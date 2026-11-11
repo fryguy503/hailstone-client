@@ -43,6 +43,7 @@
 #include "app/lua_eq_windows.h"
 #include "core/ascii_case.h"
 #include "core/atomic_file.h"
+#include "core/distribution.h"
 #include "core/frame_sections.h"
 #include "core/game_dir.h"
 #include "core/log.h"
@@ -2234,6 +2235,10 @@ int ZoneExits(lua_State* L) {
 // point of the nearest line piece closest to the player, kept 2 units inside it. Returns where it goes in map
 // units, or nil when no line leads there (or the player's place is not known yet).
 int ZoneExitWalk(lua_State* L) {
+    if (distribution::managed()) {
+        lua_pushnil(L);
+        return 1;
+    }
     EqHost& h = *host_of(L);
     const std::uint32_t to = game::zone_id_by_short_name(luaL_checkstring(L, 1));
     const auto* exits = current_exits(h);

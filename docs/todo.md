@@ -268,6 +268,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 
 - [x] Managed distribution foundation: mandatory linked SDK add-on, pinned UI sources,
   disabled external scripting/add-ons and added automation, retained stock RoF2 controls.
+  Find and atlas automatic walks stay disabled after upstream navigation updates.
   Combined Windows base suite and dedicated managed regressions passed; offline Modern
   and Gamepad startup confirmed the linked module and approved UI. Live acceptance and
   distribution-specific updates/admission remain open.

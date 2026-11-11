@@ -16,7 +16,9 @@ settings, missing/cached server rules, zoning or reconnecting. Dynamic plugins,
 player and server Lua scripts, Lua social code/faces/dry runs, add-on management
 and tools, MQ command expansion, automatic navigation/stick, mesh-assisted
 follow, autoskills, custom bulk/tidy/sell item jobs, Claim All Parcels and gameplay
-diagnostic drivers are disabled. Ordinary RoF2
+diagnostic drivers are disabled. The Find and atlas views keep their maps and
+guide paths, with their automatic walking controls hidden and walking APIs disabled.
+Ordinary RoF2
 commands and five-line socials, melody, autofire, native follow and manual
 ability/AA use retain their ordinary handlers.
 

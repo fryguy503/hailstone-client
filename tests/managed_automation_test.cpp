@@ -13,6 +13,7 @@
 #include "core/distribution.h"
 #include "core/game_dir.h"
 #include "game/slash_commands.h"
+#include "game/zone_names.h"
 #include "mq/commands.h"
 #include "mq/nav_commands.h"
 #include "plugin/hooks.h"
@@ -33,6 +34,7 @@ struct GameConnectionTestAccess {
         c.world_.player_id = 1;
     }
     static game::Inventory& inventory(GameConnection& c) { return c.inventory_; }
+    static void set_zone(GameConnection& c, NewZone zone) { c.new_zone_ = std::move(zone); }
     static MerchantSession& merchant(GameConnection& c) {
         c.merchant_.emplace();
         c.merchant_->open = true;
@@ -111,6 +113,53 @@ TEST_CASE("managed automation: direct navigation and mesh follow cannot activate
     CHECK(lookups == 0);
     CHECK(starts == 0);
     CHECK(path_requests == 0);
+}
+
+TEST_CASE("managed automation: Find and atlas walking cannot invoke navigation callbacks") {
+    REQUIRE(distribution::managed());
+    test::ScratchDir scratch("managed_find_atlas");
+    GameDir game(scratch.path());
+    net::GameConnection conn(game);
+    auto& spawn = conn.world_for_test().spawns[2];
+    spawn.id = 2;
+    spawn.is_npc = true;
+    net::NewZone zone;
+    zone.zone_id = static_cast<std::uint16_t>(game::zone_id_by_short_name("qeynos2"));
+    zone.zone_short_name = "qeynos2";
+    net::GameConnectionTestAccess::set_zone(conn, zone);
+    app::EqHost host;
+    host.game = &game;
+    host.conn = &conn;
+    host.in_game = host.ui_ready = host.feet_valid = true;
+    host.zone_short_name = "qeynos2";
+    host.zone_exits_zone = game::zone_id_by_short_name("qeynos2");
+    app::EqHost::ZoneExit exit;
+    exit.zone_id = game::zone_id_by_short_name("qeytoqrg");
+    exit.cells.push_back({100, -20, -10, 110, 20, 40});
+    host.zone_exits.push_back(exit);
+    unsigned walks = 0, commands = 0;
+    host.walk_to = [&](std::uint32_t) -> std::string { ++walks; return {}; };
+    host.submit_chat = [&](const std::string&) { ++commands; };
+    app::EqApi api(host);
+    std::unique_ptr<lua_State, decltype(&lua_close)> state(luaL_newstate(), &lua_close);
+    REQUIRE(state);
+    lua_State* L = state.get();
+    luaL_openlibs(L);
+    lua_newtable(L);
+    api.register_functions(L);
+    lua_setglobal(L, "eq");
+    const int status = luaL_dostring(L, R"lua(
+        assert(eq.FindNpcTarget(2))
+        assert(#eq.ZoneExits() == 1)
+        local ok, why = eq.FindNpcWalk(2)
+        assert(ok == false and why:find('disabled'))
+        assert(eq.ZoneExitWalk('qeytoqrg') == nil)
+    )lua");
+    const std::string error = status == LUA_OK ? "" : lua_tostring(L, -1);
+    INFO(error);
+    REQUIRE(status == LUA_OK);
+    CHECK(walks == 0);
+    CHECK(commands == 0);
 }
 
 TEST_CASE("managed automation: script and Lua social UI calls cannot execute user code") {

@@ -27,6 +27,7 @@
 #include <lua.hpp>
 
 #include "app/lua_eq.h"
+#include "core/distribution.h"
 #include "game/map_data.h"
 #include "game/useful_npcs.h"
 #include "game/world_state.h"
@@ -155,6 +156,11 @@ int FindNpcPath(lua_State* L) {
 }
 
 int FindNpcWalk(lua_State* L) {
+    if (distribution::managed()) {
+        lua_pushboolean(L, false);
+        lua_pushliteral(L, "navigation automation is disabled in this distribution");
+        return 2;
+    }
     EqHost& h = host_up(L);
     const game::Spawn* s = npc(h, luaL_checkinteger(L, 1));
     std::string why = !s ? "no such NPC" : !h.walk_to ? "walking is not available" : h.walk_to(s->id);

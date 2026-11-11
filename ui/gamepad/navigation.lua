@@ -10,6 +10,9 @@ local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local M = dofile("lib/model.lua")
 local C = T.C
+local managed = eq.ManagedDistribution and eq.ManagedDistribution() or false
+local findHints = { { "a", "Show the path" }, { "b", "Close" } }
+if not managed then table.insert(findHints, 2, { "x", "Walk there" }) end
 
 -- ---------------------------------------------------------------- find (Hailstone's Find window, eq.FindNpcs)
 local findList = { offset = 0 }
@@ -20,7 +23,7 @@ ui.window("Find", function()
   if not eq.InGame() or not eq.FindOpen() then return end
   T.frame()
   if W.begin("Find", { w = 1200, h = 860, title = "Find", subtitle = "Merchants, bankers, trainers and more in this zone",
-        hints = { { "a", "Show the path" }, { "x", "Walk there" }, { "b", "Close" } } }) then
+        hints = findHints }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     local bh = T.px(76)
@@ -57,7 +60,7 @@ ui.window("Find", function()
         eq.FindOpen(false)
       end)
       -- X: walk there (the navigator; any movement stops it), the window closing
-      if focused and W.pressed("x") then
+      if not managed and focused and W.pressed("x") then
         eq.FindNpcTarget(rows[focused].id)
         if eq.FindNpcWalk(rows[focused].id) then eq.FindOpen(false) end
       end

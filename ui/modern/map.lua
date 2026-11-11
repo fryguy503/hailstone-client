@@ -23,6 +23,7 @@ local atlas = dofile("lib/atlas.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "MapViewWnd"
+local managed = eq.ManagedDistribution and eq.ManagedDistribution() or false
 
 local SIDE_W, TOOL_H, STATUS_H = 250, 36, 24
 local ZMIN, ZMAX = 1, 40
@@ -288,7 +289,7 @@ local function findPage(x, y, w, h, s, rows, own)
       ui.Separator()
       if ui.MenuItem("Target") then eq.FindNpcTarget(r.id) end
       if ui.MenuItem("Show the path") then eq.FindNpcPath(r.id) end
-      if ui.MenuItem("Walk there") then walkTo(r.id) end
+      if not managed and ui.MenuItem("Walk there") then walkTo(r.id) end
       if ui.MenuItem("Centre the map here") then M.follow, M.cx, M.cy = false, r.x, r.y end
     end
     ui.EndPopup()
@@ -297,18 +298,20 @@ local function findPage(x, y, w, h, s, rows, own)
   -- the selected NPC: its path, a walk there, and ending the path
   local fy = y + h - footer + 6 * s
   local pathShown = eq.FindPathShown()
-  local n = pathShown and 3 or 2
+  local n = (managed and 1 or 2) + (pathShown and 1 or 0)
   local bw = (w - (n - 1) * 6 * s) / n
   local on = F.sel ~= nil
   if T.Button("##findpath", x, fy, x + bw, fy + 26 * s, s, "Show path", { primary = true, enabled = on }) then
     F.why = nil
     eq.FindNpcPath(F.sel)
   end
-  if T.Button("##findwalk", x + bw + 6 * s, fy, x + 2 * bw + 6 * s, fy + 26 * s, s, "Walk there", { enabled = on }) then
-    walkTo(F.sel)
+  if not managed then
+    if T.Button("##findwalk", x + bw + 6 * s, fy, x + 2 * bw + 6 * s, fy + 26 * s, s, "Walk there", { enabled = on }) then
+      walkTo(F.sel)
+    end
+    if ui.IsItemHovered() then ui.SetTooltip("Walks you there (any movement key stops it)") end
   end
-  if ui.IsItemHovered() then ui.SetTooltip("Walks you there (any movement key stops it)") end
-  if pathShown and T.Button("##findend", x + 2 * (bw + 6 * s), fy, x + w, fy + 26 * s, s, "End") then
+  if pathShown and T.Button("##findend", x + (managed and 1 or 2) * (bw + 6 * s), fy, x + w, fy + 26 * s, s, "End") then
     F.why = nil
     eq.EndFind()
   end

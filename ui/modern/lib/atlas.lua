@@ -14,6 +14,7 @@
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color
+local managed = eq.ManagedDistribution and eq.ManagedDistribution() or false
 
 local A = {
   page = "Default.xml", zoom = 1, cx = nil, cy = nil, sel = nil, search = "", lastClick = 0, scrollTo = nil,
@@ -607,7 +608,7 @@ function A.DrawRouteBanner(x0, y0, x1, s, onWorld)
     onWorld(target)
   end
   cx1 = cx1 - 58 * s
-  if nextHop then
+  if nextHop and not managed then
     local canWalk = A.ExitTo(nextHop.zone) ~= nil
     if T.Button("##routewalk", cx1 - 90 * s, by0 + 4 * s, cx1, by0 + h - 4 * s, s, "Walk there",
       { primary = true, enabled = canWalk, tooltip = canWalk and ("Walk to the zone line to " .. nextHop.name .. " and through it (/nav)") or
