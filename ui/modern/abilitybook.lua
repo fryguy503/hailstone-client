@@ -16,6 +16,7 @@ local stml = dofile("lib/stml.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "AbilityBookWnd"
+local MANAGED = ui.ManagedDistribution and ui.ManagedDistribution() or false
 
 local W, H = 960, 620
 local DETAIL_W = 320
@@ -123,7 +124,7 @@ local function readSettings()
   cfg.kind = setting("kind", "all")
   cfg.ready = setting("ready", false)
   cfg.favorites = setting("favorites", false)
-  cfg.auto = setting("auto", false)
+  cfg.auto = not MANAGED and setting("auto", false)
   cfg.multi = multiclass()
   cfg.class = cfg.multi and setting("class", 0) or 0
   cfg.sort = setting("sort", "Name")
@@ -270,7 +271,7 @@ local KIND_CHIPS = { { "all", "All", "##kindall" }, { "aa", "AAs", "##kindaa" },
 local FILTER_CHIPS = {
   { "ready", "Ready", "Only abilities ready to use", "##fready" },
   { "favorites", "Favorites", "Only your favorites", "##ffavorites" },
-  { "auto", "Autoskill", "Only abilities on the autoskill list", "##fauto" },
+  not MANAGED and { "auto", "Autoskill", "Only abilities on the autoskill list", "##fauto" } or nil,
 }
 local DESC_TIP, ASC_TIP = { tooltip = "Descending" }, { tooltip = "Ascending" }
 
@@ -350,7 +351,7 @@ local function abilityMenu(e)
     eq.AbilityBookFavorite(e.key, not e.favorite)
     lastRead = -1
   end
-  if e.autoable then
+  if e.autoable and not MANAGED then
     local on = onAutoskill(e.key) ~= nil
     if ui.MenuItem(on and "Remove from autoskill" or "Add to autoskill") then
       eq.AbilityBookAutoskill(e.key, not on)
@@ -481,14 +482,14 @@ local function detailsPane(x, y, w, h, s)
   end
   -- buttons
   local by = ty + 48 * s
-  local bw = (w - 12 * s) / 3
+  local bw = MANAGED and ((w - 6 * s) / 2) or ((w - 12 * s) / 3)
   if T.Button("##use", x, by, x + bw, by + 26 * s, s, "Use", { primary = e.ready }) then use(e) end
   if T.Button("##fav", x + bw + 6 * s, by, x + 2 * bw + 6 * s, by + 26 * s, s, e.favorite and "Unfavorite" or "Favorite") then
     eq.AbilityBookFavorite(e.key, not e.favorite)
     lastRead = -1
   end
   local onAuto = onAutoskill(e.key) ~= nil
-  if T.Button("##auto", x + 2 * bw + 12 * s, by, x + w, by + 26 * s, s, onAuto and "Off autoskill" or "To autoskill",
+  if not MANAGED and T.Button("##auto", x + 2 * bw + 12 * s, by, x + w, by + 26 * s, s, onAuto and "Off autoskill" or "To autoskill",
       { enabled = e.autoable, tooltip = (not e.autoable) and "Only combat skills, combat abilities and activated AAs" or nil }) then
     eq.AbilityBookAutoskill(e.key, not onAuto)
     if not onAuto then autoSel = e.key end
@@ -677,7 +678,7 @@ local function body(x, y, w, h, s)
   toolbar(x, y, w, s)
   readSettings()
   local by = y + TOOL_H * s
-  local bodyH = h - TOOL_H * s - AUTO_H * s - 8 * s
+  local bodyH = h - TOOL_H * s - (MANAGED and 0 or AUTO_H * s) - 8 * s
   local lw = w - (DETAIL_W + 14) * s
   local rows, groups = shownRows()
   columnHeader(x + 4 * s, by, lw, s)
@@ -685,8 +686,10 @@ local function body(x, y, w, h, s)
   local rx = x + w - DETAIL_W * s
   ui.DrawRectFilled(rx - 8 * s, by, rx - 7 * s, by + bodyH, C.ink[1], C.ink[2], C.ink[3], 0.06)
   detailsPane(rx, by, DETAIL_W * s, bodyH, s)
-  ui.DrawLine(x, y + h - AUTO_H * s, x + w, y + h - AUTO_H * s, C.ink[1], C.ink[2], C.ink[3], 0.06, 1)
-  autoskillStrip(x, y + h - AUTO_H * s + 10 * s, w, s)
+  if not MANAGED then
+    ui.DrawLine(x, y + h - AUTO_H * s, x + w, y + h - AUTO_H * s, C.ink[1], C.ink[2], C.ink[3], 0.06, 1)
+    autoskillStrip(x, y + h - AUTO_H * s + 10 * s, w, s)
+  end
 end
 
 ui.window("Ability Book", function()

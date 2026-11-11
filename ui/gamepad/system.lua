@@ -134,7 +134,8 @@ local MORE = {
   { "Load Skin", "Change the user interface", "LoadskinWnd" },
   { "Copy Layout", "Another character's window layout", "LayoutCopyWindow" },
   { "Notes", "Your own notes (/note)", "PlayerNotesWindow" },
-  { "Lua Scripts", "Run, stop and autorun your scripts", "ScriptsWnd" },
+  { "Lua Scripts", "Run, stop and autorun your scripts", "ScriptsWnd", nil,
+    function() return not (ui.ManagedDistribution and ui.ManagedDistribution()) end },
   { "Web Browser", "Web pages in the game (/web)", "BrowserWnd" },
   { "Tracking", "What is near (the Tracking skill)", nil, function() eq.UseSkill(TRACKING) end, tracks },
 }

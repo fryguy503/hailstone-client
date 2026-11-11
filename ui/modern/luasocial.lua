@@ -12,6 +12,7 @@
 -- error's line is marked), then Save / Dry run with the Shift, Ctrl and Alt a press is tried with, Revert, the
 -- examples, Put on cursor, Copy share text / Paste and Delete (asks first), and the dry run's commands below.
 -- eq.*: app/lua_eq_luasocial.cpp.
+if ui.ManagedDistribution and ui.ManagedDistribution() then return end
 local hud = dofile("lib/hud.lua")
 local S = dofile("lib/social.lua")
 local K = dofile("lib/dialogs_kit.lua")

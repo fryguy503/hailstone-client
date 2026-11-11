@@ -14,6 +14,7 @@ local tools = dofile("lib/itemtools.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "MerchantWnd"
+local MANAGED = ui.ManagedDistribution and ui.ManagedDistribution() or false
 local LIST = "ItemList"
 
 local search = ""
@@ -264,7 +265,7 @@ local function parcels(s, btnH)
   end
   ui.Dummy(0, 2 * s)
   local w = ui.GetContentRegionAvail()
-  local bw = (w - 8 * s) / 2
+  local bw = MANAGED and w or ((w - 8 * s) / 2)
   local x, y = ui.GetCursorScreenPos()
   if T.Button("##retrieve", x, y, x + bw, y + btnH, s, "Retrieve",
       { enabled = pickedParcel ~= nil and not busy, tooltip = "Take the parcel picked above" }) then
@@ -272,7 +273,7 @@ local function parcels(s, btnH)
   end
   local label = claiming > 0 and string.format("Claiming... %d left", claiming)
     or (#list > 0 and ("Claim all (" .. #list .. ")") or "Claim all")
-  if T.Button("##claimall", x + bw + 8 * s, y, x + w, y + btnH, s, label,
+  if not MANAGED and T.Button("##claimall", x + bw + 8 * s, y, x + w, y + btnH, s, label,
       { primary = true, enabled = #list > 0 and claiming == 0, tooltip = "Take every parcel here into your bags" }) then
     eq.ClaimAllParcels()
   end
@@ -398,7 +399,7 @@ local function body(x, y, w, h, s)
   if done and mode == "sell" then
     if T.Button("##selljunk", jx, fy, jx + junkW, fy + btnH, s, string.format("Selling %d / %d", done, total),
         SELLING_OPTS) then eq.StopItemJob() end
-  else
+  elseif not MANAGED then
     local n = tools.JunkCarried()
     if T.Button("##selljunk", jx, fy, jx + junkW, fy + btnH, s, n > 0 and ("Sell marked (" .. n .. ")") or "Sell marked",
         { enabled = n > 0, tooltip = tools.Note() or (n > 0 and "Sell every item you marked to sell"

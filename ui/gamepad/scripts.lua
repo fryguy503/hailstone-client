@@ -3,6 +3,7 @@
 -- (/lua run, /lua stop), X pauses or resumes it, Y puts it on this character's autorun list or takes it off (started
 -- at each login once the server's rules allow it). A script the rules do not allow is greyed with the reason; the
 -- server's own scripts under its hailstone.cfg cannot be stopped.
+if ui.ManagedDistribution and ui.ManagedDistribution() then return end
 local T = dofile("lib/theme.lua")
 local W = dofile("lib/window.lua")
 local C = T.C

@@ -3,6 +3,7 @@
 -- Pause / Resume, as /lua run, /lua stop and /lua pause do; Autorun puts it on this character's list, started at
 -- each login once the server's rules allow it (and kept running across zones, as every script is). A script the
 -- rules do not allow is greyed with the reason; the server's own scripts under its hailstone.cfg cannot be stopped.
+if ui.ManagedDistribution and ui.ManagedDistribution() then return end
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color

@@ -361,6 +361,7 @@ end
 -- The picked server's suggested add-ons (v.addons.suggestions, docs/addons.md "Suggested add-ons") under Log in:
 -- each one's sentence, then Look at it (the install card on the add-ons page), Not now and Don't ask again.
 local function suggestionRows(v, x0, y, x1, w)
+  if v.managed then return y end
   local rh, gap = px(ROW_H), px(GAP)
   for i, sg in ipairs(v.addons.suggestions or {}) do
     y = y + px(14)
@@ -627,15 +628,17 @@ local function morePage(v, x0, y, x1, w)
   y = y + px(76) + px(22)
 
   -- the add-ons (docs/addons.md): a page of their own
-  local installed = 0
-  for _, r in ipairs(v.addons.rows) do if r.group == "installed" then installed = installed + 1 end end
-  P.at(x0, y)
-  if P.field(F, "##addons", "Add-ons", installed == 1 and "1 installed" or (installed .. " installed"), w, px(76),
-        { chevron = true, note = "Find and install extra windows and features", disabled = busy }) then
-    eq.LoginSet("addonsOpen", true)
-    F:want("##addonlink")
+  if not v.managed then
+    local installed = 0
+    for _, r in ipairs(v.addons.rows) do if r.group == "installed" then installed = installed + 1 end end
+    P.at(x0, y)
+    if P.field(F, "##addons", "Add-ons", installed == 1 and "1 installed" or (installed .. " installed"), w, px(76),
+          { chevron = true, note = "Find and install extra windows and features", disabled = busy }) then
+      eq.LoginSet("addonsOpen", true)
+      F:want("##addonlink")
+    end
+    y = y + px(76) + gap
   end
-  y = y + px(76) + gap
 
   -- About Hailstone (view.about, docs/updater.md): What's new and its GitHub page
   local about = v.about
@@ -1048,8 +1051,8 @@ ui.window(NAME, function()
   end
   if v.transient and st.page == "server" then st.page = "main" end
   -- the add-ons page follows view.addons.open (the client keeps it, as the other pack's card)
-  if v.addons.open and st.page ~= "addons" then st.page = "addons"
-  elseif not v.addons.open and st.page == "addons" then st.page = "more" end
+  if not v.managed and v.addons.open and st.page ~= "addons" then st.page = "addons"
+  elseif (v.managed or not v.addons.open) and st.page == "addons" then st.page = "more" end
   if v.busy then st.edit, st.pick = nil, nil end -- (nothing can change while the server answers)
 
   -- (a question keeps the page's size: it is drawn over it)

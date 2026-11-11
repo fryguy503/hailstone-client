@@ -18,6 +18,7 @@ local X = dofile("lib/exchange.lua")
 local C = T.C
 
 local MW = "MerchantWnd"
+local MANAGED = ui.ManagedDistribution and ui.ManagedDistribution() or false
 local page = 1 -- 1 buy, 2 sell
 local buyList = { offset = 0 }
 local pendingBuy, pendingSell = nil, nil -- a row / slot selected this frame, its button pressed next frame
@@ -78,7 +79,9 @@ ui.window("Merchant", function()
   elseif page == 3 and sendMode then
     hints = { { "a", "Send" }, { "y", "Back to the parcels" }, { "b", "Back" } }
   elseif page == 3 then
-    hints = { { "a", "Retrieve" }, { "x", "Claim all" }, { "y", "Send a parcel" }, { "lb", "Previous page" }, { "b", "Close" } }
+    hints = MANAGED
+      and { { "a", "Retrieve" }, { "y", "Send a parcel" }, { "lb", "Previous page" }, { "b", "Close" } }
+      or { { "a", "Retrieve" }, { "x", "Claim all" }, { "y", "Send a parcel" }, { "lb", "Previous page" }, { "b", "Close" } }
   end
   if W.begin("Merchant", { w = 1500, h = 900, title = title ~= "" and title or "Merchant",
         subtitle = string.format("You have %dpp %dgp %dsp %dcp", pp or 0, gp or 0, sp or 0, cp or 0),
@@ -172,7 +175,7 @@ ui.window("Merchant", function()
           end
         end, function(i) eq.RetrieveParcel(list[i].slot) end)
       end
-      if not kb.open and W.pressed("x") and #list > 0 and claiming == 0 then eq.ClaimAllParcels() end
+      if not MANAGED and not kb.open and W.pressed("x") and #list > 0 and claiming == 0 then eq.ClaimAllParcels() end
       if not kb.open and W.pressed("y") then sendMode, sellRefocus, parcelNote = true, 1, nil end
     elseif page == 3 then
       -- sending: To, Note and money, then your bags (A on an item sends it)

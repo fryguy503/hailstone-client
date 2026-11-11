@@ -22,6 +22,7 @@ local SL = dofile("lib/social_lines.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "SocialEditWnd"
+local MANAGED = ui.ManagedDistribution and ui.ManagedDistribution() or false
 local NAME_MAX = 15
 local LINE_MAX = 255
 local HINTS = { "First command, e.g. /assist", "e.g. /attack on", "e.g. /pet attack", "e.g. /g Incoming!",
@@ -355,43 +356,45 @@ toolbar = function(n, name, color, lines, anyLine, dirty, s)
     ui.SetTooltip("Pick the social up (saving it), then click a hot button to place it. Or drag the button above")
   end
   ui.EndDisabled()
-  ui.SameLine()
-  ui.BeginDisabled(not named)
-  if ui.SmallButton("Copy##sewcopy") then
-    local t = eq.LuaSocialExport(n, { name = name, color = color or 0, lines = lines })
-    if t then
-      ui.SetClipboardText(t)
-      say("The share text is on the clipboard.")
+  if not MANAGED then
+    ui.SameLine()
+    ui.BeginDisabled(not named)
+    if ui.SmallButton("Copy##sewcopy") then
+      local t = eq.LuaSocialExport(n, { name = name, color = color or 0, lines = lines })
+      if t then
+        ui.SetClipboardText(t)
+        say("The share text is on the clipboard.")
+      end
     end
-  end
-  if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then
-    ui.SetTooltip("Copy this social as one line of text to share (hailstone-social:1:...)")
-  end
-  ui.EndDisabled()
-  ui.SameLine()
-  ui.BeginDisabled(n == nil)
-  if ui.SmallButton("Paste##sewpaste") then
-    local t, why = eq.LuaSocialImport(ui.GetClipboardText() or "")
-    if not t then
-      say(why or "The clipboard holds no social.")
-    elseif t.lua then
-      -- a Lua social: to the Lua editor, unsaved (luasocial.lua takes the draft)
-      hailstone_social_draft = { social = n, t = t }
-      eq.ShowWindow(WINDOW, false)
-      eq.OpenLuaSocialEditor(n)
-      ui.EndDisabled()
-      return true
-    else
-      if t.name ~= "" then eq.SetWindowText(WINDOW, "SEW_NameInput", t.name) end
-      if t.color >= 0 and t.color < 20 then eq.ClickChild(WINDOW, "SEW_TC" .. t.color .. "Button", "left") end
-      for i = 1, 5 do setLine(i, t.lines[i] or "") end
-      say("Pasted: Accept to keep it.")
+    if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then
+      ui.SetTooltip("Copy this social as one line of text to share (hailstone-social:1:...)")
     end
+    ui.EndDisabled()
+    ui.SameLine()
+    ui.BeginDisabled(n == nil)
+    if ui.SmallButton("Paste##sewpaste") then
+      local t, why = eq.LuaSocialImport(ui.GetClipboardText() or "")
+      if not t then
+        say(why or "The clipboard holds no social.")
+      elseif t.lua then
+        -- a Lua social: to the Lua editor, unsaved (luasocial.lua takes the draft)
+        hailstone_social_draft = { social = n, t = t }
+        eq.ShowWindow(WINDOW, false)
+        eq.OpenLuaSocialEditor(n)
+        ui.EndDisabled()
+        return true
+      else
+        if t.name ~= "" then eq.SetWindowText(WINDOW, "SEW_NameInput", t.name) end
+        if t.color >= 0 and t.color < 20 then eq.ClickChild(WINDOW, "SEW_TC" .. t.color .. "Button", "left") end
+        for i = 1, 5 do setLine(i, t.lines[i] or "") end
+        say("Pasted: Accept to keep it.")
+      end
+    end
+    if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then
+      ui.SetTooltip("Take a social someone shared from the clipboard (a Lua one opens in the Lua editor)")
+    end
+    ui.EndDisabled()
   end
-  if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then
-    ui.SetTooltip("Take a social someone shared from the clipboard (a Lua one opens in the Lua editor)")
-  end
-  ui.EndDisabled()
   if n and eq.CurrentSocial() == n then
     ui.SameLine(0, 12 * s)
     S.Chip("running", C.good)
@@ -466,11 +469,11 @@ local function body(x, y, w, h, s)
   ui.EndGroup()
   local segW, segH = 156 * s, 26 * s
   ui.SetCursorScreenPos(x + w - segW, hy + (ph - segH) / 2)
-  local mode = K.Segmented("##sewmode", { "Commands", "Lua" }, 1, segW, segH, s, {
+  local mode = not MANAGED and K.Segmented("##sewmode", { "Commands", "Lua" }, 1, segW, segH, s, {
     "Five lines, run in turn when the button is pressed.",
     "Edit this social as Lua: the lines are saved, then open in the Lua social editor as mq.cmd calls. Lua can " ..
         "branch on Shift / Ctrl / Alt, read the game and draw the button's face.",
-  })
+  }) or 1
   if mode == 2 and n then
     -- saved first (named "Lua" when it has lines but no name), so the Lua editor converts what is on screen
     local keep = name

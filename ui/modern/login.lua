@@ -815,6 +815,7 @@ end
 -- The picked server's suggested add-ons (view.addons.suggestions, docs/addons.md "Suggested add-ons"): its sentence,
 -- then Look at it (the install card: nothing is installed yet), Not now and Don't ask again.
 local function suggestionNotice(view, s)
+  if view.managed then return end
   for _, sg in ipairs(view.addons.suggestions or {}) do
     ui.PushID("suggest:" .. sg.source)
     ui.PushStyleColor(ui.Col.Text, C.accent[1], C.accent[2], C.accent[3], C.accent[4] or 1)
@@ -875,10 +876,12 @@ local function loginCard(view, s, bh)
     interfacePicker(view, s)
   end
   ui.SameLine()
-  P.AlignRight(P.ButtonsWidth(ADDONS_QUIT, s))
-  if ui.Button("Add-ons") then eq.LoginSet("addonsOpen", not view.addons.open) end
-  P.Tip("Find and install extra windows and features, and keep them up to date")
-  ui.SameLine()
+  P.AlignRight(P.ButtonsWidth(view.managed and { "Quit" } or ADDONS_QUIT, s))
+  if not view.managed then
+    if ui.Button("Add-ons") then eq.LoginSet("addonsOpen", not view.addons.open) end
+    P.Tip("Find and install extra windows and features, and keep them up to date")
+    ui.SameLine()
+  end
   if ui.Button("Quit") then eq.LoginDo("quit") end
 
   -- the confirmations (outside the disabled block: they open from it)
@@ -918,7 +921,7 @@ ui.window("Login", function()
   local bh = lh + 14 * s
   local cardW, quickW, addonsW, boxW, aboutW = 430 * s, 330 * s, 480 * s, 500 * s, 270 * s
   local gap, margin = 18 * s, 16 * s
-  local addonsOpen = view.addons.open
+  local addonsOpen = not view.managed and view.addons.open
   local quick = #view.characters > 0
   local box = boxOpen and canBox(view)
   local _, ch = P.Size("login", cardW, 520 * s)

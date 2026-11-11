@@ -12,6 +12,7 @@ local T = dofile("lib/theme.lua")
 local C = T.color
 
 local M = {}
+local MANAGED = ui.ManagedDistribution and ui.ManagedDistribution() or false
 
 ITEM_TOOLS = ITEM_TOOLS or { search = { inventory = "", bank = "" }, note = nil, noteAt = 0, mode = nil, prefs = nil }
 local S = ITEM_TOOLS
@@ -129,7 +130,7 @@ function M.SetFilter(bagPlace, cat)
   prefs().filters[bagPlace] = cat ~= "" and cat or nil
   save("filters")
 end
-function M.TidyAfterLoot() return prefs().tidyLoot end
+function M.TidyAfterLoot() return not MANAGED and prefs().tidyLoot end
 function M.JunkIds()
   local ids = {}
   for id in pairs(prefs().junk) do ids[#ids + 1] = id end
@@ -254,8 +255,8 @@ end
 -- ---------------------------------------------------------------- running
 local function note(err) if err then S.note, S.noteAt = err, ui.GetTime() end end
 
-function M.Run(where, mode) note(eq.SortItems(where, mode, options())) end
-function M.SellJunk() note(eq.SellJunk(M.JunkIds())) end
+function M.Run(where, mode) if not MANAGED then note(eq.SortItems(where, mode, options())) end end
+function M.SellJunk() if not MANAGED then note(eq.SellJunk(M.JunkIds())) end end
 
 -- The last refusal (why a job did not start) for a few seconds after it, else nil.
 function M.Note()
@@ -265,6 +266,7 @@ end
 -- After the loot window closes: Tidy the inventory, when that is on (from a frame function run every frame).
 local lootWasOpen = false
 function M.WatchLoot()
+  if MANAGED then return end
   local open = eq.WindowShown("LootWnd") == true
   if lootWasOpen and not open and M.TidyAfterLoot() and not eq.ItemJob() then
     eq.SortItems("inventory", "tidy", options())
@@ -274,7 +276,7 @@ end
 
 -- ---------------------------------------------------------------- the toolbar
 -- The width Toolbar takes (with the More button when `more`).
-function M.ToolbarWidth(s, more) return 2 * 54 * s + 6 * s + (more and 30 * s or 0) end
+function M.ToolbarWidth(s, more) return MANAGED and 0 or (2 * 54 * s + 6 * s + (more and 30 * s or 0)) end
 
 local JOB_WORD = { sort = "Sorting", stack = "Stacking", tidy = "Tidying", sell = "Selling" }
 
@@ -282,6 +284,7 @@ local JOB_WORD = { sort = "Sorting", stack = "Stacking", tidy = "Tidying", sell 
 -- looting) when `more`; while a job runs, its progress and Stop. The last refusal shows to their left (from
 -- `left`; else the window shows Note) for a few seconds. `where`: "inventory", "bank" or a bag window.
 function M.Toolbar(id, x1, y, s, where, left, more)
+  if MANAGED then return end
   local bw, h = 54 * s, 24 * s
   local done, total, mode = eq.ItemJob()
   local x0 = x1 - M.ToolbarWidth(s, more)

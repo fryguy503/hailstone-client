@@ -12,6 +12,7 @@
 --
 -- It opens on a right click on a Lua social, from the stock social editor's socials when they are Lua, and with
 -- /luasocial [1..120 | new]. eq.*: app/lua_eq_luasocial.cpp.
+if ui.ManagedDistribution and ui.ManagedDistribution() then return end
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")

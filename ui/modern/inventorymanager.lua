@@ -25,6 +25,7 @@ local tools = dofile("lib/itemtools.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "InventoryManagerWnd"
+local MANAGED = ui.ManagedDistribution and ui.ManagedDistribution() or false
 
 local W, H = 1040, 660
 local MIN_W, MIN_H = 820, 460
@@ -965,6 +966,7 @@ local function selPlaces(v)
 end
 
 local function bulkConfirm(s)
+  if MANAGED then return end
   ui.PushStyleVar(ui.StyleVar.WindowPadding, 14 * s, 12 * s)
   local open = ui.BeginPopup("##advbulkask")
   ui.PopStyleVar()
@@ -1023,7 +1025,7 @@ local function selectionBar(x, y, s, v)
     C.text, T.font.small) + 14 * s
   local busy = eq.ItemJob()
   local bw = 96 * s
-  for _, mode in ipairs({ "sell", "tribute", "destroy" }) do
+  for _, mode in ipairs(MANAGED and {} or { "sell", "tribute", "destroy" }) do
     local b = BULK[mode]
     local n, err = eq.BulkItems(mode, places, true)
     local ok = not busy and not err and n > 0
@@ -1084,7 +1086,7 @@ local function footer(x, y, w, s, v)
   local merchant = eq.WindowShown("MerchantWnd") == true
   local n = tools.JunkCarried()
   local busy = eq.ItemJob()
-  if not busy and not (banner == 0 and selecting) then -- (the selection's bar has its own Sell)
+  if not MANAGED and not busy and not (banner == 0 and selecting) then -- (the selection's bar has its own Sell)
     local tip = tools.Note() or (not merchant and "Open a merchant to sell what you marked"
       or (n > 0 and "Sell every item you carry that is marked to sell" or "Mark items to sell first"))
     if T.Button("##advsell", sx1 - sellW, y + 10 * s, sx1, y + 36 * s, s,

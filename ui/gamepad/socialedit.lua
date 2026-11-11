@@ -15,6 +15,7 @@ local AS = dofile("lib/assign.lua")
 local SL = dofile("lib/social_lines.lua")
 local C = T.C
 local WIN = "SocialEditWnd"
+local MANAGED = ui.ManagedDistribution and ui.ManagedDistribution() or false
 
 local st = CH.new()
 local wasShown = false
@@ -157,12 +158,13 @@ ui.window("Edit Social", function()
       CH.button(WIN, "SEW_Clear_Button", "Clear", bw, bh, { sub = "Name and lines", align = 0, keep = true })
       ui.SameLine(0, bgap)
       CH.refocus(st, "sewmore")
-      if T.button("##sewmore", "More", bw, bh, { sub = "Cooldown, share, Lua", align = 0, disabled = social == nil },
+      if T.button("##sewmore", "More", bw, bh, { sub = MANAGED and "Cooldown" or "Cooldown, share, Lua", align = 0, disabled = social == nil },
             pad) and social then
         local ci = nil
         for i = 1, 5 do if not ci and SL.Parts(lines[i]).timer then ci = i end end
         local cool = ci and SL.Parts(lines[ci]).timer or nil
-        CH.choose(st, "More", { "Cooldown: " .. coolText(cool), "Copy share text", "Paste share text", "Edit as Lua" }, 1,
+        CH.choose(st, "More", MANAGED and { "Cooldown: " .. coolText(cool) }
+          or { "Cooldown: " .. coolText(cool), "Copy share text", "Paste share text", "Edit as Lua" }, 1,
           function(k)
             if k == 1 then
               local sel = 1
