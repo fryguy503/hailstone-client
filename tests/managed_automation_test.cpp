@@ -147,7 +147,8 @@ TEST_CASE("managed automation: script and Lua social UI calls cannot execute use
         assert(count == 0 and err:find('disabled'))
     )lua";
     const int status = luaL_dostring(L, code);
-    INFO(status == LUA_OK ? "" : lua_tostring(L, -1));
+    const std::string error = status == LUA_OK ? "" : lua_tostring(L, -1);
+    INFO(error);
     REQUIRE(status == LUA_OK);
 
     std::vector<std::unique_ptr<app::StockWindow>> windows;
@@ -161,7 +162,7 @@ TEST_CASE("managed automation: script and Lua social UI calls cannot execute use
 
 TEST_CASE("managed automation: custom inventory jobs stop while individual item and parcel actions work") {
     REQUIRE(distribution::managed());
-    ScratchDir scratch("managed_inventory_jobs");
+    test::ScratchDir scratch("managed_inventory_jobs");
     GameDir game(scratch.path());
     net::GameConnection conn(game);
     using Access = net::GameConnectionTestAccess;

@@ -6,7 +6,15 @@
  * Managed clients accept read/events/UI/packets/extend/login capabilities only; no command,
  * movement, targeting, action, chat or independent network automation is granted.
  */
+/* Descriptor consumers need the ABI types, not the DLL-author helpers or their
+ * global host pointer. Preserve the including translation unit's macro state. */
+#ifdef HAILSTONE_HOST
 #include "hailstone_plugin.h"
+#else
+#define HAILSTONE_HOST
+#include "hailstone_plugin.h"
+#undef HAILSTONE_HOST
+#endif
 
 #ifdef __cplusplus
 extern "C" {
