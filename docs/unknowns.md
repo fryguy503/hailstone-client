@@ -206,5 +206,10 @@ Real estate is built to the original (docs/protocol/rof2-packets.md "Real estate
 
 ## Server-specific extensions
 
+- Managed distributions provide a mandatory static SDK module and restrict user code
+  loading. A distribution-specific update channel and server admission/version policy
+  are still required; this does not establish remote attestation or prevent external
+  input automation. Server-specific feature protocols remain in the separate module.
+
 - Ability Book class filter on an NMS multiclass server: the server sends every AA one of the character's classes may use with the class mask 0xFFFFFFF (zone/aa.cpp, the AA rank packet), so the book counts all of them as Shared and a class filter or the class sort cannot tell them apart. Only the AA's real mask, from the server or the AA tables, would settle it. Skills get their classes from the skill cap table at the character's level, and combat abilities from the spell's class levels.
 - Autoskill's "only when its buff has worn off" looks for the ability's own spell id among the player's buffs. An AA or combat ability whose spell only triggers another spell (the buff then carries the other's id) is never seen as buffed, so it is used again whenever its reuse timer allows. The spell's trigger effects (SPA 340, 374, 470 and similar) would settle which id to look for. Its "out of combat" trusts the server's OP_RestState flag, which EQEmu sends only while rest regen is on (`Character:RestRegenEnabled`); without it, out of combat is only "auto attack off".

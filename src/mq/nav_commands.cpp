@@ -1,5 +1,7 @@
 #include "mq/nav_commands.h"
 
+#include "core/distribution.h"
+
 #include <format>
 #include <memory>
 #include <optional>
@@ -63,6 +65,7 @@ const char* on_off(bool b) { return b ? "on" : "off"; }
 
 void add_nav_commands(plugin::Hooks& h, plugin::Hooks::Owner owner, const CommandEnv& env,
                       const std::function<void(const std::string&)>& say) {
+    if (distribution::managed()) return;
     auto context = env.context;
     auto out = [say](const std::string& t) { say("[Nav] " + t); };
 

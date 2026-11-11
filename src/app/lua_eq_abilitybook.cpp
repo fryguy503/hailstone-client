@@ -34,6 +34,7 @@
 
 #include "app/actions_ui.h"
 #include "core/ascii_case.h"
+#include "core/distribution.h"
 #include "core/log.h"
 #include "app/lua_eq_windows.h"
 #include "game/ability_book.h"
@@ -107,7 +108,7 @@ void sync(EqHost& h) {
     st.rules = game::parse_autoskill_rules(h.actions->char_ini_string(kSection, "Autoskill"));
     // Hailstone's own: the switch is as the player left it. frame() still turns it off where the server forbids
     // autoskill, without saving that.
-    st.on = h.actions->char_ini_int(kSection, "AutoskillOn", 0) != 0;
+    st.on = !distribution::managed() && h.actions->char_ini_int(kSection, "AutoskillOn", 0) != 0;
     if (st.on) {
         log::info("autoskill on from the last session ({} on the list)", st.rules.size());
         if (h.conn) h.conn->show_chat("Autoskill is on.", 15);
@@ -124,6 +125,7 @@ void save(EqHost& h) {
 }
 
 bool allowed(const EqHost& h) {
+    if (distribution::managed()) return false;
     const auto& rules = h.conn ? h.conn->server_rules() : std::nullopt;
     return !rules || !rules->configured || rules->autoskill;
 }
@@ -337,7 +339,8 @@ game::AutoskillWorld world(EqHost& h) {
 void set_enabled(EqHost& h, bool on, bool remember = true) {
     auto& st = state();
     if (on && !allowed(h)) {
-        if (h.conn) h.conn->show_chat("This server does not allow autoskill.", 13);
+        if (h.conn) h.conn->show_chat(distribution::managed() ? "Autoskill is disabled in this distribution."
+                                                           : "This server does not allow autoskill.", 13);
         on = false;
         remember = false;
     }
@@ -530,6 +533,7 @@ int AbilityBookFavorite(lua_State* L) {
 }
 
 int AbilityBookAutoskill(lua_State* L) {
+    if (distribution::managed()) return 0;
     auto& h = host(L);
     sync(h);
     std::string key = luaL_checkstring(L, 1);
@@ -546,6 +550,7 @@ int AbilityBookAutoskill(lua_State* L) {
 }
 
 int AbilityBookAutoskillMove(lua_State* L) {
+    if (distribution::managed()) return 0;
     auto& h = host(L);
     sync(h);
     const char* key_arg = luaL_checkstring(L, 1);
@@ -565,6 +570,7 @@ int AbilityBookAutoskillMove(lua_State* L) {
 }
 
 int AbilityBookAutoskillRule(lua_State* L) {
+    if (distribution::managed()) return 0;
     auto& h = host(L);
     sync(h);
     // Every argument read before any C++ object exists: a failed check longjmps past destructors.

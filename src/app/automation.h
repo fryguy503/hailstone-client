@@ -23,6 +23,8 @@
 #include <utility>
 #include <vector>
 
+struct HailstoneBuiltinAddon;
+
 #include "game/ability_book.h"
 #include "mq/tlo.h"
 #include "plugin/consent.h"
@@ -78,6 +80,8 @@ public:
     Automation& operator=(const Automation&) = delete;
 
     plugin::Hooks& hooks();
+    bool load_builtin(const HailstoneBuiltinAddon& addon, const std::filesystem::path& trusted_ui_dir = {},
+                      std::string* why = nullptr);
     // The plugins' server extensions as one (game/server_ext_chain.h): a connection asks it
     // (net::ConnectionOptions::plugins).
     std::shared_ptr<game::ExtensionChain> extensions();

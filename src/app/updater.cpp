@@ -1,4 +1,5 @@
 #include "app/updater.h"
+#include "core/distribution.h"
 
 #include <algorithm>
 #include <fstream>
@@ -43,6 +44,10 @@ bool package_file_ok(const fs::path& path, const UpdatePackage& p) { return pack
 
 UpdateSettings update_settings(const Config& config) {
     UpdateSettings s;
+    if (distribution::managed()) {
+        s.check = s.download = s.install_on_quit = false;
+        return s;
+    }
     s.check = config.get_bool("update.check", true);
     s.download = config.get_bool("update.download", false);
     s.install_on_quit = config.get_bool("update.install_on_quit", true);
@@ -51,7 +56,9 @@ UpdateSettings update_settings(const Config& config) {
     return s;
 }
 
-bool update_installs_at_quit(const UpdateSettings& s, bool asked) { return s.install_on_quit && (asked || s.download); }
+bool update_installs_at_quit(const UpdateSettings& s, bool asked) {
+    return !distribution::managed() && s.install_on_quit && (asked || s.download);
+}
 
 std::string default_update_feed() { return HAILSTONE_UPDATE_FEED; }
 
@@ -62,6 +69,7 @@ std::string default_addon_index() { return HAILSTONE_ADDON_INDEX; }
 std::string default_project_page() { return HAILSTONE_PROJECT_PAGE; }
 
 std::string updates_off_reason(const fs::path& install_dir) {
+    if (distribution::managed()) return "updates are supplied by this managed distribution";
     std::error_code ec;
     if (fs::exists(install_dir.parent_path() / "CMakeCache.txt", ec)) return "a development build";
     if (!update_release_key()) return "this build has no release key";
@@ -90,6 +98,13 @@ void Updater::set(const UpdateStatus& s) {
 }
 
 void Updater::start(void (Updater::*job)()) {
+    if (distribution::managed()) {
+        UpdateStatus status;
+        status.state = UpdateState::Failed;
+        status.error = "updates are supplied by this managed distribution";
+        set(status);
+        return;
+    }
     if (busy_.exchange(true)) return;
     if (worker_.joinable()) worker_.join();
     worker_ = std::thread([this, job] {

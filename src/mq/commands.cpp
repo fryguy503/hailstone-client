@@ -4,6 +4,7 @@
 #include <format>
 #include <utility>
 
+#include "core/distribution.h"
 #include "game/coords.h"
 #include "game/world_state.h"
 #include "mq/nav_commands.h"
@@ -68,6 +69,10 @@ Commands::Commands(CommandEnv env) : env_(std::move(env)) {
     });
     // /squelch: the chat lines its command prints are dropped.
     h.on_chat(owner_, [this](plugin::ChatLine&) { return squelch_ ? plugin::Flow::Drop : plugin::Flow::Continue; });
+
+    // Keep stock commands (including /target) on the RoF2 interpreter. This distribution does not expose MQ's
+    // command overrides or command-driven automation, even to a manually typed line.
+    if (distribution::managed()) return;
 
     h.add_command(owner_, "/echo", [this](std::string_view args) { say(std::string(args)); });
     h.add_command(owner_, "/noparse", [this](std::string_view args) {
@@ -213,7 +218,8 @@ void Commands::filter(std::string& line, plugin::Flow& flow) {
     std::string word = first_word(line);
     // ${...} (a read: scripts and plugins need the read permission) unless /noparse is running the line or a window
     // sends it (LiteralLine).
-    if (!noparse_ && g_literal_lines == 0 && !iequals(word, "/noparse") && line.find("${") != std::string::npos) {
+    if (!distribution::managed() && !noparse_ && g_literal_lines == 0 && !iequals(word, "/noparse") &&
+        line.find("${") != std::string::npos) {
         if ((plugin::caller_caps() & plugin::kCapRead) == 0) {
             if (env_.echo) env_.echo(std::format("[MQ] {}: ${{...}} needs the server's 'read' permission", plugin::caller_name()));
             flow = plugin::Flow::Drop;

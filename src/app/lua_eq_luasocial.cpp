@@ -36,6 +36,7 @@
 #include "app/lua_eq.h"
 #include "app/lua_eq_windows.h"
 #include "core/sha256.h"
+#include "core/distribution.h"
 #include "game/hotbuttons.h"
 #include "game/lua_social.h"
 #include "mq/lua_mq.h"
@@ -147,6 +148,7 @@ int LuaSocial(lua_State* L) {
 }
 
 int SetLuaSocial(lua_State* L) {
+    if (distribution::managed()) return 0;
     EqHost& h = host_of(L);
     int n = social_arg(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
@@ -184,6 +186,7 @@ int SetLuaSocial(lua_State* L) {
 }
 
 int LuaSocialFace(lua_State* L) {
+    if (distribution::managed()) return 0;
     EqHost& h = host_of(L);
     int n = social_arg(L, 1);
     if (n < 0 || !h.scripts) return 0;
@@ -211,6 +214,13 @@ int LuaSocialFace(lua_State* L) {
 }
 
 int LuaSocialDryRun(lua_State* L) {
+    if (distribution::managed()) {
+        lua_createtable(L, 0, 3);
+        set_bool(L, "ok", false);
+        set_str(L, "error", "Lua socials are disabled in this distribution");
+        set_str(L, "mode", "off");
+        return 1;
+    }
     EqHost& h = host_of(L);
     int n = social_arg(L, 1);
     if (n < 0 || !h.scripts) return 0;
@@ -258,6 +268,10 @@ int LuaSocialDryRun(lua_State* L) {
 }
 
 int PressLuaSocial(lua_State* L) {
+    if (distribution::managed()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
     EqHost& h = host_of(L);
     int n = social_arg(L, 1);
     if (n < 0 || !h.scripts || !h.hot_buttons->social(n).is_lua()) return 0;
@@ -396,6 +410,7 @@ int LuaComplete(lua_State* L) {
 // ---------------------------------------------------------------- opening, new socials
 
 int LuaSocialEditRequest(lua_State* L) {
+    if (distribution::managed()) return 0;
     EqHost& h = host_of(L);
     if (h.lua_social_edit < 0) return 0;
     lua_pushinteger(L, h.lua_social_edit);
@@ -404,6 +419,7 @@ int LuaSocialEditRequest(lua_State* L) {
 }
 
 int OpenLuaSocialEditor(lua_State* L) {
+    if (distribution::managed()) return 0;
     EqHost& h = host_of(L);
     int n = social_arg(L, 1);
     if (n >= 0) h.lua_social_edit = n;

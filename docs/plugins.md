@@ -1,5 +1,42 @@
 # Plugins, MacroQuest Lua scripts and the server's rules
 
+## Managed distributions
+
+An operator can build a managed distribution with `HAILSTONE_MANAGED_CLIENT=ON`
+and `HAILSTONE_BUILTIN_ADDON_SOURCE_DIR` naming a separately maintained SDK-only
+static module. It must provide the `hailstone_builtin_addon` target, a safe
+`HAILSTONE_BUILTIN_ADDON_ID` target property and the descriptor factory in
+`sdk/hailstone_builtin_addon.h`. The client requires that module to initialize
+before gameplay. Its identity and callbacks are linked into the executable;
+there is no user-selectable add-on directory, download, consent or unload step.
+The output is `build/hailstone-managed/`, separate from an ordinary client's tree.
+
+Managed mode is enabled before argument parsing and cannot be relaxed by INI
+settings, missing/cached server rules, zoning or reconnecting. Dynamic plugins,
+player and server Lua scripts, Lua social code/faces/dry runs, add-on management
+and tools, MQ command expansion, automatic navigation/stick, mesh-assisted
+follow, autoskills, custom bulk/tidy/sell item jobs, Claim All Parcels and gameplay
+diagnostic drivers are disabled. Ordinary RoF2
+commands and five-line socials, melody, autofire, native follow and manual
+ability/AA use retain their ordinary handlers.
+
+The UI's executable Lua must match both the logical path and content hash in a
+manifest compiled from the shipped sources. Edited/replacement packs, modules,
+dynamic code loading, developer reloads and test-action settings cannot supply
+additional executable UI. Settings such as window positions remain editable.
+The linked module's optional `ui/<pack>/` files are packaged under
+`builtin/<id>/ui/<pack>/` and receive the same manifest checks.
+
+The generic updater, staged installs and automatic rollback are disabled in
+managed mode so they cannot replace it with an unrestricted release. A dedicated
+distribution update channel is future work. The module's native code is trusted
+first-party code, not a sandbox: host capabilities do not constrain what C++ can
+do directly. These restrictions govern the supported client; modified executables
+and external input automation still require server-side rule enforcement.
+
+The following sections describe ordinary builds. Managed restrictions take
+precedence over all of their server-granted capabilities.
+
 The client can be extended in three ways. All three sit on one hook bus (`src/plugin/hooks.h`) that sees every
 world and zone packet in both directions, chat lines, typed commands, the game state, zoning, spawns and each
 frame:

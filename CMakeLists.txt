@@ -49,6 +49,11 @@ foreach(_old IN LISTS _hailstone_cache)
 endforeach()
 
 option(HAILSTONE_BUILD_TESTS "Build unit tests" ON)
+option(HAILSTONE_MANAGED_CLIENT "Build a client with only its mandatory linked add-on and approved UI" OFF)
+set(HAILSTONE_BUILTIN_ADDON_SOURCE_DIR "" CACHE PATH "SDK-only mandatory built-in add-on source directory")
+if(HAILSTONE_MANAGED_CLIENT AND NOT HAILSTONE_BUILTIN_ADDON_SOURCE_DIR)
+  message(FATAL_ERROR "A managed client requires HAILSTONE_BUILTIN_ADDON_SOURCE_DIR")
+endif()
 option(HAILSTONE_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer (GCC/Clang)" OFF)
 option(HAILSTONE_LIBFUZZER "Build libFuzzer targets (needs Clang; turns on HAILSTONE_SANITIZE)" OFF)
 if(HAILSTONE_LIBFUZZER)
@@ -123,6 +128,7 @@ add_library(hailstone_engine STATIC
   src/core/binary_header.cpp
   src/core/sha1.cpp
   src/core/sha256.cpp
+  src/core/distribution.cpp
   src/plugin/hooks.cpp
   src/plugin/consent.cpp
   src/plugin/policy.cpp
@@ -741,7 +747,11 @@ add_dependencies(hailstone_engine hailstone_shaders)
 # The client's folder (docs/layout.md): the build makes it in build/hailstone/, as an install does. The binary,
 # shaders/, ui/ and the runtime DLLs; the data Hailstone writes (hailstone.ini, servers/, logs/ ...) lands beside them,
 # since a dev build's folder is writable. $<0:> keeps multi-config generators from adding a Debug/Release level.
-set(HAILSTONE_TREE_DIR ${PROJECT_BINARY_DIR}/hailstone)
+if(HAILSTONE_MANAGED_CLIENT)
+  set(HAILSTONE_TREE_DIR ${PROJECT_BINARY_DIR}/hailstone-managed)
+else()
+  set(HAILSTONE_TREE_DIR ${PROJECT_BINARY_DIR}/hailstone)
+endif()
 # Builds before the folder put the binary itself at build/hailstone: that file has to make way for the folder.
 if(EXISTS ${HAILSTONE_TREE_DIR} AND NOT IS_DIRECTORY ${HAILSTONE_TREE_DIR})
   file(REMOVE ${HAILSTONE_TREE_DIR})
@@ -750,8 +760,13 @@ endif()
 # The example compiled plugin (plugins/example): plain C against sdk/hailstone_plugin.h, in build/hailstone/plugins.
 add_library(MQ2Example MODULE plugins/example/MQ2Example.c)
 target_include_directories(MQ2Example PRIVATE sdk)
-set_target_properties(MQ2Example PROPERTIES PREFIX "" LIBRARY_OUTPUT_DIRECTORY ${HAILSTONE_TREE_DIR}/plugins$<0:>
-                                            RUNTIME_OUTPUT_DIRECTORY ${HAILSTONE_TREE_DIR}/plugins$<0:>)
+if(HAILSTONE_MANAGED_CLIENT)
+  set(_example_plugin_dir ${PROJECT_BINARY_DIR}/test-plugins)
+else()
+  set(_example_plugin_dir ${HAILSTONE_TREE_DIR}/plugins)
+endif()
+set_target_properties(MQ2Example PROPERTIES PREFIX "" LIBRARY_OUTPUT_DIRECTORY ${_example_plugin_dir}$<0:>
+                                            RUNTIME_OUTPUT_DIRECTORY ${_example_plugin_dir}$<0:>)
 
 # The server plugins are kept in repositories of their own and reach players as add-ons (docs/addons.md): the NMS
 # server's (projecthailstone/hailstone-nms) and the Project Triune server's (projecthailstone/hailstone-projecttriune,
@@ -786,6 +801,42 @@ if(HAILSTONE_CLANG_TIDY)
   set_target_properties(hailstone PROPERTIES CXX_CLANG_TIDY "${HAILSTONE_TIDY_COMMAND}")
 endif()
 target_link_libraries(hailstone PRIVATE hailstone_engine)
+target_include_directories(hailstone PRIVATE sdk ${PROJECT_BINARY_DIR}/generated)
+set(_managed_ui_roots "=${CMAKE_CURRENT_SOURCE_DIR}/ui")
+file(GLOB_RECURSE _managed_ui_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.lua")
+if(HAILSTONE_BUILTIN_ADDON_SOURCE_DIR)
+  set(HAILSTONE_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sdk")
+  add_subdirectory("${HAILSTONE_BUILTIN_ADDON_SOURCE_DIR}" "${PROJECT_BINARY_DIR}/builtin-addon")
+  if(NOT TARGET hailstone_builtin_addon)
+    message(FATAL_ERROR "The built-in add-on must provide the static hailstone_builtin_addon target")
+  endif()
+  get_target_property(_builtin_type hailstone_builtin_addon TYPE)
+  get_target_property(_builtin_id hailstone_builtin_addon HAILSTONE_BUILTIN_ADDON_ID)
+  if(NOT _builtin_type STREQUAL "STATIC_LIBRARY" OR NOT _builtin_id MATCHES "^[a-z][a-z0-9_-]*$")
+    message(FATAL_ERROR "The built-in add-on requires a static target and a safe HAILSTONE_BUILTIN_ADDON_ID")
+  endif()
+  target_link_libraries(hailstone PRIVATE hailstone_builtin_addon)
+  target_compile_definitions(hailstone PRIVATE HAILSTONE_HAS_BUILTIN_ADDON=1 HAILSTONE_BUILTIN_ADDON_ID="${_builtin_id}")
+  if(EXISTS "${HAILSTONE_BUILTIN_ADDON_SOURCE_DIR}/ui")
+    list(APPEND _managed_ui_roots "plugin:${_builtin_id}=${HAILSTONE_BUILTIN_ADDON_SOURCE_DIR}/ui")
+    file(GLOB_RECURSE _builtin_ui_sources CONFIGURE_DEPENDS "${HAILSTONE_BUILTIN_ADDON_SOURCE_DIR}/ui/*.lua")
+    list(APPEND _managed_ui_sources ${_builtin_ui_sources})
+    add_custom_command(TARGET hailstone POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory "${HAILSTONE_BUILTIN_ADDON_SOURCE_DIR}/ui"
+              "$<TARGET_FILE_DIR:hailstone>/builtin/${_builtin_id}/ui")
+  endif()
+endif()
+add_custom_command(OUTPUT "${PROJECT_BINARY_DIR}/generated/core/managed_ui_manifest.h"
+  COMMAND ${CMAKE_COMMAND} "-DROOTS=${_managed_ui_roots}"
+          "-DOUTPUT=${PROJECT_BINARY_DIR}/generated/core/managed_ui_manifest.h"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ManagedUiManifest.cmake"
+  DEPENDS ${_managed_ui_sources} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ManagedUiManifest.cmake"
+  VERBATIM)
+add_custom_target(hailstone_managed_ui_manifest DEPENDS "${PROJECT_BINARY_DIR}/generated/core/managed_ui_manifest.h")
+if(HAILSTONE_MANAGED_CLIENT)
+  target_compile_definitions(hailstone PRIVATE HAILSTONE_MANAGED_CLIENT=1)
+  add_dependencies(hailstone hailstone_managed_ui_manifest)
+endif()
 set_target_properties(hailstone PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${HAILSTONE_TREE_DIR}$<0:>)
 # Shaders are looked up next to the executable.
 add_custom_command(TARGET hailstone POST_BUILD
@@ -1237,8 +1288,20 @@ if(HAILSTONE_BUILD_TESTS)
     target_compile_definitions(hailstone_tests PRIVATE HAILSTONE_WEB_HELPER="$<TARGET_FILE:hailstone-web>")
   endif()
   add_test(NAME hailstone_tests COMMAND hailstone_tests)
+  add_executable(hailstone_managed_tests tests/managed_test_main.cpp tests/managed_distribution_test.cpp
+    tests/managed_addons_test.cpp tests/managed_automation_test.cpp tests/managed_ui_test.cpp tests/managed_updates_test.cpp)
+  add_dependencies(hailstone_managed_tests hailstone_managed_ui_manifest)
+  target_include_directories(hailstone_managed_tests PRIVATE tests sdk ${PROJECT_BINARY_DIR}/generated)
+  target_compile_definitions(hailstone_managed_tests PRIVATE DOCTEST_CONFIG_USE_STD_HEADERS
+    HAILSTONE_CLIENT_UI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/ui")
+  target_compile_options(hailstone_managed_tests PRIVATE ${HAILSTONE_WARNINGS})
+  target_link_libraries(hailstone_managed_tests PRIVATE hailstone_engine doctest::doctest)
+  add_test(NAME hailstone_managed_tests COMMAND hailstone_managed_tests)
   # Windows has no rpath: SDL3.dll has to sit next to the executable.
   if(WIN32)
+    add_custom_command(TARGET hailstone_managed_tests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:hailstone_managed_tests> $<TARGET_FILE_DIR:hailstone_managed_tests>
+      COMMAND_EXPAND_LISTS)
     add_custom_command(TARGET hailstone_tests POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:hailstone_tests> $<TARGET_FILE_DIR:hailstone_tests>
       COMMAND_EXPAND_LISTS)

@@ -12,6 +12,7 @@
 
 #include "app/client_app_internal.h"
 #include "app/lua_eq.h"
+#include "core/distribution.h"
 #include "app/lua_eq_windows.h"
 #include "core/msvc_atoi.h"
 #include "game/hotbuttons.h"
@@ -197,6 +198,10 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
         if (word.empty()) {
             eq_api_->show("AbilityBookWnd", !eq_api_->shown("AbilityBookWnd"));
         } else if (word == "auto") {
+            if (distribution::managed()) {
+                c.show_chat("Autoskill is disabled in this distribution.", 13);
+                return true;
+            }
             std::string to = game::next_cmd_arg(rest);
             for (char& ch : to) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
             eq_api_->click_child("AbilityBookWnd", to == "on" ? "AutoskillOn" : to == "off" ? "AutoskillOff" : "AutoskillToggle");

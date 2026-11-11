@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstdint>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -20,6 +21,7 @@
 #include <lua.hpp>
 
 #include "core/atomic_file.h"
+#include "core/distribution.h"
 #include "core/frame_sections.h"
 #include "core/log.h"
 
@@ -71,6 +73,62 @@ constexpr int kHookCount = 10000; // instructions between the budget's checks
 constexpr auto kGcSlice = std::chrono::microseconds(1000);
 constexpr int kGcStart = 2; // a cycle starts when the heap is this many times the live heap after the last
 constexpr int kGcHurry = 4; // and runs to its end in one frame at this many times (the slices fell behind)
+
+enum class SourceError { None, Read, Outside, Unapproved };
+
+const char* source_error(SourceError error) {
+    switch (error) {
+    case SourceError::Outside: return "UI source is outside its approved folder";
+    case SourceError::Unapproved: return "UI source is not approved by this managed distribution";
+    default: return "cannot read UI source";
+    }
+}
+
+std::optional<std::string> read_ui_source(const fs::path& pack, const fs::path& folder,
+                                          const fs::path& file, std::string_view tag, SourceError& error) {
+    error = SourceError::Read;
+    std::string key;
+    if (distribution::managed()) {
+        std::error_code ec;
+        const auto base = fs::weakly_canonical(folder, ec);
+        if (ec) return std::nullopt;
+        const auto path = fs::weakly_canonical(file, ec);
+        if (ec) return std::nullopt;
+        const auto relative = path.lexically_relative(base);
+        if (relative.empty() || *relative.begin() == ".." || *relative.begin() == ".") {
+            error = SourceError::Outside;
+            return std::nullopt;
+        }
+        auto pack_name = pack.lexically_normal().filename();
+        if (pack_name.empty()) pack_name = pack.parent_path().filename();
+        if (!tag.empty()) key = std::string(tag) + '/';
+        key += pack_name.generic_string() + '/' + relative.generic_string();
+    }
+    // Hash and execute one snapshot, rather than reopening a path after checking it.
+    std::ifstream in(file, std::ios::binary | std::ios::ate);
+    const auto length = in.tellg();
+    if (!in || length < 0 || static_cast<std::uintmax_t>(length) > kMemoryLimit) return std::nullopt;
+    std::string bytes(static_cast<std::size_t>(length), '\0');
+    in.seekg(0);
+    if (!in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()))) return std::nullopt;
+    if (in.peek() != std::char_traits<char>::eof()) return std::nullopt;
+    if (!distribution::ui_source_allowed(key, bytes)) {
+        error = SourceError::Unapproved;
+        return std::nullopt;
+    }
+    error = SourceError::None;
+    return bytes;
+}
+
+int compile_ui_source(lua_State* L, std::string_view bytes, const std::string& name) {
+    // Match loadfile's text handling after checking the original, unmodified bytes.
+    if (bytes.starts_with("\xef\xbb\xbf")) bytes.remove_prefix(3);
+    if (bytes.starts_with('#')) {
+        const auto newline = bytes.find('\n');
+        bytes = newline == std::string_view::npos ? std::string_view{} : bytes.substr(newline);
+    }
+    return luaL_loadbufferx(L, bytes.data(), bytes.size(), name.c_str(), "t");
+}
 // The live heap is what the cycle found reachable (gc_live_bytes), not the heap when it ended: a sweep spread over
 // many frames ends with all the garbage the windows made meanwhile, which only the next cycle frees. Counted as
 // live, it raised both thresholds, so the next sweep was longer and its garbage more: a night with the Triune loot
@@ -221,6 +279,7 @@ struct LuaUi::Impl {
         return !character_file.empty() && LuaUi::character_setting(plugin_key_rest(key));
     }
     const std::string* get_setting(const std::string& key) const {
+        if (distribution::managed() && plugin_key_rest(key).starts_with("test.")) return nullptr;
         if (per_character(key))
             if (auto it = character_settings.find(key); it != character_settings.end()) return &it->second;
         auto it = settings.find(key);
@@ -233,6 +292,7 @@ struct LuaUi::Impl {
                value.find_first_of("\r\n") == std::string_view::npos;
     }
     bool set_setting(const std::string& key, const std::string& value) {
+        if (distribution::managed() && plugin_key_rest(key).starts_with("test.")) return false;
         if (!storable(key, value)) return false;
         const std::string* now = get_setting(key);
         if (now && *now == value) return true;
@@ -318,6 +378,13 @@ struct LuaUi::Impl {
     }
 
     void load_file(Script& s) {
+        SourceError error = SourceError::Outside;
+        const auto* folder = s.tag.empty() ? &root : folder_dir(s.tag);
+        auto source = folder ? read_ui_source(root, *folder, s.path, s.tag, error) : std::nullopt;
+        if (!source) {
+            report(s, source_error(folder ? error : SourceError::Outside));
+            return;
+        }
         // Drop the windows this file registered before; the reloaded script registers them again.
         for (std::size_t i = 0; i < windows.size();) {
             if (windows[i].file == s.file) {
@@ -335,7 +402,7 @@ struct LuaUi::Impl {
         {
             Budget budget(*this, budget_for(s.tag));
             Acting acting(*this, s.tag);
-            status = luaL_loadfilex(L, path.c_str(), "t"); // text only: a binary chunk can corrupt memory
+            status = compile_ui_source(L, *source, '@' + path);
             if (status == LUA_OK && !s.tag.empty()) { // a plugin's: its own globals
                 push_env(s.tag);
                 lua_setupvalue(L, -2, 1); // the chunk's _ENV
@@ -445,6 +512,8 @@ struct LuaUi::Impl {
                 scripts.push_back(std::move(n));
                 s = &scripts.back();
                 force = true;
+            } else if (distribution::managed()) {
+                continue; // approved code stays fixed for this UI instance
             }
             auto written = fs::last_write_time(p, ec);
             if (force || written != s->written) {
@@ -465,7 +534,7 @@ struct LuaUi::Impl {
                 ImGui::PushID(s.file.c_str());
                 ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f), "%s", s.file.c_str());
                 ImGui::SameLine();
-                if (ImGui::SmallButton("reload")) load_file(s);
+                if (!distribution::managed() && ImGui::SmallButton("reload")) load_file(s);
                 ImGui::TextWrapped("%s", s.error.c_str());
                 ImGui::Separator();
                 ImGui::PopID();
@@ -476,6 +545,7 @@ struct LuaUi::Impl {
 
     // The control window: windows on/off, reload, the ImGui demo (a reference for script authors).
     void draw_control() {
+        if (distribution::managed()) return;
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowCollapsed(true, ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Lua UI")) {
@@ -554,6 +624,11 @@ int lua_set_setting(lua_State* L) {
 int lua_log(lua_State* L) {
     log::info("ui script: {}", luaL_checkstring(L, 1));
     return 0;
+}
+
+int lua_managed(lua_State* L) {
+    lua_pushboolean(L, distribution::managed());
+    return 1;
 }
 
 // ui.DisableWindow(name)   -- turns a script window off (saved); the "Lua UI" window turns it back on. A plugin's
@@ -662,31 +737,42 @@ int lua_dofile(lua_State* L) {
     lua_settop(L, 1);
     auto& ui = LuaUi::Impl::of(L);
     const char* tag = lua_tostring(L, lua_upvalueindex(1)); // null: the pack's own dofile
-    bool found = false;
+    SourceError error = SourceError::Outside;
+    int status = LUA_ERRFILE;
     {
         const fs::path* folder = tag ? ui.folder_dir(tag) : nullptr;
         std::optional<fs::path> p = folder ? inside(*folder, given) : std::nullopt;
         std::error_code ec;
-        if (!p || !fs::exists(*p, ec)) p = inside(ui.root, given);
+        const bool own = p && fs::exists(*p, ec);
+        if (!own) {
+            folder = &ui.root;
+            p = inside(ui.root, given);
+        }
         if (p) {
-            const std::string text = p->string();
-            lua_pushlstring(L, text.data(), text.size());
-            found = true;
+            auto source = read_ui_source(ui.root, *folder, *p, own ? tag : "", error);
+            if (source) status = compile_ui_source(L, *source, '@' + p->string());
         }
     }
-    if (!found) return luaL_error(L, "dofile: '%s' is not in the UI's folder", given);
-    if (luaL_loadfilex(L, lua_tostring(L, 2), "t") != LUA_OK) return lua_error(L);
+    if (error == SourceError::Outside && !distribution::managed())
+        return luaL_error(L, "dofile: '%s' is not in the UI's folder", given);
+    if (error != SourceError::None) return luaL_error(L, "%s", source_error(error));
+    if (status != LUA_OK) return lua_error(L);
     if (tag) {
         ui.push_env(tag);
         lua_setupvalue(L, -2, 1); // its _ENV: the plugin's globals
     }
     lua_call(L, 0, LUA_MULTRET);
-    return lua_gettop(L) - 2;
+    return lua_gettop(L) - 1;
 }
 
 // load(chunk [, name [, mode [, env]]]): Lua's, text only; in a plugin's (upvalue 2: its globals) env defaults to
 // the plugin's globals, not the pack's.
 int lua_load_text(lua_State* L) {
+    if (distribution::managed()) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "dynamic UI code is disabled by this managed distribution");
+        return 2;
+    }
     int n = lua_gettop(L);
     if (n < 3) {
         lua_settop(L, 3);
@@ -1275,6 +1361,7 @@ LuaUi::LuaUi(fs::path scripts, fs::path settings) : impl_(std::make_unique<Impl>
              {"GetSetting", &lua_get_setting},
              {"SetSetting", &lua_set_setting},
              {"DisableWindow", &lua_disable_window},
+             {"ManagedDistribution", &lua_managed},
              {"Log", &lua_log}}) {
         lua_pushcfunction(L, fn);
         lua_setfield(L, -2, name);
@@ -1346,6 +1433,7 @@ void LuaUi::push_folder_env_for_test(std::string_view tag) const {
 }
 
 std::string LuaUi::run_for_test(std::string_view tag_view, const std::string& code) {
+    if (distribution::managed()) return "error: dynamic UI code is disabled by this managed distribution";
     Impl& m = *impl_;
     lua_State* L = m.L;
     const std::string tag(tag_view);
@@ -1376,7 +1464,7 @@ void LuaUi::add_eq_api(const Registrar& r) {
     lua_pop(L, 1);
 }
 
-void LuaUi::set_show_control(bool show) { impl_->show_control = show; }
+void LuaUi::set_show_control(bool show) { impl_->show_control = show && !distribution::managed(); }
 
 void LuaUi::set_entry_scripts(std::vector<std::string> files) { impl_->entries = std::move(files); }
 
@@ -1396,7 +1484,7 @@ void LuaUi::frame() {
     if (m.scripts.empty() && m.last_scan == Clock::time_point{}) {
         m.last_scan = Clock::now();
         m.scan(true);
-    } else if (m.folders_changed || Clock::now() - m.last_scan >= std::chrono::seconds(1)) { // reload changed scripts
+    } else if (m.folders_changed || (!distribution::managed() && Clock::now() - m.last_scan >= std::chrono::seconds(1))) {
         m.last_scan = Clock::now();
         m.scan(false);
     }

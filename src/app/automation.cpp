@@ -12,6 +12,7 @@
 
 #include "app/addon_install.h"
 #include "core/log.h"
+#include "core/distribution.h"
 #include "mq/commands.h"
 #include "mq/lua_mq.h"
 #include "mq/tlo.h"
@@ -230,6 +231,10 @@ void Automation::set_addon_ceilings(std::vector<plugin::Ceiling> ceilings) {
 }
 
 plugin::Hooks& Automation::hooks() { return impl_->hooks; }
+bool Automation::load_builtin(const HailstoneBuiltinAddon& addon, const std::filesystem::path& trusted_ui_dir,
+                              std::string* why) {
+    return impl_->plugins->load_builtin(addon, trusted_ui_dir, why);
+}
 std::shared_ptr<game::ExtensionChain> Automation::extensions() { return impl_->extensions; }
 plugin::UiBridge& Automation::plugin_ui() { return impl_->plugin_ui; }
 mq::ScriptHost& Automation::scripts() { return *impl_->scripts; }
@@ -291,7 +296,7 @@ void Automation::imgui(bool dev) {
     m.plugins->imgui();
     m.hooks.imgui();
     if (!ui::lua::replaces("PluginConsent")) m.consent_window();
-    if (dev) m.dev_window();
+    if (dev && !distribution::managed()) m.dev_window();
     ui::lua::raise_guarded_windows(); // the question above every window drawn this frame
 }
 

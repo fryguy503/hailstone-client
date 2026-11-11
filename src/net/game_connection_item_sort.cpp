@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "core/log.h"
+#include "core/distribution.h"
 #include "game/merchant.h"
 #include "net/game_connection.h"
 
@@ -21,6 +22,7 @@ bool carried_slot(const ItemSlot& at) {
 }
 
 std::string GameConnection::item_job_blocked(ItemJobScope scope) const {
+    if (distribution::managed()) return "Item automation is disabled in this distribution.";
     if (state_ != ConnectionState::InZone || pstatus_.dead) return "You cannot move items now.";
     if (scope == ItemJobScope::Bank && !bank_) return "The bank is not open.";
     if (inventory_.cursor()) return "Put down what you are holding first.";
@@ -34,6 +36,7 @@ std::string GameConnection::item_job_blocked(ItemJobScope scope) const {
 
 std::string GameConnection::start_item_job(ItemJobScope scope, const ItemSlot& bag, ItemJobMode mode,
                                            const ItemJobOptions& options) {
+    if (distribution::managed()) return "Item automation is disabled in this distribution.";
     if (item_job_) return "Already sorting.";
     if (mode == ItemJobMode::Sell) return "Use start_sell_job.";
     if (auto why = item_job_blocked(scope); !why.empty()) return why;
@@ -79,6 +82,7 @@ std::string GameConnection::start_item_job(ItemJobScope scope, const ItemSlot& b
 }
 
 std::string GameConnection::start_sell_job(const std::vector<std::uint32_t>& ids) {
+    if (distribution::managed()) return "Item automation is disabled in this distribution.";
     if (item_job_) return "Already busy with your items.";
     if (state_ != ConnectionState::InZone || pstatus_.dead) return "You cannot sell now.";
     if (!merchant_ || !merchant_->open || merchant_->trader) return "Open a merchant first.";
@@ -107,6 +111,7 @@ std::string GameConnection::start_sell_job(const std::vector<std::uint32_t>& ids
 }
 
 std::string GameConnection::bulk_items_blocked(ItemJobMode mode) const {
+    if (distribution::managed()) return "Item automation is disabled in this distribution.";
     if (item_job_) return "Already busy with your items.";
     if (state_ != ConnectionState::InZone || pstatus_.dead) return "You cannot do that now.";
     if (mode == ItemJobMode::Sell) {
@@ -172,6 +177,10 @@ std::string GameConnection::start_bulk_job(ItemJobMode mode, const std::vector<I
 }
 
 void GameConnection::update_bulk_job(std::int64_t now) {
+    if (distribution::managed()) {
+        item_job_.reset();
+        return;
+    }
     ItemJob& job = *item_job_;
     const game::SortClick& c = job.clicks[job.next];
     const bool tribute = job.status.mode == ItemJobMode::Tribute;
@@ -237,6 +246,10 @@ std::optional<GameConnection::ItemJobStatus> GameConnection::item_job() const {
 }
 
 void GameConnection::update_item_job() {
+    if (distribution::managed()) {
+        item_job_.reset();
+        return;
+    }
     if (!item_job_) return;
     ItemJob& job = *item_job_;
     std::int64_t now = now_ms();

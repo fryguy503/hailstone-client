@@ -127,8 +127,8 @@ void ClientApp::draw_ui(float fps) {
             action = ui::character_select_screen(char_view_);
         }
         // HAILSTONE_CHAR_CREATE=1 (testing): the character creation once the creation tables are in.
-        static bool test_create = hailstone::core::env("CHAR_CREATE") != nullptr;
-        if (test_create && conn_->char_create_data()) {
+        static bool test_create = !distribution::managed() && hailstone::core::env("CHAR_CREATE") != nullptr;
+        if (!distribution::managed() && test_create && conn_->char_create_data()) {
             test_create = false;
             action = ui::CharacterSelectAction::Create;
         }

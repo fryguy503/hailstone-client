@@ -13,6 +13,7 @@
 #include <lua.hpp>
 
 #include "app/lua_eq.h"
+#include "core/distribution.h"
 #include "game/slash_commands.h"
 #include "mq/lua_mq.h"
 #include "plugin/policy.h"
@@ -126,6 +127,11 @@ int Scripts(lua_State* L) {
 
 // ok, why = eq.ScriptRun(name [, args]): the arguments split as /lua run's are ("quoted words" one).
 int ScriptRun(lua_State* L) {
+    if (distribution::managed()) {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "user scripts are disabled in this distribution");
+        return 2;
+    }
     EqHost& h = host_of(L);
     const char* name_arg = luaL_checkstring(L, 1);
     const char* a = luaL_optstring(L, 2, nullptr); // (both checked before anything C++ is made)
@@ -172,6 +178,10 @@ int ScriptPause(lua_State* L) {
 }
 
 int SetScriptAutorun(lua_State* L) {
+    if (distribution::managed()) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
     EqHost& h = host_of(L);
     std::string name = luaL_checkstring(L, 1);
     bool on = lua_toboolean(L, 2) != 0;

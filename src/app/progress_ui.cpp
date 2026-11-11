@@ -5,6 +5,7 @@
 #include <imgui.h>
 
 #include "core/env.h"
+#include "core/distribution.h"
 #include "core/log.h"
 #include "game/world_state.h"
 #include "net/game_connection.h"
@@ -15,7 +16,8 @@ namespace hailstone::app {
 using Clock = std::chrono::steady_clock;
 
 ProgressUi::ProgressUi() {
-    if (const char* t = hailstone::core::env("PROGRESS_TEST")) test_ = t;
+    if (!distribution::managed())
+        if (const char* t = hailstone::core::env("PROGRESS_TEST")) test_ = t;
     if (const char* w = hailstone::core::env("PROGRESS_WINDOWS")) panel_ = *w && *w != '0';
 }
 
@@ -124,6 +126,7 @@ void ProgressUi::draw_panel(net::GameConnection& conn) {
 }
 
 void ProgressUi::drive_test(net::GameConnection& conn) {
+    if (distribution::managed()) return;
     auto now = Clock::now();
     if (test_since_ == Clock::time_point{}) test_since_ = step_since_ = now;
     if (now - test_since_ < std::chrono::seconds(6) || test_step_ < 0) return;

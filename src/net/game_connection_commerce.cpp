@@ -19,6 +19,7 @@
 #include <glm/geometric.hpp>
 
 #include "core/log.h"
+#include "core/distribution.h"
 #include "game/item_options.h"
 #include "game/merchant.h"
 #include "game/world_state.h"
@@ -274,6 +275,10 @@ std::string GameConnection::parcel_send_blocked(const std::string& to) const {
 }
 
 void GameConnection::claim_all_parcels() {
+    if (distribution::managed()) {
+        if (merchant_) merchant_->claiming.clear();
+        return;
+    }
     if (!merchant_ || !merchant_->open) return;
     merchant_->claiming.clear();
     for (const auto& [slot, parcel] : merchant_->parcels) merchant_->claiming.push_back(slot);
@@ -281,6 +286,10 @@ void GameConnection::claim_all_parcels() {
 }
 
 void GameConnection::next_parcel_claim() {
+    if (distribution::managed()) {
+        if (merchant_) merchant_->claiming.clear();
+        return;
+    }
     if (!merchant_ || merchant_->parcel_pending) return;
     while (!merchant_->claiming.empty()) {
         std::uint32_t slot = merchant_->claiming.front();

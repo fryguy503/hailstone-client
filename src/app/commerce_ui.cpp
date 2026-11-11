@@ -5,6 +5,7 @@
 #include <imgui.h>
 
 #include "core/env.h"
+#include "core/distribution.h"
 #include "core/log.h"
 #include "game/merchant.h"
 #include "game/world_state.h"
@@ -15,7 +16,8 @@ namespace hailstone::app {
 using Clock = std::chrono::steady_clock;
 
 CommerceUi::CommerceUi() {
-    if (const char* t = hailstone::core::env("COMMERCE_TEST")) test_ = t;
+    if (!distribution::managed())
+        if (const char* t = hailstone::core::env("COMMERCE_TEST")) test_ = t;
 }
 
 void CommerceUi::draw(net::GameConnection& conn, ui::ItemIconCache* icons) {
@@ -57,6 +59,7 @@ void CommerceUi::draw(net::GameConnection& conn, ui::ItemIconCache* icons) {
 }
 
 void CommerceUi::drive_test(net::GameConnection& conn) {
+    if (distribution::managed()) return;
     auto now = Clock::now();
     if (test_since_ == Clock::time_point{}) test_since_ = now;
     if (now - test_since_ < std::chrono::seconds(5)) return;

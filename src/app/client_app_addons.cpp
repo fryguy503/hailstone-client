@@ -10,6 +10,7 @@
 #include "app/client_app_internal.h"
 #include "core/addon_source.h"
 #include "core/build_info.h"
+#include "core/distribution.h"
 #include "core/server_profile.h"
 #include "core/update_manifest.h"
 #include "core/version.h"
@@ -73,6 +74,12 @@ bool tool_program_there(const std::filesystem::path& data, const InstalledAddon&
 } // namespace
 
 void ClientApp::start_addons() {
+    if (distribution::managed()) {
+        login_view_.addons.available = false;
+        login_view_.addons.open = false;
+        login_view_.addons.why_off = "This distribution includes its required add-on; user add-ons are disabled.";
+        return;
+    }
     const std::filesystem::path data = platform::data_dir();
     addons_at_start(data);
     if (automation_) automation_->set_addon_ceilings(addon_ceilings(data));
@@ -117,6 +124,7 @@ std::vector<AddonSuggestion> ClientApp::suggestions_for(std::string_view profile
                                                         const std::vector<std::string>& worlds,
                                                         const AddonIndex* index, const plugin::Rules& rules,
                                                         const std::vector<ServerAddon>& server_own) {
+    if (distribution::managed()) return {};
     if (!addons_ || profile.empty() || !config_.get_bool("addons.suggest", true)) return {};
     AddonsHad had;
     for (const auto& a : read_installed_addons(platform::data_dir())) {
@@ -134,6 +142,7 @@ std::vector<AddonSuggestion> ClientApp::suggestions_for(std::string_view profile
 
 void ClientApp::update_server_select_hint() {
     server_view_.addon_hint.clear();
+    if (distribution::managed()) return;
     if (!addons_) return;
     std::vector<std::string> worlds;
     for (const auto& s : servers_) worlds.push_back(s.name);
@@ -151,6 +160,7 @@ void ClientApp::update_server_select_hint() {
 }
 
 void ClientApp::update_addons() {
+    if (distribution::managed()) return;
     const std::filesystem::path data = platform::data_dir();
     const bool at_login = screen_ == Screen::Login;
     // Nothing of this folder runs now: the files can move.
@@ -356,6 +366,7 @@ void ClientApp::update_addons() {
 }
 
 bool ClientApp::texture_studio_installed() const {
+    if (distribution::managed()) return false;
     // Its program only (the Options window asks each frame): starting it checks the add-on's record too.
     InstalledAddon a;
     a.name = std::string(kTextureStudio);
@@ -364,6 +375,10 @@ bool ClientApp::texture_studio_installed() const {
 }
 
 bool ClientApp::start_texture_studio(std::string* error) {
+    if (distribution::managed()) {
+        if (error) *error = "User add-on tools are disabled in this distribution.";
+        return false;
+    }
     const auto all = read_installed_addons(platform::data_dir());
     const auto key = hex_decode<32>(kTextureStudioKey);
     if (find_addon(all, kTextureStudio) && (!key || !find_pinned_addon(all, kTextureStudio, AddonKind::Tool,
@@ -378,6 +393,10 @@ bool ClientApp::start_texture_studio(std::string* error) {
 }
 
 bool ClientApp::start_addon_tool(std::string_view name, std::string* error) {
+    if (distribution::managed()) {
+        if (error) *error = "User add-on tools are disabled in this distribution.";
+        return false;
+    }
     const std::filesystem::path data = platform::data_dir();
     const auto all = read_installed_addons(data);
     const InstalledAddon* a = find_addon(all, name);
@@ -400,6 +419,7 @@ bool ClientApp::start_addon_tool(std::string_view name, std::string* error) {
 }
 
 void ClientApp::addons_login_action(ui::LoginAction action) {
+    if (distribution::managed()) return;
     using A = ui::LoginAction;
     ui::AddonsView& v = login_view_.addons;
     const std::filesystem::path data = platform::data_dir();

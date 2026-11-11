@@ -1,5 +1,7 @@
 #include "plugin/policy.h"
 
+#include "core/distribution.h"
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -409,6 +411,8 @@ bool Policy::server_file(FileKind kind, const Sha256Digest& hash) const {
 }
 
 std::uint32_t Policy::caps(FileKind kind, const Sha256Digest& hash) const {
+    // A managed distribution admits only its linked module, independently of server/local policy files.
+    if (distribution::managed()) return 0;
     if (!rules_) return 0;
     std::uint32_t caps = kCapAll;
     if (rules_->configured && !server_file(kind, hash))
@@ -431,6 +435,11 @@ std::string Policy::refusal(FileKind kind) const {
 
 ButtonRules Policy::button_rules() const {
     ButtonRules r;
+    if (distribution::managed()) {
+        r.mode = ButtonMode::Off;
+        r.faces = false;
+        return r;
+    }
     if (!rules_ || rules_->provisional) return r; // socials: from the zone-in
     if (!rules_->configured) {
         r.mode = ButtonMode::Full;

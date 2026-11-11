@@ -1,4 +1,6 @@
 #include "mq/lua_mq.h"
+
+#include "core/distribution.h"
 #include "mq/lua_script.h"
 
 #include <algorithm>
@@ -901,6 +903,10 @@ int l_dofile(lua_State* L) {
 // allowed by the server's rules like the script. find_module leaves the module's chunk on the stack (1), the cached or
 // built-in value (2), or an error message (0); C++ objects are gone before anything can raise an error.
 int find_module(lua_State* L, const char* given) {
+    if (distribution::managed()) {
+        lua_pushliteral(L, "User Lua modules are disabled in this distribution.");
+        return 0;
+    }
     Script& s = Script::of(L);
     std::string name = given;
     lua_getfield(L, LUA_REGISTRYINDEX, "hailstone.loaded");
@@ -1169,6 +1175,10 @@ ScriptHost::~ScriptHost() {
 }
 
 bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
+    if (distribution::managed()) {
+        why = "User Lua states are disabled in this distribution.";
+        return false;
+    }
     sc.L = lua_newstate(limited_alloc, &sc);
     if (!sc.L) {
         why = "out of memory";
@@ -1304,6 +1314,10 @@ bool ScriptHost::Impl::open_state(Script& sc, std::string& why) {
 }
 
 bool ScriptHost::run(const std::string& name, const std::vector<std::string>& args, std::string* why) {
+    if (distribution::managed()) {
+        if (why) *why = "User Lua scripts are disabled in this distribution.";
+        return false;
+    }
     Impl& m = *impl_;
     auto refuse = [&](std::string text) {
         if (why) *why = text;
@@ -1633,6 +1647,15 @@ void ScriptHost::Impl::draw_windows(Script& s) {
 
 void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
     Impl& m = *impl_;
+    if (distribution::managed()) {
+        stop_all();
+        for (auto& [social, script] : m.buttons) {
+            (void)social;
+            m.stop_threads(*script);
+        }
+        m.reap();
+        return;
+    }
     for (auto& sp : m.scripts) {
         Script& s = *sp;
         if (s.stop_requested) continue;
@@ -1665,6 +1688,7 @@ void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
 }
 
 void ScriptHost::Impl::start_allowed(const std::vector<std::string>& names) {
+    if (distribution::managed()) return;
     if (!env.policy || !env.policy->received()) return;
     for (const auto& name : names) {
         if (name.empty() || self->running(name)) continue;
@@ -1690,6 +1714,7 @@ std::optional<Sha256Digest> ScriptHost::Impl::file_hash(const fs::path& file) co
 }
 
 std::vector<ScriptHost::Found> ScriptHost::found() const {
+    if (distribution::managed()) return {};
     const Impl& m = *impl_;
     std::vector<Found> out;
     const auto dirs = m.dirs();
@@ -1738,6 +1763,7 @@ std::vector<ScriptHost::Found> ScriptHost::found() const {
 std::vector<fs::path> ScriptHost::folders() const { return impl_->dirs(); }
 
 void ScriptHost::set_autorun_file(const fs::path& file) {
+    if (distribution::managed()) return;
     Impl& m = *impl_;
     if (file == m.autorun_file) return;
     m.autorun_file = file;
@@ -1750,14 +1776,18 @@ void ScriptHost::set_autorun_file(const fs::path& file) {
 }
 
 bool ScriptHost::autorun(std::string_view name) const {
+    if (distribution::managed()) return false;
     const auto& a = impl_->autorun;
     return std::find(a.begin(), a.end(), lower(name)) != a.end();
 }
 
-std::vector<std::string> ScriptHost::autorun_list() const { return impl_->autorun; }
-bool ScriptHost::autorun_available() const { return !impl_->autorun_file.empty(); }
+std::vector<std::string> ScriptHost::autorun_list() const {
+    return distribution::managed() ? std::vector<std::string>{} : impl_->autorun;
+}
+bool ScriptHost::autorun_available() const { return !distribution::managed() && !impl_->autorun_file.empty(); }
 
 bool ScriptHost::set_autorun(std::string_view name, bool on) {
+    if (distribution::managed()) return false;
     Impl& m = *impl_;
     std::string key = lower(name);
     if (m.autorun_file.empty() || key.empty() || key.find_first_of("=[]\r\n") != std::string::npos) return false;
@@ -1774,6 +1804,7 @@ bool ScriptHost::set_autorun(std::string_view name, bool on) {
 }
 
 void ScriptHost::Impl::lua_command(std::string_view args) {
+    if (distribution::managed()) { say("[Lua] User scripts are disabled in this distribution."); return; }
     std::string_view rest = args;
     std::string verb = lower(game::next_cmd_arg(rest));
     std::vector<std::string> words;
@@ -1929,6 +1960,10 @@ plugin::ButtonRules ScriptHost::Impl::rules(const game::LuaSocial&) const {
 
 // The social's state, made again when its code changed; null with the reason (a syntax error).
 Script* ScriptHost::Impl::button(const ButtonPress& p, std::string& why) {
+    if (distribution::managed()) {
+        why = "Lua socials are disabled in this distribution.";
+        return nullptr;
+    }
     Sha256Digest hash = game::lua_social_hash(p.lua);
     const int key = p.state >= 0 ? p.state : p.social;
     if (auto b = broken.find(key); b != broken.end()) {
@@ -2043,6 +2078,10 @@ void ScriptHost::forget_button(int social) {
 }
 
 bool ScriptHost::press_button(const ButtonPress& p, std::string* why) {
+    if (distribution::managed()) {
+        if (why) *why = "Lua socials are disabled in this distribution.";
+        return false;
+    }
     Impl& m = *impl_;
     auto refuse = [&](const std::string& text) {
         if (why) *why = text;
@@ -2099,6 +2138,10 @@ bool ScriptHost::press_button(const ButtonPress& p, std::string* why) {
 ButtonDryRun ScriptHost::dry_run_button(const ButtonPress& p) {
     Impl& m = *impl_;
     ButtonDryRun out;
+    if (distribution::managed()) {
+        out.error = "Lua socials are disabled in this distribution.";
+        return out;
+    }
     out.rules = m.rules(p.lua);
     if (p.lua.press.empty()) {
         out.error = "it has no Lua to run on a press";
@@ -2145,6 +2188,7 @@ ButtonDryRun ScriptHost::dry_run_button(const ButtonPress& p) {
 
 const ButtonFace& ScriptHost::button_face(int social, const std::string& name, const game::LuaSocial& lua) {
     static const ButtonFace none;
+    if (distribution::managed()) return none;
     Impl& m = *impl_;
     if (lua.face.empty() || !m.rules(lua).faces) return none;
     ButtonPress p;

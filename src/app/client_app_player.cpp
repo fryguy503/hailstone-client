@@ -2,6 +2,8 @@
 
 #include "app/client_app_internal.h"
 
+#include "core/distribution.h"
+
 #include "game/boats.h"
 
 namespace hailstone::app::client_internal {
@@ -317,7 +319,7 @@ void ClientApp::update_player(float dt) {
     // The original's movement commands (default keys: CMD_FORWARD W, CMD_BACK
     // S, Ctrl+R CMD_RUN_WALK; here A/D strafe and Q/E turn, see README).
     MovementKeys mk;
-    if (opts_.auto_walk_seconds > 0.0f) {
+    if (!distribution::managed() && opts_.auto_walk_seconds > 0.0f) {
         opts_.auto_walk_seconds -= dt;
         mk.forward = true;
     }
@@ -394,7 +396,8 @@ void ClientApp::update_player(float dt) {
     update_placement();
     update_item_input();
     // --auto-keys: one key command pressed and released every 2 s, 6 s after zoning in.
-    if (!opts_.auto_keys.empty() && std::chrono::duration<float>(Clock::now() - zone_entered_).count() > 6.0f &&
+    if (!distribution::managed() && !opts_.auto_keys.empty() &&
+        std::chrono::duration<float>(Clock::now() - zone_entered_).count() > 6.0f &&
         Clock::now() - auto_key_time_ > std::chrono::seconds(2)) {
         auto_key_time_ = Clock::now();
         std::size_t comma = opts_.auto_keys.find(',');
@@ -526,7 +529,7 @@ void ClientApp::update_player(float dt) {
             log::warn("auto key {}: no such command", name);
         }
     }
-    if (opts_.auto_target && conn_->world().target_id == 0) {
+    if (!distribution::managed() && opts_.auto_target && conn_->world().target_id == 0) {
         opts_.auto_target = false;
         auto id = game::nearest_npc(conn_->world(), feet_, yaw_, 1e6f, 0);
         if (!id) id = game::nearest_npc(conn_->world(), feet_, yaw_ + glm::pi<float>(), 1e6f, 0);
@@ -600,7 +603,7 @@ void ClientApp::update_player(float dt) {
                 fi.distance = game::true_distance(me, to, 0.0f); // CDisplay::TrueDistance(..., 0): flat
                 // __CastRay(target, player): the line between them is clear.
                 fi.clear_line = !collision_ || collision_->line_of_sight(t.position, feet_ + glm::vec3(0, 0, floor_offset_));
-                const bool assist = nav_ && nav_->follow_assist_on();
+                const bool assist = !distribution::managed() && nav_ && nav_->follow_assist_on();
                 const float distance = fi.distance;
                 // With the mesh's help the follow keeps on past the original's 200, to the navigator's leash.
                 if (assist && fi.distance > game::kFollowTooFar && fi.distance <= Navigator::kFollowLeash)
@@ -948,7 +951,7 @@ void ClientApp::update_player(float dt) {
         // Behind and above the player; stopped where scenery is in the way, as the cameras 1..5 are.
         camera_.position = game::wheel_follow_position(eye, -camera_.forward(), camera_distance_, camera_sweep());
     }
-    if (opts_.watch.starts_with("object:")) {
+    if (!distribution::managed() && opts_.watch.starts_with("object:")) {
         // Testing: look at ground object N from --camera-distance.
         auto id = static_cast<std::uint32_t>(std::strtoul(opts_.watch.c_str() + 7, nullptr, 10));
         for (const auto& o : conn_->ground_objects()) {
@@ -960,7 +963,7 @@ void ClientApp::update_player(float dt) {
             camera_.yaw = std::atan2(to.y, to.x);
             camera_.pitch = std::atan2(to.z, glm::length(glm::vec2(to.x, to.y)));
         }
-    } else if (opts_.watch.starts_with("door")) {
+    } else if (!distribution::managed() && opts_.watch.starts_with("door")) {
         // Testing: "door" looks at the --auto-door door, "door:N" at door N,
         // from --camera-distance along the door's heading, a little above it.
         std::uint8_t id = opts_.watch.size() > 5 ? static_cast<std::uint8_t>(std::atoi(opts_.watch.c_str() + 5)) : auto_door_id_;
@@ -973,7 +976,7 @@ void ClientApp::update_player(float dt) {
             camera_.yaw = std::atan2(to.y, to.x);
             camera_.pitch = std::atan2(to.z, glm::length(glm::vec2(to.x, to.y)));
         }
-    } else if (!opts_.watch.empty()) {
+    } else if (!distribution::managed() && !opts_.watch.empty()) {
         // Testing: look at the nearest spawn whose name contains opts_.watch.
         const game::Spawn* best = nullptr;
         float best_d = 0.0f;

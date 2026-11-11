@@ -22,6 +22,7 @@
 #include <lua.hpp>
 
 #include "app/lua_eq_windows.h"
+#include "core/distribution.h"
 #include "core/server_profile.h"
 #include "game/eq_names.h"
 #include "game/zone_names.h"
@@ -37,6 +38,11 @@ EqHost& host_of(lua_State* L) { return *static_cast<EqHost*>(lua_touserdata(L, l
 
 // The pre-game screens are the pack's; a plugin's window has no part in them.
 bool plugin_window() { return !ui::lua::LuaUi::caller_tag().empty(); }
+
+int ManagedDistribution(lua_State* L) {
+    lua_pushboolean(L, distribution::managed());
+    return 1;
+}
 
 // The window drawing this screen keeps it from the client.
 void mark(lua_State* L, std::string_view screen) {
@@ -302,6 +308,7 @@ void emit_saved_character(Out& o, const SavedCharacter& c) {
 
 template <class Out>
 void emit_login(Out& o, const ui::LoginView& v) {
+    o.boolean("managed", distribution::managed());
     o.boolean("busy", v.busy);
     emit_status(o, v.status);
     // The updater's news (docs/updater.md); nil when it has none. text is the sentence every screen shows.
@@ -458,6 +465,7 @@ int LoginSet(lua_State* L) {
     if (!h.login || h.login->busy || plugin_window()) return 0;
     ui::LoginView& v = *h.login;
     const std::string_view field = luaL_checkstring(L, 1);
+    if (distribution::managed() && (field == "addonLink" || field == "addonsOpen")) return 0;
     auto text = [&] { return std::string(luaL_checkstring(L, 2)); };
     if (field == "name") v.name = text();
     else if (field == "host") {
@@ -554,6 +562,10 @@ int LoginDo(lua_State* L) {
     }
     ui::LoginView& v = *h.login;
     const std::string_view what = luaL_checkstring(L, 1);
+    if (distribution::managed() && what.starts_with("addon")) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
     using A = ui::LoginAction;
     std::optional<A> action;
     bool ok = true;
@@ -1107,7 +1119,8 @@ int CharacterCreateDo(lua_State* L) {
 } // namespace
 
 void register_pregame_api(lua_State* L, EqHost& host, ScreenReplacements& screens) {
-    static const luaL_Reg fns[] = {{"LoginScreen", LoginScreen},         {"LoginSet", LoginSet},
+    static const luaL_Reg fns[] = {{"ManagedDistribution", ManagedDistribution},
+                                   {"LoginScreen", LoginScreen},         {"LoginSet", LoginSet},
                                    {"LoginDo", LoginDo},                 {"ServerSelect", ServerSelect},
                                    {"ServerSelectDo", ServerSelectDo},   {"CharacterSelect", CharacterSelect},
                                    {"CharacterSelectDo", CharacterSelectDo}, {"CharacterCreate", CharacterCreate},

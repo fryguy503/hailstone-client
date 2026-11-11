@@ -1,5 +1,7 @@
 #include "app/navigator.h"
 
+#include "core/distribution.h"
+
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -219,6 +221,7 @@ std::string Navigator::begin(Goal g) {
 }
 
 std::string Navigator::go_to_point(const glm::vec3& world, float distance, std::string label, bool straight) {
+    if (distribution::managed()) return "navigation automation is disabled in this distribution";
     stick_.reset();
     Goal g;
     g.kind = GoalKind::Point;
@@ -230,6 +233,7 @@ std::string Navigator::go_to_point(const glm::vec3& world, float distance, std::
 }
 
 std::string Navigator::go_to_spawn(std::uint32_t id, float distance) {
+    if (distribution::managed()) return "navigation automation is disabled in this distribution";
     stick_.reset();
     const game::Spawn* s = env_.spawn ? env_.spawn(id) : nullptr;
     if (!s) return "no such spawn";
@@ -242,6 +246,7 @@ std::string Navigator::go_to_spawn(std::uint32_t id, float distance) {
 }
 
 std::string Navigator::go_to_door(std::uint8_t id, bool click) {
+    if (distribution::managed()) return "navigation automation is disabled in this distribution";
     stick_.reset();
     const game::Door* d = env_.door ? env_.door(id) : nullptr;
     if (!d) return "no such door";
@@ -274,6 +279,7 @@ void Navigator::stop(std::string_view why) {
 void Navigator::set_paused(bool paused) { paused_ = paused && (goal_.kind != GoalKind::None || stick_); }
 
 std::string Navigator::stick(std::uint32_t id, const nav::StickOptions& options) {
+    if (distribution::managed()) return "navigation automation is disabled in this distribution";
     const game::Spawn* s = env_.spawn ? env_.spawn(id) : nullptr;
     if (!s || s->is_corpse) return "no such spawn";
     follower_.stop();
@@ -721,6 +727,13 @@ void Navigator::open_door_early(const Frame& f) {
 }
 
 nav::SteerOutput Navigator::frame(const Frame& f) {
+    if (distribution::managed()) {
+        goal_ = {};
+        stick_.reset();
+        follower_.stop();
+        end_follow();
+        return {};
+    }
     feet_ = f.feet;
     now_ = f.now;
     if (zone_) zone_->update(f.feet);
@@ -998,9 +1011,15 @@ void Navigator::end_follow() {
     follow_retry_at_ = 0.0;
 }
 
+bool Navigator::follow_assist_on() const { return !distribution::managed() && options_.assist_follow; }
+
 Navigator::FollowAssist Navigator::assist_follow(const glm::vec3& feet, const glm::vec3& target_feet, bool clear_line,
                                                  double now) {
     FollowAssist out;
+    if (distribution::managed()) {
+        end_follow();
+        return out;
+    }
     if (!options_.assist_follow || now < follow_retry_at_) return out;
     ensure_zone();
     if (!zone_ || zone_->mesh().tile_count() == 0) return out;

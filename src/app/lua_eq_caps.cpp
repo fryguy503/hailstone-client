@@ -23,6 +23,7 @@
 #include <lua.hpp>
 
 #include "core/log.h"
+#include "core/distribution.h"
 #include "plugin/policy.h"
 #include "ui/lua/lua_host.h"
 
@@ -42,6 +43,7 @@ struct Entry {
 
 // Every eq function, by name (a sub-table's as "<table>.<name>").
 constexpr Entry kCalls[] = {
+    {"ManagedDistribution", 0},
     // Reading, drawing, a window's place, size, hover, menus opened (a menu's row is GameMenuClick or CascadeClick)
     {"InGame", 0}, {"UiReady", 0}, {"GameState", 0}, {"Name", 0}, {"SlotName", 0}, {"Item", 0}, {"ItemIcon", 0},
     {"Money", 0}, {"Label", 0}, {"Gauge", 0}, {"HasSlot", 0}, {"AltCurrencies", 0}, {"UiTexture", 0},
@@ -131,7 +133,19 @@ void refused(std::string_view name, std::uint32_t need) {
 }
 
 // The gate: upvalue 1 the real function, 2 the capabilities it needs, 3 its name.
+bool managed_disabled(std::string_view name) {
+    return name == "SortItems" || name == "SellJunk" || name == "BulkItems" || name == "ClaimAllParcels" ||
+           name.starts_with("AbilityBookAutoskill") || name == "SetLuaSocial" || name == "LuaSocialDryRun" ||
+           name == "PressLuaSocial" || name == "OpenLuaSocialEditor" || name == "ScriptRun" ||
+           name == "ScriptPause" || name == "SetScriptAutorun";
+}
+
 int gated(lua_State* L) {
+    if (distribution::managed() && managed_disabled(lua_tostring(L, lua_upvalueindex(3)))) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "unavailable in this managed distribution");
+        return 2;
+    }
     const auto need = static_cast<std::uint32_t>(lua_tointeger(L, lua_upvalueindex(2)));
     if (!ui::lua::LuaUi::caller_tag().empty() && (plugin::caller_caps() & need) != need) {
         refused(lua_tostring(L, lua_upvalueindex(3)), need);
@@ -163,7 +177,7 @@ void gate_table(lua_State* L, int t, const std::string& prefix, int depth) {
         }
         const std::string name = prefix + key;
         const std::uint32_t need = eq_call_caps(name).value_or(kCapActions);
-        if (need == 0) {
+        if (need == 0 && !(distribution::managed() && managed_disabled(name))) {
             lua_pop(L, 1);
             continue;
         }

@@ -18,6 +18,10 @@
 #include "app/update_install.h"
 #include "app/updater.h"
 #include "core/build_info.h"
+#include "core/distribution.h"
+#ifdef HAILSTONE_MANAGED_CLIENT
+#include "core/managed_ui_manifest.h"
+#endif
 #include "app/model_viewer.h"
 #include "app/spell_bolts.h"
 #include "app/startup_error.h"
@@ -649,11 +653,20 @@ void update_camera(hailstone::render::FlyCamera& cam, hailstone::platform::Windo
 
 int main(int argc, char** argv) {
     using namespace hailstone;
+#ifdef HAILSTONE_MANAGED_CLIENT
+    distribution::enable_managed(distribution::kManagedUiSources);
+#endif
     // An error that ends the run is shown in a dialog too (app/startup_error.h), but not in the test drives that stop
     // after some frames, which nobody is there to close.
     bool error_dialog = true;
     std::filesystem::path log_written;
     try {
+        if (distribution::managed())
+            for (int i = 1; i < argc; ++i)
+                if (distribution::automation_option(argv[i])) {
+                    error_dialog = false;
+                    throw std::runtime_error(std::string(argv[i]) + " is unavailable in this managed build");
+                }
         Options opts = parse_args(argc, argv);
         error_dialog = opts.frames == 0 && opts.screenshot.empty();
         // The data folder (platform/paths.h) is the Hailstone folder itself. One that cannot hold the settings (a
@@ -721,7 +734,7 @@ int main(int argc, char** argv) {
         if (opts.zone.empty() && !opts.ui_demo) {
             app::ClientOptions c;
             // The updater is for a player's own runs, not the test drives that stop after some frames.
-            c.updates = opts.frames == 0 && opts.screenshot.empty();
+            c.updates = !distribution::managed() && opts.frames == 0 && opts.screenshot.empty();
             if (c.updates) {
                 // A cut-off install, or an update that never reached the login screen, is put back first; when the
                 // folder then holds another version than this one, that one is started instead.

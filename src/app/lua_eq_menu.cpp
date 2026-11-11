@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "core/game_dir.h"
+#include "core/distribution.h"
 #include "core/log.h"
 #include "game/keymap.h"
 
@@ -290,7 +291,7 @@ void CascadeMenu::load_text(std::string_view file, std::uint32_t expansions, std
     const int icon = where != top.end() ? where->icon : -1;
     where = top.insert(where, {1, icon, "Report a Bug", kMenuReportBug, -1});
     where = top.insert(where, {1, icon, "Web Browser", kMenuWebBrowser, -1});
-    top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
+    if (!distribution::managed()) top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
     plugin_menu_ = -1;
     apply_plugin_entries();
     if (!left_out.empty()) {

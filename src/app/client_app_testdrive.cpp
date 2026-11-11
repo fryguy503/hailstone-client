@@ -3,6 +3,7 @@
 #include "app/client_app_internal.h"
 
 #include "core/env.h"
+#include "core/distribution.h"
 #include "game/boats.h"
 
 namespace hailstone::app::client_internal {
@@ -11,6 +12,7 @@ namespace hailstone::app::client_internal {
 // a few units above the deck of the nearest vehicle whose name starts with `name` and drops onto it (as a teleport:
 // the server takes the next position update). Once, and again after each zone-in.
 void ClientApp::drive_auto_board() {
+    if (distribution::managed()) return;
     static const char* want = hailstone::core::env("AUTO_BOARD");
     if (!want || !conn_) return;
     // HAILSTONE_AUTO_BOARD_HELM: then, once standing on it, the right click that asks for the helm of a small boat.
@@ -72,6 +74,7 @@ void ClientApp::drive_auto_board() {
 // --auto-door (testing): a few seconds after zoning in, walk to the nearest
 // usable door, click it, and log what the server answers.
 void ClientApp::drive_auto_door(MovementKeys& mk) {
+    if (distribution::managed()) return;
     if (opts_.auto_door == 0 || !conn_ || !world_objects_ || auto_door_step_ == 3) return;
     if (opts_.auto_door == 4) {
         drive_drop_pickup();
@@ -163,6 +166,7 @@ void ClientApp::drive_auto_door(MovementKeys& mk) {
 // --auto-door 3 (testing collision): open the door, step out to one side,
 // close it, walk into it (it must stop us), open it, walk through.
 void ClientApp::drive_door_walk(MovementKeys& mk, const game::Door& d) {
+    if (distribution::managed()) return;
     auto now = Clock::now();
     auto elapsed = now - auto_door_at_;
     auto next = [&](int step) {
@@ -250,6 +254,7 @@ void ClientApp::drive_door_walk(MovementKeys& mk, const game::Door& d) {
 // the cursor, drop it, click the ground item that appears, check that it
 // comes back to the cursor and the object goes away, then put it back.
 void ClientApp::drive_drop_pickup() {
+    if (distribution::managed()) return;
     auto now = Clock::now();
     auto elapsed = now - auto_door_at_;
     auto next = [&](int step) {

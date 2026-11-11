@@ -17,6 +17,7 @@
 
 #include "core/ascii_case.h"
 #include "core/config.h"
+#include "core/distribution.h"
 #include "core/wipe.h"
 #include "game/eq_names.h"
 #include "game/zone_names.h"
@@ -1075,9 +1076,11 @@ LoginAction login_screen(LoginView& view) {
     if (ImGui::Button("Quit")) action = LoginAction::Quit;
     ImGui::EndDisabled();
     // The add-on manager (docs/addons.md), a window of its own.
-    ImGui::SameLine();
-    if (ImGui::Button("Add-ons...")) view.addons.open = !view.addons.open;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Install scripts and plugins from GitHub, and keep them up to date.");
+    if (!distribution::managed()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Add-ons...")) view.addons.open = !view.addons.open;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Install scripts and plugins from GitHub, and keep them up to date.");
+    }
     ImGui::SetCursorPosX(label_w);
     if (ImGui::Checkbox("Music", &view.pregame_music)) action = LoginAction::MusicChanged;
     if (ImGui::IsItemHovered())
@@ -1086,14 +1089,14 @@ LoginAction login_screen(LoginView& view) {
     ImGui::Spacing();
     ImGui::PushTextWrapPos(label_w + field_w);
     status_line(view.status, view.busy);
-    if (!view.busy)
+    if (!view.busy && !distribution::managed())
         if (LoginAction a = addon_suggestions(view.addons, view.addons.choice); a != LoginAction::None) action = a;
     ImGui::PopTextWrapPos();
     pad_hints({{platform::PadButton::A, "Select"}, {platform::PadButton::Start, "Login"}});
     keyboard_popup();
     ImGui::End();
 
-    if (view.addons.open)
+    if (view.addons.open && !distribution::managed())
         if (LoginAction a = addons_window(view.addons, view.busy, &view.addons.open); a != LoginAction::None) action = a;
     if (LoginAction a = about_corner(view); a != LoginAction::None) action = a;
 

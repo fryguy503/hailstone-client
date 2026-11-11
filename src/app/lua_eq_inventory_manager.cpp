@@ -33,6 +33,7 @@
 #include <lua.hpp>
 
 #include "app/lua_eq.h"
+#include "core/distribution.h"
 #include "app/lua_eq_windows.h"
 #include "net/game_connection.h"
 #include "ui/lua/lua_host.h"
@@ -235,6 +236,11 @@ std::optional<net::ItemSlot> carried_place(std::string_view text) {
 }
 
 int BulkItems(lua_State* L) {
+    if (distribution::managed()) {
+        lua_pushinteger(L, 0);
+        lua_pushliteral(L, "Item automation is disabled in this distribution.");
+        return 2;
+    }
     auto& h = host(L);
     using M = net::GameConnection::ItemJobMode;
     std::string_view mode_arg = luaL_checkstring(L, 1);

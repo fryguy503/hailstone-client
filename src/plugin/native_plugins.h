@@ -25,6 +25,8 @@
 #include "plugin/hooks.h"
 #include "plugin/policy.h"
 
+struct HailstoneBuiltinAddon;
+
 namespace hailstone::mq { class Registry; struct Context; }
 namespace hailstone::net { class GameConnection; }
 namespace hailstone::game { class ExtensionChain; }
@@ -82,6 +84,7 @@ public:
         std::uint32_t caps = 0;     // what the rules grant (0: it may not run)
         bool server = false;        // one of the server's own
         bool kept = false;          // the server's under its hailstone.cfg: the player cannot unload it
+        bool builtin = false;       // linked into the client, never loaded from a user or server folder
         bool asks = false;          // from the server's plugins/ folder: it loads only with the player's word
         Consent consent = Consent::Unasked; // that word, for these bytes (asks only)
         std::string error;
@@ -93,6 +96,8 @@ public:
     // plugin::caller_name() empty) asks; one from a script's or plugin's /plugin <name> load never shows the
     // question, so a script cannot put it up again after a "Don't allow" or after the player put it away.
     bool load(std::string_view name, std::string* why = nullptr);
+    bool load_builtin(const HailstoneBuiltinAddon& addon, const std::filesystem::path& trusted_ui_dir = {},
+                      std::string* why = nullptr);
     bool unload(std::string_view name);
     void unload_all();
     bool loaded(std::string_view name) const;

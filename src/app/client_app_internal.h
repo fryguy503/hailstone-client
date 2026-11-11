@@ -13,6 +13,11 @@
 #include "app/market_ui.h"
 #include "app/client_app.h"
 #include "app/input_script.h"
+#include "core/distribution.h"
+
+#ifdef HAILSTONE_HAS_BUILTIN_ADDON
+#include "hailstone_builtin_addon.h"
+#endif
 #include "app/zone_settle.h"
 #include "app/server_links.h"
 
@@ -29,6 +34,7 @@
 #include <random>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -294,7 +300,7 @@ private:
 // a size: the UI's places are kept for that screen, so starting it smaller piles the windows up.
 inline platform::WindowDesc window_desc(const ClientOptions& o) {
     platform::WindowDesc d{.width = o.window_width, .height = o.window_height};
-    d.pad_input_in_background = !o.input_script.empty();
+    d.pad_input_in_background = !distribution::managed() && !o.input_script.empty();
     if (o.window_width != 1280 || o.window_height != 720) return d; // --window-size
     Config c;
     if (!c.load(default_config_path())) return d;
@@ -344,7 +350,30 @@ public:
     ClientApp(const ClientApp&) = delete;
     ClientApp& operator=(const ClientApp&) = delete;
     explicit ClientApp(const ClientOptions& options)
-        : opts_(options), window_(window_desc(options)), vk_(window_, options.validation),
+        : opts_([&options] {
+              ClientOptions out = options;
+              // Also cover callers of run_client that do not use the command-line parser. Sanitize before member
+              // initializers (notably MovementTest) see the options, and leave saved-account login available.
+              if (distribution::managed()) {
+                  out.auto_walk_seconds = 0.0f;
+                  out.watch.clear();
+                  out.auto_target = false;
+                  out.pick_test = false;
+                  out.auto_keys.clear();
+                  out.input_script.clear();
+                  out.auto_cast = 0;
+                  out.auto_scribe = false;
+                  out.show_items = 0;
+                  out.move_test.clear();
+                  out.watch_turn = 0.0f;
+                  out.auto_door = 0;
+                  out.auto_commands.clear();
+                  out.auto_accept_invite = false;
+                  out.abilities_test.clear();
+                  out.melee_test = 0;
+              }
+              return out;
+          }()), window_(window_desc(options)), vk_(window_, options.validation),
           ui_(window_, vk_,
               ui::ImGuiLayerDesc{.scale_override = ui_scale_setting(options),
                                  .ini_path = platform::imgui_ini()}) {
@@ -510,6 +539,15 @@ public:
             return collision_->line_of_sight(glm::vec3(a[0], a[1], a[2]), glm::vec3(b[0], b[1], b[2]));
         };
         automation_ = std::make_unique<Automation>(aenv);
+#ifdef HAILSTONE_HAS_BUILTIN_ADDON
+        const auto* addon = hailstone_builtin_addon();
+        if (!addon || !addon->name || std::string_view(addon->name) != HAILSTONE_BUILTIN_ADDON_ID)
+            throw std::runtime_error("Built-in add-on identity does not match this distribution.");
+        std::string builtin_why;
+        const auto builtin_ui = platform::install_dir() / "builtin" / HAILSTONE_BUILTIN_ADDON_ID / "ui";
+        if (!automation_->load_builtin(*addon, builtin_ui, &builtin_why))
+            throw std::runtime_error("Built-in add-on failed: " + builtin_why);
+#endif
         automation_->hooks().add_command(plugin::Hooks::kClient, "/lighting",
                                          [this](std::string_view args) { lighting_command(args); });
         stats_ui_->set_open(opts_.show_stats);
@@ -549,6 +587,7 @@ public:
         });
         // /luasocial [n | new]: the Lua social editor on social n (1..120), or on the first empty social.
         automation_->hooks().add_command(plugin::Hooks::kClient, "/luasocial", [this](std::string_view args) {
+            if (distribution::managed()) return;
             lua_social_command(args);
         });
         actions_ui_ = std::make_unique<ActionsUi>(config_, config_path_);
@@ -557,7 +596,7 @@ public:
         gamepad_->set_state(&window_.input().pad);
         gamepad_->set_rumble([this](float low, float high, int ms) { return window_.rumble_gamepad(low, high, ms); });
         eq_host_.gamepad = gamepad_.get();
-        if (!opts_.input_script.empty())
+        if (!distribution::managed() && !opts_.input_script.empty())
             input_script_ = std::make_unique<InputScript>(
                 opts_.input_script, window_,
                 InputScript::Hooks{[this](const std::string& path) { vk_.request_screenshot(path); },
@@ -570,8 +609,10 @@ public:
                                    }});
         // HandleWindowCloseRequest: the window's close button camps in game (window_close_request).
         window_.set_hold_close_requests(true);
-        group_ui_.set_testing(opts_.auto_commands, opts_.auto_accept_invite);
-        social_ui_.set_testing(opts_.auto_accept_invite);
+        if (!distribution::managed()) {
+            group_ui_.set_testing(opts_.auto_commands, opts_.auto_accept_invite);
+            social_ui_.set_testing(opts_.auto_accept_invite);
+        }
         // Sound (audio/): the settings are hailstone.ini's audio.* keys; no device = silent.
         audio_ = std::make_unique<audio::AudioSystem>(game_, audio::load_audio_settings(config_), !opts_.no_audio);
         sound_events_ = std::make_unique<SoundEvents>(*audio_, game_);

@@ -266,6 +266,9 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 
 ## Code health
 
+- [ ] Validate managed distributions: mandatory linked SDK add-on, pinned UI sources,
+  disabled external scripting/add-ons and added automation, retained stock RoF2 controls.
+
 - [ ] The layer order (`app` -> `game` / ... -> `assets` / `net` / `web` -> `core` / `platform`, docs/plan.md and AGENTS.md) does not hold for `net` and `assets`: they include `game/` headers. In `net`: every `game_connection*.cpp` (GameConnection keeps the game state), and the packet codecs `zone_packets.cpp` (`game/mechanics/remote_spawns.h`: the bit-packed positions), `spell_packets.h` (`game::mechanics::cast::Packet`), `task_packets.h` (`game::Task`), `training_packets.h` (`game::kTrainSkills`, `kTrainLanguages`), `aa_packets.h` (`game/alt_adv.h`) and `ability_packets.h` (`game/mechanics/abilities.h`). In `assets`: `wld_zone.cpp` (`game/zone_names.h`), `model_points.cpp` (`game/sine_table.h`), `eqg_character.cpp` (`game/mechanics/anim_select.h`, `game/race_models.h`), `character.cpp`, `character_parts.cpp` and `character_dress.cpp` (`game/appearance*.h`, `game/actor_look.h`, `game/race_models.h`). Everything builds into the one `hailstone_engine` library, so nothing fails to link today, but the documented order is not what the code does, and no check enforces it. Either move the shared pieces down (the position unpacking, race and appearance tables, zone names and the sine table into `core/` or the layer that reads them, and the packet structs out of `game::` types), or write the real order into docs/plan.md and AGENTS.md (GameConnection above `game`; the tables `assets` reads as a lower part of `game`). Then add a check (a CI grep like the NMS one) so it stays true.
 
 ## Not planned

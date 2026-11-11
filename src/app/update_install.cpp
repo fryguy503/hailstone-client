@@ -1,4 +1,5 @@
 #include "app/update_install.h"
+#include "core/distribution.h"
 
 #include <algorithm>
 #include <charconv>
@@ -281,6 +282,10 @@ bool is_player_path(std::string_view path) {
 
 bool stage_update(const fs::path& install_dir, const std::string& version, const std::vector<UpdatePackage>& packages,
                   std::string* error) {
+    if (distribution::managed()) {
+        if (error) *error = "updates are supplied by this managed distribution";
+        return false;
+    }
     std::string text = "version " + version + "\n";
     for (const auto& p : packages)
         text += "package " + p.component + " " + std::to_string(p.size) + " " + to_hex(p.sha256) + " " + p.file + "\n";
@@ -317,6 +322,10 @@ std::string failed_update_version(const fs::path& install_dir) {
 InstallResult install_staged_update(const fs::path& install_dir, const std::string& running,
                                     const std::function<void(float)>& progress) {
     InstallResult r;
+    if (distribution::managed()) {
+        r.error = "updates are supplied by this managed distribution";
+        return r;
+    }
     const fs::path dir = update_dir(install_dir);
     auto staged = read_staged(install_dir);
     if (!staged) {
@@ -455,6 +464,7 @@ InstallResult install_staged_update(const fs::path& install_dir, const std::stri
 
 StartNote update_at_start(const fs::path& install_dir, const std::string& running) {
     StartNote note;
+    if (distribution::managed()) return note;
     const fs::path dir = update_dir(install_dir);
     remove_quietly(dir / "trash");
     // A rollback's news, left by the version that was rolled back for this one to show.
@@ -492,6 +502,7 @@ StartNote update_at_start(const fs::path& install_dir, const std::string& runnin
 }
 
 void update_started_fine(const fs::path& install_dir, const std::string& running) {
+    if (distribution::managed()) return;
     const State st = read_state(install_dir);
     if (st.kind == "pending" && st.new_version == running) {
         end_pending(install_dir);

@@ -17,6 +17,7 @@
 #include "core/ascii_case.h"
 #include "core/atomic_file.h"
 #include "core/log.h"
+#include "core/distribution.h"
 #include "core/sha256.h"
 #include "game/chat_text.h"
 #include "game/combat.h"
@@ -34,6 +35,7 @@
 
 #define HAILSTONE_HOST
 #include "hailstone_plugin.h"
+#include "hailstone_builtin_addon.h"
 
 namespace hailstone::plugin {
 
@@ -114,6 +116,7 @@ class NativeExtension;
 namespace {
 HailstoneSpawn spawn_struct(const net::GameConnection& c, const game::Spawn& s);
 template <std::size_t N> void copy_name(char (&dst)[N], const std::string& src);
+void discard(NativePlugins::Impl& m, std::unique_ptr<Loaded> plugin, bool shutdown);
 } // namespace
 
 struct NativePlugins::Impl {
@@ -142,6 +145,7 @@ struct NativePlugins::Impl {
         if (env.print) env.print(text, 0);
     }
     void command(std::string_view args);
+    bool attach(std::unique_ptr<Loaded> plugin, void (*set_host)(const PluginHostApi*), std::string* why);
 
     // The player's word on the server's plugins (plugin/consent.h): the ones waiting for it, and answers that could
     // not be written to servers/<profile>/plugin_approvals.txt (they hold for this run only).
@@ -178,9 +182,11 @@ struct Loaded {
     NativePlugins::Impl* host = nullptr;
     std::string name;
     fs::path file, copy;
+    fs::path builtin_ui_dir; // supplied only by the host, never by a descriptor or server/settings file
     Sha256Digest hash{};
     std::uint32_t caps = 0;
     SDL_SharedObject* lib = nullptr;
+    bool builtin = false;
     PluginHostApi table{};
     Hooks::Owner owner = 0;
     std::vector<std::string> tlos;
@@ -2007,11 +2013,26 @@ NativePlugins::NativePlugins(NativeEnv env) : impl_(std::make_unique<Impl>()) {
 
 NativePlugins::~NativePlugins() {
     unload_all();
+    // Public resets keep required modules alive. Final host destruction owns their shutdown.
+    while (!impl_->loaded.empty()) {
+        auto last = std::move(impl_->loaded.back());
+        impl_->loaded.pop_back();
+        discard(*impl_, std::move(last), true);
+    }
     if (impl_->env.hooks) impl_->env.hooks->remove(impl_->owner);
 }
 
 std::vector<NativePlugins::Info> NativePlugins::list() const {
     std::vector<Info> out;
+    for (const auto& loaded : impl_->loaded) {
+        if (!loaded->builtin) continue;
+        Info info;
+        info.name = loaded->name;
+        info.loaded = info.kept = info.builtin = true;
+        info.caps = loaded->caps;
+        out.push_back(std::move(info));
+    }
+    if (distribution::managed()) return out;
     for (const auto& file : plugin_files(impl_->dirs())) {
         Info i;
         i.name = plugin_name(file);
@@ -2042,6 +2063,7 @@ std::vector<NativePlugins::Info> NativePlugins::list() const {
 bool NativePlugins::loaded(std::string_view name) const { return impl_->find(name) != nullptr; }
 
 bool NativePlugins::has_plugin(std::string_view name) const {
+    if (distribution::managed()) return impl_->find(name) != nullptr;
     if (impl_->find(name)) return true;
     const auto files = plugin_files(impl_->dirs());
     return std::any_of(files.begin(), files.end(), [&](const fs::path& f) { return iequal(plugin_name(f), name); });
@@ -2064,7 +2086,7 @@ void discard(NativePlugins::Impl& m, std::unique_ptr<Loaded> l, bool shutdown) {
         if (m.env.extensions) m.env.extensions->remove(l->chain_id);
     }
     for (const auto& t : std::vector<std::string>(l->tlos)) h_remove_tlo(l.get(), t.c_str());
-    SDL_UnloadObject(l->lib);
+    if (l->lib) SDL_UnloadObject(l->lib);
 }
 } // namespace
 
@@ -2072,7 +2094,47 @@ bool NativePlugins::load(std::string_view name, std::string* why) {
     return load_file(name, why, caller_name().empty() ? Asker::Player : Asker::Script);
 }
 
+bool NativePlugins::load_builtin(const HailstoneBuiltinAddon& addon, const fs::path& trusted_ui_dir, std::string* why) {
+    auto refuse = [&](const char* message) { if (why) *why = message; return false; };
+    if (addon.size < sizeof(HailstoneBuiltinAddon) || addon.abi < 1 || addon.abi > HAILSTONE_PLUGIN_ABI ||
+        !addon.name || !addon.set_host) return refuse("The built-in add-on descriptor is invalid.");
+    const std::string name(addon.name);
+    if (name.empty() || name.size() > 128 || !std::all_of(name.begin(), name.end(), [](unsigned char c) {
+            return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+        })) return refuse("The built-in add-on name is invalid.");
+    constexpr auto managed_caps = kCapRead | kCapEvents | kCapUi | kCapPackets | kCapExtend | kCapLogin;
+    if (!addon.capabilities || (addon.capabilities & ~kCapAll) ||
+        (distribution::managed() && (addon.capabilities & ~managed_caps)))
+        return refuse("The built-in add-on requests unsupported capabilities.");
+    if (impl_->find(name)) return refuse("The built-in add-on is already loaded.");
+    auto plugin = std::make_unique<Loaded>();
+    plugin->host = impl_.get();
+    plugin->name = name;
+    plugin->caps = addon.capabilities;
+    plugin->builtin = true;
+    plugin->builtin_ui_dir = trusted_ui_dir;
+    plugin->initialize = addon.initialize;
+    plugin->shutdown = addon.shutdown;
+    plugin->pulse = addon.pulse;
+    plugin->game_state = addon.game_state;
+    plugin->begin_zone = addon.begin_zone;
+    plugin->end_zone = addon.end_zone;
+    plugin->zoned = addon.zoned;
+    plugin->add_spawn = addon.add_spawn;
+    plugin->remove_spawn = addon.remove_spawn;
+    plugin->incoming_chat = addon.incoming_chat;
+    plugin->filter_chat = addon.filter_chat;
+    plugin->update_imgui = addon.update_imgui;
+    plugin->packet = addon.packet;
+    plugin->hooks_fn = addon.hooks;
+    return impl_->attach(std::move(plugin), addon.set_host, why);
+}
+
 bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker asker) {
+    if (distribution::managed()) {
+        if (why) *why = "Dynamic add-ons are disabled in this distribution.";
+        return false;
+    }
     Impl& m = *impl_;
     std::string name(name_in);
     auto refuse = [&](std::string text, bool say = true) {
@@ -2162,6 +2224,27 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.packet = symbol<int (*)(int, int, HailstonePacket*)>(p.lib, "OnPacket");
     p.hooks_fn = sdk_symbol<const HailstoneHooks* (*)()>(p.lib, "hooks");
 
+    return m.attach(std::move(l), set_host, why);
+}
+
+bool NativePlugins::Impl::attach(std::unique_ptr<Loaded> l, void (*set_host)(const PluginHostApi*), std::string* why) {
+    Impl& m = *this;
+    Loaded& p = *l;
+    const std::string name = p.name;
+    const auto file = p.file;
+    const auto hash = p.hash;
+    const auto caps = p.caps;
+    auto refuse = [&](std::string text) {
+        if (why) *why = text;
+        std::erase_if(m.failures, [&](const Info& f) { return iequal(f.name, name); });
+        Info failure;
+        failure.name = name;
+        failure.error = text;
+        m.failures.push_back(std::move(failure));
+        m.say("[Plugin] " + text);
+        log::warn("plugin {}: {}", name, text);
+        return false;
+    };
     p.table.abi = HAILSTONE_PLUGIN_ABI;
     p.table.size = sizeof(PluginHostApi);
     p.table.host = &p;
@@ -2308,9 +2391,19 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     if (p.update_imgui && !p.can(kCapUi)) p.denied("OnUpdateImGui", kCapUi);
 
     // Its Lua windows (<folder>/ui/<pack>/), with the UI capability.
-    if (p.can(kCapUi) && m.env.ui) m.env.ui->set_folder(name, plugin_folder(*file, name));
+    if (p.can(kCapUi) && m.env.ui) {
+        // UiBridge stores the owner root; its windows live in root/ui/<pack>.
+        if (p.builtin) {
+            if (!p.builtin_ui_dir.empty()) m.env.ui->set_folder(name, p.builtin_ui_dir.parent_path());
+        } else {
+            m.env.ui->set_folder(name, plugin_folder(file, name));
+        }
+    }
 
-    set_host(&p.table);
+    if (!guarded(p, "set_host", [&] { set_host(&p.table); return true; })) {
+        discard(m, std::move(l), false);
+        return refuse(name + " did not load: set_host failed");
+    }
     m.loaded.push_back(std::move(l));
     std::erase_if(m.failures, [&](const Info& f) { return iequal(f.name, name); });
     // A plugin whose start lets an exception out is taken out again with all it registered so far.
@@ -2357,14 +2450,15 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
         });
     }
     m.say(std::format("[Plugin] {} loaded ({})", name, caps_text(caps)));
-    log::info("plugin {} loaded from {} (sha256 {}, caps {})", name, file->string(), to_hex(hash), caps_text(caps));
+    if (p.builtin) log::info("built-in add-on {} loaded ({})", name, caps_text(caps));
+    else log::info("plugin {} loaded from {} (sha256 {}, caps {})", name, file.string(), to_hex(hash), caps_text(caps));
     return true;
 }
 
 bool NativePlugins::unload(std::string_view name) {
     Impl& m = *impl_;
     auto it = std::find_if(m.loaded.begin(), m.loaded.end(), [&](const auto& l) { return iequal(l->name, name); });
-    if (it == m.loaded.end()) return false;
+    if (it == m.loaded.end() || (*it)->builtin) return false;
     if ((*it)->busy) { // the plugin asked from its own code: not under its feet
         (*it)->unload_pending = true;
         return true;
@@ -2387,6 +2481,7 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
     Impl& m = *impl_;
     std::vector<std::string> drop, revoked;
     for (auto& l : m.loaded) {
+        if (l->builtin) continue;
         std::uint32_t caps = m.env.policy ? m.env.policy->caps(FileKind::Plugin, l->hash) : 0;
         if (caps == 0) {
             drop.push_back(l->name);
@@ -2422,6 +2517,7 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
         m.pending.clear(); // nothing runs out of the world: no question either
         return;
     }
+    if (distribution::managed()) return;
     // The server's own plugins always load; the player's those `autoload` names.
     bool all = std::find(autoload.begin(), autoload.end(), "*") != autoload.end();
     const auto found = list();
@@ -2452,6 +2548,7 @@ void NativePlugins::set_server_dir(const fs::path& dir) {
 }
 
 std::optional<ConsentPrompt> NativePlugins::consent() const {
+    if (distribution::managed()) return std::nullopt;
     const Impl& m = *impl_;
     if (m.pending.empty()) return std::nullopt;
     ConsentPrompt p;
@@ -2462,6 +2559,7 @@ std::optional<ConsentPrompt> NativePlugins::consent() const {
 }
 
 void NativePlugins::answer_consent(std::optional<bool> allow) {
+    if (distribution::managed()) return;
     Impl& m = *impl_;
     if (m.pending.empty()) return;
     std::vector<ConsentFile> files = std::move(m.pending);
@@ -2484,6 +2582,7 @@ void NativePlugins::answer_consent(std::optional<bool> allow) {
 }
 
 void NativePlugins::recheck_consent() {
+    if (distribution::managed()) return;
     Impl& m = *impl_;
     std::vector<ConsentFile> allowed;
     const auto before = m.pending.size();
@@ -2506,6 +2605,7 @@ void NativePlugins::imgui() {
 }
 
 void NativePlugins::Impl::command(std::string_view args) {
+    if (distribution::managed()) { say("[Plugin] User add-ons are disabled in this distribution."); return; }
     std::string_view rest = args;
     auto word = [&] {
         while (!rest.empty() && rest.front() == ' ') rest.remove_prefix(1);

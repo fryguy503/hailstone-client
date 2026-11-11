@@ -118,7 +118,7 @@ public:
     FollowAssist assist_follow(const glm::vec3& feet, const glm::vec3& target_feet, bool clear_line, double now);
     // The follow ended or paused: the detour's path is dropped.
     void end_follow();
-    bool follow_assist_on() const { return options_.assist_follow; }
+    bool follow_assist_on() const;
     // While a walk or a stick moves the player with PathOptions::pass_open_doors on, the doors that are not shut do
     // not block it (the movement sweep skips them; the walk looks only for shut doors in its way). A Hailstone
     // difference from the original's collision: the client cannot know a door's state on the server (EQEmu shuts most

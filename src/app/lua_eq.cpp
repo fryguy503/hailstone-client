@@ -33,6 +33,7 @@
 #include "plugin/ui_bridge.h"
 #include "core/ini_file.h"
 #include "core/log.h"
+#include "core/distribution.h"
 #include "core/saturate.h"
 #include "game/hot_button_state.h"
 #include "game/item_sort.h"
@@ -1592,6 +1593,10 @@ const char* mode_name(net::GameConnection::ItemJobMode m) {
 // { place, ... } (left alone), filters = { [bag place] = category } (eq.Item's category names) }. nil when it started
 // (or had nothing to do), else why not
 int SortItems(lua_State* L) {
+    if (distribution::managed()) {
+        lua_pushliteral(L, "Item automation is disabled in this distribution.");
+        return 1;
+    }
     auto& m = Impl::of(L);
     std::string where = luaL_checkstring(L, 1);
     using M = net::GameConnection::ItemJobMode;
@@ -1652,6 +1657,10 @@ int SortItems(lua_State* L) {
 
 // err = eq.SellJunk({ itemId, ... })   -- sells what you carry with those ids to the open merchant, one at a time
 int SellJunk(lua_State* L) {
+    if (distribution::managed()) {
+        lua_pushliteral(L, "Item automation is disabled in this distribution.");
+        return 1;
+    }
     auto& h = Impl::of(L).host;
     ui::lua::unview(L, 1);
     std::vector<std::uint32_t> ids;
@@ -1882,6 +1891,7 @@ int RetrieveParcel(lua_State* L) {
 }
 
 int ClaimAllParcels(lua_State* L) {
+    if (distribution::managed()) return 0;
     auto& h = Impl::of(L).host;
     if (h.conn) h.conn->claim_all_parcels();
     return 0;
