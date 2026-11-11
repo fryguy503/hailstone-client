@@ -552,6 +552,11 @@ void h_write_chat(void* h, const char* text, std::uint32_t color) {
 
 void h_do_command(void* h, const char* line) {
     Loaded& l = Loaded::of(h);
+    // Managed modules cannot reach even stock action commands through a raw host command sink.
+    if (distribution::managed() && !l.can(kCapCommands)) {
+        l.denied("DoCommand", kCapCommands);
+        return;
+    }
     if (!line || !l.host->env.run) return;
     CallerScope scope(l.caps, l.name);
     l.host->env.run(line);

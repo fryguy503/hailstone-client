@@ -33,6 +33,8 @@ void initialize() {
     ++current->initialized;
     // A linked module's callbacks retain capability checks: this descriptor cannot issue commands.
     current->host->do_command(current->host->host, "/echo forbidden");
+    current->host->do_command(current->host->host, "/cast 1");
+    current->host->do_command(current->host->host, "/attack on");
     if (current->fail_init) throw std::runtime_error("fixture initialization failure");
 }
 void shutdown() { ++current->stopped; current->host = nullptr; }
