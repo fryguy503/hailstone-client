@@ -41,7 +41,7 @@ build/hailstone/hailstone --validation
 ## Code guidelines
 
 - C++20. Match the style of the surrounding code: naming, comment density and error handling. Comments say why, not what.
-- Read and write files and packets only through `core/byte_io.h`. Never cast a struct onto a buffer.
+- Read and write files and packets only through `core/byte_io.h`. Never cast a struct onto a buffer. (The plugin host's bulk reads, `get_*_data_bulk`, are the exception: they copy packed structs into an in-process plugin's buffer, as docs/plugins.md describes.)
 - OS calls go only in `src/platform/`. Layers depend downward only (`app` -> `game` / `ui` / `render` / `audio` -> `assets` / `net` / `web` -> `core` / `platform`).
 - Make no assumptions about the size of `long` or `wchar_t`, path separators or byte order.
 - Add or update tests for new behavior, and register new source and test files in `CMakeLists.txt`.

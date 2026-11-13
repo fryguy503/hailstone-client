@@ -1131,426 +1131,185 @@ int ConColor(int cLevel,int targetlevel)
     return CONCOLOR_GREY;
 
 }
+inline void write_str16(unsigned char*& dst, std::string_view sv) {
+    uint16_t len = static_cast<uint16_t>(sv.size());
+    std::memcpy(dst, &len, sizeof(len));
+    dst += sizeof(len);
+    if (len > 0) {
+        std::memcpy(dst, sv.data(), len);
+        dst += len;
+    }
+}
+//These are used by the h_get_spawns_data_bulk method
+//needs to be packed so that there is no padding
+#pragma pack(push, 1)
+struct BulkSpawnHeader {
+    uint32_t spawnCount;
+    float playerX;
+    float playerY;
+    float playerZ;
+};
+enum SpawnFlags :uint32_t {
+    FLAG_NONE = 0,
+    FLAG_AFK = 1 << 0,
+    FLAG_AGGRESSIVE = 1 << 1,
+    FLAG_ANON = 1 << 2,
+    FLAG_BUYER = 1 << 3,
+    FLAG_DEAD = 1 << 4,
+    FLAG_DUCKING = 1 << 5,
+    FLAG_FEIGNING = 1 << 6,
+    FLAG_GM = 1 << 7,
+    FLAG_INVS = 1 << 8,
+    FLAG_SUMMONED = 1 << 9,
+    FLAG_LEVITATION = 1 << 10,
+    FLAG_LINKDEAD = 1 << 11,
+    FLAG_MOUNT = 1 << 12,
+    FLAG_MOVING = 1 << 13,
+    FLAG_NAMED = 1 << 14,
+    FLAG_ROLEPLAYING = 1 << 15,
+    FLAG_SITTING = 1 << 16,
+    FLAG_SNEAKING = 1 << 17,
+    FLAG_STANDING = 1 << 18,
+    FLAG_STUNNED = 1 << 19,
+    FLAG_TARGETABLE = 1 << 20,
+    FLAG_TRADER = 1 << 21,
+    FLAG_UNDERWATER = 1 << 22,
+};
 
+struct FixedSpawnRecord {
+    int32_t id;
+    uint32_t flags;
+    int32_t isBlind;
+    int32_t bodyTypeID;
+    int32_t classID;
+    int32_t conColorID;
+    int32_t currentEndurance;
+    int64_t currentHps;
+    int32_t currentMana;
+    int32_t genderId;
+    int64_t guildID;
+    float heading;
+    float height;
+    int32_t level;
+    float look;
+    int32_t master;
+    int32_t maxEndurance;
+    float maxRange;
+    float maxRangeTo;
+    int64_t pctHPs;
+    int32_t pctMana;
+    int32_t petID;
+    int32_t playerState;
+    int32_t raceID;
+    int32_t targetOfTargetID;
+    float x;
+    float y;
+    float z;
+    int32_t deity;
+    // Immediately followed on the wire by 7 length-prefixed strings:
+    // 1. BodyDesc, 2. CleanName, 3. DisplayName, 4. Name, 5. RaceName, 6. Suffix, 7. TypeDesc
+};
+#pragma pack(pop)
 //may need to break this up, but you need a sizable buffer for this or boom.
 //for 5,000 spawns, assume 10 megs. now 5k is wayyy higher than it should ever be
 //so can get away with less, but you never know. 
 //there is a safety check that if we get down to our last 4,096 bytes, kick out and just return with what we have.
-// Not registered as a host function yet (e3n will call it), hence [[maybe_unused]].
-[[maybe_unused]] int h_get_spawns_bulk(void* h, unsigned char* data, int datamax)
+int h_get_spawns_data_bulk(void* h, unsigned char* data, int32_t datamax)
 {
-    //don't allow a deny just grab the raw connection.
-    const net::GameConnection* c = connection_of(Loaded::of(h));
+    const net::GameConnection* c = readable(Loaded::of(h), "get_spawns_data_bulk");
     if (!c) return 0;
-    auto spawns = c->world().spawns;
-    int bufferSize = 0;
-    unsigned char* pBuffer = data;
+    if (!data || datamax < 4096) return 0;
+    const auto& world = c->world();
+    const auto& spawns = world.spawns;
+    const auto* player = world.player();
+    const int playerLevel = player ? player->level : 0;
+    BulkSpawnHeader* header = reinterpret_cast<BulkSpawnHeader*>(data);
+    header->spawnCount = 0;
+    header->playerX = player ? player->position.x : 0.0f;
+    header->playerY = player ? player->position.y : 0.0f;
+    header->playerZ = player ? player->position.z : 0.0f;
+
+    unsigned char* pBuffer = data + sizeof(BulkSpawnHeader);
+    const unsigned char* pSafeLimit = data + (datamax - 4096);
+    char tempBuffer[2048];
+    uint32_t count = 0;
+
     for (const auto& [id, spawn] : spawns) {
-       
-        //if we are down to our last 4k of room
-        //kick out, as we may explode
-        if ((bufferSize + 4096) > datamax) break;
+        if (pBuffer > pSafeLimit) break;
+        const game::eSpawnType spawnType = game::Spawn::GetSpawnType(&spawn);
+        float maxRange=0;
+        if (spawnType != hailstone::game::eSpawnType::ITEM) maxRange = 14.5;
+        float maxRangeTo = 0;
+        if (spawnType != hailstone::game::eSpawnType::ITEM) maxRangeTo = 14.5;
 
-        int ID = spawn.id;
-        memcpy(pBuffer, &ID, sizeof(ID));
-        pBuffer += sizeof(ID);
-        bufferSize += sizeof(ID);
+        uint32_t flags = FLAG_NONE;
+        if (spawn.afk)                                  flags |= FLAG_AFK;
+        if ((spawn.player_state & 0x0C) != 0)           flags |= FLAG_AGGRESSIVE; // this is checking 0x4 and 0x8 at the same time.
+        if (spawn.anon == 1)                            flags |= FLAG_ANON;
+        if (spawn.buyer)                                flags |= FLAG_BUYER;
+        if (spawn.stand_state == STANDSTATE_DEAD)       flags |= FLAG_DEAD;
+        if (spawn.stand_state == STANDSTATE_DUCK)       flags |= FLAG_DUCKING;
+        if (spawn.stand_state == STANDSTATE_FEIGN)      flags |= FLAG_FEIGNING;
+        if (spawn.gm)                                   flags |= FLAG_GM;
+        if (spawn.summoned)                             flags |= FLAG_SUMMONED;
+        if (spawn.fly_mode == 2)                        flags |= FLAG_LEVITATION;
+        if (spawn.linkdead)                             flags |= FLAG_LINKDEAD;
+        if (spawn.mount_id > 0)                         flags |= FLAG_MOUNT;
+        if (std::fabs(spawn.speed_run) > 0.0f)          flags |= FLAG_MOVING;
+        if (game::Spawn::IsNamed(&spawn))               flags |= FLAG_NAMED;
+        if (spawn.anon == 2)                            flags |= FLAG_ROLEPLAYING;
+        if (spawn.stand_state == STANDSTATE_SIT)        flags |= FLAG_SITTING;
+        if (spawn.stand_state == STANDSTATE_STAND)      flags |= FLAG_STANDING;
+        if ((spawn.player_state & 0x20) != 0)           flags |= FLAG_STUNNED;
+        if (spawn.targetable)                           flags |= FLAG_TARGETABLE;
+        if (spawn.trader)                               flags |= FLAG_TRADER;
+      
 
-        bool isAFK = spawn.afk;
-        memcpy(pBuffer, &isAFK, sizeof(isAFK));
-        pBuffer += sizeof(isAFK);
-        bufferSize += sizeof(isAFK);
+        FixedSpawnRecord rec{};
+        rec.id = spawn.id;
+        rec.flags = flags;
+        rec.bodyTypeID = spawn.body_type;
+        rec.classID = spawn.class_id;
+        rec.conColorID = ConColor(playerLevel, spawn.level);
+        rec.currentHps = spawn.hp_percent;
+        rec.genderId = spawn.gender;
+        rec.guildID = spawn.guild_id;
+        rec.heading = spawn.heading * 0.703125f;
+        rec.height = spawn.heights.avatar_height;
+        rec.level = spawn.level;
+        rec.master = spawn.pet_owner_id;
+        rec.maxRange = maxRange;
+        rec.maxRangeTo = maxRangeTo;
+        rec.pctHPs = spawn.hp_percent;
+        rec.playerState = spawn.player_state;
+        rec.raceID = spawn.race;
+        rec.x = spawn.position.x;
+        rec.y = spawn.position.y;
+        rec.z = spawn.position.z;
+        rec.deity = spawn.deity;
+        std::memcpy(pBuffer, &rec, sizeof(rec));
+        pBuffer += sizeof(rec);
 
-        bool isAggressive = (spawn.player_state & 0x4 || spawn.player_state & 0x8);
-        memcpy(pBuffer, &isAggressive, sizeof(isAggressive));
-        pBuffer += sizeof(isAggressive);
-        bufferSize += sizeof(isAggressive);
-
-        bool isAnon = (spawn.anon == 1);
-        memcpy(pBuffer, &isAnon, sizeof(isAnon));
-        pBuffer += sizeof(isAnon);
-        bufferSize += sizeof(isAnon);
-        int isBlind = 0; //not sure exists in the client, so mark as 0 for now.
-        memcpy(pBuffer, &isBlind, sizeof(isBlind));
-        pBuffer += sizeof(isBlind);
-        bufferSize += sizeof(isBlind);
-
-        int BodyTypeID = spawn.body_type;
-        memcpy(pBuffer, &BodyTypeID, sizeof(BodyTypeID));
-        pBuffer += sizeof(BodyTypeID);
-        bufferSize += sizeof(BodyTypeID);
-        
-        const char* BodyDesc;
-
-        if (BodyTypeID >= 0 && static_cast<std::size_t>(BodyTypeID) < std::size(game::szBodyType))
-        {
-            BodyDesc = game::szBodyType[BodyTypeID].data();
-
+        std::string_view bodyDesc = "";
+        if (spawn.body_type >= 0 && static_cast<std::size_t>(spawn.body_type) < std::size(game::szBodyType)) {
+            bodyDesc = game::szBodyType[spawn.body_type];
         }
-        else
-        {
-            BodyDesc = "";
-        }
-        int BodyDescLength = static_cast<int>(strlen(BodyDesc));
-        //copy the size
-        memcpy(pBuffer, &BodyDescLength, sizeof(BodyDescLength));
-        pBuffer += sizeof(BodyDescLength);
-        bufferSize += sizeof(BodyDescLength);
-        //copy the data
-        memcpy(pBuffer, BodyDesc, BodyDescLength);
-        pBuffer += BodyDescLength;
-        bufferSize += BodyDescLength;
-
-        bool isBuyer = spawn.buyer;
-        memcpy(pBuffer, &isBuyer, sizeof(isBuyer));
-        pBuffer += sizeof(isBuyer);
-        bufferSize += sizeof(isBuyer);
-
-        int ClassID = spawn.class_id;
-        memcpy(pBuffer, &ClassID, sizeof(ClassID));
-        pBuffer += sizeof(ClassID);
-        bufferSize += sizeof(ClassID);
-
-        char tempBuffer[2048];
+        write_str16(pBuffer, bodyDesc);
         copy_cstr(tempBuffer, sizeof(tempBuffer), spawn.name.c_str());
         CleanupName(tempBuffer, sizeof(tempBuffer), false, false);
-        std::string tCleanName(tempBuffer);
-        int tCleanNameLength = static_cast<int>(tCleanName.size());
-        //copy the size
-        memcpy(pBuffer, &tCleanNameLength, sizeof(tCleanNameLength));
-        pBuffer += sizeof(tCleanNameLength);
-        bufferSize += sizeof(tCleanNameLength);
-        //copy the data
-        memcpy(pBuffer, tCleanName.c_str(), tCleanNameLength);
-        pBuffer += tCleanNameLength;
-        bufferSize += tCleanNameLength;
-
-        int conColorID = ConColor(c->world().player()->level,spawn.level);
-        memcpy(pBuffer, &conColorID, sizeof(conColorID));
-        pBuffer += sizeof(conColorID);
-        bufferSize += sizeof(conColorID);
-
-        int currentEndurance = 0;
-        memcpy(pBuffer, &currentEndurance, sizeof(currentEndurance));
-        pBuffer += sizeof(currentEndurance);
-        bufferSize += sizeof(currentEndurance);
-
-        int64_t currentHps = spawn.hp_percent;
-        memcpy(pBuffer, &currentHps, sizeof(currentHps));
-        pBuffer += sizeof(currentHps);
-        bufferSize += sizeof(currentHps);
-
-        int currentMana = 0;
-        memcpy(pBuffer, &currentMana, sizeof(currentMana));
-        pBuffer += sizeof(currentMana);
-        bufferSize += sizeof(currentMana);
-
-        bool dead = (spawn.stand_state == STANDSTATE_DEAD);
-        memcpy(pBuffer, &dead, sizeof(dead));
-        pBuffer += sizeof(dead);
-        bufferSize += sizeof(dead);
-        
-        std::string displayName= game::display_name(spawn.name);
-        int displayNameLength = static_cast<int>(displayName.length());
-        //copy the size
-        memcpy(pBuffer, &displayNameLength, sizeof(displayNameLength));
-        pBuffer += sizeof(displayNameLength);
-        bufferSize += sizeof(displayNameLength);
-        //copy the data
-        memcpy(pBuffer, displayName.c_str(), displayNameLength);
-        pBuffer += displayNameLength;
-        bufferSize += displayNameLength;
-
-        bool ducking = (spawn.stand_state == STANDSTATE_DUCK);
-        memcpy(pBuffer, &ducking, sizeof(ducking));
-        pBuffer += sizeof(ducking);
-        bufferSize += sizeof(ducking);
-
-        bool feigning = (spawn.stand_state == STANDSTATE_FEIGN);
-        memcpy(pBuffer, &feigning, sizeof(feigning));
-        pBuffer += sizeof(feigning);
-        bufferSize += sizeof(feigning);
-
-       
-        int genderId = spawn.gender;
-        memcpy(pBuffer, &genderId, sizeof(genderId));
-        pBuffer += sizeof(genderId);
-        bufferSize += sizeof(genderId);
-
-        bool GM = spawn.gm;
-        memcpy(pBuffer, &GM, sizeof(GM));
-        pBuffer += sizeof(GM);
-        bufferSize += sizeof(GM);
-
-        int64_t guildID = spawn.guild_id;
-        memcpy(pBuffer, &guildID, sizeof(guildID));
-        pBuffer += sizeof(guildID);
-        bufferSize += sizeof(guildID);
-
-        float heading = spawn.heading * 0.703125f;
-        memcpy(pBuffer, &heading, sizeof(heading));
-        pBuffer += sizeof(heading);
-        bufferSize += sizeof(heading);
-
-
-        float height = spawn.heights.avatar_height;
-        memcpy(pBuffer, &height, sizeof(height));
-        pBuffer += sizeof(height);
-        bufferSize += sizeof(height);
-
-        bool Invs = 0;
-        memcpy(pBuffer, &Invs, sizeof(Invs));
-        pBuffer += sizeof(Invs);
-        bufferSize += sizeof(Invs);
-
-        bool isSummoned = spawn.summoned;
-        memcpy(pBuffer, &isSummoned, sizeof(isSummoned));
-        pBuffer += sizeof(isSummoned);
-        bufferSize += sizeof(isSummoned);
-
-        int level = spawn.level;
-        memcpy(pBuffer, &level, sizeof(level));
-        pBuffer += sizeof(level);
-        bufferSize += sizeof(level);
-
-        bool levitation = spawn.fly_mode==2;
-        memcpy(pBuffer, &levitation, sizeof(levitation));
-        pBuffer += sizeof(levitation);
-        bufferSize += sizeof(levitation);
-
-        bool linkDead = spawn.linkdead;
-        memcpy(pBuffer, &linkDead, sizeof(linkDead));
-        pBuffer += sizeof(linkDead);
-        bufferSize += sizeof(linkDead);
-
-        float look =0;
-        memcpy(pBuffer, &look, sizeof(look));
-        pBuffer += sizeof(look);
-        bufferSize += sizeof(look);
-
-        int master = spawn.pet_owner_id;
-        memcpy(pBuffer, &master, sizeof(master));
-        pBuffer += sizeof(master);
-        bufferSize += sizeof(master);
-
-        int maxEndurance = 0;
-        memcpy(pBuffer, &maxEndurance, sizeof(maxEndurance));
-        pBuffer += sizeof(maxEndurance);
-        bufferSize += sizeof(maxEndurance);
-
-        game::eSpawnType spawnType = game::Spawn::GetSpawnType(&spawn);
-
-        float maxRange = 0.0;
-        if (spawnType != hailstone::game::eSpawnType::ITEM)
-        {
-            //not quite sure how to get melee range, as there is a different type of spawn object for melee calculations...
-            //and frankly shouldn't relaly use this anyway.
-            maxRange = 14.5;
-        }
-        memcpy(pBuffer, &maxRange, sizeof(maxRange));
-        pBuffer += sizeof(maxRange);
-        bufferSize += sizeof(maxRange);
-
-
-        float maxRanageTo = 0.0;
-        if (spawnType != hailstone::game::eSpawnType::ITEM)
-        {
-            maxRanageTo = 14.5;
-        }
-        memcpy(pBuffer, &maxRanageTo, sizeof(maxRanageTo));
-        pBuffer += sizeof(maxRanageTo);
-        bufferSize += sizeof(maxRanageTo);
-
-        bool mount = false;
-        if (spawn.mount_id>0)
-        {
-            mount = true;
-        }
-        memcpy(pBuffer, &mount, sizeof(mount));
-        pBuffer += sizeof(mount);
-        bufferSize += sizeof(mount);
-
-
-        bool moving = (fabs(spawn.speed_run) > 0.0f);
-        memcpy(pBuffer, &moving, sizeof(moving));
-        pBuffer += sizeof(moving);
-        bufferSize += sizeof(moving);
-
-
-        std::string name(spawn.name);
-        int tNameLength = static_cast<int>(name.size());
-        //copy the size
-        memcpy(pBuffer, &tNameLength, sizeof(tNameLength));
-        pBuffer += sizeof(tNameLength);
-        bufferSize += sizeof(tNameLength);
-        //copy the data
-        memcpy(pBuffer, name.c_str(), tNameLength);
-        pBuffer += tNameLength;
-        bufferSize += tNameLength;
-
-        bool isNamed = game::Spawn::IsNamed(&spawn);
-        memcpy(pBuffer, &isNamed, sizeof(isNamed));
-        pBuffer += sizeof(isNamed);
-        bufferSize += sizeof(isNamed);
-
-        int64_t pctHPs = spawn.hp_percent;
-        memcpy(pBuffer, &pctHPs, sizeof(pctHPs));
-        pBuffer += sizeof(pctHPs);
-        bufferSize += sizeof(pctHPs);
-
-        int pctMana = 0;
-        memcpy(pBuffer, &pctMana, sizeof(pctMana));
-        pBuffer += sizeof(pctMana);
-        bufferSize += sizeof(pctMana);
-
-        int petID = 0;
-        memcpy(pBuffer, &petID, sizeof(petID));
-        pBuffer += sizeof(petID);
-        bufferSize += sizeof(petID);
-
-        int playerState = spawn.player_state;
-        memcpy(pBuffer, &playerState, sizeof(playerState));
-        pBuffer += sizeof(playerState);
-        bufferSize += sizeof(playerState);
-
-
-        int raceID = spawn.race;
-        memcpy(pBuffer, &raceID, sizeof(raceID));
-        pBuffer += sizeof(raceID);
-        bufferSize += sizeof(raceID);
-       
-        std::string raceName(hailstone::game::Spawn::GetRaceIDName(spawn.race));
-        int tRaceNameLength = static_cast<int>(raceName.size());
-        //copy the size
-        memcpy(pBuffer, &tRaceNameLength, sizeof(tRaceNameLength));
-        pBuffer += sizeof(tRaceNameLength);
-        bufferSize += sizeof(tRaceNameLength);
-        //copy the data
-        memcpy(pBuffer, raceName.c_str(), tRaceNameLength);
-        pBuffer += tRaceNameLength;
-        bufferSize += tRaceNameLength;
-
-
-        bool rolePlaying = (spawn.anon == 2);
-        memcpy(pBuffer, &rolePlaying, sizeof(rolePlaying));
-        pBuffer += sizeof(rolePlaying);
-        bufferSize += sizeof(rolePlaying);
-
-        bool sitting = (spawn.stand_state == STANDSTATE_SIT);
-        memcpy(pBuffer, &sitting, sizeof(sitting));
-        pBuffer += sizeof(sitting);
-        bufferSize += sizeof(sitting);
-
-        bool sneaking = false;
-        memcpy(pBuffer, &sneaking, sizeof(sneaking));
-        pBuffer += sizeof(sneaking);
-        bufferSize += sizeof(sneaking);
-
-        bool standing = (spawn.stand_state == STANDSTATE_STAND);
-        memcpy(pBuffer, &standing, sizeof(standing));
-        pBuffer += sizeof(standing);
-        bufferSize += sizeof(standing);
-
-
-        bool stunned = false;
-        if (spawn.player_state & 0x20)
-        {
-            stunned = true;
-        }
-        memcpy(pBuffer, &stunned, sizeof(stunned));
-        pBuffer += sizeof(stunned);
-        bufferSize += sizeof(stunned);
-
-       
-        std::string suffix(spawn.suffix);
-        int tsuffixLength = static_cast<int>(suffix.size());
-        //copy the size
-        memcpy(pBuffer, &tsuffixLength, sizeof(tsuffixLength));
-        pBuffer += sizeof(tsuffixLength);
-        bufferSize += sizeof(tsuffixLength);
-        //copy the data
-        memcpy(pBuffer, suffix.c_str(), tsuffixLength);
-        pBuffer += tsuffixLength;
-        bufferSize += tsuffixLength;
-
-
-        bool targetable = spawn.targetable;
-        memcpy(pBuffer, &targetable, sizeof(targetable));
-        pBuffer += sizeof(targetable);
-        bufferSize += sizeof(targetable);
-
-        int targetoftargetID = 0;
-        memcpy(pBuffer, &targetoftargetID, sizeof(targetoftargetID));
-        pBuffer += sizeof(targetoftargetID);
-        bufferSize += sizeof(targetoftargetID);
-
-
-        bool trader = spawn.trader;
-        memcpy(pBuffer, &trader, sizeof(trader));
-        pBuffer += sizeof(trader);
-        bufferSize += sizeof(trader);
-
-
-        std::string typeDescription(game::Spawn::GetTypeDesc(spawnType));
-        int ttypeDescriptionLength = static_cast<int>(typeDescription.size());
-        //copy the size
-        memcpy(pBuffer, &ttypeDescriptionLength, sizeof(ttypeDescriptionLength));
-        pBuffer += sizeof(ttypeDescriptionLength);
-        bufferSize += sizeof(ttypeDescriptionLength);
-        //copy the data
-        memcpy(pBuffer, typeDescription.c_str(), ttypeDescriptionLength);
-        pBuffer += ttypeDescriptionLength;
-        bufferSize += ttypeDescriptionLength;
-        
-        bool underwater = false;
-        memcpy(pBuffer, &underwater, sizeof(underwater));
-        pBuffer += sizeof(underwater);
-        bufferSize += sizeof(underwater);
-
-        float x = spawn.position.x;
-        memcpy(pBuffer, &x, sizeof(x));
-        pBuffer += sizeof(x);
-        bufferSize += sizeof(x);
-
-        float y = spawn.position.y;
-        memcpy(pBuffer, &y, sizeof(y));
-        pBuffer += sizeof(y);
-        bufferSize += sizeof(y);
-
-        float z = spawn.position.z;
-        memcpy(pBuffer, &z, sizeof(z));
-        pBuffer += sizeof(z);
-        bufferSize += sizeof(z);
-
-
-        //so distance calculations can be done
-        ;
-        float playerx = c->world().player()->position.x;
-        memcpy(pBuffer, &playerx, sizeof(playerx));
-        pBuffer += sizeof(playerx);
-        bufferSize += sizeof(playerx);
-
-        float playery = c->world().player()->position.y;
-        memcpy(pBuffer, &playery, sizeof(playery));
-        pBuffer += sizeof(playery);
-        bufferSize += sizeof(playery);
-
-        float playerz = c->world().player()->position.z;
-        memcpy(pBuffer, &playerz, sizeof(playerz));
-        pBuffer += sizeof(playerz);
-        bufferSize += sizeof(playerz);
-
-        //needed to tell NPC vs PC corpses
-        int deity = spawn.deity;
-        memcpy(pBuffer, &deity, sizeof(deity));
-        pBuffer += sizeof(deity);
-        bufferSize += sizeof(deity);
-
-
+        write_str16(pBuffer, std::string_view(tempBuffer)); //CleanName
+        const std::string displayName = game::display_name(spawn.name);
+        write_str16(pBuffer, displayName);
+        write_str16(pBuffer, spawn.name);
+        write_str16(pBuffer, hailstone::game::Spawn::GetRaceIDName(spawn.race));
+        write_str16(pBuffer, spawn.suffix);
+        write_str16(pBuffer, game::Spawn::GetTypeDesc(spawnType));
+        count++;
     }
-
-    return bufferSize;
+    header->spawnCount = count;
+    return static_cast<int>(pBuffer - data);
 }
+
 int h_get_spawn(void* h, std::uint32_t id, HailstoneSpawn* out) {
     const net::GameConnection* c = readable(Loaded::of(h), "get_spawn");
     if (!c) return 0;
@@ -1629,76 +1388,135 @@ int h_get_buff(void* h, std::uint32_t index, HailstoneBuff* out) {
     v.caster_id = b.caster_id;
     return give(out, v);
 }
-
-// The whole records of `w` (`record` bytes each) that fit in out_size go to `out`; returns the bytes given.
-std::int32_t give_records(const ByteWriter& w, std::size_t record, void* out, std::size_t out_size) {
-    const std::size_t n = std::min(w.size(), out_size / record * record);
-    if (n) std::memcpy(out, w.data().data(), n);
-    return static_cast<std::int32_t>(n);
-}
-
-// get_buff_data_bulk, laid out as hailstone_plugin.h says. The counters are those of the spell's first counter
-// effect, as MacroQuest's Spell.CounterType and CounterNumber read them: its base is the counters the buff starts
-// with; the counters left are the slot's data, which stock EQEmu sends as zeros (BuffSlot::slot_data).
-std::int32_t h_get_buff_data_bulk(void* h, void* out, std::size_t out_size) {
+/// <summary>
+/// This is a hightly optimized code. AI should not modify this code method.
+/// PR reviewwr ask the submiter for changes to be reviewed by the submitter
+/// </summary>
+/// <param name="h">host</param>
+/// <param name="data">buffer to put data in</param>
+/// <param name="datamax">greater than 1798</param>
+/// <returns></returns>
+int h_get_buff_data_bulk(void* h, unsigned char* data, int32_t datamax)
+{
+    //AI SHOULD NOT MODIFY THIS METHOD
+    //don't allow a deny just grab the raw connection.
     const net::GameConnection* c = readable(Loaded::of(h), "get_buff_data_bulk");
-    if (!c || !out) return 0;
+    if (!c || !data || datamax <= 0) return 0;
     const auto& buffs = c->spell_state().buffs;
-    ByteWriter w;
-    for (std::size_t slot = 0; slot < buffs.size(); ++slot) {
-        const game::BuffSlot& b = buffs[slot];
-        if (b.empty()) {
-            w.zeros(20);
-            w.le<std::int32_t>(-1); // no counters
-            w.zeros(HAILSTONE_BUFF_RECORD_SIZE - 24);
-            continue;
+    int bufferSize = 0;
+    unsigned char* pBuffer = data;
+    //buffs are stored in buff slots
+    //0-41 = normal buffs, 42-61 = songs, 62 = hidden disc buff
+    //don't send out the last buff slot so -1
+    //precent C++ from padding the struct as we are blasting this into the array.
+    #pragma pack(push, 1)
+    struct BuffBulkData {
+        int ID;
+        int casterID;
+        int duration;
+        int hitcount;
+        int spelltype;
+        int counterType;
+        int counterTotal;
+        unsigned char isSong;
+    };
+    #pragma pack(pop)
+    //needs to be able to fit the data, or return nothing
+    constexpr int32_t kMinBuffBytes = (game::kBuffSlots - 1) * static_cast<int32_t>(sizeof(BuffBulkData));
+    if (datamax < kMinBuffBytes) return 0;
+
+    for (int slot = 0; slot < game::kBuffSlots - 1; ++slot) {
+        // SAFETY CHECK: Ensure writing this next packet won't exceed datamax
+        if (bufferSize + sizeof(BuffBulkData) > static_cast<std::size_t>(datamax)) {
+            // Buffer is full! Break out early to prevent an overflow crash.
+            break;
         }
-        std::int32_t counter_type = -1, counter_base = 0, counter_left = 0;
-        std::uint32_t spell_type = 0;
-        if (const game::SpellData* s = c->spell_table().get(b.spell)) {
-            spell_type = s->spell_type;
-            for (std::size_t i = 0; i < s->effect.size() && counter_type < 0; ++i) {
-                switch (s->effect[i]) {
-                case game::SPA_DISEASE: counter_type = 0; break;
-                case game::SPA_POISON: counter_type = 1; break;
-                case game::SPA_CURSE: counter_type = 2; break;
-                case game::SPA_CORRUPTION: counter_type = 3; break;
-                default: continue;
+        const auto& buff = buffs[static_cast<std::size_t>(slot)];
+        BuffBulkData pkt{};
+        pkt.ID = buff.spell;
+        pkt.counterType = 0; // 0 for empty slots
+        if (!buff.empty())
+        {
+            //get said spell for some data we need
+            //blast the id into the buffer and move pointer forward
+            pkt.casterID = buff.caster_id;
+            pkt.duration = buff.tics;
+            pkt.hitcount = buff.num_hits;
+            pkt.counterType = -1; // -1 for active slots with no matching effect
+            pkt.isSong = (slot >= game::kLongBuffSlots && slot < game::kLongBuffSlots + game::kShortBuffSlots);
+            if (const auto* spell = c->spell_table().get(pkt.ID)) {
+                pkt.spelltype = spell->spell_type;
+
+                // Evaluate spell effects for counters
+                for (std::size_t i = 0; i < spell->effect.size(); ++i) {
+                    bool match = true;
+                    switch (spell->effect[i]) {
+                    case game::eEQSPA::SPA_DISEASE:    pkt.counterType = 0; break;
+                    case game::eEQSPA::SPA_POISON:     pkt.counterType = 1; break;
+                    case game::eEQSPA::SPA_CURSE:      pkt.counterType = 2; break;
+                    case game::eEQSPA::SPA_CORRUPTION: pkt.counterType = 3; break;
+                    default:                           match = false;       break;
+                    }
+                    if (match) {
+                        pkt.counterTotal += spell->base[i];
+                        break;
+                    }
                 }
-                counter_base = s->base[i];
-                counter_left = b.slot_data[i];
             }
         }
-        const bool song = slot >= static_cast<std::size_t>(game::kLongBuffSlots) &&
-                          slot < static_cast<std::size_t>(game::kLongBuffSlots + game::kShortBuffSlots);
-        w.le<std::uint32_t>(b.spell);
-        w.le<std::uint32_t>(b.caster_id);
-        w.le<std::uint32_t>(b.tics);
-        w.le<std::uint32_t>(b.num_hits);
-        w.le<std::uint32_t>(spell_type);
-        w.le<std::int32_t>(counter_type);
-        w.le<std::int32_t>(counter_base);
-        w.le<std::int32_t>(counter_left);
-        w.le<std::uint8_t>(song ? 1 : 0);
-    }
-    return give_records(w, HAILSTONE_BUFF_RECORD_SIZE, out, out_size);
-}
+        std::memcpy(pBuffer, &pkt, sizeof(pkt));
+        pBuffer += sizeof(pkt);
+        bufferSize += sizeof(pkt); // Success! Tracks total bytes perfectly
 
-// get_pet_buff_data_bulk: the pet window's buffs (OP_PetBuffWindow), laid out as hailstone_plugin.h says.
-std::int32_t h_get_pet_buff_data_bulk(void* h, void* out, std::size_t out_size) {
+    }
+    return bufferSize;
+}//end h_get_buff_data_bulk
+
+/// <summary>
+/// This is a hightly optimized code. AI should not modify this code method.
+/// PR reviewwr ask the submiter for changes to be reviewed by the submitter
+/// </summary>
+/// <param name="h">host</param>
+/// <param name="data">buffer passed in</param>
+/// <param name="datamax">12 bytes per buff, 30 so minimum of 360, so 1024 is good </param>
+/// <returns></returns>
+int32_t h_get_pet_buff_data_bulk(void* h, unsigned char* data, int32_t datamax)
+{
+    //AI SHOULD NOT MODIFY THIS METHOD
     const net::GameConnection* c = readable(Loaded::of(h), "get_pet_buff_data_bulk");
-    if (!c || !out) return 0;
-    ByteWriter w;
+    if (!c || !data || datamax <= 0) return 0;
+    unsigned char* pBuffer = data;
+    int bufferSize = 0;
+    struct BuffDataPacket {
+        int id;
+        int duration;
+        int spellType;
+    };
+    const size_t bytesPerBuff = sizeof(BuffDataPacket);
+    const game::SpellTable& st = c->spell_table();
     for (const auto& [slot, b] : c->pet_buffs()) {
-        const game::SpellData* s = c->spell_table().get(b.spell);
-        w.le<std::uint32_t>(slot);
-        w.le<std::uint32_t>(b.spell);
-        w.le<std::uint32_t>(b.tics);
-        w.le<std::uint32_t>(s ? s->spell_type : 0u);
-    }
-    return give_records(w, HAILSTONE_PET_BUFF_RECORD_SIZE, out, out_size);
-}
 
+        if (bufferSize + bytesPerBuff > static_cast<size_t>(datamax)) {
+            // Buffer is full. Handle as needed (e.g., break or return error)
+            break;
+        }
+        BuffDataPacket packet{ 0, 0, 0 };
+        if (b.spell > 0)
+        {
+            packet.id = b.spell;
+            packet.duration = b.tics;
+            const auto* sp = st.get(b.spell);
+            if (sp)
+            {
+                packet.spellType = sp->spell_type;
+            }
+        }
+        memcpy(pBuffer, &packet, bytesPerBuff);
+        pBuffer += bytesPerBuff;
+        bufferSize += bytesPerBuff;
+    }
+    return bufferSize;
+}
 int h_get_xtarget(void* h, std::uint32_t index, HailstoneXTarget* out) {
     const net::GameConnection* c = readable(Loaded::of(h), "get_xtarget");
     if (!c) return 0;
@@ -2313,6 +2131,7 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.open_bank = main_only<h_open_bank>;
     p.table.get_buff_data_bulk = main_only<h_get_buff_data_bulk>;
     p.table.get_pet_buff_data_bulk = main_only<h_get_pet_buff_data_bulk>;
+    p.table.get_spawns_data_bulk = main_only<h_get_spawns_data_bulk>;
     p.owner = m.env.hooks->new_guest("plugin:" + name);
 
     Hooks& hooks = *m.env.hooks;

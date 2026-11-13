@@ -144,7 +144,6 @@ typedef struct HailstonePet {
     uint32_t spawn_id;
     uint32_t class_id; /* the summoning class; 0 unknown or charmed */
 } HailstonePet;
-
 /* The local character's HP, mana and endurance as the server's client answers them (set_vitals): a field counts
  * when its HAILSTONE_VITAL_* bit is in `has`, and the client's formula is used for the others. */
 #define HAILSTONE_VITAL_MAX_HP 0x01u
@@ -402,7 +401,12 @@ typedef struct HailstoneHooks {
     int (*map_spawn)(const HailstoneSpawn* spawn, HailstoneMapSpawn* out);
 } HailstoneHooks;
 
+
 /* The client's functions a plugin calls (the host table): one per plugin, handed over by hailstone_plugin_set_host. */
+/* WARNING! ALWAYS APPEND: ORDER MATTERS IN PluginHostApi (see size below) */
+/* WARNING!  ALWAYS APPEND: ORDER MATTERS IN PluginHostApi (see size below) */
+/* WARNING!  ALWAYS APPEND: ORDER MATTERS IN PluginHostApi (see size below) */
+/* WARNING!  ALWAYS APPEND: ORDER MATTERS IN PluginHostApi (see size below) */
 typedef struct PluginHostApi {
     uint32_t abi;  /* HAILSTONE_PLUGIN_ABI */
     uint32_t size; /* sizeof(PluginHostApi) of the client: later ABIs only add fields at the end */
@@ -582,25 +586,12 @@ typedef struct PluginHostApi {
      * class and range checks: `banker` a spawn id, 0 for the player itself (as the NMS patch's vault Bank button);
      * the window closes when that spawn is out of reach. 1 open (or already open), 0 not (HAILSTONE_CAP_ACTIONS). */
     int (*open_bank)(void* host, uint32_t banker);
-    /* Every buff slot of the player in one call (HAILSTONE_CAP_READ): slot 0 first, HAILSTONE_BUFF_RECORD_SIZE bytes
-     * each, for HailstonePlayer.buff_slots slots (songs from 42, the discipline slot last). Fixed little-endian
-     * fields, unaligned (read them with ByteReader):
-     *   +0  u32 spell id, 0 an empty slot (its other fields 0, counter type -1)
-     *   +4  u32 caster spawn id     +8  u32 tics, as received      +12 u32 hits left
-     *   +16 u32 the spell's type: 0 detrimental, 1 beneficial, 2 beneficial group-only (0 for a spell not known)
-     *   +20 i32 counter type: -1 none, 0 disease, 1 poison, 2 curse, 3 corruption (the spell's first counter effect)
-     *   +24 i32 that effect's base, the counters the buff starts with (MacroQuest's Spell.CounterNumber)
-     *   +28 i32 the counters left as the server sent them (stock EQEmu sends 0)
-     *   +32 u8  1 a song slot
-     * Writes the whole records that fit in out_size; returns the bytes written (0 without `read`). */
-    int32_t (*get_buff_data_bulk)(void* host, void* out, size_t out_size);
-    /* The pet window's buffs (HAILSTONE_CAP_READ), in the order the server sent them, HAILSTONE_PET_BUFF_RECORD_SIZE
-     * bytes each: +0 u32 the pet window's slot, +4 u32 spell id, +8 u32 tics, +12 u32 the spell's type (as above).
-     * Writes the whole records that fit in out_size; returns the bytes written (0 with no pet buffs or no `read`). */
-    int32_t (*get_pet_buff_data_bulk)(void* host, void* out, size_t out_size);
+    int32_t (*get_buff_data_bulk)(void* host, unsigned char* out, int32_t out_size);
+    int32_t (*get_pet_buff_data_bulk)(void* host, unsigned char* out, int32_t out_size);
+    int32_t (*get_spawns_data_bulk)(void* host, unsigned char* out, int32_t out_size);
 } PluginHostApi;
-#define HAILSTONE_BUFF_RECORD_SIZE 33
-#define HAILSTONE_PET_BUFF_RECORD_SIZE 16
+#define HAILSTONE_BUFF_RECORD_SIZE 29
+#define HAILSTONE_PET_BUFF_RECORD_SIZE 12
 /* Whether this client's host table has `field` (one added after the plugin's ABI) and it is set. */
 #define HAILSTONE_HOST_HAS(h, field)                                                                                   \
     ((h) && (h)->size >= offsetof(PluginHostApi, field) + sizeof((h)->field) && (h)->field)

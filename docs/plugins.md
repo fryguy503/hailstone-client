@@ -540,8 +540,9 @@ same changes as a plugin, with no change to Hailstone itself. With the `extend` 
   the profile holds it), `aa_value` (an owned alternate ability's slot value, by its ability id), and `eqstr` for a
   game string with its `%1` filled. A spawn also carries its rider, mercenary and GM flags, whether it is one of the
   player's group, its con colour and its body types. Each struct starts with its size; the client fills what both know, so a plugin built
-  for an older client keeps working. `get_buff_data_bulk` gives every buff slot of the player in one call and
-  `get_pet_buff_data_bulk` the pet window's buffs, as fixed little-endian records (Buff records below). `server_info` gives the
+  for an older client keeps working. `get_buff_data_bulk` gives every buff slot of the player in one call,
+  `get_pet_buff_data_bulk` the pet window's buffs and `get_spawns_data_bulk` every spawn in the zone, as packed
+  records (Buff and spawn records below). `server_info` gives the
   server this login is on (the saved server's name, host and port, the world's name and address), so a plugin for
   one server can tell it from another that sends the same packets.
 - **take item clicks** (`item_right_click`, then the client's own with `right_click_item`, which needs `actions`)
@@ -583,29 +584,90 @@ call, since a client older than the call has a shorter table. The structs a plug
 ..., `HailstoneWebState`) carry their size too and the client fills what both know; `HailstoneWebState`'s `size` is a `size_t`
 (as ABI 3 shipped it), the others' a `uint32_t`.
 
-Buff records: `get_buff_data_bulk(host, out, out_size)` and `get_pet_buff_data_bulk(host, out, out_size)` (with
-`read`; added later in ABI 3, so test `HAILSTONE_HOST_HAS(host, get_buff_data_bulk)` first) write the whole records
-that fit in `out_size` and return the bytes written. The fields are little-endian and unaligned: read them with
-`ByteReader`, never by casting a struct onto the buffer.
+Buff and spawn records: `get_buff_data_bulk(host, out, out_size)`, `get_pet_buff_data_bulk(host, out, out_size)` and
+`get_spawns_data_bulk(host, out, out_size)` (with `read`; added later in ABI 3, so test `HAILSTONE_HOST_HAS(host, <field>)` first;
+`out` is an `unsigned char*` and `out_size` an `int32_t`) write records into `out` and return the bytes written.
+The client copies its own packed structs into the buffer, so the fields are in the machine's byte order
+(little-endian on every platform Hailstone runs on) and unaligned: read them with `ByteReader` or `memcpy`, never by
+casting a struct onto the buffer. Without `read` they return 0 and say so in the chat window.
 
-- `get_buff_data_bulk`: one record of `HAILSTONE_BUFF_RECORD_SIZE` (33) bytes per buff slot, slot 0 first, for all
-  `HailstonePlayer.buff_slots` slots (the songs from slot 42, the discipline slot last), so 2079 bytes for RoF2's 63.
+- `get_buff_data_bulk`: needs `out_size` of at least 1798 bytes (62 x `HAILSTONE_BUFF_RECORD_SIZE`) and returns 0
+  below that, so a plugin gets all the slots or nothing. One record of
+  `HAILSTONE_BUFF_RECORD_SIZE` (29) bytes per buff slot, slot 0 first, for slots 0 to 61 (the songs from slot 42; the
+  last slot, the discipline slot, is not included), so 1798 bytes for RoF2's 63 slots.
 
   | Offset | Type | Field |
   |---|---|---|
-  | 0 | u32 | spell id; 0 an empty slot, whose other fields are 0 but the counter type, -1 |
-  | 4 | u32 | the caster's spawn id |
-  | 8 | u32 | tics left, as the server sent them |
-  | 12 | u32 | hits left |
-  | 16 | u32 | the spell's type: 0 detrimental, 1 beneficial, 2 beneficial group-only (0 for a spell not in spells_us.txt) |
-  | 20 | i32 | counter type of the spell's first counter effect: -1 none, 0 disease, 1 poison, 2 curse, 3 corruption |
-  | 24 | i32 | that effect's base: the counters the buff starts with (MacroQuest's `Spell.CounterNumber`) |
-  | 28 | i32 | the counters left, as the server sent them; stock EQEmu always sends 0 |
-  | 32 | u8 | 1 for a song slot |
+  | 0 | i32 | spell id; 0 an empty slot, whose other fields are all 0 |
+  | 4 | i32 | the caster's spawn id |
+  | 8 | i32 | tics left, as the server sent them |
+  | 12 | i32 | hits left |
+  | 16 | i32 | the spell's type: 0 detrimental, 1 beneficial, 2 beneficial group-only (0 for a spell not in spells_us.txt) |
+  | 20 | i32 | counter type of the spell's first counter effect: -1 none, 0 disease, 1 poison, 2 curse, 3 corruption. An empty slot also has 0 here, so test the spell id before reading it as disease |
+  | 24 | i32 | that effect's base: the counters the buff starts with (MacroQuest's `Spell.CounterNumber`); 0 with no counter effect |
+  | 28 | u8 | 1 for a song slot (42 to 61) |
 
-- `get_pet_buff_data_bulk`: one record of `HAILSTONE_PET_BUFF_RECORD_SIZE` (16) bytes per buff in the pet window,
-  in the order the server sent them (0 bytes with no pet): u32 the pet window's slot, u32 spell id, u32 tics, u32 the
-  spell's type (as above).
+  The counters left (the slot's data from the server) are not included.
+
+- `get_pet_buff_data_bulk`: one record of `HAILSTONE_PET_BUFF_RECORD_SIZE` (12) bytes per buff in the pet window, in
+  the order the server sent them (0 bytes with no pet), as many as fit in `out_size`: i32 spell id, i32 tics, i32 the
+  spell's type (as above). An entry with spell id 0 is all zeros. The pet window's slot number is not included.
+
+- `get_spawns_data_bulk`: every spawn in the zone, as a 16-byte header followed by one record per spawn. Records are
+  added until fewer than 4096 bytes are left in `out`: below 4096 bytes it returns 0, and it needs at least 4112
+  bytes to write any record and a few hundred bytes per spawn on top; the header's count says how many records follow.
+
+  Header:
+
+  | Offset | Type | Field |
+  |---|---|---|
+  | 0 | u32 | the number of spawn records that follow |
+  | 4 | f32 | the player's x (0 with no player) |
+  | 8 | f32 | the player's y |
+  | 12 | f32 | the player's z |
+
+  Each record is 128 fixed bytes:
+
+  | Offset | Type | Field |
+  |---|---|---|
+  | 0 | i32 | spawn id |
+  | 4 | u32 | flags (below) |
+  | 8 | i32 | blind: always 0 |
+  | 12 | i32 | body type id |
+  | 16 | i32 | class id |
+  | 20 | i32 | con colour against the player's level, as a chat colour (`CONCOLOR_*`: 6 grey, 2 green, 18 light blue, 4 blue, 10 white, 15 yellow, 13 red) |
+  | 24 | i32 | current endurance: always 0 |
+  | 28 | i64 | current HP: the HP percent, as the server sends it |
+  | 36 | i32 | current mana: always 0 |
+  | 40 | i32 | gender |
+  | 44 | i64 | guild id |
+  | 52 | f32 | heading in degrees (the server's heading x 0.703125) |
+  | 56 | f32 | height (the model's avatar height) |
+  | 60 | i32 | level |
+  | 64 | f32 | look: always 0 |
+  | 68 | i32 | master: the pet owner's spawn id, 0 for none |
+  | 72 | i32 | max endurance: always 0 |
+  | 76 | f32 | max range: 14.5, or 0 for a ground item |
+  | 80 | f32 | max range to: 14.5, or 0 for a ground item |
+  | 84 | i64 | HP percent |
+  | 92 | i32 | mana percent: always 0 |
+  | 96 | i32 | pet id: always 0 |
+  | 100 | i32 | player state, as the server sends it |
+  | 104 | i32 | race id |
+  | 108 | i32 | target of target id: always 0 |
+  | 112 | f32 | x |
+  | 116 | f32 | y |
+  | 120 | f32 | z |
+  | 124 | i32 | deity (tells a player's corpse from an NPC's) |
+
+  Then seven strings, each a u16 length followed by that many bytes with no terminating NUL: the body type's
+  description, the clean name, the display name, the name, the race's name, the suffix, and the spawn type's
+  description.
+
+  Flags (bit: meaning): 0 AFK, 1 aggressive (player state 0x04 or 0x08), 2 anonymous, 3 buyer, 4 dead, 5 ducking,
+  6 feigning death, 7 GM, 8 invisible, 9 summoned, 10 levitating, 11 link dead, 12 on a mount, 13 moving (a run speed
+  other than 0), 14 named, 15 roleplaying, 16 sitting, 17 sneaking, 18 standing, 19 stunned (player state 0x20),
+  20 targetable, 21 trader, 22 underwater. Bits 8, 17 and 22 are never set at present.
 
 ### Connections (ABI 2)
 

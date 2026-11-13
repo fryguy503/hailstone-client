@@ -690,7 +690,6 @@ TEST_CASE("native plugins: web_message with no buffer gives the length and keeps
     h.run("/probemessage 0");
     CHECK(h.printed_line("[Probe] message -1, -"));
 }
-
 TEST_CASE("native plugins: get_buff_data_bulk and get_pet_buff_data_bulk, laid out as the SDK says") {
     Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
     h.approve(plugin::kCapAll);
@@ -703,25 +702,23 @@ TEST_CASE("native plugins: get_buff_data_bulk and get_pet_buff_data_bulk, laid o
     sp.buffs[5].caster_id = 10;
     sp.buffs[5].tics = 7;
     sp.buffs[5].num_hits = 2;
-    sp.buffs[5].slot_data[1] = 3;
     sp.buffs[42].spell = 3373;
     sp.buffs[42].tics = 3;
-    h.run("/probebuffs 4096");
-    CHECK(h.printed_line("[Probe] buff 0: 11 0 10 0 1 -1 0 0 0"));
-    CHECK(h.printed_line("[Probe] buff 3: 717 0 2 0 1 -1 0 0 0"));
-    CHECK(h.printed_line("[Probe] buff 5: 3004 10 7 2 0 0 4 3 0")); // disease, starts at 4, 3 left
-    CHECK(h.printed_line("[Probe] buff 42: 3373 0 3 0 0 -1 0 0 1"));
-    CHECK(h.printed_line("[Probe] buffs 2079 bytes, 59 empty")); // 63 slots of 33 bytes
-    // Only whole records go into a buffer too small for all.
+    h.run("/probebuffs");
+    CHECK(h.printed_line("[Probe] buff 0: 11 0 10 0 1 -1 0 0"));
+    CHECK(h.printed_line("[Probe] buff 3: 717 0 2 0 1 -1 0 0"));
+    CHECK(h.printed_line("[Probe] buff 5: 3004 10 7 2 0 0 4 0")); // disease, starts at 4
+    CHECK(h.printed_line("[Probe] buff 42: 3373 0 3 0 0 -1 0 1"));
+    CHECK(h.printed_line("[Probe] buffs 1798 bytes, 58 empty")); // slots 0-61 of 29 bytes; the discipline slot not sent
+    // All the slots or nothing: a buffer smaller than 62 records gets none.
     h.printed.clear();
-    h.run("/probebuffs 40");
-    CHECK(h.printed_line("[Probe] buff 0: 11 0 10 0 1 -1 0 0 0"));
-    CHECK(h.printed_line("[Probe] buffs 33 bytes, 0 empty"));
-    h.run("/probebuffs 32");
+    h.run("/probebuffs 1797");
     CHECK(h.printed_line("[Probe] buffs 0 bytes, 0 empty"));
+    h.run("/probebuffs 1798");
+    CHECK(h.printed_line("[Probe] buffs 1798 bytes, 58 empty"));
 
-    // No pet buffs: nothing. Then the pet window's, in the server's order with its slots.
-    h.run("/probepetbuffs 1024");
+    // No pet buffs: nothing. Then the pet window's, in the server's order (the slots are not sent).
+    h.run("/probepetbuffs");
     CHECK(h.printed_line("[Probe] pet buffs 0 bytes"));
     auto pet_buff = [](std::uint32_t spell, std::uint32_t tics) {
         game::BuffSlot b;
@@ -730,18 +727,38 @@ TEST_CASE("native plugins: get_buff_data_bulk and get_pet_buff_data_bulk, laid o
         return b;
     };
     A::pet_buffs(*h.world.conn) = {{2, pet_buff(3002, 5)}, {0, pet_buff(11, 1)}, {7, pet_buff(99999, 4)}};
-    h.run("/probepetbuffs 1024");
-    CHECK(h.printed_line("[Probe] pet buff 2: 3002 5 0"));
-    CHECK(h.printed_line("[Probe] pet buff 0: 11 1 1"));
-    CHECK(h.printed_line("[Probe] pet buff 7: 99999 4 0")); // a spell not known: type 0
-    CHECK(h.printed_line("[Probe] pet buffs 48 bytes"));
+    h.run("/probepetbuffs");
+    CHECK(h.printed_line("[Probe] pet buff: 3002 5 0"));
+    CHECK(h.printed_line("[Probe] pet buff: 11 1 1"));
+    CHECK(h.printed_line("[Probe] pet buff: 99999 4 0")); // a spell not known: type 0
+    CHECK(h.printed_line("[Probe] pet buffs 36 bytes")); // 3 records of 12 bytes
+    // Only whole records go into a buffer too small for all.
     h.printed.clear();
-    h.run("/probepetbuffs 31");
-    CHECK(h.printed_line("[Probe] pet buff 2: 3002 5 0"));
-    CHECK_FALSE(h.printed_line("[Probe] pet buff 0: 11 1 1"));
-    CHECK(h.printed_line("[Probe] pet buffs 16 bytes"));
+    h.run("/probepetbuffs 35");
+    CHECK(h.printed_line("[Probe] pet buff: 3002 5 0"));
+    CHECK(h.printed_line("[Probe] pet buff: 11 1 1"));
+    CHECK_FALSE(h.printed_line("[Probe] pet buff: 99999 4 0"));
+    CHECK(h.printed_line("[Probe] pet buffs 24 bytes"));
 }
-
+TEST_CASE("native plugins: get_spawns_data_bulk, laid out as docs/plugins.md says") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    // The test world's five spawns (mq_test_world.h), in no set order; the player (1) at the origin.
+    h.run("/probespawns");
+    CHECK(h.printed_line("[Probe] spawn 1: 50 2 1 100 Tester"));
+    CHECK(h.printed_line("[Probe] spawn 10: 2 1 1 80 a_rat01"));
+    CHECK(h.printed_line("[Probe] spawn 11: 8 1 1 80 Fippy_Darkpaw000"));
+    CHECK(h.printed_line("[Probe] spawn 12: 48 2 1 100 Groupie"));
+    CHECK(h.printed_line("[Probe] spawn 13: 3 1 1 80 a_rat02"));
+    CHECK(h.printed_line("[Probe] spawns 5, player 0 0 0, 0 bytes left")); // every record's strings framed right
+    // Below 4096 bytes nothing; at 4112 (the header and the 4096 kept free) one record, then it stops.
+    h.printed.clear();
+    h.run("/probespawns 4095");
+    CHECK(h.printed_line("[Probe] spawns 0 bytes"));
+    h.run("/probespawns 4112");
+    CHECK(h.printed_line("[Probe] spawns 1, player 0 0 0, 0 bytes left"));
+}
 TEST_CASE("native plugins: the buff bulk reads need 'read'") {
     Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
     h.approve(plugin::kCapAll & ~plugin::kCapRead);
@@ -751,4 +768,6 @@ TEST_CASE("native plugins: the buff bulk reads need 'read'") {
     CHECK(h.printed_line("[Plugin] HostProbe: get_buff_data_bulk needs the server's 'read' permission"));
     h.run("/probepetbuffs 1024");
     CHECK(h.printed_line("[Probe] pet buffs 0 bytes"));
+    h.run("/probespawns 16384");
+    CHECK(h.printed_line("[Probe] spawns 0 bytes")); // the denial is said once per plugin, above
 }

@@ -25,7 +25,7 @@ Read before you change anything, in this order:
 
 ## Portability rules (they hold on four platforms; Linux and Windows are built, locally)
 
-- Read and write packets and files only with `core/byte_io.h` (`ByteReader` / `ByteWriter`). Never cast a struct onto a buffer, never `#pragma pack` a wire struct.
+- Read and write packets and files only with `core/byte_io.h` (`ByteReader` / `ByteWriter`). Never cast a struct onto a buffer, never `#pragma pack` a wire struct. The one exception is the plugin host's bulk reads (`get_*_data_bulk` in `src/plugin/native_plugins.cpp`): they hand an in-process plugin packed structs in the machine's byte order, for speed, as docs/plugins.md "Buff and spawn records" says. They are neither packets nor files; keep their layouts as their author wrote them.
 - OS calls live only in `src/platform/`. No Win32, POSIX or Vulkan calls elsewhere; `game/` does not include Vulkan headers.
 - No assumptions about the size of `long` or `wchar_t`, path separators, byte order, or the order of function-argument evaluation.
 - Layers depend downward only: `app` -> `game` / `ui` / `render` / `audio` -> `assets` / `net` / `web` -> `core` / `platform`.
