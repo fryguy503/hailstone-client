@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- AA window: column headers and rows stay aligned at every window scale, including when the window or scroll bar changes size. Drag a header's right edge to resize its column, drag the header to reorder it, or use **Reset columns** to restore the default widths, order and name sort. Column text stays inside its own cell
 - Money picked up onto the cursor (from the inventory, the bank or a trade) now follows the mouse as a coin of its kind with the amount beside it, in both interfaces, as an item on the cursor does. Before, nothing showed that coin was held
 - Merchant, Parcels page (modern interface): clicking a parcel now picks it, and Retrieve takes that parcel. Before, the pick was dropped at once, so Retrieve stayed greyed out. With no parcel picked, Retrieve takes the first one in the list
 - Find: Map > Show path now draws the selected world trail on the initial login, including servers without downloaded asset files; terrain bindings follow zone replacement and asset reloads
