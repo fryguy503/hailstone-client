@@ -3,8 +3,8 @@
 -- (General, Archetype, Class, Special: AAWindow's ModernList, app/lua_eq_progress.cpp), with a search and filters over
 -- all of it (the tab, the category, owned / not owned and the game's own "trainable only"), and columns for the tab,
 -- the era (the expansion the ability came with), activated or passive, the rank and the next rank's cost (a head's
--- click sorts by it, its drag moves the column; sorted by name to start with, the text a size up from other
--- windows'); and the selected ability at the side: its rank, the next rank's cost, the level and the abilities it
+-- click sorts by it, its drag moves the column, and dragging its right edge resizes it; sorted by name to start
+-- with, the text a size up from other windows'); and the selected ability at the side: its rank, the next rank's cost, the level and the abilities it
 -- needs, its reuse time, the game's description, Train (with "all ranks": the server's buy all, else the client buys rank after rank) and Hotkey;
 -- the selection stays on the ability as its ranks are bought.
 -- Deliberate differences: the stock window shows one tab's list at a time, in the game's order. Rows are the game's
@@ -210,18 +210,19 @@ local opts = nil    -- this frame's window options (M.window)
 local hookRow = {}  -- the row as opts.row's functions see it (kept)
 
 -- ---------------------------------------------------------------- the columns
--- Each column: its head, its width (design pixels; the name's is what the others leave), how its text and head line
--- up, and its sort key from a row's texts (one type per column). A head's click sorts by that column (again: the
--- other way), its drag moves the column; both are kept (settings aa.columns, aa.sort). Narrow, the category goes
--- first, then the tab. The list starts sorted by name, A to Z.
+-- Each column: its head, its preferred width (design pixels; the name has none: it takes what the others leave), its
+-- alignment and its sort key from a row's texts (one type per column). A head's click sorts by that column (again:
+-- the other way), its drag moves the column, its right edge resizes it against the next column (settings aa.columns,
+-- aa.sort, aa.widths; only the fixed columns' widths are kept, so the name still takes up a wider window).
+-- Narrow, the category goes first, then the tab. The list starts sorted by name, A to Z.
 local COLUMNS = {
-  name = { head = "ABILITY", tip = "Sort by name; drag to move the column" },
-  category = { head = "CATEGORY", w = 110, drop = 1 },
-  tab = { head = "TAB", w = 62, drop = 2 },
-  era = { head = "ERA", w = 104, tip = "Sort by expansion, in release order; drag to move the column" },
-  kind = { head = "TYPE", w = 52, tip = "Sort activated, then passive; drag to move the column" },
-  rank = { head = "RANK", w = 44, align = "center" },
-  cost = { head = "COST", w = 38, align = "right",
+  name = { head = "ABILITY", min = 80, tip = "Sort by name; drag to move the column" },
+  category = { head = "CATEGORY", w = 110, min = 48, drop = 1 },
+  tab = { head = "TAB", w = 62, min = 36, drop = 2 },
+  era = { head = "ERA", w = 104, min = 44, tip = "Sort by expansion, in release order; drag to move the column" },
+  kind = { head = "TYPE", w = 52, min = 44, tip = "Sort activated, then passive; drag to move the column" },
+  rank = { head = "RANK", w = 44, min = 38, align = "center" },
+  cost = { head = "COST", w = 38, min = 36, align = "right",
     tip = "Sort by the next rank's cost (maxed last); drag to move the column" },
 }
 local DEFAULT_ORDER = { "name", "category", "tab", "era", "kind", "rank", "cost" }
@@ -232,8 +233,9 @@ for i, key in ipairs(DEFAULT_ORDER) do
 end
 
 local order = nil         -- the columns' keys, left to right
+local widths = {}        -- the fixed columns' preferred widths (design pixels); a smaller window shrinks them as drawn
 local sortKey, sortAsc = "name", true
-local orderVersion = 0    -- bumped when the order changes (the kept layout is then worked out again)
+local orderVersion = 0    -- bumped when the order or widths change (the kept layout is then worked out again)
 
 local function loadColumns()
   order = {}
@@ -243,6 +245,12 @@ local function loadColumns()
   end
   for _, key in ipairs(DEFAULT_ORDER) do -- (a column the setting does not name: at its default place)
     if not have[key] then table.insert(order, math.min(#order + 1, COLUMNS[key].home), key) end
+  end
+  for key, value in (ui.GetSetting("aa.widths") or ""):gmatch("(%w+)=([^,]+)") do
+    local c, n = COLUMNS[key], tonumber(value)
+    if c and c.w and n and n == n and math.abs(n) < math.huge then -- (not the name's: it takes what the rest leave)
+      widths[key] = math.max(c.min, math.min(n, 2000))
+    end
   end
   local k, dir = (ui.GetSetting("aa.sort") or ""):match("^(%w+):(%a+)$")
   if k and COLUMNS[k] then sortKey, sortAsc = k, dir ~= "desc" end
@@ -255,6 +263,14 @@ end
 
 local function saveSort()
   ui.SetSetting("aa.sort", sortKey .. ":" .. (sortAsc and "asc" or "desc"))
+end
+
+local function saveWidths()
+  local values = {}
+  for _, key in ipairs(DEFAULT_ORDER) do
+    if widths[key] then values[#values + 1] = string.format("%s=%.2f", key, widths[key]) end
+  end
+  ui.SetSetting("aa.widths", table.concat(values, ","))
 end
 
 -- The columns shown from x0 to x1 (the script's part already taken off), left to right in the chosen order; each
@@ -270,28 +286,45 @@ local function columns(x0, x1, s)
     local t = 0
     for _, key in ipairs(order) do
       local c = COLUMNS[key]
-      if c.w and not (c.drop == 1 and hide1) and not (c.drop == 2 and hide2) then t = t + c.w * s + gap end
+      if c.w and not (c.drop == 1 and hide1) and not (c.drop == 2 and hide2) then
+        t = t + (widths[key] or c.w) * s + gap
+      end
     end
     return t
   end
-  local room = (x1 - pad) - (x0 + pad)
+  local room = math.max(0, (x1 - pad) - (x0 + pad))
   if room - fixed() < 150 * s then hide1 = true end
   if room - fixed() < 130 * s then hide2 = true end
-  local nameW = math.max(40 * s, room - fixed())
-  local x, n = x0 + pad, 0
+  local free = room - fixed()
+  -- how far the name can shrink (design pixels) before the narrow layout would drop a column
+  local least = not hide1 and 150 * s or (not hide2 and 130 * s or COLUMNS.name.min * s)
+  lay.slack = math.max(0, free - least) / s
+  local nameW = math.max(COLUMNS.name.min * s, free)
+  local n, total, minimum = 0, 0, 0
   for _, key in ipairs(order) do
     local c = COLUMNS[key]
     if not (c.drop == 1 and hide1) and not (c.drop == 2 and hide2) then
       n = n + 1
       local e = lay[n]
       if not e then e = {}; lay[n] = e end
-      local w = c.w and c.w * s or nameW
-      e.def, e.x0, e.x1 = c, x, x + w
-      x = x + w + gap
+      e.def, e.w = c, c.w and (widths[key] or c.w) * s or nameW
+      total, minimum = total + e.w, minimum + c.min * s
     end
   end
   for k = n + 1, #lay do lay[k] = nil end
   lay.n = n
+  gap = math.min(gap, room / math.max(1, 2 * n))
+  local available = math.max(0, room - (n - 1) * gap)
+  -- Keep the requested widths when there is room. Below that, shrink toward each column's minimum together.
+  local fraction = total > available and total > minimum and math.max(0, (available - minimum) / (total - minimum)) or 1
+  local squeeze = minimum > available and available / minimum or 1
+  local x = x0 + pad
+  for i = 1, n do
+    local e = lay[i]
+    local w = (e.def.min * s + (e.w - e.def.min * s) * fraction) * squeeze
+    e.x0, e.x1 = x, x + w
+    x = x + w + gap
+  end
   return lay
 end
 
@@ -305,41 +338,95 @@ end
 
 -- A head: a click sorts by it, a drag moves it (dropped between the two heads nearest the mouse).
 local dragging = nil -- the key of the column being dragged
+local resizing = nil -- the edge being dragged: the fixed columns either side and their starting widths
 local function columnHeads(x0, y, x1, s)
   local L = columns(x0, x1, s)
   local f, k = F.tiny, C.faint
   local _, hh = T.TextSize("Ag", f)
   local released = nil
+  local resizeBy = nil
   for i = 1, L.n do
     local e = L[i]
     local c = e.def
-    local clicked = T.Hit("##aahead" .. c.key, e.x0 - 3 * s, y - 2 * s, e.x1 + 3 * s, y + hh + 2 * s)
+    local right = L[i + 1]
+    local edgeHovered, edgeActive = false, false
+    if right then -- (the last column's right edge is the list's)
+      ui.DrawLine(e.x1, y, e.x1, y + hh, C.ink[1], C.ink[2], C.ink[3], 0.16, 1 * s)
+      T.Hit("##aaresize" .. c.key, e.x1 - 3 * s, y - 2 * s, e.x1 + 3 * s, y + hh + 2 * s)
+      edgeHovered, edgeActive = ui.IsItemHovered(), ui.IsItemActive()
+    end
+    if edgeActive and not resizing then
+      -- The fixed column on each side of the edge changes, from its preferred width; the name, the flexible column,
+      -- takes up the difference and is never given a width of its own.
+      local b = right.def
+      resizing = { key = c.key, x = ui.GetMousePos(), applied = 0 }
+      local lo, hi
+      if c.w then
+        resizing.left, resizing.leftWidth = c.key, widths[c.key] or c.w
+        lo = c.min - resizing.leftWidth
+      else
+        lo = -L.slack
+      end
+      if b.w then
+        resizing.right, resizing.rightWidth = b.key, widths[b.key] or b.w
+        hi = resizing.rightWidth - b.min
+      else
+        hi = L.slack
+      end
+      resizing.lo, resizing.hi = math.min(0, lo), math.max(0, hi)
+      dragging = nil
+    end
+    if edgeHovered or resizing and resizing.key == c.key then
+      ui.DrawLine(e.x1, y - 2 * s, e.x1, y + hh + 2 * s, C.accent[1], C.accent[2], C.accent[3], 1, 2 * s)
+      if not resizing then ui.SetTooltip("Drag to resize " .. c.head:lower()) end
+    end
+    if resizing and resizing.key == c.key then
+      local mx = ui.GetMousePos()
+      resizeBy = math.max(resizing.lo, math.min(resizing.hi, (mx - resizing.x) / s))
+    end
+    local clicked = T.Hit("##aahead" .. c.key, e.x0, y - 2 * s, e.x1 - 3 * s, y + hh + 2 * s)
     local hovered, active = ui.IsItemHovered(), ui.IsItemActive()
-    if active and ui.IsMouseDragging(ui.Mouse.Left) then dragging = c.key end
+    if active and not resizing and ui.IsMouseDragging(ui.Mouse.Left) then dragging = c.key end
     if dragging == c.key and not active then released = c.key end
-    if clicked and dragging ~= c.key then
+    if clicked and not resizing and dragging ~= c.key then
       if sortKey == c.key then sortAsc = not sortAsc else sortKey, sortAsc = c.key, true end
       saveSort()
     end
-    if hovered and not dragging then ui.SetTooltip(c.tip) end
+    if hovered and not dragging and not resizing then ui.SetTooltip(c.tip .. "; drag the right edge to resize") end
     local on = sortKey == c.key
     if hovered or dragging == c.key then
       ui.DrawRectFilled(e.x0 - 3 * s, y - 2 * s, e.x1 + 3 * s, y + hh + 2 * s, C.ink[1], C.ink[2], C.ink[3], 0.06,
         4 * s)
     end
     local ax, align = anchor(e)
-    local tw = T.TextSize(c.head, f)
     local tc = on and C.text or k
     -- the sort arrow beside the head's text, on the side away from the column's edge
     local aw = 7 * s
+    local head = T.Fit(c.head, e.x1 - e.x0 - aw - 4 * s, f)
+    local tw = T.TextSize(head, f)
     local tx = align == "right" and ax - aw - 3 * s or (align == "center" and ax - aw / 2 - 2 * s or ax)
-    T.Text(tx, y, c.head, tc, f, align)
+    ui.PushClipRect(e.x0, y - 2 * s, e.x1, y + hh + 2 * s, true)
+    T.Text(tx, y, head, tc, f, align)
     if on then
       local axl = align == "right" and ax - aw or (align == "center" and tx + tw / 2 + 3 * s or tx + tw + 4 * s)
       local my = y + hh / 2
       local a = C.accent
       local d = (sortAsc and 2.5 or -2.5) * s -- (up for A to Z, down the other way)
       ui.DrawTriangleFilled(axl, my + d, axl + aw, my + d, axl + aw / 2, my - d, a[1], a[2], a[3], 1)
+    end
+    ui.PopClipRect()
+  end
+  -- Apply changes after drawing: the rows and heads keep one layout for the whole frame.
+  if resizing then
+    if resizeBy and resizeBy ~= resizing.applied then
+      if resizing.left then widths[resizing.left] = resizing.leftWidth + resizeBy end
+      if resizing.right then widths[resizing.right] = resizing.rightWidth - resizeBy end
+      resizing.applied, resizing.changed = resizeBy, true
+      orderVersion = orderVersion + 1
+    end
+    if not ui.IsMouseDown(ui.Mouse.Left) then
+      if resizing.changed then saveWidths() end
+      resizing = nil
     end
   end
   if dragging then
@@ -371,6 +458,16 @@ local function columnHeads(x0, y, x1, s)
       dragging = nil
     end
   end
+end
+
+local function resetColumns()
+  order, widths = {}, {}
+  for i, key in ipairs(DEFAULT_ORDER) do order[i] = key end
+  sortKey, sortAsc, dragging, resizing = "name", true, nil, nil
+  orderVersion = orderVersion + 1
+  ui.SetSetting("aa.columns", "")
+  ui.SetSetting("aa.widths", "")
+  ui.SetSetting("aa.sort", "")
 end
 
 -- ---------------------------------------------------------------- the sort
@@ -491,7 +588,9 @@ local function drawRow(_, texts, x0, y0, x1, y1, s, st)
   local tiny = (y0 + y1 - tt) / 2
   for i = 1, L.n do
     local e = L[i]
+    ui.PushClipRect(e.x0, y0, e.x1, y1, true)
     CELLS[e.def.key](e, texts, ty, tiny, s)
+    ui.PopClipRect()
   end
   cell.style = nil
 end
@@ -604,6 +703,9 @@ local DIALOG = {
 local ROWS = { rowH = 24, drag = true, filter = accepts, sort = sortRows, draw = drawRow }
 
 local function body(x, y, w, h, s)
+  -- The dialog's minimum is an outer size; at that minimum its padding leaves less room for the contents.
+  local availableW, availableH = ui.GetContentRegionAvail()
+  w, h = math.min(w, availableW), math.min(h, availableH)
   header(x, y, w, s)
   if opts and opts.banner then
     local bx, by = ui.GetCursorScreenPos()
@@ -625,20 +727,31 @@ local function body(x, y, w, h, s)
   ui.BeginChild("##aaleft", listW, listBottom - cy, false)
   local lx, ly = ui.GetCursorScreenPos()
   local reserve = opts and opts.row and opts.row.width or nil
-  local innerW = ROWS.innerW or listW -- (the rows' width last frame: less the scroll bar when it shows)
   local _, hh = T.TextSize("Ag", F.tiny)
-  columnHeads(lx, ly, lx + innerW - (reserve or 0) * s, s)
   ui.SetCursorScreenPos(lx, ly + hh + 4 * s)
   local _, lh = T.TextSize("Ag", F.tiny)
   ROWS.rows = rows -- (P.Rows reads the list itself where it does not take these)
   ROWS.reserve = reserve
+  ROWS.scale = s
   ROWS.empty = #rows == 0 and "No abilities" or "No ability matches"
   ROWS.emptySub = #rows == 0 and "" or "Clear the search or the filters to see more"
-  local total, _, shown = P.Rows(WINDOW, LIST, 0, -(lh + 4 * s), ROWS)
-  local fx, fy = ui.GetCursorScreenPos()
+  local total, _, shown = P.Rows(WINDOW, LIST, 0, -(lh + 8 * s), ROWS)
+  -- The footer starts at the rows' bottom, not after EndChild's item spacing (which need not fit the space kept).
+  local fx, _, _, fy = ui.GetItemRect()
+  ui.SetCursorScreenPos(fx, fy)
+  local footerW = ui.GetContentRegionAvail()
+  -- The rows have measured this frame's scroll bar and child padding. Draw the fixed heads at those same bounds.
+  columnHeads(ROWS.innerX, ly, ROWS.innerX + ROWS.innerW - (reserve or 0) * s, s)
   local count = shown == total and string.format("%d abilities", total)
       or string.format("%d of %d abilities", shown, total)
-  T.Text(fx, fy + 2 * s, count .. "   -   drag a row to make a hot button", C.faint, F.tiny)
+  local resetW = T.TextSize("Reset columns", F.tiny) + 16 * s
+  T.Text(fx, fy + 2 * s, T.Fit(count .. "   -   drag a row to make a hot button", footerW - resetW - 8 * s, F.tiny),
+    C.faint, F.tiny)
+  ui.SetCursorScreenPos(math.floor(fx + footerW - resetW), fy)
+  ui.PushFont(F.tiny)
+  if ui.Button("Reset columns##aareset", resetW, lh + 4 * s) then resetColumns() end
+  ui.PopFont()
+  if ui.IsItemHovered() then ui.SetTooltip("Restore the default column widths, order and name sort") end
   ui.EndChild()
   -- the details
   local dx, dy = stacked and cx or (cx + listW + 8 * s), stacked and (listBottom + 6 * s) or cy
