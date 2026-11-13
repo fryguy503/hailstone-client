@@ -461,6 +461,7 @@ add_library(hailstone_engine STATIC
   src/game/mechanics/physics.cpp
   src/game/mechanics/abilities.cpp
   src/game/mechanics/tables.cpp
+  src/game/mechanics/shown_stats.cpp
   src/game/mechanics/item_stats.cpp
   src/game/mechanics/effects.cpp
   src/game/mechanics/stats.cpp
