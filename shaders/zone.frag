@@ -536,7 +536,9 @@ vec3 surface_shine(vec3 n, uint flags) {
 }
 
 void main() {
-    // The isometric camera's cut (game/iso_occlusion.h).
+    // The isometric camera's cut (game/iso_occlusion.h). The depth pre-pass (zone_depth.frag) must discard every pixel
+    // this shader discards, here and at the alpha test below: the colour pass over it tests depth equal and writes
+    // none (tests/depth_prepass_test.cpp checks the two call the same discard helpers).
     if (reveal_discard(v_world, gl_FragCoord.xy, scene.reveal_origin, scene.reveal_axis, scene.reveal_shape,
                        scene.reveal_roof))
         discard;

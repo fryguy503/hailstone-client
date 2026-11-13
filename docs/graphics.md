@@ -80,8 +80,9 @@ With `display.depth_prepass` (off by default; the viewer's `--depth-prepass`) th
 geometry is drawn depth-only first (`ZoneRenderer::draw_depth`, `shaders/zone_depth.frag`), then coloured with the
 depth test equal and no depth write: a pixel covered by several surfaces is shaded once. The alpha test is the colour
 pass's, so an alpha-tested edge covers the same samples in both passes, and `zone.vert`'s position is `invariant`, so
-both passes give a surface the same depth. The water stays out of the pre-pass (it is drawn blended after
-`begin_translucent`). The pre-pass covers the current zone's geometry only: the neighbour zones (their ties go by the
+both passes give a surface the same depth. The pre-pass discards every pixel `zone.frag` discards, the isometric
+camera's cut-away included, or the cut walls would keep their depth and hide what stands behind them. The water stays
+out of the pre-pass (it is drawn blended after `begin_translucent`). The pre-pass covers the current zone's geometry only: the neighbour zones (their ties go by the
 draw order, which an equal test would turn around), the objects, the flora and the characters keep their single pass.
 The setting is read when a zone loads. The pre-pass's shader is optional: without it the zone draws the single pass,
 with a warning in the log.
