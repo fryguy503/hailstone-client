@@ -15,6 +15,30 @@ MovementTest::MovementTest(std::string spec) {
         trace_ = true;
         spec.erase(plus, 6);
     }
+    if (spec.rfind("observe:", 0) == 0) {
+        // Parse separately from the driven tests: observation must never inherit their @ placement.
+        const char* first = spec.c_str() + 8;
+        char* end = nullptr;
+        const float degrees = std::strtof(first, &end);
+        bool valid = end != first;
+        float seconds = 25.0f;
+        if (valid && *end == ':') {
+            first = end + 1;
+            seconds = std::strtof(first, &end);
+            valid = end != first;
+        }
+        if (!valid || *end != '\0' || !std::isfinite(degrees) || !std::isfinite(seconds) ||
+            seconds < 0.0f || seconds > 120.0f) {
+            log::warn("movetest: observe needs a finite yaw and duration in [0, 120], without placement");
+            return;
+        }
+        // Keep subsequent yaw-to-heading arithmetic bounded even for a finite float near FLT_MAX.
+        walk_yaw_ = std::fmod(degrees, 360.0f) * (3.14159265f / 180.0f);
+        walk_secs_ = seconds;
+        trace_ = true;
+        kind_ = "observe";
+        return;
+    }
     // "<test>@X,Y,Z": first put the feet at the world point X Y Z (the same start for runs to compare).
     if (auto at = spec.find('@'); at != std::string::npos) {
         glm::vec3 p{0.0f};
@@ -48,6 +72,18 @@ void MovementTest::drive(float t, MovementKeys& keys, float& yaw, float& pitch, 
                          net::GameConnection& conn, const assets::Zone* zone, const MoveWorld* world,
                          const glm::vec3& feet) {
     if (!active() || done_) return;
+    if (kind_ == "observe") {
+        if (t >= walk_secs_) {
+            done_ = true;
+            movement.set_trace(false);
+            log::info("movetest: observe done at ({:.3f}, {:.3f}, {:.3f})", feet.x, feet.y, feet.z);
+        } else {
+            movement.set_trace(true);
+            yaw = walk_yaw_;
+            pitch = 0.0f;
+        }
+        return;
+    }
     struct PrevT {
         float& prev;
         float now;
@@ -246,7 +282,7 @@ void MovementTest::drive(float t, MovementKeys& keys, float& yaw, float& pitch, 
 
 void MovementTest::observe(float t, const PlayerMovement::Frame& f, const PlayerMovement& movement,
                            const net::GameConnection& conn) {
-    if (!active()) return;
+    if (!active() || (kind_ == "observe" && done_)) return;
     const auto& body = movement.controller().body;
     if (trace_ && !done_)
         for (const auto& line : f.trace) log::info("trace t={:.3f}: {}", t, line);
@@ -270,7 +306,7 @@ void MovementTest::observe(float t, const PlayerMovement::Frame& f, const Player
             last_log_ = t;
         }
     }
-    if (kind_ == "walk" && !done_ && t - last_log_ >= 0.25f) {
+    if ((kind_ == "walk" || kind_ == "observe") && !done_ && t - last_log_ >= 0.25f) {
         log::info("movetest: t={:.2f} feet ({:.3f}, {:.3f}, {:.3f}) body {} v ({:.3f}, {:.3f}, {:.3f})", t, f.feet.x,
                   f.feet.y, f.feet.z, body.body_wet, body.velocity.x, body.velocity.y, body.velocity.z);
         last_log_ = t;

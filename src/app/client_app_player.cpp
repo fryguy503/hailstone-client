@@ -369,8 +369,8 @@ void ClientApp::update_player(float dt) {
     const auto& in = window_.input();
     update_mouse_look();
 
-    // The original's movement commands (default keys: CMD_FORWARD W, CMD_BACK
-    // S, Ctrl+R CMD_RUN_WALK; here A/D strafe and Q/E turn, see README).
+    // Movement commands use the configured bindings: defaults W/S forward/back,
+    // A/D turn, Space jump and X duck.
     MovementKeys mk;
     if (opts_.auto_walk_seconds > 0.0f) {
         opts_.auto_walk_seconds -= dt;
@@ -759,8 +759,8 @@ void ClientApp::update_player(float dt) {
                 feet_.z += floor_offset_ - me->heights.avatar_height;
                 floor_offset_ = me->heights.avatar_height;
             }
-            // The actor's sweep radius (game/mechanics/collision_movement.h: sweep_radius, a stand-in until the
-            // model definition's +0x38 is read).
+            // Native probes support the explicit player-volume radius for the two measured forms
+            // (game/mechanics/collision_movement.h: sweep_radius); mounts and other sizes remain unverified.
             float radius = game::mechanics::sweep_radius(game::mechanics::SweepRadiusSpawn{floor_offset_, me->race});
             movement_.set_collision_radius(radius);
             movement_.set_race(me->race);

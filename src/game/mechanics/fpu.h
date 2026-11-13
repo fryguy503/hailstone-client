@@ -1,19 +1,19 @@
 #pragma once
 
-// The original client's x87 arithmetic, reproduced bit for bit on any CPU.
+// Nearest-even x87 arithmetic at 24- or 53-bit precision, reproduced on any CPU.
 //
 // eqgame.exe computes its float formulas on the x87 FPU. Every arithmetic
 // result is rounded to the precision in the FPU control word; loads (of an
 // integer, a float or a double) are exact. EQGraphicsDX9.dll creates its
 // Direct3D 9 device without D3DCREATE_FPU_PRESERVE (CreateDevice behaviour
-// flags 0x24 / 0x84 / 0x44 | 4 at EQGraphicsDX9.dll 0x10098f80..0x10098fbd), so
-// Direct3D switches the main thread, which also runs the game logic, to 24-bit
-// (single) precision: in game every x87 add, subtract, multiply and divide
-// rounds its result to a 24-bit mantissa (round to nearest even). Under the
-// default 53-bit precision (tools, tests outside the game) the results are
-// those of IEEE doubles.
+// flags 0x24 / 0x84 / 0x44 | 4 at EQGraphicsDX9.dll 0x10098f80..0x10098fbd).
+// That motivated the 24-bit nearest-even default here, but does not establish
+// the control word later in gameplay: 2026-11-12 Citadel-loaded sessions
+// recorded 0x0e7f (53-bit, toward zero) at native collision call boundaries.
+// The source of that mode is not established. This helper implements nearest
+// even only; it does not emulate the capture's directed rounding modes.
 //
-// Fpu reproduces both. Its operands are always exact (they are integers, float
+// At nearest even, Fpu reproduces both precisions. Its operands are exact (integers, float
 // or double constants, or earlier results), so:
 //  - 53-bit: one IEEE double operation is exactly the x87 result (same rounding
 //    of the exact value to 53 bits; the formulas stay far from the x87's wider
@@ -38,8 +38,8 @@
 namespace hailstone::game::mechanics {
 
 enum class FpuPrecision : std::uint8_t {
-    Single24, // in game (Direct3D 9 default)
-    Double53, // the FPU's power-on default
+    Single24, // Hailstone's default; nearest even
+    Double53, // IEEE double significand; nearest even (x87 reset is 64-bit)
 };
 
 class Fpu {

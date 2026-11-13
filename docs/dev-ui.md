@@ -34,6 +34,39 @@ The screens are `login`, `servers`, `chars`, `nochars`, `loading`, `game` and `i
 
 While the UI has keyboard or mouse focus, the camera ignores that input. Holding the right mouse button still turns the camera.
 
+## Movement checks
+
+`--move-test observe:D[:S]` fixes world yaw `D` (degrees, 0 = +X, 90 = +Y) and level pitch while recording normal
+movement for `S` seconds (default 25, range 0–120). It leaves movement keys, position and velocity alone, refuses
+`@` placement, and disables its trace at the deadline. Use it with `--input-script` to exercise the actual input
+path after zone-in. Verify the zone, player form and normal movement speed before comparing with a capture;
+stationary velocity alone cannot distinguish normal speed from GM speed. These launch test drivers do not
+provide automatic focus, manual-input or zone/form cancellation.
+
+The default keys are W/S forward/back, A/D turn, Space jump and X duck. For the basic sequence's A/D strafes,
+set these bindings in the test character's own Hailstone settings (the game asset folder stays read-only):
+
+```ini
+KEYMAPPING_LEFT_1=0
+KEYMAPPING_RIGHT_1=0
+KEYMAPPING_STRAFE_LEFT_1=30
+KEYMAPPING_STRAFE_RIGHT_1=32
+```
+
+From an already prepared hallway start, this plays the authored 9.2-second basic sequence and records its result:
+
+```sh
+hailstone --game-dir /path/to/rof2 --server PROFILE --account ACCOUNT \
+  --move-test observe:344.6867:12 \
+  --input-script "1 key W 0.7;2.3 key S 0.7;3.6 key A 0.7;4.9 key D 0.7;6.2 key Space 0.1;7.2 key X 0.1;8.2 key X 0.1;10.2 shot hall-end.png"
+```
+
+Input-script times count from zone-in, and `shot` paths are relative to the process working directory. The trace
+includes requested and actual movement, radius, floor/ceiling and fit queries, wall contacts, stop/slide decisions,
+stuck state and jump/landing events. It is not a native trajectory oracle. The asset-dependent regression
+`Player movement: Guild Lobby hallway basic capture acceptance` runs the production movement and world adapter
+offline with a synthetic profile; it excludes rendering, networking and dynamic server actors.
+
 The UI has the keyboard only while an edit box is being typed in, a modal dialog is open, or a window asks for it (`ui.CaptureKeyboard`). A click or drag on a button, slider, title bar or window background does not take it (`ui::keyboard_for_ui`), so movement keys held through the click stay held, as in the original.
 
 ## Using it from an app loop

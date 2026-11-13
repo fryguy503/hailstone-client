@@ -1128,6 +1128,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/wld_particles_test.cpp
     tests/wld_detail_test.cpp
     tests/movement_test.cpp
+    tests/movement_test_test.cpp
+    tests/movement_capture_acceptance_test.cpp
     tests/movement_vectors_test.cpp
     tests/mechanics_test.cpp
     tests/mechanics_vectors_test.cpp

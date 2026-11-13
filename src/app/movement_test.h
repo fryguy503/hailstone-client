@@ -9,11 +9,13 @@
 //           zone-in does no damage): fall speed, damage reported, HP
 //   swim    walk to the nearest water, swim down, up and forward: depth and speed
 //   walk:D[:S]  run S seconds (default 3) facing yaw D degrees (0 = +X, 90 = +Y), logging the feet
+//   observe:D[:S]  hold yaw D and level pitch, tracing normal movement for S seconds (default 25, 0..120),
+//           without changing movement keys or position; unlike the driven tests, @ placement is refused
 //   escape  from the start, run 1.2 s in 8 directions, then again jumping: how far each gets (stuck: none)
 //   wander:S[:N]  run S seconds (seed N), turning to a new heading every 1.5 s and jumping now and then; reports each
 //           stretch of 3 s that moved under 1 unit, with that frame's collision decisions
 // "<test>@X,Y,Z" first puts the feet at that world point (comparable starts); a "+trace" suffix logs every
-// frame's collision decisions (PlayerMovement::set_trace).
+// frame's collision decisions (PlayerMovement::set_trace). observe always enables this trace until its time ends.
 
 #include <cstdint>
 #include <optional>

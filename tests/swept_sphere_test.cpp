@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string>
 
 #include "assets/zone.h"
@@ -403,11 +404,29 @@ TEST_CASE("a type 1 volume's radius is the model's +0x38 x the model scale x COF
     CHECK(mech::model_sweep_radius(5.5696f, 1.2f) == doctest::Approx(6.6835).epsilon(1e-4));
     CHECK(mech::model_sweep_radius(5.1781f, 1.2f) == doctest::Approx(6.2137).epsilon(1e-4));
     CHECK(mech::model_sweep_radius(5.5696f, 1.2f, 0.5f) == doctest::Approx(3.3418).epsilon(1e-4));
-    // The stand-in the client sweeps with: 0x5062a0's player value.
+    // 0x5062a0's player value.
     CHECK(mech::sweep_radius({3.75f, 1}) == doctest::Approx(1.78125));
 }
 
-TEST_CASE("South Qeynos' doorways pass the stand-in radius but not the model radius" *
+TEST_CASE("player sweep radii agree with the two measured native type-2 forms within one float ULP") {
+    // Scalar observations only, no captured geometry. Native local-player probes selected type 2 with
+    // CW 0x0e7f (53-bit, toward zero); Hailstone's formula uses nearest even. Do not force its last bit
+    // to match a different rounding mode. Each value stayed unchanged through standing/crouched samples.
+    struct Case {
+        float height;
+        std::uint32_t race;
+        float native_radius;
+    };
+    for (const auto& c : {Case{1.875f, 12, 0.8906249403953552f}, Case{3.3125f, 7, 1.5734374523162842f}}) {
+        CAPTURE(c.height);
+        CAPTURE(c.race);
+        const float radius = mech::sweep_radius({c.height, c.race});
+        CHECK(radius >= std::nextafter(c.native_radius, 0.0f));
+        CHECK(radius <= std::nextafter(c.native_radius, 2.0f));
+    }
+}
+
+TEST_CASE("South Qeynos' doorways pass the player radius but not the model radius" *
           doctest::skip(!hailstone::test::game_dir())) {
     // The doorway west of the docks: a 2-thick wall at x 26..28, open for y -95.97..-85.97 and z 0..10. A human
     // walks through it in the original; a sphere swept straight through its middle, its centre vf94 = max(1.9, r)
@@ -425,7 +444,7 @@ TEST_CASE("South Qeynos' doorways pass the stand-in radius but not the model rad
     };
     CHECK(passes(mech::sweep_radius({3.75f, 1})));
     // 6.68 (classic HUM) and 6.21 (Luclin HUM) are wider than the 10-unit opening (and taller, lifted by r):
-    // blocked whichever way the walls are wound. Why the original passes is open (docs/unknowns.md).
+    // blocked whichever way the walls are wound. Native probes instead selected type 2 for two player forms.
     CHECK_FALSE(passes(static_cast<float>(mech::model_sweep_radius(5.5696f, 1.2f))));
     CHECK_FALSE(passes(static_cast<float>(mech::model_sweep_radius(5.1781f, 1.2f))));
     CHECK_FALSE(passes(4.9f)); // narrow enough across, but its top (3.75 + 2 x 4.9) is above the lintel

@@ -142,20 +142,17 @@ CollisionMove do_collision_movement(CollisionSpawn& spawn, Vec3f& target, Collis
 double collision_volume_radius(float avatar_height, bool npc, std::uint32_t race, bool mount_race,
                                const Fpu& fpu = Fpu{});
 
-// CHierarchicalActor's collision volume vf30 @0x10045fd0 for a volume of
-// type 1 (every player and NPC actor CreatePlayerActor makes): the model
+// CHierarchicalActor's collision volume vf30 @0x10045fd0 for type 1: the model
 // definition's +0x38 x the actor scale (V+0x60, the spawn's +0x31c) x
 // COFactor (V+0x8c, 1.0 with the shipped moddat.ini). Unrounded.
 double model_sweep_radius(float model_radius, float scale, float co_factor = 1.0f, const Fpu& fpu = Fpu{});
 
-// The radius the client sweeps a spawn's actor with: the one place to drop the
-// original's rule in. By the static reading (docs/mechanics.md, "Movement
-// collision") it is model_sweep_radius above (6.68 for a classic human, 6.21 Luclin), but a
-// sphere that big cannot pass South Qeynos' 10 x 10 doorways under the sweep's
-// rules (tests/swept_sphere_test.cpp), which the original's players do, so the
-// client keeps 0x5062a0's player value (0.475 x AvatarHeight, 1.78 for a
-// human) as a stand-in until a run-time read of the original's vf44 settles it
-// (docs/unknowns.md).
+// The player radius used for movement and ceiling sweeps. Native local-player
+// probes on 2026-11-12 selected type 2, reading the explicit volume radius:
+// about 0.890625 at AvatarHeight 1.875 (gnome), and 1.57343745 at 3.3125
+// (half-elf), unchanged while crouching. Both support 0x5062a0's player rule
+// within one float ULP; the captures used 53-bit/toward-zero x87 rounding.
+// Other sizes, large races and mounts still need measurement (docs/unknowns.md).
 struct SweepRadiusSpawn {
     float avatar_height = 0.0f; // +0x138
     std::uint32_t race = 0;

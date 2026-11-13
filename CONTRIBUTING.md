@@ -33,6 +33,7 @@ build/hailstone/hailstone --validation
 
 - Run the whole test suite, not only the tests you added.
 - Tests that need your game folder or recorded vectors (`EQ_GAME_DIR`, `HAILSTONE_VECTORS_DIR`) are skipped when those are unset. Run them with the variables set when you change something they cover.
+- A triangle-capture validation run also sets `HAILSTONE_REQUIRE_SWEEP_VECTORS=1`; the movement vector test then fails if no recognized triangle records are available. Its production-float and recorded-precision tallies are separate (docs/mechanics.md).
 - CI on GitHub runs checks only; it does not build ([docs/ci.md](docs/ci.md)). Builds and tests are run locally: Linux natively, and Windows with MSVC, which also runs on Linux under Wine ([docs/ci.md](docs/ci.md) "MSVC under Wine"). A change that only builds with your compiler is not done.
 - A Windows build can also be cross-compiled on Linux with clang-cl ([docs/ci.md](docs/ci.md) "Windows builds from Linux").
 - For code that parses bytes, also run the sanitizer build ([docs/hardening.md](docs/hardening.md)).

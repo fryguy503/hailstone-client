@@ -53,10 +53,14 @@ ack-all: the resend timeout min(1.25 rtt + 300, 8000) ms), and the UI rules the 
 ## Exactness
 
 - Integer math wraps (explicit unsigned adds and multiplies).
-- x87: the precision control is 24-bit in game, because the graphics layer creates its Direct3D 9 device without
-  `D3DCREATE_FPU_PRESERVE` (behaviour flags 0x24/0x84/0x44 | 4). `Fpu` rounds every x87 result exactly as the FPU
-  does at either precision (TwoSum / fma error terms decide the double-rounding ties); `-ffp-contract=off` keeps
-  the compiler from fusing operations. Example: drunkenness 64 and INT 150 give 102 at 24 bits and 101 at 53 bits.
+- x87: `Fpu` implements nearest-even rounding at 24- or 53-bit precision (TwoSum / fma error terms decide the
+  double-rounding ties); `-ffp-contract=off` keeps the compiler from fusing operations. The default remains 24-bit.
+  The graphics layer's Direct3D 9 creation flags omit `D3DCREATE_FPU_PRESERVE` (0x24/0x84/0x44 | 4), but do not
+  establish the later gameplay mode: native collision captures from Citadel-loaded sessions on 2026-11-12 recorded
+  control word `0x0e7f`, 53-bit precision with rounding toward zero. Its origin remains unestablished; `Fpu` does
+  not emulate directed rounding. Tested capture wrappers and serialization paths preserved seeded modes offline,
+  but no clean session without Citadel was measured. Example at nearest even: drunkenness 64 and INT 150 give
+  102 at 24 bits and 101 at 53 bits. x87 reset precision is 64-bit, not 53-bit.
 - `tests/mechanics_vectors_test.cpp` checks every vector record (callees mocked; the hooks replay those callees), at
   each record's precision.
 - A deliberate difference where the original never ends: shadow step (SPA 379) walks its distance down by 2 as a
@@ -275,21 +279,20 @@ How a move meets walls:
   height. The first landing check then stands the feet on it. A zone point's z is often the ground itself (freportw
   -> ecommons: -54 on a -54.47 ground, the feet 2.5 under it); tested after the Step, the frame's fall takes the
   probe under the ground and it finds the floor below (the player stuck halfway in the ground).
-- The swept sphere: radius = `sweep_radius` (collision_movement.h). The type 1 volume radius is the model's
-  +0x38 x the model scale x COFactor (`model_sweep_radius`, 6.68 for a human), which cannot pass South Qeynos'
-  doorways here, so a player value (AvatarHeight x 0.5 x 0.95, 1.78 for a human) is used. Its centre is above the
-  spawn's z by 0 when ducking, dead or in a liquid; else 1.9, or AvatarHeight x 0.5 for races 2, 9 and 10, and at
-  least the radius. Steps lower than the sphere's bottom pass under it. With the stand-in radius the sphere's bottom
-  can sit up to 0.12 above the spawn's z (1.9 - 1.78 for a human); the original's own radius (at least 1.9) puts it at
-  the spawn's z. So the player's floor test (`PlayerMovement::floor_test`) starts at the sphere's bottom when that is
-  higher (a deliberate difference, `floor_probe_lift`): otherwise a step a little taller than AvatarHeight, whose lip
+- The swept sphere: radius = `sweep_radius` (collision_movement.h), AvatarHeight x 0.5 x 0.95 for a player.
+  Native local-player probes on 2026-11-12 qualified the outer actor's radius callback, embedded collision volume
+  and selected type 2. A gnome at AvatarHeight 1.875 returned 0.8906249403953552; a half-elf at 3.3125 returned
+  1.5734374523162842, unchanged while crouching. These support the current player rule within one float ULP under
+  the recorded 53-bit/toward-zero mode. Type 1 uses model +0x38 x scale x COFactor (`model_sweep_radius`), but the
+  probes disprove the earlier assumption that every player uses it. Large races, mounts and size changes remain
+  unmeasured. The centre is above the spawn's z by 0 when ducking, dead or in a liquid; else 1.9, or AvatarHeight
+  x 0.5 for races 2, 9 and 10, and at least the radius. Steps lower than the sphere's bottom pass under it.
+  The player's floor test (`PlayerMovement::floor_test`) starts at the sphere's bottom when that is higher
+  (a deliberate difference, `floor_probe_lift`): otherwise a step a little taller than AvatarHeight, whose lip
   the sweep rides over (the Bazaar arena's 4-unit tiers for a 3.75 player, met at an angle), leaves the sphere resting
   on top with the spawn's z under it, the floor test finds nothing, and the player hangs there with its feet inside
-  the step, unable to move (`tests/step_landing_test.cpp`). Two things in eqgame point the other way
-  from the type 1 reading: that centre's 1.9 fallback is about the player value (a 6.2 radius would lift the sphere to
-  12.4 above the spawn's z), and ChangeHeight keeps the volume's sphere radius (vf48) in step with every size
-  change although only a type 2 volume reads it. The static chain itself (CreatePlayerActor's type argument 1,
-  CHierarchicalActor vf44 -> 0x10045fd0, the model definition's +0x38) checks out, so a run-time read of vf44 decides.
+  the step, unable to move (`tests/step_landing_test.cpp`). Native radius measurements do not settle that complete
+  step/floor response, so this safeguard stays.
 - Other spawns (by the static reading, not ported; Hailstone's NPC collision below is its own rule): `CollisionFilter_Movement` lets a player's actor through and an
   NPC's only when its vfa8 or vf50 (a vehicle race) answers; corpses never. The actor test for their volume type 1
   (`CActorData::FindIntersectionSphere` @0x10045840) passes the bounding sphere and box, then, for a model without
@@ -302,8 +305,8 @@ How a move meets walls:
   HasNewStyleHierarchicalModel, vtable +0xbc); `jump_duck_clip`.
 - `game/sphere_sweep.*`: the sweep's geometry (the collision info constructor, the sphere against a triangle with
   its face, edge (capsule), edge-region and vertex cases, the zero-length overlap test, GetClampPoint,
-  ComputeSkitter). It is Hailstone's own implementation of the described algorithm, in plain float arithmetic (the
-  game's 24-bit FPU precision is single precision), not the original's instruction stream, so its results agree
+  ComputeSkitter). It is Hailstone's own implementation of the described algorithm, in plain float arithmetic,
+  not the original's instruction stream or its full x87 environment, so its results agree
   with the original's recordings within a tolerance rather than bit for bit (see "Vectors" below and
   docs/unknowns.md). Where the original's edge case reports a hit without a contact point (a sphere already holding
   the edge's start vertex), the contact is that vertex. Capsule candidates retain cylinder, start-cap and far-cap
@@ -333,20 +336,46 @@ How a move meets walls:
   21 classic zones, 655 of 665 closed doors sit in their doorways (the slab and the way through it clear of the
   zone's geometry); with the heading turned clockwise 313 do. Walked live: halas door 14 and felwithea door 1 stop
   the player closed (2.3 from the slab's centre) and let it through open.
-- Vector results measured before the capsule and parallel edge-region changes above
-  (tests/movement_vectors_test.cpp). **The current sweep has not been replayed against these recordings**: the
-  numbers below are the earlier implementation's, and `movement_vectors_test` must be run with
-  `HAILSTONE_VECTORS_DIR` set before they are trusted again (docs/todo.md). DoCollisionMovement 1000, SweptSphereTriangle 3000,
-  SweepStopAndSlide 3000, s3dCollideActorSweep 2000, CollisionHit_SetCollidingType 1500,
-  CollisionFilter_Movement 2000. The sweep's three are compared within a tolerance (t 1e-4, unit vectors 1e-3,
-  points 1e-3 + 1e-6 of their size, each grown by 8 floats of the inputs' size over the move or the radius, as the
-  original keeps its points in float memory). SweepStopAndSlide and s3dCollideActorSweep agree on every record (939
-  and 907 bit for bit). Of the SweptSphereTriangle records, 2267 agree bit for bit and 436 within the tolerance; 16
-  are near grazing (the radius, the t limit or the start moved by 1e-4 of the radius gives the recorded result); 12
-  disagree (0.4%, edge and vertex-region capsule cases; the test allows 1%); 269 of the 859 records with garbage
-  inputs (NaN, infinities, normals not of unit length, which the client's triangles never hold) disagree and are
-  not failures. 70 hit normals are not compared: the original's comes from an uninitialised contact point (a bug in
-  the edge case).
+- Native triangle replay on 2026-11-12 (tests/movement_vectors_test.cpp): 157,341 calls to
+  `CCollisionInfoSphere::vf0` from gnome arena and standard-size hallway captures were compared with the current
+  `sphere_triangle` implementation. The recorded-precision comparator reported 153,496 exact, 3,840 tolerated,
+  5 near-grazing and zero unexplained disagreements. The production `sphere_triangle<float>` comparison reported
+  153,473 exact, 3,840 tolerated, 28 near-grazing and zero unexplained disagreements. All records retained their
+  original `x87-53` / `0x0e7f` metadata; the recorded-precision comparator selects the mantissa width, not an
+  emulation of toward-zero rounding. Of these records, 60,983 are the intact prefix of a capture stopped by its
+  old size limit; the other 96,358 are from three completed runs. The final completed hallway run has 84,515
+  triangles and 60 body-radius near-vertical wall contacts. Raw geometry stays outside the repository.
+  Triangle comparisons use t 1e-4 and unit vectors 1e-3, grown by 8 float roundoff units of the inputs' size
+  over the move or radius. A near-grazing classification means perturbing the radius and t limit by up to 1e-4
+  relatively, or the start by 1e-4 of the radius, recovers the native result; it is not exact agreement.
+  The separate stop/slide checker uses point tolerance 1e-3 + 1e-6 of point size; it was not exercised by these
+  triangle-only captures. The existing 1% unexplained-disagreement
+  allowance remains, but these captures needed none. This validates triangle geometry only: the earlier counts
+  for DoCollisionMovement, SweepStopAndSlide, s3dCollideActorSweep and collision callbacks are historical and were
+  not rerun here. Native comparisons of broadphase, filters, stop/slide and complete floor response remain open.
+- To repeat a required triangle replay, set `HAILSTONE_VECTORS_DIR` to an external directory containing the
+  `.jsonl` files and `HAILSTONE_REQUIRE_SWEEP_VECTORS=1`, then run
+  `build/hailstone_tests -tc="Movement test vectors from the original client"`. The required flag fails if the
+  directory or recognized triangle data is absent; ordinary runs still skip missing optional captures. Explicit
+  control words must have supported precision matching the precision label. Rounding modes are reported as
+  provenance; non-triangle checkers reject non-nearest modes because their `Fpu` helper cannot emulate them.
+- Whole-player hallway follow-up on 2026-11-13: the asset-dependent test in
+  `tests/movement_capture_acceptance_test.cpp` drives production `PlayerMovement`, `ZoneMoveWorld` and the 60 Hz
+  clock through an authored basic sequence in Guild Lobby, using the observed start and dimensions with a
+  synthetic profile. Its 612 steps have valid floors/world positions, wall contacts, jump/landing, crouching and
+  restored standing/stopping. This is offline acceptance, without rendering, networking or dynamic server actors.
+  The normal-speed live client also completed the sequence with a half-elf at AvatarHeight 3.3125, with zero
+  logged stuck flags, outside-world results, fit refusals or missing floors, ending standing/stopped.
+  Its endpoint is about 0.03 units from the offline run and about one unit from the native capture. The server
+  quantizes the starting position, and the live input pulses follow drawn frames; native trajectory equivalence
+  remains unproven. An exploratory GM-speed run was excluded: forward speed was 3.125 instead of 0.7. Turning
+  GM speed off requires a zone/relogin before the new spawn has normal speed. Repeatable live input and trace
+  controls are described in docs/dev-ui.md "Movement checks".
+- Live route checks on 2026-11-13 also passed the Bazaar arena's four-unit riser head-on and obliquely with the
+  same standard-size form, stopping on the upper floor, and an Upper Guk ladder with a gnome using the default
+  solid-ladder rule. The 12-second ladder input reached the upper floor, about 55.97 units higher, and stopped.
+  Each route had zero logged stuck flags, outside-world results, fit refusals or invalid floors before camp.
+  These check Hailstone's functional movement; native step/ladder response has not been captured for comparison.
 - The floor and ceiling queries (for floor height, ceiling height and the floor test) pass 1 as the call's twelfth
   argument, and the terrain leaf then skips every triangle whose plane normal has z == 0 exactly: walls never stop a
   floor or ceiling probe (`SphereSweep::floor_only`; placed objects keep blocking, as they are collided as actors,
@@ -433,12 +462,14 @@ Ladders (`game/zone_ladders.*`, `ladder.*`):
   player's movement meets a solid ladder as one slab, the box of its solid polygons placed as the ladder is (so it
   leans with it), instead of its rails and rungs (`game::ladder_slab`, `CollisionMesh::set_solid_ladders`). The
   movement sweep, the floor test and CanIFitHere's ceiling all see the slab; sight, picking, rain and the navigation
-  mesh still see the rungs. Without it, with the stand-in sweep radius (0.475 x AvatarHeight, "Movement collision"),
+  mesh still see the rungs. Without it, with the player sweep radius (0.475 x AvatarHeight, "Movement collision"),
   the rung ladders could not be climbed reliably by any race. A small race's sphere (a gnome's 0.89) goes between
   the rungs (3.2 apart) or off the ladder's edge, stops meeting the ladder and falls. And CanIFitHere takes the rung
   below as the floor and the rung above as the ceiling, 3.7 apart. That is less than the 2 x AvatarHeight it needs
   for every race (3.75 for a gnome), so it refuses the move and the climber sticks partway up. Upper and Lower Guk,
   Unrest and Ak'Anon each had ladders that some races (and in Ak'Anon every race) could not climb.
+  Checked live on 2026-11-13: a gnome climbed the Upper Guk ladder to its top floor with a 12-second forward
+  input and stopped there. Other live ladder routes and native equivalence remain open.
 
 ## NPC collision
 

@@ -186,7 +186,8 @@ double model_sweep_radius(float model_radius, float scale, float co_factor, cons
 }
 
 float sweep_radius(const SweepRadiusSpawn& spawn) {
-    // Stand-in: 0x5062a0 for a player, stored as a float (SetCollisionVolumeRadius).
+    // 0x5062a0's player value, stored by SetCollisionVolumeRadius. Native type-2
+    // local-player probes support this rule for the two measured forms.
     return static_cast<float>(collision_volume_radius(spawn.avatar_height, false, spawn.race, false));
 }
 

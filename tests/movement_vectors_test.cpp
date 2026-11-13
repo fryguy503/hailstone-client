@@ -1,13 +1,16 @@
 // Test vectors recorded from the original eqgame.exe: <Function>.jsonl, one
 // JSON object per line, {"fn", "addr", "in": {...}, "out": {...},
-// "precision"}, in the directory HAILSTONE_VECTORS_DIR; without it the test
-// passes with a message.
+// "precision", optional "control_word"}, in HAILSTONE_VECTORS_DIR. Missing
+// captures are optional unless HAILSTONE_REQUIRE_SWEEP_VECTORS is present;
+// that mode requires an existing directory and recognized triangle records.
 //
 // Every record of the movement functions is checked against the ports in
 // game/mechanics/movement.h, at the record's x87 precision; floats must match
-// bit for bit, except the collision sweep's (game/sphere_sweep.h), which is
-// compared within a stated tolerance. Mocked callees' results (in.calls) are
-// inputs.
+// bit for bit for supported nearest-even modes. The collision sweep
+// (game/sphere_sweep.h) uses a stated tolerance; triangle records are compared
+// at both the declared mantissa width and production float precision, without
+// emulating the full recorded x87 environment. Mocked callees' results
+// (in.calls) are inputs.
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -260,10 +263,73 @@ std::uint32_t bits_of(float f) {
     return b;
 }
 
-Fpu precision_of(const Json& rec) {
+constexpr const char* kTriangleFunction = "CCollisionInfoSphere::vf0";
+
+enum class ReplayRounding : unsigned { Nearest, Downward, Upward, TowardZero };
+constexpr std::array<const char*, 4> kReplayRoundingNames{"nearest", "downward", "upward", "toward_zero"};
+
+struct ReplayPrecision {
+    FpuPrecision precision = FpuPrecision::Single24;
+    std::optional<std::uint16_t> control_word;
+    ReplayRounding rounding = ReplayRounding::Nearest;
+};
+
+// Old vectors may omit both fields. Explicit metadata is never guessed: PC=01 is reserved and PC=11 (64 bits)
+// is unsupported by these ports. RC is retained as provenance; selecting float/double does not emulate x87 RC.
+std::optional<ReplayPrecision> replay_precision(const Json& rec, std::string& error) {
+    error.clear();
+    ReplayPrecision result;
     const Json* p = rec.get("precision");
-    auto* s = p ? std::get_if<std::string>(&p->v) : nullptr;
-    return Fpu(s && *s == "x87-53" ? FpuPrecision::Double53 : FpuPrecision::Single24);
+    if (p) {
+        const auto* label = std::get_if<std::string>(&p->v);
+        if (!label || (*label != "x87-24" && *label != "x87-53")) {
+            error = "precision must be x87-24 or x87-53";
+            return std::nullopt;
+        }
+        result.precision = *label == "x87-53" ? FpuPrecision::Double53 : FpuPrecision::Single24;
+    }
+    if (const Json* c = rec.get("control_word")) {
+        const auto* number = std::get_if<double>(&c->v);
+        if (!number || !std::isfinite(*number) || *number < 0 || *number > 65535 || std::trunc(*number) != *number) {
+            error = "control_word must be a finite integer in [0, 65535]";
+            return std::nullopt;
+        }
+        if (!p) {
+            error = "control_word requires an explicit matching precision";
+            return std::nullopt;
+        }
+        const auto word = static_cast<std::uint16_t>(*number);
+        const unsigned pc = (word >> 8) & 3;
+        if (pc != 0 && pc != 2) {
+            error = "control_word precision control is reserved or unsupported (only 24/53 bits supported)";
+            return std::nullopt;
+        }
+        const FpuPrecision precision = pc == 2 ? FpuPrecision::Double53 : FpuPrecision::Single24;
+        if (precision != result.precision) {
+            error = "precision disagrees with control_word precision control";
+            return std::nullopt;
+        }
+        result.control_word = word;
+        result.rounding = static_cast<ReplayRounding>((word >> 10) & 3);
+    }
+    return result;
+}
+
+std::optional<ReplayPrecision> replay_precision_for(const Json& rec, const std::string& function,
+                                                   std::string& error) {
+    auto result = replay_precision(rec, error);
+    if (result && result->control_word && result->rounding != ReplayRounding::Nearest && function != kTriangleFunction) {
+        error = "non-nearest control_word rounding is not emulated by this replay checker";
+        return std::nullopt;
+    }
+    return result;
+}
+
+Fpu precision_of(const Json& rec) {
+    std::string error;
+    const auto precision = replay_precision(rec, error);
+    CHECK_MESSAGE(precision.has_value(), error);
+    return Fpu(precision ? precision->precision : FpuPrecision::Single24);
 }
 
 struct Mismatch {
@@ -640,9 +706,10 @@ struct SweepCompare {
 
 // CCollisionInfoSphere::vf0 @0x7a28e0: the sphere against one triangle record.
 template <class F>
-void check_sweep_triangle(const Json& in, const Json& out, const std::string& w) {
+void check_sweep_triangle(const Json& in, const Json& out, const std::string& w,
+                          const char* tally_name = "SweptSphereTriangle") {
     using V = sweep::Vec3<F>;
-    SweepTally& tally = sweep_tallies["SweptSphereTriangle"];
+    SweepTally& tally = sweep_tallies[tally_name];
     ++tally.records;
     const V start = sweep_vec<F>(in.get("start")), delta = sweep_vec<F>(in.get("delta"));
     const V n = sweep_vec<F>(in.get("tri_normal"));
@@ -717,7 +784,7 @@ void check_sweep_triangle(const Json& in, const Json& out, const std::string& w)
     char buf[200];
     std::snprintf(buf, sizeof buf, "%s: hit %d t %.7g, want hit %d t %.7g", w.c_str(), int(h.hit), t_of(h),
                   int(want_hit), want_t ? static_cast<double>(*want_t) : 0.0);
-    MESSAGE("SweptSphereTriangle disagrees: " << buf);
+    MESSAGE(tally_name << " disagrees: " << buf);
 }
 
 // GetClampPoint @0x7a2680 and ComputeSkitter @0x7a2720 on a recorded info.
@@ -1630,12 +1697,14 @@ std::map<std::string, Checker> checkers() {
         }
         for (std::size_t k = 0; k < 3; ++k) m.check_float(got[k], as_f32(&(**a)[k]), w, what);
     };
-    // ---- the collision sweep (game/sphere_sweep.h), at the record's precision: float in game, double at 53 bits.
+    // ---- the collision sweep (game/sphere_sweep.h). Compare the declared mantissa width separately from the
+    // production float instantiation. Neither comparison emulates the recorded x87 rounding mode.
     auto at53 = [](const Json& rec) { return precision_of(rec).precision() == FpuPrecision::Double53; };
-    c["CCollisionInfoSphere::vf0"] = [at53](const Json& rec, const Json& in, const Json& out, const std::string& w,
-                                            Mismatch&) {
-        if (at53(rec)) check_sweep_triangle<double>(in, out, w);
-        else check_sweep_triangle<float>(in, out, w);
+    c[kTriangleFunction] = [at53](const Json& rec, const Json& in, const Json& out, const std::string& w, Mismatch&) {
+        constexpr const char* recorded = "SweptSphereTriangle recorded_precision";
+        if (at53(rec)) check_sweep_triangle<double>(in, out, w, recorded);
+        else check_sweep_triangle<float>(in, out, w, recorded);
+        check_sweep_triangle<float>(in, out, w, "SweptSphereTriangle production_float");
     };
     c["CollisionInfo_GetClampPoint+CCollisionInfoBase::ComputeSkitter"] =
         [at53](const Json& rec, const Json& in, const Json& out, const std::string& w, Mismatch& m) {
@@ -2020,15 +2089,130 @@ std::optional<fs::path> vectors_dir() { return hailstone::test::vector_dir(); }
 
 } // namespace
 
+TEST_CASE("Movement replay validates explicit FPU metadata and preserves legacy precision") {
+    auto metadata = [](const std::string& source, std::string& error) {
+        auto record = Parser(source).parse();
+        REQUIRE(record.has_value());
+        return replay_precision(*record, error);
+    };
+    std::string error;
+    const auto legacy = metadata("{}", error);
+    REQUIRE(legacy.has_value());
+    CHECK(legacy->precision == FpuPrecision::Single24);
+    CHECK_FALSE(legacy->control_word.has_value());
+    for (const char* label : {"x87-24", "x87-53"}) {
+        auto old = metadata(std::string("{\"precision\":\"") + label + "\"}", error);
+        REQUIRE(old.has_value());
+        CHECK_FALSE(old->control_word.has_value());
+        CHECK(old->precision == (std::string(label) == "x87-53" ? FpuPrecision::Double53 : FpuPrecision::Single24));
+    }
+
+    for (unsigned pc : {0u, 2u})
+        for (unsigned rc = 0; rc != 4; ++rc) {
+            const unsigned word = 0x007f + (pc << 8) + (rc << 10);
+            const std::string label = pc == 2 ? "x87-53" : "x87-24";
+            auto decoded = metadata("{\"precision\":\"" + label + "\",\"control_word\":" + std::to_string(word) + "}", error);
+            REQUIRE(decoded.has_value());
+            CHECK(decoded->precision == (pc == 2 ? FpuPrecision::Double53 : FpuPrecision::Single24));
+            REQUIRE(decoded->control_word.has_value());
+            CHECK(*decoded->control_word == word);
+            CHECK(static_cast<unsigned>(decoded->rounding) == rc);
+        }
+    const auto toward_zero = metadata(R"({"precision":"x87-53","control_word":3711})", error);
+    REQUIRE(toward_zero.has_value());
+    CHECK(*toward_zero->control_word == 0x0e7f);
+    CHECK(toward_zero->rounding == ReplayRounding::TowardZero);
+
+    for (const std::string source : {
+             R"({"precision":"unknown"})", R"({"precision":"x87-64"})", R"({"precision":53})",
+             R"({"precision":null})", R"({"control_word":3711})",
+             R"({"precision":"x87-53","control_word":-1})",
+             R"({"precision":"x87-53","control_word":65536})",
+             R"({"precision":"x87-53","control_word":3711.5})",
+             R"({"precision":"x87-53","control_word":1e999})",
+             R"({"precision":"x87-53","control_word":"3711"})",
+             R"({"precision":"x87-53","control_word":true})",
+             R"({"precision":"x87-53","control_word":null})",
+             R"({"precision":"x87-53","control_word":383})",  // reserved PC=01
+             R"({"precision":"x87-53","control_word":895})",  // unsupported PC=11
+             R"({"precision":"x87-24","control_word":639})",  // PC=53 contradicts label
+             R"({"precision":"x87-53","control_word":127})"}) { // PC=24 contradicts label
+        CAPTURE(source);
+        CHECK_FALSE(metadata(source, error).has_value());
+        CHECK_FALSE(error.empty());
+    }
+}
+
+TEST_CASE("Movement replay rejects unsupported rounding for the bit-exact ports") {
+    for (unsigned rc = 0; rc != 4; ++rc) {
+        const std::string source = "{\"precision\":\"x87-53\",\"control_word\":" +
+                                   std::to_string(0x027f + (rc << 10)) + "}";
+        auto record = Parser(source).parse();
+        REQUIRE(record.has_value());
+        std::string error;
+        CHECK(replay_precision_for(*record, kTriangleFunction, error).has_value());
+        const auto bit_exact = replay_precision_for(*record, "EQ_Character::CalculateWeight", error);
+        CHECK(bit_exact.has_value() == (rc == 0));
+        if (rc != 0) CHECK_FALSE(error.empty());
+    }
+}
+
+TEST_CASE("Movement triangle replay compares recorded precision and production float separately") {
+    sweep_tallies.clear();
+    struct ClearTallies {
+        ~ClearTallies() { sweep_tallies.clear(); }
+    } clear;
+    const auto table = checkers();
+    const auto checker = table.find(kTriangleFunction);
+    REQUIRE(checker != table.end());
+    // Independently authored geometry: a flat right triangle and two radius-one sweeps toward it. The second
+    // centre stays outside the triangle; its contact is on the capsule around the edge from (0,0,0) to (10,0,0).
+    // These fixtures contain no recorded client geometry. The declared RC is provenance, not emulated arithmetic.
+    for (const std::string source : {
+             R"({"precision":"x87-53","control_word":3711,
+                  "in":{"start":[2,2,-2],"delta":[0,0,4],"inv_length":0.25,"fraction_before":1,"radius":1,
+                        "tri_normal":[0,0,-1],"v0":[0,0,0],"v1":[10,0,0],"v2":[0,10,0]},
+                  "out":{"hit":true,"fraction":0.25,"normal":[0,0,-1]}})",
+             R"({"precision":"x87-53","control_word":3711,
+                  "in":{"start":[2,-0.6,-2],"delta":[0,0,4],"inv_length":0.25,"fraction_before":1,"radius":1,
+                        "tri_normal":[0,0,-1],"v0":[0,0,0],"v1":[10,0,0],"v2":[0,10,0]},
+                  "out":{"hit":true,"fraction":0.3,"normal":[0,-0.6,-0.8]}})"}) {
+        const auto record = Parser(source).parse();
+        REQUIRE(record.has_value());
+        std::string error;
+        REQUIRE(replay_precision_for(*record, kTriangleFunction, error).has_value());
+        Mismatch mismatches;
+        checker->second(*record, *record->get("in"), *record->get("out"), "authored triangle", mismatches);
+        CHECK(mismatches.count == 0);
+    }
+    REQUIRE(sweep_tallies.size() == 2);
+    for (const char* label : {"SweptSphereTriangle recorded_precision", "SweptSphereTriangle production_float"}) {
+        CAPTURE(label);
+        const auto found = sweep_tallies.find(label);
+        REQUIRE(found != sweep_tallies.end());
+        const auto& tally = found->second;
+        CHECK(tally.records == 2);
+        CHECK(tally.exact + tally.tolerated == 2);
+        CHECK(tally.grazing == 0);
+        CHECK(tally.unphysical == 0);
+        CHECK(tally.disagree == 0);
+    }
+}
+
 TEST_CASE("Movement test vectors from the original client") {
+    sweep_tallies.clear();
+    const bool require_sweep = hailstone::core::env("REQUIRE_SWEEP_VECTORS") != nullptr;
     auto dir = vectors_dir();
     std::error_code ec;
     if (!dir || !fs::is_directory(*dir, ec)) {
+        CHECK_MESSAGE(!require_sweep,
+                      "HAILSTONE_REQUIRE_SWEEP_VECTORS requires an existing HAILSTONE_VECTORS_DIR");
         MESSAGE("no recorded test vectors (HAILSTONE_VECTORS_DIR); skipped");
         return;
     }
     auto table = checkers();
-    int files = 0;
+    int files = 0, triangle_records = 0, no_control_word = 0;
+    std::array<int, 4> rounding_counts{};
     for (const auto& entry : fs::directory_iterator(*dir)) {
         if (entry.path().extension() != ".jsonl") continue;
         std::ifstream f(entry.path());
@@ -2049,22 +2233,41 @@ TEST_CASE("Movement test vectors from the original client") {
             const std::string* name = fn ? std::get_if<std::string>(&fn->v) : nullptr;
             auto it = name ? table.find(*name) : table.end();
             if (it == table.end()) break; // another port's vectors (stats, spells)
+            std::string metadata_error;
+            auto metadata = replay_precision_for(*j, *name, metadata_error);
+            if (!metadata) {
+                m.report(where, "FPU metadata", metadata_error);
+                continue;
+            }
             const Json* in = j->get("in");
             const Json* out = j->get("out");
             if (!in || !out) {
                 m.report(where, "record", "no in/out");
                 continue;
             }
+            if (metadata->control_word) ++rounding_counts[static_cast<unsigned>(metadata->rounding)];
+            else ++no_control_word;
             it->second(*j, *in, *out, where, m);
+            if (*name == kTriangleFunction) ++triangle_records;
             ++checked;
         }
-        if (checked) {
-            ++files;
+        if (checked || m.count) {
+            if (checked) ++files;
             MESSAGE(entry.path().filename().string() << ": " << checked << " records, " << m.count << " mismatches");
             CHECK(m.count == 0);
         }
     }
     MESSAGE(files << " movement vector files checked from " << dir->string());
+    MESSAGE("FPU metadata: " << no_control_word << " records without control_word; recorded RC counts: "
+                            << std::string(kReplayRoundingNames[0]) << " " << rounding_counts[0] << ", "
+                            << std::string(kReplayRoundingNames[1]) << " " << rounding_counts[1] << ", "
+                            << std::string(kReplayRoundingNames[2]) << " " << rounding_counts[2] << ", "
+                            << std::string(kReplayRoundingNames[3]) << " " << rounding_counts[3]);
+    if (triangle_records)
+        MESSAGE("Triangle recorded_precision and production_float comparisons use host arithmetic and the sweep "
+                "tolerances; they do not emulate the recorded x87 rounding mode or full FPU state.");
+    CHECK_MESSAGE((!require_sweep || triangle_records > 0),
+                  "HAILSTONE_REQUIRE_SWEEP_VECTORS requires recognized CCollisionInfoSphere::vf0 records");
     for (const auto& [name, t] : sweep_tallies) {
         if (!t.records) continue;
         MESSAGE(name << ": " << t.records << " records, " << t.exact << " exact, " << t.tolerated

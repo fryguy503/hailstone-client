@@ -464,11 +464,12 @@ PlayerMovement::RoomCheck PlayerMovement::can_i_fit_here_now(const MoveWorld* wo
 // zone and the floor switches, cached until the position changes or a moving
 // floor switch resets CollisionCounter (game/mechanics/floor_height.h).
 //
-// Hailstone: the test starts at the movement sphere's bottom when that is above the spawn's z. The sphere's centre
-// is max(1.9, radius) above the spawn's z, so with the original's radius (the model's, docs/unknowns.md) its bottom is
-// the spawn's z and the sweep never stands on a surface the floor test cannot see. With the stand-in radius (1.78 for
-// a human) the bottom is up to 0.12 higher: the sweep rides over the lip of a step a little taller than AvatarHeight
-// (the Bazaar arena's 4-unit tiers for a 3.75 one) and rests on top with the spawn's z under it, the floor test
+// Hailstone: the test starts at the movement sphere's bottom when that is above the spawn's z. When standing dry,
+// the centre is at least the radius above the spawn's z, with a 1.9 fallback for ordinary races. Native probes confirm
+// that a player's radius can be below 1.9; they do not establish the complete native step/floor response. Keep this
+// deliberate floor-probe lift: with radius 1.78 for a human the bottom is 0.12 higher, and the sweep rides over the
+// lip of a step a little taller than AvatarHeight (the Bazaar arena's 4-unit tiers for a 3.75 one) and rests on top
+// with the spawn's z under it. The floor test
 // starting below the top finds nothing, and the player hangs there with its feet inside the step, unable to move.
 float PlayerMovement::floor_probe_lift(float floor_offset) const {
     const mech::PhysicsBody& body = ctl_.body;
