@@ -1103,6 +1103,28 @@ a file per zone (`qeytoqrg.txt`) gives each of the zone's textures one material 
 Only Qeynos Hills has rules so far. Seen in the zone viewer, not in a live session: the layout and seams hold; the
 photos' repeat still shows on large flat areas.
 
+### Model overrides
+
+A texture pack can also replace a zone's placed objects: `PACK/models/<zone>/<object>.glb`, a binary glTF 2.0 file
+named after the object (`TREE1_ACTORDEF` or `TREE1`, any case), is drawn in place of that object
+(`assets/model_overrides.h`, read with cgltf). A deliberate difference from the original, and the look only: the
+collision, picking, ladders and the ambient probe keep the game's mesh, so where a player can walk does not change.
+The pack folder is the one `display.texture_folder` (the viewer's `--textures`) chooses; the files are read as each
+zone loads (`Zone::draw_objects`).
+
+- **Frame:** glTF's own, Y up; its units are EQ units, and glTF (x, y, z) is the zone's (x, -z, y). Front faces are
+  counter-clockwise; each node's transform is applied.
+- **Materials:** a material's base colour texture names its texture by its image's URI: the file name is looked up as
+  a replacement texture is (the zone's subfolder first, so a model's textures can sit beside it), any extension, with
+  its `.n` and `.r` maps. `MASK` is drawn as a cut-out, `BLEND` at 50 %, `doubleSided` without culling. Images inside
+  the file and buffers outside it are refused.
+- **Made for a mesh:** a file whose `asset.extras.hailstone_source` holds the hash of the game mesh it was made for
+  (`object_mesh_hash`, 16 hex digits) is used only on that mesh, so a game update that changes the object turns it
+  off; one without (made by hand) is used on any object of its name in that zone.
+- **Light:** a placement's baked light is one colour per vertex of the game's mesh; the replacement takes their
+  average, multiplied by its own vertex colours (a generated tree's shade inside its crown).
+- **Plants:** a replacement sways in the wind as the game's object would (`is_plant`): its cut-out parts flutter.
+
 ## Name plates
 
 NPC names are drawn in the spawn's consider colour (`game::con_rgb` of `game::con_level`, the colour Hailstone's target plate already uses) instead of this client's yellow (255, 220, 120). Mercenaries keep their blue and corpses stay grey, while other players' names stay light blue. This is a deliberate difference (Hailstone option `con_name_colour`, Options > Display, `hailstone.ini` `display.con_name_colour`, default on); turning it off restores the yellow for NPC names. The target keeps its consider colour in both settings.

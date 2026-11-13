@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Texture packs can now replace a zone's objects with models (binary glTF files in the pack's `models/` folder). Only the look changes: you collide with, click on and walk round the original objects as before
 - Hailstone Texture Studio: **Photo ground materials** rebuilds a zone's grass, rock, dirt and paths from free photo textures (Poly Haven, CC0). Qeynos Hills so far
 - Bandolier: swapping sets works with the general slots full when a bag has room. The weapon you swap out goes into the first bag with a free slot that takes it, where the server puts it; before, the swap was refused unless a general slot was free
 - Modern hot bars: drag a bar's right or bottom edge, or its bottom-right corner, to change its shape ("Buttons per row"); the bar's regular right-click menu has **Lock layout** so it cannot be moved or resized by accident

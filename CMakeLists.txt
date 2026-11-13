@@ -342,6 +342,8 @@ add_library(hailstone_engine STATIC
   src/assets/png_read.cpp
   src/assets/jpeg_read.cpp
   src/assets/texture_overrides.cpp
+  src/assets/gltf_mesh.cpp
+  src/assets/model_overrides.cpp
   src/assets/sky.cpp
   src/assets/sky_weather.cpp
   src/assets/spell_effects.cpp
@@ -649,7 +651,7 @@ if(HAILSTONE_CLANG_TIDY)
   set_target_properties(hailstone_engine PROPERTIES CXX_CLANG_TIDY "${HAILSTONE_TIDY_COMMAND}")
 endif()
 target_compile_definitions(hailstone_engine PUBLIC VK_NO_PROTOTYPES GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
-target_link_libraries(hailstone_engine PUBLIC imgui hailstone_audio_headers hailstone_bcdec hailstone_stb hailstone_recast hailstone_monocypher)
+target_link_libraries(hailstone_engine PUBLIC imgui hailstone_audio_headers hailstone_bcdec hailstone_stb hailstone_cgltf hailstone_recast hailstone_monocypher)
 # The updater (app/updater.h, docs/updater.md): the address of the release feed's manifest, and the release key's
 # public half (64 hex digits) its signature is checked with: update-key.pub at the top of the tree, or this option.
 # Without a key the build has no updates.
@@ -1211,6 +1213,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/connection_state_test.cpp
     tests/texpack_test.cpp
     tests/texpack_materials_test.cpp
+  tests/gltf_mesh_test.cpp
     tests/addon_tool_test.cpp
   )
   target_include_directories(hailstone_tests PRIVATE tests sdk)
