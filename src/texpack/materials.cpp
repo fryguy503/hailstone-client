@@ -146,6 +146,30 @@ std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt
             if (line.empty()) continue;
             const std::string where = zone + ".txt:" + std::to_string(n) + ": ";
             const auto eq = line.find('=');
+            if (lower(line).starts_with("tree ") && eq != std::string::npos) {
+                TreeRule t;
+                t.zone = lower(zone);
+                t.actor = lower(trim(std::string_view(line).substr(5, eq - 5)));
+                if (t.actor.ends_with("_actordef")) t.actor.resize(t.actor.size() - 9);
+                auto w = words(std::string_view(line).substr(eq + 1));
+                for (std::string& x : w) x = lower(x);
+                static constexpr std::string_view kStyles[] = {"auto", "pine", "broadleaf", "willow"};
+                if (t.actor.empty() || w.empty() || w.size() > 2 ||
+                    std::find(std::begin(kStyles), std::end(kStyles), w[0]) == std::end(kStyles)) {
+                    fail(error, where + "expected tree <actor> = auto|pine|broadleaf|willow [bark material]");
+                    return std::nullopt;
+                }
+                t.style = w[0];
+                if (w.size() == 2) {
+                    if (!rules.find(w[1])) {
+                        fail(error, where + "no material [" + w[1] + "] in materials.txt");
+                        return std::nullopt;
+                    }
+                    t.bark = w[1];
+                }
+                rules.trees.push_back(std::move(t));
+                continue;
+            }
             if (eq == std::string::npos) {
                 fail(error, where + "expected texture = material [material] [sharp]");
                 return std::nullopt;

@@ -1125,6 +1125,30 @@ zone loads (`Zone::draw_objects`).
   average, multiplied by its own vertex colours (a generated tree's shade inside its crown).
 - **Plants:** a replacement sways in the wind as the game's object would (`is_plant`): its cut-out parts flutter.
 
+### Generated trees
+
+Hailstone Texture Studio's "Generated trees" grows a classic zone's trees again (`texpack/trees.h`) and writes them as
+model overrides with their textures (BC7 with mips; the bark's normal and roughness maps as `.n` and `.r`). The game's
+trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tree is fitted to the game's:
+
+- **Trunk:** the prisms' rings, found by their hop count along the prism edges from each piece's bottom (a limb that is
+  a prism of its own, as TREETRY's second one, hangs from the ring nearest its root), make the skeleton. The bark is a
+  tube along it at 0.8 x the prism corners' distance: between the prism's faces and its corners, so a player stopped
+  by the collision stands at the bark.
+- **Leaves:** points spread over the cards and kept where their texture is opaque give the crown's shape; turned round
+  the trunk, they fill it. The leaves are drawn in colours picked from the game texture's opaque texels, then scaled
+  to its mean, so an autumn tree keeps its yellows among its greens.
+- **Styles:** a pine (a single upright trunk up into leaves widest low down) grows whorls of drooping branches with
+  needle sprays and a clump at each end up a leader; a broadleaf tree grows branches into the crown by space
+  colonisation (Runions, Lane and Prusinkiewicz 2007), leaf clusters at their tips; a willow hangs strands from its
+  upper branches. The rules may name the style (`tree tree71 = willow bark`); `auto` takes pine or broadleaf by shape.
+- **Bark:** a Poly Haven photo material scaled to the game bark's mean colour, or a drawn one.
+- **Budget:** 2,000 to 10,000 triangles a tree; Qeynos Hills' 363 placed trees come to about 2.5 million.
+
+The rules are lines of the studio's zone files (`tree <object> = <style> [<bark material>]`); only Qeynos Hills has
+them so far. A tree comes out the same on every build (its seed is its zone and name). Seen in the zone viewer, not
+in a live session. Open: levels of detail; leaves thin out in the smaller mips of a cut-out.
+
 ## Name plates
 
 NPC names are drawn in the spawn's consider colour (`game::con_rgb` of `game::con_level`, the colour Hailstone's target plate already uses) instead of this client's yellow (255, 220, 120). Mercenaries keep their blue and corpses stay grey, while other players' names stay light blue. This is a deliberate difference (Hailstone option `con_name_colour`, Options > Display, `hailstone.ini` `display.con_name_colour`, default on); turning it off restores the yellow for NPC names. The target keeps its consider colour in both settings.

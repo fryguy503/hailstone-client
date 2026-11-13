@@ -49,16 +49,26 @@ struct TileRule {
     bool sharp = false;  // small shapes (a path's flagstones): the split and the colour follow the original closely
 };
 
+// One generated tree (texpack/trees.h): a "tree <actor> = <style> [<bark material>]" line of a <zone>.txt.
+struct TreeRule {
+    std::string zone;  // the zone's archive stem
+    std::string actor; // lower case, without _actordef ("tree71")
+    std::string style; // auto, pine, broadleaf or willow
+    std::string bark;  // a material of materials.txt for the bark, or empty for a drawn bark
+};
+
 struct MaterialRules {
     std::vector<MaterialClass> classes;
     std::vector<TileRule> tiles;
+    std::vector<TreeRule> trees;
     const MaterialClass* find(std::string_view name) const;
     // Changes whenever anything that shapes a tile's files changes (a pack keeps it to know what to make again).
     std::string signature(const TileRule& tile) const;
 };
 
-// materials.txt (the classes, an ini file) and <zone>.txt (one "texture = material [material] [sharp]" a line, '#'
-// comments). Errors name the file and line; a rule naming no known material is an error.
+// materials.txt (the classes, an ini file) and <zone>.txt (one "texture = material [material] [sharp]" or
+// "tree <actor> = <style> [<bark material>]" a line, '#' comments). Errors name the file and line; a rule naming no
+// known material or style is an error.
 std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt,
                                                   const std::vector<std::pair<std::string, std::string>>& zone_files,
                                                   std::string* error = nullptr);
