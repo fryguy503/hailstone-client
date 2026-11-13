@@ -4,6 +4,7 @@
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
+local I = dofile("lib/items.lua")
 local C = T.C
 
 local IDW = "ItemDisplayWindow"
@@ -132,6 +133,12 @@ ui.window("Item Details", function()
           y = y + lh
         end
       end
+    end
+    -- Hailstone: the item against what you wear (docs/item-compare.md)
+    local compare = eq.CompareSlotItem(IDW, "Hailstone_Item")
+    if compare and eq.Option("item_compare") ~= 0 then
+      ui.DrawLine(x0, y, x1, y, C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
+      y = I.comparison(compare, x0, y + T.px(6), x1, y1) + T.px(6)
     end
     -- the description
     local desc = textOf("ItemDescription"):gsub("<[^>]*>", "")

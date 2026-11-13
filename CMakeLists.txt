@@ -256,6 +256,7 @@ add_library(hailstone_engine STATIC
   src/net/augment_packets.cpp
   src/net/spell_packets.cpp
   src/game/spell_description.cpp
+  src/game/item_compare.cpp
   src/game/item_display.cpp
   src/game/augments.cpp
   src/game/spell_display.cpp
@@ -460,6 +461,7 @@ add_library(hailstone_engine STATIC
   src/game/mechanics/movement_inputs.cpp
   src/game/mechanics/physics.cpp
   src/game/mechanics/abilities.cpp
+  src/game/mechanics/shown_stats.cpp
   src/game/mechanics/tables.cpp
   src/game/mechanics/item_stats.cpp
   src/game/mechanics/effects.cpp
@@ -548,6 +550,7 @@ add_library(hailstone_engine STATIC
   src/app/lua_eq_layout.cpp
   src/app/lua_eq_video.cpp
   src/app/lua_eq_zoneguide.cpp
+  src/app/lua_eq_compare.cpp
   src/app/lua_eq_find.cpp
   src/app/lua_eq_fellowship.cpp
   src/app/lua_eq_story.cpp
@@ -1176,6 +1179,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/lua_eq_test.cpp
     tests/ui_ini_test.cpp
     tests/ui_packs_test.cpp
+    tests/item_compare_test.cpp
     tests/item_display_test.cpp
     tests/game_vectors_test.cpp
     tests/key_commands_test.cpp

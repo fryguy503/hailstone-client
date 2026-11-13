@@ -2929,6 +2929,7 @@ void register_luasocial_api(lua_State* L, EqHost& host);  // app/lua_eq_luasocia
 void register_hotbar_api(lua_State* L, EqHost& host);     // app/lua_eq_hotbar.cpp
 void register_web_api(lua_State* L, EqHost& host);        // app/lua_eq_web.cpp
 void register_find_api(lua_State* L, EqHost& host);       // app/lua_eq_find.cpp
+void register_compare_api(lua_State* L, EqHost& host, std::vector<std::unique_ptr<StockWindow>>& windows); // app/lua_eq_compare.cpp
 int CompassStrips(lua_State* L);                     // app/lua_eq_misc.cpp
 int CompassMarkers(lua_State* L);                    // app/lua_eq_misc.cpp
 
@@ -2949,6 +2950,7 @@ void EqApi::register_functions(lua_State* L) {
     register_hotbar_api(L, impl_->host);
     register_web_api(L, impl_->host);
     register_find_api(L, impl_->host);
+    register_compare_api(L, impl_->host, impl_->windows);
     lua_pushlightuserdata(L, &impl_->host);
     lua_pushcclosure(L, CompassStrips, 1);
     lua_setfield(L, -2, "CompassStrips");

@@ -271,6 +271,11 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] Zone lines marked exactly into the mesh; a walk stops before stepping into one (seen live at Oasis / North Ro).
 - [ ] Swimming live end to end (a long swim, diving, climbing out); levitation paths.
 
+## Item comparison (docs/item-compare.md)
+- [x] The item against what the player wears, on a copy of the sheet through the stat rules (caps, recommended level, the shown AC and ATK); the slot choice (pairs, two-handers, the secondary); effects gained and lost; why it cannot be used; the class-weighted verdict; `eq.CompareItem` / `CompareSlotItem` / `CompareBagSlotItem`; both packs' tooltips, panels and item displays; Options (unit, bridge and pack tests).
+- [ ] Live: inventory, bags, merchant, loot, a linked item, a two-hander, a ring pair; the gamepad pack.
+- [ ] The Advanced Inventory's bank rows; focus effects by strength; the weights tuned with players.
+
 ## Isometric camera (docs/isometric.md)
 - [x] The camera (type 7): pitch, field of view, free turn, zoom, easing; fog, far plane, region and shadow cascades measured from the player; `/camera`.
 - [x] WASD relative to the camera (or classic: `camera.iso_wasd`), the turn keys turning the camera, the gamepad's sticks.

@@ -9,6 +9,7 @@
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local stml = dofile("lib/stml.lua")
+local CL = dofile("lib/compare_lines.lua")
 local T = hud.T
 local C = T.color
 local INSTANCES = 6
@@ -309,6 +310,36 @@ local function readItem(win, mod, desc, tex, u0, v0)
   return p
 end
 
+-- ---------------------------------------------------------------- comparison
+-- Hailstone: the item against what you wear (eq.CompareSlotItem over the window's Hailstone_Item;
+-- docs/item-compare.md), every change, with a button per slot when it fits two (ears, wrists, rings).
+local compareIndex = {} -- [win] = the slot shown
+local CMP_KIND = { good = "good", bad = "bad", mixed = "gold" }
+local function comparison(win)
+  if eq.Option("item_compare") == 0 then return end
+  local c = eq.CompareSlotItem(win, "Hailstone_Item")
+  if not c then return end
+  W.Heading("Compared with what you wear")
+  local index = compareIndex[win] or 1
+  if index > #c.slots then index = 1 end
+  if #c.slots > 1 then
+    for k, slot in ipairs(c.slots) do
+      if k > 1 then ui.SameLine() end
+      local label = slot.slotName .. "##cmp" .. k
+      if ui.Selectable(label, k == index, 0, (ui.CalcTextSize(slot.slotName)), 0) then compareIndex[win] = k end
+    end
+  end
+  ui.PushFont(T.font.small)
+  ui.PushTextWrapPos(0)
+  for _, line in ipairs(CL.lines(c, index, { verdict = eq.Option("item_compare_verdict") ~= 0, full = true })) do
+    local text, kind = line[1], line[2]
+    local col = CMP_KIND[kind] and C[CMP_KIND[kind]] or (kind == "muted" and C.muted or C.text)
+    ui.TextColored(col[1], col[2], col[3], 1, text)
+  end
+  ui.PopTextWrapPos()
+  ui.PopFont()
+end
+
 local function body(win, w, h, s)
   local tex, u0, v0, u1, v1 = eq.ChildArt(win, "IconButton", "decal")
   local mod = trim(W.Text(win, "IDW_ModButtonLabel"))
@@ -385,6 +416,7 @@ local function body(win, w, h, s)
     end
   end
   sockets(win, s, cw)
+  comparison(win)
   if trim(descRaw) ~= "" then
     W.Heading("Description")
     ui.PushFont(T.font.small)

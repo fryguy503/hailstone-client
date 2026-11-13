@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Item comparison, in both interfaces: an item's tooltip (inventory, bags, bank, loot, trade, a merchant's goods) and its details window (a linked item too) show what wearing it instead of what you wear would change: your HP, mana, endurance, AC, ATK, haste, stats, resists and regeneration as the game works them out, stat caps included, the weapon's damage and delay, the effects gained and lost, and why you cannot use it when you cannot. A verdict (Upgrade, Downgrade, Mixed) weighs the changes by what matters for your class. For rings, earrings and bracers Shift shows the other slot. Options > Compare Items and Upgrade Verdict turn them off. Nothing about the game's rules changes
 - Money picked up onto the cursor (from the inventory, the bank or a trade) now follows the mouse as a coin of its kind with the amount beside it, in both interfaces, as an item on the cursor does. Before, nothing showed that coin was held
 - Merchant, Parcels page (modern interface): clicking a parcel now picks it, and Retrieve takes that parcel. Before, the pick was dropped at once, so Retrieve stayed greyed out. With no parcel picked, Retrieve takes the first one in the list
 - Modern UI: a merchant's goods keep the row you clicked marked, and the Friends window's Who and Remove need a selected name
