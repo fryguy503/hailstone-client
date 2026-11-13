@@ -16,6 +16,8 @@ local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local A = dofile("lib/actions.lua")
 local C = T.C
+local ROLE_LABELS = { [0] = "", "Main Tank", "Main Assist", "Main Tank / Main Assist", "Puller",
+  "Main Tank / Puller", "Main Assist / Puller", "Main Tank / Main Assist / Puller" }
 
 -- A HUD window at x, y (design px), w x h; inputs: the mouse may click in it. draw(x0, y0, x1, y1).
 local function hud(name, x, y, w, h, inputs, draw)
@@ -49,7 +51,11 @@ end
 ui.window("HUD Player", function()
   if not W.shown("PlayerWindow") then return end
   local mana, _, mraw = eq.Gauge(2)
-  hud("HUD Player", 32, 28, 470, mraw ~= -1 and 176 or 148, false, function(x0, y0, x1, y1)
+  hud("HUD Player", 32, 28, 470, mraw ~= -1 and 176 or 148, true, function(x0, y0, x1, y1)
+    if ui.InvisibleButton("##player", x1 - x0, y1 - y0) then eq.ClickChild("PlayerWindow", "PlayerHP", "left") end
+    if ui.IsItemHovered() and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
+      eq.WindowContextMenu("PlayerWindow")
+    end
     T.panel(x0, y0, x1, y1, 0.9)
     -- auto attack (PlayerWindow's A_AttackIndicatorAnim*): a pulsing red wash and a thick red ring
     if eq.ChildShown("PlayerWindow", "A_AttackIndicatorAnimTop") == true then
@@ -193,6 +199,10 @@ ui.window("HUD Group", function()
         members[count] = m
       end
       m.i, m.name, m.hp = i, name, frac
+      local roles = (eq.ChildShown("GroupWindow", "GroupRoleTank" .. i) and 1 or 0)
+        | (eq.ChildShown("GroupWindow", "GroupRoleAssist" .. i) and 2 or 0)
+        | (eq.ChildShown("GroupWindow", "GroupRolePuller" .. i) and 4 or 0)
+      m.roles = ROLE_LABELS[roles]
       if tr then
         m.tint = m.rgba
         m.tint[1], m.tint[2], m.tint[3] = tr, tg, tb
@@ -202,7 +212,7 @@ ui.window("HUD Group", function()
     end
   end
   if count == 0 then return end
-  local rowH = 66
+  local rowH = 80
   hud("HUD Group", 32, 214, 400, 16 + count * (rowH + 6), true, function(x0, y0, x1, y1)
     local y = y0
     for k = 1, count do
@@ -212,6 +222,9 @@ ui.window("HUD Group", function()
       local clicked = ui.InvisibleButton(MEMBER_IDS[m.i].button, x1 - x0, T.px(rowH))
       if clicked then eq.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "left") end -- targets the member (F2..F6)
       local hovered = ui.IsItemHovered()
+      if hovered and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
+        eq.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "right")
+      end
       T.panel(x0, y, x1, ry1, hovered and 1 or 0.85, T.px(12))
       local p = T.px(12)
       T.font(18)
@@ -228,6 +241,11 @@ ui.window("HUD Group", function()
       by = by + T.px(16)
       if mraw ~= -1 and mana then T.bar(x0 + p, by, x0 + p + half, by + T.px(7), mana, C.mana) end
       if en then T.bar(x1 - p - half, by, x1 - p, by + T.px(7), en, C.endurance) end
+      if m.roles ~= "" then
+        T.font(15)
+        T.draw(x0 + p, by + T.px(10), T.fit(m.roles, x1 - x0 - 2 * p), C.accent)
+        T.unfont()
+      end
       y = ry1 + T.px(6)
     end
   end)

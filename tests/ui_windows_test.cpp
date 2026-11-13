@@ -24,8 +24,11 @@
 #include "game/hot_button_menu.h"
 #include "game/hotbuttons.h"
 #include "game_files.h"
+#include "mock_server/harness.h"
 #include "net/game_connection.h"
+#include "net/group_packets.h"
 #include "net/market_packets.h"
+#include "net/notice_packets.h"
 #include "net/opcodes.h"
 #include "net/pet_packets.h"
 #include "scratch_dir.h"
@@ -89,6 +92,151 @@ struct Harness {
 };
 
 } // namespace
+
+TEST_CASE("Group role menus: self, member rows, permissions and confirmed role checks") {
+    hailstone::test::ScratchDir game_scratch("ui_windows_group_roles");
+    GameDir game(game_scratch.path());
+    Harness t(game);
+    net::PlayerProfile pp;
+    pp.name = "Leader";
+    t.conn.set_profile_for_test(pp);
+    CHECK_FALSE(t.api->child_shown("GroupWindow", "Hailstone_RolesButton").value_or(true));
+    CHECK_FALSE(t.api->context_menu("PlayerWindow", 10, 20));
+    CHECK_FALSE(t.api->context_menu("GroupWindow", 10, 20));
+
+    net::GroupUpdateB group;
+    group.leader = "Leader";
+    net::GroupUpdateMember self;
+    self.name = "Leader";
+    self.slot = 0;
+    self.main_tank = 1;
+    group.members.push_back(self);
+    net::GroupUpdateMember member;
+    member.name = "Member";
+    member.slot = 1;
+    member.main_assist = 1;
+    group.members.push_back(member);
+    net::GroupUpdateMember merc;
+    merc.name = "Mercenary";
+    merc.slot = 2;
+    merc.merc = 1;
+    group.members.push_back(merc);
+    t.conn.receive_zone_packet_for_test(net::encode(group));
+
+    t.host.click_rect = {20, 30, 80, 50}; // a pad activation anchors to its button, even with no mouse position
+    REQUIRE(t.api->click_child("GroupWindow", "Hailstone_RolesButton"));
+    REQUIRE(t.host.menus.size() == 1);
+    CHECK(t.host.menus[0].x == 80);
+    CHECK(t.host.menus[0].y == 40);
+    REQUIRE(t.host.menus[0].rows.size() == 6);
+    CHECK(t.host.menus[0].rows[1].text == "Leader (you)");
+    REQUIRE(t.api->menu_click(0, 1));
+    REQUIRE(t.host.menus.size() == 2);
+    const auto& self_roles = t.host.menus[1].rows;
+    REQUIRE(self_roles.size() == 4);
+    CHECK(self_roles[0].text == "Main Tank");
+    CHECK(self_roles[0].check);
+    CHECK_FALSE(self_roles[1].check);
+    CHECK(self_roles[0].enabled);
+    CHECK(self_roles[1].enabled);
+    CHECK(self_roles[2].enabled);
+
+    // The player's own frame offers the same roles even though the group gauges omit self.
+    REQUIRE(t.api->context_menu("PlayerWindow", 20, 30));
+    REQUIRE(t.host.menus.size() == 1);
+    CHECK(t.host.menus[0].rows[0].text == "Leader");
+    CHECK(t.host.menus[0].rows[1].check);
+    CHECK(t.api->child_shown("PlayerWindow", "GroupRoleTank").value_or(false));
+
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    REQUIRE(t.host.menus.size() == 1);
+    const auto& member_rows = t.host.menus[0].rows;
+    REQUIRE(member_rows.size() == 7);
+    CHECK(member_rows[0].text == "Member");
+    CHECK_FALSE(member_rows[1].check);
+    CHECK(member_rows[2].check);
+    CHECK(t.api->child_shown("GroupWindow", "GroupRoleAssist1").value_or(false));
+    REQUIRE(t.api->menu_click(0, 6));
+    CHECK(t.host.window_menu == "GroupWindow");
+
+    REQUIRE(t.api->context_menu("GroupWindow", 20, 30));
+    REQUIRE(t.api->menu_click(0, 3));
+    REQUIRE(t.host.menus.size() == 2);
+    CHECK(t.host.menus[1].rows[0].enabled); // mercenaries may tank, but cannot assist or pull
+    CHECK_FALSE(t.host.menus[1].rows[1].enabled);
+    CHECK_FALSE(t.host.menus[1].rows[2].enabled);
+
+    // A server refresh changes the checks and the authority, without a local optimistic role assignment.
+    group.leader = "Member";
+    group.members[1].main_assist = 0;
+    group.members[1].puller = 1;
+    t.conn.receive_zone_packet_for_test(net::encode(group));
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    CHECK_FALSE(t.host.menus[0].rows[2].check);
+    CHECK(t.host.menus[0].rows[3].check);
+    CHECK_FALSE(t.host.menus[0].rows[1].enabled);
+    CHECK_FALSE(t.host.menus[0].rows[2].enabled);
+    CHECK_FALSE(t.host.menus[0].rows[3].enabled);
+    CHECK_FALSE(t.api->menu_click(0, 1));
+
+    t.host.menus.clear();
+    t.conn.set_client_option_for_session(game::ClientOption::ContextMenus, 0);
+    CHECK_FALSE(t.api->context_menu("GroupWindow", 20, 30));
+    CHECK(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    CHECK(t.host.menus.empty());
+}
+
+TEST_CASE("Group role menus: a server update while open preserves the displayed toggle intent") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    Harness t(rig.game);
+    t.host.conn = &rig.conn;
+    net::GroupUpdateB group;
+    group.leader = "Gennro";
+    net::GroupUpdateMember self;
+    self.name = "Gennro";
+    self.slot = 0;
+    group.members.push_back(self);
+    net::GroupUpdateMember member;
+    member.name = "Tank";
+    member.slot = 1;
+    group.members.push_back(member);
+    rig.server.zone.send_reliable(net::encode(group));
+    REQUIRE(rig.until([&] { return rig.conn.group().count() == 2; }));
+    auto sent_roles = [&] {
+        std::vector<net::GroupRole> roles;
+        for (const auto& packet : rig.server.zone_log)
+            if (packet.opcode == net::to_wire(net::Op::GroupRoles))
+                if (auto role = net::decode_group_role(packet)) roles.push_back(*role);
+        return roles;
+    };
+
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    REQUIRE(t.host.menus.size() == 1);
+    CHECK_FALSE(t.host.menus[0].rows[2].check); // Main Assist was unchecked when the menu opened
+    net::GroupRole change;
+    change.member = "Tank";
+    change.leader = "Gennro";
+    change.role = 2;
+    change.on = 1;
+    rig.server.zone.send_reliable(net::encode_group_role(change));
+    REQUIRE(rig.until([&] { return rig.conn.group().slots[1].main_assist; }));
+    REQUIRE(t.api->menu_click(0, 2));
+    REQUIRE(rig.until([&] { return sent_roles().size() == 1; }));
+    CHECK(sent_roles()[0].member == "Tank");
+    CHECK(sent_roles()[0].role == 2);
+    CHECK(sent_roles()[0].on == 1); // the stale unchecked menu still requests assignment
+
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    CHECK(t.host.menus[0].rows[2].check); // this time the menu offers to clear Main Assist
+    change.on = 0;
+    rig.server.zone.send_reliable(net::encode_group_role(change));
+    REQUIRE(rig.until([&] { return !rig.conn.group().slots[1].main_assist; }));
+    REQUIRE(t.api->menu_click(0, 2));
+    REQUIRE(rig.until([&] { return sent_roles().size() == 2; }));
+    CHECK(sent_roles()[1].on == 0);
+    CHECK_FALSE(rig.conn.group().slots[1].main_assist);
+}
 
 TEST_CASE("OP_PotionBelt: the right button held") {
     auto p = net::encode_potion_belt_hold(2, true);
