@@ -646,6 +646,16 @@ public:
         return &data_;
     }
 
+    // Hailstone: "ItemList:<row>", the merchant's item on that row of the list as last read (eq.SlotItem,
+    // eq.CompareSlotItem: the item comparison of a row under the mouse).
+    const net::Item* slot_item(EqHost& host, std::string_view id) override {
+        const auto* m = session(host);
+        const int row = index_after(id, "ItemList:");
+        if (!m || row < 0 || row >= static_cast<int>(slots_.size())) return nullptr;
+        auto it = m->items.find(slots_[static_cast<std::size_t>(row)]);
+        return it == m->items.end() ? nullptr : &it->second;
+    }
+
     bool list_click(EqHost& host, std::string_view id, int row, bool right, int) override {
         if (id != "ItemList" || row < 0 || row >= static_cast<int>(slots_.size())) return false;
         selected_ = slots_[static_cast<std::size_t>(row)];

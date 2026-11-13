@@ -11,6 +11,7 @@ local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local TC = dofile("lib/trade_common.lua")
 local tools = dofile("lib/itemtools.lua")
+local items = dofile("lib/items.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "MerchantWnd"
@@ -120,7 +121,8 @@ local function goods(s, h)
       T.TakeRightClick()
     end
     if ui.IsItemHovered() and not ui.IsMouseDown(ui.Mouse.Right) then
-      ui.SetTooltip(e.name .. "\nRight-click for the item's details")
+      -- Hailstone: the row's item against what you wear (docs/item-compare.md)
+      items.NameTooltip(e.name, eq.CompareSlotItem(WINDOW, LIST .. ":" .. e.row), "Right-click for the item's details")
     end
     if e.tex then ui.DrawImage(e.tex, x, y, x + icon, y + icon, e.uv[1], e.uv[2], e.uv[3], e.uv[4]) end
     local tooMuch = e.copper > purse

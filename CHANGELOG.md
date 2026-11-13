@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Item comparison, in both interfaces: an item's tooltip (inventory, bags, bank, loot, trade, a merchant's goods) and its details window (a linked item too) show what wearing it instead of what you wear would change: your HP, mana, endurance, AC, ATK, haste, stats, resists and regeneration as the game works them out, stat caps included, the weapon's damage and delay, the effects gained and lost, and why you cannot use it when you cannot. A verdict (Upgrade, Downgrade, Mixed) weighs the changes by what matters for your class. For rings, earrings and bracers Shift shows the other slot. Options > Compare Items and Upgrade Verdict turn them off. Nothing about the game's rules changes
 - Money picked up onto the cursor (from the inventory, the bank or a trade) now follows the mouse as a coin of its kind with the amount beside it, in both interfaces, as an item on the cursor does. Before, nothing showed that coin was held
 - Find: Map > Show path now draws the selected world trail on the initial login, including servers without downloaded asset files; terrain bindings follow zone replacement and asset reloads
 - Options > Display > Find Trail selects a gold line on the ground (the default) or fourteen thin, winding rainbow threads hovering a few feet above the terrain. Both follow hills and valleys and leave gaps at missing ground. The choice applies immediately and is saved per character; gamepad users can find it under Options > Interface

@@ -370,6 +370,12 @@ private:
         held_id_ = 0;
     }
 
+    // Hailstone: "Hailstone_Item", the shown item for eq.SlotItem and eq.CompareSlotItem (a child of its own: as an
+    // item slot the icon would take the slot clicks of eq.ClickChild).
+    const net::Item* slot_item(EqHost& host, std::string_view id) override {
+        return id == "Hailstone_Item" ? item(host) : nullptr;
+    }
+
     const net::Item* item(EqHost& host) const {
         if (!host.item_displays || n_ >= static_cast<int>(host.item_displays->size())) return nullptr;
         return &(*host.item_displays)[static_cast<std::size_t>(n_)];

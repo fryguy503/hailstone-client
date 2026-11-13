@@ -383,6 +383,10 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     if (o == "npc_names") return npc_names_ ? 1 : 0;
     // Hailstone: NPC names in their consider colour, on by default (draw_nameplates).
     if (o == "con_name_colour") return con_name_colour_ ? 1 : 0;
+    // Hailstone: the item comparison in the item tooltips and displays (docs/item-compare.md), and its verdict; on by
+    // default. Read by the UI packs only.
+    if (o == "item_compare") return config_.get_bool("items.compare", true) ? 1 : 0;
+    if (o == "item_compare_verdict") return config_.get_bool("items.compare_verdict", true) ? 1 : 0;
     // Hailstone: the target's name on a dark plate edged in its colour with a bobbing marker (draw_nameplates), on by default.
     if (o == "target_plate_highlight") return target_plate_highlight_ ? 1 : 0;
     // Hailstone: names a nearer name covers fade (draw_nameplates), on by default.
@@ -527,6 +531,11 @@ void ClientApp::set_option_value(std::string_view o, int v) {
     if (o == "news_last_read" || o == "news_automatic") {
         if (o == "news_last_read") config_.set_int("news.last_read", v);
         else config_.set_bool("news.automatic", v != 0);
+        config_.save(config_path_);
+        return;
+    }
+    if (o == "item_compare" || o == "item_compare_verdict") {
+        config_.set_bool(o == "item_compare" ? "items.compare" : "items.compare_verdict", v != 0);
         config_.save(config_path_);
         return;
     }

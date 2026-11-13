@@ -176,7 +176,7 @@ ui.window("Inventory", function()
     local midX = x0 + leftW + T.px(40)
     local sheetY = sheet(x0, y0, x0 + leftW)
     currencyFocused = currencyList(x0, sheetY + T.px(16), x0 + leftW, y1, held ~= nil)
-    local focusedItem, focusedWhere
+    local focusedItem, focusedWhere, focusedSlot, focusedBag
     if held and W.pressed("lb") then eq.ClickChild(INV, "IW_Destroy", "left") end
     if held and W.pressed("rb") and eq.gamepad and eq.gamepad.drop_cursor then eq.gamepad.drop_cursor() end
     local size, gap = T.px(84), T.px(10)
@@ -185,6 +185,7 @@ ui.window("Inventory", function()
       local clicked, focused, sx0, sy0, sx1 = T.slot(id, item, sz or size, { label = bag == nil and where or nil }, pad)
       if focused then
         focusedItem, focusedWhere = item, where or (bagName .. ", slot " .. (bag + 1))
+        focusedSlot, focusedBag = slot, bag
         if bag == nil and slot >= 23 and slot <= 32 and item and (item.bagSlots or 0) > 0 then openBag = slot end
         if W.pressed("x") then
           if held then eq.ChatSubmit(1, "/autoinventory") else eq.ClickSlot(slot, bag, "rightup") end
@@ -247,7 +248,8 @@ ui.window("Inventory", function()
     -- the right column: the focused item, what is held
     local rx0 = x1 - rightW
     local holdH = held and T.px(110) or 0
-    I.summary(focusedItem, focusedWhere, rx0, y0, x1, y1 - holdH - (held and T.px(12) or 0))
+    I.summary(focusedItem, focusedWhere, rx0, y0, x1, y1 - holdH - (held and T.px(12) or 0),
+      focusedItem and focusedSlot and eq.CompareItem(focusedSlot, focusedBag) or nil)
     if held then
       local hy0 = y1 - holdH
       T.rect(rx0, hy0, x1, y1, C.accent, 0.16, T.px(14))
