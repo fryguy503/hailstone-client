@@ -21,6 +21,7 @@ separate library shipped beside the macOS binary, with its licence.
 | stb_image (github.com/nothings/stb, commit 2c980bb) | public domain / MIT | JPEG pictures on the pre-game and loading screens (`src/assets/jpeg_read.cpp`) |
 | Lua 5.4.7 (`third_party/lua`) | MIT | the Lua UI's scripting (`src/ui/lua`) |
 | Recast Navigation (github.com/recastnavigation/recastnavigation, tag v1.6.0) | zlib | navigation meshes and path queries (`src/nav`) |
+| cgltf (github.com/jkuhlmann/cgltf, v1.15) | MIT | binary glTF reading for replacement models (`src/assets/gltf_mesh.cpp`) |
 | bcdec (github.com/iOrange/bcdec, commit 80859ed) | MIT or Unlicense | BC7 block decoding for texture packs on devices without BC formats (`src/assets/texture.cpp`) |
 | AMD FidelityFX FSR 1 (`third_party/fsr1`: `ffx_a.h`, `ffx_fsr1.h` from github.com/GPUOpen-Effects/FidelityFX-FSR, commit a21ffb8) | MIT | the render scale's upscale and sharpening (`shaders/fsr_easu.frag`, `fsr_rcas.frag`) |
 | CEF, the Chromium Embedded Framework (cef-builds.spotifycdn.com, 156.0.14+g4fa4ab5+chromium-156.0.8078.48, minimal binary builds) | BSD-3-Clause; Chromium's own components under their licences, listed in the shipped `browser/CREDITS.html` | the in-game browser's helper (`tools/hailstone-web`, docs/browser.md), a program of its own: the client never links it. `browser/CEF-LICENSE.txt` and `browser/CREDITS.html` are installed beside it |

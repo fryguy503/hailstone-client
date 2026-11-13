@@ -130,6 +130,20 @@ FetchContent_MakeAvailable(stb)
 add_library(hailstone_stb INTERFACE)
 target_include_directories(hailstone_stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
 
+# cgltf (MIT): binary glTF reading for replacement models (src/assets/gltf_mesh.cpp, docs/graphics.md "Model
+# overrides"). A single header: populated only; its implementation is built here as one C file.
+FetchContent_Declare(cgltf
+  GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
+  GIT_TAG 360db1a95480fe102ae9c69b27c5d101167ff5ba # v1.15
+  SOURCE_SUBDIR hailstone-headers-only
+  SYSTEM)
+FetchContent_MakeAvailable(cgltf)
+file(WRITE ${PROJECT_BINARY_DIR}/generated/cgltf_impl.c "#define CGLTF_IMPLEMENTATION\n#include <cgltf.h>\n")
+add_library(hailstone_cgltf STATIC ${PROJECT_BINARY_DIR}/generated/cgltf_impl.c)
+target_include_directories(hailstone_cgltf SYSTEM PUBLIC ${cgltf_SOURCE_DIR})
+set_target_properties(hailstone_cgltf PROPERTIES LINKER_LANGUAGE C)
+target_compile_options(hailstone_cgltf PRIVATE $<IF:$<C_COMPILER_ID:MSVC>,/w,-w>)
+
 # Monocypher (BSD-2-Clause or CC0): Ed25519 (with SHA-512, RFC 8032) checks the update manifest's signature
 # (core/ed25519.h, docs/updater.md). Populated only: its two C files are built here as one static library.
 FetchContent_Declare(monocypher

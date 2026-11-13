@@ -657,16 +657,40 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         if (cancelled()) return nullptr;
         append(zone.terrain[mi], glm::mat4(1.0f), kNoColors, true, false, &terrain_liquid[mi]);
     }
-    std::size_t missing_objects = 0;
+    std::size_t missing_objects = 0, replaced_objects = 0;
+    std::vector<std::uint32_t> replacement_colors;
     for (std::size_t pi = 0; pi < zone.placements.size(); ++pi) {
         if (pi % 256 == 0 && cancelled()) return nullptr;
         const auto& p = zone.placements[pi];
         auto it = zone.objects.find(p.actor);
         if (it == zone.objects.end()) { ++missing_objects; continue; }
+        // A replacement model (assets/model_overrides.h): the placement's baked light is one colour per vertex of the
+        // game's mesh, so the replacement takes their average (its shade, not its gradient), times its own vertex
+        // colours (a generated tree's shade inside its crown).
+        if (auto r = zone.draw_objects.find(p.actor); r != zone.draw_objects.end()) {
+            replacement_colors.clear();
+            if (!p.vertex_colors.empty()) {
+                std::uint64_t sum[4] = {};
+                for (std::uint32_t c : p.vertex_colors)
+                    for (int k = 0; k < 4; ++k) sum[k] += (c >> (8 * k)) & 0xff;
+                std::uint32_t avg[4];
+                for (int k = 0; k < 4; ++k) avg[k] = static_cast<std::uint32_t>(sum[k] / p.vertex_colors.size());
+                replacement_colors.reserve(r->second.vertices.size());
+                for (const auto& v : r->second.vertices) {
+                    std::uint32_t c = 0;
+                    for (int k = 0; k < 4; ++k) c |= (avg[k] * ((v.color >> (8 * k)) & 0xff) + 127) / 255 << (8 * k);
+                    replacement_colors.push_back(c);
+                }
+            }
+            append(r->second, p.transform, replacement_colors, false, is_plant(p.actor, r->second));
+            ++replaced_objects;
+            continue;
+        }
         append(it->second, p.transform, p.vertex_colors, false, is_plant(p.actor, it->second));
     }
     if (plants) log::info("zone renderer: {} plants sway in the wind", plants);
     if (missing_objects) log::warn("{} placements name objects the zone does not define", missing_objects);
+    if (replaced_objects) log::info("zone renderer: {} placements drawn from model overrides", replaced_objects);
     if (options.multipass_lighting)
         log::info("multi-pass lighting: {} lights reach {} zone vertices", zone.lights.size(), lit_vertices);
     if (liquid_triangles) log::info("zone renderer: {} water and lava surface triangles", liquid_triangles);

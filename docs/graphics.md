@@ -1114,6 +1114,80 @@ At run time:
 - `display.material_maps` (on by default) and the viewer's `--no-material-maps` turn the maps off.
 - Every viewer, the model viewer too, takes `--textures`.
 
+### Photo materials
+
+A built pack can rebuild a classic zone's hand-painted ground from tiling photo textures (Poly Haven's, CC0) instead
+of upscaling it (`texpack/materials.h`; Hailstone Texture Studio's "Photo ground materials"). The rules are data the
+studio ships: `materials.txt` names each material (its Poly Haven asset, the metres one repeat shows, how much it is
+magnified, its detail strength, how much of the original's painted shading it keeps, and its colour in the art), and
+a file per zone (`qeytoqrg.txt`) gives each of the zone's textures one material or two
+(`hhdrockgrass1 = grass greyrock`; `sharp` for small shapes such as a path's flagstones).
+
+- **Scale:** each texture's world units per repeat are measured on the zone's ground (the area-weighted median over
+  its triangles). A material repeats a power of two times across a tile, so Qeynos Hills' 56-unit grass tile and its
+  108-unit transitions show the grass at one scale. An EQ unit is taken as a foot.
+- **Two materials:** the original is split by a 2-means on its blurred chromaticity, seeded with the two materials'
+  colours (brightness barely counts, so the art's painted shadows are not taken for grass). The photos are blended
+  along that split, the edge moved by their displacement maps so it follows stones and soil.
+- **Detail transfer:** the result keeps the original's colour above about 6 of its texels (1.5 for `sharp`) and takes
+  only the photos' luminance detail below that, with part of the original's own painted shading. A rebuilt tile so
+  keeps the zone's palette and still meets the tiles round it, rebuilt or not; blurs and resizes wrap at the edges.
+- **Files:** the colour, normal and roughness maps go through the pack's encoder (BC7, BC5, BC4 with mips), at 512 x
+  the pack's scale on a side (1024 for a 2x pack). A texture with alpha or a variant, or not square, is upscaled.
+- **Resuming:** `PACK/materials.txt` records the rules each tile was made by; a build makes a tile again when its
+  rules change, and gives a texture back to the upscaler when the rules drop it.
+- **Fetching:** the 1K JPEG diffuse, `nor_dx`, rough and disp maps of each asset from Poly Haven's download host, once,
+  into the studio's cache.
+
+Only Qeynos Hills has rules so far. Seen in the zone viewer, not in a live session: the layout and seams hold; the
+photos' repeat still shows on large flat areas.
+
+### Model overrides
+
+A texture pack can also replace a zone's placed objects: `PACK/models/<zone>/<object>.glb`, a binary glTF 2.0 file
+named after the object (`TREE1_ACTORDEF` or `TREE1`, any case), is drawn in place of that object
+(`assets/model_overrides.h`, read with cgltf). A deliberate difference from the original, and the look only: the
+collision, picking, ladders and the ambient probe keep the game's mesh, so where a player can walk does not change.
+The pack folder is the one `display.texture_folder` (the viewer's `--textures`) chooses; the files are read as each
+zone loads (`Zone::draw_objects`).
+
+- **Frame:** glTF's own, Y up; its units are EQ units, and glTF (x, y, z) is the zone's (x, -z, y). Front faces are
+  counter-clockwise; each node's transform is applied.
+- **Materials:** a material's base colour texture names its texture by its image's URI: the file name is looked up as
+  a replacement texture is (the zone's subfolder first, so a model's textures can sit beside it), any extension, with
+  its `.n` and `.r` maps. `MASK` is drawn as a cut-out, `BLEND` at 50 %, `doubleSided` without culling. Images inside
+  the file and buffers outside it are refused.
+- **Made for a mesh:** a file whose `asset.extras.hailstone_source` holds the hash of the game mesh it was made for
+  (`object_mesh_hash`, 16 hex digits) is used only on that mesh, so a game update that changes the object turns it
+  off; one without (made by hand) is used on any object of its name in that zone.
+- **Light:** a placement's baked light is one colour per vertex of the game's mesh; the replacement takes their
+  average, multiplied by its own vertex colours (a generated tree's shade inside its crown).
+- **Plants:** a replacement sways in the wind as the game's object would (`is_plant`): its cut-out parts flutter.
+
+### Generated trees
+
+Hailstone Texture Studio's "Generated trees" grows a classic zone's trees again (`texpack/trees.h`) and writes them as
+model overrides with their textures (BC7 with mips; the bark's normal and roughness maps as `.n` and `.r`). The game's
+trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tree is fitted to the game's:
+
+- **Trunk:** the prisms' rings, found by their hop count along the prism edges from each piece's bottom (a limb that is
+  a prism of its own, as TREETRY's second one, hangs from the ring nearest its root), make the skeleton. The bark is a
+  tube along it at 0.8 x the prism corners' distance: between the prism's faces and its corners, so a player stopped
+  by the collision stands at the bark.
+- **Leaves:** points spread over the cards and kept where their texture is opaque give the crown's shape; turned round
+  the trunk, they fill it. The leaves are drawn in colours picked from the game texture's opaque texels, then scaled
+  to its mean, so an autumn tree keeps its yellows among its greens.
+- **Styles:** a pine (a single upright trunk up into leaves widest low down) grows whorls of drooping branches with
+  needle sprays and a clump at each end up a leader; a broadleaf tree grows branches into the crown by space
+  colonisation (Runions, Lane and Prusinkiewicz 2007), leaf clusters at their tips; a willow hangs strands from its
+  upper branches. The rules may name the style (`tree tree71 = willow bark`); `auto` takes pine or broadleaf by shape.
+- **Bark:** a Poly Haven photo material scaled to the game bark's mean colour, or a drawn one.
+- **Budget:** 2,000 to 10,000 triangles a tree; Qeynos Hills' 363 placed trees come to about 2.5 million.
+
+The rules are lines of the studio's zone files (`tree <object> = <style> [<bark material>]`); only Qeynos Hills has
+them so far. A tree comes out the same on every build (its seed is its zone and name). Seen in the zone viewer, not
+in a live session. Open: levels of detail; leaves thin out in the smaller mips of a cut-out.
+
 ## The isometric camera's cut
 
 In the isometric camera (`docs/isometric.md`) `zone.frag`, `object.frag` and `flora.frag` drop the pixels of what
