@@ -348,7 +348,10 @@ void GameConnection::ask(Confirmation c) {
 void GameConnection::unwind_question(const Confirmation& c) {
     // What answer_confirmation's no does to this client's own state, without a packet.
     if (c.id == kConfirmLootNoDrop) loot_popup_pending_ = false;
-    else if (c.id >= game::kConfirmAugInsert && c.id <= game::kConfirmAugDestroy)
+    else if (c.id == kConfirmFellowshipInvite) {
+        fellowship_.invite.reset();
+        fellowship_invite_expires_ = 0;
+    } else if (c.id >= game::kConfirmAugInsert && c.id <= game::kConfirmAugDestroy)
         spells_.pending = std::max(0, spells_.pending - 1);
     else if (c.id == kConfirmMoldCombine) combine_pending_ = false;
     else if (c.id == kConfirmMarketplaceResult || c.id == kConfirmMarketplaceNotice) {
@@ -418,6 +421,7 @@ void GameConnection::answer_confirmation(bool yes) {
         return;
     }
     if (c.id == kConfirmRaidInvite) return answer_raid_invite(yes); // CRaid::SendInviteResponse(yes)
+    if (c.id == kConfirmFellowshipInvite) return answer_fellowship_invite(yes);
     if (c.id == kConfirmDecayCorpse) {
         // /decaycorpse's handler @0x479e30: a yes sends opcode 0x7d50 {corpse, player}.
         if (yes && state_ == ConnectionState::InZone) send_zone(encode_decay_corpse(c.data, c.data2));

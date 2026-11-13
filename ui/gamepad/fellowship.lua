@@ -15,7 +15,7 @@ local C = T.C
 local WIN = "FellowshipWnd"
 
 local st = CH.new()
-local page = 1
+local page = tonumber(ui.GetSetting("test.tab.FellowshipWnd.Subwindows") or "") == 1 and 2 or 1
 local members, kits, desc = {}, {}, {}
 local side = {}
 local wasShown = false
@@ -35,7 +35,8 @@ ui.window("Fellowship", function()
   T.frame()
   if not wasShown then setPage(page) end
   wasShown = true
-  if W.begin("Fellowship", { w = 1700, h = 960, title = "Fellowship", subtitle = page == 1 and "Members" or "Campsite",
+  local count = eq.ListInfo(WIN, "MemberList") or 0
+  if W.begin("Fellowship", { w = 1700, h = 960, title = "Fellowship", subtitle = page == 1 and ("Members (" .. count .. ") | L: leader") or "Campsite",
         hints = CH.hints(st, { { "lb", "Fellowship" }, { "rb", "Camp" }, { "a", "Select" }, { "b", "Close" } }) }) then
     local x0, y0, x1, y1, cw = W.area()
     local wx, wy = ui.GetWindowPos()
@@ -50,13 +51,16 @@ ui.window("Fellowship", function()
       if page == 1 then
         local fh = T.px(80)
         ui.SetCursorPos(x0 - wx, y0 - wy)
-        CH.field(st, WIN, "MOTDInput", "Message of the day", listW - T.px(190), fh, { max = 255, keep = true })
+        CH.field(st, WIN, "MOTDInput", "Message of the day", listW - T.px(190), fh, { max = 1023, keep = true })
         ui.SameLine(0, T.px(10))
         CH.button(WIN, "UpdateMOTDButton", "Update", T.px(180), fh, { keep = true })
-        ui.SetCursorPos(x0 - wx, y0 + fh + T.px(14) - wy)
-        local row = CH.list(WIN, "MemberList", members, listW, y1 - y0 - fh - T.px(14), { rowH = 56, font = 19,
+        T.font(17)
+        T.draw(x0, y0 + fh + T.px(10), CH.plain(WIN, "FellowshipVitality"), C.dim)
+        T.unfont()
+        ui.SetCursorPos(x0 - wx, y0 + fh + T.px(45) - wy)
+        local row = CH.list(WIN, "MemberList", members, listW, y1 - y0 - fh - T.px(45), { rowH = 56, font = 19,
           empty = "You are in no fellowship: Create starts one.",
-          columns = { { 1, 0.24 }, { 2, 0.08, 1 }, { 3, 0.16 }, { 5, 0.24 }, { 6, 0.14 }, { 7, 0.14 } } })
+          columns = { { 1, 0.22 }, { 2, 0.08, 1 }, { 3, 0.12 }, { 4, 0.06 }, { 5, 0.22 }, { 6, 0.15 }, { 7, 0.15 } } })
         W.toSide(side, row)
         buttons = {
           { "CreateFellowshipButton", "Create", "Start a fellowship" },
@@ -72,8 +76,9 @@ ui.window("Fellowship", function()
         T.draw(x0, y0, CH.plain(WIN, "CurrentCampLoc"), C.dim)
         local viewer = CH.plain(WIN, "CampsiteViewer")
         T.draw(x0, y0 + T.px(28), viewer ~= "" and viewer or "No campsite.", viewer ~= "" and C.text or C.faint)
+        T.draw(x0, y0 + T.px(56), CH.plain(WIN, "CampsiteTime"), C.dim)
         T.unfont()
-        local fy = y0 + T.px(70)
+        local fy = y0 + T.px(100)
         ui.SetCursorPos(x0 - wx, fy - wy)
         local half = (listW - T.px(10)) / 2
         CH.combo(st, WIN, "CampsiteFilter", "Kind", half, T.px(76), { keep = true })

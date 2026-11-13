@@ -28,6 +28,23 @@ constexpr std::uint32_t kGreen = 0xff00ff00; // -0xff0100
 constexpr std::uint32_t kOfflineGrey = 0xff808080;
 constexpr std::uint32_t kMercOwner = 0xffe1b511; // -0x1e4aef
 
+int vitality_fill(std::uint64_t value, std::uint64_t cap) {
+    if (!cap) return 0;
+    if (value >= cap) return 1000;
+    // Find floor(value * 1000 / cap) without overflowing a 64-bit pool or
+    // rounding UINT64_MAX - 1 to a full gauge on platforms where long double
+    // is double. The threshold is ceil(cap * middle / 1000), also bounded.
+    const auto whole = cap / 1000, remainder = cap % 1000;
+    int low = 0, high = 1000;
+    while (low + 1 < high) {
+        const auto middle = static_cast<std::uint64_t>((low + high) / 2);
+        const auto threshold = whole * middle + (remainder * middle + 999) / 1000;
+        if (value >= threshold) low = static_cast<int>(middle);
+        else high = static_cast<int>(middle);
+    }
+    return low;
+}
+
 // LabelFromEQ_FormatIntValue @0x761b50: "%d" of value (capped at max unless max is -9999); with compare, coloured
 // against base.
 LabelValue int_value(std::int64_t value, std::int64_t base = 0, bool compare = false, std::int64_t max = -9999) {
@@ -582,6 +599,16 @@ GaugeValue stock_gauge(const EqHost& host, int type) {
         if (!c.aggro().target_id && !c.aggro().lock_id) return {-1, {}};
         return {std::min(1000, c.aggro().pct[net::kAggroPlayer] * 10), {}};
     }
+    case 147: case 148: {
+        // __GetGaugeValueFromEQ @0x762410, cases 147/148: min(pool, cap) *
+        // 1000 / cap, or zero for a zero cap. Deliberate safety: keep extreme
+        // unsigned wire values and the product from wrapping. Exact amounts
+        // stay strings for Lua's numeric precision.
+        const auto& vitality = c.fellowship().vitality;
+        const std::uint64_t value = type == 147 ? vitality.normal : vitality.aa;
+        const std::uint64_t cap = type == 147 ? vitality.normal_cap : vitality.aa_cap;
+        return {vitality_fill(value, cap), value || cap ? std::format("{} / {}", value, cap) : std::string()};
+    }
     case 2: { // mana: -1 for non-casters without mana, 0 for casters
         std::int64_t mx = max_mana(host, c);
         if (mx < 1) {
@@ -738,7 +765,7 @@ GaugeValue stock_gauge(const EqHost& host, int type) {
         return {static_cast<int>(std::min<std::uint32_t>(left, 30) * 1000 / 30), {}};
     }
     default:
-        // The rest (leadership experience, the discipline timer, vitality, achievements): not tracked here.
+        // The rest (leadership experience, the discipline timer, achievements): not tracked here.
         return {-1, {}};
     }
 }

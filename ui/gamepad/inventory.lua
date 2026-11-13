@@ -68,6 +68,20 @@ local function stat(x, y, w, name, value, c)
   T.draw(x + w - tw, y, value, c)
 end
 
+local function vitality(x0, y, x1, gauge, name, color)
+  local fill, amount = eq.Gauge(gauge)
+  if not amount or amount == "" then return y end
+  T.font(17)
+  stat(x0, y, x1 - x0, name, string.format("%.1f%%", (fill or 0) * 100), C.text)
+  T.unfont()
+  T.font(14)
+  -- Keep the exact server values as strings, including pools larger than Lua's exact integer range.
+  T.draw(x0, y + T.px(19), T.fit(amount, x1 - x0), C.dim)
+  T.unfont()
+  T.bar(x0, y + T.px(37), x1, y + T.px(42), fill, color)
+  return y + T.px(48)
+end
+
 -- The character's numbers, in x0 .. x1 from y.
 local function sheet(x0, y, x1)
   local name = (label(1)):gsub("\n.*", "")
@@ -86,6 +100,8 @@ local function sheet(x0, y, x1)
   stat(x0, y, w, "HP", label(17) .. " / " .. label(18)) y = y + lh
   if (tonumber(label(125)) or 0) > 0 then stat(x0, y, w, "Mana", label(124) .. " / " .. label(125)) y = y + lh end
   stat(x0, y, w, "Endurance", label(126) .. " / " .. label(127)) y = y + lh
+  y = vitality(x0, y, x1, 147, "XP vitality", C.exp)
+  if (tonumber(label(2)) or 0) >= 51 then y = vitality(x0, y, x1, 148, "AA vitality", C.gold) end
   stat(x0, y, w, "AC", label(22)) y = y + lh
   local atk = label(23)
   if atk ~= "" then stat(x0, y, w, "ATK", atk) y = y + lh end
