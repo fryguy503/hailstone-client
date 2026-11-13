@@ -357,3 +357,65 @@ assert(count >= 4)
 )lua");
     }
 }
+
+TEST_CASE("AA columns: after a resize the ability column takes up a wider window, and a window resize saves nothing") {
+    AaColumns ui;
+    ui.run("ui.SetSetting('plugin.plug.hud.size.AAWindow', '1000,650')");
+    ui.frames(3);
+    // The last column ends where the script's part starts, less the list's padding.
+    const auto trailing = [&] { return ui.value("aa_text", "SCRIPT PART", 1) - ui.hit("##aaheadcost").x1; };
+    const double gap = trailing();
+    const auto edge = ui.hit("##aaresizecategory").center();
+    ui.drag(edge, ImVec2(edge.x + 20, edge.y));
+    const auto saved = ui.setting("aa.widths");
+    CHECK(saved.find("category=") != std::string::npos);
+    CHECK(saved.find("name=") == std::string::npos);
+    const auto category = ui.hit("##aaheadcategory");
+    const auto name = ui.hit("##aaheadname");
+    CHECK(std::abs(trailing() - gap) <= 1.0);
+
+    ui.run("ui.SetSetting('plugin.plug.hud.size.AAWindow', '1600,650')");
+    ui.frames(3);
+    ui.checkAligned();
+    CHECK(std::abs(trailing() - gap) <= 1.0);
+    const auto wideName = ui.hit("##aaheadname");
+    CHECK(wideName.x1 - wideName.x0 > name.x1 - name.x0 + 400);
+    CHECK(ui.hit("##aaheadcategory").x1 - ui.hit("##aaheadcategory").x0 ==
+          doctest::Approx(category.x1 - category.x0));
+    CHECK(ui.setting("aa.widths") == saved);
+
+    // Squeezed by a narrow window, then widened again: the preferred widths come back unchanged.
+    ui.run("ui.SetSetting('plugin.plug.hud.size.AAWindow', '640,650')");
+    ui.frames(3);
+    CHECK(ui.setting("aa.widths") == saved);
+    ui.run("ui.SetSetting('plugin.plug.hud.size.AAWindow', '1000,650')");
+    ui.frames(3);
+    ui.checkAligned();
+    CHECK(ui.setting("aa.widths") == saved);
+    CHECK(std::abs(trailing() - gap) <= 1.0);
+    CHECK(ui.hit("##aaheadcategory").x1 - ui.hit("##aaheadcategory").x0 ==
+          doctest::Approx(category.x1 - category.x0));
+    CHECK(ui.hit("##aaheadname").x1 - ui.hit("##aaheadname").x0 == doctest::Approx(name.x1 - name.x0));
+}
+
+TEST_CASE("AA columns: a saved ability width is ignored, and the ability edge resizes the next column") {
+    AaColumns ui;
+    ui.run("ui.SetSetting('plugin.plug.aa.widths', 'name=120,category=90')");
+    ui.run("ui.SetSetting('plugin.plug.hud.size.AAWindow', '1000,650')");
+    ui.frames(3);
+    const auto trailing = [&] { return ui.value("aa_text", "SCRIPT PART", 1) - ui.hit("##aaheadcost").x1; };
+    const double gap = trailing();
+    CHECK(ui.hit("##aaheadname").x1 - ui.hit("##aaheadname").x0 > 150);
+    const auto category = ui.hit("##aaheadcategory");
+    const auto edge = ui.hit("##aaresizename").center();
+    ui.drag(edge, ImVec2(edge.x + 10, edge.y));
+    const auto saved = ui.setting("aa.widths");
+    CHECK(saved.find("name=") == std::string::npos);
+    CHECK(saved.find("category=") != std::string::npos);
+    CHECK(ui.hit("##aaheadcategory").x1 - ui.hit("##aaheadcategory").x0 < category.x1 - category.x0 - 5);
+    CHECK(ui.hit("##aaresizename").center().x == doctest::Approx(edge.x + 10));
+    CHECK(std::abs(trailing() - gap) <= 1.0);
+    ui.run("ui.SetSetting('plugin.plug.hud.size.AAWindow', '1400,650')");
+    ui.frames(3);
+    CHECK(std::abs(trailing() - gap) <= 1.0);
+}

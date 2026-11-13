@@ -210,9 +210,10 @@ local opts = nil    -- this frame's window options (M.window)
 local hookRow = {}  -- the row as opts.row's functions see it (kept)
 
 -- ---------------------------------------------------------------- the columns
--- Each column: its head, its preferred width (design pixels; the name defaults to what the others leave), its
+-- Each column: its head, its preferred width (design pixels; the name has none: it takes what the others leave), its
 -- alignment and its sort key from a row's texts (one type per column). A head's click sorts by that column (again:
--- the other way), its drag moves the column, its right edge resizes it (settings aa.columns, aa.sort, aa.widths).
+-- the other way), its drag moves the column, its right edge resizes it against the next column (settings aa.columns,
+-- aa.sort, aa.widths; only the fixed columns' widths are kept, so the name still takes up a wider window).
 -- Narrow, the category goes first, then the tab. The list starts sorted by name, A to Z.
 local COLUMNS = {
   name = { head = "ABILITY", min = 80, tip = "Sort by name; drag to move the column" },
@@ -232,7 +233,7 @@ for i, key in ipairs(DEFAULT_ORDER) do
 end
 
 local order = nil         -- the columns' keys, left to right
-local widths = {}        -- preferred widths in design pixels; a smaller window may shrink them to fit
+local widths = {}        -- the fixed columns' preferred widths (design pixels); a smaller window shrinks them as drawn
 local sortKey, sortAsc = "name", true
 local orderVersion = 0    -- bumped when the order or widths change (the kept layout is then worked out again)
 
@@ -247,7 +248,9 @@ local function loadColumns()
   end
   for key, value in (ui.GetSetting("aa.widths") or ""):gmatch("(%w+)=([^,]+)") do
     local c, n = COLUMNS[key], tonumber(value)
-    if c and n and n == n and math.abs(n) < math.huge then widths[key] = math.max(c.min, math.min(n, 2000)) end
+    if c and c.w and n and n == n and math.abs(n) < math.huge then -- (not the name's: it takes what the rest leave)
+      widths[key] = math.max(c.min, math.min(n, 2000))
+    end
   end
   local k, dir = (ui.GetSetting("aa.sort") or ""):match("^(%w+):(%a+)$")
   if k and COLUMNS[k] then sortKey, sortAsc = k, dir ~= "desc" end
@@ -292,7 +295,11 @@ local function columns(x0, x1, s)
   local room = math.max(0, (x1 - pad) - (x0 + pad))
   if room - fixed() < 150 * s then hide1 = true end
   if room - fixed() < 130 * s then hide2 = true end
-  local nameW = widths.name and widths.name * s or math.max(COLUMNS.name.min * s, room - fixed())
+  local free = room - fixed()
+  -- how far the name can shrink (design pixels) before the narrow layout would drop a column
+  local least = not hide1 and 150 * s or (not hide2 and 130 * s or COLUMNS.name.min * s)
+  lay.slack = math.max(0, free - least) / s
+  local nameW = math.max(COLUMNS.name.min * s, free)
   local n, total, minimum = 0, 0, 0
   for _, key in ipairs(order) do
     local c = COLUMNS[key]
@@ -331,28 +338,42 @@ end
 
 -- A head: a click sorts by it, a drag moves it (dropped between the two heads nearest the mouse).
 local dragging = nil -- the key of the column being dragged
-local resizing = nil -- starting bounds of the two columns that share the dragged edge
+local resizing = nil -- the edge being dragged: the fixed columns either side and their starting widths
 local function columnHeads(x0, y, x1, s)
   local L = columns(x0, x1, s)
   local f, k = F.tiny, C.faint
   local _, hh = T.TextSize("Ag", f)
   local released = nil
-  local resizeWidth = nil
+  local resizeBy = nil
   for i = 1, L.n do
     local e = L[i]
     local c = e.def
-    ui.DrawLine(e.x1, y, e.x1, y + hh, C.ink[1], C.ink[2], C.ink[3], 0.16, 1 * s)
-    T.Hit("##aaresize" .. c.key, e.x1 - 3 * s, y - 2 * s, e.x1 + 3 * s, y + hh + 2 * s)
-    local edgeHovered, edgeActive = ui.IsItemHovered(), ui.IsItemActive()
+    local right = L[i + 1]
+    local edgeHovered, edgeActive = false, false
+    if right then -- (the last column's right edge is the list's)
+      ui.DrawLine(e.x1, y, e.x1, y + hh, C.ink[1], C.ink[2], C.ink[3], 0.16, 1 * s)
+      T.Hit("##aaresize" .. c.key, e.x1 - 3 * s, y - 2 * s, e.x1 + 3 * s, y + hh + 2 * s)
+      edgeHovered, edgeActive = ui.IsItemHovered(), ui.IsItemActive()
+    end
     if edgeActive and not resizing then
-      -- Pin the displayed widths before changing a shared edge, so the flexible name column cannot absorb the drag.
-      local pinned = {}
-      for j = 1, L.n do pinned[L[j].def.key] = (L[j].x1 - L[j].x0) / s end
-      local next = L[i + 1]
-      resizing = { key = c.key, x = ui.GetMousePos(), width = pinned[c.key], pinned = pinned,
-        next = next and next.def.key, nextWidth = next and pinned[next.def.key],
-        max = pinned[c.key] + (next and (pinned[next.def.key] - next.def.min)
-          or math.max(0, (x1 - 8 * s - e.x1) / s)) }
+      -- The fixed column on each side of the edge changes, from its preferred width; the name, the flexible column,
+      -- takes up the difference and is never given a width of its own.
+      local b = right.def
+      resizing = { key = c.key, x = ui.GetMousePos(), applied = 0 }
+      local lo, hi
+      if c.w then
+        resizing.left, resizing.leftWidth = c.key, widths[c.key] or c.w
+        lo = c.min - resizing.leftWidth
+      else
+        lo = -L.slack
+      end
+      if b.w then
+        resizing.right, resizing.rightWidth = b.key, widths[b.key] or b.w
+        hi = resizing.rightWidth - b.min
+      else
+        hi = L.slack
+      end
+      resizing.lo, resizing.hi = math.min(0, lo), math.max(0, hi)
       dragging = nil
     end
     if edgeHovered or resizing and resizing.key == c.key then
@@ -361,8 +382,7 @@ local function columnHeads(x0, y, x1, s)
     end
     if resizing and resizing.key == c.key then
       local mx = ui.GetMousePos()
-      resizeWidth = math.max(math.min(c.min, resizing.width),
-        math.min(resizing.max, resizing.width + (mx - resizing.x) / s))
+      resizeBy = math.max(resizing.lo, math.min(resizing.hi, (mx - resizing.x) / s))
     end
     local clicked = T.Hit("##aahead" .. c.key, e.x0, y - 2 * s, e.x1 - 3 * s, y + hh + 2 * s)
     local hovered, active = ui.IsItemHovered(), ui.IsItemActive()
@@ -398,17 +418,16 @@ local function columnHeads(x0, y, x1, s)
   end
   -- Apply changes after drawing: the rows and heads keep one layout for the whole frame.
   if resizing then
-    if resizeWidth and resizeWidth ~= (resizing.applied or resizing.width) then
-      if resizing.pinned then
-        for key, w in pairs(resizing.pinned) do widths[key] = w end
-        resizing.pinned = nil
-      end
-      widths[resizing.key] = resizeWidth
-      resizing.applied = resizeWidth
-      if resizing.next then widths[resizing.next] = resizing.nextWidth + resizing.width - resizeWidth end
+    if resizeBy and resizeBy ~= resizing.applied then
+      if resizing.left then widths[resizing.left] = resizing.leftWidth + resizeBy end
+      if resizing.right then widths[resizing.right] = resizing.rightWidth - resizeBy end
+      resizing.applied, resizing.changed = resizeBy, true
       orderVersion = orderVersion + 1
     end
-    if not ui.IsMouseDown(ui.Mouse.Left) then saveWidths(); resizing = nil end
+    if not ui.IsMouseDown(ui.Mouse.Left) then
+      if resizing.changed then saveWidths() end
+      resizing = nil
+    end
   end
   if dragging then
     -- where it would go: the gap before the first head whose middle is right of the mouse
@@ -716,11 +735,10 @@ local function body(x, y, w, h, s)
   ROWS.scale = s
   ROWS.empty = #rows == 0 and "No abilities" or "No ability matches"
   ROWS.emptySub = #rows == 0 and "" or "Clear the search or the filters to see more"
-  -- EndChild's item spacing must fit inside the reserved footer too, even at a small dialog scale.
-  ui.PushStyleVar(ui.StyleVar.ItemSpacing, 0, 0)
   local total, _, shown = P.Rows(WINDOW, LIST, 0, -(lh + 8 * s), ROWS)
-  ui.PopStyleVar()
-  local fx, fy = ui.GetCursorScreenPos()
+  -- The footer starts at the rows' bottom, not after EndChild's item spacing (which need not fit the space kept).
+  local fx, _, _, fy = ui.GetItemRect()
+  ui.SetCursorScreenPos(fx, fy)
   local footerW = ui.GetContentRegionAvail()
   -- The rows have measured this frame's scroll bar and child padding. Draw the fixed heads at those same bounds.
   columnHeads(ROWS.innerX, ly, ROWS.innerX + ROWS.innerW - (reserve or 0) * s, s)
