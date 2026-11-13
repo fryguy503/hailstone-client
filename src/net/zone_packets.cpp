@@ -792,7 +792,9 @@ std::optional<PlayerProfile> decode_player_profile(const AppPacket& p) {
             skip_u32(6);
         }
         v.aa_exp = u32();
-        skip_u32(4);
+        v.last_fellowship_join = u32();
+        v.fellowship_vitality_normal = r.le<std::uint64_t>();
+        v.fellowship_vitality_aa = u32();
         for (auto& c : v.auto_consent) c = u8(); // group, raid, guild autoconsent
         u8();       // unknown
         u32();      // level again

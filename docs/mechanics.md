@@ -1622,3 +1622,30 @@ UseSkill's Cur_HP check, the fall damage report's knock-out floor, the caster's 
 sound's HP. The bare packet value goes below 1 while a geared player still stands, which is why none of these read
 it. The developer stats window compares its computed Max_HP with that sum. The regeneration ticks and the sheet's
 stored HP keep the packet's value (Cur_HP adds the item sum to it).
+
+## Fellowships
+
+Fellowship state comes from the server. Create, invitations, MOTD, leadership, removal, leaving, disbanding,
+XP sharing and camp placement/destruction send native requests and wait for the server's next roster. The
+first roster member leads; members may toggle their own sharing, and the leader may toggle another member's.
+Confirmation dialogs recheck fellowship identity and permission before sending. `/fsay` uses channel 21 and
+requires membership. MQ's `fellowship` spawn filter matches the received roster by name.
+The window opens with the native Ctrl+Shift+F default or the EQ menu's Fellowship entry; both use the same
+window-toggle dispatch, and the shortcut can be changed in Options > Keys.
+
+Both UI packs show sortable members, online/last-seen information, sharing/capped state, a 1023-byte MOTD draft,
+exact normal/AA vitality pools and caps, server-supplied camp kits and the active camp's location and remaining
+duration. The inventory also shows normal/AA vitality bars through native gauge types 147/148 (AA from level 51).
+Their truncated pool/cap ratio follows the original; zero caps draw empty and the computation cannot overflow a
+64-bit pool. Both roster views identify the leader. The server
+enforces all admission, XP, supplies, placement, cooldown and expiration rules. Zoning retains membership while
+clearing pending invitations and kit queries; disconnecting clears the whole state.
+
+The client deliberately supports up to 64 members instead of RoF2's twelve. This is storage and presentation
+capacity, not an entitlement to join: native twelve-slot messages remain accepted, and expanded server messages
+must follow the array layout in `docs/protocol/rof2-packets.md`. The currently inspected server remains limited
+to twelve. Packet and mock-server tests cover 64; live fellowship gameplay is still unverified. Campsite category
+names are loaded from the player's layered `Resources/campsitecategories.txt`; selecting one sends its category
+bit to the server. Kit descriptions use DBString type 0, as the original selection handler does. Missing resources
+keep an all-category filter and the server-supplied kit name. The camp countdown is presentation only: expiration
+does not mutate membership or grant permission to place a camp before the server updates it.

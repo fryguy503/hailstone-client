@@ -58,8 +58,7 @@ const std::vector<int>& listed_commands();
 // alerts (CMD_HISTORIC_ALERTS), real estate's trophies and help windows and
 // leave key (CMD_REAL_ESTATE_TROPHIES_WINDOW, CMD_REAL_ESTATE_HELP_WINDOW, CMD_REAL_ESTATE_LEAVE; its windows and
 // item placement keys stay), the "Upgrade EverQuest" help (OPEN_ETN_HELP), the
-// trading card game (CMD_TOGGLE_TCG) and social sharing (CMD_SOCIAL_SHARE); and the fellowship window
-// (TOGGLE_FELLOWSHIPWIN: EQEmu has no fellowships, the window would stay empty). They keep their index and ini name
+// trading card game (CMD_TOGGLE_TCG) and social sharing (CMD_SOCIAL_SHARE). They keep their index and ini name
 // but get no default key, no row in the keys list and no EQ menu row.
 bool key_command_dropped(int command);
 

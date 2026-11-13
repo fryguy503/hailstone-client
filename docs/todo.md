@@ -6,6 +6,12 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 
 ## 1. Gameplay a player will hit
 
+### Fellowships
+
+- [x] Native membership, invitations, leader actions, MOTD, personal/leader XP toggles, vitality, camp requests, `/fsay`, window key and MQ fellowship search; both UI packs support up to 64 server-supplied members (packet, mock-server and UI tests).
+- [ ] Live acceptance on a fellowship server, including cross-zone invitations/roster updates, XP sharing and camp creation/destruction. The inspected server still serializes twelve slots; expanded rosters need matching server support.
+- [x] Native vitality gauges and inventory bars in both packs, campsite categories loaded from the player's resources, DBString type-0 kit descriptions, gamepad leader markers and a server-expiry countdown. Category masks and description lookup were checked against the original handlers.
+
 ### Combat and spells (do first)
 - [x] Extended chat channels 57..107 and user colours 355..408 for servers that send a later client's chat colours (a Hailstone extension; stock routing and colours unchanged; docs/mechanics.md "Extended chat routing").
 - [x] Missiles: a despawned source or target as DeleteMyMissiles handles it; flying through walls with a target is the original's behaviour (60b1934). Not tested live (no archer).

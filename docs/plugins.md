@@ -283,7 +283,7 @@ Targetable flag on and its body type not 11 (EQEmu's NoTarget, which servers giv
 
 Differences from MQ: `level N`, `afk`, `linkdead`, `buyer`, `exact` and `merc` are Hailstone's own words. This client
 keeps no alert lists, so `nearalert` finds nothing and the other alert words ask nothing (as in MQ with no such
-list). EQEmu has no fellowships, so `fellowship` finds nothing. `los` keeps a spawn while the zone's collision is not
+list). `fellowship` matches the server-supplied roster, including expanded rosters of up to 64 members. `los` keeps a spawn while the zone's collision is not
 loaded. `next` and `prev` (MQ's target cycling) are accepted and do nothing yet.
 
 Not yet:

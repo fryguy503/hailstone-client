@@ -25,7 +25,7 @@ struct RaidState;
 struct GuildState;
 struct XTargetState;
 } // namespace hailstone::game
-namespace hailstone::net { class GameConnection; }
+namespace hailstone::net { class GameConnection; struct FellowshipState; }
 
 namespace hailstone::mq {
 
@@ -70,6 +70,7 @@ struct SearchSources {
     const game::RaidState* raid = nullptr;
     const game::GuildState* guild = nullptr;
     const game::XTargetState* xtargets = nullptr;
+    const net::FellowshipState* fellowship = nullptr;
     std::function<std::optional<bool>(std::uint32_t spawn)> can_see;
 };
 SearchSources sources_of(const net::GameConnection& conn);
