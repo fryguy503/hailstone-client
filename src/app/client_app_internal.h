@@ -845,7 +845,8 @@ private:
     // display.msaa (samples, read at start-up), display.tonemap (auto | none | agx | aces; auto is AgX with the modern
     // lighting and none with the classic), display.exposure (EV), display.shadows (the shadow map's size per cascade,
     // 0 off; the modern lighting only), display.ao (screen-space ambient occlusion, the modern lighting only),
-    // display.distance_blur, display.bloom (0 off .. 1), display.brightness / contrast / gamma (the grade after the
+    // display.distance_blur, display.depth_prepass (the zone's depth pre-pass, the modern lighting only),
+    // display.bloom (0 off .. 1), display.brightness / contrast / gamma (the grade after the
     // tonemap), display.render_scale (percent, 50..100: below 100 FSR 1 upscales) and display.sharpness (0..1). The
     // Options window's Display page sets them (display_option / set_display_option).
     void apply_scene_options() {
@@ -868,6 +869,7 @@ private:
             static_cast<std::uint32_t>(std::clamp(config_.get_int("display.light_shadow_size", 512), 128, 1024));
         scene.ambient_occlusion = config_.get_bool("display.ao", true);
         scene.distance_blur = config_.get_bool("display.distance_blur", true);
+        scene.depth_prepass = config_.get_bool("display.depth_prepass", false);
         scene.color_grade = config_.get_bool("display.color_grade", true);
         scene.bloom = std::clamp(config_float("display.bloom", 0.5f), 0.0f, 1.0f);
         scene.brightness = config_float("display.brightness", 0.0f);

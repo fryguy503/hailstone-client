@@ -243,6 +243,7 @@ void usage() {
         "  --shadows N        shadow map size per cascade (0 off; default 2048), with --lighting modern\n"
         "  --light-shadows N  how many lights cast shadows (0 off; default 8, at most 8), modern\n"
         "  --no-ao            no screen-space ambient occlusion (--lighting modern)\n"
+        "  --depth-prepass    draw the opaque geometry depth-only first, then colour it (--lighting modern)\n"
         "  --bloom N          bloom strength 0..1 (--lighting modern; default 0.5)\n"
         "  --render-scale P   draw the 3D view at P percent of its size (50..100) and upscale it with FSR 1\n"
         "  --sharpness N      FSR 1's sharpening below a render scale of 100, 0..1 (default 0.5)\n"
@@ -423,6 +424,8 @@ Options parse_args(int argc, char** argv) {
             o.flora_distance = std::strtof(argv[++i], nullptr);
         } else if (arg("--no-ao")) {
             o.scene.ambient_occlusion = false;
+        } else if (arg("--depth-prepass")) {
+            o.scene.depth_prepass = true;
         } else if (arg("--weather-age")) {
             need(1);
             o.weather_age = std::strtof(argv[++i], nullptr);
@@ -1328,6 +1331,7 @@ int main(int argc, char** argv) {
                 if (water_color || (opts.modern && !sky_drawn)) zone_renderer->draw_backdrop(*f, vp);
                 if (opts.modern) {
                     // The water reads the opaque world (VkContext::begin_translucent).
+                    zone_renderer->draw_depth(*f, vp, camera.position, draw_view, t);
                     zone_renderer->draw(*f, vp, camera.position, draw_view, t, render::ZonePhase::Opaque);
                     if (neighbours) neighbours->draw(*f, vp, camera.position, draw_view, t, render::ZonePhase::Opaque);
                     if (flora_renderer) flora_drawn = flora_renderer->draw(*f, vp, camera.position, t, frame_lighting, true);

@@ -630,6 +630,7 @@ int ClientApp::run() {
             if (zone_renderer_ && (under_water || (modern && !sky_drawn))) zone_renderer_->draw_backdrop(*f, vp);
             // The modern water reads the opaque world: the zone's other draws wait for VkContext::begin_translucent.
             const render::ZonePhase first = modern ? render::ZonePhase::Opaque : render::ZonePhase::All;
+            if (zone_renderer_) zone_renderer_->draw_depth(*f, vp, camera_.position, lit, t);
             if (zone_renderer_) zone_renderer_->draw(*f, vp, camera_.position, lit, t, first);
             lap.mark("zone draw");
             const bool neighbours = neighbours_ && modern && neighbour_zones_ && in_game;

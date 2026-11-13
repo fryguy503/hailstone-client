@@ -44,6 +44,10 @@ layout(location = 7) out float v_fog;
 layout(location = 8) out vec3 v_point; // the MPL point light term (in v_light; zone.frag's modern light)
 layout(location = 9) out vec3 v_rest;  // the position without the wind: the lights' shadow cubes are drawn so
 
+// The depth pre-pass (zone_depth.frag) and the colour pass are two pipelines over this shader: the position must come
+// out bit for bit the same in both, or the colour pass's equal depth test drops pixels.
+invariant gl_Position;
+
 // The effects' fog (RegionC1 vs_1_1): per
 // vertex, f = clamp((|eye - pos| - FogStart) FogRangeInv fFogRange, 0, fFogRange)
 // with FogRangeInv = 1 / (end - start), fFogRange = 10, and

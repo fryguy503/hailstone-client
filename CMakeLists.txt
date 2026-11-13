@@ -721,6 +721,7 @@ endif()
 hailstone_add_shaders(hailstone_shaders
   shaders/zone.vert
   shaders/zone.frag
+  shaders/zone_depth.frag
   shaders/spawn.vert
   shaders/spawn.frag
   shaders/actor.vert
@@ -1230,6 +1231,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/zoning_vectors_test.cpp
     tests/neighbour_zones_test.cpp
     tests/zone_liquid_test.cpp
+    tests/depth_prepass_test.cpp
     tests/player_placement_test.cpp
     tests/step_landing_test.cpp
     tests/jump_hang_test.cpp

@@ -6,10 +6,12 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <span>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_map>
 
 #include "assets/texture.h"
@@ -169,6 +171,10 @@ constexpr std::uint32_t kReflective = 256;  // modern: the sky reflected (extra.
 constexpr std::uint32_t kMolten = 512;      // modern: RegionLava drawn as lava (its texture's name says so)
 constexpr std::uint32_t kEnergy = 1024;     // modern: RegionLavaH drawn as a glowing field
 constexpr std::uint32_t kEnvMap = 2048;     // modern: slot 2 is the water's own environment (an octahedral map)
+// The depth pre-pass's flags: none. They steer the shading alone, not the position nor the alpha test.
+constexpr std::uint32_t kDepthOnlyFlags = 0;
+constexpr VkColorComponentFlags kAllChannels =
+    VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 static_assert(sizeof(PushConstants) <= 128);
 
 // zone.frag's effects.
@@ -337,6 +343,9 @@ ZoneRenderer::ZoneRenderer(VkContext& vk, PreparedPtr prepared, const std::files
     static std::atomic<std::uint64_t> made{0};
     id_ = ++made;
     behind_ = prepared->behind;
+    // A neighbour zone (behind_) keeps its single pass: its ties go by the draw order (GREATER, first drawn wins),
+    // which an equal test over the pre-pass's written depth would turn around.
+    depth_prepass_ = vk.scene_options().depth_prepass && !behind_;
     upload(*prepared);
     prepared.reset();
     create_descriptors();
@@ -357,7 +366,7 @@ ZoneRenderer::~ZoneRenderer() {
         std::vector<Buffer> buffers;
         VkSampler sampler;
         std::vector<Texture> textures;
-    } o{{shadow_pipeline_, point_shadow_pipeline_, underwater_pipeline_},
+    } o{{shadow_pipeline_, point_shadow_pipeline_, underwater_pipeline_, depth_pipeline_, opaque_equal_pipeline_},
         layout_,
         pool_,
         {set_layout_, scene_layout_},
@@ -1231,6 +1240,18 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     VkSpecializationInfo spec{1, &spec_entry, sizeof(VkBool32), &spec_value};
     stages[1].pSpecializationInfo = &spec;
 
+    VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    info.pNext = &ri;
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vi;
+    info.pInputAssemblyState = &ia;
+    info.pViewportState = &vp;
+    info.pRasterizationState = &rs;
+    info.pMultisampleState = &ms;
+    info.pDynamicState = &ds;
+    info.layout = layout_;
+
     for (int pass = 0; pass < 3; ++pass) {
         spec_value = pass == 0 ? coverage : VK_FALSE;
         ms.alphaToCoverageEnable = spec_value;
@@ -1240,8 +1261,7 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
         // Behind the current zone, a tie goes to the current zone (drawn first).
         dss.depthCompareOp = behind_ ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_GREATER_OR_EQUAL;
         VkPipelineColorBlendAttachmentState ba{};
-        ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-                            VK_COLOR_COMPONENT_A_BIT;
+        ba.colorWriteMask = kAllChannels;
         if (pass == 1) {
             ba.blendEnable = VK_TRUE;
             ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
@@ -1263,28 +1283,57 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
         cb.attachmentCount = 1;
         cb.pAttachments = &ba;
 
-        VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        info.pNext = &ri;
-        info.stageCount = 2;
-        info.pStages = stages;
-        info.pVertexInputState = &vi;
-        info.pInputAssemblyState = &ia;
-        info.pViewportState = &vp;
-        info.pRasterizationState = &rs;
-        info.pMultisampleState = &ms;
         info.pDepthStencilState = &dss;
         info.pColorBlendState = &cb;
-        info.pDynamicState = &ds;
-        info.layout = layout_;
         vk_check(vkCreateGraphicsPipelines(d, vk_.pipeline_cache(), 1, &info, nullptr, &pipelines_[pass]),
                  "vkCreateGraphicsPipelines");
+    }
+
+    // The depth pre-pass: the same vertex shader, a fragment shader that only tests alpha, no colour writes (the
+    // colour attachment stays for alpha-to-coverage), depth written. Its shader is optional: an install without it
+    // draws the single pass.
+    const std::filesystem::path depth_shader = shader_dir / "zone_depth.frag.spv";
+    std::error_code missing;
+    if (depth_prepass_ && !std::filesystem::exists(depth_shader, missing)) {
+        log::warn("depth pre-pass off: no {}", depth_shader.string());
+        depth_prepass_ = false;
+    }
+    if (depth_prepass_) {
+        // Both pipelines take the opaque pass's coverage, so an edge covers the same samples in each.
+        spec_value = coverage;
+        ms.alphaToCoverageEnable = coverage;
+        VkPipelineColorBlendAttachmentState ba{};
+        VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        cb.attachmentCount = 1;
+        cb.pAttachments = &ba;
+        VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+        dss.depthTestEnable = VK_TRUE;
+        info.pDepthStencilState = &dss;
+        info.pColorBlendState = &cb;
+
+        VkShaderModule dfs = create_shader(d, depth_shader);
+        stages[1].module = dfs;
+        ba.colorWriteMask = 0;
+        dss.depthWriteEnable = VK_TRUE;
+        dss.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+        vk_check(vkCreateGraphicsPipelines(d, vk_.pipeline_cache(), 1, &info, nullptr, &depth_pipeline_),
+                 "vkCreateGraphicsPipelines (depth)");
+        vkDestroyShaderModule(d, dfs, nullptr);
+
+        // The colour pass over it: the depth is already the nearest, so test equal and write none.
+        stages[1].module = fs;
+        ba.colorWriteMask = kAllChannels;
+        dss.depthWriteEnable = VK_FALSE;
+        dss.depthCompareOp = VK_COMPARE_OP_EQUAL;
+        vk_check(vkCreateGraphicsPipelines(d, vk_.pipeline_cache(), 1, &info, nullptr, &opaque_equal_pipeline_),
+                 "vkCreateGraphicsPipelines (equal)");
     }
     vkDestroyShaderModule(d, vs, nullptr);
     vkDestroyShaderModule(d, fs, nullptr);
 }
 
 template <class Keep, class First>
-void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, bool shadow, Keep&& keep, First&& first) {
+void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first) {
     // The draw's box first: a draw wholly out of view tests none of its chunks. Neighbouring chunks lie end to end in
     // the index buffer (build), so a run of kept ones is one draw. Skipping chunks keeps the order of the rest, which
     // the blended draws need.
@@ -1301,8 +1350,13 @@ void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, bool shadow, 
             started = true;
         }
         vkCmdDrawIndexed(cmd, run_count, 1, run_first, 0, 0);
-        (shadow ? drawn_.shadow_triangles : drawn_.triangles) += run_count / 3;
-        ++(shadow ? drawn_.shadow_calls : drawn_.calls);
+        if (counted == Counted::Scene) {
+            drawn_.triangles += run_count / 3;
+            ++drawn_.calls;
+        } else if (counted == Counted::Shadow) {
+            drawn_.shadow_triangles += run_count / 3;
+            ++drawn_.shadow_calls;
+        }
         run_count = 0;
     };
     for (std::uint32_t i = d.first_chunk; i < d.first_chunk + d.chunk_count; ++i) {
@@ -1319,9 +1373,11 @@ void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, bool shadow, 
     flush();
 }
 
-void ZoneRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
-                        const game::ViewDistance& view, double time_seconds, ZonePhase phase) {
-    if (draws_.empty()) return;
+bool ZoneRenderer::modern_lighting() const { return scene_.lighting.params.x > 0.5f; }
+
+std::uint64_t ZoneRenderer::begin_draw(const FrameInfo& frame, const glm::mat4& view_proj,
+                                       const glm::vec3& camera_pos, const game::ViewDistance& view,
+                                       double time_seconds) {
     VkCommandBuffer cmd = frame.cmd;
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer_.buffer, &offset);
@@ -1332,12 +1388,42 @@ void ZoneRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, cons
     scene_.camera_pos = glm::vec4(camera_pos, 1.0f);
     scene_.fog = glm::vec4(view.fog_start, view.fog_end, effect_scroll_seconds(time_ms), view.fog_density);
     upload_scene(frame.frame_slot);
-    VkDescriptorSet sets[3] = {set_, scene_sets_[frame.frame_slot], vk_.shadow_set()};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
+    const VkDescriptorSet sets[] = {set_, scene_sets_[frame.frame_slot], vk_.shadow_set()};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, static_cast<std::uint32_t>(std::size(sets)),
+                            sets, 0, nullptr);
+    return time_ms;
+}
+
+void ZoneRenderer::bind_draw(VkCommandBuffer cmd, const Draw& d, std::uint32_t flags, std::uint64_t time_ms) {
+    vkCmdSetCullMode(cmd, d.two_sided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT);
+    vkCmdSetFrontFace(cmd, d.front_ccw ? opposite(kEqFrontFace) : kEqFrontFace);
+    const std::size_t frame_index = texture_frame(time_ms, d.frame_delay_ms, d.frame_slots.size());
+    PushConstants pc{};
+    pc.tex = {d.frame_slots[frame_index], d.extra_slots[0], d.extra_slots[1], d.extra_slots[2]};
+    // The heightmap tiles bind their third detail map in slot 4.
+    pc.tex2 = {d.extra_slots[3], d.mode, flags, d.maps};
+    pc.params = glm::vec4(d.alpha_ref, d.opacity, d.param_z, 0.0f);
+    pc.slide = d.slide;
+    pc.extra = d.extra;
+    pc.extra2 = d.extra2;
+    pc.extra3 = d.extra3;
+    pc.extra4 = d.extra4;
+    vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+}
+
+void ZoneRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
+                        const game::ViewDistance& view, double time_seconds, ZonePhase phase) {
+    if (draws_.empty()) return;
+    VkCommandBuffer cmd = frame.cmd;
+    const std::uint64_t time_ms = begin_draw(frame, view_proj, camera_pos, view, time_seconds);
 
     // The modern water draws blended after the opaque world, reading begin_translucent's copies when split. The
     // regions' detail passes belong to the ground under it: blended, but with the opaque world (after its draws).
-    const bool modern = scene_.lighting.params.x > 0.5f;
+    const bool modern = modern_lighting();
+    // The equal pipeline only where draw_depth wrote this frame's depth (a caller that draws without it, the model
+    // viewer, would otherwise test equal against an empty buffer and lose the world).
+    const bool prepassed = depth_prepass_ && modern && depth_drawn_;
+    if (phase != ZonePhase::Translucent) depth_drawn_ = false;
     auto modern_water = [&](const Draw& d) { return modern && d.liquid == Liquid::Water; };
     auto late = [&](const Draw& d) {
         return (d.pass != Pass::Opaque && d.mode != kWldDetail) || modern_water(d);
@@ -1358,37 +1444,45 @@ void ZoneRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, cons
     const Frustum frustum = frustum_from(view_proj);
     auto seen = [&](const Chunk& c) { return box_in_frustum(frustum, Box{c.box_min, c.box_max}); };
 
-    PushConstants pc{};
-    int bound = -1;
+    VkPipeline bound = VK_NULL_HANDLE;
     for (const Draw* draw : order) {
         const Draw& d = *draw;
-        draw_chunks(cmd, d, false, seen, [&] {
+        draw_chunks(cmd, d, Counted::Scene, seen, [&] {
             int pass = modern_water(d) ? static_cast<int>(Pass::Blended) : static_cast<int>(d.pass);
-            if (pass != bound) {
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_[pass]);
-                bound = pass;
+            VkPipeline pipeline = prepassed && in_depth_prepass(d) ? opaque_equal_pipeline_ : pipelines_[pass];
+            if (pipeline != bound) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                bound = pipeline;
             }
-            const std::size_t frame_index = texture_frame(time_ms, d.frame_delay_ms, d.frame_slots.size());
-            vkCmdSetCullMode(cmd, d.two_sided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT);
-            vkCmdSetFrontFace(cmd, d.front_ccw ? opposite(kEqFrontFace) : kEqFrontFace);
-            pc.tex = {d.frame_slots[frame_index], d.extra_slots[0], d.extra_slots[1], d.extra_slots[2]};
             std::uint32_t flags = (lighting_ == VertexLighting::None || !d.lit ? kUnlit : 0u) |
                                   (d.fog ? 0u : kNoFog) |
                                   (d.multipass && lighting_ != VertexLighting::None ? kMultiPass : 0u) |
                                   (d.liquid == Liquid::Water ? kWaterSurface | copies : 0u) |
                                   (d.liquid == Liquid::Lava ? kLavaSurface : 0u) | d.surface;
-            // The heightmap tiles bind their third detail map in slot 4.
-            pc.tex2 = {d.extra_slots[3], d.mode, flags, d.maps};
-            pc.params = glm::vec4(d.alpha_ref, d.opacity, d.param_z, 0.0f);
-            pc.slide = d.slide;
-            pc.extra = d.extra;
-            pc.extra2 = d.extra2;
-            pc.extra3 = d.extra3;
-            pc.extra4 = d.extra4;
-            vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
-                               &pc);
+            bind_draw(cmd, d, flags, time_ms);
         });
     }
+}
+
+void ZoneRenderer::draw_depth(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
+                              const game::ViewDistance& view, double time_seconds) {
+    // The modern lighting's: the classic one has no per-pixel shading to save.
+    if (!depth_prepass_ || !modern_lighting() || draws_.empty()) return;
+    VkCommandBuffer cmd = frame.cmd;
+    const std::uint64_t time_ms = begin_draw(frame, view_proj, camera_pos, view, time_seconds);
+    const Frustum frustum = frustum_from(view_proj);
+    auto seen = [&](const Chunk& c) { return box_in_frustum(frustum, Box{c.box_min, c.box_max}); };
+    bool bound = false;
+    for (const auto& d : draws_) {
+        if (d.flame && hide_flames_) continue;
+        if (!in_depth_prepass(d)) continue;
+        draw_chunks(cmd, d, Counted::None, seen, [&] {
+            if (!bound) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline_);
+            bound = true;
+            bind_draw(cmd, d, kDepthOnlyFlags, time_ms);
+        });
+    }
+    depth_drawn_ = true;
 }
 
 void ZoneRenderer::upload_scene(std::uint32_t frame_slot) {
@@ -1507,7 +1601,7 @@ void ZoneRenderer::draw_shadow(const FrameInfo& frame, std::uint32_t cascade) {
     pc.tex2.w = cascade;
     // The solid casters first, a cell at a time whatever their material: they need no texture.
     if (cascade != kWaterLayer)
-        draw_chunks(cmd, solid_, true, seen, [&] {
+        draw_chunks(cmd, solid_, Counted::Shadow, seen, [&] {
             vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                &pc);
         });
@@ -1522,7 +1616,7 @@ void ZoneRenderer::draw_shadow(const FrameInfo& frame, std::uint32_t cascade) {
             // shelter thin lines of ground.
             if (cascade == kCoverLayer) continue;
         }
-        draw_chunks(cmd, d, true, seen, [&] {
+        draw_chunks(cmd, d, Counted::Shadow, seen, [&] {
             pc.tex.x = d.frame_slots[0];
             pc.params = glm::vec4(d.alpha_ref, 1.0f, 0.0f, 0.0f);
             vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),

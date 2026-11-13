@@ -132,6 +132,10 @@ public:
     // The chunks in `view_proj`'s frustum.
     void draw(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
               const game::ViewDistance& view, double time_seconds, ZonePhase phase = ZonePhase::All);
+    // The opaque and alpha-tested geometry into the scene's depth buffer, before draw's opaque phase
+    // (SceneOptions::depth_prepass): the colour pass then tests equal and writes no depth.
+    void draw_depth(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
+                    const game::ViewDistance& view, double time_seconds);
     // The opaque and alpha-tested geometry into shadow cascade `cascade`, between VkContext::begin_shadow_cascade and
     // end_shadow_cascade; the cascades come from the last set_lighting. With kCoverLayer, the cover map
     // (render/cover_map.h): the opaque geometry only; with kWaterLayer, the water map: the water surfaces only. Only
@@ -205,6 +209,11 @@ private:
     // Whether every shadow pass but the water map draws `d` without its texture: solid (opaque, not alpha-tested), not
     // a flame. These go into solid_.
     static bool casts_untextured(const Draw& d) { return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f); }
+    // Whether the depth pre-pass draws `d`, and the colour pass then tests it equal: the opaque pass's draws but the
+    // water, which the modern lighting draws blended after VkContext::begin_translucent.
+    static bool in_depth_prepass(const Draw& d) { return d.pass == Pass::Opaque && d.liquid != Liquid::Water; }
+    // The modern lighting (set_lighting), not the classic.
+    bool modern_lighting() const;
 
     void upload(Prepared& prepared);
     void create_descriptors();
@@ -213,6 +222,12 @@ private:
     void create_shadow_pipeline(const std::filesystem::path& shader_dir, bool point);
     void create_underwater_pipeline(const std::filesystem::path& shader_dir);
     void upload_scene(std::uint32_t frame_slot);
+    // What draw and draw_depth share: the geometry and the sets bound, the frame's scene uploaded. Returns the time
+    // in milliseconds.
+    std::uint64_t begin_draw(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
+                             const game::ViewDistance& view, double time_seconds);
+    // Draw `d`'s own state: its culling and its push constants, with zone.frag's `flags`.
+    void bind_draw(VkCommandBuffer cmd, const Draw& d, std::uint32_t flags, std::uint64_t time_ms);
 
     VkContext& vk_;
     std::uint64_t id_ = 0;
@@ -249,8 +264,11 @@ private:
     Draw solid_;
     // Records draw `d`'s chunks that `keep` (a predicate on a Chunk) passes, a run of neighbouring chunks in one
     // vkCmdDrawIndexed; `first` runs once before the first, so a draw with nothing to show sets up nothing.
+    // `counted`: where its triangles and calls go in drawn_. The depth pre-pass counts none: the colour pass draws
+    // the same triangles.
+    enum class Counted : std::uint8_t { Scene, Shadow, None };
     template <class Keep, class First>
-    void draw_chunks(VkCommandBuffer cmd, const Draw& d, bool shadow, Keep&& keep, First&& first);
+    void draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first);
     ZoneDrawn drawn_;
     // The zone's lights for the modern lighting's per-pixel pass (render/light_grid.h): the lights with the grid's
     // header, the cells, the cells' light numbers (zone.frag's set 1, bindings 1 to 3).
@@ -264,6 +282,12 @@ private:
     VkDescriptorSet set_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipelines_[3]{};
+    // SceneOptions::depth_prepass: the depth-only pipeline, and the opaque colour pipeline that tests equal and writes
+    // no depth (the pre-pass wrote it).
+    bool depth_prepass_ = false;
+    bool depth_drawn_ = false; // draw_depth wrote this frame's depth: the next opaque draw may test equal
+    VkPipeline depth_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline opaque_equal_pipeline_ = VK_NULL_HANDLE;
     bool behind_ = false; // ZoneRenderOptions::behind
     VkPipeline shadow_pipeline_ = VK_NULL_HANDLE;
     VkPipeline point_shadow_pipeline_ = VK_NULL_HANDLE;
