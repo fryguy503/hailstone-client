@@ -882,7 +882,8 @@ add_library(hailstone_texpack STATIC
   src/texpack/texpack.cpp
   src/texpack/upscale.cpp
   src/texpack/pack_job.cpp
-  src/texpack/model_catalog.cpp)
+  src/texpack/model_catalog.cpp
+  src/texpack/materials.cpp)
 target_compile_options(hailstone_texpack PRIVATE ${HAILSTONE_WARNINGS})
 target_link_libraries(hailstone_texpack PUBLIC hailstone_engine PRIVATE hailstone_bc7enc)
 target_link_libraries(texpack PRIVATE hailstone_texpack)
@@ -1209,6 +1210,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/player_menu_test.cpp
     tests/connection_state_test.cpp
     tests/texpack_test.cpp
+    tests/texpack_materials_test.cpp
     tests/addon_tool_test.cpp
   )
   target_include_directories(hailstone_tests PRIVATE tests sdk)

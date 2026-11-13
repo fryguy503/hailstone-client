@@ -1075,6 +1075,34 @@ At run time:
 - `display.material_maps` (on by default) and the viewer's `--no-material-maps` turn the maps off.
 - Every viewer, the model viewer too, takes `--textures`.
 
+### Photo materials
+
+A built pack can rebuild a classic zone's hand-painted ground from tiling photo textures (Poly Haven's, CC0) instead
+of upscaling it (`texpack/materials.h`; Hailstone Texture Studio's "Photo ground materials"). The rules are data the
+studio ships: `materials.txt` names each material (its Poly Haven asset, the metres one repeat shows, how much it is
+magnified, its detail strength, how much of the original's painted shading it keeps, and its colour in the art), and
+a file per zone (`qeytoqrg.txt`) gives each of the zone's textures one material or two
+(`hhdrockgrass1 = grass greyrock`; `sharp` for small shapes such as a path's flagstones).
+
+- **Scale:** each texture's world units per repeat are measured on the zone's ground (the area-weighted median over
+  its triangles). A material repeats a power of two times across a tile, so Qeynos Hills' 56-unit grass tile and its
+  108-unit transitions show the grass at one scale. An EQ unit is taken as a foot.
+- **Two materials:** the original is split by a 2-means on its blurred chromaticity, seeded with the two materials'
+  colours (brightness barely counts, so the art's painted shadows are not taken for grass). The photos are blended
+  along that split, the edge moved by their displacement maps so it follows stones and soil.
+- **Detail transfer:** the result keeps the original's colour above about 6 of its texels (1.5 for `sharp`) and takes
+  only the photos' luminance detail below that, with part of the original's own painted shading. A rebuilt tile so
+  keeps the zone's palette and still meets the tiles round it, rebuilt or not; blurs and resizes wrap at the edges.
+- **Files:** the colour, normal and roughness maps go through the pack's encoder (BC7, BC5, BC4 with mips), at 512 x
+  the pack's scale on a side (1024 for a 2x pack). A texture with alpha or a variant, or not square, is upscaled.
+- **Resuming:** `PACK/materials.txt` records the rules each tile was made by; a build makes a tile again when its
+  rules change, and gives a texture back to the upscaler when the rules drop it.
+- **Fetching:** the 1K JPEG diffuse, `nor_dx`, rough and disp maps of each asset from Poly Haven's download host, once,
+  into the studio's cache.
+
+Only Qeynos Hills has rules so far. Seen in the zone viewer, not in a live session: the layout and seams hold; the
+photos' repeat still shows on large flat areas.
+
 ## Name plates
 
 NPC names are drawn in the spawn's consider colour (`game::con_rgb` of `game::con_level`, the colour Hailstone's target plate already uses) instead of this client's yellow (255, 220, 120). Mercenaries keep their blue and corpses stay grey, while other players' names stay light blue. This is a deliberate difference (Hailstone option `con_name_colour`, Options > Display, `hailstone.ini` `display.con_name_colour`, default on); turning it off restores the yellow for NPC names. The target keeps its consider colour in both settings.
