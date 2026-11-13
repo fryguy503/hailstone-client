@@ -9,7 +9,7 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 ### Fellowships
 
 - [x] Native membership, invitations, leader actions, MOTD, personal/leader XP toggles, vitality, camp requests, `/fsay`, window key and MQ fellowship search; both UI packs support up to 64 server-supplied members (packet, mock-server and UI tests).
-- [ ] Live acceptance on a fellowship server, including cross-zone invitations/roster updates, XP sharing and camp creation/destruction. The inspected server still serializes twelve slots; expanded rosters need matching server support.
+- [ ] Live acceptance on a fellowship server, including cross-zone invitations/roster updates, XP sharing and camp creation/destruction. Stock EQEmu sends no fellowship packets; EQEmu PR #5134 (unmerged) serializes twelve slots, so expanded rosters need matching server support.
 - [x] Native vitality gauges and inventory bars in both packs, campsite categories loaded from the player's resources, DBString type-0 kit descriptions, gamepad leader markers and a server-expiry countdown. Category masks and description lookup were checked against the original handlers.
 
 ### Combat and spells (do first)

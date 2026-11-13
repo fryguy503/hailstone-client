@@ -13,6 +13,7 @@
 #include "game/fellowship_categories.h"
 #include "game/zone_names.h"
 #include "net/game_connection.h"
+#include "platform/local_time.h"
 
 namespace hailstone::app {
 
@@ -216,8 +217,9 @@ public:
 
 private:
     void sync(EqHost& host) {
-        const auto path = host.game ? host.game->find("Resources/campsitecategories.txt") : std::nullopt;
-        if (!categories_loaded_ || category_game_ != host.game || category_path_ != path) load_categories(host);
+        // Called for every child, list and combo each frame: the category file is
+        // looked up again only when the game folder changes or the window opens.
+        if (!categories_loaded_ || category_game_ != host.game) load_categories(host);
         if (!host.conn) return;
         const auto& f = host.conn->fellowship();
         if (f.id != fellowship_id_ || f.motd != received_motd_) {
@@ -246,7 +248,6 @@ private:
         }
         categories_loaded_ = true;
         category_game_ = host.game;
-        category_path_ = host.game ? host.game->find("Resources/campsitecategories.txt") : std::nullopt;
     }
     std::uint32_t category_mask() const {
         const auto selected = filter_.selected;
@@ -270,8 +271,7 @@ private:
     }
     static std::string last_on(std::uint32_t t) {
         if (!t) return {};
-        const std::time_t stamp = static_cast<std::time_t>(t);
-        const auto* date = std::localtime(&stamp);
+        const auto date = platform::local_time(static_cast<std::time_t>(t));
         return date ? std::format("{:02d}/{:02d}/{:02d}", date->tm_mon + 1, date->tm_mday, date->tm_year % 100) : "";
     }
     ListData members_, kits_;
@@ -282,7 +282,6 @@ private:
     ComboData filter_;
     std::vector<game::FellowshipCategory> categories_;
     const GameDir* category_game_ = nullptr;
-    std::optional<std::filesystem::path> category_path_;
     bool categories_loaded_ = false;
     bool show_all_ = false;
 };

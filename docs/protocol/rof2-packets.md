@@ -853,7 +853,8 @@ u32 checksum (eq_crc32 of bytes [8, size−1)), u32 size−9, 2×u32; u8 gender,
 ### Fellowships
 
 `net/fellowship_packets.*` handles the native fellowship messages independently of whether a server implements
-them. All six routes also have generated symbolic opcode mappings. Servers without fellowships keep an empty
+them. Stock EQEmu does not send them; EQEmu PR #5134 "TOB: Fellowships" (open, unmerged, GPL-3, read only as a
+protocol reference) does. All six routes also have generated symbolic opcode mappings. Servers without fellowships keep an empty
 state. Requests use opcode `0x7121` with a 1076-byte body:
 action u32 at 0, target u32 at 4, a NUL-terminated MOTD in the 1024-byte field at 20, and camp type u32 at
 1064. Unused fields are zero. Actions are create 1, MOTD 2, accept 3, invite target spawn 5, remove character 6,
@@ -861,10 +862,15 @@ promote character 7, create camp 8, destroy camp 9, leave 10, disband 11 and tog
 Requests never change membership locally. The server enforces its member limit and validates leadership,
 sharing, invitations, cooldowns, camp supplies and placement requirements.
 
-The invitation opcode is `0x62ab`; the inviter spawn is at 12 (the server's equivalent at 4 is accepted as a
-fallback). The dialog expires after 100 seconds. Dismissing it sends nothing: native action 4 is decline, but
-the referenced server also uses 4 for legacy camp destruction and has no explicit decline handler. Its pending
-invitation expires on the server. Acceptance sends action 3 with no target argument.
+The invitation opcode is `0x62ab`, 0x434 bytes; `Handle_Opcode_0x62ab` @0x667db0 reads only the inviter spawn at
+12 and shows no dialog when that spawn is not found. The dialog expires after 100 seconds. Acceptance sends
+action 3 and declining action 4, with no target argument (`Send_Opcode_0x7121` @0x668710). PR #5134 reads 4 as
+a legacy camp destruction and has no decline handler; the client still sends what RoF2 sends.
+
+**Extension beyond RoF2:** a 1080-byte invitation (PR #5134's form: action 5 at 0, inviter at 4) is accepted
+too. Its inviter is taken from 12 when set, else from 4, and when that spawn is not in the zone the dialog is
+shown without a name, since such a server may invite across zones. The 0x434-byte form never takes 4 and never
+shows a nameless dialog.
 
 Roster opcode `0x6e4d`, version 5, has a 1100-byte header: version, fellowship id, name[64], MOTD[1024], count.
 Each of the twelve native member records is 84 bytes: character id u32, name[64], zone u32, level u32, class u32,
@@ -875,11 +881,11 @@ bytes; the 2532-byte roster without camp is also accepted. A matching roster tha
 membership; an unrelated roster cannot replace or clear it. Zone changes preserve membership until the next
 server roster, but discard pending invitations and kit queries. A session end clears the state.
 
-**Deliberate capacity extension:** all member arrays may instead have 13 through 64 slots. Capacity is inferred
+**Extension beyond RoF2 (capacity):** all member arrays may instead have 13 through 64 slots. Capacity is inferred
 from exact length: `1104 + 119 * slots` without camp, `1136 + 119 * slots` with camp. Count cannot exceed capacity;
 duplicate identities, unknown versions, malformed lengths and more than 64 slots are rejected. There is no new
 admission rule or client-side 12-member cap. A server sending expanded rosters must expand every array using
-this contract. The inspected server currently hard-caps membership and native serialization at twelve; raising
+this contract. PR #5134 hard-caps membership and native serialization at twelve; raising
 its rule alone does not enable larger fellowships. Expanded rosters are covered by synthetic tests, not a live
 64-member server session.
 

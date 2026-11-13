@@ -167,12 +167,32 @@ TEST_CASE("fellowship packets: camp list bounds invitation identity and vitality
     CHECK_FALSE(decode_fellowship_kits(p));
     put32(p, 0, 0xffffffff);
     CHECK_FALSE(decode_fellowship_kits(p));
-    p = AppPacket(kOpFellowshipInvite, std::vector<std::byte>(1080));
-    put32(p, 0, 5); put32(p, 4, 777);
+    // RoF2's 0x434 bytes: only the inviter at 12 counts (Handle_Opcode_0x62ab).
+    p = AppPacket(kOpFellowshipInvite, std::vector<std::byte>(0x434));
+    put32(p, 0, 5); put32(p, 12, 778);
     auto invite = decode_fellowship_invite(p);
     REQUIRE(invite);
+    CHECK(invite->inviter_id == 778);
+    CHECK_FALSE(invite->extended);
+    put32(p, 0, 0); // RoF2 does not read the action word
+    REQUIRE(decode_fellowship_invite(p));
+    put32(p, 4, 777); put32(p, 12, 0); // the extended form's field at 4 is not RoF2's
+    CHECK_FALSE(decode_fellowship_invite(p));
+    // Extension beyond RoF2: the 1080-byte form, inviter at 4 unless 12 is set.
+    p = AppPacket(kOpFellowshipInvite, std::vector<std::byte>(1080));
+    put32(p, 0, 5); put32(p, 4, 777);
+    invite = decode_fellowship_invite(p);
+    REQUIRE(invite);
     CHECK(invite->inviter_id == 777);
-    put32(p, 4, 0);
+    CHECK(invite->extended);
+    put32(p, 12, 779);
+    REQUIRE(decode_fellowship_invite(p));
+    CHECK(decode_fellowship_invite(p)->inviter_id == 779);
+    put32(p, 4, 0); put32(p, 12, 0);
+    CHECK_FALSE(decode_fellowship_invite(p));
+    put32(p, 4, 777); put32(p, 0, 4);
+    CHECK_FALSE(decode_fellowship_invite(p));
+    p.data.resize(1078); put32(p, 0, 5);
     CHECK_FALSE(decode_fellowship_invite(p));
     ByteWriter vit;
     vit.le<std::uint64_t>(0x123456789abcdef0);
@@ -194,7 +214,8 @@ TEST_CASE("fellowship packets: received opcodes exercise valid seeds through tru
     // The generic decoder corpus uses an unrelated opcode. Retain the received
     // opcode here so malformed payloads also exercise the gated parsers' bodies.
     const std::vector<AppPacket> seeds = {roster(), roster(64, 64),
-        test::fellowship_fixture::invite(), test::fellowship_fixture::kits(), test::fellowship_fixture::vitality()};
+        test::fellowship_fixture::invite(), test::fellowship_fixture::extended_invite(),
+        test::fellowship_fixture::kits(), test::fellowship_fixture::vitality()};
     const auto feed = [](const AppPacket& p) {
         switch (p.opcode) {
         case kOpFellowshipRoster: (void)decode_fellowship_roster(p); break;

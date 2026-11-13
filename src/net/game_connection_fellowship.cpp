@@ -59,9 +59,14 @@ bool GameConnection::handle_fellowship(const AppPacket& p) {
     }
     if (p.opcode == kOpFellowshipInvite) {
         if (auto invite = decode_fellowship_invite(p); invite && !fellowship_.active() && state_ == ConnectionState::InZone) {
+            const auto it = world_.spawns.find(invite->inviter_id);
+            // Handle_Opcode_0x62ab @0x667db0 shows no dialog when GetSpawnByID
+            // fails, and leaves any earlier one alone. Extension beyond RoF2:
+            // only the 1080-byte form (a server built for a cross-zone invite)
+            // gets a dialog without the inviter's name.
+            if (it == world_.spawns.end() && !invite->extended) return true;
             reset_fellowship(true);
-            if (auto it = world_.spawns.find(invite->inviter_id); it != world_.spawns.end())
-                invite->inviter_name = it->second.name;
+            if (it != world_.spawns.end()) invite->inviter_name = it->second.name;
             fellowship_.invite = std::move(*invite);
             // The native invite has no lifetime field. Bound unanswered offers to
             // 100 seconds, as the native dialog; the server independently
@@ -185,10 +190,13 @@ void GameConnection::answer_fellowship_invite(bool accept) {
             return state_ == ConnectionState::InZone && !fellowship_.active() && !fellowship_.invite &&
                 fellowship_revision_ == revision && session_now_ms() < expires;
         });
+    } else if (!accept && valid && state_ == ConnectionState::InZone) {
+        // Send_Opcode_0x7121 @0x668710: the invitation dialog's no sends action 4.
+        send_zone(encode_fellowship_request(FellowshipAction::Decline), true, [this, revision, expires] {
+            return state_ == ConnectionState::InZone && !fellowship_.invite &&
+                fellowship_revision_ == revision && session_now_ms() < expires;
+        });
     }
-    // RoF2 declines with action 4, but the current server also interprets it
-    // as legacy camp destruction. Local dismissal safely leaves invite expiry
-    // to the server instead of transmitting that ambiguous action.
 }
 
 } // namespace hailstone::net

@@ -25,8 +25,17 @@ inline net::AppPacket roster(std::uint32_t count = 2, std::size_t capacity = 12,
     return net::AppPacket(net::kOpFellowshipRoster, w.take());
 }
 
+// RoF2's 0x434-byte invitation: the inviter spawn at 12.
 inline net::AppPacket invite(std::uint32_t inviter = 333) {
-    ByteWriter w; w.le<std::uint32_t>(5); w.le(inviter); w.zeros(1072);
+    ByteWriter w; w.le<std::uint32_t>(5); w.zeros(8); w.le(inviter);
+    w.zeros(net::kNativeFellowshipInviteSize - 16);
+    return net::AppPacket(net::kOpFellowshipInvite, w.take());
+}
+
+// The 1080-byte form (an extension beyond RoF2): the inviter at 4, zero at 12.
+inline net::AppPacket extended_invite(std::uint32_t inviter = 333) {
+    ByteWriter w; w.le<std::uint32_t>(5); w.le(inviter);
+    w.zeros(net::kExtendedFellowshipInviteSize - 8);
     return net::AppPacket(net::kOpFellowshipInvite, w.take());
 }
 

@@ -1,7 +1,9 @@
 #pragma once
 
-// Native RoF2 fellowship messages. The roster ceiling of 64 is a deliberate
-// extension; membership and gameplay limits remain the server's decision.
+// Native RoF2 fellowship messages. Extensions beyond RoF2 (a server may offer
+// more; a RoF2 server's packets behave exactly as in RoF2): rosters of 13 to 64
+// members, and the 1080-byte invitation form. Membership and gameplay limits
+// remain the server's decision.
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -13,8 +15,13 @@
 
 namespace hailstone::net {
 
+// Extension beyond RoF2: RoF2's roster has exactly twelve slots.
 inline constexpr std::size_t kMaxFellowshipMembers = 64;
 inline constexpr std::size_t kNativeFellowshipMembers = 12;
+// RoF2's invitation body (Handle_Opcode_0x62ab @0x667db0 reads the inviter at 12).
+inline constexpr std::size_t kNativeFellowshipInviteSize = 0x434;
+// Extension beyond RoF2: the invitation of EQEmu PR #5134 (unmerged), 1080 bytes.
+inline constexpr std::size_t kExtendedFellowshipInviteSize = 1080;
 inline constexpr std::uint16_t kOpFellowshipRequest = 0x7121;
 inline constexpr std::uint16_t kOpFellowshipInvite = 0x62ab;
 inline constexpr std::uint16_t kOpFellowshipRoster = 0x6e4d;
@@ -23,7 +30,7 @@ inline constexpr std::uint16_t kOpCampsiteKitList = 0x074d;
 inline constexpr std::uint16_t kOpFellowshipVitality = 0x2cc6;
 
 enum class FellowshipAction : std::uint32_t {
-    Create = 1, Motd = 2, Accept = 3, Invite = 5, Remove = 6,
+    Create = 1, Motd = 2, Accept = 3, Decline = 4, Invite = 5, Remove = 6,
     Promote = 7, CreateCamp = 8, DestroyCamp = 9, Leave = 10,
     End = 11, ToggleSharing = 12
 };
@@ -47,6 +54,8 @@ struct FellowshipKit {
 struct FellowshipInvite {
     std::uint32_t inviter_id = 0;
     std::string inviter_name;
+    // The 1080-byte form (an extension beyond RoF2); false for RoF2's 0x434 bytes.
+    bool extended = false;
 };
 struct FellowshipVitality {
     std::uint64_t normal = 0, normal_cap = 0;

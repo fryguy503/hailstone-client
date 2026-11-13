@@ -1626,10 +1626,13 @@ stored HP keep the packet's value (Cur_HP adds the item sum to it).
 ## Fellowships
 
 Fellowship state comes from the server. Create, invitations, MOTD, leadership, removal, leaving, disbanding,
-XP sharing and camp placement/destruction send native requests and wait for the server's next roster. The
+XP sharing and camp placement/destruction send native requests and wait for the server's next roster. Stock
+EQEmu does not send RoF2 fellowship packets, so against it the window stays empty. The
 first roster member leads; members may toggle their own sharing, and the leader may toggle another member's.
-Confirmation dialogs recheck fellowship identity and permission before sending. `/fsay` uses channel 21 and
-requires membership. MQ's `fellowship` spawn filter matches the received roster by name.
+Confirmation dialogs recheck fellowship identity and permission before sending. An invitation shows its dialog
+only when the inviter's spawn is known, as `Handle_Opcode_0x62ab` @0x667db0 does; yes sends action 3 and no
+action 4 (`Send_Opcode_0x7121` @0x668710). `/fsay` uses channel 21 and requires membership (`FellowshipSay`
+@0x524330: eqstr 4573 in colour 342 otherwise). MQ's `fellowship` spawn filter matches the received roster by name.
 The window opens with the native Ctrl+Shift+F default or the EQ menu's Fellowship entry; both use the same
 window-toggle dispatch, and the shortcut can be changed in Options > Keys.
 
@@ -1641,10 +1644,13 @@ Their truncated pool/cap ratio follows the original; zero caps draw empty and th
 enforces all admission, XP, supplies, placement, cooldown and expiration rules. Zoning retains membership while
 clearing pending invitations and kit queries; disconnecting clears the whole state.
 
-The client deliberately supports up to 64 members instead of RoF2's twelve. This is storage and presentation
-capacity, not an entitlement to join: native twelve-slot messages remain accepted, and expanded server messages
-must follow the array layout in `docs/protocol/rof2-packets.md`. The currently inspected server remains limited
-to twelve. Packet and mock-server tests cover 64; live fellowship gameplay is still unverified. Campsite category
+**Extension beyond RoF2:** the client supports up to 64 members instead of RoF2's twelve. This is storage and
+presentation capacity, not an entitlement to join: twelve-slot messages are read exactly as RoF2 reads them, and
+expanded server messages must follow the array layout in `docs/protocol/rof2-packets.md`. EQEmu PR #5134
+"TOB: Fellowships" (open, unmerged; a protocol reference only) remains limited to twelve. **Extension beyond
+RoF2:** a 1080-byte invitation (that PR's form, inviter at 4 when 12 is zero) is also accepted, and for it alone
+a dialog without the inviter's name is shown when the inviter is not in the zone; the RoF2 0x434-byte invitation
+from an unknown spawn shows nothing, as in RoF2. Packet and mock-server tests cover 64; live fellowship gameplay is still unverified. Campsite category
 names are loaded from the player's layered `Resources/campsitecategories.txt`; selecting one sends its category
 bit to the server. Kit descriptions use DBString type 0, as the original selection handler does. Missing resources
 keep an all-category filter and the server-supplied kit name. The camp countdown is presentation only: expiration

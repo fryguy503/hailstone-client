@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <string>
 
 #include "fellowship_test_packets.h"
 #include "manual_clock.h"
@@ -91,19 +92,28 @@ TEST_CASE("fellowship connection: roster authority, vitality, kits and all nativ
     CHECK(rig.conn.fellowship().kits.empty());
 }
 
-TEST_CASE("fellowship connection: invite accept, local decline, replacement and timeout") {
+TEST_CASE("fellowship connection: invite accept, decline action 4, replacement and timeout") {
     ManualClock clock;
     auto options = quick_options(); options.session.clock = clock.source();
     Rig rig(MockConfig::standard(), options);
     REQUIRE(rig.to_zone());
     game::Spawn leader; leader.id = 333; leader.name = "Leader";
     rig.conn.world_for_test().spawns[333] = leader;
+    game::Spawn other = leader; other.id = 334; other.name = "Other";
+    rig.conn.world_for_test().spawns[334] = other;
     rig.conn.receive_zone_packet_for_test(fellowship::invite());
     REQUIRE(rig.conn.confirmation());
     CHECK(rig.conn.confirmation()->id == kConfirmFellowshipInvite);
     CHECK(rig.conn.confirmation()->text.find("Leader") != std::string::npos);
     rig.conn.answer_confirmation(false);
     CHECK_FALSE(rig.conn.fellowship().invite);
+    // Send_Opcode_0x7121 @0x668710: no sends action 4, nothing else set.
+    REQUIRE(rig.until([&] { return requests(rig, 4) == 1; }));
+    for (const auto& p : rig.server.zone_log) {
+        if (p.opcode != kOpFellowshipRequest || field(p) != 4) continue;
+        CHECK(p.data.size() == 0x434);
+        CHECK(std::all_of(p.data.begin() + 4, p.data.end(), [](std::byte b) { return b == std::byte{}; }));
+    }
     rig.conn.receive_zone_packet_for_test(fellowship::invite());
     rig.conn.receive_zone_packet_for_test(fellowship::invite(334));
     REQUIRE(rig.conn.fellowship().invite);
@@ -114,12 +124,41 @@ TEST_CASE("fellowship connection: invite accept, local decline, replacement and 
     rig.conn.answer_fellowship_invite(true);
     barrier(rig);
     CHECK(requests(rig, 3) == 1);
-    CHECK(requests(rig, 4) == 0); // local server interprets native decline4 as legacy destroy camp
+    CHECK(requests(rig, 4) == 1); // a repeated or stale answer sends nothing
+    rig.conn.answer_fellowship_invite(false);
     rig.conn.receive_zone_packet_for_test(fellowship::invite());
     clock.hold(); clock.advance(std::chrono::milliseconds(100000));
     rig.step();
     CHECK_FALSE(rig.conn.fellowship().invite);
     CHECK_FALSE(rig.conn.confirmation());
+    rig.conn.answer_fellowship_invite(false); // after expiry
+    barrier(rig);
+    CHECK(requests(rig, 4) == 1);
+}
+
+TEST_CASE("fellowship connection: a RoF2 invite from an unknown spawn shows nothing; the extended form asks") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    // Handle_Opcode_0x62ab @0x667db0: no dialog when GetSpawnByID fails.
+    rig.conn.receive_zone_packet_for_test(fellowship::invite(444));
+    CHECK_FALSE(rig.conn.fellowship().invite);
+    CHECK_FALSE(rig.conn.confirmation());
+    // ... and an earlier offer stays.
+    game::Spawn leader; leader.id = 333; leader.name = "Leader";
+    rig.conn.world_for_test().spawns[333] = leader;
+    rig.conn.receive_zone_packet_for_test(fellowship::invite());
+    rig.conn.receive_zone_packet_for_test(fellowship::invite(444));
+    REQUIRE(rig.conn.fellowship().invite);
+    CHECK(rig.conn.fellowship().invite->inviter_id == 333);
+    CHECK(rig.conn.fellowship().invite->inviter_name == "Leader");
+    // Extension beyond RoF2: the 1080-byte form asks without the inviter's name.
+    rig.conn.receive_zone_packet_for_test(fellowship::extended_invite(444));
+    REQUIRE(rig.conn.fellowship().invite);
+    CHECK(rig.conn.fellowship().invite->inviter_id == 444);
+    CHECK(rig.conn.fellowship().invite->inviter_name.empty());
+    REQUIRE(rig.conn.confirmation());
+    CHECK(rig.conn.confirmation()->id == kConfirmFellowshipInvite);
+    CHECK(rig.conn.confirmation()->text.find("Leader") == std::string::npos);
 }
 
 TEST_CASE("fellowship connection: zone changes preserve roster and retire zone offers; logout clears all") {
@@ -137,6 +176,8 @@ TEST_CASE("fellowship connection: zone changes preserve roster and retire zone o
 
     Rig invited;
     REQUIRE(invited.to_zone());
+    game::Spawn leader; leader.id = 333; leader.name = "Leader";
+    invited.conn.world_for_test().spawns[333] = leader;
     invited.conn.notice("An earlier question");
     invited.conn.receive_zone_packet_for_test(fellowship::invite());
     invited.server.request_zone_change(1, 20, 10, 3);
@@ -159,9 +200,15 @@ TEST_CASE("fellowship connection: profile seeds vitality and chat requires recei
     CHECK(rig.conn.fellowship().vitality.normal == 0x100000012ull);
     CHECK(rig.conn.fellowship().vitality.aa == 1234);
     const auto before = MockEqServer::count(rig.server.zone_log, Op::ChannelMessage);
+    (void)rig.chat();
     rig.conn.send_command("/fsay No membership");
     barrier(rig);
     CHECK(MockEqServer::count(rig.server.zone_log, Op::ChannelMessage) == before);
+    // FellowshipSay @0x524330: the string table's line 4573, in colour 342.
+    const auto lines = rig.chat();
+    CHECK(std::count_if(lines.begin(), lines.end(), [](const ChatEvent& line) {
+        return line.kind == ChatEvent::Kind::System && line.color == 342;
+    }) == 1);
     rig.conn.receive_zone_packet_for_test(fellowship::roster());
     rig.conn.send_command("/fsay Meet at the camp");
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::ChannelMessage) == before + 1; }));
@@ -229,6 +276,10 @@ TEST_CASE("fellowship connection: outgoing hooks cannot answer a replacement inv
     auto options = quick_options(); options.hooks = &hooks;
     Rig rig(MockConfig::standard(), options);
     REQUIRE(rig.to_zone());
+    for (const std::uint32_t id : {333u, 334u}) {
+        game::Spawn inviter; inviter.id = id; inviter.name = "Inviter" + std::to_string(id);
+        rig.conn.world_for_test().spawns[id] = inviter;
+    }
     rig.conn.receive_zone_packet_for_test(fellowship::invite());
     const auto owner = hooks.new_owner("fellowship invite test");
     hooks.on_packet(owner, plugin::Stream::Zone, plugin::Direction::Out, kOpFellowshipRequest,

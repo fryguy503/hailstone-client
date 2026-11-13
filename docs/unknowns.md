@@ -4,9 +4,9 @@ What the client does not implement yet, or implements with an approximation it c
 
 ## Fellowships
 
-- Native requests and roster/vitality fields were checked against the original handlers and the local server's open implementation. Unit, mock-server and both UI-pack rendering tests cover native twelve-member and expanded 64-member rosters. Live cross-zone synchronization, XP awards and camp gameplay remain untested.
-- The 64-member array layout is a deliberate extension documented in `docs/protocol/rof2-packets.md`. The inspected server currently hard-caps its model and serializers at twelve, so its membership rule alone cannot enable 64. A matching server implementation and live roster capture would establish interoperability above twelve.
-- Decline dismisses an invitation locally and leaves expiration to the server. Native decline action 4 conflicts with the inspected server's legacy camp-destroy action. A server capability distinguishing those meanings would allow explicit rejection safely.
+- Stock EQEmu does not send RoF2 fellowship packets, so nothing here has met a server. Native requests and roster/vitality fields were checked against the original handlers, and against EQEmu PR #5134 "TOB: Fellowships" (open, unmerged) as a protocol reference. Unit, mock-server and both UI-pack rendering tests cover native twelve-member and expanded 64-member rosters. Live cross-zone synchronization, XP awards and camp gameplay remain untested.
+- The 64-member array layout and the 1080-byte invitation are extensions beyond RoF2, documented in `docs/protocol/rof2-packets.md`. PR #5134 hard-caps its model and serializers at twelve, so its membership rule alone cannot enable 64. A server that sends expanded rosters and a live roster capture would establish interoperability above twelve.
+- Declining sends action 4, as RoF2 does (`Send_Opcode_0x7121` @0x668710). PR #5134 reads action 4 as a legacy camp destruction, so against that server a decline reaches its camp handler instead of refusing the invitation; that is the server's to fix, since RoF2 sends the same. An unanswered invitation that times out sends nothing: whether the original's dialog sends action 4 on its 100-second timeout is not traced; the confirmation dialog's timeout path (dialog type 0xc) would settle it.
 
 ## Network and session
 

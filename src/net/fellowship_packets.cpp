@@ -49,8 +49,9 @@ AppPacket encode_fellowship_kit_request(bool available_only, std::uint32_t categ
 std::optional<FellowshipState> decode_fellowship_roster(const AppPacket& p) {
     // Version 5 native: 1100-byte header, 12 records of 84 bytes, a u32,
     // 12 player handles of 32 bytes, three 12-byte flag arrays, optional
-    // 32-byte camp. Deliberate extension: all five arrays may have 13..64
-    // slots. The exact packet length determines capacity, never its count.
+    // 32-byte camp. Extension beyond RoF2: all five arrays may have 13..64
+    // slots. The exact packet length determines capacity, never its count; a
+    // twelve-slot roster is read exactly as RoF2 lays it out.
     if (p.opcode != kOpFellowshipRoster) return std::nullopt;
     constexpr std::size_t header = 1100, per_slot = 119, trailer = 4;
     std::size_t slots = 0;
@@ -120,14 +121,22 @@ std::optional<FellowshipState> decode_fellowship_roster(const AppPacket& p) {
 }
 
 std::optional<FellowshipInvite> decode_fellowship_invite(const AppPacket& p) {
-    if (p.opcode != kOpFellowshipInvite || (p.data.size() != 0x434 && p.data.size() != 1080)) return std::nullopt;
-    return detail::decode_with(p, [](ByteReader& r) {
-        if (r.le<std::uint32_t>() != 5) throw std::out_of_range("fellowship invitation action");
+    // Handle_Opcode_0x62ab @0x667db0 reads only the inviter spawn at 12 of the
+    // 0x434-byte body. Extension beyond RoF2: the 1080-byte form of EQEmu PR
+    // #5134 (unmerged) also carries the inviter at 4, used when 12 is zero.
+    if (p.opcode != kOpFellowshipInvite) return std::nullopt;
+    const bool extended = p.data.size() == kExtendedFellowshipInviteSize;
+    if (!extended && p.data.size() != kNativeFellowshipInviteSize) return std::nullopt;
+    return detail::decode_with(p, [extended](ByteReader& r) {
+        // RoF2 does not read the action word (5); the extended form must carry it.
+        if (r.le<std::uint32_t>() != 5 && extended) throw std::out_of_range("fellowship invitation action");
         FellowshipInvite v;
-        v.inviter_id = r.le<std::uint32_t>();
+        v.extended = extended;
+        const auto extended_inviter = r.le<std::uint32_t>();
         r.skip(4);
-        const auto native_inviter = r.le<std::uint32_t>(); // CFellowshipWnd invite callback @0x667db0
-        if (native_inviter) v.inviter_id = native_inviter;
+        v.inviter_id = r.le<std::uint32_t>();
+        if (!v.inviter_id && extended) v.inviter_id = extended_inviter;
+        // RoF2's GetSpawnByID(0) finds nothing, so a zero inviter shows nothing.
         if (!v.inviter_id) throw std::out_of_range("fellowship inviter");
         return v;
     });
