@@ -72,7 +72,7 @@ end
 local view = {}
 
 local function goods(s, h)
-  local _, selected = eq.ListInfo(WINDOW, LIST)
+  local _, _, selected = eq.ListInfo(WINDOW, LIST)
   local all = readRows()
   local purse = TC.Purse()
   local needle = search:lower()
