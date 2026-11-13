@@ -7,6 +7,211 @@ draws them with a modern renderer. The procedural sky's
 colour maps, the EQG material classes and the multi-pass light details are not planned work unless a feature needs
 them; the classic path that exists stays as the `classic` look.
 
+## Shared GPU asset investigation
+
+GPU allocations remain private by default. The headless `hailstone_gpu_share_probe` tool reports
+external buffer, image and semaphore capabilities for each adapter without querying device UUIDs. Its optional
+`--smoke --device-index N` verifies multiple buffer aliases on one logical device; it does not enable cross-process
+sharing. See [Shared GPU memory](research/shared-gpu-memory.md) for the ownership, driver-compatibility and lifetime
+requirements, tested hardware and remaining implementation gates.
+
+`hailstone_gpu_asset_probe` renders real static zone assets in two or six offscreen views on one device, with sharing
+OFF/ON pixel comparisons and finite continuously rendered holds for native OS profiling. It is a broker experiment,
+not a client GPU-sharing setting. Its simplified material shader and allocation inventory do not establish full-client
+visual parity or physical GPU-memory use.
+
+An experimental Windows broker path imports immutable zone and actor textures into separate playable client
+processes. Each process keeps its own Vulkan device, UI, mutable buffers and presentation targets. Imported payloads
+change instance ownership under a coordinated frame lease; the client completes its release on the GPU before
+returning the lease. This preserves separate processes but reduces GPU queue overlap, so memory and rendering cost
+must be measured together. Other platforms and unsupported images retain private uploads. See the research page
+for runtime validation status and remaining failure/compatibility gates; this is not enabled by default.
+
+For controlled tests, `HAILSTONE_GPU_NAME` requests one exact generic model name. A missing, ambiguous or unusable
+request fails rather than choosing a different GPU. Without that variable, automatic GPU selection is unchanged.
+`HAILSTONE_GPU_BENCHMARK=1` logs present-submission progress and shared-frame/lease timing for test readiness; those
+values are application diagnostics, not native memory measurements or display FPS. `HAILSTONE_BENCHMARK_WORLD`
+pins automatic login to one available, unambiguous world name or saved world key, without a first-world fallback.
+
+### Developer quickstart on Windows
+
+This is an experimental **build-tree tool**, not a setting in the client or a broker included in the normal release
+package. Build it alongside the client and capability probe from the repository root:
+
+```powershell
+cmake --build build-msvc --config Release --target hailstone hailstone_gpu_cache_broker hailstone_gpu_share_probe
+```
+
+Keep the client's complete `build-msvc/hailstone/` tree, including `shaders/`, and each executable's runtime DLLs.
+The client is `build-msvc/hailstone/hailstone.exe`; the broker/probe normally sit in the build root, or its
+`Release/` subfolder with a multi-configuration generator. Set the paths below to the actual build outputs.
+The probe's ordinary JSON output supplies generic adapter model names; use an exact, unique name for both broker
+and clients. This does not share allocations between different adapters or vendors.
+
+Before running the example, save a development server profile and six separate development accounts through the
+ordinary client, including their keyring passwords. Use the same Hailstone data directory for these saved profiles
+and for this example. Replace every path/profile/world/account/character placeholder. The game-data directory is
+read only; the Hailstone data directory must be separate and writable. CPU sharing is independent: keep
+`assets.shared_memory=auto` and its cache budget identical in both GPU comparison modes if CPU sharing is wanted.
+See [Shared archive memory](layout.md#shared-archive-memory).
+
+The following **PowerShell 7.4 or later** example generates a fresh local endpoint and 256-bit session token. Only
+the owned children's environment receives them; no token or password goes into arguments, console output, a
+profile or a script file. Keep this shell open until the clients and broker have closed. Normal client login uses
+saved keyring credentials, while the world pin fails if the named development world is unavailable or ambiguous.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$clientExe = (Resolve-Path 'build-msvc/hailstone/hailstone.exe').Path
+$brokerExe = (Resolve-Path 'build-msvc/hailstone_gpu_cache_broker.exe').Path
+$session = @{
+    HAILSTONE_GPU_NAME = 'NVIDIA GeForce RTX 3070' # Replace with the exact generic model from the probe.
+    HAILSTONE_GPU_IPC_ENDPOINT = '\\.\pipe\hailstone-gpu-' + [Convert]::ToHexString(
+        [Security.Cryptography.RandomNumberGenerator]::GetBytes(16)).ToLowerInvariant()
+    HAILSTONE_GPU_IPC_TOKEN = [Convert]::ToHexString(
+        [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+    HAILSTONE_GPU_BENCHMARK = '1'
+    HAILSTONE_BENCHMARK_WORLD = 'Your Development World'
+    HAILSTONE_DATA_DIR = 'C:\HailstoneTestData'
+}
+$gameDir = 'C:\YourGameAssets'
+$serverProfile = 'your-dev-profile'
+$players = @(
+    @('dev-account-1', 'CharacterOne'), @('dev-account-2', 'CharacterTwo'),
+    @('dev-account-3', 'CharacterThree'), @('dev-account-4', 'CharacterFour'),
+    @('dev-account-5', 'CharacterFive'), @('dev-account-6', 'CharacterSix')
+)
+
+function New-GpuStartInfo([string]$Exe, [string[]]$Arguments, [switch]$Capture) {
+    $info = [Diagnostics.ProcessStartInfo]::new($Exe)
+    $info.UseShellExecute = $false
+    $info.WorkingDirectory = Split-Path -Parent $Exe
+    foreach ($prefix in @('HAILSTONE_', 'NMSC_')) {
+        foreach ($name in @('GPU_IPC_ENDPOINT', 'GPU_IPC_TOKEN', 'GPU_IPC_SERVER_PID',
+                            'GPU_NAME', 'GPU_BENCHMARK', 'BENCHMARK_WORLD', 'SERVER_SELECT')) {
+            [void]$info.Environment.Remove($prefix + $name)
+        }
+    }
+    foreach ($name in @('VK_INSTANCE_LAYERS', 'VK_LOADER_LAYERS_ENABLE', 'VK_LAYER_PATH', 'VK_LAYER_VALIDATE_SYNC')) {
+        [void]$info.Environment.Remove($name)
+    }
+    foreach ($name in $session.Keys) { $info.Environment[$name] = $session[$name] }
+    foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
+    $info.RedirectStandardOutput = $info.RedirectStandardError = [bool]$Capture
+    $info.CreateNoWindow = [bool]$Capture
+    return $info
+}
+function Invoke-GpuControl([string]$Mode) {
+    $control = [Diagnostics.Process]::Start((New-GpuStartInfo $brokerExe @($Mode) -Capture))
+    try {
+        $output = $control.StandardOutput.ReadToEndAsync()
+        $errors = $control.StandardError.ReadToEndAsync()
+        if (-not $control.WaitForExit(30000)) { throw 'Broker control timed out.' }
+        if ($control.ExitCode -notin @(0, 2)) { throw 'Broker control failed; inspect the broker log.' }
+        return [pscustomobject]@{ ExitCode = $control.ExitCode; State = ($output.Result | ConvertFrom-Json) }
+    } finally { $control.Dispose() }
+}
+
+$clients = [Collections.Generic.List[Diagnostics.Process]]::new()
+$broker = $null; $brokerOutput = $null; $brokerErrors = $null
+try {
+    $broker = [Diagnostics.Process]::Start((New-GpuStartInfo $brokerExe @('--serve', '--hold-seconds', '4320') -Capture))
+    [void]$broker.Handle
+    $brokerErrors = $broker.StandardError.ReadToEndAsync()
+    $line = $broker.StandardOutput.ReadLineAsync().WaitAsync([TimeSpan]::FromSeconds(180)).GetAwaiter().GetResult()
+    $ready = $line | ConvertFrom-Json
+    $brokerOutput = $broker.StandardOutput.ReadToEndAsync()
+    if ($ready.kind -ne 'broker-ready' -or $ready.device_model -cne $session.HAILSTONE_GPU_NAME -or
+        $ready.validation_errors -ne 0) { throw 'Broker readiness did not match the requested GPU.' }
+    $session.HAILSTONE_GPU_IPC_SERVER_PID = [string]$broker.Id
+    foreach ($player in $players) {
+        $arguments = @('--game-dir', $gameDir, '--server', $serverProfile, '--account', $player[0],
+                       '--character', $player[1], '--window-size', '1280x720', '--max-fps', '30')
+        $client = [Diagnostics.Process]::Start((New-GpuStartInfo $clientExe $arguments))
+        [void]$client.Handle
+        $clients.Add($client)
+        Start-Sleep -Seconds 8
+    }
+    (Invoke-GpuControl '--status').State
+    Read-Host 'Verify all six characters and sharing logs; press Enter to close this session' | Out-Null
+} finally {
+    # Keep all original process handles until every close/exit observation is complete.
+    foreach ($client in $clients) { if (-not $client.HasExited) { [void]$client.CloseMainWindow() } }
+    foreach ($client in $clients) { if (-not $client.HasExited) { [void]$client.WaitForExit(30000) } }
+    $running = @($clients | Where-Object { -not $_.HasExited })
+    if ($broker -and -not $broker.HasExited -and $running.Count -eq 0) {
+        $stop = Invoke-GpuControl '--stop-if-idle'
+        if ($stop.ExitCode -eq 0 -and $stop.State.stopped) { [void]$broker.WaitForExit(30000) }
+    }
+    if ($broker -and $broker.HasExited) {
+        if ($brokerOutput) { $brokerOutput.Result } # Includes broker-complete; check clean=true and exit code 0.
+        if ($brokerErrors -and $brokerErrors.Result) { Write-Warning $brokerErrors.Result }
+        if ($broker.ExitCode -ne 0 -or @($clients | Where-Object { -not $_.HasExited -or $_.ExitCode -ne 0 }).Count) {
+            Write-Warning 'An owned process did not exit cleanly; this session is not an accepted test.'
+        }
+        $broker.Dispose()
+        foreach ($client in $clients) { $client.Dispose() }
+        $session.Clear()
+    } else {
+        Write-Warning 'Session still running: keep this shell open, close its client windows, then retry status/stop-if-idle.'
+    }
+}
+```
+
+The ready message alone does not prove clients use shared textures. Check every client's actual InZone character,
+the intended development world/zone, advancing post-zone `GPU benchmark progress` with positive
+`shared_images_this_frame`, and positive current-zone `GPU immutable zone textures` sharing. ON should report six
+broker consumers, nonzero entries/hits and no poisoned epoch or validation errors. Import/allocation counters alone
+can describe an earlier scene. Logs are under the Hailstone data directory; simultaneous clients use separate log
+files as described in [The Hailstone folder](layout.md).
+
+Close all six clients before `--stop-if-idle`. The control tool exits 0 when accepted, 2 when busy, and 1 on an error;
+never treat busy as a successful shutdown. After shutdown require client exit codes 0 and `broker-complete` with
+`clean=true`, no owner/consumers/entries/allocation bytes, balanced grants/releases and broker exit code 0. If the
+example leaves a process running, retain the shell/session variables and retry the control commands after closing
+its windows. Broker lifetime defaults to 4,320 seconds and accepts at most 7,200; finish the session before its
+deadline. There is no reconnect or automatic reconstruction of imported textures after a failed live session.
+
+With no GPU IPC environment, GPU allocations remain private. Unsupported platforms/extensions and initial
+connection or explicit adapter/driver mismatch can retain private uploads; individual unsupported images or cache
+limits also fall back privately. A malformed/uncertain handshake after connection, import failure, lost ownership
+or poisoned session stops the affected client. Changing `HAILSTONE_GPU_NAME` to a missing, ambiguous or unusable
+model fails selection instead of silently switching GPUs. Current bounds are Windows local IPC, 16 connections
+including controls, 128 MiB input payload per texture, 2,048 textures and a maximum/default 2 GiB broker budget.
+Six-client AMD/NVIDIA evidence does not establish Intel, Linux/macOS GPU sharing or 24 clients. Frame leases
+serialize GPU work using shared images; memory savings do not establish equivalent rendering performance.
+
+### Native memory comparisons without the private test harness
+
+Use the same frozen client, broker and shader files, six accounts, world/zone, camera, graphics settings, window
+visibility and CPU-sharing mode for OFF/ON/ON/OFF. First run both paths with core/synchronization validation; keep
+those correctness runs separate from memory captures with validation disabled. To request validation, add
+`--validation` to broker and clients and provide the installed layer's `VK_LAYER_PATH` and
+`VK_LAYER_VALIDATE_SYNC=1` in the child environment. The example's helper removes inherited forced layer settings
+before applying its session values.
+
+For GPU OFF, launch the same clients with both `HAILSTONE_` and legacy `NMSC_` GPU IPC endpoint/token/server-pin
+variables absent and without a broker. Keep GPU model, benchmark/world pins and CPU sharing unchanged. For each
+cohort, collect native adapter-wide observations before any client/broker starts, after all six actual characters
+have settled and continue rendering, and after every client/broker exits. For example, these built-in Windows CIM
+sources expose the two native counter families, independently of in-game `/perf`:
+
+```powershell
+Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory |
+    Select-Object Name, DedicatedUsage, SharedUsage, TotalCommitted
+Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPULocalAdapterMemory |
+    Select-Object Name, LocalUsage
+```
+
+Keep the selected adapter's exact physical/partition row stable across the same boot, and establish its association
+with the chosen GPU using native Windows adapter/counter information. On multi-adapter hosts, the generic Vulkan
+model name alone is insufficient to identify a counter row. Keep those boot-local mappings private; do not query
+or publish hardware UUIDs. If a source is unavailable or rows are ambiguous, report it rather than substituting a
+different source. Sample the complete declared window, preserve before/loaded/after ranges and keep host RAM/commit
+headroom. Subtract each run's own before baseline; check after-baseline sensitivity and both pair orders. ON's
+adapter-wide measurement includes the broker. Never sum per-PID imported-memory charges, add LocalUsage to
+DedicatedUsage, or equate these accounting counters with physical residency, capacity or displayed FPS.
+
 ## The frame
 
 `render::VkContext` (`src/render/vk_context.h`):
@@ -97,9 +302,9 @@ by alpha. Transparent texels take their opaque neighbours' colour, so palette in
 longer fringes leaves. Cut-outs keep level 0's coverage on every level, so trees stay full at a distance. DDS files
 shipped without mips get a chain too.
 
-A fully opaque image whose sides are powers of two needs none of that: its chain is a plain average, which the GPU
-builds as the CPU would, so it goes up as it is and the GPU builds the levels (`render::gpu_builds_mips`,
-`render::prepare_texture_image`, `UploadBatch::texture`). The image is created `R8G8B8A8_SRGB` with
+In the ordinary private `UploadBatch::texture` path, a fully opaque image whose sides are powers of two needs none
+of that: its chain is a plain average, which the GPU builds as the CPU would, so it goes up as it is and the GPU
+builds the levels (`render::gpu_builds_mips`, `render::prepare_texture_image`). The image is created `R8G8B8A8_SRGB` with
 `VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT` and blitted level by level, so each blit decodes to linear light, filters and
 encodes back, as `assets::build_color_mips` does; the view the shaders sample is `R8G8B8A8_UNORM`, so they read the
 same values as from a CPU chain. The two agree within a rounding step per level (the GPU stores each level in 8 bits
@@ -111,6 +316,11 @@ as the GPU's own levels would blend the colour key into the edges and bring back
 those images (the baked terrain tiles, uncompressed A8R8G8B8 DDS, are opaque where they are a zone's base layer). A
 neighbour zone's textures, held to `ZoneRenderer::Options::max_texture_size` (`render::prepare_capped_texture`), always
 get the CPU chain, as only a chain has levels to drop.
+
+The experimental shared immutable path instead uses `render::prepare_immutable_texture_image` to finish colour
+mips on the CPU before content-keying and export. Its external image is UNORM, so colour chains are never left
+for an UNORM blit in the broker. Data images retain their ordinary mip recipe, and unsupported BC formats are
+decoded before keying. Disabling GPU sharing keeps the ordinary private path above.
 
 A material that never reads its texture's alpha (opaque, no alpha test: EQG `Opaque_*` classes and the classic opaque
 methods, `MaterialState::alpha_unused`) uploads it as `TextureUse::OpaqueColor` in the actor and object renderers: made

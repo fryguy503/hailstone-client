@@ -22,6 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/shared_file_cache.h"
 #include "platform/mapped_file.h"
 
 namespace hailstone { class GameDir; }
@@ -37,8 +38,11 @@ public:
     // (docs/hardening.md). So only a file Hailstone never writes is mapped: storage_for() decides.
     enum class Storage : std::uint8_t { Heap, Mapped };
 
-    // Throws std::runtime_error on a malformed archive. Mapped falls back to Heap when the file cannot be mapped.
-    static PfsArchive open(const std::filesystem::path& path, Storage storage = Storage::Heap);
+    // Throws std::runtime_error on a malformed archive. A configured cache takes precedence, retaining an immutable
+    // snapshot or its owned fallback. Without a cache, Mapped falls back to Heap when the source cannot be mapped.
+    static PfsArchive open(const std::filesystem::path& path, Storage storage = Storage::Heap,
+                           std::shared_ptr<SharedFileCache> cache = {});
+    static PfsArchive open(const std::filesystem::path& path, std::shared_ptr<SharedFileCache> cache);
     static PfsArchive from_memory(std::vector<std::byte> data, std::string label = "<memory>");
 
     // The storage for `path`, a file `game` found: Mapped for one in its asset folder or classic folder (read-only,
@@ -57,6 +61,8 @@ public:
     std::optional<std::vector<std::byte>> read_prefix(std::string_view name, std::size_t max) const;
 
     const std::string& label() const { return label_; }
+    bool backing_mapped() const { return mapped(); }
+    std::size_t backing_size() const { return storage_bytes(); }
 
     // Storage accounting for the archive bytes themselves (the index below and anything parsed from the members,
     // such as wld::WldFile data, is separate private memory and not counted here). storage_bytes() is the
@@ -67,6 +73,7 @@ public:
     std::size_t owned_bytes() const;
 
 private:
+    static PfsArchive from_bytes(ImmutableFileBytes data, std::string label);
     struct Entry {
         std::uint32_t crc = 0;
         std::uint32_t offset = 0;
@@ -74,12 +81,12 @@ private:
     };
 
     // The archive's bytes, shared between copies: an owned buffer (from_memory, open with Heap) or a read-only file
-    // mapping (open with Mapped). Copies share it; a moved-from archive shares nothing.
+    // mapping (open with Mapped), or immutable cache backing. Copies share it; a moved-from archive shares nothing.
     struct Bytes {
-        std::vector<std::byte> owned;
+        ImmutableFileBytes immutable;
         platform::MappedFile mapped_file;
         std::span<const std::byte> view() const {
-            return mapped_file.mapped() ? mapped_file.view() : std::span<const std::byte>(owned);
+            return mapped_file.mapped() ? mapped_file.view() : immutable.bytes();
         }
     };
 

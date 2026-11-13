@@ -244,12 +244,12 @@ TEST_CASE("0x21, 0x22 and 0x29 fragments parse") {
     auto file = wld::WldFile::parse(w.data());
     CHECK(file.errors().empty());
     CHECK(file.unknown_types().empty());
-    const auto* tree = std::get_if<wld::BspTree>(&file.fragments()[0].data);
+    const auto* tree = file.fragments()[0].get<wld::BspTree>();
     REQUIRE(tree);
     CHECK(tree->nodes.size() == 9);
     CHECK(tree->nodes[0].front == 2);
     CHECK(tree->nodes[6].region == 1);
-    const auto* t2 = std::get_if<wld::RegionTag>(&file.fragments()[4].data);
+    const auto* t2 = file.fragments()[4].get<wld::RegionTag>();
     REQUIRE(t2);
     CHECK(t2->tag == "DRNTP00255000004_ZONE");
 

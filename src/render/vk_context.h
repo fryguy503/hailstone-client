@@ -1,9 +1,11 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,6 +23,8 @@
 namespace hailstone::platform { class Window; }
 
 namespace hailstone::render {
+
+class GpuSharedCache;
 
 // Optional device capabilities the renderers adapt to.
 struct DeviceCaps {
@@ -274,6 +278,9 @@ public:
     std::uint32_t min_image_count() const { return min_image_count_; }
     VkPhysicalDevice physical_device() const { return physical_; }
     VmaAllocator allocator() const { return allocator_; }
+    GpuSharedCache* gpu_shared_cache() const { return gpu_shared_cache_.get(); }
+    // Coverage diagnostics for the explicit immutable upload path; not native GPU-memory measurements.
+    void note_shared_gpu_texture(bool imported);
     VkFormat color_format() const { return swapchain_format_; } // the swapchain: UI pipelines
     VkFormat scene_format() const { return kSceneFormat; }      // scene pipelines
     VkSampleCountFlagBits scene_samples() const { return scene_samples_; }
@@ -302,6 +309,8 @@ private:
     struct Frame {
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkCommandBuffer shared_acquire = VK_NULL_HANDLE;
+        VkCommandBuffer shared_release = VK_NULL_HANDLE;
         VkSemaphore image_available = VK_NULL_HANDLE;
         VkFence in_flight = VK_NULL_HANDLE;
     };
@@ -339,6 +348,16 @@ private:
     std::uint32_t queue_family_ = 0;
     VkQueue queue_ = VK_NULL_HANDLE;
     DeviceCaps caps_;
+    std::unique_ptr<GpuSharedCache> gpu_shared_cache_;
+    bool gpu_shared_requested_ = false;
+    std::uint64_t gpu_shared_bindings_ = 0;
+    std::uint64_t gpu_shared_fallbacks_ = 0;
+    std::uint64_t gpu_shared_frames_ = 0;
+    bool gpu_benchmark_ = false;
+    std::uint64_t benchmark_present_submissions_ = 0;
+    std::chrono::steady_clock::time_point gpu_benchmark_start_{};
+    double benchmark_lease_wait_ms_ = 0.0;
+    double benchmark_shared_fence_wait_ms_ = 0.0;
     VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
     PipelineCacheDevice cache_device_;
     std::filesystem::path pipeline_cache_path_;

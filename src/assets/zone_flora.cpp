@@ -682,7 +682,8 @@ std::optional<FloraDonor> open_flora_donor(const GameDir& game, std::string_view
     }
     FloraDonor out;
     try {
-        out.archive = std::make_shared<const PfsArchive>(PfsArchive::open(*found, PfsArchive::storage_for(game, *found)));
+        out.archive = std::make_shared<const PfsArchive>(PfsArchive::open(
+            *found, PfsArchive::storage_for(game, *found), game.shared_file_cache()));
     } catch (const std::exception& e) {
         log::warn("zone flora: {}: {}", donor, e.what());
         return std::nullopt;

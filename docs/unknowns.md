@@ -2,7 +2,72 @@
 
 What the client does not implement yet, or implements with an approximation it cannot confirm. Entries are removed once settled.
 
+## Shared archive memory
+
+- `assets.shared_memory=auto` shares immutable archive snapshots and classic character animation bytes; model
+  geometry, collision and other inflated members remain per client. GPU allocations are private by default, with
+  the separate experimental texture broker described below. Six-client Windows live zone
+  entry and idle-memory sharing were measured in same-zone and earlier mixed-zone cohorts, using native OS counters
+  and resident asset-page deduplication (docs/research/shared-asset-memory.md). The expanded same-binary pair saved
+  34.86% of the measured private-plus-asset-cache resident subset; this excludes other shared mappings. Sustained
+  combat/zoning, native Linux gameplay and native macOS mapping/locking behavior remain open. Rehashing each resolved
+  source adds loading work, and a cold publisher busy for over 250 ms makes another load fall back privately.
+  Controlled loading-time/fallback-rate measurements and Linux/macOS live memory profiles remain necessary before
+  further expansion. The expanded ON idle capture still grew; it does not establish long-term retention or leaks.
+
+## Shared GPU assets
+
+- The experimental cross-process texture broker is opt-in and Windows-only, with no normal client enable setting.
+  Two-process procedural-image imports/readbacks passed on AMD RX 9070 XT and NVIDIA RTX 3070 with exclusive,
+  interleaved frame leases and zero core/synchronization-validation errors. Six separate live clients on each
+  adapter then passed controlled idle-zone OFF/ON correctness: ON shared all 159 current-zone texture bindings
+  in every client and continued completing shared frames; OFF used no imported images/shared frames. All clients
+  exited normally, both ON brokers' grants/releases balanced and all resources retired, with zero core/sync errors.
+  This is not sustained gameplay/failure acceptance. Three valid validation-enabled native diagnostic samples per
+  correctness cohort are excluded from the separate primary native comparison.
+- Repeated six-live-client OFF/ON/ON/OFF native Windows observations now pass descriptive gates on both tested
+  discrete adapters, with CPU sharing held at `auto` and the broker included in ON. DedicatedUsage accounting
+  fell by 620.06 MiB / 15.10% on AMD and 650.04 MiB / 15.71% on NVIDIA. The separate LocalUsage source fell by
+  584.64 MiB / 14.44% and 650.04 MiB / 15.71%, respectively. These are adapter-global accounting observations,
+  not unique physical residency, a confidence interval or causal estimates. All 288 loaded observations were
+  retained. One failed initial NVIDIA readiness attempt captured zero native samples and is explicitly excluded;
+  the complete series restarted with eight-second launch spacing. AMD's older two-second default was not recorded
+  per series, and its shader hashes were first recorded during the first OFF capture, so prelaunch shader hashes
+  are unproven. Separate native CPU diagnostics including the broker show private commit lower by 659.25 MiB
+  (AMD) and 710.53 MiB (NVIDIA), but the private-working-set-plus-unique-CPU-asset-cache resident subset changed by
+  +64.94 MiB and -246.50 MiB, respectively. That subset excludes other shared mappings and is not whole physical
+  RAM. This CPU subset/tradeoff interpretation is complete; commit, dedicated GPU accounting and SharedUsage must
+  not be added. The sanitized report and graphs are available as the local `hailstone-gpu-live-proof` export,
+  with a SHA-256 manifest; no remote publication occurred. Performance equivalence is unproven:
+  NVIDIA's sparse application present-submission median was 16.86/s OFF versus 15.48/s ON, not native/display FPS
+  or evidence of maintained 30 FPS. Meaningful frame-time/throughput acceptance remains open
+  (docs/research/shared-gpu-memory.md).
+- The vendor-neutral capability and buffer checks passed on AMD RX 9070 XT, NVIDIA RTX 3070 and integrated AMD
+  graphics. A single-device real-static-zone
+  renderer now passes two/six-view OFF/ON pixel equality and core/synchronization validation on the discrete AMD
+  and NVIDIA adapters, using an isolated Khronos layer. Matched Windows native-memory observations now cover this
+  two/six-view static prototype, with accounting and local-memory sources kept separate and host baseline movement
+  reported explicitly. AMD's local-memory attribution remains inconclusive; its dedicated-memory accounting
+  reduction is a separate result. Those historical observations do not establish whole-client savings.
+- Independent Vulkan instances require coordinated external ownership or one rendering broker; ordinary read-only
+  sampling does not permit ownership-free fan-out. The current asset-only broker keeps client rendering and
+  presentation local; a full renderer with view/state transport is an alternative architecture, not a prerequisite
+  for this path. Broader device/driver compatibility, zoning/appearance changes, device/owner loss and sustained
+  resource retirement remain open before production acceptance. The current IPC limit is 16 connections including
+  controls, so it does not yet support 24 clients. Serialized ownership can reduce rendering throughput and needs
+  rendering-cost comparisons alongside further scale work. The present-submission markers are not displayed FPS
+  or per-frame GPU timings, and the native accounting result does not prove absence of GPU memory pressure.
+  The experimental path fails the session on lost ownership/coordinator state; it does not yet rebuild private
+  resources and continue after a broker crash. Native Intel hardware and Linux/macOS external-image transport
+  remain unverified.
+  Existing render targets, shadows and dynamic state remain private.
+
 ## Network and session
+
+- Saved-account automatic world selection falls back to the first listed world when the saved world is absent.
+  A development world being offline can therefore select another world. Automated benchmarks hold server selection
+  with `HAILSTONE_SERVER_SELECT=1`, explicitly select the intended world and verify the resulting world in session
+  logs. A strict saved-world selection policy and focused regression test remain open.
 
 - Return Home on the character select is enabled for a character whose list entry has both `go_home` and `enabled` set. The original checks `bCanGoHome` and `bUseable` (`CCharacterListWnd::EnableButtons` @0x42f4b0); that `bUseable` comes from the list's `enabled` byte is assumed, not traced. Stock EQEmu always sends `enabled = 1`, so it changes nothing there. Tracing where OP_SendCharInfo's handler fills `CharSelectInfo` +0x15c would settle it.
 - The client does not send the zone-in packets that EQEmu's RoF2 table does not define (tribute, social post and similar); EQEmu servers do not need them.

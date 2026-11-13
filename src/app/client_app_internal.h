@@ -46,6 +46,7 @@
 #include "core/character_files.h"
 #include "core/config.h"
 #include "core/game_dir.h"
+#include "core/shared_file_cache.h"
 #include "core/ini_file.h"
 #include "core/log.h"
 #include "core/wipe.h"
@@ -259,6 +260,13 @@ public:
             return;
         }
         apply_classic_folder();
+        if (config_.get_string("assets.shared_memory", "off") == "auto") {
+            const int mb = std::clamp(config_.get_int("assets.shared_memory_cache_mb", 1024), 0, 16384);
+            game_.set_shared_file_cache(std::make_shared<SharedFileCache>(SharedFileCache::Options{
+                platform::cache_dir() / "assets" / "v1" / "pfs",
+                static_cast<std::uint64_t>(mb) * 1024 * 1024}));
+            log::info("shared archive cache: enabled, {} MiB disk budget (private loading on cache failure)", mb);
+        }
         // The settings (hailstone.ini's until a character enters, then the character's: apply_settings), before the
         // renderers: their pipelines take the sample count.
         apply_settings();

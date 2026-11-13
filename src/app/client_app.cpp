@@ -209,6 +209,7 @@ int ClientApp::run() {
             if (actor_renderer_) perf.actors = &actor_renderer_->stats();
             perf.conn = conn_.get();
             perf.gpu = &vk_;
+            perf.shared_files = game_.shared_file_cache().get();
             if (conn_) {
                 const auto& w = conn_->world();
                 perf.zone_name = w.zone_long_name.empty() ? w.zone_short_name : w.zone_long_name;

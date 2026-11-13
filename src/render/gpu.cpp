@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "assets/texture.h"
+#include "render/gpu_shared_cache.h"
 #include "render/vk_context.h"
 #include "render/vk_util.h"
 
@@ -39,6 +40,13 @@ void Buffer::destroy(VmaAllocator allocator) {
 }
 
 void Texture::destroy(VkDevice device, VmaAllocator allocator) {
+    if (shared) {
+        shared.reset();
+        view = VK_NULL_HANDLE;
+        image = VK_NULL_HANDLE;
+        allocation = VK_NULL_HANDLE;
+        return;
+    }
     if (view) vkDestroyImageView(device, view, nullptr);
     if (image) vmaDestroyImage(allocator, image, allocation);
     view = VK_NULL_HANDLE;
@@ -143,6 +151,15 @@ std::optional<assets::Image> prepare_texture_image(const assets::Image& source, 
     return std::nullopt;
 }
 
+std::optional<assets::Image> prepare_immutable_texture_image(const assets::Image& source, TextureUse use,
+                                                            bool bc_textures) {
+    // The external protocol uses an UNORM image. Finish colour mips on the CPU before hashing/exporting, rather
+    // than leaving an sRGB mip blit to the private renderer's image-creation path.
+    if (auto prepared = prepare_texture_image(source, use, false)) return prepared;
+    if (source.format != assets::PixelFormat::RGBA8 && !bc_textures) return assets::to_rgba8(source);
+    return std::nullopt;
+}
+
 void drop_large_mips(assets::Image& image, std::uint32_t max_size) {
     if (max_size == 0) return;
     while (image.mips.size() > 1 && std::max(image.width, image.height) > max_size) {
@@ -237,6 +254,28 @@ Texture UploadBatch::texture(const assets::Image& source, TextureUse use) {
     return t;
 }
 
+Texture UploadBatch::immutable_texture(const assets::Image& source, TextureUse use) {
+    if (GpuSharedCache* cache = vk_.gpu_shared_cache(); cache && cache->active()) {
+        auto prepared = prepare_immutable_texture_image(source, use, vk_.caps().bc_textures);
+        const assets::Image& image = prepared ? *prepared : source;
+        const bool generate = image.format == assets::PixelFormat::RGBA8 && image.mips.size() == 1;
+        if (auto owner = cache->texture(image, generate)) {
+            Texture texture;
+            texture.image = owner->image;
+            texture.view = owner->view;
+            texture.width = owner->width;
+            texture.height = owner->height;
+            texture.shared = std::move(owner);
+            vk_.note_shared_gpu_texture(true);
+            return texture;
+        }
+        vk_.note_shared_gpu_texture(false);
+        return texture(image, TextureUse::Data);
+    }
+    vk_.note_shared_gpu_texture(false);
+    return texture(source, use);
+}
+
 void UploadBatch::submit() {
     if (buffers_.empty() && textures_.empty()) return;
     // Not waited for: the frames after it on the queue see what it wrote (the barriers below), and its staging
@@ -252,7 +291,7 @@ void UploadBatch::submit() {
         for (auto& t : textures_) {
             image_barrier(cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE, 0,
-                          VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                          VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
             vkCmdCopyBufferToImage(cmd, t.staging.buffer, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    static_cast<std::uint32_t>(t.regions.size()), t.regions.data());
             if (t.generate_mips) {

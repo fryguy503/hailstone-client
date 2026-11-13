@@ -15,8 +15,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <compare>
 #include <filesystem>
 #include <initializer_list>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -26,6 +28,8 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -55,34 +59,147 @@ struct BonePose {
     glm::vec3 scale{1.0f}; // uniform for WLD tracks; EQG tracks store three
 };
 
-// Copies share key data. Builders detach on mutation; readers never receive a mutable reference. Constant tracks
-// can store one key while keeping their logical length, so the sampler's interpolation and looping stay unchanged.
+// WLD clips keep their encoded keys and convert only the poses sampled by the renderer. EQG and fixture keys
+// stay owned; mutable access to a WLD view detaches it without changing another model or animation alias.
+class BoneFrames {
+public:
+    using value_type = BonePose;
+    using size_type = std::size_t;
+    using iterator = std::vector<BonePose>::iterator;
+    class const_iterator {
+    public:
+        using value_type = BonePose;
+        using reference = BonePose;
+        using difference_type = std::ptrdiff_t;
+        using iterator_category = std::random_access_iterator_tag;
+        using iterator_concept = std::random_access_iterator_tag;
+        struct pointer {
+            BonePose value;
+            const BonePose* operator->() const { return &value; }
+        };
+        const_iterator() = default;
+        reference operator*() const { return (*owner_)[index_]; }
+        pointer operator->() const { return {**this}; }
+        reference operator[](difference_type n) const { return *(*this + n); }
+        const_iterator& operator++() { ++index_; return *this; }
+        const_iterator operator++(int) { auto old = *this; ++*this; return old; }
+        const_iterator& operator--() { --index_; return *this; }
+        const_iterator operator--(int) { auto old = *this; --*this; return old; }
+        const_iterator& operator+=(difference_type n) {
+            index_ = static_cast<size_type>(static_cast<difference_type>(index_) + n); return *this;
+        }
+        const_iterator& operator-=(difference_type n) { return *this += -n; }
+        friend const_iterator operator+(const_iterator i, difference_type n) { i += n; return i; }
+        friend const_iterator operator+(difference_type n, const_iterator i) { return i + n; }
+        friend const_iterator operator-(const_iterator i, difference_type n) { i -= n; return i; }
+        friend difference_type operator-(const_iterator a, const_iterator b) {
+            return static_cast<difference_type>(a.index_) - static_cast<difference_type>(b.index_);
+        }
+        auto operator<=>(const const_iterator&) const = default;
+
+    private:
+        friend class BoneFrames;
+        const_iterator(const BoneFrames* owner, size_type index) : owner_(owner), index_(index) {}
+        const BoneFrames* owner_ = nullptr;
+        size_type index_ = 0;
+    };
+
+    BoneFrames() = default;
+    BoneFrames(std::initializer_list<BonePose> frames) : storage_(std::vector<BonePose>(frames)) {}
+    BoneFrames(std::vector<BonePose> frames) : storage_(std::move(frames)) {}
+    BoneFrames(const BoneFrames&) = default;
+    BoneFrames& operator=(const BoneFrames&) = default;
+    BoneFrames(BoneFrames&& other) noexcept;
+    BoneFrames& operator=(BoneFrames&& other) noexcept;
+    BoneFrames& operator=(std::initializer_list<BonePose> frames) { assign(frames); return *this; }
+    BoneFrames& operator=(std::vector<BonePose> frames) { storage_ = std::move(frames); return *this; }
+
+    static BoneFrames from_wld(wld::TrackFrames frames, glm::vec3 scale_multiplier = glm::vec3(1.0f));
+    bool encoded() const;
+    bool mapped() const;
+    size_type size() const;
+    bool empty() const { return size() == 0; }
+    size_type capacity() const;
+    size_type decoded_capacity() const;
+    // Owned payload only; mapped backing is separate from model-private memory. Shared encoded owners count once.
+    std::size_t owned_payload_bytes(std::unordered_set<const void*>& seen) const;
+    BonePose operator[](size_type i) const;
+    BonePose at(size_type i) const;
+    BonePose front() const { return (*this)[0]; }
+    BonePose back() const { return (*this)[size() - 1]; }
+    BonePose& operator[](size_type i) { return materialize()[i]; }
+    BonePose& at(size_type i);
+    BonePose& front() { return materialize().front(); }
+    BonePose& back() { return materialize().back(); }
+    BonePose* data() { return materialize().data(); }
+    const_iterator begin() const { return {this, 0}; }
+    const_iterator end() const { return {this, size()}; }
+    const_iterator cbegin() const { return begin(); }
+    const_iterator cend() const { return end(); }
+    iterator begin() { return materialize().begin(); }
+    iterator end() { return materialize().end(); }
+    void reserve(size_type count) { materialize().reserve(count); }
+    void resize(size_type count) { materialize().resize(count); }
+    void resize(size_type count, const BonePose& pose) { materialize().resize(count, pose); }
+    void push_back(const BonePose& pose) { materialize().push_back(pose); }
+    void push_back(BonePose&& pose) { materialize().push_back(std::move(pose)); }
+    template<class... Args> BonePose& emplace_back(Args&&... args) {
+        return materialize().emplace_back(std::forward<Args>(args)...);
+    }
+    void clear() {
+        if (auto* owned = std::get_if<std::vector<BonePose>>(&storage_)) owned->clear();
+        else storage_.emplace<std::vector<BonePose>>();
+    }
+    void assign(size_type count, const BonePose& pose) { storage_ = std::vector<BonePose>(count, pose); }
+    void assign(std::initializer_list<BonePose> frames) { storage_ = std::vector<BonePose>(frames); }
+    template<class It> void assign(It first, It last) { storage_ = std::vector<BonePose>(first, last); }
+
+private:
+    struct WldFrames {
+        wld::TrackFrames frames;
+        glm::vec3 scale_multiplier{1.0f};
+    };
+    std::vector<BonePose>& materialize();
+    std::variant<std::vector<BonePose>, WldFrames> storage_;
+};
+
+// Copies share key data. Builders detach on mutation; readers receive sampled values. WLD tracks may retain
+// encoded immutable backing. Constant tracks keep their logical length so interpolation and looping stay unchanged.
 class AnimationTrack {
 public:
     using StorageSet = std::unordered_set<const void*>;
     AnimationTrack() = default;
     AnimationTrack(std::initializer_list<BonePose> keys);
+    AnimationTrack(BoneFrames frames);
     AnimationTrack(const AnimationTrack&) = default;
     AnimationTrack& operator=(const AnimationTrack&) = default;
     AnimationTrack(AnimationTrack&& other) noexcept;
     AnimationTrack& operator=(AnimationTrack&& other) noexcept;
+    static AnimationTrack from_wld(wld::TrackFrames frames, glm::vec3 scale_multiplier = glm::vec3(1.0f));
     std::size_t size() const { return count_; }
     bool empty() const { return count_ == 0; }
-    const BonePose& operator[](std::size_t i) const { return (*keys_)[keys_->size() == 1 ? 0 : i]; }
-    const BonePose& front() const { return (*this)[0]; }
-    const BonePose& back() const { return (*this)[count_ - 1]; }
+    bool encoded() const { return encoded_ && encoded_->encoded(); }
+    bool mapped() const { return encoded_ && encoded_->mapped(); }
+    std::size_t decoded_capacity() const { return keys_ ? keys_->capacity() : 0; }
+    BonePose operator[](std::size_t i) const;
+    BonePose front() const { return (*this)[0]; }
+    BonePose back() const { return (*this)[count_ - 1]; }
     void push_back(const BonePose& key);
     void reserve(std::size_t count);
     void resize(std::size_t count);
-    void clear() { keys_.reset(); count_ = 0; }
-    // Physical storage, for diagnostics/tests; sampling always uses size(), the logical frame count.
-    std::size_t stored_keys() const { return keys_ ? keys_->size() : 0; }
-    const void* storage_id() const { return keys_.get(); }
+    void clear() { keys_.reset(); encoded_.reset(); count_ = 0; encoded_constant_ = false; }
+    // Stored keys can be encoded file views rather than decoded poses. Sampling uses the logical frame count.
+    std::size_t stored_keys() const {
+        return encoded_ ? (encoded_constant_ && count_ ? 1 : encoded_->size()) : (keys_ ? keys_->size() : 0);
+    }
+    const void* storage_id() const { return encoded_ ? static_cast<const void*>(encoded_.get()) : keys_.get(); }
     std::size_t storage_bytes(StorageSet& seen) const;
 private:
     friend struct CharacterModel;
     std::shared_ptr<std::vector<BonePose>> keys_;
+    std::shared_ptr<const BoneFrames> encoded_;
     std::size_t count_ = 0;
+    bool encoded_constant_ = false;
     std::vector<BonePose>& writable();
     void compact();
     std::uint64_t hash() const;
@@ -316,13 +433,13 @@ public:
     // The names so far, sorted.
     Names names() const;
     static bool active() { return current_ != nullptr; }
-    static void note(char table, const std::string& name) {
+    static void note(char table, std::string_view name) {
         if (current_) current_->note_one(table, name);
     }
     static void note(const Names& names);
 
 private:
-    void note_one(char table, const std::string& name);
+    void note_one(char table, std::string_view name);
     // Visible here so other translation units need no dynamic TLS initialization wrapper.
     static constinit thread_local CharacterLookups* current_;
     CharacterLookups* parent_;
@@ -349,7 +466,8 @@ struct FragmentLoc {
 struct CharacterTables {
     // "HUM" -> the WLD and positive actor reference; no decoded fragment is pinned by indexing.
     std::unordered_map<std::string, FragmentLoc> actors;
-    std::unordered_map<std::string, TrackLoc> tracks;
+    // These exact names belong to the retained immutable WLDs, like TrackLoc's pointers.
+    std::unordered_map<std::string_view, TrackLoc> tracks;
     // Every actor definition by WLD and code, not only the one found ("WOL" in wol_v2_chr.wld -> its actor).
     std::map<std::pair<const wld::WldFile*, std::string>, FragmentLoc> actor_wlds;
     // Bone track name -> clip codes that animate it ("HUMPE_TRACK" -> L01, P01 ...).
@@ -361,7 +479,8 @@ struct CharacterTables {
     std::unordered_map<std::string, FragmentLoc> luclin_materials;
     std::unordered_map<std::string, FragmentLoc> luclin_parts; // "IT1012"
     // The resource levels each name of actors, luclin_parts, meshes and tracks has a definition at (one bit each).
-    std::unordered_map<std::string, std::uint64_t> actor_levels, part_levels, mesh_levels, track_levels;
+    std::unordered_map<std::string, std::uint64_t> actor_levels, part_levels, mesh_levels;
+    std::unordered_map<std::string_view, std::uint64_t> track_levels;
 
     // Adds the archive at `index` of the library's list, at resource `level`. With `base`, these tables go on from
     // base's (base's archives come first and these hold only what the new archives add or change): a name takes
@@ -389,7 +508,7 @@ public:
     bool contains(const key_type& k) const { return find(k) != nullptr; }
 
 private:
-    static void note(const std::string& k) { CharacterLookups::note(Table, k); }
+    static void note(std::string_view k) { CharacterLookups::note(Table, k); }
     template <class P>
     static void note(const std::pair<P, std::string>& k) { CharacterLookups::note(Table, k.second); }
     const Map* first_;
@@ -427,6 +546,10 @@ public:
     // `levels` as CharacterLibrary's.
     explicit CharacterArchiveIndex(std::vector<std::shared_ptr<const CharacterArchive>> archives,
                                    std::vector<int> levels = {});
+    CharacterArchiveIndex(const CharacterArchiveIndex&) = default;
+    CharacterArchiveIndex(CharacterArchiveIndex&&) noexcept = default;
+    CharacterArchiveIndex& operator=(CharacterArchiveIndex other) noexcept { swap(other); return *this; }
+    void swap(CharacterArchiveIndex& other) noexcept;
     const std::vector<std::shared_ptr<const CharacterArchive>>& archives() const { return archives_; }
 
 private:
@@ -441,6 +564,10 @@ private:
 class CharacterLibrary {
 public:
     CharacterLibrary() = default;
+    CharacterLibrary(const CharacterLibrary&) = default;
+    CharacterLibrary(CharacterLibrary&&) noexcept = default;
+    CharacterLibrary& operator=(CharacterLibrary other) noexcept { swap(other); return *this; }
+    void swap(CharacterLibrary& other) noexcept;
     // `levels` gives each archive's resource level (default: kZoneResourceLevel). The archives from
     // `first_zone_archive` on are the zone's own (library_for_zone: after the global ones); what they define is
     // what no result of the shared cache may depend on here (set_shared_cache).

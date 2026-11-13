@@ -299,7 +299,7 @@ void ZoneRenderer::upload(Prepared& p) {
     constexpr std::size_t kStagingBudget = 32u * 1024 * 1024;
     for (auto& i : p.images) {
         for (const auto& level : i.image.mips) texture_bytes += level.size();
-        textures_.push_back(upload.texture(i.image, i.use));
+        textures_.push_back(upload.immutable_texture(i.image, i.use));
         i.image = {}; // freed as it goes
         if (upload.staging_bytes() >= kStagingBudget) {
             upload.submit();
@@ -307,6 +307,13 @@ void ZoneRenderer::upload(Prepared& p) {
         }
     }
     mark("textures staged", p.started);
+    if (vk_.gpu_shared_cache()) {
+        const auto shared = std::count_if(textures_.begin(), textures_.end(), [](const Texture& texture) {
+            return static_cast<bool>(texture.shared);
+        });
+        log::info("GPU immutable zone textures: total={} shared={} private={}", textures_.size(), shared,
+                  textures_.size() - static_cast<std::size_t>(shared));
+    }
     light_grid_buffers_[0] = upload.buffer(p.lights, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     light_grid_buffers_[1] = upload.buffer(p.grid_cells, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     light_grid_buffers_[2] = upload.buffer(p.grid_indices, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
