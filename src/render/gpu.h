@@ -51,6 +51,10 @@ struct Texture {
     void destroy(VkDevice device, VmaAllocator allocator);
 };
 
+// A shared texture's image and view after GpuSharedCache::localize moved it into a private image (VkContext::
+// on_shared_textures_moved). Returns whether this copy changed.
+bool refresh_shared_texture(Texture& texture);
+
 // What a texture holds. Colour textures of the world get their mip chain built on the CPU (assets::build_color_mips:
 // linear filtering, alpha-weighted colour, cut-out coverage kept); data (normal maps, UI art) keeps the plain chain.
 // OpaqueColor is a colour texture whose alpha its material never reads (MaterialState::alpha_unused): made opaque

@@ -2,43 +2,21 @@
 
 #include "core/byte_io.h"
 #include "core/env.h"
+#include "platform/gpu_ipc_internal.h"
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0600
-#endif
-#include <windows.h>
-#include <bcrypt.h>
-#endif
-
 namespace hailstone::platform {
+namespace gpu_ipc_detail {
+
 namespace {
-
-constexpr std::string_view kPipePrefix = R"(\\.\pipe\hailstone-gpu-)";
-constexpr std::uint32_t kMagic = 0x50494748; // HGIP, assembled by ByteReader/ByteWriter.
-constexpr std::uint16_t kVersion = 1;
-
-[[noreturn]] void invalid_frame() { throw std::runtime_error("GPU IPC protocol frame is invalid"); }
-[[maybe_unused, noreturn]] void transport_failure() {
-    throw std::runtime_error("GPU IPC peer, cancellation or timeout failure");
-}
 
 void validate_header(const gpu_ipc_wire::Header& h) {
     using K = gpu_ipc_wire::Kind;
@@ -67,6 +45,37 @@ int hex_digit(char c) {
     return -1;
 }
 
+constexpr std::uint32_t kMagic = 0x50494748; // HGIP, assembled by ByteReader/ByteWriter.
+constexpr std::uint16_t kVersion = 1;
+
+#if defined(_WIN32)
+bool transfer(HANDLE pipe, std::span<std::byte> bytes, bool write, HANDLE stop, HANDLE peer, Deadline deadline) {
+    WinHandle event(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!event) return false;
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+        if (stopped(stop, peer) || remaining_ms(deadline) == 0) return false;
+        OVERLAPPED operation{};
+        operation.hEvent = event.get();
+        ::ResetEvent(event.get());
+        DWORD transferred = 0;
+        const DWORD count = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, 1U << 20));
+        const BOOL immediate = write ? ::WriteFile(pipe, bytes.data() + offset, count, &transferred, &operation)
+                                     : ::ReadFile(pipe, bytes.data() + offset, count, &transferred, &operation);
+        if (!immediate && (::GetLastError() != ERROR_IO_PENDING ||
+                           !complete_io(pipe, operation, stop, peer, deadline, transferred))) return false;
+        if (!transferred || transferred > count) return false;
+        offset += transferred;
+    }
+    return true;
+}
+#endif
+
+} // namespace
+
+void invalid_frame() { throw std::runtime_error("GPU IPC protocol frame is invalid"); }
+void transport_failure() { throw std::runtime_error("GPU IPC peer, cancellation or timeout failure"); }
+
 std::array<std::byte, 32> token_bytes(std::string_view token) {
     if (token.size() != 64) throw std::runtime_error("GPU IPC session configuration is invalid");
     std::array<std::byte, 32> out{};
@@ -91,59 +100,6 @@ void validate_timeout(int timeout_ms) {
 }
 
 #if defined(_WIN32)
-
-class WinHandle {
-public:
-    WinHandle() = default;
-    explicit WinHandle(HANDLE h) : h_(h == INVALID_HANDLE_VALUE ? nullptr : h) {}
-    ~WinHandle() { reset(); }
-    WinHandle(WinHandle&& other) noexcept : h_(std::exchange(other.h_, nullptr)) {}
-    WinHandle& operator=(WinHandle&& other) noexcept {
-        if (this != &other) { reset(); h_ = std::exchange(other.h_, nullptr); }
-        return *this;
-    }
-    WinHandle(const WinHandle&) = delete;
-    WinHandle& operator=(const WinHandle&) = delete;
-    HANDLE get() const { return h_; }
-    explicit operator bool() const { return h_ != nullptr; }
-    void reset() noexcept { if (h_) ::CloseHandle(std::exchange(h_, nullptr)); }
-private:
-    HANDLE h_ = nullptr;
-};
-
-struct UserSecurity {
-    std::vector<std::byte> token_info, acl_storage;
-    SECURITY_DESCRIPTOR descriptor{};
-    SECURITY_ATTRIBUTES attributes{};
-    void initialize() {
-        HANDLE raw = nullptr;
-        if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &raw)) transport_failure();
-        WinHandle token(raw);
-        DWORD size = 0;
-        ::GetTokenInformation(token.get(), TokenUser, nullptr, 0, &size);
-        if (!size) transport_failure();
-        token_info.resize(size);
-        if (!::GetTokenInformation(token.get(), TokenUser, token_info.data(), size, &size)) transport_failure();
-        PSID sid = reinterpret_cast<const TOKEN_USER*>(token_info.data())->User.Sid;
-        if (!::IsValidSid(sid)) transport_failure();
-        const DWORD acl_size = static_cast<DWORD>(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD)) +
-                               ::GetLengthSid(sid);
-        acl_storage.resize(acl_size);
-        auto* acl = reinterpret_cast<ACL*>(acl_storage.data());
-        if (!::InitializeAcl(acl, acl_size, ACL_REVISION) ||
-            !::AddAccessAllowedAceEx(acl, ACL_REVISION, 0, FILE_ALL_ACCESS, sid) ||
-            !::InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
-            !::SetSecurityDescriptorOwner(&descriptor, sid, FALSE) ||
-            !::SetSecurityDescriptorDacl(&descriptor, TRUE, acl, FALSE) ||
-            !::SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) transport_failure();
-        attributes = {sizeof(SECURITY_ATTRIBUTES), &descriptor, FALSE};
-    }
-};
-
-using Clock = std::chrono::steady_clock;
-using Deadline = Clock::time_point;
-thread_local const void* current_server_worker = nullptr;
-
 DWORD remaining_ms(Deadline deadline) {
     if (deadline == Deadline::max()) return INFINITE;
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
@@ -151,7 +107,7 @@ DWORD remaining_ms(Deadline deadline) {
     return static_cast<DWORD>(std::min<std::int64_t>(remaining, INFINITE - 1));
 }
 
-bool stopped(HANDLE stop, HANDLE peer = nullptr) {
+bool stopped(HANDLE stop, HANDLE peer) {
     return ::WaitForSingleObject(stop, 0) == WAIT_OBJECT_0 ||
            (peer && ::WaitForSingleObject(peer, 0) == WAIT_OBJECT_0);
 }
@@ -166,27 +122,6 @@ bool complete_io(HANDLE pipe, OVERLAPPED& operation, HANDLE stop, HANDLE peer, D
     return false;
 }
 
-bool transfer(HANDLE pipe, std::span<std::byte> bytes, bool write, HANDLE stop, HANDLE peer, Deadline deadline) {
-    WinHandle event(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!event) return false;
-    std::size_t offset = 0;
-    while (offset < bytes.size()) {
-        if (stopped(stop, peer) || remaining_ms(deadline) == 0) return false;
-        OVERLAPPED operation{};
-        operation.hEvent = event.get();
-        ::ResetEvent(event.get());
-        DWORD transferred = 0;
-        const DWORD count = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, 1U << 20));
-        const BOOL immediate = write ? ::WriteFile(pipe, bytes.data() + offset, count, &transferred, &operation)
-                                     : ::ReadFile(pipe, bytes.data() + offset, count, &transferred, &operation);
-        if (!immediate && (::GetLastError() != ERROR_IO_PENDING ||
-                           !complete_io(pipe, operation, stop, peer, deadline, transferred))) return false;
-        if (!transferred || transferred > count) return false;
-        offset += transferred;
-    }
-    return true;
-}
-
 void read_bytes(HANDLE pipe, std::span<std::byte> bytes, HANDLE stop, HANDLE peer, Deadline deadline) {
     if (!transfer(pipe, bytes, false, stop, peer, deadline)) transport_failure();
 }
@@ -197,11 +132,12 @@ void write_bytes(HANDLE pipe, std::span<const std::byte> bytes, HANDLE stop, HAN
     if (!transfer(pipe, mutable_bytes, true, stop, peer, deadline)) transport_failure();
 }
 
-gpu_ipc_wire::Header read_header(HANDLE pipe, HANDLE stop, HANDLE peer, Deadline deadline, bool idle = false) {
+gpu_ipc_wire::Header read_header(HANDLE pipe, HANDLE stop, HANDLE peer, Deadline deadline, Deadline idle_deadline) {
     std::array<std::byte, gpu_ipc_wire::kHeaderSize> bytes{};
-    if (idle) {
-        // Idle authenticated peers can stay connected; a partially sent header and its body each have deadlines.
-        read_bytes(pipe, std::span(bytes).first(1), stop, peer, Deadline::max());
+    if (idle_deadline != Deadline::min()) {
+        // An idle authenticated peer may wait for its next request until idle_deadline (the server's idle limit);
+        // a partially sent header and its body each have their own deadline.
+        read_bytes(pipe, std::span(bytes).first(1), stop, peer, idle_deadline);
         deadline = Clock::now() + std::chrono::seconds(15);
         read_bytes(pipe, std::span(bytes).subspan(1), stop, peer, deadline);
     } else {
@@ -214,40 +150,11 @@ void write_header(HANDLE pipe, const gpu_ipc_wire::Header& header, HANDLE stop, 
     const auto bytes = gpu_ipc_wire::encode_header(header);
     write_bytes(pipe, bytes, stop, peer, deadline);
 }
-
-bool connect_pipe(HANDLE pipe, HANDLE stop) {
-    WinHandle event(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!event) return false;
-    OVERLAPPED operation{};
-    operation.hEvent = event.get();
-    if (::ConnectNamedPipe(pipe, &operation)) return true;
-    const DWORD error = ::GetLastError();
-    if (error == ERROR_PIPE_CONNECTED) return true;
-    if (error != ERROR_IO_PENDING) return false;
-    DWORD transferred = 0;
-    return complete_io(pipe, operation, stop, nullptr, Deadline::max(), transferred);
-}
-
-std::string hexadecimal(std::span<const std::byte> bytes) {
-    constexpr char digits[] = "0123456789abcdef";
-    std::string out;
-    out.reserve(bytes.size() * 2);
-    for (std::byte byte : bytes) {
-        const auto n = std::to_integer<unsigned>(byte);
-        out.push_back(digits[n >> 4]);
-        out.push_back(digits[n & 15]);
-    }
-    return out;
-}
-
-bool token_equal(std::span<const std::byte, 32> a, std::span<const std::byte, 32> b) {
-    unsigned different = 0;
-    for (std::size_t i = 0; i < a.size(); ++i) different |= std::to_integer<unsigned>(a[i] ^ b[i]);
-    return different == 0;
-}
-
 #endif
-} // namespace
+
+} // namespace gpu_ipc_detail
+
+using namespace gpu_ipc_detail;
 
 namespace gpu_ipc_wire {
 std::vector<std::byte> encode_header(const Header& header) {
@@ -283,18 +190,6 @@ bool gpu_ipc_available() noexcept {
     return true;
 #else
     return false;
-#endif
-}
-
-GpuIpcSession make_gpu_ipc_session() {
-#if defined(_WIN32)
-    std::array<std::byte, 48> random{};
-    if (::BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(random.data()), static_cast<ULONG>(random.size()),
-                          BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0) transport_failure();
-    return {std::string(kPipePrefix) + hexadecimal(std::span(random).first(16)),
-            hexadecimal(std::span(random).subspan(16)), 0};
-#else
-    throw std::runtime_error("GPU IPC is not available on this platform");
 #endif
 }
 
@@ -347,97 +242,8 @@ struct GpuIpcClient::Impl {
     std::mutex mutex;
     std::uint64_t sequence = 0;
 };
-
-struct GpuIpcServer::Impl {
-    GpuIpcSession session;
-    Handler handler;
-    Disconnect disconnect;
-    WinHandle stop_event;
-    std::vector<WinHandle> pipes;
-    std::vector<std::thread> workers;
-    std::atomic<std::uint64_t> next_connection{1};
-    std::mutex stop_mutex;
-    bool joined = false;
-
-    void worker(HANDLE pipe) noexcept {
-        using K = gpu_ipc_wire::Kind;
-        current_server_worker = this;
-        const auto expected_token = token_bytes(session.token);
-        while (!stopped(stop_event.get())) {
-            if (!connect_pipe(pipe, stop_event.get())) break;
-            GpuIpcPeer peer;
-            bool authenticated = false;
-            try {
-                ULONG process_id = 0;
-                if (!::GetNamedPipeClientProcessId(pipe, &process_id) || !process_id) transport_failure();
-                WinHandle process(::OpenProcess(PROCESS_DUP_HANDLE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
-                                                 FALSE, process_id));
-                if (!process || ::GetProcessId(process.get()) != process_id ||
-                    ::WaitForSingleObject(process.get(), 0) != WAIT_TIMEOUT) transport_failure();
-                peer = {process_id, next_connection.fetch_add(1)};
-                if (!peer.connection_id) transport_failure();
-                const Deadline hello_deadline = Clock::now() + std::chrono::seconds(5);
-                const auto hello = read_header(pipe, stop_event.get(), process.get(), hello_deadline);
-                if (hello.kind != K::Authenticate) invalid_frame();
-                std::array<std::byte, 32> received_token{};
-                read_bytes(pipe, received_token, stop_event.get(), process.get(), hello_deadline);
-                if (!token_equal(received_token, expected_token)) transport_failure();
-                write_header(pipe, {K::Authenticated, 0, 0, false}, stop_event.get(), process.get(), hello_deadline);
-                authenticated = true;
-                std::uint64_t last_sequence = 0;
-                while (!stopped(stop_event.get(), process.get())) {
-                    const auto request = read_header(pipe, stop_event.get(), process.get(), Deadline::max(), true);
-                    if (request.kind != K::Request || last_sequence == std::numeric_limits<std::uint64_t>::max() ||
-                        request.sequence != last_sequence + 1) invalid_frame();
-                    last_sequence = request.sequence;
-                    std::vector<std::byte> body(request.body_size);
-                    read_bytes(pipe, body, stop_event.get(), process.get(), Clock::now() + std::chrono::seconds(15));
-                    GpuIpcReply reply = handler(peer, body);
-                    if (reply.body.size() > kGpuIpcMaxBody || (reply.borrowed_handle && !reply.handle_owner)) invalid_frame();
-                    const Deadline reply_deadline = Clock::now() + std::chrono::seconds(15);
-                    write_header(pipe, {K::Response, static_cast<std::uint32_t>(reply.body.size()), request.sequence,
-                                        reply.borrowed_handle != nullptr}, stop_event.get(), process.get(), reply_deadline);
-                    if (reply.borrowed_handle) {
-                        HANDLE remote = nullptr;
-                        if (stopped(stop_event.get(), process.get()) ||
-                            !::DuplicateHandle(::GetCurrentProcess(), reply.borrowed_handle, process.get(), &remote,
-                                                0, FALSE, DUPLICATE_SAME_ACCESS)) transport_failure();
-                        ByteWriter handle_value;
-                        handle_value.le(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(remote)));
-                        // The destination owns this handle now. Never CloseHandle its integer in this process or
-                        // close a possibly reused destination handle after a partial/broken transport write.
-                        write_bytes(pipe, handle_value.data(), stop_event.get(), process.get(), reply_deadline);
-                    }
-                    write_bytes(pipe, reply.body, stop_event.get(), process.get(), reply_deadline);
-                }
-            } catch (...) {
-                // The client sees a broken channel. Never relay a handler exception or authentication material.
-            }
-            if (authenticated && disconnect) {
-                try { disconnect(peer); } catch (...) { ::SetEvent(stop_event.get()); }
-            }
-            ::DisconnectNamedPipe(pipe);
-        }
-        ::DisconnectNamedPipe(pipe);
-        current_server_worker = nullptr;
-    }
-
-    void stop() noexcept {
-        ::SetEvent(stop_event.get());
-        // A callback may request stopping, but only a control thread joins workers after callbacks return.
-        if (current_server_worker == this) return;
-        std::lock_guard lock(stop_mutex);
-        if (joined) return;
-        for (auto& pipe : pipes) ::CancelIoEx(pipe.get(), nullptr);
-        for (auto& thread : workers) if (thread.joinable()) thread.join();
-        pipes.clear();
-        joined = true;
-    }
-    ~Impl() { stop(); }
-};
 #else
 struct GpuIpcClient::Impl {};
-struct GpuIpcServer::Impl { GpuIpcSession session; };
 #endif
 
 GpuIpcClient::GpuIpcClient(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -521,52 +327,6 @@ void GpuIpcClient::close() noexcept {
     std::lock_guard lock(impl_->mutex);
     if (impl_->pipe) ::CancelIoEx(impl_->pipe.get(), nullptr);
     impl_->pipe.reset();
-#endif
-}
-
-GpuIpcServer::GpuIpcServer(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
-GpuIpcServer::~GpuIpcServer() { stop(); }
-
-std::unique_ptr<GpuIpcServer> GpuIpcServer::start(GpuIpcSession session, Handler handler,
-                                                Disconnect disconnect, std::size_t max_peers) {
-    validate_session(session);
-    if (!handler || max_peers < 1 || max_peers > 16) throw std::invalid_argument("GPU IPC server configuration is invalid");
-#if defined(_WIN32)
-    if (session.server_process_id && session.server_process_id != ::GetCurrentProcessId())
-        throw std::runtime_error("GPU IPC server process pin is invalid");
-    session.server_process_id = ::GetCurrentProcessId();
-    auto impl = std::make_unique<Impl>();
-    impl->session = std::move(session);
-    impl->handler = std::move(handler);
-    impl->disconnect = std::move(disconnect);
-    impl->stop_event = WinHandle(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!impl->stop_event) transport_failure();
-    UserSecurity security;
-    security.initialize();
-    const std::wstring name(impl->session.endpoint.begin(), impl->session.endpoint.end());
-    for (std::size_t i = 0; i < max_peers; ++i) {
-        const DWORD first = i == 0 ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0;
-        WinHandle pipe(::CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | first,
-                                         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                                         static_cast<DWORD>(max_peers), 65536, 65536, 0, &security.attributes));
-        if (!pipe) transport_failure();
-        impl->pipes.push_back(std::move(pipe));
-    }
-    try {
-        for (const auto& pipe : impl->pipes)
-            impl->workers.emplace_back([state = impl.get(), handle = pipe.get()] { state->worker(handle); });
-    } catch (...) { impl->stop(); throw; }
-    return std::unique_ptr<GpuIpcServer>(new GpuIpcServer(std::move(impl)));
-#else
-    (void)disconnect;
-    throw std::runtime_error("GPU IPC is not available on this platform");
-#endif
-}
-
-const GpuIpcSession& GpuIpcServer::session() const noexcept { return impl_->session; }
-void GpuIpcServer::stop() noexcept {
-#if defined(_WIN32)
-    if (impl_) impl_->stop();
 #endif
 }
 

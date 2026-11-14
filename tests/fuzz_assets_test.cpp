@@ -28,6 +28,8 @@
 #include "core/server_profile.h"
 #include "core/shared_file_cache.h"
 #include "nav/nav_mesh.h"
+#include "platform/gpu_ipc.h"
+#include "render/gpu_cache_protocol.h"
 #include "fuzz_support.h"
 #include "pfs_fixtures.h"
 #include "wld_fixtures.h"
@@ -525,6 +527,45 @@ TEST_CASE("fuzz: textures (DDS, BMP, TGA, PNG)") {
             if (img) (void)to_rgba8(*img);
         }
         (void)describe_texture(d);
+    });
+}
+
+// The shared GPU texture protocol (render/gpu_cache_protocol.h, platform/gpu_ipc.h): what one client process reads
+// from another. The transport's frame header, the broker's request parsing and the texture recipe it decodes.
+TEST_CASE("fuzz: GPU texture broker frames, requests and recipes") {
+    namespace gpu = render::gpu_cache;
+    sweep("gpu_ipc_wire::decode_header", {platform::gpu_ipc_wire::encode_header({platform::gpu_ipc_wire::Kind::Request, 64, 1, false})},
+          4, 400, [](std::span<const std::byte> d) { (void)platform::gpu_ipc_wire::decode_header(d); });
+
+    assets::Image image;
+    image.width = image.height = 4;
+    image.format = assets::PixelFormat::BC1;
+    image.mips = {Bytes(8), Bytes(8), Bytes(8)};
+    const auto recipe = gpu::encode_texture(image, false);
+    sweep("decode_gpu_cache_texture", {recipe}, 8, 600,
+          [](std::span<const std::byte> d) { (void)gpu::decode_texture(d); });
+
+    std::vector<Bytes> requests;
+    gpu::Request r;
+    r.op = gpu::Op::Hello;
+    r.identity.model = "GPU";
+    requests.push_back(gpu::encode_request(r));
+    r = {};
+    r.op = gpu::Op::Texture;
+    r.digest = gpu::texture_key(image, false);
+    r.recipe = recipe;
+    requests.push_back(gpu::encode_request(r));
+    r = {};
+    r.op = gpu::Op::Release;
+    r.epoch = 3;
+    r.serial = 4;
+    requests.push_back(gpu::encode_request(r));
+    r = {};
+    r.op = gpu::Op::RetireTexture;
+    requests.push_back(gpu::encode_request(r));
+    sweep("gpu broker request", requests, 8, 600, [](std::span<const std::byte> d) {
+        const auto request = gpu::decode_request(d);
+        if (request.op == gpu::Op::Texture) (void)gpu::decode_texture(request.recipe);
     });
 }
 

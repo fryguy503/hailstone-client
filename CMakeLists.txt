@@ -299,6 +299,7 @@ add_library(hailstone_engine STATIC
   src/platform/durable_file.cpp
   src/platform/shared_file.cpp
   src/platform/gpu_ipc.cpp
+  src/platform/gpu_external_memory.cpp
   src/platform/process.cpp
   src/game/eq_names.cpp
   src/ui/font_faces.cpp
@@ -355,7 +356,6 @@ add_library(hailstone_engine STATIC
   src/assets/model_points.cpp
   src/assets/regions.cpp
   src/assets/texture.cpp
-  src/assets/gpu_probe_scene.cpp
   src/assets/png_read.cpp
   src/assets/jpeg_read.cpp
   src/assets/texture_overrides.cpp
@@ -379,8 +379,8 @@ add_library(hailstone_engine STATIC
   src/app/plate_test.cpp
   src/app/nameplate_layer.cpp
   src/render/gpu_requirements.cpp
-  src/render/gpu_share_capabilities.cpp
-  src/render/gpu_asset_view_probe.cpp
+  src/render/gpu_cache_protocol.cpp
+  src/render/gpu_share_link.cpp
   src/render/gpu_shared_cache.cpp
   src/render/pipeline_cache.cpp
   src/render/gpu.cpp
@@ -708,7 +708,7 @@ set_property(SOURCE src/app/updater.cpp APPEND PROPERTY COMPILE_DEFINITIONS
              HAILSTONE_ADDON_INDEX="${HAILSTONE_ADDON_INDEX}" HAILSTONE_PROJECT_PAGE="${HAILSTONE_PROJECT_PAGE}")
 target_link_libraries(hailstone_engine PUBLIC SDL3::SDL3 Vulkan::Headers volk::volk_headers GPUOpen::VulkanMemoryAllocator glm::glm ZLIB::ZLIB)
 if(WIN32)
-  target_link_libraries(hailstone_engine PUBLIC ws2_32 advapi32 bcrypt dbghelp winhttp ole32 shell32)
+  target_link_libraries(hailstone_engine PUBLIC ws2_32 advapi32 dbghelp winhttp ole32 shell32)
 elseif(APPLE)
   target_link_libraries(hailstone_engine PUBLIC "-framework Security" "-framework CoreFoundation")
 else()
@@ -911,15 +911,34 @@ foreach(tool ${HAILSTONE_TOOLS})
   endif()
   target_link_libraries(${tool} PRIVATE hailstone_engine)
 endforeach()
-# Headless capability queries and bounded same-device GPU alias/readback diagnostics; no game assets required.
+# The shared GPU texture experiment's broker, its server transport and its probes (docs/graphics.md "Shared GPU
+# textures"): linked by the tools below and the tests, never by the client, which has only the importing side.
+add_library(hailstone_gpu_lab STATIC
+  tools/gpu_lab/gpu_cache_broker_core.cpp
+  tools/gpu_lab/gpu_cache_broker.cpp
+  tools/gpu_lab/gpu_share_capabilities.cpp
+  tools/gpu_lab/gpu_asset_view_probe.cpp
+  tools/gpu_lab/gpu_probe_scene.cpp
+  src/platform/gpu_ipc_server.cpp
+  src/platform/gpu_external_memory_export.cpp)
+target_include_directories(hailstone_gpu_lab PUBLIC tools)
+target_compile_options(hailstone_gpu_lab PRIVATE ${HAILSTONE_WARNINGS})
+target_link_libraries(hailstone_gpu_lab PUBLIC hailstone_engine)
+if(WIN32)
+  target_link_libraries(hailstone_gpu_lab PUBLIC bcrypt)
+endif()
+if(HAILSTONE_CLANG_TIDY)
+  set_target_properties(hailstone_gpu_lab PROPERTIES CXX_CLANG_TIDY "${HAILSTONE_TIDY_COMMAND}")
+endif()
+# Headless capability queries and same-device GPU alias/readback checks; no game assets required.
 add_executable(hailstone_gpu_share_probe tools/gpu_share_probe.cpp ${HAILSTONE_WIN_MANIFEST})
 target_compile_options(hailstone_gpu_share_probe PRIVATE ${HAILSTONE_WARNINGS})
 if(HAILSTONE_CLANG_TIDY)
   set_target_properties(hailstone_gpu_share_probe PROPERTIES CXX_CLANG_TIDY "${HAILSTONE_TIDY_COMMAND}")
 endif()
-target_link_libraries(hailstone_gpu_share_probe PRIVATE hailstone_engine)
+target_link_libraries(hailstone_gpu_share_probe PRIVATE hailstone_gpu_lab)
 list(APPEND HAILSTONE_TOOLS hailstone_gpu_share_probe)
-# Isolated real-asset sharing experiment; the playable client keeps its current renderer.
+# Offscreen real-zone sharing experiment; the playable client keeps its own renderer.
 hailstone_add_shaders(hailstone_gpu_asset_probe_shaders shaders/gpu_asset_probe.vert shaders/gpu_asset_probe.frag)
 add_executable(hailstone_gpu_asset_probe tools/gpu_asset_probe.cpp ${HAILSTONE_WIN_MANIFEST})
 target_compile_options(hailstone_gpu_asset_probe PRIVATE ${HAILSTONE_WARNINGS})
@@ -927,13 +946,13 @@ target_compile_definitions(hailstone_gpu_asset_probe PRIVATE HAILSTONE_GPU_ASSET
 if(HAILSTONE_CLANG_TIDY)
   set_target_properties(hailstone_gpu_asset_probe PROPERTIES CXX_CLANG_TIDY "${HAILSTONE_TIDY_COMMAND}")
 endif()
-target_link_libraries(hailstone_gpu_asset_probe PRIVATE hailstone_engine)
+target_link_libraries(hailstone_gpu_asset_probe PRIVATE hailstone_gpu_lab)
 add_dependencies(hailstone_gpu_asset_probe hailstone_gpu_asset_probe_shaders)
 list(APPEND HAILSTONE_TOOLS hailstone_gpu_asset_probe)
-# Experimental coordinator for immutable GPU textures across separate client processes.
+# The broker clients share textures through.
 add_executable(hailstone_gpu_cache_broker tools/gpu_cache_broker.cpp ${HAILSTONE_WIN_MANIFEST})
 target_compile_options(hailstone_gpu_cache_broker PRIVATE ${HAILSTONE_WARNINGS})
-target_link_libraries(hailstone_gpu_cache_broker PRIVATE hailstone_engine)
+target_link_libraries(hailstone_gpu_cache_broker PRIVATE hailstone_gpu_lab)
 if(HAILSTONE_CLANG_TIDY)
   set_target_properties(hailstone_gpu_cache_broker PROPERTIES CXX_CLANG_TIDY "${HAILSTONE_TIDY_COMMAND}")
 endif()
@@ -993,9 +1012,10 @@ if(HAILSTONE_BUILD_TESTS)
     tests/startup_error_test.cpp
     tests/gpu_requirements_test.cpp
     tests/gpu_ipc_test.cpp
-    tests/gpu_shared_cache_test.cpp
+    tests/gpu_cache_protocol_test.cpp
     tests/gpu_shared_texture_owner_test.cpp
-    tests/benchmark_world_test.cpp
+    tests/gpu_share_link_test.cpp
+    tests/gpu_cache_broker_core_test.cpp
     tests/frame_sync_test.cpp
     tests/look_eviction_test.cpp
     tests/appearance_systems_test.cpp
@@ -1337,7 +1357,7 @@ if(HAILSTONE_BUILD_TESTS)
   add_dependencies(hailstone_tests hailstone_shared_cache_probe)
   target_compile_definitions(hailstone_tests PRIVATE HAILSTONE_SHARED_CACHE_PROBE="$<TARGET_FILE:hailstone_shared_cache_probe>")
   target_compile_options(hailstone_tests PRIVATE ${HAILSTONE_WARNINGS})
-  target_link_libraries(hailstone_tests PRIVATE hailstone_engine hailstone_texpack doctest::doctest)
+  target_link_libraries(hailstone_tests PRIVATE hailstone_engine hailstone_gpu_lab hailstone_texpack doctest::doctest)
   # The server extension test plugin (tests/plugins/ExtendTest.c), the same as an ABI 1 plugin, and the same with its
   # hook table under the export name after 0.6.
   add_library(ExtendTest MODULE tests/plugins/ExtendTest.c)
@@ -1400,7 +1420,7 @@ if(HAILSTONE_LIBFUZZER)
   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "HAILSTONE_LIBFUZZER needs Clang")
   endif()
-  foreach(target pfs wld texture soe packets decoders zip)
+  foreach(target pfs wld texture soe packets decoders zip gpucache)
     string(TOUPPER ${target} upper)
     add_executable(fuzz_${target} tests/fuzz_libfuzzer.cpp)
     target_compile_definitions(fuzz_${target} PRIVATE HAILSTONE_FUZZ_${upper})
@@ -1431,4 +1451,11 @@ if(WIN32)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:${exe}> $<TARGET_FILE_DIR:${exe}>
       COMMAND_EXPAND_LISTS)
   endforeach()
+endif()
+
+# MSVC under Wine (docs/ci.md): the engine library's archive command is longer than the 32,767 characters a Windows
+# command line holds, and CMake writes response files on its own only when the host is Windows. Set last, so it holds
+# for this directory's targets only: the dependencies' subdirectories (SDL's precompiled header) keep plain commands.
+if(WIN32 AND NOT CMAKE_HOST_WIN32)
+  set(CMAKE_NINJA_FORCE_RESPONSE_FILE ON)
 endif()

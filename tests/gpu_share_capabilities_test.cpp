@@ -2,7 +2,7 @@
 
 #include <limits>
 
-#include "render/gpu_share_capabilities.h"
+#include "gpu_lab/gpu_share_capabilities.h"
 
 using namespace hailstone::render;
 

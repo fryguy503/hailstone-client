@@ -187,10 +187,18 @@ ActorRenderer::ActorRenderer(VkContext& vk, std::shared_ptr<const assets::Charac
         upload.submit();
     }
     for (std::uint32_t slot = 0; slot < VkContext::kFramesInFlight; ++slot) rebuild_descriptors(slot); // none in flight yet
+    // Shared textures moved into this client's own images when sharing stopped: each set is rewritten when its
+    // frame comes round (rebuild_descriptors).
+    shared_listener_ = vk_.on_shared_textures_moved([this] {
+        for (auto& t : textures_)
+            if (refresh_shared_texture(t))
+                for (auto& written : descriptor_textures_) written = 0;
+    });
     create_pipelines(shader_dir);
 }
 
 ActorRenderer::~ActorRenderer() {
+    vk_.remove_shared_textures_listener(shared_listener_);
     stop_dresser();
     VkDevice d = vk_.device();
     vk_.wait_idle();
@@ -300,6 +308,8 @@ std::unique_ptr<ActorRenderer::Kept> ActorRenderer::release_kept() {
 
 void ActorRenderer::adopt(Kept& kept) {
     textures_ = std::move(kept.textures);
+    // Kept across a zone change, while shared textures may have moved into private images.
+    for (auto& t : textures_) refresh_shared_texture(t);
     texture_slots_ = std::move(kept.texture_slots);
     models_ = std::move(kept.models);
     mesh_refs_ = std::move(kept.mesh_refs);

@@ -11,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-#include "render/gpu_share_capabilities.h"
+#include "gpu_lab/gpu_share_capabilities.h"
 
 namespace {
 const char* boolean(bool value) { return value ? "true" : "false"; }

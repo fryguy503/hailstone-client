@@ -169,7 +169,8 @@ no client runs.
 
 The performance window (Ctrl+Shift+P) shows the mapped backing and the cache's hit, build, fallback and eviction
 counts. Mapped bytes are address space, not measured resident memory. See
-[Shared asset memory](research/shared-asset-memory.md) for the design and measurements.
+[Shared asset memory](research/shared-asset-memory.md) for the design and measurements. The separate Windows
+experiment that shares GPU textures is in [graphics.md](graphics.md#shared-gpu-textures-experimental-windows).
 
 ### A character's settings
 

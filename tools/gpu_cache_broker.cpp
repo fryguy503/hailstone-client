@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "core/env.h"
-#include "render/gpu_shared_cache.h"
+#include "gpu_lab/gpu_cache_broker.h"
 
 using namespace hailstone;
 namespace {
@@ -18,7 +18,7 @@ std::uint32_t number(std::string_view text) {
 }
 int main(int argc, char** argv) {
     try {
-        render::GpuCacheBrokerOptions options;
+        gpu_lab::GpuCacheBrokerOptions options;
         if (const char* model = core::env("GPU_NAME")) options.device_model = model;
         enum class Mode { None, Serve, Proof, Status, Stop } mode = Mode::None;
         std::uint32_t iterations = 32;
@@ -49,9 +49,9 @@ int main(int argc, char** argv) {
             else if (arg == "--budget-mib") options.budget_bytes = std::uint64_t{value} << 20;
             else options.maximum_entries = value;
         }
-        if (mode == Mode::Serve) return render::run_gpu_cache_broker(options);
-        if (mode == Mode::Proof) return render::run_gpu_cache_consumer_proof(options, iterations);
-        if (mode == Mode::Status || mode == Mode::Stop) return render::run_gpu_cache_control(mode == Mode::Stop);
+        if (mode == Mode::Serve) return gpu_lab::run_gpu_cache_broker(options);
+        if (mode == Mode::Proof) return gpu_lab::run_gpu_cache_consumer_proof(options, iterations);
+        if (mode == Mode::Status || mode == Mode::Stop) return gpu_lab::run_gpu_cache_control(mode == Mode::Stop);
         throw std::invalid_argument("Select a GPU cache tool mode; see --help");
     } catch (const std::exception& error) {
         std::fprintf(stderr, "GPU cache: %s\n", error.what()); return 1;

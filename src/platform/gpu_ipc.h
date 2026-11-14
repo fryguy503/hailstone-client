@@ -3,6 +3,7 @@
 // Local authenticated transport for the experimental GPU asset broker. Only opaque packets and borrowed exports
 // cross this boundary; Vulkan stays in render/. Endpoint/token values are private and must never be logged.
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,8 @@
 namespace hailstone::platform {
 
 inline constexpr std::size_t kGpuIpcMaxBody = std::size_t{256} << 20;
+// How long the server keeps an authenticated peer that sends nothing.
+inline constexpr std::chrono::milliseconds kGpuIpcIdleTimeout{std::chrono::minutes(5)};
 
 // Transport codec, exposed for GPU-free malformed-frame tests. Render owns its own packet opcodes and schema.
 namespace gpu_ipc_wire {
@@ -37,7 +40,8 @@ struct GpuIpcSession {
 };
 
 bool gpu_ipc_available() noexcept;
-// Windows only for now; unsupported platforms fail explicitly so callers can use their private renderer.
+// Windows only for now; unsupported platforms fail explicitly so callers can use their private renderer. Part of the
+// server side (gpu_ipc_server.cpp): the broker tool and the tests have it, the client does not.
 GpuIpcSession make_gpu_ipc_session();
 // HAILSTONE_GPU_IPC_ENDPOINT, HAILSTONE_GPU_IPC_TOKEN, optional HAILSTONE_GPU_IPC_SERVER_PID (core::env aliases).
 // Returns nullopt when neither endpoint nor token is set. Partial/invalid configuration throws without its values.
@@ -98,6 +102,7 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+// The broker's side (gpu_ipc_server.cpp): linked by the broker tool and the tests, not by the client.
 class GpuIpcServer {
 public:
     using Handler = std::function<GpuIpcReply(const GpuIpcPeer&, std::span<const std::byte>)>;
@@ -107,9 +112,11 @@ public:
     GpuIpcServer& operator=(const GpuIpcServer&) = delete;
     // Current-user DACL, local clients only, first-instance name ownership, at most 16 connection workers. Handler
     // may run concurrently and must return within 10 seconds. Disconnect runs once for every authenticated peer,
-    // including transport failure/shutdown, and must invalidate any lease still owned by that connection.
+    // including transport failure/shutdown, and must release any lease still owned by that connection. A peer that
+    // sends nothing for `idle_timeout` is disconnected (a client sends a keep-alive well within the default).
     static std::unique_ptr<GpuIpcServer> start(GpuIpcSession session, Handler handler,
-                                               Disconnect disconnect = {}, std::size_t max_peers = 16);
+                                               Disconnect disconnect = {}, std::size_t max_peers = 16,
+                                               std::chrono::milliseconds idle_timeout = kGpuIpcIdleTimeout);
     const GpuIpcSession& session() const noexcept;
     void stop() noexcept;
 

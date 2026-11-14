@@ -15,7 +15,7 @@
 #include <glm/glm.hpp>
 #include <volk.h>
 
-#include "assets/gpu_probe_scene.h"
+#include "gpu_lab/gpu_probe_scene.h"
 #include "core/sha256.h"
 
 namespace hailstone::render {

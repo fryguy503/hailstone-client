@@ -22,6 +22,8 @@
 #include "core/zip_read.h"
 #include "net/session_codec.h"
 #include "net/zone_packets.h"
+#include "platform/gpu_ipc.h"
+#include "render/gpu_cache_protocol.h"
 #if defined(HAILSTONE_FUZZ_DECODERS)
 #include <iterator>
 
@@ -133,6 +135,22 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
             // state layouts without a received catalog and cannot fuzz their inner fields.
             // Alternate format: byte0 chooses an achievement parser, remainder is its body.
             hailstone::fuzz_achievements::feed(in);
+        }
+#elif defined(HAILSTONE_FUZZ_GPUCACHE)
+        // What one client process reads from another over the shared GPU texture transport: byte 0 picks the
+        // frame header, the broker's request parser (and the recipe a texture request carries) or the recipe alone.
+        if (size >= 1) {
+            const auto body = in.subspan(1);
+            switch (data[0] % 3) {
+            case 0: (void)hailstone::platform::gpu_ipc_wire::decode_header(body); break;
+            case 1: {
+                const auto request = hailstone::render::gpu_cache::decode_request(body);
+                if (request.op == hailstone::render::gpu_cache::Op::Texture)
+                    (void)hailstone::render::gpu_cache::decode_texture(request.recipe);
+                break;
+            }
+            default: (void)hailstone::render::gpu_cache::decode_texture(body); break;
+            }
         }
 #elif defined(HAILSTONE_FUZZ_ZIP)
         // The updater's inputs (docs/updater.md): a package zip read whole, and the same bytes as a manifest.

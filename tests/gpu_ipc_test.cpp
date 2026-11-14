@@ -147,6 +147,25 @@ TEST_CASE("GPU IPC Windows: authenticated peers, first-instance ownership and di
     CHECK_THROWS(a->call({}));
 }
 
+TEST_CASE("GPU IPC Windows: a peer that stays idle past the server's limit is disconnected") {
+    std::atomic<unsigned> disconnected = 0;
+    auto server = GpuIpcServer::start(
+        make_gpu_ipc_session(),
+        [](const GpuIpcPeer&, std::span<const std::byte> body) { return GpuIpcReply{{body.begin(), body.end()}, nullptr, {}}; },
+        [&](const GpuIpcPeer&) { ++disconnected; }, 1, std::chrono::milliseconds(200));
+    auto client = GpuIpcClient::connect(server->session());
+    const std::array message{std::byte{7}};
+    CHECK(std::ranges::equal(client->call(message).body, message));
+    // Polled up to a generous bound: only the server's idle limit can end this connection.
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (disconnected.load() == 0 && std::chrono::steady_clock::now() < until)
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(disconnected.load() == 1);
+    CHECK_THROWS(client->call(message));
+    client->close();
+    server->stop();
+}
+
 TEST_CASE("GPU IPC Windows: concurrent calls are serialized per connection") {
     auto server = GpuIpcServer::start(make_gpu_ipc_session(),
         [](const GpuIpcPeer&, std::span<const std::byte> body) { return GpuIpcReply{{body.begin(), body.end()}, nullptr, {}}; }, {}, 1);
