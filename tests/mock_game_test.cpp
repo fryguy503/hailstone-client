@@ -479,6 +479,15 @@ TEST_CASE("mock server: a tradeskill station opens in the tradeskill window, its
     forge.drop_id = 12;
     forge.type = 16; // a forge: a combine container
     forge.name = "Forge";
+    GroundObject station;
+    station.drop_id = forge.drop_id;
+    station.object_type = 16;
+    const auto at = conn.world().player()->position;
+    station.x = at.y;
+    station.y = at.x;
+    station.z = at.z;
+    conn.receive_zone_packet_for_test(encode(station));
+    REQUIRE(conn.click_object(forge.drop_id));
     conn.receive_zone_packet_for_test(encode(forge));
     REQUIRE(conn.world_container());
     CHECK(conn.tradeskill().open);
@@ -489,6 +498,7 @@ TEST_CASE("mock server: a tradeskill station opens in the tradeskill window, its
     REQUIRE(conn.world_container());
     CHECK_FALSE(conn.world_container()->window);
     // Experiment: the container in its own window, the tradeskill window closed.
+    REQUIRE(conn.click_object(forge.drop_id));
     conn.receive_zone_packet_for_test(encode(forge));
     REQUIRE(conn.tradeskill().open);
     conn.show_world_container_window();
@@ -500,6 +510,7 @@ TEST_CASE("mock server: a tradeskill station opens in the tradeskill window, its
     ClickObjectAction box = forge;
     box.type = 1;
     box.name = "Box";
+    REQUIRE(conn.click_object(box.drop_id));
     conn.receive_zone_packet_for_test(encode(box));
     REQUIRE(conn.world_container());
     CHECK_FALSE(conn.tradeskill().open);

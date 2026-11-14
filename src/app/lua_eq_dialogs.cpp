@@ -44,6 +44,8 @@ class QuantityWindow : public StockWindow {
 public:
     QuantityWindow() : StockWindow("QuantityWnd", false) {}
 
+    void frame(EqHost& host) override { sync(host); }
+
     bool shown(EqHost& host) override {
         sync(host);
         return active_;
@@ -112,6 +114,7 @@ public:
 private:
     // The dialog's owner this frame; a new one starts the slider at its start and moves the window.
     void sync(EqHost& host) {
+        if (host.quantity && host.quantity->owner_valid && !host.quantity->owner_valid()) host.quantity.reset();
         int key = 0;
         std::int32_t min = 0, max = 0, start = 0;
         std::optional<std::pair<int, int>> pos;
@@ -926,7 +929,13 @@ private:
 
 } // namespace
 
-void open_quantity(EqHost& host, const game::QuantityOpen& in, std::function<void(std::int32_t)> done) {
+void open_quantity(EqHost& host, const game::QuantityOpen& in, std::function<void(std::int32_t)> done,
+                   std::function<bool()> owner_valid) {
+    if (owner_valid) {
+        done = [valid = owner_valid, accept = std::move(done)](std::int32_t n) {
+            if (valid() && accept) accept(n);
+        };
+    }
     game::QuantityOpen q = in;
     ImVec2 ds = ImGui::GetIO().DisplaySize;
     q.screen_width = static_cast<std::int32_t>(ds.x);
@@ -953,6 +962,7 @@ void open_quantity(EqHost& host, const game::QuantityOpen& in, std::function<voi
     u.slider = r.slider;
     u.position = r.position;
     u.done = std::move(done);
+    u.owner_valid = std::move(owner_valid);
     u.serial = ++host.quantity_serial;
     host.quantity = std::move(u);
 }

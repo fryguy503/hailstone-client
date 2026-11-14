@@ -67,6 +67,10 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [ ] Achievements: live catalog refresh, earned/guild messages, local/nonlocal links, comparison and reward delivery; native completion timing, icon resource selection and legacy achievement gauges (docs/unknowns.md).
 - [x] Stock pending reward selection and task reward previews (`0x6411` / `0x6471`), both UI packs, explicit claims and item inspection; codec, model, bridge, mock-server and Lua UI tests. Live use reported generally working (2026-11-12); the refined reward window still needs targeted live claims/inspection acceptance below.
 - [ ] Reward selection: offered-task preview controls and live claims/inspection on a RoF2 server (docs/unknowns.md).
+- [x] NPC service distance closure and dependent quantity/confirmation cleanup in both UI packs; every container closes with the bank (unit, UI and mock-server coverage; docs/mechanics.md "Leaving an NPC interaction").
+- [x] World tradeskill station distance closure in recipe, Experiment and hidden modes, out-of-reach open replies and busy replies, and world-only quantity/mold/batch cleanup; carried tradeskill bags stay when only the station closes.
+- [x] The service windows' ranges and timers checked against the original (docs/mechanics.md "Leaving an NPC interaction"); still open: the mercenary liaison's check cadence (docs/unknowns.md) and walking away from each service live.
+- [ ] Trades with players: CTradeWnd::OnProcessFrame @0x780b50 cancels them beyond the partner's avatar height + 20 too (hand-ins only so far).
 - [x] Partial-stack looting asks the quantity (EQEmu ignores it); Link All; the loot music (entry 5 has no asset).
 - [x] Ctrl + right-click bag swapping; Ctrl+click bag contents' slot order and refusal text (game/bag_move).
 - [x] The tradeskill window: favourites, request waits, combine checks, trivial colours (experiment and auto-combine were already in).
