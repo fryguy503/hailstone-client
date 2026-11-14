@@ -718,6 +718,9 @@ intensity; updated every frame, in every zone type, with or without a sky):
     rains), the rings fading out where a pixel spans more than a tenth of a unit.
   - Snow lies on level surfaces in noisy drifts, covering over 2 minutes and melting over 5: on the ground and on the
     doors' and objects' roofs and ledges, not on the characters (drifts fixed in the world would slide over them).
+  - A cut-out surface of the zone (alpha-tested: leaves, fronds, grates) gets neither puddles nor snow, and a third
+    of the wet look: its normals are a crown's or a card's, mostly facing up, and would paint a generated tree's
+    crown with the sky's reflection or turn it white.
   - All of it is in `shaders/weather.glsl` (`weather_surface`), fed `SceneLighting::weather` (`render::set_weather`:
     wet, snow, the rain falling, the puddles).
   - The look belongs to the zone: entering another zone starts it over, dry and with a clear sky

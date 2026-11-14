@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Modern lighting: in rain and snow, trees from a texture pack with generated trees no longer turn pale, sky-coloured or white. Leaves and other cut-out surfaces no longer get puddles or snow, and get a lighter wet look
 - Click to move without the isometric camera: Options > Display > Isometric Camera > **Click to Move in Every Camera** (and the gamepad pack's Camera page) lets you click the ground to walk there, and click a door, an item, a merchant or a corpse out of reach to walk to it and use it, in first person and the camera behind you too. It is off unless you turn it on; the isometric camera always moves this way
 - The classic zones' ground is drawn smooth: hills and rock faces are shaded in smooth gradients instead of flat facets, and their triangles are curved and cut finer, while walls, cliff edges and buildings stay sharp. Where you can walk, what you collide with and where mobs stand are unchanged (the drawn ground stays within a foot of the original). `display.smooth_ground = 0` in `hailstone.ini` turns it off
 - Modern lighting: the land past the zone lines no longer shows the neighbour zone's slopes and banks sticking through it as brown strips, shards and fins (North Karana's lake towards East Karana), nor two lakes on top of each other where both zones have one. Further from the line the neighbour's own ground is now drawn, its roads and textures included, instead of a stand-in. `display.neighbour_tint=true` in `hailstone.ini` tints what comes from the neighbour zones, to find any such spot that is left
