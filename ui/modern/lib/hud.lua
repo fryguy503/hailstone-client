@@ -659,8 +659,10 @@ function hud.Dialog(screen, title, opts, body)
     savedW = savedW and math.max(savedW, opts.resizable[1])
     savedH = savedH and math.max(savedH, opts.resizable[2])
     -- its size is kept in design pixels and set every frame: a new scale (the menu's Scale, Ctrl+wheel, the UI
-    -- scale) zooms the whole window, not only what is in it; its edges and corner (below) change the size
-    ui.SetNextWindowSize((savedW or dw) * s, (savedH or dh) * s, ui.Cond.Always)
+    -- scale) zooms the whole window, not only what is in it; its edges and corner (below) change the size. It is
+    -- drawn no bigger than the screen (the saved size is kept): a large scale left its foot below the screen's edge.
+    ui.SetNextWindowSize(math.min((savedW or dw) * s, io.width), math.min((savedH or dh) * s, io.height),
+      ui.Cond.Always)
   end
   local alpha = windowAlpha(key, k, false)
   style.Push()

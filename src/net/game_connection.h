@@ -86,6 +86,7 @@
 #include "net/door_packets.h"
 #include "net/dz_packets.h"
 #include "net/guild_bank_packets.h"
+#include "net/fellowship_packets.h"
 #include "net/item_packets.h"
 #include "net/commerce.h"
 #include "net/market_packets.h"
@@ -168,6 +169,7 @@ inline constexpr std::uint32_t kConfirmDestroy = 0x10101, kConfirmNotice = 0x101
 // A raid invitation with Options/RaidInviteConfirm on (Handle_OP_RaidUpdate 0x14 / 0x16: CRaid's own
 // ConfirmationDialog); the answer is CRaid::SendInviteResponse's.
 inline constexpr std::uint32_t kConfirmRaidInvite = 0x10007;
+inline constexpr std::uint32_t kConfirmFellowshipInvite = 0x1000a;
 // /decaycorpse's question (dialog 0x64 on its own handler object, vtable 0x9c69bc; data the corpse, data2 the player).
 inline constexpr std::uint32_t kConfirmDecayCorpse = 0x10008;
 // /offlinemode's question with Options/OfflineModeConfirm on (CEverQuest's dialog 0x8f, eqstr 13345, 60 s); a yes
@@ -2223,6 +2225,19 @@ public:
     // OP_GuildUpdate action 5 fills.
     bool has_guild_permission(std::int32_t permission) const;
     const game::RaidState& raid() const { return raid_; }
+    const FellowshipState& fellowship() const { return fellowship_; }
+    void fellowship_create();
+    void fellowship_set_motd(const std::string& motd);
+    void fellowship_invite_target();
+    void fellowship_remove(std::uint32_t character_id);
+    void fellowship_promote(std::uint32_t character_id);
+    void fellowship_toggle_sharing(std::uint32_t character_id);
+    void fellowship_leave();
+    void fellowship_end();
+    void fellowship_refresh_kits(bool available_only, std::uint32_t category_mask);
+    void fellowship_create_camp(std::uint32_t camp_type_id);
+    void fellowship_destroy_camp();
+    void answer_fellowship_invite(bool accept);
     // The last OP_WhoAllResponse as it came (its lines went to the chat window) and how many have come: the
     // gamepad pack's Who window lists it (a client extension: RoF2 has only the chat lines).
     const WhoResponse* last_who() const { return last_who_ ? &*last_who_ : nullptr; }
@@ -2738,6 +2753,12 @@ private:
     void close_trade(bool completed);
     void reset_commerce_for_zone();
     void handle_group(Op op, const AppPacket& p);
+    bool handle_fellowship(const AppPacket& p);
+    void reset_fellowship(bool zoning = false);
+    void fellowship_invite_tick();
+    bool fellowship_request_allowed(FellowshipAction action, std::uint32_t target) const;
+    void send_fellowship_request(FellowshipAction action, std::uint32_t target = 0,
+                                 std::string_view motd = {}, std::uint32_t camp_type = 0);
     bool group_command(const std::string& command, const std::string& args);
     // The group roles and the leadership abilities' commands (net/game_connection_group.cpp): /grouproles,
     // /groupleader, /marknpc, /gmarknpc, /rmarknpc, /clearmarks, /findpc, /inspectbuffs.
@@ -3247,6 +3268,9 @@ private:
     void handle_track_reply(const AppPacket& p);
     void track_filter_all();
     game::RaidState raid_;
+    FellowshipState fellowship_;
+    std::uint64_t fellowship_revision_ = 0;
+    std::int64_t fellowship_invite_expires_ = 0;
     std::optional<WhoResponse> last_who_;
     std::uint32_t who_count_ = 0;
     std::unique_ptr<ChatServer> chat_server_;

@@ -1,5 +1,6 @@
 # Hailstone's own flora rules (assets/zone_flora.h, docs/graphics.md "Zone flora"). East Commonlands: the grassland
-# family, and a few desert plants on its sand and dirt.
+# family, and a few desert plants on its sand and dirt (commonlands.eqg, the revamped Commonlands).
+donor commonlands.eqg
 ground sand* 0.15 DesertPlant1 DesertPlant2 DesertPlant3
 ground dirt* 0.15 DesertPlant1 DesertPlant2 DesertPlant3
 include plains

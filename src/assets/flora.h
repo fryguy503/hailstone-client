@@ -25,14 +25,20 @@ namespace hailstone::assets {
 
 class ZoneFloraGrower;
 
+// A FloraInstance's definition for a patch of Hailstone's lawn (assets/zone_flora.h): blades built in the shaders
+// over a square of `width` a side, not a definition's picture.
+inline constexpr std::uint32_t kLawnDefinition = 0xffffffffu;
+
 // One plant: its foot, its turn (degrees about the vertical), its size, the terrain's colour under it (ARGB, for
-// *INHERITVERTEXCOLOR) and its definition (index into ZoneFlora::definitions).
+// *INHERITVERTEXCOLOR) and its definition (index into ZoneFlora::definitions, or kLawnDefinition). A lawn patch also
+// keeps the ground's slope under it (dz/dx, dz/dy), so its blades stand on the ground across the whole square.
 struct FloraInstance {
     glm::vec3 position{0.0f};
     float rotation = 0.0f;
     float width = 1.0f, height = 1.0f;
     std::uint32_t color = 0xffffffffu;
     std::uint32_t definition = 0;
+    glm::vec2 slope{0.0f};
 };
 
 // A zone's flora, by tile (the instances of tile t are instances[first, first + count)).

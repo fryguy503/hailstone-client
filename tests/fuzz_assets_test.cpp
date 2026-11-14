@@ -14,6 +14,7 @@
 
 #include "assets/eqg.h"
 #include "assets/eqg_character.h"
+#include "assets/gltf_mesh.h"
 #include "assets/pfs.h"
 #include "assets/regions.h"
 #include "assets/sound_files.h"
@@ -484,6 +485,20 @@ TEST_CASE("fuzz: textures (DDS, BMP, TGA, PNG)") {
         }
         (void)describe_texture(d);
     });
+}
+
+TEST_CASE("fuzz: binary glTF models") {
+    fuzz::QuietLog quiet;
+    Mesh m;
+    m.vertices.resize(4);
+    for (std::size_t i = 0; i < 4; ++i) m.vertices[i].position = glm::vec3(float(i), float(i % 2), 1.0f);
+    m.indices = {0, 1, 2, 1, 2, 3};
+    Material mat;
+    mat.frames = {"leaf.png"};
+    mat.blend = BlendMode::Masked;
+    m.materials = {mat};
+    m.parts = {{0, 6, 0, true}};
+    sweep("read_glb", {write_glb(m, 1)}, 24, 600, [](std::span<const std::byte> d) { (void)read_glb(d); });
 }
 
 TEST_CASE("fuzz: XMI, sound and effect tables, ini and tag text") {

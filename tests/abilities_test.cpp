@@ -385,7 +385,7 @@ TEST_CASE("key map: the original's defaults, names and ini round trip") {
     // the welcome screen's key has none.
     for (KeyCommand c : {KeyCommand::CMD_TOGGLE_CLAIM_WIN, KeyCommand::CMD_VOTE_RESULTS, KeyCommand::CMD_HISTORIC_ALERTS,
                          KeyCommand::CMD_SOCIAL_SHARE, KeyCommand::CMD_MARKETPLACE_GOLD,
-                         KeyCommand::CMD_REAL_ESTATE_LEAVE, KeyCommand::TOGGLE_FELLOWSHIPWIN,
+                         KeyCommand::CMD_REAL_ESTATE_LEAVE,
                          KeyCommand::CMD_TOGGLE_TICKET_WND, KeyCommand::CMD_WELCOMESCREEN}) {
         int i = static_cast<int>(c);
         CHECK(key_command_dropped(i));
@@ -394,6 +394,8 @@ TEST_CASE("key map: the original's defaults, names and ini round trip") {
     }
     // The Marketplace window's key stays (no default key in the original): the window speaks the original's opcodes.
     CHECK_FALSE(key_command_dropped(static_cast<int>(KeyCommand::CMD_MARKETPLACE)));
+    CHECK_FALSE(key_command_dropped(static_cast<int>(KeyCommand::TOGGLE_FELLOWSHIPWIN)));
+    CHECK(std::find(listed_commands().begin(), listed_commands().end(), static_cast<int>(KeyCommand::TOGGLE_FELLOWSHIPWIN)) != listed_commands().end());
     CHECK_FALSE(km.binding(static_cast<int>(KeyCommand::CMD_MARKETPLACE), 0).bound());
     CHECK_FALSE(key_command_dropped(static_cast<int>(KeyCommand::CMD_MERCENARIES)));
     CHECK_FALSE(key_command_dropped(static_cast<int>(KeyCommand::CMD_ACHIEVEMENT_WINDOW)));

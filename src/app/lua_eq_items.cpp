@@ -168,8 +168,8 @@ public:
 
     // The Alt. Currency page (not decoded; EQEmu's OP_AltCurrency): icon, name and amount per currency the server
     // listed as shown (Display Missing adds the ones at 0). Create Item takes some out onto the cursor (the quantity
-    // dialog, at most a stack), Reclaim puts the cursor's currency item back (OP_AltCurrencyReclaim). The names'
-    // dbstr type is not known, so a currency shows as "Currency <n>".
+    // dialog, at most a stack), Reclaim puts the cursor's currency item back (OP_AltCurrencyReclaim). A name is dbstr
+    // type 0x12 of the currency id (CInventoryWnd's list fill), "Currency <n>" when the game folder has none.
     const ListData* list(EqHost& host, std::string_view id) override {
         if (!host.conn || id != "AltCurr_PointList") return nullptr;
         currencies_ = {};
@@ -179,7 +179,9 @@ public:
         for (std::uint32_t cid : listed(*host.conn)) {
             const auto& a = host.conn->alt_currencies().at(cid);
             ListRow r;
-            r.texts = {"", std::format("Currency {}", cid), std::to_string(a.amount)};
+            std::string name = host.conn->strings().db_string(cid, 0x12);
+            if (name.empty()) name = std::format("Currency {}", cid);
+            r.texts = {"", std::move(name), std::to_string(a.amount)};
             if (host.textures) r.icon = host.textures->item_icon(a.entry.icon);
             if (cid == selected_) currencies_.selected = static_cast<int>(currencies_.rows.size());
             currencies_.rows.push_back(std::move(r));
@@ -661,6 +663,16 @@ public:
             ++row;
         }
         return &data_;
+    }
+
+    // Hailstone: "ItemList:<row>", the merchant's item on that row of the list as last read (eq.SlotItem,
+    // eq.CompareSlotItem: the item comparison of a row under the mouse).
+    const net::Item* slot_item(EqHost& host, std::string_view id) override {
+        const auto* m = session(host);
+        const int row = index_after(id, "ItemList:");
+        if (!m || row < 0 || row >= static_cast<int>(slots_.size())) return nullptr;
+        auto it = m->items.find(slots_[static_cast<std::size_t>(row)]);
+        return it == m->items.end() ? nullptr : &it->second;
     }
 
     bool list_click(EqHost& host, std::string_view id, int row, bool right, int) override {

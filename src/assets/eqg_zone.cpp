@@ -19,6 +19,7 @@
 
 #include "assets/eqg.h"
 #include "assets/flora.h"
+#include "assets/model_overrides.h"
 #include "assets/texture.h"
 #include "assets/wld.h"
 #include "assets/zone.h"
@@ -1137,6 +1138,7 @@ Zone load_zone(const GameDir& game, std::string_view name, const ZoneLoadCancel&
         log::info("{}: loading the live client's revamped {}.eqg, the zone the server runs", lname, lname);
     }
     if (std::size_t n = add_environment_emitters(game, zone)) log::info("{}: {} environment emitters", zone.name, n);
+    apply_model_overrides(zone);
     return zone;
 }
 

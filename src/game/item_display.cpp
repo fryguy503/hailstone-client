@@ -34,6 +34,13 @@ std::string str(const ItemDisplayContext& ctx, std::uint32_t id) {
     return ctx.strings ? ctx.strings->format(id, {}) : std::string();
 }
 
+// The string table's text, or a plain label where the player's eqstr_us.txt lacks the id. The original always has
+// its own table's; a live game folder's table dropped the stats live removed (13036..13044, 13315, 9354), and items
+// on a RoF2 server still carry them.
+std::string str_or(const ItemDisplayContext& ctx, std::uint32_t id, const char* fallback) {
+    return ctx.strings && ctx.strings->has(id) ? ctx.strings->format(id, {}) : std::string(fallback);
+}
+
 std::string str_args(const ItemDisplayContext& ctx, std::uint32_t id, std::initializer_list<std::string> args) {
     std::vector<std::string> v(args);
     return ctx.strings ? ctx.strings->format(id, v) : std::string();
@@ -430,7 +437,7 @@ std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
                                                                     : str_args(ctx, 0xbbb, {std::to_string(item.charges)})) +
                      "<BR>";
             }
-            if (item.potion_belt_enabled) d += str(ctx, 0x248a) + "<BR>";
+            if (item.potion_belt_enabled) d += str_or(ctx, 0x248a, "Potion Belt Enabled") + "<BR>";
         } else {
             d += augment_slot_types_line(item, aug_strings(ctx)) + "<BR>"; // 0x69d6e0
         }
@@ -764,12 +771,12 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
 
     g.row = start;
     any = false;
-    auto col3 = [&](std::uint32_t id, std::int32_t (*f)(const net::Item&), bool mod) {
+    auto col3 = [&](std::uint32_t id, std::int32_t (*f)(const net::Item&), bool mod, const char* fallback = nullptr) {
         std::int32_t aug = 0;
         std::int32_t v = stat(item, f, aug);
         if (mod) v = modified(v, skill);
         if (v != 0) {
-            g.put_int(3, str(ctx, id), v, aug);
+            g.put_int(3, fallback ? str_or(ctx, id, fallback) : str(ctx, id), v, aug);
             any = true;
         }
     };
@@ -777,16 +784,16 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
     col3(0x3402, f_regen, false);
     col3(0x32ea, f_mregen, false);
     col3(0x32eb, f_eregen, false);
-    col3(0x32ec, f_sshield, false);
-    col3(0x32ed, f_ce, false);
-    col3(0x32ee, f_shielding, false);
-    col3(0x32ef, f_ds, false);
-    col3(0x32f0, f_dot, true);
-    col3(0x32f1, f_dsmit, true);
-    col3(0x32f2, f_avoid, true);
-    col3(0x32f3, f_acc, true);
-    col3(0x32f4, f_stun, true);
-    col3(0x3403, f_strike, true);
+    col3(0x32ec, f_sshield, false, "Spell Shield:");
+    col3(0x32ed, f_ce, false, "Combat Effects:");
+    col3(0x32ee, f_shielding, false, "Shielding:");
+    col3(0x32ef, f_ds, false, "Damage Shield:");
+    col3(0x32f0, f_dot, true, "DoT Shielding:");
+    col3(0x32f1, f_dsmit, true, "DS Mitigation:");
+    col3(0x32f2, f_avoid, true, "Avoidance:");
+    col3(0x32f3, f_acc, true, "Accuracy:");
+    col3(0x32f4, f_stun, true, "Stun Resist:");
+    col3(0x3403, f_strike, true, "Strikethrough:");
     col3(0x33fb, f_heal, true);
     col3(0x33fc, f_sdmg, true);
     col3(0x23ed, f_clair, true);

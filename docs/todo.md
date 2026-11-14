@@ -6,6 +6,12 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 
 ## 1. Gameplay a player will hit
 
+### Fellowships
+
+- [x] Native membership, invitations, leader actions, MOTD, personal/leader XP toggles, vitality, camp requests, `/fsay`, window key and MQ fellowship search; both UI packs support up to 64 server-supplied members (packet, mock-server and UI tests).
+- [ ] Live acceptance on a fellowship server, including cross-zone invitations/roster updates, XP sharing and camp creation/destruction. Stock EQEmu sends no fellowship packets; EQEmu PR #5134 (unmerged) serializes twelve slots, so expanded rosters need matching server support.
+- [x] Native vitality gauges and inventory bars in both packs, campsite categories loaded from the player's resources, DBString type-0 kit descriptions, gamepad leader markers and a server-expiry countdown. Category masks and description lookup were checked against the original handlers.
+
 ### Combat and spells (do first)
 - [x] Extended chat channels 57..107 and user colours 355..408 for servers that send a later client's chat colours (a Hailstone extension; stock routing and colours unchanged; docs/mechanics.md "Extended chat routing").
 - [x] Missiles: a despawned source or target as DeleteMyMissiles handles it; flying through walls with a target is the original's behaviour (60b1934). Not tested live (no archer).
@@ -146,9 +152,14 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] EQG: water reflects the drawn sky and the noswap environment maps, modern lava (crust, LavaH walls), blood/coloured falls, foam only on rising floors, animated texture sidecars, the one unpainted heightmap tile (scorchedwoods) (look-surfaces). Open: heightmap lighting colour, glow maps in the classic look, planar reflections, TAA.
 - [x] Upscaling: a render scale (`display.render_scale`, 50 .. 100 %) with AMD FSR 1 (EASU + RCAS, `display.sharpness`) (render-scale; zone viewer with validation, not seen in game or with /viewport).
 - [x] Hailstone Texture Studio: HD texture packs built from the player's files on their GPU (ncnn Vulkan, the PBRify models), a tool add-on of its own repository (projecthailstone/hailstone-texstudio) built on `src/texpack`; the add-on manager's tool kind (docs/addons.md "Tools") installs and starts it; Options picks the pack (from the next start) and starts the studio (texstudio-addon; unit tests with stand-in models and GitHub in memory, one zone built on an RX 9060 XT and compared with the PyTorch pack). Open: an install from the real GitHub on Windows; measure an integrated GPU (Intel Iris Xe), NVIDIA and Windows' drivers; the 17 live textures the decoder cannot read; a pack's settings changing without a new pack; a pack applied without a restart.
+- [x] Photo materials in built packs (docs/graphics.md "Photo materials"): a classic zone's ground tiles rebuilt from Poly Haven's CC0 photo textures by rules the texture studio ships, keeping the original's layout and colour (unit tests with stand-in materials; Qeynos Hills built and seen in the zone viewer). Open: rules for more zones; the photos' repeat on large flat areas; a preview of a material tile in the studio; the studio's size estimate ignores the material tiles' size.
+- [x] Model overrides (docs/graphics.md "Model overrides"): binary glTF models in a texture pack drawn in place of a zone's objects, the collision kept on the game's mesh (unit tests; seen in the zone viewer). Open: doors and other moving objects (the object renderer); a scale or offset for models made by hand.
+- [x] Generated trees (docs/graphics.md "Generated trees"): a classic zone's trees grown again as models fitted to the game's trunks and leaves, with photo bark, from the texture studio's rules (unit tests; Qeynos Hills built and seen in the zone viewer). Levels of detail done (near, middle, far cards with pictures; about a tenth of the triangles). Open: rules for more zones; cut-out leaves thin out in the smaller mips; EQG zones' trees. Shadows draw coarser levels than the scene (7,100 shadow triangles at the test spot, as the game's trees); each tree kind is stored once and drawn instanced; levels fade into each other with a dither; Options > Tree Detail Distance.
+- [x] Horizon hills (docs/graphics.md "Horizon hills"): rings of distant hills round an outdoor zone, placed, coloured and sized from the zone's own terrain (unit tests for the measuring; viewer screenshots of qeytoqrg, eastkarana and everfrost by day and night, modern lighting; not yet in a session). Fog banks round their feet and a sea of fog short of them; a fade with distance. Open: the god rays cross them; no snow caps or tree lines of their own; the fog does not follow the wind.
 - [x] Zone flora for classic zones (docs/graphics.md "Zone flora"): rules files of Hailstone's own, plants from a donor EQG archive, `+green` texel masks; East Commonlands first (unit tests and the zone files; seen in the zone viewer with the modern lighting, not yet in a session).
 - [x] Zone flora for every outdoor classic zone (flora/default.txt): no plants under the zone's own roofs, ceilings and bridges, nor on water, built surfaces or rock; grown tile by tile round the camera (unit tests; tools/florascan over the 148 outdoor classic zones of an NMS asset folder; viewer screenshots of a dozen zones, modern lighting; not yet in a session).
 - [x] Flora lit in the shaders (the sun's shadow per pixel, the sky, the place's light and the lamps per vertex), bending round the spawns standing in it, up to 262,144 plants a frame; climate families of donors for zone flora (unit tests; viewer screenshots and frame times, modern lighting; not yet in a session).
+- [x] Zone flora's grass is a lawn built in the shaders (no game asset): an even carpet, a patch per 3.2-unit square, blades at three levels of detail, the wind, the bending, tapered edges; the donors' kinds scattered over it (unit tests; viewer screenshots and frame times in Qeynos Hills, South Karana and Greater Faydark, modern lighting; not yet in a session, nor with the classic lighting).
 - [ ] Zone flora: a placed object's roof (a tent, a hut that is an object) still has grass under it; zones the default suits less well may want files of their own; a dev-UI view to try rules in a zone and save them; the classic lighting and the bending in a session.
 - [ ] Upscaling, temporal groundwork (docs/graphics.md Roadmap 6): projection jitter; a motion-vector target from every scene pipeline (last frame's camera, bones, wind time, door matrices); history reset on zone-in, teleport and resize; texture LOD bias.
 - [ ] Upscaling: TAA/TAAU on that groundwork, then FSR 2/3.1 (MIT) as the temporal upscaler; reactive mask for particles, spells, water and lava.
@@ -217,6 +228,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 
 ## 3. UI
 
+- [x] Modern AA window: aligned headers and rows at the dialog's scale, current-frame column bounds, saved column resizing, clipped cells and Reset columns (UI input tests; live acceptance pending).
 - [x] Labels: combat timer, breath, respawn gauge, aggro meter, title, ATK, regeneration, and more EQTypes, in the modern and gamepad packs (ui-gaps, merged up to 90aa43f; checked live). ATK leaves out the leadership offense bonus and profile +0x3468; the label and gauge types still not tracked are listed in unknowns.md.
 - [x] Buff icon fading below 19 s; gauge colours for special values (unit tests, not seen live).
 - [x] Hot buttons: the AA and gem right clicks, vertical bars (modern pack, checked live), the key-map text corner; the ranged attack was already in.
@@ -273,6 +285,11 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] Swimming: water surfaces in the mesh, the look pitch steered while swimming (breath, diving, climbing out).
 - [x] Zone lines marked exactly into the mesh; a walk stops before stepping into one (seen live at Oasis / North Ro).
 - [ ] Swimming live end to end (a long swim, diving, climbing out); levitation paths.
+
+## Item comparison (docs/item-compare.md)
+- [x] The item against what the player wears, on a copy of the sheet through the stat rules (caps, recommended level, the shown AC and ATK); the slot choice (pairs, two-handers, the secondary); effects gained and lost; why it cannot be used; the class-weighted verdict; `eq.CompareItem` / `CompareSlotItem` / `CompareBagSlotItem`; both packs' tooltips, panels and item displays; Options (unit, bridge and pack tests).
+- [ ] Live: inventory, bags, merchant, loot, a linked item, a two-hander, a ring pair; the gamepad pack.
+- [ ] The Advanced Inventory's bank rows; focus effects by strength; the weights tuned with players.
 
 ## Isometric camera (docs/isometric.md)
 - [x] The camera (type 7): pitch, field of view, free turn, zoom, easing; fog, far plane, region and shadow cascades measured from the player; `/camera`.

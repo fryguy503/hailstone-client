@@ -934,7 +934,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | ItemIcon | (icon) → tex,u0,v0,u1,v1 \| nil | Item icon cell | — |
 | ClickSlot | (slot, bagSlot\|nil, "left"\|"leftheld"\|"right"\|phase [, outside]) → ok | Game slot logic: pick up, drop, swap, split, use | actions |
 | HasSlot | (slot, bagSlot\|nil) → bool | ClickSlot can act there now: in game, a possessions slot 0..33, and with bagSlot a place inside the bag that general slot holds (empty places count) | — |
-| SlotItem | (name, child) → item\|nil | Item in a window's item slot (loot, bank, trade…) | — |
+| SlotItem | (name, child) → item\|nil | Item in a window's item slot (loot, bank, trade…; `MerchantWnd` `ItemList:<row>` a merchant's row, `ItemDisplayWindow` `Hailstone_Item` the shown item) | — |
 | BagInfo | (bagWindow) → name, slots, combine, where, slot \| nil | "Bag1".."Bag36" or "WorldContainer". where: "inventory", "bank" or "other" | — |
 | BagSlotItem | (bagWindow, index) → item\|nil | Item in a bag slot (0-based) | — |
 | BagSlotClick | (bagWindow, index [, button [, outside]]) → ok | Slot logic on a bag slot | actions |
@@ -1179,6 +1179,16 @@ achievement and reward-selection APIs.
 | ZoneExitWalk | (zone) → x, y \| nil | /nav walk through the nearest line to `zone` | move |
 | ShowZoneMap | ([zone]) → — | Map window shows another zone (or own) | — |
 | MapZoneShown | () → long, short, own | Zone the map shows | — |
+
+#### Item comparison (lua_eq_compare.cpp)
+
+The item against what the player wears (docs/item-compare.md). `c` = {usable, whyNot, notes, slots = {{slot, slotName, current, verdict, score, changes = {{key, name, before, after, delta, weight}}, weaponBefore, weaponAfter, gained, lost}}}, the best swap first; nil for no comparison.
+
+| Function | Args → returns | What | Cap |
+|---|---|---|---|
+| CompareItem | (slot [, bagSlot]) → c\|nil | An item carried (nil for a worn one) | — |
+| CompareSlotItem | (window, child) → c\|nil | The item in a window's item slot (as SlotItem) | — |
+| CompareBagSlotItem | (bagWindow, index) → c\|nil | The item in a bag window's slot | — |
 
 #### Find window (lua_eq_find.cpp)
 

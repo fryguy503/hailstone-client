@@ -2,23 +2,29 @@
 
 // Flora for zones that have none of their own (docs/graphics.md "Zone flora"): Hailstone's own, not the original's.
 // The classic (WLD) zones carry no flora data; a rules file of this client's (flora/<zone>.txt in the install folder)
-// names the ground textures that grow plants, how densely and of which kinds, and the EQG archive in the player's game
-// folder whose RadialFloraDefs.rfd and textures give the plants' shapes and pictures (East Commonlands takes
-// commonlands.eqg's). Nothing in the zone's files changes; the plants are placed over the zone's terrain as it loads,
+// names the ground textures that grow plants: a lawn (blades the shaders build, no game asset: an even carpet over
+// the ground, a patch per kLawnCell square) and, scattered over it, plants of the kinds it names, whose shapes and
+// pictures are the RadialFloraDefs.rfd and textures of EQG archives in the player's game folder (the forests take
+// oldkithicor.eqg's ferns). Nothing in the zone's files changes; the plants are placed over the zone's terrain as it loads,
 // into Zone::flora, and drawn by render::FloraRenderer like an EQG zone's. They are looks only: no collision, line of
 // sight or picking sees them.
 //
 // The rules file, one directive a line, '#' to the end of a line a comment:
-//   donor <archive>                  an EQG archive of the shapes and textures (commonlands.eqg); several donor lines
+//   donor <archive>                  an EQG archive of the shapes and textures (oldkithicor.eqg); several donor lines
 //                                    add up, their definitions named <archive stem>/<name> (oldkithicor/fern)
 //   max_slope <degrees>              steeper ground grows nothing (default 40)
 //   scale <min> <max>                every plant's size times a random factor in the range (default 1 1)
-//   ground <glob> <density> [+green|+greenish] <kind>[:<weight>]...
-//                                    ground whose texture matches the glob (case-insensitive, '*' and '?') grows
-//                                    <density> plants per 100 square units, each one of the kinds (definition names
+//   lawn_height <min> <max>          the lawn's blades, in units: their height wanders between the two slowly over the
+//                                    ground (default 1.8 3)
+//   ground <glob> <density> [+green|+greenish] [lawn] [<kind>[:<weight>]...]
+//                                    ground whose texture matches the glob (case-insensitive, '*' and '?') grows the
+//                                    lawn when the line says `lawn` (every kLawnCell square whose centre passes the
+//                                    tests below), and <density> plants per 100 square units, each one of the kinds
+//                                    (definition names
 //                                    of the donors' RadialFloraDefs.rfd, the first donor's that has it, or one
 //                                    donor's as <archive stem>/<name>) picked by weight (default 1); the first
-//                                    matching line wins, and a density of 0 keeps a texture bare. With +green a plant
+//                                    matching line wins, and a line with a density of 0 and no lawn keeps a texture
+//                                    bare. With +green a plant
 //                                    grows only where the texel under it is green (is_green_texel): the classic
 //                                    zones' ground textures blend grass into cliff, sand or a path within one picture.
 //                                    +greenish (is_greenish_texel) also takes olive and dark grass: for a texture whose
@@ -64,11 +70,14 @@ struct ZoneFloraRules {
         float density = 0.0f; // plants per 100 square units
         bool green_only = false; // +green or +greenish
         bool greenish = false;   // +greenish
+        bool lawn = false;       // lawn
         std::vector<Kind> kinds;
+        bool grows() const { return lawn || (density > 0.0f && !kinds.empty()); }
     };
     std::vector<std::string> donors; // in order
     float max_slope = 40.0f; // degrees
     float min_scale = 1.0f, max_scale = 1.0f;
+    float lawn_min = 1.8f, lawn_max = 3.0f; // the lawn's blade height, units
     std::vector<Ground> ground;
 };
 
@@ -88,7 +97,22 @@ std::optional<ZoneFloraRules> load_zone_flora_rules(const std::filesystem::path&
 
 // The tiles the plants grow by (ZoneFlora::tiles), in units.
 inline constexpr float kZoneFloraTile = 128.0f;
-// The most plants one tile grows: a bound for a rules file asking too much (the default's grass reaches some 2,000).
+// The lawn's squares (a patch of blades each), in units: world-aligned, kZoneFloraTile / 40, so a tile holds 40 x 40.
+inline constexpr float kLawnCell = kZoneFloraTile / 40.0f;
+// The lawn tapers where it meets bare ground over this many squares: a patch's height is times
+// lawn_edge_factor(the distance to the nearest bare square's centre, in squares).
+inline constexpr int kLawnEdgeCells = 3;
+// 0.55 beside bare ground, rising smoothly to 1 at kLawnEdgeCells + 0.5 squares and past.
+float lawn_edge_factor(float squares);
+// A lawn patch with fewer of its eight neighbouring squares grown is dropped: a lone tuft of a stray green texel.
+inline constexpr int kLawnMinNeighbours = 3;
+// How far the lawn's height wanders: its value noise's lattice, in units.
+inline constexpr float kLawnNoiseCell = 48.0f;
+// The lawn's height at a spot (0..1 between lawn_height's min and max): smooth value noise over the world, so the
+// carpet rises and falls gently rather than patch by patch.
+float lawn_height_noise(glm::vec2 p);
+
+// The most plants one tile grows: a bound for a rules file asking too much (a lawn's tile holds 1,600 patches).
 inline constexpr std::size_t kMaxTileFlora = 65536;
 
 // Whether a texel (RGB bytes) is grass for +green: green over red and well over blue, and not near black.
@@ -137,8 +161,9 @@ public:
         float area = 0.0f;
     };
 
+    struct Data; // opaque (zone_flora.cpp)
+
 private:
-    struct Data;
     std::unique_ptr<Data> d_;
 };
 
@@ -171,9 +196,10 @@ std::optional<FloraDonors> open_flora_donors(const GameDir& game, std::span<cons
 // "oldkithicor/fern" that donor's alone.
 bool flora_kind_matches(std::string_view kind, std::string_view definition);
 
-// For a zone without flora of its own: takes its rules (load_zone_flora_rules), opens their donor archive from
+// For a zone without flora of its own: takes its rules (load_zone_flora_rules), opens their donor archives from
 // `game` and sets zone.flora up to grow (ZoneFlora::grower). Returns how many tiles may grow plants (0 when the zone
-// has flora already, no rules apply, or the donor or its definitions are missing; each logged).
+// has flora already, no rules apply, or nothing would grow: no lawn and no donor's definitions; each logged). The
+// lawn needs no donor.
 std::size_t add_zone_flora(const GameDir& game, Zone& zone, const std::filesystem::path& rules_dir, bool outdoor);
 
 } // namespace hailstone::assets

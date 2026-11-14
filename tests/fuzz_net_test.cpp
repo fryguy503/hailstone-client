@@ -33,6 +33,7 @@
 #include "net/door_packets.h"
 #include "net/dz_packets.h"
 #include "net/group_packets.h"
+#include "net/fellowship_packets.h"
 #include "net/guild_bank_packets.h"
 #include "net/item_packets.h"
 #include "net/login.h"

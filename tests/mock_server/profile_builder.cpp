@@ -128,7 +128,9 @@ AppPacket build_player_profile(const ProfileSpec& spec) {
     u32(0);
     u32(50); for (int r = 0; r < 50; ++r) { cstr(w, ""); zeros32(6); }
     u32(55555);                            // expAA
-    zeros32(4);
+    u32(spec.last_fellowship_join);
+    w.le(spec.fellowship_vitality_normal);
+    u32(spec.fellowship_vitality_aa);
     u8(0); u8(0); u8(0); u8(0);
     u32(65);
     u8(1);                                 // showhelm

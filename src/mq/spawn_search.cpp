@@ -172,6 +172,15 @@ bool in_raid(const game::Spawn& s, const game::WorldState& world, const game::Ra
     return false;
 }
 
+bool in_fellowship(const game::Spawn& s, const net::FellowshipState* fellowship, bool corpse) {
+    if (!fellowship || !fellowship->active()) return false;
+    for (const auto& m : fellowship->members) {
+        if (m.name.empty()) continue;
+        if (corpse ? istarts_with(s.name, m.name + "'s corpse") : iequals(s.name, m.name)) return true;
+    }
+    return false;
+}
+
 // MQ's IsPCNear: another player not in the group within `radius` (3D) of the spawn. Without a group the player
 // counts too, as IsInGroup is false for everyone then.
 bool pc_near(const game::Spawn& s, const game::WorldState& world, const game::GroupState* group, float radius) {
@@ -256,8 +265,7 @@ bool matches(const SpawnSearch& q, const game::Spawn& s, const game::Spawn* me, 
     const bool corpse_names = q.kind == K::PcCorpse || s.is_corpse;
     if (q.nogroup && in_group(s, world, src.group, false)) return false;
     if (q.group && !in_group(s, world, src.group, corpse_names)) return false;
-    // MQ's IsInFellowship: EQEmu has no fellowships (game/keymap.h), so the player's has no members.
-    if (q.fellowship) return false;
+    if (q.fellowship && !in_fellowship(s, src.fellowship, corpse_names)) return false;
     if (q.raid && !in_raid(s, world, src.raid, corpse_names)) return false;
 
     const glm::vec3 p = server_pos(s);
@@ -313,6 +321,7 @@ SearchSources sources_of(const net::GameConnection& conn) {
     s.raid = &conn.raid();
     s.guild = &conn.guild();
     s.xtargets = &conn.xtargets();
+    s.fellowship = &conn.fellowship();
     return s;
 }
 
