@@ -65,6 +65,8 @@ void GameConnection::open_merchant(std::uint32_t npc_id) {
         chat(ChatEvent::Kind::System, strings_.format(1466, std::vector<std::string>{}));
     }
     merchant_ = MerchantSession{};
+    merchant_->serial = ++npc_session_serial_;
+    merchant_check_ms_ = 0;
     merchant_->npc_id = npc_id;
     merchant_->name = game::display_name(it->second.name);
     MerchantClick m;
@@ -96,6 +98,33 @@ void GameConnection::update_merchant() {
     if (!in_range && merchant_->pending < 1) {
         log::info("merchant: {} is out of reach, closing", merchant_->name);
         close_merchant();
+    }
+}
+
+void GameConnection::update_npc_interactions() {
+    update_merchant();
+    update_bank();
+    update_barter();
+    // These services used to check reach only when opening. Until their original frame checks are verified,
+    // use the same 3D 20-unit reach as merchant/bank (docs/unknowns.md), without ending active tribute benefits.
+    auto unavailable = [&](std::uint32_t npc) {
+        auto it = world_.spawns.find(npc);
+        return it == world_.spawns.end() || it->second.is_corpse || distance_to(npc) > kInteractRange;
+    };
+    if (point_merchant_.npc && unavailable(point_merchant_.npc)) close_point_merchant();
+    if (adventure_merchant_.npc && unavailable(adventure_merchant_.npc)) close_adventure_merchant();
+    if (tribute_.master_id && unavailable(tribute_.master_id)) close_tribute_master();
+    if (guild_tribute_.master_id && unavailable(guild_tribute_.master_id)) close_guild_tribute_master();
+    std::uint32_t trainer = training_ ? training_->trainer_id : training_requested_;
+    if (trainer && unavailable(trainer)) close_trainer();
+    if (adventure_.recruiter && unavailable(adventure_.recruiter)) close_adventure_recruiter();
+    if (merc_windows_[0] && merc_.liaison_id && unavailable(merc_.liaison_id)) set_merc_window_open(0, false);
+    if (trade_ && trade_->with_npc) {
+        auto it = world_.spawns.find(trade_->partner_id);
+        // Reuse DropItemOrMoneyOnPlayer's reach; cancel normally so the server returns the offer.
+        if (it == world_.spawns.end() || it->second.is_corpse ||
+            distance_to(trade_->partner_id) > it->second.heights.avatar_height + kInteractRange)
+            trade_cancel();
     }
 }
 
@@ -739,10 +768,15 @@ bool GameConnection::open_point_merchant(std::uint32_t npc) {
     if (state_ != ConnectionState::InZone || it == world_.spawns.end() || !me || it->second.class_id != 70) return false;
     glm::vec3 at = motion_known_ ? position_ : me->position;
     if (glm::distance(at, it->second.position) >= kInteractRange) return false;
-    point_merchant_ = {};
+    close_point_merchant();
     point_merchant_.npc = npc;
     send_zone(encode_alt_currency_merchant_request(npc));
     return true;
+}
+
+void GameConnection::close_point_merchant() {
+    point_merchant_ = {};
+    discard_questions([](const Confirmation& c) { return c.id == kConfirmPointBuy; });
 }
 
 void GameConnection::point_merchant_buy(std::uint32_t item_id) {
@@ -819,11 +853,16 @@ bool GameConnection::open_adventure_merchant(std::uint32_t npc) {
     if (!type) return false;
     glm::vec3 at = motion_known_ ? position_ : me->position;
     if (glm::distance(at, it->second.position) >= kInteractRange) return false;
-    adventure_merchant_ = {};
+    close_adventure_merchant();
     adventure_merchant_.npc = npc;
     adventure_merchant_.type = type;
     send_zone(encode_adventure_merchant_request(type, npc));
     return true;
+}
+
+void GameConnection::close_adventure_merchant() {
+    adventure_merchant_ = {};
+    discard_questions([](const Confirmation& c) { return c.id == kConfirmAdventureBuy; });
 }
 
 void GameConnection::adventure_merchant_buy(std::uint32_t item_id) {

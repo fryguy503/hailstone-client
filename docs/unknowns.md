@@ -84,6 +84,14 @@ What the client does not implement yet, or implements with an approximation it c
 
 ## Items, inventory and commerce
 
+- NPC service distance closure: alternate-currency and adventure merchants, personal and guild tribute masters,
+  trainers, adventure recruiters and mercenary liaisons use a 3D 20-unit safety fallback each connection update,
+  matching merchant/bank reach. World tradeskill stations reuse their 3D 20-unit opening reach, including pending
+  opens and sessions whose recipe window is hidden. NPC hand-ins reuse their opening reach (avatar height plus 20) to cancel.
+  Their original frame cadence, range and any pending-request exceptions remain
+  unverified; reading each service window's OnProcessFrame or a capture of walking away would settle them.
+  Unit, UI and mock-server coverage exercises the fallback; live gameplay acceptance remains open.
+
 - Ctrl bag moves (game/bag_move.h): ProcessMove's ValidateMove refusals (lore, equip, storage) are not run before OP_MoveMultipleItems goes (the server checks), and FindRoom's place trading (0x56f1c0) is left out; no list MoveItem builds was found where it adds room.
 - Looting: the quantity asked for a partial stack goes in OP_LootItem's last field, which EQEmu ignores (it loots the whole stack; seen live on NMS: 5 of 15 typed, 15 looted). Link All's chat input, and the item display icon's link that takes the same path, skip the IME check of CEditWnd::AddItemTag and count the input's links from its text. Both add the link at the end of what is typed; AddItemTag goes through ReplaceSelection, so the original puts it at the input's caret or over its selection. Settled by tracing where CEditWnd keeps the caret while the input does not have the focus, and putting the link there.
 - Looting: when the loot session ends (OP_LootComplete, unk_CLootWnd_ResetLootSession) with a NO DROP or Loot All question still open, the client drops the question unanswered and clears the window's popup flag (+0x398), so a later yes cannot loot that slot of the next corpse. Whether the original's ConfirmationDialog outlives the session is not traced; reading what ResetLootSession does to an open dialog 100 / 0x65 would settle it. A zone change, and a disconnect, drop every open and waiting question the same way (their side state, such as an augment's pending request, taken back as a no would).

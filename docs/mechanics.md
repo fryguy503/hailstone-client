@@ -748,6 +748,32 @@ find affect slot 1600). Each record is replayed call for call against the record
   sitting player (110), so a feigned one stays down until /sit or /stand (CEverQuest::Sit: anything but standing or
   ducking stands up). The client hands ProcessControls the feigned state as 115 (`CharacterInput::lying`).
 
+## Leaving an NPC interaction
+
+Connection updates check NPC service sessions independently of the UI pack. Merchant and bank retain their
+500 ms checks: a missing NPC or a 3D distance greater than 20 units closes the session; exactly 20 stays open.
+A merchant waits for an outstanding buy or sell reply before closing. Barter now runs its existing frame check
+too, ending the buyer inspection through its normal close packet.
+
+Alternate-currency and adventure merchants, personal and guild tribute masters, trainers, adventure recruiters
+and mercenary liaisons also close when the NPC disappears or is more than 20 units away, including height.
+These services currently use the merchant/bank reach as a safety fallback; their original close thresholds and
+timing remain unverified (`docs/unknowns.md`). A late tribute or training open reply outside reach cannot show
+the window again. Closing a tribute master leaves active benefits, favour and outstanding donation replies intact.
+NPC hand-ins cancel through the normal trade path when the NPC disappears or exceeds the opening reach
+(the NPC's avatar height plus 20 units); the server returns offered items and money.
+
+Quantity questions, point-purchase confirmations and guild-bank text entry end with their owning session.
+Reopening the same NPC creates a new session, so an old answer cannot act on it. Bank and shared-bank bags
+close with the bank; carried bags stay open. Both UI packs use this shared session state.
+
+World tradeskill stations also close beyond their 20-unit opening reach (3D, exactly 20 stays open), or when the
+object disappears. This uses the same fallback as the additional NPC services until the original frame check is
+verified. It applies to recipe, Experiment and hidden recipe windows. Pending opens are canceled too; a late
+reply cannot reopen a canceled station or replace a different station. The normal empty OP_ClickObjectAction
+releases the station so the server returns any remaining contents. World-slot quantity questions and world-mold
+confirmations close, and world recipe batches stop. Carried tradeskill bags and their questions remain independent.
+
 ## The merchant's "Show only items I can use"
 
 The merchant window's purchase page has a check box, MW_UsableButton, ticked when the window is made (CMerchantWnd's

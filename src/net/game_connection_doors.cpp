@@ -6,6 +6,7 @@
 #include "core/log.h"
 #include "game/coords.h"
 #include "game/cursor_drop.h"
+#include "game/distance.h"
 #include "game/merchant.h"
 #include "net/game_connection.h"
 #include "net/opcodes.h"
@@ -17,6 +18,13 @@ namespace {
 
 // eqstr_us.txt 1462 (UseSwitch's token_string_to_client 0x5b6).
 constexpr std::uint32_t kCantReach = 1462;
+
+bool object_in_reach(const std::vector<game::GroundObject>& objects, std::uint32_t id, const glm::vec3* at) {
+    if (!at) return false;
+    auto it = std::find_if(objects.begin(), objects.end(), [&](const game::GroundObject& o) { return o.drop_id == id; });
+    // Reuse the opening reach until the original container frame check is verified (docs/unknowns.md).
+    return it != objects.end() && game::player_distance(at, &it->position) <= game::kGroundItemReach;
+}
 
 game::DoorSpawn door_spawn(const DoorRecord& r) {
     game::DoorSpawn s;
@@ -118,6 +126,14 @@ void GameConnection::handle_door(Op op, const AppPacket& p) {
     case Op::ClickObjectAction:
         if (auto a = decode_click_object_action(p)) {
             if (a->drop_id == 0xffffffffu) break; // someone else is using it (the server says so in chat)
+            if (!world_container_requested_ || *world_container_requested_ != a->drop_id) break;
+            const auto* me = world_.player();
+            const auto* at = me ? (motion_known_ ? &position_ : &me->position) : nullptr;
+            if (!object_in_reach(ground_objects_, a->drop_id, at)) {
+                close_world_container();
+                break;
+            }
+            world_container_requested_.reset();
             world_container_ = game::WorldContainer{a->drop_id, a->type, a->icon, a->name};
             log::info("tradeskill container {} '{}' type {} opened", a->drop_id, a->name, a->type);
             open_tradeskill_world();
@@ -142,6 +158,12 @@ void GameConnection::handle_door(Op op, const AppPacket& p) {
 }
 
 void GameConnection::update_doors() {
+    if (world_container_ || world_container_requested_) {
+        const auto id = world_container_ ? world_container_->drop_id : *world_container_requested_;
+        const auto* me = world_.player();
+        const auto* at = me ? (motion_known_ ? &position_ : &me->position) : nullptr;
+        if (!object_in_reach(ground_objects_, id, at)) close_world_container();
+    }
     auto use = game::process_doors(doors_, switch_clock_, switch_time(), zone_id(), door_riders_);
     // RepopSwitch "uses" types 0x28 and 0x2d again: UseSwitch(0, 0, 0xff, 0),
     // which online is an OP_ClickDoor without a player.
@@ -203,22 +225,33 @@ bool GameConnection::click_object(std::uint32_t drop_id) {
     auto it = std::find_if(ground_objects_.begin(), ground_objects_.end(),
                            [&](const game::GroundObject& o) { return o.drop_id == drop_id; });
     if (it == ground_objects_.end()) return false;
-    if (glm::distance(position_, it->position) >= game::kGroundItemReach) {
+    const auto* me = world_.player();
+    if (!me) return false;
+    const auto& at = motion_known_ ? position_ : me->position;
+    if (game::player_distance(&at, &it->position) >= game::kGroundItemReach) {
         chat(ChatEvent::Kind::System, strings_.format(kCantReach, {}));
         return false;
     }
     ClickObject c;
     c.drop_id = drop_id;
     c.player_id = world_.player_id;
+    const auto name = it->name;
+    if (it->type != 1) {
+        close_world_container();
+        world_container_requested_ = drop_id;
+    }
     send_zone(encode(c));
-    log::info("clicked object {} ({})", drop_id, it->name);
+    log::info("clicked object {} ({})", drop_id, name);
     return true;
 }
 
 void GameConnection::close_world_container() {
-    if (!world_container_) return;
+    if (!world_container_ && !world_container_requested_) return;
     send_zone(encode_close_object());
+    world_container_requested_.reset();
     world_container_.reset();
+    if (quantity_ && quantity_->slot.type == kInvWorld) quantity_.reset();
+    discard_questions([](const Confirmation& c) { return c.id == kConfirmMoldCombine && c.slot.type == kInvWorld; });
     if (tradeskill_.world) close_tradeskill();
 }
 

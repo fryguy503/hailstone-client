@@ -1272,6 +1272,7 @@ void GameConnection::handle_barter(const AppPacket& p) {
             } else if (barter_merchant_.buyer_id == 0 && world_.spawns.contains(r->spawn_id)) {
                 barter_merchant_ = game::BarterMerchantState{};
                 barter_merchant_.buyer_id = r->spawn_id;
+                barter_merchant_.serial = ++npc_session_serial_;
             }
         }
         break;
@@ -1460,6 +1461,8 @@ void GameConnection::handle_market(Op op, const AppPacket& p) {
                     auto it = world_.spawns.find(m->click->trader_id);
                     if (m->click->approval && it != world_.spawns.end() && !merchant_) {
                         merchant_ = MerchantSession{};
+                        merchant_->serial = ++npc_session_serial_;
+                        merchant_check_ms_ = 0;
                         merchant_->npc_id = m->click->trader_id;
                         merchant_->name = game::display_name(it->second.name);
                         merchant_->open = true;

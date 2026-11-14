@@ -82,6 +82,14 @@ public:
     virtual void drop_selection() = 0;
 };
 
+std::function<bool()> merchant_quantity_owner(EqHost& host) {
+    const auto* conn = host.conn;
+    const auto serial = conn && conn->merchant() ? conn->merchant()->serial : 0;
+    return [&host, conn, serial] {
+        return host.conn == conn && conn && conn->merchant() && conn->merchant()->serial == serial;
+    };
+}
+
 // CInventoryWnd::ClickedMoneyButton (GameConnection::inventory_money_button): coin on the
 // cursor goes into the inventory as this button's coin; otherwise the quantity dialog opens at the button's centre
 // with max = start = the inventory's coins of that type (none: nothing; one, Shift: all, Ctrl: 1 at once) and its
@@ -89,7 +97,7 @@ public:
 // (GameConnection::parcel_coin_button): the bag item picked is let go and, with coins of that type, the button is
 // outlined and the merchant window's selection cleared. Hailstone: there the answer is the money picked for sending
 // (GameConnection::set_parcel_money; nothing moves until the page sends it), as there is no SendMoneyWnd to drop
-// the cursor's coin on; were the merchant gone by the answer, the coin comes onto the cursor as the original's does.
+// the cursor's coin on. Its question closes with that merchant session.
 void inventory_money_click(EqHost& host, int coin, ParcelPage* page) {
     const auto& r = host.click_rect;
     std::array<std::int32_t, 4> rect{static_cast<std::int32_t>(r[0]), static_cast<std::int32_t>(r[1]),
@@ -105,6 +113,7 @@ void inventory_money_click(EqHost& host, int coin, ParcelPage* page) {
         host.conn->parcel_coin_button(coin, q.max);
         if (q.max > 0) page->drop_selection();
     }
+    std::function<bool()> owner = parcels ? merchant_quantity_owner(host) : std::function<bool()>{};
     open_quantity(host, q, [&host, coin, parcels](std::int32_t n) {
         if (!host.conn) return;
         if (parcels && host.conn->merchant() && host.conn->merchant()->open) {
@@ -112,7 +121,7 @@ void inventory_money_click(EqHost& host, int coin, ParcelPage* page) {
             return;
         }
         host.conn->inventory_money_button(coin, n, nullptr);
-    });
+    }, std::move(owner));
 }
 
 const ChildArt kNone{ChildArt::None, {}, {}};
@@ -266,6 +275,7 @@ struct Containers {
     bool all_closed = true;
     // +0x2011, the same for the bank's bags (0x698d60, CMD_TOGGLE_BANK_BAGS), also set by the constructor.
     bool bank_all_closed = true;
+    std::uint64_t bank_serial = 0;
     void toggle(const net::ItemSlot& s) {
         for (auto it = open.begin(); it != open.end(); ++it)
             if (it->same(s)) {
@@ -275,7 +285,12 @@ struct Containers {
         open.push_back(s);
     }
     void prune(const net::GameConnection& c) {
+        const auto serial = c.bank() ? c.bank()->serial : 0;
+        const bool bank_changed = serial != bank_serial;
+        bank_serial = serial;
+        if (!c.bank() || bank_changed) bank_all_closed = true;
         std::erase_if(open, [&](const net::ItemSlot& s) {
+            if ((s.type == net::kInvBank || s.type == net::kInvSharedBank) && (!c.bank() || bank_changed)) return true;
             const net::Item* bag = c.inventory().at(s);
             return !bag || !bag->is_bag();
         });
@@ -294,6 +309,7 @@ Containers& containers() {
 // closes a tradeskill window showing it too.
 void toggle_container(EqHost& host, const net::ItemSlot& s) {
     auto& cs = containers();
+    if (host.conn) cs.prune(*host.conn);
     bool open = std::any_of(cs.open.begin(), cs.open.end(), [&](const net::ItemSlot& o) { return o.same(s); });
     if (!open && host.conn && host.conn->container_opens_tradeskill(s, ctrl())) {
         host.conn->open_tradeskill_bag(s);
@@ -346,6 +362,7 @@ void toggle_all_bags(EqHost& host) {
 // (CContainerMgr::CloseContainer), then the flag is set.
 void toggle_all_bank_bags(EqHost& host) {
     auto& cs = containers();
+    if (host.conn) cs.prune(*host.conn);
     if (cs.bank_all_closed) {
         if (!host.conn || !host.conn->bank()) return;
         auto open = [&](std::int16_t type, int slots) {
@@ -676,7 +693,7 @@ public:
                 std::uint32_t slot = *s;
                 open_quantity(host, q, [&host, slot](std::int32_t n) {
                     if (host.conn && n > 0) host.conn->merchant_buy(slot, static_cast<std::uint32_t>(n));
-                });
+                }, merchant_quantity_owner(host));
             }
         } else if (id == "MW_Sell_Button") {
             // HandleSell: max = start = the stack count (1 unstackable).
@@ -690,7 +707,7 @@ public:
                     net::ItemSlot where = *m->selected;
                     open_quantity(host, q, [&host, where](std::int32_t n) {
                         if (host.conn && n > 0) host.conn->merchant_sell(where, static_cast<std::uint32_t>(n));
-                    });
+                    }, merchant_quantity_owner(host));
                 }
             }
         } else if (id == "MW_Send_Button") {
@@ -706,7 +723,7 @@ public:
                         game::QuantityOpen q;
                         q.max = q.start = static_cast<std::int32_t>(it->stack_count);
                         at_button(host, q);
-                        open_quantity(host, q, send);
+                        open_quantity(host, q, send, merchant_quantity_owner(host));
                     } else {
                         send(1);
                     }

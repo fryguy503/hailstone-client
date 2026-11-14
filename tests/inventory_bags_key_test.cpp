@@ -144,6 +144,21 @@ TEST_CASE("bank bags key: the bank's and the shared bank's bags open while the b
     api.right_click_item(net::ItemSlot::possessions(25));
     CHECK(open() == "|||");
 
+    // Closing the bank dismisses both kinds of bank bag, while carried bags stay open. Reopening the same
+    // banker before the next UI frame must still discard its old bags and reset the bank key to open.
+    api.right_click_item(net::ItemSlot::possessions(25));
+    api.toggle_all_bank_bags();
+    CHECK(open() == "Pouch|Bank Sack|Shared Box|");
+    conn.close_bank();
+    REQUIRE(conn.activate_bank(60));
+    CHECK(open() == "Pouch|||");
+    api.toggle_all_bank_bags();
+    CHECK(open() == "Pouch|Bank Sack|Shared Box|");
+    conn.close_bank();
+    CHECK(open() == "Pouch|||");
+    api.close_all_bags();
+    CHECK(open() == "|||");
+
     lua_close(L);
     ImGui::DestroyContext(ctx);
 }

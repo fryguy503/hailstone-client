@@ -588,9 +588,11 @@ std::int32_t GameConnection::train_cost(std::size_t row) const {
 }
 
 void GameConnection::close_trainer() {
-    if (!training_) return;
-    send_zone(encode_gm_end_training(training_->trainer_id, world_.player_id));
+    std::uint32_t npc = training_ ? training_->trainer_id : training_requested_;
+    if (!npc) return;
+    if (state_ == ConnectionState::InZone) send_zone(encode_gm_end_training(npc, world_.player_id));
     training_.reset();
+    training_requested_ = 0;
 }
 
 // ---------------------------------------------------------------- tradeskills
@@ -669,6 +671,7 @@ void GameConnection::send_combine(const ItemSlot& container_slot, std::uint32_t 
     if (container_type == 0x37 || container_type == 0x38) {
         Confirmation q;
         q.id = kConfirmMoldCombine;
+        q.slot = container_slot;
         q.text = strings_.format(container_type == 0x37 ? 6328 : 6339, std::vector<std::string>{});
         q.offer = encode(c);
         ask(std::move(q));

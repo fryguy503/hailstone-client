@@ -56,6 +56,7 @@ bool GameConnection::activate_bank(std::uint32_t banker_id) {
     // calls MakeMeVisible(0, 0): only when invisible, the invisibility
     // effects go, SpawnAppearance {me, 3, 0} and OP_Hide when hidden.
     bank_ = BankSession{};
+    bank_->serial = ++npc_session_serial_;
     bank_->banker_id = banker_id;
     bank_->name = game::display_name(it->second.name);
     bank_->slots = game::bank_slot_count(profile_ ? profile_->expansions : 0, inventory_);

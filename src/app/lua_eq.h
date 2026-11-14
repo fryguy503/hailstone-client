@@ -206,6 +206,7 @@ struct EqHost {
         std::int32_t min = 0, max = 0, slider = 0;
         std::optional<std::pair<int, int>> position;
         std::function<void(std::int32_t quantity)> done;
+        std::function<bool()> owner_valid;
         int serial = 0;
     };
     std::optional<UiQuantity> quantity;
@@ -237,6 +238,7 @@ struct EqHost {
         int min_chars = 0; // CTextEntryWnd::UpdateButtons: OK only with at least this many
         int max_chars = 0;
         std::function<void(const std::string& text)> done;
+        std::function<bool()> owner_valid;
     };
     std::optional<TextEntry> text_entry;
     // A window's own ConfirmationDialog question (the options window's Default Keys, ...): Yes / No, answered
@@ -384,7 +386,8 @@ struct EqHost {
 };
 
 // CQuantityWnd::Open (game/quantity_dialog.h) for a window: accepted at once calls `done`, else shows the dialog.
-void open_quantity(EqHost& host, const game::QuantityOpen& in, std::function<void(std::int32_t)> done);
+void open_quantity(EqHost& host, const game::QuantityOpen& in, std::function<void(std::int32_t)> done,
+                   std::function<bool()> owner_valid = {});
 
 class EqApi {
 public:

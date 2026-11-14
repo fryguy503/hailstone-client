@@ -82,7 +82,7 @@ void GameConnection::handle_adventure(Op op, const AppPacket& p) {
         }
         break;
     case Op::AdventureDetails:
-        if (auto v = decode_adventure_text(p)) a.offer = std::move(*v);
+        if (auto v = decode_adventure_text(p); v && a.recruiter) a.offer = std::move(*v);
         break;
     case Op::AdventureData:
         if (auto v = decode_adventure_data(p)) {

@@ -362,8 +362,7 @@ void GameConnection::update() {
         send_position(false);
         update_afk();
         update_spells();
-        update_merchant();
-        update_bank();
+        update_npc_interactions();
         update_loot();
         update_merc();
         update_inspect();
@@ -681,6 +680,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         doors_.clear();
         ground_objects_.clear();
         world_container_.reset();
+        world_container_requested_.reset();
         close_tradeskill();
         switch_clock_ = {};
         reset_group_for_zone();

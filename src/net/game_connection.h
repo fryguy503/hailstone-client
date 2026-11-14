@@ -726,6 +726,7 @@ public:
         std::int64_t timer_at = 0;       // when it came (now_ms)
         std::map<std::uint32_t, std::string> descriptions; // OP_SelectTribute's answers
         std::uint32_t master_id = 0;     // the tribute master whose window is open
+        std::uint64_t master_serial = 0;
         bool benefit_open = false;       // TributeBenefitWnd
         std::int32_t last_donation = 0;  // the favour the last donation gave
         std::uint32_t donation_answers = 0; // OP_TributeItem answers so far (the Advanced Inventory's job waits on them)
@@ -981,6 +982,7 @@ public:
     // and CGuildBankWnd's state: the banker a right click on a class-66 guild banker opened it at, the selected item
     // (key: area << 16 | slot) and the requests awaiting an answer (its share of EverQuestinfo::IsItemPending).
     struct GuildBank {
+        std::uint64_t serial = 0;
         std::vector<std::optional<GuildBankItem>> deposit, main;
         std::uint32_t banker = 0;  // the banker's spawn id while the window is open (+0xd0b0)
         std::int32_t selected = -1; // +0xd0a8
@@ -1107,7 +1109,7 @@ public:
     };
     const Adventure& adventure() const { return adventure_; }
     bool open_adventure_recruiter(std::uint32_t npc);
-    void close_adventure_recruiter() { adventure_.recruiter = 0; }
+    void close_adventure_recruiter() { adventure_answer(false); adventure_.recruiter = 0; }
     void adventure_request(std::uint32_t risk, std::uint32_t type);
     void adventure_answer(bool accept);
     // OP_LeaveAdventure (no body): leave the current adventure (EQEmu's world server may refuse, with its own line).
@@ -1127,6 +1129,7 @@ public:
         std::int64_t timer_at = 0; // when active.timer_ms came (now_ms)
         std::optional<bool> opted_in;
         std::uint32_t master_id = 0;
+        std::uint64_t master_serial = 0;
         std::int32_t last_donation = 0;
         std::uint32_t donation_answers = 0;
         std::uint32_t active_cost() const;
@@ -1162,7 +1165,7 @@ public:
     };
     const PointMerchant& point_merchant() const { return point_merchant_; }
     bool open_point_merchant(std::uint32_t npc);
-    void close_point_merchant() { point_merchant_ = {}; }
+    void close_point_merchant();
     // Adventure merchants (classes 59, 61, 67, 68: NewPointMerchantWnd), paid in LDoN points, PvP points or crystals.
     struct AdventureMerchant {
         std::uint32_t npc = 0, type = 0; // type: 1 LDoN, 2 Discord, 4 Norrath's Keepers, 5 Dark Reign
@@ -1170,7 +1173,7 @@ public:
     };
     const AdventureMerchant& adventure_merchant() const { return adventure_merchant_; }
     bool open_adventure_merchant(std::uint32_t npc);
-    void close_adventure_merchant() { adventure_merchant_ = {}; }
+    void close_adventure_merchant();
     void adventure_merchant_buy(std::uint32_t item_id);
     // The adventure merchant window's Purchase (CPointMerchantWnd_ConfirmPurchase @0x71bba0, one item): with
     // pointMerchantNoConfirm it buys at once, else it asks first (the merchant's point system's question).
@@ -2777,6 +2780,7 @@ private:
     mutable std::unique_ptr<game::mechanics::CharacterSheet> character_sheet_;
     mutable bool character_sheet_busy_ = false;
     void update_merchant();
+    void update_npc_interactions();
     void update_barter();
     void update_bank();
     void update_loot();
@@ -3175,6 +3179,7 @@ private:
     game::SwitchClock switch_clock_;
     std::vector<game::GroundObject> ground_objects_;
     std::optional<game::WorldContainer> world_container_;
+    std::optional<std::uint32_t> world_container_requested_;
     std::uint32_t door_moves_seen_ = 0;
     std::vector<SoundCue> sound_cues_;
     std::vector<SpellEffectCue> effect_cues_;
@@ -3192,6 +3197,7 @@ private:
     std::chrono::steady_clock::time_point last_eye_position_send_{};
     bool eye_motion_dirty_ = false;
     std::optional<MerchantSession> merchant_;
+    std::uint64_t npc_session_serial_ = 0;
     std::int64_t merchant_check_ms_ = 0; // CMerchantWnd::NextRefreshTime: the range check every 500 ms
     std::optional<TradeSession> trade_;
     std::optional<BankSession> bank_;
