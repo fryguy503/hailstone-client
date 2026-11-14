@@ -93,6 +93,7 @@ std::optional<int> ClientApp::iso_option(std::string_view o) const {
     if (o == "iso_wasd") return iso_wasd_camera_ ? 0 : 1;
     if (o == "iso_marker") return iso_marker_on_ ? 1 : 0;
     if (o == "iso_hover") return iso_hover_on_ ? 1 : 0;
+    if (o == "click_move") return click_move_ ? 1 : 0;
     return std::nullopt;
 }
 
@@ -120,6 +121,9 @@ bool ClientApp::set_iso_option(std::string_view o, int v) {
     } else if (o == "iso_hover") {
         iso_hover_on_ = v != 0;
         if (!iso_hover_on_) iso_hover_ = {};
+    } else if (o == "click_move") {
+        click_move_ = v != 0;
+        if (!click_moves() && nav_ && iso_walking_) nav_->stop(""); // a click's walk does not outlive the option
     } else {
         return false;
     }
@@ -139,6 +143,7 @@ void ClientApp::load_iso_settings() {
     iso_silhouette_ = config_.get_bool("camera.iso_silhouette", true);
     iso_marker_on_ = config_.get_bool("camera.iso_marker", true);
     iso_hover_on_ = config_.get_bool("camera.iso_hover", true);
+    click_move_ = config_.get_bool("mouse.click_move", false);
 }
 
 void ClientApp::save_iso_settings() {
@@ -153,6 +158,7 @@ void ClientApp::save_iso_settings() {
     config_.set_bool("camera.iso_silhouette", iso_silhouette_);
     config_.set_bool("camera.iso_marker", iso_marker_on_);
     config_.set_bool("camera.iso_hover", iso_hover_on_);
+    config_.set_bool("mouse.click_move", click_move_);
     config_.save(config_path_);
 }
 
@@ -360,7 +366,8 @@ void ClientApp::update_iso_clicks(bool player_moved) {
         iso_pending_.reset();
         iso_hold_ = false;
     }
-    if (!mouse_left_held_ || !iso()) iso_hold_ = false;
+    // (Not during a left-button mouse look either, which the other cameras' MouseTurnZoom starts: that drag turns.)
+    if (!mouse_left_held_ || !click_moves() || mouse_look_.active) iso_hold_ = false;
     // The left button held on the ground: the walk follows the cursor (not while the mesh is still building, which
     // would ask again and again).
     if (iso_hold_ && status.active && status.mesh_complete && !ui_.wants_mouse() &&

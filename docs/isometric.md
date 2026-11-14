@@ -62,6 +62,16 @@ there: ..."). A click that walks to the spot says nothing when the mesh goes onl
 at the spot in a zone without a mesh. The click at the end is made only when the walk ended near enough; a walk
 stopped short (a key, no path, stuck) clicks nothing.
 
+### Click to move in every camera
+
+The same clicks work in the other cameras when `mouse.click_move` is set (the `click_move` option, off by default:
+a Hailstone addition, so the other cameras click as the original does until it is switched on;
+`ClientApp::click_moves`). The table above holds as it is, the click marker included. What stays the other cameras'
+own: the movement keys (never relative to the camera there), the mouse look, and no see-through cut or hover ring. In
+first person and the camera behind the player, the walk turns the player and so the view, as `/nav`'s does. A
+left-button mouse look (MouseTurnZoom in the camera behind) clicks only at a short release, as it always has, and the
+button held during the look does not steer the walk.
+
 ## Measured from the player
 
 The camera stands well back from the player, so what the other cameras measure from the camera is measured from the
@@ -160,6 +170,7 @@ through `eq.Option` / `eq.SetOption`:
 | `iso_wasd` | 0 relative to the camera, 1 classic |
 | `iso_reveal` | 0..60: the circle's radius (0 off) |
 | `iso_reveal_always`, `iso_roof`, `iso_silhouette`, `iso_marker`, `iso_hover` | 0, 1 |
+| `click_move` | 0, 1: click to move in the other cameras too |
 
 ## Settings
 
@@ -178,6 +189,7 @@ through `eq.Option` / `eq.SetOption`:
 | `camera.iso_silhouette` | 1 | the player's silhouette where they are hidden |
 | `camera.iso_marker` | 1 | the click marker |
 | `camera.iso_hover` | 1 | the ring under the cursor |
+| `mouse.click_move` | 0 | click to move in every camera, not only the isometric one |
 
 ## Still to do
 

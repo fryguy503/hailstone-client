@@ -299,6 +299,7 @@ Server side: zone `Handle_OP_Group*` (client_packet.cpp), `Group::*` (groups.cpp
 | GroupLeadershipAAUpdate | Z→C | 0x02cf | leadership AAs; sent after every group update; the group leader's ability ranks and NPC marker are kept (`GameConnection::handle_leadership_ability`) |
 | GroupMakeLeader | C→Z | 0x4229 | 456 B: u32 8, `char[64]` current leader (me), `char[64]` new leader, 324 B 0. The client then sends GroupMentor {0, ""} |
 | GroupMentor | C→Z | 0x3342 | 68 B: i32 percent, `char[64]` name ("" clears) |
+| GroupRoles | both | 0x70e2 | 148 B: `char[64]` member, `char[64]` leader, 3 × u32, i32 role at +0x8c (1 Main Tank, 2 Main Assist, 3 Puller), u8 on at +0x90 (0 clear, 1 assign), 3 B padding. The group leader's menu and `/grouproles` send requests; server replies update the member's flags and clear the previous holder of an assigned role. Requests leave the local flags unchanged until a server update |
 | MobManaUpdate / MobEnduranceUpdate | Z→C | 0x2404 / 0x1c81 | 3 B: u16 spawn, u8 percent; group members' mana and endurance |
 | MobHealth | Z→C | 0x37b1 | 3 B (above); group members' HP percentages come this way too |
 
@@ -605,7 +606,7 @@ Tried live against EQEmu with two clients (playprobe `--duel`, `--duel-wait`, `-
 | Stun / ItemRecastDelay / Bind_Wound | Z→C | 0x36a4 / 0x15a9 / 0x0386 | u32 duration ms (+2 B) / 12 B {delay s, recast type, bool} / 8 B {u16 target, u16, u16 type: 3 start, 1 done, 4 target dead, 5 gone, 7 no bandage} |
 | Sound (QuestReward_Struct) / CashReward | Z→C | 0x1a30 / 0x5f7a | 68 B {giver, our id, exp, faction, mod, copper +20, silver, gold, platinum} / 16 B {copper, silver, gold, platinum}: coin added without a coin update |
 | GuildMemberAdd / Delete / Level / PublicNote / SetGuildRank (= RankAltBanker) / Details | Z→C | 0x2925 / 0x3141 / 0x1bd3 / 0x01f9 / 0x0b9c / 0x69b9 | u32 guild first; see GameConnection::handle_world_social |
-| GroupRoles / Charm / DisciplineUpdate / Untargetable / YellForHelp / GetGuildMOTDReply | Z→C | 0x70e2 / 0x5d92 / 0x759e / 0x053c / 0x4e56 / 0x4f1f | 148 B GroupRole_Struct (role +0x8c, on +0x90) / 12 B {owner, pet, 1 on / 0 off} / 300 × u32 / 8 B {spawn, targetable} / u32 yeller / the GuildMOTD struct |
+| Charm / DisciplineUpdate / Untargetable / YellForHelp / GetGuildMOTDReply | Z→C | 0x5d92 / 0x759e / 0x053c / 0x4e56 / 0x4f1f | 12 B {owner, pet, 1 on / 0 off} / 300 × u32 / 8 B {spawn, targetable} / u32 yeller / the GuildMOTD struct |
 | Weblink | Z→C | 0x6f4b | the address, NUL-terminated (EQEmu `Weblink_Struct`); the case @0x4c5b5d opens it in an HTML window (docs/browser.md) |
 | Bug | C→Z | 0x73f4 | 8740 B EQEmu BugReport_Struct (not translated): category and its name, reporter, UI path, server x, y, z, heading, minutes played, target id and name, flags (1 can duplicate, 2 crash, 4 target, 8 character flags), the report at +2592, system info at +4642 |
 | VetClaimRequest / VetRewardsAvaliable / VetClaimReply | C→Z / Z→C / Z→C | 0x1126 / 0x590e / 0x16d4 | 80 B {`char[68]`, claim id (0xffffffff: the list), u32, action} / {count, × {claim id, available, item count, u8 enabled, × {u32 length, name (not NUL-terminated), item id, charges}}} / 80 B, action 0 claimed, 1 refused |

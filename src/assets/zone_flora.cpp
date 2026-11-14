@@ -76,11 +76,17 @@ bool sane_position(const glm::vec3& p) {
     return std::abs(p.x) <= kMaxFloraCoord && std::abs(p.y) <= kMaxFloraCoord && std::abs(p.z) <= kMaxFloraCoord;
 }
 
+// The terrain as drawn: the smoothed ground's (assets/ground_refine.h) when the zone has it.
+const std::vector<Mesh>& drawn_terrain(const Zone& zone) {
+    return zone.draw_terrain.size() == zone.terrain.size() ? zone.draw_terrain : zone.terrain;
+}
+
 class CoverGrid {
 public:
     explicit CoverGrid(const Zone& zone) {
         glm::vec2 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
-        for (const auto& mesh : zone.terrain)
+        // The drawn ground, which the plants stand on: the flat terrain lies up to the smoothing's offset over it.
+        for (const auto& mesh : drawn_terrain(zone))
             for (const auto& part : mesh.parts) {
                 if (part.material >= mesh.materials.size() || !casts_cover(mesh.materials[part.material])) continue;
                 const std::size_t end =
@@ -439,8 +445,11 @@ ZoneFloraGrower::ZoneFloraGrower(const Zone& zone, const ZoneFloraRules& rules,
                                                                    kMinGreenShare * static_cast<float>(g.rgb.size()));
         return std::pair<Data::Ground, bool>(std::move(g), none);
     };
-    for (std::size_t mi = 0; mi < zone.terrain.size(); ++mi) {
-        const Mesh& mesh = zone.terrain[mi];
+    // On the ground as drawn: the smoothed ground's (assets/ground_refine.h) when the zone has it, so the plants stand
+    // on its curves rather than in or over them.
+    const std::vector<Mesh>& drawn = drawn_terrain(zone);
+    for (std::size_t mi = 0; mi < drawn.size(); ++mi) {
+        const Mesh& mesh = drawn[mi];
         for (const auto& part : mesh.parts) {
             if (part.material >= mesh.materials.size()) continue;
             // Plants grow on solid ground: an opaque or cut-out surface. Not on one that is never drawn (the invisible
@@ -877,7 +886,8 @@ std::optional<FloraDonor> open_flora_donor(const GameDir& game, std::string_view
     }
     FloraDonor out;
     try {
-        out.archive = std::make_shared<const PfsArchive>(PfsArchive::open(*found, PfsArchive::storage_for(game, *found)));
+        out.archive = std::make_shared<const PfsArchive>(PfsArchive::open(
+            *found, PfsArchive::storage_for(game, *found), game.shared_file_cache()));
     } catch (const std::exception& e) {
         log::warn("zone flora: {}: {}", donor, e.what());
         return std::nullopt;

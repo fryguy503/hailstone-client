@@ -2,8 +2,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include <volk.h>
@@ -14,6 +16,7 @@ namespace hailstone::assets { struct Image; }
 namespace hailstone::render {
 
 class VkContext;
+struct GpuSharedTexture;
 
 struct Buffer {
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -23,13 +26,34 @@ struct Buffer {
 };
 
 struct Texture {
+    Texture() = default;
+    Texture(const Texture&) = default; // retirement callbacks intentionally retain shared imports
+    Texture& operator=(const Texture&) = default;
+    Texture(Texture&& other) noexcept { *this = std::move(other); }
+    Texture& operator=(Texture&& other) noexcept {
+        if (this != &other) {
+            image = std::exchange(other.image, VK_NULL_HANDLE);
+            allocation = std::exchange(other.allocation, VK_NULL_HANDLE);
+            view = std::exchange(other.view, VK_NULL_HANDLE);
+            width = std::exchange(other.width, 0);
+            height = std::exchange(other.height, 0);
+            shared = std::move(other.shared);
+        }
+        return *this;
+    }
     VkImage image = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    // An imported image has its own local Vulkan objects, with an external payload kept by this owner.
+    std::shared_ptr<GpuSharedTexture> shared;
     void destroy(VkDevice device, VmaAllocator allocator);
 };
+
+// A shared texture's image and view after GpuSharedCache::localize moved it into a private image (VkContext::
+// on_shared_textures_moved). Returns whether this copy changed.
+bool refresh_shared_texture(Texture& texture);
 
 // What a texture holds. Colour textures of the world get their mip chain built on the CPU (assets::build_color_mips:
 // linear filtering, alpha-weighted colour, cut-out coverage kept); data (normal maps, UI art) keeps the plain chain.
@@ -54,6 +78,9 @@ bool gpu_builds_mips(const assets::Image& image, TextureUse use);
 // uploads unchanged as TextureUse::Data. `gpu_mips` false builds the chain here even where gpu_builds_mips() would
 // leave it to the GPU (a caller that cuts the chain down: prepare_capped_texture).
 std::optional<assets::Image> prepare_texture_image(const assets::Image& image, TextureUse use, bool gpu_mips = true);
+// The final immutable external-image payload: colour mips built on the CPU and BC decoded when unsupported.
+// Nullopt means the source is already usable unchanged. This never leaves a colour mip chain for an UNORM blit.
+std::optional<assets::Image> prepare_immutable_texture_image(const assets::Image& image, TextureUse use, bool bc_textures);
 // Drops the image's largest mip levels until it is at most `max_size` texels across (0: none dropped), keeping at
 // least one level.
 void drop_large_mips(assets::Image& image, std::uint32_t max_size);
@@ -83,6 +110,10 @@ public:
     // get theirs from assets::build_color_mips, except those gpu_builds_mips() leaves to the GPU (blitted on an sRGB
     // view, the CPU chain again where the device cannot blit one: DeviceCaps::srgb_mip_blit).
     Texture texture(const assets::Image& image, TextureUse use = TextureUse::Data);
+    // Only immutable assets: an available external cache can share their payload with other client processes.
+    // Colour mips are finalized on the CPU before the external UNORM image is content-keyed and uploaded.
+    // Mutable/UI uploads continue to use texture(). Unsupported images retain the normal private upload.
+    Texture immutable_texture(const assets::Image& image, TextureUse use = TextureUse::Data);
 
     void submit();
 

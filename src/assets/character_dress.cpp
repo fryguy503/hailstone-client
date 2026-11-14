@@ -110,13 +110,13 @@ std::optional<CharacterLibrary::ItemMesh> CharacterLibrary::actor_mesh(const std
     if (const FragmentLoc* loc = actors().find(code)) {
         try {
             const wld::WldFile& w = *loc->first;
-            const auto& actor = std::get<wld::ActorDef>(loc->fragment()->data);
+            const auto& actor = loc->fragment()->as<wld::ActorDef>();
             CharacterMesh mesh;
             // Static items: 0x2d mesh references, vertices in item space.
             for (wld::Ref s : actor.sprites) {
                 const auto* ref = w.get<wld::MeshRef>(s);
                 const wld::Fragment* mf = ref ? w.resolve(ref->mesh) : nullptr;
-                if (mf && std::holds_alternative<wld::MeshDef>(mf->data))
+                if (mf && mf->holds<wld::MeshDef>())
                     detail::append_wld_mesh(w, *mf, 1, 0, mesh);
             }
             if (mesh.indices.empty()) {
@@ -282,7 +282,7 @@ CharacterMesh CharacterLibrary::dress_wld(const CharacterModel& model, const gam
     const FragmentLoc* loc = actors().find(code);
     if (!loc) return model.default_mesh();
     const wld::WldFile& w = *loc->first;
-    const auto& actor = std::get<wld::ActorDef>(loc->fragment()->data);
+    const auto& actor = loc->fragment()->as<wld::ActorDef>();
     const wld::Skeleton* sk = nullptr;
     for (wld::Ref s : actor.sprites)
         if (const auto* sr = w.get<wld::SkeletonRef>(s))
@@ -313,9 +313,9 @@ CharacterMesh CharacterLibrary::dress_wld(const CharacterModel& model, const gam
     std::unordered_set<const wld::Fragment*> seen;
     for (auto [s, owner] : sprites) {
         const wld::Fragment* sprite = w.resolve(s);
-        const auto* ref = sprite ? std::get_if<wld::MeshRef>(&sprite->data) : nullptr;
+        const auto* ref = sprite ? sprite->get<wld::MeshRef>() : nullptr;
         const wld::Fragment* mf = ref ? w.resolve(ref->mesh) : nullptr;
-        if (!mf || !std::holds_alternative<wld::MeshDef>(mf->data)) continue;
+        if (!mf || !mf->holds<wld::MeshDef>()) continue;
         const wld::WldFile* mw = &w;
         std::string name = upper(mf->name);
         FragmentLoc alt{};
@@ -439,7 +439,7 @@ std::vector<std::string> CharacterLibrary::luclin_layers(std::string_view materi
     const FragmentLoc* loc = luclin_materials().find(upper(material));
     if (!loc) return out;
     const wld::WldFile& w = *loc->first;
-    const auto& def = std::get<wld::MaterialDef>(loc->fragment()->data);
+    const auto& def = loc->fragment()->as<wld::MaterialDef>();
     const auto* sprite = w.get<wld::BitmapInfoRef>(def.bitmap);
     const auto* info = sprite ? w.get<wld::BitmapInfo>(sprite->info) : nullptr;
     const auto* bmp = info && !info->frames.empty() ? w.get<wld::BitmapName>(info->frames.front()) : nullptr;

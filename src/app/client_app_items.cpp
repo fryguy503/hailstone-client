@@ -18,8 +18,9 @@ void ClientApp::update_item_input() {
     // RMouseUp: nothing while placing; a placed object asks for its menu (0x21ec); so does a spawn the server marked
     // as a real estate NPC item, before its own right click.
     if (conn_->placement().active()) return;
-    // The isometric camera's click to move: an NPC or a corpse out of reach is walked to, then right clicked.
-    if (iso() && iso_click(right_down_pos_, picked, true)) return;
+    // Click to move (the isometric camera's, or mouse.click_move): an NPC or a corpse out of reach is walked to, then
+    // right clicked.
+    if (click_moves() && iso_click(right_down_pos_, picked, true)) return;
     if (picked.kind == PickTarget::Kind::Placed && world_objects_) {
         if (auto b = world_objects_->placed_bounds(picked.re, picked.item))
             conn_->re_request_placed_menu(picked.re, picked.item, b->center, b->radius, sx, sy);

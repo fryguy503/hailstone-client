@@ -1056,7 +1056,8 @@ Zone load_eqg_zone(const GameDir& game, std::string_view name_view, const ZoneLo
     if (!path) throw std::runtime_error("zone archive " + name + ".eqg not found");
     Zone zone;
     zone.name = name;
-    Source src{std::make_shared<const PfsArchive>(PfsArchive::open(*path, PfsArchive::storage_for(game, *path))), &game};
+    Source src{std::make_shared<const PfsArchive>(PfsArchive::open(
+                   *path, PfsArchive::storage_for(game, *path), game.shared_file_cache())), &game};
     zone.archives.push_back(src.archive);
     auto zon = find_declaration(src, name);
     check();

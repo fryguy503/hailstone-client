@@ -563,6 +563,10 @@ TEST_CASE("Advanced Inventory bulk tribute: donated one at a time to the open tr
     using M = net::GameConnection::ItemJobMode;
     const std::vector<net::ItemSlot> chosen{at(13), at(24), at(25), at(26)};
     CHECK(conn.start_bulk_job(M::Tribute, chosen) == "Open a tribute master first.");
+    auto master = *conn.world().player();
+    master.id = 77;
+    master.is_npc = true;
+    conn.world_for_test().spawns[77] = master;
     rig.server.zone.send_reliable(net::encode(net::StartTribute{conn.world().player_id, 77, 1}));
     REQUIRE(rig.until([&] { return conn.tribute().master_id == 77u; }));
     CHECK(conn.bulk_items_plan(M::Tribute, chosen).size() == 2);
