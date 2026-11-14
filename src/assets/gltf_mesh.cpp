@@ -11,6 +11,7 @@
 #include <cgltf.h>
 
 #include "core/byte_io.h"
+#include "core/float_chars.h"
 
 namespace hailstone::assets {
 
@@ -87,6 +88,33 @@ std::uint64_t parse_source_hash(const cgltf_data* data) {
     return v;
 }
 
+// A node's extras {"hailstone_lod": [near, far]}, or none.
+std::optional<std::pair<float, float>> parse_lod(const cgltf_extras& extras) {
+    if (!extras.data) return std::nullopt;
+    std::string_view json(extras.data);
+    constexpr std::string_view kKey = "\"hailstone_lod\"";
+    auto at = json.find(kKey);
+    if (at == std::string_view::npos) return std::nullopt;
+    at = json.find('[', at + kKey.size());
+    const auto end = at == std::string_view::npos ? at : json.find(']', at);
+    if (end == std::string_view::npos) return std::nullopt;
+    const std::string inner(json.substr(at + 1, end - at - 1));
+    const auto comma = inner.find(',');
+    if (comma == std::string::npos) return std::nullopt;
+    auto value = [](std::string_view text) -> std::optional<float> {
+        while (!text.empty() && (text.front() == ' ' || text.front() == '\n' || text.front() == '\t')) text.remove_prefix(1);
+        float v = 0.0f;
+        auto [ptr, ec] = float_from_chars(text.data(), text.data() + text.size(), v);
+        if (ec != std::errc() || !std::isfinite(v) || v < 0.0f) return std::nullopt;
+        (void)ptr;
+        return v;
+    };
+    auto near = value(std::string_view(inner).substr(0, comma));
+    auto far = value(std::string_view(inner).substr(comma + 1));
+    if (!near || !far || *far <= *near) return std::nullopt;
+    return std::pair{*near, *far};
+}
+
 struct DataFree {
     void operator()(cgltf_data* d) const { cgltf_free(d); }
 };
@@ -129,24 +157,31 @@ std::optional<GltfMesh> read_glb(std::span<const std::byte> bytes, std::string* 
 
     const cgltf_scene* scene = data->scene ? data->scene : data->scenes_count ? &data->scenes[0] : nullptr;
     std::vector<const cgltf_node*> nodes;
+    struct ReadVertices {
+        std::array<const void*, 4> key;
+        glm::mat4 world;
+        std::size_t base;
+    };
+    std::vector<ReadVertices> read_vertices;
     if (scene) {
+        // In the file's order, depth first (a stack filled backwards).
         std::vector<const cgltf_node*> stack(scene->nodes, scene->nodes + scene->nodes_count);
+        std::reverse(stack.begin(), stack.end());
         while (!stack.empty() && nodes.size() < 65536) {
             const cgltf_node* n = stack.back();
             stack.pop_back();
             nodes.push_back(n);
-            for (cgltf_size c = 0; c < n->children_count; ++c) stack.push_back(n->children[c]);
+            for (cgltf_size c = n->children_count; c-- > 0;) stack.push_back(n->children[c]);
         }
     }
     for (const cgltf_node* node : nodes) {
         if (!node->mesh) continue;
+        const auto lod = parse_lod(node->extras);
         float m[16];
         cgltf_node_transform_world(node, m);
         glm::mat4 world;
         std::memcpy(&world[0][0], m, sizeof m);
         const glm::mat3 normal_world = glm::transpose(glm::inverse(glm::mat3(world)));
-        std::array<const void*, 4> last_key{};
-        std::size_t last_base = 0;
         for (cgltf_size pi = 0; pi < node->mesh->primitives_count; ++pi) {
             const cgltf_primitive& prim = node->mesh->primitives[pi];
             if (prim.type != cgltf_primitive_type_triangles) continue;
@@ -159,12 +194,18 @@ std::optional<GltfMesh> read_glb(std::span<const std::byte> bytes, std::string* 
                 else if (at.type == cgltf_attribute_type_color && at.index == 0) col = at.data;
             }
             if (!pos || pos->count == 0) continue;
-            // Primitives of a node that share their vertex data (one part per material) share the vertices.
+            // Primitives that share their vertex data under the same transform (one part per material, one node per
+            // level of detail) share the vertices.
             const std::array<const void*, 4> key{pos, nrm, uv, col};
-            const bool shared = pi > 0 && key == last_key;
-            const std::size_t base = shared ? last_base : mesh.vertices.size();
-            last_key = key;
-            last_base = base;
+            std::size_t base = mesh.vertices.size();
+            bool shared = false;
+            for (const auto& r : read_vertices)
+                if (r.key == key && r.world == world) {
+                    base = r.base;
+                    shared = true;
+                    break;
+                }
+            if (!shared) read_vertices.push_back({key, world, base});
             const std::size_t count = prim.indices ? prim.indices->count : pos->count;
             if (mesh.vertices.size() + pos->count > kMaxVertices || mesh.indices.size() + count > kMaxIndices) {
                 fail(error, "too many vertices");
@@ -213,6 +254,7 @@ std::optional<GltfMesh> read_glb(std::span<const std::byte> bytes, std::string* 
                 part.material = static_cast<std::uint32_t>(default_material);
             }
             part.solid = false;
+            if (lod) part.lod_near = lod->first, part.lod_far = lod->second;
             if (part.index_count) mesh.parts.push_back(part);
         }
     }
@@ -286,7 +328,7 @@ std::vector<std::byte> write_glb(const Mesh& mesh, std::uint64_t source_hash) {
     for (const auto& v : mesh.vertices) bin.le(v.color);
     const std::size_t vertex_bytes = bin.size();
 
-    std::string views, accessors, prims;
+    std::string views, accessors;
     auto view = [&](std::size_t offset, std::size_t length, int target) {
         if (!views.empty()) views += ',';
         views += "{\"buffer\":0,\"byteOffset\":" + std::to_string(offset) + ",\"byteLength\":" + std::to_string(length) +
@@ -303,7 +345,14 @@ std::vector<std::byte> write_glb(const Mesh& mesh, std::uint64_t source_hash) {
     accessors += ",{\"bufferView\":2,\"componentType\":5126,\"count\":" + count + ",\"type\":\"VEC2\"}";
     accessors += ",{\"bufferView\":3,\"componentType\":5121,\"normalized\":true,\"count\":" + count + ",\"type\":\"VEC4\"}";
     int next_view = 4, next_accessor = 4;
+    // One glTF mesh and node a level-of-detail band, its parts' primitives in it.
+    std::vector<std::pair<float, float>> bands;
+    for (const auto& part : mesh.parts)
+        if (std::find(bands.begin(), bands.end(), std::pair{part.lod_near, part.lod_far}) == bands.end())
+            bands.emplace_back(part.lod_near, part.lod_far);
+    std::vector<std::string> band_prims(bands.size());
     for (const auto& part : mesh.parts) {
+        auto& prims = band_prims[std::size_t(std::find(bands.begin(), bands.end(), std::pair{part.lod_near, part.lod_far}) - bands.begin())];
         const std::size_t at = bin.size();
         for (std::uint32_t k = 0; k + 2 < part.index_count; k += 3) {
             const std::uint32_t* t = &mesh.indices[part.first_index + k];
@@ -341,10 +390,18 @@ std::vector<std::byte> write_glb(const Mesh& mesh, std::uint64_t source_hash) {
     std::snprintf(hash, sizeof hash, "%016llx", static_cast<unsigned long long>(source_hash));
     std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"Hailstone\"";
     if (source_hash) json += ",\"extras\":{\"hailstone_source\":\"" + std::string(hash) + "\"}";
-    json += "},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],\"nodes\":[{\"mesh\":0";
-    json += ",\"name\":";
-    json_string(json, mesh.name);
-    json += "}],\"meshes\":[{\"primitives\":[" + prims + "]}]";
+    json += "},\"scene\":0,\"scenes\":[{\"nodes\":[";
+    for (std::size_t b = 0; b < bands.size(); ++b) json += (b ? "," : "") + std::to_string(b);
+    json += "]}],\"nodes\":[";
+    for (std::size_t b = 0; b < bands.size(); ++b) {
+        json += std::string(b ? "," : "") + "{\"mesh\":" + std::to_string(b) + ",\"name\":";
+        json_string(json, bands.size() > 1 ? mesh.name + " lod" + std::to_string(b) : mesh.name);
+        if (bands[b].second > 0.0f) json += ",\"extras\":{\"hailstone_lod\":[" + num(bands[b].first) + "," + num(bands[b].second) + "]}";
+        json += "}";
+    }
+    json += "],\"meshes\":[";
+    for (std::size_t b = 0; b < bands.size(); ++b) json += std::string(b ? "," : "") + "{\"primitives\":[" + band_prims[b] + "]}";
+    json += "]";
     if (!materials.empty())
         json += ",\"materials\":[" + materials + "],\"textures\":[" + textures + "],\"images\":[" + images + "]";
     json += ",\"buffers\":[{\"byteLength\":" + std::to_string(bin.size()) + "}]";

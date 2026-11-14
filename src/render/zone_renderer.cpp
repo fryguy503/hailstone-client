@@ -236,10 +236,11 @@ struct MaterialKey {
     std::string effect;
     std::uint8_t liquid = 0; // ZoneRenderer::Liquid
     bool flame = false;      // a placed object's flame (assets::flame_material_hue)
+    float lod_near = 0.0f, lod_far = 0.0f; // assets::MeshPart's level-of-detail band
     bool operator<(const MaterialKey& o) const {
-        return std::tie(blend, eqg, two_sided, front_ccw, frames, delay, multipass, effect, liquid, flame) <
-               std::tie(o.blend, o.eqg, o.two_sided, o.front_ccw, o.frames, o.delay, o.multipass, o.effect, o.liquid,
-                        o.flame);
+        return std::tie(blend, eqg, two_sided, front_ccw, frames, delay, multipass, effect, liquid, flame, lod_near,
+                        lod_far) < std::tie(o.blend, o.eqg, o.two_sided, o.front_ccw, o.frames, o.delay, o.multipass,
+                                            o.effect, o.liquid, o.flame, o.lod_near, o.lod_far);
     }
 };
 
@@ -570,9 +571,15 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
     };
 
     std::size_t plants = 0;
+    // Each vertex's placement's position (a zone region's: none), so that a level of detail's chunks hold whole
+    // placements (the cell sort below).
+    std::vector<glm::vec2> anchors;
     auto append = [&](const assets::Mesh& mesh, const glm::mat4& transform, const std::vector<std::uint32_t>& colors,
                       bool region, bool plant, const std::vector<std::uint8_t>* liquid = nullptr) {
         auto base = static_cast<std::uint32_t>(vertices.size());
+        anchors.resize(base, glm::vec2(std::numeric_limits<float>::quiet_NaN()));
+        anchors.resize(base + mesh.vertices.size(), region ? glm::vec2(std::numeric_limits<float>::quiet_NaN())
+                                                           : glm::vec2(transform[3]));
         glm::mat3 normal_matrix = glm::transpose(glm::inverse(glm::mat3(transform)));
         // Point lights reach only zone regions (not placed actors) whose
         // material has an MPL triple.
@@ -621,6 +628,8 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                             region && options.multipass_lighting && has_mpl_triple(mesh, m), effect_key(m.effect)};
             if (m.eqg_shader == assets::EqgShader::Water) key.liquid = static_cast<std::uint8_t>(Liquid::Water);
             key.flame = !region && assets::flame_material_hue(m) != assets::FlameHue::None;
+            key.lod_near = part.lod_near;
+            key.lod_far = part.lod_far;
             // Classic regions' plain materials: each triangle by the regions around it (classic_liquid_triangles).
             const bool classify = region && liquid != nullptr;
             for (std::uint32_t i = 0; i + 2 < part.index_count; i += 3) {
@@ -854,6 +863,8 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         d.frame_delay_ms = key.delay;
         d.two_sided = key.two_sided;
         d.front_ccw = key.front_ccw;
+        d.lod_near = key.lod_near;
+        d.lod_far = key.lod_far;
         MaterialState st = material_state(look);
         for (const auto& name : key.frames) d.frame_slots.push_back(slot_for(name, st.masked_texture, TextureUse::Color, !st.alpha_unused()));
         const auto& e = look.effect;
@@ -933,6 +944,10 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                 const std::uint32_t* idx = &indices[d.first_index + t * 3];
                 glm::vec3 c =
                     (vertices[idx[0]].position + vertices[idx[1]].position + vertices[idx[2]].position) / 3.0f;
+                // A level of detail's triangles by their placement's cell, so a tree is one chunk's and changes level
+                // at once (a neighbour zone's cut triangles have no anchor: their own centre).
+                if (d.lod_far > 0.0f && idx[0] < anchors.size() && !std::isnan(anchors[idx[0]].x))
+                    c = glm::vec3(anchors[idx[0]] + glm::vec2(options.offset), c.z);
                 tris[t] = {cell_key(static_cast<std::int64_t>(std::floor(c.x / kChunk)),
                                     static_cast<std::int64_t>(std::floor(c.y / kChunk))), t};
             }
@@ -1385,7 +1400,7 @@ void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted count
     };
     for (std::uint32_t i = d.first_chunk; i < d.first_chunk + d.chunk_count; ++i) {
         const Chunk& c = chunks_[i];
-        if (!keep(c)) continue;
+        if (!lod_shows(d, c.box_min, c.box_max) || !keep(c)) continue;
         if (run_count > 0 && c.first_index == run_first + run_count) {
             run_count += c.index_count;
         } else {
@@ -1410,6 +1425,7 @@ std::uint64_t ZoneRenderer::begin_draw(const FrameInfo& frame, const glm::mat4& 
     scene_.view_proj = view_proj;
     scene_.fog_color = glm::vec4(view.fog_color, 1.0f);
     scene_.camera_pos = glm::vec4(camera_pos, 1.0f);
+    lod_eye_ = camera_pos;
     scene_.fog = glm::vec4(view.fog_start, view.fog_end, effect_scroll_seconds(time_ms), view.fog_density);
     upload_scene(frame.frame_slot);
     const VkDescriptorSet sets[] = {set_, scene_sets_[frame.frame_slot], vk_.shadow_set()};
@@ -1704,6 +1720,7 @@ void ZoneRenderer::draw_point_shadow(const FrameInfo& frame, const PointReach& r
     for (std::uint32_t i : reach.chunks) {
         const Chunk& c = chunks_[i];
         if (!box_reaches_face(reach.light, face, c.box_min, c.box_max)) continue;
+        if (c.draw < draws_.size() && !lod_shows(draws_[c.draw], c.box_min, c.box_max)) continue;
         if (run_count > 0 && c.draw == run_draw && c.first_index == run_first + run_count) {
             run_count += c.index_count;
         } else {

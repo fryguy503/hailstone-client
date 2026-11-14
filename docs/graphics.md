@@ -1163,6 +1163,13 @@ zone loads (`Zone::draw_objects`).
 - **Light:** a placement's baked light is one colour per vertex of the game's mesh; the replacement takes their
   average, multiplied by its own vertex colours (a generated tree's shade inside its crown).
 - **Plants:** a replacement sways in the wind as the game's object would (`is_plant`): its cut-out parts flutter.
+- **Levels of detail:** a node's extras `{"hailstone_lod": [near, far]}` draw its meshes only from `near` to `far` world
+  units from the camera (`MeshPart::lod_near`, `lod_far`). The zone renderer keeps each band's draws apart and cuts
+  them into chunks of whole placements (the cell of the placement's position, not of each triangle), and a chunk is
+  drawn, in every pass (the scene, the depth pre-pass, the sun's cascades, the lights' shadow cubes), when the camera's
+  distance to its box's centre is in the band: a tree changes level at once, and each one shows one level. The shadow
+  passes take the camera's position of the frame before. A banded draw is not merged into the untextured shadow
+  casters, so its shadow changes level with it.
 
 ### Generated trees
 
@@ -1184,11 +1191,18 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
   colonisation (Runions, Lane and Prusinkiewicz 2007), leaf clusters at their tips; a willow hangs strands from its
   upper branches. The rules may name the style (`tree tree71 = willow bark`); `auto` takes pine or broadleaf by shape.
 - **Bark:** a Poly Haven photo material scaled to the game bark's mean colour, or a drawn one.
-- **Budget:** 2,000 to 10,000 triangles a tree; Qeynos Hills' 363 placed trees come to about 2.5 million.
+- **Levels of detail:** the near tree to three times its height (at least 200 units); then a middle level with two
+  leaf cards in three, each grown to keep the cover, about half the sides and no thin branches; and from eight times
+  its height (at least 600 units) three crossed cards and a level one, with a picture of the near tree from the side
+  and from above (rendered by the generator: a small rasteriser, twice the size and averaged down). The near and
+  middle levels are built together, so they have one shape.
+- **Budget:** 4,000 to 11,000 triangles a tree at the near level, 8 at the far. In the zone viewer at a Qeynos Hills
+  spot the trees and ground came to about 27,000 zone triangles a frame with the levels (239,000 without, 3,400 with
+  the game's trees), and 9,000 looking over the zone from above (195,000 without).
 
 The rules are lines of the studio's zone files (`tree <object> = <style> [<bark material>]`); only Qeynos Hills has
 them so far. A tree comes out the same on every build (its seed is its zone and name). Seen in the zone viewer, not
-in a live session. Open: levels of detail; leaves thin out in the smaller mips of a cut-out.
+in a live session. Open: leaves thin out in the smaller mips of a cut-out; a level changes with no blend.
 
 ## The isometric camera's cut
 

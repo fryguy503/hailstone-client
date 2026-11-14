@@ -204,11 +204,28 @@ private:
         std::uint32_t first_chunk = 0; // its chunks in chunks_
         std::uint32_t chunk_count = 0;
         glm::vec3 box_min{0.0f}, box_max{0.0f}; // round all of them: a draw wholly out of view tests no chunk
+        // A replacement model's level of detail (assets::MeshPart::lod_near, lod_far): its chunks show only from
+        // lod_near to lod_far units from the camera (lod_shows). lod_far 0: always.
+        float lod_near = 0.0f, lod_far = 0.0f;
     };
 
     // Whether every shadow pass but the water map draws `d` without its texture: solid (opaque, not alpha-tested), not
     // a flame. These go into solid_.
-    static bool casts_untextured(const Draw& d) { return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f); }
+    // (A level of detail is drawn on its own, so that its shadow changes level with it.)
+    static bool casts_untextured(const Draw& d) {
+        return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f) && d.lod_far <= 0.0f;
+    }
+    // Whether a chunk of `d` shows at its distance from lod_eye_: the distance from the camera to the chunk's box's
+    // centre within the draw's band. A banded draw's chunks are cells of whole placements, so a tree changes level at
+    // once, and each cell shows one level of it.
+    bool lod_shows(const Draw& d, const glm::vec3& box_min, const glm::vec3& box_max) const {
+        if (d.lod_far <= 0.0f) return true;
+        const float dist = glm::distance((box_min + box_max) * 0.5f, lod_eye_);
+        return dist >= d.lod_near && dist < d.lod_far;
+    }
+    // The camera's position the levels of detail are chosen by: the last begin_draw's (the shadow passes, drawn
+    // before it in a frame, take the frame before's).
+    glm::vec3 lod_eye_{0.0f};
     // Whether the depth pre-pass draws `d`, and the colour pass then tests it equal: the opaque pass's draws but the
     // water, which the modern lighting draws blended after VkContext::begin_translucent.
     static bool in_depth_prepass(const Draw& d) { return d.pass == Pass::Opaque && d.liquid != Liquid::Water; }
