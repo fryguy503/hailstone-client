@@ -124,6 +124,12 @@ public:
     static PreparedPtr prepare(const assets::Zone& zone, const ZoneRenderOptions& options, std::uint32_t max_images);
     // The prepared data's size in bytes (vertices, indices, textures as uploaded), for the logs.
     static std::size_t prepared_bytes(const Prepared& prepared);
+    // What a prepare built: the vertices and indices in the buffers, the instances (the identity not counted), the
+    // triangles as drawn (an instanced model's once for each placement) and the draws' chunks.
+    struct PreparedCounts {
+        std::size_t vertices = 0, indices = 0, instances = 0, triangles = 0, chunks = 0;
+    };
+    static PreparedCounts prepared_counts(const Prepared& prepared);
 
     ZoneRenderer(VkContext& vk, const assets::Zone& zone, const std::filesystem::path& shader_dir,
                  const ZoneRenderOptions& options = {});
@@ -219,17 +225,20 @@ private:
         // A replacement model's level of detail (render/lod_bands.h): its chunks show only within its band
         // (lod_shows).
         LodBand lod;
+        // An instanced replacement model's number + 1 (0: the zone's own geometry): its chunks are its placements,
+        // each all of the draw's indices with an instance of its own (Chunk::instance).
+        std::uint32_t instanced = 0;
     };
 
     // Whether every shadow pass but the water map draws `d` without its texture: solid (opaque, not alpha-tested), not
     // a flame. These go into solid_.
     // (A level of detail is drawn on its own, so that its shadow changes level with it.)
     static bool casts_untextured(const Draw& d) {
-        return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f) && !d.lod.banded();
+        return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f) && !d.lod.banded() && d.instanced == 0;
     }
     // Whether a chunk of `d` shows by `pick` at its distance from lod_eye_: the distance from the camera to the chunk's
-    // box's centre. A banded draw's chunks are cells of whole placements, so a tree changes level at once, and each
-    // cell shows one level of it.
+    // box's centre. A banded draw is an instanced model's, its chunks its placements, so a tree changes level at
+    // once.
     bool lod_shows(const Draw& d, const glm::vec3& box_min, const glm::vec3& box_max, LodPick pick = {}) const {
         return render::lod_shows(d.lod, glm::distance((box_min + box_max) * 0.5f, lod_eye_), pick, lod_scale_);
     }
@@ -286,7 +295,25 @@ private:
         std::uint32_t index_count = 0;
         glm::vec3 box_min{0.0f}, box_max{0.0f};
         bool sways = false; // some of its vertices sway in the wind
+        std::uint32_t instance = 0; // in the instance buffer (0: the identity, the zone's own geometry)
     };
+    // Whether chunk `c` continues the run drawn from `first` (`count` indices) as instances `instance` on (`instances`
+    // of them): the zone's own geometry end to end in the index buffer, or an instanced model's next placement. Grows
+    // the run.
+    static bool extends_run(const Chunk& c, std::uint32_t first, std::uint32_t& count, std::uint32_t instance,
+                            std::uint32_t& instances) {
+        if (c.instance == 0 && instance == 0 && c.first_index == first + count) {
+            count += c.index_count;
+            return true;
+        }
+        if (c.instance != 0 && c.instance == instance + instances && c.first_index == first && c.index_count == count) {
+            ++instances;
+            return true;
+        }
+        return false;
+    }
+    // Binds the vertex, instance and index buffers.
+    void bind_geometry(VkCommandBuffer cmd) const;
     std::vector<Chunk> chunks_;
     // The casts_untextured draws merged for the shadow passes, one chunk a cell (render/shadow_chunks.h): its chunks
     // follow the draws' in chunks_, its indices the draws' in the index buffer. Only its chunk fields are set.
@@ -304,6 +331,7 @@ private:
     // header, the cells, the cells' light numbers (zone.frag's set 1, bindings 1 to 3).
     std::array<Buffer, 3> light_grid_buffers_{};
     Buffer vertex_buffer_;
+    Buffer instance_buffer_; // GpuInstance: the identity, then the instanced models' placements
     Buffer index_buffer_;
     std::vector<Texture> textures_;
     VkSampler sampler_ = VK_NULL_HANDLE;

@@ -1204,13 +1204,19 @@ zone loads (`Zone::draw_objects`).
 - **Made for a mesh:** a file whose `asset.extras.hailstone_source` holds the hash of the game mesh it was made for
   (`object_mesh_hash`, 16 hex digits) is used only on that mesh, so a game update that changes the object turns it
   off; one without (made by hand) is used on any object of its name in that zone.
+- **Instanced:** the zone renderer keeps each replacement mesh once, in its own space, and draws it at every placement
+  with a per-instance transform (`GpuInstance`: the transform's rows, the normal matrix's, the sway's scale and a
+  tint; the buffer's first entry is the identity, which the zone's own geometry uses, so one set of pipelines draws
+  both). Each placement of each level is a chunk of its own, and neighbouring placements in view go in one call.
+  Qeynos Hills with the generated trees: 52,000 vertices and 146,000 indices on the GPU, from 3.7 million and
+  8.3 million (266 MB of vertices) when every placement was a copy. A neighbour zone's placements are moved with it
+  and kept whole or left out by where they stand, not cut at the zone line.
 - **Light:** a placement's baked light is one colour per vertex of the game's mesh; the replacement takes their
-  average, multiplied by its own vertex colours (a generated tree's shade inside its crown).
+  average as its instance's tint, which multiplies its own vertex colours (a generated tree's shade inside its crown).
 - **Plants:** a replacement sways in the wind as the game's object would (`is_plant`): its cut-out parts flutter.
 - **Levels of detail:** a node's extras `{"hailstone_lod": [near, far]}` draw its meshes only from `near` to `far` world
-  units from the camera (`MeshPart::lod_near`, `lod_far`). The zone renderer keeps each band's draws apart and cuts
-  them into chunks of whole placements (the cell of the placement's position, not of each triangle), and a chunk is
-  drawn, in every pass (the scene, the depth pre-pass, the sun's cascades, the lights' shadow cubes), when the camera's
+  units from the camera (`MeshPart::lod_near`, `lod_far`). The zone renderer keeps each band's draws apart, a chunk
+  for each placement, and a chunk is drawn, in every pass (the scene, the depth pre-pass, the sun's cascades, the lights' shadow cubes), when the camera's
   distance to its box's centre is in the band: a tree changes level at once, and each one shows one level. The shadow
   passes take the camera's position of the frame before. A banded draw is not merged into the untextured shadow
   casters. A shadow needs less detail than the tree it falls from (`render/lod_bands.h`): the sun's two nearest

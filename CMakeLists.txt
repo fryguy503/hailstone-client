@@ -1271,6 +1271,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/gltf_mesh_test.cpp
     tests/texpack_trees_test.cpp
     tests/lod_bands_test.cpp
+    tests/zone_models_test.cpp
     tests/addon_tool_test.cpp
   )
   target_include_directories(hailstone_tests PRIVATE tests sdk)

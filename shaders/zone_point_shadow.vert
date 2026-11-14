@@ -19,12 +19,15 @@ layout(push_constant) uniform Push {
 
 layout(location = 0) in vec3 in_position;
 layout(location = 2) in vec2 in_uv;
+layout(location = 8) in vec4 in_row0; // an instanced model's placement (zone.vert)
+layout(location = 9) in vec4 in_row1;
+layout(location = 10) in vec4 in_row2;
 
 layout(location = 0) out vec2 v_uv;
 layout(location = 1) out vec3 v_from_light;
 
 void main() {
     v_uv = in_uv;
-    v_from_light = in_position - pc.slide.xyz;
+    v_from_light = instance_point(in_position, in_row0, in_row1, in_row2) - pc.slide.xyz;
     gl_Position = point_shadow_clip(v_from_light, pc.tex2.w, pc.extra.x, pc.slide.w);
 }

@@ -28,12 +28,18 @@ layout(push_constant) uniform Push {
 layout(location = 0) in vec3 in_position;
 layout(location = 2) in vec2 in_uv;
 layout(location = 7) in vec4 in_sway;
+layout(location = 8) in vec4 in_row0; // an instanced model's placement (zone.vert)
+layout(location = 9) in vec4 in_row1;
+layout(location = 10) in vec4 in_row2;
+layout(location = 11) in vec4 in_normal_row0; // w: the sway's scale
 
 layout(location = 0) out vec2 v_uv;
 
 void main() {
     v_uv = in_uv;
-    vec3 p = in_position + wind_offset(in_position, in_sway, scene.wind, scene.time.x);
+    vec3 position = instance_point(in_position, in_row0, in_row1, in_row2);
+    vec4 sway = instance_sway(in_sway, in_row0, in_row1, in_normal_row0.w);
+    vec3 p = position + wind_offset(position, sway, scene.wind, scene.time.x);
     if (pc.tex2.w < 4u) {
         gl_Position = scene.shadow_view_proj[pc.tex2.w] * vec4(p, 1.0);
     } else {
