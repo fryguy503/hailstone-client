@@ -22,6 +22,8 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Spell particles: the impact stage's caster is the packet's source (EQPlayer::TriggerSpellEffect @0x593eb0; nothing when the source is unknown, as DoSpellEffect); the actor's opacity and the point model's PESFactor on actor emitters.
 - [ ] Spell particles: whether an actor's world matrix rows carry its scale (normalised here), and what makes a floor-flag actor emitter again as the actor moves (kept on the actor here). unknowns.md.
 - [x] Linked spell timers and discipline timers from the player profile.
+- [x] Combat Abilities: active discipline duration gauge 26 and seconds display in both UIs, with icon cancellation regression coverage (unit, mock-server and UI tests; live acceptance open).
+- [x] Combat Abilities: red reuse overlays and seconds in both UIs; shared timer groups remain marked even when the wait exceeds an ability's own recast, including discipline hot buttons (packet, UI and unit coverage; live acceptance open).
 - [x] Item recast on cast items (already in 789134d).
 - [x] The distance modifier of effect values, and the extra long-buff slots from level 72 and 75.
 - [x] Buff tick timers held by SPA 0x1b4 and suspendable spells.

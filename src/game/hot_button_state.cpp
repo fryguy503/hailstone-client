@@ -1,6 +1,8 @@
 #include "game/hot_button_state.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <limits>
 
 namespace hailstone::game {
 
@@ -106,9 +108,21 @@ void update_hot_button(HotButtonDisplay& d, const HotButton& b, HotButtonStateQu
             d.cool_down.stop();
             break;
         }
-        const auto reuse = static_cast<std::uint32_t>(a->recast - a->focus);
-        const std::uint32_t begin = fast_time_to_eq_time(a->ready, q.fast_now(), now) - reuse;
-        d.checked = d.cool_down.set_running(now, begin, reuse);
+        const auto fast_now = q.fast_now();
+        if (a->ready <= fast_now) {
+            d.cool_down.stop();
+            break;
+        }
+        d.checked = true;
+        const auto left = static_cast<std::uint64_t>(a->ready - fast_now) * 1000;
+        const auto reuse = static_cast<std::uint64_t>(
+            std::max<std::int64_t>(static_cast<std::int64_t>(a->recast) - a->focus, 0));
+        // A shared timer's wait can exceed this ability's reuse. Keep it shaded instead of passing a future
+        // begin to SetCoolDown's unsigned elapsed test. The button's EQ-time fields hold at most 2^32-1 ms.
+        constexpr auto limit = std::numeric_limits<std::uint32_t>::max();
+        const auto duration = static_cast<std::uint32_t>(std::min<std::uint64_t>(std::max(reuse, left), limit));
+        const auto remaining = static_cast<std::uint32_t>(std::min<std::uint64_t>(left, limit));
+        d.cool_down.set_ending(now + remaining, duration);
         break;
     }
     case HotButtonType::Leadership: {

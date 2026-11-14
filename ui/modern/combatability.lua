@@ -14,13 +14,21 @@ local WINDOW = "CombatAbilityWnd"
 local DRAW_KEY = "test.draw." .. WINDOW -- testing: draws the window though the game has not opened it
 local BUTTONS = 8
 
+local function cooldownTime(ms)
+  local sec = math.ceil(ms / 1000)
+  if sec >= 3600 then return string.format("%d:%02d:%02d", sec // 3600, (sec // 60) % 60, sec % 60) end
+  return string.format("%d:%02d", sec // 60, sec % 60)
+end
+
 -- One ability button as a tile at the cursor (w x h): the click, right click and drag go to the window's button.
 local function abilityTile(n, w, h, s)
   local id = "CAW_Button" .. n
   local name = W.Text(WINDOW, id)
   local empty = name == ""
-  local _, cooling = eq.ChildState(WINDOW, id)
   local x, y = ui.GetCursorScreenPos()
+  local _, _, _, _, _, left, reuse = eq.ButtonCoolDown(WINDOW, id, y, y + h)
+  local cooling = not empty and (left or 0) > 0
+  local fraction = cooling and math.min(1, left / math.max(left, reuse or 0, 1)) or 0
   local clicked = T.Hit("##caw" .. n, x, y, x + w, y + h)
   local hovered, active = ui.IsItemHovered(), ui.IsItemActive()
   if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
@@ -33,21 +41,29 @@ local function abilityTile(n, w, h, s)
   local fill = empty and 0.02 or 0.06
   if active then fill = fill + 0.10 elseif hovered then fill = fill + 0.06 end
   ui.DrawRectFilled(x, y, x + w, y + h, base[1], base[2], base[3], fill, rad)
-  local edge = hovered and C.accent or C.ink
-  ui.DrawRect(x, y, x + w, y + h, edge[1], edge[2], edge[3], hovered and 0.6 or 0.14, rad, hovered and 1.5 or 1)
-  -- the reuse time still to go, shaded from the bottom up (CButtonWnd::SetCoolDown)
-  local top = eq.ButtonCoolDown(WINDOW, id, y, y + h)
-  if top then ui.DrawRectFilled(x, top, x + w, y + h, 0, 0, 0, 0.45, rad) end
+  if cooling then
+    ui.DrawRectFilled(x, y, x + w, y + h, C.danger[1], C.danger[2], C.danger[3], 0.08, rad)
+    ui.DrawRectFilled(x, y, x + w * fraction, y + h, C.danger[1], C.danger[2], C.danger[3], 0.20, rad)
+  end
+  local edge = hovered and C.accent or (cooling and C.danger or C.ink)
+  ui.DrawRect(x, y, x + w, y + h, edge[1], edge[2], edge[3], hovered and 0.6 or (cooling and 0.45 or 0.14), rad, hovered and 1.5 or 1)
   T.Text(x + 6 * s, y + 4 * s, tostring(n), C.faint, T.font.tiny)
   local font = T.font.small
   local _, th = T.TextSize("Ag", font)
-  local label = empty and "Empty" or T.Fit(name, w - 12 * s, font)
-  T.Text(x + w / 2, y + (h - th) / 2, label, empty and C.faint or (cooling and C.muted or C.text), font, "center")
+  local label = empty and "Empty" or T.Fit(name, w - (cooling and 24 or 12) * s, font)
+  if cooling then
+    local _, timerH = T.TextSize("Ag", T.font.tiny)
+    local top = y + math.max(s, (h - th - timerH - 2 * s) / 2)
+    T.Text(x + w / 2 + 4 * s, top, label, C.muted, font, "center")
+    T.Text(x + w / 2, top + th + 2 * s, cooldownTime(left), C.danger, T.font.tiny, "center")
+  else
+    T.Text(x + w / 2, y + (h - th) / 2, label, empty and C.faint or C.text, font, "center")
+  end
   if hovered and not dragged then
     if empty then
       ui.SetTooltip("An empty button\nRight-click to choose an ability, or drop one here from Combat Skills")
     else
-      ui.SetTooltip(name .. (cooling and "\n(reusing)" or "") ..
+      ui.SetTooltip(name .. (cooling and ("\nReady in " .. cooldownTime(left)) or "") ..
         "\nClick to use it; right-click to choose another\nDrag onto an action bar to make a hot button")
     end
   end
@@ -77,11 +93,17 @@ local function body(x, y, w, h, s)
   local textW = w - (tx - x) - skillsW - 8 * s
   local _, th = T.TextSize("Ag", T.font.small)
   local effect = W.Text(WINDOW, "CAW_CombatEffectLabel")
-  T.Text(tx, iy + (active and 0 or (icon - th) / 2), T.Fit(effect, textW, T.font.small),
+  local fraction, remaining
+  if active then fraction, remaining = eq.Gauge(26) end
+  local timerW = remaining and remaining ~= "" and (T.TextSize(remaining, T.font.small) + 8 * s) or 0
+  local nameW = math.max(0, textW - timerW)
+  local name = nameW >= T.TextSize("...", T.font.small) and T.Fit(effect, nameW, T.font.small) or ""
+  T.Text(tx, iy + (active and 0 or (icon - th) / 2), name,
     active and C.text or C.muted, T.font.small)
   if active then
-    ui.SetCursorScreenPos(tx, iy + th + 6 * s)
-    W.Gauge(WINDOW, "CAW_CombatEffectTimeRemainingGauge", { eqtype = 26, width = textW, height = 8, s = s })
+    T.Text(tx + textW, iy, remaining or "", C.muted, T.font.small, "right")
+    T.Bar("cawEffectTime", tx, iy + th + 6 * s, tx + textW, iy + th + 14 * s, s,
+      fraction or 0, C.accent, { noTrail = true })
   end
   ui.SetCursorScreenPos(x + w - skillsW, iy + (icon - (th + 10 * s)) / 2)
   W.Button(WINDOW, "CAW_OpenCombatSkillSelectWnd", "Skills", { width = skillsW,

@@ -542,6 +542,19 @@ lookup 1500, follow AI 3000):
   its address, so a server patch's detour runs for each (NMS: the timer ids from 20 up in the patch's own map,
   stamped now + RecastTime / 1000 on use and set by OP_DisciplineTimer; the map lives for the session and nothing
   fills it at zone-in, as the profile has 20 timers).
+- Ability reuse is shared by timer id, including id 0. A profile timer or OP_DisciplineTimer marks every ability
+  using that id, independently of which ability started it or whether a discipline is currently active. The combat
+  ability tiles and discipline hot buttons derive their cooldown state from that shared deadline. A shorter
+  ability's reuse can be less than the shared wait; as a presentation fix, its overlay stays full until the wait
+  fits its own reuse, instead of a future inferred start making it look ready. Both UIs show a faded red reuse
+  fill and seconds countdown on combat ability entries. The regular use, assignment and drag handlers still run.
+- The active discipline's duration is separate from its reuse timer: gauge 26 uses the discipline buff slot's
+  remaining ticks over `SpellDuration(spell, local player level, false)` (RoF2's helper at 0x761600), capped full.
+  Both UIs interpolate the remaining duration between ticks and show seconds above the bar; these are presentation
+  enhancements over RoF2's tick-based gauge. Suspended timers stay still and permanent effects show a full bar with
+  "Permanent". Clicking the active icon (or selecting it with A in the gamepad UI) follows `/stopdisc`, requesting
+  removal of the discipline slot and waiting for the server's fade; ordinary buff slots and ability reuse timers
+  are unchanged.
 - The rank swap (CastSpell and doCombatAbility): a player who is not a GM (PcClient's CharacterBase vtable +0x90,
   @0x580300: the spawn's vtable +0xdc) casting a spell of a SpellGroup from a gem takes, when the membership's
   spell tier limit (vtable +0 = PcClient::GetGameFeature_ @0x5784e0, feature 3) is not -1 and below the spell's

@@ -729,6 +729,7 @@ GaugeValue stock_gauge(const EqHost& host, int type) {
         return {t->is_corpse ? -1 : spawn_hp_percent(host, c, *t) * 10, trim_name(t->name)};
     }
     case 25: return {100, {}};
+    case 26: return eq_discipline_gauge(host, net::GameConnection::now_ms());
     case 42: case 43: case 44: case 45: case 46: case 47: case 48: case 49: case 50: case 51:
     case 52: case 53: case 54: case 55: case 56: case 57: case 58: case 59: case 60: case 61: {
         // Extended target slot n (expansion flag 0x8000, else -2): its spawn's HP and name (-3 a corpse); without a
@@ -765,12 +766,32 @@ GaugeValue stock_gauge(const EqHost& host, int type) {
         return {static_cast<int>(std::min<std::uint32_t>(left, 30) * 1000 / 30), {}};
     }
     default:
-        // The rest (leadership experience, the discipline timer, achievements): not tracked here.
+        // The rest (leadership experience, achievements): not tracked here.
         return {-1, {}};
     }
 }
 
 } // namespace
+
+GaugeValue eq_discipline_gauge(const EqHost& host, std::int64_t now_ms) {
+    if (!host.conn || !host.in_game || !host.conn->discipline_active()) return {0, {}};
+    const auto& c = *host.conn;
+    const auto& buff = c.spell_state().buffs[game::kBuffSlots - 1];
+    const auto* spell = c.spell_table().get(buff.spell);
+    if (!spell) return {0, {}};
+    // Gauge 26's helper @0x761600: remaining ticks / SpellDuration(spell, local player's level).
+    // Presentation enhancements: interpolate between buff ticks, show seconds, and draw permanent effects full.
+    if (game::buff_is_permanent(buff.tics, spell)) return {1000, "Permanent"};
+    const auto left = game::buff_countdown_held(spell, c.spell_state().buff_timers_on_hold)
+                          ? static_cast<std::uint64_t>(buff.tics) * game::kBuffTickMs
+                          : game::buff_ms_left(buff.tics, buff.received_ms, now_ms);
+    const auto ticks = host.character ? host.character->spell_duration(*spell, c.player_status().level) : 0;
+    const auto total = static_cast<std::int64_t>(ticks) * game::kBuffTickMs;
+    const int value = total > 0
+                          ? static_cast<int>(std::min<std::uint64_t>(left * 1000 / static_cast<std::uint64_t>(total), 1000))
+                          : 0;
+    return {value, game::format_duration(left)};
+}
 
 GaugeFill gauge_fill(int value) {
     if (value == -2) return {1000, 0xff800000u};

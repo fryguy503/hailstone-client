@@ -2,17 +2,29 @@
 // menu (CCombatAbilityWnd_RebuildAbilityMenus / CategorizeAbility) and its [CombatAbilities] buttons.
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <ctime>
+#include <fstream>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include <lua.hpp>
+
+#include "app/actions_ui.h"
+#include "app/lua_eq.h"
 #include "core/byte_io.h"
+#include "core/config.h"
 #include "core/ini_file.h"
 #include "game/combat_ability_menu.h"
 #include "game/hotbuttons.h"
 #include "game/mechanics/sheet_builder.h"
 #include "mock_server/harness.h"
+#include "mock_server/profile_builder.h"
 #include "mq_test_world.h"
+#include "net/packet_io.h"
+#include "net/spell_packets.h"
 
 using namespace hailstone;
 
@@ -517,6 +529,198 @@ TEST_CASE("/stopdisc and /dismount") {
     A::status(c).stand_state = 102;
     c.dismount_command();
     CHECK(drain(c).size() == 1); // 6159
+}
+
+TEST_CASE("an active discipline refreshes and its icon asks the server for its slot to fade") {
+    test::EmptyGameDir dir;
+    std::ofstream(dir.path() / "spells_us.txt")
+        << mq_test::spell_line({{0, "4498"}, {1, "Test Discipline"}, {17, "5"}, {83, "1"}}) << '\n';
+    GameDir game(dir.path());
+    test::MockEqServer server(test::MockConfig::standard());
+    net::GameConnection c(game, test::quick_options());
+    auto until = [&](const std::function<bool()>& done) {
+        return test::pump([&] { c.update(); server.poll(); }, done);
+    };
+    auto barriers = [&] {
+        return std::count_if(server.zone_log.begin(), server.zone_log.end(),
+            [](const net::AppPacket& p) { return p.opcode == 0x7f01; });
+    };
+    auto barrier = [&] {
+        const auto before = barriers();
+        c.send_zone_packet(net::AppPacket(0x7f01));
+        REQUIRE(until([&] { return barriers() > before; }));
+    };
+    c.start(server.ticket());
+    REQUIRE(until([&] { return c.state() == net::ConnectionState::CharacterSelect; }));
+    c.enter_world("Gennro");
+    REQUIRE(until([&] { return c.state() == net::ConnectionState::InZone && c.player_status().max_hp != 0; }));
+    REQUIRE(c.spell_table().get(4498));
+    Config config;
+    app::ActionsUi actions(config, dir.path() / "hailstone.ini");
+    app::EqHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &c;
+    host.actions = &actions;
+    host.hot_buttons = &actions.hot_buttons();
+    app::EqApi api(host);
+    constexpr auto disc_slot = static_cast<std::uint32_t>(game::kBuffSlots - 1);
+    const auto& discipline = c.spell_state().buffs[disc_slot];
+
+    // With no discipline, the stop command sends no removal request.
+    c.stop_discipline();
+    barrier();
+    CHECK(test::MockEqServer::count(server.zone_log, net::Op::BuffRemoveRequest) == 0);
+
+    net::BuffIcons icons;
+    icons.entity_id = c.world().player_id;
+    icons.entries = {{1, 4498, 10, 0, "Caster"}, {disc_slot, 4498, 5, 0, "Caster"}};
+    server.zone.send_reliable(net::encode(icons, false));
+    REQUIRE(until([&] { return c.discipline_active(); }));
+    CHECK(discipline.spell == 4498);
+    CHECK(discipline.tics == 5);
+
+    // The same duration updates used for buffs also refresh the dedicated discipline slot.
+    net::BuffPacket refresh;
+    refresh.entity_id = c.world().player_id;
+    refresh.slot = disc_slot;
+    refresh.fade = 2;
+    refresh.buff.spell_id = 4498;
+    refresh.buff.duration = 3;
+    refresh.buff.level = 50;
+    server.zone.send_reliable(net::encode(refresh));
+    REQUIRE(until([&] { return discipline.tics == 3; }));
+    CHECK(discipline.level == 50);
+
+    REQUIRE(api.click_child("CombatAbilityWnd", "CAW_CombatEffectButton"));
+    REQUIRE(until([&] { return test::MockEqServer::count(server.zone_log, net::Op::BuffRemoveRequest) == 1; }));
+    const auto request = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+        [](const net::AppPacket& p) { return net::is_op(p, net::Op::BuffRemoveRequest); });
+    REQUIRE(request != server.zone_log.end());
+    REQUIRE(request->data.size() == 8);
+    ByteReader bytes(request->data);
+    CHECK(bytes.le<std::uint32_t>() == disc_slot);
+    CHECK(bytes.le<std::uint32_t>() == c.world().player_id);
+    CHECK(c.discipline_active()); // The server, rather than the click, confirms removal.
+    CHECK(discipline.tics == 3);
+    CHECK(c.spell_state().buffs[1].spell == 4498);
+
+    refresh.fade = 1; // The server sends the same fade for cancellation and natural expiry.
+    server.zone.send_reliable(net::encode(refresh));
+    REQUIRE(until([&] { return !c.discipline_active(); }));
+    CHECK(discipline.empty());
+    CHECK(c.spell_state().buffs[1].spell == 4498);
+    c.stop_discipline();
+    barrier();
+    CHECK(test::MockEqServer::count(server.zone_log, net::Op::BuffRemoveRequest) == 1);
+}
+
+TEST_CASE("discipline buttons share server reuse timers despite different recasts") {
+    test::EmptyGameDir dir;
+    std::ofstream spells(dir.path() / "spells_us.txt");
+    spells << mq_test::spell_line({{0, "6001"}, {1, "Long Guard"}, {15, "600000"}, {167, "1"}, {168, "1"}}) << '\n';
+    spells << mq_test::spell_line({{0, "6002"}, {1, "Short Guard"}, {15, "300000"}, {167, "1"}, {168, "1"}}) << '\n';
+    spells << mq_test::spell_line({{0, "6003"}, {1, "Independent"}, {15, "600000"}, {167, "2"}, {168, "1"}}) << '\n';
+    spells << mq_test::spell_line({{0, "6004"}, {1, "Timer Zero"}, {15, "120000"}, {167, "0"}, {168, "1"}}) << '\n';
+    spells << mq_test::spell_line({{0, "6005"}, {1, "No Recast"}, {15, "0"}, {167, "1"}, {168, "1"}}) << '\n';
+    spells.close();
+    GameDir game(dir.path());
+    net::GameConnection c(game, {});
+    test::ProfileSpec profile;
+    const auto now = static_cast<std::uint32_t>(std::time(nullptr));
+    profile.combat_ability_timers[0] = now + 120;
+    profile.combat_ability_timers[1] = now + 600;
+    profile.combat_ability_timers[2] = now - 1;
+    c.receive_zone_packet_for_test(test::build_player_profile(profile));
+    ByteWriter known;
+    for (std::uint32_t i = 0; i < 300; ++i) known.le<std::uint32_t>(i < 5 ? 6001 + i : 0);
+    c.receive_zone_packet_for_test(net::AppPacket(net::to_wire(net::Op::DisciplineUpdate), known.take()));
+    Config config;
+    app::ActionsUi actions(config, dir.path() / "hailstone.ini");
+    for (int i = 0; i < 5; ++i)
+        actions.hot_buttons().combat_abilities[static_cast<std::size_t>(i)] = game::kCombatAbilityValueBase + i;
+    app::EqHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &c;
+    host.actions = &actions;
+    host.hot_buttons = &actions.hot_buttons();
+    app::EqApi api(host);
+    std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
+    REQUIRE(lua);
+    lua_newtable(lua.get());
+    api.register_functions(lua.get());
+    lua_setglobal(lua.get(), "eq");
+    struct CoolDown { bool shown; std::int64_t top, left, reuse; };
+    auto cooldown = [&](int button) {
+        lua_settop(lua.get(), 0);
+        const auto code = "return eq.ButtonCoolDown('CombatAbilityWnd','CAW_Button" + std::to_string(button) + "',0,100)";
+        REQUIRE(luaL_dostring(lua.get(), code.c_str()) == LUA_OK);
+        REQUIRE(lua_gettop(lua.get()) == 7);
+        return CoolDown{lua_isnumber(lua.get(), 1) != 0, lua_tointeger(lua.get(), 1),
+                        lua_tointeger(lua.get(), 6), lua_tointeger(lua.get(), 7)};
+    };
+    CHECK(api.child_checked("CombatAbilityWnd", "CAW_Button1") == true);
+    CHECK(api.child_checked("CombatAbilityWnd", "CAW_Button2") == true);
+    const auto short_guard = cooldown(2);
+    CHECK(short_guard.shown);
+    CHECK(short_guard.top == 0); // The shared wait exceeds this button's own 300-second recast.
+    CHECK(short_guard.left > short_guard.reuse);
+    CHECK(short_guard.reuse == 300000);
+    CHECK(cooldown(5).shown); // A zero-recast ability on the same shared timer is also unavailable.
+    CHECK(cooldown(5).reuse == 0);
+    CHECK(cooldown(5).top == 0);
+    CHECK_FALSE(cooldown(3).shown); // Independent group's profile timer already expired.
+    CHECK(cooldown(3).left == 0);
+    CHECK(api.child_checked("CombatAbilityWnd", "CAW_Button3") == false);
+    CHECK(cooldown(4).shown); // Timer id zero is valid.
+    CHECK(cooldown(4).left > 0);
+    REQUIRE(luaL_dostring(lua.get(), "local d=eq.Disciplines(); return #d==5 and d[1].timer==1 and d[2].timer==1 "
+        "and d[1].remaining>0 and d[1].remaining==d[2].remaining and d[1].remaining==d[5].remaining "
+        "and d[3].remaining==0 and d[4].timer==0 and d[4].remaining>0") == LUA_OK);
+    CHECK(lua_toboolean(lua.get(), -1));
+
+    // The same tile can be replaced or emptied while cooling without inheriting the old ability's overlay.
+    actions.hot_buttons().combat_abilities[1] = game::kCombatAbilityValueBase + 2;
+    CHECK_FALSE(cooldown(2).shown);
+    actions.hot_buttons().combat_abilities[1] = -1;
+    CHECK_FALSE(cooldown(2).shown);
+    CHECK(cooldown(2).left == 0);
+    actions.hot_buttons().combat_abilities[1] = game::kCombatAbilityValueBase + 1;
+    CHECK(cooldown(2).shown);
+
+    auto timer = [&](std::uint32_t id, std::uint32_t seconds) {
+        ByteWriter bytes;
+        bytes.le<std::uint32_t>(id);
+        bytes.le<std::uint32_t>(seconds);
+        bytes.le<std::uint32_t>(0);
+        c.receive_zone_packet_for_test(net::AppPacket(net::to_wire(net::Op::DisciplineTimer), bytes.take()));
+    };
+    timer(1, 20);
+    CHECK(cooldown(1).left > 0);
+    CHECK(cooldown(1).left <= 20000);
+    CHECK(cooldown(2).left > 0);
+    CHECK(cooldown(2).left <= 20000);
+    CHECK(cooldown(2).top > 0);
+    CHECK(cooldown(5).left > 0);
+    CHECK_FALSE(cooldown(3).shown);
+    timer(2, 30);
+    CHECK(cooldown(3).shown);
+    timer(1, 0); // The server's reset releases every ability in group 1, and leaves other groups alone.
+    CHECK_FALSE(cooldown(1).shown);
+    CHECK_FALSE(cooldown(2).shown);
+    CHECK_FALSE(cooldown(5).shown);
+    CHECK(cooldown(1).left == 0);
+    CHECK(cooldown(1).reuse == 0);
+    CHECK(cooldown(3).shown);
+    CHECK(cooldown(4).shown);
+    timer(0, 0);
+    CHECK_FALSE(cooldown(4).shown);
+    timer(20, 60);
+    CHECK(c.discipline_reuse_timer(20) == 0); // Stock timer ids stop at 19.
+
+    // The Lua timing detail is not truncated to a 32-bit millisecond span.
+    A::spells(c).discipline_ready[1] = 0xfffffffeu;
+    CHECK(cooldown(2).left > 0xffffffffLL);
+    CHECK(cooldown(2).top == 0);
 }
 
 TEST_CASE("CYCLE_XTARGET after the server shrank the list past the cursor ends") {
