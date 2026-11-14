@@ -819,7 +819,7 @@ namespace hailstone::game {
 		constexpr uint16_t Node = 2254;
 	}
 
-	//needed for plugins for backward mq functionality 
+	//needed for plugins for backward mq functionality
 	#define CONCOLOR_GREY                            0x06
 	#define CONCOLOR_GREEN                           0x02
 	#define CONCOLOR_LIGHTBLUE                       0x12
@@ -1148,9 +1148,12 @@ namespace hailstone::game {
 		float speed_heading = 0.0f;  // heading units per tick
 		double update_time = 0.0;    // when position was last set (seconds, steady clock)
 		float snap_error = 0.0f;     // how far the last update moved the stepped position (diagnostics)
-		// The spawn record's flymode, then SpawnAppearance 19 (PlayerPhysics_SetFlyMode): 0 on the ground (gravity),
-		// 1 flying, 2 levitating.
+		// The spawn record's flymode, then SpawnAppearance 19 (PlayerPhysics_SetFlyMode): 0 ground, 1 flying,
+		// 2 levitating, 3 water, 4 floating, 5 levitating while running. The local player's own mode is worked out
+		// by PlayerMovement (mech::local_fly_mode); `fly_mode_sets` counts the type-19 updates so that one setting
+		// the same value again is still seen.
 		std::uint8_t fly_mode = 0;
+		std::uint32_t fly_mode_sets = 0;
 		// The region types under it (+0xa1 FeetWet, +0xa2 BodyWet: 0 dry, 5 water, ...), probed with each step
 		// (WorldState::smooth's `region`); the local player's come from its own controller.
 		std::uint8_t feet_wet = 0, body_wet = 0;

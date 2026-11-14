@@ -485,7 +485,10 @@ int ClientApp::run() {
                                                               actor_renderer_.get(), lighting, objects);
                 lap.mark("plan point shadows");
                 settle_frame_.shadow_builds = point_builds.size();
-                if (zone_renderer_) zone_renderer_->set_lighting(lighting);
+                if (zone_renderer_) {
+                    zone_renderer_->set_lighting(lighting);
+                    zone_renderer_->set_lod_scale(static_cast<float>(tree_detail_) / 100.0f);
+                }
                 // The zone's exits for the map and its zone finder (EqHost::zone_exits), once its zone points are in.
                 if (in_game && zone_ && conn_ && eq_host_.zone_exits_zone == 0 && conn_->zone_id() != 0 &&
                     !conn_->zone_points().empty()) {
@@ -523,6 +526,7 @@ int ClientApp::run() {
                     lap.mark("neighbour zones update");
                     neighbours_->set_scene_light(scene_light);
                     neighbours_->set_lighting(lighting);
+                    neighbours_->set_lod_scale(static_cast<float>(tree_detail_) / 100.0f);
                 }
                 frame_lighting_ = lighting;
                 if (actor_renderer_) actor_renderer_->set_lighting(lighting);

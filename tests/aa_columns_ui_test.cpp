@@ -244,6 +244,17 @@ eq.ShowWindow('AAWindow', true)
         }
     }
 
+    // Every head is drawn whole: a column is never narrower than its head and the sort arrow.
+    void checkHeads() {
+        for (const char* head : {"ABILITY", "CATEGORY", "TAB", "ERA", "TYPE", "RANK", "COST"}) {
+            INFO(head);
+            lua_getglobal(state(), "aa_text");
+            lua_getfield(state(), -1, head);
+            CHECK(lua_istable(state(), -1));
+            lua_settop(state(), 0);
+        }
+    }
+
     void checkFooter() {
         const auto button = hit("Reset columns##aareset");
         CHECK(button.x0 >= value("aa_hits", "Reset columns##aareset", 5));
@@ -261,12 +272,13 @@ eq.ShowWindow('AAWindow', true)
 
 TEST_CASE("AA columns: dialog scale, resizing and a row extension share the header layout") {
     AaColumns ui;
-    for (const char* scale : {"0.6", "1.5", "2.0"}) {
+    for (const char* scale : {"0.6", "1.0", "1.5", "2.0"}) {
         INFO(scale);
         ui.run(std::string("ui.SetSetting('plugin.plug.hud.scale.AAWindow', '") + scale + "')");
         ui.frames(3);
         ui.checkAligned();
         ui.checkClipped();
+        ui.checkHeads();
         ui.checkFooter();
         ui.run("ui.SetSetting('plugin.plug.hud.size.AAWindow', '1250,650')");
         ui.frames();

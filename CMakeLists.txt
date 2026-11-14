@@ -743,6 +743,8 @@ hailstone_add_shaders(hailstone_shaders
   shaders/fire.vert
   shaders/flora.vert
   shaders/flora.frag
+  shaders/lawn.vert
+  shaders/lawn.frag
   shaders/fire.frag
   shaders/spell_fx.vert
   shaders/spell_fx.frag
@@ -1011,6 +1013,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/tcp_socket_test.cpp
     tests/plugin_tcp_test.cpp
     tests/merchant_buy_test.cpp
+    tests/npc_interaction_distance_test.cpp
+    tests/world_container_distance_test.cpp
     tests/merchant_usable_test.cpp
     tests/ascii_case_test.cpp
     tests/ui_pack_windows_test.cpp
@@ -1242,6 +1246,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/step_landing_test.cpp
     tests/jump_hang_test.cpp
     tests/stop_moving_test.cpp
+    tests/fly_mode_test.cpp
     tests/zone_ladders_test.cpp
     tests/chat_trade_vectors_test.cpp
     tests/hotbutton_tracking_vectors_test.cpp
@@ -1267,8 +1272,10 @@ if(HAILSTONE_BUILD_TESTS)
     tests/connection_state_test.cpp
     tests/texpack_test.cpp
     tests/texpack_materials_test.cpp
-  tests/gltf_mesh_test.cpp
-  tests/texpack_trees_test.cpp
+    tests/gltf_mesh_test.cpp
+    tests/texpack_trees_test.cpp
+    tests/lod_bands_test.cpp
+    tests/zone_models_test.cpp
     tests/addon_tool_test.cpp
   )
   target_include_directories(hailstone_tests PRIVATE tests sdk)

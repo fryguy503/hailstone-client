@@ -1182,6 +1182,9 @@ private:
     // neighbours (NeighbourZones::drawn_key) it was last hidden for.
     bool horizon_hills_ = true;
     std::uint64_t distant_hidden_key_ = 0;
+    // How far the replacement models' (a texture pack's generated trees') levels of detail reach, in percent of their
+    // own distances (render::ZoneRenderer::set_lod_scale); display.tree_detail, 50 to 200.
+    int tree_detail_ = 100;
     std::unique_ptr<audio::AudioSystem> audio_;             // emitters, music, event sounds (audio/)
     std::unique_ptr<SoundEvents> sound_events_;             // what plays which sound (app/sound_events.h)
     // The listener (audio/listener.h): PlayerClient +0x11b4 (the last ceiling found above the player), CDisplay

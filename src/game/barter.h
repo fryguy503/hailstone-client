@@ -120,6 +120,7 @@ BarterWindowButtons barter_window_buttons(const BarterWindowState& s, std::uint3
 
 // CBarterMerchantWnd: the buyer we look at.
 struct BarterMerchantState {
+    std::uint64_t serial = 0;
     std::uint32_t buyer_id = 0;         // +0x260: the buyer's spawn id while the window is open (pinstActiveMerchant)
     std::vector<net::BuyLine> lines;    // +0x23c, in the order the server sent them
     std::uint32_t selected_slot = 0xffffffff; // +0x238: the selected line's slot

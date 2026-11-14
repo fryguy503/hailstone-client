@@ -447,6 +447,11 @@ void NeighbourZones::set_lighting(const render::SceneLighting& lighting) {
         if (l.renderer) l.renderer->set_lighting(lighting);
 }
 
+void NeighbourZones::set_lod_scale(float scale) {
+    for (auto& l : lines_)
+        if (l.renderer) l.renderer->set_lod_scale(scale);
+}
+
 void NeighbourZones::draw(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
                           const game::ViewDistance& view, double time_seconds, render::ZonePhase phase) {
     const auto t0 = Clock::now();

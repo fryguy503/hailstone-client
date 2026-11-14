@@ -19,6 +19,7 @@
 namespace hailstone::net {
 
 struct MerchantSession {
+    std::uint64_t serial = 0;   // identifies this opening, including reopening the same NPC
     std::uint32_t npc_id = 0;
     std::string name;            // display name
     bool open = false;           // the server answered OP_ShopRequest with command 1
@@ -74,6 +75,7 @@ struct TradeSession {
 // items are in the inventory (types 1 and 2), its coin in
 // GameConnection::bank_coins().
 struct BankSession {
+    std::uint64_t serial = 0;
     std::uint32_t banker_id = 0;
     std::string name;            // the banker's trimmed name (BW_BankerName)
     int slots = 16;              // CBankWnd::BankSize: 16 or 24 (game::bank_slot_count)

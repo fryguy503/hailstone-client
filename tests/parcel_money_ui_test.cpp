@@ -11,6 +11,7 @@
 #include "net/item_packets.h"
 #include "net/merchant_packets.h"
 #include "net/packet_io.h"
+#include "net/tribute_packets.h"
 
 using namespace hailstone;
 using namespace hailstone::test;
@@ -144,5 +145,167 @@ TEST_CASE("Parcels page: an inventory coin button picks money to send, lets the 
     CHECK(conn.cursor_coins()[3] == 3);
     CHECK(conn.coins().platinum == 4);
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) > moves_before; }));
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("merchant quantity questions end with their session, including a reopened merchant") {
+    for (bool parcels : {false, true}) {
+        for (bool reopen_before_frame : {false, true}) {
+            CAPTURE(parcels);
+            CAPTURE(reopen_before_frame);
+            ImGuiContext* ctx = ImGui::CreateContext();
+            ImGui::GetIO().DisplaySize = ImVec2(1280, 720);
+            Rig rig(MockConfig::standard());
+            auto& conn = rig.conn;
+            REQUIRE(rig.to_zone());
+            open_parcel_merchant(conn);
+            app::EqHost host;
+            host.in_game = host.ui_ready = true;
+            host.conn = &conn;
+            app::EqApi api(host);
+            Lua lua(api);
+
+            if (parcels) {
+                lua.run("eq.SetTabPage('MerchantWnd', 'MW_MerchantSubwindows', 2)");
+                lua.run("eq.ClickChild('InventoryWindow', 'IW_Money0', 'left')");
+            } else {
+                conn.merchant_select(net::ItemSlot::possessions(23));
+                REQUIRE(lua.flag("return eq.ClickChild('MerchantWnd', 'MW_Sell_Button', 'left')"));
+            }
+            REQUIRE(host.quantity);
+            auto stale_answer = host.quantity->done;
+            conn.close_merchant();
+            if (reopen_before_frame) open_parcel_merchant(conn);
+            api.begin_frame();
+            CHECK_FALSE(host.quantity);
+            CHECK_FALSE(lua.flag("return eq.WindowShown('QuantityWnd')"));
+            if (!reopen_before_frame) open_parcel_merchant(conn);
+            stale_answer(2);
+            CHECK(conn.merchant()->pending == 0);
+            CHECK_FALSE(conn.merchant()->parcel_money);
+            CHECK(conn.coins().platinum == 7);
+            CHECK(conn.cursor_coins() == std::array<std::uint32_t, 4>{});
+            CHECK(conn.inventory().at(net::ItemSlot::possessions(23))->stack_count == 5);
+            conn.close_merchant();
+            ImGui::DestroyContext(ctx);
+        }
+    }
+}
+
+TEST_CASE("tribute coin questions close with the personal or guild master session") {
+    for (bool guild : {false, true}) {
+        CAPTURE(guild);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().DisplaySize = ImVec2(1280, 720);
+        Rig rig(MockConfig::standard());
+        auto& conn = rig.conn;
+        REQUIRE(rig.to_zone());
+        auto& world = conn.world_for_test();
+        game::Spawn master = *world.player();
+        master.id = kMerchant;
+        master.name = "Tribute_Master00";
+        master.is_npc = true;
+        master.class_id = guild ? 64 : 63;
+        world.spawns[kMerchant] = master;
+        conn.receive_zone_packet_for_test(net::encode_money_update(net::Coins{7, 0, 0, 0}));
+        auto open = [&] {
+            auto packet = net::encode(net::StartTribute{world.player_id, kMerchant, 1});
+            if (guild) packet.opcode = net::to_wire(net::Op::OpenGuildTributeMaster);
+            conn.receive_zone_packet_for_test(packet);
+            REQUIRE((guild ? conn.guild_tribute().master_id : conn.tribute().master_id) == kMerchant);
+        };
+        open();
+        app::EqHost host;
+        host.in_game = host.ui_ready = true;
+        host.conn = &conn;
+        app::EqApi api(host);
+        Lua lua(api);
+        REQUIRE(lua.flag("return eq.ClickChild('TributeMasterWnd', 'TMW_CoinButton', 'left')"));
+        REQUIRE(host.quantity);
+        auto stale_answer = host.quantity->done;
+        if (guild) conn.close_guild_tribute_master();
+        else conn.close_tribute_master();
+        open(); // even reopening the same master cannot reuse the old quantity question
+        api.begin_frame();
+        CHECK_FALSE(host.quantity);
+        stale_answer(3);
+        CHECK(lua.integer("return tonumber((eq.WindowText('TributeMasterWnd', 'TMW_CoinButton')))") == 0);
+        REQUIRE(lua.flag("return eq.ClickChild('TributeMasterWnd', 'TMW_CoinButton', 'left')"));
+        REQUIRE(host.quantity);
+        host.quantity->done(2);
+        host.quantity.reset();
+        CHECK(lua.integer("return tonumber((eq.WindowText('TributeMasterWnd', 'TMW_CoinButton')))") == 2);
+        if (guild) conn.close_guild_tribute_master();
+        else conn.close_tribute_master();
+        open();
+        api.begin_frame();
+        CHECK(lua.integer("return tonumber((eq.WindowText('TributeMasterWnd', 'TMW_CoinButton')))") == 0);
+        ImGui::DestroyContext(ctx);
+    }
+}
+
+TEST_CASE("barter and guild bank questions cannot survive a new service session") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().DisplaySize = ImVec2(1280, 720);
+    Rig rig(MockConfig::standard());
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    app::EqHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &conn;
+    app::EqApi api(host);
+    Lua lua(api);
+
+    auto& buyer = const_cast<game::BarterMerchantState&>(conn.barter_merchant());
+    auto open_buyer = [&](std::uint64_t serial) {
+        buyer.buyer_id = kMerchant;
+        buyer.serial = serial;
+        net::BuyLine line;
+        line.item_id = 1002;
+        line.quantity = 5;
+        line.slot = 0;
+        buyer.lines = {line};
+        buyer.selected_slot = 0;
+    };
+    open_buyer(1);
+    REQUIRE(lua.flag("return eq.ClickChild('BarterMerchantWnd', 'SellButton', 'left')"));
+    REQUIRE(host.quantity);
+    auto stale_sale = host.quantity->done;
+    conn.close_buyer();
+    open_buyer(2);
+    api.begin_frame();
+    CHECK_FALSE(host.quantity);
+    stale_sale(2);
+    CHECK(buyer.pending == 0);
+    conn.close_buyer();
+
+    auto& bank = const_cast<net::GameConnection::GuildBank&>(conn.guild_bank());
+    auto open_bank = [&](std::uint64_t serial) {
+        bank.banker = kMerchant;
+        bank.serial = serial;
+        bank.selected = 0;
+        net::GuildBankItem item;
+        item.item_id = 1002;
+        item.quantity = 5;
+        bank.deposit = {item};
+    };
+    open_bank(3);
+    REQUIRE(lua.flag("return eq.ClickChild('GuildBankWnd', 'WithdrawButton', 'left')"));
+    REQUIRE(host.quantity);
+    auto stale_withdraw = host.quantity->done;
+    conn.close_guild_bank();
+    open_bank(4);
+    api.begin_frame();
+    CHECK_FALSE(host.quantity);
+    stale_withdraw(2);
+    CHECK(bank.pending == 0);
+
+    REQUIRE(lua.flag("return eq.ClickChild('GuildBankWnd', 'ChangeTargetButton', 'left')"));
+    REQUIRE(host.text_entry);
+    conn.close_guild_bank();
+    open_bank(5);
+    api.begin_frame();
+    CHECK_FALSE(host.text_entry);
+    CHECK_FALSE(lua.flag("return eq.WindowShown('TextEntryWnd')"));
     ImGui::DestroyContext(ctx);
 }

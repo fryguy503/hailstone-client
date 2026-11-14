@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -198,6 +199,128 @@ TEST_CASE("Swimming, sneak and SetAccel") {
     CHECK(bits(set_accel(0.0f, 1.5f, false, AccelRider{true, true}, 1.0f, 1.2f)) == bits(1.0f * 50.0f * 1.2f / 1500.0f));
     CHECK(bits(set_accel(1.5f, 0.0f, false, AccelRider{true, true}, 1.0f, 1.2f)) ==
           bits(1.5f - 1.0f * 50.0f * 1.2f / 1500.0f));
+}
+
+TEST_CASE("Local fly mode: server modes, buffs, no-levitation zones, rebuilds") {
+    constexpr std::array<FlyMode, 6> all{FlyMode::Ground, FlyMode::Flying, FlyMode::Levitate,
+                                         FlyMode::Water, FlyMode::Floating, FlyMode::LevitateRun};
+    auto set = [](FlyMode m) { FlyModeEvents e; e.server_mode = m; return e; };
+    FlyModeEvents recache;
+    recache.recache = true;
+    const FlyModeEvents none;
+
+    // OP_SpawnAppearance 19 sets every mode outright, buffs or not, in a no-levitation zone too: the rules wait for
+    // the next rebuild.
+    for (FlyMode m : all) {
+        CHECK(local_fly_mode(FlyMode::Ground, set(m), false, false, std::nullopt, false) == m);
+        CHECK(local_fly_mode(FlyMode::Levitate, set(m), true, false, std::nullopt, true) == m);
+    }
+    // Without a rebuild nothing changes it: frames without events keep the server's mode against the buffs.
+    CHECK(local_fly_mode(FlyMode::Water, none, true, false, std::nullopt, false) == FlyMode::Water);
+    CHECK(local_fly_mode(FlyMode::Ground, none, true, false, std::nullopt, false) == FlyMode::Ground);
+
+    // A rebuild (a buff changing) puts modes 0 and 2 to 5 back to what the buffs give.
+    for (FlyMode m : {FlyMode::Ground, FlyMode::Levitate, FlyMode::Water, FlyMode::Floating, FlyMode::LevitateRun}) {
+        CHECK(local_fly_mode(m, recache, false, false, std::nullopt, false) == FlyMode::Ground);
+        CHECK(local_fly_mode(m, recache, true, false, std::nullopt, false) == FlyMode::Levitate);
+        CHECK(local_fly_mode(m, recache, false, true, std::nullopt, false) == FlyMode::LevitateRun);
+    }
+    // #set flymode 0 while levitating: on the ground until the buffs next change, then levitating again.
+    FlyMode mode = local_fly_mode(FlyMode::Levitate, set(FlyMode::Ground), true, false, std::nullopt, false);
+    CHECK(mode == FlyMode::Ground);
+    mode = local_fly_mode(mode, none, true, false, std::nullopt, false);
+    CHECK(mode == FlyMode::Ground);
+    mode = local_fly_mode(mode, recache, true, false, std::nullopt, false);
+    CHECK(mode == FlyMode::Levitate);
+    // #set flymode 3 without levitation, then an unrelated buff lands: back on the ground.
+    mode = local_fly_mode(FlyMode::Ground, set(FlyMode::Water), false, false, std::nullopt, false);
+    CHECK(mode == FlyMode::Water);
+    mode = local_fly_mode(mode, recache, false, false, std::nullopt, false);
+    CHECK(mode == FlyMode::Ground);
+
+    // Mode 1 survives a rebuild, but not in a no-levitation zone (unless the spawn may fly anyway).
+    CHECK(local_fly_mode(FlyMode::Flying, recache, false, false, std::nullopt, false) == FlyMode::Flying);
+    CHECK(local_fly_mode(FlyMode::Flying, recache, true, false, std::nullopt, false) == FlyMode::Flying);
+    CHECK(local_fly_mode(FlyMode::Flying, recache, false, false, std::nullopt, true) == FlyMode::Ground);
+    CHECK(local_fly_mode(FlyMode::Flying, recache, false, false, std::nullopt, true, true) == FlyMode::Flying);
+    // A levitate buff in a no-levitation zone gives nothing at a rebuild.
+    CHECK(local_fly_mode(FlyMode::Levitate, recache, true, false, std::nullopt, true) == FlyMode::Ground);
+    // A rider follows its mount's mode at a rebuild.
+    CHECK(local_fly_mode(FlyMode::Ground, recache, true, false, FlyMode::Flying, false) == FlyMode::Flying);
+
+    // A server mode and a rebuild in the same frame: the rebuild comes last.
+    FlyModeEvents both = set(FlyMode::Water);
+    both.recache = true;
+    CHECK(local_fly_mode(FlyMode::Ground, both, false, false, std::nullopt, false) == FlyMode::Ground);
+    both.server_mode = FlyMode::Flying;
+    CHECK(local_fly_mode(FlyMode::Ground, both, false, false, std::nullopt, false) == FlyMode::Flying);
+    CHECK(local_fly_mode(FlyMode::Ground, both, false, false, std::nullopt, true) == FlyMode::Ground);
+
+    // A levitate buff landing (FUN_00432b20) replaces even mode 1: 2, or 5 for a non-zero Base2; 0 in a
+    // no-levitation zone. The rebuild after it keeps that.
+    FlyModeEvents landed;
+    landed.levitate_landed = 0;
+    landed.recache = true;
+    CHECK(local_fly_mode(FlyMode::Flying, landed, true, false, std::nullopt, false) == FlyMode::Levitate);
+    landed.levitate_landed = 1;
+    CHECK(local_fly_mode(FlyMode::Flying, landed, false, true, std::nullopt, false) == FlyMode::LevitateRun);
+    landed.recache = false;
+    CHECK(local_fly_mode(FlyMode::Flying, landed, false, true, std::nullopt, true) == FlyMode::Ground);
+    CHECK(local_fly_mode(FlyMode::Flying, landed, false, true, std::nullopt, true, true) == FlyMode::LevitateRun);
+
+    // A levitate buff fading with no levitation left (RemoveAffect) grounds mode 1 too; with another levitation
+    // left, mode 1 stays.
+    FlyModeEvents faded;
+    faded.levitate_faded = true;
+    faded.recache = true;
+    CHECK(local_fly_mode(FlyMode::Flying, faded, false, false, std::nullopt, false) == FlyMode::Ground);
+    CHECK(local_fly_mode(FlyMode::Water, faded, false, false, std::nullopt, false) == FlyMode::Ground);
+    CHECK(local_fly_mode(FlyMode::Flying, faded, true, false, std::nullopt, false) == FlyMode::Flying);
+}
+
+TEST_CASE("Buff levitation change between frames") {
+    // Spell 10 levitates (Base2 0), 11 levitates while running (Base2 1), 20 does not.
+    auto base2 = [](std::uint32_t id) -> std::optional<std::int32_t> {
+        if (id == 10) return 0;
+        if (id == 11) return 1;
+        return std::nullopt;
+    };
+    constexpr std::uint32_t E = kNoBuffSpell;
+    const std::vector<std::uint32_t> empty{E, E, E};
+
+    BuffLevitationChange c = buff_levitation_change(empty, empty, base2);
+    CHECK_FALSE(c.changed);
+    CHECK_FALSE(c.faded);
+    CHECK_FALSE(c.landed);
+
+    // An unrelated buff: a change (a rebuild), no levitation event.
+    c = buff_levitation_change(empty, std::vector<std::uint32_t>{E, 20, E}, base2);
+    CHECK(c.changed);
+    CHECK_FALSE(c.faded);
+    CHECK_FALSE(c.landed);
+
+    // Landing: the last slot's Base2.
+    c = buff_levitation_change(empty, std::vector<std::uint32_t>{10, E, E}, base2);
+    CHECK(c.changed);
+    CHECK(c.landed == 0);
+    c = buff_levitation_change(empty, std::vector<std::uint32_t>{10, E, 11}, base2);
+    CHECK(c.landed == 1);
+
+    // Fading, and a levitate buff replaced by another spell; a slot keeping its spell is no event.
+    c = buff_levitation_change(std::vector<std::uint32_t>{10, 20, E}, std::vector<std::uint32_t>{E, 20, E}, base2);
+    CHECK(c.changed);
+    CHECK(c.faded);
+    CHECK_FALSE(c.landed);
+    c = buff_levitation_change(std::vector<std::uint32_t>{11, E, E}, std::vector<std::uint32_t>{20, E, E}, base2);
+    CHECK(c.faded);
+    c = buff_levitation_change(std::vector<std::uint32_t>{10, E, E}, std::vector<std::uint32_t>{10, 20, E}, base2);
+    CHECK(c.changed);
+    CHECK_FALSE(c.faded);
+    CHECK_FALSE(c.landed);
+    // The slot count differing (no slots yet before the profile): the new ones count as changed.
+    c = buff_levitation_change(std::vector<std::uint32_t>{}, std::vector<std::uint32_t>{E, 10}, base2);
+    CHECK(c.changed);
+    CHECK(c.landed == 0);
 }
 
 TEST_CASE("Levitation mode, air supply, breathing") {

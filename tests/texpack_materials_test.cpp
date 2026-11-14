@@ -208,6 +208,20 @@ TEST_CASE("photo materials: the rules files") {
     CHECK_FALSE(parse_material_rules("[a]\nasset = x\nmetres = -1\n", {}, &error));
     CHECK_FALSE(parse_material_rules("[a]\nasset = x\ncolour = 1 2\n", {}, &error));
 
+    // A zone's own colour for a material, for that file's tiles only and wherever in it the line is
+    auto coloured = parse_material_rules(kMaterials, {{"snowy", "edge = grass rock\ncolour grass = 0.5 0.6 0.7\n"},
+                                                      {"other", "edge = grass rock\n"}});
+    REQUIRE(coloured);
+    REQUIRE(coloured->tiles.size() == 2);
+    REQUIRE(coloured->tiles[0].first_colour);
+    CHECK((*coloured->tiles[0].first_colour)[2] == doctest::Approx(0.7));
+    CHECK_FALSE(coloured->tiles[0].second_colour);
+    CHECK_FALSE(coloured->tiles[1].first_colour);
+    CHECK(coloured->signature(coloured->tiles[0]) != coloured->signature(coloured->tiles[1]));
+    CHECK_FALSE(parse_material_rules(kMaterials, {{"z", "colour sand = 0.1 0.1 0.1"}}, &error));
+    CHECK(error.starts_with("z.txt:1: expected colour"));
+    CHECK_FALSE(parse_material_rules(kMaterials, {{"z", "colour grass = 0.1 2 0.1"}}, &error));
+
     SUBCASE("a folder of them") {
         test::ScratchDir dir("materials-rules");
         REQUIRE(write_file_atomic(dir.path() / "materials.txt", std::string(kMaterials)));
@@ -294,6 +308,12 @@ TEST_CASE("photo materials: a tile keeps the original's layout and takes the pho
     CHECK(column_mean(*out.color, 66, 72, 1) < column_mean(*out.color, 80, 112, 1) * 1.15);
     // flat normals stay flat and unit length
     CHECK(column_mean(*out.normal, 0, 128, 2) > 0.99);
+    // a zone's own colour for a material is the one the tile is made with (one far from the art's grass changes the
+    // texels where the materials meet)
+    MaterialTile odd = edge;
+    odd.rule.first_colour = std::array<float, 3>{0.8f, 0.8f, 0.8f};
+    Outputs other = compose_tile(odd, r, orig, lib, 128, false);
+    CHECK(std::abs(column_mean(*other.color, 54, 62, 1) - column_mean(*out.color, 54, 62, 1)) > 0.01);
 
     // one material: all grass's roughness, and no maps when they are off
     MaterialTile pure{r.tiles[0], 56.0, "sig"};

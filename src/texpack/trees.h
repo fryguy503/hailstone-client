@@ -53,10 +53,11 @@ using TreeTextureLookup = std::function<const assets::Image*(const assets::Mater
 std::optional<TreeShape> measure_tree(const assets::Mesh& mesh, const TreeTextureLookup& texture,
                                       std::string* why = nullptr);
 
-// How the tree grows: Auto takes TreeShape::conifer (a pine or a broadleaf tree); a willow is not told from its shape
-// and is asked for by name.
-enum class TreeStyle : std::uint8_t { Auto, Pine, Broadleaf, Willow };
-std::optional<TreeStyle> tree_style_from_name(std::string_view name); // "auto", "pine", "broadleaf", "willow"
+// How the tree grows: Auto takes TreeShape::conifer (a pine or a broadleaf tree); a willow, a dead tree (a pine's
+// branches, bare) and a palm (fronds from the top of its trunk) are not told from their shape and are asked for by name.
+enum class TreeStyle : std::uint8_t { Auto, Pine, Broadleaf, Willow, Dead, Palm };
+// "auto", "pine", "broadleaf", "willow", "dead", "palm"
+std::optional<TreeStyle> tree_style_from_name(std::string_view name);
 
 struct TreeOptions {
     std::uint32_t seed = 1;
@@ -84,6 +85,12 @@ struct GeneratedTree {
 };
 
 GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options);
+
+// The outline a leaf card is cut to, in texture coordinates (u right, v down the image's rows): a convex polygon of at
+// most `corners` corners round every texel of `leaf` that is not wholly transparent, `margin` texels out (the smaller
+// mips spread the leaves a little), within the unit square. Empty when nothing is opaque. The cards draw only inside
+// it: a cut-out's transparent texels cost as much to draw as its leaves.
+std::vector<glm::vec2> card_outline(const assets::Image& leaf, int corners = 6, float margin = 6.0f);
 
 // Writes a generated tree into `pack_dir`/models/<zone>/: <actor>.glb (made for `source_hash`, assets::object_mesh_hash
 // of the game's mesh) and its textures as pack files (BC7 with mips; the bark's normal and roughness maps as .n, .r).

@@ -1200,6 +1200,14 @@ class GuildBankWindow : public StockWindow {
 public:
     GuildBankWindow() : StockWindow("GuildBankWnd", false) {}
 
+    void frame(EqHost& host) override {
+        const auto serial = shown(host) ? host.conn->guild_bank().serial : 0;
+        if (serial != session_serial_) {
+            session_serial_ = serial;
+            asking_ = asking_quantity_ = false;
+        }
+    }
+
     bool shown(EqHost& host) override { return host.conn && host.conn->guild_bank().banker; }
     void set_shown(EqHost& host, bool show) override {
         if (!show && host.conn) host.conn->close_guild_bank();
@@ -1420,7 +1428,7 @@ private:
             q.x = static_cast<std::int32_t>((host.click_rect[0] + host.click_rect[2]) / 2);
             q.y = static_cast<std::int32_t>((host.click_rect[1] + host.click_rect[3]) / 2);
         }
-        open_quantity(host, q, std::move(done));
+        open_quantity(host, q, std::move(done), question_owner(host));
         asking_quantity_ = host.quantity.has_value();
         if (host.quantity) quantity_serial_ = host.quantity->serial;
     }
@@ -1431,13 +1439,24 @@ private:
         e.prompt = eqstr(host, 6109);
         e.max_chars = 64;
         e.text = name;
-        e.done = [this, &host](const std::string& text) {
+        e.owner_valid = question_owner(host);
+        e.done = [this, &host, valid = e.owner_valid](const std::string& text) {
             asking_ = false;
-            if (!host.conn || !host.conn->has_guild_permission(game::kGuildPermBankPermissions)) return;
+            if (!valid() || !host.conn->has_guild_permission(game::kGuildPermBankPermissions)) return;
             host.conn->guild_bank_set_permission(net::GuildBankPermission::SingleMember, text);
         };
         host.text_entry = std::move(e);
         asking_ = true;
+    }
+
+    static std::function<bool()> question_owner(EqHost& host) {
+        const auto* conn = host.conn;
+        const auto serial = conn->guild_bank().serial;
+        const auto selected = conn->guild_bank().selected;
+        return [&host, conn, serial, selected] {
+            return host.conn == conn && conn && conn->guild_bank().banker && conn->guild_bank().serial == serial &&
+                   conn->guild_bank().selected == selected;
+        };
     }
 
     ListData main_list_, deposit_list_;
@@ -1446,6 +1465,7 @@ private:
     ComboData filter_, permission_;
     bool asking_ = false, asking_quantity_ = false; // a member name or quantity question of ours is open
     int quantity_serial_ = 0;
+    std::uint64_t session_serial_ = 0;
 };
 
 } // namespace
