@@ -627,8 +627,8 @@ void ClientApp::set_option_value(std::string_view o, int v) {
         return;
     }
     if (o == "texture_pack") {
-        // From the next start: the zone loaders read the overrides on their own threads (TextureOverrides has no
-        // lock), so the folder is indexed only at start (client_app_internal.h).
+        // From the next start (or the character's next zone-in, with its own settings): textures already loaded
+        // stay as they are, so the pack changes where the folder is indexed (apply_settings).
         auto value = assets::texture_pack_value(v, assets::texture_pack_names(platform::textures_dir()));
         if (!value) return;
         config_.set("display.texture_folder", *value);
