@@ -1202,7 +1202,9 @@ of upscaling it (`texpack/materials.h`; Hailstone Texture Studio's "Photo ground
 studio ships: `materials.txt` names each material (its Poly Haven asset, the metres one repeat shows, how much it is
 magnified, its detail strength, how much of the original's painted shading it keeps, and its colour in the art), and
 a file per zone (`qeytoqrg.txt`) gives each of the zone's textures one material or two
-(`hhdrockgrass1 = grass greyrock`; `sharp` for small shapes such as a path's flagstones).
+(`hhdrockgrass1 = grass greyrock`; `sharp` for small shapes such as a path's flagstones). A zone file may set a
+material's colour in that zone's art (`colour grass = 0.30 0.27 0.12`), for its own tiles only: one material serves
+zones whose art differs (Qeynos Hills' green grass, Everfrost's dark tundra), and its photos are loaded once.
 
 - **Scale:** each texture's world units per repeat are measured on the zone's ground (the area-weighted median over
   its triangles). A material repeats a power of two times across a tile, so Qeynos Hills' 56-unit grass tile and its
