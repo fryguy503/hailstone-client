@@ -26,7 +26,9 @@ constexpr VkShaderStageFlags kPushStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADE
 struct Push {
     glm::mat4 view_proj;
     glm::vec4 time; // x seconds (wrapped)
-    glm::vec4 lod;  // the lawn's level (LawnLod): x blades a side, y segments, z blade width
+    glm::vec4 lod;    // the lawn's draw: x its blades (LawnLod), y segments, z kLawnCell, w kLawnBladeWidth
+    glm::vec4 curve;  // lawn_blades: x kLawnFull, y kLawnNear, z kLawnMid
+    glm::vec4 counts; // lawn_blades: xyz kLawnLods' blades
 };
 static_assert(sizeof(Push) <= 128);
 
@@ -72,7 +74,41 @@ float flora_keep(float d) {
     return r * r;
 }
 
+namespace {
+float smooth(float a, float b, float x) {
+    const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+} // namespace
+
+// lawn.vert's lawn_blades, line for line.
+float lawn_blades(float d) {
+    const auto n0 = static_cast<float>(kLawnLods[0].blades), n1 = static_cast<float>(kLawnLods[1].blades),
+               n2 = static_cast<float>(kLawnLods[2].blades);
+    if (!(d > kLawnFull)) return n0;
+    if (d <= kLawnNear) return n0 + (n1 - n0) * smooth(kLawnFull, kLawnNear, d);
+    if (d <= kLawnMid) return n1 + (n2 - n1) * smooth(kLawnNear, kLawnMid, d);
+    return n2;
+}
+
+float lawn_blade_width(float d) {
+    return kLawnBladeWidth * std::sqrt(static_cast<float>(kLawnLods[0].blades) / lawn_blades(d));
+}
+
 std::size_t lawn_lod(float d) { return d < kLawnNear ? 0 : d < kLawnMid ? 1 : 2; }
+
+float lawn_patch_fade(std::uint32_t patch_stride, float d) {
+    const float gone = patch_stride >= 4 ? -1.0f : patch_stride >= 2 ? kFloraReach * 2.0f : kFloraReach;
+    if (gone < 0.0f) return 1.0f;
+    return 1.0f - smooth(gone - kLawnStrideBand, gone, d);
+}
+
+float lawn_patch_side(std::uint32_t patch_stride, float d) {
+    float side = 1.0f;
+    if (patch_stride >= 2) side += smooth(kFloraReach - kLawnStrideBand, kFloraReach, d);
+    if (patch_stride >= 4) side += 2.0f * smooth(kFloraReach * 2.0f - kLawnStrideBand, kFloraReach * 2.0f, d);
+    return side * assets::kLawnCell;
+}
 
 std::uint32_t lawn_stride(float d) {
     if (!(d > kFloraReach)) return 1;
@@ -317,17 +353,18 @@ std::uint32_t FloraRenderer::draw(const FrameInfo& frame, const glm::mat4& view_
             if (p.definition == assets::kLawnDefinition) {
                 if (!lawn_pipeline_) continue;
                 const float dist = std::sqrt(dist2);
-                // Past kFloraReach every stride-th patch each way, stride times as wide: the same cover, fewer patches.
-                const std::uint32_t stride = lawn_stride(dist);
-                if (stride > 1 && lawn_patch_stride(glm::vec2(p.position)) < stride) continue;
-                const float side = p.width * static_cast<float>(stride);
+                // Further out fewer patches, the ones kept wider: the same cover (lawn_patch_fade, lawn_patch_side).
+                const std::uint32_t own = lawn_patch_stride(glm::vec2(p.position));
+                const float thin = lawn_patch_fade(own, dist);
+                if (thin <= 0.0f) continue;
+                const float side = lawn_patch_side(own, dist) * (p.width / assets::kLawnCell);
                 glm::vec4 clip = view_proj * glm::vec4(p.position + glm::vec3(0.0f, 0.0f, p.height * 0.5f), 1.0f);
                 if (clip.w < -side) continue;
                 float fade = std::clamp((reach - dist) / (reach * 0.2f), 0.0f, 1.0f);
                 if (fade <= 0.0f) continue;
                 GpuPlant g;
                 g.position_turn = glm::vec4(p.position, 0.0f);
-                g.size = glm::vec4(side, p.height * fade, p.slope.x, p.slope.y);
+                g.size = glm::vec4(side, p.height * fade * thin, p.slope.x, p.slope.y);
                 g.color = p.color;
                 lawn_[lawn_lod(dist)].push_back(g);
                 ++lawn_count;
@@ -378,7 +415,10 @@ std::uint32_t FloraRenderer::draw(const FrameInfo& frame, const glm::mat4& view_
     std::copy(pushers_.begin(), pushers_.end(), ff.pushers.begin());
     frame_buffers_->write(frame.frame_slot, &ff, sizeof(ff));
     VkCommandBuffer cmd = frame.cmd;
-    Push pc{view_proj, glm::vec4(static_cast<float>(std::fmod(seconds, 4096.0)), 0.0f, 0.0f, 0.0f), glm::vec4(0.0f)};
+    Push pc{view_proj, glm::vec4(static_cast<float>(std::fmod(seconds, 4096.0)), 0.0f, 0.0f, 0.0f), glm::vec4(0.0f),
+            glm::vec4(kLawnFull, kLawnNear, kLawnMid, 0.0f),
+            glm::vec4(static_cast<float>(kLawnLods[0].blades), static_cast<float>(kLawnLods[1].blades),
+                      static_cast<float>(kLawnLods[2].blades), 0.0f)};
     VkDeviceSize offset = 0;
     VkDescriptorSet sets[2] = {sets_[frame.frame_slot], vk_.shadow_set()};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 2, sets, 0, nullptr);
@@ -393,7 +433,8 @@ std::uint32_t FloraRenderer::draw(const FrameInfo& frame, const glm::mat4& view_
         for (std::size_t k = 0; k < kLawnLods.size(); ++k) {
             if (lawn_[k].empty()) continue;
             const LawnLod& lod = kLawnLods[k];
-            pc.lod = glm::vec4(static_cast<float>(lod.side), static_cast<float>(lod.segments), lod.blade_width, 0.0f);
+            pc.lod = glm::vec4(static_cast<float>(lod.blades), static_cast<float>(lod.segments), assets::kLawnCell,
+                               kLawnBladeWidth);
             vkCmdPushConstants(cmd, layout_, kPushStages, 0, sizeof(pc), &pc);
             vkCmdDraw(cmd, lod.vertices(), static_cast<std::uint32_t>(lawn_[k].size()), 0, lawn_first[k]);
         }
