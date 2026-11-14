@@ -274,49 +274,6 @@ end
             s.frames(2);
             CHECK(run("return tostring(gaugeReads == 0 and not drewDiscTime and discIcon == nil)") == "true");
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-TEST_CASE("UI packs: hover respawn draws available and unavailable choices without script errors") {
-    for (const char* pack : {"modern", "gamepad"}) {
-        INFO(pack);
-        const fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
-        test::ScratchDir scratch("ui_pack_respawn_test");
-        const fs::path dir = scratch.path();
-        fs::create_directories(dir / "game");
-        fs::copy(src, dir / pack, fs::copy_options::recursive);
-        ImGuiContext* ctx = ImGui::CreateContext();
-        ImGui::GetIO().IniFilename = nullptr;
-        unsigned char* px = nullptr;
-        int width = 0, height = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &width, &height);
-        {
-            test::ManualClock clock;
-            clock.hold();
-            net::ConnectionOptions options;
-            options.session.clock = clock.source();
-            Session s(dir, pack, std::move(options));
-            s.conn.receive_zone_packet_for_test(respawn_window_packet(1));
-            clock.advance(std::chrono::milliseconds(1));
-            s.frames(3);
-            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-            ImGuiWindow* respawn = ImGui::FindWindowByName(std::string_view(pack) == "modern"
-                ? "###modern.RespawnWnd" : "Respawn");
-            REQUIRE(respawn);
-            CHECK(respawn->Active);
-            CHECK(s.api.child_state("RespawnWnd", "SelectButton") == true);
-            CHECK(s.api.list_texts("RespawnWnd", "OptionsList") == std::vector<std::string>{"*", "r"});
-
-            CHECK(s.api.click_list("RespawnWnd", "OptionsList", 1, 0));
-            s.frames(2);
-            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-            CHECK(s.api.child_state("RespawnWnd", "SelectButton") == false);
-            CHECK(s.api.click_child("RespawnWnd", "SelectButton"));
-            CHECK_FALSE(s.conn.respawn_chosen());
-
-            s.conn.receive_zone_packet_for_test(respawn_window_packet(0));
-            clock.advance(std::chrono::milliseconds(1));
-            s.frames(2);
-            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-            CHECK(s.api.child_state("RespawnWnd", "SelectButton") == true);
-            CHECK(s.api.list_texts("RespawnWnd", "OptionsList") == std::vector<std::string>{"*", ""});
         }
         ImGui::DestroyContext(ctx);
     }
@@ -545,6 +502,59 @@ end
             s.frames(1);
             CHECK(run("return tostring(redFills == 0 and timerDraws == 0)") == "true");
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
+TEST_CASE("UI packs: hover respawn draws available and unavailable choices without script errors") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        const fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        test::ScratchDir scratch("ui_pack_respawn_test");
+        const fs::path dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(src, dir / pack, fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* px = nullptr;
+        int width = 0, height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &width, &height);
+        {
+            test::ManualClock clock;
+            clock.hold();
+            net::ConnectionOptions options;
+            options.session.clock = clock.source();
+            Session s(dir, pack, std::move(options));
+            s.conn.receive_zone_packet_for_test(respawn_window_packet(1));
+            clock.advance(std::chrono::milliseconds(1));
+            s.frames(3);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            ImGuiWindow* respawn = ImGui::FindWindowByName(std::string_view(pack) == "modern"
+                ? "###modern.RespawnWnd" : "Respawn");
+            REQUIRE(respawn);
+            CHECK(respawn->Active);
+            CHECK(s.api.child_state("RespawnWnd", "SelectButton") == true);
+            CHECK(s.api.list_texts("RespawnWnd", "OptionsList") == std::vector<std::string>{"*", "r"});
+
+            CHECK(s.api.click_list("RespawnWnd", "OptionsList", 1, 0));
+            s.frames(2);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            CHECK(s.api.child_state("RespawnWnd", "SelectButton") == false);
+            CHECK(s.api.click_child("RespawnWnd", "SelectButton"));
+            CHECK_FALSE(s.conn.respawn_chosen());
+
+            s.conn.receive_zone_packet_for_test(respawn_window_packet(0));
+            clock.advance(std::chrono::milliseconds(1));
+            s.frames(2);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            CHECK(s.api.child_state("RespawnWnd", "SelectButton") == true);
+            CHECK(s.api.list_texts("RespawnWnd", "OptionsList") == std::vector<std::string>{"*", ""});
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
 TEST_CASE("UI packs: the respawn window leaves the focus alone for a question that is not a resurrection") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
