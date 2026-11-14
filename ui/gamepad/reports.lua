@@ -10,8 +10,8 @@
 --   Feedback (FeedbackWindow, /feedback) your name, the feedback, Cancel and Send (RB)
 --   Claim (ClaimWnd, /claim)             the veteran rewards that can be claimed and the selected one's items;
 --                                        Refresh, Cancel, Claim (the window enables it for a reward with any left)
---   Respawn (RespawnWnd)                 where to return after death: the server's choices (its default and a
---                                        resurrection marked), the timer, and Respawn once its delay has passed;
+--   Respawn (RespawnWnd)                 where to return after death: the server's choices (its default and
+--                                        unavailable choices marked), the timer, and Respawn after its delay;
 --                                        only the server closes it (no B)
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
@@ -212,16 +212,20 @@ end)
 -- ---------------------------------------------------------------- respawn
 local RESPAWN = "RespawnWnd"
 local choices = { offset = 0 }
+local respawnQuestionShown = false
 ui.window("Respawn", function()
-  if not W.shown(RESPAWN) then return end
+  if not W.shown(RESPAWN) then respawnQuestionShown = false; return end
+  local question = W.shown("ConfirmationDialogBox")
+  local returnFocus = respawnQuestionShown and not question
+  respawnQuestionShown = question
   T.frame()
-  if W.begin("Respawn", { w = 1200, h = 820, title = "Respawn", close = false, alwaysFocus = true,
+  if W.begin("Respawn", { w = 1200, h = 820, title = "Respawn", close = false, alwaysFocus = true, noFocus = question,
         hints = { { "a", "Select" } } }) then
     local x0, y0, x1, y1, w = W.area()
     local wx, wy = ui.GetWindowPos()
     local ready = G.enabled(RESPAWN, "SelectButton")
     T.font(22)
-    T.draw(x0, y0, ready and "Choose where to return" or "You may choose where to return when the timer runs out", C.dim)
+    T.draw(x0, y0, "Choose an available destination", C.dim)
     T.unfont()
     local frac, text = eq.ChildGauge(RESPAWN, "TimeGauge")
     if frac == nil then frac, text = eq.Gauge(28) end
@@ -231,32 +235,35 @@ ui.window("Respawn", function()
     local visible = math.max(1, math.floor((y1 - bh - T.px(20) - top + T.px(10)) / (T.px(rowH) + T.px(10))))
     ui.SetCursorPos(x0 - wx, top - wy)
     G.list(RESPAWN, "OptionsList", choices, visible, rowH, w, function(i, t, rx0, ry0, rx1, ry1)
-      local res = t[1] == "r"
-      local c = res and C.hp or (i == choices.selected and C.accent or C.text)
+      local unavailable = t[1] == "unavailable"
+      local c = (t.colors and t.colors[2]) or (unavailable and C.dim or (i == choices.selected and C.accent or C.text))
       local name = t[2] or ""
       T.font(23)
       T.textIn(rx0 + T.px(18), ry0, rx0 + (rx1 - rx0) * 0.6, ry1, name, c, 0)
       local nw = ui.CalcTextSize(name)
       T.unfont()
-      -- a tag after the name: the server's default, or a resurrection offered
-      local tag = t[1] == "*" and "DEFAULT" or (res and "RESURRECT") or nil
+      -- A tag after the name: the server's availability flag is not an option kind.
+      local tag = unavailable and "UNAVAILABLE" or (t[1] == "*" and "DEFAULT") or nil
       if tag then
         local tx = math.min(rx0 + T.px(34) + nw, rx0 + (rx1 - rx0) * 0.6 - T.px(10))
         T.font(16)
         local tw, th = ui.CalcTextSize(tag)
-        local tc = res and C.hp or C.accent
+        local tc = unavailable and C.dim or C.accent
         local cy = (ry0 + ry1) / 2
         T.rect(tx, cy - th / 2 - T.px(4), tx + tw + T.px(16), cy + th / 2 + T.px(4), tc, 0.22, T.px(6))
         T.textIn(tx, ry0, tx + tw + T.px(16), ry1, tag, tc, 0.5)
         T.unfont()
       end
       T.font(20)
-      T.textIn(rx0 + (rx1 - rx0) * 0.6, ry0, rx1 - T.px(18), ry1, t[3] or "", C.dim, 1)
+      T.textIn(rx0 + (rx1 - rx0) * 0.6, ry0, rx1 - T.px(18), ry1, t[3] or "", (t.colors and t.colors[3]) or C.dim, 1)
       T.unfont()
     end)
     ui.SetCursorPos(x0 - wx, y1 - bh - wy)
-    G.button(RESPAWN, "SelectButton", ready and "Respawn" or "Respawn (when the timer runs out)", w, bh,
+    G.button(RESPAWN, "SelectButton", ready and "Respawn" or "Respawn (unavailable)", w, bh,
       { primary = true, always = true })
   end
   W.finish()
+  -- The offer stays in front while the original choices and countdown remain drawn underneath it.
+  if question then ui.SetWindowFocus("Confirm")
+  elseif returnFocus then ui.SetWindowFocus("Respawn"); pad.focus("Respawn") end
 end)

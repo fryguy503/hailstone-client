@@ -348,6 +348,48 @@ void ClientApp::update_player(float dt) {
         step_move_ = glm::vec3(0.0f);
         step_turn_ = step_pitch_ = 0.0f;
     }
+    if (conn_) {
+        if (auto respawn = conn_->take_respawn_placement()) {
+            // Same-zone hover recovery publishes a new local spawn without enter_zone(). Its physics and
+            // interpolation must start at that spawn too, or the next step sends the corpse's old position back.
+            if (const game::Spawn* me = conn_->world().player()) {
+                floor_offset_ = me->heights.avatar_height;
+                feet_ = respawn->position - glm::vec3(0, 0, floor_offset_);
+                yaw_ = game::heading_to_yaw(respawn->heading);
+                pitch_ = chase_heading_ = 0.0f;
+                mouse_look_.cancel();
+                left_click_pending_.reset();
+                window_.set_mouse_captured(false);
+                movement_.reset(feet_, yaw_);
+                step_move_ = last_velocity_ = glm::vec3(0.0f);
+                step_turn_ = step_pitch_ = last_speed_run_ = 0.0f;
+                motion_ = {};
+                if (actor_renderer_)
+                    actor_renderer_->set_player_motion({true, glm::vec3(0.0f), 0.0f, 0, 0, 0.0f, false,
+                                                        camera_type_ == game::kCameraFirstPerson, 0});
+                motion_body_wet_ = motion_head_wet_ = head_wet_ = 0;
+                listener_ceiling_.reset();
+                boat_hold_.reset();
+                riding_id_ = 0;
+                conn_->set_standing_on(0);
+                conn_->set_touching_switch(std::nullopt);
+                if (nav_) nav_->stop("");
+                // A stopped click walk must not run its pending interaction at the respawn destination.
+                iso_pending_.reset();
+                iso_walking_ = iso_hold_ = false;
+                iso_marker_ = {};
+                if (conn_->follow_target()) conn_->stop_follow(false);
+                follow_move_ = follow_run_ = follow_detour_ = follow_assist_strafed_ = false;
+                // Prime the new spawn's region state without treating the placement itself as walking into a line.
+                zone_line_.reset();
+                if (zone_) (void)zone_line_.update(feet_, zone_->regions);
+                if (audio_ && music_dead_) audio_->music_selection(audio::kMusicDeath, false);
+                music_dead_ = false;
+                if (audio_ && special_room_) audio_->set_special_room(std::nullopt);
+                special_room_ = stun_room_ = false;
+            }
+        }
+    }
     // KnockedOut saves the current camera and selects overhead once. GetConscious restores it; a new zone's
     // active status also clears the saved unconscious view when the connection's status is reset.
     if (conn_ && conn_->consciousness_changes() != consciousness_changes_) {

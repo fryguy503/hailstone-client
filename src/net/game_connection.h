@@ -500,7 +500,9 @@ public:
     void set_player_motion(const glm::vec3& position, float heading, const glm::vec3& velocity, bool moving);
     // Where the local player (and the mount it rides) is drawn this frame: the camera's place between the game
     // clock's steps (game::WorldState::set_local_drawn). Nothing is sent.
-    void set_player_drawn(const glm::vec3& position, float heading) { world_.set_local_drawn(position, heading); }
+    void set_player_drawn(const glm::vec3& position, float heading) {
+        if (!pstatus_.dead) world_.set_local_drawn(position, heading);
+    }
     // What set_player_motion last gave: whether the player is moving, and the heading (0..512).
     bool player_moving() const { return moving_; }
     float player_heading() const { return heading_; }
@@ -706,16 +708,29 @@ public:
     // the list and button are then disabled until OP_ZonePlayerToBind closes the window.
     const std::optional<RespawnWindow>& respawn_window() const { return respawn_; }
     bool respawn_ready() const;
+    bool respawn_option_available(std::uint32_t option_id) const;
+    bool respawn_option_is_resurrection(std::uint32_t option_id) const;
+    std::optional<std::uint32_t> accepted_hover_rez_option() const;
     bool respawn_chosen() const { return respawn_chosen_; }
+    std::uint32_t respawn_session() const { return respawn_session_; }
     // The respawn timer's milliseconds left (the window's time less the time since it came), and its whole span.
     // How long the window has been up (ms): the respawn gauge's and Select's clock (the original counts from the
     // corpse's time, PlayerZoneClient +0x2bc; taken as the window's arrival here).
-    std::int64_t respawn_age_ms() const { return respawn_ ? now_ms() - respawn_shown_ms_ : 0; }
+    std::int64_t respawn_age_ms() const { return respawn_ ? std::max<std::int64_t>(0, respawn_now_ms() - respawn_shown_ms_) : 0; }
     std::int64_t respawn_ms_left() const {
         if (!respawn_) return 0;
-        return std::max<std::int64_t>(0, static_cast<std::int64_t>(respawn_->time_remaining_ms) - (now_ms() - respawn_shown_ms_));
+        return std::max<std::int64_t>(0, static_cast<std::int64_t>(respawn_->time_remaining_ms) - respawn_age_ms());
     }
     void choose_respawn(std::uint32_t option_id);
+    // Same-zone hover completion publishes a new living spawn. The app must place its physics body there before
+    // the next movement step; a full zone change uses the ordinary zone-in placement instead.
+    struct RespawnPlacement {
+        glm::vec3 position{};
+        float heading = 0;
+    };
+    std::optional<RespawnPlacement> take_respawn_placement() {
+        return std::exchange(respawn_placement_, std::nullopt);
+    }
 
     // ---- personal tribute (net/game_connection_tribute.cpp, net/tribute_packets.h): the tributes the server offers
     // (asked for while zoning in), our chosen benefits, favour, the active timer, and the tribute master's window
@@ -3151,6 +3166,14 @@ private:
     std::uint32_t bard_twist_pos_ = 0;                // +0x1eac
     std::function<bool(std::string_view, const std::string&)> app_commands_;
     std::optional<RespawnWindow> respawn_;
+    // A hover resurrection answer stages a choice locally; only OP_RespawnWindow commits the destination.
+    std::optional<RespawnOption> hover_rez_choice_;
+    bool hover_rez_accepted_ = false;
+    const RespawnOption* respawn_resurrection_option() const;
+    void clear_hover_rez() { hover_rez_choice_.reset(); hover_rez_accepted_ = false; }
+    bool respawn_spawn_pending_ = false; // same-zone bind acknowledged; still waiting for our living OP_ZoneEntry
+    std::optional<RespawnPlacement> respawn_placement_;
+    std::int64_t respawn_now_ms() const;
 
     // Spells.
     std::shared_ptr<const game::SpellTable> spell_table_;
@@ -3541,6 +3564,8 @@ private:
     bool waiting_for_port_ = false; // PlayerZoneClient +0x1f05
     std::int64_t respawn_shown_ms_ = 0;
     bool respawn_chosen_ = false;
+    bool respawn_selection_sending_ = false; // outgoing hooks cannot recursively commit another choice
+    std::uint32_t respawn_session_ = 0;
 };
 
 } // namespace hailstone::net

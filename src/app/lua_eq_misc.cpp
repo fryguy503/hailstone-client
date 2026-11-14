@@ -944,20 +944,22 @@ public:
 
     void child(EqHost& host, std::string_view id, Child& out) override {
         if (!host.conn || !host.conn->respawn_window()) return;
+        sync_selection(host);
         const auto& w = *host.conn->respawn_window();
         // TimeGauge is the XML's EQType 28 (app/lua_eq_values.cpp).
         if (id == "SelectButton") {
-            out.enabled = host.conn->respawn_ready() && option(w) != nullptr;
+            const auto* selected = option(w);
+            out.enabled = host.conn->respawn_ready() && selected && host.conn->respawn_option_available(selected->id);
         } else if (id == "OptionsList") {
             out.enabled = !host.conn->respawn_chosen();
         }
     }
     const ListData* list(EqHost& host, std::string_view id) override {
         if (!host.conn || !host.conn->respawn_window() || id != "OptionsList") return nullptr;
+        sync_selection(host);
         const auto& w = *host.conn->respawn_window();
-        // Handle_OP_RespawnWindow @0x74ec70 (the window's AddOption) fills a line per option: a marker cell ("*"
-        // @0x9c4678 for the default option, "r" @0x9cf320 for a resurrection, else empty), the option's name and the
-        // zone's full name (GetFullZoneNameById); a resurrection's cells are red (0xffff0000). The XML's columns.
+        // The final wire byte is availability, not an option kind (EQEmu RoF2 RespawnOptions_Struct).
+        // Keep the server's destination names, mark its default, and make unavailable choices explicit.
         list_ = {};
         list_.columns = 3;
         list_.labels = {"", "Name", "Zone"};
@@ -966,30 +968,58 @@ public:
         for (const auto& o : w.options) {
             if (o.id == *chosen_) list_.selected = static_cast<int>(list_.rows.size());
             ListRow row;
-            row.texts = {o.id == w.selected ? "*" : o.type != 0 ? "r" : "", o.name, game::zone_long_name(o.zone_id)};
-            if (o.type != 0) row.color = {1, 0, 0};
+            const bool available = host.conn->respawn_option_available(o.id);
+            row.texts = {!available ? "unavailable" : o.id == w.selected ? "*" : "", o.name,
+                         game::zone_long_name(o.zone_id)};
+            if (host.conn->respawn_option_is_resurrection(o.id)) {
+                row.color = available ? Rgb{0.25f, 1.0f, 0.35f} : Rgb{1.0f, 0.25f, 0.25f};
+                row.cell_colors.resize(3);
+                row.cell_colors[1] = row.color;
+                row.cell_colors[2] = row.color;
+            } else if (!available) {
+                row.color = {0.6f, 0.6f, 0.6f};
+            }
             list_.rows.push_back(std::move(row));
         }
         return &list_;
     }
     bool list_click(EqHost& host, std::string_view id, int row, bool, int) override {
         if (!host.conn || !host.conn->respawn_window() || id != "OptionsList") return false;
+        sync_selection(host);
         const auto& opts = host.conn->respawn_window()->options;
-        if (!host.conn->respawn_chosen() && row >= 0 && row < static_cast<int>(opts.size()))
+        if (!host.conn->respawn_chosen() && row >= 0 && row < static_cast<int>(opts.size())) {
             chosen_ = opts[static_cast<std::size_t>(row)].id;
+            manual_choice_ = true;
+        }
         return true;
     }
     bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
         if (id != "SelectButton") return false;
+        sync_selection(host);
         if (button == "left" && host.conn && host.conn->respawn_window())
-            if (const auto* o = option(*host.conn->respawn_window())) host.conn->choose_respawn(o->id);
+            if (const auto* o = option(*host.conn->respawn_window()); o && host.conn->respawn_option_available(o->id))
+                host.conn->choose_respawn(o->id);
         return true;
     }
     void frame(EqHost& host) override {
-        if (!host.conn || !host.conn->respawn_window()) chosen_.reset(); // a new window starts from its selection
+        if (!host.conn || !host.conn->respawn_window()) {
+            chosen_.reset();
+            manual_choice_ = false;
+        }
     }
 
 private:
+    void sync_selection(EqHost& host) {
+        if (!host.conn) return;
+        if (connection_ != host.conn || session_ != host.conn->respawn_session()) {
+            connection_ = host.conn;
+            session_ = host.conn->respawn_session();
+            chosen_.reset();
+            manual_choice_ = false;
+        }
+        if (!manual_choice_ && !host.conn->respawn_chosen() && host.conn->respawn_window())
+            chosen_ = host.conn->accepted_hover_rez_option().value_or(host.conn->respawn_window()->selected);
+    }
     const net::RespawnOption* option(const net::RespawnWindow& w) const {
         std::uint32_t want = chosen_.value_or(w.selected);
         for (const auto& o : w.options)
@@ -999,6 +1029,9 @@ private:
 
     ListData list_;
     std::optional<std::uint32_t> chosen_;
+    bool manual_choice_ = false;
+    const net::GameConnection* connection_ = nullptr;
+    std::uint32_t session_ = 0;
 };
 
 } // namespace

@@ -85,3 +85,41 @@ TEST_CASE("Player placement: a spawn just above the ground lands on it, not on t
         CHECK(frame.feet.z == doctest::Approx(0.0f).epsilon(0.01));
     }
 }
+
+TEST_CASE("Player placement: respawn reset clears old movement and fall state before the new floor test") {
+    test::ScratchDir scratch("player_respawn_placement");
+    GameDir game(scratch.path());
+    net::GameConnection conn(game, {});
+    const Floors world({0.0f, -8.4f});
+    app::PlayerMovement m;
+    m.reset(glm::vec3(10.0f, 20.0f, 100.0f), 0.0f);
+    m.command(game::mechanics::kCmdForward, true, true);
+    m.set_autorun(1);
+    m.push(glm::vec3(2.0f, 3.0f, -4.0f));
+    std::uint32_t now = 5000;
+    (void)m.update({}, 0.0f, 0.0f, 16.0f, now, conn, nullptr, kAvatarHeight, &world);
+    REQUIRE(m.moving_keys());
+    REQUIRE(m.controller().body.velocity.z < 0.0f);
+
+    const glm::vec3 destination(30.0f, 40.0f, 0.5f - kAvatarHeight);
+    const float yaw = 1.0f;
+    m.reset(destination, yaw);
+    CHECK_FALSE(m.moving_keys());
+    CHECK(m.controller().autorun() == 0);
+    CHECK(m.controller().body.velocity == glm::vec3(0.0f));
+    CHECK_FALSE(m.floor_height().has_value());
+    // Time spent dead must not resume the old fall or carry a held forward command to the destination.
+    now += 100000;
+    auto frame = m.update({}, yaw, 0.0f, 16.0f, now, conn, nullptr, kAvatarHeight, &world);
+    CHECK(frame.feet.x == doctest::Approx(destination.x));
+    CHECK(frame.feet.y == doctest::Approx(destination.y));
+    CHECK(frame.feet.z == doctest::Approx(0.0f).epsilon(0.01));
+    CHECK(frame.yaw == doctest::Approx(yaw));
+    CHECK(frame.fall_damage.value_or(0) == 0);
+    CHECK_FALSE(frame.jumped);
+    now += 16;
+    frame = m.update({}, yaw, 0.0f, 16.0f, now, conn, nullptr, kAvatarHeight, &world);
+    CHECK(frame.feet.x == doctest::Approx(destination.x));
+    CHECK(frame.feet.y == doctest::Approx(destination.y));
+    CHECK(frame.fall_damage.value_or(0) == 0);
+}

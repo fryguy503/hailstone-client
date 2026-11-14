@@ -23,7 +23,9 @@
 #include <lua.hpp>
 
 #include "app/lua_eq.h"
+#include "app/gamepad.h"
 #include "core/byte_io.h"
+#include "core/config.h"
 #include "core/game_dir.h"
 #include "net/aa_packets.h"
 #include "net/game_connection.h"
@@ -36,6 +38,7 @@
 #include "ui/dev_screens.h"
 #include "ui/lua/lua_host.h"
 #include "mock_server/harness.h"
+#include "manual_clock.h"
 #include "scratch_dir.h"
 #include "app/web_service.h"
 #include "mq/lua_mq.h"
@@ -54,8 +57,8 @@ struct Session {
     app::EqHost host;
     app::EqApi api;
     ui::lua::LuaUi lua;
-    Session(const fs::path& dir, const std::string& pack)
-        : game(dir / "game"), conn(game), api(host), lua(dir / pack, dir / "ui.txt") {
+    Session(const fs::path& dir, const std::string& pack, net::ConnectionOptions options = {})
+        : game(dir / "game"), conn(game, std::move(options)), api(host), lua(dir / pack, dir / "ui.txt") {
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
@@ -67,18 +70,63 @@ struct Session {
         });
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
     }
-    void frames(int n) {
+    void frames(int n, ui::InGameView* fallback = nullptr) {
         for (int i = 0; i < n; ++i) {
             ImGuiIO& io = ImGui::GetIO();
             io.DisplaySize = ImVec2(1600, 900);
             io.DeltaTime = 1.0f / 60.0f;
             api.begin_frame();
             ImGui::NewFrame();
+            if (fallback) (void)ui::in_game_overlay(*fallback);
             lua.frame();
             ImGui::Render();
         }
     }
 };
+
+struct ReplacementCheck {
+    explicit ReplacementCheck(const app::EqApi& api) {
+        ui::lua::set_replaced_check([p = &api](std::string_view screen) { return p->replaces(screen); });
+    }
+    ~ReplacementCheck() { ui::lua::set_replaced_check({}); }
+};
+
+net::AppPacket respawn_window_packet(std::uint8_t validity) {
+    ByteWriter w;
+    w.le<std::uint32_t>(0);
+    w.le<std::uint32_t>(60000);
+    w.le<std::uint32_t>(0);
+    w.le<std::uint32_t>(2);
+    for (std::uint32_t id = 0; id < 2; ++id) {
+        w.le(id);
+        w.le<std::uint32_t>(2);
+        for (int i = 0; i < 4; ++i) w.f32(0);
+        const std::string_view name = id == 0 ? "Bind Location" : "Resurrect";
+        w.bytes(std::as_bytes(std::span(name.data(), name.size())));
+        w.le<std::uint8_t>(0);
+        w.le<std::uint8_t>(id == 0 ? 0 : validity);
+    }
+    return net::AppPacket(net::to_wire(net::Op::RespawnWindow), w.take());
+}
+
+net::AppPacket resurrection_offer_packet() {
+    ByteWriter w;
+    w.le<std::uint32_t>(0);
+    w.le<std::uint16_t>(2);
+    w.le<std::uint16_t>(0);
+    w.f32(30);
+    w.f32(40);
+    w.f32(12);
+    w.le<std::uint32_t>(0);
+    w.fixed_string("Gennro", 64);
+    w.le<std::uint32_t>(0);
+    w.fixed_string("Healer", 64);
+    w.le<std::uint32_t>(100);
+    w.fixed_string("Gennro's corpse", 64);
+    w.le<std::uint32_t>(0);
+    w.zeros(8);
+    return net::AppPacket(net::to_wire(net::Op::RezzRequest), w.take());
+}
 
 // Windows the packs redid from the Classic UI's (and a few more of theirs): shown one after another.
 constexpr const char* kScreens[] = {
@@ -129,6 +177,204 @@ TEST_CASE("UI packs: every script of the shipped UIs loads, and their windows dr
             }
         }
         ImGui::DestroyContext(ctx);
+    }
+}
+
+TEST_CASE("UI packs: hover respawn draws available and unavailable choices without script errors") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        const fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        test::ScratchDir scratch("ui_pack_respawn_test");
+        const fs::path dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(src, dir / pack, fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* px = nullptr;
+        int width = 0, height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &width, &height);
+        {
+            test::ManualClock clock;
+            clock.hold();
+            net::ConnectionOptions options;
+            options.session.clock = clock.source();
+            Session s(dir, pack, std::move(options));
+            s.conn.receive_zone_packet_for_test(respawn_window_packet(1));
+            clock.advance(std::chrono::milliseconds(1));
+            s.frames(3);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            ImGuiWindow* respawn = ImGui::FindWindowByName(std::string_view(pack) == "modern"
+                ? "###modern.RespawnWnd" : "Respawn");
+            REQUIRE(respawn);
+            CHECK(respawn->Active);
+            CHECK(s.api.child_state("RespawnWnd", "SelectButton") == true);
+            CHECK(s.api.list_texts("RespawnWnd", "OptionsList") == std::vector<std::string>{"*", "unavailable"});
+
+            CHECK(s.api.click_list("RespawnWnd", "OptionsList", 1, 0));
+            s.frames(2);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            CHECK(s.api.child_state("RespawnWnd", "SelectButton") == false);
+            CHECK(s.api.click_child("RespawnWnd", "SelectButton"));
+            CHECK_FALSE(s.conn.respawn_chosen());
+
+            s.conn.receive_zone_packet_for_test(respawn_window_packet(0));
+            clock.advance(std::chrono::milliseconds(1));
+            s.frames(2);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            CHECK(s.api.child_state("RespawnWnd", "SelectButton") == true);
+            CHECK(s.api.list_texts("RespawnWnd", "OptionsList") == std::vector<std::string>{"*", ""});
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
+TEST_CASE("UI packs: resurrection keeps the original respawn choices and timer until an explicit destination") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        for (int choice : {0, 1, 2}) {
+            const bool accept = choice != 0, manual_bind = choice == 2;
+            INFO(pack, " accept=", accept, " manual_bind=", manual_bind);
+            const bool gamepad_pack = std::string_view(pack) == "gamepad";
+            const fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+            test::ScratchDir scratch("ui_pack_respawn_question_test");
+            const fs::path dir = scratch.path();
+            fs::create_directories(dir / "game");
+            fs::copy(src, dir / pack, fs::copy_options::recursive);
+            ImGuiContext* ctx = ImGui::CreateContext();
+            ImGui::GetIO().IniFilename = nullptr;
+            unsigned char* px = nullptr;
+            int width = 0, height = 0;
+            ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &width, &height);
+            {
+                test::ManualClock clock;
+                auto options = test::quick_options();
+                options.session.clock = clock.source();
+                test::Rig rig(test::MockConfig::standard(), std::move(options));
+                REQUIRE(rig.to_zone());
+                clock.hold();
+                Config config;
+                platform::GamepadState state;
+                state.connected = true;
+                state.type = platform::PadType::Xbox;
+                app::Gamepad pad(config, dir / "gamepad.ini");
+                pad.set_state(&state);
+                Session s(dir, pack);
+                auto& conn = rig.conn;
+                s.host.conn = &conn;
+                s.host.gamepad = &pad;
+                // Observe the actual pack's paint and selected-row input, rather than only its shared model.
+                REQUIRE(luaL_dostring(s.lua.state(), R"lua(
+local TextColored, DrawText, ListInfo = ui.TextColored, ui.DrawText, eq.ListInfo
+ui.TextColored = function(r, g, b, a, text, ...)
+  if text == "Resurrect" then RespawnPaintColor = { r, g, b } end
+  return TextColored(r, g, b, a, text, ...)
+end
+ui.DrawText = function(x, y, r, g, b, a, text, ...)
+  if text == "Resurrect" then RespawnPaintColor = { r, g, b } end
+  return DrawText(x, y, r, g, b, a, text, ...)
+end
+eq.ListInfo = function(win, child)
+  local rows, columns, selected, labels, widths, multi = ListInfo(win, child)
+  if win == "RespawnWnd" and child == "OptionsList" then RespawnPaintSelected = selected end
+  return rows, columns, selected, labels, widths, multi
+end
+)lua") == LUA_OK);
+
+                net::Death death;
+                death.spawn_id = death.corpse_id = conn.world().player_id;
+                death.killer_id = 101;
+                death.damage = 5000;
+                conn.receive_zone_packet_for_test(net::encode(death));
+                conn.receive_zone_packet_for_test(respawn_window_packet(1));
+                if (manual_bind) CHECK(s.api.click_list("RespawnWnd", "OptionsList", 0, 0));
+                conn.receive_zone_packet_for_test(resurrection_offer_packet());
+                REQUIRE(conn.confirmation());
+                REQUIRE(conn.confirmation()->id == net::kConfirmRezz);
+                clock.advance(std::chrono::milliseconds(1));
+                s.frames(3); // both packets arrived before the first UI frame, within its initial three seconds
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+                ImGuiWindow* confirm = ImGui::FindWindowByName(gamepad_pack ? "Confirm" : "###modern.ConfirmationDialogBox");
+                REQUIRE(confirm);
+                CHECK(confirm->Active);
+                REQUIRE(GImGui->NavWindow);
+                CHECK(GImGui->NavWindow->RootWindow == confirm);
+                const char* respawn_name = gamepad_pack ? "Respawn" : "###modern.RespawnWnd";
+                ImGuiWindow* respawn = ImGui::FindWindowByName(respawn_name);
+                REQUIRE(respawn);
+                CHECK(respawn->Active);
+                CHECK(s.api.replaces("RespawnWnd"));
+                REQUIRE(luaL_dostring(s.lua.state(),
+                    "assert(RespawnPaintColor and math.abs(RespawnPaintColor[1]-1)<0.001 and "
+                    "math.abs(RespawnPaintColor[2]-0.25)<0.001 and math.abs(RespawnPaintColor[3]-0.25)<0.001); "
+                    "assert(RespawnPaintSelected==0)") == LUA_OK);
+                // Match the app's fallback draw before the Lua pass: the pack must retain ownership while
+                // the question is present, so a second "You have died" window cannot replace its original.
+                ReplacementCheck replacements(s.api);
+                ui::InGameView fallback;
+                fallback.respawn.options = {{0, "Bind Location"}, {1, "Resurrect"}};
+                fallback.respawn.ready = true;
+                s.frames(3, &fallback);
+                ImGuiWindow* duplicate = ImGui::FindWindowByName("You have died##hailstone_respawn");
+                CHECK((!duplicate || !duplicate->Active));
+                CHECK(respawn->Active);
+                CHECK(confirm->Active);
+                CHECK(GImGui->NavWindow->RootWindow == confirm);
+                auto requests = pad.take_focus_requests();
+                if (gamepad_pack) {
+                    REQUIRE_FALSE(requests.empty());
+                    CHECK(requests.back() == "Confirm");
+                    CHECK(std::find(requests.begin(), requests.end(), "Respawn") == requests.end());
+                }
+
+                CHECK(s.api.click_child("ConfirmationDialogBox", accept ? "Yes_Button" : "No_Button"));
+                CHECK_FALSE(conn.confirmation());
+                CHECK_FALSE(conn.respawn_chosen());
+                CHECK(conn.respawn_option_available(0));
+                CHECK(conn.respawn_option_available(1) == accept);
+                const auto remaining = conn.respawn_ms_left();
+                clock.advance(std::chrono::milliseconds(2000));
+                s.frames(2);
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+                respawn = ImGui::FindWindowByName(respawn_name);
+                REQUIRE(respawn);
+                CHECK(respawn->Active);
+                CHECK(s.api.child_state("RespawnWnd", "SelectButton") == true);
+                CHECK(s.api.child_state("RespawnWnd", "OptionsList") == true);
+                CHECK(conn.respawn_ms_left() == remaining - 2000);
+                CHECK_FALSE(conn.respawn_chosen());
+                auto markers = s.api.list_texts("RespawnWnd", "OptionsList");
+                REQUIRE(markers.size() == 2);
+                CHECK(markers[0] == "*");
+                CHECK(markers[1] == (accept ? "" : "unavailable"));
+                if (accept) {
+                    REQUIRE(luaL_dostring(s.lua.state(),
+                        "assert(RespawnPaintColor and math.abs(RespawnPaintColor[1]-0.25)<0.001 and "
+                        "math.abs(RespawnPaintColor[2]-1)<0.001 and math.abs(RespawnPaintColor[3]-0.35)<0.001)") == LUA_OK);
+                }
+                const char* expected_selection = accept && !manual_bind
+                    ? "assert(RespawnPaintSelected==1)" : "assert(RespawnPaintSelected==0)";
+                REQUIRE(luaL_dostring(s.lua.state(), expected_selection) == LUA_OK);
+                if (gamepad_pack) {
+                    requests = pad.take_focus_requests();
+                    REQUIRE_FALSE(requests.empty());
+                    CHECK(requests.back() == "Respawn");
+                }
+                CHECK(s.api.click_list("RespawnWnd", "OptionsList", accept ? 1 : 0, 0));
+                CHECK(s.api.child_state("RespawnWnd", "SelectButton") == true);
+                CHECK_FALSE(conn.respawn_chosen());
+                CHECK(s.api.click_child("RespawnWnd", "SelectButton"));
+                CHECK(conn.respawn_chosen());
+                CHECK(s.api.child_state("RespawnWnd", "SelectButton") == false);
+                net::ZonePlayerToBind bind;
+                bind.zone_id = 2;
+                bind.zone_name = accept ? "Resurrection destination" : "Bind destination";
+                conn.receive_zone_packet_for_test(net::encode(bind));
+                s.frames(2);
+                CHECK_FALSE(conn.respawn_window());
+                CHECK_FALSE(respawn->Active);
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            }
+            ImGui::DestroyContext(ctx);
+        }
     }
 }
 

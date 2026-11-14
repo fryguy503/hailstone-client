@@ -463,8 +463,26 @@ void GameConnection::answer_confirmation(bool yes) {
         // A server offer: the answer goes back about the packet that asked (net/notice_packets.h).
         if (state_ != ConnectionState::InZone) return;
         if (c.id == kConfirmTranslocate) send_zone(answer_translocate(c.offer, yes));
-        else if (c.id == kConfirmRezz) send_zone(answer_rezz(c.offer, yes));
-        else if (auto i = decode_shared_task_invite(c.offer)) send_zone(encode_shared_task_invite_response(i->invite_id, yes));
+        else if (c.id == kConfirmRezz) {
+            if (respawn_spawn_pending_ || (respawn_ && respawn_chosen_)) return;
+            clear_hover_rez();
+            if (respawn_) {
+                if (const auto* rez = respawn_resurrection_option()) {
+                    hover_rez_choice_ = *rez;
+                    hover_rez_accepted_ = yes;
+                    log::info("hover resurrection offer {} locally; awaiting destination selection", yes ? "accepted" : "declined");
+                } else if (yes) {
+                    log::warn("hover resurrection offer has no reserved destination; leaving respawn choices unchanged");
+                }
+                // Native hover separates consent from destination selection. The server already retains the
+                // offer: Yes enables its reserved row locally, and OP_RespawnWindow later commits the choice.
+                // An ordinary OP_RezzAnswer acceptance would bypass the stock hover publication path.
+                if (!yes) send_zone(answer_rezz(c.offer, false));
+                discard_questions([](const Confirmation& q) { return q.id == kConfirmRezz; });
+            } else {
+                send_zone(answer_rezz(c.offer, yes));
+            }
+        } else if (auto i = decode_shared_task_invite(c.offer)) send_zone(encode_shared_task_invite_response(i->invite_id, yes));
         return;
     }
     if (!yes || state_ != ConnectionState::InZone) return;
