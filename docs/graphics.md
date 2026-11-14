@@ -1254,10 +1254,17 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
   its height (at least 600 units) three crossed cards and a level one, with a picture of the near tree from the side
   and from above (rendered by the generator: a small rasteriser, twice the size and averaged down). The near and
   middle levels are built together, so they have one shape.
-- **Budget:** 4,000 to 11,000 triangles a tree at the near level, 8 at the far. In the zone viewer at a Qeynos Hills
-  spot the trees and ground came to about 27,000 zone triangles a frame with the levels (239,000 without, 3,400 with
-  the game's trees), and 9,000 looking over the zone from above (195,000 without). Into the shadow map, 7,100 with the
-  shadows' own levels (98,000 with the camera's, 574,000 with none, 7,300 with the game's trees).
+- **Cards cut to their leaves:** each leaf card is cut to its texture's outline (`card_outline`: the convex hull of
+  the texels that are not transparent, cut down to six corners by the cheapest cuts, six texels out for the smaller
+  mips), each quad of a strip clipped to it in texture space. A spray fills only part of its square: a pine's card
+  keeps about 42 % of its area, a broadleaf cluster's 74 %. It costs triangles (a quad is a fan of up to four) and
+  saves the pixels the alpha test would throw away.
+- **Budget:** 5,000 to 12,000 triangles a tree at the near level, 1,700 to 4,300 at the middle, 8 at the far. At the
+  Qeynos Hills test spot the zone drew 56,000 triangles a frame (3,400 with the game's trees; the trees in a fade
+  draw two levels), 35,000 looking over the zone from above, and 9,300 into the shadow map (7,300 with the game's
+  trees). Cutting the cards doubled the leaf triangles and took about 5 % off the frame at 2560 x 1440 with 8x MSAA
+  in a view full of trees (3.29 ms from 3.47; zone viewer, offscreen). Each kind of tree is stored once (instanced),
+  so the triangles cost no memory per tree.
 
 The rules are lines of the studio's zone files (`tree <object> = <style> [<bark material>]`); only Qeynos Hills has
 them so far. A tree comes out the same on every build (its seed is its zone and name). Seen in the zone viewer, not

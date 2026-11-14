@@ -366,3 +366,50 @@ TEST_CASE("trees: Qeynos Hills' trees measured from the game files") {
         CHECK(tips(*shape) == (n == "TREETRY_ACTORDEF" ? 2 : 1)); // TREETRY's second limb is a prism of its own
     }
 }
+
+TEST_CASE("trees: a leaf card is cut to its texture's outline") {
+    // A disc of leaves in the middle of a 64 x 64 card.
+    assets::Image leaf;
+    leaf.width = leaf.height = 64;
+    leaf.mips.emplace_back(std::size_t(64) * 64 * 4);
+    std::size_t opaque = 0;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+            if (glm::distance(glm::vec2(float(x) + 0.5f, float(y) + 0.5f), glm::vec2(32.0f, 40.0f)) < 14.0f) {
+                leaf.mips[0][(std::size_t(y) * 64 + std::size_t(x)) * 4 + 3] = std::byte{255};
+                ++opaque;
+            }
+    const auto outline = card_outline(leaf, 6, 2.0f);
+    REQUIRE(outline.size() >= 3);
+    CHECK(outline.size() <= 6);
+    float area = 0.0f;
+    for (std::size_t i = 0; i < outline.size(); ++i) {
+        const glm::vec2 p = outline[i], q = outline[(i + 1) % outline.size()];
+        area += p.x * q.y - q.x * p.y;
+        CHECK(p.x >= 0.0f);
+        CHECK(p.y <= 1.0f);
+    }
+    area = std::abs(area) * 0.5f;
+    CHECK(area < 0.4f); // the disc is about 0.15 of the card
+    CHECK(area > float(opaque) / (64.0f * 64.0f));
+    // Every opaque texel's centre inside it.
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) {
+            if (leaf.mips[0][(std::size_t(y) * 64 + std::size_t(x)) * 4 + 3] == std::byte{0}) continue;
+            const glm::vec2 c((float(x) + 0.5f) / 64.0f, (float(y) + 0.5f) / 64.0f);
+            float sign = 0.0f;
+            bool inside = true;
+            for (std::size_t i = 0; i < outline.size(); ++i) {
+                const glm::vec2 p = outline[i], q = outline[(i + 1) % outline.size()];
+                const float side = (q.x - p.x) * (c.y - p.y) - (q.y - p.y) * (c.x - p.x);
+                if (sign == 0.0f) sign = side;
+                inside &= side * sign >= 0.0f;
+            }
+            CHECK(inside);
+        }
+    // Nothing opaque: no outline.
+    assets::Image empty;
+    empty.width = empty.height = 8;
+    empty.mips.emplace_back(std::size_t(8) * 8 * 4);
+    CHECK(card_outline(empty).empty());
+}
