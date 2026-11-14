@@ -194,7 +194,8 @@ constexpr std::uint32_t kReflective = 256;  // modern: the sky reflected (extra.
 constexpr std::uint32_t kMolten = 512;      // modern: RegionLava drawn as lava (its texture's name says so)
 constexpr std::uint32_t kEnergy = 1024;     // modern: RegionLavaH drawn as a glowing field
 constexpr std::uint32_t kEnvMap = 2048;     // modern: slot 2 is the water's own environment (an octahedral map)
-// The depth pre-pass's flags: none. They steer the shading alone, not the position nor the alpha test.
+constexpr std::uint32_t kLodFading = 4096;  // a level of detail: extra3 its band (coverage.glsl lod_fade_samples)
+// The depth pre-pass's flags: none of the shading's (bind_draw adds kLodFading, which decides discards, to both).
 constexpr std::uint32_t kDepthOnlyFlags = 0;
 constexpr VkColorComponentFlags kAllChannels =
     VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -364,6 +365,8 @@ void ZoneRenderer::upload(Prepared& p) {
               p.indices.size() * sizeof(std::uint32_t) / (1024 * 1024), p.instances.size() - 1);
     draws_ = std::move(p.draws);
     chunks_ = std::move(p.chunks);
+    instance_origins_.clear();
+    for (const GpuInstance& i : p.instances) instance_origins_.emplace_back(i.row[0].w, i.row[1].w, i.row[2].w);
     solid_ = p.solid;
     stats_.triangles = p.triangles;
     stats_.draws = draws_.size();
@@ -894,7 +897,8 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                                           static_cast<std::int64_t>(std::floor(m[3].y / 128.0f))),
                                  i});
             }
-            std::stable_sort(order.begin(), order.end(), [](const Placed& a, const Placed& b) { return a.cell < b.cell; });
+            std::stable_sort(order.begin(), order.end(),
+                             [](const Placed& a, const Placed& b) { return a.cell < b.cell; });
             std::vector<GpuInstance> instances;
             std::vector<glm::mat4> transforms;
             for (const Placed& o : order) {
@@ -1461,9 +1465,15 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     // Multisampled, the opaque pass turns the alpha test into coverage: alpha-to-coverage, and the fragment
     // shader's constant_id 0 makes its alpha the coverage (shaders/zone.frag, actor.frag, object.frag).
     const VkBool32 coverage = vk_.scene_samples() != VK_SAMPLE_COUNT_1_BIT ? VK_TRUE : VK_FALSE;
-    VkSpecializationMapEntry spec_entry{0, 0, sizeof(VkBool32)};
-    VkBool32 spec_value = VK_FALSE;
-    VkSpecializationInfo spec{1, &spec_entry, sizeof(VkBool32), &spec_value};
+    // constant_id 1: the scene's samples, which a level of detail's fade shares out (lighting.glsl lod_fade_samples).
+    struct Spec {
+        VkBool32 coverage = VK_FALSE;
+        std::int32_t samples = 1;
+    } spec_value;
+    spec_value.samples = static_cast<std::int32_t>(vk_.scene_samples());
+    const VkSpecializationMapEntry spec_entries[] = {{0, offsetof(Spec, coverage), sizeof(VkBool32)},
+                                                     {1, offsetof(Spec, samples), sizeof(std::int32_t)}};
+    VkSpecializationInfo spec{2, spec_entries, sizeof(Spec), &spec_value};
     stages[1].pSpecializationInfo = &spec;
 
     VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -1479,8 +1489,8 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     info.layout = layout_;
 
     for (int pass = 0; pass < 3; ++pass) {
-        spec_value = pass == 0 ? coverage : VK_FALSE;
-        ms.alphaToCoverageEnable = spec_value;
+        spec_value.coverage = pass == 0 ? coverage : VK_FALSE;
+        ms.alphaToCoverageEnable = spec_value.coverage;
         VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         dss.depthTestEnable = VK_TRUE;
         dss.depthWriteEnable = pass == 0 ? VK_TRUE : VK_FALSE;
@@ -1526,7 +1536,7 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     }
     if (depth_prepass_) {
         // Both pipelines take the opaque pass's coverage, so an edge covers the same samples in each.
-        spec_value = coverage;
+        spec_value.coverage = coverage;
         ms.alphaToCoverageEnable = coverage;
         VkPipelineColorBlendAttachmentState ba{};
         VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
@@ -1590,7 +1600,7 @@ void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted count
     };
     for (std::uint32_t i = d.first_chunk; i < d.first_chunk + d.chunk_count; ++i) {
         const Chunk& c = chunks_[i];
-        if (!lod_shows(d, c.box_min, c.box_max, lod) || !keep(c)) continue;
+        if (!lod_shows(d, c, lod) || !keep(c)) continue;
         if (run_count > 0 && extends_run(c, run_first, run_count, run_instance, run_instances)) continue;
         flush();
         run_first = c.first_index;
@@ -1599,6 +1609,13 @@ void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted count
         run_instances = 1;
     }
     flush();
+}
+
+bool ZoneRenderer::lod_shows(const Draw& d, const Chunk& c, LodPick pick) const {
+    if (!d.lod.banded()) return true;
+    const glm::vec3 at = c.instance < instance_origins_.size() ? instance_origins_[c.instance]
+                                                               : (c.box_min + c.box_max) * 0.5f;
+    return render::lod_shows(d.lod, glm::distance(at, lod_eye_), pick, lod_scale_);
 }
 
 void ZoneRenderer::bind_geometry(VkCommandBuffer cmd) const {
@@ -1641,6 +1658,12 @@ void ZoneRenderer::bind_draw(VkCommandBuffer cmd, const Draw& d, std::uint32_t f
     pc.extra = d.extra;
     pc.extra2 = d.extra2;
     pc.extra3 = d.extra3;
+    // A level of detail fades into its neighbours (render/lod_bands.h): its band as the scene sees it. Only the
+    // classic effect is banded (a replacement model's), which leaves extra3 to it.
+    if (d.lod.banded()) {
+        pc.tex2.z |= kLodFading;
+        pc.extra3 = glm::vec4(d.lod.near * lod_scale_, d.lod.far * lod_scale_, render::kLodFade, 0.0f);
+    }
     pc.extra4 = d.extra4;
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 }
@@ -1694,7 +1717,7 @@ void ZoneRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, cons
                                   (d.liquid == Liquid::Water ? kWaterSurface | copies : 0u) |
                                   (d.liquid == Liquid::Lava ? kLavaSurface : 0u) | d.surface;
             bind_draw(cmd, d, flags, time_ms);
-        });
+        }, kSceneLod);
     }
 }
 
@@ -1714,7 +1737,7 @@ void ZoneRenderer::draw_depth(const FrameInfo& frame, const glm::mat4& view_proj
             if (!bound) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline_);
             bound = true;
             bind_draw(cmd, d, kDepthOnlyFlags, time_ms);
-        });
+        }, kSceneLod);
     }
     depth_drawn_ = true;
 }
@@ -1948,7 +1971,7 @@ void ZoneRenderer::draw_point_shadow(const FrameInfo& frame, const PointReach& r
     for (std::uint32_t i : reach.chunks) {
         const Chunk& c = chunks_[i];
         if (!box_reaches_face(reach.light, face, c.box_min, c.box_max)) continue;
-        if (c.draw < draws_.size() && !lod_shows(draws_[c.draw], c.box_min, c.box_max, kPointShadowLod)) continue;
+        if (c.draw < draws_.size() && !lod_shows(draws_[c.draw], c, kPointShadowLod)) continue;
         if (run_count > 0 && c.draw == run_draw && extends_run(c, run_first, run_count, run_instance, run_instances))
             continue;
         flush();

@@ -1216,14 +1216,18 @@ zone loads (`Zone::draw_objects`).
 - **Plants:** a replacement sways in the wind as the game's object would (`is_plant`): its cut-out parts flutter.
 - **Levels of detail:** a node's extras `{"hailstone_lod": [near, far]}` draw its meshes only from `near` to `far` world
   units from the camera (`MeshPart::lod_near`, `lod_far`). The zone renderer keeps each band's draws apart, a chunk
-  for each placement, and a chunk is drawn, in every pass (the scene, the depth pre-pass, the sun's cascades, the lights' shadow cubes), when the camera's
-  distance to its box's centre is in the band: a tree changes level at once, and each one shows one level. The shadow
-  passes take the camera's position of the frame before. A banded draw is not merged into the untextured shadow
-  casters. A shadow needs less detail than the tree it falls from (`render/lod_bands.h`): the sun's two nearest
-  cascades draw at least the second level (the camera's where coarser), the two further ones the last, and a light's
-  shadow cube, drawn once and kept, always the second whatever the camera's distance. A model's levels are its bands
-  in order of their near ends.
-  `display.tree_detail` (Options, Tree Detail Distance, 50 to 200 %) scales every band's distances.
+  for each placement, and chooses by the camera's distance to where the placement stands (`render/lod_bands.h`), so
+  all of a tree changes level together. A model's levels are its bands in order of their near ends.
+  - The scene and the depth pre-pass fade one level into the next across 20 % of the distance where they meet,
+    centred on it: both are drawn there, and each of a pixel's samples shows exactly one of them
+    (`coverage.glsl lod_fade_samples`, a sample mask by the placement's distance from `zone.vert` and a per-pixel
+    noise), more of the next level the further the tree, so it dissolves instead of jumping. With 8x MSAA that is
+    nine steps a pixel; without MSAA, a dither.
+  - A shadow needs less detail than the tree it falls from: the sun's two nearest cascades draw at least the second
+    level (the camera's where coarser), the two further ones the last, and a light's shadow cube, drawn once and
+    kept, always the second whatever the camera's distance. Shadows do not fade; they take the camera's position of
+    the frame before. A banded draw is not merged into the untextured shadow casters.
+  - `display.tree_detail` (Options, Tree Detail Distance, 50 to 200 %) scales every band's distances.
 
 ### Generated trees
 
@@ -1257,7 +1261,7 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
 
 The rules are lines of the studio's zone files (`tree <object> = <style> [<bark material>]`); only Qeynos Hills has
 them so far. A tree comes out the same on every build (its seed is its zone and name). Seen in the zone viewer, not
-in a live session. Open: leaves thin out in the smaller mips of a cut-out; a level changes with no blend.
+in a live session. Open: leaves thin out in the smaller mips of a cut-out.
 
 ## The isometric camera's cut
 

@@ -107,7 +107,7 @@ struct Options {
     bool no_fire = false;                         // --no-fire: the modern lighting without its flames (timing)
     bool no_grass = false;                        // --no-grass: the viewer without the zone's flora
     bool no_horizon = false;                      // --no-horizon: no distant hills round the zone (render/horizon.h)
-    float tree_detail = 1.0f;                     // --tree-detail PCT: display.tree_detail (ZoneRenderer::set_lod_scale)
+    float tree_detail = 1.0f;                     // --tree-detail PCT: display.tree_detail, as a scale
     float flora_distance = 400.0f;                // --flora-distance: how far the viewer draws the flora
     std::optional<glm::vec3> flora_push;          // --flora-push: a foot the viewer's flora bends away from
     std::optional<std::string> textures; // --textures DIR: replacement textures (assets/texture_overrides.h)
@@ -268,7 +268,7 @@ void usage() {
         "  --weather-stopped S  viewer: --weather stopped S seconds ago (the clearing)\n"
         "  --no-grade         viewer: no colour grade (--lighting modern; display.color_grade)\n"
         "  --no-horizon       viewer: no distant hills round the zone (--lighting modern; display.horizon_hills)\n"
-        "  --tree-detail PCT  viewer: the replacement models' levels of detail reach PCT %% as far (display.tree_detail)\n"
+        "  --tree-detail PCT  viewer: replacement models' levels of detail reach PCT %% as far (display.tree_detail)\n"
         "  --view-distance X  with --lighting modern: draw X times further than the original, into haze (2.5)\n"
         "  --model A,B,...    model viewer: classic character models by code (HUM) or race (r:RACE[:GENDER]);\n"
         "                     --anim CODE (default P01), --anim-time T, --size S, --heading H (0..512),\n"

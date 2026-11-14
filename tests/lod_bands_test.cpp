@@ -59,3 +59,24 @@ TEST_CASE("levels of detail: the detail setting scales the bands") {
     CHECK(shown(150.0f, {}, 0.5f) == 1);
     CHECK(shown(350.0f, {}, 0.5f) == 2);
 }
+
+TEST_CASE("levels of detail: the scene fades one level into the next") {
+    // Where the near and middle levels meet (200), across 20 % of it: both drawn, adding up to the whole.
+    for (float d : {181.0f, 190.0f, 200.0f, 210.0f, 219.0f}) {
+        INFO(d);
+        CHECK(lod_shows(kNear, d, kSceneLod));
+        CHECK(lod_shows(kMiddle, d, kSceneLod));
+        CHECK(lod_presence(kNear, d).out + lod_presence(kMiddle, d).in == doctest::Approx(1.0f));
+    }
+    CHECK(lod_presence(kNear, 180.0f).out == doctest::Approx(1.0f));
+    CHECK(lod_presence(kMiddle, 220.0f).in == doctest::Approx(1.0f));
+    CHECK_FALSE(lod_shows(kMiddle, 179.0f, kSceneLod));
+    CHECK_FALSE(lod_shows(kNear, 221.0f, kSceneLod));
+    // The first level fades in from nowhere: shown from the start.
+    CHECK(lod_presence(kNear, 0.0f).in == 1.0f);
+    // The far level's fade starts at 540.
+    CHECK(lod_shows(kFar, 545.0f, kSceneLod));
+    CHECK_FALSE(lod_shows(kFar, 535.0f, kSceneLod));
+    // The shadows do not fade.
+    CHECK_FALSE(lod_shows(kMiddle, 190.0f, LodPick{1, false}) == lod_shows(kNear, 190.0f, LodPick{1, false}));
+}

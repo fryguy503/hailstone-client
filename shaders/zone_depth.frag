@@ -34,11 +34,13 @@ layout(push_constant) uniform Push {
 
 layout(location = 0) in vec2 v_uv;
 layout(location = 2) in vec3 v_world; // zone.vert
+layout(location = 10) flat in float v_lod_distance;
 
 layout(location = 0) out vec4 o_color; // its alpha alone counts: alpha-to-coverage reads it
 
 // zone.frag's effects whose alpha is 1 whatever their texture's (render/zone_renderer.cpp Mode).
 const uint kModeLava = 3u;
+const uint kFlagLodFade = 4096u; // render/zone_renderer.cpp kLodFading
 const uint kModeRegionTerrain = 4u;
 
 void main() {
@@ -46,6 +48,9 @@ void main() {
     if (reveal_discard(v_world, gl_FragCoord.xy, scene.reveal_origin, scene.reveal_axis, scene.reveal_shape,
                        scene.reveal_roof))
         discard;
+    int lod_samples = lod_fade_samples((pc.tex2.z & kFlagLodFade) != 0u, v_lod_distance, pc.extra3, gl_FragCoord.xy);
+    if (lod_samples == 0) discard;
+    gl_SampleMask[0] = lod_samples;
     // The alpha zone.frag tests, for the effects the opaque pass draws (render/material_state.h): 1 for the lava and
     // the region terrain, else the texture's. The waterfall, the water and the detail pass, whose alpha is another,
     // are blended and never come here. Without an alpha test (reference 0) the alpha decides nothing: not read.

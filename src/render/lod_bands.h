@@ -27,7 +27,29 @@ struct LodBand {
 struct LodPick {
     std::uint8_t level = 0;
     bool exact = false;
+    bool fade = false; // the scene's: a level also shows through its fades (lod_presence), either side of its band
 };
+inline constexpr LodPick kSceneLod{0, false, true};
+
+// A level fades into the next across a stretch of kLodFade x the distance where they meet, centred on it: the scene
+// draws both there, each of a pixel's samples of one or the other (coverage.glsl lod_fade_samples), so a tree
+// dissolves into its next level instead of jumping.
+inline constexpr float kLodFade = 0.2f;
+
+// How much of `band` shows at `dist` (both scaled), 0 to 1: rising across the fade at its near end (from the start,
+// none), falling across the one at its far end. Where two levels meet, the one fading in and the one fading out add
+// up to 1 (coverage.glsl lod_fade_samples gives the two complementary samples).
+struct LodPresence {
+    float in = 1.0f, out = 1.0f;
+};
+inline LodPresence lod_presence(const LodBand& band, float dist, float scale = 1.0f) {
+    LodPresence p;
+    if (!band.banded()) return p;
+    const float near = band.near * scale, far = band.far * scale;
+    if (near > 0.0f) p.in = std::clamp((dist - near * (1.0f - 0.5f * kLodFade)) / (kLodFade * near), 0.0f, 1.0f);
+    p.out = std::clamp((far * (1.0f + 0.5f * kLodFade) - dist) / (kLodFade * far), 0.0f, 1.0f);
+    return p;
+}
 
 // The sun's cascades (render/shadows.h): the two nearest and sharpest the middle level, the others the last (a
 // generated tree's far cards).
@@ -41,6 +63,10 @@ inline bool lod_shows(const LodBand& band, float dist, LodPick pick = {}, float 
     const std::uint8_t level = std::min<std::uint8_t>(pick.level, band.levels > 0 ? band.levels - 1 : 0);
     if (pick.exact) return band.level == level;
     if (band.level < level) return false;
+    if (pick.fade) {
+        const LodPresence p = lod_presence(band, dist, scale);
+        return p.in > 0.0f && p.out > 0.0f;
+    }
     return (band.level == level || dist >= band.near * scale) && dist < band.far * scale;
 }
 

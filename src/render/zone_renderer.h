@@ -236,12 +236,6 @@ private:
     static bool casts_untextured(const Draw& d) {
         return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f) && !d.lod.banded() && d.instanced == 0;
     }
-    // Whether a chunk of `d` shows by `pick` at its distance from lod_eye_: the distance from the camera to the chunk's
-    // box's centre. A banded draw is an instanced model's, its chunks its placements, so a tree changes level at
-    // once.
-    bool lod_shows(const Draw& d, const glm::vec3& box_min, const glm::vec3& box_max, LodPick pick = {}) const {
-        return render::lod_shows(d.lod, glm::distance((box_min + box_max) * 0.5f, lod_eye_), pick, lod_scale_);
-    }
     float lod_scale_ = 1.0f; // set_lod_scale
     // The camera's position the levels of detail are chosen by: the last begin_draw's (the shadow passes, drawn
     // before it in a frame, take the frame before's).
@@ -312,6 +306,12 @@ private:
         }
         return false;
     }
+    // Whether chunk `c` of `d` shows by `pick` at its distance from lod_eye_. A banded draw is an instanced model's,
+    // its chunks its placements: the distance to where the placement stands, the one zone.vert fades it by
+    // (v_lod_distance), so every level of a tree changes together.
+    bool lod_shows(const Draw& d, const Chunk& c, LodPick pick = {}) const;
+    // Where each instance stands (GpuInstance's translation), for lod_shows.
+    std::vector<glm::vec3> instance_origins_;
     // Binds the vertex, instance and index buffers.
     void bind_geometry(VkCommandBuffer cmd) const;
     std::vector<Chunk> chunks_;
