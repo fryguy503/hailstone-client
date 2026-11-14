@@ -369,10 +369,18 @@ TEST_CASE("leadership: the toggle, a purchase, the rank and experience updates, 
 
     CHECK(game::leadership_ability(0).name == "Mark NPC");
     CHECK(game::leadership_max_rank(0) == 3);
-    CHECK(game::leadership_next_cost(0, 0) == 1);
+    CHECK(game::leadership_next_cost(0, 0) == 3);
     CHECK(game::leadership_next_cost(0, 3) == 0);
     CHECK(game::leadership_max_rank(9) == 5); // offense enhancement
     CHECK(game::leadership_ability(5).name.empty());
+    CHECK(game::leadership_ability(18).name.empty()); // unavailable waypoint, never raid main assist
+    CHECK(game::leadership_ability(19).name == "Delegate Main Assist");
+    CHECK(game::leadership_max_rank(19) == 3);
+    CHECK(game::leadership_next_cost(19, 2) == 8);
+    CHECK(game::leadership_ability(20).name == "Delegate Mark NPC");
+    CHECK(game::leadership_next_cost(20, 2) == 6);
+    CHECK(game::leadership_hot_button_def(18).count == 0);
+    CHECK(game::leadership_hot_button_def(19).count == 1);
     CHECK(game::leadership_next_cost(24, 4) == 10);
     CHECK(game::leadership_ability(40).name.empty());
 }
@@ -384,4 +392,20 @@ TEST_CASE("leadership gauge: the server's f64 experience is clamped before it be
     CHECK(game::leadership_gauge(1e300, 1000.0) == 1000); // was INT_MIN on x86 (undefined), so an empty gauge
     CHECK(game::leadership_gauge(std::numeric_limits<double>::infinity(), 1000.0) == 1000);
     CHECK(game::leadership_gauge(std::numeric_limits<double>::quiet_NaN(), 1000.0) == 0);
+}
+
+TEST_CASE("raid delegation: decode the complete EQEmu pass-through record") {
+    std::vector<std::uint8_t> raw(92, 0);
+    put32(raw, 0, 3);
+    put32(raw, 4, 3); // third assist is one-based in live EQEmu assignments
+    put32(raw, 20, 1234);
+    put_str(raw, 28, "ThirdAssist");
+    auto decoded = decode_delegate_ability(packet(Op::RaidDelegateAbility, raw));
+    REQUIRE(decoded);
+    CHECK(decoded->ability == 3);
+    CHECK(decoded->member == 3);
+    CHECK(decoded->spawn_id == 1234);
+    CHECK(decoded->name == "ThirdAssist");
+    raw.resize(91);
+    CHECK_FALSE(decode_delegate_ability(packet(Op::RaidDelegateAbility, raw)));
 }

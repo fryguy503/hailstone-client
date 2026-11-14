@@ -181,6 +181,7 @@ void GameConnection::with_character(const std::function<void(game::mechanics::Ch
     if (!profile_) return;
     static const game::mechanics::GameTables no_tables; // the effect totals read no tables
     game::mechanics::LiveState live;
+    live.leadership = leadership_bonuses();
     live.drunkenness = drunkenness_;
     live.owner_status = pstatus_.owner_status;
     live.pvp_rules = pvp_rules_;
@@ -920,8 +921,24 @@ void GameConnection::handle_spell(Op op, const AppPacket& p) {
                 spells_.others[b->caster_id] = {b->spell_id, now, b->cast_time};
                 if (it != world_.spawns.end() && b->spell_id != 0xffffffffu) {
                     std::string who = game::display_name(it->second.name);
-                    if (!bard) spell_message(12206, {who}); // %1 begins to cast a spell.
-                    else if (sp && !sp->cast_by_other.empty()) spell_message(12207, {who, sp->cast_by_other});
+                    std::string text;
+                    if (!bard) {
+                        const std::array<std::string, 1> args{who};
+                        text = strings_.format(12206, args); // %1 begins to cast a spell.
+                    } else if (sp && !sp->cast_by_other.empty()) {
+                        const std::array<std::string, 2> args{who, sp->cast_by_other};
+                        text = strings_.format(12207, args);
+                    }
+                    // StartCasting @0x522b76: Spell Awareness identifies another caster's spell through five
+                    // levels above the player. Group (8) or raid (23) suffices; a GM sees it independently.
+                    if (sp) {
+                        const game::Spawn* player = world_.player();
+                        if (player_is_gm()) text += " (" + sp->name + ")";
+                        else if (player && static_cast<int>(it->second.level) <= static_cast<int>(player->level) + 5 &&
+                                 (leadership_ability_active(8, 1) || leadership_ability_active(0x17, 1)))
+                            text += " <" + sp->name + ">";
+                    }
+                    if (!text.empty()) chat(ChatEvent::Kind::Spell, std::move(text));
                 }
             }
         }
@@ -1052,6 +1069,7 @@ void GameConnection::handle_spell(Op op, const AppPacket& p) {
 void GameConnection::land_spell_on_me(const Action& a, std::int64_t now) {
     static const game::mechanics::GameTables no_tables;
     game::mechanics::LiveState live;
+    live.leadership = leadership_bonuses();
     live.drunkenness = drunkenness_;
     live.owner_status = pstatus_.owner_status;
     live.pvp_rules = pvp_rules_;

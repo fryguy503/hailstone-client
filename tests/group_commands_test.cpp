@@ -38,6 +38,28 @@ std::vector<AppPacket> sent(const MockEqServer& server, Op op) {
     return out;
 }
 
+// EQEmu's pass-through DelegateAbility_Struct, authored from field offsets rather than the client encoder.
+AppPacket raid_delegate(std::uint32_t ability, std::uint32_t member, bool removed, std::uint32_t entity,
+                        const std::string& name) {
+    ByteWriter w;
+    w.le(ability);
+    w.le(member);
+    w.le<std::uint32_t>(removed ? 1u : 0u);
+    w.zeros(8);
+    w.le(entity);
+    w.zeros(4);
+    w.fixed_string(name, 64);
+    return AppPacket(0x2b33, w.take());
+}
+
+AppPacket leadership_target(std::uint16_t opcode, std::uint32_t entity, std::uint32_t number) {
+    ByteWriter w;
+    w.le(entity);
+    w.le(number);
+    w.zeros(64);
+    return AppPacket(opcode, w.take());
+}
+
 // Puts the mock's character (Gennro) in a group led by `leader` with the others.
 void group_up(MockEqServer& server, const std::string& leader, std::vector<std::string> others) {
     GroupUpdateB u;
@@ -377,12 +399,12 @@ TEST_CASE("mock server: the leadership abilities' commands and messages (marks, 
     REQUIRE(rig.until([&] { return abilities().size() == 1; }));
     CHECK(abilities()[0] == std::pair<std::uint32_t, std::uint32_t>{0, 2});
 
-    // The server's mark; marking the same NPC with the same number again unmarks it (0).
+    // EQEmu accepts mark numbers 1..3; repeating a mark must not send the unsupported native toggle value 0.
     server.zone.send_reliable(encode_mark_npc(Op::MarkNPC, MarkNpc{101, 2, "a_rat001"}));
     REQUIRE(rig.until([&] { return conn.leadership().group_marks[1] == 101; }));
     conn.send_command("/marknpc 2");
     REQUIRE(rig.until([&] { return abilities().size() == 2; }));
-    CHECK(abilities()[1] == std::pair<std::uint32_t, std::uint32_t>{0, 0});
+    CHECK(abilities()[1] == std::pair<std::uint32_t, std::uint32_t>{0, 2});
     server.zone.send_reliable(encode_mark_npc(Op::MarkNPC, MarkNpc{101, 0, "a_rat001"}));
     REQUIRE(rig.until([&] { return conn.leadership().group_marks[1] == 0; }));
 
@@ -471,6 +493,7 @@ TEST_CASE("mock server: raid leadership (ranks, raid marks, delegation, the lead
     lead.leadership[16] = 3; // Raid Mark NPC
     lead.leadership[17] = 1; // NPC Health
     lead.leadership[0x13] = 1;
+    lead.leadership[0x14] = 1;
     lead.leadership[0x1c] = 1;
     server.zone.send_reliable(encode_raid_update(lead));
     REQUIRE(rig.until([&] { return conn.leadership().active_ranks[16] == 3; }));
@@ -487,6 +510,7 @@ TEST_CASE("mock server: raid leadership (ranks, raid marks, delegation, the lead
     ranks.general.player_name = ranks.general.leader_name = "Gennro";
     ranks.leadership[16] = 2;
     ranks.leadership[0x13] = 1;
+    ranks.leadership[0x14] = 1;
     ranks.leadership[0x1c] = 1;
     server.zone.send_reliable(encode_raid_update(ranks));
     REQUIRE(rig.until([&] { return conn.leadership().active_ranks[16] == 2; }));
@@ -518,8 +542,8 @@ TEST_CASE("mock server: raid leadership (ranks, raid marks, delegation, the lead
     server.zone.send_reliable(encode(DelegateAbility{4, 0, 0, 77, "Member1"}, Op::RaidDelegateAbility));
     REQUIRE(rig.until([&] { return conn.leadership().raid_markers[0] == 77; }));
     server.zone.send_reliable(encode(DelegateAbility{3, 1, 0, 78, "Member2"}, Op::RaidDelegateAbility));
-    REQUIRE(rig.until([&] { return conn.leadership().raid_assists[1] == 78; }));
-    CHECK(conn.leadership().raid_assist_names[1] == "Member2");
+    REQUIRE(rig.until([&] { return conn.leadership().raid_assists[0] == 78; }));
+    CHECK(conn.leadership().raid_assist_names[0] == "Member2");
     auto member = [&](const std::string& n) {
         for (const auto& m : conn.raid().members)
             if (m.name == n) return m;
@@ -577,6 +601,142 @@ TEST_CASE("mock server: raid leadership (ranks, raid marks, delegation, the lead
     conn.raid_delegate_ability(4, conn.raid().target);
     REQUIRE(rig.until([&] { return sent(server, Op::RaidDelegateAbility).size() == 2; }));
     CHECK(decode_delegate_ability(sent(server, Op::RaidDelegateAbility)[1])->ability == 4);
+}
+
+TEST_CASE("mock server: raid delegates use EQEmu identities and one-based assist slots") {
+    Rig rig(MockConfig::standard(), quick_options());
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    auto member = [&](const std::string& name) {
+        for (const auto& entry : conn.raid().members)
+            if (entry.name == name) return entry;
+        return game::RaidMember{};
+    };
+    REQUIRE(rig.to_zone());
+    RaidUpdate add;
+    add.general.action = kRaidAddMember;
+    add.general.leader_name = "Member1";
+    add.level = 60;
+    for (int i = 0; i < 18; ++i) {
+        add.general.player_name = i ? "Member" + std::to_string(i) : "Gennro";
+        add.general.parameter = static_cast<std::uint32_t>(i / 6);
+        server.zone.send_reliable(encode_raid_update(add));
+    }
+    RaidUpdate ranks;
+    ranks.general.action = kRaidSetLeader;
+    ranks.general.player_name = ranks.general.leader_name = "Member1";
+    ranks.leadership[16] = ranks.leadership[19] = ranks.leadership[20] = 3;
+    server.zone.send_reliable(encode_raid_update(ranks));
+    REQUIRE(rig.until([&] { return conn.raid().members.size() == 18 && conn.leadership().active_ranks[16] == 3; }));
+    CHECK_FALSE(conn.leadership_ability_active(16, 1));
+
+    const auto own_id = server.config.own_spawn_id;
+    server.zone.send_reliable(raid_delegate(4, 0, false, own_id, "Gennro"));
+    server.zone.send_reliable(raid_delegate(4, 0, false, 77, "Member1"));
+    server.zone.send_reliable(raid_delegate(4, 0, false, 78, "Member2"));
+    REQUIRE(rig.until([&] { return conn.leadership().raid_marker_names[2] == "Member2"; }));
+    CHECK(conn.leadership_ability_active(16, 3)); // later marker-zero assignments must retain our permission
+    CHECK(member("Gennro").marker);
+    server.zone.send_reliable(raid_delegate(4, 0, true, 77, "Member1"));
+    REQUIRE(rig.until([&] { return !member("Member1").marker; }));
+    CHECK(conn.leadership_ability_active(16, 3));
+    server.zone.send_reliable(raid_delegate(4, 0, false, 78, "Member2")); // idempotent resend, no duplicate
+    REQUIRE(rig.until([&] { return conn.leadership().raid_markers[2] == 78; }));
+    CHECK(conn.leadership().raid_markers[1] == 0);
+
+    conn.set_target(101);
+    conn.send_command("/rmarknpc 1");
+    REQUIRE(rig.until([&] { return sent(server, Op::DoGroupLeadershipAbility).size() == 1; }));
+    server.zone.send_reliable(leadership_target(0x5a58, 101, 1));
+    REQUIRE(rig.until([&] { return conn.leadership().raid_marks[0] == 101; }));
+    conn.send_command("/rmarknpc 1");
+    REQUIRE(rig.until([&] { return sent(server, Op::DoGroupLeadershipAbility).size() == 2; }));
+    const auto repeated_mark = sent(server, Op::DoGroupLeadershipAbility).back();
+    ByteReader repeat(repeated_mark.data);
+    CHECK(repeat.le<std::uint32_t>() == 16);
+    CHECK(repeat.le<std::uint32_t>() == 1); // native toggle 0 is rejected by stock EQEmu
+    server.zone.send_reliable(raid_delegate(4, 0, true, own_id, "Gennro"));
+    REQUIRE(rig.until([&] { return !member("Gennro").marker; }));
+    CHECK_FALSE(conn.leadership_ability_active(16, 1));
+
+    server.zone.send_reliable(raid_delegate(3, 1, false, 77, "Member1"));
+    server.zone.send_reliable(raid_delegate(3, 2, false, 78, "Member2"));
+    server.zone.send_reliable(raid_delegate(3, 3, false, 79, "Member3"));
+    REQUIRE(rig.until([&] { return conn.leadership().raid_assists[2] == 79; }));
+    CHECK(conn.leadership().raid_assists[0] == 77);
+    CHECK(conn.leadership().raid_assists[1] == 78);
+    CHECK(conn.leadership().raid_assist_slots_known[2]);
+    for (std::uint32_t n = 1; n <= 3; ++n)
+        server.zone.send_reliable(leadership_target(0x2814, 100 + n, n));
+    REQUIRE(rig.until([&] { return conn.leadership().assist_targets[3] == 103; }));
+    // EQEmu removal packets can contain the next free slot rather than the removed member's old slot.
+    server.zone.send_reliable(raid_delegate(3, 3, true, 77, "Member1"));
+    REQUIRE(rig.until([&] { return conn.leadership().raid_assists[0] == 0; }));
+    CHECK(conn.leadership().assist_targets[1] == 0);
+    CHECK(conn.leadership().assist_targets[2] == 102);
+    CHECK(conn.leadership().assist_targets[3] == 103);
+    server.zone.send_reliable(raid_delegate(3, 0, false, 80, "Member4")); // zone-in resend, slot unknown
+    server.zone.send_reliable(raid_delegate(3, 0, false, 79, "Member3")); // does not overwrite the other delegates
+    REQUIRE(rig.until([&] { return conn.leadership().raid_assists[0] == 80; }));
+    CHECK(conn.leadership().raid_assists[1] == 78);
+    CHECK(conn.leadership().raid_assists[2] == 79);
+    CHECK_FALSE(conn.leadership().raid_assist_slots_known[0]);
+    server.zone.send_reliable(raid_delegate(3, 0, true, 80, "Member4"));
+    REQUIRE(rig.until([&] { return conn.leadership().raid_assists[0] == 0; }));
+    CHECK(conn.leadership().assist_targets[2] == 0); // slot is unknown: invalidate stale raid targets safely
+    CHECK(conn.leadership().assist_targets[3] == 0);
+
+    GroupLeadershipUpdate group;
+    group.ranks[11] = 2;
+    server.zone.send_reliable(encode(group));
+    REQUIRE(rig.until([&] { return conn.leadership().active_ranks[11] == 2; }));
+    server.zone.send_reliable(leadership_target(0x2814, 102, 2));
+    REQUIRE(rig.until([&] { return conn.leadership().assist_targets[2] == 102; }));
+    ByteWriter deleted;
+    deleted.le<std::uint32_t>(78);
+    server.zone.send_reliable(make_packet(Op::DeleteSpawn, std::move(deleted)));
+    REQUIRE(rig.until([&] { return conn.leadership().raid_markers[2] == 0; }));
+    CHECK(conn.leadership().raid_marker_names[2] == "Member2");
+    CHECK(member("Member2").marker); // membership identity survives a delegate zoning away
+    CHECK(conn.leadership().assist_targets[2] == 0);
+    ByteWriter marked_deleted;
+    marked_deleted.le<std::uint32_t>(101);
+    server.zone.send_reliable(make_packet(Op::DeleteSpawn, std::move(marked_deleted)));
+    REQUIRE(rig.until([&] { return conn.leadership().raid_marks[0] == 0; }));
+    conn.reset_raid_leadership();
+    CHECK(conn.leadership().active_ranks[16] == 0);
+    CHECK(conn.leadership().active_ranks[11] == 2);
+    CHECK(conn.leadership().raid_marks[0] == 0);
+    CHECK(conn.leadership().raid_assist_names[1].empty());
+    CHECK_FALSE(member("Member2").main_assist);
+    CHECK_FALSE(member("Member2").marker);
+}
+
+TEST_CASE("raid leadership: full same-id spawn replacements retire marks and delegate spawn ids") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& conn = rig.conn;
+    conn.receive_zone_packet_for_test(encode(make_spawn("Assist", 78, 0, 1, 0, 0, 0)));
+    conn.receive_zone_packet_for_test(raid_delegate(3, 1, false, 78, "Assist"));
+    conn.receive_zone_packet_for_test(raid_delegate(4, 0, false, 78, "Assist"));
+    conn.receive_zone_packet_for_test(leadership_target(0x5a58, 101, 1));
+    conn.receive_zone_packet_for_test(leadership_target(0x2814, 101, 1));
+    REQUIRE(conn.leadership().raid_marks[0] == 101);
+    REQUIRE(conn.leadership().raid_assists[0] == 78);
+    REQUIRE(conn.leadership().assist_targets[1] == 101);
+
+    // Upstream assigns a fresh incarnation even without a preceding DeleteSpawn packet.
+    conn.receive_zone_packet_for_test(encode(make_spawn("Replacement", 101, 1, 1, 0, 0, 0)));
+    CHECK(conn.leadership().raid_marks[0] == 0);
+    CHECK(conn.leadership().assist_targets[1] == 0);
+    CHECK(conn.leadership().raid_assists[0] == 78);
+    conn.receive_zone_packet_for_test(leadership_target(0x2814, 101, 1));
+    conn.receive_zone_packet_for_test(encode(make_spawn("AnotherPlayer", 78, 0, 1, 0, 0, 0)));
+    CHECK(conn.leadership().raid_assists[0] == 0);
+    CHECK(conn.leadership().raid_markers[0] == 0);
+    CHECK(conn.leadership().assist_targets[1] == 0);
+    CHECK(conn.leadership().raid_assist_names[0] == "Assist");
+    CHECK(conn.leadership().raid_marker_names[0] == "Assist");
 }
 
 TEST_CASE("name sprites: the leadership marks around a non-player's name") {

@@ -92,7 +92,7 @@ ui.window("Game Menus", function()
         end
       end
       T.unfont()
-      overAny = overAny or ui.IsWindowHovered()
+      overAny = overAny or ui.IsWindowHovered(ui.HoveredFlags.AllowWhenBlockedByActiveItem)
       if newest and W.pressed("b") then eq.GameMenuClose() end
     end
     ui.End()

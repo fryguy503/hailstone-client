@@ -37,8 +37,8 @@ std::int32_t offense_value(const Character& ch, std::uint32_t skill, bool buffs)
 
 // The weapon skill with its item mods (when the character has the skill), (2 * stat - 150) / 3 for STR (DEX for
 // archery 7 and throwing 51) of 75 and above, the items' ATK (+0x110) and the spell cache's item ATK capped at 250 +
-// SPA 341, and the buffs' ATK (SPA 2; spell 2434 moves 100 of it to the capped part). Not kept: the leadership
-// offense enhancement (Leadership_GetOffenseEnhancementBonus, no packet source) and the profile's +0x3468 bonus.
+// SPA 341, and the buffs' ATK (SPA 2; spell 2434 moves 100 of it to the capped part), plus the active leaders'
+// offense enhancement. The profile's +0x3468 bonus is not kept.
 std::int32_t attack_value(const Character& ch, std::uint32_t skill, bool spell_2434) {
     std::int32_t cap = ch.total_effect(341, true, 0, true, true) + 250;
     std::int32_t v = ch.adjusted_skill(skill) > 0 ? ch.skill_with_item_mods(skill, true) : 0;
@@ -51,7 +51,7 @@ std::int32_t attack_value(const Character& ch, std::uint32_t skill, bool spell_2
         buff -= 100;
     }
     item = std::min(item + ch.stats().attack, cap);
-    return std::max(v + item + buff, 1);
+    return std::max(v + item + buff + ch.sheet().leadership_offense_bonus, 1);
 }
 
 std::int64_t shown_ac(const Character& ch) {

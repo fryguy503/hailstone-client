@@ -1328,6 +1328,45 @@ icons and menu checks, and scripts' `Group.MainTank`, `Group.MainAssist`, `Group
 that same state. Assigning a role clears its previous holder when the server confirms it. A group disband or
 zone transition clears the old state, and the server's roster and role updates restore it.
 
+## Group and raid leadership
+
+Both UI packs expose raid Main Assist and Mark NPC delegation, Find PC, and the Leadership window's three
+Create Hotkey buttons. A hotkey is placed on the cursor for a hot bar; the gamepad pack opens its slot picker to
+assign it with the controller. Passive abilities have none. The purchased
+rank list is separate from the active group and raid leaders' ranks. Nontrainable waypoint records are not shown
+as purchasable assist or marker abilities.
+
+The raid member menu is a Hailstone UI extension in both packs: right-click a member, or select one and use
+Member actions. The gamepad pack also opens it with Y on the focused row. Main Assist and Mark NPC delegate
+those roles to that member; they do not mark the member as an NPC target. The menu also offers Find PC,
+leadership and looter changes, and group removal. It captures the member's name and checks current membership
+and permissions again when an action is chosen, so a changed selection or roster cannot redirect the action.
+The original button APIs remain available to scripts. Raid-wide invitations, options, lock and leave controls
+stay outside the member menu; dragging and the gamepad's group picker still move members between groups.
+When Context Menus is switched off, both packs show the direct member buttons instead.
+
+Raid marks use `/rmarknpc 1`, `/rmarknpc 2` and `/rmarknpc 3`, or leadership hotkeys. Marking the same target again
+sends the same numbered request; the server owns the result. `/clearmarks` clears all raid marks for the leader or
+a delegated marker. Delegation and marks change locally only when the server confirms them. Delegate identities
+are reconciled by member name, including servers that send zero-numbered roster snapshots. Departures, disbanding
+and zoning clear transient marks and delegate spawn IDs so another spawn cannot inherit them.
+
+The original expansion and population checks remain: Gates of Discord, at least three group members or eighteen
+raid members, and the active leader's appropriate rank. HP, mana, HP regeneration and offense enhancements use
+those active ranks, stack group and raid effects when both apply, and feed the live character sheet and ATK label.
+The server remains authoritative for combat and received vitals.
+
+Spell Awareness adds the spell name to another caster's normal casting message when the active group or raid
+leader grants it and the caster is no more than five levels above the player. GM spell identification is
+independent of leadership. The spell still has to be present in the player's spell data.
+
+Invite Expedition and Invite Task in the raid window invite missing members of the player's expedition or shared
+task **into the raid**. They send ordinary named raid invitations, skip the player and existing raid members, and
+recheck raid leadership, lock and capacity when clicked. They do not require expedition/task leadership and do not
+predict acceptance. These are distinct from the expedition and task windows' invitations into those activities.
+
+Covered by packet, mock-server and both-pack UI tests; live multiplayer acceptance remains to be checked.
+
 ## Hot buttons, socials and tracking
 
 Vectors in `tests/hotbutton_tracking_vectors_test.cpp` (do-hot-button 4000, hot-button right click 1500, social stop
@@ -1744,7 +1783,7 @@ Vectors in `tests/merc_vectors_test.cpp` (25 files, every handler and sender of 
   (100%). A deliberate difference there: the original's `current * 100 / max` is an int32 product that wraps past
   21.4 million; with the maximum standing in for the current power the wrap would only make the 100% meaningless, so
   the client multiplies in 64 bits.
-- Leadership bonuses, the server's PvP ruleset, the server's regen rule for `IsRestingForFastRegen`, the 21 extra
+- The server's PvP ruleset, the server's regen rule for `IsRestingForFastRegen`, the 21 extra
   item lookups (tribute-like containers), the caster level of buffs that arrived without one (OP_BuffCreate; the
   player's level is used).
 

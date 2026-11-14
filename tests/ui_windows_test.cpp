@@ -3,6 +3,7 @@
 // page, the extended target window's context menu, and the pet window's gauges for several pets.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -36,6 +37,7 @@
 #include "net/notice_packets.h"
 #include "net/opcodes.h"
 #include "net/pet_packets.h"
+#include "net/social_packets.h"
 #include "net/zone_packets.h"
 #include "manual_clock.h"
 #include "scratch_dir.h"
@@ -215,6 +217,204 @@ TEST_CASE("Group role menus: self, member rows, permissions and confirmed role c
     CHECK(t.host.menus.empty());
     CHECK(t.api->click_child("PlayerWindow", "PlayerHP", "right"));
     CHECK(t.host.menus.empty());
+}
+
+TEST_CASE("Raid member menus: clicked identities, grouped and ungrouped rows, and stale authority") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    {
+        test::Rig rig;
+        REQUIRE(rig.to_zone());
+        auto& conn = rig.conn;
+        app::EqHost host;
+        host.conn = &conn;
+        host.in_game = host.ui_ready = true;
+        app::EqApi api(host);
+        std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
+        luaL_openlibs(lua.get());
+        lua_newtable(lua.get());
+        api.register_functions(lua.get());
+        lua_setglobal(lua.get(), "eq");
+        auto run = [&](const std::string& code) {
+            INFO(code);
+            REQUIRE(luaL_dostring(lua.get(), code.c_str()) == LUA_OK);
+            lua_settop(lua.get(), 0);
+        };
+        auto member = [&](const std::string& name, std::uint32_t group, bool add = true) {
+            net::RaidUpdate update;
+            update.general.action = add ? net::kRaidAddMember : net::kRaidRemoveMember;
+            update.general.player_name = name;
+            update.general.parameter = group;
+            conn.receive_zone_packet_for_test(net::encode_raid_update(update));
+        };
+        member("Gennro", 0);
+        for (int i = 1; i <= 17; ++i) member("Member" + std::to_string(i), static_cast<std::uint32_t>(i / 6));
+        member("Ungrouped", 0xffffffffu);
+        auto authority = [&](const std::string& leader, std::uint32_t marker_rank = 1) {
+            net::RaidUpdate update;
+            update.general.action = net::kRaidSetLeader;
+            update.general.leader_name = leader;
+            update.leadership[19] = 1;
+            update.leadership[20] = marker_rank;
+            update.leadership[28] = 1;
+            conn.receive_zone_packet_for_test(net::encode_raid_update(update));
+        };
+        authority("Gennro");
+        auto open = [&](const std::string& list, const std::string& name) {
+            const auto rows = api.list_rows("RaidWindow", list);
+            auto found = std::find_if(rows.begin(), rows.end(), [&](const auto& row) {
+                return row.size() > 1 && row[1] == name;
+            });
+            REQUIRE(found != rows.end());
+            run("eq.ListClick('RaidWindow', '" + list + "', " + std::to_string(found - rows.begin()) + ", 'right')");
+        };
+        auto action = [&](const std::string& label) -> app::EqHost::MenuRow {
+            REQUIRE(host.menus.size() == 1);
+            const auto& rows = host.menus[0].rows;
+            auto found = std::find_if(rows.begin(), rows.end(), [&](const auto& row) { return row.text == label; });
+            REQUIRE(found != rows.end());
+            return *found; // menus may be replaced while the captured callback remains open
+        };
+        auto delegates = [&] {
+            std::vector<net::DelegateAbility> result;
+            for (const auto& packet : rig.server.zone_log)
+                if (packet.opcode == net::to_wire(net::Op::RaidDelegateAbility))
+                    if (auto decoded = net::decode_delegate_ability(packet)) result.push_back(*decoded);
+            return result;
+        };
+        conn.set_raid_target("Member1");
+        open("RAID_PlayerList", "Member2");
+        REQUIRE(host.menus.size() == 1);
+        CHECK(host.menus[0].rows.front().text == "Member2");
+        auto assist = action("Main Assist");
+        REQUIRE(assist.enabled);
+        CHECK_FALSE(assist.check);
+        conn.set_raid_target("Member1");
+        assist.act();
+        REQUIRE(rig.until([&] { return delegates().size() == 1; }));
+        CHECK(delegates()[0].ability == 3);
+        CHECK(delegates()[0].name == "Member2");
+
+        open("RAID_NotInGroupPlayerList", "Ungrouped");
+        CHECK(host.menus[0].rows.front().text == "Ungrouped");
+        auto mark = action("Mark NPC");
+        REQUIRE(mark.enabled);
+        conn.set_raid_target("Member1");
+        mark.act();
+        REQUIRE(rig.until([&] { return delegates().size() == 2; }));
+        CHECK(delegates()[1].ability == 4);
+        CHECK(delegates()[1].name == "Ungrouped");
+
+        // A server update that already achieved a checkbox's captured intent must not toggle it back off.
+        open("RAID_PlayerList", "Member2");
+        auto pending_assist = action("Main Assist").act;
+        conn.receive_zone_packet_for_test(net::encode(net::DelegateAbility{3, 1, 0, 0, "Member2"}, net::Op::RaidDelegateAbility));
+        pending_assist();
+        open("RAID_PlayerList", "Member2");
+        CHECK(action("Main Assist").check);
+
+        auto handoffs = [&] {
+            const auto expected = net::encode(net::RaidGeneral{net::kRaidCmdMakeLeader, "Gennro", "Member2"});
+            return std::count_if(rig.server.zone_log.begin(), rig.server.zone_log.end(), [&](const auto& packet) {
+                return packet.opcode == expected.opcode && packet.data == expected.data;
+            });
+        };
+        action("Make Raid Leader").act();
+        REQUIRE(host.confirm);
+        CHECK(host.confirm->text == "Make Member2 the raid leader?");
+        CHECK(handoffs() == 0);
+        auto confirm_departed = host.confirm->done;
+        member("Member2", 0, false);
+        confirm_departed(true);
+        member("Member2", 0);
+        open("RAID_PlayerList", "Member2");
+        action("Make Raid Leader").act();
+        REQUIRE(host.confirm);
+        auto confirm_selected = host.confirm->done;
+        conn.set_raid_target("Member1");
+        confirm_selected(true);
+        REQUIRE(rig.until([&] { return handoffs() == 1; }));
+
+        // The selected-member control is the keyboard/controller entry to the same captured-name menu.
+        conn.set_raid_target("Member2");
+        REQUIRE(api.click_child("RaidWindow", "RAID_MemberActionsButton"));
+        REQUIRE(host.menus.size() == 1);
+        CHECK(host.menus[0].rows.front().text == "Member2");
+        auto removed = action("Mark NPC").act;
+        member("Member2", 0, false);
+        conn.set_raid_target("Member1");
+        removed(); // a departed member must never redirect an old action to the current selection
+        member("Member2", 0);
+
+        open("RAID_PlayerList", "Member2");
+        auto lost_leader = action("Main Assist").act;
+        authority("Member1");
+        lost_leader();
+        open("RAID_PlayerList", "Member2");
+        CHECK_FALSE(action("Main Assist").enabled);
+        authority("Gennro");
+
+        open("RAID_PlayerList", "Member2");
+        auto lost_rank = action("Mark NPC").act;
+        authority("Gennro", 0);
+        lost_rank();
+        open("RAID_PlayerList", "Member2");
+        CHECK_FALSE(action("Mark NPC").enabled);
+        authority("Gennro");
+
+        // Raid IDs may be zero on both sides of a disband/reform. Old callbacks must still expire.
+        conn.receive_zone_packet_for_test(net::encode(net::DelegateAbility{3, 1, 1, 0, "Member2"}, net::Op::RaidDelegateAbility));
+        open("RAID_PlayerList", "Member2");
+        auto before_reform = action("Main Assist");
+        REQUIRE(before_reform.enabled);
+        CHECK_FALSE(before_reform.check);
+        action("Make Raid Leader").act();
+        REQUIRE(host.confirm);
+        auto confirm_before_reform = host.confirm->done;
+        REQUIRE(conn.raid().id == 0);
+        net::RaidUpdate lifecycle;
+        lifecycle.general.action = net::kRaidDisband;
+        conn.receive_zone_packet_for_test(net::encode_raid_update(lifecycle));
+        lifecycle.general.action = net::kRaidCreate;
+        lifecycle.general.leader_name = "Gennro";
+        conn.receive_zone_packet_for_test(net::encode_raid_update(lifecycle));
+        member("Gennro", 0);
+        for (int i = 1; i <= 17; ++i) member("Member" + std::to_string(i), static_cast<std::uint32_t>(i / 6));
+        member("Ungrouped", 0xffffffffu);
+        authority("Gennro");
+        REQUIRE(conn.raid().id == 0);
+        before_reform.act();
+        confirm_before_reform(true);
+        rig.run_for(std::chrono::milliseconds(30));
+        CHECK(delegates().size() == 2);
+        CHECK(handoffs() == 1);
+        open("RAID_PlayerList", "Member2");
+        action("Main Assist").act();
+        REQUIRE(rig.until([&] { return delegates().size() == 3; }));
+        CHECK(delegates().back().ability == 3);
+        CHECK(delegates().back().name == "Member2");
+
+        open("RAID_PlayerList", "Member2");
+        auto context_disabled = action("Mark NPC").act;
+        host.menus.clear();
+        conn.set_client_option_for_session(game::ClientOption::ContextMenus, 0);
+        context_disabled();
+        open("RAID_PlayerList", "Member2");
+        CHECK(host.menus.empty());
+        CHECK_FALSE(api.child_state("RaidWindow", "RAID_MemberActionsButton").value_or(true));
+        CHECK_FALSE(api.click_child("RaidWindow", "RAID_MemberActionsButton"));
+        CHECK(host.menus.empty());
+        conn.set_client_option_for_session(game::ClientOption::ContextMenus, 1);
+
+        open("RAID_PlayerList", "Member2");
+        auto locked = action("Mark NPC").act;
+        conn.send_command("/safelock test");
+        REQUIRE(conn.interface_locked());
+        locked();
+        rig.run_for(std::chrono::milliseconds(30));
+        CHECK(delegates().size() == 3);
+    }
+    ImGui::DestroyContext(ctx);
 }
 
 TEST_CASE("Group role icons: player and member flags follow confirmed assignments and disband") {

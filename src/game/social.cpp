@@ -604,6 +604,7 @@ bool RaidState::remove(const std::string& name) {
 }
 
 void RaidState::clear() {
+    ++generation;
     active = false;
     leader.clear();
     locked = false;

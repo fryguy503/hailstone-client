@@ -153,9 +153,10 @@ struct CharacterSheet {
     bool bazaar_zone = false, barter_zone = false;
     std::int32_t encumbered_state = 0; // int 0xddf748: 1 while "You are encumbered" stands (CalculateWeight)
 
-    // ---- group / raid leadership (Leadership_Get*Bonus; no packet source yet) ----
+    // ---- group / raid leadership (the active leaders' ranks, with population / expansion checks) ----
     bool leadership_active = false;  // pinstLeadership (0xe63b58) exists
     std::int32_t leadership_hp_bonus = 0, leadership_mana_bonus = 0, leadership_hp_regen_bonus = 0;
+    std::int32_t leadership_offense_bonus = 0;
 
     // ---- arithmetic ----
     FpuPrecision fpu = FpuPrecision::Single24;

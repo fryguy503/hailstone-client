@@ -1531,11 +1531,17 @@ void GameConnection::set_raid_target(const std::string& name) {
 
 void GameConnection::raid_delegate_ability(std::uint32_t ability, const std::string& member) {
     // Send_OP_RaidDelegateAbility @0x55e5b0: no member prints 0x222c (colour 0xd).
-    if (!zone_session_) return;
+    if (state_ != ConnectionState::InZone || (ability != 3 && ability != 4)) return;
+    if (interface_locked()) return system(game::kStrInterfaceLocked, {}, game::kLockedColor);
     if (member.empty()) return system(0x222c, {}, 0xd);
+    // A window or hot button may have been enabled before leadership, ranks or membership changed.
+    if (!raid_.active || !iequals(raid_.leader, character_)) return system(0x21c9, {}, 0xd);
+    const game::RaidMember* selected = raid_.find(member);
+    if (!selected) return system(0x222c, {}, 0xd);
+    if (!leadership_ability_active(static_cast<int>(ability) + 16, 1)) return system(0x21c1, {}, 0xd);
     DelegateAbility d;
     d.ability = ability;
-    d.name = member.substr(0, 63);
+    d.name = selected->name.substr(0, 63);
     send_zone(encode(d, Op::RaidDelegateAbility));
 }
 
@@ -1706,6 +1712,26 @@ void GameConnection::raid_invite(const std::string& args) {
     g.leader_name = character_;
     send_zone(encode(g));
     system(5064, {who});
+}
+
+void GameConnection::raid_invite_expedition() {
+    if (state_ != ConnectionState::InZone || !expedition_.info.assigned || raid_.locked ||
+        (raid_.active && !iequals(raid_.leader, character_)) || raid_.members.size() >= 72) return;
+    if (interface_locked()) return system(game::kStrInterfaceLocked, {}, game::kLockedColor);
+    // CRaidWnd::WndNotification @0x72d180: invite each expedition member missing from the raid through the normal
+    // raid invitation. No expedition invitation or local roster change is involved.
+    for (const auto& member : expedition_.members)
+        if (!member.name.empty() && !iequals(member.name, character_) && !raid_.is_member(member.name))
+            raid_invite(member.name);
+}
+
+void GameConnection::raid_invite_shared_task() {
+    if (state_ != ConnectionState::InZone || raid_.locked ||
+        (raid_.active && !iequals(raid_.leader, character_)) || raid_.members.size() >= 72) return;
+    if (interface_locked()) return system(game::kStrInterfaceLocked, {}, game::kLockedColor);
+    // The same notification handles the shared task's roster through the ordinary raid invitation sender.
+    for (const auto& name : tasks_.shared_members)
+        if (!name.empty() && !iequals(name, character_) && !raid_.is_member(name)) raid_invite(name);
 }
 
 void GameConnection::answer_raid_invite(bool accept) {
@@ -2228,24 +2254,34 @@ void GameConnection::handle_social(Op op, const AppPacket& p) {
                 m.class_ = u->class_;
                 m.level = u->level;
                 m.group_leader = u->group_leader != 0;
+                // EQEmu moves a member between groups with a remove/add pair, retaining its raid delegates.
+                m.main_assist = std::any_of(leadership_.raid_assist_names.begin(), leadership_.raid_assist_names.end(),
+                                           [&](const std::string& name) { return iequals(name, m.name); });
+                m.marker = std::any_of(leadership_.raid_marker_names.begin(), leadership_.raid_marker_names.end(),
+                                      [&](const std::string& name) { return iequals(name, m.name); });
                 if (raid_.add(m) && had && !iequals(m.name, me)) system(5059, {m.name});
                 break;
             }
             case kRaidRemoveMember:
                 // CRaid::DeleteRaidMember @0x47e6c0: "%1 has left the raid."
+                // A group move uses this same remove before its add. Delegate-clear packets revoke actual raid
+                // roles; Disband/NoRaid below clear the local character's raid state.
                 if (raid_.remove(g.player_name) && !iequals(g.player_name, me)) system(5063, {g.player_name});
                 break;
             case kRaidDisband:
                 if (raid_.active) system(5062); // You were removed from the raid.
                 raid_.clear();
+                reset_raid_leadership();
                 break;
             case kRaidCreate:
+                ++raid_.generation;
                 raid_.active = true;
                 raid_.leader = g.leader_name.empty() ? g.player_name : g.leader_name;
                 raid_.id = g.raid_id; // CRaid::RaidCreated: raidId from +0x44
                 break;
             case kRaidNoRaid:
                 raid_.clear();
+                reset_raid_leadership();
                 break;
             case kRaidLock:
                 raid_.locked = true;

@@ -191,7 +191,8 @@ AppPacket encode(const GroupLeadershipUpdate& v); // server direction, for tests
 // OP_DelegateAbility (0x76b8, 92 bytes, DelegateAbility_Struct): u32 ability (1 mark NPC, 2 main assist), u32 member
 // number, u32 action (1 removes), 2 × u32, u32 the delegate's spawn id, u32, char[64] its name. OP_RaidDelegateAbility
 // (0x2b33) is the same 92 bytes with the raid's abilities (3 main assist, 4 marker, 5 the third set, CRaid_
-// SetMemberWaypointer's); the member number indexes the raid's three of each.
+// SetMemberWaypointer's). EQEmu numbers live assist slots 1..3, but sends 0 for its zone-in assist resend and all
+// markers; names/entity IDs identify delegates, and a zero-number assist does not establish a slot number.
 // The client sends both with the ability and the name only (Leadership_ActivateAbility 4 / 5: OP_DelegateAbility 1 /
 // 2 with the target's name; Send_OP_RaidDelegateAbility @0x55e5b0: the ability and the member's name; the original
 // leaves +8 and +0x18 as stack bytes, 0 here).

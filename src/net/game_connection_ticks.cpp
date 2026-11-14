@@ -88,8 +88,14 @@ void GameConnection::update_player_consciousness(bool allow_knockout) {
     }
 }
 
+game::LeadershipBonuses GameConnection::leadership_bonuses() const {
+    return game::leadership_passive_bonuses(leadership_.active_ranks,
+        has_gates_of_discord() && group_has_players(3), has_gates_of_discord() && raid_has_players(18));
+}
+
 game::mechanics::LiveState GameConnection::live_state() const {
     game::mechanics::LiveState live;
+    live.leadership = leadership_bonuses();
     live.level = pstatus_.level;
     live.pvp_rules = pvp_rules_;
     live.class_mask = server_class_mask(); // the server extension's mask (NMS); 0 = the profile class only

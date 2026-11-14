@@ -45,6 +45,7 @@
 #include "game/eq_names.h"
 #include "game/eq_strings.h"
 #include "game/group.h"
+#include "game/leadership_bonuses.h"
 #include "game/pet_buttons.h"
 #include "game/social.h"
 #include "game/interact.h"
@@ -1237,6 +1238,8 @@ public:
         std::uint32_t group_marker = 0, group_assist = 0;
         std::array<std::uint32_t, 3> raid_assists{}, raid_markers{}, raid_waypointers{}, group_marks{}, raid_marks{};
         std::array<std::string, 3> raid_assist_names;
+        std::array<std::string, 3> raid_marker_names;
+        std::array<bool, 3> raid_assist_slots_known{};
         std::array<std::uint32_t, 4> assist_targets{};
     };
     const Leadership& leadership() const { return leadership_; }
@@ -1563,6 +1566,7 @@ public:
     // What the character sheet is built from besides the profile, inventory and buffs (game_connection_ticks.cpp):
     // the level, the pools as the server sent them and the ticks moved them, sitting, hunger, auto attack.
     game::mechanics::LiveState live_state() const;
+    game::LeadershipBonuses leadership_bonuses() const;
     std::int32_t drunkenness() const { return drunkenness_; }
     std::uint32_t drunkenness_updates() const { return drunkenness_updates_; }
     std::uint32_t drunkenness_motion_updates() const { return drunkenness_motion_updates_; }
@@ -2292,6 +2296,10 @@ public:
     bool guild_world_invites() const { return guild_world_invites_; }
     // /raidinvite [name] (Cmd_raidinvite @0x4de470): invites the name or, without one, the targeted player.
     void raid_invite(const std::string& args);
+    // The raid window's roster invitations: invite expedition/shared task members into the raid, skipping members
+    // already present and the local character. Each invitation uses the ordinary raid protocol and server checks.
+    void raid_invite_expedition();
+    void raid_invite_shared_task();
     // CRaid::SendInviteResponse @0x47d700: /raidaccept and /raiddecline.
     void answer_raid_invite(bool accept);
     // /raiddisband and the raid window's Leave: leave the raid, or for its leader remove the raid target (OP_RaidInvite
@@ -2322,6 +2330,9 @@ public:
     void raid_delegate_ability(std::uint32_t ability, const std::string& member);
     // The raid window's Find PC (Leadership_FindPathToPlayer on the raid target).
     void raid_find_path_to_target();
+    void reset_raid_leadership();
+    void reset_group_leadership();
+    void forget_leadership_spawn(std::uint32_t id);
     // RaidOptionsWindow's open flag.
     struct RaidOptions {
         bool open = false;

@@ -3,7 +3,7 @@
 --   Leadership   group and raid leadership points and the experience toward the next one at the top, the switch
 --                for earning leadership experience (the window's On / Off), the abilities of one kind (LB / RB: the
 --                group's or the raid's list, LEList1 / LEList2) with their rank and the next rank's cost, and the
---                selected one's description with Purchase (X too), Group Mentoring and Done.
+--                selected one's description with Purchase (X too), hotkey creation, Group Mentoring and Done.
 --   Mentoring    the protege (the window's drop-down), the share of experience to give (D-pad left / right on it,
 --                LB / RB ten; the window's slider) and Accept.
 -- Rows, buttons, the drop-down and the slider are the stock windows' children, so the game decides what each does.
@@ -11,6 +11,7 @@ local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local CH = dofile("lib/child.lua")
+local AS = dofile("lib/assign.lua")
 local TB = dofile("lib/textbox.lua")
 local C = T.C
 
@@ -97,21 +98,40 @@ ui.window("Leadership", function()
     local bh = T.px(76)
     local buttons = {
       { "LEW_PurchaseButton", "Purchase", "The next rank of the selected ability", true },
+      { "LEW_HotkeyButton1", "Create Hotkey 1", "Place the selected ability on a hot bar" },
+      { "LEW_HotkeyButton2", "Create Hotkey 2", "Place the selected ability on a hot bar" },
+      { "LEW_HotkeyButton3", "Create Hotkey 3", "Place the selected ability on a hot bar" },
       { "LEW_GroupMentoring", "Group Mentoring", "Give experience to a group member" },
       { "LEW_OnButton", "Earn leadership experience", "Part of your experience goes to leadership" },
       { "LEW_OffButton", "Stop earning it", "Leadership earns no experience" },
       { "LEW_DoneButton", "Done", nil },
     }
-    local by = y1 - #buttons * (bh + T.px(10)) + T.px(10)
+    local by = ly + math.min(T.px(170), (y1 - ly) * 0.28)
     TB.draw(eq.WindowText(LW, "LEW_Description") or "", rx0, ly, x1, by - T.px(16), desc)
+    ui.SetCursorPos(rx0 - wx, by - wy)
+    -- Navigation scrolls the selected action into view, even on a smaller display.
+    ui.BeginChild("##leadershipactions", rw, y1 - by, false)
+    local ax, ay = ui.GetCursorScreenPos()
+    local actionW = ui.GetContentRegionAvail()
+    by = ay
     for k, b in ipairs(buttons) do
-      ui.SetCursorPos(rx0 - wx, by - wy)
+      ui.SetCursorScreenPos(ax, by)
       W.sideBefore(side, k)
       local on = CH.checked(LW, b[1])
-      CH.button(LW, b[1], b[2], rw, bh, { sub = on and "(now)" or b[3], align = 0, primary = b[4] or on, keep = true })
+      local tip = eq.ChildTooltip(LW, b[1]) or ""
+      local opts = { sub = on and "(now)" or (tip ~= "" and tip or b[3]), align = 0, primary = b[4] or on, keep = true }
+      if b[1]:find("LEW_HotkeyButton", 1, true) == 1 then
+        opts.disabled = not CH.enabled(LW, b[1])
+        if T.button("##" .. LW .. b[1], b[2], actionW, bh, opts, pad) then
+          AS.start(tip ~= "" and tip or b[2], function() eq.ClickChild(LW, b[1], "left") return true end, "Leadership")
+        end
+      else
+        CH.button(LW, b[1], b[2], actionW, bh, opts)
+      end
       W.sideAfter(side, k, #buttons, lists[tab])
       by = by + bh + T.px(10)
     end
+    ui.EndChild()
   end
   if W.finish() then eq.ShowWindow(LW, false) end
 end)

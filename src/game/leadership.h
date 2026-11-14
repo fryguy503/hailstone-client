@@ -1,9 +1,9 @@
 #pragma once
 
-// Leadership abilities (the leadership window). EQEmu's indexes, costs and experience rule (zone/aa.h
-// LeadershipAACosts, common/features.h): 0..15 group abilities, 16..31 raid ones, at most 6 ranks, a cost per
-// rank (0: no further rank); a group point takes 1000 experience, a raid point 2000. The original's CLeadershipWnd
-// table is not decoded: the names are EQEmu's, written out.
+// Leadership abilities: RoF2's trainable indexes and rank progression (LeadershipAbility constructor @0x55d8e0),
+// 0..15 group and 16..31 raid, at most six ranks. Unavailable waypoint/legacy abilities are omitted. EQEmu's
+// common/features.h supplies the experience scale: 1000 per group point, 2000 per raid point. The server validates
+// purchases; older EQEmu cost tables differ from RoF2 for some indexes.
 
 #include <array>
 #include <cstdint>
@@ -15,7 +15,7 @@ inline constexpr int kLeadershipAbilities = 32, kLeadershipRanks = 6, kFirstRaid
 inline constexpr double kGroupLeadershipExpPerPoint = 1000, kRaidLeadershipExpPerPoint = 2000;
 
 struct LeadershipAbility {
-    std::string_view name; // empty: no such ability (EQEmu's placeholders)
+    std::string_view name; // empty: no trainable RoF2 ability
     std::array<std::uint8_t, kLeadershipRanks> costs;
 };
 const LeadershipAbility& leadership_ability(int index);
@@ -32,7 +32,7 @@ std::uint32_t leadership_next_cost(int index, std::uint32_t rank);
 // the leadership window's hot buttons read them: how many hot buttons the ability has (+8: 3 for the marks and
 // the main assists, else 1) and the three string ids of its hot button text (+0xc, +0x10, +0x14; 0 none).
 struct LeadershipHotButtonDef {
-    int count = 1;
+    int count = 0;
     std::array<std::uint32_t, 3> words{};
 };
 const LeadershipHotButtonDef& leadership_hot_button_def(int ability);

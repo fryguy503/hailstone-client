@@ -1268,6 +1268,10 @@ public:
         } else if (int n = hotkey_button(id)) {
             // CLeadershipWnd_UpdateAbilityDescription: no ability selected disables the three.
             out.enabled = selected_ >= 0 && host.conn->leadership_hot_button_enabled(selected_, n);
+            if (selected_ >= 0 && n <= game::leadership_hot_button_def(selected_).count &&
+                !game::leadership_passive(selected_))
+                out.tooltip = host.conn->leadership_hot_button_label(selected_, n) +
+                              ": pick up this ability and place it on a hot bar.";
         }
     }
 
@@ -1315,7 +1319,7 @@ public:
         else if (int n = hotkey_button(id)) {
             // CLeadershipWnd::WndNotification @0x6b7bf0: the selected ability as a hot button on the cursor (type 11,
             // ability * 8 + n, its text).
-            if (selected_ < 0 || host.cursor_button) return true;
+            if (selected_ < 0 || host.cursor_button || !c.leadership_hot_button_enabled(selected_, n)) return true;
             game::HotButton b;
             b.type = game::HotButtonType::Leadership;
             b.slot = game::leadership_hot_button_value(selected_, n);

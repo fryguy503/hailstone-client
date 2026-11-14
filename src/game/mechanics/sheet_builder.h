@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "game/mechanics/character_sheet.h"
+#include "game/leadership_bonuses.h"
 
 namespace hailstone::net {
 struct PlayerProfile;
@@ -25,6 +26,7 @@ struct WorldState;
 namespace mechanics {
 
 struct LiveState {
+    LeadershipBonuses leadership;
     std::int32_t level = 0;            // the current level (OP_LevelUpdate), 0 = the profile's
     std::uint32_t class_mask = 0;      // the server extension's class mask (bit c-1 = class c; 0 = the profile's)
     std::uint32_t focus_classes = 0;   // GameConnection::focus_class_mask (bit c-1; 0 = the stock focus class rules)

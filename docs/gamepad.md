@@ -223,6 +223,10 @@ of at least 20 px at 1080p, targets of at least 48 px, and every action reachabl
   like; shift gives capitals and the keys' second characters, `! @ # $ % ^ & * ( )` over the digits; the windows'
   smaller keyboards, lib/keyboard.lua, have the same keys), confirmation dialogs (A / B), and Options > Gamepad (the bindings, dead zone, camera speed and
   inversion).
+- **Raid** (raid.lua): right-click a member or press Y on the focused row for the shared member menu, including
+  Main Assist, Mark NPC delegation, Find PC, leadership and looter actions. The selected member's Member actions
+  button opens the same menu. A chooses, B closes; the group picker, tell and note controls remain beside the
+  roster, and raid-wide controls, including Invite Expedition and Invite Task, remain above it.
 - **Abilities, skills and AAs** (abilities.lua, skills.lua, aa.lua): the active discipline above the combat ability
   list shows its remaining duration to the second and a draining bar; click its icon or press LB to end it (the icon
   is left out of the pad's navigation, so the first focus is the list and A never ends the discipline).

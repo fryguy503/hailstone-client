@@ -42,6 +42,7 @@ public:
     CastQueries(GameConnection& c, cast::State& st, std::uint8_t) : c_(c), st_(st) {
         if (c.profile_) {
             game::mechanics::LiveState live;
+            live.leadership = c.leadership_bonuses();
             live.drunkenness = c.drunkenness_;
             live.owner_status = c.pstatus_.owner_status;
             live.level = c.pstatus_.level;

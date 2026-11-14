@@ -2088,6 +2088,7 @@ int ListClick(lua_State* L) {
         lua_pushboolean(L, 1);
         return 1;
     }
+    if (right) note_click_rect(m.host);
     lua_pushboolean(L, w && w->list_click(m.host, luaL_checkstring(L, 2), static_cast<int>(luaL_checkinteger(L, 3)),
                                           right, column));
     return 1;

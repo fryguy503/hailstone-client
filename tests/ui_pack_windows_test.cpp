@@ -4,10 +4,12 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -3224,6 +3226,256 @@ TEST_CASE("UI packs (modern): the raid leader drags a member onto another group"
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
     }
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("UI packs: raid member context menus and leadership hotkeys are reachable through drawn controls") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        const bool modern = std::string_view(pack) == "modern";
+        fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        hailstone::test::ScratchDir scratch("ui_pack_raid_leadership_test");
+        fs::path dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(src, dir / pack, fs::copy_options::recursive);
+        std::ofstream(dir / "UI_Test_Server.ini") << "[Tips]\nShowTips=0\nShowTOTD=0\n";
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        {
+            Session s(dir, pack);
+            Config gamepad_config;
+            app::Gamepad gamepad(gamepad_config, {});
+            s.host.gamepad = &gamepad;
+            auto hot_buttons = std::make_unique<game::HotButtonStore>();
+            s.host.hot_buttons = hot_buttons.get();
+            s.host.set_hot_button = [&](int bar, int button, const game::HotButton& value) {
+                hot_buttons->current(bar, button) = value;
+            };
+            hailstone::test::Rig rig;
+            REQUIRE(rig.to_zone());
+            auto& conn = rig.conn;
+            s.host.conn = &conn;
+            const std::string me = conn.character_name();
+            net::RaidUpdate raid;
+            raid.general.action = net::kRaidAddMember;
+            raid.general.leader_name = me;
+            raid.class_ = 1;
+            raid.level = 60;
+            for (int i = 0; i < 18; ++i) {
+                raid.general.player_name = i ? "Member" + std::to_string(i) : me;
+                raid.general.parameter = static_cast<std::uint32_t>(i / 6);
+                conn.receive_zone_packet_for_test(net::encode_raid_update(raid));
+            }
+            conn.set_raid_target("Member1");
+            lua_State* L = s.lua.state();
+            auto run = [&](const std::string& code) {
+                INFO(code);
+                REQUIRE(luaL_dostring(L, code.c_str()) == LUA_OK);
+            };
+            // Record the real controls' rectangles; clicks below are mouse input, never direct ClickChild calls.
+            run(R"lua(
+                controls, memberPoints = {}, {}
+                local button, invisible, menuItem, drawText = ui.Button, ui.InvisibleButton, ui.MenuItem, ui.DrawText
+                local function record(id)
+                  controls[id] = { ui.GetItemRect() }
+                end
+                ui.Button = function(id, ...)
+                  local clicked = button(id, ...)
+                  record(id)
+                  return clicked
+                end
+                ui.InvisibleButton = function(id, ...)
+                  local clicked = invisible(id, ...)
+                  record(id)
+                  return clicked
+                end
+                ui.MenuItem = function(label, ...)
+                  local clicked = menuItem(label, ...)
+                  controls['menu.' .. label] = { ui.GetItemRect() }
+                  return clicked
+                end
+                ui.DrawText = function(...)
+                  local x, y, text = select(1, ...), select(2, ...), select(7, ...)
+                  if text == 'Member2' then memberPoints[text] = {x + 3, y + 3} end
+                  if text == 'Main Assist' or text == 'Mark NPC' then
+                    controls['menu.' .. text] = { ui.GetItemRect() }
+                  end
+                  return drawText(...)
+                end
+                ui.SetSetting('hud.size.RaidWindow', '1000,700')
+                ui.SetSetting('test.pos.RaidWindow', '20,20')
+                eq.ShowWindow('RaidWindow', true)
+            )lua");
+            s.frames(4);
+            // The gamepad pack's initial help tip covers the action column; dismiss unrelated onboarding first.
+            run("eq.ShowWindow('TipWindow', false)");
+            s.frames(2);
+            auto rectangle = [&](const std::string& id) {
+                lua_getglobal(L, "controls");
+                lua_getfield(L, -1, id.c_str());
+                REQUIRE(lua_istable(L, -1));
+                ImVec4 r;
+                float* fields[] = {&r.x, &r.y, &r.z, &r.w};
+                for (int i = 0; i < 4; ++i) {
+                    lua_rawgeti(L, -1, i + 1);
+                    *fields[i] = static_cast<float>(lua_tonumber(L, -1));
+                    lua_pop(L, 1);
+                }
+                lua_settop(L, 0);
+                return r;
+            };
+            auto mouse_click = [&](ImVec2 at, int button) {
+                auto& io = ImGui::GetIO();
+                io.AddMousePosEvent(at.x, at.y);
+                s.frames(1);
+                io.AddMouseButtonEvent(button, true);
+                s.frames(1);
+                io.AddMouseButtonEvent(button, false);
+                s.frames(2);
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            };
+            auto click = [&](const std::string& id) {
+                const ImVec4 r = rectangle(id);
+                mouse_click(ImVec2((r.x + r.z) / 2, (r.y + r.w) / 2), ImGuiMouseButton_Left);
+            };
+            auto member_menu = [&] {
+                lua_getglobal(L, "memberPoints");
+                lua_getfield(L, -1, "Member2");
+                REQUIRE(lua_istable(L, -1));
+                lua_rawgeti(L, -1, 1);
+                const float x = static_cast<float>(lua_tonumber(L, -1));
+                lua_pop(L, 1);
+                lua_rawgeti(L, -1, 2);
+                const float y = static_cast<float>(lua_tonumber(L, -1));
+                lua_settop(L, 0);
+                mouse_click(ImVec2(x, y), ImGuiMouseButton_Right);
+                REQUIRE(s.host.menus.size() == 1);
+                REQUIRE_FALSE(s.host.menus[0].rows.empty());
+                CHECK(s.host.menus[0].rows.front().text == "Member2");
+            };
+            const std::array<const char*, 3> control_ids = modern ? std::array<const char*, 3>{
+                     "Invite Expedition##RAID_InviteExpedButton", "Invite Task##RAID_InviteTaskButton",
+                     "Member actions##RAID_MemberActionsButton"}
+                                        : std::array<const char*, 3>{"##top6", "##top7", "##memberactions"};
+            for (const char* id : control_ids)
+                CHECK(rectangle(id).z > 0);
+            run(modern ? "assert(controls['Main Assist##RAID_MainAssistButton'] == nil)"
+                       : "assert(controls['##assist'] == nil)");
+            auto delegates = [&] {
+                std::vector<net::DelegateAbility> result;
+                for (const auto& p : rig.server.zone_log)
+                    if (p.opcode == net::to_wire(net::Op::RaidDelegateAbility))
+                        if (auto d = net::decode_delegate_ability(p)) result.push_back(*d);
+                return result;
+            };
+            // A different member was selected first: opening the menu must use the row under the right click.
+            member_menu();
+            const auto disabled_assist = std::find_if(s.host.menus[0].rows.begin(), s.host.menus[0].rows.end(),
+                                                     [](const auto& row) { return row.text == "Main Assist"; });
+            REQUIRE(disabled_assist != s.host.menus[0].rows.end());
+            CHECK_FALSE(disabled_assist->enabled);
+            CHECK(delegates().empty());
+            s.host.menus.clear();
+            s.frames(2);
+            raid = {};
+            raid.general.action = net::kRaidSetLeader;
+            raid.general.player_name = raid.general.leader_name = me;
+            raid.leadership[16] = 3;
+            raid.leadership[0x13] = raid.leadership[0x14] = raid.leadership[0x1c] = 1;
+            conn.receive_zone_packet_for_test(net::encode_raid_update(raid));
+            s.frames(2);
+            CHECK(conn.leadership_ability_active(0x13, 1));
+            CHECK(conn.raid().leader == me);
+            conn.set_raid_target("Member1");
+            member_menu();
+            REQUIRE(std::any_of(s.host.menus[0].rows.begin(), s.host.menus[0].rows.end(), [](const auto& row) {
+                return row.text == "Main Assist" && row.enabled;
+            }));
+            click("menu.Main Assist");
+            REQUIRE(rig.until([&] { return delegates().size() == 1; }));
+            CHECK(delegates()[0].ability == 3);
+            CHECK(delegates()[0].name == "Member2");
+            member_menu();
+            click("menu.Mark NPC");
+            REQUIRE(rig.until([&] { return delegates().size() == 2; }));
+            CHECK(delegates()[1].ability == 4);
+            CHECK(delegates()[1].name == "Member2");
+            click(modern ? "Member actions##RAID_MemberActionsButton" : "##memberactions");
+            REQUIRE(s.host.menus.size() == 1);
+            CHECK(s.host.menus[0].rows.front().text == "Member2");
+            s.host.menus.clear();
+            s.frames(2);
+
+            // Disabling context menus restores direct member controls in each shipped pack.
+            conn.set_client_option_for_session(game::ClientOption::ContextMenus, 0);
+            run("controls = {}");
+            s.frames(3);
+            run(modern ? "assert(controls['Member actions##RAID_MemberActionsButton'] == nil)"
+                       : "assert(controls['##memberactions'] == nil)");
+            click(modern ? "Main Assist##RAID_MainAssistButton" : "##assist");
+            REQUIRE(rig.until([&] { return delegates().size() == 3; }));
+            CHECK(delegates()[2].ability == 3);
+            CHECK(delegates()[2].name == "Member2");
+            click(modern ? "Mark NPC##RAID_MarkNPCButton" : "##marker");
+            REQUIRE(rig.until([&] { return delegates().size() == 4; }));
+            CHECK(delegates()[3].ability == 4);
+            CHECK(delegates()[3].name == "Member2");
+            raid = {};
+            raid.general.action = net::kRaidSetLootType;
+            raid.general.parameter = 3;
+            conn.receive_zone_packet_for_test(net::encode_raid_update(raid));
+            if (!modern) {
+                const ImVec4 r = rectangle("##assist");
+                auto& io = ImGui::GetIO();
+                io.AddMousePosEvent((r.x + r.z) / 2, (r.y + r.w) / 2);
+                s.frames(1);
+                io.AddMouseWheelEvent(0, -8);
+                s.frames(3);
+            }
+            click(modern ? "Add Looter##RAID_AddLooterButton" : "##addlooter");
+            const auto add_looter = net::encode(net::RaidGeneral{net::kRaidCmdAddLooter, me, "Member2"});
+            REQUIRE(rig.until([&] {
+                return std::any_of(rig.server.zone_log.begin(), rig.server.zone_log.end(), [&](const auto& packet) {
+                    return packet.opcode == add_looter.opcode && packet.data == add_looter.data;
+                });
+            }));
+            conn.set_client_option_for_session(game::ClientOption::ContextMenus, 1);
+
+            run("eq.ShowWindow('RaidWindow', false) eq.ShowWindow('LeadershipWindow', true)"
+                " eq.ListInfo('LeadershipWindow', 'LEList2') eq.ListClick('LeadershipWindow', 'LEList2', 0, 'left')");
+            s.frames(20); // let the gamepad window's focus-settling interval finish before pressing its actions
+            for (int n = 1; n <= 3; ++n) {
+                CAPTURE(n);
+                const std::string id = modern ? "Create Hotkey " + std::to_string(n) + "##LEW_HotkeyButton" + std::to_string(n)
+                                             : "##LeadershipWindowLEW_HotkeyButton" + std::to_string(n);
+                run("assert(eq.ChildState('LeadershipWindow', 'LEW_HotkeyButton" + std::to_string(n) + "'))");
+                click(id);
+                REQUIRE(s.host.cursor_button);
+                CHECK(s.host.cursor_button->type == game::HotButtonType::Leadership);
+                CHECK(s.host.cursor_button->slot == 16 * 8 + n);
+                if (modern) {
+                    s.host.cursor_button.reset();
+                } else {
+                    run("assert(GPSTATE.assign and GPSTATE.assign.from == 'Leadership')");
+                    s.frames(20);
+                    click("##slot"); // the final cross-hotbar slot drawn by the assignment picker
+                    CHECK_FALSE(s.host.cursor_button);
+                    run("assert(not GPSTATE.assign)");
+                    CHECK(hot_buttons->current(0, 7).type == game::HotButtonType::Leadership);
+                    CHECK(hot_buttons->current(0, 7).slot == 16 * 8 + n);
+                    s.frames(20);
+                }
+            }
+            // A passive selection disables all three creation controls instead of making inert hot buttons.
+            run("eq.ListInfo('LeadershipWindow', 'LEList2') eq.ListClick('LeadershipWindow', 'LEList2', 1, 'left')");
+            s.frames(2);
+            click(modern ? "Create Hotkey 1##LEW_HotkeyButton1" : "##LeadershipWindowLEW_HotkeyButton1");
+            CHECK_FALSE(s.host.cursor_button);
+        }
+        ImGui::DestroyContext(ctx);
+    }
 }
 
 TEST_CASE("UI packs (modern): the Options window's Textures section picks the texture pack and starts the studio") {

@@ -45,6 +45,11 @@ void build_sheet_into(CharacterSheet& s, const net::PlayerProfile& p, const Inve
     s.focus_classes = live.focus_classes;
     s.skill_rules = live.skill_rules;
     s.vitals = live.vitals;
+    s.leadership_active = (p.expansions & 0x40) != 0;
+    s.leadership_hp_bonus = live.leadership.hp;
+    s.leadership_mana_bonus = live.leadership.mana;
+    s.leadership_hp_regen_bonus = live.leadership.hp_regen;
+    s.leadership_offense_bonus = live.leadership.offense;
     s.level = live.level > 0 ? live.level : p.level;
     // PcBase_GetHighestLevel: the profile carries no separate value in EQEmu's RoF2 encoder; the current level.
     s.highest_level = s.level;

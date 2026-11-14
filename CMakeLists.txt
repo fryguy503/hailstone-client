@@ -500,6 +500,7 @@ add_library(hailstone_engine STATIC
   src/game/trade_rules.cpp
   src/game/tradeskill.cpp
   src/game/leadership.cpp
+  src/game/leadership_bonuses.cpp
   src/game/chat_input.cpp
   src/game/hot_button_press.cpp
   src/game/hot_button_menu.cpp
@@ -1169,6 +1170,9 @@ if(HAILSTONE_BUILD_TESTS)
     tests/spell_sets_test.cpp
     tests/hot_button_sets_test.cpp
     tests/group_commands_test.cpp
+    tests/leadership_bonuses_test.cpp
+    tests/leadership_spell_awareness_test.cpp
+    tests/raid_invites_test.cpp
     tests/group_search_test.cpp
     tests/chat_ui_test.cpp
     tests/inventory_bandolier_ui_test.cpp

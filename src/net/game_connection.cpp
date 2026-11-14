@@ -881,6 +881,7 @@ void GameConnection::smooth(float dt, const game::WorldState::FloorFn& floor,
 void GameConnection::smooth_vehicles(float dt) { world_.smooth_vehicles(dt, steady_seconds()); }
 
 void GameConnection::apply_spawn(const Spawn& s) {
+    if (world_.spawns.contains(s.spawn_id)) forget_leadership_spawn(s.spawn_id);
     game::Spawn& out = world_.spawns[s.spawn_id];
     ++world_.spawn_set_serial; // a full same-id replacement also retires the previous identity
     out.id = s.spawn_id;
@@ -1432,6 +1433,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
             // (CTradeWnd_CancelAndClose, which sends OP_CancelTrade). EQEmu tells only the player who left.
             if (trade_ && trade_->partner_id == *id) trade_cancel();
             spawn_leaving(*id);
+            forget_leadership_spawn(*id);
             if (world_.spawns.erase(*id)) ++world_.spawn_set_serial;
             forget_pet_spawn(*id);
             // msgEQRmPlayer @0x4b8380: the target leaving stops auto attack and clears the target (no OP_TargetMouse).

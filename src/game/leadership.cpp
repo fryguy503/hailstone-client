@@ -8,11 +8,11 @@ namespace hailstone::game {
 namespace {
 
 const std::array<LeadershipAbility, kLeadershipAbilities> kAbilities = {{
-    {"Mark NPC", {1, 2, 3, 0, 0, 0}},
+    {"Mark NPC", {3, 4, 5, 0, 0, 0}},
     {"NPC Health", {2, 0, 0, 0, 0, 0}},
-    {"Delegate Main Assist", {4, 0, 0, 0, 0, 0}},
+    {{}, {0, 0, 0, 0, 0, 0}}, // Mark Waypoint: unavailable in RoF2
+    {{}, {0, 0, 0, 0, 0, 0}}, // legacy group main-assist training: unavailable in RoF2
     {"Delegate Mark NPC", {4, 0, 0, 0, 0, 0}},
-    {"Delegate Mark NPC (alternate)", {4, 0, 0, 0, 0, 0}},
     {{}, {0, 0, 0, 0, 0, 0}},
     {"Inspect Buffs", {4, 6, 0, 0, 0, 0}},
     {{}, {0, 0, 0, 0, 0, 0}},
@@ -26,9 +26,9 @@ const std::array<LeadershipAbility, kLeadershipAbilities> kAbilities = {{
     {{}, {0, 0, 0, 0, 0, 0}},
     {"Mark NPC", {5, 6, 7, 0, 0, 0}},
     {"NPC Health", {4, 0, 0, 0, 0, 0}},
+    {{}, {0, 0, 0, 0, 0, 0}}, // Mark Waypoint: unavailable in RoF2
     {"Delegate Main Assist", {6, 7, 8, 0, 0, 0}},
     {"Delegate Mark NPC", {6, 6, 6, 0, 0, 0}},
-    {"Delegate Mark NPC (alternate)", {6, 6, 6, 0, 0, 0}},
     {{}, {0, 0, 0, 0, 0, 0}},
     {{}, {0, 0, 0, 0, 0, 0}},
     {"Spell Awareness", {8, 0, 0, 0, 0, 0}},
@@ -50,19 +50,13 @@ const std::array<LeadershipHotButtonDef, kLeadershipAbilities> kHotButtons = [] 
         t[static_cast<std::size_t>(a)] = {count, {w0, w1, w2}};
     };
     set(0, 3, 0x2190, 0x2191, 0x2192);    // Group Mark NPC
-    set(2, 3, 0x2198, 0x2199, 0x219a);
-    set(3, 1, 0x219b, 0x219c, 0x219d);
     set(4, 1, 0x21ff, 0x2200, 0x2201);
-    set(5, 1, 0x2209, 0x220a, 0x220b);
     set(6, 1, 0x219e, 0x219f, 0x21a0);
     set(13, 1, 0x21a1, 0x21a2, 0x21a3);
     set(14, 1, 0x2195, 0x2196, 0x2197);
-    set(15, 1, 0x21a4, 0x21a5, 0x21a6);
     set(16, 3, 0x21da, 0x21db, 0x21dc);   // Raid Mark NPC
-    set(18, 3, 0x21ae, 0x21af, 0x21b0);
     set(19, 1, 0x21df, 0x21e0, 0x21e1);   // Raid Main Assist
     set(20, 1, 0x2204, 0x2205, 0x2206);   // Raid Delegate Mark
-    set(21, 1, 0x220e, 0x220f, 0x2210);
     set(28, 1, 0x21fa, 0x21fb, 0x21fc);   // Raid Find PC
     set(29, 1, 0x21b3, 0x21b4, 0x21b5);
     return t;

@@ -300,7 +300,7 @@ AppPacket encode(const GroupLeadershipUpdate& v) {
 }
 
 std::optional<DelegateAbility> decode_delegate_ability(const AppPacket& p) {
-    if (p.data.size() < 28) return std::nullopt;
+    if (p.data.size() < 92) return std::nullopt;
     return decode_with(p, [](ByteReader& r) {
         DelegateAbility v;
         v.ability = r.le<std::uint32_t>();
@@ -309,7 +309,7 @@ std::optional<DelegateAbility> decode_delegate_ability(const AppPacket& p) {
         r.skip(8);
         v.spawn_id = r.le<std::uint32_t>();
         r.skip(4);
-        v.name = r.fixed_string(std::min<std::size_t>(64, r.remaining()));
+        v.name = r.fixed_string(64);
         return v;
     });
 }

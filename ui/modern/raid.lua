@@ -1,6 +1,7 @@
 -- Raid: replaces the game's RaidWindow. The raid as twelve group cards side by side (they reflow to the window's
 -- width), the players in no group in a strip above them, a summary line (players, average level, the leader,
--- locked or open) with a search that picks players out, and the raid's buttons under the cards. An invitation
+-- locked or open) with a search that picks players out, member actions in a right-click menu, and raid-wide buttons
+-- under the cards. An invitation
 -- shows as a banner with Accept and Decline.
 --
 -- Everything goes through the game's window: the members are its two lists (RAID_PlayerList, the grouped players,
@@ -12,9 +13,8 @@
 -- The game enables the group buttons for the leader of a locked raid only (CRaidWnd::UpdateButtons). So that the
 -- raid leader can always drag, a move asked for while the raid is unlocked presses Lock first and makes the move
 -- once the lock has come back from the server; a strip over the cards says so and holds Lock / Unlock. A drop on a
--- full group (six) is refused here rather than sent (EQEmu ignores it). The stock buttons the window leaves
--- disabled (Main Assist, Mark NPC, Find PC, the task and expedition invites, Remove Leader) are not drawn. The Notes
--- page has the members' notes and the message of the day.
+-- full group (six) is refused here rather than sent (EQEmu ignores it). Leadership and invitation controls follow
+-- the window's permissions and ability ranks. The Notes page has the members' notes and the message of the day.
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -202,7 +202,7 @@ local function memberLine(m, x, y, w, s, raid, needle, drags)
 
   -- a click selects the row in the game's list; right-click is the list's own; a drag carries the member
   if hit and not drag then eq.ListClick(WINDOW, m.list, m.row, "left") end
-  if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
+  if not drag and ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
     eq.ListClick(WINDOW, m.list, m.row, "right")
     T.TakeRightClick()
   end
@@ -218,6 +218,7 @@ local function memberLine(m, x, y, w, s, raid, needle, drags)
     local note = noteOf(m.name)
     if note ~= "" then lines[#lines + 1] = "Note: " .. note end
     if waiting then lines[#lines + 1] = "Moving once the raid is locked..." end
+    if eq.ContextMenus() then lines[#lines + 1] = "Right-click for member actions" end
     if drags then lines[#lines + 1] = "Drag onto another group to move" end
     ui.SetTooltip(table.concat(lines, "\n"))
   end
@@ -360,6 +361,32 @@ local function leaderStrip(s)
   ui.SetCursorScreenPos(x, y + h + 6 * s)
 end
 
+local ACTIONS = {
+  { "RAID_MemberActionsButton", "Member actions", { tooltip = "Open the selected member's actions; right-clicking a member opens the same menu" } },
+  { "RAID_InviteExpedButton", "Invite Expedition", { tooltip = "Invite expedition members who are missing from this raid" } },
+  { "RAID_InviteTaskButton", "Invite Task", { tooltip = "Invite shared task members who are missing from this raid" } },
+  { "RAID_InviteButton", "Invite", { primary = true, tooltip = "Invite your target to the raid" } },
+  { "RAID_OptionsButton", "Options", { tooltip = "The raid's loot type, looters and class colours" } },
+  { "RAID_DumpButton", "Dump", { tooltip = "Write the raid roster with its notes to a file" } },
+  { "RAID_DisbandButton", "Leave", { danger = true, tooltip = "Leave the raid" } },
+}
+-- Context menus can be switched off globally. Keep the member controls usable in that mode.
+local DIRECT_ACTIONS = {
+  { "RAID_MainAssistButton", "Main Assist", { tooltip = "Delegate raid main assist to the selected member" } },
+  { "RAID_MarkNPCButton", "Mark NPC", { tooltip = "Delegate raid target marking to the selected member" } },
+  { "RAID_FindPCButton", "Find PC", { tooltip = "Find a path to the selected raid member" } },
+  { "RAID_MakeLeaderButton", "Make Leader", { tooltip = "Hand the raid lead to your target" } },
+  { "RAID_RemoveLeaderButton", "Remove Leader", { tooltip = "Remove the selected member's group leadership" } },
+  { "RAID_AddLooterButton", "Add Looter", { tooltip = "Let the selected player loot (Raid Looters loot type)" } },
+  { "RAID_RemoveLooterButton", "Remove Looter", { tooltip = "Take the selected player off the looters" } },
+  { "RAID_NoGroupButton", "Ungroup", { tooltip = "Take the selected player out of their group" } },
+}
+for i = 2, #ACTIONS do DIRECT_ACTIONS[#DIRECT_ACTIONS + 1] = ACTIONS[i] end
+local function actionList() return eq.ContextMenus() and ACTIONS or DIRECT_ACTIONS end
+local function actionColumns(w, s)
+  return w >= 680 * s and 4 or (w >= 510 * s and 3 or 2)
+end
+
 local function actions(raid, s)
   local btnH = S.ButtonHeight(s)
   local sel = raid.selected
@@ -372,25 +399,25 @@ local function actions(raid, s)
     ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1,
       sel.level .. " " .. sel.class .. "  -  " .. (sel.group and ("Group " .. sel.group) or "not in a group"))
   end
-  W.ButtonRow(WINDOW, {
-    { "RAID_MakeLeaderButton", "Make Leader", { tooltip = "Hand the raid lead to your target" } },
-    { "RAID_AddLooterButton", "Add Looter", { tooltip = "Let the selected player loot (Raid Looters loot type)" } },
-    { "RAID_RemoveLooterButton", "Remove Looter", { tooltip = "Take the selected player off the looters" } },
-    { "RAID_NoGroupButton", "Ungroup", { tooltip = "Take the selected player out of their group" } },
-  }, btnH)
-  W.ButtonRow(WINDOW, {
-    { "RAID_InviteButton", "Invite", { primary = true, tooltip = "Invite your target to the raid" } },
-    { "RAID_OptionsButton", "Options", { tooltip = "The raid's loot type, looters and class colours" } },
-    { "RAID_DumpButton", "Dump", { tooltip = "Write the raid roster with its notes to a file" } },
-    { "RAID_DisbandButton", "Leave", { danger = true, tooltip = "Leave the raid" } },
-  }, btnH)
+  ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1,
+    eq.ContextMenus() and "Right-click a member for actions." or "Select a member, then choose an action.")
+  local choices = actionList()
+  local cols = actionColumns(ui.GetContentRegionAvail(), s)
+  for first = 1, #choices, cols do
+    local row = {}
+    for i = first, math.min(first + cols - 1, #choices) do row[#row + 1] = choices[i] end
+    W.ButtonRow(WINDOW, row, btnH)
+  end
 end
 
 local function membersPage(raid, s)
   local needle = search:lower()
   leaderStrip(s)
   local btnH = S.ButtonHeight(s)
-  local below = 2 * btnH + 18 * s + (raid.selected and select(2, ui.CalcTextSize("Ag")) + 4 * s or 0)
+  local aw, ah = ui.GetContentRegionAvail()
+  local rows = math.ceil(#actionList() / actionColumns(aw, s))
+  local below = math.min(ah * 0.60, rows * (btnH + 8 * s) + 30 * s + select(2, ui.CalcTextSize("Ag")) + 4 * s +
+    (raid.selected and select(2, ui.CalcTextSize("Ag")) + 4 * s or 0))
   ui.BeginChild("##raidcards", 0, -below, false)
   local x0, y0 = ui.GetCursorScreenPos()
   local aw = ui.GetContentRegionAvail()
@@ -484,7 +511,10 @@ local function membersPage(raid, s)
   end
   ui.EndChild()
   ui.Dummy(0, 2 * s)
+  -- A small resized window scrolls its controls rather than drawing them beyond the dialog.
+  ui.BeginChild("##raidactions", 0, 0, false)
   actions(raid, s)
+  ui.EndChild()
 end
 
 local function notesPage(s)

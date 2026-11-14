@@ -1,8 +1,9 @@
 -- Raid (gamepad pack): stands in for RaidWindow (the raid key, the EQ menu's Raid; an invitation opens it too). The
 -- raid's buttons along the top (accept or decline an invitation, invite the target, leave, lock, the loot options,
 -- the message of the day), the members by group on the left, and the leader's actions for the picked member on the
--- right: move them to a group or out of the groups, make them leader, add or remove them as a looter, set their
--- note (shown in their row). Each is the stock window's own button (eq.ClickChild), shown and enabled as the game
+-- right: open their member menu, send a tell, move them to a group, or set their note (shown in their row).
+-- Right-clicking a member or pressing Y on one opens that same menu. Each is the stock window's own button, shown
+-- and enabled as the game
 -- has it (eq.ChildShown, eq.ChildState); a note goes through the window's note list, note input and Update.
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
@@ -39,7 +40,7 @@ local function readMembers()
       local r = eq.ListRow(RW, l, i)
       if r then
         out[#out + 1] = { list = l, row = i, group = tonumber(r[1] or ""), name = r[2] or "", level = r[3] or "",
-          class = r[4] or "", rank = r[6] or "" }
+          class = r[4] or "", role = r[5] or "", rank = r[6] or "" }
       end
     end
   end
@@ -85,15 +86,15 @@ local function motdLine(w)
   return motdPlain, motdFit
 end
 
--- The stock list row that names `name` now, selected (a click on it when it is not): false when no row does (they
--- left the raid). The picker acts on the member it was opened for, not on whoever the lists select by then.
-local function selectMember(name)
+-- Resolve the named member in the current stock lists before selecting them or opening their menu: cached row
+-- numbers can have changed. The picker also acts on the member it was opened for, even if selection moved.
+local function selectMember(name, button)
   for _, l in ipairs({ "RAID_PlayerList", "RAID_NotInGroupPlayerList" }) do
     local rows, _, sel = eq.ListInfo(RW, l)
     for i = 0, (rows or 0) - 1 do
       local r = eq.ListRow(RW, l, i)
       if r and r[2] == name then
-        if sel ~= i then eq.ListClick(RW, l, i, "left") end
+        if button == "right" or sel ~= i then eq.ListClick(RW, l, i, button or "left") end
         return true
       end
     end
@@ -150,9 +151,12 @@ ui.window("Raid", function()
   local count = eq.WindowText(RW, "RAID_PlayerCountLabel") or "0"
   local avg = eq.WindowText(RW, "RAID_LevelAverageLabel") or "0"
   local inRaid = #list > 0
+  local contextMenus = eq.ContextMenus() ~= false
+  local hints = { { "a", "Select" }, { "b", (state.confirm or picking) and "Cancel" or "Close" } }
+  if contextMenus and inRaid and not state.confirm and not picking then table.insert(hints, 2, { "y", "Member actions" }) end
   if W.begin("Raid", { w = 1720, h = 960, title = "Raid",
         subtitle = inRaid and (count .. " players, average level " .. avg) or "Not in a raid",
-        hints = kb.open and K.HINTS or { { "a", "Select" }, { "b", (state.confirm or picking) and "Cancel" or "Close" } } }) then
+        hints = kb.open and K.HINTS or hints }) then
     local x0, y0, x1, y1, cw = W.area()
     local wx, wy = ui.GetWindowPos()
     if state.confirm then
@@ -191,11 +195,17 @@ ui.window("Raid", function()
       if inRaid and shown("RAID_UnlockButton") then top[#top + 1] = { "RAID_UnlockButton", "Unlock", "Allow invitations" } end
       if inRaid then top[#top + 1] = { "RAID_OptionsButton", "Loot options", "Loot type, looters", false, nil, true } end
       if inRaid then top[#top + 1] = { "##motd", "Set MOTD", "Message of the day" } end
-      local n = math.max(#top, 5)
-      local bw = (cw - (n - 1) * T.px(10)) / n
+      if inRaid then
+        top[#top + 1] = { "RAID_InviteExpedButton", "Invite Expedition", "Expedition members to raid" }
+        top[#top + 1] = { "RAID_InviteTaskButton", "Invite Task", "Shared task members to raid" }
+      end
+      local cols = 5
+      local topRows = math.max(1, math.ceil(#top / cols))
+      local bw = (cw - (cols - 1) * T.px(10)) / cols
       local bh = T.px(84)
       for i, b in ipairs(top) do
-        if i > 1 then ui.SameLine(0, T.px(10)) end
+        if (i - 1) % cols ~= 0 then ui.SameLine(0, T.px(10))
+        else ui.SetCursorPos(x0 - wx, y0 + ((i - 1) // cols) * (bh + T.px(10)) - wy) end
         local child = b[1]
         local on = child == "##motd" and enabled("UpdateMOTDButton") or (child ~= "##motd" and enabled(child))
         if T.button("##top" .. i, b[2], bw, bh, { sub = b[3], align = 0, disabled = not on, primary = b[4] == true }, pad) then
@@ -211,7 +221,7 @@ ui.window("Raid", function()
           end
         end
       end
-      local ly = y0 + bh + T.px(16)
+      local ly = y0 + topRows * (bh + T.px(10)) + T.px(6)
       -- the message of the day
       if inRaid then
         T.font(19)
@@ -244,8 +254,11 @@ ui.window("Raid", function()
         listState.selected = selected
         local visible = math.max(1, math.floor((y1 - ly + T.px(10)) / (T.px(56) + T.px(10))))
         listState.shown = visible
-        local focusedRow = W.list("raid", listState, #list, visible, 56, listW, function(i, rx0, ry0, rx1, ry1)
+        local focusedRow = W.list("raid", listState, #list, visible, 56, listW, function(i, rx0, ry0, rx1, ry1, focused)
           local m = list[i]
+          if contextMenus and ((ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt) or (focused and W.pressed("y"))) then
+            selectMember(m.name, "right")
+          end
           local w = rx1 - rx0
           local col = i == selected and C.accent or C.text
           -- the group as a badge, alternate groups tinted so they read as blocks
@@ -258,13 +271,14 @@ ui.window("Raid", function()
           T.font(22)
           T.textIn(gx1 + T.px(14), ry0, rx0 + w * 0.42, ry1, m.name, col, 0)
           T.textIn(rx0 + w * 0.42, ry0, rx0 + w * 0.72, ry1, m.level .. " " .. m.class, col, 0)
-          local rank = m.rank
+          local role = (m.role:find("A", 1, true) and "MA " or "") .. (m.role:find("M", 1, true) and "MK " or "")
+          local rank = role .. m.rank
           if m.note ~= "" then rank = (rank ~= "" and (rank .. "  ") or "") .. "\"" .. m.note .. "\"" end
           T.textIn(rx0 + w * 0.72, ry0, rx1 - T.px(12), ry1, T.fit(rank, rx1 - T.px(12) - rx0 - w * 0.72), C.dim, 0)
           T.unfont()
-        end, function(i) eq.ListClick(RW, list[i].list, list[i].row, "left") end)
+        end, function(i) selectMember(list[i].name) end)
         W.toSide(side, focusedRow)
-        -- the picked member: the leader's actions
+        -- The picked member's menu and the shortcuts that use the pack's picker or keyboard.
         local rx0 = x0 + listW + T.px(30)
         local rw = x1 - rx0
         local m = selected and list[selected]
@@ -273,10 +287,16 @@ ui.window("Raid", function()
         -- goes down the list, not across; ImGui scores a button just below a row's middle as "down")
         T.draw(rx0, ly - T.px(38), m and (m.name:upper() .. (m.group and ("  GROUP " .. m.group) or "  NO GROUP")) or "SELECT A MEMBER ON THE LEFT", C.dim)
         T.unfont()
-        local ry = ly
+        ui.SetCursorPos(rx0 - wx, ly - wy)
+        ui.BeginChild("##raidactions", rw, y1 - ly, false)
+        local ax, ay = ui.GetCursorScreenPos()
+        local actionW = ui.GetContentRegionAvail()
+        local ry = ay
         local abh = T.px(72)
         local who = m and m.name or ""
         local actions = {
+          { "##memberactions", "Member actions", "Leadership, marking, looters and groups", m ~= nil and enabled("RAID_MemberActionsButton"),
+            function() if selectMember(who) then eq.ClickChild(RW, "RAID_MemberActionsButton", "left") end end },
           { "##tell", "Send a tell", "Opens the chat with /tell", m ~= nil, function() W.chat("/tell " .. who .. " ") end },
           -- (the game moves members only in a locked raid, CRaidWnd::UpdateButtons: for the leader of an unlocked
           -- one this locks it, and the picker's groups light up once the lock is back)
@@ -286,15 +306,6 @@ ui.window("Raid", function()
               if not enabled("RAID_Group1Button") then eq.ClickChild(RW, "RAID_LockButton", "left") end
               picking, pickAt = who, ui.GetTime()
             end },
-          { "##nogroup", "Out of the groups", "Not in any group", enabled("RAID_NoGroupButton"),
-            function() eq.ClickChild(RW, "RAID_NoGroupButton", "left") end },
-          { "##leader", "Make raid leader", "Hand the raid over", enabled("RAID_MakeLeaderButton"), function()
-            state.confirm = { "Make " .. who .. " the raid leader?", function() eq.ClickChild(RW, "RAID_MakeLeaderButton", "left") end }
-          end },
-          { "##addlooter", "Add looter", "May loot for the raid", enabled("RAID_AddLooterButton"),
-            function() eq.ClickChild(RW, "RAID_AddLooterButton", "left") end },
-          { "##removelooter", "Remove looter", "", enabled("RAID_RemoveLooterButton"),
-            function() eq.ClickChild(RW, "RAID_RemoveLooterButton", "left") end },
           -- (the leader's: the window shows the MOTD's Update to the leader only)
           { "##note", "Set note", m and m.note ~= "" and m.note or "Seen by the whole raid",
             m ~= nil and m.noteRow ~= nil and shown("UpdateMOTDButton"),
@@ -303,13 +314,41 @@ ui.window("Raid", function()
               K.open(kb, "Note for " .. who, m.note, 63)
             end },
         }
+        if not contextMenus then
+          -- Turning off context menus keeps the same native actions reachable as direct controls.
+          table.remove(actions, 1)
+          local function memberButton(child)
+            return function() if selectMember(who) then eq.ClickChild(RW, child, "left") end end
+          end
+          local direct = {
+            { "##assist", "Main Assist", "Delegate to the selected member", m ~= nil and enabled("RAID_MainAssistButton"),
+              memberButton("RAID_MainAssistButton") },
+            { "##marker", "Mark NPC", "Delegate target marking", m ~= nil and enabled("RAID_MarkNPCButton"),
+              memberButton("RAID_MarkNPCButton") },
+            { "##findpc", "Find PC", "Find a path to this member", m ~= nil and enabled("RAID_FindPCButton"),
+              memberButton("RAID_FindPCButton") },
+            { "##nogroup", "Out of the groups", "Not in any group", m ~= nil and enabled("RAID_NoGroupButton"),
+              memberButton("RAID_NoGroupButton") },
+            { "##leader", "Make raid leader", "Hand the raid over", m ~= nil and enabled("RAID_MakeLeaderButton"), function()
+              state.confirm = { "Make " .. who .. " the raid leader?", memberButton("RAID_MakeLeaderButton") }
+            end },
+            { "##removeleader", "Remove group leader", "Remove this member's group leadership", m ~= nil and enabled("RAID_RemoveLeaderButton"),
+              memberButton("RAID_RemoveLeaderButton") },
+            { "##addlooter", "Add looter", "May loot for the raid", m ~= nil and enabled("RAID_AddLooterButton"),
+              memberButton("RAID_AddLooterButton") },
+            { "##removelooter", "Remove looter", "", m ~= nil and enabled("RAID_RemoveLooterButton"),
+              memberButton("RAID_RemoveLooterButton") },
+          }
+          for i, action in ipairs(direct) do table.insert(actions, i, action) end
+        end
         for k, a in ipairs(actions) do
-          ui.SetCursorPos(rx0 - wx, ry - wy)
+          ui.SetCursorScreenPos(ax, ry)
           W.sideBefore(side, k)
-          if T.button(a[1], a[2], rw, abh, { sub = a[3] ~= "" and a[3] or nil, disabled = not a[4], align = 0 }, pad) then a[5]() end
+          if T.button(a[1], a[2], actionW, abh, { sub = a[3] ~= "" and a[3] or nil, disabled = not a[4], align = 0 }, pad) then a[5]() end
           W.sideAfter(side, k, #actions, listState)
           ry = ry + abh + T.px(10)
         end
+        ui.EndChild()
       end
     end
   end

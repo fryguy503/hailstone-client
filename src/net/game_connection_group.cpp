@@ -292,6 +292,8 @@ void GameConnection::reset_group_for_zone() {
     // A new zone re-sends the group (RefreshGroupFromDB → OP_GroupUpdateB) and
     // the pets (OP_PetList, the pet's spawn); an open invitation lapses.
     group_.clear();
+    reset_group_leadership();
+    reset_raid_leadership();
     group_.inviter.clear();
     pets_.clear();
     pet_buffs_.clear();
@@ -483,7 +485,10 @@ void GameConnection::handle_group(Op op, const AppPacket& p) {
         StateGroup sg(group_, me, [&](std::uint32_t id, std::vector<std::string> args) { say(id, std::move(args)); });
         bool grouped = group_.active;
         game::handle_group_world_message(grouped, g, sg);
-        if (!grouped) group_.clear();
+        if (!grouped) {
+            group_.clear();
+            reset_group_leadership();
+        }
         break;
     }
     case Op::GroupUpdateB:
@@ -1041,6 +1046,53 @@ bool GameConnection::leadership_command(std::string_view h, const std::string& a
 
 // ---------------------------------------------------------------- leadership abilities
 
+void GameConnection::reset_group_leadership() {
+    std::fill(leadership_.active_ranks.begin(), leadership_.active_ranks.begin() + game::kFirstRaidAbility, 0u);
+    leadership_.group_marker = 0;
+    leadership_.group_assist = 0;
+    leadership_.group_marks = {};
+    leadership_.assist_targets[0] = 0;
+}
+
+void GameConnection::reset_raid_leadership() {
+    std::fill(leadership_.active_ranks.begin() + game::kFirstRaidAbility, leadership_.active_ranks.end(), 0u);
+    leadership_.raid_assists = {};
+    leadership_.raid_assist_names = {};
+    leadership_.raid_assist_slots_known = {};
+    leadership_.raid_markers = {};
+    leadership_.raid_marker_names = {};
+    leadership_.raid_waypointers = {};
+    leadership_.raid_marks = {};
+    std::fill(leadership_.assist_targets.begin() + 1, leadership_.assist_targets.end(), 0u);
+    for (auto& member : raid_.members) member.main_assist = member.marker = member.waypointer = false;
+}
+
+void GameConnection::forget_leadership_spawn(std::uint32_t id) {
+    // Spawn IDs belong to one zone appearance. Keep delegate names/roles for a later roster resend, but never
+    // let a replacement entity inherit the departed spawn's mark, assist bracket or delegated permission.
+    if (!id) return;
+    if (leadership_.group_marker == id) leadership_.group_marker = 0;
+    if (leadership_.group_assist == id) {
+        leadership_.group_assist = 0;
+        leadership_.assist_targets[0] = 0;
+    }
+    for (std::size_t i = 0; i < leadership_.raid_assists.size(); ++i) {
+        if (leadership_.raid_assists[i] != id) continue;
+        if (leadership_.raid_assist_slots_known[i]) leadership_.assist_targets[i + 1] = 0;
+        else std::fill(leadership_.assist_targets.begin() + 1, leadership_.assist_targets.end(), 0u);
+    }
+    auto forget = [id](auto& ids) {
+        for (auto& stored : ids)
+            if (stored == id) stored = 0;
+    };
+    forget(leadership_.raid_assists);
+    forget(leadership_.raid_markers);
+    forget(leadership_.raid_waypointers);
+    forget(leadership_.group_marks);
+    forget(leadership_.raid_marks);
+    forget(leadership_.assist_targets);
+}
+
 bool GameConnection::has_gates_of_discord() const { return profile_ && (profile_->expansions & 0x40) != 0; }
 
 bool GameConnection::group_has_players(int n) const {
@@ -1060,7 +1112,7 @@ bool GameConnection::raid_has_players(int n) const {
 bool GameConnection::leadership_has_rank(int ability, std::int32_t rank) const {
     // Leadership_HasAbilityRank @0x55eb10: the ability's kind (1 group, 2 raid) picks the group leader's or the raid
     // leader's ranks, at least `rank`.
-    if (ability < 0 || ability >= game::kLeadershipAbilities) return false;
+    if (ability < 0 || ability >= game::kLeadershipAbilities || rank < 1) return false;
     return static_cast<std::int32_t>(leadership_.active_ranks[static_cast<std::size_t>(ability)]) >= rank;
 }
 
@@ -1120,6 +1172,8 @@ void GameConnection::activate_leadership_ability(int ability, std::int32_t param
     // Leadership_ActivateAbility @0x55f0f0 (CHotButtonWnd::DoHotButton's type 11 and the commands); its refusals print
     // in colour 0xd. Abilities 1, 3, 7..12, 15, 17, 22..27 (and any other) do nothing.
     if (state_ != ConnectionState::InZone) return;
+    const auto& buttons = game::leadership_hot_button_def(ability);
+    if (parameter < 1 || parameter > buttons.count) return;
     auto target = world_.spawns.find(world_.target_id);
     const game::Spawn* t = target == world_.spawns.end() ? nullptr : &target->second;
     const bool target_pc = t && !t->is_npc && !t->is_corpse; // Type 0
@@ -1132,13 +1186,12 @@ void GameConnection::activate_leadership_ability(int ability, std::int32_t param
         send_zone(encode_do_group_leadership_ability(static_cast<std::uint32_t>(a), static_cast<std::uint32_t>(p)));
     };
     switch (ability) {
-    case 0: // group mark NPC 1..3; the target already holding that mark is unmarked (0)
+    case 0: // group mark NPC 1..3
         if (!group_has_players(3)) return check_group_size();
         if (!group_.is_leader(character_) && !(me && leadership_.group_marker == me)) return refuse(0x2234);
         if (!leadership_ability_active(0, parameter)) return refuse(0x21c2);
-        if (!t) return refuse(0x21b7);
-        if (parameter >= 1 && parameter <= 3 && leadership_.group_marks[static_cast<std::size_t>(parameter - 1)] == t->id)
-            parameter = 0;
+        if (!t || !t->is_npc || t->is_corpse) return refuse(0x21b7);
+        // EQEmu accepts only 1..3. Repeating a mark is idempotent; /clearmarks removes marks.
         return send(0, parameter);
     case 2: // the group's main assist
         if (!group_has_players(3)) return check_group_size();
@@ -1180,9 +1233,7 @@ void GameConnection::activate_leadership_ability(int ability, std::int32_t param
         if (!raid_has_players(18)) return check_raid_size();
         if (!raid_leader && !is_raid_delegate(leadership_.raid_markers)) return refuse(0x2233);
         if (!leadership_ability_active(0x10, parameter)) return refuse(0x21c1);
-        if (!t) return refuse(0x21b7);
-        if (parameter >= 1 && parameter <= 3 && leadership_.raid_marks[static_cast<std::size_t>(parameter - 1)] == t->id)
-            parameter = 0;
+        if (!t || !t->is_npc || t->is_corpse) return refuse(0x21b7);
         return send(0x10, parameter);
     case 0x12:
         if (!raid_has_players(18)) return check_raid_size();
@@ -1276,25 +1327,68 @@ void GameConnection::handle_leadership_ability(Op op, const AppPacket& p) {
         }
         break;
     case Op::RaidDelegateAbility:
-        // 0x2b33: ability 3 the raid's main assists (the spawn id and name kept by member number; removing one also
-        // clears RaidAssistNPC[number]), 4 its markers, 5 the third set; the line (0x2242 / 0x2248, 0x2243 / 0x2249,
-        // 0x2244 / 0x224a with the name, colour 0x14a) and the member's flag (CRaid_SetMemberMainAssist / Marker /
-        // Waypointer). The original indexes the profile's arrays with the number unchecked; numbers over 2 are not
-        // stored here. EQEmu numbers its markers 0.
-        if (auto d = decode_delegate_ability(p)) {
+        // EQEmu's live assist assignments number slots 1..3; its zone-in resends and every marker packet use 0.
+        // Identity therefore comes from the name/entity, never marker slot 0 or an assist removal's slot field
+        // (which EQEmu fills from the next free slot). Keep whether an assist's actual slot has been observed.
+        if (auto d = decode_delegate_ability(p); d && d->action <= 1 && d->ability >= 3 && d->ability <= 5 &&
+                                              (!d->name.empty() || d->spawn_id)) {
             const bool removed = d->action == 1;
-            const std::size_t n = d->member;
+            auto same = [&](std::uint32_t id, const std::string& name) {
+                if (!d->name.empty() && !name.empty()) return iequals(name, d->name);
+                return d->spawn_id && id == d->spawn_id;
+            };
             if (d->ability == 3) {
-                if (n < 3) {
-                    l.raid_assists[n] = removed ? 0 : d->spawn_id;
-                    l.raid_assist_names[n] = removed ? std::string() : d->name.substr(0, 63);
+                if (d->member > 3) break;
+                std::size_t existing = 3, free = 3;
+                for (std::size_t i = 0; i < 3; ++i) {
+                    if (same(l.raid_assists[i], l.raid_assist_names[i])) existing = i;
+                    if (!l.raid_assists[i] && l.raid_assist_names[i].empty() && free == 3) free = i;
                 }
-                if (removed && n + 1 < l.assist_targets.size()) l.assist_targets[n + 1] = 0;
+                if (removed) {
+                    if (existing < 3) {
+                        if (!l.raid_assist_slots_known[existing])
+                            std::fill(l.assist_targets.begin() + 1, l.assist_targets.end(), 0u);
+                        else l.assist_targets[existing + 1] = 0;
+                        l.raid_assists[existing] = 0;
+                        l.raid_assist_names[existing].clear();
+                        l.raid_assist_slots_known[existing] = false;
+                    }
+                } else {
+                    std::size_t n = d->member ? d->member - 1 : existing < 3 ? existing : free;
+                    if (n >= 3) break;
+                    if (d->member && !same(l.raid_assists[n], l.raid_assist_names[n])) l.assist_targets[n + 1] = 0;
+                    if (existing < 3 && existing != n) {
+                        std::swap(l.raid_assists[n], l.raid_assists[existing]);
+                        std::swap(l.raid_assist_names[n], l.raid_assist_names[existing]);
+                        const bool known = l.raid_assist_slots_known[n];
+                        l.raid_assist_slots_known[n] = l.raid_assist_slots_known[existing];
+                        l.raid_assist_slots_known[existing] = known;
+                    } else if (existing == 3 && !l.raid_assist_names[n].empty()) {
+                        if (!l.raid_assist_slots_known[n] && free < 3) {
+                            l.raid_assists[free] = l.raid_assists[n];
+                            l.raid_assist_names[free] = std::move(l.raid_assist_names[n]);
+                            l.raid_assist_slots_known[free] = false;
+                        } else if (auto* previous = raid_.find(l.raid_assist_names[n])) previous->main_assist = false;
+                    }
+                    l.raid_assists[n] = d->spawn_id;
+                    l.raid_assist_names[n] = d->name.substr(0, 63);
+                    if (d->member) l.raid_assist_slots_known[n] = true;
+                }
                 line(removed ? 0x2242 : 0x2248, {d->name});
             } else if (d->ability == 4) {
-                if (n < 3) l.raid_markers[n] = removed ? 0 : d->spawn_id;
+                std::size_t existing = 3, free = 3;
+                for (std::size_t i = 0; i < 3; ++i) {
+                    if (same(l.raid_markers[i], l.raid_marker_names[i])) existing = i;
+                    if (!l.raid_markers[i] && l.raid_marker_names[i].empty() && free == 3) free = i;
+                }
+                const std::size_t n = existing < 3 ? existing : free;
+                if (n < 3) {
+                    l.raid_markers[n] = removed ? 0 : d->spawn_id;
+                    l.raid_marker_names[n] = removed ? std::string() : d->name.substr(0, 63);
+                }
                 line(removed ? 0x2243 : 0x2249, {d->name});
             } else if (d->ability == 5) {
+                const std::size_t n = d->member;
                 if (n < 3) l.raid_waypointers[n] = removed ? 0 : d->spawn_id;
                 line(removed ? 0x2244 : 0x224a, {d->name});
             }
@@ -1365,7 +1459,7 @@ bool GameConnection::leadership_hot_button_enabled(int ability, int n) const {
     // rank (PcBase +0x1da0).
     if (game::leadership_passive(ability) || ability < 0 || ability >= game::kLeadershipAbilities) return false;
     const auto& def = game::leadership_hot_button_def(ability);
-    if (n > def.count) return false;
+    if (n < 1 || n > def.count) return false;
     return static_cast<std::int32_t>(leadership_.ranks[static_cast<std::size_t>(ability)]) >= n ||
            leadership_ability_active(ability, n);
 }
@@ -1392,6 +1486,7 @@ void GameConnection::leadership_purchase_button(std::uint32_t ability) {
     // LeadershipNoConfirm (0xde0d0c), else ConfirmationDialog(0x64, the group or raid question by whether the next rank
     // costs 1 (Leadership_GetNextRankCost, Leadership_IsGroupAbility): the cost "%d" and the name, 20 s).
     if (state_ != ConnectionState::InZone || ability >= leadership_.ranks.size()) return;
+    if (!game::leadership_next_cost(static_cast<int>(ability), leadership_.ranks[ability])) return;
     if (client_option(game::ClientOption::LeadershipNoConfirm)) {
         buy_leadership(ability);
         return;
@@ -1426,6 +1521,7 @@ bool GameConnection::send_group_mentor(const std::string& name, std::int32_t per
 
 void GameConnection::buy_leadership(std::uint32_t ability) {
     if (state_ != ConnectionState::InZone || ability >= leadership_.ranks.size()) return;
+    if (!game::leadership_next_cost(static_cast<int>(ability), leadership_.ranks[ability])) return;
     // The server checks the points and the rank (EQEmu Handle_OP_PurchaseLeadershipAA) and answers with the rank.
     send_zone(encode_purchase_leadership(ability));
 }

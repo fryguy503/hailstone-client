@@ -1,9 +1,8 @@
 -- Leadership: replaces the game's LeadershipWindow. Group and raid leadership side by side at the top (the points
 -- to spend and the experience toward the next one), the switch for earning leadership experience, then the
 -- abilities of one kind (tabs) as rows with their rank and the next rank's cost, and the selected one's description
--- with Purchase. Everything is the original's children: a row click selects in the game's list (LEList1 /
--- LEList2), the buttons are its On / Off / Purchase. (Its hotkey and mentoring buttons are not built in this
--- client, so they are left out.)
+-- with Purchase and hotkey creation. Everything is the original's children: a row click selects in the game's
+-- list (LEList1 / LEList2); buttons use the window's permissions, ranks and hotkey labels.
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -88,7 +87,7 @@ local function drawWindow(x, y, w, h, s)
   local _, lh = ui.CalcTextSize("Ag")
   local btnH = lh + 10 * s
   local descH = math.max(64 * s, (y + h - cy) * 0.24)
-  local listH = y + h - cy - descH - btnH - 16 * s
+  local listH = y + h - cy - descH - 2 * btnH - 24 * s
   P.Rows(WINDOW, list, 0, listH, {
     rowH = 28,
     draw = drawRow,
@@ -102,6 +101,14 @@ local function drawWindow(x, y, w, h, s)
     P.Empty(w - 20 * s, descH - 12 * s, "Select an ability", "Its rank and the next rank's cost show here")
   else
     W.Stml(WINDOW, "LEW_Description", w - 20 * s, descH - 12 * s)
+  end
+  ui.SetCursorScreenPos(x, y + h - 2 * btnH - 8 * s)
+  local hw = (w - 12 * s) / 3
+  for n = 1, 3 do
+    if n > 1 then ui.SameLine(0, 6 * s) end
+    local id = "LEW_HotkeyButton" .. n
+    W.Button(WINDOW, id, "Create Hotkey " .. n, { width = hw, height = btnH,
+      tooltip = eq.ChildTooltip(WINDOW, id) or "Create a hotkey for the selected ability, then place it on a hot bar" })
   end
   ui.SetCursorScreenPos(x, y + h - btnH)
   local mw = 150 * s
