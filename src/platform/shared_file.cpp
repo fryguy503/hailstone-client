@@ -378,7 +378,9 @@ PublishResult CacheTempFile::publish(const std::filesystem::path& destination) {
     bool synced = ::FlushFileBuffers(reinterpret_cast<HANDLE>(file_)) != 0;
     if (!::CloseHandle(reinterpret_cast<HANDLE>(file_))) synced = false;
 #else
-    bool synced = ::fsync(static_cast<int>(file_)) == 0;
+    // Read-only once published: a blob is never rewritten, and a stray write through its name would change bytes
+    // other clients have mapped (docs/hardening.md).
+    bool synced = ::fchmod(static_cast<int>(file_), 0400) == 0 && ::fsync(static_cast<int>(file_)) == 0;
     if (::close(static_cast<int>(file_)) != 0) synced = false;
 #endif
     file_ = -1;

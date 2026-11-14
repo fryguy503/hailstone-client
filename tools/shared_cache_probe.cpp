@@ -26,11 +26,10 @@ void wait_for_input_end() {
 
 int abandon(const std::filesystem::path& directory) {
     if (!platform::prepare_private_cache_directory(directory)) return 1;
-    auto lease = platform::ScopedFileLock::try_acquire(directory / "use.lock", platform::FileLockMode::Shared);
     auto writer = platform::ScopedFileLock::try_acquire(directory / "publish.lock", platform::FileLockMode::Exclusive);
     auto temporary = platform::CacheTempFile::create(directory);
     const std::string_view partial = "unpublished partial cache payload";
-    if (!lease || !writer || !temporary || !temporary->write(std::as_bytes(std::span(partial.data(), partial.size()))))
+    if (!writer || !temporary || !temporary->write(std::as_bytes(std::span(partial.data(), partial.size()))))
         return 1;
     std::puts("prepared");
     std::fflush(stdout);
@@ -92,7 +91,16 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(stats.fallbacks), static_cast<unsigned long long>(checksum),
                     platform::process_id());
         std::fflush(stdout);
-        if (hold) wait_for_input_end();
+        // With --hold, each 'c' on the input reads every retained byte again (after another client trimmed the
+        // cache, say) and reports the checksum.
+        for (int c = hold ? std::getchar() : EOF; c != EOF; c = std::getchar()) {
+            if (c != 'c') continue;
+            std::uint64_t again = 0;
+            for (const auto& payload : retained)
+                for (const auto value : payload.bytes()) again += static_cast<unsigned char>(value);
+            std::printf("recheck checksum=%llu\n", static_cast<unsigned long long>(again));
+            std::fflush(stdout);
+        }
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "shared cache probe: %s\n", error.what());

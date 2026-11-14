@@ -314,34 +314,39 @@ TEST_CASE("PfsArchive storage policy and shared cache compose without losing saf
     const auto bytes = make_pfs({{"a.txt", content}});
     write_bytes(source, bytes);
 
-    SUBCASE("cache hits take precedence over either direct storage policy") {
+    SUBCASE("game-folder files keep their direct mapping; only heap reads go through the cache") {
         auto cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{root / "cache"});
-        const auto warm = cache->load(source);
-        REQUIRE(warm);
-        REQUIRE(warm->mapped());
-        for (const auto storage : {PfsArchive::Storage::Mapped, PfsArchive::Storage::Heap}) {
-            const auto previous_hits = cache->stats().hits;
-            const auto archive = PfsArchive::open(source, storage, cache);
-            CHECK(cache->stats().hits == previous_hits + 1);
-            CHECK(archive.mapped());
-            CHECK(archive.backing_mapped());
-            CHECK(archive.storage_bytes() == bytes.size());
-            CHECK(archive.backing_size() == bytes.size());
-            CHECK(archive.owned_bytes() == 0);
-            CHECK(archive.read("a.txt").value() == content);
-        }
+        const auto direct = PfsArchive::open(source, PfsArchive::Storage::Mapped, cache);
+        CHECK(direct.mapped());
+        CHECK(direct.owned_bytes() == 0);
+        CHECK(direct.read("a.txt").value() == content);
+        // The page cache already shares a direct mapping: nothing was copied, hashed or counted.
+        const auto untouched = cache->stats();
+        CHECK(untouched.builds + untouched.hits + untouched.fallbacks == 0);
+        CHECK_FALSE(std::filesystem::exists(root / "cache"));
+        const auto snapshot = PfsArchive::open(source, PfsArchive::Storage::Heap, cache);
+        CHECK(cache->stats().builds == 1);
+        CHECK(snapshot.mapped());
+        CHECK(snapshot.backing_mapped());
+        CHECK(snapshot.backing_size() == bytes.size());
+        CHECK(snapshot.owned_bytes() == 0);
+        CHECK(snapshot.read("a.txt").value() == content);
+        const auto again = PfsArchive::open(source, PfsArchive::Storage::Heap, cache);
+        CHECK(cache->stats().hits == 1);
+        CHECK(again.read("a.txt").value() == content);
     }
-    SUBCASE("an unavailable cache keeps its owned fallback instead of directly mapping the source") {
+    SUBCASE("an unavailable cache leaves each storage choice as it is without a cache") {
         const auto blocked = root / "cache-is-a-file";
         write_bytes(blocked, {std::byte{'!'}});
         auto cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{blocked});
-        const auto archive = PfsArchive::open(source, PfsArchive::Storage::Mapped, cache);
-        CHECK(cache->stats().fallbacks >= 1);
-        CHECK_FALSE(archive.mapped());
-        CHECK_FALSE(archive.backing_mapped());
-        CHECK(archive.storage_bytes() == bytes.size());
-        CHECK(archive.owned_bytes() == bytes.size());
-        CHECK(archive.read("a.txt").value() == content);
+        const auto mapped = PfsArchive::open(source, PfsArchive::Storage::Mapped, cache);
+        CHECK(mapped.mapped());
+        CHECK(mapped.owned_bytes() == 0);
+        const auto heap = PfsArchive::open(source, PfsArchive::Storage::Heap, cache);
+        CHECK(cache->stats().fallbacks == 1);
+        CHECK_FALSE(heap.mapped());
+        CHECK(heap.owned_bytes() == bytes.size());
+        CHECK(heap.read("a.txt").value() == content);
     }
     SUBCASE("a null cache preserves both upstream storage choices") {
         const auto mapped = PfsArchive::open(source, PfsArchive::Storage::Mapped, {});

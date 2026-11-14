@@ -1,7 +1,8 @@
 #pragma once
 
-// Immutable file bytes, either privately owned or mapped from a content-addressed cache. Cache failures always
-// leave the normal file reader available. Native mappings and locks live in platform/shared_file.h.
+// Immutable file bytes, either privately owned or mapped from a content-addressed cache that several clients on one
+// machine share (assets.shared_memory, docs/layout.md "Shared archive memory"). Cache failures always leave the
+// normal file reader available. Native mappings and locks live in platform/shared_file.h.
 
 #include <cstddef>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -39,17 +41,28 @@ public:
         std::uint64_t hits = 0;
         std::uint64_t builds = 0;
         std::uint64_t fallbacks = 0;
+        std::uint64_t evictions = 0; // blobs this instance removed to keep the disk budget
     };
 
+    // The options hailstone.ini asks for: none (the cache is off) unless `mode` is "auto" and the budget is above 0.
+    static std::optional<Options> configured(std::string_view mode, int budget_mib, std::filesystem::path directory);
+
     explicit SharedFileCache(Options options);
-    // Hashes the opened source on each acquisition; metadata alone cannot establish freshness. Thread-safe.
+    // A source file's snapshot. The source is hashed once per cache instance while its size, identity and
+    // timestamps stay the same, and a blob found on disk is hashed once per instance before it is trusted.
+    // Thread-safe.
     std::optional<ImmutableFileBytes> load(const std::filesystem::path& source);
-    // Publishes already-decoded immutable bytes by content digest. Failed caching retains the supplied bytes
-    // privately; callers need not write an intermediate source file or keep a second owned payload.
+    // Publishes already-decoded immutable bytes by content digest; a blob found on disk is compared with them.
+    // Failed caching returns the supplied bytes privately.
     ImmutableFileBytes store(std::vector<std::byte> bytes);
     Stats stats() const;
-    // Removes finished blobs and abandoned temporaries only if no client holds a cache-use lease. Nonblocking.
+    // Removes abandoned temporaries, then evicts the least recently used blobs this instance has not mapped until
+    // the cache holds at most `target_bytes` (default: the budget). A blob another client maps stays on Windows; on
+    // POSIX its readers keep their mapping and only the name goes. Nonblocking: false when another client is
+    // publishing, or when the target cannot be reached. Runs by itself on first use and whenever an insertion
+    // would exceed the budget.
     bool trim();
+    bool trim(std::uint64_t target_bytes);
 
 private:
     struct State;

@@ -38,8 +38,9 @@ public:
     // (docs/hardening.md). So only a file Hailstone never writes is mapped: storage_for() decides.
     enum class Storage : std::uint8_t { Heap, Mapped };
 
-    // Throws std::runtime_error on a malformed archive. A configured cache takes precedence, retaining an immutable
-    // snapshot or its owned fallback. Without a cache, Mapped falls back to Heap when the source cannot be mapped.
+    // Throws std::runtime_error on a malformed archive. Mapped falls back to Heap when the file cannot be mapped. A
+    // cache, when given, replaces only the Heap read: the file's snapshot is mapped from it, or read privately when
+    // the cache cannot take it.
     static PfsArchive open(const std::filesystem::path& path, Storage storage = Storage::Heap,
                            std::shared_ptr<SharedFileCache> cache = {});
     static PfsArchive open(const std::filesystem::path& path, std::shared_ptr<SharedFileCache> cache);

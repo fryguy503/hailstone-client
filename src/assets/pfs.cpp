@@ -112,7 +112,9 @@ void zlib_inflate(std::span<const std::byte> in, std::span<std::byte> out) {
 
 PfsArchive PfsArchive::open(const std::filesystem::path& path, Storage storage,
                             std::shared_ptr<SharedFileCache> cache) {
-    if (cache) {
+    // A direct mapping of a game-folder file is already shared between clients through the page cache, so the
+    // cache only takes archives that would otherwise be read onto the heap (the server's overlay files).
+    if (cache && storage == Storage::Heap) {
         auto data = cache->load(path);
         if (!data) throw std::runtime_error("cannot read " + path.string());
         return from_bytes(std::move(*data), path.filename().string());

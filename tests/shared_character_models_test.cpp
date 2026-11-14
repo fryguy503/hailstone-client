@@ -299,7 +299,7 @@ TEST_CASE("shared character archive models match private stock clips and retain 
     REQUIRE_FALSE(retained.empty());
     REQUIRE(mapped_tracks > 0);
     SharedFileCache cleanup({cache_path, std::uint64_t{4} << 30});
-    CHECK_FALSE(cleanup.trim());
+    (void)cleanup.trim(0); // on POSIX the names go; the models keep their mappings
     std::size_t survivors = 0;
     for (const auto& models : retained) {
         if (models.mapped_clip.empty()) continue;
@@ -315,5 +315,5 @@ TEST_CASE("shared character archive models match private stock clips and retain 
     }
     CHECK(survivors > 0);
     retained.clear();
-    CHECK(cleanup.trim());
+    CHECK(cleanup.trim(0));
 }

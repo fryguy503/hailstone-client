@@ -42,6 +42,12 @@ std::vector<fs::path> cache_files(const fs::path& directory, std::string_view ex
     return out;
 }
 
+// Published blobs are read-only (0400 on POSIX); a test that damages one makes it writable first.
+void damage(const fs::path& blob, std::string_view text) {
+    fs::permissions(blob, fs::perms::owner_write, fs::perm_options::add);
+    write_source(blob, text);
+}
+
 fs::path cache_path(const test::ScratchDir& dir) {
     return fs::canonical(dir.path()) / "cache";
 }
@@ -92,7 +98,8 @@ TEST_CASE("shared cache: cold publication and warm reads retain one immutable ma
     CHECK(cache.stats().mapped_bytes == first->bytes().size());
     first.reset();
     CHECK(cache.stats().mapped_bytes == second->bytes().size());
-    CHECK_FALSE(cache.trim());
+    CHECK_FALSE(cache.trim(0)); // a blob this client maps is never evicted
+    CHECK(cache_files(cache_path(dir), ".blob").size() == 1);
     second.reset();
     CHECK(cache.stats().mapped_bytes == 0);
     auto warm = cache.load(source);
@@ -101,11 +108,12 @@ TEST_CASE("shared cache: cold publication and warm reads retain one immutable ma
     CHECK(cache.stats().hits == 2);
     CHECK(cache.stats().builds == 1);
     warm.reset();
-    CHECK(cache.trim());
+    CHECK(cache.trim(0));
+    CHECK(cache.stats().evictions == 1);
     CHECK(cache_files(cache_path(dir), ".blob").empty());
 }
 
-TEST_CASE("shared cache: payloads outlive the cache and copies retain their lease") {
+TEST_CASE("shared cache: payloads outlive the cache and another instance's trim") {
     test::ScratchDir dir("shared_cache_lifetime");
     const auto source = dir.path() / "source";
     write_source(source, "kept by the last view");
@@ -117,13 +125,16 @@ TEST_CASE("shared cache: payloads outlive the cache and copies retain their leas
         REQUIRE(retained->mapped());
     }
     SharedFileCache other({cache_path(dir), 1024});
-    CHECK_FALSE(other.trim());
     auto copy = *retained;
     retained.reset();
     CHECK(text(copy) == "kept by the last view");
-    CHECK_FALSE(other.trim());
+    // Another client cannot know this mapping. On POSIX its trim removes only the name and the mapping stays
+    // readable; Windows refuses to remove a mapped file.
+    (void)other.trim(0);
+    CHECK(text(copy) == "kept by the last view");
     copy = {};
-    CHECK(other.trim());
+    CHECK(other.trim(0));
+    CHECK(cache_files(cache_path(dir), ".blob").empty());
 }
 
 TEST_CASE("shared cache: source content selects snapshots across names layers and unchanged metadata") {
@@ -161,7 +172,7 @@ TEST_CASE("shared cache: source content selects snapshots across names layers an
     CHECK(cache_files(cache_path(dir), ".blob").size() == 3);
 }
 
-TEST_CASE("shared cache: a damaged entry falls back privately until an idle trim removes it") {
+TEST_CASE("shared cache: a damaged entry falls back privately until a trim removes it") {
     test::ScratchDir dir("shared_cache_corrupt");
     const auto source = dir.path() / "asset";
     write_source(source, "correct bytes");
@@ -172,20 +183,22 @@ TEST_CASE("shared cache: a damaged entry falls back privately until an idle trim
     initial.reset();
     const auto files = cache_files(cache_path(dir), ".blob");
     REQUIRE(files.size() == 1);
-    write_source(files.front(), "corrupt bytes"); // same length: the payload hash, not just size, must reject it
-    auto fallback = cache.load(source);
+    damage(files.front(), "corrupt bytes"); // same length: the payload hash, not just size, must reject it
+    // An instance trusts a blob it has checked or written itself; the next client to start checks it again.
+    SharedFileCache next({cache_path(dir), 1024});
+    auto fallback = next.load(source);
     REQUIRE(fallback);
     CHECK_FALSE(fallback->mapped());
     CHECK(text(*fallback) == "correct bytes");
-    CHECK(cache.stats().fallbacks == 1);
+    CHECK(next.stats().fallbacks == 1);
     write_source(cache_path(dir) / "unrelated.txt", "preserve");
-    REQUIRE(cache.trim());
+    REQUIRE(next.trim(0));
     CHECK(fs::exists(cache_path(dir) / "unrelated.txt"));
-    auto rebuilt = cache.load(source);
+    auto rebuilt = next.load(source);
     REQUIRE(rebuilt);
     CHECK(rebuilt->mapped());
     CHECK(text(*rebuilt) == "correct bytes");
-    CHECK(cache.stats().builds == 2);
+    CHECK(next.stats().builds == 1);
     CHECK(text(*fallback) == "correct bytes");
 }
 
@@ -231,7 +244,7 @@ TEST_CASE("shared cache: disabled unavailable oversized and empty inputs preserv
     }
 }
 
-TEST_CASE("shared cache: the disk budget respects live leases and evicts only when idle") {
+TEST_CASE("shared cache: the disk budget keeps blobs this client maps and evicts the others") {
     test::ScratchDir dir("shared_cache_budget");
     const auto first_source = dir.path() / "first";
     const auto second_source = dir.path() / "second";
@@ -255,6 +268,7 @@ TEST_CASE("shared cache: the disk budget respects live leases and evicts only wh
     const auto files = cache_files(cache_path(dir), ".blob");
     REQUIRE(files.size() == 1);
     CHECK(fs::file_size(files.front()) == 8);
+    CHECK(cache.stats().evictions == 1);
 }
 
 TEST_CASE("shared cache: simultaneous worker acquisitions converge on one mapping") {
@@ -326,14 +340,15 @@ TEST_CASE("shared cache: many distinct retained archives share one cache lease w
     CHECK(cache.stats().hits == 0);
     CHECK(cache.stats().fallbacks == 0);
     CHECK(cache_files(cache_path(dir), ".blob").size() == count);
-    CHECK_FALSE(cache.trim());
+    CHECK_FALSE(cache.trim(0));
+    CHECK(cache_files(cache_path(dir), ".blob").size() == count);
     retained.clear();
     CHECK(cache.stats().mapped_bytes == 0);
-    CHECK(cache.trim());
+    CHECK(cache.trim(0));
     CHECK(cache_files(cache_path(dir), ".blob").empty());
 }
 
-TEST_CASE("shared cache: abandoned temporary files count against the disk budget until idle cleanup") {
+TEST_CASE("shared cache: abandoned temporary files count against the disk budget and go at the next insertion") {
     test::ScratchDir dir("shared_cache_orphan_budget");
     const auto first_source = dir.path() / "first";
     const auto second_source = dir.path() / "second";
@@ -343,20 +358,17 @@ TEST_CASE("shared cache: abandoned temporary files count against the disk budget
     auto held = cache.load(first_source);
     REQUIRE(held);
     REQUIRE(held->mapped());
+    // A client that died while publishing; every writer holds publish.lock, so whoever holds it next may remove it.
     const auto orphan = cache_path(dir) / ".tmp-abandoned";
     write_source(orphan, "orphan-99");
-    auto busy = cache.load(second_source);
-    REQUIRE(busy);
-    CHECK_FALSE(busy->mapped());
-    CHECK(text(*busy) == "22222222");
-    CHECK(fs::exists(orphan));
-    CHECK(cache_files(cache_path(dir), ".blob").size() == 1);
-    held.reset();
-    auto recovered = cache.load(second_source);
-    REQUIRE(recovered);
-    CHECK(recovered->mapped());
+    auto second = cache.load(second_source);
+    REQUIRE(second);
+    CHECK(second->mapped());
+    CHECK(text(*second) == "22222222");
+    CHECK(text(*held) == "11111111");
     CHECK_FALSE(fs::exists(orphan));
-    CHECK(cache_files(cache_path(dir), ".blob").size() == 1);
+    CHECK(cache_files(cache_path(dir), ".blob").size() == 2);
+    CHECK(cache.stats().evictions == 0);
 }
 
 TEST_CASE("shared cache: simultaneous client processes publish and retain the same snapshot") {
@@ -414,18 +426,22 @@ TEST_CASE("shared cache: simultaneous client processes publish and retain the sa
         CHECK(clients[i]->running());
     }
     CHECK(cache_files(cache_path(dir), ".blob").size() == 1);
-    SharedFileCache cache({cache_path(dir), 1024 * 1024});
-    CHECK_FALSE(cache.trim());
     clients.front()->stop(true); // another client closing cannot invalidate the remaining readers
     REQUIRE(clients.front()->wait_exit(5000));
-    CHECK_FALSE(cache.trim());
+    // Nor can a trim by a client that does not map the blob: its readers keep their bytes.
+    SharedFileCache cache({cache_path(dir), 1024 * 1024});
+    (void)cache.trim(0);
+    const std::array<std::byte, 1> recheck{std::byte{'c'}};
     for (std::size_t i = 1; i < count; ++i) {
         CHECK(clients[i]->running());
+        clients[i]->write(recheck);
+        REQUIRE_MESSAGE(read_until(*clients[i], output[i], "recheck checksum=7340032\n"), output[i]);
         clients[i]->stop(false);
         REQUIRE(clients[i]->wait_exit(5000));
         CHECK(clients[i]->exit_code() == 0);
     }
-    CHECK(cache.trim());
+    CHECK(cache.trim(0));
+    CHECK(cache_files(cache_path(dir), ".blob").empty());
 }
 
 TEST_CASE("shared cache: a killed producer releases locks and its incomplete payload is never served") {
@@ -454,4 +470,96 @@ TEST_CASE("shared cache: a killed producer releases locks and its incomplete pay
     for (const auto& entry : fs::directory_iterator(cache_path(dir)))
         CHECK_FALSE(entry.path().filename().string().starts_with(".tmp-"));
     CHECK(text(*blocked) == "valid source after producer death");
+}
+
+TEST_CASE("shared cache: eviction follows the last use, and a smaller budget applies at the next start") {
+    test::ScratchDir dir("shared_cache_lru");
+    std::array<fs::path, 4> sources;
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        sources[i] = dir.path() / ("source-" + std::to_string(i));
+        write_source(sources[i], std::string(8, static_cast<char>('a' + i)));
+    }
+    std::array<fs::path, 3> blobs;
+    {
+        SharedFileCache first({cache_path(dir), 24});
+        for (std::size_t i = 0; i < blobs.size(); ++i) REQUIRE(first.load(sources[i])->mapped());
+        auto files = cache_files(cache_path(dir), ".blob");
+        REQUIRE(files.size() == 3);
+        // Name each blob by its content, and age them in build order.
+        const auto now = fs::file_time_type::clock::now();
+        for (const auto& file : files) {
+            std::ifstream in(file, std::ios::binary);
+            const auto i = static_cast<std::size_t>(in.get() - 'a');
+            REQUIRE(i < blobs.size());
+            blobs[i] = file;
+            fs::last_write_time(file, now - std::chrono::hours(3 - static_cast<int>(i)));
+        }
+    }
+    SharedFileCache second({cache_path(dir), 24});
+    // Using the oldest blob makes it the newest; the next insertion then evicts the second-oldest instead.
+    REQUIRE(second.load(sources[0])->mapped());
+    auto fourth = second.load(sources[3]);
+    REQUIRE(fourth);
+    CHECK(fourth->mapped());
+    CHECK(fs::exists(blobs[0]));
+    CHECK_FALSE(fs::exists(blobs[1]));
+    CHECK(fs::exists(blobs[2]));
+    CHECK(second.stats().evictions == 1);
+    fourth.reset();
+    // A client started with a smaller budget trims to it on first use, keeping the most recently used.
+    SharedFileCache smaller({cache_path(dir), 16});
+    REQUIRE(smaller.load(sources[0])->mapped());
+    auto files = cache_files(cache_path(dir), ".blob");
+    CHECK(files.size() == 2);
+    CHECK(fs::exists(blobs[0]));
+    CHECK_FALSE(fs::exists(blobs[2]));
+}
+
+TEST_CASE("shared cache: an edited source is hashed again even with its old modification time") {
+    test::ScratchDir dir("shared_cache_settled");
+    const auto source = dir.path() / "overlay.eqg";
+    write_source(source, "first-11");
+    const auto old = fs::file_time_type::clock::now() - std::chrono::hours(1);
+    fs::last_write_time(source, old); // settled, so its digest is remembered
+    SharedFileCache cache({cache_path(dir), 1024});
+    auto a = cache.load(source);
+    REQUIRE(a);
+    auto again = cache.load(source);
+    REQUIRE(again);
+    CHECK(again->bytes().data() == a->bytes().data());
+    write_source(source, "second22");
+    fs::last_write_time(source, old);
+    auto b = cache.load(source);
+    REQUIRE(b);
+    CHECK(b->mapped());
+    CHECK(text(*b) == "second22");
+    CHECK(text(*a) == "first-11");
+    CHECK(cache.stats().builds == 2);
+}
+
+#if !defined(_WIN32)
+TEST_CASE("shared cache: published blobs are read-only") {
+    test::ScratchDir dir("shared_cache_readonly");
+    const auto source = dir.path() / "source";
+    write_source(source, "read only payload");
+    SharedFileCache cache({cache_path(dir), 1024});
+    REQUIRE(cache.load(source)->mapped());
+    REQUIRE(cache.store({std::byte{1}, std::byte{2}}).mapped());
+    const auto files = cache_files(cache_path(dir), ".blob");
+    REQUIRE(files.size() == 2);
+    for (const auto& file : files) CHECK(fs::status(file).permissions() == fs::perms::owner_read);
+}
+#endif
+
+TEST_CASE("shared cache: hailstone.ini turns the cache on only with auto and a budget above 0") {
+    const fs::path where = "cache-dir";
+    CHECK_FALSE(SharedFileCache::configured("off", 1024, where));
+    CHECK_FALSE(SharedFileCache::configured("", 1024, where));
+    CHECK_FALSE(SharedFileCache::configured("auto", 0, where));
+    CHECK_FALSE(SharedFileCache::configured("auto", -5, where));
+    const auto on = SharedFileCache::configured("auto", 512, where);
+    REQUIRE(on);
+    CHECK(on->directory == where);
+    CHECK(on->budget_bytes == std::uint64_t{512} << 20);
+    CHECK(SharedFileCache::configured("auto", 99999, where)->budget_bytes == std::uint64_t{16384} << 20);
 }

@@ -34,9 +34,8 @@ struct BloodSprite {
     std::shared_ptr<const std::vector<std::byte>> bytes;
 };
 
-std::optional<BloodSprite> read_blood_sprite(const std::filesystem::path& path,
-                                           std::shared_ptr<SharedFileCache> cache) {
-    auto archive = assets::PfsArchive::open(path, std::move(cache));
+std::optional<BloodSprite> read_blood_sprite(const GameDir& game, const std::filesystem::path& path) {
+    auto archive = assets::PfsArchive::open(path, assets::PfsArchive::storage_for(game, path), game.shared_file_cache());
     auto wld_bytes = archive.read("gequip.wld");
     if (!wld_bytes) return std::nullopt;
     auto wld = assets::wld::WldFile::parse(*wld_bytes, "gequip.s3d:gequip.wld");
@@ -77,7 +76,7 @@ std::optional<BloodSprite> load_blood_sprite(const GameDir& game) {
         return cache->sprite;
     std::optional<BloodSprite> sprite;
     try {
-        sprite = read_blood_sprite(*path, game.shared_file_cache());
+        sprite = read_blood_sprite(game, *path);
     } catch (const std::exception& e) {
         log::warn("blood particles: {}", e.what());
     }

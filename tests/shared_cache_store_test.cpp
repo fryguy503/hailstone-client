@@ -48,7 +48,7 @@ TEST_CASE("shared cache store: decoded bytes share content identity with file sn
     CHECK(cache.stats().builds == 1);
     CHECK(cache.stats().hits == 2);
     CHECK(cache.stats().mapped_bytes == stored.bytes().size());
-    CHECK_FALSE(cache.trim());
+    CHECK_FALSE(cache.trim(0)); // mapped here, so kept
 
     auto changed = cache.store(payload("decoded immutable payloaD"));
     REQUIRE(changed.mapped());
@@ -77,7 +77,7 @@ TEST_CASE("shared cache store: unavailable and undersized caches preserve decode
     CHECK(small.stats().fallbacks == 2);
 }
 
-TEST_CASE("shared cache store: decoded mapping owns its lease beyond the service lifetime") {
+TEST_CASE("shared cache store: a decoded mapping outlives the cache service") {
     test::ScratchDir dir("shared_store_lifetime");
     const auto cache_path = std::filesystem::canonical(dir.path()) / "cache";
     std::optional<ImmutableFileBytes> survivor;
@@ -87,15 +87,15 @@ TEST_CASE("shared cache store: decoded mapping owns its lease beyond the service
         REQUIRE(survivor->mapped());
     }
     SharedFileCache second({cache_path, 1024});
-    CHECK_FALSE(second.trim());
     CHECK(contents(*survivor) == "reader survives cache service");
     auto warm = second.store(payload("reader survives cache service"));
     REQUIRE(warm.mapped());
     CHECK(contents(warm) == contents(*survivor));
+    CHECK(second.stats().hits == 1);
     survivor.reset();
-    CHECK_FALSE(second.trim());
+    CHECK_FALSE(second.trim(0));
     warm = {};
-    CHECK(second.trim());
+    CHECK(second.trim(0));
 }
 
 TEST_CASE("shared cache store: corrupt existing snapshots are never replaced under a content key") {
@@ -110,6 +110,8 @@ TEST_CASE("shared cache store: corrupt existing snapshots are never replaced und
     for (const auto& entry : std::filesystem::directory_iterator(cache_path))
         if (entry.path().extension() == ".blob") blob = entry.path();
     REQUIRE_FALSE(blob.empty());
+    // The same instance compares a found blob with the bytes it was given, so even one it wrote is checked.
+    std::filesystem::permissions(blob, std::filesystem::perms::owner_write, std::filesystem::perm_options::add);
     {
         std::ofstream corrupt(blob, std::ios::binary | std::ios::trunc);
         corrupt << "corrupted";
