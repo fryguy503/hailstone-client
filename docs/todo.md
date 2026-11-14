@@ -13,6 +13,7 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Native vitality gauges and inventory bars in both packs, campsite categories loaded from the player's resources, DBString type-0 kit descriptions, gamepad leader markers and a server-expiry countdown. Category masks and description lookup were checked against the original handlers.
 
 ### Combat and spells (do first)
+- [x] Personal and guild tribute: received bonus items feed local stats/effects and retire on received deactivation, selection changes, opt-out and context changes; guild benefit controls enforce received permissions, and guild platinum donations wait for matching replies. Packet, mechanics and mock/UI regressions; full live tribute workflow acceptance remains open.
 - [x] Extended chat channels 57..107 and user colours 355..408 for servers that send a later client's chat colours (a Hailstone extension; stock routing and colours unchanged; docs/mechanics.md "Extended chat routing").
 - [x] Missiles: a despawned source or target as DeleteMyMissiles handles it; flying through walls with a target is the original's behaviour (60b1934). Not tested live (no archer).
 - [x] Valid spell missiles: spell lifetime, launch and ending stages, stationary area contact, source physics clock and spell 859 local presentation. Packet-to-emitter and missile fixtures cover these; live gameplay remains unverified. Invalid or absent spell ids still end immediately.
@@ -22,6 +23,8 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Spell particles: the impact stage's caster is the packet's source (EQPlayer::TriggerSpellEffect @0x593eb0; nothing when the source is unknown, as DoSpellEffect); the actor's opacity and the point model's PESFactor on actor emitters.
 - [ ] Spell particles: whether an actor's world matrix rows carry its scale (normalised here), and what makes a floor-flag actor emitter again as the actor moves (kept on the actor here). unknowns.md.
 - [x] Linked spell timers and discipline timers from the player profile.
+- [x] Combat Abilities: active discipline duration gauge 26 and seconds display in both UIs, with icon cancellation regression coverage (unit, mock-server and UI tests; live acceptance open).
+- [x] Combat Abilities: red reuse overlays and seconds in both UIs; shared timer groups remain marked even when the wait exceeds an ability's own recast, including discipline hot buttons (packet, UI and unit coverage; live acceptance open).
 - [x] Item recast on cast items (already in 789134d).
 - [x] The distance modifier of effect values, and the extra long-buff slots from level 72 and 75.
 - [x] Buff tick timers held by SPA 0x1b4 and suspendable spells.
@@ -140,6 +143,8 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Passable ladders (Cabilis's LADDERCB101, every polygon passable): clickable from the top as in the original, and climbed by walking or swimming into them by Hailstone's own rule, switched by `hailstone.cfg` `[movement] passable_ladders` (canal-ladder; unit tests, and the real Cabilis East zone with `EQ_GAME_DIR`). Not tried live.
 - [x] Solid ladders (Hailstone's own, switched by `hailstone.cfg` `[movement] solid_ladders`): the movement meets a ladder as one slab, so every race climbs the rung ladders, which small races fell through and every race could stick on (solid-ladders; unit tests, and Upper and Lower Guk with `EQ_GAME_DIR`). Not tried live.
 - [x] Complete five-word armor records across spawn/wear/save/preview paths, Hero's Forge category and membership filters, and Drakkin illusion feature updates; unit and mock packet tests.
+- [x] Resolve modern Hero's Forge aliases in an armor-only cache and carry their native surface maps and layer parameters into modern actor lighting; collision, cache-order, material and asset regressions.
+- [ ] Compare modern Hero's Forge fits across races/genders, animations, previews and illusion/equipment transitions against the original client; offline renders do not establish complete live acceptance.
 - [x] Luclin eye colours and `SwapFace` (e7a5849; model viewer). Open: one-texture Luclin materials' tint (female dwarf faces 2 and 3).
 - [x] Elementals: UseLuclinElementals (default on) draws race 75 as the typed Luclin elementals 209–212 by texture, and off draws those as race 75 (CreatePlayerActor's swap; unit tests and `chrdump` on the live asset folder, not seen live).
 - [x] UseLuclinElementals off skips the implicit Global5_chr load ("Global NPC Models", @0x492780); synthetic archive-option tests. Hailstone loads neither Global5_chr2 nor frog_mount_chr implicitly.
@@ -234,6 +239,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 
 - [x] Group role controls in both packs: right-click member names or the player's own name (Y on a gamepad Group window row), with server-confirmed role icons beside names in the Group and Player windows; leader-only Main Tank / Main Assist / Puller changes, with mercenaries restricted to tank. Unit and mock-server coverage; live gameplay remains unverified.
 - [x] Modern AA window: aligned headers and rows at the dialog's scale, current-frame column bounds, saved column resizing, clipped cells and Reset columns (UI input tests; live acceptance pending).
+- [x] Hover respawn: validate availability; recover same-zone player identity, placement and resources; handle resurrection confirmation, server timeout and disconnect safely. Both UI packs and loopback packet sequences have regressions; live gameplay acceptance remains outstanding.
 - [x] Labels: combat timer, breath, respawn gauge, aggro meter, title, ATK, regeneration, and more EQTypes, in the modern and gamepad packs (ui-gaps, merged up to 90aa43f; checked live). ATK leaves out the leadership offense bonus and profile +0x3468; the label and gauge types still not tracked are listed in unknowns.md.
 - [x] Buff icon fading below 19 s; gauge colours for special values (unit tests, not seen live).
 - [x] Hot buttons: the AA and gem right clicks, vertical bars (modern pack, checked live), the key-map text corner; the ranged attack was already in.

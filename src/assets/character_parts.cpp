@@ -103,6 +103,7 @@ public:
         std::optional<std::array<float, 16>> adjust;
         std::string overlay;
         std::map<std::int32_t, std::string> materials; // part +0x108
+        bool hero_forge = false;
     };
 
     DressEnv(const CharacterLibrary& lib, const CharacterModel& model, CharacterMesh& mesh, bool eqg)
@@ -135,11 +136,19 @@ public:
         return hidden.contains({slot, 0}) || hidden.contains({slot, 1});
     }
     bool attach(std::int32_t dag, const std::string& name, const game::NewArmorAdjustment* adjustment) override {
+        return attach_part(dag, name, adjustment, false);
+    }
+    bool attach_armor(std::int32_t dag, const std::string& name, const game::NewArmorAdjustment* adjustment) override {
+        return attach_part(dag, name, adjustment, true);
+    }
+    bool attach_part(std::int32_t dag, const std::string& name, const game::NewArmorAdjustment* adjustment,
+                     bool hero_forge) {
         if (!has_dag(dag)) return false;
         parts.erase(dag);
-        if (name.empty() || name == "0" || !exists(name)) return false;
+        if (name.empty() || name == "0" || !exists(name, hero_forge)) return false;
         Attached a;
         a.name = upper(name);
+        a.hero_forge = hero_forge;
         if (adjustment) a.adjust = adjustment->matrix;
         parts.emplace(dag, std::move(a));
         return true;
@@ -292,10 +301,18 @@ private:
     bool wld_part(const std::string& name) const {
         return lib_.luclin_parts().contains(name) || lib_.actors().contains(name);
     }
-    bool exists(const std::string& name) const {
+    bool exists(const std::string& name, bool hero_forge) const {
         std::string n = upper(name);
+        if (hero_forge && lib_.eqg_ && lib_.eqg_->armor_alias(n)) return static_cast<bool>(lib_.eqg_->armor_part_mesh(n));
         if (!eqg_ && wld_part(n)) return true;
-        return lib_.eqg_ && lib_.eqg_->part_mesh(n) != nullptr;
+        return static_cast<bool>(eqg_part(n, hero_forge));
+    }
+    // An EQG part's mesh: Hero's Forge armor by its alias rules, else the
+    // plain part with no surface maps.
+    eqg_character::ArmorPart eqg_part(const std::string& name, bool hero_forge) const {
+        if (!lib_.eqg_) return {};
+        if (hero_forge) return lib_.eqg_->armor_part_mesh(name);
+        return {lib_.eqg_->part_mesh(name), false};
     }
 
     void append(CharacterMesh& piece, std::uint32_t tint) {
@@ -332,7 +349,7 @@ private:
     bool attach_luclin(const Attached& a, int anchor) {
         const glm::mat4 adjust = a.adjust ? glm::make_mat4(a.adjust->data()) : glm::mat4(1.0f);
         CharacterMesh piece;
-        if (wld_part(a.name)) {
+        if (wld_part(a.name) && !(a.hero_forge && lib_.eqg_ && lib_.eqg_->armor_alias(a.name))) {
             const auto* loc = lib_.luclin_parts().find(a.name);
             if (!loc) loc = lib_.actors().find(a.name);
             std::vector<glm::mat4> body;
@@ -397,11 +414,12 @@ private:
             // each vertex moves from the piece's bind space into its bone's
             // (or the nearest named ancestor's) space and follows that body
             // bone; unnamed ones follow the dag point.
-            auto file = lib_.eqg_ ? lib_.eqg_->part_mesh(a.name) : nullptr;
-            if (!file) return false;
+            const auto part = eqg_part(a.name, a.hero_forge);
+            if (!part) return false;
+            const auto& file = part.mesh;
             std::vector<std::size_t> all(file->pieces.size());
             for (std::size_t i = 0; i < all.size(); ++i) all[i] = i;
-            eqg_character::append_pieces(*file, all, piece);
+            eqg_character::append_pieces(*file, all, piece, part.surface_maps);
             if (!eqg_character::bind_part_to_wld(*file, model_.code, model_.bone_names, anchor, adjust, piece)) return false;
             // EQG triangles wind the other way round from WLD ones (the actor renderer turns the front face for
             // EQG models), so on a WLD body each is reversed, or only its inside faces would be drawn.
@@ -416,9 +434,9 @@ private:
     // "IT14162"): its bones follow the body's of the same names (bind space
     // as the body's); its material textures by part +0x108 and the overlay.
     bool attach_eqg(const Attached& a, int anchor) {
-        auto file = lib_.eqg_ ? lib_.eqg_->part_mesh(a.name) : nullptr;
-        if (!file) return false;
-        eqg_character::MeshFile f = *file;
+        const auto part = eqg_part(a.name, a.hero_forge);
+        if (!part) return false;
+        eqg_character::MeshFile f = *part.mesh;
         for (const auto& [index, name] : a.materials) {
             std::string texture = lower(name) + "_c.dds";
             if (index >= 0 && static_cast<std::size_t>(index) < f.materials.size() && lib_.has_file(texture))
@@ -447,7 +465,7 @@ private:
         std::vector<std::size_t> all(f.pieces.size());
         for (std::size_t i = 0; i < all.size(); ++i) all[i] = i;
         CharacterMesh piece;
-        eqg_character::append_pieces(f, all, piece);
+        eqg_character::append_pieces(f, all, piece, part.surface_maps);
         for (auto& v : piece.vertices)
             for (std::size_t k = 0; k < 4; ++k) {
                 std::size_t b = v.bones[k];

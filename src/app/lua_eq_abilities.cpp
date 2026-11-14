@@ -12,13 +12,14 @@
 // and the CombatAbilityWnd model: shown only for the classes CCombatAbilityWnd::AboutToShow accepts; a drag from its
 // "Discipline" row n (eq.PickUp("CombatAbilityWnd", "Discipline", n)) makes the discipline's hotbutton.
 #include <algorithm>
-#include <array>
 #include <cstdio>
 #include <ctime>
+#include <limits>
 
 #include <lua.hpp>
 
 #include "app/actions_ui.h"
+#include "app/lua_eq_values.h"
 #include "app/lua_eq_windows.h"
 #include "app/spell_ui.h"
 #include "game/combat_ability_menu.h"
@@ -183,6 +184,13 @@ public:
     void child(EqHost& host, std::string_view id, Child& out) override {
         if (!host.conn) return;
         auto& c = *host.conn;
+        if (id == "CAW_CombatEffectTimeRemainingGauge") {
+            const auto gauge = eq_gauge(host, 26);
+            out.has_gauge = true;
+            out.gauge = gauge.value;
+            out.gauge_text = gauge.text;
+            return;
+        }
         if (id == "CAW_CombatEffectLabel" || id == "CAW_CombatEffectButton") {
             const auto& b = c.spell_state().buffs[game::kBuffSlots - 1];
             const game::SpellData* s = c.discipline_active() ? c.spell_table().get(b.spell) : nullptr;
@@ -206,18 +214,28 @@ public:
         out.text = s ? s->name : std::string();
         out.tooltip = s ? s->name : std::string();
         out.checked = false;
-        game::ButtonCoolDown& cd = cool_downs_[static_cast<std::size_t>(n)];
-        const std::uint32_t now = net::GameConnection::eq_time();
-        if (!s) {
-            cd.stop();
-            return;
-        }
+        if (!s) return;
         const std::uint32_t ready = c.discipline_reuse_timer(c.combat_ability_timer(*s)); // FastTime seconds
+        const auto fast_now = static_cast<std::uint32_t>(std::time(nullptr));
+        if (ready <= fast_now) return;
+        out.checked = true;
+        out.cool_down_left = static_cast<std::uint64_t>(ready - fast_now) * 1000;
         const std::int32_t focus =
             host.character && !c.server_ext().reuse_focus_dropped(c, *s) ? host.character->focus_reuse_mod(*s) : 0;
-        const auto reuse = static_cast<std::uint32_t>(static_cast<std::int32_t>(s->recast_time) - focus);
-        const auto fast_now = static_cast<std::uint32_t>(std::time(nullptr));
-        out.checked = cd.set_running(now, game::fast_time_to_eq_time(ready, fast_now, now) - reuse, reuse);
+        out.cool_down_duration = static_cast<std::uint64_t>(
+            std::max<std::int64_t>(static_cast<std::int64_t>(s->recast_time) - focus, 0));
+        // Readiness belongs to the server's shared timer. Inferring begin = ready - this ability's reuse can
+        // put begin in the future for a shorter-reuse ability and make SetCoolDown's unsigned test look ready.
+        // Keep the overlay full while the shared wait exceeds this ability's reuse (also when reuse is zero), as
+        // game/hot_button_state.cpp does; the fraction is still DrawCooldown's (ButtonCoolDown, FPU model).
+        // The button's EQ-time fields hold at most 2^32-1 ms.
+        constexpr auto limit = std::numeric_limits<std::uint32_t>::max();
+        const auto duration = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(std::max(out.cool_down_duration, out.cool_down_left), limit));
+        const auto remaining = static_cast<std::uint32_t>(std::min<std::uint64_t>(out.cool_down_left, limit));
+        const std::uint32_t now = net::GameConnection::eq_time();
+        game::ButtonCoolDown cd;
+        cd.set_ending(now + remaining, duration);
         out.cool_down = cd.overlay_fraction(now);
     }
 
@@ -300,7 +318,6 @@ public:
     }
 
 private:
-    std::array<game::ButtonCoolDown, game::kCombatAbilityButtons> cool_downs_{}; // the buttons' CButtonWnd +0x21c / +0x220
     static bool combat_ability_class(std::uint32_t c) {
         return c == 1 || c == 3 || c == 4 || c == 5 || c == 7 || c == 8 || c == 9 || c == 15 || c == 16;
     }

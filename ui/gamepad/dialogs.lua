@@ -51,7 +51,7 @@ ui.window("Confirm", function()
   T.frame()
   local okOnly = eq.ChildShown(CONFIRM, "OK_Button") == true and eq.ChildShown(CONFIRM, "Yes_Button") == false
   local hints = okOnly and { { "a", "OK" } } or { { "a", "Select" }, { "b", "No" } }
-  if W.begin("Confirm", { w = 760, h = 420, title = "Confirm", hints = hints }) then
+  if W.begin("Confirm", { w = 760, h = 420, title = "Confirm", hints = hints, alwaysFocus = true }) then
     local x0, y0, x1, y1, w = W.area()
     local text = plain((eq.WindowText(CONFIRM, "TextOutput")))
     wrapped(text, x0, y0, w, C.text)

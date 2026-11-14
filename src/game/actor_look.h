@@ -106,6 +106,11 @@ public:
     // +0x134: shows `name` ("IT<n>", "<code>_HAIR_01", "0" or "" for none) on
     // dag `dag`, with a NewArmorAdjData matrix or none; whether it took.
     virtual bool attach(std::int32_t dag, const std::string& name, const NewArmorAdjustment* adjustment) = 0;
+    // Hero's Forge attachments resolve layered armor before direct item models.
+    // Other environments keep the same attachment calls (including recorded vectors).
+    virtual bool attach_armor(std::int32_t dag, const std::string& name, const NewArmorAdjustment* adjustment) {
+        return attach(dag, name, adjustment);
+    }
     // The dag's part's SetTint (part virtual +0x114, children 0).
     virtual void tint_part(std::int32_t dag, std::uint32_t color) = 0;
     // The dag's part's overlay texture (part virtual +0x24c).

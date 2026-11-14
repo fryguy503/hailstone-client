@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <unordered_set>
 
 #include "net/packet_io.h"
 
@@ -1529,6 +1530,7 @@ std::optional<RespawnWindow> decode_respawn_window(const AppPacket& p) {
         v.delay_ms = r.le<std::uint32_t>();
         auto count = r.le<std::uint32_t>();
         if (count > r.remaining() / 26) throw std::out_of_range("respawn option count exceeds packet");
+        std::unordered_set<std::uint32_t> ids;
         for (std::uint32_t i = 0; i < count; ++i) {
             RespawnOption o;
             o.id = r.le<std::uint32_t>();
@@ -1538,7 +1540,8 @@ std::optional<RespawnWindow> decode_respawn_window(const AppPacket& p) {
             o.z = r.f32();
             o.heading = r.f32();
             o.name = r.cstring();
-            o.type = r.le<std::uint8_t>();
+            o.validity = r.le<std::uint8_t>();
+            if (!ids.insert(o.id).second) throw std::out_of_range("duplicate respawn option id");
             v.options.push_back(std::move(o));
         }
         return v;

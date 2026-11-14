@@ -57,6 +57,8 @@ inline constexpr std::int32_t kGuildPermBankView = 15;        // seeing (and vie
 inline constexpr std::int32_t kGuildPermBankPromote = 16;     // Put in Bank
 inline constexpr std::int32_t kGuildPermBankPermissions = 17; // an item's permission, Change Member, Split, Merge
 inline constexpr std::int32_t kGuildPermGuildChatSee = 0x13; // msg_new_text: channels 0 and 17
+inline constexpr std::int32_t kGuildPermTributeOthers = 22;   // changing another member's tribute participation
+inline constexpr std::int32_t kGuildPermTributeBenefits = 23; // choosing and activating the guild's tribute
 inline constexpr std::int32_t kGuildPermBanker = 0x1a;       // Send_OP_GuildManageBanker
 inline constexpr std::int32_t kGuildPermDemoteSelf = 0x1e;   // Send_OP_GuildDemote (yourself)
 

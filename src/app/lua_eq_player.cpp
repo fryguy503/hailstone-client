@@ -199,6 +199,9 @@ public:
         else if (id == "Yes_Button" || id == "No_Button") out.shown = !ok_only(host);
         else if (id == "OK_Button") out.shown = ok_only(host);
         else if (id == "Cancel_Button") out.shown = false;
+        // Not a child of the XML: whether the question is the server's resurrection offer (the packs' respawn
+        // window gives it the focus once, as it appears, over the respawn choices).
+        else if (id == "ResurrectionOffer") out.shown = q == 2 && host.conn->confirmation()->id == net::kConfirmRezz;
     }
     bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
         if (!question(host) || button != "left") return false;

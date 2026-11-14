@@ -215,32 +215,79 @@ local CW = "CombatAbilityWnd"
 local discList = { offset = 0 }
 local discDesc = {}
 
+local function cooldownTime(sec)
+  sec = math.ceil(sec)
+  if sec >= 3600 then return string.format("%d:%02d:%02d", sec // 3600, (sec // 60) % 60, sec % 60) end
+  return string.format("%d:%02d", sec // 60, sec % 60)
+end
+
 ui.window("Combat Abilities", function()
   if not W.shown(CW) then return end
   local discs = eq.Disciplines()
   local focusedDisc
+  -- The active discipline's icon stays out of the pad's navigation: as the window's first item it would take the
+  -- first focus, and A on opening the window would end the discipline. LB ends it instead (a click still does).
+  local discActive = eq.ChildShown(CW, "CAW_CombatEffectButton") == true
+  local hints = discActive
+      and { { "a", "Use" }, { "x", "Assign to slot" }, { "y", "Actions" }, { "lb", "End discipline" }, { "b", "Close" } }
+      or { { "a", "Use" }, { "x", "Assign to slot" }, { "y", "Actions" }, { "b", "Close" } }
   if W.begin("Combat Abilities", { w = 1600, h = 900, title = "Combat Abilities", subtitle = #discs .. " disciplines",
-        hints = { { "a", "Use" }, { "x", "Assign to slot" }, { "y", "Actions" }, { "b", "Close" } } }) then
+        hints = hints }) then
     local discSettled = AS.settled("Combat Abilities")
     if W.pressed("y") then -- the Actions window's combat page (the COMBAT key)
       eq.SetTabPage(AW, "ACTW_ActionsSubwindows", 2)
       eq.ShowWindow(AW, true)
     end
     local x0, y0, x1, y1 = W.area()
+    if discActive then
+      local icon = T.px(64)
+      ui.SetCursorScreenPos(x0, y0)
+      local clicked = ui.InvisibleButton("##cawEffect", icon, icon) -- no EnableNav: the mouse only
+      local hovered = ui.IsItemHovered()
+      local r = T.px(12)
+      T.rect(x0, y0, x0 + icon, y0 + icon, C.raised, 1, r)
+      if hovered then T.rect(x0, y0, x0 + icon, y0 + icon, C.accent, ui.IsItemActive() and 0.30 or 0.18, r) end
+      T.outline(x0, y0, x0 + icon, y0 + icon, C.edge, 1, r)
+      if (clicked or W.pressed("lb")) and discSettled then
+        eq.ClickChild(CW, "CAW_CombatEffectButton", "left")
+      end
+      if hovered then ui.SetTooltip("End this discipline") end
+      local tex, u0, v0, u1, v1 = eq.ChildArt(CW, "CAW_CombatEffectButton", "decal")
+      T.icon(tex, u0, v0, u1, v1, x0, y0, x0 + icon, y0 + icon)
+      local tx = x0 + icon + T.px(16)
+      local fraction, remaining = eq.Gauge(26)
+      T.font(22)
+      local timerW = remaining and remaining ~= "" and (ui.CalcTextSize(remaining) + T.px(16)) or 0
+      local name = eq.WindowText(CW, "CAW_CombatEffectLabel") or ""
+      T.textIn(tx, y0, x1 - timerW, y0 + T.px(32), T.fit(name, math.max(0, x1 - tx - timerW)), C.text, 0)
+      T.textIn(tx, y0, x1, y0 + T.px(32), remaining or "", C.dim, 1)
+      T.unfont()
+      T.bar(tx, y0 + T.px(44), x1, y0 + T.px(54), fraction or 0, C.accent)
+      y0 = y0 + T.px(80)
+      ui.SetCursorScreenPos(x0, y0)
+    end
     local listX1 = x1 - T.px(600)
     local rowH = 72
     local visible = math.max(1, math.floor((y1 - y0 + T.px(10)) / T.px(rowH + 10)))
     W.list("disc", discList, #discs, visible, rowH, listX1 - x0, function(i, rx0, ry0, rx1, ry1, focused)
       local d = discs[i]
+      if d.remaining > 0 then
+        local fraction = math.min(1, d.remaining / math.max(d.reuse, d.remaining, 1))
+        T.rect(rx0, ry0, rx1, ry1, C.bad, 0.08, T.px(10))
+        T.rect(rx0, ry0, rx0 + (rx1 - rx0) * fraction, ry1, C.bad, 0.20, T.px(10))
+        T.rect(rx0 + T.px(4), ry1 - T.px(5), rx0 + T.px(4) + (rx1 - rx0 - T.px(8)) * fraction,
+          ry1 - T.px(2), C.bad, 0.75, T.px(2))
+      end
       local s = ry1 - ry0 - T.px(12)
       local tex, u0, v0, u1, v1 = eq.SpellIcon(d.icon)
       if tex then T.icon(tex, u0, v0, u1, v1, rx0 + T.px(8), ry0 + T.px(6), rx0 + T.px(8) + s, ry0 + T.px(6) + s, d.remaining > 0 and 0.45 or 1) end
-      T.textIn(rx0 + s + T.px(24), ry0, rx1 - T.px(330), ry1, T.fit(d.name, rx1 - rx0 - s - T.px(360)), C.text, 0)
+      T.textIn(rx0 + s + T.px(24), ry0, rx1 - T.px(330), ry1, T.fit(d.name, rx1 - rx0 - s - T.px(360)),
+        d.remaining > 0 and C.dim or C.text, 0)
       T.font(18)
       if d.level > 0 and d.level < 255 then T.textIn(rx1 - T.px(320), ry0, rx1 - T.px(200), ry1, "Lvl " .. d.level, C.dim, 0) end
       T.textIn(rx1 - T.px(200), ry0, rx1 - T.px(16), ry1,
-        d.remaining > 0 and T.duration(d.remaining) or (d.endurance > 0 and (d.endurance .. " end") or "Ready"),
-        d.remaining > 0 and C.endurance or C.good, 1)
+        d.remaining > 0 and cooldownTime(d.remaining) or (d.endurance > 0 and (d.endurance .. " end") or "Ready"),
+        d.remaining > 0 and C.bad or C.good, 1)
       T.unfont()
       if focused then
         focusedDisc = d
@@ -270,7 +317,7 @@ ui.window("Combat Abilities", function()
       py = py + is + T.px(14)
       T.font(18)
       local reuse = focusedDisc.reuse > 0 and ("Reuse " .. T.duration(focusedDisc.reuse)) or "No reuse time"
-      T.draw(px, py, reuse .. (focusedDisc.remaining > 0 and ("   (ready in " .. T.duration(focusedDisc.remaining) .. ")") or ""), C.dim)
+      T.draw(px, py, reuse .. (focusedDisc.remaining > 0 and ("   (ready in " .. cooldownTime(focusedDisc.remaining) .. ")") or ""), C.dim)
       T.unfont()
       py = py + T.px(34)
       local _, stml = eq.SpellDetails(focusedDisc.spell)

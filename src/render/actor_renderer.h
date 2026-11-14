@@ -26,6 +26,7 @@
 #include "game/spawn_animation.h"
 #include "game/world_state.h"
 #include "render/actor_layers.h"
+#include "render/actor_surface.h"
 #include "render/culling.h"
 #include "render/gpu.h"
 #include "render/scene_lighting.h"
@@ -284,6 +285,8 @@ private:
         std::uint32_t tint = 0; // 0xAARRGGBB, high byte 0 = none
         std::uint32_t texture2 = 0xffffffffu; // SkinMeshLuclin's tinted second layer, or none
         std::uint32_t normal_map = 0, rough_map = 0; // a texture pack's maps' slots (0 = none)
+        ActorSurface surface; // native EQG armor maps and highlight; other materials keep the old path
+        bool native_surface = false;
         bool two_sided = false;
         bool fog = true;
     };
@@ -332,6 +335,7 @@ private:
         bool masked = false;
         TextureUse use = TextureUse::Color;
         std::optional<assets::TextureMap> map;
+        bool environment = false; // a DDS cube converted to an octahedral 2D texture
         std::string key() const; // texture_slots_'s
     };
     // A texture read for the GPU: the image as it goes up as `use` (a colour texture's mips built already), or
@@ -349,6 +353,7 @@ private:
             Part part; // all but its texture slots
             TextureRef texture, normal, rough;
             std::optional<TextureRef> texture2;
+            std::optional<TextureRef> native_normal, environment;
         };
         std::vector<std::byte> vertices;
         std::vector<PartPlan> parts;
@@ -425,6 +430,7 @@ private:
     struct Prepared {
         const GpuModel* gpu = nullptr;
         std::uint32_t bone_offset = 0;
+        std::uint32_t surface_offset = 0; // the model's first record in this frame's surface table; 0: old path
         bool eqg = false;
         glm::vec3 center{0.0f}; // the model origin and its bounding radius at its scale
         float radius = 0.0f;
@@ -436,7 +442,9 @@ private:
 
     VkContext& vk_;
     SceneLighting lighting_ = classic_full_bright();
-    std::unique_ptr<FrameBuffers> lighting_buffers_; // the SceneLighting per frame in flight (binding 2)
+    std::unique_ptr<FrameBuffers> lighting_buffers_; // SceneLighting and armor surfaces per frame (binding 1)
+    std::vector<std::byte> lighting_data_; // only the used surface-table prefix is copied each frame
+    bool surface_capacity_reported_ = false;
     std::shared_ptr<const assets::CharacterLibrary> library_;
     // The world's racedata tables, kept from prepare_spawns for choose_model's live model codes.
     std::shared_ptr<const game::HeightTables> height_tables_;

@@ -216,7 +216,7 @@ std::optional<GuildTributeActive> decode_guild_tribute_active(const AppPacket& p
     if (p.data.size() < 40) return std::nullopt;
     return decode_with(p, [](ByteReader& r) {
         GuildTributeActive v;
-        r.skip(4);
+        v.guild_id = r.le<std::uint32_t>();
         v.favor = r.le<std::uint32_t>();
         v.timer_ms = r.le<std::uint32_t>();
         v.enabled = r.le<std::uint32_t>() != 0;
@@ -229,7 +229,7 @@ std::optional<GuildTributeActive> decode_guild_tribute_active(const AppPacket& p
 
 AppPacket encode(const GuildTributeActive& v, Op op) {
     ByteWriter w;
-    w.le<std::uint32_t>(0);
+    w.le(v.guild_id);
     w.le(v.favor);
     w.le(v.timer_ms);
     w.le<std::uint32_t>(v.enabled ? 1 : 0);
@@ -383,11 +383,14 @@ AppPacket encode_guild_donate_platinum(std::uint32_t platinum, std::uint32_t mas
     return make_packet(Op::GuildTributeDonatePlat, std::move(w));
 }
 
-std::optional<std::uint32_t> decode_guild_donate_platinum(const AppPacket& p) {
+std::optional<GuildTributePlatinum> decode_guild_donate_platinum(const AppPacket& p) {
     if (p.data.size() < 12) return std::nullopt;
     return decode_with(p, [](ByteReader& r) {
-        r.skip(8);
-        return r.le<std::uint32_t>();
+        GuildTributePlatinum v;
+        v.platinum = r.le<std::uint32_t>();
+        r.skip(4);
+        v.favor = r.le<std::uint32_t>();
+        return v;
     });
 }
 

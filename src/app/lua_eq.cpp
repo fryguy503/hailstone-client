@@ -1131,24 +1131,33 @@ int GemInfo(lua_State* L) {
     return 1;
 }
 
-// top, r, g, b, a = eq.ButtonCoolDown(name, child, y0, y1)   -- a button's cool-down (CButtonWnd's DrawCooldown
+// top, r, g, b, a, remainingMs, reuseMs = eq.ButtonCoolDown(name, child, y0, y1) -- a button's cool-down (CButtonWnd's DrawCooldown
 // @0x8970a0, the spell gem's rectangle): from y0 + ftol(fraction * (y1 - y0)) down to y1, the button's width, in
-// user colour 0x15f at alpha 0x40; nil while idle
+// user colour 0x15f at alpha 0x40; nil while idle. The window may also supply remaining/reuse milliseconds
+// (combat ability buttons); both are 0 while idle or when the window has no timing detail.
 int ButtonCoolDown(lua_State* L) {
     std::optional<double> cool_down;
+    std::uint64_t left = 0, duration = 0;
     { // the Child gone before the checks below
         StockWindow* w = nullptr;
-        cool_down = Impl::of(L).child(L, w).cool_down;
+        const Child child = Impl::of(L).child(L, w);
+        cool_down = child.cool_down;
+        left = child.cool_down_left;
+        duration = child.cool_down_duration;
     }
     if (!cool_down) {
-        lua_pushnil(L);
-        return 1;
+        for (int i = 0; i < 5; ++i) lua_pushnil(L);
+        lua_pushinteger(L, 0);
+        lua_pushinteger(L, 0);
+        return 7;
     }
     const std::int32_t y0 = number_to_int(luaL_checknumber(L, 3)), y1 = number_to_int(luaL_checknumber(L, 4));
     lua_pushinteger(L, game::spell_gem_overlay_top(*cool_down, y0, y1));
     const std::uint32_t argb = cool_down_color();
     for (int shift : {16, 8, 0, 24}) lua_pushnumber(L, static_cast<double>((argb >> shift) & 0xffu) / 255.0);
-    return 5;
+    lua_pushinteger(L, static_cast<lua_Integer>(left));
+    lua_pushinteger(L, static_cast<lua_Integer>(duration));
+    return 7;
 }
 
 // preview = eq.ItemPreview()   -- the item preview window's state (CObjectPreviewWnd, game/item_preview.h): nil while
@@ -2010,7 +2019,7 @@ int ListInfo(lua_State* L) {
 }
 
 // texts, r, g, b [, texture, u0, v0, u1, v1] = eq.ListRow(name, child, row)   -- row from 0; texts.altRight,
-// texts.comboColumn, texts.iconColumn
+// texts.comboColumn, texts.disabled, texts.iconColumn
 // (from 0) when the icon is not in the first column
 int ListRowFn(lua_State* L) {
     auto& m = Impl::of(L);
@@ -2051,6 +2060,10 @@ int ListRowFn(lua_State* L) {
     if (d->alt_right_click) { // texts.altRight: an Alt right click on the row is the window's
         lua_pushboolean(L, 1);
         lua_setfield(L, -2, "altRight");
+    }
+    if (r.disabled) { // texts.disabled: the window left the line disabled
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "disabled");
     }
     for (float f : r.color) lua_pushnumber(L, f);
     if (!r.icon) return 4;

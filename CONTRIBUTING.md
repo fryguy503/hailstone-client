@@ -32,7 +32,7 @@ build/hailstone/hailstone --validation
 ```
 
 - Run the whole test suite, not only the tests you added.
-- Tests that need your game folder or recorded vectors (`EQ_GAME_DIR`, `HAILSTONE_VECTORS_DIR`) are skipped when those are unset. Run them with the variables set when you change something they cover.
+- Tests that need your game folder or recorded vectors (`EQ_GAME_DIR`, `HAILSTONE_VECTORS_DIR`) are skipped when those are unset. Run them with the variables set when you change something they cover. A few tests of the newer model files (hero's forge layers, the live spell file) also need a current live install in `EQ_LIVE_DIR`.
 - CI on GitHub runs checks only; it does not build ([docs/ci.md](docs/ci.md)). Builds and tests are run locally: Linux natively, and Windows with MSVC, which also runs on Linux under Wine ([docs/ci.md](docs/ci.md) "MSVC under Wine"). A change that only builds with your compiler is not done.
 - A Windows build can also be cross-compiled on Linux with clang-cl ([docs/ci.md](docs/ci.md) "Windows builds from Linux").
 - For code that parses bytes, also run the sanitizer build ([docs/hardening.md](docs/hardening.md)).

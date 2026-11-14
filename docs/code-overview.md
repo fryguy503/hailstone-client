@@ -224,6 +224,7 @@ and `charcreate.lua`.
 - `*_vectors_test.cpp` check `game/mechanics/` against vectors recorded from the original client. Without
   `HAILSTONE_VECTORS_DIR` set they pass without checking anything.
 - Tests that read real game files (zones, models, sounds) need `EQ_GAME_DIR`, and likewise pass silently without it.
+  The few that read a current live install's newer files (hero's forge layers) need `EQ_LIVE_DIR`.
 - `mock_*_test.cpp` drive the real login and game connection against the in-process mock server
   (`tests/mock_server/README.md`).
 - `fuzz_*`: every decoder in `src/net/` must be in `fuzz_decoders.inc`; `fuzz_assets_test.cpp` covers the asset

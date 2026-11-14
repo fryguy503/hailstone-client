@@ -9,6 +9,7 @@
 #include <fstream>
 #include <memory>
 #include <numbers>
+#include <tuple>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -17,6 +18,7 @@
 #include "assets/pfs.h"
 #include "core/game_dir.h"
 #include "game/appearance.h"
+#include "game/appearance_data.h"
 #include "game/race_models.h"
 #include "game_files.h"
 #include "scratch_dir.h"
@@ -484,6 +486,418 @@ TEST_CASE("hero's forge layered parts: a long chain of distinct names stops at k
     CHECK(store.layered_part("P0") == std::pair<std::string, std::string>{"P1", "L"});
     CHECK(store.part_mesh("P0") == nullptr);
     CHECK(store.part_mesh("P5") == nullptr); // cached on the way down
+}
+
+namespace {
+
+// Authored fixtures contain only a triangle and invented material names.
+std::vector<std::byte> armor_fixture_mesh(float marker, bool parameters = true) {
+    ByteWriter strings, materials;
+    auto str = [&](std::string_view value) {
+        auto offset = static_cast<std::uint32_t>(strings.size());
+        strings.fixed_string(value, value.size() + 1);
+        return offset;
+    };
+    for (std::uint32_t i = 0; i < 2; ++i) {
+        materials.le(i);
+        materials.le(str("M" + std::to_string(i)));
+        materials.le(str("Opaque_MaxCBSGE1.fx"));
+        materials.le<std::uint32_t>(parameters ? 6u : 1u);
+        for (const auto& [key, value] : std::array{
+                 std::pair{"e_TextureDiffuse0", "BASE_C.DDS"}, std::pair{"e_TextureNormal0", "BASE_N.DDS"},
+                 std::pair{"e_TextureEnvironment0", "BASE_E.DDS"}}) {
+            if (!parameters && std::string_view(key) != "e_TextureDiffuse0") continue;
+            materials.le(str(key));
+            materials.le<std::uint32_t>(2);
+            materials.le(str(value));
+        }
+        for (const auto& [key, value] : std::array{
+                 std::pair{"e_fShininess0", 24.0f}, std::pair{"e_fGloss0", 0.7f},
+                 std::pair{"e_fEnvMapStrength0", 0.25f}}) {
+            if (!parameters) continue;
+            materials.le(str(key));
+            materials.le<std::uint32_t>(0);
+            materials.f32(value);
+        }
+    }
+    ByteWriter out;
+    out.fixed_string("EQGM", 4);
+    for (std::uint32_t v : {3u, static_cast<std::uint32_t>(strings.size()), 2u, 3u, 2u, 0u}) out.le(v);
+    out.bytes(strings.data());
+    out.bytes(materials.data());
+    for (int i = 0; i < 3; ++i) {
+        for (float v : {marker + static_cast<float>(i), 0.0f, 0.0f, 0.0f, 0.0f, 1.0f}) out.f32(v);
+        out.le<std::uint32_t>(0xffffffffu);
+        for (int j = 0; j < 4; ++j) out.f32(0.0f);
+    }
+    for (std::uint32_t material = 0; material < 2; ++material)
+        for (std::uint32_t v : {0u, 1u, 2u, material, 0u}) out.le(v);
+    return out.take();
+}
+
+std::vector<std::byte> armor_fixture_layer(bool maps = true, bool color = true) {
+    ByteWriter strings;
+    auto str = [&](std::string_view value) {
+        auto offset = static_cast<std::uint32_t>(strings.size());
+        strings.fixed_string(value, value.size() + 1);
+        return offset;
+    };
+    auto name = str("SURFACE"), diffuse = str("SURFACE_C.DDS"), normal = str("SURFACE_N.DDS"),
+         environment = str("SURFACE_E.DDS");
+    ByteWriter out;
+    out.fixed_string("EQGL", 4);
+    for (std::uint32_t v : {4u, static_cast<std::uint32_t>(strings.size()), 1u}) out.le(v);
+    out.bytes(strings.data());
+    for (std::uint32_t v : {name, color ? diffuse : 0xffffffffu, maps ? normal : 0xffffffffu,
+                           maps ? environment : 0xffffffffu,
+                           0xffffffffu, 0xffffffffu}) out.le(v);
+    out.f32(12.0f);
+    out.f32(0.5f);
+    return out.take();
+}
+
+void write_armor_fixture(const std::filesystem::path& path, const std::vector<std::byte>& bytes) {
+    std::ofstream file(path, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
+
+void armor_fixture_folder(const std::filesystem::path& dir, bool maps = true, bool diffuse = true,
+                          bool parameters = true, bool color = true) {
+    std::filesystem::create_directories(dir / "Resources" / "Layers");
+    std::ofstream(dir / "Resources" / "OnDemandResources.txt")
+        << "direct.eqg^IT1.MOD^IT1_ACTORDEF^EQGM\nbase.eqg^IT2.MOD^IT2_ACTORDEF^EQGM\n"
+           "direct.eqg^IT1.MOD^IT3_ACTORDEF^EQGM\ndirect.eqg^IT1.MOD^IT4_ACTORDEF^EQGM\n"
+           "direct.eqg^IT9.MOD^IT9_ACTORDEF^EQGM\n"
+           "surface.eqg^surface.lay^SURFACE^EQGL\n";
+    std::ofstream(dir / "Resources" / "Layers" / "A.txt")
+        << "\xef\xbb\xbf IT1 ^ IT2 ^ SURFACE \r\nIT2^IT999^SURFACE\nIT3^IT999^SURFACE\nIT4^IT2^MISSING\n"
+           "IT5^IT6^SURFACE\nIT6^IT5^SURFACE\nIT-1^IT2^SURFACE\nIT7^../IT2^SURFACE\n"
+           "IT8^IT2^SURFACE^EXTRA\n";
+    std::ofstream(dir / "Resources" / "Layers" / "C.txt") << "IT9^IT2^MISSING\n";
+    std::ofstream(dir / "Resources" / "Layers" / "B.txt") << "IT1^IT999^OTHER\n";
+    auto incompatible = armor_fixture_mesh(30.0f, parameters);
+    incompatible[20] = std::byte{1}; // one triangle instead of the base's two
+    incompatible.resize(incompatible.size() - 20);
+    write_armor_fixture(dir / "direct.eqg", test::pfs_fixtures::make_pfs({
+        {"it1.mod", armor_fixture_mesh(10.0f, parameters)}, {"it9.mod", std::move(incompatible)}}));
+    write_armor_fixture(dir / "base.eqg", test::pfs_fixtures::make_pfs({{"it2.mod", armor_fixture_mesh(20.0f, parameters)}}));
+    std::vector<std::pair<std::string, std::vector<std::byte>>> files{
+        {"surface.lay", armor_fixture_layer(maps, color)}, {"surface_n.dds", {std::byte{1}}},
+        {"surface_e.dds", {std::byte{1}}}};
+    if (diffuse) files.push_back({"surface_c.dds", {std::byte{1}}});
+    write_armor_fixture(dir / "surface.eqg", test::pfs_fixtures::make_pfs(files));
+}
+
+} // namespace
+
+TEST_CASE("hero's forge armor aliases precede colliding generic parts without sharing their cache") {
+    test::ScratchDir dir("armor_alias");
+    armor_fixture_folder(dir.path());
+    for (bool armor_first : {false, true}) {
+        EqgCharacterStore store{GameDir(dir.path())};
+        if (armor_first) REQUIRE(store.armor_part_mesh("IT1"));
+        auto direct = store.part_mesh("IT1");
+        auto armor = store.armor_part_mesh("it1");
+        REQUIRE(direct);
+        REQUIRE(armor);
+        CHECK(direct->pieces[0].vertices[0].position.x == 10.0f);
+        CHECK(armor.mesh->pieces[0].vertices[0].position.x == 20.0f);
+        CHECK(store.armor_part_mesh("IT1").mesh == armor.mesh);
+        CHECK(store.part_mesh("IT1") == direct);
+        CHECK(armor.surface_maps);
+        REQUIRE(armor.mesh->materials.size() == 2);
+        for (const auto& material : armor.mesh->materials) {
+            CHECK(material.diffuse == "surface_c.dds");
+            CHECK(material.effect.normal_map == "surface_n.dds");
+            CHECK(material.effect.textures == std::vector<std::string>{"surface_e.dds"});
+            CHECK(material.effect.shininess == 12.0f);
+            CHECK(material.effect.gloss == doctest::Approx(0.7f));
+            CHECK(material.effect.env_strength == 0.5f);
+            CHECK(material.effect.specular);
+            CHECK(material.effect.reflective);
+        }
+        CharacterMesh plain_mesh, armor_mesh;
+        eqg_character::append_pieces(*direct, {0}, plain_mesh);
+        eqg_character::append_pieces(*armor.mesh, {0}, armor_mesh, armor.surface_maps);
+        REQUIRE(plain_mesh.materials.size() == 2);
+        REQUIRE(armor_mesh.materials.size() == 2);
+        CHECK(plain_mesh.materials[0].effect.normal_map.empty());
+        CHECK_FALSE(plain_mesh.materials[0].effect.specular);
+        CHECK(armor_mesh.materials[0].effect.normal_map == "surface_n.dds");
+        CHECK(armor_mesh.materials[1].effect.textures == std::vector<std::string>{"surface_e.dds"});
+        // A row whose base is missing is not followed: the direct part, as with no row, plainly lit.
+        auto unmapped = store.armor_part_mesh("IT3");
+        REQUIRE(unmapped);
+        CHECK(unmapped.mesh == store.part_mesh("IT3"));
+        CHECK_FALSE(unmapped.surface_maps);
+        CHECK_FALSE(store.armor_alias("IT3"));
+        CHECK(store.armor_alias("IT1"));
+        auto legacy = store.armor_part_mesh("IT4"); // an existing base with an absent layer keeps its direct look
+        REQUIRE(legacy);
+        CHECK(legacy.mesh->pieces[0].vertices[0].position.x == 10.0f);
+        CHECK(legacy.mesh == store.part_mesh("IT4")); // shared, not copied
+        CHECK_FALSE(legacy.surface_maps);
+        CHECK(store.part_mesh("IT3"));
+        CHECK(store.part_mesh("IT4"));
+        CHECK_FALSE(store.armor_part_mesh("IT5")); // cycle: no base, no direct part
+        CHECK_FALSE(store.layered_part("IT-1"));
+        CHECK_FALSE(store.layered_part("IT7"));
+        CHECK_FALSE(store.layered_part("IT8"));
+        // IT2's own row names a missing base: its direct mesh, which IT1's base lookup also kept.
+        auto own = store.armor_part_mesh("IT2");
+        REQUIRE(own);
+        CHECK(own.mesh == store.part_mesh("IT2"));
+        CHECK(own.mesh->pieces[0].vertices[0].position.x == 20.0f);
+        CHECK_FALSE(own.surface_maps);
+        CHECK_FALSE(store.armor_part_mesh("IT9")); // unrelated direct layout cannot fill in a missing layer
+        CHECK(store.part_mesh("IT9"));
+    }
+}
+
+TEST_CASE("hero's forge layers retain omitted surface maps and preserve legacy parts when the layer is unavailable") {
+    test::ScratchDir dir("armor_layer_slots");
+    armor_fixture_folder(dir.path(), false);
+    EqgCharacterStore store{GameDir(dir.path())};
+    auto armor = store.armor_part_mesh("IT1");
+    REQUIRE(armor);
+    CHECK(armor.mesh->materials[0].effect.normal_map == "base_n.dds");
+    CHECK(armor.mesh->materials[0].effect.textures == std::vector<std::string>{"base_e.dds"});
+    test::ScratchDir incomplete("armor_missing_diffuse");
+    armor_fixture_folder(incomplete.path(), true, false);
+    EqgCharacterStore broken{GameDir(incomplete.path())};
+    auto legacy = broken.armor_part_mesh("IT1");
+    REQUIRE(legacy);
+    CHECK(legacy.mesh->pieces[0].vertices[0].position.x == 10.0f);
+    CHECK_FALSE(legacy.surface_maps);
+    CharacterMesh rendered;
+    eqg_character::append_pieces(*legacy.mesh, {0}, rendered, legacy.surface_maps);
+    REQUIRE_FALSE(rendered.materials.empty());
+    CHECK(rendered.materials[0].effect.normal_map.empty());
+    CHECK_FALSE(rendered.materials[0].effect.specular);
+    CHECK(broken.part_mesh("IT1"));
+}
+
+TEST_CASE("hero's forge surface identity keeps native shader and maps without changing legacy material merging") {
+    auto source = eqg_character::parse_mesh(armor_fixture_mesh(0.0f), "fixture");
+    REQUIRE(source.materials.size() == 2);
+    source.materials[0].name = source.materials[1].name = "SHARED";
+    source.materials[1].shader = "Chroma_MaxCB1.fx";
+    source.materials[1].effect.normal_map = "other_n.dds";
+    CharacterMesh generic;
+    eqg_character::append_pieces(source, {0}, generic);
+    REQUIRE(generic.materials.size() == 1); // legacy identity is name plus diffuse
+    CHECK(generic.materials[0].effect.normal_map.empty());
+    CharacterMesh armor;
+    eqg_character::append_pieces(source, {0}, armor, true);
+    REQUIRE(armor.materials.size() == 2);
+    CHECK(armor.materials[0].eqg_shader == EqgShader::None);
+    CHECK(armor.materials[1].eqg_shader == EqgShader::Chroma);
+    CHECK(armor.materials[0].effect.normal_map == "base_n.dds");
+    CHECK(armor.materials[1].effect.normal_map == "other_n.dds");
+    CHECK(armor.parts[0].material != armor.parts[1].material);
+    // Whichever comes first, a plain part never shares an armor part's material (and its maps), nor the reverse.
+    for (bool armor_first : {true, false}) {
+        CAPTURE(armor_first);
+        CharacterMesh mixed;
+        eqg_character::append_pieces(source, {0}, mixed, armor_first);
+        eqg_character::append_pieces(source, {0}, mixed, !armor_first);
+        REQUIRE(mixed.parts.size() == 4);
+        REQUIRE(mixed.materials.size() == 3);
+        const std::size_t plain = armor_first ? 2 : 0, mapped = armor_first ? 0 : 2;
+        for (std::size_t i = plain; i < plain + 2; ++i) {
+            CHECK(mixed.materials[mixed.parts[i].material].effect.normal_map.empty());
+            CHECK_FALSE(mixed.materials[mixed.parts[i].material].effect.specular);
+        }
+        CHECK(mixed.parts[plain].material == mixed.parts[plain + 1].material);
+        CHECK(mixed.materials[mixed.parts[mapped].material].effect.normal_map == "base_n.dds");
+        CHECK(mixed.materials[mixed.parts[mapped + 1].material].effect.normal_map == "other_n.dds");
+    }
+}
+
+TEST_CASE("EQG character diffuse properties keep exact names and the last matching value") {
+    ByteWriter strings;
+    auto str = [&](std::string_view value) {
+        auto offset = static_cast<std::uint32_t>(strings.size());
+        strings.fixed_string(value, value.size() + 1);
+        return offset;
+    };
+    ByteWriter material;
+    material.le<std::uint32_t>(0);
+    material.le(str("M"));
+    material.le(str("Opaque_MaxCB1.fx"));
+    material.le<std::uint32_t>(3);
+    for (const auto& [key, value] : std::array{
+             std::pair{"e_TextureDiffuse0", "FIRST_C.DDS"}, std::pair{"e_TextureDiffuse0", "LAST_C.DDS"},
+             std::pair{"E_TEXTUREDIFFUSE0", "WRONG_CASE_C.DDS"}}) {
+        material.le(str(key));
+        material.le<std::uint32_t>(2);
+        material.le(str(value));
+    }
+    ByteWriter data;
+    data.fixed_string("EQGM", 4);
+    for (std::uint32_t v : {3u, static_cast<std::uint32_t>(strings.size()), 1u, 0u, 0u, 0u}) data.le(v);
+    data.bytes(strings.data());
+    data.bytes(material.data());
+    auto mesh = eqg_character::parse_mesh(data.data(), "fixture");
+    REQUIRE(mesh.materials.size() == 1);
+    CHECK(mesh.materials[0].diffuse == "LAST_C.DDS");
+}
+
+TEST_CASE("hero's forge map-only layers preserve base diffuse and update only authored shader parameters") {
+    test::ScratchDir dir("armor_map_only");
+    armor_fixture_folder(dir.path(), true, true, true, false);
+    EqgCharacterStore store{GameDir(dir.path())};
+    auto armor = store.armor_part_mesh("IT1");
+    REQUIRE(armor);
+    CHECK(armor.mesh->materials[0].diffuse == "BASE_C.DDS");
+    CHECK(armor.mesh->materials[0].effect.normal_map == "surface_n.dds");
+    CHECK(armor.mesh->materials[0].effect.shininess == 12.0f);
+    test::ScratchDir no_params("armor_absent_properties");
+    armor_fixture_folder(no_params.path(), true, true, false);
+    EqgCharacterStore bare{GameDir(no_params.path())};
+    auto plain = bare.armor_part_mesh("IT1");
+    REQUIRE(plain);
+    CHECK(plain.mesh->materials[0].diffuse == "surface_c.dds");
+    CHECK(plain.mesh->materials[0].effect.normal_map.empty());
+    CHECK(plain.mesh->materials[0].effect.textures.empty());
+    CHECK(plain.mesh->materials[0].effect.shininess == 40.0f);
+    CHECK(plain.mesh->materials[0].effect.env_strength == 0.0f);
+}
+
+TEST_CASE("hero's forge aliases bypass colliding WLD armor parts while held items keep the WLD actor") {
+    using namespace test::wld_fixtures;
+    test::ScratchDir dir("armor_wld_collision");
+    armor_fixture_folder(dir.path());
+    WldBuilder b;
+    auto bitmap = b.add(0x03, b.str("BODY_SPRITE"), bitmap_name("fixture.bmp"));
+    ByteWriter info;
+    info.le<std::uint32_t>(0);
+    info.le<std::uint32_t>(1);
+    info.le(bitmap);
+    auto sprite_info = b.add(0x04, 0, info);
+    ByteWriter ref;
+    ref.le(sprite_info);
+    ref.le<std::uint32_t>(0);
+    auto sprite = b.add(0x05, 0, ref);
+    auto mat = b.add(0x30, b.str("BODY_MDF"), material(0x80000001, sprite));
+    auto palette = b.add(0x31, 0, refs({mat, mat, mat}));
+    auto geometry = b.add(0x36, b.str("HUM_DMSPRITEDEF"), mesh(palette, false));
+    ref = {};
+    ref.le(geometry);
+    ref.le<std::uint32_t>(0);
+    auto mesh_ref = b.add(0x2d, 0, ref);
+    ByteWriter track;
+    track.le<std::int32_t>(0);
+    track.le<std::uint32_t>(0);
+    const std::array tracks{b.add(0x13, b.str("HUM_ROOT_TRACK"), track),
+                            b.add(0x13, b.str("HUMHEAD_POINT_TRACK"), track),
+                            b.add(0x13, b.str("HUMTUNIC_POINT_TRACK"), track)};
+    ByteWriter skeleton;
+    skeleton.le<std::uint32_t>(0);
+    skeleton.le<std::uint32_t>(3);
+    skeleton.le<std::int32_t>(0);
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        skeleton.le<std::int32_t>(0);
+        skeleton.le<std::uint32_t>(0);
+        skeleton.le(tracks[i]);
+        skeleton.le<std::int32_t>(i == 0 ? mesh_ref : 0);
+        skeleton.le<std::uint32_t>(0);
+    }
+    auto sk = b.add(0x10, b.str("HUM_HS_DEF"), skeleton);
+    ref = {};
+    ref.le(sk);
+    ref.le<std::uint32_t>(0);
+    auto sk_ref = b.add(0x11, 0, ref);
+    auto actor = [&](const char* name, std::int32_t resource) {
+        ByteWriter body;
+        for (std::uint32_t v : {0u, 0u, 0u, 1u, 0u}) body.le(v);
+        body.le(resource);
+        b.add(0x14, b.str(name), body);
+    };
+    actor("HUM_ACTORDEF", sk_ref);
+    actor("IT1_ACTORDEF", mesh_ref);
+    actor("IT3_ACTORDEF", mesh_ref); // IT3's row names a missing base
+    auto source = std::make_shared<CharacterArchive>();
+    source->archive = std::make_shared<PfsArchive>(PfsArchive::from_memory(
+        test::pfs_fixtures::make_pfs({{"fixture.wld", b.build()}}), "globalhum_chr.s3d"));
+    source->wlds.push_back(wld::WldFile::parse(*source->archive->read("fixture.wld"), "globalhum_chr.s3d:fixture.wld"));
+    CharacterLibrary library({source});
+    library.set_eqg_store(std::make_shared<EqgCharacterStore>(GameDir(dir.path())));
+    auto data = std::make_shared<game::AppearanceData>();
+    data->new_armor_filter = game::kNewArmorAllBits;
+    data->new_armor.parse_tags("5000\tHUM\t1\t\t-1\t1\t\n5001\tHUM\t3\t\t-1\t1\t\n");
+    library.set_appearance_data(data);
+    auto model = library.model("HUM");
+    REQUIRE(model);
+    REQUIRE(model->luclin);
+    game::Appearance appearance;
+    appearance.show_helm = true;
+    appearance.hero_forge[0] = 5000;
+    auto dressed = library.dress(*model, appearance);
+    REQUIRE(dressed);
+    CHECK(std::any_of(dressed->materials.begin(), dressed->materials.end(), [](const Material& m) {
+        return m.frames == std::vector<std::string>{"surface_c.dds"};
+    }));
+    // An unfollowable row (no base) leaves the piece as it was without rows: the WLD actor, not the EQG one.
+    appearance.hero_forge[0] = 5001;
+    auto unmapped = library.dress(*model, appearance);
+    REQUIRE(unmapped);
+    CHECK(unmapped->vertices.size() == dressed->vertices.size() - 3 + 4); // EQG piece (3) replaced by the WLD one (4)
+    CHECK(std::none_of(unmapped->materials.begin(), unmapped->materials.end(), [](const Material& m) {
+        return !m.frames.empty() && (m.frames[0] == "BASE_C.DDS" || m.frames[0] == "base_c.dds");
+    }));
+    auto held = library.item_mesh(1);
+    REQUIRE(held);
+    CHECK_FALSE(held->eqg);
+    CHECK(held->mesh.vertices.size() == 4);
+    CHECK(held->mesh.vertices[0].position.x >= 100.0f);
+}
+
+TEST_CASE("modern hero's forge real assets resolve Celestial and Holiday armor separately from held models") {
+    // Runs with a live install in EQ_LIVE_DIR (its Resources/Layers rows and modern armor).
+    const char* modern_dir = std::getenv("EQ_LIVE_DIR");
+    if (!modern_dir) return;
+    EqgCharacterStore store{GameDir(modern_dir)};
+    auto celestial = store.armor_part_mesh("IT99592");
+    REQUIRE(celestial);
+    CHECK_FALSE(celestial.mesh->bones.empty());
+    CHECK(celestial.mesh->materials[0].diffuse == "robe_celestrial_c.dds");
+    CHECK(celestial.mesh->materials[0].effect.normal_map == "robe_celestrial_n.dds");
+    auto holiday = store.armor_part_mesh("IT20817");
+    auto direct = store.part_mesh("IT20817");
+    auto base = store.part_mesh("IT70017");
+    REQUIRE(holiday);
+    REQUIRE(direct);
+    REQUIRE(base);
+    CHECK_FALSE(holiday.mesh->bones.empty());
+    CHECK(direct->bones.empty());
+    CHECK(holiday.mesh->pieces[0].vertices.size() == base->pieces[0].vertices.size());
+    CHECK(holiday.mesh->pieces[0].vertices.size() != direct->pieces[0].vertices.size());
+    auto old_robe = store.part_mesh("IT28700");
+    auto compatible_robe = store.armor_part_mesh("IT28700");
+    REQUIRE(old_robe);
+    REQUIRE(compatible_robe);
+    CHECK(compatible_robe.mesh->pieces[0].vertices.size() == old_robe->pieces[0].vertices.size());
+    CHECK(compatible_robe.mesh->materials[0].diffuse == old_robe->materials[0].diffuse);
+    CHECK_FALSE(compatible_robe.surface_maps);
+    auto library = CharacterLibrary::load(GameDir(modern_dir), "", true);
+    auto data = std::make_shared<game::AppearanceData>(*library.appearance_data());
+    data->new_armor_filter = game::kNewArmorAllBits;
+    library.set_appearance_data(data);
+    for (const auto& [code, slot, hero] : std::array{std::tuple{"HIF", 1u, 28507u}, std::tuple{"BAF", 4u, 71004u}}) {
+        CAPTURE(code);
+        auto model = library.model(code);
+        REQUIRE(model);
+        game::Appearance appearance;
+        appearance.material[slot] = slot == 1 ? 10u : 1u;
+        appearance.hero_forge[slot] = hero;
+        auto dressed = library.dress(*model, appearance);
+        REQUIRE(dressed);
+        const std::string& expected = slot == 1 ? celestial.mesh->materials[0].diffuse : holiday.mesh->materials[0].diffuse;
+        CHECK(std::any_of(dressed->materials.begin(), dressed->materials.end(), [&](const Material& m) {
+            return !m.frames.empty() && m.frames[0] == expected;
+        }));
+    }
 }
 
 TEST_CASE("EQG clips: key times 0 and 0xFFFFFFFF resample to at most kMaxClipFrames frames") {

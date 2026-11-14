@@ -862,6 +862,7 @@ TEST_CASE("guild tribute: the list, the benefits, opting in and donations") {
     act.favor = 900;
     act.timer_ms = 600000;
     act.enabled = true;
+    act.guild_id = 3;
     act.tributes = {5, kTributeNone};
     act.tiers = {1, 0};
     AppPacket ap = encode(act);
@@ -869,6 +870,7 @@ TEST_CASE("guild tribute: the list, the benefits, opting in and donations") {
     auto da = decode_guild_tribute_active(ap);
     REQUIRE(da);
     CHECK(da->enabled);
+    CHECK(da->guild_id == 3);
     CHECK(da->tributes[0] == 5);
     CHECK(da->tiers[0] == 1);
 
@@ -903,8 +905,16 @@ TEST_CASE("guild tribute: the list, the benefits, opting in and donations") {
     CHECK(rep->favor == 150);
     CHECK(encode_guild_donate_platinum(10, 77, 3).data.size() == 20);
     std::vector<std::byte> plat(12);
+    plat[0] = std::byte{10};
     plat[8] = std::byte{50};
-    CHECK(decode_guild_donate_platinum(AppPacket(to_wire(Op::GuildTributeDonatePlat), plat)).value_or(0) == 50);
+    auto donation = decode_guild_donate_platinum(AppPacket(to_wire(Op::GuildTributeDonatePlat), plat));
+    REQUIRE(donation);
+    CHECK(donation->platinum == 10);
+    CHECK(donation->favor == 50);
+    for (std::size_t size = 0; size < 12; ++size) {
+        plat.resize(size);
+        CHECK_FALSE(decode_guild_donate_platinum(AppPacket(to_wire(Op::GuildTributeDonatePlat), plat)));
+    }
 }
 
 #include "net/social_packets.h"

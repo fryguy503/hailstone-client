@@ -59,7 +59,8 @@ ItemSlot read_slot(ByteReader& r);
 
 // ItemContainerInstance values (rof2_limits.h invtype).
 inline constexpr std::int16_t kInvPossessions = 0, kInvBank = 1, kInvSharedBank = 2, kInvTrade = 3, kInvWorld = 4,
-                              kInvLimbo = 5, kInvMerchant = 9, kInvCorpse = 11, kInvRealEstate = 14,
+                              kInvLimbo = 5, kInvTribute = 6, kInvGuildTribute = 8,
+                              kInvMerchant = 9, kInvCorpse = 11, kInvRealEstate = 14,
                               kInvAltStorage = 19, kInvArchived = 20, kInvMail = 21;
 
 // Possessions slot numbers (rof2_limits.h invslot): 0..22 equipment,

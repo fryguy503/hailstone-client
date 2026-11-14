@@ -7,7 +7,7 @@ layout(push_constant) uniform Push {
     mat4 view_proj;
     vec4 fog_color; // a: fog density
     vec4 fog; // start, end, alpha_ref, opacity
-    vec4 camera_pos;
+    vec4 camera_pos; // w: the part's native armor surface-table index (fragment shader)
     uint texture_index;
     uint bone_offset;
     uint tint; // 0xAARRGGBB; high byte 0 = none

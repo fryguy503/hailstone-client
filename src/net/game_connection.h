@@ -500,7 +500,9 @@ public:
     void set_player_motion(const glm::vec3& position, float heading, const glm::vec3& velocity, bool moving);
     // Where the local player (and the mount it rides) is drawn this frame: the camera's place between the game
     // clock's steps (game::WorldState::set_local_drawn). Nothing is sent.
-    void set_player_drawn(const glm::vec3& position, float heading) { world_.set_local_drawn(position, heading); }
+    void set_player_drawn(const glm::vec3& position, float heading) {
+        if (!pstatus_.dead) world_.set_local_drawn(position, heading);
+    }
     // What set_player_motion last gave: whether the player is moving, and the heading (0..512).
     bool player_moving() const { return moving_; }
     float player_heading() const { return heading_; }
@@ -706,16 +708,29 @@ public:
     // the list and button are then disabled until OP_ZonePlayerToBind closes the window.
     const std::optional<RespawnWindow>& respawn_window() const { return respawn_; }
     bool respawn_ready() const;
+    bool respawn_option_available(std::uint32_t option_id) const;
+    bool respawn_option_is_resurrection(std::uint32_t option_id) const;
+    std::optional<std::uint32_t> accepted_hover_rez_option() const;
     bool respawn_chosen() const { return respawn_chosen_; }
+    std::uint32_t respawn_session() const { return respawn_session_; }
     // The respawn timer's milliseconds left (the window's time less the time since it came), and its whole span.
     // How long the window has been up (ms): the respawn gauge's and Select's clock (the original counts from the
     // corpse's time, PlayerZoneClient +0x2bc; taken as the window's arrival here).
-    std::int64_t respawn_age_ms() const { return respawn_ ? now_ms() - respawn_shown_ms_ : 0; }
+    std::int64_t respawn_age_ms() const { return respawn_ ? std::max<std::int64_t>(0, respawn_now_ms() - respawn_shown_ms_) : 0; }
     std::int64_t respawn_ms_left() const {
         if (!respawn_) return 0;
-        return std::max<std::int64_t>(0, static_cast<std::int64_t>(respawn_->time_remaining_ms) - (now_ms() - respawn_shown_ms_));
+        return std::max<std::int64_t>(0, static_cast<std::int64_t>(respawn_->time_remaining_ms) - respawn_age_ms());
     }
     void choose_respawn(std::uint32_t option_id);
+    // Same-zone hover completion publishes a new living spawn. The app must place its physics body there before
+    // the next movement step; a full zone change uses the ordinary zone-in placement instead.
+    struct RespawnPlacement {
+        glm::vec3 position{};
+        float heading = 0;
+    };
+    std::optional<RespawnPlacement> take_respawn_placement() {
+        return std::exchange(respawn_placement_, std::nullopt);
+    }
 
     // ---- personal tribute (net/game_connection_tribute.cpp, net/tribute_packets.h): the tributes the server offers
     // (asked for while zoning in), our chosen benefits, favour, the active timer, and the tribute master's window
@@ -723,6 +738,7 @@ public:
     struct Tribute {
         std::map<std::uint32_t, TributeAbility> abilities; // by tribute id
         TributeSettings settings;                           // the server's (OP_TributeUpdate)
+        bool settings_known = false; // received settings, rather than the initial profile's selected ids
         std::int32_t points = 0, career = 0;
         std::uint32_t timer_ms = 0;      // OP_TributeTimer's value
         std::int64_t timer_at = 0;       // when it came (now_ms)
@@ -1134,6 +1150,7 @@ public:
         std::map<std::uint32_t, TributeAbility> abilities;
         std::map<std::uint32_t, std::string> descriptions;
         GuildTributeActive active;
+        bool active_known = false; // a first active update may follow the zone-in's item packets
         std::int64_t timer_at = 0; // when active.timer_ms came (now_ms)
         std::optional<bool> opted_in;
         std::uint32_t master_id = 0;
@@ -1146,6 +1163,7 @@ public:
     const GuildTribute& guild_tribute() const { return guild_tribute_; }
     void close_guild_tribute_master() { guild_tribute_.master_id = 0; }
     void guild_tribute_describe(std::uint32_t tribute_id, std::uint32_t tier = 0);
+    bool can_change_guild_tribute() const;
     // Saves the guild's two benefits (OP_GuildSaveActiveTributes, then OP_GuildModifyBenefits).
     void guild_tribute_change(const GuildTributeActive& v);
     void guild_tribute_toggle(bool on);
@@ -1155,7 +1173,10 @@ public:
     void guild_tribute_opt_out(const std::string& member);
     void guild_trophy_opt_out(const std::string& member);
     bool guild_tribute_donate_cursor();
+    // Sends only while carried platinum covers the amount and no platinum donation is waiting for its reply.
     bool guild_tribute_donate_platinum(std::uint32_t platinum);
+    // A guild platinum donation waits for its reply (CTributeMasterWnd+0x2d8): the master window greys Donate.
+    bool guild_platinum_pending() const { return guild_platinum_pending_ != 0; }
 
     // ---- alternate currencies and point merchants (net/game_connection_commerce.cpp, net/merchant_packets.h)
     struct AltCurrency {
@@ -2230,6 +2251,8 @@ public:
     // LocalPC_HasGuildPermission @0x4241f0 (game/guild_ranks.h): a GM always; else the rank's bit of the table
     // OP_GuildUpdate action 5 fills.
     bool has_guild_permission(std::int32_t permission) const;
+    // Tagged SendGuildRanks rows can arrive before the own GuildID appearance during a membership change.
+    std::uint32_t received_guild_permission_context() const;
     const game::RaidState& raid() const { return raid_; }
     const FellowshipState& fellowship() const { return fellowship_; }
     void fellowship_create();
@@ -3161,6 +3184,14 @@ private:
     std::uint32_t bard_twist_pos_ = 0;                // +0x1eac
     std::function<bool(std::string_view, const std::string&)> app_commands_;
     std::optional<RespawnWindow> respawn_;
+    // A hover resurrection answer stages a choice locally; only OP_RespawnWindow commits the destination.
+    std::optional<RespawnOption> hover_rez_choice_;
+    bool hover_rez_accepted_ = false;
+    const RespawnOption* respawn_resurrection_option() const;
+    void clear_hover_rez() { hover_rez_choice_.reset(); hover_rez_accepted_ = false; }
+    bool respawn_spawn_pending_ = false; // same-zone bind acknowledged; still waiting for our living OP_ZoneEntry
+    std::optional<RespawnPlacement> respawn_placement_;
+    std::int64_t respawn_now_ms() const;
 
     // Spells.
     std::shared_ptr<const game::SpellTable> spell_table_;
@@ -3290,6 +3321,13 @@ private:
     // Social, guilds, raids, the chat server.
     game::SocialState social_;
     game::GuildState guild_;
+    struct PendingGuildPermissions {
+        std::uint32_t guild_id = 0;
+        game::GuildPermissions permissions;
+        std::array<std::string, 9> rank_names;
+    };
+    std::optional<PendingGuildPermissions> pending_guild_permissions_;
+    void reset_guild_permissions(std::uint32_t next_guild_id);
     Tracking tracking_;
     void handle_track_reply(const AppPacket& p);
     void track_filter_all();
@@ -3445,8 +3483,17 @@ private:
     bool begin_tribute_donation(bool guild, const Item& item, std::uint32_t master_id);
     bool finish_tribute_donation(bool guild, const ItemSlot& slot, std::uint32_t quantity,
                                 std::uint32_t master_id, bool consumed);
-    void reset_tribute_donations() { pending_tribute_donation_.reset(); }
-    std::uint32_t guild_platinum_pending_ = 0; // a guild platinum donation awaiting its answer
+    void reset_tribute_donations() {
+        pending_tribute_donation_.reset();
+        guild_platinum_pending_ = 0;
+    }
+    // One request at a time: the reply identifies only the quantity, not a transaction. A later master-open
+    // reply also clears this fence, after any donation reply on the same ordered zone connection.
+    std::uint32_t guild_platinum_pending_ = 0;
+    void reset_guild_tribute_bonuses(std::uint32_t next_guild_id = kTributeNone);
+    // Zone/session ended: no received tribute items belong to the next zone. The guild's rank permissions and
+    // names are not cleared here: they belong to the membership, and EQEmu sends them again on every zone-in.
+    void reset_tribute_bonuses();
     void handle_tribute(Op op, const AppPacket& p);
     Expedition expedition_;
     Adventure adventure_;
@@ -3573,6 +3620,8 @@ private:
     bool waiting_for_port_ = false; // PlayerZoneClient +0x1f05
     std::int64_t respawn_shown_ms_ = 0;
     bool respawn_chosen_ = false;
+    bool respawn_selection_sending_ = false; // outgoing hooks cannot recursively commit another choice
+    std::uint32_t respawn_session_ = 0;
 };
 
 } // namespace hailstone::net

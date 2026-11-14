@@ -495,14 +495,18 @@ vec3 modern_lava(vec3 texel, float molten, vec2 p) {
 }
 
 // The weather on the ground (shaders/weather.glsl): snow on the level surfaces, the rain's soak, and water standing
-// in the low spots.
-vec3 weathered(vec3 color, vec3 n) {
+// in the low spots. A cut-out surface (`cutout`: leaves, fronds, grates) has no surface for water to stand on, and its
+// normals are a crown's or a card's, mostly facing up: no puddles or snow and a lighter soak, or a generated tree's
+// crown takes the sky's colour or turns white.
+vec3 weathered(vec3 color, vec3 n, bool cutout) {
     float footprint = length(fwidth(v_world));
     float open = sky_open(shadow_map, scene.cover, scene.cover_params, scene.shadow_params.y, v_world + n * 0.5);
     if (open <= 0.0) return color;
     vec3 horizon = scene.haze.z > 0.5 ? scene.haze_color.rgb : to_linear(scene.fog_color.rgb);
+    vec4 weather = scene.weather;
+    if (cutout) weather.y = 0.0;
     return weather_surface(color, lit(vec3(0.88, 0.9, 0.94)), v_world, n, normalize(scene.camera_pos.xyz - v_world),
-                           scene.weather, open, horizon, scene.sky.rgb, scene.time.x, footprint, true, 1.0);
+                           weather, open, horizon, scene.sky.rgb, scene.time.x, footprint, !cutout, cutout ? 0.3 : 1.0);
 }
 
 vec3 mapped_normal(vec3 n, uint slot) {
@@ -701,7 +705,7 @@ void main() {
     if (g_modern && !unlit && mode == 0u && (flags & (kSpecular | kReflective)) != 0u) color += surface_shine(n, flags);
     if (g_modern && !unlit && (flags & (kWaterSurface | kLavaSurface)) == 0u && mode != 2u && mode != 3u &&
         (scene.weather.x > 0.0 || scene.weather.y > 0.0 || scene.weather.w > 0.0))
-        color = weathered(color, n);
+        color = weathered(color, n, pc.params.x > 0.0);
     // Alpha test, GREATEREQUAL against the reference (0 = off), or coverage when multisampled.
     float out_alpha;
     if (!alpha_test(alpha, pc.params.x, pc.params.y, out_alpha)) discard;

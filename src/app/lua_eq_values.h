@@ -26,6 +26,9 @@ struct GaugeValue {
 };
 GaugeValue eq_gauge(const EqHost& host, int type);
 
+// Gauge 26 at a supplied frame time: the active discipline's remaining duration, with seconds in its text.
+GaugeValue eq_discipline_gauge(const EqHost& host, std::int64_t now_ms);
+
 // How CGaugeWnd::Draw @0x66fc30 fills a gauge value: 0..1000 as it is (no tint of its own); -2 full in dark red
 // (0xff800000, no lines fill); -110..-10 at (value + 110) * 10 in purple (0xff800080); -2000..-1000 at value + 2000
 // in pink (0xffc08080); anything else below 0 (-1, -3, -9) empty (fill -1).

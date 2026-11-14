@@ -17,6 +17,8 @@
 //    SetCoolDown(now + (left - total) * 1000, total * 1000), checked while it runs;
 //  - 10 combat ability (0x84 + n): SetCoolDown(FastTimeToEQTime(GetDisciplineReuseTimer(+0x198)) - reuse, reuse)
 //    with reuse = the recast +0x18 less CharacterZoneClient::GetFocusReuseMod, checked while it runs; none: stopped;
+//    presentation fix: when a shared timer exceeds this ability's reuse, keep it checked and fully shaded until
+//    the shared wait fits that reuse, rather than letting a future begin look ready;
 //  - 11 leadership (ability value / 8 below 31, rank value % 8): checked while Leadership_IsAbilityActive is false;
 //  - 8 pet: the pet window's button's check (+0x1e4) when that button is enabled (+0x258);
 //  - 2 / 3 (the Actions window's lists), 6 (menu), 7 (spell gem: its CSpellGemWnd draws the gem's own tint and

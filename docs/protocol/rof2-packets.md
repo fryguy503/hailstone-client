@@ -134,7 +134,7 @@ What world checks:
 | Animation | Z→C | 0x7177 | 4 B: u16 spawn, u8 action, u8 speed (rof2.cpp swaps action and speed relative to the server struct). Action n is the n-th clip of C01..C11, D01..D05, L01..L09, O01, S01..S05, P01..P07, T01..T09, S06..S28, P08, O02, O03 |
 | SpawnAppearance (sit) | both | 0x0971 | 8 B: u16 own id, u16 14, u32 110 sit / 100 stand (102 freeze, 105 loot, 111 crouch, 115 lying). The server checks the id is the sender's; it is not echoed to the sender |
 | ZonePlayerToBind | Z→C | 0x08d8 | u16 zone (0 = this zone), u16 instance, f32 x, y, z, heading, cstr zone name, u8 1, 3×u32 0 |
-| RespawnWindow | Z→C | 0x0ecb | u32 selection, u32 ms left, u32 0, u32 count, count×{u32 id, u32 zone, f32 x, y, z, heading, cstr name, u8 type}, then count + 1 zero bytes |
+| RespawnWindow | Z→C | 0x0ecb | u32 selection, u32 ms left, u32 0, u32 count, count×{u32 id, u32 zone, f32 x, y, z, heading, cstr name, u8 validity (0 available, nonzero unavailable)}, optionally followed by legacy count + 1 zero padding bytes |
 | RespawnWindow | C→Z | 0x0ecb | 4 B: u32 chosen option id |
 
 Observed sequences (EQEmu server, `playprobe --fight-nearest`):
@@ -143,6 +143,12 @@ Observed sequences (EQEmu server, `playprobe --fight-nearest`):
 - Melee: C→Z `OP_AutoAttack` 1 + `OP_AutoAttack2` 1. The server swings on its own timer when the player is in range (`CombatRange`), sees the target (LOS) and **faces** it (`IsFacingMob`); out of range it sends "Your target is too far away, get closer!". Each swing: Z→C `OP_Damage` (to both sides), `OP_Animation`, `OP_MobHealth`; hits on the player also `OP_HPUpdate`. Client-built lines: "You slash a rodent for 6 points of damage.", "A rodent bites YOU for 5 points of damage.".
 - NPC death: Z→C `OP_Death` (the spawn keeps its id as the corpse), then `OP_ExpUpdate` and the experience message. The client prints "You have slain a rodent!", drops the target and stops attacking.
 - Player death (Character:RespawnFromHover off): Z→C `OP_Death` with the player as victim, then `OP_ZonePlayerToBind` with zone 0 (bind in this zone). The client answers C→Z `OP_ZoneChange` {zone 0, instance, the given position, reason 0}; the server resolves zone 0 to the bind point (`Handle_OP_ZoneChange`, zone mode ZoneToBindPoint) and answers success 1, and the client re-enters the zone through world like any zone change. With hover respawn on, the server sends `OP_RespawnWindow` instead and waits for the chosen option (or picks option 0 itself when the timer runs out).
+
+Hover completion (EQEmu source sequence, covered by the loopback tests in `tests/hover_respawn_test.cpp`):
+- Same zone and instance: `OP_ZonePlayerToBind`, then a living own `OP_ZoneEntry` with a new entity ID, authoritative buffs and HP. The previous ID remains the corpse. Movement stays blocked between the bind acknowledgement and own publication; other players, NPCs and stale records for the corpse ID cannot release that wait. The app consumes the new spawn's position and heading once and resets its movement body, held controls and fall state without loading the zone again.
+- RoF2's bind packet contains zero HP/mana/endurance placeholders. During same-zone hover recovery the client preserves current mana/endurance (including zero), applies explicit nonzero values if supplied, and accepts the server's resource updates before or after the bind packet. While the live entity is unpublished, mana/endurance updates can use entity ID zero. HP and buffs after publication belong to the new player ID.
+- Another zone or instance uses the normal zone transfer and profile reload. Countdown expiry remains the server's decision; the client does not guess a destination. The selection is sent once, only for an available ID from the current window. Malformed windows preserve the valid current window and cannot unlock a selection.
+- A resurrection uses the ordinary `OP_RezzRequest` / `OP_RezzAnswer` confirmation, even when no refreshed respawn window arrives. While hovering, Yes to an offer whose zone dword (+4, zone and instance) is the current zone records consent locally and enables the reserved final resurrection option, leaving the selection where it was; it sends no acceptance packet and does not restart the countdown (ConfirmationDialog_HandleResponse @0x52d540 case 0x67). Yes to an offer naming another zone or instance is echoed in `OP_RezzAnswer` at once. A subsequent destination selection sends `OP_RespawnWindow {option_id}` for either bind or resurrection. This preserves the native hover publication path on stock EQEmu; sending an ordinary `OP_RezzAnswer` acceptance at the prompt would commit immediately on some servers. No echoes `OP_RezzAnswer` decline immediately and leaves bind usable. Outside hover, the ordinary resurrection answer still sends `OP_RezzAnswer` at once. Both UI packs keep the original respawn window drawn alongside the question, and put the question in front once, as it appears (the `ResurrectionOffer` child of ConfirmationDialogBox tells them it is the resurrection offer). Replacement ownership remains registered so the fallback death panel cannot take over. EQEmu reserves the final row for resurrection and numbers rows from zero; local consent is associated only with that verified ordering, never with translated names or the availability byte. A changed reserved destination or newer offer invalidates that consent. New death, completion, zoning and disconnect discard stale resurrection questions without answering them.
 
 ### Items, inventory and loot (`net/item_packets.h`, `GameConnection` in `net/game_connection_items.cpp`, rules in `game/inventory.{h,cpp}`)
 
@@ -744,6 +750,43 @@ From EQEmu (zone/tribute.cpp and the RoF2 translator). Not tried live.
 | TributeItem / TributeMoney | both | 0x4f3e / 0x58fb | 24 B {slot (12 B), quantity, master, favour} / 12 B {platinum, master, favour}: the server takes the donation and answers with the favour |
 
 The profile carries favour, career favour and the five chosen tributes (`PlayerProfile::tribute_points`, `career_tribute_points`, `tributes`).
+
+The bonus items arrive through `OP_ItemPacket`, type 108 for personal tribute (inventory type 6, slots 0..4)
+and 109 for guild tribute (inventory type 8, slots 0..1). These received items feed local stats and effects.
+At login, personal bonus item packets precede `OP_CharInventory`; that possessions/bank snapshot preserves
+already received tribute items unless it explicitly supplies their replacements.
+The server does not notify their deletion on deactivation or opt-out: received tribute settings, guild active
+benefits and our own opt state retire obsolete items. Changed selections retire the affected slot; repeated
+unchanged state preserves it. Guild membership and session changes retire the previous context's items too.
+
+Guild benefit editing and activation require received guild permission 23, checked both by the shared window
+bridge and before sending a request. Another member's opt-out requires permission 22; self opt-in/out remains
+available. Revocation discards unsaved guild-benefit edits. Both UI packs use these shared checks. Source can
+send the next guild's tagged permission rows, rank names and active tribute snapshot before the own GuildID
+appearance. Those permissions remain separate until membership confirms their guild. The active packet's
+leading DWORD can be zero (`SendGuildActiveTributes`) or the guild id (`GuildTributeToggleReply`); an untagged
+snapshot uses the received rank-table context. Matching new-guild metadata survives the appearance while old
+bonus items retire, and a future guild's state cannot authorize changing the current guild's benefits.
+Joining a different guild also clears the old rank until the new GuildRank appearance confirms it; a previous guild's
+leader rank cannot authorize actions during split delivery of the two appearances.
+The confirmed rank permissions and names survive a zone change (EQEmu's zone-in sends them all again,
+`SendGuildRanks` / `SendGuildRankNames`) and are cleared at a session start, a disconnect or a guild change. A
+staged table that no GuildID appearance confirmed is dropped at a zone change: untagged rank names go to a staged
+table while one exists, so a stale one would otherwise take the current guild's later names.
+
+A guild platinum donation has one outstanding request at a time. As in the original
+(`Send_OP_GuildTributeDonatePlat` @0x483e80), it is sent only while carried platinum covers the amount (gold,
+silver and copper do not count), and the master window's Donate button is greyed until the reply
+(`CTributeMasterWnd` +0x2d8, `UpdateDonateButton` @0x785f40). Its 12-byte reply retains both quantity and
+favour. A quantity of -1 clears the request without a debit, as @0x483cd0 does. A client safety deviation: the
+original clears the request on any reply, but here only a matching quantity debits the purse, updates the last
+donation and clears it; malformed, unmatched and repeated replies leave it alone, since the reply names no
+transaction. No coin is removed before the answer. A second deviation: the original subtracts carried platinum
+only, but EQEmu (`TakeMoneyFromPP`) takes copper first and makes change without a coin update, so the client's
+debit follows the server's. Session reset or a later guild-master open reply retires an unanswered request (the
+zone connection orders that open after any earlier donation answer); a local timeout cannot identify a new
+transaction. The existing decoder fuzz tests and mock tests cover malformed replies, overlap, duplicates, the
+greyed button, making change and reset. No server changes are needed.
 
 ### Mercenaries (`game/mercenary.{h,cpp}`, `GameConnection` in `net/game_connection_merc.cpp`, windows in `app/lua_eq_merc.cpp`)
 

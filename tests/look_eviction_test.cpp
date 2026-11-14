@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "render/look_eviction.h"
+#include "render/actor_surface.h"
 #include "render/texture_claims.h"
 
 using hailstone::render::kLookIdleMs;
@@ -30,6 +31,37 @@ TEST_CASE("Appearance texture lifetime: shared layers survive until the last mod
     CHECK(used == std::unordered_set<std::uint32_t>{0, 1, 3, 5});
     models.clear();
     CHECK(hailstone::render::model_texture_slots(models) == std::unordered_set<std::uint32_t>{0});
+}
+
+TEST_CASE("Appearance texture lifetime: native armor maps survive idle sweeps and follow shared model ownership") {
+    using namespace hailstone::render;
+    struct Part {
+        std::uint32_t texture = 0, texture2 = 0xffffffffu, normal_map = 0, rough_map = 0;
+        ActorSurface surface;
+    };
+    struct Model { std::vector<Part> parts; };
+    Part first;
+    first.texture = 1;
+    first.surface.slots = {7, 8, kActorSurfaceReflective, 0};
+    Part second;
+    second.texture = 2;
+    second.surface.slots = {7, 9, kActorSurfaceReflective, 0};
+    std::map<int, Model> models{{1, {{first}}}, {2, {{second}}}};
+    const std::unordered_set<std::uint32_t> resident{0, 1, 2, 7, 8, 9};
+    CHECK(model_texture_slots(models) == resident);
+    // The same callback list governs zone handoff/adoption and idle texture eviction.
+    std::unordered_set<std::uint32_t> handed_off{0};
+    for_each_part_texture_slot(first, [&](std::uint32_t slot) { handed_off.insert(slot); });
+    CHECK(handed_off == std::unordered_set<std::uint32_t>{0, 1, 7, 8});
+    models.erase(1); // one appearance goes idle; another still samples the shared native normal map
+    const auto used = model_texture_slots(models);
+    std::unordered_set<std::uint32_t> released;
+    for (std::uint32_t slot : resident)
+        if (!used.contains(slot)) released.insert(slot);
+    CHECK(used == std::unordered_set<std::uint32_t>{0, 2, 7, 9});
+    CHECK(released == std::unordered_set<std::uint32_t>{1, 8});
+    models.clear();
+    CHECK(model_texture_slots(models) == std::unordered_set<std::uint32_t>{0});
 }
 
 TEST_CASE("Appearance texture lifetime: exhausted uploads retry once capacity returns; absent images stay cached") {

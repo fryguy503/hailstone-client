@@ -123,6 +123,8 @@ struct GuildTributeActive {
     bool enabled = false;
     std::array<std::uint32_t, kGuildTributeSlots> tributes{kTributeNone, kTributeNone};
     std::array<std::uint32_t, kGuildTributeSlots> tiers{};
+    // The leading DWORD: toggle replies identify the guild; SendGuildActiveTributes may leave it zero.
+    std::uint32_t guild_id = 0;
 };
 std::optional<GuildTributeActive> decode_guild_tribute_active(const AppPacket& p);
 AppPacket encode(const GuildTributeActive& v, Op op = Op::GuildSendActiveTributes); // server direction, for tests
@@ -172,6 +174,9 @@ struct GuildTributeDonation {
 std::optional<GuildTributeDonation> decode_guild_donate_item(const AppPacket& p);
 AppPacket encode(const GuildTributeDonation& v); // server direction, for tests
 AppPacket encode_guild_donate_platinum(std::uint32_t platinum, std::uint32_t master_id, std::uint32_t guild_id);
-std::optional<std::uint32_t> decode_guild_donate_platinum(const AppPacket& p); // the favour
+struct GuildTributePlatinum {
+    std::uint32_t platinum = 0, favor = 0;
+};
+std::optional<GuildTributePlatinum> decode_guild_donate_platinum(const AppPacket& p);
 
 } // namespace hailstone::net

@@ -50,6 +50,23 @@ Outside this directory, with vectors: `net/reliable_channel.*` (the session laye
 ack-all: the resend timeout min(1.25 rtt + 300, 8000) ms), and the UI rules the windows call (`game/spell_book.h`,
 `group_rules.h`, `quantity_dialog.h`, `trade_rules.h`, `cursor_drop.h`; `tests/ui_rules_vectors_test.cpp`).
 
+## Tribute bonus items
+
+The server supplies personal tribute bonus items in inventory type 6, slots 0..4, and guild tribute bonus items
+in type 8, slots 0..1. `sheet_builder.cpp` puts them in the character's existing extra item lookups (0..4 and
+15..16), so their normal item stats, worn effects and focus effects take the same paths as the other item
+bonuses. Their stack count does not multiply those bonuses. Trophy containers still have no source on stock EQEmu.
+The bulk possessions/bank inventory can follow personal tribute item packets at login; it preserves those
+separately received bonus containers instead of erasing them.
+
+Stock EQEmu removes these items without item-deletion packets when tribute is disabled or a member opts out.
+The connection therefore retires the cached items on received deactivation, changed selections, self opt-out,
+guild changes and session transitions. A toggle request alone grants or removes no bonus. Repeated unchanged
+active-state messages preserve the current items; new item packets replace them normally.
+
+Packet, mechanics and mock-connection regressions cover item replacement and retirement, along with the benefit
+windows' guild permissions and platinum-donation replies. Full tribute workflows still need live acceptance.
+
 ## Exactness
 
 - Integer math wraps (explicit unsigned adds and multiplies).
@@ -564,6 +581,21 @@ lookup 1500, follow AI 3000):
   its address, so a server patch's detour runs for each (NMS: the timer ids from 20 up in the patch's own map,
   stamped now + RecastTime / 1000 on use and set by OP_DisciplineTimer; the map lives for the session and nothing
   fills it at zone-in, as the profile has 20 timers).
+- Ability reuse is shared by timer id, including id 0. A profile timer or OP_DisciplineTimer marks every ability
+  using that id, independently of which ability started it or whether a discipline is currently active. The combat
+  ability tiles and discipline hot buttons derive their cooldown state from that shared deadline. A shorter
+  ability's reuse can be less than the shared wait; as a presentation fix, its overlay stays full until the wait
+  fits its own reuse, instead of a future inferred start making it look ready. Both UIs show a faded red reuse
+  fill and seconds countdown on combat ability entries. The regular use, assignment and drag handlers still run.
+- The active discipline's duration is separate from its reuse timer: gauge 26's helper @0x761600 gives, while a
+  discipline is active (PcZoneClient_IsDisciplineActive @0x5802c0, its effect from @0x5802a0), the effect's
+  remaining ticks * 1000 / `CharacterZoneClient::SpellDuration` @0x434420 (spell, the local player's level, false),
+  0 when that duration is not positive; the gauge function then caps the value at 1000. RoF2 gives this gauge no
+  text: the seconds shown above the bar, the interpolation between ticks, "Permanent" with a full bar for a
+  permanent effect, and a still bar while buff timers are suspended are Hailstone additions. Clicking the active
+  icon (LB in the gamepad UI, whose navigation leaves the icon out so that A on opening the window cannot end the
+  discipline) follows `/stopdisc`, requesting removal of the discipline slot and waiting for the server's fade;
+  ordinary buff slots and ability reuse timers are unchanged.
 - The rank swap (CastSpell and doCombatAbility): a player who is not a GM (PcClient's CharacterBase vtable +0x90,
   @0x580300: the spawn's vtable +0xdc) casting a spell of a SpellGroup from a gem takes, when the membership's
   spell tier limit (vtable +0 = PcClient::GetGameFeature_ @0x5784e0, feature 3) is not -1 and below the spell's
@@ -1063,7 +1095,12 @@ teleport index request and wait 300, do-teleport-B 2000, zone player to bind 120
   PrepareForRepop (buffs, vitals to max, drunkenness 0), vitals from the packet, air to max, gems refreshed; the
   same zone (the whole dword with the instance): death music off, rewind reset, the position list sent, no move;
   another zone: MoveToZone(zone, save 1, reason 10, x, y, z, (int)heading, -1, -1, 0).
-- The respawn window's Select waits for the packet's +8 delay and is disabled once chosen; it sends {u32 option}.
+  A deliberate difference after a same-zone hover respawn: PrepareForRepop's mana and endurance to max are skipped,
+  and the packet's mana or endurance is taken only when it is not 0, so the current values stay. EQEmu's RoF2
+  encoder writes 0 placeholders there, and the server's resource updates can arrive before the packet (or, for
+  mana still at 0 after a resurrection, not at all); the original takes the packet's values as they are.
+- The respawn window's Select waits for the packet's +8 delay and an available selected destination, then sends {u32 option} once. The option's final byte is availability, not a resurrection kind; both UI packs identify unavailable choices. The server controls timeout resolution.
+- Same-zone hover completion waits for the living own spawn with its new ID before releasing movement. The old corpse stays in the world; the new spawn's position, heading and fresh physics body replace the old movement state. Pending isometric click-to-move interactions and their marker are cancelled at placement. Current mana/endurance survive the RoF2 bind packet's zero placeholders, and the server's following buff/HP updates apply to the new player. Resurrection confirmations take input priority while the original respawn window stays drawn in both UI packs. Yes to an offer for the current zone (the zone dword with the instance, ConfirmationDialog_HandleResponse @0x52d540 case 0x67) sends no OP_RezzAnswer and locally enables the reserved final resurrection row alongside bind (0x74e9e0 enables the disabled lines and recolours them green); the countdown continues and no resurrection is committed until Select sends the chosen destination. Yes to an offer naming another zone or instance sends OP_RezzAnswer at once, as outside hover. Yes does not move the selection, and the row keeps its "r" marker; a committed highlight stays fixed until completion. The original also requires the offer's corpse name to match the local player's; that is not compared (docs/unknowns.md). Resurrection text is red while unavailable and green while available in both UI packs. Highlighting does not change the server's timeout default. No sends the decline immediately and leaves bind usable. The server's final-row ordering identifies resurrection, independently of names and availability flags. A replaced offer or changed destination invalidates local consent. Pending resurrection dialogs are dropped when respawn completes, zoning starts or the connection ends. Packet-sequence and movement coverage: `tests/hover_respawn_test.cpp`, `tests/player_placement_test.cpp`; protocol details in `docs/protocol/rof2-packets.md`.
 - Camp: sits, OP_Camp, 12293; 12684 every 5 s; a second /camp or a position change (the Stand button, the sit key,
   moving forward while sitting) cancels it (12290), any other
   stand 12683; it never looks at an open trade. At the end the position history goes (when not riding), then

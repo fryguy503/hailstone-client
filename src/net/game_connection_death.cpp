@@ -1,5 +1,6 @@
 // Death, the respawn at bind, teleports by index and camping (game/death_report.h,
 // game/zoning.h).
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 
@@ -115,6 +116,10 @@ void GameConnection::handle_death(const Death& d) {
     if (d.damage > 0 && d.attack_skill < 231) melee_sound(d.spawn_id, d.killer_id, static_cast<std::int32_t>(d.damage));
     if (r.local_died) {
         release_eye_control(true);
+        clear_hover_rez();
+        discard_questions([](const Confirmation& c) { return c.id == kConfirmRezz; });
+        respawn_spawn_pending_ = false;
+        respawn_placement_.reset();
         death_tip_pending_ = true; // 0x531730: CEverQuest +0x39580 = 1 (the death tip at the next zone-in)
         pstatus_.dead = true;
         pstatus_.owner_status = 4;
@@ -151,6 +156,13 @@ void GameConnection::handle_zone_to_bind(const AppPacket& p) {
     std::span<const std::uint8_t> bytes(reinterpret_cast<const std::uint8_t*>(p.data.data()), p.data.size());
     auto packet = game::decode_zone_to_bind(bytes);
     if (!packet) return;
+    const bool hover = respawn_.has_value() || respawn_spawn_pending_;
+    const bool same_zone_hover = hover && packet->zone == current_zone_dword();
+    // RoF2 publishes a new own spawn after a same-zone hover respawn. Until it arrives, our old ID names the
+    // corpse: do not permit movement or let another spawn take control. A full zone-in resets this pending state.
+    if (same_zone_hover) respawn_spawn_pending_ = true;
+    clear_hover_rez();
+    discard_questions([](const Confirmation& c) { return c.id == kConfirmRezz; });
     log::info("zone player to bind: zone {:#x} ({}), hp {} mana {} endurance {}", packet->zone, packet->zone_name,
               packet->hp, packet->mana, packet->endurance);
     game::ZoneToBindHooks h;
@@ -164,11 +176,13 @@ void GameConnection::handle_zone_to_bind(const AppPacket& p) {
         // PcClient::PrepareForRepop: buffs removed, vitals to max, drunkenness 0.
         for (auto& b : spells_.buffs) b = {};
         pstatus_.hp = pstatus_.max_hp;
-        pstatus_.mana = pstatus_.max_mana;
-        pstatus_.endurance = pstatus_.max_endurance;
+        if (!same_zone_hover) {
+            pstatus_.mana = pstatus_.max_mana;
+            pstatus_.endurance = pstatus_.max_endurance;
+        }
         drunkenness_ = 0;
-        pstatus_.dead = false;
-        pstatus_.owner_status = 0;
+        pstatus_.dead = same_zone_hover;
+        pstatus_.owner_status = same_zone_hover ? 4 : 0;
         // In a raid: CRaid::SetTargetRaidPlayer(0) and ClearInvitedState (a pending invitation is dropped).
         if (raid_.active) {
             raid_.target.clear();
@@ -180,8 +194,11 @@ void GameConnection::handle_zone_to_bind(const AppPacket& p) {
     };
     h.set_vitals = [&](std::int32_t hp, std::int32_t mana, std::int32_t endurance) {
         pstatus_.hp = hp;
-        pstatus_.mana = static_cast<std::uint32_t>(mana);
-        pstatus_.endurance = static_cast<std::uint32_t>(endurance);
+        // A deliberate difference from the original (docs/mechanics.md), which takes the packet's values as they
+        // are: EQEmu's RoF2 encoder writes zero placeholders here. Resource updates can precede this packet, and
+        // unchanged zero mana after a resurrection need not be sent again. Preserve the current server values.
+        if (!same_zone_hover || mana != 0) pstatus_.mana = static_cast<std::uint32_t>(mana);
+        if (!same_zone_hover || endurance != 0) pstatus_.endurance = static_cast<std::uint32_t>(endurance);
     };
     h.fill_air = [] {};
     h.update_spell_gems = [] {};
@@ -196,14 +213,74 @@ void GameConnection::handle_zone_to_bind(const AppPacket& p) {
     game::zone_player_to_bind(bytes.size(), *packet, current_zone_dword(), respawn_.has_value(), true, h);
 }
 
+const RespawnOption* GameConnection::respawn_resurrection_option() const {
+    // EQEmu's RoF2 contract reserves the final option for resurrection and numbers the rows consecutively.
+    // Do not infer a destination kind from translated text or its availability byte.
+    if (!respawn_ || respawn_->options.size() < 2) return nullptr;
+    for (std::size_t i = 0; i < respawn_->options.size(); ++i)
+        if (respawn_->options[i].id != i) return nullptr;
+    return &respawn_->options.back();
+}
+
+bool GameConnection::respawn_option_is_resurrection(std::uint32_t option_id) const {
+    const auto* rez = respawn_resurrection_option();
+    return rez && rez->id == option_id;
+}
+
+std::optional<std::uint32_t> GameConnection::accepted_hover_rez_option() const {
+    const auto* rez = respawn_resurrection_option();
+    if (hover_rez_accepted_ && hover_rez_choice_ && rez && *hover_rez_choice_ == *rez) return rez->id;
+    return std::nullopt;
+}
+
+bool GameConnection::respawn_option_available(std::uint32_t option_id) const {
+    if (!respawn_) return false;
+    const auto option = std::find_if(respawn_->options.begin(), respawn_->options.end(),
+                                    [option_id](const RespawnOption& o) { return o.id == option_id; });
+    if (option == respawn_->options.end()) return false;
+    if (const auto* rez = respawn_resurrection_option(); rez && rez->id == option_id) {
+        if (hover_rez_choice_ && *hover_rez_choice_ == *rez) return hover_rez_accepted_;
+        const auto question = [](const Confirmation& c) { return c.id == kConfirmRezz; };
+        if ((confirmation_ && question(*confirmation_)) ||
+            std::any_of(confirm_queue_.begin(), confirm_queue_.end(), question)) return false;
+    }
+    return option->available();
+}
+
 bool GameConnection::respawn_ready() const {
-    return respawn_ && !respawn_chosen_ && now_ms() - respawn_shown_ms_ > static_cast<std::int64_t>(respawn_->delay_ms);
+    return respawn_ && !respawn_chosen_ && respawn_age_ms() > static_cast<std::int64_t>(respawn_->delay_ms);
+}
+
+std::int64_t GameConnection::respawn_now_ms() const {
+    const auto now = options_.session.clock ? options_.session.clock() : Clock::now();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 }
 
 void GameConnection::choose_respawn(std::uint32_t option_id) {
-    if (!respawn_ready()) return;
-    send_zone(encode_respawn_selection(option_id));
+    if (respawn_selection_sending_ || !respawn_ready() || !respawn_option_available(option_id)) return;
+    const auto option = std::find_if(respawn_->options.begin(), respawn_->options.end(),
+                                    [option_id](const RespawnOption& o) { return o.id == option_id; });
+    if (option == respawn_->options.end()) return;
+    const RespawnOption selected = *option;
+    const auto session = respawn_session_;
+    const auto player = world_.player_id;
+    const auto current = [&] {
+        return state_ == ConnectionState::InZone && !zone_change_pending_ && respawn_session_ == session &&
+            world_.player_id == player && respawn_ready() && respawn_option_available(option_id) &&
+            std::find(respawn_->options.begin(), respawn_->options.end(), selected) != respawn_->options.end();
+    };
+    // Reserve only the send, not the player's choice: a dropped packet leaves the same consent and window usable.
+    // Hooks may replace that window or disconnect; the guard must not roll back any state they installed.
+    respawn_selection_sending_ = true;
+    struct SendGuard {
+        bool& sending;
+        ~SendGuard() { sending = false; }
+    } guard{respawn_selection_sending_};
+    if (!send_zone(encode_respawn_selection(option_id), true, current)) return;
+    log::info("hover respawn selection sent: option {}", option_id);
     respawn_chosen_ = true;
+    clear_hover_rez();
+    discard_questions([](const Confirmation& c) { return c.id == kConfirmRezz; });
 }
 
 std::uint32_t GameConnection::current_zone_dword() const {

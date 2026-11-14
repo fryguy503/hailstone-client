@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <glm/common.hpp>
 #include <glm/trigonometric.hpp>
@@ -18,12 +19,62 @@
 #include "game/sky_clock.h"
 #include "game/weather.h"
 #include "render/ambient_probe.h"
+#include "render/actor_surface.h"
 #include "render/atmosphere.h"
 #include "render/scene_lighting.h"
 #include "render/vk_context.h"
 #include "render/weather_renderer.h"
 
 using namespace hailstone;
+
+TEST_CASE("actor armor surfaces: defaults keep the old path; optional maps and material highlights stay distinct") {
+    assets::EffectParams effect;
+    CHECK_FALSE(render::has_actor_surface(effect));
+    const auto plain = render::actor_surface(effect, 0, 0);
+    CHECK(plain.slots == glm::uvec4(0));
+    CHECK(plain.params == glm::vec4(40.0f, 0.2f, 0.0f, 0.0f));
+
+    effect.normal_map = "armor_n.dds";
+    effect.specular = true;
+    effect.reflective = true;
+    effect.shininess = 80.0f;
+    effect.gloss = 0.4f;
+    effect.env_strength = 0.8f;
+    REQUIRE(render::has_actor_surface(effect));
+    const auto mapped = render::actor_surface(effect, 7, 11);
+    CHECK(mapped.params == glm::vec4(80.0f, 0.4f, 0.8f, 0.0f));
+    CHECK(mapped.slots.x == 7);
+    CHECK(mapped.slots.y == 11);
+    CHECK(mapped.slots.z == (render::kActorSurfaceSpecular | render::kActorSurfaceReflective));
+    // A missing cube suppresses reflection without dropping the authored highlight or inventing a sky texture.
+    const auto missing = render::actor_surface(effect, 0, 0);
+    CHECK(missing.slots.x == 0); // the shader then uses the pack's normal, when present
+    CHECK(missing.slots.z == render::kActorSurfaceSpecular);
+    effect.reflective = false;
+    CHECK(render::actor_surface(effect, 7, 11).slots.z == render::kActorSurfaceSpecular);
+}
+
+TEST_CASE("actor armor surfaces: malformed scalars and a full frame cannot produce invalid shader indexes") {
+    assets::EffectParams effect;
+    effect.shininess = std::numeric_limits<float>::quiet_NaN();
+    effect.gloss = std::numeric_limits<float>::infinity();
+    effect.env_strength = -1.0f;
+    const auto bounded = render::actor_surface(effect, 0, 0);
+    CHECK(bounded.params == glm::vec4(40.0f, 0.2f, 0.0f, 0.0f));
+    effect.shininess = 0.0f;
+    effect.gloss = -4.0f;
+    effect.env_strength = std::numeric_limits<float>::max();
+    CHECK(render::actor_surface(effect, 0, 0).params == glm::vec4(1.0f, 0.0f, 16.0f, 0.0f));
+    CHECK(render::actor_surface_range(1, 3) == 1);
+    CHECK(render::actor_surface_range(render::kMaxActorSurfaces - 1, 1) == render::kMaxActorSurfaces - 1);
+    CHECK_FALSE(render::actor_surface_range(render::kMaxActorSurfaces - 1, 2));
+    CHECK_FALSE(render::actor_surface_range(0, 1)); // zero belongs to the old material path
+    CHECK_FALSE(render::actor_surface_range(render::kMaxActorSurfaces, 0));
+    CHECK_FALSE(render::actor_surface_range(1, std::numeric_limits<std::size_t>::max()));
+    // Every permitted table index survives the unused push-constant float word without rounding or denormals.
+    const auto last = render::kMaxActorSurfaces - 1;
+    CHECK(static_cast<std::uint32_t>(static_cast<float>(last)) == last);
+}
 
 // The shader's own kernel, compiled as C++ with GLM's float operations (shaders/ao_kernel.glsl).
 namespace ao_kernel_test {

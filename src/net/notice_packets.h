@@ -68,6 +68,7 @@ AppPacket answer_translocate(const AppPacket& offer, bool go);
 // (accept) or 0.
 struct RezzRequest {
     std::uint32_t zone = 0, spell = 0;
+    std::uint16_t instance = 0; // +6: with `zone`, the dword ConfirmationDialog_HandleResponse compares (+4)
     std::string rezzer, corpse;
 };
 std::optional<RezzRequest> decode_rezz_request(const AppPacket& p);

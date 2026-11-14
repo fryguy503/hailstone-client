@@ -718,6 +718,9 @@ intensity; updated every frame, in every zone type, with or without a sky):
     rains), the rings fading out where a pixel spans more than a tenth of a unit.
   - Snow lies on level surfaces in noisy drifts, covering over 2 minutes and melting over 5: on the ground and on the
     doors' and objects' roofs and ledges, not on the characters (drifts fixed in the world would slide over them).
+  - A cut-out surface of the zone (alpha-tested: leaves, fronds, grates) gets neither puddles nor snow, and a third
+    of the wet look: its normals are a crown's or a card's, mostly facing up, and would paint a generated tree's
+    crown with the sky's reflection or turn it white.
   - All of it is in `shaders/weather.glsl` (`weather_surface`), fed `SceneLighting::weather` (`render::set_weather`:
     wet, snow, the rain falling, the puddles).
   - The look belongs to the zone: entering another zone starts it over, dry and with a clear sky
@@ -905,6 +908,15 @@ modern lighting always uses them (`shaders/zone.frag` `mapped_normal`, `surface_
   (`sky_reflection`) in place of the material's environment map, weighted by Fresnel.
 
 The classic lighting draws them as before (the diffuse texture by the lit colour).
+
+Hero's Forge attachments carry their own EQG surface properties into the actor renderer, including supplied layer
+overrides. Their native normal maps use the full RGB tangent vector and the same +v convention as EQG zones;
+texture-pack normals keep their separate BC5 RG interpretation and remain the fallback when a native map is absent.
+Armor reflection uses the material's environment DDS cube, converted with the existing cube-to-octahedral loader;
+an absent or invalid cube supplies no reflection. The base shader's known specular/reflective classes select the
+effect, and a layer's parameters do not invent a new shader class. Native surface records share the actor's lighting
+buffer, with one bounded table per frame shared by instances of a mesh. Push constants remain 128 bytes and no
+descriptor bindings are added. Ordinary WLD, Luclin, held-item and EQG NPC materials retain their existing path.
 
 Alpha-tested materials (trees, grass, fences, Chroma/Masked) draw in the opaque pass with alpha-to-coverage when the
 scene is multisampled: the pipelines set `shaders/coverage.glsl`'s `kAlphaToCoverage`, and the alpha test becomes a
