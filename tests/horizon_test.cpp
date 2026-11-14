@@ -279,7 +279,10 @@ Neighbour make_neighbour() {
         for (int x = 0; x < nx; ++x)
             ground.push_back(neighbour_ground(lo.x + (static_cast<float>(x) + 0.5f) * cell,
                                               lo.y + (static_cast<float>(y) + 0.5f) * cell));
-    n.source = std::make_shared<const render::HorizonSource>(render::horizon_source("east", lo, cell, nx, ny, ground));
+    std::vector<float> top = ground;
+    for (float& h : top) h += 5.0f;
+    n.source =
+        std::make_shared<const render::HorizonSource>(render::horizon_source("east", lo, cell, nx, ny, ground, top));
     return n;
 }
 
@@ -294,6 +297,10 @@ TEST_CASE("horizon: a neighbour's ground loses what stands narrow on it, and fad
     CHECK(near(*render::source_ground(s, {3050.0f, 550.0f}), 150.0f, 0.5f));
     CHECK(near(*render::source_ground(s, {4300.0f, 300.0f}), 300.0f, 0.5f));
     CHECK(near(*render::source_ground(s, {2500.0f, 1000.0f}), 150.0f, 0.5f));
+    // Its terrain's highest points are kept as they are, the house's too.
+    REQUIRE(render::source_top(s, {3050.0f, 550.0f}));
+    CHECK(*render::source_top(s, {3050.0f, 550.0f}) == doctest::Approx(405.0f));
+    CHECK_FALSE(render::source_top(s, {1900.0f, 700.0f}));
     // No ground before its edge (the zone is there), nor in its padding.
     CHECK_FALSE(render::source_ground(s, {1900.0f, 700.0f}));
     CHECK_FALSE(render::source_ground(s, {6500.0f, 700.0f}));
@@ -352,9 +359,13 @@ TEST_CASE("horizon: a neighbour's part of the land is the land's own squares, me
         // Its triangles lie in its squares, wound as the land's, at the land's own heights.
         CHECK(std::binary_search(part.squares.begin(), part.squares.end(), n.field.mesh_square(glm::vec2(a + b + c) / 3.0f)));
         CHECK(glm::cross(b - a, c - a).z > 0.0f);
+        // At the land's own heights, but past the band sunk under the neighbour's own terrain, which is drawn there.
         for (int k = 0; k < 3; ++k) {
-            CHECK(part.positions[mine[i + k]] == full.positions[mine[i + k]]);
-            in_part[mine[i + k]] = true;
+            const std::uint32_t v = mine[i + k];
+            CHECK(part.positions[v].x == full.positions[v].x);
+            CHECK(part.positions[v].y == full.positions[v].y);
+            CHECK(part.positions[v].z == doctest::Approx(full.positions[v].z - render::kHorizonTuck * part.settled[v]));
+            in_part[v] = true;
         }
     }
     // Where the rest of the land meets it, their shared corners are where the land is without the neighbour: the
@@ -383,6 +394,17 @@ TEST_CASE("horizon: a neighbour's part of the land is the land's own squares, me
         return w;
     };
     CHECK(weight_near({2100.0f, 1000.0f}) < 0.3f);
+    // Sunk under its terrain well past the band, not at the zone's edge; horizon_point says the same.
+    CHECK(render::horizon_point(n.field, sources, {3500.0f, 1000.0f}, 0).settled == doctest::Approx(1.0f));
+    CHECK(render::horizon_point(n.field, sources, {3500.0f, 1000.0f}, 0).height ==
+          doctest::Approx(render::horizon_height(n.field, sources, {3500.0f, 1000.0f}) - render::kHorizonTuck));
+    CHECK(render::horizon_point(n.field, sources, {2100.0f, 1000.0f}, 0).settled == 0.0f);
+    CHECK(render::horizon_point(n.field, sources, {3500.0f, 1000.0f}, -1).settled == 0.0f);
+    // By the neighbour's own edge (its boundary walls stand there) the land does not sink: its terrain goes there.
+    CHECK(render::sample_source(*n.source, {6000.0f, 1000.0f}).inner < render::kHorizonInnerFrom);
+    CHECK(render::sample_source(*n.source, {3500.0f, 1000.0f}).inner > render::kHorizonInnerTo);
+    CHECK(render::horizon_point(n.field, sources, {6000.0f, 1000.0f}, 0).settled == 0.0f);
+    CHECK(render::horizon_point(n.field, sources, {3500.0f, 2010.0f}, 0).settled == 0.0f);
     CHECK(weight_near({3500.0f, 1000.0f}) == doctest::Approx(1.0f));
     for (float w : part.weight) {
         CHECK(w >= 0.0f);
@@ -429,6 +451,11 @@ TEST_CASE("horizon: a neighbour's ground is cached and read back; a damaged file
         if (!std::isnan(s.height[i])) CHECK(s.height[i] == n.source->height[i]);
     }
     CHECK(s.fill == n.source->fill);
+    REQUIRE(s.top.size() == n.source->top.size());
+    for (std::size_t i = 0; i < s.top.size(); ++i) {
+        CHECK(std::isnan(s.top[i]) == std::isnan(n.source->top[i]));
+        if (!std::isnan(s.top[i])) CHECK(s.top[i] == n.source->top[i]);
+    }
     CHECK(s.dist == n.source->dist);
     // Cut short, too long, another version, an absurd size.
     CHECK_FALSE(render::read_horizon_cache(std::span(bytes).first(bytes.size() - 1)));

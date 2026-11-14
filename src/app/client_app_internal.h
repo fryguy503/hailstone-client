@@ -1182,6 +1182,8 @@ private:
     // neighbours (NeighbourZones::drawn_key) it was last hidden for.
     bool horizon_hills_ = true;
     std::uint64_t distant_hidden_key_ = 0;
+    // display.neighbour_tint: the neighbour zones' debugging view (render::ZoneRenderer::set_debug_tint).
+    bool neighbour_tint_ = false;
     // How far the replacement models' (a texture pack's generated trees') levels of detail reach, in percent of their
     // own distances (render::ZoneRenderer::set_lod_scale); display.tree_detail, 50 to 200.
     int tree_detail_ = 100;
