@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Pressing Tab no longer puts the cursor in the chat input (or the first text field of whichever window was last clicked). Tab still moves to the next field while you are typing in one
 - Modern UI: with Snap to grid on, resizing a frame or dialog puts the dragged edge on the grid, or flush with the screen's edge when that is nearer, and shows the grid while resizing (the hot bars, which change shape in whole buttons, are not snapped)
 - Movement: the server's fly modes (`#set flymode`, a quest's flymode) now move your own character, all six of them, including free flight with flymode 1. As in the original client, a mode other than flying lasts until your buffs next change, when your levitation decides again; in a no-levitation zone flying also ends then
 - Hailstone Texture Studio: generated trees can now be dead trees (bare forked limbs) and palms, for zones such as Everfrost, Dagnor's Cauldron, North Ro and Erud's Crossing

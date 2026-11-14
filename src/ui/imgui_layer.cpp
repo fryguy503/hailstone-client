@@ -322,6 +322,7 @@ void ImGuiLayer::new_frame() {
         last_h_ = io.DisplaySize.y;
     }
     keyboard_request_ = GImGui->WantCaptureKeyboardNextFrame; // (NewFrame applies it to io, then clears it)
+    keep_tab_from_windows();
     ImGui::NewFrame();
     frame_open_ = true;
     // The pad's X (ImGui's "menu" key) is the windows' own shortcut (use, take, none, ...; the Lua windows read it from
@@ -466,6 +467,15 @@ bool ImGuiLayer::wants_mouse() const { return ImGui::GetIO().WantCaptureMouse; }
 bool ImGuiLayer::wants_keyboard() const { return keyboard_for_ui(keyboard_request_); }
 
 void configure_keys() { ImGui::GetIO().ConfigMacOSXBehaviors = false; }
+
+void keep_tab_from_windows() {
+    // ImGui's tabbing is always on (NavUpdateCreateTabbingRequest, whatever ImGuiConfigFlags_NavEnableKeyboard says)
+    // and, with no item active, a Tab focuses the first field of the focused window: the chat's input took the keys
+    // from a Tab meant for the game. Owned for the frame, the press is not ImGui's navigation's (it tests for no
+    // owner), while ImGui::IsKeyPressed (any owner: a browser page's keys) still sees it. A field being typed in
+    // leaves Tab alone, so it still moves to the next field.
+    if (GImGui->ActiveId == 0) ImGui::SetKeyOwner(ImGuiKey_Tab, ImHashStr("##GameTab"));
+}
 
 bool keyboard_for_ui(int requested) {
     const ImGuiIO& io = ImGui::GetIO();
