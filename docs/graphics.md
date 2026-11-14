@@ -297,7 +297,7 @@ which the cover test below keeps bare). A rules file is read line by line, and t
   under it is clearly green (`is_green_texel`: not the water's teal, mud's olive or a dungeon's near-black), and
   `+greenish` also takes dry and dark grass, for textures whose name says they are grass.
 - `max_slope` (degrees), `scale <min> <max>` (the scattered plants' sizes), `lawn_height <min> <max>` (the lawn's
-  blades, 1.4 to 2.4 units by default; the grasslands' grow 2 to 3.5), and `include <name>` (another file's lines in
+  blades, 1.8 to 3 units by default; the grasslands' grow 2.4 to 4), and `include <name>` (another file's lines in
   place: a zone file puts its own exceptions first, then `include default`; East Commonlands adds desert plants from
   `commonlands.eqg` on its sand that way).
 
@@ -308,7 +308,8 @@ then take anything else with `+green`. A `+green` texture with next to no green 
 nothing at all.
 
 **Families.** Most zones take the lawn alone (`default.txt`). A zone of a climate with plants of its own includes a
-family file, the same lines with kinds from donors scattered over the lawn:
+family file, the same lines with kinds from donors scattered sparsely over the lawn (about 0.4 to 1 plant per 100
+square units):
 
 | Family | Zones | Added, from |
 |---|---|---|
@@ -324,18 +325,22 @@ family file, the same lines with kinds from donors scattered over the lawn:
 
 **The lawn.** An even carpet rather than plants scattered at random: the ground is cut into world-aligned squares
 of `kLawnCell` (3.2 units, 40 to a tile), and each square whose centre lies over ground that grows a lawn (the
-tests below, at that centre) holds one patch of blades, at the ground's height and slope there. Each square goes to
+tests below, at that centre; `+green` by the majority of five texels, the centre's and four half a square out, so a
+texture blending grass into dirt texel by texel grows no speckle) holds one patch of blades, at the ground's height
+and slope there. Each square goes to
 exactly one ground triangle, so the patches meet without gaps or overlaps. A patch takes the colour of the ground
 texel at its centre; its height wanders slowly over the zone between `lawn_height`'s two values (smooth value noise
 on a 48-unit lattice, `assets::lawn_height_noise`), not patch by patch. Where the lawn meets bare ground (a path, a
-road, a texture `+green` turns down) it tapers over three squares (`lawn_edge_factor`: 0.3 of the height beside it),
-so it does not end in a wall along a texture's straight border; a tile grows its neighbours' squares within three of
-its edge to see them, then drops them.
+road, a texture `+green` turns down) it tapers over three squares (`lawn_edge_factor`: 0.55 of the height beside it),
+so it does not end in a wall along a texture's straight border, and a patch with fewer than three of its eight
+neighbours grown is dropped (a lone tuft); a tile grows its neighbours' squares within three of its edge to see them,
+then drops them.
 
 The blades are built in `shaders/lawn.vert`, without a texture (`render::FloraRenderer`'s second pipeline): a
 patch's square holds a grid of blades, one jittered in each cell, so the cover is even. A blade is a tapered strip
 of a few pieces ending in a point, standing on the ground across the patch (its slope), curving over as it rises, a
-little taller or shorter and leaning its own way (within a quarter of its height, so the carpet stays even), leaning
+little taller or shorter, combed: it leans 0.4 to 0.65 of its height the way a slowly turning field over the zone
+points (broad swathes lying together), a little off it, its flat side to the way it leans; leaning
 with the scene's wind as gusts roll across the zone (the zone's plants' wind, `SceneLighting::wind`: gentle in fair
 weather, hard in a storm) and fluttering a little, and bent away from the spawns walking through it like the other
 plants. `shaders/lawn.frag` gives it the ground's hue with its brightness held within a band (a pale or dark texel
@@ -343,12 +348,12 @@ makes no pale or dark patch), darker at the roots and brighter and warmer toward
 is lit as the radial flora is, with its face's normal turned most of the way up (the lawn is lit like the ground
 under it, not blade by blade) and some light through it when the sun is behind it. It casts no shadow.
 
-By distance (`render::kLawnLods`): within 45 units 36 blades a patch of four pieces each, to 140 units 9 of three, past
-that 4 single triangles, each level's blades wider so a patch keeps its cover. Past 400 units every second patch
+By distance (`render::kLawnLods`): within 45 units 49 blades a patch of three pieces each, to 140 units 16 of three,
+past that 9 single triangles, each level's blades wider so a patch keeps its cover. Past 400 units every second patch
 each way is kept, past 800 every fourth (`lawn_stride`), each as wide as the squares it stands for; a grown tile keeps
 its patches by the coarsest stride that keeps them, so a far tile walks only those it draws. The lawn shrinks into the
 ground over the last fifth of the reach with the other plants. In South Karana, on the AMD card (RADV) it was tuned
-on, the lawn costs about 0.45 ms a frame at the default reach and about what the old grass did at 1,200 units.
+on, the lawn costs about 0.45 ms a frame at the default reach, and less than the old grass did at 1,200 units.
 
 **Where.** On level ground (45 degrees by default) of a drawn, opaque or cut-out surface: not the invisible collision
 surfaces, nor the translucent water. Not in water, lava or a zone line, nor on the water's surface (the region just

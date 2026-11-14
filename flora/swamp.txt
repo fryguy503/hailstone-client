@@ -7,9 +7,9 @@ max_slope 45
 scale 0.9 1.3
 include bare
 # Ground named as grass (jungle floors too): its olive and dark grass as well, only its paths and bare patches not.
-ground *jung* 4.27 +greenish lawn flora_a:1 flora_e:1 flora_f:0.6 swampgrass:0.6 cattails:0.12
-ground *grass* 4.27 +greenish lawn flora_a:1 flora_e:1 flora_f:0.6 swampgrass:0.6 cattails:0.12
-ground *gras* 4.27 +greenish lawn flora_a:1 flora_e:1 flora_f:0.6 swampgrass:0.6 cattails:0.12
+ground *jung* 1.07 +greenish lawn flora_a:1 flora_e:1 flora_f:0.6 swampgrass:0.6 cattails:0.12
+ground *grass* 1.07 +greenish lawn flora_a:1 flora_e:1 flora_f:0.6 swampgrass:0.6 cattails:0.12
+ground *gras* 1.07 +greenish lawn flora_a:1 flora_e:1 flora_f:0.6 swampgrass:0.6 cattails:0.12
 include stone
 # Anything else that is clearly green.
-ground * 4.27 +green lawn flora_a:1 flora_e:1 flora_f:0.6 swampgrass:0.6 cattails:0.12
+ground * 1.07 +green lawn flora_a:1 flora_e:1 flora_f:0.6 swampgrass:0.6 cattails:0.12

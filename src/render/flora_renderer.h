@@ -51,7 +51,7 @@ struct LawnLod {
     float blade_width = 0.0f;
     std::uint32_t vertices() const { return side * side * ((segments - 1) * 6 + 3); }
 };
-inline constexpr std::array<LawnLod, 3> kLawnLods = {{{6, 4, 0.3f}, {3, 3, 0.55f}, {2, 1, 0.8f}}};
+inline constexpr std::array<LawnLod, 3> kLawnLods = {{{7, 3, 0.26f}, {4, 3, 0.42f}, {3, 1, 0.6f}}};
 inline constexpr float kLawnNear = 45.0f, kLawnMid = 140.0f; // where the first two levels end
 // The level of detail of a patch at distance `d` (an index into kLawnLods).
 std::size_t lawn_lod(float d);

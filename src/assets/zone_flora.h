@@ -15,7 +15,7 @@
 //   max_slope <degrees>              steeper ground grows nothing (default 40)
 //   scale <min> <max>                every plant's size times a random factor in the range (default 1 1)
 //   lawn_height <min> <max>          the lawn's blades, in units: their height wanders between the two slowly over the
-//                                    ground (default 1.4 2.4)
+//                                    ground (default 1.8 3)
 //   ground <glob> <density> [+green|+greenish] [lawn] [<kind>[:<weight>]...]
 //                                    ground whose texture matches the glob (case-insensitive, '*' and '?') grows the
 //                                    lawn when the line says `lawn` (every kLawnCell square whose centre passes the
@@ -77,7 +77,7 @@ struct ZoneFloraRules {
     std::vector<std::string> donors; // in order
     float max_slope = 40.0f; // degrees
     float min_scale = 1.0f, max_scale = 1.0f;
-    float lawn_min = 1.4f, lawn_max = 2.4f; // the lawn's blade height, units
+    float lawn_min = 1.8f, lawn_max = 3.0f; // the lawn's blade height, units
     std::vector<Ground> ground;
 };
 
@@ -102,8 +102,10 @@ inline constexpr float kLawnCell = kZoneFloraTile / 40.0f;
 // The lawn tapers where it meets bare ground over this many squares: a patch's height is times
 // lawn_edge_factor(the distance to the nearest bare square's centre, in squares).
 inline constexpr int kLawnEdgeCells = 3;
-// 0.3 beside bare ground, rising smoothly to 1 at kLawnEdgeCells + 0.5 squares and past.
+// 0.55 beside bare ground, rising smoothly to 1 at kLawnEdgeCells + 0.5 squares and past.
 float lawn_edge_factor(float squares);
+// A lawn patch with fewer of its eight neighbouring squares grown is dropped: a lone tuft of a stray green texel.
+inline constexpr int kLawnMinNeighbours = 3;
 // How far the lawn's height wanders: its value noise's lattice, in units.
 inline constexpr float kLawnNoiseCell = 48.0f;
 // The lawn's height at a spot (0..1 between lawn_height's min and max): smooth value noise over the world, so the

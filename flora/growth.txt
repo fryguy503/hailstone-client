@@ -6,9 +6,9 @@ max_slope 45
 scale 0.9 1.3
 include bare
 # Ground named as grass (jungle floors too): its olive and dark grass as well, only its paths and bare patches not.
-ground *jung* 3.8 +greenish lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
-ground *grass* 3.8 +greenish lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
-ground *gras* 3.8 +greenish lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
+ground *jung* 0.95 +greenish lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
+ground *grass* 0.95 +greenish lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
+ground *gras* 0.95 +greenish lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
 include stone
 # Anything else that is clearly green.
-ground * 3.8 +green lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
+ground * 0.95 +green lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3

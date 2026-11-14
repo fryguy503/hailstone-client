@@ -4,7 +4,8 @@
 // Hailstone's lawn (render/flora_renderer.h, assets/zone_flora.h): a patch per instance, its blades built here, no
 // texture. The patch's square holds side x side blades (the push block's level of detail), one in each cell of a
 // grid over it, jittered within it, so the carpet is even: no clumps, no gaps. Each blade is a tapered strip of
-// `segments` pieces, the last a point, standing on the ground (the patch's slope), curving over as it rises, leaning
+// `segments` pieces, the last a point, standing on the ground (the patch's slope), curving over as it rises (combed
+// the way its neighbours lean), leaning
 // with the wind as gusts roll across the zone and bent away from whoever walks through it. Its height wanders a
 // little round the patch's (the patch's own wanders slowly over the zone, assets::lawn_height_noise). Modern: the
 // light that casts no shadow here per vertex, as flora.vert; the sun in lawn.frag.
@@ -86,11 +87,15 @@ void main() {
     vec2 at = ((vec2(bx, by) + vec2(next(s), next(s))) / float(side) - 0.5) * i_size.x;
     vec3 root = centre + vec3(at, dot(at, i_size.zw));
     float height = i_size.y * (0.85 + 0.25 * next(s));
-    float facing = next(s) * 6.2831853;
-    float lean_turn = next(s) * 6.2831853;
-    float lean = height * (0.2 + 0.25 * next(s));
+    // Combed: the blades lean the way a slowly turning field over the zone points (broad swathes of grass lying
+    // together), each a little off it, and turn their flat side to the way they lean.
+    vec2 g = root.xy * 0.011;
+    float comb = sin(g.x + sin(g.y * 1.7) * 1.3) * 1.6 + sin(g.y * 0.8 - g.x * 0.6 + 2.0) * 1.2;
+    float lean_turn = comb + (next(s) - 0.5) * 0.9;
+    float facing = lean_turn + 1.5707963 + (next(s) - 0.5) * 0.8;
+    float lean = height * (0.4 + 0.25 * next(s));
     float width = pc.lod.z * (0.8 + 0.4 * next(s));
-    v_shade = 0.9 + 0.2 * next(s);
+    v_shade = 0.94 + 0.12 * next(s);
     float phase = next(s) * 6.2831853;
 
     // Where the tip goes: its own lean, the wind (a steady push, gusts rolling across the zone in the wind's direction
