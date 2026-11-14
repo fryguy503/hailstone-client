@@ -533,14 +533,17 @@ namespace {
 
 // Whether a plant may stand at `p` with the texel `under` beneath it: +green's test (a texture that cannot be read
 // grows nothing with +green: no telling grass from stone), out of water, lava and zone lines, and not under cover.
+bool green_enough(const ZoneFloraRules::Ground& ground, const std::optional<std::uint32_t>& under) {
+    if (!under) return false;
+    const auto r = static_cast<std::uint8_t>(*under & 0xff), g = static_cast<std::uint8_t>(*under >> 8 & 0xff),
+               b = static_cast<std::uint8_t>(*under >> 16 & 0xff);
+    return ground.greenish ? is_greenish_texel(r, g, b) : is_green_texel(r, g, b);
+}
+
+// `green` false: the caller has made +green's test (the lawn's, by a square's majority).
 bool may_grow(const ZoneFloraGrower::Data& d, const ZoneFloraRules::Ground& ground, const std::optional<std::uint32_t>& under,
-              const glm::vec3& p) {
-    if (ground.green_only) {
-        if (!under) return false;
-        const auto r = static_cast<std::uint8_t>(*under & 0xff), g = static_cast<std::uint8_t>(*under >> 8 & 0xff),
-                   b = static_cast<std::uint8_t>(*under >> 16 & 0xff);
-        if (!(ground.greenish ? is_greenish_texel(r, g, b) : is_green_texel(r, g, b))) return false;
-    }
+              const glm::vec3& p, bool green = true) {
+    if (green && ground.green_only && !green_enough(ground, under)) return false;
     if (!d.regions.empty()) {
         // In the water or lava, or standing on its surface (the region just under the foot), or in a zone line.
         const RegionInfo r = d.regions.lookup(p + glm::vec3(0.0f, 0.0f, 1.0f));
@@ -598,7 +601,21 @@ void grow_lawn(const ZoneFloraGrower::Data& d, const ZoneFloraGrower::Piece& t, 
             const float w = 1.0f - u - v;
             const glm::vec3 p = t.p[0] * w + t.p[1] * u + t.p[2] * v;
             const std::optional<std::uint32_t> under = texels.at(t.uv[0] * w + t.uv[1] * u + t.uv[2] * v);
-            if (!may_grow(d, ground, under, p)) continue;
+            // +green by the square's majority: its centre and four spots half a square out (the piece's texture
+            // mapping carried past its edges), so a texture blending grass into dirt texel by texel does not grow a
+            // speckle of lone patches.
+            if (ground.green_only) {
+                int green = green_enough(ground, under) ? 1 : 0;
+                const float h = kLawnCell * 0.5f;
+                for (const glm::vec2 o : {glm::vec2(h, 0.0f), glm::vec2(-h, 0.0f), glm::vec2(0.0f, h), glm::vec2(0.0f, -h)}) {
+                    const glm::vec2 r = q + o;
+                    const float ou = ((r.x - a.x) * (c.y - a.y) - (c.x - a.x) * (r.y - a.y)) / det;
+                    const float ov = ((b.x - a.x) * (r.y - a.y) - (r.x - a.x) * (b.y - a.y)) / det;
+                    if (green_enough(ground, texels.at(t.uv[0] * (1.0f - ou - ov) + t.uv[1] * ou + t.uv[2] * ov))) ++green;
+                }
+                if (green < 3) continue;
+            }
+            if (!may_grow(d, ground, under, p, false)) continue;
             FloraInstance patch;
             patch.position = p;
             patch.width = kLawnCell;
@@ -615,7 +632,7 @@ void grow_lawn(const ZoneFloraGrower::Data& d, const ZoneFloraGrower::Piece& t, 
 
 float lawn_edge_factor(float squares) {
     const float t = std::clamp((squares - 1.0f) / (static_cast<float>(kLawnEdgeCells) - 0.5f), 0.0f, 1.0f);
-    return 0.3f + 0.7f * t * t * (3.0f - 2.0f * t);
+    return 0.55f + 0.45f * t * t * (3.0f - 2.0f * t);
 }
 
 float lawn_height_noise(glm::vec2 p) {
@@ -714,9 +731,26 @@ void soften_lawn_edges(std::vector<FloraInstance>& out, std::size_t first, glm::
     std::unordered_set<std::uint64_t> grown;
     for (const auto& p : plants)
         if (p.definition == kLawnDefinition) grown.insert(key(cell_of(p.position.x), cell_of(p.position.y)));
+    // A patch with fewer than kLawnMinNeighbours of its eight neighbours grown stands alone (a stray green texel's):
+    // it goes, so the lawn's edge is a margin of grass, not a stubble of lone tufts.
+    std::vector<std::uint64_t> lone;
+    for (const auto& p : plants) {
+        if (p.definition != kLawnDefinition) continue;
+        const std::int64_t cx = cell_of(p.position.x), cy = cell_of(p.position.y);
+        int around = 0;
+        for (std::int64_t dy = -1; dy <= 1; ++dy)
+            for (std::int64_t dx = -1; dx <= 1; ++dx)
+                if ((dx != 0 || dy != 0) && grown.contains(key(cx + dx, cy + dy))) ++around;
+        if (around < kLawnMinNeighbours) lone.push_back(key(cx, cy));
+    }
+    for (const auto k : lone) grown.erase(k);
     for (auto& p : plants) {
         if (p.definition != kLawnDefinition) continue;
         const std::int64_t cx = cell_of(p.position.x), cy = cell_of(p.position.y);
+        if (!grown.contains(key(cx, cy))) {
+            p.height = 0.0f; // dropped below
+            continue;
+        }
         constexpr std::int64_t r = kLawnEdgeCells;
         std::int64_t nearest2 = (r + 1) * (r + 1);
         for (std::int64_t dy = -r; dy <= r; ++dy)
@@ -730,8 +764,8 @@ void soften_lawn_edges(std::vector<FloraInstance>& out, std::size_t first, glm::
     out.erase(std::remove_if(out.begin() + static_cast<std::ptrdiff_t>(first), out.end(),
                              [&](const FloraInstance& p) {
                                  return p.definition == kLawnDefinition &&
-                                        (p.position.x < lo.x || p.position.x >= hi.x || p.position.y < lo.y ||
-                                         p.position.y >= hi.y);
+                                        (p.height <= 0.0f || p.position.x < lo.x || p.position.x >= hi.x ||
+                                         p.position.y < lo.y || p.position.y >= hi.y);
                              }),
               out.end());
 }

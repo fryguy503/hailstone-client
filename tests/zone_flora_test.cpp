@@ -477,8 +477,8 @@ TEST_CASE("zone flora: the lawn's rules") {
     CHECK(errors.size() == 2);
     // Defaults.
     auto plain = parse_zone_flora_rules("ground * 0 lawn\n");
-    CHECK(plain.lawn_min == 1.4f);
-    CHECK(plain.lawn_max == 2.4f);
+    CHECK(plain.lawn_min == 1.8f);
+    CHECK(plain.lawn_max == 3.0f);
 }
 
 TEST_CASE("zone flora: the lawn is an even carpet, one patch per square, without donors") {
@@ -495,8 +495,8 @@ TEST_CASE("zone flora: the lawn is an even carpet, one patch per square, without
     for (const auto& p : flora.instances) {
         CHECK(p.definition == kLawnDefinition);
         CHECK(p.width == kLawnCell);
-        CHECK(p.height >= 1.4f * 0.3f); // the edge tapers (soften_lawn_edges)
-        CHECK(p.height <= 2.4f);
+        CHECK(p.height >= 1.8f * 0.55f); // the edge tapers (soften_lawn_edges)
+        CHECK(p.height <= 3.0f);
         CHECK(p.color == 0xff3f6b3au); // no texel lookup: the lawn's own green
         CHECK(p.slope == glm::vec2(0.0f));
         const float fx = p.position.x / kLawnCell - 0.5f, fy = p.position.y / kLawnCell - 0.5f;
@@ -562,7 +562,7 @@ TEST_CASE("zone flora: the lawn tapers where it meets bare ground") {
     CHECK(at(10, 10) == doctest::Approx(2.0f * lawn_edge_factor(1.0f)));
     CHECK(at(11, 20) == doctest::Approx(2.0f * lawn_edge_factor(2.0f)));
     CHECK(at(10 + kLawnEdgeCells, 20) == doctest::Approx(2.0f));
-    CHECK(lawn_edge_factor(1.0f) == doctest::Approx(0.3f));
+    CHECK(lawn_edge_factor(1.0f) == doctest::Approx(0.55f));
     CHECK(lawn_edge_factor(static_cast<float>(kLawnEdgeCells) + 0.5f) == doctest::Approx(1.0f));
     for (float d = 1.0f; d < 5.0f; d += 0.25f) CHECK(lawn_edge_factor(d + 0.25f) >= lawn_edge_factor(d));
     // Across a tile's border too: ground of 256 units over four tiles tapers at its own edge only.
@@ -581,6 +581,42 @@ TEST_CASE("zone flora: the lawn tapers where it meets bare ground") {
         CHECK((p.height < 1.99f) == at_edge);
     }
     CHECK(edge == 6400 - 74 * 74);
+}
+
+TEST_CASE("zone flora: the lawn grows no lone tufts") {
+    auto rules = parse_zone_flora_rules("ground grass* 0 +green lawn\n");
+    // Ground a little over one square: its patch has no neighbours and goes.
+    Zone speck;
+    speck.terrain.push_back(square("grass.bmp", kLawnCell * 1.5f));
+    for (auto& v : speck.terrain[0].vertices) v.position += glm::vec3(32.0f, 32.0f, 0.0f);
+    ZoneFlora none;
+    place_zone_flora(speck, parse_zone_flora_rules("ground grass* 0 lawn\n"), {}, none);
+    CHECK(none.instances.empty());
+
+    // A texture green but for a scatter of single grey texels (one in nine): a square's majority keeps the lawn whole
+    // over them. And one grey but for a scatter of green ones grows nothing.
+    auto scatter = [](bool green_ground) {
+        Image img;
+        img.width = img.height = 96;
+        img.mips.push_back({});
+        for (std::uint32_t y = 0; y < img.height; ++y)
+            for (std::uint32_t x = 0; x < img.width; ++x) {
+                const bool odd = x % 3 == 1 && y % 3 == 1;
+                const std::uint32_t c = (odd != green_ground) ? 0xff285a3cu : 0xff808080u;
+                for (int k = 0; k < 4; ++k) img.mips[0].push_back(static_cast<std::byte>(c >> (8 * k) & 0xff));
+            }
+        return img;
+    };
+    Zone zone;
+    zone.terrain.push_back(square("grass.bmp", 128.0f));
+    for (auto& v : zone.terrain[0].vertices) v.uv = glm::vec2(v.position) / 128.0f;
+    for (bool green_ground : {true, false}) {
+        const Image img = scatter(green_ground);
+        ZoneFlora flora;
+        place_zone_flora(zone, rules, {}, flora, [&](std::string_view) { return std::optional<Image>(img); });
+        if (green_ground) CHECK(flora.instances.size() == 1600);
+        else CHECK(flora.instances.empty());
+    }
 }
 
 TEST_CASE("zone flora: the lawn's height wanders smoothly between 0 and 1") {
@@ -607,8 +643,8 @@ TEST_CASE("lawn: levels of detail and the far patches' stride") {
         CHECK(render::kLawnLods[k].vertices() < render::kLawnLods[k - 1].vertices());
         CHECK(render::kLawnLods[k].blade_width > render::kLawnLods[k - 1].blade_width);
     }
-    CHECK(render::kLawnLods[0].vertices() == 36 * 21);
-    CHECK(render::kLawnLods[2].vertices() == 4 * 3);
+    CHECK(render::kLawnLods[0].vertices() == 49 * 15);
+    CHECK(render::kLawnLods[2].vertices() == 9 * 3);
     CHECK(render::lawn_stride(0.0f) == 1);
     CHECK(render::lawn_stride(render::kFloraReach) == 1);
     CHECK(render::lawn_stride(render::kFloraReach + 1.0f) == 2);
