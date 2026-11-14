@@ -779,8 +779,9 @@ GaugeValue eq_discipline_gauge(const EqHost& host, std::int64_t now_ms) {
     const auto& buff = c.spell_state().buffs[game::kBuffSlots - 1];
     const auto* spell = c.spell_table().get(buff.spell);
     if (!spell) return {0, {}};
-    // Gauge 26's helper @0x761600: remaining ticks / SpellDuration(spell, local player's level).
-    // Presentation enhancements: interpolate between buff ticks, show seconds, and draw permanent effects full.
+    // Gauge 26's helper @0x761600: remaining ticks * 1000 / SpellDuration @0x434420 (spell, the local player's
+    // level, false), 0 when that is not positive; the gauge function caps it at 1000. RoF2 gives the gauge no text.
+    // Hailstone additions: interpolation between buff ticks, the seconds text, and permanent effects drawn full.
     if (game::buff_is_permanent(buff.tics, spell)) return {1000, "Permanent"};
     const auto left = game::buff_countdown_held(spell, c.spell_state().buff_timers_on_hold)
                           ? static_cast<std::uint64_t>(buff.tics) * game::kBuffTickMs

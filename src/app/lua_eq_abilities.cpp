@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
+#include <limits>
 
 #include <lua.hpp>
 
@@ -24,6 +25,7 @@
 #include "game/combat_ability_menu.h"
 #include "game/mechanics/character.h"
 #include "game/hotbuttons.h"
+#include "game/spell_gem.h"
 #include "game/mechanics/abilities.h"
 #include "net/game_connection.h"
 
@@ -224,9 +226,17 @@ public:
             std::max<std::int64_t>(static_cast<std::int64_t>(s->recast_time) - focus, 0));
         // Readiness belongs to the server's shared timer. Inferring begin = ready - this ability's reuse can
         // put begin in the future for a shorter-reuse ability and make SetCoolDown's unsigned test look ready.
-        // Keep the overlay full while the shared wait exceeds this ability's reuse (also when reuse is zero).
-        const auto duration = std::max(out.cool_down_duration, out.cool_down_left);
-        out.cool_down = std::min(1.0 - static_cast<double>(out.cool_down_left) / static_cast<double>(duration), 0.87);
+        // Keep the overlay full while the shared wait exceeds this ability's reuse (also when reuse is zero), as
+        // game/hot_button_state.cpp does; the fraction is still DrawCooldown's (ButtonCoolDown, FPU model).
+        // The button's EQ-time fields hold at most 2^32-1 ms.
+        constexpr auto limit = std::numeric_limits<std::uint32_t>::max();
+        const auto duration = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(std::max(out.cool_down_duration, out.cool_down_left), limit));
+        const auto remaining = static_cast<std::uint32_t>(std::min<std::uint64_t>(out.cool_down_left, limit));
+        const std::uint32_t now = net::GameConnection::eq_time();
+        game::ButtonCoolDown cd;
+        cd.set_ending(now + remaining, duration);
+        out.cool_down = cd.overlay_fraction(now);
     }
 
     bool click(EqHost& host, std::string_view id, std::string_view button, bool outside) override {
