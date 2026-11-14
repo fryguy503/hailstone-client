@@ -745,6 +745,7 @@ std::optional<int> ClientApp::display_option(std::string_view name) const {
     if (name == "distance_blur") return config_.get_bool("display.distance_blur", true) ? 1 : 0;
     if (name == "color_grade") return config_.get_bool("display.color_grade", true) ? 1 : 0;
     if (name == "neighbour_zones") return neighbour_zones_ ? 1 : 0;
+    if (name == "horizon_hills") return horizon_hills_ ? 1 : 0;
     // Hailstone: NPCs the server leaves in the air are drawn on the floor (game::WorldState::ground_npcs), on by default.
     if (name == "ground_npcs") return config_.get_bool("display.ground_npcs", true) ? 1 : 0;
     if (name == "find_trail_style")
@@ -801,6 +802,13 @@ bool ClientApp::set_display_option(std::string_view name, int value) {
         // The zones past the outdoor zone lines (app/neighbour_zones.h): freed at once when turned off.
         neighbour_zones_ = value != 0;
         config_.set_bool("display.neighbour_zones", neighbour_zones_);
+        config_.save(config_path_);
+        return true;
+    }
+    if (name == "horizon_hills") {
+        // The distant hills round an outdoor zone (render/horizon.h).
+        horizon_hills_ = value != 0;
+        config_.set_bool("display.horizon_hills", horizon_hills_);
         config_.save(config_path_);
         return true;
     }

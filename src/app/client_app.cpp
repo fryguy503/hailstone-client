@@ -628,6 +628,12 @@ int ClientApp::run() {
             // Where no sky is drawn, the modern haze fills the background as it fills the distance (with the sun's glow
             // in it), not the plain fog colour; under water, the water.
             if (zone_renderer_ && (under_water || (modern && !sky_drawn))) zone_renderer_->draw_backdrop(*f, vp);
+            // The distant hills round an outdoor zone (render/horizon.h), behind the zone, under an open sky or none
+            // (not the planes' and Luclin's painted skies); faded in a thick fog, lava and a storm.
+            if (zone_renderer_ && in_game && modern && outdoor && !under_water && horizon_hills_ &&
+                (!sky_renderer_ || sky_renderer_->has_atmosphere()))
+                zone_renderer_->draw_horizon(*f, vp, render::horizon_strength(view_.fog_end, haze.extend,
+                                                                              weather_look_.storm));
             // The modern water reads the opaque world: the zone's other draws wait for VkContext::begin_translucent.
             const render::ZonePhase first = modern ? render::ZonePhase::Opaque : render::ZonePhase::All;
             if (zone_renderer_) zone_renderer_->draw_depth(*f, vp, camera_.position, lit, t);

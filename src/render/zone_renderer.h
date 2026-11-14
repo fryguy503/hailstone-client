@@ -14,6 +14,7 @@
 #include <glm/glm.hpp>
 
 #include "render/gpu.h"
+#include "render/horizon.h"
 #include "render/scene_lighting.h"
 #include "render/vk_context.h"
 
@@ -162,6 +163,12 @@ public:
     // haze as it is infinitely far away, its glow towards the sun too; with the camera under water
     // (render::set_underwater), the open water, its colour and light shafts. Draw it first in the scene.
     void draw_backdrop(const FrameInfo& frame, const glm::mat4& view_proj);
+    // The distant hills round the zone (render/horizon.h, shaders/horizon.frag; the modern lighting outdoors), from
+    // the last set_lighting, at `strength` (render::horizon_strength; 0 draws nothing). Draw it after the sky or the
+    // backdrop and before the zone: it fills only where nothing nearer is drawn.
+    void draw_horizon(const FrameInfo& frame, const glm::mat4& view_proj, float strength);
+    // The land round the zone, measured from its terrain while preparing it (not for a neighbour zone).
+    const HorizonLand& horizon() const { return horizon_; }
 
     const ZoneRenderStats& stats() const { return stats_; }
     // The counts since the last call; they start again from zero.
@@ -238,6 +245,7 @@ private:
     void create_shadow_pipeline(const std::filesystem::path& shader_dir);
     void create_shadow_pipeline(const std::filesystem::path& shader_dir, bool point);
     void create_underwater_pipeline(const std::filesystem::path& shader_dir);
+    VkPipeline create_background_pipeline(const std::filesystem::path& shader_dir, const char* fragment, bool blended);
     void upload_scene(std::uint32_t frame_slot);
     // What draw and draw_depth share: the geometry and the sets bound, the frame's scene uploaded. Returns the time
     // in milliseconds.
@@ -309,6 +317,8 @@ private:
     VkPipeline shadow_pipeline_ = VK_NULL_HANDLE;
     VkPipeline point_shadow_pipeline_ = VK_NULL_HANDLE;
     VkPipeline underwater_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline horizon_pipeline_ = VK_NULL_HANDLE; // not for a neighbour zone (behind_)
+    HorizonLand horizon_;
 };
 
 } // namespace hailstone::render

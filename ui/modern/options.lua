@@ -630,6 +630,8 @@ local function graphicsTab()
     check("distance_blur", "Distance Blur", "Softens the far distance a little (modern lighting).")
     check("neighbour_zones", "Neighbour Zones",
       "Draws the next zone past an outdoor zone line in the distance (modern lighting; scenery only).")
+    check("horizon_hills", "Horizon Hills",
+      "Distant hills and mountains round outdoor zones, so the land does not end in haze (modern lighting; scenery only).")
     check("ground_npcs", "Ground Floating NPCs",
       "Draws an NPC the server left standing in the air on the ground below it (up to 50 units). Flying and levitating NPCs stay up.")
     ticks("bloom", "Bloom", function(t) return pct(t * 5) end, "A glow around bright lights and the sun.")

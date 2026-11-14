@@ -284,6 +284,7 @@ struct ZoneRenderer::Prepared {
     std::size_t missing_textures = 0;
     std::vector<std::byte> lights, grid_cells, grid_indices; // the light grid's three buffers
     bool behind = false;                                      // ZoneRenderOptions::behind
+    HorizonLand horizon;                                      // the land round the zone (not for a neighbour)
 };
 
 void ZoneRenderer::PreparedDeleter::operator()(Prepared* p) const { delete p; }
@@ -344,6 +345,7 @@ ZoneRenderer::ZoneRenderer(VkContext& vk, PreparedPtr prepared, const std::files
     static std::atomic<std::uint64_t> made{0};
     id_ = ++made;
     behind_ = prepared->behind;
+    horizon_ = prepared->horizon;
     // A neighbour zone (behind_) keeps its single pass: its ties go by the draw order (GREATER, first drawn wins),
     // which an equal test over the pre-pass's written depth would turn around.
     depth_prepass_ = vk.scene_options().depth_prepass && !behind_;
@@ -367,7 +369,8 @@ ZoneRenderer::~ZoneRenderer() {
         std::vector<Buffer> buffers;
         VkSampler sampler;
         std::vector<Texture> textures;
-    } o{{shadow_pipeline_, point_shadow_pipeline_, underwater_pipeline_, depth_pipeline_, opaque_equal_pipeline_},
+    } o{{shadow_pipeline_, point_shadow_pipeline_, underwater_pipeline_, horizon_pipeline_, depth_pipeline_,
+        opaque_equal_pipeline_},
         layout_,
         pool_,
         {set_layout_, scene_layout_},
@@ -570,6 +573,11 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         }
     };
 
+    // The zone's level ground and slopes for the hills round it (render/horizon.h): its own terrain's opaque, dry
+    // triangles, by their first texture. Not for a neighbour zone, which draws none.
+    const bool measure_horizon = options.offset == glm::vec3(0.0f) && options.keep.empty() && !options.behind;
+    std::vector<HorizonTriangle> horizon_triangles;
+    std::unordered_map<std::string, std::uint32_t> horizon_textures; // texture name -> index
     std::size_t plants = 0;
     // Each vertex's placement's position (a zone region's: none), so that a level of detail's chunks hold whole
     // placements (the cell sort below).
@@ -647,6 +655,12 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                         tri_key.liquid = (*liquid)[at];
                         ++liquid_triangles;
                     }
+                }
+                if (measure_horizon && region && tri_key.liquid == 0 && m.blend == assets::BlendMode::Opaque) {
+                    auto [it, fresh] = horizon_textures.try_emplace(m.frames.front(),
+                                                                    static_cast<std::uint32_t>(horizon_textures.size()));
+                    horizon_triangles.push_back({vertices[base + t[0]].position, vertices[base + t[1]].position,
+                                                 vertices[base + t[2]].position, it->second});
                 }
                 auto& out = by_material[tri_key];
                 looks.try_emplace(tri_key, m);
@@ -785,6 +799,7 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                   options.offset.x, options.offset.y, options.offset.z, kept, cut, dropped, doubled, split);
     }
 
+    std::unordered_map<std::string, std::uint32_t> horizon_slots; // a draw's first texture name -> its slot
     // Texture slot 0 is plain white, used for anything that fails to load.
     const std::size_t replaced_before = assets::texture_overrides().applied();
     {
@@ -867,6 +882,7 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         d.lod_far = key.lod_far;
         MaterialState st = material_state(look);
         for (const auto& name : key.frames) d.frame_slots.push_back(slot_for(name, st.masked_texture, TextureUse::Color, !st.alpha_unused()));
+        if (!key.frames.empty()) horizon_slots.try_emplace(key.frames.front(), d.frame_slots.front());
         const auto& e = look.effect;
         for (std::size_t i = 0; i < e.textures.size() && i < d.extra_slots.size(); ++i)
             d.extra_slots[i] = slot_for(e.textures[i], false);
@@ -1062,6 +1078,23 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                                   grid.width, grid.height, grid.cell);
     }
     prep.indices = std::move(indices);
+    if (measure_horizon) {
+        // Each texture's mean colour from its decoded image (slot 0, the white of a texture that failed, says nothing).
+        std::vector<std::optional<glm::vec3>> colors(horizon_textures.size());
+        for (const auto& [name, index] : horizon_textures)
+            if (auto it = horizon_slots.find(name); it != horizon_slots.end() && it->second != 0 &&
+                                                    it->second < prep.images.size())
+                colors[index] = mean_texture_color(prep.images[it->second].image);
+        prep.horizon = horizon_land(horizon_triangles, colors, horizon_seed(zone.name));
+        const HorizonLand& h = prep.horizon;
+        if (h.valid)
+            log::info("zone renderer: horizon hills round ({:.0f} {:.0f}) from {:.0f} units, ground {:.0f}, relief "
+                      "{:.0f}, from {} terrain triangles",
+                      h.centre.x, h.centre.y, h.radius, h.ground, h.relief, horizon_triangles.size());
+        else
+            log::info("zone renderer: no horizon hills ({} terrain triangles, too little level ground)",
+                      horizon_triangles.size());
+    }
     mark("prepared", prep.started);
     return prepared;
 }
@@ -1541,10 +1574,35 @@ void ZoneRenderer::draw_backdrop(const FrameInfo& frame, const glm::mat4& view_p
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
+void ZoneRenderer::draw_horizon(const FrameInfo& frame, const glm::mat4& view_proj, float strength) {
+    if (!horizon_pipeline_ || !horizon_.valid || !(strength > 0.0f)) return;
+    VkCommandBuffer cmd = frame.cmd;
+    scene_.view_proj = view_proj;
+    upload_scene(frame.frame_slot);
+    struct {
+        glm::vec4 ring, shape, ground_color, slope_color;
+    } push{{horizon_.centre, horizon_.radius, horizon_.ground},
+           {horizon_.relief, horizon_.seed, std::min(strength, 1.0f), 0.0f},
+           glm::vec4(horizon_.ground_color, 0.0f),
+           glm::vec4(horizon_.slope_color, 0.0f)};
+    static_assert(sizeof(push) <= sizeof(PushConstants));
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, horizon_pipeline_);
+    VkDescriptorSet sets[3] = {set_, scene_sets_[frame.frame_slot], vk_.shadow_set()};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
+    vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+}
+
 void ZoneRenderer::create_underwater_pipeline(const std::filesystem::path& shader_dir) {
+    underwater_pipeline_ = create_background_pipeline(shader_dir, "underwater.frag.spv", false);
+    if (!behind_) horizon_pipeline_ = create_background_pipeline(shader_dir, "horizon.frag.spv", true);
+}
+
+VkPipeline ZoneRenderer::create_background_pipeline(const std::filesystem::path& shader_dir, const char* fragment,
+                                                    bool blended) {
     VkDevice d = vk_.device();
     VkShaderModule vs = create_shader(d, shader_dir / "underwater.vert.spv");
-    VkShaderModule fs = create_shader(d, shader_dir / "underwater.frag.spv");
+    VkShaderModule fs = create_shader(d, shader_dir / fragment);
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", nullptr};
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr};
@@ -1560,11 +1618,20 @@ void ZoneRenderer::create_underwater_pipeline(const std::filesystem::path& shade
     rs.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = vk_.scene_samples();
-    // Behind everything: drawn first, no depth test or write.
+    // Behind everything: drawn first, no depth test or write. The horizon's hills blend over the sky (their edges).
     VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     VkPipelineColorBlendAttachmentState ba{};
     ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
                         VK_COLOR_COMPONENT_A_BIT;
+    if (blended) {
+        ba.blendEnable = VK_TRUE;
+        ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        ba.colorBlendOp = VK_BLEND_OP_ADD;
+        ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        ba.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
     VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = 1;
     cb.pAttachments = &ba;
@@ -1590,10 +1657,12 @@ void ZoneRenderer::create_underwater_pipeline(const std::filesystem::path& shade
     info.pColorBlendState = &cb;
     info.pDynamicState = &ds;
     info.layout = layout_;
-    vk_check(vkCreateGraphicsPipelines(d, vk_.pipeline_cache(), 1, &info, nullptr, &underwater_pipeline_),
-             "vkCreateGraphicsPipelines (underwater)");
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    vk_check(vkCreateGraphicsPipelines(d, vk_.pipeline_cache(), 1, &info, nullptr, &pipeline),
+             "vkCreateGraphicsPipelines (background)");
     vkDestroyShaderModule(d, vs, nullptr);
     vkDestroyShaderModule(d, fs, nullptr);
+    return pipeline;
 }
 
 bool ZoneRenderer::map_moves(std::uint32_t layer) const {

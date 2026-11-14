@@ -97,6 +97,7 @@
 #include "platform/window.h"
 #include "render/ambient_probe.h"
 #include "render/atmosphere.h"
+#include "render/horizon.h"
 #include "render/camera.h"
 #include "render/cover_map.h"
 #include "render/fire_renderer.h"
@@ -1178,6 +1179,8 @@ private:
     // display.neighbour_zones.
     std::unique_ptr<NeighbourZones> neighbours_;
     bool neighbour_zones_ = true;
+    // The distant hills round an outdoor zone in the modern lighting (render/horizon.h); display.horizon_hills.
+    bool horizon_hills_ = true;
     std::unique_ptr<audio::AudioSystem> audio_;             // emitters, music, event sounds (audio/)
     std::unique_ptr<SoundEvents> sound_events_;             // what plays which sound (app/sound_events.h)
     // The listener (audio/listener.h): PlayerClient +0x11b4 (the last ceiling found above the player), CDisplay
