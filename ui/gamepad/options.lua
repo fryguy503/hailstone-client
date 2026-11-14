@@ -257,6 +257,7 @@ local PAGES = {
     local rows = {}
     local list = {
       optionRow("Isometric camera", "iso_camera", "bool"),
+      optionRow("Click to move in every camera", "click_move", "bool"),
       optionRow("Pitch", "iso_pitch", { 20, 89, 1, "°" }),
       optionRow("Field of view", "iso_fov", { 10, 90, 1, "°" }),
       optionRow("Movement", "iso_wasd", { "Relative to the camera", "Classic" }),
