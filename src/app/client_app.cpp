@@ -529,6 +529,7 @@ int ClientApp::run() {
                     neighbours_->set_scene_light(scene_light);
                     neighbours_->set_lighting(lighting);
                     neighbours_->set_lod_scale(static_cast<float>(tree_detail_) / 100.0f);
+                    neighbours_->set_debug_tint(neighbour_tint_);
                 }
                 frame_lighting_ = lighting;
                 if (actor_renderer_) actor_renderer_->set_lighting(lighting);

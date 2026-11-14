@@ -110,11 +110,12 @@ struct HorizonField {
 HorizonField horizon_field(std::span<const HorizonTriangle> triangles, const HorizonLand& land);
 
 // A neighbour zone's ground in the current zone's coordinates (app/neighbour_zones.h), which shapes the land past its
-// zone line: heights on a grid of kHorizonCell squares, NaN where it has none (before the seam, in its void). A
-// building or a crest narrower than a few squares is taken off (horizon_source: the ground is "opened", eroded then
-// dilated over kHorizonOpening squares), so the land lies under the neighbour's roofs and the tops of its hills, which
-// then stand out of it. Past its ground its influence fades over kHorizonSourceFade (its `cover`, 1 on its ground).
-inline constexpr int kHorizonOpening = 2;
+// zone line: heights on a grid of kHorizonCell squares, NaN where it has none (before the seam, in its void),
+// measured from its terrain alone (its placed objects, trees and houses, are not its ground). A wall or a crest narrower
+// than three squares is taken off (horizon_source: the ground is "opened", eroded then dilated over kHorizonOpening
+// squares), so the land does not rise in a ramp against a wall; wider, it follows the terrain. Past its ground its
+// influence fades over kHorizonSourceFade (its `cover`, 1 on its ground).
+inline constexpr int kHorizonOpening = 1;
 inline constexpr float kHorizonSourceFade = 1200.0f;
 struct HorizonSource {
     std::string name; // the neighbour's short name
@@ -122,11 +123,13 @@ struct HorizonSource {
     float cell = kHorizonCell;
     int nx = 0, ny = 0;
     std::vector<float> height; // the opened ground, NaN where none; padded by the fade on every side
-    // finish_horizon_source: each square's nearest ground, and how far it lies (0 on it).
-    std::vector<float> fill, dist;
+    std::vector<float> top;    // its terrain's highest point in each square, unopened, NaN where none (or empty)
+    // finish_horizon_source: each square's nearest ground, and how far it lies (0 on it); on its ground, how far the
+    // nearest square without ground lies (its edge: before the seam, its void past its own boundary walls).
+    std::vector<float> fill, dist, inner;
     bool valid() const {
         const auto n = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
-        return nx > 0 && ny > 0 && height.size() == n && fill.size() == n && dist.size() == n;
+        return nx > 0 && ny > 0 && height.size() == n && fill.size() == n && dist.size() == n && inner.size() == n;
     }
 };
 // The sources a land is built with, sorted by name (each once): the same set builds the same land.
@@ -134,16 +137,21 @@ using HorizonSources = std::vector<std::shared_ptr<const HorizonSource>>;
 void sort_sources(HorizonSources& sources);
 
 // A source from the neighbour's ground sampled on `nx` x `ny` squares from `lo` (NaN: none): padded, opened, finished.
-HorizonSource horizon_source(std::string name, glm::vec2 lo, float cell, int nx, int ny, std::vector<float> ground);
+// `top` (the same squares, or empty): its terrain's highest point in each, kept as it is (horizon_source_top).
+HorizonSource horizon_source(std::string name, glm::vec2 lo, float cell, int nx, int ny, std::vector<float> ground,
+                             std::vector<float> top = {});
 // Fills in `fill` and `dist` from `height` (a source read back from the cache).
 void finish_horizon_source(HorizonSource& source);
 struct HorizonSourceSample {
     float height = 0.0f; // the ground, or past it the nearest ground's height
     float cover = 0.0f;  // 1 on its ground, fading to 0 over kHorizonSourceFade past it
+    float inner = 0.0f;  // on its ground, how far in from its edge
 };
 HorizonSourceSample sample_source(const HorizonSource& source, glm::vec2 p);
 // The opened ground under `p` (bilinear between the squares' centres), nullopt where the source has none.
 std::optional<float> source_ground(const HorizonSource& source, glm::vec2 p);
+// Its terrain's highest point in the square holding `p`, unopened; nullopt where it has none or was not kept.
+std::optional<float> source_top(const HorizonSource& source, glm::vec2 p);
 
 // Where the land comes off the zone's edge onto a neighbour's ground, it eases from the edge's height to the
 // neighbour's over a band past the edge: kHorizonBandSlope times their difference, kHorizonBandMin to kHorizonBandMax
@@ -155,11 +163,25 @@ inline constexpr float kHorizonBandMax = 800.0f;
 // The land's height at `p` (as the mesh's vertices have it).
 float horizon_height(const HorizonField& field, const HorizonSources& sources, glm::vec2 p);
 
+// Past the band, where a neighbour that is drawn has its own ground (its cover whole) and at least kHorizonInnerFrom
+// in from its edge (kHorizonInnerTo for all of it), the land of its part (horizon_mesh with `only`) sinks kHorizonTuck
+// under that ground, so the neighbour's own terrain is drawn there over it (its roads, its textures, its hills) and the
+// land fills only what it lacks; in the band and by its edge (its own boundary walls and filler) its terrain goes and
+// the land is the ground (game::split_off_land). `settled`, 0..1: how far it has sunk.
+inline constexpr float kHorizonInnerFrom = 128.0f;
+inline constexpr float kHorizonInnerTo = 512.0f;
+struct HorizonPoint {
+    float height = 0.0f; // as `only`'s part has it
+    float settled = 0.0f;
+};
+HorizonPoint horizon_point(const HorizonField& field, const HorizonSources& sources, glm::vec2 p, int only);
+
 struct HorizonMesh {
     std::vector<glm::vec3> positions;
     std::vector<glm::vec3> normals;
     std::vector<float> shade;  // per vertex, 0..1: what is left of the light (woods and valleys are darker)
     std::vector<float> weight; // per vertex, 0..1: a neighbour's part (`only`): how much its own ground shows
+    std::vector<float> settled; // per vertex, 0..1: a neighbour's part: how far under its terrain (horizon_point)
     // Triangles (index triples into positions), counter-clockwise seen from above: the zone's ground material, its
     // rock (slopes and peaks), and its water (a flat surface at water_level).
     std::vector<std::uint32_t> ground, rock, water;

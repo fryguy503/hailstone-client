@@ -492,14 +492,14 @@ std::optional<float> LandMask::ground_at(float x, float y) const {
     const float gx = (x - origin.x) / cell, gy = (y - origin.y) / cell;
     if (!(gx >= 0.0f && gy >= 0.0f && gx < static_cast<float>(width) && gy < static_cast<float>(height)))
         return std::nullopt;
-    const auto own = cell_at(static_cast<int>(gx), static_cast<int>(gy));
-    if (!own) return std::nullopt;
+    const auto here = cell_at(static_cast<int>(gx), static_cast<int>(gy));
+    if (!here) return std::nullopt;
     const float fx = gx - 0.5f, fy = gy - 0.5f;
     const float x0 = std::floor(fx), y0 = std::floor(fy);
     const float tx = fx - x0, ty = fy - y0;
     auto sample = [&](float i, float j) {
         const auto h = cell_at(static_cast<int>(i), static_cast<int>(j));
-        return h ? *h : *own;
+        return h ? *h : *here;
     };
     const float bottom = sample(x0, y0) + (sample(x0 + 1.0f, y0) - sample(x0, y0)) * tx;
     const float top = sample(x0, y0 + 1.0f) + (sample(x0 + 1.0f, y0 + 1.0f) - sample(x0, y0 + 1.0f)) * tx;
@@ -514,11 +514,111 @@ bool LandMask::stands_at(float x, float y) const {
                   static_cast<std::size_t>(static_cast<int>(gx))] != 0;
 }
 
+bool LandMask::terrain_at(float x, float y) const {
+    if (empty() || terrain.empty()) return true;
+    const float gx = (x - origin.x) / cell, gy = (y - origin.y) / cell;
+    if (!(gx >= 0.0f && gy >= 0.0f && gx < static_cast<float>(width) && gy < static_cast<float>(height))) return true;
+    return terrain[static_cast<std::size_t>(static_cast<int>(gy)) * static_cast<std::size_t>(width) +
+                   static_cast<std::size_t>(static_cast<int>(gx))] != 0;
+}
+
+bool LandMask::own_at(float x, float y) const {
+    if (empty() || own.empty()) return false;
+    const float gx = (x - origin.x) / cell, gy = (y - origin.y) / cell;
+    if (!(gx >= 0.0f && gy >= 0.0f && gx < static_cast<float>(width) && gy < static_cast<float>(height))) return false;
+    return own[static_cast<std::size_t>(static_cast<int>(gy)) * static_cast<std::size_t>(width) +
+               static_cast<std::size_t>(static_cast<int>(gx))] != 0;
+}
+
+std::optional<float> LandMask::surface_at(float x, float y) const {
+    if (empty() || surface.empty()) return std::nullopt;
+    auto cell_at = [&](int i, int j) -> std::optional<float> {
+        if (i < 0 || j < 0 || i >= width || j >= height) return std::nullopt;
+        const float h = surface[static_cast<std::size_t>(j) * static_cast<std::size_t>(width) + static_cast<std::size_t>(i)];
+        if (std::isnan(h)) return std::nullopt;
+        return h;
+    };
+    const float gx = (x - origin.x) / cell, gy = (y - origin.y) / cell;
+    if (!(gx >= 0.0f && gy >= 0.0f && gx < static_cast<float>(width) && gy < static_cast<float>(height)))
+        return std::nullopt;
+    const auto here = cell_at(static_cast<int>(gx), static_cast<int>(gy));
+    if (!here) return std::nullopt;
+    const float fx = gx - 0.5f, fy = gy - 0.5f;
+    const float x0 = std::floor(fx), y0 = std::floor(fy);
+    const float tx = fx - x0, ty = fy - y0;
+    auto sample = [&](float i, float j) {
+        const auto h = cell_at(static_cast<int>(i), static_cast<int>(j));
+        return h ? *h : *here;
+    };
+    const float bottom = sample(x0, y0) + (sample(x0 + 1.0f, y0) - sample(x0, y0)) * tx;
+    const float top = sample(x0, y0 + 1.0f) + (sample(x0 + 1.0f, y0 + 1.0f) - sample(x0, y0 + 1.0f)) * tx;
+    return bottom + (top - bottom) * ty;
+}
+
+std::size_t spread_terrain_cut(LandMask& mask, const std::function<std::optional<float>(glm::vec2)>& highest,
+                               float tolerance, int reach, const std::function<bool()>& stop) {
+    if (mask.empty() || mask.terrain.size() != mask.ground.size() || mask.surface.size() != mask.ground.size()) return 0;
+    struct Open {
+        int x, y, steps;
+    };
+    auto at = [&](int x, int y) {
+        return static_cast<std::size_t>(y) * static_cast<std::size_t>(mask.width) + static_cast<std::size_t>(x);
+    };
+    std::vector<Open> open;
+    for (int y = 0; y < mask.height; ++y)
+        for (int x = 0; x < mask.width; ++x)
+            if (!mask.terrain[at(x, y)]) open.push_back({x, y, 0});
+    std::size_t spread = 0;
+    while (!open.empty()) {
+        if (stop && stop()) break;
+        const Open from = open.back();
+        open.pop_back();
+        if (from.steps >= reach) continue;
+        for (const auto& [dx, dy] : {std::pair{1, 0}, std::pair{-1, 0}, std::pair{0, 1}, std::pair{0, -1}}) {
+            const int px = from.x + dx, py = from.y + dy;
+            if (px < 0 || py < 0 || px >= mask.width || py >= mask.height) continue;
+            const std::size_t j = at(px, py);
+            if (!mask.terrain[j] || std::isnan(mask.surface[j])) continue;
+            const glm::vec2 p = mask.origin + (glm::vec2(static_cast<float>(px), static_cast<float>(py)) + 0.5f) * mask.cell;
+            const auto top = highest(p);
+            if (!top || *top <= mask.surface[j] + tolerance) continue;
+            mask.terrain[j] = 0;
+            ++spread;
+            open.push_back({px, py, from.steps + 1});
+        }
+    }
+    return spread;
+}
+
 std::optional<std::vector<BaryPolygon>> split_off_land(const LandMask& mask, const glm::vec3& a, const glm::vec3& b,
-                                                       const glm::vec3& c, float tolerance) {
+                                                       const glm::vec3& c, LandPart part, float tolerance) {
     if (mask.empty()) return std::nullopt;
-    const bool up = faces_up(a, b, c);
     auto position = [&](const glm::vec3& w) { return a * w.x + b * w.y + c * w.z; };
+    auto middle = [&](const BaryPolygon& poly) {
+        glm::vec3 mid(0.0f);
+        for (const glm::vec3& w : poly) mid += position(w);
+        return mid / static_cast<float>(poly.size());
+    };
+    if (part == LandPart::Terrain)
+        return split_cells(mask.origin, mask.cell, mask.width, mask.height, a, b, c, [&](const BaryPolygon& poly) {
+            const glm::vec3 mid = middle(poly);
+            if (mask.terrain_at(mid.x, mid.y)) return false;
+            // Where its terrain is not drawn, what of it stands clear of its own ground (a wall, a tower, a wall's
+            // top: narrower than its opened ground) is kept as what stands on the ground is; its ground goes.
+            bool clear = false;
+            for (const glm::vec3& w : poly) {
+                const glm::vec3 p = position(w);
+                const auto h = mask.ground_at(p.x, p.y);
+                clear |= h && p.z > *h + tolerance;
+            }
+            return !clear || !mask.stands_at(mid.x, mid.y);
+        });
+    if (part == LandPart::Liquid)
+        return split_cells(mask.origin, mask.cell, mask.width, mask.height, a, b, c, [&](const BaryPolygon& poly) {
+            const glm::vec3 mid = middle(poly);
+            return mask.own_at(mid.x, mid.y) || !mask.stands_at(mid.x, mid.y);
+        });
+    const bool up = faces_up(a, b, c);
     return split_cells(mask.origin, mask.cell, mask.width, mask.height, a, b, c, [&](const BaryPolygon& poly) {
         glm::vec3 mid(0.0f);
         bool ground = up;

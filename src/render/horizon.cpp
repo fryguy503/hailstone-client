@@ -130,6 +130,7 @@ struct Point {
     int owner = -1;      // the source with the most cover here
     float cover = 0.0f;  // its cover
     float weight = 0.0f; // the `only` source's cover times the band's (its own ground's share)
+    float settled = 0.0f; // sunk under the `only` source's own terrain (horizon_point)
 };
 
 Point land_point(const HorizonField& g, const HorizonSources& sources, const Shape& k, glm::vec2 p, int only) {
@@ -161,7 +162,7 @@ Point land_point(const HorizonField& g, const HorizonSources& sources, const Sha
     out.sea = g.sea[i];
     // The neighbours' ground: from the zone's edge it eases onto theirs across the band, and fades back into the hills
     // past it as their cover does.
-    float sum = 0.0f, weighed = 0.0f, cover = 0.0f, only_cover = 0.0f;
+    float sum = 0.0f, weighed = 0.0f, cover = 0.0f, only_cover = 0.0f, only_inner = 0.0f;
     for (std::size_t s = 0; s < sources.size(); ++s) {
         const HorizonSourceSample smp = sample_source(*sources[s], p);
         if (!(smp.cover > 0.0f)) continue;
@@ -171,7 +172,10 @@ Point land_point(const HorizonField& g, const HorizonSources& sources, const Sha
             cover = smp.cover;
             out.owner = static_cast<int>(s);
         }
-        if (static_cast<int>(s) == only) only_cover = smp.cover;
+        if (static_cast<int>(s) == only) {
+            only_cover = smp.cover;
+            only_inner = smp.inner;
+        }
     }
     float flat = 0.0f; // how much of the neighbours' ground (no mountains on it)
     if (sum > 0.0f) {
@@ -182,6 +186,10 @@ Point land_point(const HorizonField& g, const HorizonSources& sources, const Sha
         out.sea *= 1.0f - cover;
         out.cover = cover;
         out.weight = only_cover * across;
+        // Past the band, on the drawn neighbour's own ground, under its terrain.
+        out.settled = smooth(0.85f, 1.0f, only_cover) * smooth(0.8f, 1.0f, across) *
+                      smooth(kHorizonInnerFrom, kHorizonInnerTo, only_inner);
+        h -= kHorizonTuck * out.settled;
         flat = cover;
     }
     out.h = h;
@@ -474,7 +482,8 @@ void sort_sources(HorizonSources& sources) {
                   sources.end());
 }
 
-HorizonSource horizon_source(std::string name, glm::vec2 lo, float cell, int nx, int ny, std::vector<float> ground) {
+HorizonSource horizon_source(std::string name, glm::vec2 lo, float cell, int nx, int ny, std::vector<float> ground,
+                             std::vector<float> top) {
     HorizonSource s;
     s.name = std::move(name);
     s.cell = cell;
@@ -492,10 +501,13 @@ HorizonSource horizon_source(std::string name, glm::vec2 lo, float cell, int nx,
         return static_cast<std::size_t>(y) * static_cast<std::size_t>(s.nx) + static_cast<std::size_t>(x);
     };
     std::vector<float> raw(static_cast<std::size_t>(s.nx) * static_cast<std::size_t>(s.ny), nan);
+    const bool tops = top.size() == ground.size();
+    if (tops) s.top.assign(raw.size(), nan);
     for (int y = 0; y < ny; ++y)
         for (int x = 0; x < nx; ++x) {
-            const float h = ground[static_cast<std::size_t>(y) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(x)];
-            raw[at(x + pad, y + pad)] = std::isfinite(h) ? h : nan;
+            const auto i = static_cast<std::size_t>(y) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(x);
+            raw[at(x + pad, y + pad)] = std::isfinite(ground[i]) ? ground[i] : nan;
+            if (tops) s.top[at(x + pad, y + pad)] = std::isfinite(top[i]) ? top[i] : nan;
         }
     // Opened: the lowest ground within kHorizonOpening squares, then the highest of those lows. Something standing
     // above the ground narrower than the window goes; the ground's own shape stays.
@@ -527,9 +539,11 @@ void finish_horizon_source(HorizonSource& s) {
     const std::size_t n = static_cast<std::size_t>(std::max(s.nx, 0)) * static_cast<std::size_t>(std::max(s.ny, 0));
     s.fill.assign(n, 0.0f);
     s.dist.assign(n, std::numeric_limits<float>::infinity());
+    s.inner.assign(n, 0.0f);
     if (n == 0 || s.height.size() != n) {
         s.fill.clear();
         s.dist.clear();
+        s.inner.clear();
         return;
     }
     std::vector<int> nearest(n, -1);
@@ -566,6 +580,43 @@ void finish_horizon_source(HorizonSource& s) {
         }
     for (std::size_t i = 0; i < n; ++i)
         if (nearest[i] >= 0) s.fill[i] = s.height[static_cast<std::size_t>(nearest[i])];
+    // On the ground, the distance to the nearest square without it (the grid's own border counts as without: the
+    // source is padded, so its ground never reaches it).
+    std::vector<int> edge(n, -1);
+    std::vector<float> in(n, std::numeric_limits<float>::infinity());
+    for (std::size_t i = 0; i < n; ++i)
+        if (!std::isfinite(s.height[i])) {
+            edge[i] = static_cast<int>(i);
+            in[i] = 0.0f;
+        }
+    auto relax_in = [&](int x, int y, int px, int py) {
+        if (px < 0 || py < 0 || px >= s.nx || py >= s.ny) return;
+        const auto i = static_cast<std::size_t>(y) * static_cast<std::size_t>(s.nx) + static_cast<std::size_t>(x);
+        const int src = edge[static_cast<std::size_t>(py) * static_cast<std::size_t>(s.nx) + static_cast<std::size_t>(px)];
+        if (src < 0) return;
+        const int sx = src % s.nx, sy = src / s.nx;
+        const float d = std::hypot(static_cast<float>(x - sx), static_cast<float>(y - sy)) * s.cell;
+        if (d < in[i]) {
+            in[i] = d;
+            edge[i] = src;
+        }
+    };
+    for (int y = 0; y < s.ny; ++y)
+        for (int x = 0; x < s.nx; ++x) {
+            relax_in(x, y, x - 1, y);
+            relax_in(x, y, x - 1, y - 1);
+            relax_in(x, y, x, y - 1);
+            relax_in(x, y, x + 1, y - 1);
+        }
+    for (int y = s.ny - 1; y >= 0; --y)
+        for (int x = s.nx - 1; x >= 0; --x) {
+            relax_in(x, y, x + 1, y);
+            relax_in(x, y, x + 1, y + 1);
+            relax_in(x, y, x, y + 1);
+            relax_in(x, y, x - 1, y + 1);
+        }
+    // From the ground's edge, half a square short of the nearest square without it.
+    for (std::size_t i = 0; i < n; ++i) s.inner[i] = std::isfinite(in[i]) ? std::max(in[i] - 0.5f * s.cell, 0.0f) : 0.0f;
 }
 
 HorizonSourceSample sample_source(const HorizonSource& s, glm::vec2 p) {
@@ -590,6 +641,7 @@ HorizonSourceSample sample_source(const HorizonSource& s, glm::vec2 p) {
     if (!std::isfinite(dist)) return out; // a source with no ground at all
     out.height = lerp2(s.fill);
     out.cover = 1.0f - smooth(0.0f, kHorizonSourceFade, dist);
+    out.inner = extra > 0.0f ? 0.0f : lerp2(s.inner);
     return out;
 }
 
@@ -614,9 +666,25 @@ std::optional<float> source_ground(const HorizonSource& s, glm::vec2 p) {
     return glm::mix(glm::mix(h(x0, y0), h(x1, y0), tx), glm::mix(h(x0, y1), h(x1, y1), tx), ty);
 }
 
+std::optional<float> source_top(const HorizonSource& s, glm::vec2 p) {
+    if (!s.valid() || s.top.size() != s.height.size()) return std::nullopt;
+    const float gx = (p.x - s.lo.x) / s.cell, gy = (p.y - s.lo.y) / s.cell;
+    if (!(gx >= 0.0f && gy >= 0.0f && gx < static_cast<float>(s.nx) && gy < static_cast<float>(s.ny))) return std::nullopt;
+    const float h = s.top[static_cast<std::size_t>(static_cast<int>(gy)) * static_cast<std::size_t>(s.nx) +
+                          static_cast<std::size_t>(static_cast<int>(gx))];
+    if (!std::isfinite(h)) return std::nullopt;
+    return h;
+}
+
 float horizon_height(const HorizonField& field, const HorizonSources& sources, glm::vec2 p) {
     if (!field.valid()) return 0.0f;
     return land_point(field, sources, shape_of(field.land), p, -1).h;
+}
+
+HorizonPoint horizon_point(const HorizonField& field, const HorizonSources& sources, glm::vec2 p, int only) {
+    if (!field.valid()) return {};
+    const Point pt = land_point(field, sources, shape_of(field.land), p, only);
+    return {pt.h, pt.settled};
 }
 
 HorizonMesh horizon_mesh(std::span<const HorizonTriangle> triangles, const HorizonLand& land) {
@@ -647,10 +715,12 @@ HorizonMesh horizon_mesh(const HorizonField& g, const HorizonSources& sources, i
     mesh.normals.resize(mesh.positions.size(), glm::vec3(0.0f, 0.0f, 1.0f));
     mesh.shade.resize(mesh.positions.size(), 1.0f);
     mesh.weight.resize(mesh.positions.size(), 0.0f);
+    mesh.settled.resize(mesh.positions.size(), 0.0f);
     for (std::size_t r = 0; r < rows; ++r)
         for (std::size_t c = 0; c < cols; ++c) {
             const std::size_t v = r * cols + c;
             mesh.weight[v] = points[v].weight;
+            mesh.settled[v] = points[v].settled;
             const std::size_t c0 = c > 0 ? c - 1 : c, c1 = c + 1 < cols ? c + 1 : c;
             const std::size_t r0 = r > 0 ? r - 1 : r, r1 = r + 1 < rows ? r + 1 : r;
             const glm::vec3 dx = mesh.positions[r * cols + c1] - mesh.positions[r * cols + c0];
@@ -678,6 +748,7 @@ HorizonMesh horizon_mesh(const HorizonField& g, const HorizonSources& sources, i
             mesh.normals.emplace_back(0.0f, 0.0f, 1.0f);
             mesh.shade.push_back(1.0f);
             mesh.weight.push_back(0.0f);
+            mesh.settled.push_back(0.0f);
         }
         return water_vertex[v];
     };
@@ -731,7 +802,9 @@ HorizonMesh horizon_mesh(const HorizonField& g, const HorizonSources& sources, i
 
 namespace {
 constexpr std::uint32_t kCacheMagic = 0x314e5a48u; // "HZN1"
-constexpr std::uint32_t kCacheVersion = 1;
+// 2: measured from the terrain alone, opened over one square, with its highest points (1: with the placed objects,
+// opened over two).
+constexpr std::uint32_t kCacheVersion = 2;
 constexpr std::size_t kCacheMaxName = 64;
 constexpr int kCacheMaxSide = 4096;
 
@@ -764,6 +837,9 @@ std::vector<std::byte> write_horizon_cache(const HorizonCacheEntry& e) {
     w.le(static_cast<std::uint32_t>(std::max(s.nx, 0)));
     w.le(static_cast<std::uint32_t>(std::max(s.ny, 0)));
     for (float h : s.height) w.f32(h);
+    // Its terrain's highest points, all NaN when not kept.
+    for (std::size_t i = 0; i < s.height.size(); ++i)
+        w.f32(i < s.top.size() ? s.top[i] : std::numeric_limits<float>::quiet_NaN());
     return w.take();
 }
 
@@ -788,13 +864,15 @@ std::optional<HorizonCacheEntry> read_horizon_cache(std::span<const std::byte> d
             ny > static_cast<std::uint32_t>(kCacheMaxSide))
             return std::nullopt;
         const std::size_t n = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
-        if (r.remaining() != n * 4) return std::nullopt;
+        if (r.remaining() != n * 8) return std::nullopt;
         s.nx = static_cast<int>(nx);
         s.ny = static_cast<int>(ny);
-        s.height.resize(n);
-        for (float& h : s.height) {
-            h = r.f32();
-            if (std::isinf(h)) h = std::numeric_limits<float>::quiet_NaN();
+        for (auto* layer : {&s.height, &s.top}) {
+            layer->resize(n);
+            for (float& h : *layer) {
+                h = r.f32();
+                if (std::isinf(h)) h = std::numeric_limits<float>::quiet_NaN();
+            }
         }
         finish_horizon_source(s);
         return e;

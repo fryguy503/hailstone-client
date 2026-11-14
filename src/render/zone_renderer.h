@@ -82,10 +82,12 @@ struct ZoneRenderOptions {
     glm::vec3 offset{0.0f};
     std::vector<glm::vec4> keep;
     // The parts of a triangle (after the move) to keep, as convex polygons of barycentric weights over its corners,
-    // or nullopt to keep it whole: a neighbour's ground goes where the current zone has its own
-    // (game::split_off_ground).
+    // or nullopt to keep it whole: a neighbour's ground goes where the current zone or the land draws the ground
+    // (game::split_off_land, game::split_off_ground). `Part`: what the triangle is, the zone's own terrain (its
+    // meshes), a water or lava surface, or a placed object.
+    enum class Part : std::uint8_t { Placed, Terrain, Liquid };
     std::function<std::optional<std::vector<std::vector<glm::vec3>>>(const glm::vec3&, const glm::vec3&,
-                                                                     const glm::vec3&)>
+                                                                     const glm::vec3&, Part)>
         split;
     // Drawn behind the current zone, which is drawn first: a neighbour's fragments lose ties and near-ties with what
     // the current zone already drew (a strict depth test and a depth bias pushing them back).
@@ -243,6 +245,9 @@ public:
     void set_lod_scale(float scale) { lod_scale_ = std::clamp(scale, 0.25f, 4.0f); }
     // Leaves the placed objects' flame meshes out of draw (the modern lighting draws its own: render/fire_renderer.h).
     void set_hide_flames(bool hide) { hide_flames_ = hide; }
+    // A neighbour zone's debugging view (display.neighbour_tint): its own geometry tinted magenta, and in its part of
+    // the land the pixels showing its own ground tinted green, so what comes from where can be told apart.
+    void set_debug_tint(bool on) { debug_tint_ = on; }
 
 private:
     enum class Pass : std::uint8_t { Opaque, Blended, Additive };
@@ -322,6 +327,7 @@ private:
     ZoneRenderStats stats_;
     VertexLighting lighting_ = VertexLighting::Classic;
     bool hide_flames_ = false;
+    bool debug_tint_ = false;
     struct SceneUniforms { // std140, zone.vert's Scene block
         glm::mat4 view_proj{1.0f};
         glm::vec4 fog_color{0.0f};
