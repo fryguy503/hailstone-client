@@ -3,6 +3,7 @@
 #include "core/byte_io.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
+#include "net/adventure_packets.h"
 #include "net/market_packets.h"
 #include "net/merchant_packets.h"
 #include "net/packet_io.h"
@@ -14,6 +15,13 @@ using namespace hailstone;
 
 namespace {
 constexpr std::uint32_t kNpc = 5002;
+
+net::AppPacket adventure_text(net::Op op, const std::string& text) {
+    net::AppPacket p(net::to_wire(op), {});
+    for (char ch : text) p.data.push_back(static_cast<std::byte>(ch));
+    p.data.push_back(std::byte{0});
+    return p;
+}
 enum class Service { Merchant, Bank, Points, AdventureMerchant, Tribute, GuildTribute, Trainer, Recruiter, Mercenary, Barter, Handin };
 constexpr Service services[] = {Service::Merchant, Service::Bank, Service::Points, Service::AdventureMerchant,
                                 Service::Tribute, Service::GuildTribute, Service::Trainer, Service::Recruiter,
@@ -66,7 +74,12 @@ void open_service(net::GameConnection& c, Service service) {
         c.receive_zone_packet_for_test(net::encode(reply));
         break;
     }
-    case Service::Recruiter: REQUIRE(c.open_adventure_recruiter(kNpc)); break;
+    case Service::Recruiter:
+        REQUIRE(c.open_adventure_recruiter(kNpc));
+        // AdventureMgr state 1: the range check runs only from here, once more than 500 ms have passed.
+        c.receive_zone_packet_for_test(adventure_text(net::Op::AdventureInfo, "Greetings."));
+        net::GameConnectionTestAccess::npc_checks(c).recruiter -= 501;
+        break;
     case Service::Mercenary: REQUIRE(c.open_merc_liaison(kNpc)); break;
     case Service::Barter: {
         REQUIRE(c.open_buyer(kNpc));
@@ -218,4 +231,157 @@ TEST_CASE("NPC services: distance closure sends normal session end packets once"
         if (service == Service::Barter) CHECK(r.le<std::uint32_t>() == net::kBuyerInspectEnd);
         CHECK(r.le<std::uint32_t>() == kNpc);
     }
+}
+
+TEST_CASE("NPC services: the service windows check their reach on 500 ms timers") {
+    // Each window's OnProcessFrame checks only when its NextRefreshTime has come (then now + 500).
+    for (auto service : {Service::Points, Service::AdventureMerchant, Service::Tribute, Service::GuildTribute,
+                         Service::Trainer, Service::Handin}) {
+        CAPTURE(static_cast<int>(service));
+        mq_test::World world("npc_interaction_timer");
+        auto& c = *world.conn;
+        open_service(c, service);
+        auto& checks = net::GameConnectionTestAccess::npc_checks(c);
+        auto& next = service == Service::Points              ? checks.point_merchant
+                     : service == Service::AdventureMerchant ? checks.adventure_merchant
+                     : service == Service::Trainer           ? checks.trainer
+                     : service == Service::Handin            ? checks.trade
+                                                             : checks.tribute;
+        c.update(); // in reach: this check is spent
+        CHECK(next > net::GameConnection::now_ms());
+        next = net::GameConnection::now_ms() + 60000; // not due
+        c.set_player_motion({0, 0, 21}, 0, {}, true);
+        c.update();
+        CHECK(active(c, service));
+        next = 0; // due
+        c.update();
+        CHECK_FALSE(active(c, service));
+    }
+}
+
+TEST_CASE("NPC services: a tribute master's window stays out of reach while an item request is pending") {
+    for (auto service : {Service::Tribute, Service::GuildTribute}) {
+        CAPTURE(static_cast<int>(service));
+        mq_test::World world("npc_interaction_tribute_pending");
+        auto& c = *world.conn;
+        open_service(c, service);
+        net::GameConnectionTestAccess::spells(c).pending = 1; // EverQuestinfo::IsItemPending > 0
+        c.set_player_motion({0, 0, 21}, 0, {}, true);
+        c.update();
+        CHECK(active(c, service)); // CTributeMasterWnd::OnProcessFrame: out of reach, but a request is pending
+        net::GameConnectionTestAccess::npc_checks(c).tribute = 0;
+        net::GameConnectionTestAccess::spells(c).pending = 0;
+        c.update();
+        CHECK_FALSE(active(c, service));
+
+        // The master gone closes it even with a request pending.
+        mq_test::World gone("npc_interaction_tribute_gone");
+        auto& g = *gone.conn;
+        open_service(g, service);
+        net::GameConnectionTestAccess::spells(g).pending = 1;
+        g.world_for_test().spawns.erase(kNpc);
+        g.update();
+        CHECK_FALSE(active(g, service));
+    }
+}
+
+TEST_CASE("NPC services: the adventure recruiter closes out of reach only while its words or an offer are up") {
+    auto open_far = [](net::GameConnection& c) {
+        auto npc = *c.world().player();
+        npc.id = kNpc;
+        npc.name = "Recruiter00";
+        npc.is_npc = true;
+        npc.class_id = 60;
+        c.world_for_test().spawns[kNpc] = npc;
+        REQUIRE(c.open_adventure_recruiter(kNpc));
+        c.set_player_motion({0, 0, 21}, 0, {}, true);
+    };
+    SUBCASE("state 0: the request still waiting") {
+        mq_test::World world("recruiter_state0");
+        auto& c = *world.conn;
+        open_far(c);
+        c.update();
+        CHECK(c.adventure().recruiter == kNpc);
+    }
+    SUBCASE("state 1: not before 500 ms have passed") {
+        mq_test::World world("recruiter_state1");
+        auto& c = *world.conn;
+        open_far(c);
+        c.receive_zone_packet_for_test(adventure_text(net::Op::AdventureInfo, "Greetings."));
+        c.update();
+        CHECK(c.adventure().recruiter == kNpc);
+        net::GameConnectionTestAccess::npc_checks(c).recruiter -= 501;
+        c.update();
+        CHECK(c.adventure().recruiter == 0);
+    }
+    SUBCASE("state 2: the offer is declined as the window hides") {
+        mq_test::World world("recruiter_state2");
+        auto& c = *world.conn;
+        open_far(c);
+        c.receive_zone_packet_for_test(adventure_text(net::Op::AdventureDetails, "Find the lost scout."));
+        REQUIRE_FALSE(c.adventure().offer.empty());
+        net::GameConnectionTestAccess::npc_checks(c).recruiter -= 501;
+        c.update();
+        CHECK(c.adventure().recruiter == 0);
+        CHECK(c.adventure().offer.empty());
+    }
+    SUBCASE("states 3 and 4: on an adventure the window stays") {
+        mq_test::World world("recruiter_state3");
+        auto& c = *world.conn;
+        open_far(c);
+        c.receive_zone_packet_for_test(adventure_text(net::Op::AdventureInfo, "Greetings."));
+        net::AdventureData d;
+        d.assigned = true;
+        d.text = "Find the lost scout.";
+        d.time_to_enter = 1800;
+        c.receive_zone_packet_for_test(net::encode(d));
+        net::GameConnectionTestAccess::npc_checks(c).recruiter -= 501;
+        c.update();
+        CHECK(c.adventure().recruiter == kNpc);
+    }
+}
+
+TEST_CASE("NPC services: walking away from an adventure offer sends the decline") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    const auto at = c.world().player()->position;
+    auto npc = *c.world().player();
+    npc.id = kNpc;
+    npc.name = "Recruiter00";
+    npc.is_npc = true;
+    npc.class_id = 60;
+    c.world_for_test().spawns[kNpc] = npc;
+    REQUIRE(c.open_adventure_recruiter(kNpc));
+    c.receive_zone_packet_for_test(adventure_text(net::Op::AdventureDetails, "Find the lost scout."));
+    net::GameConnectionTestAccess::npc_checks(c).recruiter -= 501;
+    c.set_player_motion(at + glm::vec3{0, 0, 21}, 0, {}, true);
+    REQUIRE(rig.until([&] { return c.adventure().recruiter == 0 &&
+                                   test::MockEqServer::count(rig.server.zone_log, net::Op::LDoNButton) == 1; }));
+    const net::AppPacket* button = nullptr;
+    for (const auto& p : rig.server.zone_log)
+        if (net::is_op(p, net::Op::LDoNButton)) button = &p;
+    REQUIRE(button);
+    REQUIRE(button->data.size() == 1);
+    CHECK(button->data[0] == std::byte{0});
+}
+
+TEST_CASE("NPC services: a training request still waiting is not range-checked; its answer is, up to 20 units") {
+    mq_test::World world("npc_interaction_trainer_pending");
+    auto& c = *world.conn;
+    auto npc = *c.world().player();
+    npc.id = kNpc;
+    npc.name = "Guildmaster00";
+    npc.is_npc = true;
+    npc.class_id = static_cast<std::uint8_t>(c.profile()->class_ + 19);
+    c.world_for_test().spawns[kNpc] = npc;
+    REQUIRE(c.open_trainer(kNpc));
+    c.set_player_motion({0, 0, 21}, 0, {}, true);
+    c.update(); // CTrainWnd is not up yet: nothing to check
+    c.set_player_motion({12, 0, 16}, 0, {}, true); // exactly 20: Handle_OP_GMTraining accepts it
+    net::GMTraining reply;
+    reply.trainer_id = kNpc;
+    reply.success = 1;
+    c.receive_zone_packet_for_test(net::encode(reply));
+    CHECK(c.training().has_value());
 }

@@ -1111,7 +1111,13 @@ public:
     };
     const Adventure& adventure() const { return adventure_; }
     bool open_adventure_recruiter(std::uint32_t npc);
-    void close_adventure_recruiter() { adventure_answer(false); adventure_.recruiter = 0; }
+    // CAdventureRequestWnd::AboutToHide @0x618420 (0x41fe10): an offer up is declined (OP_LDoNButton 0) and the
+    // recruiter state goes back to 0.
+    void close_adventure_recruiter() {
+        adventure_answer(false);
+        recruiter_state_ = 0;
+        adventure_.recruiter = 0;
+    }
     void adventure_request(std::uint32_t risk, std::uint32_t type);
     void adventure_answer(bool accept);
     // OP_LeaveAdventure (no body): leave the current adventure (EQEmu's world server may refuse, with its own line).
@@ -3220,6 +3226,26 @@ private:
     std::optional<MerchantSession> merchant_;
     std::uint64_t npc_session_serial_ = 0;
     std::int64_t merchant_check_ms_ = 0; // CMerchantWnd::NextRefreshTime: the range check every 500 ms
+    // The other service windows' range checks (update_npc_interactions), each on its window's own 500 ms timer:
+    // the time of the next check (NextRefreshTime-style), or of the last one (`recruiter`, `world`: AdventureMgr
+    // +0x458 and CContainerMgr::Timer, which check once more than 500 ms have passed).
+    struct NpcRangeChecks {
+        std::int64_t point_merchant = 0;     // CNewPointMerchantWnd +0x25c
+        std::int64_t adventure_merchant = 0; // CPointMerchantWnd +0x29c
+        std::int64_t tribute = 0;            // CTributeMasterWnd +0x2a0 (personal and guild share the window)
+        std::int64_t trainer = 0;            // CTrainWnd's NextRefreshTime
+        std::int64_t trade = 0;              // CTradeWnd::NextRefreshTime
+        std::int64_t recruiter = 0;          // AdventureMgr +0x458, set when the state becomes 1 or 2
+        std::int64_t world = 0;              // CContainerMgr::Timer
+    };
+    NpcRangeChecks npc_checks_;
+    // AdventureMgr +4 as far as the recruiter's range check needs it: 1 the recruiter's words shown
+    // (OP_AdventureInfo), 2 an offer up (OP_AdventureDetails), 0 otherwise (none, answered, or on an adventure).
+    std::uint8_t recruiter_state_ = 0;
+    void set_recruiter_state(std::uint8_t state) {
+        recruiter_state_ = state;
+        npc_checks_.recruiter = now_ms();
+    }
     std::optional<TradeSession> trade_;
     std::optional<BankSession> bank_;
     game::BankSnapshot bank_seen_;     // Hailstone: the bank as last seen (bank.dat)

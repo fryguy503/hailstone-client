@@ -287,12 +287,16 @@ struct Containers {
         open.push_back(s);
     }
     void prune(const net::GameConnection& c) {
+        // The bank window hiding (CBankWnd::OnShow @0x627760) runs CContainerMgr::CloseAllContainers @0x65d4e0:
+        // every container closes, carried bags too, and 0x697e40 sets both all-closed flags.
         const auto serial = c.bank() ? c.bank()->serial : 0;
-        const bool bank_changed = serial != bank_serial;
+        if (bank_serial != 0 && serial != bank_serial) {
+            open.clear();
+            all_closed = bank_all_closed = true;
+        }
         bank_serial = serial;
-        if (!c.bank() || bank_changed) bank_all_closed = true;
         std::erase_if(open, [&](const net::ItemSlot& s) {
-            if ((s.type == net::kInvBank || s.type == net::kInvSharedBank) && (!c.bank() || bank_changed)) return true;
+            if ((s.type == net::kInvBank || s.type == net::kInvSharedBank) && !c.bank()) return true;
             const net::Item* bag = c.inventory().at(s);
             return !bag || !bag->is_bag();
         });

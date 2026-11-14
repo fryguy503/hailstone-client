@@ -22,7 +22,8 @@ constexpr std::uint32_t kCantReach = 1462;
 bool object_in_reach(const std::vector<game::GroundObject>& objects, std::uint32_t id, const glm::vec3* at) {
     if (!at) return false;
     auto it = std::find_if(objects.begin(), objects.end(), [&](const game::GroundObject& o) { return o.drop_id == id; });
-    // Reuse the opening reach until the original container frame check is verified (docs/unknowns.md).
+    // CContainerMgr::Process @0x65d740 checks the world container with 0x4dc160: the 3D distance from the ground
+    // item to the player at most 20.0 (0x9c4ec0); a missing item closes it too.
     return it != objects.end() && game::player_distance(at, &it->position) <= game::kGroundItemReach;
 }
 
@@ -125,10 +126,15 @@ void GameConnection::handle_door(Op op, const AppPacket& p) {
         break;
     case Op::ClickObjectAction:
         if (auto a = decode_click_object_action(p)) {
-            if (a->drop_id == 0xffffffffu) break; // someone else is using it (the server says so in chat)
+            if (a->drop_id == 0xffffffffu) { // someone else is using it (the server says so in chat)
+                world_container_requested_.reset(); // the request is answered; nothing was opened to release
+                break;
+            }
             if (!world_container_requested_ || *world_container_requested_ != a->drop_id) break;
             const auto* me = world_.player();
             const auto* at = me ? (motion_known_ ? &position_ : &me->position) : nullptr;
+            // Hailstone: the original opens it and Process closes it within 500 ms when it is out of reach or
+            // gone; here it is released at once, with the same packet.
             if (!object_in_reach(ground_objects_, a->drop_id, at)) {
                 close_world_container();
                 break;
@@ -158,11 +164,16 @@ void GameConnection::handle_door(Op op, const AppPacket& p) {
 }
 
 void GameConnection::update_doors() {
-    if (world_container_ || world_container_requested_) {
-        const auto id = world_container_ ? world_container_->drop_id : *world_container_requested_;
-        const auto* me = world_.player();
-        const auto* at = me ? (motion_known_ ? &position_ : &me->position) : nullptr;
-        if (!object_in_reach(ground_objects_, id, at)) close_world_container();
+    // CContainerMgr::Process @0x65d740: the open world container, once more than 500 ms have passed since the last
+    // check (CContainerMgr::Timer). A request still waiting for its answer is not checked; its answer is.
+    if (world_container_) {
+        const std::int64_t now = now_ms();
+        if (now > npc_checks_.world + 500) {
+            npc_checks_.world = now;
+            const auto* me = world_.player();
+            const auto* at = me ? (motion_known_ ? &position_ : &me->position) : nullptr;
+            if (!object_in_reach(ground_objects_, world_container_->drop_id, at)) close_world_container();
+        }
     }
     auto use = game::process_doors(doors_, switch_clock_, switch_time(), zone_id(), door_riders_);
     // RepopSwitch "uses" types 0x28 and 0x2d again: UseSwitch(0, 0, 0xff, 0),

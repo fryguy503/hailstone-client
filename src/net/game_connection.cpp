@@ -708,6 +708,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         guild_bank_.selected = -1;
         adventure_.recruiter = 0;
         adventure_.offer.clear();
+        recruiter_state_ = 0;
         guild_tribute_.master_id = 0;
         guild_platinum_pending_ = 0;
         state_ = ConnectionState::ZoneConnecting;

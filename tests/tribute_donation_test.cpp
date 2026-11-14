@@ -338,6 +338,9 @@ TEST_CASE("tribute: a donation reply after walking away still reconciles the don
         REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, item_opcode(guild)) == 1; }));
         const auto before = answers(c, guild);
         c.set_player_motion(c.world().player()->position + glm::vec3{0, 0, 21}, 0, {}, true);
+        // The donation does not raise IsItemPending (Send_OP_TributeItem @0x484190), so the window's next 500 ms
+        // check closes it.
+        net::GameConnectionTestAccess::npc_checks(c).tribute = 0;
         c.update();
         CHECK((guild ? c.guild_tribute().master_id : c.tribute().master_id) == 0);
         c.receive_zone_packet_for_test(reply(guild));

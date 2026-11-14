@@ -113,17 +113,18 @@ TEST_CASE("world containers: distance closure covers recipes Experiment and hidd
     }
 }
 
-TEST_CASE("world containers: canceled pending and mismatched replies cannot reopen or replace a station") {
+TEST_CASE("world containers: pending, busy and mismatched replies cannot reopen or replace a station") {
     mq_test::World world("world_container_late_open");
     auto& c = *world.conn;
     place_station(c);
     REQUIRE(c.click_object(kStation));
     REQUIRE_FALSE(c.world_container());
     c.set_player_motion({0, 0, 21}, 0, {}, true);
-    c.update();
+    c.update(); // CContainerMgr::Process checks only an open world container
     c.set_player_motion({0, 0, 0}, 0, {}, false);
     answer_open(c);
-    CHECK_FALSE(c.world_container()); // returning before the old answer does not renew its request
+    REQUIRE(c.world_container()); // the request survived; its answer is checked, and it is in reach again
+    c.close_world_container();
 
     REQUIRE(c.click_object(kStation));
     place_station(c, kOtherStation);
@@ -135,8 +136,6 @@ TEST_CASE("world containers: canceled pending and mismatched replies cannot reop
 
     REQUIRE(c.click_object(kOtherStation));
     CHECK_FALSE(c.world_container());
-    answer_open(c, 0xffffffffu); // an older busy reply has no object ID and cannot cancel the newer request
-    CHECK_FALSE(c.world_container());
     answer_open(c); // the earlier station's duplicate cannot consume the newer request
     CHECK_FALSE(c.world_container());
     answer_open(c, kOtherStation);
@@ -145,6 +144,77 @@ TEST_CASE("world containers: canceled pending and mismatched replies cannot reop
     answer_open(c);
     REQUIRE(c.world_container());
     CHECK(c.world_container()->drop_id == kOtherStation);
+
+    // A busy answer (someone else is using it) ends the request: no later answer opens it.
+    c.close_world_container();
+    REQUIRE(c.click_object(kStation));
+    answer_open(c, 0xffffffffu);
+    answer_open(c);
+    CHECK_FALSE(c.world_container());
+}
+
+TEST_CASE("world containers: a busy station leaves no request to release") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    const auto at = c.world().player()->position;
+    place_station(c, kStation, 16, at);
+    REQUIRE(c.click_object(kStation));
+    answer_open(c, 0xffffffffu);
+    const int closes = close_packets(rig);
+    // Neither walking away nor closing sends an ID-less release for the refused station.
+    c.set_player_motion(at + glm::vec3{0, 0, 21}, 0, {}, true);
+    for (int i = 0; i < 4; ++i) rig.step();
+    c.close_world_container();
+    for (int i = 0; i < 4; ++i) rig.step();
+    CHECK(close_packets(rig) == closes);
+}
+
+TEST_CASE("world containers: the open station's reach is checked once more than 500 ms have passed") {
+    mq_test::World world("world_container_timer");
+    auto& c = *world.conn;
+    open_station(c);
+    auto& timer = net::GameConnectionTestAccess::npc_checks(c).world;
+    c.update(); // in reach: this check is spent
+    CHECK(timer > 0);
+    timer = net::GameConnection::now_ms(); // checked just now
+    c.set_player_motion({0, 0, 21}, 0, {}, true);
+    c.update();
+    CHECK(c.world_container());
+    timer -= 501;
+    c.update();
+    CHECK_FALSE(c.world_container());
+}
+
+TEST_CASE("world containers: the bank window closing closes the station and the tradeskill window") {
+    // CBankWnd::OnShow @0x627760 runs CContainerMgr::CloseAllContainers on hide.
+    for (bool carried : {false, true}) {
+        CAPTURE(carried);
+        test::Rig rig;
+        REQUIRE(rig.to_zone());
+        auto& c = rig.conn;
+        const auto at = c.world().player()->position;
+        auto banker = *c.world().player();
+        banker.id = 5003;
+        banker.name = "Banker00";
+        banker.is_npc = true;
+        banker.class_id = 40;
+        c.world_for_test().spawns[banker.id] = banker;
+        if (carried) {
+            const auto bag_slot = net::ItemSlot::possessions(30);
+            net::GameConnectionTestAccess::inventory(c).put(bag_slot, carried_bag());
+            c.open_tradeskill_bag(bag_slot);
+        } else {
+            open_station(c, kStation, 16, at);
+        }
+        REQUIRE(c.tradeskill().open);
+        REQUIRE(c.activate_bank(banker.id));
+        const int closes = close_packets(rig);
+        c.close_bank();
+        CHECK_FALSE(c.world_container());
+        CHECK_FALSE(c.tradeskill().open);
+        REQUIRE(rig.until([&] { return close_packets(rig) == closes + (carried ? 0 : 1); }));
+    }
 }
 
 TEST_CASE("world containers: an open reply outside reach closes its request before showing either window") {

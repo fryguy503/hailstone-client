@@ -750,29 +750,53 @@ find affect slot 1600). Each record is replayed call for call against the record
 
 ## Leaving an NPC interaction
 
-Connection updates check NPC service sessions independently of the UI pack. Merchant and bank retain their
-500 ms checks: a missing NPC or a 3D distance greater than 20 units closes the session; exactly 20 stays open.
-A merchant waits for an outstanding buy or sell reply before closing. Barter now runs its existing frame check
-too, ending the buyer inspection through its normal close packet.
+Each service window of the original checks its NPC in its OnProcessFrame with PlayerClient_IsWithinInteractRange
+(npc, 0, 20.0) @0x5a06f0: CDisplay::PlayerDistance with z scale 1, so a 3D distance, of at most 20 units (exactly
+20 stays open); a missing NPC or local player fails it. Hailstone runs these checks on connection updates, so they
+work the same in both UI packs:
 
-Alternate-currency and adventure merchants, personal and guild tribute masters, trainers, adventure recruiters
-and mercenary liaisons also close when the NPC disappears or is more than 20 units away, including height.
-These services currently use the merchant/bank reach as a safety fallback; their original close thresholds and
-timing remain unverified (`docs/unknowns.md`). A late tribute or training open reply outside reach cannot show
-the window again. Closing a tribute master leaves active benefits, favour and outstanding donation replies intact.
-NPC hand-ins cancel through the normal trade path when the NPC disappears or exceeds the opening reach
-(the NPC's avatar height plus 20 units); the server returns offered items and money.
+| Window | Original | Timer | Exception |
+|---|---|---|---|
+| Merchant | CMerchantWnd::OnProcessFrame @0x6f2400 | 500 ms | stays while a buy or sell awaits its answer |
+| Bank | CBankWnd::OnProcessFrame @0x627850 | 500 ms | |
+| Barter buyer | CBarterMerchantWnd::OnProcessFrame @0x62a500 | every frame | |
+| Alternate currency merchant | CNewPointMerchantWnd::OnProcessFrame @0x6fba10 | 500 ms | |
+| Adventure merchant | CPointMerchantWnd::OnProcessFrame @0x719e90 | 500 ms | |
+| Tribute master, personal and guild | CTributeMasterWnd::OnProcessFrame @0x787ae0 | 500 ms | out of reach it stays while an item request is pending (EverQuestinfo::IsItemPending > 0); a missing master closes it regardless |
+| Trainer | CTrainWnd::OnProcessFrame @0x7812a0 | 500 ms | |
+| Adventure recruiter | AdventureMgr_Process @0x41fa80 | more than 500 ms since the state was set or last checked | only in states 1 and 2: the recruiter's words (OP_AdventureInfo) or an offer (OP_AdventureDetails) up; on an adventure the window stays |
+| Mercenary liaison | the window's observer 0x6eb560 | every update (see docs/unknowns.md) | only with a liaison id set |
+| NPC hand-in | CTradeWnd::OnProcessFrame @0x780b50 | 500 ms | the reach is the NPC's avatar height plus 20 |
+| World tradeskill station | CContainerMgr::Process @0x65d740 (0x4dc160) | more than 500 ms since the last check | the ground item's 3D distance, at most 20; a missing item closes it too |
+
+Closing goes through each window's normal close: the merchant's OP_ShopEnd, the buyer's end of inspection, the
+trainer's OP_GMEndTraining, the trade's OP_CancelTrade (the server returns what was offered), the station's empty
+OP_ClickObjectAction (the server returns what is left in it). Hiding the adventure recruiter's window declines an
+offer that is up (CAdventureRequestWnd::AboutToHide @0x618420, 0x41fe10: OP_LDoNButton 0). Closing a tribute master
+leaves active benefits, favour and outstanding donation replies alone. The trainer and the hand-in also close when
+the NPC dies (Handle_OP_Death @0x532b50 closes the training window and cancels a trade with the dying spawn).
+
+A late open reply cannot show a window out of reach: the tribute master's (CTributeMasterWnd::AboutToShow @0x7878b0)
+and the trainer's (Handle_OP_GMTraining @0x4b49c0) apply the same 20-unit check to the answer. A training request or
+a station request still waiting for its answer is not checked; its answer is. Hailstone releases a station whose
+open reply comes out of reach at once, where the original opens it and releases it at its next 500 ms check. A busy
+reply (someone else is using the station) ends the request, so nothing is released for it later.
+
+When the bank window hides, for any reason, CBankWnd::OnShow @0x627760 runs CContainerMgr::CloseAllContainers
+@0x65d4e0: every container window closes, carried bags included, the world container is released, the tradeskill
+window hides and both "all bags" keys go back to opening (0x697e40). The quantity window closes with it too.
 
 Quantity questions, point-purchase confirmations and guild-bank text entry end with their owning session.
-Reopening the same NPC creates a new session, so an old answer cannot act on it. Bank and shared-bank bags
-close with the bank; carried bags stay open. Both UI packs use this shared session state.
+Reopening the same NPC creates a new session, so an old answer cannot act on it. World-slot quantity questions and
+world-mold confirmations close with the station, and a world recipe batch stops. Carried tradeskill bags and their
+questions stay when only the station closes.
 
-World tradeskill stations also close beyond their 20-unit opening reach (3D, exactly 20 stays open), or when the
-object disappears. This uses the same fallback as the additional NPC services until the original frame check is
-verified. It applies to recipe, Experiment and hidden recipe windows. Pending opens are canceled too; a late
-reply cannot reopen a canceled station or replace a different station. The normal empty OP_ClickObjectAction
-releases the station so the server returns any remaining contents. World-slot quantity questions and world-mold
-confirmations close, and world recipe batches stop. Carried tradeskill bags and their questions remain independent.
+Hailstone's model of IsItemPending (GameConnection::transact_state) counts the requests it tracks (item clicks,
+casts, memorizing, augments, the guild bank's). A tribute donation is not one of them in the original either: its
+senders (Send_OP_TributeItem @0x484190, Send_OP_GuildTributeDonateItem @0x484870) do not raise it.
+
+Not done yet: CTradeWnd checks player trades the same way (and skips the check while the merchant window shows its
+page handler 2); Hailstone checks hand-ins only.
 
 ## The merchant's "Show only items I can use"
 

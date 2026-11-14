@@ -13,7 +13,9 @@ namespace hailstone::net {
 namespace {
 
 constexpr std::uint8_t kClassAdventureRecruiter = 60;
-constexpr float kRecruiterRange = 20.0f; // EQEmu checks none; the client's own is not known
+// EQEmu checks none. AdventureMgr_Process @0x41fa80 keeps the window within PlayerClient_IsWithinInteractRange(npc,
+// 0, 20.0); the right click's own check is not traced.
+constexpr float kRecruiterRange = 20.0f;
 
 } // namespace
 
@@ -27,6 +29,7 @@ bool GameConnection::open_adventure_recruiter(std::uint32_t npc) {
     if (glm::distance(at, it->second.position) >= kRecruiterRange) return false;
     adventure_.recruiter = npc;
     adventure_.npc_text.clear();
+    recruiter_state_ = 0; // Send_OP_AdventureInfoRequest @0x420030: AdventureMgr_SetState(0) first
     send_zone(encode_adventure_info_request(npc));
     return true;
 }
@@ -45,6 +48,7 @@ void GameConnection::adventure_request(std::uint32_t risk, std::uint32_t type) {
 void GameConnection::adventure_answer(bool accept) {
     if (adventure_.offer.empty()) return;
     adventure_.offer.clear();
+    recruiter_state_ = 0; // Send_OP_LDoNButton (0x41fed0 / 0x41ff80 / 0x41fe10): AdventureMgr_SetState(0)
     if (state_ == ConnectionState::InZone) send_zone(encode_ldon_button(accept));
 }
 
@@ -79,16 +83,25 @@ void GameConnection::handle_adventure(Op op, const AppPacket& p) {
         if (auto v = decode_adventure_text(p)) {
             a.npc_text = std::move(*v);
             if (!a.recruiter) ui_message(a.npc_text); // a notice with no window open
+            // AdventureMgr_HandleAdventureInfo @0x420130: state 1, its range-check clock started.
+            else set_recruiter_state(1);
         }
         break;
     case Op::AdventureDetails:
-        if (auto v = decode_adventure_text(p); v && a.recruiter) a.offer = std::move(*v);
+        // AdventureMgr_HandleAdventureDetails @0x4201b0: state 2, its range-check clock started. The original also
+        // shows the window when it was closed; this client's window needs its recruiter, so an offer for a closed
+        // window is dropped (Hailstone).
+        if (auto v = decode_adventure_text(p); v && a.recruiter) {
+            a.offer = std::move(*v);
+            set_recruiter_state(2);
+        }
         break;
     case Op::AdventureData:
         if (auto v = decode_adventure_data(p)) {
             a.data = std::move(*v);
             a.data_at = now_ms();
             if (!a.data.assigned) a.count = {};
+            else recruiter_state_ = 0; // AdventureMgr_HandleAdventureData @0x420320: states 3 / 4, not range-checked
         }
         break;
     case Op::AdventureUpdate:

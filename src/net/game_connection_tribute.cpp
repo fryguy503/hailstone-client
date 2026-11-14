@@ -13,7 +13,9 @@ namespace hailstone::net {
 namespace {
 
 constexpr std::uint8_t kClassTributeMaster = 63, kClassGuildTributeMaster = 64;
-constexpr float kTributeRange = 20.0f; // EQEmu's USE_NPC_RANGE2 is 200 units squared; the client's own is not known
+// CTributeMasterWnd::AboutToShow @0x7878b0 and OnProcessFrame @0x787ae0: PlayerClient_IsWithinInteractRange(master,
+// 0, 20.0). EQEmu's USE_NPC_RANGE2 is 200 units squared.
+constexpr float kTributeRange = 20.0f;
 
 bool iequals(std::string_view a, std::string_view b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
