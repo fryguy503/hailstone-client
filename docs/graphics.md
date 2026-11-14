@@ -1038,12 +1038,16 @@ the neighbour zones, covers them. `render/horizon.h` holds the measuring, `shade
   ridged, for mountains), seeded by the zone's short name (`render::horizon_seed`), so the hills are the same every
   visit and move with parallax as the camera does. The tallest rise 2.5, 4 and 6.5 degrees over the foot seen from
   the centre, times 0.7 to 1.8 with the relief, plus 0.6, 0.9 and 1.2 of the relief. Looking down short of the first
-  ring, the ray meets a plain at the foot instead.
+  ring, the ray meets a sea of fog at the foot instead, a faint hint of the ground showing where it thins.
 - **The look**: lit as the zone is (the sky and ground ambient by the land's slope, the sun or moon by the noise's
   gradient, the rings rising away from the zone), the slopes and the far ring's tops in the slope colour, patches and
-  shaded hollows fixed to the land, a mist about their feet. Then the frame's haze (`apply_haze`, its glow and its
-  thinning with height), with the distance held under 0.3, 0.42 and 0.55 of the haze's length, so they stay in sight
-  at any view distance while the far rings fade more. Their edges blend over the sky by the pixel's footprint.
+  shaded hollows fixed to the land. Then they fade as distant land does: their colour is kept 75, 60 and 45 %, the
+  frame's haze (`apply_haze`, its glow and its thinning with height) takes them over a distance held under 0.3, 0.42
+  and 0.55 of the haze's length, so they stay in sight at any view distance, and each ring keeps only 70, 50 and 32 %
+  of what is left against the haze's colour, so the far ring is a pale outline. Fog banks lie round their feet: their
+  tops rise and fall along each ring (15 to 50 % of its hills' height near, 35 to 70 % far) and drift round a circle
+  650 units across once every 1024 s (the scene clock wraps there, so the drift never jumps). Their edges blend over
+  the sky by the pixel's footprint.
 - **When**: outdoors (time types 1, 2, 5), not under water, under an open sky (1, 2, 4) or none (gfaydark, everfrost);
   not under the planes' and Luclin's painted skies. `render::horizon_strength` fades them where the zone's fog ends
   between 350 and 900 units (nektulos' 400 nearly none, East Commonlands' 800 nearly all), as the haze leaves the
