@@ -65,7 +65,7 @@ ModelOverrides& model_overrides() {
 std::size_t apply_model_overrides(Zone& zone) {
     std::lock_guard lock(index_mutex());
     ModelOverrides& overrides = model_overrides();
-    const std::filesystem::path& folder = texture_overrides().folder();
+    const std::filesystem::path folder = texture_overrides().folder();
     if (folder != overrides.folder()) overrides.set_folder(folder);
     if (overrides.size() == 0) return 0;
     std::size_t applied = 0;

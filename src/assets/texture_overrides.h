@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <cstddef>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -36,18 +38,19 @@ namespace hailstone::assets {
 
 class TextureOverrides {
 public:
-    // Indexes the image files under `folder` (any depth); an empty or missing folder turns the overrides off.
-    // Call before textures load: lookups are not synchronised with it.
+    // Indexes the image files under `folder` (any depth); an empty or missing folder turns the overrides off. Safe
+    // while textures load on other threads (a character's own settings change the pack at zone-in): the new index
+    // is built aside and swapped in, and a lookup keeps the index it started with.
     void set_folder(const std::filesystem::path& folder);
-    const std::filesystem::path& folder() const { return folder_; }
-    std::size_t size() const { return files_.size(); }
+    std::filesystem::path folder() const { return index()->folder; }
+    std::size_t size() const { return index()->files.size(); }
 
     // The file standing in for the game texture `name` (a file name, any case, any extension): the one for the game
     // file's content `hash` first (0: none), then the zone's own, then any. `suffix` picks a variant or map (".n").
-    const std::filesystem::path* find(std::string_view name, std::string_view zone = {}, std::uint64_t hash = 0,
-                                      std::string_view suffix = {}) const;
+    std::optional<std::filesystem::path> find(std::string_view name, std::string_view zone = {}, std::uint64_t hash = 0,
+                                              std::string_view suffix = {}) const;
     // Whether any file is keyed by content hash, so that a lookup has to hash the game's file.
-    bool has_hashed() const { return hashed_ != 0; }
+    bool has_hashed() const { return index()->hashed != 0; }
     // hailstone.ini display.material_maps: off, decode_texture_map finds nothing (the surfaces stay flat).
     void set_material_maps(bool on) { material_maps_ = on; }
     bool material_maps() const { return material_maps_; }
@@ -57,11 +60,19 @@ public:
     void count_applied() { applied_.fetch_add(1, std::memory_order_relaxed); }
 
 private:
-    std::filesystem::path folder_;
-    // "<stem>", "<subfolder>/<stem>" and "#<hash>" (by-hash/), lower case.
-    std::unordered_map<std::string, std::filesystem::path> files_;
-    std::size_t hashed_ = 0;
-    bool material_maps_ = true;
+    struct Index {
+        std::filesystem::path folder;
+        // "<stem>", "<subfolder>/<stem>" and "#<hash>" (by-hash/), lower case.
+        std::unordered_map<std::string, std::filesystem::path> files;
+        std::size_t hashed = 0;
+    };
+    std::shared_ptr<const Index> index() const {
+        std::lock_guard lock(mutex_);
+        return index_;
+    }
+    mutable std::mutex mutex_;
+    std::shared_ptr<const Index> index_ = std::make_shared<const Index>();
+    std::atomic<bool> material_maps_{true};
     std::atomic<std::size_t> applied_{0};
 };
 
