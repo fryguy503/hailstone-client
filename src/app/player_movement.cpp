@@ -494,6 +494,7 @@ void PlayerMovement::floor_test(const MoveWorld* world, float floor_offset) {
 
 void PlayerMovement::reset(const glm::vec3& feet, float yaw) {
     ctl_.reset(feet, game::yaw_to_heading(yaw));
+    fly_ = {};
     last_second_ = 0;
     last_step_ = 0;
     drunken_motion_ = {};
@@ -509,6 +510,50 @@ void PlayerMovement::reset(const glm::vec3& feet, float yaw) {
     auto_duck_ = {};
     floor_cache_.ceiling = mech::kNoFloorHeight;
     floor_valid_ = false;
+}
+
+mech::FlyMode PlayerMovement::local_fly_mode(const net::GameConnection& conn, const game::Spawn* me,
+                                            const mech::MovementFacts& facts, bool no_levitate_zone,
+                                            mech::FlyMode current) {
+    // The buff slots' spells as the cache last saw them; a change clears the cache flag, so the next effect read
+    // rebuilds it. Hailstone sees the slots, not the packets: an OP_Buff that refreshes a slot with the same spell
+    // also clears the flag in the original, and is missed here (docs/unknowns.md).
+    const auto& slots = conn.spell_state().buffs;
+    std::vector<std::uint32_t> now(slots.size(), mech::kNoBuffSpell);
+    for (std::size_t i = 0; i < slots.size(); ++i)
+        if (!slots[i].empty()) now[i] = slots[i].spell;
+    const bool lev2 = facts.levitate_mode2 != 0, lev5 = facts.levitate_mode5 != 0;
+
+    mech::FlyModeEvents ev;
+    if (!fly_.ready) {
+        // Zone-in: the spawn record's mode, then a rebuild with the profile's buffs. Whether the original's first
+        // rebuild comes after its own spawn exists is not settled (docs/unknowns.md); rebuilding keeps a
+        // no-levitation zone's rule.
+        if (!me) return current;
+        fly_.ready = true;
+        if (me->fly_mode <= 5) ev.server_mode = static_cast<mech::FlyMode>(me->fly_mode);
+        ev.recache = true;
+    } else {
+        mech::BuffLevitationChange change =
+            mech::buff_levitation_change(fly_.buffs, now, [&](std::uint32_t id) -> std::optional<std::int32_t> {
+                if (const game::SpellData* s = conn.spell_table().get(id))
+                    for (std::size_t i = 0; i < s->effect.size(); ++i)
+                        if (s->effect[i] == 57) return s->base2[i];
+                return std::nullopt;
+            });
+        ev.levitate_faded = change.faded;
+        ev.levitate_landed = change.landed;
+        // The character's cache values standing in for the fallback's (or worn levitation) are a rebuild too.
+        ev.recache = change.changed || lev2 != fly_.lev2 || lev5 != fly_.lev5;
+        // PlayerPhysics_SetFlyMode throws above 5; such a value is ignored.
+        if (me && me->fly_mode_sets != fly_.sets && me->fly_mode <= 5)
+            ev.server_mode = static_cast<mech::FlyMode>(me->fly_mode);
+    }
+    if (me) fly_.sets = me->fly_mode_sets;
+    fly_.buffs = std::move(now);
+    fly_.lev2 = lev2;
+    fly_.lev5 = lev5;
+    return mech::local_fly_mode(current, ev, lev2, lev5, std::nullopt, no_levitate_zone);
 }
 
 PlayerMovement::Frame PlayerMovement::update(const MovementKeys& keys, float yaw, float pitch, float elapsed_ms,
@@ -704,14 +749,15 @@ PlayerMovement::Frame PlayerMovement::update(const MovementKeys& keys, float yaw
     if (std::uint32_t msg = mech::encumbrance_message(encumbered_shown_, w.carried, w.strength))
         out.messages.push_back(conn.strings().format(msg, {}));
 
-    // A non-ground spawn mode or an explicit type-19 update is authoritative. Otherwise derive levitation from the
-    // effect cache, as UpdateLevitationState does after each cache rebuild: SPA 57 value 0 gives mode 2, else value 1
-    // gives mode 5.
-    std::optional<mech::FlyMode> server_fly_mode;
-    if (cp && (eye || cp->fly_mode != 0 || cp->fly_mode_appearance))
-        server_fly_mode = static_cast<mech::FlyMode>(cp->fly_mode);
-    body.fly_mode = mech::levitation_mode(body.fly_mode, facts.levitate_mode2 != 0, facts.levitate_mode5 != 0,
-                                          std::nullopt, in(kNoLevitateZones, zone), false, server_fly_mode);
+    // The fly mode. An eye of Zomm's body takes its own spawn's mode. The player's is set outright by the server
+    // (the spawn record at zone-in, OP_SpawnAppearance 19) and by a levitate buff landing or fading, and recomputed
+    // from the buffs by UpdateLevitationState only when the effect cache is rebuilt (mech::local_fly_mode). A
+    // server-set mode therefore lasts until the buffs next change, as in the original.
+    if (eye) {
+        if (cp && cp->fly_mode <= 5) body.fly_mode = static_cast<mech::FlyMode>(cp->fly_mode);
+    } else {
+        body.fly_mode = local_fly_mode(conn, me, facts, in(kNoLevitateZones, zone), body.fly_mode);
+    }
 
     // ProcessControls and the jump.
     mech::ControlInput ci;

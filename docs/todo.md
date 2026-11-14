@@ -38,7 +38,7 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] (358bf04, checked live: /discipline now runs the NMS reuse timers; the empty list after login matches the original) A second `/discipline` right after `/stopdisc` is not refused by the client (NMS disc timer map or a missing server timer packet); the reuse list is empty after zone-in until the server sends timers.
 
 ### Movement
-- [x] Server flymodes: the local player honors the spawn flymode and `SpawnAppearance` 19 (Ground, Flying, Levitating, Water, Floating, Levitate While Running); explicit Ground overrides buff levitation, and otherwise the buff-derived fallback remains. Unit regression covers all six values.
+- [x] Server flymodes: the local player takes the spawn record's flymode and `SpawnAppearance` 19 (all six modes) and keeps them until the effect cache is rebuilt, when `UpdateLevitationState`'s rules apply again (docs/mechanics.md "fly mode"; unit tests of the decision and through the connection's packets). Not seen live yet.
 - [x] The game rules on a 60 Hz game clock (`game.fixed_step`, docs/mechanics.md "Frame rate"): movement, other spawns, missiles, weather and fog steps, the frame-gated timers; the camera drawn between steps (unit tests at 15 to 1000 simulated frames a second).
 - [ ] Collision radius: the static reading gives the model's bounding radius (6.2 for a human), too wide for doorways; settle it with a run-time read of the actor's vf44 in the real client (rof2re's radius_log, needs a new rof2re.dll in the game folder and a user-run session). The stand-in stays until then.
 - [ ] Other spawns: bodies never block in the original (no per-bone meshes); only bone attachments such as held weapons could, and that test is not ported.

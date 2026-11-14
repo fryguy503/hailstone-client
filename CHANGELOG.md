@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Movement: server flymodes now control the local character, including `#set flymode 1` for free flight; all six gravity behaviors are supported
+- Movement: the server's fly modes (`#set flymode`, a quest's flymode) now move your own character, all six of them, including free flight with flymode 1. As in the original client, a mode other than flying lasts until your buffs next change, when your levitation decides again; in a no-levitation zone flying also ends then
 - Hailstone Texture Studio: generated trees can now be dead trees (bare forked limbs) and palms, for zones such as Everfrost, Dagnor's Cauldron, North Ro and Erud's Crossing
 - Modern lighting: the grass in the classic zones is now an even lawn that Hailstone builds itself, instead of clumps of flat pictures borrowed from the revamped Commonlands. Thick blades cover the open ground in a continuous carpet in the ground's own colour, lying over in broad combed swathes, sway in the wind (harder in a storm), bend away from whoever walks through them and taper off at the edges of paths and roads. The grass needs nothing from the game folder; the forests' ferns, the swamps' cattails and the other climate plants are still taken from the game's own files, scattered sparsely over the lawn. Flora Distance still sets how far it reaches
 - Alternate currencies (the inventory's Alt. Currency page in both interfaces, and real estate costs) show their names from the game folder, such as "Doubloons", instead of "Currency 10"

@@ -235,12 +235,40 @@ std::int32_t levitation_mode_value(std::int32_t current, bool spa57_value0, bool
 }
 
 FlyMode levitation_mode(FlyMode current, bool spa57_value0, bool spa57_value1, std::optional<FlyMode> rider_mode,
-                        bool no_levitate_zone, bool may_fly_anyway, std::optional<FlyMode> server_mode) {
-    if (server_mode) return *server_mode;
+                        bool no_levitate_zone, bool may_fly_anyway) {
     std::optional<std::int32_t> rider;
     if (rider_mode) rider = static_cast<std::int32_t>(*rider_mode);
     return static_cast<FlyMode>(levitation_mode_value(static_cast<std::int32_t>(current), spa57_value0, spa57_value1,
                                                       rider, no_levitate_zone, may_fly_anyway));
+}
+
+FlyMode local_fly_mode(FlyMode current, const FlyModeEvents& ev, bool spa57_value0, bool spa57_value1,
+                       std::optional<FlyMode> rider_mode, bool no_levitate_zone, bool may_fly_anyway) {
+    FlyMode mode = current;
+    if (ev.levitate_faded && !spa57_value0 && !spa57_value1) mode = FlyMode::Ground;
+    if (ev.levitate_landed) {
+        if (!may_fly_anyway && no_levitate_zone) mode = FlyMode::Ground;
+        else mode = *ev.levitate_landed != 0 ? FlyMode::LevitateRun : FlyMode::Levitate;
+    }
+    if (ev.server_mode) mode = *ev.server_mode;
+    if (ev.recache) mode = levitation_mode(mode, spa57_value0, spa57_value1, rider_mode, no_levitate_zone, may_fly_anyway);
+    return mode;
+}
+
+BuffLevitationChange buff_levitation_change(std::span<const std::uint32_t> before, std::span<const std::uint32_t> after,
+                                            const std::function<std::optional<std::int32_t>(std::uint32_t)>& levitate_base2) {
+    BuffLevitationChange out;
+    const std::size_t n = std::max(before.size(), after.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        const std::uint32_t was = i < before.size() ? before[i] : kNoBuffSpell;
+        const std::uint32_t now = i < after.size() ? after[i] : kNoBuffSpell;
+        if (was == now) continue;
+        out.changed = true;
+        if (was != kNoBuffSpell && levitate_base2(was)) out.faded = true;
+        if (now != kNoBuffSpell)
+            if (std::optional<std::int32_t> base2 = levitate_base2(now)) out.landed = base2;
+    }
+    return out;
 }
 
 // ------------------------------------------------------------- air supply
