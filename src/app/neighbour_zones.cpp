@@ -5,6 +5,7 @@
 #include <cmath>
 #include <exception>
 #include <format>
+#include <functional>
 #include <limits>
 #include <span>
 
@@ -56,6 +57,12 @@ constexpr float kCacheOffsetSlack = 1.0f;
 // this height of its own measured ground is ground; what stands over a land lower than that by more is left out.
 constexpr float kLandMaskCell = 64.0f;
 constexpr float kLandTolerance = 24.0f;
+// Its terrain is drawn where its part of the land has sunk at least this far under it (render::horizon_point): the
+// two then stay apart by kHorizonTuck times it (no fighting over pixels), and where its terrain stops, the step down to
+// the land is at most that.
+constexpr float kTerrainSettled = 0.3f;
+// How many cells on from where its terrain is not drawn it is left out while it stands over the land (land_mask).
+constexpr int kFinReach = 6;
 
 // The ground under (p.x, p.y), from `top` down: the line's own height range, not the zone's highest surface. The
 // ground as seen (CollisionMesh::ground_below): a tunnel roof's underside is not ground, nor an invisible plane (some
@@ -87,9 +94,10 @@ std::string heights(const std::vector<std::vector<float>>& v) {
 
 double ms_since(Clock::time_point t) { return std::chrono::duration<double, std::milli>(Clock::now() - t).count(); }
 
-// The neighbour's ground in the current zone's coordinates (render::HorizonSource): its highest visible ground on
-// squares over its box (moved by `offset`, within kSourceReach of the current zone's box), past the seam only (before
-// it lies the current zone). A square takes the median of its samples, from two hits at least.
+// The neighbour's ground in the current zone's coordinates (render::HorizonSource): its terrain's highest visible
+// ground (`collision` built without its placed objects) on squares over its box (moved by `offset`, within
+// kSourceReach of the current zone's box), past the seam only (before it lies the current zone). A square takes the
+// median of its samples, from two hits at least, and keeps the highest of them (HorizonSource::top).
 render::HorizonSource measure_ground(const std::string& name, const assets::Zone& zone,
                                      const game::CollisionMesh& collision, const glm::vec3& offset,
                                      const game::Seam& seam, const glm::vec3& here_lo, const glm::vec3& here_hi,
@@ -105,6 +113,7 @@ render::HorizonSource measure_ground(const std::string& name, const assets::Zone
     const float top = zone.bounds_max.z + 10.0f;
     std::vector<float> ground(static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny),
                               std::numeric_limits<float>::quiet_NaN());
+    std::vector<float> highest = ground;
     std::vector<float> hits;
     for (int y = 0; y < ny; ++y) {
         if (cancelled) return {};
@@ -122,17 +131,23 @@ render::HorizonSource measure_ground(const std::string& name, const assets::Zone
             std::sort(hits.begin(), hits.end());
             const std::size_t m = hits.size() / 2;
             const float h = hits.size() % 2 ? hits[m] : 0.5f * (hits[m - 1] + hits[m]);
-            ground[static_cast<std::size_t>(y) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(x)] = h + offset.z;
+            const auto i = static_cast<std::size_t>(y) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(x);
+            ground[i] = h + offset.z;
+            highest[i] = hits.back() + offset.z;
         }
     }
-    return render::horizon_source(name, lo, cell, nx, ny, std::move(ground));
+    return render::horizon_source(name, lo, cell, nx, ny, std::move(ground), std::move(highest));
 }
 
-// Where the land stands in for the neighbour's ground (game::LandMask), over its measured ground: what stands there
-// is drawn where the land (over the current zone's own terrain, that terrain, `here`) lies no lower than the
-// neighbour's ground less kLandTolerance.
-game::LandMask land_mask(const render::HorizonField& field, const render::HorizonSources& sources,
+// Where the land stands in for the neighbour's ground (game::LandMask), over its measured ground: its terrain is drawn
+// where its part of the land has sunk under it (render::horizon_point with `only`, its index in `sources`, at least
+// kTerrainSettled); what stands there is drawn where the land (over the current zone's own terrain, that terrain,
+// `here`) lies no lower than the neighbour's ground less kLandTolerance. Where its terrain stops, it must stop where it
+// meets the land (game::spread_terrain_cut, `highest` its terrain's own highest points, render::source_top, at most
+// kFinReach cells on).
+game::LandMask land_mask(const render::HorizonField& field, const render::HorizonSources& sources, int only,
                          const render::HorizonSource& self, const game::GroundGrid& here,
+                         const std::function<std::optional<float>(glm::vec2)>& highest,
                          const std::atomic<bool>& cancelled) {
     game::LandMask mask;
     // The box of the measured ground (the source is padded by its fade).
@@ -153,25 +168,39 @@ game::LandMask land_mask(const render::HorizonField& field, const render::Horizo
     const std::size_t n = static_cast<std::size_t>(mask.width) * static_cast<std::size_t>(mask.height);
     mask.ground.assign(n, std::numeric_limits<float>::quiet_NaN());
     mask.stands.assign(n, 1);
+    mask.terrain.assign(n, 1);
+    mask.own.assign(n, 0);
+    mask.surface.assign(n, std::numeric_limits<float>::quiet_NaN());
     for (int y = 0; y < mask.height; ++y) {
         if (cancelled) return {};
         for (int x = 0; x < mask.width; ++x) {
             const glm::vec2 p = mask.origin + (glm::vec2(static_cast<float>(x), static_cast<float>(y)) + 0.5f) * mask.cell;
-            const auto g = render::source_ground(self, p);
-            if (!g) continue;
             const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(mask.width) +
                                   static_cast<std::size_t>(x);
+            mask.own[i] = field.covers(p);
+            const auto g = render::source_ground(self, p);
+            if (!g) continue;
             mask.ground[i] = *g;
+            const render::HorizonPoint land = render::horizon_point(field, sources, p, only);
+            mask.terrain[i] = land.settled >= kTerrainSettled;
             if (field.covers(p)) {
                 const auto z = here.height_at(p.x, p.y);
                 mask.stands[i] = !z || *z >= *g - kLandTolerance;
+                if (z) mask.surface[i] = *z;
             } else {
+                mask.surface[i] = land.height;
                 mask.stands[i] = render::horizon_height(field, sources, p) >= *g - kLandTolerance;
             }
         }
     }
+    // The fins: from where its terrain is not drawn into where it is, while it stands over the land.
+    const std::size_t spread =
+        game::spread_terrain_cut(mask, highest, kLandTolerance, kFinReach, [&] { return cancelled.load(); });
+    if (spread) log::debug("neighbour zone {}: its terrain left out of {} more cells where it stood over the land",
+                           self.name, spread);
     return mask;
 }
+
 
 } // namespace
 
@@ -446,11 +475,16 @@ void NeighbourZones::run(std::shared_ptr<Job> job, const GameDir* game) {
             return;
         }
         // Its ground in the current zone's coordinates, for the land round the current zone: the cache's when it was
-        // moved by the same offset, else measured here and cached.
+        // moved by the same offset, else measured here, from its terrain alone (its placed objects, trees and houses,
+        // are not its ground), and cached.
         if (job->cached && glm::distance(job->cached_offset, job->offset.offset) <= kCacheOffsetSlack) {
             job->source = job->cached;
         } else {
-            auto measured = measure_ground(job->name, zone, collision, job->offset.offset, job->seam, job->here_lo,
+            auto placements = std::move(zone.placements);
+            const game::CollisionMesh terrain = game::CollisionMesh::build(zone);
+            zone.placements = std::move(placements);
+            if (stop()) return;
+            auto measured = measure_ground(job->name, zone, terrain, job->offset.offset, job->seam, job->here_lo,
                                            job->here_hi, job->cancelled);
             if (stop()) return;
             if (measured.valid()) {
@@ -496,18 +530,36 @@ void NeighbourZones::run(std::shared_ptr<Job> job, const GameDir* game) {
                 patch->rock = job->horizon->rock;
                 patch->files = job->land_files;
                 if (patch->mesh.squares.empty()) patch.reset();
-                else mask = land_mask(job->horizon->field, all, *job->source, job->ground, job->cancelled);
+                else {
+                    mask = land_mask(
+                        job->horizon->field, all, static_cast<int>(self - all.begin()), *job->source, job->ground,
+                        [&](glm::vec2 p) { return render::source_top(*job->source, p); },
+                        job->cancelled);
+                    // Where its terrain is left out, its part of the land comes back up from under it.
+                    for (std::size_t v = 0; v < patch->mesh.positions.size() && v < patch->mesh.settled.size(); ++v) {
+                        glm::vec3& at = patch->mesh.positions[v];
+                        if (patch->mesh.settled[v] > 0.0f && !mask.terrain_at(at.x, at.y)) {
+                            at.z += render::kHorizonTuck * patch->mesh.settled[v];
+                            patch->mesh.settled[v] = 0.0f;
+                        }
+                    }
+                }
                 if (stop()) return;
             }
         }
         if (patch && !mask.empty()) {
             job->land_squares = patch->mesh.squares.size();
             options.land = patch;
-            options.split = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c) {
-                return game::split_off_land(mask, a, b, c, kLandTolerance);
+            options.split = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
+                                render::ZoneRenderOptions::Part part) {
+                using Part = render::ZoneRenderOptions::Part;
+                const game::LandPart as = part == Part::Terrain ? game::LandPart::Terrain
+                                          : part == Part::Liquid ? game::LandPart::Liquid
+                                                                 : game::LandPart::Placed;
+                return game::split_off_land(mask, a, b, c, as, kLandTolerance);
             };
         } else if (!job->ground.empty()) {
-            options.split = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c) {
+            options.split = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, render::ZoneRenderOptions::Part) {
                 return game::split_off_ground(job->ground, a, b, c, kGroundTolerance);
             };
         }
@@ -571,6 +623,7 @@ void NeighbourZones::finish(Job& job) {
     try {
         l.renderer = std::make_unique<render::ZoneRenderer>(vk_, std::move(job.prepared), shader_dir_);
         l.renderer->set_distant(true); // its part of the land round the zone
+        l.renderer->set_debug_tint(debug_tint_);
         l.bytes = job.bytes;
         log::info("neighbour zone {}: open sky {:.0f}%, prepared in {:.0f} ms on the loader, uploaded in {:.1f} ms: "
                   "{} triangles, {} textures, {:.1f} MB, {} squares of the land round the zone",
@@ -741,6 +794,12 @@ void NeighbourZones::set_scene_light(const game::SceneLight& light) {
 void NeighbourZones::set_lighting(const render::SceneLighting& lighting) {
     for (auto& l : lines_)
         if (l.renderer) l.renderer->set_lighting(lighting);
+}
+
+void NeighbourZones::set_debug_tint(bool on) {
+    debug_tint_ = on;
+    for (auto& l : lines_)
+        if (l.renderer) l.renderer->set_debug_tint(on);
 }
 
 void NeighbourZones::set_lod_scale(float scale) {

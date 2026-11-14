@@ -75,6 +75,8 @@ const uint kMolten = 512u;     // RegionLava whose texture's name says lava or m
 const uint kEnergy = 1024u;    // RegionLavaH (harbingers' towers): drawn as lava (modern)
 const uint kEnvMap = 2048u;    // water: slot 2 is its own environment, an octahedral map (a "noswap" cube)
 const uint kFlagLodFade = 4096u; // a level of detail: extra3 its band (coverage.glsl lod_fade_samples)
+const uint kTintNeighbour = 32768u; // render/zone_renderer.h set_debug_tint: a neighbour's own geometry
+const uint kTintLand = 65536u;      // its own ground in its part of the land
 
 vec4 tex(uint i, vec2 uv) { return texture(textures[nonuniformEXT(i)], uv); }
 
@@ -705,6 +707,9 @@ void main() {
     if (!alpha_test(alpha, pc.params.x, pc.params.y, out_alpha)) discard;
     // The modern water over the copies is the whole result (it blends the floor itself).
     if (g_modern && (flags & kWaterCopies) != 0u) out_alpha = 1.0;
+    // The neighbour zones' debugging view: what comes from where.
+    if ((flags & kTintNeighbour) != 0u) color = mix(color, vec3(dot(color, vec3(0.3, 0.6, 0.1))) * vec3(1.6, 0.2, 1.4), 0.75);
+    if ((flags & kTintLand) != 0u) color = mix(color, vec3(dot(color, vec3(0.3, 0.6, 0.1))) * vec3(0.2, 1.6, 0.3), 0.6);
     if (g_modern) {
         if ((flags & kNoFog) == 0u)
             color = apply_haze(color, v_world, scene.camera, scene.haze, scene.haze_color, scene.to_light, scene.light);

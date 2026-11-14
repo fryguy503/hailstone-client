@@ -199,6 +199,9 @@ constexpr std::uint32_t kLodFading = 4096;  // a level of detail: extra3 its ban
 // vertices' weight (color2's alpha), the current zone's where it is not (coverage.glsl land_blend_discard).
 constexpr std::uint32_t kLandOwn = 8192;
 constexpr std::uint32_t kLandZone = 16384;
+// ZoneRenderer::set_debug_tint: a neighbour's own geometry, and its own ground in its part of the land.
+constexpr std::uint32_t kTintNeighbour = 32768;
+constexpr std::uint32_t kTintLand = 65536;
 // The depth pre-pass's flags: none of the shading's (bind_draw adds kLodFading, which decides discards, to both).
 constexpr std::uint32_t kDepthOnlyFlags = 0;
 constexpr VkColorComponentFlags kAllChannels =
@@ -811,6 +814,8 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         if (cancelled()) return nullptr;
         append(zone.terrain[mi], glm::mat4(1.0f), kNoColors, true, false, &terrain_liquid[mi]);
     }
+    // The zone's own terrain is the vertices so far (its meshes and their detail passes; ZoneRenderOptions::split).
+    const std::size_t terrain_vertices = vertices.size();
     std::size_t missing_objects = 0, replaced_objects = 0;
     for (std::size_t pi = 0; pi < zone.placements.size(); ++pi) {
         if (pi % 256 == 0 && cancelled()) return nullptr;
@@ -1016,7 +1021,12 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
             for (std::size_t i = 0; i + 2 < list.size(); i += 3) {
                 const std::uint32_t t[3] = {list[i], list[i + 1], list[i + 2]};
                 if (options.split) {
-                    auto parts = options.split(vertices[t[0]].position, vertices[t[1]].position, vertices[t[2]].position);
+                    using Part = ZoneRenderOptions::Part;
+                    const Part part = key.liquid != 0 ? Part::Liquid
+                                      : t[0] < terrain_vertices ? Part::Terrain
+                                                                : Part::Placed;
+                    auto parts = options.split(vertices[t[0]].position, vertices[t[1]].position, vertices[t[2]].position,
+                                               part);
                     if (parts) {
                         if (parts->empty()) {
                             ++doubled;
@@ -1905,6 +1915,8 @@ void ZoneRenderer::bind_draw(VkCommandBuffer cmd, const Draw& d, std::uint32_t f
     // A neighbour's part of the land: which side of the blend this draw shows (decides discards: both passes).
     if (d.land_fade == 1) pc.tex2.z |= kLandOwn;
     else if (d.land_fade == 2) pc.tex2.z |= kLandZone;
+    if (debug_tint_ && !d.distant) pc.tex2.z |= kTintNeighbour;
+    if (debug_tint_ && d.land_fade == 1) pc.tex2.z |= kTintLand;
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 }
 

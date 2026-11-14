@@ -64,6 +64,8 @@ public:
     void set_lighting(const render::SceneLighting& lighting);
     // render::ZoneRenderer::set_lod_scale, for each neighbour's renderer.
     void set_lod_scale(float scale);
+    // render::ZoneRenderer::set_debug_tint (display.neighbour_tint): what comes from the neighbours, tinted.
+    void set_debug_tint(bool on);
     void draw(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
               const game::ViewDistance& view, double time_seconds, render::ZonePhase phase);
 
@@ -142,6 +144,7 @@ private:
         std::thread thread;
     };
     std::vector<Abandoned> abandoned_; // loads cut off by zoning, joined once they end
+    bool debug_tint_ = false;
     double draw_ms_ = 0.0, draw_acc_ = 0.0;
     std::size_t drawn_triangles_ = 0, drawn_calls_ = 0, triangles_acc_ = 0, calls_acc_ = 0;
 };
