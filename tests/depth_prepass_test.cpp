@@ -40,11 +40,12 @@ std::string read_shader(const char* name) {
 }
 
 // The calls in a shader's code (not its comments) to a helper that decides a discard: the *_discard helpers
-// (lighting.glsl reveal_discard) and the alpha test (coverage.glsl alpha_test).
+// (lighting.glsl reveal_discard), the alpha test (coverage.glsl alpha_test) and a level of detail's sample mask
+// (coverage.glsl lod_fade_samples).
 std::set<std::string> discard_helpers(const std::string& source) {
     const std::string code = std::regex_replace(source, std::regex(R"(//[^\n]*)"), "");
     std::set<std::string> found;
-    const std::regex call(R"(\b(\w+_discard|alpha_test)\s*\()");
+    const std::regex call(R"(\b(\w+_discard|alpha_test|lod_fade_samples)\s*\()");
     for (auto it = std::sregex_iterator(code.begin(), code.end(), call); it != std::sregex_iterator(); ++it)
         found.insert((*it)[1].str());
     return found;
@@ -58,6 +59,8 @@ TEST_CASE("depth pre-pass: the depth shader discards where zone.frag does") {
     const auto colour = discard_helpers(read_shader("zone.frag"));
     const auto depth = discard_helpers(read_shader("zone_depth.frag"));
     CHECK(colour.count("reveal_discard") == 1);
+    // A level of detail's fade: the same samples in both (coverage.glsl lod_fade_samples).
+    CHECK(colour.count("lod_fade_samples") == 1);
     for (const auto& helper : colour) {
         INFO("zone.frag calls " << helper << ", zone_depth.frag does not");
         CHECK(depth.count(helper) == 1);

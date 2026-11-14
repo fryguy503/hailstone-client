@@ -85,6 +85,29 @@ struct GpuVertex {
     glm::vec4 sway;        // a plant's: its foot (xy), how far the vertex bends (z) and flutters (w); zone.vert
 };
 
+// Where an instanced replacement model stands (zone.vert's per-instance inputs, lighting.glsl instance_point): its
+// placement's transform, model to world, as the rows of a 3 x 4 matrix; the normal matrix's rows, the first's w how
+// much the sway's distances scale; and what its vertex colours are multiplied by (the placement's baked light). The
+// buffer's first is the identity, for the zone's own geometry.
+struct GpuInstance {
+    glm::vec4 row[3]{{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}};
+    glm::vec4 normal_row[3]{{1, 0, 0, 1}, {0, 1, 0, 0}, {0, 0, 1, 0}};
+    glm::vec4 tint{1.0f};
+};
+
+GpuInstance make_instance(const glm::mat4& m, const glm::vec4& tint) {
+    GpuInstance g;
+    const glm::mat3 n = glm::transpose(glm::inverse(glm::mat3(m)));
+    for (int r = 0; r < 3; ++r) {
+        g.row[r] = glm::vec4(m[0][r], m[1][r], m[2][r], m[3][r]);
+        g.normal_row[r] = glm::vec4(n[0][r], n[1][r], n[2][r], 0.0f);
+    }
+    // sway_plant measures a plant by its height: scaled with its up axis.
+    g.normal_row[0].w = glm::length(glm::vec3(m[2]));
+    g.tint = tint;
+    return g;
+}
+
 // A placed plant's sway (zone.vert, lighting.glsl wind_offset): the higher a vertex stands above the plant's foot, the
 // further it bends, as the square of its height (a stiff trunk, supple tips), up to 4 % of the plant's height at full
 // wind; the vertices of its leaves (the masked parts) also flutter.
@@ -171,7 +194,8 @@ constexpr std::uint32_t kReflective = 256;  // modern: the sky reflected (extra.
 constexpr std::uint32_t kMolten = 512;      // modern: RegionLava drawn as lava (its texture's name says so)
 constexpr std::uint32_t kEnergy = 1024;     // modern: RegionLavaH drawn as a glowing field
 constexpr std::uint32_t kEnvMap = 2048;     // modern: slot 2 is the water's own environment (an octahedral map)
-// The depth pre-pass's flags: none. They steer the shading alone, not the position nor the alpha test.
+constexpr std::uint32_t kLodFading = 4096;  // a level of detail: extra3 its band (coverage.glsl lod_fade_samples)
+// The depth pre-pass's flags: none of the shading's (bind_draw adds kLodFading, which decides discards, to both).
 constexpr std::uint32_t kDepthOnlyFlags = 0;
 constexpr VkColorComponentFlags kAllChannels =
     VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -236,11 +260,12 @@ struct MaterialKey {
     std::string effect;
     std::uint8_t liquid = 0; // ZoneRenderer::Liquid
     bool flame = false;      // a placed object's flame (assets::flame_material_hue)
-    float lod_near = 0.0f, lod_far = 0.0f; // assets::MeshPart's level-of-detail band
+    LodBand lod; // assets::MeshPart's level-of-detail band, its place among the mesh's
+    std::uint32_t instanced = 0; // an instanced model's number + 1 (ZoneRenderer::Draw::instanced)
     bool operator<(const MaterialKey& o) const {
-        return std::tie(blend, eqg, two_sided, front_ccw, frames, delay, multipass, effect, liquid, flame, lod_near,
-                        lod_far) < std::tie(o.blend, o.eqg, o.two_sided, o.front_ccw, o.frames, o.delay, o.multipass,
-                                            o.effect, o.liquid, o.flame, o.lod_near, o.lod_far);
+        return std::tie(blend, eqg, two_sided, front_ccw, frames, delay, multipass, effect, liquid, flame, lod,
+                        instanced) < std::tie(o.blend, o.eqg, o.two_sided, o.front_ccw, o.frames, o.delay,
+                                              o.multipass, o.effect, o.liquid, o.flame, o.lod, o.instanced);
     }
 };
 
@@ -273,8 +298,10 @@ struct ZoneRenderer::Prepared {
     std::vector<GpuVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<Draw> draws;
+    std::vector<GpuInstance> instances; // the identity, then the instanced models' placements
     std::vector<Chunk> chunks; // the draws', then solid's
     std::size_t draw_chunks = 0;
+    std::size_t triangles = 0; // as drawn, each instance's counted
     Draw solid; // ZoneRenderer::solid_
     struct Image {
         assets::Image image;
@@ -289,8 +316,14 @@ struct ZoneRenderer::Prepared {
 
 void ZoneRenderer::PreparedDeleter::operator()(Prepared* p) const { delete p; }
 
+ZoneRenderer::PreparedCounts ZoneRenderer::prepared_counts(const Prepared& p) {
+    return {p.vertices.size(), p.indices.size(), p.instances.empty() ? 0 : p.instances.size() - 1, p.triangles,
+            p.draw_chunks};
+}
+
 std::size_t ZoneRenderer::prepared_bytes(const Prepared& p) {
-    std::size_t n = p.vertices.size() * sizeof(GpuVertex) + p.indices.size() * sizeof(std::uint32_t);
+    std::size_t n = p.vertices.size() * sizeof(GpuVertex) + p.indices.size() * sizeof(std::uint32_t) +
+                    p.instances.size() * sizeof(GpuInstance);
     for (const auto& i : p.images)
         for (const auto& level : i.image.mips) n += level.size();
     return n;
@@ -322,15 +355,20 @@ void ZoneRenderer::upload(Prepared& p) {
                                           kStagingBudget);
     index_buffer_ = upload.buffer_pieces(std::as_bytes(std::span(p.indices)), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                                          kStagingBudget);
+    if (p.instances.empty()) p.instances.emplace_back();
+    instance_buffer_ = upload.buffer(std::as_bytes(std::span(p.instances)), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     upload.submit();
     mark("submitted", p.started);
-    log::info("zone renderer prepared: {} textures ({} MB), {} vertices ({} MB), {} indices ({} MB)", textures_.size(),
-              texture_bytes / (1024 * 1024), p.vertices.size(), p.vertices.size() * sizeof(GpuVertex) / (1024 * 1024),
-              p.indices.size(), p.indices.size() * sizeof(std::uint32_t) / (1024 * 1024));
+    log::info("zone renderer prepared: {} textures ({} MB), {} vertices ({} MB), {} indices ({} MB), {} instances",
+              textures_.size(), texture_bytes / (1024 * 1024), p.vertices.size(),
+              p.vertices.size() * sizeof(GpuVertex) / (1024 * 1024), p.indices.size(),
+              p.indices.size() * sizeof(std::uint32_t) / (1024 * 1024), p.instances.size() - 1);
     draws_ = std::move(p.draws);
     chunks_ = std::move(p.chunks);
+    instance_origins_.clear();
+    for (const GpuInstance& i : p.instances) instance_origins_.emplace_back(i.row[0].w, i.row[1].w, i.row[2].w);
     solid_ = p.solid;
-    stats_.triangles = (p.indices.size() - solid_.index_count) / 3;
+    stats_.triangles = p.triangles;
     stats_.draws = draws_.size();
     stats_.textures = textures_.size();
     stats_.chunks = p.draw_chunks;
@@ -381,6 +419,7 @@ ZoneRenderer::~ZoneRenderer() {
     for (const auto& b : scene_buffers_) o.buffers.push_back(b);
     for (const auto& b : light_grid_buffers_) o.buffers.push_back(b);
     o.buffers.push_back(vertex_buffer_);
+    o.buffers.push_back(instance_buffer_);
     o.buffers.push_back(index_buffer_);
     vk_.retire([d = vk_.device(), allocator = vk_.allocator(), o]() mutable {
         for (VkPipeline p : o.pipelines)
@@ -579,15 +618,25 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
     std::vector<HorizonTriangle> horizon_triangles;
     std::unordered_map<std::string, std::uint32_t> horizon_textures; // texture name -> index
     std::size_t plants = 0;
-    // Each vertex's placement's position (a zone region's: none), so that a level of detail's chunks hold whole
-    // placements (the cell sort below).
-    std::vector<glm::vec2> anchors;
+    // The replacement models (assets/model_overrides.h), drawn instanced: each mesh once, in its own space, with a
+    // transform for each of its placements (GpuInstance). Kept apart from `vertices` and `by_material` until the
+    // neighbour zone's cut below, which works on world positions.
+    struct InstancedModel {
+        std::vector<GpuInstance> instances;
+        std::vector<glm::mat4> transforms; // the instances' own, for their boxes
+        std::uint32_t first_instance = 0;  // in Prepared::instances
+    };
+    std::vector<InstancedModel> models;
+    std::unordered_map<const assets::Mesh*, std::uint32_t> model_numbers; // mesh -> its number in models + 1
+    std::vector<GpuVertex> model_vertices;
+    std::map<MaterialKey, std::vector<std::uint32_t>> model_by_material;
+    // `instanced`: an instanced model's number + 1, its mesh appended to model_vertices untransformed.
     auto append = [&](const assets::Mesh& mesh, const glm::mat4& transform, const std::vector<std::uint32_t>& colors,
-                      bool region, bool plant, const std::vector<std::uint8_t>* liquid = nullptr) {
-        auto base = static_cast<std::uint32_t>(vertices.size());
-        anchors.resize(base, glm::vec2(std::numeric_limits<float>::quiet_NaN()));
-        anchors.resize(base + mesh.vertices.size(), region ? glm::vec2(std::numeric_limits<float>::quiet_NaN())
-                                                           : glm::vec2(transform[3]));
+                      bool region, bool plant, const std::vector<std::uint8_t>* liquid = nullptr,
+                      std::uint32_t instanced = 0) {
+        std::vector<GpuVertex>& out = instanced ? model_vertices : vertices;
+        auto& out_by_material = instanced ? model_by_material : by_material;
+        auto base = static_cast<std::uint32_t>(out.size());
         glm::mat3 normal_matrix = glm::transpose(glm::inverse(glm::mat3(transform)));
         // Point lights reach only zone regions (not placed actors) whose
         // material has an MPL triple.
@@ -623,10 +672,16 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                 }
             }
             g.sway = glm::vec4(0.0f);
-            vertices.push_back(g);
+            out.push_back(g);
         }
-        if (plant) sway_plant(mesh, transform, std::span(vertices).subspan(base));
+        if (plant) sway_plant(mesh, transform, std::span(out).subspan(base));
         plants += plant;
+        // The mesh's levels of detail by their near ends, nearest first: the shadow passes pick a level by its place.
+        std::vector<float> bands;
+        for (const auto& part : mesh.parts)
+            if (part.lod_far > 0.0f) bands.push_back(part.lod_near);
+        std::sort(bands.begin(), bands.end());
+        bands.erase(std::unique(bands.begin(), bands.end()), bands.end());
         for (const auto& part : mesh.parts) {
             if (part.material >= mesh.materials.size()) continue;
             const auto& m = mesh.materials[part.material];
@@ -636,8 +691,14 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                             region && options.multipass_lighting && has_mpl_triple(mesh, m), effect_key(m.effect)};
             if (m.eqg_shader == assets::EqgShader::Water) key.liquid = static_cast<std::uint8_t>(Liquid::Water);
             key.flame = !region && assets::flame_material_hue(m) != assets::FlameHue::None;
-            key.lod_near = part.lod_near;
-            key.lod_far = part.lod_far;
+            key.instanced = instanced;
+            if (part.lod_far > 0.0f) {
+                key.lod.near = part.lod_near;
+                key.lod.far = part.lod_far;
+                key.lod.level = static_cast<std::uint8_t>(std::min<std::ptrdiff_t>(
+                    std::lower_bound(bands.begin(), bands.end(), part.lod_near) - bands.begin(), 255));
+                key.lod.levels = static_cast<std::uint8_t>(std::min<std::size_t>(bands.size(), 255));
+            }
             // Classic regions' plain materials: each triangle by the regions around it (classic_liquid_triangles).
             const bool classify = region && liquid != nullptr;
             for (std::uint32_t i = 0; i + 2 < part.index_count; i += 3) {
@@ -662,9 +723,9 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                     horizon_triangles.push_back({vertices[base + t[0]].position, vertices[base + t[1]].position,
                                                  vertices[base + t[2]].position, it->second});
                 }
-                auto& out = by_material[tri_key];
+                auto& tris_out = out_by_material[tri_key];
                 looks.try_emplace(tri_key, m);
-                for (std::uint32_t k : t) out.push_back(base + k);
+                for (std::uint32_t k : t) tris_out.push_back(base + k);
             }
         }
         if (region && options.details) append_details(mesh, base);
@@ -681,7 +742,6 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         append(zone.terrain[mi], glm::mat4(1.0f), kNoColors, true, false, &terrain_liquid[mi]);
     }
     std::size_t missing_objects = 0, replaced_objects = 0;
-    std::vector<std::uint32_t> replacement_colors;
     for (std::size_t pi = 0; pi < zone.placements.size(); ++pi) {
         if (pi % 256 == 0 && cancelled()) return nullptr;
         const auto& p = zone.placements[pi];
@@ -691,21 +751,24 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         // game's mesh, so the replacement takes their average (its shade, not its gradient), times its own vertex
         // colours (a generated tree's shade inside its crown).
         if (auto r = zone.draw_objects.find(p.actor); r != zone.draw_objects.end()) {
-            replacement_colors.clear();
+            glm::vec4 tint(1.0f);
             if (!p.vertex_colors.empty()) {
                 std::uint64_t sum[4] = {};
                 for (std::uint32_t c : p.vertex_colors)
                     for (int k = 0; k < 4; ++k) sum[k] += (c >> (8 * k)) & 0xff;
-                std::uint32_t avg[4];
-                for (int k = 0; k < 4; ++k) avg[k] = static_cast<std::uint32_t>(sum[k] / p.vertex_colors.size());
-                replacement_colors.reserve(r->second.vertices.size());
-                for (const auto& v : r->second.vertices) {
-                    std::uint32_t c = 0;
-                    for (int k = 0; k < 4; ++k) c |= (avg[k] * ((v.color >> (8 * k)) & 0xff) + 127) / 255 << (8 * k);
-                    replacement_colors.push_back(c);
-                }
+                for (int k = 0; k < 4; ++k)
+                    tint[k] = static_cast<float>(sum[k]) / static_cast<float>(p.vertex_colors.size()) / 255.0f;
             }
-            append(r->second, p.transform, replacement_colors, false, is_plant(p.actor, r->second));
+            auto [number, fresh] = model_numbers.try_emplace(&r->second, 0u);
+            if (fresh) {
+                models.emplace_back();
+                number->second = static_cast<std::uint32_t>(models.size());
+                append(r->second, glm::mat4(1.0f), kNoColors, false, is_plant(p.actor, r->second), nullptr,
+                       number->second);
+            }
+            InstancedModel& model = models[number->second - 1];
+            model.instances.push_back(make_instance(p.transform, tint));
+            model.transforms.push_back(p.transform);
             ++replaced_objects;
             continue;
         }
@@ -713,7 +776,9 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
     }
     if (plants) log::info("zone renderer: {} plants sway in the wind", plants);
     if (missing_objects) log::warn("{} placements name objects the zone does not define", missing_objects);
-    if (replaced_objects) log::info("zone renderer: {} placements drawn from model overrides", replaced_objects);
+    if (replaced_objects)
+        log::info("zone renderer: {} placements drawn from model overrides, {} models instanced", replaced_objects,
+                  models.size());
     if (options.multipass_lighting)
         log::info("multi-pass lighting: {} lights reach {} zone vertices", zone.lights.size(), lit_vertices);
     if (liquid_triangles) log::info("zone renderer: {} water and lava surface triangles", liquid_triangles);
@@ -799,6 +864,55 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                   options.offset.x, options.offset.y, options.offset.z, kept, cut, dropped, doubled, split);
     }
 
+    // The instanced models join the geometry after the cut: their meshes' vertices and triangles at the end, their
+    // placements in the instance buffer after the identity, each model's together and by 128-unit cell (so that the
+    // neighbouring ones in view go in one call). A neighbour zone's are moved with it and kept whole or left out by
+    // where they stand.
+    prep.instances.assign(1, GpuInstance{});
+    {
+        const auto vbase = static_cast<std::uint32_t>(vertices.size());
+        vertices.insert(vertices.end(), model_vertices.begin(), model_vertices.end());
+        for (auto& [key, list] : model_by_material) {
+            for (std::uint32_t& i : list) i += vbase;
+            by_material.emplace(key, std::move(list));
+        }
+        const bool moved = options.offset != glm::vec3(0.0f) || !options.keep.empty();
+        std::size_t left_out = 0;
+        for (InstancedModel& model : models) {
+            struct Placed { std::int64_t cell; std::size_t at; };
+            std::vector<Placed> order;
+            for (std::size_t i = 0; i < model.instances.size(); ++i) {
+                glm::mat4& m = model.transforms[i];
+                if (moved) {
+                    m[3] += glm::vec4(options.offset, 0.0f);
+                    for (int r = 0; r < 3; ++r) model.instances[i].row[r].w = m[3][r];
+                    const glm::vec3 at(m[3]);
+                    if (!std::all_of(options.keep.begin(), options.keep.end(),
+                                     [&](const glm::vec4& plane) { return game::plane_side(plane, at) >= 0.0f; })) {
+                        ++left_out;
+                        continue;
+                    }
+                }
+                order.push_back({cell_key(static_cast<std::int64_t>(std::floor(m[3].x / 128.0f)),
+                                          static_cast<std::int64_t>(std::floor(m[3].y / 128.0f))),
+                                 i});
+            }
+            std::stable_sort(order.begin(), order.end(),
+                             [](const Placed& a, const Placed& b) { return a.cell < b.cell; });
+            std::vector<GpuInstance> instances;
+            std::vector<glm::mat4> transforms;
+            for (const Placed& o : order) {
+                instances.push_back(model.instances[o.at]);
+                transforms.push_back(model.transforms[o.at]);
+            }
+            model.instances = std::move(instances);
+            model.transforms = std::move(transforms);
+            model.first_instance = static_cast<std::uint32_t>(prep.instances.size());
+            prep.instances.insert(prep.instances.end(), model.instances.begin(), model.instances.end());
+        }
+        if (left_out) log::info("zone renderer: {} model placements past the zone line left out", left_out);
+    }
+
     std::unordered_map<std::string, std::uint32_t> horizon_slots; // a draw's first texture name -> its slot
     // Texture slot 0 is plain white, used for anything that fails to load.
     const std::size_t replaced_before = assets::texture_overrides().applied();
@@ -878,8 +992,8 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         d.frame_delay_ms = key.delay;
         d.two_sided = key.two_sided;
         d.front_ccw = key.front_ccw;
-        d.lod_near = key.lod_near;
-        d.lod_far = key.lod_far;
+        d.lod = key.lod;
+        d.instanced = key.instanced;
         MaterialState st = material_state(look);
         for (const auto& name : key.frames) d.frame_slots.push_back(slot_for(name, st.masked_texture, TextureUse::Color, !st.alpha_unused()));
         if (!key.frames.empty()) horizon_slots.try_emplace(key.frames.front(), d.frame_slots.front());
@@ -951,6 +1065,46 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
     for (std::uint32_t di = 0; di < prep.draws.size(); ++di) {
         Draw& d = prep.draws[di];
         const std::uint32_t count = d.index_count / 3;
+        if (d.instanced) {
+            // An instanced model's draw: a chunk for each placement, all its triangles, its box the mesh's moved by
+            // the placement's transform.
+            glm::vec3 lo(std::numeric_limits<float>::max()), hi(-std::numeric_limits<float>::max());
+            bool sways = false;
+            for (std::uint32_t i = 0; i < d.index_count; ++i) {
+                const GpuVertex& v = vertices[indices[d.first_index + i]];
+                const float r = sway_reach(v.sway);
+                sways |= r > 0.0f;
+                lo = glm::min(lo, v.position - r);
+                hi = glm::max(hi, v.position + r);
+            }
+            const InstancedModel& model = models[d.instanced - 1];
+            d.first_chunk = static_cast<std::uint32_t>(prep.chunks.size());
+            for (std::size_t i = 0; i < model.instances.size() && d.index_count > 0; ++i) {
+                const glm::mat4& m = model.transforms[i];
+                Chunk c;
+                c.draw = di;
+                c.first_index = d.first_index;
+                c.index_count = d.index_count;
+                c.instance = model.first_instance + static_cast<std::uint32_t>(i);
+                c.sways = sways;
+                c.box_min = glm::vec3(std::numeric_limits<float>::max());
+                c.box_max = glm::vec3(-std::numeric_limits<float>::max());
+                for (int k = 0; k < 8; ++k) {
+                    const glm::vec3 corner((k & 1) ? hi.x : lo.x, (k & 2) ? hi.y : lo.y, (k & 4) ? hi.z : lo.z);
+                    const glm::vec3 w(m * glm::vec4(corner, 1.0f));
+                    c.box_min = glm::min(c.box_min, w);
+                    c.box_max = glm::max(c.box_max, w);
+                }
+                prep.chunks.push_back(c);
+                chunk_cells.push_back(0);
+                prep.triangles += count;
+                d.box_min = i == 0 ? c.box_min : glm::min(d.box_min, c.box_min);
+                d.box_max = i == 0 ? c.box_max : glm::max(d.box_max, c.box_max);
+            }
+            d.chunk_count = static_cast<std::uint32_t>(prep.chunks.size()) - d.first_chunk;
+            continue;
+        }
+        prep.triangles += count;
         const bool sorted = d.pass == Pass::Opaque;
         std::vector<std::int64_t> keys;
         if (sorted) {
@@ -958,12 +1112,8 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
             std::vector<Tri> tris(count);
             for (std::uint32_t t = 0; t < count; ++t) {
                 const std::uint32_t* idx = &indices[d.first_index + t * 3];
-                glm::vec3 c =
+                const glm::vec3 c =
                     (vertices[idx[0]].position + vertices[idx[1]].position + vertices[idx[2]].position) / 3.0f;
-                // A level of detail's triangles by their placement's cell, so a tree is one chunk's and changes level
-                // at once (a neighbour zone's cut triangles have no anchor: their own centre).
-                if (d.lod_far > 0.0f && idx[0] < anchors.size() && !std::isnan(anchors[idx[0]].x))
-                    c = glm::vec3(anchors[idx[0]] + glm::vec2(options.offset), c.z);
                 tris[t] = {cell_key(static_cast<std::int64_t>(std::floor(c.x / kChunk)),
                                     static_cast<std::int64_t>(std::floor(c.y / kChunk))), t};
             }
@@ -1257,7 +1407,8 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", nullptr};
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr};
 
-    VkVertexInputBindingDescription vb{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    const VkVertexInputBindingDescription vb[] = {{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX},
+                                                  {1, sizeof(GpuInstance), VK_VERTEX_INPUT_RATE_INSTANCE}};
     VkVertexInputAttributeDescription attrs[] = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, position)},
         {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, normal)},
@@ -1267,11 +1418,18 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
         {5, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(GpuVertex, color2)},
         {6, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, point_light)},
         {7, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuVertex, sway)},
+        {8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, row)},
+        {9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, row) + sizeof(glm::vec4)},
+        {10, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, row) + 2 * sizeof(glm::vec4)},
+        {11, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, normal_row)},
+        {12, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, normal_row) + sizeof(glm::vec4)},
+        {13, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, normal_row) + 2 * sizeof(glm::vec4)},
+        {14, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, tint)},
     };
     VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vi.vertexBindingDescriptionCount = 1;
-    vi.pVertexBindingDescriptions = &vb;
-    vi.vertexAttributeDescriptionCount = 8;
+    vi.vertexBindingDescriptionCount = 2;
+    vi.pVertexBindingDescriptions = vb;
+    vi.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(std::size(attrs));
     vi.pVertexAttributeDescriptions = attrs;
     VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -1307,9 +1465,15 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     // Multisampled, the opaque pass turns the alpha test into coverage: alpha-to-coverage, and the fragment
     // shader's constant_id 0 makes its alpha the coverage (shaders/zone.frag, actor.frag, object.frag).
     const VkBool32 coverage = vk_.scene_samples() != VK_SAMPLE_COUNT_1_BIT ? VK_TRUE : VK_FALSE;
-    VkSpecializationMapEntry spec_entry{0, 0, sizeof(VkBool32)};
-    VkBool32 spec_value = VK_FALSE;
-    VkSpecializationInfo spec{1, &spec_entry, sizeof(VkBool32), &spec_value};
+    // constant_id 1: the scene's samples, which a level of detail's fade shares out (lighting.glsl lod_fade_samples).
+    struct Spec {
+        VkBool32 coverage = VK_FALSE;
+        std::int32_t samples = 1;
+    } spec_value;
+    spec_value.samples = static_cast<std::int32_t>(vk_.scene_samples());
+    const VkSpecializationMapEntry spec_entries[] = {{0, offsetof(Spec, coverage), sizeof(VkBool32)},
+                                                     {1, offsetof(Spec, samples), sizeof(std::int32_t)}};
+    VkSpecializationInfo spec{2, spec_entries, sizeof(Spec), &spec_value};
     stages[1].pSpecializationInfo = &spec;
 
     VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -1325,8 +1489,8 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     info.layout = layout_;
 
     for (int pass = 0; pass < 3; ++pass) {
-        spec_value = pass == 0 ? coverage : VK_FALSE;
-        ms.alphaToCoverageEnable = spec_value;
+        spec_value.coverage = pass == 0 ? coverage : VK_FALSE;
+        ms.alphaToCoverageEnable = spec_value.coverage;
         VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         dss.depthTestEnable = VK_TRUE;
         dss.depthWriteEnable = pass == 0 ? VK_TRUE : VK_FALSE;
@@ -1372,7 +1536,7 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     }
     if (depth_prepass_) {
         // Both pipelines take the opaque pass's coverage, so an edge covers the same samples in each.
-        spec_value = coverage;
+        spec_value.coverage = coverage;
         ms.alphaToCoverageEnable = coverage;
         VkPipelineColorBlendAttachmentState ba{};
         VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
@@ -1405,7 +1569,8 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
 }
 
 template <class Keep, class First>
-void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first) {
+void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first,
+                               LodPick lod) {
     // The draw's box first: a draw wholly out of view tests none of its chunks. Neighbouring chunks lie end to end in
     // the index buffer (build), so a run of kept ones is one draw. Skipping chunks keeps the order of the rest, which
     // the blended draws need.
@@ -1414,35 +1579,50 @@ void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted count
     whole.box_max = d.box_max;
     if (d.chunk_count == 0 || !keep(whole)) return;
     bool started = false;
-    std::uint32_t run_first = 0, run_count = 0;
+    // A run: neighbouring chunks of the zone's own geometry (end to end in the index buffer), or of an instanced
+    // model's placements (one range of indices, neighbouring instances).
+    std::uint32_t run_first = 0, run_count = 0, run_instance = 0, run_instances = 0;
     auto flush = [&] {
         if (run_count == 0) return;
         if (!started) {
             first();
             started = true;
         }
-        vkCmdDrawIndexed(cmd, run_count, 1, run_first, 0, 0);
+        vkCmdDrawIndexed(cmd, run_count, run_instances, run_first, 0, run_instance);
         if (counted == Counted::Scene) {
-            drawn_.triangles += run_count / 3;
+            drawn_.triangles += std::size_t{run_count / 3} * run_instances;
             ++drawn_.calls;
         } else if (counted == Counted::Shadow) {
-            drawn_.shadow_triangles += run_count / 3;
+            drawn_.shadow_triangles += std::size_t{run_count / 3} * run_instances;
             ++drawn_.shadow_calls;
         }
         run_count = 0;
     };
     for (std::uint32_t i = d.first_chunk; i < d.first_chunk + d.chunk_count; ++i) {
         const Chunk& c = chunks_[i];
-        if (!lod_shows(d, c.box_min, c.box_max) || !keep(c)) continue;
-        if (run_count > 0 && c.first_index == run_first + run_count) {
-            run_count += c.index_count;
-        } else {
-            flush();
-            run_first = c.first_index;
-            run_count = c.index_count;
-        }
+        if (!lod_shows(d, c, lod) || !keep(c)) continue;
+        if (run_count > 0 && extends_run(c, run_first, run_count, run_instance, run_instances)) continue;
+        flush();
+        run_first = c.first_index;
+        run_count = c.index_count;
+        run_instance = c.instance;
+        run_instances = 1;
     }
     flush();
+}
+
+bool ZoneRenderer::lod_shows(const Draw& d, const Chunk& c, LodPick pick) const {
+    if (!d.lod.banded()) return true;
+    const glm::vec3 at = c.instance < instance_origins_.size() ? instance_origins_[c.instance]
+                                                               : (c.box_min + c.box_max) * 0.5f;
+    return render::lod_shows(d.lod, glm::distance(at, lod_eye_), pick, lod_scale_);
+}
+
+void ZoneRenderer::bind_geometry(VkCommandBuffer cmd) const {
+    const VkBuffer buffers[] = {vertex_buffer_.buffer, instance_buffer_.buffer};
+    const VkDeviceSize offsets[] = {0, 0};
+    vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+    vkCmdBindIndexBuffer(cmd, index_buffer_.buffer, 0, VK_INDEX_TYPE_UINT32);
 }
 
 bool ZoneRenderer::modern_lighting() const { return scene_.lighting.params.x > 0.5f; }
@@ -1451,9 +1631,7 @@ std::uint64_t ZoneRenderer::begin_draw(const FrameInfo& frame, const glm::mat4& 
                                        const glm::vec3& camera_pos, const game::ViewDistance& view,
                                        double time_seconds) {
     VkCommandBuffer cmd = frame.cmd;
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer_.buffer, &offset);
-    vkCmdBindIndexBuffer(cmd, index_buffer_.buffer, 0, VK_INDEX_TYPE_UINT32);
+    bind_geometry(cmd);
     auto time_ms = static_cast<std::uint64_t>(time_seconds * 1000.0);
     scene_.view_proj = view_proj;
     scene_.fog_color = glm::vec4(view.fog_color, 1.0f);
@@ -1480,6 +1658,12 @@ void ZoneRenderer::bind_draw(VkCommandBuffer cmd, const Draw& d, std::uint32_t f
     pc.extra = d.extra;
     pc.extra2 = d.extra2;
     pc.extra3 = d.extra3;
+    // A level of detail fades into its neighbours (render/lod_bands.h): its band as the scene sees it. Only the
+    // classic effect is banded (a replacement model's), which leaves extra3 to it.
+    if (d.lod.banded()) {
+        pc.tex2.z |= kLodFading;
+        pc.extra3 = glm::vec4(d.lod.near * lod_scale_, d.lod.far * lod_scale_, render::kLodFade, 0.0f);
+    }
     pc.extra4 = d.extra4;
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 }
@@ -1533,7 +1717,7 @@ void ZoneRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, cons
                                   (d.liquid == Liquid::Water ? kWaterSurface | copies : 0u) |
                                   (d.liquid == Liquid::Lava ? kLavaSurface : 0u) | d.surface;
             bind_draw(cmd, d, flags, time_ms);
-        });
+        }, kSceneLod);
     }
 }
 
@@ -1553,7 +1737,7 @@ void ZoneRenderer::draw_depth(const FrameInfo& frame, const glm::mat4& view_proj
             if (!bound) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline_);
             bound = true;
             bind_draw(cmd, d, kDepthOnlyFlags, time_ms);
-        });
+        }, kSceneLod);
     }
     depth_drawn_ = true;
 }
@@ -1689,9 +1873,7 @@ void ZoneRenderer::draw_shadow(const FrameInfo& frame, std::uint32_t cascade) {
     VkCommandBuffer cmd = frame.cmd;
     // The cascades in this frame's block; draw() writes it again later in the frame with the same cascades.
     upload_scene(frame.frame_slot);
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer_.buffer, &offset);
-    vkCmdBindIndexBuffer(cmd, index_buffer_.buffer, 0, VK_INDEX_TYPE_UINT32);
+    bind_geometry(cmd);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow_pipeline_);
     VkDescriptorSet sets[3] = {set_, scene_sets_[frame.frame_slot], vk_.shadow_set()};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
@@ -1708,6 +1890,8 @@ void ZoneRenderer::draw_shadow(const FrameInfo& frame, std::uint32_t cascade) {
     };
     PushConstants pc{};
     pc.tex2.w = cascade;
+    static_assert(kShadowLodLevel.size() == kShadowCascades);
+    const std::uint8_t min_level = cascade < kShadowCascades ? kShadowLodLevel[cascade] : std::uint8_t{0};
     // The solid casters first, a cell at a time whatever their material: they need no texture.
     if (cascade != kWaterLayer)
         draw_chunks(cmd, solid_, Counted::Shadow, seen, [&] {
@@ -1730,7 +1914,7 @@ void ZoneRenderer::draw_shadow(const FrameInfo& frame, std::uint32_t cascade) {
             pc.params = glm::vec4(d.alpha_ref, 1.0f, 0.0f, 0.0f);
             vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                &pc);
-        });
+        }, LodPick{min_level, false});
     }
 }
 
@@ -1757,9 +1941,7 @@ void ZoneRenderer::point_reach(const glm::vec3& light, float radius, PointReach&
 void ZoneRenderer::draw_point_shadow(const FrameInfo& frame, const PointReach& reach, std::uint32_t face) {
     if (reach.chunks.empty() || !point_shadow_pipeline_) return;
     VkCommandBuffer cmd = frame.cmd;
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertex_buffer_.buffer, &offset);
-    vkCmdBindIndexBuffer(cmd, index_buffer_.buffer, 0, VK_INDEX_TYPE_UINT32);
+    bind_geometry(cmd);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_shadow_pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &set_, 0, nullptr);
     PushConstants pc{};
@@ -1768,7 +1950,7 @@ void ZoneRenderer::draw_point_shadow(const FrameInfo& frame, const PointReach& r
     pc.extra = glm::vec4(kPointShadowFaceScale, kPointShadowNear, 0.0f, 0.0f);
     // The chunks in the light's reach on this face's side of it; a run of neighbouring ones of one draw in one call
     // (as draw_chunks), its texture pushed when the draw changes.
-    std::uint32_t pushed = 0, run_draw = 0, run_first = 0, run_count = 0;
+    std::uint32_t pushed = 0, run_draw = 0, run_first = 0, run_count = 0, run_instance = 0, run_instances = 0;
     bool any_pushed = false;
     auto flush = [&] {
         if (run_count == 0) return;
@@ -1781,23 +1963,23 @@ void ZoneRenderer::draw_point_shadow(const FrameInfo& frame, const PointReach& r
             pushed = run_draw;
             any_pushed = true;
         }
-        vkCmdDrawIndexed(cmd, run_count, 1, run_first, 0, 0);
-        drawn_.shadow_triangles += run_count / 3;
+        vkCmdDrawIndexed(cmd, run_count, run_instances, run_first, 0, run_instance);
+        drawn_.shadow_triangles += std::size_t{run_count / 3} * run_instances;
         ++drawn_.shadow_calls;
         run_count = 0;
     };
     for (std::uint32_t i : reach.chunks) {
         const Chunk& c = chunks_[i];
         if (!box_reaches_face(reach.light, face, c.box_min, c.box_max)) continue;
-        if (c.draw < draws_.size() && !lod_shows(draws_[c.draw], c.box_min, c.box_max)) continue;
-        if (run_count > 0 && c.draw == run_draw && c.first_index == run_first + run_count) {
-            run_count += c.index_count;
-        } else {
-            flush();
-            run_draw = c.draw;
-            run_first = c.first_index;
-            run_count = c.index_count;
-        }
+        if (c.draw < draws_.size() && !lod_shows(draws_[c.draw], c, kPointShadowLod)) continue;
+        if (run_count > 0 && c.draw == run_draw && extends_run(c, run_first, run_count, run_instance, run_instances))
+            continue;
+        flush();
+        run_draw = c.draw;
+        run_first = c.first_index;
+        run_count = c.index_count;
+        run_instance = c.instance;
+        run_instances = 1;
     }
     flush();
 }
@@ -1814,16 +1996,22 @@ void ZoneRenderer::create_shadow_pipeline(const std::filesystem::path& shader_di
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", nullptr};
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr};
-    VkVertexInputBindingDescription vb{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    const VkVertexInputBindingDescription vb[] = {{0, sizeof(GpuVertex), VK_VERTEX_INPUT_RATE_VERTEX},
+                                                  {1, sizeof(GpuInstance), VK_VERTEX_INPUT_RATE_INSTANCE}};
+    // The lights' cubes are drawn once: no wind (the sway and its scale, the last two).
     VkVertexInputAttributeDescription attrs[] = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(GpuVertex, position)},
         {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(GpuVertex, uv)},
+        {8, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, row)},
+        {9, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, row) + sizeof(glm::vec4)},
+        {10, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, row) + 2 * sizeof(glm::vec4)},
         {7, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuVertex, sway)},
+        {11, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuInstance, normal_row)},
     };
     VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vi.vertexBindingDescriptionCount = 1;
-    vi.pVertexBindingDescriptions = &vb;
-    vi.vertexAttributeDescriptionCount = point ? 2 : 3; // the lights' cubes are drawn once: no wind
+    vi.vertexBindingDescriptionCount = 2;
+    vi.pVertexBindingDescriptions = vb;
+    vi.vertexAttributeDescriptionCount = point ? 5 : 7;
     vi.pVertexAttributeDescriptions = attrs;
     VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;

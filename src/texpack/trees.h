@@ -85,6 +85,12 @@ struct GeneratedTree {
 
 GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options);
 
+// The outline a leaf card is cut to, in texture coordinates (u right, v down the image's rows): a convex polygon of at
+// most `corners` corners round every texel of `leaf` that is not wholly transparent, `margin` texels out (the smaller
+// mips spread the leaves a little), within the unit square. Empty when nothing is opaque. The cards draw only inside
+// it: a cut-out's transparent texels cost as much to draw as its leaves.
+std::vector<glm::vec2> card_outline(const assets::Image& leaf, int corners = 6, float margin = 6.0f);
+
 // Writes a generated tree into `pack_dir`/models/<zone>/: <actor>.glb (made for `source_hash`, assets::object_mesh_hash
 // of the game's mesh) and its textures as pack files (BC7 with mips; the bark's normal and roughness maps as .n, .r).
 bool write_tree(const std::filesystem::path& pack_dir, const std::string& zone, const std::string& actor,

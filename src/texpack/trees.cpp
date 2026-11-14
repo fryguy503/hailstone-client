@@ -748,6 +748,179 @@ std::optional<TreeStyle> tree_style_from_name(std::string_view name) {
     return std::nullopt;
 }
 
+namespace {
+
+// `poly` (convex) cut to the side of the line `axis` = `edge` that is above it (`keep_above`) or below it
+// (Sutherland-Hodgman).
+std::vector<glm::vec2> clip_polygon(const std::vector<glm::vec2>& poly, int axis, float edge, bool keep_above) {
+    std::vector<glm::vec2> out;
+    auto inside = [&](const glm::vec2& p) { return keep_above ? p[axis] >= edge : p[axis] <= edge; };
+    for (std::size_t k = 0; k < poly.size(); ++k) {
+        const glm::vec2 p = poly[k], q = poly[(k + 1) % poly.size()];
+        if (inside(p)) out.push_back(p);
+        if (inside(p) != inside(q)) out.push_back(p + (q - p) * ((edge - p[axis]) / (q[axis] - p[axis])));
+    }
+    return out.size() >= 3 ? out : std::vector<glm::vec2>{};
+}
+
+} // namespace
+
+std::vector<glm::vec2> card_outline(const assets::Image& leaf, int corners, float margin) {
+    if (leaf.width == 0 || leaf.height == 0 || leaf.mips.empty() ||
+        leaf.mips[0].size() < std::size_t(leaf.width) * leaf.height * 4)
+        return {};
+    // The corners of each row's opaque run, in texels.
+    std::vector<glm::vec2> pts;
+    for (std::uint32_t y = 0; y < leaf.height; ++y) {
+        int first = -1, last = -1;
+        for (std::uint32_t x = 0; x < leaf.width; ++x)
+            if (leaf.mips[0][(std::size_t(y) * leaf.width + x) * 4 + 3] != std::byte{0}) {
+                if (first < 0) first = int(x);
+                last = int(x);
+            }
+        if (first < 0) continue;
+        for (float dy : {0.0f, 1.0f}) {
+            pts.emplace_back(float(first), float(y) + dy);
+            pts.emplace_back(float(last + 1), float(y) + dy);
+        }
+    }
+    if (pts.size() < 3) return {};
+    // Their convex hull (Andrew's monotone chain), counter-clockwise with y up, so clockwise on the image.
+    std::sort(pts.begin(), pts.end(), [](const glm::vec2& a, const glm::vec2& b) {
+        return a.x < b.x || (a.x == b.x && a.y < b.y);
+    });
+    auto cross = [](const glm::vec2& o, const glm::vec2& a, const glm::vec2& b) {
+        return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    };
+    std::vector<glm::vec2> hull(pts.size() * 2);
+    std::size_t k = 0;
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        while (k >= 2 && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0.0f) --k;
+        hull[k++] = pts[i];
+    }
+    for (std::size_t i = pts.size() - 1, low = k + 1; i-- > 0;) {
+        while (k >= low && cross(hull[k - 2], hull[k - 1], pts[i]) <= 0.0f) --k;
+        hull[k++] = pts[i];
+    }
+    hull.resize(k - 1);
+    // Down to `corners` by the cheapest cut: an edge whose neighbours, extended, meet past it is replaced by where
+    // they meet, adding the least area. Each step only grows the outline, so it still holds every opaque texel.
+    while (int(hull.size()) > std::max(corners, 3)) {
+        const std::size_t n = hull.size();
+        float best_area = std::numeric_limits<float>::max();
+        std::size_t best = n;
+        glm::vec2 best_at(0.0f);
+        for (std::size_t i = 0; i < n; ++i) {
+            const glm::vec2 a = hull[(i + n - 1) % n], b = hull[i], c = hull[(i + 1) % n], d = hull[(i + 2) % n];
+            const glm::vec2 d1 = b - a, d2 = d - c;
+            const float den = d1.x * d2.y - d1.y * d2.x;
+            if (std::abs(den) < 1e-9f) continue;
+            const glm::vec2 r = c - b;
+            const float t = (r.x * d2.y - r.y * d2.x) / den, u = (r.x * d1.y - r.y * d1.x) / den;
+            if (t < 0.0f || u > 0.0f) continue; // they meet behind the edge: no outward corner
+            const glm::vec2 at = b + d1 * t;
+            const float area = 0.5f * std::abs(cross(b, at, c));
+            if (area < best_area) best_area = area, best = i, best_at = at;
+        }
+        if (best == n) break;
+        hull[best] = best_at;
+        hull.erase(hull.begin() + std::ptrdiff_t((best + 1) % n));
+    }
+    // Out by the margin: each edge moved out along its normal, the corners where the moved edges meet.
+    const std::size_t n = hull.size();
+    std::vector<glm::vec2> out(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const glm::vec2 a = hull[(i + n - 1) % n], b = hull[i], c = hull[(i + 1) % n];
+        // Counter-clockwise (y up): the outward normal of an edge along e is (e.y, -e.x).
+        glm::vec2 n1 = glm::normalize(glm::vec2((b - a).y, -(b - a).x)), n2 = glm::normalize(glm::vec2((c - b).y, -(c - b).x));
+        const glm::vec2 bis = n1 + n2;
+        const float cos_half = glm::dot(glm::normalize(bis), n1);
+        out[i] = b + glm::normalize(bis) * (margin / std::max(cos_half, 0.2f));
+    }
+    // In texture coordinates, clipped to the card.
+    const glm::vec2 size(float(leaf.width), float(leaf.height));
+    for (auto& p : out) p /= size;
+    for (int axis = 0; axis < 2; ++axis)
+        for (float edge : {0.0f, 1.0f}) out = clip_polygon(out, axis, edge, edge == 0.0f);
+    return out;
+}
+
+namespace {
+
+// Cuts the leaf cards of the near and middle levels to `outline` (card_outline): each quad of a strip (emit_strip's
+// two triangles, u 0 to 1 across, v between its rows) clipped to the outline in texture space, its corners placed by
+// where they fall in the quad, as a fan. A quad wholly outside it goes.
+void trim_cards(Builder& b, const std::vector<glm::vec2>& outline) {
+    if (outline.size() < 3) return;
+    for (int level = 0; level < 2; ++level) {
+        auto& list = b.idx[level][1];
+        std::vector<std::uint32_t> kept;
+        kept.reserve(list.size());
+        std::size_t i = 0;
+        for (; i + 6 <= list.size(); i += 6) {
+            const std::uint32_t a = list[i], c1 = list[i + 2], c = list[i + 5];
+            const bool quad = list[i + 1] == a + 1 && list[i + 3] == a && list[i + 4] == c1 && c1 == c + 1;
+            if (!quad) {
+                kept.insert(kept.end(), list.begin() + std::ptrdiff_t(i), list.begin() + std::ptrdiff_t(i + 6));
+                continue;
+            }
+            const assets::Vertex la = b.mesh.vertices[a], ra = b.mesh.vertices[a + 1];
+            const assets::Vertex lb = b.mesh.vertices[c], rb = b.mesh.vertices[c + 1];
+            const float va = la.uv.y, vb = lb.uv.y;
+            if (std::abs(vb - va) < 1e-6f) {
+                kept.insert(kept.end(), list.begin() + std::ptrdiff_t(i), list.begin() + std::ptrdiff_t(i + 6));
+                continue;
+            }
+            // The outline clipped to the quad's rows.
+            std::vector<glm::vec2> poly = clip_polygon(outline, 1, std::min(va, vb), true);
+            poly = clip_polygon(poly, 1, std::max(va, vb), false);
+            if (poly.size() < 3) continue;
+            const std::uint32_t first = static_cast<std::uint32_t>(b.mesh.vertices.size());
+            for (const glm::vec2& p : poly) {
+                const float s = (p.y - va) / (vb - va);
+                assets::Vertex v = la;
+                v.position = glm::mix(glm::mix(la.position, ra.position, p.x), glm::mix(lb.position, rb.position, p.x), s);
+                const glm::vec3 n = glm::mix(la.normal, lb.normal, s);
+                v.normal = glm::dot(n, n) > 0.0f ? glm::normalize(n) : la.normal;
+                v.uv = p;
+                b.mesh.vertices.push_back(v);
+            }
+            // The fan keeps the quad's facing: its first triangle (a, a+1, c+1) runs +u then +v.
+            const bool flip = (vb - va) < 0.0f;
+            const bool clockwise_uv = [&] {
+                float area = 0.0f;
+                for (std::size_t k = 0; k < poly.size(); ++k) {
+                    const glm::vec2 p = poly[k], q = poly[(k + 1) % poly.size()];
+                    area += p.x * q.y - q.x * p.y;
+                }
+                return area < 0.0f;
+            }();
+            for (std::uint32_t k = 1; k + 1 < poly.size(); ++k) {
+                std::uint32_t t[3] = {first, first + k, first + k + 1};
+                if (clockwise_uv != flip) std::swap(t[1], t[2]);
+                kept.insert(kept.end(), t, t + 3);
+            }
+        }
+        kept.insert(kept.end(), list.begin() + std::ptrdiff_t(i), list.end());
+        list = std::move(kept);
+    }
+    // The vertices no triangle uses any more out, the rest renumbered.
+    std::vector<std::uint32_t> remap(b.mesh.vertices.size(), std::numeric_limits<std::uint32_t>::max());
+    std::vector<assets::Vertex> used;
+    for (auto& level : b.idx)
+        for (auto& list : level)
+            for (std::uint32_t& i : list) {
+                if (remap[i] == std::numeric_limits<std::uint32_t>::max()) {
+                    remap[i] = static_cast<std::uint32_t>(used.size());
+                    used.push_back(b.mesh.vertices[i]);
+                }
+                i = remap[i];
+            }
+    b.mesh.vertices = std::move(used);
+}
+
+} // namespace
+
 GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) {
     GeneratedTree out;
     const bool pine = options.style == TreeStyle::Pine || (options.style == TreeStyle::Auto && shape.conifer);
@@ -1037,6 +1210,9 @@ GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) 
             out.leaf = draw_leaves(options.leaf_size, shape.leaf_colour, shape.leaf_palette, tex);
         }
     }
+
+    // The leaf cards cut to their texture's outline: the leaves fill only part of a card.
+    trim_cards(b, card_outline(out.leaf));
 
     // Bark: the photo scaled to the game bark's colour, else drawn.
     if (options.bark) {
