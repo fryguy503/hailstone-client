@@ -6,7 +6,9 @@
 // The file's frame is glTF's own (Y up, metres taken as EQ units, front faces counter-clockwise), turned to the zone's
 // Z-up frame on reading: glTF (x, y, z) is EQ (x, -z, y). A material's texture is named by its image's URI: the file
 // name stands for a texture as a game texture's name does, looked up in the texture pack (assets/texture_overrides.h);
-// images inside the file and buffers outside it are refused.
+// images inside the file and buffers outside it are refused. Levels of detail: a node's extras
+// {"hailstone_lod": [near, far]} draw its meshes only from `near` to `far` world units from the camera
+// (MeshPart::lod_near, lod_far); write_glb writes one node a band.
 
 #include <cstddef>
 #include <cstdint>

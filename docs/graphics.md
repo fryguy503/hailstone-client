@@ -1163,6 +1163,13 @@ zone loads (`Zone::draw_objects`).
 - **Light:** a placement's baked light is one colour per vertex of the game's mesh; the replacement takes their
   average, multiplied by its own vertex colours (a generated tree's shade inside its crown).
 - **Plants:** a replacement sways in the wind as the game's object would (`is_plant`): its cut-out parts flutter.
+- **Levels of detail:** a node's extras `{"hailstone_lod": [near, far]}` draw its meshes only from `near` to `far` world
+  units from the camera (`MeshPart::lod_near`, `lod_far`). The zone renderer keeps each band's draws apart and cuts
+  them into chunks of whole placements (the cell of the placement's position, not of each triangle), and a chunk is
+  drawn, in every pass (the scene, the depth pre-pass, the sun's cascades, the lights' shadow cubes), when the camera's
+  distance to its box's centre is in the band: a tree changes level at once, and each one shows one level. The shadow
+  passes take the camera's position of the frame before. A banded draw is not merged into the untextured shadow
+  casters, so its shadow changes level with it.
 
 ### Generated trees
 
