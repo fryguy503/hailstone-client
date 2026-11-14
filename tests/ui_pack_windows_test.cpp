@@ -231,6 +231,111 @@ end
     }
 }
 
+TEST_CASE("UI packs: the gamepad's first focus is the discipline list, and LB ends the active discipline") {
+    test::ScratchDir scratch("ui_pack_discipline_pad_test");
+    const auto dir = scratch.path();
+    fs::create_directories(dir / "game");
+    fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / "gamepad", dir / "gamepad",
+             fs::copy_options::recursive);
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    unsigned char* px = nullptr;
+    int w = 0, h = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    {
+        Session s(dir, "gamepad");
+        auto* L = s.lua.state();
+        auto run = [&](const char* code) {
+            const int rc = luaL_dostring(L, code);
+            INFO((rc == LUA_OK ? "" : lua_tostring(L, -1)));
+            REQUIRE(rc == LUA_OK);
+            const std::string result = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_settop(L, 0);
+            return result;
+        };
+        // A pad in menu mode; padPress is the button that went down this frame.
+        run(R"lua(
+padPress, windowShown, discActive, endClicks, uses = nil, false, true, 0, 0
+eq.gamepad = {
+  connected = function() return true end,
+  type = function() return 'xbox' end,
+  mode = function() return 'menu' end,
+  set_mode = function() return 'menu' end,
+  pressed = function(b) return b == padPress end,
+  down = function(b) return b == padPress end,
+  released = function() return false end,
+  axis = function() return 0 end,
+  glyph = function(b) return string.upper(b) end,
+  takes_b = function() end,
+  request_focus = function(window) ui.SetWindowFocus(window) end,
+}
+local shown, replace, child, text, art, click = eq.WindowShown, eq.ReplaceWindow, eq.ChildShown, eq.WindowText,
+  eq.ChildArt, eq.ClickChild
+eq.WindowShown = function(win) if win == "CombatAbilityWnd" then return windowShown end return shown(win) end
+eq.ReplaceWindow = function(win)
+  if win == "CombatAbilityWnd" then return true, 40, 40, 360, 190 end
+  return replace(win)
+end
+eq.ChildShown = function(win, id)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return discActive end
+  return child(win, id)
+end
+eq.WindowText = function(win, id)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectLabel" then return "Test Discipline" end
+  return text(win, id)
+end
+eq.ChildArt = function(win, id, kind)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return nil end
+  return art(win, id, kind)
+end
+eq.Gauge = function() return 0.5, "30s" end
+eq.Disciplines = function()
+  return { { index = 0, spell = 101, name = "Guard", icon = 0, level = 50, endurance = 0, reuse = 60,
+    remaining = 0, timer = 1 } }
+end
+eq.PressButtonFrom = function() uses = uses + 1 end
+eq.ClickChild = function(win, id, button)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then
+    endClicks, discActive = endClicks + 1, false
+    return true
+  end
+  return click(win, id, button)
+end
+local button = ui.InvisibleButton
+ui.InvisibleButton = function(id, ...)
+  local hit = button(id, ...)
+  if id == "##cawEffect" then effectFocused = ui.IsItemFocused() end
+  if id == "##row" then rowFocused = ui.IsItemFocused() end
+  return hit
+end
+)lua");
+        s.frames(240); // the pack takes the pad's focus for a window only from 3 seconds after zoning in
+        CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        run("windowShown = true");
+        s.frames(30); // the window appears with the focus; past its settle time
+        CHECK(run("return tostring(rowFocused == true and effectFocused == false)") == "true");
+        auto& io = ImGui::GetIO();
+        // A press of A uses the focused discipline; the running one is not ended. (ImGui activates only with its
+        // navigation cursor shown, as it is once the pad has moved it.)
+        ImGui::SetNavCursorVisible(true);
+        io.AddKeyEvent(ImGuiKey_GamepadFaceDown, true);
+        s.frames(1);
+        io.AddKeyEvent(ImGuiKey_GamepadFaceDown, false);
+        s.frames(2);
+        CHECK(run("return tostring(endClicks == 0 and uses == 1)") == "true");
+        // LB ends it.
+        run("padPress = 'lb'");
+        s.frames(1);
+        run("padPress = nil");
+        s.frames(2);
+        CHECK(run("return tostring(endClicks)") == "1");
+        CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+    }
+    ImGui::DestroyContext(ctx);
+}
+
 TEST_CASE("UI packs: linked discipline cooldowns show red fills and matching seconds until ready") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);

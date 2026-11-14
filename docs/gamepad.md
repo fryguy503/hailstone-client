@@ -224,7 +224,8 @@ of at least 20 px at 1080p, targets of at least 48 px, and every action reachabl
   smaller keyboards, lib/keyboard.lua, have the same keys), confirmation dialogs (A / B), and Options > Gamepad (the bindings, dead zone, camera speed and
   inversion).
 - **Abilities, skills and AAs** (abilities.lua, skills.lua, aa.lua): the active discipline above the combat ability
-  list shows its remaining duration to the second and a draining bar; click its icon or select it with A to end it.
+  list shows its remaining duration to the second and a draining bar; click its icon or press LB to end it (the icon
+  is left out of the pad's navigation, so the first focus is the list and A never ends the discipline).
   Cooling entries have a faded red reuse fill and a seconds countdown, including every entry sharing the same timer.
   The Actions window's four pages (LB / RB; Y
   chooses an ability button's skill), the combat abilities (disciplines: icon, level, reuse time left and the

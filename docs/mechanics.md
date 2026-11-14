@@ -570,13 +570,15 @@ lookup 1500, follow AI 3000):
   ability's reuse can be less than the shared wait; as a presentation fix, its overlay stays full until the wait
   fits its own reuse, instead of a future inferred start making it look ready. Both UIs show a faded red reuse
   fill and seconds countdown on combat ability entries. The regular use, assignment and drag handlers still run.
-- The active discipline's duration is separate from its reuse timer: gauge 26 uses the discipline buff slot's
-  remaining ticks over `SpellDuration(spell, local player level, false)` (RoF2's helper at 0x761600), capped full.
-  Both UIs interpolate the remaining duration between ticks and show seconds above the bar; these are presentation
-  enhancements over RoF2's tick-based gauge. Suspended timers stay still and permanent effects show a full bar with
-  "Permanent". Clicking the active icon (or selecting it with A in the gamepad UI) follows `/stopdisc`, requesting
-  removal of the discipline slot and waiting for the server's fade; ordinary buff slots and ability reuse timers
-  are unchanged.
+- The active discipline's duration is separate from its reuse timer: gauge 26's helper @0x761600 gives, while a
+  discipline is active (PcZoneClient_IsDisciplineActive @0x5802c0, its effect from @0x5802a0), the effect's
+  remaining ticks * 1000 / `CharacterZoneClient::SpellDuration` @0x434420 (spell, the local player's level, false),
+  0 when that duration is not positive; the gauge function then caps the value at 1000. RoF2 gives this gauge no
+  text: the seconds shown above the bar, the interpolation between ticks, "Permanent" with a full bar for a
+  permanent effect, and a still bar while buff timers are suspended are Hailstone additions. Clicking the active
+  icon (LB in the gamepad UI, whose navigation leaves the icon out so that A on opening the window cannot end the
+  discipline) follows `/stopdisc`, requesting removal of the discipline slot and waiting for the server's fade;
+  ordinary buff slots and ability reuse timers are unchanged.
 - The rank swap (CastSpell and doCombatAbility): a player who is not a GM (PcClient's CharacterBase vtable +0x90,
   @0x580300: the spawn's vtable +0xdc) casting a spell of a SpellGroup from a gem takes, when the membership's
   spell tier limit (vtable +0 = PcClient::GetGameFeature_ @0x5784e0, feature 3) is not -1 and below the spell's

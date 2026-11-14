@@ -225,21 +225,33 @@ ui.window("Combat Abilities", function()
   if not W.shown(CW) then return end
   local discs = eq.Disciplines()
   local focusedDisc
+  -- The active discipline's icon stays out of the pad's navigation: as the window's first item it would take the
+  -- first focus, and A on opening the window would end the discipline. LB ends it instead (a click still does).
+  local discActive = eq.ChildShown(CW, "CAW_CombatEffectButton") == true
+  local hints = discActive
+      and { { "a", "Use" }, { "x", "Assign to slot" }, { "y", "Actions" }, { "lb", "End discipline" }, { "b", "Close" } }
+      or { { "a", "Use" }, { "x", "Assign to slot" }, { "y", "Actions" }, { "b", "Close" } }
   if W.begin("Combat Abilities", { w = 1600, h = 900, title = "Combat Abilities", subtitle = #discs .. " disciplines",
-        hints = { { "a", "Use" }, { "x", "Assign to slot" }, { "y", "Actions" }, { "b", "Close" } } }) then
+        hints = hints }) then
     local discSettled = AS.settled("Combat Abilities")
     if W.pressed("y") then -- the Actions window's combat page (the COMBAT key)
       eq.SetTabPage(AW, "ACTW_ActionsSubwindows", 2)
       eq.ShowWindow(AW, true)
     end
     local x0, y0, x1, y1 = W.area()
-    if eq.ChildShown(CW, "CAW_CombatEffectButton") == true then
+    if discActive then
       local icon = T.px(64)
       ui.SetCursorScreenPos(x0, y0)
-      if T.button("##cawEffect", "", icon, icon, nil, pad) and discSettled then
+      local clicked = ui.InvisibleButton("##cawEffect", icon, icon) -- no EnableNav: the mouse only
+      local hovered = ui.IsItemHovered()
+      local r = T.px(12)
+      T.rect(x0, y0, x0 + icon, y0 + icon, C.raised, 1, r)
+      if hovered then T.rect(x0, y0, x0 + icon, y0 + icon, C.accent, ui.IsItemActive() and 0.30 or 0.18, r) end
+      T.outline(x0, y0, x0 + icon, y0 + icon, C.edge, 1, r)
+      if (clicked or W.pressed("lb")) and discSettled then
         eq.ClickChild(CW, "CAW_CombatEffectButton", "left")
       end
-      if ui.IsItemHovered() then ui.SetTooltip("End this discipline") end
+      if hovered then ui.SetTooltip("End this discipline") end
       local tex, u0, v0, u1, v1 = eq.ChildArt(CW, "CAW_CombatEffectButton", "decal")
       T.icon(tex, u0, v0, u1, v1, x0, y0, x0 + icon, y0 + icon)
       local tx = x0 + icon + T.px(16)
