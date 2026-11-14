@@ -1049,7 +1049,7 @@ GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) 
             for (const auto& p : shape.foliage)
                 if (p.z > z - fh * 0.05f && glm::dot(glm::vec2(p) - glm::vec2(p0), glm::vec2(flat_dir)) > 0.0f)
                     reach.push_back(glm::distance(p, p0));
-            const float len = std::max(percentile(reach, 0.95f), fh * 0.15f) * rng.range(0.85f, 1.0f);
+            const float len = std::max(percentile(reach, 0.9f), fh * 0.15f) * rng.range(0.85f, 1.0f);
             const float rise = rng.range(0.6f, 1.0f) - 0.4f * t; // tan of the climb: the low limbs spread, the high ones climb
             const glm::vec3 dir = glm::normalize(flat_dir + up * rise);
             const glm::vec3 p1 = p0 + dir * len * 0.55f, p2 = p0 + glm::normalize(dir + up * 0.25f) * len;
@@ -1101,7 +1101,7 @@ GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) 
             const glm::vec3 dir(std::cos(az), std::sin(az), 0.0f);
             const float lift = j % 3 == 0 ? rng.range(0.6f, 1.0f) : j % 3 == 1 ? rng.range(0.25f, 0.55f)
                                                                   : rng.range(-0.1f, 0.2f); // how far it rises first
-            const float l = len * rng.range(0.9f, 1.15f);
+            const float l = len * rng.range(0.85f, 1.0f);
             std::vector<glm::vec3> c, side, nrm;
             const glm::vec3 flat = glm::normalize(glm::cross(up, dir));
             for (int s = 0; s <= 4; ++s) {
