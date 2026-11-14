@@ -430,7 +430,9 @@ TEST_CASE("zone flora: East Commonlands' ground (game files)") {
     REQUIRE(zone.flora.grower);
     std::vector<FloraInstance> plants;
     for (std::size_t t = 0; t < zone.flora.grower->tiles().size(); ++t) zone.flora.grower->grow(t, plants);
-    CHECK(plants.size() > 300000);
+    // The accent plants (ferns, flowers, bushes) are a quarter as dense since the lawn took over the ground
+    // (density 0.95, was 3.8): about 190,000 here.
+    CHECK(plants.size() > 150000);
     std::size_t wet = 0;
     for (const auto& p : plants)
         if (zone.regions.lookup(p.position + glm::vec3(0, 0, 1)).is_water()) ++wet;
