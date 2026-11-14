@@ -40,6 +40,11 @@ void put_coin_away(net::GameConnection& c) {
 }
 
 void open_master(Rig& rig, bool guild) {
+    auto master = *rig.conn.world().player();
+    master.id = 77;
+    master.is_npc = true;
+    master.class_id = guild ? 64 : 63;
+    rig.conn.world_for_test().spawns[77] = master;
     auto packet = net::encode(net::StartTribute{rig.conn.world().player_id, 77, 1});
     if (guild)
         packet.opcode = net::to_wire(net::Op::OpenGuildTributeMaster);
@@ -311,12 +316,47 @@ TEST_CASE("zone and disconnect discard old tribute reply identities") {
             // Set up the next session without a live reconnect: the prior request
             // cannot keep its donation fence.
             net::GameConnectionTestAccess::state(c) = net::ConnectionState::InZone;
+            auto& world = c.world_for_test();
+            if (!world.player()) {
+                game::Spawn player;
+                player.id = 1;
+                world.player_id = player.id;
+                world.spawns[player.id] = player;
+            }
+            auto master = *world.player();
+            master.id = 77;
+            master.is_npc = true;
+            world.spawns[master.id] = master;
             auto open = net::encode(net::StartTribute{0, 77, 1});
             if (guild)
                 open.opcode = net::to_wire(net::Op::OpenGuildTributeMaster);
             c.receive_zone_packet_for_test(open);
             CHECK(donate(c, guild));
         }
+    }
+}
+
+TEST_CASE("tribute: a donation reply after walking away still reconciles the donated item") {
+    for (bool guild : {false, true}) {
+        ScratchDir files("tribute_reply_after_distance_close");
+        Rig rig(tribute_config(), tribute_options(files));
+        REQUIRE(rig.to_zone());
+        auto& c = rig.conn;
+        put_coin_away(c);
+        open_master(rig, guild);
+        take_rations(c);
+        REQUIRE(donate(c, guild));
+        REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, item_opcode(guild)) == 1; }));
+        const auto before = answers(c, guild);
+        c.set_player_motion(c.world().player()->position + glm::vec3{0, 0, 21}, 0, {}, true);
+        // The donation does not raise IsItemPending (Send_OP_TributeItem @0x484190), so the window's next 500 ms
+        // check closes it.
+        net::GameConnectionTestAccess::npc_checks(c).tribute = 0;
+        c.update();
+        CHECK((guild ? c.guild_tribute().master_id : c.tribute().master_id) == 0);
+        c.receive_zone_packet_for_test(reply(guild));
+        CHECK(answers(c, guild) == before + 1);
+        CHECK_FALSE(c.inventory().cursor());
     }
 }
 

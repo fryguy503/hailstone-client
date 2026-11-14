@@ -108,6 +108,7 @@ bool GameConnection::open_guild_bank(std::uint32_t npc) {
         return false;
     }
     guild_bank_.banker = npc;
+    guild_bank_.serial = ++npc_session_serial_;
     guild_bank_.checked_ms = now_ms();
     if (guild_bank_.deposit.empty()) {
         guild_bank_.deposit.resize(kGuildBankDepositSlots);

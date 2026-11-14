@@ -908,6 +908,15 @@ public:
     }
     // Closed by the server or by zoning: an unsent edit is dropped, so the window reopens on the server's state.
     void frame(EqHost& host) override {
+        const auto serial = !shown(host) ? 0 : guild(host) ? host.conn->guild_tribute().master_serial
+                                                                       : host.conn->tribute().master_serial;
+        if (serial != master_serial_) {
+            master_serial_ = serial;
+            editing_ = false;
+            available_sel_ = active_sel_ = -1;
+            described_ = net::kTributeNone;
+            platinum_ = 0;
+        }
         if (!shown(host) || !can_edit(host)) editing_ = false;
         if (host.conn && guild(host) != was_guild_) {
             was_guild_ = guild(host);
@@ -1046,7 +1055,14 @@ public:
             game::QuantityOpen q;
             q.max = static_cast<std::int32_t>(std::min<std::uint32_t>(c.coins().platinum, 1000000));
             q.start = static_cast<std::int32_t>(std::min<std::uint32_t>(platinum_, c.coins().platinum));
-            open_quantity(host, q, [this](std::int32_t v) { platinum_ = static_cast<std::uint32_t>(std::max(0, v)); });
+            const auto* conn = host.conn;
+            const auto serial = g ? c.guild_tribute().master_serial : c.tribute().master_serial;
+            open_quantity(host, q, [this](std::int32_t v) { platinum_ = static_cast<std::uint32_t>(std::max(0, v)); },
+                          [&host, conn, g, serial] {
+                              if (host.conn != conn || !conn) return false;
+                              return g ? conn->guild_tribute().master_id && conn->guild_tribute().master_serial == serial
+                                       : conn->tribute().master_id && conn->tribute().master_serial == serial;
+                          });
         } else if (id == "TMW_SelectedItem") {
         } else {
             return false;
@@ -1117,6 +1133,7 @@ private:
     int available_sel_ = -1, active_sel_ = -1;
     std::uint32_t described_ = net::kTributeNone;
     std::uint32_t platinum_ = 0;
+    std::uint64_t master_serial_ = 0;
 };
 
 // The tribute benefit window (TOGGLE_TRIBUTEBENEFITWIN): the Personal page's chosen benefits (ActiveBenefitList), a

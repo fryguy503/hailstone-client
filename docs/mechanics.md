@@ -203,8 +203,30 @@ AGI 0, plain item weights). Each value, with what produces it:
 | weight factor | `calculate_weight`: current weight = carried weight (`item_weight`: each item's own weight, charm-scaled, without its augments or its stack count; the bag reduction, SPA 221), capacity = STR with items and buffs, current / max HP with the spawn type, and `slowdown_any_level` (the level threshold 0 instead of 3); bazaar and barter zones from the zone table |
 | fall damage | current weight, adjusted skill 39, the profile's Safe Fall skill, `TotalEffect(228)`, the heroic AGI bonus; the no-fall-damage flag is the zone's (OP_NewZone +894) |
 | air supply and region damage | max air supply with STA with buffs and `TotalEffect(246)`; water breathing `TotalEffect(14)`; the fire / cold (disease in zone 200) resists from process_all_stats |
-| levitation | the levitation state update on `cached_buff(57, 0 / 1)` |
+| fly mode | `local_fly_mode` (below): the spawn record and OP_SpawnAppearance 19 set it, a levitate buff landing or fading sets it, and `cached_buff(57, 0 / 1)` recomputes it at each effect cache rebuild |
 | sneaking | the Sneak flag, set by the server's OP_SpawnAppearance type 15 and cleared by OP_CancelSneakHide or a cast's make-me-visible; the control processing then uses `sneak_speed(class, level)` x 0.46 forward and halves the walk back speed (`controls.cpp`) |
+
+The local player's fly mode (the physics object's +0xc) is state, as in the original, with several writers
+(`mech::local_fly_mode`, applied in this order within a frame):
+
+- a levitate buff fading with no levitation left (`CharacterZoneClient_RemoveAffect` @0x439700, SPA 57 case,
+  `PlayerZoneClient::Levitating` @0x5a1140) sets 0, a flying mode 1 included;
+- a levitate buff landing (`EQ_Character::HitBySpell`'s SPA 57, FUN_00432b20 @0x432b20) sets 2, or 5 for a
+  non-zero Base2, over mode 1 too; 0 in a no-levitation zone;
+- the server sets any mode 0 to 5 outright, with no rule applied: the spawn record at zone-in (UnSerializeSpawn) and
+  OP_SpawnAppearance 19 (`Handle_OP_SpawnAppearance` @0x4b4b60, `PlayerPhysics_SetFlyMode` @0x8d0910; a value above 5
+  is ignored, the original throws);
+- the effect cache rebuild (`ReCacheSpellEffects` @0x438910, ending in `UpdateLevitationState` @0x433480) gives 2 or
+  5 from the levitate buffs, else 0; it keeps mode 1, a rider takes its mount's mode, and a no-levitation zone forces 0.
+
+The rebuild runs only when the cache is cleared, so a server-set mode lasts until the buffs next change: after GM
+`#set flymode 3` the next buff landing or fading puts the player back on the ground (or levitating), and
+`#set flymode 0` while levitating lasts until then too. `#set flymode 1` survives buff changes, except a levitate buff
+landing or fading, and in a no-levitation zone the next rebuild grounds it. Hailstone sees the buff slots rather than
+the packets that clear the cache: any slot whose spell changes is a rebuild, a slot that loses a levitate spell is a
+fade and one that gains one is a landing (docs/unknowns.md). Zoning in applies the spawn record and then rebuilds.
+Tests: `tests/movement_test.cpp` ("Local fly mode", "Buff levitation change") and `tests/fly_mode_test.cpp` (through
+the connection's packets).
 
 Tests: `tests/movement_inputs_test.cpp` builds synthetic characters (buffs, worn items, augments, bags, heroic gear)
 and checks each value against the hand-worked result; the ports themselves keep their vectors
@@ -765,6 +787,56 @@ find affect slot 1600). Each record is replayed call for call against the record
   sitting player (110), so a feigned one stays down until /sit or /stand (CEverQuest::Sit: anything but standing or
   ducking stands up). The client hands ProcessControls the feigned state as 115 (`CharacterInput::lying`).
 
+## Leaving an NPC interaction
+
+Each service window of the original checks its NPC in its OnProcessFrame with PlayerClient_IsWithinInteractRange
+(npc, 0, 20.0) @0x5a06f0: CDisplay::PlayerDistance with z scale 1, so a 3D distance, of at most 20 units (exactly
+20 stays open); a missing NPC or local player fails it. Hailstone runs these checks on connection updates, so they
+work the same in both UI packs:
+
+| Window | Original | Timer | Exception |
+|---|---|---|---|
+| Merchant | CMerchantWnd::OnProcessFrame @0x6f2400 | 500 ms | stays while a buy or sell awaits its answer |
+| Bank | CBankWnd::OnProcessFrame @0x627850 | 500 ms | |
+| Barter buyer | CBarterMerchantWnd::OnProcessFrame @0x62a500 | every frame | |
+| Alternate currency merchant | CNewPointMerchantWnd::OnProcessFrame @0x6fba10 | 500 ms | |
+| Adventure merchant | CPointMerchantWnd::OnProcessFrame @0x719e90 | 500 ms | |
+| Tribute master, personal and guild | CTributeMasterWnd::OnProcessFrame @0x787ae0 | 500 ms | out of reach it stays while an item request is pending (EverQuestinfo::IsItemPending > 0); a missing master closes it regardless |
+| Trainer | CTrainWnd::OnProcessFrame @0x7812a0 | 500 ms | |
+| Adventure recruiter | AdventureMgr_Process @0x41fa80 | more than 500 ms since the state was set or last checked | only in states 1 and 2: the recruiter's words (OP_AdventureInfo) or an offer (OP_AdventureDetails) up; on an adventure the window stays |
+| Mercenary liaison | the window's observer 0x6eb560 | every update (see docs/unknowns.md) | only with a liaison id set |
+| NPC hand-in | CTradeWnd::OnProcessFrame @0x780b50 | 500 ms | the reach is the NPC's avatar height plus 20 |
+| World tradeskill station | CContainerMgr::Process @0x65d740 (0x4dc160) | more than 500 ms since the last check | the ground item's 3D distance, at most 20; a missing item closes it too |
+
+Closing goes through each window's normal close: the merchant's OP_ShopEnd, the buyer's end of inspection, the
+trainer's OP_GMEndTraining, the trade's OP_CancelTrade (the server returns what was offered), the station's empty
+OP_ClickObjectAction (the server returns what is left in it). Hiding the adventure recruiter's window declines an
+offer that is up (CAdventureRequestWnd::AboutToHide @0x618420, 0x41fe10: OP_LDoNButton 0). Closing a tribute master
+leaves active benefits, favour and outstanding donation replies alone. The trainer and the hand-in also close when
+the NPC dies (Handle_OP_Death @0x532b50 closes the training window and cancels a trade with the dying spawn).
+
+A late open reply cannot show a window out of reach: the tribute master's (CTributeMasterWnd::AboutToShow @0x7878b0)
+and the trainer's (Handle_OP_GMTraining @0x4b49c0) apply the same 20-unit check to the answer. A training request or
+a station request still waiting for its answer is not checked; its answer is. Hailstone releases a station whose
+open reply comes out of reach at once, where the original opens it and releases it at its next 500 ms check. A busy
+reply (someone else is using the station) ends the request, so nothing is released for it later.
+
+When the bank window hides, for any reason, CBankWnd::OnShow @0x627760 runs CContainerMgr::CloseAllContainers
+@0x65d4e0: every container window closes, carried bags included, the world container is released, the tradeskill
+window hides and both "all bags" keys go back to opening (0x697e40). The quantity window closes with it too.
+
+Quantity questions, point-purchase confirmations and guild-bank text entry end with their owning session.
+Reopening the same NPC creates a new session, so an old answer cannot act on it. World-slot quantity questions and
+world-mold confirmations close with the station, and a world recipe batch stops. Carried tradeskill bags and their
+questions stay when only the station closes.
+
+Hailstone's model of IsItemPending (GameConnection::transact_state) counts the requests it tracks (item clicks,
+casts, memorizing, augments, the guild bank's). A tribute donation is not one of them in the original either: its
+senders (Send_OP_TributeItem @0x484190, Send_OP_GuildTributeDonateItem @0x484870) do not raise it.
+
+Not done yet: CTradeWnd checks player trades the same way (and skips the check while the merchant window shows its
+page handler 2); Hailstone checks hand-ins only.
+
 ## The merchant's "Show only items I can use"
 
 The merchant window's purchase page has a check box, MW_UsableButton, ticked when the window is made (CMerchantWnd's
@@ -1200,6 +1272,41 @@ Vectors in `tests/chat_trade_vectors_test.cpp` (set chat input mode 1500, toggle
 - Trade: [Options] Trade (2 everyone, 1 group, 0 no one), is-ok-to-transact in its order, the refusal OP_TradeBusy
   and 1447; CastSpell asks the same check.
 - Group invites: 148 bytes out; in, declines 1 / 4 / 5 or the pending invitation with the u32 at +0x94.
+
+## Group roles
+
+The group leader assigns Main Tank (1), Main Assist (2) and Puller (3) by right-clicking a member's name in the
+Group window, or their own name in the Player window, in either UI pack. Small role icons beside the names show
+the assignments, with the full role names on hover. A member may hold several roles, while each role belongs to
+at most one member; mercenaries may only hold Main Tank.
+On stock EQEmu, assigning a role requires the member to be in the leader's zone. An existing role can also be
+cleared while its holder is in another zone; the menus explain this restriction.
+
+Deliberate differences from RoF2 (Hailstone's, marked in `app/lua_eq_hud.cpp` and `GameConnection::send_group_role`):
+
+- The original's roles are a "Roles" submenu of the Group and Player windows' own context menu (added by
+  CGroupWnd::sub_0067ac60 @0x67ac60 and CPlayerWnd::sub_00717f60 @0x717f60). Hailstone opens the role menu on its
+  own from a right click on the name (Y on a row in the gamepad pack), and leaves the window menu to the rest of the
+  frame; the menu has no "Window" row.
+- The original offers Roles only to the group leader (the Group window's test: FUN_00443670 in 0x67ac60): other
+  members get no Roles row at all. Hailstone shows everyone in a group the menu, with the role rows greyed for all
+  but the leader.
+- The original's submenu starts with "Leader" (item 100, /makeleader; built in CGroupWnd's constructor @0x67bc00).
+  Hailstone's menu is roles only; /makeleader stays.
+- For a mercenary the original offers every row and refuses Leader, Main Assist and Puller on the click with eqstr
+  7607 "A NPC cannot be that role." (CGroupWnd::WndNotification @0x67c620). Hailstone greys those rows instead;
+  `send_group_role` still refuses with 7607 for any other caller.
+- The original's menu sends Send_OP_GroupRoles without checking leadership or CanUseCommandNow, relying on Roles
+  being offered to the leader only. Hailstone's `send_group_role` checks both (0x1db1 for a non-leader, then
+  CanUseCommandNow's refusals), as Cmd_grouproles @0x4f8360 does for `/grouproles set|unset`, so a menu left open
+  after leadership changed cannot send.
+
+The UI and `/grouproles set|unset <member> <role number>` share `GameConnection::send_group_role`, which checks
+the current group, leader, member and role before sending the existing `OP_GroupRoles` packet. Sending a request
+does not change local roles: `OP_GroupRoles` replies and the `OP_GroupUpdateB` roster set the flags. The UI's
+icons and menu checks, and scripts' `Group.MainTank`, `Group.MainAssist`, `Group.Puller` and member role flags, read
+that same state. Assigning a role clears its previous holder when the server confirms it. A group disband or
+zone transition clears the old state, and the server's roster and role updates restore it.
 
 ## Hot buttons, socials and tracking
 

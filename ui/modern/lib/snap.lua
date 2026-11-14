@@ -6,8 +6,9 @@
 --   local snap = dofile("lib/snap.lua")
 --   local g = snap.Grid()                     -- the grid in screen pixels, or nil (off, or Shift held)
 --   x = snap.Axis(x, w, W, g)                 -- one axis: position, the window's size, the screen's
+--   w = snap.Extent(x, w, dx, minW, s, W, g) -- a resize: the far edge from x moved dx screen pixels, the screen's
 --
--- Axis is pure (tests/lua_scripts_test.cpp runs it without the ui table).
+-- Axis and Extent are pure (tests/lua_scripts_test.cpp runs them without the ui table).
 local snap = {}
 
 snap.DEFAULT_SIZE, snap.MIN_SIZE, snap.MAX_SIZE = 10, 4, 64
@@ -24,6 +25,20 @@ function snap.Axis(raw, size, screen, grid)
     if d < bestD then best, bestD = c, d end
   end
   return math.floor(best + 0.5)
+end
+
+-- The resized size on one axis (design pixels) when a window's far edge is dragged: the window starts at origin
+-- (screen pixels) and is size long at scale, and the drag has moved the edge delta screen pixels. With a grid, the
+-- far edge goes to the grid line nearest where the mouse put it, or flush with the screen's far edge when that is
+-- nearer (the grid line on a tie), as Axis places a moved window; never below minSize. The origin need not be on a
+-- grid line.
+function snap.Extent(origin, size, delta, minSize, scale, screen, grid)
+  local extent = math.max(minSize, size + delta / scale)
+  if not grid or grid <= 0 then return extent end
+  local raw = origin + extent * scale
+  local edge = nearest(raw, grid)
+  if screen and math.abs(screen - raw) < math.abs(edge - raw) then edge = screen end
+  return math.max(minSize, (edge - origin) / scale)
 end
 
 function snap.On() return ui.GetSetting("hud.snap") == "1" end

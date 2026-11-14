@@ -195,6 +195,13 @@ constexpr std::uint32_t kMolten = 512;      // modern: RegionLava drawn as lava 
 constexpr std::uint32_t kEnergy = 1024;     // modern: RegionLavaH drawn as a glowing field
 constexpr std::uint32_t kEnvMap = 2048;     // modern: slot 2 is the water's own environment (an octahedral map)
 constexpr std::uint32_t kLodFading = 4096;  // a level of detail: extra3 its band (coverage.glsl lod_fade_samples)
+// A neighbour's part of the land (Draw::land_fade): its own material shows where the blend's noise is under the
+// vertices' weight (color2's alpha), the current zone's where it is not (coverage.glsl land_blend_discard).
+constexpr std::uint32_t kLandOwn = 8192;
+constexpr std::uint32_t kLandZone = 16384;
+// ZoneRenderer::set_debug_tint: a neighbour's own geometry, and its own ground in its part of the land.
+constexpr std::uint32_t kTintNeighbour = 32768;
+constexpr std::uint32_t kTintLand = 65536;
 // The depth pre-pass's flags: none of the shading's (bind_draw adds kLodFading, which decides discards, to both).
 constexpr std::uint32_t kDepthOnlyFlags = 0;
 constexpr VkColorComponentFlags kAllChannels =
@@ -262,10 +269,13 @@ struct MaterialKey {
     bool flame = false;      // a placed object's flame (assets::flame_material_hue)
     LodBand lod; // assets::MeshPart's level-of-detail band, its place among the mesh's
     std::uint32_t instanced = 0; // an instanced model's number + 1 (ZoneRenderer::Draw::instanced)
+    bool distant = false;        // the land round the zone (render/horizon.h)
+    std::uint8_t land_fade = 0;  // ZoneRenderer::Draw::land_fade
     bool operator<(const MaterialKey& o) const {
         return std::tie(blend, eqg, two_sided, front_ccw, frames, delay, multipass, effect, liquid, flame, lod,
-                        instanced) < std::tie(o.blend, o.eqg, o.two_sided, o.front_ccw, o.frames, o.delay,
-                                              o.multipass, o.effect, o.liquid, o.flame, o.lod, o.instanced);
+                        instanced, distant, land_fade) < std::tie(o.blend, o.eqg, o.two_sided, o.front_ccw, o.frames,
+                                                                  o.delay, o.multipass, o.effect, o.liquid, o.flame,
+                                                                  o.lod, o.instanced, o.distant, o.land_fade);
     }
 };
 
@@ -312,6 +322,10 @@ struct ZoneRenderer::Prepared {
     std::vector<std::byte> lights, grid_cells, grid_indices; // the light grid's three buffers
     bool behind = false;                                      // ZoneRenderOptions::behind
     HorizonLand horizon;                                      // the land round the zone (not for a neighbour)
+    std::shared_ptr<const HorizonBuild> horizon_build;        // ZoneRenderer::horizon_build_
+    std::vector<std::uint32_t> distant_indices;               // ZoneRenderer::distant_indices_
+    std::vector<std::int64_t> distant_squares;                // ZoneRenderer::distant_squares_
+    std::vector<std::int64_t> footprint;                      // a neighbour's (ZoneRenderer::footprint_)
 };
 
 void ZoneRenderer::PreparedDeleter::operator()(Prepared* p) const { delete p; }
@@ -319,6 +333,15 @@ void ZoneRenderer::PreparedDeleter::operator()(Prepared* p) const { delete p; }
 ZoneRenderer::PreparedCounts ZoneRenderer::prepared_counts(const Prepared& p) {
     return {p.vertices.size(), p.indices.size(), p.instances.empty() ? 0 : p.instances.size() - 1, p.triangles,
             p.draw_chunks};
+}
+
+ZoneRenderer::PreparedLand ZoneRenderer::prepared_land(const Prepared& p) {
+    PreparedLand out;
+    out.build = p.horizon_build;
+    out.footprint = p.footprint.size();
+    for (const Draw& d : p.draws)
+        if (d.distant && d.land_fade < out.triangles.size()) out.triangles[d.land_fade] += d.index_count / 3;
+    return out;
 }
 
 std::size_t ZoneRenderer::prepared_bytes(const Prepared& p) {
@@ -340,7 +363,7 @@ void ZoneRenderer::upload(Prepared& p) {
     constexpr std::size_t kStagingBudget = 32u * 1024 * 1024;
     for (auto& i : p.images) {
         for (const auto& level : i.image.mips) texture_bytes += level.size();
-        textures_.push_back(upload.texture(i.image, i.use));
+        textures_.push_back(upload.immutable_texture(i.image, i.use));
         i.image = {}; // freed as it goes
         if (upload.staging_bytes() >= kStagingBudget) {
             upload.submit();
@@ -348,6 +371,13 @@ void ZoneRenderer::upload(Prepared& p) {
         }
     }
     mark("textures staged", p.started);
+    if (vk_.gpu_shared_cache()) {
+        const auto shared = std::count_if(textures_.begin(), textures_.end(), [](const Texture& texture) {
+            return static_cast<bool>(texture.shared);
+        });
+        log::info("GPU immutable zone textures: total={} shared={} private={}", textures_.size(), shared,
+                  textures_.size() - static_cast<std::size_t>(shared));
+    }
     light_grid_buffers_[0] = upload.buffer(p.lights, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     light_grid_buffers_[1] = upload.buffer(p.grid_cells, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     light_grid_buffers_[2] = upload.buffer(p.grid_indices, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -359,6 +389,22 @@ void ZoneRenderer::upload(Prepared& p) {
     instance_buffer_ = upload.buffer(std::as_bytes(std::span(p.instances)), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     upload.submit();
     mark("submitted", p.started);
+    if (!distant_indices_.empty())
+        for (std::size_t i = 0; i < distant_buffers_.size(); ++i) {
+            VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            bi.size = distant_indices_.size() * sizeof(std::uint32_t);
+            bi.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+            VmaAllocationCreateInfo ai{};
+            ai.usage = VMA_MEMORY_USAGE_AUTO;
+            ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            VmaAllocationInfo out{};
+            vk_check(vmaCreateBuffer(vk_.allocator(), &bi, &ai, &distant_buffers_[i].buffer,
+                                     &distant_buffers_[i].allocation, &out),
+                     "create the land's index buffer");
+            distant_buffers_[i].size = bi.size;
+            distant_mapped_[i] = out.pMappedData;
+            distant_dirty_ |= 1u << i;
+        }
     log::info("zone renderer prepared: {} textures ({} MB), {} vertices ({} MB), {} indices ({} MB), {} instances",
               textures_.size(), texture_bytes / (1024 * 1024), p.vertices.size(),
               p.vertices.size() * sizeof(GpuVertex) / (1024 * 1024), p.indices.size(),
@@ -384,18 +430,31 @@ ZoneRenderer::ZoneRenderer(VkContext& vk, PreparedPtr prepared, const std::files
     id_ = ++made;
     behind_ = prepared->behind;
     horizon_ = prepared->horizon;
+    horizon_build_ = std::move(prepared->horizon_build);
+    footprint_ = std::move(prepared->footprint);
+    distant_indices_ = std::move(prepared->distant_indices);
+    distant_squares_ = std::move(prepared->distant_squares);
+    distant_shown_ = distant_indices_;
     // A neighbour zone (behind_) keeps its single pass: its ties go by the draw order (GREATER, first drawn wins),
     // which an equal test over the pre-pass's written depth would turn around.
     depth_prepass_ = vk.scene_options().depth_prepass && !behind_;
     upload(*prepared);
     prepared.reset();
     create_descriptors();
+    // Shared textures moved into this client's own images when sharing stopped: the set takes the new views.
+    shared_listener_ = vk_.on_shared_textures_moved([this] {
+        bool changed = false;
+        for (auto& t : textures_)
+            if (refresh_shared_texture(t)) changed = true;
+        if (changed) write_texture_set();
+    });
     create_pipelines(shader_dir);
     create_shadow_pipeline(shader_dir);
     create_underwater_pipeline(shader_dir);
 }
 
 ZoneRenderer::~ZoneRenderer() {
+    vk_.remove_shared_textures_listener(shared_listener_);
     // Retired rather than destroyed after a wait for the device: a neighbour zone is let go in the middle of a frame
     // (app/neighbour_zones.h), and vkDeviceWaitIdle there was a hitch. Its objects go once the frames that may still
     // draw it, and its uploads, are done (VkContext::retire).
@@ -407,8 +466,7 @@ ZoneRenderer::~ZoneRenderer() {
         std::vector<Buffer> buffers;
         VkSampler sampler;
         std::vector<Texture> textures;
-    } o{{shadow_pipeline_, point_shadow_pipeline_, underwater_pipeline_, horizon_pipeline_, depth_pipeline_,
-        opaque_equal_pipeline_},
+    } o{{shadow_pipeline_, point_shadow_pipeline_, underwater_pipeline_, depth_pipeline_, opaque_equal_pipeline_},
         layout_,
         pool_,
         {set_layout_, scene_layout_},
@@ -421,6 +479,7 @@ ZoneRenderer::~ZoneRenderer() {
     o.buffers.push_back(vertex_buffer_);
     o.buffers.push_back(instance_buffer_);
     o.buffers.push_back(index_buffer_);
+    for (const auto& b : distant_buffers_) o.buffers.push_back(b);
     vk_.retire([d = vk_.device(), allocator = vk_.allocator(), o]() mutable {
         for (VkPipeline p : o.pipelines)
             if (p) vkDestroyPipeline(d, p, nullptr);
@@ -612,11 +671,20 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         }
     };
 
-    // The zone's level ground and slopes for the hills round it (render/horizon.h): its own terrain's opaque, dry
-    // triangles, by their first texture. Not for a neighbour zone, which draws none.
+    // The zone's terrain for the land round it (render/horizon.h): its own opaque triangles and its liquid surfaces.
+    // Not for a neighbour zone, which draws none.
     const bool measure_horizon = options.offset == glm::vec3(0.0f) && options.keep.empty() && !options.behind;
+    // A neighbour drawing its part of the land measures its materials the same way, for its own ground there.
+    const bool measure_uses = measure_horizon || options.land != nullptr;
     std::vector<HorizonTriangle> horizon_triangles;
-    std::unordered_map<std::string, std::uint32_t> horizon_textures; // texture name -> index
+    // Per material: its level ground's and its slopes' area, its texture's scale (UV area over area), which way up
+    // its level triangles face, and how many liquid triangles; the level ground's vertex colours.
+    struct HorizonUse {
+        float level = 0.0f, slope = 0.0f, uv_area = 0.0f, area = 0.0f, up = 0.0f;
+        std::size_t liquid = 0;
+        std::vector<std::uint32_t> colors;
+    };
+    std::map<MaterialKey, HorizonUse> horizon_uses;
     std::size_t plants = 0;
     // The replacement models (assets/model_overrides.h), drawn instanced: each mesh once, in its own space, with a
     // transform for each of its placements (GpuInstance). Kept apart from `vertices` and `by_material` until the
@@ -717,11 +785,31 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                         ++liquid_triangles;
                     }
                 }
-                if (measure_horizon && region && tri_key.liquid == 0 && m.blend == assets::BlendMode::Opaque) {
-                    auto [it, fresh] = horizon_textures.try_emplace(m.frames.front(),
-                                                                    static_cast<std::uint32_t>(horizon_textures.size()));
-                    horizon_triangles.push_back({vertices[base + t[0]].position, vertices[base + t[1]].position,
-                                                 vertices[base + t[2]].position, it->second});
+                if (measure_uses && region && (tri_key.liquid != 0 || m.blend == assets::BlendMode::Opaque)) {
+                    const GpuVertex &va = vertices[base + t[0]], &vb = vertices[base + t[1]], &vc = vertices[base + t[2]];
+                    if (measure_horizon)
+                        horizon_triangles.push_back({va.position, vb.position, vc.position, tri_key.liquid != 0});
+                    HorizonUse& use = horizon_uses[tri_key];
+                    const glm::vec3 n = glm::cross(vb.position - va.position, vc.position - va.position);
+                    const float twice = glm::length(n);
+                    if (twice > 1e-4f && std::isfinite(twice)) {
+                        const float up = std::abs(n.z) / twice;
+                        const glm::vec2 du = vb.uv - va.uv, dv = vc.uv - va.uv;
+                        use.uv_area += 0.5f * std::abs(du.x * dv.y - du.y * dv.x);
+                        use.area += 0.5f * twice;
+                        if (tri_key.liquid != 0) {
+                            ++use.liquid;
+                            use.up += n.z > 0.0f ? 0.5f * twice : -0.5f * twice;
+                            if (use.colors.size() < 4096)
+                                use.colors.insert(use.colors.end(), {va.color, vb.color, vc.color});
+                        } else if (up >= kHorizonLevel) {
+                            use.level += 0.5f * twice;
+                            use.up += n.z > 0.0f ? 0.5f * twice : -0.5f * twice;
+                            if (use.colors.size() < 4096) use.colors.insert(use.colors.end(), {va.color, vb.color, vc.color});
+                        } else if (up >= 0.3f) {
+                            use.slope += 0.5f * twice;
+                        }
+                    }
                 }
                 auto& tris_out = out_by_material[tri_key];
                 looks.try_emplace(tri_key, m);
@@ -737,10 +825,24 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
     static const std::vector<std::uint32_t> kNoColors;
     // options.cancelled: a load thrown away (a neighbour's, on zoning) stops here and between materials below.
     auto cancelled = [&] { return options.cancelled && options.cancelled(); };
+    // The smoothed ground (assets/ground_refine.h) when the zone has it: its triangles take the liquid class of the
+    // terrain triangles they were cut from.
+    const bool refined = zone.draw_terrain.size() == zone.terrain.size() &&
+                         zone.draw_terrain_source.size() == zone.terrain.size();
     for (std::size_t mi = 0; mi < zone.terrain.size(); ++mi) {
         if (cancelled()) return nullptr;
-        append(zone.terrain[mi], glm::mat4(1.0f), kNoColors, true, false, &terrain_liquid[mi]);
+        if (!refined) {
+            append(zone.terrain[mi], glm::mat4(1.0f), kNoColors, true, false, &terrain_liquid[mi]);
+            continue;
+        }
+        const auto& source = zone.draw_terrain_source[mi];
+        std::vector<std::uint8_t> liquid(source.size(), 0);
+        for (std::size_t t = 0; t < source.size(); ++t)
+            if (source[t] < terrain_liquid[mi].size()) liquid[t] = terrain_liquid[mi][source[t]];
+        append(zone.draw_terrain[mi], glm::mat4(1.0f), kNoColors, true, false, &liquid);
     }
+    // The zone's own terrain is the vertices so far (its meshes and their detail passes; ZoneRenderOptions::split).
+    const std::size_t terrain_vertices = vertices.size();
     std::size_t missing_objects = 0, replaced_objects = 0;
     for (std::size_t pi = 0; pi < zone.placements.size(); ++pi) {
         if (pi % 256 == 0 && cancelled()) return nullptr;
@@ -785,6 +887,133 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
     if (detail_triangles) log::info("zone renderer: {} detail texture triangles", detail_triangles);
     mark("mesh loop done", prep.started);
 
+    // The land's materials (render/horizon.h): the zone's plain materials (no shader effect of their own, no
+    // scrolling) that cover the most level ground and slopes, and its most used water.
+    struct LandPick {
+        const MaterialKey *ground = nullptr, *rock = nullptr, *water = nullptr;
+    };
+    auto pick_land = [&] {
+        LandPick p;
+        for (const auto& [key, use] : horizon_uses) {
+            if (!(use.uv_area > 0.0f) || !(use.area > 0.0f)) continue;
+            const bool plain = key.eqg == assets::EqgShader::None && !key.frames.empty() &&
+                               looks.at(key).effect.slide == glm::vec4(0.0f);
+            if (plain && key.liquid == 0) {
+                if (!p.ground || use.level > horizon_uses.at(*p.ground).level) p.ground = &key;
+                if (!p.rock || use.slope > horizon_uses.at(*p.rock).slope) p.rock = &key;
+            }
+            if (key.liquid == static_cast<std::uint8_t>(Liquid::Water) &&
+                (!p.water || use.liquid > horizon_uses.at(*p.water).liquid))
+                p.water = &key;
+        }
+        if (p.ground && !(horizon_uses.at(*p.ground).level > 0.0f)) p.ground = nullptr;
+        if (p.ground && !(horizon_uses.at(*p.rock).slope > 0.0f)) p.rock = p.ground;
+        if (!p.ground) p.rock = nullptr;
+        return p;
+    };
+    // The median of each channel, so a few lamp-lit vertices do not tint the land.
+    auto median_color = [](const std::vector<std::uint32_t>& colors) {
+        if (colors.empty()) return 0xffffffffu;
+        std::uint32_t out = 0;
+        std::vector<std::uint32_t> channel(colors.size());
+        for (std::uint32_t k = 0; k < 4; ++k) {
+            for (std::size_t i = 0; i < colors.size(); ++i) channel[i] = (colors[i] >> (8 * k)) & 0xffu;
+            const auto mid = channel.begin() + static_cast<std::ptrdiff_t>(channel.size() / 2);
+            std::nth_element(channel.begin(), mid, channel.end());
+            out |= *mid << (8 * k);
+        }
+        return out;
+    };
+    auto look_of = [&](const MaterialKey& key, std::uint32_t color) {
+        const HorizonUse& use = horizon_uses.at(key);
+        HorizonLook look;
+        look.frames = key.frames;
+        look.delay = key.delay;
+        look.two_sided = key.two_sided;
+        look.front_ccw = key.front_ccw;
+        look.density = std::sqrt(use.uv_area / use.area);
+        look.flip = use.up < 0.0f;
+        look.color = color;
+        return look;
+    };
+    // Appends `tris` of `mesh` as the land under `key`'s material (`material` its look, if not yet known): mapped
+    // flat with `look`'s texture scale, wound its way, its colour times the vertices' shade; with `fade`
+    // (Draw::land_fade) the vertices' weight in color2's alpha. Returns the triangles added.
+    auto add_land = [&](MaterialKey key, const assets::Material& material, const HorizonLook& look,
+                        const HorizonMesh& mesh, const std::vector<std::uint32_t>& tris, std::uint8_t fade) {
+        if (tris.empty()) return std::size_t{0};
+        key.distant = true;
+        key.multipass = false;
+        key.land_fade = fade;
+        looks.try_emplace(key, material);
+        auto& out = by_material[key];
+        std::unordered_map<std::uint32_t, std::uint32_t> made;
+        for (std::size_t i = 0; i + 2 < tris.size(); i += 3) {
+            const std::uint32_t t[3] = {tris[i], tris[i + (look.flip ? 2 : 1)], tris[i + (look.flip ? 1 : 2)]};
+            for (std::uint32_t v : t) {
+                auto [it, fresh] = made.try_emplace(v, static_cast<std::uint32_t>(vertices.size()));
+                if (fresh) {
+                    GpuVertex g{};
+                    g.position = mesh.positions[v];
+                    g.normal = mesh.normals[v];
+                    g.uv = glm::vec2(g.position) * look.density;
+                    std::uint32_t c = look.color & 0xff000000u;
+                    for (std::uint32_t k = 0; k < 3; ++k)
+                        c |= static_cast<std::uint32_t>(
+                                 static_cast<float>((look.color >> (8 * k)) & 0xffu) * mesh.shade[v] + 0.5f)
+                             << (8 * k);
+                    g.color = c;
+                    if (fade != 0 && v < mesh.weight.size())
+                        g.color2 = static_cast<std::uint32_t>(std::lround(std::clamp(mesh.weight[v], 0.0f, 1.0f) * 255.0f))
+                                   << 24;
+                    vertices.push_back(g);
+                }
+                out.push_back(it->second);
+            }
+        }
+        return tris.size() / 3;
+    };
+
+    // The land round the zone (render/horizon.h): a mesh past its edges, shaped by the neighbours' ground the cache
+    // holds, drawn with the zone's own plain materials that cover the most level ground, slopes and water (their
+    // texture scale, their winding, the level ground's median baked light), so it is shaded, lit and hazed as the zone
+    // is. Its draws are `distant`: no shadows, shown by set_distant.
+    if (measure_horizon) {
+        prep.horizon = horizon_land(horizon_triangles, horizon_seed(zone.name));
+        HorizonField field = horizon_field(horizon_triangles, prep.horizon);
+        HorizonSources sources = options.horizon_sources;
+        sort_sources(sources);
+        const HorizonMesh land = horizon_mesh(field, sources);
+        const LandPick pick = pick_land();
+        std::size_t land_triangles = 0;
+        if (pick.ground && !land.empty()) {
+            const std::uint32_t land_color = median_color(horizon_uses.at(*pick.ground).colors);
+            auto build = std::make_shared<HorizonBuild>();
+            build->ground = look_of(*pick.ground, land_color);
+            build->rock = look_of(*pick.rock, land_color);
+            land_triangles += add_land(*pick.ground, looks.at(*pick.ground), build->ground, land, land.ground, 0);
+            land_triangles += add_land(*pick.rock, looks.at(*pick.rock), build->rock, land, land.rock, 0);
+            if (pick.water) {
+                const HorizonLook water = look_of(*pick.water, median_color(horizon_uses.at(*pick.water).colors));
+                land_triangles += add_land(*pick.water, looks.at(*pick.water), water, land, land.water, 0);
+            }
+            build->field = std::move(field);
+            build->sources = std::move(sources);
+            prep.horizon_build = std::move(build);
+        }
+        const HorizonLand& h = prep.horizon;
+        if (land_triangles)
+            log::info("zone renderer: the land round the zone, {} triangles ({} ground '{}', {} rock '{}', {} water), "
+                      "level ground ({:.0f} {:.0f}) to ({:.0f} {:.0f}) at {:.0f}, relief {:.0f}, shaped by {} "
+                      "neighbours' ground",
+                      land_triangles, land.ground.size() / 3, pick.ground->frames.front(), land.rock.size() / 3,
+                      pick.rock->frames.front(), pick.water ? land.water.size() / 3 : 0, h.lo.x, h.lo.y, h.hi.x,
+                      h.hi.y, h.ground, h.relief, prep.horizon_build->sources.size());
+        else
+            log::info("zone renderer: no land round the zone ({} terrain triangles{})", horizon_triangles.size(),
+                      !h.valid ? ", too little level ground" : pick.ground ? "" : ", no plain ground material");
+    }
+
     // A neighbouring zone: moved into the current zone's coordinates, then cut to what lies past the zone line.
     if (options.offset != glm::vec3(0.0f) || !options.keep.empty()) {
         for (auto& v : vertices) {
@@ -819,7 +1048,12 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
             for (std::size_t i = 0; i + 2 < list.size(); i += 3) {
                 const std::uint32_t t[3] = {list[i], list[i + 1], list[i + 2]};
                 if (options.split) {
-                    auto parts = options.split(vertices[t[0]].position, vertices[t[1]].position, vertices[t[2]].position);
+                    using Part = ZoneRenderOptions::Part;
+                    const Part part = key.liquid != 0 ? Part::Liquid
+                                      : t[0] < terrain_vertices ? Part::Terrain
+                                                                : Part::Placed;
+                    auto parts = options.split(vertices[t[0]].position, vertices[t[1]].position, vertices[t[2]].position,
+                                               part);
                     if (parts) {
                         if (parts->empty()) {
                             ++doubled;
@@ -860,8 +1094,46 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         }
         std::erase_if(by_material, [](const auto& kv) { return kv.second.empty(); });
         log::info("zone renderer: moved by ({:.1f} {:.1f} {:.1f}), {} triangles kept, {} cut at the planes, {} left "
-                  "out, {} doubling the ground left out, {} cut where they double it",
+                  "out, {} left out as ground drawn otherwise (the current zone's or the land), {} cut there",
                   options.offset.x, options.offset.y, options.offset.z, kept, cut, dropped, doubled, split);
+    }
+
+    // A neighbour's part of the land round the current zone (ZoneRenderOptions::land), already in the current zone's
+    // coordinates: each triangle with the neighbour's own ground or rock material and with the current zone's, faded
+    // into each other by the vertices' weight; only the current zone's where the neighbour has no plain material.
+    if (options.land) {
+        const LandPatch& patch = *options.land;
+        const LandPick own = pick_land();
+        auto material_of = [](const HorizonLook& look) {
+            MaterialKey key{look.frames, look.delay, assets::BlendMode::Opaque, look.two_sided, look.front_ccw,
+                            assets::EqgShader::None, false, {}};
+            assets::Material m;
+            m.name = look.frames.empty() ? std::string() : look.frames.front();
+            m.frames = look.frames;
+            m.frame_delay_ms = look.delay;
+            m.blend = assets::BlendMode::Opaque;
+            m.two_sided = look.two_sided;
+            return std::pair{key, m};
+        };
+        std::size_t added = 0;
+        auto add_side = [&](const HorizonLook& zone_look, const MaterialKey* own_key,
+                            const std::vector<std::uint32_t>& tris) {
+            HorizonLook own_look;
+            if (own_key && own.ground) own_look = look_of(*own_key, median_color(horizon_uses.at(*own.ground).colors));
+            const bool both = own_look.valid() && zone_look.valid();
+            if (own_look.valid()) added += add_land(*own_key, looks.at(*own_key), own_look, patch.mesh, tris, both ? 1 : 0);
+            if (zone_look.valid()) {
+                const auto [key, m] = material_of(zone_look);
+                added += add_land(key, m, zone_look, patch.mesh, tris, both ? 2 : 0);
+            }
+        };
+        add_side(patch.ground, own.ground, patch.mesh.ground);
+        add_side(patch.rock, own.rock, patch.mesh.rock);
+        prep.footprint = patch.mesh.squares;
+        log::info("zone renderer: its part of the land round the current zone, {} triangles over {} squares, its own "
+                  "ground '{}' fading into the current zone's '{}'",
+                  added, patch.mesh.squares.size(), own.ground ? own.ground->frames.front() : std::string("(none)"),
+                  patch.ground.frames.empty() ? std::string("(none)") : patch.ground.frames.front());
     }
 
     // The instanced models join the geometry after the cut: their meshes' vertices and triangles at the end, their
@@ -912,8 +1184,6 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         }
         if (left_out) log::info("zone renderer: {} model placements past the zone line left out", left_out);
     }
-
-    std::unordered_map<std::string, std::uint32_t> horizon_slots; // a draw's first texture name -> its slot
     // Texture slot 0 is plain white, used for anything that fails to load.
     const std::size_t replaced_before = assets::texture_overrides().applied();
     {
@@ -935,6 +1205,9 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         if (auto it = slots.find(key); it != slots.end()) return it->second;
         std::uint32_t slot = 0;
         auto data = zone.read_file(name);
+        // A neighbour's part of the land borrows the current zone's ground, whose texture its own files may lack.
+        if (!data && options.land)
+            if (auto it = options.land->files.find(name); it != options.land->files.end()) data = it->second;
         std::string error;
         std::optional<assets::Image> image;
         image = assets::decode_game_texture(
@@ -996,7 +1269,6 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         d.instanced = key.instanced;
         MaterialState st = material_state(look);
         for (const auto& name : key.frames) d.frame_slots.push_back(slot_for(name, st.masked_texture, TextureUse::Color, !st.alpha_unused()));
-        if (!key.frames.empty()) horizon_slots.try_emplace(key.frames.front(), d.frame_slots.front());
         const auto& e = look.effect;
         for (std::size_t i = 0; i < e.textures.size() && i < d.extra_slots.size(); ++i)
             d.extra_slots[i] = slot_for(e.textures[i], false);
@@ -1044,6 +1316,8 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         d.multipass = key.multipass;
         d.liquid = static_cast<Liquid>(key.liquid);
         d.flame = key.flame;
+        d.distant = key.distant;
+        d.land_fade = key.land_fade;
         d.pass = static_cast<Pass>(st.pass);
         d.alpha_ref = st.alpha_ref;
         d.opacity = st.opacity;
@@ -1114,8 +1388,9 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                 const std::uint32_t* idx = &indices[d.first_index + t * 3];
                 const glm::vec3 c =
                     (vertices[idx[0]].position + vertices[idx[1]].position + vertices[idx[2]].position) / 3.0f;
-                tris[t] = {cell_key(static_cast<std::int64_t>(std::floor(c.x / kChunk)),
-                                    static_cast<std::int64_t>(std::floor(c.y / kChunk))), t};
+                const float cell = d.distant ? kDistantChunk : kChunk;
+                tris[t] = {cell_key(static_cast<std::int64_t>(std::floor(c.x / cell)),
+                                    static_cast<std::int64_t>(std::floor(c.y / cell))), t};
             }
             std::stable_sort(tris.begin(), tris.end(), [](const Tri& a, const Tri& b) { return a.key < b.key; });
             std::vector<std::uint32_t> old(indices.begin() + d.first_index,
@@ -1200,6 +1475,20 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
             prep.chunks.push_back(c);
         }
     }
+    // The land round the zone's triangles once more, in the distant draws' order with each one's middle, for its own
+    // index buffers (set_distant_hidden).
+    for (Draw& d : prep.draws) {
+        if (!d.distant) continue;
+        d.distant_first = static_cast<std::uint32_t>(prep.distant_indices.size());
+        const bool hideable = prep.horizon_build && d.liquid == Liquid::None;
+        for (std::uint32_t i = d.first_index; i + 2 < d.first_index + d.index_count; i += 3) {
+            prep.distant_indices.insert(prep.distant_indices.end(), {indices[i], indices[i + 1], indices[i + 2]});
+            const glm::vec2 middle = glm::vec2(vertices[indices[i]].position + vertices[indices[i + 1]].position +
+                                               vertices[indices[i + 2]].position) /
+                                     3.0f;
+            prep.distant_squares.push_back(hideable ? prep.horizon_build->field.mesh_square(middle) : -1);
+        }
+    }
     if (std::size_t replaced = assets::texture_overrides().applied() - replaced_before)
         log::info("zone renderer: {} textures replaced from {}", replaced, assets::texture_overrides().folder().string());
 
@@ -1228,23 +1517,6 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                                   grid.width, grid.height, grid.cell);
     }
     prep.indices = std::move(indices);
-    if (measure_horizon) {
-        // Each texture's mean colour from its decoded image (slot 0, the white of a texture that failed, says nothing).
-        std::vector<std::optional<glm::vec3>> colors(horizon_textures.size());
-        for (const auto& [name, index] : horizon_textures)
-            if (auto it = horizon_slots.find(name); it != horizon_slots.end() && it->second != 0 &&
-                                                    it->second < prep.images.size())
-                colors[index] = mean_texture_color(prep.images[it->second].image);
-        prep.horizon = horizon_land(horizon_triangles, colors, horizon_seed(zone.name));
-        const HorizonLand& h = prep.horizon;
-        if (h.valid)
-            log::info("zone renderer: horizon hills round ({:.0f} {:.0f}) from {:.0f} units, ground {:.0f}, relief "
-                      "{:.0f}, from {} terrain triangles",
-                      h.centre.x, h.centre.y, h.radius, h.ground, h.relief, horizon_triangles.size());
-        else
-            log::info("zone renderer: no horizon hills ({} terrain triangles, too little level ground)",
-                      horizon_triangles.size());
-    }
     mark("prepared", prep.started);
     return prepared;
 }
@@ -1259,6 +1531,18 @@ ZoneRenderOptions zone_render_options(const GameDir& game) {
     if (auto path = game.find("eqclient.ini")) ini.load(*path);
     o.multipass_lighting = multipass_lighting_setting(ini.get_string("Defaults", "MultiPassLighting"));
     return o;
+}
+
+void ZoneRenderer::write_texture_set() {
+    std::vector<VkDescriptorImageInfo> infos;
+    for (const auto& t : textures_) infos.push_back({sampler_, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = set_;
+    w.dstBinding = 0;
+    w.descriptorCount = static_cast<std::uint32_t>(infos.size());
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = infos.data();
+    vkUpdateDescriptorSets(vk_.device(), 1, &w, 0, nullptr);
 }
 
 void ZoneRenderer::create_descriptors() {
@@ -1340,15 +1624,7 @@ void ZoneRenderer::create_descriptors() {
     ai.pSetLayouts = &set_layout_;
     vk_check(vkAllocateDescriptorSets(d, &ai, &set_), "vkAllocateDescriptorSets");
 
-    std::vector<VkDescriptorImageInfo> infos;
-    for (const auto& t : textures_) infos.push_back({sampler_, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet = set_;
-    w.dstBinding = 0;
-    w.descriptorCount = count;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w.pImageInfo = infos.data();
-    vkUpdateDescriptorSets(d, 1, &w, 0, nullptr);
+    write_texture_set();
 
     for (std::size_t i = 0; i < scene_sets_.size(); ++i) {
         VkDescriptorSetAllocateInfo sai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -1588,7 +1864,9 @@ void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted count
             first();
             started = true;
         }
-        vkCmdDrawIndexed(cmd, run_count, run_instances, run_first, 0, run_instance);
+        // The land round the zone from its own index buffers (bind_indices).
+        vkCmdDrawIndexed(cmd, run_count, run_instances, d.distant ? run_first - d.first_index + d.distant_first : run_first,
+                         0, run_instance);
         if (counted == Counted::Scene) {
             drawn_.triangles += std::size_t{run_count / 3} * run_instances;
             ++drawn_.calls;
@@ -1665,6 +1943,11 @@ void ZoneRenderer::bind_draw(VkCommandBuffer cmd, const Draw& d, std::uint32_t f
         pc.extra3 = glm::vec4(d.lod.near * lod_scale_, d.lod.far * lod_scale_, render::kLodFade, 0.0f);
     }
     pc.extra4 = d.extra4;
+    // A neighbour's part of the land: which side of the blend this draw shows (decides discards: both passes).
+    if (d.land_fade == 1) pc.tex2.z |= kLandOwn;
+    else if (d.land_fade == 2) pc.tex2.z |= kLandZone;
+    if (debug_tint_ && !d.distant) pc.tex2.z |= kTintNeighbour;
+    if (debug_tint_ && d.land_fade == 1) pc.tex2.z |= kTintLand;
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 }
 
@@ -1699,12 +1982,18 @@ void ZoneRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, cons
     const std::uint32_t copies = phase == ZonePhase::Translucent ? kWaterCopies : 0u;
     // Only the chunks in the camera's view; a draw none of whose chunks shows sets up nothing.
     const Frustum frustum = frustum_from(view_proj);
-    auto seen = [&](const Chunk& c) { return box_in_frustum(frustum, Box{c.box_min, c.box_max}); };
 
     VkPipeline bound = VK_NULL_HANDLE;
+    bool distant_bound = false;
     for (const Draw* draw : order) {
         const Draw& d = *draw;
+        if (d.distant && !show_distant_) continue;
+        auto seen = [&](const Chunk& c) { return box_in_frustum(frustum, Box{c.box_min, c.box_max}); };
         draw_chunks(cmd, d, Counted::Scene, seen, [&] {
+            if (d.distant != distant_bound) {
+                bind_indices(cmd, frame.frame_slot, d.distant);
+                distant_bound = d.distant;
+            }
             int pass = modern_water(d) ? static_cast<int>(Pass::Blended) : static_cast<int>(d.pass);
             VkPipeline pipeline = prepassed && in_depth_prepass(d) ? opaque_equal_pipeline_ : pipelines_[pass];
             if (pipeline != bound) {
@@ -1728,14 +2017,20 @@ void ZoneRenderer::draw_depth(const FrameInfo& frame, const glm::mat4& view_proj
     VkCommandBuffer cmd = frame.cmd;
     const std::uint64_t time_ms = begin_draw(frame, view_proj, camera_pos, view, time_seconds);
     const Frustum frustum = frustum_from(view_proj);
-    auto seen = [&](const Chunk& c) { return box_in_frustum(frustum, Box{c.box_min, c.box_max}); };
-    bool bound = false;
+    bool bound = false, distant_bound = false;
     for (const auto& d : draws_) {
         if (d.flame && hide_flames_) continue;
         if (!in_depth_prepass(d)) continue;
+        // The colour pass tests equal: it must draw the same.
+        if (d.distant && !show_distant_) continue;
+        auto seen = [&](const Chunk& c) { return box_in_frustum(frustum, Box{c.box_min, c.box_max}); };
         draw_chunks(cmd, d, Counted::None, seen, [&] {
             if (!bound) vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, depth_pipeline_);
             bound = true;
+            if (d.distant != distant_bound) {
+                bind_indices(cmd, frame.frame_slot, d.distant);
+                distant_bound = d.distant;
+            }
             bind_draw(cmd, d, kDepthOnlyFlags, time_ms);
         }, kSceneLod);
     }
@@ -1758,35 +2053,10 @@ void ZoneRenderer::draw_backdrop(const FrameInfo& frame, const glm::mat4& view_p
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }
 
-void ZoneRenderer::draw_horizon(const FrameInfo& frame, const glm::mat4& view_proj, float strength) {
-    if (!horizon_pipeline_ || !horizon_.valid || !(strength > 0.0f)) return;
-    VkCommandBuffer cmd = frame.cmd;
-    scene_.view_proj = view_proj;
-    upload_scene(frame.frame_slot);
-    struct {
-        glm::vec4 ring, shape, ground_color, slope_color;
-    } push{{horizon_.centre, horizon_.radius, horizon_.ground},
-           {horizon_.relief, horizon_.seed, std::min(strength, 1.0f), 0.0f},
-           glm::vec4(horizon_.ground_color, 0.0f),
-           glm::vec4(horizon_.slope_color, 0.0f)};
-    static_assert(sizeof(push) <= sizeof(PushConstants));
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, horizon_pipeline_);
-    VkDescriptorSet sets[3] = {set_, scene_sets_[frame.frame_slot], vk_.shadow_set()};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
-    vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-}
-
 void ZoneRenderer::create_underwater_pipeline(const std::filesystem::path& shader_dir) {
-    underwater_pipeline_ = create_background_pipeline(shader_dir, "underwater.frag.spv", false);
-    if (!behind_) horizon_pipeline_ = create_background_pipeline(shader_dir, "horizon.frag.spv", true);
-}
-
-VkPipeline ZoneRenderer::create_background_pipeline(const std::filesystem::path& shader_dir, const char* fragment,
-                                                    bool blended) {
     VkDevice d = vk_.device();
     VkShaderModule vs = create_shader(d, shader_dir / "underwater.vert.spv");
-    VkShaderModule fs = create_shader(d, shader_dir / fragment);
+    VkShaderModule fs = create_shader(d, shader_dir / "underwater.frag.spv");
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main", nullptr};
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main", nullptr};
@@ -1802,20 +2072,11 @@ VkPipeline ZoneRenderer::create_background_pipeline(const std::filesystem::path&
     rs.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = vk_.scene_samples();
-    // Behind everything: drawn first, no depth test or write. The horizon's hills blend over the sky (their edges).
+    // Behind everything: drawn first, no depth test or write.
     VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     VkPipelineColorBlendAttachmentState ba{};
     ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
                         VK_COLOR_COMPONENT_A_BIT;
-    if (blended) {
-        ba.blendEnable = VK_TRUE;
-        ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        ba.colorBlendOp = VK_BLEND_OP_ADD;
-        ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-        ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        ba.alphaBlendOp = VK_BLEND_OP_ADD;
-    }
     VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = 1;
     cb.pAttachments = &ba;
@@ -1841,12 +2102,34 @@ VkPipeline ZoneRenderer::create_background_pipeline(const std::filesystem::path&
     info.pColorBlendState = &cb;
     info.pDynamicState = &ds;
     info.layout = layout_;
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    vk_check(vkCreateGraphicsPipelines(d, vk_.pipeline_cache(), 1, &info, nullptr, &pipeline),
-             "vkCreateGraphicsPipelines (background)");
+    vk_check(vkCreateGraphicsPipelines(d, vk_.pipeline_cache(), 1, &info, nullptr, &underwater_pipeline_),
+             "vkCreateGraphicsPipelines (underwater)");
     vkDestroyShaderModule(d, vs, nullptr);
     vkDestroyShaderModule(d, fs, nullptr);
-    return pipeline;
+}
+
+void ZoneRenderer::set_distant_hidden(std::vector<std::int64_t> squares) {
+    std::sort(squares.begin(), squares.end());
+    distant_shown_ = distant_indices_;
+    if (!squares.empty())
+        for (std::size_t t = 0; t < distant_squares_.size(); ++t)
+            if (distant_squares_[t] >= 0 && std::binary_search(squares.begin(), squares.end(), distant_squares_[t]))
+                distant_shown_[t * 3 + 1] = distant_shown_[t * 3 + 2] = distant_shown_[t * 3];
+    distant_dirty_ = (1u << VkContext::kFramesInFlight) - 1u;
+}
+
+void ZoneRenderer::bind_indices(VkCommandBuffer cmd, std::uint32_t frame_slot, bool distant) {
+    if (!distant || !distant_buffers_[frame_slot].buffer) {
+        vkCmdBindIndexBuffer(cmd, index_buffer_.buffer, 0, VK_INDEX_TYPE_UINT32);
+        return;
+    }
+    if (distant_dirty_ & (1u << frame_slot)) {
+        const std::size_t bytes = distant_shown_.size() * sizeof(std::uint32_t);
+        std::memcpy(distant_mapped_[frame_slot], distant_shown_.data(), bytes);
+        vmaFlushAllocation(vk_.allocator(), distant_buffers_[frame_slot].allocation, 0, bytes);
+        distant_dirty_ &= ~(1u << frame_slot);
+    }
+    vkCmdBindIndexBuffer(cmd, distant_buffers_[frame_slot].buffer, 0, VK_INDEX_TYPE_UINT32);
 }
 
 bool ZoneRenderer::map_moves(std::uint32_t layer) const {
@@ -1899,6 +2182,7 @@ void ZoneRenderer::draw_shadow(const FrameInfo& frame, std::uint32_t cascade) {
                                &pc);
         });
     for (const auto& d : draws_) {
+        if (d.distant) continue; // far past the shadows' reach and the maps' square
         // The water map: the water surfaces alone.
         if (cascade == kWaterLayer) {
             if (d.liquid != Liquid::Water) continue;
@@ -1935,7 +2219,7 @@ void ZoneRenderer::point_reach(const glm::vec3& light, float radius, PointReach&
     };
     add(solid_);
     for (const Draw& d : draws_)
-        if (d.pass == Pass::Opaque && !d.flame && !casts_untextured(d)) add(d);
+        if (d.pass == Pass::Opaque && !d.flame && !d.distant && !casts_untextured(d)) add(d);
 }
 
 void ZoneRenderer::draw_point_shadow(const FrameInfo& frame, const PointReach& reach, std::uint32_t face) {

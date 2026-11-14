@@ -13,6 +13,8 @@
 
 namespace hailstone {
 
+class SharedFileCache;
+
 // The player's RoF2 installation. EQ treats file names case-insensitively,
 // so lookups go through a lower-cased index of the directory tree, which
 // also makes them work on case-sensitive file systems.
@@ -55,6 +57,10 @@ public:
     std::optional<std::filesystem::path> classic() const;
     // The layers, highest priority first: the overlay (when set), the base (when set), then the classic folder.
     std::vector<std::filesystem::path> roots() const;
+
+    // Optional immutable archive backing, shared by copies and retained when asset layers change.
+    void set_shared_file_cache(std::shared_ptr<SharedFileCache> cache);
+    std::shared_ptr<SharedFileCache> shared_file_cache() const;
 
     // Replaces the base folder and rebuilds the index; throws std::runtime_error when it is not a directory (the
     // GameDir is then unchanged).
@@ -114,6 +120,7 @@ private:
 
     std::filesystem::path base_;
     mutable std::mutex mutex_; // guards everything below
+    std::shared_ptr<SharedFileCache> shared_file_cache_;
     std::optional<std::filesystem::path> overlay_;
     std::shared_ptr<const Index> base_index_;
     std::shared_ptr<const Index> overlay_index_;

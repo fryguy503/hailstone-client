@@ -1,10 +1,15 @@
 #include <doctest/doctest.h>
 
+#include <fstream>
+
 #include "assets/pfs.h"
 #include "core/byte_io.h"
+#include "core/game_dir.h"
+#include "core/shared_file_cache.h"
 #include "fuzz_support.h"
 #include "game_files.h"
 #include "pfs_fixtures.h"
+#include "scratch_dir.h"
 
 using hailstone::assets::PfsArchive;
 
@@ -212,4 +217,172 @@ TEST_CASE("PfsArchive::read_prefix refuses a block that inflates to less than it
     auto a = PfsArchive::from_memory(archive);
     CHECK(a.read_prefix("a.bin", 50).value().size() == 50);
     CHECK_THROWS(a.read_prefix("a.bin", 150));
+}
+
+namespace {
+void write_pfs_fixture(const std::filesystem::path& path, const std::vector<std::byte>& bytes) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    REQUIRE(out.is_open());
+    if (!bytes.empty())
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    out.close();
+    REQUIRE(out.good());
+}
+} // namespace
+
+TEST_CASE("PfsArchive mapped snapshots match private parsing and retain their backing") {
+    using namespace hailstone;
+    using namespace hailstone::test::pfs_fixtures;
+    test::ScratchDir dir("pfs-shared");
+    const auto source = dir.path() / "fixture.s3d";
+    std::vector<std::byte> member(12000);
+    for (std::size_t i = 0; i < member.size(); ++i) member[i] = static_cast<std::byte>((i * 7) % 251);
+    const auto bytes = make_pfs({{"model.mod", member}, {"empty.bin", {}}}, 3000);
+    write_pfs_fixture(source, bytes);
+    const auto cache_path = std::filesystem::canonical(dir.path()) / "cache";
+    auto first_cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{cache_path});
+    auto second_cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{cache_path});
+    auto mapped = PfsArchive::open(source, first_cache);
+    auto second = PfsArchive::open(source, second_cache);
+    auto private_archive = PfsArchive::open(source);
+    auto memory_archive = PfsArchive::from_memory(bytes, "fixture.s3d");
+    REQUIRE(mapped.backing_mapped());
+    REQUIRE(second.backing_mapped());
+    CHECK_FALSE(private_archive.backing_mapped());
+    CHECK_FALSE(memory_archive.backing_mapped());
+    CHECK(mapped.backing_size() == bytes.size());
+    CHECK(second_cache->stats().hits >= 1);
+    for (const auto* archive : {&mapped, &second, &private_archive, &memory_archive}) {
+        CHECK(archive->label() == "fixture.s3d");
+        CHECK(archive->names() == memory_archive.names());
+        CHECK(archive->contains("MODEL.MOD"));
+        CHECK(archive->read("model.mod").value() == member);
+        CHECK(archive->read_prefix("model.mod", 4500).value() ==
+              std::vector<std::byte>(member.begin(), member.begin() + 4500));
+        CHECK(archive->read("empty.bin").value().empty());
+        CHECK_FALSE(archive->read("missing.bin"));
+    }
+    // Archives and copies own their view; destroying the service or the original archive cannot retire it.
+    auto copied = mapped;
+    first_cache.reset();
+    second_cache.reset();
+    mapped = PfsArchive::from_memory(make_pfs({{"replacement.bin", {}}}));
+    CHECK(copied.backing_mapped());
+    CHECK(copied.read("model.mod").value() == member);
+    CHECK(second.read("model.mod").value() == member);
+}
+
+TEST_CASE("PfsArchive old mappings survive source truncation and distinguish a same-metadata replacement") {
+    using namespace hailstone;
+    using namespace hailstone::test::pfs_fixtures;
+    test::ScratchDir dir("pfs-generation");
+    const auto source = dir.path() / "fixture.s3d";
+    const std::vector<std::byte> before(128, std::byte{'a'}), after(128, std::byte{'b'});
+    const auto before_archive = make_pfs({{"a.bin", before}});
+    const auto after_archive = make_pfs({{"a.bin", after}});
+    REQUIRE(before_archive.size() == after_archive.size());
+    write_pfs_fixture(source, before_archive);
+    const auto original_time = std::filesystem::last_write_time(source);
+    auto cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{std::filesystem::canonical(dir.path()) / "cache"});
+    auto old = PfsArchive::open(source, cache);
+    REQUIRE(old.backing_mapped());
+    write_pfs_fixture(source, after_archive);
+    std::filesystem::last_write_time(source, original_time);
+    auto current = PfsArchive::open(source, cache);
+    REQUIRE(current.backing_mapped());
+    CHECK(current.read("a.bin").value() == after);
+    CHECK(old.read("a.bin").value() == before);
+    write_pfs_fixture(source, {});
+    CHECK_THROWS(PfsArchive::open(source, cache));
+    CHECK(current.read("a.bin").value() == after);
+    CHECK(old.read("a.bin").value() == before);
+}
+
+TEST_CASE("PfsArchive keeps private loading and parser errors when the shared cache is unavailable") {
+    using namespace hailstone;
+    using namespace hailstone::test::pfs_fixtures;
+    test::ScratchDir dir("pfs-fallback");
+    const auto source = dir.path() / "fixture.s3d";
+    const auto blocked = dir.path() / "cache-is-a-file";
+    const std::vector<std::byte> content{std::byte{'a'}};
+    write_pfs_fixture(source, make_pfs({{"a.bin", content}}));
+    write_pfs_fixture(blocked, content);
+    auto cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{blocked});
+    auto archive = PfsArchive::open(source, cache);
+    CHECK_FALSE(archive.backing_mapped());
+    CHECK(archive.read("a.bin").value() == content);
+    CHECK(cache->stats().fallbacks >= 1);
+    CHECK_THROWS_WITH(PfsArchive::open(dir.path() / "missing.s3d", cache), doctest::Contains("cannot read"));
+    write_pfs_fixture(source, std::vector<std::byte>(64, std::byte{0x11}));
+    CHECK_THROWS_WITH(PfsArchive::open(source, cache), doctest::Contains("not a PFS archive"));
+    CHECK_THROWS_WITH(PfsArchive::open(source), doctest::Contains("not a PFS archive"));
+}
+
+TEST_CASE("GameDir preserves shared archive backing across copies moves and asset layer changes") {
+    using namespace hailstone;
+    test::ScratchDir dir("game-shared-cache");
+    const auto base = dir.path() / "base", overlay = dir.path() / "overlay", classic = dir.path() / "classic";
+    for (const auto& path : {base, overlay, classic}) std::filesystem::create_directories(path);
+    auto cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{dir.path() / "cache"});
+    GameDir game(base);
+    CHECK_FALSE(game.shared_file_cache());
+    game.set_shared_file_cache(cache);
+    GameDir copied(game), assigned;
+    assigned = game;
+    CHECK(copied.shared_file_cache() == cache);
+    CHECK(assigned.shared_file_cache() == cache);
+    GameDir moved(std::move(copied)), move_assigned;
+    move_assigned = std::move(assigned);
+    CHECK(moved.shared_file_cache() == cache);
+    CHECK(move_assigned.shared_file_cache() == cache);
+    game.set_overlay(overlay);
+    game.set_classic(classic, [](std::string_view) { return true; });
+    game.set_overlay_filter([](std::string_view) { return true; });
+    game.rescan();
+    game.set_base(base);
+    CHECK(game.shared_file_cache() == cache);
+    game.set_shared_file_cache({});
+    CHECK_FALSE(game.shared_file_cache());
+    CHECK(moved.shared_file_cache() == cache);
+}
+
+TEST_CASE("PfsArchive mapped stock archives match private member reads" * doctest::skip(!hailstone::test::game_dir())) {
+    using namespace hailstone;
+    test::ScratchDir dir("pfs-shared-stock");
+    auto cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{
+        std::filesystem::canonical(dir.path()) / "cache"});
+    const auto* game = test::game_dir();
+    std::vector<std::filesystem::path> sources;
+    for (const auto name : {"qeynos2.s3d", "global_chr.s3d", "sky.s3d"}) {
+        const auto source = game->find(name);
+        REQUIRE_MESSAGE(source, name);
+        sources.push_back(*source);
+    }
+    // Exercise one available EQG too, without assuming a particular zone is installed.
+    for (const auto& entry : game->list("")) {
+        if (GameDir::normalize(entry.name).ends_with(".eqg")) {
+            sources.push_back(entry.path);
+            break;
+        }
+    }
+    for (const auto& source : sources) {
+        CAPTURE(source);
+        auto private_archive = PfsArchive::open(source);
+        auto mapped_archive = PfsArchive::open(source, cache);
+        auto warm_archive = PfsArchive::open(source, cache);
+        REQUIRE(mapped_archive.backing_mapped());
+        CHECK(warm_archive.backing_mapped());
+        CHECK(mapped_archive.names() == private_archive.names());
+        CHECK(warm_archive.names() == private_archive.names());
+        std::size_t checked = 0;
+        for (const auto& name : private_archive.names()) {
+            CAPTURE(name);
+            CHECK(mapped_archive.read(name) == private_archive.read(name));
+            CHECK(warm_archive.read_prefix(name, 1024) == private_archive.read_prefix(name, 1024));
+            if (++checked == 8) break;
+        }
+        CHECK(checked > 0);
+    }
+    CHECK(cache->stats().mapped_bytes == 0);
+    CHECK(cache->stats().fallbacks == 0);
 }

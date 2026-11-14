@@ -24,6 +24,7 @@
 #include "app/ui_demo.h"
 #include "app/zone_particles.h"
 #include "game/spells.h"
+#include "assets/ground_refine.h"
 #include "assets/sky.h"
 #include "assets/texture_overrides.h"
 #include "assets/zone_flora.h"
@@ -57,7 +58,6 @@
 #include "render/zone_renderer.h"
 #include "render/particle_renderer.h"
 #include "render/atmosphere.h"
-#include "render/horizon.h"
 #include "render/weather_renderer.h"
 #include "app/nameplate_layer.h"
 #include "app/plate_test.h"
@@ -106,7 +106,9 @@ struct Options {
     std::vector<hailstone::render::FireSource> fires; // --fire X Y Z H W: flames placed by hand (modern)
     bool no_fire = false;                         // --no-fire: the modern lighting without its flames (timing)
     bool no_grass = false;                        // --no-grass: the viewer without the zone's flora
-    bool no_horizon = false;                      // --no-horizon: no distant hills round the zone (render/horizon.h)
+    bool no_smooth_ground = false;                // --no-smooth-ground: the viewer draws the file's flat ground
+    bool no_horizon = false;                      // --no-horizon: no land round the zone (render/horizon.h)
+    bool neighbour_tint = false;                  // --neighbour-tint: render::ZoneRenderer::set_debug_tint
     float tree_detail = 1.0f;                     // --tree-detail PCT: display.tree_detail, as a scale
     float flora_distance = 400.0f;                // --flora-distance: how far the viewer draws the flora
     std::optional<glm::vec3> flora_push;          // --flora-push: a foot the viewer's flora bends away from
@@ -254,6 +256,7 @@ void usage() {
         "  --no-fire          viewer: no flames at all in the modern lighting (to time them)\n"
         "  --no-grass         viewer: no flora (radial flora, and Hailstone's zone flora: flora/<zone>.txt); the\n"
         "                     viewer draws flora with --lighting modern only\n"
+        "  --no-smooth-ground viewer: draw the zone's ground as the file's flat triangles (display.smooth_ground off)\n"
         "  --flora-distance U viewer: draw the flora U units round the camera (400 .. 1200; default 400)\n"
         "  --flora-push X Y Z viewer: the flora bends away from a foot standing there, as from a spawn (testing)\n"
         "  --moon P           the moon's phase, 0 new .. 0.5 full .. 1 (--lighting modern; client: instead of the calendar)\n"
@@ -267,7 +270,9 @@ void usage() {
         "  --weather-age S    viewer: S seconds after --weather began (its transition; default 600, settled)\n"
         "  --weather-stopped S  viewer: --weather stopped S seconds ago (the clearing)\n"
         "  --no-grade         viewer: no colour grade (--lighting modern; display.color_grade)\n"
-        "  --no-horizon       viewer: no distant hills round the zone (--lighting modern; display.horizon_hills)\n"
+        "  --no-horizon       viewer: no land round the zone (--lighting modern; display.horizon_hills)\n"
+        "  --neighbour-tint   viewer, with --neighbours: the neighbours' own geometry magenta, their own ground in\n"
+        "                     their part of the land green (display.neighbour_tint)\n"
         "  --tree-detail PCT  viewer: replacement models' levels of detail reach PCT %% as far (display.tree_detail)\n"
         "  --view-distance X  with --lighting modern: draw X times further than the original, into haze (2.5)\n"
         "  --model A,B,...    model viewer: classic character models by code (HUM) or race (r:RACE[:GENDER]);\n"
@@ -419,6 +424,8 @@ Options parse_args(int argc, char** argv) {
             o.view_distance = std::strtof(argv[++i], nullptr);
         } else if (arg("--no-grass")) {
             o.no_grass = true;
+        } else if (arg("--no-smooth-ground")) {
+            o.no_smooth_ground = true;
         } else if (arg("--flora-push")) {
             need(3);
             o.flora_push = glm::vec3(std::strtof(argv[i + 1], nullptr), std::strtof(argv[i + 2], nullptr),
@@ -441,6 +448,8 @@ Options parse_args(int argc, char** argv) {
             o.scene.color_grade = false;
         } else if (arg("--no-horizon")) {
             o.no_horizon = true;
+        } else if (arg("--neighbour-tint")) {
+            o.neighbour_tint = true;
         } else if (arg("--tree-detail")) {
             need(1);
             o.tree_detail = std::strtof(argv[++i], nullptr) / 100.0f;
@@ -795,6 +804,11 @@ int main(int argc, char** argv) {
             GameDir game = open_game_dir(opts.game_dir, opts.classic_dir);
             auto t0 = std::chrono::steady_clock::now();
             zone = assets::load_zone(game, opts.zone);
+            if (!opts.no_smooth_ground) {
+                const auto r = assets::refine_ground(*zone);
+                log::info("smoothed ground: {} triangles drawn as {}, {} curved edges, at most {:.2f} units off",
+                          r.ground_triangles, r.triangles, r.curved_edges, r.max_offset);
+            }
             if (!opts.no_grass) {
                 const int tt = opts.time_type >= 0 ? opts.time_type : (opts.sky > 0 ? 1 : 0); // as the fog below
                 assets::add_zone_flora(game, *zone, platform::flora_dir(), tt == 1 || tt == 2 || tt == 5);
@@ -844,8 +858,13 @@ int main(int argc, char** argv) {
         render::CoverMapState cover_state, water_state; // what the cover and water maps last showed
         render::FlyCamera camera;
         if (zone) {
-            zone_renderer = std::make_unique<render::ZoneRenderer>(vk, *zone, shader_dir,
-                                                                   render::zone_render_options(open_game_dir(opts.game_dir, opts.classic_dir)));
+            const GameDir game = open_game_dir(opts.game_dir, opts.classic_dir);
+            auto options = render::zone_render_options(game);
+            // The neighbours' ground an earlier run measured (--neighbours) shapes the land round the zone.
+            if (opts.neighbours && opts.modern)
+                options.horizon_sources =
+                    app::cached_horizon_sources(game, app::horizon_cache_dir("viewer", zone->name), zone->name);
+            zone_renderer = std::make_unique<render::ZoneRenderer>(vk, *zone, shader_dir, options);
             zone_renderer->set_hide_flames(opts.modern);
             zone_renderer->set_lod_scale(opts.tree_detail);
             const auto& s = zone_renderer->stats();
@@ -856,6 +875,7 @@ int main(int argc, char** argv) {
         // --neighbours: the zones past the zone lines, loaded before the first frame (the screenshot waits for them).
         std::unique_ptr<GameDir> neighbour_game;
         std::unique_ptr<app::NeighbourZones> neighbours;
+        std::uint64_t distant_hidden_key = 0; // the drawn neighbours the land round the zone was last hidden for
         std::optional<game::CollisionMesh> neighbour_collision; // the zone's, which the neighbours read until they go
         if (zone && opts.neighbours && opts.modern) {
             neighbour_game = std::make_unique<GameDir>(open_game_dir(opts.game_dir, opts.classic_dir));
@@ -868,6 +888,8 @@ int main(int argc, char** argv) {
             in.zone_id = game::zone_id_by_short_name(opts.zone);
             const int tt = opts.time_type >= 0 ? opts.time_type : (opts.sky > 0 ? 1 : 0);
             in.outdoor = opts.sky > 0 && (tt == 1 || tt == 2 || tt == 5);
+            in.horizon = zone_renderer->horizon_build();
+            in.cache_dir = app::horizon_cache_dir("viewer", zone->name);
             neighbours->enter(in);
         }
         if (opts.yaw_deg) camera.yaw = glm::radians(*opts.yaw_deg);
@@ -1279,6 +1301,14 @@ int main(int argc, char** argv) {
                         }
                         neighbours->set_scene_light(scene_light);
                         neighbours->set_lighting(lighting);
+                        neighbours->set_debug_tint(opts.neighbour_tint);
+                        // As the client: no land round the zone where a neighbour is drawn.
+                        if (neighbours->drawn_key() != distant_hidden_key) {
+                            distant_hidden_key = neighbours->drawn_key();
+                            std::vector<std::int64_t> cells;
+                            neighbours->footprint(cells);
+                            zone_renderer->set_distant_hidden(std::move(cells));
+                        }
                     }
                     if (vk.point_shadow_slots() > 0)
                         render::draw_point_shadows(vk, *f, point_shadows, zone->lights, point_builds, *zone_renderer,
@@ -1340,11 +1370,9 @@ int main(int argc, char** argv) {
                 if (sky_drawn) sky_renderer->draw(*f, proj, camera.view(), sky_frame);
                 // As the client: the modern haze behind everything where no sky is drawn; under water, the water.
                 if (water_color || (opts.modern && !sky_drawn)) zone_renderer->draw_backdrop(*f, vp);
-                // The distant hills round an outdoor zone, under an open sky or none (not the planes' painted skies).
-                if (opts.modern && outdoor && !water_color && !opts.no_horizon &&
-                    (!sky_renderer || sky_renderer->has_atmosphere()))
-                    zone_renderer->draw_horizon(*f, vp, render::horizon_strength(view.fog_end, haze.extend,
-                                                                                 weather_look.storm));
+                // The land round an outdoor zone, under an open sky or none (not the planes' painted skies).
+                zone_renderer->set_distant(opts.modern && outdoor && !opts.no_horizon &&
+                                           (!sky_renderer || sky_renderer->has_atmosphere()));
                 if (opts.modern) {
                     // The water reads the opaque world (VkContext::begin_translucent).
                     zone_renderer->draw_depth(*f, vp, camera.position, draw_view, t);

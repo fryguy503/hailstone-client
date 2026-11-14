@@ -37,6 +37,11 @@ struct Zone {
     // Replacement models (assets/model_overrides.h) drawn in place of the objects of the same name; the look only:
     // collision, picking and the rest keep `objects`.
     std::unordered_map<std::string, Mesh> draw_objects;
+    // The terrain as drawn when its ground is smoothed (assets/ground_refine.h), or empty to draw `terrain`; the look
+    // only. One mesh per terrain mesh, with its materials; draw_terrain_source[m][t] is the terrain triangle (index
+    // / 3 in terrain[m]) that draw_terrain[m]'s triangle t was cut from.
+    std::vector<Mesh> draw_terrain;
+    std::vector<std::vector<std::uint32_t>> draw_terrain_source;
     std::vector<PointLight> lights;
     // Particle emitters the placed objects carry (classic zones: 0x34 clouds on
     // skeleton nodes, assets/wld_particles.h): the definitions, the first of a

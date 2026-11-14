@@ -729,6 +729,7 @@ public:
         std::int64_t timer_at = 0;       // when it came (now_ms)
         std::map<std::uint32_t, std::string> descriptions; // OP_SelectTribute's answers
         std::uint32_t master_id = 0;     // the tribute master whose window is open
+        std::uint64_t master_serial = 0;
         bool benefit_open = false;       // TributeBenefitWnd
         std::int32_t last_donation = 0;  // the favour the last donation gave
         std::uint32_t donation_answers = 0; // OP_TributeItem answers so far (the Advanced Inventory's job waits on them)
@@ -984,6 +985,7 @@ public:
     // and CGuildBankWnd's state: the banker a right click on a class-66 guild banker opened it at, the selected item
     // (key: area << 16 | slot) and the requests awaiting an answer (its share of EverQuestinfo::IsItemPending).
     struct GuildBank {
+        std::uint64_t serial = 0;
         std::vector<std::optional<GuildBankItem>> deposit, main;
         std::uint32_t banker = 0;  // the banker's spawn id while the window is open (+0xd0b0)
         std::int32_t selected = -1; // +0xd0a8
@@ -1110,7 +1112,13 @@ public:
     };
     const Adventure& adventure() const { return adventure_; }
     bool open_adventure_recruiter(std::uint32_t npc);
-    void close_adventure_recruiter() { adventure_.recruiter = 0; }
+    // CAdventureRequestWnd::AboutToHide @0x618420 (0x41fe10): an offer up is declined (OP_LDoNButton 0) and the
+    // recruiter state goes back to 0.
+    void close_adventure_recruiter() {
+        adventure_answer(false);
+        recruiter_state_ = 0;
+        adventure_.recruiter = 0;
+    }
     void adventure_request(std::uint32_t risk, std::uint32_t type);
     void adventure_answer(bool accept);
     // OP_LeaveAdventure (no body): leave the current adventure (EQEmu's world server may refuse, with its own line).
@@ -1131,6 +1139,7 @@ public:
         std::int64_t timer_at = 0; // when active.timer_ms came (now_ms)
         std::optional<bool> opted_in;
         std::uint32_t master_id = 0;
+        std::uint64_t master_serial = 0;
         std::int32_t last_donation = 0;
         std::uint32_t donation_answers = 0;
         std::uint32_t active_cost() const;
@@ -1167,7 +1176,7 @@ public:
     };
     const PointMerchant& point_merchant() const { return point_merchant_; }
     bool open_point_merchant(std::uint32_t npc);
-    void close_point_merchant() { point_merchant_ = {}; }
+    void close_point_merchant();
     // Adventure merchants (classes 59, 61, 67, 68: NewPointMerchantWnd), paid in LDoN points, PvP points or crystals.
     struct AdventureMerchant {
         std::uint32_t npc = 0, type = 0; // type: 1 LDoN, 2 Discord, 4 Norrath's Keepers, 5 Dark Reign
@@ -1175,7 +1184,7 @@ public:
     };
     const AdventureMerchant& adventure_merchant() const { return adventure_merchant_; }
     bool open_adventure_merchant(std::uint32_t npc);
-    void close_adventure_merchant() { adventure_merchant_ = {}; }
+    void close_adventure_merchant();
     void adventure_merchant_buy(std::uint32_t item_id);
     // The adventure merchant window's Purchase (CPointMerchantWnd_ConfirmPurchase @0x71bba0, one item): with
     // pointMerchantNoConfirm it buys at once, else it asks first (the merchant's point system's question).
@@ -2803,6 +2812,7 @@ private:
     mutable std::unique_ptr<game::mechanics::CharacterSheet> character_sheet_;
     mutable bool character_sheet_busy_ = false;
     void update_merchant();
+    void update_npc_interactions();
     void update_barter();
     void update_bank();
     void update_loot();
@@ -3201,6 +3211,7 @@ private:
     game::SwitchClock switch_clock_;
     std::vector<game::GroundObject> ground_objects_;
     std::optional<game::WorldContainer> world_container_;
+    std::optional<std::uint32_t> world_container_requested_;
     std::uint32_t door_moves_seen_ = 0;
     std::vector<SoundCue> sound_cues_;
     std::vector<SpellEffectCue> effect_cues_;
@@ -3218,7 +3229,28 @@ private:
     std::chrono::steady_clock::time_point last_eye_position_send_{};
     bool eye_motion_dirty_ = false;
     std::optional<MerchantSession> merchant_;
+    std::uint64_t npc_session_serial_ = 0;
     std::int64_t merchant_check_ms_ = 0; // CMerchantWnd::NextRefreshTime: the range check every 500 ms
+    // The other service windows' range checks (update_npc_interactions), each on its window's own 500 ms timer:
+    // the time of the next check (NextRefreshTime-style), or of the last one (`recruiter`, `world`: AdventureMgr
+    // +0x458 and CContainerMgr::Timer, which check once more than 500 ms have passed).
+    struct NpcRangeChecks {
+        std::int64_t point_merchant = 0;     // CNewPointMerchantWnd +0x25c
+        std::int64_t adventure_merchant = 0; // CPointMerchantWnd +0x29c
+        std::int64_t tribute = 0;            // CTributeMasterWnd +0x2a0 (personal and guild share the window)
+        std::int64_t trainer = 0;            // CTrainWnd's NextRefreshTime
+        std::int64_t trade = 0;              // CTradeWnd::NextRefreshTime
+        std::int64_t recruiter = 0;          // AdventureMgr +0x458, set when the state becomes 1 or 2
+        std::int64_t world = 0;              // CContainerMgr::Timer
+    };
+    NpcRangeChecks npc_checks_;
+    // AdventureMgr +4 as far as the recruiter's range check needs it: 1 the recruiter's words shown
+    // (OP_AdventureInfo), 2 an offer up (OP_AdventureDetails), 0 otherwise (none, answered, or on an adventure).
+    std::uint8_t recruiter_state_ = 0;
+    void set_recruiter_state(std::uint8_t state) {
+        recruiter_state_ = state;
+        npc_checks_.recruiter = now_ms();
+    }
     std::optional<TradeSession> trade_;
     std::optional<BankSession> bank_;
     game::BankSnapshot bank_seen_;     // Hailstone: the bank as last seen (bank.dat)

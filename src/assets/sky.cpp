@@ -103,7 +103,7 @@ constexpr float kAmbientFloor = 0.08f;
 
 std::optional<SkyLayer> build_layer(const wld::WldFile& w, const std::string& name) {
     const wld::Fragment* f = w.find(name);
-    const auto* md = f ? std::get_if<wld::MeshDef>(&f->data) : nullptr;
+    const auto* md = f ? f->get<wld::MeshDef>() : nullptr;
     if (!md) return std::nullopt;
     SkyLayer layer;
     layer.mesh = wld::build_mesh(w, *md, name);
@@ -141,7 +141,8 @@ std::optional<Sky> load_sky(const GameDir& game, int index) {
         log::warn("sky.s3d not found; no sky");
         return std::nullopt;
     }
-    auto archive = std::make_shared<const PfsArchive>(PfsArchive::open(*path, PfsArchive::storage_for(game, *path)));
+    auto archive = std::make_shared<const PfsArchive>(PfsArchive::open(
+        *path, PfsArchive::storage_for(game, *path), game.shared_file_cache()));
     auto data = archive->read("sky.wld");
     if (!data) throw std::runtime_error(archive->label() + ": missing sky.wld");
     auto w = wld::WldFile::parse(*data, archive->label() + ":sky.wld");
@@ -153,7 +154,7 @@ std::optional<Sky> load_sky(const GameDir& game, int index) {
     sky.dome = build_layer(w, prefix + "1_DMSPRITEDEF");
     sky.clouds = build_layer(w, prefix + "3_DMSPRITEDEF");
     if (const wld::Fragment* f = w.find(prefix + "2_HS_DEF"))
-        if (const auto* sk = std::get_if<wld::Skeleton>(&f->data))
+        if (const auto* sk = f->get<wld::Skeleton>())
             sky.bodies = wld::build_skeleton_pose(w, *sk, f->name);
     if (!sky.dome && !sky.clouds) return std::nullopt;
     return sky;

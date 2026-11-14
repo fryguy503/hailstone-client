@@ -169,11 +169,11 @@ ZoneRegions ZoneRegions::from_wld(const wld::WldFile& wld) {
     std::size_t region_count = 0;
     std::vector<wld::RegionTag> tags;
     for (const auto& f : wld.fragments()) {
-        if (const auto* t = std::get_if<wld::BspTree>(&f.data)) {
+        if (const auto* t = f.get<wld::BspTree>()) {
             if (!tree) tree = t;
         } else if (f.type == 0x22) {
             ++region_count; // counted even if it failed to parse, so numbering stays intact
-        } else if (const auto* g = std::get_if<wld::RegionTag>(&f.data)) {
+        } else if (const auto* g = f.get<wld::RegionTag>()) {
             tags.push_back(*g);
         }
     }

@@ -304,6 +304,17 @@ private:
     std::uint32_t speed_stops_ = 0, turn_stops_ = 0, stun_leans_ = 0; // GameConnection's, as last seen
     game::mechanics::DrunkenMotion drunken_motion_;
     std::uint32_t drunkenness_motion_updates_ = 0;
+    // What the fly mode was last worked out from (local_fly_mode): the buff slots' spells, the SPA 57 cache values
+    // and the local spawn's count of OP_SpawnAppearance 19; not ready until the first frame after a reset.
+    struct FlyModeSeen {
+        bool ready = false;
+        std::vector<std::uint32_t> buffs;
+        bool lev2 = false, lev5 = false;
+        std::uint32_t sets = 0;
+    } fly_;
+    game::mechanics::FlyMode local_fly_mode(const net::GameConnection& conn, const game::Spawn* me,
+                                            const game::mechanics::MovementFacts& facts, bool no_levitate_zone,
+                                            game::mechanics::FlyMode current);
 };
 
 } // namespace hailstone::app

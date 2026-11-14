@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <limits>
+
 #include <algorithm>
 #include <cmath>
 #include <optional>
@@ -341,6 +343,117 @@ TEST_CASE("Neighbour zones: the neighbour's ground goes where the current zone h
                 CHECK(std::min({w.x, w.y, w.z}) >= -1e-4f);
             }
     }
+}
+
+TEST_CASE("neighbour zones: where the land stands in for the neighbour's ground, its ground goes and what stands stays") {
+    // The neighbour's ground at 100 over 0..256 x 0..128 on 32-unit cells; past x 192 the land lies lower than it,
+    // so nothing may stand there (a house would float).
+    LandMask m;
+    m.origin = {0.0f, 0.0f};
+    m.cell = 32.0f;
+    m.width = 8;
+    m.height = 4;
+    m.ground.assign(32, 100.0f);
+    m.stands.assign(32, 1);
+    for (int y = 0; y < m.height; ++y)
+        for (int x = 6; x < m.width; ++x) m.stands[static_cast<std::size_t>(y * m.width + x)] = 0;
+    REQUIRE(m.ground_at(50.0f, 50.0f));
+    CHECK(*m.ground_at(50.0f, 50.0f) == doctest::Approx(100.0f));
+    CHECK_FALSE(m.ground_at(300.0f, 50.0f));
+    CHECK(m.stands_at(50.0f, 50.0f));
+    CHECK_FALSE(m.stands_at(200.0f, 50.0f));
+    CHECK(m.stands_at(400.0f, 50.0f)); // outside the grid
+
+    // Its ground, either way up: it goes, the land is drawn there.
+    for (bool flip : {false, true}) {
+        const glm::vec3 a{10, 10, 104}, b{150, 10, 104}, c{10, 100, 104};
+        auto parts = flip ? split_off_land(m, a, c, b, LandPart::Placed) : split_off_land(m, a, b, c, LandPart::Placed);
+        REQUIRE(parts);
+        CHECK(parts->empty());
+    }
+    // A roof well over the ground where things may stand: it stays whole. A wall too.
+    CHECK_FALSE(split_off_land(m, {10, 10, 200}, {150, 10, 200}, {10, 100, 200}, LandPart::Placed));
+    CHECK_FALSE(split_off_land(m, {20, 40, 100}, {150, 40, 100}, {150, 40, 300}, LandPart::Placed));
+    // A wall running into where nothing may stand: the part there goes, the rest stays.
+    {
+        const glm::vec3 a{100, 40, 100}, b{250, 40, 100}, c{250, 40, 300};
+        auto parts = split_off_land(m, a, b, c, LandPart::Placed);
+        REQUIRE(parts);
+        REQUIRE_FALSE(parts->empty());
+        for (const auto& poly : *parts)
+            for (const glm::vec3& w : poly) CHECK((a * w.x + b * w.y + c * w.z).x <= 192.0f + 1e-3f);
+    }
+    // Outside the mask: whole. An empty mask: whole.
+    CHECK_FALSE(split_off_land(m, {300, 10, 100}, {400, 10, 100}, {300, 100, 100}, LandPart::Placed));
+    CHECK_FALSE(split_off_land(LandMask{}, {10, 10, 104}, {150, 10, 104}, {10, 100, 104}, LandPart::Placed));
+
+    // Its terrain goes where it is not drawn (the band: the land is the ground there), whatever way it faces, and
+    // stays whole where it is: the slopes and ridges crossing the land in the band, which showed as shards and strips.
+    m.terrain.assign(32, 1);
+    for (int y = 0; y < m.height; ++y)
+        for (int x = 0; x < 3; ++x) m.terrain[static_cast<std::size_t>(y * m.width + x)] = 0;
+    CHECK_FALSE(m.terrain_at(50.0f, 50.0f));
+    CHECK(m.terrain_at(150.0f, 50.0f));
+    {
+        // A slope on its ground (within the tolerance: a broad one, its opened ground follows it) wholly where its
+        // terrain is not drawn: it goes, whatever way it faces.
+        auto parts = split_off_land(m, {10, 10, 90}, {80, 10, 110}, {10, 20, 120}, LandPart::Terrain);
+        REQUIRE(parts);
+        CHECK(parts->empty());
+        // A wall standing clear of its ground there stays, as a placed one would.
+        CHECK_FALSE(split_off_land(m, {10, 40, 100}, {80, 40, 100}, {10, 40, 300}, LandPart::Terrain));
+        // Its ground where its terrain is drawn stays whole, though it lies on its measured ground.
+        CHECK_FALSE(split_off_land(m, {110, 10, 100}, {180, 10, 100}, {110, 100, 100}, LandPart::Terrain));
+        // Across, lying on its ground: the part in the band goes.
+        const glm::vec3 a{20, 40, 100}, b{180, 40, 100}, c{180, 60, 110};
+        auto across = split_off_land(m, a, b, c, LandPart::Terrain);
+        REQUIRE(across);
+        REQUIRE_FALSE(across->empty());
+        for (const auto& poly : *across)
+            for (const glm::vec3& w : poly) CHECK((a * w.x + b * w.y + c * w.z).x >= 96.0f - 1e-3f);
+    }
+    // Its water goes over the current zone's own terrain or water, which would double it; elsewhere it stays.
+    m.own.assign(32, 0);
+    for (int y = 0; y < m.height; ++y) m.own[static_cast<std::size_t>(y * m.width)] = 1; // x 0..32
+    CHECK(m.own_at(10.0f, 50.0f));
+    CHECK_FALSE(m.own_at(50.0f, 50.0f));
+    CHECK_FALSE(m.own_at(-50.0f, 50.0f));
+    {
+        auto parts = split_off_land(m, {4, 10, 90}, {28, 10, 90}, {4, 100, 90}, LandPart::Liquid);
+        REQUIRE(parts);
+        CHECK(parts->empty());
+        CHECK_FALSE(split_off_land(m, {40, 10, 90}, {150, 10, 90}, {40, 100, 90}, LandPart::Liquid));
+        // Where nothing may stand, water goes too.
+        auto past = split_off_land(m, {200, 10, 90}, {250, 10, 90}, {200, 100, 90}, LandPart::Liquid);
+        REQUIRE(past);
+        CHECK(past->empty());
+    }
+}
+
+TEST_CASE("neighbour zones: where the neighbour's terrain stops, it stops where it meets the land, not in a fin") {
+    // A row of cells: its terrain not drawn in the first (the band), drawn after; the land at 0 throughout. Its own
+    // ground rises to a bank 100 high over cells 1..2, then lies at 10 (on the land, within the tolerance).
+    LandMask m;
+    m.cell = 64.0f;
+    m.width = 8;
+    m.height = 1;
+    m.ground.assign(8, 0.0f);
+    m.stands.assign(8, 1);
+    m.surface.assign(8, 0.0f);
+    m.terrain = {0, 1, 1, 1, 1, 1, 1, 1};
+    auto bank = [](glm::vec2 p) -> std::optional<float> { return p.x < 192.0f ? 100.0f : 10.0f; };
+    CHECK(spread_terrain_cut(m, bank, 24.0f, 6) == 2);
+    CHECK(m.terrain == std::vector<std::uint8_t>{0, 0, 0, 1, 1, 1, 1, 1});
+    // At most `reach` cells on: a whole hillside is not taken off.
+    m.terrain = {0, 1, 1, 1, 1, 1, 1, 1};
+    CHECK(spread_terrain_cut(m, [](glm::vec2) -> std::optional<float> { return 100.0f; }, 24.0f, 3) == 3);
+    CHECK(m.terrain == std::vector<std::uint8_t>{0, 0, 0, 0, 1, 1, 1, 1});
+    // Where nothing is known of the land, or of its ground, nothing spreads.
+    m.terrain = {0, 1, 1, 1, 1, 1, 1, 1};
+    m.surface[1] = std::numeric_limits<float>::quiet_NaN();
+    CHECK(spread_terrain_cut(m, bank, 24.0f, 6) == 0);
+    m.surface[1] = 0.0f;
+    CHECK(spread_terrain_cut(m, [](glm::vec2) -> std::optional<float> { return std::nullopt; }, 24.0f, 6) == 0);
 }
 
 TEST_CASE("neighbour zones: a thin line box faces along its thin axis, a squarer one the nearest edge") {

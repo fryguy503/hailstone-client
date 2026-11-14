@@ -202,30 +202,39 @@ VertexColors read_vertex_colors(ByteReader& r) {
     return v;
 }
 
-TrackDef read_track_def(ByteReader& r) {
+TrackFrame read_track_frame(ByteReader& r, bool packed) {
+    TrackFrame f;
+    if (packed) {
+        // s16 w, x, y, z (/16384), s16 translation (/256), u16 scale (/256);
+        // the scale is unsigned (OpenEQ docs/WLD_PACKED_SCALE.md).
+        float q[4];
+        for (float& c : q) c = static_cast<float>(r.le<std::int16_t>()) / 16384.0f;
+        f.rotation = glm::quat(q[0], q[1], q[2], q[3]);
+        for (int k = 0; k < 3; ++k) f.translation[k] = static_cast<float>(r.le<std::int16_t>()) / 256.0f;
+        f.scale = static_cast<float>(r.le<std::uint16_t>()) / 256.0f;
+    } else {
+        f.scale = r.f32();
+        f.translation = read_vec3(r);
+        float q[4];
+        for (float& c : q) c = r.f32();
+        f.rotation = glm::quat(q[0], q[1], q[2], q[3]);
+    }
+    return f;
+}
+
+TrackDef read_track_def(ByteReader& r, const ImmutableFileBytes* backing, std::size_t payload_offset) {
     TrackDef t;
     t.flags = r.le<std::uint32_t>();
     bool packed = t.flags & 0x8;
-    std::size_t count = checked_count(r, r.le<std::uint32_t>(), packed ? 16 : 32);
-    t.frames.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
-        TrackFrame f;
-        if (packed) {
-            // s16 w, x, y, z (/16384), s16 translation (/256), u16 scale (/256);
-            // the scale is unsigned (OpenEQ docs/WLD_PACKED_SCALE.md).
-            float q[4];
-            for (float& c : q) c = static_cast<float>(r.le<std::int16_t>()) / 16384.0f;
-            f.rotation = glm::quat(q[0], q[1], q[2], q[3]);
-            for (int k = 0; k < 3; ++k) f.translation[k] = static_cast<float>(r.le<std::int16_t>()) / 256.0f;
-            f.scale = static_cast<float>(r.le<std::uint16_t>()) / 256.0f;
-        } else {
-            f.scale = r.f32();
-            f.translation = read_vec3(r);
-            float q[4];
-            for (float& c : q) c = r.f32();
-            f.rotation = glm::quat(q[0], q[1], q[2], q[3]);
-        }
-        t.frames.push_back(f);
+    const std::size_t stride = packed ? 16 : 32;
+    std::size_t count = checked_count(r, r.le<std::uint32_t>(), stride);
+    if (backing) {
+        const auto offset = payload_offset + r.position();
+        r.skip(count * stride);
+        t.frames = TrackFrames::from_encoded(*backing, offset, count, packed);
+    } else {
+        t.frames.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) t.frames.push_back(read_track_frame(r, packed));
     }
     return t;
 }
@@ -337,6 +346,69 @@ RegionTag read_region_tag(ByteReader& r, std::string_view name) {
 
 } // namespace
 
+TrackFrames::TrackFrames(TrackFrames&& other) noexcept
+    : owned_(std::move(other.owned_)), backing_(std::move(other.backing_)),
+      offset_(std::exchange(other.offset_, 0)), count_(std::exchange(other.count_, 0)),
+      encoded_(std::exchange(other.encoded_, false)), packed_(std::exchange(other.packed_, false)) {
+    other.owned_.clear();
+}
+
+TrackFrames& TrackFrames::operator=(TrackFrames&& other) noexcept {
+    if (this != &other) {
+        owned_ = std::move(other.owned_);
+        backing_ = std::move(other.backing_);
+        offset_ = std::exchange(other.offset_, 0);
+        count_ = std::exchange(other.count_, 0);
+        encoded_ = std::exchange(other.encoded_, false);
+        packed_ = std::exchange(other.packed_, false);
+        other.owned_.clear();
+    }
+    return *this;
+}
+
+TrackFrames TrackFrames::from_encoded(ImmutableFileBytes owner, size_type offset, size_type count, bool packed) {
+    const auto bytes = owner.bytes();
+    const size_type stride = packed ? 16 : 32;
+    if (offset > bytes.size() || count > (bytes.size() - offset) / stride)
+        throw std::out_of_range("WLD track frames exceed their backing");
+    TrackFrames out;
+    out.backing_ = std::move(owner);
+    out.offset_ = offset;
+    out.count_ = count;
+    out.encoded_ = true;
+    out.packed_ = packed;
+    return out;
+}
+
+TrackFrame TrackFrames::operator[](size_type i) const {
+    if (!encoded_) return owned_[i];
+    if (i >= count_) throw std::out_of_range("WLD track frame index");
+    const size_type stride = packed_ ? 16 : 32;
+    ByteReader r(backing_.bytes().subspan(offset_ + i * stride, stride));
+    return read_track_frame(r, packed_);
+}
+
+TrackFrame TrackFrames::at(size_type i) const {
+    if (i >= size()) throw std::out_of_range("WLD track frame index");
+    return (*this)[i];
+}
+
+TrackFrame& TrackFrames::at(size_type i) {
+    if (i >= size()) throw std::out_of_range("WLD track frame index");
+    materialize();
+    return owned_[i];
+}
+
+void TrackFrames::materialize() {
+    if (!encoded_) return;
+    std::vector<TrackFrame> decoded;
+    decoded.reserve(count_);
+    const TrackFrames& view = *this;
+    for (size_type i = 0; i < count_; ++i) decoded.push_back(view[i]);
+    owned_ = std::move(decoded);
+    reset_encoded();
+}
+
 std::vector<std::uint8_t> decode_string_bytes(std::span<const std::byte> in) {
     std::vector<std::uint8_t> out(in.size());
     for (std::size_t i = 0; i < in.size(); ++i)
@@ -345,27 +417,41 @@ std::vector<std::uint8_t> decode_string_bytes(std::span<const std::byte> in) {
 }
 
 WldFile WldFile::parse(std::span<const std::byte> data, std::string label) {
+    return parse_impl(data, std::move(label), {});
+}
+
+WldFile WldFile::parse(ImmutableFileBytes data, std::string label, bool keep_private) {
+    const auto bytes = data.bytes();
+    // Only a mapping is worth keeping: it is shared with other clients and its pages can be dropped. Private bytes
+    // (no cache, or the cache's fallback) are decoded and freed with `data`, as parse(span) does.
+    if (!data.mapped() && !keep_private) return parse_impl(bytes, std::move(label), {});
+    return parse_impl(bytes, std::move(label), std::move(data));
+}
+
+WldFile WldFile::parse_impl(std::span<const std::byte> data, std::string label, ImmutableFileBytes backing) {
     WldFile w;
+    w.backing_ = std::move(backing);
     w.label_ = std::move(label);
     ByteReader r(data);
+    std::uint32_t fragment_count = 0;
     try {
         if (r.le<std::uint32_t>() != kMagic) throw std::runtime_error(w.label_ + ": not a WLD file");
         auto version = r.le<std::uint32_t>();
         if (version != kVersionOld && version != kVersionNew)
             log::debug("{}: unusual WLD version {:#x}", w.label_, version);
         w.new_format_ = version != kVersionOld;
-        auto count = r.le<std::uint32_t>();
+        fragment_count = r.le<std::uint32_t>();
         r.skip(8); // region count, max object bytes
         auto string_size = r.le<std::uint32_t>();
         r.skip(4); // string count
         w.strings_ = decode_string_bytes(r.bytes(string_size));
-        if (count > r.remaining() / 8) throw std::runtime_error(w.label_ + ": bad WLD fragment count");
-        w.fragments_.reserve(count);
+        if (fragment_count > r.remaining() / 8) throw std::runtime_error(w.label_ + ": bad WLD fragment count");
+        w.fragments_.reserve(fragment_count);
     } catch (const std::out_of_range&) {
         throw std::runtime_error(w.label_ + ": truncated WLD header");
     }
 
-    for (std::size_t i = 0; i < w.fragments_.capacity(); ++i) {
+    for (std::size_t i = 0; i < fragment_count; ++i) {
         Fragment f;
         f.offset = r.position();
         std::size_t size = 0;
@@ -399,7 +485,7 @@ WldFile WldFile::parse(std::span<const std::byte> data, std::string label) {
                 f.data = sr;
                 break;
             }
-            case 0x12: f.data = read_track_def(fr); break;
+            case 0x12: f.data = read_track_def(fr, w.backing_.bytes().empty() ? nullptr : &w.backing_, f.offset + 8); break;
             case 0x13: {
                 TrackRef t;
                 t.track = fr.le<std::int32_t>();
@@ -477,9 +563,21 @@ WldFile WldFile::parse(std::span<const std::byte> data, std::string label) {
             f.data = std::monostate{};
             w.errors_.push_back({i, f.type, e.what()});
         }
-        if (!f.name.empty()) w.by_name_.try_emplace(f.name, i);
         w.fragments_.push_back(std::move(f));
     }
+    const auto named_count = static_cast<std::size_t>(std::count_if(w.fragments_.begin(), w.fragments_.end(),
+        [](const Fragment& fragment) { return !fragment.name.empty(); }));
+    w.by_name_.reserve(named_count);
+    for (std::size_t i = 0; i < w.fragments_.size(); ++i)
+        if (!w.fragments_[i].name.empty()) w.by_name_.push_back(static_cast<std::uint32_t>(i));
+    std::sort(w.by_name_.begin(), w.by_name_.end(), [&w](std::uint32_t a, std::uint32_t b) {
+        const auto& left = w.fragments_[a].name;
+        const auto& right = w.fragments_[b].name;
+        return left < right || (left == right && a < b);
+    });
+    w.by_name_.erase(std::unique(w.by_name_.begin(), w.by_name_.end(), [&w](std::uint32_t a, std::uint32_t b) {
+        return w.fragments_[a].name == w.fragments_[b].name;
+    }), w.by_name_.end());
     for (const auto& e : w.errors_)
         log::debug("{}: fragment {} (type {:#04x}) truncated: {}", w.label_, e.index + 1, e.type, e.what);
     return w;
@@ -496,7 +594,7 @@ struct WldFile::Deferred {
         TrackRef track{};
     };
     std::vector<Entry> entries;
-    std::function<std::vector<std::byte>()> loader;
+    std::function<ImmutableFileBytes()> loader;
     mutable std::mutex mutex;
     std::unique_ptr<WldFile> parsed;
     std::size_t readers = 0, parsed_bytes = 0;
@@ -656,6 +754,10 @@ WldFile::DecodeStats WldFile::decode_stats() const {
 }
 
 WldFile WldFile::deferred(std::function<std::vector<std::byte>()> loader, std::string label) {
+    return deferred([loader = std::move(loader)] { return ImmutableFileBytes::owned(loader()); }, std::move(label));
+}
+
+WldFile WldFile::deferred(std::function<ImmutableFileBytes()> loader, std::string label) {
     auto parsed = parse(loader(), label);
     WldFile out;
     out.label_ = std::move(label);
@@ -679,8 +781,7 @@ void WldFile::visit_character_index(const IndexVisitor& visitor) const {
     for (std::size_t i = 0; i < fragments_.size(); ++i) {
         const auto& f = fragments_[i];
         if (f.name.empty()) continue;
-        if (std::holds_alternative<ActorDef>(f.data) || std::holds_alternative<MeshDef>(f.data) ||
-            std::holds_alternative<MaterialDef>(f.data) || std::holds_alternative<TrackRef>(f.data))
+        if (f.holds<ActorDef>() || f.holds<MeshDef>() || f.holds<MaterialDef>() || f.holds<TrackRef>())
             visitor(static_cast<Ref>(i + 1), f.type, f.name, std::get_if<TrackRef>(&f.data));
     }
 }
@@ -734,8 +835,9 @@ const Fragment* WldFile::resolve(Ref ref) const {
 
 const Fragment* WldFile::find(std::string_view name) const {
     if (deferred_) return decoded().find(name);
-    auto it = by_name_.find(std::string(name));
-    return it == by_name_.end() ? nullptr : &fragments_[it->second];
+    const auto it = std::lower_bound(by_name_.begin(), by_name_.end(), name,
+        [this](std::uint32_t index, std::string_view key) { return fragments_[index].name < key; });
+    return it == by_name_.end() || fragments_[*it].name != name ? nullptr : &fragments_[*it];
 }
 
 std::size_t WldFile::retained_bytes() const {
@@ -761,9 +863,12 @@ std::size_t WldFile::retained_bytes() const {
                     total += vec(d.frames);
                 } else if constexpr (std::is_same_v<D, MaterialList>) {
                     total += vec(d.materials);
-                } else if constexpr (std::is_same_v<D, MeshDef>) {
-                    total += vec(d.positions) + vec(d.uvs) + vec(d.normals) + vec(d.colors) + vec(d.polygons) +
-                             vec(d.vertex_pieces) + vec(d.render_groups);
+                } else if constexpr (std::is_same_v<D, FragmentBox<MeshDef>>) {
+                    if (const auto* mesh = d.get())
+                        total += sizeof(MeshDef) + vec(mesh->positions) + vec(mesh->uvs) + vec(mesh->normals) +
+                                 vec(mesh->colors) + vec(mesh->polygons) + vec(mesh->vertex_pieces) + vec(mesh->render_groups);
+                } else if constexpr (std::is_same_v<D, FragmentBox<ParticleCloud>>) {
+                    if (d.get()) total += sizeof(ParticleCloud);
                 } else if constexpr (std::is_same_v<D, ActorDef>) {
                     total += str(d.callback) + vec(d.sprites);
                 } else if constexpr (std::is_same_v<D, VertexColors>) {
@@ -771,7 +876,7 @@ std::size_t WldFile::retained_bytes() const {
                 } else if constexpr (std::is_same_v<D, LightDef>) {
                     total += vec(d.levels) + vec(d.colors);
                 } else if constexpr (std::is_same_v<D, TrackDef>) {
-                    total += vec(d.frames);
+                    if (!d.frames.encoded()) total += vec(d.frames);
                 } else if constexpr (std::is_same_v<D, Skeleton>) {
                     total += vec(d.nodes) + vec(d.meshes);
                     for (const auto& n : d.nodes) total += str(n.name) + vec(n.children);

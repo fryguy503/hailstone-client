@@ -10,12 +10,15 @@
 #include <string>
 #include <utility>
 
+#include "core/env.h"
 #include "core/log.h"
 #include "core/png_write.h"
 #include "platform/paths.h"
 #include "platform/window.h"
 #include "render/descriptor_limits.h"
+#include "render/frame_sync.h"
 #include "render/gpu_requirements.h"
+#include "render/gpu_shared_cache.h"
 #include "render/swapchain_size.h"
 #include "render/vk_util.h"
 
@@ -179,6 +182,8 @@ Tonemap parse_tonemap(std::string_view name) {
 }
 
 VkContext::VkContext(platform::Window& window, bool validation) : window_(window) {
+    const char* benchmark = core::env("GPU_BENCHMARK");
+    gpu_benchmark_ = benchmark && std::strcmp(benchmark, "1") == 0;
     if (auto loader = window_.bundled_vulkan_loader())
         volkInitializeCustom(loader); // the MoltenVK a macOS release ships, as the window loaded it
     else
@@ -197,6 +202,15 @@ VkContext::~VkContext() {
     // Every upload is done and every retired object can go (before the allocator does).
     uploads_.all_done([this](const Upload& u) { recycle_upload(u); });
     retired_.flush();
+    if (gpu_shared_requested_) {
+        const auto stats = gpu_shared_cache_ ? gpu_shared_cache_->stats() : GpuSharedCache::Stats{};
+        log::info("GPU asset sharing totals: shared bindings {}, unique imports {}, local hits {}, broker hits {}, "
+                  "private fallbacks {}, shared frames {}, imported allocation bytes {}",
+                  gpu_shared_bindings_, stats.imports, stats.local_hits, stats.broker_hits, gpu_shared_fallbacks_,
+                  gpu_shared_frames_, stats.imported_allocation_bytes);
+    }
+    // Imported owners retired by the renderers are released before the importing device.
+    gpu_shared_cache_.reset();
     for (VkFence f : free_fences_) vkDestroyFence(device_, f, nullptr);
     free_fences_.clear();
     if (upload_pool_) vkDestroyCommandPool(device_, upload_pool_, nullptr);
@@ -304,12 +318,15 @@ void VkContext::pick_physical_device() {
     // Each GPU's support is kept so that, when none qualifies, the error names what each one lacks
     // (render/gpu_requirements.h); app/startup_error.h turns it into the player's dialog.
     std::vector<GpuSupport> seen;
-    int best_score = -1;
-    for (VkPhysicalDevice pd : devices) {
+    std::vector<std::uint32_t> queue_families(devices.size(), UINT32_MAX);
+    for (std::size_t device_index = 0; device_index < devices.size(); ++device_index) {
+        VkPhysicalDevice pd = devices[device_index];
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(pd, &props);
         GpuSupport& gpu = seen.emplace_back();
         gpu.name = props.deviceName;
+        gpu.kind = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? GpuKind::Discrete
+                   : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? GpuKind::Integrated : GpuKind::Other;
         gpu.api_major = VK_API_VERSION_MAJOR(props.apiVersion);
         gpu.api_minor = VK_API_VERSION_MINOR(props.apiVersion);
         // The 1.2 and 1.3 feature structs are only valid to query on a 1.3 device.
@@ -341,17 +358,13 @@ void VkContext::pick_physical_device() {
             if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present) { family = i; break; }
         }
         gpu.presents = family != UINT32_MAX;
-        if (!gpu_missing(gpu).empty()) continue;
-
-        int score = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2
-                  : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 1 : 0;
-        if (score > best_score) {
-            best_score = score;
-            physical_ = pd;
-            queue_family_ = family;
-        }
+        queue_families[device_index] = family;
     }
-    if (!physical_) throw std::runtime_error(no_usable_gpu_text(seen));
+    const char* requested_name = core::env("GPU_NAME");
+    const GpuSelection selected = choose_gpu(seen, requested_name ? requested_name : "");
+    if (!selected.index) throw std::runtime_error(selected.error);
+    physical_ = devices[*selected.index];
+    queue_family_ = queue_families[*selected.index];
 
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(physical_, &props);
@@ -409,6 +422,16 @@ void VkContext::create_device() {
     for (const auto& e : available)
         if (std::strcmp(e.extensionName, "VK_KHR_portability_subset") == 0) extensions.push_back("VK_KHR_portability_subset");
 
+    gpu_shared_requested_ = GpuSharedCache::requested();
+    const char* shared_extension = gpu_shared_requested_ ? GpuSharedCache::device_extension() : nullptr;
+    const bool shared_supported = shared_extension &&
+        std::any_of(available.begin(), available.end(), [shared_extension](const VkExtensionProperties& e) {
+            return std::strcmp(e.extensionName, shared_extension) == 0;
+        });
+    if (shared_supported) extensions.push_back(shared_extension);
+    else if (gpu_shared_requested_)
+        log::warn("GPU asset sharing: external-memory transport unavailable; immutable assets remain private");
+
     float priority = 1.0f;
     VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     queue.queueFamilyIndex = queue_family_;
@@ -463,6 +486,29 @@ void VkContext::create_device() {
     }
     if (depth_format_ == VK_FORMAT_UNDEFINED) throw std::runtime_error("no usable depth format");
     create_pipeline_cache();
+    if (shared_supported) {
+        try {
+            gpu_shared_cache_ = std::make_unique<GpuSharedCache>(physical_, device_, queue_family_, gpu_name_, instance_);
+            log::info("GPU asset sharing: connected to the texture broker");
+        } catch (const std::exception& e) {
+            // Sharing is an extra: without it every texture is the client's own, as with sharing off.
+            log::warn("GPU asset sharing: not started ({}); textures stay private", e.what());
+            gpu_shared_cache_.reset();
+        }
+    }
+}
+
+void VkContext::note_shared_gpu_texture(bool imported) {
+    if (!gpu_shared_requested_) return;
+    std::uint64_t& count = imported ? gpu_shared_bindings_ : gpu_shared_fallbacks_;
+    ++count;
+    // Sparse coverage logs let native test automation distinguish actual imports from private fallback.
+    if (count == 1 || (count & (count - 1)) == 0) {
+        const auto stats = gpu_shared_cache_ ? gpu_shared_cache_->stats() : GpuSharedCache::Stats{};
+        log::info("GPU asset sharing coverage: shared bindings {}, unique imports {}, local hits {}, broker hits {}, "
+                  "private fallbacks {}", gpu_shared_bindings_, stats.imports, stats.local_hits, stats.broker_hits,
+                  gpu_shared_fallbacks_);
+    }
 }
 
 void VkContext::create_pipeline_cache() {
@@ -908,6 +954,28 @@ void VkContext::create_frames() {
     vk_check(vkCreateCommandPool(device_, &p, nullptr, &upload_pool_), "vkCreateCommandPool");
 }
 
+void VkContext::localize_shared_textures() {
+    // Sharing has stopped: the imports become the client's own textures, then whoever holds a copy of their
+    // image or view takes the new ones. Between frames, with the device idle: no set in use is rewritten.
+    if (!shared_detach_logged_) {
+        shared_detach_logged_ = true;
+        log::warn("GPU asset sharing stopped ({}); this client goes on with its own textures",
+                  gpu_shared_cache_->detach_reason());
+    }
+    wait_idle();
+    const std::size_t moved = gpu_shared_cache_->localize(queue_, allocator_);
+    log::info("GPU asset sharing: {} shared textures copied into this client's own memory", moved);
+    for (const auto& [id, refresh] : shared_texture_listeners_) refresh();
+}
+
+std::uint64_t VkContext::on_shared_textures_moved(std::function<void()> refresh) {
+    const std::uint64_t id = ++shared_texture_listener_ids_;
+    shared_texture_listeners_.emplace(id, std::move(refresh));
+    return id;
+}
+
+void VkContext::remove_shared_textures_listener(std::uint64_t id) { shared_texture_listeners_.erase(id); }
+
 void VkContext::wait_idle() {
     vkDeviceWaitIdle(device_);
     // Every frame submitted is done; one being recorded is not (what it recorded so far may still be drawn).
@@ -1051,6 +1119,10 @@ bool VkContext::request_screenshot(std::filesystem::path path, std::uint32_t max
 }
 
 std::optional<FrameInfo> VkContext::begin_frame_commands() {
+    if (gpu_shared_cache_) {
+        gpu_shared_cache_->keep_alive();
+        if (gpu_shared_cache_->needs_localize()) localize_shared_textures();
+    }
     if (window_.minimized()) return std::nullopt;
 
     std::uint32_t w = 0, h = 0;
@@ -1121,16 +1193,14 @@ void VkContext::begin_scene(const FrameInfo& frame, const glm::vec4& clear_color
                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                       VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     // The depth targets: the previous frame's AO and post passes read them.
-    constexpr VkPipelineStageFlags2 kDepthTests =
-        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-    for (VkImage depth : {depth_.image, depth_resolved_.image})
-        if (depth)
-            image_barrier(cmd, depth, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                          kDepthTests | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                              VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                          VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, kDepthTests | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                          VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    const auto depth_sync = depth_frame_sync(scene_samples_);
+    auto prepare_depth = [&](VkImage image, AttachmentSync sync) {
+        image_barrier(cmd, image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                      sync.stages | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, sync.access, sync.stages, sync.access);
+    };
+    prepare_depth(depth_.image, depth_sync.attachment);
+    if (depth_resolved_.image) prepare_depth(depth_resolved_.image, depth_sync.sampled);
 
     // begin_translucent's copies are read only after it writes them; until then their contents do not matter.
     for (VkImage copy : {water_color_.image, water_depth_.image})
@@ -1194,14 +1264,15 @@ void VkContext::begin_translucent(const FrameInfo& frame) {
     vkCmdEndRendering(cmd);
     // The resolved colour and depth (sample 0) into the copies the water samples.
     const Image& depth = depth_resolved_.image ? depth_resolved_ : depth_;
+    const auto depth_sync = depth_frame_sync(scene_samples_);
     struct Copy { VkImage from, to; VkImageAspectFlags aspect; VkImageLayout layout; VkPipelineStageFlags2 stages;
                   VkAccessFlags2 access; };
     const Copy copies[2] = {
         {scene_resolved_.image, water_color_.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT},
+         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+         VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT},
         {depth.image, water_depth_.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-         VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-         VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT},
+         depth_sync.sampled.stages, depth_sync.sampled.access},
     };
     for (const Copy& c : copies) {
         image_barrier(cmd, c.from, c.aspect, c.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.stages, c.access,
@@ -1220,9 +1291,7 @@ void VkContext::begin_translucent(const FrameInfo& frame) {
                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         // Back to an attachment: the next rendering loads (the single-sampled targets) or resolves into it again.
         image_barrier(cmd, c.from, c.aspect, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.layout,
-                      VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, c.stages,
-                      c.access | (c.aspect == VK_IMAGE_ASPECT_DEPTH_BIT ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT
-                                                                        : VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT));
+                      VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, c.stages, c.access);
     }
     // The multisampled targets were stored by the first rendering and are loaded as they are.
     if (scene_msaa_.image)
@@ -1232,10 +1301,8 @@ void VkContext::begin_translucent(const FrameInfo& frame) {
                       VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     if (depth_resolved_.image)
         image_barrier(cmd, depth_.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                      VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, depth_sync.attachment.stages,
+                      depth_sync.attachment.access, depth_sync.attachment.stages, depth_sync.attachment.access);
     begin_scene_rendering(cmd, true, glm::vec4(0.0f));
 }
 
@@ -1254,10 +1321,9 @@ void VkContext::begin_overlay(const FrameInfo& frame) {
 
     // The depth for the AO and the post pass (a depth resolve runs in the colour output stage).
     const Image& depth = depth_resolved_.image ? depth_resolved_ : depth_;
+    const auto depth_sync = depth_frame_sync(scene_samples_).sampled;
     image_barrier(cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                  VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, depth_sync.stages, depth_sync.access,
                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     // The ambient occlusion (shaders/ao.frag), when this frame's view was given.
     const bool ao = taken && scene_options_.ambient_occlusion && ao_pipeline_;
@@ -1539,6 +1605,36 @@ void VkContext::end_frame(const FrameInfo& frame) {
                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0);
     }
+    // Neighbour zones and dressed actors may add imports while the frame is recorded. Snapshot only now, so
+    // their acquire runs before every recorded draw, and keep owners alive until the release has completed. The
+    // barriers cover every live import, not only those this frame samples: which ones a frame samples is not
+    // tracked (the renderers bind whole texture arrays), and an ownership barrier on an image in a read-only layout
+    // costs little.
+    const GpuSharedCache::Snapshot shared = gpu_shared_cache_ ? gpu_shared_cache_->snapshot() : GpuSharedCache::Snapshot{};
+    const bool shared_frame = !shared.empty();
+    if (shared_frame) {
+        if (!f.shared_acquire) {
+            // Only a client that imports textures needs these two.
+            VkCommandBufferAllocateInfo a{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            a.commandPool = f.pool;
+            a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            a.commandBufferCount = 2;
+            std::array<VkCommandBuffer, 2> commands{};
+            vk_check(vkAllocateCommandBuffers(device_, &a, commands.data()), "allocate shared-image commands");
+            f.shared_acquire = commands[0];
+            f.shared_release = commands[1];
+        }
+        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vk_check(vkResetCommandBuffer(f.shared_acquire, 0), "reset shared-image acquire commands");
+        vk_check(vkBeginCommandBuffer(f.shared_acquire, &begin), "begin shared-image acquire commands");
+        gpu_shared_cache_->record_acquire(f.shared_acquire, shared);
+        vk_check(vkEndCommandBuffer(f.shared_acquire), "end shared-image acquire commands");
+        vk_check(vkResetCommandBuffer(f.shared_release, 0), "reset shared-image release commands");
+        vk_check(vkBeginCommandBuffer(f.shared_release, &begin), "begin shared-image release commands");
+        gpu_shared_cache_->record_release(f.shared_release, shared);
+        vk_check(vkEndCommandBuffer(f.shared_release), "end shared-image release commands");
+    }
     vk_check(vkEndCommandBuffer(frame.cmd), "vkEndCommandBuffer");
 
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
@@ -1546,18 +1642,57 @@ void VkContext::end_frame(const FrameInfo& frame) {
     wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     signal.semaphore = render_finished_[frame.image_index];
-    signal.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-    VkCommandBufferSubmitInfo cmd_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    cmd_info.commandBuffer = frame.cmd;
+    signal.stageMask = kPresentSignalStage;
+    std::array<VkCommandBufferSubmitInfo, 3> commands{};
+    for (auto& command : commands) command.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+    commands[0].commandBuffer = shared_frame ? f.shared_acquire : frame.cmd;
+    commands[1].commandBuffer = frame.cmd;
+    commands[2].commandBuffer = f.shared_release;
     VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
     submit.waitSemaphoreInfoCount = 1;
     submit.pWaitSemaphoreInfos = &wait;
-    submit.commandBufferInfoCount = 1;
-    submit.pCommandBufferInfos = &cmd_info;
+    submit.commandBufferInfoCount = shared_frame ? 3u : 1u;
+    submit.pCommandBufferInfos = commands.data();
     submit.signalSemaphoreInfoCount = 1;
     submit.pSignalSemaphoreInfos = &signal;
-    vk_check(vkQueueSubmit2(queue_, 1, &submit, f.in_flight), "vkQueueSubmit2");
-    recording_ = false;
+    if (shared_frame) {
+        // Only the GPU's use of the imports is serialized across clients: the frame takes the lease, submits, waits
+        // for its own fence (bounded) and gives the lease back. Whatever goes wrong detaches sharing for this client
+        // alone (a lease not granted in time, the broker gone, a fence that does not pass in time: the dropped lease
+        // closes the connection and the broker releases it), and the frame is still submitted: its fence was reset
+        // and its image acquired. Before the next frame records, the imports are copied into private images
+        // (begin_frame_commands) and the game goes on without sharing.
+        const auto lease_started = gpu_benchmark_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        auto lease = gpu_shared_cache_->acquire_frame();
+        if (gpu_benchmark_)
+            benchmark_lease_wait_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lease_started).count();
+        vk_check(vkQueueSubmit2(queue_, 1, &submit, f.in_flight), "submit frame with external images");
+        recording_ = false;
+        if (lease) {
+            constexpr std::uint64_t kSharedFrameTimeout = 2'000'000'000; // ns
+            const auto fence_started = gpu_benchmark_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+            const VkResult done = vkWaitForFences(device_, 1, &f.in_flight, VK_TRUE, kSharedFrameTimeout);
+            if (gpu_benchmark_)
+                benchmark_shared_fence_wait_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fence_started).count();
+            if (done == VK_SUCCESS) {
+                if (lease.finish()) ++gpu_shared_frames_;
+            } else if (done != VK_TIMEOUT) {
+                vk_check(done, "complete external-image frame");
+            } // VK_TIMEOUT: the lease is dropped below, which detaches
+        }
+        if (gpu_shared_frames_ == 1 && !shared_first_logged_) {
+            shared_first_logged_ = true;
+            log::info("GPU asset sharing: first frame completed with {} imported images", shared.size());
+        }
+        if (!gpu_shared_cache_->active() && !shared_detach_logged_) {
+            shared_detach_logged_ = true;
+            log::warn("GPU asset sharing stopped ({}); this client goes on with its own textures",
+                      gpu_shared_cache_->detach_reason());
+        }
+    } else {
+        vk_check(vkQueueSubmit2(queue_, 1, &submit, f.in_flight), "vkQueueSubmit2");
+        recording_ = false;
+    }
 
     VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     present.waitSemaphoreCount = 1;
@@ -1570,6 +1705,18 @@ void VkContext::end_frame(const FrameInfo& frame) {
         resize_pending_ = true;
     else
         vk_check(r, "vkQueuePresentKHR");
+
+    if (gpu_benchmark_ && (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)) {
+        const auto at = std::chrono::steady_clock::now();
+        if (++benchmark_present_submissions_ == 1) gpu_benchmark_start_ = at;
+        if (benchmark_present_submissions_ == 1 || benchmark_present_submissions_ % 120 == 0)
+            log::info("GPU benchmark progress: gpu=\"{}\" presents={} shared_frames={} elapsed_seconds={:.3f} "
+                      "shared_images_this_frame={} "
+                      "lease_wait_ms={:.3f} shared_fence_wait_ms={:.3f}", gpu_name_, benchmark_present_submissions_,
+                      gpu_shared_frames_, std::chrono::duration<double>(at - gpu_benchmark_start_).count(),
+                      shared.size(),
+                      benchmark_lease_wait_ms_, benchmark_shared_fence_wait_ms_);
+    }
 
     if (readback) {
         vk_check(vkWaitForFences(device_, 1, &f.in_flight, VK_TRUE, UINT64_MAX), "vkWaitForFences");

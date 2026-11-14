@@ -13,7 +13,9 @@ namespace hailstone::net {
 namespace {
 
 constexpr std::uint8_t kClassTributeMaster = 63, kClassGuildTributeMaster = 64;
-constexpr float kTributeRange = 20.0f; // EQEmu's USE_NPC_RANGE2 is 200 units squared; the client's own is not known
+// CTributeMasterWnd::AboutToShow @0x7878b0 and OnProcessFrame @0x787ae0: PlayerClient_IsWithinInteractRange(master,
+// 0, 20.0). EQEmu's USE_NPC_RANGE2 is 200 units squared.
+constexpr float kTributeRange = 20.0f;
 
 bool iequals(std::string_view a, std::string_view b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
@@ -382,7 +384,8 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
         break;
     case Op::OpenGuildTributeMaster:
         if (auto st = decode_start_tribute(p)) {
-            g.master_id = st->response ? st->master_id : 0;
+            g.master_id = st->response && distance_to(st->master_id) <= kTributeRange ? st->master_id : 0;
+            g.master_serial = ++npc_session_serial_;
             // EQEmu answered any guild donation sent before this open (Handle_OP_GuildTributeDonateItem replies in
             // the handler or never, as without a guild), so no answer to it is still coming.
             if (pending_tribute_donation_ && pending_tribute_donation_->guild) pending_tribute_donation_.reset();
@@ -419,7 +422,8 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
         break;
     case Op::OpenTributeMaster:
         if (auto st = decode_start_tribute(p)) {
-            tribute_.master_id = st->response ? st->master_id : 0;
+            tribute_.master_id = st->response && distance_to(st->master_id) <= kTributeRange ? st->master_id : 0;
+            tribute_.master_serial = ++npc_session_serial_;
             // Handle_OP_TributeItem replies in the handler or returns silently (a master out of range or gone), so
             // an answer to the earlier donation came before this one or never comes.
             if (pending_tribute_donation_ && !pending_tribute_donation_->guild) pending_tribute_donation_.reset();

@@ -35,6 +35,10 @@ TEST_CASE("commerce: Keep blocks both barter sale paths, including a changed qua
     REQUIRE(rig.to_zone());
     auto& c = rig.conn;
     auto& merchant = const_cast<game::BarterMerchantState&>(c.barter_merchant());
+    auto buyer = *c.world().player();
+    buyer.id = 77;
+    buyer.buyer = true;
+    c.world_for_test().spawns[77] = buyer;
     merchant.buyer_id = 77;
     net::BuyLine line;
     line.item_id = 1002;
@@ -125,6 +129,10 @@ TEST_CASE("commerce: bulk Keep changes one revision and donation guards respect 
     CHECK(c.kept_items().kept(1002));
     c.set_items_kept({{1002, "Rations"}}, true);
     CHECK(c.kept_items_revision() == revision + 1);
+    auto master = *c.world().player();
+    master.id = 77;
+    master.is_npc = true;
+    c.world_for_test().spawns[77] = master;
     auto personal = net::encode(net::StartTribute{c.world().player_id, 77, 1});
     auto guild = personal;
     guild.opcode = net::to_wire(net::Op::OpenGuildTributeMaster);
@@ -260,6 +268,10 @@ TEST_CASE("commerce: bulk guild tribute waits for the guild answer and uses guil
     REQUIRE(rig.to_zone());
     auto& c = rig.conn;
     empty_coin_cursor(c);
+    auto master = *c.world().player();
+    master.id = 77;
+    master.is_npc = true;
+    c.world_for_test().spawns[77] = master;
     auto open = net::encode(net::StartTribute{c.world().player_id, 77, 1});
     open.opcode = net::to_wire(net::Op::OpenGuildTributeMaster);
     rig.server.zone.send_reliable(open);

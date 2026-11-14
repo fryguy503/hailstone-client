@@ -189,7 +189,8 @@ TEST_CASE("trees: a grown tree stands on the game trunk, inside its leaves, the 
         const Textures tex(cone);
         auto shape = measure_tree(mesh, tex.lookup());
         REQUIRE(shape);
-        for (TreeStyle style : {TreeStyle::Auto, TreeStyle::Pine, TreeStyle::Broadleaf, TreeStyle::Willow}) {
+        for (TreeStyle style : {TreeStyle::Auto, TreeStyle::Pine, TreeStyle::Broadleaf, TreeStyle::Willow,
+                                TreeStyle::Dead, TreeStyle::Palm}) {
             CAPTURE(cone);
             CAPTURE(int(style));
             TreeOptions opt;
@@ -277,6 +278,8 @@ TEST_CASE("trees: a grown tree stands on the game trunk, inside its leaves, the 
         }
     }
     CHECK(tree_style_from_name("willow") == TreeStyle::Willow);
+    CHECK(tree_style_from_name("dead") == TreeStyle::Dead);
+    CHECK(tree_style_from_name("palm") == TreeStyle::Palm);
     CHECK_FALSE(tree_style_from_name("oak"));
 }
 
@@ -331,7 +334,7 @@ TEST_CASE("trees: the rules' tree lines") {
     CHECK(rules->trees[1].bark.empty());
     CHECK(rules->tiles.empty());
     CHECK_FALSE(parse_material_rules(materials, {{"z", "tree x = oak"}}, &error));
-    CHECK(error == "z.txt:1: expected tree <actor> = auto|pine|broadleaf|willow [bark material]");
+    CHECK(error == "z.txt:1: expected tree <actor> = auto|pine|broadleaf|willow|dead|palm [bark material]");
     CHECK_FALSE(parse_material_rules(materials, {{"z", "\ntree x = pine birch"}}, &error));
     CHECK(error == "z.txt:2: no material [birch] in materials.txt");
 }
