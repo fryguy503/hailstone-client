@@ -917,7 +917,7 @@ public:
             described_ = net::kTributeNone;
             platinum_ = 0;
         }
-        if (!shown(host)) editing_ = false;
+        if (!shown(host) || !can_edit(host)) editing_ = false;
         if (host.conn && guild(host) != was_guild_) {
             was_guild_ = guild(host);
             editing_ = false;
@@ -929,6 +929,7 @@ public:
     void child(EqHost& host, std::string_view id, Child& out) override {
         if (!host.conn) return;
         bool g = guild(host);
+        bool may_edit = can_edit(host);
         const auto& gt = host.conn->guild_tribute();
         net::TributeSettings now = settings(host);
         const auto& set = editing_ ? edit_ : now;
@@ -937,12 +938,19 @@ public:
         else if (id == "TMW_ValueLabel") out.text = std::to_string(donation);
         else if (id == "TMW_CoinButton") out.text = std::to_string(platinum_);
         else if (id == "TMW_StatusText") out.text = now.active ? "Active" : "Inactive";
-        else if (id == "TMW_StatusButton") out.checked = now.active;
-        else if (id == "TMW_LockButton") out.text = editing_ ? "Save Benefits" : "Modify Benefits";
-        else if (id == "TMW_UpgradeButton") out.enabled = editing_ && (available_sel_ >= 0 || active_sel_ >= 0);
-        else if (id == "TMW_DowngradeButton") out.enabled = editing_ && active_sel_ >= 0 && active_sel_ < slots(host) &&
+        else if (id == "TMW_StatusButton") {
+            out.checked = now.active;
+            out.enabled = may_edit;
+        } else if (id == "TMW_LockButton") {
+            out.text = editing_ ? "Save Benefits" : "Modify Benefits";
+            out.enabled = may_edit;
+        } else if (id == "TMW_UpgradeButton") out.enabled = may_edit && editing_ && (available_sel_ >= 0 || active_sel_ >= 0);
+        else if (id == "TMW_DowngradeButton") out.enabled = may_edit && editing_ && active_sel_ >= 0 && active_sel_ < slots(host) &&
                                                        set.tributes[static_cast<std::size_t>(active_sel_)] != net::kTributeNone;
-        else if (id == "TMW_DonateButton") out.enabled = host.conn->inventory().cursor() != nullptr || platinum_ > 0;
+        // UpdateDonateButton @0x785f40: greyed while a donation waits for its reply (+0x2d8; the guild platinum one).
+        else if (id == "TMW_DonateButton")
+            out.enabled = !(g && host.conn->guild_platinum_pending()) &&
+                          (host.conn->inventory().cursor() != nullptr || platinum_ > 0);
         else if (id == "TMW_SelectedItem") {
             const net::Item* held = host.conn->inventory().cursor();
             if (held && host.textures)
@@ -1018,6 +1026,11 @@ public:
         auto& c = *host.conn;
         bool g = guild(host);
         net::TributeSettings now = settings(host);
+        if ((id == "TMW_LockButton" || id == "TMW_UpgradeButton" || id == "TMW_DowngradeButton" ||
+             id == "TMW_StatusButton") && !can_edit(host)) {
+            editing_ = false;
+            return true;
+        }
         if (id == "TMW_LockButton") {
             if (editing_) save(c, g);
             else edit_ = now;
@@ -1035,6 +1048,7 @@ public:
             if (g) c.guild_tribute_toggle(!now.active);
             else c.tribute_toggle(!now.active);
         } else if (id == "TMW_DonateButton") {
+            if (g && c.guild_platinum_pending()) return true; // greyed until the reply
             if (c.inventory().cursor()) {
                 if (g) c.guild_tribute_donate_cursor();
                 else c.tribute_donate_cursor();
@@ -1062,6 +1076,9 @@ public:
 
 private:
     static bool guild(EqHost& host) { return host.conn && host.conn->guild_tribute().master_id != 0; }
+    static bool can_edit(EqHost& host) {
+        return host.conn && (!guild(host) || host.conn->can_change_guild_tribute());
+    }
     static int slots(EqHost& host) { return guild(host) ? net::kGuildTributeSlots : net::kTributeSlots; }
     static const std::map<std::uint32_t, net::TributeAbility>& abilities(EqHost& host) {
         return guild(host) ? host.conn->guild_tribute().abilities : host.conn->tribute().abilities;
@@ -1150,7 +1167,7 @@ public:
             out.enabled = in_guild;
         } else if (id == "GuildActivateButton") {
             out.text = g.active.enabled ? "Deactivate" : "Activate";
-            out.enabled = in_guild;
+            out.enabled = host.conn->can_change_guild_tribute();
         } else if (id == "TrophyActivateButton" || id == "TrophyOptOutButton" || id == "GuildTrophyActivateButton")
             out.enabled = false;
     }

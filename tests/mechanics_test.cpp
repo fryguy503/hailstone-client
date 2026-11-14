@@ -459,6 +459,97 @@ TEST_CASE("build_sheet: current intoxication replaces the received profile, incl
     CHECK(profile.intoxication == 80); // The received snapshot is independent from changing local state.
 }
 
+TEST_CASE("build_sheet: received personal and guild tribute items contribute until replaced or removed") {
+    World world;
+    world.spell(700, {{3, 5, 100}});
+    net::PlayerProfile profile;
+    profile.race = 1;
+    profile.class_ = 1;
+    profile.level = 60;
+    profile.str = profile.sta = profile.cha = profile.dex = profile.int_ = profile.agi = profile.wis = 75;
+    Inventory inventory;
+    SpellState spells;
+    LiveState live;
+    live.level = 60;
+    live.hp = live.max_hp = 100000;
+
+    // Stock RoF2 item packets: ItemPacketTributeItem (108), type 6 / slots 0..4; ItemPacketGuildTribute (109),
+    // type 8 / slots 0..1. Exercise their serialized item headers rather than filling the sheet directly.
+    auto receive = [&](std::int16_t type, std::int16_t slot, std::int8_t strength, bool worn_effect = false) {
+        net::Item received = item();
+        received.id = static_cast<std::uint32_t>(1000 + type * 10 + slot);
+        received.slot = {type, slot, -1, -1};
+        received.astr = strength;
+        received.stack_count = 7; // A received tribute item contributes once, independently of its stack count.
+        received.max_stack = 20;
+        if (worn_effect) {
+            received.effects[net::kEffectWorn].effect = 700;
+            received.effects[net::kEffectWorn].level = 60;
+        }
+        net::ItemPacket packet;
+        packet.type = type == 8 ? 109u : 108u;
+        packet.item = received;
+        auto decoded = net::decode_item_packet(net::encode_item_packet(false, packet));
+        REQUIRE(decoded);
+        CHECK(decoded->item.slot.type == type);
+        CHECK(decoded->item.slot.slot == slot);
+        const net::ItemSlot at = decoded->item.slot;
+        REQUIRE(inventory.put(at, std::move(decoded->item)));
+    };
+    for (std::int16_t slot = 0; slot < 5; ++slot)
+        receive(6, slot, static_cast<std::int8_t>(slot + 1));
+    receive(8, 0, 10);
+    receive(8, 1, 20, true);
+    // Unused trophy containers and out-of-range tribute slots cannot become bonus sources.
+    receive(7, 0, 100);
+    receive(22, 0, 100);
+    receive(6, 5, 100);
+    receive(8, 2, 100);
+
+    CharacterSheet sheet = build_sheet(profile, inventory, spells, live);
+    auto strength = [&] {
+        Character character(sheet, world.tables, world.lookup());
+        character.process_all_stats();
+        return character.stats().stats.str;
+    };
+    auto speed_effect = [&] {
+        Character character(sheet, world.tables, world.lookup());
+        return character.total_effect(3);
+    };
+    for (std::size_t slot = 0; slot < 5; ++slot) {
+        REQUIRE(sheet.extra_items[slot]);
+        CHECK(sheet.extra_items[slot]->slot.type == 6);
+        CHECK(sheet.extra_items[slot]->slot.slot == static_cast<std::int16_t>(slot));
+    }
+    REQUIRE(sheet.extra_items[15]);
+    REQUIRE(sheet.extra_items[16]);
+    CHECK(sheet.extra_items[15]->slot.type == 8);
+    CHECK(sheet.extra_items[16]->slot.slot == 1);
+    for (std::size_t slot = 5; slot < sheet.extra_items.size(); ++slot)
+        if (slot != 15 && slot != 16) CHECK_FALSE(sheet.extra_items[slot]);
+    CHECK(strength() == 120); // Base 75 + personal 1+2+3+4+5 + guild 10+20, without multiplying by seven.
+    CHECK(speed_effect() == 5);
+
+    // A server removal names the same type/slot in OP_MoveItem; rebuilding clears its previous contribution.
+    const net::ItemSlot last_personal{6, 4, -1, -1};
+    auto removal = net::decode_move_item(net::encode(net::MoveItem{last_personal, net::ItemSlot::invalid(), 0}));
+    REQUIRE(removal);
+    REQUIRE(inventory.take(removal->from));
+    build_sheet_into(sheet, profile, inventory, spells, live, {});
+    CHECK_FALSE(sheet.extra_items[4]);
+    CHECK(strength() == 115);
+
+    receive(8, 1, 7); // A tier/benefit replacement also replaces the previous worn effect.
+    build_sheet_into(sheet, profile, inventory, spells, live, {});
+    CHECK(strength() == 102);
+    CHECK(speed_effect() == 0);
+
+    inventory.clear(); // A zone/disconnect inventory reset cannot leave tribute bonuses in a reused sheet.
+    build_sheet_into(sheet, profile, inventory, spells, live, {});
+    for (const auto& extra : sheet.extra_items) CHECK_FALSE(extra);
+    CHECK(strength() == 75);
+}
+
 TEST_CASE("build_sheet_into: a sheet built again in place is the sheet build_sheet makes") {
     // The per-frame character (StatsUi, GameConnection::with_character) is rebuilt into the last frame's sheet so
     // its items reuse their storage; nothing of the last state may stay.

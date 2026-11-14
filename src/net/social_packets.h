@@ -310,12 +310,15 @@ AppPacket encode_guild_manage_banker(const std::string& member, std::uint32_t fl
 // 5 a rank's permission (0x5c B: u32 rank +0x50, u32 permission +0x54, u8 on +0x58).
 AppPacket encode_guild_update_text(std::uint32_t action, const std::string& text);
 AppPacket encode_guild_rank_name(std::uint32_t rank, const std::string& name);
-AppPacket encode_guild_rank_permission(std::uint32_t rank, std::uint32_t permission, bool on);
+AppPacket encode_guild_rank_permission(std::uint32_t rank, std::uint32_t permission, bool on,
+                                     std::uint32_t guild_id = 0);
 // The server's OP_GuildUpdate (HandleWorldMessage_Guild @0x425d30) is the same record: at least 0x54 bytes, the action
 // at +0; action 5 needs 0x59 bytes and action 4 0x55 (a shorter one gives nothing). The text runs from +0x50 (actions
-// 0 and 1) or +0x54 (4) to the first NUL or the end. Other actions carry the action alone.
+// 0 and 1) or +0x54 (4) to the first NUL or the end. SendGuildRanks stamps action 5's guild id at +0x4c;
+// permission-change broadcasts and rank names leave that field zero. Other actions carry the action alone.
 struct GuildUpdate {
     std::uint32_t action = 0;
+    std::uint32_t guild_id = 0; // the server's action 5 context; 0 means no context tag
     std::uint32_t rank = 0, permission = 0; // actions 4 and 5
     bool on = false;                        // action 5
     std::string text;                       // actions 0, 1 and 4

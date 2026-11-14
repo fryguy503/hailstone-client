@@ -106,6 +106,21 @@ void GameConnection::handle_item(Op op, const AppPacket& p) {
             const bool with_bank = std::any_of(items->begin(), items->end(), [](const Item& it) {
                 return it.slot.type == kInvBank || it.slot.type == kInvSharedBank;
             });
+            // Source sends personal tribute item packets before its bulk possessions/bank inventory at zone-in.
+            // That bulk packet does not replace tribute containers. Keep this zone's received bonus items;
+            // state changes and zone/session reset retire them, and an explicit replacement here wins.
+            auto retain_tributes = [&](std::int16_t type, int count) {
+                for (std::int16_t slot = 0; slot < count; ++slot) {
+                    const ItemSlot at{type, slot, -1, -1};
+                    if (const Item* item = inventory_.at(at);
+                        item && std::none_of(items->begin(), items->end(), [&](const Item& received) {
+                            return received.slot.same(at);
+                        }))
+                        items->push_back(*item);
+                }
+            };
+            retain_tributes(kInvTribute, kTributeSlots);
+            retain_tributes(kInvGuildTribute, kGuildTributeSlots);
             inventory_.load(std::move(*items));
             set_bank_live(with_bank);
         } else {

@@ -1199,6 +1199,21 @@ bool GameConnection::has_guild_permission(std::int32_t permission) const {
                                                permission, guild_.permissions);
 }
 
+std::uint32_t GameConnection::received_guild_permission_context() const {
+    return pending_guild_permissions_ ? pending_guild_permissions_->guild_id : guild_.guild_id;
+}
+
+void GameConnection::reset_guild_permissions(std::uint32_t next_guild_id) {
+    guild_.permissions.clear();
+    guild_.rank_names = {};
+    if (pending_guild_permissions_ && next_guild_id != 0 && next_guild_id != 0xffffffff &&
+        pending_guild_permissions_->guild_id == next_guild_id) {
+        guild_.permissions = pending_guild_permissions_->permissions;
+        guild_.rank_names = std::move(pending_guild_permissions_->rank_names);
+    }
+    pending_guild_permissions_.reset();
+}
+
 void GameConnection::guild_command(std::string_view h, const std::string& args) {
     std::string_view rest = args;
     if (h == "Cmd_guildinvite") {
@@ -2125,9 +2140,28 @@ void GameConnection::handle_social(Op op, const AppPacket& p) {
         // names a rank; 0 and 1: the guild's web page and chat channel (+0x50).
         if (auto u = decode_guild_update(p)) {
             if (u->action == 5) {
-                guild_.permissions.set(static_cast<std::int32_t>(u->rank), static_cast<std::int32_t>(u->permission), u->on);
+                // Source SendGuildRanks tags the new guild before its own-member GuildID appearance. Keep
+                // that table separate until membership confirms it; a foreign table never grants permission.
+                if (u->guild_id && u->guild_id != 0xffffffff && u->guild_id != guild_.guild_id) {
+                    if (!pending_guild_permissions_ || pending_guild_permissions_->guild_id != u->guild_id)
+                        pending_guild_permissions_ = PendingGuildPermissions{u->guild_id, {}, {}};
+                    pending_guild_permissions_->permissions.set(static_cast<std::int32_t>(u->rank),
+                                                                 static_cast<std::int32_t>(u->permission), u->on);
+                } else if (guild_.in_guild() && (!u->guild_id || u->guild_id == guild_.guild_id)) {
+                    if (u->guild_id) pending_guild_permissions_.reset();
+                    guild_.permissions.set(static_cast<std::int32_t>(u->rank), static_cast<std::int32_t>(u->permission), u->on);
+                }
             } else if (u->action == 4) {
-                if (u->rank < guild_.rank_names.size()) guild_.rank_names[u->rank] = std::move(u->text);
+                // SendGuildRankNames has no tag, and follows that guild's tagged permission rows. This assumes a
+                // staged table is confirmed by the GuildID appearance in the same burst; one never confirmed would
+                // take the current guild's later untagged names, so a zone change drops it (the zone-in resends
+                // the current guild's rows and names) and a tagged row for the current guild drops it too.
+                if (pending_guild_permissions_) {
+                    if (u->rank < pending_guild_permissions_->rank_names.size())
+                        pending_guild_permissions_->rank_names[u->rank] = std::move(u->text);
+                } else if (guild_.in_guild() && u->rank < guild_.rank_names.size()) {
+                    guild_.rank_names[u->rank] = std::move(u->text);
+                }
             } else if (u->action == 0) {
                 guild_.url = std::move(u->text);
             } else if (u->action == 1) {
