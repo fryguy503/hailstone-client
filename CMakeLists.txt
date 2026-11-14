@@ -150,6 +150,7 @@ add_library(hailstone_engine STATIC
   src/game/light_list.cpp
   src/render/scene_lighting.cpp
   src/render/atmosphere.cpp
+  src/render/horizon.cpp
   src/render/ambient_probe.cpp
   src/render/shadows.cpp
   src/render/light_grid.cpp
@@ -749,6 +750,7 @@ hailstone_add_shaders(hailstone_shaders
   shaders/target_ring.frag
   shaders/underwater.vert
   shaders/underwater.frag
+  shaders/horizon.frag
   shaders/zone_shadow.vert
   shaders/zone_shadow.frag
   shaders/zone_point_shadow.vert
@@ -1041,6 +1043,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/precipitation_test.cpp
     tests/sky_colours_test.cpp
     tests/scene_light_test.cpp
+    tests/horizon_test.cpp
     tests/collision_test.cpp
     tests/nav_test.cpp
     tests/map_data_test.cpp
