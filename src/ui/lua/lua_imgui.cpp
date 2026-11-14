@@ -1051,7 +1051,7 @@ void register_ui_api(lua_State *L) {
 		{"WindowPadding", ImGuiStyleVar_WindowPadding},
 		{"FramePadding", ImGuiStyleVar_FramePadding}, {"ItemSpacing", ImGuiStyleVar_ItemSpacing},
 		{"FrameRounding", ImGuiStyleVar_FrameRounding}, {"WindowBorderSize", ImGuiStyleVar_WindowBorderSize},
-		{"WindowRounding", ImGuiStyleVar_WindowRounding},
+		{"WindowRounding", ImGuiStyleVar_WindowRounding}, {"WindowMinSize", ImGuiStyleVar_WindowMinSize},
 		{"WindowTitleAlign", ImGuiStyleVar_WindowTitleAlign}, {"ChildRounding", ImGuiStyleVar_ChildRounding},
 		{"ChildBorderSize", ImGuiStyleVar_ChildBorderSize}, {"PopupRounding", ImGuiStyleVar_PopupRounding},
 		{"PopupBorderSize", ImGuiStyleVar_PopupBorderSize}, {"FrameBorderSize", ImGuiStyleVar_FrameBorderSize},

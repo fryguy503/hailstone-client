@@ -56,6 +56,7 @@ bool GameConnection::activate_bank(std::uint32_t banker_id) {
     // calls MakeMeVisible(0, 0): only when invisible, the invisibility
     // effects go, SpawnAppearance {me, 3, 0} and OP_Hide when hidden.
     bank_ = BankSession{};
+    bank_->serial = ++npc_session_serial_;
     bank_->banker_id = banker_id;
     bank_->name = game::display_name(it->second.name);
     bank_->slots = game::bank_slot_count(profile_ ? profile_->expansions : 0, inventory_);
@@ -80,10 +81,15 @@ void GameConnection::close_bank() {
     // CBankWnd::Show(false) @0x627680: "%1 tells you, 'Come back soon!'"
     // (12143) while a banker is set, then the banker is cleared. AboutToHide
     // sends nothing; the quantity dialog closes with the window (OnShow).
+    // OnShow @0x627760 also runs CContainerMgr::CloseAllContainers @0x65d4e0: every container window closes,
+    // carried bags too (the UI's bag windows follow BankSession::serial, app/lua_eq_items.cpp), the world
+    // container is released (OP_ClickObjectAction) and the tradeskill window hides.
     if (!bank_) return;
     chat(ChatEvent::Kind::Tell, strings_.format(12143, std::vector<std::string>{bank_->name}));
     bank_.reset();
     quantity_.reset();
+    if (world_container_) close_world_container();
+    if (tradeskill_.open) close_tradeskill();
     capture_bank();
 }
 

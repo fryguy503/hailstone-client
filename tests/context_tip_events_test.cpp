@@ -88,6 +88,15 @@ TEST_CASE("context tips: the events' tips (experience, invitations, consent, wor
     a.drop_id = 12;
     a.type = 16;
     a.name = "Forge";
+    GroundObject station;
+    station.drop_id = a.drop_id;
+    station.object_type = 16;
+    const auto at = conn.world().player()->position;
+    station.x = at.y;
+    station.y = at.x;
+    station.z = at.z;
+    conn.receive_zone_packet_for_test(encode(station));
+    REQUIRE(conn.click_object(a.drop_id));
     conn.receive_zone_packet_for_test(encode(a));
     CHECK(has(conn.take_context_tips(), 0x1b));
 }

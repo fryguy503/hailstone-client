@@ -633,12 +633,19 @@ int ClientApp::run() {
             // Where no sky is drawn, the modern haze fills the background as it fills the distance (with the sun's glow
             // in it), not the plain fog colour; under water, the water.
             if (zone_renderer_ && (under_water || (modern && !sky_drawn))) zone_renderer_->draw_backdrop(*f, vp);
-            // The distant hills round an outdoor zone (render/horizon.h), behind the zone, under an open sky or none
-            // (not the planes' and Luclin's painted skies); faded in a thick fog, lava and a storm.
-            if (zone_renderer_ && in_game && modern && outdoor && !under_water && horizon_hills_ &&
-                (!sky_renderer_ || sky_renderer_->has_atmosphere()))
-                zone_renderer_->draw_horizon(*f, vp, render::horizon_strength(view_.fog_end, haze.extend,
-                                                                              weather_look_.storm));
+            // The land round an outdoor zone (render/horizon.h), under an open sky or none (not the planes' and
+            // Luclin's painted skies); not where a neighbour zone is drawn.
+            if (zone_renderer_) {
+                zone_renderer_->set_distant(in_game && modern && outdoor && horizon_hills_ &&
+                                            (!sky_renderer_ || sky_renderer_->has_atmosphere()));
+                const std::uint64_t drawn = neighbours_ && modern && neighbour_zones_ && in_game ? neighbours_->drawn_key() : 0;
+                if (drawn != distant_hidden_key_) {
+                    distant_hidden_key_ = drawn;
+                    std::vector<std::int64_t> cells;
+                    if (drawn) neighbours_->footprint(cells);
+                    zone_renderer_->set_distant_hidden(std::move(cells));
+                }
+            }
             // The modern water reads the opaque world: the zone's other draws wait for VkContext::begin_translucent.
             const render::ZonePhase first = modern ? render::ZonePhase::Opaque : render::ZonePhase::All;
             if (zone_renderer_) zone_renderer_->draw_depth(*f, vp, camera_.position, lit, t);

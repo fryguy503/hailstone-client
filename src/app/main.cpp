@@ -57,7 +57,6 @@
 #include "render/zone_renderer.h"
 #include "render/particle_renderer.h"
 #include "render/atmosphere.h"
-#include "render/horizon.h"
 #include "render/weather_renderer.h"
 #include "app/nameplate_layer.h"
 #include "app/plate_test.h"
@@ -106,7 +105,7 @@ struct Options {
     std::vector<hailstone::render::FireSource> fires; // --fire X Y Z H W: flames placed by hand (modern)
     bool no_fire = false;                         // --no-fire: the modern lighting without its flames (timing)
     bool no_grass = false;                        // --no-grass: the viewer without the zone's flora
-    bool no_horizon = false;                      // --no-horizon: no distant hills round the zone (render/horizon.h)
+    bool no_horizon = false;                      // --no-horizon: no land round the zone (render/horizon.h)
     float tree_detail = 1.0f;                     // --tree-detail PCT: display.tree_detail, as a scale
     float flora_distance = 400.0f;                // --flora-distance: how far the viewer draws the flora
     std::optional<glm::vec3> flora_push;          // --flora-push: a foot the viewer's flora bends away from
@@ -267,7 +266,7 @@ void usage() {
         "  --weather-age S    viewer: S seconds after --weather began (its transition; default 600, settled)\n"
         "  --weather-stopped S  viewer: --weather stopped S seconds ago (the clearing)\n"
         "  --no-grade         viewer: no colour grade (--lighting modern; display.color_grade)\n"
-        "  --no-horizon       viewer: no distant hills round the zone (--lighting modern; display.horizon_hills)\n"
+        "  --no-horizon       viewer: no land round the zone (--lighting modern; display.horizon_hills)\n"
         "  --tree-detail PCT  viewer: replacement models' levels of detail reach PCT %% as far (display.tree_detail)\n"
         "  --view-distance X  with --lighting modern: draw X times further than the original, into haze (2.5)\n"
         "  --model A,B,...    model viewer: classic character models by code (HUM) or race (r:RACE[:GENDER]);\n"
@@ -856,6 +855,7 @@ int main(int argc, char** argv) {
         // --neighbours: the zones past the zone lines, loaded before the first frame (the screenshot waits for them).
         std::unique_ptr<GameDir> neighbour_game;
         std::unique_ptr<app::NeighbourZones> neighbours;
+        std::uint64_t distant_hidden_key = 0; // the drawn neighbours the land round the zone was last hidden for
         std::optional<game::CollisionMesh> neighbour_collision; // the zone's, which the neighbours read until they go
         if (zone && opts.neighbours && opts.modern) {
             neighbour_game = std::make_unique<GameDir>(open_game_dir(opts.game_dir, opts.classic_dir));
@@ -1279,6 +1279,13 @@ int main(int argc, char** argv) {
                         }
                         neighbours->set_scene_light(scene_light);
                         neighbours->set_lighting(lighting);
+                        // As the client: no land round the zone where a neighbour is drawn.
+                        if (neighbours->drawn_key() != distant_hidden_key) {
+                            distant_hidden_key = neighbours->drawn_key();
+                            std::vector<std::int64_t> cells;
+                            neighbours->footprint(cells);
+                            zone_renderer->set_distant_hidden(std::move(cells));
+                        }
                     }
                     if (vk.point_shadow_slots() > 0)
                         render::draw_point_shadows(vk, *f, point_shadows, zone->lights, point_builds, *zone_renderer,
@@ -1340,11 +1347,9 @@ int main(int argc, char** argv) {
                 if (sky_drawn) sky_renderer->draw(*f, proj, camera.view(), sky_frame);
                 // As the client: the modern haze behind everything where no sky is drawn; under water, the water.
                 if (water_color || (opts.modern && !sky_drawn)) zone_renderer->draw_backdrop(*f, vp);
-                // The distant hills round an outdoor zone, under an open sky or none (not the planes' painted skies).
-                if (opts.modern && outdoor && !water_color && !opts.no_horizon &&
-                    (!sky_renderer || sky_renderer->has_atmosphere()))
-                    zone_renderer->draw_horizon(*f, vp, render::horizon_strength(view.fog_end, haze.extend,
-                                                                                 weather_look.storm));
+                // The land round an outdoor zone, under an open sky or none (not the planes' painted skies).
+                zone_renderer->set_distant(opts.modern && outdoor && !opts.no_horizon &&
+                                           (!sky_renderer || sky_renderer->has_atmosphere()));
                 if (opts.modern) {
                     // The water reads the opaque world (VkContext::begin_translucent).
                     zone_renderer->draw_depth(*f, vp, camera.position, draw_view, t);

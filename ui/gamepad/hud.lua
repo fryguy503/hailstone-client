@@ -15,7 +15,9 @@ local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local A = dofile("lib/actions.lua")
+local roles = dofile("lib/role_icons.lua")
 local C = T.C
+local ROLE_COLORS = { C.mana, C.accent, C.endurance }
 
 -- A HUD window at x, y (design px), w x h; inputs: the mouse may click in it. draw(x0, y0, x1, y1).
 local function hud(name, x, y, w, h, inputs, draw)
@@ -45,10 +47,31 @@ local function num(type)
   return t or ""
 end
 
+-- A window that takes the mouse over x0, y0 .. x1, y1 (screen px) alone, over a HUD window that takes none: the part
+-- of a panel a click does something on, so the rest of the panel leaves the mouse to the world. draw(x0, y0, x1, y1).
+local function hitArea(name, x0, y0, x1, y1, draw)
+  ui.SetNextWindowPos(x0, y0, ui.Cond.Always)
+  ui.SetNextWindowSize(math.max(1, x1 - x0), math.max(1, y1 - y0), ui.Cond.Always)
+  ui.PushStyleVar(ui.StyleVar.WindowPadding, 0, 0)
+  ui.PushStyleVar(ui.StyleVar.WindowBorderSize, 0)
+  local minSize = ui.StyleVar.WindowMinSize -- (ImGui's 32 px smallest window would reach past the strip)
+  if minSize then ui.PushStyleVar(minSize, 1, 1) end
+  local flags = ui.WindowFlags.NoDecoration | ui.WindowFlags.NoBackground | ui.WindowFlags.NoSavedSettings
+      | ui.WindowFlags.NoMove | ui.WindowFlags.NoFocusOnAppearing | ui.WindowFlags.NoBringToFrontOnFocus | W.NoNav
+  if ui.Begin(name, nil, flags) then draw(x0, y0, x1, y1) end
+  ui.End()
+  ui.PopStyleVar(minSize and 3 or 2)
+end
+
 -- ---------------------------------------------------------------- player
+-- The name row, in a group: where the role icons go and a right click opens the group role menu (filled in by the
+-- panel each frame, used by the name's hit area after it).
+local nameRow = { shown = false }
+
 ui.window("HUD Player", function()
   if not W.shown("PlayerWindow") then return end
   local mana, _, mraw = eq.Gauge(2)
+  nameRow.shown = false
   hud("HUD Player", 32, 28, 470, mraw ~= -1 and 176 or 148, false, function(x0, y0, x1, y1)
     T.panel(x0, y0, x1, y1, 0.9)
     -- auto attack (PlayerWindow's A_AttackIndicatorAnim*): a pulsing red wash and a thick red ring
@@ -61,17 +84,38 @@ ui.window("HUD Player", function()
     local p = T.px(16)
     local name = (eq.Label(1) or ""):gsub("\n.*", "")
     local lvl, cls = num(2), num(3)
+    local level = (lvl ~= "" and ("Level " .. lvl) or "") .. (cls ~= "" and ("  " .. cls) or "")
+    local timer = eq.Label(137) or ""
+    T.font(18)
+    level = T.fit(level, (x1 - x0 - 2 * p) * 0.45)
+    local levelW = ui.CalcTextSize(level)
+    local timerW = timer ~= "" and ui.CalcTextSize(timer) or 0
+    T.unfont()
+    local nameRight = x1 - p - levelW - (levelW > 0 and T.px(14) or 0)
+      - timerW - (timerW > 0 and T.px(14) or 0)
     T.font(26)
-    local _, nh = T.text(x0 + p, y0 + p - T.px(2), name)
+    local mask = roles.Mask("PlayerWindow")
+    local iconSize, iconGap = T.px(18), T.px(4)
+    local iconW = roles.Width(mask, iconSize, iconGap)
+    local fittedName = T.fit(name, nameRight - x0 - p - (iconW > 0 and iconW + T.px(6) or 0))
+    local nameW, nh = T.text(x0 + p, y0 + p - T.px(2), fittedName)
+    local nameY = y0 + p - T.px(2)
+    local iconX, iconY = x0 + p + nameW + T.px(6), nameY + (nh - iconSize) / 2
+    -- in a group the name row takes the mouse (its own window, below) and draws the icons, for their tooltips;
+    -- the rest of the panel takes no input, so a click there reaches the world as it did before
+    if eq.ChildState("GroupWindow", "DisbandButton") == true or mask ~= 0 then
+      nameRow.shown = true
+      nameRow.x0, nameRow.y0, nameRow.x1, nameRow.y1 = x0 + p, nameY, nameRight, nameY + nh
+      nameRow.mask, nameRow.ix, nameRow.iy, nameRow.size, nameRow.gap = mask, iconX, iconY, iconSize, iconGap
+    else
+      roles.Draw(mask, iconX, iconY, iconSize, iconGap, ROLE_COLORS)
+    end
     T.unfont()
     T.font(18)
-    local level = (lvl ~= "" and ("Level " .. lvl) or "") .. (cls ~= "" and ("  " .. cls) or "")
     T.textIn(x0 + p, y0 + p, x1 - p, y0 + p + nh, level, C.dim, 1)
     -- the combat timer (label 137: OP_RestState's downtime left), left of the level while it runs
-    local timer = eq.Label(137) or ""
     if timer ~= "" then
-      local lw = ui.CalcTextSize(level)
-      T.textIn(x0 + p, y0 + p, x1 - p - lw - T.px(14), y0 + p + nh, timer, C.endurance, 1)
+      T.textIn(x0 + p, y0 + p, x1 - p - levelW - T.px(14), y0 + p + nh, timer, C.endurance, 1)
     end
     T.unfont()
     local y = y0 + p + nh + T.px(8)
@@ -93,6 +137,16 @@ ui.window("HUD Player", function()
     local ey = y1 - T.px(7)
     T.rect(x0 + p, ey, x1 - p, ey + T.px(4), C.sunken, 1, T.px(2))
     if xp > 0 then T.rect(x0 + p, ey, x0 + p + (x1 - x0 - 2 * p) * math.min(1, xp), ey + T.px(4), C.exp, 1, T.px(2)) end
+  end)
+  if not nameRow.shown then return end
+  local r = nameRow
+  hitArea("HUD Player Name", r.x0, r.y0, r.x1, r.y1, function(x0, y0, x1, y1)
+    -- a left click targets the player (CPlayerWnd's click on its gauges), a right click opens the group role menu
+    if ui.InvisibleButton("##name", x1 - x0, y1 - y0) then eq.ClickChild("PlayerWindow", "PlayerHP", "left") end
+    local hovered = ui.IsItemHovered()
+    local roleHovered = roles.Draw(r.mask, r.ix, r.iy, r.size, r.gap, ROLE_COLORS)
+    if hovered and not roleHovered then ui.SetTooltip("Right-click for group roles") end
+    if hovered and ui.IsMouseClicked(ui.Mouse.Right) then eq.ClickChild("PlayerWindow", "PlayerHP", "right") end
   end)
 end)
 
@@ -193,6 +247,7 @@ ui.window("HUD Group", function()
         members[count] = m
       end
       m.i, m.name, m.hp = i, name, frac
+      m.roles = roles.Mask("GroupWindow", i)
       if tr then
         m.tint = m.rgba
         m.tint[1], m.tint[2], m.tint[3] = tr, tg, tb
@@ -202,7 +257,7 @@ ui.window("HUD Group", function()
     end
   end
   if count == 0 then return end
-  local rowH = 66
+  local rowH = 62
   hud("HUD Group", 32, 214, 400, 16 + count * (rowH + 6), true, function(x0, y0, x1, y1)
     local y = y0
     for k = 1, count do
@@ -212,11 +267,20 @@ ui.window("HUD Group", function()
       local clicked = ui.InvisibleButton(MEMBER_IDS[m.i].button, x1 - x0, T.px(rowH))
       if clicked then eq.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "left") end -- targets the member (F2..F6)
       local hovered = ui.IsItemHovered()
+      if hovered and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
+        eq.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "right")
+      end
       T.panel(x0, y, x1, ry1, hovered and 1 or 0.85, T.px(12))
       local p = T.px(12)
       T.font(18)
       local _, th = ui.CalcTextSize("Ag")
-      T.draw(x0 + p, y + T.px(6), T.fit(m.name, x1 - x0 - 2 * p - T.px(60)))
+      local iconSize, iconGap = T.px(18), T.px(4)
+      local iconW = roles.Width(m.roles, iconSize, iconGap)
+      local name = T.fit(m.name:gsub("\n.*", ""), x1 - x0 - 2 * p - T.px(60) - (iconW > 0 and iconW + T.px(6) or 0))
+      local nameW = ui.CalcTextSize(name)
+      T.draw(x0 + p, y + T.px(6), name)
+      roles.Draw(m.roles, x0 + p + nameW + T.px(6), y + T.px(6) + (th - iconSize) / 2,
+        iconSize, iconGap, ROLE_COLORS)
       local pct = eq.Label(34 + m.i) or ""
       T.textIn(x0 + p, y + T.px(6), x1 - p, y + T.px(6) + th, pct ~= "" and (pct .. "%") or "", C.dim, 1)
       T.unfont()

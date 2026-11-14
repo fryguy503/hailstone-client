@@ -6,6 +6,7 @@
 // colour are kept and the photos give the detail below a few of its texels, so a rebuilt tile still meets the
 // tiles round it. The rules (which material each texture is) are data, read from a folder the texture studio ships.
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -47,6 +48,9 @@ struct TileRule {
     std::string texture; // lower case, no extension ("hhdrockgrass1")
     std::string first, second; // the materials; `second` empty: the tile is all `first`
     bool sharp = false;  // small shapes (a path's flagstones): the split and the colour follow the original closely
+    // The materials' colours in this zone's art, where its file sets them ("colour <material> = r g b"): a material
+    // looks different from zone to zone (Qeynos Hills' grass, Everfrost's tundra). Empty: the material's own.
+    std::optional<std::array<float, 3>> first_colour, second_colour;
 };
 
 // One generated tree (texpack/trees.h): a "tree <actor> = <style> [<bark material>]" line of a <zone>.txt.
@@ -66,8 +70,9 @@ struct MaterialRules {
     std::string signature(const TileRule& tile) const;
 };
 
-// materials.txt (the classes, an ini file) and <zone>.txt (one "texture = material [material] [sharp]" or
-// "tree <actor> = <style> [<bark material>]" a line, '#' comments). Errors name the file and line; a rule naming no
+// materials.txt (the classes, an ini file) and <zone>.txt (one "texture = material [material] [sharp]",
+// "tree <actor> = <style> [<bark material>]" or "colour <material> = r g b" a line, '#' comments; a colour line holds
+// for the whole file). Errors name the file and line; a rule naming no
 // known material or style is an error.
 std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt,
                                                   const std::vector<std::pair<std::string, std::string>>& zone_files,

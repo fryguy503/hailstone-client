@@ -365,8 +365,7 @@ void GameConnection::update() {
         send_position(false);
         update_afk();
         update_spells();
-        update_merchant();
-        update_bank();
+        update_npc_interactions();
         update_loot();
         update_merc();
         update_inspect();
@@ -684,6 +683,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         doors_.clear();
         ground_objects_.clear();
         world_container_.reset();
+        world_container_requested_.reset();
         close_tradeskill();
         switch_clock_ = {};
         reset_group_for_zone();
@@ -708,6 +708,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         guild_bank_.selected = -1;
         adventure_.recruiter = 0;
         adventure_.offer.clear();
+        recruiter_state_ = 0;
         guild_tribute_.master_id = 0;
         guild_platinum_pending_ = 0;
         state_ = ConnectionState::ZoneConnecting;
@@ -890,7 +891,8 @@ void GameConnection::apply_spawn(const Spawn& s) {
     out.walk_speed = s.walk_speed;
     out.run_speed = s.run_speed;
     set_spawn_motion(out, s.motion);
-    out.fly_mode = s.fly_mode;
+    out.fly_mode = s.fly_mode; // UnSerializeSpawn's PlayerPhysics_SetFlyMode
+    ++out.fly_mode_sets;
     out.hp_percent = s.hp_percent;
     out.stand_state = s.stand_state ? s.stand_state : 100;
     out.targetable = s.targetable;
@@ -2738,7 +2740,10 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
                 case 3: s->invis_rank = static_cast<std::int32_t>(a->parameter); break;
                 case 5: s->light_type = static_cast<std::uint8_t>(a->parameter); break;
                 case 18: s->linkdead = a->parameter != 0; break;
-                case 19: s->fly_mode = static_cast<std::uint8_t>(a->parameter); break; // PlayerPhysics_SetFlyMode
+                case 19: // PlayerPhysics_SetFlyMode
+                    s->fly_mode = static_cast<std::uint8_t>(a->parameter);
+                    ++s->fly_mode_sets;
+                    break;
                 case 20: s->gm = a->parameter != 0; break;
                 case 21:
                     s->anon = static_cast<std::uint8_t>(a->parameter);

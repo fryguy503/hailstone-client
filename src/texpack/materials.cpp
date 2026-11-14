@@ -79,11 +79,14 @@ const MaterialClass* MaterialRules::find(std::string_view name) const {
 
 std::string MaterialRules::signature(const TileRule& tile) const {
     std::string s = std::string("v") + std::string(kComposeVersion) + (tile.sharp ? " sharp" : "");
-    for (const std::string* name : {&tile.first, &tile.second}) {
-        const MaterialClass* c = name->empty() ? nullptr : find(*name);
+    for (int k = 0; k < 2; ++k) {
+        const std::string& name = k == 0 ? tile.first : tile.second;
+        const MaterialClass* c = name.empty() ? nullptr : find(name);
         if (!c) continue;
+        const auto& own = k == 0 ? tile.first_colour : tile.second_colour;
+        const float* colour = own ? own->data() : c->colour;
         s += " " + c->name + ":" + c->asset + "," + fmt(c->metres) + "," + fmt(c->magnify) + "," + fmt(c->detail) +
-             "," + fmt(c->shading) + "," + fmt(c->colour[0]) + "/" + fmt(c->colour[1]) + "/" + fmt(c->colour[2]);
+             "," + fmt(c->shading) + "," + fmt(colour[0]) + "/" + fmt(colour[1]) + "/" + fmt(colour[2]);
     }
     return s;
 }
@@ -137,6 +140,8 @@ std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt
         rules.classes.push_back(std::move(c));
     }
     for (const auto& [zone, text] : zone_files) {
+        std::map<std::string, std::array<float, 3>> colours; // the file's colour lines
+        const std::size_t first_tile = rules.tiles.size();
         std::istringstream in(text);
         int n = 0;
         for (std::string line; std::getline(in, line);) {
@@ -153,10 +158,10 @@ std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt
                 if (t.actor.ends_with("_actordef")) t.actor.resize(t.actor.size() - 9);
                 auto w = words(std::string_view(line).substr(eq + 1));
                 for (std::string& x : w) x = lower(x);
-                static constexpr std::string_view kStyles[] = {"auto", "pine", "broadleaf", "willow"};
+                static constexpr std::string_view kStyles[] = {"auto", "pine", "broadleaf", "willow", "dead", "palm"};
                 if (t.actor.empty() || w.empty() || w.size() > 2 ||
                     std::find(std::begin(kStyles), std::end(kStyles), w[0]) == std::end(kStyles)) {
-                    fail(error, where + "expected tree <actor> = auto|pine|broadleaf|willow [bark material]");
+                    fail(error, where + "expected tree <actor> = auto|pine|broadleaf|willow|dead|palm [bark material]");
                     return std::nullopt;
                 }
                 t.style = w[0];
@@ -168,6 +173,23 @@ std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt
                     t.bark = w[1];
                 }
                 rules.trees.push_back(std::move(t));
+                continue;
+            }
+            if (lower(line).starts_with("colour ") && eq != std::string::npos) {
+                const std::string name = lower(trim(std::string_view(line).substr(7, eq - 7)));
+                auto w = words(std::string_view(line).substr(eq + 1));
+                std::array<float, 3> rgb{};
+                bool ok = w.size() == 3 && rules.find(name);
+                for (std::size_t i = 0; ok && i < 3; ++i) {
+                    auto v = number(w[i]);
+                    ok = v && *v >= 0.0 && *v <= 1.0;
+                    if (ok) rgb[i] = static_cast<float>(*v);
+                }
+                if (!ok) {
+                    fail(error, where + "expected colour <material> = r g b (0..1, a material of materials.txt)");
+                    return std::nullopt;
+                }
+                colours[name] = rgb;
                 continue;
             }
             if (eq == std::string::npos) {
@@ -196,6 +218,11 @@ std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt
             r.first = mats[0];
             if (mats.size() == 2) r.second = mats[1];
             rules.tiles.push_back(std::move(r));
+        }
+        for (std::size_t i = first_tile; i < rules.tiles.size(); ++i) {
+            TileRule& r = rules.tiles[i];
+            if (auto it = colours.find(r.first); it != colours.end()) r.first_colour = it->second;
+            if (auto it = colours.find(r.second); !r.second.empty() && it != colours.end()) r.second_colour = it->second;
         }
     }
     return rules;
@@ -530,6 +557,9 @@ Outputs compose_tile(const MaterialTile& tile, const MaterialRules& rules, const
     auto ma = library.tiled(a->name, material_repeats(*a, tile.units), size);
     auto mb = b ? library.tiled(b->name, material_repeats(*b, tile.units), size) : nullptr;
     if (!ma || (b && !mb)) throw std::runtime_error("material images not loaded");
+    // The materials' colours in this zone's art (TileRule::first_colour), else their own.
+    const float* colour_a = tile.rule.first_colour ? tile.rule.first_colour->data() : a->colour;
+    const float* colour_b = b ? (tile.rule.second_colour ? tile.rule.second_colour->data() : b->colour) : nullptr;
 
     const Planes orig = to_planes(original, 3);
     const std::size_t n = std::size_t(size) * size;
@@ -549,8 +579,8 @@ Outputs compose_tile(const MaterialTile& tile, const MaterialRules& rules, const
         std::vector<float> feat(m * 4);
         for (std::size_t i = 0; i < m; ++i) feature(&blurred.px[i * 3], &feat[i * 4]);
         float centre[2][4];
-        feature(a->colour, centre[0]);
-        feature(b->colour, centre[1]);
+        feature(colour_a, centre[0]);
+        feature(colour_b, centre[1]);
         std::vector<std::uint8_t> label(m);
         auto dist = [&](std::size_t i, int k) {
             float d = 0;
@@ -590,8 +620,8 @@ Outputs compose_tile(const MaterialTile& tile, const MaterialRules& rules, const
     // then match the original's, which the detail transfer below relies on (else an edge gets a bright halo).
     float ga[3], gb[3] = {1.0f, 1.0f, 1.0f};
     for (int c = 0; c < 3; ++c) {
-        ga[c] = a->colour[c] / std::max(ma->mean[c], 1e-3f);
-        if (b) gb[c] = b->colour[c] / std::max(mb->mean[c], 1e-3f);
+        ga[c] = colour_a[c] / std::max(ma->mean[c], 1e-3f);
+        if (b) gb[c] = colour_b[c] / std::max(mb->mean[c], 1e-3f);
     }
     Planes color(size, size, 3), normal(size, size, 3), rough(size, size, 1);
     {

@@ -8,6 +8,8 @@
 #include "game/group_role_sets.h"
 #include "game/leadership.h"
 #include "mock_server/harness.h"
+#include "mq/parse.h"
+#include "mq/tlo.h"
 #include "net/dz_packets.h"
 #include "net/group_packets.h"
 #include "net/notice_packets.h"
@@ -220,6 +222,127 @@ TEST_CASE("mock server: /dz, /task commands, the task window's shared task page 
     REQUIRE(rig.until([&] { return sent(server, Op::GroupRoles).size() == before + 9; }));
     conn.send_command("/grouproles roleset delete Raiders");
     REQUIRE(rig.until([&] { return conn.group_role_sets().find("Raiders") == -1; }));
+}
+
+TEST_CASE("mock server: group role requests validate the current leader and roster without predicting state") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    conn.send_group_role("Gennro", 1, true); // not connected
+    REQUIRE(rig.to_zone());
+    conn.send_group_role("Gennro", 1, true); // solo
+    group_up(server, "Gennro", {"Tank", "Healer"});
+    REQUIRE(rig.until([&] { return conn.group().count() == 3; }));
+
+    // A reliable packet after the requests is a barrier for assertions that no role packet was sent.
+    auto flush = [&] {
+        const auto before = sent(server, Op::RandomReq).size();
+        conn.send_zone_packet(encode_random_request(1, 1));
+        REQUIRE(rig.until([&] { return sent(server, Op::RandomReq).size() == before + 1; }));
+    };
+    conn.send_group_role("Outsider", 1, true);
+    conn.send_group_role("", 2, true);
+    conn.send_group_role("Tank", 0, true);
+    conn.send_group_role("Tank", -1, true);
+    conn.send_group_role("Tank", 4, true);
+    conn.send_command("/grouproles set Tank 999999999999999999999999999999");
+    flush();
+    CHECK(sent(server, Op::GroupRoles).empty());
+
+    // Self may fill every role. Case-insensitive selections send the canonical roster name.
+    for (int role = 1; role <= 3; ++role) conn.send_group_role("gEnNrO", role, true);
+    flush();
+    auto requests = sent(server, Op::GroupRoles);
+    REQUIRE(requests.size() == 3);
+    for (int i = 0; i < 3; ++i) {
+        auto request = decode_group_role(requests[static_cast<std::size_t>(i)]);
+        REQUIRE(request);
+        CHECK(request->member == "Gennro");
+        CHECK(request->leader == "Gennro");
+        CHECK(request->role == i + 1);
+        CHECK(request->on == 1);
+    }
+    CHECK_FALSE(conn.group().slots[0].main_tank);
+    CHECK_FALSE(conn.group().slots[0].main_assist);
+    CHECK_FALSE(conn.group().slots[0].puller);
+
+    server.zone.send_reliable(encode_group_leader_change("Tank"));
+    REQUIRE(rig.until([&] { return conn.group().is_leader("Tank"); }));
+    conn.send_group_role("Gennro", 2, true); // menu opened before losing leadership
+    conn.send_command("/grouproles set Gennro 1");
+    flush();
+    CHECK(sent(server, Op::GroupRoles).size() == 3);
+
+    group_up(server, "Gennro", {"Healer"});
+    REQUIRE(rig.until([&] { return conn.group().count() == 2 && conn.group().is_leader("Gennro"); }));
+    conn.send_group_role("Tank", 1, true); // menu opened before that member left
+    conn.send_command("/safelock password");
+    REQUIRE(conn.interface_locked());
+    conn.send_group_role("Healer", 1, true);
+    flush();
+    CHECK(sent(server, Op::GroupRoles).size() == 3);
+}
+
+TEST_CASE("mock server: confirmed group roles reach autocombat TLOs and survive roster refreshes") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    group_up(server, "Gennro", {"Tank", "Healer"});
+    REQUIRE(rig.until([&] { return conn.group().count() == 3; }));
+    mq::Registry registry;
+    mq::register_game_tlos(registry);
+    mq::Context context;
+    context.registry = &registry;
+    context.conn = &conn;
+    auto tlo = [&](std::string_view text) { return mq::parse_macro_data(context, text); };
+    CHECK(tlo("${Group.MainAssist.Name}") == "NULL");
+
+    server.zone.send_reliable(encode_group_role({"Gennro", "Gennro", 2, 1}));
+    REQUIRE(rig.until([&] { return conn.group().slots[0].main_assist; }));
+    CHECK(tlo("${Group.MainAssist.Name}") == "Gennro");
+    CHECK(tlo("${Group.Member[0].MainAssist}") == "TRUE");
+    server.zone.send_reliable(encode_group_role({"Tank", "Gennro", 2, 1}));
+    REQUIRE(rig.until([&] { return conn.group().slots[1].main_assist; }));
+    CHECK_FALSE(conn.group().slots[0].main_assist);
+    CHECK(tlo("${Group.MainAssist.Name}") == "Tank");
+    server.zone.send_reliable(encode_group_role({"Tank", "Gennro", 2, 0}));
+    REQUIRE(rig.until([&] { return !conn.group().slots[1].main_assist; }));
+    CHECK(tlo("${Group.MainAssist.Name}") == "NULL");
+
+    GroupUpdateB update;
+    update.group_id = 7;
+    update.leader = "Gennro";
+    GroupUpdateMember me;
+    me.name = "Gennro";
+    me.main_assist = 1;
+    me.puller = 1;
+    GroupUpdateMember merc;
+    merc.slot = 1;
+    merc.name = "Merc";
+    merc.merc = 1;
+    merc.main_tank = 1;
+    update.members = {me, merc};
+    server.zone.send_reliable(encode(update));
+    REQUIRE(rig.until([&] { return conn.group().slots[1].merc; }));
+    CHECK(tlo("${Group.MainAssist.Name}") == "Gennro");
+    CHECK(tlo("${Group.Puller.Name}") == "Gennro");
+    CHECK(tlo("${Group.MainTank.Name}") == "Merc");
+    conn.send_group_role("Merc", 2, true);
+    conn.send_group_role("Merc", 3, true);
+    conn.send_group_role("Merc", 1, false);
+    REQUIRE(rig.until([&] { return sent(server, Op::GroupRoles).size() >= 1; }));
+    auto requests = sent(server, Op::GroupRoles);
+    REQUIRE(requests.size() == 1);
+    CHECK(decode_group_role(requests[0])->role == 1);
+    CHECK(decode_group_role(requests[0])->on == 0);
+    CHECK(conn.group().slots[1].main_tank); // still awaiting the server
+
+    server.zone.send_reliable(encode_group_generic(Op::GroupDisbandYou, {"Gennro", "Gennro"}));
+    REQUIRE(rig.until([&] { return !conn.group().active; }));
+    CHECK(tlo("${Group.MainTank.Name}") == "NULL");
+    CHECK(tlo("${Group.MainAssist.Name}") == "NULL");
+    CHECK(tlo("${Group.Puller.Name}") == "NULL");
 }
 
 TEST_CASE("mock server: the leadership abilities' commands and messages (marks, inspect buffs, clear marks)") {

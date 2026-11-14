@@ -760,7 +760,6 @@ hailstone_add_shaders(hailstone_shaders
   shaders/target_ring.frag
   shaders/underwater.vert
   shaders/underwater.frag
-  shaders/horizon.frag
   shaders/zone_shadow.vert
   shaders/zone_shadow.frag
   shaders/zone_point_shadow.vert
@@ -1066,6 +1065,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/tcp_socket_test.cpp
     tests/plugin_tcp_test.cpp
     tests/merchant_buy_test.cpp
+    tests/npc_interaction_distance_test.cpp
+    tests/world_container_distance_test.cpp
     tests/merchant_usable_test.cpp
     tests/ascii_case_test.cpp
     tests/ui_pack_windows_test.cpp
@@ -1300,6 +1301,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/step_landing_test.cpp
     tests/jump_hang_test.cpp
     tests/stop_moving_test.cpp
+    tests/fly_mode_test.cpp
     tests/zone_ladders_test.cpp
     tests/chat_trade_vectors_test.cpp
     tests/hotbutton_tracking_vectors_test.cpp

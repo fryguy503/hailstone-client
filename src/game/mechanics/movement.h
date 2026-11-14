@@ -37,6 +37,7 @@
 // controller runs at 24-bit precision.
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -188,12 +189,54 @@ std::int32_t calc_carried_weight(std::span<const CarriedItem> items, std::int32_
 // buffs: SPA 57 in the buff cache (value 0) levitates (2), else its second
 // value (5); mode 1 (flying mount) is kept; a rider follows its mount; a
 // no-levitation zone (flag 8) or the cancel byte (0xddfc9c) forces 0 unless
-// the spawn may fly anyway (its virtual +0xdc).
+// the spawn may fly anyway (its virtual +0xdc). It runs only when the effect
+// cache is rebuilt (local_fly_mode below), so a mode set between rebuilds
+// stands until the next one.
 FlyMode levitation_mode(FlyMode current, bool spa57_value0, bool spa57_value1, std::optional<FlyMode> rider_mode,
                         bool no_levitate_zone, bool may_fly_anyway = false);
 // The same on the raw mode values (the physics object's +0xc).
 std::int32_t levitation_mode_value(std::int32_t current, bool spa57_value0, bool spa57_value1,
                                    std::optional<std::int32_t> rider_mode, bool no_levitate_zone, bool may_fly_anyway);
+
+// What changed the local player's fly mode (the physics object's +0xc) since the last frame. Each writer sets the
+// mode outright; only the cache rebuild applies the buff, flying-mount and no-levitation-zone rules.
+struct FlyModeEvents {
+    // CharacterZoneClient_RemoveAffect @0x439700, its SPA 57 case: a levitate buff removed while
+    // PlayerZoneClient::Levitating @0x5a1140 (TotalEffect(57, 0 / 1)) finds no other levitation sets mode 0,
+    // whatever it was (a flying mode 1 included). local_fly_mode reads "no other levitation" from the SPA 57
+    // values it is given (the buff cache's; Levitating also counts worn items and AAs).
+    bool levitate_faded = false;
+    // EQ_Character::HitBySpell's SPA 57 case, FUN_00432b20 @0x432b20 with the effect's Base2: a levitate buff
+    // landing sets mode 5 for a non-zero Base2, else 2 (over mode 1 too), or 0 in a no-levitation zone unless the
+    // spawn may fly anyway.
+    std::optional<std::int32_t> levitate_landed;
+    // OP_SpawnAppearance type 19 (Handle_OP_SpawnAppearance @0x4b4b60) or the spawn record's flymode
+    // (EQPlayer::UnSerializeSpawn): PlayerPhysics_SetFlyMode @0x8d0910 with no rules applied, on the spawn and its
+    // mount.
+    std::optional<FlyMode> server_mode;
+    // CharacterZoneClient_ReCacheSpellEffects @0x438910, which ends with UpdateLevitationState: it runs at the next
+    // effect read after anything clears the cache flag (+0x1a4), such as a buff landing, fading or refreshed.
+    bool recache = false;
+};
+// The local player's fly mode after a frame's events, applied in the order above: the packets of a frame are
+// handled before the frame's effect reads, so a rebuild in the same frame comes last. A server-set mode 2 to 5 (or
+// 0) therefore lasts until the next rebuild, a server-set mode 1 is kept by it except in a no-levitation zone.
+FlyMode local_fly_mode(FlyMode current, const FlyModeEvents& events, bool spa57_value0, bool spa57_value1,
+                       std::optional<FlyMode> rider_mode, bool no_levitate_zone, bool may_fly_anyway = false);
+
+// The levitation events in a change of the buff slots between two frames (the slots' spell ids, in slot order):
+// `changed` when any slot's spell differs (the cache would be cleared), `faded` when a slot that held a levitate
+// spell holds another or none (local_fly_mode checks that no levitation is left), `landed` the Base2 of the levitate effect of the last
+// slot (in slot order) that newly holds a levitate spell. `levitate_base2` gives a spell's first SPA 57 Base2, or
+// nothing for a spell without one.
+inline constexpr std::uint32_t kNoBuffSpell = 0xffffffff; // an empty slot (game::kNoSpell)
+struct BuffLevitationChange {
+    bool changed = false;
+    bool faded = false;
+    std::optional<std::int32_t> landed;
+};
+BuffLevitationChange buff_levitation_change(std::span<const std::uint32_t> before, std::span<const std::uint32_t> after,
+                                            const std::function<std::optional<std::int32_t>(std::uint32_t)>& levitate_base2);
 
 // PlayerClient::DoSwimJump @0x58c940 with PlayerClient_CanSwimJumpNow
 // @0x59fb60: when NextSwim is before now, the next swim jump waits 1.5 s;
