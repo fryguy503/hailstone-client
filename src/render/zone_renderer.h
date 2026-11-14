@@ -15,6 +15,7 @@
 
 #include "render/gpu.h"
 #include "render/horizon.h"
+#include "render/lod_bands.h"
 #include "render/scene_lighting.h"
 #include "render/vk_context.h"
 
@@ -211,24 +212,22 @@ private:
         std::uint32_t first_chunk = 0; // its chunks in chunks_
         std::uint32_t chunk_count = 0;
         glm::vec3 box_min{0.0f}, box_max{0.0f}; // round all of them: a draw wholly out of view tests no chunk
-        // A replacement model's level of detail (assets::MeshPart::lod_near, lod_far): its chunks show only from
-        // lod_near to lod_far units from the camera (lod_shows). lod_far 0: always.
-        float lod_near = 0.0f, lod_far = 0.0f;
+        // A replacement model's level of detail (render/lod_bands.h): its chunks show only within its band
+        // (lod_shows).
+        LodBand lod;
     };
 
     // Whether every shadow pass but the water map draws `d` without its texture: solid (opaque, not alpha-tested), not
     // a flame. These go into solid_.
     // (A level of detail is drawn on its own, so that its shadow changes level with it.)
     static bool casts_untextured(const Draw& d) {
-        return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f) && d.lod_far <= 0.0f;
+        return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f) && !d.lod.banded();
     }
-    // Whether a chunk of `d` shows at its distance from lod_eye_: the distance from the camera to the chunk's box's
-    // centre within the draw's band. A banded draw's chunks are cells of whole placements, so a tree changes level at
-    // once, and each cell shows one level of it.
-    bool lod_shows(const Draw& d, const glm::vec3& box_min, const glm::vec3& box_max) const {
-        if (d.lod_far <= 0.0f) return true;
-        const float dist = glm::distance((box_min + box_max) * 0.5f, lod_eye_);
-        return dist >= d.lod_near && dist < d.lod_far;
+    // Whether a chunk of `d` shows by `pick` at its distance from lod_eye_: the distance from the camera to the chunk's
+    // box's centre. A banded draw's chunks are cells of whole placements, so a tree changes level at once, and each
+    // cell shows one level of it.
+    bool lod_shows(const Draw& d, const glm::vec3& box_min, const glm::vec3& box_max, LodPick pick = {}) const {
+        return render::lod_shows(d.lod, glm::distance((box_min + box_max) * 0.5f, lod_eye_), pick);
     }
     // The camera's position the levels of detail are chosen by: the last begin_draw's (the shadow passes, drawn
     // before it in a frame, take the frame before's).
@@ -292,8 +291,9 @@ private:
     // `counted`: where its triangles and calls go in drawn_. The depth pre-pass counts none: the colour pass draws
     // the same triangles.
     enum class Counted : std::uint8_t { Scene, Shadow, None };
+    // `lod`: which level of a banded draw (lod_shows).
     template <class Keep, class First>
-    void draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first);
+    void draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first, LodPick lod = {});
     ZoneDrawn drawn_;
     // The zone's lights for the modern lighting's per-pixel pass (render/light_grid.h): the lights with the grid's
     // header, the cells, the cells' light numbers (zone.frag's set 1, bindings 1 to 3).

@@ -1213,7 +1213,10 @@ zone loads (`Zone::draw_objects`).
   drawn, in every pass (the scene, the depth pre-pass, the sun's cascades, the lights' shadow cubes), when the camera's
   distance to its box's centre is in the band: a tree changes level at once, and each one shows one level. The shadow
   passes take the camera's position of the frame before. A banded draw is not merged into the untextured shadow
-  casters, so its shadow changes level with it.
+  casters. A shadow needs less detail than the tree it falls from (`render/lod_bands.h`): the sun's two nearest
+  cascades draw at least the second level (the camera's where coarser), the two further ones the last, and a light's
+  shadow cube, drawn once and kept, always the second whatever the camera's distance. A model's levels are its bands
+  in order of their near ends.
 
 ### Generated trees
 
@@ -1242,7 +1245,8 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
   middle levels are built together, so they have one shape.
 - **Budget:** 4,000 to 11,000 triangles a tree at the near level, 8 at the far. In the zone viewer at a Qeynos Hills
   spot the trees and ground came to about 27,000 zone triangles a frame with the levels (239,000 without, 3,400 with
-  the game's trees), and 9,000 looking over the zone from above (195,000 without).
+  the game's trees), and 9,000 looking over the zone from above (195,000 without). Into the shadow map, 7,100 with the
+  shadows' own levels (98,000 with the camera's, 574,000 with none, 7,300 with the game's trees).
 
 The rules are lines of the studio's zone files (`tree <object> = <style> [<bark material>]`); only Qeynos Hills has
 them so far. A tree comes out the same on every build (its seed is its zone and name). Seen in the zone viewer, not

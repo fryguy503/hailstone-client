@@ -236,11 +236,11 @@ struct MaterialKey {
     std::string effect;
     std::uint8_t liquid = 0; // ZoneRenderer::Liquid
     bool flame = false;      // a placed object's flame (assets::flame_material_hue)
-    float lod_near = 0.0f, lod_far = 0.0f; // assets::MeshPart's level-of-detail band
+    LodBand lod; // assets::MeshPart's level-of-detail band, its place among the mesh's
     bool operator<(const MaterialKey& o) const {
-        return std::tie(blend, eqg, two_sided, front_ccw, frames, delay, multipass, effect, liquid, flame, lod_near,
-                        lod_far) < std::tie(o.blend, o.eqg, o.two_sided, o.front_ccw, o.frames, o.delay, o.multipass,
-                                            o.effect, o.liquid, o.flame, o.lod_near, o.lod_far);
+        return std::tie(blend, eqg, two_sided, front_ccw, frames, delay, multipass, effect, liquid, flame, lod) <
+               std::tie(o.blend, o.eqg, o.two_sided, o.front_ccw, o.frames, o.delay, o.multipass, o.effect, o.liquid,
+                        o.flame, o.lod);
     }
 };
 
@@ -627,6 +627,12 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         }
         if (plant) sway_plant(mesh, transform, std::span(vertices).subspan(base));
         plants += plant;
+        // The mesh's levels of detail by their near ends, nearest first: the shadow passes pick a level by its place.
+        std::vector<float> bands;
+        for (const auto& part : mesh.parts)
+            if (part.lod_far > 0.0f) bands.push_back(part.lod_near);
+        std::sort(bands.begin(), bands.end());
+        bands.erase(std::unique(bands.begin(), bands.end()), bands.end());
         for (const auto& part : mesh.parts) {
             if (part.material >= mesh.materials.size()) continue;
             const auto& m = mesh.materials[part.material];
@@ -636,8 +642,13 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                             region && options.multipass_lighting && has_mpl_triple(mesh, m), effect_key(m.effect)};
             if (m.eqg_shader == assets::EqgShader::Water) key.liquid = static_cast<std::uint8_t>(Liquid::Water);
             key.flame = !region && assets::flame_material_hue(m) != assets::FlameHue::None;
-            key.lod_near = part.lod_near;
-            key.lod_far = part.lod_far;
+            if (part.lod_far > 0.0f) {
+                key.lod.near = part.lod_near;
+                key.lod.far = part.lod_far;
+                key.lod.level = static_cast<std::uint8_t>(std::min<std::ptrdiff_t>(
+                    std::lower_bound(bands.begin(), bands.end(), part.lod_near) - bands.begin(), 255));
+                key.lod.levels = static_cast<std::uint8_t>(std::min<std::size_t>(bands.size(), 255));
+            }
             // Classic regions' plain materials: each triangle by the regions around it (classic_liquid_triangles).
             const bool classify = region && liquid != nullptr;
             for (std::uint32_t i = 0; i + 2 < part.index_count; i += 3) {
@@ -878,8 +889,7 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
         d.frame_delay_ms = key.delay;
         d.two_sided = key.two_sided;
         d.front_ccw = key.front_ccw;
-        d.lod_near = key.lod_near;
-        d.lod_far = key.lod_far;
+        d.lod = key.lod;
         MaterialState st = material_state(look);
         for (const auto& name : key.frames) d.frame_slots.push_back(slot_for(name, st.masked_texture, TextureUse::Color, !st.alpha_unused()));
         if (!key.frames.empty()) horizon_slots.try_emplace(key.frames.front(), d.frame_slots.front());
@@ -962,7 +972,7 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                     (vertices[idx[0]].position + vertices[idx[1]].position + vertices[idx[2]].position) / 3.0f;
                 // A level of detail's triangles by their placement's cell, so a tree is one chunk's and changes level
                 // at once (a neighbour zone's cut triangles have no anchor: their own centre).
-                if (d.lod_far > 0.0f && idx[0] < anchors.size() && !std::isnan(anchors[idx[0]].x))
+                if (d.lod.banded() && idx[0] < anchors.size() && !std::isnan(anchors[idx[0]].x))
                     c = glm::vec3(anchors[idx[0]] + glm::vec2(options.offset), c.z);
                 tris[t] = {cell_key(static_cast<std::int64_t>(std::floor(c.x / kChunk)),
                                     static_cast<std::int64_t>(std::floor(c.y / kChunk))), t};
@@ -1405,7 +1415,8 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
 }
 
 template <class Keep, class First>
-void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first) {
+void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first,
+                               LodPick lod) {
     // The draw's box first: a draw wholly out of view tests none of its chunks. Neighbouring chunks lie end to end in
     // the index buffer (build), so a run of kept ones is one draw. Skipping chunks keeps the order of the rest, which
     // the blended draws need.
@@ -1433,7 +1444,7 @@ void ZoneRenderer::draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted count
     };
     for (std::uint32_t i = d.first_chunk; i < d.first_chunk + d.chunk_count; ++i) {
         const Chunk& c = chunks_[i];
-        if (!lod_shows(d, c.box_min, c.box_max) || !keep(c)) continue;
+        if (!lod_shows(d, c.box_min, c.box_max, lod) || !keep(c)) continue;
         if (run_count > 0 && c.first_index == run_first + run_count) {
             run_count += c.index_count;
         } else {
@@ -1708,6 +1719,8 @@ void ZoneRenderer::draw_shadow(const FrameInfo& frame, std::uint32_t cascade) {
     };
     PushConstants pc{};
     pc.tex2.w = cascade;
+    static_assert(kShadowLodLevel.size() == kShadowCascades);
+    const std::uint8_t min_level = cascade < kShadowCascades ? kShadowLodLevel[cascade] : std::uint8_t{0};
     // The solid casters first, a cell at a time whatever their material: they need no texture.
     if (cascade != kWaterLayer)
         draw_chunks(cmd, solid_, Counted::Shadow, seen, [&] {
@@ -1730,7 +1743,7 @@ void ZoneRenderer::draw_shadow(const FrameInfo& frame, std::uint32_t cascade) {
             pc.params = glm::vec4(d.alpha_ref, 1.0f, 0.0f, 0.0f);
             vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                &pc);
-        });
+        }, LodPick{min_level, false});
     }
 }
 
@@ -1789,7 +1802,7 @@ void ZoneRenderer::draw_point_shadow(const FrameInfo& frame, const PointReach& r
     for (std::uint32_t i : reach.chunks) {
         const Chunk& c = chunks_[i];
         if (!box_reaches_face(reach.light, face, c.box_min, c.box_max)) continue;
-        if (c.draw < draws_.size() && !lod_shows(draws_[c.draw], c.box_min, c.box_max)) continue;
+        if (c.draw < draws_.size() && !lod_shows(draws_[c.draw], c.box_min, c.box_max, kPointShadowLod)) continue;
         if (run_count > 0 && c.draw == run_draw && c.first_index == run_first + run_count) {
             run_count += c.index_count;
         } else {
