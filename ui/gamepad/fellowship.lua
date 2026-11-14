@@ -36,7 +36,8 @@ ui.window("Fellowship", function()
   if not wasShown then setPage(page) end
   wasShown = true
   local count = eq.ListInfo(WIN, "MemberList") or 0
-  if W.begin("Fellowship", { w = 1700, h = 960, title = "Fellowship", subtitle = page == 1 and ("Members (" .. count .. ") | L: leader") or "Campsite",
+  if W.begin("Fellowship", { w = 1700, h = 960, title = "Fellowship", subtitle = page == 1
+          and (count .. (count == 1 and " member" or " members") .. " | L marks the leader") or "Campsite",
         hints = CH.hints(st, { { "lb", "Fellowship" }, { "rb", "Camp" }, { "a", "Select" }, { "b", "Close" } }) }) then
     local x0, y0, x1, y1, cw = W.area()
     local wx, wy = ui.GetWindowPos()

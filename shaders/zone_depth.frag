@@ -32,6 +32,8 @@ layout(push_constant) uniform Push {
     vec4 extra4;
 } pc;
 
+// Only these two of zone.vert's outputs are read. The validation layer notes, as a performance hint, that the others
+// reach no input here; they are kept, since one vertex shader for both passes is what keeps their depth identical.
 layout(location = 0) in vec2 v_uv;
 layout(location = 2) in vec3 v_world; // zone.vert
 

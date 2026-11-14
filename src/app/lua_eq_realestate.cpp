@@ -65,11 +65,11 @@ std::string coin_line(std::uint64_t copper) {
     return s.empty() ? "0 copper" : s;
 }
 
-// A currency other than coin: its alternate currency's name when the server listed it (CDBStr kind 0x13 of the
-// currency's item is not traced: the count and the currency id here).
+// A currency other than coin: its name, dbstr type 0x12 of the currency id (the plural, as CInventoryWnd's Alt.
+// Currency list and CNewPointMerchantWnd read it; type 0x13 is the AA categories), else the currency id.
 std::string currency_line(const GameConnection& c, std::uint32_t currency, std::uint64_t amount) {
     if (currency == 0) return coin_line(amount);
-    std::string name = c.strings().db_string(currency, 0x13);
+    std::string name = c.strings().db_string(currency, 0x12);
     if (name.empty()) name = "currency " + std::to_string(currency);
     return std::to_string(amount) + " " + name;
 }
@@ -364,7 +364,7 @@ public:
                         balance_rows_.push_back({0, static_cast<std::uint32_t>(3 - i), total});
                     }
                 } else {
-                    std::string name = c.strings().db_string(b.currency, 0x13);
+                    std::string name = c.strings().db_string(b.currency, 0x12);
                     balance_.rows.push_back(ListRow{{name.empty() ? "currency " + std::to_string(b.currency) : name, std::to_string(total)}});
                     balance_rows_.push_back({b.currency, 1, total});
                 }

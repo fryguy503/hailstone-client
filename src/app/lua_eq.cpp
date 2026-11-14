@@ -666,8 +666,8 @@ int HasSlot(lua_State* L) {
 }
 
 // list = eq.AltCurrencies([showMissing])   -- { name, count, icon, maxStack } per alternate currency
-// (OP_AltCurrency; the names' dbstr type is not known: "Currency <n>"); without showMissing only those held and
-// shown. The order and filter are the InventoryWindow's AltCurr_PointList rows (eq.ListClick selects one there).
+// (OP_AltCurrency; the name is dbstr type 0x12 of the currency id, as CInventoryWnd's Alt. Currency list reads it,
+// "Currency <n>" when the game folder has none); without showMissing only those held and shown. The order and filter are the InventoryWindow's AltCurr_PointList rows (eq.ListClick selects one there).
 int AltCurrencies(lua_State* L) {
     auto& h = Impl::of(L).host;
     bool missing = lua_toboolean(L, 1) != 0;
@@ -677,7 +677,9 @@ int AltCurrencies(lua_State* L) {
     for (const auto& [id, a] : h.conn->alt_currencies()) {
         if (!missing && (a.amount == 0 || !a.entry.shown)) continue;
         lua_newtable(L);
-        lua_pushstring(L, ("Currency " + std::to_string(id)).c_str());
+        std::string name = h.conn->strings().db_string(id, 0x12);
+        if (name.empty()) name = "Currency " + std::to_string(id);
+        lua_pushstring(L, name.c_str());
         lua_setfield(L, -2, "name");
         lua_pushinteger(L, a.amount);
         lua_setfield(L, -2, "count");
