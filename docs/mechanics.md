@@ -186,8 +186,30 @@ AGI 0, plain item weights). Each value, with what produces it:
 | weight factor | `calculate_weight`: current weight = carried weight (`item_weight`: each item's own weight, charm-scaled, without its augments or its stack count; the bag reduction, SPA 221), capacity = STR with items and buffs, current / max HP with the spawn type, and `slowdown_any_level` (the level threshold 0 instead of 3); bazaar and barter zones from the zone table |
 | fall damage | current weight, adjusted skill 39, the profile's Safe Fall skill, `TotalEffect(228)`, the heroic AGI bonus; the no-fall-damage flag is the zone's (OP_NewZone +894) |
 | air supply and region damage | max air supply with STA with buffs and `TotalEffect(246)`; water breathing `TotalEffect(14)`; the fire / cold (disease in zone 200) resists from process_all_stats |
-| levitation | the levitation state update on `cached_buff(57, 0 / 1)` |
+| fly mode | `local_fly_mode` (below): the spawn record and OP_SpawnAppearance 19 set it, a levitate buff landing or fading sets it, and `cached_buff(57, 0 / 1)` recomputes it at each effect cache rebuild |
 | sneaking | the Sneak flag, set by the server's OP_SpawnAppearance type 15 and cleared by OP_CancelSneakHide or a cast's make-me-visible; the control processing then uses `sneak_speed(class, level)` x 0.46 forward and halves the walk back speed (`controls.cpp`) |
+
+The local player's fly mode (the physics object's +0xc) is state, as in the original, with several writers
+(`mech::local_fly_mode`, applied in this order within a frame):
+
+- a levitate buff fading with no levitation left (`CharacterZoneClient_RemoveAffect` @0x439700, SPA 57 case,
+  `PlayerZoneClient::Levitating` @0x5a1140) sets 0, a flying mode 1 included;
+- a levitate buff landing (`EQ_Character::HitBySpell`'s SPA 57, FUN_00432b20 @0x432b20) sets 2, or 5 for a
+  non-zero Base2, over mode 1 too; 0 in a no-levitation zone;
+- the server sets any mode 0 to 5 outright, with no rule applied: the spawn record at zone-in (UnSerializeSpawn) and
+  OP_SpawnAppearance 19 (`Handle_OP_SpawnAppearance` @0x4b4b60, `PlayerPhysics_SetFlyMode` @0x8d0910; a value above 5
+  is ignored, the original throws);
+- the effect cache rebuild (`ReCacheSpellEffects` @0x438910, ending in `UpdateLevitationState` @0x433480) gives 2 or
+  5 from the levitate buffs, else 0; it keeps mode 1, a rider takes its mount's mode, and a no-levitation zone forces 0.
+
+The rebuild runs only when the cache is cleared, so a server-set mode lasts until the buffs next change: after GM
+`#set flymode 3` the next buff landing or fading puts the player back on the ground (or levitating), and
+`#set flymode 0` while levitating lasts until then too. `#set flymode 1` survives buff changes, except a levitate buff
+landing or fading, and in a no-levitation zone the next rebuild grounds it. Hailstone sees the buff slots rather than
+the packets that clear the cache: any slot whose spell changes is a rebuild, a slot that loses a levitate spell is a
+fade and one that gains one is a landing (docs/unknowns.md). Zoning in applies the spawn record and then rebuilds.
+Tests: `tests/movement_test.cpp` ("Local fly mode", "Buff levitation change") and `tests/fly_mode_test.cpp` (through
+the connection's packets).
 
 Tests: `tests/movement_inputs_test.cpp` builds synthetic characters (buffs, worn items, augments, bags, heroic gear)
 and checks each value against the hand-worked result; the ports themselves keep their vectors
