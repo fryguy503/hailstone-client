@@ -229,6 +229,24 @@ TEST_CASE("EQGL material layers: names, texture roles by suffix, entry sizes per
     CHECK(layers[0].diffuse == "C_GUS_BD_S01_C.DDS");
     CHECK(layers[0].normal == "C_GUS_BD_S00_N.DDS");
     CHECK(layers[0].environment == "C_GUS_EVMP_S05_E.DDS");
+    REQUIRE(layers[0].shininess);
+    REQUIRE(layers[0].env_strength);
+    CHECK(*layers[0].shininess == 12.0f);
+    CHECK(*layers[0].env_strength == 0.0f);
+    auto version3 = data;
+    version3[4] = std::byte{3};
+    version3.resize(version3.size() - 4);
+    auto v3 = eqg_character::parse_layers(version3);
+    REQUIRE(v3.size() == 1);
+    CHECK(v3[0].shininess == 12.0f);
+    CHECK(v3[0].env_strength == 1.0f);
+    auto truncated = data;
+    truncated.pop_back();
+    CHECK_THROWS(eqg_character::parse_layers(truncated));
+    auto nonfinite = data;
+    nonfinite[nonfinite.size() - 2] = std::byte{0x80};
+    nonfinite[nonfinite.size() - 1] = std::byte{0x7f};
+    CHECK_THROWS(eqg_character::parse_layers(nonfinite));
     data[4] = std::byte{9}; // unknown version
     CHECK_THROWS(eqg_character::parse_layers(data));
     // Material i (file order) takes layer M<i + 1>.
@@ -522,12 +540,20 @@ struct FaceEnv : hailstone::game::ActorEnv {
     std::vector<std::string> palette;
     std::vector<std::string> calls;
     std::vector<std::pair<std::string, std::uint32_t>> attached;
+    int generic_attachments = 0;
+    int armor_attachments = 0;
     bool new_model() override { return false; }
     bool has_dag(std::int32_t) override { return true; }
     bool has_part(std::int32_t) override { return false; }
     std::optional<std::string> part_object(std::int32_t) override { return std::nullopt; }
     bool mesh_hidden(std::int32_t) override { return false; }
     bool attach(std::int32_t dag, const std::string& name, const hailstone::game::NewArmorAdjustment*) override {
+        ++generic_attachments;
+        attached.emplace_back(name, static_cast<std::uint32_t>(dag));
+        return true;
+    }
+    bool attach_armor(std::int32_t dag, const std::string& name, const hailstone::game::NewArmorAdjustment*) override {
+        ++armor_attachments;
         attached.emplace_back(name, static_cast<std::uint32_t>(dag));
         return true;
     }
@@ -623,6 +649,46 @@ TEST_CASE("armour record words 2 and 3 dress as the variation and the overlay ma
     REQUIRE_FALSE(bare.attached.empty());
     CHECK(bare.attached.front().first == "DRF_02_00_CH");
     CHECK(bare.overlays.empty());
+}
+
+TEST_CASE("hero's forge attachment routing is scoped to resolved armor tags on both model families") {
+    using namespace hailstone::game;
+    struct TaggedEnv : ArmorEnv {
+        bool modern = false;
+        bool new_model() override { return modern; }
+        std::optional<NewArmorTag> find_new_armor_tag(std::uint32_t id, const std::string&) override {
+            if (id != 9) return std::nullopt;
+            NewArmorTag tag;
+            tag.it_number = 101;
+            tag.it_pair = 102;
+            return tag;
+        }
+    };
+    for (bool modern : {false, true}) {
+        for (bool filtered : {false, true}) {
+            TaggedEnv env;
+            env.modern = modern;
+            ActorLook look = luclin_look(1, 0, "HUM");
+            look.new_armor_filtered = filtered;
+            look.armor[3].material = 1;
+            look.armor[3].new_armor_id = 9;
+            apply_armor_texture(look, env, 3);
+            REQUIRE(env.attached.size() == 2);
+            CHECK(env.armor_attachments == (filtered ? 0 : 2));
+            CHECK(env.generic_attachments == (filtered ? 2 : 0));
+            if (!filtered) {
+                CHECK(env.attached[0].first == "IT101");
+                CHECK(env.attached[1].first == "IT102");
+            }
+        }
+        TaggedEnv normal;
+        normal.modern = modern;
+        ActorLook look = luclin_look(1, 0, "HUM");
+        look.armor[3].material = 1;
+        apply_armor_texture(look, normal, 3);
+        CHECK(normal.armor_attachments == 0);
+        CHECK(normal.generic_attachments == 2);
+    }
 }
 
 TEST_CASE("SwapFace names the Luclin head materials by face variant and index") {
