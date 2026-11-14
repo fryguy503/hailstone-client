@@ -1147,6 +1147,44 @@ puts it behind anything nearer. Scenery only: nothing collides with it.
 
 `display.horizon_hills` (Options, Horizon Hills) turns it off; the viewer takes `--no-horizon`.
 
+## Smoothed ground
+
+A classic zone's ground is drawn with smooth normals and curved, subdivided triangles instead of the file's flat
+facets (`assets/ground_refine.h`). A deliberate difference from the original, the look only, in both lightings:
+`Zone::terrain` stays as loaded and keeps collision, the regions, the liquids' classification, the ambient probe and
+everything else that must agree with the server's geometry. The refined copy goes into `Zone::draw_terrain` (with
+`draw_terrain_source`, the terrain triangle each drawn one was cut from), which the zone renderer and the zone flora
+use; the lawn and the plants stand on it, and the flora's cover test sees it.
+
+- **Ground:** the solid, opaque triangles of the classic (WLD) terrain meshes. Not cut-outs, translucent or invisible
+  surfaces, passable ones (water), heightmap tiles or EQG meshes. Neighbour zones are drawn from their own terrain,
+  flat.
+- **Normals:** corners are welded by position (to 1/128 unit) across meshes and materials, and each corner of a
+  triangle takes the angle-weighted average of the faces round it within 45 degrees of its own face. Hills turn
+  smooth; a wall's foot, a cliff's edge or a building's corner stays sharp.
+- **Shape:** each triangle becomes a cubic PN triangle (Vlachos, Peters, Boyd and Mitchell, "Curved PN Triangles",
+  2001) over its corner normals. An edge is curved only where exactly two ground triangles meet on it and agree on
+  both corners' normals; a crease, the ground's border and a seam with a wall or a cut-out stay the file's straight
+  edge, uncut, so the refined ground meets the rest of the zone exactly. A curved edge is cut into 2, 4 or 8 segments,
+  so a segment cuts through the curve by at most about 0.05 units. A triangle takes the most of its edges' (or what
+  its own bulge needs), S: the points whose weights are all at least 1/S form a regular inner grid, and each edge's
+  own samples are stitched to the inner grid's side along it. An edge's samples are counted and evaluated from its
+  lower welded corner, so both triangles on it make the same points bit for bit, and no crack opens where two
+  triangles cut it differently (Qeynos Hills: 9,655 ground triangles drawn as 127,293, the open edges the same 509
+  as the file's).
+- **Offset:** an edge's control points are held within 1 unit of the flat triangle, so the curve stays within 1
+  unit of the ground that collision, feet and the server's spawn heights are measured on (Qeynos Hills: at most 0.88).
+  Hills' outlines so change little; the shading changes most (flat light and dark planes on hills and rock become
+  smooth gradients).
+- **Attributes:** UVs, both vertex colours (the baked light) and the detail passes are interpolated over the original
+  triangle.
+- **Cost:** about 40 ms more on Qeynos Hills' load. In the viewer at 1280 x 720 on the RX 9060 XT, a view over its
+  hills went from 1.52 to 1.60 ms a frame to 1.74 to 1.77 ms (65,000 zone triangles drawn instead of 18,000, most of
+  the difference in the shadow cascades).
+
+`display.smooth_ground` (on by default, read as each zone loads) turns it off; the viewer takes
+`--no-smooth-ground`. The log says how many triangles were refined into how many.
+
 ## Texture overrides
 
 Replacement textures, such as upscaled packs, go in a pack folder under `textures/` of the Hailstone folder
@@ -1430,6 +1468,7 @@ viewer (`--zone`, `--model`) takes `--msaa`, `--tonemap`, `--exposure`, `--rende
 | `display.distance_blur` | 0, 1 | 1 | the far distance's slight blur; modern only |
 | `display.neighbour_zones` | 0, 1 | 1 | the zone past an outdoor zone line drawn in the distance (Neighbour zones); modern only; `/neighbourzones [on \| off]` |
 | `display.horizon_hills` | 0, 1 | 1 | land round an outdoor zone past its edges (Horizon hills); modern only; viewer `--no-horizon` |
+| `display.smooth_ground` | 0, 1 | 1 | a classic zone's ground drawn smooth and curved (Smoothed ground); read as each zone loads; viewer `--no-smooth-ground` |
 | `display.tree_detail` | 50 to 200 | 100 | how far a texture pack's replacement models (generated trees) keep their nearer levels of detail, in percent of their own distances (Tree Detail Distance); viewer `--tree-detail` |
 | `display.target_ring_cues` | 0, 1 | 1 | the target ring's sweep on a new target and pulse while attacking (Target Ring Cues; The target ring) |
 | `display.find_trail_style` | 0, 1 | 0 | Find paths: 0 the gold ground line, 1 rainbow strands; Options > Display (gamepad: Interface), saved per character and changed immediately; docs/navigation.md "The trail" |

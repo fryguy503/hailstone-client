@@ -24,6 +24,7 @@
 #include "app/ui_demo.h"
 #include "app/zone_particles.h"
 #include "game/spells.h"
+#include "assets/ground_refine.h"
 #include "assets/sky.h"
 #include "assets/texture_overrides.h"
 #include "assets/zone_flora.h"
@@ -105,6 +106,7 @@ struct Options {
     std::vector<hailstone::render::FireSource> fires; // --fire X Y Z H W: flames placed by hand (modern)
     bool no_fire = false;                         // --no-fire: the modern lighting without its flames (timing)
     bool no_grass = false;                        // --no-grass: the viewer without the zone's flora
+    bool no_smooth_ground = false;                // --no-smooth-ground: the viewer draws the file's flat ground
     bool no_horizon = false;                      // --no-horizon: no land round the zone (render/horizon.h)
     float tree_detail = 1.0f;                     // --tree-detail PCT: display.tree_detail, as a scale
     float flora_distance = 400.0f;                // --flora-distance: how far the viewer draws the flora
@@ -253,6 +255,7 @@ void usage() {
         "  --no-fire          viewer: no flames at all in the modern lighting (to time them)\n"
         "  --no-grass         viewer: no flora (radial flora, and Hailstone's zone flora: flora/<zone>.txt); the\n"
         "                     viewer draws flora with --lighting modern only\n"
+        "  --no-smooth-ground viewer: draw the zone's ground as the file's flat triangles (display.smooth_ground off)\n"
         "  --flora-distance U viewer: draw the flora U units round the camera (400 .. 1200; default 400)\n"
         "  --flora-push X Y Z viewer: the flora bends away from a foot standing there, as from a spawn (testing)\n"
         "  --moon P           the moon's phase, 0 new .. 0.5 full .. 1 (--lighting modern; client: instead of the calendar)\n"
@@ -418,6 +421,8 @@ Options parse_args(int argc, char** argv) {
             o.view_distance = std::strtof(argv[++i], nullptr);
         } else if (arg("--no-grass")) {
             o.no_grass = true;
+        } else if (arg("--no-smooth-ground")) {
+            o.no_smooth_ground = true;
         } else if (arg("--flora-push")) {
             need(3);
             o.flora_push = glm::vec3(std::strtof(argv[i + 1], nullptr), std::strtof(argv[i + 2], nullptr),
@@ -794,6 +799,11 @@ int main(int argc, char** argv) {
             GameDir game = open_game_dir(opts.game_dir, opts.classic_dir);
             auto t0 = std::chrono::steady_clock::now();
             zone = assets::load_zone(game, opts.zone);
+            if (!opts.no_smooth_ground) {
+                const auto r = assets::refine_ground(*zone);
+                log::info("smoothed ground: {} triangles drawn as {}, {} curved edges, at most {:.2f} units off",
+                          r.ground_triangles, r.triangles, r.curved_edges, r.max_offset);
+            }
             if (!opts.no_grass) {
                 const int tt = opts.time_type >= 0 ? opts.time_type : (opts.sky > 0 ? 1 : 0); // as the fog below
                 assets::add_zone_flora(game, *zone, platform::flora_dir(), tt == 1 || tt == 2 || tt == 5);

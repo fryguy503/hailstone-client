@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The classic zones' ground is drawn smooth: hills and rock faces are shaded in smooth gradients instead of flat facets, and their triangles are curved and cut finer, while walls, cliff edges and buildings stay sharp. Where you can walk, what you collide with and where mobs stand are unchanged (the drawn ground stays within a foot of the original). `display.smooth_ground = 0` in `hailstone.ini` turns it off
 - Pressing Tab no longer puts the cursor in the chat input (or the first text field of whichever window was last clicked). Tab still moves to the next field while you are typing in one
 - Modern lighting: the zones past the zone lines no longer clash with the one you are in. Their ground is no longer drawn over your zone's edge with seams, steps and flickering where the two never lined up; instead the land past your zone's edge takes the shape of the neighbour's ground, rising or falling to it smoothly, and your zone's grass gives way to the neighbour's in patches across it. The neighbour's walls, buildings, trees and hills stand on that land. Each neighbour's ground is measured once and kept in Hailstone's cache, and from your next visit the land past every zone line takes its shape, even towards a neighbour too far away to draw
 - Modern UI: with Snap to grid on, resizing a frame or dialog puts the dragged edge on the grid, or flush with the screen's edge when that is nearer, and shows the grid while resizing (the hot bars, which change shape in whole buttons, are not snapped)
