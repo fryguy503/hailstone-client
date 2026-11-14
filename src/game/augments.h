@@ -104,11 +104,13 @@ std::uint32_t aug_restriction_string_id(std::uint32_t restriction);
 //  - primary and secondary (7, 8): the model number of the ornament model the server names (ornament_main, or
 //    ornament_off for the secondary when that is set; EQEmu writes the ornament augment's IDFile into both), else
 //    the item's IDFile;
-//  - armour (0..6): the ornament's hero's forge model the server names (ornament_hero_model, EQEmu's
-//    GetOrnamentHeroModel for the slot) in place of the item's, and the Material of the augment in an ornament
-//    socket (types 20, 21; the later socket, as the appearance area shows it) in place of the item's, when it has
-//    one and its texture is not disabled (update_stats_disabled). A robe glamour is such a Material (10..16).
-// The tint is the item's. The original's own choice of these was not traced (docs/unknowns.md).
+//  - armour (0..6): the item's Material, and the ornament's hero's forge model the server names
+//    (ornament_hero_model, EQEmu's GetOrnamentHeroModel for the slot) in place of the item's.
+// A disabled ornament (has_disabled_ornament) shows the plain item. The tint is the item's. As
+// PcClient_RefreshWornSlotVisual @0x4919b0 (ItemBase_GetIDFile @0x7b3e70, ItemBase_GetArmorProperties @0x7b3d90).
+// Whether the item's first ornament socket (types 20, 21) holds an augment whose stats are disabled
+// (ItemBase_HasDisabledOrnamentAug @0x7b2ea0).
+bool has_disabled_ornament(const net::Item& item);
 struct WornLook {
     std::uint32_t material = 0, hero_forge = 0, tint = 0;
 };
