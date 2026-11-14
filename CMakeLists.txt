@@ -995,7 +995,6 @@ if(HAILSTONE_BUILD_TESTS)
     tests/gpu_ipc_test.cpp
     tests/gpu_shared_cache_test.cpp
     tests/gpu_shared_texture_owner_test.cpp
-    tests/benchmark_world_test.cpp
     tests/frame_sync_test.cpp
     tests/look_eviction_test.cpp
     tests/appearance_systems_test.cpp

@@ -3,7 +3,6 @@
 #include <cstdlib>
 
 #include "app/client_app_internal.h"
-#include "app/benchmark_world.h"
 #include "app/lua_eq.h"
 #include "core/asset_folder.h"
 #include "net/server_files.h"
@@ -464,25 +463,16 @@ void ClientApp::update_login() {
         // box login the world played last on this server (the server select's quick connect), else the first.
         if ((!opts_.auto_user.empty() || box_play_) && !auto_play_sent_ && !servers_.empty() &&
             !hailstone::core::env("SERVER_SELECT")) {
+            auto_play_sent_ = true;
+            server_view_.busy = true;
             const net::ServerInfo* world = &servers_.front();
-            if (const char* requested = core::env("BENCHMARK_WORLD")) {
-                const auto pinned = benchmark_world_id(servers_, requested);
-                if (!pinned) {
-                    server_view_.status = {"The requested world is unavailable or ambiguous.", true};
-                    break;
-                }
-                for (const auto& candidate : servers_)
-                    if (candidate.id == *pinned) world = &candidate;
-                log::info("benchmark: requested world selected");
-            } else if (box_play_) {
+            if (box_play_) {
                 // The account's world (the character's), else the world played last on this server.
                 std::string last = !box_world_.empty() ? box_world_
                                                        : config_.get_string("login.last_world." + server_profile_.id);
                 for (const auto& s : servers_)
                     if (!last.empty() && (s.name == last || saved_character_key_part(s.name) == last)) world = &s;
             }
-            auto_play_sent_ = true;
-            server_view_.busy = true;
             login_->request_play(world->id);
         }
         break;
