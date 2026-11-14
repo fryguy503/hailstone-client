@@ -280,3 +280,28 @@ TEST_CASE("build_item_display: the power percentage of a large power does not wr
             }
     CHECK(found);
 }
+
+TEST_CASE("build_item_display: a stat label the game folder's eqstr_us.txt lacks falls back to a plain one") {
+    // A live game folder's table has 13034 (Mana Regen) but not 13036 (Spell Shield) or 13315 (Strikethrough).
+    game::EqStrings s;
+    s.set(0x32ea, "Mana Regen:");
+    s.set(0x32ec, "Spell Shield:");
+    net::Item it;
+    it.name = "Test Staff";
+    it.mana_regen = 2;
+    it.spell_shield = 3;
+    it.avoidance = 4;
+    it.strike_through = 5;
+    game::ItemDisplayContext ctx;
+    ctx.strings = &s;
+    auto d = game::build_item_display(it, ctx);
+    std::vector<std::string> labels;
+    for (const auto& row : d.grid)
+        if (row[2].shown) labels.push_back(row[2].stat);
+    REQUIRE(labels.size() == 4);
+    CHECK(labels[0] == "Mana Regen:");
+    CHECK(labels[1] == "Spell Shield:"); // the table's own text when it has the id
+    CHECK(labels[2] == "Avoidance:");
+    CHECK(labels[3] == "Strikethrough:");
+    for (const auto& l : labels) CHECK(l.find('[') == std::string::npos);
+}

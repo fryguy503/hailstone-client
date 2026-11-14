@@ -31,6 +31,8 @@
 #include "net/merchant_packets.h"
 #include "net/social_packets.h"
 #include "net/spell_packets.h"
+#include "game/mechanics/character.h"
+#include "game/mechanics/tables.h"
 #include "ui/dev_screens.h"
 #include "ui/lua/lua_host.h"
 #include "mock_server/harness.h"
@@ -2297,6 +2299,82 @@ TEST_CASE("UI packs (modern): an item display draws the shown item's stats, and 
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
     }
     ImGui::DestroyContext(ctx);
+}
+
+// Hailstone's item comparison (docs/item-compare.md): a linked item's display says what wearing it would change,
+// in both packs, and the Options switch turns it off.
+TEST_CASE("UI packs: the item display compares the item with what you wear") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        CAPTURE(pack);
+        fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        hailstone::test::ScratchDir dir_scratch("ui_pack_item_compare_test");
+        fs::path dir = dir_scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(src, dir / pack, fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* px = nullptr;
+        int w = 0, h = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        {
+            Session s(dir, pack);
+            namespace mech = game::mechanics;
+            mech::GameTables tables;
+            tables.class_levels.parse("60^1^400^0^300^3^6^0.9^0^1.25\n");
+            tables.skill_caps.parse("1^15^60^210^0\n");
+            mech::CharacterSheet sheet;
+            sheet.level = sheet.highest_level = 60;
+            sheet.base_str = sheet.base_sta = sheet.base_cha = sheet.base_dex = sheet.base_int = sheet.base_agi =
+                sheet.base_wis = 75;
+            sheet.buffs.resize(mech::kPlayerBuffSlots);
+            net::Item old_helm;
+            old_helm.name = "Old Helm";
+            old_helm.classes = old_helm.races = 0xffff;
+            old_helm.equip_slots = 1u << 2;
+            old_helm.hp = 10;
+            sheet.possessions[2] = old_helm;
+            mech::Character ch(sheet, tables, [](std::int32_t) -> const game::SpellData* { return nullptr; });
+            ch.process_all_stats();
+            s.host.character = &ch;
+            int option = 1;
+            s.host.find_option = [&](std::string_view o) -> std::optional<int> { return o == "item_compare" ? option : 1; };
+
+            net::Item helm = old_helm;
+            helm.id = 1001;
+            helm.name = "Iron Helm";
+            helm.hp = 60;
+            std::vector<net::Item> displays{helm};
+            std::vector<std::uint64_t> ids{1};
+            s.host.item_displays = &displays;
+            s.host.item_display_ids = &ids;
+            lua_State* L = s.lua.state();
+            REQUIRE(luaL_dostring(L, R"(
+                test_seen = {}
+                local dt, tc = ui.DrawText, ui.TextColored
+                ui.DrawText = function(...) local a = { ... } test_seen[tostring(a[#a])] = true return dt(...) end
+                ui.TextColored = function(...) local a = { ... } test_seen[tostring(a[5])] = true return tc(...) end)") ==
+                    LUA_OK);
+            auto seen = [&](const std::string& text) {
+                REQUIRE(luaL_dostring(L, ("return test_seen['" + text + "'] == true").c_str()) == LUA_OK);
+                bool b = lua_toboolean(L, -1);
+                lua_settop(L, 0);
+                return b;
+            };
+            s.frames(3);
+            const std::string hp = "+50 HP (" + std::to_string(ch.max_hp(true)) + " to " +
+                                   std::to_string(ch.max_hp(true) + 50) + ")";
+            CHECK(seen("Compared with your Old Helm (Head)"));
+            CHECK(seen("Upgrade"));
+            CHECK(seen(hp));
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+
+            option = 0;
+            REQUIRE(luaL_dostring(L, "test_seen = {}") == LUA_OK);
+            s.frames(2);
+            CHECK_FALSE(seen("Compared with your Old Helm (Head)"));
+        }
+        ImGui::DestroyContext(ctx);
+    }
 }
 
 // The modern windows whose per-frame reading was cut down (the reads kept to what changed, the tables made once)

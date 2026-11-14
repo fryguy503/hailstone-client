@@ -289,6 +289,9 @@ struct PlayerProfile {
     std::uint32_t platinum_bank = 0, gold_bank = 0, silver_bank = 0, copper_bank = 0, platinum_shared = 0;
     std::uint32_t character_id = 0;
     std::uint32_t aa_exp = 0;
+    std::uint32_t last_fellowship_join = 0;
+    std::uint64_t fellowship_vitality_normal = 0;
+    std::uint32_t fellowship_vitality_aa = 0;
     std::array<std::uint8_t, 3> auto_consent{}; // group, raid, guild (PcClient +0x2921..+0x2923)
     std::uint8_t show_helm = 0;
     std::uint32_t rest_timer = 0;

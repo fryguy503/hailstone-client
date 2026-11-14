@@ -54,7 +54,7 @@ local function page(p, s)
       filter = needle ~= "" and function(_, texts) return S.Matches(texts, needle) end or nil,
     })
   end
-  local _, selected = eq.ListInfo(WINDOW, P.list)
+  local _, _, selected = eq.ListInfo(WINDOW, P.list)
   local has = (selected or -1) >= 0
   ui.BeginDisabled(not has)
   if p == 0 then

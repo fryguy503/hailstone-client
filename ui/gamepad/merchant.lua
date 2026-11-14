@@ -97,7 +97,7 @@ ui.window("Merchant", function()
     local listX1 = x1 - T.px(420)
     local top = tabs(x0, y0)
     ui.SetCursorPos(x0 - wx, top - wy)
-    local focusedItem, focusedWhere, focusedRow
+    local focusedItem, focusedWhere, focusedRow, focusedCompare
     if page == 1 then
       if not kb.open and W.pressed("x") then
         eq.ClickChild(MW, "MW_UsableButton", "left")
@@ -121,6 +121,7 @@ ui.window("Merchant", function()
         if focused then
           focusedWhere = "Price: " .. coins(texts)
           focusedRow = { name = texts[2] or "", qty = texts[3] or "", price = coins(texts), tex = tex, uv = { u0, v0, u1, v1 } }
+          focusedCompare = eq.CompareSlotItem(MW, "ItemList:" .. (i - 1)) -- Hailstone: against what you wear
           if buyList.lastFocus ~= i then -- select it in the stock window: the price and the item to inspect
             buyList.lastFocus = i
             eq.ListClick(MW, "ItemList", i - 1, "left")
@@ -261,6 +262,7 @@ ui.window("Merchant", function()
         local clicked, focused = T.slot("##sell" .. slot .. "_" .. (bag or -1), item, size, {}, pad)
         if focused then
           focusedItem, focusedWhere, focusedAt = item, where, n
+          if item then focusedCompare = eq.CompareItem(slot, bag) end -- Hailstone: against what you wear
           if W.pressed("y") and item then eq.ClickSlot(slot, bag, "rightheld") end
         end
         if clicked and item then
@@ -292,7 +294,7 @@ ui.window("Merchant", function()
     end
     -- the right column: the focused item, the stock window's selection
     if page >= 2 then
-      I.summary(focusedItem, focusedWhere, listX1 + T.px(24), y0, x1, y1 - T.px(170))
+      I.summary(focusedItem, focusedWhere, listX1 + T.px(24), y0, x1, y1 - T.px(170), focusedCompare)
     else -- the merchant's row: its icon, name and price (Y shows the item's details)
       local px0, py1 = listX1 + T.px(24), y1 - T.px(170)
       T.rect(px0, y0, x1, py1, C.sunken, 1, T.px(14))
@@ -314,6 +316,7 @@ ui.window("Merchant", function()
         T.draw(px0 + p, y, "Price: " .. focusedRow.price, C.endurance)
         if focusedRow.qty ~= "" then T.draw(px0 + p, y + lh + T.px(4), "In stock: " .. focusedRow.qty, C.dim) end
         T.unfont()
+        I.comparison(focusedCompare, px0 + p, y + 2 * (lh + T.px(4)), x1 - p, py1 - p - T.px(40))
         T.font(18)
         T.hints(pad, { { "y", "Item details" } }, px0 + p, py1 - p - T.px(30), T.px(30))
         T.unfont()

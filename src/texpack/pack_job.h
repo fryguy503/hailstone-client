@@ -12,6 +12,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -20,6 +21,7 @@
 #include <thread>
 #include <vector>
 
+#include "texpack/materials.h"
 #include "texpack/texpack.h"
 #include "texpack/upscale.h"
 
@@ -110,6 +112,11 @@ struct JobOptions {
     unsigned encoders = 0;     // 0: the hardware's threads less two
     bool low_impact = false;   // the GPU rests as long as it works, and the encoders are fewer and run at a low priority
     PackInfo info;             // written to pack.ini as the build finishes (its counts filled in)
+    // Photo materials (texpack/materials.h): the textures the plan names are composed from the library on the
+    // encoders instead of upscaled, and made again when PACK/materials.txt says they were made by other rules (or
+    // given back to the upscaler when the plan no longer names them). Both null: none.
+    std::shared_ptr<const MaterialPlan> materials;
+    std::shared_ptr<MaterialLibrary> material_library;
 };
 
 // One build, on threads of its own; the GPU stage runs on `gpu`, which must outlive it.
@@ -147,6 +154,7 @@ private:
     std::size_t in_gpu_ = 0;                 // textures posted to the GPU and not back yet
     bool reading_done_ = false;
     std::chrono::steady_clock::time_point resumed_at_;
+    std::map<std::uint64_t, std::string> material_record_; // PACK/materials.txt as this build leaves it
     std::thread thread_;
     std::vector<std::thread> encoders_;
 };

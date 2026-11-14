@@ -485,7 +485,10 @@ int ClientApp::run() {
                                                               actor_renderer_.get(), lighting, objects);
                 lap.mark("plan point shadows");
                 settle_frame_.shadow_builds = point_builds.size();
-                if (zone_renderer_) zone_renderer_->set_lighting(lighting);
+                if (zone_renderer_) {
+                    zone_renderer_->set_lighting(lighting);
+                    zone_renderer_->set_lod_scale(static_cast<float>(tree_detail_) / 100.0f);
+                }
                 // The zone's exits for the map and its zone finder (EqHost::zone_exits), once its zone points are in.
                 if (in_game && zone_ && conn_ && eq_host_.zone_exits_zone == 0 && conn_->zone_id() != 0 &&
                     !conn_->zone_points().empty()) {
@@ -523,6 +526,7 @@ int ClientApp::run() {
                     lap.mark("neighbour zones update");
                     neighbours_->set_scene_light(scene_light);
                     neighbours_->set_lighting(lighting);
+                    neighbours_->set_lod_scale(static_cast<float>(tree_detail_) / 100.0f);
                 }
                 frame_lighting_ = lighting;
                 if (actor_renderer_) actor_renderer_->set_lighting(lighting);
@@ -628,8 +632,15 @@ int ClientApp::run() {
             // Where no sky is drawn, the modern haze fills the background as it fills the distance (with the sun's glow
             // in it), not the plain fog colour; under water, the water.
             if (zone_renderer_ && (under_water || (modern && !sky_drawn))) zone_renderer_->draw_backdrop(*f, vp);
+            // The distant hills round an outdoor zone (render/horizon.h), behind the zone, under an open sky or none
+            // (not the planes' and Luclin's painted skies); faded in a thick fog, lava and a storm.
+            if (zone_renderer_ && in_game && modern && outdoor && !under_water && horizon_hills_ &&
+                (!sky_renderer_ || sky_renderer_->has_atmosphere()))
+                zone_renderer_->draw_horizon(*f, vp, render::horizon_strength(view_.fog_end, haze.extend,
+                                                                              weather_look_.storm));
             // The modern water reads the opaque world: the zone's other draws wait for VkContext::begin_translucent.
             const render::ZonePhase first = modern ? render::ZonePhase::Opaque : render::ZonePhase::All;
+            if (zone_renderer_) zone_renderer_->draw_depth(*f, vp, camera_.position, lit, t);
             if (zone_renderer_) zone_renderer_->draw(*f, vp, camera_.position, lit, t, first);
             lap.mark("zone draw");
             const bool neighbours = neighbours_ && modern && neighbour_zones_ && in_game;
