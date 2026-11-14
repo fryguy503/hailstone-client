@@ -496,7 +496,16 @@ bool bind_part_to_wld(const MeshFile& file, std::string_view body_code,
     return true;
 }
 
-void append_pieces(const MeshFile& mesh, const std::vector<std::size_t>& pieces, CharacterMesh& out) {
+void append_pieces(const MeshFile& mesh, const std::vector<std::size_t>& pieces, CharacterMesh& out,
+                   bool surface_maps) {
+    // The surface fields the actor renderer draws; two materials of the same
+    // name and diffuse share a slot only when these agree, whichever was
+    // appended first, so a plain part never takes an armor part's maps.
+    auto same_surface = [](const EffectParams& a, const EffectParams& b) {
+        return a.normal_map == b.normal_map && a.textures == b.textures && a.shininess == b.shininess &&
+               a.gloss == b.gloss && a.env_strength == b.env_strength && a.specular == b.specular &&
+               a.reflective == b.reflective;
+    };
     for (std::size_t pi : pieces) {
         const Piece& piece = mesh.pieces[pi];
         auto vbase = static_cast<std::uint32_t>(out.vertices.size());
@@ -516,21 +525,18 @@ void append_pieces(const MeshFile& mesh, const std::vector<std::size_t>& pieces,
             if (!info.diffuse.empty() && lower(info.diffuse) != "none") material.frames.push_back(info.diffuse);
             material.blend = eqg::shader_blend(info.shader);
             material.eqg_shader = eqg::shader_class(info.shader);
-            if (info.surface_maps) material.effect = info.effect;
+            if (surface_maps) material.effect = info.effect;
             if (shader.find("invis") != std::string::npos || shader.find("boundary") != std::string::npos)
                 material.blend = BlendMode::Invisible;
             std::uint32_t mi = 0;
             for (; mi < out.materials.size(); ++mi) {
                 const Material& existing = out.materials[mi];
                 if (existing.name != material.name || existing.frames != material.frames) continue;
-                if (!info.surface_maps || (
-                    existing.blend == material.blend && existing.eqg_shader == material.eqg_shader &&
-                    existing.effect.normal_map == material.effect.normal_map &&
-                    existing.effect.textures == material.effect.textures &&
-                    existing.effect.shininess == material.effect.shininess && existing.effect.gloss == material.effect.gloss &&
-                    existing.effect.env_strength == material.effect.env_strength &&
-                    existing.effect.specular == material.effect.specular &&
-                    existing.effect.reflective == material.effect.reflective)) break;
+                if (!same_surface(existing.effect, material.effect)) continue;
+                // Plain parts keep the legacy identity (name plus diffuse).
+                if (surface_maps && (existing.blend != material.blend || existing.eqg_shader != material.eqg_shader))
+                    continue;
+                break;
             }
             if (mi == out.materials.size()) {
                 out.materials.push_back(material);
@@ -935,19 +941,24 @@ std::shared_ptr<const eqg_character::MeshFile> EqgCharacterStore::part_mesh(std:
     return result;
 }
 
-std::shared_ptr<const eqg_character::MeshFile> EqgCharacterStore::armor_part_mesh(std::string_view name) {
+bool EqgCharacterStore::armor_alias(std::string_view name) {
+    auto mapped = layered_part(name);
+    return mapped && part_mesh(mapped->first, 1) != nullptr;
+}
+
+eqg_character::ArmorPart EqgCharacterStore::armor_part_mesh(std::string_view name) {
     const std::string key = upper(name);
     if (auto it = armor_parts_.find(key); it != armor_parts_.end()) return it->second;
     // Separate from parts_: an armor alias and an unrelated direct resource
     // may have the same IT number. The provisional entry also breaks cycles.
-    armor_parts_.emplace(key, nullptr);
-    std::shared_ptr<eqg_character::MeshFile> result;
-    bool legacy_fallback = false;
+    armor_parts_.emplace(key, eqg_character::ArmorPart{});
+    eqg_character::ArmorPart result;
     try {
-        if (auto mapped = layered_part(key)) {
-            // The native scoped redirect asks for the base actor definition
-            // once. A base which also has an alias keeps its direct mesh.
-            auto base = part_mesh(mapped->first, 1);
+        auto mapped = layered_part(key);
+        // The native scoped redirect asks for the base actor definition
+        // once. A base which also has an alias keeps its direct mesh.
+        auto base = mapped ? part_mesh(mapped->first, 1) : nullptr;
+        if (mapped && base) {
             const eqg_character::Layer* surface = layer(mapped->second);
             if (!surface && game_.exists(lower(mapped->second) + ".eqg")) {
                 archive(lower(mapped->second) + ".eqg");
@@ -956,9 +967,9 @@ std::shared_ptr<const eqg_character::MeshFile> EqgCharacterStore::armor_part_mes
             const bool recognized = surface && (!surface->diffuse.empty() || !surface->normal.empty() ||
                                                !surface->environment.empty());
             const bool diffuse_ready = surface && (surface->diffuse.empty() || has_file(surface->diffuse));
-            if (base && recognized && diffuse_ready) {
-                result = std::make_shared<eqg_character::MeshFile>(*base);
-                for (auto& material : result->materials) {
+            if (recognized && diffuse_ready) {
+                auto mesh = std::make_shared<eqg_character::MeshFile>(*base);
+                for (auto& material : mesh->materials) {
                     const auto& properties = material.surface_properties;
                     if (properties.diffuse && !surface->diffuse.empty()) material.diffuse = lower(surface->diffuse);
                     // Native SetLayer replaces supplied texture roles only;
@@ -971,7 +982,8 @@ std::shared_ptr<const eqg_character::MeshFile> EqgCharacterStore::armor_part_mes
                     // forwards its environment scalar without doubling it.
                     if (properties.env_strength && surface->env_strength) material.effect.env_strength = *surface->env_strength;
                 }
-            } else if (base) {
+                result = {std::move(mesh), true};
+            } else {
                 // Hailstone compatibility policy, not native model-class
                 // identification: retain a mixed-era direct appearance only
                 // when its bone/piece/vertex/triangle counts match the base.
@@ -979,26 +991,31 @@ std::shared_ptr<const eqg_character::MeshFile> EqgCharacterStore::armor_part_mes
                 const bool compatible = direct && direct->bones.size() == base->bones.size() &&
                     direct->pieces.size() == base->pieces.size() &&
                     std::equal(direct->pieces.begin(), direct->pieces.end(), base->pieces.begin(),
-                               [](const eqg_character::Piece& a, const eqg_character::Piece& b) {
-                                   return a.vertices.size() == b.vertices.size() && a.triangles.size() == b.triangles.size();
+                               [](const eqg_character::Piece& x, const eqg_character::Piece& y) {
+                                   return x.vertices.size() == y.vertices.size() && x.triangles.size() == y.triangles.size();
                                });
                 if (compatible) {
-                    result = std::make_shared<eqg_character::MeshFile>(*direct);
-                    legacy_fallback = true;
+                    result = {std::move(direct), false};
                     log::debug("EQG armor {}: unavailable layer {}, retaining legacy direct part", key, mapped->second);
                 } else {
                     log::debug("EQG armor {}: unavailable layer {} or compatible legacy direct part", key, mapped->second);
                 }
-            } else {
-                log::debug("EQG armor {}: unavailable base {} or layer {}", key, mapped->first, mapped->second);
             }
-        } else if (auto direct = part_mesh(key)) {
-            result = std::make_shared<eqg_character::MeshFile>(*direct);
+        } else if (mapped) {
+            // Hailstone policy for a mixed install: a row whose base mesh is
+            // missing cannot be followed, so the piece resolves as it would
+            // with no row at all (part_mesh, as before aliases were read and
+            // as an install without Resources/Layers shows it), plainly lit.
+            result = {part_mesh(key), false};
+            log::debug("EQG armor {}: unavailable base {}, {}", key, mapped->first,
+                       result ? "keeping the direct part" : "no direct part");
+        } else {
+            // A mesh of its own: shared with part_mesh's cache, not copied.
+            result = {part_mesh(key), true};
         }
-        if (result)
-            for (auto& material : result->materials) material.surface_maps = !legacy_fallback;
     } catch (const std::exception& e) {
         log::debug("EQG armor {}: {}", key, e.what());
+        result = {};
     }
     // A depth-limited or incomplete lookup must not poison a later lookup
     // beginning closer to the real base; successful immutable meshes cache.

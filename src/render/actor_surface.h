@@ -23,7 +23,9 @@ static_assert(offsetof(ActorSurface, slots) == 16);
 
 constexpr std::uint32_t kActorSurfaceSpecular = 1;
 constexpr std::uint32_t kActorSurfaceReflective = 2;
-constexpr std::uint32_t kMaxActorSurfaces = 65536;
+// Table entries per frame in flight (32 bytes each, host-visible: 128 KiB). A drawn look with any surface takes one
+// entry per part, so this holds dozens of distinct armored looks a frame; past it a look keeps plain lighting.
+constexpr std::uint32_t kMaxActorSurfaces = 4096;
 
 inline bool has_actor_surface(const assets::EffectParams& effect) {
     return !effect.normal_map.empty() || effect.specular || effect.reflective;

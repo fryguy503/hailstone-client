@@ -84,12 +84,18 @@ A Luclin model (`HUM_ACTORDEF` in `globalhum_chr.wld`) is a WLD skeletal actor l
 Hero's Forge attachments use `EqgCharacterStore::armor_part_mesh`, whose alias lookup takes precedence over a direct
 item model or WLD actor of the same name. The requested name and the race/sex adjustment remain the attachment's;
 only its geometry and layer are resolved. Its cache is separate from `part_mesh`, so ordinary held items, hair and
-NPC parts retain their direct-first lookup, even when a modern armor mapping reuses their IT number. A mapped armor
-piece with no usable base is omitted. When the base exists but its layer is unavailable, a pre-existing direct model
+NPC parts retain their direct-first lookup, even when a modern armor mapping reuses their IT number. A row whose base
+mesh is missing cannot be followed (`EqgCharacterStore::armor_alias` is false), so the piece resolves as it would with
+no row at all: the direct EQG model, or on a Luclin model the WLD actor, plainly lit (a Hailstone policy for mixed
+installs, as RoF2 itself reads no layer rows). When the base exists but its layer is unavailable, a pre-existing direct model
 with matching bone, piece, vertex and triangle counts keeps its legacy rendering; this conservative compatibility
 fallback preserves working armor in installations
 with incomplete layer catalogs and rejects direct models with a different layout. A usable modern mapping always takes precedence. No game files
 are changed or supplied. The modern/v2 armor revision uses the existing EQGM/EQGL formats, not a new wire format.
+Whether a piece's materials draw their surface maps travels beside the mesh (`eqg_character::ArmorPart`, the
+`surface_maps` argument of `append_pieces`), so a direct piece shares `part_mesh`'s cached mesh rather than a copy.
+`append_pieces` gives two materials of the same name and diffuse one slot only when their surface maps and parameters
+agree, so a plain part never takes an armor part's maps, whichever is appended first.
 
 Layered armor applies the layer to every material of a copy of the base mesh. The layer's supplied C/N/E textures
 replace the corresponding base shader properties; omitted textures retain the base maps. EQGL v3 supplies shininess
