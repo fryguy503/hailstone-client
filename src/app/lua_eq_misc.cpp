@@ -958,8 +958,14 @@ public:
         if (!host.conn || !host.conn->respawn_window() || id != "OptionsList") return nullptr;
         sync_selection(host);
         const auto& w = *host.conn->respawn_window();
-        // The final wire byte is availability, not an option kind (EQEmu RoF2 RespawnOptions_Struct).
-        // Keep the server's destination names, mark its default, and make unavailable choices explicit.
+        // Handle_OP_RespawnWindow @0x74ec70 (the window's AddOption) fills a line per option: a marker cell ("*"
+        // @0x9c4678 for the default option, "r" @0x9cf320 for one whose final byte is set, else empty), the option's
+        // name and the zone's full name (GetFullZoneNameById); a line with that byte set is red (0xffff0000) and
+        // added disabled. On EQEmu that byte is availability (RoF2 RespawnOptions_Struct), so `disabled` follows
+        // GameConnection::respawn_option_available: a yes to a resurrection offer here enables the disabled lines
+        // (ConfirmationDialog_HandleResponse @0x52d540 case 0x67, 0x74e9e0 recolours them green, 0xff00ff00) and
+        // leaves the selection and the marker as they were. The colours of the reserved row (red, then green)
+        // and the grey of another unavailable one are this client's. The XML's columns.
         list_ = {};
         list_.columns = 3;
         list_.labels = {"", "Name", "Zone"};
@@ -969,8 +975,8 @@ public:
             if (o.id == *chosen_) list_.selected = static_cast<int>(list_.rows.size());
             ListRow row;
             const bool available = host.conn->respawn_option_available(o.id);
-            row.texts = {!available ? "unavailable" : o.id == w.selected ? "*" : "", o.name,
-                         game::zone_long_name(o.zone_id)};
+            row.texts = {o.id == w.selected ? "*" : !o.available() ? "r" : "", o.name, game::zone_long_name(o.zone_id)};
+            row.disabled = !available;
             if (host.conn->respawn_option_is_resurrection(o.id)) {
                 row.color = available ? Rgb{0.25f, 1.0f, 0.35f} : Rgb{1.0f, 0.25f, 0.25f};
                 row.cell_colors.resize(3);
@@ -1017,8 +1023,10 @@ private:
             chosen_.reset();
             manual_choice_ = false;
         }
+        // Until a row is clicked the server's selection is shown; accepting a resurrection does not move it
+        // (0x74e9e0 only enables and recolours lines).
         if (!manual_choice_ && !host.conn->respawn_chosen() && host.conn->respawn_window())
-            chosen_ = host.conn->accepted_hover_rez_option().value_or(host.conn->respawn_window()->selected);
+            chosen_ = host.conn->respawn_window()->selected;
     }
     const net::RespawnOption* option(const net::RespawnWindow& w) const {
         std::uint32_t want = chosen_.value_or(w.selected);

@@ -58,11 +58,11 @@ AppPacket bind_packet(std::uint16_t zone = 2, std::uint16_t instance = 0,
     return AppPacket(to_wire(Op::ZonePlayerToBind), w.take());
 }
 
-AppPacket rez_offer(std::uint32_t spell = 100) {
+AppPacket rez_offer(std::uint32_t spell = 100, std::uint16_t zone = 2, std::uint16_t instance = 0) {
     ByteWriter w;
     w.le<std::uint32_t>(0);
-    w.le<std::uint16_t>(2);
-    w.le<std::uint16_t>(0);
+    w.le(zone);
+    w.le(instance);
     w.f32(30);
     w.f32(40);
     w.f32(12);
@@ -130,6 +130,43 @@ void hover_barrier(Rig& rig) {
 }
 
 } // namespace
+
+TEST_CASE("Hover respawn: a yes to an offer naming another zone or instance is answered at once") {
+    // ConfirmationDialog_HandleResponse @0x52d540 case 0x67: the answer is held back for the respawn window only
+    // when the offer's zone dword (zone and instance) is the current zone.
+    HoverRig h;
+    REQUIRE(h.start());
+    auto& c = h.rig.conn;
+    REQUIRE(c.zone_id() == 2);
+    REQUIRE(c.zone_instance() == 0);
+    std::uint16_t zone = 3, instance = 0;
+    SUBCASE("another zone") {}
+    SUBCASE("another instance of this zone") { zone = 2; instance = 1; }
+    c.receive_zone_packet_for_test(rez_offer(100, zone, instance));
+    REQUIRE(c.confirmation());
+    c.answer_confirmation(true);
+    CHECK_FALSE(c.accepted_hover_rez_option());
+    CHECK_FALSE(c.respawn_option_available(1)); // the reserved line stays disabled
+    hover_barrier(h.rig);
+    REQUIRE(MockEqServer::count(h.rig.server.zone_log, Op::RezzAnswer) == 1);
+    const auto answer = std::find_if(h.rig.server.zone_log.begin(), h.rig.server.zone_log.end(),
+                                     [](const AppPacket& p) { return p.opcode == to_wire(Op::RezzAnswer); });
+    REQUIRE(answer != h.rig.server.zone_log.end());
+    REQUIRE(answer->data.size() > 224);
+    CHECK(static_cast<std::uint8_t>(answer->data[224]) == 1); // the yes, echoed in the offer
+    CHECK(MockEqServer::count(h.rig.server.zone_log, Op::RespawnWindow) == 0);
+}
+
+TEST_CASE("Hover respawn: a yes to an offer for this zone is held back for the respawn window") {
+    HoverRig h;
+    REQUIRE(h.start());
+    auto& c = h.rig.conn;
+    c.receive_zone_packet_for_test(rez_offer());
+    c.answer_confirmation(true);
+    CHECK(c.accepted_hover_rez_option() == 1);
+    hover_barrier(h.rig);
+    CHECK(MockEqServer::count(h.rig.server.zone_log, Op::RezzAnswer) == 0);
+}
 
 TEST_CASE("Hover respawn: a dropped selection retains consent and can be retried") {
     plugin::Hooks hooks;

@@ -157,6 +157,7 @@ struct ListRow {
     std::optional<ui::UiTextures::Cell> icon;
     std::vector<std::optional<Rgb>> cell_colors; // CListWnd::SetItemColor(row, column): a cell's own colour
     int icon_column = 0; // CListWnd::SetItemIcon's column
+    bool disabled = false; // a line added or left disabled (CListWnd line flag 0x100 clear): the packs grey it
 };
 // A combo box's choices and the chosen one (-1 none).
 struct ComboData {

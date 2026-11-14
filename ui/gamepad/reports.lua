@@ -212,14 +212,14 @@ end)
 -- ---------------------------------------------------------------- respawn
 local RESPAWN = "RespawnWnd"
 local choices = { offset = 0 }
-local respawnQuestionShown = false
+local respawnOfferShown = false
 ui.window("Respawn", function()
-  if not W.shown(RESPAWN) then respawnQuestionShown = false; return end
-  local question = W.shown("ConfirmationDialogBox")
-  local returnFocus = respawnQuestionShown and not question
-  respawnQuestionShown = question
+  if not W.shown(RESPAWN) then respawnOfferShown = false; return end
+  local offer = W.shown("ConfirmationDialogBox") and eq.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
+  local takeFocus, returnFocus = offer and not respawnOfferShown, respawnOfferShown and not offer
+  respawnOfferShown = offer
   T.frame()
-  if W.begin("Respawn", { w = 1200, h = 820, title = "Respawn", close = false, alwaysFocus = true, noFocus = question,
+  if W.begin("Respawn", { w = 1200, h = 820, title = "Respawn", close = false, alwaysFocus = true, noFocus = offer,
         hints = { { "a", "Select" } } }) then
     local x0, y0, x1, y1, w = W.area()
     local wx, wy = ui.GetWindowPos()
@@ -235,7 +235,7 @@ ui.window("Respawn", function()
     local visible = math.max(1, math.floor((y1 - bh - T.px(20) - top + T.px(10)) / (T.px(rowH) + T.px(10))))
     ui.SetCursorPos(x0 - wx, top - wy)
     G.list(RESPAWN, "OptionsList", choices, visible, rowH, w, function(i, t, rx0, ry0, rx1, ry1)
-      local unavailable = t[1] == "unavailable"
+      local unavailable = t.disabled == true -- (t[1] is the original's marker: "*" default, "r" flagged)
       local c = (t.colors and t.colors[2]) or (unavailable and C.dim or (i == choices.selected and C.accent or C.text))
       local name = t[2] or ""
       T.font(23)
@@ -263,7 +263,8 @@ ui.window("Respawn", function()
       { primary = true, always = true })
   end
   W.finish()
-  -- The offer stays in front while the original choices and countdown remain drawn underneath it.
-  if question then ui.SetWindowFocus("Confirm")
+  -- A resurrection offer goes in front of the choices once, on the frame it (or this window) appears, the
+  -- countdown still drawn behind it. Not every frame: focusing a window takes the active widget from the others.
+  if takeFocus then ui.SetWindowFocus("Confirm")
   elseif returnFocus then ui.SetWindowFocus("Respawn"); pad.focus("Respawn") end
 end)

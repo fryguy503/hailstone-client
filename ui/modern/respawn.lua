@@ -40,7 +40,7 @@ local function drawWindow(x, y, w, h, s)
     hide = { [1] = true },
     columns = { [2] = { "Destination", 0 }, [3] = { "Zone", 0 } },
     onRow = function(row, texts)
-      local unavailable = texts[1] == "unavailable"
+      local unavailable = texts.disabled == true -- (texts[1] is the original's marker: "*" default, "r" flagged)
       local col = (texts.colors and texts.colors[2]) or (unavailable and C.muted or C.text)
       ui.TextColored(col[1], col[2], col[3], 1, texts[2] or "")
       if unavailable then badge("unavailable", C.muted) elseif texts[1] == "*" then badge("default", C.accent) end
@@ -56,15 +56,17 @@ local function drawWindow(x, y, w, h, s)
   })
 end
 
-local questionShown = false
+local offerShown = false
 ui.window("Respawn", function()
   if not eq.InGame() then return end
-  if not eq.WindowShown(WINDOW) then questionShown = false; return end
-  local question = eq.WindowShown("ConfirmationDialogBox")
-  local returnFocus = questionShown and not question
-  questionShown = question
+  if not eq.WindowShown(WINDOW) then offerShown = false; return end
+  local offer = eq.WindowShown("ConfirmationDialogBox") and eq.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
+  local takeFocus, returnFocus = offer and not offerShown, offerShown and not offer
+  offerShown = offer
   hud.Dialog(WINDOW, "Respawn", WINDOW_OPTS, drawWindow)
-  -- Keep the choices and timer visible behind a question, including when both first appear together.
-  if question then ui.SetWindowFocus("###modern.ConfirmationDialogBox")
+  -- A resurrection offer goes in front of the choices once, on the frame it (or this window) appears, the timer
+  -- still drawn behind it. Not every frame: focusing a window takes the active widget from the others, so chat
+  -- typing and open popups would stop working while the offer waits.
+  if takeFocus then ui.SetWindowFocus("###modern.ConfirmationDialogBox")
   elseif returnFocus then ui.SetWindowFocus("###modern.RespawnWnd") end
 end)

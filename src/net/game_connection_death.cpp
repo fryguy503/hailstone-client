@@ -194,7 +194,8 @@ void GameConnection::handle_zone_to_bind(const AppPacket& p) {
     };
     h.set_vitals = [&](std::int32_t hp, std::int32_t mana, std::int32_t endurance) {
         pstatus_.hp = hp;
-        // EQEmu's RoF2 encoder writes zero placeholders here. Resource updates can precede this packet, and
+        // A deliberate difference from the original (docs/mechanics.md), which takes the packet's values as they
+        // are: EQEmu's RoF2 encoder writes zero placeholders here. Resource updates can precede this packet, and
         // unchanged zero mana after a resurrection need not be sent again. Preserve the current server values.
         if (!same_zone_hover || mana != 0) pstatus_.mana = static_cast<std::uint32_t>(mana);
         if (!same_zone_hover || endurance != 0) pstatus_.endurance = static_cast<std::uint32_t>(endurance);

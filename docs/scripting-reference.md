@@ -894,7 +894,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | ComboInfo | (name, child) → {choices}, selected \| nil | Combo choices and the chosen one (0-based) | — |
 | ComboSelect | (name, child, index) → ok | Pick a combo choice (0-based) | actions |
 | ListInfo | (name, child) → rows, columns, selected, labels, widths \| nil | List shape | — |
-| ListRow | (name, child, row) → texts, r, g, b [, tex,u0,v0,u1,v1] | Row (0-based). texts.altRight / .comboColumn / .iconColumn / .colors | — |
+| ListRow | (name, child, row) → texts, r, g, b [, tex,u0,v0,u1,v1] | Row (0-based). texts.altRight / .comboColumn / .iconColumn / .colors / .disabled (a line the window left disabled) | — |
 | ListClick | (name, child, row [, "left"\|"right"\|"double" [, column [, mods]]]) → ok | Click a list row. mods: 1 shift, 2 ctrl | actions |
 | ListHeaderClick | (name, child, column) → ok | Click a column header (0-based) | actions |
 

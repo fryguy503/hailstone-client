@@ -764,7 +764,7 @@ TEST_CASE("Respawn window: the options, the default row and Select") {
     auto markers = t.api->list_texts("RespawnWnd", "OptionsList");
     REQUIRE(markers.size() == 2);
     CHECK(markers[0] == "*"); // the default option
-    CHECK(markers[1] == "unavailable"); // no pending resurrection offer
+    CHECK(markers[1] == "r"); // the final byte set (Handle_OP_RespawnWindow's marker); on EQEmu: unavailable
     clock.advance(std::chrono::milliseconds(1)); // Select: older than the delay (0)
     CHECK(c.respawn_ready());
     CHECK(t.api->click_list("RespawnWnd", "OptionsList", 1, 0));
@@ -821,7 +821,7 @@ TEST_CASE("Respawn window: a new session restores the server default without an 
     CHECK(c.respawn_chosen());
 }
 
-TEST_CASE("Respawn window: accepted resurrection highlights only an automatic selection") {
+TEST_CASE("Respawn window: an accepted resurrection enables its line and leaves the selection") {
     test::ManualClock clock;
     auto options = test::quick_options();
     options.session.clock = clock.source();
@@ -845,6 +845,16 @@ TEST_CASE("Respawn window: accepted resurrection highlights only an automatic se
         if (status != LUA_OK || !lua_isinteger(L.get(), -1)) return -2;
         return static_cast<int>(lua_tointeger(L.get(), -1));
     };
+    // The row's marker cell and its texts.disabled, as a pack reads them.
+    auto row = [&](int r) {
+        t.api->begin_frame();
+        lua_settop(L.get(), 0);
+        const std::string code = "local t = eq.ListRow('RespawnWnd', 'OptionsList', " + std::to_string(r) +
+                                 ") return t[1] .. (t.disabled and ':disabled' or '')";
+        const int status = luaL_dostring(L.get(), code.c_str());
+        CHECK(status == LUA_OK);
+        return status == LUA_OK && lua_isstring(L.get(), -1) ? std::string(lua_tostring(L.get(), -1)) : std::string("?");
+    };
     auto die = [&](std::uint32_t id) {
         net::Death death;
         death.spawn_id = death.corpse_id = id;
@@ -862,17 +872,22 @@ TEST_CASE("Respawn window: accepted resurrection highlights only an automatic se
     };
     die(c.world().player_id);
     CHECK(selected() == 0);
+    CHECK(row(0) == "*");
+    CHECK(row(1) == "r:disabled");
 
-    SUBCASE("automatic acceptance follows replacement offers and preserves the committed highlight") {
+    SUBCASE("Yes enables the line, keeps its marker and leaves the server's selection") {
         approve();
-        CHECK(selected() == 1);
+        CHECK(selected() == 0); // 0x74e9e0 only enables and recolours lines
+        CHECK(row(1) == "r");   // the marker stays; the line is enabled
         clock.advance(std::chrono::milliseconds(10));
         rig.run_for(std::chrono::milliseconds(10));
         CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::RespawnWindow) == 0);
         CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::RezzAnswer) == 0);
         c.receive_zone_packet_for_test(respawn_rez_offer(101));
-        CHECK(selected() == 0); // automatic consent was withdrawn; bind is the server's default
+        CHECK(row(1) == "r:disabled"); // a replacement offer needs its own consent
         c.answer_confirmation(true);
+        CHECK(selected() == 0);
+        CHECK(t.api->click_list("RespawnWnd", "OptionsList", 1, 0));
         CHECK(selected() == 1);
         CHECK(t.api->click_child("RespawnWnd", "SelectButton"));
         CHECK(c.respawn_chosen());
@@ -887,7 +902,7 @@ TEST_CASE("Respawn window: accepted resurrection highlights only an automatic se
         c.receive_zone_packet_for_test(net::encode(bind));
         c.receive_zone_packet_for_test(net::encode(test::make_spawn("Gennro", 60, 0, 1, 0, 0, 0)));
         die(60);
-        CHECK(selected() == 0); // a new window resets the previous automatic choice
+        CHECK(selected() == 0); // a new window starts from the server's selection
     }
     SUBCASE("an explicit bind click before Yes keeps bind selected") {
         CHECK(t.api->click_list("RespawnWnd", "OptionsList", 0, 0));
