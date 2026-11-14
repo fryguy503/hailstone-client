@@ -1184,6 +1184,22 @@ Vectors in `tests/chat_trade_vectors_test.cpp` (set chat input mode 1500, toggle
   and 1447; CastSpell asks the same check.
 - Group invites: 148 bytes out; in, declines 1 / 4 / 5 or the pending invitation with the u32 at +0x94.
 
+## Group roles
+
+The group leader assigns Main Tank (1), Main Assist (2) and Puller (3) by right-clicking a member's name in the
+Group window, or their own name in the Player window, in either UI pack. Small role icons beside the names show
+the assignments, with the full role names on hover. A member may hold several roles, while each role belongs to
+at most one member; mercenaries may only hold Main Tank.
+On stock EQEmu, assigning a role requires the member to be in the leader's zone. An existing role can also be
+cleared while its holder is in another zone; the menus explain this restriction.
+
+The UI and `/grouproles set|unset <member> <role number>` share `GameConnection::send_group_role`, which checks
+the current group, leader, member and role before sending the existing `OP_GroupRoles` packet. Sending a request
+does not change local roles: `OP_GroupRoles` replies and the `OP_GroupUpdateB` roster set the flags. The UI's
+icons and menu checks, and scripts' `Group.MainTank`, `Group.MainAssist`, `Group.Puller` and member role flags, read
+that same state. Assigning a role clears its previous holder when the server confirms it. A group disband or
+zone transition clears the old state, and the server's roster and role updates restore it.
+
 ## Hot buttons, socials and tracking
 
 Vectors in `tests/hotbutton_tracking_vectors_test.cpp` (do-hot-button 4000, hot-button right click 1500, social stop

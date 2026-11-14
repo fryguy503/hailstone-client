@@ -126,6 +126,78 @@ const char* role_name(int role) {
     }
 }
 
+bool member_role(const game::GroupMember& m, int role) {
+    return role == 1 ? m.main_tank : role == 2 ? m.main_assist : m.puller;
+}
+
+std::vector<EqHost::MenuRow> group_role_rows(EqHost& host, const std::string& name) {
+    std::vector<EqHost::MenuRow> rows;
+    if (!host.conn || !host.conn->group().active) return rows;
+    const auto& c = *host.conn;
+    const auto& g = c.group();
+    int slot = g.slot_of(name);
+    if (slot < 0) return rows;
+    const auto& m = g.slots[static_cast<std::size_t>(slot)];
+    bool leader = g.is_leader(self_name(c));
+    for (int role = 1; role <= 3; ++role) {
+        EqHost::MenuRow row;
+        row.text = role_name(role);
+        row.check = member_role(m, role);
+        row.enabled = leader && (!m.merc || role == 1);
+        bool on = !row.check;
+        row.act = [&host, name, role, on] {
+            if (!host.conn) return;
+            const auto& group = host.conn->group();
+            int current = group.slot_of(name);
+            if (current < 0) return;
+            // Resolve a stale roster by name and recheck authority, while preserving the displayed toggle's intent.
+            const auto& member = group.slots[static_cast<std::size_t>(current)];
+            host.conn->send_group_role(member.name, role, on);
+        };
+        rows.push_back(std::move(row));
+    }
+    EqHost::MenuRow note;
+    note.text = "Assign in the same zone; clear roles from any zone";
+    note.enabled = false;
+    rows.push_back(std::move(note));
+    return rows;
+}
+
+void append_window_menu(EqHost& host, std::vector<EqHost::MenuRow>& rows, const std::string& screen) {
+    EqHost::MenuRow separator;
+    separator.separator = true;
+    rows.push_back(std::move(separator));
+    EqHost::MenuRow window;
+    window.text = "Window";
+    window.act = [&host, screen] { host.window_menu = screen; };
+    rows.push_back(std::move(window));
+}
+
+bool open_member_roles(EqHost& host, const std::string& name, const std::string& screen, float x, float y) {
+    auto rows = group_role_rows(host, name);
+    if (rows.empty()) return false;
+    EqHost::MenuRow heading;
+    heading.text = name;
+    heading.enabled = false;
+    rows.insert(rows.begin(), std::move(heading));
+    append_window_menu(host, rows, screen);
+    host.open_menu(x, y, std::move(rows));
+    return true;
+}
+
+ImVec2 role_menu_position(const EqHost& host) {
+    ImVec2 pos = ImGui::GetMousePos();
+    // Name and icon drawing need not submit an item; an earlier item may even belong to a tooltip.
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && ImGui::IsMousePosValid(&pos)) return pos;
+    const auto& r = host.click_rect;
+    if (r[2] >= 0) return ImVec2(r[2], (r[1] + r[3]) / 2);
+    if (!ImGui::IsMousePosValid(&pos)) {
+        const auto& size = ImGui::GetIO().DisplaySize;
+        pos = ImVec2(size.x / 2, size.y / 2);
+    }
+    return pos;
+}
+
 // The buff button of a buff window (CBuffWindow::SetBuffIcon): the spell's icon in A_SpellIcons on a blue
 // (beneficial) or red (detrimental) background; nothing for an empty slot.
 void buff_button(EqHost& host, const game::BuffSlot& b, Child& out) {
@@ -190,7 +262,13 @@ public:
     }
 
     bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
-        if (!host.conn || button != "left") return false;
+        if (!host.conn) return false;
+        if (id == "PlayerHP" && button == "right") {
+            if (!host.context_menus()) return true;
+            auto pos = role_menu_position(host);
+            return open_member_roles(host, self_name(*host.conn), screen_, pos.x, pos.y);
+        }
+        if (button != "left") return false;
         // CPlayerWnd::WndNotification: a click on the gauges or role icons targets the player.
         if (id == "PlayerHP" || id == "PlayerMana" || id == "PlayerFatigue" || id.starts_with("GroupRole")) {
             host.conn->set_target(host.conn->world().player_id);
@@ -369,7 +447,7 @@ public:
     }
 
     bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
-        if (!host.conn || button != "left") return false;
+        if (!host.conn) return false;
         auto& c = *host.conn;
         // CGroupWnd::WndNotification
         // 0x67ae00: the member row a child belongs to (its gauges and labels end in the row number).
@@ -378,6 +456,14 @@ public:
                 if (child.rfind(p, 0) == 0 && child.size() == p.size() + 1) return child.back() - '0';
             return -1;
         };
+        if (button == "right") {
+            if (!host.context_menus()) return true;
+            int n = row_of(id);
+            const auto* m = n >= 1 && n <= 5 ? other_member(c, n - 1) : nullptr;
+            auto pos = role_menu_position(host);
+            return m && open_member_roles(host, m->name, screen_, pos.x, pos.y);
+        }
+        if (button != "left") return false;
         if (id == "FollowButton") c.accept_group_invite();
         else if (id == "InviteButton") c.group_invite();
         else if (id == "DeclineButton" || id == "DisbandButton") c.group_disband();
@@ -389,6 +475,7 @@ public:
         } else return false;
         return true;
     }
+
 };
 
 // ---------------------------------------------------------------- BuffWindow / ShortDurationBuffWindow (CBuffWindow)

@@ -3,9 +3,11 @@
 -- the invite, disband, accept and decline buttons under the cards (the game's own buttons: they are enabled when
 -- the game enables them).
 local hud = dofile("lib/hud.lua")
+local roles = dofile("lib/role_icons.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "GroupWindow"
+local ROLE_COLORS = { C.mana, C.accent, C.endurance }
 
 -- Each slot's ids and its member record (filled in again every frame), made once.
 local SLOTS = {}
@@ -42,6 +44,7 @@ local function member(i)
     c[1], c[2], c[3] = r, g, b
     m.color = c
   end
+  m.roles = roles.Mask(WINDOW, i)
   return m
 end
 
@@ -54,7 +57,7 @@ local function cardH(m) return 47 + (m.pet and 9 or 0) end
 
 -- What the options and body read, set each frame before hud.Window (they are made once, not every frame).
 local members = {}
-local frame = { invited = false, canInvite = false, total = 0 }
+local frame = { invited = false, canInvite = false, grouped = false, total = 0 }
 local INVITED_BUTTONS = { { "FollowButton", "Accept", true, "##FollowButton" }, { "DeclineButton", "Decline", nil, "##DeclineButton" } }
 local GROUP_BUTTONS = { { "InviteButton", "Invite", nil, "##InviteButton" }, { "DisbandButton", "Disband", nil, "##DisbandButton" } }
 local BUTTON_OPTS = {}
@@ -63,7 +66,7 @@ local OPTS = {
   size = function() return CARD_W, frame.total end,
   panelOpts = { opaque = true },
   -- solo: shown only with an invitation to answer or a player to invite
-  hideWhen = function() return #members == 0 and not frame.invited and not frame.canInvite end,
+  hideWhen = function() return #members == 0 and not frame.invited and not frame.canInvite and not frame.grouped end,
 }
 
 local function body(x0, y, w0, h, s)
@@ -92,11 +95,21 @@ local function body(x0, y, w0, h, s)
     local clicked = T.Hit(slot.hit, x, cy, x + w, cy + ch)
     if hud.DragItem() then clicked = false end -- a drag moves the frame
     local hovered = ui.IsItemHovered()
+    if hovered and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
+      T.TakeRightClick()
+      eq.ClickChild(WINDOW, slot.gauge, "right")
+    end
     ui.DrawRectFilled(x, cy, x + w, cy + ch, C.ink[1], C.ink[2], C.ink[3], hovered and 0.07 or 0.035, 6 * s)
     if hovered then ui.DrawRect(x, cy, x + w, cy + ch, C.accent[1], C.accent[2], C.accent[3], 0.6, 6 * s, 1.5 * s) end
     local pad = 8 * s
     local _, nh = T.TextSize("Ag", T.font.small)
-    T.Text(x + pad, cy + 5 * s, T.Fit(m.name, w - 60 * s, T.font.small), m.color or C.text, T.font.small)
+    local iconSize, iconGap = 14 * s, 3 * s
+    local iconW = roles.Width(m.roles, iconSize, iconGap)
+    local name = T.Fit(m.name, w - 60 * s - (iconW > 0 and iconW + 4 * s or 0), T.font.small)
+    local nameW = T.TextSize(name, T.font.small)
+    T.Text(x + pad, cy + 5 * s, name, m.color or C.text, T.font.small)
+    local roleHovered = roles.Draw(m.roles, x + pad + nameW + 4 * s, cy + 5 * s + (nh - iconSize) / 2,
+      iconSize, iconGap, ROLE_COLORS)
     local pct
     if m.dead then pct = "Dead" elseif m.away then pct = "Away" else
       local n = math.floor((m.hp or 0) * 100 + 0.5)
@@ -119,7 +132,10 @@ local function body(x0, y, w0, h, s)
     if m.pet then
       by = by + 7 * s
       T.Bar(slot.pet, x + pad + 10 * s, by, x + w - pad, by + 5 * s, s, m.pet, C.pet)
-      if hovered then ui.SetTooltip(m.name .. "\nPet: " .. m.petName) end
+    end
+    if hovered and not roleHovered then
+      ui.SetTooltip(m.name .. (m.roles ~= 0 and ("\n" .. roles.Labels[m.roles]) or "")
+        .. (m.pet and ("\nPet: " .. m.petName) or "") .. "\nRight-click for group roles")
     end
     if clicked then eq.ClickChild(WINDOW, slot.gauge, "left") end
     cy = cy + ch + 4 * s
@@ -149,6 +165,7 @@ ui.window("Group", function()
   end
   frame.invited = eq.ChildShown(WINDOW, "FollowButton") == true
   frame.canInvite = eq.ChildState(WINDOW, "InviteButton") == true
+  frame.grouped = eq.ChildState(WINDOW, "DisbandButton") == true
   local total = HEAD + PAD
   for _, m in ipairs(members) do total = total + cardH(m) + 4 end
   if #members == 0 then total = total + 22 end

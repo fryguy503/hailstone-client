@@ -3,7 +3,9 @@
 // page, the extended target window's context menu, and the pet window's gauges for several pets.
 #include <doctest/doctest.h>
 
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -15,6 +17,8 @@
 #include <thread>
 
 #include <imgui.h>
+#include <imgui_internal.h>
+#include <lua.hpp>
 
 #include "app/lua_eq.h"
 #include "app/lua_eq_hotbar.h"
@@ -24,11 +28,15 @@
 #include "game/hot_button_menu.h"
 #include "game/hotbuttons.h"
 #include "game_files.h"
+#include "mock_server/harness.h"
 #include "net/game_connection.h"
+#include "net/group_packets.h"
 #include "net/market_packets.h"
+#include "net/notice_packets.h"
 #include "net/opcodes.h"
 #include "net/pet_packets.h"
 #include "scratch_dir.h"
+#include "ui/lua/lua_host.h"
 
 using namespace hailstone;
 namespace fs = std::filesystem;
@@ -89,6 +97,367 @@ struct Harness {
 };
 
 } // namespace
+
+TEST_CASE("Group role menus: self, member rows, permissions and confirmed role checks") {
+    hailstone::test::ScratchDir game_scratch("ui_windows_group_roles");
+    GameDir game(game_scratch.path());
+    Harness t(game);
+    net::PlayerProfile pp;
+    pp.name = "Leader";
+    t.conn.set_profile_for_test(pp);
+    CHECK_FALSE(t.api->child_shown("GroupWindow", "Hailstone_RolesButton").has_value());
+    CHECK_FALSE(t.api->click_child("GroupWindow", "Hailstone_RolesButton"));
+    CHECK_FALSE(t.api->context_menu("PlayerWindow", 10, 20));
+    CHECK_FALSE(t.api->context_menu("GroupWindow", 10, 20));
+
+    net::GroupUpdateB group;
+    group.leader = "Leader";
+    net::GroupUpdateMember self;
+    self.name = "Leader";
+    self.slot = 0;
+    self.main_tank = 1;
+    group.members.push_back(self);
+    net::GroupUpdateMember member;
+    member.name = "Member";
+    member.slot = 1;
+    member.main_assist = 1;
+    group.members.push_back(member);
+    net::GroupUpdateMember merc;
+    merc.name = "Mercenary";
+    merc.slot = 2;
+    merc.merc = 1;
+    group.members.push_back(merc);
+    t.conn.receive_zone_packet_for_test(net::encode(group));
+
+    // There is no roster button or background role menu. A member's name is the entry point.
+    CHECK_FALSE(t.api->child_shown("GroupWindow", "Hailstone_RolesButton").has_value());
+    CHECK_FALSE(t.api->click_child("GroupWindow", "Hailstone_RolesButton"));
+    CHECK_FALSE(t.api->context_menu("GroupWindow", 20, 30));
+    CHECK_FALSE(t.api->context_menu("PlayerWindow", 20, 30));
+    CHECK(t.host.menus.empty());
+    t.host.click_rect = {20, 30, 80, 50}; // a pad right click anchors to the member's item
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    REQUIRE(t.host.menus.size() == 1);
+    CHECK(t.host.menus[0].x == 80);
+    CHECK(t.host.menus[0].y == 40);
+    REQUIRE(t.host.menus[0].rows.size() == 7);
+    CHECK(t.host.menus[0].rows[0].text == "Member");
+
+    // The player's own name offers the same roles even though the group gauges omit self.
+    REQUIRE(t.api->click_child("PlayerWindow", "PlayerHP", "right"));
+    REQUIRE(t.host.menus.size() == 1);
+    CHECK(t.host.menus[0].rows[0].text == "Leader");
+    CHECK(t.host.menus[0].rows[1].check);
+    CHECK_FALSE(t.host.menus[0].rows[2].check);
+    CHECK(t.host.menus[0].rows[1].enabled);
+    CHECK(t.host.menus[0].rows[2].enabled);
+    CHECK(t.host.menus[0].rows[3].enabled);
+    CHECK(t.api->child_shown("PlayerWindow", "GroupRoleTank").value_or(false));
+
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    REQUIRE(t.host.menus.size() == 1);
+    const auto& member_rows = t.host.menus[0].rows;
+    REQUIRE(member_rows.size() == 7);
+    CHECK(member_rows[0].text == "Member");
+    CHECK_FALSE(member_rows[1].check);
+    CHECK(member_rows[2].check);
+    CHECK(t.api->child_shown("GroupWindow", "GroupRoleAssist1").value_or(false));
+    REQUIRE(t.api->menu_click(0, 6));
+    CHECK(t.host.window_menu == "GroupWindow");
+
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge2", "right"));
+    REQUIRE(t.host.menus.size() == 1);
+    CHECK(t.host.menus[0].rows[0].text == "Mercenary");
+    CHECK(t.host.menus[0].rows[1].enabled); // mercenaries may tank, but cannot assist or pull
+    CHECK_FALSE(t.host.menus[0].rows[2].enabled);
+    CHECK_FALSE(t.host.menus[0].rows[3].enabled);
+
+    // A server refresh changes the checks and the authority, without a local optimistic role assignment.
+    group.leader = "Member";
+    group.members[1].main_assist = 0;
+    group.members[1].puller = 1;
+    t.conn.receive_zone_packet_for_test(net::encode(group));
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    CHECK_FALSE(t.host.menus[0].rows[2].check);
+    CHECK(t.host.menus[0].rows[3].check);
+    CHECK_FALSE(t.host.menus[0].rows[1].enabled);
+    CHECK_FALSE(t.host.menus[0].rows[2].enabled);
+    CHECK_FALSE(t.host.menus[0].rows[3].enabled);
+    CHECK_FALSE(t.api->menu_click(0, 1));
+
+    t.host.menus.clear();
+    t.conn.set_client_option_for_session(game::ClientOption::ContextMenus, 0);
+    CHECK_FALSE(t.api->context_menu("GroupWindow", 20, 30));
+    CHECK(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    CHECK(t.host.menus.empty());
+    CHECK(t.api->click_child("PlayerWindow", "PlayerHP", "right"));
+    CHECK(t.host.menus.empty());
+}
+
+TEST_CASE("Group role icons: player and member flags follow confirmed assignments and disband") {
+    test::ScratchDir game_scratch("ui_windows_group_role_icons");
+    GameDir game(game_scratch.path());
+    Harness t(game);
+    net::PlayerProfile pp;
+    pp.name = "Leader";
+    t.conn.set_profile_for_test(pp);
+    const std::array<const char*, 3> roles = {"GroupRoleTank", "GroupRoleAssist", "GroupRolePuller"};
+    for (const char* role : roles) {
+        CHECK_FALSE(t.api->child_shown("PlayerWindow", role).value_or(true));
+        CHECK_FALSE(t.api->child_shown("GroupWindow", std::string(role) + "1").value_or(true));
+    }
+
+    net::GroupUpdateB group;
+    group.leader = "Leader";
+    net::GroupUpdateMember self;
+    self.name = "Leader";
+    self.slot = 0;
+    self.main_tank = self.main_assist = self.puller = 1;
+    group.members.push_back(self);
+    net::GroupUpdateMember member;
+    member.name = "Member";
+    member.slot = 1;
+    group.members.push_back(member);
+    t.conn.receive_zone_packet_for_test(net::encode(group));
+
+    for (std::size_t i = 0; i < roles.size(); ++i) {
+        CHECK(t.api->child_shown("PlayerWindow", roles[i]).value_or(false));
+        CHECK_FALSE(t.api->child_shown("GroupWindow", std::string(roles[i]) + "1").value_or(true));
+    }
+
+    // A confirmed reassignment removes the player's icon and adds the member's matching icon.
+    for (int role = 1; role <= 3; ++role) {
+        net::GroupRole change;
+        change.leader = "Leader";
+        change.member = "Member";
+        change.role = role;
+        change.on = 1;
+        t.conn.receive_zone_packet_for_test(net::encode_group_role(change));
+        const auto index = static_cast<std::size_t>(role - 1);
+        CHECK_FALSE(t.api->child_shown("PlayerWindow", roles[index]).value_or(true));
+        CHECK(t.api->child_shown("GroupWindow", std::string(roles[index]) + "1").value_or(false));
+    }
+
+    t.conn.receive_zone_packet_for_test(net::encode_group_generic(net::Op::GroupDisbandYou, {"Leader", "Member"}));
+    for (const char* role : roles) {
+        CHECK_FALSE(t.api->child_shown("PlayerWindow", role).value_or(true));
+        CHECK_FALSE(t.api->child_shown("GroupWindow", std::string(role) + "1").value_or(true));
+    }
+    t.host.menus.clear();
+    CHECK_FALSE(t.api->click_child("PlayerWindow", "PlayerHP", "right"));
+    CHECK(t.host.menus.empty());
+}
+
+TEST_CASE("Group role UI packs: icons beside fitted names and name right clicks in player and group windows") {
+    for (const std::string pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        test::ScratchDir scratch("ui_windows_group_role_pack");
+        GameDir game(scratch.path());
+        Harness t(game);
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = ImVec2(1600, 900);
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        const auto source = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        ui::lua::LuaUi lua(source, scratch.path() / "pack.txt");
+        lua.set_entry_scripts(pack == "modern" ? std::vector<std::string>{"player.lua", "group.lua"}
+                                                : std::vector<std::string>{"hud.lua", "group.lua"});
+        lua.add_eq_api([&](lua_State* state) {
+            t.api->register_functions(state);
+            lua_pushcfunction(state, [](lua_State* L) { lua_pushboolean(L, true); return 1; });
+            lua_setfield(state, -2, "InGame");
+        });
+        // Observe the real shipped helper and text drawing without substituting either renderer.
+        REQUIRE(lua.run_for_test("", R"lua(
+          partyRoleDraws, partyNameRects, partyRoleTips = {}, {}, {}
+          local register, load, text, tooltip = ui.window, dofile, ui.DrawText, ui.SetTooltip
+          ui.window = function(name, fn)
+            return register(name, function(...)
+              partyRoleWindow = name
+              fn(...)
+              partyRoleWindow = nil
+            end)
+          end
+          dofile = function(path)
+            local module = load(path)
+            if path == 'lib/role_icons.lua' then
+              local draw = module.Draw
+              module.Draw = function(mask, x, y, size, gap, colors)
+                if mask > 0 then partyRoleDraws[partyRoleWindow] = {mask, x, y, size, module.Width(mask, size, gap)} end
+                return draw(mask, x, y, size, gap, colors)
+              end
+            end
+            return module
+          end
+          ui.DrawText = function(x, y, r, g, b, a, value, ...)
+            if value == 'Roles' then partyRolesButtonDrawn = true end
+            if value:match('^Leader') or value:match('^Member') then
+              local w, h = ui.CalcTextSize(value)
+              partyNameRects[partyRoleWindow] = {x, y, w, h}
+            end
+            return text(x, y, r, g, b, a, value, ...)
+          end
+          ui.SetTooltip = function(value)
+            partyRoleTips[value] = true
+            return tooltip(value)
+          end
+          return true
+        )lua") == "true");
+
+        net::PlayerProfile pp;
+        pp.name = "LeaderWithAnExtremelyLongNameForRoleLayout";
+        t.conn.set_profile_for_test(pp);
+        net::GroupUpdateB group;
+        group.leader = pp.name;
+        net::GroupUpdateMember self;
+        self.name = pp.name;
+        self.main_tank = self.main_assist = self.puller = 1;
+        group.members.push_back(self);
+        net::GroupUpdateMember member;
+        member.name = "MemberWithAnExtremelyLongNameForRoleLayout";
+        member.slot = 1;
+        group.members.push_back(member);
+        t.conn.receive_zone_packet_for_test(net::encode(group));
+        t.api->show("PlayerWindow", true);
+        t.api->show("GroupWindow", true);
+        const auto frames = [&](int count) {
+            for (int i = 0; i < count; ++i) {
+                REQUIRE(lua.run_for_test("", "partyRoleDraws,partyNameRects,partyRoleTips={}, {}, {};partyRolesButtonDrawn=false;return true") == "true");
+                io.DeltaTime = 1.0f / 60.0f;
+                t.api->begin_frame();
+                ImGui::NewFrame();
+                lua.frame();
+                ImGui::Render();
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+                CHECK(lua.run_for_test("", "return partyRolesButtonDrawn") == "false");
+            }
+        };
+        const auto record = [&](const char* table, const std::string& window, int fields) {
+            std::vector<float> values;
+            lua_State* state = lua.state();
+            lua_getglobal(state, table);
+            lua_getfield(state, -1, window.c_str());
+            if (lua_istable(state, -1)) {
+                for (int i = 1; i <= fields; ++i) {
+                    lua_rawgeti(state, -1, i);
+                    values.push_back(static_cast<float>(lua_tonumber(state, -1)));
+                    lua_pop(state, 1);
+                }
+            }
+            lua_pop(state, 2);
+            return values;
+        };
+        const auto check_icons = [&](const std::string& window) {
+            INFO(window);
+            const auto icons = record("partyRoleDraws", window, 5);
+            const auto name = record("partyNameRects", window, 4);
+            REQUIRE(icons.size() == 5);
+            REQUIRE(name.size() == 4);
+            CHECK(icons[0] == 7); // all three confirmed roles draw on the same name row
+            CHECK(icons[4] > icons[3] * 3);
+            CHECK(icons[1] >= name[0] + name[2]);
+            CHECK(std::abs((icons[2] + icons[3] / 2) - (name[1] + name[3] / 2)) < 2);
+            const std::string imgui_name = pack == "modern" ? "###modern." + window + "Window" : window;
+            const auto* drawn = ImGui::FindWindowByName(imgui_name.c_str());
+            REQUIRE(drawn);
+            CHECK(icons[1] >= drawn->Pos.x);
+            CHECK(icons[1] + icons[4] <= drawn->Pos.x + drawn->Size.x);
+            const float gap = (icons[4] - 3 * icons[3]) / 2;
+            const std::array<const char*, 3> labels = {"Main Tank", "Main Assist", "Puller"};
+            for (std::size_t role = 0; role < labels.size(); ++role) {
+                io.AddMousePosEvent(icons[1] + static_cast<float>(role) * (icons[3] + gap) + icons[3] / 2,
+                                   icons[2] + icons[3] / 2);
+                frames(2);
+                CHECK(lua.run_for_test("", "return partyRoleTips['" + std::string(labels[role]) + "']") == "true");
+            }
+            return ImVec2(icons[1] + icons[3] / 2, icons[2] + icons[3] / 2);
+        };
+        const auto right_click = [&](ImVec2 at, const std::string& expected_name) {
+            t.host.menus.clear();
+            io.AddMousePosEvent(at.x, at.y);
+            frames(2);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+            frames(1);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+            frames(1);
+            REQUIRE(t.host.menus.size() == 1);
+            REQUIRE(t.host.menus[0].rows.size() == 7);
+            CHECK(t.host.menus[0].x == doctest::Approx(std::floor(at.x)));
+            CHECK(t.host.menus[0].y == doctest::Approx(std::floor(at.y)));
+            CHECK(t.host.menus[0].rows[0].text == expected_name);
+        };
+        frames(3);
+        const auto player = check_icons(pack == "modern" ? "Player" : "HUD Player");
+        right_click(player, pp.name);
+
+        group.members[0].main_tank = group.members[0].main_assist = group.members[0].puller = 0;
+        group.members[1].main_tank = group.members[1].main_assist = group.members[1].puller = 1;
+        t.conn.receive_zone_packet_for_test(net::encode(group));
+        frames(2);
+        const auto group_name = check_icons(pack == "modern" ? "Group" : "HUD Group");
+        right_click(group_name, member.name);
+        if (pack == "gamepad") {
+            REQUIRE(lua.run_for_test("", "GPSTATE.groupOpen=true;return true") == "true");
+            frames(3);
+            const auto dialog_name = check_icons("Group");
+            right_click(dialog_name, member.name);
+        }
+    }
+}
+
+TEST_CASE("Group role menus: a server update while open preserves the displayed toggle intent") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    Harness t(rig.game);
+    t.host.conn = &rig.conn;
+    net::GroupUpdateB group;
+    group.leader = "Gennro";
+    net::GroupUpdateMember self;
+    self.name = "Gennro";
+    self.slot = 0;
+    group.members.push_back(self);
+    net::GroupUpdateMember member;
+    member.name = "Tank";
+    member.slot = 1;
+    group.members.push_back(member);
+    rig.server.zone.send_reliable(net::encode(group));
+    REQUIRE(rig.until([&] { return rig.conn.group().count() == 2; }));
+    auto sent_roles = [&] {
+        std::vector<net::GroupRole> roles;
+        for (const auto& packet : rig.server.zone_log)
+            if (packet.opcode == net::to_wire(net::Op::GroupRoles))
+                if (auto role = net::decode_group_role(packet)) roles.push_back(*role);
+        return roles;
+    };
+
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    REQUIRE(t.host.menus.size() == 1);
+    CHECK_FALSE(t.host.menus[0].rows[2].check); // Main Assist was unchecked when the menu opened
+    net::GroupRole change;
+    change.member = "Tank";
+    change.leader = "Gennro";
+    change.role = 2;
+    change.on = 1;
+    rig.server.zone.send_reliable(net::encode_group_role(change));
+    REQUIRE(rig.until([&] { return rig.conn.group().slots[1].main_assist; }));
+    REQUIRE(t.api->menu_click(0, 2));
+    REQUIRE(rig.until([&] { return sent_roles().size() == 1; }));
+    CHECK(sent_roles()[0].member == "Tank");
+    CHECK(sent_roles()[0].role == 2);
+    CHECK(sent_roles()[0].on == 1); // the stale unchecked menu still requests assignment
+
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
+    CHECK(t.host.menus[0].rows[2].check); // this time the menu offers to clear Main Assist
+    change.on = 0;
+    rig.server.zone.send_reliable(net::encode_group_role(change));
+    REQUIRE(rig.until([&] { return !rig.conn.group().slots[1].main_assist; }));
+    REQUIRE(t.api->menu_click(0, 2));
+    REQUIRE(rig.until([&] { return sent_roles().size() == 2; }));
+    CHECK(sent_roles()[1].on == 0);
+    CHECK_FALSE(rig.conn.group().slots[1].main_assist);
+}
 
 TEST_CASE("OP_PotionBelt: the right button held") {
     auto p = net::encode_potion_belt_hold(2, true);

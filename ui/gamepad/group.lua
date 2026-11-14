@@ -4,7 +4,9 @@
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
+local roles = dofile("lib/role_icons.lua")
 local C = T.C
+local ROLE_COLORS = { C.mana, C.accent, C.endurance }
 
 local GW = "GroupWindow"
 local BUTTONS = {
@@ -46,9 +48,22 @@ ui.window("Group", function()
       local frac, name, raw = eq.Gauge(10 + i)
       if raw ~= -1 and name and name ~= "" then
         any = true
+        local mask = roles.Mask(GW, i)
         local clicked, _, bx0, by0, bx1, by1 = T.button("##m" .. i, "", cw, T.px(64), {}, pad)
-        T.textIn(bx0 + T.px(18), by0, bx0 + cw * 0.45, by1, name, C.text, 0)
-        T.bar(bx0 + cw * 0.48, by0 + T.px(20), bx1 - T.px(18), by1 - T.px(20), frac, C.hp)
+        local hovered = ui.IsItemHovered()
+        local nx, nr = bx0 + T.px(18), bx0 + cw * 0.45
+        local iconSize, iconGap = T.px(20), T.px(4)
+        local iconW = roles.Width(mask, iconSize, iconGap)
+        local fittedName = T.fit(name:gsub("\n.*", ""), nr - nx - (iconW > 0 and iconW + T.px(6) or 0))
+        local nameW, nameH = ui.CalcTextSize(fittedName)
+        T.draw(nx, (by0 + by1 - nameH) / 2, fittedName)
+        local roleHovered = roles.Draw(mask, nx + nameW + T.px(6), (by0 + by1 - iconSize) / 2,
+          iconSize, iconGap, ROLE_COLORS)
+        T.bar(bx0 + cw * 0.48, by0 + T.px(20), bx1 - T.px(18), by1 - T.px(24), frac, C.hp)
+        if hovered and not roleHovered then ui.SetTooltip(name .. "\nRight-click for group roles") end
+        if hovered and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
+          eq.ClickChild(GW, "Gauge" .. i, "right")
+        end
         if clicked then eq.ClickChild(GW, "Gauge" .. i, "left") end -- targets the member, as F2..F6
       end
     end

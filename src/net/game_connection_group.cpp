@@ -3,6 +3,7 @@
 // net/group_packets.h and net/pet_packets.h, the state game/group.h.
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <functional>
 #include <optional>
@@ -859,10 +860,17 @@ bool GameConnection::can_use_command_now() {
 void GameConnection::send_group_role(const std::string& member, std::int32_t role, bool on) {
     // Send_OP_GroupRoles @0x525d30: in a group; a mercenary takes only role 1 (else 0x1db7, colour 0xd).
     if (state_ != ConnectionState::InZone || !group_.active) return;
-    int slot = group_.slot_of(member);
-    if (role != 1 && slot >= 0 && group_.slots[static_cast<std::size_t>(slot)].merc) return system(0x1db7, {}, 0xd);
+    // Every entry point (including a menu opened before leadership or membership changed) checks the current
+    // roster. The server confirms the change; a request never changes the local role flags.
+    if (!group_.is_leader(character_)) return system(0x1db1, {}, 0xd);
+    if (!game::group_role_name(role)) return;
+    const int slot = group_.slot_of(member);
+    if (slot < 0) return;
+    const auto& m = group_.slots[static_cast<std::size_t>(slot)];
+    if (role != 1 && m.merc) return system(0x1db7, {}, 0xd);
+    if (!can_use_command_now()) return;
     GroupRole r;
-    r.member = member;
+    r.member = m.name;
     r.leader = character_;
     r.role = role;
     r.on = on ? 1 : 0;
@@ -922,8 +930,9 @@ void GameConnection::grouproles_command(const std::string& args) {
         bool numeric = !role.empty() && std::all_of(role.begin(), role.end(), [](char c) {
             return std::isdigit(static_cast<unsigned char>(c));
         });
-        std::int32_t number = numeric ? std::atoi(role.c_str()) : 0;
-        if (!numeric || !game::group_role_name(number)) return system(0x1db0, {}, 0xd);
+        std::int32_t number = 0;
+        const auto parsed = std::from_chars(role.data(), role.data() + role.size(), number);
+        if (!numeric || parsed.ec != std::errc{} || !game::group_role_name(number)) return system(0x1db0, {}, 0xd);
         send_group_role(name, number, on);
         return;
     }
