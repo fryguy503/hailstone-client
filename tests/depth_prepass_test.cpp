@@ -61,6 +61,8 @@ TEST_CASE("depth pre-pass: the depth shader discards where zone.frag does") {
     CHECK(colour.count("reveal_discard") == 1);
     // A level of detail's fade: the same samples in both (coverage.glsl lod_fade_samples).
     CHECK(colour.count("lod_fade_samples") == 1);
+    // A neighbour's part of the land: the same side of the blend in both (coverage.glsl land_blend_discard).
+    CHECK(colour.count("land_blend_discard") == 1);
     for (const auto& helper : colour) {
         INFO("zone.frag calls " << helper << ", zone_depth.frag does not");
         CHECK(depth.count(helper) == 1);

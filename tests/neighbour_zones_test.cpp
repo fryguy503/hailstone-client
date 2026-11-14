@@ -343,6 +343,49 @@ TEST_CASE("Neighbour zones: the neighbour's ground goes where the current zone h
     }
 }
 
+TEST_CASE("neighbour zones: where the land stands in for the neighbour's ground, its ground goes and what stands stays") {
+    // The neighbour's ground at 100 over 0..256 x 0..128 on 32-unit cells; past x 192 the land lies lower than it,
+    // so nothing may stand there (a house would float).
+    LandMask m;
+    m.origin = {0.0f, 0.0f};
+    m.cell = 32.0f;
+    m.width = 8;
+    m.height = 4;
+    m.ground.assign(32, 100.0f);
+    m.stands.assign(32, 1);
+    for (int y = 0; y < m.height; ++y)
+        for (int x = 6; x < m.width; ++x) m.stands[static_cast<std::size_t>(y * m.width + x)] = 0;
+    REQUIRE(m.ground_at(50.0f, 50.0f));
+    CHECK(*m.ground_at(50.0f, 50.0f) == doctest::Approx(100.0f));
+    CHECK_FALSE(m.ground_at(300.0f, 50.0f));
+    CHECK(m.stands_at(50.0f, 50.0f));
+    CHECK_FALSE(m.stands_at(200.0f, 50.0f));
+    CHECK(m.stands_at(400.0f, 50.0f)); // outside the grid
+
+    // Its ground, either way up: it goes, the land is drawn there.
+    for (bool flip : {false, true}) {
+        const glm::vec3 a{10, 10, 104}, b{150, 10, 104}, c{10, 100, 104};
+        auto parts = flip ? split_off_land(m, a, c, b) : split_off_land(m, a, b, c);
+        REQUIRE(parts);
+        CHECK(parts->empty());
+    }
+    // A roof well over the ground where things may stand: it stays whole. A wall too.
+    CHECK_FALSE(split_off_land(m, {10, 10, 200}, {150, 10, 200}, {10, 100, 200}));
+    CHECK_FALSE(split_off_land(m, {20, 40, 100}, {150, 40, 100}, {150, 40, 300}));
+    // A wall running into where nothing may stand: the part there goes, the rest stays.
+    {
+        const glm::vec3 a{100, 40, 100}, b{250, 40, 100}, c{250, 40, 300};
+        auto parts = split_off_land(m, a, b, c);
+        REQUIRE(parts);
+        REQUIRE_FALSE(parts->empty());
+        for (const auto& poly : *parts)
+            for (const glm::vec3& w : poly) CHECK((a * w.x + b * w.y + c * w.z).x <= 192.0f + 1e-3f);
+    }
+    // Outside the mask: whole. An empty mask: whole.
+    CHECK_FALSE(split_off_land(m, {300, 10, 100}, {400, 10, 100}, {300, 100, 100}));
+    CHECK_FALSE(split_off_land(LandMask{}, {10, 10, 104}, {150, 10, 104}, {10, 100, 104}));
+}
+
 TEST_CASE("neighbour zones: a thin line box faces along its thin axis, a squarer one the nearest edge") {
     // East Commonlands' tunnel to North Ro: 139 across in x, 20 thick in y, but nearer the zone's west edge (711)
     // than its south one (2070). The line faces south (-y), as North Ro's own end of the tunnel faces north.

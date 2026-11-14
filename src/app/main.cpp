@@ -843,8 +843,13 @@ int main(int argc, char** argv) {
         render::CoverMapState cover_state, water_state; // what the cover and water maps last showed
         render::FlyCamera camera;
         if (zone) {
-            zone_renderer = std::make_unique<render::ZoneRenderer>(vk, *zone, shader_dir,
-                                                                   render::zone_render_options(open_game_dir(opts.game_dir, opts.classic_dir)));
+            const GameDir game = open_game_dir(opts.game_dir, opts.classic_dir);
+            auto options = render::zone_render_options(game);
+            // The neighbours' ground an earlier run measured (--neighbours) shapes the land round the zone.
+            if (opts.neighbours && opts.modern)
+                options.horizon_sources =
+                    app::cached_horizon_sources(game, app::horizon_cache_dir("viewer", zone->name), zone->name);
+            zone_renderer = std::make_unique<render::ZoneRenderer>(vk, *zone, shader_dir, options);
             zone_renderer->set_hide_flames(opts.modern);
             zone_renderer->set_lod_scale(opts.tree_detail);
             const auto& s = zone_renderer->stats();
@@ -868,6 +873,8 @@ int main(int argc, char** argv) {
             in.zone_id = game::zone_id_by_short_name(opts.zone);
             const int tt = opts.time_type >= 0 ? opts.time_type : (opts.sky > 0 ? 1 : 0);
             in.outdoor = opts.sky > 0 && (tt == 1 || tt == 2 || tt == 5);
+            in.horizon = zone_renderer->horizon_build();
+            in.cache_dir = app::horizon_cache_dir("viewer", zone->name);
             neighbours->enter(in);
         }
         if (opts.yaw_deg) camera.yaw = glm::radians(*opts.yaw_deg);

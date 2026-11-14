@@ -413,39 +413,29 @@ bool GroundGrid::inside_ground(float x, float y) const {
     return true;
 }
 
-std::optional<std::vector<BaryPolygon>> split_off_ground(const GroundGrid& ground, const glm::vec3& a,
-                                                         const glm::vec3& b, const glm::vec3& c, float tolerance) {
-    if (ground.empty()) return std::nullopt;
-    const glm::vec3 n = glm::cross(b - a, c - a);
-    const float len = glm::length(n);
-    if (!(len > 1e-6f) || std::abs(n.z) < 0.6f * len) return std::nullopt;
+namespace {
+
+// A triangle cut along a grid's cells (origin, cell, width x height): each piece as barycentric weights, the
+// outermost cells reaching out to the triangle's box so no part goes missing. `drops(piece)` says which go. Returns the
+// pieces to keep (empty: none), or nullopt when none goes (the whole triangle stays). A triangle wholly outside the
+// grid stays; a huge one (far more cells than any ground triangle spans) is decided whole.
+template <class Drops>
+std::optional<std::vector<BaryPolygon>> split_cells(glm::vec2 origin, float cell, int width, int height,
+                                                    const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
+                                                    Drops&& drops) {
     auto position = [&](const glm::vec3& w) { return a * w.x + b * w.y + c * w.z; };
-    auto doubles = [&](const BaryPolygon& poly) {
-        for (const glm::vec3& w : poly) {
-            const glm::vec3 p = position(w);
-            const auto h = ground.height_at(p.x, p.y);
-            if (!h || std::abs(p.z - *h) > tolerance || !ground.inside_ground(p.x, p.y)) return false;
-        }
-        return true;
-    };
-    // The cells the triangle's box covers (those outside the grid have no ground: what lies there stays).
     const glm::vec2 lo = glm::min(glm::min(glm::vec2(a), glm::vec2(b)), glm::vec2(c));
     const glm::vec2 hi = glm::max(glm::max(glm::vec2(a), glm::vec2(b)), glm::vec2(c));
-    const float gx1 = ground.origin.x + static_cast<float>(ground.width) * ground.cell;
-    const float gy1 = ground.origin.y + static_cast<float>(ground.height) * ground.cell;
-    if (hi.x <= ground.origin.x || hi.y <= ground.origin.y || lo.x >= gx1 || lo.y >= gy1) return std::nullopt;
-    const int i0 = static_cast<int>(std::floor((lo.x - ground.origin.x) / ground.cell));
-    const int i1 = static_cast<int>(std::floor((hi.x - ground.origin.x) / ground.cell));
-    const int j0 = static_cast<int>(std::floor((lo.y - ground.origin.y) / ground.cell));
-    const int j1 = static_cast<int>(std::floor((hi.y - ground.origin.y) / ground.cell));
+    const float gx1 = origin.x + static_cast<float>(width) * cell;
+    const float gy1 = origin.y + static_cast<float>(height) * cell;
+    if (hi.x <= origin.x || hi.y <= origin.y || lo.x >= gx1 || lo.y >= gy1) return std::nullopt;
+    const int i0 = static_cast<int>(std::floor((lo.x - origin.x) / cell));
+    const int i1 = static_cast<int>(std::floor((hi.x - origin.x) / cell));
+    const int j0 = static_cast<int>(std::floor((lo.y - origin.y) / cell));
+    const int j1 = static_cast<int>(std::floor((hi.y - origin.y) / cell));
     const BaryPolygon whole{{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
-    if (i0 == i1 && j0 == j1) {
-        if (!doubles(whole)) return std::nullopt;
-        return std::vector<BaryPolygon>{};
-    }
-    // A huge triangle (far more cells than any ground triangle spans): decided whole.
-    if (static_cast<long>(i1 - i0 + 1) * static_cast<long>(j1 - j0 + 1) > 4096) {
-        if (!doubles(whole)) return std::nullopt;
+    if ((i0 == i1 && j0 == j1) || static_cast<long>(i1 - i0 + 1) * static_cast<long>(j1 - j0 + 1) > 4096) {
+        if (!drops(whole)) return std::nullopt;
         return std::vector<BaryPolygon>{};
     }
     std::vector<BaryPolygon> keep;
@@ -454,20 +444,95 @@ std::optional<std::vector<BaryPolygon>> split_off_ground(const GroundGrid& groun
     auto lerp = [](const glm::vec3& p, const glm::vec3& q, float t) { return p + (q - p) * t; };
     for (int j = j0; j <= j1; ++j)
         for (int i = i0; i <= i1; ++i) {
-            const float x0 = ground.origin.x + static_cast<float>(i) * ground.cell, x1 = x0 + ground.cell;
-            const float y0 = ground.origin.y + static_cast<float>(j) * ground.cell, y1 = y0 + ground.cell;
+            const float x0 = origin.x + static_cast<float>(i) * cell, x1 = x0 + cell;
+            const float y0 = origin.y + static_cast<float>(j) * cell, y1 = y0 + cell;
             poly = whole;
-            // The cell's square; the outermost cells reach out to the triangle's box, so no part goes missing.
             if (i > i0) clip_polygon(poly, glm::vec4(1.0f, 0.0f, 0.0f, -x0), position, lerp, scratch);
             if (i < i1) clip_polygon(poly, glm::vec4(-1.0f, 0.0f, 0.0f, x1), position, lerp, scratch);
             if (j > j0) clip_polygon(poly, glm::vec4(0.0f, 1.0f, 0.0f, -y0), position, lerp, scratch);
             if (j < j1) clip_polygon(poly, glm::vec4(0.0f, -1.0f, 0.0f, y1), position, lerp, scratch);
             if (poly.empty()) continue;
-            if (doubles(poly)) dropped = true;
+            if (drops(poly)) dropped = true;
             else keep.push_back(poly);
         }
     if (!dropped) return std::nullopt;
     return keep;
+}
+
+bool faces_up(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c) {
+    const glm::vec3 n = glm::cross(b - a, c - a);
+    const float len = glm::length(n);
+    return len > 1e-6f && std::abs(n.z) >= 0.6f * len;
+}
+
+} // namespace
+
+std::optional<std::vector<BaryPolygon>> split_off_ground(const GroundGrid& ground, const glm::vec3& a,
+                                                         const glm::vec3& b, const glm::vec3& c, float tolerance) {
+    if (ground.empty() || !faces_up(a, b, c)) return std::nullopt;
+    auto position = [&](const glm::vec3& w) { return a * w.x + b * w.y + c * w.z; };
+    return split_cells(ground.origin, ground.cell, ground.width, ground.height, a, b, c, [&](const BaryPolygon& poly) {
+        for (const glm::vec3& w : poly) {
+            const glm::vec3 p = position(w);
+            const auto h = ground.height_at(p.x, p.y);
+            if (!h || std::abs(p.z - *h) > tolerance || !ground.inside_ground(p.x, p.y)) return false;
+        }
+        return true;
+    });
+}
+
+std::optional<float> LandMask::ground_at(float x, float y) const {
+    if (empty()) return std::nullopt;
+    auto cell_at = [&](int i, int j) -> std::optional<float> {
+        if (i < 0 || j < 0 || i >= width || j >= height) return std::nullopt;
+        const float h = ground[static_cast<std::size_t>(j) * static_cast<std::size_t>(width) + static_cast<std::size_t>(i)];
+        if (std::isnan(h)) return std::nullopt;
+        return h;
+    };
+    const float gx = (x - origin.x) / cell, gy = (y - origin.y) / cell;
+    if (!(gx >= 0.0f && gy >= 0.0f && gx < static_cast<float>(width) && gy < static_cast<float>(height)))
+        return std::nullopt;
+    const auto own = cell_at(static_cast<int>(gx), static_cast<int>(gy));
+    if (!own) return std::nullopt;
+    const float fx = gx - 0.5f, fy = gy - 0.5f;
+    const float x0 = std::floor(fx), y0 = std::floor(fy);
+    const float tx = fx - x0, ty = fy - y0;
+    auto sample = [&](float i, float j) {
+        const auto h = cell_at(static_cast<int>(i), static_cast<int>(j));
+        return h ? *h : *own;
+    };
+    const float bottom = sample(x0, y0) + (sample(x0 + 1.0f, y0) - sample(x0, y0)) * tx;
+    const float top = sample(x0, y0 + 1.0f) + (sample(x0 + 1.0f, y0 + 1.0f) - sample(x0, y0 + 1.0f)) * tx;
+    return bottom + (top - bottom) * ty;
+}
+
+bool LandMask::stands_at(float x, float y) const {
+    if (empty()) return true;
+    const float gx = (x - origin.x) / cell, gy = (y - origin.y) / cell;
+    if (!(gx >= 0.0f && gy >= 0.0f && gx < static_cast<float>(width) && gy < static_cast<float>(height))) return true;
+    return stands[static_cast<std::size_t>(static_cast<int>(gy)) * static_cast<std::size_t>(width) +
+                  static_cast<std::size_t>(static_cast<int>(gx))] != 0;
+}
+
+std::optional<std::vector<BaryPolygon>> split_off_land(const LandMask& mask, const glm::vec3& a, const glm::vec3& b,
+                                                       const glm::vec3& c, float tolerance) {
+    if (mask.empty()) return std::nullopt;
+    const bool up = faces_up(a, b, c);
+    auto position = [&](const glm::vec3& w) { return a * w.x + b * w.y + c * w.z; };
+    return split_cells(mask.origin, mask.cell, mask.width, mask.height, a, b, c, [&](const BaryPolygon& poly) {
+        glm::vec3 mid(0.0f);
+        bool ground = up;
+        for (const glm::vec3& w : poly) {
+            const glm::vec3 p = position(w);
+            mid += p;
+            if (ground) {
+                const auto h = mask.ground_at(p.x, p.y);
+                ground = h && std::abs(p.z - *h) <= tolerance;
+            }
+        }
+        mid /= static_cast<float>(poly.size());
+        return ground || !mask.stands_at(mid.x, mid.y);
+    });
 }
 
 float distance_xy(const glm::vec3& p, const glm::vec3& lo, const glm::vec3& hi) {
