@@ -67,12 +67,19 @@ struct TreeOptions {
     std::shared_ptr<const MaterialLibrary::Maps> bark;
     double bark_units = 12.0;
     // The texture names the model's materials use (the files the pack keeps beside it).
-    std::string bark_name = "bark", leaf_name = "leaf";
+    std::string bark_name = "bark", leaf_name = "leaf", far_name = "far";
+    // The far level's picture (an atlas: the side view on the left half, the view from above on the right half's top
+    // square), and how far out the levels change (a tree's height x 3 and x 8, at least 200 and 600 units, times this).
+    std::uint32_t far_width = 512, far_height = 512;
+    float lod_scale = 1.0f;
 };
 
 struct GeneratedTree {
-    assets::Mesh mesh; // material 0 bark, 1 leaves; counter-clockwise from the front
-    assets::Image leaf;                       // RGBA8, upright, cut-out in alpha
+    // Material 0 bark, 1 leaves, 2 the far picture; counter-clockwise from the front. Three levels of detail
+    // (assets::MeshPart::lod_near, lod_far): the near tree; a middle one with half the leaf cards, grown to keep the
+    // cover, fewer sides and no thin branches; and far, three crossed cards and a level one with pictures of the near one.
+    assets::Mesh mesh;
+    assets::Image leaf, far;                  // RGBA8, upright, cut-out in alpha
     assets::Image bark, bark_normal, bark_rough; // RGBA8, upright; the maps empty without a photo
 };
 

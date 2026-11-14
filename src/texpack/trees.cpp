@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <system_error>
@@ -297,13 +298,21 @@ std::optional<TreeShape> measure_tree(const assets::Mesh& mesh, const TreeTextur
 
 namespace {
 
+// The levels of detail a tree is drawn at (assets::MeshPart::lod_near, lod_far): the near one, a middle one with
+// half the leaf cards (each grown to keep the cover), fewer sides and no thin branches, and a far one of three crossed
+// cards with a picture of the near one (make_far).
+constexpr int kLevels = 3;
+constexpr float kFarthest = 1.0e6f; // the far level's end: everywhere past the middle one
+
+// Builds the near and the middle level together: every tube and strip goes into both, by the middle's rules.
 struct Builder {
     assets::Mesh mesh;
-    std::vector<std::uint32_t> idx[2]; // bark, leaves
+    std::vector<std::uint32_t> idx[kLevels][3]; // [level][material: bark, leaves, far picture]
 
     // The shade baked into the vertices (assets::Vertex::color, which multiplies a placement's light): set by the
     // generator per part of the tree.
     float shade = 1.0f;
+    std::uint32_t strips = 0; // strips made, for the middle level's choice
 
     std::uint32_t vert(const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv) {
         assets::Vertex v;
@@ -315,20 +324,27 @@ struct Builder {
         mesh.vertices.push_back(v);
         return static_cast<std::uint32_t>(mesh.vertices.size() - 1);
     }
-    void tri(int mat, std::uint32_t a, std::uint32_t b, std::uint32_t c) {
-        idx[mat].push_back(a), idx[mat].push_back(b), idx[mat].push_back(c);
+    void tri(int level, int mat, std::uint32_t a, std::uint32_t b, std::uint32_t c) {
+        auto& list = idx[level][mat];
+        list.push_back(a), list.push_back(b), list.push_back(c);
     }
 
-    // A tube along `path` (counter-clockwise outward), frames carried along it; v runs with length / `v_units`.
+    // A tube along `path` (counter-clockwise outward), frames carried along it; v runs with length / `v_units`. The
+    // middle level has about half the sides and leaves out the thin branches (not the trunk).
     void tube(const std::vector<glm::vec3>& path, const std::vector<float>& radius, int sides, float u_repeats,
-              float v_units, float v_start = 0.0f) {
+              float v_units, bool trunk = false) {
+        emit_tube(0, path, radius, sides, u_repeats, v_units);
+        if (trunk || radius.front() >= 0.35f) emit_tube(1, path, radius, std::max(3, (sides + 1) / 2), u_repeats, v_units);
+    }
+    void emit_tube(int level, const std::vector<glm::vec3>& path, const std::vector<float>& radius, int sides,
+                   float u_repeats, float v_units) {
         if (path.size() < 2) return;
         glm::vec3 t0 = path[1] - path[0];
         if (glm::dot(t0, t0) < 1e-8f) t0 = glm::vec3(0, 0, 1);
         t0 = glm::normalize(t0);
         glm::vec3 u = std::abs(t0.z) < 0.9f ? glm::cross(glm::vec3(0, 0, 1), t0) : glm::cross(glm::vec3(1, 0, 0), t0);
         u = glm::normalize(u);
-        float v_at = v_start;
+        float v_at = 0.0f;
         std::uint32_t prev = 0;
         for (std::size_t i = 0; i < path.size(); ++i) {
             glm::vec3 t = i + 1 < path.size() ? path[i + 1] - path[i] : path[i] - path[i - 1];
@@ -349,49 +365,153 @@ struct Builder {
                 for (int j = 0; j < sides; ++j) {
                     const std::uint32_t a = prev + std::uint32_t(j), b = a + 1;
                     const std::uint32_t c = first + std::uint32_t(j) + 1, d = first + std::uint32_t(j);
-                    tri(0, a, b, c);
-                    tri(0, a, c, d);
+                    tri(level, 0, a, b, c);
+                    tri(level, 0, a, c, d);
                 }
             prev = first;
         }
     }
 
-    // A two-sided card strip: `centre` points, `side` the half-width vectors there; u across, v from v0 to v1.
+    // A two-sided card strip: `centre` points, `side` the half-width vectors there; u across, v from v0 to v1. The
+    // middle level keeps two strips in three (by a hash of its number, so not in a pattern), each as one quad grown
+    // about its middle to cover for the ones dropped.
     void strip(const std::vector<glm::vec3>& centre, const std::vector<glm::vec3>& side, const std::vector<glm::vec3>& normal,
                float v0, float v1) {
+        emit_strip(0, centre, side, normal, v0, v1);
+        if (((strips++ * 2654435761u) >> 16) % 3u == 0u) return;
+        glm::vec3 mid(0.0f);
+        for (const auto& c : centre) mid += c;
+        mid /= float(centre.size());
+        emit_strip(1, {mid + (centre.front() - mid) * 1.1f, mid + (centre.back() - mid) * 1.1f},
+                   {side.front() * 1.25f, side.back() * 1.25f}, {normal.front(), normal.back()}, v0, v1);
+    }
+    void emit_strip(int level, const std::vector<glm::vec3>& centre, const std::vector<glm::vec3>& side,
+                    const std::vector<glm::vec3>& normal, float v0, float v1) {
         std::uint32_t prev = 0;
         for (std::size_t i = 0; i < centre.size(); ++i) {
             const float v = v0 + (v1 - v0) * float(i) / float(centre.size() - 1);
             const std::uint32_t l = vert(centre[i] - side[i], normal[i], {0.0f, v});
             vert(centre[i] + side[i], normal[i], {1.0f, v});
             if (i > 0) {
-                tri(1, prev, prev + 1, l + 1);
-                tri(1, prev, l + 1, l);
+                tri(level, 1, prev, prev + 1, l + 1);
+                tri(level, 1, prev, l + 1, l);
             }
             prev = l;
         }
     }
 
-    void finish() {
-        assets::Material bark, leaf;
+    // The parts, a level's from `ends[level - 1]` to `ends[level]` units away (the last level to kFarthest).
+    void finish(const float (&ends)[kLevels - 1]) {
+        assets::Material bark, leaf, far;
         bark.name = "bark";
         leaf.name = "leaves";
         leaf.blend = assets::BlendMode::Masked;
         leaf.two_sided = true;
-        mesh.materials = {bark, leaf};
-        for (int m = 0; m < 2; ++m) {
-            if (idx[m].empty()) continue;
-            assets::MeshPart part;
-            part.first_index = static_cast<std::uint32_t>(mesh.indices.size());
-            part.index_count = static_cast<std::uint32_t>(idx[m].size());
-            part.material = static_cast<std::uint32_t>(m);
-            part.solid = false;
-            mesh.indices.insert(mesh.indices.end(), idx[m].begin(), idx[m].end());
-            mesh.parts.push_back(part);
-        }
+        far.name = "far";
+        far.blend = assets::BlendMode::Masked;
+        far.two_sided = true;
+        mesh.materials = {bark, leaf, far};
+        int last = 0;
+        for (int l = 0; l < kLevels; ++l)
+            for (int m = 0; m < 3; ++m)
+                if (!idx[l][m].empty()) last = l;
+        for (int l = 0; l <= last; ++l)
+            for (int m = 0; m < 3; ++m) {
+                if (idx[l][m].empty()) continue;
+                assets::MeshPart part;
+                part.first_index = static_cast<std::uint32_t>(mesh.indices.size());
+                part.index_count = static_cast<std::uint32_t>(idx[l][m].size());
+                part.material = static_cast<std::uint32_t>(m);
+                part.solid = false;
+                part.lod_near = l == 0 ? 0.0f : ends[l - 1];
+                part.lod_far = l == last ? kFarthest : ends[l];
+                mesh.indices.insert(mesh.indices.end(), idx[l][m].begin(), idx[l][m].end());
+                mesh.parts.push_back(part);
+            }
         mesh.front_ccw = true;
     }
 };
+
+// The far level's picture: the near level seen from the side (along +y) on the left half and from above on the right
+// half's top square, orthographic, its leaves cut out by their texture, shaded by its vertices' shade and a soft
+// light; rendered at twice the size and averaged down, so its edges and the gaps between its leaves are not
+// stair-stepped. Upright (row 0 the top); the cut in alpha where a texel is at least half covered. `width` is the
+// atlas's (twice a view's), `height` twice that.
+assets::Image render_far(const Builder& b, const assets::Image& leaf, const assets::Image& bark, std::uint32_t width,
+                         std::uint32_t height, glm::vec3 lo, glm::vec3 hi) {
+    const std::uint32_t W = width * 2, H = height * 2, V = W / 2; // the supersampled atlas and a view's width
+    std::vector<glm::vec3> colour(std::size_t(W) * H, glm::vec3(0.0f));
+    std::vector<float> depth(colour.size(), std::numeric_limits<float>::max());
+    const auto& v = b.mesh.vertices;
+    const glm::vec3 size = glm::max(hi - lo, glm::vec3(1e-3f));
+    for (int view = 0; view < 2; ++view) {
+        // Side: x across, z up, nearer is lower y. Top: x across, y up the picture, nearer is higher z.
+        const glm::vec3 light = view == 0 ? glm::normalize(glm::vec3(-0.35f, -0.6f, 0.72f)) : glm::normalize(glm::vec3(-0.3f, -0.4f, 0.87f));
+        const glm::vec3 toward = view == 0 ? glm::vec3(0, -1, 0) : glm::vec3(0, 0, 1); // to the viewer
+        auto to_px = [&](const glm::vec3& p) {
+            const float x = (p.x - lo.x) / size.x * float(V) + float(view * V);
+            const float y = view == 0 ? (hi.z - p.z) / size.z * float(H) : (hi.y - p.y) / size.y * float(V);
+            return glm::vec2(x, y);
+        };
+        auto depth_of = [&](const glm::vec3& p) { return view == 0 ? p.y : -p.z; };
+        const int x_lo = view * int(V), x_hi = x_lo + int(V) - 1, y_hi = view == 0 ? int(H) - 1 : int(V) - 1;
+        for (int m = 0; m < 2; ++m) {
+            const assets::Image& tex = m == 0 ? bark : leaf;
+            const bool usable_tex = tex.width && !tex.mips.empty();
+            const auto& list = b.idx[0][m];
+            for (std::size_t t = 0; t + 2 < list.size(); t += 3) {
+                const assets::Vertex* c[3] = {&v[list[t]], &v[list[t + 1]], &v[list[t + 2]]};
+                const glm::vec2 p0 = to_px(c[0]->position), p1 = to_px(c[1]->position), p2 = to_px(c[2]->position);
+                const float area = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
+                if (std::abs(area) < 1e-6f) continue;
+                const int x0 = std::max(x_lo, int(std::floor(std::min({p0.x, p1.x, p2.x}))));
+                const int x1 = std::min(x_hi, int(std::ceil(std::max({p0.x, p1.x, p2.x}))));
+                const int y0 = std::max(0, int(std::floor(std::min({p0.y, p1.y, p2.y}))));
+                const int y1 = std::min(y_hi, int(std::ceil(std::max({p0.y, p1.y, p2.y}))));
+                for (int y = y0; y <= y1; ++y)
+                    for (int x = x0; x <= x1; ++x) {
+                        const glm::vec2 p(float(x) + 0.5f, float(y) + 0.5f);
+                        const float w1 = ((p.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p.y - p0.y)) / area;
+                        const float w2 = ((p1.x - p0.x) * (p.y - p0.y) - (p.x - p0.x) * (p1.y - p0.y)) / area;
+                        const float w0 = 1.0f - w1 - w2;
+                        if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) continue;
+                        const float d = w0 * depth_of(c[0]->position) + w1 * depth_of(c[1]->position) + w2 * depth_of(c[2]->position);
+                        const std::size_t at = std::size_t(y) * W + std::size_t(x);
+                        if (d >= depth[at]) continue;
+                        glm::vec4 sample(1.0f);
+                        if (usable_tex) sample = texel(tex, w0 * c[0]->uv + w1 * c[1]->uv + w2 * c[2]->uv);
+                        if (m == 1 && sample.a < 0.5f) continue;
+                        glm::vec3 n = w0 * c[0]->normal + w1 * c[1]->normal + w2 * c[2]->normal;
+                        if (m == 1 && glm::dot(n, toward) < 0.0f) n = -n; // a two-sided leaf faces the viewer
+                        const float lit = 0.7f + 0.3f * std::max(0.0f, glm::dot(glm::normalize(n), light));
+                        const float shade = (float(c[0]->color & 0xff) * w0 + float(c[1]->color & 0xff) * w1 +
+                                             float(c[2]->color & 0xff) * w2) / 255.0f;
+                        depth[at] = d;
+                        colour[at] = glm::vec3(sample) * shade * lit;
+                    }
+            }
+        }
+    }
+    assets::Image img;
+    img.width = width, img.height = height;
+    img.mips.emplace_back(std::size_t(width) * height * 4);
+    for (std::uint32_t y = 0; y < height; ++y)
+        for (std::uint32_t x = 0; x < width; ++x) {
+            glm::vec3 sum(0.0f);
+            int covered = 0;
+            for (std::uint32_t k = 0; k < 4; ++k) {
+                const std::size_t at = std::size_t(y * 2 + k / 2) * W + (x * 2 + k % 2);
+                if (depth[at] == std::numeric_limits<float>::max()) continue;
+                sum += colour[at];
+                ++covered;
+            }
+            std::byte* o = &img.mips[0][(std::size_t(y) * width + x) * 4];
+            const glm::vec3 c = covered ? sum / float(covered) : glm::vec3(0.0f);
+            for (int k = 0; k < 3; ++k) o[k] = std::byte(static_cast<std::uint8_t>(std::lround(std::clamp(c[k], 0.0f, 1.0f) * 255.0f)));
+            o[3] = std::byte(covered >= 2 ? 255 : 0);
+        }
+    return img;
+}
 
 // The trunk's paths: the longest root-to-tip chain first, then each other tip from where it leaves a drawn path.
 std::vector<std::vector<int>> trunk_paths(const TreeShape& shape) {
@@ -668,7 +788,7 @@ GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) 
             leader = path, leader_r = r;
         }
         const float r_mid = r[r.size() / 2];
-        b.tube(path, r, bark_sides(r.front()), around(r_mid), bark_units);
+        b.tube(path, r, bark_sides(r.front()), around(r_mid), bark_units, true);
     }
     // A point on the leader at height z.
     auto axis_at = [&](float z) {
@@ -931,9 +1051,47 @@ GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) 
         out.bark = draw_bark(options.bark_size, shape.bark_colour, tex);
     }
 
-    b.finish();
+    // The far level: three crossed cards through the tree's middle, with its picture.
+    glm::vec3 lo(std::numeric_limits<float>::max()), hi(std::numeric_limits<float>::lowest());
+    for (int m = 0; m < 2; ++m)
+        for (std::uint32_t i : b.idx[0][m]) lo = glm::min(lo, b.mesh.vertices[i].position), hi = glm::max(hi, b.mesh.vertices[i].position);
+    float ends[kLevels - 1] = {0.0f, 0.0f};
+    if (lo.x <= hi.x) {
+        out.far = render_far(b, out.leaf, out.bark, options.far_width, options.far_height, lo, hi);
+        const glm::vec2 axis((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
+        b.shade = 1.0f; // the picture has its shade
+        for (int k = 0; k < 3; ++k) {
+            const float a = kPi * float(k) / 3.0f;
+            const glm::vec2 d(std::cos(a), std::sin(a));
+            const glm::vec2 left = axis + d * (lo.x - axis.x), right = axis + d * (hi.x - axis.x);
+            // Lit from above whichever way the card faces: it stands for a crown, not a flat board.
+            const std::uint32_t q = b.vert({left, hi.z}, up, {0, 0});
+            b.vert({right, hi.z}, up, {0.5f, 0});
+            b.vert({right, lo.z}, up, {0.5f, 1});
+            b.vert({left, lo.z}, up, {0, 1});
+            b.tri(2, 2, q, q + 1, q + 2);
+            b.tri(2, 2, q, q + 2, q + 3);
+        }
+        // From above, the view from above on a level card through the crown, at its leaves' mean height (seen from
+        // the side it is edge on).
+        float crown = 0.0f;
+        for (std::uint32_t i : b.idx[0][1]) crown += b.mesh.vertices[i].position.z;
+        crown = b.idx[0][1].empty() ? (lo.z + hi.z) * 0.5f : crown / float(b.idx[0][1].size());
+        const std::uint32_t q = b.vert({lo.x, hi.y, crown}, up, {0.5f, 0});
+        b.vert({hi.x, hi.y, crown}, up, {1, 0});
+        b.vert({hi.x, lo.y, crown}, up, {1, 0.5f});
+        b.vert({lo.x, lo.y, crown}, up, {0.5f, 0.5f});
+        b.tri(2, 2, q, q + 2, q + 1);
+        b.tri(2, 2, q, q + 3, q + 2);
+        // A tree's levels change at distances by its height: a tall pine stays detailed further out.
+        const float tall = hi.z - lo.z;
+        ends[0] = std::max(200.0f, 3.0f * tall) * options.lod_scale;
+        ends[1] = std::max(600.0f, 8.0f * tall) * options.lod_scale;
+    }
+    b.finish(ends);
     b.mesh.materials[0].frames = {options.bark_name};
     b.mesh.materials[1].frames = {options.leaf_name};
+    b.mesh.materials[2].frames = {options.far_name};
     out.mesh = std::move(b.mesh);
     return out;
 }
@@ -967,7 +1125,8 @@ bool write_tree(const std::filesystem::path& pack_dir, const std::string& zone, 
         name = name.substr(0, name.size() - 4) + suffix + ".dds";
         return put(dir / name, encode_pack_file(img, kind, false));
     };
-    return texture(tree.leaf, FileKind::Masked, "leaf", "") && texture(tree.bark, FileKind::Color, "bark", "") &&
+    return texture(tree.leaf, FileKind::Masked, "leaf", "") && texture(tree.far, FileKind::Masked, "far", "") &&
+           texture(tree.bark, FileKind::Color, "bark", "") &&
            texture(tree.bark_normal, FileKind::Normal, "bark", ".n") && texture(tree.bark_rough, FileKind::Rough, "bark", ".r");
 }
 
@@ -1033,6 +1192,7 @@ std::size_t build_trees(const MaterialRules& rules, const GameDir& game, const s
                 }
             opt.bark_name = tree_texture_name(actor, "bark");
             opt.leaf_name = tree_texture_name(actor, "leaf");
+            opt.far_name = tree_texture_name(actor, "far");
             const GeneratedTree tree = generate_tree(*shape, opt);
             if (!write_tree(pack_dir, zone_name, actor, tree, assets::object_mesh_hash(*mesh), &why)) {
                 note(why);

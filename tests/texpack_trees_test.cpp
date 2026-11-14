@@ -198,20 +198,49 @@ TEST_CASE("trees: a grown tree stands on the game trunk, inside its leaves, the 
             opt.leaf_size = opt.bark_size = 64;
             opt.bark_name = "b.dds";
             opt.leaf_name = "l.dds";
+            opt.far_name = "f.dds";
+            opt.far_width = 64;
+            opt.far_height = 64;
             const GeneratedTree a = generate_tree(*shape, opt);
             const GeneratedTree b = generate_tree(*shape, opt);
             REQUIRE(a.mesh.vertices.size() == b.mesh.vertices.size());
             CHECK(a.mesh.indices == b.mesh.indices);
             for (std::size_t i = 0; i < a.mesh.vertices.size(); i += 37) CHECK(a.mesh.vertices[i].position == b.mesh.vertices[i].position);
             CHECK(a.leaf.mips[0] == b.leaf.mips[0]);
-            // Bark and leaves; a budget a zone of a few hundred trees can draw.
-            REQUIRE(a.mesh.parts.size() == 2);
+            // Three levels: near bark and leaves, the middle's, and the far picture's cards, their bands end to end
+            // (200 and 600 units for a tree this small) and the last reaching everywhere past the middle.
+            REQUIRE(a.mesh.parts.size() == 5);
+            const float bands[][2] = {{0, 200}, {0, 200}, {200, 600}, {200, 600}, {600, 1.0e6f}};
+            const std::uint32_t materials[] = {0, 1, 0, 1, 2};
+            std::size_t tris[3] = {0, 0, 0};
+            for (std::size_t i = 0; i < 5; ++i) {
+                CAPTURE(i);
+                CHECK(a.mesh.parts[i].material == materials[i]);
+                CHECK(a.mesh.parts[i].lod_near == bands[i][0]);
+                CHECK(a.mesh.parts[i].lod_far == bands[i][1]);
+                tris[i < 2 ? 0 : i < 4 ? 1 : 2] += a.mesh.parts[i].index_count / 3;
+            }
             CHECK(a.mesh.materials[0].frames[0] == "b.dds");
             CHECK(a.mesh.materials[1].frames[0] == "l.dds");
-            CHECK(a.mesh.materials[1].blend == assets::BlendMode::Masked);
-            CHECK(a.mesh.materials[1].two_sided);
+            CHECK(a.mesh.materials[2].frames[0] == "f.dds");
+            for (std::size_t m : {1u, 2u}) {
+                CHECK(a.mesh.materials[m].blend == assets::BlendMode::Masked);
+                CHECK(a.mesh.materials[m].two_sided);
+            }
             CHECK(a.mesh.front_ccw);
-            CHECK(a.mesh.indices.size() / 3 < 20000);
+            // A budget a zone of a few hundred trees can draw; the middle level well under the near one; the far six
+            // triangles (three crossed cards and a level one).
+            CHECK(tris[0] < 20000);
+            CHECK(tris[1] * 10 < tris[0] * 7);
+            CHECK(tris[2] == 8);
+            // The far picture: the tree's shape cut out, its leaves and bark in it.
+            REQUIRE(a.far.width == 64);
+            REQUIRE(a.far.height == 64);
+            int opaque = 0;
+            for (std::size_t i = 3; i < a.far.mips[0].size(); i += 4) opaque += std::to_integer<int>(a.far.mips[0][i]) == 255;
+            CHECK(opaque > 64 * 64 / 10);
+            CHECK(opaque < 64 * 64 * 9 / 10);
+            CHECK(a.far.mips[0] == b.far.mips[0]);
             // The bark at the foot is round the game's prism: past its faces (half the corner distance), inside its
             // corners, where a player stopped by it stands.
             const auto& bark = a.mesh.parts[0];
@@ -261,6 +290,7 @@ TEST_CASE("trees: a written tree is a pack's replacement model for that game mes
     opt.leaf_size = opt.bark_size = 64;
     opt.bark_name = tree_texture_name("TREE1_ACTORDEF", "bark");
     opt.leaf_name = tree_texture_name("TREE1_ACTORDEF", "leaf");
+    opt.far_name = tree_texture_name("TREE1_ACTORDEF", "far");
     CHECK(opt.leaf_name == "hstree_tree1_leaf.dds");
     const GeneratedTree tree = generate_tree(*shape, opt);
     std::string error;
@@ -268,6 +298,7 @@ TEST_CASE("trees: a written tree is a pack's replacement model for that game mes
     const fs::path models = dir.path() / "models" / "qeytoqrg";
     CHECK(fs::exists(models / "hstree_tree1_leaf.dds"));
     CHECK(fs::exists(models / "hstree_tree1_bark.dds"));
+    CHECK(fs::exists(models / "hstree_tree1_far.dds"));
     CHECK_FALSE(fs::exists(models / "hstree_tree1_bark.n.dds")); // a drawn bark has no maps
     auto bytes = read_file(models / "tree1.glb");
     REQUIRE(bytes);
@@ -275,7 +306,12 @@ TEST_CASE("trees: a written tree is a pack's replacement model for that game mes
     REQUIRE_MESSAGE(model, error);
     CHECK(model->source_hash == assets::object_mesh_hash(mesh));
     CHECK(model->mesh.materials[1].frames[0] == "hstree_tree1_leaf.dds");
-    CHECK(model->mesh.vertices.size() == tree.mesh.vertices.size());
+    CHECK(model->mesh.vertices.size() == tree.mesh.vertices.size()); // the levels share one vertex list
+    REQUIRE(model->mesh.parts.size() == tree.mesh.parts.size());
+    for (std::size_t i = 0; i < tree.mesh.parts.size(); ++i) {
+        CHECK(model->mesh.parts[i].lod_near == doctest::Approx(tree.mesh.parts[i].lod_near));
+        CHECK(model->mesh.parts[i].lod_far == doctest::Approx(tree.mesh.parts[i].lod_far));
+    }
     auto leaf = assets::decode_texture(*read_file(models / "hstree_tree1_leaf.dds"));
     REQUIRE(leaf);
     CHECK(leaf->mips.size() == 7); // 64 down to 1
