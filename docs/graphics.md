@@ -1459,9 +1459,12 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
   the trunk, they fill it. The leaves are drawn in colours picked from the game texture's opaque texels, then scaled
   to its mean, so an autumn tree keeps its yellows among its greens.
   The gaps narrower than a few texels inside a spray or a cluster are filled with a shadowed base (a closing of the
-  cut-out): pinholes of sky between needles flickered as the tree swayed a fraction of a pixel.
+  cut-out): pinholes of sky between needles flickered as the tree swayed a fraction of a pixel. A needle spray's two
+  layers are close in shade and its twigs a darker shade of the needles, not brown: stark stripes and bright twig
+  lines shimmered as the camera moved and read as streaks from afar.
 - **Styles:** a pine (a single upright trunk up into leaves widest low down) grows whorls of drooping branches with
-  needle sprays and a clump at each end up a leader; a broadleaf tree grows branches into the crown by space
+  two crossed needle sprays and a clump at each end up a leader, the whorls three units apart or more (9 to 18) with
+  four to six branches each, so the crown shows gaps; a broadleaf tree grows branches into the crown by space
   colonisation (Runions, Lane and Prusinkiewicz 2007), leaf clusters at their tips; a willow hangs strands from its
   upper branches. A dead tree (`dead`: Everfrost's and Dagnor's Cauldron's bare pines) grows a few long limbs from its
   upper trunk, rising and forking once, with sprays of drawn bare twigs at their ends. A palm (`palm`) carries its
@@ -1469,8 +1472,10 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
   springs two dozen arching fronds from there, a drawn frond of narrow leaflets along a rib. The rules may name the
   style (`tree tree71 = willow bark`); `auto` takes pine or broadleaf by shape.
 - **Bark:** a Poly Haven photo material scaled to the game bark's mean colour, or a drawn one.
-- **Levels of detail:** the near tree to three times its height (at least 200 units); then a middle level with two
-  leaf cards in three, each grown to keep the cover, about half the sides and no thin branches; and from eight times
+- **Levels of detail:** the near tree to twice its height (at least 200 units); then a middle level with the same
+  leaf cards, each one straight quad (a tree does not change its leaves where the levels meet: fewer cards, grown to
+  keep the cover, showed as a flicker over a forest as the camera moved), about half the sides and no thin
+  branches; and from eight times
   its height (at least 600 units) three crossed cards and a level one, with a picture of the near tree from the side
   and from above (rendered by the generator: a small rasteriser, twice the size and averaged down). The near and
   middle levels are built together, so they have one shape.
@@ -1479,7 +1484,11 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
   mips), each quad of a strip clipped to it in texture space. A spray fills only part of its square: a pine's card
   keeps about 42 % of its area, a broadleaf cluster's 74 %. It costs triangles (a quad is a fan of up to four) and
   saves the pixels the alpha test would throw away.
-- **Budget:** 5,000 to 12,000 triangles a tree at the near level, 1,700 to 4,300 at the middle, 8 at the far. At the
+- **Budget:** about 1,600 to 7,200 triangles a tree at the near level (the tenth to the ninetieth percentile of
+  the 129 classic trees; 12,000 to 20,000 for the few biggest broadleaf trees), 1,000 to 3,000 at the middle, 8 at
+  the far. In Greater Faydark at 3124 x 1366 with 8x MSAA and 4096 shadow maps a forest view took 8.5 ms (10.0 with
+  the denser pines and fewer middle cards before; 7.5 with the game's trees; zone viewer, offscreen), 700,000
+  triangles a frame from 1.1 million. The figures below are from before that change. At the
   Qeynos Hills test spot the zone drew 56,000 triangles a frame (3,400 with the game's trees; the trees in a fade
   draw two levels), 35,000 looking over the zone from above, and 9,300 into the shadow map (7,300 with the game's
   trees). Cutting the cards doubled the leaf triangles and took about 5 % off the frame at 2560 x 1440 with 8x MSAA

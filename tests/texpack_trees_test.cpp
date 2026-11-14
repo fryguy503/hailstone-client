@@ -229,10 +229,10 @@ TEST_CASE("trees: a grown tree stands on the game trunk, inside its leaves, the 
                 CHECK(a.mesh.materials[m].two_sided);
             }
             CHECK(a.mesh.front_ccw);
-            // A budget a zone of a few hundred trees can draw; the middle level well under the near one; the far six
-            // triangles (three crossed cards and a level one).
+            // A budget a zone of a few hundred trees can draw; the middle level under the near one (the same cards,
+            // straight, and thinner bark); the far eight triangles (three crossed cards and a level one).
             CHECK(tris[0] < 20000);
-            CHECK(tris[1] * 10 < tris[0] * 7);
+            CHECK(tris[1] * 10 < tris[0] * 8);
             CHECK(tris[2] == 8);
             // The far picture: the tree's shape cut out, its leaves and bark in it.
             REQUIRE(a.far.width == 64);
