@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -282,6 +283,11 @@ public:
     VkPhysicalDevice physical_device() const { return physical_; }
     VmaAllocator allocator() const { return allocator_; }
     GpuSharedCache* gpu_shared_cache() const { return gpu_shared_cache_.get(); }
+    // Called (between frames, the device idle) after shared textures moved into this client's own images when
+    // sharing stopped: a holder of Texture copies refreshes them (refresh_shared_texture) and rewrites its
+    // descriptors. Returns an id for remove_shared_textures_listener.
+    std::uint64_t on_shared_textures_moved(std::function<void()> refresh);
+    void remove_shared_textures_listener(std::uint64_t id);
     // Coverage diagnostics for the explicit immutable upload path; not native GPU-memory measurements.
     void note_shared_gpu_texture(bool imported);
     VkFormat color_format() const { return swapchain_format_; } // the swapchain: UI pipelines
@@ -327,6 +333,7 @@ private:
     void destroy_swapchain();
     void recreate_swapchain();
     void create_frames();
+    void localize_shared_textures();
     void create_scene_targets();
     void destroy_scene_targets();
     void create_post_pipeline(const std::filesystem::path& shader_dir);
@@ -356,6 +363,10 @@ private:
     std::uint64_t gpu_shared_bindings_ = 0;
     std::uint64_t gpu_shared_fallbacks_ = 0;
     std::uint64_t gpu_shared_frames_ = 0;
+    bool shared_first_logged_ = false;
+    bool shared_detach_logged_ = false;
+    std::map<std::uint64_t, std::function<void()>> shared_texture_listeners_;
+    std::uint64_t shared_texture_listener_ids_ = 0;
     bool gpu_benchmark_ = false;
     std::uint64_t benchmark_present_submissions_ = 0;
     std::chrono::steady_clock::time_point gpu_benchmark_start_{};

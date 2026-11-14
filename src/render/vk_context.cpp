@@ -489,16 +489,10 @@ void VkContext::create_device() {
     if (shared_supported) {
         try {
             gpu_shared_cache_ = std::make_unique<GpuSharedCache>(physical_, device_, queue_family_, gpu_name_, instance_);
-            if (!gpu_shared_cache_->active()) {
-                gpu_shared_cache_.reset();
-                log::warn("GPU asset sharing: session unavailable; immutable assets remain private");
-            } else {
-                log::info("GPU asset sharing: external immutable texture session connected");
-            }
-        } catch (const GpuSharedCacheFatal&) {
-            throw;
+            log::info("GPU asset sharing: connected to the texture broker");
         } catch (const std::exception& e) {
-            log::warn("GPU asset sharing: connection failed ({}); immutable assets remain private", e.what());
+            // Sharing is an extra: without it every texture is the client's own, as with sharing off.
+            log::warn("GPU asset sharing: not started ({}); textures stay private", e.what());
             gpu_shared_cache_.reset();
         }
     }
@@ -946,12 +940,8 @@ void VkContext::create_frames() {
         VkCommandBufferAllocateInfo a{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         a.commandPool = f.pool;
         a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        a.commandBufferCount = 3;
-        std::array<VkCommandBuffer, 3> commands{};
-        vk_check(vkAllocateCommandBuffers(device_, &a, commands.data()), "vkAllocateCommandBuffers");
-        f.cmd = commands[0];
-        f.shared_acquire = commands[1];
-        f.shared_release = commands[2];
+        a.commandBufferCount = 1;
+        vk_check(vkAllocateCommandBuffers(device_, &a, &f.cmd), "vkAllocateCommandBuffers");
         VkSemaphoreCreateInfo s{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         vk_check(vkCreateSemaphore(device_, &s, nullptr, &f.image_available), "vkCreateSemaphore");
         VkFenceCreateInfo fe{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -963,6 +953,28 @@ void VkContext::create_frames() {
     p.queueFamilyIndex = queue_family_;
     vk_check(vkCreateCommandPool(device_, &p, nullptr, &upload_pool_), "vkCreateCommandPool");
 }
+
+void VkContext::localize_shared_textures() {
+    // Sharing has stopped: the imports become the client's own textures, then whoever holds a copy of their
+    // image or view takes the new ones. Between frames, with the device idle: no set in use is rewritten.
+    if (!shared_detach_logged_) {
+        shared_detach_logged_ = true;
+        log::warn("GPU asset sharing stopped ({}); this client goes on with its own textures",
+                  gpu_shared_cache_->detach_reason());
+    }
+    wait_idle();
+    const std::size_t moved = gpu_shared_cache_->localize(queue_, allocator_);
+    log::info("GPU asset sharing: {} shared textures copied into this client's own memory", moved);
+    for (const auto& [id, refresh] : shared_texture_listeners_) refresh();
+}
+
+std::uint64_t VkContext::on_shared_textures_moved(std::function<void()> refresh) {
+    const std::uint64_t id = ++shared_texture_listener_ids_;
+    shared_texture_listeners_.emplace(id, std::move(refresh));
+    return id;
+}
+
+void VkContext::remove_shared_textures_listener(std::uint64_t id) { shared_texture_listeners_.erase(id); }
 
 void VkContext::wait_idle() {
     vkDeviceWaitIdle(device_);
@@ -1107,6 +1119,10 @@ bool VkContext::request_screenshot(std::filesystem::path path, std::uint32_t max
 }
 
 std::optional<FrameInfo> VkContext::begin_frame_commands() {
+    if (gpu_shared_cache_) {
+        gpu_shared_cache_->keep_alive();
+        if (gpu_shared_cache_->needs_localize()) localize_shared_textures();
+    }
     if (window_.minimized()) return std::nullopt;
 
     std::uint32_t w = 0, h = 0;
@@ -1590,10 +1606,24 @@ void VkContext::end_frame(const FrameInfo& frame) {
                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_NONE, 0);
     }
     // Neighbour zones and dressed actors may add imports while the frame is recorded. Snapshot only now, so
-    // their acquire runs before every recorded draw, and keep owners alive until the release has completed.
+    // their acquire runs before every recorded draw, and keep owners alive until the release has completed. The
+    // barriers cover every live import, not only those this frame samples: which ones a frame samples is not
+    // tracked (the renderers bind whole texture arrays), and an ownership barrier on an image in a read-only layout
+    // costs little.
     const GpuSharedCache::Snapshot shared = gpu_shared_cache_ ? gpu_shared_cache_->snapshot() : GpuSharedCache::Snapshot{};
     const bool shared_frame = !shared.empty();
     if (shared_frame) {
+        if (!f.shared_acquire) {
+            // Only a client that imports textures needs these two.
+            VkCommandBufferAllocateInfo a{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            a.commandPool = f.pool;
+            a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            a.commandBufferCount = 2;
+            std::array<VkCommandBuffer, 2> commands{};
+            vk_check(vkAllocateCommandBuffers(device_, &a, commands.data()), "allocate shared-image commands");
+            f.shared_acquire = commands[0];
+            f.shared_release = commands[1];
+        }
         VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vk_check(vkResetCommandBuffer(f.shared_acquire, 0), "reset shared-image acquire commands");
@@ -1626,23 +1656,39 @@ void VkContext::end_frame(const FrameInfo& frame) {
     submit.signalSemaphoreInfoCount = 1;
     submit.pSignalSemaphoreInfos = &signal;
     if (shared_frame) {
-        // CPU command recording remains independent. Only GPU submission/use is serialized across processes.
-        // A lease not explicitly finished poisons the session; no exception path can advertise an unfinished
-        // ownership release to another instance. In particular, never skip this already-reset frame fence.
+        // Only the GPU's use of the imports is serialized across clients: the frame takes the lease, submits, waits
+        // for its own fence (bounded) and gives the lease back. Whatever goes wrong detaches sharing for this client
+        // alone (a lease not granted in time, the broker gone, a fence that does not pass in time: the dropped lease
+        // closes the connection and the broker releases it), and the frame is still submitted: its fence was reset
+        // and its image acquired. Before the next frame records, the imports are copied into private images
+        // (begin_frame_commands) and the game goes on without sharing.
         const auto lease_started = gpu_benchmark_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         auto lease = gpu_shared_cache_->acquire_frame();
         if (gpu_benchmark_)
             benchmark_lease_wait_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lease_started).count();
         vk_check(vkQueueSubmit2(queue_, 1, &submit, f.in_flight), "submit frame with external images");
         recording_ = false;
-        const auto fence_started = gpu_benchmark_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-        vk_check(vkWaitForFences(device_, 1, &f.in_flight, VK_TRUE, UINT64_MAX), "complete external-image frame release");
-        if (gpu_benchmark_)
-            benchmark_shared_fence_wait_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fence_started).count();
-        lease.finish();
-        ++gpu_shared_frames_;
-        if (gpu_shared_frames_ == 1)
+        if (lease) {
+            constexpr std::uint64_t kSharedFrameTimeout = 2'000'000'000; // ns
+            const auto fence_started = gpu_benchmark_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+            const VkResult done = vkWaitForFences(device_, 1, &f.in_flight, VK_TRUE, kSharedFrameTimeout);
+            if (gpu_benchmark_)
+                benchmark_shared_fence_wait_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - fence_started).count();
+            if (done == VK_SUCCESS) {
+                if (lease.finish()) ++gpu_shared_frames_;
+            } else if (done != VK_TIMEOUT) {
+                vk_check(done, "complete external-image frame");
+            } // VK_TIMEOUT: the lease is dropped below, which detaches
+        }
+        if (gpu_shared_frames_ == 1 && !shared_first_logged_) {
+            shared_first_logged_ = true;
             log::info("GPU asset sharing: first frame completed with {} imported images", shared.size());
+        }
+        if (!gpu_shared_cache_->active() && !shared_detach_logged_) {
+            shared_detach_logged_ = true;
+            log::warn("GPU asset sharing stopped ({}); this client goes on with its own textures",
+                      gpu_shared_cache_->detach_reason());
+        }
     } else {
         vk_check(vkQueueSubmit2(queue_, 1, &submit, f.in_flight), "vkQueueSubmit2");
         recording_ = false;

@@ -1,4 +1,4 @@
-#include "render/gpu_asset_view_probe.h"
+#include "gpu_lab/gpu_asset_view_probe.h"
 
 #include <algorithm>
 #include <cmath>

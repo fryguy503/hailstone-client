@@ -6,7 +6,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "assets/gpu_probe_scene.h"
+#include "gpu_lab/gpu_probe_scene.h"
 #include "assets/zone.h"
 #include "core/byte_io.h"
 #include "game_files.h"

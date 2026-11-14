@@ -151,6 +151,13 @@ std::optional<assets::Image> prepare_texture_image(const assets::Image& source, 
     return std::nullopt;
 }
 
+bool refresh_shared_texture(Texture& texture) {
+    if (!texture.shared || (texture.image == texture.shared->image && texture.view == texture.shared->view)) return false;
+    texture.image = texture.shared->image;
+    texture.view = texture.shared->view;
+    return true;
+}
+
 std::optional<assets::Image> prepare_immutable_texture_image(const assets::Image& source, TextureUse use,
                                                             bool bc_textures) {
     // The external protocol uses an UNORM image. Finish colour mips on the CPU before hashing/exporting, rather

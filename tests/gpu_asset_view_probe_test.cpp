@@ -4,7 +4,7 @@
 #include <limits>
 #include <string>
 
-#include "render/gpu_asset_view_probe.h"
+#include "gpu_lab/gpu_asset_view_probe.h"
 
 using namespace hailstone;
 using namespace hailstone::render;

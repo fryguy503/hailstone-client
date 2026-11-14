@@ -184,7 +184,7 @@ The performance window (Ctrl+Shift+P) shows shared asset backing and cache hit/b
 are addressable backing, not measured resident physical memory. Each process's resident figure may include the
 same shared pages. With CPU sharing alone, model objects and geometry, collision, other inflated members, texture
 uploads and Vulkan allocations still belong to each process. The separate experimental Windows
-[GPU texture broker](graphics.md#developer-quickstart-on-windows) has its own opt-in, usage and validation limits. See the
+[GPU texture broker](graphics.md#shared-gpu-textures-experimental-windows) has its own opt-in, usage and validation limits. See the
 [shared asset memory design](research/shared-asset-memory.md) for the next stages and measurement limits.
 
 ### A character's settings

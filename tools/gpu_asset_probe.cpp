@@ -20,7 +20,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "assets/gpu_probe_scene.h"
+#include "gpu_lab/gpu_probe_scene.h"
 #include "assets/texture_overrides.h"
 #include "assets/zone.h"
 #include "core/byte_io.h"
@@ -30,7 +30,7 @@
 #include "platform/process.h"
 #include "platform/shared_file.h"
 #include "render/gpu.h"
-#include "render/gpu_asset_view_probe.h"
+#include "gpu_lab/gpu_asset_view_probe.h"
 #include "render/material_state.h"
 
 #ifndef HAILSTONE_GPU_ASSET_SHADER_DIR
