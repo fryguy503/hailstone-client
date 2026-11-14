@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -179,6 +180,9 @@ public:
     void set_scene_light(const game::SceneLight& light);
     // The modern mode's switch, daylight and dynamic lights (render/scene_lighting.h); classic: params.x 0.
     void set_lighting(const SceneLighting& lighting);
+    // How far the replacement models' levels of detail reach (render/lod_bands.h), times their own distances: the
+    // tree detail setting (display.tree_detail). 0.25 to 4.
+    void set_lod_scale(float scale) { lod_scale_ = std::clamp(scale, 0.25f, 4.0f); }
     // Leaves the placed objects' flame meshes out of draw (the modern lighting draws its own: render/fire_renderer.h).
     void set_hide_flames(bool hide) { hide_flames_ = hide; }
 
@@ -227,8 +231,9 @@ private:
     // box's centre. A banded draw's chunks are cells of whole placements, so a tree changes level at once, and each
     // cell shows one level of it.
     bool lod_shows(const Draw& d, const glm::vec3& box_min, const glm::vec3& box_max, LodPick pick = {}) const {
-        return render::lod_shows(d.lod, glm::distance((box_min + box_max) * 0.5f, lod_eye_), pick);
+        return render::lod_shows(d.lod, glm::distance((box_min + box_max) * 0.5f, lod_eye_), pick, lod_scale_);
     }
+    float lod_scale_ = 1.0f; // set_lod_scale
     // The camera's position the levels of detail are chosen by: the last begin_draw's (the shadow passes, drawn
     // before it in a frame, take the frame before's).
     glm::vec3 lod_eye_{0.0f};

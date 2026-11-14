@@ -52,6 +52,8 @@ public:
 
     void set_scene_light(const game::SceneLight& light);
     void set_lighting(const render::SceneLighting& lighting);
+    // render::ZoneRenderer::set_lod_scale, for each neighbour's renderer.
+    void set_lod_scale(float scale);
     void draw(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
               const game::ViewDistance& view, double time_seconds, render::ZonePhase phase);
 

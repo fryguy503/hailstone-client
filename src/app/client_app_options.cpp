@@ -709,6 +709,7 @@ void ClientApp::apply_settings() {
                               render::kFloraReach, render::kMaxFloraReach);
     neighbour_zones_ = config_.get_bool("display.neighbour_zones", true);
     horizon_hills_ = config_.get_bool("display.horizon_hills", true);
+    tree_detail_ = std::clamp(config_.get_int("display.tree_detail", 100), 50, 200);
     ring_cues_ = config_.get_bool("display.target_ring_cues", true);
     ring_xray_ = config_.get_bool("display.target_ring_xray", false);
     load_ring_colors();

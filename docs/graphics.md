@@ -1217,6 +1217,7 @@ zone loads (`Zone::draw_objects`).
   cascades draw at least the second level (the camera's where coarser), the two further ones the last, and a light's
   shadow cube, drawn once and kept, always the second whatever the camera's distance. A model's levels are its bands
   in order of their near ends.
+  `display.tree_detail` (Options, Tree Detail Distance, 50 to 200 %) scales every band's distances.
 
 ### Generated trees
 
@@ -1315,6 +1316,7 @@ viewer (`--zone`, `--model`) takes `--msaa`, `--tonemap`, `--exposure`, `--rende
 | `display.distance_blur` | 0, 1 | 1 | the far distance's slight blur; modern only |
 | `display.neighbour_zones` | 0, 1 | 1 | the zone past an outdoor zone line drawn in the distance (Neighbour zones); modern only; `/neighbourzones [on \| off]` |
 | `display.horizon_hills` | 0, 1 | 1 | distant hills round an outdoor zone where nothing else is drawn (Horizon hills); modern only; viewer `--no-horizon` |
+| `display.tree_detail` | 50 to 200 | 100 | how far a texture pack's replacement models (generated trees) keep their nearer levels of detail, in percent of their own distances (Tree Detail Distance); viewer `--tree-detail` |
 | `display.target_ring_cues` | 0, 1 | 1 | the target ring's sweep on a new target and pulse while attacking (Target Ring Cues; The target ring) |
 | `display.find_trail_style` | 0, 1 | 0 | Find paths: 0 the gold ground line, 1 rainbow strands; Options > Display (gamepad: Interface), saved per character and changed immediately; docs/navigation.md "The trail" |
 | `display.target_ring_xray` | 0, 1 | 0 | the target ring's hidden part showing faintly through what stands in front (Target Ring Through Models) |
