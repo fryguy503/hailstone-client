@@ -813,8 +813,9 @@ void ClientApp::update_combat_input() {
             return;
         }
         PickTarget hit = pick_at(at->x, at->y, game::kClickRequired, game::kClickSkip, "left click");
-        // The isometric camera's click to move (game/click_intent.h): the ground, or a thing out of reach, is walked to.
-        if (iso() && iso_click(*at, hit, false)) return;
+        // Click to move (game/click_intent.h; the isometric camera's, or mouse.click_move in any camera): the ground,
+        // or a thing out of reach, is walked to.
+        if (click_moves() && iso_click(*at, hit, false)) return;
         // A mount race with a rider (PlayerBase_IsMountRace, 0x58cfb0) gives the rider (LMouseUp @0x53875b).
         if (hit.kind == PickTarget::Kind::Spawn) {
             const auto& spawns = conn_->world().spawns;
