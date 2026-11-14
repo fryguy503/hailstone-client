@@ -862,6 +862,9 @@ void GameConnection::send_group_role(const std::string& member, std::int32_t rol
     if (state_ != ConnectionState::InZone || !group_.active) return;
     // Every entry point (including a menu opened before leadership or membership changed) checks the current
     // roster. The server confirms the change; a request never changes the local role flags.
+    // Hailstone, not RoF2: the leader (0x1db1) and CanUseCommandNow checks are Cmd_grouproles' (@0x4f8360); the
+    // original's group window menu (CGroupWnd::WndNotification @0x67c620) sends without them, relying on Roles being
+    // offered to the leader only. Here every caller gets them, so a stale menu cannot send for a former leader.
     if (!group_.is_leader(character_)) return system(0x1db1, {}, 0xd);
     if (!game::group_role_name(role)) return;
     const int slot = group_.slot_of(member);

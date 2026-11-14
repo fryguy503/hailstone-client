@@ -130,6 +130,20 @@ bool member_role(const game::GroupMember& m, int role) {
     return role == 1 ? m.main_tank : role == 2 ? m.main_assist : m.puller;
 }
 
+// The group role menu of a member (CGroupWnd's "Roles" submenu, built in its constructor @0x67bc00 and added by
+// CGroupWnd::sub_0067ac60 @0x67ac60; the player's own in CPlayerWnd::sub_00717f60 @0x717f60). Hailstone's
+// differences from RoF2, each deliberate:
+// - The menu opens on the name itself (the Group window's member, the Player window's own name), on its own: the
+//   original's Roles is a submenu of the window's context menu. The window's menu stays on the rest of the frame.
+// - Everyone in a group gets the menu, with the role rows greyed for all but the leader: the original adds Roles
+//   only for the group leader (the Group window's test: FUN_00443670 in 0x67ac60) and gives the others no Roles
+//   row at all.
+// - The original's first row, "Leader" (item 100: /makeleader), is left out: this menu is roles only.
+// - A mercenary's Main Assist and Puller rows are greyed: the original offers them and refuses the click with
+//   eqstr 7607 ("A NPC cannot be that role.", CGroupWnd::WndNotification @0x67c620). send_group_role still refuses.
+// - A click goes through GameConnection::send_group_role, which checks leadership and CanUseCommandNow as
+//   /grouproles does (the original's menu sends Send_OP_GroupRoles with neither check).
+// - A disabled line says where roles can be set (stock EQEmu assigns only in the leader's zone).
 std::vector<EqHost::MenuRow> group_role_rows(EqHost& host, const std::string& name) {
     std::vector<EqHost::MenuRow> rows;
     if (!host.conn || !host.conn->group().active) return rows;
@@ -163,24 +177,16 @@ std::vector<EqHost::MenuRow> group_role_rows(EqHost& host, const std::string& na
     return rows;
 }
 
-void append_window_menu(EqHost& host, std::vector<EqHost::MenuRow>& rows, const std::string& screen) {
-    EqHost::MenuRow separator;
-    separator.separator = true;
-    rows.push_back(std::move(separator));
-    EqHost::MenuRow window;
-    window.text = "Window";
-    window.act = [&host, screen] { host.window_menu = screen; };
-    rows.push_back(std::move(window));
-}
-
-bool open_member_roles(EqHost& host, const std::string& name, const std::string& screen, float x, float y) {
+// The role menu for `name` with the name as its heading; false (nothing opens) outside a group or for a name not in
+// it, so the caller's window menu can take the click. No "Window" row: the gamepad pack has no window menu for it to
+// open, and the modern pack's frame menu is the rest of the frame's right click (or Alt with a right click here).
+bool open_member_roles(EqHost& host, const std::string& name, float x, float y) {
     auto rows = group_role_rows(host, name);
     if (rows.empty()) return false;
     EqHost::MenuRow heading;
     heading.text = name;
     heading.enabled = false;
     rows.insert(rows.begin(), std::move(heading));
-    append_window_menu(host, rows, screen);
     host.open_menu(x, y, std::move(rows));
     return true;
 }
@@ -266,7 +272,7 @@ public:
         if (id == "PlayerHP" && button == "right") {
             if (!host.context_menus()) return true;
             auto pos = role_menu_position(host);
-            return open_member_roles(host, self_name(*host.conn), screen_, pos.x, pos.y);
+            return open_member_roles(host, self_name(*host.conn), pos.x, pos.y);
         }
         if (button != "left") return false;
         // CPlayerWnd::WndNotification: a click on the gauges or role icons targets the player.
@@ -461,7 +467,7 @@ public:
             int n = row_of(id);
             const auto* m = n >= 1 && n <= 5 ? other_member(c, n - 1) : nullptr;
             auto pos = role_menu_position(host);
-            return m && open_member_roles(host, m->name, screen_, pos.x, pos.y);
+            return m && open_member_roles(host, m->name, pos.x, pos.y);
         }
         if (button != "left") return false;
         if (id == "FollowButton") c.accept_group_invite();

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -140,7 +141,7 @@ TEST_CASE("Group role menus: self, member rows, permissions and confirmed role c
     REQUIRE(t.host.menus.size() == 1);
     CHECK(t.host.menus[0].x == 80);
     CHECK(t.host.menus[0].y == 40);
-    REQUIRE(t.host.menus[0].rows.size() == 7);
+    REQUIRE(t.host.menus[0].rows.size() == 5);
     CHECK(t.host.menus[0].rows[0].text == "Member");
 
     // The player's own name offers the same roles even though the group gauges omit self.
@@ -157,13 +158,16 @@ TEST_CASE("Group role menus: self, member rows, permissions and confirmed role c
     REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "right"));
     REQUIRE(t.host.menus.size() == 1);
     const auto& member_rows = t.host.menus[0].rows;
-    REQUIRE(member_rows.size() == 7);
+    REQUIRE(member_rows.size() == 5);
     CHECK(member_rows[0].text == "Member");
     CHECK_FALSE(member_rows[1].check);
     CHECK(member_rows[2].check);
     CHECK(t.api->child_shown("GroupWindow", "GroupRoleAssist1").value_or(false));
-    REQUIRE(t.api->menu_click(0, 6));
-    CHECK(t.host.window_menu == "GroupWindow");
+    // Heading, the three roles and the zone note: no "Window" row (the gamepad pack has no window menu for it; the
+    // modern frame menu is the rest of the frame's right click).
+    CHECK(member_rows[4].text == "Assign in the same zone; clear roles from any zone");
+    CHECK_FALSE(member_rows[4].enabled);
+    for (const auto& row : member_rows) CHECK(row.text != "Window");
 
     REQUIRE(t.api->click_child("GroupWindow", "Gauge2", "right"));
     REQUIRE(t.host.menus.size() == 1);
@@ -292,7 +296,6 @@ TEST_CASE("Group role UI packs: icons beside fitted names and name right clicks 
             return module
           end
           ui.DrawText = function(x, y, r, g, b, a, value, ...)
-            if value == 'Roles' then partyRolesButtonDrawn = true end
             if value:match('^Leader') or value:match('^Member') then
               local w, h = ui.CalcTextSize(value)
               partyNameRects[partyRoleWindow] = {x, y, w, h}
@@ -324,14 +327,13 @@ TEST_CASE("Group role UI packs: icons beside fitted names and name right clicks 
         t.api->show("GroupWindow", true);
         const auto frames = [&](int count) {
             for (int i = 0; i < count; ++i) {
-                REQUIRE(lua.run_for_test("", "partyRoleDraws,partyNameRects,partyRoleTips={}, {}, {};partyRolesButtonDrawn=false;return true") == "true");
+                REQUIRE(lua.run_for_test("", "partyRoleDraws,partyNameRects,partyRoleTips={}, {}, {};return true") == "true");
                 io.DeltaTime = 1.0f / 60.0f;
                 t.api->begin_frame();
                 ImGui::NewFrame();
                 lua.frame();
                 ImGui::Render();
                 CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-                CHECK(lua.run_for_test("", "return partyRolesButtonDrawn") == "false");
             }
         };
         const auto record = [&](const char* table, const std::string& window, int fields) {
@@ -383,7 +385,7 @@ TEST_CASE("Group role UI packs: icons beside fitted names and name right clicks 
             io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
             frames(1);
             REQUIRE(t.host.menus.size() == 1);
-            REQUIRE(t.host.menus[0].rows.size() == 7);
+            REQUIRE(t.host.menus[0].rows.size() == 5);
             CHECK(t.host.menus[0].x == doctest::Approx(std::floor(at.x)));
             CHECK(t.host.menus[0].y == doctest::Approx(std::floor(at.y)));
             CHECK(t.host.menus[0].rows[0].text == expected_name);
@@ -405,6 +407,251 @@ TEST_CASE("Group role UI packs: icons beside fitted names and name right clicks 
             right_click(dialog_name, member.name);
         }
     }
+}
+
+namespace {
+
+// A UI pack's scripts over a Harness, for the group role tests below: frames run as the client runs them.
+struct RolePackRig {
+    test::ScratchDir scratch;
+    GameDir game;
+    Harness t;
+    std::unique_ptr<ui::lua::LuaUi> lua;
+    RolePackRig(const std::string& pack, std::vector<std::string> scripts)
+        : scratch("ui_windows_group_role_rig"), game(scratch.path()), t(game) {
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = ImVec2(1600, 900);
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        const auto source = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        lua = std::make_unique<ui::lua::LuaUi>(source, scratch.path() / "pack.txt");
+        lua->set_entry_scripts(std::move(scripts));
+        lua->add_eq_api([this](lua_State* state) {
+            t.api->register_functions(state);
+            lua_pushcfunction(state, [](lua_State* L) { lua_pushboolean(L, true); return 1; });
+            lua_setfield(state, -2, "InGame");
+        });
+    }
+    ~RolePackRig() { lua.reset(); }
+    // `before` runs between ImGui's NewFrame and the scripts (a pad focus put on an item, say).
+    void frames(int count, const std::function<void()>& before = {}) {
+        for (int i = 0; i < count; ++i) {
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            t.api->begin_frame();
+            ImGui::NewFrame();
+            if (before) before();
+            lua->frame();
+            ImGui::Render();
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        }
+    }
+    std::string run(const std::string& code) { return lua->run_for_test("", code); }
+    void group(const std::string& self) {
+        net::PlayerProfile pp;
+        pp.name = self;
+        t.conn.set_profile_for_test(pp);
+        net::GroupUpdateB g;
+        g.leader = self;
+        net::GroupUpdateMember me;
+        me.name = self;
+        g.members.push_back(me);
+        net::GroupUpdateMember member;
+        member.name = "Member";
+        member.slot = 1;
+        g.members.push_back(member);
+        t.conn.receive_zone_packet_for_test(net::encode(g));
+    }
+};
+
+// The screen rectangle the script hook below saved for the drawn text starting with `prefix` (empty when none).
+std::vector<float> drawn_text_rect(RolePackRig& r) {
+    std::vector<float> v;
+    lua_State* L = r.lua->state();
+    lua_getglobal(L, "roleTextRect");
+    if (lua_istable(L, -1))
+        for (int i = 1; i <= 4; ++i) {
+            lua_rawgeti(L, -1, i);
+            v.push_back(static_cast<float>(lua_tonumber(L, -1)));
+            lua_pop(L, 1);
+        }
+    lua_pop(L, 1);
+    return v;
+}
+
+constexpr const char* kTextRectHook = R"lua(
+  roleTextPrefix, roleTextRect, rolePopups = nil, nil, {}
+  local text, popup = ui.DrawText, ui.OpenPopup
+  ui.DrawText = function(x, y, r, g, b, a, value, ...)
+    if roleTextPrefix and type(value) == 'string' and value:sub(1, #roleTextPrefix) == roleTextPrefix then
+      local w, h = ui.CalcTextSize(value)
+      roleTextRect = {x, y, w, h}
+    end
+    return text(x, y, r, g, b, a, value, ...)
+  end
+  ui.OpenPopup = function(id, ...)
+    rolePopups[id] = true
+    return popup(id, ...)
+  end
+  return true
+)lua";
+
+} // namespace
+
+TEST_CASE("Group role UI packs: the modern Player window's name keeps the frame menu when no role menu opens") {
+    RolePackRig r("modern", {"player.lua"});
+    REQUIRE(r.run(kTextRectHook) == "true");
+    net::PlayerProfile pp;
+    pp.name = "Soloist";
+    r.t.conn.set_profile_for_test(pp);
+    r.t.api->show("PlayerWindow", true);
+    REQUIRE(r.run("roleTextPrefix='Soloist';return true") == "true");
+    auto& io = ImGui::GetIO();
+    r.frames(3);
+    const auto name = drawn_text_rect(r);
+    REQUIRE(name.size() == 4);
+    const ImVec2 at(name[0] + name[2] / 2, name[1] + name[3] / 2);
+    const auto right_click = [&](bool alt) {
+        // (a left click on empty screen first shuts a popup the last click opened)
+        io.AddMousePosEvent(1590, 890);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        r.frames(1);
+        r.t.host.menus.clear();
+        REQUIRE(r.run("rolePopups={};return true") == "true");
+        io.AddKeyEvent(ImGuiMod_Alt, alt);
+        io.AddMousePosEvent(at.x, at.y);
+        r.frames(2);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        r.frames(1);
+        io.AddKeyEvent(ImGuiMod_Alt, false);
+        r.frames(1);
+    };
+
+    // Solo there is no role menu: the click is the frame's, and its layout menu opens as anywhere else on it.
+    right_click(false);
+    CHECK(r.t.host.menus.empty());
+    CHECK(r.run("return rolePopups['##hudmenu'] == true") == "true");
+
+    // In a group the name opens the role menu, and the frame menu stays shut.
+    r.group("Soloist");
+    r.frames(2);
+    right_click(false);
+    REQUIRE(r.t.host.menus.size() == 1);
+    CHECK(r.t.host.menus[0].rows[0].text == "Soloist");
+    CHECK(r.run("return rolePopups['##hudmenu'] == true") == "false");
+
+    // Alt with the right click is the frame's menu, in a group too.
+    right_click(true);
+    CHECK(r.t.host.menus.empty());
+    CHECK(r.run("return rolePopups['##hudmenu'] == true") == "true");
+}
+
+TEST_CASE("Group role UI packs: the gamepad HUD player panel takes the mouse only on its name row in a group") {
+    RolePackRig r("gamepad", {"hud.lua"});
+    net::PlayerProfile pp;
+    pp.name = "Soloist";
+    r.t.conn.set_profile_for_test(pp);
+    r.t.api->show("PlayerWindow", true);
+    r.frames(3);
+    const auto* panel = ImGui::FindWindowByName("HUD Player");
+    REQUIRE(panel);
+    CHECK((panel->Flags & ImGuiWindowFlags_NoInputs) != 0);
+    const auto* row = ImGui::FindWindowByName("HUD Player Name");
+    CHECK((row == nullptr || !row->Active)); // solo the name does nothing, so nothing takes the mouse
+
+    r.group("Soloist");
+    r.frames(3);
+    panel = ImGui::FindWindowByName("HUD Player");
+    REQUIRE(panel);
+    CHECK((panel->Flags & ImGuiWindowFlags_NoInputs) != 0);
+    row = ImGui::FindWindowByName("HUD Player Name");
+    REQUIRE(row);
+    REQUIRE(row->Active);
+    CHECK(row->Size.y < panel->Size.y / 3);
+    CHECK(row->Pos.y >= panel->Pos.y);
+    CHECK(row->Pos.y + row->Size.y <= panel->Pos.y + panel->Size.y / 2);
+
+    // Over the gauges (the panel's lower half) no window of the UI takes the mouse; over the name the row does.
+    auto& io = ImGui::GetIO();
+    io.AddMousePosEvent(panel->Pos.x + panel->Size.x / 2, panel->Pos.y + panel->Size.y * 0.75f);
+    r.frames(2);
+    CHECK(ImGui::GetCurrentContext()->HoveredWindow == nullptr);
+    CHECK_FALSE(io.WantCaptureMouse);
+    const ImVec2 at(row->Pos.x + 4, row->Pos.y + row->Size.y / 2);
+    io.AddMousePosEvent(at.x, at.y);
+    r.frames(2);
+    CHECK(ImGui::GetCurrentContext()->HoveredWindow == ImGui::FindWindowByName("HUD Player Name"));
+    r.t.host.menus.clear();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+    r.frames(1);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+    r.frames(1);
+    REQUIRE(r.t.host.menus.size() == 1);
+    CHECK(r.t.host.menus[0].rows[0].text == "Soloist");
+}
+
+TEST_CASE("Group role UI packs: Y on a gamepad Group window row opens that member's role menu with the pad's focus") {
+    RolePackRig r("gamepad", {"group.lua", "menus.lua"});
+    // A pad in menu mode; padPress is the button that went down this frame.
+    REQUIRE(r.run(R"lua(
+      padPress = nil
+      eq.gamepad = {
+        connected = function() return true end,
+        type = function() return 'xbox' end,
+        mode = function() return 'menu' end,
+        set_mode = function() return 'menu' end,
+        pressed = function(b) return b == padPress end,
+        down = function(b) return b == padPress end,
+        released = function() return false end,
+        axis = function() return 0 end,
+        glyph = function(b) return string.upper(b) end,
+        takes_b = function() end,
+        request_focus = function(window) ui.SetWindowFocus(window) end,
+      }
+      return true
+    )lua") == "true");
+    r.group("Leader");
+    r.frames(1);
+    REQUIRE(r.run("GPSTATE.groupOpen = true;return true") == "true");
+    r.frames(3);
+    auto* window = ImGui::FindWindowByName("Group");
+    REQUIRE(window);
+    const auto press_y_on = [&](const char* id) {
+        r.t.host.menus.clear();
+        const ImGuiID item = window->GetID(id);
+        const auto focus = [&] {
+            ImGui::SetWindowFocus("Group");
+            ImGui::SetFocusID(item, window);
+        };
+        r.frames(1, focus);
+        REQUIRE(r.run("padPress='y';return true") == "true");
+        r.frames(1, focus);
+        REQUIRE(r.run("padPress=nil;return true") == "true");
+        r.frames(2);
+    };
+
+    press_y_on("##m1");
+    REQUIRE(r.t.host.menus.size() == 1);
+    CHECK(r.t.host.menus[0].rows[0].text == "Member");
+    CHECK(r.t.host.menus[0].rows[1].enabled); // the leader may give roles
+    CHECK(r.t.conn.world().target_id == 0);   // Y is not A: the member is not targeted
+    // menus.lua draws it with the pad's focus, so A and the D-pad work it as any game menu
+    const auto* menu = ImGui::FindWindowByName("##gamemenu1");
+    REQUIRE(menu);
+    CHECK(menu->Active);
+    REQUIRE(ImGui::GetCurrentContext()->NavWindow);
+    CHECK(ImGui::GetCurrentContext()->NavWindow->RootWindow == menu);
+
+    // The player's own row (first in a group) opens the player's role menu.
+    press_y_on("##self");
+    REQUIRE(r.t.host.menus.size() == 1);
+    CHECK(r.t.host.menus[0].rows[0].text == "Leader");
 }
 
 TEST_CASE("Group role menus: a server update while open preserves the displayed toggle intent") {

@@ -47,12 +47,32 @@ local function num(type)
   return t or ""
 end
 
+-- A window that takes the mouse over x0, y0 .. x1, y1 (screen px) alone, over a HUD window that takes none: the part
+-- of a panel a click does something on, so the rest of the panel leaves the mouse to the world. draw(x0, y0, x1, y1).
+local function hitArea(name, x0, y0, x1, y1, draw)
+  ui.SetNextWindowPos(x0, y0, ui.Cond.Always)
+  ui.SetNextWindowSize(math.max(1, x1 - x0), math.max(1, y1 - y0), ui.Cond.Always)
+  ui.PushStyleVar(ui.StyleVar.WindowPadding, 0, 0)
+  ui.PushStyleVar(ui.StyleVar.WindowBorderSize, 0)
+  local minSize = ui.StyleVar.WindowMinSize -- (ImGui's 32 px smallest window would reach past the strip)
+  if minSize then ui.PushStyleVar(minSize, 1, 1) end
+  local flags = ui.WindowFlags.NoDecoration | ui.WindowFlags.NoBackground | ui.WindowFlags.NoSavedSettings
+      | ui.WindowFlags.NoMove | ui.WindowFlags.NoFocusOnAppearing | ui.WindowFlags.NoBringToFrontOnFocus | W.NoNav
+  if ui.Begin(name, nil, flags) then draw(x0, y0, x1, y1) end
+  ui.End()
+  ui.PopStyleVar(minSize and 3 or 2)
+end
+
 -- ---------------------------------------------------------------- player
+-- The name row, in a group: where the role icons go and a right click opens the group role menu (filled in by the
+-- panel each frame, used by the name's hit area after it).
+local nameRow = { shown = false }
+
 ui.window("HUD Player", function()
   if not W.shown("PlayerWindow") then return end
   local mana, _, mraw = eq.Gauge(2)
-  hud("HUD Player", 32, 28, 470, mraw ~= -1 and 176 or 148, true, function(x0, y0, x1, y1)
-    if ui.InvisibleButton("##player", x1 - x0, y1 - y0) then eq.ClickChild("PlayerWindow", "PlayerHP", "left") end
+  nameRow.shown = false
+  hud("HUD Player", 32, 28, 470, mraw ~= -1 and 176 or 148, false, function(x0, y0, x1, y1)
     T.panel(x0, y0, x1, y1, 0.9)
     -- auto attack (PlayerWindow's A_AttackIndicatorAnim*): a pulsing red wash and a thick red ring
     if eq.ChildShown("PlayerWindow", "A_AttackIndicatorAnimTop") == true then
@@ -80,10 +100,15 @@ ui.window("HUD Player", function()
     local fittedName = T.fit(name, nameRight - x0 - p - (iconW > 0 and iconW + T.px(6) or 0))
     local nameW, nh = T.text(x0 + p, y0 + p - T.px(2), fittedName)
     local nameY = y0 + p - T.px(2)
-    roles.Draw(mask, x0 + p + nameW + T.px(6), nameY + (nh - iconSize) / 2, iconSize, iconGap, ROLE_COLORS)
-    if ui.IsWindowHovered() and ui.IsMouseHoveringRect(x0 + p, nameY, nameRight, nameY + nh)
-        and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
-      eq.ClickChild("PlayerWindow", "PlayerHP", "right")
+    local iconX, iconY = x0 + p + nameW + T.px(6), nameY + (nh - iconSize) / 2
+    -- in a group the name row takes the mouse (its own window, below) and draws the icons, for their tooltips;
+    -- the rest of the panel takes no input, so a click there reaches the world as it did before
+    if eq.ChildState("GroupWindow", "DisbandButton") == true or mask ~= 0 then
+      nameRow.shown = true
+      nameRow.x0, nameRow.y0, nameRow.x1, nameRow.y1 = x0 + p, nameY, nameRight, nameY + nh
+      nameRow.mask, nameRow.ix, nameRow.iy, nameRow.size, nameRow.gap = mask, iconX, iconY, iconSize, iconGap
+    else
+      roles.Draw(mask, iconX, iconY, iconSize, iconGap, ROLE_COLORS)
     end
     T.unfont()
     T.font(18)
@@ -112,6 +137,16 @@ ui.window("HUD Player", function()
     local ey = y1 - T.px(7)
     T.rect(x0 + p, ey, x1 - p, ey + T.px(4), C.sunken, 1, T.px(2))
     if xp > 0 then T.rect(x0 + p, ey, x0 + p + (x1 - x0 - 2 * p) * math.min(1, xp), ey + T.px(4), C.exp, 1, T.px(2)) end
+  end)
+  if not nameRow.shown then return end
+  local r = nameRow
+  hitArea("HUD Player Name", r.x0, r.y0, r.x1, r.y1, function(x0, y0, x1, y1)
+    -- a left click targets the player (CPlayerWnd's click on its gauges), a right click opens the group role menu
+    if ui.InvisibleButton("##name", x1 - x0, y1 - y0) then eq.ClickChild("PlayerWindow", "PlayerHP", "left") end
+    local hovered = ui.IsItemHovered()
+    local roleHovered = roles.Draw(r.mask, r.ix, r.iy, r.size, r.gap, ROLE_COLORS)
+    if hovered and not roleHovered then ui.SetTooltip("Right-click for group roles") end
+    if hovered and ui.IsMouseClicked(ui.Mouse.Right) then eq.ClickChild("PlayerWindow", "PlayerHP", "right") end
   end)
 end)
 

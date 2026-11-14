@@ -147,10 +147,11 @@ local function body(x, y, w, h, s)
   local nameY = y + pad - 2 * s
   T.Text(bx0, nameY, fittedName, nameColor, T.font.normal)
   roles.Draw(mask, bx0 + nameW + 5 * s, nameY + (nameH - iconSize) / 2, iconSize, iconGap, ROLE_COLORS)
+  -- a right click on the name: the group role menu (in a group); solo, or with Alt, the frame's own menu as anywhere
+  -- else on the frame (the click is taken only when the role menu opened)
   if ui.IsWindowHovered() and ui.IsMouseHoveringRect(bx0, nameY, bx1, nameY + nameH)
       and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
-    T.TakeRightClick()
-    eq.ClickChild(WINDOW, "PlayerHP", "right")
+    if eq.ClickChild(WINDOW, "PlayerHP", "right") then T.TakeRightClick() end
   end
   -- the classes on their own line: the full names when they fit, else the short ones, the full list on hover
   local list, full, short, tip = classes()

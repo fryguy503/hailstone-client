@@ -95,9 +95,9 @@ local function body(x0, y, w0, h, s)
     local clicked = T.Hit(slot.hit, x, cy, x + w, cy + ch)
     if hud.DragItem() then clicked = false end -- a drag moves the frame
     local hovered = ui.IsItemHovered()
+    -- a right click: the member's group role menu; with Alt (or when no menu opened) the frame's own menu
     if hovered and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
-      T.TakeRightClick()
-      eq.ClickChild(WINDOW, slot.gauge, "right")
+      if eq.ClickChild(WINDOW, slot.gauge, "right") then T.TakeRightClick() end
     end
     ui.DrawRectFilled(x, cy, x + w, cy + ch, C.ink[1], C.ink[2], C.ink[3], hovered and 0.07 or 0.035, 6 * s)
     if hovered then ui.DrawRect(x, cy, x + w, cy + ch, C.accent[1], C.accent[2], C.accent[3], 0.6, 6 * s, 1.5 * s) end
