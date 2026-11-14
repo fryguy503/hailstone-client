@@ -1431,3 +1431,10 @@ if(WIN32)
       COMMAND_EXPAND_LISTS)
   endforeach()
 endif()
+
+# MSVC under Wine (docs/ci.md): the engine library's archive command is longer than the 32,767 characters a Windows
+# command line holds, and CMake writes response files on its own only when the host is Windows. Set last, so it holds
+# for this directory's targets only: the dependencies' subdirectories (SDL's precompiled header) keep plain commands.
+if(WIN32 AND NOT CMAKE_HOST_WIN32)
+  set(CMAKE_NINJA_FORCE_RESPONSE_FILE ON)
+endif()
