@@ -41,6 +41,16 @@ const float kRelief[kLayers] = float[](0.6, 0.9, 1.2);
 const float kRise[kLayers] = float[](0.35, 0.6, 0.9);
 const float kRock[kLayers] = float[](0.0, 0.25, 0.55);
 const float kHaze[kLayers] = float[](0.3, 0.42, 0.55);
+// Per ring: how much of its own colour is left after the distance's fade (it goes towards the haze's colour, the
+// far ring to a pale outline) and how much colour it keeps; and how high its fog banks reach, as a share of its hills
+// at the least and the most (they rise and fall along the ring and drift).
+const float kKeep[kLayers] = float[](0.7, 0.5, 0.32);
+const float kSaturation[kLayers] = float[](0.75, 0.6, 0.45);
+const float kMistLow[kLayers] = float[](0.15, 0.25, 0.35);
+const float kMistHigh[kLayers] = float[](0.5, 0.6, 0.7);
+// The fog's drift: round a circle once every 1024 s (the scene clock wraps there, so it never jumps), this far
+// across, about 4 units a second.
+const float kDrift = 650.0;
 
 float hash2(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -80,6 +90,17 @@ float amplitude(int layer, float radius) {
     return radius * tan(radians(kAngle[layer])) * rugged + pc.shape.x * kRelief[layer];
 }
 
+// How much of ring `layer` at `rel`, `height` (0 its foot, 1 its tallest hills) up, the fog banks hide, 0..1: their
+// top rises and falls along the ring and drifts with the scene's time; soft above it, thick below.
+float mist(int layer, vec2 rel, float height) {
+    float w = scene.time.x * (6.2831853 / 1024.0);
+    vec2 drift = kDrift * vec2(cos(w), sin(w));
+    vec2 q = (rel + drift) / 1100.0 + pc.shape.yy * 0.5 + vec2(3.1 * float(layer));
+    float n = value_noise(q) * 0.65 + value_noise(q * 2.7 + vec2(1.7, 9.2)) * 0.35;
+    float top = mix(kMistLow[layer], kMistHigh[layer], n);
+    return 1.0 - smoothstep(top - 0.25, top + 0.08, height);
+}
+
 void main() {
     vec3 dir = normalize(v_dir);
     vec3 cam = scene.camera.xyz;
@@ -112,14 +133,17 @@ void main() {
     // Looking down short of the first ring: the plain before the hills, at their foot, nearer and so clearer.
     float plain = dir.z < -1e-4 ? (pc.ring.w - cam.z) / dir.z : -1.0;
     if (plain > 0.0 && (pz[0] > 1e8 || plain < length(hit[0] - cam))) {
+        // A sea of fog, only a hint of the ground showing through it where it thins.
         vec3 p = cam + dir * plain;
         vec2 rel = p.xy - pc.ring.xy;
-        float patches = value_noise(rel / 420.0 + pc.shape.yy) * 0.6 + value_noise(rel / 110.0 + pc.shape.yy) * 0.4;
-        vec3 albedo = pc.ground_color.rgb * (0.7 + 0.6 * patches);
-        vec3 color = albedo * (scene.sky.rgb + scene.light.rgb * max(scene.to_light.z, 0.0));
-        color = apply_haze(color, cam + dir * min(plain, kHaze[0] * hold), scene.camera, scene.haze, scene.haze_color,
-                           scene.to_light, scene.light);
-        o_color = vec4(color, clamp(pc.shape.z, 0.0, 1.0));
+        vec3 ground = pc.ground_color.rgb * (scene.sky.rgb + scene.light.rgb * max(scene.to_light.z, 0.0));
+        ground = apply_haze(ground, cam + dir * min(plain, kHaze[0] * hold), scene.camera, scene.haze,
+                            scene.haze_color, scene.to_light, scene.light);
+        float thin = mist(0, rel, -0.1);
+        float w = scene.time.x * (6.2831853 / 1024.0);
+        float gaps = value_noise((rel + kDrift * vec2(cos(w), sin(w))) / 700.0 + pc.shape.yy);
+        float fog = mix(0.75, 0.97, smoothstep(0.3, 0.7, gaps)) * thin;
+        o_color = vec4(mix(ground, haze_only * 1.04, fog), clamp(pc.shape.z, 0.0, 1.0));
         return;
     }
     for (int i = 0; i < kLayers; ++i) {
@@ -148,11 +172,17 @@ void main() {
         vec3 color = albedo * (hemisphere(n, scene.sky.rgb, scene.ground.rgb) +
                                scene.light.rgb * max(dot(n, scene.to_light.xyz), 0.0));
 
+        // Distant land loses its colour and goes towards the sky's: the haze over the held distance, then the
+        // ring's own fade, the far ones most.
+        float grey = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        color = mix(vec3(grey), color, kSaturation[i]);
         float dist = length(hit[i] - cam);
         color = apply_haze(color, cam + dir * min(dist, kHaze[i] * hold), scene.camera, scene.haze, scene.haze_color,
                            scene.to_light, scene.light);
-        // A mist about their feet, so they rise out of the plain.
-        color = mix(color, haze_only, 0.3 * (1.0 - smoothstep(0.0, 0.3, height)));
+        color = mix(haze_only, color, kKeep[i]);
+        // The fog banks round their feet, a little lit by the sun.
+        vec3 fog_color = haze_only * 1.04 + scene.light.rgb * 0.01;
+        color = mix(color, fog_color, 0.92 * mist(i, rel, height));
 
         acc += (1.0 - alpha) * cover * color;
         alpha += (1.0 - alpha) * cover;
