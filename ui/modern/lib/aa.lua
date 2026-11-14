@@ -282,12 +282,16 @@ local function columns(x0, x1, s)
   layKey0, layKey1, layS, layVersion = x0, x1, s, orderVersion
   local pad, gap = 8 * s, 6 * s
   local hide1, hide2 = false, false
+  -- A column is never drawn narrower than its head and the sort arrow (columnHeads), whatever its saved width: the
+  -- head's font does not grow in step with the scale.
+  local function least(c) return math.max(c.min * s, T.TextSize(c.head, F.tiny) + 11 * s + 1) end
+  local function width(key, c) return math.max((widths[key] or c.w) * s, least(c)) end
   local function fixed()
     local t = 0
     for _, key in ipairs(order) do
       local c = COLUMNS[key]
       if c.w and not (c.drop == 1 and hide1) and not (c.drop == 2 and hide2) then
-        t = t + (widths[key] or c.w) * s + gap
+        t = t + width(key, c) + gap
       end
     end
     return t
@@ -297,8 +301,8 @@ local function columns(x0, x1, s)
   if room - fixed() < 130 * s then hide2 = true end
   local free = room - fixed()
   -- how far the name can shrink (design pixels) before the narrow layout would drop a column
-  local least = not hide1 and 150 * s or (not hide2 and 130 * s or COLUMNS.name.min * s)
-  lay.slack = math.max(0, free - least) / s
+  local keep = not hide1 and 150 * s or (not hide2 and 130 * s or COLUMNS.name.min * s)
+  lay.slack = math.max(0, free - keep) / s
   local nameW = math.max(COLUMNS.name.min * s, free)
   local n, total, minimum = 0, 0, 0
   for _, key in ipairs(order) do
@@ -307,8 +311,8 @@ local function columns(x0, x1, s)
       n = n + 1
       local e = lay[n]
       if not e then e = {}; lay[n] = e end
-      e.def, e.w = c, c.w and (widths[key] or c.w) * s or nameW
-      total, minimum = total + e.w, minimum + c.min * s
+      e.def, e.w, e.min = c, c.w and width(key, c) or nameW, c.w and least(c) or c.min * s
+      total, minimum = total + e.w, minimum + e.min
     end
   end
   for k = n + 1, #lay do lay[k] = nil end
@@ -321,7 +325,7 @@ local function columns(x0, x1, s)
   local x = x0 + pad
   for i = 1, n do
     local e = lay[i]
-    local w = (e.def.min * s + (e.w - e.def.min * s) * fraction) * squeeze
+    local w = (e.min + (e.w - e.min) * fraction) * squeeze
     e.x0, e.x1 = x, x + w
     x = x + w + gap
   end
