@@ -76,6 +76,17 @@ on into the same targets (stored and loaded, the multisampled ones too): the gra
 so the target ring lies on the ground under it), then `ZonePhase::Translucent`: the water first, then the blended and
 additive draws.
 
+With `display.depth_prepass` (off by default; the viewer's `--depth-prepass`) the zone's opaque and alpha-tested
+geometry is drawn depth-only first (`ZoneRenderer::draw_depth`, `shaders/zone_depth.frag`), then coloured with the
+depth test equal and no depth write: a pixel covered by several surfaces is shaded once. The alpha test is the colour
+pass's, so an alpha-tested edge covers the same samples in both passes, and `zone.vert`'s position is `invariant`, so
+both passes give a surface the same depth. The pre-pass discards every pixel `zone.frag` discards, the isometric
+camera's cut-away included, or the cut walls would keep their depth and hide what stands behind them. The water stays
+out of the pre-pass (it is drawn blended after `begin_translucent`). The pre-pass covers the current zone's geometry only: the neighbour zones (their ties go by the
+draw order, which an equal test would turn around), the objects, the flora and the characters keep their single pass.
+The setting is read when a zone loads. The pre-pass's shader is optional: without it the zone draws the single pass,
+with a warning in the log.
+
 The scene target holds linear colour. The classic lighting computes in display (sRGB) values as the classic renderer does
 and converts at the end of each shader; the modern lighting computes in linear HDR.
 
@@ -268,23 +279,27 @@ far ring costs about what the near circle does. The tiles are filled nearest fir
 
 Hailstone's own, not the original's: the classic zones have no flora, and this gives them grass without changing
 their files (`assets/zone_flora.h`, `display.zone_flora`). Their plants join the same `Zone::flora` the EQG zones'
-radial flora fills and are drawn the same way (above; /showgrass hides them, Flora Distance sets their reach).
+radial flora fills (/showgrass hides them, Flora Distance sets their reach). The grass is a lawn the client builds
+itself, no game asset (below); ferns, flowers and bushes from donor EQG archives are scattered over it and drawn as
+the radial flora is (above).
 
 **Which rules.** A zone takes `flora/<zone>.txt` from the install folder (shipped) when there is one, else
 `flora/default.txt` when the server calls it outdoor (OP_NewZone's time type 1, 2 or 5; PEQ marks some dungeons so,
 which the cover test below keeps bare). A rules file is read line by line, and the first matching ground line wins:
 - `donor <archive>`: an EQG archive in the player's game folder whose `RadialFloraDefs.rfd` and textures give the
-  plants' shapes and pictures; several donor lines add up. The default takes `commonlands.eqg`'s, the revamped
-  Commonlands. Nothing is shipped; without its donors a zone has no flora, and a kind whose donor (or whose picture)
-  is missing is left out.
-- `ground <glob> <density> [+green|+greenish] <kind>[:<weight>]...`: plants per 100 square units on the ground
-  textures the glob matches, and their kinds by weight (a definition of the first donor that has it, or one donor's
-  as `<archive stem>/<name>`); 0 keeps a texture bare. The classic ground textures blend
+  scattered plants' shapes and pictures; several donor lines add up. Nothing is shipped; a kind whose donor (or
+  whose picture) is missing is left out, and the lawn needs none (the default names no donor).
+- `ground <glob> <density> [+green|+greenish] [lawn] [<kind>[:<weight>]...]`: on the ground textures the glob
+  matches, the lawn when the line says `lawn`, and `<density>` plants per 100 square units of the kinds by weight (a
+  definition of the first donor that has it, or one donor's as `<archive stem>/<name>`); a density of 0 and no lawn
+  keeps a texture bare. The classic ground textures blend
   grass into cliff, sand or a path within one picture, so `+green` keeps a plant only where the game's own texel
   under it is clearly green (`is_green_texel`: not the water's teal, mud's olive or a dungeon's near-black), and
   `+greenish` also takes dry and dark grass, for textures whose name says they are grass.
-- `max_slope` (degrees), `scale <min> <max>`, and `include <name>` (another file's lines in place: a zone file puts its
-  own exceptions first, then `include default`; East Commonlands adds desert plants on its sand that way).
+- `max_slope` (degrees), `scale <min> <max>` (the scattered plants' sizes), `lawn_height <min> <max>` (the lawn's
+  blades, 1.8 to 3 units by default; the grasslands' grow 2.4 to 4), and `include <name>` (another file's lines in
+  place: a zone file puts its own exceptions first, then `include default`; East Commonlands adds desert plants from
+  `commonlands.eqg` on its sand that way).
 
 The shared files turn down built and wet surfaces by name before anything else (`bare.txt`: roofs, walls, cobbles,
 tiles, bridges, hedges, ship decks, water, lava), then take grass-named textures with `+greenish`, then turn down
@@ -292,8 +307,9 @@ floors, rock, stone and cliffs (`stone.txt`, after the grass lines so a grass an
 then take anything else with `+green`. A `+green` texture with next to no green texels (`kMinGreenShare`) grows
 nothing at all.
 
-**Families.** Most zones take the shared Commonlands grass alone (`default.txt`). A zone of a climate with plants of
-its own includes a family file, the same lines with more kinds from more donors:
+**Families.** Most zones take the lawn alone (`default.txt`). A zone of a climate with plants of its own includes a
+family file, the same lines with kinds from donors scattered sparsely over the lawn (about 0.4 to 1 plant per 100
+square units):
 
 | Family | Zones | Added, from |
 |---|---|---|
@@ -306,6 +322,38 @@ its own includes a family file, the same lines with more kinds from more donors:
 | `luclin` | the Twilight Sea, the Grimling Forest, Tenebrous, Shadeweaver's, Hollowshade, Dawnshroud, the Maiden's Eye, Shar Vahl, Katta Castellum, Sanctus Seru | shrubs, plants and shade grass, `mistythicket.eqg` |
 | `growth` | the Plane of Growth | tall flowering grass and ferns, `arcstone.eqg`; flowering grass, `moors.eqg` |
 
+
+**The lawn.** An even carpet rather than plants scattered at random: the ground is cut into world-aligned squares
+of `kLawnCell` (3.2 units, 40 to a tile), and each square whose centre lies over ground that grows a lawn (the
+tests below, at that centre; `+green` by the majority of five texels, the centre's and four half a square out, so a
+texture blending grass into dirt texel by texel grows no speckle) holds one patch of blades, at the ground's height
+and slope there. Each square goes to
+exactly one ground triangle, so the patches meet without gaps or overlaps. A patch takes the colour of the ground
+texel at its centre; its height wanders slowly over the zone between `lawn_height`'s two values (smooth value noise
+on a 48-unit lattice, `assets::lawn_height_noise`), not patch by patch. Where the lawn meets bare ground (a path, a
+road, a texture `+green` turns down) it tapers over three squares (`lawn_edge_factor`: 0.55 of the height beside it),
+so it does not end in a wall along a texture's straight border, and a patch with fewer than three of its eight
+neighbours grown is dropped (a lone tuft); a tile grows its neighbours' squares within three of its edge to see them,
+then drops them.
+
+The blades are built in `shaders/lawn.vert`, without a texture (`render::FloraRenderer`'s second pipeline): a
+patch's square holds a grid of blades, one jittered in each cell, so the cover is even. A blade is a tapered strip
+of a few pieces ending in a point, standing on the ground across the patch (its slope), curving over as it rises, a
+little taller or shorter, combed: it leans 0.4 to 0.65 of its height the way a slowly turning field over the zone
+points (broad swathes lying together), a little off it, its flat side to the way it leans; leaning
+with the scene's wind as gusts roll across the zone (the zone's plants' wind, `SceneLighting::wind`: gentle in fair
+weather, hard in a storm) and fluttering a little, and bent away from the spawns walking through it like the other
+plants. `shaders/lawn.frag` gives it the ground's hue with its brightness held within a band (a pale or dark texel
+makes no pale or dark patch), darker at the roots and brighter and warmer towards the tip; in the modern lighting it
+is lit as the radial flora is, with its face's normal turned most of the way up (the lawn is lit like the ground
+under it, not blade by blade) and some light through it when the sun is behind it. It casts no shadow.
+
+By distance (`render::kLawnLods`): within 45 units 49 blades a patch of three pieces each, to 140 units 16 of three,
+past that 9 single triangles, each level's blades wider so a patch keeps its cover. Past 400 units every second patch
+each way is kept, past 800 every fourth (`lawn_stride`), each as wide as the squares it stands for; a grown tile keeps
+its patches by the coarsest stride that keeps them, so a far tile walks only those it draws. The lawn shrinks into the
+ground over the last fifth of the reach with the other plants. In South Karana, on the AMD card (RADV) it was tuned
+on, the lawn costs about 0.45 ms a frame at the default reach, and less than the old grass did at 1,200 units.
 
 **Where.** On level ground (45 degrees by default) of a drawn, opaque or cut-out surface: not the invisible collision
 surfaces, nor the translucent water. Not in water, lava or a zone line, nor on the water's surface (the region just
@@ -1003,6 +1051,50 @@ in filler: the ground, hills and walls their builders put past each line, often 
   this zone's; a zone with a short view (freportw's 450) hides its neighbours in the haze; the classic zone-line
   quirks for North Ro and East Freeport (`game::resolve_teleport_index`'s 1044) are not applied to the offset.
 
+## Horizon hills
+
+In the modern lighting, outdoors, rings of distant hills and mountains stand round the zone where nothing else is
+drawn, so the land past its edges is not a blank haze (Hailstone's own; the classic client drew nothing past a zone's
+geometry). They are scenery only, drawn after the sky and before the zone: anything nearer, the zone, its objects and
+the neighbour zones, covers them. `render/horizon.h` holds the measuring, `shaders/horizon.frag` the drawing
+(`ZoneRenderer::draw_horizon`).
+
+- **What the zone says** (`render::horizon_land`, while `ZoneRenderer::prepare` builds the zone; not for a neighbour):
+  the terrain's opaque, dry triangles. Level ones (the normal's z at least 0.8, either way up) place the hills: their
+  centre is the middle of the level ground's extent (2 % of its area cut each side, so a dock or an island far out does
+  not move it), and the first ring stands at half its diagonal plus 400 units. The hills' foot is the level ground's
+  median height; its spread from the 10th to the 90th percentile, 40 to 1200 units, is the relief, which makes rugged
+  zones' hills taller. Their colours are the area-weighted mean of the level ground's textures and of the slopes'
+  (`render::mean_texture_color`: linear, by alpha, a sample of the smallest level of 16 texels or more; BC1 to BC3 from
+  their blocks' endpoints; BC4, BC5 and BC7 not read), so Qeynos Hills' are green and Everfrost's white. A zone with
+  less than 250,000 square units of level ground gets none. The log says what was found: qeytoqrg round
+  (2122, -21) from 3630 units, ground 2, relief 80.
+- **The rings**: three, at the first ring's radius plus 0, 1400 and 3600 units. Each pixel's view ray meets each ring's
+  upright cylinder about the centre (its far side, so it works from anywhere in the zone); the land there is as high
+  as a noise over the ground says (value noise, five octaves, one cell 900, 1500 and 2600 units across; the far ring's
+  ridged, for mountains), seeded by the zone's short name (`render::horizon_seed`), so the hills are the same every
+  visit and move with parallax as the camera does. The tallest rise 2.5, 4 and 6.5 degrees over the foot seen from
+  the centre, times 0.7 to 1.8 with the relief, plus 0.6, 0.9 and 1.2 of the relief. Looking down short of the first
+  ring, the ray meets a sea of fog at the foot instead, a faint hint of the ground showing where it thins.
+- **The look**: lit as the zone is (the sky and ground ambient by the land's slope, the sun or moon by the noise's
+  gradient, the rings rising away from the zone), the slopes and the far ring's tops in the slope colour, patches and
+  shaded hollows fixed to the land. Then they fade as distant land does: their colour is kept 75, 60 and 45 %, the
+  frame's haze (`apply_haze`, its glow and its thinning with height) takes them over a distance held under 0.3, 0.42
+  and 0.55 of the haze's length, so they stay in sight at any view distance, and each ring keeps only 70, 50 and 32 %
+  of what is left against the haze's colour, so the far ring is a pale outline. Fog banks lie round their feet: their
+  tops rise and fall along each ring (15 to 50 % of its hills' height near, 35 to 70 % far) and drift round a circle
+  650 units across once every 1024 s (the scene clock wraps there, so the drift never jumps). Their edges blend over
+  the sky by the pixel's footprint.
+- **When**: outdoors (time types 1, 2, 5), not under water, under an open sky (1, 2, 4) or none (gfaydark, everfrost);
+  not under the planes' and Luclin's painted skies. `render::horizon_strength` fades them where the zone's fog ends
+  between 350 and 900 units (nektulos' 400 nearly none, East Commonlands' 800 nearly all), as the haze leaves the
+  modern view's reach (lava, a thick-fog region) and to a quarter under a storm.
+- **Limits**: they write no depth (a neighbour zone past them must still show), so the god rays (`post.frag`) treat
+  them as open sky and can streak across them towards the sun. They do not take the sun's shadows. One full-screen
+  pass; the frame time in Qeynos Hills at 2560 x 1120 did not move outside the runs' noise.
+
+`display.horizon_hills` (Options, Horizon Hills) turns them off; the viewer takes `--no-horizon`.
+
 ## Texture overrides
 
 Replacement textures, such as upscaled packs, go in a pack folder under `textures/` of the Hailstone folder
@@ -1103,6 +1195,126 @@ At run time:
 - `display.material_maps` (on by default) and the viewer's `--no-material-maps` turn the maps off.
 - Every viewer, the model viewer too, takes `--textures`.
 
+### Photo materials
+
+A built pack can rebuild a classic zone's hand-painted ground from tiling photo textures (Poly Haven's, CC0) instead
+of upscaling it (`texpack/materials.h`; Hailstone Texture Studio's "Photo ground materials"). The rules are data the
+studio ships: `materials.txt` names each material (its Poly Haven asset, the metres one repeat shows, how much it is
+magnified, its detail strength, how much of the original's painted shading it keeps, and its colour in the art), and
+a file per zone (`qeytoqrg.txt`) gives each of the zone's textures one material or two
+(`hhdrockgrass1 = grass greyrock`; `sharp` for small shapes such as a path's flagstones). A zone file may set a
+material's colour in that zone's art (`colour grass = 0.30 0.27 0.12`), for its own tiles only: one material serves
+zones whose art differs (Qeynos Hills' green grass, Everfrost's dark tundra), and its photos are loaded once.
+
+- **Scale:** each texture's world units per repeat are measured on the zone's ground (the area-weighted median over
+  its triangles). A material repeats a power of two times across a tile, so Qeynos Hills' 56-unit grass tile and its
+  108-unit transitions show the grass at one scale. An EQ unit is taken as a foot.
+- **Two materials:** the original is split by a 2-means on its blurred chromaticity, seeded with the two materials'
+  colours (brightness barely counts, so the art's painted shadows are not taken for grass). The photos are blended
+  along that split, the edge moved by their displacement maps so it follows stones and soil.
+- **Detail transfer:** the result keeps the original's colour above about 6 of its texels (1.5 for `sharp`) and takes
+  only the photos' luminance detail below that, with part of the original's own painted shading. A rebuilt tile so
+  keeps the zone's palette and still meets the tiles round it, rebuilt or not; blurs and resizes wrap at the edges.
+- **Files:** the colour, normal and roughness maps go through the pack's encoder (BC7, BC5, BC4 with mips), at 512 x
+  the pack's scale on a side (1024 for a 2x pack). A texture with alpha or a variant, or not square, is upscaled.
+- **Resuming:** `PACK/materials.txt` records the rules each tile was made by; a build makes a tile again when its
+  rules change, and gives a texture back to the upscaler when the rules drop it.
+- **Fetching:** the 1K JPEG diffuse, `nor_dx`, rough and disp maps of each asset from Poly Haven's download host, once,
+  into the studio's cache.
+
+The studio has rules for the original game's 34 outdoor zones (not the expansions', not the revamped ones; in cities
+the ground only). A texture that is also drawn with a cut-out somewhere (three of North Ro's) stays with the upscaler.
+Seen in the zone viewer, not in a live session: the layout and seams hold; the photos' repeat still shows on large
+flat areas.
+
+### Model overrides
+
+A texture pack can also replace a zone's placed objects: `PACK/models/<zone>/<object>.glb`, a binary glTF 2.0 file
+named after the object (`TREE1_ACTORDEF` or `TREE1`, any case), is drawn in place of that object
+(`assets/model_overrides.h`, read with cgltf). A deliberate difference from the original, and the look only: the
+collision, picking, ladders and the ambient probe keep the game's mesh, so where a player can walk does not change.
+The pack folder is the one `display.texture_folder` (the viewer's `--textures`) chooses; the files are read as each
+zone loads (`Zone::draw_objects`).
+
+- **Frame:** glTF's own, Y up; its units are EQ units, and glTF (x, y, z) is the zone's (x, -z, y). Front faces are
+  counter-clockwise; each node's transform is applied.
+- **Materials:** a material's base colour texture names its texture by its image's URI: the file name is looked up as
+  a replacement texture is (the zone's subfolder first, so a model's textures can sit beside it), any extension, with
+  its `.n` and `.r` maps. `MASK` is drawn as a cut-out, `BLEND` at 50 %, `doubleSided` without culling. Images inside
+  the file and buffers outside it are refused.
+- **Made for a mesh:** a file whose `asset.extras.hailstone_source` holds the hash of the game mesh it was made for
+  (`object_mesh_hash`, 16 hex digits) is used only on that mesh, so a game update that changes the object turns it
+  off; one without (made by hand) is used on any object of its name in that zone.
+- **Instanced:** the zone renderer keeps each replacement mesh once, in its own space, and draws it at every placement
+  with a per-instance transform (`GpuInstance`: the transform's rows, the normal matrix's, the sway's scale and a
+  tint; the buffer's first entry is the identity, which the zone's own geometry uses, so one set of pipelines draws
+  both). Each placement of each level is a chunk of its own, and neighbouring placements in view go in one call.
+  Qeynos Hills with the generated trees: 52,000 vertices and 146,000 indices on the GPU, from 3.7 million and
+  8.3 million (266 MB of vertices) when every placement was a copy. A neighbour zone's placements are moved with it
+  and kept whole or left out by where they stand, not cut at the zone line.
+- **Light:** a placement's baked light is one colour per vertex of the game's mesh; the replacement takes their
+  average as its instance's tint, which multiplies its own vertex colours (a generated tree's shade inside its crown).
+- **Plants:** a replacement sways in the wind as the game's object would (`is_plant`): its cut-out parts flutter.
+- **Levels of detail:** a node's extras `{"hailstone_lod": [near, far]}` draw its meshes only from `near` to `far` world
+  units from the camera (`MeshPart::lod_near`, `lod_far`). The zone renderer keeps each band's draws apart, a chunk
+  for each placement, and chooses by the camera's distance to where the placement stands (`render/lod_bands.h`), so
+  all of a tree changes level together. A model's levels are its bands in order of their near ends.
+  - The scene and the depth pre-pass fade one level into the next across 20 % of the distance where they meet,
+    centred on it: both are drawn there, and each of a pixel's samples shows exactly one of them
+    (`coverage.glsl lod_fade_samples`, a sample mask by the placement's distance from `zone.vert` and a per-pixel
+    noise), more of the next level the further the tree, so it dissolves instead of jumping. With 8x MSAA that is
+    nine steps a pixel; without MSAA, a dither.
+  - A shadow needs less detail than the tree it falls from: the sun's two nearest cascades draw at least the second
+    level (the camera's where coarser), the two further ones the last, and a light's shadow cube, drawn once and
+    kept, always the second whatever the camera's distance. Shadows do not fade; they take the camera's position of
+    the frame before. A banded draw is not merged into the untextured shadow casters.
+  - `display.tree_detail` (Options, Tree Detail Distance, 50 to 200 %) scales every band's distances.
+
+### Generated trees
+
+Hailstone Texture Studio's "Generated trees" grows a classic zone's trees again (`texpack/trees.h`) and writes them as
+model overrides with their textures (BC7 with mips; the bark's normal and roughness maps as `.n` and `.r`). The game's
+trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tree is fitted to the game's:
+
+- **Trunk:** the prisms' rings, found by their hop count along the prism edges from each piece's bottom (a limb that is
+  a prism of its own, as TREETRY's second one, hangs from the ring nearest its root), make the skeleton. The bark is a
+  tube along it at 0.8 x the prism corners' distance: between the prism's faces and its corners, so a player stopped
+  by the collision stands at the bark.
+- **Leaves:** points spread over the cards and kept where their texture is opaque give the crown's shape; turned round
+  the trunk, they fill it. The leaves are drawn in colours picked from the game texture's opaque texels, then scaled
+  to its mean, so an autumn tree keeps its yellows among its greens.
+  The gaps narrower than a few texels inside a spray or a cluster are filled with a shadowed base (a closing of the
+  cut-out): pinholes of sky between needles flickered as the tree swayed a fraction of a pixel.
+- **Styles:** a pine (a single upright trunk up into leaves widest low down) grows whorls of drooping branches with
+  needle sprays and a clump at each end up a leader; a broadleaf tree grows branches into the crown by space
+  colonisation (Runions, Lane and Prusinkiewicz 2007), leaf clusters at their tips; a willow hangs strands from its
+  upper branches. A dead tree (`dead`: Everfrost's and Dagnor's Cauldron's bare pines) grows a few long limbs from its
+  upper trunk, rising and forking once, with sprays of drawn bare twigs at their ends. A palm (`palm`) carries its
+  trunk on up to near the top of the game's leaves (its solid prisms stop halfway; the cards paint the rest) and
+  springs two dozen arching fronds from there, a drawn frond of narrow leaflets along a rib. The rules may name the
+  style (`tree tree71 = willow bark`); `auto` takes pine or broadleaf by shape.
+- **Bark:** a Poly Haven photo material scaled to the game bark's mean colour, or a drawn one.
+- **Levels of detail:** the near tree to three times its height (at least 200 units); then a middle level with two
+  leaf cards in three, each grown to keep the cover, about half the sides and no thin branches; and from eight times
+  its height (at least 600 units) three crossed cards and a level one, with a picture of the near tree from the side
+  and from above (rendered by the generator: a small rasteriser, twice the size and averaged down). The near and
+  middle levels are built together, so they have one shape.
+- **Cards cut to their leaves:** each leaf card is cut to its texture's outline (`card_outline`: the convex hull of
+  the texels that are not transparent, cut down to six corners by the cheapest cuts, six texels out for the smaller
+  mips), each quad of a strip clipped to it in texture space. A spray fills only part of its square: a pine's card
+  keeps about 42 % of its area, a broadleaf cluster's 74 %. It costs triangles (a quad is a fan of up to four) and
+  saves the pixels the alpha test would throw away.
+- **Budget:** 5,000 to 12,000 triangles a tree at the near level, 1,700 to 4,300 at the middle, 8 at the far. At the
+  Qeynos Hills test spot the zone drew 56,000 triangles a frame (3,400 with the game's trees; the trees in a fade
+  draw two levels), 35,000 looking over the zone from above, and 9,300 into the shadow map (7,300 with the game's
+  trees). Cutting the cards doubled the leaf triangles and took about 5 % off the frame at 2560 x 1440 with 8x MSAA
+  in a view full of trees (3.29 ms from 3.47; zone viewer, offscreen). Each kind of tree is stored once (instanced),
+  so the triangles cost no memory per tree.
+
+The rules are lines of the studio's zone files (`tree <object> = <style> [<bark material>]`); the 34 zones with
+ground rules have them (129 trees in the 30 that have trees). A tree comes out the same on every build (its seed is its zone and name). Seen in the zone viewer, not
+in a live session. Open: leaves thin out in the smaller mips of a cut-out.
+
 ## The isometric camera's cut
 
 In the isometric camera (`docs/isometric.md`) `zone.frag`, `object.frag` and `flora.frag` drop the pixels of what
@@ -1162,8 +1374,11 @@ viewer (`--zone`, `--model`) takes `--msaa`, `--tonemap`, `--exposure`, `--rende
 | `display.light_shadow_size` | 128 .. 1024 | 512 | texels per side of each face of a light's shadow cube |
 | `display.view_distance` | multiplier | 2.5 | the modern mode draws this many times further than the classic client (at most 12000 units), into haze; picking keeps the classic distance |
 | `display.ao` | 0, 1 | 1 | screen-space ambient occlusion; modern only; viewer `--no-ao` |
+| `display.depth_prepass` | 0, 1 | 0 | draw the zone's opaque geometry depth-only first, then colour it with the depth test equal; the current zone only, read when a zone loads; modern only; viewer `--depth-prepass` |
 | `display.distance_blur` | 0, 1 | 1 | the far distance's slight blur; modern only |
 | `display.neighbour_zones` | 0, 1 | 1 | the zone past an outdoor zone line drawn in the distance (Neighbour zones); modern only; `/neighbourzones [on \| off]` |
+| `display.horizon_hills` | 0, 1 | 1 | distant hills round an outdoor zone where nothing else is drawn (Horizon hills); modern only; viewer `--no-horizon` |
+| `display.tree_detail` | 50 to 200 | 100 | how far a texture pack's replacement models (generated trees) keep their nearer levels of detail, in percent of their own distances (Tree Detail Distance); viewer `--tree-detail` |
 | `display.target_ring_cues` | 0, 1 | 1 | the target ring's sweep on a new target and pulse while attacking (Target Ring Cues; The target ring) |
 | `display.find_trail_style` | 0, 1 | 0 | Find paths: 0 the gold ground line, 1 rainbow strands; Options > Display (gamepad: Interface), saved per character and changed immediately; docs/navigation.md "The trail" |
 | `display.target_ring_xray` | 0, 1 | 0 | the target ring's hidden part showing faintly through what stands in front (Target Ring Through Models) |

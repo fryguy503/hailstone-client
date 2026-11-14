@@ -52,6 +52,8 @@ class Gamepad;
 // What the eq.* functions read and drive; the client fills it in every frame.
 struct EqHost {
     net::GameConnection* conn = nullptr;   // the world / zone connection, null before login
+    // Wall-clock seconds for display timers; empty uses the system clock.
+    std::function<std::int64_t()> unix_time;
     bool in_game = false;                  // a character is in the world
     bool ui_ready = false;                 // in game or at character select
     int game_state = 0;                    // CEverQuest::GameState: 1 character select, 2 creation, 5 in game

@@ -110,15 +110,16 @@ int main(int argc, char** argv) {
                 std::printf("%s: no rules\n", name.c_str());
                 continue;
             }
-            auto donor = open_flora_donors(game, rules->donors);
-            if (!donor) {
-                std::printf("%s: flora/%s.txt: no donor opens\n", name.c_str(), source.c_str());
-                continue;
+            // The lawn needs no donor; the other kinds do.
+            FloraDonors donor;
+            if (!rules->donors.empty()) {
+                if (auto opened = open_flora_donors(game, rules->donors)) donor = std::move(*opened);
+                else std::printf("%s: flora/%s.txt: no donor opens (the lawn alone)\n", name.c_str(), source.c_str());
             }
             ZoneFlora flora;
             std::unordered_map<std::string, std::size_t> by_texture;
             const auto t0 = std::chrono::steady_clock::now();
-            place_zone_flora(zone, *rules, std::move(donor->definitions), flora, zone_ground_textures(zone), &by_texture);
+            place_zone_flora(zone, *rules, std::move(donor.definitions), flora, zone_ground_textures(zone), &by_texture);
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0);
             std::printf("%s: flora/%s.txt: %zu plants on %zu tiles (%lld ms to grow them all)\n", name.c_str(),
                         source.c_str(), flora.instances.size(), flora.tiles.size(), static_cast<long long>(ms.count()));

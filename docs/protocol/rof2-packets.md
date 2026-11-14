@@ -850,6 +850,57 @@ cstr name; u32 spawn id; u8 level; f32 melee radius (size − 0.7); u8 type (0 P
 
 u32 checksum (eq_crc32 of bytes [8, size−1)), u32 size−9, 2×u32; u8 gender, u32 race, u8 class, u8 level ×2; u32 5 + 5 binds {u32 zone, f32 x, y, z, heading}; u32 deity, u32 intoxication; u32 10 + 10×u32; u32 22 + 22×{5 u32} equipment; u32 9 + 9×{5 u32}; u32 9 + 9 tints; u32 9 + 9 tints; u8 hair colour, beard colour, u32, eye 1, eye 2, hair style, beard, face; 3×u32 drakkin; 5 B; f32 height, 3 f32, 2 u32; u32 points, mana, current HP; STR, STA, CHA, DEX, INT, AGI, WIS; 7 u32; counted arrays: AAs (12 B each), skills, innate skills, disciplines, timestamps, recast timers, timestamps 2, spell book, memorised gems, gem refresh; u8; counted buffs (80 B each: u8, f32 instrument mod, u32 caster, u8, u32 counters, u32 duration, u8 level, u32 spell, u8 effect type, u32 hits, u32, u32 counters, 44 B); coin ×4, cursor coin ×4, 3 u32, thirst, hunger, AA spent, u32 5 + assigned + 5 tab values (last = unspent), 2 B; counted bandoliers (cstr + 4×{cstr, u32 id, i32 icon}, kept as `PlayerProfile::bandoliers`); counted potion belt ({cstr, u32, i32}, `potion_belt`); 4 i32; 12 u32 (resists etc.); u32 20; 4 u32; endurance; 2 u32; u32 64 + `char[64]` name; u32 32 + `char[32]` last name; birthday, account start, last login, minutes played, entitled, expansions; counted languages (bytes); u16 zone, u16 instance, f32 y, x, z, heading; u8, pvp, u8, gm; u32 guild, u8 rank, u32, u8, u32; u64 exp; u8; bank coin ×4, shared platinum, … `character_id` after 663 unknown bytes; … AA exp; …; u8 show helm; u32 rest timer; counted 1024 B; 2 u32; u8. The decoder reads every array by its own count prefix, so it follows the server's sizes (20 bandoliers × 4 items is the one fixed count).
 
+### Fellowships
+
+`net/fellowship_packets.*` handles the native fellowship messages independently of whether a server implements
+them. Stock EQEmu does not send them; EQEmu PR #5134 "TOB: Fellowships" (open, unmerged, GPL-3, read only as a
+protocol reference) does. All six routes also have generated symbolic opcode mappings. Servers without fellowships keep an empty
+state. Requests use opcode `0x7121` with a 1076-byte body:
+action u32 at 0, target u32 at 4, a NUL-terminated MOTD in the 1024-byte field at 20, and camp type u32 at
+1064. Unused fields are zero. Actions are create 1, MOTD 2, accept 3, invite target spawn 5, remove character 6,
+promote character 7, create camp 8, destroy camp 9, leave 10, disband 11 and toggle sharing for character 12.
+Requests never change membership locally. The server enforces its member limit and validates leadership,
+sharing, invitations, cooldowns, camp supplies and placement requirements.
+
+The invitation opcode is `0x62ab`, 0x434 bytes; `Handle_Opcode_0x62ab` @0x667db0 reads only the inviter spawn at
+12 and shows no dialog when that spawn is not found. The dialog expires after 100 seconds. Acceptance sends
+action 3 and declining action 4, with no target argument (`Send_Opcode_0x7121` @0x668710). PR #5134 reads 4 as
+a legacy camp destruction and has no decline handler; the client still sends what RoF2 sends.
+
+**Extension beyond RoF2:** a 1080-byte invitation (PR #5134's form: action 5 at 0, inviter at 4) is accepted
+too. Its inviter is taken from 12 when set, else from 4, and when that spawn is not in the zone the dialog is
+shown without a name, since such a server may invite across zones. The 0x434-byte form never takes 4 and never
+shows a nameless dialog.
+
+Roster opcode `0x6e4d`, version 5, has a 1100-byte header: version, fellowship id, name[64], MOTD[1024], count.
+Each of the twelve native member records is 84 bytes: character id u32, name[64], zone u32, level u32, class u32,
+last-seen epoch u32. The first record is leader. Records are followed by a u32, twelve 32-byte player handles,
+and three twelve-byte arrays (sharing, capped, offline). A 32-byte campsite trailer contains y/x/z floats,
+zone, expiry, a second expiry, an unused word and active, all remaining fields u32. Full native size is 2564
+bytes; the 2532-byte roster without camp is also accepted. A matching roster that omits this character clears
+membership; an unrelated roster cannot replace or clear it. Zone changes preserve membership until the next
+server roster, but discard pending invitations and kit queries. A session end clears the state.
+
+**Extension beyond RoF2 (capacity):** all member arrays may instead have 13 through 64 slots. Capacity is inferred
+from exact length: `1104 + 119 * slots` without camp, `1136 + 119 * slots` with camp. Count cannot exceed capacity;
+duplicate identities, unknown versions, malformed lengths and more than 64 slots are rejected. There is no new
+admission rule or client-side 12-member cap. A server sending expanded rosters must expand every array using
+this contract. PR #5134 hard-caps membership and native serialization at twelve; raising
+its rule alone does not enable larger fellowships. Expanded rosters are covered by synthetic tests, not a live
+64-member server session.
+
+Camp refresh `0x0c12` has two u32s: available-only and category mask (all bits for all categories). Reply `0x074d`
+is count u32 followed by available u8, camp type u32, description id u32 and a NUL-terminated display name. The
+description id is a DBString type-0 lookup, as checked in the original selection handler. Category labels come
+from the player's layered `Resources/campsitecategories.txt` (`id^label`); selecting a category sends `1 << id`.
+An absent category file leaves the all-category query available; a missing DBString falls back to the supplied
+kit name. Vitality `0x2cc6` is 28 bytes: normal
+u64, normal cap u64, AA u32, unused u32, AA cap u32. The profile seeds normal/AA vitality from the sixteen bytes
+after AA experience (last fellowship join u32, normal u64, AA u32); the dedicated message updates values and caps.
+Native gauges 147/148 display `min(pool, cap) * 1000 / cap`, truncated; zero caps draw empty. The client computes
+that presentation ratio without overflowing 64-bit values and keeps exact amount strings for Lua. No XP award
+or vitality transfer arithmetic is performed locally. Fellowship chat uses channel 21 and colour 342.
+
 ## 5. Notes
 
 - **Item ids above 0xFFFFF**: ids that large make item links carry 8-digit ids (`SAY_LINK_BODY_SIZE` 77 in `rof2_limits.h`). `game/item_links.cpp` reads both widths.

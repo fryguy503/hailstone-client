@@ -115,6 +115,8 @@ public:
     Character(const CharacterSheet& sheet, const GameTables& tables, SpellLookup spells);
 
     const CharacterSheet& sheet() const { return sheet_; }
+    const GameTables& tables() const { return tables_; }
+    const SpellLookup& spells() const { return spells_; }
     const Fpu& fpu() const { return fpu_; }
     const SpellData* spell(std::int32_t id) const;
     // The ProcessAllStats results, to read, or to set for a single function's check.

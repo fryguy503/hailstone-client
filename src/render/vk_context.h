@@ -55,6 +55,9 @@ struct SceneOptions {
     bool ambient_occlusion = true;    // screen-space AO (shaders/ao.frag) in frames that give set_ao_view
     float ao_strength = 0.85f;        // how far the AO darkens the scene (0..1)
     bool distance_blur = true;        // soften the far distance a little, with the AO's frames
+    // Draw the opaque geometry depth-only first, then colour it with the depth test equal and no depth write
+    // (render/zone_renderer.cpp draw_depth): a pixel covered by several surfaces is shaded once.
+    bool depth_prepass = false;
     // Bright light spreading into its surroundings (0 off .. 1 strong), with the AO's frames: a chain of
     // half-size levels of the scene (shaders/bloom_down.frag, bloom_up.frag) mixed in before the tonemap.
     float bloom = 0.5f;

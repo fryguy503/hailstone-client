@@ -128,6 +128,9 @@ struct MeshPart {
     std::uint32_t index_count = 0;
     std::uint32_t material = 0; // index into Mesh::materials
     bool solid = true;          // false: passable, no collision (EQG triangle flag bit 0)
+    // A level of detail (a replacement model's, assets/gltf_mesh.h): drawn only from `lod_near` to `lod_far` world
+    // units from the camera. lod_far 0: at every distance (the game's meshes).
+    float lod_near = 0.0f, lod_far = 0.0f;
 };
 
 struct Mesh {

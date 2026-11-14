@@ -71,7 +71,7 @@ constexpr Entry kCalls[] = {
     {"SpellSets", 0}, {"DrawMap", 0}, {"MapZoom", 0}, {"MapMouseDown", 0}, {"MapMouseUp", 0}, {"MapPanReset", 0},
     {"DrawMinimap", 0}, {"DrawZoneMap", 0}, {"DrawAtlas", 0}, {"AtlasIndex", 0}, {"AtlasPageData", 0}, {"AtlasTexture", 0}, {"ZoneLinks", 0}, {"ZoneRoute", 0},
     {"ZoneExits", 0}, {"ShowZoneMap", 0}, {"MapZoneShown", 0}, {"FindPathShown", 0}, {"ZoneName", 0}, {"GameTime", 0},
-    {"FindNpcs", 0}, {"FindCategories", 0},
+    {"FindNpcs", 0}, {"FindCategories", 0}, {"CompareItem", 0}, {"CompareSlotItem", 0}, {"CompareBagSlotItem", 0},
     {"LuaSocialRules", 0}, {"LuaSocial", 0}, {"LuaSocialFace", 0}, {"LuaSocialExport", 0},
     {"LuaSocialImport", 0}, {"LuaComplete", 0}, {"LuaSocialEditRequest", 0}, {"FreeSocial", 0}, {"SocialColors", 0},
     {"SocialEditorSocial", 0}, {"SocialLine", 0}, {"SlashCommands", 0}, {"CurrentSocial", 0},

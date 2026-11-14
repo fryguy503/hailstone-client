@@ -383,6 +383,22 @@ vec3 underwater_shafts(sampler2DArray map, vec4 cover, vec4 params, vec3 camera,
 // z how far this vertex bends at full strength (world units, 0 at the roots), w how much it flutters (its leaves).
 // `wind` is SceneLighting::wind. The plant leans with the wind, rocks as gusts roll across the zone in the wind's
 // direction, and its leaves shiver on their own.
+// An instanced replacement model's placement (render/zone_renderer.cpp GpuInstance; the zone's own geometry has the
+// identity, which leaves every value as it is): a point moved by the rows of its 3 x 4 transform, a normal by the
+// normal matrix's rows, and a plant's sway (sway_plant measured it in the model's own space, its foot at the origin)
+// to where the placement stands, its distances scaled with it.
+vec3 instance_point(vec3 p, vec4 row0, vec4 row1, vec4 row2) {
+    vec4 h = vec4(p, 1.0);
+    return vec3(dot(row0, h), dot(row1, h), dot(row2, h));
+}
+vec3 instance_normal(vec3 n, vec4 row0, vec4 row1, vec4 row2) {
+    vec3 m = vec3(dot(row0.xyz, n), dot(row1.xyz, n), dot(row2.xyz, n));
+    return dot(m, m) > 0.0 ? normalize(m) : n;
+}
+vec4 instance_sway(vec4 sway, vec4 row0, vec4 row1, float scale) {
+    return vec4(sway.xy + vec2(row0.w, row1.w), sway.zw * scale);
+}
+
 vec3 wind_offset(vec3 p, vec4 sway, vec4 wind, float t) {
     if (wind.z <= 0.0 || sway.z + sway.w <= 0.0) return vec3(0.0);
     float phase = fract(dot(sway.xy, vec2(0.0131, 0.0173))) * 6.2832;

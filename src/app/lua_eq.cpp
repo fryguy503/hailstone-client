@@ -666,8 +666,8 @@ int HasSlot(lua_State* L) {
 }
 
 // list = eq.AltCurrencies([showMissing])   -- { name, count, icon, maxStack } per alternate currency
-// (OP_AltCurrency; the names' dbstr type is not known: "Currency <n>"); without showMissing only those held and
-// shown. The order and filter are the InventoryWindow's AltCurr_PointList rows (eq.ListClick selects one there).
+// (OP_AltCurrency; the name is dbstr type 0x12 of the currency id, as CInventoryWnd's Alt. Currency list reads it,
+// "Currency <n>" when the game folder has none); without showMissing only those held and shown. The order and filter are the InventoryWindow's AltCurr_PointList rows (eq.ListClick selects one there).
 int AltCurrencies(lua_State* L) {
     auto& h = Impl::of(L).host;
     bool missing = lua_toboolean(L, 1) != 0;
@@ -677,7 +677,9 @@ int AltCurrencies(lua_State* L) {
     for (const auto& [id, a] : h.conn->alt_currencies()) {
         if (!missing && (a.amount == 0 || !a.entry.shown)) continue;
         lua_newtable(L);
-        lua_pushstring(L, ("Currency " + std::to_string(id)).c_str());
+        std::string name = h.conn->strings().db_string(id, 0x12);
+        if (name.empty()) name = "Currency " + std::to_string(id);
+        lua_pushstring(L, name.c_str());
         lua_setfield(L, -2, "name");
         lua_pushinteger(L, a.amount);
         lua_setfield(L, -2, "count");
@@ -2929,6 +2931,7 @@ void register_luasocial_api(lua_State* L, EqHost& host);  // app/lua_eq_luasocia
 void register_hotbar_api(lua_State* L, EqHost& host);     // app/lua_eq_hotbar.cpp
 void register_web_api(lua_State* L, EqHost& host);        // app/lua_eq_web.cpp
 void register_find_api(lua_State* L, EqHost& host);       // app/lua_eq_find.cpp
+void register_compare_api(lua_State* L, EqHost& host, std::vector<std::unique_ptr<StockWindow>>& windows); // app/lua_eq_compare.cpp
 int CompassStrips(lua_State* L);                     // app/lua_eq_misc.cpp
 int CompassMarkers(lua_State* L);                    // app/lua_eq_misc.cpp
 
@@ -2949,6 +2952,7 @@ void EqApi::register_functions(lua_State* L) {
     register_hotbar_api(L, impl_->host);
     register_web_api(L, impl_->host);
     register_find_api(L, impl_->host);
+    register_compare_api(L, impl_->host, impl_->windows);
     lua_pushlightuserdata(L, &impl_->host);
     lua_pushcclosure(L, CompassStrips, 1);
     lua_setfield(L, -2, "CompassStrips");

@@ -295,7 +295,7 @@ TEST_CASE("spawn search: MQ's matching rules") {
     net::GameConnectionTestAccess::group(*f.world.conn).active = true;
     // Raid: the player always; a member by name and class.
     CHECK(count("raid") == "1");
-    // Fellowship: EQEmu has none, nothing matches.
+    // A server has not supplied fellowship membership yet.
     CHECK(count("fellowship") == "0");
 
     // nopcnear: Groupie (in the group) does not count; without a group the player does.
@@ -337,6 +337,33 @@ TEST_CASE("spawn search: MQ's matching rules") {
     // No alert lists: nearalert finds nothing, the others ask nothing.
     CHECK(count("npc nearalert 1") == "0");
     CHECK(count("npc alert 1 noalert 2 notnearalert 3") == "2");
+}
+
+TEST_CASE("spawn search: fellowship membership and member corpses") {
+    Fixture f;
+    auto& c = *f.world.conn;
+    auto& w = net::GameConnectionTestAccess::world(c);
+    net::FellowshipState fellowship;
+    fellowship.id = 75;
+    net::FellowshipMember member;
+    member.character_id = 9876; member.name = "Tester";
+    fellowship.members.push_back(member);
+    auto src = mq::sources_of(c);
+    src.fellowship = &fellowship;
+    auto found = mq::search_spawns(mq::parse_spawn_search("pc fellowship"), w, src);
+    REQUIRE(found.size() == 1);
+    CHECK(found.front()->id == w.player_id);
+    member.character_id = 9877; member.name = "Groupie";
+    fellowship.members.push_back(member);
+    CHECK(mq::search_spawns(mq::parse_spawn_search("pc fellowship"), w, src).size() == 2);
+    f.world.add(99, "Groupie's corpse01", false, 48, {1, 1, 1});
+    w.spawns[99].is_corpse = true;
+    w.spawns[99].deity = 201; // MQ distinguishes a player's corpse by its nonzero deity
+    found = mq::search_spawns(mq::parse_spawn_search("pccorpse fellowship"), w, src);
+    REQUIRE(found.size() == 1);
+    CHECK(found.front()->id == 99);
+    fellowship.members.clear();
+    CHECK(mq::search_spawns(mq::parse_spawn_search("fellowship"), w, src).empty());
 }
 
 TEST_CASE("spawn search: xtarhater and the guild words") {

@@ -6,6 +6,7 @@
 -- dragging off it, puts a hotbutton for it on the cursor instead ("leftheld"), to be let go of over a hot bar.
 local T = dofile("lib/theme.lua")
 local tools = dofile("lib/itemtools.lua")
+local CL = dofile("lib/compare_lines.lua")
 local C = T.color
 
 local items = {}
@@ -36,7 +37,36 @@ local function leftPressFrame(key, onClick, hovered)
   end
 end
 
-function items.Tooltip(item, where)
+-- Hailstone's item comparison under the item's lines (docs/item-compare.md): `compare` is eq.Compare*'s table.
+-- Shift shows the other slot of a pair (ears, wrists, rings).
+local KIND = { good = "good", bad = "bad", mixed = "gold" } -- the palette's colour names (read as drawn: it may change)
+local function comparison(compare)
+  if not compare or eq.Option("item_compare") == 0 then return end
+  ui.Separator()
+  local index = (#compare.slots > 1 and ui.GetIO().shift) and 2 or 1
+  for _, line in ipairs(CL.lines(compare, index, { verdict = eq.Option("item_compare_verdict") ~= 0 })) do
+    local text, kind = line[1], line[2]
+    local col = KIND[kind] and C[KIND[kind]]
+    if col then ui.TextColored(col[1], col[2], col[3], 1, text)
+    elseif kind == "muted" then ui.TextDisabled(text)
+    else ui.Text(text) end
+  end
+  local other = CL.otherSlotName(compare, index)
+  if other then ui.TextDisabled((index == 1 and "Hold" or "Let go of") .. " Shift to compare with your " .. other) end
+end
+
+-- A tooltip of a name, the comparison (when there is one) and a footer: for rows that are not slots (the merchant's
+-- goods). nil compare: just the name and footer.
+function items.NameTooltip(name, compare, footer)
+  ui.BeginTooltip()
+  ui.Text(name)
+  comparison(compare)
+  if footer then ui.TextDisabled(footer) end
+  ui.EndTooltip()
+end
+
+-- items.Tooltip(item, where [, compare]): compare is eq.CompareItem's (or CompareSlotItem's ...) table or nil.
+function items.Tooltip(item, where, compare)
   ui.BeginTooltip()
   if item.magic then ui.TextColored(MAGIC[1], MAGIC[2], MAGIC[3], 1, item.name) else ui.Text(item.name) end
   local tags = {}
@@ -52,6 +82,7 @@ function items.Tooltip(item, where)
   ui.TextDisabled(string.format("Weight %.1f", item.weight or 0))
   if item.stackable then ui.TextDisabled(string.format("Stack %d / %d", item.count, item.stackSize)) end
   if item.bagSlots and item.bagSlots > 0 then ui.TextDisabled(item.bagSlots .. " slot container") end
+  comparison(compare)
   ui.TextDisabled("Hold right-click for details")
   ui.EndTooltip()
 end
@@ -60,7 +91,7 @@ end
 --   item: eq.Item(...) or nil; placeholder: a short name drawn in an empty slot ("Head"); where: the tooltip's place
 --   onClick(button [, outside]): "left", "leftheld" (with opts.held; true when a hotbutton went on the cursor) or a
 --   right-button phase. opts: selected (a ring the window sets), held (the left click on release, the hold or a drag
---   "leftheld")
+--   "leftheld"), compare (a function giving eq.Compare*'s table for the slot's item, asked only while hovered)
 -- items.HELD and items.SELECTED: opts tables for a caller to pass rather than a new one each slot each frame.
 items.HELD = { held = true }
 items.SELECTED = { selected = true }
@@ -108,7 +139,8 @@ function items.Slot(id, x, y, size, s, item, placeholder, where, onClick, opts)
   T.RightPressFrame(key, onClick, hovered)
   if opts.held then leftPressFrame(key, onClick, hovered) end
   if hovered and not ui.IsMouseDown(ui.Mouse.Right) then
-    if item then items.Tooltip(item, where) elseif where and where ~= "" then ui.SetTooltip(where) end
+    if item then items.Tooltip(item, where, opts.compare and opts.compare())
+    elseif where and where ~= "" then ui.SetTooltip(where) end
   end
 end
 
@@ -128,6 +160,7 @@ local function invSlot(slot, bagSlot)
     if tools.Intercept(rec.place, rec.item, button) then return end
     return eq.ClickSlot(slot, bagSlot, button, outside)
   end
+  rec.opts = { held = true, compare = function() return eq.CompareItem(slot, bagSlot) end }
   bySub[k] = rec
   return rec
 end
@@ -136,7 +169,7 @@ function items.InvSlot(slot, bagSlot, x, y, size, s, placeholder)
   local where = eq.SlotName(slot) or ""
   local rec = invSlot(slot, bagSlot)
   rec.item = item
-  items.Slot(rec.id, x, y, size, s, item, placeholder, where, rec.onClick, items.HELD)
+  items.Slot(rec.id, x, y, size, s, item, placeholder, where, rec.onClick, rec.opts)
   if item then tools.Marks(x, y, size, s, item, rec.place) end
   return item
 end

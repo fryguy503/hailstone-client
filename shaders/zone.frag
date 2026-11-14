@@ -59,6 +59,7 @@ layout(location = 6) in vec3 v_normal;
 layout(location = 7) in float v_fog; // oFog (zone.vert)
 layout(location = 8) in vec3 v_point;
 layout(location = 9) in vec3 v_rest; // the plants at rest, as the lights' shadow cubes hold them (point_shadow)
+layout(location = 10) flat in float v_lod_distance; // zone.vert: a level of detail's fades
 
 layout(location = 0) out vec4 o_color;
 
@@ -73,6 +74,7 @@ const uint kReflective = 256u; // the sky reflected: extra.z strength
 const uint kMolten = 512u;     // RegionLava whose texture's name says lava or magma: drawn as lava (modern)
 const uint kEnergy = 1024u;    // RegionLavaH (harbingers' towers): drawn as lava (modern)
 const uint kEnvMap = 2048u;    // water: slot 2 is its own environment, an octahedral map (a "noswap" cube)
+const uint kFlagLodFade = 4096u; // a level of detail: extra3 its band (coverage.glsl lod_fade_samples)
 
 vec4 tex(uint i, vec2 uv) { return texture(textures[nonuniformEXT(i)], uv); }
 
@@ -536,10 +538,17 @@ vec3 surface_shine(vec3 n, uint flags) {
 }
 
 void main() {
-    // The isometric camera's cut (game/iso_occlusion.h).
+    // The isometric camera's cut (game/iso_occlusion.h). The depth pre-pass (zone_depth.frag) must discard every pixel
+    // this shader discards, here and at the alpha test below: the colour pass over it tests depth equal and writes
+    // none (tests/depth_prepass_test.cpp checks the two call the same discard helpers).
     if (reveal_discard(v_world, gl_FragCoord.xy, scene.reveal_origin, scene.reveal_axis, scene.reveal_shape,
                        scene.reveal_roof))
         discard;
+    // A level of detail in its fade into the next (render/lod_bands.h): each sample shows one of the two. The mask is
+    // written on every path (an unwritten one is undefined), and zone_depth.frag writes the same.
+    int lod_samples = lod_fade_samples((pc.tex2.z & kFlagLodFade) != 0u, v_lod_distance, pc.extra3, gl_FragCoord.xy);
+    if (lod_samples == 0) discard;
+    gl_SampleMask[0] = lod_samples;
     uint mode = pc.tex2.y;
     uint flags = pc.tex2.z;
     bool unlit = (flags & kUnlit) != 0u;
