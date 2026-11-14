@@ -1,15 +1,14 @@
 # Hailstone's own flora rules (assets/zone_flora.h, docs/graphics.md "Zone flora"). The Plane of Growth: Arcstone's
-# tall flowering grass and ferns (arcstone.eqg) with the Moors' flowering grass (moors.eqg) among the shared grass.
-donor commonlands.eqg
+# tall flowering grass and ferns (arcstone.eqg) with the Moors' flowering grass (moors.eqg) among the lawn.
 donor arcstone.eqg
 donor moors.eqg
 max_slope 45
 scale 0.9 1.3
 include bare
 # Ground named as grass (jungle floors too): its olive and dark grass as well, only its paths and bare patches not.
-ground *jung* 12 +greenish grassblades:3 grass2:2 arcstone/grass1:1 arcstone/grass2:0.6 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
-ground *grass* 12 +greenish grassblades:3 grass2:2 arcstone/grass1:1 arcstone/grass2:0.6 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
-ground *gras* 12 +greenish grassblades:3 grass2:2 arcstone/grass1:1 arcstone/grass2:0.6 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
+ground *jung* 3.8 +greenish lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
+ground *grass* 3.8 +greenish lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
+ground *gras* 3.8 +greenish lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
 include stone
 # Anything else that is clearly green.
-ground * 12 +green grassblades:3 grass2:2 arcstone/grass1:1 arcstone/grass2:0.6 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
+ground * 3.8 +green lawn arcstone/grass1:1 arcstone/grass4:0.4 jungle1:0.4 grasslandflora:0.5 grasslandplant2:0.3
