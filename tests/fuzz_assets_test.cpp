@@ -12,6 +12,7 @@
 
 #include <zlib.h>
 
+#include "assets/character.h"
 #include "assets/eqg.h"
 #include "assets/eqg_character.h"
 #include "assets/gltf_mesh.h"
@@ -25,6 +26,7 @@
 #include "core/byte_io.h"
 #include "core/ini_file.h"
 #include "core/server_profile.h"
+#include "core/shared_file_cache.h"
 #include "nav/nav_mesh.h"
 #include "fuzz_support.h"
 #include "pfs_fixtures.h"
@@ -82,6 +84,22 @@ Bytes wld_all_types(std::uint64_t seed) {
         body.bytes(payload);
         b.add_raw(type, body.take());
     }
+    return b.build();
+}
+
+// One 0x12 track of `count` keys, packed (s16) or not (f32), with a 0x13 reference to it.
+Bytes wld_track(bool packed, std::uint32_t count, std::uint64_t seed) {
+    test::wld_fixtures::WldBuilder b;
+    Rng rng(seed);
+    ByteWriter body;
+    body.le<std::uint32_t>(packed ? 8 : 0);
+    body.le(count);
+    body.bytes(fuzz::random_bytes(rng, count * (packed ? 16u : 32u)));
+    b.add(0x12, b.str("FUZZ_TRACKDEF"), body);
+    ByteWriter ref;
+    ref.le<std::int32_t>(1);
+    ref.le<std::uint32_t>(0);
+    b.add(0x13, b.str("FUZZ_TRACK"), ref);
     return b.build();
 }
 
@@ -415,6 +433,29 @@ TEST_CASE("fuzz: WLD files and the meshes built from them") {
         }
         (void)w.string_at(-1000000);
         (void)w.find("x");
+    });
+}
+
+// The encoded-key path the shared cache's mapped WLDs take: tracks stay views into the file's bytes and each key is
+// decoded on read, by the WLD's own TrackFrames and by the animation tracks built from them.
+TEST_CASE("fuzz: WLD track keys read from the file's bytes") {
+    fuzz::QuietLog quiet;
+    std::vector<Bytes> seeds = {wld_track(true, 3, 1), wld_track(false, 3, 2), wld_track(true, 1, 3), wld_all_types(3)};
+    sweep("WldFile encoded tracks", seeds, 28, 700, [](std::span<const std::byte> d) {
+        const auto w = wld::WldFile::parse(ImmutableFileBytes::owned(Bytes(d.begin(), d.end())), "fuzz", true);
+        for (const auto& f : w.fragments()) {
+            const auto* def = f.get<wld::TrackDef>();
+            if (!def) continue;
+            float sum = 0.0f;
+            for (const auto& key : def->frames) sum += key.scale + key.translation.x + key.rotation.w;
+            if (def->frames.size() != 0) sum += def->frames.back().scale;
+            const auto track = AnimationTrack::from_wld(def->frames, glm::vec3(0.5f));
+            CHECK(track.size() == def->frames.size());
+            for (std::size_t i = 0; i < track.size(); ++i) sum += track[i].scale.x;
+            const auto bones = BoneFrames::from_wld(def->frames);
+            for (const auto& pose : bones) sum += pose.translation.y;
+            (void)sum;
+        }
     });
 }
 

@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "assets/character.h"
 #include "assets/pfs.h"
 #include "assets/texture.h"
 #include "assets/wld.h"
@@ -16,6 +17,7 @@
 #include "core/addon_manifest.h"
 #include "core/addon_source.h"
 #include "core/binary_header.h"
+#include "core/shared_file_cache.h"
 #include "core/update_manifest.h"
 #include "core/zip_read.h"
 #include "net/session_codec.h"
@@ -78,6 +80,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
             [in] { return std::vector<std::byte>(in.begin(), in.end()); }, "fuzz");
         for (const auto& f : w.fragments())
             if (const auto* m = f.get<hailstone::assets::wld::MeshDef>()) (void)hailstone::assets::wld::build_mesh(w, *m, f.name);
+        // The shared cache's path: track keys stay encoded in the file's bytes and are decoded on read.
+        const auto encoded = hailstone::assets::wld::WldFile::parse(
+            hailstone::ImmutableFileBytes::owned(std::vector<std::byte>(in.begin(), in.end())), "fuzz", true);
+        for (const auto& f : encoded.fragments())
+            if (const auto* def = f.get<hailstone::assets::wld::TrackDef>()) {
+                const auto track = hailstone::assets::AnimationTrack::from_wld(def->frames);
+                for (std::size_t i = 0; i < track.size(); ++i) (void)track[i];
+            }
 #elif defined(HAILSTONE_FUZZ_TEXTURE)
         (void)hailstone::assets::decode_texture(in);
 #elif defined(HAILSTONE_FUZZ_SOE)
