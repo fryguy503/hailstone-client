@@ -65,6 +65,8 @@ void GameConnection::open_merchant(std::uint32_t npc_id) {
         chat(ChatEvent::Kind::System, strings_.format(1466, std::vector<std::string>{}));
     }
     merchant_ = MerchantSession{};
+    merchant_->serial = ++npc_session_serial_;
+    merchant_check_ms_ = 0;
     merchant_->npc_id = npc_id;
     merchant_->name = game::display_name(it->second.name);
     MerchantClick m;
@@ -96,6 +98,70 @@ void GameConnection::update_merchant() {
     if (!in_range && merchant_->pending < 1) {
         log::info("merchant: {} is out of reach, closing", merchant_->name);
         close_merchant();
+    }
+}
+
+void GameConnection::update_npc_interactions() {
+    update_merchant();
+    update_bank();
+    update_barter();
+    // The other service windows' OnProcessFrame checks: PlayerClient_IsWithinInteractRange(npc, 0, 20.0) @0x5a06f0,
+    // CDisplay::PlayerDistance with z scale 1 (3D) of at most 20 (exactly 20 stays open); a missing NPC or local
+    // player fails it. distance_to gives 1e9 for either.
+    const std::int64_t now = now_ms();
+    auto out_of_reach = [&](std::uint32_t npc) { return distance_to(npc) > kInteractRange; };
+    // Every 500 ms from `next` (NextRefreshTime: due once now reaches it, then now + 500).
+    auto due = [&](std::int64_t& next) {
+        if (now < next) return false;
+        next = now + 500;
+        return true;
+    };
+    // CNewPointMerchantWnd::OnProcessFrame @0x6fba10 (alternate currency) and CPointMerchantWnd::OnProcessFrame
+    // @0x719e90 (adventure merchants).
+    if (point_merchant_.npc && due(npc_checks_.point_merchant) && out_of_reach(point_merchant_.npc))
+        close_point_merchant();
+    if (adventure_merchant_.npc && due(npc_checks_.adventure_merchant) && out_of_reach(adventure_merchant_.npc))
+        close_adventure_merchant();
+    // CTributeMasterWnd::OnProcessFrame @0x787ae0, one window for both masters: it stays open while its master is
+    // pinstActiveMerchant and either within reach or an item request is pending (EverQuestinfo::IsItemPending > 0,
+    // this client's model of it: transact_state().item_pending); a missing master closes it regardless. Closing
+    // ends no tribute benefit and drops no outstanding donation reply.
+    if (std::uint32_t master = tribute_.master_id ? tribute_.master_id : guild_tribute_.master_id;
+        master && due(npc_checks_.tribute)) {
+        const bool present = world_.spawns.contains(master) && world_.player();
+        if (!present || (out_of_reach(master) && transact_state().item_pending < 1)) {
+            if (tribute_.master_id) close_tribute_master();
+            if (guild_tribute_.master_id) close_guild_tribute_master();
+        }
+    }
+    // CTrainWnd::OnProcessFrame @0x7812a0: the open window only. A request still waiting is not checked here;
+    // Handle_OP_GMTraining @0x4b49c0 ignores an answer whose guildmaster is gone or out of reach. Handle_OP_Death
+    // @0x532b50 closes the window when the guildmaster dies, which the corpse test stands in for.
+    if (training_ && due(npc_checks_.trainer)) {
+        auto it = world_.spawns.find(training_->trainer_id);
+        if (it == world_.spawns.end() || it->second.is_corpse || out_of_reach(training_->trainer_id)) close_trainer();
+    }
+    // AdventureMgr_Process @0x41fa80: only in states 1 and 2 (the recruiter's words or an offer up), once more than
+    // 500 ms have passed since the state was set or last checked; on an adventure (states 3, 4) the window stays.
+    // Hiding the window runs AboutToHide, which declines an offer up (close_adventure_recruiter).
+    if (adventure_.recruiter && (recruiter_state_ == 1 || recruiter_state_ == 2) &&
+        now > npc_checks_.recruiter + 500) {
+        npc_checks_.recruiter = now;
+        if (out_of_reach(adventure_.recruiter)) close_adventure_recruiter();
+    }
+    // The mercenary liaison window's observer (0x6eb560, vftable 0x9f1ef8 slot 1): a liaison id set and the
+    // liaison missing or beyond reach hides it. What calls the observer, and how often, is not traced
+    // (docs/unknowns.md); this client checks every update.
+    if (merc_windows_[0] && merc_.liaison_id && out_of_reach(merc_.liaison_id)) set_merc_window_open(0, false);
+    // CTradeWnd::OnProcessFrame @0x780b50: every 500 ms while trading, the partner within its avatar height + 20;
+    // else CTradeWnd_CancelAndClose, so the server returns the offer. Hand-ins only: the original checks player
+    // trades the same way, which this client does not do yet (docs/todo.md). Handle_OP_Death also cancels a trade
+    // with the partner who dies, which the corpse test stands in for.
+    if (trade_ && trade_->with_npc && trade_->open && due(npc_checks_.trade)) {
+        auto it = world_.spawns.find(trade_->partner_id);
+        if (it == world_.spawns.end() || it->second.is_corpse ||
+            distance_to(trade_->partner_id) > it->second.heights.avatar_height + kInteractRange)
+            trade_cancel();
     }
 }
 
@@ -739,10 +805,15 @@ bool GameConnection::open_point_merchant(std::uint32_t npc) {
     if (state_ != ConnectionState::InZone || it == world_.spawns.end() || !me || it->second.class_id != 70) return false;
     glm::vec3 at = motion_known_ ? position_ : me->position;
     if (glm::distance(at, it->second.position) >= kInteractRange) return false;
-    point_merchant_ = {};
+    close_point_merchant();
     point_merchant_.npc = npc;
     send_zone(encode_alt_currency_merchant_request(npc));
     return true;
+}
+
+void GameConnection::close_point_merchant() {
+    point_merchant_ = {};
+    discard_questions([](const Confirmation& c) { return c.id == kConfirmPointBuy; });
 }
 
 void GameConnection::point_merchant_buy(std::uint32_t item_id) {
@@ -819,11 +890,16 @@ bool GameConnection::open_adventure_merchant(std::uint32_t npc) {
     if (!type) return false;
     glm::vec3 at = motion_known_ ? position_ : me->position;
     if (glm::distance(at, it->second.position) >= kInteractRange) return false;
-    adventure_merchant_ = {};
+    close_adventure_merchant();
     adventure_merchant_.npc = npc;
     adventure_merchant_.type = type;
     send_zone(encode_adventure_merchant_request(type, npc));
     return true;
+}
+
+void GameConnection::close_adventure_merchant() {
+    adventure_merchant_ = {};
+    discard_questions([](const Confirmation& c) { return c.id == kConfirmAdventureBuy; });
 }
 
 void GameConnection::adventure_merchant_buy(std::uint32_t item_id) {

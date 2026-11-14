@@ -33,7 +33,7 @@ ui.window("Loot", function()
       local it = eq.SlotItem(LOOT, "LW_LootSlot" .. i)
       if it then items[#items + 1] = { i = i, item = it } end
     end
-    local focusedItem
+    local focusedItem, focusedChild
     if #items == 0 then
       T.font(24)
       T.draw(x0, y0 + T.px(20), "Nothing left on this corpse.", C.dim)
@@ -47,6 +47,7 @@ ui.window("Loot", function()
       local clicked, focused = T.slot("##loot" .. e.i, e.item, size, {}, pad)
       if focused then
         focusedItem, anyFocused, focusedAt = e.item, true, n
+        focusedChild = child
         if W.pressed("x") then eq.ClickChild(LOOT, child, "left") end
         if W.pressed("y") then eq.ClickChild(LOOT, child, "rightheld") end
       end
@@ -55,7 +56,8 @@ ui.window("Loot", function()
     end
     -- the focused item, on the right
     local gx1 = x0 + cols * size + (cols - 1) * gap
-    I.summary(focusedItem, nil, gx1 + T.px(24), y0, x1, y1 - T.px(90))
+    I.summary(focusedItem, nil, gx1 + T.px(24), y0, x1, y1 - T.px(90),
+      focusedChild and eq.CompareSlotItem(LOOT, focusedChild) or nil)
     -- Loot All, Link All and Done
     local wx, wy = ui.GetWindowPos()
     local bh = T.px(64)

@@ -145,6 +145,7 @@ void GameConnection::reload_game_files() {
 GameConnection::~GameConnection() { disconnect(); }
 
 void GameConnection::fail(std::string message) {
+    reset_fellowship();
     reset_achievements();
     reset_rewards();
     log::warn("connection: {}", message);
@@ -175,6 +176,7 @@ void GameConnection::chat(ChatEvent::Kind kind, std::string text, std::uint32_t 
 }
 
 void GameConnection::start(const WorldTicket& ticket) {
+    reset_fellowship();
     reset_achievements();
     reset_rewards();
     reset_tribute_donations();
@@ -321,6 +323,7 @@ void GameConnection::update() {
     attack_hold_tick();
     apply_poison_tick();
     guild_invite_tick();
+    fellowship_invite_tick();
     guild_bank_tick();
     real_estate_tick();
     if (alarm_due_ms_ && now_ms() >= alarm_due_ms_) {
@@ -362,8 +365,7 @@ void GameConnection::update() {
         send_position(false);
         update_afk();
         update_spells();
-        update_merchant();
-        update_bank();
+        update_npc_interactions();
         update_loot();
         update_merc();
         update_inspect();
@@ -681,10 +683,12 @@ void GameConnection::handle_world(const AppPacket& p) {
         doors_.clear();
         ground_objects_.clear();
         world_container_.reset();
+        world_container_requested_.reset();
         close_tradeskill();
         switch_clock_ = {};
         reset_group_for_zone();
         reset_social_for_zone();
+        reset_fellowship(true);
         reset_commerce_for_zone();
         reset_tribute_donations();
         reset_progress_for_zone();
@@ -704,6 +708,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         guild_bank_.selected = -1;
         adventure_.recruiter = 0;
         adventure_.offer.clear();
+        recruiter_state_ = 0;
         guild_tribute_.master_id = 0;
         guild_platinum_pending_ = 0;
         state_ = ConnectionState::ZoneConnecting;
@@ -886,7 +891,8 @@ void GameConnection::apply_spawn(const Spawn& s) {
     out.walk_speed = s.walk_speed;
     out.run_speed = s.run_speed;
     set_spawn_motion(out, s.motion);
-    out.fly_mode = s.fly_mode;
+    out.fly_mode = s.fly_mode; // UnSerializeSpawn's PlayerPhysics_SetFlyMode
+    ++out.fly_mode_sets;
     out.hp_percent = s.hp_percent;
     out.stand_state = s.stand_state ? s.stand_state : 100;
     out.targetable = s.targetable;
@@ -1253,11 +1259,14 @@ void GameConnection::handle_zone(const AppPacket& p) {
     }
     Op op = from_wire(p.opcode);
     handle_ability(op, p); // only looks (net/game_connection_abilities.cpp)
+    if (handle_fellowship(p)) return;
     switch (op) {
     case Op::PlayerProfile:
         profile_ = decode_player_profile(p);
         if (profile_) drunkenness_ = static_cast<std::int32_t>(std::min(profile_->intoxication, 200u));
         if (profile_) {
+            fellowship_.vitality.normal = profile_->fellowship_vitality_normal;
+            fellowship_.vitality.aa = profile_->fellowship_vitality_aa;
             pstatus_.hp = profile_->cur_hp;
             pstatus_.mana = profile_->mana;
             pstatus_.endurance = profile_->endurance;
@@ -1932,6 +1941,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 chat(ChatEvent::Kind::System, "Zoning...");
                 send_zone(encode_delete_own_spawn(world_.player_id));
                 state_ = ConnectionState::Zoning;
+                reset_fellowship(true);
                 reset_achievements();
                 reset_rewards();
                 status_ = "Leaving the zone";
@@ -2240,6 +2250,7 @@ void GameConnection::leave_zone_dropped() {
         if (raid_.active) raid_.target.clear();
         raid_.clear();
         raid_.inviter.clear(); // ResetRaid's state 1 ends an invitation too
+        reset_fellowship();
         capture_bank();
         state_ = ConnectionState::Disconnected;
         error_ = "Camped out.";
@@ -2283,6 +2294,7 @@ void GameConnection::simulate_link_loss() {
 }
 
 void GameConnection::disconnect() {
+    reset_fellowship();
     capture_bank();
     reset_achievements();
     reset_rewards();
@@ -2728,7 +2740,10 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
                 case 3: s->invis_rank = static_cast<std::int32_t>(a->parameter); break;
                 case 5: s->light_type = static_cast<std::uint8_t>(a->parameter); break;
                 case 18: s->linkdead = a->parameter != 0; break;
-                case 19: s->fly_mode = static_cast<std::uint8_t>(a->parameter); break; // PlayerPhysics_SetFlyMode
+                case 19: // PlayerPhysics_SetFlyMode
+                    s->fly_mode = static_cast<std::uint8_t>(a->parameter);
+                    ++s->fly_mode_sets;
+                    break;
                 case 20: s->gm = a->parameter != 0; break;
                 case 21:
                     s->anon = static_cast<std::uint8_t>(a->parameter);

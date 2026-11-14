@@ -383,6 +383,10 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     if (o == "npc_names") return npc_names_ ? 1 : 0;
     // Hailstone: NPC names in their consider colour, on by default (draw_nameplates).
     if (o == "con_name_colour") return con_name_colour_ ? 1 : 0;
+    // Hailstone: the item comparison in the item tooltips and displays (docs/item-compare.md), and its verdict; on by
+    // default. Read by the UI packs only.
+    if (o == "item_compare") return config_.get_bool("items.compare", true) ? 1 : 0;
+    if (o == "item_compare_verdict") return config_.get_bool("items.compare_verdict", true) ? 1 : 0;
     // Hailstone: the target's name on a dark plate edged in its colour with a bobbing marker (draw_nameplates), on by default.
     if (o == "target_plate_highlight") return target_plate_highlight_ ? 1 : 0;
     // Hailstone: names a nearer name covers fade (draw_nameplates), on by default.
@@ -530,6 +534,11 @@ void ClientApp::set_option_value(std::string_view o, int v) {
         config_.save(config_path_);
         return;
     }
+    if (o == "item_compare" || o == "item_compare_verdict") {
+        config_.set_bool(o == "item_compare" ? "items.compare" : "items.compare_verdict", v != 0);
+        config_.save(config_path_);
+        return;
+    }
     if (o == "con_name_colour") {
         con_name_colour_ = v != 0;
         config_.set_bool("display.con_name_colour", v != 0);
@@ -618,8 +627,8 @@ void ClientApp::set_option_value(std::string_view o, int v) {
         return;
     }
     if (o == "texture_pack") {
-        // From the next start: the zone loaders read the overrides on their own threads (TextureOverrides has no
-        // lock), so the folder is indexed only at start (client_app_internal.h).
+        // From the next start (or the character's next zone-in, with its own settings): textures already loaded
+        // stay as they are, so the pack changes where the folder is indexed (apply_settings).
         auto value = assets::texture_pack_value(v, assets::texture_pack_names(platform::textures_dir()));
         if (!value) return;
         config_.set("display.texture_folder", *value);
@@ -699,6 +708,9 @@ void ClientApp::apply_settings() {
     flora_reach_ = std::clamp(static_cast<float>(config_.get_int("display.flora_distance", static_cast<int>(render::kFloraReach))),
                               render::kFloraReach, render::kMaxFloraReach);
     neighbour_zones_ = config_.get_bool("display.neighbour_zones", true);
+    horizon_hills_ = config_.get_bool("display.horizon_hills", true);
+    neighbour_tint_ = config_.get_bool("display.neighbour_tint", false);
+    tree_detail_ = std::clamp(config_.get_int("display.tree_detail", 100), 50, 200);
     ring_cues_ = config_.get_bool("display.target_ring_cues", true);
     ring_xray_ = config_.get_bool("display.target_ring_xray", false);
     load_ring_colors();

@@ -54,6 +54,7 @@ const char* toggle_command_window(int command) {
         {C::CMD_TOGGLETASKWIN, "TaskWnd"},         {C::TOGGLE_GUILDMGMTWIN, "GuildManagementWnd"},
         {C::CMD_TOGGLE_REWARD_SELECTION_WIN, "RewardSelectionWnd"},
         {C::CMD_ACHIEVEMENT_WINDOW, "AchievementsWnd"},
+        {C::TOGGLE_FELLOWSHIPWIN, "FellowshipWnd"},
         {C::TOGGLE_RAIDWIN, "RaidWindow"},         {C::TOGGLE_FRIENDSWIN, "FriendsWindow"},
         {C::TOGGLE_MAPWIN, "MapViewWnd"},
         {C::TOGGLE_MAILWIN, "MailWindow"},         {C::TOGGLE_MAILCOMPWIN, "MailCompositionWindow"},

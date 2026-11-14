@@ -82,6 +82,14 @@ public:
     virtual void drop_selection() = 0;
 };
 
+std::function<bool()> merchant_quantity_owner(EqHost& host) {
+    const auto* conn = host.conn;
+    const auto serial = conn && conn->merchant() ? conn->merchant()->serial : 0;
+    return [&host, conn, serial] {
+        return host.conn == conn && conn && conn->merchant() && conn->merchant()->serial == serial;
+    };
+}
+
 // CInventoryWnd::ClickedMoneyButton (GameConnection::inventory_money_button): coin on the
 // cursor goes into the inventory as this button's coin; otherwise the quantity dialog opens at the button's centre
 // with max = start = the inventory's coins of that type (none: nothing; one, Shift: all, Ctrl: 1 at once) and its
@@ -89,7 +97,7 @@ public:
 // (GameConnection::parcel_coin_button): the bag item picked is let go and, with coins of that type, the button is
 // outlined and the merchant window's selection cleared. Hailstone: there the answer is the money picked for sending
 // (GameConnection::set_parcel_money; nothing moves until the page sends it), as there is no SendMoneyWnd to drop
-// the cursor's coin on; were the merchant gone by the answer, the coin comes onto the cursor as the original's does.
+// the cursor's coin on. Its question closes with that merchant session.
 void inventory_money_click(EqHost& host, int coin, ParcelPage* page) {
     const auto& r = host.click_rect;
     std::array<std::int32_t, 4> rect{static_cast<std::int32_t>(r[0]), static_cast<std::int32_t>(r[1]),
@@ -105,6 +113,7 @@ void inventory_money_click(EqHost& host, int coin, ParcelPage* page) {
         host.conn->parcel_coin_button(coin, q.max);
         if (q.max > 0) page->drop_selection();
     }
+    std::function<bool()> owner = parcels ? merchant_quantity_owner(host) : std::function<bool()>{};
     open_quantity(host, q, [&host, coin, parcels](std::int32_t n) {
         if (!host.conn) return;
         if (parcels && host.conn->merchant() && host.conn->merchant()->open) {
@@ -112,7 +121,7 @@ void inventory_money_click(EqHost& host, int coin, ParcelPage* page) {
             return;
         }
         host.conn->inventory_money_button(coin, n, nullptr);
-    });
+    }, std::move(owner));
 }
 
 const ChildArt kNone{ChildArt::None, {}, {}};
@@ -159,8 +168,8 @@ public:
 
     // The Alt. Currency page (not decoded; EQEmu's OP_AltCurrency): icon, name and amount per currency the server
     // listed as shown (Display Missing adds the ones at 0). Create Item takes some out onto the cursor (the quantity
-    // dialog, at most a stack), Reclaim puts the cursor's currency item back (OP_AltCurrencyReclaim). The names'
-    // dbstr type is not known, so a currency shows as "Currency <n>".
+    // dialog, at most a stack), Reclaim puts the cursor's currency item back (OP_AltCurrencyReclaim). A name is dbstr
+    // type 0x12 of the currency id (CInventoryWnd's list fill), "Currency <n>" when the game folder has none.
     const ListData* list(EqHost& host, std::string_view id) override {
         if (!host.conn || id != "AltCurr_PointList") return nullptr;
         currencies_ = {};
@@ -170,7 +179,9 @@ public:
         for (std::uint32_t cid : listed(*host.conn)) {
             const auto& a = host.conn->alt_currencies().at(cid);
             ListRow r;
-            r.texts = {"", std::format("Currency {}", cid), std::to_string(a.amount)};
+            std::string name = host.conn->strings().db_string(cid, 0x12);
+            if (name.empty()) name = std::format("Currency {}", cid);
+            r.texts = {"", std::move(name), std::to_string(a.amount)};
             if (host.textures) r.icon = host.textures->item_icon(a.entry.icon);
             if (cid == selected_) currencies_.selected = static_cast<int>(currencies_.rows.size());
             currencies_.rows.push_back(std::move(r));
@@ -266,6 +277,7 @@ struct Containers {
     bool all_closed = true;
     // +0x2011, the same for the bank's bags (0x698d60, CMD_TOGGLE_BANK_BAGS), also set by the constructor.
     bool bank_all_closed = true;
+    std::uint64_t bank_serial = 0;
     void toggle(const net::ItemSlot& s) {
         for (auto it = open.begin(); it != open.end(); ++it)
             if (it->same(s)) {
@@ -275,7 +287,16 @@ struct Containers {
         open.push_back(s);
     }
     void prune(const net::GameConnection& c) {
+        // The bank window hiding (CBankWnd::OnShow @0x627760) runs CContainerMgr::CloseAllContainers @0x65d4e0:
+        // every container closes, carried bags too, and 0x697e40 sets both all-closed flags.
+        const auto serial = c.bank() ? c.bank()->serial : 0;
+        if (bank_serial != 0 && serial != bank_serial) {
+            open.clear();
+            all_closed = bank_all_closed = true;
+        }
+        bank_serial = serial;
         std::erase_if(open, [&](const net::ItemSlot& s) {
+            if ((s.type == net::kInvBank || s.type == net::kInvSharedBank) && !c.bank()) return true;
             const net::Item* bag = c.inventory().at(s);
             return !bag || !bag->is_bag();
         });
@@ -294,6 +315,7 @@ Containers& containers() {
 // closes a tradeskill window showing it too.
 void toggle_container(EqHost& host, const net::ItemSlot& s) {
     auto& cs = containers();
+    if (host.conn) cs.prune(*host.conn);
     bool open = std::any_of(cs.open.begin(), cs.open.end(), [&](const net::ItemSlot& o) { return o.same(s); });
     if (!open && host.conn && host.conn->container_opens_tradeskill(s, ctrl())) {
         host.conn->open_tradeskill_bag(s);
@@ -346,6 +368,7 @@ void toggle_all_bags(EqHost& host) {
 // (CContainerMgr::CloseContainer), then the flag is set.
 void toggle_all_bank_bags(EqHost& host) {
     auto& cs = containers();
+    if (host.conn) cs.prune(*host.conn);
     if (cs.bank_all_closed) {
         if (!host.conn || !host.conn->bank()) return;
         auto open = [&](std::int16_t type, int slots) {
@@ -646,6 +669,16 @@ public:
         return &data_;
     }
 
+    // Hailstone: "ItemList:<row>", the merchant's item on that row of the list as last read (eq.SlotItem,
+    // eq.CompareSlotItem: the item comparison of a row under the mouse).
+    const net::Item* slot_item(EqHost& host, std::string_view id) override {
+        const auto* m = session(host);
+        const int row = index_after(id, "ItemList:");
+        if (!m || row < 0 || row >= static_cast<int>(slots_.size())) return nullptr;
+        auto it = m->items.find(slots_[static_cast<std::size_t>(row)]);
+        return it == m->items.end() ? nullptr : &it->second;
+    }
+
     bool list_click(EqHost& host, std::string_view id, int row, bool right, int) override {
         if (id != "ItemList" || row < 0 || row >= static_cast<int>(slots_.size())) return false;
         selected_ = slots_[static_cast<std::size_t>(row)];
@@ -676,7 +709,7 @@ public:
                 std::uint32_t slot = *s;
                 open_quantity(host, q, [&host, slot](std::int32_t n) {
                     if (host.conn && n > 0) host.conn->merchant_buy(slot, static_cast<std::uint32_t>(n));
-                });
+                }, merchant_quantity_owner(host));
             }
         } else if (id == "MW_Sell_Button") {
             // HandleSell: max = start = the stack count (1 unstackable).
@@ -690,7 +723,7 @@ public:
                     net::ItemSlot where = *m->selected;
                     open_quantity(host, q, [&host, where](std::int32_t n) {
                         if (host.conn && n > 0) host.conn->merchant_sell(where, static_cast<std::uint32_t>(n));
-                    });
+                    }, merchant_quantity_owner(host));
                 }
             }
         } else if (id == "MW_Send_Button") {
@@ -706,7 +739,7 @@ public:
                         game::QuantityOpen q;
                         q.max = q.start = static_cast<std::int32_t>(it->stack_count);
                         at_button(host, q);
-                        open_quantity(host, q, send);
+                        open_quantity(host, q, send, merchant_quantity_owner(host));
                     } else {
                         send(1);
                     }

@@ -19,6 +19,7 @@
 
 #include "assets/eqg.h"
 #include "assets/flora.h"
+#include "assets/model_overrides.h"
 #include "assets/texture.h"
 #include "assets/wld.h"
 #include "assets/zone.h"
@@ -1055,7 +1056,8 @@ Zone load_eqg_zone(const GameDir& game, std::string_view name_view, const ZoneLo
     if (!path) throw std::runtime_error("zone archive " + name + ".eqg not found");
     Zone zone;
     zone.name = name;
-    Source src{std::make_shared<const PfsArchive>(PfsArchive::open(*path, PfsArchive::storage_for(game, *path))), &game};
+    Source src{std::make_shared<const PfsArchive>(PfsArchive::open(
+                   *path, PfsArchive::storage_for(game, *path), game.shared_file_cache())), &game};
     zone.archives.push_back(src.archive);
     auto zon = find_declaration(src, name);
     check();
@@ -1137,6 +1139,7 @@ Zone load_zone(const GameDir& game, std::string_view name, const ZoneLoadCancel&
         log::info("{}: loading the live client's revamped {}.eqg, the zone the server runs", lname, lname);
     }
     if (std::size_t n = add_environment_emitters(game, zone)) log::info("{}: {} environment emitters", zone.name, n);
+    apply_model_overrides(zone);
     return zone;
 }
 

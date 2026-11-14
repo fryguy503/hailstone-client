@@ -399,7 +399,11 @@ private:
 class TextEntryWindow : public StockWindow {
 public:
     TextEntryWindow() : StockWindow("TextEntryWnd", false) {}
+    void frame(EqHost& host) override {
+        if (host.text_entry && host.text_entry->owner_valid && !host.text_entry->owner_valid()) host.text_entry.reset();
+    }
     bool shown(EqHost& host) override {
+        frame(host);
         if (host.text_entry && !was_) move_ = centred(host, "TextEntryWnd");
         was_ = host.text_entry.has_value();
         return was_;
@@ -408,18 +412,21 @@ public:
         if (!show) host.text_entry.reset();
     }
     void child(EqHost& host, std::string_view id, Child& out) override {
+        frame(host);
         if (!host.text_entry) return;
         if (id == "Prompt") out.text = host.text_entry->prompt;
         else if (id == "Entry") out.text = host.text_entry->text;
         else if (id == "OK") out.enabled = static_cast<int>(host.text_entry->text.size()) >= host.text_entry->min_chars;
     }
     bool set_text(EqHost& host, std::string_view id, const std::string& text) override {
+        frame(host);
         if (!host.text_entry || id != "Entry") return false;
         int max = host.text_entry->max_chars;
         host.text_entry->text = max > 0 ? text.substr(0, static_cast<std::size_t>(max)) : text;
         return true;
     }
     bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
+        frame(host);
         if (!host.text_entry || button != "left") return false;
         if (id == "OK" || id == "Entry") {
             if (static_cast<int>(host.text_entry->text.size()) < host.text_entry->min_chars) return true;

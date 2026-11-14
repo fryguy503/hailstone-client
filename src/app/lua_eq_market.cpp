@@ -719,8 +719,14 @@ public:
         q.max = static_cast<std::int32_t>(*max);
         q.start = 1;
         at_click_centre(host, q);
+        const auto* conn = host.conn;
+        const auto serial = conn->barter_merchant().serial;
+        const auto selected = conn->barter_merchant().selected_slot;
         open_quantity(host, q, [&host](std::int32_t v) {
             if (host.conn && v > 0) host.conn->barter_merchant_sell(static_cast<std::uint32_t>(v));
+        }, [&host, conn, serial, selected] {
+            return host.conn == conn && conn && conn->barter_merchant().buyer_id &&
+                   conn->barter_merchant().serial == serial && conn->barter_merchant().selected_slot == selected;
         });
         return true;
     }

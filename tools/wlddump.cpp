@@ -43,8 +43,8 @@ void print_histogram(const wld::WldFile& w) {
     std::size_t meshes = 0, uncoloured = 0, no_colours = 0;
     std::map<int, std::size_t> alpha_hist; // colour alpha / 32
     for (const auto& f : w.fragments()) {
-        if (const auto* m = std::get_if<wld::MaterialDef>(&f.data)) ++mat_flags[m->flags];
-        if (const auto* md = std::get_if<wld::MeshDef>(&f.data)) {
+        if (const auto* m = f.get<wld::MaterialDef>()) ++mat_flags[m->flags];
+        if (const auto* md = f.get<wld::MeshDef>()) {
             ++meshes;
             bool any = false;
             for (auto c : md->colors) {
@@ -55,7 +55,7 @@ void print_histogram(const wld::WldFile& w) {
             if (!any) ++uncoloured;
             for (const auto& p : md->polygons) ++poly_flags[p.flags];
         }
-        if (const auto* g = std::get_if<wld::GlobalAmbient>(&f.data))
+        if (const auto* g = f.get<wld::GlobalAmbient>())
             std::printf("    global ambient (0x35): %08x (stored B,G,R,A)\n", g->color);
     }
     if (!mat_flags.empty()) {
@@ -140,7 +140,7 @@ std::map<std::string, std::size_t> unplaced(const Zone& z) {
     if (z.archives.empty() || !z.archives.front()->contains("objects.wld")) return out;
     auto w = wld::WldFile::parse(*z.archives.front()->read("objects.wld"), "objects.wld");
     for (const auto& f : w.fragments()) {
-        const auto* inst = std::get_if<wld::ActorInstance>(&f.data);
+        const auto* inst = f.get<wld::ActorInstance>();
         if (!inst || !inst->has_location || inst->position.z < -32767.0f) continue;
         auto name = w.string_at(inst->actor);
         if (!z.objects.contains(name)) ++out[name];

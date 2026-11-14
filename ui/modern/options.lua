@@ -292,6 +292,9 @@ local function displayTab()
   end)
   -- Hailstone's isometric camera (docs/isometric.md): the iso_* options, also /camera.
   section("Isometric Camera", function()
+    check("click_move", "Click to Move in Every Camera",
+      "Click the ground to walk there, and click a door, an item or an NPC out of reach to walk to it and use it, "
+      .. "in the other cameras too. The isometric camera always moves this way.")
     local deg = function(v) return v .. "°" end
     check("iso_camera", "Isometric Camera",
       "Look down on your character from above and to one side, and click to move. /camera iso and /camera behind "
@@ -380,6 +383,10 @@ local function displayTab()
     check("npc_names", "Show NPC Names", "The names over NPCs.")
     combo("find_trail_style", "Find Trail", { "Gold line (default)", "Rainbow trail" },
       "Choose the gold ground line or thin, winding rainbow strands hovering a few feet above the terrain along your Find route.")
+    check("item_compare", "Compare Items",
+      "Hailstone: an item's tooltip and its details show what wearing it instead of what you wear would change: your HP, mana, AC, stats and resists as the game works them out, caps included.")
+    check("item_compare_verdict", "Upgrade Verdict",
+      "Hailstone: the comparison also says Upgrade, Downgrade or Mixed, weighing the changes by what matters for your class. It is a guide: the numbers are always shown.")
     check("con_name_colour", "Con-Coloured NPC Names", "Hailstone: NPC names take their consider colour, as your target's does. Off keeps them yellow.")
     check("target_plate_highlight", "Highlight Target Name",
       "Hailstone: makes your target's name easy to spot, on a dark background with a coloured edge and a small bouncing arrow above it. Turn it off to show the name as plain text in its colour.")
@@ -626,6 +633,10 @@ local function graphicsTab()
     check("distance_blur", "Distance Blur", "Softens the far distance a little (modern lighting).")
     check("neighbour_zones", "Neighbour Zones",
       "Draws the next zone past an outdoor zone line in the distance (modern lighting; scenery only).")
+    check("horizon_hills", "Horizon Hills",
+      "Land, hills and mountains past the edges of outdoor zones, in the zone's own ground, so the world does not end in haze (modern lighting; scenery only).")
+    slider("tree_detail", "Tree Detail Distance", 50, 200, pct,
+      "How far a texture pack's generated trees keep their full and middle detail. Lower is faster; further trees turn to simpler ones sooner.")
     check("ground_npcs", "Ground Floating NPCs",
       "Draws an NPC the server left standing in the air on the ground below it (up to 50 units). Flying and levitating NPCs stay up.")
     ticks("bloom", "Bloom", function(t) return pct(t * 5) end, "A glow around bright lights and the sun.")

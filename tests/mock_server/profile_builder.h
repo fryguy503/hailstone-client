@@ -27,6 +27,9 @@ struct ProfileSpec {
     std::uint16_t zone_instance = 0;
     float y = -148.0f, x = -285.0f, z = 3.5f, heading = 128.0f; // the server's order
     std::uint32_t character_id = 9876;
+    std::uint32_t last_fellowship_join = 0;
+    std::uint64_t fellowship_vitality_normal = 0;
+    std::uint32_t fellowship_vitality_aa = 0;
     std::array<std::uint32_t, 20> combat_ability_timers{}; // EQEmu sends zeros
     std::array<std::uint32_t, 20> linked_timers{};         // EQEmu's recastTimers
     std::array<std::uint32_t, 100> item_recast_timers{};   // EQEmu sends zeros

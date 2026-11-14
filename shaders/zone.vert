@@ -32,6 +32,14 @@ layout(location = 4) in vec2 in_uv2;
 layout(location = 5) in vec4 in_color2;
 layout(location = 6) in vec3 in_point_light;
 layout(location = 7) in vec4 in_sway; // the wind's hold on a plant's vertex (lighting.glsl wind_offset)
+// Per instance (lighting.glsl instance_point): an instanced model's placement, the identity for the zone's own.
+layout(location = 8) in vec4 in_row0;
+layout(location = 9) in vec4 in_row1;
+layout(location = 10) in vec4 in_row2;
+layout(location = 11) in vec4 in_normal_row0; // w: the sway's scale
+layout(location = 12) in vec4 in_normal_row1;
+layout(location = 13) in vec4 in_normal_row2;
+layout(location = 14) in vec4 in_tint; // times the vertex colour: the placement's baked light
 
 layout(location = 0) out vec2 v_uv;
 layout(location = 1) out vec4 v_light;
@@ -43,6 +51,11 @@ layout(location = 6) out vec3 v_normal;
 layout(location = 7) out float v_fog;
 layout(location = 8) out vec3 v_point; // the MPL point light term (in v_light; zone.frag's modern light)
 layout(location = 9) out vec3 v_rest;  // the position without the wind: the lights' shadow cubes are drawn so
+layout(location = 10) flat out float v_lod_distance; // an instanced model's placement's from the camera (its fades)
+
+// The depth pre-pass (zone_depth.frag) and the colour pass are two pipelines over this shader: the position must come
+// out bit for bit the same in both, or the colour pass's equal depth test drops pixels.
+invariant gl_Position;
 
 // The effects' fog (RegionC1 vs_1_1): per
 // vertex, f = clamp((|eye - pos| - FogStart) FogRangeInv fFogRange, 0, fFogRange)
@@ -60,20 +73,22 @@ const uint kFlagMultiPass = 4u; // add the lights.wld point lights (MPL path)
 const uint kModeWldDetail = 6u;  // a classic region's detail pass (zone.frag)
 
 void main() {
+    vec3 position = instance_point(in_position, in_row0, in_row1, in_row2);
+    vec3 n = instance_normal(in_normal, in_normal_row0, in_normal_row1, in_normal_row2);
+    vec4 color = in_color * in_tint;
     v_uv = in_uv;
     v_uv2 = in_uv2;
-    v_color = in_color;
+    v_color = color;
     v_color2 = in_color2;
-    v_normal = in_normal;
+    v_normal = n;
     // RenderEffects/SPL/RegionC1 and RegionOldA (vs_1_1), per vertex:
     // rgb = C.rgb + C.a Ambient + SpecialAmbient
     //     + C.a (Bounce max(N.Dn, 0) + Directional max(N.-Dn, 0)), saturated.
     // SPL/RegionOldDetailSingle and RegionOldDetailPalette (vs_1_1, a detail pass) add the same terms without the
     // alpha's weight: rgb = C.rgb + Ambient + SpecialAmbient + Bounce max(N.Dn, 0) + Directional max(N.-Dn, 0).
-    vec3 n = in_normal;
     vec3 dn = scene.direction.xyz;
-    float a = pc.tex2.y == kModeWldDetail ? 1.0 : in_color.a;
-    vec3 rgb = in_color.rgb + a * scene.ambient.rgb + scene.special_ambient.rgb +
+    float a = pc.tex2.y == kModeWldDetail ? 1.0 : color.a;
+    vec3 rgb = color.rgb + a * scene.ambient.rgb + scene.special_ambient.rgb +
                a * (scene.bounce.rgb * max(dot(n, dn), 0.0) + scene.directional.rgb * max(dot(n, -dn), 0.0));
     rgb = clamp(rgb, 0.0, 1.0);
     // The multi-pass path adds one pass per point light; the per-vertex sum of
@@ -81,7 +96,8 @@ void main() {
     v_point = (pc.tex2.z & kFlagMultiPass) != 0u ? in_point_light : vec3(0.0);
     rgb += v_point;
     v_light = vec4(rgb, 1.0);
-    vec3 p = in_position + wind_offset(in_position, in_sway, scene.wind, scene.time.x);
+    vec4 sway = instance_sway(in_sway, in_row0, in_row1, in_normal_row0.w);
+    vec3 p = position + wind_offset(position, sway, scene.wind, scene.time.x);
     if (pc.tex2.y == kModeWldDetail) {
         // The batch's TEXTUREFACTOR alpha (the region draw, 0x10018e2e): d = how far the camera is outside the
         // batch's box along x plus along y (box: in_uv2 min x, min y; in_point_light max x, max y); drawn while
@@ -95,7 +111,8 @@ void main() {
         v_color2.a = in_color2.a * factor / 255.0;
     }
     v_world = p;
-    v_rest = in_position;
+    v_rest = position;
+    v_lod_distance = distance(scene.camera_pos.xyz, vec3(in_row0.w, in_row1.w, in_row2.w));
     v_fog = fog_factor(p);
     gl_Position = scene.view_proj * vec4(p, 1.0);
 }

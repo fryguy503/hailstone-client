@@ -1,6 +1,7 @@
 // ClientApp: Zone load and unload, scene fog, listener and music, entering the zone.
 
 #include "app/client_app_internal.h"
+#include "app/neighbour_zones.h"
 
 #include <array>
 #include <algorithm>
@@ -10,6 +11,7 @@
 
 #include <SDL3/SDL_video.h>
 
+#include "assets/ground_refine.h"
 #include "assets/zone_flora.h"
 #include "core/ascii_case.h"
 #include "core/ini_file.h"
@@ -49,6 +51,13 @@ void ClientApp::load_zone(const std::string& short_name) {
                                                       tested_collision);
         zone_ = assets::load_zone(game_, short_name, {}, revamped_test);
         mark("zone data");
+        // The classic ground smoothed for drawing (assets/ground_refine.h, display.smooth_ground); before the flora,
+        // which stands on it.
+        if (config_.get_bool("display.smooth_ground", true)) {
+            const auto r = assets::refine_ground(*zone_);
+            log::info("smoothed ground: {} triangles drawn as {}, {} curved edges, at most {:.2f} units off",
+                      r.ground_triangles, r.triangles, r.curved_edges, r.max_offset);
+        }
         // Hailstone's own flora for a zone without any (assets/zone_flora.h, display.zone_flora).
         if (config_.get_bool("display.zone_flora", true)) {
             // flora/default.txt only where the server calls the zone outdoor (OP_NewZone's time type 1, 2 or 5), so
@@ -78,7 +87,14 @@ void ClientApp::load_zone(const std::string& short_name) {
             log::info("zone fires: {} flames, {} lights added for them", zone_fires_.size(), lights);
             if (!fire_renderer_) fire_renderer_ = std::make_unique<render::FireRenderer>(vk_, shader_dir_);
         }
-        zone_renderer_ = std::make_unique<render::ZoneRenderer>(vk_, *zone_, shader_dir_, render::zone_render_options(game_));
+        {
+            // The neighbours' ground measured on earlier visits shapes the land round the zone (app/neighbour_zones.h).
+            auto options = render::zone_render_options(game_);
+            options.horizon_sources =
+                cached_horizon_sources(game_, horizon_cache_dir(server_profile_.id, zone_->name), zone_->name);
+            zone_renderer_ = std::make_unique<render::ZoneRenderer>(vk_, *zone_, shader_dir_, options);
+        }
+        distant_hidden_key_ = 0;
         mark("zone renderer");
         flora_renderer_.reset();
         if (!zone_->flora.empty()) flora_renderer_ = std::make_unique<render::FloraRenderer>(vk_, *zone_, shader_dir_);
@@ -745,6 +761,8 @@ std::optional<int> ClientApp::display_option(std::string_view name) const {
     if (name == "distance_blur") return config_.get_bool("display.distance_blur", true) ? 1 : 0;
     if (name == "color_grade") return config_.get_bool("display.color_grade", true) ? 1 : 0;
     if (name == "neighbour_zones") return neighbour_zones_ ? 1 : 0;
+    if (name == "horizon_hills") return horizon_hills_ ? 1 : 0;
+    if (name == "tree_detail") return tree_detail_;
     // Hailstone: NPCs the server leaves in the air are drawn on the floor (game::WorldState::ground_npcs), on by default.
     if (name == "ground_npcs") return config_.get_bool("display.ground_npcs", true) ? 1 : 0;
     if (name == "find_trail_style")
@@ -801,6 +819,19 @@ bool ClientApp::set_display_option(std::string_view name, int value) {
         // The zones past the outdoor zone lines (app/neighbour_zones.h): freed at once when turned off.
         neighbour_zones_ = value != 0;
         config_.set_bool("display.neighbour_zones", neighbour_zones_);
+        config_.save(config_path_);
+        return true;
+    }
+    if (name == "horizon_hills") {
+        // The distant hills round an outdoor zone (render/horizon.h).
+        horizon_hills_ = value != 0;
+        config_.set_bool("display.horizon_hills", horizon_hills_);
+        config_.save(config_path_);
+        return true;
+    }
+    if (name == "tree_detail") {
+        tree_detail_ = std::clamp(value, 50, 200);
+        config_.set_int("display.tree_detail", tree_detail_);
         config_.save(config_path_);
         return true;
     }

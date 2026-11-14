@@ -137,7 +137,6 @@ bool key_command_dropped(int command) {
     case C::CMD_TOGGLE_TCG:
     case C::CMD_HISTORIC_ALERTS:
     case C::CMD_SOCIAL_SHARE:
-    case C::TOGGLE_FELLOWSHIPWIN:
     // The customer service (ticket) key runs Cmd_petition with no text (__ExecuteCmd case 108, as OPEN_ETN_HELP),
     // which opens Daybreak's petition web page; the welcome screen (case 133, Cmd_welcomescreen @0x4fd4a0) is
     // Daybreak's news page in the HTML window. Neither has a server side here.

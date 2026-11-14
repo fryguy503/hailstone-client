@@ -41,6 +41,7 @@ PAGES = [
         ("docs/browser.md", "Browser"),
         ("docs/navigation.md", "Navigation"),
         ("docs/isometric.md", "Isometric-Camera"),
+        ("docs/item-compare.md", "Item-Comparison"),
     ]),
     ("Scripting and UI", [
         ("docs/plugins.md", "Plugins-and-Scripts"),
@@ -82,6 +83,8 @@ PAGES = [
         ("docs/wiki.md", "Wiki"),
         ("docs/research/external-resources.md", "Research-External-Resources"),
         ("docs/research/plugin-v2-inventory.md", "Research-Plugin-v2-Inventory"),
+        ("docs/research/shared-asset-memory.md", "Research-Shared-Asset-Memory"),
+        ("docs/research/shared-gpu-memory.md", "Research-Shared-GPU-Memory"),
     ]),
 ]
 

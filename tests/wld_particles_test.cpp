@@ -74,7 +74,7 @@ TEST_CASE("WLD 0x34 particle clouds and their 0x26 sprites parse") {
     auto cloud = b.add(0x34, b.str("L307_PCD"), l307_body(blit));
     auto w = wld::WldFile::parse(b.build());
     REQUIRE(w.errors().empty());
-    const auto& c = std::get<wld::ParticleCloud>(w.at(cloud)->data);
+    const auto& c = w.at(cloud)->as<wld::ParticleCloud>();
     CHECK(c.flags == 4u);
     CHECK(c.mode == 3u);
     CHECK(c.bits == 0x30500u);
@@ -269,14 +269,14 @@ TEST_CASE("skeleton_particles finds the particle node and its rest matrix") {
     auto skeleton = b.add(0x10, b.str("LAMP_HS_DEF"), sk);
     auto w = wld::WldFile::parse(b.build());
     REQUIRE(w.errors().empty());
-    const auto& def = std::get<wld::Skeleton>(w.at(skeleton)->data);
+    const auto& def = w.at(skeleton)->as<wld::Skeleton>();
     auto found = wld::skeleton_particles(w, def);
     REQUIRE(found.size() == 1);
     CHECK(found[0].cloud == w.at(cloud));
     CHECK(near(glm::vec3(found[0].node[3]), {0, 0, 9}));
     // The node's +Y turned onto +Z: the cloud's (0, 1, 0) direction sprays up.
     CHECK(near(glm::vec3(found[0].node[1]), {0, 0, 1}));
-    auto d = particle_cloud_definition(std::get<wld::ParticleCloud>(w.at(cloud)->data), *particle_texture(w, blit),
+    auto d = particle_cloud_definition(w.at(cloud)->as<wld::ParticleCloud>(), *particle_texture(w, blit),
                                        "L307_PCD");
     glm::mat3 axes = game::emitter_axes(glm::mat3(found[0].node), d.angle1, d.angle2);
     CHECK(near(axes[2], {0, 0, 1}));

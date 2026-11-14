@@ -82,51 +82,59 @@ std::optional<Image> read_override(const std::filesystem::path& file, std::strin
 } // namespace
 
 void TextureOverrides::set_folder(const std::filesystem::path& folder) {
-    files_.clear();
-    hashed_ = 0;
-    folder_ = folder;
+    auto index = std::make_shared<Index>();
+    index->folder = folder;
     std::error_code ec;
-    if (folder.empty() || !std::filesystem::is_directory(folder, ec)) return;
-    // Of several files for one key the shallowest wins, then the first by path: never the order the folder happens
-    // to be listed in, which differs between file systems (NTFS lists gfaydark/ before kbarkd.png, ext4 need not).
-    auto depth = [&](const std::filesystem::path& p) {
-        const std::filesystem::path rel = p.lexically_relative(folder);
-        return std::distance(rel.begin(), rel.end());
-    };
-    auto keep = [&](const std::string& key, const std::filesystem::path& p) {
-        auto [slot, added] = files_.try_emplace(key, p);
-        if (added) return true;
-        const auto d = depth(p), held = depth(slot->second);
-        if (d < held || (d == held && p < slot->second)) slot->second = p;
-        return false;
-    };
-    for (auto it = std::filesystem::recursive_directory_iterator(folder, ec);
-         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-        if (!it->is_regular_file(ec) || !image_extension(it->path())) continue;
-        std::string stem = stem_of(it->path().filename().string());
-        // A zone's subfolder keys its files apart, and they stand for the bare name too unless a shallower file does.
-        auto parent = it->path().parent_path();
-        std::string sub = parent != folder ? lower(parent.filename().string()) : std::string();
-        if (sub == "by-hash") {
-            hashed_ += keep("#" + stem, it->path());
-            continue;
+    if (!folder.empty() && std::filesystem::is_directory(folder, ec)) {
+        auto& files = index->files;
+        // Of several files for one key the shallowest wins, then the first by path: never the order the folder
+        // happens to be listed in, which differs between file systems (NTFS lists gfaydark/ before kbarkd.png, ext4
+        // need not).
+        auto depth = [&](const std::filesystem::path& p) {
+            const std::filesystem::path rel = p.lexically_relative(folder);
+            return std::distance(rel.begin(), rel.end());
+        };
+        auto keep = [&](const std::string& key, const std::filesystem::path& p) {
+            auto [slot, added] = files.try_emplace(key, p);
+            if (added) return true;
+            const auto d = depth(p), held = depth(slot->second);
+            if (d < held || (d == held && p < slot->second)) slot->second = p;
+            return false;
+        };
+        for (auto it = std::filesystem::recursive_directory_iterator(folder, ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+            if (!it->is_regular_file(ec) || !image_extension(it->path())) continue;
+            std::string stem = stem_of(it->path().filename().string());
+            // A zone's subfolder keys its files apart, and they stand for the bare name too unless a shallower file
+            // does.
+            auto parent = it->path().parent_path();
+            std::string sub = parent != folder ? lower(parent.filename().string()) : std::string();
+            if (sub == "by-hash") {
+                index->hashed += keep("#" + stem, it->path());
+                continue;
+            }
+            if (!sub.empty()) keep(sub + "/" + stem, it->path());
+            keep(stem, it->path());
         }
-        if (!sub.empty()) keep(sub + "/" + stem, it->path());
-        keep(stem, it->path());
+        if (!files.empty()) log::info("texture overrides: {} names in {}", files.size(), folder.string());
     }
-    if (!files_.empty()) log::info("texture overrides: {} names in {}", files_.size(), folder.string());
+    std::lock_guard lock(mutex_);
+    index_ = std::move(index);
 }
 
-const std::filesystem::path* TextureOverrides::find(std::string_view name, std::string_view zone, std::uint64_t hash,
-                                                    std::string_view suffix) const {
-    if (files_.empty()) return nullptr;
-    if (hash != 0 && hashed_ != 0)
-        if (auto it = files_.find("#" + hex16(hash) + lower(suffix)); it != files_.end()) return &it->second;
+std::optional<std::filesystem::path> TextureOverrides::find(std::string_view name, std::string_view zone,
+                                                            std::uint64_t hash, std::string_view suffix) const {
+    const auto index = this->index();
+    const auto& files = index->files;
+    if (files.empty()) return std::nullopt;
+    if (hash != 0 && index->hashed != 0)
+        if (auto it = files.find("#" + hex16(hash) + lower(suffix)); it != files.end()) return it->second;
     std::string stem = stem_of(name) + lower(suffix);
     if (!zone.empty())
-        if (auto it = files_.find(lower(zone) + "/" + stem); it != files_.end()) return &it->second;
-    auto it = files_.find(stem);
-    return it == files_.end() ? nullptr : &it->second;
+        if (auto it = files.find(lower(zone) + "/" + stem); it != files.end()) return it->second;
+    auto it = files.find(stem);
+    if (it == files.end()) return std::nullopt;
+    return it->second;
 }
 
 std::uint64_t texture_content_hash(std::span<const std::byte> data) {
@@ -179,7 +187,7 @@ std::optional<Image> decode_game_texture(std::string_view name, const std::optio
     TextureOverrides& overrides = texture_overrides();
     const std::uint64_t hash = hash_of(original);
     const bool bmp = bmp_rows(name, original);
-    const std::filesystem::path* file = nullptr;
+    std::optional<std::filesystem::path> file;
     if (options.palette_index0_transparent && bmp) file = overrides.find(name, zone, hash, ".m");
     if (!file && options.reads_alpha) file = overrides.find(name, zone, hash, ".k");
     if (!file) file = overrides.find(name, zone, hash);
@@ -227,7 +235,7 @@ std::optional<Image> decode_texture_map(std::string_view name, const std::option
                                         TextureMap map, bool wld_bmp_rows, std::string_view zone) {
     TextureOverrides& overrides = texture_overrides();
     if (!overrides.material_maps()) return std::nullopt;
-    const std::filesystem::path* file =
+    const std::optional<std::filesystem::path> file =
         overrides.find(name, zone, hash_of(original), map == TextureMap::Normal ? ".n" : ".r");
     if (!file) return std::nullopt;
     std::string why;

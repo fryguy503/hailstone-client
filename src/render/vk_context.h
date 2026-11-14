@@ -1,9 +1,12 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,6 +24,8 @@
 namespace hailstone::platform { class Window; }
 
 namespace hailstone::render {
+
+class GpuSharedCache;
 
 // Optional device capabilities the renderers adapt to.
 struct DeviceCaps {
@@ -55,6 +60,9 @@ struct SceneOptions {
     bool ambient_occlusion = true;    // screen-space AO (shaders/ao.frag) in frames that give set_ao_view
     float ao_strength = 0.85f;        // how far the AO darkens the scene (0..1)
     bool distance_blur = true;        // soften the far distance a little, with the AO's frames
+    // Draw the opaque geometry depth-only first, then colour it with the depth test equal and no depth write
+    // (render/zone_renderer.cpp draw_depth): a pixel covered by several surfaces is shaded once.
+    bool depth_prepass = false;
     // Bright light spreading into its surroundings (0 off .. 1 strong), with the AO's frames: a chain of
     // half-size levels of the scene (shaders/bloom_down.frag, bloom_up.frag) mixed in before the tonemap.
     float bloom = 0.5f;
@@ -274,6 +282,14 @@ public:
     std::uint32_t min_image_count() const { return min_image_count_; }
     VkPhysicalDevice physical_device() const { return physical_; }
     VmaAllocator allocator() const { return allocator_; }
+    GpuSharedCache* gpu_shared_cache() const { return gpu_shared_cache_.get(); }
+    // Called (between frames, the device idle) after shared textures moved into this client's own images when
+    // sharing stopped: a holder of Texture copies refreshes them (refresh_shared_texture) and rewrites its
+    // descriptors. Returns an id for remove_shared_textures_listener.
+    std::uint64_t on_shared_textures_moved(std::function<void()> refresh);
+    void remove_shared_textures_listener(std::uint64_t id);
+    // Coverage diagnostics for the explicit immutable upload path; not native GPU-memory measurements.
+    void note_shared_gpu_texture(bool imported);
     VkFormat color_format() const { return swapchain_format_; } // the swapchain: UI pipelines
     VkFormat scene_format() const { return kSceneFormat; }      // scene pipelines
     VkSampleCountFlagBits scene_samples() const { return scene_samples_; }
@@ -302,6 +318,8 @@ private:
     struct Frame {
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkCommandBuffer shared_acquire = VK_NULL_HANDLE;
+        VkCommandBuffer shared_release = VK_NULL_HANDLE;
         VkSemaphore image_available = VK_NULL_HANDLE;
         VkFence in_flight = VK_NULL_HANDLE;
     };
@@ -315,6 +333,7 @@ private:
     void destroy_swapchain();
     void recreate_swapchain();
     void create_frames();
+    void localize_shared_textures();
     void create_scene_targets();
     void destroy_scene_targets();
     void create_post_pipeline(const std::filesystem::path& shader_dir);
@@ -339,6 +358,20 @@ private:
     std::uint32_t queue_family_ = 0;
     VkQueue queue_ = VK_NULL_HANDLE;
     DeviceCaps caps_;
+    std::unique_ptr<GpuSharedCache> gpu_shared_cache_;
+    bool gpu_shared_requested_ = false;
+    std::uint64_t gpu_shared_bindings_ = 0;
+    std::uint64_t gpu_shared_fallbacks_ = 0;
+    std::uint64_t gpu_shared_frames_ = 0;
+    bool shared_first_logged_ = false;
+    bool shared_detach_logged_ = false;
+    std::map<std::uint64_t, std::function<void()>> shared_texture_listeners_;
+    std::uint64_t shared_texture_listener_ids_ = 0;
+    bool gpu_benchmark_ = false;
+    std::uint64_t benchmark_present_submissions_ = 0;
+    std::chrono::steady_clock::time_point gpu_benchmark_start_{};
+    double benchmark_lease_wait_ms_ = 0.0;
+    double benchmark_shared_fence_wait_ms_ = 0.0;
     VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
     PipelineCacheDevice cache_device_;
     std::filesystem::path pipeline_cache_path_;

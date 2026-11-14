@@ -1,11 +1,14 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <string>
 #include <utility>
@@ -14,6 +17,8 @@
 #include <glm/glm.hpp>
 
 #include "render/gpu.h"
+#include "render/horizon.h"
+#include "render/lod_bands.h"
 #include "render/scene_lighting.h"
 #include "render/vk_context.h"
 
@@ -33,6 +38,37 @@ namespace hailstone::render {
 // (game/scene_light.h) or full-bright (a debugging view).
 enum class VertexLighting : std::uint32_t { Classic = 0, None = 1 };
 
+// One of the land's materials (render/horizon.h): the zone's plain material it borrows, mapped flat with the zone's
+// own texture scale and wound as the zone winds its own, under one colour (the level ground's median baked light).
+struct HorizonLook {
+    std::vector<std::string> frames;
+    std::uint32_t delay = 0;
+    bool two_sided = false;
+    bool front_ccw = false;
+    float density = 0.0f; // texture units a world unit
+    bool flip = false;    // the zone's own faces up the other way round
+    std::uint32_t color = 0xffffffffu;
+    bool valid() const { return !frames.empty() && density > 0.0f; }
+};
+
+// What the land round a zone was built from (ZoneRenderer::horizon_build), for its neighbours: the field (its grid and
+// lines), the neighbours' ground it was shaped by, its ground and rock materials and their textures' files.
+struct HorizonBuild {
+    HorizonField field;
+    HorizonSources sources;
+    HorizonLook ground, rock;
+};
+
+// A neighbour zone's part of the land round the current zone (app/neighbour_zones.h): the squares its ground owns
+// (render::horizon_mesh with `only`), which the neighbour draws in place of its own ground and the current zone hides.
+// Each triangle twice, with the current zone's material and with the neighbour's own, each showing where the other
+// does not (zone.frag's land blend, by the vertices' weight), so the one ground fades into the other.
+struct LandPatch {
+    HorizonMesh mesh;
+    HorizonLook ground, rock; // the current zone's
+    std::map<std::string, std::vector<std::byte>> files; // their textures' files, from the current zone
+};
+
 struct ZoneRenderOptions {
     // eqclient.ini [Defaults] MultiPassLighting (render::read_multipass_lighting):
     // the zone's point lights shade zone geometry whose effect has a
@@ -46,10 +82,12 @@ struct ZoneRenderOptions {
     glm::vec3 offset{0.0f};
     std::vector<glm::vec4> keep;
     // The parts of a triangle (after the move) to keep, as convex polygons of barycentric weights over its corners,
-    // or nullopt to keep it whole: a neighbour's ground goes where the current zone has its own
-    // (game::split_off_ground).
+    // or nullopt to keep it whole: a neighbour's ground goes where the current zone or the land draws the ground
+    // (game::split_off_land, game::split_off_ground). `Part`: what the triangle is, the zone's own terrain (its
+    // meshes), a water or lava surface, or a placed object.
+    enum class Part : std::uint8_t { Placed, Terrain, Liquid };
     std::function<std::optional<std::vector<std::vector<glm::vec3>>>(const glm::vec3&, const glm::vec3&,
-                                                                     const glm::vec3&)>
+                                                                     const glm::vec3&, Part)>
         split;
     // Drawn behind the current zone, which is drawn first: a neighbour's fragments lose ties and near-ties with what
     // the current zone already drew (a strict depth test and a depth bias pushing them back).
@@ -61,6 +99,10 @@ struct ZoneRenderOptions {
     bool material_maps = true;
     // Asked between meshes and materials while preparing: true stops it, and prepare() returns null. Unset: never.
     std::function<bool()> cancelled;
+    // The current zone: the neighbours' ground its land is shaped by (the cache's, app/neighbour_zones.h).
+    HorizonSources horizon_sources;
+    // A neighbour: its part of the land, drawn after its own geometry is moved and cut (not moved or cut itself).
+    std::shared_ptr<const LandPatch> land;
 };
 
 // CRender::ReadIniRenderSettings @0x10098350 and CDisplay::InitWorld: true
@@ -121,6 +163,21 @@ public:
     static PreparedPtr prepare(const assets::Zone& zone, const ZoneRenderOptions& options, std::uint32_t max_images);
     // The prepared data's size in bytes (vertices, indices, textures as uploaded), for the logs.
     static std::size_t prepared_bytes(const Prepared& prepared);
+    // What a prepare built: the vertices and indices in the buffers, the instances (the identity not counted), the
+    // triangles as drawn (an instanced model's once for each placement) and the draws' chunks.
+    struct PreparedCounts {
+        std::size_t vertices = 0, indices = 0, instances = 0, triangles = 0, chunks = 0;
+    };
+    static PreparedCounts prepared_counts(const Prepared& prepared);
+    // What a prepare built of the land (render/horizon.h): the build it keeps for the neighbours, a neighbour's
+    // footprint, and the land's triangles by Draw::land_fade (0 plain, 1 a neighbour's own ground, 2 the current
+    // zone's in a neighbour's part).
+    struct PreparedLand {
+        std::shared_ptr<const HorizonBuild> build;
+        std::size_t footprint = 0;
+        std::array<std::size_t, 3> triangles{};
+    };
+    static PreparedLand prepared_land(const Prepared& prepared);
 
     ZoneRenderer(VkContext& vk, const assets::Zone& zone, const std::filesystem::path& shader_dir,
                  const ZoneRenderOptions& options = {});
@@ -132,6 +189,10 @@ public:
     // The chunks in `view_proj`'s frustum.
     void draw(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
               const game::ViewDistance& view, double time_seconds, ZonePhase phase = ZonePhase::All);
+    // The opaque and alpha-tested geometry into the scene's depth buffer, before draw's opaque phase
+    // (SceneOptions::depth_prepass): the colour pass then tests equal and writes no depth.
+    void draw_depth(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
+                    const game::ViewDistance& view, double time_seconds);
     // The opaque and alpha-tested geometry into shadow cascade `cascade`, between VkContext::begin_shadow_cascade and
     // end_shadow_cascade; the cascades come from the last set_lighting. With kCoverLayer, the cover map
     // (render/cover_map.h): the opaque geometry only; with kWaterLayer, the water map: the water surfaces only. Only
@@ -158,6 +219,18 @@ public:
     // haze as it is infinitely far away, its glow towards the sun too; with the camera under water
     // (render::set_underwater), the open water, its colour and light shafts. Draw it first in the scene.
     void draw_backdrop(const FrameInfo& frame, const glm::mat4& view_proj);
+    // The land round the zone (render/horizon.h), built from its terrain while preparing it (not for a neighbour
+    // zone): what was measured, and whether draw and draw_depth draw it (off until set; the modern lighting outdoors).
+    const HorizonLand& horizon() const { return horizon_; }
+    // What the land was built from, for the neighbours' parts of it; null without land.
+    const std::shared_ptr<const HorizonBuild>& horizon_build() const { return horizon_build_; }
+    void set_distant(bool show) { show_distant_ = show; }
+    // Where a neighbour zone draws its part of the land, the current zone's is not drawn: its ground and rock
+    // triangles in these squares (render::HorizonField::mesh_square, a neighbour's footprint) are left out; its sea
+    // stays. Empty: none.
+    void set_distant_hidden(std::vector<std::int64_t> squares);
+    // A neighbour zone's (ZoneRenderOptions::land): the squares of the land it draws (render::HorizonMesh::squares).
+    const std::vector<std::int64_t>& footprint() const { return footprint_; }
 
     const ZoneRenderStats& stats() const { return stats_; }
     // The counts since the last call; they start again from zero.
@@ -167,8 +240,14 @@ public:
     void set_scene_light(const game::SceneLight& light);
     // The modern mode's switch, daylight and dynamic lights (render/scene_lighting.h); classic: params.x 0.
     void set_lighting(const SceneLighting& lighting);
+    // How far the replacement models' levels of detail reach (render/lod_bands.h), times their own distances: the
+    // tree detail setting (display.tree_detail). 0.25 to 4.
+    void set_lod_scale(float scale) { lod_scale_ = std::clamp(scale, 0.25f, 4.0f); }
     // Leaves the placed objects' flame meshes out of draw (the modern lighting draws its own: render/fire_renderer.h).
     void set_hide_flames(bool hide) { hide_flames_ = hide; }
+    // A neighbour zone's debugging view (display.neighbour_tint): its own geometry tinted magenta, and in its part of
+    // the land the pixels showing its own ground tinted green, so what comes from where can be told apart.
+    void set_debug_tint(bool on) { debug_tint_ = on; }
 
 private:
     enum class Pass : std::uint8_t { Opaque, Blended, Additive };
@@ -194,31 +273,63 @@ private:
         bool multipass = false; // add the point lights (MPL path)
         Liquid liquid = Liquid::None;
         bool flame = false; // a placed object's flame mesh: set_hide_flames leaves it out
+        bool distant = false; // the land round the zone: no shadows; set_distant, set_distant_hidden
+        std::uint32_t distant_first = 0; // a distant draw's first index in the land's own index buffers
+        // A neighbour's part of the land (ZoneRenderOptions::land): 1 its own material, 2 the current zone's, each
+        // showing where the other does not (zone.frag's land blend); 0 neither.
+        std::uint8_t land_fade = 0;
         glm::vec4 slide{0.0f}, extra{0.0f}, extra2{0.0f}, extra3{0.0f}, extra4{0.0f};
         float param_z = 0.0f;
         std::uint32_t surface = 0; // the modern lighting's surface maps (kNormalMap, kSpecular, kReflective)
         std::uint32_t first_chunk = 0; // its chunks in chunks_
         std::uint32_t chunk_count = 0;
         glm::vec3 box_min{0.0f}, box_max{0.0f}; // round all of them: a draw wholly out of view tests no chunk
+        // A replacement model's level of detail (render/lod_bands.h): its chunks show only within its band
+        // (lod_shows).
+        LodBand lod;
+        // An instanced replacement model's number + 1 (0: the zone's own geometry): its chunks are its placements,
+        // each all of the draw's indices with an instance of its own (Chunk::instance).
+        std::uint32_t instanced = 0;
     };
 
     // Whether every shadow pass but the water map draws `d` without its texture: solid (opaque, not alpha-tested), not
     // a flame. These go into solid_.
-    static bool casts_untextured(const Draw& d) { return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f); }
+    // (A level of detail is drawn on its own, so that its shadow changes level with it.)
+    static bool casts_untextured(const Draw& d) {
+        return d.pass == Pass::Opaque && !d.flame && !d.distant && !(d.alpha_ref > 0.0f) && !d.lod.banded() && d.instanced == 0;
+    }
+    float lod_scale_ = 1.0f; // set_lod_scale
+    // The camera's position the levels of detail are chosen by: the last begin_draw's (the shadow passes, drawn
+    // before it in a frame, take the frame before's).
+    glm::vec3 lod_eye_{0.0f};
+    // Whether the depth pre-pass draws `d`, and the colour pass then tests it equal: the opaque pass's draws but the
+    // water, which the modern lighting draws blended after VkContext::begin_translucent.
+    static bool in_depth_prepass(const Draw& d) { return d.pass == Pass::Opaque && d.liquid != Liquid::Water; }
+    // The modern lighting (set_lighting), not the classic.
+    bool modern_lighting() const;
 
     void upload(Prepared& prepared);
     void create_descriptors();
+    void write_texture_set();
     void create_pipelines(const std::filesystem::path& shader_dir);
     void create_shadow_pipeline(const std::filesystem::path& shader_dir);
     void create_shadow_pipeline(const std::filesystem::path& shader_dir, bool point);
     void create_underwater_pipeline(const std::filesystem::path& shader_dir);
     void upload_scene(std::uint32_t frame_slot);
+    // What draw and draw_depth share: the geometry and the sets bound, the frame's scene uploaded. Returns the time
+    // in milliseconds.
+    std::uint64_t begin_draw(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
+                             const game::ViewDistance& view, double time_seconds);
+    // Draw `d`'s own state: its culling and its push constants, with zone.frag's `flags`.
+    void bind_draw(VkCommandBuffer cmd, const Draw& d, std::uint32_t flags, std::uint64_t time_ms);
 
     VkContext& vk_;
     std::uint64_t id_ = 0;
+    std::uint64_t shared_listener_ = 0;
     ZoneRenderStats stats_;
     VertexLighting lighting_ = VertexLighting::Classic;
     bool hide_flames_ = false;
+    bool debug_tint_ = false;
     struct SceneUniforms { // std140, zone.vert's Scene block
         glm::mat4 view_proj{1.0f};
         glm::vec4 fog_color{0.0f};
@@ -242,20 +353,49 @@ private:
         std::uint32_t index_count = 0;
         glm::vec3 box_min{0.0f}, box_max{0.0f};
         bool sways = false; // some of its vertices sway in the wind
+        std::uint32_t instance = 0; // in the instance buffer (0: the identity, the zone's own geometry)
     };
+    // Whether chunk `c` continues the run drawn from `first` (`count` indices) as instances `instance` on (`instances`
+    // of them): the zone's own geometry end to end in the index buffer, or an instanced model's next placement. Grows
+    // the run.
+    static bool extends_run(const Chunk& c, std::uint32_t first, std::uint32_t& count, std::uint32_t instance,
+                            std::uint32_t& instances) {
+        if (c.instance == 0 && instance == 0 && c.first_index == first + count) {
+            count += c.index_count;
+            return true;
+        }
+        if (c.instance != 0 && c.instance == instance + instances && c.first_index == first && c.index_count == count) {
+            ++instances;
+            return true;
+        }
+        return false;
+    }
+    // Whether chunk `c` of `d` shows by `pick` at its distance from lod_eye_. A banded draw is an instanced model's,
+    // its chunks its placements: the distance to where the placement stands, the one zone.vert fades it by
+    // (v_lod_distance), so every level of a tree changes together.
+    bool lod_shows(const Draw& d, const Chunk& c, LodPick pick = {}) const;
+    // Where each instance stands (GpuInstance's translation), for lod_shows.
+    std::vector<glm::vec3> instance_origins_;
+    // Binds the vertex, instance and index buffers.
+    void bind_geometry(VkCommandBuffer cmd) const;
     std::vector<Chunk> chunks_;
     // The casts_untextured draws merged for the shadow passes, one chunk a cell (render/shadow_chunks.h): its chunks
     // follow the draws' in chunks_, its indices the draws' in the index buffer. Only its chunk fields are set.
     Draw solid_;
     // Records draw `d`'s chunks that `keep` (a predicate on a Chunk) passes, a run of neighbouring chunks in one
     // vkCmdDrawIndexed; `first` runs once before the first, so a draw with nothing to show sets up nothing.
+    // `counted`: where its triangles and calls go in drawn_. The depth pre-pass counts none: the colour pass draws
+    // the same triangles.
+    enum class Counted : std::uint8_t { Scene, Shadow, None };
+    // `lod`: which level of a banded draw (lod_shows).
     template <class Keep, class First>
-    void draw_chunks(VkCommandBuffer cmd, const Draw& d, bool shadow, Keep&& keep, First&& first);
+    void draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first, LodPick lod = {});
     ZoneDrawn drawn_;
     // The zone's lights for the modern lighting's per-pixel pass (render/light_grid.h): the lights with the grid's
     // header, the cells, the cells' light numbers (zone.frag's set 1, bindings 1 to 3).
     std::array<Buffer, 3> light_grid_buffers_{};
     Buffer vertex_buffer_;
+    Buffer instance_buffer_; // GpuInstance: the identity, then the instanced models' placements
     Buffer index_buffer_;
     std::vector<Texture> textures_;
     VkSampler sampler_ = VK_NULL_HANDLE;
@@ -264,10 +404,32 @@ private:
     VkDescriptorSet set_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipelines_[3]{};
+    // SceneOptions::depth_prepass: the depth-only pipeline, and the opaque colour pipeline that tests equal and writes
+    // no depth (the pre-pass wrote it).
+    bool depth_prepass_ = false;
+    bool depth_drawn_ = false; // draw_depth wrote this frame's depth: the next opaque draw may test equal
+    VkPipeline depth_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline opaque_equal_pipeline_ = VK_NULL_HANDLE;
     bool behind_ = false; // ZoneRenderOptions::behind
     VkPipeline shadow_pipeline_ = VK_NULL_HANDLE;
     VkPipeline point_shadow_pipeline_ = VK_NULL_HANDLE;
     VkPipeline underwater_pipeline_ = VK_NULL_HANDLE;
+    HorizonLand horizon_;
+    std::shared_ptr<const HorizonBuild> horizon_build_;
+    // The land round the zone's chunks are cells this size.
+    static constexpr float kDistantChunk = 256.0f;
+    bool show_distant_ = false;
+    std::vector<std::int64_t> footprint_; // a neighbour's
+    // The land's triangles are drawn from index buffers of their own, one per frame in flight, holding
+    // distant_shown_: its triangles as built (distant_indices_, in the distant draws' order) with those
+    // set_distant_hidden hides collapsed to a point. distant_dirty_: the frame slots whose buffer is behind it (bits).
+    std::vector<std::uint32_t> distant_indices_, distant_shown_;
+    std::vector<std::int64_t> distant_squares_; // each triangle's square (-1: never hidden, the sea)
+    std::array<Buffer, VkContext::kFramesInFlight> distant_buffers_{};
+    std::array<void*, VkContext::kFramesInFlight> distant_mapped_{};
+    std::uint32_t distant_dirty_ = 0;
+    // Binds the land's index buffer for `frame_slot` (brought up to date first), or the zone's.
+    void bind_indices(VkCommandBuffer cmd, std::uint32_t frame_slot, bool distant);
 };
 
 } // namespace hailstone::render

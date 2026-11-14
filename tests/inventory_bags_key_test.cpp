@@ -144,6 +144,24 @@ TEST_CASE("bank bags key: the bank's and the shared bank's bags open while the b
     api.right_click_item(net::ItemSlot::possessions(25));
     CHECK(open() == "|||");
 
+    // Closing the bank closes every container, carried bags too, and sets both keys back to open
+    // (CBankWnd::OnShow @0x627760: CContainerMgr::CloseAllContainers, 0x697e40). Reopening the same banker
+    // before the next UI frame must still close the old bags.
+    api.toggle_all_bags();
+    api.toggle_all_bank_bags();
+    CHECK(open() == "Pouch|Bank Sack|Shared Box|");
+    conn.close_bank();
+    REQUIRE(conn.activate_bank(60));
+    CHECK(open() == "|||");
+    api.toggle_all_bank_bags();
+    CHECK(open() == "Bank Sack|Shared Box||");
+    api.right_click_item(net::ItemSlot::possessions(25));
+    CHECK(open() == "Bank Sack|Shared Box|Pouch|");
+    conn.close_bank();
+    CHECK(open() == "|||");
+    api.toggle_all_bags(); // the inventory key opens again: its flag was set
+    CHECK(open() == "Pouch|||");
+
     lua_close(L);
     ImGui::DestroyContext(ctx);
 }

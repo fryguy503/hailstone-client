@@ -181,6 +181,7 @@ local PAGES = {
         { "Con-coloured NPC names", "con_name_colour" }, { "Highlight target name", "target_plate_highlight" }, { "Target name through walls", "target_plate_through_walls" }, { "Fade overlapping names", "plate_overlap_fade" }, { "Target ring", "show_target_ring" },
         { "Target ring cues", "target_ring_cues" }, { "Target ring through models", "target_ring_xray" },
         { "Target skips pets", "tab_skip_pets" }, { "Target needs sight", "tab_line_of_sight" }, { "Gem replaces spell", "replace_gem_spell" }, { "Buff timers", "show_buff_timer" }, { "Song timers", "show_song_timer" },
+        { "Compare items with what you wear", "item_compare" }, { "Upgrade / downgrade verdict", "item_compare_verdict" },
         { "Context menus", "context_menus" }, { "Player right-click menu", "player_menu" }, { "More hot button states", "hotbutton_extras" },
         { "Offer layouts to new characters", "offer_layout_copy" } }) do
       local x = optionRow(o[1], o[2], "bool")
@@ -241,6 +242,7 @@ local PAGES = {
       optionRow("Ambient occlusion", "ao", "bool"),
       optionRow("Grass", "grass", "bool"),
       optionRow("Grass distance", "flora_distance", { 400, 1200, 100, " units" }),
+      optionRow("Tree detail distance", "tree_detail", { 50, 200, 10, " %" }),
       optionRow("Lighting", "lighting", { "Modern", "Classic" }),
       optionRow("Max camera zoom", "max_camera_distance", { 10, 150, 10, " units" }),
       optionRow("Ground floating NPCs", "ground_npcs", "bool"),
@@ -255,6 +257,7 @@ local PAGES = {
     local rows = {}
     local list = {
       optionRow("Isometric camera", "iso_camera", "bool"),
+      optionRow("Click to move in every camera", "click_move", "bool"),
       optionRow("Pitch", "iso_pitch", { 20, 89, 1, "°" }),
       optionRow("Field of view", "iso_fov", { 10, 90, 1, "°" }),
       optionRow("Movement", "iso_wasd", { "Relative to the camera", "Classic" }),

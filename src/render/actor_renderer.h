@@ -461,6 +461,7 @@ private:
     double clock_ = 0.0;
     std::minstd_rand rng_{0x5eed};
 
+    std::uint64_t shared_listener_ = 0; // VkContext::on_shared_textures_moved
     std::vector<Texture> textures_; // a freed slot holds no image (drawn white) until it is used again
     std::vector<std::uint32_t> free_textures_;
     std::unordered_map<std::string, TextureSlot> texture_slots_;

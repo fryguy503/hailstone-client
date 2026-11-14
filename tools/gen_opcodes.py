@@ -29,6 +29,9 @@ LINE = re.compile(r"^OP_([A-Za-z0-9_]+)\s*=\s*0x([0-9A-Fa-f]{1,4})\b")
 # Taken from the server side of EQEmu#5119 and not yet traced in the original (docs/unknowns.md "Achievements"):
 # 0xdab0, 0x618f, 0x2b42, 0x059d, 0x28e0, 0x171e and 0x675d. src/net/achievement_packets.h and reward_packets.h
 # repeat these values as constants for switch labels; tests/achievement_packets_test.cpp checks they agree.
+# Native fellowship routes were independently checked at CFellowshipWnd sends
+# 0x669440/0x6688e0 and receive routes 0x4c5733/0x4c55cd/0x6691d0/0x4cd4d3.
+# UpdateAltResponse is the campsite kit list, not an alternate roster.
 STOCK_ROF2_ADDITIONS = (
     ("AchievementReward", 0x6411), ("RewardSelection", 0x6471),
     ("AchievementDefinitions", 0xDAB0), ("AchievementUpdate", 0x618F),
@@ -36,6 +39,9 @@ STOCK_ROF2_ADDITIONS = (
     ("AchievementComparisonReply", 0x28E0), ("AchievementEarned", 0x17F8),
     ("AchievementWindow", 0x171E), ("AchievementRequest", 0x47CB),
     ("AchievementLinkRequest", 0x675D), ("AchievementCompareRequest", 0x1665),
+    ("FellowshipUpdate", 0x7121), ("FellowshipCampRefresh", 0x0C12),
+    ("FellowshipInvite", 0x62AB), ("FellowshipUpdateResponse", 0x6E4D),
+    ("FellowshipUpdateAltResponse", 0x074D), ("FellowshipVitalityUpdate", 0x2CC6),
 )
 
 

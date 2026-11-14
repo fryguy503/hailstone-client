@@ -2,6 +2,35 @@
 
 What the client does not implement yet, or implements with an approximation it cannot confirm. Entries are removed once settled.
 
+## Fellowships
+
+- Stock EQEmu does not send RoF2 fellowship packets, so nothing here has met a server. Native requests and roster/vitality fields were checked against the original handlers, and against EQEmu PR #5134 "TOB: Fellowships" (open, unmerged) as a protocol reference. Unit, mock-server and both UI-pack rendering tests cover native twelve-member and expanded 64-member rosters. Live cross-zone synchronization, XP awards and camp gameplay remain untested.
+- The 64-member array layout and the 1080-byte invitation are extensions beyond RoF2, documented in `docs/protocol/rof2-packets.md`. PR #5134 hard-caps its model and serializers at twelve, so its membership rule alone cannot enable 64. A server that sends expanded rosters and a live roster capture would establish interoperability above twelve.
+- Declining sends action 4, as RoF2 does (`Send_Opcode_0x7121` @0x668710). PR #5134 reads action 4 as a legacy camp destruction, so against that server a decline reaches its camp handler instead of refusing the invitation; that is the server's to fix, since RoF2 sends the same. An unanswered invitation that times out sends nothing: whether the original's dialog sends action 4 on its 100-second timeout is not traced; the confirmation dialog's timeout path (dialog type 0xc) would settle it.
+
+## Shared archive memory
+
+- `assets.shared_memory=auto` (docs/layout.md "Shared archive memory") is measured on Linux only, one and two clients
+  in one zone (docs/research/shared-asset-memory.md). Windows and macOS mapping, locking and eviction are covered by
+  unit tests, not live sessions; sustained play with zoning, and more clients, are not measured. A cache file is
+  checked once per client and then trusted: a file damaged on disk while a client runs is not noticed by that client
+  (the parsers still bound what they read).
+
+## Shared GPU textures
+
+The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/research/shared-gpu-memory.md):
+
+- When sharing stops, a client copies its imports into its own images (`GpuSharedCache::localize`). That copy reads
+  each import once more after the client has left the lease, and a client whose shared frame did not finish within
+  2 seconds gives up the lease (by disconnecting) while that frame may still be running. Vulkan gives an external
+  image to one instance at a time; both cases only read immutable images that every client keeps in
+  `SHADER_READ_ONLY_OPTIMAL`, and the copy's layout change to `TRANSFER_SRC_OPTIMAL` is on the client's own image
+  object, but whether a driver may rewrite such an image's memory (compression metadata) on that transition is not
+  established. Khronos guidance or the driver vendors' word on external images would settle it; a validation-layer
+  run of the failure paths on AMD, NVIDIA and Intel would at least rule out API misuse.
+- The failure paths (broker killed, a client killed holding the lease, lease timeout, hung frame, localisation) are
+  covered by unit tests of the bookkeeping and the client's decisions only, not on Windows with real GPUs.
+
 ## Network and session
 
 - Return Home on the character select is enabled for a character whose list entry has both `go_home` and `enabled` set. The original checks `bCanGoHome` and `bUseable` (`CCharacterListWnd::EnableButtons` @0x42f4b0); that `bUseable` comes from the list's `enabled` byte is assumed, not traced. Stock EQEmu always sends `enabled = 1`, so it changes nothing there. Tracing where OP_SendCharInfo's handler fills `CharSelectInfo` +0x15c would settle it.
@@ -47,6 +76,7 @@ What the client does not implement yet, or implements with an approximation it c
 - A window close request on a loading screen waits for the next screen (as the original's queued message would); a second one quits at once.
 - Which zone version the server runs: RoF2's zone-in packets do not say, so with a live asset folder and no `.s3d`, the revamped `.eqg` of bazaar, highpasshold or lavastorm loads only when the safe point OP_NewZone sends stands on its floor (at most 10 units above it; game/revamped_zone.h). It was measured on PEQ's rows only: the revamp's safe points stand 2.0 to 4.2 units above its floor, and the old versions' have no floor under them (bazaar, lavastorm) or one 15.9 units down (nektulos). A server whose zone row has another safe point (an unset 0, 0, 0, a point in the air) gets the refusal or, by chance, the revamp. There is no fallback on the spawns: they arrive after the load has started, so testing them would mean loading the zone twice. A neighbour zone loaded ahead (no OP_NewZone yet) and the offline viewers keep the refusal. Testing other servers' zone tables would settle it.
 - Arena and Nektulos with a live folder: the `.s3d` wins over the revamped `.eqg` (`is_eqg_zone`), as before, and the safe-point test is not asked. Yet PEQ runs the revamp there: its only Arena row's safe point stands 4.2 units above the live arena.eqg's floor and 51 above arena.s3d's, with 6 of 6 spawns on the `.eqg` and 1 of 6 on the `.s3d`; Nektulos version 1 (expansion 10 on) has 400 of 404 spawns on nektulos.eqg and 39 of 404 on nektulos.s3d. Whether a RoF2 folder's own arena.s3d and nektulos.s3d are the live folder's, and whether the safe point should also choose between a present `.s3d` and the `.eqg`, are open. Comparing the files with a RoF2 install would settle the first.
+- The local player's fly mode (docs/mechanics.md "fly mode"): the original rebuilds its effect cache, and so recomputes levitation, whenever something clears the cache flag (+0x1a4): OP_Buff in every form, `HitBySpell`, `RemoveAffect`, the buff tick for tick-varying effects, and possibly worn item changes. Hailstone counts a change of a buff slot's spell (or of the SPA 57 values) as a rebuild, so an OP_Buff that refreshes a slot with the same spell, the tick and an item change do not put a server-set mode back; a slot losing or gaining a levitate spell stands for `RemoveAffect`'s and `HitBySpell`'s SPA 57 cases, though OP_Buff's copy (bufffade 3) calls neither; the "no levitation left" test reads the buff cache's SPA 57, where `PlayerZoneClient::Levitating` also counts worn items and AAs. At zone-in Hailstone applies the spawn record and then rebuilds; whether the original's first rebuild comes after its own spawn exists (`UpdateLevitationState` does nothing without one) is not traced, and only matters when the record disagrees with the buffs (stock EQEmu sends 2 for a levitating player, else 0). A live session with GM `#set flymode` and buffs, or a trace of the cache flag's writers, would settle it.
 
 ## Navigation (a Hailstone addition, docs/navigation.md)
 
@@ -83,6 +113,11 @@ What the client does not implement yet, or implements with an approximation it c
 - AllowedToAttack's newbie-zone rule reads the target's Zone (+0x210); the client fills it for every spawn with the current zone's id and instance (`AttackCheckInput::zone`), as a spawn is only known in the player's own zone. Where the original writes a spawn's +0x210 (the spawn packet or the zone-in) was not traced; tracing those writes would settle it.
 
 ## Items, inventory and commerce
+
+- Mercenary liaison window (docs/mechanics.md "Leaving an NPC interaction"): its range check is the window's
+  observer 0x6eb560 (vftable 0x9f1ef8 slot 1; a liaison id set and the liaison missing or beyond 20 units, 3D, hides
+  it), but what calls the observer, and how often, is not traced. Hailstone checks every connection update. Tracing
+  the callers of that slot in the mercenary manager's event dispatch would settle it.
 
 - Ctrl bag moves (game/bag_move.h): ProcessMove's ValidateMove refusals (lore, equip, storage) are not run before OP_MoveMultipleItems goes (the server checks), and FindRoom's place trading (0x56f1c0) is left out; no list MoveItem builds was found where it adds room.
 - Looting: the quantity asked for a partial stack goes in OP_LootItem's last field, which EQEmu ignores (it loots the whole stack; seen live on NMS: 5 of 15 typed, 15 looted). Link All's chat input, and the item display icon's link that takes the same path, skip the IME check of CEditWnd::AddItemTag and count the input's links from its text. Both add the link at the end of what is typed; AddItemTag goes through ReplaceSelection, so the original puts it at the input's caret or over its selection. Settled by tracing where CEditWnd keeps the caret while the input does not have the focus, and putting the link there.
@@ -191,12 +226,12 @@ What the client does not implement yet, or implements with an approximation it c
 
 - The NPC target keys (game/targeting.h): whether the scene graph query that offers the cycle's spawns (EQGraphicsDX9.dll, vtable +0x98) tests line of sight is not traced; the client offers every NPC within 500 units, and the Hailstone option `tab_line_of_sight` (on by default) adds a sight test of its own. Settled by reading that query, or by pressing Tab in the original client with an NPC behind a wall.
 
-- Labels and gauges (`app/lua_eq_values.cpp`): ATK leaves out the leadership offense enhancement (no packet source) and the profile's `+0x3468` bonus. Not tracked: the leadership experience gauges (23, 24), the discipline timer gauge (26), vitality (147, 148), the loyalty velocity (146), the skill damage labels (228..236), the item bonus caps (277..295), the loyalty tokens (296), the trophy tribute labels (297..301), the leadership experience labels (130, 131), the mercenary label (72), the subscription time (334) and the achievement gauges. The HP gauges' `PlayerZoneClient +0x194` test (the pink band) is not known.
+- Labels and gauges (`app/lua_eq_values.cpp`): ATK leaves out the leadership offense enhancement (no packet source) and the profile's `+0x3468` bonus. Not tracked: the leadership experience gauges (23, 24), the discipline timer gauge (26), the loyalty velocity (146), the skill damage labels (228..236), the item bonus caps (277..295), the loyalty tokens (296), the trophy tribute labels (297..301), the leadership experience labels (130, 131), the mercenary label (72), the subscription time (334) and the achievement gauges. The HP gauges' `PlayerZoneClient +0x194` test (the pink band) is not known.
 - The modern pack's hot bars lay out vertically by their own "Buttons per row"; the stock window's vertical page buttons (`HB_VerticalBarPageButtons`) stay hidden in the model. The gamepad pack's bars turn vertical (a column left of the minimap, the buttons smaller when the screen is short) by a click on their page number, kept as its own setting `hotbar.vertical.<window>`; with Show Spinner off there is no page number to click.
 - The spell book's Mem. This Page buttons do nothing in RoF2: the window looks them up but never handles them, and its layout makes them 1 x 1; neither pack shows them.
 - The trophy tribute, zone guide and zone path windows have no data on EQEmu servers.
 - The Find window's quest givers (server/README.md) are the NPCs whose own quest file has a say or hand-in handler, by the file's text: a handler a Perl plugin or an encounter adds at run time is missed, and a file that has the handler but does nothing in it is counted. Two NPC types with the same name in a zone, one of them scripted by id, both show as having quests. Asking EQEmu's own `HasQuestSub` from Lua (not exposed) would settle it. The tribute trophy list is empty.
-- Voice macros and audio triggers are not implemented by choice, nor are a few commercial-service windows (the marketplace's funding and credit-card pages, polls, alerts and event calendar, trading cards, social sharing, fellowships).
+- Voice macros and audio triggers are not implemented by choice, nor are a few commercial-service windows (the marketplace's funding and credit-card pages, polls, alerts and event calendar, trading cards, social sharing).
 - Context menus and the EQ menu use this client's own style; the cursor attachment's placement is approximate.
 - Windows scale with the display scale; sizes are stored unscaled.
 - Escape and the UI pack's windows: the modern pack's windows close on the close-top-window key only when "Close with Esc" is ticked in their right-click menu (on by default for the windows opened to look at something, listed in `lib/escape.lua` DEFAULT_ON; off for the rest), the frontmost by the order they were opened or clicked. Which of the original's windows close on Escape, in which order, and whether it then also clears the target, is not traced (CLOSE_TOP_WINDOW in `__ExecuteCmd` and the window manager's escape handling would settle it).
@@ -233,7 +268,7 @@ Real estate is built to the original (docs/protocol/rof2-packets.md "Real estate
 - The neighborhood polls (0x15e2, 0x3311, 0x39bb, 0x52b5, 0x6860, 0x7497, 0x593a) and the vote window (the manage window's vote button) are not built.
 - The windows: access edits are sent at once as the whole table on 0x3146; the original queues them (SendQueuedUpdates @0x747ed0, not traced). "May manage" (0x4ff6c0 with 0xc) is read as "your own plot, or a GM"; the opt-out and upkeep checks (0x5b09d0, 0x5aee30) are left to the server.
 - Item menu (0x21ec) entry types 2 (placement), 0xc / 0xd (target the item's spawn), 0xe (window 0x4b) and 0x11 (dialog 0x67, eqstr 0x14d9) do nothing. What the item operations 0x050c, 0x51e3, 0x64a3 and 0x7ad1 do is not known; the menu sends them as the original lays them out. The request's +0x2f8 is sent as the item's id; the original reads item definition +0xec, not confirmed to be the id.
-- The text of the Store All / Pack / Unpack questions is not traced, so the windows use their own wording; the access groups' and permissions' names are this client's labels. The cost text is this client's own (PopulateCostCombo @0x74d240 not traced), and alternate currency names use dbstr type 0x13, a guess. The plot window's title (the address, plus " (id)" for a GM) is a guess.
+- The text of the Store All / Pack / Unpack questions is not traced, so the windows use their own wording; the access groups' and permissions' names are this client's labels. The cost text is this client's own (PopulateCostCombo @0x74d240 not traced), and an alternate currency's name is dbstr type 0x12 of its id, as the inventory's and the point merchant's lists read it (whether real estate passes the same id is not traced). The plot window's title (the address, plus " (id)" for a GM) is a guess.
 - The items window's button greying (005aee70 / 005af1e0 / 005b0c60) and its show filters are not built: the buttons are enabled when a row is selected and no request is pending.
 - Guild halls: an instanced guild hall is the one whose zone word has bit 15 set, as the original tests it. Whether EQEmu-based servers ever set that bit is not known; without it every guild hall zone allows the bank, as on stock EQEmu.
 
