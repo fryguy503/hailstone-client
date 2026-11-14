@@ -1256,6 +1256,41 @@ Vectors in `tests/chat_trade_vectors_test.cpp` (set chat input mode 1500, toggle
   and 1447; CastSpell asks the same check.
 - Group invites: 148 bytes out; in, declines 1 / 4 / 5 or the pending invitation with the u32 at +0x94.
 
+## Group roles
+
+The group leader assigns Main Tank (1), Main Assist (2) and Puller (3) by right-clicking a member's name in the
+Group window, or their own name in the Player window, in either UI pack. Small role icons beside the names show
+the assignments, with the full role names on hover. A member may hold several roles, while each role belongs to
+at most one member; mercenaries may only hold Main Tank.
+On stock EQEmu, assigning a role requires the member to be in the leader's zone. An existing role can also be
+cleared while its holder is in another zone; the menus explain this restriction.
+
+Deliberate differences from RoF2 (Hailstone's, marked in `app/lua_eq_hud.cpp` and `GameConnection::send_group_role`):
+
+- The original's roles are a "Roles" submenu of the Group and Player windows' own context menu (added by
+  CGroupWnd::sub_0067ac60 @0x67ac60 and CPlayerWnd::sub_00717f60 @0x717f60). Hailstone opens the role menu on its
+  own from a right click on the name (Y on a row in the gamepad pack), and leaves the window menu to the rest of the
+  frame; the menu has no "Window" row.
+- The original offers Roles only to the group leader (the Group window's test: FUN_00443670 in 0x67ac60): other
+  members get no Roles row at all. Hailstone shows everyone in a group the menu, with the role rows greyed for all
+  but the leader.
+- The original's submenu starts with "Leader" (item 100, /makeleader; built in CGroupWnd's constructor @0x67bc00).
+  Hailstone's menu is roles only; /makeleader stays.
+- For a mercenary the original offers every row and refuses Leader, Main Assist and Puller on the click with eqstr
+  7607 "A NPC cannot be that role." (CGroupWnd::WndNotification @0x67c620). Hailstone greys those rows instead;
+  `send_group_role` still refuses with 7607 for any other caller.
+- The original's menu sends Send_OP_GroupRoles without checking leadership or CanUseCommandNow, relying on Roles
+  being offered to the leader only. Hailstone's `send_group_role` checks both (0x1db1 for a non-leader, then
+  CanUseCommandNow's refusals), as Cmd_grouproles @0x4f8360 does for `/grouproles set|unset`, so a menu left open
+  after leadership changed cannot send.
+
+The UI and `/grouproles set|unset <member> <role number>` share `GameConnection::send_group_role`, which checks
+the current group, leader, member and role before sending the existing `OP_GroupRoles` packet. Sending a request
+does not change local roles: `OP_GroupRoles` replies and the `OP_GroupUpdateB` roster set the flags. The UI's
+icons and menu checks, and scripts' `Group.MainTank`, `Group.MainAssist`, `Group.Puller` and member role flags, read
+that same state. Assigning a role clears its previous holder when the server confirms it. A group disband or
+zone transition clears the old state, and the server's roster and role updates restore it.
+
 ## Hot buttons, socials and tracking
 
 Vectors in `tests/hotbutton_tracking_vectors_test.cpp` (do-hot-button 4000, hot-button right click 1500, social stop
