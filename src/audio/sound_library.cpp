@@ -59,7 +59,8 @@ void SoundLibrary::build_index() {
             if (stop_) return;
         }
         try {
-            auto a = assets::PfsArchive::open(archive_paths_[i], assets::PfsArchive::storage_for(game_, archive_paths_[i]));
+            auto a = assets::PfsArchive::open(archive_paths_[i],
+                assets::PfsArchive::storage_for(game_, archive_paths_[i]), game_.shared_file_cache());
             for (const auto& n : a.names()) {
                 index[lower_case(n)] = static_cast<int>(i); // higher numbers override
                 ++files;
@@ -110,7 +111,8 @@ std::shared_ptr<const assets::PfsArchive> SoundLibrary::archive(int index) {
         }
     auto a = std::make_shared<const assets::PfsArchive>(
         assets::PfsArchive::open(archive_paths_[static_cast<std::size_t>(index)],
-                                  assets::PfsArchive::storage_for(game_, archive_paths_[static_cast<std::size_t>(index)])));
+            assets::PfsArchive::storage_for(game_, archive_paths_[static_cast<std::size_t>(index)]),
+            game_.shared_file_cache()));
     open_.emplace_back(index, a);
     if (open_.size() > kOpenArchives) open_.erase(open_.begin());
     return a;

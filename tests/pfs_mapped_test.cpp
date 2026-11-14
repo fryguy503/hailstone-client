@@ -14,6 +14,7 @@
 #include "assets/pfs.h"
 #include "assets/wld.h"
 #include "core/game_dir.h"
+#include "core/shared_file_cache.h"
 #include "pfs_fixtures.h"
 #include "platform/durable_file.h"
 #include "platform/mapped_file.h"
@@ -301,4 +302,55 @@ TEST_CASE("PfsArchive::storage_for maps the game folder's files and reads the ov
     // No overlay: the base's files are mapped.
     hailstone::GameDir plain(base);
     CHECK(PfsArchive::storage_for(plain, *plain.find("gfaydark.s3d")) == PfsArchive::Storage::Mapped);
+}
+
+TEST_CASE("PfsArchive storage policy and shared cache compose without losing safe fallbacks") {
+    using hailstone::SharedFileCache;
+    using namespace hailstone::test::pfs_fixtures;
+    hailstone::test::ScratchDir dir{"pfs_storage_cache"};
+    const auto root = std::filesystem::canonical(dir.path());
+    const auto source = root / "fixture.s3d";
+    const std::vector<std::byte> content(30, std::byte{'h'});
+    const auto bytes = make_pfs({{"a.txt", content}});
+    write_bytes(source, bytes);
+
+    SUBCASE("cache hits take precedence over either direct storage policy") {
+        auto cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{root / "cache"});
+        const auto warm = cache->load(source);
+        REQUIRE(warm);
+        REQUIRE(warm->mapped());
+        for (const auto storage : {PfsArchive::Storage::Mapped, PfsArchive::Storage::Heap}) {
+            const auto previous_hits = cache->stats().hits;
+            const auto archive = PfsArchive::open(source, storage, cache);
+            CHECK(cache->stats().hits == previous_hits + 1);
+            CHECK(archive.mapped());
+            CHECK(archive.backing_mapped());
+            CHECK(archive.storage_bytes() == bytes.size());
+            CHECK(archive.backing_size() == bytes.size());
+            CHECK(archive.owned_bytes() == 0);
+            CHECK(archive.read("a.txt").value() == content);
+        }
+    }
+    SUBCASE("an unavailable cache keeps its owned fallback instead of directly mapping the source") {
+        const auto blocked = root / "cache-is-a-file";
+        write_bytes(blocked, {std::byte{'!'}});
+        auto cache = std::make_shared<SharedFileCache>(SharedFileCache::Options{blocked});
+        const auto archive = PfsArchive::open(source, PfsArchive::Storage::Mapped, cache);
+        CHECK(cache->stats().fallbacks >= 1);
+        CHECK_FALSE(archive.mapped());
+        CHECK_FALSE(archive.backing_mapped());
+        CHECK(archive.storage_bytes() == bytes.size());
+        CHECK(archive.owned_bytes() == bytes.size());
+        CHECK(archive.read("a.txt").value() == content);
+    }
+    SUBCASE("a null cache preserves both upstream storage choices") {
+        const auto mapped = PfsArchive::open(source, PfsArchive::Storage::Mapped, {});
+        const auto heap = PfsArchive::open(source, PfsArchive::Storage::Heap, {});
+        CHECK(mapped.mapped());
+        CHECK(mapped.owned_bytes() == 0);
+        CHECK_FALSE(heap.mapped());
+        CHECK(heap.owned_bytes() == bytes.size());
+        CHECK(mapped.read("a.txt").value() == content);
+        CHECK(heap.read("a.txt").value() == content);
+    }
 }

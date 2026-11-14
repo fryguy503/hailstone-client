@@ -2,6 +2,12 @@
 
 Implementation: `src/assets/wld.{h,cpp}` (parser), `src/assets/wld_zone.cpp` (meshes, skeleton rest pose, placements, `load_classic_zone`). Tool: `wlddump`. Tests: `tests/wld_test.cpp`.
 
+Parsed fragments keep common small payloads inline and own the larger mesh and particle-cloud payloads separately.
+`Fragment::get<T>()`, `holds<T>()`, and `as<T>()` expose the same decoded values; `as` throws on a mismatched type.
+Copies own independent mutable payloads. The name index stores sorted fragment indices instead of another copy of
+each string, preserving case-sensitive lookup and the first definition of a repeated name. It remains valid when
+a WLD file is copied or moved. Storage and lookup regression tests are in `tests/wld_storage_test.cpp`.
+
 Sources:
 - **OpenEQ** (MIT OR Apache-2.0): `docs/ARCHITECTURE.md` (WLD section, coordinate system), `WLD_FRAGMENT_BOUNDARIES.md`, `WLD_STRING_OFFSETS.md`, `WLD_REFERENCE_RESOLUTION.md`, `WLD_PACKED_SCALE.md`, `WLD_PLACED_OBJECTS.md`, `WLD_OBJECT_ANIMATION.md`, and `crates/openeq-assets/src/wld.rs`.
 - **libeq** (github.com/cjab/libeq, MIT): `crates/libeq_wld/src/parser/fragments/*.rs`, the most detailed field-level docs (it quotes Windcatcher's WLD spec).

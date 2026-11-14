@@ -82,9 +82,10 @@ hailstone/
                              scripts/<name>/ and plugins/<name>/
   update/                    the updater's downloads, the installed components' file lists, the files the last
                              update replaced (until the new version has started) and its journal (docs/updater.md)
-  cache/                     safe to delete: cache/plugins/ holds the loaded plugins' copies, cache/pipelines.bin
+  cache/                     safe to delete after clients stop: cache/plugins/ holds the loaded plugins' copies, cache/pipelines.bin
                              the compiled Vulkan pipelines, cache/navmesh/<server>/<zone>.navmesh the zones'
                              navigation meshes (docs/navigation.md)
+    assets/v1/pfs/           optional shared archive snapshots ("Shared archive memory" below), their stable locks
 ```
 
 The paths come from `src/platform/paths.h`: `install_dir()` is the binary's folder, from which the shipped parts are
@@ -129,6 +130,62 @@ world or character name is compared with the saved list in that form, so such a 
 A save that fails is logged; on Windows, where the replace is refused while another program has the file open, it
 is tried a few more times first. Two clients may share `hailstone.ini`: when the file changed since a client read
 it, that client writes only the keys it changed over the other's (`core/config.h`).
+
+### Shared archive memory
+
+Several clients started from the same Hailstone data folder can share immutable archive backing and classic
+character animation bytes in RAM. Add these
+flat keys to the main `hailstone.ini`, then restart each client:
+
+```ini
+assets.shared_memory=auto
+assets.shared_memory_cache_mb=1024
+```
+
+The snapshot cache is experimental and off by default (`assets.shared_memory=off`). With it off, the normal archive
+policy still maps base/classic game files read-only and keeps replaceable server-overlay archives in owned memory.
+The disk budget defaults to 1024 MiB, with a maximum of 16384 MiB. With `auto` selected, a zero budget uses owned
+private fallback rather than the normal cache-off mapping policy. These settings apply to every character and are
+read at start-up. The cache stays under `data_dir()/cache/assets/v1/pfs`; separate portable data folders have separate
+caches. Different servers' replacements are distinguished by content, including edits that preserve file size and
+timestamp. The game install is only read. Cached bytes are local derivatives and must not be redistributed.
+
+Every client maps the same completed snapshot read-only, retaining a use lease until the last reader finishes.
+Published files are never rewritten. New contents create a new snapshot, so an external patcher's changes to the
+source cannot truncate an existing mapping. Cache copying/verification uses bounded buffers. On a miss, a client
+waits at most 250 ms for another publisher before loading privately. Source hashing, snapshots and parsing run
+where the existing archive load runs; enabling this can add I/O and CPU work during loading.
+
+The disk budget counts finished snapshots and abandoned temporary files. When more room is needed, old snapshots
+are removed only if no client holds any mapping/build lease. While other clients keep the cache in use, a full
+cache loads new archives privately. An unavailable cache, unsupported filesystem, unsafe permissions/links, corrupt
+entry or mapping failure also uses private loading. A corrupt entry is removed only during exclusive trimming;
+it is never replaced underneath another reader. Stop all clients before manually deleting cache contents, and
+never remove or replace its `use.lock` or `publish.lock` files while a client is running.
+
+Character WLD members are also cached as immutable inflated snapshots. Their packed animation keys are read from
+those bytes on demand, including the clips and animation aliases of loaded models, instead of retaining private
+expanded key arrays in each client. Decoding preserves the normal pose conversion and borrowed-bone scaling.
+Character WLDs retain a stable validated resource index and decode full payloads when needed. The existing
+process-wide 128 MiB LRU retains released decoded payloads; that budget is separate from the snapshot disk budget.
+Mapped animation owners remain valid when a decoded payload is evicted.
+
+`AnimationTrack` copies and aliases share keys within a process, detach on builder mutation and compact constant
+tracks without changing their logical length or timing. Mapped tracks keep encoded backing through that
+compaction; EQG keys keep the owned copy-on-write path. WLD fragment storage and name indexes also use less private
+memory in both loading modes. Borrowed lookup names belong to stable deferred resource-index entries, or retained
+fragment names for eagerly parsed WLDs, so decoded-payload eviction cannot invalidate the tables.
+
+Windows uses read-only file mappings; Linux and macOS use read-only shared POSIX mappings of the same cache files.
+This does not require a named shared-memory segment, `/dev/shm` configuration or administrator privileges. Native
+macOS execution and Linux live gameplay remain validation gaps; see the research page for the tested scope.
+
+The performance window (Ctrl+Shift+P) shows shared asset backing and cache hit/build/fallback counts. Mapped bytes
+are addressable backing, not measured resident physical memory. Each process's resident figure may include the
+same shared pages. With CPU sharing alone, model objects and geometry, collision, other inflated members, texture
+uploads and Vulkan allocations still belong to each process. The separate experimental Windows
+[GPU texture broker](graphics.md#developer-quickstart-on-windows) has its own opt-in, usage and validation limits. See the
+[shared asset memory design](research/shared-asset-memory.md) for the next stages and measurement limits.
 
 ### A character's settings
 

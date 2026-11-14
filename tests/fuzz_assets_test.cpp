@@ -409,9 +409,9 @@ TEST_CASE("fuzz: WLD files and the meshes built from them") {
         auto w = wld::WldFile::deferred([d] { return std::vector<std::byte>(d.begin(), d.end()); }, "fuzz");
         for (const auto& f : w.fragments()) {
             (void)w.resolve(static_cast<wld::Ref>(f.offset));
-            if (const auto* m = std::get_if<wld::MeshDef>(&f.data)) check_parts(wld::build_mesh(w, *m, f.name));
-            if (const auto* sk = std::get_if<wld::Skeleton>(&f.data)) (void)wld::build_skeleton_pose(w, *sk, f.name);
-            if (const auto* inst = std::get_if<wld::ActorInstance>(&f.data)) (void)wld::placement_transform(*inst);
+            if (const auto* m = f.get<wld::MeshDef>()) check_parts(wld::build_mesh(w, *m, f.name));
+            if (const auto* sk = f.get<wld::Skeleton>()) (void)wld::build_skeleton_pose(w, *sk, f.name);
+            if (const auto* inst = f.get<wld::ActorInstance>()) (void)wld::placement_transform(*inst);
         }
         (void)w.string_at(-1000000);
         (void)w.find("x");

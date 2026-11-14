@@ -373,13 +373,13 @@ private:
                 }
             } catch (const std::exception&) {
                 const wld::WldFile& w = *loc->first;
-                const auto& actor = std::get<wld::ActorDef>(loc->fragment()->data);
+                const auto& actor = loc->fragment()->as<wld::ActorDef>();
                 piece = {};
                 try {
                     for (wld::Ref s : actor.sprites) {
                         const auto* ref = w.get<wld::MeshRef>(s);
                         const wld::Fragment* mf = ref ? w.resolve(ref->mesh) : nullptr;
-                        if (mf && std::holds_alternative<wld::MeshDef>(mf->data)) detail::append_wld_mesh(w, *mf, 1, 0, piece);
+                        if (mf && mf->holds<wld::MeshDef>()) detail::append_wld_mesh(w, *mf, 1, 0, piece);
                     }
                 } catch (const std::exception& e) {
                     log::debug("Luclin part {}: {}", a.name, e.what());

@@ -3,15 +3,21 @@
 // What a GPU needs for Hailstone (render/vk_context.cpp pick_physical_device), kept apart from Vulkan so the words a
 // player sees when no GPU qualifies are tested. The README's "System requirements" lists the same.
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace hailstone::render {
 
+enum class GpuKind { Other, Integrated, Discrete };
+
 // What one GPU reports, read from its Vulkan properties and features.
 struct GpuSupport {
     std::string name;
+    GpuKind kind = GpuKind::Other;
     std::uint32_t api_major = 0;
     std::uint32_t api_minor = 0;
     bool dynamic_rendering = false;
@@ -32,6 +38,15 @@ std::vector<std::string> gpu_missing(const GpuSupport& gpu);
 
 // The error for no usable GPU: every GPU with what it lacks, or that none was found.
 std::string no_usable_gpu_text(const std::vector<GpuSupport>& gpus);
+
+struct GpuSelection {
+    std::optional<std::size_t> index;
+    std::string error;
+};
+
+// Empty `exact_name` keeps the automatic preference: discrete, integrated, other, first on a tie. A requested
+// generic model must match exactly one enumerated GPU and meet every requirement; it never falls back.
+GpuSelection choose_gpu(const std::vector<GpuSupport>& gpus, std::string_view exact_name = {});
 
 // The instance extensions to enable, from what the window needs and what the Vulkan library offers.
 // VK_KHR_portability_enumeration is the Vulkan loader's: SDL asks for it on macOS, but MoltenVK loaded directly (the

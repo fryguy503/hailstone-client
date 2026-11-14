@@ -73,7 +73,7 @@ namespace {
 Material build_material(const WldFile& wld, Ref ref) {
     Material m;
     const Fragment* f = wld.resolve(ref);
-    const auto* def = f ? std::get_if<MaterialDef>(&f->data) : nullptr;
+    const auto* def = f ? f->get<MaterialDef>() : nullptr;
     if (!def) {
         m.blend = BlendMode::Invisible;
         return m;
@@ -242,7 +242,7 @@ std::vector<ParticleAttachment> skeleton_particles(const WldFile& wld, const Ske
     std::optional<std::vector<glm::mat4>> world;
     for (std::size_t i = 0; i < sk.nodes.size(); ++i) {
         const Fragment* f = sk.nodes[i].sprite ? wld.resolve(sk.nodes[i].sprite) : nullptr;
-        if (!f || !std::holds_alternative<ParticleCloud>(f->data)) continue;
+        if (!f || !f->holds<ParticleCloud>()) continue;
         if (!world && !(world = skeleton_rest_pose(wld, sk))) return {};
         out.push_back({f, (*world)[i]});
     }
@@ -263,9 +263,9 @@ std::optional<Mesh> build_skeleton_pose(const WldFile& wld, const Skeleton& sk, 
     std::unordered_set<const Fragment*> seen;
     for (Ref s : sprites) {
         const Fragment* sprite = wld.resolve(s);
-        const auto* ref = sprite ? std::get_if<MeshRef>(&sprite->data) : nullptr;
+        const auto* ref = sprite ? sprite->get<MeshRef>() : nullptr;
         const Fragment* mesh_frag = ref ? wld.resolve(ref->mesh) : nullptr;
-        const auto* md = mesh_frag ? std::get_if<MeshDef>(&mesh_frag->data) : nullptr;
+        const auto* md = mesh_frag ? mesh_frag->get<MeshDef>() : nullptr;
         if (!md || !seen.insert(sprite).second) continue; // particle sprites and repeats
         Mesh m = build_mesh(wld, *md, mesh_frag->name);
         if (!md->vertex_pieces.empty()) {
@@ -318,7 +318,8 @@ std::string lower(std::string s) {
 std::shared_ptr<const PfsArchive> open_archive(const GameDir& game, const std::string& file) {
     auto path = game.find(file);
     if (!path) return nullptr;
-    return std::make_shared<const PfsArchive>(PfsArchive::open(*path, PfsArchive::storage_for(game, *path)));
+    return std::make_shared<const PfsArchive>(PfsArchive::open(
+        *path, PfsArchive::storage_for(game, *path), game.shared_file_cache()));
 }
 
 wld::WldFile parse_member(const PfsArchive& archive, std::string_view member) {
@@ -342,7 +343,7 @@ std::uint32_t particle_definition(Zone& zone, ActorParticles& particles, const w
                                   const wld::Fragment& cloud) {
     if (auto it = particles.definitions.find(cloud.name); it != particles.definitions.end()) return it->second;
     std::uint32_t index = 0;
-    const auto& c = std::get<wld::ParticleCloud>(cloud.data);
+    const auto& c = cloud.as<wld::ParticleCloud>();
     if (auto tex = particle_texture(w, c.sprite)) {
         if (zone.particle_definitions.empty()) zone.particle_definitions.emplace_back().name = "None";
         index = static_cast<std::uint32_t>(zone.particle_definitions.size());
@@ -393,7 +394,7 @@ std::unordered_set<const wld::Fragment*> add_actor_defs(Zone& zone, const wld::W
     std::unordered_set<const wld::Fragment*> used;
     std::size_t failed = 0;
     for (const auto& f : w.fragments()) {
-        const auto* def = std::get_if<wld::ActorDef>(&f.data);
+        const auto* def = f.get<wld::ActorDef>();
         if (!def || f.name.empty()) continue;
         std::optional<Mesh> mesh;
         const std::string key = upper(f.name);
@@ -401,13 +402,13 @@ std::unordered_set<const wld::Fragment*> add_actor_defs(Zone& zone, const wld::W
         for (wld::Ref s : def->sprites) {
             const auto* sprite = w.resolve(s);
             std::optional<Mesh> built;
-            if (const auto* ref = sprite ? std::get_if<wld::MeshRef>(&sprite->data) : nullptr) {
+            if (const auto* ref = sprite ? sprite->get<wld::MeshRef>() : nullptr) {
                 const auto* mesh_frag = w.resolve(ref->mesh);
-                if (const auto* md = mesh_frag ? std::get_if<wld::MeshDef>(&mesh_frag->data) : nullptr) {
+                if (const auto* md = mesh_frag ? mesh_frag->get<wld::MeshDef>() : nullptr) {
                     used.insert(mesh_frag);
                     built = wld::build_mesh(w, *md, mesh_frag->name);
                 }
-            } else if (const auto* sref = sprite ? std::get_if<wld::SkeletonRef>(&sprite->data) : nullptr) {
+            } else if (const auto* sref = sprite ? sprite->get<wld::SkeletonRef>() : nullptr) {
                 if (const auto* sk = w.get<wld::Skeleton>(sref->skeleton)) {
                     built = wld::build_skeleton_pose(w, *sk, f.name);
                     if (!built) ++failed;
@@ -499,7 +500,7 @@ Zone load_classic_zone(const GameDir& game, std::string_view name_view, const Zo
     auto terrain = parse_member(*main, name + ".wld");
     auto used = add_actor_defs(zone, terrain, particles);
     for (const auto& f : terrain.fragments())
-        if (const auto* md = std::get_if<wld::MeshDef>(&f.data); md && !used.contains(&f)) {
+        if (const auto* md = f.get<wld::MeshDef>(); md && !used.contains(&f)) {
             zone.terrain.push_back(wld::build_mesh(terrain, *md, f.name));
             // A region mesh without colours: CTerrain::AddWldRegionMesh @0x1001f630 gives every vertex 0xFF1F1F1F
             // (the float -2.1150884e38 it stores), dark grey with full alpha.
@@ -508,7 +509,7 @@ Zone load_classic_zone(const GameDir& game, std::string_view name_view, const Zo
         }
     zone.regions = ZoneRegions::from_wld(terrain);
     for (const auto& f : terrain.fragments())
-        if (const auto* g = std::get_if<wld::GlobalAmbient>(&f.data)) {
+        if (const auto* g = f.get<wld::GlobalAmbient>()) {
             // Stored B, G, R, A; CS3DFile::LoadGlobalAmbient @0x1001b6a0 -> CSceneGraph vtable +0xd0.
             zone.global_ambient = glm::vec3((g->color >> 16) & 0xff, (g->color >> 8) & 0xff, g->color & 0xff) / 255.0f;
             break;
@@ -519,7 +520,7 @@ Zone load_classic_zone(const GameDir& game, std::string_view name_view, const Zo
         auto objects = parse_member(*main, "objects.wld");
         std::size_t missing = 0;
         for (const auto& f : objects.fragments()) {
-            const auto* inst = std::get_if<wld::ActorInstance>(&f.data);
+            const auto* inst = f.get<wld::ActorInstance>();
             if (!inst || !inst->has_location) continue;
             std::string actor = inst->actor < 0 ? objects.string_at(inst->actor)
                                                 : (objects.at(inst->actor) ? objects.at(inst->actor)->name : "");
@@ -554,7 +555,7 @@ Zone load_classic_zone(const GameDir& game, std::string_view name_view, const Zo
     if (main->contains("lights.wld")) {
         auto lights = parse_member(*main, "lights.wld");
         for (const auto& f : lights.fragments()) {
-            const auto* pl = std::get_if<wld::PointLight>(&f.data);
+            const auto* pl = f.get<wld::PointLight>();
             if (!pl) continue;
             PointLight light;
             light.position = pl->position;
