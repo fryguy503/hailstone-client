@@ -476,6 +476,8 @@ TEST_CASE("guild platinum donation fences retire on a later master-open reply or
         REQUIRE(rig.to_zone());
         auto& c = rig.conn;
         open_master(rig, true);
+        const auto player = *c.world().player();
+        const auto master = c.world().spawns.at(77);
         net::GameConnectionTestAccess::coins(c) = {20, 0, 0, 0};
         REQUIRE(c.guild_tribute_donate_platinum(3));
         REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::GuildTributeDonatePlat) == 1; }));
@@ -489,8 +491,12 @@ TEST_CASE("guild platinum donation fences retire on a later master-open reply or
             CHECK(c.coins().platinum == 20);
             CHECK(c.guild_tribute().last_donation == 0);
         }
-        // A new master's open reply follows every earlier donation answer on the ordered zone connection.
+        // A new master's open reply follows every earlier donation answer on the ordered zone connection. It counts
+        // only with the master in range, so put the player and the master back after the zone change or disconnect.
         net::GameConnectionTestAccess::state(c) = net::ConnectionState::InZone;
+        c.world_for_test().player_id = player.id;
+        c.world_for_test().spawns[player.id] = player;
+        c.world_for_test().spawns[77] = master;
         auto opened = net::encode(net::StartTribute{0, 77, 1});
         opened.opcode = net::to_wire(net::Op::OpenGuildTributeMaster);
         c.receive_zone_packet_for_test(opened);
@@ -500,14 +506,37 @@ TEST_CASE("guild platinum donation fences retire on a later master-open reply or
     }
 }
 
-TEST_CASE("guild platinum donations can make change from other carried denominations") {
+TEST_CASE("guild platinum donations need carried platinum; the accepted debit makes change as EQEmu does") {
     ScratchDir files("tribute_platinum_change");
     Rig rig(tribute_config(), tribute_options(files));
     REQUIRE(rig.to_zone());
     auto& c = rig.conn;
     open_master(rig, true);
+    // Send_OP_GuildTributeDonatePlat @0x483e80 counts carried platinum only, not gold, silver or copper.
     net::GameConnectionTestAccess::coins(c) = {0, 20, 0, 0};
-    REQUIRE(c.guild_tribute_donate_platinum(2));
-    c.receive_zone_packet_for_test(platinum_reply(2, 20));
-    CHECK(game::total_copper(c.coins()) == 0);
+    CHECK_FALSE(c.guild_tribute_donate_platinum(2));
+    CHECK_FALSE(c.guild_platinum_pending());
+    net::GameConnectionTestAccess::coins(c) = {1, 20, 0, 5};
+    CHECK_FALSE(c.guild_tribute_donate_platinum(2));
+    REQUIRE(c.guild_tribute_donate_platinum(1));
+    // EQEmu's TakeMoneyFromPP takes copper first and sends no coin update; the purse follows it.
+    c.receive_zone_packet_for_test(platinum_reply(1, 10));
+    CHECK(game::total_copper(c.coins()) == 1000 + 2000 + 5 - 1000);
+    CHECK_FALSE(c.guild_platinum_pending());
+}
+
+TEST_CASE("a guild platinum reply of -1 clears the pending donation without a debit") {
+    ScratchDir files("tribute_platinum_refused");
+    Rig rig(tribute_config(), tribute_options(files));
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    open_master(rig, true);
+    net::GameConnectionTestAccess::coins(c) = {20, 0, 0, 0};
+    REQUIRE(c.guild_tribute_donate_platinum(3));
+    // Tribute_HandleGuildDonationAccepted @0x483cd0: quantity -1 debits nothing and clears the pending flag.
+    c.receive_zone_packet_for_test(platinum_reply(0xffffffffu, 0));
+    CHECK_FALSE(c.guild_platinum_pending());
+    CHECK(c.coins().platinum == 20);
+    CHECK(c.guild_tribute().last_donation == 0);
+    CHECK(c.guild_tribute_donate_platinum(3));
 }

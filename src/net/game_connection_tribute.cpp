@@ -271,14 +271,10 @@ bool GameConnection::guild_tribute_donate_cursor() {
 
 bool GameConnection::guild_tribute_donate_platinum(std::uint32_t platinum) {
     if (state_ != ConnectionState::InZone || !guild_tribute_.master_id || platinum == 0) return false;
-    if (guild_platinum_pending_) {
-        chat(ChatEvent::Kind::System, "Wait for the guild tribute master to answer your previous platinum donation.");
-        return false;
-    }
-    // TakePlatinum accepts the whole platinum represented by each carried denomination, then makes change.
-    const std::uint64_t available = static_cast<std::uint64_t>(coins_.platinum) + coins_.gold / 10u +
-                                    coins_.silver / 100u + coins_.copper / 1000u;
-    if (platinum > available) return false;
+    // Send_OP_GuildTributeDonatePlat @0x483e80 sends only while carried platinum (PcProfile+0x33b8) covers the
+    // amount, then sets CTributeMasterWnd+0x2d8, which greys Donate (UpdateDonateButton @0x785f40) until the reply
+    // (@0x483cd0) clears it; guild_platinum_pending() is that flag, and the window greys its button by it.
+    if (guild_platinum_pending_ || platinum > coins_.platinum) return false;
     send_zone(encode_guild_donate_platinum(platinum, guild_tribute_.master_id, guild_.guild_id));
     guild_platinum_pending_ = platinum;
     return true;
@@ -309,7 +305,6 @@ void GameConnection::reset_tribute_bonuses() {
     t.settings_known = false;
     t.master_id = 0;
     reset_guild_tribute_bonuses();
-    reset_guild_permissions(kTributeNone);
 }
 
 void GameConnection::handle_tribute(Op op, const AppPacket& p) {
@@ -371,6 +366,14 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
         break;
     case Op::GuildTributeDonatePlat:
         if (auto v = decode_guild_donate_platinum(p)) {
+            // Tribute_HandleGuildDonationAccepted @0x483cd0 clears the pending flag on any reply, and a quantity of
+            // -1 debits nothing. A client safety deviation: a reply whose quantity is not the pending request's
+            // is ignored (no debit, the request stays pending), since the reply names no transaction and a stale
+            // one must not debit the purse twice; a later master-open reply or a reset still clears the request.
+            if (guild_platinum_pending_ && v->platinum == 0xffffffffu) {
+                guild_platinum_pending_ = 0;
+                break;
+            }
             if (!guild_platinum_pending_ || v->platinum != guild_platinum_pending_) {
                 log::warn("ignoring an unmatched guild tribute platinum reply");
                 break;
@@ -378,6 +381,9 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
             g.last_donation = static_cast<std::int32_t>(v->favor);
             // EQEmu takes the platinum without a coin update (TakePlatinum(quantity, false)); TakePlatinum takes
             // nothing when the platinum is short (and answers anyway), and take_money likewise leaves the coins.
+            // A deviation: the original subtracts carried platinum only (@0x483cd0, PcProfile+0x33b8), but EQEmu's
+            // TakeMoneyFromPP takes copper first and makes change, and sends no coin update, so the purse follows
+            // the server's debit.
             game::take_money(coins_, static_cast<std::int64_t>(v->platinum) * 1000);
             guild_platinum_pending_ = 0;
         }

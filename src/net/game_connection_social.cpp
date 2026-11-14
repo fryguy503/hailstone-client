@@ -2152,7 +2152,10 @@ void GameConnection::handle_social(Op op, const AppPacket& p) {
                     guild_.permissions.set(static_cast<std::int32_t>(u->rank), static_cast<std::int32_t>(u->permission), u->on);
                 }
             } else if (u->action == 4) {
-                // SendGuildRankNames has no tag, and follows that guild's tagged permission rows.
+                // SendGuildRankNames has no tag, and follows that guild's tagged permission rows. This assumes a
+                // staged table is confirmed by the GuildID appearance in the same burst; one never confirmed would
+                // take the current guild's later untagged names, so a zone change drops it (the zone-in resends
+                // the current guild's rows and names) and a tagged row for the current guild drops it too.
                 if (pending_guild_permissions_) {
                     if (u->rank < pending_guild_permissions_->rank_names.size())
                         pending_guild_permissions_->rank_names[u->rank] = std::move(u->text);

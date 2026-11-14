@@ -154,6 +154,7 @@ void GameConnection::fail(std::string message) {
     state_ = ConnectionState::Disconnected;
     reset_tribute_donations();
     reset_tribute_bonuses();
+    reset_guild_permissions(kTributeNone);
     world_drop_pending_ = false;
     zone_exit_ = ZoneExit::None;
     if (zone_session_) zone_session_->disconnect();
@@ -182,6 +183,7 @@ void GameConnection::start(const WorldTicket& ticket) {
     reset_rewards();
     reset_tribute_donations();
     reset_tribute_bonuses();
+    reset_guild_permissions(kTributeNone);
     ticket_ = ticket;
     camped_out_.reset();
     link_death_.reset();
@@ -694,6 +696,10 @@ void GameConnection::handle_world(const AppPacket& p) {
         reset_commerce_for_zone();
         reset_tribute_donations();
         reset_tribute_bonuses();
+        // The guild's confirmed rank permissions and names stay: the membership has not changed, and EQEmu's
+        // zone-in sends every rank's permissions and the names again (SendGuildRanks / SendGuildRankNames). A
+        // staged table for a guild the GuildID appearance never confirmed is dropped; the next zone resends it.
+        pending_guild_permissions_.reset();
         reset_progress_for_zone();
         reset_achievements();
         reset_rewards();
@@ -2306,6 +2312,7 @@ void GameConnection::disconnect() {
     reset_rewards();
     reset_tribute_donations();
     reset_tribute_bonuses();
+    reset_guild_permissions(kTributeNone);
     release_eye_control();
     blood_spurts_.clear();
     world_drop_pending_ = false;

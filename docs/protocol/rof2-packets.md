@@ -763,13 +763,24 @@ snapshot uses the received rank-table context. Matching new-guild metadata survi
 bonus items retire, and a future guild's state cannot authorize changing the current guild's benefits.
 Joining a different guild also clears the old rank until the new GuildRank appearance confirms it; a previous guild's
 leader rank cannot authorize actions during split delivery of the two appearances.
+The confirmed rank permissions and names survive a zone change (EQEmu's zone-in sends them all again,
+`SendGuildRanks` / `SendGuildRankNames`) and are cleared at a session start, a disconnect or a guild change. A
+staged table that no GuildID appearance confirmed is dropped at a zone change: untagged rank names go to a staged
+table while one exists, so a stale one would otherwise take the current guild's later names.
 
-A guild platinum donation has one outstanding request at a time. Its 12-byte reply retains both quantity and
-favour; only a matching quantity can debit the purse and update the last donation. Malformed, unmatched and
-repeated replies leave it alone. No coin is removed before the answer. Session reset or a later guild-master
-open reply retires an unanswered request (the zone connection orders that open after any earlier donation
-answer); a local timeout cannot identify a new transaction. The existing decoder fuzz tests and mock tests
-cover malformed replies, overlap, duplicates, making change and reset. No server changes are needed.
+A guild platinum donation has one outstanding request at a time. As in the original
+(`Send_OP_GuildTributeDonatePlat` @0x483e80), it is sent only while carried platinum covers the amount (gold,
+silver and copper do not count), and the master window's Donate button is greyed until the reply
+(`CTributeMasterWnd` +0x2d8, `UpdateDonateButton` @0x785f40). Its 12-byte reply retains both quantity and
+favour. A quantity of -1 clears the request without a debit, as @0x483cd0 does. A client safety deviation: the
+original clears the request on any reply, but here only a matching quantity debits the purse, updates the last
+donation and clears it; malformed, unmatched and repeated replies leave it alone, since the reply names no
+transaction. No coin is removed before the answer. A second deviation: the original subtracts carried platinum
+only, but EQEmu (`TakeMoneyFromPP`) takes copper first and makes change without a coin update, so the client's
+debit follows the server's. Session reset or a later guild-master open reply retires an unanswered request (the
+zone connection orders that open after any earlier donation answer); a local timeout cannot identify a new
+transaction. The existing decoder fuzz tests and mock tests cover malformed replies, overlap, duplicates, the
+greyed button, making change and reset. No server changes are needed.
 
 ### Mercenaries (`game/mercenary.{h,cpp}`, `GameConnection` in `net/game_connection_merc.cpp`, windows in `app/lua_eq_merc.cpp`)
 

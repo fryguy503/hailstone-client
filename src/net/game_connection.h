@@ -1158,7 +1158,10 @@ public:
     void guild_tribute_opt_out(const std::string& member);
     void guild_trophy_opt_out(const std::string& member);
     bool guild_tribute_donate_cursor();
+    // Sends only while carried platinum covers the amount and no platinum donation is waiting for its reply.
     bool guild_tribute_donate_platinum(std::uint32_t platinum);
+    // A guild platinum donation waits for its reply (CTributeMasterWnd+0x2d8): the master window greys Donate.
+    bool guild_platinum_pending() const { return guild_platinum_pending_ != 0; }
 
     // ---- alternate currencies and point merchants (net/game_connection_commerce.cpp, net/merchant_packets.h)
     struct AltCurrency {
@@ -3465,7 +3468,9 @@ private:
     // reply also clears this fence, after any donation reply on the same ordered zone connection.
     std::uint32_t guild_platinum_pending_ = 0;
     void reset_guild_tribute_bonuses(std::uint32_t next_guild_id = kTributeNone);
-    void reset_tribute_bonuses(); // zone/session ended: no received tribute items belong to the next zone
+    // Zone/session ended: no received tribute items belong to the next zone. The guild's rank permissions and
+    // names are not cleared here: they belong to the membership, and EQEmu sends them again on every zone-in.
+    void reset_tribute_bonuses();
     void handle_tribute(Op op, const AppPacket& p);
     Expedition expedition_;
     Adventure adventure_;

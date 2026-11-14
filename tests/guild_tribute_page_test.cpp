@@ -15,9 +15,11 @@
 #include "core/byte_io.h"
 #include "mock_server/harness.h"
 #include "mock_server/profile_builder.h"
+#include "mq_test_world.h"
 #include "net/packet_io.h"
 #include "net/social_packets.h"
 #include "net/tribute_packets.h"
+#include "net/world_packets.h"
 #include "net/zone_packets.h"
 
 using namespace hailstone;
@@ -178,6 +180,12 @@ TEST_CASE("guild tribute benefits require the received permission at the window 
     net::GuildTributeActive active;
     active.tributes = {71, net::kTributeNone};
     server.zone.send_reliable(net::encode(active));
+    // The open reply counts only with the guild tribute master in range.
+    auto master = *conn.world().player();
+    master.id = 77;
+    master.is_npc = true;
+    master.class_id = 64;
+    conn.world_for_test().spawns[77] = master;
     auto open = net::encode(net::StartTribute{server.config.own_spawn_id, 77, 1});
     open.opcode = net::to_wire(net::Op::OpenGuildTributeMaster);
     server.zone.send_reliable(open);
@@ -475,4 +483,85 @@ TEST_CASE("guild tribute permissions wait for the new guild rank when identity a
     CHECK_FALSE(connection.can_change_guild_tribute());
     connection.receive_zone_packet_for_test(net::encode(net::SpawnAppearance{me, 23, 1}));
     CHECK(connection.can_change_guild_tribute());
+}
+
+TEST_CASE("guild rank permissions and names survive a zone change; a staged table and a session end do not") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& connection = rig.conn;
+    const auto me = static_cast<std::uint16_t>(rig.server.config.own_spawn_id);
+    connection.receive_zone_packet_for_test(net::encode(net::SpawnAppearance{me, 22, 3}));
+    connection.receive_zone_packet_for_test(net::encode(net::SpawnAppearance{me, 23, 5}));
+    connection.receive_zone_packet_for_test(net::encode_guild_rank_permission(5, 23, true, 3));
+    connection.receive_zone_packet_for_test(net::encode_guild_rank_name(5, "Officer"));
+    REQUIRE(connection.can_change_guild_tribute());
+    REQUIRE(connection.guild().rank_names[5] == "Officer");
+    // Another guild's tagged rows that no GuildID appearance confirms.
+    connection.receive_zone_packet_for_test(net::encode_guild_rank_permission(5, 23, true, 9));
+    CHECK(connection.received_guild_permission_context() == 9);
+
+    connection.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 9000}));
+    CHECK(connection.guild().permissions.has(5, 23));
+    CHECK(connection.guild().rank_names[5] == "Officer");
+    // The staged table is gone, so an untagged rank name reaches the current guild again.
+    CHECK(connection.received_guild_permission_context() == 3);
+    connection.receive_zone_packet_for_test(net::encode_guild_rank_name(5, "Renamed"));
+    CHECK(connection.guild().rank_names[5] == "Renamed");
+
+    connection.disconnect();
+    CHECK_FALSE(connection.guild().permissions.has(5, 23));
+    CHECK(connection.guild().rank_names[5].empty());
+}
+
+TEST_CASE("the tribute master's Donate button is greyed while a guild platinum donation waits for its reply") {
+    std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& conn = rig.conn;
+    const auto me = static_cast<std::uint16_t>(rig.server.config.own_spawn_id);
+    conn.receive_zone_packet_for_test(net::encode(net::SpawnAppearance{me, 22, 3}));
+    auto master = *conn.world().player();
+    master.id = 77;
+    master.is_npc = true;
+    master.class_id = 64;
+    conn.world_for_test().spawns[77] = master;
+    auto open = net::encode(net::StartTribute{conn.world().player_id, 77, 1});
+    open.opcode = net::to_wire(net::Op::OpenGuildTributeMaster);
+    conn.receive_zone_packet_for_test(open);
+    REQUIRE(conn.guild_tribute().master_id == 77);
+    net::GameConnectionTestAccess::coins(conn) = {5, 0, 0, 0};
+    conn.click_slot(net::ItemSlot::possessions(23), true, false);
+    REQUIRE(conn.inventory().cursor());
+
+    app::EqHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &conn;
+    app::EqApi api(host);
+    std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
+    lua_State* L = lua.get();
+    luaL_openlibs(L);
+    lua_newtable(L);
+    api.register_functions(L);
+    lua_setglobal(L, "eq");
+    api.begin_frame();
+    auto enabled = [&] { return run(L, "return (eq.ChildState('TributeMasterWnd', 'TMW_DonateButton'))"); };
+    CHECK(enabled() == "true");
+
+    REQUIRE(conn.guild_tribute_donate_platinum(3));
+    CHECK(conn.guild_platinum_pending());
+    CHECK(enabled() == "false");
+    // A click on the greyed button sends nothing.
+    CHECK(run(L, "return eq.ClickChild('TributeMasterWnd', 'TMW_DonateButton', 'left')") == "true");
+    rig.run_for(std::chrono::milliseconds(30));
+    CHECK(MockEqServer::count(rig.server.zone_log, net::Op::GuildTributeDonateItem) == 0);
+    CHECK(conn.inventory().cursor());
+
+    ByteWriter w; // the reply: quantity, an unused DWORD, favour
+    w.le<std::uint32_t>(3);
+    w.le<std::uint32_t>(0);
+    w.le<std::uint32_t>(30);
+    conn.receive_zone_packet_for_test({net::to_wire(net::Op::GuildTributeDonatePlat), w.take()});
+    CHECK_FALSE(conn.guild_platinum_pending());
+    CHECK(conn.coins().platinum == 2);
+    CHECK(enabled() == "true");
 }

@@ -947,7 +947,10 @@ public:
         } else if (id == "TMW_UpgradeButton") out.enabled = may_edit && editing_ && (available_sel_ >= 0 || active_sel_ >= 0);
         else if (id == "TMW_DowngradeButton") out.enabled = may_edit && editing_ && active_sel_ >= 0 && active_sel_ < slots(host) &&
                                                        set.tributes[static_cast<std::size_t>(active_sel_)] != net::kTributeNone;
-        else if (id == "TMW_DonateButton") out.enabled = host.conn->inventory().cursor() != nullptr || platinum_ > 0;
+        // UpdateDonateButton @0x785f40: greyed while a donation waits for its reply (+0x2d8; the guild platinum one).
+        else if (id == "TMW_DonateButton")
+            out.enabled = !(g && host.conn->guild_platinum_pending()) &&
+                          (host.conn->inventory().cursor() != nullptr || platinum_ > 0);
         else if (id == "TMW_SelectedItem") {
             const net::Item* held = host.conn->inventory().cursor();
             if (held && host.textures)
@@ -1045,6 +1048,7 @@ public:
             if (g) c.guild_tribute_toggle(!now.active);
             else c.tribute_toggle(!now.active);
         } else if (id == "TMW_DonateButton") {
+            if (g && c.guild_platinum_pending()) return true; // greyed until the reply
             if (c.inventory().cursor()) {
                 if (g) c.guild_tribute_donate_cursor();
                 else c.tribute_donate_cursor();
