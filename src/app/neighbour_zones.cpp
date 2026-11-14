@@ -117,6 +117,18 @@ void NeighbourZones::clear() {
     collision_ = nullptr;
 }
 
+void NeighbourZones::footprint(std::vector<std::int64_t>& out) const {
+    for (const Line& l : lines_)
+        if (l.renderer && !l.idle) out.insert(out.end(), l.renderer->footprint().begin(), l.renderer->footprint().end());
+}
+
+std::uint64_t NeighbourZones::drawn_key() const {
+    std::uint64_t key = 0;
+    for (const Line& l : lines_)
+        if (l.renderer && !l.idle) key = key * 1000003u + l.renderer->id();
+    return key;
+}
+
 std::size_t NeighbourZones::loaded() const {
     return static_cast<std::size_t>(std::count_if(lines_.begin(), lines_.end(), [](const Line& l) { return l.renderer != nullptr; }));
 }

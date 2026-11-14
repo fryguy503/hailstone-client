@@ -97,7 +97,6 @@
 #include "platform/window.h"
 #include "render/ambient_probe.h"
 #include "render/atmosphere.h"
-#include "render/horizon.h"
 #include "render/camera.h"
 #include "render/cover_map.h"
 #include "render/fire_renderer.h"
@@ -1179,8 +1178,10 @@ private:
     // display.neighbour_zones.
     std::unique_ptr<NeighbourZones> neighbours_;
     bool neighbour_zones_ = true;
-    // The distant hills round an outdoor zone in the modern lighting (render/horizon.h); display.horizon_hills.
+    // The land round an outdoor zone in the modern lighting (render/horizon.h); display.horizon_hills. The drawn
+    // neighbours (NeighbourZones::drawn_key) it was last hidden for.
     bool horizon_hills_ = true;
+    std::uint64_t distant_hidden_key_ = 0;
     // How far the replacement models' (a texture pack's generated trees') levels of detail reach, in percent of their
     // own distances (render::ZoneRenderer::set_lod_scale); display.tree_detail, 50 to 200.
     int tree_detail_ = 100;

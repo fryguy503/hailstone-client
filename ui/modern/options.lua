@@ -631,7 +631,7 @@ local function graphicsTab()
     check("neighbour_zones", "Neighbour Zones",
       "Draws the next zone past an outdoor zone line in the distance (modern lighting; scenery only).")
     check("horizon_hills", "Horizon Hills",
-      "Distant hills and mountains round outdoor zones, so the land does not end in haze (modern lighting; scenery only).")
+      "Land, hills and mountains past the edges of outdoor zones, in the zone's own ground, so the world does not end in haze (modern lighting; scenery only).")
     slider("tree_detail", "Tree Detail Distance", 50, 200, pct,
       "How far a texture pack's generated trees keep their full and middle detail. Lower is faster; further trees turn to simpler ones sooner.")
     check("ground_npcs", "Ground Floating NPCs",
