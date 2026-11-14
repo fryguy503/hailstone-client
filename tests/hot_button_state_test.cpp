@@ -194,6 +194,65 @@ TEST_CASE("hot buttons: socials, alternate abilities, combat abilities, leadersh
     CHECK(m2.checked);
 }
 
+TEST_CASE("combat ability hot buttons keep a longer shared reuse timer shaded") {
+    Fake q;
+    HotButtonDisplay longer, shorter, zero;
+    const auto ready = q.fast + 600;
+    q.disc = HotButtonStateQueries::CombatAbility{ready, 600000, 0};
+    update_hot_button(longer, button(HotButtonType::CombatAbility, kCombatAbilityValueBase), q, false);
+    q.disc = HotButtonStateQueries::CombatAbility{ready, 300000, 0};
+    update_hot_button(shorter, button(HotButtonType::CombatAbility, kCombatAbilityValueBase + 1), q, false);
+    CHECK(longer.checked);
+    CHECK(shorter.checked);
+    CHECK(longer.cool_down.left(q.t) == 600000);
+    CHECK(shorter.cool_down.left(q.t) == 600000);
+    REQUIRE(shorter.cool_down.overlay_fraction(q.t));
+    CHECK(*shorter.cool_down.overlay_fraction(q.t) == 0.0);
+    q.disc = HotButtonStateQueries::CombatAbility{ready, 0, 0};
+    update_hot_button(zero, button(HotButtonType::CombatAbility, kCombatAbilityValueBase + 2), q, false);
+    CHECK(zero.checked);
+    CHECK(zero.cool_down.left(q.t) == 600000);
+    CHECK(*zero.cool_down.overlay_fraction(q.t) == 0.0);
+
+    q.fast += 400;
+    q.t += 400000;
+    q.disc = HotButtonStateQueries::CombatAbility{ready, 300000, 0};
+    update_hot_button(shorter, button(HotButtonType::CombatAbility, kCombatAbilityValueBase + 1), q, false);
+    CHECK(shorter.checked);
+    CHECK(shorter.cool_down.duration == 300000);
+    CHECK(shorter.cool_down.left(q.t) == 200000);
+    CHECK(*shorter.cool_down.overlay_fraction(q.t) == doctest::Approx(1.0 / 3.0));
+    // A focus larger than recast is clamped for presentation; it cannot override the shared server deadline.
+    q.disc->focus = 400000;
+    q.t += 101;
+    update_hot_button(shorter, button(HotButtonType::CombatAbility, kCombatAbilityValueBase + 1), q, false);
+    CHECK(shorter.checked);
+    CHECK(shorter.cool_down.left(q.t) == 200000);
+    CHECK(*shorter.cool_down.overlay_fraction(q.t) == 0.0);
+
+    q.fast = ready;
+    q.t += 200000;
+    update_hot_button(shorter, button(HotButtonType::CombatAbility, kCombatAbilityValueBase + 1), q, false);
+    CHECK_FALSE(shorter.checked);
+    CHECK(shorter.cool_down.duration == 0);
+    q.disc->ready = q.fast + 10;
+    q.t += 101;
+    update_hot_button(shorter, button(HotButtonType::CombatAbility, kCombatAbilityValueBase + 1), q, false);
+    REQUIRE(shorter.checked);
+    q.disc->ready = 0; // An explicit server clear also stops it.
+    q.t += 101;
+    update_hot_button(shorter, button(HotButtonType::CombatAbility, kCombatAbilityValueBase + 1), q, false);
+    CHECK_FALSE(shorter.checked);
+    CHECK(shorter.cool_down.duration == 0);
+    q.disc->ready = q.fast + 10;
+    q.t += 101;
+    update_hot_button(shorter, button(HotButtonType::CombatAbility, kCombatAbilityValueBase + 1), q, false);
+    REQUIRE(shorter.checked);
+    update_hot_button(shorter, button(HotButtonType::MenuButton, 0), q, false);
+    CHECK_FALSE(shorter.checked);
+    CHECK(shorter.cool_down.duration == 0);
+}
+
 TEST_CASE("hot buttons: an item's recast timer (CInvSlotWnd_Draw) and a changed button") {
     Fake q;
     HotButtonDisplay d;

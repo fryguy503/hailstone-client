@@ -132,6 +132,333 @@ TEST_CASE("UI packs: every script of the shipped UIs loads, and their windows dr
     }
 }
 
+TEST_CASE("UI packs: active discipline shows seconds and its icon cancels on a mouse click") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        test::ScratchDir scratch("ui_pack_discipline_test");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
+                 fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* px = nullptr;
+        int w = 0, h = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        {
+            Session s(dir, pack);
+            auto* L = s.lua.state();
+            auto run = [&](const char* code) {
+                const int rc = luaL_dostring(L, code);
+                INFO((rc == LUA_OK ? "" : lua_tostring(L, -1)));
+                REQUIRE(rc == LUA_OK);
+                const std::string result = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+                lua_settop(L, 0);
+                return result;
+            };
+            run(R"lua(
+discActive, discFraction, discTime, endClicks = true, 1, "1:00", 0
+local shown, replace, child, text, art, gauge, click = eq.WindowShown, eq.ReplaceWindow,
+  eq.ChildShown, eq.WindowText, eq.ChildArt, eq.Gauge, eq.ClickChild
+eq.WindowShown = function(win) if win == "CombatAbilityWnd" then return true end return shown(win) end
+eq.ReplaceWindow = function(win)
+  if win == "CombatAbilityWnd" then return true, 40, 40, 360, 190 end
+  return replace(win)
+end
+eq.ChildShown = function(win, id)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return discActive end
+  return child(win, id)
+end
+eq.WindowText = function(win, id)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectLabel" then return "Test Discipline" end
+  return text(win, id)
+end
+eq.ChildArt = function(win, id, kind)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return nil end
+  return art(win, id, kind)
+end
+eq.Gauge = function(kind)
+  if kind == 26 then gaugeReads = (gaugeReads or 0) + 1; return discFraction, discTime end
+  return gauge(kind)
+end
+eq.ClickChild = function(win, id, button)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then
+    assert(button == "left")
+    endClicks, discActive = endClicks + 1, false
+    return true
+  end
+  return click(win, id, button)
+end
+local button, drawText = ui.InvisibleButton, ui.DrawText
+ui.InvisibleButton = function(id, ...)
+  local hit = button(id, ...)
+  if id == "##cawEffect" then discIcon = { ui.GetItemRect() } end
+  return hit
+end
+ui.DrawText = function(x, y, r, g, b, a, value)
+  if value == discTime then drewDiscTime = true end
+  return drawText(x, y, r, g, b, a, value)
+end
+)lua");
+            s.frames(3);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            CHECK(run("return tostring(drewDiscTime and gaugeReads > 0 and discIcon ~= nil)") == "true");
+            run("discFraction, discTime, drewDiscTime = 0.5, '30s', false");
+            s.frames(2);
+            CHECK(run("return tostring(drewDiscTime)") == "true");
+            lua_getglobal(L, "discIcon");
+            float rect[4]{};
+            for (int i = 0; i < 4; ++i) {
+                lua_rawgeti(L, -1, i + 1);
+                rect[i] = static_cast<float>(lua_tonumber(L, -1));
+                lua_pop(L, 1);
+            }
+            lua_settop(L, 0);
+            auto& io = ImGui::GetIO();
+            io.AddMousePosEvent((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2);
+            s.frames(1);
+            io.AddMouseButtonEvent(0, true);
+            s.frames(1);
+            io.AddMouseButtonEvent(0, false);
+            s.frames(1);
+            CHECK(run("return tostring(endClicks)") == "1");
+            run("gaugeReads, drewDiscTime, discIcon = 0, false, nil");
+            s.frames(2);
+            CHECK(run("return tostring(gaugeReads == 0 and not drewDiscTime and discIcon == nil)") == "true");
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
+TEST_CASE("UI packs: the gamepad's first focus is the discipline list, and LB ends the active discipline") {
+    test::ScratchDir scratch("ui_pack_discipline_pad_test");
+    const auto dir = scratch.path();
+    fs::create_directories(dir / "game");
+    fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / "gamepad", dir / "gamepad",
+             fs::copy_options::recursive);
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    unsigned char* px = nullptr;
+    int w = 0, h = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    {
+        Session s(dir, "gamepad");
+        auto* L = s.lua.state();
+        auto run = [&](const char* code) {
+            const int rc = luaL_dostring(L, code);
+            INFO((rc == LUA_OK ? "" : lua_tostring(L, -1)));
+            REQUIRE(rc == LUA_OK);
+            const std::string result = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_settop(L, 0);
+            return result;
+        };
+        // A pad in menu mode; padPress is the button that went down this frame.
+        run(R"lua(
+padPress, windowShown, discActive, endClicks, uses = nil, false, true, 0, 0
+eq.gamepad = {
+  connected = function() return true end,
+  type = function() return 'xbox' end,
+  mode = function() return 'menu' end,
+  set_mode = function() return 'menu' end,
+  pressed = function(b) return b == padPress end,
+  down = function(b) return b == padPress end,
+  released = function() return false end,
+  axis = function() return 0 end,
+  glyph = function(b) return string.upper(b) end,
+  takes_b = function() end,
+  request_focus = function(window) ui.SetWindowFocus(window) end,
+}
+local shown, replace, child, text, art, click = eq.WindowShown, eq.ReplaceWindow, eq.ChildShown, eq.WindowText,
+  eq.ChildArt, eq.ClickChild
+eq.WindowShown = function(win) if win == "CombatAbilityWnd" then return windowShown end return shown(win) end
+eq.ReplaceWindow = function(win)
+  if win == "CombatAbilityWnd" then return true, 40, 40, 360, 190 end
+  return replace(win)
+end
+eq.ChildShown = function(win, id)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return discActive end
+  return child(win, id)
+end
+eq.WindowText = function(win, id)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectLabel" then return "Test Discipline" end
+  return text(win, id)
+end
+eq.ChildArt = function(win, id, kind)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return nil end
+  return art(win, id, kind)
+end
+eq.Gauge = function() return 0.5, "30s" end
+eq.Disciplines = function()
+  return { { index = 0, spell = 101, name = "Guard", icon = 0, level = 50, endurance = 0, reuse = 60,
+    remaining = 0, timer = 1 } }
+end
+eq.PressButtonFrom = function() uses = uses + 1 end
+eq.ClickChild = function(win, id, button)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then
+    endClicks, discActive = endClicks + 1, false
+    return true
+  end
+  return click(win, id, button)
+end
+local button = ui.InvisibleButton
+ui.InvisibleButton = function(id, ...)
+  local hit = button(id, ...)
+  if id == "##cawEffect" then effectFocused = ui.IsItemFocused() end
+  if id == "##row" then rowFocused = ui.IsItemFocused() end
+  return hit
+end
+)lua");
+        s.frames(240); // the pack takes the pad's focus for a window only from 3 seconds after zoning in
+        CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        run("windowShown = true");
+        s.frames(30); // the window appears with the focus; past its settle time
+        CHECK(run("return tostring(rowFocused == true and effectFocused == false)") == "true");
+        auto& io = ImGui::GetIO();
+        // A press of A uses the focused discipline; the running one is not ended. (ImGui activates only with its
+        // navigation cursor shown, as it is once the pad has moved it.)
+        ImGui::SetNavCursorVisible(true);
+        io.AddKeyEvent(ImGuiKey_GamepadFaceDown, true);
+        s.frames(1);
+        io.AddKeyEvent(ImGuiKey_GamepadFaceDown, false);
+        s.frames(2);
+        CHECK(run("return tostring(endClicks == 0 and uses == 1)") == "true");
+        // LB ends it.
+        run("padPress = 'lb'");
+        s.frames(1);
+        run("padPress = nil");
+        s.frames(2);
+        CHECK(run("return tostring(endClicks)") == "1");
+        CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("UI packs: linked discipline cooldowns show red fills and matching seconds until ready") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        test::ScratchDir scratch("ui_pack_discipline_cooldown_test");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
+                 fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* px = nullptr;
+        int w = 0, h = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        {
+            Session s(dir, pack);
+            auto* L = s.lua.state();
+            auto run = [&](const char* code) {
+                const int rc = luaL_dostring(L, code);
+                INFO((rc == LUA_OK ? "" : lua_tostring(L, -1)));
+                REQUIRE(rc == LUA_OK);
+                const std::string result = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+                lua_settop(L, 0);
+                return result;
+            };
+            run(R"lua(
+sharedLeft, expectedTime, timerDraws, redArea, redFills, abilityClicks = 600, "10:00", 0, 0, 0, 0
+local shown, replace, child, text, cooldown, click = eq.WindowShown, eq.ReplaceWindow,
+  eq.ChildShown, eq.WindowText, eq.ButtonCoolDown, eq.ClickChild
+local names, reuse = { "Long Guard", "Short Guard", "Independent" }, { 600, 300, 120 }
+eq.WindowShown = function(win) if win == "CombatAbilityWnd" then return true end return shown(win) end
+eq.ReplaceWindow = function(win)
+  if win == "CombatAbilityWnd" then return true, 40, 40, 360, 190 end
+  return replace(win)
+end
+eq.ChildShown = function(win, id)
+  if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return false end
+  return child(win, id)
+end
+eq.WindowText = function(win, id)
+  local n = id:match("^CAW_Button(%d)$")
+  if win == "CombatAbilityWnd" and n then return names[tonumber(n)] or "" end
+  return text(win, id)
+end
+eq.ButtonCoolDown = function(win, id, y0, y1)
+  local n = id:match("^CAW_Button(%d)$")
+  n = n and tonumber(n)
+  if win == "CombatAbilityWnd" and n and n <= 2 and sharedLeft > 0 then
+    return y0, 0, 0, 0, 0.25, sharedLeft * 1000, reuse[n] * 1000
+  end
+  return cooldown(win, id, y0, y1)
+end
+local row = 0
+eq.Disciplines = function()
+  row = 0
+  local out = {}
+  for i = 1, 3 do
+    out[i] = { index = i - 1, spell = 100 + i, name = names[i], icon = 0, level = 50,
+      endurance = 0, reuse = reuse[i], remaining = i <= 2 and sharedLeft or 0, timer = i <= 2 and 1 or 2 }
+  end
+  return out
+end
+eq.ClickChild = function(win, id, button)
+  if win == "CombatAbilityWnd" and id == "CAW_Button1" and button == "left" then
+    abilityClicks = abilityClicks + 1; return true
+  end
+  return click(win, id, button)
+end
+eq.PressButtonFrom = function(win, id, n)
+  assert(win == "CombatAbilityWnd" and id == "Discipline" and n == 1)
+  abilityClicks = abilityClicks + 1
+end
+local button, rect, drawText = ui.InvisibleButton, ui.DrawRectFilled, ui.DrawText
+ui.InvisibleButton = function(id, ...)
+  local hit = button(id, ...)
+  if id == "##row" then row = row + 1 end
+  if id == "##caw1" or (id == "##row" and row == 1) then firstAbility = { ui.GetItemRect() } end
+  return hit
+end
+ui.DrawRectFilled = function(x0, y0, x1, y1, r, g, b, a, ...)
+  if a and math.abs(a - 0.20) < 0.0001 and r > g * 1.5 and r > b * 1.5 then
+    redFills, redArea = redFills + 1, redArea + (x1 - x0) * (y1 - y0)
+  end
+  return rect(x0, y0, x1, y1, r, g, b, a, ...)
+end
+ui.DrawText = function(x, y, r, g, b, a, value)
+  if value == expectedTime then timerDraws = timerDraws + 1 end
+  return drawText(x, y, r, g, b, a, value)
+end
+)lua");
+            s.frames(3);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            run("redFills, redArea, timerDraws = 0, 0, 0");
+            s.frames(1);
+            CHECK(run("return tostring(redFills == 2 and timerDraws >= 2)") == "true");
+            run("fullArea = redArea");
+            lua_getglobal(L, "firstAbility");
+            float rect[4]{};
+            for (int i = 0; i < 4; ++i) {
+                lua_rawgeti(L, -1, i + 1);
+                rect[i] = static_cast<float>(lua_tonumber(L, -1));
+                lua_pop(L, 1);
+            }
+            lua_settop(L, 0);
+            auto& io = ImGui::GetIO();
+            io.AddMousePosEvent((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2);
+            s.frames(1);
+            io.AddMouseButtonEvent(0, true);
+            s.frames(1);
+            io.AddMouseButtonEvent(0, false);
+            s.frames(1);
+            CHECK(run("return tostring(abilityClicks)") == "1"); // The normal use handler still receives the click.
+            run("sharedLeft, expectedTime, redFills, redArea, timerDraws = 30, '0:30', 0, 0, 0");
+            s.frames(1);
+            CHECK(run("return tostring(redFills == 2 and timerDraws >= 2 and redArea < fullArea)") == "true");
+            run("sharedLeft, redFills, timerDraws = 0, 0, 0");
+            s.frames(1);
+            CHECK(run("return tostring(redFills == 0 and timerDraws == 0)") == "true");
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
 TEST_CASE("UI packs: each draws the login, server select and character select screens in the client's place") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);

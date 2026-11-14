@@ -73,6 +73,9 @@ struct Child {
     // CButtonWnd's cool-down (SetCoolDown, drawn by vtable +0x16c @0x8970a0): its rectangle's fraction (the part
     // gone, at most 0.87; game/spell_gem.h ButtonCoolDown), none when idle.
     std::optional<double> cool_down;
+    // Optional timing detail from the window (combat ability buttons): milliseconds left and the ability's
+    // focus-adjusted reuse. A shared timer can exceed this ability's reuse; 64 bits keep seconds * 1000 exact.
+    std::uint64_t cool_down_left = 0, cool_down_duration = 0;
     bool under = false; // the window draws it in its own Draw, under its children (CTargetWnd::Draw)
 };
 
