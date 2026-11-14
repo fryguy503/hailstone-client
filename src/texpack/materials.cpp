@@ -158,10 +158,10 @@ std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt
                 if (t.actor.ends_with("_actordef")) t.actor.resize(t.actor.size() - 9);
                 auto w = words(std::string_view(line).substr(eq + 1));
                 for (std::string& x : w) x = lower(x);
-                static constexpr std::string_view kStyles[] = {"auto", "pine", "broadleaf", "willow"};
+                static constexpr std::string_view kStyles[] = {"auto", "pine", "broadleaf", "willow", "dead", "palm"};
                 if (t.actor.empty() || w.empty() || w.size() > 2 ||
                     std::find(std::begin(kStyles), std::end(kStyles), w[0]) == std::end(kStyles)) {
-                    fail(error, where + "expected tree <actor> = auto|pine|broadleaf|willow [bark material]");
+                    fail(error, where + "expected tree <actor> = auto|pine|broadleaf|willow|dead|palm [bark material]");
                     return std::nullopt;
                 }
                 t.style = w[0];

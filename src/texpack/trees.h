@@ -53,10 +53,11 @@ using TreeTextureLookup = std::function<const assets::Image*(const assets::Mater
 std::optional<TreeShape> measure_tree(const assets::Mesh& mesh, const TreeTextureLookup& texture,
                                       std::string* why = nullptr);
 
-// How the tree grows: Auto takes TreeShape::conifer (a pine or a broadleaf tree); a willow is not told from its shape
-// and is asked for by name.
-enum class TreeStyle : std::uint8_t { Auto, Pine, Broadleaf, Willow };
-std::optional<TreeStyle> tree_style_from_name(std::string_view name); // "auto", "pine", "broadleaf", "willow"
+// How the tree grows: Auto takes TreeShape::conifer (a pine or a broadleaf tree); a willow, a dead tree (a pine's
+// branches, bare) and a palm (fronds from the top of its trunk) are not told from their shape and are asked for by name.
+enum class TreeStyle : std::uint8_t { Auto, Pine, Broadleaf, Willow, Dead, Palm };
+// "auto", "pine", "broadleaf", "willow", "dead", "palm"
+std::optional<TreeStyle> tree_style_from_name(std::string_view name);
 
 struct TreeOptions {
     std::uint32_t seed = 1;

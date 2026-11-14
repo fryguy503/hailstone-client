@@ -1286,7 +1286,11 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
 - **Styles:** a pine (a single upright trunk up into leaves widest low down) grows whorls of drooping branches with
   needle sprays and a clump at each end up a leader; a broadleaf tree grows branches into the crown by space
   colonisation (Runions, Lane and Prusinkiewicz 2007), leaf clusters at their tips; a willow hangs strands from its
-  upper branches. The rules may name the style (`tree tree71 = willow bark`); `auto` takes pine or broadleaf by shape.
+  upper branches. A dead tree (`dead`: Everfrost's and Dagnor's Cauldron's bare pines) grows a few long limbs from its
+  upper trunk, rising and forking once, with sprays of drawn bare twigs at their ends. A palm (`palm`) carries its
+  trunk on up to near the top of the game's leaves (its solid prisms stop halfway; the cards paint the rest) and
+  springs two dozen arching fronds from there, a drawn frond of narrow leaflets along a rib. The rules may name the
+  style (`tree tree71 = willow bark`); `auto` takes pine or broadleaf by shape.
 - **Bark:** a Poly Haven photo material scaled to the game bark's mean colour, or a drawn one.
 - **Levels of detail:** the near tree to three times its height (at least 200 units); then a middle level with two
   leaf cards in three, each grown to keep the cover, about half the sides and no thin branches; and from eight times
