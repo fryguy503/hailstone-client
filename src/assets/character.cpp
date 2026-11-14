@@ -20,6 +20,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_set>
 
 #include "assets/eqg_character.h"
@@ -246,7 +247,7 @@ namespace detail {
 
 void append_wld_mesh(const wld::WldFile& w, const wld::Fragment& mf, std::size_t n, std::int64_t owner,
                      CharacterMesh& out) {
-    const auto* md = std::get_if<wld::MeshDef>(&mf.data);
+    const auto* md = mf.get<wld::MeshDef>();
     if (!md) return;
     // The pieces' counts are checked against the vertices before any is expanded: a forged count must not make a
     // vector of billions of bone indices.
@@ -316,15 +317,16 @@ std::size_t CharacterArchive::parsed_bytes() const {
 std::shared_ptr<const CharacterArchive> load_character_archive(const GameDir& game, std::string_view file) {
     auto path = game.find(file);
     if (!path) return nullptr;
+    auto cache = game.shared_file_cache();
     auto out = std::make_shared<CharacterArchive>();
-    out->archive = std::make_shared<const PfsArchive>(PfsArchive::open(*path, PfsArchive::storage_for(game, *path)));
+    out->archive = std::make_shared<const PfsArchive>(PfsArchive::open(*path, PfsArchive::storage_for(game, *path), cache));
     for (const auto& member : out->archive->names()) {
         if (!member.ends_with(".wld")) continue;
         auto source = out->archive;
-        out->wlds.push_back(wld::WldFile::deferred([source, member] {
+        out->wlds.push_back(wld::WldFile::deferred([source, member, cache]() -> ImmutableFileBytes {
             auto bytes = source->read(member);
             if (!bytes) throw std::runtime_error("missing character WLD " + member);
-            return std::move(*bytes);
+            return cache ? cache->store(std::move(*bytes)) : ImmutableFileBytes::owned(std::move(*bytes));
         }, source->label() + ":" + member));
     }
     return out;
@@ -490,9 +492,9 @@ namespace {
 // dropped when the name already has one at that level, otherwise it becomes
 // the one found (a later level wins). Returns whether it was taken. A name new to `levels` starts from the levels
 // `base` (the tables these go on from) has for it.
-template <typename Map, typename Value>
-bool add_resource(Map& map, std::unordered_map<std::string, std::uint64_t>& levels,
-                  const std::unordered_map<std::string, std::uint64_t>* base, const std::string& key, int level,
+template <typename Map, typename Levels, typename Value>
+bool add_resource(Map& map, Levels& levels, const std::type_identity_t<Levels>* base,
+                  const typename Map::key_type& key, int level,
                   Value&& value) {
     std::uint64_t bit = std::uint64_t{1} << (static_cast<unsigned>(level) & 63u);
     auto [seen, fresh] = levels.try_emplace(key, 0);
@@ -523,7 +525,7 @@ void CharacterLookups::note(const Names& names) {
     if (current_ && names) current_->names_.insert(names->begin(), names->end());
 }
 
-void CharacterLookups::note_one(char table, const std::string& name) {
+void CharacterLookups::note_one(char table, std::string_view name) {
     std::string key;
     key.reserve(name.size() + 1);
     key += table;
@@ -647,6 +649,29 @@ CharacterArchiveIndex::CharacterArchiveIndex(std::vector<std::shared_ptr<const C
     : archives_(std::move(archives)) {
     for (std::size_t ai = 0; ai < archives_.size(); ++ai)
         tables_.add(*archives_[ai], ai, ai < levels.size() ? levels[ai] : kZoneResourceLevel, nullptr, nullptr);
+}
+
+void CharacterArchiveIndex::swap(CharacterArchiveIndex& other) noexcept {
+    // Both sets of archives stay owned until their borrowed table keys have changed owners too.
+    using std::swap;
+    swap(archives_, other.archives_);
+    swap(tables_, other.tables_);
+}
+
+void CharacterLibrary::swap(CharacterLibrary& other) noexcept {
+    using std::swap;
+    swap(archives_, other.archives_);
+    swap(globals_, other.globals_);
+    swap(tables_, other.tables_);
+    swap(zone_names_, other.zone_names_);
+    swap(mutex_, other.mutex_);
+    swap(cache_, other.cache_);
+    swap(dress_cache_, other.dress_cache_);
+    swap(item_cache_, other.item_cache_);
+    swap(shared_, other.shared_);
+    swap(eqg_, other.eqg_);
+    swap(own_, other.own_);
+    swap(appearance_, other.appearance_);
 }
 
 CharacterLibrary::CharacterLibrary(std::vector<std::shared_ptr<const CharacterArchive>> archives,
@@ -857,7 +882,7 @@ std::vector<std::string> CharacterLibrary::model_codes() const {
     auto consider = [&](const std::string& code, const FragmentLoc& loc) {
         // Skeletal actors only; IT<n> are item models.
         if (code.size() > 2 && code.starts_with("IT") && std::isdigit(static_cast<unsigned char>(code[2]))) return;
-        const auto& actor = std::get<wld::ActorDef>(loc.fragment()->data);
+        const auto& actor = loc.fragment()->as<wld::ActorDef>();
         // NOLINTBEGIN(clang-analyzer-core.NullDereference): false positive, the actor tables hold only non-null locations.
         bool skeletal = std::any_of(actor.sprites.begin(), actor.sprites.end(),
                                     [&](wld::Ref r) { return loc.first->get<wld::SkeletonRef>(r) != nullptr; });
@@ -956,7 +981,7 @@ const wld::Skeleton* actor_skeleton(const wld::WldFile& w, const wld::ActorDef& 
 
 CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld::WldFile& w,
                                              const wld::Fragment& actor_fragment) const {
-    const auto& actor = std::get<wld::ActorDef>(actor_fragment.data);
+    const auto& actor = actor_fragment.as<wld::ActorDef>();
 
     const wld::Skeleton* sk = actor_skeleton(w, actor);
     if (!sk) return build_static_actor(code, w, actor);
@@ -991,7 +1016,7 @@ CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld:
         if (sk->nodes[i].name == code + "_BLD_DAG") m.blood_bone = static_cast<int>(i);
         const auto* f = w.resolve(sk->nodes[i].track);
         m.bone_names.push_back(f ? f->name : std::string());
-        const auto* ref = f ? std::get_if<wld::TrackRef>(&f->data) : nullptr;
+        const auto* ref = f ? f->get<wld::TrackRef>() : nullptr;
         const auto* def = ref ? w.get<wld::TrackDef>(ref->track) : nullptr;
         rest.tracks[i].push_back(def && !def->frames.empty() ? to_pose(def->frames.front()) : BonePose{});
     }
@@ -1014,9 +1039,9 @@ CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld:
     CharacterMesh geometry;
     for (auto [s, owner] : sprites) {
         const wld::Fragment* sprite = w.resolve(s);
-        const auto* ref = sprite ? std::get_if<wld::MeshRef>(&sprite->data) : nullptr;
+        const auto* ref = sprite ? sprite->get<wld::MeshRef>() : nullptr;
         const wld::Fragment* mf = ref ? w.resolve(ref->mesh) : nullptr;
-        if (!mf || !std::holds_alternative<wld::MeshDef>(mf->data) || !seen.insert(mf).second) continue;
+        if (!mf || !mf->holds<wld::MeshDef>() || !seen.insert(mf).second) continue;
         detail::append_wld_mesh(w, *mf, n, owner, geometry);
     }
     m.vertices = std::move(geometry.vertices);
@@ -1051,7 +1076,7 @@ CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld:
         auto [it, added] = rivals.try_emplace(loc->wld, false);
         if (added)
             if (auto a = actor_wlds().find({loc->wld, code})) {
-                const auto* other = actor_skeleton(*loc->wld, std::get<wld::ActorDef>(a->fragment()->data));
+                const auto* other = actor_skeleton(*loc->wld, a->fragment()->as<wld::ActorDef>());
                 std::vector<std::string> names;
                 if (other)
                     for (const auto& node : other->nodes) {
@@ -1079,7 +1104,7 @@ CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld:
         auto [it, added] = donor_rivals.try_emplace(loc->wld, false);
         if (added)
             if (auto a = actor_wlds().find({loc->wld, m.animation_donor})) {
-                const auto* other = actor_skeleton(*loc->wld, std::get<wld::ActorDef>(a->fragment()->data));
+                const auto* other = actor_skeleton(*loc->wld, a->fragment()->as<wld::ActorDef>());
                 std::size_t shared = 0;
                 if (other)
                     for (const auto& node : other->nodes) {
@@ -1119,15 +1144,18 @@ CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld:
             }
             found = true;
             if (!own && !donor_rival(loc)) lent = true;
-            a.tracks[i].reserve(def->frames.size());
-            for (const auto& f : def->frames) {
-                BonePose p = to_pose(f);
-                // A bone the model hides by scaling it to nearly nothing at rest stays hidden in a borrowed track:
-                // the Luclin Erudite folds a robe flap away so (ERMPEBUTTR at 0.02), which the Wood Elf's tracks
-                // (scale 1) would unfold into a long wedge from the hip. Other rest sizes (1.3, 0.9...) are left to
-                // the donor's track, as before.
-                if (!own && rest.tracks[i].front().scale.x < 0.1f) p.scale *= rest.tracks[i].front().scale;
-                a.tracks[i].push_back(p);
+            // Hidden borrowed bones keep the same rest multiplier in both owned and mapped tracks.
+            const glm::vec3 multiplier = !own && rest.tracks[i].front().scale.x < 0.1f
+                                             ? rest.tracks[i].front().scale : glm::vec3{1.0f};
+            if (def->frames.mapped()) {
+                a.tracks[i] = AnimationTrack::from_wld(def->frames, multiplier);
+            } else {
+                a.tracks[i].reserve(def->frames.size());
+                for (const auto& f : def->frames) {
+                    BonePose p = to_pose(f);
+                    p.scale *= multiplier;
+                    a.tracks[i].push_back(p);
+                }
             }
             if (def->frames.size() > 1) {
                 a.frame_count = std::max<std::uint32_t>(a.frame_count, static_cast<std::uint32_t>(def->frames.size()));
@@ -1180,9 +1208,9 @@ CharacterModel CharacterLibrary::build_static_actor(const std::string& code, con
     const wld::Fragment* mf = nullptr;
     for (wld::Ref r : actor.sprites) {
         const wld::Fragment* sprite = w.resolve(r);
-        const auto* ref = sprite ? std::get_if<wld::MeshRef>(&sprite->data) : nullptr;
+        const auto* ref = sprite ? sprite->get<wld::MeshRef>() : nullptr;
         const wld::Fragment* f = ref ? w.resolve(ref->mesh) : nullptr;
-        if (f && std::holds_alternative<wld::MeshDef>(f->data)) {
+        if (f && f->holds<wld::MeshDef>()) {
             mf = f;
             break;
         }

@@ -209,6 +209,7 @@ int ClientApp::run() {
             if (actor_renderer_) perf.actors = &actor_renderer_->stats();
             perf.conn = conn_.get();
             perf.gpu = &vk_;
+            perf.shared_files = game_.shared_file_cache().get();
             if (conn_) {
                 const auto& w = conn_->world();
                 perf.zone_name = w.zone_long_name.empty() ? w.zone_short_name : w.zone_long_name;
@@ -520,6 +521,8 @@ int ClientApp::run() {
                         in.zone_id = static_cast<std::uint32_t>(conn_->zone_id());
                         const auto& z = conn_->zone_info();
                         in.outdoor = z && z->sky != 0 && outdoor;
+                        if (zone_renderer_) in.horizon = zone_renderer_->horizon_build();
+                        in.cache_dir = horizon_cache_dir(server_profile_.id, zone_->name);
                         neighbours_->enter(in);
                     }
                     neighbours_->update(camera_.position, lit.far_plane, modern && neighbour_zones_ && in_game);
@@ -527,6 +530,7 @@ int ClientApp::run() {
                     neighbours_->set_scene_light(scene_light);
                     neighbours_->set_lighting(lighting);
                     neighbours_->set_lod_scale(static_cast<float>(tree_detail_) / 100.0f);
+                    neighbours_->set_debug_tint(neighbour_tint_);
                 }
                 frame_lighting_ = lighting;
                 if (actor_renderer_) actor_renderer_->set_lighting(lighting);

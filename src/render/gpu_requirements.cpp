@@ -1,6 +1,7 @@
 #include "render/gpu_requirements.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace hailstone::render {
 
@@ -39,6 +40,57 @@ std::string no_usable_gpu_text(const std::vector<GpuSupport>& gpus) {
         }
     }
     return text;
+}
+
+GpuSelection choose_gpu(const std::vector<GpuSupport>& gpus, std::string_view exact_name) {
+    if (!exact_name.empty()) {
+        std::optional<std::size_t> matched;
+        std::size_t matches = 0;
+        for (std::size_t i = 0; i < gpus.size(); ++i) {
+            if (gpus[i].name != exact_name) continue;
+            matched = i;
+            ++matches;
+        }
+        const std::string requested = "requested GPU \"" + std::string(exact_name) + "\"";
+        if (matches == 0) {
+            std::string error = requested + " was not found; the GPU name must match exactly.";
+            if (gpus.empty()) {
+                error += " Vulkan found no GPU at all.";
+            } else {
+                error += "\nAvailable GPU names:";
+                for (const GpuSupport& gpu : gpus)
+                    error += "\n- " + (gpu.name.empty() ? std::string("unnamed GPU") : gpu.name);
+            }
+            return {std::nullopt, std::move(error)};
+        }
+        if (matches != 1) {
+            return {std::nullopt, requested + " is ambiguous: " + std::to_string(matches) +
+                                      " GPUs have that exact name; automatic selection was not used."};
+        }
+        const auto missing = gpu_missing(gpus[*matched]);
+        if (!missing.empty()) {
+            std::string error = requested + " cannot run Hailstone: lacks ";
+            for (std::size_t i = 0; i < missing.size(); ++i) {
+                if (i) error += ", ";
+                error += missing[i];
+            }
+            return {std::nullopt, std::move(error)};
+        }
+        return {matched, {}};
+    }
+
+    std::optional<std::size_t> best;
+    int best_score = -1;
+    for (std::size_t i = 0; i < gpus.size(); ++i) {
+        const GpuSupport& gpu = gpus[i];
+        if (!gpu_missing(gpu).empty()) continue;
+        const int score = gpu.kind == GpuKind::Discrete ? 2 : gpu.kind == GpuKind::Integrated ? 1 : 0;
+        if (score > best_score) {
+            best = i;
+            best_score = score;
+        }
+    }
+    return best ? GpuSelection{best, {}} : GpuSelection{std::nullopt, no_usable_gpu_text(gpus)};
 }
 
 InstanceExtensions choose_instance_extensions(const std::vector<std::string>& wanted,

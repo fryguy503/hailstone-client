@@ -17,14 +17,18 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <compare>
 #include <functional>
+#include <initializer_list>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -32,6 +36,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "assets/model.h"
+#include "core/shared_file_cache.h"
 
 namespace hailstone::assets::wld {
 
@@ -171,10 +176,118 @@ struct TrackFrame {
     float scale = 1.0f;
 };
 
+// Track keys may stay in an immutable WLD snapshot instead of expanding every packed 16-byte key to a private
+// 32-byte TrackFrame. Const reads decode values with ByteReader; fixture/build-time mutation makes an owned copy.
+class TrackFrames {
+public:
+    using value_type = TrackFrame;
+    using size_type = std::size_t;
+    using iterator = std::vector<TrackFrame>::iterator;
+    class const_iterator {
+    public:
+        using value_type = TrackFrame;
+        using reference = TrackFrame;
+        using difference_type = std::ptrdiff_t;
+        // Dereferencing decodes a value, so to C++17 algorithms this is only an input iterator (as iota_view's);
+        // C++20 ranges see a random-access one.
+        using iterator_category = std::input_iterator_tag;
+        using iterator_concept = std::random_access_iterator_tag;
+        struct pointer {
+            TrackFrame value;
+            const TrackFrame* operator->() const { return &value; }
+        };
+        const_iterator() = default;
+        reference operator*() const { return (*owner_)[index_]; }
+        pointer operator->() const { return {**this}; }
+        reference operator[](difference_type n) const { return *(*this + n); }
+        const_iterator& operator++() { ++index_; return *this; }
+        const_iterator operator++(int) { auto old = *this; ++*this; return old; }
+        const_iterator& operator--() { --index_; return *this; }
+        const_iterator operator--(int) { auto old = *this; --*this; return old; }
+        const_iterator& operator+=(difference_type n) {
+            index_ = static_cast<size_type>(static_cast<difference_type>(index_) + n); return *this;
+        }
+        const_iterator& operator-=(difference_type n) { return *this += -n; }
+        friend const_iterator operator+(const_iterator i, difference_type n) { i += n; return i; }
+        friend const_iterator operator+(difference_type n, const_iterator i) { return i + n; }
+        friend const_iterator operator-(const_iterator i, difference_type n) { i -= n; return i; }
+        friend difference_type operator-(const_iterator a, const_iterator b) {
+            return static_cast<difference_type>(a.index_) - static_cast<difference_type>(b.index_);
+        }
+        auto operator<=>(const const_iterator&) const = default;
+
+    private:
+        friend class TrackFrames;
+        const_iterator(const TrackFrames* owner, size_type index) : owner_(owner), index_(index) {}
+        const TrackFrames* owner_ = nullptr;
+        size_type index_ = 0;
+    };
+
+    TrackFrames() = default;
+    TrackFrames(std::initializer_list<TrackFrame> frames) : owned_(frames) {}
+    TrackFrames(std::vector<TrackFrame> frames) : owned_(std::move(frames)) {}
+    TrackFrames(const TrackFrames&) = default;
+    TrackFrames& operator=(const TrackFrames&) = default;
+    TrackFrames(TrackFrames&& other) noexcept;
+    TrackFrames& operator=(TrackFrames&& other) noexcept;
+    TrackFrames& operator=(std::initializer_list<TrackFrame> frames) { assign(frames); return *this; }
+    TrackFrames& operator=(std::vector<TrackFrame> frames) {
+        owned_ = std::move(frames); reset_encoded(); return *this;
+    }
+
+    // Offsets and counts are checked against the owner's bytes before any view is made.
+    static TrackFrames from_encoded(ImmutableFileBytes owner, size_type offset, size_type count, bool packed);
+    bool encoded() const { return encoded_; }
+    bool mapped() const { return encoded_ && backing_.mapped(); }
+    // The full owned source may back several tracks; callers deduplicate it by identity for storage accounting.
+    std::span<const std::byte> private_encoded_bytes() const {
+        return encoded_ && !backing_.mapped() ? backing_.bytes() : std::span<const std::byte>{};
+    }
+    size_type size() const { return encoded_ ? count_ : owned_.size(); }
+    bool empty() const { return size() == 0; }
+    size_type capacity() const { return encoded_ ? count_ : owned_.capacity(); }
+    size_type decoded_capacity() const { return owned_.capacity(); }
+    TrackFrame operator[](size_type i) const;
+    TrackFrame at(size_type i) const;
+    TrackFrame front() const { return (*this)[0]; }
+    TrackFrame back() const { return (*this)[size() - 1]; }
+    TrackFrame& operator[](size_type i) { materialize(); return owned_[i]; }
+    TrackFrame& at(size_type i);
+    TrackFrame& front() { materialize(); return owned_.front(); }
+    TrackFrame& back() { materialize(); return owned_.back(); }
+    TrackFrame* data() { materialize(); return owned_.data(); }
+    const_iterator begin() const { return {this, 0}; }
+    const_iterator end() const { return {this, size()}; }
+    const_iterator cbegin() const { return begin(); }
+    const_iterator cend() const { return end(); }
+    iterator begin() { materialize(); return owned_.begin(); }
+    iterator end() { materialize(); return owned_.end(); }
+    void reserve(size_type count) { materialize(); owned_.reserve(count); }
+    void resize(size_type count) { materialize(); owned_.resize(count); }
+    void resize(size_type count, const TrackFrame& frame) { materialize(); owned_.resize(count, frame); }
+    void push_back(const TrackFrame& frame) { materialize(); owned_.push_back(frame); }
+    void push_back(TrackFrame&& frame) { materialize(); owned_.push_back(std::move(frame)); }
+    template<class... Args> TrackFrame& emplace_back(Args&&... args) {
+        materialize(); return owned_.emplace_back(std::forward<Args>(args)...);
+    }
+    void clear() { owned_.clear(); reset_encoded(); }
+    void assign(size_type count, const TrackFrame& frame) { owned_.assign(count, frame); reset_encoded(); }
+    void assign(std::initializer_list<TrackFrame> frames) { owned_.assign(frames); reset_encoded(); }
+    template<class It> void assign(It first, It last) { owned_.assign(first, last); reset_encoded(); }
+
+private:
+    void materialize();
+    void reset_encoded() { backing_ = {}; offset_ = count_ = 0; encoded_ = packed_ = false; }
+    std::vector<TrackFrame> owned_;
+    ImmutableFileBytes backing_;
+    size_type offset_ = 0, count_ = 0;
+    bool encoded_ = false, packed_ = false;
+};
+
 // 0x12 TRACKDEFINITION: the keys of one skeleton node.
 struct TrackDef {
     std::uint32_t flags = 0; // 0x8: packed s16 keys
-    std::vector<TrackFrame> frames;
+    TrackFrames frames;
 };
 
 // 0x13 TRACKINSTANCE: reference to a 0x12.
@@ -289,17 +402,67 @@ struct ParticleCloud {
     Ref sprite = 0;
 };
 
+// Rare large payloads must not set the size of every fragment: tracks and
+// small references account for most entries. Copies still own independent
+// parsed values, including their mutable vectors.
+template <typename T> class FragmentBox {
+public:
+    FragmentBox(T value) : value_(std::make_unique<T>(std::move(value))) {}
+    FragmentBox(const FragmentBox& other)
+        : value_(other.value_ ? std::make_unique<T>(*other.value_) : nullptr) {}
+    FragmentBox& operator=(const FragmentBox& other) {
+        if (this != &other) {
+            FragmentBox copy(other);
+            value_.swap(copy.value_);
+        }
+        return *this;
+    }
+    FragmentBox(FragmentBox&&) noexcept = default;
+    FragmentBox& operator=(FragmentBox&&) noexcept = default;
+    T* get() noexcept { return value_.get(); }
+    const T* get() const noexcept { return value_.get(); }
+
+private:
+    std::unique_ptr<T> value_;
+};
+
 using Payload = std::variant<std::monostate, BitmapName, BitmapInfo, BitmapInfoRef, MaterialDef,
-                             MaterialList, MeshDef, ActorDef, MeshRef, ActorInstance, VertexColors,
+                             MaterialList, FragmentBox<MeshDef>, ActorDef, MeshRef, ActorInstance, VertexColors,
                              VertexColorsRef, LightDef, LightRef, PointLight, TrackDef, TrackRef,
                              Skeleton, SkeletonRef, BspTree, BspRegion, RegionTag, GlobalAmbient,
-                             ParticleSprite, ParticleCloud>;
+                             ParticleSprite, FragmentBox<ParticleCloud>>;
 
 struct Fragment {
     std::uint32_t type = 0;
     std::string name;
     std::size_t offset = 0; // file offset of the fragment header
     Payload data;           // monostate when the type is unsupported or failed to parse
+
+    template <typename T> T* get() noexcept {
+        if constexpr (std::is_same_v<T, MeshDef> || std::is_same_v<T, ParticleCloud>) {
+            auto* box = std::get_if<FragmentBox<T>>(&data);
+            return box ? box->get() : nullptr;
+        } else {
+            return std::get_if<T>(&data);
+        }
+    }
+    template <typename T> const T* get() const noexcept {
+        if constexpr (std::is_same_v<T, MeshDef> || std::is_same_v<T, ParticleCloud>) {
+            const auto* box = std::get_if<FragmentBox<T>>(&data);
+            return box ? box->get() : nullptr;
+        } else {
+            return std::get_if<T>(&data);
+        }
+    }
+    template <typename T> bool holds() const noexcept { return get<T>() != nullptr; }
+    template <typename T> T& as() {
+        if (auto* value = get<T>()) return *value;
+        throw std::bad_variant_access{};
+    }
+    template <typename T> const T& as() const {
+        if (const auto* value = get<T>()) return *value;
+        throw std::bad_variant_access{};
+    }
 };
 
 class WldFile {
@@ -309,10 +472,16 @@ public:
     // malformed. A fragment whose payload does not fit its declared size is
     // kept as an empty entry and listed in errors().
     static WldFile parse(std::span<const std::byte> data, std::string label = "<memory>");
+    // A mapped snapshot (the shared cache's) keeps its encoded tracks as read-only views into the mapping. Private
+    // bytes are decoded as parse(span) does and freed on return, unless `keep_private` (the fuzzers, to reach the
+    // encoded-key reader without a cache).
+    static WldFile parse(ImmutableFileBytes data, std::string label = "<memory>", bool keep_private = false);
 
     // Validate once and keep only the named character-resource index. The loader must return the same immutable
     // bytes on every call. Full fragments decode on first use; ReadScope can reclaim them. Zone WLDs use parse().
     static WldFile deferred(std::function<std::vector<std::byte>()> loader, std::string label);
+    // A loader returning mapped bytes lets decoded tracks, and models built from them, keep encoded views.
+    static WldFile deferred(std::function<ImmutableFileBytes()> loader, std::string label);
     using IndexVisitor = std::function<void(Ref, std::uint32_t, const std::string&, const TrackRef*)>;
     // Only successfully decoded named character resource types (0x13, 0x14, 0x30, 0x36), in fragment order.
     void visit_character_index(const IndexVisitor& visitor) const;
@@ -369,7 +538,7 @@ public:
 
     template <typename T> const T* get(Ref ref) const {
         const Fragment* f = resolve(ref);
-        return f ? std::get_if<T>(&f->data) : nullptr;
+        return f ? f->get<T>() : nullptr;
     }
 
     struct Error {
@@ -381,19 +550,23 @@ public:
     // Fragment types this parser does not decode, with counts.
     const std::map<std::uint32_t, std::size_t>& unknown_types() const { return unknown_; }
     // An estimate of the private memory this file retains: the decoded string table, the fragment objects and the
-    // vectors and strings inside their payloads (skeleton nodes and their child lists, meshes, track frames).
-    // Indices, diagnostics, capacities, allocator overhead and page-cache pages are not counted, so it compares categories, not exact
-    // residency.
+    // vectors and strings inside their payloads (skeleton nodes and their child lists, meshes, owned track frames),
+    // plus private encoded backing once. Indices, diagnostics, capacities, allocator overhead and mapped page-cache
+    // pages are not counted, so it compares categories, not exact residency.
     std::size_t retained_bytes() const;
 
 private:
     std::shared_ptr<Deferred> deferred_;
     const WldFile& decoded() const;
+    static WldFile parse_impl(std::span<const std::byte> data, std::string label, ImmutableFileBytes backing);
+    ImmutableFileBytes backing_;
     std::string label_;
     bool new_format_ = false;
     std::vector<std::uint8_t> strings_; // decoded string table
     std::vector<Fragment> fragments_;
-    std::unordered_map<std::string, std::size_t> by_name_;
+    // Sorted unique names refer back to fragment-owned strings. Indices keep
+    // ordinary WldFile copies and moves independent of the source's storage.
+    std::vector<std::uint32_t> by_name_;
     std::vector<Error> errors_;
     std::map<std::uint32_t, std::size_t> unknown_;
 };

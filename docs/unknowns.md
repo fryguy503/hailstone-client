@@ -8,6 +8,29 @@ What the client does not implement yet, or implements with an approximation it c
 - The 64-member array layout and the 1080-byte invitation are extensions beyond RoF2, documented in `docs/protocol/rof2-packets.md`. PR #5134 hard-caps its model and serializers at twelve, so its membership rule alone cannot enable 64. A server that sends expanded rosters and a live roster capture would establish interoperability above twelve.
 - Declining sends action 4, as RoF2 does (`Send_Opcode_0x7121` @0x668710). PR #5134 reads action 4 as a legacy camp destruction, so against that server a decline reaches its camp handler instead of refusing the invitation; that is the server's to fix, since RoF2 sends the same. An unanswered invitation that times out sends nothing: whether the original's dialog sends action 4 on its 100-second timeout is not traced; the confirmation dialog's timeout path (dialog type 0xc) would settle it.
 
+## Shared archive memory
+
+- `assets.shared_memory=auto` (docs/layout.md "Shared archive memory") is measured on Linux only, one and two clients
+  in one zone (docs/research/shared-asset-memory.md). Windows and macOS mapping, locking and eviction are covered by
+  unit tests, not live sessions; sustained play with zoning, and more clients, are not measured. A cache file is
+  checked once per client and then trusted: a file damaged on disk while a client runs is not noticed by that client
+  (the parsers still bound what they read).
+
+## Shared GPU textures
+
+The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/research/shared-gpu-memory.md):
+
+- When sharing stops, a client copies its imports into its own images (`GpuSharedCache::localize`). That copy reads
+  each import once more after the client has left the lease, and a client whose shared frame did not finish within
+  2 seconds gives up the lease (by disconnecting) while that frame may still be running. Vulkan gives an external
+  image to one instance at a time; both cases only read immutable images that every client keeps in
+  `SHADER_READ_ONLY_OPTIMAL`, and the copy's layout change to `TRANSFER_SRC_OPTIMAL` is on the client's own image
+  object, but whether a driver may rewrite such an image's memory (compression metadata) on that transition is not
+  established. Khronos guidance or the driver vendors' word on external images would settle it; a validation-layer
+  run of the failure paths on AMD, NVIDIA and Intel would at least rule out API misuse.
+- The failure paths (broker killed, a client killed holding the lease, lease timeout, hung frame, localisation) are
+  covered by unit tests of the bookkeeping and the client's decisions only, not on Windows with real GPUs.
+
 ## Network and session
 
 - Return Home on the character select is enabled for a character whose list entry has both `go_home` and `enabled` set. The original checks `bCanGoHome` and `bUseable` (`CCharacterListWnd::EnableButtons` @0x42f4b0); that `bUseable` comes from the list's `enabled` byte is assumed, not traced. Stock EQEmu always sends `enabled = 1`, so it changes nothing there. Tracing where OP_SendCharInfo's handler fills `CharSelectInfo` +0x15c would settle it.

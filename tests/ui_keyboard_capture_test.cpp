@@ -39,6 +39,7 @@ public:
         io.AddMousePosEvent(mouse.x, mouse.y);
         io.AddMouseButtonEvent(0, down);
         const int requested = GImGui->WantCaptureKeyboardNextFrame;
+        ui::keep_tab_from_windows(); // (as ImGuiLayer::begin_frame)
         ImGui::NewFrame();
         const bool keys = ui::keyboard_for_ui(requested);
         imgui_captured = io.WantCaptureKeyboard;
@@ -49,6 +50,7 @@ public:
         rects.button = centre();
         ImGui::InputText("##edit", text_, sizeof(text_));
         rects.edit = centre();
+        edit_active = ImGui::IsItemActive();
         if (extra) extra();
         ImGui::End();
         ImGui::Render();
@@ -65,6 +67,7 @@ public:
 
     Rects rects;
     bool imgui_captured = false;
+    bool edit_active = false; // the edit box being typed in, in the last frame
 
 private:
     static ImVec2 centre() {
@@ -135,3 +138,37 @@ TEST_CASE("UI keys: Ctrl is Ctrl in the windows on every system (no macOS Cmd sw
     ImGui::EndFrame();
 }
 
+
+TEST_CASE("UI keys: Tab with nothing typed in stays the game's; in an edit box it moves to the next field") {
+    Ui ui;
+    ImGuiIO& io = ImGui::GetIO();
+    bool second_active = false;
+    auto second = [&] {
+        static char more[16] = {};
+        ImGui::InputText("##more", more, sizeof(more));
+        second_active = ImGui::IsItemActive();
+    };
+    auto tap_tab = [&] {
+        io.AddKeyEvent(ImGuiKey_Tab, true);
+        ui.frame(kAway, false, second);
+        io.AddKeyEvent(ImGuiKey_Tab, false);
+        for (int i = 0; i < 3; ++i) ui.frame(kAway, false, second);
+    };
+    // The window focused by a click on its background, nothing active: the Tab does not open the edit box (the chat
+    // input took the keys this way).
+    ui.frame(kAway, false, second);
+    ui.hold(ImVec2(350, 280));
+    REQUIRE(GImGui->NavWindow != nullptr);
+    tap_tab();
+    CHECK_FALSE(ui.edit_active);
+    CHECK_FALSE(second_active);
+    CHECK(GImGui->ActiveId == 0);
+
+    // Typing in the edit box: Tab goes on to the next field, as before.
+    ui.hold(ui.rects.edit);
+    ui.frame(kAway, false, second);
+    REQUIRE(ui.edit_active);
+    tap_tab();
+    CHECK_FALSE(ui.edit_active);
+    CHECK(second_active);
+}

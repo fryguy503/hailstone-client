@@ -640,13 +640,48 @@ TEST_CASE("lawn: levels of detail and the far patches' stride") {
     CHECK(render::lawn_lod(0.0f) == 0);
     CHECK(render::lawn_lod(render::kLawnNear + 1.0f) == 1);
     CHECK(render::lawn_lod(render::kLawnMid + 1.0f) == 2);
-    // Each level fewer vertices, its blades wider, so a patch keeps about its cover.
-    for (std::size_t k = 1; k < render::kLawnLods.size(); ++k) {
-        CHECK(render::kLawnLods[k].vertices() < render::kLawnLods[k - 1].vertices());
-        CHECK(render::kLawnLods[k].blade_width > render::kLawnLods[k - 1].blade_width);
-    }
     CHECK(render::kLawnLods[0].vertices() == 49 * 15);
     CHECK(render::kLawnLods[2].vertices() == 9 * 3);
+    // The blades thin out smoothly, never more than the draw a patch is in holds, and the width grows as they thin.
+    CHECK(render::lawn_blades(0.0f) == 49.0f);
+    CHECK(render::lawn_blades(render::kLawnNear) == doctest::Approx(16.0f));
+    CHECK(render::lawn_blades(render::kLawnMid) == doctest::Approx(9.0f));
+    CHECK(render::lawn_blades(5000.0f) == 9.0f);
+    float last_n = 49.0f, last_w = 0.0f;
+    for (float d = 0.0f; d < 600.0f; d += 0.5f) {
+        const float n = render::lawn_blades(d), w = render::lawn_blade_width(d);
+        CHECK(n <= static_cast<float>(render::kLawnLods[render::lawn_lod(d)].blades) + 1e-4f);
+        CHECK(n <= last_n);
+        CHECK(last_n - n < 0.5f); // no step
+        CHECK(w >= last_w);
+        last_n = n;
+        last_w = w;
+    }
+    CHECK(render::lawn_blade_width(0.0f) == render::kLawnBladeWidth);
+    // Far patches: those a coarser stride drops fade out over the band before it, the kept ones grow to take their
+    // squares, smoothly.
+    CHECK(render::lawn_patch_fade(1, 0.0f) == 1.0f);
+    CHECK(render::lawn_patch_fade(1, render::kFloraReach - render::kLawnStrideBand) == 1.0f);
+    CHECK(render::lawn_patch_fade(1, render::kFloraReach) == 0.0f);
+    CHECK(render::lawn_patch_fade(2, render::kFloraReach * 2.0f) == 0.0f);
+    CHECK(render::lawn_patch_fade(4, 5000.0f) == 1.0f);
+    CHECK(render::lawn_patch_side(1, 0.0f) == kLawnCell);
+    CHECK(render::lawn_patch_side(2, render::kFloraReach) == doctest::Approx(2.0f * kLawnCell));
+    CHECK(render::lawn_patch_side(4, render::kFloraReach) == doctest::Approx(2.0f * kLawnCell));
+    CHECK(render::lawn_patch_side(4, render::kFloraReach * 2.0f) == doctest::Approx(4.0f * kLawnCell));
+    for (std::uint32_t own : {1u, 2u, 4u}) {
+        float fade = 1.0f, side = 0.0f;
+        for (float d = 0.0f; d < 1300.0f; d += 1.0f) {
+            CHECK(render::lawn_patch_fade(own, d) <= fade);
+            CHECK(fade - render::lawn_patch_fade(own, d) < 0.03f);
+            CHECK(render::lawn_patch_side(own, d) >= side);
+            CHECK(render::lawn_patch_side(own, d) - side < 0.2f + (side == 0.0f ? kLawnCell : 0.0f));
+            // A patch is gone wherever lawn_stride drops it (a far tile skips those).
+            if (own < render::lawn_stride(d)) CHECK(render::lawn_patch_fade(own, d) == 0.0f);
+            fade = render::lawn_patch_fade(own, d);
+            side = render::lawn_patch_side(own, d);
+        }
+    }
     CHECK(render::lawn_stride(0.0f) == 1);
     CHECK(render::lawn_stride(render::kFloraReach) == 1);
     CHECK(render::lawn_stride(render::kFloraReach + 1.0f) == 2);

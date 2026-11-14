@@ -185,14 +185,22 @@ ActorRenderer::ActorRenderer(VkContext& vk, std::shared_ptr<const assets::Charac
         assets::Image white;
         white.width = white.height = 1;
         white.mips.push_back(std::vector<std::byte>(4, std::byte{0xff}));
-        textures_.push_back(upload.texture(white));
+        textures_.push_back(upload.immutable_texture(white));
         upload.submit();
     }
     for (std::uint32_t slot = 0; slot < VkContext::kFramesInFlight; ++slot) rebuild_descriptors(slot); // none in flight yet
+    // Shared textures moved into this client's own images when sharing stopped: each set is rewritten when its
+    // frame comes round (rebuild_descriptors).
+    shared_listener_ = vk_.on_shared_textures_moved([this] {
+        for (auto& t : textures_)
+            if (refresh_shared_texture(t))
+                for (auto& written : descriptor_textures_) written = 0;
+    });
     create_pipelines(shader_dir);
 }
 
 ActorRenderer::~ActorRenderer() {
+    vk_.remove_shared_textures_listener(shared_listener_);
     stop_dresser();
     VkDevice d = vk_.device();
     vk_.wait_idle();
@@ -301,6 +309,8 @@ std::unique_ptr<ActorRenderer::Kept> ActorRenderer::release_kept() {
 
 void ActorRenderer::adopt(Kept& kept) {
     textures_ = std::move(kept.textures);
+    // Kept across a zone change, while shared textures may have moved into private images.
+    for (auto& t : textures_) refresh_shared_texture(t);
     texture_slots_ = std::move(kept.texture_slots);
     models_ = std::move(kept.models);
     mesh_refs_ = std::move(kept.mesh_refs);
@@ -390,13 +400,13 @@ std::optional<std::uint32_t> ActorRenderer::add_texture(UploadBatch& upload, con
     if (!free_textures_.empty()) {
         const std::uint32_t slot = free_textures_.back();
         free_textures_.pop_back();
-        textures_[slot] = upload.texture(image, use);
+        textures_[slot] = upload.immutable_texture(image, use);
         // Each set takes it when its own frame comes round (rebuild_descriptors).
         for (auto& written : descriptor_textures_) written = std::min(written, slot);
         return slot;
     }
     if (textures_.size() >= max_textures_) return std::nullopt;
-    textures_.push_back(upload.texture(image, use));
+    textures_.push_back(upload.immutable_texture(image, use));
     return static_cast<std::uint32_t>(textures_.size() - 1);
 }
 

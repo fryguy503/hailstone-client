@@ -43,3 +43,30 @@ bool alpha_test(float alpha, float ref, float opacity, out float out_alpha) {
     out_alpha = alpha * opacity;
     return !(ref > 0.0 && alpha < ref);
 }
+
+// A neighbour's part of the land (render/zone_renderer.cpp Draw::land_fade): each triangle is drawn twice, with the
+// neighbour's own ground (`flags` kLandOwn) and with the current zone's (kLandZone); a pixel shows the neighbour's
+// where the blend's noise at its place on the ground lies under the vertices' weight (`weight`, color2's alpha), the
+// current zone's where it does not, so each pixel shows exactly one. The noise is in world space, patches of a few
+// tens of units with ragged edges: the one ground gives way to the other in clumps, not a straight line, and holds
+// still as the camera moves. Returns true to discard.
+float land_blend_hash(vec2 i) {
+    vec3 p = fract(vec3(i.xyx) * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+float land_blend_value(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(land_blend_hash(i), land_blend_hash(i + vec2(1.0, 0.0)), f.x),
+               mix(land_blend_hash(i + vec2(0.0, 1.0)), land_blend_hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+bool land_blend_discard(uint flags, float weight, vec3 world) {
+    const uint kLandOwn = 8192u, kLandZone = 16384u;
+    if ((flags & (kLandOwn | kLandZone)) == 0u) return false;
+    vec2 p = world.xy;
+    float n = 0.6 * land_blend_value(p / 48.0) + 0.3 * land_blend_value(p / 12.0) + 0.1 * land_blend_value(p / 3.0);
+    bool own = n < weight;
+    return (flags & kLandOwn) != 0u ? !own : own;
+}
