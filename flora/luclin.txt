@@ -1,15 +1,14 @@
 # Hailstone's own flora rules (assets/zone_flora.h, docs/graphics.md "Zone flora"). Luclin's open ground (the Twilight
-# Sea, the Grimling Forest, Hollowshade...): the shared grass with Misty Thicket's shrubs and plants
+# Sea, the Grimling Forest, Hollowshade...): the lawn with Misty Thicket's shrubs and plants
 # (mistythicket.eqg).
-donor commonlands.eqg
 donor mistythicket.eqg
 max_slope 45
 scale 0.9 1.3
 include bare
 # Ground named as grass (jungle floors too): its olive and dark grass as well, only its paths and bare patches not.
-ground *jung* 12 +greenish grassblades:3 grass2:3 treeshade:1 ShadeGrass:0.8 Plant:0.4 Shrub1:0.3 Shrub2:0.3
-ground *grass* 12 +greenish grassblades:3 grass2:3 treeshade:1 ShadeGrass:0.8 Plant:0.4 Shrub1:0.3 Shrub2:0.3
-ground *gras* 12 +greenish grassblades:3 grass2:3 treeshade:1 ShadeGrass:0.8 Plant:0.4 Shrub1:0.3 Shrub2:0.3
+ground *jung* 2.45 +greenish lawn ShadeGrass:0.8 Plant:0.4 Shrub1:0.3 Shrub2:0.3
+ground *grass* 2.45 +greenish lawn ShadeGrass:0.8 Plant:0.4 Shrub1:0.3 Shrub2:0.3
+ground *gras* 2.45 +greenish lawn ShadeGrass:0.8 Plant:0.4 Shrub1:0.3 Shrub2:0.3
 include stone
 # Anything else that is clearly green.
-ground * 12 +green grassblades:3 grass2:3 treeshade:1 ShadeGrass:0.8 Plant:0.4 Shrub1:0.3 Shrub2:0.3
+ground * 2.45 +green lawn ShadeGrass:0.8 Plant:0.4 Shrub1:0.3 Shrub2:0.3

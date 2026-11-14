@@ -7,6 +7,11 @@
 // out at half alpha, lit in the shaders as the zone around them (the sun through its shadow, per pixel; the sky, the
 // place's light and the lamps per vertex) and hazed with distance, bent away from whoever walks through them; the
 // plants shrink into the ground over the last fifth of the reach, as the original draws flora only round the camera.
+//
+// Hailstone's lawn (assets/zone_flora.h, kLawnDefinition) is drawn by a pipeline of its own (shaders/lawn.vert,
+// lawn.frag): each patch's blades are built in the vertex shader, no texture, at three levels of detail by distance
+// (lawn_lod); past kFloraReach every s-th patch each way is kept, s times as wide, so the carpet keeps its cover. A
+// grown tile keeps its patches by the coarsest stride that keeps them, so a far tile walks only those it draws.
 
 #include <array>
 #include <chrono>
@@ -39,6 +44,24 @@ inline constexpr float kMaxFloraReach = 1200.0f;
 // The share of the plants kept at distance `d`: all within kFloraReach, (kFloraReach / d)^2 past it.
 float flora_keep(float d);
 
+// The lawn's levels of detail: blades a side of a patch (side x side of them), the segments of a blade, and its
+// width (units at the root: fewer blades are wider, so a patch keeps its cover).
+struct LawnLod {
+    std::uint32_t side = 0, segments = 0;
+    float blade_width = 0.0f;
+    std::uint32_t vertices() const { return side * side * ((segments - 1) * 6 + 3); }
+};
+inline constexpr std::array<LawnLod, 3> kLawnLods = {{{6, 4, 0.3f}, {3, 3, 0.55f}, {2, 1, 0.8f}}};
+inline constexpr float kLawnNear = 45.0f, kLawnMid = 140.0f; // where the first two levels end
+// The level of detail of a patch at distance `d` (an index into kLawnLods).
+std::size_t lawn_lod(float d);
+// How many patches each way one kept patch stands for at distance `d`: 1 within kFloraReach, 2 within twice it, 4
+// past that (at least 1 / sqrt(flora_keep(d)), so the far lawn costs less than the near does). Powers of two, so the
+// patches a coarser stride keeps are among those a finer one keeps.
+std::uint32_t lawn_stride(float d);
+// The coarsest stride (1, 2 or 4) that keeps the patch standing at `p`: its square's column and row are multiples of it.
+std::uint32_t lawn_patch_stride(glm::vec2 p);
+
 class FloraRenderer {
 public:
     static constexpr std::uint32_t kMaxPlants = 262144; // a frame's, nearest first (10 MB of instances a frame)
@@ -67,7 +90,8 @@ public:
                        const SceneLighting& lighting, bool modern);
 
 private:
-    void create_pipeline(const std::filesystem::path& shader_dir);
+    void create_pipelines(const std::filesystem::path& shader_dir);
+    VkPipeline create_pipeline(const std::filesystem::path& vert, const std::filesystem::path& frag);
 
     // Hailstone's zone flora (assets::ZoneFloraGrower): drops the tiles out of reach, grows the missing ones within it.
     void grow_tiles(const glm::vec3& camera);
@@ -75,7 +99,13 @@ private:
 
     VkContext& vk_;
     float reach_ = kFloraReach;
-    std::unordered_map<std::uint32_t, std::vector<assets::FloraInstance>> grown_; // by index into ZoneFlora::tiles
+    // A grown tile's plants: the lawn first, the patches that stride 4 keeps, then those stride 2 keeps, then the rest
+    // (lawn_end: where each part ends), then the other plants.
+    struct Grown {
+        std::vector<assets::FloraInstance> plants;
+        std::array<std::uint32_t, 3> lawn_end{};
+    };
+    std::unordered_map<std::uint32_t, Grown> grown_; // by index into ZoneFlora::tiles
     std::vector<std::pair<float, std::uint32_t>> near_tiles_; // per draw: tiles in reach by distance
     std::uint32_t max_textures_ = 0; // kMaxTextures, within DeviceCaps::max_sampled_images
     const assets::Zone& zone_;
@@ -90,8 +120,11 @@ private:
     std::vector<glm::vec4> pushers_;
     std::array<Buffer, VkContext::kFramesInFlight> instances_{};
     std::array<void*, VkContext::kFramesInFlight> mapped_{};
+    struct GpuPlant; // flora_renderer.cpp
+    std::array<std::vector<GpuPlant>, kLawnLods.size()> lawn_; // per draw: the lawn's patches by level
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
+    VkPipeline lawn_pipeline_ = VK_NULL_HANDLE;
 };
 
 } // namespace hailstone::render

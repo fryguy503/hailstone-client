@@ -1,14 +1,15 @@
 # Hailstone's own flora rules (assets/zone_flora.h, docs/graphics.md "Zone flora"). The grasslands (the Karanas, the
-# Commonlands, Lake Rathetear): the shared grass with the Moors' flowering grass and wheat (moors.eqg).
-donor commonlands.eqg
+# Commonlands, Lake Rathetear): the lawn with the Moors' flowering grass and wheat (moors.eqg).
 donor moors.eqg
 max_slope 45
+# The grasslands' lawn grows taller.
+lawn_height 2 3.5
 scale 0.9 1.3
 include bare
 # Ground named as grass (jungle floors too): its olive and dark grass as well, only its paths and bare patches not.
-ground *jung* 12 +greenish grassblades:4 grass2:3 treeshade:1 grasslandflora:0.6 grasslandplant2:0.4 grasslandgrass:0.4 wheat:0.25
-ground *grass* 12 +greenish grassblades:4 grass2:3 treeshade:1 grasslandflora:0.6 grasslandplant2:0.4 grasslandgrass:0.4 wheat:0.25
-ground *gras* 12 +greenish grassblades:4 grass2:3 treeshade:1 grasslandflora:0.6 grasslandplant2:0.4 grasslandgrass:0.4 wheat:0.25
+ground *jung* 2.05 +greenish lawn grasslandflora:0.6 grasslandplant2:0.4 grasslandgrass:0.4 wheat:0.25
+ground *grass* 2.05 +greenish lawn grasslandflora:0.6 grasslandplant2:0.4 grasslandgrass:0.4 wheat:0.25
+ground *gras* 2.05 +greenish lawn grasslandflora:0.6 grasslandplant2:0.4 grasslandgrass:0.4 wheat:0.25
 include stone
 # Anything else that is clearly green.
-ground * 12 +green grassblades:4 grass2:3 treeshade:1 grasslandflora:0.6 grasslandplant2:0.4 grasslandgrass:0.4 wheat:0.25
+ground * 2.05 +green lawn grasslandflora:0.6 grasslandplant2:0.4 grasslandgrass:0.4 wheat:0.25

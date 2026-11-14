@@ -279,23 +279,27 @@ far ring costs about what the near circle does. The tiles are filled nearest fir
 
 Hailstone's own, not the original's: the classic zones have no flora, and this gives them grass without changing
 their files (`assets/zone_flora.h`, `display.zone_flora`). Their plants join the same `Zone::flora` the EQG zones'
-radial flora fills and are drawn the same way (above; /showgrass hides them, Flora Distance sets their reach).
+radial flora fills (/showgrass hides them, Flora Distance sets their reach). The grass is a lawn the client builds
+itself, no game asset (below); ferns, flowers and bushes from donor EQG archives are scattered over it and drawn as
+the radial flora is (above).
 
 **Which rules.** A zone takes `flora/<zone>.txt` from the install folder (shipped) when there is one, else
 `flora/default.txt` when the server calls it outdoor (OP_NewZone's time type 1, 2 or 5; PEQ marks some dungeons so,
 which the cover test below keeps bare). A rules file is read line by line, and the first matching ground line wins:
 - `donor <archive>`: an EQG archive in the player's game folder whose `RadialFloraDefs.rfd` and textures give the
-  plants' shapes and pictures; several donor lines add up. The default takes `commonlands.eqg`'s, the revamped
-  Commonlands. Nothing is shipped; without its donors a zone has no flora, and a kind whose donor (or whose picture)
-  is missing is left out.
-- `ground <glob> <density> [+green|+greenish] <kind>[:<weight>]...`: plants per 100 square units on the ground
-  textures the glob matches, and their kinds by weight (a definition of the first donor that has it, or one donor's
-  as `<archive stem>/<name>`); 0 keeps a texture bare. The classic ground textures blend
+  scattered plants' shapes and pictures; several donor lines add up. Nothing is shipped; a kind whose donor (or
+  whose picture) is missing is left out, and the lawn needs none (the default names no donor).
+- `ground <glob> <density> [+green|+greenish] [lawn] [<kind>[:<weight>]...]`: on the ground textures the glob
+  matches, the lawn when the line says `lawn`, and `<density>` plants per 100 square units of the kinds by weight (a
+  definition of the first donor that has it, or one donor's as `<archive stem>/<name>`); a density of 0 and no lawn
+  keeps a texture bare. The classic ground textures blend
   grass into cliff, sand or a path within one picture, so `+green` keeps a plant only where the game's own texel
   under it is clearly green (`is_green_texel`: not the water's teal, mud's olive or a dungeon's near-black), and
   `+greenish` also takes dry and dark grass, for textures whose name says they are grass.
-- `max_slope` (degrees), `scale <min> <max>`, and `include <name>` (another file's lines in place: a zone file puts its
-  own exceptions first, then `include default`; East Commonlands adds desert plants on its sand that way).
+- `max_slope` (degrees), `scale <min> <max>` (the scattered plants' sizes), `lawn_height <min> <max>` (the lawn's
+  blades, 1.4 to 2.4 units by default; the grasslands' grow 2 to 3.5), and `include <name>` (another file's lines in
+  place: a zone file puts its own exceptions first, then `include default`; East Commonlands adds desert plants from
+  `commonlands.eqg` on its sand that way).
 
 The shared files turn down built and wet surfaces by name before anything else (`bare.txt`: roofs, walls, cobbles,
 tiles, bridges, hedges, ship decks, water, lava), then take grass-named textures with `+greenish`, then turn down
@@ -303,8 +307,8 @@ floors, rock, stone and cliffs (`stone.txt`, after the grass lines so a grass an
 then take anything else with `+green`. A `+green` texture with next to no green texels (`kMinGreenShare`) grows
 nothing at all.
 
-**Families.** Most zones take the shared Commonlands grass alone (`default.txt`). A zone of a climate with plants of
-its own includes a family file, the same lines with more kinds from more donors:
+**Families.** Most zones take the lawn alone (`default.txt`). A zone of a climate with plants of its own includes a
+family file, the same lines with kinds from donors scattered over the lawn:
 
 | Family | Zones | Added, from |
 |---|---|---|
@@ -317,6 +321,34 @@ its own includes a family file, the same lines with more kinds from more donors:
 | `luclin` | the Twilight Sea, the Grimling Forest, Tenebrous, Shadeweaver's, Hollowshade, Dawnshroud, the Maiden's Eye, Shar Vahl, Katta Castellum, Sanctus Seru | shrubs, plants and shade grass, `mistythicket.eqg` |
 | `growth` | the Plane of Growth | tall flowering grass and ferns, `arcstone.eqg`; flowering grass, `moors.eqg` |
 
+
+**The lawn.** An even carpet rather than plants scattered at random: the ground is cut into world-aligned squares
+of `kLawnCell` (3.2 units, 40 to a tile), and each square whose centre lies over ground that grows a lawn (the
+tests below, at that centre) holds one patch of blades, at the ground's height and slope there. Each square goes to
+exactly one ground triangle, so the patches meet without gaps or overlaps. A patch takes the colour of the ground
+texel at its centre; its height wanders slowly over the zone between `lawn_height`'s two values (smooth value noise
+on a 48-unit lattice, `assets::lawn_height_noise`), not patch by patch. Where the lawn meets bare ground (a path, a
+road, a texture `+green` turns down) it tapers over three squares (`lawn_edge_factor`: 0.3 of the height beside it),
+so it does not end in a wall along a texture's straight border; a tile grows its neighbours' squares within three of
+its edge to see them, then drops them.
+
+The blades are built in `shaders/lawn.vert`, without a texture (`render::FloraRenderer`'s second pipeline): a
+patch's square holds a grid of blades, one jittered in each cell, so the cover is even. A blade is a tapered strip
+of a few pieces ending in a point, standing on the ground across the patch (its slope), curving over as it rises, a
+little taller or shorter and leaning its own way (within a quarter of its height, so the carpet stays even), leaning
+with the scene's wind as gusts roll across the zone (the zone's plants' wind, `SceneLighting::wind`: gentle in fair
+weather, hard in a storm) and fluttering a little, and bent away from the spawns walking through it like the other
+plants. `shaders/lawn.frag` gives it the ground's hue with its brightness held within a band (a pale or dark texel
+makes no pale or dark patch), darker at the roots and brighter and warmer towards the tip; in the modern lighting it
+is lit as the radial flora is, with its face's normal turned most of the way up (the lawn is lit like the ground
+under it, not blade by blade) and some light through it when the sun is behind it. It casts no shadow.
+
+By distance (`render::kLawnLods`): within 45 units 36 blades a patch of four pieces each, to 140 units 9 of three, past
+that 4 single triangles, each level's blades wider so a patch keeps its cover. Past 400 units every second patch
+each way is kept, past 800 every fourth (`lawn_stride`), each as wide as the squares it stands for; a grown tile keeps
+its patches by the coarsest stride that keeps them, so a far tile walks only those it draws. The lawn shrinks into the
+ground over the last fifth of the reach with the other plants. In South Karana, on the AMD card (RADV) it was tuned
+on, the lawn costs about 0.45 ms a frame at the default reach and about what the old grass did at 1,200 units.
 
 **Where.** On level ground (45 degrees by default) of a drawn, opaque or cut-out surface: not the invisible collision
 surfaces, nor the translucent water. Not in water, lava or a zone line, nor on the water's surface (the region just

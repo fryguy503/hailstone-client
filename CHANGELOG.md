@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Modern lighting: the grass in the classic zones is now an even lawn that Hailstone builds itself, instead of clumps of flat pictures borrowed from the revamped Commonlands. Short blades cover the open ground in a continuous carpet in the ground's own colour, sway in the wind (harder in a storm), bend away from whoever walks through them and taper off at the edges of paths and roads. The grass needs nothing from the game folder; the forests' ferns, the swamps' cattails and the other climate plants are still taken from the game's own files and scattered over the lawn. Flora Distance still sets how far it reaches
 - Alternate currencies (the inventory's Alt. Currency page in both interfaces, and real estate costs) show their names from the game folder, such as "Doubloons", instead of "Currency 10"
 - Modern interface: the AA window's column heads are never cut short (COST and RANK showed as "C…" and "RA…"), and a resizable window bigger than the screen at a large UI scale is drawn at the screen's size, its saved size kept
 - Options > Tree Detail Distance (50 to 200 %) sets how far a texture pack's generated trees keep their full and middle detail before turning to simpler ones. Lower is faster. Their shadows now use the simpler trees too, so they cost about what the game's own trees' shadows did

@@ -743,6 +743,8 @@ hailstone_add_shaders(hailstone_shaders
   shaders/fire.vert
   shaders/flora.vert
   shaders/flora.frag
+  shaders/lawn.vert
+  shaders/lawn.frag
   shaders/fire.frag
   shaders/spell_fx.vert
   shaders/spell_fx.frag

@@ -1,15 +1,14 @@
 # Hailstone's own flora rules (assets/zone_flora.h, docs/graphics.md "Zone flora"). Kunark's plains and hills (the
-# Field of Bone, the Overthere, the Frontier Mountains...): the shared grass with the revamped Field of Bone's flowers
+# Field of Bone, the Overthere, the Frontier Mountains...): the lawn with the revamped Field of Bone's flowers
 # and shrubs (oldfieldofboneb.eqg).
-donor commonlands.eqg
 donor oldfieldofboneb.eqg
 max_slope 45
 scale 0.9 1.3
 include bare
 # Ground named as grass (jungle floors too): its olive and dark grass as well, only its paths and bare patches not.
-ground *jung* 12 +greenish grassblades:4 grass2:3 treeshade:1 grassy_bush:0.6 fleur:0.25 yellow_bush:0.25 green_bush:0.2 dry_shrub:0.2
-ground *grass* 12 +greenish grassblades:4 grass2:3 treeshade:1 grassy_bush:0.6 fleur:0.25 yellow_bush:0.25 green_bush:0.2 dry_shrub:0.2
-ground *gras* 12 +greenish grassblades:4 grass2:3 treeshade:1 grassy_bush:0.6 fleur:0.25 yellow_bush:0.25 green_bush:0.2 dry_shrub:0.2
+ground *jung* 1.89 +greenish lawn grassy_bush:0.6 fleur:0.25 yellow_bush:0.25 green_bush:0.2 dry_shrub:0.2
+ground *grass* 1.89 +greenish lawn grassy_bush:0.6 fleur:0.25 yellow_bush:0.25 green_bush:0.2 dry_shrub:0.2
+ground *gras* 1.89 +greenish lawn grassy_bush:0.6 fleur:0.25 yellow_bush:0.25 green_bush:0.2 dry_shrub:0.2
 include stone
 # Anything else that is clearly green.
-ground * 12 +green grassblades:4 grass2:3 treeshade:1 grassy_bush:0.6 fleur:0.25 yellow_bush:0.25 green_bush:0.2 dry_shrub:0.2
+ground * 1.89 +green lawn grassy_bush:0.6 fleur:0.25 yellow_bush:0.25 green_bush:0.2 dry_shrub:0.2
