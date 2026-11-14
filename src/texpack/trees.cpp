@@ -439,6 +439,34 @@ struct Canvas {
                 if (glm::distance(p, a + t * d) <= width * 0.5f) put(x, y, c);
             }
     }
+    // Fills the gaps narrower than 2 r texels inside the cut-out (a closing of its mask: grown by r, then shrunk by
+    // r) with `under`, leaving its outline. Pinholes of sky between needles flip from texel to texel as the tree
+    // sways a fraction of a pixel, a sparkle; a solid, shadowed base under the needles does not.
+    void fill_gaps(int r, const glm::vec3& under) {
+        const int W = int(w), H = int(h);
+        std::vector<std::uint8_t> mask(px.size()), tmp(px.size());
+        for (std::size_t i = 0; i < px.size(); ++i) mask[i] = px[i].a > 0.5f;
+        // A square element, separable: a pass along x, then y, for each of grow (max) and shrink (min).
+        auto pass = [&](std::vector<std::uint8_t>& src, bool grow, bool along_x) {
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x) {
+                    std::uint8_t v = grow ? 0 : 1;
+                    for (int k = -r; k <= r; ++k) {
+                        const int xx = along_x ? x + k : x, yy = along_x ? y : y + k;
+                        // Outside the picture counts as empty, so the outline is not grown past the edge.
+                        const std::uint8_t m = xx < 0 || yy < 0 || xx >= W || yy >= H ? 0 : src[std::size_t(yy) * w + std::size_t(xx)];
+                        v = grow ? std::max(v, m) : std::min(v, m);
+                    }
+                    tmp[std::size_t(y) * w + std::size_t(x)] = v;
+                }
+            src.swap(tmp);
+        };
+        std::vector<std::uint8_t> closed = mask;
+        pass(closed, true, true), pass(closed, true, false), pass(closed, false, true), pass(closed, false, false);
+        for (std::size_t i = 0; i < px.size(); ++i)
+            if (closed[i] && !mask[i]) px[i] = glm::vec4(under, 1.0f);
+    }
+
     assets::Image image(const glm::vec3& target) const {
         // Scaled so that its opaque texels average `target`: the game tree's own colour.
         glm::dvec3 sum(0.0);
@@ -503,12 +531,13 @@ assets::Image draw_needles(std::uint32_t size, const glm::vec3& colour, const st
                     const float angle = strands ? rng.range(0.2f, 0.45f) : rng.range(0.55f, 1.05f);
                     const glm::vec2 nd = glm::normalize(perp * side * std::sin(angle) + dir * std::cos(angle));
                     const float nl = s * tw.reach * (layer ? 0.33f : 0.36f) * (strands ? 1.6f : 1.0f) * taper * rng.range(0.75f, 1.1f);
-                    const glm::vec3 c = pick(palette, colour, rng, 0.12f) * (layer ? (side > 0 ? 1.12f : 0.95f) : 0.55f);
+                    const glm::vec3 c = pick(palette, colour, rng, 0.1f) * (layer ? (side > 0 ? 1.06f : 0.97f) : 0.72f);
                     cv.line(p, p + nd * nl, std::max(2.0f, s * (layer ? 0.007f : 0.011f) * (strands ? 1.8f : 1.0f)), c);
                 }
             }
         }
     for (const auto& tw : twigs) cv.line(tw.a, tw.b, twig_w, glm::vec3(0.32f, 0.24f, 0.17f));
+    cv.fill_gaps(std::max(2, int(s * 0.014f)), colour * 0.6f);
     return cv.image(colour);
 }
 
@@ -553,6 +582,7 @@ assets::Image draw_leaves(std::uint32_t size, const glm::vec3& colour, const std
                 cv.put(x, y, base * shade);
             }
     }
+    cv.fill_gaps(std::max(2, int(s * 0.012f)), colour * 0.6f);
     return cv.image(colour);
 }
 
@@ -685,8 +715,10 @@ GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) 
                 std::vector<glm::vec3> path{p0, p0 + dir * len * 0.5f - up * droop * 0.45f, p0 + dir * len - up * droop * 0.8f};
                 // Shade: the sprays deep in the crown and low down darker.
                 b.shade = 0.55f + 0.45f * std::min(1.0f, 0.4f + 0.6f * t);
+                // Only the branch's first part is a tube: further out the spray's drawn twig stands for it, and a thin
+                // dark tube showing through the needles aliases.
                 const float r0 = std::max(0.04f * len, 0.08f);
-                b.tube(path, {r0, r0 * 0.6f, r0 * 0.25f}, 3, 1.0f, bark_units);
+                b.tube({path[0], glm::mix(path[0], path[1], 0.5f)}, {r0, r0 * 0.7f}, 3, 1.0f, bark_units);
                 // Two crossed needle sprays along the branch.
                 const glm::vec3 flat = glm::normalize(glm::cross(up, dir));
                 const float twist = rng.range(0.85f, 1.15f);
