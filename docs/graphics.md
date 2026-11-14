@@ -348,12 +348,18 @@ makes no pale or dark patch), darker at the roots and brighter and warmer toward
 is lit as the radial flora is, with its face's normal turned most of the way up (the lawn is lit like the ground
 under it, not blade by blade) and some light through it when the sun is behind it. It casts no shadow.
 
-By distance (`render::kLawnLods`): within 45 units 49 blades a patch of three pieces each, to 140 units 16 of three,
-past that 9 single triangles, each level's blades wider so a patch keeps its cover. Past 400 units every second patch
-each way is kept, past 800 every fourth (`lawn_stride`), each as wide as the squares it stands for; a grown tile keeps
-its patches by the coarsest stride that keeps them, so a far tile walks only those it draws. The lawn shrinks into the
-ground over the last fifth of the reach with the other plants. In South Karana, on the AMD card (RADV) it was tuned
-on, the lawn costs about 0.45 ms a frame at the default reach, and less than the old grass did at 1,200 units.
+Nothing about the lawn changes at a line as the camera moves (`render::kLawnLods`, `lawn_blades`). A patch's blades
+come in a fixed order, placed by a low-discrepancy sequence shifted per patch, so any first few of them cover its
+square evenly. All 49 stand within 40 units; past that the last of them shrink away one by one (each over three
+places in the order) to 16 at 90 units and 9 at 250, while the rest widen by the square root of how many fewer there
+are, so a patch keeps its cover. The three draws (49 blades of three pieces within 90 units, 16 of three to 250, 9
+single triangles past that) each take the first blades of the one before, so a draw's switch removes only blades
+already gone. Past 400 units every second patch each way fades out over the 120 units before it while the patches
+kept widen to take their squares, past 800 every fourth (`lawn_patch_fade`, `lawn_patch_side`); a grown tile keeps
+its patches by the coarsest stride that keeps them, so a far tile walks only those it draws. The lawn shrinks into
+the ground over the last fifth of the reach with the other plants. A blade is narrow at the root (0.55 of its width),
+widest a third of the way up, and comes to a point. In South Karana, on the AMD card (RADV) it was tuned on, the lawn
+costs about 0.4 ms a frame at the default reach.
 
 **Where.** On level ground (45 degrees by default) of a drawn, opaque or cut-out surface: not the invisible collision
 surfaces, nor the translucent water. Not in water, lava or a zone line, nor on the water's surface (the region just
