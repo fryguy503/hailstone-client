@@ -624,3 +624,70 @@ TEST_CASE("CheckAugmentCombinedRestrictions over a server extension's classes (w
     CHECK(game::check_augment_combined_restrictions(bagged, &aug, war_wiz) == 2);
     CHECK(game::can_gem_fit_in_slot(host, &aug, 0, false, false, war_wiz) == 6); // passes the class test; no socket
 }
+
+TEST_CASE("worn_look: the ornament a worn item shows on its wearer") {
+    auto with_aug = [](net::Item host, int socket, net::Item aug) {
+        net::BagItem b;
+        b.index = static_cast<std::uint32_t>(socket);
+        b.item = std::move(aug);
+        host.contents.push_back(std::move(b));
+        return host;
+    };
+    net::Item chest;
+    chest.material = 3;
+    chest.color = 0xff112233;
+    chest.aug_sockets[0] = {1, 1, 0};
+    chest.aug_sockets[5] = {20, 1, 0};
+
+    auto w = game::worn_look(chest, 1);
+    CHECK(w.material == 3);
+    CHECK(w.hero_forge == 0);
+    CHECK(w.tint == 0xff112233);
+
+    // An ornament augment's own Material is not shown: the server shows everyone the item's (and so does zone-in).
+    net::Item robe;
+    robe.material = 11;
+    net::Item stats;
+    stats.material = 7;
+    net::Item worn = with_aug(with_aug(chest, 0, stats), 5, robe);
+    w = game::worn_look(worn, 1);
+    CHECK(w.material == 3);
+    CHECK(w.tint == 0xff112233);
+
+    net::Item forge = with_aug(chest, 5, net::Item{});
+    forge.heros_forge_model = 900;
+    forge.ornament_hero_model = 1501;
+    w = game::worn_look(forge, 1);
+    CHECK(w.material == 3);
+    CHECK(w.hero_forge == 1501);
+    // A disabled ornament (either flag) shows the plain item's hero's forge model.
+    forge.contents.back().item.aug_texture_disabled = true;
+    CHECK(game::worn_look(forge, 1).hero_forge == 900);
+    forge.contents.back().item.aug_texture_disabled = false;
+    forge.contents.back().item.rank_disabled = true;
+    CHECK(game::worn_look(forge, 1).hero_forge == 900);
+    CHECK(game::has_disabled_ornament(forge));
+    // Only the first ornament socket decides.
+    net::Item two = chest;
+    two.aug_sockets[3] = {21, 1, 0};
+    net::Item off;
+    off.rank_disabled = true;
+    two = with_aug(with_aug(two, 3, net::Item{}), 5, off);
+    CHECK_FALSE(game::has_disabled_ornament(two));
+
+    net::Item sword;
+    sword.id_file = "IT5";
+    CHECK(game::worn_look(sword, 7).material == 5);
+    sword.ornament_main = "IT10652";
+    sword.ornament_off = "IT10653";
+    CHECK(game::worn_look(sword, 7).material == 10652);
+    CHECK(game::worn_look(sword, 8).material == 10653);
+    sword.ornament_off.clear();
+    CHECK(game::worn_look(sword, 8).material == 10652);
+    // A disabled weapon ornament shows the item's own model.
+    sword.aug_sockets[0] = {20, 1, 0};
+    net::Item gone;
+    gone.aug_texture_disabled = true;
+    sword = with_aug(sword, 0, gone);
+    CHECK(game::worn_look(sword, 7).material == 5);
+}

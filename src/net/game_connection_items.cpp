@@ -11,6 +11,7 @@
 #include "core/atomic_file.h"
 #include "core/log.h"
 #include "game/appearance.h"
+#include "game/augments.h"
 #include "game/bag_move.h"
 #include "game/distance.h"
 #include "game/inventory.h"
@@ -29,13 +30,6 @@ namespace {
 ItemSlot cursor_slot() { return ItemSlot::possessions(kSlotCursor); }
 
 bool is_worn(const ItemSlot& s) { return s.type == kInvPossessions && s.sub < 0 && s.slot >= 0 && s.slot < kEquipmentSlots; }
-
-// "IT63" -> 63: the weapon model number a primary/secondary item shows.
-std::uint32_t model_number(const std::string& id_file) {
-    if (id_file.size() > 2 && (id_file[0] == 'I' || id_file[0] == 'i') && (id_file[1] == 'T' || id_file[1] == 't'))
-        return static_cast<std::uint32_t>(std::strtoul(id_file.c_str() + 2, nullptr, 10));
-    return 0;
-}
 
 } // namespace
 
@@ -319,20 +313,18 @@ void GameConnection::handle_item(Op op, const AppPacket& p) {
 // ---------------------------------------------------------------- moves
 
 void GameConnection::refresh_worn_slot(int slot) {
-    // PcClient_RefreshWornSlotVisual: our own model shows what we wear. The
-    // server sends OP_WearChange to everyone else, not to us.
+    // PcClient_RefreshWornSlotVisual: our own model shows what we wear, its
+    // ornament included (game::worn_look). The server sends OP_WearChange to
+    // everyone else, not to us.
     int ms = game::material_slot(slot);
     if (ms < 0) return;
     auto it = world_.spawns.find(world_.player_id);
     if (it == world_.spawns.end()) return;
     const Item* item = inventory_.at(ItemSlot::possessions(static_cast<std::int16_t>(slot)));
-    std::uint32_t material = 0, tint = 0, hero = 0;
-    if (item) {
-        material = ms >= 7 ? model_number(item->id_file) : item->material;
-        tint = item->color;
-        hero = item->heros_forge_model;
-    }
-    game::apply_wear_change(it->second.appearance, static_cast<std::uint8_t>(ms), material, hero, tint);
+    game::WornLook look;
+    if (item) look = game::worn_look(*item, ms);
+    game::apply_wear_change(it->second.appearance, static_cast<std::uint8_t>(ms), look.material, look.hero_forge,
+                            look.tint);
 }
 
 void GameConnection::move_item(const ItemSlot& from, const ItemSlot& to, std::uint32_t count) {
