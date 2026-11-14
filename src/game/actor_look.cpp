@@ -27,8 +27,9 @@ bool change_dag(ActorEnv& env, std::int32_t dag, std::uint32_t color) {
 // ActorClient::sub_0040a9c0 @0x40a9c0: attaches, then tints the part as it
 // is; whether the dag has a part.
 bool attach_tinted(ActorEnv& env, std::int32_t dag, const std::string& name, std::uint32_t tint,
-                   const NewArmorAdjustment* adjustment) {
-    env.attach(dag, name, adjustment);
+                   const NewArmorAdjustment* adjustment, bool armor = false) {
+    if (armor) env.attach_armor(dag, name, adjustment);
+    else env.attach(dag, name, adjustment);
     if (!env.has_part(dag)) return false;
     env.tint_part(dag, tint);
     return true;
@@ -452,7 +453,7 @@ void update_new_armor_slot(ActorLook& look, ActorEnv& env, std::uint32_t slot) {
         else if (armor && !(robed && slot == 6)) name = format("IT%d", item);
         else name = format("%s_%02d_%02d_%s", code.c_str(), a, b, object_name.c_str());
         std::uint32_t tint = armor ? 0xff000000u : look.tint[slot];
-        bool took = attach_tinted(env, which, name, tint, adjustment);
+        bool took = attach_tinted(env, which, name, tint, adjustment, armor.has_value());
         if (c && env.has_part(which)) env.overlay_part(which, format("A_%s_%02d_%02d_S%02d", code.c_str(), a, b, c));
         return took;
     };
@@ -569,13 +570,13 @@ void apply_armor_texture(ActorLook& look, ActorEnv& env, std::int32_t slot) {
             if (part != -1) {
                 const NewArmorAdjustment* adjustment =
                     armor->ignore_adjustment ? nullptr : env.find_adjustment(part, robed && part == 0xb ? 1 : 0, code);
-                env.attach(part, name(armor->it_number), adjustment);
+                env.attach_armor(part, name(armor->it_number), adjustment);
                 change_dag(env, part, color);
             }
             if (second != -1) {
                 const NewArmorAdjustment* adjustment =
                     armor->ignore_adjustment ? nullptr : env.find_adjustment(second, robed && second == 0xb ? 1 : 0, code);
-                env.attach(second, name(armor->it_pair), adjustment);
+                env.attach_armor(second, name(armor->it_pair), adjustment);
                 change_dag(env, second, color);
             }
         } else {

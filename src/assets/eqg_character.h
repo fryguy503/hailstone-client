@@ -52,6 +52,14 @@ struct MaterialInfo {
     std::string name;
     std::string shader;
     std::string diffuse; // e_TextureDiffuse0
+    EffectParams effect;
+    struct SurfaceProperties {
+        bool diffuse = false, normal = false, environment = false;
+        bool shininess = false, env_strength = false;
+    } surface_properties;
+    // Armor attachments opt into the authored surface maps; ordinary EQG
+    // bodies and held parts retain their existing rendering path.
+    bool surface_maps = false;
 };
 
 // A parsed .mds / .mod character mesh.
@@ -92,6 +100,11 @@ struct Layer {
     std::string diffuse;
     std::string normal;
     std::string environment;
+    // SetLayer @0x10048130 replaces the named properties with these raw
+    // layer values. V3 supplies environment strength 1; V4 stores both.
+    // Versions 1/2 have different tails; their scalar layouts remain open.
+    std::optional<float> shininess;
+    std::optional<float> env_strength;
 };
 // Throws std::runtime_error when malformed.
 std::vector<Layer> parse_layers(std::span<const std::byte> data);
@@ -166,6 +179,11 @@ public:
     // EQGM entry ("IT14162", hero's forge pieces), else a live client's
     // layered part (layered_part). Cached; nullptr if none.
     std::shared_ptr<const eqg_character::MeshFile> part_mesh(std::string_view name);
+    // Armor aliases take precedence over a same-numbered generic resource
+    // (which may be a held item or furniture). A missing base produces no
+    // armor. An existing base with an unusable layer can retain a compatible
+    // direct appearance, without enabling modern surface effects.
+    std::shared_ptr<const eqg_character::MeshFile> armor_part_mesh(std::string_view name);
     // How many layered rows part_mesh follows to a base mesh before giving up.
     static constexpr std::uint32_t kMaxLayerDepth = 8;
     // The live client ships each colour of a hero's forge piece as a base
@@ -199,6 +217,7 @@ private:
     std::unordered_map<std::string, std::shared_ptr<const CharacterModel>> models_;
     std::unordered_map<std::string, std::shared_ptr<const eqg_character::MeshFile>> mesh_files_;
     std::unordered_map<std::string, std::shared_ptr<const eqg_character::MeshFile>> parts_;
+    std::unordered_map<std::string, std::shared_ptr<const eqg_character::MeshFile>> armor_parts_;
     void load_layers(const Source& lay);
     std::unordered_map<std::string, Source> layer_sources_;       // "C_GBN_S01_M01" -> gbn.eqg / gbn.lay
     std::unordered_map<std::string, eqg_character::Layer> layers_; // upper-case name -> layer

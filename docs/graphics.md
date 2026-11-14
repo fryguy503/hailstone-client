@@ -858,6 +858,15 @@ modern lighting always uses them (`shaders/zone.frag` `mapped_normal`, `surface_
 
 The classic lighting draws them as before (the diffuse texture by the lit colour).
 
+Hero's Forge attachments carry their own EQG surface properties into the actor renderer, including supplied layer
+overrides. Their native normal maps use the full RGB tangent vector and the same +v convention as EQG zones;
+texture-pack normals keep their separate BC5 RG interpretation and remain the fallback when a native map is absent.
+Armor reflection uses the material's environment DDS cube, converted with the existing cube-to-octahedral loader;
+an absent or invalid cube supplies no reflection. The base shader's known specular/reflective classes select the
+effect, and a layer's parameters do not invent a new shader class. Native surface records share the actor's lighting
+buffer, with one bounded table per frame shared by instances of a mesh. Push constants remain 128 bytes and no
+descriptor bindings are added. Ordinary WLD, Luclin, held-item and EQG NPC materials retain their existing path.
+
 Alpha-tested materials (trees, grass, fences, Chroma/Masked) draw in the opaque pass with alpha-to-coverage when the
 scene is multisampled: the pipelines set `shaders/coverage.glsl`'s `kAlphaToCoverage`, and the alpha test becomes a
 ramp about one pixel wide around the reference, capped at 0.05 of alpha so far minified textures do not leave

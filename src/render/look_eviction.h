@@ -50,7 +50,17 @@ template <class States> auto worn_meshes(const States& states) {
     return worn;
 }
 
-// A texture stays while any GPU model reads it: base and tint layers and both
+// Every path that keeps or frees an actor's textures uses the same list: base/tint, pack maps and native armor maps.
+// The optional surface members keep this helper usable by the older, renderer-independent fixtures too.
+template <class Part, class Fn> void for_each_part_texture_slot(const Part& part, Fn&& fn) {
+    for (const std::uint32_t slot : {part.texture, part.texture2, part.normal_map, part.rough_map})
+        if (slot != 0xffffffffu) fn(slot);
+    if constexpr (requires { part.surface.slots.x; part.surface.slots.y; })
+        for (const std::uint32_t slot : {part.surface.slots.x, part.surface.slots.y})
+            if (slot != 0xffffffffu) fn(slot);
+}
+
+// A texture stays while any GPU model reads it: base and tint layers and
 // material maps count, including defaults and looks retained for a hidden spawn.
 // Rebuilding this set on the idle sweep avoids a separate count that can drift
 // when models are adopted from the preceding zone or an upload fails midway.
@@ -58,8 +68,7 @@ template <class Models> std::unordered_set<std::uint32_t> model_texture_slots(co
     std::unordered_set<std::uint32_t> used{0}; // the white fallback is permanent
     for (const auto& kv : models)
         for (const auto& part : kv.second.parts)
-            for (const std::uint32_t slot : {part.texture, part.texture2, part.normal_map, part.rough_map})
-                if (slot != 0xffffffffu) used.insert(slot);
+            for_each_part_texture_slot(part, [&](std::uint32_t slot) { used.insert(slot); });
     return used;
 }
 

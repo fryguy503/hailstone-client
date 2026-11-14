@@ -5,6 +5,7 @@
 #include "assets/eqg_character.h"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -113,6 +114,19 @@ bool safe_member(std::string_view s) {
     return !s.empty() && s.find_first_of("/\\:") == std::string_view::npos;
 }
 
+std::string layer_token(std::string_view text) {
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) text.remove_prefix(1);
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) text.remove_suffix(1);
+    if (text.empty() || text.size() > kMaxNameLength ||
+        !std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; })) return {};
+    std::string result = upper(text);
+    // IT-1 is an invalid catalog entry, not an item model. Other names are
+    // retained for bounded generic layer chains and existing asset extensions.
+    if (result.starts_with("IT") && (result.size() == 2 ||
+        !std::all_of(result.begin() + 2, result.end(), [](unsigned char c) { return std::isdigit(c); }))) return {};
+    return result;
+}
+
 } // namespace
 
 namespace eqg_character {
@@ -143,16 +157,39 @@ MeshFile parse_mesh(std::span<const std::byte> data, std::string_view label) {
     auto strings = r.bytes(ns);
     for (std::uint32_t i = 0; i < nm; ++i) {
         MaterialInfo m;
-        r.le<std::uint32_t>(); // id
+        eqg::MaterialDef def;
+        def.id = r.le<std::uint32_t>();
         m.name = name_at(strings, r.le<std::uint32_t>());
         m.shader = name_at(strings, r.le<std::uint32_t>());
+        def.name = m.name;
+        def.shader = m.shader;
         std::uint32_t props = count(r, limit);
         for (std::uint32_t k = 0; k < props; ++k) {
-            std::string key = name_at(strings, r.le<std::uint32_t>());
-            std::uint32_t type = r.le<std::uint32_t>();
-            std::uint32_t value = r.le<std::uint32_t>();
-            if (type == 2 && key == "e_TextureDiffuse0") m.diffuse = name_at(strings, value);
+            eqg::Property property;
+            property.name = name_at(strings, r.le<std::uint32_t>());
+            property.type = r.le<std::uint32_t>();
+            property.u = r.le<std::uint32_t>();
+            if (property.type == 0) property.f = std::bit_cast<float>(property.u);
+            else if (property.type == 2) {
+                property.text = name_at(strings, property.u);
+                // Keep the character loader's exact-name, last-wins diffuse
+                // selection; the retained definition also supplies armor maps.
+                if (property.name == "e_TextureDiffuse0") m.diffuse = property.text;
+            }
+            def.properties.push_back(std::move(property));
         }
+        m.effect = eqg::effect_params(def, eqg::shader_class(m.shader));
+        const std::string environment = lower(def.texture("e_TextureEnvironment0"));
+        if (!environment.empty()) m.effect.textures = {environment};
+        auto has = [&](std::string_view property, std::uint32_t type) {
+            const auto* p = def.find(property);
+            return p && p->type == type;
+        };
+        m.surface_properties.diffuse = has("e_TextureDiffuse0", 2);
+        m.surface_properties.normal = has("e_TextureNormal0", 2);
+        m.surface_properties.environment = has("e_TextureEnvironment0", 2);
+        m.surface_properties.shininess = has("e_fShininess0", 0);
+        m.surface_properties.env_strength = has("e_fEnvMapStrength0", 0);
         f.materials.push_back(std::move(m));
     }
     auto read_bones = [&] {
@@ -304,6 +341,12 @@ std::vector<Layer> parse_layers(std::span<const std::byte> data) {
             if (role == 'C') l.diffuse = tex;
             else if (role == 'N') l.normal = tex;
             else if (role == 'E') l.environment = tex;
+        }
+        if (version == 3 || version == 4) {
+            l.shininess = std::bit_cast<float>(w[6]);
+            l.env_strength = version == 4 ? std::bit_cast<float>(w[7]) : 1.0f;
+            if (!std::isfinite(*l.shininess) || !std::isfinite(*l.env_strength))
+                throw std::runtime_error("non-finite EQGL scalar");
         }
         out.push_back(std::move(l));
     }
@@ -473,11 +516,22 @@ void append_pieces(const MeshFile& mesh, const std::vector<std::size_t>& pieces,
             if (!info.diffuse.empty() && lower(info.diffuse) != "none") material.frames.push_back(info.diffuse);
             material.blend = eqg::shader_blend(info.shader);
             material.eqg_shader = eqg::shader_class(info.shader);
+            if (info.surface_maps) material.effect = info.effect;
             if (shader.find("invis") != std::string::npos || shader.find("boundary") != std::string::npos)
                 material.blend = BlendMode::Invisible;
             std::uint32_t mi = 0;
-            for (; mi < out.materials.size(); ++mi)
-                if (out.materials[mi].name == material.name && out.materials[mi].frames == material.frames) break;
+            for (; mi < out.materials.size(); ++mi) {
+                const Material& existing = out.materials[mi];
+                if (existing.name != material.name || existing.frames != material.frames) continue;
+                if (!info.surface_maps || (
+                    existing.blend == material.blend && existing.eqg_shader == material.eqg_shader &&
+                    existing.effect.normal_map == material.effect.normal_map &&
+                    existing.effect.textures == material.effect.textures &&
+                    existing.effect.shininess == material.effect.shininess && existing.effect.gloss == material.effect.gloss &&
+                    existing.effect.env_strength == material.effect.env_strength &&
+                    existing.effect.specular == material.effect.specular &&
+                    existing.effect.reflective == material.effect.reflective)) break;
+            }
             if (mi == out.materials.size()) {
                 out.materials.push_back(material);
                 out.tints.push_back(0);
@@ -880,6 +934,78 @@ std::shared_ptr<const eqg_character::MeshFile> EqgCharacterStore::part_mesh(std:
     return result;
 }
 
+std::shared_ptr<const eqg_character::MeshFile> EqgCharacterStore::armor_part_mesh(std::string_view name) {
+    const std::string key = upper(name);
+    if (auto it = armor_parts_.find(key); it != armor_parts_.end()) return it->second;
+    // Separate from parts_: an armor alias and an unrelated direct resource
+    // may have the same IT number. The provisional entry also breaks cycles.
+    armor_parts_.emplace(key, nullptr);
+    std::shared_ptr<eqg_character::MeshFile> result;
+    bool legacy_fallback = false;
+    try {
+        if (auto mapped = layered_part(key)) {
+            // The native scoped redirect asks for the base actor definition
+            // once. A base which also has an alias keeps its direct mesh.
+            auto base = part_mesh(mapped->first, 1);
+            const eqg_character::Layer* surface = layer(mapped->second);
+            if (!surface && game_.exists(lower(mapped->second) + ".eqg")) {
+                archive(lower(mapped->second) + ".eqg");
+                surface = layer(mapped->second);
+            }
+            const bool recognized = surface && (!surface->diffuse.empty() || !surface->normal.empty() ||
+                                               !surface->environment.empty());
+            const bool diffuse_ready = surface && (surface->diffuse.empty() || has_file(surface->diffuse));
+            if (base && recognized && diffuse_ready) {
+                result = std::make_shared<eqg_character::MeshFile>(*base);
+                for (auto& material : result->materials) {
+                    const auto& properties = material.surface_properties;
+                    if (properties.diffuse && !surface->diffuse.empty()) material.diffuse = lower(surface->diffuse);
+                    // Native SetLayer replaces supplied texture roles only;
+                    // omitted roles retain the base material's own maps.
+                    if (properties.normal && !surface->normal.empty()) material.effect.normal_map = lower(surface->normal);
+                    if (properties.environment && !surface->environment.empty())
+                        material.effect.textures = {lower(surface->environment)};
+                    if (properties.shininess && surface->shininess) material.effect.shininess = *surface->shininess;
+                    // Unlike the mesh's named e_* property reader, SetLayer
+                    // forwards its environment scalar without doubling it.
+                    if (properties.env_strength && surface->env_strength) material.effect.env_strength = *surface->env_strength;
+                }
+            } else if (base) {
+                // Hailstone compatibility policy, not native model-class
+                // identification: retain a mixed-era direct appearance only
+                // when its bone/piece/vertex/triangle counts match the base.
+                auto direct = part_mesh(key);
+                const bool compatible = direct && direct->bones.size() == base->bones.size() &&
+                    direct->pieces.size() == base->pieces.size() &&
+                    std::equal(direct->pieces.begin(), direct->pieces.end(), base->pieces.begin(),
+                               [](const eqg_character::Piece& a, const eqg_character::Piece& b) {
+                                   return a.vertices.size() == b.vertices.size() && a.triangles.size() == b.triangles.size();
+                               });
+                if (compatible) {
+                    result = std::make_shared<eqg_character::MeshFile>(*direct);
+                    legacy_fallback = true;
+                    log::debug("EQG armor {}: unavailable layer {}, retaining legacy direct part", key, mapped->second);
+                } else {
+                    log::debug("EQG armor {}: unavailable layer {} or compatible legacy direct part", key, mapped->second);
+                }
+            } else {
+                log::debug("EQG armor {}: unavailable base {} or layer {}", key, mapped->first, mapped->second);
+            }
+        } else if (auto direct = part_mesh(key)) {
+            result = std::make_shared<eqg_character::MeshFile>(*direct);
+        }
+        if (result)
+            for (auto& material : result->materials) material.surface_maps = !legacy_fallback;
+    } catch (const std::exception& e) {
+        log::debug("EQG armor {}: {}", key, e.what());
+    }
+    // A depth-limited or incomplete lookup must not poison a later lookup
+    // beginning closer to the real base; successful immutable meshes cache.
+    if (result) armor_parts_[key] = result;
+    else armor_parts_.erase(key);
+    return result;
+}
+
 std::optional<std::pair<std::string, std::string>> EqgCharacterStore::layered_part(std::string_view name) {
     if (!layered_parts_) {
         layered_parts_.emplace();
@@ -887,13 +1013,16 @@ std::optional<std::pair<std::string, std::string>> EqgCharacterStore::layered_pa
             if (!lower(entry.name).ends_with(".txt")) continue;
             auto data = game_.read(entry.relative);
             if (!data) continue;
-            for (const auto& line : text_lines(*data)) {
+            for (const auto& raw_line : text_lines(*data)) {
+                std::string_view line = raw_line;
+                if (line.starts_with("\xef\xbb\xbf")) line.remove_prefix(3);
                 std::size_t a = line.find('^'), b = a == std::string::npos ? a : line.find('^', a + 1);
-                if (b == std::string::npos) continue;
-                std::string layer = upper(line.substr(b + 1));
-                while (!layer.empty() && (layer.back() == '\r' || layer.back() == ' ')) layer.pop_back();
-                if (layer.empty()) continue;
-                layered_parts_->try_emplace(upper(line.substr(0, a)), upper(line.substr(a + 1, b - a - 1)), layer);
+                if (b == std::string::npos || line.find('^', b + 1) != std::string::npos) continue;
+                std::string alias = layer_token(line.substr(0, a));
+                std::string base = layer_token(line.substr(a + 1, b - a - 1));
+                std::string layer = layer_token(line.substr(b + 1));
+                if (alias.empty() || base.empty() || layer.empty()) continue;
+                layered_parts_->try_emplace(std::move(alias), std::move(base), std::move(layer));
             }
         }
         if (!layered_parts_->empty()) log::info("hero's forge layers: {} layered pieces", layered_parts_->size());
