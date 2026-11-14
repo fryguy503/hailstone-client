@@ -152,6 +152,11 @@ void GameConnection::fail(std::string message) {
     capture_bank();
     error_ = std::move(message);
     state_ = ConnectionState::Disconnected;
+    respawn_.reset();
+    clear_hover_rez();
+    respawn_spawn_pending_ = false;
+    respawn_placement_.reset();
+    discard_questions([](const Confirmation& c) { return c.id == kConfirmRezz; });
     reset_tribute_donations();
     reset_tribute_bonuses();
     reset_guild_permissions(kTributeNone);
@@ -666,6 +671,9 @@ void GameConnection::handle_world(const AppPacket& p) {
         controlled_boat_ = standing_on_ = 0;
         spell_book_open_ = false; // MoveToZone closes the book
         respawn_.reset();
+        clear_hover_rez();
+        respawn_spawn_pending_ = false;
+        respawn_placement_.reset();
         pstatus_.dead = false;
         pstatus_.owner_status = 0;
         pstatus_.stand_state = 100;
@@ -1316,8 +1324,12 @@ void GameConnection::handle_zone(const AppPacket& p) {
     case Op::NewSpawn: {
         auto s = decode_spawn(p);
         if (!s) { log::debug("undecodable spawn ({} bytes)", p.data.size()); break; }
+        // The old ID still belongs to our corpse. A stale living record for that ID cannot publish a respawn.
+        if (respawn_spawn_pending_ && s->spawn_id == world_.player_id && s->npc == 0 && s->name == character_)
+            break;
         apply_spawn(*s);
-        if (!own_spawn_seen_ && s->name == character_) {
+        if ((!own_spawn_seen_ || respawn_spawn_pending_) && s->npc == 0 && s->spawn_id != 0 && s->name == character_) {
+            const bool respawning = respawn_spawn_pending_;
             world_.player_id = s->spawn_id;
             invis_state_ = s->invis;
             own_spawn_seen_ = true;
@@ -1331,7 +1343,30 @@ void GameConnection::handle_zone(const AppPacket& p) {
             position_ = game::server_to_world({s->motion.x, s->motion.y, s->motion.z});
             heading_ = s->motion.heading;
             motion_known_ = true;
-            maybe_request_client_spawn();
+            if (respawning) {
+                // The corpse keeps the previous ID. Only this living, matching own spawn can release the
+                // same-zone respawn wait, and both network motion and the app's physics must use its placement.
+                respawn_spawn_pending_ = false;
+                world_.controlled_id = 0;
+                standing_on_ = controlled_boat_ = 0;
+                velocity_ = glm::vec3(0.0f);
+                moving_ = false;
+                speed_run_ = 0.0f;
+                motion_dirty_ = true;
+                position_tracker_.flush();
+                pstatus_.dead = false;
+                pstatus_.owner_status = 0;
+                pstatus_.stand_state = s->stand_state ? s->stand_state : kStandStanding;
+                respawn_placement_ = RespawnPlacement{position_, heading_};
+                if (profile_) {
+                    profile_->x = s->motion.x;
+                    profile_->y = s->motion.y;
+                    profile_->z = s->motion.z;
+                    profile_->heading = heading_;
+                }
+            } else {
+                maybe_request_client_spawn();
+            }
         }
         break;
     }
@@ -1795,6 +1830,13 @@ void GameConnection::handle_zone(const AppPacket& p) {
         auto t = tl ? decode_translocate(p) : std::nullopt;
         auto rz = tl ? std::nullopt : decode_rezz_request(p);
         if (!t && !rz) break;
+        if (rz) {
+            if (respawn_spawn_pending_ || (respawn_ && respawn_chosen_)) break;
+            clear_hover_rez();
+            // A new server resurrection offer replaces the old one; queued dialogs must not answer superseded
+            // corpse/spell data after the current offer has been accepted or the hover timeout has completed.
+            discard_questions([](const Confirmation& c) { return c.id == kConfirmRezz; });
+        }
         std::uint32_t zone = t ? t->zone : rz->zone;
         std::string where = game::zone_long_name(zone);
         if (where.empty()) where = std::format("zone {}", zone);
@@ -2120,6 +2162,8 @@ std::optional<ChatEvent> GameConnection::poll_chat() {
 
 void GameConnection::set_player_motion(const glm::vec3& position, float heading, const glm::vec3& velocity,
                                        bool moving) {
+    // During hover the player ID belongs to the corpse; local physics must not move its server-owned pose.
+    if (pstatus_.dead) return;
     // Against the place last sent, not last frame's: at a high frame rate a slow walk (sneaking, snared) moves less
     // than 0.01 a frame and would never be reported.
     if (glm::distance(position, last_sent_position_) > 0.01f || moving != moving_) motion_dirty_ = true;
@@ -2271,6 +2315,10 @@ void GameConnection::leave_zone_dropped() {
 }
 
 void GameConnection::start_zone_change(const ZoneChange& request) {
+    if (respawn_ || respawn_spawn_pending_) {
+        clear_hover_rez();
+        discard_questions([](const Confirmation& c) { return c.id == kConfirmRezz; });
+    }
     send_zone(encode(request));
     zone_change_request_ = request;
     zone_change_pending_ = true;
@@ -2310,6 +2358,10 @@ void GameConnection::disconnect() {
     capture_bank();
     reset_achievements();
     reset_rewards();
+    respawn_.reset();
+    clear_hover_rez();
+    respawn_spawn_pending_ = false;
+    respawn_placement_.reset();
     reset_tribute_donations();
     reset_tribute_bonuses();
     reset_guild_permissions(kTributeNone);
@@ -2624,7 +2676,8 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
         break;
     case Op::ManaUpdate:
     case Op::EnduranceUpdate:
-        if (auto u = decode_points_update(p); u && u->spawn_id == me) {
+        if (auto u = decode_points_update(p); u && (u->spawn_id == me ||
+            (u->spawn_id == 0 && pstatus_.dead && (respawn_ || respawn_spawn_pending_)))) {
             if (op == Op::ManaUpdate) {
                 pstatus_.mana = u->current;
                 pstatus_.max_mana = u->maximum;
@@ -2831,9 +2884,24 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
         break;
     case Op::RespawnWindow:
         // Handle_OP_RespawnWindow: CRespawnWnd filled and shown; Select waits for the delay.
-        respawn_ = decode_respawn_window(p);
-        respawn_shown_ms_ = now_ms();
-        respawn_chosen_ = false;
+        // A malformed packet must not discard a valid window or unlock a selection already sent. Once the server
+        // acknowledged a same-zone respawn, only the new own spawn can complete it, not another window.
+        if (!respawn_spawn_pending_)
+            if (auto window = decode_respawn_window(p)) {
+                const bool chosen = respawn_ && respawn_chosen_;
+                if (!respawn_) {
+                    respawn_session_ = core::next_process_serial();
+                    clear_hover_rez();
+                }
+                respawn_ = std::move(window);
+                // A refreshed server list must not apply local consent to a different or withdrawn destination.
+                const auto* rez = respawn_resurrection_option();
+                if (hover_rez_choice_ && (!rez || *hover_rez_choice_ != *rez)) clear_hover_rez();
+                respawn_shown_ms_ = respawn_now_ms();
+                respawn_chosen_ = chosen;
+                log::info("hover respawn window: {} options, {} ms left, default {}", respawn_->options.size(),
+                          respawn_->time_remaining_ms, respawn_->selected);
+            }
         break;
     default:
         break;

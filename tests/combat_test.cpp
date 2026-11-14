@@ -26,6 +26,26 @@ std::vector<std::byte> bytes_of(ByteWriter&& w) { return w.take(); }
 
 AppPacket packet(Op op, ByteWriter&& w) { return AppPacket(to_wire(op), w.take()); }
 
+AppPacket respawn_choices(std::uint8_t validity = 1, bool duplicate_id = false) {
+    ByteWriter w;
+    w.le<std::uint32_t>(0);
+    w.le<std::uint32_t>(300000);
+    w.le<std::uint32_t>(0);
+    w.le<std::uint32_t>(2);
+    const char* names[] = {"Bind Location", "Resurrect"};
+    for (std::uint32_t i = 0; i < 2; ++i) {
+        w.le<std::uint32_t>(duplicate_id ? 0 : i);
+        w.le<std::uint32_t>(1);
+        w.f32(1.0f);
+        w.f32(2.0f);
+        w.f32(3.0f);
+        w.f32(4.0f);
+        w.bytes(std::as_bytes(std::span(names[i], std::strlen(names[i]) + 1)));
+        w.le<std::uint8_t>(i == 1 ? validity : 0);
+    }
+    return packet(Op::RespawnWindow, std::move(w));
+}
+
 } // namespace
 
 TEST_CASE("OP_TargetMouse / OP_TargetCommand are ClientTarget_Struct (u32)") {
@@ -209,33 +229,41 @@ TEST_CASE("OP_ZonePlayerToBind follows ENCODE(OP_ZonePlayerToBind)") {
 }
 
 TEST_CASE("OP_RespawnWindow decodes SendRespawnBinds with its zero padding; the answer is a u32") {
-    ByteWriter w;
-    w.le<std::uint32_t>(0);      // initial selection
-    w.le<std::uint32_t>(300000); // time
-    w.le<std::uint32_t>(0);
-    w.le<std::uint32_t>(2);
-    const char* names[] = {"Bind Location", "Resurrect"};
-    for (std::uint32_t i = 0; i < 2; ++i) {
-        w.le<std::uint32_t>(i);
-        w.le<std::uint32_t>(1);
-        w.f32(1.0f);
-        w.f32(2.0f);
-        w.f32(3.0f);
-        w.f32(4.0f);
-        w.bytes(std::as_bytes(std::span(names[i], std::strlen(names[i]) + 1)));
-        w.le<std::uint8_t>(i == 1 ? 1 : 0);
-    }
-    w.zeros(3); // count + 1 bytes EQEmu allocates but does not write
-    auto r = decode_respawn_window(packet(Op::RespawnWindow, std::move(w)));
+    auto p = respawn_choices();
+    p.data.insert(p.data.end(), 3, std::byte{0}); // count + 1 bytes EQEmu allocates but does not write
+    auto r = decode_respawn_window(p);
     REQUIRE(r);
     CHECK(r->time_remaining_ms == 300000);
     REQUIRE(r->options.size() == 2);
     CHECK(r->options[0].name == "Bind Location");
     CHECK(r->options[1].name == "Resurrect");
-    CHECK(r->options[1].type == 1);
+    CHECK(r->options[0].available());
+    CHECK(r->options[1].validity == 1);
+    CHECK_FALSE(r->options[1].available());
     AppPacket a = encode_respawn_selection(0);
     CHECK(a.opcode == 0x0ecb);
     CHECK(a.data == std::vector<std::byte>(4));
+}
+
+TEST_CASE("OP_RespawnWindow availability is independent of the destination's name") {
+    for (std::uint8_t validity : {std::uint8_t{0}, std::uint8_t{1}, std::uint8_t{2}}) {
+        auto r = decode_respawn_window(respawn_choices(validity));
+        REQUIRE(r);
+        REQUIRE(r->options.size() == 2);
+        CHECK(r->options[1].name == "Resurrect");
+        CHECK(r->options[1].validity == validity);
+        CHECK(r->options[1].available() == (validity == 0));
+    }
+}
+
+TEST_CASE("OP_RespawnWindow rejects truncated options and ambiguous option ids") {
+    auto p = respawn_choices();
+    for (std::size_t size = 0; size < p.data.size(); ++size) {
+        auto truncated = p;
+        truncated.data.resize(size);
+        CHECK_FALSE(decode_respawn_window(truncated).has_value());
+    }
+    CHECK_FALSE(decode_respawn_window(respawn_choices(0, true)).has_value());
 }
 
 TEST_CASE("sitting is OP_SpawnAppearance animation 110, standing 100") {

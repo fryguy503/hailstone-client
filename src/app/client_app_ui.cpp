@@ -310,11 +310,13 @@ void ClientApp::draw_ui(float fps) {
             tv.distance = glm::distance(t.position, feet_ + glm::vec3(0, 0, floor_offset_));
         }
         game_view_.respawn = {};
-        if (const auto& rw = conn_->respawn_window()) {
-            for (const auto& o : rw->options) game_view_.respawn.options.emplace_back(o.id, o.name);
-            game_view_.respawn.seconds_left = rw->time_remaining_ms / 1000;
-            game_view_.respawn.ready = conn_->respawn_ready();
-        }
+        if (!(eq_api_ && eq_api_->replaces("RespawnWnd")))
+            if (const auto& rw = conn_->respawn_window()) {
+                for (const auto& o : rw->options)
+                    if (conn_->respawn_option_available(o.id)) game_view_.respawn.options.emplace_back(o.id, o.name);
+                game_view_.respawn.seconds_left = static_cast<std::uint32_t>((conn_->respawn_ms_left() + 999) / 1000);
+                game_view_.respawn.ready = conn_->respawn_ready();
+            }
         game_view_.spawns.selected_id = world.target_id;
         auto actions = ui::in_game_overlay(game_view_);
         draw_items();

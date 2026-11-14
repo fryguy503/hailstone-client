@@ -2019,7 +2019,7 @@ int ListInfo(lua_State* L) {
 }
 
 // texts, r, g, b [, texture, u0, v0, u1, v1] = eq.ListRow(name, child, row)   -- row from 0; texts.altRight,
-// texts.comboColumn, texts.iconColumn
+// texts.comboColumn, texts.disabled, texts.iconColumn
 // (from 0) when the icon is not in the first column
 int ListRowFn(lua_State* L) {
     auto& m = Impl::of(L);
@@ -2060,6 +2060,10 @@ int ListRowFn(lua_State* L) {
     if (d->alt_right_click) { // texts.altRight: an Alt right click on the row is the window's
         lua_pushboolean(L, 1);
         lua_setfield(L, -2, "altRight");
+    }
+    if (r.disabled) { // texts.disabled: the window left the line disabled
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "disabled");
     }
     for (float f : r.color) lua_pushnumber(L, f);
     if (!r.icon) return 4;

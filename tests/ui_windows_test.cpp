@@ -15,7 +15,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <thread>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -24,6 +23,7 @@
 #include "app/lua_eq.h"
 #include "app/lua_eq_hotbar.h"
 #include "app/lua_eq_windows.h"
+#include "core/byte_io.h"
 #include "core/ini_file.h"
 #include "game/bazaar.h"
 #include "game/hot_button_menu.h"
@@ -36,6 +36,8 @@
 #include "net/notice_packets.h"
 #include "net/opcodes.h"
 #include "net/pet_packets.h"
+#include "net/zone_packets.h"
+#include "manual_clock.h"
 #include "scratch_dir.h"
 #include "ui/lua/lua_host.h"
 
@@ -54,23 +56,40 @@ void put_f32(std::vector<std::byte>& b, float f) {
 }
 
 // OP_RespawnWindow as EQEmu's SendRespawnBinds writes it.
-net::AppPacket respawn_packet() {
+net::AppPacket respawn_packet(std::uint8_t validity = 1) {
     std::vector<std::byte> b;
     put_u32(b, 0);     // the default option
     put_u32(b, 60000); // time remaining
     put_u32(b, 0);     // delay
     put_u32(b, 2);
-    auto option = [&](std::uint32_t id, std::uint32_t zone, const char* name, std::uint8_t type) {
+    auto option = [&](std::uint32_t id, std::uint32_t zone, const char* name, std::uint8_t availability) {
         put_u32(b, id);
         put_u32(b, zone);
         for (int i = 0; i < 4; ++i) put_f32(b, 0.0f);
         for (const char* c = name; *c; ++c) b.push_back(static_cast<std::byte>(*c));
         b.push_back(std::byte{0});
-        b.push_back(static_cast<std::byte>(type));
+        b.push_back(static_cast<std::byte>(availability));
     };
     option(0, 2, "Bind Location", 0);
-    option(1, 2, "Resurrect", 1);
+    option(1, 2, "Resurrect", validity);
     return net::AppPacket(net::to_wire(net::Op::RespawnWindow), std::move(b));
+}
+
+net::AppPacket respawn_rez_offer(std::uint32_t spell = 100) {
+    ByteWriter w;
+    w.le<std::uint32_t>(0);
+    w.le<std::uint16_t>(2);
+    w.le<std::uint16_t>(0);
+    for (int i = 0; i < 3; ++i) w.f32(0);
+    w.le<std::uint32_t>(0);
+    w.fixed_string("Gennro", 64);
+    w.le<std::uint32_t>(0);
+    w.fixed_string("Healer", 64);
+    w.le(spell);
+    w.fixed_string("Gennro's corpse", 64);
+    w.le<std::uint32_t>(0);
+    w.zeros(8);
+    return net::AppPacket(net::to_wire(net::Op::RezzRequest), w.take());
 }
 
 struct Harness {
@@ -729,22 +748,177 @@ TEST_CASE("OP_Bandolier: the right button held on a set's slot") {
 }
 
 TEST_CASE("Respawn window: the options, the default row and Select") {
-    const GameDir* game = test::game_dir();
-    if (!game) return;
-    Harness t(*game);
+    test::ManualClock clock;
+    auto options = test::quick_options();
+    options.session.clock = clock.source();
+    test::Rig rig(test::MockConfig::standard(), std::move(options));
+    REQUIRE(rig.to_zone());
+    clock.hold();
+    Harness t(rig.game);
+    t.host.conn = &rig.conn;
+    auto& c = rig.conn;
     CHECK_FALSE(t.api->shown("RespawnWnd"));
-    t.conn.receive_zone_packet_for_test(respawn_packet());
+    c.receive_zone_packet_for_test(respawn_packet());
     REQUIRE(t.api->shown("RespawnWnd"));
-    CHECK(t.conn.respawn_window()->options.size() == 2);
+    CHECK(c.respawn_window()->options.size() == 2);
     auto markers = t.api->list_texts("RespawnWnd", "OptionsList");
     REQUIRE(markers.size() == 2);
     CHECK(markers[0] == "*"); // the default option
-    CHECK(markers[1] == "r"); // a resurrection
-    std::this_thread::sleep_for(std::chrono::milliseconds(5)); // Select: older than the delay (0)
-    CHECK(t.conn.respawn_ready());
+    CHECK(markers[1] == "r"); // the final byte set (Handle_OP_RespawnWindow's marker); on EQEmu: unavailable
+    clock.advance(std::chrono::milliseconds(1)); // Select: older than the delay (0)
+    CHECK(c.respawn_ready());
     CHECK(t.api->click_list("RespawnWnd", "OptionsList", 1, 0));
+    CHECK(t.api->child_state("RespawnWnd", "SelectButton") == false);
     CHECK(t.api->click_child("RespawnWnd", "SelectButton"));
-    CHECK(t.conn.respawn_chosen());
+    CHECK_FALSE(c.respawn_chosen());
+    // A server refresh makes the same row available without inventing a kind from the validity flag.
+    c.receive_zone_packet_for_test(respawn_packet(0));
+    markers = t.api->list_texts("RespawnWnd", "OptionsList");
+    REQUIRE(markers.size() == 2);
+    CHECK(markers[1].empty());
+    clock.advance(std::chrono::milliseconds(1));
+    CHECK(t.api->child_state("RespawnWnd", "SelectButton") == true);
+    CHECK(t.api->click_child("RespawnWnd", "SelectButton"));
+    CHECK(c.respawn_chosen());
+    CHECK(t.api->child_state("RespawnWnd", "SelectButton") == false);
+    CHECK(t.api->child_state("RespawnWnd", "OptionsList") == false);
+}
+
+TEST_CASE("Respawn window: a new session restores the server default without an intervening UI frame") {
+    test::ManualClock clock;
+    auto options = test::quick_options();
+    options.session.clock = clock.source();
+    test::Rig rig(test::MockConfig::standard(), std::move(options));
+    REQUIRE(rig.to_zone());
+    clock.hold();
+    Harness t(rig.game);
+    t.host.conn = &rig.conn;
+    auto& c = rig.conn;
+    c.receive_zone_packet_for_test(respawn_packet());
+    REQUIRE(c.respawn_window());
+    const auto first_session = c.respawn_session();
+    CHECK(t.api->click_list("RespawnWnd", "OptionsList", 1, 0));
+    clock.advance(std::chrono::milliseconds(1));
+    CHECK(t.api->child_state("RespawnWnd", "SelectButton") == false); // unavailable choice inspected
+
+    net::ZonePlayerToBind bind;
+    bind.zone_id = 2;
+    bind.zone_name = "Bind destination";
+    c.receive_zone_packet_for_test(net::encode(bind));
+    REQUIRE_FALSE(c.respawn_window());
+    c.receive_zone_packet_for_test(net::encode(test::make_spawn("Gennro", 60, 0, 1, 0, 0, 0)));
+    net::Death death;
+    death.spawn_id = death.corpse_id = 60;
+    death.damage = 5000;
+    c.receive_zone_packet_for_test(net::encode(death));
+    // Both packets arrive before the UI can observe the closed window and run its per-frame cleanup.
+    c.receive_zone_packet_for_test(respawn_packet());
+    REQUIRE(c.respawn_window());
+    CHECK(c.respawn_session() != first_session);
+    clock.advance(std::chrono::milliseconds(1));
+    CHECK(t.api->child_state("RespawnWnd", "SelectButton") == true); // new default is the available bind
+    CHECK(t.api->click_child("RespawnWnd", "SelectButton"));
+    CHECK(c.respawn_chosen());
+}
+
+TEST_CASE("Respawn window: an accepted resurrection enables its line and leaves the selection") {
+    test::ManualClock clock;
+    auto options = test::quick_options();
+    options.session.clock = clock.source();
+    test::Rig rig(test::MockConfig::standard(), std::move(options));
+    REQUIRE(rig.to_zone());
+    clock.hold();
+    Harness t(rig.game);
+    t.host.conn = &rig.conn; // the live mock connection outlives this UI harness
+    auto& c = rig.conn;
+    std::unique_ptr<lua_State, decltype(&lua_close)> L(luaL_newstate(), &lua_close);
+    REQUIRE(L);
+    luaL_openlibs(L.get());
+    lua_newtable(L.get());
+    t.api->register_functions(L.get());
+    lua_setglobal(L.get(), "eq");
+    auto selected = [&] {
+        t.api->begin_frame();
+        lua_settop(L.get(), 0);
+        const int status = luaL_dostring(L.get(), "return (select(3, eq.ListInfo('RespawnWnd', 'OptionsList')))");
+        CHECK(status == LUA_OK);
+        if (status != LUA_OK || !lua_isinteger(L.get(), -1)) return -2;
+        return static_cast<int>(lua_tointeger(L.get(), -1));
+    };
+    // The row's marker cell and its texts.disabled, as a pack reads them.
+    auto row = [&](int r) {
+        t.api->begin_frame();
+        lua_settop(L.get(), 0);
+        const std::string code = "local t = eq.ListRow('RespawnWnd', 'OptionsList', " + std::to_string(r) +
+                                 ") return t[1] .. (t.disabled and ':disabled' or '')";
+        const int status = luaL_dostring(L.get(), code.c_str());
+        CHECK(status == LUA_OK);
+        return status == LUA_OK && lua_isstring(L.get(), -1) ? std::string(lua_tostring(L.get(), -1)) : std::string("?");
+    };
+    auto die = [&](std::uint32_t id) {
+        net::Death death;
+        death.spawn_id = death.corpse_id = id;
+        death.killer_id = 101;
+        death.damage = 5000;
+        c.receive_zone_packet_for_test(net::encode(death));
+        c.receive_zone_packet_for_test(respawn_packet());
+    };
+    auto approve = [&] {
+        c.receive_zone_packet_for_test(respawn_rez_offer());
+        REQUIRE(c.confirmation());
+        c.answer_confirmation(true);
+        CHECK_FALSE(c.respawn_chosen());
+        CHECK(c.respawn_option_available(1));
+    };
+    die(c.world().player_id);
+    CHECK(selected() == 0);
+    CHECK(row(0) == "*");
+    CHECK(row(1) == "r:disabled");
+
+    SUBCASE("Yes enables the line, keeps its marker and leaves the server's selection") {
+        approve();
+        CHECK(selected() == 0); // 0x74e9e0 only enables and recolours lines
+        CHECK(row(1) == "r");   // the marker stays; the line is enabled
+        clock.advance(std::chrono::milliseconds(10));
+        rig.run_for(std::chrono::milliseconds(10));
+        CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::RespawnWindow) == 0);
+        CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::RezzAnswer) == 0);
+        c.receive_zone_packet_for_test(respawn_rez_offer(101));
+        CHECK(row(1) == "r:disabled"); // a replacement offer needs its own consent
+        c.answer_confirmation(true);
+        CHECK(selected() == 0);
+        CHECK(t.api->click_list("RespawnWnd", "OptionsList", 1, 0));
+        CHECK(selected() == 1);
+        CHECK(t.api->click_child("RespawnWnd", "SelectButton"));
+        CHECK(c.respawn_chosen());
+        CHECK_FALSE(c.accepted_hover_rez_option());
+        CHECK(selected() == 1); // clearing consent after commit must not move the highlight to bind
+        CHECK(t.api->child_state("RespawnWnd", "SelectButton") == false);
+        CHECK(t.api->child_state("RespawnWnd", "OptionsList") == false);
+
+        net::ZonePlayerToBind bind;
+        bind.zone_id = 2;
+        bind.zone_name = "Bind destination";
+        c.receive_zone_packet_for_test(net::encode(bind));
+        c.receive_zone_packet_for_test(net::encode(test::make_spawn("Gennro", 60, 0, 1, 0, 0, 0)));
+        die(60);
+        CHECK(selected() == 0); // a new window starts from the server's selection
+    }
+    SUBCASE("an explicit bind click before Yes keeps bind selected") {
+        CHECK(t.api->click_list("RespawnWnd", "OptionsList", 0, 0));
+        approve();
+        CHECK(selected() == 0);
+    }
+    SUBCASE("an explicit resurrection click survives replacement but cannot commit without new consent") {
+        approve();
+        CHECK(t.api->click_list("RespawnWnd", "OptionsList", 1, 0));
+        CHECK(selected() == 1);
+        c.receive_zone_packet_for_test(respawn_rez_offer(101));
+        CHECK(selected() == 1);
+        CHECK(t.api->child_state("RespawnWnd", "SelectButton") == false);
+        CHECK_FALSE(c.respawn_option_available(1));
+        CHECK_FALSE(c.respawn_chosen());
+    }
 }
 
 TEST_CASE("Tip window: the duel tip, its history and the show options") {

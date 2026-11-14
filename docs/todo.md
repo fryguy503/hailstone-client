@@ -237,6 +237,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 
 - [x] Group role controls in both packs: right-click member names or the player's own name (Y on a gamepad Group window row), with server-confirmed role icons beside names in the Group and Player windows; leader-only Main Tank / Main Assist / Puller changes, with mercenaries restricted to tank. Unit and mock-server coverage; live gameplay remains unverified.
 - [x] Modern AA window: aligned headers and rows at the dialog's scale, current-frame column bounds, saved column resizing, clipped cells and Reset columns (UI input tests; live acceptance pending).
+- [x] Hover respawn: validate availability; recover same-zone player identity, placement and resources; handle resurrection confirmation, server timeout and disconnect safely. Both UI packs and loopback packet sequences have regressions; live gameplay acceptance remains outstanding.
 - [x] Labels: combat timer, breath, respawn gauge, aggro meter, title, ATK, regeneration, and more EQTypes, in the modern and gamepad packs (ui-gaps, merged up to 90aa43f; checked live). ATK leaves out the leadership offense bonus and profile +0x3468; the label and gauge types still not tracked are listed in unknowns.md.
 - [x] Buff icon fading below 19 s; gauge colours for special values (unit tests, not seen live).
 - [x] Hot buttons: the AA and gem right clicks, vertical bars (modern pack, checked live), the key-map text corner; the ranged attack was already in.
