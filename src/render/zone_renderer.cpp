@@ -807,9 +807,21 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
     static const std::vector<std::uint32_t> kNoColors;
     // options.cancelled: a load thrown away (a neighbour's, on zoning) stops here and between materials below.
     auto cancelled = [&] { return options.cancelled && options.cancelled(); };
+    // The smoothed ground (assets/ground_refine.h) when the zone has it: its triangles take the liquid class of the
+    // terrain triangles they were cut from.
+    const bool refined = zone.draw_terrain.size() == zone.terrain.size() &&
+                         zone.draw_terrain_source.size() == zone.terrain.size();
     for (std::size_t mi = 0; mi < zone.terrain.size(); ++mi) {
         if (cancelled()) return nullptr;
-        append(zone.terrain[mi], glm::mat4(1.0f), kNoColors, true, false, &terrain_liquid[mi]);
+        if (!refined) {
+            append(zone.terrain[mi], glm::mat4(1.0f), kNoColors, true, false, &terrain_liquid[mi]);
+            continue;
+        }
+        const auto& source = zone.draw_terrain_source[mi];
+        std::vector<std::uint8_t> liquid(source.size(), 0);
+        for (std::size_t t = 0; t < source.size(); ++t)
+            if (source[t] < terrain_liquid[mi].size()) liquid[t] = terrain_liquid[mi][source[t]];
+        append(zone.draw_terrain[mi], glm::mat4(1.0f), kNoColors, true, false, &liquid);
     }
     std::size_t missing_objects = 0, replaced_objects = 0;
     for (std::size_t pi = 0; pi < zone.placements.size(); ++pi) {
