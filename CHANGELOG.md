@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Modern UI: with Snap to grid on, resizing a frame or dialog puts the dragged edge on the grid, or flush with the screen's edge when that is nearer, and shows the grid while resizing (the hot bars, which change shape in whole buttons, are not snapped)
 - Hailstone Texture Studio: generated trees can now be dead trees (bare forked limbs) and palms, for zones such as Everfrost, Dagnor's Cauldron, North Ro and Erud's Crossing
 - Modern lighting: the grass in the classic zones is now an even lawn that Hailstone builds itself, instead of clumps of flat pictures borrowed from the revamped Commonlands. Thick blades cover the open ground in a continuous carpet in the ground's own colour, lying over in broad combed swathes, sway in the wind (harder in a storm), bend away from whoever walks through them and taper off at the edges of paths and roads. The grass needs nothing from the game folder; the forests' ferns, the swamps' cattails and the other climate plants are still taken from the game's own files, scattered sparsely over the lawn. Flora Distance still sets how far it reaches
 - Alternate currencies (the inventory's Alt. Currency page in both interfaces, and real estate costs) show their names from the game folder, such as "Doubloons", instead of "Currency 10"
