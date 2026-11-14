@@ -1,6 +1,5 @@
-// Expedition and adventure windows. CDynamicZoneWnd / CDZSwitchListWnd and the LDoN windows (CAdventureRequestWnd,
-// CAdventureStatsWnd, CAdventureLeaderboardWnd) are not decoded; these follow their XML over EQEmu's packets
-// (net/dz_packets.h, net/game_connection_dz.cpp, net/adventure_packets.h, net/game_connection_adventure.cpp).
+// Expedition, adventure and PvP windows over their EQEmu packets. Adventure controls follow the RoF2 senders
+// CAdventureRequestWnd @0x617f10, CAdventureStatsWnd @0x619da0 and CAdventureLeaderboardWnd @0x616ec0.
 
 #include <algorithm>
 #include <format>
@@ -188,48 +187,84 @@ private:
 constexpr const char* kAdventureThemes[net::kAdventureThemes] = {"All Themes", "Deepest Guk", "Miragul's Menagerie",
                                                                  "Mistmoore Catacombs", "Rujarkian Hills", "Takish-Hiz"};
 
-std::string percent(std::uint32_t won, std::uint32_t lost) {
-    return won + lost ? std::format("{:.1f}%", 100.0 * won / (won + lost)) : std::string("-");
+std::string percent(std::uint32_t won, std::uint32_t lost, bool single_precision = false) {
+    const auto total = static_cast<std::uint64_t>(won) + lost;
+    const double value = total ? 100.0 * won / static_cast<double>(total) : 0;
+    // The stats and leaderboard rows round to binary32 before formatting; the personal leaderboard line does not.
+    return std::format("{:.1f}%", single_precision ? static_cast<double>(static_cast<float>(value)) : value);
+}
+
+std::string adventure_rank(std::uint32_t rank) { return rank ? std::to_string(rank) : std::string("---"); }
+
+std::string adventure_time_left(std::int64_t seconds) {
+    const auto minutes = (std::max<std::int64_t>(0, seconds) + 59) / 60;
+    return std::format("{} {}", minutes, minutes == 1 ? "minute" : "minutes");
+}
+
+std::vector<std::size_t> adventure_leader_ranks(const net::AdventureLeaderboard& board, std::uint32_t order) {
+    std::vector<std::size_t> ranks;
+    std::size_t rank = 0;
+    for (std::size_t i = 0; i < board.rows.size(); ++i) {
+        const auto& row = board.rows[i];
+        bool tied = false;
+        if (i) {
+            const auto& previous = board.rows[i - 1];
+            if (order == 0) tied = row.success == previous.success && row.failure == previous.failure;
+            else {
+                auto rate = [](const net::AdventureLeader& r) {
+                    const auto total = static_cast<std::uint64_t>(r.success) + r.failure;
+                    return total ? static_cast<float>(100.0 * r.success / static_cast<double>(total)) : 0.0f;
+                };
+                tied = row.success == previous.success && rate(row) == rate(previous);
+            }
+        }
+        if (!tied) rank = row.position ? row.position : i + 1;
+        ranks.push_back(rank);
+    }
+    return ranks;
 }
 
 // AdventureRequestWnd: the recruiter's words (or the adventure offered, or the current adventure's description),
-// the objective and risk to ask for, Request, Accept / Decline for an offer (Decline leaves the current adventure
-// when there is no offer), the current adventure's times and progress, and View Stats.
+// the objective and risk to ask for, Request, Accept / Decline for an offer, the current adventure's times and
+// progress, and View Stats. Leave is an explicit Hailstone control, confirmed by each UI pack.
 class AdventureRequestWindow : public StockWindow {
 public:
     AdventureRequestWindow() : StockWindow("AdventureRequestWnd", false) {}
 
-    bool shown(EqHost& host) override { return host.conn && host.conn->adventure().recruiter; }
+    bool shown(EqHost& host) override { return host.conn && host.conn->adventure().window_open; }
     void set_shown(EqHost& host, bool show) override {
-        if (!show && host.conn) host.conn->close_adventure_recruiter();
+        if (host.conn) host.conn->set_adventure_window_open(show);
     }
 
     void child(EqHost& host, std::string_view id, Child& out) override {
         if (!host.conn) return;
         const auto& a = host.conn->adventure();
         bool in = a.data.assigned;
-        std::int64_t gone = (net::GameConnection::now_ms() - a.data_at) / 1000;
+        std::int64_t gone = host.conn->adventure_elapsed_seconds();
         if (id == "AdvRqst_NPCText") {
             const std::string& t = !a.offer.empty() ? a.offer : in && !a.data.text.empty() ? a.data.text : a.npc_text;
-            out.text = stml_escape(t);
+            out.text = stml_escape(t.empty() ? "You are not currently assigned to an adventure." : t);
         } else if (id == "AdvRqst_RequestButton") {
-            out.enabled = !in && a.offer.empty();
+            out.enabled = host.conn->adventure_request_ready();
         } else if (id == "AdvRqst_AcceptButton") {
-            out.enabled = !a.offer.empty();
+            out.enabled = !a.offer.empty() && host.conn->adventure_recruiter_available();
         } else if (id == "AdvRqst_DeclineButton") {
-            out.enabled = !a.offer.empty() || in; // on an adventure it leaves it (this client's use of the button)
+            out.enabled = !a.offer.empty();
+        } else if (id == "AdvRqst_LeaveButton") {
+            out.shown = in;
+            out.enabled = in;
         } else if (id == "AdvRqst_EnterTimeLeftLabel") {
-            out.text = in && a.data.time_to_enter ? dz_time_left(static_cast<std::int64_t>(a.data.time_to_enter) - gone) : std::string();
+            out.text = in && a.data.time_to_enter ? adventure_time_left(static_cast<std::int64_t>(a.data.time_to_enter) - gone) : std::string();
         } else if (id == "AdvRqst_CompleteTimeLeftLabel") {
-            out.text = in && !a.data.time_to_enter ? dz_time_left(static_cast<std::int64_t>(a.data.time_left) - gone) : std::string();
+            out.text = in && !a.data.time_to_enter ? adventure_time_left(static_cast<std::int64_t>(a.data.time_left) - gone) : std::string();
         } else if (id == "AdvRqst_ProgressTextLabel") {
-            out.text = in && a.count.total ? std::format("{} / {}", a.count.current, a.count.total) : std::string();
+            out.text = in && !a.data.time_to_enter && a.count.total ? std::format("{} / {}", a.count.current, a.count.total) : std::string();
         } else if (id == "AdvRqst_TypeCombobox" || id == "AdvRqst_RiskCombobox") {
-            out.enabled = !in && a.offer.empty();
+            out.enabled = host.conn->adventure_request_ready();
         }
     }
 
-    const ComboData* combo(EqHost&, std::string_view id) override {
+    const ComboData* combo(EqHost& host, std::string_view id) override {
         if (id == "AdvRqst_TypeCombobox") {
             type_.choices = {"Any Type", "Assassinate", "Kill", "Collect", "Rescue"}; // EQEmu's AdventureObjective
             if (type_.selected < 0) type_.selected = 0;
@@ -238,13 +273,15 @@ public:
         if (id == "AdvRqst_RiskCombobox") {
             risk_.choices = {"Normal", "High"};
             if (risk_.selected < 0) risk_.selected = 0;
+            if (host.conn && host.conn->adventure().data.assigned)
+                risk_.selected = host.conn->adventure().data.risk == 2 ? 1 : 0;
             return &risk_;
         }
         return nullptr;
     }
     bool combo_select(EqHost&, std::string_view id, int index) override {
-        if (id == "AdvRqst_TypeCombobox") type_.selected = index;
-        else if (id == "AdvRqst_RiskCombobox") risk_.selected = index;
+        if (id == "AdvRqst_TypeCombobox" && index >= 0 && index < 5) type_.selected = index;
+        else if (id == "AdvRqst_RiskCombobox" && index >= 0 && index < 2) risk_.selected = index;
         else return false;
         return true;
     }
@@ -256,10 +293,8 @@ public:
             c.adventure_request(static_cast<std::uint32_t>(std::max(risk_.selected, 0) + 1),
                                 static_cast<std::uint32_t>(std::max(type_.selected, 0)));
         else if (id == "AdvRqst_AcceptButton") c.adventure_answer(true);
-        else if (id == "AdvRqst_DeclineButton") {
-            if (!c.adventure().offer.empty()) c.adventure_answer(false);
-            else c.adventure_leave();
-        }
+        else if (id == "AdvRqst_DeclineButton") c.adventure_answer(false);
+        else if (id == "AdvRqst_LeaveButton") c.adventure_leave();
         else if (id == "AdvRqst_ViewStatsButton") c.set_adventure_stats_open(true);
         else return false;
         return true;
@@ -281,24 +316,25 @@ public:
     }
     void child(EqHost& host, std::string_view id, Child& out) override {
         if (host.conn && id == "AdvStats_AvailableValue") out.text = std::to_string(host.conn->adventure().points.available);
+        else if (host.conn && id == "AdvStats_RefreshButton") out.enabled = host.conn->adventure_stats_ready();
     }
     const ListData* list(EqHost& host, std::string_view id) override {
         if (!host.conn || id != "AdvStats_ThemeList") return nullptr;
         const auto& a = host.conn->adventure();
         list_ = {};
-        list_.columns = 6;
-        list_.labels = {"Theme", "Successes", "Failures", "Rank", "Rank (%)", "Points"};
-        list_.widths = {150, 70, 70, 60, 60, 60};
-        std::uint32_t total_points = 0;
+        list_.columns = 7;
+        list_.labels = {"Theme", "Rank", "Successes", "Failures", "Percent", "Rank (%)", "Points"};
+        list_.widths = {150, 55, 65, 65, 65, 65, 70};
+        std::uint64_t total_points = 0;
         for (auto p : a.points.theme) total_points += p;
-        for (int t = 0; t < net::kAdventureThemes; ++t) {
-            auto n = [&](const std::array<std::uint32_t, net::kAdventureThemes>& col) {
-                return a.stats ? std::to_string(col[static_cast<std::size_t>(t)]) : std::string("-");
-            };
-            std::uint32_t points = t ? a.points.theme[static_cast<std::size_t>(t - 1)] : total_points;
-            list_.rows.push_back(ListRow{{kAdventureThemes[t], a.stats ? n(a.stats->success) : "-", a.stats ? n(a.stats->failure) : "-",
-                                          a.stats ? n(a.stats->rank) : "-", a.stats ? n(a.stats->rank_percent) : "-",
-                                          std::to_string(points)}});
+        for (int row = 1; row <= net::kAdventureThemes; ++row) {
+            const auto t = static_cast<std::size_t>(row % net::kAdventureThemes);
+            const auto wins = a.stats ? a.stats->success[t] : 0u;
+            const auto losses = a.stats ? a.stats->failure[t] : 0u;
+            const auto points = t ? a.points.theme[t - 1] : total_points;
+            list_.rows.push_back(ListRow{{t ? kAdventureThemes[t] : "Totals", adventure_rank(a.stats ? a.stats->rank[t] : 0),
+                                          std::to_string(wins), std::to_string(losses), percent(wins, losses, true),
+                                          adventure_rank(a.stats ? a.stats->rank_percent[t] : 0), std::to_string(points)}});
         }
         return &list_;
     }
@@ -316,9 +352,8 @@ private:
     ListData list_;
 };
 
-// AdventureLeaderboardWnd: the top 100 by the theme picked in Select (OP_AdventureLeaderboardRequest) and our own
-// line. EQEmu orders by wins or by percentage and reads no risk, so the second combo box picks the order (this
-// client's use of it).
+// CAdventureLeaderboardWnd::SendRequest @0x6173e0: category index / 2 is theme, index % 2 is order, and the second
+// combo is the raw risk (all / normal / high). Stock EQEmu ignores risk and returns its combined standings.
 class AdventureLeaderboardWindow : public StockWindow {
 public:
     AdventureLeaderboardWindow() : StockWindow("AdventureLeaderboardWnd", false) {}
@@ -331,29 +366,51 @@ public:
         if (!host.conn) return;
         const auto& b = host.conn->adventure().leaderboard;
         if (id == "AdvLeaderboard_YourNameLabel") out.text = host.conn->character_name();
-        else if (id == "AdvLeaderboard_YourRankLabel") out.text = b ? std::to_string(b->rank) : std::string();
+        else if (id == "AdvLeaderboard_YourRankLabel") {
+            out.text = adventure_rank(b ? b->rank : 0);
+            if (b) {
+                // HandleReply @0x617c85 replaces the header rank with our competition rank when listed.
+                const auto ranks = adventure_leader_ranks(*b, host.conn->adventure().leaderboard_selection.order);
+                for (std::size_t i = 0; i < b->rows.size(); ++i)
+                    if (b->rows[i].name == host.conn->character_name()) out.text = std::to_string(ranks[i]);
+            }
+        }
         else if (id == "AdvLeaderboard_YourSuccessLabel") out.text = b ? std::to_string(b->success) : std::string();
         else if (id == "AdvLeaderboard_YourFailureLabel") out.text = b ? std::to_string(b->failure) : std::string();
         else if (id == "AdvLeaderboard_YourPercentLabel") out.text = b ? percent(b->success, b->failure) : std::string();
+        else if (id == "AdvLeaderboard_RefreshButton") out.enabled = host.conn->adventure_leaderboard_ready();
+        else if (id == "AdvLeaderboard_StatusLabel")
+            out.text = host.conn->adventure().leaderboard_inflight || host.conn->adventure().leaderboard_queued
+                           ? "Updating leaderboard..."
+                           : host.conn->adventure().leaderboard_failed ? "Leaderboard unavailable. Refresh to retry." : "";
     }
-    const ComboData* combo(EqHost&, std::string_view id) override {
+    const ComboData* combo(EqHost& host, std::string_view id) override {
         if (id == "AdvLeaderboard_SelectCombobox") {
-            theme_.choices.assign(std::begin(kAdventureThemes), std::end(kAdventureThemes));
-            if (theme_.selected < 0) theme_.selected = 0;
-            return &theme_;
+            category_.choices.clear();
+            for (int theme = 0; theme < net::kAdventureThemes; ++theme) {
+                category_.choices.push_back(theme ? std::format("{} wins", kAdventureThemes[theme]) : "Total wins");
+                category_.choices.push_back(theme ? std::format("{} percentage", kAdventureThemes[theme]) : "Total percentage");
+            }
+            category_.selected = host.conn ? static_cast<int>(host.conn->adventure().leaderboard_selection.theme * 2 +
+                                                            host.conn->adventure().leaderboard_selection.order) : 0;
+            return &category_;
         }
         if (id == "AdvLeaderboard_RiskCombobox") {
-            order_.choices = {"By Successes", "By Percentage"};
-            if (order_.selected < 0) order_.selected = 0;
-            return &order_;
+            risk_.choices = {"All", "Normal Risk", "High Risk"};
+            risk_.selected = host.conn ? static_cast<int>(host.conn->adventure().leaderboard_selection.risk) : 0;
+            return &risk_;
         }
         return nullptr;
     }
     bool combo_select(EqHost& host, std::string_view id, int index) override {
-        if (id == "AdvLeaderboard_SelectCombobox") theme_.selected = index;
-        else if (id == "AdvLeaderboard_RiskCombobox") order_.selected = index;
+        if (!host.conn) return false;
+        auto selection = host.conn->adventure().leaderboard_selection;
+        if (id == "AdvLeaderboard_SelectCombobox" && index >= 0 && index < net::kAdventureThemes * 2) {
+            selection.order = static_cast<std::uint32_t>(index % 2);
+            selection.theme = static_cast<std::uint32_t>(index / 2);
+        } else if (id == "AdvLeaderboard_RiskCombobox" && index >= 0 && index < 3) selection.risk = static_cast<std::uint32_t>(index);
         else return false;
-        request(host);
+        host.conn->adventure_leaderboard_request(selection.order, selection.theme, selection.risk);
         return true;
     }
     const ListData* list(EqHost& host, std::string_view id) override {
@@ -363,10 +420,13 @@ public:
         list_.labels = {"Rank", "Name", "Successes", "Failures", "Percent"};
         list_.widths = {45, 120, 60, 60, 60};
         if (const auto& b = host.conn->adventure().leaderboard) {
-            int rank = 0;
-            for (const auto& r : b->rows)
-                list_.rows.push_back(ListRow{{std::to_string(++rank), r.name, std::to_string(r.success), std::to_string(r.failure),
-                                              percent(r.success, r.failure)}});
+            // HandleReply @0x6175c0 uses competition ranks: 1, 1, 3. Do not reorder the server's rows.
+            const auto ranks = adventure_leader_ranks(*b, host.conn->adventure().leaderboard_selection.order);
+            for (std::size_t i = 0; i < b->rows.size(); ++i) {
+                const auto& r = b->rows[i];
+                list_.rows.push_back(ListRow{{std::to_string(ranks[i]), r.name, std::to_string(r.success), std::to_string(r.failure),
+                                              percent(r.success, r.failure, true)}});
+            }
         }
         return &list_;
     }
@@ -381,11 +441,12 @@ public:
 
 private:
     void request(EqHost& host) {
-        if (host.conn)
-            host.conn->adventure_leaderboard_request(static_cast<std::uint32_t>(std::max(order_.selected, 0)),
-                                                     static_cast<std::uint32_t>(std::max(theme_.selected, 0)), 1);
+        if (host.conn) {
+            const auto& selection = host.conn->adventure().leaderboard_selection;
+            host.conn->adventure_leaderboard_request(selection.order, selection.theme, selection.risk);
+        }
     }
-    ComboData theme_, order_;
+    ComboData category_, risk_;
     ListData list_;
 };
 

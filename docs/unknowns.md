@@ -2,6 +2,12 @@
 
 What the client does not implement yet, or implements with an approximation it cannot confirm. Entries are removed once settled.
 
+## Adventures (LDoN)
+
+- Request, stats and leaderboard opcodes/offsets, native ten-second refresh guards, twenty-unit inclusive recruiter range, minute-ceiling timers and tied ranking were checked against the stock RoF2 executable; stock EQEmu provides the fixed incoming layouts. Live request/offer/entry/completion/leave, cross-zone synchronization, actual server standings and physical controller acceptance remain untested.
+- Stock EQEmu zeroes the leaderboard reply's category words. Requests are serialized, but after the thirty-second recovery timeout an extremely late reply cannot be conclusively associated with the selected category. A server-provided request identifier would settle this. Native disables selectors during its ten-second guard; Hailstone deliberately allows choosing a pending category and sends only the latest after the previous reply.
+- The native meaning of AdventureData's leading/trailing reserved words and leaderboard header +4 remains unestablished. Hailstone follows EQEmu's all-zero adventure clear and ignores the leaderboard reserved word. Some native actor interaction predicates beyond recruiter class, corpse status and range are not reproduced.
+
 ## Fellowships
 
 - Stock EQEmu does not send RoF2 fellowship packets, so nothing here has met a server. Native requests and roster/vitality fields were checked against the original handlers, and against EQEmu PR #5134 "TOB: Fellowships" (open, unmerged) as a protocol reference. Unit, mock-server and both UI-pack rendering tests cover native twelve-member and expanded 64-member rosters. Live cross-zone synchronization, XP awards and camp gameplay remain untested.

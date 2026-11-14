@@ -767,8 +767,15 @@ std::optional<PlayerProfile> decode_player_profile(const AppPacket& p) {
         r.skip(320 + 343);
         v.character_id = u32();
         v.leadership_exp_on = u8() != 0; // leadAAActive
-        skip_counted(r, 4);  // LDoN points
-        u32();               // LDoN available
+        {
+            std::uint32_t n = u32(); // RoF2 sends six: unknown, then the five LDoN themes.
+            need(r, n, 4);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                auto points = u32();
+                if (i > 0 && i <= v.adventure_points.size()) v.adventure_points[i - 1] = points;
+            }
+        }
+        v.adventure_points_available = u32();
         v.group_leadership_exp = r.f64();
         v.raid_leadership_exp = r.f64();
         v.group_leadership_points = u32();

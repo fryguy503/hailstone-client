@@ -22,7 +22,7 @@ AppPacket encode_adventure_info_request(std::uint32_t npc) {
 }
 
 std::optional<std::string> decode_adventure_text(const AppPacket& p) {
-    return decode_with(p, [](ByteReader& r) { return r.fixed_string(r.remaining()); });
+    return decode_with(p, [](ByteReader& r) { return r.cstring(); });
 }
 
 AppPacket encode_adventure_request(std::uint32_t risk, std::uint32_t npc, std::uint32_t type) {
@@ -40,7 +40,7 @@ AppPacket encode_ldon_button(bool accept) {
 }
 
 std::optional<AdventureData> decode_adventure_data(const AppPacket& p) {
-    if (p.data.size() < kDataSize - 4) return std::nullopt;
+    if (p.data.size() < kDataSize) return std::nullopt;
     return decode_with(p, [](ByteReader& r) {
         AdventureData v;
         std::uint32_t tag = r.le<std::uint32_t>();
@@ -115,7 +115,11 @@ AppPacket encode(const AdventurePoints& v) {
     return make_packet(Op::AdventurePointsUpdate, std::move(w));
 }
 
-AppPacket encode_adventure_stats_request() { return make_empty(Op::AdventureStatsRequest); }
+AppPacket encode_adventure_stats_request() {
+    ByteWriter w;
+    w.le<std::uint8_t>(0); // CAdventureStatsWnd::SendRequest @0x619570 sends one unused byte.
+    return make_packet(Op::AdventureStatsRequest, std::move(w));
+}
 
 std::optional<AdventureStats> decode_adventure_stats(const AppPacket& p) {
     if (p.data.size() < kStatsSize) return std::nullopt;
@@ -155,6 +159,7 @@ std::optional<AdventureLeaderboard> decode_adventure_leaderboard(const AppPacket
             l.name = r.fixed_string(kName);
             l.success = r.le<std::uint32_t>();
             l.failure = r.le<std::uint32_t>();
+            l.position = static_cast<std::uint32_t>(i + 1);
             if (!l.name.empty()) v.rows.push_back(std::move(l));
         }
         return v;

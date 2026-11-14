@@ -3,9 +3,10 @@
 
 #include <doctest/doctest.h>
 
-#include <cstring>
+#include <algorithm>
 #include <string>
 
+#include "core/byte_io.h"
 #include "net/adventure_packets.h"
 #include "net/opcodes.h"
 
@@ -15,9 +16,9 @@ using namespace hailstone::net;
 namespace {
 
 std::uint32_t u32(const AppPacket& p, std::size_t at) {
-    std::uint32_t v;
-    std::memcpy(&v, p.data.data() + at, 4);
-    return v;
+    ByteReader r(p.data);
+    r.seek(at);
+    return r.le<std::uint32_t>();
 }
 
 } // namespace
@@ -45,7 +46,8 @@ TEST_CASE("adventure: the client's requests") {
     REQUIRE(lb.data.size() == 12); // AdventureLeaderboardRequest_Struct {type, theme, risk}
     CHECK(u32(lb, 0) == 1);
     CHECK(u32(lb, 4) == 3);
-    CHECK(encode_adventure_stats_request().data.empty());
+    CHECK(encode_adventure_stats_request().opcode == 0x5a62);
+    CHECK(encode_adventure_stats_request().data == std::vector<std::byte>{std::byte{0}});
 }
 
 TEST_CASE("adventure: the recruiter's text is a NUL-terminated string") {
@@ -58,6 +60,10 @@ TEST_CASE("adventure: the recruiter's text is a NUL-terminated string") {
     auto d = decode_adventure_text(p);
     REQUIRE(d);
     CHECK(*d == t);
+    p.data.resize(t.size());
+    CHECK_FALSE(decode_adventure_text(p));
+    p.data.clear();
+    CHECK_FALSE(decode_adventure_text(p));
 }
 
 TEST_CASE("adventure: the current adventure is 2084 bytes; a zeroed one is none") {
@@ -85,6 +91,11 @@ TEST_CASE("adventure: the current adventure is 2084 bytes; a zeroed one is none"
     auto n = decode_adventure_data(none);
     REQUIRE(n);
     CHECK_FALSE(n->assigned);
+
+    for (std::size_t size : {0u, 4u, 2052u, 2080u, 2083u}) {
+        p.data.resize(size);
+        CHECK_FALSE(decode_adventure_data(p));
+    }
 }
 
 TEST_CASE("adventure: points, stats and the leaderboard") {
@@ -119,12 +130,21 @@ TEST_CASE("adventure: points, stats and the leaderboard") {
     AppPacket lp = encode(lb);
     REQUIRE(lp.data.size() == 7220); // AdventureLeaderboard_Struct
     CHECK(u32(lp, 16) == 9);
-    CHECK(std::string(reinterpret_cast<const char*>(lp.data.data() + 20 + 72)) == "Second");
+    ByteReader names(lp.data);
+    names.seek(20 + 72);
+    CHECK(names.fixed_string(64) == "Second");
     auto dl = decode_adventure_leaderboard(lp);
     REQUIRE(dl);
     CHECK(dl->rank == 9);
     REQUIRE(dl->rows.size() == 2);
     CHECK(dl->rows[1].failure == 10);
+    CHECK(dl->rows[1].position == 2);
+    // The native board counts fixed wire slots even when an earlier name is empty.
+    std::fill(lp.data.begin() + 20, lp.data.begin() + 84, std::byte{});
+    auto sparse = decode_adventure_leaderboard(lp);
+    REQUIRE(sparse);
+    REQUIRE(sparse->rows.size() == 1);
+    CHECK(sparse->rows.front().position == 2);
     lp.data.resize(7219);
     CHECK_FALSE(decode_adventure_leaderboard(lp));
 }

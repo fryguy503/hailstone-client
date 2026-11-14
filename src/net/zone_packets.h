@@ -256,6 +256,9 @@ struct PlayerProfile {
     // Personal tribute (ENCODE(OP_PlayerProfile)): favour, career favour, and the chosen benefits {tribute id
     // (0xffffffff none), tier} (RoF2: 5).
     std::uint32_t tribute_points = 0, career_tribute_points = 0;
+    // RoF2's counted LDoN block: unknown slot 0 followed by the five themes, then the spendable total.
+    std::array<std::uint32_t, 5> adventure_points{};
+    std::uint32_t adventure_points_available = 0;
     // Leadership (ENCODE(OP_PlayerProfile)): experience toward the next group and raid point (EQEmu: 1000 and 2000 a
     // point), the unspent points, the abilities' ranks by EQEmu's index (0..15 group, 16..31 raid), and whether
     // leadership experience is earned.

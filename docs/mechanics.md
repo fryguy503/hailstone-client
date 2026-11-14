@@ -1799,3 +1799,34 @@ names are loaded from the player's layered `Resources/campsitecategories.txt`; s
 bit to the server. Kit descriptions use DBString type 0, as the original selection handler does. Missing resources
 keep an all-category filter and the server-supplied kit name. The camp countdown is presentation only: expiration
 does not mutate membership or grant permission to place a camp before the server updates it.
+
+
+## Adventures (LDoN)
+
+Alt+V (`TOGGLE_ADVREQUESTWIN`, index 351) toggles the adventure window independently of a recruiter. A right click
+on a class-60 recruiter within 20 units in XYZ (inclusive) requests its introduction. Risk 1/2 and objective 0..4
+are sent unchanged apart from the risk selector's one-based conversion. Introductions and offers use the shared
+native 500 ms recruiter range check; assigned adventure status stays open beyond recruiter range. Closing an
+unaccepted offer declines it;
+closing the status window preserves the assigned mission. Leaving uses a separate confirmed control in both UI
+packs. The server selects the mission and decides group eligibility, acceptance and departure.
+
+AdventureData selects the entry timer when nonzero, otherwise the completion timer. Displays round remaining
+seconds up to whole minutes and clamp at zero (`0x618a00`, `0x618ae0`); progress is shown only during completion.
+The compass uses the server's zone-local XYZ/flag. AdventureFinish clears assignment, timers, compass and progress
+and closes the window (`0x4206eb`); points remain server-authoritative. Zone changes clear the old recruiter and
+zone-local mission data until the new server supplies them. Selecting another character clears cached adventure state.
+
+Stats show themes 1..5 then Totals: win rank, successes, failures, win percentage, percentage rank and current theme
+point balances. Profile data supplies initial points; point updates replace balances and request fresh stats when
+the ten-second guard permits. Rank zero displays a placeholder. Percentage totals and point sums use wide
+arithmetic so large server values do not wrap. Row percentages round to binary32 before one-decimal formatting.
+
+Leaderboard categories interleave wins and percentage within each theme; risk is All/Normal/High. Stock EQEmu
+combines risks. Row ranks are competition ranks (1, 1, 3), counting empty wire slots: wins ties require equal wins
+and failures; percentage ties require equal binary32 percentage and wins (`0x6175c0`). The personal rank uses the
+header value unless the player appears in the rows, in which case the computed row rank replaces it. This also
+matches RoF2 when EQEmu's header carries a zero-based found-player rank. Both selectors and refresh preserve their
+current selection across window closes. Hailstone queues the latest changed category during a request rather than
+disabling selectors as RoF2 does; ten-second refresh guards and bounded missing-reply recovery are described in
+`docs/protocol/rof2-packets.md`.

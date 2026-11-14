@@ -353,3 +353,148 @@ end
     CHECK(r.saw("Memorizing"));
     CHECK(r.no_errors());
 }
+
+TEST_CASE("UI packs: adventure controls remain visible away from a recruiter and totals use the final record") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        const bool modern = std::string(pack) == "modern";
+        PackRig r(pack);
+        r.run(R"lua(
+fake.shown.AdventureRequestWnd = true
+local ChildState, ChildShown, WindowText, ComboInfo = eq.ChildState, eq.ChildShown, eq.WindowText, eq.ComboInfo
+eq.ChildState = function(win, child, ...)
+  if win == 'AdventureRequestWnd' then return child == 'AdvRqst_ViewStatsButton' end
+  return ChildState(win, child, ...)
+end
+eq.ChildShown = function(win, child, ...)
+  if win == 'AdventureRequestWnd' then return child ~= 'AdvRqst_LeaveButton' end
+  return ChildShown(win, child, ...)
+end
+eq.WindowText = function(win, child, ...)
+  if win == 'AdventureRequestWnd' then
+    if child == 'AdvRqst_NPCText' then return 'No adventure is assigned.' end
+    return ''
+  end
+  if win == 'AdventureStatsWnd' and child == 'AdvStats_AvailableValue' then return '901' end
+  return WindowText(win, child, ...)
+end
+eq.ComboInfo = function(win, child, ...)
+  if win == 'AdventureRequestWnd' then return { 'Normal', 'High' }, 0 end
+  return ComboInfo(win, child, ...)
+end
+local Button = ui.Button
+ui.Button = function(label, ...)
+  calls[#calls + 1] = 'button ' .. label
+  local clicked = Button(label, ...)
+  local x0, y0, x1, y1 = ui.GetItemRect()
+  rects[label] = { x0, y0, x1 - x0, y1 - y0 }
+  return clicked
+end
+eq.ClickChild = function(win, child) calls[#calls + 1] = 'click ' .. win .. '.' .. child end
+)lua");
+        r.s->frames(3);
+        if (modern) {
+            CHECK(r.called("Request Adventure##AdvRqst_RequestButton"));
+            CHECK(r.called("Accept##AdvRqst_AcceptButton"));
+            CHECK(r.called("Decline##AdvRqst_DeclineButton"));
+        } else {
+            CHECK(r.saw("Request Adventure"));
+            CHECK(r.saw("Accept"));
+            CHECK(r.saw("Decline"));
+        }
+        CHECK_FALSE(r.saw("Leave Adventure"));
+        const ImVec2 request = r.centre(modern ? "Request Adventure##AdvRqst_RequestButton" : "##AdventureRequestWnd.AdvRqst_RequestButton");
+        r.mouse_to(request);
+        r.button(ImGuiMouseButton_Left, true);
+        r.button(ImGuiMouseButton_Left, false);
+        CHECK_FALSE(r.called("click AdventureRequestWnd.AdvRqst_RequestButton"));
+        const ImVec2 stats = r.centre(modern ? "View Stats##AdvRqst_ViewStatsButton" : "##AdventureRequestWnd.AdvRqst_ViewStatsButton");
+        r.mouse_to(stats);
+        r.button(ImGuiMouseButton_Left, true);
+        r.button(ImGuiMouseButton_Left, false);
+        CHECK(r.called("click AdventureRequestWnd.AdvRqst_ViewStatsButton"));
+        CHECK(r.no_errors());
+
+        r.run(R"lua(
+fake.shown.AdventureRequestWnd = false
+fake.shown.AdventureStatsWnd = true
+local ListInfo, ListRow = eq.ListInfo, eq.ListRow
+local records = {
+  { 'Deepest Guk', '5', '2', '1', '66.7%', '8', '88' },
+  { 'Totals', '7', '37', '9', '80.4%', '12', '901' },
+}
+eq.ListInfo = function(win, child, ...)
+  if win == 'AdventureStatsWnd' and child == 'AdvStats_ThemeList' then
+    return #records, 7, -1, { 'Theme', 'Rank', 'Successes', 'Failures', 'Percent', 'Rank (%)', 'Points' },
+      { 150, 60, 70, 70, 60, 60, 60 }
+  end
+  return ListInfo(win, child, ...)
+end
+eq.ListRow = function(win, child, row, ...)
+  if win == 'AdventureStatsWnd' and child == 'AdvStats_ThemeList' then return records[row + 1] end
+  return ListRow(win, child, row, ...)
+end
+)lua");
+        r.s->frames(3);
+        r.run("seen = {}");
+        r.s->frames(1);
+        CHECK(r.saw("37"));
+        CHECK(r.saw("901"));
+        // The modern table omits Totals, while the gamepad table also repeats it below the summary.
+        CHECK(r.truth(std::string("(function() local n = 0 for _, v in ipairs(seen) do if v == '80.4%' then n = n + 1 end end return n >= ") +
+                      (modern ? "1" : "2") + " end)()"));
+        CHECK(r.no_errors());
+
+        r.run(R"lua(
+fake.shown.AdventureStatsWnd = false
+fake.shown.AdventureLeaderboardWnd = true
+local WindowText = eq.WindowText
+eq.WindowText = function(win, child, ...)
+  if win == 'AdventureLeaderboardWnd' and child == 'AdvLeaderboard_StatusLabel' then return 'Updating leaderboard...' end
+  return WindowText(win, child, ...)
+end
+local TextColored = ui.TextColored
+ui.TextColored = function(...)
+  seen[#seen + 1] = select(5, ...)
+  return TextColored(...)
+end
+)lua");
+        r.s->frames(3);
+        r.run("seen = {}");
+        r.s->frames(1);
+        CHECK(r.saw("Updating leaderboard..."));
+        CHECK_FALSE(r.saw("No adventurers on this board yet."));
+        CHECK(r.no_errors());
+    }
+}
+
+TEST_CASE("UI packs (gamepad): ending an adventure clears its abandon confirmation") {
+    PackRig r("gamepad");
+    r.run(R"lua(
+fake.shown.AdventureRequestWnd = true
+fake.activeAdventure = true
+local ChildShown, ChildState, WindowText = eq.ChildShown, eq.ChildState, eq.WindowText
+eq.ChildShown = function(win, child, ...)
+  if win == 'AdventureRequestWnd' then return child ~= 'AdvRqst_LeaveButton' or fake.activeAdventure end
+  return ChildShown(win, child, ...)
+end
+eq.ChildState = function(win, child, ...)
+  if win == 'AdventureRequestWnd' then return child == 'AdvRqst_LeaveButton' or child == 'AdvRqst_ViewStatsButton' end
+  return ChildState(win, child, ...)
+end
+eq.WindowText = function(win, child, ...)
+  if win == 'AdventureRequestWnd' then return '' end
+  return WindowText(win, child, ...)
+end
+)lua");
+    r.s->frames(3);
+    const ImVec2 leave = r.centre("##advleave");
+    r.mouse_to(leave);
+    r.button(ImGuiMouseButton_Left, true);
+    r.button(ImGuiMouseButton_Left, false);
+    CHECK(r.saw("Give up the current adventure?"));
+    r.run("fake.activeAdventure = false seen = {}");
+    r.s->frames(2);
+    CHECK_FALSE(r.saw("Give up the current adventure?"));
+    CHECK(r.no_errors());
+}

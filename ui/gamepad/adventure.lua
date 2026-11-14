@@ -39,11 +39,14 @@ end
 
 ui.window("Adventure", function()
   M.testShow()
-  if not W.shown(AR) then return end
+  if not W.shown(AR) then
+    arPick, arText, arState = {}, { scroll = 0 }, {}
+    return
+  end
   T.frame()
+  if not M.shown(AR, "AdvRqst_LeaveButton") then arState.confirm = nil end
   local npc = M.text(AR, "AdvRqst_NPCLabel")
   local offer = M.shown(AR, "AdvRqst_AcceptButton") and (M.state(AR, "AdvRqst_AcceptButton"))
-  local canRequest = M.shown(AR, "AdvRqst_RequestButton") and (M.state(AR, "AdvRqst_RequestButton"))
   local hints = arPick.open and { { "a", "Choose" }, { "b", "Back" } } or { { "a", "Select" }, { "b", "Close" } }
   if W.begin("Adventure", { w = 1500, h = 900, title = "Adventure", subtitle = npc ~= "NPC Name" and npc or "",
         hints = hints }) then
@@ -70,28 +73,24 @@ ui.window("Adventure", function()
         end
       end
       P.draw("##advtext", arText, M.text(AR, "AdvRqst_NPCText"), x0, ty, midX - T.px(24), y1,
-        { empty = "The recruiter has nothing to say yet." })
+        { empty = "Speak with an adventure recruiter to request an adventure." })
       -- the right column: the request form, the answer to an offer, leaving, the record
       local rx0 = midX
-      local bh = T.px(76)
+      local bh = T.px(66)
       ui.SetCursorPos(rx0 - wx, y0 - wy)
       ui.BeginGroup()
       local cw = x1 - rx0
-      if M.shown(AR, "AdvRqst_TypeCombobox") or canRequest then
-        T.heading("Ask for an adventure")
-        M.combo(AR, "AdvRqst_TypeCombobox", "Kind", cw, bh, arPick)
-        M.combo(AR, "AdvRqst_RiskCombobox", "Risk", cw, bh, arPick, { none = "-" })
-        M.button(AR, "AdvRqst_RequestButton", "Request Adventure", cw, bh, { primary = true })
-      end
-      if offer then
-        T.heading("The adventure offered")
-        M.button(AR, "AdvRqst_AcceptButton", "Accept", cw, bh, { primary = true })
-        M.button(AR, "AdvRqst_DeclineButton", "Decline", cw, bh)
-      elseif M.shown(AR, "AdvRqst_DeclineButton") and (M.state(AR, "AdvRqst_DeclineButton")) and not canRequest then
-        -- on an adventure: Decline gives it up (asked first)
+      T.heading("Ask for an adventure")
+      M.combo(AR, "AdvRqst_TypeCombobox", "Kind", cw, bh, arPick)
+      M.combo(AR, "AdvRqst_RiskCombobox", "Risk", cw, bh, arPick, { none = "-" })
+      M.button(AR, "AdvRqst_RequestButton", "Request Adventure", cw, bh, { primary = true })
+      T.heading(offer and "The adventure offered" or "Adventure offer")
+      M.buttons(AR, { { "AdvRqst_AcceptButton", "Accept", { primary = true } },
+        { "AdvRqst_DeclineButton", "Decline" } }, rx0, x1, bh)
+      if M.shown(AR, "AdvRqst_LeaveButton") then
         T.heading("Current adventure")
         if T.button("##advleave", "Leave Adventure", cw, bh, { sub = "Give up the current adventure" , align = 0 }, pad) then
-          arState.confirm = { "Give up the current adventure?", function() eq.ClickChild(AR, "AdvRqst_DeclineButton", "left") end }
+          arState.confirm = { "Give up the current adventure?", function() eq.ClickChild(AR, "AdvRqst_LeaveButton", "left") end }
         end
       end
       T.heading("Your record")
@@ -133,8 +132,9 @@ local function board(name, o, pick, state)
       local fy = y0 + bh + T.px(18)
       local by = M.facts(facts, x0, x1, fy) + T.px(18)
       local me = M.text(o.win, o.me)
+      local status = o.status and M.text(o.win, o.status) or ""
       M.list(o.win, o.list, state, x0, by, x1, y1, {
-        empty = o.empty,
+        empty = status ~= "" and status or o.empty,
         -- your own row in the endurance colour, as the stock board's yellow line
         rowText = function(_, texts)
           if me ~= "" and texts[o.nameCol] == me then
@@ -150,12 +150,13 @@ local function board(name, o, pick, state)
 end
 
 local ALB = { win = "AdventureLeaderboardWnd", list = "AdvLeaderboard_LeaderList", nameCol = 2,
-  combos = { { "AdvLeaderboard_SelectCombobox", "Theme" }, { "AdvLeaderboard_RiskCombobox", "Order" } },
+  combos = { { "AdvLeaderboard_SelectCombobox", "Category" }, { "AdvLeaderboard_RiskCombobox", "Risk" } },
   me = "AdvLeaderboard_YourNameLabel",
   you = { { "Your rank", "AdvLeaderboard_YourRankLabel" }, { "Name", "AdvLeaderboard_YourNameLabel" },
     { "Wins", "AdvLeaderboard_YourSuccessLabel" }, { "Losses", "AdvLeaderboard_YourFailureLabel" },
     { "Win rate", "AdvLeaderboard_YourPercentLabel" } },
   refresh = "AdvLeaderboard_RefreshButton", done = "AdvLeaderboard_DoneButton",
+  status = "AdvLeaderboard_StatusLabel",
   empty = "No adventurers on this board yet." }
 local albPick, albList = {}, {}
 ui.window("Adventure Leaderboard", function() board("Adventure Leaderboard", ALB, albPick, albList) end)
@@ -182,13 +183,11 @@ ui.window("Adventure Stats", function()
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     if pressed("Adventure Stats", "x") then eq.ClickChild(AS, "AdvStats_RefreshButton", "left") end
-    -- the totals: the points to spend and the list's "All Themes" row
-    local rows = M.rows(AS, "AdvStats_ThemeList", 1)
-    local all = rows[1] or {}
-    local won, lost = tonumber(all[2] or ""), tonumber(all[3] or "")
-    local rate = (won and lost and won + lost > 0) and string.format("%.0f%%", 100 * won / (won + lost)) or "-"
+    -- the totals: the points to spend and the list's final totals row
+    local rows = M.rows(AS, "AdvStats_ThemeList")
+    local all = rows[#rows] or {}
     local by = M.facts({ { "Points to spend", M.text(AS, "AdvStats_AvailableValue"), C.endurance },
-      { "Wins", all[2] }, { "Losses", all[3] }, { "Win rate", rate }, { "Points earned", all[6], C.accent } },
+      { "Wins", all[3] }, { "Losses", all[4] }, { "Win rate", all[5] }, { "Points", all[7], C.accent } },
       x0, x1, y0) + T.px(20)
     local bh = T.px(72)
     M.list(AS, "AdvStats_ThemeList", asList, x0, by, x1, y1 - bh - T.px(14),

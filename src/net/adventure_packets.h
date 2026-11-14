@@ -1,8 +1,8 @@
 #pragma once
 
 // LDoN adventures in EQEmu's layouts (common/eq_packet_structs.h: the RoF2 translator passes these through;
-// zone/client_packet.cpp Handle_OP_Adventure*, zone/client.cpp SendAdventure*); the original's CAdventureRequestWnd /
-// CAdventureStatsWnd / CAdventureLeaderboardWnd senders are not decoded.
+// zone/client_packet.cpp Handle_OP_Adventure*, zone/client.cpp SendAdventure*), checked against the RoF2 senders:
+// info 0x420030, request 0x4209f0, accept/decline 0x41fed0/0x41ff80, stats 0x619570, leaderboard 0x6173e0.
 
 #include <array>
 #include <cstdint>
@@ -66,7 +66,7 @@ struct AdventurePoints {
 std::optional<AdventurePoints> decode_adventure_points(const AppPacket& p);
 AppPacket encode(const AdventurePoints& v); // server direction, for tests
 
-// OP_AdventureStatsRequest (C→Z, no body) and OP_AdventureStatsReply (Z→C, 96 bytes): four columns (successes,
+// OP_AdventureStatsRequest (C→Z, one unused byte) and OP_AdventureStatsReply (Z→C, 96 bytes): four columns (successes,
 // failures, rank by wins, rank by percentage) of six u32s (total, then the themes).
 AppPacket encode_adventure_stats_request();
 struct AdventureStats {
@@ -75,13 +75,15 @@ struct AdventureStats {
 std::optional<AdventureStats> decode_adventure_stats(const AppPacket& p);
 AppPacket encode(const AdventureStats& v); // server direction, for tests
 
-// OP_AdventureLeaderboardRequest (C→Z, 12 bytes): u32 order (0 wins, 1 percentage), u32 theme, u32 risk (EQEmu
+// OP_AdventureLeaderboardRequest (C→Z, 12 bytes): u32 order (0 wins, 1 percentage), u32 theme, u32 risk (0 all,
+// 1 normal, 2 high; EQEmu
 // does not read it). OP_AdventureLeaderboardReply (Z→C, 7220 bytes): u32, u32, our successes, failures and rank,
 // 100 × {char[64] name, u32 successes, u32 failures} (unused rows have no name).
 AppPacket encode_adventure_leaderboard_request(std::uint32_t order, std::uint32_t theme, std::uint32_t risk);
 struct AdventureLeader {
     std::string name;
     std::uint32_t success = 0, failure = 0;
+    std::uint32_t position = 0; // one-based wire slot; empty slots still count toward competition ranks
 };
 struct AdventureLeaderboard {
     std::uint32_t success = 0, failure = 0, rank = 0;

@@ -754,12 +754,16 @@ TEST_CASE("OP_PlayerProfile decodes from a buffer built like ENCODE(OP_PlayerPro
     spec.combat_ability_timers[2] = 1700000002;
     spec.linked_timers[5] = 1700000005;
     spec.item_recast_timers[99] = 1700000099;
+    spec.adventure_points = {101, 202, 303, 404, 505};
+    spec.adventure_points_available = 1515;
     AppPacket p = test::build_player_profile(spec);
     auto pp = decode_player_profile(p);
     REQUIRE(pp);
     CHECK(pp->trailing_bytes == 0);
     CHECK(pp->bandoliers.size() == 20);
     CHECK(pp->potion_belt.size() == 5);
+    CHECK(pp->adventure_points == spec.adventure_points);
+    CHECK(pp->adventure_points_available == 1515);
     CHECK(pp->bandoliers[0].items[0].icon == 0xffffffffu);
     CHECK(pp->checksum_size == p.data.size() - 9);
     CHECK(pp->checksum == eq_crc32(std::span<const std::byte>(p.data).subspan(8, p.data.size() - 9)));

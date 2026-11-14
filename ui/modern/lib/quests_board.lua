@@ -11,7 +11,7 @@ local B = {}
 local search = {}
 
 -- opts: win, list, nameCol (1-based), combos = { { id, caption, tooltip }, ... }, you = { { caption, id }, ... },
--- refresh, done (button ids), empty (text), s
+-- refresh, done (button ids), empty / emptyHint (text), s
 function B.Draw(opts)
   local s = opts.s
   local win = opts.win
@@ -45,7 +45,7 @@ function B.Draw(opts)
   local needle = K.Search(search, win, "Search names")
   if rows == 0 then
     ui.BeginChild("##boardempty" .. win, 0, -(btnH + 8 * s), false)
-    K.Empty(opts.empty or "No one on this board yet.", "Pick a board above, or Refresh.")
+    K.Empty(opts.empty or "No one on this board yet.", opts.emptyHint or "Pick a board above, or Refresh.")
     ui.EndChild()
   else
     local col = opts.nameCol

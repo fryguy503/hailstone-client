@@ -6,6 +6,10 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 
 ## 1. Gameplay a player will hit
 
+### Adventures (LDoN)
+- [x] Alt+V and recruiter request/offer windows in both UI packs, entry/completion timers and progress, profile point balances, seven-column theme stats and native leaderboard categories, risk choices and tied ranks; native protocol investigation, unit and mock-server coverage.
+- [ ] Complete an adventure live: request, accept/decline, zone in, objective updates, finish, leave and cross-zone refresh; confirm stats, leaderboard standings and physical controller operation. Remaining protocol ambiguity is in unknowns.md.
+
 ### Fellowships
 
 - [x] Native membership, invitations, leader actions, MOTD, personal/leader XP toggles, vitality, camp requests, `/fsay`, window key and MQ fellowship search; both UI packs support up to 64 server-supplied members (packet, mock-server and UI tests).

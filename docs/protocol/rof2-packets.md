@@ -626,8 +626,9 @@ Tried live against EQEmu with two clients (playprobe `--duel`, `--duel-wait`, `-
 | AdventureRequest / LDoNButton | C→Z | 0x2c6c / 0x5327 | 12 B {risk 1 normal / 2 high, recruiter, objective 0 any .. 4 rescue} / 1 B accept the offer |
 | AdventureData / AdventureUpdate / AdventureFinish | Z→C | 0x7171 / 0x1b01 / 0x400f | 2084 B {u32 (0 with no adventure: all zero), `char[2048]` text, seconds to enter, seconds left, risk, f32 x, y, z, show compass, u32} / 8 B {current, total} / 8 B {won, points} |
 | AdventurePointsUpdate | Z→C | 0x65c3 | 140 B {available; each theme's points at +56, +76, +96, +116, +136} |
-| AdventureStatsRequest / Reply | C→Z / Z→C | 0x5a62 / 0x2370 | no body / 96 B: successes, failures, rank, percentage rank × {total, five themes} |
-| AdventureLeaderboardRequest / Reply | C→Z / Z→C | 0x7093 / 0x7f79 | 12 B {order 0 wins / 1 percentage, theme 0..5, risk (unread)} / 7220 B {u32, u32, our successes, failures, rank, 100 × {`char[64]`, successes, failures}} |
+| AdventureStatsRequest / Reply | C→Z / Z→C | 0x5a62 / 0x2370 | 1 B zero (native sender reserves one byte; EQEmu ignores it) / 96 B: successes, failures, rank, percentage rank × {total, five themes} |
+| AdventureLeaderboardRequest / Reply | C→Z / Z→C | 0x7093 / 0x7f79 | 12 B {order 0 wins / 1 percentage, theme 0..5, risk 0 all / 1 normal / 2 high (EQEmu ignores risk)} / 7220 B {order, reserved, our successes, failures, rank, 100 × {`char[64]`, successes, failures}}; EQEmu zeroes both leading words |
+
 | DzExpeditionInfo / DzSetLeaderName / DzExpeditionEndsWarning | Z→C | 0x9119 / 0x3de9 / 0x5189 | every DZ packet starts {u32 client id, u32}: 208 B {assigned, max players, `char[128]` name, `char[64]` leader} / 72 B `char[64]` leader / 12 B minutes left (EQEmu sends its own chat line too) |
 | DzMemberList / DzMemberListStatus / DzMemberListName | Z→C | 0x5ae4 / 0x12f5 / 0x32f0 | {count, count × {name, u8 status: 1 online, 2 offline, 3 in the zone, 4 link dead}} (Status: one member whose status changed; more than 1000 members are refused, a client limit) / 76 B {u32 add, `char[64]` name} |
 | DzExpeditionLockoutTimers | Z→C | 0x205f | {count, count × {expedition, u32 seconds, i32 type (-1 replay), event}} (the answer to DzListTimers too) |
@@ -639,6 +640,17 @@ Tried live against EQEmu with two clients (playprobe `--duel`, `--duel-wait`, `-
 | NewTitlesAvailable | Z→C | 0x0d32 | empty: a line when the window's notice box is on |
 
 Duel state (`game::DuelState`) is the player we challenged or accepted, the challenger, and an on flag. The profile's bandolier sets and potion belt are decoded (`PlayerProfile::bandoliers`, `potion_belt`).
+
+Adventure request fields are verified against RoF2 senders `0x420030`, `0x4209f0`, `0x41fed0` and `0x41ff80`.
+The stats sender `0x619570` and leaderboard sender `0x6173e0` both gate requests for ten seconds (EQEmu separately
+limits them to eight and four seconds). The leaderboard category index interleaves order within theme:
+`order = category % 2`, `theme = category / 2`; risk is the second selector's raw index.
+The player profile's counted LDoN block has six u32 entries: a reserved entry then the five theme balances,
+followed by the available total (`rof2.cpp ENCODE(OP_PlayerProfile)`). Subsequent point updates replace these balances.
+
+The leaderboard reply has no reliable category identifier on stock EQEmu, so Hailstone serializes requests and
+holds the latest selection until the preceding reply and ten-second guard allow it. A missing reply is released
+after thirty seconds, a Hailstone recovery choice. See `docs/unknowns.md` for the residual late-reply ambiguity.
 
 ### Bazaar and barter (`net/market_packets.h`, `GameConnection` in `net/game_connection_market.cpp`, rules in `game/bazaar.{h,cpp}`)
 

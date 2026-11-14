@@ -1113,27 +1113,33 @@ public:
     // ---- LDoN adventures (net/game_connection_adventure.cpp, net/adventure_packets.h): the recruiter's window (a
     // right click on a class-60 NPC: OP_AdventureInfoRequest), the request and the offer to accept, the current
     // adventure, points, stats and the leaderboard. EQEmu's world server picks the adventure and checks the group.
+    struct AdventureLeaderboardSelection {
+        std::uint32_t order = 0, theme = 0, risk = 0;
+        bool operator==(const AdventureLeaderboardSelection&) const = default;
+    };
     struct Adventure {
         std::uint32_t recruiter = 0;     // the recruiter whose window is open
         std::string npc_text;            // OP_AdventureInfo: the recruiter's words or the server's refusal
         std::string offer;               // OP_AdventureDetails: awaiting accept / decline
         AdventureData data;              // the current adventure (assigned false: none)
-        std::int64_t data_at = 0;        // when it came (now_ms); its times count down from there
+        std::int64_t data_at = 0;        // when it came (session_now_ms); its times count down from there
         AdventureCount count;
         AdventurePoints points;
         std::optional<AdventureStats> stats;
         std::optional<AdventureLeaderboard> leaderboard;
-        bool stats_open = false, leaderboard_open = false;
+        bool window_open = false, stats_open = false, leaderboard_open = false;
+        std::int64_t request_next_ms = 0, stats_next_ms = 0, leaderboard_next_ms = 0, leaderboard_deadline_ms = 0;
+        AdventureLeaderboardSelection leaderboard_selection;
+        std::optional<AdventureLeaderboardSelection> leaderboard_inflight;
+        bool stats_queued = false, leaderboard_queued = false, leaderboard_failed = false;
     };
     const Adventure& adventure() const { return adventure_; }
     bool open_adventure_recruiter(std::uint32_t npc);
-    // CAdventureRequestWnd::AboutToHide @0x618420 (0x41fe10): an offer up is declined (OP_LDoNButton 0) and the
-    // recruiter state goes back to 0.
-    void close_adventure_recruiter() {
-        adventure_answer(false);
-        recruiter_state_ = 0;
-        adventure_.recruiter = 0;
-    }
+    void set_adventure_window_open(bool open);
+    // CAdventureRequestWnd::AboutToHide @0x618420 cancels an offer and resets the recruiter interaction.
+    void close_adventure_recruiter();
+    bool adventure_recruiter_available() const;
+    bool adventure_request_ready() const;
     void adventure_request(std::uint32_t risk, std::uint32_t type);
     void adventure_answer(bool accept);
     // OP_LeaveAdventure (no body): leave the current adventure (EQEmu's world server may refuse, with its own line).
@@ -1142,6 +1148,12 @@ public:
     void set_adventure_leaderboard_open(bool open);
     void adventure_stats_request();
     void adventure_leaderboard_request(std::uint32_t order, std::uint32_t theme, std::uint32_t risk);
+    bool adventure_stats_ready() const;
+    bool adventure_leaderboard_ready() const;
+    std::int64_t adventure_elapsed_seconds() const;
+    // Process the latest queued leaderboard selection after the native window's ten-second request guard.
+    void adventure_frame();
+    void reset_adventure_for_zone();
 
     // ---- guild tribute (net/game_connection_tribute.cpp): the guild's tributes (asked for while zoning in), its two
     // benefits, favour and timer, our opt-in, and a guild tribute master's window (class 64:

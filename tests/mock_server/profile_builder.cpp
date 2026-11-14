@@ -116,8 +116,9 @@ AppPacket build_player_profile(const ProfileSpec& spec) {
     w.zeros(320); w.zeros(343);
     u32(spec.character_id);                // char_id
     u8(1);                                 // leadAAActive
-    u32(6); zeros32(6);
-    u32(0);
+    u32(6); u32(0);
+    for (auto points : spec.adventure_points) u32(points);
+    u32(spec.adventure_points_available);
     w.f64(750.0); w.f64(1500.0);           // group / raid leadership experience
     u32(3); u32(7);                        // group / raid leadership points
     u32(64); u32(2); zeros32(15); u32(1); zeros32(47); // ranks: Mark NPC 2, raid Mark NPC 1

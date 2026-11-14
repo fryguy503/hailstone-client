@@ -1177,6 +1177,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/lua_scripts_test.cpp
     tests/adventure_packets_test.cpp
     tests/adventure_request_test.cpp
+    tests/adventure_windows_test.cpp
     tests/dz_packets_test.cpp
     tests/guild_bank_packets_test.cpp
     tests/notice_packets_test.cpp

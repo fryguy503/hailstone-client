@@ -1,4 +1,4 @@
--- Adventure leaderboard: replaces the game's AdventureLeaderboardWnd. The theme and the order as drop-downs (the
+-- Adventure leaderboard: replaces the game's AdventureLeaderboardWnd. The category and risk as drop-downs (the
 -- original's combo boxes: a pick asks the server for that board), your own standing as tiles, the top adventurers
 -- as a sortable table with a name search (your row in gold), Refresh / Done (lib/quests_board.lua). All of it the
 -- original's AdvLeaderboard_* children.
@@ -13,11 +13,12 @@ local WINDOW_OPTS = {
   place = function(sw, sh, w, h) return sw / 2 - w / 2 + 120, sh / 2 - h / 2 - 20 end,
 }
 local function drawWindow(x, y, w, h, s)
+  local status = eq.WindowText(WINDOW, "AdvLeaderboard_StatusLabel") or ""
   B.Draw({
     s = s, win = WINDOW, list = "AdvLeaderboard_LeaderList", nameCol = 2,
     combos = {
-      { "AdvLeaderboard_SelectCombobox", "Theme" },
-      { "AdvLeaderboard_RiskCombobox", "Order", "Rank by the most wins, or by the best win rate" },
+      { "AdvLeaderboard_SelectCombobox", "Category", "Wins or win rate, for all themes or one theme" },
+      { "AdvLeaderboard_RiskCombobox", "Risk" },
     },
     meName = "AdvLeaderboard_YourNameLabel",
     you = {
@@ -27,7 +28,8 @@ local function drawWindow(x, y, w, h, s)
       { "Win rate", "AdvLeaderboard_YourPercentLabel", hud.T.color.gold },
     },
     refresh = "AdvLeaderboard_RefreshButton", done = "AdvLeaderboard_DoneButton",
-    empty = "No adventurers on this board yet.",
+    empty = status ~= "" and status or "No adventurers on this board yet.",
+    emptyHint = status ~= "" and "Refresh asks the server for this board again." or nil,
   })
 end
 

@@ -335,6 +335,7 @@ void GameConnection::update() {
     fellowship_invite_tick();
     guild_bank_tick();
     real_estate_tick();
+    adventure_frame();
     if (alarm_due_ms_ && now_ms() >= alarm_due_ms_) {
         alarm_due_ms_ = 0;
         ui_message("Your alarm has gone off."); // this client's line (the original's is not decoded)
@@ -723,9 +724,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         guild_bank_.banker = 0;
         guild_bank_.pending = 0;
         guild_bank_.selected = -1;
-        adventure_.recruiter = 0;
-        adventure_.offer.clear();
-        recruiter_state_ = 0;
+        reset_adventure_for_zone();
         guild_tribute_.master_id = 0;
         state_ = ConnectionState::ZoneConnecting;
         status_ = "Connecting to the zone server";
@@ -820,6 +819,8 @@ std::optional<ServerProfile> GameConnection::saved_server() const {
 
 void GameConnection::enter_world(const std::string& name, bool return_home) {
     if (state_ != ConnectionState::CharacterSelect) return;
+    adventure_ = {};
+    recruiter_state_ = 0;
     character_ = name;
     {
         // The files an earlier build kept in characters/<name>/ of the profile, copied once to the world's folder.
@@ -1304,6 +1305,8 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 leadership_.ranks[i] = profile_->leadership_ranks[i];
             tribute_.points = static_cast<std::int32_t>(profile_->tribute_points);
             tribute_.career = static_cast<std::int32_t>(profile_->career_tribute_points);
+            adventure_.points.available = profile_->adventure_points_available;
+            adventure_.points.theme = profile_->adventure_points;
             for (std::size_t i = 0; i < tribute_.settings.tributes.size() && i < profile_->tributes.size(); ++i) {
                 tribute_.settings.tributes[i] = profile_->tributes[i].first;
                 tribute_.settings.tiers[i] = profile_->tributes[i].second;
