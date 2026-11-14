@@ -5,6 +5,7 @@
 #include <initializer_list>
 
 #include "game/eq_strings.h"
+#include "game/item_preview.h"
 #include "game/merchant.h"
 #include "game/mechanics/item_stats.h"
 
@@ -195,6 +196,28 @@ std::uint32_t aug_socket_type(const net::Item& item, int socket) {
 const net::Item* augment_in(const net::Item& item, int socket) {
     if (socket < 0) return nullptr;
     return item.content(static_cast<std::uint32_t>(socket));
+}
+
+WornLook worn_look(const net::Item& item, int material_slot) {
+    WornLook w;
+    w.tint = item.color;
+    if (material_slot >= 7) {
+        const std::string& ornament =
+            material_slot == 8 && !item.ornament_off.empty() ? item.ornament_off : item.ornament_main;
+        w.material = item_model_number(ornament);
+        if (w.material == 0) w.material = item_model_number(item.id_file);
+        return w;
+    }
+    w.material = item.material;
+    w.hero_forge = item.ornament_hero_model != 0 ? item.ornament_hero_model : item.heros_forge_model;
+    for (int socket = kAugSockets - 1; socket >= 0; --socket) {
+        if (!is_ornament_socket_type(aug_socket_type(item, socket))) continue;
+        const net::Item* aug = augment_in(item, socket);
+        if (!aug) continue;
+        if (!aug->aug_texture_disabled && aug->material != 0) w.material = aug->material;
+        break;
+    }
+    return w;
 }
 
 void update_stats_disabled(net::Item& item, std::int32_t use_item, std::int32_t ornament, bool top_level) {

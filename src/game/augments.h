@@ -97,6 +97,23 @@ std::uint32_t augment_fit_string_id(int result);
 // ItemClient_GetAugRestrictionStringId @00554c70: the "... Only" text of AugRestrictions 1..15, else 0.
 std::uint32_t aug_restriction_string_id(std::uint32_t restriction);
 
+// ---- the look
+
+// What a worn item shows on the wearer's own model in material slot `material_slot` (0..8), ornament included
+// (refresh_worn_slot, PcClient_RefreshWornSlotVisual):
+//  - primary and secondary (7, 8): the model number of the ornament model the server names (ornament_main, or
+//    ornament_off for the secondary when that is set; EQEmu writes the ornament augment's IDFile into both), else
+//    the item's IDFile;
+//  - armour (0..6): the ornament's hero's forge model the server names (ornament_hero_model, EQEmu's
+//    GetOrnamentHeroModel for the slot) in place of the item's, and the Material of the augment in an ornament
+//    socket (types 20, 21; the later socket, as the appearance area shows it) in place of the item's, when it has
+//    one and its texture is not disabled (update_stats_disabled). A robe glamour is such a Material (10..16).
+// The tint is the item's. The original's own choice of these was not traced (docs/unknowns.md).
+struct WornLook {
+    std::uint32_t material = 0, hero_forge = 0, tint = 0;
+};
+WornLook worn_look(const net::Item& item, int material_slot);
+
 // ---- the item display
 
 inline constexpr std::uint32_t kAugFitArgb = 0xffd6b228;      // the "fits" highlight (@0069f3e8)

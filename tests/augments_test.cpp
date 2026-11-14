@@ -624,3 +624,51 @@ TEST_CASE("CheckAugmentCombinedRestrictions over a server extension's classes (w
     CHECK(game::check_augment_combined_restrictions(bagged, &aug, war_wiz) == 2);
     CHECK(game::can_gem_fit_in_slot(host, &aug, 0, false, false, war_wiz) == 6); // passes the class test; no socket
 }
+
+TEST_CASE("worn_look: the ornament a worn item shows on its wearer") {
+    auto with_aug = [](net::Item host, int socket, net::Item aug) {
+        net::BagItem b;
+        b.index = static_cast<std::uint32_t>(socket);
+        b.item = std::move(aug);
+        host.contents.push_back(std::move(b));
+        return host;
+    };
+    net::Item chest;
+    chest.material = 3;
+    chest.color = 0xff112233;
+    chest.aug_sockets[0] = {1, 1, 0};
+    chest.aug_sockets[5] = {20, 1, 0};
+
+    auto w = game::worn_look(chest, 1);
+    CHECK(w.material == 3);
+    CHECK(w.hero_forge == 0);
+    CHECK(w.tint == 0xff112233);
+
+    net::Item robe; // a robe glamour: only a Material, no hero's forge model
+    robe.material = 11;
+    net::Item stats;
+    stats.material = 7;
+    net::Item worn = with_aug(with_aug(chest, 0, stats), 5, robe);
+    w = game::worn_look(worn, 1);
+    CHECK(w.material == 11); // the ornament socket's, not the type-1 socket's
+    CHECK(w.tint == 0xff112233);
+
+    worn.contents.back().item.aug_texture_disabled = true; // a type-21 ornament without game feature 0x15
+    CHECK(game::worn_look(worn, 1).material == 3);
+
+    net::Item forge = with_aug(chest, 5, net::Item{});
+    forge.ornament_hero_model = 1501;
+    w = game::worn_look(forge, 1);
+    CHECK(w.material == 3); // the ornament has no Material of its own
+    CHECK(w.hero_forge == 1501);
+
+    net::Item sword;
+    sword.id_file = "IT5";
+    CHECK(game::worn_look(sword, 7).material == 5);
+    sword.ornament_main = "IT10652";
+    sword.ornament_off = "IT10653";
+    CHECK(game::worn_look(sword, 7).material == 10652);
+    CHECK(game::worn_look(sword, 8).material == 10653);
+    sword.ornament_off.clear();
+    CHECK(game::worn_look(sword, 8).material == 10652);
+}
