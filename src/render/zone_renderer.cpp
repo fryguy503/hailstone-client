@@ -363,7 +363,7 @@ void ZoneRenderer::upload(Prepared& p) {
     constexpr std::size_t kStagingBudget = 32u * 1024 * 1024;
     for (auto& i : p.images) {
         for (const auto& level : i.image.mips) texture_bytes += level.size();
-        textures_.push_back(upload.texture(i.image, i.use));
+        textures_.push_back(upload.immutable_texture(i.image, i.use));
         i.image = {}; // freed as it goes
         if (upload.staging_bytes() >= kStagingBudget) {
             upload.submit();
@@ -371,6 +371,13 @@ void ZoneRenderer::upload(Prepared& p) {
         }
     }
     mark("textures staged", p.started);
+    if (vk_.gpu_shared_cache()) {
+        const auto shared = std::count_if(textures_.begin(), textures_.end(), [](const Texture& texture) {
+            return static_cast<bool>(texture.shared);
+        });
+        log::info("GPU immutable zone textures: total={} shared={} private={}", textures_.size(), shared,
+                  textures_.size() - static_cast<std::size_t>(shared));
+    }
     light_grid_buffers_[0] = upload.buffer(p.lights, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     light_grid_buffers_[1] = upload.buffer(p.grid_cells, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     light_grid_buffers_[2] = upload.buffer(p.grid_indices, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -434,12 +441,20 @@ ZoneRenderer::ZoneRenderer(VkContext& vk, PreparedPtr prepared, const std::files
     upload(*prepared);
     prepared.reset();
     create_descriptors();
+    // Shared textures moved into this client's own images when sharing stopped: the set takes the new views.
+    shared_listener_ = vk_.on_shared_textures_moved([this] {
+        bool changed = false;
+        for (auto& t : textures_)
+            if (refresh_shared_texture(t)) changed = true;
+        if (changed) write_texture_set();
+    });
     create_pipelines(shader_dir);
     create_shadow_pipeline(shader_dir);
     create_underwater_pipeline(shader_dir);
 }
 
 ZoneRenderer::~ZoneRenderer() {
+    vk_.remove_shared_textures_listener(shared_listener_);
     // Retired rather than destroyed after a wait for the device: a neighbour zone is let go in the middle of a frame
     // (app/neighbour_zones.h), and vkDeviceWaitIdle there was a hitch. Its objects go once the frames that may still
     // draw it, and its uploads, are done (VkContext::retire).
@@ -1518,6 +1533,18 @@ ZoneRenderOptions zone_render_options(const GameDir& game) {
     return o;
 }
 
+void ZoneRenderer::write_texture_set() {
+    std::vector<VkDescriptorImageInfo> infos;
+    for (const auto& t : textures_) infos.push_back({sampler_, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = set_;
+    w.dstBinding = 0;
+    w.descriptorCount = static_cast<std::uint32_t>(infos.size());
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = infos.data();
+    vkUpdateDescriptorSets(vk_.device(), 1, &w, 0, nullptr);
+}
+
 void ZoneRenderer::create_descriptors() {
     VkDevice d = vk_.device();
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -1597,15 +1624,7 @@ void ZoneRenderer::create_descriptors() {
     ai.pSetLayouts = &set_layout_;
     vk_check(vkAllocateDescriptorSets(d, &ai, &set_), "vkAllocateDescriptorSets");
 
-    std::vector<VkDescriptorImageInfo> infos;
-    for (const auto& t : textures_) infos.push_back({sampler_, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet = set_;
-    w.dstBinding = 0;
-    w.descriptorCount = count;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w.pImageInfo = infos.data();
-    vkUpdateDescriptorSets(d, 1, &w, 0, nullptr);
+    write_texture_set();
 
     for (std::size_t i = 0; i < scene_sets_.size(); ++i) {
         VkDescriptorSetAllocateInfo sai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};

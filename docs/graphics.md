@@ -7,6 +7,44 @@ draws them with a modern renderer. The procedural sky's
 colour maps, the EQG material classes and the multi-pass light details are not planned work unless a feature needs
 them; the classic path that exists stays as the `classic` look.
 
+## Shared GPU textures (experimental, Windows)
+
+Several clients on one machine can share the GPU memory of their immutable zone and actor textures instead of each
+uploading its own copy. It is off unless a separately started broker is configured, it is not in the release package,
+and every client still has its own Vulkan device, renderer, UI and window: only the texture payloads are shared.
+The design and its limits are in [Shared GPU memory](research/shared-gpu-memory.md).
+
+- **The broker** (`hailstone_gpu_cache_broker`, `tools/gpu_lab/`) owns one copy of each texture on its own device and
+  hands each client an opaque Win32 handle to it over a local named pipe (`platform/gpu_ipc.h`: current user only,
+  local peers only, a random endpoint and 256-bit token passed in `HAILSTONE_GPU_IPC_ENDPOINT` and
+  `HAILSTONE_GPU_IPC_TOKEN`, never in arguments or logs). Clients and broker must use the same GPU model, driver and
+  memory layout (checked in the handshake); `HAILSTONE_GPU_NAME` picks the GPU by its exact model name.
+- **The client** (`render/gpu_shared_cache.h`) asks for a texture by its final content (after colour preparation and
+  mip building, `render::prepare_immutable_texture_image`, so the broker's UNORM image never builds a colour chain)
+  and imports the handle (`platform/gpu_external_memory.h`). A texture the broker declines (unsupported format, its
+  budget full, an upload failure) is uploaded privately; sharing carries on.
+- **Frames:** Vulkan allows one instance to own an external image at a time, so a frame that samples imports takes a
+  machine-wide lease, acquires the imports from `VK_QUEUE_FAMILY_EXTERNAL`, submits, waits for its own fence and
+  releases them. The barriers cover every live import, not only those the frame samples (the renderers bind whole
+  texture arrays). GPU work that touches shared textures is therefore serialized across clients, and each such
+  frame waits for its own fence: memory is saved at a cost in frame overlap.
+- **Failure never stops the game.** A bad request fails alone; a client that disconnects or crashes gives back its
+  lease and references and the others carry on. A client that loses the broker, waits more than 5 seconds for the
+  lease, does not see its frame finish within 2 seconds or gets any reply it cannot use stops sharing for good: it
+  closes its connection, copies its imports into its own images before the next frame (they stay valid without the
+  broker) and plays on with private textures (`render/gpu_share_link.h`). A connection idle for 5 minutes is closed
+  by the broker; clients ping well within that.
+
+The tools beside it, also only in the build tree: `hailstone_gpu_share_probe` reports each adapter's external memory
+capabilities (`--smoke --device-index N` checks buffer aliases on one device), and `hailstone_gpu_asset_probe` renders
+a real zone's static assets in several offscreen views on one device with sharing on and off and compares the pixels.
+
+To try it, build `hailstone_gpu_cache_broker`, start it with `--serve` and the session variables, then start each
+client with the same variables (and `HAILSTONE_GPU_IPC_SERVER_PID` set to the broker's process id to pin it).
+`--status` and `--stop-if-idle` query and stop the broker. Without the variables nothing changes: every texture is
+private, as before. `HAILSTONE_GPU_BENCHMARK=1` logs the client's presented frames and the time spent waiting for
+the lease and for shared frames' fences.
+
 ## The frame
 
 `render::VkContext` (`src/render/vk_context.h`):
@@ -108,9 +146,9 @@ by alpha. Transparent texels take their opaque neighbours' colour, so palette in
 longer fringes leaves. Cut-outs keep level 0's coverage on every level, so trees stay full at a distance. DDS files
 shipped without mips get a chain too.
 
-A fully opaque image whose sides are powers of two needs none of that: its chain is a plain average, which the GPU
-builds as the CPU would, so it goes up as it is and the GPU builds the levels (`render::gpu_builds_mips`,
-`render::prepare_texture_image`, `UploadBatch::texture`). The image is created `R8G8B8A8_SRGB` with
+In the ordinary private `UploadBatch::texture` path, a fully opaque image whose sides are powers of two needs none
+of that: its chain is a plain average, which the GPU builds as the CPU would, so it goes up as it is and the GPU
+builds the levels (`render::gpu_builds_mips`, `render::prepare_texture_image`). The image is created `R8G8B8A8_SRGB` with
 `VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT` and blitted level by level, so each blit decodes to linear light, filters and
 encodes back, as `assets::build_color_mips` does; the view the shaders sample is `R8G8B8A8_UNORM`, so they read the
 same values as from a CPU chain. The two agree within a rounding step per level (the GPU stores each level in 8 bits
@@ -122,6 +160,10 @@ as the GPU's own levels would blend the colour key into the edges and bring back
 those images (the baked terrain tiles, uncompressed A8R8G8B8 DDS, are opaque where they are a zone's base layer). A
 neighbour zone's textures, held to `ZoneRenderer::Options::max_texture_size` (`render::prepare_capped_texture`), always
 get the CPU chain, as only a chain has levels to drop.
+
+A texture shared through the broker ("Shared GPU textures" above) instead gets its colour chain on the CPU
+(`render::prepare_immutable_texture_image`) before it is keyed and exported, since the broker's image is UNORM. Data
+images keep their ordinary mip recipe, and BC formats the device lacks are decoded first.
 
 A material that never reads its texture's alpha (opaque, no alpha test: EQG `Opaque_*` classes and the classic opaque
 methods, `MaterialState::alpha_unused`) uploads it as `TextureUse::OpaqueColor` in the actor and object renderers: made

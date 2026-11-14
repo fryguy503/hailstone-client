@@ -310,6 +310,7 @@ private:
 
     void upload(Prepared& prepared);
     void create_descriptors();
+    void write_texture_set();
     void create_pipelines(const std::filesystem::path& shader_dir);
     void create_shadow_pipeline(const std::filesystem::path& shader_dir);
     void create_shadow_pipeline(const std::filesystem::path& shader_dir, bool point);
@@ -324,6 +325,7 @@ private:
 
     VkContext& vk_;
     std::uint64_t id_ = 0;
+    std::uint64_t shared_listener_ = 0;
     ZoneRenderStats stats_;
     VertexLighting lighting_ = VertexLighting::Classic;
     bool hide_flames_ = false;

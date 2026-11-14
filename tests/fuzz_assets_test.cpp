@@ -13,6 +13,7 @@
 
 #include <zlib.h>
 
+#include "assets/character.h"
 #include "assets/eqg.h"
 #include "assets/eqg_character.h"
 #include "assets/gltf_mesh.h"
@@ -26,7 +27,10 @@
 #include "core/byte_io.h"
 #include "core/ini_file.h"
 #include "core/server_profile.h"
+#include "core/shared_file_cache.h"
 #include "nav/nav_mesh.h"
+#include "platform/gpu_ipc.h"
+#include "render/gpu_cache_protocol.h"
 #include "render/horizon.h"
 #include "fuzz_support.h"
 #include "pfs_fixtures.h"
@@ -84,6 +88,22 @@ Bytes wld_all_types(std::uint64_t seed) {
         body.bytes(payload);
         b.add_raw(type, body.take());
     }
+    return b.build();
+}
+
+// One 0x12 track of `count` keys, packed (s16) or not (f32), with a 0x13 reference to it.
+Bytes wld_track(bool packed, std::uint32_t count, std::uint64_t seed) {
+    test::wld_fixtures::WldBuilder b;
+    Rng rng(seed);
+    ByteWriter body;
+    body.le<std::uint32_t>(packed ? 8 : 0);
+    body.le(count);
+    body.bytes(fuzz::random_bytes(rng, count * (packed ? 16u : 32u)));
+    b.add(0x12, b.str("FUZZ_TRACKDEF"), body);
+    ByteWriter ref;
+    ref.le<std::int32_t>(1);
+    ref.le<std::uint32_t>(0);
+    b.add(0x13, b.str("FUZZ_TRACK"), ref);
     return b.build();
 }
 
@@ -411,12 +431,35 @@ TEST_CASE("fuzz: WLD files and the meshes built from them") {
         auto w = wld::WldFile::deferred([d] { return std::vector<std::byte>(d.begin(), d.end()); }, "fuzz");
         for (const auto& f : w.fragments()) {
             (void)w.resolve(static_cast<wld::Ref>(f.offset));
-            if (const auto* m = std::get_if<wld::MeshDef>(&f.data)) check_parts(wld::build_mesh(w, *m, f.name));
-            if (const auto* sk = std::get_if<wld::Skeleton>(&f.data)) (void)wld::build_skeleton_pose(w, *sk, f.name);
-            if (const auto* inst = std::get_if<wld::ActorInstance>(&f.data)) (void)wld::placement_transform(*inst);
+            if (const auto* m = f.get<wld::MeshDef>()) check_parts(wld::build_mesh(w, *m, f.name));
+            if (const auto* sk = f.get<wld::Skeleton>()) (void)wld::build_skeleton_pose(w, *sk, f.name);
+            if (const auto* inst = f.get<wld::ActorInstance>()) (void)wld::placement_transform(*inst);
         }
         (void)w.string_at(-1000000);
         (void)w.find("x");
+    });
+}
+
+// The encoded-key path the shared cache's mapped WLDs take: tracks stay views into the file's bytes and each key is
+// decoded on read, by the WLD's own TrackFrames and by the animation tracks built from them.
+TEST_CASE("fuzz: WLD track keys read from the file's bytes") {
+    fuzz::QuietLog quiet;
+    std::vector<Bytes> seeds = {wld_track(true, 3, 1), wld_track(false, 3, 2), wld_track(true, 1, 3), wld_all_types(3)};
+    sweep("WldFile encoded tracks", seeds, 28, 700, [](std::span<const std::byte> d) {
+        const auto w = wld::WldFile::parse(ImmutableFileBytes::owned(Bytes(d.begin(), d.end())), "fuzz", true);
+        for (const auto& f : w.fragments()) {
+            const auto* def = f.get<wld::TrackDef>();
+            if (!def) continue;
+            float sum = 0.0f;
+            for (const auto& key : def->frames) sum += key.scale + key.translation.x + key.rotation.w;
+            if (def->frames.size() != 0) sum += def->frames.back().scale;
+            const auto track = AnimationTrack::from_wld(def->frames, glm::vec3(0.5f));
+            CHECK(track.size() == def->frames.size());
+            for (std::size_t i = 0; i < track.size(); ++i) sum += track[i].scale.x;
+            const auto bones = BoneFrames::from_wld(def->frames);
+            for (const auto& pose : bones) sum += pose.translation.y;
+            (void)sum;
+        }
     });
 }
 
@@ -486,6 +529,45 @@ TEST_CASE("fuzz: textures (DDS, BMP, TGA, PNG)") {
             if (img) (void)to_rgba8(*img);
         }
         (void)describe_texture(d);
+    });
+}
+
+// The shared GPU texture protocol (render/gpu_cache_protocol.h, platform/gpu_ipc.h): what one client process reads
+// from another. The transport's frame header, the broker's request parsing and the texture recipe it decodes.
+TEST_CASE("fuzz: GPU texture broker frames, requests and recipes") {
+    namespace gpu = render::gpu_cache;
+    sweep("gpu_ipc_wire::decode_header", {platform::gpu_ipc_wire::encode_header({platform::gpu_ipc_wire::Kind::Request, 64, 1, false})},
+          4, 400, [](std::span<const std::byte> d) { (void)platform::gpu_ipc_wire::decode_header(d); });
+
+    assets::Image image;
+    image.width = image.height = 4;
+    image.format = assets::PixelFormat::BC1;
+    image.mips = {Bytes(8), Bytes(8), Bytes(8)};
+    const auto recipe = gpu::encode_texture(image, false);
+    sweep("decode_gpu_cache_texture", {recipe}, 8, 600,
+          [](std::span<const std::byte> d) { (void)gpu::decode_texture(d); });
+
+    std::vector<Bytes> requests;
+    gpu::Request r;
+    r.op = gpu::Op::Hello;
+    r.identity.model = "GPU";
+    requests.push_back(gpu::encode_request(r));
+    r = {};
+    r.op = gpu::Op::Texture;
+    r.digest = gpu::texture_key(image, false);
+    r.recipe = recipe;
+    requests.push_back(gpu::encode_request(r));
+    r = {};
+    r.op = gpu::Op::Release;
+    r.epoch = 3;
+    r.serial = 4;
+    requests.push_back(gpu::encode_request(r));
+    r = {};
+    r.op = gpu::Op::RetireTexture;
+    requests.push_back(gpu::encode_request(r));
+    sweep("gpu broker request", requests, 8, 600, [](std::span<const std::byte> d) {
+        const auto request = gpu::decode_request(d);
+        if (request.op == gpu::Op::Texture) (void)gpu::decode_texture(request.recipe);
     });
 }
 

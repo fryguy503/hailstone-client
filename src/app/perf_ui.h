@@ -17,6 +17,7 @@
 
 namespace hailstone::net { class GameConnection; struct SessionStats; }
 namespace hailstone::render { struct ZoneRenderStats; struct ActorRenderStats; class VkContext; }
+namespace hailstone { class SharedFileCache; }
 
 namespace hailstone::app {
 
@@ -47,6 +48,7 @@ struct PerfInputs {
     const render::ActorRenderStats* actors = nullptr;
     const net::GameConnection* conn = nullptr;
     const render::VkContext* gpu = nullptr; // the GPU's name and memory heaps
+    const SharedFileCache* shared_files = nullptr;
     std::string zone_name;
     std::size_t spawns = 0;
     glm::vec3 camera{0.0f};

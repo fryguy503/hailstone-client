@@ -613,10 +613,10 @@ TEST_CASE("append_wld_mesh: vertex pieces must cover the vertices before their b
     auto w = wld::WldFile::parse(test::wld_fixtures::mesh_wld(false));
     const wld::Fragment* mesh = nullptr;
     for (const auto& f : w.fragments())
-        if (std::holds_alternative<wld::MeshDef>(f.data)) mesh = &f;
+        if (f.holds<wld::MeshDef>()) mesh = &f;
     REQUIRE(mesh);
     wld::Fragment f = *mesh;
-    auto& md = std::get<wld::MeshDef>(f.data);
+    auto& md = f.as<wld::MeshDef>();
     REQUIRE(md.positions.size() == 4);
     md.vertex_pieces = {{{3, 0}}, {{1, 1}}};
     CharacterMesh out;

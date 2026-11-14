@@ -82,11 +82,12 @@ hailstone/
                              scripts/<name>/ and plugins/<name>/
   update/                    the updater's downloads, the installed components' file lists, the files the last
                              update replaced (until the new version has started) and its journal (docs/updater.md)
-  cache/                     safe to delete: cache/plugins/ holds the loaded plugins' copies, cache/pipelines.bin
+  cache/                     safe to delete while no client runs: cache/plugins/ holds the loaded plugins' copies, cache/pipelines.bin
                              the compiled Vulkan pipelines, cache/navmesh/<server>/<zone>.navmesh the zones'
                              navigation meshes (docs/navigation.md), cache/horizon/<server>/<zone>/<neighbour>.bin
                              the neighbour zones' ground the land round a zone takes the shape of (docs/graphics.md
                              "Neighbour zones"; the viewer's under cache/horizon/viewer/)
+    assets/v1/pfs/           the shared asset cache, when on ("Shared archive memory" below)
 ```
 
 The paths come from `src/platform/paths.h`: `install_dir()` is the binary's folder, from which the shipped parts are
@@ -131,6 +132,47 @@ world or character name is compared with the saved list in that form, so such a 
 A save that fails is logged; on Windows, where the replace is refused while another program has the file open, it
 is tried a few more times first. Two clients may share `hailstone.ini`: when the file changed since a client read
 it, that client writes only the keys it changed over the other's (`core/config.h`).
+
+### Shared archive memory
+
+Several clients started from the same Hailstone data folder can share the bytes of some immutable assets in RAM.
+It is off by default; to turn it on, add to the main `hailstone.ini` and restart each client:
+
+```ini
+assets.shared_memory=auto
+assets.shared_memory_cache_mb=1024
+```
+
+The budget is the cache's disk space, from 1 to 16384 MiB (default 1024); 0 turns the cache off. The settings apply
+to every character and are read at start-up. The cache lives in `data_dir()/cache/assets/v1/pfs`, so separate
+portable data folders have separate caches. The game folder is only read.
+
+What it shares:
+- The game folder's archives are mapped read-only whether the cache is on or off, so the system's page cache
+  already shares them between clients. The cache does not copy them.
+- A server's own archives (its assets folder), which are otherwise read onto each client's heap, are copied into
+  the cache and mapped from there.
+- Inflated character WLDs are stored there too, and their animation keys are read from the mapping when sampled
+  instead of being expanded into each client's memory.
+
+Model geometry, collision, other inflated members, textures and game state stay per client.
+
+Each cache file is named by the SHA-256 of its content, written once (read-only, 0400 on POSIX) and never changed.
+A client hashes a source once while its size, identity and timestamps stay the same, checks a cache file it did not
+write once before trusting it (a stored WLD is compared with the bytes it was made from), and loads privately
+whenever the cache cannot serve: unavailable, unsafe permissions or links, a damaged file, a full budget, or another
+client publishing for more than 250 ms. A private load uses the same memory as with the cache off.
+
+The budget counts finished files and abandoned temporary files. A client trims the cache to the budget when it
+first uses it and whenever an insertion would pass it, removing the least recently used files it does not map
+itself. On Windows a file another client maps cannot be removed and stays; on Linux and macOS its readers keep their
+mapping and only its name goes, so its disk space returns when they let go of it. The cache can be deleted while
+no client runs.
+
+The performance window (Ctrl+Shift+P) shows the mapped backing and the cache's hit, build, fallback and eviction
+counts. Mapped bytes are address space, not measured resident memory. See
+[Shared asset memory](research/shared-asset-memory.md) for the design and measurements. The separate Windows
+experiment that shares GPU textures is in [graphics.md](graphics.md#shared-gpu-textures-experimental-windows).
 
 ### A character's settings
 

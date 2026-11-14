@@ -655,7 +655,8 @@ std::shared_ptr<const PfsArchive> EqgCharacterStore::archive(const std::string& 
     std::shared_ptr<const PfsArchive> a;
     if (auto path = game_.find(name)) {
         try {
-            a = std::make_shared<const PfsArchive>(PfsArchive::open(*path, PfsArchive::storage_for(game_, *path)));
+            a = std::make_shared<const PfsArchive>(PfsArchive::open(
+                *path, PfsArchive::storage_for(game_, *path), game_.shared_file_cache()));
             // A model's own textures ("c_pma_bd_s02_c.dds") are its archive's (pma.eqg): another archive's copies
             // of them (mpu.eqg's, an older puma's left in the puma mount's) do not take their place.
             for (const auto& member : a->names())

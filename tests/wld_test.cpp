@@ -76,8 +76,8 @@ TEST_CASE("WldFile bounds each fragment to its declared size") {
     auto w = wld::WldFile::parse(b.build());
     REQUIRE(w.errors().size() == 1);
     CHECK(w.errors()[0].index == 0);
-    CHECK(std::holds_alternative<std::monostate>(w.fragments()[0].data));
-    CHECK(std::get<wld::MeshRef>(w.fragments()[1].data).mesh == 7);
+    CHECK(w.fragments()[0].holds<std::monostate>());
+    CHECK(w.fragments()[1].as<wld::MeshRef>().mesh == 7);
 
     // A fragment whose size runs past the end of the file is a framing error.
     auto data = b.build();
@@ -93,7 +93,7 @@ TEST_CASE("build_mesh resolves runs positionally across empty slots and groups t
         REQUIRE(w.errors().empty());
         CHECK(w.new_format() == new_format);
         const auto& frag = w.fragments().back();
-        auto m = wld::build_mesh(w, std::get<wld::MeshDef>(frag.data), frag.name);
+        auto m = wld::build_mesh(w, frag.as<wld::MeshDef>(), frag.name);
 
         REQUIRE(m.materials.size() == 2); // the empty middle slot is unused
         CHECK(m.materials[0].name == "WATER_MDF");
@@ -160,7 +160,7 @@ TEST_CASE("build_skeleton_pose composes parent and child rest frames") {
     auto skeleton = b.add(0x10, b.str("TREE_HS_DEF"), sk);
     auto w = wld::WldFile::parse(b.build());
     REQUIRE(w.errors().empty());
-    const auto& def = std::get<wld::Skeleton>(w.at(skeleton)->data);
+    const auto& def = w.at(skeleton)->as<wld::Skeleton>();
     CHECK(def.nodes[1].name == "BR1");
     auto m = wld::build_skeleton_pose(w, def, "TREE_ACTORDEF");
     REQUIRE(m);
