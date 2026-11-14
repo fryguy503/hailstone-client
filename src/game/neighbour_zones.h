@@ -239,6 +239,31 @@ std::optional<std::vector<BaryPolygon>> split_off_ground(const GroundGrid& groun
                                                          const glm::vec3& b, const glm::vec3& c,
                                                          float tolerance = 24.0f);
 
+// Where the land round the current zone (render/horizon.h) stands in for a neighbour's ground: a grid over the
+// neighbour, per cell the neighbour's own ground (its opened ground, render::source_ground; NaN none) and whether what
+// stands on it may be drawn there: where the land (or, over the current zone's own terrain, that terrain) lies no lower
+// than the neighbour's ground less the tolerance, so a wall or a house is never seen floating over a gap; else it is
+// left out, and the land is all there is.
+struct LandMask {
+    glm::vec2 origin{0.0f};
+    float cell = 32.0f;
+    int width = 0, height = 0;
+    std::vector<float> ground;        // the neighbour's ground at the cell's centre, NaN none
+    std::vector<std::uint8_t> stands; // what stands there may be drawn
+    bool empty() const { return ground.empty(); }
+    // Bilinear between the cells' centres (a missing one counts as the cell's own), nullopt where the cell has none.
+    std::optional<float> ground_at(float x, float y) const;
+    // Whether what stands at (x, y) may be drawn; true outside the grid.
+    bool stands_at(float x, float y) const;
+};
+// A neighbour's triangle (in the current zone's coordinates) where the land stands in for its ground. A triangle
+// facing up (normal z >= 0.6) is cut along the mask's cells, and a piece every corner of which lies within `tolerance`
+// of the neighbour's ground under it is ground, which the land draws instead: it goes. Any triangle's piece (cut the
+// same way) whose middle lies in a cell where nothing may stand goes too. Returns the pieces to keep (empty: none), or
+// nullopt when the whole triangle stays.
+std::optional<std::vector<BaryPolygon>> split_off_land(const LandMask& mask, const glm::vec3& a, const glm::vec3& b,
+                                                       const glm::vec3& c, float tolerance = 24.0f);
+
 // The distance from `p` to the box, in the horizontal plane.
 float distance_xy(const glm::vec3& p, const glm::vec3& lo, const glm::vec3& hi);
 

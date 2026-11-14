@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Modern lighting: the zones past the zone lines no longer clash with the one you are in. Their ground is no longer drawn over your zone's edge with seams, steps and flickering where the two never lined up; instead the land past your zone's edge takes the shape of the neighbour's ground, rising or falling to it smoothly, and your zone's grass gives way to the neighbour's in patches across it. The neighbour's walls, buildings, trees and hills stand on that land. Each neighbour's ground is measured once and kept in Hailstone's cache, and from your next visit the land past every zone line takes its shape, even towards a neighbour too far away to draw
 - Modern UI: with Snap to grid on, resizing a frame or dialog puts the dragged edge on the grid, or flush with the screen's edge when that is nearer, and shows the grid while resizing (the hot bars, which change shape in whole buttons, are not snapped)
 - Movement: the server's fly modes (`#set flymode`, a quest's flymode) now move your own character, all six of them, including free flight with flymode 1. As in the original client, a mode other than flying lasts until your buffs next change, when your levitation decides again; in a no-levitation zone flying also ends then
 - Hailstone Texture Studio: generated trees can now be dead trees (bare forked limbs) and palms, for zones such as Everfrost, Dagnor's Cauldron, North Ro and Erud's Crossing

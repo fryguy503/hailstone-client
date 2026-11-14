@@ -520,6 +520,8 @@ int ClientApp::run() {
                         in.zone_id = static_cast<std::uint32_t>(conn_->zone_id());
                         const auto& z = conn_->zone_info();
                         in.outdoor = z && z->sky != 0 && outdoor;
+                        if (zone_renderer_) in.horizon = zone_renderer_->horizon_build();
+                        in.cache_dir = horizon_cache_dir(server_profile_.id, zone_->name);
                         neighbours_->enter(in);
                     }
                     neighbours_->update(camera_.position, lit.far_plane, modern && neighbour_zones_ && in_game);

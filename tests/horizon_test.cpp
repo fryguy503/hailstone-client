@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <span>
 #include <vector>
 
 #include "render/horizon.h"
@@ -245,4 +247,196 @@ TEST_CASE("horizon: the same zone gives the same land; another seed other hills"
     const auto c = render::horizon_mesh(tris, land);
     REQUIRE(c.positions.size() == a.positions.size());
     CHECK(c.positions != a.positions);
+}
+
+namespace {
+
+// A neighbour east of a flat zone (0..2000 x 0..1500 at 50): its ground at 150 from x 2000 to 6000, with a house
+// (100 across, 400 high) at (3000..3100, 500..600) and a plateau (600 across, at 300) at (4000..4600, 0..600).
+struct Neighbour {
+    std::vector<HorizonTriangle> tris;
+    render::HorizonLand land;
+    render::HorizonField field;
+    std::shared_ptr<const render::HorizonSource> source;
+};
+
+float neighbour_ground(float x, float y) {
+    if (x >= 3000.0f && x < 3100.0f && y >= 500.0f && y < 600.0f) return 400.0f;
+    if (x >= 4000.0f && x < 4600.0f && y >= 0.0f && y < 600.0f) return 300.0f;
+    return 150.0f;
+}
+
+Neighbour make_neighbour() {
+    Neighbour n;
+    add_grid(n.tris, 0.0f, 0.0f, 2000.0f, 1500.0f, 100.0f, [](float, float) { return 50.0f; });
+    n.land = render::horizon_land(n.tris, 3.0f);
+    n.field = render::horizon_field(n.tris, n.land);
+    const glm::vec2 lo(2000.0f, -512.0f);
+    const float cell = render::kHorizonCell;
+    const int nx = 63, ny = 40;
+    std::vector<float> ground;
+    for (int y = 0; y < ny; ++y)
+        for (int x = 0; x < nx; ++x)
+            ground.push_back(neighbour_ground(lo.x + (static_cast<float>(x) + 0.5f) * cell,
+                                              lo.y + (static_cast<float>(y) + 0.5f) * cell));
+    n.source = std::make_shared<const render::HorizonSource>(render::horizon_source("east", lo, cell, nx, ny, ground));
+    return n;
+}
+
+} // namespace
+
+TEST_CASE("horizon: a neighbour's ground loses what stands narrow on it, and fades out past it") {
+    const Neighbour n = make_neighbour();
+    REQUIRE(n.source->valid());
+    const auto& s = *n.source;
+    // The house is narrower than the opening: the ground runs under it. The plateau is wider: it stays.
+    REQUIRE(render::source_ground(s, {3050.0f, 550.0f}));
+    CHECK(near(*render::source_ground(s, {3050.0f, 550.0f}), 150.0f, 0.5f));
+    CHECK(near(*render::source_ground(s, {4300.0f, 300.0f}), 300.0f, 0.5f));
+    CHECK(near(*render::source_ground(s, {2500.0f, 1000.0f}), 150.0f, 0.5f));
+    // No ground before its edge (the zone is there), nor in its padding.
+    CHECK_FALSE(render::source_ground(s, {1900.0f, 700.0f}));
+    CHECK_FALSE(render::source_ground(s, {6500.0f, 700.0f}));
+    // Its cover: whole on its ground, part way past it, none beyond the fade.
+    CHECK(render::sample_source(s, {2500.0f, 700.0f}).cover == doctest::Approx(1.0f));
+    const float half = render::sample_source(s, {6032.0f + 0.5f * render::kHorizonSourceFade, 700.0f}).cover;
+    CHECK(half > 0.2f);
+    CHECK(half < 0.8f);
+    CHECK(render::sample_source(s, {6100.0f + render::kHorizonSourceFade, 700.0f}).cover == 0.0f);
+    CHECK(render::sample_source(s, {20000.0f, 700.0f}).cover == 0.0f);
+    // Past it, the nearest ground's height.
+    CHECK(near(render::sample_source(s, {6400.0f, 700.0f}).height, 150.0f, 0.5f));
+}
+
+TEST_CASE("horizon: past the zone's edge the land eases onto a neighbour's ground, and back into its hills past it") {
+    const Neighbour n = make_neighbour();
+    REQUIRE(n.field.valid());
+    const render::HorizonSources sources{n.source};
+    // At the zone's edge, its height (tucked a little under it); across the band, the neighbour's.
+    CHECK(render::horizon_height(n.field, sources, {2140.0f, 700.0f}) < 90.0f);
+    CHECK(near(render::horizon_height(n.field, sources, {3500.0f, 1000.0f}), 150.0f, 1.0f));
+    CHECK(near(render::horizon_height(n.field, sources, {2700.0f, 1000.0f}), 150.0f, 1.0f));
+    // Under the house the ground; on the plateau the plateau.
+    CHECK(near(render::horizon_height(n.field, sources, {3050.0f, 550.0f}), 150.0f, 1.0f));
+    CHECK(near(render::horizon_height(n.field, sources, {4300.0f, 300.0f}), 300.0f, 1.0f));
+    // Between the edge and the band's end it climbs steadily.
+    float last = -1e9f;
+    for (float x = 2100.0f; x <= 2600.0f; x += 50.0f) {
+        const float h = render::horizon_height(n.field, sources, {x, 1000.0f});
+        CHECK(h >= last - 0.5f);
+        last = h;
+    }
+    // Beyond its fade the land is the zone's own hills, as without the neighbour; on the zone's other sides too.
+    for (glm::vec2 p : {glm::vec2(9000.0f, 700.0f), glm::vec2(-1500.0f, 700.0f), glm::vec2(1000.0f, -2500.0f)})
+        CHECK(render::horizon_height(n.field, sources, p) == render::horizon_height(n.field, {}, p));
+    // Over the zone, tucked under it, the neighbour or not.
+    CHECK(render::horizon_height(n.field, sources, {1000.0f, 700.0f}) == render::horizon_height(n.field, {}, {1000.0f, 700.0f}));
+}
+
+TEST_CASE("horizon: a neighbour's part of the land is the land's own squares, meeting the rest edge to edge") {
+    const Neighbour n = make_neighbour();
+    const render::HorizonSources sources{n.source};
+    const auto full = render::horizon_mesh(n.field, sources);
+    const auto part = render::horizon_mesh(n.field, sources, 0);
+    const auto without = render::horizon_mesh(n.field, {});
+    REQUIRE_FALSE(part.squares.empty());
+    CHECK(std::is_sorted(part.squares.begin(), part.squares.end()));
+    CHECK(part.water.empty());
+    CHECK(part.weight.size() == part.positions.size());
+    std::vector<std::uint32_t> mine = part.ground;
+    mine.insert(mine.end(), part.rock.begin(), part.rock.end());
+    REQUIRE_FALSE(mine.empty());
+    std::vector<bool> in_part(full.positions.size(), false);
+    for (std::size_t i = 0; i < mine.size(); i += 3) {
+        const glm::vec3 a = part.positions[mine[i]], b = part.positions[mine[i + 1]], c = part.positions[mine[i + 2]];
+        // Its triangles lie in its squares, wound as the land's, at the land's own heights.
+        CHECK(std::binary_search(part.squares.begin(), part.squares.end(), n.field.mesh_square(glm::vec2(a + b + c) / 3.0f)));
+        CHECK(glm::cross(b - a, c - a).z > 0.0f);
+        for (int k = 0; k < 3; ++k) {
+            CHECK(part.positions[mine[i + k]] == full.positions[mine[i + k]]);
+            in_part[mine[i + k]] = true;
+        }
+    }
+    // Where the rest of the land meets it, their shared corners are where the land is without the neighbour: the
+    // current zone's land, built before the neighbour was measured, meets it with no crack.
+    std::vector<std::uint32_t> rest = full.ground;
+    rest.insert(rest.end(), full.rock.begin(), full.rock.end());
+    std::size_t shared = 0;
+    for (std::size_t i = 0; i < rest.size(); i += 3) {
+        const glm::vec2 middle = glm::vec2(full.positions[rest[i]] + full.positions[rest[i + 1]] + full.positions[rest[i + 2]]) / 3.0f;
+        if (std::binary_search(part.squares.begin(), part.squares.end(), n.field.mesh_square(middle))) continue;
+        for (int k = 0; k < 3; ++k)
+            if (in_part[rest[i + k]]) {
+                ++shared;
+                CHECK(full.positions[rest[i + k]] == without.positions[rest[i + k]]);
+            }
+    }
+    CHECK(shared > 0);
+    // Its own ground shows across the band and on: little at the zone's edge, all of it well past.
+    auto weight_near = [&](glm::vec2 p) {
+        float best = 1e9f, w = -1.0f;
+        for (std::uint32_t v : mine)
+            if (const float d = glm::distance(glm::vec2(part.positions[v]), p); d < best) {
+                best = d;
+                w = part.weight[v];
+            }
+        return w;
+    };
+    CHECK(weight_near({2100.0f, 1000.0f}) < 0.3f);
+    CHECK(weight_near({3500.0f, 1000.0f}) == doctest::Approx(1.0f));
+    for (float w : part.weight) {
+        CHECK(w >= 0.0f);
+        CHECK(w <= 1.0f);
+    }
+    // Asked for a source it does not have: nothing.
+    CHECK(render::horizon_mesh(n.field, sources, 3).empty());
+}
+
+TEST_CASE("horizon: the sources are kept by name, once each") {
+    const Neighbour n = make_neighbour();
+    auto other = std::make_shared<render::HorizonSource>(*n.source);
+    other->name = "alpha";
+    render::HorizonSources sources{n.source, other, n.source, std::make_shared<const render::HorizonSource>()};
+    render::sort_sources(sources);
+    REQUIRE(sources.size() == 2);
+    CHECK(sources[0]->name == "alpha");
+    CHECK(sources[1]->name == "east");
+}
+
+TEST_CASE("horizon: a neighbour's ground is cached and read back; a damaged file is refused") {
+    const Neighbour n = make_neighbour();
+    render::HorizonCacheEntry e;
+    e.zone = "ecommons";
+    e.neighbour = "east";
+    e.key = 0x1234567890abcdefull;
+    e.offset = {2.5f, -2399.4f, -26.5f};
+    e.source = *n.source;
+    const auto bytes = render::write_horizon_cache(e);
+    const auto back = render::read_horizon_cache(bytes);
+    REQUIRE(back);
+    CHECK(back->zone == "ecommons");
+    CHECK(back->neighbour == "east");
+    CHECK(back->key == e.key);
+    CHECK(back->offset == e.offset);
+    const auto& s = back->source;
+    REQUIRE(s.valid());
+    CHECK(s.name == "east");
+    CHECK(s.lo == n.source->lo);
+    CHECK(s.nx == n.source->nx);
+    CHECK(s.ny == n.source->ny);
+    for (std::size_t i = 0; i < s.height.size(); ++i) {
+        CHECK(std::isnan(s.height[i]) == std::isnan(n.source->height[i]));
+        if (!std::isnan(s.height[i])) CHECK(s.height[i] == n.source->height[i]);
+    }
+    CHECK(s.fill == n.source->fill);
+    CHECK(s.dist == n.source->dist);
+    // Cut short, too long, another version, an absurd size.
+    CHECK_FALSE(render::read_horizon_cache(std::span(bytes).first(bytes.size() - 1)));
+    auto longer = bytes;
+    longer.push_back(std::byte{0});
+    CHECK_FALSE(render::read_horizon_cache(longer));
+    auto other = bytes;
+    other[4] = std::byte{9};
+    CHECK_FALSE(render::read_horizon_cache(other));
+    CHECK_FALSE(render::read_horizon_cache({}));
 }

@@ -549,6 +549,8 @@ void main() {
     int lod_samples = lod_fade_samples((pc.tex2.z & kFlagLodFade) != 0u, v_lod_distance, pc.extra3, gl_FragCoord.xy);
     if (lod_samples == 0) discard;
     gl_SampleMask[0] = lod_samples;
+    // A neighbour's part of the land: this draw's ground or the other's (coverage.glsl land_blend_discard).
+    if (land_blend_discard(pc.tex2.z, v_color2.a, v_world)) discard;
     uint mode = pc.tex2.y;
     uint flags = pc.tex2.z;
     bool unlit = (flags & kUnlit) != 0u;
