@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Texture packs with generated trees: the pines are less dense, with gaps in their crowns, and their needles no longer show bright twig streaks. Trees no longer visibly change their leaves as you move towards or away from them, and forests such as Greater Faydark draw faster (about 15 % in a dense view). Rebuild a pack's trees in the Texture Studio to get them
 - Modern lighting: in rain and snow, trees from a texture pack with generated trees no longer turn pale, sky-coloured or white. Leaves and other cut-out surfaces no longer get puddles or snow, and get a lighter wet look
 - Click to move without the isometric camera: Options > Display > Isometric Camera > **Click to Move in Every Camera** (and the gamepad pack's Camera page) lets you click the ground to walk there, and click a door, an item, a merchant or a corpse out of reach to walk to it and use it, in first person and the camera behind you too. It is off unless you turn it on; the isometric camera always moves this way
 - The classic zones' ground is drawn smooth: hills and rock faces are shaded in smooth gradients instead of flat facets, and their triangles are curved and cut finer, while walls, cliff edges and buildings stay sharp. Where you can walk, what you collide with and where mobs stand are unchanged (the drawn ground stays within a foot of the original). `display.smooth_ground = 0` in `hailstone.ini` turns it off

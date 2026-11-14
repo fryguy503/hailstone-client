@@ -299,7 +299,7 @@ std::optional<TreeShape> measure_tree(const assets::Mesh& mesh, const TreeTextur
 namespace {
 
 // The levels of detail a tree is drawn at (assets::MeshPart::lod_near, lod_far): the near one, a middle one with
-// half the leaf cards (each grown to keep the cover), fewer sides and no thin branches, and a far one of three crossed
+// its leaf cards straight (Builder::strip), fewer sides and no thin branches, and a far one of three crossed
 // cards with a picture of the near one (make_far).
 constexpr int kLevels = 3;
 constexpr float kFarthest = 1.0e6f; // the far level's end: everywhere past the middle one
@@ -312,7 +312,6 @@ struct Builder {
     // The shade baked into the vertices (assets::Vertex::color, which multiplies a placement's light): set by the
     // generator per part of the tree.
     float shade = 1.0f;
-    std::uint32_t strips = 0; // strips made, for the middle level's choice
 
     std::uint32_t vert(const glm::vec3& p, const glm::vec3& n, const glm::vec2& uv) {
         assets::Vertex v;
@@ -373,17 +372,13 @@ struct Builder {
     }
 
     // A two-sided card strip: `centre` points, `side` the half-width vectors there; u across, v from v0 to v1. The
-    // middle level keeps two strips in three (by a hash of its number, so not in a pattern), each as one quad grown
-    // about its middle to cover for the ones dropped.
+    // middle level keeps every strip, each as one straight quad from its first point to its last: the same cards, so a
+    // tree does not change its leaves where its levels meet (fewer cards, grown to cover, showed as a flicker over a
+    // forest while flying or walking through it).
     void strip(const std::vector<glm::vec3>& centre, const std::vector<glm::vec3>& side, const std::vector<glm::vec3>& normal,
                float v0, float v1) {
         emit_strip(0, centre, side, normal, v0, v1);
-        if (((strips++ * 2654435761u) >> 16) % 3u == 0u) return;
-        glm::vec3 mid(0.0f);
-        for (const auto& c : centre) mid += c;
-        mid /= float(centre.size());
-        emit_strip(1, {mid + (centre.front() - mid) * 1.1f, mid + (centre.back() - mid) * 1.1f},
-                   {side.front() * 1.25f, side.back() * 1.25f}, {normal.front(), normal.back()}, v0, v1);
+        emit_strip(1, {centre.front(), centre.back()}, {side.front(), side.back()}, {normal.front(), normal.back()}, v0, v1);
     }
     void emit_strip(int level, const std::vector<glm::vec3>& centre, const std::vector<glm::vec3>& side,
                     const std::vector<glm::vec3>& normal, float v0, float v1) {
@@ -651,12 +646,14 @@ assets::Image draw_needles(std::uint32_t size, const glm::vec3& colour, const st
                     const float angle = strands ? rng.range(0.2f, 0.45f) : rng.range(0.55f, 1.05f);
                     const glm::vec2 nd = glm::normalize(perp * side * std::sin(angle) + dir * std::cos(angle));
                     const float nl = s * tw.reach * (layer ? 0.33f : 0.36f) * (strands ? 1.6f : 1.0f) * taper * rng.range(0.75f, 1.1f);
-                    const glm::vec3 c = pick(palette, colour, rng, 0.1f) * (layer ? (side > 0 ? 1.06f : 0.97f) : 0.72f);
+                    // The layers close in shade: stark stripes shimmer as the tree sways or the camera moves.
+                    const glm::vec3 c = pick(palette, colour, rng, 0.08f) * (layer ? (side > 0 ? 1.04f : 0.98f) : 0.84f);
                     cv.line(p, p + nd * nl, std::max(2.0f, s * (layer ? 0.007f : 0.011f) * (strands ? 1.8f : 1.0f)), c);
                 }
             }
         }
-    for (const auto& tw : twigs) cv.line(tw.a, tw.b, twig_w, glm::vec3(0.32f, 0.24f, 0.17f));
+    // The twigs a darker shade of the needles: a brown line across a lit spray reads as a streak from afar.
+    for (const auto& tw : twigs) cv.line(tw.a, tw.b, twig_w, colour * 0.55f + glm::vec3(0.04f, 0.02f, 0.0f));
     cv.fill_gaps(std::max(2, int(s * 0.014f)), colour * 0.6f);
     return cv.image(colour);
 }
@@ -1134,11 +1131,13 @@ GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) 
             const int i = std::min(int(f), kBands - 2);
             return glm::mix(reach[std::size_t(i)], reach[std::size_t(i + 1)], f - float(i));
         };
-        const int whorls = std::clamp(int(fh / 2.0f), 12, 26);
+        // Whorls far enough apart, and few enough branches in each, that the crown shows gaps and stays cheap in a
+        // forest of them (Greater Faydark's).
+        const int whorls = std::clamp(int(fh / 3.0f), 9, 18);
         for (int k = 0; k < whorls; ++k) {
             const float t = (float(k) + 0.5f + rng.range(-0.3f, 0.3f)) / float(whorls);
             const float z = fmin.z + fh * (0.03f + 0.9f * t);
-            const int count = 5 + int(rng.next() % 4);
+            const int count = 4 + int(rng.next() % 3);
             for (int j = 0; j < count; ++j) {
                 const float az = float(k) * 2.4f + 2.0f * kPi * float(j) / float(count) + rng.range(-0.4f, 0.4f);
                 // Branches start above where their needles reach to (they droop into the measured shape).
@@ -1157,8 +1156,8 @@ GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) 
                 b.tube({path[0], glm::mix(path[0], path[1], 0.5f)}, {r0, r0 * 0.7f}, 3, 1.0f, bark_units);
                 // Two crossed needle sprays along the branch.
                 const glm::vec3 flat = glm::normalize(glm::cross(up, dir));
-                const float twist = rng.range(0.85f, 1.15f);
-                for (float tilt : {rng.range(-0.15f, 0.15f), twist, -twist}) {
+                const float twist = rng.range(0.6f, 0.8f);
+                for (float tilt : {twist, -twist}) {
                     std::vector<glm::vec3> c, side, nrm;
                     for (int s = 0; s <= 3; ++s) {
                         const float u = 0.06f + 0.94f * float(s) / 3.0f;
@@ -1402,9 +1401,11 @@ GeneratedTree generate_tree(const TreeShape& shape, const TreeOptions& options) 
         b.vert({lo.x, lo.y, crown}, up, {0.5f, 0.5f});
         b.tri(2, 2, q, q + 2, q + 1);
         b.tri(2, 2, q, q + 3, q + 2);
-        // A tree's levels change at distances by its height: a tall pine stays detailed further out.
+        // A tree's levels change at distances by its height: a tall pine stays detailed further out. A tree twice its
+        // height away fills about a third of the view's height, eight times, a thirteenth: the far cards' picture
+        // differs most from the tree, so they come in only where it is small.
         const float tall = hi.z - lo.z;
-        ends[0] = std::max(200.0f, 3.0f * tall) * options.lod_scale;
+        ends[0] = std::max(200.0f, 2.0f * tall) * options.lod_scale;
         ends[1] = std::max(600.0f, 8.0f * tall) * options.lod_scale;
     }
     b.finish(ends);
