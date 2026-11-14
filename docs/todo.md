@@ -328,12 +328,8 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 
 ## Code health
 
-- [x] Optional read-only shared archive snapshots with private-loader fallback and per-process mapped-backing counters (`assets.shared_memory`, docs/layout.md "Shared archive memory").
-- [x] Shared archive memory: six live Windows clients in matched mixed zones, private-commit/resident-page measurements and a graph with native archive-page deduplication (docs/research/shared-asset-memory.md).
-- [x] Shared character animation bytes and compact WLD metadata, including built-clip/alias ownership and assignment lifetime; Windows stock-asset parity and Linux sanitizer validation (docs/research/shared-asset-memory.md).
-- [x] Six same-zone live Windows clients, same-binary OFF/ON native memory measurements, deduplicated resident asset pages, allocation profiles and separate CPU/GPU baseline graphs (docs/research/shared-asset-memory.md).
-- [ ] Shared asset memory: native macOS validation, Linux live gameplay, sustained combat/zoning and controlled loading-time measurements; investigate further immutable geometry/collision sharing (docs/unknowns.md).
-- [x] CPU asset cache: 24 native helper readers retain and verify one shared payload; conditional 24-client projections remain distinct from live gameplay evidence (docs/research/shared-asset-memory.md).
+- [x] Shared asset cache (`assets.shared_memory`, docs/layout.md "Shared archive memory"): server-overlay archives and inflated character WLDs mapped from a content-addressed cache shared by clients, with animation keys read from the mapping.
+- [ ] Shared asset cache: live Windows and macOS sessions, sustained play with zoning and more than two clients; whether static collision or geometry are worth sharing too (docs/unknowns.md "Shared archive memory").
 - [x] GPU asset sharing groundwork: vendor-neutral headless capability probe and same-device 24-alias GPU readback on AMD and NVIDIA, with Linux sanitizer/unit coverage (docs/research/shared-gpu-memory.md).
 - [x] GPU broker primitive: real static zone textures/geometry rendered in two/six views on one device, OFF/ON pixel equality, AMD/NVIDIA core and synchronization validation (docs/research/shared-gpu-memory.md).
 - [x] GPU broker prototype: matched Windows native-memory observations for two/six views on AMD/NVIDIA, with separate accounting/residency sources, baseline/headroom checks and uncertainty flags (docs/research/shared-gpu-memory.md).

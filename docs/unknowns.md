@@ -10,16 +10,11 @@ What the client does not implement yet, or implements with an approximation it c
 
 ## Shared archive memory
 
-- `assets.shared_memory=auto` shares immutable archive snapshots and classic character animation bytes; model
-  geometry, collision and other inflated members remain per client. GPU allocations are private by default, with
-  the separate experimental texture broker described below. Six-client Windows live zone
-  entry and idle-memory sharing were measured in same-zone and earlier mixed-zone cohorts, using native OS counters
-  and resident asset-page deduplication (docs/research/shared-asset-memory.md). The expanded same-binary pair saved
-  34.86% of the measured private-plus-asset-cache resident subset; this excludes other shared mappings. Sustained
-  combat/zoning, native Linux gameplay and native macOS mapping/locking behavior remain open. Rehashing each resolved
-  source adds loading work, and a cold publisher busy for over 250 ms makes another load fall back privately.
-  Controlled loading-time/fallback-rate measurements and Linux/macOS live memory profiles remain necessary before
-  further expansion. The expanded ON idle capture still grew; it does not establish long-term retention or leaks.
+- `assets.shared_memory=auto` (docs/layout.md "Shared archive memory") is measured on Linux only, one and two clients
+  in one zone (docs/research/shared-asset-memory.md). Windows and macOS mapping, locking and eviction are covered by
+  unit tests, not live sessions; sustained play with zoning, and more clients, are not measured. A cache file is
+  checked once per client and then trusted: a file damaged on disk while a client runs is not noticed by that client
+  (the parsers still bound what they read).
 
 ## Shared GPU assets
 
