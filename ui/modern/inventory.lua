@@ -394,8 +394,26 @@ local COINS = {
   { "IW_Money3", "cp", C.copper },
 }
 
+local function hasVitality()
+  local _, normal = eq.Gauge(147)
+  local _, aa = eq.Gauge(148)
+  return normal ~= "" or ((tonumber((eq.Label(2))) or 0) >= 51 and aa ~= "")
+end
+
+local function vitality(x, y, w, s, gauge, name, color)
+  local fill, amount = eq.Gauge(gauge)
+  if not amount or amount == "" then return end
+  T.Text(x, y, name, C.muted, T.font.small)
+  T.Text(x + w, y, string.format("%.1f%%", (fill or 0) * 100), C.text, T.font.small, "right")
+  -- Amounts arrive as strings: a 64-bit vitality pool must not pass through Lua's floating-point formatter.
+  T.Text(x, y + 15 * s, T.Fit(amount, w, T.font.tiny), C.faint, T.font.tiny)
+  T.Bar("inv.vitality" .. gauge, x, y + 29 * s, x + w, y + 33 * s, s, fill, color, { noTrail = true })
+  T.Hit("##vitality" .. gauge, x, y, x + w, y + 34 * s)
+  if ui.IsItemHovered() then ui.SetTooltip(name .. ": " .. amount) end
+end
+
 local OPTS = {
-  size = function() return W, H end,
+  size = function() return W, H + (hasVitality() and 40 or 0) end,
   place = function(sw, sh, w, h, s, x, y) return sw - w - 60 * s, sh / 2 - h / 2 end,
   keepTitle = true,
 }
@@ -490,6 +508,14 @@ local function body(x, y, w, h, s)
   end
 
   local btnY = cy + 34 * s
+  if hasVitality() then
+    local half = (w - 16 * s) / 2
+    vitality(x, btnY, half, s, 147, "XP vitality", C.xp)
+    if (tonumber((eq.Label(2))) or 0) >= 51 then
+      vitality(x + half + 16 * s, btnY, half, s, 148, "AA vitality", C.aa)
+    end
+    btnY = btnY + 40 * s
+  end
   local per = BUTTONS_PER_ROW
   local bw = (w - (per - 1) * 6 * s) / per
   for k, b in ipairs(BUTTONS) do

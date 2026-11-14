@@ -449,7 +449,9 @@ void GameConnection::say_to_channel(std::uint32_t channel, const std::string& te
         if (!raid_.active) return system(5108);
         break;
     case 21:
-        return system(4573); // You are not a member of a fellowship.
+        // FellowshipSay @0x524330: without a fellowship, eqstr 4573 in colour 342.
+        if (!fellowship_.active()) return system(4573, {}, 342); // You are not a member of a fellowship.
+        break;
     default:
         break;
     }

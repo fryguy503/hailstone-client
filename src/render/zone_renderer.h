@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -14,6 +15,8 @@
 #include <glm/glm.hpp>
 
 #include "render/gpu.h"
+#include "render/horizon.h"
+#include "render/lod_bands.h"
 #include "render/scene_lighting.h"
 #include "render/vk_context.h"
 
@@ -121,6 +124,12 @@ public:
     static PreparedPtr prepare(const assets::Zone& zone, const ZoneRenderOptions& options, std::uint32_t max_images);
     // The prepared data's size in bytes (vertices, indices, textures as uploaded), for the logs.
     static std::size_t prepared_bytes(const Prepared& prepared);
+    // What a prepare built: the vertices and indices in the buffers, the instances (the identity not counted), the
+    // triangles as drawn (an instanced model's once for each placement) and the draws' chunks.
+    struct PreparedCounts {
+        std::size_t vertices = 0, indices = 0, instances = 0, triangles = 0, chunks = 0;
+    };
+    static PreparedCounts prepared_counts(const Prepared& prepared);
 
     ZoneRenderer(VkContext& vk, const assets::Zone& zone, const std::filesystem::path& shader_dir,
                  const ZoneRenderOptions& options = {});
@@ -132,6 +141,10 @@ public:
     // The chunks in `view_proj`'s frustum.
     void draw(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
               const game::ViewDistance& view, double time_seconds, ZonePhase phase = ZonePhase::All);
+    // The opaque and alpha-tested geometry into the scene's depth buffer, before draw's opaque phase
+    // (SceneOptions::depth_prepass): the colour pass then tests equal and writes no depth.
+    void draw_depth(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
+                    const game::ViewDistance& view, double time_seconds);
     // The opaque and alpha-tested geometry into shadow cascade `cascade`, between VkContext::begin_shadow_cascade and
     // end_shadow_cascade; the cascades come from the last set_lighting. With kCoverLayer, the cover map
     // (render/cover_map.h): the opaque geometry only; with kWaterLayer, the water map: the water surfaces only. Only
@@ -158,6 +171,12 @@ public:
     // haze as it is infinitely far away, its glow towards the sun too; with the camera under water
     // (render::set_underwater), the open water, its colour and light shafts. Draw it first in the scene.
     void draw_backdrop(const FrameInfo& frame, const glm::mat4& view_proj);
+    // The distant hills round the zone (render/horizon.h, shaders/horizon.frag; the modern lighting outdoors), from
+    // the last set_lighting, at `strength` (render::horizon_strength; 0 draws nothing). Draw it after the sky or the
+    // backdrop and before the zone: it fills only where nothing nearer is drawn.
+    void draw_horizon(const FrameInfo& frame, const glm::mat4& view_proj, float strength);
+    // The land round the zone, measured from its terrain while preparing it (not for a neighbour zone).
+    const HorizonLand& horizon() const { return horizon_; }
 
     const ZoneRenderStats& stats() const { return stats_; }
     // The counts since the last call; they start again from zero.
@@ -167,6 +186,9 @@ public:
     void set_scene_light(const game::SceneLight& light);
     // The modern mode's switch, daylight and dynamic lights (render/scene_lighting.h); classic: params.x 0.
     void set_lighting(const SceneLighting& lighting);
+    // How far the replacement models' levels of detail reach (render/lod_bands.h), times their own distances: the
+    // tree detail setting (display.tree_detail). 0.25 to 4.
+    void set_lod_scale(float scale) { lod_scale_ = std::clamp(scale, 0.25f, 4.0f); }
     // Leaves the placed objects' flame meshes out of draw (the modern lighting draws its own: render/fire_renderer.h).
     void set_hide_flames(bool hide) { hide_flames_ = hide; }
 
@@ -200,11 +222,29 @@ private:
         std::uint32_t first_chunk = 0; // its chunks in chunks_
         std::uint32_t chunk_count = 0;
         glm::vec3 box_min{0.0f}, box_max{0.0f}; // round all of them: a draw wholly out of view tests no chunk
+        // A replacement model's level of detail (render/lod_bands.h): its chunks show only within its band
+        // (lod_shows).
+        LodBand lod;
+        // An instanced replacement model's number + 1 (0: the zone's own geometry): its chunks are its placements,
+        // each all of the draw's indices with an instance of its own (Chunk::instance).
+        std::uint32_t instanced = 0;
     };
 
     // Whether every shadow pass but the water map draws `d` without its texture: solid (opaque, not alpha-tested), not
     // a flame. These go into solid_.
-    static bool casts_untextured(const Draw& d) { return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f); }
+    // (A level of detail is drawn on its own, so that its shadow changes level with it.)
+    static bool casts_untextured(const Draw& d) {
+        return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f) && !d.lod.banded() && d.instanced == 0;
+    }
+    float lod_scale_ = 1.0f; // set_lod_scale
+    // The camera's position the levels of detail are chosen by: the last begin_draw's (the shadow passes, drawn
+    // before it in a frame, take the frame before's).
+    glm::vec3 lod_eye_{0.0f};
+    // Whether the depth pre-pass draws `d`, and the colour pass then tests it equal: the opaque pass's draws but the
+    // water, which the modern lighting draws blended after VkContext::begin_translucent.
+    static bool in_depth_prepass(const Draw& d) { return d.pass == Pass::Opaque && d.liquid != Liquid::Water; }
+    // The modern lighting (set_lighting), not the classic.
+    bool modern_lighting() const;
 
     void upload(Prepared& prepared);
     void create_descriptors();
@@ -212,7 +252,14 @@ private:
     void create_shadow_pipeline(const std::filesystem::path& shader_dir);
     void create_shadow_pipeline(const std::filesystem::path& shader_dir, bool point);
     void create_underwater_pipeline(const std::filesystem::path& shader_dir);
+    VkPipeline create_background_pipeline(const std::filesystem::path& shader_dir, const char* fragment, bool blended);
     void upload_scene(std::uint32_t frame_slot);
+    // What draw and draw_depth share: the geometry and the sets bound, the frame's scene uploaded. Returns the time
+    // in milliseconds.
+    std::uint64_t begin_draw(const FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
+                             const game::ViewDistance& view, double time_seconds);
+    // Draw `d`'s own state: its culling and its push constants, with zone.frag's `flags`.
+    void bind_draw(VkCommandBuffer cmd, const Draw& d, std::uint32_t flags, std::uint64_t time_ms);
 
     VkContext& vk_;
     std::uint64_t id_ = 0;
@@ -242,20 +289,49 @@ private:
         std::uint32_t index_count = 0;
         glm::vec3 box_min{0.0f}, box_max{0.0f};
         bool sways = false; // some of its vertices sway in the wind
+        std::uint32_t instance = 0; // in the instance buffer (0: the identity, the zone's own geometry)
     };
+    // Whether chunk `c` continues the run drawn from `first` (`count` indices) as instances `instance` on (`instances`
+    // of them): the zone's own geometry end to end in the index buffer, or an instanced model's next placement. Grows
+    // the run.
+    static bool extends_run(const Chunk& c, std::uint32_t first, std::uint32_t& count, std::uint32_t instance,
+                            std::uint32_t& instances) {
+        if (c.instance == 0 && instance == 0 && c.first_index == first + count) {
+            count += c.index_count;
+            return true;
+        }
+        if (c.instance != 0 && c.instance == instance + instances && c.first_index == first && c.index_count == count) {
+            ++instances;
+            return true;
+        }
+        return false;
+    }
+    // Whether chunk `c` of `d` shows by `pick` at its distance from lod_eye_. A banded draw is an instanced model's,
+    // its chunks its placements: the distance to where the placement stands, the one zone.vert fades it by
+    // (v_lod_distance), so every level of a tree changes together.
+    bool lod_shows(const Draw& d, const Chunk& c, LodPick pick = {}) const;
+    // Where each instance stands (GpuInstance's translation), for lod_shows.
+    std::vector<glm::vec3> instance_origins_;
+    // Binds the vertex, instance and index buffers.
+    void bind_geometry(VkCommandBuffer cmd) const;
     std::vector<Chunk> chunks_;
     // The casts_untextured draws merged for the shadow passes, one chunk a cell (render/shadow_chunks.h): its chunks
     // follow the draws' in chunks_, its indices the draws' in the index buffer. Only its chunk fields are set.
     Draw solid_;
     // Records draw `d`'s chunks that `keep` (a predicate on a Chunk) passes, a run of neighbouring chunks in one
     // vkCmdDrawIndexed; `first` runs once before the first, so a draw with nothing to show sets up nothing.
+    // `counted`: where its triangles and calls go in drawn_. The depth pre-pass counts none: the colour pass draws
+    // the same triangles.
+    enum class Counted : std::uint8_t { Scene, Shadow, None };
+    // `lod`: which level of a banded draw (lod_shows).
     template <class Keep, class First>
-    void draw_chunks(VkCommandBuffer cmd, const Draw& d, bool shadow, Keep&& keep, First&& first);
+    void draw_chunks(VkCommandBuffer cmd, const Draw& d, Counted counted, Keep&& keep, First&& first, LodPick lod = {});
     ZoneDrawn drawn_;
     // The zone's lights for the modern lighting's per-pixel pass (render/light_grid.h): the lights with the grid's
     // header, the cells, the cells' light numbers (zone.frag's set 1, bindings 1 to 3).
     std::array<Buffer, 3> light_grid_buffers_{};
     Buffer vertex_buffer_;
+    Buffer instance_buffer_; // GpuInstance: the identity, then the instanced models' placements
     Buffer index_buffer_;
     std::vector<Texture> textures_;
     VkSampler sampler_ = VK_NULL_HANDLE;
@@ -264,10 +340,18 @@ private:
     VkDescriptorSet set_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipelines_[3]{};
+    // SceneOptions::depth_prepass: the depth-only pipeline, and the opaque colour pipeline that tests equal and writes
+    // no depth (the pre-pass wrote it).
+    bool depth_prepass_ = false;
+    bool depth_drawn_ = false; // draw_depth wrote this frame's depth: the next opaque draw may test equal
+    VkPipeline depth_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline opaque_equal_pipeline_ = VK_NULL_HANDLE;
     bool behind_ = false; // ZoneRenderOptions::behind
     VkPipeline shadow_pipeline_ = VK_NULL_HANDLE;
     VkPipeline point_shadow_pipeline_ = VK_NULL_HANDLE;
     VkPipeline underwater_pipeline_ = VK_NULL_HANDLE;
+    VkPipeline horizon_pipeline_ = VK_NULL_HANDLE; // not for a neighbour zone (behind_)
+    HorizonLand horizon_;
 };
 
 } // namespace hailstone::render

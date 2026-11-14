@@ -3,6 +3,7 @@
 // it through the stock buttons, without the stock list ever being drawn.
 #include <doctest/doctest.h>
 
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,43 @@ TEST_CASE("Alt. currency page: eq.ListClick selects by eq.AltCurrencies' order, 
         CHECK(run(L, "return eq.ListClick(" + inv + ", " + list + ", 1, 'left')") == "true");
         CHECK(run(L, "return (eq.WindowText(" + inv + ", 'AltCurr_MaxStackLabel'))") == "Max stack: 500");
         CHECK(run(L, "return (eq.ChildState(" + inv + ", 'AltCurr_CreateItemButton'))") == "false"); // none of it
+        lua_close(L);
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+// A currency's name is dbstr type 0x12 of its id (CInventoryWnd's Alt. Currency list), in eq.AltCurrencies and in
+// the stock list's rows; a currency the game folder has no name for shows its number. Type 0x13, which the real
+// estate cost text read before, is the AA categories.
+TEST_CASE("Alt. currency page: names come from dbstr type 18, the number when there is none") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    {
+        hailstone::test::ScratchDir scratch("alt_currency_names");
+        {
+            std::ofstream out(scratch.path() / "dbstr_us.txt");
+            out << "31^17^Doubloon^0^\n31^18^Doubloons^0^\n33^19^Quest Only^0^\n";
+        }
+        GameDir game(scratch.path());
+        net::GameConnection conn(game, {});
+        app::EqHost host;
+        host.in_game = host.ui_ready = true;
+        host.conn = &conn;
+        app::EqApi api(host);
+        lua_State* L = luaL_newstate();
+        luaL_openlibs(L);
+        lua_newtable(L);
+        api.register_functions(L);
+        lua_setglobal(L, "eq");
+
+        std::vector<net::AltCurrencyEntry> entries{{31, 22000, 1500, 1000, true}, {33, 22002, 1502, 20, true}};
+        conn.receive_zone_packet_for_test(net::encode_alt_currency_populate(entries));
+        conn.receive_zone_packet_for_test(net::encode_alt_currency_update({31, 7}));
+        conn.receive_zone_packet_for_test(net::encode_alt_currency_update({33, 3}));
+        CHECK(run(L, "return eq.AltCurrencies()[1].name") == "Doubloons");
+        CHECK(run(L, "return eq.AltCurrencies()[2].name") == "Currency 33");
+        const std::string at = "'InventoryWindow', 'AltCurr_PointList'";
+        CHECK(run(L, "return (eq.ListRow(" + at + ", 0))[2]") == "Doubloons");
+        CHECK(run(L, "return (eq.ListRow(" + at + ", 1))[2]") == "Currency 33");
         lua_close(L);
     }
     ImGui::DestroyContext(ctx);

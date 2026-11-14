@@ -1,36 +1,30 @@
-// The fellowship window (CFellowshipWnd), the alert history (CAlertHistoryWnd) and the trophy tribute
-// (CTributeTrophyWnd). None has data on an EQEmu server: EQEmu sends no fellowship (the player's SFellowship stays
-// empty), no campsite kits, no alerts and no trophy tribute, so these show
-// what the original shows without them, and send what the original sends.
+// Fellowship, alert history and trophy tribute window models.
 
+#include <algorithm>
+#include <ctime>
+#include <format>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "app/lua_eq_windows.h"
+#include "core/game_dir.h"
+#include "game/eq_names.h"
+#include "game/fellowship_categories.h"
+#include "game/zone_names.h"
 #include "net/game_connection.h"
+#include "platform/local_time.h"
 
 namespace hailstone::app {
 
 namespace {
 
-// Opcodes not in EQEmu's RoF2 table: the fellowship requests (CFellowshipWnd::WndNotification @0x669440, 0x434 bytes
-// {u32 request, u32 argument, ...}) and the campsite kit request (CFellowshipWnd_RequestCampsiteKits @0x6688e0, 8 bytes
-// {u32 !ShowAll, i32 the filter's bit or -1}).
-constexpr std::uint16_t kOpFellowshipRequest = 0x7121, kOpCampsiteKitRequest = 0x0c12;
-constexpr std::uint32_t kRequestCreate = 1;
-
-// CFellowshipWnd @0x6689f0:
-// CFellowshipWnd_UpdateDisplay @0x667ed0 without a fellowship enables Create and disables Leave, Create Campsite and
-// Destroy Campsite, empties the campsite viewer and the motto (disabled); Make Leader, Remove, Invite, End, Toggle
-// Experience Sharing and Update MOTD are enabled only for the leader, as OnProcessFrame @0x668630 keeps Create (no
-// fellowship), Make Leader and Invite (leading). The campsite filter holds "None - show all" (and the kit categories
-// of a table loaded elsewhere, not built). WndNotification @0x669440: Create sends request 1; Refresh List asks for
-// the campsite kits; the rest act on a fellowship.
+// CFellowshipWnd::UpdateDisplay @0x667ed0 and WndNotification @0x669440: roster, leader actions, personal XP
+// sharing and campsite kits. Selection follows character ids, including when an expanded roster is sorted.
 class FellowshipWindow : public StockWindow {
 public:
     FellowshipWindow() : StockWindow("FellowshipWnd", false) {
-        filter_.choices = {"None - show all"}, filter_.selected = 0;
-        // the XML's columns
+        filter_.choices = {"All categories"}, filter_.selected = 0;
         members_.columns = 7;
         members_.labels = {"Name", "Lvl", "Class", "L", "Zone", "Last On", "XP Sharing"};
         members_.widths = {100, 45, 60, 25, 100, 80, 80};
@@ -39,51 +33,256 @@ public:
         kits_.widths = {10, 500};
     }
 
-    void child(EqHost&, std::string_view id, Child& out) override {
-        if (id == "CreateFellowshipButton") out.enabled = true;
-        else if (id == "LeaveFellowshipButton" || id == "CreateCampsite" || id == "DestroyCampsite" ||
-                 id == "MakeLeaderButton" || id == "RemoveMemberButton" || id == "InviteMemberButton" ||
-                 id == "EndFellowshipButton" || id == "ToggleExpSharingButton" || id == "UpdateMOTDButton" ||
-                 id == "MOTDInput")
-            out.enabled = false;
-        if (id == "MOTDInput" || id == "CampsiteViewer" || id == "CampsiteDescription") out.text = "";
-        else if (id == "ShowAllButton") out.checked = show_all_;
+    void set_shown(EqHost& host, bool show) override {
+        if (show && !open_ && host.conn) refresh(host);
+        open_ = show;
     }
-    const ListData* list(EqHost&, std::string_view id) override {
-        if (id == "MemberList") return &members_;
-        if (id == "CampsiteKitList") return &kits_;
+
+    std::string title(EqHost& host) override {
+        if (!host.conn || !host.conn->fellowship().active()) return "Fellowship";
+        return "Fellowship (" + std::to_string(host.conn->fellowship().members.size()) + " members)";
+    }
+
+    void child(EqHost& host, std::string_view id, Child& out) override {
+        sync(host);
+        if (!host.conn) return;
+        const auto& c = *host.conn;
+        const auto& f = c.fellowship();
+        const auto* m = selected_member(host);
+        const auto* kit = selected_kit(host);
+        const bool ready = c.state() == net::ConnectionState::InZone;
+        const bool active = f.active();
+        const bool leader = f.is_leader(c.character_name());
+        const auto* own = f.member(c.character_name());
+        const bool self = m && own && m->character_id == own->character_id;
+        if (id == "CreateFellowshipButton") out.enabled = ready && !active;
+        else if (id == "LeaveFellowshipButton") out.enabled = ready && active;
+        else if (id == "EndFellowshipButton") out.enabled = ready && leader;
+        else if (id == "MakeLeaderButton" || id == "RemoveMemberButton") out.enabled = ready && leader && m && !self;
+        else if (id == "InviteMemberButton") out.enabled = ready && leader && f.members.size() < net::kMaxFellowshipMembers;
+        else if (id == "MOTDInput" || id == "UpdateMOTDButton") out.enabled = ready && leader;
+        else if (id == "ToggleExpSharingButton") out.enabled = ready && m && (self || leader) && (!m->capped || m->sharing);
+        else if (id == "CreateCampsite") out.enabled = ready && active && !f.camp.active && kit && kit->available;
+        else if (id == "DestroyCampsite") out.enabled = ready && active && f.camp.active;
+        else if (id == "RefreshListButton") out.enabled = ready;
+        if (id == "MOTDInput") out.text = motd_;
+        else if (id == "FellowshipVitality")
+            out.text = std::format("XP vitality: {} / {}    AA vitality: {} / {}", f.vitality.normal,
+                                   f.vitality.normal_cap, f.vitality.aa, f.vitality.aa_cap);
+        else if (id == "ShowAllButton") out.checked = show_all_;
+        else if (id == "CurrentCampLoc") out.text = f.camp.active ? game::zone_long_name(f.camp.zone_id) : "";
+        else if (id == "CampsiteViewer")
+            out.text = f.camp.active ? std::format("Location: {:.1f}, {:.1f}, {:.1f}", f.camp.y, f.camp.x, f.camp.z) : "";
+        else if (id == "CampsiteTime") {
+            out.text = "";
+            if (f.camp.active) {
+                if (!f.camp.expires) out.text = "Remaining time unavailable";
+                else {
+                    const auto now = host.unix_time ? host.unix_time() : static_cast<std::int64_t>(std::time(nullptr));
+                    const auto expiry = static_cast<std::int64_t>(f.camp.expires);
+                    // A negative wall clock is treated as the epoch. This display
+                    // never expires the campsite or changes its server-owned state.
+                    const auto left = std::max<std::int64_t>(0, expiry - std::max<std::int64_t>(0, now));
+                    out.text = left == 0 ? "Awaiting campsite update" :
+                        std::format("Time remaining: {}:{:02d}:{:02d}", left / 3600, (left / 60) % 60, left % 60);
+                }
+            }
+        }
+        else if (id == "CampsiteDescription") {
+            out.text = "";
+            if (kit) {
+                // CFellowshipWnd::WndNotification @0x66950a resolves the catalog
+                // reference through DBString type 0, then passes its STML to the
+                // description viewer. The UI's existing parser handles markup.
+                const auto description = c.strings().db_string(kit->description_id, 0);
+                out.text = stml_escape(kit->name) + "<br><br>" +
+                    (description.empty() ? "No description supplied." : description) + "<br><br>" +
+                    (kit->available ? "Available to create." : "Creation requirements are not met.");
+            }
+        }
+    }
+
+    const ListData* list(EqHost& host, std::string_view id) override {
+        sync(host);
+        if (!host.conn) return nullptr;
+        const auto& f = host.conn->fellowship();
+        if (id == "MemberList") {
+            members_.rows.clear();
+            member_ids_.clear();
+            members_.selected = -1;
+            for (const auto& m : f.members) {
+                const bool online = m.zone_id != 0 && !m.offline;
+                ListRow row;
+                row.texts = {m.name, std::to_string(m.level), game::class_short_name(m.class_),
+                             !f.members.empty() && m.character_id == f.members.front().character_id ? "L" : "",
+                             online ? game::zone_long_name(m.zone_id) : "Offline", online ? "Online" : last_on(m.last_seen),
+                             m.capped ? "Capped" : m.sharing ? "On" : "Off"};
+                row.color = online ? Rgb{1, 1, 1} : argb_to_rgb(0xffc0c0c0);
+                members_.rows.push_back(std::move(row));
+                member_ids_.push_back(m.character_id);
+            }
+            ListSort::apply(members_, member_ids_, member_sort_.order(members_.rows, [&](std::size_t a, std::size_t b) {
+                if (member_sort_.column != 1) return std::optional<int>();
+                const auto left = f.members[a].level, right = f.members[b].level;
+                return std::optional<int>(left < right ? -1 : left > right ? 1 : 0);
+            }));
+            for (std::size_t i = 0; i < member_ids_.size(); ++i)
+                if (member_ids_[i] == selected_member_) members_.selected = static_cast<int>(i);
+            return &members_;
+        }
+        if (id == "CampsiteKitList") {
+            kits_.rows.clear();
+            kit_ids_.clear();
+            kits_.selected = -1;
+            for (const auto& kit : f.kits) {
+                ListRow row{{kit.available ? "Yes" : "No", kit.name}};
+                if (!kit.available) row.color = argb_to_rgb(0xffc0c0c0);
+                if (kit.camp_type_id == selected_kit_) kits_.selected = static_cast<int>(kits_.rows.size());
+                kits_.rows.push_back(std::move(row));
+                kit_ids_.push_back(kit.camp_type_id);
+            }
+            return &kits_;
+        }
         return nullptr;
     }
-    const ComboData* combo(EqHost&, std::string_view id) override { return id == "CampsiteFilter" ? &filter_ : nullptr; }
-    bool combo_select(EqHost&, std::string_view id, int index) override {
+
+    bool list_click(EqHost& host, std::string_view id, int row, bool right, int) override {
+        if (right) return id == "MemberList" || id == "CampsiteKitList";
+        if (id == "MemberList") {
+            if (row >= 0 && row < static_cast<int>(member_ids_.size())) selected_member_ = member_ids_[static_cast<std::size_t>(row)];
+            sync(host);
+            return true;
+        }
+        if (id == "CampsiteKitList") {
+            if (row >= 0 && row < static_cast<int>(kit_ids_.size())) selected_kit_ = kit_ids_[static_cast<std::size_t>(row)];
+            return true;
+        }
+        return false;
+    }
+
+    bool list_header_click(EqHost&, std::string_view id, int column) override {
+        if (id != "MemberList" || column < 0 || column >= members_.columns) return false;
+        member_sort_.header_click(column);
+        return true;
+    }
+
+    bool set_text(EqHost& host, std::string_view id, const std::string& text) override {
+        if (id != "MOTDInput" || !host.conn || !host.conn->fellowship().is_leader(host.conn->character_name())) return false;
+        sync(host);
+        motd_ = text.substr(0, 1023);
+        return true;
+    }
+
+    const ComboData* combo(EqHost& host, std::string_view id) override {
+        sync(host);
+        return id == "CampsiteFilter" ? &filter_ : nullptr;
+    }
+    bool combo_select(EqHost& host, std::string_view id, int index) override {
+        sync(host);
         if (id != "CampsiteFilter" || index < 0 || index >= static_cast<int>(filter_.choices.size())) return false;
         filter_.selected = index;
+        refresh(host);
         return true;
     }
     bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
         if (button != "left" || !host.conn) return false;
-        if (id == "CreateFellowshipButton") {
-            std::vector<std::byte> b(0x434);
-            b[0] = static_cast<std::byte>(kRequestCreate);
-            host.conn->send_zone_packet(net::AppPacket(kOpFellowshipRequest, std::move(b)));
-        } else if (id == "RefreshListButton") {
-            kits_.rows.clear();
-            std::vector<std::byte> b(8);
-            b[0] = static_cast<std::byte>(show_all_ ? 0 : 1);
-            std::int32_t mask = -1; // the filter's "None - show all"
-            for (int i = 0; i < 4; ++i) b[4 + static_cast<std::size_t>(i)] = static_cast<std::byte>((static_cast<std::uint32_t>(mask) >> (8 * i)) & 0xff);
-            host.conn->send_zone_packet(net::AppPacket(kOpCampsiteKitRequest, std::move(b)));
-        } else if (id == "ShowAllButton") {
+        sync(host);
+        Child state;
+        child(host, id, state);
+        if (state.enabled == false) return true;
+        auto& c = *host.conn;
+        const auto* m = selected_member(host);
+        if (id == "CreateFellowshipButton") c.fellowship_create();
+        else if (id == "UpdateMOTDButton") c.fellowship_set_motd(motd_);
+        else if (id == "InviteMemberButton") c.fellowship_invite_target();
+        else if (id == "ToggleExpSharingButton") { if (m) c.fellowship_toggle_sharing(m->character_id); }
+        else if (id == "CreateCampsite") c.fellowship_create_camp(selected_kit_);
+        else if (id == "RefreshListButton") refresh(host);
+        else if (id == "ShowAllButton") {
             show_all_ = !show_all_;
-        } else {
-            return false;
-        }
+            refresh(host);
+        } else if (id == "MakeLeaderButton" && m)
+            confirm(host, "Make " + m->name + " the fellowship leader?", [member = m->character_id](auto& conn) { conn.fellowship_promote(member); });
+        else if (id == "RemoveMemberButton" && m)
+            confirm(host, "Remove " + m->name + " from the fellowship?", [member = m->character_id](auto& conn) { conn.fellowship_remove(member); });
+        else if (id == "LeaveFellowshipButton")
+            confirm(host, "Leave the fellowship?", [](auto& conn) { conn.fellowship_leave(); });
+        else if (id == "EndFellowshipButton")
+            confirm(host, "End the fellowship for all members?", [](auto& conn) { conn.fellowship_end(); });
+        else if (id == "DestroyCampsite")
+            confirm(host, "Destroy the fellowship campsite?", [](auto& conn) { conn.fellowship_destroy_camp(); });
+        else return false;
         return true;
     }
 
 private:
+    void sync(EqHost& host) {
+        // Called for every child, list and combo each frame: the category file is
+        // looked up again only when the game folder changes or the window opens.
+        if (!categories_loaded_ || category_game_ != host.game) load_categories(host);
+        if (!host.conn) return;
+        const auto& f = host.conn->fellowship();
+        if (f.id != fellowship_id_ || f.motd != received_motd_) {
+            motd_ = received_motd_ = f.motd;
+            if (f.id != fellowship_id_) selected_member_ = selected_kit_ = 0;
+            fellowship_id_ = f.id;
+        }
+        if (!f.member(selected_member_)) selected_member_ = 0;
+    }
+    const net::FellowshipMember* selected_member(EqHost& host) const {
+        return host.conn->fellowship().member(selected_member_);
+    }
+    const net::FellowshipKit* selected_kit(EqHost& host) const {
+        const auto& list = host.conn->fellowship().kits;
+        const auto it = std::find_if(list.begin(), list.end(), [&](const auto& kit) { return kit.camp_type_id == selected_kit_; });
+        return it == list.end() ? nullptr : &*it;
+    }
+    void load_categories(EqHost& host) {
+        const auto old_mask = category_mask();
+        categories_ = host.game ? game::load_fellowship_categories(*host.game) : std::vector<game::FellowshipCategory>{};
+        filter_.choices = {"All categories"};
+        filter_.selected = 0;
+        for (const auto& category : categories_) {
+            filter_.choices.push_back(category.name);
+            if (category.mask() == old_mask) filter_.selected = static_cast<int>(filter_.choices.size()) - 1;
+        }
+        categories_loaded_ = true;
+        category_game_ = host.game;
+    }
+    std::uint32_t category_mask() const {
+        const auto selected = filter_.selected;
+        return selected > 0 && static_cast<std::size_t>(selected) <= categories_.size()
+            ? categories_[static_cast<std::size_t>(selected - 1)].mask() : 0xffffffffu;
+    }
+    void refresh(EqHost& host) {
+        load_categories(host);
+        if (host.conn) host.conn->fellowship_refresh_kits(!show_all_, category_mask());
+    }
+    void confirm(EqHost& host, std::string text, std::function<void(net::GameConnection&)> action) const {
+        if (host.confirm) return;
+        const auto id = host.conn->fellowship().id;
+        auto* c = host.conn;
+        EqHost::Confirm q;
+        q.text = std::move(text);
+        q.done = [c, id, action = std::move(action)](bool yes) {
+            if (yes && c->fellowship().active() && c->fellowship().id == id) action(*c);
+        };
+        host.confirm = std::move(q);
+    }
+    static std::string last_on(std::uint32_t t) {
+        if (!t) return {};
+        const auto date = platform::local_time(static_cast<std::time_t>(t));
+        return date ? std::format("{:02d}/{:02d}/{:02d}", date->tm_mon + 1, date->tm_mday, date->tm_year % 100) : "";
+    }
     ListData members_, kits_;
+    ListSort member_sort_;
+    std::vector<std::uint32_t> member_ids_, kit_ids_;
+    std::uint32_t selected_member_ = 0, selected_kit_ = 0, fellowship_id_ = 0;
+    std::string motd_, received_motd_;
     ComboData filter_;
+    std::vector<game::FellowshipCategory> categories_;
+    const GameDir* category_game_ = nullptr;
+    bool categories_loaded_ = false;
     bool show_all_ = false;
 };
 

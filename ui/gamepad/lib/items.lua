@@ -1,6 +1,7 @@
 -- Item helpers for the gamepad windows: the summary panel shown beside a slot grid for the focused item (no
 -- hover tooltips on a couch: what the focus is on is always described), from the eq.Item table.
 local T = dofile("lib/theme.lua")
+local CL = dofile("lib/compare_lines.lua")
 local I = {}
 local C = T.C
 
@@ -21,8 +22,30 @@ local function facts(item)
   return out
 end
 
--- The focused item's panel in x0, y0 .. x1, y1: icon, name and facts; `where` (the slot's name) under the name.
-function I.summary(item, where, x0, y0, x1, y1)
+-- Hailstone's item comparison (docs/item-compare.md): eq.Compare*'s table as lines from y down to y1 at most, between
+-- x and x1; the best slot's comparison (a pair's other slot is named at the end). Returns the y below. Nothing when
+-- the Options turn it off.
+local KIND = { good = "good", bad = "bad", mixed = "gold", muted = "dim" }
+function I.comparison(compare, x, y, x1, y1)
+  if not compare or eq.Option("item_compare") == 0 then return y end
+  T.font(18)
+  local _, h = ui.CalcTextSize("Ag")
+  local lines = CL.lines(compare, 1, { verdict = eq.Option("item_compare_verdict") ~= 0 })
+  local other = CL.otherSlotName(compare, 1)
+  if other then lines[#lines + 1] = { "Also fits your " .. other, "muted" } end
+  y = y + T.px(6)
+  for _, line in ipairs(lines) do
+    if y + h > y1 then break end
+    T.draw(x, y, T.fit(line[1], x1 - x), C[KIND[line[2]] or "text"] or C.text)
+    y = y + h + T.px(3)
+  end
+  T.unfont()
+  return y
+end
+
+-- The focused item's panel in x0, y0 .. x1, y1: icon, name and facts; `where` (the slot's name) under the name;
+-- `compare` (eq.Compare*'s table, or nil) the item against what the player wears, below the facts.
+function I.summary(item, where, x0, y0, x1, y1, compare)
   T.rect(x0, y0, x1, y1, C.sunken, 1, T.px(14))
   local p = T.px(18)
   if not item then
@@ -65,6 +88,7 @@ function I.summary(item, where, x0, y0, x1, y1)
     y = y + h + T.px(4)
   end
   T.unfont()
+  I.comparison(compare, x0 + p, y, x1 - p, y1 - p)
 end
 
 return I

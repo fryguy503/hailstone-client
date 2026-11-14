@@ -6,6 +6,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 
 #include <set>
@@ -152,7 +153,7 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     for (C c : {C::CMD_MARKETPLACE_SILVER, C::CMD_MARKETPLACE_GOLD, C::CMD_TOGGLE_CLAIM_WIN,
                 C::CMD_VOTE_RESULTS, C::CMD_HISTORIC_ALERTS,
                 C::CMD_REAL_ESTATE_TROPHIES_WINDOW, C::CMD_REAL_ESTATE_LEAVE, C::OPEN_ETN_HELP,
-                C::CMD_TOGGLE_TCG, C::CMD_SOCIAL_SHARE, C::TOGGLE_FELLOWSHIPWIN})
+                C::CMD_TOGGLE_TCG, C::CMD_SOCIAL_SHARE})
         CHECK_FALSE(app::menu_command_offered(static_cast<int>(c), [](std::string_view) { return true; }));
     CHECK(std::string(app::toggle_command_window(static_cast<int>(C::CMD_TOGGLE_AURAWND))) == "AuraWindow");
     CHECK(app::toggle_command_window(static_cast<int>(C::CMD_HISTORIC_ALERTS)) == nullptr);
@@ -301,6 +302,64 @@ ui::ServerEntry world(const char* name) {
 }
 
 } // namespace
+
+TEST_CASE("Fellowship window: the default shortcut and EQ menu resolve to its toggle") {
+    std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+    {
+        app::EqHost host;
+        host.in_game = host.ui_ready = true;
+        EqTable eq(host);
+        CHECK(eq.run("return eq.ReplaceWindow('FellowshipWnd')") == "false");
+        REQUIRE(eq.api.replaces("FellowshipWnd"));
+        CHECK_FALSE(eq.api.shown("FellowshipWnd"));
+
+        const int fellowship = static_cast<int>(game::KeyCommand::TOGGLE_FELLOWSHIPWIN);
+        game::KeyMap keys;
+        keys.reset_defaults(true);
+        const game::KeyCombo shortcut{0x21, true, true, false}; // Ctrl+Shift+F
+        CHECK(keys.binding(fellowship, 0) == shortcut);
+        std::vector<game::KeyMap::Event> events;
+        keys.key_down(shortcut, events);
+        REQUIRE(events.size() == 1);
+        CHECK(events.front().command == fellowship);
+        CHECK(events.front().down);
+        const char* screen = app::toggle_command_window(events.front().command);
+        REQUIRE(screen != nullptr);
+        CHECK(std::string(screen) == "FellowshipWnd");
+        eq.api.toggle(screen);
+        CHECK(eq.api.shown("FellowshipWnd"));
+
+        events.clear();
+        keys.key_up(shortcut.code, events);
+        REQUIRE(events.size() == 1);
+        CHECK_FALSE(events.front().down);
+        events.clear();
+        keys.key_down(shortcut, events);
+        REQUIRE(events.size() == 1);
+        screen = app::toggle_command_window(events.front().command);
+        REQUIRE(screen != nullptr);
+        eq.api.toggle(screen);
+        CHECK_FALSE(eq.api.shown("FellowshipWnd"));
+
+        const auto offered = [&](int command) {
+            return app::menu_command_offered(command, [&](std::string_view name) { return eq.api.replaces(name); });
+        };
+        CHECK(offered(fellowship));
+        app::CascadeMenu menu;
+        menu.load_text("0^1^0^Fellowship^TOGGLE_FELLOWSHIPWIN\n", 0xffffffffu, 0, offered);
+        const auto rows = menu.row_texts(0);
+        const auto row = std::find(rows.begin(), rows.end(), "Fellowship");
+        REQUIRE(row != rows.end());
+        menu.toggle({0, 0, 50, 20}, 1920, 1080);
+        const auto command = menu.click(0, static_cast<int>(row - rows.begin()));
+        REQUIRE(command);
+        CHECK(*command == fellowship);
+        screen = app::toggle_command_window(*command);
+        REQUIRE(screen != nullptr);
+        eq.api.toggle(screen);
+        CHECK(eq.api.shown("FellowshipWnd"));
+    }
+}
 
 TEST_CASE("eq UI animation: registered read-only binding returns nil without an artwork provider") {
     ImGuiContext* context = ImGui::CreateContext();

@@ -509,6 +509,9 @@ local function slotRec(win, id)
   local rec = byId[id]
   if not rec then
     rec = { key = "##slot" .. win .. id, onClick = function(button, outside) eq.ClickChild(win, id, button, outside) end }
+    -- The item comparison of the slot's item (Hailstone: eq.CompareSlotItem), plain and with the selected ring.
+    local compare = function() return eq.CompareSlotItem(win, id) end
+    rec.opts, rec.selectedOpts = { compare = compare }, { selected = true, compare = compare }
     byId[id] = rec
   end
   return rec
@@ -519,7 +522,7 @@ function W.Slot(win, id, size, placeholder, where)
   local _, checked = W.State(win, id)
   local rec = slotRec(win, id)
   items.Slot(rec.key, x, y, size, s, eq.SlotItem(win, id), placeholder, where or "", rec.onClick,
-    checked and items.SELECTED or nil)
+    checked and rec.selectedOpts or rec.opts)
   ui.SetCursorScreenPos(x, y)
   ui.Dummy(size, size)
 end

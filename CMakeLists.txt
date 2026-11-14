@@ -150,6 +150,7 @@ add_library(hailstone_engine STATIC
   src/game/light_list.cpp
   src/render/scene_lighting.cpp
   src/render/atmosphere.cpp
+  src/render/horizon.cpp
   src/render/ambient_probe.cpp
   src/render/shadows.cpp
   src/render/light_grid.cpp
@@ -199,6 +200,7 @@ add_library(hailstone_engine STATIC
   src/net/game_connection_death.cpp
   src/net/door_packets.cpp
   src/net/game_connection_group.cpp
+  src/net/game_connection_fellowship.cpp
   src/net/game_connection_group_search.cpp
   src/net/game_connection_marketplace.cpp
   src/net/game_connection_social.cpp
@@ -251,11 +253,14 @@ add_library(hailstone_engine STATIC
   src/game/spell_projectiles.cpp
   src/game/slash_commands.cpp
   src/net/group_packets.cpp
+  src/net/fellowship_packets.cpp
+  src/game/fellowship_categories.cpp
   src/net/pet_packets.cpp
   src/net/item_packets.cpp
   src/net/augment_packets.cpp
   src/net/spell_packets.cpp
   src/game/spell_description.cpp
+  src/game/item_compare.cpp
   src/game/item_display.cpp
   src/game/augments.cpp
   src/game/spell_display.cpp
@@ -349,6 +354,8 @@ add_library(hailstone_engine STATIC
   src/assets/png_read.cpp
   src/assets/jpeg_read.cpp
   src/assets/texture_overrides.cpp
+  src/assets/gltf_mesh.cpp
+  src/assets/model_overrides.cpp
   src/assets/sky.cpp
   src/assets/sky_weather.cpp
   src/assets/spell_effects.cpp
@@ -460,6 +467,7 @@ add_library(hailstone_engine STATIC
   src/game/mechanics/movement_inputs.cpp
   src/game/mechanics/physics.cpp
   src/game/mechanics/abilities.cpp
+  src/game/mechanics/shown_stats.cpp
   src/game/mechanics/tables.cpp
   src/game/mechanics/item_stats.cpp
   src/game/mechanics/effects.cpp
@@ -548,6 +556,7 @@ add_library(hailstone_engine STATIC
   src/app/lua_eq_layout.cpp
   src/app/lua_eq_video.cpp
   src/app/lua_eq_zoneguide.cpp
+  src/app/lua_eq_compare.cpp
   src/app/lua_eq_find.cpp
   src/app/lua_eq_fellowship.cpp
   src/app/lua_eq_story.cpp
@@ -664,7 +673,7 @@ if(HAILSTONE_CLANG_TIDY)
   set_target_properties(hailstone_engine PROPERTIES CXX_CLANG_TIDY "${HAILSTONE_TIDY_COMMAND}")
 endif()
 target_compile_definitions(hailstone_engine PUBLIC VK_NO_PROTOTYPES GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
-target_link_libraries(hailstone_engine PUBLIC imgui hailstone_audio_headers hailstone_bcdec hailstone_stb hailstone_recast hailstone_monocypher)
+target_link_libraries(hailstone_engine PUBLIC imgui hailstone_audio_headers hailstone_bcdec hailstone_stb hailstone_cgltf hailstone_recast hailstone_monocypher)
 # The updater (app/updater.h, docs/updater.md): the address of the release feed's manifest, and the release key's
 # public half (64 hex digits) its signature is checked with: update-key.pub at the top of the tree, or this option.
 # Without a key the build has no updates.
@@ -715,6 +724,7 @@ endif()
 hailstone_add_shaders(hailstone_shaders
   shaders/zone.vert
   shaders/zone.frag
+  shaders/zone_depth.frag
   shaders/spawn.vert
   shaders/spawn.frag
   shaders/actor.vert
@@ -733,6 +743,8 @@ hailstone_add_shaders(hailstone_shaders
   shaders/fire.vert
   shaders/flora.vert
   shaders/flora.frag
+  shaders/lawn.vert
+  shaders/lawn.frag
   shaders/fire.frag
   shaders/spell_fx.vert
   shaders/spell_fx.frag
@@ -740,6 +752,7 @@ hailstone_add_shaders(hailstone_shaders
   shaders/target_ring.frag
   shaders/underwater.vert
   shaders/underwater.frag
+  shaders/horizon.frag
   shaders/zone_shadow.vert
   shaders/zone_shadow.frag
   shaders/zone_point_shadow.vert
@@ -898,7 +911,9 @@ add_library(hailstone_texpack STATIC
   src/texpack/texpack.cpp
   src/texpack/upscale.cpp
   src/texpack/pack_job.cpp
-  src/texpack/model_catalog.cpp)
+  src/texpack/model_catalog.cpp
+  src/texpack/materials.cpp
+  src/texpack/trees.cpp)
 target_compile_options(hailstone_texpack PRIVATE ${HAILSTONE_WARNINGS})
 target_link_libraries(hailstone_texpack PUBLIC hailstone_engine PRIVATE hailstone_bc7enc)
 target_link_libraries(texpack PRIVATE hailstone_texpack)
@@ -1002,6 +1017,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/merchant_usable_test.cpp
     tests/ascii_case_test.cpp
     tests/ui_pack_windows_test.cpp
+    tests/aa_columns_ui_test.cpp
     tests/ui_pack_stale_state_test.cpp
     tests/net_session_test.cpp
     tests/ucs_session_test.cpp
@@ -1029,6 +1045,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/precipitation_test.cpp
     tests/sky_colours_test.cpp
     tests/scene_light_test.cpp
+    tests/horizon_test.cpp
     tests/collision_test.cpp
     tests/nav_test.cpp
     tests/map_data_test.cpp
@@ -1151,6 +1168,11 @@ if(HAILSTONE_BUILD_TESTS)
     tests/ability_commands_test.cpp
     tests/hot_button_state_test.cpp
     tests/group_packets_test.cpp
+    tests/fellowship_packets_test.cpp
+    tests/fellowship_connection_test.cpp
+    tests/fellowship_ui_test.cpp
+    tests/fellowship_categories_test.cpp
+    tests/fellowship_vitality_test.cpp
     tests/progress_test.cpp
     tests/task_window_test.cpp
     tests/reward_packets_test.cpp
@@ -1176,6 +1198,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/lua_eq_test.cpp
     tests/ui_ini_test.cpp
     tests/ui_packs_test.cpp
+    tests/item_compare_test.cpp
     tests/item_display_test.cpp
     tests/game_vectors_test.cpp
     tests/key_commands_test.cpp
@@ -1217,6 +1240,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/zoning_vectors_test.cpp
     tests/neighbour_zones_test.cpp
     tests/zone_liquid_test.cpp
+    tests/depth_prepass_test.cpp
     tests/player_placement_test.cpp
     tests/step_landing_test.cpp
     tests/jump_hang_test.cpp
@@ -1245,6 +1269,11 @@ if(HAILSTONE_BUILD_TESTS)
     tests/player_menu_test.cpp
     tests/connection_state_test.cpp
     tests/texpack_test.cpp
+    tests/texpack_materials_test.cpp
+    tests/gltf_mesh_test.cpp
+    tests/texpack_trees_test.cpp
+    tests/lod_bands_test.cpp
+    tests/zone_models_test.cpp
     tests/addon_tool_test.cpp
   )
   target_include_directories(hailstone_tests PRIVATE tests sdk)

@@ -27,7 +27,18 @@ end
 -- One record per bag window, made once: its dialog's opts and body read what bag() last read this frame.
 local bags = {}
 local PRIMARY = { primary = true }
-local HELD = { held = true }
+-- Each bag slot's options, made once: held, and the item comparison of its item (eq.CompareBagSlotItem).
+local slotOpts = {} -- [window][i]
+local function bagSlotOpts(window, i)
+  local byWindow = slotOpts[window]
+  if not byWindow then byWindow = {}; slotOpts[window] = byWindow end
+  local o = byWindow[i]
+  if not o then
+    o = { held = true, compare = function() return eq.CompareBagSlotItem(window, i) end }
+    byWindow[i] = o
+  end
+  return o
+end
 
 local function record(window, n)
   -- chromeW, chromeH: the window's padding and title bar around the contents (design pixels), measured each frame;
@@ -78,7 +89,7 @@ local function record(window, n)
       items.Slot("##slot" .. i, cx, cy, sz, s, item, nil, slotName(i), function(button, outside)
         if place and tools.Intercept(place, item, button) then return end
         return eq.BagSlotClick(window, i, button, outside)
-      end, HELD)
+      end, bagSlotOpts(window, i))
       if item then tools.Mark(cx, cy, sz, s, item, where, nil, place)
       elseif place then tools.Marks(cx, cy, sz, s, nil, place) end
     end

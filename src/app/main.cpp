@@ -57,6 +57,7 @@
 #include "render/zone_renderer.h"
 #include "render/particle_renderer.h"
 #include "render/atmosphere.h"
+#include "render/horizon.h"
 #include "render/weather_renderer.h"
 #include "app/nameplate_layer.h"
 #include "app/plate_test.h"
@@ -105,6 +106,8 @@ struct Options {
     std::vector<hailstone::render::FireSource> fires; // --fire X Y Z H W: flames placed by hand (modern)
     bool no_fire = false;                         // --no-fire: the modern lighting without its flames (timing)
     bool no_grass = false;                        // --no-grass: the viewer without the zone's flora
+    bool no_horizon = false;                      // --no-horizon: no distant hills round the zone (render/horizon.h)
+    float tree_detail = 1.0f;                     // --tree-detail PCT: display.tree_detail, as a scale
     float flora_distance = 400.0f;                // --flora-distance: how far the viewer draws the flora
     std::optional<glm::vec3> flora_push;          // --flora-push: a foot the viewer's flora bends away from
     std::optional<std::string> textures; // --textures DIR: replacement textures (assets/texture_overrides.h)
@@ -243,6 +246,7 @@ void usage() {
         "  --shadows N        shadow map size per cascade (0 off; default 2048), with --lighting modern\n"
         "  --light-shadows N  how many lights cast shadows (0 off; default 8, at most 8), modern\n"
         "  --no-ao            no screen-space ambient occlusion (--lighting modern)\n"
+        "  --depth-prepass    draw the opaque geometry depth-only first, then colour it (--lighting modern)\n"
         "  --bloom N          bloom strength 0..1 (--lighting modern; default 0.5)\n"
         "  --render-scale P   draw the 3D view at P percent of its size (50..100) and upscale it with FSR 1\n"
         "  --sharpness N      FSR 1's sharpening below a render scale of 100, 0..1 (default 0.5)\n"
@@ -263,6 +267,8 @@ void usage() {
         "  --weather-age S    viewer: S seconds after --weather began (its transition; default 600, settled)\n"
         "  --weather-stopped S  viewer: --weather stopped S seconds ago (the clearing)\n"
         "  --no-grade         viewer: no colour grade (--lighting modern; display.color_grade)\n"
+        "  --no-horizon       viewer: no distant hills round the zone (--lighting modern; display.horizon_hills)\n"
+        "  --tree-detail PCT  viewer: replacement models' levels of detail reach PCT %% as far (display.tree_detail)\n"
         "  --view-distance X  with --lighting modern: draw X times further than the original, into haze (2.5)\n"
         "  --model A,B,...    model viewer: classic character models by code (HUM) or race (r:RACE[:GENDER]);\n"
         "                     --anim CODE (default P01), --anim-time T, --size S, --heading H (0..512),\n"
@@ -423,6 +429,8 @@ Options parse_args(int argc, char** argv) {
             o.flora_distance = std::strtof(argv[++i], nullptr);
         } else if (arg("--no-ao")) {
             o.scene.ambient_occlusion = false;
+        } else if (arg("--depth-prepass")) {
+            o.scene.depth_prepass = true;
         } else if (arg("--weather-age")) {
             need(1);
             o.weather_age = std::strtof(argv[++i], nullptr);
@@ -431,6 +439,11 @@ Options parse_args(int argc, char** argv) {
             o.weather_stopped = std::strtof(argv[++i], nullptr);
         } else if (arg("--no-grade")) {
             o.scene.color_grade = false;
+        } else if (arg("--no-horizon")) {
+            o.no_horizon = true;
+        } else if (arg("--tree-detail")) {
+            need(1);
+            o.tree_detail = std::strtof(argv[++i], nullptr) / 100.0f;
         } else if (arg("--weather")) {
             need(2);
             std::string kind = argv[++i];
@@ -834,6 +847,7 @@ int main(int argc, char** argv) {
             zone_renderer = std::make_unique<render::ZoneRenderer>(vk, *zone, shader_dir,
                                                                    render::zone_render_options(open_game_dir(opts.game_dir, opts.classic_dir)));
             zone_renderer->set_hide_flames(opts.modern);
+            zone_renderer->set_lod_scale(opts.tree_detail);
             const auto& s = zone_renderer->stats();
             log::info("zone renderer: {} triangles, {} draws in {} chunks, {} textures ({} missing)", s.triangles,
                       s.draws, s.chunks, s.textures, s.missing_textures);
@@ -1326,8 +1340,14 @@ int main(int argc, char** argv) {
                 if (sky_drawn) sky_renderer->draw(*f, proj, camera.view(), sky_frame);
                 // As the client: the modern haze behind everything where no sky is drawn; under water, the water.
                 if (water_color || (opts.modern && !sky_drawn)) zone_renderer->draw_backdrop(*f, vp);
+                // The distant hills round an outdoor zone, under an open sky or none (not the planes' painted skies).
+                if (opts.modern && outdoor && !water_color && !opts.no_horizon &&
+                    (!sky_renderer || sky_renderer->has_atmosphere()))
+                    zone_renderer->draw_horizon(*f, vp, render::horizon_strength(view.fog_end, haze.extend,
+                                                                                 weather_look.storm));
                 if (opts.modern) {
                     // The water reads the opaque world (VkContext::begin_translucent).
+                    zone_renderer->draw_depth(*f, vp, camera.position, draw_view, t);
                     zone_renderer->draw(*f, vp, camera.position, draw_view, t, render::ZonePhase::Opaque);
                     if (neighbours) neighbours->draw(*f, vp, camera.position, draw_view, t, render::ZonePhase::Opaque);
                     if (flora_renderer) flora_drawn = flora_renderer->draw(*f, vp, camera.position, t, frame_lighting, true);

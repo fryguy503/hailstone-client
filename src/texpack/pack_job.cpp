@@ -170,6 +170,8 @@ struct PackJob::Made {
     std::vector<FileKind> files;
     std::size_t planned = 0; // files.size() as read (the rate counts them even when the texture failed)
     Outputs outputs;
+    const MaterialTile* material = nullptr; // composed by the encoder from `sources`, not upscaled
+    std::shared_ptr<Sources> sources;
 };
 
 namespace {
@@ -283,11 +285,21 @@ void PackJob::run() {
         fs::create_directories(options_.pack_dir / "by-hash", ec);
         if (ec) throw std::runtime_error("cannot make " + (options_.pack_dir / "by-hash").string() + ": " + ec.message());
         const std::set<std::string> contents = pack_contents(options_.pack_dir);
+        const MaterialPlan* plan = options_.materials.get();
+        if (plan && !plan->tiles.empty() && !options_.material_library)
+            throw std::runtime_error("the photo materials are not loaded");
+        material_record_ = read_material_record(options_.pack_dir);
+        const bool had_record = !material_record_.empty();
         std::vector<Todo> todo;
         double texels = 0;
         std::size_t complete = 0;
         for (TextureInfo& t : options_.textures) {
-            auto files = missing_files(t, options_.settings.maps, contents);
+            // A tile made by other rules than the plan's (or made from materials and no longer named) is made whole.
+            const MaterialTile* tile = plan ? plan->find(t.hash) : nullptr;
+            const auto recorded = material_record_.find(t.hash);
+            const bool redo = tile ? recorded == material_record_.end() || recorded->second != tile->signature
+                                   : recorded != material_record_.end();
+            auto files = redo ? pack_files(t, options_.settings.maps) : missing_files(t, options_.settings.maps, contents);
             if (files.empty()) {
                 ++complete;
                 continue;
@@ -341,6 +353,18 @@ void PackJob::run() {
             item->files = std::move(t.files);
             item->planned = item->files.size();
             auto src = std::make_shared<Sources>(std::move(*sources));
+            if (const MaterialTile* tile = plan ? plan->find(item->info.hash) : nullptr) {
+                // (no GPU: the encoder composes it)
+                item->material = tile;
+                item->sources = std::move(src);
+                {
+                    std::lock_guard lock(mutex_);
+                    --in_gpu_;
+                    made_.push_back(item);
+                }
+                cv_.notify_all();
+                continue;
+            }
             gpu_.post([this, item, src](const Models& models) {
                 if (!cancel_) {
                     {
@@ -381,6 +405,7 @@ void PackJob::run() {
         encoders_.clear();
 
         const bool cancelled = cancel_;
+        if (had_record || !material_record_.empty()) write_material_record(options_.pack_dir, material_record_);
         PackInfo info = options_.info;
         info.scale = options_.settings.scale;
         info.maps = options_.settings.maps;
@@ -439,7 +464,18 @@ void PackJob::encoder(unsigned index, unsigned count) {
         const std::string base = hash_name(item->info.hash);
         std::uint64_t files = 0, bytes = 0;
         std::string error;
+        if (item->material && !item->files.empty() && !cancel_) {
+            try {
+                item->outputs = compose_tile(*item->material, options_.materials->rules, item->sources->color,
+                                             *options_.material_library, options_.materials->size,
+                                             options_.settings.maps);
+            } catch (const std::exception& e) {
+                error = e.what();
+            }
+            item->sources.reset();
+        }
         for (FileKind k : item->files) {
+            if (!error.empty()) break;
             if (cancel_) break;
             auto& img = item->outputs.of(k);
             if (!img) continue;
@@ -461,6 +497,9 @@ void PackJob::encoder(unsigned index, unsigned count) {
         if (!error.empty()) {
             note_error(*item->info.names.begin() + ": " + error);
             ++status_.failures;
+        } else if (!cancel_ && !item->files.empty()) {
+            if (item->material) material_record_[item->info.hash] = item->material->signature;
+            else material_record_.erase(item->info.hash);
         }
         ++status_.done;
         status_.files_written += files;

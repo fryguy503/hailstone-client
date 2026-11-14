@@ -4,8 +4,8 @@
 --     End Fellowship (the game enables each as you lead, belong or neither);
 --   * Camp: your campsite (where it is, Create Camp and Destroy Camp), the campsite kits with their filter and
 --     "Show all possible", the selected kit's description, and Refresh List.
--- Every field, list and button is the window's (app/lua_eq_fellowship.cpp), so the requests are the game's. (An
--- EQEmu server has no fellowships: the lists stay empty and only Create is enabled.)
+-- Every field, list and button uses the shared model (app/lua_eq_fellowship.cpp). The server decides membership,
+-- permissions and campsite availability; the member list scrolls through rosters of up to 64 players.
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -21,7 +21,7 @@ local function fellowshipPage(s)
   local bh = K.ButtonH(s)
   K.Caption("Message of the day")
   local updW = 72 * s
-  local _, committed = W.Edit(WINDOW, "MOTDInput", { width = -(updW + 8 * s), max = 256,
+  local _, committed = W.Edit(WINDOW, "MOTDInput", { width = -(updW + 8 * s), max = 1023,
     hint = "Your fellowship's message of the day" })
   local enter = committed and ui.IsKeyPressed(ui.Key.Enter)
   ui.SameLine()
@@ -29,9 +29,11 @@ local function fellowshipPage(s)
     tooltip = "Set this as your fellowship's message of the day" })
   if enter and not clicked and W.State(WINDOW, "UpdateMOTDButton") then eq.ClickChild(WINDOW, "UpdateMOTDButton", "left") end
   ui.Dummy(0, 2 * s)
-  K.Caption("Members")
+  W.Label(WINDOW, "FellowshipVitality", C.muted, true)
+  local count = eq.ListInfo(WINDOW, "MemberList") or 0
+  K.Caption(count > 0 and ("Members (" .. count .. ")") or "Members")
   local below = bh * 2 + 12 * s
-  if (eq.ListInfo(WINDOW, "MemberList") or 0) == 0 then
+  if count == 0 then
     local aw, ah = ui.GetContentRegionAvail()
     S.Empty(aw, math.max(40 * s, ah - below), "You are not in a fellowship.",
       "Create one, then invite players by targeting them.")
@@ -42,7 +44,7 @@ local function fellowshipPage(s)
     { "CreateFellowshipButton", "Create", { primary = true, tooltip = "Start a fellowship (you lead it)" } },
     { "InviteMemberButton", "Invite", { tooltip = "Invite your target to the fellowship" } },
     { "MakeLeaderButton", "Make Leader", { tooltip = "Make the selected member the leader" } },
-    { "RemoveMemberButton", "Remove", { tooltip = "Remove the selected member" } },
+    { "RemoveMemberButton", "Remove", { danger = true, tooltip = "Remove the selected member" } },
   }, bh)
   W.ButtonRow(WINDOW, {
     { "ToggleExpSharingButton", "Toggle XP", { tooltip = "Turn experience sharing on or off for the selected member" } },
@@ -61,6 +63,7 @@ local function campPage(s)
   else
     ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1, "No campsite.")
   end
+  if W.Text(WINDOW, "CampsiteTime") ~= "" then W.Label(WINDOW, "CampsiteTime", C.muted, true) end
   W.ButtonRow(WINDOW, {
     { "CreateCampsite", "Create Camp", { primary = true, tooltip = "Set up a campsite here" } },
     { "DestroyCampsite", "Destroy Camp", { tooltip = "Take your campsite down" } },
@@ -84,8 +87,8 @@ local function campPage(s)
 end
 
 local OPTS = {
-  size = function() return 560, 440 end,
-  resizable = { 400, 340 },
+  size = function() return 780, 520 end,
+  resizable = { 560, 360 },
 }
 local function body(x, y, w, h, s)
   -- the tab box is the window's own (its model keeps no page): a tab bar of this script's

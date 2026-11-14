@@ -6,6 +6,10 @@
 // The game-side decoders of server data (hailstone::game, over a byte span or text; tests/fuzz_game_decoders.h):
 // HAILSTONE_FUZZ_GAME_DECODER(name). fuzz_net_test.cpp checks every 'decode_*(std::span<const ...>)' in src/game/*.h is here.
 HAILSTONE_FUZZ_DECODER(decode_aa_action)
+HAILSTONE_FUZZ_DECODER(decode_fellowship_roster)
+HAILSTONE_FUZZ_DECODER(decode_fellowship_invite)
+HAILSTONE_FUZZ_DECODER(decode_fellowship_kits)
+HAILSTONE_FUZZ_DECODER(decode_fellowship_vitality)
 HAILSTONE_FUZZ_DECODER(decode_achievement_catalog)
 HAILSTONE_FUZZ_DECODER(decode_achievement_primary)
 HAILSTONE_FUZZ_DECODER(decode_achievement_progress)

@@ -9,6 +9,7 @@
 #include "game/item_moves.h"
 #include "game/mechanics/character.h"
 #include "game/mechanics/item_stats.h"
+#include "game/mechanics/shown_stats.h"
 #include "game/spells.h"
 #include "game/world_state.h"
 #include "net/game_connection.h"
@@ -26,6 +27,23 @@ constexpr std::uint32_t kGrey = 0xffc0c0c0;  // -0x3f3f40
 constexpr std::uint32_t kGreen = 0xff00ff00; // -0xff0100
 constexpr std::uint32_t kOfflineGrey = 0xff808080;
 constexpr std::uint32_t kMercOwner = 0xffe1b511; // -0x1e4aef
+
+int vitality_fill(std::uint64_t value, std::uint64_t cap) {
+    if (!cap) return 0;
+    if (value >= cap) return 1000;
+    // Find floor(value * 1000 / cap) without overflowing a 64-bit pool or
+    // rounding UINT64_MAX - 1 to a full gauge on platforms where long double
+    // is double. The threshold is ceil(cap * middle / 1000), also bounded.
+    const auto whole = cap / 1000, remainder = cap % 1000;
+    int low = 0, high = 1000;
+    while (low + 1 < high) {
+        const auto middle = static_cast<std::uint64_t>((low + high) / 2);
+        const auto threshold = whole * middle + (remainder * middle + 999) / 1000;
+        if (value >= threshold) low = static_cast<int>(middle);
+        else high = static_cast<int>(middle);
+    }
+    return low;
+}
 
 // LabelFromEQ_FormatIntValue @0x761b50: "%d" of value (capped at max unless max is -9999); with compare, coloured
 // against base.
@@ -132,57 +150,6 @@ LabelValue aggro_pct(int pct) {
 // 0x761560: the meter is locked on a spawn other than its target.
 bool aggro_locked_elsewhere(const net::GameConnection::Aggro& a) { return a.lock_id != 0 && a.lock_id != a.target_id; }
 
-// The worn primary's skill as 0x584f60 picks it: a common (type 0) item that is a weapon gives
-// ItemTypeToSkill of its item type, anything else hand to hand (28).
-std::uint32_t attack_skill(const mechanics::Character& ch) {
-    const auto& primary = ch.sheet().possessions[13];
-    if (primary && primary->id != 0 && primary->item_class == 0 &&
-        game::item_is_weapon(primary->item_type, static_cast<std::int32_t>(primary->damage)))
-        return mechanics::item_type_to_skill(primary->item_type);
-    return 28;
-}
-
-// CharacterZoneClient_GetOffenseValue @0x453e30 (skill, include buffs): Offense (33) with its item mods + 7, plus the
-// weapon skill's when the character has it; for a PC, a drunk one (drunkenness / 2 above 20, with buffs) scaled by
-// min(1, (110 - drunkenness / 2) * 0.01), else a berserking one + level * 2 / 5. At least 1.
-std::int32_t offense_value(const mechanics::Character& ch, std::uint32_t skill, bool buffs) {
-    std::int32_t v = ch.skill_with_item_mods(33, buffs) + 7;
-    if (ch.adjusted_skill(skill) > 0) v += ch.skill_with_item_mods(skill, buffs);
-    const auto& sh = ch.sheet();
-    if (sh.spawn_type == mechanics::SpawnType::PC) {
-        std::int32_t half = sh.drunkenness / 2;
-        if (buffs && static_cast<double>(half) > 20.0) {
-            double f = std::min(1.0, (110.0 - static_cast<double>(half)) * 0.01);
-            v = static_cast<std::int32_t>(f * static_cast<double>(v));
-        } else if (sh.berserk) {
-            v += sh.level * 2 / 5;
-        }
-    }
-    return std::max(v, 1);
-}
-
-// 0x453f50 (skill, include buffs): the weapon skill with its item mods (when the character has the skill),
-// (2 * stat - 150) / 3 for STR (DEX for archery 7 and throwing 51) of 75 and above, the items' ATK (+0x110) and the
-// spell cache's item ATK capped at 250 + SPA 341, and the buffs' ATK (SPA 2; spell 2434 moves 100 of it to the capped
-// part). Not kept: the leadership offense enhancement (Leadership_GetOffenseEnhancementBonus, no packet source) and
-// the profile's +0x3468 bonus.
-std::int32_t attack_value(const mechanics::Character& ch, const net::GameConnection& c, std::uint32_t skill) {
-    std::int32_t cap = ch.total_effect(341, true, 0, true, true) + 250;
-    std::int32_t v = ch.adjusted_skill(skill) > 0 ? ch.skill_with_item_mods(skill, true) : 0;
-    std::int32_t stat = skill == 7 || skill == 51 ? ch.stats().stats.dex : ch.stats().stats.str;
-    if (stat >= 75) v += (2 * stat - 150) / 3;
-    std::int32_t buff = ch.total_effect(2, true, 0, false, true);
-    std::int32_t item = ch.cached_item(2, 0);
-    for (const auto& b : c.spell_state().buffs)
-        if (!b.empty() && b.spell == 2434) {
-            item += 100;
-            buff -= 100;
-            break;
-        }
-    item = std::min(item + ch.stats().attack, cap);
-    return std::max(v + item + buff, 1);
-}
-
 } // namespace
 
 Rgb argb_to_rgb(std::uint32_t argb) {
@@ -269,20 +236,16 @@ LabelValue stock_label(const EqHost& host, int type) {
         return {world.player() ? world.player()->title : std::string(), std::nullopt};
     case 22: { // case 0x15: the displayed AC (0x580330), green / red against it without AC buffs
         if (!ch) return int_value(0);
-        std::int64_t x = static_cast<std::int64_t>(ch->compute_defense(true)) + ch->stats().ac;
-        // x * 1000 / 847, the signed division by a multiply with 0x9abf9f49 and shifts, as the original computes it
-        std::int64_t v = x * 1000;
-        std::int64_t hi = (v * static_cast<std::int64_t>(static_cast<std::int32_t>(0x9abf9f49))) >> 32;
-        std::int64_t q = (hi + v) >> 9;
-        q += (q < 0) ? 1 : 0;
+        std::int64_t q = mechanics::shown_ac(*ch);
         std::int64_t buffs = ch->total_effect(1, true, 0, false, true) + ch->total_effect(0x1a0, true, 0, false, true) +
                              ch->total_effect(0x37, true, 0, false, true);
         return int_value(q, q - buffs, true);
     }
     case 23: { // case 0x16: ATK, 0x584f60(1): (offense + attack) * 1000 / 744, against it without SPA 2
         if (!ch) return int_value(0);
-        std::uint32_t skill = attack_skill(*ch);
-        std::int64_t atk = (static_cast<std::int64_t>(offense_value(*ch, skill, true)) + attack_value(*ch, c, skill)) * 1000 / 744;
+        bool spell_2434 = std::ranges::any_of(c.spell_state().buffs,
+                                              [](const auto& b) { return !b.empty() && b.spell == 2434; });
+        std::int64_t atk = mechanics::shown_atk(*ch, spell_2434);
         return int_value(atk, atk - ch->total_effect(2, true, 0, false, true), true);
     }
     // Cases 0x4a..0x4c: the combat regeneration (GetHPRegen / GetManaRegen / GetEnduranceRegen without the resting
@@ -636,6 +599,16 @@ GaugeValue stock_gauge(const EqHost& host, int type) {
         if (!c.aggro().target_id && !c.aggro().lock_id) return {-1, {}};
         return {std::min(1000, c.aggro().pct[net::kAggroPlayer] * 10), {}};
     }
+    case 147: case 148: {
+        // __GetGaugeValueFromEQ @0x762410, cases 147/148: min(pool, cap) *
+        // 1000 / cap, or zero for a zero cap. Deliberate safety: keep extreme
+        // unsigned wire values and the product from wrapping. Exact amounts
+        // stay strings for Lua's numeric precision.
+        const auto& vitality = c.fellowship().vitality;
+        const std::uint64_t value = type == 147 ? vitality.normal : vitality.aa;
+        const std::uint64_t cap = type == 147 ? vitality.normal_cap : vitality.aa_cap;
+        return {vitality_fill(value, cap), value || cap ? std::format("{} / {}", value, cap) : std::string()};
+    }
     case 2: { // mana: -1 for non-casters without mana, 0 for casters
         std::int64_t mx = max_mana(host, c);
         if (mx < 1) {
@@ -792,7 +765,7 @@ GaugeValue stock_gauge(const EqHost& host, int type) {
         return {static_cast<int>(std::min<std::uint32_t>(left, 30) * 1000 / 30), {}};
     }
     default:
-        // The rest (leadership experience, the discipline timer, vitality, achievements): not tracked here.
+        // The rest (leadership experience, the discipline timer, achievements): not tracked here.
         return {-1, {}};
     }
 }

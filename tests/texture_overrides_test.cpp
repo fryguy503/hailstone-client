@@ -6,6 +6,7 @@
 #include <string_view>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 #include <vector>
 
 #include <zlib.h>
@@ -423,4 +424,33 @@ TEST_CASE("texture overrides: the Options window's texture pack choice") {
     CHECK_FALSE(texture_pack_value(-1, names));
     // each choice stores what reads back as itself
     for (int c = 0; c <= 3; ++c) CHECK(texture_pack_choice(*texture_pack_value(c, names), names) == c);
+}
+
+TEST_CASE("texture overrides: the folder changes while other threads look textures up") {
+    // A character's own settings change the pack at zone-in while models load on other threads: a lookup sees the
+    // old index or the new one, never one being built or freed.
+    hailstone::test::ScratchDir dir_scratch("texture_overrides_swap");
+    const auto dir = dir_scratch.path();
+    for (int i = 0; i < 300; ++i) write(dir / ("zone" + std::to_string(i % 7)) / ("tex" + std::to_string(i) + ".png"), {});
+    TextureOverrides& o = texture_overrides();
+    o.set_folder({});
+    std::atomic<bool> done{false};
+    std::atomic<int> found{0}, wrong{0};
+    std::vector<std::thread> readers;
+    for (int t = 0; t < 3; ++t)
+        readers.emplace_back([&, t] {
+            for (int i = 0; !done; ++i) {
+                const std::string name = "TEX" + std::to_string((i * 7 + t) % 300) + ".BMP";
+                auto file = o.find(name, "zone" + std::to_string(i % 7));
+                if (!file) continue;
+                ++found;
+                if (file->stem() != "tex" + std::to_string((i * 7 + t) % 300)) ++wrong;
+            }
+        });
+    for (int i = 0; i < 40; ++i) o.set_folder(i % 2 ? std::filesystem::path() : dir);
+    done = true;
+    for (auto& r : readers) r.join();
+    o.set_folder({});
+    CHECK(found > 0);
+    CHECK(wrong == 0);
 }
