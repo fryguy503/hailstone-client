@@ -1222,8 +1222,10 @@ zones whose art differs (Qeynos Hills' green grass, Everfrost's dark tundra), an
 - **Fetching:** the 1K JPEG diffuse, `nor_dx`, rough and disp maps of each asset from Poly Haven's download host, once,
   into the studio's cache.
 
-Only Qeynos Hills has rules so far. Seen in the zone viewer, not in a live session: the layout and seams hold; the
-photos' repeat still shows on large flat areas.
+The studio has rules for the original game's 34 outdoor zones (not the expansions', not the revamped ones; in cities
+the ground only). A texture that is also drawn with a cut-out somewhere (three of North Ro's) stays with the upscaler.
+Seen in the zone viewer, not in a live session: the layout and seams hold; the photos' repeat still shows on large
+flat areas.
 
 ### Model overrides
 
@@ -1309,8 +1311,8 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
   in a view full of trees (3.29 ms from 3.47; zone viewer, offscreen). Each kind of tree is stored once (instanced),
   so the triangles cost no memory per tree.
 
-The rules are lines of the studio's zone files (`tree <object> = <style> [<bark material>]`); only Qeynos Hills has
-them so far. A tree comes out the same on every build (its seed is its zone and name). Seen in the zone viewer, not
+The rules are lines of the studio's zone files (`tree <object> = <style> [<bark material>]`); the 34 zones with
+ground rules have them (129 trees in the 30 that have trees). A tree comes out the same on every build (its seed is its zone and name). Seen in the zone viewer, not
 in a live session. Open: leaves thin out in the smaller mips of a cut-out.
 
 ## The isometric camera's cut
