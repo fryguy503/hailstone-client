@@ -188,7 +188,9 @@ public:
         using value_type = TrackFrame;
         using reference = TrackFrame;
         using difference_type = std::ptrdiff_t;
-        using iterator_category = std::random_access_iterator_tag;
+        // Dereferencing decodes a value, so to C++17 algorithms this is only an input iterator (as iota_view's);
+        // C++20 ranges see a random-access one.
+        using iterator_category = std::input_iterator_tag;
         using iterator_concept = std::random_access_iterator_tag;
         struct pointer {
             TrackFrame value;
@@ -470,13 +472,15 @@ public:
     // malformed. A fragment whose payload does not fit its declared size is
     // kept as an empty entry and listed in errors().
     static WldFile parse(std::span<const std::byte> data, std::string label = "<memory>");
-    // Immutable snapshots keep their encoded tracks as read-only byte views, including a private cache fallback.
-    static WldFile parse(ImmutableFileBytes data, std::string label = "<memory>");
+    // A mapped snapshot (the shared cache's) keeps its encoded tracks as read-only views into the mapping. Private
+    // bytes are decoded as parse(span) does and freed on return, unless `keep_private` (the fuzzers, to reach the
+    // encoded-key reader without a cache).
+    static WldFile parse(ImmutableFileBytes data, std::string label = "<memory>", bool keep_private = false);
 
     // Validate once and keep only the named character-resource index. The loader must return the same immutable
     // bytes on every call. Full fragments decode on first use; ReadScope can reclaim them. Zone WLDs use parse().
     static WldFile deferred(std::function<std::vector<std::byte>()> loader, std::string label);
-    // Immutable loaders retain encoded tracks through decode eviction and model-owned frame views.
+    // A loader returning mapped bytes lets decoded tracks, and models built from them, keep encoded views.
     static WldFile deferred(std::function<ImmutableFileBytes()> loader, std::string label);
     using IndexVisitor = std::function<void(Ref, std::uint32_t, const std::string&, const TrackRef*)>;
     // Only successfully decoded named character resource types (0x13, 0x14, 0x30, 0x36), in fragment order.

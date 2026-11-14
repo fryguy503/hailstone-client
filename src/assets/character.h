@@ -71,7 +71,9 @@ public:
         using value_type = BonePose;
         using reference = BonePose;
         using difference_type = std::ptrdiff_t;
-        using iterator_category = std::random_access_iterator_tag;
+        // Dereferencing decodes a value, so to C++17 algorithms this is only an input iterator (as iota_view's);
+        // C++20 ranges see a random-access one.
+        using iterator_category = std::input_iterator_tag;
         using iterator_concept = std::random_access_iterator_tag;
         struct pointer {
             BonePose value;
@@ -547,7 +549,7 @@ public:
     explicit CharacterArchiveIndex(std::vector<std::shared_ptr<const CharacterArchive>> archives,
                                    std::vector<int> levels = {});
     CharacterArchiveIndex(const CharacterArchiveIndex&) = default;
-    CharacterArchiveIndex(CharacterArchiveIndex&&) noexcept = default;
+    CharacterArchiveIndex(CharacterArchiveIndex&&) = default;
     CharacterArchiveIndex& operator=(CharacterArchiveIndex other) noexcept { swap(other); return *this; }
     void swap(CharacterArchiveIndex& other) noexcept;
     const std::vector<std::shared_ptr<const CharacterArchive>>& archives() const { return archives_; }
@@ -565,7 +567,7 @@ class CharacterLibrary {
 public:
     CharacterLibrary() = default;
     CharacterLibrary(const CharacterLibrary&) = default;
-    CharacterLibrary(CharacterLibrary&&) noexcept = default;
+    CharacterLibrary(CharacterLibrary&&) = default;
     CharacterLibrary& operator=(CharacterLibrary other) noexcept { swap(other); return *this; }
     void swap(CharacterLibrary& other) noexcept;
     // `levels` gives each archive's resource level (default: kZoneResourceLevel). The archives from

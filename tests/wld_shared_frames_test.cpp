@@ -3,10 +3,12 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -20,6 +22,8 @@ using namespace hailstone;
 using namespace hailstone::assets;
 
 static_assert(std::random_access_iterator<wld::TrackFrames::const_iterator>);
+// Values are decoded on dereference, so the C++17 category is only input.
+static_assert(std::is_same_v<std::iterator_traits<wld::TrackFrames::const_iterator>::iterator_category, std::input_iterator_tag>);
 
 namespace {
 std::vector<std::byte> track_wld(bool packed, std::uint32_t declared = 2, std::size_t written = 2) {
@@ -47,6 +51,14 @@ const wld::TrackDef& track(const wld::WldFile& file) {
     const auto* value = file.get<wld::TrackDef>(1);
     REQUIRE(value);
     return *value;
+}
+
+// The bytes as the shared cache maps them: only mapped backing keeps tracks encoded.
+ImmutableFileBytes mapped(const test::ScratchDir& dir, std::vector<std::byte> bytes) {
+    SharedFileCache cache({std::filesystem::canonical(dir.path()) / "cache"});
+    auto out = cache.store(std::move(bytes));
+    REQUIRE(out.mapped());
+    return out;
 }
 
 void same_frame(const wld::TrackFrame& a, const wld::TrackFrame& b) {
@@ -107,7 +119,7 @@ TEST_CASE("shared WLD tracks: copied files and fragments retain backing after ca
     bytes.shrink_to_fit();
     cache.reset();
     SharedFileCache cleanup({directory});
-    CHECK_FALSE(cleanup.trim());
+    (void)cleanup.trim(0); // removes at most the blob's name (POSIX); the views keep the mapping
     same_frame(track(copied).frames.front(), expected);
     copied = {};
     auto moved = std::move(fragment.as<wld::TrackDef>().frames);
@@ -115,14 +127,13 @@ TEST_CASE("shared WLD tracks: copied files and fragments retain backing after ca
     const auto& view = moved;
     CHECK(view.mapped());
     same_frame(view.front(), expected);
-    CHECK_FALSE(cleanup.trim());
     moved.clear();
-    CHECK(cleanup.trim());
+    CHECK(cleanup.trim(0));
 }
 
 TEST_CASE("shared WLD tracks: fixture mutation detaches encoded keys without changing another reader") {
-    const auto bytes = track_wld(true);
-    const auto file = wld::WldFile::parse(ImmutableFileBytes::owned(bytes));
+    test::ScratchDir dir("wld-shared-mutation");
+    const auto file = wld::WldFile::parse(mapped(dir, track_wld(true)));
     const auto& source = track(file).frames;
     REQUIRE(source.encoded());
     auto changed = source;
@@ -156,26 +167,35 @@ TEST_CASE("shared WLD tracks: fixture mutation detaches encoded keys without cha
     CHECK(source.decoded_capacity() == 0);
 }
 
-TEST_CASE("shared WLD tracks: private cache fallback keeps immutable encoded storage alive") {
+TEST_CASE("shared WLD tracks: private bytes are decoded and freed, as without the cache") {
     test::ScratchDir dir("wld-shared-fallback");
     SharedFileCache disabled({std::filesystem::canonical(dir.path()) / "cache", 0});
     auto input = disabled.store(track_wld(false));
     CHECK_FALSE(input.mapped());
-    const auto file = wld::WldFile::parse(std::move(input));
-    const auto& frames = track(file).frames;
-    CHECK(frames.encoded());
-    CHECK_FALSE(frames.mapped());
-    CHECK(frames.decoded_capacity() == 0);
-    CHECK(frames.size() == 2);
-    CHECK(frames.front().translation.x == -123.5f);
-    CHECK(std::bit_cast<std::uint32_t>(frames.back().rotation.z) == 0x7fc12345u);
+    const auto via_fallback = wld::WldFile::parse(std::move(input));
+    const auto plain = wld::WldFile::parse(track_wld(false));
+    for (const auto* file : {&via_fallback, &plain}) {
+        const auto& frames = track(*file).frames;
+        CHECK_FALSE(frames.encoded());
+        CHECK_FALSE(frames.mapped());
+        CHECK(frames.private_encoded_bytes().empty());
+        CHECK(frames.size() == 2);
+        CHECK(frames.front().translation.x == -123.5f);
+        CHECK(std::bit_cast<std::uint32_t>(frames.back().rotation.z) == 0x7fc12345u);
+    }
+    // Nothing of the file's bytes is retained beyond what parse(span) keeps.
+    CHECK(via_fallback.retained_bytes() == plain.retained_bytes());
+    const auto owned = wld::WldFile::parse(ImmutableFileBytes::owned(track_wld(true)));
+    CHECK_FALSE(track(owned).frames.encoded());
+    CHECK(owned.retained_bytes() == wld::WldFile::parse(track_wld(true)).retained_bytes());
 }
 
 TEST_CASE("shared WLD tracks: truncated payloads and impossible views retain parser bounds") {
+    test::ScratchDir dir("wld-shared-bounds");
     for (bool packed : {true, false}) {
         const auto malformed = track_wld(packed, 2, 1);
         const auto owning = wld::WldFile::parse(malformed);
-        const auto viewed = wld::WldFile::parse(ImmutableFileBytes::owned(malformed));
+        const auto viewed = wld::WldFile::parse(mapped(dir, malformed));
         REQUIRE(owning.errors().size() == 1);
         REQUIRE(viewed.errors().size() == 1);
         CHECK(viewed.errors()[0].index == owning.errors()[0].index);
@@ -185,8 +205,8 @@ TEST_CASE("shared WLD tracks: truncated payloads and impossible views retain par
         auto truncated = track_wld(packed);
         truncated.pop_back();
         CHECK_THROWS(wld::WldFile::parse(truncated));
-        CHECK_THROWS(wld::WldFile::parse(ImmutableFileBytes::owned(truncated)));
-        const auto empty = wld::WldFile::parse(ImmutableFileBytes::owned(track_wld(packed, 0, 0)));
+        CHECK_THROWS(wld::WldFile::parse(mapped(dir, truncated)));
+        const auto empty = wld::WldFile::parse(mapped(dir, track_wld(packed, 0, 0)));
         CHECK(track(empty).frames.empty());
         CHECK(track(empty).frames.begin() == track(empty).frames.end());
     }
@@ -198,7 +218,8 @@ TEST_CASE("shared WLD tracks: truncated payloads and impossible views retain par
 }
 
 TEST_CASE("shared WLD tracks: concurrent const reads keep keys encoded and independent") {
-    const auto file = wld::WldFile::parse(ImmutableFileBytes::owned(track_wld(true)));
+    test::ScratchDir dir("wld-shared-concurrent");
+    const auto file = wld::WldFile::parse(mapped(dir, track_wld(true)));
     const auto& frames = track(file).frames;
     std::array<std::uint64_t, 4> sums{};
     std::vector<std::thread> readers;

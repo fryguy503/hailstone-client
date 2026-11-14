@@ -110,7 +110,7 @@ std::optional<CharacterLibrary::ItemMesh> CharacterLibrary::actor_mesh(const std
     if (const FragmentLoc* loc = actors().find(code)) {
         try {
             const wld::WldFile& w = *loc->first;
-                    const auto& actor = loc->fragment()->as<wld::ActorDef>();
+            const auto& actor = loc->fragment()->as<wld::ActorDef>();
             CharacterMesh mesh;
             // Static items: 0x2d mesh references, vertices in item space.
             for (wld::Ref s : actor.sprites) {

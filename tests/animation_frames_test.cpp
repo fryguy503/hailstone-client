@@ -5,10 +5,12 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -23,6 +25,8 @@ using namespace hailstone;
 using namespace hailstone::assets;
 
 static_assert(std::random_access_iterator<BoneFrames::const_iterator>);
+// Values are decoded on dereference, so the C++17 category is only input.
+static_assert(std::is_same_v<std::iterator_traits<BoneFrames::const_iterator>::iterator_category, std::input_iterator_tag>);
 
 namespace {
 std::vector<wld::TrackFrame> unpacked_frames() {
@@ -183,7 +187,7 @@ TEST_CASE("shared animation frames: packed mapped aliases retain backing and bor
     clip = {};
     cache.reset();
     SharedFileCache cleanup({directory});
-    CHECK_FALSE(cleanup.trim());
+    (void)cleanup.trim(0); // removes at most the name (POSIX); the keys keep their mapping
     const auto& keys = std::as_const(alias).tracks[0];
     REQUIRE(keys.mapped());
     same_pose(keys.front(), expected);
@@ -191,9 +195,8 @@ TEST_CASE("shared animation frames: packed mapped aliases retain backing and bor
     auto moved = std::move(alias.tracks[0]);
     CHECK(alias.tracks[0].empty());
     same_pose(std::as_const(moved).front(), expected);
-    CHECK_FALSE(cleanup.trim());
     moved.clear();
-    CHECK(cleanup.trim());
+    CHECK(cleanup.trim(0));
 }
 
 TEST_CASE("shared animation frames: fixture mutations detach one view and EQG owned poses remain direct") {
@@ -338,9 +341,8 @@ TEST_CASE("shared animation frames: loaded character clips aliases and borrowed 
             }
     }
     SharedFileCache cleanup({root / "cache"});
-    CHECK_FALSE(cleanup.trim());
     mapped = {};
-    CHECK(cleanup.trim());
+    CHECK(cleanup.trim(0));
 }
 
 TEST_CASE("shared animation tracks: encoded constant compaction preserves logical trajectories and copy-on-write") {

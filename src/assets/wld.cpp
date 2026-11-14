@@ -420,8 +420,11 @@ WldFile WldFile::parse(std::span<const std::byte> data, std::string label) {
     return parse_impl(data, std::move(label), {});
 }
 
-WldFile WldFile::parse(ImmutableFileBytes data, std::string label) {
+WldFile WldFile::parse(ImmutableFileBytes data, std::string label, bool keep_private) {
     const auto bytes = data.bytes();
+    // Only a mapping is worth keeping: it is shared with other clients and its pages can be dropped. Private bytes
+    // (no cache, or the cache's fallback) are decoded and freed with `data`, as parse(span) does.
+    if (!data.mapped() && !keep_private) return parse_impl(bytes, std::move(label), {});
     return parse_impl(bytes, std::move(label), std::move(data));
 }
 
@@ -846,7 +849,6 @@ std::size_t WldFile::retained_bytes() const {
         return bytes;
     }
     std::size_t total = strings_.size() + fragments_.size() * sizeof(Fragment);
-    if (!backing_.mapped()) total += backing_.bytes().size();
     auto vec = [](auto& v) { return v.size() * sizeof(typename std::decay_t<decltype(v)>::value_type); };
     auto str = [](const std::string& s) { return s.size(); };
     for (const auto& f : fragments_) {
