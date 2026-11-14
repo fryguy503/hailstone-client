@@ -578,10 +578,11 @@ AppPacket encode_guild_manage_banker(const std::string& member, std::uint32_t fl
 }
 
 namespace {
-ByteWriter guild_update(std::uint32_t action) {
+ByteWriter guild_update(std::uint32_t action, std::uint32_t guild_id = 0) {
     ByteWriter w;
     w.le(action);
-    w.zeros(0x4c);
+    w.zeros(0x48);
+    w.le(guild_id);
     return w;
 }
 } // namespace
@@ -599,8 +600,8 @@ AppPacket encode_guild_rank_name(std::uint32_t rank, const std::string& name) {
     return make_packet(Op::GuildUpdate, std::move(w));
 }
 
-AppPacket encode_guild_rank_permission(std::uint32_t rank, std::uint32_t permission, bool on) {
-    ByteWriter w = guild_update(5);
+AppPacket encode_guild_rank_permission(std::uint32_t rank, std::uint32_t permission, bool on, std::uint32_t guild_id) {
+    ByteWriter w = guild_update(5, guild_id);
     w.le(rank);
     w.le(permission);
     w.le<std::uint8_t>(on ? 1 : 0);
@@ -614,7 +615,8 @@ std::optional<GuildUpdate> decode_guild_update(const AppPacket& p) {
     return decode_with(p, [n](ByteReader& r) -> std::optional<GuildUpdate> {
         GuildUpdate v;
         v.action = r.le<std::uint32_t>();
-        r.skip(0x4c);
+        r.skip(0x48);
+        v.guild_id = r.le<std::uint32_t>();
         if (v.action == 5) {
             if (n < 0x59) return std::nullopt;
             v.rank = r.le<std::uint32_t>();

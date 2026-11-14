@@ -21,6 +21,20 @@ bool iequals(std::string_view a, std::string_view b) {
            });
 }
 
+// EQEmu removes tribute benefits without an item deletion packet (DoTributeUpdate / DoGuildTributeUpdate).
+// Retire the old received item on an authoritative state change; a later item packet supplies its replacement.
+// The first enabled snapshot may follow zone-in items, so its default previous selections are not a change.
+template <std::size_t N>
+void retire_tribute_items(game::Inventory& inventory, std::int16_t type, bool enabled, bool previous_known,
+                          const std::array<std::uint32_t, N>& previous_ids,
+                          const std::array<std::uint32_t, N>& previous_tiers,
+                          const std::array<std::uint32_t, N>& ids, const std::array<std::uint32_t, N>& tiers) {
+    for (std::size_t slot = 0; slot < N; ++slot)
+        if (!enabled || ids[slot] == kTributeNone ||
+            (previous_known && (ids[slot] != previous_ids[slot] || tiers[slot] != previous_tiers[slot])))
+            inventory.take({type, static_cast<std::int16_t>(slot), -1, -1});
+}
+
 std::uint32_t donation_count(const Item& item) { return item.stackable() ? item.stack_count : 1u; }
 
 // A bag must not take newly added contents with it when its delayed donation reply arrives.
@@ -207,8 +221,15 @@ void GameConnection::guild_tribute_describe(std::uint32_t tribute_id, std::uint3
     send_zone(encode_guild_select_tribute(tribute_id, tier));
 }
 
+bool GameConnection::can_change_guild_tribute() const {
+    return state_ == ConnectionState::InZone && guild_.in_guild() &&
+           (!guild_tribute_.active_known || !guild_tribute_.active.guild_id ||
+            guild_tribute_.active.guild_id == guild_.guild_id) &&
+           has_guild_permission(game::kGuildPermTributeBenefits);
+}
+
 void GameConnection::guild_tribute_change(const GuildTributeActive& v) {
-    if (state_ != ConnectionState::InZone || !guild_tribute_.master_id) return;
+    if (!can_change_guild_tribute() || !guild_tribute_.master_id) return;
     // EQEmu's save stores the benefits (turned off, the timer reset) and tells the guild; the modify echo with
     // command 0 asks it for the guild's active tributes again.
     send_zone(encode_guild_save_tributes(guild_tribute_.master_id, v));
@@ -216,7 +237,7 @@ void GameConnection::guild_tribute_change(const GuildTributeActive& v) {
 }
 
 void GameConnection::guild_tribute_toggle(bool on) {
-    if (state_ == ConnectionState::InZone && guild_.in_guild()) send_zone(encode_guild_tribute_toggle(on));
+    if (can_change_guild_tribute()) send_zone(encode_guild_tribute_toggle(on));
 }
 
 void GameConnection::guild_tribute_opt(bool in) {
@@ -225,7 +246,8 @@ void GameConnection::guild_tribute_opt(bool in) {
 
 void GameConnection::guild_tribute_opt_out(const std::string& member) {
     // WndNotification on TributeOptOutButton: Send_OP_GuildOptInOut(the selected member's name, 0).
-    if (state_ == ConnectionState::InZone && guild_.in_guild() && !member.empty())
+    if (state_ == ConnectionState::InZone && guild_.in_guild() && !member.empty() &&
+        (iequals(member, character_) || has_guild_permission(game::kGuildPermTributeOthers)))
         send_zone(encode_guild_tribute_opt(guild_.guild_id, false, member));
 }
 
@@ -247,9 +269,45 @@ bool GameConnection::guild_tribute_donate_cursor() {
 
 bool GameConnection::guild_tribute_donate_platinum(std::uint32_t platinum) {
     if (state_ != ConnectionState::InZone || !guild_tribute_.master_id || platinum == 0) return false;
+    if (guild_platinum_pending_) {
+        chat(ChatEvent::Kind::System, "Wait for the guild tribute master to answer your previous platinum donation.");
+        return false;
+    }
+    // TakePlatinum accepts the whole platinum represented by each carried denomination, then makes change.
+    const std::uint64_t available = static_cast<std::uint64_t>(coins_.platinum) + coins_.gold / 10u +
+                                    coins_.silver / 100u + coins_.copper / 1000u;
+    if (platinum > available) return false;
     send_zone(encode_guild_donate_platinum(platinum, guild_tribute_.master_id, guild_.guild_id));
     guild_platinum_pending_ = platinum;
     return true;
+}
+
+void GameConnection::reset_guild_tribute_bonuses(std::uint32_t next_guild_id) {
+    auto& g = guild_tribute_;
+    retire_tribute_items(inventory_, kInvGuildTribute, false, false,
+                          g.active.tributes, g.active.tiers, g.active.tributes, g.active.tiers);
+    // Source can send the new guild's ranks and active benefits before our GuildID appearance. Preserve that
+    // matching snapshot, but never carry the old guild's bonus items or participation across membership.
+    if (!next_guild_id || next_guild_id == kTributeNone || !g.active_known || g.active.guild_id != next_guild_id) {
+        g.active = {};
+        g.active_known = false;
+        g.timer_at = 0;
+    }
+    g.opted_in.reset();
+    g.master_id = 0;
+    guild_platinum_pending_ = 0;
+    if (pending_tribute_donation_ && pending_tribute_donation_->guild) pending_tribute_donation_.reset();
+}
+
+void GameConnection::reset_tribute_bonuses() {
+    auto& t = tribute_;
+    retire_tribute_items(inventory_, kInvTribute, false, false,
+                          t.settings.tributes, t.settings.tiers, t.settings.tributes, t.settings.tiers);
+    t.settings.active = false;
+    t.settings_known = false;
+    t.master_id = 0;
+    reset_guild_tribute_bonuses();
+    reset_guild_permissions(kTributeNone);
 }
 
 void GameConnection::handle_tribute(Op op, const AppPacket& p) {
@@ -264,7 +322,11 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
     case Op::GuildSendActiveTributes:
     case Op::GuildTributeToggleReply:
         if (auto v = decode_guild_tribute_active(p)) {
+            if (!v->guild_id) v->guild_id = received_guild_permission_context();
+            retire_tribute_items(inventory_, kInvGuildTribute, v->enabled, g.active_known,
+                                  g.active.tributes, g.active.tiers, v->tributes, v->tiers);
             g.active = *v;
+            g.active_known = true;
             g.timer_at = now_ms();
         }
         break;
@@ -280,7 +342,12 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
         // nothing) gets the
         // states, donations, time and flag (0x482cf0), then its tribute list row is refreshed.
         if (auto v = decode_guild_tribute_opt(p)) {
-            if (v->member == character_) g.opted_in = v->on;
+            if (iequals(v->member, character_)) {
+                g.opted_in = v->on;
+                if (!v->on)
+                    retire_tribute_items(inventory_, kInvGuildTribute, false, false,
+                                          g.active.tributes, g.active.tiers, g.active.tributes, g.active.tiers);
+            }
             for (auto& m : guild_.members) {
                 if (!iequals(m.name, v->member)) continue;
                 m.tribute_on = v->on;
@@ -302,10 +369,14 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
         break;
     case Op::GuildTributeDonatePlat:
         if (auto v = decode_guild_donate_platinum(p)) {
-            g.last_donation = static_cast<std::int32_t>(*v);
+            if (!guild_platinum_pending_ || v->platinum != guild_platinum_pending_) {
+                log::warn("ignoring an unmatched guild tribute platinum reply");
+                break;
+            }
+            g.last_donation = static_cast<std::int32_t>(v->favor);
             // EQEmu takes the platinum without a coin update (TakePlatinum(quantity, false)); TakePlatinum takes
             // nothing when the platinum is short (and answers anyway), and take_money likewise leaves the coins.
-            if (guild_platinum_pending_) game::take_money(coins_, static_cast<std::int64_t>(guild_platinum_pending_) * 1000);
+            game::take_money(coins_, static_cast<std::int64_t>(v->platinum) * 1000);
             guild_platinum_pending_ = 0;
         }
         break;
@@ -315,6 +386,7 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
             // EQEmu answered any guild donation sent before this open (Handle_OP_GuildTributeDonateItem replies in
             // the handler or never, as without a guild), so no answer to it is still coming.
             if (pending_tribute_donation_ && pending_tribute_donation_->guild) pending_tribute_donation_.reset();
+            guild_platinum_pending_ = 0;
         }
         break;
     case Op::GuildModifyBenefits:
@@ -323,7 +395,12 @@ void GameConnection::handle_tribute(Op op, const AppPacket& p) {
         if (auto a = decode_tribute_info(p)) tribute_.abilities[a->id] = std::move(*a);
         break;
     case Op::TributeUpdate:
-        if (auto s = decode_tribute_settings(p)) tribute_.settings = *s;
+        if (auto s = decode_tribute_settings(p)) {
+            retire_tribute_items(inventory_, kInvTribute, s->active, tribute_.settings_known,
+                                  tribute_.settings.tributes, tribute_.settings.tiers, s->tributes, s->tiers);
+            tribute_.settings = *s;
+            tribute_.settings_known = true;
+        }
         break;
     case Op::TributeTimer:
         if (auto t = decode_tribute_timer(p)) {

@@ -744,6 +744,32 @@ From EQEmu (zone/tribute.cpp and the RoF2 translator). Not tried live.
 
 The profile carries favour, career favour and the five chosen tributes (`PlayerProfile::tribute_points`, `career_tribute_points`, `tributes`).
 
+The bonus items arrive through `OP_ItemPacket`, type 108 for personal tribute (inventory type 6, slots 0..4)
+and 109 for guild tribute (inventory type 8, slots 0..1). These received items feed local stats and effects.
+At login, personal bonus item packets precede `OP_CharInventory`; that possessions/bank snapshot preserves
+already received tribute items unless it explicitly supplies their replacements.
+The server does not notify their deletion on deactivation or opt-out: received tribute settings, guild active
+benefits and our own opt state retire obsolete items. Changed selections retire the affected slot; repeated
+unchanged state preserves it. Guild membership and session changes retire the previous context's items too.
+
+Guild benefit editing and activation require received guild permission 23, checked both by the shared window
+bridge and before sending a request. Another member's opt-out requires permission 22; self opt-in/out remains
+available. Revocation discards unsaved guild-benefit edits. Both UI packs use these shared checks. Source can
+send the next guild's tagged permission rows, rank names and active tribute snapshot before the own GuildID
+appearance. Those permissions remain separate until membership confirms their guild. The active packet's
+leading DWORD can be zero (`SendGuildActiveTributes`) or the guild id (`GuildTributeToggleReply`); an untagged
+snapshot uses the received rank-table context. Matching new-guild metadata survives the appearance while old
+bonus items retire, and a future guild's state cannot authorize changing the current guild's benefits.
+Joining a different guild also clears the old rank until the new GuildRank appearance confirms it; a previous guild's
+leader rank cannot authorize actions during split delivery of the two appearances.
+
+A guild platinum donation has one outstanding request at a time. Its 12-byte reply retains both quantity and
+favour; only a matching quantity can debit the purse and update the last donation. Malformed, unmatched and
+repeated replies leave it alone. No coin is removed before the answer. Session reset or a later guild-master
+open reply retires an unanswered request (the zone connection orders that open after any earlier donation
+answer); a local timeout cannot identify a new transaction. The existing decoder fuzz tests and mock tests
+cover malformed replies, overlap, duplicates, making change and reset. No server changes are needed.
+
 ### Mercenaries (`game/mercenary.{h,cpp}`, `GameConnection` in `net/game_connection_merc.cpp`, windows in `app/lua_eq_merc.cpp`)
 
 The handlers and senders are checked against 25 recorded vector files (`tests/merc_vectors_test.cpp`, 0 mismatches). EQEmu's `patch_RoF2.conf` names only fourteen of the opcodes, the first thirteen and the switch 0x1b37 (in `net/opcodes_rof2.inc`); the others have no EQEmu name and are constants in `game/mercenary.h` (`kOpMerc*`). The test server has `Mercs:AllowMercs` false and no class-71 NPC, so none of the server's answers were seen live; on zone-in the client sends 0x31e4 and 0x4820 {8} (unanswered).

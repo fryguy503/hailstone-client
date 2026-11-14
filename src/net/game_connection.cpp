@@ -153,6 +153,7 @@ void GameConnection::fail(std::string message) {
     error_ = std::move(message);
     state_ = ConnectionState::Disconnected;
     reset_tribute_donations();
+    reset_tribute_bonuses();
     world_drop_pending_ = false;
     zone_exit_ = ZoneExit::None;
     if (zone_session_) zone_session_->disconnect();
@@ -180,6 +181,7 @@ void GameConnection::start(const WorldTicket& ticket) {
     reset_achievements();
     reset_rewards();
     reset_tribute_donations();
+    reset_tribute_bonuses();
     ticket_ = ticket;
     camped_out_.reset();
     link_death_.reset();
@@ -691,6 +693,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         reset_fellowship(true);
         reset_commerce_for_zone();
         reset_tribute_donations();
+        reset_tribute_bonuses();
         reset_progress_for_zone();
         reset_achievements();
         reset_rewards();
@@ -709,7 +712,6 @@ void GameConnection::handle_world(const AppPacket& p) {
         adventure_.recruiter = 0;
         adventure_.offer.clear();
         guild_tribute_.master_id = 0;
-        guild_platinum_pending_ = 0;
         state_ = ConnectionState::ZoneConnecting;
         status_ = "Connecting to the zone server";
         break;
@@ -1289,6 +1291,10 @@ void GameConnection::handle_zone(const AppPacket& p) {
             for (std::size_t i = 0; i < tribute_.settings.tributes.size() && i < profile_->tributes.size(); ++i) {
                 tribute_.settings.tributes[i] = profile_->tributes[i].first;
                 tribute_.settings.tiers[i] = profile_->tributes[i].second;
+            }
+            if (guild_.guild_id != profile_->guild_id) {
+                reset_guild_tribute_bonuses(profile_->guild_id);
+                reset_guild_permissions(profile_->guild_id);
             }
             guild_.guild_id = profile_->guild_id;
             guild_.rank = profile_->guild_rank;
@@ -2297,6 +2303,7 @@ void GameConnection::disconnect() {
     reset_achievements();
     reset_rewards();
     reset_tribute_donations();
+    reset_tribute_bonuses();
     release_eye_control();
     blood_spurts_.clear();
     world_drop_pending_ = false;
@@ -2750,9 +2757,15 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
                     auto line = game::guild_id_appearance_line(guild_, id == me, s->guild_id, a->parameter, s->name);
                     if (line.eqstr && profile_) system(line.eqstr, line.args, 0x111);
                     if (id == me && guild_.guild_id != a->parameter) {
+                        reset_guild_tribute_bonuses(a->parameter);
+                        reset_guild_permissions(a->parameter);
+                        // A new guild's rank must arrive before it can authorize the staged permissions. Keep
+                        // GuildStatus's native history for rank-change chat; without membership no action is allowed.
+                        if (a->parameter && a->parameter != 0xffffffff) {
+                            guild_.rank = 0;
+                            s->guild_rank = 0;
+                        }
                         // another guild's ranks, names, page and channel
-                        guild_.permissions.clear();
-                        guild_.rank_names = {};
                         guild_.url.clear();
                         guild_.channel.clear();
                         guild_.guild_id = a->parameter;

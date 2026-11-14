@@ -50,6 +50,23 @@ Outside this directory, with vectors: `net/reliable_channel.*` (the session laye
 ack-all: the resend timeout min(1.25 rtt + 300, 8000) ms), and the UI rules the windows call (`game/spell_book.h`,
 `group_rules.h`, `quantity_dialog.h`, `trade_rules.h`, `cursor_drop.h`; `tests/ui_rules_vectors_test.cpp`).
 
+## Tribute bonus items
+
+The server supplies personal tribute bonus items in inventory type 6, slots 0..4, and guild tribute bonus items
+in type 8, slots 0..1. `sheet_builder.cpp` puts them in the character's existing extra item lookups (0..4 and
+15..16), so their normal item stats, worn effects and focus effects take the same paths as the other item
+bonuses. Their stack count does not multiply those bonuses. Trophy containers still have no source on stock EQEmu.
+The bulk possessions/bank inventory can follow personal tribute item packets at login; it preserves those
+separately received bonus containers instead of erasing them.
+
+Stock EQEmu removes these items without item-deletion packets when tribute is disabled or a member opts out.
+The connection therefore retires the cached items on received deactivation, changed selections, self opt-out,
+guild changes and session transitions. A toggle request alone grants or removes no bonus. Repeated unchanged
+active-state messages preserve the current items; new item packets replace them normally.
+
+Packet, mechanics and mock-connection regressions cover item replacement and retirement, along with the benefit
+windows' guild permissions and platinum-donation replies. Full tribute workflows still need live acceptance.
+
 ## Exactness
 
 - Integer math wraps (explicit unsigned adds and multiplies).

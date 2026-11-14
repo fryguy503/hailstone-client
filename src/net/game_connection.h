@@ -723,6 +723,7 @@ public:
     struct Tribute {
         std::map<std::uint32_t, TributeAbility> abilities; // by tribute id
         TributeSettings settings;                           // the server's (OP_TributeUpdate)
+        bool settings_known = false; // received settings, rather than the initial profile's selected ids
         std::int32_t points = 0, career = 0;
         std::uint32_t timer_ms = 0;      // OP_TributeTimer's value
         std::int64_t timer_at = 0;       // when it came (now_ms)
@@ -1126,6 +1127,7 @@ public:
         std::map<std::uint32_t, TributeAbility> abilities;
         std::map<std::uint32_t, std::string> descriptions;
         GuildTributeActive active;
+        bool active_known = false; // a first active update may follow the zone-in's item packets
         std::int64_t timer_at = 0; // when active.timer_ms came (now_ms)
         std::optional<bool> opted_in;
         std::uint32_t master_id = 0;
@@ -1137,6 +1139,7 @@ public:
     const GuildTribute& guild_tribute() const { return guild_tribute_; }
     void close_guild_tribute_master() { guild_tribute_.master_id = 0; }
     void guild_tribute_describe(std::uint32_t tribute_id, std::uint32_t tier = 0);
+    bool can_change_guild_tribute() const;
     // Saves the guild's two benefits (OP_GuildSaveActiveTributes, then OP_GuildModifyBenefits).
     void guild_tribute_change(const GuildTributeActive& v);
     void guild_tribute_toggle(bool on);
@@ -2221,6 +2224,8 @@ public:
     // LocalPC_HasGuildPermission @0x4241f0 (game/guild_ranks.h): a GM always; else the rank's bit of the table
     // OP_GuildUpdate action 5 fills.
     bool has_guild_permission(std::int32_t permission) const;
+    // Tagged SendGuildRanks rows can arrive before the own GuildID appearance during a membership change.
+    std::uint32_t received_guild_permission_context() const;
     const game::RaidState& raid() const { return raid_; }
     const FellowshipState& fellowship() const { return fellowship_; }
     void fellowship_create();
@@ -3258,6 +3263,13 @@ private:
     // Social, guilds, raids, the chat server.
     game::SocialState social_;
     game::GuildState guild_;
+    struct PendingGuildPermissions {
+        std::uint32_t guild_id = 0;
+        game::GuildPermissions permissions;
+        std::array<std::string, 9> rank_names;
+    };
+    std::optional<PendingGuildPermissions> pending_guild_permissions_;
+    void reset_guild_permissions(std::uint32_t next_guild_id);
     Tracking tracking_;
     void handle_track_reply(const AppPacket& p);
     void track_filter_all();
@@ -3413,8 +3425,15 @@ private:
     bool begin_tribute_donation(bool guild, const Item& item, std::uint32_t master_id);
     bool finish_tribute_donation(bool guild, const ItemSlot& slot, std::uint32_t quantity,
                                 std::uint32_t master_id, bool consumed);
-    void reset_tribute_donations() { pending_tribute_donation_.reset(); }
-    std::uint32_t guild_platinum_pending_ = 0; // a guild platinum donation awaiting its answer
+    void reset_tribute_donations() {
+        pending_tribute_donation_.reset();
+        guild_platinum_pending_ = 0;
+    }
+    // One request at a time: the reply identifies only the quantity, not a transaction. A later master-open
+    // reply also clears this fence, after any donation reply on the same ordered zone connection.
+    std::uint32_t guild_platinum_pending_ = 0;
+    void reset_guild_tribute_bonuses(std::uint32_t next_guild_id = kTributeNone);
+    void reset_tribute_bonuses(); // zone/session ended: no received tribute items belong to the next zone
     void handle_tribute(Op op, const AppPacket& p);
     Expedition expedition_;
     Adventure adventure_;

@@ -13,6 +13,7 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Native vitality gauges and inventory bars in both packs, campsite categories loaded from the player's resources, DBString type-0 kit descriptions, gamepad leader markers and a server-expiry countdown. Category masks and description lookup were checked against the original handlers.
 
 ### Combat and spells (do first)
+- [x] Personal and guild tribute: received bonus items feed local stats/effects and retire on received deactivation, selection changes, opt-out and context changes; guild benefit controls enforce received permissions, and guild platinum donations wait for matching replies. Packet, mechanics and mock/UI regressions; full live tribute workflow acceptance remains open.
 - [x] Extended chat channels 57..107 and user colours 355..408 for servers that send a later client's chat colours (a Hailstone extension; stock routing and colours unchanged; docs/mechanics.md "Extended chat routing").
 - [x] Missiles: a despawned source or target as DeleteMyMissiles handles it; flying through walls with a target is the original's behaviour (60b1934). Not tested live (no archer).
 - [x] Valid spell missiles: spell lifetime, launch and ending stages, stationary area contact, source physics clock and spell 859 local presentation. Packet-to-emitter and missile fixtures cover these; live gameplay remains unverified. Invalid or absent spell ids still end immediately.
