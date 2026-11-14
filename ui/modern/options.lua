@@ -292,6 +292,9 @@ local function displayTab()
   end)
   -- Hailstone's isometric camera (docs/isometric.md): the iso_* options, also /camera.
   section("Isometric Camera", function()
+    check("click_move", "Click to Move in Every Camera",
+      "Click the ground to walk there, and click a door, an item or an NPC out of reach to walk to it and use it, "
+      .. "in the other cameras too. The isometric camera always moves this way.")
     local deg = function(v) return v .. "°" end
     check("iso_camera", "Isometric Camera",
       "Look down on your character from above and to one side, and click to move. /camera iso and /camera behind "
@@ -631,7 +634,7 @@ local function graphicsTab()
     check("neighbour_zones", "Neighbour Zones",
       "Draws the next zone past an outdoor zone line in the distance (modern lighting; scenery only).")
     check("horizon_hills", "Horizon Hills",
-      "Distant hills and mountains round outdoor zones, so the land does not end in haze (modern lighting; scenery only).")
+      "Land, hills and mountains past the edges of outdoor zones, in the zone's own ground, so the world does not end in haze (modern lighting; scenery only).")
     slider("tree_detail", "Tree Detail Distance", 50, 200, pct,
       "How far a texture pack's generated trees keep their full and middle detail. Lower is faster; further trees turn to simpler ones sooner.")
     check("ground_npcs", "Ground Floating NPCs",

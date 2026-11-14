@@ -116,6 +116,10 @@ private:
 // ui.CaptureKeyboard) keep them.
 bool keyboard_for_ui(int requested);
 
+// Called before ImGui::NewFrame: a Tab pressed while no item is active does not move ImGui's focus into a window's
+// first field (the chat input), so it stays the game's. Tab still moves between fields while one is typed in.
+void keep_tab_from_windows();
+
 // The name plates' font as ImGuiLayer::set_plate_font set it (nullptr when the built-in font stands in: draw with
 // ImGui's font at plate_font_size()), and its size in ImGui's pixels. plate_font_faux_bold: bold was asked for and
 // the face has no bold file, so the plates strike each letter twice.

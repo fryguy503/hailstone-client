@@ -180,7 +180,9 @@ The `ui` table adds the navigation calls that the gamepad windows need: `ui.IsIt
 it draws shapes and uses only the item, spell and gem icon sheets. It is designed for 10-foot viewing: a base font
 of at least 20 px at 1080p, targets of at least 48 px, and every action reachable from the pad.
 
-- **HUD** (always on, no focus): player HP, mana and endurance (the panel pulses red while auto attack is on); the
+- **HUD** (always on, no focus): player HP, mana and endurance (the panel pulses red while auto attack is on; the
+  panel takes no mouse input, except in a group its name row: a click targets the player, a right click opens the
+  group role menu); the
   target with its con colour and distance; the group; the pet; the casting bar; short buff rows; the zone and the compass.
 - **Minimap** (top right, a client extension; the game has only the map window): the zone map in a circle
   around the player (`eq.DrawMinimap`), north up or turning with the player (right click), with the zone name
@@ -194,6 +196,11 @@ of at least 20 px at 1080p, targets of at least 48 px, and every action reachabl
 - **Cross hotbar** (bottom centre): the three sets as two diamonds (D-pad, face buttons) each, shown in the pad's
   glyphs. The held set is enlarged and the others dimmed. Each slot shows its icon, its cooldown and whether it is
   usable.
+- **Group roles** (group.lua, lib/role_icons.lua): the Group window (main menu, Group) lists the player first and
+  then the members, each with icons for the roles the server confirmed. Y on a row opens that member's group role
+  menu (Main Tank, Main Assist, Puller; the same menu a right click on a name opens, docs/dev-ui.md), which takes the
+  pad's focus as every game menu does: A toggles a role, B closes it. The rows are greyed for all but the group
+  leader. The HUD's group rows and player name open it with a right click too.
 - **Main menu** (Start, `mainmenu.lua`): a tiled, focus-driven menu with Inventory, Spells, Abilities, AA, Skills,
   Map, Group, Pet, Raid, Guild, Friends, Who, Bazaar, Quests, Mail, Chat, Options, All Windows (every window of the
   EQ menu), More (`system.lua`, the game's other windows: help, a bug report, the storyline, the NPC journal,

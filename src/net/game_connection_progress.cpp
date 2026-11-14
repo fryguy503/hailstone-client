@@ -79,14 +79,12 @@ void GameConnection::handle_progress(Op op, const AppPacket& p) {
 
     // ---- training
     case Op::GMTraining:
-        // Handle_OP_GMTraining @0x4b49c0: the guildmaster must still be within reach.
+        // Handle_OP_GMTraining @0x4b49c0: the guildmaster must still be within reach
+        // (PlayerClient_IsWithinInteractRange(gm, 0, 20.0): 3D, at most 20).
         if (auto g = decode_gm_training(p)) {
             training_requested_ = 0;
             auto it = world_.spawns.find(g->trainer_id);
-            const game::Spawn* me = world_.player();
-            if (it == world_.spawns.end() || !me) break;
-            glm::vec3 at = motion_known_ ? position_ : me->position;
-            if (glm::distance(at, it->second.position) >= kInteractRange) break;
+            if (it == world_.spawns.end() || distance_to(g->trainer_id) > kInteractRange) break;
             if (!g->success) break; // the original then ends the interaction
             game::TrainingSession s;
             s.trainer_id = g->trainer_id;
@@ -588,9 +586,11 @@ std::int32_t GameConnection::train_cost(std::size_t row) const {
 }
 
 void GameConnection::close_trainer() {
-    if (!training_) return;
-    send_zone(encode_gm_end_training(training_->trainer_id, world_.player_id));
+    std::uint32_t npc = training_ ? training_->trainer_id : training_requested_;
+    if (!npc) return;
+    if (state_ == ConnectionState::InZone) send_zone(encode_gm_end_training(npc, world_.player_id));
     training_.reset();
+    training_requested_ = 0;
 }
 
 // ---------------------------------------------------------------- tradeskills
@@ -669,6 +669,7 @@ void GameConnection::send_combine(const ItemSlot& container_slot, std::uint32_t 
     if (container_type == 0x37 || container_type == 0x38) {
         Confirmation q;
         q.id = kConfirmMoldCombine;
+        q.slot = container_slot;
         q.text = strings_.format(container_type == 0x37 ? 6328 : 6339, std::vector<std::string>{});
         q.offer = encode(c);
         ask(std::move(q));

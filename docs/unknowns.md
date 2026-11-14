@@ -8,6 +8,29 @@ What the client does not implement yet, or implements with an approximation it c
 - The 64-member array layout and the 1080-byte invitation are extensions beyond RoF2, documented in `docs/protocol/rof2-packets.md`. PR #5134 hard-caps its model and serializers at twelve, so its membership rule alone cannot enable 64. A server that sends expanded rosters and a live roster capture would establish interoperability above twelve.
 - Declining sends action 4, as RoF2 does (`Send_Opcode_0x7121` @0x668710). PR #5134 reads action 4 as a legacy camp destruction, so against that server a decline reaches its camp handler instead of refusing the invitation; that is the server's to fix, since RoF2 sends the same. An unanswered invitation that times out sends nothing: whether the original's dialog sends action 4 on its 100-second timeout is not traced; the confirmation dialog's timeout path (dialog type 0xc) would settle it.
 
+## Shared archive memory
+
+- `assets.shared_memory=auto` (docs/layout.md "Shared archive memory") is measured on Linux only, one and two clients
+  in one zone (docs/research/shared-asset-memory.md). Windows and macOS mapping, locking and eviction are covered by
+  unit tests, not live sessions; sustained play with zoning, and more clients, are not measured. A cache file is
+  checked once per client and then trusted: a file damaged on disk while a client runs is not noticed by that client
+  (the parsers still bound what they read).
+
+## Shared GPU textures
+
+The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/research/shared-gpu-memory.md):
+
+- When sharing stops, a client copies its imports into its own images (`GpuSharedCache::localize`). That copy reads
+  each import once more after the client has left the lease, and a client whose shared frame did not finish within
+  2 seconds gives up the lease (by disconnecting) while that frame may still be running. Vulkan gives an external
+  image to one instance at a time; both cases only read immutable images that every client keeps in
+  `SHADER_READ_ONLY_OPTIMAL`, and the copy's layout change to `TRANSFER_SRC_OPTIMAL` is on the client's own image
+  object, but whether a driver may rewrite such an image's memory (compression metadata) on that transition is not
+  established. Khronos guidance or the driver vendors' word on external images would settle it; a validation-layer
+  run of the failure paths on AMD, NVIDIA and Intel would at least rule out API misuse.
+- The failure paths (broker killed, a client killed holding the lease, lease timeout, hung frame, localisation) are
+  covered by unit tests of the bookkeeping and the client's decisions only, not on Windows with real GPUs.
+
 ## Network and session
 
 - Return Home on the character select is enabled for a character whose list entry has both `go_home` and `enabled` set. The original checks `bCanGoHome` and `bUseable` (`CCharacterListWnd::EnableButtons` @0x42f4b0); that `bUseable` comes from the list's `enabled` byte is assumed, not traced. Stock EQEmu always sends `enabled = 1`, so it changes nothing there. Tracing where OP_SendCharInfo's handler fills `CharSelectInfo` +0x15c would settle it.
@@ -53,6 +76,7 @@ What the client does not implement yet, or implements with an approximation it c
 - A window close request on a loading screen waits for the next screen (as the original's queued message would); a second one quits at once.
 - Which zone version the server runs: RoF2's zone-in packets do not say, so with a live asset folder and no `.s3d`, the revamped `.eqg` of bazaar, highpasshold or lavastorm loads only when the safe point OP_NewZone sends stands on its floor (at most 10 units above it; game/revamped_zone.h). It was measured on PEQ's rows only: the revamp's safe points stand 2.0 to 4.2 units above its floor, and the old versions' have no floor under them (bazaar, lavastorm) or one 15.9 units down (nektulos). A server whose zone row has another safe point (an unset 0, 0, 0, a point in the air) gets the refusal or, by chance, the revamp. There is no fallback on the spawns: they arrive after the load has started, so testing them would mean loading the zone twice. A neighbour zone loaded ahead (no OP_NewZone yet) and the offline viewers keep the refusal. Testing other servers' zone tables would settle it.
 - Arena and Nektulos with a live folder: the `.s3d` wins over the revamped `.eqg` (`is_eqg_zone`), as before, and the safe-point test is not asked. Yet PEQ runs the revamp there: its only Arena row's safe point stands 4.2 units above the live arena.eqg's floor and 51 above arena.s3d's, with 6 of 6 spawns on the `.eqg` and 1 of 6 on the `.s3d`; Nektulos version 1 (expansion 10 on) has 400 of 404 spawns on nektulos.eqg and 39 of 404 on nektulos.s3d. Whether a RoF2 folder's own arena.s3d and nektulos.s3d are the live folder's, and whether the safe point should also choose between a present `.s3d` and the `.eqg`, are open. Comparing the files with a RoF2 install would settle the first.
+- The local player's fly mode (docs/mechanics.md "fly mode"): the original rebuilds its effect cache, and so recomputes levitation, whenever something clears the cache flag (+0x1a4): OP_Buff in every form, `HitBySpell`, `RemoveAffect`, the buff tick for tick-varying effects, and possibly worn item changes. Hailstone counts a change of a buff slot's spell (or of the SPA 57 values) as a rebuild, so an OP_Buff that refreshes a slot with the same spell, the tick and an item change do not put a server-set mode back; a slot losing or gaining a levitate spell stands for `RemoveAffect`'s and `HitBySpell`'s SPA 57 cases, though OP_Buff's copy (bufffade 3) calls neither; the "no levitation left" test reads the buff cache's SPA 57, where `PlayerZoneClient::Levitating` also counts worn items and AAs. At zone-in Hailstone applies the spawn record and then rebuilds; whether the original's first rebuild comes after its own spawn exists (`UpdateLevitationState` does nothing without one) is not traced, and only matters when the record disagrees with the buffs (stock EQEmu sends 2 for a levitating player, else 0). A live session with GM `#set flymode` and buffs, or a trace of the cache flag's writers, would settle it.
 
 ## Navigation (a Hailstone addition, docs/navigation.md)
 
@@ -89,6 +113,11 @@ What the client does not implement yet, or implements with an approximation it c
 - AllowedToAttack's newbie-zone rule reads the target's Zone (+0x210); the client fills it for every spawn with the current zone's id and instance (`AttackCheckInput::zone`), as a spawn is only known in the player's own zone. Where the original writes a spawn's +0x210 (the spawn packet or the zone-in) was not traced; tracing those writes would settle it.
 
 ## Items, inventory and commerce
+
+- Mercenary liaison window (docs/mechanics.md "Leaving an NPC interaction"): its range check is the window's
+  observer 0x6eb560 (vftable 0x9f1ef8 slot 1; a liaison id set and the liaison missing or beyond 20 units, 3D, hides
+  it), but what calls the observer, and how often, is not traced. Hailstone checks every connection update. Tracing
+  the callers of that slot in the mercenary manager's event dispatch would settle it.
 
 - Ctrl bag moves (game/bag_move.h): ProcessMove's ValidateMove refusals (lore, equip, storage) are not run before OP_MoveMultipleItems goes (the server checks), and FindRoom's place trading (0x56f1c0) is left out; no list MoveItem builds was found where it adds room.
 - Looting: the quantity asked for a partial stack goes in OP_LootItem's last field, which EQEmu ignores (it loots the whole stack; seen live on NMS: 5 of 15 typed, 15 looted). Link All's chat input, and the item display icon's link that takes the same path, skip the IME check of CEditWnd::AddItemTag and count the input's links from its text. Both add the link at the end of what is typed; AddItemTag goes through ReplaceSelection, so the original puts it at the input's caret or over its selection. Settled by tracing where CEditWnd keeps the caret while the input does not have the focus, and putting the link there.

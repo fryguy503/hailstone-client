@@ -106,3 +106,91 @@ TEST_CASE("zone renderer: a prepare that is cancelled stops and returns nothing"
     CHECK(render::ZoneRenderer::prepare(zone, options, 16));
     CHECK(asked > 0);
 }
+
+namespace {
+
+// A flat terrain mesh of `cell` squares over x0..x1, y0..y1 at height z, one plain material on `texture`.
+assets::Mesh flat_terrain(float x0, float y0, float x1, float y1, float cell, float z, const char* texture) {
+    assets::Mesh m;
+    for (float x = x0; x < x1; x += cell)
+        for (float y = y0; y < y1; y += cell)
+            for (glm::vec3 p : {glm::vec3(x, y, z), glm::vec3(x + cell, y, z), glm::vec3(x + cell, y + cell, z),
+                                glm::vec3(x, y, z), glm::vec3(x + cell, y + cell, z), glm::vec3(x, y + cell, z)}) {
+                assets::Vertex v;
+                v.position = p;
+                v.normal = {0, 0, 1};
+                v.uv = glm::vec2(p) / 64.0f;
+                v.color = 0xff808080u;
+                m.indices.push_back(static_cast<std::uint32_t>(m.vertices.size()));
+                m.vertices.push_back(v);
+            }
+    m.materials.resize(1);
+    m.materials[0].name = texture;
+    m.materials[0].frames = {texture};
+    m.parts.push_back({0, static_cast<std::uint32_t>(m.indices.size()), 0, true});
+    return m;
+}
+
+} // namespace
+
+TEST_CASE("zone renderer: the land round the zone, shaped by a neighbour's ground, and the neighbour's part of it") {
+    assets::Zone zone;
+    zone.name = "here";
+    zone.terrain.push_back(flat_terrain(0, 0, 2000, 1500, 100, 50, "grass.bmp"));
+    const auto plain = render::ZoneRenderer::prepare(zone, {}, 64);
+    REQUIRE(plain);
+    const auto land = render::ZoneRenderer::prepared_land(*plain);
+    REQUIRE(land.build);
+    CHECK(land.build->field.valid());
+    CHECK(land.build->sources.empty());
+    CHECK(land.build->ground.frames == std::vector<std::string>{"grass.bmp"});
+    CHECK(land.build->ground.density == doctest::Approx(1.0f / 64.0f));
+    CHECK(land.triangles[0] > 0);
+    CHECK(land.triangles[1] + land.triangles[2] == 0);
+
+    // A neighbour's ground east of it, from the cache: the land takes it in.
+    std::vector<float> ground(40 * 30, 150.0f);
+    auto source = std::make_shared<const render::HorizonSource>(
+        render::horizon_source("east", {2000.0f, -400.0f}, render::kHorizonCell, 40, 30, ground));
+    render::ZoneRenderOptions shaped;
+    shaped.horizon_sources = {source};
+    const auto with = render::ZoneRenderer::prepare(zone, shaped, 64);
+    REQUIRE(with);
+    const auto land2 = render::ZoneRenderer::prepared_land(*with);
+    REQUIRE(land2.build);
+    REQUIRE(land2.build->sources.size() == 1);
+    CHECK(land2.build->sources[0]->name == "east");
+
+    // The neighbour draws its part: each triangle with its own ground and with the current zone's.
+    auto patch = std::make_shared<render::LandPatch>();
+    patch->mesh = render::horizon_mesh(land2.build->field, land2.build->sources, 0);
+    patch->ground = land2.build->ground;
+    patch->rock = land2.build->rock;
+    REQUIRE_FALSE(patch->mesh.squares.empty());
+    const std::size_t patch_triangles = (patch->mesh.ground.size() + patch->mesh.rock.size()) / 3;
+    assets::Zone east;
+    east.name = "east";
+    east.terrain.push_back(flat_terrain(-500, 0, 3000, 2000, 100, 0, "dirt.bmp"));
+    render::ZoneRenderOptions neighbour;
+    neighbour.offset = {2500.0f, 0.0f, 150.0f};
+    neighbour.keep = {glm::vec4(1.0f, 0.0f, 0.0f, -2000.0f)}; // past x 2000
+    neighbour.behind = true;
+    neighbour.land = patch;
+    const auto drawn = render::ZoneRenderer::prepare(east, neighbour, 64);
+    REQUIRE(drawn);
+    const auto part = render::ZoneRenderer::prepared_land(*drawn);
+    CHECK_FALSE(part.build); // a neighbour keeps no land of its own
+    CHECK(part.footprint == patch->mesh.squares.size());
+    CHECK(part.triangles[1] == patch_triangles);
+    CHECK(part.triangles[2] == patch_triangles);
+    CHECK(part.triangles[0] == 0);
+
+    // A neighbour with no plain ground of its own: the current zone's alone, not faded.
+    assets::Zone bare;
+    bare.name = "bare";
+    const auto alone = render::ZoneRenderer::prepare(bare, neighbour, 64);
+    REQUIRE(alone);
+    const auto part2 = render::ZoneRenderer::prepared_land(*alone);
+    CHECK(part2.triangles[0] == patch_triangles);
+    CHECK(part2.triangles[1] + part2.triangles[2] == 0);
+}

@@ -11,6 +11,7 @@
 
 #include "core/frame_sections.h"
 #include "core/log.h"
+#include "core/shared_file_cache.h"
 #include "net/game_connection.h"
 #include "platform/process.h"
 #include "render/actor_renderer.h"
@@ -264,6 +265,13 @@ void PerfUi::draw(const PerfInputs& in) {
             row("Process (resident)", "%s", bytes_text(static_cast<double>(*rss)).c_str());
         if (auto commit = platform::private_commit_memory())
             row("Process (private commit)", "%s", bytes_text(static_cast<double>(*commit)).c_str());
+        if (in.shared_files) {
+            const auto cache = in.shared_files->stats();
+            row("Shared asset backing", "%s", bytes_text(static_cast<double>(cache.mapped_bytes)).c_str());
+            row("Shared asset loads", "%llu hits, %llu built, %llu private fallbacks, %llu evicted",
+                static_cast<unsigned long long>(cache.hits), static_cast<unsigned long long>(cache.builds),
+                static_cast<unsigned long long>(cache.fallbacks), static_cast<unsigned long long>(cache.evictions));
+        }
         if (in.gpu) {
             row("GPU", "%s", in.gpu->gpu_name().c_str());
             const auto heaps = in.gpu->heap_use();

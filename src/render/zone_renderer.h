@@ -5,8 +5,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <string>
 #include <utility>
@@ -36,6 +38,37 @@ namespace hailstone::render {
 // (game/scene_light.h) or full-bright (a debugging view).
 enum class VertexLighting : std::uint32_t { Classic = 0, None = 1 };
 
+// One of the land's materials (render/horizon.h): the zone's plain material it borrows, mapped flat with the zone's
+// own texture scale and wound as the zone winds its own, under one colour (the level ground's median baked light).
+struct HorizonLook {
+    std::vector<std::string> frames;
+    std::uint32_t delay = 0;
+    bool two_sided = false;
+    bool front_ccw = false;
+    float density = 0.0f; // texture units a world unit
+    bool flip = false;    // the zone's own faces up the other way round
+    std::uint32_t color = 0xffffffffu;
+    bool valid() const { return !frames.empty() && density > 0.0f; }
+};
+
+// What the land round a zone was built from (ZoneRenderer::horizon_build), for its neighbours: the field (its grid and
+// lines), the neighbours' ground it was shaped by, its ground and rock materials and their textures' files.
+struct HorizonBuild {
+    HorizonField field;
+    HorizonSources sources;
+    HorizonLook ground, rock;
+};
+
+// A neighbour zone's part of the land round the current zone (app/neighbour_zones.h): the squares its ground owns
+// (render::horizon_mesh with `only`), which the neighbour draws in place of its own ground and the current zone hides.
+// Each triangle twice, with the current zone's material and with the neighbour's own, each showing where the other
+// does not (zone.frag's land blend, by the vertices' weight), so the one ground fades into the other.
+struct LandPatch {
+    HorizonMesh mesh;
+    HorizonLook ground, rock; // the current zone's
+    std::map<std::string, std::vector<std::byte>> files; // their textures' files, from the current zone
+};
+
 struct ZoneRenderOptions {
     // eqclient.ini [Defaults] MultiPassLighting (render::read_multipass_lighting):
     // the zone's point lights shade zone geometry whose effect has a
@@ -49,10 +82,12 @@ struct ZoneRenderOptions {
     glm::vec3 offset{0.0f};
     std::vector<glm::vec4> keep;
     // The parts of a triangle (after the move) to keep, as convex polygons of barycentric weights over its corners,
-    // or nullopt to keep it whole: a neighbour's ground goes where the current zone has its own
-    // (game::split_off_ground).
+    // or nullopt to keep it whole: a neighbour's ground goes where the current zone or the land draws the ground
+    // (game::split_off_land, game::split_off_ground). `Part`: what the triangle is, the zone's own terrain (its
+    // meshes), a water or lava surface, or a placed object.
+    enum class Part : std::uint8_t { Placed, Terrain, Liquid };
     std::function<std::optional<std::vector<std::vector<glm::vec3>>>(const glm::vec3&, const glm::vec3&,
-                                                                     const glm::vec3&)>
+                                                                     const glm::vec3&, Part)>
         split;
     // Drawn behind the current zone, which is drawn first: a neighbour's fragments lose ties and near-ties with what
     // the current zone already drew (a strict depth test and a depth bias pushing them back).
@@ -64,6 +99,10 @@ struct ZoneRenderOptions {
     bool material_maps = true;
     // Asked between meshes and materials while preparing: true stops it, and prepare() returns null. Unset: never.
     std::function<bool()> cancelled;
+    // The current zone: the neighbours' ground its land is shaped by (the cache's, app/neighbour_zones.h).
+    HorizonSources horizon_sources;
+    // A neighbour: its part of the land, drawn after its own geometry is moved and cut (not moved or cut itself).
+    std::shared_ptr<const LandPatch> land;
 };
 
 // CRender::ReadIniRenderSettings @0x10098350 and CDisplay::InitWorld: true
@@ -130,6 +169,15 @@ public:
         std::size_t vertices = 0, indices = 0, instances = 0, triangles = 0, chunks = 0;
     };
     static PreparedCounts prepared_counts(const Prepared& prepared);
+    // What a prepare built of the land (render/horizon.h): the build it keeps for the neighbours, a neighbour's
+    // footprint, and the land's triangles by Draw::land_fade (0 plain, 1 a neighbour's own ground, 2 the current
+    // zone's in a neighbour's part).
+    struct PreparedLand {
+        std::shared_ptr<const HorizonBuild> build;
+        std::size_t footprint = 0;
+        std::array<std::size_t, 3> triangles{};
+    };
+    static PreparedLand prepared_land(const Prepared& prepared);
 
     ZoneRenderer(VkContext& vk, const assets::Zone& zone, const std::filesystem::path& shader_dir,
                  const ZoneRenderOptions& options = {});
@@ -171,12 +219,18 @@ public:
     // haze as it is infinitely far away, its glow towards the sun too; with the camera under water
     // (render::set_underwater), the open water, its colour and light shafts. Draw it first in the scene.
     void draw_backdrop(const FrameInfo& frame, const glm::mat4& view_proj);
-    // The distant hills round the zone (render/horizon.h, shaders/horizon.frag; the modern lighting outdoors), from
-    // the last set_lighting, at `strength` (render::horizon_strength; 0 draws nothing). Draw it after the sky or the
-    // backdrop and before the zone: it fills only where nothing nearer is drawn.
-    void draw_horizon(const FrameInfo& frame, const glm::mat4& view_proj, float strength);
-    // The land round the zone, measured from its terrain while preparing it (not for a neighbour zone).
+    // The land round the zone (render/horizon.h), built from its terrain while preparing it (not for a neighbour
+    // zone): what was measured, and whether draw and draw_depth draw it (off until set; the modern lighting outdoors).
     const HorizonLand& horizon() const { return horizon_; }
+    // What the land was built from, for the neighbours' parts of it; null without land.
+    const std::shared_ptr<const HorizonBuild>& horizon_build() const { return horizon_build_; }
+    void set_distant(bool show) { show_distant_ = show; }
+    // Where a neighbour zone draws its part of the land, the current zone's is not drawn: its ground and rock
+    // triangles in these squares (render::HorizonField::mesh_square, a neighbour's footprint) are left out; its sea
+    // stays. Empty: none.
+    void set_distant_hidden(std::vector<std::int64_t> squares);
+    // A neighbour zone's (ZoneRenderOptions::land): the squares of the land it draws (render::HorizonMesh::squares).
+    const std::vector<std::int64_t>& footprint() const { return footprint_; }
 
     const ZoneRenderStats& stats() const { return stats_; }
     // The counts since the last call; they start again from zero.
@@ -191,6 +245,9 @@ public:
     void set_lod_scale(float scale) { lod_scale_ = std::clamp(scale, 0.25f, 4.0f); }
     // Leaves the placed objects' flame meshes out of draw (the modern lighting draws its own: render/fire_renderer.h).
     void set_hide_flames(bool hide) { hide_flames_ = hide; }
+    // A neighbour zone's debugging view (display.neighbour_tint): its own geometry tinted magenta, and in its part of
+    // the land the pixels showing its own ground tinted green, so what comes from where can be told apart.
+    void set_debug_tint(bool on) { debug_tint_ = on; }
 
 private:
     enum class Pass : std::uint8_t { Opaque, Blended, Additive };
@@ -216,6 +273,11 @@ private:
         bool multipass = false; // add the point lights (MPL path)
         Liquid liquid = Liquid::None;
         bool flame = false; // a placed object's flame mesh: set_hide_flames leaves it out
+        bool distant = false; // the land round the zone: no shadows; set_distant, set_distant_hidden
+        std::uint32_t distant_first = 0; // a distant draw's first index in the land's own index buffers
+        // A neighbour's part of the land (ZoneRenderOptions::land): 1 its own material, 2 the current zone's, each
+        // showing where the other does not (zone.frag's land blend); 0 neither.
+        std::uint8_t land_fade = 0;
         glm::vec4 slide{0.0f}, extra{0.0f}, extra2{0.0f}, extra3{0.0f}, extra4{0.0f};
         float param_z = 0.0f;
         std::uint32_t surface = 0; // the modern lighting's surface maps (kNormalMap, kSpecular, kReflective)
@@ -234,7 +296,7 @@ private:
     // a flame. These go into solid_.
     // (A level of detail is drawn on its own, so that its shadow changes level with it.)
     static bool casts_untextured(const Draw& d) {
-        return d.pass == Pass::Opaque && !d.flame && !(d.alpha_ref > 0.0f) && !d.lod.banded() && d.instanced == 0;
+        return d.pass == Pass::Opaque && !d.flame && !d.distant && !(d.alpha_ref > 0.0f) && !d.lod.banded() && d.instanced == 0;
     }
     float lod_scale_ = 1.0f; // set_lod_scale
     // The camera's position the levels of detail are chosen by: the last begin_draw's (the shadow passes, drawn
@@ -248,11 +310,11 @@ private:
 
     void upload(Prepared& prepared);
     void create_descriptors();
+    void write_texture_set();
     void create_pipelines(const std::filesystem::path& shader_dir);
     void create_shadow_pipeline(const std::filesystem::path& shader_dir);
     void create_shadow_pipeline(const std::filesystem::path& shader_dir, bool point);
     void create_underwater_pipeline(const std::filesystem::path& shader_dir);
-    VkPipeline create_background_pipeline(const std::filesystem::path& shader_dir, const char* fragment, bool blended);
     void upload_scene(std::uint32_t frame_slot);
     // What draw and draw_depth share: the geometry and the sets bound, the frame's scene uploaded. Returns the time
     // in milliseconds.
@@ -263,9 +325,11 @@ private:
 
     VkContext& vk_;
     std::uint64_t id_ = 0;
+    std::uint64_t shared_listener_ = 0;
     ZoneRenderStats stats_;
     VertexLighting lighting_ = VertexLighting::Classic;
     bool hide_flames_ = false;
+    bool debug_tint_ = false;
     struct SceneUniforms { // std140, zone.vert's Scene block
         glm::mat4 view_proj{1.0f};
         glm::vec4 fog_color{0.0f};
@@ -350,8 +414,22 @@ private:
     VkPipeline shadow_pipeline_ = VK_NULL_HANDLE;
     VkPipeline point_shadow_pipeline_ = VK_NULL_HANDLE;
     VkPipeline underwater_pipeline_ = VK_NULL_HANDLE;
-    VkPipeline horizon_pipeline_ = VK_NULL_HANDLE; // not for a neighbour zone (behind_)
     HorizonLand horizon_;
+    std::shared_ptr<const HorizonBuild> horizon_build_;
+    // The land round the zone's chunks are cells this size.
+    static constexpr float kDistantChunk = 256.0f;
+    bool show_distant_ = false;
+    std::vector<std::int64_t> footprint_; // a neighbour's
+    // The land's triangles are drawn from index buffers of their own, one per frame in flight, holding
+    // distant_shown_: its triangles as built (distant_indices_, in the distant draws' order) with those
+    // set_distant_hidden hides collapsed to a point. distant_dirty_: the frame slots whose buffer is behind it (bits).
+    std::vector<std::uint32_t> distant_indices_, distant_shown_;
+    std::vector<std::int64_t> distant_squares_; // each triangle's square (-1: never hidden, the sea)
+    std::array<Buffer, VkContext::kFramesInFlight> distant_buffers_{};
+    std::array<void*, VkContext::kFramesInFlight> distant_mapped_{};
+    std::uint32_t distant_dirty_ = 0;
+    // Binds the land's index buffer for `frame_slot` (brought up to date first), or the zone's.
+    void bind_indices(VkCommandBuffer cmd, std::uint32_t frame_slot, bool distant);
 };
 
 } // namespace hailstone::render

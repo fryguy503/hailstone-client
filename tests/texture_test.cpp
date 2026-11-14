@@ -906,6 +906,36 @@ TEST_CASE("The GPU builds a texture's mips only where they come out as the CPU's
     REQUIRE(prepare_texture_image(pot, TextureUse::Color, false).has_value());
 }
 
+TEST_CASE("Immutable external textures finish colour mips before the UNORM upload") {
+    // The private path leaves this eligible opaque chain for an sRGB image blit. The shared path exports an UNORM
+    // image, so its actual preparation entry point must supply final linear-light mip bytes instead.
+    const auto source = opaque_image(16, 8, 37);
+    CHECK(hailstone::render::gpu_builds_mips(source, TextureUse::Color));
+    CHECK_FALSE(prepare_texture_image(source, TextureUse::Color).has_value());
+    const auto prepared = hailstone::render::prepare_immutable_texture_image(source, TextureUse::Color, true);
+    REQUIRE(prepared.has_value());
+    Image expected = source;
+    build_color_mips(expected);
+    CHECK(prepared->format == expected.format);
+    CHECK(prepared->width == expected.width);
+    CHECK(prepared->height == expected.height);
+    CHECK(prepared->mips == expected.mips);
+    CHECK(prepared->mips.size() == 5);
+    CHECK(source.mips.size() == 1); // canonicalization does not alter the retained asset image
+    CHECK_FALSE(hailstone::render::prepare_immutable_texture_image(source, TextureUse::Data, true).has_value());
+
+    Image bc;
+    bc.width = bc.height = 4;
+    bc.format = hailstone::assets::PixelFormat::BC1;
+    bc.mips.emplace_back(8, std::byte{0}); // one synthetic BC1 block
+    CHECK_FALSE(hailstone::render::prepare_immutable_texture_image(bc, TextureUse::Data, true).has_value());
+    const auto decoded = hailstone::render::prepare_immutable_texture_image(bc, TextureUse::Data, false);
+    REQUIRE(decoded.has_value());
+    CHECK(decoded->format == hailstone::assets::PixelFormat::RGBA8);
+    CHECK(decoded->mips == hailstone::assets::to_rgba8(bc).mips);
+    CHECK(bc.format == hailstone::assets::PixelFormat::BC1);
+}
+
 TEST_CASE("An sRGB blit chain of an opaque texture matches assets::build_color_mips") {
     // What vkCmdBlitImage does on the R8G8B8A8_SRGB image (render/gpu.cpp UploadBatch::texture): each level from the
     // one above, each texel the 2x2 average of its sources decoded to linear, encoded back to 8-bit sRGB. The CPU

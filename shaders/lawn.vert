@@ -2,10 +2,11 @@
 #extension GL_GOOGLE_include_directive : require
 
 // Hailstone's lawn (render/flora_renderer.h, assets/zone_flora.h): a patch per instance, its blades built here, no
-// texture. The patch's square holds side x side blades (the push block's level of detail), one in each cell of a
-// grid over it, jittered within it, so the carpet is even: no clumps, no gaps. Each blade is a tapered strip of
-// `segments` pieces, the last a point, standing on the ground (the patch's slope), curving over as it rises (combed
-// the way its neighbours lean), leaning
+// texture. A patch's blades come in a fixed order, placed by a low-discrepancy sequence (R2) shifted per patch, so
+// any first few of them cover the square evenly: the draw (the push block's lod) takes the first lod.x, and with
+// distance the last of them shrink away one by one while the rest widen (lawn_blades), so no draw's switch shows.
+// Each blade is a strip of `segments` pieces, the last a point, narrow at the root, widest a third of the way up,
+// standing on the ground (the patch's slope), curving over as it rises (combed the way its neighbours lean), leaning
 // with the wind as gusts roll across the zone and bent away from whoever walks through it. Its height wanders a
 // little round the patch's (the patch's own wanders slowly over the zone, assets::lawn_height_noise). Modern: the
 // light that casts no shadow here per vertex, as flora.vert; the sun in lawn.frag.
@@ -15,7 +16,9 @@
 layout(push_constant) uniform Push {
     mat4 view_proj;
     vec4 time; // x seconds
-    vec4 lod;  // x blades a side, y segments, z blade width (units)
+    vec4 lod;    // x this draw's blades, y segments, z kLawnCell, w kLawnBladeWidth
+    vec4 curve;  // x kLawnFull, y kLawnNear, z kLawnMid
+    vec4 counts; // xyz kLawnLods' blades
 } pc;
 
 // render/scene_lighting.h SceneLighting.
@@ -56,8 +59,15 @@ float next(inout uint s) {
     return float(s & 0xffffu) / 65535.0;
 }
 
+// render/flora_renderer.cpp lawn_blades, line for line: how many of a patch's blades stand at distance `d`.
+float lawn_blades(float d) {
+    if (!(d > pc.curve.x)) return pc.counts.x;
+    if (d <= pc.curve.y) return mix(pc.counts.x, pc.counts.y, smoothstep(pc.curve.x, pc.curve.y, d));
+    if (d <= pc.curve.z) return mix(pc.counts.y, pc.counts.z, smoothstep(pc.curve.y, pc.curve.z, d));
+    return pc.counts.z;
+}
+
 void main() {
-    const int side = max(int(pc.lod.x + 0.5), 1);
     const int segments = max(int(pc.lod.y + 0.5), 1);
     const int per_blade = (segments - 1) * 6 + 3;
     const int blade = gl_VertexIndex / per_blade;
@@ -79,14 +89,18 @@ void main() {
     }
     float t = float(level) / float(segments);
 
-    // The blade's own draws, from where the patch stands (the same blade every frame) and its number.
+    // The blade's own draws, from where the patch stands (the same blade every frame, in every draw) and its number.
     vec3 centre = i_position_turn.xyz;
     uvec2 cell = uvec2(ivec2(floor(centre.xy * 4.0)));
-    uint s = hash(cell.x * 73856093u ^ cell.y * 19349663u ^ uint(blade) * 83492791u);
-    int bx = blade % side, by = blade / side;
-    vec2 at = ((vec2(bx, by) + vec2(next(s), next(s))) / float(side) - 0.5) * i_size.x;
+    uint patch_seed = hash(cell.x * 73856093u ^ cell.y * 19349663u);
+    uint s = hash(patch_seed ^ uint(blade) * 83492791u);
+    vec2 shift = vec2(float(patch_seed & 0xffffu), float(patch_seed >> 16)) / 65535.0;
+    vec2 at = (fract(shift + float(blade) * vec2(0.7548776662, 0.5698402910)) - 0.5) * i_size.x;
     vec3 root = centre + vec3(at, dot(at, i_size.zw));
-    float height = i_size.y * (0.85 + 0.25 * next(s));
+    // How much of it stands: the blades past lawn_blades(distance) shrink away over three places in the order.
+    float shown = lawn_blades(distance(root, lighting.camera.xyz));
+    float grown = clamp((shown - float(blade)) / 3.0, 0.0, 1.0);
+    float height = i_size.y * (0.85 + 0.25 * next(s)) * grown;
     // Combed: the blades lean the way a slowly turning field over the zone points (broad swathes of grass lying
     // together), each a little off it, and turn their flat side to the way they lean.
     vec2 g = root.xy * 0.011;
@@ -94,7 +108,9 @@ void main() {
     float lean_turn = comb + (next(s) - 0.5) * 0.9;
     float facing = lean_turn + 1.5707963 + (next(s) - 0.5) * 0.8;
     float lean = height * (0.4 + 0.25 * next(s));
-    float width = pc.lod.z * (0.8 + 0.4 * next(s));
+    // Wider as fewer stand (render::lawn_blade_width), and as the patch covers more squares far off.
+    float width = pc.lod.w * sqrt(pc.counts.x / max(shown, 1.0)) * (i_size.x / pc.lod.z) * (0.8 + 0.4 * next(s));
+    if (grown <= 0.0) width = 0.0;
     v_shade = 0.94 + 0.12 * next(s);
     float phase = next(s) * 6.2831853;
 
@@ -130,7 +146,9 @@ void main() {
     }
     float rise = height * (1.0 - 0.5 * (reach * reach) / (height * height)) * (1.0 - 0.25 * press);
     vec3 across = vec3(cos(facing), sin(facing), 0.0);
-    vec3 p = root + vec3(bend * t * t, rise * t) + across * (edge * width * 0.5 * (1.0 - t));
+    // Narrow at the root, widest a third of the way up, to a point.
+    float profile = (1.0 - t) * (0.55 + 1.35 * t);
+    vec3 p = root + vec3(bend * t * t, rise * t) + across * (edge * width * 0.5 * profile);
 
     // The face: across the blade and along it (the curve's slope there).
     vec3 along = normalize(vec3(bend * 2.0 * t, max(rise, 0.01)));

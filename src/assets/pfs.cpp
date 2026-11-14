@@ -110,7 +110,15 @@ void zlib_inflate(std::span<const std::byte> in, std::span<std::byte> out) {
         throw std::runtime_error("zlib block did not inflate to its declared size");
 }
 
-PfsArchive PfsArchive::open(const std::filesystem::path& path, Storage storage) {
+PfsArchive PfsArchive::open(const std::filesystem::path& path, Storage storage,
+                            std::shared_ptr<SharedFileCache> cache) {
+    // A direct mapping of a game-folder file is already shared between clients through the page cache, so the
+    // cache only takes archives that would otherwise be read onto the heap (the server's overlay files).
+    if (cache && storage == Storage::Heap) {
+        auto data = cache->load(path);
+        if (!data) throw std::runtime_error("cannot read " + path.string());
+        return from_bytes(std::move(*data), path.filename().string());
+    }
     if (storage == Storage::Mapped) {
         auto bytes = std::make_shared<Bytes>();
         try {
@@ -132,6 +140,10 @@ PfsArchive PfsArchive::open(const std::filesystem::path& path, Storage storage) 
     auto data = read_file(path);
     if (!data) throw std::runtime_error("cannot read " + path.string());
     return from_memory(std::move(*data), path.filename().string());
+}
+
+PfsArchive PfsArchive::open(const std::filesystem::path& path, std::shared_ptr<SharedFileCache> cache) {
+    return open(path, Storage::Heap, std::move(cache));
 }
 
 namespace {
@@ -158,20 +170,26 @@ PfsArchive::Storage PfsArchive::storage_for(const GameDir& game, const std::file
 }
 
 PfsArchive PfsArchive::from_memory(std::vector<std::byte> data, std::string label) {
+    return from_bytes(ImmutableFileBytes::owned(std::move(data)), std::move(label));
+}
+
+PfsArchive PfsArchive::from_bytes(ImmutableFileBytes data, std::string label) {
     PfsArchive a;
     a.label_ = std::move(label);
     auto storage = std::make_shared<Bytes>();
-    storage->owned = std::move(data);
+    storage->immutable = std::move(data);
     a.storage_ = storage;
     a.parse_index();
     return a;
 }
 
-bool PfsArchive::mapped() const { return storage_ && storage_->mapped_file.mapped(); }
+bool PfsArchive::mapped() const {
+    return storage_ && (storage_->mapped_file.mapped() || storage_->immutable.mapped());
+}
 
 std::size_t PfsArchive::storage_bytes() const { return bytes().size(); }
 
-std::size_t PfsArchive::owned_bytes() const { return storage_ ? storage_->owned.size() : 0; }
+std::size_t PfsArchive::owned_bytes() const { return mapped() ? 0 : bytes().size(); }
 
 void PfsArchive::parse_index() {
     ByteReader r(bytes());
