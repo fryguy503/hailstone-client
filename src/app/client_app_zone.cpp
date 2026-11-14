@@ -1,6 +1,7 @@
 // ClientApp: Zone load and unload, scene fog, listener and music, entering the zone.
 
 #include "app/client_app_internal.h"
+#include "app/neighbour_zones.h"
 
 #include <array>
 #include <algorithm>
@@ -10,6 +11,7 @@
 
 #include <SDL3/SDL_video.h>
 
+#include "assets/ground_refine.h"
 #include "assets/zone_flora.h"
 #include "core/ascii_case.h"
 #include "core/ini_file.h"
@@ -49,6 +51,13 @@ void ClientApp::load_zone(const std::string& short_name) {
                                                       tested_collision);
         zone_ = assets::load_zone(game_, short_name, {}, revamped_test);
         mark("zone data");
+        // The classic ground smoothed for drawing (assets/ground_refine.h, display.smooth_ground); before the flora,
+        // which stands on it.
+        if (config_.get_bool("display.smooth_ground", true)) {
+            const auto r = assets::refine_ground(*zone_);
+            log::info("smoothed ground: {} triangles drawn as {}, {} curved edges, at most {:.2f} units off",
+                      r.ground_triangles, r.triangles, r.curved_edges, r.max_offset);
+        }
         // Hailstone's own flora for a zone without any (assets/zone_flora.h, display.zone_flora).
         if (config_.get_bool("display.zone_flora", true)) {
             // flora/default.txt only where the server calls the zone outdoor (OP_NewZone's time type 1, 2 or 5), so
@@ -78,7 +87,13 @@ void ClientApp::load_zone(const std::string& short_name) {
             log::info("zone fires: {} flames, {} lights added for them", zone_fires_.size(), lights);
             if (!fire_renderer_) fire_renderer_ = std::make_unique<render::FireRenderer>(vk_, shader_dir_);
         }
-        zone_renderer_ = std::make_unique<render::ZoneRenderer>(vk_, *zone_, shader_dir_, render::zone_render_options(game_));
+        {
+            // The neighbours' ground measured on earlier visits shapes the land round the zone (app/neighbour_zones.h).
+            auto options = render::zone_render_options(game_);
+            options.horizon_sources =
+                cached_horizon_sources(game_, horizon_cache_dir(server_profile_.id, zone_->name), zone_->name);
+            zone_renderer_ = std::make_unique<render::ZoneRenderer>(vk_, *zone_, shader_dir_, options);
+        }
         distant_hidden_key_ = 0;
         mark("zone renderer");
         flora_renderer_.reset();

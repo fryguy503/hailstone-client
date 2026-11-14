@@ -360,6 +360,7 @@ add_library(hailstone_engine STATIC
   src/assets/jpeg_read.cpp
   src/assets/texture_overrides.cpp
   src/assets/gltf_mesh.cpp
+  src/assets/ground_refine.cpp
   src/assets/model_overrides.cpp
   src/assets/sky.cpp
   src/assets/sky_weather.cpp
@@ -1072,6 +1073,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/font_faces_test.cpp
     tests/process_test.cpp
     tests/flora_test.cpp
+    tests/ground_refine_test.cpp
     tests/zone_flora_test.cpp
     tests/client_info_commands_test.cpp
     tests/gameplay_commands_test.cpp

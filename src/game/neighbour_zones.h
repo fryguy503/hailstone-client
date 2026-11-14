@@ -239,6 +239,56 @@ std::optional<std::vector<BaryPolygon>> split_off_ground(const GroundGrid& groun
                                                          const glm::vec3& b, const glm::vec3& c,
                                                          float tolerance = 24.0f);
 
+// Where the land round the current zone (render/horizon.h) stands in for a neighbour's ground: a grid over the
+// neighbour, per cell the neighbour's own ground (its opened ground, render::source_ground; NaN none), whether its own
+// terrain is drawn there (where the land has sunk under it, render::horizon_point: past the band), and whether what
+// stands on it may be drawn there: where the land (or, over the current zone's own terrain, that terrain) lies no lower
+// than the neighbour's ground less the tolerance, so a wall or a house is never seen floating over a gap; else it is
+// left out, and the land is all there is.
+struct LandMask {
+    glm::vec2 origin{0.0f};
+    float cell = 32.0f;
+    int width = 0, height = 0;
+    std::vector<float> ground;        // the neighbour's ground at the cell's centre, NaN none
+    std::vector<std::uint8_t> stands;  // what stands there may be drawn
+    std::vector<std::uint8_t> terrain; // its terrain is drawn there (empty: everywhere)
+    std::vector<std::uint8_t> own;     // the current zone's own terrain or water is there (empty: nowhere)
+    std::vector<float> surface;        // the ground drawn there: the land, or the current zone's own (NaN: unknown)
+    bool empty() const { return ground.empty(); }
+    // Bilinear between the cells' centres (a missing one counts as the cell's own), nullopt where the cell has none.
+    std::optional<float> ground_at(float x, float y) const;
+    // Whether what stands at (x, y) may be drawn; true outside the grid.
+    bool stands_at(float x, float y) const;
+    // Whether its terrain at (x, y) is drawn; true outside the grid.
+    bool terrain_at(float x, float y) const;
+    // Whether the current zone's own terrain or water is at (x, y); false outside the grid.
+    bool own_at(float x, float y) const;
+    // The ground drawn at (x, y), bilinear between the cells' centres; nullopt outside the grid or where unknown.
+    std::optional<float> surface_at(float x, float y) const;
+};
+// Where its terrain stops (LandMask::terrain_at), it must stop where it meets the land, or the cut leaves a fin in
+// the air (a bank, a ridge narrower than its opened ground): from the cells where it is not drawn, a cell where it is
+// whose highest ground (`highest` at the cell's middle; its terrain's own, unopened) stands more than `tolerance` over
+// the ground drawn there (LandMask::surface) is left out too, and so on from it, at most `reach` cells on. `stop` is
+// asked between cells. Returns how many cells were left out.
+std::size_t spread_terrain_cut(LandMask& mask, const std::function<std::optional<float>(glm::vec2)>& highest,
+                               float tolerance, int reach, const std::function<bool()>& stop = {});
+// What a neighbour's triangle is: its own terrain (its zone's meshes), a water or lava surface, or a placed object.
+enum class LandPart : std::uint8_t { Placed, Terrain, Liquid };
+// A neighbour's triangle (in the current zone's coordinates) where the land stands in for its ground, cut along the
+// mask's cells; each piece goes by its middle, or by its corners:
+// - its terrain goes where its terrain is not drawn (LandMask::terrain_at): in the band the land is the ground, and a
+//   slope of the neighbour's crossing it there would show as shards and strips; by its edge, its own filler. There a
+//   piece with a corner more than `tolerance` over its own ground (a wall, a tower, a wall's top: narrower than its
+//   opened ground) is kept as a placed object is, where something may stand;
+// - its water goes over the current zone's own terrain or water (LandMask::own_at), which would double it;
+// - water and placed objects go where nothing may stand (LandMask::stands_at);
+// - a placed object's piece facing up (normal z >= 0.6) every corner of which lies within `tolerance` of the
+//   neighbour's ground under it is ground, which the land draws instead, and goes.
+// Returns the pieces to keep (empty: none), or nullopt when the whole triangle stays.
+std::optional<std::vector<BaryPolygon>> split_off_land(const LandMask& mask, const glm::vec3& a, const glm::vec3& b,
+                                                       const glm::vec3& c, LandPart part, float tolerance = 24.0f);
+
 // The distance from `p` to the box, in the horizontal plane.
 float distance_xy(const glm::vec3& p, const glm::vec3& lo, const glm::vec3& hi);
 

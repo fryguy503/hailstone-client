@@ -292,6 +292,9 @@ local function displayTab()
   end)
   -- Hailstone's isometric camera (docs/isometric.md): the iso_* options, also /camera.
   section("Isometric Camera", function()
+    check("click_move", "Click to Move in Every Camera",
+      "Click the ground to walk there, and click a door, an item or an NPC out of reach to walk to it and use it, "
+      .. "in the other cameras too. The isometric camera always moves this way.")
     local deg = function(v) return v .. "°" end
     check("iso_camera", "Isometric Camera",
       "Look down on your character from above and to one side, and click to move. /camera iso and /camera behind "

@@ -84,7 +84,9 @@ hailstone/
                              update replaced (until the new version has started) and its journal (docs/updater.md)
   cache/                     safe to delete while no client runs: cache/plugins/ holds the loaded plugins' copies, cache/pipelines.bin
                              the compiled Vulkan pipelines, cache/navmesh/<server>/<zone>.navmesh the zones'
-                             navigation meshes (docs/navigation.md)
+                             navigation meshes (docs/navigation.md), cache/horizon/<server>/<zone>/<neighbour>.bin
+                             the neighbour zones' ground the land round a zone takes the shape of (docs/graphics.md
+                             "Neighbour zones"; the viewer's under cache/horizon/viewer/)
     assets/v1/pfs/           the shared asset cache, when on ("Shared archive memory" below)
 ```
 

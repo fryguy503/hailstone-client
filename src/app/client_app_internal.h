@@ -1189,6 +1189,8 @@ private:
     // neighbours (NeighbourZones::drawn_key) it was last hidden for.
     bool horizon_hills_ = true;
     std::uint64_t distant_hidden_key_ = 0;
+    // display.neighbour_tint: the neighbour zones' debugging view (render::ZoneRenderer::set_debug_tint).
+    bool neighbour_tint_ = false;
     // How far the replacement models' (a texture pack's generated trees') levels of detail reach, in percent of their
     // own distances (render::ZoneRenderer::set_lod_scale); display.tree_detail, 50 to 200.
     int tree_detail_ = 100;
@@ -1432,6 +1434,11 @@ private:
     float iso_saved_fov_ = game::kStockFovUnits;
     float iso_focus_distance_ = 0.0f;
     bool iso() const { return camera_type_ == game::kCameraIsometric; }
+    // Click to move (Hailstone's own; docs/isometric.md "Click to move in every camera"): always in the isometric
+    // camera, and in the others when mouse.click_move is set (Options, the click_move option). Off by default, so
+    // the other cameras click as the original does.
+    bool click_move_ = false;
+    bool click_moves() const { return iso() || click_move_; }
     // Places camera_ for the isometric camera this frame, looking at the player drawn at `feet`.
     void update_iso_camera(const glm::vec3& feet, float dt);
     // The isometric camera's click to move and movement relative to the camera (app/client_app_iso.cpp): WASD
@@ -1512,7 +1519,7 @@ private:
     IsoMarker iso_marker_;
     std::unique_ptr<render::TargetRingRenderer> iso_marker_renderer_;
     void set_iso_marker(const glm::vec3& point, bool click);
-    bool iso_marker_shown() const { return iso() && iso_marker_.active; }
+    bool iso_marker_shown() const { return click_moves() && iso_marker_.active; }
     void draw_iso_marker(const render::FrameInfo& frame, const glm::mat4& view_proj, float far_plane, bool modern,
                          double seconds);
     Clock::time_point last_mouse_look_{}; // the last mouse look's time (the chase camera's height rate)

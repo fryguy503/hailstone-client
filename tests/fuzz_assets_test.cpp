@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <span>
 #include <string>
 
@@ -30,6 +31,7 @@
 #include "nav/nav_mesh.h"
 #include "platform/gpu_ipc.h"
 #include "render/gpu_cache_protocol.h"
+#include "render/horizon.h"
 #include "fuzz_support.h"
 #include "pfs_fixtures.h"
 #include "wld_fixtures.h"
@@ -679,4 +681,29 @@ TEST_CASE("fuzz: navigation cache files and their tiles") {
               mesh.mark_areas(tiles[0].tx, tiles[0].ty, [](const glm::vec3&) { return nav::Area::Water; }, 2.0f);
               mesh.for_each_polygon([](std::span<const glm::vec3>, nav::Area) {});
           });
+}
+
+// ---- The neighbours' ground cache (render/horizon.h) ---------------------------------------------------------------
+// read_horizon_cache, then the source it gives sampled: a broken file must be refused or give a source that samples
+// without reading past its grid.
+
+TEST_CASE("fuzz: the neighbours' ground cache") {
+    fuzz::QuietLog quiet;
+    std::vector<float> ground(12 * 9);
+    for (std::size_t i = 0; i < ground.size(); ++i) ground[i] = i % 7 == 0 ? std::numeric_limits<float>::quiet_NaN() : static_cast<float>(i);
+    render::HorizonCacheEntry e;
+    e.zone = "ecommons";
+    e.neighbour = "freportw";
+    e.key = 77;
+    e.offset = {1.0f, 2.0f, 3.0f};
+    e.source = render::horizon_source("freportw", {100.0f, -50.0f}, 64.0f, 12, 9, ground);
+    const Bytes seed = render::write_horizon_cache(e);
+    sweep("read_horizon_cache", {seed}, 64, 1500, [&](std::span<const std::byte> d) {
+        auto got = render::read_horizon_cache(d);
+        if (!got) return;
+        for (glm::vec2 p : {glm::vec2(0.0f), glm::vec2(400.0f, 200.0f), glm::vec2(-1e6f, 1e6f), glm::vec2(500.0f, -9.0f)}) {
+            (void)render::sample_source(got->source, p);
+            (void)render::source_ground(got->source, p);
+        }
+    });
 }

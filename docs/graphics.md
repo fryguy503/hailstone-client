@@ -390,12 +390,18 @@ makes no pale or dark patch), darker at the roots and brighter and warmer toward
 is lit as the radial flora is, with its face's normal turned most of the way up (the lawn is lit like the ground
 under it, not blade by blade) and some light through it when the sun is behind it. It casts no shadow.
 
-By distance (`render::kLawnLods`): within 45 units 49 blades a patch of three pieces each, to 140 units 16 of three,
-past that 9 single triangles, each level's blades wider so a patch keeps its cover. Past 400 units every second patch
-each way is kept, past 800 every fourth (`lawn_stride`), each as wide as the squares it stands for; a grown tile keeps
-its patches by the coarsest stride that keeps them, so a far tile walks only those it draws. The lawn shrinks into the
-ground over the last fifth of the reach with the other plants. In South Karana, on the AMD card (RADV) it was tuned
-on, the lawn costs about 0.45 ms a frame at the default reach, and less than the old grass did at 1,200 units.
+Nothing about the lawn changes at a line as the camera moves (`render::kLawnLods`, `lawn_blades`). A patch's blades
+come in a fixed order, placed by a low-discrepancy sequence shifted per patch, so any first few of them cover its
+square evenly. All 49 stand within 40 units; past that the last of them shrink away one by one (each over three
+places in the order) to 16 at 90 units and 9 at 250, while the rest widen by the square root of how many fewer there
+are, so a patch keeps its cover. The three draws (49 blades of three pieces within 90 units, 16 of three to 250, 9
+single triangles past that) each take the first blades of the one before, so a draw's switch removes only blades
+already gone. Past 400 units every second patch each way fades out over the 120 units before it while the patches
+kept widen to take their squares, past 800 every fourth (`lawn_patch_fade`, `lawn_patch_side`); a grown tile keeps
+its patches by the coarsest stride that keeps them, so a far tile walks only those it draws. The lawn shrinks into
+the ground over the last fifth of the reach with the other plants. A blade is narrow at the root (0.55 of its width),
+widest a third of the way up, and comes to a point. In South Karana, on the AMD card (RADV) it was tuned on, the lawn
+costs about 0.4 ms a frame at the default reach.
 
 **Where.** On level ground (45 degrees by default) of a drawn, opaque or cut-out surface: not the invisible collision
 surfaces, nor the translucent water. Not in water, lava or a zone line, nor on the water's surface (the region just
@@ -1039,6 +1045,13 @@ zoning and what the server sees are unchanged. The classic client drew nothing p
 in filler: the ground, hills and walls their builders put past each line, often a stand-in for the neighbour).
 `game/neighbour_zones.h` holds the arithmetic, `app/neighbour_zones.h` the loading and drawing.
 
+The two zones were never built to meet: their ground disagrees in height and texture where they overlap, and their
+filler stands in each other's way. So next to this zone the neighbour's own terrain is not drawn: the land round the
+current zone (below, "Horizon hills") is the ground past its edge, shaped like the neighbour's, easing onto it across a
+band. Further in, the neighbour's own terrain is drawn (its roads, its textures, its hills) with the land sunk under
+it, and its walls, buildings and trees stand on whichever ground is drawn, so there is one continuous ground from the
+current zone's filler out to the neighbour.
+
 - **The lines**: the zone-line regions of the zone's BSP (`assets::ZoneRegions::leaf_cells`: each leaf's convex cell,
   its split planes cut from the zone's box) grouped by where they lead: an absolute tag's zone, or a reference tag's
   zone point from OP_SendZonepoints. Each group's seam faces the zone edge it is nearest (+-x or +-y: zones are not
@@ -1064,15 +1077,65 @@ in filler: the ground, hills and walls their builders put past each line, often 
   zone-line region and never count. An indoor zone draws none.
 - **The cut**: the neighbour is moved into place on the CPU and cut at the plane through the seam's face, keeping what
   lies past it (triangles across it split along it, `ZoneRenderOptions::keep`), so its own filler towards this zone
-  goes. Past the seam this zone's filler and the neighbour's real ground overlap as far as this zone's edge, and where
-  both have ground this zone's wins:
-  - this zone's ground there is sampled on a 24-unit grid (`game::GroundGrid`, bilinear between the samples); the
-    neighbour's upward-facing triangles over it are cut along the grid's cells and each piece within 24 units of it
-    goes (`game::split_off_ground`, `ZoneRenderOptions::split`), unless it lies in the last cell before this zone's
-    ground ends, so no gap opens there; walls, buildings and hills standing higher stay;
-  - what still meets this zone's surfaces loses to them: the neighbour is drawn after this zone with a strict depth
-    test and a depth bias pushing it back (`ZoneRenderOptions::behind`: 16 steps of the depth's precision plus twice
-    its slope; the depth is reversed), so ties and near-ties do not flicker between the two as the camera moves.
+  goes.
+- **Its ground** (`render::HorizonSource`): the highest visible ground (`CollisionMesh::ground_below`) of the
+  neighbour's terrain alone (a collision mesh built without its placed objects: trees and houses are not its ground)
+  on 64-unit squares over its box past the seam, at most 8000 units past this zone's box, the median of four samples a
+  square, moved by the offset; the highest of the four is kept too (`HorizonSource::top`, `render::source_top`). It is
+  "opened" (the lowest within one square, then the highest of those lows), so a wall or a crest narrower than about
+  200 units goes from it and the land does not rise in a ramp against a wall; wider, it follows the terrain. Past its
+  ground its cover fades from 1 to 0 over 1200 units, and on it `inner` says how far in from its edge a point lies
+  (before the seam, and its void past its own boundary walls).
+- **The land over it** (`render::horizon_mesh`): past this zone's edge the land eases from the edge's height to the
+  neighbour's ground across a band three times their difference wide (200 to 800 units), is the neighbour's ground
+  beyond, and goes back into the zone's own hills as the cover fades. A square of the land belongs to the neighbour
+  whose cover is the greatest at its corners. The neighbour draws its squares (`ZoneRenderOptions::land`,
+  `render::LandPatch`; the land's own lines and heights, so they meet this zone's land vertex for vertex), and this
+  zone hides its ground and rock triangles there (`ZoneRenderer::set_distant_hidden`, by `HorizonField::mesh_square`);
+  its sea stays. In the neighbour's squares, past the band and at least 128 units in from the neighbour's edge (all of
+  it by 512), the land sinks 40 units under its ground (`render::horizon_point`, `HorizonMesh::settled`), so its own
+  terrain is drawn there over the land.
+- **Two grounds fading into each other**: each of the neighbour's squares is drawn twice, with the neighbour's own
+  most used plain ground (or rock) material and with this zone's land material (its texture's file read from this
+  zone's archive when the zone is entered, `LandPatch::files`). A vertex's weight is the neighbour's cover times how far
+  across the band it lies; a pixel shows the neighbour's material where world-space value noise (patches of 48, 12 and
+  3 units) lies under the weight, else this zone's (`coverage.glsl` `land_blend_discard`, zone.frag and
+  zone_depth.frag), so the zone's grass gives way to the neighbour's in ragged clumps across the band and holds still
+  as the camera moves.
+- **What of the neighbour stays** (`game::split_off_land`, `game::LandMask` on 64-unit cells, each triangle cut
+  along them and each piece judged by its middle), by what it is (`ZoneRenderOptions::Part`: its terrain, the vertices
+  of its own meshes; a water or lava surface; a placed object):
+  - its terrain stays where the land has sunk at least 30 % of the way under it (12 units), and goes elsewhere: in the
+    band and over this zone's own terrain the land or this zone is the ground, and a slope or ridge of the
+    neighbour's crossing it there showed as shards and long brown strips (North Karana's lake towards East Karana);
+    by its edge its own filler goes. There what of it stands more than 24 units clear of its own (opened) ground, a
+    wall, a tower, a wall's top (Qeynos's walls are qeynos2's terrain), is kept as a placed object is, where
+    something may stand: narrower than the opened ground, it is not a slope the land would cross. Where its terrain stops it must stop where it meets the land,
+    or the cut leaves a fin in the air (a bank narrower than its opened ground): from where it is not drawn, a cell
+    whose highest ground (`source_top`) stands more than 24 units over the ground drawn there goes too, and so on, at
+    most six cells on (`game::spread_terrain_cut`); there its part of the land comes back up from under it;
+  - its water goes over this zone's own terrain or water (both zones' lakes doubled where they overlap), and where
+    nothing may stand;
+  - a placed object's piece facing up within 24 units of its measured ground is ground, and goes; and what stands in
+    a cell goes where the ground under it would leave it floating: where the land there (over this zone's own
+    terrain: that terrain, sampled past the seam on a 24-unit grid as before) lies more than 24 units under the
+    neighbour's ground, which happens in the band. A wall crossing such a cell is cut along its edge.
+
+  It is drawn after this zone with a strict depth test and a depth bias pushing it back
+  (`ZoneRenderOptions::behind`), so where it meets this zone's surfaces they win. Without the land (a zone with too
+  little level ground, or no plain ground material) it falls back to the earlier cut: its ground goes only where this
+  zone's doubles it within 24 units (`game::split_off_ground`).
+- **Seeing what comes from where**: `display.neighbour_tint` in `hailstone.ini` (the viewer's `--neighbour-tint`)
+  tints the neighbours' own geometry magenta and, in their parts of the land, the pixels showing their own ground
+  green (`ZoneRenderer::set_debug_tint`); the land showing this zone's ground and this zone itself keep their colours.
+  It is how a strip or a fin past a zone line is told apart: magenta is the neighbour's, the rest the land's or this
+  zone's.
+- **The cache**: its ground is written to `cache/horizon/<server>/<zone>/<neighbour>.bin` (docs/layout.md) with the
+  offset and both zones' file sizes; a zone's land is built with the cached ground of all its neighbours that still
+  match the asset folder, and a neighbour's load uses its cached ground when the offset found now is within a unit of
+  the cached one, else measures it again. Every qualifying neighbour is measured, drawn or not: when there is nothing
+  to load, the nearest whose ground is not known is loaded on the same thread just to measure it (about as long as a
+  load without the upload). One measured only this visit shapes the land from the next zone-in.
 - **Loading**: once the zone is entered and the zone points are in, the nearest qualifying neighbour whose line is
   within the view distance plus 1500 units loads on a background thread at a lower priority (`ZoneRenderer::prepare`:
   the geometry, chunks and decoded textures with their mip chains, capped at 128 texels across; no detail passes,
@@ -1084,14 +1147,24 @@ in filler: the ground, hills and walls their builders put past each line, often 
   cut off by zoning or quitting stops at its next step (after reading the zone, after its collision mesh, and
   between `prepare`'s meshes and materials, `ZoneRenderOptions::cancelled`), so the wait for its thread is short;
   reading the zone's files is not broken off. It is fogged by this zone's haze, as it is drawn with this zone's
-  lighting; the sun's shadows do not reach it.
-- **Cost** (ecommons by the Freeport line, two neighbours loaded): freportw 81,244 triangles and 28 MB, nektulos
-  40,043 and 9 MB; about 300 ms on the loader, 20 to 45 ms of upload on the frame's thread; 72k triangles in 241
-  calls a frame, 0.09 ms of CPU, about 0.5 ms a frame on the GPU (7.0 -> 7.5 ms).
-- **Not yet**: the seam is a straight cut and the ground can step by a few units where the two zones' builders
-  disagree; the two zones' ground textures meet at a hard line; the neighbour's own sky, fog and water colour are
-  this zone's; a zone with a short view (freportw's 450) hides its neighbours in the haze; the classic zone-line
-  quirks for North Ro and East Freeport (`game::resolve_teleport_index`'s 1044) are not applied to the offset.
+  lighting; the sun's shadows do not reach it. A neighbour always draws its part of the land, whether the land round
+  the zone is shown or not (Options, Horizon Hills): it is its ground.
+- **Cost** (ecommons by the Freeport line, two neighbours loaded, before the land stood in for their ground):
+  freportw 81,244 triangles and 28 MB, nektulos 40,043 and 9 MB; about 300 ms on the loader, 20 to 45 ms of upload on
+  the frame's thread; 72k triangles in 241 calls a frame, 0.09 ms of CPU, about 0.5 ms a frame on the GPU (7.0 -> 7.5
+  ms). With the land (qeytoqrg, its two drawn neighbours, no texture pack, the viewer at 1280 x 720): qey2hh1 33 -> 38
+  MB (its part of the land, 13,237 squares drawn twice, 52,948 triangles), qeynos2 unchanged at 24 MB; on the loader
+  about 300 and 200 ms as before from the cache, and measuring a neighbour's ground the first time adds about as much
+  again; the frame time 5.19 -> 5.30 ms looking out over Western Karana. The cache files are 23 KB (qeynos2) and 136 KB
+  (qey2hh1).
+- **Not yet**: a wall cut where the land under it is too low shows its hollow inside along the cut (now out in the
+  band rather than at the seam); where the neighbour's terrain stops at the band, a step of up to 12 units down to the
+  land can show; the neighbour's water is drawn over the land where the land replaces its lake bed (in the band); where two neighbours' ground overlaps (past a zone's corner) and only one was
+  known when the other loaded, both may draw the squares between them until the next zone-in; the neighbour's own sky,
+  fog and water colour are this zone's; a zone with a short view (freportw's 450) hides its neighbours in the haze; the
+  classic zone-line quirks for North Ro and East Freeport (`game::resolve_teleport_index`'s 1044) are not applied to
+  the offset; the neighbours' neighbours are not measured (their offsets would need their zone points, which only the
+  server of the zone one is in sends).
 
 ## Horizon hills
 
@@ -1112,8 +1185,8 @@ puts it behind anything nearer. Scenery only: nothing collides with it.
   wet. Each empty square takes, from the nearest covered square, its distance and the zone's edge there: the highest
   terrain (a wall's top, the open ground at a zone line) or, where the water reaches the edge, the water's surface;
   smoothed over a few squares.
-- **The land**: a grid of vertices over the zone's squares (64 units apart, more for a big zone), then wider by 12 % a
-  step out to 10000 units past them. Vertices in a covered square are tucked 40 units under its lowest terrain, and in
+- **The land**: a grid of vertices over the zone's squares and 2500 units past them (64 units apart, more for a zone
+  wider than 256 squares with that), then wider by 12 % a step out to 10000 units past the zone's squares. Vertices in a covered square are tucked 40 units under its lowest terrain, and in
   the empty square beside one 5 units under the lowest beside it (a wall's foot), so the land meets the zone's edge
   without a gap and stays under its ground; the squares under the zone are drawn too (they show only through the back
   of its walls, which have only their inner faces). Past the edge the land starts at the edge's height and turns over
@@ -1130,18 +1203,60 @@ puts it behind anything nearer. Scenery only: nothing collides with it.
   patches on the level land, in the valleys and in broad patches that keep the texture's repeat from showing. The
   log says what it used: qeytoqrg 36892 triangles, ground `XGRASSDIRT2.BMP`, rock `HHDROCKGRASS.BMP`; butcher with
   10108 water triangles.
-- **Neighbour zones**: where one is drawn the land is not. Each neighbour keeps the 64-unit squares its opaque
-  geometry covers (`render::horizon_footprint`, `ZoneRenderer::footprint`), and the current zone collapses its land's
-  triangles whose middle lies in one (`ZoneRenderer::set_distant_hidden`), in index buffers of the land's own (one per
-  frame in flight), whenever the neighbours drawn change.
+- **Neighbour zones**: past a zone line the land takes the shape of the neighbour's ground (above, "Neighbour
+  zones": `render::HorizonSource`, the band, the cache): from the zone's edge it eases onto that ground, follows it,
+  and fades back into the hills past it. Where a neighbour is drawn, it draws its squares of the land itself with its
+  own ground faded into the zone's (`ZoneRenderer::footprint`, its squares), and the current zone collapses its
+  land's ground and rock triangles there (`ZoneRenderer::set_distant_hidden`, by `HorizonField::mesh_square` of each
+  triangle's middle), in index buffers of the land's own (one per frame in flight), whenever the neighbours drawn
+  change.
 - **When**: outdoors (time types 1, 2, 5), under an open sky (1, 2, 4) or none (gfaydark, everfrost); not under the
   planes' and Luclin's painted skies. A thick fog, lava, a thick-fog region, a storm and the night hide it as they hide
   the zone, by the same haze.
-- **Cost**: in Qeynos Hills about 37,000 triangles in 256-unit chunks, culled with the zone's; no shadows (neither cast
-  nor drawn into the sun's cascades or the cover and water maps). Looking out over it, 9,000 more triangles and 70
-  more draw calls; the frame time did not move.
+- **Cost**: in Qeynos Hills about 99,000 triangles in 256-unit chunks (44,000 before its squares were kept fine out to
+  2500 units past the zone, which the neighbours' ground needs), culled with the zone's; no shadows (neither cast nor
+  drawn into the sun's cascades or the cover and water maps). Looking out over it, 9,000 more triangles and 70 more
+  draw calls; the frame time did not move.
 
 `display.horizon_hills` (Options, Horizon Hills) turns it off; the viewer takes `--no-horizon`.
+
+## Smoothed ground
+
+A classic zone's ground is drawn with smooth normals and curved, subdivided triangles instead of the file's flat
+facets (`assets/ground_refine.h`). A deliberate difference from the original, the look only, in both lightings:
+`Zone::terrain` stays as loaded and keeps collision, the regions, the liquids' classification, the ambient probe and
+everything else that must agree with the server's geometry. The refined copy goes into `Zone::draw_terrain` (with
+`draw_terrain_source`, the terrain triangle each drawn one was cut from), which the zone renderer and the zone flora
+use; the lawn and the plants stand on it, and the flora's cover test sees it.
+
+- **Ground:** the solid, opaque triangles of the classic (WLD) terrain meshes. Not cut-outs, translucent or invisible
+  surfaces, passable ones (water), heightmap tiles or EQG meshes. Neighbour zones are drawn from their own terrain,
+  flat.
+- **Normals:** corners are welded by position (to 1/128 unit) across meshes and materials, and each corner of a
+  triangle takes the angle-weighted average of the faces round it within 45 degrees of its own face. Hills turn
+  smooth; a wall's foot, a cliff's edge or a building's corner stays sharp.
+- **Shape:** each triangle becomes a cubic PN triangle (Vlachos, Peters, Boyd and Mitchell, "Curved PN Triangles",
+  2001) over its corner normals. An edge is curved only where exactly two ground triangles meet on it and agree on
+  both corners' normals; a crease, the ground's border and a seam with a wall or a cut-out stay the file's straight
+  edge, uncut, so the refined ground meets the rest of the zone exactly. A curved edge is cut into 2, 4 or 8 segments,
+  so a segment cuts through the curve by at most about 0.05 units. A triangle takes the most of its edges' (or what
+  its own bulge needs), S: the points whose weights are all at least 1/S form a regular inner grid, and each edge's
+  own samples are stitched to the inner grid's side along it. An edge's samples are counted and evaluated from its
+  lower welded corner, so both triangles on it make the same points bit for bit, and no crack opens where two
+  triangles cut it differently (Qeynos Hills: 9,655 ground triangles drawn as 127,293, the open edges the same 509
+  as the file's).
+- **Offset:** an edge's control points are held within 1 unit of the flat triangle, so the curve stays within 1
+  unit of the ground that collision, feet and the server's spawn heights are measured on (Qeynos Hills: at most 0.88).
+  Hills' outlines so change little; the shading changes most (flat light and dark planes on hills and rock become
+  smooth gradients).
+- **Attributes:** UVs, both vertex colours (the baked light) and the detail passes are interpolated over the original
+  triangle.
+- **Cost:** about 40 ms more on Qeynos Hills' load. In the viewer at 1280 x 720 on the RX 9060 XT, a view over its
+  hills went from 1.52 to 1.60 ms a frame to 1.74 to 1.77 ms (65,000 zone triangles drawn instead of 18,000, most of
+  the difference in the shadow cascades).
+
+`display.smooth_ground` (on by default, read as each zone loads) turns it off; the viewer takes
+`--no-smooth-ground`. The log says how many triangles were refined into how many.
 
 ## Texture overrides
 
@@ -1426,6 +1541,7 @@ viewer (`--zone`, `--model`) takes `--msaa`, `--tonemap`, `--exposure`, `--rende
 | `display.distance_blur` | 0, 1 | 1 | the far distance's slight blur; modern only |
 | `display.neighbour_zones` | 0, 1 | 1 | the zone past an outdoor zone line drawn in the distance (Neighbour zones); modern only; `/neighbourzones [on \| off]` |
 | `display.horizon_hills` | 0, 1 | 1 | land round an outdoor zone past its edges (Horizon hills); modern only; viewer `--no-horizon` |
+| `display.smooth_ground` | 0, 1 | 1 | a classic zone's ground drawn smooth and curved (Smoothed ground); read as each zone loads; viewer `--no-smooth-ground` |
 | `display.tree_detail` | 50 to 200 | 100 | how far a texture pack's replacement models (generated trees) keep their nearer levels of detail, in percent of their own distances (Tree Detail Distance); viewer `--tree-detail` |
 | `display.target_ring_cues` | 0, 1 | 1 | the target ring's sweep on a new target and pulse while attacking (Target Ring Cues; The target ring) |
 | `display.find_trail_style` | 0, 1 | 0 | Find paths: 0 the gold ground line, 1 rainbow strands; Options > Display (gamepad: Interface), saved per character and changed immediately; docs/navigation.md "The trail" |

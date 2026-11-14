@@ -9,9 +9,13 @@
 // plants shrink into the ground over the last fifth of the reach, as the original draws flora only round the camera.
 //
 // Hailstone's lawn (assets/zone_flora.h, kLawnDefinition) is drawn by a pipeline of its own (shaders/lawn.vert,
-// lawn.frag): each patch's blades are built in the vertex shader, no texture, at three levels of detail by distance
-// (lawn_lod); past kFloraReach every s-th patch each way is kept, s times as wide, so the carpet keeps its cover. A
-// grown tile keeps its patches by the coarsest stride that keeps them, so a far tile walks only those it draws.
+// lawn.frag): each patch's blades are built in the vertex shader, no texture, and nothing about it changes at a line
+// as the camera moves: a patch's blades come in a fixed order, any first few of them spread evenly over it, and with
+// distance the last of them shrink away one by one while the rest widen (lawn_blades, lawn_blade_width), so the three
+// draws by distance (lawn_lod, kLawnLods: each the first blades of the one before) switch only blades already gone.
+// Past kFloraReach every second patch each way fades out over kLawnStrideBand while the ones kept widen to take their
+// squares, past twice it every fourth (lawn_patch_fade, lawn_patch_side). A grown tile keeps its patches by the
+// coarsest stride that keeps them, so a far tile walks only those it draws.
 
 #include <array>
 #include <chrono>
@@ -44,23 +48,38 @@ inline constexpr float kMaxFloraReach = 1200.0f;
 // The share of the plants kept at distance `d`: all within kFloraReach, (kFloraReach / d)^2 past it.
 float flora_keep(float d);
 
-// The lawn's levels of detail: blades a side of a patch (side x side of them), the segments of a blade, and its
-// width (units at the root: fewer blades are wider, so a patch keeps its cover).
+// The lawn's draws by distance: how many of a patch's blades each draws (the first ones) and the segments of a blade.
 struct LawnLod {
-    std::uint32_t side = 0, segments = 0;
-    float blade_width = 0.0f;
-    std::uint32_t vertices() const { return side * side * ((segments - 1) * 6 + 3); }
+    std::uint32_t blades = 0, segments = 0;
+    std::uint32_t vertices() const { return blades * ((segments - 1) * 6 + 3); }
 };
-inline constexpr std::array<LawnLod, 3> kLawnLods = {{{7, 3, 0.26f}, {4, 3, 0.42f}, {3, 1, 0.6f}}};
-inline constexpr float kLawnNear = 45.0f, kLawnMid = 140.0f; // where the first two levels end
-// The level of detail of a patch at distance `d` (an index into kLawnLods).
+inline constexpr std::array<LawnLod, 3> kLawnLods = {{{49, 3}, {16, 3}, {9, 1}}};
+// All of a patch's blades within kLawnFull; kLawnLods[1]'s count by kLawnNear, where the first draw ends, and [2]'s
+// by kLawnMid, where the second ends.
+inline constexpr float kLawnFull = 40.0f, kLawnNear = 90.0f, kLawnMid = 250.0f;
+// A blade's width at its widest with all of a patch's blades, in units.
+inline constexpr float kLawnBladeWidth = 0.24f;
+// How many of a patch's blades stand at distance `d`, smoothly fewer: kLawnLods[0]'s count to kLawnFull, [1]'s at
+// kLawnNear, [2]'s from kLawnMid. Fractional: the last one is part grown.
+float lawn_blades(float d);
+// A blade's width at distance `d`: wider as there are fewer (by the square root), so a patch keeps its cover.
+float lawn_blade_width(float d);
+// The draw a patch at distance `d` goes in (an index into kLawnLods): one with at least lawn_blades(d) blades.
 std::size_t lawn_lod(float d);
+// How far before kFloraReach (and twice it) the patches a coarser stride drops fade out.
+inline constexpr float kLawnStrideBand = 120.0f;
 // How many patches each way one kept patch stands for at distance `d`: 1 within kFloraReach, 2 within twice it, 4
 // past that (at least 1 / sqrt(flora_keep(d)), so the far lawn costs less than the near does). Powers of two, so the
 // patches a coarser stride keeps are among those a finer one keeps.
 std::uint32_t lawn_stride(float d);
 // The coarsest stride (1, 2 or 4) that keeps the patch standing at `p`: its square's column and row are multiples of it.
 std::uint32_t lawn_patch_stride(glm::vec2 p);
+// A patch's height share at distance `d` by its own stride (lawn_patch_stride): 1, then down to 0 over
+// kLawnStrideBand before the distance where lawn_stride drops it.
+float lawn_patch_fade(std::uint32_t patch_stride, float d);
+// The side of the square a patch covers at distance `d` (kLawnCell to 4 of them), growing over the same bands as the
+// patches round it fade, so the cover stays whole.
+float lawn_patch_side(std::uint32_t patch_stride, float d);
 
 class FloraRenderer {
 public:
