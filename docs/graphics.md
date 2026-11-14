@@ -1177,6 +1177,8 @@ trees are a trunk of a few solid prisms under crossed cut-out cards. Each new tr
 - **Leaves:** points spread over the cards and kept where their texture is opaque give the crown's shape; turned round
   the trunk, they fill it. The leaves are drawn in colours picked from the game texture's opaque texels, then scaled
   to its mean, so an autumn tree keeps its yellows among its greens.
+  The gaps narrower than a few texels inside a spray or a cluster are filled with a shadowed base (a closing of the
+  cut-out): pinholes of sky between needles flickered as the tree swayed a fraction of a pixel.
 - **Styles:** a pine (a single upright trunk up into leaves widest low down) grows whorls of drooping branches with
   needle sprays and a clump at each end up a leader; a broadleaf tree grows branches into the crown by space
   colonisation (Runions, Lane and Prusinkiewicz 2007), leaf clusters at their tips; a willow hangs strands from its
