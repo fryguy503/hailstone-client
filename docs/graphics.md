@@ -1016,47 +1016,53 @@ in filler: the ground, hills and walls their builders put past each line, often 
 
 ## Horizon hills
 
-In the modern lighting, outdoors, rings of distant hills and mountains stand round the zone where nothing else is
-drawn, so the land past its edges is not a blank haze (Hailstone's own; the classic client drew nothing past a zone's
-geometry). They are scenery only, drawn after the sky and before the zone: anything nearer, the zone, its objects and
-the neighbour zones, covers them. `render/horizon.h` holds the measuring, `shaders/horizon.frag` the drawing
-(`ZoneRenderer::draw_horizon`).
+In the modern lighting, outdoors, land stands round the zone past its edges, out to about the modern view's reach, so
+the world does not end in a blank haze (Hailstone's own; the classic client drew nothing past a zone's geometry). It is
+real geometry: a mesh built while `ZoneRenderer::prepare` builds the zone (`render::horizon_mesh`, `render/horizon.h`)
+and drawn with the zone's own materials through `zone.frag`, so it takes the zone's textures (a texture pack's photo
+materials and normal maps too), its light, the sun and the haze exactly as the zone's ground does, and the depth test
+puts it behind anything nearer. Scenery only: nothing collides with it.
 
-- **What the zone says** (`render::horizon_land`, while `ZoneRenderer::prepare` builds the zone; not for a neighbour):
-  the terrain's opaque, dry triangles. Level ones (the normal's z at least 0.8, either way up) place the hills: their
-  centre is the middle of the level ground's extent (2 % of its area cut each side, so a dock or an island far out does
-  not move it), and the first ring stands at half its diagonal plus 400 units. The hills' foot is the level ground's
-  median height; its spread from the 10th to the 90th percentile, 40 to 1200 units, is the relief, which makes rugged
-  zones' hills taller. Their colours are the area-weighted mean of the level ground's textures and of the slopes'
-  (`render::mean_texture_color`: linear, by alpha, a sample of the smallest level of 16 texels or more; BC1 to BC3 from
-  their blocks' endpoints; BC4, BC5 and BC7 not read), so Qeynos Hills' are green and Everfrost's white. A zone with
-  less than 250,000 square units of level ground gets none. The log says what was found: qeytoqrg round
-  (2122, -21) from 3630 units, ground 2, relief 80.
-- **The rings**: three, at the first ring's radius plus 0, 1400 and 3600 units. Each pixel's view ray meets each ring's
-  upright cylinder about the centre (its far side, so it works from anywhere in the zone); the land there is as high
-  as a noise over the ground says (value noise, five octaves, one cell 900, 1500 and 2600 units across; the far ring's
-  ridged, for mountains), seeded by the zone's short name (`render::horizon_seed`), so the hills are the same every
-  visit and move with parallax as the camera does. The tallest rise 2.5, 4 and 6.5 degrees over the foot seen from
-  the centre, times 0.7 to 1.8 with the relief, plus 0.6, 0.9 and 1.2 of the relief. Looking down short of the first
-  ring, the ray meets a sea of fog at the foot instead, a faint hint of the ground showing where it thins.
-- **The look**: lit as the zone is (the sky and ground ambient by the land's slope, the sun or moon by the noise's
-  gradient, the rings rising away from the zone), the slopes and the far ring's tops in the slope colour, patches and
-  shaded hollows fixed to the land. Then they fade as distant land does: their colour is kept 75, 60 and 45 %, the
-  frame's haze (`apply_haze`, its glow and its thinning with height) takes them over a distance held under 0.3, 0.42
-  and 0.55 of the haze's length, so they stay in sight at any view distance, and each ring keeps only 70, 50 and 32 %
-  of what is left against the haze's colour, so the far ring is a pale outline. Fog banks lie round their feet: their
-  tops rise and fall along each ring (15 to 50 % of its hills' height near, 35 to 70 % far) and drift round a circle
-  650 units across once every 1024 s (the scene clock wraps there, so the drift never jumps). Their edges blend over
-  the sky by the pixel's footprint.
-- **When**: outdoors (time types 1, 2, 5), not under water, under an open sky (1, 2, 4) or none (gfaydark, everfrost);
-  not under the planes' and Luclin's painted skies. `render::horizon_strength` fades them where the zone's fog ends
-  between 350 and 900 units (nektulos' 400 nearly none, East Commonlands' 800 nearly all), as the haze leaves the
-  modern view's reach (lava, a thick-fog region) and to a quarter under a storm.
-- **Limits**: they write no depth (a neighbour zone past them must still show), so the god rays (`post.frag`) treat
-  them as open sky and can streak across them towards the sun. They do not take the sun's shadows. One full-screen
-  pass; the frame time in Qeynos Hills at 2560 x 1120 did not move outside the runs' noise.
+- **What the zone says** (`render::horizon_land`; not for a neighbour): the terrain's opaque triangles, and its water
+  and lava surfaces. The level ones (the normal's z at least 0.8, either way up) give the level ground's extent (2 % of
+  its area cut each side), its median height (the land's base) and its spread from the 10th to the 90th percentile,
+  40 to 1200 units (the relief, which makes rugged zones' land taller). A zone with less than 250,000 square units of
+  level ground gets none.
+- **The grid**: the zone's terrain (geometry more than 4000 units past the level ground left out) is laid on squares
+  64 units across. Terrain anywhere in a square covers it, with its lowest and highest point; a water surface marks it
+  wet. Each empty square takes, from the nearest covered square, its distance and the zone's edge there: the highest
+  terrain (a wall's top, the open ground at a zone line) or, where the water reaches the edge, the water's surface;
+  smoothed over a few squares.
+- **The land**: a grid of vertices over the zone's squares (64 units apart, more for a big zone), then wider by 12 % a
+  step out to 10000 units past them. Vertices in a covered square are tucked 40 units under its lowest terrain, and in
+  the empty square beside one 5 units under the lowest beside it (a wall's foot), so the land meets the zone's edge
+  without a gap and stays under its ground; the squares under the zone are drawn too (they show only through the back
+  of its walls, which have only their inner faces). Past the edge the land starts at the edge's height and turns over
+  1200 units into rolling hills (value noise, 200 to 650 units high with the relief) and, from 800 to 5000 units out,
+  ridged mountains (900 to 2250 units), all seeded by the zone's short name (`render::horizon_seed`), so it is the same
+  every visit. A pocket the zone's terrain closes round (a gap between its walls, a hole in it) is a flat lid just under
+  its rim. Where the edge is water, the sea: its floor falls to 250 units under the zone's water level (the median of
+  its water surfaces) within 800 units, with coasts and islands rising from 2500 units out, and its surface is drawn
+  at the water level with the zone's own water material.
+- **The look**: the zone's plain material (no shader effect of its own, no scrolling) that covers the most level
+  ground draws the land, the one on the most slopes (at most 0.8 up, and the mountains' upper half) its rock, and the
+  most used water material the sea, each mapped flat with its own texture scale (the zone's UV area over area) and
+  wound as the zone winds its own. Its vertex colour is the level ground's median baked light, darker in woods-like
+  patches on the level land, in the valleys and in broad patches that keep the texture's repeat from showing. The
+  log says what it used: qeytoqrg 36892 triangles, ground `XGRASSDIRT2.BMP`, rock `HHDROCKGRASS.BMP`; butcher with
+  10108 water triangles.
+- **Neighbour zones**: where one is drawn the land is not. Each neighbour keeps the 64-unit squares its opaque
+  geometry covers (`render::horizon_footprint`, `ZoneRenderer::footprint`), and the current zone collapses its land's
+  triangles whose middle lies in one (`ZoneRenderer::set_distant_hidden`), in index buffers of the land's own (one per
+  frame in flight), whenever the neighbours drawn change.
+- **When**: outdoors (time types 1, 2, 5), under an open sky (1, 2, 4) or none (gfaydark, everfrost); not under the
+  planes' and Luclin's painted skies. A thick fog, lava, a thick-fog region, a storm and the night hide it as they hide
+  the zone, by the same haze.
+- **Cost**: in Qeynos Hills about 37,000 triangles in 256-unit chunks, culled with the zone's; no shadows (neither cast
+  nor drawn into the sun's cascades or the cover and water maps). Looking out over it, 9,000 more triangles and 70
+  more draw calls; the frame time did not move.
 
-`display.horizon_hills` (Options, Horizon Hills) turns them off; the viewer takes `--no-horizon`.
+`display.horizon_hills` (Options, Horizon Hills) turns it off; the viewer takes `--no-horizon`.
 
 ## Texture overrides
 
@@ -1310,7 +1316,7 @@ viewer (`--zone`, `--model`) takes `--msaa`, `--tonemap`, `--exposure`, `--rende
 | `display.depth_prepass` | 0, 1 | 0 | draw the zone's opaque geometry depth-only first, then colour it with the depth test equal; the current zone only, read when a zone loads; modern only; viewer `--depth-prepass` |
 | `display.distance_blur` | 0, 1 | 1 | the far distance's slight blur; modern only |
 | `display.neighbour_zones` | 0, 1 | 1 | the zone past an outdoor zone line drawn in the distance (Neighbour zones); modern only; `/neighbourzones [on \| off]` |
-| `display.horizon_hills` | 0, 1 | 1 | distant hills round an outdoor zone where nothing else is drawn (Horizon hills); modern only; viewer `--no-horizon` |
+| `display.horizon_hills` | 0, 1 | 1 | land round an outdoor zone past its edges (Horizon hills); modern only; viewer `--no-horizon` |
 | `display.target_ring_cues` | 0, 1 | 1 | the target ring's sweep on a new target and pulse while attacking (Target Ring Cues; The target ring) |
 | `display.find_trail_style` | 0, 1 | 0 | Find paths: 0 the gold ground line, 1 rainbow strands; Options > Display (gamepad: Interface), saved per character and changed immediately; docs/navigation.md "The trail" |
 | `display.target_ring_xray` | 0, 1 | 0 | the target ring's hidden part showing faintly through what stands in front (Target Ring Through Models) |

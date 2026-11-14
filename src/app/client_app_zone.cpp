@@ -79,6 +79,7 @@ void ClientApp::load_zone(const std::string& short_name) {
             if (!fire_renderer_) fire_renderer_ = std::make_unique<render::FireRenderer>(vk_, shader_dir_);
         }
         zone_renderer_ = std::make_unique<render::ZoneRenderer>(vk_, *zone_, shader_dir_, render::zone_render_options(game_));
+        distant_hidden_key_ = 0;
         mark("zone renderer");
         flora_renderer_.reset();
         if (!zone_->flora.empty()) flora_renderer_ = std::make_unique<render::FloraRenderer>(vk_, *zone_, shader_dir_);

@@ -55,6 +55,11 @@ public:
     void draw(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::vec3& camera_pos,
               const game::ViewDistance& view, double time_seconds, render::ZonePhase phase);
 
+    // The squares (render::ZoneRenderer::footprint) of the neighbours drawn now, for the current zone's
+    // set_distant_hidden; and a number that changes when which are drawn does.
+    void footprint(std::vector<std::int64_t>& out) const;
+    std::uint64_t drawn_key() const;
+
     bool entered() const { return entered_; }
     // A load is under way (update starts and finishes them), its ground being sampled included.
     bool busy() const { return job_ != nullptr || pending_.has_value(); }

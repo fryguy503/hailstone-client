@@ -750,7 +750,6 @@ hailstone_add_shaders(hailstone_shaders
   shaders/target_ring.frag
   shaders/underwater.vert
   shaders/underwater.frag
-  shaders/horizon.frag
   shaders/zone_shadow.vert
   shaders/zone_shadow.frag
   shaders/zone_point_shadow.vert
