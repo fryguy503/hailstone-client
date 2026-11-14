@@ -72,6 +72,7 @@ constexpr Entry kCalls[] = {
     {"DrawMinimap", 0}, {"DrawZoneMap", 0}, {"DrawAtlas", 0}, {"AtlasIndex", 0}, {"AtlasPageData", 0}, {"AtlasTexture", 0}, {"ZoneLinks", 0}, {"ZoneRoute", 0},
     {"ZoneExits", 0}, {"ShowZoneMap", 0}, {"MapZoneShown", 0}, {"FindPathShown", 0}, {"ZoneName", 0}, {"GameTime", 0},
     {"FindNpcs", 0}, {"FindCategories", 0}, {"CompareItem", 0}, {"CompareSlotItem", 0}, {"CompareBagSlotItem", 0},
+    {"Tasks", 0},
     {"LuaSocialRules", 0}, {"LuaSocial", 0}, {"LuaSocialFace", 0}, {"LuaSocialExport", 0},
     {"LuaSocialImport", 0}, {"LuaComplete", 0}, {"LuaSocialEditRequest", 0}, {"FreeSocial", 0}, {"SocialColors", 0},
     {"SocialEditorSocial", 0}, {"SocialLine", 0}, {"SlashCommands", 0}, {"CurrentSocial", 0},
@@ -92,7 +93,7 @@ constexpr Entry kCalls[] = {
     // The chat input's reply key (the input's new text; the reply index steps) and the page keys' scroll
     {"ChatCycleReply", 0}, {"ChatPage", 0},
     // Windows, options, the chat windows' setup, lists of the player's own (spell sets, the autoskill list)
-    {"ShowWindow", kCapCommands}, {"SetOption", kCapCommands}, {"SetUiIni", kCapCommands},
+    {"ShowWindow", kCapCommands}, {"OpenTask", kCapCommands}, {"SetOption", kCapCommands}, {"SetUiIni", kCapCommands},
     {"ChatLink", kCapCommands},
     {"ChatActivate", kCapCommands}, {"ChatClear", kCapCommands}, {"ChatNewWindow", kCapCommands},
     {"ChatCloseWindow", kCapCommands}, {"ChatNewTab", kCapCommands}, {"ChatCloseTab", kCapCommands},

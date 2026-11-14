@@ -1035,6 +1035,183 @@ return true
     }
 }
 
+// The tracker reads the same task snapshot as the journal without consulting TaskWnd's visibility or selection.
+// Keep its interaction checks separate from the shared HUD's placement, lock and resize checks above.
+TEST_CASE("UI quest tracker: independent tracked objectives and journal links") {
+    if (!fs::exists(ui_dir() / "modern" / "questtracker.lua")) return;
+    auto fails = run_modern(R"lua(
+local base = ...
+local hud = dofile("lib/hud.lua")
+local Q = dofile("lib/task_journal.lua")
+local real_dofile = dofile
+local texts, buttons, window, opts, pending = {}, {}, nil, nil, nil
+local cx, cy, calls, opened, journal = 0, 0, 0, nil, nil
+local inGame, openAllowed = true, true
+local snapshot = {
+  { id = 10, type = 2, title = "First quest", duration = 600, left = 128, done = 1, total = 6, objectives = {
+    { hidden = true, text = "Hidden secret" },
+    { text = "Already done", count = 1, goal = 1, done = true },
+    { separator = true },
+    { text = "First known", count = 1, goal = 4, zone = "North Ro" },
+    { text = "Second known", count = 0, goal = 1, zone = "Befallen" },
+    { text = "Third known", count = 2, goal = 3, zone = "Najena" },
+    { text = "Fourth known", count = 0, goal = 1, zone = "Upper Guk" },
+  } },
+  { id = 20, type = 1, title = "Another quest", objectives = { { text = "Other objective", count = 2, goal = 8 } } },
+}
+eq.InGame = function() return inGame end
+eq.Tasks = function() calls = calls + 1 return snapshot end
+eq.WindowShown = function() error("the tracker must not inspect TaskWnd") end
+eq.ReplaceWindow = eq.WindowShown
+eq.OpenTask = function(id) opened = id return openAllowed end
+eq.ShowWindow = function(name, shown) journal = { name, shown } end
+ui.window = function(name, fn) assert(name == "Quest Tracker") window = fn end
+ui.GetWindowPos = function() return 0, 0 end
+ui.GetCursorScreenPos = function() return cx, cy end
+ui.GetCursorPos = ui.GetCursorScreenPos
+ui.SetCursorPos = function(x, y) cx, cy = x, y end
+ui.SetCursorScreenPos = ui.SetCursorPos
+ui.GetContentRegionAvail = function() return 282, 250 end
+ui.IsItemHovered = function() return false end
+ui.TextColored = function(_, _, _, _, text) texts[text] = true cy = cy + 16 end
+ui.Separator = function() cy = cy + 4 end
+hud.T.Text = function(_, _, text) texts[text] = true end
+hud.T.Hit = function(id) if pending == id then pending = nil return true end return false end
+hud.T.Button = function(id, _, _, _, _, _, label, options)
+  buttons[id] = label
+  return hud.T.Hit(id) and (not options or options.enabled ~= false)
+end
+hud.DragItem = function() return false end
+hud.Window = function(screen, title, options, body)
+  assert(screen == nil and title == "Quest Tracker", "an independent HUD frame")
+  opts = options
+  assert(options.resizable[1] >= 200 and options.resizable[2] >= 80, "bounded resizing")
+  assert(options.rollup and options.onClose, "the HUD owns rolling and closing")
+  if options.shown() then
+    options.rolled = hud.Rolled(title)
+    body(0, 0, 300, options.rolled and options.titleHeight or 350, 1)
+  end
+end
+dofile = function(name) if name == "lib/hud.lua" then return hud end return real_dofile(name) end
+assert(loadfile(base .. "/questtracker.lua"))()
+local function draw(click)
+  texts, buttons, pending, cx, cy = {}, {}, click, 0, 0
+  frame = frame + 1
+  window()
+  return texts
+end
+draw()
+assert(next(texts) == nil, "an empty tracker is not shown by default")
+Q.setTrackerVisible(true)
+draw()
+assert(texts["No tracked quests. Use Track in the Quest Journal to add one."], "explicitly showing an empty tracker offers help")
+Q.setTrackerVisible(false)
+Q.setTracked(10, true)
+Q.setTracked(20, true)
+local before = calls
+local drawn = draw()
+assert(drawn["First quest"] and drawn["Another quest"], "both tracked quests")
+assert(drawn["First known"] and drawn["Second known"] and drawn["Third known"], "the first three incomplete objectives")
+assert(not drawn["Fourth known"] and not drawn["Hidden secret"] and not drawn["Already done"], "compact visible unfinished rows only")
+assert(drawn["1/4"] and drawn["2/3"] and drawn["North Ro"] and drawn["Befallen"], "counts and zones")
+assert(drawn["2m 08s remaining"] and drawn["1/6"], "time and total progress")
+assert(calls == before + 1, "the snapshot is read once in a frame")
+ui.SetSetting("tasks.section.20", "rewards")
+draw("##quest20")
+assert(opened == 20, "the quest title selects that quest")
+assert(settings["tasks.section.20"] == "objectives" and settings["tasks.category"] == "active",
+  "a shared quest title opens its objectives with the other active tasks")
+local beforeRefresh = calls
+assert(Q.tasks() == snapshot and calls == beforeRefresh + 1, "opening a quest invalidates the same-frame snapshot")
+ui.SetSetting("tasks.section.10", "rewards")
+draw("##all10")
+assert(opened == 10, "all objectives opens the correct quest")
+assert(settings["tasks.section.10"] == "objectives" and settings["tasks.category"] == "active",
+  "all objectives opens objectives in the active category")
+ui.SetSetting("tasks.section.10", "rewards")
+openAllowed = false
+draw("##all10")
+assert(settings["tasks.section.10"] == "rewards", "a failed open preserves section preferences")
+openAllowed = true
+draw("##managequests")
+assert(journal[1] == "TaskWnd" and journal[2] == true, "the journal can be restored from the tracker")
+draw("##collapse10")
+assert(settings["tasks.tracker.collapsed.10"] == "1" and not texts["First known"], "per-quest collapse")
+assert(texts["Other objective"], "collapsing one quest leaves another expanded")
+draw()
+assert(not texts["First known"], "collapse is remembered")
+draw("##collapse10")
+assert(texts["First known"] and settings["tasks.tracker.collapsed.10"] == "0", "per-quest expand")
+draw("##trackerlock")
+assert(settings["hud.lock.Quest Tracker"] == "1", "the shared HUD lock setting")
+draw("##trackerlock")
+assert(settings["hud.lock.Quest Tracker"] == "0", "unlock")
+draw("##trackerroll")
+assert(settings["hud.rolled.Quest Tracker"] == "1", "the shared HUD roll-up setting")
+draw()
+assert(not texts["First quest"] and buttons["##trackerroll"] == "+", "rolled up shows only its header")
+draw("##trackerroll")
+draw()
+assert(texts["First known"], "expanded contents return")
+opts.onClose()
+draw()
+assert(not texts["First quest"] and Q.isTracked(10) and Q.isTracked(20), "hiding never clears watch flags")
+Q.setTrackerVisible(true)
+draw()
+assert(texts["First quest"], "hidden tracker can be shown again")
+snapshot[1].objectives[4].done = true
+draw()
+assert(not texts["First known"] and texts["Fourth known"], "progress changes refresh the compact objective set")
+Q.setTracked(10, false)
+draw()
+assert(not texts["First quest"] and texts["Another quest"], "untracking removes only that quest")
+snapshot = {}
+draw()
+assert(texts["No tracked quests. Use Track in the Quest Journal to add one."], "stale watch flags do not create stale tasks")
+local prior = calls
+inGame = false
+draw()
+assert(calls == prior and next(texts) == nil, "no tracker outside the game")
+return {}
+)lua");
+    CHECK_MESSAGE(fails.empty(), (fails.empty() ? "" : fails.front()));
+}
+
+TEST_CASE("UI task journal: shared snapshots and settings-backed tracking") {
+    if (!fs::exists(ui_dir() / "modern" / "lib" / "task_journal.lua")) return;
+    auto fails = run_modern(R"lua(
+local Q = dofile("lib/task_journal.lua")
+local other = dofile("lib/task_journal.lua")
+local calls = 0
+local snapshot = { { id = 10 }, { id = 20 }, { id = 30 } }
+eq.Tasks = function() calls = calls + 1 return snapshot end
+assert(Q.tasks() == other.tasks() and calls == 1, "both windows share one snapshot per frame")
+frame = frame + 1
+snapshot = { { id = 10 }, { id = 30 } }
+assert(Q.tasks() == snapshot and calls == 2, "a new frame reads current tasks")
+Q.setTracked(20, true)
+Q.setTracked(10, true)
+local tracked = other.getTracked(Q.tasks())
+assert(#tracked == 1 and tracked[1].id == 10, "watch flags cannot keep a removed task visible")
+assert(Q.trackerVisible(), "tracking a quest shows the tracker")
+other.setTrackerVisible(false)
+assert(not Q.trackerVisible() and Q.isTracked(10) and Q.isTracked(20), "visibility is independent of tracking")
+Q.setTracked(10, false)
+assert(not other.isTracked(10) and Q.isTracked(20), "watch flags are shared through settings")
+local done, total = Q.stats({ objectives = {
+  { done = true }, { done = false }, { hidden = true, done = true }, { separator = true },
+} })
+assert(done == 1 and total == 3, "hidden and separator rows do not count as finished objectives")
+assert(Q.time(65) == "1m 05s" and Q.time(3600) == "1h 00m", "task time formatting")
+assert(Q.inZone({objectives={{currentZone=true,hidden=true},{currentZone=true,done=true}}}) == false,
+  "hidden or completed objectives do not make a task current-zone")
+assert(Q.inZone({objectives={{currentZone=false},{currentZone=true,done=false}}}),
+  "a known incomplete objective can make a task current-zone")
+return {}
+)lua");
+    CHECK_MESSAGE(fails.empty(), (fails.empty() ? "" : fails.front()));
+}
+
 // The modern chat's item links in its input (ui/modern/lib/chatlinks.lua): tags shown as names, and back as tags when
 // the line is sent. The same item linked twice once found its second name inside the first tag put back and sent a
 // tag in a tag.

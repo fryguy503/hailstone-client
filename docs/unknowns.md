@@ -227,6 +227,8 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
 
 ## UI
 
+- The modern Quest Journal and independent Quest Tracker are covered by packet-driven and headless UI tests, but quest updates across live zoning, timed quest expiry, shared roster updates and membership actions, and mouse move/resize have not been checked in a live session. The journal preserves the server's objective group boundaries as separators; the meaning of a particular quest's groups is not inferred or labelled as numbered stages. A live quest session with a packet capture would settle those acceptance cases.
+
 - The NPC target keys (game/targeting.h): whether the scene graph query that offers the cycle's spawns (EQGraphicsDX9.dll, vtable +0x98) tests line of sight is not traced; the client offers every NPC within 500 units, and the Hailstone option `tab_line_of_sight` (on by default) adds a sight test of its own. Settled by reading that query, or by pressing Tab in the original client with an NPC behind a wall.
 
 - Labels and gauges (`app/lua_eq_values.cpp`): ATK leaves out the leadership offense enhancement (no packet source) and the profile's `+0x3468` bonus. Not tracked: the leadership experience gauges (23, 24), the loyalty velocity (146), the skill damage labels (228..236), the item bonus caps (277..295), the loyalty tokens (296), the trophy tribute labels (297..301), the leadership experience labels (130, 131), the mercenary label (72), the subscription time (334) and the achievement gauges. The HP gauges' `PlayerZoneClient +0x194` test (the pink band) is not known.

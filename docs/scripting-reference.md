@@ -898,6 +898,25 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | ListClick | (name, child, row [, "left"\|"right"\|"double" [, column [, mods]]]) → ok | Click a list row. mods: 1 shift, 2 ctrl | actions |
 | ListHeaderClick | (name, child, column) → ok | Click a column header (0-based) | actions |
 
+#### Active tasks and quest journal (lua_eq_progress.cpp)
+
+| Function | Args → returns | What | Cap |
+|---|---|---|---|
+| Tasks | () → tasks | all authoritative active tasks, independent of journal visibility or selection | — |
+| OpenTask | (taskId) → bool | selects and opens an existing active task in the journal; false for an unknown ID | `commands` |
+
+`Tasks` returns an array in native task/shared/quest and slot order, plus `selectedId` (0 if none), `revision`
+and `requestTimerLeft` (seconds). Each task has `id`, `type` (0 task, 1 shared, 2 quest), `sequence`, `title`,
+`duration`, `left` (seconds; 0 when untimed), `description`, `rewards`, `details` (the combined native STML),
+`hasRewards`, `rewardSet`, `done`, `total` and `objectives`. It is empty outside the world.
+
+Objectives preserve native group/slot order. A separator is `{separator=true, group}`. A normal entry has
+`activityId`, `group`, `separator=false`, `hidden`, `optional`, `done`, `currentZone`, `text`, `status`, `zone`,
+`count` and `goal`. Hidden entries have no `count` or `goal`; their undisclosed names and locations are not
+available. `currentZone` is false for hidden objectives and those that count anywhere. `group` is the server's
+list-group value, not a parent-objective ID or an invented numbered stage. Reading tasks does not select one or
+send a request. `OpenTask` changes the journal selection and visibility, not task or tracking state.
+
 #### Spell gems, buffs, cool-downs (lua_eq.cpp)
 
 | Function | Args → returns | What | Cap |

@@ -41,6 +41,13 @@ TEST_CASE("Lua UI: the window layout per character, the other settings shared") 
     CHECK(LuaUi::character_setting("items.Anna.junk"));
     CHECK_FALSE(LuaUi::layout_setting("items.Anna.junk"));
     CHECK(LuaUi::layout_setting("hud.pos.AAWindow"));
+    CHECK(LuaUi::character_setting("tasks.tracked.101"));
+    CHECK(LuaUi::character_setting("tasks.tracker.visible"));
+    CHECK(LuaUi::character_setting("tasks.tracker.collapsed.101"));
+    CHECK(LuaUi::character_setting("tasks.section.101"));
+    CHECK(LuaUi::character_setting("tasks.category"));
+    CHECK_FALSE(LuaUi::layout_setting("tasks.tracked.101"));
+    CHECK_FALSE(LuaUi::layout_setting("tasks.tracker.visible"));
 
     hailstone::test::ScratchDir scratch("lua_character_settings_test");
     const fs::path pack = scratch.path() / "pack", shared = scratch.path() / "shared.txt";
@@ -116,4 +123,37 @@ TEST_CASE("Lua UI: item marks kept per server and character, and a layout copy l
     }
     CHECK(read(shared) == "items.Anna.junk=7\n");
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("Lua UI: tracked quests and journal sections are per character and not copied with a layout") {
+    using hailstone::ui::lua::LuaUi;
+    hailstone::test::ScratchDir scratch("lua_character_tasks_test");
+    const auto pack = scratch.path() / "pack", shared = scratch.path() / "shared.txt";
+    const auto first = scratch.path() / "first.txt", second = scratch.path() / "second.txt";
+    fs::create_directories(pack);
+    std::ofstream(shared) << "tasks.tracked.999=1\ntasks.tracker.visible=0\n";
+    ImGuiContext* context = ImGui::CreateContext();
+    {
+        LuaUi lua(pack, shared);
+        lua_State* L = lua.state();
+        lua.set_character_settings(first);
+        CHECK(run(L, "return ui.GetSetting('tasks.tracked.999')") == "nil");
+        CHECK(run(L, "return ui.GetSetting('tasks.tracker.visible')") == "nil");
+        run(L, "ui.SetSetting('tasks.tracked.101','1'); ui.SetSetting('tasks.tracker.visible','1'); ui.SetSetting('tasks.tracker.collapsed.101','1'); ui.SetSetting('tasks.section.101','rewards'); ui.SetSetting('tasks.category','shared'); ui.SetSetting('hud.pos.QuestTracker','20,30')");
+        lua.set_character_settings(second);
+        CHECK(run(L, "return ui.GetSetting('tasks.tracked.101')") == "nil");
+        CHECK(run(L, "return ui.GetSetting('tasks.category')") == "nil");
+        run(L, "ui.SetSetting('tasks.tracked.201','1')");
+        lua.copy_character_layout(first);
+        CHECK(run(L, "return ui.GetSetting('hud.pos.QuestTracker')") == "20,30");
+        CHECK(run(L, "return ui.GetSetting('tasks.tracked.201')") == "1");
+        CHECK(run(L, "return ui.GetSetting('tasks.tracked.101')") == "nil");
+        CHECK(run(L, "return ui.GetSetting('tasks.section.101')") == "nil");
+        lua.set_character_settings(first);
+        CHECK(run(L, "return ui.GetSetting('tasks.tracked.101')") == "1");
+        CHECK(run(L, "return ui.GetSetting('tasks.tracker.collapsed.101')") == "1");
+        CHECK(run(L, "return ui.GetSetting('tasks.section.101')") == "rewards");
+        CHECK(run(L, "return ui.GetSetting('tasks.category')") == "shared");
+    }
+    ImGui::DestroyContext(context);
 }

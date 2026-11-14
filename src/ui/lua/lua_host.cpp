@@ -221,8 +221,14 @@ struct LuaUi::Impl {
         return !character_file.empty() && LuaUi::character_setting(plugin_key_rest(key));
     }
     const std::string* get_setting(const std::string& key) const {
-        if (per_character(key))
+        if (per_character(key)) {
             if (auto it = character_settings.find(key); it != character_settings.end()) return &it->second;
+            const auto rest = plugin_key_rest(key);
+            // Quest identities and open sections belong to this character, never to a shared layout or another
+            // character's old global settings. Window geometry still inherits the shared layout as before.
+            if (rest.starts_with("tasks.tracked.") || rest.starts_with("tasks.tracker.") ||
+                rest.starts_with("tasks.section.") || rest == "tasks.category") return nullptr;
+        }
         auto it = settings.find(key);
         return it == settings.end() ? nullptr : &it->second;
     }
@@ -1306,7 +1312,10 @@ bool LuaUi::set_setting(std::string_view key, std::string_view value) {
     return impl_->set_setting(std::string(key), std::string(value));
 }
 
-bool LuaUi::character_setting(std::string_view key) { return layout_setting(key) || key.starts_with("items."); }
+bool LuaUi::character_setting(std::string_view key) {
+    return layout_setting(key) || key.starts_with("items.") || key.starts_with("tasks.tracked.") ||
+           key.starts_with("tasks.tracker.") || key.starts_with("tasks.section.") || key == "tasks.category";
+}
 
 void LuaUi::set_character_settings(const fs::path& file) {
     Impl& m = *impl_;

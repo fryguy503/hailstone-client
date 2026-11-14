@@ -1274,6 +1274,9 @@ if(HAILSTONE_BUILD_TESTS)
     tests/char_select_scene_test.cpp
     tests/lua_eq_args_test.cpp
     tests/lua_eq_test.cpp
+    tests/lua_eq_tasks_test.cpp
+    tests/lua_task_journal_test.cpp
+    tests/quest_journal_ui_test.cpp
     tests/ui_ini_test.cpp
     tests/ui_packs_test.cpp
     tests/item_compare_test.cpp

@@ -176,6 +176,11 @@ experiment that shares GPU textures is in [graphics.md](graphics.md#shared-gpu-t
 
 ### A character's settings
 
+The modern UI's tracked quest IDs, tracker visibility and per-quest collapsed state, journal category and section
+are also kept in the character's `ui-modern.txt` (`tasks.tracked.*`, `tasks.tracker.*`, `tasks.category` and
+`tasks.section.*`). These quest preferences do not fall back to another character's shared settings and are not
+copied by Copy layout. The tracker's position, size and lock are ordinary `hud.*` character layout keys.
+
 From the entry into the world until it leaves (camp, logout, a lost connection), a character plays with its own
 client settings: `servers/<profile>/characters/<world>/<character>/hailstone.ini` (`Config::attach_character`,
 `ClientApp::use_character_settings`). The first time a character enters, that file is made from `hailstone.ini`'s keys
