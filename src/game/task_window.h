@@ -113,6 +113,12 @@ std::vector<TaskWindowRow> history_element_rows(const std::vector<TaskElement>& 
 std::string task_details_stml(const Task& t, const EqStrings& strings,
                               const std::function<std::string(const TaskElement&)>& element_text);
 
+// CTaskSelectWnd_ShowTaskDescription @0x76b310: the offer's processed description, then eqstr 6029
+// ("This task begins in %1") with element slot 0's zone names when its type is neither 0 nor -1 and it has zones.
+std::string task_offer_details_stml(const TaskOffer& offer, const EqStrings& strings,
+                                    const std::function<std::string(const TaskElement&)>& element_text,
+                                    const std::function<std::string(std::uint32_t)>& zone_name);
+
 // The abandon question (CTaskWnd::WndNotification, TASK_AbandonButton): 8995 for a task, 8996 for the shared task,
 // 8997 for a quest, with the title; ConfirmationDialog(100, Yes / No, 10 s, the task id).
 std::uint32_t task_abandon_eqstr(std::uint32_t type);

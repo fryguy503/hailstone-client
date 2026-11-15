@@ -417,6 +417,10 @@ The element text is the server's description, else the type's template (with / w
 
 **Reward selection** (`net/reward_packets`, `game/reward_selection`). These are stock RoF2 managers, independent of a server's reward providers. Pending rewards use `0x6411` (`AchievementReward`); task previews use `0x6471` (`RewardSelection`) and cannot claim.
 
+Offered-task Preview Reward uses the same action-4 request as active tasks: the selected task id, gated by the
+offer's received preview byte. This was confirmed in `CTaskSelectWnd::WndNotification` (@0x76b660) and the
+preview manager sender (@0x463a90). It neither accepts nor declines the offer.
+
 | Action | Direction | Layout after u32 action |
 |---|---|---|
 | 0 | Z→C | u8 has reward, then one reward set when true; pending upserts by pending id, preview replaces |

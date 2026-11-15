@@ -1,8 +1,7 @@
 -- Offered tasks: replaces the game's TaskSelectWnd (an NPC's task offer). The offers as cards (title, how long it
--- runs), the selected one's description and first objectives at the right, Accept and Decline All. The cards are
--- the original's TaskList (a click selects there: eq.ListClick), the text its Description, the buttons its own, so
--- accepting is the game's (closing the window declines, as the stock window does). Offer-preview controls remain
--- unavailable here; active-task previews use TaskWnd.
+-- runs), the selected one's description and first objectives at the right, Accept, Preview Reward and Decline All.
+-- The cards are the original's TaskList (a click selects there: eq.ListClick), the text its Description, the buttons its own, so
+-- accepting is the game's (closing the window declines, as the stock window does).
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -84,6 +83,7 @@ local function drawWindow(x, y, w, h, s)
   ui.Dummy(0, 4 * s)
   W.ButtonRow(WINDOW, {
     { "AcceptButton", "Accept", { primary = true, tooltip = "Take on the selected task" } },
+    { "TSEL_PreviewRewardButton", "Preview Reward", { tooltip = "View the selected task's rewards" } },
     { "DeclineButton", "Decline All", { tooltip = "Turn down every task offered" } },
   }, btnH)
 end

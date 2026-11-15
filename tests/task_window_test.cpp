@@ -242,6 +242,162 @@ TEST_CASE("task window: the compass mark") {
     CHECK_FALSE(task_compass_mark(st, 3, spawns));
 }
 
+TEST_CASE("task offers: description appends the starting zones of element slot zero") {
+    auto s = strings();
+    s.set(6029, "<BR><BR>Starts in %1");
+    TaskOffer offer;
+    offer.description = "Story [1,%1]";
+    auto later = element(1, 0, 4, "Later objective", 0, 1);
+    later.zones = "2";
+    auto first = element(0, 0, 4, "Talk to the guard", 0, 1);
+    first.zones = "1;2";
+    first.target_zones = "999";
+    offer.elements = {later, first}; // packet order need not be element slot order
+    CHECK(task_offer_details_stml(offer, s, text_of, zone_of) ==
+          "Story Talk to the guard<BR><BR>Starts in South Qeynos or North Qeynos");
+
+    offer.description = "Story";
+    for (const int type : {0, -1}) {
+        offer.elements.back().type = type;
+        CHECK(task_offer_details_stml(offer, s, text_of, zone_of) == "Story");
+    }
+    offer.elements.back().type = 4;
+    offer.elements.back().zones.clear();
+    CHECK(task_offer_details_stml(offer, s, text_of, zone_of) == "Story");
+    offer.elements.pop_back();
+    CHECK(task_offer_details_stml(offer, s, text_of, zone_of) == "Story"); // no slot 0; do not use slot 1
+    first.zones = "1;999";
+    offer.elements.push_back(first);
+    offer.description.clear();
+    CHECK(task_offer_details_stml(offer, s, text_of, zone_of) == "<BR><BR>Starts in South Qeynos or Unknown Zone");
+    first.zones = "2";
+    offer.elements.push_back(first); // repeated slot assignment follows the native array's last value
+    offer.reward_preview = true;
+    offer.reward_multiplier = 3.0f;
+    CHECK(task_offer_details_stml(offer, s, text_of, zone_of) == "<BR><BR>Starts in North Qeynos");
+    offer.elements.clear();
+    CHECK(task_offer_details_stml(offer, s, text_of, zone_of).empty());
+}
+
+TEST_CASE("task offers: Preview Reward uses the selected received offer and refuses stale rows") {
+    for (const auto op : {net::Op::TaskSelectWindow, net::Op::SharedTaskSelectWindow}) {
+        CAPTURE(op);
+        plugin::Hooks hooks;
+        const auto owner = hooks.new_owner("task offer preview fixture");
+        std::vector<net::AppPacket> requests;
+        hooks.on_packet(owner, plugin::Stream::Zone, plugin::Direction::Out, 0x6471, [&](net::AppPacket& p) {
+            requests.push_back(p);
+            return plugin::Flow::Continue;
+        });
+        test::ManualClock clock;
+        auto options = test::quick_options();
+        options.session.clock = clock.source();
+        options.hooks = &hooks;
+        test::Rig rig(test::MockConfig::standard(), options);
+        REQUIRE(rig.to_zone());
+        clock.hold();
+
+        TaskOffers offers;
+        offers.giver_id = 123;
+        offers.type = op == net::Op::SharedTaskSelectWindow ? kTaskTypeShared : kTaskTypeQuest;
+        TaskOffer first;
+        first.task_id = 9001;
+        first.title = "First offer";
+        first.description = "First description";
+        TaskOffer second = first;
+        second.task_id = 70000;
+        second.title = "Second offer";
+        second.description = "Second description";
+        second.reward_preview = true;
+        offers.offers = {first, second};
+        rig.conn.receive_zone_packet_for_test(net::encode_task_select(offers, op));
+
+        app::EqHost host;
+        host.conn = &rig.conn;
+        host.game = &rig.game;
+        host.in_game = host.ui_ready = true;
+        std::vector<std::unique_ptr<app::StockWindow>> windows;
+        app::add_progress_windows(windows);
+        const auto found = std::find_if(windows.begin(), windows.end(), [](const auto& w) { return w->screen() == "TaskSelectWnd"; });
+        REQUIRE(found != windows.end());
+        auto& window = **found;
+        app::Child button;
+        window.child(host, "TSEL_PreviewRewardButton", button);
+        CHECK(button.enabled == false); // no displayed rows yet
+        REQUIRE(window.click(host, "TSEL_PreviewRewardButton", "left", false));
+        REQUIRE(window.list(host, "TaskList"));
+        window.frame(host);
+        CHECK(requests.empty());
+        button = {};
+        window.child(host, "TSEL_PreviewRewardButton", button);
+        CHECK(button.enabled == false);
+        REQUIRE(window.list_click(host, "TaskList", 1, false, 0));
+        app::Child description;
+        window.child(host, "Description", description);
+        CHECK(description.text == second.description);
+        button = {};
+        window.child(host, "TSEL_PreviewRewardButton", button);
+        REQUIRE(button.enabled == true);
+        CHECK_FALSE(window.click(host, "TSEL_PreviewRewardButton", "right", false));
+        CHECK(requests.empty());
+        REQUIRE(window.click(host, "TSEL_PreviewRewardButton", "left", false));
+        REQUIRE(requests.size() == 1);
+        ByteReader reader(requests.front().data);
+        CHECK(reader.le<std::uint32_t>() == 4u);
+        CHECK(reader.le<std::uint32_t>() == second.task_id);
+        CHECK(reader.empty());
+        CHECK(rig.conn.tasks().offers.has_value()); // preview never accepts or declines the offer
+        CHECK(rig.conn.rewards().lane(RewardLane::Preview).shown);
+
+        clock.advance(std::chrono::milliseconds{501});
+        offers.offers[1].task_id = 80000;
+        rig.conn.receive_zone_packet_for_test(net::encode_task_select(offers, op));
+        button = {};
+        window.child(host, "TSEL_PreviewRewardButton", button);
+        CHECK(button.enabled == false);
+        description = {};
+        window.child(host, "Description", description);
+        CHECK(description.text == "");
+        REQUIRE(window.click(host, "TSEL_PreviewRewardButton", "left", false));
+        REQUIRE(window.click(host, "AcceptButton", "left", false));
+        CHECK(requests.size() == 1);
+        REQUIRE(rig.conn.tasks().offers.has_value());
+
+        REQUIRE(window.list(host, "TaskList"));
+        ++offers.giver_id; // same task ID from a different giver is also a new offer view
+        rig.conn.receive_zone_packet_for_test(net::encode_task_select(offers, op));
+        button = {};
+        window.child(host, "TSEL_PreviewRewardButton", button);
+        CHECK(button.enabled == false);
+        REQUIRE(window.click(host, "TSEL_PreviewRewardButton", "left", false));
+        CHECK(requests.size() == 1);
+
+        REQUIRE(window.list(host, "TaskList"));
+        offers.offers[1].reward_preview = false;
+        rig.conn.receive_zone_packet_for_test(net::encode_task_select(offers, op));
+        Task active;
+        active.task_id = offers.offers[1].task_id;
+        active.has_rewards = active.reward_set = true;
+        rig.conn.receive_zone_packet_for_test(net::encode_task_description(active));
+        REQUIRE(rig.conn.tasks().find_id(active.task_id));
+        REQUIRE(rig.conn.tasks().find_id(active.task_id)->reward_set);
+        button = {};
+        window.child(host, "TSEL_PreviewRewardButton", button);
+        CHECK(button.enabled == false);
+        REQUIRE(window.click(host, "TSEL_PreviewRewardButton", "left", false));
+        CHECK(requests.size() == 1); // an active copy must not override this offer's disabled control
+        REQUIRE(window.list_click(host, "TaskList", 99, false, 0));
+        REQUIRE(window.click(host, "TSEL_PreviewRewardButton", "left", false));
+        CHECK(requests.size() == 1);
+        window.set_shown(host, false);
+        CHECK_FALSE(window.shown(host));
+        CHECK_FALSE(window.click(host, "TSEL_PreviewRewardButton", "left", false));
+        button = {};
+        window.child(host, "TSEL_PreviewRewardButton", button);
+        CHECK(button.enabled == false);
+    }
+}
+
 TEST_CASE("task window: Preview Reward sends the selected task ID and refuses stale slots") {
     plugin::Hooks hooks;
     const auto owner = hooks.new_owner("task preview fixture");

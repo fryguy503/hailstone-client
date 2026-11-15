@@ -386,6 +386,178 @@ end
     ImGui::DestroyContext(ctx);
 }
 
+TEST_CASE("UI packs: offered-task description summary and explicit preview follow the selected offer") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        CAPTURE(pack);
+        test::ScratchDir scratch("ui_pack_task_offer_rewards");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
+                 fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* px = nullptr;
+        int w = 0, h = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        {
+            Session s(dir, pack);
+            auto* L = s.lua.state();
+            auto run = [&](const char* code) {
+                const int rc = luaL_dostring(L, code);
+                INFO((rc == LUA_OK ? "" : lua_tostring(L, -1)));
+                REQUIRE(rc == LUA_OK);
+                const std::string result = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+                lua_settop(L, 0);
+                return result;
+            };
+            run(R"lua(
+offerSelected, offerPreviewEnabled, offerPreviewClicks = 0, true, {}
+offerWindowShown, activeTaskShown, activePreviewEnabled, activePreviewClicks = true, false, true, 0
+offerTexts = {}
+assert(type(eq.ChildState) == "function", "ChildState must be registered before the fixture wraps it")
+local shown, replace, childShown, childState, text, list, row, listClick, click =
+  eq.WindowShown, eq.ReplaceWindow, eq.ChildShown, eq.ChildState,
+  eq.WindowText, eq.ListInfo, eq.ListRow, eq.ListClick, eq.ClickChild
+eq.WindowShown = function(win)
+  if win == "TaskSelectWnd" then return offerWindowShown end
+  if win == "TaskWnd" then return activeTaskShown end
+  return shown(win)
+end
+eq.ReplaceWindow = function(win)
+  if win == "TaskSelectWnd" then return true, 40, 40, 600, 400 end
+  return replace(win)
+end
+eq.ChildShown = function(win, id)
+  if win == "TaskSelectWnd" then return true end
+  return childShown(win, id)
+end
+eq.ChildState = function(win, id)
+  if win == "TaskSelectWnd" then
+    if id == "TSEL_PreviewRewardButton" then return offerPreviewEnabled, false end
+    return true, false
+  end
+  if win == "TaskWnd" and id == "TASK_PreviewRewardButton" then return activePreviewEnabled, false end
+  return childState(win, id)
+end
+eq.ListInfo = function(win, id)
+  if win == "TaskSelectWnd" and id == "TaskList" then return 2, 2, offerSelected end
+  if win == "TaskWnd" then
+    if id == "TASK_TaskList" then return 1, 3, 0 end
+    if id == "TASK_TaskElementList" then return 1, 3, -1 end
+  end
+  return list(win, id)
+end
+eq.ListRow = function(win, id, index)
+  if win == "TaskSelectWnd" and id == "TaskList" then
+    return {index == 0 and "First offer" or "Second offer", ""}
+  end
+  if win == "TaskWnd" then
+    assert(index == 0)
+    if id == "TASK_TaskList" then return {"Q", "Active task", "Unlimited"} end
+    if id == "TASK_TaskElementList" then return {"ActiveObjective", "0/1", "North Qeynos"} end
+  end
+  return row(win, id, index)
+end
+eq.ListClick = function(win, id, index, ...)
+  if win == "TaskSelectWnd" and id == "TaskList" then offerSelected = index; return end
+  if win == "TaskWnd" and id == "TASK_TaskList" then assert(index == 0); return end
+  return listClick(win, id, index, ...)
+end
+eq.WindowText = function(win, id)
+  if win == "TaskSelectWnd" and id == "Description" then
+    return offerSelected == 0 and "FirstDescription<br>TaskBeginsInFirst" or "SecondDescription<br>TaskBeginsInSecond"
+  end
+  if win == "TaskWnd" and id == "TASK_Description" then return "ActiveTaskDescription" end
+  return text(win, id)
+end
+eq.ClickChild = function(win, id, button)
+  if win == "TaskSelectWnd" then
+    assert(id == "TSEL_PreviewRewardButton" and button == "left", "Preview must use its matching native action")
+    offerPreviewClicks[#offerPreviewClicks + 1] = offerSelected
+    return true
+  end
+  if win == "TaskWnd" then
+    assert(id == "TASK_PreviewRewardButton" and button == "left", "Active preview must use its matching native action")
+    activePreviewClicks = activePreviewClicks + 1
+    return true
+  end
+  return click(win, id, button)
+end
+local button, invisible, colored, wrapped, drawText = ui.Button, ui.InvisibleButton, ui.TextColored, ui.TextWrapped, ui.DrawText
+ui.Button = function(label, ...)
+  local hit = button(label, ...)
+  if label == "Preview Reward##TSEL_PreviewRewardButton" then offerPreviewRect = {ui.GetItemRect()} end
+  return hit
+end
+ui.InvisibleButton = function(id, ...)
+  local hit = invisible(id, ...)
+  if id == "##offerpreview" or id == "##taskpreview" then offerPreviewRect = {ui.GetItemRect()} end
+  return hit
+end
+ui.TextColored = function(r, g, b, a, value)
+  offerTexts[value] = true
+  return colored(r, g, b, a, value)
+end
+ui.TextWrapped = function(value)
+  offerTexts[value] = true
+  return wrapped(value)
+end
+ui.DrawText = function(x, y, r, g, b, a, value)
+  offerTexts[value] = true
+  return drawText(x, y, r, g, b, a, value)
+end
+)lua");
+            s.frames(20);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            CHECK(run("return tostring(offerTexts.TaskBeginsInFirst and offerPreviewRect ~= nil and #offerPreviewClicks == 0)") == "true");
+            auto click_preview = [&] {
+                lua_getglobal(L, "offerPreviewRect");
+                REQUIRE(lua_istable(L, -1));
+                float rect[4]{};
+                for (int i = 0; i < 4; ++i) {
+                    lua_rawgeti(L, -1, i + 1);
+                    rect[i] = static_cast<float>(lua_tonumber(L, -1));
+                    lua_pop(L, 1);
+                }
+                lua_settop(L, 0);
+                auto& io = ImGui::GetIO();
+                io.AddMousePosEvent((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2);
+                s.frames(1);
+                io.AddMouseButtonEvent(0, true);
+                s.frames(1);
+                io.AddMouseButtonEvent(0, false);
+                s.frames(1);
+            };
+            click_preview();
+            CHECK(run("return tostring(#offerPreviewClicks == 1 and offerPreviewClicks[1] == 0)") == "true");
+            run("offerSelected, offerTexts = 1, {}");
+            s.frames(2);
+            CHECK(run("return tostring(offerTexts.TaskBeginsInSecond and not offerTexts.TaskBeginsInFirst and #offerPreviewClicks == 1)") == "true");
+            click_preview();
+            CHECK(run("return tostring(#offerPreviewClicks == 2 and offerPreviewClicks[2] == 1)") == "true");
+            run("offerPreviewEnabled = false");
+            s.frames(2);
+            click_preview();
+            CHECK(run("return tostring(#offerPreviewClicks)") == "2");
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            if (std::string_view(pack) == "gamepad") {
+                run("offerWindowShown, activeTaskShown, offerPreviewRect, offerTexts = false, true, nil, {}");
+                s.frames(20);
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+                CHECK(run("return tostring(offerTexts.ActiveTaskDescription and offerTexts.ActiveObjective and offerPreviewRect ~= nil and activePreviewClicks == 0)") == "true");
+                click_preview();
+                CHECK(run("return tostring(activePreviewClicks)") == "1");
+                run("activePreviewEnabled = false");
+                s.frames(2);
+                click_preview();
+                CHECK(run("return tostring(activePreviewClicks == 1 and #offerPreviewClicks == 2)") == "true");
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            }
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
 TEST_CASE("UI packs: linked discipline cooldowns show red fills and matching seconds until ready") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);

@@ -671,6 +671,20 @@ guild permission 1500, AA window filter 3000, PC skill limit 3000):
   priority 1), alpha 255, 500 / 500 / 3000 ms, and nothing in chat; an invalid type / index or another task id is
   dropped.
 
+Task offers use `CTaskSelectWnd::WndNotification` (@0x76b660): a left click on `TSEL_PreviewRewardButton`
+requires a selected offer with its received preview byte enabled, then calls the preview manager (@0x463a90)
+with the task id. Both UI packs use the existing `0x6471` action-4 request and leave the offers open. Drawing,
+selecting and disabled controls send no preview. Actions remain tied to the displayed offer's task and giver
+identities when an incoming packet replaces the list.
+
+`CTaskSelectWnd_ShowTaskDescription` (@0x76b310) appends eqstr 6029 (`0x178d`, "This task begins in %1")
+after the processed offer description when element slot 0 has a type other than 0/-1 and a nonempty zone list.
+The slot is the received activity id, not packet order. `TaskElement_FormatTargetNames` (@0x480780) supplies
+full zone names joined with " or "; the string template supplies its own line breaks. This hint is independent
+of the preview flag, including with an empty description. The old bridge comment incorrectly called it a reward
+line: the native offer description does not build reward amounts or item summaries from the multiplier.
+These rules were checked by static tracing; native UI clicks and live Hailstone offer previews remain untested.
+
 ## Item moves and coin
 
 Vectors in `tests/item_moves_vectors_test.cpp` (can-item-go-in-equip-slot 4000; can-use-item, race, deity and level

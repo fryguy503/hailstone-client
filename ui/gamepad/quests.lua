@@ -5,8 +5,9 @@
 --                           description. Preview asks for the selected task's rewards; X abandons it (asked first).
 --                  Shared   the shared task's members.
 --                  History  the completed tasks; A asks for one's objectives (the stock list's click).
---   Task Offers    the offers (title, duration) and the focused one's description and objectives; A accepts the
---                  focused offer, X declines them all (as does closing the window, the stock window's close).
+--   Task Offers    the offers (title, duration) and the focused one's description and objectives. Preview Reward
+--                  asks for that offer's rewards; A accepts the focused offer, X declines them all (as does
+--                  closing the window, the stock window's close).
 -- Everything comes from the stock windows' lists and texts (eq.ListInfo / ListRow / WindowText) and acts through
 -- their buttons (eq.ClickChild), so the rules are the game's.
 local T = dofile("lib/theme.lua")
@@ -199,7 +200,7 @@ ui.window("Quest Journal", function()
         local previewH = T.px(60)
         P.draw("##taskdesc", desc, eq.WindowText(TW, "TASK_Description") or "", rx0, descY, x1, y1 - previewH - T.px(8), { empty = "No description." })
         ui.SetCursorPos(rx0 - wx, y1 - previewH - wy)
-        local previewEnabled = eq.ChildEnabled(TW, "TASK_PreviewRewardButton") == true
+        local previewEnabled = eq.ChildState(TW, "TASK_PreviewRewardButton") == true
         if T.button("##taskpreview", "Preview Reward", x1 - rx0, previewH, { disabled = not previewEnabled }, pad) then
           eq.ClickChild(TW, "TASK_PreviewRewardButton", "left")
         end
@@ -298,7 +299,13 @@ ui.window("Task Offers", function()
     local _, th = ui.CalcTextSize("Ag")
     T.draw(rx0, y0, T.fit(texts and texts[1] or "", x1 - rx0))
     T.unfont()
-    P.draw("##offerdesc", offerDesc, eq.WindowText(SW, "Description") or "", rx0, y0 + th + T.px(14), x1, y1)
+    local previewH = T.px(60)
+    P.draw("##offerdesc", offerDesc, eq.WindowText(SW, "Description") or "", rx0, y0 + th + T.px(14), x1, y1 - previewH - T.px(8))
+    ui.SetCursorPos(rx0 - wx, y1 - previewH - wy)
+    local previewEnabled = eq.ChildState(SW, "TSEL_PreviewRewardButton") == true
+    if T.button("##offerpreview", "Preview Reward", x1 - rx0, previewH, { disabled = not previewEnabled }, pad) then
+      eq.ClickChild(SW, "TSEL_PreviewRewardButton", "left")
+    end
     if pressed("Task Offers", "x") then eq.ClickChild(SW, "DeclineButton", "left") end
   end
   if W.finish() then eq.ShowWindow(SW, false) end

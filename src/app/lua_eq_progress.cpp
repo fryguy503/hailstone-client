@@ -529,7 +529,7 @@ ListData task_list_data(const std::vector<game::TaskWindowRow>& rows, std::vecto
     return d;
 }
 
-// CTaskSelectWnd: the offers (title and duration), the selected one's description and objectives, Accept / Decline.
+// CTaskSelectWnd: the offers, the selected one's description and Preview Reward, Accept / Decline.
 class TaskSelectWindow : public StockWindow {
 public:
     TaskSelectWindow() : StockWindow("TaskSelectWnd", false) {}
@@ -547,10 +547,16 @@ public:
         if (selected_ >= static_cast<int>(o.offers.size())) selected_ = -1;
         if (selected_ < 0 && !o.offers.empty()) selected_ = 0;
         list_.selected = selected_;
-        for (const auto& t : o.offers)
+        giver_id_ = o.giver_id;
+        type_ = o.type;
+        shared_ = o.shared;
+        ids_.clear();
+        for (const auto& t : o.offers) {
             list_.rows.push_back({{t.title, t.duration ? game::format_duration_hms(static_cast<std::int32_t>(t.duration)) : ""},
                                   {1, 1, 1},
                                   std::nullopt});
+            ids_.push_back(t.task_id);
+        }
         return &list_;
     }
     bool list_click(EqHost&, std::string_view id, int row, bool, int) override {
@@ -559,26 +565,32 @@ public:
         return true;
     }
     void child(EqHost& host, std::string_view id, Child& out) override {
-        if (id != "Description" || !shown(host)) return;
-        const auto& o = *host.conn->tasks().offers;
-        if (selected_ < 0 || selected_ >= static_cast<int>(o.offers.size())) return;
-        const auto& t = o.offers[static_cast<std::size_t>(selected_)];
-        // CTaskSelectWnd_ShowTaskDescription @0x76b310: the offer's description through 0x481960 (the step
-        // markers and %N element texts, as the task window's; game::task_description_text) over the elements the
-        // offer carries. (Its reward line, eqstr 0x178d with the reward's target names, is not built.)
-        game::Task task;
-        task.title = t.title;
-        task.description = t.description;
-        for (const auto& e : t.elements) task.elements[e.activity_id] = e;
+        const auto* t = host.conn ? selected_offer(*host.conn) : nullptr;
+        if (id == "TSEL_PreviewRewardButton") {
+            // CTaskSelectWnd's selection handler @0x76b5c0 uses the received offer's preview byte.
+            out.enabled = t && t->reward_preview;
+            return;
+        }
+        if (id == "AcceptButton") {
+            out.enabled = t != nullptr;
+            return;
+        }
+        if (id != "Description") return;
+        out.text = std::string();
+        if (!t) return;
+        // Eqstr 0x178d is the task's starting-zone hint, not a reward summary.
         const auto& c = *host.conn;
-        out.text = game::task_description_text(task, [&c](const game::TaskElement& e) { return c.task_element_text(e); });
+        out.text = game::task_offer_details_stml(*t, c.strings(),
+                                                  [&c](const game::TaskElement& e) { return c.task_element_text(e); },
+                                                  task_zone_name);
     }
     bool click(EqHost& host, std::string_view id, std::string_view button, bool) override {
         if (!shown(host) || button != "left") return false;
-        const auto& o = *host.conn->tasks().offers;
         if (id == "AcceptButton") {
-            if (selected_ >= 0 && selected_ < static_cast<int>(o.offers.size()))
-                host.conn->accept_task(o.offers[static_cast<std::size_t>(selected_)].task_id);
+            if (const auto* t = selected_offer(*host.conn)) host.conn->accept_task(t->task_id);
+        } else if (id == "TSEL_PreviewRewardButton") {
+            // CTaskSelectWnd::WndNotification @0x76b660 -> preview manager @0x463a90: action 4 and the task ID.
+            if (const auto* t = selected_offer(*host.conn); t && t->reward_preview) host.conn->preview_task_reward(t->task_id);
         } else if (id == "DeclineButton") {
             host.conn->decline_tasks();
         } else return false;
@@ -586,7 +598,18 @@ public:
     }
 
 private:
+    // A packet can replace the offers before the UI rebuilds its rows. Keep actions tied to the displayed offer.
+    const game::TaskOffer* selected_offer(const net::GameConnection& c) const {
+        const auto& o = c.tasks().offers;
+        if (!o || o->giver_id != giver_id_ || o->type != type_ || o->shared != shared_ || selected_ < 0) return nullptr;
+        const auto row = static_cast<std::size_t>(selected_);
+        if (row >= ids_.size() || row >= o->offers.size() || o->offers[row].task_id != ids_[row]) return nullptr;
+        return &o->offers[row];
+    }
     ListData list_;
+    std::vector<std::uint32_t> ids_;
+    std::uint32_t giver_id_ = 0, type_ = 0;
+    bool shared_ = false;
     int selected_ = -1;
 };
 

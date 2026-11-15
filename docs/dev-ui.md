@@ -73,6 +73,12 @@ It does not invent numbered steps or parent/child dependencies. Completed quests
 Description and reward links use the existing `TASK_Description` STML handler, and Abandon retains its native
 confirmation. Preview Reward opens the selected task's server-owned reward preview when the native task model
 enables it. The Rewards section retains the supplied reward text; unavailable previews stay disabled.
+Both packs use the registered `eq.ChildState` API to read the active-task preview's enabled state.
+
+TaskSelectWnd also provides Preview Reward in both packs, using `TSEL_PreviewRewardButton` and the selected
+offer's received preview flag. Opening or drawing offers does not request rewards; preview leaves the offers
+open. Its Description includes the native starting-zone hint from element slot 0. This is eqstr 6029, not a
+reward summary; reward details come from the server's separate preview response.
 
 The header's Shared members control shows the roster count and opens a dismissible shared-task management popup.
 Its Member and Role columns read the native `STASK_MemberList`; selecting a member drives Remove member and

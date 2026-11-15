@@ -298,6 +298,23 @@ std::uint32_t task_abandon_eqstr(std::uint32_t type) {
     return type == kTaskTypeShared ? 8996 : 8997;
 }
 
+std::string task_offer_details_stml(const TaskOffer& offer, const EqStrings& strings,
+                                    const std::function<std::string(const TaskElement&)>& element_text,
+                                    const std::function<std::string(std::uint32_t)>& zone_name) {
+    Task task;
+    task.description = offer.description;
+    for (const auto& e : offer.elements) task.elements[e.activity_id] = e;
+    std::string out = task_description_text(task, element_text);
+    if (const auto it = task.elements.find(0); it != task.elements.end()) {
+        const auto& e = it->second;
+        if (e.type != 0 && e.type != -1 && !e.zones.empty()) {
+            const std::string args[]{task_zone_names(e.zones, zone_name)};
+            out += strings.format(6029, args);
+        }
+    }
+    return out;
+}
+
 std::optional<TaskCompassMark> task_compass_mark(const TaskState& s, std::uint32_t zone_id,
                                                  const std::vector<TaskCompassSpawn>& spawns) {
     for (std::uint32_t type = 0; type < 2; ++type) {
