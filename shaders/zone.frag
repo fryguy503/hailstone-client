@@ -5,6 +5,7 @@
 #include "lighting.glsl"
 #include "coverage.glsl"
 #include "weather.glsl"
+#include "zone_surface.glsl"
 
 // Zone geometry pixels by the original's effect:
 //   0 classic region effects (RegionC1 / RegionOld*): texture x lit colour
@@ -85,6 +86,9 @@ const uint kEnvMap = 2048u;    // water: slot 2 is its own environment, an octah
 const uint kFlagLodFade = 4096u; // a level of detail: extra3 its band (coverage.glsl lod_fade_samples)
 const uint kTintNeighbour = 32768u; // render/zone_renderer.h set_debug_tint: a neighbour's own geometry
 const uint kTintLand = 65536u;      // its own ground in its part of the land
+const uint kPackedNormal = 131072u; // CBGG1/CBSG1: RG normal, B glow, A gloss
+const uint kGlow = 262144u;         // blue channel of slot 1
+const uint kAdditiveGlow = 524288u; // AddAlpha surfaces emit into modern HDR
 
 vec4 tex(uint i, vec2 uv) { return texture(textures[nonuniformEXT(i)], uv); }
 
@@ -525,7 +529,7 @@ vec3 weathered(vec3 color, vec3 n, bool cutout) {
                           footprint, scene.to_light.xyz, scene.light.rgb * g_shadow);
 }
 
-vec3 mapped_normal(vec3 n, uint slot) {
+vec3 mapped_normal(vec3 n, vec4 surface, bool packed_channels) {
     vec3 dp1 = dFdx(v_world), dp2 = dFdy(v_world);
     vec2 duv1 = dFdx(v_uv), duv2 = dFdy(v_uv);
     vec3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
@@ -534,7 +538,7 @@ vec3 mapped_normal(vec3 n, uint slot) {
     float scale = max(dot(t, t), dot(b, b));
     if (!(scale > 1e-20)) return n;
     float inv = inversesqrt(scale);
-    vec3 m = tex(slot, v_uv).rgb * 2.0 - 1.0;
+    vec3 m = zone_surface_normal(surface, packed_channels);
     vec3 mapped = t * inv * m.x + b * inv * m.y + n * m.z;
     float l = length(mapped);
     return l > 1e-6 ? mapped / l : n;
@@ -542,14 +546,14 @@ vec3 mapped_normal(vec3 n, uint slot) {
 
 // The specular classes' highlight of the sun (Blinn-Phong at the material's shininess, its gloss as the strength) and
 // the reflective classes' sky (in place of their environment map), both in the open sky's share of the vertex.
-vec3 surface_shine(vec3 n, uint flags) {
+vec3 surface_shine(vec3 n, uint flags, float gloss) {
     vec3 view = normalize(scene.camera_pos.xyz - v_world);
     vec3 shine = vec3(0.0);
     if ((flags & kSpecular) != 0u) {
         vec3 h = normalize(view + scene.to_light.xyz);
         float ndl = max(dot(n, scene.to_light.xyz), 0.0);
         float power = max(pc.extra.x, 1.0);
-        shine += scene.light.rgb * g_shadow * ndl * pow(max(dot(n, h), 0.0), power) * pc.extra.y * (power + 8.0) / 25.0;
+        shine += scene.light.rgb * g_shadow * ndl * pow(max(dot(n, h), 0.0), power) * gloss * (power + 8.0) / 25.0;
     }
     if ((flags & kReflective) != 0u) {
         vec3 r = reflect(-view, n);
@@ -581,7 +585,10 @@ void main() {
     vec3 n = len > 1e-6 ? v_normal / len : vec3(0.0, 0.0, 1.0);
     // The EQG materials' normal maps (modern): the tangent frame from the position's and the texture coordinates'
     // screen derivatives (the meshes carry no tangents), the map's green along +v as Direct3D's maps have it.
-    if (g_modern && mode == 0u && (flags & kNormalMap) != 0u && !unlit) n = mapped_normal(n, pc.tex.y);
+    bool has_surface = mode == 0u && (flags & kNormalMap) != 0u && !unlit;
+    bool packed_surface = (flags & kPackedNormal) != 0u;
+    vec4 surface = has_surface && (g_modern || (flags & kGlow) != 0u) ? tex(pc.tex.y, v_uv) : vec4(0.5, 0.5, 1.0, 1.0);
+    if (g_modern && has_surface) n = mapped_normal(n, surface, packed_surface);
     // A texture pack's maps, on the classic effect in the modern lighting.
     uint normal_slot = pc.tex2.w & 0xffffu, rough_slot = pc.tex2.w >> 16;
     bool mapped = g_modern && !unlit && mode == 0u && (flags & (kWaterSurface | kLavaSurface)) == 0u;
@@ -718,7 +725,13 @@ void main() {
             color = modern_lava(t.rgb, 0.0, v_world.xy * 0.045);
         }
     }
-    if (g_modern && !unlit && mode == 0u && (flags & (kSpecular | kReflective)) != 0u) color += surface_shine(n, flags);
+    if (g_modern && !unlit && mode == 0u && (flags & (kSpecular | kReflective)) != 0u)
+        color += surface_shine(n, flags, zone_surface_gloss(surface, packed_surface, pc.extra.y));
+    if (!unlit && mode == 0u && (flags & kGlow) != 0u) {
+        vec3 albedo = tex(pc.tex.x, v_uv).rgb;
+        color += zone_surface_glow(g_modern ? to_linear(albedo) : albedo, surface.b, g_modern);
+    }
+    if (g_modern && (flags & kAdditiveGlow) != 0u) color *= zone_emission_gain(true);
     if (g_modern && !unlit && (flags & (kWaterSurface | kLavaSurface)) == 0u && mode != 2u && mode != 3u &&
         (scene.weather.x > 0.0 || scene.weather.y > 0.0 || scene.weather.w > 0.0))
         color = weathered(color, n, pc.params.x > 0.0);

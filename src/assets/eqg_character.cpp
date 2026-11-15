@@ -504,7 +504,7 @@ void append_pieces(const MeshFile& mesh, const std::vector<std::size_t>& pieces,
     auto same_surface = [](const EffectParams& a, const EffectParams& b) {
         return a.normal_map == b.normal_map && a.textures == b.textures && a.shininess == b.shininess &&
                a.gloss == b.gloss && a.env_strength == b.env_strength && a.specular == b.specular &&
-               a.reflective == b.reflective;
+               a.reflective == b.reflective && a.packed_normal == b.packed_normal && a.glow == b.glow;
     };
     for (std::size_t pi : pieces) {
         const Piece& piece = mesh.pieces[pi];

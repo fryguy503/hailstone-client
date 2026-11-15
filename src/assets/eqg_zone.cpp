@@ -156,6 +156,13 @@ EffectParams effect_params(const MaterialDef& def, EqgShader cls) {
         e.gloss = f("e_fGloss0", 0.2f);
         e.env_strength = 2.0f * f("e_fEnvMapStrength0", 0.0f);
         const std::string& sh = def.shader;
+        std::string_view suffix = sh;
+        if (ends_with(suffix, ".fx")) suffix.remove_suffix(3);
+        if (ends_with(suffix, "Max")) suffix.remove_suffix(3);
+        // CBGG1 and CBSG1 select the same native material class (0x0d), whose static-model effect binds
+        // SModelCBSG1.fxo: the surface map packs its normal in RG, self-illumination in B and gloss in A.
+        e.packed_normal = ends_with(suffix, "CBGG1") || ends_with(suffix, "CBSG1");
+        e.glow = e.packed_normal;
         e.specular = contains(sh, "CBS") || contains(sh, "SB") || contains(sh, "GB") || contains(sh, "Full");
         e.reflective = contains(sh, "CE1") || contains(sh, "CBSGE1");
         break;
@@ -376,6 +383,12 @@ void load_binary(Zone& zone, const Source& src, std::span<const std::byte> zon_d
             // placement is not applied (OpenEQ docs/EQGZ_NATIVE_REGIONS.md,
             // EQGraphicsDX9.dll 0x10020970).
             if (terrain) {
+                // Terrain's optional baked light is named by the TER file, independently of its ZON placement
+                // (EQGraphicsDX9.dll 0x10063f10). Its alpha weighs sky light; opaque white admits full sunlight.
+                if (auto lit_data = src.archive->read(file.substr(0, file.size() - 4) + ".lit")) {
+                    auto colors = lighting_colors(parse_lit(*lit_data), mesh);
+                    for (std::size_t v = 0; v < colors.size(); ++v) mesh.vertices[v].color = colors[v];
+                }
                 zone.terrain.push_back(std::move(mesh));
             } else {
                 zone.objects.emplace(key, std::move(mesh));

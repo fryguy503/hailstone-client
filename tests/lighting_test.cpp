@@ -87,6 +87,45 @@ using glm::inversesqrt;
 #include "../shaders/ao_kernel.glsl"
 }
 
+namespace zone_surface_test {
+using glm::vec3;
+using glm::vec4;
+using glm::clamp;
+#include "../shaders/zone_surface.glsl"
+}
+
+TEST_CASE("EQG packed surfaces: glow and gloss channels never reverse the tangent normal") {
+    using namespace zone_surface_test;
+    const glm::vec4 dark(0.5f, 0.5f, 0.0f, 0.15f), bright(0.5f, 0.5f, 1.0f, 1.0f);
+    const auto n = zone_surface_normal(dark, true);
+    CHECK(n == zone_surface_normal(bright, true));
+    CHECK(n.x == 0.0f);
+    CHECK(n.y == 0.0f);
+    CHECK(n.z > 0.0f); // a black glow mask still faces out of the surface
+    CHECK(zone_surface_normal(glm::vec4(1, 0.5f, 0, 0), true).x > 0.0f);
+    CHECK(zone_surface_normal(glm::vec4(0.5f, 1, 0, 0), true).y > 0.0f);
+    // Ordinary RGB normal maps retain their full three-channel interpretation.
+    CHECK(zone_surface_normal(glm::vec4(0.5f, 0.5f, 1, 0), false) == glm::vec3(0, 0, 1));
+    CHECK(zone_surface_normal(dark, false).z < 0.0f);
+    CHECK(zone_surface_gloss(dark, true, 0.2f) == dark.a);
+    CHECK(zone_surface_gloss(bright, true, 0.2f) == 1.0f);
+    CHECK(zone_surface_gloss(bright, false, 0.2f) == 0.2f);
+}
+
+TEST_CASE("EQG glow: an authored mask emits in darkness, with HDR headroom only in modern lighting") {
+    using namespace zone_surface_test;
+    const glm::vec3 albedo(0.4f, 0.8f, 1.0f);
+    CHECK(zone_surface_glow(albedo, 0.0f, true) == glm::vec3(0));
+    CHECK(zone_surface_glow(albedo, -1.0f, true) == glm::vec3(0));
+    CHECK(zone_surface_glow(albedo, 1.0f, false) == albedo);
+    CHECK(zone_surface_glow(albedo, 0.5f, false) == albedo * 0.5f);
+    const auto modern = zone_surface_glow(albedo, 1.0f, true);
+    CHECK(modern.r > albedo.r);
+    CHECK(modern.b > 1.0f); // enough range for bloom without raising ordinary surfaces
+    CHECK(zone_surface_glow(albedo, 2.0f, true) == modern);
+    CHECK(zone_emission_gain(false) == 1.0f); // the classic additive ray pass keeps its source intensity
+}
+
 // The puddles' noise and cover, compiled as C++ the same way (shaders/puddle_cover.glsl).
 namespace puddle_cover_test {
 using glm::vec2;

@@ -76,6 +76,9 @@ struct EffectParams {
     std::string normal_map;
     float shininess = 40.0f, gloss = 0.2f, env_strength = 0.0f;
     bool specular = false, reflective = false;
+    // The packed CBGG1 / CBSG1 surface map: RG tangent normal, B self-illumination, A gloss. Other classes retain
+    // their existing RGB normal interpretation; a missing map supplies neither the packed normal nor the glow.
+    bool packed_normal = false, glow = false;
 };
 
 // A classic material's detail texture (assets/wld_detail.h): the file and the

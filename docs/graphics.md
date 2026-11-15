@@ -1093,12 +1093,25 @@ modern lighting always uses them (`shaders/zone.frag` `mapped_normal`, `surface_
   comes from the screen derivatives of the position and the texture coordinates; the map's green runs along +v, as in
   Direct3D's (and 3ds Max's) maps. The bumped normal feeds the whole modern light: the sun and its shadow, the sky
   hemisphere, the zone's and the dynamic lights.
-- **Specular** (shaders whose name holds `CBS`, `SB`, `GB` or `Full`): a Blinn-Phong highlight of the sun at
+- **Specular** (shaders whose name holds `CBS`, `SB`, `GB` or `Full`, and the packed `CBGG1` class): a Blinn-Phong highlight of the sun at
   `e_fShininess0` (40 when unset), as strong as `e_fGloss0` (0.2), in the vertex's share of the open sky.
 - **Reflection** (`CE1`, `CBSGE1` with `e_fEnvMapStrength0` > 0, read doubled): the sky
   (`sky_reflection`) in place of the material's environment map, weighted by Fresnel.
 
-The classic lighting draws them as before (the diffuse texture by the lit colour).
+The `CBGG1` / `CBSG1` static-model classes use a packed surface map: RG is tangent normal direction with a positive
+Z of 0.9 before normalization, B is self-illumination, and A is gloss. This follows their material type 0x0d,
+static effect 0x2f and `SPL/SModelCBSG1` high-quality shader. The glow mask is multiplied by diffuse colour, independent
+of baked light, sky share and shadows. The modern zone renderer gives it HDR headroom, as it does additive particles;
+the classic lighting adds it at the authored intensity. A missing map supplies no glow. The modern highlight uses
+the map's gloss directly instead of the ordinary class's scalar gloss. Other classes keep their existing RGB-normal
+path. Treating packed B as normal Z had turned dark regions' normals inward and lost the luminous parts entirely.
+
+The crystal's beam and radial rays in Forgotten Halls are additive model triangles. In modern lighting `AddAlpha`
+zone surfaces also get HDR headroom for bloom; classic retains their texture-direct additive intensity. Full-bright
+views and ordinary opaque or WLD additive materials are not brightened by this rule. The zone's geode particle
+fixtures supply the floating motes, not the rays.
+
+Apart from that packed glow mask, classic lighting keeps its diffuse-by-lit-colour surface path.
 
 Hero's Forge attachments carry their own EQG surface properties into the actor renderer, including supplied layer
 overrides. Their native normal maps use the full RGB tangent vector and the same +v convention as EQG zones;
@@ -1131,6 +1144,12 @@ specks against the sky.
   term) add in display values and are converted after the sum, so interiors keep their builders' brightness; the
   vertex alpha (the share of sky light the classic region shader gives the vertex) weighs the hemisphere ambient
   and the sun.
+  Binary EQG terrain also takes its mesh's `.lit` sidecar, including that alpha. Previously only object placements'
+  sidecars were read, leaving older TER meshes opaque white: their authored indoor light was lost and they admitted
+  the full sun wherever its shadow map allowed.
+  This is an asset-loading correction in both lighting modes, with no change to the daylight or shadow formulas.
+  Older outdoor EQG zones with terrain sidecars also regain their authored lighting; zones without those sidecars
+  keep their existing terrain colours.
 - **Night and the baked colour**: the vertex colour already holds the builders' ambient, sun and lamps, so left whole
   it lights every surface evenly at any hour (the classic renderer does that). The modern light splits it per pixel: its
   lamps' part is what the zone's lights give the pixel as `game::point_light_term` weighs them (less what their
@@ -1160,6 +1179,15 @@ specks against the sky.
 - **Uncoloured meshes**: a zone mesh whose vertices are all the loader's opaque white (an EQG placement without
   lighting data) takes no baked light in the modern lighting: it is lit by the sky, the sun and the lights, as the
   doors are; its white had added a full display white, glaring beside the ground.
+- **Indoor follow-up**: restoring EQG terrain lighting is the first correction identified by the Forgotten Halls
+  comparison. Fixed-camera offline captures confirm that restoring the terrain file removes the broad sunlit bands
+  and restores localized lamp pools, but the hall becomes darker overall. The crystal and statues also use packed
+  `CBGG1` maps (EQG surface maps): correct channel decoding restores their outward normals and the crystal's authored
+  glow; the beam and radial rays use the additive model pass. The indoor baked-light balance still needs visual tuning.
+  An outdoor `qeynos2` control is unchanged; shade in the older EQG `draniksscar` becomes darker with its terrain
+  sidecar restored. The loader correction needs that broader visual review before it is a finished lighting pass.
+  A reference player's carried light and vision can brighten the floor as well;
+  a comparison needs the same position, hour, lighting options and player-light state before changing those formulas.
 - **Spell light** (`game::particle_lights`): the glowing spell effects light what is round them, up to 8 lights of
   the 32. An emitter glows when it is additive, unless its texture is smoke, dust, rock, cloud, water or darkness.
   An alpha-blended one glows when its texture is fire or energy (flame, fire, flare, explosion, electric, spark,

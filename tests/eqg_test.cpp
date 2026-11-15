@@ -238,6 +238,68 @@ TEST_CASE("EQG effect parameters come from the e_* properties") {
     CHECK(e.water_color1.a == doctest::Approx(1.0f));
 }
 
+TEST_CASE("EQG packed glow and gloss maps follow the CBGG1 and CBSG1 material classes") {
+    eqg::ModelFile model;
+    model.positions = {{0, 0, 0}, {10, 0, 0}, {0, 10, 0}};
+    model.normals.assign(3, glm::vec3(0, 0, 1));
+    model.uvs = {{0, 0}, {1, 0}, {0, 1}};
+    model.triangles.push_back({{0, 1, 2}, 0, 0});
+    eqg::MaterialDef def;
+    def.name = "crystal";
+    auto texture = [&](std::string name, std::string value) {
+        eqg::Property p;
+        p.name = std::move(name);
+        p.type = 2;
+        p.text = std::move(value);
+        def.properties.push_back(std::move(p));
+    };
+    texture("e_TextureDiffuse0", "Crystal_C.dds");
+    texture("e_TextureNormal0", "Crystal_N.dds");
+    eqg::Property shininess;
+    shininess.name = "e_fShininess0";
+    shininess.type = 0;
+    shininess.f = 64.0f;
+    def.properties.push_back(shininess);
+    bool packed = true;
+    bool specular = false;
+    SUBCASE("static CBGG1 reads the packed normal and self-light mask") {
+        def.shader = "OpaqueSModelCBGG1Max.fx";
+    }
+    SUBCASE("CBSG1 uses the same packed surface channels") {
+        def.shader = "Opaque_MaxCBSG1.fx";
+        specular = true;
+    }
+    SUBCASE("ordinary RGB normal maps retain their existing interpretation") {
+        def.shader = "OpaqueSModelCBS1Max.fx";
+        packed = false;
+        specular = true;
+    }
+    SUBCASE("an unconfirmed suffix does not enable packed channels") {
+        def.shader = "OpaqueSModelCBGG1Custom.fx";
+        packed = false;
+        specular = false;
+    }
+    SUBCASE("additive ray geometry keeps its texture-only material") {
+        def.shader = "AddAlphaC1Max.fx";
+        packed = false;
+        specular = false;
+    }
+    model.materials.push_back(std::move(def));
+    eqg::MeshStats stats;
+    const auto mesh = eqg::build_mesh(model, "crystal", stats);
+    REQUIRE(mesh.materials.size() == 1);
+    const auto& effect = mesh.materials.front().effect;
+    CHECK(effect.packed_normal == packed);
+    CHECK(effect.glow == packed);
+    CHECK(effect.specular == specular);
+    if (mesh.materials.front().eqg_shader == EqgShader::AddAlpha) {
+        CHECK(effect.normal_map.empty());
+    } else {
+        CHECK(effect.normal_map == "crystal_n.dds");
+        CHECK(effect.shininess == 64.0f);
+    }
+}
+
 TEST_CASE("heightmap light .def: *COLOR is ARGB, scaled by *INTENSITY; broken numbers saturate") {
     auto c = eqg::light_definition_color("*COLOR 4294934528\r\n*INTENSITY 0.5\r\n"); // 0xFFFF8000
     REQUIRE(c);
@@ -1051,6 +1113,99 @@ TEST_CASE("binary ZON: a terrain listed many times is loaded once") {
     GameDir game(dir.path());
     auto zone = load_zone(game, "terdup");
     CHECK(zone.terrain.size() == 1);
+}
+
+TEST_CASE("binary ZON terrain keeps its file's baked colour and sky-light share without a placement transform") {
+    const std::vector<std::uint32_t> sidecar_words{0x00102030u, 0x80405060u, 0xe0a0b0c0u};
+    auto make_lit = [](const std::vector<std::uint32_t>& words) {
+        ByteWriter w;
+        w.le<std::uint32_t>(0x50475145u); // EQGP
+        w.le<std::uint32_t>(static_cast<std::uint32_t>(words.size()));
+        for (auto word : words) w.le(word);
+        return w.take();
+    };
+    std::uint32_t version = 1, model_version = 1;
+    std::vector<std::uint32_t> inline_words;
+    auto sidecar = make_lit(sidecar_words);
+    bool include_sidecar = true, include_placement = true;
+    std::vector<std::uint32_t> expected{0x00302010u, 0x80605040u, 0xe0c0b0a0u};
+
+    SUBCASE("v1 reads the sidecar named by the terrain file") {}
+    SUBCASE("v2 terrain placement lighting does not replace the file's sidecar") {
+        version = 2;
+        inline_words = {0x00010203u, 0x40040506u, 0xc0070809u};
+    }
+    SUBCASE("a terrain file without a ZON placement still reads its sidecar") {
+        include_placement = false;
+    }
+    SUBCASE("a sidecar with the wrong vertex count leaves the mesh uncoloured") {
+        sidecar = make_lit({0x00112233u});
+        expected.assign(3, 0xffffffffu);
+    }
+    SUBCASE("a truncated sidecar leaves the mesh uncoloured") {
+        sidecar.pop_back();
+        expected.assign(3, 0xffffffffu);
+    }
+    SUBCASE("an unrecognised sidecar leaves the mesh uncoloured") {
+        sidecar[0] = std::byte{0};
+        expected.assign(3, 0xffffffffu);
+    }
+    SUBCASE("a missing sidecar leaves the mesh uncoloured") {
+        include_sidecar = false;
+        expected.assign(3, 0xffffffffu);
+    }
+    SUBCASE("a missing sidecar preserves a v3 terrain's inline vertex colours") {
+        include_sidecar = false;
+        model_version = 3;
+        expected.assign(3, 0xff302010u);
+    }
+
+    const std::vector<glm::vec3> pos{{5, 7, 9}, {15, 7, 9}, {15, 17, 9}};
+    auto ter = make_model(true, model_version, {{"ground", "Opaque_MaxCB1.fx", "ground_c.dds"}}, pos,
+                          {{0, 0}, {1, 0}, {1, 1}}, {{0, 1, 2, 0, 0}});
+    Strings s;
+    auto file = s.add("TER_Only.TER"), placement = s.add("TER_Lighting");
+    ByteWriter w;
+    w.le(eqg::kZonMagic);
+    w.le(version);
+    w.le<std::uint32_t>(static_cast<std::uint32_t>(s.bytes.size()));
+    w.le<std::uint32_t>(2); // duplicate model references still draw one terrain
+    w.le<std::uint32_t>(include_placement ? 2 : 0);
+    w.le<std::uint32_t>(0);
+    w.le<std::uint32_t>(0);
+    w.bytes(s.bytes);
+    w.le(file);
+    w.le(file);
+    for (std::int32_t i = 0; include_placement && i < 2; ++i) {
+        w.le(i);
+        w.le(placement);
+        vec3(w, 500, 700, 900);
+        vec3(w, 1, 2, 3);
+        w.f32(7.0f);
+        if (version == 2) {
+            w.le<std::uint32_t>(static_cast<std::uint32_t>(inline_words.size()));
+            for (auto word : inline_words) w.le(word);
+        }
+    }
+    std::vector<std::pair<std::string, std::vector<std::byte>>> files{
+        {"terlit.zon", w.take()}, {"ter_only.ter", std::move(ter)},
+        {"ter_lighting.lit", make_lit({0x00010203u, 0x40040506u, 0xc0070809u})}};
+    if (include_sidecar) files.emplace_back("ter_only.lit", std::move(sidecar));
+    hailstone::test::ScratchDir dir("eqg_terrain_lighting");
+    {
+        const auto archive = hailstone::test::pfs_fixtures::make_pfs(files);
+        std::ofstream f(dir.path() / "terlit.eqg", std::ios::binary);
+        f.write(reinterpret_cast<const char*>(archive.data()), static_cast<std::streamsize>(archive.size()));
+    }
+    const auto zone = load_zone(GameDir(dir.path()), "terlit");
+    REQUIRE(zone.terrain.size() == 1);
+    CHECK(zone.placements.empty());
+    const auto& vertices = zone.terrain.front().vertices;
+    REQUIRE(vertices.size() == 3);
+    for (std::size_t i = 0; i < vertices.size(); ++i) {
+        CHECK(vertices[i].color == expected[i]);
+        CHECK(vertices[i].position == pos[i]);
+    }
 }
 
 TEST_CASE("binary ZON: a .mod that is missing or does not parse is tried once however often it is listed") {

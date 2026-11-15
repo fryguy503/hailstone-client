@@ -212,6 +212,9 @@ constexpr std::uint32_t kLandZone = 16384;
 // ZoneRenderer::set_debug_tint: a neighbour's own geometry, and its own ground in its part of the land.
 constexpr std::uint32_t kTintNeighbour = 32768;
 constexpr std::uint32_t kTintLand = 65536;
+constexpr std::uint32_t kPackedNormal = 131072; // CBGG1/CBSG1: RG normal, B glow, A gloss
+constexpr std::uint32_t kGlow = 262144;         // slot 1's blue channel is self-illumination
+constexpr std::uint32_t kAdditiveGlow = 524288; // AddAlpha light surfaces, HDR in modern lighting
 // The depth pre-pass's flags: none of the shading's (bind_draw adds kLodFading, which decides discards, to both).
 constexpr std::uint32_t kDepthOnlyFlags = 0;
 constexpr VkColorComponentFlags kAllChannels =
@@ -249,7 +252,8 @@ std::string effect_key(const assets::EffectParams& e) {
         k += std::to_string(f) + ",";
     k += e.overlay ? "o" : "";
     k += "|" + e.normal_map + "|" + std::to_string(e.shininess) + "," + std::to_string(e.gloss) + "," +
-         std::to_string(e.env_strength) + (e.specular ? "s" : "") + (e.reflective ? "r" : "");
+         std::to_string(e.env_strength) + (e.specular ? "s" : "") + (e.reflective ? "r" : "") +
+         (e.packed_normal ? "p" : "") + (e.glow ? "g" : "");
     return k;
 }
 
@@ -1293,8 +1297,11 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
             if (!e.normal_map.empty()) {
                 d.extra_slots[0] = slot_for(e.normal_map, false, TextureUse::Data);
                 d.surface |= d.extra_slots[0] != 0 ? kNormalMap : 0u;
+                if (d.extra_slots[0] != 0)
+                    d.surface |= (e.packed_normal ? kPackedNormal : 0u) | (e.glow ? kGlow : 0u);
             }
-            d.surface |= (e.specular ? kSpecular : 0u) | (e.reflective && e.env_strength > 0.0f ? kReflective : 0u);
+            d.surface |= (e.specular || e.packed_normal ? kSpecular : 0u) |
+                         (e.reflective && e.env_strength > 0.0f ? kReflective : 0u);
             d.extra = {e.shininess, e.gloss, e.env_strength, 0.0f};
             // A material's own normal map and highlight win over a texture pack's.
             if ((d.surface & (kNormalMap | kSpecular)) != 0u) d.maps = 0;
@@ -1307,6 +1314,7 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                 if (name.find(word) != std::string::npos) d.surface |= kMolten;
         }
         if (look.eqg_shader == assets::EqgShader::LavaH) d.surface |= kEnergy;
+        if (look.eqg_shader == assets::EqgShader::AddAlpha) d.surface |= kAdditiveGlow;
         switch (d.mode) {
         case kTerrainTile: d.extra = e.detail_scale; break;
         case kRegionTerrain: d.param_z = e.coverage_scale; break;
