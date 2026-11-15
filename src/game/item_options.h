@@ -86,9 +86,9 @@ inline bool loot_asks_quantity(bool own_corpse, std::int32_t stack_count) { retu
 
 // CLootWnd::LootAll(close) @0x6bdba0 over the corpse's slots: two passes, bags (item class 1) first, then the rest,
 // each in slot order. An item that asks (loot_no_drop_asks) is left out and asked about, the window's popup flag
-// (+0x398) set; a second one while the flag is set drops the whole list (nothing is looted). With nothing to loot
-// the window closes unless a question is showing; else the first request goes out (OP_LootItem, auto loot) and each
-// answer sends the next.
+// (+0x398) set; a second one while the flag is set drops the whole list, leaving the first question open. With
+// nothing to loot the window closes unless a question is showing; else the first request goes out (OP_LootItem,
+// auto loot) and each answer sends the next. `ask` must be opened even when `aborted` is true.
 struct LootAllItem {
     std::int16_t slot = 0;
     bool bag = false;
@@ -97,7 +97,7 @@ struct LootAllItem {
 struct LootAllPlan {
     std::vector<std::int16_t> queue;  // the requests, in order
     std::optional<std::int16_t> ask;  // the item asked about (its request has auto loot set)
-    bool aborted = false;             // a second question: nothing goes out
+    bool aborted = false;             // a second question: the automatic queue is discarded
     bool close = false;               // nothing to loot and no question: the window closes
     bool popup_pending = false;       // the flag afterwards
 };

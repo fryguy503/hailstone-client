@@ -1759,6 +1759,7 @@ public:
         net::Coins money;
         bool open = false;     // the server accepted the request
         bool complete = false; // every item sent
+        std::size_t pending_requests = 0; // OP_LootItem requests awaiting an answer, including individual loots
     };
     void loot(std::uint32_t corpse_id);
     // CLootWnd::RequestLootSlot: a corpse slot onto the cursor (or auto looted); a no-drop item may ask first

@@ -89,17 +89,39 @@ TEST_CASE("item options: CLootWnd::LootAll's plan") {
     CHECK(*p.ask == 24);
     CHECK(p.popup_pending);
 
-    // A second one (or one while a question shows) drops the whole list.
+    // A second one drops the whole list, but the first question survives the abort.
     p = game::plan_loot_all({{23, false, true}, {24, false, false}, {25, false, true}}, false);
     CHECK(p.aborted);
     CHECK(p.queue.empty());
+    REQUIRE(p.ask.has_value());
+    CHECK(*p.ask == 23);
+    CHECK(p.popup_pending);
+    CHECK_FALSE(p.close);
+
+    // A question from before the scan is kept; no new question replaces it.
     p = game::plan_loot_all({{23, false, false}, {24, false, true}}, true);
     CHECK(p.aborted);
+    CHECK(p.queue.empty());
+    CHECK_FALSE(p.ask.has_value());
+    CHECK(p.popup_pending);
+    CHECK_FALSE(p.close);
 
     // Nothing to loot: the window closes unless a question shows.
     CHECK(game::plan_loot_all({}, false).close);
     p = game::plan_loot_all({{23, false, true}}, false);
     CHECK(p.queue.empty());
+    CHECK_FALSE(p.close);
+}
+
+TEST_CASE("item options: Loot All preserves the first no-drop question in bag-first order") {
+    // Ordinary loot collected in the bag pass is also discarded when a later no-drop item aborts the scan.
+    const auto p = game::plan_loot_all(
+        {{23, false, true}, {24, true, false}, {25, true, true}, {26, false, false}, {27, true, false}}, false);
+    CHECK(p.aborted);
+    CHECK(p.queue.empty());
+    REQUIRE(p.ask.has_value());
+    CHECK(*p.ask == 25); // the bag, although the ordinary no-drop item has a lower slot
+    CHECK(p.popup_pending);
     CHECK_FALSE(p.close);
 }
 

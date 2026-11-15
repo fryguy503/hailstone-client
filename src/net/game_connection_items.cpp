@@ -275,6 +275,7 @@ void GameConnection::handle_item(Op op, const AppPacket& p) {
     case Op::LootItem:
         if (auto l = decode_loot_item(p)) {
             if (!loot_) break;
+            if (loot_->pending_requests != 0) --loot_->pending_requests;
             // Handle_OP_LootItem @0x6bd210: a negative auto loot or slot is a refusal ("You may not loot that item
             // from this corpse.", 0x111); otherwise the looted item leaves the window, or with a count below its
             // stack only that many; then the loot-all queue sends its next request.
@@ -295,7 +296,7 @@ void GameConnection::handle_item(Op op, const AppPacket& p) {
                 break;
             }
             // The last answer of a Loot All closes the window (bCloseOnComplete, unless a no-drop question is open).
-            if (loot_close_on_complete_ && !loot_popup_pending_) end_loot();
+            if (loot_close_on_complete_ && !loot_popup_pending_ && loot_->pending_requests == 0) end_loot();
         }
         break;
     case Op::LootComplete:
@@ -972,13 +973,20 @@ void GameConnection::send_loot_item(std::int16_t corpse_slot, bool auto_loot, st
     l.slot = static_cast<std::uint16_t>(corpse_slot);
     l.auto_loot = auto_loot ? 1 : 0;
     l.unknown16 = quantity; // the quantity asked (EQEmu loots the whole stack whatever it says)
-    send_zone(encode(l));
+    ++loot_->pending_requests;
+    if (!send_zone(encode(l)) && loot_ && loot_->corpse_id == l.lootee) {
+        // A dropped request has no reply to release the guard or advance the automatic queue.
+        if (loot_->pending_requests != 0) --loot_->pending_requests;
+        loot_all_queue_.clear();
+        loot_close_on_complete_ = false;
+    }
 }
 
 void GameConnection::loot_all() {
     // CLootWnd::WndNotification @0x6be180, Loot All: at once from the player's own corpse or without LootAllConfirm,
     // else "Loot all, are you sure?" (11018, 20 s) first.
     if (!loot_ || !loot_->open) return;
+    if (!loot_all_queue_.empty() || loot_->pending_requests != 0) return;
     if (!game::loot_all_asks(looting_own_corpse(), client_options_.get(game::ClientOption::LootAllConfirm))) {
         loot_all_now();
         return;
@@ -995,6 +1003,9 @@ void GameConnection::loot_all_now() {
     // asked about (a second one drops the whole list); one OP_LootItem at a time, the next on each answer; with
     // nothing to loot and no question the window closes.
     if (!loot_ || !loot_->open) return;
+    // LootAll's queue guard @0x6bdbf5: do not rebuild an active list. The last queued slot has already left the
+    // deque while its request awaits a reply; an individual loot request also has to finish before a new list.
+    if (!loot_all_queue_.empty() || loot_->pending_requests != 0) return;
     if (std::any_of(cursor_coins_.begin(), cursor_coins_.end(), [](std::uint32_t c) { return c != 0; })) return;
     if (!loot_->complete) { // before the server's "every item sent" (6): runs when that arrives
         loot_all_deferred_ = true;

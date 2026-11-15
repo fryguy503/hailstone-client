@@ -10,6 +10,7 @@
 #include "net/item_packets.h"
 #include "net/packet_io.h"
 #include "net/trade_packets.h"
+#include "plugin/hooks.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -56,7 +57,7 @@ AppPacket money(std::uint8_t response, std::uint32_t p = 0, std::uint32_t g = 0,
     return encode(m);
 }
 
-AppPacket loot_item_packet(std::int16_t slot, const std::string& name) {
+AppPacket loot_item_packet(std::int16_t slot, const std::string& name, std::uint8_t no_drop = 0, bool bag = false) {
     ItemPacket ip;
     ip.type = kItemPacketLoot;
     ip.item.id = 1001;
@@ -64,7 +65,29 @@ AppPacket loot_item_packet(std::int16_t slot, const std::string& name) {
     ip.item.slot.type = 0;
     ip.item.slot.slot = slot;
     ip.item.stack_count = 1;
+    ip.item.no_drop = no_drop;
+    ip.item.item_class = bag ? 1 : 0;
     return encode_item_packet(false, ip);
+}
+
+std::vector<std::uint16_t> loot_requests(const Rig& rig) {
+    std::vector<std::uint16_t> slots;
+    for (const auto& packet : rig.server.zone_log)
+        if (is_op(packet, Op::LootItem)) {
+            auto request = decode_loot_item(packet);
+            REQUIRE(request);
+            CHECK(request->auto_loot == 1);
+            slots.push_back(request->slot);
+        }
+    return slots;
+}
+
+// A reliable marker after the clicks proves every preceding request reached the mock. LootItem has no automatic
+// mock reply, so the tests can keep a request outstanding until they explicitly deliver its answer.
+void flush_loot_requests(Rig& rig) {
+    const auto before = MockEqServer::count(rig.server.zone_log, Op::ChannelMessage);
+    rig.conn.say("loot-request-marker");
+    REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::ChannelMessage) == before + 1; }));
 }
 
 } // namespace
@@ -202,6 +225,344 @@ TEST_CASE("loot: Loot All waits for every item, then closes the window after the
     answer.slot = 24;
     conn.receive_zone_packet_for_test(encode(answer));
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 1; }));
+}
+
+TEST_CASE("loot: rapid Loot All activation preserves the active queue through its final delayed reply") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 0);
+    conn.set_client_option_for_session(game::ClientOption::LootNoDrop, 2);
+    conn.destroy_cursor();
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.receive_zone_packet_for_test(loot_item_packet(23, "Cloth Cap"));
+    conn.receive_zone_packet_for_test(loot_item_packet(24, "Small Bag", 255, true));
+    conn.receive_zone_packet_for_test(loot_item_packet(25, "Rusty Dagger"));
+    conn.receive_zone_packet_for_test(money(6));
+
+    conn.loot_all();
+    for (int click = 0; click < 10; ++click) conn.loot_all();
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24});
+
+    // Reentry also ignores the button before it could open another Loot All confirmation.
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 1);
+    for (int click = 0; click < 10; ++click) conn.loot_all();
+    CHECK_FALSE(conn.confirmation());
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24});
+
+    LootItem answer;
+    answer.lootee = corpse;
+    answer.slot = 24;
+    answer.auto_loot = 1;
+    conn.receive_zone_packet_for_test(encode(answer));
+    for (int click = 0; click < 10; ++click) conn.loot_all();
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24, 23});
+    CHECK_FALSE(conn.confirmation());
+
+    answer.slot = 23;
+    conn.receive_zone_packet_for_test(encode(answer));
+    // No slots remain queued while the final request waits: its busy state still prevents a duplicate.
+    for (int click = 0; click < 10; ++click) conn.loot_all();
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24, 23, 25});
+    CHECK_FALSE(conn.confirmation());
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 0);
+
+    answer.slot = 25;
+    conn.receive_zone_packet_for_test(encode(answer));
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24, 23, 25});
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 1);
+}
+
+TEST_CASE("loot: Loot All waits for a preceding individual item request and recovers after its reply") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 0);
+    conn.set_client_option_for_session(game::ClientOption::LootNoDrop, 2);
+    conn.destroy_cursor();
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.receive_zone_packet_for_test(loot_item_packet(23, "Cloth Cap"));
+    conn.receive_zone_packet_for_test(loot_item_packet(24, "Rusty Dagger"));
+    conn.receive_zone_packet_for_test(money(6));
+
+    conn.loot_item(24, true);
+    for (int click = 0; click < 10; ++click) conn.loot_all();
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24});
+
+    LootItem answer;
+    answer.lootee = corpse;
+    answer.slot = 24;
+    answer.auto_loot = 1;
+    bool refused = false, reset = false;
+    SUBCASE("an accepted individual request releases busy state") {}
+    SUBCASE("a refused individual request releases busy state and leaves its slot for the new queue") {
+        answer.auto_loot = -1;
+        refused = true;
+    }
+    SUBCASE("a session reset drops the outstanding request before a fresh corpse opens") {
+        conn.receive_zone_packet_for_test(AppPacket{to_wire(Op::LootComplete), {}});
+        CHECK_FALSE(conn.loot_session());
+        auto next_corpse = conn.world_for_test().spawns.at(corpse);
+        next_corpse.id = corpse + 1;
+        conn.world_for_test().spawns[next_corpse.id] = next_corpse;
+        conn.loot(next_corpse.id);
+        conn.receive_zone_packet_for_test(money(1));
+        conn.receive_zone_packet_for_test(loot_item_packet(23, "Fresh Corpse Item"));
+        conn.receive_zone_packet_for_test(money(6));
+        answer.lootee = next_corpse.id;
+        reset = true;
+    }
+    if (!reset) conn.receive_zone_packet_for_test(encode(answer));
+    answer.auto_loot = 1;
+    conn.loot_all();
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24, 23});
+    answer.slot = 23;
+    conn.receive_zone_packet_for_test(encode(answer));
+    flush_loot_requests(rig);
+    if (refused) {
+        CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24, 23, 24});
+        CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 0);
+        answer.slot = 24;
+        conn.receive_zone_packet_for_test(encode(answer));
+        flush_loot_requests(rig);
+    }
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 1);
+}
+
+TEST_CASE("loot: a dropped LootItem handoff leaves Loot All retryable") {
+    plugin::Hooks hooks;
+    auto options = quick_options();
+    options.hooks = &hooks;
+    Rig rig(MockConfig::standard(), options);
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 0);
+    conn.set_client_option_for_session(game::ClientOption::LootNoDrop, 2);
+    conn.destroy_cursor();
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.receive_zone_packet_for_test(loot_item_packet(23, "Cloth Cap"));
+    conn.receive_zone_packet_for_test(loot_item_packet(24, "Rusty Dagger"));
+    conn.receive_zone_packet_for_test(money(6));
+    const auto owner = hooks.new_owner("loot handoff drop test");
+    bool drop = true;
+    hooks.on_packet(owner, plugin::Stream::Zone, plugin::Direction::Out, to_wire(Op::LootItem),
+        [&](AppPacket&) { return drop ? plugin::Flow::Drop : plugin::Flow::Continue; });
+
+    SUBCASE("the first request of a new auto-loot queue is dropped") {
+        conn.loot_all();
+    }
+    SUBCASE("a preceding individual request is dropped") {
+        conn.loot_item(24, true);
+    }
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig).empty());
+    drop = false;
+    conn.loot_all();
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{23});
+
+    LootItem answer;
+    answer.lootee = corpse;
+    answer.slot = 23;
+    answer.auto_loot = 1;
+    conn.receive_zone_packet_for_test(encode(answer));
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{23, 24});
+    answer.slot = 24;
+    conn.receive_zone_packet_for_test(encode(answer));
+    flush_loot_requests(rig);
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 1);
+    hooks.remove(owner);
+}
+
+TEST_CASE("loot: a delayed Loot All confirmation cannot replace an individual request started meanwhile") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 1);
+    conn.set_client_option_for_session(game::ClientOption::LootNoDrop, 2);
+    conn.destroy_cursor();
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.receive_zone_packet_for_test(loot_item_packet(23, "Cloth Cap"));
+    conn.receive_zone_packet_for_test(loot_item_packet(24, "Rusty Dagger"));
+    conn.receive_zone_packet_for_test(money(6));
+    conn.loot_all();
+    REQUIRE(conn.confirmation());
+    CHECK(conn.confirmation()->id == kConfirmLootAll);
+    conn.loot_item(24, true);
+    conn.answer_confirmation(true);
+    CHECK_FALSE(conn.confirmation());
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24});
+
+    LootItem answer;
+    answer.lootee = corpse;
+    answer.slot = 24;
+    answer.auto_loot = 1;
+    conn.receive_zone_packet_for_test(encode(answer));
+    flush_loot_requests(rig);
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 0);
+    conn.loot_all();
+    REQUIRE(conn.confirmation());
+    CHECK(conn.confirmation()->id == kConfirmLootAll);
+    conn.answer_confirmation(true);
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24, 23});
+    answer.slot = 23;
+    conn.receive_zone_packet_for_test(encode(answer));
+    flush_loot_requests(rig);
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 1);
+}
+
+TEST_CASE("loot: an accepted NO DROP question keeps Loot All open until both outstanding replies arrive") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 0);
+    conn.set_client_option_for_session(game::ClientOption::LootNoDrop, 0);
+    conn.destroy_cursor();
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.receive_zone_packet_for_test(loot_item_packet(23, "Cloth Cap", 255));
+    conn.receive_zone_packet_for_test(loot_item_packet(24, "Relic"));
+    conn.receive_zone_packet_for_test(money(6));
+    conn.loot_all();
+    REQUIRE(conn.confirmation());
+    CHECK(conn.confirmation()->data == 24);
+    conn.answer_confirmation(true);
+    CHECK_FALSE(conn.confirmation());
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{23, 24});
+
+    LootItem answer;
+    answer.lootee = corpse;
+    answer.auto_loot = 1;
+    std::uint16_t first_slot = 23, last_slot = 24;
+    SUBCASE("the ordinary item answers first") {}
+    SUBCASE("the NO DROP item answers first") {
+        first_slot = 24;
+        last_slot = 23;
+    }
+    answer.slot = first_slot;
+    conn.receive_zone_packet_for_test(encode(answer));
+    for (int click = 0; click < 10; ++click) conn.loot_all();
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{23, 24});
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 0);
+    answer.slot = last_slot;
+    conn.receive_zone_packet_for_test(encode(answer));
+    flush_loot_requests(rig);
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 1);
+}
+
+TEST_CASE("loot: multiple NO DROP items abort the queue but keep its first bag question answerable") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 0);
+    conn.set_client_option_for_session(game::ClientOption::LootNoDrop, 0);
+    conn.destroy_cursor();
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.receive_zone_packet_for_test(loot_item_packet(23, "Cloth Cap", 255));
+    conn.receive_zone_packet_for_test(loot_item_packet(24, "Second Relic"));
+    conn.receive_zone_packet_for_test(loot_item_packet(25, "First Relic Bag", 0, true));
+    conn.receive_zone_packet_for_test(loot_item_packet(26, "Rusty Dagger", 255));
+    conn.receive_zone_packet_for_test(money(6));
+
+    conn.loot_all();
+    REQUIRE(conn.confirmation());
+    CHECK(conn.confirmation()->id == kConfirmLootNoDrop);
+    CHECK(conn.confirmation()->data == 25);
+    CHECK(conn.confirmation()->text == game::loot_no_drop_question("First Relic Bag"));
+    for (int click = 0; click < 10; ++click) conn.loot_all();
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig).empty());
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 0);
+    REQUIRE(conn.confirmation());
+    CHECK(conn.confirmation()->data == 25);
+
+    SUBCASE("yes loots only the item named by the surviving question") {
+        conn.answer_confirmation(true);
+        CHECK_FALSE(conn.confirmation());
+        flush_loot_requests(rig);
+        CHECK(loot_requests(rig) == std::vector<std::uint16_t>{25});
+        LootItem answer;
+        answer.lootee = corpse;
+        answer.slot = 25;
+        answer.auto_loot = 1;
+        conn.receive_zone_packet_for_test(encode(answer));
+        flush_loot_requests(rig);
+        CHECK(loot_requests(rig) == std::vector<std::uint16_t>{25});
+        REQUIRE(conn.loot_session());
+        CHECK(conn.loot_session()->items.count(25) == 0);
+        CHECK(conn.loot_session()->items.count(23) == 1);
+        CHECK(conn.loot_session()->items.count(24) == 1);
+        CHECK(conn.loot_session()->items.count(26) == 1);
+    }
+
+    SUBCASE("no releases the popup and allows a fresh scan or another individual question") {
+        conn.answer_confirmation(false);
+        CHECK_FALSE(conn.confirmation());
+        flush_loot_requests(rig);
+        CHECK(loot_requests(rig).empty());
+        conn.loot_all();
+        REQUIRE(conn.confirmation());
+        CHECK(conn.confirmation()->data == 25);
+        conn.answer_confirmation(false);
+        CHECK_FALSE(conn.confirmation());
+        conn.loot_item(24, true);
+        REQUIRE(conn.confirmation());
+        CHECK(conn.confirmation()->data == 24);
+        conn.answer_confirmation(true);
+        CHECK_FALSE(conn.confirmation());
+        flush_loot_requests(rig);
+        CHECK(loot_requests(rig) == std::vector<std::uint16_t>{24});
+    }
+}
+
+TEST_CASE("loot: Loot All preserves an individual NO DROP question already pending before the scan") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 0);
+    conn.set_client_option_for_session(game::ClientOption::LootNoDrop, 0);
+    conn.destroy_cursor();
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.receive_zone_packet_for_test(loot_item_packet(23, "Original Relic"));
+    conn.receive_zone_packet_for_test(loot_item_packet(24, "Another Relic Bag", 0, true));
+    conn.receive_zone_packet_for_test(loot_item_packet(25, "Cloth Cap", 255));
+    conn.receive_zone_packet_for_test(money(6));
+    conn.loot_item(23, true);
+    REQUIRE(conn.confirmation());
+    CHECK(conn.confirmation()->data == 23);
+    conn.loot_all();
+    REQUIRE(conn.confirmation());
+    CHECK(conn.confirmation()->data == 23);
+    CHECK(conn.confirmation()->text == game::loot_no_drop_question("Original Relic"));
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig).empty());
+    conn.answer_confirmation(false);
+    CHECK_FALSE(conn.confirmation());
 }
 
 TEST_CASE("loot: walking away from the corpse closes the window (CLootWnd::OnProcessFrame)") {

@@ -802,6 +802,23 @@ find affect slot 1600). Each record is replayed call for call against the record
   sitting player (110), so a feigned one stays down until /sit or /stand (CEverQuest::Sit: anything but standing or
   ducking stands up). The client hands ProcessControls the feigned state as 115 (`CharacterInput::lying`).
 
+## Loot All
+
+CLootWnd::LootAll @0x6bdba0 visits bags first and then other items, keeping corpse-slot order within each pass,
+including on the player's own corpse. Its queue-pointer guard @0x6bdbf5 ignores activation while a queue already
+exists. Hailstone keeps that queue and any outstanding OP_LootItem request intact on repeated activation, including
+the wait for the final item's reply when no later slots remain queued. Replies advance the queue one item at a
+time. A request that cannot be sent releases its busy state and cancels the automatic queue so the player can retry.
+
+A NO DROP item requiring confirmation is left out of the queue and opens the first question during the scan
+(@0x6bdf93). Encountering another item requiring confirmation aborts the queue but leaves that first question alive;
+answering it still applies to its original slot. Closing after Loot All waits for every outstanding loot reply,
+including a confirmed NO DROP request sent while an ordinary item is still pending (native close timing for that
+overlap remains untraced; docs/unknowns.md). If a loot question was already
+pending before the scan, it stays unchanged and no new question is created. Bags-first ordering and the player's
+own-corpse exemption from NO DROP questions are unchanged. Planner and mock-server regressions cover these paths;
+rapid activation with delayed replies and recovery from several NO DROP items still need live acceptance.
+
 ## Leaving an NPC interaction
 
 Each service window of the original checks its NPC in its OnProcessFrame with PlayerClient_IsWithinInteractRange

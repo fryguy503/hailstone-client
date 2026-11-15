@@ -93,9 +93,8 @@ LootAllPlan plan_loot_all(const std::vector<LootAllItem>& items, bool popup_pend
                 p.queue.push_back(it.slot);
                 continue;
             }
-            if (p.popup_pending) { // the list is freed: nothing goes out
+            if (p.popup_pending) { // the list is freed, but an earlier question stays open (@0x6bdf93)
                 p.queue.clear();
-                p.ask.reset();
                 p.aborted = true;
                 return p;
             }

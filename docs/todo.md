@@ -88,6 +88,9 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] The service windows' ranges and timers checked against the original (docs/mechanics.md "Leaving an NPC interaction"); still open: the mercenary liaison's check cadence (docs/unknowns.md) and walking away from each service live.
 - [ ] Trades with players: CTradeWnd::OnProcessFrame @0x780b50 cancels them beyond the partner's avatar height + 20 too (hand-ins only so far).
 - [x] Partial-stack looting asks the quantity (EQEmu ignores it); Link All; the loot music (entry 5 has no asset).
+- [x] Loot All preserves an active queue or outstanding loot request on repeated activation, and retains the first NO DROP question when a later confirmation aborts the queue (planner and mock-server regressions; docs/mechanics.md "Loot All").
+- [ ] Loot All: live rapid activation with delayed replies and recovery from several NO DROP items requiring confirmation.
+- [ ] Loot All: trace native auto-close timing when an accepted NO DROP question overlaps the last automatic request (docs/unknowns.md).
 - [x] Ctrl + right-click bag swapping; Ctrl+click bag contents' slot order and refusal text (game/bag_move).
 - [x] The tradeskill window: favourites, request waits, combine checks, trivial colours (experiment and auto-combine were already in).
 - [x] Hailstone's tradeskill window: each component's carried count (green / red), how many can be made, Combine / Combine N / Combine All with each result put away and a stop when the inventory is full (docs/mechanics.md; unit and mock tests, not seen live).
