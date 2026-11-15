@@ -145,6 +145,7 @@ void GameConnection::reload_game_files() {
 GameConnection::~GameConnection() { disconnect(); }
 
 void GameConnection::fail(std::string message) {
+    close_evolving_transfer();
     reset_fellowship();
     reset_achievements();
     reset_rewards();
@@ -188,6 +189,7 @@ void GameConnection::chat(ChatEvent::Kind kind, std::string text, std::uint32_t 
 }
 
 void GameConnection::start(const WorldTicket& ticket) {
+    close_evolving_transfer();
     reset_fellowship();
     reset_achievements();
     reset_rewards();
@@ -331,6 +333,7 @@ void GameConnection::update() {
     }
 
     rewards_.update(reward_now_ms());
+    update_evolving_transfer();
     update_achievements();
     camp_tick();
     auto_target_tick(); // before attack_hold_tick: a new target ends the attack hold with auto attack still on
@@ -1602,6 +1605,9 @@ void GameConnection::handle_zone(const AppPacket& p) {
     case Op::AugmentInfo:
         handle_augment_info(p); // game_connection_augments.cpp
         break;
+    case Op::EvolveItem:
+        handle_evolving_item(p);
+        break;
     case Op::ShopRequest:
     case Op::ShopPlayerBuy:
     case Op::ShopPlayerSell:
@@ -2376,6 +2382,7 @@ void GameConnection::simulate_link_loss() {
 }
 
 void GameConnection::disconnect() {
+    close_evolving_transfer();
     reset_fellowship();
     capture_bank();
     reset_achievements();

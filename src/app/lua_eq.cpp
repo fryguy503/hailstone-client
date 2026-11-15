@@ -2935,6 +2935,7 @@ void register_spellbook_api(lua_State* L, EqHost& host); // app/lua_eq_spellbook
 void register_abilities_api(lua_State* L, EqHost& host); // app/lua_eq_abilities.cpp
 void register_ability_book_api(lua_State* L, EqHost& host); // app/lua_eq_abilitybook.cpp
 void register_inventory_manager_api(lua_State* L, EqHost& host); // app/lua_eq_inventory_manager.cpp
+void register_item_transfer_api(lua_State* L, EqHost& host); // app/lua_eq_itemdisplay.cpp
 void register_reward_selection_api(lua_State* L, EqHost& host); // app/lua_eq_rewards.cpp
 void register_achievement_api(lua_State* L, EqHost& host); // app/lua_eq_achievements.cpp
 void register_exchange_api(lua_State* L, EqHost& host);  // app/lua_eq_exchange.cpp
@@ -2957,6 +2958,7 @@ void EqApi::register_functions(lua_State* L) {
     register_abilities_api(L, impl_->host);
     register_ability_book_api(L, impl_->host);
     register_inventory_manager_api(L, impl_->host);
+    register_item_transfer_api(L, impl_->host);
     register_reward_selection_api(L, impl_->host);
     register_achievement_api(L, impl_->host);
     register_exchange_api(L, impl_->host);

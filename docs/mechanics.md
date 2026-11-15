@@ -1448,6 +1448,16 @@ Vectors in `tests/hotbutton_tracking_vectors_test.cpp` (do-hot-button 4000, hot-
   such slot (a primary or secondary held, the other hand keeping its item unless a two-hander is involved, the range
   item in the left hand, armour by its material and tint), else alone when its IDFile is not IT63 / IT64, else "No
   item preview available.". Hailstone draws the view with its own orbit camera.
+- Evolving-item experience transfer (`net/game_connection_evolving.cpp`): both packs offer Transfer experience
+  on an owned evolving item's display and open `ItemExpTransferWnd`. Hailstone uses selectors over worn, carried,
+  bagged and cursor items instead of requiring cursor placement for each native selection button. The server
+  supplies compatibility percent, max-transfer level (including zero), and projected source/destination forms.
+  Transfer stays disabled until both results exist and compatibility is nonzero. Review asks the native
+  confirmation question (eqstr 6148, CItemExpTransferWnd::WndNotification @0x6b0230); Cancel sends nothing.
+  Confirmation binds the original 64-bit evolving IDs, preview revision and current serialized originals,
+  then sends action 3 once. It never installs the previews into inventory or reports an unacknowledged success:
+  the server recalculates the transfer and delivers inventory updates and messages. Zoning/disconnect clears
+  the window. The item's Final Result STML link sends action 4 (Send_OP_EvolveItem @0x69ef60), independently of transfer.
 - The stats-disabled flags on items (`game::update_stats_disabled`): set from the UseItem (0x13) and Ornament (0x15)
   game features and the OP_SendMembership entries, on the worn items before the stat sums and on a shown item; a
   disabled child adds nothing to SumStat unless its owner is disabled too. EQEmu sends UseItem -1 and Ornament 1, so

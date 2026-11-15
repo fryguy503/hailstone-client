@@ -226,6 +226,28 @@ Observed sequences (EQEmu server, `playprobe --shop/--hail/--handin/--trade-with
 - Player trade: the partner gets OP_TradeRequest, acknowledges, receives the offer as item packet 0x65 (slot 0) and the coin as OP_TradeCoins (+2 silver); both OP_TradeAcceptClick, then OP_MoneyUpdate, the item as 0x67 (stacked into an existing stack), OP_FinishTrade. A client that disconnects with an open give window gets its item back (server refund).
 - On every camp the server sends OP_CancelTrade {own id, action 7}; with no trade open it is ignored.
 
+### Evolving items (`net/evolving_packets.h`, `net/game_connection_evolving.cpp`)
+
+`OP_EvolveItem` is `0x7cfb`. Layouts were checked against EQEmu's RoF2 serializer and the native handlers
+`0x6af8e0` (details), `0x6b0230` (selection/confirmation), `0x6b00b0` (confirmed transfer) and `0x69ef60` (Final Result).
+
+| Action | Direction | Payload |
+|---|---|---|
+| 0 update | Z→C | 24 B: `u32 action, u32 padding, u64 evolving ID, u32 percent, u32 activated` |
+| 1 open | Z→C | 24 B, same fixed envelope; resets the transfer window locally; no client open request |
+| 2 details request | C→Z | 24 B: `u32 action, u32 zero, u64 source ID, u64 destination ID` |
+| 2 details reply | Z→C | 30 B header: `u32 action, u64 source ID, u64 destination ID, u32 compatibility percent, u32 max level, u8 source present, u8 destination present`, followed by each present serialized item |
+| 3 transfer | C→Z | 24 B, same layout as the details request, sent only after explicit confirmation |
+| 4 Final Result | C→Z | 24 B: six `u32`s: `4, item template ID, final-item hint, current evolving level, bare-item link hash, !Shift` |
+
+An evolving item's ID combines the serialized header's `parcel_item_id` high word and `instance_id` low word;
+the serial text is a different identity. The details reply uses original IDs in its header, but its serialized
+items are projected resulting forms. Hailstone matches the selected original pair and rejects invalid presence
+flags, truncated items and trailing data. Confirmation rechecks live originals and the approval revision.
+The protocol has no request nonce: two replies for the same pair cannot be distinguished (see `docs/unknowns.md`).
+The server rechecks on action 3 and supplies results through ordinary inventory updates and messages, with no
+dedicated success reply. No preview is applied optimistically to inventory.
+
 ### Bank, coin moves and stack splits (`GameConnection` in `net/game_connection_bank.cpp` and `net/game_connection_items.cpp`, rules in `game/bank.{h,cpp}`)
 
 The bank window has no packets of its own: a right click on a banker (class 40) within 20 units opens the bank window locally ("%1 tells you, 'Welcome to my bank!'" 1465), and it closes itself with "Come back soon!" (12143) when a 500 ms check finds the banker gone or more than 20 units away. Bank items arrive with the inventory (InventorySlot type 1, slots 0..23; shared bank type 2, slots 0..1). Bank coin is in the player profile (`platinum_bank`.., `platinum_shared`) and is then kept by the client: OP_MoneyUpdate only carries the coin on the person. The server checks for a banker within 200 units (`GetClosestBanker`, `USE_NPC_RANGE2` = 40000, a squared distance) on every bank item and coin move.

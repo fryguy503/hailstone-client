@@ -31,6 +31,7 @@
 #include "core/game_dir.h"
 #include "net/aa_packets.h"
 #include "net/game_connection.h"
+#include "net/evolving_packets.h"
 #include "net/group_packets.h"
 #include "net/merchant_packets.h"
 #include "net/social_packets.h"
@@ -143,7 +144,7 @@ constexpr const char* kScreens[] = {
     "CombatSkillSelectWnd", "AdventureRequestWnd", "AdventureStatsWnd", "AdventureLeaderboardWnd", "DynamicZoneWnd",
     "PvPStatsWnd", "PvpLeaderboardWnd", "BazaarSearchWnd", "BarterSearchWnd", "TrainWindow", "TrackingWnd",
     "GuildBankWnd", "HotButtonWnd2", "HotButtonWnd3", "BrowserWnd", "RealEstatePurchaseWnd", "RealEstateManageWnd",
-    "RealEstateItemsWnd", "RealEstateNeighborhoodWnd", "RealEstatePlotSearchWnd", "ScriptsWnd"};
+    "RealEstateItemsWnd", "RealEstateNeighborhoodWnd", "RealEstatePlotSearchWnd", "ScriptsWnd", "ItemExpTransferWnd"};
 
 } // namespace
 
@@ -177,6 +178,185 @@ TEST_CASE("UI packs: every script of the shipped UIs loads, and their windows dr
                 std::string hide = std::string("eq.ShowWindow('") + screen + "', false)";
                 REQUIRE(luaL_dostring(L, hide.c_str()) == LUA_OK);
             }
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
+TEST_CASE("UI packs: evolving transfer reviews server previews and drawn confirmation sends once") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        const bool gamepad_pack = std::string_view(pack) == "gamepad";
+        test::ScratchDir scratch("ui_pack_evolving_transfer_test");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
+                 fs::copy_options::recursive);
+        std::ofstream(dir / "UI_Test_Server.ini") << "[Tips]\nShowTips=0\nShowTOTD=0\n";
+        ImGuiContext* ctx = ImGui::CreateContext();
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+        io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        {
+            test::Rig rig;
+            REQUIRE(rig.to_zone());
+            Session s(dir, pack);
+            s.host.conn = &rig.conn;
+            auto item = [](std::uint32_t id, std::uint32_t record, int slot, std::string name) {
+                net::Item value;
+                value.id = id;
+                value.name = std::move(name);
+                value.is_evolving = 1;
+                value.instance_id = record;
+                value.slot = net::ItemSlot::possessions(static_cast<std::int16_t>(slot));
+                value.evolving.evolve_level = 2;
+                value.evolving.evolve_max_level = 5;
+                value.evolving.progress = 12.5;
+                return value;
+            };
+            const auto source = item(101, 11, 23, "Source evolving item");
+            const auto destination = item(102, 12, 24, "Destination evolving item");
+            rig.conn.receive_zone_packet_for_test(net::encode_char_inventory({source, destination}));
+            rig.conn.open_evolving_transfer();
+            REQUIRE(rig.conn.select_evolving_transfer(true, 11));
+            REQUIRE(rig.conn.select_evolving_transfer(false, 12));
+            auto projected_source = source;
+            projected_source.name = "Projected source";
+            projected_source.evolving.evolve_level = 1;
+            auto projected_destination = destination;
+            projected_destination.name = "Projected destination";
+            projected_destination.evolving.evolve_level = 4;
+            rig.conn.receive_zone_packet_for_test(net::encode(net::EvolvingTransferDetails{
+                11, 12, 75, 4, projected_source, projected_destination}));
+            REQUIRE(rig.conn.can_transfer_evolving());
+            lua_State* L = s.lua.state();
+            auto run = [&](const char* code) {
+                INFO(code);
+                const int rc = luaL_dostring(L, code);
+                REQUIRE_MESSAGE(rc == LUA_OK, (rc == LUA_OK ? "" : lua_tostring(L, -1)));
+                lua_settop(L, 0);
+            };
+            run(R"lua(
+                controls, lines, padPress = {}, {}, nil
+                local function record(label)
+                  if not label:find('evolve-',1,true) then return end
+                  local key=label:match('##(.*)$')
+                  controls[key]={rect={ui.GetItemRect()},id=ui.GetItemID()}
+                end
+                local button,invisible,text=ui.Button,ui.InvisibleButton,ui.Text
+                ui.Button=function(label,...)
+                  local clicked=button(label,...);record(label);return clicked
+                end
+                ui.InvisibleButton=function(label,...)
+                  local clicked=invisible(label,...);record(label);return clicked
+                end
+                ui.Text=function(value,...)
+                  lines[value]=true;return text(value,...)
+                end
+                ui.SetSetting('hud.size.ItemExpTransferWnd','760,620')
+                ui.SetSetting('test.pos.ItemExpTransferWnd','20,20')
+                eq.ShowWindow('TipWindow',false)
+            )lua");
+            if (gamepad_pack) run(R"lua(
+                eq.gamepad={
+                  connected=function() return true end,type=function() return 'xbox' end,
+                  mode=function() return 'menu' end,set_mode=function() return 'menu' end,
+                  pressed=function(button) return button==padPress end,
+                  down=function(button) return button==padPress end,released=function() return false end,
+                  axis=function() return 0 end,glyph=function(button) return button:upper() end,
+                  takes_b=function() end,request_focus=function(window) ui.SetWindowFocus(window) end,
+                }
+            )lua");
+            s.frames(30); // the gamepad's initial window-focus settling period
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            run("assert(lines['Compatibility: 75%'] and lines['Max transfer level: 4'])");
+            run("assert(lines['Source after transfer: Projected source (level 1/5, 12.5% experience)'])");
+            run("assert(lines['Destination after transfer: Projected destination (level 4/5, 12.5% experience)'])");
+            auto rectangle = [&](const char* key) {
+                lua_getglobal(L, "controls");
+                lua_getfield(L, -1, key);
+                REQUIRE(lua_istable(L, -1));
+                lua_getfield(L, -1, "rect");
+                ImVec4 r;
+                float* fields[] = {&r.x, &r.y, &r.z, &r.w};
+                for (int i = 0; i < 4; ++i) {
+                    lua_rawgeti(L, -1, i + 1);
+                    *fields[i] = static_cast<float>(lua_tonumber(L, -1));
+                    lua_pop(L, 1);
+                }
+                lua_settop(L, 0);
+                return r;
+            };
+            auto click = [&](const char* key) {
+                const auto r = rectangle(key);
+                io.AddMousePosEvent((r.x + r.z) / 2, (r.y + r.w) / 2);
+                s.frames(1);
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+                s.frames(1);
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+                s.frames(2);
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            };
+            auto transfer_count = [&] {
+                int count = 0;
+                for (const auto& packet : rig.server.zone_log)
+                    if (const auto request = net::decode_evolving_request(packet);
+                        request && request->action == net::EvolvingAction::Transfer) ++count;
+                return count;
+            };
+            click("evolve-transfer");
+            run("assert(lines['Confirm experience transfer'] and controls['evolve-confirm'])");
+            CHECK_FALSE(rig.conn.evolving_transfer().submitted);
+            click("evolve-cancel");
+            CHECK(rig.conn.can_transfer_evolving());
+            CHECK_FALSE(rig.conn.evolving_transfer().submitted);
+            if (gamepad_pack) {
+                click("evolve-transfer");
+                run("padPress='b'");
+                io.AddKeyEvent(ImGuiKey_GamepadFaceRight, true);
+                s.frames(1);
+                run("padPress=nil");
+                io.AddKeyEvent(ImGuiKey_GamepadFaceRight, false);
+                s.frames(2);
+                CHECK(rig.conn.evolving_transfer().shown);
+                CHECK(rig.conn.can_transfer_evolving());
+                CHECK_FALSE(rig.conn.evolving_transfer().submitted);
+            }
+            rig.run_for(std::chrono::milliseconds(20));
+            CHECK(transfer_count() == 0);
+            click("evolve-transfer");
+            if (gamepad_pack) {
+                // Put ImGui's navigation on the actual drawn Confirm item, then activate it with A.
+                lua_getglobal(L, "controls");
+                lua_getfield(L, -1, "evolve-confirm");
+                lua_getfield(L, -1, "id");
+                const auto id = static_cast<ImGuiID>(lua_tointeger(L, -1));
+                lua_settop(L, 0);
+                ImGuiWindow* content = nullptr;
+                for (ImGuiWindow* window : ctx->Windows)
+                    if (window->Active && std::string_view(window->Name).find("##evolve-content") != std::string_view::npos)
+                        content = window;
+                REQUIRE(content);
+                ImGui::FocusWindow(content);
+                ImGui::SetFocusID(id, content);
+                ImGui::SetNavCursorVisible(true);
+                io.AddMousePosEvent(-100, -100);
+                s.frames(1);
+                io.AddKeyEvent(ImGuiKey_GamepadFaceDown, true);
+                s.frames(1);
+                io.AddKeyEvent(ImGuiKey_GamepadFaceDown, false);
+                s.frames(2);
+            } else click("evolve-confirm");
+            CHECK(rig.conn.evolving_transfer().submitted);
+            REQUIRE(rig.until([&] { return transfer_count() == 1; }));
+            s.frames(3);
+            rig.run_for(std::chrono::milliseconds(20));
+            CHECK(transfer_count() == 1);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
         ImGui::DestroyContext(ctx);
     }

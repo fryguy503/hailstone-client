@@ -95,6 +95,7 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Bazaar purchase: EQEmu's TradeRequestFailed reads as a failure (5cf3f63; mock test only).
 - [x] Seen live (5ba3a3b and before): a stock-loot corpse with a partial stack, Link All (a crash without a loot session fixed) and Loot All, a two-client trade with coin and the busy refusals, Ctrl bag moves and the bag swap, the tradeskill search and favourites (the modern window's selected recipe fixed), the bandolier's Make Hot Button and Auto Swap, the merchant's Qty and Lvl.
 - [x] The item display's icon links its item into the active chat window's input (CItemDisplayWnd::WndNotification, IconButton), both packs, X in the gamepad one (unit tests; not seen live).
+- [x] Evolving-item experience transfer: both packs select owned source/destination items, request server compatibility and projected results, show max-transfer level and confirm the approved pair; native Final Result links send action 4 (codec, mock-server, Lua bridge and pack tests; live acceptance pending).
 - [x] Link All in the gamepad loot window (unit tests); the inventory doll drop in the modern pack (checked live). Open: the bandolier button actually swapping weapons.
 - [x] Bazaar: Find Trader, Hide Traders, the result row's Buy button, the stall check, the price load of a selected slot (f7401f3; Hide Traders by unit tests only).
 - [x] Barter: the feature check, offline mode, Hide Buyers (f7401f3; Hide Buyers and the feature check by unit tests only).

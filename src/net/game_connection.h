@@ -89,6 +89,7 @@
 #include "net/guild_bank_packets.h"
 #include "net/fellowship_packets.h"
 #include "net/item_packets.h"
+#include "net/evolving_packets.h"
 #include "net/commerce.h"
 #include "net/market_packets.h"
 #include "net/settings_packets.h"
@@ -1779,6 +1780,23 @@ public:
     // @006ae710): every open item display showing the same serial (+0xf8) is set to it in place.
     std::optional<Item> take_item_refresh();
 
+    struct EvolvingTransfer {
+        bool shown = false, pending = false, submitted = false;
+        std::uint64_t source_id = 0, destination_id = 0, revision = 0;
+        std::optional<EvolvingTransferDetails> details;
+        std::string status;
+    };
+    const EvolvingTransfer& evolving_transfer() const { return evolving_transfer_; }
+    std::vector<Item> evolving_transfer_items() const;
+    void open_evolving_transfer();
+    void close_evolving_transfer();
+    bool select_evolving_transfer(bool source, std::uint64_t id);
+    bool can_transfer_evolving() const;
+    // Called only after the UI's confirmation for this exact revision. Rechecks the live items before sending.
+    bool request_evolving_transfer(std::uint64_t expected_revision);
+    void preview_evolving_item(std::uint32_t item_id, std::uint32_t final_hint, std::uint32_t level,
+                              std::uint32_t hash, bool full = true);
+
     // ---- augments (game/augments.h; net/game_connection_augments.cpp) ----
     // What the request rules read: the cursor, the inventory searches, the class check.
     game::AugmentContext augment_context() const;
@@ -3269,6 +3287,11 @@ private:
     std::deque<Item> item_displays_;
     std::deque<Item> item_refreshes_;                     // for take_item_refresh()
     std::map<std::uint32_t, std::string> augment_info_;   // SolventText by display window (OP_AugmentInfo)
+    EvolvingTransfer evolving_transfer_;
+    std::vector<std::byte> evolving_source_snapshot_, evolving_destination_snapshot_;
+    void handle_evolving_item(const AppPacket& p);
+    void update_evolving_transfer();
+    void request_evolving_details();
     // PcZoneClient::GetItemByID @00585a10 / GetItemByItemClass @00586210: the possessions searched recursively.
     std::optional<game::FoundItem> find_possession(const std::function<bool(const Item&)>& match) const;
     void handle_augment_info(const AppPacket& p);

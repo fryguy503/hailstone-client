@@ -375,6 +375,9 @@ local function body(win, w, h, s)
   end
   local _, cy = ui.GetCursorScreenPos()
   ui.SetCursorScreenPos(x, math.max(cy, y + icon) + 6 * s)
+  if eq.ItemDisplayCanTransfer(win) then
+    if ui.Button("Transfer evolving experience##evolve", -1, 0) then eq.ItemDisplayTransfer(win) end
+  end
 
   -- the rest scrolls
   ui.BeginChild("##idbody", 0, 0, false)

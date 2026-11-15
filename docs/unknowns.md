@@ -2,6 +2,18 @@
 
 What the client does not implement yet, or implements with an approximation it cannot confirm. Entries are removed once settled.
 
+## Evolving-item experience transfer
+
+- The native actions, request/reply layouts, confirmation question and Final Result link were traced. Codec,
+  mock-server, Lua bridge and headless pack tests cover the flow; live transfers, server refusals, replacement
+  items across zoning and physical controller use still need acceptance against an EQEmu server.
+- RoF2's details reply identifies only the source/destination evolving IDs, with no request nonce. Hailstone
+  checks the current pair, live original items and a local approval revision, but an older reply for the same
+  pair cannot be distinguished after a fresh request. The server recalculates on commit. A server-provided nonce
+  would settle this completely. If a server sends no preview, closing/reopening permits a fresh request; Hailstone
+  does not fabricate compatibility or result items. There is no dedicated success acknowledgment, so submitted
+  transfers wait for inventory changes and server messages rather than declaring success locally.
+
 ## Adventures (LDoN)
 
 - Request, stats and leaderboard opcodes/offsets, native ten-second refresh guards, twenty-unit inclusive recruiter range, minute-ceiling timers and tied ranking were checked against the stock RoF2 executable; stock EQEmu provides the fixed incoming layouts. Live request/offer/entry/completion/leave, cross-zone synchronization, actual server standings and physical controller acceptance remain untested.

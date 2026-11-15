@@ -29,6 +29,7 @@
 #include "net/adventure_packets.h"
 #include "net/aggro_packets.h"
 #include "net/augment_packets.h"
+#include "net/evolving_packets.h"
 #include "net/chat_server.h"
 #include "net/door_packets.h"
 #include "net/dz_packets.h"

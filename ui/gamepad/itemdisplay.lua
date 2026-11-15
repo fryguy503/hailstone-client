@@ -98,6 +98,13 @@ ui.window("Item Details", function()
       end
     end
     y = math.max(y + s, iy) + T.px(16)
+    if eq.ItemDisplayCanTransfer(IDW) then
+      ui.SetCursorScreenPos(x0, y)
+      if T.button("##evolve-transfer-entry", "Transfer evolving experience", w, T.px(54), nil, pad) then
+        eq.ItemDisplayTransfer(IDW)
+      end
+      y = y + T.px(66)
+    end
     -- the stat grid: three columns of name / value
     local colW = (w - T.px(40)) / 3
     local any = false

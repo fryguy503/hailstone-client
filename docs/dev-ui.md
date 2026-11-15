@@ -106,6 +106,21 @@ UI folder) paths. This copies changed scripts while leaving pack settings alone.
 
 ## The Lua windows
 
+`ItemExpTransferWnd` is drawn by `itemexptransfer.lua` in both packs. An owned evolving item's display offers
+Transfer experience; the source starts selected. The selectors list evolving possessions, including bag contents
+and the cursor, without moving them. `eq.ItemExpTransfer()` returns `shown`, `pending`, `submitted`, `hasDetails`,
+`compatible`, `compatibility` (percent), `maxTransferLevel`, `canTransfer`, `status`, exact string identities
+`source`/`destination` (empty when unselected), `revision`, and `items`. Items and optional `previewSource` /
+`previewDestination` have string `id`, `name`, `icon`, `level`, `maxLevel`, and `progress`. Preview items are the
+server's resulting forms, never substituted for the selected original identities.
+`eq.ItemExpTransferSelect("source"|"destination", id)` selects an exact string ID (empty clears it).
+Transfer enters a separate review stage; Cancel sends nothing, and Confirm calls
+`eq.ItemExpTransferConfirm(source, destination, revision)`. Every argument remains a string; a changed pair,
+approval revision or live original item invalidates confirmation. `eq.ItemDisplayCanTransfer(screen)` and
+`eq.ItemDisplayTransfer(screen)` provide the display entry. `eq.ShowWindow("ItemExpTransferWnd", false)` retires
+the selection. Gamepad Back cancels review first, then closes the window.
+The read functions need no additional plugin capability; selection, display entry and confirmation require Actions.
+
 `eq.UiAnimation(name)` explicitly resolves the first frame of a named `Ui2DAnimation` from the installed/default XML and returns `texture, u0, v0, u1, v1, width, height`, or nil for unavailable/invalid art. Width and height are the authored frame dimensions, not the atlas size. This read-only opt-in works in an icon-only pack without changing `eq.UiTexture`, `eq.ChildArt` or the pack's normal art policy. Only a relative atlas filename and an entirely contained positive crop are accepted. Resolve handles each draw rather than retaining them across texture-cache eviction. No game art or XML is bundled with the client.
 
 The windows are Lua scripts drawn with ImGui, grouped into user interfaces: every folder of `ui/` with a `ui.ini` is one (`src/ui/ui_packs.h`), copied next to the executable at build time and reloaded when its scripts change (the build copies only the scripts whose contents changed and deletes those gone from the source, `cmake/SyncUiPacks.cmake`, so a rebuild reloads only what it changed). Each saved server keeps its own (`servers/<id>/server.ini` `[Server] ui`, picked on the login screen's Interface list, which every pack's login screen shows on its main card, or in Options > Display > Interface > User Interface; the login screen switches to it at once, and a saved server keeps it at once); `hailstone.ini` `ui.name` is the one for a new server or a test login (`modern` when it is missing), and each keeps its scripts' settings in `ui/settings/<name>.txt` of the Hailstone folder (not inside the pack, which an update replaces).

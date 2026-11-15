@@ -64,6 +64,7 @@ constexpr Entry kCalls[] = {
     {"WhoResults", 0}, {"SpellBook", 0}, {"SpellBookState", 0}, {"SpellIcon", 0}, {"SpellDetails", 0},
     {"DisplaySpellId", 0}, {"DisplayItemData", 0},
     {"RewardSelection", 0},
+    {"ItemExpTransfer", 0}, {"ItemDisplayCanTransfer", 0},
     {"Achievements", 0}, {"Achievement", 0},
     {"AchievementOpen", kCapCommands}, {"AchievementClearCompare", kCapCommands},
     {"AchievementRefresh", kCapActions}, {"AchievementCompare", kCapActions},
@@ -110,6 +111,8 @@ constexpr Entry kCalls[] = {
     {"gamepad.set_cross_slot", kCapCommands}, {"gamepad.set_setting", kCapCommands},
     {"RewardSelectionClose", kCapCommands},
     // Acting in the game
+    {"ItemExpTransferSelect", kCapActions}, {"ItemExpTransferConfirm", kCapActions},
+    {"ItemDisplayTransfer", kCapActions},
     {"RewardSelectionClaim", kCapActions}, {"RewardSelectionInspect", kCapActions},
     {"RestorePendingRewards", kCapActions},
     {"ClickSlot", kCapActions}, {"ClickChild", kCapActions}, {"ClickChildAt", kCapActions},

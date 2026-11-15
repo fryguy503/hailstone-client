@@ -1220,6 +1220,18 @@ return {}
     CHECK_MESSAGE(fails.empty(), (fails.empty() ? "" : fails.front()));
 }
 
+TEST_CASE("UI evolving transfer: confirmation is bound to the approved pair and revision in both packs") {
+    const auto root = ui_dir().parent_path();
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    const auto path = root.generic_string();
+    lua_pushlstring(L, path.data(), path.size());
+    lua_setglobal(L, "CLIENT_ROOT");
+    const int rc = luaL_dofile(L, (root / "tests" / "item_exp_transfer_ui_test.lua").string().c_str());
+    CHECK_MESSAGE(rc == LUA_OK, (rc == LUA_OK ? "" : lua_tostring(L, -1)));
+    lua_close(L);
+}
+
 // The modern chat's item links in its input (ui/modern/lib/chatlinks.lua): tags shown as names, and back as tags when
 // the line is sent. The same item linked twice once found its second name inside the first tag put back and sent a
 // tag in a tag.

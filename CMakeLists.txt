@@ -181,6 +181,7 @@ add_library(hailstone_engine STATIC
   src/net/game_connection_vehicle.cpp
   src/net/game_connection_items.cpp
   src/net/game_connection_augments.cpp
+  src/net/game_connection_evolving.cpp
   src/net/game_connection_item_use.cpp
   src/net/game_connection_commerce.cpp
   src/net/game_connection_bank.cpp
@@ -259,6 +260,7 @@ add_library(hailstone_engine STATIC
   src/net/pet_packets.cpp
   src/net/item_packets.cpp
   src/net/augment_packets.cpp
+  src/net/evolving_packets.cpp
   src/net/spell_packets.cpp
   src/game/spell_description.cpp
   src/game/item_compare.cpp
@@ -1226,6 +1228,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/eye_control_test.cpp
     tests/item_packets_test.cpp
     tests/augments_test.cpp
+    tests/evolving_transfer_test.cpp
     tests/item_preview_test.cpp
     tests/doors_test.cpp
     tests/touching_switch_test.cpp
@@ -1280,6 +1283,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/reward_selection_test.cpp
     tests/reward_connection_test.cpp
     tests/lua_eq_rewards_test.cpp
+    tests/lua_eq_evolving_test.cpp
     tests/reward_selection_ui_test.cpp
     tests/achievement_packets_test.cpp
     tests/achievements_test.cpp
