@@ -1114,6 +1114,12 @@ scene is multisampled: the pipelines set `shaders/coverage.glsl`'s `kAlphaToCove
 ramp about one pixel wide around the reference, capped at 0.05 of alpha so far minified textures do not leave
 specks against the sky.
 
+The zone colour and depth shaders turn that ramp into a sample mask and intersect it with the LOD fade's mask.
+Their pipelines leave fixed-function alpha-to-coverage off: combining it with shader sample-mask output and
+fragment discard made terrain and buildings disappear on Radeon RX 9070 XT. Both passes use the same pixel noise
+and coverage helper, so cut-out edges keep the same samples when the depth pre-pass is enabled. Actor and object
+pipelines continue to use hardware alpha-to-coverage.
+
 ## Modern lighting
 
 `render/scene_lighting.h` (`daylight`, `make_scene_lighting`) and `shaders/zone.frag`, `actor.frag`, `object.frag`:
@@ -1189,8 +1195,14 @@ specks against the sky.
   over a face seen up close. Contact shading within arm's reach of the camera is lost with them. The samples' shade is scaled by AoView's intensity 12 over the 12 samples: the
   bounded kernel weighs a mid-range sample less than the old one (whose weight grew as 1/|v|, which blotched the
   near ones black), and 12 keeps a contact corner's shade near the old depth (tests/lighting_test.cpp). The post pass averages the 4 x 4 block weighted by depth and darkens the scene
-  by it (strength 0.85) before the exposure. Applied to everything, not to the ambient alone (there is no depth
-  prepass), so it is kept to contact shadows.
+  by it (strength 0.85) before the exposure. It darkens the rendered scene colour, including every lighting term,
+  so it is kept to contact shadows.
+
+  With MSAA and AO active, a global dependency from colour-output writes to fragment sampled reads follows the
+  final depth image transition. This compatibility measure stabilizes grass AO on Radeon RX 9070 XT. Grass keeps
+  writing depth; AO, distance blur and shafts use the final depth. Hidden zero-height lawn blades stay collapsed
+  at their root with finite current and previous motion positions (`shaders/lawn.vert`, `blade_at`). See
+  [World rendering qualification](unknowns.md#world-rendering) for validation limits.
 
 - **View distance and haze** (`render::modern_view`, `set_haze_linear`, `apply_haze` in `shaders/lighting.glsl`): the far
   plane is the classic far plane x `display.view_distance` (not under water, in lava or thick-fog regions, which keep the

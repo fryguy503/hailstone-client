@@ -105,7 +105,10 @@ vec3 blade_at(float sec, vec3 root, float height, float lean_turn, float lean, f
         bend *= limit / reach;
         reach = limit;
     }
-    rise = height * (1.0 - 0.5 * (reach * reach) / (height * height)) * (1.0 - 0.25 * press);
+    // Hidden blades have zero height: keep them collapsed at the root rather than sending 0/0 to gl_Position.
+    float bend_fraction = 0.0;
+    if (height > 0.0) bend_fraction = reach / height;
+    rise = height * (1.0 - 0.5 * bend_fraction * bend_fraction) * (1.0 - 0.25 * press);
     across = vec3(cos(facing), sin(facing), 0.0);
     // Narrow at the root, widest a third of the way up, to a point.
     float profile = (1.0 - t) * (0.55 + 1.35 * t);

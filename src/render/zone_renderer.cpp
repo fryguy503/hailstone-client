@@ -1744,8 +1744,8 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     ds.pDynamicStates = dyn;
     VkPipelineRenderingCreateInfo ri = vk_.scene_rendering();
 
-    // Multisampled, the opaque pass turns the alpha test into coverage: alpha-to-coverage, and the fragment
-    // shader's constant_id 0 makes its alpha the coverage (shaders/zone.frag, actor.frag, object.frag).
+    // Multisampled, the zone shaders combine alpha coverage with the LOD mask themselves. Fixed-function
+    // alpha-to-coverage plus SampleMask and discard can hide all zone geometry on Radeon RX 9070 XT.
     const VkBool32 coverage = vk_.scene_samples() != VK_SAMPLE_COUNT_1_BIT ? VK_TRUE : VK_FALSE;
     // constant_id 1: the scene's samples, which a level of detail's fade shares out (lighting.glsl lod_fade_samples).
     struct Spec {
@@ -1772,7 +1772,7 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
 
     for (int pass = 0; pass < 3; ++pass) {
         spec_value.coverage = pass == 0 ? coverage : VK_FALSE;
-        ms.alphaToCoverageEnable = spec_value.coverage;
+        ms.alphaToCoverageEnable = VK_FALSE;
         VkPipelineDepthStencilStateCreateInfo dss{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         dss.depthTestEnable = VK_TRUE;
         dss.depthWriteEnable = pass == 0 ? VK_TRUE : VK_FALSE;
@@ -1808,9 +1808,8 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
                  "vkCreateGraphicsPipelines");
     }
 
-    // The depth pre-pass: the same vertex shader, a fragment shader that only tests alpha, no colour writes (the
-    // colour attachment stays for alpha-to-coverage), depth written. Its shader is optional: an install without it
-    // draws the single pass.
+    // The depth pre-pass uses the same vertex shader and matching alpha/sample-mask tests, writes depth and no
+    // colour. Its shader is optional: an install without it draws the single pass.
     const std::filesystem::path depth_shader = shader_dir / "zone_depth.frag.spv";
     std::error_code missing;
     if (depth_prepass_ && !std::filesystem::exists(depth_shader, missing)) {
@@ -1820,7 +1819,7 @@ void ZoneRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
     if (depth_prepass_) {
         // Both pipelines take the opaque pass's coverage, so an edge covers the same samples in each.
         spec_value.coverage = coverage;
-        ms.alphaToCoverageEnable = coverage;
+        ms.alphaToCoverageEnable = VK_FALSE;
         VkPipelineColorBlendAttachmentState ba{};
         // The depth-only pass writes nothing; the colour pass over it writes the opaque pass's motion.
         SceneBlends blends = vk_.scene_blends(ba, SceneOutput::Nothing);

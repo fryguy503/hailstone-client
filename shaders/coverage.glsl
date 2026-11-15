@@ -1,8 +1,9 @@
 // Alpha-to-coverage for the opaque pass (render/vk_context.h SceneOptions msaa): the pipeline sets constant_id 0
-// when the scene is multisampled, and the alpha test then becomes the coverage of the pixel's samples.
+// when the scene is multisampled, and the alpha test then becomes the coverage of the pixel's samples. Actors and
+// objects use fixed-function coverage; the zone shaders combine it with their LOD sample mask themselves.
 
 layout(constant_id = 0) const bool kAlphaToCoverage = false;
-// The scene's samples a pixel (1, 2, 4 or 8; render/zone_renderer.cpp create_pipelines).
+// The scene's actual samples a pixel (render/zone_renderer.cpp create_pipelines).
 layout(constant_id = 1) const int kSceneSamples = 1;
 
 // The samples of a pixel a level of detail covers in its fades (render/lod_bands.h lod_presence), as gl_SampleMask:
@@ -42,6 +43,20 @@ bool alpha_test(float alpha, float ref, float opacity, out float out_alpha) {
     }
     out_alpha = alpha * opacity;
     return !(ref > 0.0 && alpha < ref);
+}
+
+// The zone's alpha coverage as samples, without fixed-function alpha-to-coverage: combining that state with
+// SampleMask and discard loses geometry on some drivers. Round and turn with stable pixel noise, shifted and
+// transposed so partial alpha does not favour one LOD. Both passes share this mask; other passes leave the LOD alone.
+int alpha_coverage_samples(float alpha, vec2 frag) {
+    if (!kAlphaToCoverage) return -1;
+    float n = fract(52.9829189 * fract(dot(frag.yx + vec2(17.0, 53.0), vec2(0.06711056, 0.00583715))));
+    int count = kSceneSamples;
+    int keep = clamp(int(floor(clamp(alpha, 0.0, 1.0) * float(count) + n)), 0, count);
+    int mask = (1 << keep) - 1;
+    int turn = int(fract(n * 7.0) * float(count)) % count;
+    int all = (1 << count) - 1;
+    return ((mask << turn) | (mask >> (count - turn))) & all;
 }
 
 // A neighbour's part of the land (render/zone_renderer.cpp Draw::land_fade): each triangle is drawn twice, with the

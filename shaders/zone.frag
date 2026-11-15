@@ -566,11 +566,10 @@ void main() {
     if (reveal_discard(v_world, gl_FragCoord.xy, scene.reveal_origin, scene.reveal_axis, scene.reveal_shape,
                        scene.reveal_roof))
         discard;
-    // A level of detail in its fade into the next (render/lod_bands.h): each sample shows one of the two. The mask is
-    // written on every path (an unwritten one is undefined), and zone_depth.frag writes the same.
+    // A level of detail in its fade into the next (render/lod_bands.h): each sample shows one of the two. Its mask
+    // is combined with the alpha test below, as in zone_depth.frag.
     int lod_samples = lod_fade_samples((pc.tex2.z & kFlagLodFade) != 0u, v_lod_distance, pc.extra3, gl_FragCoord.xy);
     if (lod_samples == 0) discard;
-    gl_SampleMask[0] = lod_samples;
     // A neighbour's part of the land: this draw's ground or the other's (coverage.glsl land_blend_discard).
     if (land_blend_discard(pc.tex2.z, v_color2.a, v_world)) discard;
     uint mode = pc.tex2.y;
@@ -725,6 +724,8 @@ void main() {
     // Alpha test, GREATEREQUAL against the reference (0 = off), or coverage when multisampled.
     float out_alpha;
     if (!alpha_test(alpha, pc.params.x, pc.params.y, out_alpha)) discard;
+    // Write every surviving path's coverage explicitly, including the alpha-tested edges under MSAA.
+    gl_SampleMask[0] = lod_samples & alpha_coverage_samples(out_alpha, gl_FragCoord.xy);
     // The modern water over the copies is the whole result (it blends the floor itself).
     if (g_modern && (flags & kWaterCopies) != 0u) out_alpha = 1.0;
     // The neighbour zones' debugging view: what comes from where.

@@ -1603,14 +1603,27 @@ void VkContext::begin_overlay(const FrameInfo& frame) {
     VkCommandBuffer cmd = frame.cmd;
     vkCmdEndRendering(cmd);
 
+    const bool ao = taken && scene_options_.ambient_occlusion && ao_pipeline_;
     // The depth for the AO and the post pass (a depth resolve runs in the colour output stage).
     const Image& depth = depth_resolved_.image ? depth_resolved_ : depth_;
     const auto depth_sync = depth_frame_sync(scene_samples_).sampled;
     image_barrier(cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, depth_sync.stages, depth_sync.access,
                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    if (ao && depth_resolved_.image) {
+        // Global resolve-to-sampling visibility keeps AO stable over grass on RX 9070, in addition to the
+        // image transition above. Keep the grass depth and synchronize only the resolve writer and AO reader.
+        VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.memoryBarrierCount = 1;
+        dependency.pMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(cmd, &dependency);
+    }
     // The ambient occlusion (shaders/ao.frag), when this frame's view was given.
-    const bool ao = taken && scene_options_.ambient_occlusion && ao_pipeline_;
     float depth_x = 0.0f, depth_y = 0.0f; // view depth = y / (d + x), reverse Z (FlyCamera::projection)
     if (taken) {
         float n = taken->near_plane, f = taken->far_plane;
