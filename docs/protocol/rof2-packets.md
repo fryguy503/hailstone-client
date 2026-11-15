@@ -479,6 +479,7 @@ Chat out (OP_ChannelMessage 0x2b2d) is echoed locally with the client's own temp
 | Packet | Dir | Opcode | Layout |
 |---|---|---|---|
 | WhoAllRequest | C→Z | 0x674b | 156 B: `char[64]` name, 64 B, u32 race, class, level low, level high, GM (1 / 0), guild (or -2 friends, -3 LFG, -4 traders, -5 buyers), type (0 zone, 2 corpse, 3 all, 4 ripoff); 0xffffffff = no filter |
+| FriendsWho | C→Z | 0x3956 | ASCII `0` (zone) or `1` (all), then each saved friend name prefixed by a comma, then NUL; no trailing comma or count. The server answers with WhoAllResponse |
 | WhoAllResponse | Z→C | 0x578c | 64 B header (u32 id, u32 title eqstr, `char[27]` rule, u8, u32, u32 footer eqstr @+0x28, u32 footer count @+0x2c, 3×u32, u32 entries @+0x3c), then per player u32 format, u32 flags, u32 PID eqstr, name, u32 rank eqstr, guild, u32, u32 extra eqstr, u32 zone eqstr, u32 zone, [flags 0x200: zone name], u32 class, level, race, account, u32 |
 | RandomReq | C→Z | 0x7b10 | 8 B: u32 low, u32 high (the first word and the rest of the line, `atoi`; 0..0 is 0..100 on EQEmu) |
 | RandomReply | Z→C | 0x106b | 76 B: u32 low, high, result, `char[64]` name; shown as 1086 and 1087 unless the roller is ignored |
@@ -492,6 +493,8 @@ Chat out (OP_ChannelMessage 0x2b2d) is echoed locally with the client's own temp
 | LFPGetMatchesResponse | Z→C | 0x22c6 | u32 (skipped), then {comments, i16 from, i16 to, u32 classes, i16 count, count × {name, i16 class, level, zone, guild}} |
 | Consent / ConsentDeny | C→Z | 0x1fd1 / 0x7a45 | the name, NUL-terminated |
 | SpawnAppearance 21 / 24 | C→Z | 0x0971 | anonymous flags (1 anonymous, 2 roleplaying) / AFK; other spawns' 18 linkdead, 20 GM, 22 guild id, 23 guild rank, 52 guild show, 53 offline mode update `game::Spawn` (the guild lines: Guilds below) |
+
+`/who friends` (also the localised `friend` word and `/who all friends`) sends the saved list through FriendsWho instead of WhoAllRequest. The scope, separators and final NUL follow Who_BuildAndSendRequest (`0x524a8a`, send at `0x524c1a`); an empty list shows eqstr 12308 locally (`0x524c94`). The exact current UCS world's prefix is removed from saved names (`World.Alice` becomes `Alice`); other worlds and case-mismatched prefixes stay, as UniversalChatProxy's friend getter (`0x7efa90`) does. Stock EQEmu selects online friends in world and supplies the normal who response, omitting offline friends and hiding anonymous/roleplaying friends' level, class, race and zone. Its world handler treats the leading scope token as an unmatched friend name and searches the whole world for either scope. Hailstone uses the response's format and fields without filling in hidden details from local spawns. Packet and loopback mock-server tests cover the request and display; a live RoF2 comparison remains open.
 
 Tried live against EQEmu with two clients: `/who` (zone) and `/who all bard` (world, truncated by the server with "Your who request was cut short... too many players."), `/random` with the 1086/1087 lines on both clients, `/loc`, `/time`, `/played`, `/emote` (shown to the sender; the other client was outside EQEmu's emote range), `/tell` with the server's echo, `/reply` and `/rtarget`, `/afk`, `/anon`, `/lfg`, the socials (`/smile`, `/smile <name>`, `/cheer` seen by the other client), `/follow`.
 

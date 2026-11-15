@@ -16,6 +16,10 @@ What the client does not implement yet, or implements with an approximation it c
 - The 64-member array layout and the 1080-byte invitation are extensions beyond RoF2, documented in `docs/protocol/rof2-packets.md`. PR #5134 hard-caps its model and serializers at twelve, so its membership rule alone cannot enable 64. A server that sends expanded rosters and a live roster capture would establish interoperability above twelve.
 - Declining sends action 4, as RoF2 does (`Send_Opcode_0x7121` @0x668710). PR #5134 reads action 4 as a legacy camp destruction, so against that server a decline reaches its camp handler instead of refusing the invitation; that is the server's to fix, since RoF2 sends the same. An unanswered invitation that times out sends nothing: whether the original's dialog sends action 4 on its 100-second timeout is not traced; the confirmation dialog's timeout path (dialog type 0xc) would settle it.
 
+## Social and friends
+
+- `/who friends` now sends OP_FriendsWho and uses the ordinary who response. Native scope/name serialization and the empty-list guard are confirmed; packet and loopback mock-server tests cover online, anonymous/roleplaying and omitted offline friends against stock EQEmu's response contract. A live comparison with RoF2, including cross-zone friends and online/offline transitions, remains untested.
+
 ## Shared archive memory
 
 - `assets.shared_memory=auto` (docs/layout.md "Shared archive memory") is measured on Linux only, one and two clients

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `/who friends` now asks the server which friends are online and shows their who information, respecting anonymity, instead of printing the saved names. `/who all friends` uses the same lookup
 - With the Temporal or AMD FSR 3.1 upscaler: characters cost less CPU time each frame again. Keeping their last frame's pose for the upscaler read it back from memory meant only for writing, and reallocated it every frame
 - Texture packs with generated trees: the trees sway in the wind again, each branch moving as one piece, without the flicker they had before (rebuild a pack's trees in the Texture Studio to get the pines without their branch-end slabs)
 - Texture packs with generated trees: pines no longer show flat slabs of needles across their branches when seen from beside. Rebuild a pack's trees in the Texture Studio to get them

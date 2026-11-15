@@ -35,7 +35,7 @@ struct WhoContext {
 
 struct WhoParse {
     std::optional<std::uint32_t> error; // eqstr id to show instead of sending
-    bool friends = false;               // /who friends (OP_FriendsWho; not sent yet)
+    bool friends = false;               // /who friends (OP_FriendsWho)
     std::uint32_t name_set = 0;
     std::string name;
     std::uint32_t race = 0xffffffff, class_ = 0xffffffff;

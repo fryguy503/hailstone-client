@@ -102,6 +102,7 @@ public:
     void update();
     bool connected() const;
     bool failed() const;
+    std::string_view server_short_name() const { return info_.server_short_name; }
     bool send_command(const std::string& text);
     // A mail command ("[getheaders" ...), see encode_mail_bracket_command.
     bool send_mail_command(const std::string& text);

@@ -1289,6 +1289,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/lua_eq_achievements_test.cpp
     tests/achievements_ui_test.cpp
     tests/social_test.cpp
+    tests/friends_who_test.cpp
     tests/options_social_test.cpp
     tests/player_market_test.cpp
     tests/barter_test.cpp

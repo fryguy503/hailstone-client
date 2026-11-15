@@ -56,6 +56,21 @@ std::optional<WhoRequest> decode_who_request(const AppPacket& p) {
     });
 }
 
+AppPacket encode_friends_who(const std::vector<std::string>& friends, bool all, std::string_view server_short_name) {
+    ByteWriter w;
+    w.le<std::uint8_t>(all ? '1' : '0');
+    for (const auto& name : friends) {
+        std::string_view text = name;
+        if (!server_short_name.empty() && text.starts_with(server_short_name) &&
+            text.size() > server_short_name.size() && text[server_short_name.size()] == '.')
+            text.remove_prefix(server_short_name.size() + 1);
+        w.le<std::uint8_t>(',');
+        w.bytes({reinterpret_cast<const std::byte*>(text.data()), text.size()});
+    }
+    w.le<std::uint8_t>(0);
+    return make_packet(Op::FriendsWho, std::move(w));
+}
+
 AppPacket encode(const WhoResponse& v) {
     ByteWriter w;
     w.le<std::uint32_t>(v.id);

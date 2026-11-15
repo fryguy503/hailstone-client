@@ -22,6 +22,11 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [ ] Live acceptance on a fellowship server, including cross-zone invitations/roster updates, XP sharing and camp creation/destruction. Stock EQEmu sends no fellowship packets; EQEmu PR #5134 (unmerged) serializes twelve slots, so expanded rosters need matching server support.
 - [x] Native vitality gauges and inventory bars in both packs, campsite categories loaded from the player's resources, DBString type-0 kit descriptions, gamepad leader markers and a server-expiry countdown. Category masks and description lookup were checked against the original handlers.
 
+### Social and friends
+
+- [x] `/who friends` sends OP_FriendsWho with RoF2's zone/all scope and saved names and displays the server's normal who results; native serialization checked, packet and mock-server coverage includes empty lists, online friends, anonymous/roleplaying friends and omitted offline friends.
+- [ ] Compare `/who friends` and `/who all friends` live with RoF2: online/offline transitions, friends in other zones and anonymous/roleplaying friends.
+
 ### Combat and spells (do first)
 - [x] Spell Hit Modes: Normal, Abbreviated and Number Only for direct damage, DoTs, heals and HoTs, preserving full spell and melee log lines and incoming-chat hooks. Structured message and UI tests; live gameplay remains unverified (docs/mechanics.md "Spell hit modes").
 - [x] Personal and guild tribute: received bonus items feed local stats/effects and retire on received deactivation, selection changes, opt-out and context changes; guild benefit controls enforce received permissions, and guild platinum donations wait for matching replies. Packet, mechanics and mock/UI regressions; full live tribute workflow acceptance remains open.

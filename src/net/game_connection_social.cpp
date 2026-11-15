@@ -723,10 +723,9 @@ void GameConnection::who_command(const std::string& args) {
     auto w = game::parse_who_args(args, ctx, strings_);
     if (w.error) return system(*w.error);
     if (w.friends) {
-        // OP_FriendsWho (the friends list as text): not ported yet (docs/unknowns.md).
         if (social_.friends.empty()) return system(12308);
-        system(12307);
-        for (const auto& f : social_.friends) chat(ChatEvent::Kind::System, f);
+        send_zone(encode_friends_who(social_.friends, w.type == 3,
+                                    chat_server_ ? chat_server_->server_short_name() : std::string_view{}));
         return;
     }
     WhoRequest r;

@@ -6,6 +6,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -221,6 +222,34 @@ TEST_CASE("who: filter words (Who_BuildAndSendRequest)") {
     CHECK(w.guild == 7);
     CHECK(game::parse_who_args("GM", ctx, s).gm == 1);
     CHECK(game::parse_who_args("human", ctx, s).race == 1);
+    for (const char* args : {"friend", "friends", "all friend", "all friends", "FRIENDS ALL"}) {
+        w = game::parse_who_args(args, ctx, s);
+        CHECK_FALSE(w.error);
+        CHECK(w.friends);
+        CHECK(w.guild == static_cast<std::uint32_t>(-2));
+    }
+    s.set(3112, "amigos");
+    CHECK(game::parse_who_args("all amigos", ctx, s).friends);
+}
+
+TEST_CASE("who: OP_FriendsWho carries the RoF2 scope and comma-separated saved list") {
+    auto p = encode_friends_who({"Bob", "Other.Alice", "Anon"}, false);
+    CHECK(p.opcode == to_wire(Op::FriendsWho));
+    CHECK(p.opcode == 0x3956);
+    const std::string expected = "0,Bob,Other.Alice,Anon";
+    auto bytes = bytes_of(p);
+    REQUIRE(bytes.size() == expected.size() + 1);
+    CHECK(std::equal(expected.begin(), expected.end(), bytes.begin()));
+    CHECK(bytes.back() == 0);
+
+    p = encode_friends_who({"Solo"}, true);
+    bytes = bytes_of(p);
+    CHECK(bytes == std::vector<std::uint8_t>{'1', ',', 'S', 'o', 'l', 'o', 0});
+
+    p = encode_friends_who({"World.Bob", "Other.Alice", "world.Case", "Worldly.Name", "Bare"}, true, "World");
+    bytes = bytes_of(p);
+    CHECK(str_at(bytes, 0) == "1,Bob,Other.Alice,world.Case,Worldly.Name,Bare");
+    CHECK(bytes.size() == std::strlen("1,Bob,Other.Alice,world.Case,Worldly.Name,Bare") + 1);
 }
 
 TEST_CASE("who: OP_WhoAllResponse decodes and formats like HandleWhoAllResponse") {

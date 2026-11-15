@@ -40,6 +40,14 @@ inline constexpr std::size_t kWhoRequestSize = 156;
 AppPacket encode(const WhoRequest& v);
 std::optional<WhoRequest> decode_who_request(const AppPacket& p);
 
+// OP_FriendsWho (0x3956), client → zone (Who_BuildAndSendRequest @0x524a8a):
+// ASCII '0' (zone) or '1' (all), then each saved friend name prefixed by a comma,
+// then NUL; no trailing comma. UniversalChatProxy's friend getter @0x7efa90
+// strips the exact current world's prefix ("World.") and keeps other worlds.
+// Replies use OP_WhoAllResponse.
+AppPacket encode_friends_who(const std::vector<std::string>& friends, bool all,
+                            std::string_view server_short_name = {});
+
 // OP_WhoAllResponse (0x578c), zone → client, as HandleWhoAllResponse
 // @0x4bc010 reads it (EQEmu ENCODE(OP_WhoAllResponse) writes the same): a
 // 64-byte header (u32 id, u32 title eqstr, char[27] rule line, u8, u32,
