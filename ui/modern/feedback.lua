@@ -1,6 +1,7 @@
 -- Send feedback: replaces the game's FeedbackWindow (/feedback). The character's name, the feedback in a large text
--- box, Cancel and Send. Every piece is the window's child (eq.SetWindowText, eq.ClickChild), so what the server gets
+-- box, Cancel and Send. Every piece is the window's child (hs.SetWindowText, hs.ClickChild), so what the server gets
 -- is the window's (the position and heading go with it).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -28,6 +29,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Send Feedback", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Send Feedback", WINDOW_OPTS, drawWindow)
 end)

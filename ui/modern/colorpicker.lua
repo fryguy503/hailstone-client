@@ -1,8 +1,9 @@
 -- Colour picker: replaces the game's ColorPickerWnd (opened by the tint window's brush, the map's colour buttons, the
 -- label window and the options' user colours). A large preview of the colour with its hex value, red / green / blue
 -- as sliders with number boxes beside them, the window's fifteen preset swatches, Accept and Cancel. The sliders,
--- boxes and swatches are the window's own (eq.SetSlider, eq.SetWindowText, eq.ClickChild): the window keeps the
+-- boxes and swatches are the window's own (hs.SetSlider, hs.SetWindowText, hs.ClickChild): the window keeps the
 -- three values in step and Accept hands the colour to whoever opened it. Cancel is the close box.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -74,7 +75,7 @@ local function drawWindow(x, y, w, h, s)
     local sr, sg, sb = K.Tint(WINDOW, id)
     if K.Swatch("##" .. id, sr, sg, sb, sz, s, { tooltip = K.Hex(sr, sg, sb),
         selected = K.Hex(sr, sg, sb) == hex }) then
-      eq.ClickChild(WINDOW, id, "left")
+      API.windows.ClickChild(WINDOW, id, "left")
     end
   end
   -- the buttons at the bottom
@@ -86,10 +87,10 @@ local function drawWindow(x, y, w, h, s)
   W.Button(WINDOW, "CPW_Accept_Button", "Accept", { primary = true, height = bh,
     width = (ui.GetContentRegionAvail() - 8) / 2, tooltip = "Use this color" })
   ui.SameLine()
-  if ui.Button("Cancel##cpw", -1, bh) then eq.ShowWindow(WINDOW, false) end
+  if ui.Button("Cancel##cpw", -1, bh) then API.windows.Show(WINDOW, false) end
 end
 
 ui.window("Color Picker", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Color", WINDOW_OPTS, drawWindow)
 end)

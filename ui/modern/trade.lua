@@ -1,12 +1,13 @@
 -- Trade: replaces the game's TradeWnd (a trade with another player). Two offers, theirs and yours, as cards side by
 -- side (one above the other when the window is narrow): the eight item slots of each (tiles that rewrap to the
 -- width), their coin and your coin piles, then Trade and Cancel.
--- The slots and buttons are the game's (eq.SlotItem / eq.ClickChild on TRDW_TradeSlot0..15, TRDW_MyMoney0..3,
+-- The slots and buttons are the game's (hs.SlotItem / hs.ClickChild on TRDW_TradeSlot0..15, TRDW_MyMoney0..3,
 -- TRDW_Trade_Button, TRDW_Cancel_Button): drop an item from your bags on one of your slots to offer it, click your
 -- coin piles with coin on the cursor to add it, hold the right button on any item to see it.
--- Who has accepted is eq.TradeState()'s myReady / theirReady (the stock window's flags; any change to an offer
+-- Who has accepted is hs.TradeState()'s myReady / theirReady (the stock window's flags; any change to an offer
 -- clears both): an accepted offer's card is framed and tagged "Accepted", a line above the buttons says where the
 -- trade stands, and the partner's accept flashes the frame for a moment so it is not missed.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local TC = dofile("lib/trade_common.lua")
@@ -20,7 +21,7 @@ local MY_MONEY = { "TRDW_MyMoney0", "TRDW_MyMoney1", "TRDW_MyMoney2", "TRDW_MyMo
 
 local function filled(first, last)
   local n = 0
-  for i = first, last do if eq.SlotItem(WINDOW, SLOT_IDS[i]) then n = n + 1 end end
+  for i = first, last do if API.inventory.SlotItem(WINDOW, SLOT_IDS[i]) then n = n + 1 end end
   return n
 end
 
@@ -116,7 +117,7 @@ local function body(x, y, w, h, s)
   local btnH = lh + 10 * s
   local partner = W.Text(WINDOW, "TRDW_HisName")
   local me = W.Text(WINDOW, "TRDW_MyName")
-  local t = eq.TradeState and eq.TradeState() or {}
+  local t = API.trade.State and API.trade.State() or {}
   local mine, theirs = t.myReady == true, t.theirReady == true
   local now = ui.GetTime()
   if theirs then theirSince = theirSince or now else theirSince = nil end
@@ -153,6 +154,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Trade", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Trade", OPTS, body)
 end)

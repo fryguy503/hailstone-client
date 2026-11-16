@@ -3,6 +3,7 @@
 -- an address (typed with the on-screen keys), text typed into the page where it has its cursor, the pad's pointer
 -- for the page (cursor mode: the left stick moves it, A clicks, B leaves), closing the tab. LB / RB go through the
 -- tabs. The mouse and keyboard work on the page as they do in the Modern pack.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -35,7 +36,7 @@ ui.window("Web Browser", function()
     return
   end
   T.frame()
-  local tabs = eq.WebTabs()
+  local tabs = API.web.Tabs()
   -- (the tabs seen last frame and this one: two tables used in turn, not a new one a frame)
   local seen = spare
   for id in pairs(seen) do seen[id] = nil end
@@ -45,15 +46,15 @@ ui.window("Web Browser", function()
   end
   known, spare = seen, known
   if current and not seen[current] then current = tabs[#tabs] end
-  local s = current and eq.WebState(current)
-  local subtitle = not eq.WebAvailable() and "Not installed"
+  local s = current and API.web.State(current)
+  local subtitle = not API.web.Available() and "Not installed"
     or s and string.format("%s (%d of %d)", title(s), tabIndex(tabs, current), #tabs)
     or "No page open"
   local hints = CH.hints(st, HINTS)
   if W.begin("Web Browser", { w = 1700, h = 1000, title = "Web Browser", subtitle = subtitle, hints = hints }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
-    if not eq.WebAvailable() then
+    if not API.web.Available() then
       ui.SetCursorPos(x0 - wx, y0 - wy)
       T.heading("The in-game browser is not installed: web pages open in your own browser.", x1 - x0)
     elseif not CH.modal(st, x0, y0, x1, y1) then
@@ -69,10 +70,10 @@ ui.window("Web Browser", function()
         CH.type(st, "An address", s and s.url ~= "about:blank" and s.url or "", function(t)
           if not t:match("%S") then return end
           local ok, why
-          if open then ok, why = eq.WebNavigate(current, t)
+          if open then ok, why = API.web.Navigate(current, t)
           else
             local id
-            id, why = eq.WebOpen(t)
+            id, why = API.web.Open(t)
             ok = id ~= nil
             if ok then current = id end -- (a failed open keeps the tab that was in front)
           end
@@ -80,23 +81,23 @@ ui.window("Web Browser", function()
         end, { max = 1024, from = "addr" })
       end
       if open then
-        if button(2, "back", "Back", { align = 0, disabled = not s.canBack }) and s.canBack then eq.WebNav(current, "back") end
+        if button(2, "back", "Back", { align = 0, disabled = not s.canBack }) and s.canBack then API.web.Nav(current, "back") end
         if button(3, "fwd", "Forward", { align = 0, disabled = not s.canForward }) and s.canForward then
-          eq.WebNav(current, "forward")
+          API.web.Nav(current, "forward")
         end
         if button(4, "reload", s.loading and "Stop" or "Reload", { align = 0 }) then
-          eq.WebNav(current, s.loading and "stop" or "reload")
+          API.web.Nav(current, s.loading and "stop" or "reload")
         end
         if button(5, "type", "Type into the page", { align = 0, sub = "Where the page's cursor is" }) then
-          CH.type(st, "Text for the page", "", function(t) if t ~= "" then eq.WebText(current, t) end end,
+          CH.type(st, "Text for the page", "", function(t) if t ~= "" then API.web.Text(current, t) end end,
             { max = 1024, from = "type" })
         end
         if button(6, "point", "Point at the page", { align = 0, sub = "Stick moves, A clicks, B ends" }) then
           pad.set_mode("cursor")
         end
-        if button(7, "close", "Close the tab", { align = 0 }) then eq.WebClose(current) end
+        if button(7, "close", "Close the tab", { align = 0 }) then API.web.Close(current) end
       elseif button(2, "new", "New tab", { align = 0 }) then
-        local id, why = eq.WebOpen("about:blank")
+        local id, why = API.web.Open("about:blank")
         if id then current = id end
         problem = not id and (why or "The browser could not open a page.") or nil
       end
@@ -117,7 +118,7 @@ ui.window("Web Browser", function()
       end
       ui.SetCursorPos(x0 - wx, py0 - wy)
       if open then
-        eq.WebView(current, math.floor(px1 - x0), math.floor(y1 - py0))
+        API.web.View(current, math.floor(px1 - x0), math.floor(y1 - py0))
       elseif s and s.closed then
         T.draw(x0, py0, "This page was closed: " .. (s.why ~= "" and s.why or "the browser stopped"), C.faint)
       else
@@ -125,5 +126,5 @@ ui.window("Web Browser", function()
       end
     end
   end
-  if CH.back(st, W.finish()) then eq.ShowWindow(WIN, false) end
+  if CH.back(st, W.finish()) then API.windows.Show(WIN, false) end
 end)

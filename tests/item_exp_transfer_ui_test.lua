@@ -1,6 +1,6 @@
 CLIENT_ROOT = CLIENT_ROOT or (arg and arg[1]) or "."
+local attachUI = assert(loadfile(CLIENT_ROOT .. "/tests/lua_ui_api_mock.lua"))()
 for _, pack in ipairs({ "modern", "gamepad" }) do
-  local transfer = dofile(CLIENT_ROOT .. "/ui/" .. pack .. "/lib/item_exp_transfer.lua")
   local function nop() end
   local clicks, lines, offered, selected, confirmed = {}, {}, {}, {}, {}
   local choice
@@ -15,10 +15,12 @@ for _, pack in ipairs({ "modern", "gamepad" }) do
       return false
     end,
   }
-  eq = {
+  hs = {
     ItemExpTransferSelect=function(role,id) selected[#selected+1]={role,id};return true end,
     ItemExpTransferConfirm=function(...) confirmed[#confirmed+1]={...};return true end,
   }
+  attachUI(hs)
+  local transfer = dofile(CLIENT_ROOT .. "/ui/" .. pack .. "/lib/item_exp_transfer.lua")
   local src, dst, third = "18446744073709551615", "9007199254740993", "9007199254740994"
   local revision = "18446744073709551614"
   local items = {

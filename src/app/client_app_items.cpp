@@ -33,11 +33,11 @@ void ClientApp::update_item_input() {
     // Hailstone (a deliberate difference, game::opens_player_menu): another player's menu over them, where the
     // original inspects; with the switch off, context menus off or the player down, the original's right click.
     // The gamepad's Interact keeps the original's (right_click_spawn).
-    if (player_menu_ && eq_api_) {
+    if (player_menu_ && ui_api_) {
         const auto& world = conn_->world();
         auto it = world.spawns.find(picked.id);
         if (it != world.spawns.end() && game::opens_player_menu(it->second, picked.id == world.player_id) &&
-            eq_api_->open_player_menu(picked.id, right_down_pos_.x, right_down_pos_.y)) {
+            ui_api_->open_player_menu(picked.id, right_down_pos_.x, right_down_pos_.y)) {
             conn_->set_target(picked.id);
             return;
         }
@@ -173,11 +173,11 @@ void ClientApp::draw_items() {
             const auto& inv = conn_->inventory();
             if (opts_.show_items & 1) {
                 item_ui_->toggle_inventory();
-                if (eq_api_) eq_api_->show("InventoryWindow", true);
+                if (ui_api_) ui_api_->show("InventoryWindow", true);
                 for (std::int16_t s = net::kSlotGeneral1; s <= net::kSlotGeneral10; ++s)
                     if (const auto* it = inv.at(net::ItemSlot::possessions(s)); it && it->is_bag()) {
                         item_ui_->open_bag(s);
-                        if (eq_api_) eq_api_->right_click_item(net::ItemSlot::possessions(s));
+                        if (ui_api_) ui_api_->right_click_item(net::ItemSlot::possessions(s));
                     }
             }
             if (opts_.show_items & 2) {
@@ -194,10 +194,10 @@ void ClientApp::draw_items() {
                         break;
                     }
             }
-            if (opts_.show_items & 32) eq_host_.show_spell(200, false); // a spell display (testing)
-            if ((opts_.show_items & 16) && eq_api_) { // the EQ menu, its Character submenu open (testing)
-                eq_api_->click_child("EQMainWnd", "EQButton");
-                eq_api_->cascade_hover(0, 2);
+            if (opts_.show_items & 32) ui_host_.show_spell(200, false); // a spell display (testing)
+            if ((opts_.show_items & 16) && ui_api_) { // the EQ menu, its Character submenu open (testing)
+                ui_api_->click_child("EQMainWnd", "EQButton");
+                ui_api_->cascade_hover(0, 2);
             }
             if (opts_.show_items & 4) {
                 if (const auto* it = inv.at(net::ItemSlot::possessions(net::kSlotPrimary))) {

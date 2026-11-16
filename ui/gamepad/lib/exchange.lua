@@ -1,6 +1,7 @@
 -- Pieces shared by the windows that move items and coin between you and someone else (bank.lua, trade.lua): a slot
 -- that takes the pad's item buttons, your bags with the focused bag's contents, a row of coin buttons, and the
--- "Holding" panel. Every click is the game's (the caller's click function: eq.ClickSlot, eq.ClickChild, ...).
+-- "Holding" panel. Every click is the game's (the caller's click function: hs.ClickSlot, hs.ClickChild, ...).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -22,8 +23,8 @@ function X.afterA(fn) W.deferred(deferred, fn) end
 
 function X.frame(nav, sections)
   W.runDeferred(deferred)
-  local ctx = { held = eq.Item(eq.CursorSlot or 33), nav = nav, sections = sections }
-  if eq.CursorCoin then ctx.coinType, ctx.coinAmount = eq.CursorCoin() end
+  local ctx = { held = API.inventory.Item(API.inventory.CursorSlot or 33), nav = nav, sections = sections }
+  if API.cursor.Coin then ctx.coinType, ctx.coinAmount = API.cursor.Coin() end
   return ctx
 end
 
@@ -68,7 +69,7 @@ function X.cell(ctx, id, item, where, click, opts)
     if W.pressed("x") then
       acted = true
       if ctx.held then
-        if opts.put then opts.put() else eq.ChatSubmit(1, "/autoinventory") end
+        if opts.put then opts.put() else API.chat.Submit(1, "/autoinventory") end
       elseif item and not X.isBag(item) and not opts.noUse then
         click("rightup")
       end
@@ -99,12 +100,12 @@ function X.row(x, wx, wy, i, per)
   if i % per == 0 then ui.SetCursorPos(x - wx, select(2, ui.GetCursorScreenPos()) - wy) else ui.SameLine(0, T.px(X.GAP)) end
 end
 
--- The bag slots are read once a call (eq.Item, eq.SlotName) and read again only after a cell acted (it may have
+-- The bag slots are read once a call (hs.Item, hs.SlotName) and read again only after a cell acted (it may have
 -- moved an item); the slots' ids and click functions are made once.
 local bagItems = {}
 local bagCells, innerCells = {}, {}
 for slot = 23, 32 do
-  bagCells[slot] = { id = "##inv" .. slot, click = function(b) eq.ClickSlot(slot, nil, b) end }
+  bagCells[slot] = { id = "##inv" .. slot, click = function(b) API.inventory.ClickSlot(slot, nil, b) end }
 end
 local function innerCell(slot, i)
   local bySlot = innerCells[slot]
@@ -114,13 +115,13 @@ local function innerCell(slot, i)
   end
   local cell = bySlot[i]
   if not cell then
-    cell = { id = "##ib" .. slot .. "_" .. i, click = function(b) eq.ClickSlot(slot, i, b) end }
+    cell = { id = "##ib" .. slot .. "_" .. i, click = function(b) API.inventory.ClickSlot(slot, i, b) end }
     bySlot[i] = cell
   end
   return cell
 end
 local function bagItem(slot, stale)
-  if stale then return eq.Item(slot) end
+  if stale then return API.inventory.Item(slot) end
   return bagItems[slot]
 end
 local cellOpts = {}
@@ -136,9 +137,9 @@ function X.bags(ctx, state, x, w, per, opts)
   acted = false
   for slot = 23, 32 do
     X.row(x, wx, wy, slot - 23, per)
-    local item = eq.Item(slot)
+    local item = API.inventory.Item(slot)
     bagItems[slot] = item
-    local name = eq.SlotName(slot)
+    local name = API.inventory.SlotName(slot)
     local cell = bagCells[slot]
     cellOpts.label = name
     if X.cell(ctx, cell.id, item, name, cell.click, cellOpts) and X.isBag(item) then
@@ -162,7 +163,7 @@ function X.bags(ctx, state, x, w, per, opts)
   for i = 0, bag.bagSlots - 1 do
     X.row(x, wx, wy, i, per)
     local cell = innerCell(slot, i)
-    X.cell(ctx, cell.id, eq.Item(slot, i), bag.name .. ", slot " .. (i + 1), cell.click, cellOpts)
+    X.cell(ctx, cell.id, API.inventory.Item(slot, i), bag.name .. ", slot " .. (i + 1), cell.click, cellOpts)
   end
 end
 
@@ -194,10 +195,10 @@ end
 -- Your purse's coin buttons (the inventory's, CInventoryWnd::ClickedMoneyButton): coin held drops into the purse,
 -- else the quantity dialog asks how much comes onto the cursor.
 function X.purse(ctx, x, w, section)
-  local pp, gp, sp, cp = eq.Money()
+  local pp, gp, sp, cp = API.character.Money()
   local mine = { pp, gp, sp, cp }
   X.coinRow("purse", x, w, function(i) return mine[i + 1] end,
-    function(i) X.afterA(function() eq.ClickChild("InventoryWindow", "IW_Money" .. i, "left") end) end,
+    function(i) X.afterA(function() API.windows.ClickChild("InventoryWindow", "IW_Money" .. i, "left") end) end,
     { ctx = ctx, section = section })
 end
 

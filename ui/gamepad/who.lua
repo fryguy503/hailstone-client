@@ -1,8 +1,9 @@
 -- Who (gamepad pack), from the main menu (and the Friends window's Who): RoF2 has no who window, /who answers in the
 -- chat window. This builds the /who line from a few filters (this zone or everywhere, a level band, a class, LFG,
--- a name typed on the keyboard), runs it through the chat window as typing it would (eq.ChatSubmit), and lists the
--- answer (eq.WhoResults: the reply the chat lines came from). A picked player can be sent a tell, invited to the
+-- a name typed on the keyboard), runs it through the chat window as typing it would (hs.ChatSubmit), and lists the
+-- answer (hs.WhoResults: the reply the chat lines came from). A picked player can be sent a tell, invited to the
 -- group (/invite name), targeted (/target name) or added as a friend (/friends name).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -23,7 +24,7 @@ local asked, askedAt = nil, 0 -- the who_count when the search went out
 local selected
 
 local function myLevel()
-  return tonumber(eq.Label(2) or "") -- EQType 2: the player's level
+  return tonumber(API.character.Label(2) or "") -- EQType 2: the player's level
 end
 
 -- The /who line for the filters.
@@ -42,7 +43,7 @@ local function command()
   return table.concat(words, " ")
 end
 
--- The last reply (eq.WhoResults builds every player's chat line each call): read at most every 0.25 s, and its
+-- The last reply (hs.WhoResults builds every player's chat line each call): read at most every 0.25 s, and its
 -- players kept while the reply count is the same (a reply changes it), so each row's line is cut down once. Dropped
 -- out of the game: the next connection's count starts over.
 local REFRESH = 0.25
@@ -50,7 +51,7 @@ local whoCount, whoPlayers, whoAt = nil, nil, nil
 local function results()
   local now = ui.GetTime()
   if not whoAt or now - whoAt >= REFRESH or now < whoAt then
-    local count, players = eq.WhoResults()
+    local count, players = API.character.WhoResults()
     if count ~= whoCount or not whoPlayers then whoCount, whoPlayers = count, players end
     whoAt = now
   end
@@ -70,13 +71,13 @@ end
 
 -- A line typed into the main chat window (the game's command interpreter).
 local function say(line)
-  local windows = eq.ChatWindows()
-  eq.ChatSubmit(windows[1] and windows[1].slot or 1, line)
+  local windows = API.chat.Windows()
+  API.chat.Submit(windows[1] and windows[1].slot or 1, line)
 end
 
 local function run(line)
   say(line)
-  asked, askedAt = eq.WhoResults(), ui.GetTime()
+  asked, askedAt = API.character.WhoResults(), ui.GetTime()
   whoAt = nil -- (read again next frame)
   selected = nil
   listState.offset = 0
@@ -88,7 +89,7 @@ end
 -- (the setting does not change in play: once it is read without who, the hook stays off, as M.testShow does)
 local testAt, testOff
 local function testOpen()
-  if testOff or GPSTATE["test_who"] or not eq.InGame() then return end
+  if testOff or GPSTATE["test_who"] or not API.session.InGame() then return end
   if not (","..(ui.GetSetting("test.open") or "")..","):find(",who,", 1, true) then
     testOff = true
     return
@@ -104,7 +105,7 @@ end
 
 ui.window("Who", function()
   testOpen()
-  if not eq.InGame() then
+  if not API.session.InGame() then
     GPSTATE.whoOpen = false
     whoCount, whoPlayers, whoAt = nil, nil, nil
     return

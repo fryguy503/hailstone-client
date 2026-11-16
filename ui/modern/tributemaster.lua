@@ -5,6 +5,7 @@
 -- bar: the item on your cursor, the platinum to give (a click asks how much), Donate, and what the last donation
 -- was worth. Every number, list and button is the original's child (TMW_*), so the rules (what may be chosen, the
 -- guild's two slots, donations) are the game's. In guild mode the guild's favor, cost and time show instead.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -14,7 +15,7 @@ local WINDOW = "TributeMasterWnd"
 
 local state = {}
 
-local function label(t) return eq.Label(t) or "" end
+local function label(t) return API.character.Label(t) or "" end
 
 local function lists(s, h, editing, btnH)
   local gap = 12 * s
@@ -56,10 +57,10 @@ local function donations(s, btnH)
   local size = 40 * s
   local x, y = ui.GetCursorScreenPos()
   -- the item to give: what you hold on the cursor (the original's TMW_SelectedItem shows it)
-  local tex, u0, v0, u1, v1 = eq.ChildArt(WINDOW, "TMW_SelectedItem", "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(WINDOW, "TMW_SelectedItem", "decal")
   T.Icon(x, y, size, s, type(tex) == "userdata" and tex or nil, u0, v0, u1, v1, tex and C.gold or nil)
-  if T.Hit("##tmitem", x, y, x + size, y + size) then eq.ClickChild(WINDOW, "TMW_SelectedItem", "left") end
-  if ui.IsItemHovered() then ui.SetTooltip(eq.ChildTooltip(WINDOW, "TMW_SelectedItem")) end
+  if T.Hit("##tmitem", x, y, x + size, y + size) then API.windows.ClickChild(WINDOW, "TMW_SelectedItem", "left") end
+  if ui.IsItemHovered() then ui.SetTooltip(API.windows.ChildTooltip(WINDOW, "TMW_SelectedItem")) end
   ui.SetCursorScreenPos(x + size + 10 * s, y + (size - btnH) / 2)
   local plat = W.Text(WINDOW, "TMW_CoinButton")
   W.Button(WINDOW, "TMW_CoinButton", (plat ~= "" and plat or "0") .. " platinum",
@@ -125,6 +126,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Tribute Master", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Tribute Master", WINDOW_OPTS, drawWindow)
 end)

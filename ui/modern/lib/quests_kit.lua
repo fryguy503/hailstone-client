@@ -1,7 +1,8 @@
 -- Small pieces shared by the modern quest, expedition, adventure, PvP and tribute windows (tasks.lua,
 -- taskselect.lua, dynamiczone.lua, adventure*.lua, pvp*.lua, tribute*.lua): empty states, chips, stat tiles,
 -- search boxes, a game list read as rows, selectable cards and times. They draw in ImGui's flow, so the dialogs
--- that use them reflow when resized. Every click still goes to the original window (eq.ListClick, W.Button).
+-- that use them reflow when resized. Every click still goes to the original window (hs.ListClick, W.Button).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local C = T.color
 
@@ -10,7 +11,7 @@ local K = {}
 local function scale() return ui.GetIO().uiScale or 1 end
 
 -- ---------------------------------------------------------------- reading
--- Whether two eq.ListRow texts tables read the same (the texts, the cell colours, the icon's column).
+-- Whether two hs.ListRow texts tables read the same (the texts, the cell colours, the icon's column).
 local function sameTexts(t, u)
   if #t ~= #u or t.iconColumn ~= u.iconColumn then return false end
   for i = 1, #t do if t[i] ~= u[i] then return false end end
@@ -37,13 +38,13 @@ local lastRows = {} -- [win][id] = the rows K.Rows gave last call
 -- A row that reads as it did last call is last call's table (its texts and colour unchanged), so a list that stands
 -- still makes no new tables but the list's own answers; the rows are the caller's to read, not to change.
 function K.Rows(win, id)
-  local rows, _, selected = eq.ListInfo(win, id)
+  local rows, _, selected = API.windows.ListInfo(win, id)
   local out = {}
   local byId = lastRows[win]
   if not byId then byId = {}; lastRows[win] = byId end
   local last = byId[id]
   for r = 0, (rows or 0) - 1 do
-    local texts, cr, cg, cb = eq.ListRow(win, id, r)
+    local texts, cr, cg, cb = API.windows.ListRow(win, id, r)
     if texts then
       if not cr then cg, cb = nil, nil end
       local e = last and last[#out + 1]
@@ -236,13 +237,13 @@ end
 local stml = dofile("lib/stml.lua")
 local stmlCache = {}
 function K.Stml(win, id, raw)
-  raw = raw or (eq.WindowText(win, id) or "")
+  raw = raw or (API.windows.Text(win, id) or "")
   local byId = stmlCache[win]
   if not byId then byId = {}; stmlCache[win] = byId end
   local c = byId[id]
   if not c or c.raw ~= raw then
     -- (the link handler is made with the lines, not once a line a frame)
-    c = { raw = raw, lines = stml.Lines(raw, nil), onLink = function(link) eq.StmlLink(win, id, link[1], link[2]) end }
+    c = { raw = raw, lines = stml.Lines(raw, nil), onLink = function(link) API.windows.StmlLink(win, id, link[1], link[2]) end }
     byId[id] = c
   end
   local width = ui.GetContentRegionAvail()

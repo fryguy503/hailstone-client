@@ -9,6 +9,7 @@
 
 #include "assets/regions.h"
 #include "core/log.h"
+#include "core/process_serial.h"
 #include "game/collision.h"
 #include "game/coords.h"
 #include "game/doors.h"
@@ -116,7 +117,8 @@ void Navigator::start_zone(bool use_cache) {
 }
 
 void Navigator::zone_unloaded() {
-    if (goal_.kind != GoalKind::None) stop("");
+    if (goal_.kind != GoalKind::None || stick_) stop("");
+    end_follow();
     zone_.reset();
     geo_.reset();
     collision_ = nullptr;
@@ -133,12 +135,34 @@ void Navigator::rebuild() {
     start_zone(false);
 }
 
+bool Navigator::goal_allowed() const {
+    if (goal_.context && env_.interaction_context && env_.interaction_context() != goal_.context) return false;
+    const auto revision = goal_revision_;
+    const auto eligible = goal_.eligible; // callbacks can replace the goal (and its std::function)
+    bool allowed = false;
+    try { allowed = !eligible || eligible(); }
+    catch (...) {}
+    if (revision != goal_revision_) return true;
+    if (!allowed) return false;
+    if (goal_.kind == GoalKind::Spawn) {
+        const auto id = goal_.spawn;
+        const auto incarnation = goal_.incarnation;
+        const auto* actor = env_.spawn ? env_.spawn(id) : nullptr;
+        if (revision != goal_revision_) return true;
+        return actor && actor->incarnation == incarnation;
+    }
+    return true;
+}
+
 std::optional<glm::vec3> Navigator::goal_point() const {
+    const auto revision = goal_revision_;
+    if (!goal_allowed() || revision != goal_revision_) return std::nullopt;
     switch (goal_.kind) {
     case GoalKind::Point: return goal_.point;
     case GoalKind::Spawn:
         if (const game::Spawn* s = env_.spawn ? env_.spawn(goal_.spawn) : nullptr)
-            return s->position - glm::vec3(0.0f, 0.0f, s->heights.avatar_height);
+            if (s->incarnation == goal_.incarnation)
+                return s->position - glm::vec3(0.0f, 0.0f, s->heights.avatar_height);
         return std::nullopt;
     case GoalKind::Door:
         if (const game::Door* d = env_.door ? env_.door(goal_.door) : nullptr) return door_position(*d);
@@ -149,8 +173,9 @@ std::optional<glm::vec3> Navigator::goal_point() const {
 }
 
 bool Navigator::plan(const glm::vec3& from) {
+    const auto revision = goal_revision_;
     auto to = goal_point();
-    if (!to) return false;
+    if (!to || revision != goal_revision_) return false;
     goal_.point = *to;
     std::vector<glm::vec3> points;
     if (goal_.straight) {
@@ -167,14 +192,21 @@ bool Navigator::plan(const glm::vec3& from) {
         partial_told_ = true;
         env_.chat(std::format("[Nav] {} cannot be reached over the mesh; going as near as it allows.", goal_.label));
     }
+    if (revision != goal_revision_) return false;
     if (follower_.state() == nav::FollowState::Moving || follower_.state() == nav::FollowState::NeedsPath)
         follower_.replace(std::move(points));
     else
         follower_.start(std::move(points), goal_.distance);
+    retire_server_path(); // a local mesh result supersedes its still-pending server fallback
     return true;
 }
 
 std::string Navigator::begin(Goal g) {
+    if (goal_.live) *goal_.live = false;
+    retire_server_path();
+    const auto revision = ++goal_revision_;
+    g.live = std::make_shared<bool>(true);
+    if (env_.interaction_context) g.context = env_.interaction_context();
     follower_.stop();
     goal_ = std::move(g);
     paused_ = false;
@@ -196,7 +228,15 @@ std::string Navigator::begin(Goal g) {
         goal_ = {};
         return "this zone has no navigation mesh";
     }
-    if (!plan(feet_)) {
+    const bool planned = plan(feet_);
+    if (revision != goal_revision_) return "navigation changed while checking the destination";
+    if (!planned) {
+        const bool allowed = goal_allowed();
+        if (revision != goal_revision_) return "navigation changed while checking the destination";
+        if (!allowed) {
+            finish("");
+            return "this destination is no longer available to Find";
+        }
         if (zone_->complete()) {
             std::string why = "no path to " + goal_.label;
             goal_ = {};
@@ -209,8 +249,16 @@ std::string Navigator::begin(Goal g) {
                                   zone_->tiles_done(), zone_->tiles_total()));
         // Meanwhile a spawn's path can come from the server, when there is no mesh under the player.
         if (goal_.kind == GoalKind::Spawn && env_.request_server_path && !zone_->mesh().nearest(feet_)) {
-            env_.request_server_path(goal_.spawn);
-            server_asked_at_ = now_;
+            if (!server_owner_) server_owner_ = core::next_process_identity();
+            const auto lease = env_.request_server_path(goal_.spawn,
+                {server_owner_, goal_revision_, goal_.eligible ? game::ServerPathOrigin::Purpose::NpcFind : game::ServerPathOrigin::Purpose::ManualNavigation,
+                 goal_.live, true});
+            if (revision != goal_revision_) {
+                if (lease && env_.cancel_server_path) env_.cancel_server_path(lease);
+                return "navigation changed while requesting the server fallback";
+            }
+            server_lease_ = lease;
+            if (server_lease_) server_asked_at_ = now_;
         }
     }
     if (env_.started) env_.started();
@@ -246,14 +294,25 @@ std::string Navigator::walk_to_click(const glm::vec3& world, float distance) {
 }
 
 std::string Navigator::go_to_spawn(std::uint32_t id, float distance) {
+    return go_to_spawn_guarded(id, distance, {});
+}
+
+std::string Navigator::go_to_spawn_guarded(std::uint32_t id, float distance, std::function<bool()> eligible) {
+    // A rejected Find action must not cancel an unrelated walk or inspect the newly hidden destination.
+    const auto revision = goal_revision_;
+    try { if (eligible && !eligible()) return "this destination is no longer available to Find"; }
+    catch (...) { return "this destination is no longer available to Find"; }
+    if (revision != goal_revision_) return "navigation changed while checking the destination";
     stick_.reset();
     const game::Spawn* s = env_.spawn ? env_.spawn(id) : nullptr;
     if (!s) return "no such spawn";
     Goal g;
     g.kind = GoalKind::Spawn;
     g.spawn = id;
+    g.incarnation = s->incarnation;
     g.distance = distance > 0.0f ? distance : 5.0f;
     g.label = s->name;
+    g.eligible = std::move(eligible);
     return begin(std::move(g));
 }
 
@@ -271,7 +330,16 @@ std::string Navigator::go_to_door(std::uint8_t id, bool click) {
     return begin(std::move(g));
 }
 
+void Navigator::retire_server_path() {
+    if (server_lease_ && env_.cancel_server_path) env_.cancel_server_path(server_lease_);
+    server_lease_ = {};
+    server_asked_at_ = -1.0;
+}
+
 void Navigator::finish(const std::string& message) {
+    if (goal_.live) *goal_.live = false;
+    retire_server_path();
+    ++goal_revision_;
     last_finish_ = message;
     if (!message.empty() && env_.chat) env_.chat(message);
     log::info("nav: {}", message.empty() ? std::string("stopped") : message);
@@ -292,17 +360,25 @@ void Navigator::set_paused(bool paused) { paused_ = paused && (goal_.kind != Goa
 std::string Navigator::stick(std::uint32_t id, const nav::StickOptions& options) {
     const game::Spawn* s = env_.spawn ? env_.spawn(id) : nullptr;
     if (!s || s->is_corpse) return "no such spawn";
+    Stick chosen{id, s->incarnation, env_.interaction_context ? env_.interaction_context() : 0, options, s->name};
+    if (goal_.live) *goal_.live = false;
+    retire_server_path();
+    ++goal_revision_;
     follower_.stop();
     goal_ = {};
     paused_ = false;
-    stick_ = Stick{id, options, s->name};
+    stick_ = std::move(chosen);
+    const auto name = stick_->label;
     if (env_.started) env_.started();
-    log::info("nav: sticking to {} ({:.1f})", s->name, stick_distance());
+    log::info("nav: sticking to {} ({:.1f})", name, stick_distance());
     return {};
 }
 
 void Navigator::unstick(std::string_view why) {
     if (!stick_) return;
+    if (goal_.live) *goal_.live = false;
+    retire_server_path();
+    ++goal_revision_;
     stick_.reset();
     follower_.stop();
     goal_ = {};
@@ -318,23 +394,36 @@ float Navigator::stick_distance() const {
     return melee ? std::max(*melee * kStickMeleeShare, 1.0f) : 10.0f;
 }
 
+bool Navigator::stick_current() const {
+    if (!stick_ || (stick_->context && env_.interaction_context && env_.interaction_context() != stick_->context)) return false;
+    const auto* actor = env_.spawn ? env_.spawn(stick_->spawn) : nullptr;
+    return actor && !actor->is_corpse && actor->incarnation == stick_->incarnation;
+}
+
 nav::SteerOutput Navigator::stick_frame(const Frame& f) {
     if (f.player_input) {
         unstick("You are no longer sticking to anything.");
         return {};
     }
-    const game::Spawn* s = env_.spawn ? env_.spawn(stick_->spawn) : nullptr;
-    if (!s || s->is_corpse) {
+    if (!stick_current()) {
         unstick(std::format("[Stick] {} is gone.", stick_->label));
         return {};
     }
     if (!f.can_move || paused_) return {};
+    const auto revision = goal_revision_;
+    const game::Spawn* s = env_.spawn ? env_.spawn(stick_->spawn) : nullptr;
+    if (!s) return {};
     const glm::vec3 at = s->position - glm::vec3(0.0f, 0.0f, s->heights.avatar_height);
+    const float yaw = game::heading_to_yaw(s->heading);
     const float want = stick_distance();
+    if (revision != goal_revision_ || !stick_) return {};
+    if (!stick_current()) {
+        unstick(std::format("[Stick] {} is gone.", stick_->label));
+        return {};
+    }
     glm::vec2 to_me = glm::vec2(f.feet - at);
     const float away = glm::length(to_me);
     // Behind: the player's bearing from the spawn within 45 degrees of its back.
-    const float yaw = game::heading_to_yaw(s->heading);
     const glm::vec2 facing(std::cos(yaw), std::sin(yaw));
     const bool in_arc = !stick_->options.behind || (away > 0.01f && glm::dot(to_me / away, -facing) >= std::cos(glm::radians(45.0f)));
     glm::vec3 spot = at;
@@ -746,6 +835,12 @@ nav::SteerOutput Navigator::frame(const Frame& f) {
 
 nav::SteerOutput Navigator::walk_frame(const Frame& f) {
     if (goal_.kind == GoalKind::None) return {};
+    const auto revision = goal_revision_;
+    if (!goal_allowed()) {
+        finish("Find navigation stopped: this destination is no longer available.");
+        return {};
+    }
+    if (revision != goal_revision_) return {};
     if (f.player_input) {
         finish("Navigation stopped.");
         return {};
@@ -754,7 +849,8 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
 
     // Waiting for the server's path (no mesh under the player when the walk began).
     if (server_asked_at_ >= 0.0) {
-        std::optional<std::vector<glm::vec3>> reply = env_.server_path ? env_.server_path() : std::nullopt;
+        std::optional<std::vector<glm::vec3>> reply = env_.server_path ? env_.server_path(server_lease_) : std::nullopt;
+        if (revision != goal_revision_) return {};
         std::vector<glm::vec3> sp = reply ? std::move(*reply) : std::vector<glm::vec3>{};
         if (reply && sp.empty()) {
             server_asked_at_ = -1.0; // the server has no path: wait for the mesh alone
@@ -774,9 +870,17 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
     if (waiting_mesh_) {
         if (f.now < replan_at_) return {};
         replan_at_ = f.now + kRepathSeconds;
-        if (plan(f.feet)) {
+        const bool planned = plan(f.feet);
+        if (revision != goal_revision_) return {};
+        if (planned) {
             waiting_mesh_ = false;
         } else {
+            const bool allowed = goal_allowed();
+            if (revision != goal_revision_) return {};
+            if (!allowed) {
+                finish("Find navigation stopped: this destination is no longer available.");
+                return {};
+            }
             if (zone_ && zone_->complete() && server_asked_at_ < 0.0) finish("No path to " + goal_.label + ".");
             return {};
         }
@@ -785,6 +889,7 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
     // A goal that moves (a spawn): a new path when it has gone elsewhere.
     if (goal_.kind == GoalKind::Spawn) {
         auto at = goal_point();
+        if (revision != goal_revision_) return {};
         if (!at) {
             finish(goal_.label + " is gone.");
             return {};
@@ -794,6 +899,8 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
             if (glm::distance(*at, goal_.point) > kRepathMoved) plan(f.feet);
         }
     }
+
+    if (revision != goal_revision_) return {};
 
     // Out of the swing of a door the walk clicked, until it has swung.
     if (auto s = clear_of_swing(f)) return *s;
@@ -912,7 +1019,7 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
         log::info("nav: arrived at {}", done.label);
         return {};
     }
-    case nav::FollowState::NeedsPath:
+    case nav::FollowState::NeedsPath: {
         if (open_door_ahead(f)) {
             // Give the door time to open, then carry on along the same path.
             follower_.replace(std::vector<glm::vec3>(follower_.points().begin() +
@@ -921,7 +1028,15 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
                                   follower_.checks_height());
             return out;
         }
-        if (!plan(f.feet)) {
+        const bool planned = plan(f.feet);
+        if (revision != goal_revision_) return {};
+        if (!planned) {
+            const bool allowed = goal_allowed();
+            if (revision != goal_revision_) return {};
+            if (!allowed) {
+                finish("Find navigation stopped: this destination is no longer available.");
+                return {};
+            }
             // Off the mesh for the moment (falling, or swimming between a deep floor and the surface): no new path
             // from here, so carry on along this one; the follower gives up after a few of these (Failed).
             if (zone_ && !zone_->mesh().nearest(f.feet) && !follower_.points().empty()) {
@@ -937,8 +1052,16 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
                 waiting_mesh_ = true;
                 replan_at_ = f.now + kRepathSeconds;
                 if (goal_.kind == GoalKind::Spawn && env_.request_server_path && server_asked_at_ < 0.0) {
-                    env_.request_server_path(goal_.spawn);
-                    server_asked_at_ = f.now;
+                    if (!server_owner_) server_owner_ = core::next_process_identity();
+                    const auto lease = env_.request_server_path(goal_.spawn,
+                        {server_owner_, goal_revision_, goal_.eligible ? game::ServerPathOrigin::Purpose::NpcFind : game::ServerPathOrigin::Purpose::ManualNavigation,
+                         goal_.live, true});
+                    if (revision != goal_revision_) {
+                        if (lease && env_.cancel_server_path) env_.cancel_server_path(lease);
+                        return {};
+                    }
+                    server_lease_ = lease;
+                    if (server_lease_) server_asked_at_ = f.now;
                 }
                 return {};
             }
@@ -950,6 +1073,7 @@ nav::SteerOutput Navigator::walk_frame(const Frame& f) {
         if (out.active && follower_.next() < follower_.points().size())
             out.pitch = swim_pitch(f, follower_.points()[follower_.next()], follower_.ahead(f.feet, kSwimAhead));
         return out;
+    }
     case nav::FollowState::Failed:
         log_stuck(f);
         finish("Navigation stuck going to " + goal_.label +

@@ -7,6 +7,7 @@
 #include <map>
 #include <mutex>
 #include <span>
+#include <set>
 #include <sstream>
 #include <system_error>
 #include <vector>
@@ -242,10 +243,11 @@ fs::path addons_dir(const fs::path& data_dir) { return data_dir / "addons"; }
 
 namespace {
 std::string_view kind_folder(AddonKind kind) {
-    return kind == AddonKind::Script   ? "scripts"
-           : kind == AddonKind::Plugin ? "plugins"
-           : kind == AddonKind::Tool   ? "tools"
-                                       : "upscalers";
+    return kind == AddonKind::Script     ? "scripts"
+           : kind == AddonKind::Plugin   ? "plugins"
+           : kind == AddonKind::Tool     ? "tools"
+           : kind == AddonKind::Upscaler ? "upscalers"
+                                         : "ui-addons";
 }
 } // namespace
 
@@ -254,10 +256,11 @@ fs::path addon_folder(const fs::path& data_dir, AddonKind kind, std::string_view
 }
 
 std::string_view addon_kind_word(AddonKind kind) {
-    return kind == AddonKind::Script   ? "script"
-           : kind == AddonKind::Plugin ? "plugin"
-           : kind == AddonKind::Tool   ? "tool"
-                                       : "upscaler";
+    return kind == AddonKind::Script     ? "script"
+           : kind == AddonKind::Plugin   ? "plugin"
+           : kind == AddonKind::Tool     ? "tool"
+           : kind == AddonKind::Upscaler ? "upscaler"
+                                         : "ui";
 }
 
 std::string addon_tool_program(std::string_view name, std::string_view platform) {
@@ -288,6 +291,7 @@ std::optional<AddonKind> kind_of_word(std::string_view w) {
     if (w == "plugin") return AddonKind::Plugin;
     if (w == "tool") return AddonKind::Tool;
     if (w == "upscaler") return AddonKind::Upscaler;
+    if (w == "ui") return AddonKind::Ui;
     return std::nullopt;
 }
 
@@ -351,6 +355,11 @@ ParsedRegistry parse_registry(const fs::path& file) {
             a.key = hex_decode<32>(rest);
             bad = bad || !a.key;
         } else if (what == "autoupdate") a.auto_update = rest == "1";
+        else if (what == "autoload" || what == "enabled") {
+            if (rest != "0" && rest != "1") bad = true;
+            else if (what == "autoload") a.autoload = rest == "1";
+            else a.enabled = rest == "1";
+        }
         // ("auto", up to 0.7.0-beta, was written as 1 for every install without asking the player: it is read as off)
         else if (what == "author") a.author = std::string(rest);
         else if (what == "description") a.description = std::string(rest);
@@ -427,6 +436,38 @@ std::vector<InstalledAddon> read_installed_addons(const fs::path& data_dir) {
     return read_addon_registry(data_dir).addons;
 }
 
+std::vector<mq::ManagedScript> managed_addon_scripts(const fs::path& data_dir) {
+    std::vector<mq::ManagedScript> out;
+    for (const auto& addon : read_installed_addons(data_dir)) {
+        if (addon.kind != AddonKind::Script || !addon.autoload) continue;
+        mq::ManagedScript script;
+        script.name = lower(addon.name);
+        script.entry = addon_folder(data_dir, addon.kind, addon.name) / "init.lua";
+        script.enabled = addon.enabled;
+        bool have_entry = false;
+        std::string revision = addon.version + "\n" + std::to_string(addon.caps) + "\n";
+        for (const auto& file : addon.files) {
+            if (file.path == "init.lua") { script.hash = file.sha256; have_entry = true; }
+            revision += file.path + " " + to_hex(file.sha256) + "\n";
+        }
+        script.revision = sha256(revision);
+        script.verified = have_entry && modified_addon_files(data_dir, addon).empty();
+        out.push_back(std::move(script));
+    }
+    return out;
+}
+
+bool set_addon_enabled(const fs::path& data_dir, std::string_view name, bool enabled) {
+    auto registry = read_addon_registry(data_dir);
+    if (!registry.writable()) return false;
+    for (auto& addon : registry.addons) {
+        if (!iequal(addon.name, name) || addon.kind != AddonKind::Script || !addon.autoload) continue;
+        addon.enabled = enabled;
+        return write_installed_addons(data_dir, registry.addons);
+    }
+    return false;
+}
+
 namespace {
 std::string registry_text(const std::vector<InstalledAddon>& addons) {
     std::string text = "# The add-ons Hailstone installed (docs/addons.md). Written by the client.\n";
@@ -439,6 +480,8 @@ std::string registry_text(const std::vector<InstalledAddon>& addons) {
         text += "caps " + plugin::caps_text(a.caps) + "\n";
         if (a.key) text += "key " + hex_encode(*a.key) + "\n";
         text += std::string("autoupdate ") + (a.auto_update ? "1" : "0") + "\n";
+        text += std::string("autoload ") + (a.autoload ? "1" : "0") + "\n";
+        text += std::string("enabled ") + (a.enabled ? "1" : "0") + "\n";
         if (!a.author.empty()) text += "author " + a.author + "\n";
         if (!a.description.empty()) text += "description " + a.description + "\n";
         if (!a.notes.empty()) text += "notes " + a.notes + "\n";
@@ -555,6 +598,12 @@ std::string taken_on_disk(const fs::path& data_dir, AddonKind kind, std::string_
     std::error_code ec;
     const fs::path folder = addon_folder(data_dir, kind, name);
     const std::string where = std::string(kind_folder(kind)) + "/";
+    if (kind == AddonKind::Ui) {
+        for (const auto& entry : fs::directory_iterator(data_dir / "ui-addons", ec))
+            if (iequal(entry.path().filename().string(), name))
+                return where + entry.path().filename().string() + " is there already";
+        return {};
+    }
     // Nothing but add-ons is put in tools/ or upscalers/ (but the example provider a build from source puts there):
     // any folder or file of the name is in the way.
     if (kind == AddonKind::Tool || kind == AddonKind::Upscaler)
@@ -594,7 +643,7 @@ std::string addon_name_taken(const fs::path& data_dir, const std::vector<Install
     if (const InstalledAddon* a = find_addon(addons, name))
         return "the add-on \"" + a->name + "\" is installed already";
     if (std::string why = taken_on_disk(data_dir, kind, name); !why.empty()) return why;
-    if (kind == AddonKind::Tool || kind == AddonKind::Upscaler) return {};
+    if (kind == AddonKind::Tool || kind == AddonKind::Upscaler || kind == AddonKind::Ui) return {};
     // Nor a script and a compiled plugin of one name: their windows are told apart by kind
     // (plugin::UiBridge::owner_tag), but the player would not tell them apart.
     const AddonKind other = kind == AddonKind::Script ? AddonKind::Plugin : AddonKind::Script;
@@ -611,7 +660,7 @@ bool addon_owns_folder(const fs::path& data_dir, std::string_view folder) {
     }
     // One whose record does not read is still taken for an add-on's: the updater leaves it alone.
     for (const auto& u : reg.unreadable)
-        for (AddonKind k : {AddonKind::Script, AddonKind::Plugin, AddonKind::Tool, AddonKind::Upscaler})
+        for (AddonKind k : {AddonKind::Script, AddonKind::Plugin, AddonKind::Tool, AddonKind::Upscaler, AddonKind::Ui})
             if ((!u.kind || *u.kind == k) && iequal(std::string(kind_folder(k)) + "/" + u.name, folder)) return true;
     return false;
 }
@@ -832,6 +881,71 @@ std::optional<std::vector<AddonFile>> unpack_upscaler(const fs::path& data_dir, 
     return write_unpacked(data_dir, m.name, zip, files, libraries, error);
 }
 
+
+std::optional<std::vector<AddonFile>> unpack_ui(const fs::path& data_dir, const AddonManifest& m, ZipReader& zip,
+                                               std::string* error) {
+    auto fail = [&](std::string why) -> std::optional<std::vector<AddonFile>> {
+        if (error) *error = std::move(why);
+        return std::nullopt;
+    };
+    std::vector<const ZipEntry*> files;
+    std::map<std::string, std::string> seen, packs;
+    std::map<std::string, std::pair<std::string, bool>> paths;
+    std::set<std::string> manifests;
+    std::uint64_t total = 0;
+    for (const auto& entry : zip.entries()) {
+        if (entry.is_directory()) continue;
+        if (files.size() >= kMaxFiles) return fail("the UI package holds too many files");
+        total += entry.size;
+        if (total > kMaxScriptBytes) return fail("the UI package is too large");
+        if (!net::is_safe_file_path_shape(entry.name)) return fail(entry.name + ": unsafe UI package path");
+        if (!seen.emplace(lower(entry.name), entry.name).second) return fail(entry.name + " is in the package twice");
+        // Portable bundles use one spelling and one file/directory role for each path component.
+        for (std::size_t end = 0;;) {
+            end = entry.name.find('/', end);
+            const bool file = end == std::string::npos;
+            const std::string prefix = entry.name.substr(0, end);
+            const auto [at, inserted] = paths.emplace(lower(prefix), std::pair{prefix, file});
+            if (!inserted && at->second.first != prefix)
+                return fail(entry.name + ": UI path components differ only in case");
+            if (!inserted && at->second.second != file)
+                return fail(entry.name + ": a UI path is both a file and a directory");
+            if (file) break;
+            ++end;
+        }
+        const auto slash = entry.name.find('/', 3);
+        const bool notice = entry.name == "LICENSE" || entry.name == "NOTICE" || entry.name == "NOTICE.md" ||
+                            entry.name == "README.md";
+        if (!notice) {
+            if (!entry.name.starts_with("ui/") || slash == std::string::npos)
+                return fail(entry.name + ": UI files go in ui/<pack>/");
+            const std::string pack = entry.name.substr(3, slash - 3);
+            if (!addon_name_ok(pack)) return fail(entry.name + ": invalid UI pack name");
+            const auto [found, inserted] = packs.emplace(lower(pack), pack);
+            if (!inserted && found->second != pack) return fail(entry.name + ": UI pack folders differ only in case");
+            if (entry.name.substr(slash + 1) == "ui.ini") {
+                if (!entry.size || entry.size > 64 * 1024) return fail(entry.name + ": invalid UI manifest size");
+                manifests.insert(lower(pack));
+            }
+        }
+        const std::string ext = extension_of(entry.name), name = lower(file_of(entry.name));
+        if (std::find(std::begin(kToolRefused), std::end(kToolRefused), ext) != std::end(kToolRefused) ||
+            ext == ".dll" || ext == ".dylib" || ext == ".so" || name.find(".so.") != std::string::npos)
+            return fail(entry.name + ": a UI package holds presentation Lua and assets, not programs");
+        if (ext == ".lua") {
+            auto bytes = read_entry(zip, entry, kMaxLuaFile, error);
+            if (!bytes) return std::nullopt;
+            std::string why;
+            if (!lua_compiles(*bytes, m.name + "/" + entry.name, &why))
+                return fail(entry.name + " does not compile: " + why);
+        }
+        files.push_back(&entry);
+    }
+    if (packs.empty() || manifests.size() != packs.size())
+        return fail("every UI pack has ui/<pack>/ui.ini");
+    return write_unpacked(data_dir, m.name, zip, files, {}, error);
+}
+
 } // namespace
 
 std::optional<std::vector<AddonFile>> unpack_addon(const fs::path& data_dir, const AddonManifest& m,
@@ -845,6 +959,7 @@ std::optional<std::vector<AddonFile>> unpack_addon(const fs::path& data_dir, con
     if (!zip.open(zip_path)) return fail("the package is not a zip this reads: " + zip.error());
     if (m.kind == AddonKind::Tool) return unpack_tool(data_dir, m, zip, platform, error);
     if (m.kind == AddonKind::Upscaler) return unpack_upscaler(data_dir, m, zip, platform, error);
+    if (m.kind == AddonKind::Ui) return unpack_ui(data_dir, m, zip, error);
     const bool script = m.kind == AddonKind::Script;
     const std::string top = std::string(script ? "scripts/" : "plugins/") + m.name + "/";
     const std::string_view lib_ext = plugin_extension(platform);
@@ -971,7 +1086,14 @@ bool apply_addon(const fs::path& data_dir, const InstalledAddon& addon, std::str
     InstalledAddon entry = addon;
     // An update keeps the player's auto-update switch as installed.txt has it now (they may have changed it while
     // the update downloaded).
-    if (old) entry.auto_update = old->auto_update;
+    if (old) {
+        entry.auto_update = old->auto_update;
+        // Once installed as managed, updates retain the player's activation control until removal/reinstallation.
+        // Dropping a manifest flag must not turn a disabled addon into an ordinary autorun script.
+        entry.autoload = entry.autoload || old->autoload;
+        // An update cannot silently activate a formerly ordinary script or undo the player's disabled switch.
+        entry.enabled = entry.autoload && old->autoload && old->enabled;
+    }
     std::erase_if(all, [&](const InstalledAddon& a) { return iequal(a.name, addon.name); });
     all.push_back(std::move(entry));
     std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return lower(a.name) < lower(b.name); });

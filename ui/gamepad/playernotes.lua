@@ -4,6 +4,7 @@
 -- real keyboard edits anywhere in the box over them), Add a dated note (X) types one line and gives it to /note, as
 -- typing "/note ..." does. The window keeps the text (its edit box PlayerNotesInput, 10000 characters) and writes
 -- notes.txt when it closes (B or Done).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -136,7 +137,7 @@ ui.window("Notes Window", function()
       if T.button("##notesend", "Go to the end", x1 - rx0, bh, { sub = "The newest notes", align = 0 }, pad) then view.scroll = 1e9 end
       at(4)
       if T.button("##notesdone", "Done", x1 - rx0, bh, { glyph = "b", sub = "Saves notes.txt", align = 0 }, pad) then
-        eq.ShowWindow(WIN, false)
+        API.windows.Show(WIN, false)
       end
     end
   end
@@ -144,6 +145,6 @@ ui.window("Notes Window", function()
   if close and editing then
     editing, refocus = false, "edit"
   elseif CH.back(st, close) then
-    eq.ShowWindow(WIN, false)
+    API.windows.Show(WIN, false)
   end
 end)

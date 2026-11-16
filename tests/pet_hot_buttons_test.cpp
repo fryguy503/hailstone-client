@@ -1,5 +1,5 @@
-// The pet window's command buttons dragged onto a hot bar (game/pet_buttons.h, app/lua_eq_misc.cpp PetWindow::pick_up,
-// app/lua_eq_hud.cpp hot_button_info): the type 8 button "Pet <command>" of the button's index, saved as the other
+// The pet window's command buttons dragged onto a hot bar (game/pet_buttons.h, app/lua_ui_misc.cpp PetWindow::pick_up,
+// app/lua_ui_hud.cpp hot_button_info): the type 8 button "Pet <command>" of the button's index, saved as the other
 // hot buttons are, and checked while its toggle command is on.
 #include <doctest/doctest.h>
 
@@ -13,8 +13,8 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_windows.h"
 #include "core/game_dir.h"
 #include "game/hotbuttons.h"
 #include "game/pet_buttons.h"
@@ -185,51 +185,51 @@ TEST_CASE("Pet hot buttons: a pet window button dragged to a bar, lit while its 
         GameDir game(scratch.path());
         net::GameConnection conn(game, {});
         game::HotButtonStore store;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         host.hot_buttons = &store;
         host.set_hot_button = [&](int bar, int button, const game::HotButton& b) { store.current(bar, button) = b; };
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
         const std::string pet = conn.strings().format(game::kStrPet, {});
         api.begin_frame(); // SyncHotButtonStates: the buttons holding a command are enabled
 
         // Pet1_Button is "follow" (the constructor's table): its drag puts "Pet follow", value 1, on the cursor.
-        CHECK(run(L, "return eq.PickUp('PetInfoWindow', 'Pet1_Button')") == "true");
+        CHECK(run(L, "return hs.PickUp('PetInfoWindow', 'Pet1_Button')") == "true");
         REQUIRE(host.cursor_button);
         CHECK(host.cursor_button->type == game::HotButtonType::PetCommand);
         CHECK(host.cursor_button->slot == 1);
         CHECK(host.cursor_button->label == pet + " follow");
-        CHECK(run(L, "return eq.ClickHotButton('HotButtonWnd', 'HB_Button2', 'left')") == "true");
+        CHECK(run(L, "return hs.ClickHotButton('HotButtonWnd', 'HB_Button2', 'left')") == "true");
         CHECK(store.current(0, 1).type == game::HotButtonType::PetCommand);
-        CHECK(run(L, "local k, l = eq.HotButton('HotButtonWnd', 'HB_Button2'); return k .. '|' .. l") ==
+        CHECK(run(L, "local k, l = hs.HotButton('HotButtonWnd', 'HB_Button2'); return k .. '|' .. l") ==
               "button|" + pet + " follow");
         // a button holding no command ("none": Pet9_Button ..) is disabled and gives nothing
-        CHECK(run(L, "return eq.PickUp('PetInfoWindow', 'Pet9_Button')") == "false");
-        CHECK(run(L, "return (eq.ChildState('PetInfoWindow', 'Pet9_Button'))") == "false");
+        CHECK(run(L, "return hs.PickUp('PetInfoWindow', 'Pet9_Button')") == "false");
+        CHECK(run(L, "return (hs.ChildState('PetInfoWindow', 'Pet9_Button'))") == "false");
         // attack (not a toggle) on button 3
-        CHECK(run(L, "return eq.PickUp('PetInfoWindow', 'Pet0_Button')") == "true");
-        run(L, "eq.ClickHotButton('HotButtonWnd', 'HB_Button3', 'left')");
+        CHECK(run(L, "return hs.PickUp('PetInfoWindow', 'Pet0_Button')") == "true");
+        run(L, "hs.ClickHotButton('HotButtonWnd', 'HB_Button3', 'left')");
 
         // OP_PetCommandState: follow (EQEmu PET_BUTTON_FOLLOW 3) on: the follow hot button is checked.
-        CHECK(run(L, "return eq.HotButtonChecked('HotButtonWnd', 'HB_Button2')") == "false");
+        CHECK(run(L, "return hs.HotButtonChecked('HotButtonWnd', 'HB_Button2')") == "false");
         conn.receive_zone_packet_for_test(net::encode(net::PetCommandState{3, 1}));
-        CHECK(run(L, "return eq.HotButtonChecked('HotButtonWnd', 'HB_Button2')") == "true");
-        CHECK(run(L, "return eq.HotButtonChecked('HotButtonWnd', 'HB_Button3')") == "false");
+        CHECK(run(L, "return hs.HotButtonChecked('HotButtonWnd', 'HB_Button2')") == "true");
+        CHECK(run(L, "return hs.HotButtonChecked('HotButtonWnd', 'HB_Button3')") == "false");
         conn.receive_zone_packet_for_test(net::encode(net::PetCommandState{3, 0}));
-        CHECK(run(L, "return eq.HotButtonChecked('HotButtonWnd', 'HB_Button2')") == "false");
+        CHECK(run(L, "return hs.HotButtonChecked('HotButtonWnd', 'HB_Button2')") == "false");
 
         // The right button down on a "none" button: the command menu (no pet seen yet: only "none").
-        CHECK(run(L, "return eq.ClickChild('PetInfoWindow', 'Pet9_Button', 'rightdown')") == "true");
+        CHECK(run(L, "return hs.ClickChild('PetInfoWindow', 'Pet9_Button', 'rightdown')") == "true");
         REQUIRE(host.menus.size() == 1);
         REQUIRE(host.menus[0].rows.size() == 1);
         CHECK(host.menus[0].rows[0].text == "none");
-        CHECK(run(L, "return select(5, eq.ChildState('PetInfoWindow', 'Pet9_Button'))") == "true"); // bAction
+        CHECK(run(L, "return select(5, hs.ChildState('PetInfoWindow', 'Pet9_Button'))") == "true"); // bAction
         // with hold and focus usable (CanUsePetCommand while the pet was there), hold goes on Pet9 and is saved
         const auto ini = scratch.path() / "UI_test.ini";
         api.load_layout(scratch.path() / "defaults.ini", ini, {});
@@ -237,15 +237,15 @@ TEST_CASE("Pet hot buttons: a pet window button dragged to a bar, lit while its 
         std::array<bool, game::kPetCommandCount> usable{};
         usable[10] = usable[13] = true;
         host.pet_buttons.set_usable(usable);
-        CHECK(run(L, "return eq.ClickChild('PetInfoWindow', 'Pet9_Button', 'rightdown')") == "true");
+        CHECK(run(L, "return hs.ClickChild('PetInfoWindow', 'Pet9_Button', 'rightdown')") == "true");
         REQUIRE(host.menus.size() == 1);
         REQUIRE(host.menus[0].rows.size() == 3);
         CHECK(host.menus[0].rows[0].text == "hold");
         CHECK(host.menus[0].rows[1].text == "focus");
         host.menus[0].rows[0].act();
         api.begin_frame(); // SyncHotButtonStates enables it
-        CHECK(run(L, "return (eq.WindowText('PetInfoWindow', 'Pet9_Button'))") == "hold");
-        CHECK(run(L, "return (eq.ChildState('PetInfoWindow', 'Pet9_Button'))") == "true");
+        CHECK(run(L, "return (hs.WindowText('PetInfoWindow', 'Pet9_Button'))") == "hold");
+        CHECK(run(L, "return (hs.ChildState('PetInfoWindow', 'Pet9_Button'))") == "true");
         {
             std::ifstream f(ini);
             std::string all((std::istreambuf_iterator<char>(f)), {});
@@ -253,16 +253,16 @@ TEST_CASE("Pet hot buttons: a pet window button dragged to a bar, lit while its 
                   std::string::npos);
         }
         // dragged to a bar: "Pet hold", lit while OP_PetCommandState hold (6) is on
-        CHECK(run(L, "return eq.PickUp('PetInfoWindow', 'Pet9_Button')") == "true");
+        CHECK(run(L, "return hs.PickUp('PetInfoWindow', 'Pet9_Button')") == "true");
         REQUIRE(host.cursor_button);
         CHECK(host.cursor_button->slot == 9);
         CHECK(host.cursor_button->label == pet + " hold");
-        run(L, "eq.ClickHotButton('HotButtonWnd', 'HB_Button5', 'left')");
+        run(L, "hs.ClickHotButton('HotButtonWnd', 'HB_Button5', 'left')");
         conn.receive_zone_packet_for_test(net::encode(net::PetCommandState{6, 1}));
-        CHECK(run(L, "return eq.HotButtonChecked('HotButtonWnd', 'HB_Button5')") == "true");
-        CHECK(run(L, "return select(2, eq.ChildState('PetInfoWindow', 'Pet9_Button'))") == "true");
+        CHECK(run(L, "return hs.HotButtonChecked('HotButtonWnd', 'HB_Button5')") == "true");
+        CHECK(run(L, "return select(2, hs.ChildState('PetInfoWindow', 'Pet9_Button'))") == "true");
         conn.receive_zone_packet_for_test(net::encode(net::PetCommandState{6, 0}));
-        CHECK(run(L, "return eq.HotButtonChecked('HotButtonWnd', 'HB_Button5')") == "false");
+        CHECK(run(L, "return hs.HotButtonChecked('HotButtonWnd', 'HB_Button5')") == "false");
         // the next login reads it back
         host.pet_buttons = {};
         api.load_layout(scratch.path() / "defaults.ini", ini, {});
@@ -339,10 +339,10 @@ TEST_CASE("Pet toggles: /pet words save PetButtonToggleState, a new pet gets the
         hailstone::test::ScratchDir scratch("pet_toggles");
         GameDir game(scratch.path());
         net::GameConnection conn(game, {});
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         const auto ini = scratch.path() / "char" / "UI_test.ini";
         std::filesystem::create_directories(ini.parent_path());
         {
@@ -445,10 +445,10 @@ TEST_CASE("Pet window: a pet there before the UI ini is read still pops the wind
         hailstone::test::ScratchDir scratch("pet_popup");
         GameDir game(scratch.path());
         net::GameConnection conn(game, {});
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         auto& world = conn.world_for_test();
         world.player_id = 10;
         world.spawns[10].id = 10;
@@ -470,15 +470,15 @@ TEST_CASE("Pet window: a pet there before the UI ini is read still pops the wind
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
-        CHECK(run(L, "return (eq.ReplaceWindow('PetInfoWindow'))") == "false"); // the saved state
+        lua_setglobal(L, "hs");
+        CHECK(run(L, "return (hs.ReplaceWindow('PetInfoWindow'))") == "false"); // the saved state
         api.begin_frame(); // RefreshPetState: a pet, the window's first look
-        CHECK(run(L, "return (eq.ReplaceWindow('PetInfoWindow'))") == "true");
+        CHECK(run(L, "return (hs.ReplaceWindow('PetInfoWindow'))") == "true");
         // a copied layout read again does not make the window anew
         api.load_layout(scratch.path() / "defaults.ini", ini, {});
-        run(L, "eq.ShowWindow('PetInfoWindow', false)");
+        run(L, "hs.ShowWindow('PetInfoWindow', false)");
         api.begin_frame();
-        CHECK(run(L, "return (eq.ReplaceWindow('PetInfoWindow'))") == "false");
+        CHECK(run(L, "return (hs.ReplaceWindow('PetInfoWindow'))") == "false");
         lua_close(L);
     }
     ImGui::DestroyContext(ctx);

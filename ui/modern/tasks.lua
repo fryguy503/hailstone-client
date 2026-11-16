@@ -1,6 +1,7 @@
 -- Compact multi-quest journal. Objectives retain the server's order, individual hidden rows and real group
 -- separators; no numbered phases or parent/child relationships are inferred. Tracking is shared with the HUD;
 -- reward previews and abandonment remain the selected task's native actions.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -15,7 +16,7 @@ local KIND = { [0] = "Task", [1] = "Shared task", [2] = "Quest" }
 local function setCategory(category)
   state.category, state.categoryPref = category, category
   ui.SetSetting("tasks.category", category)
-  eq.SetTabPage(WINDOW, TABS, category == "history" and PAGE_HISTORY or PAGE_ACTIVE)
+  API.windows.SetTabPage(WINDOW, TABS, category == "history" and PAGE_HISTORY or PAGE_ACTIVE)
 end
 
 local function find(tasks, id)
@@ -23,7 +24,7 @@ local function find(tasks, id)
 end
 
 local function pick(task)
-  if task and eq.OpenTask(task.id) then
+  if task and API.tasks.Open(task.id) then
     state.selected, state.nativeId = task.id, task.id
     Q.invalidate()
   end
@@ -32,7 +33,7 @@ end
 -- Follow a task opened by the tracker, without taking a history selection away while its page is open.
 local function sync(tasks)
   local restoredCategory = false
-  local requestedMembers = eq.TabPage(WINDOW, TABS) == PAGE_MEMBERS
+  local requestedMembers = API.windows.TabPage(WINDOW, TABS) == PAGE_MEMBERS
   local native = find(tasks, tasks.selectedId)
   local category = ui.GetSetting("tasks.category")
   -- Earlier versions used Shared as a quest filter. The native page is a roster, not another quest list.
@@ -41,7 +42,7 @@ local function sync(tasks)
     state.categoryPref = category
     if category == "active" or category == "history" then
       state.category = category
-      eq.SetTabPage(WINDOW, TABS, category == "history" and PAGE_HISTORY or PAGE_ACTIVE)
+      API.windows.SetTabPage(WINDOW, TABS, category == "history" and PAGE_HISTORY or PAGE_ACTIVE)
       if native and category == "active" then state.selected = native.id end
       restoredCategory = true
     end
@@ -49,9 +50,9 @@ local function sync(tasks)
   if not state.loaded then
     state.loaded = true
     local test = tonumber(ui.GetSetting("test.tab." .. WINDOW .. "." .. TABS) or "")
-    if test then eq.SetTabPage(WINDOW, TABS, test); restoredCategory = false end
+    if test then API.windows.SetTabPage(WINDOW, TABS, test); restoredCategory = false end
   end
-  local page = eq.TabPage(WINDOW, TABS) or PAGE_ACTIVE
+  local page = API.windows.TabPage(WINDOW, TABS) or PAGE_ACTIVE
   if requestedMembers or page == PAGE_MEMBERS then
     state.openMembers = true
     setCategory("active")
@@ -62,7 +63,7 @@ local function sync(tasks)
     state.category = "active"
   end
   state.nativeId = tasks.selectedId
-  if page ~= PAGE_ACTIVE and page ~= PAGE_HISTORY then eq.SetTabPage(WINDOW, TABS, PAGE_ACTIVE) end
+  if page ~= PAGE_ACTIVE and page ~= PAGE_HISTORY then API.windows.SetTabPage(WINDOW, TABS, PAGE_ACTIVE) end
   if state.category ~= "history" then
     local task = find(tasks, state.selected)
     if not task then
@@ -100,7 +101,7 @@ local function categories(tasks, history, s)
     end
   end
   -- This roster belongs to the current shared task, independently of the selected quest or History page.
-  local members = eq.ListInfo(WINDOW, "STASK_MemberList") or 0
+  local members = API.windows.ListInfo(WINDOW, "STASK_MemberList") or 0
   local label = "Shared members  " .. members
   local width = T.TextSize(label, T.font.normal) + 24 * s
   ui.SameLine(0, 8 * s)
@@ -119,15 +120,15 @@ end
 -- The native roster's selection set to `row` (-1: none), clicked only when it is not that already: a click drops
 -- every list the frame has read, so one each frame for nothing made the windows build their lists again.
 local function selectMember(row)
-  local _, _, current = eq.ListInfo(WINDOW, "STASK_MemberList")
-  if (current or -1) ~= row then eq.ListClick(WINDOW, "STASK_MemberList", row, "left", 0) end
+  local _, _, current = API.windows.ListInfo(WINDOW, "STASK_MemberList")
+  if (current or -1) ~= row then API.windows.ListClick(WINDOW, "STASK_MemberList", row, "left", 0) end
 end
 
 local function sharedMembers(tasks, s)
   local popup = "##sharedMembers"
   if state.openMembers then
     state.openMembers, state.memberName = nil, nil
-    eq.ListClick(WINDOW, "STASK_MemberList", -1, "left", 0)
+    API.windows.ListClick(WINDOW, "STASK_MemberList", -1, "left", 0)
     ui.OpenPopup(popup)
   end
   local io = ui.GetIO()
@@ -154,11 +155,11 @@ local function sharedMembers(tasks, s)
     W.List(WINDOW, "STASK_MemberList", 0, math.min(210 * s, (28 + #rows * 22) * s), {
       hide = { [3] = true }, columns = { { "Member", 0 }, { "Role", 85 } },
     })
-    local _, _, picked = eq.ListInfo(WINDOW, "STASK_MemberList")
+    local _, _, picked = API.windows.ListInfo(WINDOW, "STASK_MemberList")
     state.memberName = picked and rows[picked + 1] and rows[picked + 1].texts[1] or nil
   end
   ui.Separator()
-  if eq.ChildState(WINDOW, "STASK_AddPlayerButton") == false then
+  if API.windows.ChildState(WINDOW, "STASK_AddPlayerButton") == false then
     K.Muted("Only the shared-task leader can manage members.")
   end
   local h = 25 * s
@@ -238,7 +239,7 @@ local function historyList(rows, selected, needle, s)
         T.Text(x, y + 23 * s, T.Fit(row.texts[3] or "Completed", w - 6 * s, T.font.small), C.muted, T.font.small)
       end)
       if ui.IsItemHovered() then ui.SetTooltip(title) end
-      if hit then eq.ListClick(WINDOW, "QUEST_TaskList", row.row, "left", 1) end
+      if hit then API.windows.ListClick(WINDOW, "QUEST_TaskList", row.row, "left", 1) end
     end
   end
   if shown == 0 then K.Empty(needle == "" and "No completed quests." or "No matching quests.") end
@@ -427,7 +428,7 @@ local function drawWindow(_, _, _, _, s)
 end
 
 ui.window("Tasks", function()
-  if not eq.InGame() then
+  if not API.session.InGame() then
     state.loaded, state.selected, state.nativeId, state.categoryPref = false, nil, nil, nil
     state.openMembers, state.memberName, state.memberTaskId = nil, nil, nil
     state.category, state.search = "active", ""

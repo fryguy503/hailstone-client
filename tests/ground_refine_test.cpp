@@ -10,6 +10,7 @@
 
 #include "assets/ground_refine.h"
 #include "assets/zone.h"
+#include "game/collision.h"
 #include "game_files.h"
 
 using namespace hailstone;
@@ -130,6 +131,38 @@ glm::vec3 front(const Mesh& m, std::size_t i) {
 }
 
 } // namespace
+
+TEST_CASE("world geometry visual mesh matches default smoothed drawing while movement keeps original ground") {
+    auto zone=hill_zone();
+    const auto physics=game::CollisionMesh::build(zone);
+    const auto stats=refine_ground(zone); // the same default options selected by ClientApp
+    REQUIRE(stats.curved_edges>0);
+    const auto visual=game::CollisionMesh::build_visual(zone);
+    std::size_t changed=0,checked=0;
+    for(const auto& mesh:zone.draw_terrain)
+        for(std::size_t index=0;index+2<mesh.indices.size();index+=3) {
+            const auto a=mesh.vertices[mesh.indices[index]].position;
+            const auto b=mesh.vertices[mesh.indices[index+1]].position;
+            const auto c=mesh.vertices[mesh.indices[index+2]].position;
+            if(!(glm::cross(a-b,c-b).z>0))continue;
+            const auto at=(a+b+c)/3.0f;
+            const auto rendered=visual.visual_surface_below({at.x,at.y,at.z+10});
+            REQUIRE(rendered);
+            CHECK(*rendered==doctest::Approx(at.z).epsilon(.00001));
+            const auto original=physics.floor_below({at.x,at.y,at.z+10},0);
+            REQUIRE(original);
+            if(std::abs(*original-*rendered)>.001f)++changed;
+            ++checked;
+        }
+    CHECK(checked>stats.ground_triangles);
+    CHECK(changed>0); // querying the original collision would visibly disagree with the uploaded smooth mesh
+    zone.draw_terrain.clear();zone.draw_terrain_source.clear(); // geometry selection changes on zone rebuild
+    const auto unsmoothed=game::CollisionMesh::build_visual(zone);
+    const glm::vec3 query{53,67,100};
+    REQUIRE(physics.floor_below(query,0));
+    REQUIRE(unsmoothed.visual_surface_below(query));
+    CHECK(*unsmoothed.visual_surface_below(query)==*physics.floor_below(query,0));
+}
 
 TEST_CASE("flat ground keeps its triangles and gets normals straight up") {
     Zone z;

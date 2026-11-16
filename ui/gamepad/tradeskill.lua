@@ -9,7 +9,8 @@
 --               Auto-Inventory.
 --   Combine     the container's slots and your bags side by side: A picks up or puts down the focused item (the
 --               game's slot logic), Y shows its details, X combines (the stock Combine button).
--- Everything acts through the stock windows (eq.ListClick, eq.ClickChild, eq.ClickSlot, eq.BagSlotClick).
+-- Everything acts through the stock windows (hs.ListClick, hs.ClickChild, hs.ClickSlot, hs.BagSlotClick).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -43,7 +44,7 @@ local wasShown = false
 
 -- Search Recipes with the name typed; the pad's focus goes to the first recipe found.
 local function search()
-  eq.ClickChild(TW, "SearchButton", "left")
+  API.windows.ClickChild(TW, "SearchButton", "left")
   searching, recipes.offset, recipes.lastFocus, recipes.focusNext = false, 0, nil, 1
 end
 
@@ -56,15 +57,15 @@ ui.window("Tradeskill", function()
     wasShown = true
     recipes.offset = 0
   end
-  local name = eq.WindowText(TW, "ContainerName") or ""
+  local name = API.windows.Text(TW, "ContainerName") or ""
   local hints = searching and { K.hints[1], K.hints[2], K.hints[3], K.hints[4], { "b", "Search" } }
     or { { "a", "Combine" }, { "x", "Search" }, { "y", "Favorites" }, { "lb", "Experiment" }, { "b", "Close" } }
   if W.begin("Tradeskill", { w = 1640, h = 960, title = name ~= "" and name or "Tradeskill",
-        subtitle = eq.WindowText(TW, "SkillLabel") or "", hints = hints }) then
+        subtitle = API.windows.Text(TW, "SkillLabel") or "", hints = hints }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     local leftX1 = x0 + (x1 - x0) * 0.46
-    local count, _, sel = eq.ListInfo(TW, "RecipeList")
+    local count, _, sel = API.windows.ListInfo(TW, "RecipeList")
     count = count or 0
     -- the recipes
     ui.SetCursorPos(x0 - wx, y0 - wy)
@@ -75,7 +76,7 @@ ui.window("Tradeskill", function()
     W.list("recipes", recipes, count, shownRows, rowH, leftX1 - x0,
       function(i, rx0, ry0, rx1, ry1, focused)
         if focused then stayInColumn(recipes, i, count, shownRows) end
-        local texts, r, g, b = eq.ListRow(TW, "RecipeList", i - 1)
+        local texts, r, g, b = API.windows.ListRow(TW, "RecipeList", i - 1)
         if not texts then return end
         local fav = b and b < 0.7 -- the stock list's favourite colour
         T.font(21)
@@ -86,12 +87,12 @@ ui.window("Tradeskill", function()
         T.unfont()
         if focused and recipes.lastFocus ~= i then -- select it: the stock window asks for its components
           recipes.lastFocus = i
-          eq.ListClick(TW, "RecipeList", i - 1, "left")
+          API.windows.ListClick(TW, "RecipeList", i - 1, "left")
         end
       end,
       function(i)
-        eq.ListClick(TW, "RecipeList", i - 1, "left")
-        eq.ClickChild(TW, "CombineOneButton", "left")
+        API.windows.ListClick(TW, "RecipeList", i - 1, "left")
+        API.windows.ClickChild(TW, "CombineOneButton", "left")
       end)
     if count == 0 then
       T.font(20)
@@ -106,16 +107,16 @@ ui.window("Tradeskill", function()
       T.unfont()
       ui.SetCursorPos(rx0 - wx, y0 + T.px(36) - wy)
       ui.SetNextItemWidth(x1 - rx0)
-      local text = eq.WindowText(TW, "SearchTextEdit") or ""
+      local text = API.windows.Text(TW, "SearchTextEdit") or ""
       local t, entered = ui.InputText("##tsearch", text, 64, ui.InputTextFlags.EnterReturnsTrue, { moveToEnd = true })
-      if t ~= text then eq.SetWindowText(TW, "SearchTextEdit", t) end
+      if t ~= text then API.windows.SetText(TW, "SearchTextEdit", t) end
       ui.SetCursorPos(rx0 - wx, select(2, ui.GetCursorScreenPos()) + T.px(10) - wy)
-      local done = K.draw(kb, function() return eq.WindowText(TW, "SearchTextEdit") end,
-        function(v) eq.SetWindowText(TW, "SearchTextEdit", v) end, rx0, x1)
+      local done = K.draw(kb, function() return API.windows.Text(TW, "SearchTextEdit") end,
+        function(v) API.windows.SetText(TW, "SearchTextEdit", v) end, rx0, x1)
       if done == "done" or entered then search() end
     else
       -- the selected recipe and its components
-      local texts = sel and sel >= 0 and eq.ListRow(TW, "RecipeList", sel) or nil
+      local texts = sel and sel >= 0 and API.windows.ListRow(TW, "RecipeList", sel) or nil
       T.font(26)
       local _, th = ui.CalcTextSize("Ag")
       T.draw(rx0, y0, T.fit(texts and texts[1] or "No recipe selected", x1 - rx0), texts and C.text or C.faint)
@@ -123,7 +124,7 @@ ui.window("Tradeskill", function()
       local cy = y0 + th + T.px(18)
       T.font(18)
       T.draw(rx0, cy, "COMPONENTS", C.dim)
-      local make = eq.WindowText(TW, "MakeableLabel") or ""
+      local make = API.windows.Text(TW, "MakeableLabel") or ""
       if make ~= "" then
         local tw = ui.CalcTextSize("CAN MAKE " .. make:upper())
         T.draw(x1 - tw, cy, "CAN MAKE " .. make:upper(), make ~= "0" and C.good or C.bad)
@@ -131,10 +132,10 @@ ui.window("Tradeskill", function()
       T.unfont()
       cy = cy + T.px(32)
       local s, gap = T.px(64), T.px(10)
-      local n = eq.ListInfo(TW, "ComponentList") or 0
+      local n = API.windows.ListInfo(TW, "ComponentList") or 0
       T.font(20)
       for k = 0, n - 1 do
-        local ctexts, r, g, b, tex, u0, v0, u1, v1 = eq.ListRow(TW, "ComponentList", k)
+        local ctexts, r, g, b, tex, u0, v0, u1, v1 = API.windows.ListRow(TW, "ComponentList", k)
         if ctexts then
           local col = k % 2
           local row = k // 2
@@ -153,7 +154,7 @@ ui.window("Tradeskill", function()
       if n == 0 then T.draw(rx0, cy, texts and "Asking for the components..." or "Focus a recipe to see what it needs.", C.faint) end
       T.unfont()
       -- the buttons
-      local progress = eq.WindowText(TW, "CombineProgressLabel") or ""
+      local progress = API.windows.Text(TW, "CombineProgressLabel") or ""
       local all = progress ~= "" and { "Stop (" .. progress .. ")", "CombineStopButton" } or { "Combine All", "CombineAllButton", true }
       local buttons = { { "Combine", "CombineOneButton", true }, all, { "Add Favorite", "AddFavoriteButton" },
         { "Remove Favorite", "RemoveFavoriteButton" }, { "Experiment", "ExperimentButton" }, { "Auto-Inventory", "AutoInvButton" } }
@@ -164,23 +165,23 @@ ui.window("Tradeskill", function()
       T.font(20)
       for i, b in ipairs(buttons) do
         if i % 2 == 0 then ui.SameLine(0, T.px(10)) else ui.SetCursorPos(rx0 - wx, select(2, ui.GetCursorScreenPos()) - wy) end
-        local on = eq.ChildState(TW, b[2]) ~= false
-        if T.button("##tb" .. b[2], b[1], bw, bh, { primary = b[3], disabled = not on }, pad) then eq.ClickChild(TW, b[2], "left") end
+        local on = API.windows.ChildState(TW, b[2]) ~= false
+        if T.button("##tb" .. b[2], b[1], bw, bh, { primary = b[3], disabled = not on }, pad) then API.windows.ClickChild(TW, b[2], "left") end
       end
       T.unfont()
       if pressed("Tradeskill", "x") then
         searching = true
         K.focus(kb)
       end
-      if pressed("Tradeskill", "lb") then eq.ClickChild(TW, "ExperimentButton", "left") end
+      if pressed("Tradeskill", "lb") then API.windows.ClickChild(TW, "ExperimentButton", "left") end
       if pressed("Tradeskill", "y") then
-        eq.ClickChild(TW, "ShowFavoritesButton", "left")
+        API.windows.ClickChild(TW, "ShowFavoritesButton", "left")
         recipes.offset, recipes.lastFocus = 0, nil
       end
     end
   end
   if W.finish() then
-    if searching then search() else eq.ShowWindow(TW, false) end
+    if searching then search() else API.windows.Show(TW, false) end
   end
 end)
 
@@ -193,17 +194,17 @@ for n = 1, 36 do BAG_SCREENS[n] = "Bag" .. n end
 local function combineBag()
   for n = 1, 36 do
     local screen = BAG_SCREENS[n]
-    local name, slots, combine = eq.BagInfo(screen)
+    local name, slots, combine = API.inventory.BagInfo(screen)
     if not name then break end
     if combine then return screen, name, slots end
   end
 end
 
 ui.window("Combine", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   local screen, name, slots = combineBag()
   if not screen or not W.shown(screen) then return end
-  local held = eq.Item(eq.CursorSlot or 33)
+  local held = API.inventory.Item(API.inventory.CursorSlot or 33)
   if W.begin("Combine", { w = 1500, h = 900, title = name, subtitle = slots .. " slots",
         hints = { { "a", held and "Put down" or "Pick up" }, { "x", "Combine" }, { "y", "Details" }, { "b", "Close" } } }) then
     local x0, y0, x1, y1 = W.area()
@@ -217,22 +218,22 @@ ui.window("Combine", function()
     ui.BeginGroup()
     for i = 0, slots - 1 do
       if i % per ~= 0 then ui.SameLine(0, gap) end
-      local item = eq.BagSlotItem(screen, i)
+      local item = API.inventory.BagSlotItem(screen, i)
       local clicked, focused = T.slot("##cs" .. i, item, size, { label = tostring(i + 1) }, pad)
       if focused then
         focusedItem, focusedWhere = item, name .. ", slot " .. (i + 1)
-        if pressed("Combine", "y") and item then eq.BagSlotClick(screen, i, "rightheld") end
+        if pressed("Combine", "y") and item then API.inventory.BagSlotClick(screen, i, "rightheld") end
       end
-      if clicked then eq.BagSlotClick(screen, i, "left") end
+      if clicked then API.inventory.BagSlotClick(screen, i, "left") end
     end
     ui.EndGroup()
     ui.SetCursorPos(x0 - wx, select(2, ui.GetCursorScreenPos()) + T.px(16) - wy)
     T.font(22)
     if T.button("##combine", "Combine", per * size + (per - 1) * gap, T.px(64), { primary = true, glyph = "x" }, pad) then
-      eq.ClickChild(screen, "Container_Combine", "left")
+      API.windows.ClickChild(screen, "Container_Combine", "left")
     end
     T.unfont()
-    if pressed("Combine", "x") then eq.ClickChild(screen, "Container_Combine", "left") end
+    if pressed("Combine", "x") then API.windows.ClickChild(screen, "Container_Combine", "left") end
     -- your bags: the items to put in (the combine bag's own slots are above)
     local bx0 = x0 + per * (size + gap) + T.px(40)
     local listX1 = x1 - T.px(400)
@@ -241,7 +242,7 @@ ui.window("Combine", function()
     T.heading("Your bags")
     local bper = math.max(1, math.floor((listX1 - bx0 + gap) / (size + gap)))
     local n = 0
-    local bagItem = eq.BagSlotItem(screen, -1)
+    local bagItem = API.inventory.BagSlotItem(screen, -1)
     local acted = false -- (a click may have moved an item: the bag slots are read again after it)
     local function cell(slot, bag, item, where)
       if n % bper ~= 0 then ui.SameLine(0, gap) end
@@ -249,22 +250,22 @@ ui.window("Combine", function()
       local clicked, focused = T.slot(I.cellId("inv", slot, bag), item, size, { label = where }, pad)
       if focused then
         focusedItem, focusedWhere = item, where
-        if pressed("Combine", "y") and item then eq.ClickSlot(slot, bag, "rightheld") end
+        if pressed("Combine", "y") and item then API.inventory.ClickSlot(slot, bag, "rightheld") end
       end
       if clicked then
-        eq.ClickSlot(slot, bag, "left")
+        API.inventory.ClickSlot(slot, bag, "left")
         acted = true
       end
     end
     I.readBagSlots(bagSlots)
     for slot = 23, 32 do
       local it = bagSlots[slot]
-      if not it or (it.bagSlots or 0) == 0 then cell(slot, nil, it, eq.SlotName(slot)) end
+      if not it or (it.bagSlots or 0) == 0 then cell(slot, nil, it, API.inventory.SlotName(slot)) end
     end
     for slot = 23, 32 do
-      local bag = acted and eq.Item(slot) or bagSlots[slot]
+      local bag = acted and API.inventory.Item(slot) or bagSlots[slot]
       if bag and (bag.bagSlots or 0) > 0 and not (bagItem and bag.id == bagItem.id and bag.name == bagItem.name) then
-        for i = 0, bag.bagSlots - 1 do cell(slot, i, eq.Item(slot, i), bag.name) end
+        for i = 0, bag.bagSlots - 1 do cell(slot, i, API.inventory.Item(slot, i), bag.name) end
       end
     end
     ui.EndGroup()
@@ -283,5 +284,5 @@ ui.window("Combine", function()
       T.unfont()
     end
   end
-  if W.finish() then eq.ShowWindow(screen, false) end
+  if W.finish() then API.windows.Show(screen, false) end
 end)

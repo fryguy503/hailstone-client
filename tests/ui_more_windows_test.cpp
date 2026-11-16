@@ -1,4 +1,4 @@
-// More stock windows over the eq API (app/lua_eq_names.cpp, ...): the name change windows.
+// More stock windows over the hs API (app/lua_ui_names.cpp, ...): the name change windows.
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -13,8 +13,8 @@
 
 #include <imgui.h>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_windows.h"
 #include "core/ini_file.h"
 #include "game_files.h"
 #include "net/game_connection.h"
@@ -32,8 +32,8 @@ struct Harness {
     hailstone::test::ScratchDir dir_scratch{"ui_more_windows_test"};
     fs::path dir = dir_scratch.path();
     net::GameConnection conn;
-    app::EqHost host;
-    std::unique_ptr<app::EqApi> api;
+    app::UiHost host;
+    std::unique_ptr<app::UiApi> api;
     std::map<std::string, std::string> char_ini; // "section/key" -> value
     explicit Harness(const GameDir& game) : conn(game, {}) {
         fs::remove_all(dir);
@@ -41,7 +41,7 @@ struct Harness {
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
-        api = std::make_unique<app::EqApi>(host);
+        api = std::make_unique<app::UiApi>(host);
         api->load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ImGui::GetIO().DisplaySize = ImVec2(1280, 720);
         conn.set_character_ini(
@@ -227,7 +227,7 @@ TEST_CASE("Layout copy: another character's layout for a size, onto this one's w
     CHECK(me.get("InventoryWindow", "Show") == "1");
     // The current file's own windowed layout onto itself is refused.
     {
-        app::EqHost::LayoutSource self{chars / "Me" / "UI.ini", "Me", "Windowed"};
+        app::UiHost::LayoutSource self{chars / "Me" / "UI.ini", "Me", "Windowed"};
         auto refused = t.host.copy_layout(self, {});
         REQUIRE(refused);
         CHECK(refused->first == 6337u);

@@ -5,18 +5,20 @@
 -- here, under the stock labels and tooltips; the original's Voice and Share pages (its voice chat, Facebook, Twitter
 -- and EQPlayers services) are left out.
 --
--- Every setting is a client option by name: eq.Option(name) reads it (nil when the client does not have it, and its
--- row is left out), eq.SetOption(name, value) applies and saves it (hailstone.ini; app/client_app_options.cpp).
--- The key bindings, chat filters and user colours come from the original window's lists (app/lua_eq_dialogs.cpp
+-- Every setting is a client option by name: hs.Option(name) reads it (nil when the client does not have it, and its
+-- row is left out), hs.SetOption(name, value) applies and saves it (hailstone.ini; app/client_app_options.cpp).
+-- The key bindings, chat filters and user colours come from the original window's lists (app/lua_ui_dialogs.cpp
 -- OptionsWindow).
 --
 -- For contrast (WCAG AA, lib/palettes.lua checks): the section headings in the palette's heading colour, and every
 -- field, check box, combo box, slider and button outlined in its frameBorder colour (the window's own edge keeps the
 -- hairline), so the controls stand out from the window and not only their text does.
+local API = hs.UI
 local style = dofile("lib/style.lua")
 local T = dofile("lib/theme.lua")
 local snap = dofile("lib/snap.lua")
 local esc = dofile("lib/escape.lua")
+local interfaceStatus = dofile("lib/interface_status.lua")
 local C = T.color
 local WINDOW = "OptionsWindow"
 
@@ -105,7 +107,7 @@ end
 
 -- A combo box over choices (1-based here, the option's values 0-based); `values` maps a choice to the option's value.
 local function combo(name, label, choices, tooltip, values)
-  local v = eq.Option(name)
+  local v = API.settings.Option(name)
   if v == nil then
     lastRowShown = false -- no row: a note() meant for it is left out too
     return
@@ -120,7 +122,7 @@ local function combo(name, label, choices, tooltip, values)
     if ui.BeginCombo("##" .. name, preview) then
       for i, c in ipairs(choices) do
         if ui.Selectable(c .. "##" .. i, i - 1 == current) then
-          eq.SetOption(name, values and values[i] or (i - 1))
+          API.settings.SetOption(name, values and values[i] or (i - 1))
         end
       end
       ui.EndCombo()
@@ -129,40 +131,40 @@ local function combo(name, label, choices, tooltip, values)
 end
 
 local function check(name, label, tooltip)
-  local v = eq.Option(name)
+  local v = API.settings.Option(name)
   if v == nil then
     lastRowShown = false -- no row: a note() meant for it is left out too
     return
   end
   row(label, tooltip, function()
     local on, changed = ui.Checkbox("##" .. name, v ~= 0)
-    if changed then eq.SetOption(name, on and 1 or 0) end
+    if changed then API.settings.SetOption(name, on and 1 or 0) end
   end)
 end
 
 -- A check box shown inverted: checked while the option is 0 (SyncGeneralPage's TradeskillWnd CtrlBypass box).
 local function invcheck(name, label, tooltip)
-  local v = eq.Option(name)
+  local v = API.settings.Option(name)
   if v == nil then
     lastRowShown = false -- no row: a note() meant for it is left out too
     return
   end
   row(label, tooltip, function()
     local on, changed = ui.Checkbox("##" .. name, v == 0)
-    if changed then eq.SetOption(name, on and 0 or 1) end
+    if changed then API.settings.SetOption(name, on and 0 or 1) end
   end)
 end
 
 -- A slider over the option's own values (min..max); text(v) is what it shows.
 local function slider(name, label, min, max, text, tooltip)
-  local v = eq.Option(name)
+  local v = API.settings.Option(name)
   if v == nil then
     lastRowShown = false -- no row: a note() meant for it is left out too
     return
   end
   row(label, tooltip, function()
     local nv, changed = ui.SliderInt("##" .. name, v, min, max, text and text(v) or nil)
-    if changed then eq.SetOption(name, nv) end
+    if changed then API.settings.SetOption(name, nv) end
   end)
 end
 
@@ -176,14 +178,14 @@ local function pct(v) return string.format("%d %%", v) end
 
 -- One bit of an option (the click-through mask).
 local function bit(name, mask, label, tooltip)
-  local v = eq.Option(name)
+  local v = API.settings.Option(name)
   if v == nil then
     lastRowShown = false -- no row: a note() meant for it is left out too
     return
   end
   row(label, tooltip, function()
     local on, changed = ui.Checkbox("##" .. name .. mask, v & mask ~= 0)
-    if changed then eq.SetOption(name, on and (v | mask) or (v & ~mask)) end
+    if changed then API.settings.SetOption(name, on and (v | mask) or (v & ~mask)) end
   end)
 end
 
@@ -306,16 +308,16 @@ local function displayTab()
     combo("window_mode", "Display Mode", { "Windowed", "Borderless Fullscreen", "Fullscreen" },
       "Windowed: a normal window. Borderless: a window covering the whole screen at the desktop's resolution "
       .. "(quick to switch away from). Fullscreen: exclusive, at the resolution below.")
-    local mode = eq.Option("window_mode") or 0
-    local res = eq.Option("resolution")
+    local mode = API.settings.Option("window_mode") or 0
+    local res = API.settings.Option("resolution")
     if res ~= nil then
       row("Resolution", mode == 1 and "Borderless fullscreen always uses the desktop's resolution."
         or "The window's size (windowed) or the screen mode (fullscreen).", function()
-        local choices = eq.OptionChoices("resolution")
+        local choices = API.settings.OptionChoices("resolution")
         ui.BeginDisabled(mode == 1)
         if ui.BeginCombo("##resolution", choices[res + 1] or "Custom", ui.ComboFlags.HeightLarge) then
           for i, c in ipairs(choices) do
-            if ui.Selectable(c .. "##r" .. i, i - 1 == res) then eq.SetOption("resolution", i - 1) end
+            if ui.Selectable(c .. "##r" .. i, i - 1 == res) then API.settings.SetOption("resolution", i - 1) end
           end
           ui.EndCombo()
         end
@@ -334,15 +336,15 @@ local function displayTab()
       BG_FPS)
   end)
   section("View", function()
-    local fov = eq.Option("fov")
+    local fov = API.settings.Option("fov")
     if fov ~= nil then
       row("Field of View", "Degrees across the screen. The original's is 63.", function()
         local w = ui.GetContentRegionAvail()
         ui.SetNextItemWidth(w - 70 * U)
         local nv, changed = ui.SliderInt("##fov", fov, 45, 120, fov .. "°")
-        if changed then eq.SetOption("fov", nv) end
+        if changed then API.settings.SetOption("fov", nv) end
         ui.SameLine()
-        if ui.Button("Default##fov", 62 * U, 0) then eq.SetOption("fov", -1) end
+        if ui.Button("Default##fov", 62 * U, 0) then API.settings.SetOption("fov", -1) end
       end)
     end
   end)
@@ -372,25 +374,32 @@ local function displayTab()
     check("iso_hover", "Highlight Under Cursor", "A ring under the character, door or item the mouse is over.")
   end)
   section("Interface", function()
-    local uiName = eq.Option("ui_name")
+    local uiName = API.settings.Option("ui_name")
     if uiName ~= nil then
-      local names, info = eq.OptionChoices("ui_name"), eq.OptionChoices("ui_name_info")
+      local names, info = API.settings.OptionChoices("ui_name"), API.settings.OptionChoices("ui_name_info")
+      local packs = API.Supports("interfaces", "List") and API.interfaces.List() or {}
       local function infoOf(i)
         local d, input = (info[i] or ""):match("^(.-)\n(.*)$")
         return (d or "") .. ((input and input ~= "") and ("\nMade for: " .. input) or "")
       end
-      row("User Interface", "The look and layout of every window, kept for this server. Takes effect at the next login.", function()
+      row("User Interface", "The look and layout of every window, kept for this server. Installed UI addons appear here automatically.", function()
         if ui.BeginCombo("##ui_name", names[uiName + 1] or "?") then
           for i, n in ipairs(names) do
-            if ui.Selectable(n .. "##ui" .. i, i - 1 == uiName) then eq.SetOption("ui_name", i - 1) end
-            tip(infoOf(i))
+            local available = not packs[i] or packs[i].available ~= false
+            ui.BeginDisabled(not available)
+            if ui.Selectable(n .. "##ui" .. i, i - 1 == uiName) then API.settings.SetOption("ui_name", i - 1) end
+            ui.EndDisabled()
+            if ui.IsItemHovered(ui.HoveredFlags.DelayShort | ui.HoveredFlags.AllowWhenDisabled) then
+              ui.SetTooltip(infoOf(i) .. (available and "" or ("\nUnavailable: " .. (packs[i].reason or ""))))
+            end
           end
           ui.EndCombo()
         end
       end)
-      local now = eq.Option("ui_name_now")
-      if now ~= nil and now ~= uiName then
-        note("Log in again to switch to " .. (names[uiName + 1] or "it") .. " (now " .. (names[now + 1] or "?") .. ").")
+    end
+    if API.Supports("interfaces", "Status") then
+      for _, entry in ipairs(interfaceStatus(API.interfaces.Status())) do
+        row(entry[1], "Interface loading information and diagnostics", function() ui.TextWrapped(entry[2]) end)
       end
     end
     -- The running UI's colour palettes (the global ui_palette its theme sets up: classic's palette.lua, modern's
@@ -411,25 +420,25 @@ local function displayTab()
     end
     -- The map pack: the map window's maps directory (its MVW_MapsDirCombobox, "Main" "MapSkin" in the character's
     -- UI ini), the subfolders of maps/ (docs/layout.md "Maps"). The map, minimap and zone map change at once.
-    local packs, pack = eq.ComboInfo("MapViewWnd", "MVW_MapsDirCombobox")
+    local packs, pack = API.windows.ComboInfo("MapViewWnd", "MVW_MapsDirCombobox")
     if packs and #packs > 0 then
       row("Map Pack", "The folder under maps/ the map, minimap and zone map are read from first, kept for this character. Default: maps/ itself.", function()
         if ui.BeginCombo("##map_pack", packs[pack + 1] or packs[1]) then
           for i, n in ipairs(packs) do
-            if ui.Selectable(n .. "##mp" .. i, i - 1 == pack) then eq.ComboSelect("MapViewWnd", "MVW_MapsDirCombobox", i - 1) end
+            if ui.Selectable(n .. "##mp" .. i, i - 1 == pack) then API.windows.ComboSelect("MapViewWnd", "MVW_MapsDirCombobox", i - 1) end
           end
           ui.EndCombo()
         end
       end)
     end
     -- The original's General page font button and list (the system's faces; /fontface).
-    local fonts = eq.OptionChoices("font_face")
+    local fonts = API.settings.OptionChoices("font_face")
     if fonts and #fonts > 0 then
       combo("font_face", "Current Font", fonts, "The face every window's text is drawn in (/fontface).")
     end
     combo("ui_scale", "UI Scale", SCALE_NAMES,
       "The size of the windows and text. Takes effect the next time the game starts.", SCALES)
-    local want, now = eq.Option("ui_scale"), eq.Option("ui_scale_now")
+    local want, now = API.settings.Option("ui_scale"), API.settings.Option("ui_scale_now")
     if want and want > 0 and now and want ~= now then
       note("Restart the game to change the UI scale (now " .. now .. " %).")
     end
@@ -465,7 +474,7 @@ local function displayTab()
   -- Hailstone's name plate text (game/nameplate_style.h; docs/graphics.md "Name plates"): the names over heads in
   -- their own face and size. Changes show at once.
   section("Name Plates", function()
-    local faces = eq.OptionChoices("plate_font_face")
+    local faces = API.settings.OptionChoices("plate_font_face")
     if faces and #faces > 0 then
       combo("plate_font_face", "Font", faces,
         "Hailstone: the face the names over players and NPCs are drawn in. Same as UI follows Current Font.")
@@ -481,7 +490,7 @@ local function displayTab()
       "Hailstone: the size of the lines under a name (a player's guild, an NPC's role or a pet's owner), against the name's.")
   end)
   -- Hailstone's target ring settings (app/target_ring.cpp; docs/graphics.md "The target ring"): its colour for each
-  -- con (the colour picker, eq.ClickChild TargetRingColor<n>), how opaque and how bright it is, and its cues.
+  -- con (the colour picker, hs.ClickChild TargetRingColor<n>), how opaque and how bright it is, and its cues.
   section("Target Ring", function()
     check("target_ring_cues", "Cues",
       "Hailstone: the ring sweeps in when you change target, and turns faster and pulses while you auto attack.")
@@ -490,42 +499,42 @@ local function displayTab()
     slider("target_ring_opacity", "Opacity", 25, 200, pct, "How solid the ring is, against the con colour's own.")
     slider("target_ring_glow", "Glow", 0, 100, pct, "How brightly the ring's core shines (with the bloom).")
     -- Max Size (game::cap_ring_radius): 4 .. 40 units, and the slider's top end (41) is Off, the original's size.
-    local maxSize = eq.Option("target_ring_max_size")
+    local maxSize = API.settings.Option("target_ring_max_size")
     if maxSize ~= nil then
       row("Max Size", "Hailstone: the largest the ring gets, so a giant's or a dragon's does not fill the screen; "
           .. "a smaller ring is left as it is. About 6 is a human's. All the way right is Off: every ring at its "
           .. "own size, as on the original client.", function()
         local v = maxSize == 0 and 41 or maxSize
         local nv, changed = ui.SliderInt("##target_ring_max_size", v, 4, 41, v > 40 and "Off" or tostring(v))
-        if changed and nv ~= v then eq.SetOption("target_ring_max_size", nv > 40 and 0 or nv) end
+        if changed and nv ~= v then API.settings.SetOption("target_ring_max_size", nv > 40 and 0 or nv) end
       end)
     end
     for i, con in ipairs(RING_CONS) do
-      local rgb = eq.Option("target_ring_color_" .. (i - 1))
+      local rgb = API.settings.Option("target_ring_color_" .. (i - 1))
       if rgb then
         row(con[1], "Hailstone: the ring's colour for a target that cons " .. con[2] .. ". Click to change it.", function()
           local r, g, b = (rgb >> 16 & 0xff) / 255, (rgb >> 8 & 0xff) / 255, (rgb & 0xff) / 255
           ui.PushStyleColor(ui.Col.Button, r, g, b, 1)
           ui.PushStyleColor(ui.Col.ButtonHovered, r, g, b, 0.85)
           ui.PushStyleColor(ui.Col.ButtonActive, r, g, b, 0.7)
-          if ui.Button("##ringcolor" .. i, 60 * U, 0) then eq.ClickChild(WINDOW, "TargetRingColor" .. (i - 1)) end
+          if ui.Button("##ringcolor" .. i, 60 * U, 0) then API.windows.ClickChild(WINDOW, "TargetRingColor" .. (i - 1)) end
           ui.PopStyleColor(3)
         end)
       end
     end
     row("", nil, function()
-      if ui.Button("Default Colors") then eq.ClickChild(WINDOW, "TargetRingColorDefault") end
+      if ui.Button("Default Colors") then API.windows.ClickChild(WINDOW, "TargetRingColorDefault") end
     end)
   end)
   -- The original's window fade sliders (COptionsWnd::WndNotification, CXWndManager::SetGlobal*): they set every
   -- window's value at once and keep it in the UI ini's [Main].
   section("Windows", function()
     local function global(label, key, default, count, write, text, tooltip)
-      local raw = tonumber(eq.UiIni("Main", key) or "") or default
+      local raw = tonumber(API.settings.UiIni("Main", key) or "") or default
       local v = write.from(raw)
       row(label, tooltip, function()
         local nv, changed = ui.SliderInt("##" .. key, v, 0, count - 1, text(v))
-        if changed and nv ~= v then eq.SetUiIni("Main", key, tostring(write.to(nv))) end
+        if changed and nv ~= v then API.settings.SetUiIni("Main", key, tostring(write.to(nv))) end
       end)
     end
     global("Window Transparency", "GlobalAlpha", 255, 230,
@@ -599,30 +608,30 @@ local function displayTab()
       ui.TableNextColumn()
       ui.TableNextColumn()
       if ui.Button("Reset Picture", 0, 0) then
-        for _, o in ipairs({ "brightness", "contrast", "gamma" }) do eq.SetOption(o, 10) end
+        for _, o in ipairs({ "brightness", "contrast", "gamma" }) do API.settings.SetOption(o, 10) end
       end
     end
   end)
   -- The RoF2 asset folder the game reads (hailstone.ini assets.path); the picker changes it on the login screen.
-  local pick = eq.Option("asset_folder_pick")
+  local pick = API.settings.Option("asset_folder_pick")
   if pick ~= nil then
     section("Game Files", function()
       row("Asset Folder", "The EverQuest (Rain of Fear 2) installation the game reads its files from. "
         .. "Hailstone never changes it.", function()
-        ui.TextWrapped(eq.OptionChoices("asset_folder")[1] or "?")
+        ui.TextWrapped(API.settings.OptionChoices("asset_folder")[1] or "?")
       end)
       if search == "" then
         ui.TableNextRow()
         ui.TableNextColumn()
         ui.TableNextColumn()
         if pick == 0 then
-          if ui.Button("Change Asset Folder", 0, 0) then eq.SetOption("asset_folder_pick", 1) end
+          if ui.Button("Change Asset Folder", 0, 0) then API.settings.SetOption("asset_folder_pick", 1) end
           tip("Shows the folder picker on the login screen (after camping out), or the next time the game starts.")
         else
-          if ui.Button("Keep This Folder", 0, 0) then eq.SetOption("asset_folder_pick", 0) end
+          if ui.Button("Keep This Folder", 0, 0) then API.settings.SetOption("asset_folder_pick", 0) end
         end
         if pick ~= 0 then
-          note(eq.Option("asset_folder_override") == 1
+          note(API.settings.Option("asset_folder_override") == 1
             and "Started with --game-dir or EQ_GAME_DIR: that folder is used while it is given."
             or "The folder picker shows on the login screen: camp out to choose another asset folder.")
         end
@@ -645,7 +654,7 @@ local function currentPreset()
   for i, p in ipairs(PRESETS) do
     local same = true
     for _, k in ipairs(PRESET_KEYS) do
-      if eq.Option(k) ~= p[k] then same = false end
+      if API.settings.Option(k) ~= p[k] then same = false end
     end
     if same then return i end
   end
@@ -656,27 +665,27 @@ local upscalerAtStart -- so does the upscaler
 local packAtStart -- so does the texture pack
 
 local function graphicsTab()
-  msaaAtStart = msaaAtStart or eq.Option("msaa")
-  upscalerAtStart = upscalerAtStart or eq.Option("upscaler")
+  msaaAtStart = msaaAtStart or API.settings.Option("msaa")
+  upscalerAtStart = upscalerAtStart or API.settings.Option("upscaler")
   section("Quality", function()
     row("Preset", "Sets shadows, anti-aliasing, ambient occlusion, distance blur and view distance together.", function()
       local p = currentPreset()
       if ui.BeginCombo("##preset", p and PRESETS[p].name or "Custom") then
         for i, preset in ipairs(PRESETS) do
           if ui.Selectable(preset.name, i == p) then
-            for _, k in ipairs(PRESET_KEYS) do eq.SetOption(k, preset[k]) end
+            for _, k in ipairs(PRESET_KEYS) do API.settings.SetOption(k, preset[k]) end
           end
         end
         ui.EndCombo()
       end
     end)
     -- 0 Low, 1 Medium, 2 High (render/graphics_tier.h): what the first start picked for this computer.
-    local tier = eq.Option("gpu_tier")
+    local tier = API.settings.Option("gpu_tier")
     if tier ~= nil then
       local tierName = ({ [0] = "Low", [1] = "Medium", [2] = "High" })[tier] or "High"
       row("Detect", "Sets the graphics this computer's graphics card and processor suit, as the first start did: "
           .. tierName .. " here (Low also uses the classic lighting, without upscaling or radial flora). Anti-aliasing and the upscaler change the next time the game starts.", function()
-        if ui.Button("Use " .. tierName .. " for This Computer", 0, 0) then eq.SetOption("detect_graphics", 1) end
+        if ui.Button("Use " .. tierName .. " for This Computer", 0, 0) then API.settings.SetOption("detect_graphics", 1) end
       end)
     end
     combo("shadows", "Shadows", { "Off", "Low", "Medium", "High" },
@@ -686,7 +695,7 @@ local function graphicsTab()
       "How far from the camera characters cast shadows (the original's advanced display setting; /shadows on <n>).")
     combo("msaa", "Anti-aliasing", { "Off", "2x MSAA", "4x MSAA" },
       "Smooths edges. Takes effect the next time the game starts.")
-    local msaa = eq.Option("msaa")
+    local msaa = API.settings.Option("msaa")
     if msaa ~= nil and msaaAtStart ~= nil and msaa ~= msaaAtStart then
       note("Restart the game to change anti-aliasing.")
     end
@@ -694,17 +703,17 @@ local function graphicsTab()
     -- upscaler_choice); every one from 2 on is temporal.
     if (upscalerAtStart or 0) >= 2 then note("The temporal upscalers smooth edges themselves: MSAA is off while one is on.") end
     local upscalers = { "Off", "AMD FSR 1", "Temporal (TAA)", "AMD FSR 3.1" }
-    for _, name in ipairs(eq.OptionChoices("upscaler_providers") or {}) do upscalers[#upscalers + 1] = name end
+    for _, name in ipairs(API.settings.OptionChoices("upscaler_providers") or {}) do upscalers[#upscalers + 1] = name end
     combo("upscaler", "Upscaler", upscalers,
       "Off draws the 3D world at full size with no upscaling and no Frame Generation. FSR 1 sharpens each frame on its own, below a render scale of 100. Temporal and FSR 3.1 build a smooth picture over several frames at every render scale and replace MSAA; FSR 3.1 is AMD's, Temporal is Hailstone's own. Upscalers installed as add-ons follow them, and work as FSR 3.1 does; one the graphics card cannot run falls back to FSR 3.1. Takes effect the next time the game starts.")
-    local upscaler = eq.Option("upscaler")
+    local upscaler = API.settings.Option("upscaler")
     -- Off and FSR 1 draw the same way, so a change between them needs no restart.
     if upscaler ~= nil and upscalerAtStart ~= nil and upscaler ~= upscalerAtStart
         and (upscaler >= 2 or upscalerAtStart >= 2) then
       note("Restart the game to change the upscaler.")
     end
     -- A Low computer (render/graphics_tier.h): FSR 3.1 and frame generation cost more than they give back there.
-    if tier == 0 and (upscaler == 3 or eq.Option("frame_gen") == 1) then
+    if tier == 0 and (upscaler == 3 or API.settings.Option("frame_gen") == 1) then
       note("AMD FSR 3.1 and Frame Generation are slow on this computer's graphics: Off or AMD FSR 1 is faster here.")
     end
     -- Off draws at full size without frame generation: the settings below would do nothing.
@@ -720,13 +729,13 @@ local function graphicsTab()
       if temporal or (upscaler or 0) >= 2 then
         check("frame_gen", "Frame Generation",
           "Shows a frame made between each two the game draws, from their motion: smoother movement on a high refresh rate screen. The game then draws at most half the refresh rate, keeps vertical sync on and reacts a little later. Needs Temporal or AMD FSR 3.1.")
-        if not temporal and eq.Option("frame_gen") == 1 then
+        if not temporal and API.settings.Option("frame_gen") == 1 then
           note("Frame Generation starts after a restart, when the new upscaler does.")
         end
       end
       slider("render_scale", "Render Scale", 33, 100, pct,
         "Draws the 3D world at this share of its size and upscales it. Lower is faster and softer; the interface stays sharp.")
-      if (eq.Option("render_scale") or 100) < 100 or temporal then
+      if (API.settings.Option("render_scale") or 100) < 100 or temporal then
         ticks("sharpness", "Upscale Sharpening", function(t) return pct(t * 5) end,
           "How much the upscaled picture is sharpened.")
       end
@@ -771,16 +780,16 @@ local function graphicsTab()
   end)
   -- Texture packs (display.texture_folder): a folder of the Hailstone folder's textures/, such as an HD pack built by
   -- Hailstone Texture Studio (a tool add-on, docs/addons.md), read at the next start.
-  local pack = eq.Option("texture_pack")
+  local pack = API.settings.Option("texture_pack")
   if pack ~= nil then
     packAtStart = packAtStart or pack
     section("Textures", function()
       row("Texture Pack", "Replacement textures from a folder of Hailstone's textures folder. Off: the game's own.",
         function()
-          local choices = eq.OptionChoices("texture_pack")
+          local choices = API.settings.OptionChoices("texture_pack")
           if ui.BeginCombo("##texture_pack", choices[pack + 1] or "A folder of its own") then
             for i, name in ipairs(choices) do
-              if ui.Selectable(name, i == pack + 1) then eq.SetOption("texture_pack", i - 1) end
+              if ui.Selectable(name, i == pack + 1) then API.settings.SetOption("texture_pack", i - 1) end
             end
             ui.EndCombo()
           end
@@ -790,8 +799,8 @@ local function graphicsTab()
         ui.TableNextRow()
         ui.TableNextColumn()
         ui.TableNextColumn()
-        if eq.Option("texture_studio") == 1 then
-          if ui.Button("Texture Studio...", 0, 0) then eq.SetOption("texture_studio", 1) end
+        if API.settings.Option("texture_studio") == 1 then
+          if ui.Button("Texture Studio...", 0, 0) then API.settings.SetOption("texture_studio", 1) end
           tip("Builds an HD texture pack from your own game files on your graphics card (a program of its own).")
         else
           ui.TextDisabled("Texture Studio builds HD packs: install it from Add-ons on the login screen.")
@@ -801,20 +810,20 @@ local function graphicsTab()
   end
   if search == "" and ui.Button("Restore Default Graphics", 0, 0) then
     -- (anti-aliasing and the lighting mode stay as they are)
-    eq.SetOption("view_distance", 6)
-    eq.SetOption("exposure", 10)
-    eq.SetOption("ao", 1)
-    eq.SetOption("distance_blur", 1)
-    if eq.Option("color_grade") ~= nil then eq.SetOption("color_grade", 1) end
-    eq.SetOption("shadows", 2)
-    eq.SetOption("tonemap", 0)
-    eq.SetOption("clip_plane", 15)
-    if eq.Option("bloom") ~= nil then eq.SetOption("bloom", 10) end
-    if eq.Option("render_scale") ~= nil then eq.SetOption("render_scale", 100) end
-    if eq.Option("sharpness") ~= nil then eq.SetOption("sharpness", 10) end
-    eq.SetOption("max_camera_distance", 60)
-    if eq.Option("flora_distance") ~= nil then eq.SetOption("flora_distance", 400) end
-    if eq.Option("grass_density") ~= nil then eq.SetOption("grass_density", 100) end
+    API.settings.SetOption("view_distance", 6)
+    API.settings.SetOption("exposure", 10)
+    API.settings.SetOption("ao", 1)
+    API.settings.SetOption("distance_blur", 1)
+    if API.settings.Option("color_grade") ~= nil then API.settings.SetOption("color_grade", 1) end
+    API.settings.SetOption("shadows", 2)
+    API.settings.SetOption("tonemap", 0)
+    API.settings.SetOption("clip_plane", 15)
+    if API.settings.Option("bloom") ~= nil then API.settings.SetOption("bloom", 10) end
+    if API.settings.Option("render_scale") ~= nil then API.settings.SetOption("render_scale", 100) end
+    if API.settings.Option("sharpness") ~= nil then API.settings.SetOption("sharpness", 10) end
+    API.settings.SetOption("max_camera_distance", 60)
+    if API.settings.Option("flora_distance") ~= nil then API.settings.SetOption("flora_distance", 400) end
+    if API.settings.Option("grass_density") ~= nil then API.settings.SetOption("grass_density", 100) end
   end
 end
 
@@ -847,7 +856,7 @@ local function keyCommandNames(rows, filter)
   if keyNames.key ~= key then
     local names = {}
     for r = 0, rows - 1 do
-      local texts = eq.ListRow(WINDOW, KEYS_LIST, r)
+      local texts = API.windows.ListRow(WINDOW, KEYS_LIST, r)
       names[r] = texts and texts[1] or ""
     end
     keyNames.key, keyNames.names = key, names
@@ -856,22 +865,22 @@ local function keyCommandNames(rows, filter)
 end
 
 local function keyBindings()
-  local choices, selected = eq.ComboInfo(WINDOW, KEYS_FILTER)
+  local choices, selected = API.windows.ComboInfo(WINDOW, KEYS_FILTER)
   if choices then
     ui.Text("Show")
     ui.SameLine()
     ui.SetNextItemWidth(180 * U)
     if ui.BeginCombo("##keyfilter", choices[selected + 1] or "", ui.ComboFlags.HeightLarge) then
       for i, c in ipairs(choices) do
-        if ui.Selectable(c .. "##k" .. i, i - 1 == selected) then eq.ComboSelect(WINDOW, KEYS_FILTER, i - 1) end
+        if ui.Selectable(c .. "##k" .. i, i - 1 == selected) then API.windows.ComboSelect(WINDOW, KEYS_FILTER, i - 1) end
       end
       ui.EndCombo()
     end
     ui.SameLine()
   end
-  if ui.Button("Default Keys", 0, 0) then eq.WindowButton(WINDOW, "OKP_DefaultKeysButton") end
+  if ui.Button("Default Keys", 0, 0) then API.windows.Button(WINDOW, "OKP_DefaultKeysButton") end
   ui.TextDisabled("Click a key to change it, then press the new key (Escape clears it). Red: the key is bound to another command too.")
-  local rows = eq.ListInfo(WINDOW, KEYS_LIST)
+  local rows = API.windows.ListInfo(WINDOW, KEYS_LIST)
   if not rows then return end
   local _, availH = ui.GetContentRegionAvail()
   local flags = ui.TableFlags.Borders | ui.TableFlags.RowBg | ui.TableFlags.ScrollY | ui.TableFlags.Resizable
@@ -890,7 +899,7 @@ local function keyBindings()
         local kc = texts.colors and texts.colors[c]
         if kc then ui.PushStyleColor(ui.Col.Text, kc[1], kc[2], kc[3], 1) end
         if ui.Selectable((t ~= "" and t or "-") .. "##" .. r .. "_" .. c, false) then
-          eq.ListClick(WINDOW, KEYS_LIST, r, "left", c - 1)
+          API.windows.ListClick(WINDOW, KEYS_LIST, r, "left", c - 1)
         end
         if kc then ui.PopStyleColor() end
         if kc and ui.IsItemHovered() then ui.SetTooltip("This key is bound to another command too.") end
@@ -906,7 +915,7 @@ local function keyBindings()
         ui.TableNextRow()
         ui.TableNextColumn()
         local _, rowY = ui.GetCursorScreenPos()
-        local texts = rowY + lineH >= viewY and rowY <= viewY + viewH and eq.ListRow(WINDOW, KEYS_LIST, r)
+        local texts = rowY + lineH >= viewY and rowY <= viewY + viewH and API.windows.ListRow(WINDOW, KEYS_LIST, r)
         if not texts then
           ui.Dummy(0, lineH)
         else
@@ -918,7 +927,7 @@ local function keyBindings()
       local names = keyCommandNames(rows, selected)
       for r = 0, rows - 1 do
         if matches(names[r]) then
-          local texts = eq.ListRow(WINDOW, KEYS_LIST, r)
+          local texts = API.windows.ListRow(WINDOW, KEYS_LIST, r)
           if texts then
             ui.TableNextRow()
             ui.TableNextColumn()
@@ -950,7 +959,7 @@ local FILTERS, FILTER_SETTING = "FilterList", "FilterComboBox"
 
 local function chatTab()
   ui.TextDisabled("What the chat windows show of each kind of message.")
-  local rows = eq.ListInfo(WINDOW, FILTERS)
+  local rows = API.windows.ListInfo(WINDOW, FILTERS)
   if not rows then return end
   local _, availH = ui.GetContentRegionAvail()
   local flags = ui.TableFlags.Borders | ui.TableFlags.RowBg | ui.TableFlags.ScrollY
@@ -959,7 +968,7 @@ local function chatTab()
     ui.TableSetupColumn("Show", ui.TableColumnFlags.WidthFixed, 140 * U)
     ui.TableHeadersRow()
     for r = 0, rows - 1 do
-      local texts = eq.ListRow(WINDOW, FILTERS, r)
+      local texts = API.windows.ListRow(WINDOW, FILTERS, r)
       if texts and matches(texts[1]) then
         ui.TableNextRow()
         ui.TableNextColumn()
@@ -968,10 +977,10 @@ local function chatTab()
         ui.SetNextItemWidth(-1)
         if ui.BeginCombo("##filter" .. r, texts[2] or "") then
           -- The setting's choices are the selected filter's (the original's list and its drop-down).
-          eq.ListClick(WINDOW, FILTERS, r)
-          local choices, selected = eq.ComboInfo(WINDOW, FILTER_SETTING)
+          API.windows.ListClick(WINDOW, FILTERS, r)
+          local choices, selected = API.windows.ComboInfo(WINDOW, FILTER_SETTING)
           for i, c in ipairs(choices or {}) do
-            if ui.Selectable(c .. "##f" .. i, i - 1 == selected) then eq.ComboSelect(WINDOW, FILTER_SETTING, i - 1) end
+            if ui.Selectable(c .. "##f" .. i, i - 1 == selected) then API.windows.ComboSelect(WINDOW, FILTER_SETTING, i - 1) end
           end
           ui.EndCombo()
         end
@@ -987,7 +996,7 @@ local COLORS = "ColorChooseList"
 -- colour picker on it (Accept stores it in eqclient.ini) and Reset Default Colors asks before restoring them all.
 local function colorsTab()
   ui.TextDisabled("The colours of the chat's kinds of text.")
-  local rows, _, selected = eq.ListInfo(WINDOW, COLORS)
+  local rows, _, selected = API.windows.ListInfo(WINDOW, COLORS)
   if not rows then return end
   local _, availH = ui.GetContentRegionAvail()
   local footer = 32 * U -- the buttons below
@@ -997,12 +1006,12 @@ local function colorsTab()
     ui.TableSetupColumn("Sample", ui.TableColumnFlags.WidthFixed, 140 * U)
     ui.TableHeadersRow()
     for r = 0, rows - 1 do
-      local texts = eq.ListRow(WINDOW, COLORS, r)
+      local texts = API.windows.ListRow(WINDOW, COLORS, r)
       if texts and matches(texts[1]) then
         ui.TableNextRow()
         ui.TableNextColumn()
         if ui.Selectable((texts[1] or "") .. "##c" .. r, r == selected, ui.SelectableFlags.SpanAllColumns) then
-          eq.ListClick(WINDOW, COLORS, r)
+          API.windows.ListClick(WINDOW, COLORS, r)
         end
         ui.TableNextColumn()
         local c = texts.colors and texts.colors[2] or { 1, 1, 1 }
@@ -1011,13 +1020,13 @@ local function colorsTab()
     end
     ui.EndTable()
   end
-  if ui.Button("Change Selected Color") and selected >= 0 then eq.ClickChild(WINDOW, "UserColorChange") end
+  if ui.Button("Change Selected Color") and selected >= 0 then API.windows.ClickChild(WINDOW, "UserColorChange") end
   ui.SameLine()
-  if ui.Button("Reset Default Colors") then eq.ClickChild(WINDOW, "UserColorDefault") end
+  if ui.Button("Reset Default Colors") then API.windows.ClickChild(WINDOW, "UserColorDefault") end
 end
 
--- The plugins' options (eq.PluginOptions; docs/plugins.md "Plugin windows"), one section per plugin: a switch, or
--- a slider over the option's range. `options`: this frame's eq.PluginOptions(), which pages() reads once (each call
+-- The plugins' options (hs.PluginOptions; docs/plugins.md "Plugin windows"), one section per plugin: a switch, or
+-- a slider over the option's range. `options`: this frame's hs.PluginOptions(), which pages() reads once (each call
 -- runs every option's get).
 local function pluginsTab(options)
   local by = {}
@@ -1036,10 +1045,10 @@ local function pluginsTab(options)
           local id = "##plugin." .. o.owner .. "." .. o.name
           if o.max == 1 and o.min == 0 then
             local on, changed = ui.Checkbox(id, o.value ~= 0)
-            if changed then eq.SetPluginOption(o.owner, o.name, on and 1 or 0) end
+            if changed then API.plugins.SetOption(o.owner, o.name, on and 1 or 0) end
           else
             local nv, changed = ui.SliderInt(id, o.value, o.min, o.max)
-            if changed then eq.SetPluginOption(o.owner, o.name, nv) end
+            if changed then API.plugins.SetOption(o.owner, o.name, nv) end
           end
         end)
       end
@@ -1052,14 +1061,17 @@ local TABS = {
   { "General", generalTab }, { "Display", displayTab }, { "Graphics", graphicsTab }, { "Audio", audioTab },
   { "Controls", controlsTab }, { "Chat", chatTab }, { "Colors", colorsTab },
 }
+local restoreSection = ui.GetSetting("options.section")
+if restoreSection == "Interface" then restoreSection = "Display" end
+local savedSection = nil
 
 -- The tabs. The stock page the game turned to (COptionsWnd_SetTabPage; /filter: 4, the chat filters): its tab here,
 -- once (the page is then set to -1, which no tab is).
 local function pages(visible)
-  local want = eq.TabPage(WINDOW, "OPTW_OptionsSubwindows")
-  if want and want >= 0 then eq.SetTabPage(WINDOW, "OPTW_OptionsSubwindows", -1) end
+  local want = API.windows.TabPage(WINDOW, "OPTW_OptionsSubwindows")
+  if want and want >= 0 then API.windows.SetTabPage(WINDOW, "OPTW_OptionsSubwindows", -1) end
   local tabs = TABS
-  local options = eq.PluginOptions()
+  local options = API.plugins.Options()
   if #options > 0 then -- the Plugins tab, while a loaded plugin has options
     tabs = { table.unpack(TABS) }
     tabs[#tabs + 1] = { "Plugins", function() pluginsTab(options) end }
@@ -1071,20 +1083,24 @@ local function pages(visible)
   end
   if visible and ui.BeginTabBar("##optionstabs") then
     for _, t in ipairs(tabs) do
-      local select = (want == 4 and t[1] == "Chat") and ui.TabItemFlags.SetSelected or 0
+      local select = ((want == 4 and t[1] == "Chat") or (want ~= 4 and restoreSection == t[1]))
+        and ui.TabItemFlags.SetSelected or 0
       if ui.BeginTabItem(t[1], select) then
+        local sectionName = t[1] == "Display" and "Interface" or t[1]
+        if savedSection ~= sectionName then ui.SetSetting("options.section", sectionName) savedSection = sectionName end
         if ui.BeginChild("##" .. t[1], 0, 0, false) then t[2]() end
         ui.EndChild()
         ui.EndTabItem()
       end
     end
+    restoreSection = nil
     ui.EndTabBar()
   end
 end
 
 ui.window("Options", function()
-  if not eq.InGame() then return end
-  if not eq.WindowShown(WINDOW) then return end
+  if not API.session.InGame() then return end
+  if not API.windows.Shown(WINDOW) then return end
   U = ui.GetIO().uiScale or 1
   ui.SetNextWindowSize(560 * U, 600 * U, ui.Cond.FirstUseEver)
   style.Push()
@@ -1108,5 +1124,5 @@ ui.window("Options", function()
   ui.PopStyleColor()
   style.Pop()
   if not ok then error(err, 0) end
-  if not open then eq.ShowWindow(WINDOW, false) end
+  if not open then API.windows.Show(WINDOW, false) end
 end)

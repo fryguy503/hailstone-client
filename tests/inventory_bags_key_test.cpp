@@ -1,5 +1,5 @@
 // The OPEN_INV_BAGS / CLOSE_INV_BAGS / TOGGLE_INV_BAGS keys (Shift+B toggles by default) and CMD_TOGGLE_BANK_BAGS on
-// the Lua bag windows (EqApi::open_all_bags and the rest, app/lua_eq_items.cpp), against the mock server.
+// the Lua bag windows (UiApi::open_all_bags and the rest, app/lua_ui_items.cpp), against the mock server.
 #include <doctest/doctest.h>
 
 #include <string>
@@ -7,7 +7,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "net/item_packets.h"
 
@@ -31,7 +31,7 @@ net::Item item(std::uint32_t id, const char* name, std::int16_t slot, bool bag, 
 } // namespace
 
 TEST_CASE("inventory bags keys: every bag in the general slots opens, closes and toggles") {
-    ImGuiContext* ctx = ImGui::CreateContext(); // the eq API reads the keyboard's modifiers
+    ImGuiContext* ctx = ImGui::CreateContext(); // the hs API reads the keyboard's modifiers
     MockConfig config = MockConfig::standard();
     config.characters[0].inventory.push_back(item(1003, "Backpack", 23, true));
     config.characters[0].inventory.push_back(item(13005, "Iron Ration", 24, false));
@@ -40,20 +40,20 @@ TEST_CASE("inventory bags keys: every bag in the general slots opens, closes and
     auto& conn = rig.conn;
     REQUIRE(rig.to_zone());
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
     // The bag windows' titles, Bag1 .. Bag3 ("" for a closed one).
     auto open = [&] {
         std::string out;
         for (int n = 1; n <= 3; ++n) {
-            std::string chunk = "return (eq.BagInfo('Bag" + std::to_string(n) + "'))";
+            std::string chunk = "return (hs.BagInfo('Bag" + std::to_string(n) + "'))";
             REQUIRE(luaL_dostring(L, chunk.c_str()) == LUA_OK);
             const char* name = lua_tostring(L, -1);
             out += std::string(name ? name : "") + "|";
@@ -103,19 +103,19 @@ TEST_CASE("bank bags key: the bank's and the shared bank's bags open while the b
     REQUIRE(rig.to_zone());
     REQUIRE(rig.until([&] { return conn.inventory().at({net::kInvSharedBank, 1, -1, -1, 0, 0}) != nullptr; }));
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
     auto open = [&] {
         std::string out;
         for (int n = 1; n <= 3; ++n) {
-            std::string chunk = "return (eq.BagInfo('Bag" + std::to_string(n) + "'))";
+            std::string chunk = "return (hs.BagInfo('Bag" + std::to_string(n) + "'))";
             REQUIRE(luaL_dostring(L, chunk.c_str()) == LUA_OK);
             const char* name = lua_tostring(L, -1);
             out += std::string(name ? name : "") + "|";

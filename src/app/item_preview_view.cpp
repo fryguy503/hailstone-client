@@ -319,7 +319,7 @@ void* ItemPreviewView::image(int width, int height) {
 }
 
 void ItemPreviewView::control(std::string_view what, float x, float y) {
-    // NaN passes std::clamp and would reach the camera's matrices (eq.ItemPreviewControl refuses it too). The yaw
+    // NaN passes std::clamp and would reach the camera's matrices (hs.ItemPreviewControl refuses it too). The yaw
     // stays within a turn and the pan within a few views, so repeated calls cannot grow them to an infinity either.
     if (!std::isfinite(x) || !std::isfinite(y)) return;
     if (what == "reset") {

@@ -4,6 +4,8 @@
 
 #include "assets/character.h"
 #include "game_files.h"
+#include "game/coords.h"
+#include "game/world_state.h"
 #include "render/actor_renderer.h"
 
 using namespace hailstone;
@@ -86,6 +88,57 @@ TEST_CASE("a rider is drawn in its mount's bone frame, without its own scale") {
     standing.clip = wld_rider.clip("");
     CHECK_FALSE(render::ActorRenderer::seat_rider(other, standing, nullptr));
     CHECK_FALSE(standing.attached);
+}
+
+TEST_CASE("a current render pose uses the display transform and model origin even when the actor is hidden") {
+    game::Spawn spawn;
+    spawn.position = {100, 200, 300};
+    spawn.heading = 384;
+    spawn.display_valid = true;
+    spawn.display_position = {10, 20, 30};
+    spawn.display_heading = 128;
+    spawn.heights.model_scale = 2.0f;
+    auto classic = model_with("HUM", {"HUM_TRACK"});
+    const auto pose = render::ActorRenderer::render_pose(spawn, classic, nullptr);
+    const auto transform = render::ActorRenderer::draw_matrix(pose);
+    CHECK(near(glm::vec3(transform[3]), {10, 20, 30}));
+    CHECK(near(glm::vec3(transform[0]), {0, 2, 0}));
+    CHECK(pose.yaw == doctest::Approx(game::heading_to_yaw(128)));
+
+    auto eqg = model_with("DKM", {"ROOT_BONE"});
+    eqg.eqg = true;
+    const auto eqg_pose = render::ActorRenderer::render_pose(spawn, eqg, nullptr);
+    CHECK(near(glm::vec3(render::ActorRenderer::draw_matrix(eqg_pose)[3]), {10, 20, 23.75f}));
+    CHECK(eqg_pose.scale == 2.0f);
+}
+
+TEST_CASE("a hidden first-person rider uses the drawn mount seat rather than its independent spawn transform") {
+    auto horse = model_with("HRS", {"ROOT_BONE", "CHEST03_MOUNT01"});
+    auto rider_model = model_with("DKM", {"ROOT_BONE"});
+    rider_model.eqg = true;
+    game::Spawn mount_spawn;
+    mount_spawn.display_valid = true;
+    mount_spawn.display_position = {10, 20, 30};
+    mount_spawn.display_heading = 128;
+    mount_spawn.heights.model_scale = 2;
+    auto mount = render::ActorRenderer::render_pose(mount_spawn, horse, nullptr);
+    mount.clip = horse.clip(""); // the mount's actual prepared animation pose
+    game::Spawn rider_spawn;
+    rider_spawn.display_valid = true;
+    rider_spawn.display_position = {100, 200, 300};
+    rider_spawn.display_heading = 384;
+    rider_spawn.heights.model_scale = 6;
+    auto hidden = render::ActorRenderer::render_pose(rider_spawn, rider_model, nullptr);
+    auto visible = hidden;
+    visible.clip = rider_model.clip("");
+    REQUIRE(render::ActorRenderer::seat_rider(mount, hidden, nullptr));
+    REQUIRE(render::ActorRenderer::seat_rider(mount, visible, nullptr));
+    const auto hidden_transform = render::ActorRenderer::draw_matrix(hidden);
+    const auto visible_transform = render::ActorRenderer::draw_matrix(visible);
+    CHECK(near(glm::vec3(hidden_transform[3]), {10, 22, 27.75f}));
+    CHECK(near(glm::vec3(hidden_transform[0]), {0, 2, 0}));
+    for (int column = 0; column < 4; ++column)
+        CHECK(near(glm::vec3(hidden_transform[column]), glm::vec3(visible_transform[column])));
 }
 
 TEST_CASE("the shipped mounts' rider dags" * doctest::skip(!hailstone::test::game_dir())) {

@@ -1,5 +1,5 @@
-// The bug report window's Send (app/lua_eq_dialogs.cpp BugReportWindow) over the eq API: the report is written by
-// EqHost::save_bug_report's future, the window says it is being saved until that is ready, and a Send made while an
+// The bug report window's Send (app/lua_ui_dialogs.cpp BugReportWindow) over the hs API: the report is written by
+// UiHost::save_bug_report's future, the window says it is being saved until that is ready, and a Send made while an
 // earlier report is still being written waits for it and is the one the window shows.
 #include <doctest/doctest.h>
 
@@ -10,7 +10,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 
 using namespace hailstone;
@@ -53,30 +53,30 @@ struct Window {
     EmptyGameDir dir;
     GameDir game{dir.path()};
     net::GameConnection conn{game, quick_options()};
-    app::EqHost host;
+    app::UiHost host;
     Saves saves;
-    std::unique_ptr<app::EqApi> api;
+    std::unique_ptr<app::UiApi> api;
     lua_State* L = luaL_newstate();
     Window() {
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         host.save_bug_report = [this](app::BugReport r) { return saves.save(std::move(r)); };
-        api = std::make_unique<app::EqApi>(host);
+        api = std::make_unique<app::UiApi>(host);
         luaL_openlibs(L);
         lua_newtable(L);
         api->register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
     }
     ~Window() {
         lua_close(L);
         api.reset();
         ImGui::DestroyContext(ctx);
     }
-    std::string shown() { return run(L, "return eq.WindowShown('BugReportWindow')"); }
-    std::string saved_name() { return run(L, "return (eq.WindowText('BugReportWindow', 'SavedName'))"); }
+    std::string shown() { return run(L, "return hs.WindowShown('BugReportWindow')"); }
+    std::string saved_name() { return run(L, "return (hs.WindowText('BugReportWindow', 'SavedName'))"); }
     std::string send(const char* text) {
-        run(L, std::string("eq.SetWindowText('BugReportWindow', 'Edit', '") + text + "')");
-        return run(L, "return eq.ClickChild('BugReportWindow', 'SendButton', 'left')");
+        run(L, std::string("hs.SetWindowText('BugReportWindow', 'Edit', '") + text + "')");
+        return run(L, "return hs.ClickChild('BugReportWindow', 'SendButton', 'left')");
     }
 };
 
@@ -132,7 +132,7 @@ TEST_CASE("Bug report window: a Send while an earlier report is still being writ
     CHECK(w.saved_name() == "bug-second.zip");
 }
 
-// A Send that waits for an earlier report is filled at its Send (EqHost::bug_report_now: the zone, the place, the
+// A Send that waits for an earlier report is filled at its Send (UiHost::bug_report_now: the zone, the place, the
 // screenshot's bytes), not when its turn to be written comes, by which time the player may have zoned.
 TEST_CASE("Bug report window: a queued Send keeps the facts of the moment it was sent") {
     Window w;

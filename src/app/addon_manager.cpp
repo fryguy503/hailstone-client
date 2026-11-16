@@ -253,11 +253,11 @@ std::string AddonManager::manifest_problem(const AddonManifest& m, std::uint32_t
         if (running && compare_versions(*running, *m.min_client) < 0)
             return m.name + " " + m.version_text + " needs Hailstone " + m.min_client_text + " or newer";
     }
-    if (m.kind != AddonKind::Script && !addon_package_for(m, env_.platform))
+    if (m.kind != AddonKind::Script && m.kind != AddonKind::Ui && !addon_package_for(m, env_.platform))
         return m.name + " has no build for " + (env_.platform.empty() ? std::string("this system") : env_.platform);
-    // A tool or an upscaler asks for nothing (the manifest refuses one that does): the client grants it nothing to ask
-    // for.
-    if (m.kind == AddonKind::Tool || m.kind == AddonKind::Upscaler) {
+    // Tools and upscalers request no host capabilities. UI packs use the separately disclosed full-interface
+    // trust grant, rather than a script/plugin capability ceiling.
+    if (m.kind == AddonKind::Tool || m.kind == AddonKind::Upscaler || m.kind == AddonKind::Ui) {
         if (caps) *caps = 0;
         if (!m.key && !env_.settings.allow_unsigned)
             return m.name + " is not signed, and hailstone.ini addons.allow_unsigned is off";
@@ -437,7 +437,7 @@ void AddonManager::cancel_offer() {
 std::optional<AddonManager::Staged> AddonManager::download(const AddonManifest& m, const std::string& manifest_url,
                                                            const std::string& source, std::uint32_t caps,
                                                            bool auto_update, std::string* error) {
-    const AddonPackage* p = addon_package_for(m, m.kind == AddonKind::Script ? "any" : env_.platform);
+    const AddonPackage* p = addon_package_for(m, m.kind == AddonKind::Script || m.kind == AddonKind::Ui ? "any" : env_.platform);
     if (!p) {
         if (error) *error = "no package for " + env_.platform;
         return std::nullopt;
@@ -491,6 +491,8 @@ std::optional<AddonManager::Staged> AddonManager::download(const AddonManifest& 
     a.caps = caps;
     a.key = m.key;
     a.auto_update = auto_update;
+    a.autoload = m.autoload;
+    a.enabled = m.autoload;
     a.author = m.author;
     a.description = m.description;
     a.notes = m.notes;
@@ -732,6 +734,14 @@ void AddonManager::set_auto_update(std::string_view name, bool on) {
     if (AddonStatus* r = row(name)) r->addon.auto_update = on;
 }
 
+bool AddonManager::set_enabled(std::string_view name, bool on) {
+    if (!set_addon_enabled(env_.data_dir, name, on)) return false;
+    std::lock_guard lock(mutex_);
+    if (AddonStatus* r = row(name)) r->addon.enabled = on;
+    ++status_.serial;
+    return true;
+}
+
 bool AddonManager::remove(std::string_view name, std::string* error) {
     {
         std::lock_guard lock(mutex_);
@@ -808,6 +818,8 @@ std::vector<std::string> AddonManager::install_ready() {
         if (const AddonStatus* r = row(st.addon.name)) s = *r;
         if (ok) {
             s.addon = st.addon;
+            const auto installed = read_installed_addons(env_.data_dir);
+            if (const auto* current = find_addon(installed, st.addon.name)) s.addon = *current;
             s.installed = true;
             s.state = AddonState::UpToDate;
             s.new_version.clear();

@@ -10,7 +10,7 @@
 -- Until the player moves a frame it sits where the default layout (lib/layout.lua) puts it for this screen, among
 -- the frames shown now; a frame that layout does not know gives its own opts.place.
 --
--- The game decides whether a window is shown (eq.ReplaceWindow: its keys, /commands and close buttons work as
+-- The game decides whether a window is shown (hs.ReplaceWindow: its keys, /commands and close buttons work as
 -- they do for the stock window). Places are the modern UI's own (ui/settings/modern.txt, hud.pos.<window>), not
 -- the character's UI ini, so switching back to Classic finds the stock layout untouched.
 --
@@ -22,6 +22,7 @@
 -- (lib/snap.lua) lines up the frames and dialogs a drag places. A window that can be closed has "Close with Esc" in
 -- its right-click menu (lib/escape.lua; some windows have it ticked from the start).
 
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local style = dofile("lib/style.lua")
 local snap = dofile("lib/snap.lua")
@@ -101,8 +102,8 @@ end
 
 -- Whether the game shows `screen` this frame: the one place hud.Window and hud.Dialog ask. Asking also takes the
 -- game window over (its keys, /commands and close buttons work as the stock window's do, and the stock window is
--- not drawn). It may also return where the stock window sits (hud.Dialog asks eq.ReplaceWindow when it does not).
-local function gameShown(screen) return eq.WindowShown(screen) end
+-- not drawn). It may also return where the stock window sits (hud.Dialog asks hs.ReplaceWindow when it does not).
+local function gameShown(screen) return API.windows.Shown(screen) end
 
 -- The default layout (lib/layout.lua) over the frames drawn in the last frames: window -> { w, h, frame, fit, rolled }
 -- in shared.frames, the solve kept in shared.solved for as long as nothing it was worked out from changes: a frame
@@ -215,7 +216,7 @@ end
 -- GlobalFadeDuration: CXWndManager::SetGlobal*), read once a frame for every script: alphas 0..1, times in seconds.
 shared.fadeGlobals = shared.fadeGlobals or { frame = -1 }
 local globals = shared.fadeGlobals
-local function ini(key, default) return tonumber(eq.UiIni("Main", key) or "") or default end
+local function ini(key, default) return tonumber(API.settings.UiIni("Main", key) or "") or default end
 local function fadeSettings()
   local frame = ui.GetFrameCount()
   if globals.frame ~= frame then
@@ -317,7 +318,7 @@ local function menu(window, title, opts)
   if opts.onClose then
     if ui.MenuItem("Close") then opts.onClose() end
   elseif opts.closable ~= false and opts.screen and ui.MenuItem("Close") then
-    eq.ShowWindow(opts.screen, false)
+    API.windows.Show(opts.screen, false)
   end
   if opts.onClose or (opts.closable ~= false and opts.screen) then esc.MenuItem(window) end
   if ui.BeginMenu("All frames") then
@@ -335,12 +336,12 @@ local function menu(window, title, opts)
   ui.TextDisabled("Alt+right-click always opens this menu")
 end
 
--- Auto Z's switch and its two ranges (eq.MapAutoZ), for a menu or popup: how far above (+) and below (-) the
+-- Auto Z's switch and its two ranges (hs.MapAutoZ), for a menu or popup: how far above (+) and below (-) the
 -- player's feet the map's lines and labels stay whole before they fade. Shared by the map and the minimap.
 local AUTOZ_MAX = 300
 function hud.AutoZControls(s)
-  local on, above, below = eq.MapAutoZ()
-  if ui.MenuItem("Auto Z", on) then eq.MapAutoZ(not on) end
+  local on, above, below = API.map.AutoZ()
+  if ui.MenuItem("Auto Z", on) then API.map.AutoZ(not on) end
   if ui.IsItemHovered() then ui.SetTooltip("Fade what is well above or below you") end
   if not on then ui.BeginDisabled() end
   ui.SetNextItemWidth(180 * (s or 1))
@@ -348,7 +349,7 @@ function hud.AutoZControls(s)
   ui.SetNextItemWidth(180 * (s or 1))
   local b, cb = ui.SliderInt("##autozbelow", below, 1, AUTOZ_MAX, string.format("-%d below you", below))
   if not on then ui.EndDisabled() end
-  if ca or cb then eq.MapAutoZ(on, a, b) end
+  if ca or cb then API.map.AutoZ(on, a, b) end
 end
 
 -- An X button of this UI's own (a frame's close box): size x size at x, y; onClose() when it is clicked.
@@ -393,7 +394,7 @@ local function frameEdge(st, id, x0, y0, x1, y1, right, s, minW, minH, snaps, se
 end
 
 -- hud.Window(screen, title, opts, body)
---   screen: the game window this replaces (eq.ReplaceWindow), or nil for a frame of this UI's own (opts.shown()).
+--   screen: the game window this replaces (hs.ReplaceWindow), or nil for a frame of this UI's own (opts.shown()).
 --   opts.size(s) -> w, h        the frame's size in design pixels (may change with its contents); called only while
 --                                the frame is drawn, so work for the frame alone can go there
 --   opts.place(W, H, w, h, s) -> x, y   the default place on a W x H screen (w, h on screen), for a frame the
@@ -593,13 +594,13 @@ function hud.Window(screen, title, opts, body)
     ui.PopStyleVar()
     ui.SetWindowFontScale(1)
 
-    -- right click: the game window's own menu (eq.WindowContextMenu) unless a piece took the click or Alt is held;
+    -- right click: the game window's own menu (hs.WindowContextMenu) unless a piece took the click or Alt is held;
     -- else this UI's frame menu
     if ((io.alt and not T.AltRightClickTaken()) or not T.RightClickTaken()) and ui.IsMouseClicked(ui.Mouse.Right)
         and ui.IsWindowHovered(ui.HoveredFlags.ChildWindows) then
-      if io.alt or layout or not (screen and eq.WindowContextMenu(screen)) then ui.OpenPopup("##hudmenu") end
+      if io.alt or layout or not (screen and API.menus.WindowContext(screen)) then ui.OpenPopup("##hudmenu") end
     end
-    if screen and eq.TakeWindowMenu(screen) then ui.OpenPopup("##hudmenu") end
+    if screen and API.menus.TakeWindow(screen) then ui.OpenPopup("##hudmenu") end
     if ui.BeginPopup("##hudmenu") then
       menu(key, title, opts)
       ui.EndPopup()
@@ -608,7 +609,7 @@ function hud.Window(screen, title, opts, body)
   ui.End()
   style.Pop()
   if closeNow then
-    if opts.onClose then opts.onClose() else eq.ShowWindow(screen, false) end
+    if opts.onClose then opts.onClose() else API.windows.Show(screen, false) end
   end
   if failure then error(failure, 0) end
 end
@@ -647,7 +648,7 @@ function hud.Dialog(screen, title, opts, body)
   local shown, sx, sy = gameShown(screen)
   if opts.shown ~= nil then shown = opts.shown end
   if not shown then return end
-  if sx == nil then sx, sy = select(2, eq.ReplaceWindow(screen)) end -- (where the stock window sits)
+  if sx == nil then sx, sy = select(2, API.windows.Replace(screen)) end -- (where the stock window sits)
   local k = keysOf(key)
   local io = ui.GetIO()
   local ownScale = num(k.scale, 1.0)
@@ -731,7 +732,7 @@ function hud.Dialog(screen, title, opts, body)
   else
     flags = flags | ui.WindowFlags.NoCollapse
   end
-  local gameTitle = eq.WindowTitle(screen)
+  local gameTitle = API.windows.Title(screen)
   if gameTitle and gameTitle ~= "" and not opts.keepTitle then title = gameTitle end
   local failure = nil
   local visible, open = ui.Begin(windowName(k, title), opts.closable ~= false or nil, flags, rollable)
@@ -847,9 +848,9 @@ function hud.Dialog(screen, title, opts, body)
     end
     if ((io.alt and not T.AltRightClickTaken()) or not T.RightClickTaken()) and ui.IsMouseClicked(ui.Mouse.Right)
         and ui.IsWindowHovered(ui.HoveredFlags.ChildWindows) then
-      if io.alt or not eq.WindowContextMenu(screen) then ui.OpenPopup("##dialogmenu") end
+      if io.alt or not API.menus.WindowContext(screen) then ui.OpenPopup("##dialogmenu") end
     end
-    if eq.TakeWindowMenu(screen) then ui.OpenPopup("##dialogmenu") end
+    if API.menus.TakeWindow(screen) then ui.OpenPopup("##dialogmenu") end
     if ui.BeginPopup("##dialogmenu") then
       ui.TextDisabled(title)
       ui.Separator()
@@ -889,7 +890,7 @@ function hud.Dialog(screen, title, opts, body)
   style.Pop()
   if failure then error(failure, 0) end
   if not open then
-    if opts.onClose then opts.onClose() else eq.ShowWindow(screen, false) end
+    if opts.onClose then opts.onClose() else API.windows.Show(screen, false) end
   end
 end
 

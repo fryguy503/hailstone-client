@@ -2,9 +2,9 @@
 -- ones and are answered through them (lib/model.lua), so what is set, loaded or copied is the game's:
 --   Video Modes (VideoModesWindow)     this client's display sizes (A picks one), in full screen its refresh rates and
 --                                      bit depth (A opens their choices), Accept (in full screen the game asks to keep
---                                      the mode; app/lua_eq_video.cpp)
+--                                      the mode; app/lua_ui_video.cpp)
 --   Load Skin (LoadskinWnd, /loadskin) the user interfaces (A picks one), Keep Your Layout, Load Skin
---                                      (app/lua_eq_layout.cpp)
+--                                      (app/lua_ui_layout.cpp)
 --   Copy Layout (LayoutCopyWindow,     the layouts to copy from (A picks one), what to copy with it (hot buttons,
 --   /copylayout)                       their loadouts, socials; Hailstone's chat and options) and Copy (the game
 --                                      asks first); at a character's first entry it says why it came up and has a
@@ -13,6 +13,7 @@
 --                                      command open otherwise: help, the storyline, the NPC journal, adventures,
 --                                      expeditions, PvP, the zone guide, alerts, trophies, the display and
 --                                      the user interface. A opens one (the stock window's show, as its key)
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -47,7 +48,7 @@ ui.window("Video Modes", function()
       ui.EndGroup()
     end
   end
-  if M.back(W.finish(), vpick, nil, nil, sizes) then eq.ShowWindow(VW, false) end
+  if M.back(W.finish(), vpick, nil, nil, sizes) then API.windows.Show(VW, false) end
 end)
 
 -- ---------------------------------------------------------------- load skin (LoadskinWnd)
@@ -71,7 +72,7 @@ ui.window("Load Skin", function()
     M.button(LW, "LoadButton", "Load Skin", cw, bh, { primary = true })
     ui.EndGroup()
   end
-  if W.finish() then eq.ShowWindow(LW, false) end
+  if W.finish() then API.windows.Show(LW, false) end
 end)
 
 -- ---------------------------------------------------------------- copy layout (LayoutCopyWindow)
@@ -81,7 +82,7 @@ local layouts = {}
 ui.window("Copy Layout", function()
   if not W.shown(CW) then return end
   T.frame()
-  local first = eq.ChildShown(CW, "LC_FirstVisitText") == true
+  local first = API.windows.ChildShown(CW, "LC_FirstVisitText") == true
   if W.begin("Copy Layout", { w = 1400, h = 960, title = "Copy Layout",
         subtitle = first and "A new character: start from one of your others, or close to keep the default"
           or "Another character's (or the default) window layout over this one",
@@ -108,14 +109,14 @@ ui.window("Copy Layout", function()
     M.button(CW, "LC_CopyButton", "Copy", cw, bh, { primary = true })
     ui.EndGroup()
   end
-  if W.finish() then eq.ShowWindow(CW, false) end
+  if W.finish() then API.windows.Show(CW, false) end
 end)
 
 -- ---------------------------------------------------------------- More (the main menu's tile)
 -- { title, what it is, stock window [, open() in its place, shown() (the tile is there)] }
 local TRACKING = 53 -- the skill: using it opens the tracking window (UseSkill; CTrackingWnd::AboutToShow)
 local function tracks()
-  for _, s in ipairs(eq.UsableSkills()) do if s.id == TRACKING then return true end end
+  for _, s in ipairs(API.abilities.UsableSkills()) do if s.id == TRACKING then return true end end
   return false
 end
 local MORE = {
@@ -127,7 +128,7 @@ local MORE = {
   { "Expeditions", "Members and lockouts", "DynamicZoneWnd" },
   { "Rewards", "Pending rewards and task previews", "RewardSelectionWnd" },
   { "PvP Stats", "Kills, deaths, the leaderboard", "PvPStatsWnd" },
-  { "Find", "Merchants, bankers, trainers and more", nil, function() eq.FindOpen(true) end },
+  { "Find", "Merchants, bankers, trainers and more", nil, function() API.find.Open(true) end },
   { "Zone Path", "The zones on the way", "ZonePathWnd" },
   { "Alert History", "Alerts you closed", "AlertHistoryWnd" },
   { "Tribute Trophies", "Trophy tribute benefits", "TributeTrophyWnd" },
@@ -137,10 +138,10 @@ local MORE = {
   { "Notes", "Your own notes (/note)", "PlayerNotesWindow" },
   { "Lua Scripts", "Run, stop and autorun your scripts", "ScriptsWnd" },
   { "Web Browser", "Web pages in the game (/web)", "BrowserWnd" },
-  { "Tracking", "What is near (the Tracking skill)", nil, function() eq.UseSkill(TRACKING) end, tracks },
+  { "Tracking", "What is near (the Tracking skill)", nil, function() API.abilities.UseSkill(TRACKING) end, tracks },
 }
 ui.window("More", function()
-  if not eq.InGame() then
+  if not API.session.InGame() then
     GPSTATE.moreOpen = false
     return
   end
@@ -153,9 +154,9 @@ ui.window("More", function()
     -- two columns of buttons
     local list = {}
     for _, m in ipairs(MORE) do if not m[5] or m[5]() then list[#list + 1] = m end end
-    -- the loaded plugins' entries (eq.PluginMenu; docs/plugins.md "Plugin windows")
-    for i, e in ipairs(eq.PluginMenu()) do
-      list[#list + 1] = { e.label, e.plugin, nil, function() eq.PluginMenuClick(i) end }
+    -- the loaded plugins' entries (hs.PluginMenu; docs/plugins.md "Plugin windows")
+    for i, e in ipairs(API.plugins.Menu()) do
+      list[#list + 1] = { e.label, e.plugin, nil, function() API.plugins.MenuClick(i) end }
     end
     local cols, gap, bh = #list > 14 and 3 or 2, T.px(14), T.px(82)
     local bw = (x1 - x0 - (cols - 1) * gap) / cols
@@ -164,7 +165,7 @@ ui.window("More", function()
       ui.SetCursorPos(x0 + c * (bw + gap) - wx, y0 + r * (bh + T.px(10)) - wy)
       if T.button("##more" .. i, m[1], bw, bh, { sub = m[2], align = 0 }, pad) then
         GPSTATE.moreOpen = false
-        if m[4] then m[4]() else eq.ShowWindow(m[3], true) end
+        if m[4] then m[4]() else API.windows.Show(m[3], true) end
       end
     end
   end

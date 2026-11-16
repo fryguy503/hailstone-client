@@ -15,7 +15,16 @@
 
 #include <glm/glm.hpp>
 
+namespace hailstone::net { class GameConnection; }
+
 namespace hailstone::app {
+
+// Recheck the current Find presentation policy before a running guide observes the destination's live position.
+std::optional<glm::vec3> guide_spawn_position(const net::GameConnection&, std::uint32_t spawn);
+// Bind only a Find walk to this connection and this incarnation, including while its mesh is still building.
+// The current-connection callback is checked before dereferencing the captured connection.
+std::function<bool()> find_walk_eligibility(std::function<const net::GameConnection*()> current,
+                                          const net::GameConnection&, std::uint32_t spawn);
 
 class GuidePath {
 public:
@@ -29,7 +38,9 @@ public:
     static constexpr double kReplanGap = 0.5;    // seconds between two searches
     static constexpr double kMeshRetry = 1.0;    // seconds between tries while the mesh is not ready
 
-    void start(std::uint32_t spawn, std::string name);
+    void start(std::uint32_t spawn, std::string name, std::function<bool()> eligible = {});
+    bool eligible() const;
+    std::uint64_t revision() const { return revision_; }
     void stop();
     bool active() const { return spawn_ != 0; }
     std::uint32_t spawn() const { return spawn_; }
@@ -59,6 +70,8 @@ private:
     double next_plan_ = 0.0;
     bool partial_ = false;
     bool told_waiting_ = false;
+    std::function<bool()> eligible_;
+    std::uint64_t revision_ = 0;
 };
 
 } // namespace hailstone::app

@@ -1,6 +1,7 @@
 -- Alert history: replaces the game's AlertHistoryWnd (the alerts you have closed). The alerts as a table (title and
 -- text) and Open Alert, which the window enables while one is selected; a double click opens it too. The list and
--- button are the original's (app/lua_eq_fellowship.cpp). EQEmu sends no alerts, so the list stays empty there.
+-- button are the original's (app/lua_ui_fellowship.cpp). EQEmu sends no alerts, so the list stays empty there.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -14,7 +15,7 @@ local OPTS = {
 }
 local function body(x, y, w, h, s)
   local bh = D.ButtonH(s)
-  local rows = eq.ListInfo(WINDOW, "AH_Closed_Alert_List") or 0
+  local rows = API.windows.ListInfo(WINDOW, "AH_Closed_Alert_List") or 0
   if rows == 0 then
     ui.BeginChild("##alertsempty", 0, -D.FooterH(s), false)
     K.Empty("No closed alerts.", "Alerts you close are kept here to open again.")
@@ -22,7 +23,7 @@ local function body(x, y, w, h, s)
   else
     W.List(WINDOW, "AH_Closed_Alert_List", 0, -D.FooterH(s), {
       columns = { [1] = { "Title", 140 }, [2] = { "Alert", 0 } }, hide = { [3] = true },
-      doubleClick = function() eq.ClickChild(WINDOW, "AH_Open_Alert_Btn", "left") end,
+      doubleClick = function() API.windows.ClickChild(WINDOW, "AH_Open_Alert_Btn", "left") end,
     })
   end
   W.ButtonRow(WINDOW, {
@@ -30,9 +31,9 @@ local function body(x, y, w, h, s)
   }, bh)
 end
 
-local function testOpen() eq.ShowWindow(WINDOW, true) end
+local function testOpen() API.windows.Show(WINDOW, true) end
 ui.window("Alert History", function()
   P.TestOpen(WINDOW, testOpen) -- testing: test.open.AlertHistoryWnd=1
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Alert History", OPTS, body)
 end)

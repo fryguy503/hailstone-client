@@ -3,12 +3,20 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <cctype>
 #include <cstddef>
 #include <deque>
 #include <fstream>
 #include <thread>
+#include <stdexcept>
+#include <map>
+#include <tuple>
+#include <SDL3/SDL_loadso.h>
 
 #include "core/sha256.h"
+#include "core/binary_measurement.h"
+#include "net/item_packets.h"
+#include "game/server_ext_chain.h"
 #include "mq/commands.h"
 #include "mq/parse.h"
 #include "platform/tcp_socket.h"
@@ -29,7 +37,10 @@ namespace fs = std::filesystem;
 namespace {
 
 struct Host {
-    mq_test::World world{"hailstone_native_plugins_test"};
+    std::shared_ptr<game::ExtensionChain> extensions = std::make_shared<game::ExtensionChain>();
+    mq_test::World world{"hailstone_native_plugins_test", [this] {
+        net::ConnectionOptions options; options.plugins = extensions; return options;
+    }()};
     fs::path plugin_dir = world.dir / "plugins";
     plugin::Hooks hooks;
     plugin::Policy policy;
@@ -37,12 +48,13 @@ struct Host {
     mq::Context ctx;
     std::vector<std::string> printed, sent;
     std::vector<std::pair<int, std::string>> used, checked; // use_ability, ability_state (kind and name)
-    bool ability_ready = true;
+    bool ability_ready = true, ability_throws = false;
     std::vector<plugin::AbilityBulkRow> ability_rows; // get_ability_data_bulk's rows
     std::vector<std::pair<plugin::Stream, net::AppPacket>> packets;
     std::unique_ptr<mq::Commands> commands;
     std::unique_ptr<plugin::NativePlugins> plugins;
     fs::path file;
+    std::map<std::string, std::string> sdk_layouts;
 
     // own_folder: the binary in the plugin's own folder, plugins/MQ2Example/, not directly in plugins/.
     // `built`: the plugin to put in the folder (the example; tests/plugins/HostProbe.cpp ...).
@@ -79,6 +91,7 @@ struct Host {
             return true;
         };
         ne.ability = [this](mq::AbilityKind kind, std::string_view name) -> std::optional<mq::AbilityState> {
+            if (ability_throws) throw std::runtime_error("ability fixture failed");
             checked.emplace_back(static_cast<int>(kind), std::string(name));
             mq::AbilityState st;
             st.name = std::string(name);
@@ -88,6 +101,11 @@ struct Host {
             return st;
         };
         ne.ability_bulk = [this] { return ability_rows; };
+        ne.extensions = extensions.get();
+        ne.sdk_layout = [this](const Sha256Digest& digest) {
+            const auto found = sdk_layouts.find(to_hex(digest));
+            return found == sdk_layouts.end() ? std::string{} : found->second;
+        };
         plugins = std::make_unique<plugin::NativePlugins>(ne);
     }
     ~Host() {
@@ -121,7 +139,558 @@ struct Host {
     bool printed_line(const std::string& t) const { return std::find(printed.begin(), printed.end(), t) != printed.end(); }
 };
 
+// Keep the exact private-copy module alive across a loader refusal, so exported counters prove whether the
+// setter/initializer ran before the refusal. A reloaded module would reset counters and give a false proof.
+struct SdkProbe {
+    unsigned setters = 0, initialized = 0;
+    SDL_SharedObject* library = nullptr;
+    using Counters = void (*)(unsigned*, unsigned*);
+    Counters counters = nullptr;
+    explicit SdkProbe(Host& host) {
+        const auto copy = host.world.dir / "cache" / (to_hex(host.hash()).substr(0, 16) + "_" + host.file.filename().string());
+        fs::create_directories(copy.parent_path());
+        fs::copy_file(host.file, copy, fs::copy_options::overwrite_existing);
+        library = SDL_LoadObject(copy.string().c_str());
+        REQUIRE_MESSAGE(library, SDL_GetError());
+        counters = reinterpret_cast<Counters>(SDL_LoadFunction(library, "sdk_probe_counters"));
+        REQUIRE(counters);
+        counters(&setters, &initialized);
+    }
+    ~SdkProbe() {
+        if (counters) counters(nullptr, nullptr);
+        if (library) SDL_UnloadObject(library);
+    }
+};
+
 } // namespace
+
+TEST_CASE("native SDK layouts: contract fingerprints cover declarations and packed bulk payload schemas") {
+    std::ifstream file(fs::path(HAILSTONE_SOURCE_DIR) / "sdk/hailstone_plugin.h", std::ios::binary);
+    REQUIRE(file.good());
+    const std::string source(std::istreambuf_iterator<char>(file), {});
+    std::string declarations;
+    for (std::size_t at = 0; at < source.size();) {
+        if (source.compare(at, 2, "/*") == 0) {
+            const auto end = source.find("*/", at + 2); REQUIRE(end != std::string::npos); at = end + 2;
+        } else if (source.compare(at, 2, "//") == 0) {
+            const auto end = source.find('\n', at + 2); at = end == std::string::npos ? source.size() : end + 1;
+        } else declarations += source[at++];
+    }
+    auto compact = [](std::string_view text) {
+        std::string result;
+        for (const auto ch : text) if (!std::isspace(static_cast<unsigned char>(ch))) result += ch;
+        return result;
+    };
+    std::string model;
+    for (const std::string name : {"PluginHostApi", "HailstoneHooks"}) {
+        const auto start = declarations.find("typedef struct " + name);
+        REQUIRE(start != std::string::npos);
+        const auto first = declarations.find('{', start);
+        const auto end = declarations.find("} " + name + ";", first);
+        REQUIRE(first != std::string::npos); REQUIRE(end != std::string::npos);
+        model += name + '{';
+        for (auto at = first + 1; at < end; ++at)
+            if (!std::isspace(static_cast<unsigned char>(declarations[at]))) model += declarations[at];
+        model += '}';
+    }
+    CHECK(to_hex(sha256(model)) == HAILSTONE_PLUGIN_DECLARATION_MODEL_SHA256);
+    auto range = [&](std::string_view first, std::string_view last, bool include_last_line) {
+        const auto start = declarations.find(first);
+        REQUIRE(start != std::string::npos);
+        auto end = declarations.find(last, start);
+        REQUIRE(end != std::string::npos);
+        if (include_last_line) end = declarations.find('\n', end);
+        REQUIRE(end != std::string::npos);
+        return compact(std::string_view(declarations).substr(start, end - start));
+    };
+    std::string bulk = "BulkSchema{";
+    bulk += range("#define HAILSTONE_PLUGIN_BULK_SCHEMA_VERSION", "\n", false);
+    bulk += range("enum HS_BulkSpawnFlags", "#define HS_BULK_RAID_ME", true);
+    bulk += range("enum HS_AbilityKinds", "};", true);
+    bulk += range("#define HAILSTONE_BUFF_RECORD_SIZE", "#define HAILSTONE_HOST_HAS", false);
+    bulk += '}';
+    CHECK(to_hex(sha256(bulk)) == HAILSTONE_PLUGIN_BULK_MODEL_SHA256);
+    const auto digest = sha256(model + bulk);
+    CHECK(to_hex(digest) == HAILSTONE_PLUGIN_LAYOUT_MODEL_SHA256);
+    CHECK(to_hex(digest) != to_hex(sha256(model))); // unchanged pointers do not imply unchanged payloads
+    CHECK(sha256(model + bulk + "semantic-change") != digest);
+    const auto total = bulk.find("int32_ttotal;");
+    REQUIRE(total != std::string::npos);
+    auto changed = bulk; changed.replace(total, std::string("int32_ttotal;").size(), "int64_ttotal;");
+    CHECK(sha256(model + changed) != digest);
+    std::uint64_t id = 0;
+    for (std::size_t at = 0; at < 8; ++at) id = (id << 8) | digest[at];
+    CHECK(id == HAILSTONE_PLUGIN_LAYOUT);
+}
+
+TEST_CASE("native SDK layouts: canonical builds negotiate and are refused by an old-host symbol lookup") {
+    Host h(false, nullptr, HAILSTONE_SDK_LAYOUT_MODERN);
+    h.approve(plugin::kCapAll);
+    SdkProbe probe(h);
+    CHECK(SDL_LoadFunction(probe.library, "hailstone_plugin_set_host") == nullptr);
+    CHECK(SDL_LoadFunction(probe.library, "nmsc_plugin_set_host") == nullptr);
+    const auto setter = reinterpret_cast<int (*)(const PluginHostApi*, std::uint64_t)>(
+        SDL_LoadFunction(probe.library, "hailstone_plugin_set_host_v2"));
+    REQUIRE(setter);
+    PluginHostApi table{}; table.size = sizeof(table);
+    CHECK(setter(&table, UINT64_MAX) == 0);
+    CHECK(setter(&table, HAILSTONE_PLUGIN_LAYOUT_ABI3_CANONICAL_1) == 0);
+    CHECK(setter(&table, HAILSTONE_PLUGIN_LAYOUT_ABI3_CANONICAL_2) == 0);
+    CHECK(setter(&table, HAILSTONE_PLUGIN_LAYOUT_ABI3_CANONICAL_3) == 0);
+    table.size = 4; CHECK(setter(&table, HAILSTONE_PLUGIN_LAYOUT) == 0);
+    REQUIRE(h.plugins->load("SdkLayoutModern"));
+    CHECK(probe.initialized == 1);
+    h.run("/sdkstate");
+    CHECK(h.printed_line("[SDK] table size " + std::to_string(sizeof(PluginHostApi))));
+}
+
+TEST_CASE("native SDK layouts: malformed contracts cannot reach initialization") {
+    for (const auto& [file, name, setter_calls] : {
+            std::tuple{fs::path(HAILSTONE_SDK_LAYOUT_UNKNOWN), "SdkLayoutUnknown", 0u},
+            std::tuple{fs::path(HAILSTONE_SDK_LAYOUT_MISSING_SETTER), "SdkLayoutMissingSetter", 0u},
+            std::tuple{fs::path(HAILSTONE_SDK_LAYOUT_MISSING_MARKER), "SdkLayoutMissingMarker", 0u},
+            std::tuple{fs::path(HAILSTONE_SDK_LAYOUT_REJECT), "SdkLayoutReject", 1u}}) {
+        CAPTURE(name);
+        Host h(false, nullptr, file); h.approve(plugin::kCapAll); SdkProbe probe(h);
+        std::string why;
+        CHECK_FALSE(h.plugins->load(name, &why));
+        CHECK_FALSE(why.empty());
+        CHECK(probe.setters == setter_calls);
+        CHECK(probe.initialized == 0);
+    }
+}
+
+TEST_CASE("native SDK layouts: released ABI3 prefix and explicit preview view coexist") {
+    Host h(false, nullptr, HAILSTONE_SDK_LAYOUT_PREVIEW);
+    h.approve(plugin::kCapAll);
+    h.sdk_layouts[to_hex(h.hash())] = "ui-preview-1";
+    SdkProbe preview(h);
+    REQUIRE(h.plugins->load("SdkLayoutPreview"));
+    CHECK(preview.setters == 1); CHECK(preview.initialized == 1);
+    h.run("/sdkstate");
+    CHECK(h.printed_line("[SDK] table size " + std::to_string(offsetof(PluginHostApi, caps) + 98 * sizeof(PluginHostApi::caps))));
+    h.run("/sdkpreview");
+    CHECK(h.printed_line("[SDK] preview services 1 1 1 1"));
+    fs::copy_file(HAILSTONE_SDK_LAYOUT_LEGACY, h.plugin_dir / fs::path(HAILSTONE_SDK_LAYOUT_LEGACY).filename());
+    REQUIRE(h.plugins->load("SdkLayoutLegacy"));
+    h.run("/sdkreleased");
+    CHECK(h.printed_line("[SDK] released readers 1 1 1 1 1"));
+    CHECK(h.printed_line("[SDK] released abilities 1 0 6000 1 8"));
+    h.printed.clear(); h.run("/sdkpreview");
+    CHECK(h.printed_line("[SDK] preview services 1 1 1 1")); // each module retains its own view
+}
+
+TEST_CASE("native SDK layouts: preceding marked models automatically keep their original service slots") {
+  for (const auto& [file, name, slots] : {
+          std::tuple{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_F6), "SdkLayoutMarkedF6", 102u},
+          std::tuple{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_E7), "SdkLayoutMarkedE7", 103u},
+          std::tuple{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_DBF), "SdkLayoutMarkedDbf", 103u}}) {
+    CAPTURE(name);
+    Host h(false, nullptr, file);
+    h.approve(plugin::kCapAll);
+    SdkProbe probe(h);
+    REQUIRE(h.sdk_layouts.empty());
+    REQUIRE(h.plugins->load(name));
+    CHECK(probe.setters == 1); CHECK(probe.initialized == 1);
+    h.run("/sdkstate");
+    CHECK(h.printed_line("[SDK] table size " + std::to_string(offsetof(PluginHostApi, caps) + slots * sizeof(PluginHostApi::caps))));
+    h.run("/sdkmarked");
+    CHECK(h.printed_line("[SDK] marked services 1 1 1 1 world 0"));
+
+    net::ItemPacket item;
+    item.type = net::kItemPacketTrade;
+    item.item.id = 7001; item.item.name = "Marked layout decoder fixture";
+    item.item.slot = net::ItemSlot::possessions(net::kSlotGeneral1, 2);
+    auto packet = net::encode_item_packet(false, item);
+    REQUIRE(h.hooks.packet(plugin::Stream::Zone, plugin::Direction::In, packet) == plugin::Flow::Continue);
+    h.run("/sdkmarkeditem 3");
+    CHECK(h.printed_line("[SDK] marked decode 0 slot_unchanged 1 item_unchanged 1 id 1515870810"));
+    h.run("/sdkmarkeditem");
+    CHECK(h.printed_line("[SDK] marked decode 1 slot_unchanged 0 item_unchanged 0 id 7001"));
+
+    // Loading a current marked module must not replace the retained older table or its owner pointer.
+    fs::copy_file(HAILSTONE_SDK_LAYOUT_MODERN, h.plugin_dir / fs::path(HAILSTONE_SDK_LAYOUT_MODERN).filename());
+    REQUIRE(h.plugins->load("SdkLayoutModern"));
+    h.printed.clear(); h.run("/sdkmarked");
+    CHECK(h.printed_line("[SDK] marked services 1 1 1 1 world 0"));
+    h.approve(plugin::kCapAll & ~plugin::kCapRead); h.plugins->policy_changed({});
+    h.printed.clear(); h.run("/sdkmarked"); h.run("/sdkmarkeditem");
+    CHECK(h.printed_line("[SDK] marked services 0 0 0 0 world 0"));
+    CHECK(h.printed_line("[SDK] marked decode 0 slot_unchanged 1 item_unchanged 1 id 1515870810"));
+    h.approve(plugin::kCapAll); h.plugins->policy_changed({});
+    h.printed.clear(); h.run("/sdkmarked"); h.run("/sdkmarkeditem");
+    CHECK(h.printed_line("[SDK] marked services 1 1 1 1 world 0"));
+    CHECK(h.printed_line("[SDK] marked decode 1 slot_unchanged 0 item_unchanged 0 id 7001"));
+    REQUIRE(h.plugins->unload(name));
+    h.sent.clear(); h.run("/sdkmarked");
+    CHECK(h.sent == std::vector<std::string>{"/sdkmarked"});
+  }
+}
+
+TEST_CASE("native SDK layouts: retained marked world services use the current frame and owner permissions") {
+  for (const auto& [file, name] : {
+          std::pair{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_F6), "SdkLayoutMarkedF6"},
+          std::pair{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_E7), "SdkLayoutMarkedE7"},
+          std::pair{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_DBF), "SdkLayoutMarkedDbf"}}) {
+    CAPTURE(name);
+    Host h(false, nullptr, file);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load(name));
+    HailstoneWorldFrame frame{};
+    frame.size = sizeof(frame); frame.frame = 17; frame.epoch = 3; frame.remaining_queries = 8;
+    frame.capabilities = HAILSTONE_WORLD_GEOMETRY | HAILSTONE_WORLD_TERRAIN |
+                         HAILSTONE_WORLD_DRAWN_ANCHORS | HAILSTONE_WORLD_SURFACE_PATCH;
+    unsigned floors = 0, anchors = 0, patches = 0;
+    plugin::WorldQueries queries;
+    queries.floor = [&](float, float, float, float& height) {
+        ++floors; height = 2.5f; return HAILSTONE_WORLD_RESOLVED;
+    };
+    queries.anchor = [&](std::uint32_t id, HailstoneWorldAnchor& anchor) {
+        ++anchors; CHECK(id == 12);
+        anchor.flags = HAILSTONE_WORLD_DRAWN_POSE; return HAILSTONE_WORLD_RESOLVED;
+    };
+    queries.surface_patch = [&](const HailstoneWorldSurfacePatch&, HailstoneWorldSurfacePatchResult&, std::uint32_t&) {
+        ++patches; return HAILSTONE_WORLD_PATCH_PLANAR;
+    };
+    h.plugins->world_frame(frame, queries);
+    CHECK(h.printed_line("[SDK] marked world " + std::to_string(frame.capabilities) + " 1 1 1 1 floor 2.500 anchor 12"));
+    CHECK(floors == 1); CHECK(anchors == 1); CHECK(patches == 1);
+    REQUIRE(h.plugins->world_batches().size() == 1);
+    CHECK(h.plugins->world_batches().front().vertices.size() == 3);
+    h.plugins->world_unavailable();
+    h.printed.clear(); h.run("/sdkmarkedworld 17 3 12");
+    CHECK(h.printed_line("[SDK] marked world 0 0 0 0 0 floor 123.000 anchor 0"));
+    h.approve(plugin::kCapAll & ~plugin::kCapExtend); h.plugins->policy_changed({});
+    h.printed.clear(); h.plugins->world_frame(frame, queries);
+    CHECK(floors == 1); CHECK(anchors == 1); CHECK(patches == 1);
+    CHECK(h.plugins->world_batches().empty());
+    CHECK(std::none_of(h.printed.begin(), h.printed.end(), [](const auto& line) { return line.starts_with("[SDK] marked world "); }));
+  }
+}
+
+TEST_CASE("native SDK layouts: older marked bulk readers retain four-byte framing and original truncated counts") {
+    for (const auto& [file, name] : {
+            std::pair{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_F6), "SdkLayoutMarkedF6"},
+            std::pair{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_E7), "SdkLayoutMarkedE7"}}) {
+        CAPTURE(name);
+        Host h(false, nullptr, file); h.approve(plugin::kCapAll);
+        REQUIRE(h.plugins->load(name));
+        using A = net::GameConnectionTestAccess;
+        auto& spells = A::spells(*h.world.conn);
+        spells.target_buffs_entity = 10;
+        game::BuffSlot first, second;
+        first.spell = 11; first.caster_name = "Alfa";
+        second.spell = 717;
+        spells.target_buffs = {{0, first}, {1, second}};
+        auto& aa = A::alt_adv(*h.world.conn);
+        for (const std::uint32_t id : {41u, 42u}) {
+            game::AltAbility ability; ability.id = id; ability.group = static_cast<std::int32_t>(id); ability.title_sid = -1;
+            aa.add(ability);
+        }
+        aa.owned = {{41, 1, 0}, {42, 1, 0}};
+        REQUIRE(A::profile(*h.world.conn));
+        A::profile(*h.world.conn)->disciplines = {99998, 99999};
+        auto expect = [&](std::string_view kind, unsigned room, int bytes, int count, unsigned records, int id) {
+            h.printed.clear();
+            h.run("/sdkoldlists " + std::string(kind) + " " + std::to_string(room));
+            const auto expected = "[SDK] old " + std::string(kind) + " bytes " + std::to_string(bytes) +
+                " count " + std::to_string(count) + " records " + std::to_string(records) +
+                " first " + std::to_string(id) + " guard 0 left 0";
+            CAPTURE(expected);
+            CHECK(h.printed_line(expected));
+        };
+        // Target's old single count is total held even when no record or just the first record fits.
+        expect("target", 3, 0, -1, 0, -1);
+        expect("target", 4, 4, 2, 0, -1);
+        expect("target", 27, 4, 2, 0, -1);
+        expect("target", 28, 28, 2, 1, 11);
+        expect("target", 47, 28, 2, 1, 11);
+        expect("target", 48, 48, 2, 2, 11);
+        // AA and discipline old counts mean records written, including a header-only count of zero.
+        for (const auto& [kind, id] : {std::pair{"aa", 41}, std::pair{"disc", 99998}}) {
+            expect(kind, 3, 0, -1, 0, -1);
+            expect(kind, 4, 4, 0, 0, -1);
+            expect(kind, 11, 4, 0, 0, -1);
+            expect(kind, 12, 12, 1, 1, id);
+            expect(kind, 19, 12, 1, 1, id);
+            expect(kind, 20, 20, 2, 2, id);
+        }
+        // A current module in this same host receives the new eight-byte count/total schema.
+        fs::copy_file(HAILSTONE_PROBE_PLUGIN, h.plugin_dir / fs::path(HAILSTONE_PROBE_PLUGIN).filename());
+        REQUIRE(h.plugins->load("HostProbe"));
+        h.printed.clear(); h.run("/probetargetbuffs 28");
+        CHECK(h.printed_line("[Probe] target buffs count 0, total 2, 8 bytes, 0 records, 0 empty, 0 bytes left"));
+        h.run("/probeaas 8"); h.run("/probediscs 8");
+        CHECK(h.printed_line("[Probe] aas count 0, total 2, 8 bytes, 0 bytes left"));
+        CHECK(h.printed_line("[Probe] discs count 0, total 2, 8 bytes, 0 bytes left"));
+        expect("target", 48, 48, 2, 2, 11); // the current module did not change the older module's format
+        A::world(*h.world.conn).target_id = 0;
+        expect("target", 4, 4, 0, 0, -1);
+        h.approve(plugin::kCapAll & ~plugin::kCapRead); h.plugins->policy_changed({});
+        for (const auto kind : {"target", "aa", "disc"}) expect(kind, 48, 0, -1, 0, -1);
+        h.approve(plugin::kCapAll); h.plugins->policy_changed({});
+        expect("aa", 20, 20, 2, 2, 41);
+        auto conn = std::move(h.world.conn);
+        for (const auto kind : {"target", "aa", "disc"}) expect(kind, 4, 4, 0, 0, -1);
+        h.world.conn = std::move(conn);
+    }
+}
+
+TEST_CASE("native SDK layouts: retained canonical3 bulk reads keep eight-byte count and total headers") {
+    Host h(false, nullptr, HAILSTONE_SDK_LAYOUT_MARKED_DBF); h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("SdkLayoutMarkedDbf"));
+    using A = net::GameConnectionTestAccess;
+    auto& spells = A::spells(*h.world.conn);
+    spells.target_buffs_entity = 10;
+    game::BuffSlot first, second; first.spell = 11; first.caster_name = "Alfa"; second.spell = 717;
+    spells.target_buffs = {{0, first}, {1, second}};
+    auto& aa = A::alt_adv(*h.world.conn);
+    for (const std::uint32_t id : {41u, 42u}) {
+        game::AltAbility ability; ability.id = id; ability.group = static_cast<std::int32_t>(id); ability.title_sid = -1;
+        aa.add(ability);
+    }
+    aa.owned = {{41, 1, 0}, {42, 1, 0}};
+    REQUIRE(A::profile(*h.world.conn)); A::profile(*h.world.conn)->disciplines = {99998, 99999};
+    auto expect = [&](std::string_view kind, unsigned room, int bytes, int count, int total, unsigned records, int id) {
+        h.printed.clear(); h.run("/sdkoldlists " + std::string(kind) + " " + std::to_string(room));
+        const auto expected = "[SDK] retained8 " + std::string(kind) + " bytes " + std::to_string(bytes) +
+            " count " + std::to_string(count) + " total " + std::to_string(total) + " records " + std::to_string(records) +
+            " first " + std::to_string(id) + " guard 0 left 0";
+        CAPTURE(expected); CHECK(h.printed_line(expected));
+    };
+    expect("target", 7, 0, -1, -1, 0, -1);
+    expect("target", 8, 8, 0, 2, 0, -1);
+    expect("target", 31, 8, 0, 2, 0, -1);
+    expect("target", 32, 32, 1, 2, 1, 11);
+    expect("target", 51, 32, 1, 2, 1, 11);
+    expect("target", 52, 52, 2, 2, 2, 11);
+    for (const auto& [kind, id] : {std::pair{"aa", 41}, std::pair{"disc", 99998}}) {
+        expect(kind, 7, 0, -1, -1, 0, -1);
+        expect(kind, 8, 8, 0, 2, 0, -1);
+        expect(kind, 15, 8, 0, 2, 0, -1);
+        expect(kind, 16, 16, 1, 2, 1, id);
+        expect(kind, 23, 16, 1, 2, 1, id);
+        expect(kind, 24, 24, 2, 2, 2, id);
+    }
+    h.approve(plugin::kCapAll & ~plugin::kCapRead); h.plugins->policy_changed({});
+    for (const auto kind : {"target", "aa", "disc"}) expect(kind, 52, 0, -1, -1, 0, -1);
+    h.approve(plugin::kCapAll); h.plugins->policy_changed({});
+    auto conn = std::move(h.world.conn);
+    for (const auto kind : {"target", "aa", "disc"}) expect(kind, 8, 8, 0, 0, 0, -1);
+    h.world.conn = std::move(conn);
+}
+
+TEST_CASE("native SDK layouts: overrides are exact-binary and reject unknown or marked selections") {
+    {
+        Host h(false, nullptr, HAILSTONE_SDK_LAYOUT_PREVIEW);
+        h.approve(plugin::kCapAll); h.sdk_layouts[to_hex(h.hash())] = "unknown";
+        SdkProbe probe(h); std::string why;
+        CHECK_FALSE(h.plugins->load("SdkLayoutPreview", &why));
+        CHECK(why.find("unknown SDK layout") != std::string::npos);
+        CHECK(probe.setters == 0); CHECK(probe.initialized == 0);
+    }
+    for (const auto& [file, name] : {
+            std::pair{fs::path(HAILSTONE_SDK_LAYOUT_MODERN), "SdkLayoutModern"},
+            std::pair{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_F6), "SdkLayoutMarkedF6"},
+            std::pair{fs::path(HAILSTONE_SDK_LAYOUT_MARKED_E7), "SdkLayoutMarkedE7"}}) {
+        Host h(false, nullptr, file);
+        h.approve(plugin::kCapAll); h.sdk_layouts[to_hex(h.hash())] = "ui-preview-1";
+        SdkProbe probe(h); std::string why;
+        CHECK_FALSE(h.plugins->load(name, &why));
+        CHECK(why.find("override") != std::string::npos); CHECK(probe.initialized == 0);
+    }
+    {
+        Host h(false, nullptr, HAILSTONE_SDK_LAYOUT_PREVIEW);
+        h.approve(plugin::kCapAll); h.sdk_layouts[to_hex(h.hash())] = "ui-preview-1";
+        { std::ofstream file(h.file, std::ios::binary | std::ios::app); file.put('\0'); }
+        SdkProbe probe(h);
+        REQUIRE(h.plugins->load("SdkLayoutPreview"));
+        h.run("/sdkstate");
+        CHECK(h.printed_line("[SDK] table size " + std::to_string(sizeof(PluginHostApi))));
+        // Do not call preview-only slots without an explicit matching setting: unmarked binaries are ambiguous.
+    }
+}
+
+TEST_CASE("native plugins: received item decode commits both outputs only for an accepted prefix") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    net::ItemPacket item;
+    item.type = net::kItemPacketTrade;
+    item.item.id = 7001;
+    item.item.name = "Decoder fixture";
+    item.item.slot = net::ItemSlot::possessions(net::kSlotGeneral1, 2);
+    auto packet = net::encode_item_packet(false, item);
+    REQUIRE(h.hooks.packet(plugin::Stream::Zone, plugin::Direction::In, packet) == plugin::Flow::Continue);
+    h.run("/probedecode 3");
+    CHECK(h.printed_line("[Probe] decode 0 slot_unchanged 1 item_unchanged 1 id 1515870810"));
+    h.run("/probedecode");
+    CHECK(h.printed_line("[Probe] decode 1 slot_unchanged 0 item_unchanged 0 id 7001"));
+    h.approve(plugin::kCapAll & ~plugin::kCapRead); h.plugins->policy_changed({});
+    h.printed.clear();
+    h.run("/probedecode");
+    CHECK(h.printed_line("[Probe] decode 0 slot_unchanged 1 item_unchanged 1 id 1515870810"));
+    h.approve(plugin::kCapAll); h.plugins->policy_changed({});
+    packet.data.clear();
+    REQUIRE(h.hooks.packet(plugin::Stream::Zone, plugin::Direction::In, packet) == plugin::Flow::Continue);
+    h.printed.clear();
+    h.run("/probedecode");
+    CHECK(h.printed_line("[Probe] decode 0 slot_unchanged 1 item_unchanged 1 id 1515870810"));
+}
+
+TEST_CASE("native plugins: copied raid actors expose known vitals and reject stale identity selections") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    auto& w = net::GameConnectionTestAccess::world(*h.world.conn);
+    w.spawns.at(1).incarnation = 100;
+    auto& actor = w.spawns.at(12); actor.incarnation = 200; actor.hp_known = true;
+    net::GameConnectionTestAccess::group(*h.world.conn).mana_percent[12] = 42;
+    auto& raid = net::GameConnectionTestAccess::raid(*h.world.conn);
+    raid.active = true; raid.leader = "Tester";
+    game::RaidMember member; member.name = "Groupie"; member.group = 0;
+    raid.members.push_back(member);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probeservices");
+    CHECK(h.printed_line("[Probe] services spawn 1 token 200 flags 3 mana 42 roster 1 count 1 member 1 actor 12 stale 0"));
+    h.run("/probeselectraid");
+    CHECK(h.printed_line("[Probe] raid selection 1")); CHECK(w.target_id == 12);
+    ++actor.incarnation; w.target_id = 10;
+    h.run("/probeselectraid");
+    CHECK(h.printed_line("[Probe] raid selection 0")); CHECK(w.target_id == 10);
+}
+
+TEST_CASE("native plugins: raid actor selection requires target permission") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll & ~plugin::kCapTarget);
+    auto& w = net::GameConnectionTestAccess::world(*h.world.conn);
+    w.spawns.at(1).incarnation = 100; w.spawns.at(12).incarnation = 200;
+    auto& raid = net::GameConnectionTestAccess::raid(*h.world.conn);
+    raid.active = true;
+    game::RaidMember member; member.name = "Groupie"; raid.members.push_back(member);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probeservices"); h.run("/probeselectraid");
+    CHECK(h.printed_line("[Probe] raid selection 0")); CHECK(w.target_id == 10);
+}
+
+TEST_CASE("native plugins: binary measurement uses the admitted library copy and preserves failures") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    const auto measured = measure_binary_file(h.file);
+    REQUIRE(measured);
+    REQUIRE(h.plugins->load("HostProbe"));
+    const auto expected = "[Probe] binary kind 2 bytes " + std::to_string(measured->byte_count) +
+                          " fnv " + std::to_string(measured->fnv1a63) + " sha " + to_hex(measured->sha256);
+    h.run("/probebinary 2");
+    CHECK(h.printed_line(expected));
+    h.printed.clear();
+    { std::ofstream replacement(h.file, std::ios::binary | std::ios::trunc); replacement << "new source file"; }
+    h.run("/probebinary 2");
+    CHECK(h.printed_line(expected)); // updating the installed file does not change the loaded module's identity
+    h.run("/probebinary 99");
+    CHECK(h.printed_line("[Probe] binary result 0 untouched 1"));
+    h.printed.clear(); h.run("/probebinary 2 3");
+    CHECK(h.printed_line("[Probe] binary result 0 untouched 1"));
+    h.printed.clear(); h.run("/probebinary 2 4");
+    CHECK(h.printed_line("[Probe] binary result 1 untouched 1"));
+    h.run("/probebinarythread");
+    CHECK(h.printed_line("[Probe] binary thread 0"));
+}
+
+TEST_CASE("native plugins: map policy validates copied hooks, prefixes, capabilities and callback recursion") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll); REQUIRE(h.plugins->load("HostProbe"));
+    CHECK(h.world.conn->server_ext().map_policy(*h.world.conn).flags == 0);
+    h.run("/probemapset 7");
+    auto policy = h.world.conn->server_ext().map_policy(*h.world.conn);
+    CHECK(policy.flags == 7); CHECK(policy.name == "Probe map");
+    h.run("/probemappolicy");
+    CHECK(h.printed_line("[Probe] map result 1 flags 7 untouched 0 name Probe map"));
+    h.run("/probemappolicy 3");
+    CHECK(h.printed_line("[Probe] map result 0 flags 1515870810 untouched 1 name -"));
+    h.run("/probemappolicy 4");
+    CHECK(h.printed_line("[Probe] map result 1 flags 1515870810 untouched 1 name -"));
+    h.run("/probemapthread"); CHECK(h.printed_line("[Probe] map thread 0"));
+    for (int malformed = 1; malformed <= 4; ++malformed) {
+        h.run("/probemapset 7 " + std::to_string(malformed));
+        CHECK(h.world.conn->server_ext().map_policy(*h.world.conn).flags == 0);
+    }
+    h.run("/probemapset 7 5");
+    CHECK(h.world.conn->server_ext().map_policy(*h.world.conn).flags == 7);
+    CHECK(h.printed_line("[Probe] nested map 0"));
+    h.run("/probemapset 7 6");
+    CHECK(h.world.conn->server_ext().map_policy(*h.world.conn).flags == 0); // retires inside its callback
+    CHECK(h.world.conn->server_ext().map_policy(*h.world.conn).flags == 0);
+    h.run("/probemapset 7");
+    h.approve(plugin::kCapAll & ~plugin::kCapUi); h.plugins->policy_changed({});
+    CHECK(h.world.conn->server_ext().map_policy(*h.world.conn).flags == 0);
+}
+
+TEST_CASE("native plugins: host provider exceptions return failure before crossing SDK frames") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll); REQUIRE(h.plugins->load("HostProbe"));
+    struct Provider final : game::ServerExtension {
+        bool fail = true;
+        game::MapPolicy map_policy(const net::GameConnection&) const override {
+            if (fail) throw std::runtime_error("host policy failed");
+            return {game::MapPolicyCustomSpawns, "Host provider", 1};
+        }
+    };
+    auto provider = std::make_shared<Provider>(); h.extensions->add(provider);
+    CHECK_NOTHROW(h.run("/probemappolicy"));
+    CHECK(h.printed_line("[Probe] map result 0 flags 1515870810 untouched 1 name -"));
+    CHECK(h.plugins->loaded("HostProbe"));
+    provider->fail = false;
+    h.run("/probemappolicy");
+    CHECK(h.printed_line("[Probe] map result 1 flags 1 untouched 0 name Host provider"));
+}
+
+TEST_CASE("native plugins: map policy reads need READ and old hook tables keep stock defaults") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll & ~plugin::kCapRead); REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probemappolicy");
+    CHECK(h.printed_line("[Probe] map result 0 flags 1515870810 untouched 1 name -"));
+    Host old;
+    old.approve(plugin::kCapAll); REQUIRE(old.plugins->load("MQ2Example"));
+    CHECK(old.world.conn->server_ext().map_policy(*old.world.conn).flags == 0);
+}
+
+TEST_CASE("native plugins: map policy accepts old aligned prefixes and changes across unseen owner transitions") {
+    Host h(false,nullptr,HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);REQUIRE(h.plugins->load("HostProbe"));
+    const auto current=[&]{return h.world.conn->server_ext().map_policy(*h.world.conn);};
+    const auto lifecycle=[&]{return h.world.conn->server_ext().lifecycle_revision(*h.world.conn);};
+    const auto initial_lifecycle=lifecycle();
+    for(const int format:{7,8,0}) {
+        h.run("/probemapset 7 "+std::to_string(format)+" 42");
+        const auto policy=current();CHECK(policy.flags==7);CHECK(policy.name=="Probe map");CHECK(policy.revision!=0);
+        CHECK(lifecycle()==initial_lifecycle); // map-only content and optional record format do not retire Tracking
+        for(const int size:{72,80,88}) {
+            h.run("/probemapprefix "+std::to_string(size));
+            CHECK(h.printed_line("[Probe] map prefix "+std::to_string(size)+" result 1 flags 7 canary 1 revision "+
+                (size>=80?"1":"0")+" context "+(size>=88?"1":"0")));
+        }
+    }
+    auto before=current().revision;CHECK(current().revision==before);
+    h.run("/probemapset 7 0 43");CHECK(current().revision!=before);CHECK(lifecycle()==initial_lifecycle);
+    before=current().revision;h.run("/probemapcycle");CHECK(current().revision!=before);CHECK(lifecycle()!=initial_lifecycle);
+    before=current().revision;
+    const auto before_caps=lifecycle();
+    h.approve(plugin::kCapAll&~plugin::kCapUi);h.plugins->policy_changed({});
+    h.approve(plugin::kCapAll);h.plugins->policy_changed({});
+    CHECK(current().revision!=before); // no policy query observed the revoked interval
+    CHECK(lifecycle()!=before_caps);
+    before=current().revision;
+    REQUIRE(h.plugins->unload("HostProbe"));REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probemapset 7 0 43");CHECK(current().revision!=before);
+}
+
+TEST_CASE("native plugins: binary measurement requires read permission") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll & ~plugin::kCapRead);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probebinary 2");
+    CHECK(h.printed_line("[Probe] binary result 0 untouched 1"));
+}
 
 TEST_CASE("native plugins: off before the zone-in; free without a hailstone.cfg; the player's only when it says") {
     Host h;
@@ -1539,6 +2108,17 @@ TEST_CASE("native plugins: use_ability and ability_state, by kind and name, held
     CHECK(denied.printed_line("[Plugin] HostProbe: use_ability needs the server's 'actions' permission"));
     CHECK(denied.used.empty());
     CHECK(denied.checked.empty());
+}
+
+TEST_CASE("native plugins: ability state provider exceptions preserve unknown and output arguments") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN); h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.ability_throws = true;
+    CHECK_NOTHROW(h.run("/probeability 0 Kick"));
+    CHECK(h.printed_line("[Probe] ability 0 Kick: state -1, -1 of -1 ms, use 1"));
+    h.ability_throws = false;
+    h.printed.clear(); h.run("/probeability 0 Kick");
+    CHECK(h.printed_line("[Probe] ability 0 Kick: state 1, 0 of 6000 ms, use 1"));
 }
 
 TEST_CASE("native plugins: get_ability_data_bulk, its layout, truncation and the read gate") {

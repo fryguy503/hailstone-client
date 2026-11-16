@@ -1,7 +1,8 @@
 -- Text prompt: replaces the game's TextEntryWnd (a window asking for a name or a line of text: a bandolier set's
 -- name, ...). The prompt, the text box (focused when the prompt opens; Enter accepts), OK and Cancel. What is typed
--- goes into the window's Entry box (eq.SetWindowText: the window keeps it to its length), and Enter is a click on
+-- goes into the window's Entry box (hs.SetWindowText: the window keeps it to its length), and Enter is a click on
 -- Entry, which the window takes as OK, as the stock edit box's Enter.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -30,8 +31,8 @@ local function drawWindow(x, y, w, h, s)
   local current = W.Text(WINDOW, "Entry")
   ui.SetNextItemWidth(-1)
   local text, enter = ui.InputText("##entry", current, 256, ui.InputTextFlags.EnterReturnsTrue)
-  if text ~= current then eq.SetWindowText(WINDOW, "Entry", text) end
-  if enter then eq.ClickChild(WINDOW, "Entry", "left") end
+  if text ~= current then API.windows.SetText(WINDOW, "Entry", text) end
+  if enter then API.windows.ClickChild(WINDOW, "Entry", "left") end
   -- the buttons at the bottom of the window
   local bh = K.ButtonH(s)
   local _, cy = ui.GetCursorPos()
@@ -45,8 +46,8 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Enter Text", function()
-  if not eq.InGame() then return end
-  local open = eq.WindowShown(WINDOW)
+  if not API.session.InGame() then return end
+  local open = API.windows.Shown(WINDOW)
   if not open then focus = true return end
   hud.Dialog(WINDOW, "Enter Text", WINDOW_OPTS, drawWindow)
 end)

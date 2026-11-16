@@ -115,15 +115,15 @@ std::string scrub_settings(std::string_view text) {
         const std::size_t end = text.find('\n');
         std::string_view line = text.substr(0, end);
         text.remove_prefix(end == std::string_view::npos ? text.size() : end + 1);
-        const std::size_t eq = line.find('=');
+        const std::size_t hs = line.find('=');
         bool secret = false;
-        if (eq != std::string_view::npos) {
-            const std::string key = lower(line.substr(0, eq));
+        if (hs != std::string_view::npos) {
+            const std::string key = lower(line.substr(0, hs));
             for (std::string_view s : kSecret) secret = secret || key.find(s) != std::string::npos;
             const std::string_view name = std::string_view(key).substr(0, key.find_last_not_of(" \t") + 1);
             secret = secret || name.ends_with("_key") || name.ends_with("-key") || name.ends_with(".key");
         }
-        out += secret ? std::string(line.substr(0, eq + 1)) + " (removed)" : std::string(line);
+        out += secret ? std::string(line.substr(0, hs + 1)) + " (removed)" : std::string(line);
         if (end != std::string_view::npos) out += '\n';
     }
     return out;

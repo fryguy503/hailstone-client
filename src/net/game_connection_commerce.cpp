@@ -825,7 +825,7 @@ void GameConnection::point_merchant_buy(std::uint32_t item_id) {
 void GameConnection::point_merchant_purchase(std::uint32_t item_id) {
     // CNewPointMerchantWnd_ConfirmPurchase(1) @0x6fce90: at once with pointMerchantNoConfirm (0xde0d08), else
     // ConfirmationDialog(100, 8064: the cost, the currency's name (singular for a cost of 1, else plural) and the
-    // item's, no time limit). The currencies' names are not known here (app/lua_eq_items.cpp: "Currency <n>").
+    // item's, no time limit). The currencies' names are not known here (app/lua_ui_items.cpp: "Currency <n>").
     if (state_ != ConnectionState::InZone || !point_merchant_.npc) return;
     if (client_option(game::ClientOption::PointMerchantNoConfirm)) {
         point_merchant_buy(item_id);

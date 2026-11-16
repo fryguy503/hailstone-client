@@ -1,5 +1,5 @@
 // The modern inventory's Mitigation and Avoidance rows (label types 6668 and 6667, ui/modern/inventory.lua): the stock
-// client has no such types (eq.Label gives "Unknown\tLabel<n>"), only a server's client fills them in (the NMS
+// client has no such types (hs.Label gives "Unknown\tLabel<n>"), only a server's client fills them in (the NMS
 // plugin), so on a stock server the rows are left out instead of drawing that text over AC and ATK.
 #include <doctest/doctest.h>
 
@@ -11,7 +11,9 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "ui/lua/lua_host.h"
 #include "scratch_dir.h"
@@ -66,17 +68,18 @@ TEST_CASE("Inventory (modern): Mitigation and Avoidance show only when the serve
     {
         Rig rig;
         REQUIRE(rig.to_zone());
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &rig.game;
         host.conn = &rig.conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ui::lua::LuaUi lua(dir / "modern", dir / "modern.txt");
-        lua.add_eq_api([&](lua_State* L) {
+        lua.add_ui_api([&](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         lua_State* L = lua.state();
         REQUIRE(luaL_dostring(L, R"(
@@ -97,7 +100,7 @@ TEST_CASE("Inventory (modern): Mitigation and Avoidance show only when the serve
         };
 
         // The stock server: the client has no text for the two types, and neither row is drawn on either page.
-        REQUIRE(luaL_dostring(L, "return eq.Label(6668)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "return hs.Label(6668)") == LUA_OK);
         CHECK(std::string(lua_tostring(L, -1)).starts_with("Unknown"));
         lua_settop(L, 0);
         // (The Stats page has an item-stat "Avoidance" row of its own, type 221.)
@@ -118,11 +121,12 @@ TEST_CASE("Inventory (modern): Mitigation and Avoidance show only when the serve
 
         // A server's client that fills them in (as the NMS plugin's labels do): both rows with their values.
         REQUIRE(luaL_dostring(L, R"(
-            local label = eq.Label
-            eq.Label = function(t)
+            local label = hs.Label
+            hs.Label = function(t)
               if t == 6668 then return "321" elseif t == 6667 then return "123" end
               return label(t)
             end)") == LUA_OK);
+        hailstone::test::sync_ui_api_aliases(L);
         for (const char* page : {"character", "stats"}) {
             CAPTURE(std::string(page));
             REQUIRE(luaL_dostring(L, (std::string("ui.SetSetting('test.inv.page', '") + page + "')").c_str()) == LUA_OK);

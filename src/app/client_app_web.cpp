@@ -2,7 +2,7 @@
 // the first tab; its data is data_dir()/web/, one profile folder per saved server.
 
 #include "app/client_app_internal.h"
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "platform/open_folder.h"
 #include "web/page_rules.h"
 
@@ -46,11 +46,11 @@ void ClientApp::close_orphan_tabs() {
 
 bool ClientApp::open_web_page(const std::string& url, std::uint32_t* tab) {
     if (tab) *tab = 0;
-    if (web_service_ && web_service_->available() && eq_api_) {
+    if (web_service_ && web_service_->available() && ui_api_) {
         std::string why;
         if (const std::uint32_t id = web_service_->open("", plugin::kCapAll, url, 800, 600, &why)) {
             if (tab) *tab = id;
-            eq_api_->show("BrowserWnd", true);
+            ui_api_->show("BrowserWnd", true);
             return true;
         }
         log::warn("web: {}", why);
@@ -87,20 +87,20 @@ void ClientApp::open_server_link(const std::string& url) {
         if (d.first_drop) log::warn("OP_Weblink: the server sends pages faster than they are opened: {} not opened", url);
         return;
     }
-    if (d.action == ServerLinks::Action::Reuse && web_service_ && eq_api_) {
+    if (d.action == ServerLinks::Action::Reuse && web_service_ && ui_api_) {
         std::string why;
         if (web_service_->navigate("", plugin::kCapAll, d.tab, url, &why)) {
             server_links_.opened(d.tab, url);
-            eq_api_->show("BrowserWnd", true);
+            ui_api_->show("BrowserWnd", true);
             return;
         }
         log::warn("web: {}", why);
     }
     std::uint32_t tab = 0;
-    if (web_service_ && web_service_->available() && eq_api_) {
+    if (web_service_ && web_service_->available() && ui_api_) {
         std::string why;
         tab = web_service_->open_server_link(url, &why);
-        if (tab) eq_api_->show("BrowserWnd", true);
+        if (tab) ui_api_->show("BrowserWnd", true);
         else log::warn("web: {}", why);
     }
     if (!tab) {

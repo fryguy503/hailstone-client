@@ -2,6 +2,7 @@
 -- move the frame), a card per member (name, health, mana and endurance, their pet), a click targets the member, and
 -- the invite, disband, accept and decline buttons under the cards (the game's own buttons: they are enabled when
 -- the game enables them).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local roles = dofile("lib/role_icons.lua")
 local T = hud.T
@@ -20,7 +21,7 @@ for i = 1, 5 do
 end
 
 local function member(i)
-  local frac, name, raw, tr, tg, tb = eq.Gauge(10 + i)
+  local frac, name, raw, tr, tg, tb = API.character.Gauge(10 + i)
   if raw == -1 or not name or name == "" then return nil end
   local slot = SLOTS[i]
   local m = slot.m
@@ -32,13 +33,13 @@ local function member(i)
     t[1], t[2], t[3] = tr, tg, tb
     m.tint = t
   end
-  local mf, _, mraw = eq.Gauge(30 + i)
+  local mf, _, mraw = API.character.Gauge(30 + i)
   if mraw ~= -1 then m.mana = mf end
-  local ef, _, eraw = eq.Gauge(35 + i)
+  local ef, _, eraw = API.character.Gauge(35 + i)
   if eraw ~= -1 then m.endurance = ef end
-  local pf, pname, praw = eq.Gauge(16 + i)
+  local pf, pname, praw = API.character.Gauge(16 + i)
   if praw ~= -1 and pname and pname ~= "" then m.pet, m.petName = pf, pname end
-  local r, g, b = eq.ChildColor(WINDOW, slot.gauge) -- a leader's name in green
+  local r, g, b = API.windows.ChildColor(WINDOW, slot.gauge) -- a leader's name in green
   if r then
     local c = slot.color
     c[1], c[2], c[3] = r, g, b
@@ -97,7 +98,7 @@ local function body(x0, y, w0, h, s)
     local hovered = ui.IsItemHovered()
     -- a right click: the member's group role menu; with Alt (or when no menu opened) the frame's own menu
     if hovered and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
-      if eq.ClickChild(WINDOW, slot.gauge, "right") then T.TakeRightClick() end
+      if API.windows.ClickChild(WINDOW, slot.gauge, "right") then T.TakeRightClick() end
     end
     ui.DrawRectFilled(x, cy, x + w, cy + ch, C.ink[1], C.ink[2], C.ink[3], hovered and 0.07 or 0.035, 6 * s)
     if hovered then ui.DrawRect(x, cy, x + w, cy + ch, C.accent[1], C.accent[2], C.accent[3], 0.6, 6 * s, 1.5 * s) end
@@ -137,7 +138,7 @@ local function body(x0, y, w0, h, s)
       ui.SetTooltip(m.name .. (m.roles ~= 0 and ("\n" .. roles.Labels[m.roles]) or "")
         .. (m.pet and ("\nPet: " .. m.petName) or "") .. "\nRight-click for group roles")
     end
-    if clicked then eq.ClickChild(WINDOW, slot.gauge, "left") end
+    if clicked then API.windows.ClickChild(WINDOW, slot.gauge, "left") end
     cy = cy + ch + 4 * s
   end
   -- the buttons
@@ -147,25 +148,25 @@ local function body(x0, y, w0, h, s)
   local bw = (w - (#buttons - 1) * 6 * s) / #buttons
   for k, b in ipairs(buttons) do
     local bx = x + (k - 1) * (bw + 6 * s)
-    local enabled = eq.ChildState(WINDOW, b[1])
-    local tip = eq.ChildTooltip(WINDOW, b[1])
+    local enabled = API.windows.ChildState(WINDOW, b[1])
+    local tip = API.windows.ChildTooltip(WINDOW, b[1])
     BUTTON_OPTS.enabled, BUTTON_OPTS.primary, BUTTON_OPTS.tooltip = enabled ~= false, b[3], tip ~= "" and tip or nil
     if T.Button(b[4], bx, by, bx + bw, by + bh, s, b[2], BUTTON_OPTS) then
-      eq.ClickChild(WINDOW, b[1], "left")
+      API.windows.ClickChild(WINDOW, b[1], "left")
     end
   end
 end
 
 ui.window("Group", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   for k = #members, 1, -1 do members[k] = nil end
   for i = 1, 5 do
     local m = member(i)
     if m then members[#members + 1] = m end
   end
-  frame.invited = eq.ChildShown(WINDOW, "FollowButton") == true
-  frame.canInvite = eq.ChildState(WINDOW, "InviteButton") == true
-  frame.grouped = eq.ChildState(WINDOW, "DisbandButton") == true
+  frame.invited = API.windows.ChildShown(WINDOW, "FollowButton") == true
+  frame.canInvite = API.windows.ChildState(WINDOW, "InviteButton") == true
+  frame.grouped = API.windows.ChildState(WINDOW, "DisbandButton") == true
   local total = HEAD + PAD
   for _, m in ipairs(members) do total = total + cardH(m) + 4 end
   if #members == 0 then total = total + 22 end

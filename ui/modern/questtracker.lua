@@ -1,5 +1,6 @@
 -- A HUD frame of this UI's own: watch flags and its visibility are independent of TaskWnd. The task snapshot is
 -- read directly from the game's state, so closing the journal or selecting another task never changes this list.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local Q = dofile("lib/task_journal.lua")
 local T = hud.T
@@ -9,8 +10,8 @@ local HEAD, FOOT, PAD = 28, 25, 9
 local watched = {}
 
 local function openJournal(task)
-  if not task then eq.ShowWindow("TaskWnd", true); return end
-  if eq.OpenTask(task.id) then
+  if not task then API.windows.Show("TaskWnd", true); return end
+  if API.tasks.Open(task.id) then
     ui.SetSetting("tasks.section." .. tostring(task.id), "objectives")
     ui.SetSetting("tasks.category", "active")
     Q.invalidate()
@@ -182,7 +183,7 @@ local function draw(x, y, w, h, s)
 end
 
 ui.window("Quest Tracker", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   -- A hidden tracker reads no quests at all.
   watched = Q.trackerVisible() and Q.getTracked(Q.tasks()) or {}
   hud.Window(nil, KEY, OPTS, draw)

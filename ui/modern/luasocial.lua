@@ -1,17 +1,18 @@
 -- Lua social: Hailstone's editor for Lua socials (game/lua_social.h; not a stock window), in this UI's look. A
 -- social's Lua runs on its hot button instead of five command lines; "Press" runs on the key press, "Face"
--- (optional) says how the button looks. What it may do is the server's choice (eq.LuaSocialRules): a note under the
+-- (optional) says how the button looks. What it may do is the server's choice (hs.LuaSocialRules): a note under the
 -- name says what, and a dry run lists the commands a press would send without sending them.
 --
 -- It opens on a right click on a Lua social, from the social editor's socials when they are Lua, from the social
--- editor's Commands / Lua switch, and with /luasocial [1..120 | new] (eq.LuaSocialEditRequest). A plain social's
+-- editor's Commands / Lua switch, and with /luasocial [1..120 | new] (hs.LuaSocialEditRequest). A plain social's
 -- lines become mq.cmd calls, their waits mq.delay (lib/social_lines.lua); the same switch here turns a press made
 -- only of those back into command lines and opens the social editor on them. A resizable dialog: the social's place and whether it is
 -- running (with Stop), the name and its colour (the twenty social colours as swatches), the server's rules, the
 -- Press and Face code on tabs (ui.CodeEditor: Tab takes a completion, Ctrl+Up / Ctrl+Down choose one; a Lua
 -- error's line is marked), then Save / Dry run with the Shift, Ctrl and Alt a press is tried with, Revert, the
 -- examples, Put on cursor, Copy share text / Paste and Delete (asks first), and the dry run's commands below.
--- eq.*: app/lua_eq_luasocial.cpp.
+-- hs.*: app/lua_ui_luasocial.cpp.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local S = dofile("lib/social.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -71,7 +72,7 @@ local message = ""
 
 local function load(n)
   social = n
-  local s = eq.LuaSocial(n)
+  local s = API.luasocials.Get(n)
   ed = {
     name = s and s.name or "Lua", color = s and s.color or 0,
     press = s and s.press or "", face = s and s.face or "",
@@ -109,7 +110,7 @@ end
 
 local function save()
   if ed.name == "" then ed.name = "Lua" end
-  eq.SetLuaSocial(social, { name = ed.name, color = ed.color, press = ed.press, face = ed.face })
+  API.luasocials.Set(social, { name = ed.name, color = ed.color, press = ed.press, face = ed.face })
   ed.saved = { name = ed.name, color = ed.color, press = ed.press, face = ed.face }
   message = "Saved."
 end
@@ -153,14 +154,14 @@ local function toCommands()
     message = why
     return
   end
-  eq.SetLuaSocial(social, { name = ed.name ~= "" and ed.name or "Lua", color = ed.color, press = "", face = "",
+  API.luasocials.Set(social, { name = ed.name ~= "" and ed.name or "Lua", color = ed.color, press = "", face = "",
     lines = lines })
   open = false
-  eq.OpenSocialEditor(social)
+  API.socials.OpenEditor(social)
 end
 
 local function header(s, x, w)
-  local st = eq.LuaSocial(social)
+  local st = API.luasocials.Get(social)
   local _, hy = ui.GetCursorScreenPos()
   ui.TextColored(C.heading[1], C.heading[2], C.heading[3], 1, string.format("Social %d", social + 1))
   ui.SameLine()
@@ -170,7 +171,7 @@ local function header(s, x, w)
     ui.SameLine()
     S.Chip("running", C.good)
     ui.SameLine()
-    if ui.SmallButton("Stop") then eq.StopLuaSocial(social) end
+    if ui.SmallButton("Stop") then API.luasocials.Stop(social) end
   end
   local _, why = SL.FromLua(ed.press, ed.face)
   local segW, segH = 156 * s, 24 * s
@@ -188,9 +189,9 @@ local function header(s, x, w)
   return st
 end
 
-local socialColors -- (eq.SocialColors: a fixed palette, read once)
+local socialColors -- (hs.SocialColors: a fixed palette, read once)
 local function nameAndColour(s)
-  socialColors = socialColors or eq.SocialColors()
+  socialColors = socialColors or API.socials.Colors()
   local colors = socialColors
   local c = colors[ed.color + 1] or { 1, 1, 1 }
   K.Caption("Name")
@@ -226,7 +227,7 @@ local function code(s, codeH)
       if errors[part] > 0 then label = label .. "  (error, line " .. errors[part] .. ")" end
       if ui.BeginTabItem(label .. "##" .. part) then
         local t, ch = ui.CodeEditor("##ls" .. part, ed[part], 0, codeH,
-          { complete = eq.LuaComplete, error_line = errors[part] })
+          { complete = API.luasocials.Complete, error_line = errors[part] })
         if ch then ed[part] = t end
         ui.EndTabItem()
       end
@@ -252,7 +253,7 @@ local function actions(s)
   if ui.IsItemHovered() then ui.SetTooltip("Keep the social (its hot buttons run it from now on)") end
   ui.SameLine()
   if ui.Button("Dry run") then
-    result = eq.LuaSocialDryRun(social, { press = ed.press, face = ed.face }, mods)
+    result = API.luasocials.DryRun(social, { press = ed.press, face = ed.face }, mods)
     errorLines(result and result.error)
     message = ""
   end
@@ -281,18 +282,18 @@ local function actions(s)
   ui.SameLine()
   if ui.Button("Put on cursor") then
     if dirty() then save() end
-    eq.SocialToCursor(social)
+    API.socials.ToCursor(social)
   end
   if ui.IsItemHovered() then ui.SetTooltip("Pick the social up to drop it on a hot button") end
 
   if ui.Button("Copy share text") then
     if dirty() then save() end
-    local t = eq.LuaSocialExport(social)
+    local t = API.luasocials.Export(social)
     if t then ui.SetClipboardText(t) message = "The share text is on the clipboard." end
   end
   ui.SameLine()
   if ui.Button("Paste") then
-    local t, why = eq.LuaSocialImport(ui.GetClipboardText())
+    local t, why = API.luasocials.Import(ui.GetClipboardText())
     if t then
       ed.name, ed.color, ed.press, ed.face = t.name ~= "" and t.name or ed.name, t.color, t.press, t.face
       if not t.lua then ed.press = SL.ToLua(t.lines or {}) end -- a plain social's lines, as Lua
@@ -312,7 +313,7 @@ local function actions(s)
   if ui.BeginPopup("##lsdelete") then
     ui.Text("Delete this social?")
     if ui.Button("Delete##lsyes") then
-      eq.SetLuaSocial(social, { name = "" })
+      API.luasocials.Set(social, { name = "" })
       open = false
       ui.CloseCurrentPopup()
     end
@@ -358,7 +359,7 @@ local function drawWindow(x, y, w, h, s)
   if not open then return end
   nameAndColour(s)
   ui.Dummy(0, 2 * s)
-  local text, color = rulesText(st and st.rules or eq.LuaSocialRules())
+  local text, color = rulesText(st and st.rules or API.luasocials.Rules())
   note(text, color, s)
   local _, cy = ui.GetCursorScreenPos()
   local _, lh = ui.CalcTextSize("Ag")
@@ -374,9 +375,9 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Lua Social", function()
-  local req = eq.LuaSocialEditRequest()
+  local req = API.luasocials.EditRequest()
   if req then load(req) end
-  if not open or not ed or not eq.InGame() then return end
+  if not open or not ed or not API.session.InGame() then return end
   WINDOW_OPTS.shown = open
   hud.Dialog(KEY, "Lua Social", WINDOW_OPTS, drawWindow)
 end)

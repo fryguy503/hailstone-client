@@ -4,23 +4,24 @@
 --
 -- A.menu(text): runs the EQ menu's entry named `text` (uifiles/default/CascadeMenu.txt: "Inventory",
 -- "Alternate Advancement", "Quest Journal", ...), wherever it sits in the menu, as clicking it would: the menu's
--- key command. A.toggle(screen): shows / hides a stock window this pack draws (EqApi::toggle, what its key does).
+-- key command. A.toggle(screen): shows / hides a stock window this pack draws (UiApi::toggle, what its key does).
+local API = hs.UI
 local A = {}
 
 local function search(level, text, depth)
-  local menus = eq.CascadeMenus()
+  local menus = API.menus.Cascades()
   local m = menus[level]
   if not m then return false end
   for i, item in ipairs(m.items) do
     if item.kind == "command" and item.text == text then
-      eq.CascadeClick(level, i)
+      API.menus.CascadeClick(level, i)
       return true
     end
   end
   if depth <= 0 then return false end
   for i, item in ipairs(m.items) do
     if item.kind == "submenu" then
-      eq.CascadeHover(level, i) -- opens it (and closes the other submenus of this menu)
+      API.menus.CascadeHover(level, i) -- opens it (and closes the other submenus of this menu)
       if search(level + 1, text, depth - 1) then return true end
     end
   end
@@ -29,16 +30,16 @@ end
 
 -- Runs the EQ menu entry `text`; false when the menu has no such entry.
 function A.menu(text)
-  if not eq.CascadeMenus then return false end
-  local wasOpen = #eq.CascadeMenus() > 0
-  if not wasOpen then eq.ClickChild("EQMainWnd", "EQButton", "left") end -- the EQ button opens the menu
-  if #eq.CascadeMenus() == 0 then return false end
+  if not API.menus.Cascades then return false end
+  local wasOpen = #API.menus.Cascades() > 0
+  if not wasOpen then API.windows.ClickChild("EQMainWnd", "EQButton", "left") end -- the EQ button opens the menu
+  if #API.menus.Cascades() == 0 then return false end
   local ok = search(1, text, 3)
-  if not ok and not wasOpen then eq.CascadeClose() end
+  if not ok and not wasOpen then API.menus.CascadeClose() end
   return ok
 end
 
-function A.toggle(screen) eq.ShowWindow(screen, not eq.WindowShown(screen)) end
+function A.toggle(screen) API.windows.Show(screen, not API.windows.Shown(screen)) end
 
 -- The EQ menu entry, else the stock window: for windows of this pack (which the menu also reaches).
 function A.open(text, screen)

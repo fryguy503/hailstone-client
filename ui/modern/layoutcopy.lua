@@ -1,9 +1,10 @@
 -- Copy a layout: replaces the game's LayoutCopyWindow (/copylayout with no arguments). The layouts that can be
 -- copied over the current one (another character's, or the default; File and Mode), what to copy with the windows
 -- (Hot Buttons, Loadouts, Socials) and Copy, which asks first. The list, the check boxes and Copy are the
--- original's (app/lua_eq_layout.cpp), so the copy is the game's. Hailstone adds Chat and Options (this client keeps
+-- original's (app/lua_ui_layout.cpp), so the copy is the game's. Hailstone adds Chat and Options (this client keeps
 -- them per character) and opens the window at a character's first entry into the world, with a line saying why and
 -- a box to stop offering it.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -18,7 +19,7 @@ local WINDOW_OPTS = {
 local function drawWindow(x, y, w, h, s)
   local bh = K.ButtonH(s)
   local _, lh = ui.CalcTextSize("Ag")
-  local first = eq.ChildShown(WINDOW, "LC_FirstVisitText") == true
+  local first = API.windows.ChildShown(WINDOW, "LC_FirstVisitText") == true
   if first then
     ui.TextWrapped(W.Text(WINDOW, "LC_FirstVisitText"))
     ui.Dummy(0, 4 * s)
@@ -50,6 +51,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Copy Layout", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Copy Layout", WINDOW_OPTS, drawWindow)
 end)

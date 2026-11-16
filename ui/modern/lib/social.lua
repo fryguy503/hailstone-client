@@ -1,6 +1,7 @@
 -- Pieces the social windows share (friends, guild, raid, looking for guild, inspect, mail): a search box, an empty
 -- state, class colours and abbreviations, a toolbar line, and reading a list child's rows. Display only: every
 -- action still goes to the game window's children through lib/widgets.lua.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local C = T.color
 
@@ -107,7 +108,7 @@ function S.Chip(text, color, tooltip)
   if tooltip and ui.IsItemHovered() then ui.SetTooltip(tooltip) end
 end
 
--- Whether two eq.ListRow texts tables read the same (the texts, the cell colours, the icon's column).
+-- Whether two hs.ListRow texts tables read the same (the texts, the cell colours, the icon's column).
 local function sameTexts(t, u)
   if #t ~= #u or t.iconColumn ~= u.iconColumn then return false end
   for i = 1, #t do if t[i] ~= u[i] then return false end end
@@ -132,14 +133,14 @@ local lastRows = {} -- [win][id] = the rows S.Rows gave last call
 -- A row that reads as it did last call is last call's table (its texts and colour unchanged), so a list that stands
 -- still makes no new tables but the list's own answers; the rows are the caller's to read, not to change.
 function S.Rows(win, id)
-  local rows, _, selected = eq.ListInfo(win, id)
+  local rows, _, selected = API.windows.ListInfo(win, id)
   local out = {}
   if not rows then return out, -1 end
   local byId = lastRows[win]
   if not byId then byId = {}; lastRows[win] = byId end
   local last = byId[id]
   for r = 0, rows - 1 do
-    local texts, cr, cg, cb = eq.ListRow(win, id, r)
+    local texts, cr, cg, cb = API.windows.ListRow(win, id, r)
     if texts then
       cr, cg, cb = cr or 1, cg or 1, cb or 1
       local e = last and last[#out + 1]
@@ -172,9 +173,9 @@ function S.TestClicks(win)
     local id, row = item:match("^(.-):(%d+)$")
     local box, pg = item:match("^(.-)=(%d+)$")
     local edit, text = item:match("^(.-)~(.*)$")
-    if edit then eq.SetWindowText(win, edit, text)
-    elseif box then eq.SetTabPage(win, box, tonumber(pg))
-    elseif id then eq.ListClick(win, id, tonumber(row), "left") else eq.ClickChild(win, item, "left") end
+    if edit then API.windows.SetText(win, edit, text)
+    elseif box then API.windows.SetTabPage(win, box, tonumber(pg))
+    elseif id then API.windows.ListClick(win, id, tonumber(row), "left") else API.windows.ClickChild(win, item, "left") end
   end
 end
 

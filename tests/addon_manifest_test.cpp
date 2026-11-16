@@ -125,6 +125,28 @@ TEST_CASE("addon_source: the GitHub links a player pastes") {
     }
 }
 
+TEST_CASE("addon_manifest: managed Lua activation is an explicit strict script-only opt-in") {
+    const auto ordinary = parse_addon_manifest(script_manifest());
+    REQUIRE(ordinary);
+    CHECK_FALSE(ordinary->autoload);
+    const auto managed = parse_addon_manifest(script_manifest("autoload 1\n"));
+    REQUIRE(managed);
+    CHECK(managed->autoload);
+    CHECK(parse_addon_manifest(script_manifest("autoload 0\n")));
+    for (const auto* bad : {"autoload yes\n", "autoload 2\n", "autoload\n", "autoload 1 0\n", "autoload 1\nautoload 1\n"})
+        CHECK_FALSE(parse_addon_manifest(script_manifest(bad)));
+    for (const std::string kind : {"plugin", "tool", "upscaler", "ui"}) {
+        auto other = script_manifest();
+        other.replace(other.find("kind script"), std::string("kind script").size(), "kind " + kind);
+        if (kind != "ui") other.replace(other.find("package any"), std::string("package any").size(), "package windows-x64");
+        if (kind != "plugin") other.replace(other.find("caps read, events,actions"), std::string("caps read, events,actions").size(), "caps none");
+        REQUIRE(parse_addon_manifest(other)); // the kind is otherwise valid: activation is the reason for refusal
+        std::string why;
+        CHECK_FALSE(parse_addon_manifest(other + "autoload 1\n", &why));
+        CHECK(why.find("autoload") != std::string::npos);
+    }
+}
+
 TEST_CASE("addon_source: the manifest's addresses, and only GitHub's hosts") {
     auto latest = addon_manifest_urls(*parse_addon_link("owner/repo"));
     REQUIRE(latest.size() == 2);
@@ -235,6 +257,25 @@ TEST_CASE("addon_manifest: what is refused") {
         CHECK_MESSAGE(why.find(c.why) != std::string::npos, why);
     }
     CHECK_FALSE(parse_addon_manifest(std::string(70 * 1024, '#')));
+}
+
+TEST_CASE("addon_manifest: UI packages are portable interface bundles without script capabilities") {
+    const std::string header = "hailstone-addon 1\nname interfaces\nkind ui\nversion 1.0.0\n";
+    const std::string package = "package any 1 " + kHash + " interfaces.zip\n";
+    for (const auto& caps : {std::string{}, std::string{"caps none\n"}}) {
+        std::string why;
+        const auto parsed = parse_addon_manifest(header + caps + package, &why);
+        REQUIRE_MESSAGE(parsed, why);
+        CHECK(parsed->kind == AddonKind::Ui);
+        CHECK(parsed->caps.empty());
+        CHECK(addon_package_for(*parsed, "any") != nullptr);
+    }
+    for (const auto& suffix : {"caps read,ui\n" + package,
+                               "caps none\npackage windows-x64 1 " + kHash + " interfaces.zip\n"}) {
+        std::string why;
+        CHECK_FALSE(parse_addon_manifest(header + suffix, &why));
+        CHECK_FALSE(why.empty());
+    }
 }
 
 TEST_CASE("addon_manifest: the signature is the manifest's own key's") {

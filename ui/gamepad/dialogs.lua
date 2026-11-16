@@ -8,9 +8,10 @@
 --                                          the new name on the keys, Submit Name, Disable Reminder, Remind Me Later
 --   Map label (EditLabelWnd)               the label's text (on the keys), its size and colour, Done and Cancel
 --   Alarm (AlarmWnd)                       hours and minutes stepped, quick choices, Set Alarm and Cancel
---   Server plugins (PluginConsent)         a server's compiled plugins ask before they load (eq.PluginConsent):
+--   Server plugins (PluginConsent)         a server's compiled plugins ask before they load (hs.PluginConsent):
 --                                          Allow / Don't allow (the pad starts on Don't allow); B puts it away
 --                                          until the next zone-in
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -53,31 +54,31 @@ ui.window("Confirm", function()
     return
   end
   T.frame()
-  local okOnly = eq.ChildShown(CONFIRM, "OK_Button") == true and eq.ChildShown(CONFIRM, "Yes_Button") == false
+  local okOnly = API.windows.ChildShown(CONFIRM, "OK_Button") == true and API.windows.ChildShown(CONFIRM, "Yes_Button") == false
   local hints = okOnly and { { "a", "OK" } } or { { "a", "Select" }, { "b", "No" } }
   if W.begin("Confirm", { w = 760, h = 420, title = "Confirm", hints = hints, alwaysFocus = true }) then
     local x0, y0, x1, y1, w = W.area()
-    local text = plain((eq.WindowText(CONFIRM, "TextOutput")))
+    local text = plain((API.windows.Text(CONFIRM, "TextOutput")))
     wrapped(text, x0, y0, w, C.text)
     local bw, bh = T.px(220), T.px(64)
     -- the buttons at the bottom right of the content area
     local wx, wy = ui.GetWindowPos()
     ui.SetCursorPos(x1 - wx - (okOnly and bw or 2 * bw + T.px(16)), y1 - wy - bh)
     if okOnly then
-      if T.button("##ok", "OK", bw, bh, { primary = true, glyph = "a" }, pad) then eq.ClickChild(CONFIRM, "OK_Button", "left") end
+      if T.button("##ok", "OK", bw, bh, { primary = true, glyph = "a" }, pad) then API.windows.ClickChild(CONFIRM, "OK_Button", "left") end
     else
-      if T.button("##yes", "Yes", bw, bh, { primary = true, glyph = "a" }, pad) then eq.ClickChild(CONFIRM, "Yes_Button", "left") end
+      if T.button("##yes", "Yes", bw, bh, { primary = true, glyph = "a" }, pad) then API.windows.ClickChild(CONFIRM, "Yes_Button", "left") end
       ui.SameLine(0, T.px(16))
       -- the focus starts on No (as W.confirm): an A carried over (a destroy, a buy) must not answer Yes
       if not confirmFocused then
         ui.SetKeyboardFocusHere()
         confirmFocused = true
       end
-      if T.button("##no", "No", bw, bh, { glyph = "b" }, pad) then eq.ClickChild(CONFIRM, "No_Button", "left") end
+      if T.button("##no", "No", bw, bh, { glyph = "b" }, pad) then API.windows.ClickChild(CONFIRM, "No_Button", "left") end
     end
   end
   -- B / the close button: No (the stock window's close answers its owner as No)
-  if W.finish() then eq.ClickChild(CONFIRM, okOnly and "OK_Button" or "No_Button", "left") end
+  if W.finish() then API.windows.ClickChild(CONFIRM, okOnly and "OK_Button" or "No_Button", "left") end
 end)
 
 -- ---------------------------------------------------------------- quantity
@@ -85,17 +86,17 @@ local QTY = "QuantityWnd"
 ui.window("Quantity", function()
   if not W.shown(QTY) then return end
   T.frame()
-  local _, _, value, count = eq.ChildState(QTY, "QTYW_Slider")
+  local _, _, value, count = API.windows.ChildState(QTY, "QTYW_Slider")
   value, count = value or 0, count or 1
   local maxv = math.max(0, count - 1)
-  local function set(v) eq.SetSlider(QTY, "QTYW_Slider", math.max(0, math.min(maxv, v))) end
+  local function set(v) API.windows.SetSlider(QTY, "QTYW_Slider", math.max(0, math.min(maxv, v))) end
   -- (no ImGui navigation: the D-pad sets the amount, so it cannot also move between the buttons)
   if W.begin("Quantity", { w = 640, h = 400, title = "How many?", noNav = true,
         hints = { { "left", "-1" }, { "right", "+1" }, { "lb", "-10" }, { "rb", "+10" }, { "a", "Accept" }, { "b", "Cancel" } } }) then
     local x0, y0, x1, y1, w = W.area()
     -- the amount, large
     T.font(56)
-    local amount = eq.WindowText(QTY, "QTYW_SliderInput") or tostring(value)
+    local amount = API.windows.Text(QTY, "QTYW_SliderInput") or tostring(value)
     local _, th = ui.CalcTextSize("0")
     T.textIn(x0, y0, x1, y0 + th, amount, C.text, 0.5)
     T.unfont()
@@ -126,9 +127,9 @@ ui.window("Quantity", function()
     ui.SameLine(0, T.px(10))
     local aw = x1 - (ui.GetCursorScreenPos())
     if T.button("##accept", "Accept", math.max(T.px(120), aw), bh, { primary = true, glyph = "a" }, pad) then accept = true end
-    if accept then eq.ClickChild(QTY, "QTYW_Accept_Button", "left") end
+    if accept then API.windows.ClickChild(QTY, "QTYW_Accept_Button", "left") end
   end
-  if W.finish() then eq.ShowWindow(QTY, false) end
+  if W.finish() then API.windows.Show(QTY, false) end
 end)
 
 -- ---------------------------------------------------------------- the prompts
@@ -160,7 +161,7 @@ local function prompt(p)
       T.unfont()
       ui.SetCursorPos(x0 - wx, y + T.px(10) - wy)
       if G.edit(kb, p.screen, p.edit, x0, x1, { max = p.max }) == "done" and G.enabled(p.screen, p.ok) then
-        eq.ClickChild(p.screen, p.ok, "left")
+        API.windows.ClickChild(p.screen, p.ok, "left")
       end
       -- the window's buttons along the bottom
       local shown = {}
@@ -175,7 +176,7 @@ local function prompt(p)
         G.button(p.screen, b[1], label, bw, bh, b[3])
       end
     end
-    if W.finish() then eq.ClickChild(p.screen, p.cancel, "left") end
+    if W.finish() then API.windows.ClickChild(p.screen, p.cancel, "left") end
   end)
 end
 
@@ -251,14 +252,14 @@ ui.window("Map Label", function()
     end
   end
   if W.finish() then
-    if labelEditing then labelEditing, labelRefocus = false, true else eq.ClickChild(LABEL, "ELW_CancelButton", "left") end
+    if labelEditing then labelEditing, labelRefocus = false, true else API.windows.ClickChild(LABEL, "ELW_CancelButton", "left") end
   end
 end)
 
 -- ---------------------------------------------------------------- alarm
 -- Alarm (AlarmWnd, /alarm: a reminder after a time): hours and minutes stepped with their buttons, quick choices
 -- that fill both, what the alarm comes to, Set Alarm and Cancel. The numbers are the window's own edit boxes
--- (eq.SetWindowText) and Set Alarm is its Set Time button, so the window starts the alarm as the stock one does.
+-- (hs.SetWindowText) and Set Alarm is its Set Time button, so the window starts the alarm as the stock one does.
 local ALARM = "AlarmWnd"
 local HOURS, MINUTES = "ALRW_HoursEditbox", "ALRW_MinutesEditbox"
 local QUICK = { { "5 min", 0, 5 }, { "15 min", 0, 15 }, { "30 min", 0, 30 }, { "1 hour", 1, 0 }, { "2 hours", 2, 0 } }
@@ -272,8 +273,8 @@ ui.window("Alarm", function()
     local hrs = math.max(0, math.floor(tonumber(G.text(ALARM, HOURS)) or 0))
     local mins = math.max(0, math.floor(tonumber(G.text(ALARM, MINUTES)) or 0))
     local function set(h, m)
-      eq.SetWindowText(ALARM, HOURS, tostring(math.max(0, math.min(99, h))))
-      eq.SetWindowText(ALARM, MINUTES, tostring(math.max(0, math.min(59, m))))
+      API.windows.SetText(ALARM, HOURS, tostring(math.max(0, math.min(99, h))))
+      API.windows.SetText(ALARM, MINUTES, tostring(math.max(0, math.min(59, m))))
     end
     local gap, bh = T.px(12), T.px(72)
     -- a number with its steps: the name and value on the left, the buttons on the right
@@ -322,7 +323,7 @@ ui.window("Alarm", function()
     ui.SameLine(0, gap)
     G.button(ALARM, "ALRW_OkButton", "Set Alarm", hw, fh, { primary = true, always = true, disabled = total == 0 })
   end
-  if W.finish() then eq.ClickChild(ALARM, "ALRW_CancelButton", "left") end
+  if W.finish() then API.windows.ClickChild(ALARM, "ALRW_CancelButton", "left") end
 end)
 
 -- ---------------------------------------------------------------- server plugins
@@ -332,8 +333,8 @@ end)
 local consentShown = nil -- the question's serial the pad's focus was put on Don't allow for
 local consentAt = 0 -- when that question showed: Allow and Don't allow wait a second (a press meant for something else)
 ui.window("Server Plugins", function()
-  eq.WindowShown("PluginConsent")
-  local q = eq.PluginConsent()
+  API.windows.Shown("PluginConsent")
+  local q = API.plugins.Consent()
   if not q then
     consentShown = nil
     return
@@ -362,14 +363,14 @@ ui.window("Server Plugins", function()
     ui.SetCursorPos(x1 - wx - 2 * bw - T.px(16), y1 - wy - bh)
     if consentShown ~= q.serial then consentAt = ui.GetTime() end
     local off = { disabled = ui.GetTime() - consentAt < 1.0 }
-    if T.button("##consentallow", "Allow", bw, bh, off, pad) then eq.AnswerPluginConsent(true, q.serial) end
+    if T.button("##consentallow", "Allow", bw, bh, off, pad) then API.plugins.AnswerConsent(true, q.serial) end
     ui.SameLine(0, T.px(16))
     if consentShown ~= q.serial then
       ui.SetKeyboardFocusHere()
       consentShown = q.serial
     end
-    if T.button("##consentdeny", "Don't allow", bw, bh, off, pad) then eq.AnswerPluginConsent(false, q.serial) end
+    if T.button("##consentdeny", "Don't allow", bw, bh, off, pad) then API.plugins.AnswerConsent(false, q.serial) end
   end
   -- B / the close button: not now (asked again at the next zone-in)
-  if W.finish() then eq.AnswerPluginConsent(nil, q.serial) end
+  if W.finish() then API.plugins.AnswerConsent(nil, q.serial) end
 end)

@@ -1,7 +1,7 @@
 #pragma once
 
 // The player customization window's actor (game::CustomizationActor) on a spawn and the model it is drawn with: the
-// local player in game, or the model player of character select and creation (EqHost::model_player). The features
+// local player in game, or the model player of character select and creation (UiHost::model_player). The features
 // are read from the spawn when the actor is made and written back by commit(); each SetFHEB call tries the feature on
 // a scratch dressing of the spawn's model (CharacterLibrary::try_fheb).
 
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "assets/character.h"
 #include "game/appearance_data.h"
 #include "game/player_customization.h"
@@ -147,10 +147,10 @@ private:
     }
 };
 
-// The model player of character select and creation (EqHost::model_player): the features go straight onto its spawn.
+// The model player of character select and creation (UiHost::model_player): the features go straight onto its spawn.
 class ModelPlayerActor final : public SpawnActor {
 public:
-    ModelPlayerActor(EqHost& host, std::mt19937& rng)
+    ModelPlayerActor(UiHost& host, std::mt19937& rng)
         : SpawnActor(host.model_player, host.model_player && host.model_for ? host.model_for(*host.model_player) : nullptr,
                      host.char_library, rng),
           host_(host) {}
@@ -161,7 +161,7 @@ public:
     std::int32_t profile_race() override { return race(); }
 
 private:
-    EqHost& host_;
+    UiHost& host_;
 };
 
 } // namespace hailstone::app

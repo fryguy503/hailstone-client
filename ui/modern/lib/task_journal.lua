@@ -1,10 +1,11 @@
 -- Shared journal/tracker state. The authoritative snapshot is independent of TaskWnd's visibility and selection.
 -- dofile is used by both windows, so the snapshot cache is shared, while watch flags live in character settings.
+local API = hs.UI
 local Q = {}
 modern_task_journal_cache = modern_task_journal_cache or { frame = -1 }
 local cache = modern_task_journal_cache
--- eq.Tasks() builds every quest's text and objectives, too much to redo every frame: it is read again when the
--- task list or the selection changes (eq.TasksRevision, cheap), after invalidate(), and every REFRESH seconds for
+-- hs.Tasks() builds every quest's text and objectives, too much to redo every frame: it is read again when the
+-- task list or the selection changes (hs.TasksRevision, cheap), after invalidate(), and every REFRESH seconds for
 -- the countdowns it carries.
 local REFRESH = 0.5
 
@@ -33,14 +34,14 @@ function Q.tasks()
   local frame = ui.GetFrameCount()
   if cache.frame == frame then return cache.value end
   local revision, selected
-  if eq.TasksRevision then revision, selected = eq.TasksRevision() end
+  if API.tasks.Revision then revision, selected = API.tasks.Revision() end
   local now = ui.GetTime and ui.GetTime() or 0
-  local fresh = cache.frame == -1 or not eq.TasksRevision or revision ~= cache.revision or
+  local fresh = cache.frame == -1 or not API.tasks.Revision or revision ~= cache.revision or
     selected ~= cache.selected or now - (cache.time or 0) >= REFRESH or now < (cache.time or 0)
   cache.frame = frame
   if fresh then
     local old = cache.value
-    cache.value = eq.Tasks() or {}
+    cache.value = API.tasks.List() or {}
     cache.time, cache.revision, cache.selected = now, revision, selected
     if old and old.revision and old.revision > 0 then prune(old, cache.value) end
   end

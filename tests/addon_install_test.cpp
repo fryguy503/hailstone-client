@@ -58,6 +58,91 @@ void install_script(const fs::path& dir, const std::string& name, const std::str
 
 } // namespace
 
+TEST_CASE("addon_install: managed activation persists independently of updates and verifies all installed files") {
+    test::ScratchDir dir("addon_managed");
+    auto m = manifest("managed", AddonKind::Script);
+    m.autoload = true;
+    std::string why;
+    auto files = unpack(dir.path(), m, {{"init.lua", "print('managed')\n"}, {"helper.lua", "return 1\n"}}, &why);
+    REQUIRE_MESSAGE(files, why);
+    auto a = record(m, *files);
+    a.autoload = true;
+    a.enabled = true;
+    REQUIRE_MESSAGE(apply_addon(dir.path(), a, &why), why);
+    auto specs = managed_addon_scripts(dir.path());
+    REQUIRE(specs.size() == 1);
+    CHECK(specs[0].enabled);
+    CHECK(specs[0].verified);
+    CHECK(specs[0].hash == sha256(std::string_view("print('managed')\n")));
+    CHECK(set_addon_enabled(dir.path(), "MANAGED", false));
+    CHECK_FALSE(managed_addon_scripts(dir.path())[0].enabled);
+    put_file(addon_folder(dir.path(), AddonKind::Script, "managed") / "helper.lua", "return 2\n");
+    CHECK_FALSE(managed_addon_scripts(dir.path())[0].verified);
+    m = manifest("managed", AddonKind::Script, "1.0.1");
+    m.autoload = true;
+    files = unpack(dir.path(), m, {{"init.lua", "print('managed v2')\n"}}, &why);
+    REQUIRE(files);
+    a = record(m, *files); a.autoload = true; a.enabled = true;
+    REQUIRE(apply_addon(dir.path(), a, &why));
+    specs = managed_addon_scripts(dir.path());
+    REQUIRE(specs.size() == 1);
+    CHECK_FALSE(specs[0].enabled); // a download never reverses the user's disabled switch
+    CHECK(specs[0].verified);
+    CHECK(set_addon_enabled(dir.path(), "managed", true));
+    CHECK(managed_addon_scripts(dir.path())[0].enabled);
+    CHECK_FALSE(set_addon_enabled(dir.path(), "missing", true));
+    REQUIRE(remove_addon(dir.path(), "managed", &why));
+    CHECK(managed_addon_scripts(dir.path()).empty());
+}
+
+TEST_CASE("addon_install: an update that newly opts into managed loading requires player activation") {
+    test::ScratchDir dir("addon_managed_optin");
+    install_script(dir.path(), "managed", "1.0.0", {{"init.lua", "print('ordinary')\n"}});
+    auto m = manifest("managed", AddonKind::Script, "1.0.1");
+    m.autoload = true;
+    std::string why;
+    auto files = unpack(dir.path(), m, {{"init.lua", "print('managed')\n"}}, &why);
+    REQUIRE(files);
+    auto a = record(m, *files); a.autoload = true; a.enabled = true;
+    REQUIRE(apply_addon(dir.path(), a, &why));
+    const auto specs = managed_addon_scripts(dir.path());
+    REQUIRE(specs.size() == 1);
+    CHECK_FALSE(specs[0].enabled);
+    CHECK(set_addon_enabled(dir.path(), "managed", true));
+}
+
+TEST_CASE("addon_install: dropping a manifest activation flag cannot bypass an installed disabled switch") {
+    test::ScratchDir dir("addon_managed_downgrade");
+    auto m = manifest("managed", AddonKind::Script);
+    m.autoload = true;
+    std::string why;
+    auto files = unpack(dir.path(), m, {{"init.lua", "return 1\n"}}, &why);
+    REQUIRE_MESSAGE(files, why);
+    auto a = record(m, *files);
+    a.autoload = true;
+    a.enabled = false;
+    REQUIRE_MESSAGE(apply_addon(dir.path(), a, &why), why);
+    m = manifest("managed", AddonKind::Script, "1.0.1"); // new installs of this release are ordinary Lua
+    CHECK_FALSE(m.autoload);
+    files = unpack(dir.path(), m, {{"init.lua", "return 2\n"}}, &why);
+    REQUIRE_MESSAGE(files, why);
+    REQUIRE_MESSAGE(apply_addon(dir.path(), record(m, *files), &why), why);
+    const auto specs = managed_addon_scripts(dir.path());
+    REQUIRE(specs.size() == 1);
+    CHECK_FALSE(specs[0].enabled);
+    CHECK(specs[0].verified);
+    const auto installed = read_installed_addons(dir.path());
+    REQUIRE(installed.size() == 1);
+    CHECK(installed[0].autoload);
+    CHECK_FALSE(installed[0].enabled);
+    CHECK(set_addon_enabled(dir.path(), "managed", true));
+    REQUIRE(remove_addon(dir.path(), "managed", &why));
+    files = unpack(dir.path(), m, {{"init.lua", "return 2\n"}}, &why);
+    REQUIRE_MESSAGE(files, why);
+    REQUIRE_MESSAGE(apply_addon(dir.path(), record(m, *files), &why), why);
+    CHECK(managed_addon_scripts(dir.path()).empty()); // explicit removal/reinstallation resets the opt-in
+}
+
 TEST_CASE("addon_install: a script's package, checked and unpacked") {
     test::ScratchDir dir("addon_script");
     const AddonManifest m = manifest("autoloot", AddonKind::Script);
@@ -75,6 +160,80 @@ TEST_CASE("addon_install: a script's package, checked and unpacked") {
     CHECK(read_file(out / "data" / "items.txt") == "Rusty Sword\n");
     for (const auto& f : *files)
         if (f.path == "README.md") CHECK(f.sha256 == sha256(std::string_view("# autoloot\n")));
+}
+
+TEST_CASE("addon_install: UI bundles install and update transactionally without running presentation Lua") {
+    test::ScratchDir dir("addon_ui_bundle");
+    auto parsed = parse_addon_manifest(manifest_for("interfaces", "ui", "1.0.0", "none", "any", "x", "p.zip"));
+    REQUIRE(parsed);
+    std::string why;
+    auto files = unpack(dir.path(), *parsed,
+        {{"ui/first/ui.ini", "name=First\nbase=builtin:modern\n"},
+         {"ui/first/panel.lua", "error('install must not execute UI code')\n"},
+         {"ui/first/lib/a.lua", "return 1\n"}, {"ui/first/lib/b.lua", "return 2\n"},
+         {"ui/second/ui.ini", "name=Second\nbase=first\n"}, {"LICENSE", "original fixture license"}}, &why);
+    REQUIRE_MESSAGE(files, why);
+    auto installed = record(*parsed, *files);
+    installed.caps = 0;
+    REQUIRE_MESSAGE(apply_addon(dir.path(), installed, &why), why);
+    const auto folder = dir.path() / "ui-addons/interfaces";
+    CHECK(fs::is_regular_file(folder / "ui/first/ui.ini"));
+    CHECK(fs::is_regular_file(folder / "ui/first/lib/a.lua"));
+    CHECK(fs::is_regular_file(folder / "ui/first/lib/b.lua"));
+    CHECK_FALSE(fs::exists(dir.path() / "scripts/interfaces"));
+    CHECK(addon_owns_folder(dir.path(), "ui-addons/interfaces"));
+    const auto registry = read_addon_registry(dir.path());
+    REQUIRE(registry.addons.size() == 1);
+    CHECK(registry.addons.front().kind == AddonKind::Ui);
+    CHECK(registry.addons.front().caps == 0);
+    CHECK(addon_ceilings(registry.addons).empty());
+    const auto presentation = dir.path() / "ui-data/addon.interfaces.first/lib/layout.lua";
+    put_file(presentation, "return {kind='player presentation'}\n");
+    CHECK_FALSE(addon_owns_folder(dir.path(), "ui-data/addon.interfaces.first"));
+    put_file(folder / "notes.txt", "player-owned data");
+    parsed->version_text = "2.0.0";
+    files = unpack(dir.path(), *parsed, {{"ui/first/ui.ini", "name=Updated\nbase=builtin:modern\n"}}, &why);
+    REQUIRE_MESSAGE(files, why);
+    installed = record(*parsed, *files);
+    installed.caps = 0;
+    REQUIRE_MESSAGE(apply_addon(dir.path(), installed, &why), why);
+    CHECK_FALSE(fs::exists(folder / "ui/second/ui.ini"));
+    CHECK(fs::is_regular_file(folder / "notes.txt"));
+    CHECK(read_file(presentation) == "return {kind='player presentation'}\n");
+    REQUIRE_MESSAGE(remove_addon(dir.path(), "interfaces", &why), why);
+    CHECK(fs::is_regular_file(folder / "notes.txt"));
+    CHECK_FALSE(fs::exists(folder / "ui/first/ui.ini"));
+    CHECK(read_file(presentation) == "return {kind='player presentation'}\n");
+    CHECK(read_installed_addons(dir.path()).empty());
+    CHECK_FALSE(addon_name_taken(dir.path(), {}, AddonKind::Ui, "INTERFACES").empty());
+}
+
+TEST_CASE("addon_install: invalid UI bundles are rejected before writing files") {
+    const auto parsed = parse_addon_manifest(manifest_for("interfaces", "ui", "1.0.0", "none", "any", "x", "p.zip"));
+    REQUIRE(parsed);
+    for (const std::map<std::string, std::string>& files : {
+            std::map<std::string, std::string>{{"init.lua", "error('not a script')"}},
+            {{"ui/first/panel.lua", "return true"}},
+            {{"ui/first/ui.ini", "name=First"}, {"ui/second/panel.lua", "return true"}},
+            {{"ui/first/ui.ini", "name=First"}, {"ui/FIRST/panel.lua", "return true"}},
+            {{"ui/first/ui.ini", "name=First"}, {"ui/first/run.exe", "program"}},
+            {{"ui/first/ui.ini", "name=First"}, {"ui/first/lib.so.1", "library"}},
+            {{"ui/first/ui.ini", "name=First"}, {"ui/first/panel.lua", "local = broken"}},
+            {{"ui/first/ui.ini", "name=First"}, {"../escape.txt", "escape"}},
+            {{"ui/bad.name/ui.ini", "name=Bad"}},
+            {{"ui/first/ui.ini", ""}},
+            {{"ui/first/ui.ini", "name=First"}, {"ui/first/UI.ini", "name=Duplicate"}},
+            {{"ui/first/ui.ini", "name=First"}, {"ui/first/lib/a.lua", "return 1"},
+             {"ui/first/Lib/b.lua", "return 2"}},
+            {{"ui/first/ui.ini", "name=First"}, {"ui/first/lib", "data"}, {"ui/first/lib/a.lua", "return 1"}},
+        }) {
+        test::ScratchDir dir("addon_ui_refused");
+        std::string why;
+        CHECK_FALSE(unpack(dir.path(), *parsed, files, &why));
+        CHECK_FALSE(why.empty());
+        CHECK_FALSE(fs::exists(addons_dir(dir.path()) / "new/interfaces"));
+        CHECK_FALSE(fs::exists(dir.path() / "escape.txt"));
+    }
 }
 
 TEST_CASE("addon_install: what a script's package may not hold") {

@@ -347,7 +347,10 @@ void GameConnection::ask(Confirmation c) {
 
 void GameConnection::unwind_question(const Confirmation& c) {
     // What answer_confirmation's no does to this client's own state, without a packet.
-    if (c.id == kConfirmLootNoDrop) loot_popup_pending_ = false;
+    if (c.id == kConfirmLootNoDrop) {
+        loot_popup_pending_ = false;
+        if (c.data2 & 0x80000000u) { loot_close_on_complete_ = false; continue_extension_loot_all(); }
+    }
     else if (c.id == kConfirmFellowshipInvite) {
         fellowship_.invite.reset();
         fellowship_invite_expires_ = 0;
@@ -414,6 +417,7 @@ void GameConnection::answer_confirmation(bool yes) {
         return;
     }
     if (c.id == kConfirmLootNoDrop) {
+        if (c.data2 & 0x80000000u) { answer_extension_loot_question(c, yes); return; }
         // Send_OP_LootItem @0x6be810 (the loot window's dialog 100): the popup flag clears either way; a yes sends
         // the request kept with the question.
         loot_popup_pending_ = false;

@@ -120,7 +120,7 @@ std::int64_t ratio_x100(const net::Item* w) {
     return static_cast<std::int64_t>(w->damage) * 100 / w->delay;
 }
 
-// The numbers the inventory window shows (app/lua_eq_values.cpp's cases), for a character that has run
+// The numbers the inventory window shows (app/lua_ui_values.cpp's cases), for a character that has run
 // process_all_stats.
 Readout read_out(const mech::Character& ch, int slot) {
     const auto& d = ch.stats();

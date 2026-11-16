@@ -8,8 +8,9 @@
 --   Task Offers    the offers (title, duration) and the focused one's description and objectives. Preview Reward
 --                  asks for that offer's rewards; A accepts the focused offer, X declines them all (as does
 --                  closing the window, the stock window's close).
--- Everything comes from the stock windows' lists and texts (eq.ListInfo / ListRow / WindowText) and acts through
--- their buttons (eq.ClickChild), so the rules are the game's.
+-- Everything comes from the stock windows' lists and texts (hs.ListInfo / ListRow / WindowText) and acts through
+-- their buttons (hs.ClickChild), so the rules are the game's.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -60,13 +61,13 @@ local rowCache = {}
 local function forgetRows() rowCache = {} end
 local function realRows(screen, child)
   local now = ui.GetTime()
-  local rows = eq.ListInfo(screen, child) or 0
+  local rows = API.windows.ListInfo(screen, child) or 0
   local key = child -- (the lists' names differ)
   local e = rowCache[key]
   if e and e.rows == rows and now - e.at < 0.25 and now >= e.at then return e.out end
   local out = {}
   for r = 0, rows - 1 do
-    local texts = eq.ListRow(screen, child, r)
+    local texts = API.windows.ListRow(screen, child, r)
     local blank = true
     for _, t in ipairs(texts or {}) do if t ~= "" then blank = false end end
     if not blank then out[#out + 1] = r end
@@ -86,7 +87,7 @@ local function objectives(screen, child, state, visible, width)
   end
   ui.BeginGroup() -- (the rows start at this x, not the window's left)
   W.list(child, state, rows, visible, 72, width, function(i, rx0, ry0, rx1, ry1, focused)
-    local texts, r, g, b = eq.ListRow(screen, child, idx[i])
+    local texts, r, g, b = API.windows.ListRow(screen, child, idx[i])
     if not texts then return end
     local col = { r or 1, g or 1, b or 1, 1 }
     local done = texts[2] == "Done" -- the stock list's status for a finished objective
@@ -137,8 +138,8 @@ ui.window("Quest Journal", function()
   end
   local taskIdx = realRows(TW, "TASK_TaskList")
   local count = #taskIdx
-  local _, _, sel = eq.ListInfo(TW, "TASK_TaskList")
-  local selTexts = sel and sel >= 0 and eq.ListRow(TW, "TASK_TaskList", sel) or nil
+  local _, _, sel = API.windows.ListInfo(TW, "TASK_TaskList")
+  local selTexts = sel and sel >= 0 and API.windows.ListRow(TW, "TASK_TaskList", sel) or nil
   local hints = { { "lb", "Page" }, { "rb", "Page" } }
   if page == 1 and selTexts and taskList.hasFocus then hints[#hints + 1] = { "x", "Abandon" } end
   if page == 3 then hints[#hints + 1] = { "a", "Show objectives" } end
@@ -158,7 +159,7 @@ ui.window("Quest Journal", function()
       local taskRows = fits(y1 - top, 84)
       local focusedTask = W.list("tasks", taskList, count, taskRows, 84, leftX1 - x0, function(i, rx0_, ry0, rx1, ry1, focused)
         if focused then stayInColumn(taskList, i, count, taskRows) end
-        local texts = eq.ListRow(TW, "TASK_TaskList", taskIdx[i])
+        local texts = API.windows.ListRow(TW, "TASK_TaskList", taskIdx[i])
         if not texts then return end
         local p = T.px(16)
         T.font(22)
@@ -172,12 +173,12 @@ ui.window("Quest Journal", function()
         T.unfont()
         if focused and taskList.lastFocus ~= i then -- select it in the stock window: its objectives and description
           taskList.lastFocus = i
-          eq.ListClick(TW, "TASK_TaskList", taskIdx[i], "left")
+          API.windows.ListClick(TW, "TASK_TaskList", taskIdx[i], "left")
           forgetRows()
           elemList.offset, desc.scroll = 0, 0
         end
       end, function(i)
-        eq.ListClick(TW, "TASK_TaskList", taskIdx[i], "left")
+        API.windows.ListClick(TW, "TASK_TaskList", taskIdx[i], "left")
         forgetRows()
       end)
       taskList.hasFocus = focusedTask ~= nil
@@ -198,45 +199,45 @@ ui.window("Quest Journal", function()
         ui.SetCursorPos(rx0 - wx, oy - wy)
         objectives(TW, "TASK_TaskElementList", elemList, fits(descY - oy - T.px(20), 72), x1 - rx0)
         local previewH = T.px(60)
-        P.draw("##taskdesc", desc, eq.WindowText(TW, "TASK_Description") or "", rx0, descY, x1, y1 - previewH - T.px(8), { empty = "No description." })
+        P.draw("##taskdesc", desc, API.windows.Text(TW, "TASK_Description") or "", rx0, descY, x1, y1 - previewH - T.px(8), { empty = "No description." })
         ui.SetCursorPos(rx0 - wx, y1 - previewH - wy)
-        local previewEnabled = eq.ChildState(TW, "TASK_PreviewRewardButton") == true
+        local previewEnabled = API.windows.ChildState(TW, "TASK_PreviewRewardButton") == true
         if T.button("##taskpreview", "Preview Reward", x1 - rx0, previewH, { disabled = not previewEnabled }, pad) then
-          eq.ClickChild(TW, "TASK_PreviewRewardButton", "left")
+          API.windows.ClickChild(TW, "TASK_PreviewRewardButton", "left")
         end
         -- X abandons the focused task (the list's row, which is the selected one) through the stock Remove, which
         -- asks first
-        if focusedTask and pressed("Quest Journal", "x") then eq.ClickChild(TW, "TASK_AbandonButton", "left") end
+        if focusedTask and pressed("Quest Journal", "x") then API.windows.ClickChild(TW, "TASK_AbandonButton", "left") end
       end
     elseif page == 2 then
-      local n = eq.ListInfo(TW, "STASK_MemberList") or 0
+      local n = API.windows.ListInfo(TW, "STASK_MemberList") or 0
       ui.SetCursorPos(x0 - wx, top - wy)
       T.heading("Shared task members")
       W.list("members", memberList, n, fits(y1 - top - T.px(40), 60), 60, (x1 - x0) * 0.5, function(i, rx0_, ry0, rx1, ry1)
-        local texts = eq.ListRow(TW, "STASK_MemberList", i - 1)
+        local texts = API.windows.ListRow(TW, "STASK_MemberList", i - 1)
         if not texts then return end
         T.textIn(rx0_ + T.px(16), ry0, rx1 - T.px(16), ry1, texts[1] or "", C.text, 0)
         if (texts[2] or "") ~= "" then T.textIn(rx0_, ry0, rx1 - T.px(16), ry1, texts[2], C.dim, 1) end
       end)
       if n == 0 then T.draw(x0, top + T.px(40), "You are not in a shared task.", C.faint) end
     else
-      local n = eq.ListInfo(TW, "QUEST_TaskList") or 0
-      local _, _, hsel = eq.ListInfo(TW, "QUEST_TaskList")
+      local n = API.windows.ListInfo(TW, "QUEST_TaskList") or 0
+      local _, _, hsel = API.windows.ListInfo(TW, "QUEST_TaskList")
       ui.SetCursorPos(x0 - wx, top - wy)
       local histRows = fits(y1 - top, 60)
       W.list("history", histList, n, histRows, 60, leftX1 - x0, function(i, rx0_, ry0, rx1, ry1, focused)
         if focused then stayInColumn(histList, i, n, histRows) end
-        local texts = eq.ListRow(TW, "QUEST_TaskList", i - 1)
+        local texts = API.windows.ListRow(TW, "QUEST_TaskList", i - 1)
         if not texts then return end
         T.textIn(rx0_ + T.px(16), ry0, rx1 - T.px(16), ry1, T.fit(texts[2] or "", rx1 - rx0_ - T.px(32)), C.text, 0)
       end, function(i)
-        eq.ListClick(TW, "QUEST_TaskList", i - 1, "left") -- asks the server for its objectives
+        API.windows.ListClick(TW, "QUEST_TaskList", i - 1, "left") -- asks the server for its objectives
         forgetRows()
         histElems.offset = 0
       end)
       if n == 0 then T.draw(x0, top, "No completed tasks.", C.faint) end
       if hsel and hsel >= 0 then
-        local texts = eq.ListRow(TW, "QUEST_TaskList", hsel)
+        local texts = API.windows.ListRow(TW, "QUEST_TaskList", hsel)
         T.font(26)
         local _, th = ui.CalcTextSize("Ag")
         T.draw(rx0, top, T.fit(texts and texts[2] or "", x1 - rx0))
@@ -248,7 +249,7 @@ ui.window("Quest Journal", function()
       end
     end
   end
-  if W.finish() then eq.ShowWindow(TW, false) end
+  if W.finish() then API.windows.Show(TW, false) end
 end)
 
 -- ---------------------------------------------------------------- a task giver's offers (TaskSelectWnd)
@@ -261,7 +262,7 @@ ui.window("Task Offers", function()
     offerList.lastFocus = nil
     return
   end
-  local count = eq.ListInfo(SW, "TaskList") or 0
+  local count = API.windows.ListInfo(SW, "TaskList") or 0
   if W.begin("Task Offers", { w = 1500, h = 880, title = "Tasks Offered",
         subtitle = count == 1 and "1 task offered" or (count .. " tasks offered"),
         hints = { { "a", "Accept" }, { "x", "Decline" }, { "b", "Close (decline)" } } }) then
@@ -272,7 +273,7 @@ ui.window("Task Offers", function()
     local offerRows = fits(y1 - y0, 84)
     W.list("offers", offerList, count, offerRows, 84, leftX1 - x0, function(i, rx0, ry0, rx1, ry1, focused)
       if focused then stayInColumn(offerList, i, count, offerRows) end
-      local texts = eq.ListRow(SW, "TaskList", i - 1)
+      local texts = API.windows.ListRow(SW, "TaskList", i - 1)
       if not texts then return end
       local p = T.px(16)
       T.font(22)
@@ -285,28 +286,28 @@ ui.window("Task Offers", function()
       T.unfont()
       if focused and offerList.lastFocus ~= i then -- select it: its description shows
         offerList.lastFocus = i
-        eq.ListClick(SW, "TaskList", i - 1, "left")
+        API.windows.ListClick(SW, "TaskList", i - 1, "left")
         offerDesc.scroll = 0
       end
     end, function(i)
-      eq.ListClick(SW, "TaskList", i - 1, "left")
-      eq.ClickChild(SW, "AcceptButton", "left")
+      API.windows.ListClick(SW, "TaskList", i - 1, "left")
+      API.windows.ClickChild(SW, "AcceptButton", "left")
     end)
     local rx0 = leftX1 + T.px(24)
-    local _, _, sel = eq.ListInfo(SW, "TaskList")
-    local texts = sel and sel >= 0 and eq.ListRow(SW, "TaskList", sel) or nil
+    local _, _, sel = API.windows.ListInfo(SW, "TaskList")
+    local texts = sel and sel >= 0 and API.windows.ListRow(SW, "TaskList", sel) or nil
     T.font(26)
     local _, th = ui.CalcTextSize("Ag")
     T.draw(rx0, y0, T.fit(texts and texts[1] or "", x1 - rx0))
     T.unfont()
     local previewH = T.px(60)
-    P.draw("##offerdesc", offerDesc, eq.WindowText(SW, "Description") or "", rx0, y0 + th + T.px(14), x1, y1 - previewH - T.px(8))
+    P.draw("##offerdesc", offerDesc, API.windows.Text(SW, "Description") or "", rx0, y0 + th + T.px(14), x1, y1 - previewH - T.px(8))
     ui.SetCursorPos(rx0 - wx, y1 - previewH - wy)
-    local previewEnabled = eq.ChildState(SW, "TSEL_PreviewRewardButton") == true
+    local previewEnabled = API.windows.ChildState(SW, "TSEL_PreviewRewardButton") == true
     if T.button("##offerpreview", "Preview Reward", x1 - rx0, previewH, { disabled = not previewEnabled }, pad) then
-      eq.ClickChild(SW, "TSEL_PreviewRewardButton", "left")
+      API.windows.ClickChild(SW, "TSEL_PreviewRewardButton", "left")
     end
-    if pressed("Task Offers", "x") then eq.ClickChild(SW, "DeclineButton", "left") end
+    if pressed("Task Offers", "x") then API.windows.ClickChild(SW, "DeclineButton", "left") end
   end
-  if W.finish() then eq.ShowWindow(SW, false) end
+  if W.finish() then API.windows.Show(SW, false) end
 end)

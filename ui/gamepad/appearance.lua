@@ -4,9 +4,10 @@
 --       window disables them for your race and model); X Random, A Accept, B Cancel. The features are stepped and
 --       tried on your model by the game's code, and Accept sends them. (No ImGui navigation: the D-pad is the rows'.)
 --   Item preview (ObjectPreviewWnd: Alt + a right click on an item)
---       the client's 3D view of the item on your character, or of the item alone (eq.ItemPreviewImage): the right
+--       the client's 3D view of the item on your character, or of the item alone (hs.ItemPreviewImage): the right
 --       stick turns it, LB / RB zoom, Y fits it again; the row below has the game's own turn, zoom and Reset
 --       buttons (OPW_*). The mouse drags (left: turn, right: move) and the wheel zooms.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -24,8 +25,8 @@ local ROWS = {
 local feature = 1
 ui.window("Set Appearance", function()
   G.testShow()
-  -- (in game, or at character creation: eq.GameState 2)
-  local shown = W.shown(PC) or (eq.GameState and eq.GameState() == 2 and eq.WindowShown(PC))
+  -- (in game, or at character creation: hs.GameState 2)
+  local shown = W.shown(PC) or (API.session.GameState and API.session.GameState() == 2 and API.windows.Shown(PC))
   if not shown then return end
   T.frame()
   local heritage = G.text(PC, "ParentId_Text")
@@ -36,7 +37,7 @@ ui.window("Set Appearance", function()
     local wx, wy = ui.GetWindowPos()
     local function step(i, dir)
       local id = ROWS[i][1] .. (dir < 0 and "_Down_Button" or "_Up_Button")
-      if G.enabled(PC, id) then eq.ClickChild(PC, id, "left") end
+      if G.enabled(PC, id) then API.windows.ClickChild(PC, id, "left") end
     end
     local accept = false
     if W.focused() then
@@ -44,7 +45,7 @@ ui.window("Set Appearance", function()
       if G.repeated("down") then feature = math.min(#ROWS, feature + 1) end
       if G.repeated("left") then step(feature, -1) end
       if G.repeated("right") then step(feature, 1) end
-      if pad.menuPressed("x") then eq.ClickChild(PC, "Random_Button", "left") end
+      if pad.menuPressed("x") then API.windows.ClickChild(PC, "Random_Button", "left") end
       if T.settledPress(pad, "a") then accept = true end
     end
     local rh, gap = T.px(72), T.px(10)
@@ -69,9 +70,9 @@ ui.window("Set Appearance", function()
     G.button(PC, "Cancel_Button", "Cancel", hw, bh, { glyph = "b", always = true })
     ui.SameLine(0, T.px(12))
     G.button(PC, "Accept_Button", "Accept", hw, bh, { primary = true, glyph = "a", always = true })
-    if accept then eq.ClickChild(PC, "Accept_Button", "left") end
+    if accept then API.windows.ClickChild(PC, "Accept_Button", "left") end
   end
-  if W.finish() then eq.ClickChild(PC, "Cancel_Button", "left") end
+  if W.finish() then API.windows.ClickChild(PC, "Cancel_Button", "left") end
 end)
 
 -- ---------------------------------------------------------------- item preview
@@ -85,7 +86,7 @@ local lastSerial
 ui.window("Item Preview", function()
   if not W.shown(OP) then return end
   T.frame()
-  local p = eq.ItemPreview()
+  local p = API.preview.Draw()
   local fresh = p and p.serial ~= lastSerial
   if fresh then lastSerial = p.serial end -- a new item: the window takes the pad again (below)
   local title = p and p.show and p.name ~= "" and p.name or "Item Preview"
@@ -98,28 +99,28 @@ ui.window("Item Preview", function()
     local vy1 = y1 - bh - T.px(14)
     if p and p.show then
       T.rect(x0, y0, x1, vy1, C.sunken, 1, T.px(14))
-      local tex = eq.ItemPreviewImage(x1 - x0, vy1 - y0)
+      local tex = API.preview.Image(x1 - x0, vy1 - y0)
       if tex then ui.DrawImage(tex, x0, y0, x1, vy1, 0, 0, 1, 1) end
       -- the mouse over the view
       ui.SetCursorPos(x0 - wx, y0 - wy)
       ui.InvisibleButton("##previewview", x1 - x0, vy1 - y0, ui.ButtonFlags.MouseButtonLeft + ui.ButtonFlags.MouseButtonRight)
       local io = ui.GetIO()
-      if ui.IsItemHovered() and io.wheel ~= 0 then eq.ItemPreviewControl("zoom", io.wheel > 0 and 0.9 or 1.1) end
+      if ui.IsItemHovered() and io.wheel ~= 0 then API.preview.Control("zoom", io.wheel > 0 and 0.9 or 1.1) end
       if ui.IsItemActive() then
         if ui.IsMouseDown(ui.Mouse.Left) then
-          eq.ItemPreviewControl("rotate", io.mouseDX * 0.01, -io.mouseDY * 0.01)
+          API.preview.Control("rotate", io.mouseDX * 0.01, -io.mouseDY * 0.01)
         elseif ui.IsMouseDown(ui.Mouse.Right) then
-          eq.ItemPreviewControl("pan", -io.mouseDX / (x1 - x0), io.mouseDY / (vy1 - y0))
+          API.preview.Control("pan", -io.mouseDX / (x1 - x0), io.mouseDY / (vy1 - y0))
         end
       end
       -- the pad: the right stick turns it, LB / RB zoom, Y fits it again
       if W.focused() and pad.mode() == "menu" then
         local dt = 1 / math.max(20, io.fps or 60)
         local rx, ry = pad.axis("rx") or 0, pad.axis("ry") or 0
-        if math.abs(rx) > 0.15 or math.abs(ry) > 0.15 then eq.ItemPreviewControl("rotate", rx * 3 * dt, -ry * 3 * dt) end
-        if pad.down("lb") then eq.ItemPreviewControl("zoom", 1 + dt) end
-        if pad.down("rb") then eq.ItemPreviewControl("zoom", 1 - dt) end
-        if W.pressed("y") then eq.ClickChild(OP, "OPW_ResetButton", "left") end
+        if math.abs(rx) > 0.15 or math.abs(ry) > 0.15 then API.preview.Control("rotate", rx * 3 * dt, -ry * 3 * dt) end
+        if pad.down("lb") then API.preview.Control("zoom", 1 + dt) end
+        if pad.down("rb") then API.preview.Control("zoom", 1 - dt) end
+        if W.pressed("y") then API.windows.ClickChild(OP, "OPW_ResetButton", "left") end
       end
       local gap = T.px(10)
       local bw = (w - (#BUTTONS - 1) * gap) / #BUTTONS
@@ -136,5 +137,5 @@ ui.window("Item Preview", function()
       T.unfont()
     end
   end
-  if W.finish() then eq.ShowWindow(OP, false) end
+  if W.finish() then API.windows.Show(OP, false) end
 end)

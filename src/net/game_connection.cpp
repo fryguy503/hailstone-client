@@ -112,7 +112,7 @@ void GameConnection::set_own_spawn_hp() {
     const OwnHp hp = own_hp();
     if (hp.max <= 0) return;
     if (auto it = world_.spawns.find(world_.player_id); it != world_.spawns.end())
-        it->second.hp_percent = spawn_hp_percent(hp.cur, hp.max);
+        { it->second.hp_percent = spawn_hp_percent(hp.cur, hp.max); it->second.hp_known = true; }
 }
 
 void GameConnection::set_own_hp_items(std::int64_t cur, std::int64_t max) {
@@ -376,6 +376,7 @@ void GameConnection::update() {
 
     update_chat_server();
     if (state_ == ConnectionState::InZone) {
+        maintain_tracking();
         // CTrackingWnd::OnProcessFrame: OP_Track every 6 s with auto update on.
         auto f = game::tracking_frame(tracking_.open, static_cast<std::uint32_t>(now_ms()), tracking_.next_controls,
                                       tracking_.next_track, tracking_.auto_update);
@@ -637,6 +638,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         // OP_WorldComplete, then the zone is connected once world has dropped the link (case @0x4cac19; EQEmu
         // closes it on OP_WorldComplete). The fresh zone connection replaces any old one.
         zone_session_.reset();
+        invalidate_interaction_context();
         send_world(make_empty(Op::WorldComplete));
         world_drop_pending_ = true;
         world_drop_deadline_ = Clock::now() + kWorldDropWait;
@@ -675,6 +677,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         auras_.clear();
         aggro_.lock_id = aggro_.target_id = aggro_.secondary_id = 0;
         aggro_.pct = {};
+        aggro_.received = {};
         stun_timer_ms_ = 0;
         stun_state_ = false;
         // The helm goes with the zone: the new zone may reuse the boat's id for another vehicle, which must smooth.
@@ -685,6 +688,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         respawn_spawn_pending_ = false;
         respawn_placement_.reset();
         pstatus_.dead = false;
+        invalidate_interaction_context();
         pstatus_.owner_status = 0;
         pstatus_.stand_state = 100;
         spells_.casting = {};
@@ -726,7 +730,14 @@ void GameConnection::handle_world(const AppPacket& p) {
         path_.stop();
         // Finds asked in the old zone and never answered there: the new zone's first /find reply is not theirs.
         find_requests_.clear();
+        find_reply_quarantine_ = false;
+        npc_find_identity_.reset();
         quiet_path_.reset();
+        shown_find_lease_ = {};
+        ++shown_find_generation_;
+        retire_tracking();
+        tracking_request_.reset(); tracking_data_.reset(); tracking_actors_.clear();
+        tracking_request_retired_ = false; tracking_reply_quarantine_ = false;
         expedition_.compass.clear();
         // NPC windows close with the zone (a guild bank deposit outside the guild hall would lose the item).
         reset_real_estate_for_zone();
@@ -894,6 +905,14 @@ void GameConnection::smooth_vehicles(float dt) { world_.smooth_vehicles(dt, stea
 
 void GameConnection::apply_spawn(const Spawn& s) {
     if (world_.spawns.contains(s.spawn_id)) forget_leadership_spawn(s.spawn_id);
+    group_.mana_percent.erase(s.spawn_id);
+    group_.endurance_percent.erase(s.spawn_id);
+    spells_.others.erase(s.spawn_id);
+    if (spells_.target_buffs_entity == s.spawn_id) {
+        spells_.target_buffs_entity = 0;
+        spells_.target_buffs.clear();
+    }
+    if (aggro_.target_id == s.spawn_id) aggro_.received = {};
     game::Spawn& out = world_.spawns[s.spawn_id];
     ++world_.spawn_set_serial; // a full same-id replacement also retires the previous identity
     out.id = s.spawn_id;
@@ -923,6 +942,7 @@ void GameConnection::apply_spawn(const Spawn& s) {
     out.fly_mode = s.fly_mode; // UnSerializeSpawn's PlayerPhysics_SetFlyMode
     ++out.fly_mode_sets;
     out.hp_percent = s.hp_percent;
+    out.hp_known = s.hp_percent <= 100;
     out.stand_state = s.stand_state ? s.stand_state : 100;
     out.targetable = s.targetable;
     out.cyclable = s.targetable_with_hotkey;
@@ -1155,7 +1175,7 @@ void GameConnection::finish_zone_in() {
 
 void GameConnection::request_quest_npcs() {
     // Only of a server whose zone answered the settings request (it runs the script): others never see the opcode.
-    if (quest_npcs_asked_ || !zone_ready_ || !hailstone_script_) return;
+    if (!npc_find_enabled() || quest_npcs_asked_ || !zone_ready_ || !hailstone_script_) return;
     quest_npcs_asked_ = true;
     send_zone(encode_quest_npcs_request());
 }
@@ -1371,6 +1391,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 motion_dirty_ = true;
                 position_tracker_.flush();
                 pstatus_.dead = false;
+                invalidate_interaction_context();
                 pstatus_.owner_status = 0;
                 pstatus_.stand_state = s->stand_state ? s->stand_state : kStandStanding;
                 respawn_placement_ = RespawnPlacement{position_, heading_};
@@ -1449,7 +1470,18 @@ void GameConnection::handle_zone(const AppPacket& p) {
             if (trade_ && trade_->partner_id == *id) trade_cancel();
             spawn_leaving(*id);
             forget_leadership_spawn(*id);
+            // Observations belong to this actor's lifetime, not the numerical id a later actor may reuse.
+            group_.mana_percent.erase(*id);
+            group_.endurance_percent.erase(*id);
+            spells_.others.erase(*id);
+            if (spells_.target_buffs_entity == *id) {
+                spells_.target_buffs_entity = 0;
+                spells_.target_buffs.clear();
+            }
+            if (aggro_.target_id == *id) aggro_.received = {};
             if (world_.spawns.erase(*id)) ++world_.spawn_set_serial;
+            group_.mana_percent.erase(*id);
+            group_.endurance_percent.erase(*id);
             forget_pet_spawn(*id);
             // msgEQRmPlayer @0x4b8380: the target leaving stops auto attack and clears the target (no OP_TargetMouse).
             // Hailstone, as after a death: attack_until_xtarget_clear keeps attacking while the extended target list
@@ -1911,6 +1943,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
     case Op::AggroMeterTargetInfo:
         if (auto v = decode_aggro_target_info(p)) {
             aggro_.lock_id = v->lock_id;
+            if (aggro_.target_id != v->target_id) aggro_.received = {};
             aggro_.target_id = v->target_id;
         }
         break;
@@ -1918,7 +1951,10 @@ void GameConnection::handle_zone(const AppPacket& p) {
         if (auto v = decode_aggro_update(p)) {
             if (v->secondary_id) aggro_.secondary_id = *v->secondary_id;
             for (auto [type, pct] : v->entries)
-                if (type < kAggroTypes) aggro_.pct[type] = pct;
+                if (type < kAggroTypes) {
+                    aggro_.pct[type] = pct;
+                    aggro_.received[type] = true;
+                }
             if (!aggro_seen_) aggro_.window_open = aggro_seen_ = true;
         }
         break;
@@ -2690,7 +2726,7 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
     switch (op) {
     case Op::MobHealth:
         if (auto h = decode_mob_health(p))
-            if (auto* s = spawn(h->spawn_id)) s->hp_percent = h->percent;
+            if (auto* s = spawn(h->spawn_id)) { s->hp_percent = h->percent; s->hp_known = h->percent <= 100; }
         break;
     case Op::HPUpdate:
         if (auto h = decode_hp_update(p)) {
@@ -2701,6 +2737,7 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
                 set_own_spawn_hp(); // the player's own: Cur_HP / Max_HP, the items' HP included (own_hp)
             } else if (auto* s = spawn(id); s && h->max_hp > 0) {
                 s->hp_percent = spawn_hp_percent(std::int64_t{static_cast<std::int32_t>(h->cur_hp)}, h->max_hp);
+                s->hp_known = true;
             }
         }
         break;

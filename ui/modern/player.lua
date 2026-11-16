@@ -1,9 +1,10 @@
 -- Player frame: replaces the game's PlayerWindow. A level badge, the name, and the health, mana and endurance bars
--- (the game's own values: eq.Gauge / eq.Label by EQType), experience and alternate advancement experience (the
+-- (the game's own values: hs.Gauge / hs.Label by EQType), experience and alternate advancement experience (the
 -- inventory's gauges 4 and 5) under them, the spell being cast, and while auto attack is on a pulsing red ring with a
 -- halo, a red wash over the frame and a red level badge (the pet's health is the Pet window's). The cast bar replaces
 -- the game's CastingWindow: shown while the game shows it, the spell's name over a bar that fills as the cast
 -- completes (the casting gauge counts the time left down from 1).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local roles = dofile("lib/role_icons.lua")
 local T = hud.T
@@ -24,7 +25,7 @@ local SHORT = {
 -- and the hover text; kept while the label reads the same.
 local classLabel, classList, classFull, classShort, classTip = nil, {}, "", "", ""
 local function classes()
-  local label = eq.Label(3) or ""
+  local label = API.character.Label(3) or ""
   if label ~= classLabel then
     classLabel = label
     local list = {}
@@ -69,7 +70,7 @@ local STATE = {
   A_PWCSStanding = "muted",
 }
 local function combatState(cx, cy, r, s)
-  local timer = eq.Gauge(29)
+  local timer = API.character.Gauge(29)
   if timer then
     local col = C.endurance
     local n = 48
@@ -80,10 +81,10 @@ local function combatState(cx, cy, r, s)
       ui.DrawLine(cx + rr * math.cos(a0), cy + rr * math.sin(a0), cx + rr * math.cos(a1), cy + rr * math.sin(a1),
         col[1], col[2], col[3], 0.95, 2.5 * s)
     end
-    local left = eq.Label(137) or ""
+    local left = API.character.Label(137) or ""
     if left ~= "" then T.Text(cx, cy + rr + 1 * s, left, col, T.font.tiny, "center") end
   end
-  local art = eq.ChildArt(WINDOW, "PW_CombatStateAnim", "decal")
+  local art = API.windows.ChildArt(WINDOW, "PW_CombatStateAnim", "decal")
   local tok = type(art) == "string" and STATE[art]
   if not tok then return end
   local col = C[tok] or C.muted
@@ -91,7 +92,7 @@ local function combatState(cx, cy, r, s)
   ui.DrawCircleFilled(px, py, pr + 1.5 * s, C.inset[1], C.inset[2], C.inset[3], 1)
   ui.DrawCircleFilled(px, py, pr, col[1], col[2], col[3], 1)
   if ui.IsMouseHoveringRect(px - pr, py - pr, px + pr, py + pr) and ui.IsWindowHovered() then
-    local tip = eq.ChildTooltip(WINDOW, "PW_CombatStateAnim")
+    local tip = API.windows.ChildTooltip(WINDOW, "PW_CombatStateAnim")
     if tip and tip ~= "" then ui.SetTooltip(tip) end
   end
 end
@@ -123,17 +124,17 @@ local function body(x, y, w, h, s)
   local ring = attack and C.danger or C.accent
   ui.DrawCircleFilled(cx, cy, r, C.inset[1], C.inset[2], C.inset[3], 0.9)
   ui.DrawCircle(cx, cy, r, ring[1], ring[2], ring[3], attack and 1 or 0.85, (attack and 3 or 2) * s)
-  local level = eq.Label(2) or ""
+  local level = API.character.Label(2) or ""
   local _, lh = T.TextSize(level, T.font.large)
   T.Text(cx, cy - lh / 2, level, C.text, T.font.large, "center")
   combatState(cx, cy, r, s)
 
   local bx0, bx1 = cx + r + 10 * s, x + w - pad
-  local hpFrac, hpLabel = eq.Gauge(1)
-  local name = (hpLabel or eq.Name() or ""):match("^[^\n]*")
+  local hpFrac, hpLabel = API.character.Gauge(1)
+  local name = (hpLabel or API.character.Name() or ""):match("^[^\n]*")
   local nameColor = C.text
   do
-    local _, nr, ng, nb = eq.Label(1) -- green for a group leader
+    local _, nr, ng, nb = API.character.Label(1) -- green for a group leader
     if nr then
       NAME_COLOR[1], NAME_COLOR[2], NAME_COLOR[3] = nr, ng, nb
       nameColor = NAME_COLOR
@@ -152,7 +153,7 @@ local function body(x, y, w, h, s)
   -- else on the frame (the click is taken only when the role menu opened)
   if ui.IsWindowHovered() and ui.IsMouseHoveringRect(bx0, nameY, bx1, nameY + nameH)
       and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
-    if eq.ClickChild(WINDOW, "PlayerHP", "right") then T.TakeRightClick() end
+    if API.windows.ClickChild(WINDOW, "PlayerHP", "right") then T.TakeRightClick() end
   end
   -- the classes on their own line: the full names when they fit, else the short ones, the full list on hover
   local list, full, short, tip = classes()
@@ -168,32 +169,32 @@ local function body(x, y, w, h, s)
   end
 
   local by = cy0 + ch + 3 * s
-  local hp, maxHp = eq.Label(17), eq.Label(18)
+  local hp, maxHp = API.character.Label(17), API.character.Label(18)
   local pct = math.floor((hpFrac or 0) * 100 + 0.5)
   local hpColor = (hpFrac or 1) < 0.25 and C.hpLow or C.hp
   HP_BAR.text, HP_BAR.right, HP_BAR.font = hpText(hp, maxHp), percent(pct), T.font.small
   T.Bar("player.hp", bx0, by, bx1, by + 16 * s, s, hpFrac, hpColor, HP_BAR)
-  if T.Hit("##hp", bx0, by, bx1, by + 16 * s) then eq.ClickChild(WINDOW, "PlayerHP", "left") end -- target yourself
+  if T.Hit("##hp", bx0, by, bx1, by + 16 * s) then API.windows.ClickChild(WINDOW, "PlayerHP", "left") end -- target yourself
   by = by + 19 * s
   if caster then
-    local mf = frame.manaFrac -- (eq.Gauge(2), read once this frame)
-    local mana, maxMana = eq.Label(124), eq.Label(125)
+    local mf = frame.manaFrac -- (hs.Gauge(2), read once this frame)
+    local mana, maxMana = API.character.Label(124), API.character.Label(125)
     T.Bar("player.mana", bx0, by, bx1, by + 9 * s, s, mf, C.mana)
     T.Hit("##mana", bx0, by, bx1, by + 9 * s)
     if ui.IsItemHovered() and mana then ui.SetTooltip("Mana " .. T.Thousands(mana) .. " / " .. T.Thousands(maxMana)) end
     by = by + 12 * s
   end
-  local ef = eq.Gauge(3)
+  local ef = API.character.Gauge(3)
   T.Bar("player.end", bx0, by, bx1, by + 6 * s, s, ef, C.endurance)
   T.Hit("##end", bx0, by - 1 * s, bx1, by + 7 * s)
   if ui.IsItemHovered() then
-    local e, maxE = eq.Label(126), eq.Label(127)
+    local e, maxE = API.character.Label(126), API.character.Label(127)
     if e then ui.SetTooltip("Endurance " .. T.Thousands(e) .. " / " .. T.Thousands(maxE)) end
   end
   -- experience and AA experience, across the frame (their percentages made again only when the gauges move)
   by = by + 12 * s
   do
-    local xp, aa = eq.Gauge(4) or 0, eq.Gauge(5) or 0
+    local xp, aa = API.character.Gauge(4) or 0, API.character.Gauge(5) or 0
     local x0, x1 = x + pad, x + w - pad
     local split = x0 + (x1 - x0) * 0.64
     local _, th = T.TextSize("Ag", T.font.tiny)
@@ -201,7 +202,7 @@ local function body(x, y, w, h, s)
     if xp ~= pctXp then pctXp, pctXpText = xp, string.format("%.1f%%", xp * 100) end
     T.Text(split - 6 * s, by, pctXpText, C.text, T.font.tiny, "right")
     T.Text(split + 6 * s, by, "AA", C.muted, T.font.tiny)
-    local banked = eq.Label(71) or "0" -- unspent AA points
+    local banked = API.character.Label(71) or "0" -- unspent AA points
     local aw = T.TextSize("AA ", T.font.tiny)
     T.Text(split + 6 * s + aw, by, banked, C.aa, T.font.tiny)
     if aa ~= pctAa then pctAa, pctAaText = aa, string.format("%.1f%%", aa * 100) end
@@ -224,22 +225,22 @@ local function body(x, y, w, h, s)
     end
   end
   if casting then
-    local left, _, raw = eq.Gauge(7)
+    local left, _, raw = API.character.Gauge(7)
     local done = (left and raw ~= -1) and (1 - left) or 0
     local x0, x1 = x + pad, x + w - pad
     local cy = y + h - pad - (CAST_H - 2) * s
     local _, th = T.TextSize("Ag", T.font.tiny)
-    T.Text(x0, cy, T.Fit(eq.Label(134) or "", x1 - x0, T.font.tiny), C.text, T.font.tiny)
+    T.Text(x0, cy, T.Fit(API.character.Label(134) or "", x1 - x0, T.font.tiny), C.text, T.font.tiny)
     T.Bar("player.cast", x0, cy + th + 2 * s, x1, cy + th + 9 * s, s, done, C.cast, NO_TRAIL)
   end
 end
 
 ui.window("Player", function()
-  if not eq.InGame() then return end
-  local manaFrac, _, manaRaw = eq.Gauge(2)
+  if not API.session.InGame() then return end
+  local manaFrac, _, manaRaw = API.character.Gauge(2)
   frame.caster, frame.manaFrac = manaRaw ~= -1, manaFrac
-  frame.casting = eq.WindowShown("CastingWindow")
-  local attacking = eq.ChildShown(WINDOW, "A_AttackIndicatorAnimTop") == true
+  frame.casting = API.windows.Shown("CastingWindow")
+  local attacking = API.windows.ChildShown(WINDOW, "A_AttackIndicatorAnimTop") == true
   local glow, attack = nil, nil
   if attacking then
     attack = math.abs(math.sin(ui.GetTime() * 4))

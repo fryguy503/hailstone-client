@@ -163,7 +163,7 @@ social with `/camera toggle` gives the camera a key. The gamepad has a pad actio
 ## Options
 
 Options > Display > **Isometric Camera** (the modern pack) and the gamepad pack's **Camera** page set the same things,
-through `eq.Option` / `eq.SetOption`:
+through `hs.Option` / `hs.SetOption`:
 
 | Option | Values |
 |---|---|

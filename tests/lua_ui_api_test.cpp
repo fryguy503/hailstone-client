@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,12 +16,182 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
+#include "lua_ui_api_mock.h"
+
 #include "ui/imgui_layer.h"
 #include "ui/lua/lua_host.h"
 #include "ui/texture_ids.h"
 #include "scratch_dir.h"
 
 namespace fs = std::filesystem;
+
+TEST_CASE("Lua UI: all public window flags match ImGui and scrollbar flags reach window creation") {
+    hailstone::test::ScratchDir scratch("lua_ui_scrollbar_flags");
+    const auto dir = scratch.path() / "pack";
+    fs::create_directories(dir);
+    std::ofstream(dir / "scrollbars.lua") << R"lua(
+        local flags = ui.WindowFlags.HorizontalScrollbar | ui.WindowFlags.AlwaysVerticalScrollbar
+            | ui.WindowFlags.AlwaysHorizontalScrollbar | ui.WindowFlags.NoSavedSettings
+        ui.window('Scrollbar flags', function()
+            ui.SetNextWindowSize(260, 180, ui.Cond.Always)
+            ui.Begin('Scrollbar flags', nil, flags)
+            ui.BeginChild('Scrollbar child', 160, 80, false, flags)
+            ui.Text('Short content')
+            ui.EndChild()
+            ui.End()
+        end)
+    )lua";
+    std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+    ImGui::GetIO().IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "settings.txt");
+    for (const auto& [name, value] : {
+            std::pair{"None", ImGuiWindowFlags_None},
+            std::pair{"NoTitleBar", ImGuiWindowFlags_NoTitleBar},
+            std::pair{"NoResize", ImGuiWindowFlags_NoResize},
+            std::pair{"NoMove", ImGuiWindowFlags_NoMove},
+            std::pair{"NoScrollbar", ImGuiWindowFlags_NoScrollbar},
+            std::pair{"NoScrollWithMouse", ImGuiWindowFlags_NoScrollWithMouse},
+            std::pair{"NoCollapse", ImGuiWindowFlags_NoCollapse},
+            std::pair{"AlwaysAutoResize", ImGuiWindowFlags_AlwaysAutoResize},
+            std::pair{"NoBackground", ImGuiWindowFlags_NoBackground},
+            std::pair{"NoSavedSettings", ImGuiWindowFlags_NoSavedSettings},
+            std::pair{"NoMouseInputs", ImGuiWindowFlags_NoMouseInputs},
+            std::pair{"MenuBar", ImGuiWindowFlags_MenuBar},
+            std::pair{"HorizontalScrollbar", ImGuiWindowFlags_HorizontalScrollbar},
+            std::pair{"NoFocusOnAppearing", ImGuiWindowFlags_NoFocusOnAppearing},
+            std::pair{"NoBringToFrontOnFocus", ImGuiWindowFlags_NoBringToFrontOnFocus},
+            std::pair{"AlwaysVerticalScrollbar", ImGuiWindowFlags_AlwaysVerticalScrollbar},
+            std::pair{"AlwaysHorizontalScrollbar", ImGuiWindowFlags_AlwaysHorizontalScrollbar},
+            std::pair{"NoNavInputs", ImGuiWindowFlags_NoNavInputs},
+            std::pair{"NoNavFocus", ImGuiWindowFlags_NoNavFocus},
+            std::pair{"UnsavedDocument", ImGuiWindowFlags_UnsavedDocument},
+            std::pair{"NoNav", ImGuiWindowFlags_NoNav},
+            std::pair{"NoDecoration", ImGuiWindowFlags_NoDecoration},
+            std::pair{"NoInputs", ImGuiWindowFlags_NoInputs}}) {
+        CAPTURE(name);
+        CHECK(lua.run_for_test("", std::string("return ui.WindowFlags.") + name) == std::to_string(value));
+    }
+    CHECK(lua.run_for_test("", "local count=0 for _ in pairs(ui.WindowFlags) do count=count+1 end return count") == "23");
+    CHECK(lua.run_for_test("", "return ui.WindowFlags.NoNav == (ui.WindowFlags.NoNavInputs | ui.WindowFlags.NoNavFocus)") == "true");
+    CHECK(lua.run_for_test("", "return ui.WindowFlags.NoInputs == (ui.WindowFlags.NoMouseInputs | ui.WindowFlags.NoNav)") == "true");
+    for (const auto name : {"ChildWindow", "Tooltip", "Popup", "Modal", "ChildMenu", "NavFlattened", "AlwaysUseWindowPadding"}) {
+        CAPTURE(name);
+        CHECK(lua.run_for_test("", std::string("return ui.WindowFlags.") + name) == "nil");
+    }
+    for (int frame = 0; frame < 2; ++frame) {
+        ImGui::GetIO().DisplaySize = ImVec2(800, 600);
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        lua.frame();
+        ImGui::Render();
+    }
+    CHECK(lua.load_status().error_count == 0);
+    const auto* window = ImGui::FindWindowByName("Scrollbar flags");
+    REQUIRE(window);
+    CHECK((window->Flags & ImGuiWindowFlags_HorizontalScrollbar) != 0);
+    CHECK((window->Flags & ImGuiWindowFlags_AlwaysVerticalScrollbar) != 0);
+    CHECK((window->Flags & ImGuiWindowFlags_AlwaysHorizontalScrollbar) != 0);
+    CHECK(window->ScrollbarX);
+    CHECK(window->ScrollbarY);
+    REQUIRE(window->DC.ChildWindows.Size == 1);
+    const auto* child = window->DC.ChildWindows.front();
+    CHECK((child->Flags & ImGuiWindowFlags_HorizontalScrollbar) != 0);
+    CHECK((child->Flags & ImGuiWindowFlags_AlwaysVerticalScrollbar) != 0);
+    CHECK((child->Flags & ImGuiWindowFlags_AlwaysHorizontalScrollbar) != 0);
+    CHECK(child->ScrollbarX);
+    CHECK(child->ScrollbarY);
+}
+
+TEST_CASE("Lua UI: IsItemDisabled and GetStyleAlpha observe widget state without changing it") {
+    hailstone::test::ScratchDir scratch("lua_ui_disabled_item");
+    const auto dir = scratch.path() / "pack";
+    fs::create_directories(dir);
+    std::ofstream(dir / "items.lua") << R"lua(
+        REGISTERED = type(ui.IsItemDisabled) == 'function' and type(ui.GetStyleAlpha) == 'function'
+        ui.window('Item state', function()
+            ui.Begin('Item state')
+            ALPHA_ORIGINAL = ui.GetStyleAlpha()
+            ui.PushStyleVar(ui.StyleVar.Alpha, 0.375)
+            ALPHA_PUSHED = ui.GetStyleAlpha()
+            ui.Button('Enabled')
+            ENABLED = ui.IsItemDisabled()
+            ui.BeginDisabled(true)
+            ui.Button('Disabled')
+            ALPHA_DISABLED = ui.GetStyleAlpha()
+            ui.EndDisabled()
+            ALPHA_REENABLED = ui.GetStyleAlpha()
+            DISABLED = ui.IsItemDisabled()
+            local id = ui.GetItemID()
+            REPEATED = ui.IsItemDisabled() and ui.GetItemID() == id
+            ui.BeginDisabled(true)
+            ui.BeginDisabled(false)
+            ui.Checkbox('Nested disabled', false)
+            ui.EndDisabled()
+            ui.EndDisabled()
+            NESTED = ui.IsItemDisabled()
+            ui.Button('Enabled after')
+            RESTORED = ui.IsItemDisabled()
+            ui.BeginDisabled(true)
+            ui.SetNextItemWidth(140)
+            SLIDER_VALUE, SLIDER_CHANGED = ui.SliderInt('Visible slider label', 42, 0, 100)
+            ui.EndDisabled()
+            local sliderId = ui.GetItemID()
+            TOTAL = {ui.GetItemRect()}
+            CONTROL = {ui.GetItemRect(true)}
+            local explicit = {ui.GetItemRect(false)}
+            RECT_DEFAULT = explicit[1] == TOTAL[1] and explicit[2] == TOTAL[2]
+                and explicit[3] == TOTAL[3] and explicit[4] == TOTAL[4]
+            SLIDER_ID = ui.GetItemID() == sliderId
+            SLIDER_DISABLED = ui.IsItemDisabled()
+            ui.PopStyleVar()
+            ALPHA_RESTORED = ui.GetStyleAlpha()
+            ui.End()
+        end)
+    )lua";
+    ImGuiContext* context = ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    {
+        hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "settings.txt");
+        for (int frame = 0; frame < 2; ++frame) {
+            ImGui::GetIO().DisplaySize = ImVec2(800, 600);
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            lua.frame();
+            ImGui::Render();
+        }
+        CHECK(lua.run_for_test("", "return REGISTERED") == "true");
+        CHECK(lua.run_for_test("", "return ENABLED") == "false");
+        CHECK(lua.run_for_test("", "return DISABLED") == "true");
+        CHECK(lua.run_for_test("", "return REPEATED") == "true");
+        CHECK(lua.run_for_test("", "return NESTED") == "true");
+        CHECK(lua.run_for_test("", "return RESTORED") == "false");
+        CHECK(lua.run_for_test("", "return SLIDER_VALUE") == "42");
+        CHECK(lua.run_for_test("", "return SLIDER_CHANGED") == "false");
+        CHECK(lua.run_for_test("", "return SLIDER_ID and RECT_DEFAULT and SLIDER_DISABLED") == "true");
+        CHECK(lua.run_for_test("", "return CONTROL[1]==TOTAL[1] and CONTROL[2]==TOTAL[2] and CONTROL[4]==TOTAL[4]") == "true");
+        CHECK(lua.run_for_test("", "return CONTROL[3]>CONTROL[1] and CONTROL[3]<TOTAL[3]") == "true");
+        const auto number = [&](const char* key) {
+            lua_getglobal(lua.state(), key);
+            REQUIRE(lua_isnumber(lua.state(), -1));
+            const double value = lua_tonumber(lua.state(), -1);
+            lua_pop(lua.state(), 1);
+            return value;
+        };
+        CHECK(number("ALPHA_ORIGINAL") == doctest::Approx(ImGui::GetStyle().Alpha));
+        CHECK(number("ALPHA_PUSHED") == doctest::Approx(0.375));
+        CHECK(number("ALPHA_DISABLED") == doctest::Approx(0.375 * ImGui::GetStyle().DisabledAlpha));
+        CHECK(number("ALPHA_REENABLED") == doctest::Approx(0.375));
+        CHECK(number("ALPHA_RESTORED") == doctest::Approx(number("ALPHA_ORIGINAL")));
+        CHECK(lua.load_status().error_count == 0);
+    }
+    ImGui::DestroyContext(context);
+}
 
 TEST_CASE("Lua UI: the key names, keyboard capture, typing and DrawText's size") {
     hailstone::test::ScratchDir scratch("lua_ui_api_test");
@@ -231,7 +402,7 @@ TEST_CASE("Lua UI: PushStyleColors and PushStyleVars push a list in one call") {
     ImGui::DestroyContext(ctx);
 }
 
-// The modern pack's shared pieces (ui/modern/lib) over a stand-in eq table: W.List keeps a copy of a sorted or
+// The modern pack's shared pieces (ui/modern/lib) over a stand-in hs table: W.List keeps a copy of a sorted or
 // filtered list and sorts it again when a row changes (in view or not), W.ButtonRow leaves the caller's opts alone,
 // and the testing hooks read their settings once.
 TEST_CASE("Modern UI libs: W.List's sorted copy, ButtonRow's opts, the test hooks read once") {
@@ -246,7 +417,7 @@ TEST_CASE("Modern UI libs: W.List's sorted copy, ButtonRow's opts, the test hook
 LIST = {}
 for i = 1, 200 do LIST[i] = { tostring(1000 - i) } end -- the list's order is descending
 reads, listCalls, shown, opened = 0, 0, {}, nil
-eq = {
+hs = {
   ListInfo = function() return #LIST, 1, -1, { "Value" }, { 0 } end,
   ListRow = function(_, _, r)
     reads = reads + 1
@@ -264,6 +435,7 @@ eq = {
   ShowWindow = function(w) shown[#shown + 1] = w end,
   HoldingButton = function() return false end,
 }
+TEST_UI_API_ATTACH(hs)
 local asked = {}
 local getSetting = ui.GetSetting
 ui.GetSetting = function(k, d) asked[k] = (asked[k] or 0) + 1; return getSetting(k, d) end
@@ -310,6 +482,7 @@ end)
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
+        REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
         auto frames = [&](int n, float dt = 1.0f / 60.0f) {
             for (int i = 0; i < n; ++i) {
                 ImGui::GetIO().DisplaySize = ImVec2(800, 600);
@@ -387,10 +560,10 @@ end)
     ImGui::DestroyContext(ctx);
 }
 
-// lib/progress.lua's P.Rows keeps a copy of the list (no eq.WindowList, a few rows read a frame) and sorts it again
-// only when the rows shown change; lib/find.lua's rows are kept a moment and shared by its copies (the map's and the
-// minimap's).
-TEST_CASE("Modern UI libs: P.Rows' kept copy and sort, Find's kept rows") {
+// lib/progress.lua's P.Rows keeps a copy of the list (no hs.WindowList, a few rows read a frame) and sorts it again
+// only when the rows shown change; lib/find.lua shares rows within a frame (map and minimap) while checking live
+// eligibility again in each new frame.
+TEST_CASE("Modern UI libs: P.Rows' kept copy and sort, Find's frame-shared rows") {
     hailstone::test::ScratchDir scratch("lua_ui_modern_rows_test");
     const fs::path dir = scratch.path() / "pack";
     const fs::path lib = fs::path(__FILE__).parent_path().parent_path() / "ui" / "modern" / "lib";
@@ -402,7 +575,7 @@ LIST = {}
 for i = 1, 200 do LIST[i] = { tostring(1000 - i) } end -- the list's order is descending
 reads, listCalls, sortCalls, finds = 0, 0, 0, 0
 SEARCH = ""
-eq = {
+hs = {
   ListInfo = function() return #LIST, 1, -1, { "Value" }, { 0 } end,
   ListRow = function(_, _, r)
     reads = reads + 1
@@ -420,6 +593,7 @@ eq = {
     return { { id = 1, name = "A" .. search, category = "merchant" }, { id = 2, name = "B", category = "banker" } }
   end,
 }
+TEST_UI_API_ATTACH(hs)
 local P = dofile("lib/progress.lua")
 local FL1, FL2 = dofile("lib/find.lua"), dofile("lib/find.lua")
 local function byValue(a, b)
@@ -457,6 +631,7 @@ end)
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
+        REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
         auto frames = [&](int n, float dt = 1.0f / 60.0f) {
             for (int i = 0; i < n; ++i) {
                 ImGui::GetIO().DisplaySize = ImVec2(800, 600);
@@ -505,7 +680,7 @@ end)
         CHECK(last("f.drawn[1] .. ',' .. f.total .. ',' .. f.shown") == "1,200,200");
         CHECK_FALSE(ImGui::FindWindowByName("UI errors"));
 
-        // Find: one read for both copies, again when the search changes or the moment passes
+        // Find: both copies share a read within one frame, with fresh eligibility in each new frame.
         run("SEARCH = 'x'");
         frames(1);
         CHECK(last("f.finds") == "1");
@@ -513,7 +688,9 @@ end)
         CHECK(last("f.same") == "true");
         run("finds = 0");
         frames(6); // (0.1 s)
-        CHECK(last("finds") == "0");
+        CHECK(last("finds") == "6");
+        CHECK(last("f.finds") == "1");
+        CHECK(last("f.same") == "true");
         frames(1, 0.25f);
         CHECK(last("f.finds") == "1");
         CHECK_FALSE(ImGui::FindWindowByName("UI errors"));
@@ -1150,7 +1327,8 @@ TEST_CASE("Modern UI libs: Close with Esc closes the frontmost ticked window, on
     fs::copy(lib, dir / "lib", fs::copy_options::recursive);
     std::ofstream(dir / "esc.lua") << R"lua(
 PRESS = false
-eq = { TakeCloseTopWindow = function() local p = PRESS; PRESS = false; return p end }
+hs = { TakeCloseTopWindow = function() local p = PRESS; PRESS = false; return p end }
+TEST_UI_API_ATTACH(hs)
 local esc = dofile("lib/escape.lua")
 OPEN = { A = true, B = false, C = false }
 local place = { A = 0, B = 200, C = 400 }
@@ -1175,6 +1353,7 @@ function open() return (OPEN.A and "A" or "") .. (OPEN.B and "B" or "") .. (OPEN
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
+        REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
         auto frames = [&](int n) {
             for (int i = 0; i < n; ++i) {
                 ImGui::GetIO().DisplaySize = ImVec2(800, 600);
@@ -1239,7 +1418,8 @@ TEST_CASE("Modern UI libs: Close with Esc is on by default for the put-away wind
     fs::copy(lib, dir / "lib", fs::copy_options::recursive);
     std::ofstream(dir / "esc.lua") << R"lua(
 PRESS = false
-eq = { TakeCloseTopWindow = function() local p = PRESS; PRESS = false; return p end }
+hs = { TakeCloseTopWindow = function() local p = PRESS; PRESS = false; return p end }
+TEST_UI_API_ATTACH(hs)
 local esc = dofile("lib/escape.lua")
 NAMES = { "Other", "InventoryWindow", "Bag7", "ItemDisplayWindow#3" }
 OPEN = { Other = true, InventoryWindow = true, Bag7 = true, ["ItemDisplayWindow#3"] = true }
@@ -1267,6 +1447,7 @@ end
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
+        REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
         auto frames = [&](int n) {
             for (int i = 0; i < n; ++i) {
                 ImGui::GetIO().DisplaySize = ImVec2(800, 600);
@@ -1372,7 +1553,7 @@ TEST_CASE("Lua UI: a window rolls up, its collapse button at the right") {
     ImGui::DestroyContext(ctx);
 }
 
-// ui/modern/browser.lua with a stand-in for eq's browser calls and lib/hud.lua: a first tab that cannot open is not
+// ui/modern/browser.lua with a stand-in for hs's browser calls and lib/hud.lua: a first tab that cannot open is not
 // asked for again each frame, and why is shown; "+" failing keeps the tab in front.
 TEST_CASE("Modern UI: the browser shows why its first tab did not open and keeps the tab in front") {
     hailstone::test::ScratchDir scratch("lua_ui_browser_test");
@@ -1389,7 +1570,7 @@ end }
 )lua";
     std::ofstream(dir / "a_eq.lua") << R"lua(
 B = { opens = 0, fail = "no browser process", tabs = {} }
-eq = {
+hs = {
   WebAvailable = function() return true end,
   WebTabs = function() return B.tabs end,
   WebOpen = function()
@@ -1402,6 +1583,7 @@ eq = {
   WebNav = function() end, WebNavigate = function() return true end, WebClose = function() end,
   WebOpenExternal = function() end, WebView = function(id) B.viewed = id end,
 }
+TEST_UI_API_ATTACH(hs)
 -- what the window shows in red, and a button "pressed" by name for one frame
 local textColored, button, small = ui.TextColored, ui.Button, ui.SmallButton
 ui.TextColored = function(r, g, b, a, t) B.shown = t; return textColored(r, g, b, a, t) end
@@ -1420,6 +1602,7 @@ ui.Button, ui.SmallButton = pressing(button), pressing(small)
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
+        REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
         auto frames = [&](int n) {
             for (int i = 0; i < n; ++i) {
                 ImGui::GetIO().DisplaySize = ImVec2(800, 600);

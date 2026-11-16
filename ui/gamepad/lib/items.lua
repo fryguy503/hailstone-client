@@ -1,11 +1,12 @@
 -- Item helpers for the gamepad windows: the summary panel shown beside a slot grid for the focused item (no
--- hover tooltips on a couch: what the focus is on is always described), from the eq.Item table.
+-- hover tooltips on a couch: what the focus is on is always described), from the hs.Item table.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local CL = dofile("lib/compare_lines.lua")
 local I = {}
 local C = T.C
 
--- The facts eq.Item gives, as short lines.
+-- The facts hs.Item gives, as short lines.
 local function facts(item)
   local out = {}
   local tags = {}
@@ -22,15 +23,15 @@ local function facts(item)
   return out
 end
 
--- Hailstone's item comparison (docs/item-compare.md): eq.Compare*'s table as lines from y down to y1 at most, between
+-- Hailstone's item comparison (docs/item-compare.md): hs.Compare*'s table as lines from y down to y1 at most, between
 -- x and x1; the best slot's comparison (a pair's other slot is named at the end). Returns the y below. Nothing when
 -- the Options turn it off.
 local KIND = { good = "good", bad = "bad", mixed = "gold", muted = "dim" }
 function I.comparison(compare, x, y, x1, y1)
-  if not compare or eq.Option("item_compare") == 0 then return y end
+  if not compare or API.settings.Option("item_compare") == 0 then return y end
   T.font(18)
   local _, h = ui.CalcTextSize("Ag")
-  local lines = CL.lines(compare, 1, { verdict = eq.Option("item_compare_verdict") ~= 0 })
+  local lines = CL.lines(compare, 1, { verdict = API.settings.Option("item_compare_verdict") ~= 0 })
   local other = CL.otherSlotName(compare, 1)
   if other then lines[#lines + 1] = { "Also fits your " .. other, "muted" } end
   y = y + T.px(6)
@@ -44,7 +45,7 @@ function I.comparison(compare, x, y, x1, y1)
 end
 
 -- The focused item's panel in x0, y0 .. x1, y1: icon, name and facts; `where` (the slot's name) under the name;
--- `compare` (eq.Compare*'s table, or nil) the item against what the player wears, below the facts.
+-- `compare` (hs.Compare*'s table, or nil) the item against what the player wears, below the facts.
 function I.summary(item, where, x0, y0, x1, y1, compare)
   T.rect(x0, y0, x1, y1, C.sunken, 1, T.px(14))
   local p = T.px(18)
@@ -117,7 +118,7 @@ end
 -- The ten bag slots' items read into `into` (slots 23..32), once a frame for the windows that walk them twice (the
 -- loose items, then each bag's contents).
 function I.readBagSlots(into)
-  for slot = 23, 32 do into[slot] = eq.Item(slot) end
+  for slot = 23, 32 do into[slot] = API.inventory.Item(slot) end
   return into
 end
 

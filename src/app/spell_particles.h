@@ -90,6 +90,8 @@ public:
     std::vector<game::LightSource> lights(std::size_t max) const;
     // The Find window's guide path (app/guide_path.h) to draw, the player first; empty: none.
     void set_guide_line(std::vector<glm::vec3> line) { guide_line_ = std::move(line); }
+    // Transient UI visibility: hide only route trails and completion effects, retaining both route inputs.
+    void set_paths_visible(bool visible) { paths_visible_ = visible; }
     void set_find_trail_style(game::FindTrailStyle style) { find_trail_style_ = style; }
     game::FindTrailStyle find_trail_style() const { return find_trail_style_; }
 
@@ -120,6 +122,7 @@ private:
     std::optional<std::size_t> path_definition_; // the thin rainbow segments' definition
     std::optional<std::size_t> navigation_definition_;
     game::FindTrailStyle find_trail_style_ = game::FindTrailStyle::Navigation;
+    bool paths_visible_ = true;
     std::optional<std::size_t> blood_definition_;
     BloodPoint blood_point_;
     MissilePose missile_pose_;

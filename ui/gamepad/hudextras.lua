@@ -10,6 +10,7 @@
 --   Cursor (CursorAttachment)   what the game carries on the cursor (an item, money, a spell, a hotbutton) drawn
 --                               above every window: at the pointer with the mouse; in menu mode, where the pad has
 --                               no pointer, as a card at the bottom right saying what is held
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -57,7 +58,7 @@ end
 ui.window("HUD Breath", function()
   CH.testOpen("BreathWindow")
   if not W.shown("BreathWindow") then return end
-  air = eq.Gauge(8) or 0
+  air = API.character.Gauge(8) or 0
   hud("HUD Breath", 760, -410, 400, 62, false, drawBreath)
 end)
 
@@ -79,13 +80,13 @@ end
 ui.window("HUD Aggro", function()
   CH.testOpen("AggroMeterWnd")
   if not W.shown("AggroMeterWnd") then return end
-  local frac, _, raw = eq.Gauge(149)
-  local _, target, traw = eq.Gauge(6)
+  local frac, _, raw = API.character.Gauge(149)
+  local _, target, traw = API.character.Gauge(6)
   if raw == nil or raw == -1 or traw == -1 or not target or target == "" then return end
-  if (eq.Label(302) or "") ~= target then return end -- the meter is on another spawn (a locked one)
-  aggro.mine = tonumber((eq.Label(305))) or math.floor((frac or 0) * 100 + 0.5)
-  aggro.other = eq.Label(303) or ""
-  aggro.otherPct = tonumber((eq.Label(307))) or 0
+  if (API.character.Label(302) or "") ~= target then return end -- the meter is on another spawn (a locked one)
+  aggro.mine = tonumber((API.character.Label(305))) or math.floor((frac or 0) * 100 + 0.5)
+  aggro.other = API.character.Label(303) or ""
+  aggro.otherPct = tonumber((API.character.Label(307))) or 0
   hud("HUD Aggro", 660, 232, 600, aggro.other ~= "" and 92 or 58, false, drawAggro)
 end)
 
@@ -112,18 +113,18 @@ local function drawBelt(x0, y0, x1, y1)
     local clicked = ui.InvisibleButton("##pb", sz, sz)
     local hovered = ui.IsItemHovered()
     ui.PopID()
-    local name = eq.ChildTooltip(PB, id) or ""
+    local name = API.windows.ChildTooltip(PB, id) or ""
     T.rect(bx, by, bx + sz, by + sz, name ~= "" and C.raised or C.sunken, 1, T.px(10))
     if name ~= "" then
-      local tex, u0, v0, u1, v1 = eq.ChildArt(PB, id, "decal")
+      local tex, u0, v0, u1, v1 = API.windows.ChildArt(PB, id, "decal")
       if type(tex) == "userdata" then
         local m = math.floor(sz * 0.1)
         T.icon(tex, u0, v0, u1, v1, bx + m, by + m, bx + sz - m, by + sz - m)
       end
       -- the slot's recast (the belt button's cool-down): the part still to go, from below
-      local top = eq.ButtonCoolDown(PB, id, by, by + sz)
+      local top = API.spells.ButtonCoolDown(PB, id, by, by + sz)
       if top then ui.DrawRectFilled(bx, top, bx + sz, by + sz, 0, 0, 0, 0.55, T.px(10)) end
-      local count = eq.WindowText(PB, LABEL_IDS[i]) or ""
+      local count = API.windows.Text(PB, LABEL_IDS[i]) or ""
       if count ~= "" then
         T.font(16)
         T.textIn(bx, by + sz - T.px(22), bx + sz - T.px(5), by + sz, count, count == "0" and C.bad or C.text, 1)
@@ -138,19 +139,19 @@ local function drawBelt(x0, y0, x1, y1)
       ui.SetTooltip(name ~= "" and (name .. "\nRight-click to use, hold the right button to inspect")
         or "An empty belt slot: click it with a potion on the cursor to put it here")
     end
-    if clicked then eq.ClickChild(PB, id, "left") end
+    if clicked then API.windows.ClickChild(PB, id, "left") end
     -- the right button as the game takes it on a slot (down, held after 500 ms, up)
     if hovered and ui.IsMouseClicked(ui.Mouse.Right) then
       rightPress = { i = i, at = ui.GetTime() }
-      eq.ClickChild(PB, id, "rightdown")
+      API.windows.ClickChild(PB, id, "rightdown")
     end
     if rightPress and rightPress.i == i then
       if not ui.IsMouseDown(ui.Mouse.Right) then
-        eq.ClickChild(PB, id, rightPress.held and "rightupheld" or "rightup", not hovered)
+        API.windows.ClickChild(PB, id, rightPress.held and "rightupheld" or "rightup", not hovered)
         rightPress = nil
       elseif not rightPress.held and ui.GetTime() - rightPress.at > 0.5 then
         rightPress.held = true
-        eq.ClickChild(PB, id, "rightheld")
+        API.windows.ClickChild(PB, id, "rightheld")
       end
     end
   end
@@ -179,8 +180,8 @@ local function coin(c, x0, y0, sz)
 end
 
 ui.window("Cursor Item", function()
-  if not eq.InGame() then return end
-  local a = eq.CursorAttachment()
+  if not API.session.InGame() then return end
+  local a = API.cursor.Attachment()
   if not a then return end
   T.frame()
   if pad.connected() and pad.mode() == "menu" then
@@ -202,7 +203,7 @@ ui.window("Cursor Item", function()
       T.draw(x0 + s + T.px(30), y0 + T.px(14), "HOLDING", C.dim)
       T.unfont()
       T.font(23)
-      local item = not a.button and eq.Item(eq.CursorSlot or 33) or nil
+      local item = not a.button and API.inventory.Item(API.inventory.CursorSlot or 33) or nil
       local what = (item and item.name) or (held and held[2]) or ((a.text and a.text ~= "") and a.text) or (a.spell)
         or (a.button and "A hot button" or "A spell")
       if a.quantity then what = what .. "  x" .. a.quantity end

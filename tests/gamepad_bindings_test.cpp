@@ -1,5 +1,5 @@
 // The gamepad's bindings, chords, settings and labels (game/gamepad_bindings.h), its dead zone (platform/gamepad.h),
-// the backward NPC cycle (game/targeting.h) and eq.gamepad (app/lua_eq_gamepad.cpp). A client extension: docs/gamepad.md is the specification.
+// the backward NPC cycle (game/targeting.h) and hs.gamepad (app/lua_ui_gamepad.cpp). A client extension: docs/gamepad.md is the specification.
 #include <doctest/doctest.h>
 
 #include <limits>
@@ -7,7 +7,7 @@
 #include <lua.hpp>
 
 #include "app/gamepad.h"
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "core/config.h"
 #include "game/gamepad_bindings.h"
 #include "game/keymap.h"
@@ -20,7 +20,7 @@ using platform::PadButton;
 using Kind = PadAction::Kind;
 
 namespace hailstone::app {
-void register_gamepad_api(lua_State* L, EqHost& host); // app/lua_eq_gamepad.cpp
+void register_gamepad_api(lua_State* L, UiHost& host); // app/lua_ui_gamepad.cpp
 }
 
 namespace {
@@ -364,7 +364,7 @@ TEST_CASE("The backward NPC cycle walks the forward cycle's list the other way")
     CHECK(get_previous_cycle_target(tm, 5, 0, offered) == 0);
 }
 
-TEST_CASE("eq.gamepad: section 5's calls over the pad, its mode and its bindings") {
+TEST_CASE("hs.gamepad: section 5's calls over the pad, its mode and its bindings") {
     Config config;
     app::Gamepad gp(config, {});
     GamepadState s;
@@ -374,15 +374,15 @@ TEST_CASE("eq.gamepad: section 5's calls over the pad, its mode and its bindings
     s.down[idx(PadButton::LT)] = s.pressed[idx(PadButton::LT)] = true;
     s.axes[static_cast<std::size_t>(platform::PadAxis::LX)] = -0.5f;
     gp.set_state(&s);
-    app::EqHost host;
+    app::UiHost host;
     host.gamepad = &gp;
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     app::register_gamepad_api(L, host);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
     const char* script = R"(
-        local g = eq.gamepad
+        local g = hs.gamepad
         local ok, name = g.connected()
         assert(ok and name == "Test Pad")
         assert(g.type() == "playstation")

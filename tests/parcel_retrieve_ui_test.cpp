@@ -1,4 +1,4 @@
-// The merchant's Parcels page in the modern pack (ui/modern/merchant.lua over eq.Parcels / eq.RetrieveParcel),
+// The merchant's Parcels page in the modern pack (ui/modern/merchant.lua over hs.Parcels / hs.RetrieveParcel),
 // driven with the mouse against the mock server: a click on a parcel's row picks it, and Retrieve takes it.
 #include <doctest/doctest.h>
 
@@ -9,7 +9,9 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "net/item_packets.h"
 #include "net/merchant_packets.h"
@@ -91,17 +93,18 @@ TEST_CASE("Parcels page (modern): a click on a row picks the parcel, Retrieve ta
         deliver_parcel(conn, 1, 3002, "Rusty Dagger");
         REQUIRE(conn.merchant()->parcels.size() == 2);
 
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &rig.game;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ui::lua::LuaUi lua(dir / "modern", dir / "modern.txt");
-        lua.add_eq_api([&](lua_State* L) {
+        lua.add_ui_api([&](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         lua_State* L = lua.state();
         // Where the rows and buttons are drawn: each hit box's and button's rectangle, by id.
@@ -113,7 +116,7 @@ ui.InvisibleButton = function(id, ...)
   test_rects[id] = { ui.GetItemRect() }
   return r
 end
-eq.SetTabPage('MerchantWnd', 'MW_MerchantSubwindows', 2)
+hs.SetTabPage('MerchantWnd', 'MW_MerchantSubwindows', 2)
 )lua") == LUA_OK);
         auto frame = [&] {
             api.begin_frame();

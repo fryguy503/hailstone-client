@@ -135,7 +135,19 @@ std::vector<game::KeyMap::Event> ActionsUi::process_keys(const platform::InputSt
             capture_ = {};
             continue;
         }
-        if (!keyboard_free || ev.repeat) continue;
+        if (ev.repeat) continue;
+        if (!keyboard_free) {
+            // The remappable UI visibility key also works while an edit box or modal owns the keyboard.
+            // Capturing a new binding takes priority above; every other game command stays blocked.
+            const auto key = combo(ev.code);
+            const int toggle = static_cast<int>(game::KeyCommand::FULLSCREEN);
+            const auto matches = [&](int bank) {
+                const auto& binding = keymap_.binding(toggle, bank);
+                return binding.bound() && binding == key;
+            };
+            if (ev.down && (matches(0) || matches(1))) out.push_back({toggle, true});
+            continue;
+        }
         if (ev.down) keymap_.key_down(combo(ev.code), out);
         else keymap_.key_up(ev.code, out);
     }
@@ -437,9 +449,7 @@ void ActionsUi::use_skill(net::GameConnection& conn, const mech::Character* ch, 
     // A server extension may refuse the skill first (it says why).
     if (auto allowed = conn.server_ext().before_use_skill(conn, skill); allowed && !*allowed) return;
     // Tracking's skill check goes through the server extension (game/server_ext.h; stock: game::tracking_allowed()).
-    if (skill == mech::skill::kTracking &&
-        !conn.server_ext().tracking_allowed(conn, ch->sheet().class_id, conn.player_class_mask(),
-                                            static_cast<std::uint32_t>(std::max(0, ch->adjusted_skill(skill)))))
+    if (skill == mech::skill::kTracking && !conn.tracking_admitted())
         return;
     mech::SkillContext ctx = context(conn, *ch, view);
     mech::SkillResult r = mech::use_skill(ctx, state_, skill);
@@ -459,7 +469,7 @@ void ActionsUi::use_skill(net::GameConnection& conn, const mech::Character* ch, 
     if (r.stop_auto_fire) conn.set_auto_fire(false);
     for (int slot : r.removed_buffs) conn.clear_buff_locally(slot);
     if (r.compass_reset) compass_.sense_heading();
-    if (r.open_tracking_window) conn.open_tracking();  // CTrackingWnd::AboutToShow sends OP_Track
+    if (r.open_tracking_window) conn.open_tracking(true);  // the skill's admission was checked above
     else if (r.track_request) conn.send_track();
     log::info("UseSkill {} (value {}, adjusted {}): {} sends, {} messages; target {} at {:.2f} (melee range {:.2f})", skill,
               skill < 100 ? ch->sheet().skills[skill] : 0, skill < 100 ? ch->adjusted_skill(skill) : 0, r.sends.size(),

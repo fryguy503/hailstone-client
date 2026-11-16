@@ -48,6 +48,8 @@ PAGES = [
         ("docs/plugins.md", "Plugins-and-Scripts"),
         ("docs/scripting-reference.md", "Scripting-Reference"),
         ("docs/dev-ui.md", "Developer-UI"),
+        ("docs/ui-api.md", "UI-API"),
+        ("docs/ui-api-reference.md", "UI-API-Reference"),
     ]),
     ("Server owners", [
         ("server/README.md", "Server-Support"),

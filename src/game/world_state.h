@@ -1175,6 +1175,7 @@ namespace hailstone::game {
 		std::uint32_t form_mount_id = 0; // re-seat after a form change rebuilds this actor
 		float walk_speed = 0.0f, run_speed = 0.0f; // the spawn record's walkspeed / runspeed (+0x330 / +0x350)
 		std::uint8_t hp_percent = 100;
+        bool hp_known = false; // at least one received/full-spawn or local authoritative HP value
 		std::uint8_t stand_state = 100; // SpawnAppearance animation: 100 stand, 110 sit, 111 crouch, 115 lying
 		bool targetable = true;         // spawn bitfield bit 27
 		bool cyclable = true;           // bit 28 (targetable_with_hotkey; PlayerZoneClient +0x161 bTargetCyclable)

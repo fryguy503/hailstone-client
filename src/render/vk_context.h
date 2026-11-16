@@ -184,6 +184,13 @@ struct FrameInfo {
     std::uint32_t frame_slot = 0; // 0..kFramesInFlight-1, for per-frame resources
 };
 
+// The real frame's queue results, independent of an optional generated frame.
+// Presented means accepted by vkQueuePresentKHR, not a visible-pixel guarantee.
+struct FrameOutcome {
+    bool submitted = false;
+    bool presented = false;
+};
+
 // Vulkan 1.3 device, swapchain, scene target and frame loop. Uses dynamic
 // rendering and synchronization2, so there are no render pass or framebuffer
 // objects. Depth uses reverse Z: clear to 0, test GREATER_OR_EQUAL.
@@ -304,7 +311,7 @@ public:
     // map's); binding 4 the point shadow map's faces (sampler2DArrayShadow).
     VkDescriptorSetLayout shadow_set_layout() const { return shadow_set_layout_; }
     VkDescriptorSet shadow_set() const { return shadow_set_; }
-    void end_frame(const FrameInfo& frame);
+    FrameOutcome end_frame(const FrameInfo& frame);
 
     // Call once before the scene renderers are made (their pipelines take the
     // sample count); later calls change the tonemap and exposure, and the

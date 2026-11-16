@@ -10,6 +10,7 @@
 #include "core/byte_io.h"
 #include "game/death_report.h"
 #include "mock_server/harness.h"
+#include "mq_test_world.h"
 #include "net/packet_io.h"
 #include "net/player_packets.h"
 #include "plugin/hooks.h"
@@ -42,6 +43,10 @@ AppPacket tracking_reply(std::initializer_list<TrackRow> rows) {
 }
 
 void publish_tracking(Rig& rig, std::initializer_list<TrackRow> rows) {
+    // This fixture exercises accepted Tracking traffic: use an eligible tracker and issue its request first.
+    GameConnectionTestAccess::tracking_skill_fixture(rig.conn);
+    REQUIRE(rig.conn.tracking_admitted());
+    rig.conn.send_track();
     const auto revision = rig.conn.tracking().revision;
     rig.server.zone.send_reliable(tracking_reply(rows));
     REQUIRE(rig.until([&] { return rig.conn.tracking().revision != revision; }));
@@ -123,7 +128,7 @@ TEST_CASE("Tracking death: a tracked spawn stops once and leaves the cached list
     CHECK(c.tracking().tracked == 0);
     CHECK(c.tracking().revision != revision);
     CHECK_FALSE(c.tracking().open);
-    CHECK(tracking_ids(c) == std::vector<std::int32_t>{102});
+    CHECK(tracking_ids(c) == (dead == c.world().player_id ? std::vector<std::int32_t>{} : std::vector<std::int32_t>{102}));
     CHECK(std::none_of(c.tracking().list.begin(), c.tracking().list.end(), [&](const game::TrackEntry& e) {
         return e.spawn_id == static_cast<std::int32_t>(dead);
     }));
@@ -138,7 +143,7 @@ TEST_CASE("Tracking death: a tracked spawn stops once and leaves the cached list
     // A filter/sort rebuild cannot offer the corpse again, nor may a second death report send another stop.
     c.set_track_filter({});
     c.set_track_sort(0);
-    CHECK(tracking_ids(c) == std::vector<std::int32_t>{102});
+    CHECK(tracking_ids(c) == (dead == c.world().player_id ? std::vector<std::int32_t>{} : std::vector<std::int32_t>{102}));
     c.track_spawn(static_cast<std::int32_t>(dead));
     c.receive_zone_packet_for_test(encode(death_of(dead)));
     tracking_barrier(rig);
@@ -161,8 +166,8 @@ TEST_CASE("Tracking death: an untracked death removes its row without stopping a
     const auto revision = c.tracking().revision;
     receive_death(rig, dead);
     CHECK(c.tracking().revision != revision);
-    CHECK(c.tracking().tracked == (active ? 102 : 0));
-    CHECK(tracking_ids(c) == std::vector<std::int32_t>{102});
+    CHECK(c.tracking().tracked == (active && dead != c.world().player_id ? 102 : 0));
+    CHECK(tracking_ids(c) == (dead == c.world().player_id ? std::vector<std::int32_t>{} : std::vector<std::int32_t>{102}));
     CHECK(c.player_status().dead == (dead == c.world().player_id));
     tracking_barrier(rig);
     CHECK(tracked_packets(rig).empty());

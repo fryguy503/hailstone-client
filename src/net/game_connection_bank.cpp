@@ -82,7 +82,7 @@ void GameConnection::close_bank() {
     // (12143) while a banker is set, then the banker is cleared. AboutToHide
     // sends nothing; the quantity dialog closes with the window (OnShow).
     // OnShow @0x627760 also runs CContainerMgr::CloseAllContainers @0x65d4e0: every container window closes,
-    // carried bags too (the UI's bag windows follow BankSession::serial, app/lua_eq_items.cpp), the world
+    // carried bags too (the UI's bag windows follow BankSession::serial, app/lua_ui_items.cpp), the world
     // container is released (OP_ClickObjectAction) and the tradeskill window hides.
     if (!bank_) return;
     chat(ChatEvent::Kind::Tell, strings_.format(12143, std::vector<std::string>{bank_->name}));

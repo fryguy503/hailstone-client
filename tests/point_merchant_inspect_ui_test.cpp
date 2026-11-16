@@ -1,7 +1,7 @@
 // A right click on a good in the point merchants' lists (NewPointMerchantWnd for the adventure merchants, PointMerchantWnd
-// for the alternate currency ones; app/lua_eq_market.cpp) inspects it: CNewPointMerchantWnd::WndNotification @0x6fea70
-// and CPointMerchantWnd::WndNotification @0x71d350 send OP_ItemLinkResponse with the good's id and name, or with Shift
-// or Ctrl the item preview request. Over the eq API, against the mock server.
+// for the alternate currency ones; app/lua_ui_market.cpp) inspects it: the handlers send OP_ItemLinkResponse
+// with the good's id and name, or with Shift
+// or Ctrl the item preview request. Over the hs API, against the mock server.
 #include <doctest/doctest.h>
 
 #include <cstring>
@@ -10,7 +10,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "net/item_packets.h"
 #include "net/packet_io.h"
@@ -44,11 +44,11 @@ net::AppPacket text_packet(net::Op op, std::string_view prefix, const std::strin
 
 struct Lua {
     lua_State* L = luaL_newstate();
-    explicit Lua(app::EqApi& api) {
+    explicit Lua(app::UiApi& api) {
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
     }
     ~Lua() { lua_close(L); }
     bool flag(const std::string& code) {
@@ -79,20 +79,20 @@ void check_inspect(Rig& rig, Lua& lua, const std::string& window, const std::str
                    const std::string& name) {
     auto& io = ImGui::GetIO();
     io.KeyShift = io.KeyCtrl = false;
-    CHECK(lua.flag("return eq.ListClick('" + window + "', '" + list + "', 1, 'right', 0)"));
+    CHECK(lua.flag("return hs.ListClick('" + window + "', '" + list + "', 1, 'right', 0)"));
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::ItemLinkResponse) >= 1; }));
     auto [id, sent] = last_link_request(rig.server.zone_log);
     CHECK(id == item_id);
     CHECK(sent == name);
 
     // A plain left click only selects; with Ctrl it inspects too.
-    CHECK(lua.flag("return eq.ListClick('" + window + "', '" + list + "', 1, 'left', 0)"));
+    CHECK(lua.flag("return hs.ListClick('" + window + "', '" + list + "', 1, 'left', 0)"));
     io.KeyCtrl = true;
-    CHECK(lua.flag("return eq.ListClick('" + window + "', '" + list + "', 1, 'left', 0)"));
+    CHECK(lua.flag("return hs.ListClick('" + window + "', '" + list + "', 1, 'left', 0)"));
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::ItemLinkResponse) >= 2; }));
 
     // Ctrl and a right click: the item preview, no inspect.
-    CHECK(lua.flag("return eq.ListClick('" + window + "', '" + list + "', 1, 'right', 0)"));
+    CHECK(lua.flag("return hs.ListClick('" + window + "', '" + list + "', 1, 'right', 0)"));
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::ItemPreviewRequest) >= 1; }));
     CHECK(MockEqServer::count(rig.server.zone_log, net::Op::ItemLinkResponse) == 2);
     io.KeyCtrl = false;
@@ -101,7 +101,7 @@ void check_inspect(Rig& rig, Lua& lua, const std::string& window, const std::str
 } // namespace
 
 TEST_CASE("Adventure merchant (LDoN): a right click on a good inspects it") {
-    ImGuiContext* ctx = ImGui::CreateContext(); // the eq API reads the keyboard's modifiers
+    ImGuiContext* ctx = ImGui::CreateContext(); // the hs API reads the keyboard's modifiers
     Rig rig(MockConfig::standard());
     auto& conn = rig.conn;
     REQUIRE(rig.to_zone());
@@ -112,10 +112,10 @@ TEST_CASE("Adventure merchant (LDoN): a right click on a good inspects it") {
                                                   "^Cloak of Guk|1234|150|1|0|1|65535|65535^Ring of Takish|5678|40|5|0|1|65535|65535"));
     REQUIRE(conn.adventure_merchant().items.size() == 2);
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     Lua lua(api);
     check_inspect(rig, lua, "NewPointMerchantWnd", "NewPointMerchant_ItemList", 5678, "Ring of Takish");
     ImGui::DestroyContext(ctx);
@@ -132,10 +132,10 @@ TEST_CASE("Alternate currency merchant: a right click on a good inspects it") {
                                                   "31|1|31|2^Shiny Ring|1001|25|0|1|65535|65535^Old Boot|1002|3|0|1|1|2"));
     REQUIRE(conn.point_merchant().list.items.size() == 2);
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     Lua lua(api);
     check_inspect(rig, lua, "PointMerchantWnd", "PointMerchant_ItemList", 1002, "Old Boot");
     ImGui::DestroyContext(ctx);

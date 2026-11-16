@@ -17,6 +17,8 @@
 
 #include <lua.hpp>
 
+#include "lua_ui_api_mock.h"
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -34,6 +36,78 @@ std::string slurp(const fs::path& p) {
 }
 
 } // namespace
+
+TEST_CASE("UI Options: interface status distinguishes selected and loaded and retains loading diagnostics") {
+    for (const auto* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        lua_State* L = luaL_newstate();
+        REQUIRE(L);
+        luaL_openlibs(L);
+        const auto path = ui_dir() / pack / "lib/interface_status.lua";
+        REQUIRE(luaL_dofile(L, path.string().c_str()) == LUA_OK);
+        lua_setglobal(L, "statusRows");
+        const int rc = luaL_dostring(L, R"lua(
+local status = {
+  selected={id='addon.example.alternate',name='Alternate',source='addon',addon='example',
+    available=false,reason='Interface runtime unavailable'},
+  loaded={id='modern',name='Modern',source='builtin'},state='fallback',bases={'modern'},
+  scriptCount=12,loadedScriptCount=11,errorCount=1,windowCount=35,
+  diagnostics={'window.lua: missing helper',
+    'A long diagnostic must keep all of its words when the controller view splits it into readable rows.'}
+}
+local rows = statusRows(status)
+local values = {}
+for _,row in ipairs(rows) do values[row[1]]=row[2];assert(row[3]==nil, 'status rows cannot change settings') end
+assert(values['Selected UI']=='Alternate' and values['Loaded UI']=='Modern')
+assert(values['Load state']=='Using fallback' and values['Unavailable']=='Interface runtime unavailable')
+assert(values.Scripts=='11 / 12 loaded; 1 errors' and values['Lua windows']=='35')
+assert(values['Details 1']=='window.lua: missing helper')
+local all={}
+for _,row in ipairs(statusRows(status,42)) do
+  assert(#row[2]<=42,'controller rows must fit')
+  all[#all+1]=row[2]
+end
+local combined=table.concat(all,' '):gsub('%s+',' ')
+assert(combined:find(status.diagnostics[2],1,true),'controller diagnostics retain the full message')
+status.selected,status.loaded,status.state={id='gamepad',name='Gamepad'},{id='gamepad',name='Gamepad'},'ready'
+status.diagnostics={};status.scriptCount,status.windowCount=nil,nil
+values={}
+for _,row in ipairs(statusRows(status)) do values[row[1]]=row[2] end
+assert(values['Loaded UI']=='Gamepad' and values['Load state']=='Ready')
+assert(values['Details 1']==nil and values.Scripts==nil and values['Lua windows']==nil)
+)lua");
+        CHECK_MESSAGE(rc == LUA_OK, (rc == LUA_OK ? "" : lua_tostring(L, -1)));
+        lua_close(L);
+    }
+}
+
+TEST_CASE("UI mock facade: discovery is explicit and aliases observe fixture overrides") {
+    lua_State* L = luaL_newstate();
+    REQUIRE(L);
+    luaL_openlibs(L);
+    REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
+    const int rc = luaL_dostring(L, R"lua(
+local noop=function() end
+hs=setmetatable({InGame=function() return 4 end,CursorSlot=33,
+ gamepad=setmetatable({connected=function() return true end},{__index=function() return noop end})},
+ {__index=function() return noop end})
+local API=TEST_UI_API_ATTACH(hs)
+assert(API.version.major==1 and API.version.minor==5)
+assert(API.Supports('session') and API.Supports('session','InGame'))
+assert(not API.Supports('session','UiReady') and not API.Supports('invented'))
+assert(API.Supports('inventory','CursorSlot') and API.inventory.CursorSlot==33)
+assert(API.Supports('gamepad','Connected') and not API.Supports('gamepad','Axis'))
+assert(API.session.InGame()==4)
+hs.InGame=function() return 9 end
+assert(API.session.InGame()==9)
+assert(API.windows.Invented==nil)
+local info=API.Describe('windows','Show')
+assert(info.binding=='ShowWindow' and info.kind=='function' and info.requiredCaps==2)
+)lua");
+    const std::string error = rc == LUA_OK ? "" : lua_tostring(L, -1);
+    lua_close(L);
+    CHECK_MESSAGE(rc == LUA_OK, error);
+}
 
 TEST_CASE("UI scripts: every script compiles, window names are unique") {
     fs::path dir = ui_dir();
@@ -65,6 +139,35 @@ TEST_CASE("UI scripts: every script compiles, window names are unique") {
     }
     lua_close(L);
     CHECK(scripts > 150);
+}
+
+TEST_CASE("Gamepad UI: the pad helper uses versioned members and explicit optional support") {
+    lua_State* L = luaL_newstate();
+    REQUIRE(L);
+    luaL_openlibs(L);
+    REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
+    REQUIRE(luaL_dostring(L, R"lua(
+frame=1
+ui={GetFrameCount=function() return frame end,GetSetting=function() end,SetSetting=function() end}
+hs={gamepad={connected=function() return true end,type=function() return 'xbox' end,
+ mode=function() return 'menu' end,pressed=function(name) return name=='a' end,
+ set_mode=function(mode) changedMode=mode;return mode end}}
+TEST_UI_API_ATTACH(hs)
+)lua") == LUA_OK);
+    const auto path = ui_dir() / "gamepad/lib/pad.lua";
+    REQUIRE(luaL_dofile(L, path.string().c_str()) == LUA_OK);
+    lua_setglobal(L, "pad");
+    const int rc = luaL_dostring(L, R"lua(
+assert(pad.real() and pad.connected() and pad.menuPressed('a') and not pad.menuPressed('b'))
+assert(pad.set_mode('cursor')=='cursor' and changedMode=='cursor')
+assert(pad.axis('lx')==0, 'an absent optional member uses the existing stand-in')
+hs.gamepad=nil;frame=2
+assert(not pad.real() and not pad.connected() and not pad.menuPressed('a'))
+assert(pad.kind()=='generic' and pad.binding('a')=='interact')
+)lua");
+    const std::string error = rc == LUA_OK ? "" : lua_tostring(L, -1);
+    lua_close(L);
+    CHECK_MESSAGE(rc == LUA_OK, error);
 }
 
 // Each UI's colour palettes (ui/<name>/lib/palettes.lua: `list`, `default`, `checks`): every palette resolves through
@@ -437,7 +540,7 @@ TEST_CASE("UI snap: window positions and resize edges land on the grid") {
     lua_close(L);
 }
 
-// The modern UI's libraries (lib/hud.lua, lib/theme.lua, lib/style.lua) run here over a stand-in `ui` and `eq`: no
+// The modern UI's libraries (lib/hud.lua, lib/theme.lua, lib/style.lua) run here over a stand-in `ui` and `hs`: no
 // ImGui, the frame count, the screen, the settings and the game's windows as each check sets them. ui.Begin answers
 // false, so a frame is placed and noted but its body is not drawn. Each chunk returns a list of failures.
 namespace {
@@ -480,10 +583,11 @@ ui = setmetatable({
   HoveredFlags = numbers(),
 }, { __index = function() return noop end })
 shownWindows = {}
-eq = setmetatable({
+hs = setmetatable({
   ReplaceWindow = function(w) return shownWindows[w] == true, 100, 100 end,
   WindowShown = function(w) return shownWindows[w] == true end,
 }, { __index = function() return noop end })
+TEST_UI_API_ATTACH(hs)
 )lua";
 
 std::vector<std::string> run_modern(const char* chunk) {
@@ -491,6 +595,7 @@ std::vector<std::string> run_modern(const char* chunk) {
     const fs::path base = ui_dir() / "modern";
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
+    REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
     for (const char* code : {kModernStubs, chunk}) {
         int rc = luaL_loadstring(L, code);
         if (rc == LUA_OK) {
@@ -814,7 +919,7 @@ ui = stub({
   BeginCombo = function() return true end,
   Selectable = function(label) return label == "Name" end,
 })
-eq = stub({
+hs = stub({
   InGame = function() return true end,
   ListInfo = function() return nil end,
   ListRow = function() return nil end,
@@ -826,6 +931,7 @@ local libs = {
 dofile = function(name) return libs[name] or any end
 )lua";
         REQUIRE(luaL_dostring(L, stubs) == LUA_OK);
+        REQUIRE(hailstone::test::attach_mock_ui_api(L) == LUA_OK);
         int rc = luaL_dofile(L, file.string().c_str());
         REQUIRE_MESSAGE(rc == LUA_OK, (rc == LUA_OK ? "" : lua_tostring(L, -1)));
         const char* check = R"lua(
@@ -880,7 +986,7 @@ local function ability(key, kind)
     endurance = 0, mana = 0, classes = 0, favorite = false, ready = true, autoable = false, maxRank = 1, rank = 1,
     icon = -1, spell = 0 }
 end
-eq = stub({
+hs = stub({
   InGame = function() return true end,
   AbilityBook = function()
     return { ability("Kick", "skill"), ability("Newfangled", "something new"), ability("Fury", "aa") }
@@ -896,6 +1002,7 @@ local libs = {
 dofile = function(name) return libs[name] or any end
 )lua";
     REQUIRE(luaL_dostring(L, stubs) == LUA_OK);
+    REQUIRE(hailstone::test::attach_mock_ui_api(L) == LUA_OK);
     int rc = luaL_dofile(L, file.string().c_str());
     REQUIRE_MESSAGE(rc == LUA_OK, (rc == LUA_OK ? "" : lua_tostring(L, -1)));
     rc = luaL_dostring(L, "local _, fn = next(windows) fn() fn()");
@@ -926,7 +1033,7 @@ any = setmetatable({}, {
 local function stub(t) return setmetatable(t, { __index = self }) end
 windows, texts, bars, labels, gauges, colors, children = {}, {}, {}, {}, {}, {}, {}
 ui = stub({ window = function(name, fn) windows[name] = fn end, GetTime = function() return 0 end })
-eq = stub({
+hs = stub({
   InGame = function() return true end,
   Label = function(n) return labels[n] end,
   Gauge = function(n) local g = gauges[n] if g then return table.unpack(g) end return nil, nil, -1 end,
@@ -975,6 +1082,7 @@ function frame()
 end
 )lua";
         REQUIRE(luaL_dostring(L, stubs) == LUA_OK);
+        REQUIRE(hailstone::test::attach_mock_ui_api(L) == LUA_OK);
         int rc = luaL_dofile(L, file.string().c_str());
         REQUIRE_MESSAGE(rc == LUA_OK, (rc == LUA_OK ? "" : lua_tostring(L, -1)));
         const char* player = R"lua(
@@ -1059,13 +1167,13 @@ local snapshot = {
   } },
   { id = 20, type = 1, title = "Another quest", objectives = { { text = "Other objective", count = 2, goal = 8 } } },
 }
-eq.InGame = function() return inGame end
-eq.Tasks = function() calls = calls + 1 return snapshot end
-eq.TasksRevision = function() return frame, 0 end -- a new revision every frame: read once a frame
-eq.WindowShown = function() error("the tracker must not inspect TaskWnd") end
-eq.ReplaceWindow = eq.WindowShown
-eq.OpenTask = function(id) opened = id return openAllowed end
-eq.ShowWindow = function(name, shown) journal = { name, shown } end
+hs.InGame = function() return inGame end
+hs.Tasks = function() calls = calls + 1 return snapshot end
+hs.TasksRevision = function() return frame, 0 end -- a new revision every frame: read once a frame
+hs.WindowShown = function() error("the tracker must not inspect TaskWnd") end
+hs.ReplaceWindow = hs.WindowShown
+hs.OpenTask = function(id) opened = id return openAllowed end
+hs.ShowWindow = function(name, shown) journal = { name, shown } end
 ui.window = function(name, fn) assert(name == "Quest Tracker") window = fn end
 ui.GetWindowPos = function() return 0, 0 end
 ui.GetCursorScreenPos = function() return cx, cy end
@@ -1186,8 +1294,8 @@ local other = dofile("lib/task_journal.lua")
 local calls = 0
 local snapshot = { { id = 10 }, { id = 20 }, { id = 30 } }
 local revision = 1
-eq.Tasks = function() calls = calls + 1 return snapshot end
-eq.TasksRevision = function() return revision, 0 end
+hs.Tasks = function() calls = calls + 1 return snapshot end
+hs.TasksRevision = function() return revision, 0 end
 assert(Q.tasks() == other.tasks() and calls == 1, "both windows share one snapshot per frame")
 frame = frame + 1
 assert(Q.tasks() == other.tasks() and calls == 1, "an unchanged task list is not rebuilt in a new frame")

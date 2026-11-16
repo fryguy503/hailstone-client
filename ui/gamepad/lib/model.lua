@@ -1,7 +1,7 @@
 -- A stock window's children as this pack's widgets, for the windows the pack draws over a C++ window model (the
 -- adventure, journal, help windows ...): each widget asks the original child what it shows
--- (eq.WindowText, eq.ChildState, eq.ListInfo / eq.ListRow, eq.ComboInfo) and hands the pad's presses and the mouse's
--- clicks to it (eq.ClickChild, eq.ListClick, eq.ComboSelect), as the classic pack's lib/sidl.lua does for the stock
+-- (hs.WindowText, hs.ChildState, hs.ListInfo / hs.ListRow, hs.ComboInfo) and hands the pad's presses and the mouse's
+-- clicks to it (hs.ClickChild, hs.ListClick, hs.ComboSelect), as the classic pack's lib/sidl.lua does for the stock
 -- layouts, so what happens is the game's.
 --
 --   local M = dofile("lib/model.lua")
@@ -10,7 +10,8 @@
 --   M.combo(WIN, "Chooser", "Category", w, h, pick)                 -- A opens a list of its choices (M.picker)
 --   M.list(WIN, "List", state, x0, y0, x1, y1, opts)                -- the rows in columns, A clicks one
 --   if M.picker(pick, W.area()) then ... (the choices are up: draw nothing else) end
---   if M.back(W.finish(), pick) then eq.ShowWindow(WIN, false) end -- B takes the choices down first
+--   if M.back(W.finish(), pick) then hs.ShowWindow(WIN, false) end -- B takes the choices down first
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -19,12 +20,12 @@ local M = {}
 
 -- ---------------------------------------------------------------- reading the original
 -- The child's text, "" when it has none.
-function M.text(win, id) return (eq.WindowText(win, id)) or "" end
+function M.text(win, id) return (API.windows.Text(win, id)) or "" end
 -- Whether the window shows the child (true when it says nothing).
-function M.shown(win, id) return eq.ChildShown(win, id) ~= false end
+function M.shown(win, id) return API.windows.ChildShown(win, id) ~= false end
 -- enabled, checked (enabled true and checked nil when the child has no state of its own).
 function M.state(win, id)
-  local e, c = eq.ChildState(win, id)
+  local e, c = API.windows.ChildState(win, id)
   if e == nil then return true, nil end
   return e ~= false, c
 end
@@ -32,11 +33,11 @@ end
 -- The rows of a list child as { texts, ... } (short lists: every row is read), and the selected one (1-based or nil).
 -- limit: read only the first that many rows (a window that wants the first row).
 function M.rows(win, id, limit)
-  local rows, _, selected = eq.ListInfo(win, id)
+  local rows, _, selected = API.windows.ListInfo(win, id)
   local out = {}
   local last = (rows or 0) - 1
   if limit then last = math.min(last, limit - 1) end
-  for r = 0, last do out[#out + 1] = eq.ListRow(win, id, r) or {} end
+  for r = 0, last do out[#out + 1] = API.windows.ListRow(win, id, r) or {} end
   return out, (selected and selected >= 0) and selected + 1 or nil
 end
 
@@ -52,7 +53,7 @@ function M.button(win, id, label, w, h, opts)
   if T.button("##" .. win .. "." .. id, label, w, h,
         { primary = opts.primary or checked == true, disabled = not on, glyph = opts.glyph, sub = opts.sub,
           align = opts.align }, pad) then
-    eq.ClickChild(win, id, "left")
+    API.windows.ClickChild(win, id, "left")
     return true
   end
   return false
@@ -65,7 +66,7 @@ function M.toggle(win, id, label, w, h, opts)
   if T.button("##" .. win .. "." .. id, label, w, h,
         { primary = checked == true, disabled = not enabled, sub = checked and (opts.on or "On") or (opts.off or "Off"),
           align = opts.align or 0 }, pad) then
-    eq.ClickChild(win, id, "left")
+    API.windows.ClickChild(win, id, "left")
     return true
   end
   return false
@@ -94,8 +95,8 @@ end
 -- M.picker draws them). Returns nothing.
 function M.combo(win, id, label, w, h, pick, opts)
   opts = opts or {}
-  local choices, selected = eq.ComboInfo(win, id)
-  local enabled = eq.ChildState(win, id) ~= false and choices ~= nil and #choices > 0
+  local choices, selected = API.windows.ComboInfo(win, id)
+  local enabled = API.windows.ChildState(win, id) ~= false and choices ~= nil and #choices > 0
   local current = choices and choices[(selected or -1) + 1] or ""
   if pick.refocus == win .. "." .. id then -- the choices just went down: the focus comes back here
     pick.refocus = nil
@@ -110,12 +111,12 @@ function M.combo(win, id, label, w, h, pick, opts)
 end
 
 -- The open combo's choices in the window's content area x0, y0 .. x1, y1 (W.area), in place of its body: the window
--- draws nothing else while this returns true. A picks the focused choice (eq.ComboSelect), B (M.back) goes back
+-- draws nothing else while this returns true. A picks the focused choice (hs.ComboSelect), B (M.back) goes back
 -- without one.
 function M.picker(pick, x0, y0, x1, y1)
   local o = pick.open
   if not o then return false end
-  local choices, selected = eq.ComboInfo(o.win, o.id)
+  local choices, selected = API.windows.ComboInfo(o.win, o.id)
   if not choices then
     pick.open = nil
     return false
@@ -147,7 +148,7 @@ function M.picker(pick, x0, y0, x1, y1)
       i == st.selected and C.accent or C.text, 0)
     T.unfont()
   end, function(i)
-    if i - 1 ~= selected then eq.ComboSelect(o.win, o.id, i - 1) end
+    if i - 1 ~= selected then API.windows.ComboSelect(o.win, o.id, i - 1) end
     pick.open = nil
     pick.refocus = o.win .. "." .. o.id
   end)
@@ -206,7 +207,7 @@ end
 local rowColor = {} -- (a row's colour, used while the row is drawn)
 function M.list(win, id, state, x0, y0, x1, y1, opts)
   opts = opts or {}
-  local rows, columns, selected, labels, widths, multi = eq.ListInfo(win, id)
+  local rows, columns, selected, labels, widths, multi = API.windows.ListInfo(win, id)
   rows = rows or 0
   labels, widths = labels or {}, widths or {}
   local wx, wy = ui.GetWindowPos()
@@ -224,7 +225,7 @@ function M.list(win, id, state, x0, y0, x1, y1, opts)
       local l = (opts.labels and opts.labels[c[1]]) or labels[c[1]] or ""
       T.textIn(c[2], y0, c[3] - T.px(8), y0 + th, T.fit(l:upper(), c[3] - c[2] - T.px(8)), C.dim, 0)
       if l ~= "" and ui.IsMouseHoveringRect(c[2], y0, c[3], y0 + th) and ui.IsMouseClicked(ui.Mouse.Left) then
-        eq.ListHeaderClick(win, id, c[1] - 1)
+        API.windows.ListHeaderClick(win, id, c[1] - 1)
       end
     end
     T.unfont()
@@ -242,7 +243,7 @@ function M.list(win, id, state, x0, y0, x1, y1, opts)
   state.selected = (selected and selected >= 0) and selected + 1 or nil
   ui.BeginGroup() -- (the rows start at this x)
   local focusedRow = W.list(win .. id, state, rows, visible, rowH, x1 - x0, function(i, rx0, ry0, rx1, ry1, focused)
-    local texts, cr, cg, cb = eq.ListRow(win, id, i - 1)
+    local texts, cr, cg, cb = API.windows.ListRow(win, id, i - 1)
     if not texts then return end
     if opts.rowText then texts = opts.rowText(i, texts) or texts end
     if multi and multi[i - 1] then T.rect(rx0, ry0, rx1, ry1, C.accent, 0.22, T.px(10)) end
@@ -264,15 +265,15 @@ function M.list(win, id, state, x0, y0, x1, y1, opts)
     if focused then
       if opts.focusSelects and state.lastFocus ~= i then
         state.lastFocus = i
-        if state.selected ~= i then eq.ListClick(win, id, i - 1, "left") end
+        if state.selected ~= i then API.windows.ListClick(win, id, i - 1, "left") end
       end
-      if opts.multi and pad.menuPressed("x") then eq.ListClick(win, id, i - 1, "left", nil, 2) end
+      if opts.multi and pad.menuPressed("x") then API.windows.ListClick(win, id, i - 1, "left", nil, 2) end
       if opts.activate and pad.menuPressed("y") then opts.activate(i) end
     end
     if opts.activate and ui.IsMouseHoveringRect(rx0, ry0, rx1, ry1) and ui.IsMouseDoubleClicked(ui.Mouse.Left) then
       opts.activate(i)
     end
-  end, function(i) eq.ListClick(win, id, i - 1, "left") end)
+  end, function(i) API.windows.ListClick(win, id, i - 1, "left") end)
   ui.EndGroup()
   return focusedRow, rows
 end
@@ -305,7 +306,7 @@ end
 -- (testing: screenshots of windows only the game opens, docs/gamepad.md).
 local testShown, testAt = false, nil
 function M.testShow()
-  if testShown or not eq.InGame() then return end
+  if testShown or not API.session.InGame() then return end
   local list = ui.GetSetting("test.show") or ""
   if list == "" then
     testShown = true
@@ -314,7 +315,7 @@ function M.testShow()
   testAt = testAt or ui.GetTime()
   if ui.GetTime() - testAt < tonumber(ui.GetSetting("test.show.after") or "6") then return end
   testShown = true
-  for s in list:gmatch("[^,]+") do eq.ShowWindow(s, true) end
+  for s in list:gmatch("[^,]+") do API.windows.Show(s, true) end
 end
 
 return M

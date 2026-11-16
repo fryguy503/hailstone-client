@@ -3,7 +3,7 @@
 #include <cstdlib>
 
 #include "app/client_app_internal.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui_windows.h"
 #include "core/env.h"
 #include "core/web_url.h"
 #include "platform/open_folder.h"
@@ -64,12 +64,12 @@ void ClientApp::draw_ui(float fps) {
         if (!login_view_.transient && !login_view_.busy)
             if (const ui::UiPack* pack = ui::find_ui_pack(ui_packs_, login_view_.ui); pack && pack->id != ui_name_)
                 use_ui_pack(pack->id);
-        // The user interface's own login screen (app/lua_eq_pregame.cpp) stands in for the client's when its script
+        // The user interface's own login screen (app/lua_ui_pregame.cpp) stands in for the client's when its script
         // draws it; its buttons come back as the same actions.
         ui::LoginAction action = ui::LoginAction::None;
-        if (eq_api_ && eq_api_->replaces("LoginScreen")) {
-            if (eq_host_.login_action) action = static_cast<ui::LoginAction>(*eq_host_.login_action);
-            eq_host_.login_action.reset();
+        if (ui_api_ && ui_api_->replaces("LoginScreen")) {
+            if (ui_host_.login_action) action = static_cast<ui::LoginAction>(*ui_host_.login_action);
+            ui_host_.login_action.reset();
         } else {
             action = ui::login_screen(login_view_);
         }
@@ -82,12 +82,12 @@ void ClientApp::draw_ui(float fps) {
         break;
     }
     case Screen::Servers: {
-        // The user interface's stock server select (app/lua_eq_login.cpp) stands in for the client's own when its
+        // The user interface's stock server select (app/lua_ui_login.cpp) stands in for the client's own when its
         // script runs; its buttons come back as the same actions.
         ui::ServerSelectAction action = ui::ServerSelectAction::None;
-        if (eq_api_ && eq_api_->replaces("serverselect")) {
-            if (eq_host_.server_select_action) action = static_cast<ui::ServerSelectAction>(*eq_host_.server_select_action);
-            eq_host_.server_select_action.reset();
+        if (ui_api_ && ui_api_->replaces("serverselect")) {
+            if (ui_host_.server_select_action) action = static_cast<ui::ServerSelectAction>(*ui_host_.server_select_action);
+            ui_host_.server_select_action.reset();
         } else {
             action = ui::server_select_screen(server_view_);
         }
@@ -117,13 +117,13 @@ void ClientApp::draw_ui(float fps) {
         screen_keys();
         if (screen_ != Screen::Characters) break;
         char_view_.scene = pre_game_scene();
-        // The user interface's own character select (app/lua_eq_pregame.cpp) stands in for the client's when its
+        // The user interface's own character select (app/lua_ui_pregame.cpp) stands in for the client's when its
         // script draws it.
         auto action = ui::CharacterSelectAction::None;
-        if (eq_api_ && eq_api_->replaces("CharacterListWnd")) {
-            if (eq_host_.char_select_action)
-                action = static_cast<ui::CharacterSelectAction>(*eq_host_.char_select_action);
-            eq_host_.char_select_action.reset();
+        if (ui_api_ && ui_api_->replaces("CharacterListWnd")) {
+            if (ui_host_.char_select_action)
+                action = static_cast<ui::CharacterSelectAction>(*ui_host_.char_select_action);
+            ui_host_.char_select_action.reset();
         } else {
             action = ui::character_select_screen(char_view_);
         }
@@ -186,9 +186,9 @@ void ClientApp::draw_ui(float fps) {
     case Screen::Create: {
         screen_keys();
         if (screen_ != Screen::Create) break;
-        // The user interface's stock character creation (app/lua_eq_login.cpp) stands in for the client's own when its
-        // script runs: it sends the name for approval itself (EqHost::char_create_submit) or goes back.
-        if (eq_api_ && eq_api_->replaces("CharacterCreation")) break;
+        // The user interface's stock character creation (app/lua_ui_login.cpp) stands in for the client's own when its
+        // script runs: it sends the name for approval itself (UiHost::char_create_submit) or goes back.
+        if (ui_api_ && ui_api_->replaces("CharacterCreation")) break;
         // OP_RandomNameGenerator's answer goes in the name.
         if (auto random = conn_->take_random_name()) {
             create_view_.name = *random;
@@ -197,14 +197,14 @@ void ClientApp::draw_ui(float fps) {
         create_view_.scene = pre_game_scene();
         ui::create_normalize(create_view_);
         // Hidden while the customization window shows on the model (CC_Appearance_Button's Show(0, 1, 1)).
-        if (eq_host_.customization_shown) break;
-        // The user interface's own creation window (app/lua_eq_pregame.cpp) stands in for the client's screen when
+        if (ui_host_.customization_shown) break;
+        // The user interface's own creation window (app/lua_ui_pregame.cpp) stands in for the client's screen when
         // its script draws it; its buttons come back as the screen's actions.
         auto create_action = ui::CharacterCreateAction::None;
-        if (eq_api_ && eq_api_->replaces("CharacterCreateScreen")) {
-            if (eq_host_.char_create_action)
-                create_action = static_cast<ui::CharacterCreateAction>(*eq_host_.char_create_action);
-            eq_host_.char_create_action.reset();
+        if (ui_api_ && ui_api_->replaces("CharacterCreateScreen")) {
+            if (ui_host_.char_create_action)
+                create_action = static_cast<ui::CharacterCreateAction>(*ui_host_.char_create_action);
+            ui_host_.char_create_action.reset();
         } else {
             create_action = ui::character_create_screen(create_view_);
         }
@@ -249,7 +249,7 @@ void ClientApp::draw_ui(float fps) {
         }
         case ui::CharacterCreateAction::Cancel: screen_ = Screen::Characters; break;
         case ui::CharacterCreateAction::Appearance:
-            if (eq_api_) eq_api_->show("PlayerCustomizationWnd", true);
+            if (ui_api_) ui_api_->show("PlayerCustomizationWnd", true);
             break;
         default: break;
         }
@@ -264,7 +264,8 @@ void ClientApp::draw_ui(float fps) {
     case Screen::InGame: {
         const auto& world = conn_->world();
         auto& hud = game_view_.hud;
-        hud.zone = world.zone_long_name.empty() ? world.zone_short_name : world.zone_long_name;
+        hud.zone = conn_->zone_display_name();
+        if (hud.zone.empty()) hud.zone = world.zone_short_name;
         glm::vec3 loc = game::world_to_server(feet_ + glm::vec3(0, 0, floor_offset_));
         hud.x = loc.x;
         hud.y = loc.y;
@@ -311,7 +312,7 @@ void ClientApp::draw_ui(float fps) {
             tv.distance = glm::distance(t.position, feet_ + glm::vec3(0, 0, floor_offset_));
         }
         game_view_.respawn = {};
-        if (!(eq_api_ && eq_api_->replaces("RespawnWnd")))
+        if (!(ui_api_ && ui_api_->replaces("RespawnWnd")))
             if (const auto& rw = conn_->respawn_window()) {
                 for (const auto& o : rw->options)
                     if (conn_->respawn_option_available(o.id)) game_view_.respawn.options.emplace_back(o.id, o.name);
@@ -337,7 +338,7 @@ void ClientApp::draw_ui(float fps) {
             }
         }
         group_ui_.draw(*conn_);
-        conn_->set_target_of_target_open(eq_api_ && eq_api_->shown("TargetOfTargetWindow"));
+        conn_->set_target_of_target_open(ui_api_ && ui_api_->shown("TargetOfTargetWindow"));
         if (auto t = conn_->take_window_toggle()) {
             if (*t == "spellbook") {
                 // /book: the book follows the command's open flag through CSpellBookWnd's rules.
@@ -349,23 +350,23 @@ void ClientApp::draw_ui(float fps) {
             } else if (t->rfind("tip:", 0) == 0) {
                 // CTipWnd::Activate(tip, 0) on the context tip window: the duel tip (0x1a), the death tip (0x1f).
                 int tip = *t == "tip:duel" ? 0x1a : std::atoi(t->c_str() + 4);
-                if (eq_api_) eq_api_->activate_tip(tip);
+                if (ui_api_) ui_api_->activate_tip(tip);
             } else if (*t == "raid") {
                 // /raidwindow: the raid key's toggle, the UI pack's RaidWindow when it draws one.
-                if (eq_api_ && eq_api_->replaces("RaidWindow")) eq_api_->toggle("RaidWindow");
+                if (ui_api_ && ui_api_->replaces("RaidWindow")) ui_api_->toggle("RaidWindow");
                 else social_ui_.toggle_raid();
             }
             else if (t->rfind("targetoftarget:", 0) == 0) {
                 // Leadership_ActivateAbility 0xe / 0x1d: CTargetOfTargetWnd's Show.
-                if (eq_api_) eq_api_->show("TargetOfTargetWindow", t->back() == '1');
+                if (ui_api_) ui_api_->show("TargetOfTargetWindow", t->back() == '1');
             } else if (t->rfind("show:", 0) == 0) {
                 // A window the game shows itself (OP_TaskDescription's open flag: CTaskWnd's Show(1, 1, 1)).
-                if (eq_api_) eq_api_->show(t->substr(5), true);
+                if (ui_api_) ui_api_->show(t->substr(5), true);
             }
         }
         conn_->set_spellbook_open(conn_->spell_book_open()); // /book's flag follows the book (it closes itself)
         for (int tip : conn_->take_context_tips()) // the connection's events' context tips
-            if (eq_api_) eq_api_->activate_tip(tip);
+            if (ui_api_) ui_api_->activate_tip(tip);
         for (const std::string& url : conn_->take_web_links()) open_server_link(url);
         social_ui_.draw(*conn_);
         if (spell_ui_) {

@@ -13,8 +13,9 @@
 --                    the name typed, the buyers to ask (all or this zone's), Search (X), the matching buy lines
 --                    (focusing one selects it, A sells to it), what it gives besides coins, Find Buyer, Greeting,
 --                    Welcome and the inspect buttons the game shows.
--- Every list, field and button is the stock window's (eq.ListClick, eq.SetWindowText, eq.ComboSelect,
--- eq.ClickChild): the rules and messages are the game's.
+-- Every list, field and button is the stock window's (hs.ListClick, hs.SetWindowText, hs.ComboSelect,
+-- hs.ClickChild): the rules and messages are the game's.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -42,7 +43,7 @@ local status = { scroll = 0 }
 local function startStop(x, y, w, h)
   local wx, wy = ui.GetWindowPos()
   ui.SetCursorPos(x - wx, y - wy)
-  local buying = (eq.WindowText(BW, "StartStopButton") or ""):find("Stop") ~= nil
+  local buying = (API.windows.Text(BW, "StartStopButton") or ""):find("Stop") ~= nil
   M.button(BW, "StartStopButton", buying and "Stop Buyer" or "Start Buyer", w, h, { primary = not buying, glyph = "x" })
 end
 
@@ -52,7 +53,7 @@ ui.window("Barter Buyer", function()
     return
   end
   M.frame()
-  local buying = (eq.WindowText(BW, "StartStopButton") or ""):find("Stop") ~= nil
+  local buying = (API.windows.Text(BW, "StartStopButton") or ""):find("Stop") ~= nil
   local hints = M.hints(F, { { "a", "Select" }, { "x", buying and "Stop Buyer" or "Start Buyer" },
     { "lb", "Previous" }, { "rb", "Next" }, { "b", "Close" } })
   if W.begin("Barter Buyer", { w = 1760, h = 1000, title = "Barter Buyer",
@@ -62,7 +63,7 @@ ui.window("Barter Buyer", function()
     if not M.modal(F, x0, y0, x1, y1) then
       if M.pressed("Barter Buyer", "lb") then page = math.max(1, page - 1) end
       if M.pressed("Barter Buyer", "rb") then page = math.min(3, page + 1) end
-      if M.pressed("Barter Buyer", "x") then eq.ClickChild(BW, "StartStopButton", "left") end
+      if M.pressed("Barter Buyer", "x") then API.windows.ClickChild(BW, "StartStopButton", "left") end
       local top = M.tabs({ "1  Item", "2  Offer", "3  Buy lines" }, page, x0, y0, function(i) page = i end)
       local bh = T.px(64)
       local mid = x0 + (x1 - x0) * 0.5
@@ -71,7 +72,7 @@ ui.window("Barter Buyer", function()
         ui.SetCursorPos(x0 - wx, top - wy)
         local fw = mid - x0 - T.px(24)
         M.field(F, BW, "ItemSearchEdit", "Item name", fw * 0.7, bh, { hint = "Type the item to buy",
-          done = function() eq.ClickChild(BW, "ItemSearchButton", "left") M.refresh(BW, "ItemSearchList") end })
+          done = function() API.windows.ClickChild(BW, "ItemSearchButton", "left") M.refresh(BW, "ItemSearchList") end })
         ui.SameLine(0, T.px(10))
         M.button(BW, "ItemSearchButton", "Search", fw * 0.3 - T.px(10), bh, { primary = true })
         local _, sel = M.list(BW, "ItemSearchList", search, x0, top + bh + T.px(16), mid - T.px(24), y1, {
@@ -122,7 +123,7 @@ ui.window("Barter Buyer", function()
         local rx0 = mid + T.px(24)
         M.caption(rx0, top, "Status")
         local wy0 = y1 - 2 * bh - T.px(60)
-        P.draw("##btrstatus", status, eq.WindowText(BW, "StatusText") or "", rx0, top + T.px(30), x1, wy0 - bh - T.px(24),
+        P.draw("##btrstatus", status, API.windows.Text(BW, "StatusText") or "", rx0, top + T.px(30), x1, wy0 - bh - T.px(24),
           { empty = "Nothing yet.", size = 19 })
         ui.SetCursorPos(rx0 - wx, wy0 - bh - T.px(10) - wy)
         M.buttons(BW, { { "ListLinesButton", "List Lines" }, { "ClearStatusButton", "Clear" } }, rx0, x1, bh)
@@ -137,7 +138,7 @@ ui.window("Barter Buyer", function()
       startStop(x1 - T.px(560) + cw + T.px(16), y0 - T.px(4), x1 - (x1 - T.px(560) + cw + T.px(16)), T.px(56))
     end
   end
-  if M.back(F, W.finish()) then eq.ShowWindow(BW, false) end
+  if M.back(F, W.finish()) then API.windows.Show(BW, false) end
 end)
 
 -- ---------------------------------------------------------------- a buyer's window (BarterMerchantWnd)
@@ -147,7 +148,7 @@ local mlines, mdetail = {}, {}
 ui.window("Barter Merchant", function()
   if not M.visible(MW) then return end
   M.frame()
-  local name = eq.WindowText(MW, "MerchantNameLabel") or ""
+  local name = API.windows.Text(MW, "MerchantNameLabel") or ""
   if W.begin("Barter Merchant", { w = 1500, h = 900, title = name ~= "" and name or "Buyer", subtitle = "is buying",
         hints = { { "a", "Sell" }, { "y", "Inspect" }, { "b", "Close" } } }) then
     local x0, y0, x1, y1 = W.area()
@@ -161,7 +162,7 @@ ui.window("Barter Merchant", function()
           if cp then M.price(cp, xr, a, b, 1) end
         end, { sub = "wants " .. (r.texts[3] or "?") })
       end,
-      onA = function() M.afterA(function() eq.ClickChild(MW, "SellButton", "left") end) end })
+      onA = function() M.afterA(function() API.windows.ClickChild(MW, "SellButton", "left") end) end })
     local rx0 = mid + T.px(24)
     M.caption(rx0, y0, sel and "Also gives, for each sale" or "Focus a buy line")
     local bh = T.px(72)
@@ -174,7 +175,7 @@ ui.window("Barter Merchant", function()
     ui.SetCursorPos(rx0 - wx, y1 - bh - wy)
     M.button(MW, "SellButton", "Sell", x1 - rx0, bh, { primary = true, afterA = true, glyph = "a" })
   end
-  if W.finish() then eq.ShowWindow(MW, false) end
+  if W.finish() then API.windows.Show(MW, false) end
 end)
 
 -- ---------------------------------------------------------------- the search for buyers (BarterSearchWnd)
@@ -184,7 +185,7 @@ local sinv, slines, sdetail = {}, {}, {}
 local searched, lastDrawn = false, -10
 
 local function find()
-  eq.ClickChild(SW, "SearchButton", "left")
+  API.windows.ClickChild(SW, "SearchButton", "left")
   M.refresh(SW, "BuyLineList")
   searched = true
   slines.offset = 0
@@ -233,7 +234,7 @@ ui.window("Barter Search", function()
           end, { sub = (r.texts[5] or "?") .. " wants " .. (r.texts[3] or "?") })
         end,
         -- Sell: the line's own button (the list's column 5, as CBarterSearchWnd puts one on each line)
-        onA = function(r) M.afterA(function() eq.ListClick(SW, "BuyLineList", r.index, "left", 5) end) end })
+        onA = function(r) M.afterA(function() API.windows.ListClick(SW, "BuyLineList", r.index, "left", 5) end) end })
       -- what the line gives, and the buttons
       local rx0 = c2x1 + T.px(24)
       M.caption(rx0, y0, sel and "Also gives, for each sale" or "Focus a buy line")
@@ -243,7 +244,7 @@ ui.window("Barter Search", function()
       ui.SetCursorPos(rx0 - wx, by - wy)
       if T.button("##btssell", "Sell", (x1 - rx0 - T.px(10)) / 2, bh, { primary = true, disabled = sel == nil }, pad) and sel then
         local index = sel.index
-        M.afterA(function() eq.ListClick(SW, "BuyLineList", index, "left", 5) end)
+        M.afterA(function() API.windows.ListClick(SW, "BuyLineList", index, "left", 5) end)
       end
       ui.SameLine(0, T.px(10))
       M.button(SW, "FindButton", "Find Buyer", (x1 - rx0 - T.px(10)) / 2, bh)
@@ -252,5 +253,5 @@ ui.window("Barter Search", function()
         { "CompensationPreviewButton", "Preview" }, { "HideButton", "Hide" } }, rx0, x1, bh)
     end
   end
-  if M.back(SF, W.finish()) then eq.ShowWindow(SW, false) end
+  if M.back(SF, W.finish()) then API.windows.Show(SW, false) end
 end)

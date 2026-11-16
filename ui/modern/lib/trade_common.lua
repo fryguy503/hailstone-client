@@ -3,6 +3,7 @@
 --
 --   local TC = dofile("lib/trade_common.lua")
 --   TC.MoneyButtons("BankWnd", { "BW_Money0", "BW_Money1", "BW_Money2", "BW_Money3" }, s)   -- platinum first
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local C = T.color
 
@@ -28,7 +29,7 @@ end
 
 -- The coins the character carries, in copper.
 function TC.Purse()
-  local p, g, s_, c = eq.Money()
+  local p, g, s_, c = API.character.Money()
   return TC.Copper(p, g, s_, c)
 end
 
@@ -57,8 +58,8 @@ end
 -- One coin pile as a button bound to a money child: its count (the child's text), the coin's colour; a click is
 -- the child's (pick the pile up, or drop the coin on the cursor). Returns clicked.
 function TC.MoneyButton(win, id, coin, s, width, tooltip)
-  local enabled = select(1, eq.ChildState(win, id)) ~= false
-  local n = tonumber((eq.WindowText(win, id))) or 0
+  local enabled = select(1, API.windows.ChildState(win, id)) ~= false
+  local n = tonumber((API.windows.Text(win, id))) or 0
   local x, y = ui.GetCursorScreenPos()
   local _, th = T.TextSize("Ag", T.font.small)
   local h = th + 10 * s
@@ -72,7 +73,7 @@ function TC.MoneyButton(win, id, coin, s, width, tooltip)
   T.Text(x + width - 7 * s, y + (h - th) / 2, T.Thousands(n), n > 0 and C.text or C.faint, T.font.small, "right")
   if hov and tooltip then ui.SetTooltip(TC.COIN[coin][2] .. ": " .. T.Thousands(n) .. "\n" .. tooltip) end
   if clicked and enabled then
-    eq.ClickChild(win, id, "left")
+    API.windows.ClickChild(win, id, "left")
     return true
   end
   return false

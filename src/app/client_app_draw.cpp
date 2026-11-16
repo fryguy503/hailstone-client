@@ -2,6 +2,9 @@
 
 #include "app/client_app_internal.h"
 #include "app/nameplate_layer.h"
+#include "app/nameplate_canvas_context.h"
+#include "ui/lua/lua_host.h"
+#include "ui/texture_ids.h"
 
 #include "game/item_preview.h"
 
@@ -18,7 +21,7 @@ void ClientApp::draw_text_overlay() {
     // CTextOverlay::Draw @0x41f610 (game/text_overlay.h): the line wrapped in {x0 + W/4, y0 + 0.33 H, x0 + 3W/4, y1},
     // centred (DrawWrappedText flags 0x10), in font 6 (the static at 0xab3448 passed to the text object's draw,
     // vtable +0xc): EQGraphicsDX9's font table @0x100b2100 makes it Arial with a cell height of 24, the same as
-    // the UI's font 6 (ui::eq_font).
+    // the UI's font 6 (ui::ui_font).
     if (!conn_) return;
     auto frame = conn_->text_overlay().frame(static_cast<std::uint32_t>(net::GameConnection::now_ms()));
     if (!frame) return;
@@ -27,7 +30,7 @@ void ClientApp::draw_text_overlay() {
     float left = static_cast<float>(static_cast<int>(display.x * 0.25f));
     float top = static_cast<float>(static_cast<int>(display.y * 0.33f));
     float width = static_cast<float>(static_cast<int>(display.x * 0.5f));
-    ImFont* font = ui::eq_font(6);
+    ImFont* font = ui::ui_font(6);
     if (!font) font = ImGui::GetFont();
     float size = font->FontSize;
     std::uint32_t c = frame->argb;
@@ -63,7 +66,9 @@ void ClientApp::update_market_hidden(bool in_game) {
         if (conn_->spawn_invisible(s, see_invisible)) market_hidden_.insert(id);
 }
 
-void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4& view_proj, VkExtent2D extent, float far_plane) {
+void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::mat4& scene_view_proj,
+                                VkExtent2D extent, float far_plane) {
+    plate_hits_.clear();
     if (!conn_) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     // The 3D view's pixels to its place in the window (/viewport).
@@ -89,6 +94,16 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
     if (!plate_layer_) plate_layer_ = std::make_unique<NameplateLayer>(vk_, shader_dir_);
     plate_layer_->begin(frame, dl, glm::vec4(view_area_.x, view_area_.y, view_area_.w, view_area_.h), camera_.near_plane,
                         far_plane);
+    auto* canvas_registry = automation_ ? &automation_->nameplates() : nullptr;
+    const bool canvas_active = canvas_registry && !canvas_registry->empty() && plate_layer_->supports_canvas();
+    NameplateCanvasPaintStyle canvas_style;
+    if (canvas_active) {
+        canvas_style.font = ui::plate_font();
+        canvas_style.font_at = [](int index) { return ui::ui_font(index); };
+        canvas_style.image_live = [](std::uintptr_t texture) {
+            return ui::texture_id_live(reinterpret_cast<void*>(texture));
+        };
+    }
     // Hailstone (game/nameplate_style.h): the name plates' own font, size, edge and tag size.
     {
         NameplateDrawStyle style;
@@ -97,6 +112,7 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         style.faux_bold = ui::plate_font_faux_bold();
         style.edge = plate_style_.edge;
         style.tag_scale = static_cast<float>(plate_style_.tag_scale) / 100.0f;
+        style.canvas = canvas_style;
         plate_layer_->set_style(style);
     }
     plate_count_ = 0;
@@ -127,16 +143,18 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         if (glm::vec3 seated; actor_renderer_ && actor_renderer_->drawn_rider_top(id, seated))
             head = seated + glm::vec3(0, 0, 1.5f);
         const float head_distance = glm::distance(head, camera_.position);
-        if (head_distance > kNameplateRange) continue;
+        if (!std::isfinite(head_distance) || head_distance > kNameplateRange) continue;
         glm::vec4 clip = view_proj * glm::vec4(head, 1.0f);
-        if (clip.w <= 0.1f) continue;
+        if (!std::isfinite(clip.w) || clip.w <= 0.1f) continue;
         glm::vec2 ndc(clip.x / clip.w, clip.y / clip.w);
-        if (std::abs(ndc.x) > 1.0f || std::abs(ndc.y) > 1.0f) continue;
+        if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || std::abs(ndc.x) > 1.0f || std::abs(ndc.y) > 1.0f) continue;
         float px = view_area_.x + (ndc.x * 0.5f + 0.5f) * static_cast<float>(extent.width) * sx;
         float py = view_area_.y + (0.5f - ndc.y * 0.5f) * static_cast<float>(extent.height) * sy;
         if (plate_count_ == plates_.size()) plates_.emplace_back();
         PlateEntry& entry = plates_[plate_count_];
         NameplateText& plate = entry.plate;
+        plate.canvas.reset();
+        entry.canvas_owner = 0;
         std::string& label = plate.name; // (built in place: the string keeps its capacity from frame to frame)
         label = game::display_name(s.name);
         // An NPC's last name is its owner line under the name (below); a player's follows the name.
@@ -191,7 +209,78 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         if (auto rgb = game::gm_name_colour(s))
             plate.color = IM_COL32((*rgb >> 16) & 0xff, (*rgb >> 8) & 0xff, *rgb & 0xff, 255);
         entry.id = id;
+        entry.head = head;
         ++plate_count_;
+    }
+    if (canvas_active) {
+        game::NameplateCanvasFrame canvas_frame;
+        canvas_frame.now_ms = static_cast<double>(net::GameConnection::now_ms());
+        canvas_frame.dt_ms = static_cast<double>(ImGui::GetIO().DeltaTime) * 1000.0;
+        canvas_frame.font_size = ui::plate_font_size();
+        if (canvas_frame.font_size <= 0.0f)
+            canvas_frame.font_size = canvas_style.font ? canvas_style.font->FontSize : ImGui::GetFontSize();
+        canvas_frame.viewport = {view_area_.x, view_area_.y, view_area_.w, view_area_.h};
+        std::vector<std::size_t> candidates;
+        candidates.reserve(plate_count_);
+        for (std::size_t i = 0; i < plate_count_; ++i) candidates.push_back(i);
+        const auto priority = [&](std::size_t a, std::size_t b) {
+            const auto& left = plates_[a]; const auto& right = plates_[b];
+            if (left.plate.target != right.plate.target) return left.plate.target;
+            if (left.plate.depth != right.plate.depth) return left.plate.depth < right.plate.depth;
+            return left.id < right.id;
+        };
+        const auto count = std::min(candidates.size(), game::kCanvasMaxCandidates);
+        std::partial_sort(candidates.begin(), candidates.begin() + static_cast<std::ptrdiff_t>(count), candidates.end(), priority);
+        candidates.resize(count);
+        canvas_frame.candidates.reserve(count);
+        std::vector<std::size_t> frame_entries;
+        frame_entries.reserve(count);
+        for (const auto index : candidates) {
+            const auto& entry = plates_[index];
+            const auto spawn = world.spawns.find(entry.id);
+            if (spawn == world.spawns.end()) continue;
+            game::NameplateCanvasCandidate candidate;
+            candidate.x = entry.plate.pos.x; candidate.y = entry.plate.pos.y;
+            candidate.depth = entry.plate.depth; candidate.native_scale = entry.plate.scale;
+            fill_nameplate_canvas_candidate(candidate, *conn_, spawn->second, entry.plate.name,
+                                            glm::distance(entry.head, camera_.position));
+            canvas_frame.candidates.push_back(std::move(candidate));
+            frame_entries.push_back(index);
+        }
+        canvas_registry->set_measure([canvas_style](std::string_view text, float size, int font) {
+            return measure_nameplate_canvas_text(text, size, font, canvas_style);
+        });
+        canvas_registry->set_icon([this](std::uint32_t icon) -> std::optional<game::CanvasImage> {
+            if (!ui_textures_) return std::nullopt;
+            const auto cell = ui_textures_->spell_icon(static_cast<std::int32_t>(icon));
+            if (!cell || !ui::texture_id_live(cell->id)) return std::nullopt;
+            return game::CanvasImage{reinterpret_cast<std::uintptr_t>(cell->id), cell->u0, cell->v0, cell->u1, cell->v1};
+        });
+        const auto connection = conn_.get();
+        const auto serial = world.spawn_set_serial;
+        auto submissions = canvas_registry->frame(canvas_frame);
+        canvas_registry->set_measure({});
+        canvas_registry->set_icon({});
+        // A callback can close its session. Never use candidates from a retired connection or entity set.
+        if (conn_.get() != connection || !conn_ || conn_->world().spawn_set_serial != serial) {
+            plate_count_ = 0;
+            dl->PopClipRect();
+            return;
+        }
+        for (auto& submission : submissions) {
+            if (submission.candidate_index >= frame_entries.size() || !canvas_registry->owner_valid(submission.owner)) continue;
+            auto& entry = plates_[frame_entries[submission.candidate_index]];
+            entry.canvas_owner = submission.owner;
+            entry.plate.through_walls = submission.model.through_walls;
+            entry.plate.canvas = std::move(submission.model);
+        }
+        std::size_t shown = 0;
+        for (std::size_t i = 0; i < plate_count_; ++i) {
+            if (plates_[i].plate.canvas && plates_[i].plate.canvas->hide) continue;
+            if (shown != i) plates_[shown] = std::move(plates_[i]);
+            ++shown;
+        }
+        plate_count_ = shown;
     }
     // Hailstone (game/nameplate_overlap.h): the nearer name is drawn over the farther, and a name a nearer one covers
     // fades toward a tenth of its alpha, smoothly (tau 0.3 s). The target stays at full alpha at its projected head.
@@ -200,9 +289,9 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         NameplateText& p = plates_[i].plate;
         const glm::vec2 size = plate_layer_->size_of(p);
         // Hailstone: the plate's bottom edge at the head, so a larger name (or more lines) grows upward, off the head.
-        p.pos.y -= size.y;
-        plate_boxes_.push_back({p.pos.x - size.x * 0.5f, p.pos.y, p.pos.x + size.x * 0.5f, p.pos.y + size.y, p.depth,
-                                p.target});
+        if (!p.canvas) p.pos.y -= size.y;
+        const auto bounds = plate_layer_->bounds_of(p);
+        plate_boxes_.push_back({bounds.x, bounds.y, bounds.z, bounds.w, p.depth, p.target});
     }
     if (plate_overlap_fade_) game::plate_target_alpha(plate_boxes_, plate_alpha_);
     else plate_alpha_.assign(plate_boxes_.size(), 1.0f);
@@ -211,13 +300,41 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
     for (std::size_t i = 0; i < plate_count_; ++i)
         plates_[i].plate.alpha = plate_fade_.step(plates_[i].id, plate_alpha_[i], dt, plates_[i].plate.target);
     plate_fade_.end_frame();
-    for (std::size_t i : plate_order_) plate_layer_->draw(plates_[i].plate);
+    for (std::size_t i : plate_order_) {
+        const auto& entry = plates_[i];
+        const auto& plate = entry.plate;
+        if (!plate_layer_->draw(plate)) continue;
+        const bool visible_canvas = plate.canvas && std::any_of(plate.canvas->commands.begin(), plate.canvas->commands.end(),
+            [&](const game::CanvasCommand& command) {
+                const float alpha = command.kind == game::CanvasCommandKind::Gradient ? std::max(command.alpha, command.alpha2) : command.alpha;
+                return alpha * plate.alpha > 0.05f;
+            });
+        if (visible_canvas && plate.canvas->clickable &&
+            canvas_registry && canvas_registry->owner_valid(entry.canvas_owner) && plate_hits_.size() < 1024) {
+            auto bounds = plate_layer_->bounds_of(plate);
+            bounds.x = std::max(bounds.x, view_area_.x); bounds.y = std::max(bounds.y, view_area_.y);
+            bounds.z = std::min(bounds.z, view_area_.x + view_area_.w); bounds.w = std::min(bounds.w, view_area_.y + view_area_.h);
+            const auto spawn = world.spawns.find(entry.id);
+            if (bounds.z > bounds.x && bounds.w > bounds.y && spawn != world.spawns.end())
+                plate_hits_.push_back({entry.id, bounds, entry.head, plate.through_walls, plate.depth,
+                                       entry.canvas_owner, spawn->second.incarnation});
+        }
+    }
+    plate_hit_connection_ = conn_.get();
+    plate_hit_serial_ = world.spawn_set_serial;
+    plate_hit_zone_ = conn_->zone_id();
+    plate_hit_time_ = Clock::now();
+    if (!plate_hits_.empty()) {
+        plate_inverse_view_ = glm::inverse(scene_view_proj);
+        plate_camera_ = camera_.position; plate_forward_ = camera_.forward();
+        plate_hit_view_ = {view_area_.x, view_area_.y, view_area_.w, view_area_.h};
+    }
     dl->PopClipRect();
 }
 
-void ClientApp::register_eq_api(lua_State* L) { eq_api_->register_functions(L); }
+void ClientApp::register_ui_api(lua_State* L) { ui_api_->register_functions(L); }
 
-// What the Lua windows' eq.* functions read this frame.
+// What the Lua windows' hs.* functions read this frame.
 void ClientApp::sync_item_preview() {
     sync_item_preview(previews_[0], conn_ ? &conn_->item_preview() : nullptr);
     sync_item_preview(previews_[1], conn_ ? &conn_->marketplace().preview : nullptr);
@@ -260,8 +377,8 @@ void ClientApp::sync_item_preview(PreviewSlot& slot, const net::GameConnection::
     }
 }
 
-void ClientApp::update_eq_host() {
-    EqHost& h = eq_host_;
+void ClientApp::update_ui_host() {
+    UiHost& h = ui_host_;
     h.conn = conn_.get();
     if (!h.item_preview_image) {
         h.item_preview_image = [this](int w, int ht, int view) -> void* {
@@ -315,7 +432,7 @@ void ClientApp::update_eq_host() {
                         ? config_.get_string("login.last_world." + (server_profile_.id.empty() ? std::string("_test") : server_profile_.id), "")
                         : std::string();
     h.character = stats_ui_ ? stats_ui_->character() : nullptr;
-    // The player customization window's model (app/lua_eq_customization.cpp).
+    // The player customization window's model (app/lua_ui_customization.cpp).
     h.char_library = actor_renderer_ ? &actor_renderer_->library() : nullptr;
     h.player_model.reset();
     if (actor_renderer_ && h.in_game)
@@ -331,32 +448,34 @@ void ClientApp::update_eq_host() {
     if (actions_ui_) {
         const auto* ch = h.in_game ? h.character : nullptr;
         actions_ui_->compass().process(static_cast<std::uint32_t>(net::GameConnection::now_ms()),
-                                       h.in_game && eq_api_ && eq_api_->shown("CompassWindow"),
+                                       h.in_game && ui_api_ && ui_api_->shown("CompassWindow"),
                                        ch ? ch->sheet().skills[game::mechanics::skill::kSenseHeading] : -1,
                                        [] { return static_cast<std::int32_t>(std::rand() & 0x7fff); });
     }
     h.air = movement_.air_supply();
     h.max_air = movement_.max_air_supply();
     h.zone_short_name = conn_ ? conn_->world().zone_short_name : std::string();
-    h.zone_long_name = conn_ ? conn_->world().zone_long_name : std::string();
+    h.zone_long_name = conn_ ? conn_->zone_display_name() : std::string();
     h.game_hour = sky_hour_;
     h.feet_valid = h.in_game;
     h.guide_line = guide_.active() && h.in_game ? &guide_.line() : nullptr;
     if (!h.guide_to) {
         h.guide_to = [this](std::uint32_t id) {
-            if (!conn_) return false;
+            if (!conn_ || !conn_->npc_find_allowed(id)) return false;
             const auto& spawns = conn_->world().spawns;
             auto it = spawns.find(id);
             if (it == spawns.end()) return false;
-            guide_.start(id, game::display_name(it->second.name));
+            guide_.start(id, game::display_name(it->second.name),
+                find_walk_eligibility([this] { return conn_.get(); }, *conn_, id));
             guide_zone_ = conn_->world().zone_short_name;
             return true;
         };
         h.end_guide = [this] { guide_.stop(); };
         h.walk_to = [this](std::uint32_t id) -> std::string {
-            if (!nav_ || !eq_host_.guide_to || !eq_host_.guide_to(id)) return "no such NPC";
+            if (!nav_ || !ui_host_.guide_to || !ui_host_.guide_to(id)) return "no such NPC";
             // Close enough to talk to (within the guide path's arrival, so it says "You have reached").
-            return nav_->go_to_spawn(id, 10.0f);
+            return nav_->go_to_spawn_guarded(id, 10.0f,
+                find_walk_eligibility([this] { return conn_.get(); }, *conn_, id));
         };
     }
     for (int i = 0; i < 3; ++i) h.feet[i] = feet_[i];
@@ -386,29 +505,29 @@ void ClientApp::update_eq_host() {
             };
             hooks.window_active = [this, screen](game::HotButtonWindow w) {
                 if (w == game::HotButtonWindow::SpellBook && spell_ui_) return spell_ui_->book_open();
-                return eq_api_ && eq_api_->shown(screen(w));
+                return ui_api_ && ui_api_->shown(screen(w));
             };
             hooks.window_show = [this, screen](game::HotButtonWindow w, bool show) {
                 if (w == game::HotButtonWindow::SpellBook) {
                     if (spell_ui_ && spell_ui_->book_open() != show) spell_ui_->toggle_book();
-                } else if (eq_api_) {
-                    eq_api_->show(screen(w), show);
+                } else if (ui_api_) {
+                    ui_api_->show(screen(w), show);
                 }
             };
             hooks.execute_cmd = [this](std::uint32_t command) { key_command({static_cast<int>(command), true}); };
             hooks.toggle_view = [this] { toggle_view(); };
-            hooks.pet_button = [this](int button) { return eq_api_ && eq_api_->click_child("PetInfoWindow", "Pet" + std::to_string(button) + "_Button"); };
+            hooks.pet_button = [this](int button) { return ui_api_ && ui_api_->click_child("PetInfoWindow", "Pet" + std::to_string(button) + "_Button"); };
             hooks.use_item = [this](std::int32_t slot, std::int32_t bag) {
-                if (eq_api_) eq_api_->right_click_item(net::ItemSlot::possessions(static_cast<std::int16_t>(slot), static_cast<std::int16_t>(bag)));
+                if (ui_api_) ui_api_->right_click_item(net::ItemSlot::possessions(static_cast<std::int16_t>(slot), static_cast<std::int16_t>(bag)));
             };
             hooks.open_social_editor = [&h](std::int32_t social) {
                 if (h.open_social_editor) h.open_social_editor(social);
             };
             hooks.show_aa_ability = [this](std::int32_t group) {
-                if (eq_api_) eq_api_->activate_window("AAWindow", group);
+                if (ui_api_) ui_api_->activate_window("AAWindow", group);
             };
             hooks.spell_gem_right_click = [this](std::int32_t gem) {
-                if (eq_api_) eq_api_->click_gem(gem, true);
+                if (ui_api_) ui_api_->click_gem(gem, true);
             };
             // Lua socials (game/lua_social.h): their Lua runs in the script host with the modifiers held now.
             hooks.press_lua_social = [this](std::int32_t social, int bar, int button) {
@@ -490,7 +609,7 @@ void ClientApp::update_eq_host() {
     wire_bug_reports(h);
 }
 
-// /luasocial [n | new]: opens the Lua social editor (the UI pack's window takes EqHost::lua_social_edit).
+// /luasocial [n | new]: opens the Lua social editor (the UI pack's window takes UiHost::lua_social_edit).
 void ClientApp::lua_social_command(std::string_view args) {
     while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
     auto say = [this](const std::string& text) {
@@ -510,7 +629,7 @@ void ClientApp::lua_social_command(std::string_view args) {
         if (ec != std::errc() || n < 1 || n > kSocials) return say("[Lua] usage: /luasocial [1..120 | new]");
         social = n - 1;
     }
-    eq_host_.lua_social_edit = social;
+    ui_host_.lua_social_edit = social;
 }
 
 } // namespace hailstone::app::client_internal

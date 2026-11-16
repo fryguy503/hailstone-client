@@ -1,6 +1,6 @@
 #pragma once
 
-// UiValue (plugin/ui_bridge.h) to and from Lua, for the UI's eq.Plugin (app/lua_eq_plugins.cpp) and the scripts'
+// UiValue (plugin/ui_bridge.h) to and from Lua, for the UI's hs.Plugin (app/lua_ui_plugins.cpp) and the scripts'
 // hailstone module (mq/lua_hailstone.cpp).
 
 #include <cstddef>

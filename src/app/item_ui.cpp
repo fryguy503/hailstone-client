@@ -4,6 +4,7 @@
 
 #include "core/log.h"
 #include "net/game_connection.h"
+#include "game/server_ext.h"
 
 namespace hailstone::app {
 
@@ -37,6 +38,8 @@ void ItemUi::draw(net::GameConnection& conn) {
     in.inventory = &conn.inventory();
     in.coins = conn.coins();
     in.class_mask = conn.player_class_mask();
+    in.item_flags = [&conn](const net::Item& item, std::string_view flags) { return conn.server_ext().item_flags(conn, item, flags); };
+    in.item_description_append = [&conn](const net::Item& item) { return conn.server_ext().item_description_append(conn, item); };
     if (const auto& loot = conn.loot_session(); loot && loot->open) {
         in.corpse_id = loot->corpse_id;
         in.corpse_name = loot->corpse_name;

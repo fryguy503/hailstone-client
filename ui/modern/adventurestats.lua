@@ -3,6 +3,7 @@
 -- losses, win rank, win rate, rate rank, points), and Refresh / Leaderboard. The numbers are the original's
 -- (AdvStats_ThemeList, AdvStats_AvailableValue) and the buttons its own. Until the server has sent the record the
 -- rows read 0, "---" for a rank and 0.0%; "-" only stands in for a totals row the list does not have.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -45,6 +46,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Adventure Stats", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Adventure Record", WINDOW_OPTS, drawWindow)
 end)

@@ -3,7 +3,9 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <mutex>
+#include <span>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -155,4 +157,62 @@ TEST_CASE("Scene lanes: a job queued without a target draws into the first") {
     lanes.clear();
     lanes.each_in(0, [&](std::size_t) { ++calls; });
     CHECK(calls == 1);
+}
+
+TEST_CASE("Scene lanes: joined actor poses and borrowed world batches keep author and receipt observers on the caller") {
+    // The CPU contract used at the application's world-author boundary: record joins before the observer reads
+    // actor state, and a borrowed batch is consumed completely before its owner is released. This does not create
+    // Vulkan buffers or prove ClientApp's placement of these barriers or the resulting pixels.
+    const auto caller = std::this_thread::get_id();
+    for (unsigned workers : {0u, 3u}) {
+        CAPTURE(workers);
+        const auto previous = core::workers();
+        core::WorkerPool pool(workers);
+        struct RestoreWorkers {
+            core::WorkerPool* previous;
+            ~RestoreWorkers() { core::set_workers(previous); }
+        } restore{previous};
+        core::set_workers(&pool);
+        std::array<int, 3> actors{};
+        std::array<int, 3> pose{};
+        render::SceneLanes lanes;
+        for (int pass = 0; pass < 2; ++pass)
+            for (auto& actor : actors) lanes.add(&actor);
+        lanes.record([&](std::size_t job) { pose[lanes.lane_of(job)] += static_cast<int>(job + 1); });
+
+        // Author code may read the completed poses and construct the frame's owned geometry on the caller.
+        const auto observe = [&] {
+            CHECK(std::this_thread::get_id() == caller);
+            CHECK_FALSE(core::WorkerPool::on_worker());
+            CHECK(pose == std::array<int, 3>{5, 7, 9});
+            return std::make_shared<const std::vector<int>>(pose.begin(), pose.end());
+        };
+        auto storage = observe();
+        const std::weak_ptr<const std::vector<int>> lifetime = storage;
+        const std::span<const int> borrowed(*storage);
+        const int* const original_data = storage->data();
+        lanes.clear();
+        std::array<int, 3> renderers{};
+        for (auto& renderer : renderers) lanes.add(&renderer);
+        std::array<int, 3> recorded{};
+        std::array<bool, 3> owner_alive{}, borrowed_original{};
+        lanes.record([&](std::size_t job) {
+            owner_alive[job] = !lifetime.expired();
+            borrowed_original[job] = borrowed.data() == original_data;
+            for (int value : borrowed) recorded[job] += value;
+        });
+        // Receipts and owner retirement follow the joined GPU-only work; no author callback was a queued job.
+        const auto receipts = [&] {
+            CHECK(std::this_thread::get_id() == caller);
+            CHECK_FALSE(core::WorkerPool::on_worker());
+            for (std::size_t job = 0; job < recorded.size(); ++job) {
+                CHECK(recorded[job] == 21);
+                CHECK(owner_alive[job]);
+                CHECK(borrowed_original[job]);
+            }
+        };
+        receipts();
+        storage.reset();
+        CHECK(lifetime.expired());
+    }
 }

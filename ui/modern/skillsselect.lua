@@ -1,6 +1,7 @@
 -- Choose a skill: replaces the game's SkillsSelectWindow, the picker a right click on an Actions window ability
 -- button opens. The skills the button can take as rows with a search; a click is the original list's click (the
 -- skill goes on the button and the picker closes), "(none)" empties the button.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local P = dofile("lib/progress.lua")
 local T = hud.T
@@ -34,9 +35,9 @@ local function body(x, y, w, h, s)
   })
 end
 
-local function testOpen() eq.ClickChild("ActionsWindow", "AAP_FirstAbilityButton", "right") end
+local function testOpen() API.windows.ClickChild("ActionsWindow", "AAP_FirstAbilityButton", "right") end
 ui.window("Choose a skill", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   hud.Dialog(WINDOW, "Choose a skill", OPTS, body)
 end)

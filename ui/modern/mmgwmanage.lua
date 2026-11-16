@@ -4,6 +4,7 @@
 -- Switch). Lists, check box and buttons are the original's children: a stance row click changes the stance at once,
 -- as on the stock list, and each button is enabled, labelled and explained (its tooltip) as the game sets it.
 -- (The tabs are this window's own: the game fills both pages whichever is shown.)
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -24,7 +25,7 @@ local function list(id, h, empty, tip)
     local c = r.color or C.text
     local text = table.concat(r.texts, "  "):gsub("^%s+", "")
     ui.PushStyleColor(ui.Col.Text, c[1], c[2], c[3], 1)
-    if ui.Selectable(text .. "##" .. i, i - 1 == selected) then eq.ListClick(WINDOW, id, i - 1, "left") end
+    if ui.Selectable(text .. "##" .. i, i - 1 == selected) then API.windows.ListClick(WINDOW, id, i - 1, "left") end
     ui.PopStyleColor(1)
     if tip then M.Tip(tip) end
   end
@@ -35,7 +36,7 @@ local function list(id, h, empty, tip)
 end
 
 local function tip(id, fallback)
-  local t = eq.ChildTooltip(WINDOW, id)
+  local t = API.windows.ChildTooltip(WINDOW, id)
   return (t and t ~= "") and t or fallback
 end
 
@@ -85,7 +86,7 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Manage Mercenaries", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   M.TestOpen(WINDOW)
   hud.Dialog(WINDOW, "Mercenary", OPTS, body)
 end)

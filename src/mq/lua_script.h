@@ -65,6 +65,8 @@ class LuaExtension;
 // script gave the client (its server extension, its UI) taken back.
 void register_hailstone(lua_State* L);
 void release_plugin(Script& s);
+// A live capability/activation or whole-hook-source change invalidates source-owned interactions.
+void invalidate_plugin_lifecycle(Script& s);
 // The script's mq.configDir: env.config_dir for a script with every capability, config/<name>/ for another.
 fs::path script_config_dir(const Script& s);
 
@@ -147,6 +149,8 @@ struct ScriptHost::Impl {
     std::vector<std::string> autorun;
     // Starts those of `names` that are not running and the rules allow, quietly (not asked for by a command).
     void start_allowed(const std::vector<std::string>& names);
+    std::vector<ManagedScript> managed;
+    void start_managed();
     // found()'s hashes, by file, kept while the file's size and time stay the same (the window asks each frame).
     struct HashEntry {
         std::uintmax_t size = 0;
@@ -173,6 +177,8 @@ struct Script {
     Sha256Digest hash{};
     // Modules already loaded into this state remain subject to a later server policy change.
     std::vector<std::pair<std::string, Sha256Digest>> modules;
+    bool managed = false;
+    Sha256Digest managed_revision{};
     std::uint32_t caps = 0;
     lua_State* L = nullptr;
     lua_State* co = nullptr;

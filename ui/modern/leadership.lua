@@ -3,6 +3,7 @@
 -- abilities of one kind (tabs) as rows with their rank and the next rank's cost, and the selected one's description
 -- with Purchase and hotkey creation. Everything is the original's children: a row click selects in the game's
 -- list (LEList1 / LEList2); buttons use the window's permissions, ranks and hotkey labels.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -26,7 +27,7 @@ local function card(x, y, w, h, s, title, points, gauge, color)
   T.Text(x + w - pad, y + 4 * s, p ~= "" and p or "0", C.gold, T.font.large, "right")
   T.Text(x + w - pad - T.TextSize(p ~= "" and p or "0", T.font.large) - 6 * s, y + 10 * s, "points", C.faint,
     T.font.tiny, "right")
-  local frac, text = eq.ChildGauge(WINDOW, gauge)
+  local frac, text = API.windows.ChildGauge(WINDOW, gauge)
   T.Bar("lead." .. gauge, x + pad, y + h - 24 * s, x + w - pad, y + h - 16 * s, s, frac or 0, color, { noTrail = true })
   T.Text(x + pad, y + h - 14 * s, "Toward the next point", C.faint, T.font.tiny)
   if text and text ~= "" then T.Text(x + w - pad, y + h - 14 * s, text, C.muted, T.font.tiny, "right") end
@@ -106,7 +107,7 @@ local function drawWindow(x, y, w, h, s)
     if n > 1 then ui.SameLine(0, 6 * s) end
     local id = "LEW_HotkeyButton" .. n
     W.Button(WINDOW, id, "Create Hotkey " .. n, { width = hw, height = btnH,
-      tooltip = eq.ChildTooltip(WINDOW, id) or "Create a hotkey for the selected ability, then place it on a hot bar" })
+      tooltip = API.windows.ChildTooltip(WINDOW, id) or "Create a hotkey for the selected ability, then place it on a hot bar" })
   end
   ui.SetCursorScreenPos(x, y + h - btnH)
   local mw = 150 * s
@@ -119,6 +120,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Leadership", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Leadership", WINDOW_OPTS, drawWindow)
 end)

@@ -149,6 +149,7 @@ Window::Window(const WindowDesc& desc) {
 
     SDL_WindowFlags flags = SDL_WINDOW_VULKAN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (desc.resizable) flags |= SDL_WINDOW_RESIZABLE;
+    if (desc.hidden) flags |= SDL_WINDOW_HIDDEN;
     if (desc.maximized) flags |= SDL_WINDOW_MAXIMIZED;
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, desc.title.c_str());

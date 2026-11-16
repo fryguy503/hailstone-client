@@ -10,6 +10,9 @@
 
 #include "app/automation.h"
 #include "app/addon_install.h"
+#include "app/addon_requirements.h"
+#include "core/config.h"
+#include "core/game_dir.h"
 #include "mq/lua_mq.h"
 #include "mq_test_world.h"
 #include "core/sha256.h"
@@ -24,11 +27,12 @@ struct AutomationHost {
     mq_test::World world{"hailstone_automation_test"};
     std::unique_ptr<app::Automation> automation;
     std::vector<std::pair<mq::AbilityKind, std::string>> used;
-    AutomationHost() {
+    explicit AutomationHost(std::function<std::string(std::string_view)> sdk_layout = {}) {
         net::GameConnectionTestAccess::set_server_rules(*world.conn, plugin::Rules{}); // no hailstone.cfg: free
         app::AutomationEnv env;
         env.data_dir = world.dir / "data";
         env.install_dir = world.dir / "install";
+        env.sdk_layout = std::move(sdk_layout);
         env.connection = [this] { return world.conn.get(); };
         env.autoskill_list = [] {
             game::AutoskillRule kick;
@@ -61,6 +65,36 @@ struct AutomationHost {
     }
 };
 } // namespace
+
+TEST_CASE("Automation: SDK layout settings are fresh exact-hash shared-file reads") {
+    mq_test::World world("sdk_layout_settings");
+    const auto shared_path = world.dir / "hailstone.ini";
+    const std::string hash(64, 'a'), upper(64, 'A'), other(64, 'b');
+    const auto key = "plugin.sdk_layout." + hash;
+    CHECK(app::configured_plugin_sdk_layout(shared_path, hash).empty());
+    Config shared;
+    shared.set(key, "ui-preview-1"); REQUIRE(shared.save(shared_path));
+    CHECK(app::configured_plugin_sdk_layout(shared_path, hash) == "ui-preview-1");
+    CHECK(app::configured_plugin_sdk_layout(shared_path, other).empty());
+    CHECK(app::configured_plugin_sdk_layout(shared_path, upper) == "ui-preview-1");
+    REQUIRE(shared.attach_character(world.dir / "character.ini"));
+    shared.set(key, "character-must-not-choose"); REQUIRE(shared.save(shared_path));
+    CHECK(shared.get(key) == "character-must-not-choose");
+    CHECK(app::configured_plugin_sdk_layout(shared_path, hash) == "ui-preview-1");
+    Config changed; changed.set(key, "unknown-layout"); REQUIRE(changed.save(shared_path));
+    CHECK(app::configured_plugin_sdk_layout(shared_path, hash) == "unknown-layout"); // loader validates the value
+    changed.set(key, ""); REQUIRE(changed.save(shared_path));
+    CHECK(app::configured_plugin_sdk_layout(shared_path, hash).empty());
+    changed.erase(key); changed.set("plugin.sdk_layout." + upper, "ui-preview-1"); REQUIRE(changed.save(shared_path));
+    CHECK(app::configured_plugin_sdk_layout(shared_path, hash) == "ui-preview-1");
+    changed.set(key, ""); REQUIRE(changed.save(shared_path));
+    CHECK_FALSE(app::configured_plugin_sdk_layout(shared_path, hash).empty()); // conflicting case variants fail closed
+    CHECK(app::configured_plugin_sdk_layout(shared_path, hash) != "ui-preview-1");
+    changed.set(key, "ui-preview-1"); REQUIRE(changed.save(shared_path));
+    CHECK(app::configured_plugin_sdk_layout(shared_path, hash) == "ui-preview-1");
+    CHECK_FALSE(app::configured_plugin_sdk_layout(shared_path, "../bad-key").empty());
+    CHECK_FALSE(app::configured_plugin_sdk_layout(world.dir, hash).empty()); // existing non-file is not a missing config
+}
 
 TEST_CASE("Automation: a script holds autoskill off while it runs; stopping it lets go") {
     AutomationHost h;
@@ -147,6 +181,57 @@ TEST_CASE("Automation: enforcement lazily attributes current code and refreshes 
     CHECK(h.automation->scripts().running("managed"));
     CHECK(h.automation->scripts().caps_of("managed") == plugin::kCapRead);
     CHECK_FALSE(h.automation->scripts().run("copy", {}));
+}
+
+TEST_CASE("Automation: required managed scripts preserve activation and UI packages never become autorun scripts") {
+    AutomationHost h;
+    const auto data = h.world.dir / "data";
+    const std::string code = "while true do require('mq').delay(10) end\n";
+    app::InstalledAddon script;
+    script.name = "managed"; script.source = "maker/managed"; script.version = "1.0.0";
+    script.caps = plugin::kCapRead | plugin::kCapUi;
+    script.autoload = script.enabled = true;
+    script.files = {{"init.lua", code.size(), sha256(code)}};
+    h.write("managed/init.lua", code);
+    app::InstalledAddon interface;
+    interface.name = "interface"; interface.source = "maker/interface"; interface.version = "1.0.0";
+    interface.kind = AddonKind::Ui;
+    const std::string descriptor = "name=Interface\nbase=builtin:modern\n";
+    const auto folder = app::addon_folder(data, AddonKind::Ui, interface.name) / "ui/skin";
+    fs::create_directories(folder);
+    std::ofstream(folder / "ui.ini", std::ios::binary) << descriptor;
+    interface.files = {{"ui/skin/ui.ini", descriptor.size(), sha256(descriptor)}};
+    fs::create_directories(app::addons_dir(data));
+    REQUIRE(app::write_installed_addons(data, {script, interface}));
+    CHECK(app::modified_addon_files(data, interface).empty());
+    h.automation->set_addon_ceilings(app::addon_ceilings(data));
+    h.automation->refresh_managed_addons();
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer=on\n[addons]\nenforce=on\ndefault=deny\n"
+                                          "required=maker/managed,maker/interface\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("managed"));
+    CHECK(h.automation->plugin_caps("script:managed") == (plugin::kCapRead | plugin::kCapUi));
+    std::string problem;
+    CHECK(h.automation->required_addons_ready(&problem));
+    CHECK(problem.empty());
+    CHECK_FALSE(h.automation->scripts().running("interface"));
+    CHECK_FALSE(h.automation->scripts().run("interface", {}));
+    const auto managed = app::managed_addon_scripts(data);
+    REQUIRE(managed.size() == 1);
+    CHECK(managed.front().name == "managed");
+    CHECK(app::addon_requirement_problems(rules,
+        {{interface.name, interface.source, AddonKind::Ui, 0, true, false}}).size() == 1); // only script is missing
+    REQUIRE(app::set_addon_enabled(data, "managed", false));
+    h.automation->refresh_managed_addons();
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("managed"));
+    CHECK_FALSE(h.automation->required_addons_ready(&problem));
+    CHECK_FALSE(problem.empty());
+    const auto registry = app::read_installed_addons(data);
+    REQUIRE(app::find_addon(registry, "managed"));
+    CHECK_FALSE(app::find_addon(registry, "managed")->enabled); // server requirements do not rewrite player activation
 }
 
 TEST_CASE("Automation: hailstone.autoskill_list gives the player's list with names and conditions") {
@@ -260,6 +345,29 @@ print('[max] train ' .. tostring(hs.train_aa(10)) .. ' ' .. tostring(hs.train_aa
 }
 
 #ifdef HAILSTONE_EXAMPLE_PLUGIN
+TEST_CASE("Automation: native loading forwards the exact admitted binary hash and refreshes layout decisions") {
+    std::vector<std::string> hashes;
+    std::string selected = "invalid-layout-fixture";
+    AutomationHost h([&](std::string_view hash) { hashes.emplace_back(hash); return selected; });
+    const fs::path built = HAILSTONE_EXAMPLE_PLUGIN;
+    const fs::path plugin_dir = h.world.dir / "data" / "plugins" / "MQ2Example";
+    fs::create_directories(plugin_dir);
+    fs::copy_file(built, plugin_dir / built.filename());
+    const auto bytes = read_file(built); REQUIRE(bytes);
+    const auto actual = sha256(*bytes);
+    h.automation->frame();
+    REQUIRE_FALSE(hashes.empty()); CHECK(hashes.back() == to_hex(actual));
+    CHECK(h.automation->plugin_caps("plugin:MQ2Example") == 0);
+    const auto attempts = hashes.size();
+    selected.clear();
+    // Reload through Automation's real command bus, as ClientApp's connection dispatches plugin commands.
+    std::string retry = "/plugin MQ2Example load";
+    REQUIRE(h.automation->hooks().command(retry)); h.automation->frame();
+    CHECK(hashes.size() > attempts);
+    CHECK(h.automation->plugin_caps("plugin:MQ2Example") == plugin::kCapAll);
+    CHECK(hashes.back() == to_hex(actual));
+}
+
 // A script add-on that names itself after a compiled plugin (a "read,ui" script called "nms" beside the NMS server's
 // plugin) gets neither the plugin's capabilities in its windows nor its folder, functions, options or menu: each is
 // the owner's by kind and name (plugin::UiBridge::owner_tag).
@@ -316,7 +424,7 @@ while true do require('mq').delay(10) end
     CHECK(ui.folders()[0].first == "plugin:MQ2Example");
     CHECK(ui.folders()[0].second == plugin_dir);
     CHECK(ui.folders()[1].first == "script:mq2example");
-    // eq.Plugin("MQ2Example") is the compiled plugin's; the script's by its tag.
+    // hs.Plugin("MQ2Example") is the compiled plugin's; the script's by its tag.
     CHECK(ui.call("MQ2Example", "secret", {})->s == "plugin");
     CHECK(ui.call("script:mq2example", "secret", {})->s == "script");
     REQUIRE(ui.menu().size() == 1);

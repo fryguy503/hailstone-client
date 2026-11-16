@@ -1,4 +1,4 @@
-// Adventure window models over the real eq API: the Alt+V view without a recruiter, offer and active states,
+// Adventure window models over the real hs API: the Alt+V view without a recruiter, offer and active states,
 // profile balances, complete theme statistics, and the native leaderboard's category/risk and tied standings.
 #include <doctest/doctest.h>
 
@@ -11,8 +11,8 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_menu.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_menu.h"
 #include "core/byte_io.h"
 #include "game/keymap.h"
 #include "manual_clock.h"
@@ -42,8 +42,8 @@ struct AdventureUi {
     ImGuiScope imgui;
     test::ManualClock clock;
     mq_test::World world{"hailstone_adventure_windows", with_clock(clock)};
-    app::EqHost host;
-    app::EqApi api{host};
+    app::UiHost host;
+    app::UiApi api{host};
     lua_State* L = luaL_newstate();
 
     AdventureUi() {
@@ -54,7 +54,7 @@ struct AdventureUi {
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
     }
     ~AdventureUi() { lua_close(L); }
 
@@ -100,14 +100,14 @@ TEST_CASE("adventure windows: Alt+V and the menu toggle the adventure away from 
     CHECK_FALSE(ui.api.shown("AdventureRequestWnd"));
     ui.api.toggle(app::toggle_command_window(command));
     CHECK(ui.api.shown("AdventureRequestWnd"));
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "You are not currently assigned to an adventure.");
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "false");
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_AcceptButton'))") == "false");
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_DeclineButton'))") == "false");
-    CHECK(ui("return eq.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "false");
-    CHECK(ui("return #(eq.ComboInfo('AdventureRequestWnd', 'AdvRqst_TypeCombobox'))") == "5");
-    CHECK(ui("return #(eq.ComboInfo('AdventureRequestWnd', 'AdvRqst_RiskCombobox'))") == "2");
-    CHECK(ui("return eq.ClickChild('AdventureRequestWnd', 'AdvRqst_ViewStatsButton', 'left')") == "true");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "You are not currently assigned to an adventure.");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "false");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_AcceptButton'))") == "false");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_DeclineButton'))") == "false");
+    CHECK(ui("return hs.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "false");
+    CHECK(ui("return #(hs.ComboInfo('AdventureRequestWnd', 'AdvRqst_TypeCombobox'))") == "5");
+    CHECK(ui("return #(hs.ComboInfo('AdventureRequestWnd', 'AdvRqst_RiskCombobox'))") == "2");
+    CHECK(ui("return hs.ClickChild('AdventureRequestWnd', 'AdvRqst_ViewStatsButton', 'left')") == "true");
     CHECK(ui.api.shown("AdventureStatsWnd"));
     ui.api.toggle("AdventureRequestWnd");
     CHECK_FALSE(ui.api.shown("AdventureRequestWnd"));
@@ -118,15 +118,15 @@ TEST_CASE("adventure windows: recruiter offers and active adventures expose sepa
     AdventureUi ui;
     ui.recruiter();
     CHECK(ui.api.shown("AdventureRequestWnd"));
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "true");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "true");
     ui.receive(text_packet(Op::AdventureInfo, "Recruiter introduction."));
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "Recruiter introduction.");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "Recruiter introduction.");
     ui.receive(text_packet(Op::AdventureDetails, "Offered <adventure> & briefing."));
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "Offered &lt;adventure&gt; &amp; briefing.");
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "false");
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_AcceptButton'))") == "true");
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_DeclineButton'))") == "true");
-    CHECK(ui("return eq.ClickChild('AdventureRequestWnd', 'AdvRqst_DeclineButton', 'left')") == "true");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "Offered &lt;adventure&gt; &amp; briefing.");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "false");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_AcceptButton'))") == "true");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_DeclineButton'))") == "true");
+    CHECK(ui("return hs.ClickChild('AdventureRequestWnd', 'AdvRqst_DeclineButton', 'left')") == "true");
     CHECK(ui.world.conn->adventure().offer.empty());
 
     AdventureData active;
@@ -141,34 +141,34 @@ TEST_CASE("adventure windows: recruiter offers and active adventures expose sepa
     count.le<std::uint32_t>(10);
     ui.receive(make_packet(Op::AdventureUpdate, std::move(count))); // kept, shown once inside
     ui.clock.advance(31s);
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "Current briefing.");
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_EnterTimeLeftLabel')") == "2 minutes");
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_CompleteTimeLeftLabel')") == "");
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_ProgressTextLabel')") == "");
-    CHECK(ui("return select(2, eq.ComboInfo('AdventureRequestWnd', 'AdvRqst_RiskCombobox'))") == "1");
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_AcceptButton'))") == "false");
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_DeclineButton'))") == "false");
-    CHECK(ui("return eq.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "true");
-    CHECK(ui("return (eq.ChildState('AdventureRequestWnd', 'AdvRqst_LeaveButton'))") == "true");
-    ui("eq.ClickChild('AdventureRequestWnd', 'AdvRqst_DeclineButton', 'left')");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "Current briefing.");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_EnterTimeLeftLabel')") == "2 minutes");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_CompleteTimeLeftLabel')") == "");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_ProgressTextLabel')") == "");
+    CHECK(ui("return select(2, hs.ComboInfo('AdventureRequestWnd', 'AdvRqst_RiskCombobox'))") == "1");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_AcceptButton'))") == "false");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_DeclineButton'))") == "false");
+    CHECK(ui("return hs.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "true");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_LeaveButton'))") == "true");
+    ui("hs.ClickChild('AdventureRequestWnd', 'AdvRqst_DeclineButton', 'left')");
     CHECK(ui.world.conn->adventure().data.assigned);
 
     active.time_to_enter = 0;
     active.time_left = 90;
     active.risk = 0;
     ui.receive(encode(active));
-    CHECK(ui("return select(2, eq.ComboInfo('AdventureRequestWnd', 'AdvRqst_RiskCombobox'))") == "0");
+    CHECK(ui("return select(2, hs.ComboInfo('AdventureRequestWnd', 'AdvRqst_RiskCombobox'))") == "0");
     ui.clock.advance(1s);
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_EnterTimeLeftLabel')") == "");
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_CompleteTimeLeftLabel')") == "2 minutes");
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_ProgressTextLabel')") == "3 / 10");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_EnterTimeLeftLabel')") == "");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_CompleteTimeLeftLabel')") == "2 minutes");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_ProgressTextLabel')") == "3 / 10");
     ui.clock.advance(30s);
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_CompleteTimeLeftLabel')") == "1 minute");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_CompleteTimeLeftLabel')") == "1 minute");
     ui.clock.advance(100s);
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_CompleteTimeLeftLabel')") == "0 minutes");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_CompleteTimeLeftLabel')") == "0 minutes");
     ui.receive(encode(AdventureData{}));
-    CHECK(ui("return eq.WindowText('AdventureRequestWnd', 'AdvRqst_ProgressTextLabel')") == "");
-    CHECK(ui("return eq.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "false");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_ProgressTextLabel')") == "");
+    CHECK(ui("return hs.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "false");
 }
 
 TEST_CASE("adventure windows: profile points and full theme statistics include percentages without overflow") {
@@ -178,7 +178,7 @@ TEST_CASE("adventure windows: profile points and full theme statistics include p
     profile.adventure_points = {11, 22, 33, 44, 55};
     profile.adventure_points_available = 165;
     ui.receive(test::build_player_profile(profile));
-    CHECK(ui("return eq.WindowText('AdventureStatsWnd', 'AdvStats_AvailableValue')") == "165");
+    CHECK(ui("return hs.WindowText('AdventureStatsWnd', 'AdvStats_AvailableValue')") == "165");
     auto rows = ui.api.list_rows("AdventureStatsWnd", "AdvStats_ThemeList");
     REQUIRE(rows.size() == 6);
     REQUIRE(rows[0].size() == 7);
@@ -211,10 +211,10 @@ TEST_CASE("adventure windows: profile points and full theme statistics include p
 
 TEST_CASE("adventure windows: leaderboard category and risk are independent and ties retain competition ranks") {
     AdventureUi ui;
-    CHECK(ui("return #(eq.ComboInfo('AdventureLeaderboardWnd', 'AdvLeaderboard_SelectCombobox'))") == "12");
-    CHECK(ui("return (eq.ComboInfo('AdventureLeaderboardWnd', 'AdvLeaderboard_SelectCombobox'))[1]") == "Total wins");
-    CHECK(ui("return (eq.ComboInfo('AdventureLeaderboardWnd', 'AdvLeaderboard_SelectCombobox'))[2]") == "Total percentage");
-    CHECK(ui("return #(eq.ComboInfo('AdventureLeaderboardWnd', 'AdvLeaderboard_RiskCombobox'))") == "3");
+    CHECK(ui("return #(hs.ComboInfo('AdventureLeaderboardWnd', 'AdvLeaderboard_SelectCombobox'))") == "12");
+    CHECK(ui("return (hs.ComboInfo('AdventureLeaderboardWnd', 'AdvLeaderboard_SelectCombobox'))[1]") == "Total wins");
+    CHECK(ui("return (hs.ComboInfo('AdventureLeaderboardWnd', 'AdvLeaderboard_SelectCombobox'))[2]") == "Total percentage");
+    CHECK(ui("return #(hs.ComboInfo('AdventureLeaderboardWnd', 'AdvLeaderboard_RiskCombobox'))") == "3");
     for (int category = 0; category < 12; ++category) {
         CHECK(ui.api.select_combo("AdventureLeaderboardWnd", "AdvLeaderboard_SelectCombobox", category));
         const auto& selected = ui.world.conn->adventure().leaderboard_selection;
@@ -232,7 +232,7 @@ TEST_CASE("adventure windows: leaderboard category and risk are independent and 
     ui.receive(encode(AdventureLeaderboard{}));
     ui.clock.advance(10s);
     ui.world.conn->adventure_frame();
-    CHECK(ui("return eq.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_StatusLabel')") == "Updating leaderboard...");
+    CHECK(ui("return hs.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_StatusLabel')") == "Updating leaderboard...");
     AdventureLeaderboard board;
     board.success = 0;
     board.failure = 0;
@@ -247,9 +247,9 @@ TEST_CASE("adventure windows: leaderboard category and risk are independent and 
     CHECK(rows[3][0] == "4");
     CHECK(rows[0][4] == "83.3%");
     CHECK(rows[3][4] == "0.0%");
-    CHECK(ui("return eq.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_YourRankLabel')") == "---");
-    CHECK(ui("return eq.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_YourPercentLabel')") == "0.0%");
-    CHECK(ui("return eq.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_StatusLabel')") == "");
+    CHECK(ui("return hs.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_YourRankLabel')") == "---");
+    CHECK(ui("return hs.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_YourPercentLabel')") == "0.0%");
+    CHECK(ui("return hs.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_StatusLabel')") == "");
 
     // A blank wire slot is skipped visually but still counts toward the next untied rank.
     CHECK(ui.api.select_combo("AdventureLeaderboardWnd", "AdvLeaderboard_SelectCombobox", 10));
@@ -264,7 +264,7 @@ TEST_CASE("adventure windows: leaderboard category and risk are independent and 
     CHECK(rows[0][0] == "1");
     CHECK(rows[1][0] == "3");
     CHECK(rows[2][0] == "4");
-    CHECK(ui("return eq.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_YourRankLabel')") == "3");
+    CHECK(ui("return hs.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_YourRankLabel')") == "3");
 
     // A visible personal row uses the board's computed competition rank even when the header has no rank.
     ui.world.conn->adventure_leaderboard_request(0, 5, 2);
@@ -273,7 +273,7 @@ TEST_CASE("adventure windows: leaderboard category and risk are independent and 
     board.rank = 0;
     board.rows[1].name = "Tester";
     ui.receive(encode(board));
-    CHECK(ui("return eq.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_YourRankLabel')") == "1");
+    CHECK(ui("return hs.WindowText('AdventureLeaderboardWnd', 'AdvLeaderboard_YourRankLabel')") == "1");
 
     // A script can change the selected board between UI frames; each selector preserves the other live choice.
     ui.world.conn->adventure_leaderboard_request(1, 2, 1);

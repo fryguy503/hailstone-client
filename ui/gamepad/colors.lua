@@ -2,13 +2,14 @@
 --   Color picker (ColorPickerWnd: the tint window's brush, the map's colour buttons, the label window)
 --       a large preview with its hex value, red / green / blue as bars and the fifteen preset swatches. D-pad up /
 --       down picks a row, left / right change its value by one (held: on and on) or, on the presets, pick the next
---       swatch; LB / RB change it by 16. The bars and swatches are the window's sliders and buttons (eq.SetSlider,
---       eq.ClickChild): it keeps the three values in step, and Accept (A) hands the colour to whoever opened it.
+--       swatch; LB / RB change it by 16. The bars and swatches are the window's sliders and buttons (hs.SetSlider,
+--       hs.ClickChild): it keeps the three values in step, and Accept (A) hands the colour to whoever opened it.
 --       B cancels (the close box). (No ImGui navigation in it: the D-pad is the values'.)
 --   Armor dye (BodyTintWnd: the inventory's tint button)
 --       the brush (A opens the colour picker on it), then a row per tintable slot: its colour now (A takes it as
 --       the brush) and its new dye (A paints the brush on it), marked when it will change; the reagents, Reset and
 --       Save Dye (a Vial of Prismatic Dye per changed slot; the window enables it when you have enough).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -33,16 +34,16 @@ ui.window("Color Picker", function()
     local x0, y0, x1, y1, w = W.area()
     local wx, wy = ui.GetWindowPos()
     local function value(ch)
-      local _, _, v, count = eq.ChildState(CP, ch[2])
+      local _, _, v, count = API.windows.ChildState(CP, ch[2])
       return v or 0, math.max(1, (count or 256) - 1)
     end
     local function set(ch, v)
       local _, maxv = value(ch)
-      eq.SetSlider(CP, ch[2], math.max(0, math.min(maxv, v)))
+      API.windows.SetSlider(CP, ch[2], math.max(0, math.min(maxv, v)))
     end
     local function pick(i)
       preset = i % 15
-      eq.ClickChild(CP, "CPW_TC" .. preset .. "Button", "left")
+      API.windows.ClickChild(CP, "CPW_TC" .. preset .. "Button", "left")
     end
     -- the pad
     local accept = false
@@ -121,10 +122,10 @@ ui.window("Color Picker", function()
     local cancel = T.button("##cpcancel", "Cancel", hw, bh, { glyph = "b" }, pad)
     ui.SameLine(0, T.px(12))
     G.button(CP, "CPW_Accept_Button", "Accept", hw, bh, { primary = true, glyph = "a", always = true })
-    if accept then eq.ClickChild(CP, "CPW_Accept_Button", "left") end
-    if cancel then eq.ShowWindow(CP, false) end
+    if accept then API.windows.ClickChild(CP, "CPW_Accept_Button", "left") end
+    if cancel then API.windows.Show(CP, false) end
   end
-  if W.finish() then eq.ShowWindow(CP, false) end
+  if W.finish() then API.windows.Show(CP, false) end
 end)
 
 -- ---------------------------------------------------------------- armour dye
@@ -144,7 +145,7 @@ local function swatchButton(id, w, h, sub)
     T.unfont()
   end
   if focused then T.focusRing(x0, y0, x1, y1, T.px(12)) end
-  if clicked then eq.ClickChild(BT, id, "left") end
+  if clicked then API.windows.ClickChild(BT, id, "left") end
   return r, g, b
 end
 
@@ -199,5 +200,5 @@ ui.window("Armor Dye", function()
     ui.SameLine(0, T.px(12))
     G.button(BT, "TINT_SaveTint", "Save Dye", hw, bh, { primary = true, always = true })
   end
-  if W.finish() then eq.ShowWindow(BT, false) end
+  if W.finish() then API.windows.Show(BT, false) end
 end)

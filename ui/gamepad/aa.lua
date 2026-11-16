@@ -6,6 +6,7 @@
 --   X   Assign it to a hot button / cross hotbar slot (the Hotkey button's hotbutton)
 -- Under the description: the points, "Can Purchase" (the stock filter) and the AA experience percentage (- / +, the
 -- stock buttons: 10 at a time).
+local API = hs.UI
 local W = dofile("lib/window.lua")
 local T = W.T -- the window module's theme: the scale W.begin computed this frame
 local pad = W.pad
@@ -31,7 +32,7 @@ local function tabs(x0, y0, page)
     T.rect(x, y0, x + w, y0 + th + T.px(16), on and C.accent or C.raised, on and 0.9 or 1, T.px(10))
     T.textIn(x, y0, x + w, y0 + th + T.px(16), l, on and C.onAccent or C.text, 0.5)
     if ui.IsMouseHoveringRect(x, y0, x + w, y0 + th + T.px(16)) and ui.IsMouseClicked(ui.Mouse.Left) then
-      eq.SetTabPage(AW, "Subwindows", i - 1)
+      API.windows.SetTabPage(AW, "Subwindows", i - 1)
     end
     x = x + w + T.px(10)
   end
@@ -39,11 +40,11 @@ local function tabs(x0, y0, page)
   return y0 + th + T.px(28)
 end
 
-local function label(id) return (eq.WindowText(AW, id)) or "" end
+local function label(id) return (API.windows.Text(AW, id)) or "" end
 
 ui.window("Alternate Advancement", function()
   if not W.shown(AW) then return end
-  local page = eq.TabPage(AW, "Subwindows") or 0
+  local page = API.windows.TabPage(AW, "Subwindows") or 0
   local timer = label("Timer")
   local canUse = timer ~= ""
   if W.begin("Alternate Advancement", { w = 1700, h = 940, title = "Alternate Advancement",
@@ -55,11 +56,11 @@ ui.window("Alternate Advancement", function()
     if W.pressed("lb") then switched = (page + 3) % 4 end
     if W.pressed("rb") then switched = (page + 1) % 4 end
     if switched then
-      eq.SetTabPage(AW, "Subwindows", switched)
+      API.windows.SetTabPage(AW, "Subwindows", switched)
       lists[switched + 1].focusNext = 1 -- the pad's focus onto the new tab's list
       lists[switched + 1].lastFocus = nil
     end
-    page = eq.TabPage(AW, "Subwindows") or page
+    page = API.windows.TabPage(AW, "Subwindows") or page
     local listId = "List" .. (page + 1)
     local state = lists[page + 1]
     local x0, y0, x1, y1 = W.area()
@@ -76,14 +77,14 @@ ui.window("Alternate Advancement", function()
       return T.button(id, text, w, bh, opts or {}, pad)
     end
     T.font(20)
-    if control("##more", "+", T.px(60), { disabled = eq.ChildState(AW, "MoreExpButton") == false }) then eq.ClickChild(AW, "MoreExpButton", "left") end
+    if control("##more", "+", T.px(60), { disabled = API.windows.ChildState(AW, "MoreExpButton") == false }) then API.windows.ClickChild(AW, "MoreExpButton", "left") end
     local pw = T.px(170)
     cx = cx - pw
     T.textIn(cx, y0, cx + pw, y0 + bh, "AA exp " .. label("ExpCount"), C.exp, 0.5)
     cx = cx - T.px(10)
-    if control("##less", "-", T.px(60), { disabled = eq.ChildState(AW, "LessExpButton") == false }) then eq.ClickChild(AW, "LessExpButton", "left") end
-    local _, checked = eq.ChildState(AW, "CanPurchaseFilter")
-    if control("##filter", (checked and "[x] " or "[  ] ") .. "Can purchase", T.px(230)) then eq.ClickChild(AW, "CanPurchaseFilter", "left") end
+    if control("##less", "-", T.px(60), { disabled = API.windows.ChildState(AW, "LessExpButton") == false }) then API.windows.ClickChild(AW, "LessExpButton", "left") end
+    local _, checked = API.windows.ChildState(AW, "CanPurchaseFilter")
+    if control("##filter", (checked and "[x] " or "[  ] ") .. "Can purchase", T.px(230)) then API.windows.ClickChild(AW, "CanPurchaseFilter", "left") end
     T.unfont()
     -- the column heads
     T.font(18)
@@ -94,11 +95,11 @@ ui.window("Alternate Advancement", function()
     T.unfont()
     top = top + T.px(34)
     ui.SetCursorPos(x0 - wx, top - wy)
-    local rows = eq.ListInfo(AW, listId) or 0
+    local rows = API.windows.ListInfo(AW, listId) or 0
     local rowH = 54
     local visible = math.max(1, math.floor((y1 - top + T.px(10)) / T.px(rowH + 10)))
     W.list("aa", state, rows, visible, rowH, listX1 - x0, function(i, rx0, ry0, rx1, ry1, focused)
-      local texts, r, g, b = eq.ListRow(AW, listId, i - 1)
+      local texts, r, g, b = API.windows.ListRow(AW, listId, i - 1)
       if not texts then return end
       local col = rowCol
       col[1], col[2], col[3] = r or 1, g or 1, b or 1
@@ -111,25 +112,25 @@ ui.window("Alternate Advancement", function()
       if focused then
         if state.lastFocus ~= i then -- the stock selection follows the focus: the description and timer
           state.lastFocus = i
-          eq.ListClick(AW, listId, i - 1, "left")
+          API.windows.ListClick(AW, listId, i - 1, "left")
         end
         if W.pressed("y") then
-          if canUse then eq.PressButtonFrom(AW, "HotButton")
+          if canUse then API.cursor.PressButtonFrom(AW, "HotButton")
           else message, messageAt = "Only an owned ability with a reuse time can be used.", ui.GetTime() end
         end
         if W.pressed("x") then
           local name = texts[1] or ""
-          if not AS.start(name, function() return eq.PickUp(AW, listId, i) end, "Alternate Advancement") then
+          if not AS.start(name, function() return API.cursor.PickUp(AW, listId, i) end, "Alternate Advancement") then
             message, messageAt = "This ability makes no hot button.", ui.GetTime()
           end
         end
       end
     end, function(i)
       if not settled then return end
-      eq.ListClick(AW, listId, i - 1, "left")
-      local enabled = eq.ChildState(AW, "TrainButton")
+      API.windows.ListClick(AW, listId, i - 1, "left")
+      local enabled = API.windows.ChildState(AW, "TrainButton")
       if enabled == false then message, messageAt = "You cannot train this ability now.", ui.GetTime()
-      else eq.ClickChild(AW, "TrainButton", "left") end
+      else API.windows.ClickChild(AW, "TrainButton", "left") end
     end)
     -- the right column: the selected ability's description and timer, then the points and the settings
     local rx0 = listX1 + T.px(24)
@@ -144,7 +145,7 @@ ui.window("Alternate Advancement", function()
     end
     local bottomH = T.px(150)
     T.font(20)
-    TB.draw(eq.WindowText(AW, "Description") or "", px, py, x1 - T.px(14), y1 - bottomH, desc)
+    TB.draw(API.windows.Text(AW, "Description") or "", px, py, x1 - T.px(14), y1 - bottomH, desc)
     T.unfont()
     local by = y1 - bottomH + T.px(14)
     ui.DrawLine(px, by - T.px(8), x1 - T.px(18), by - T.px(8), C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
@@ -160,5 +161,5 @@ ui.window("Alternate Advancement", function()
       T.unfont()
     end
   end
-  if W.finish() then eq.ShowWindow(AW, false) end
+  if W.finish() then API.windows.Show(AW, false) end
 end)

@@ -1,5 +1,5 @@
 -- The Pet window (pet.lua) as a library, so a plugin's window can be the pack's with its own part added
--- (eq.Plugin windows: dofile("lib/pet.lua") finds this one). pet.window(opts) draws the whole window; opts (all
+-- (hs.Plugin windows: dofile("lib/pet.lua") finds this one). pet.window(opts) draws the whole window; opts (all
 -- optional):
 --   extra = { height = function(s) ... end, draw = function(x, y, w, s) ... end }: drawn between the pets' health
 --     and the command buttons; height is unscaled (the window's size), draw returns the y below it
@@ -7,6 +7,7 @@
 --   fold = "<setting key>": the command buttons fold under a "Pet commands" header the player opens and closes
 --     (kept in the UI settings under that key; folded at first)
 -- The pet's buffs open the buff's menu on a right click (lib/buffmenu.lua: Spell Info and Add to Blocked Pet Spells).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local buffmenu = dofile("lib/buffmenu.lua")
 local T = hud.T
@@ -49,8 +50,8 @@ local function gather()
   nButtons, nBuffs, nOthers = 0, 0, 0
   for i = 1, BUTTONS do
     local id = BUTTON_IDS[i]
-    local text = eq.WindowText(WINDOW, id)
-    if text and text ~= "" and eq.ChildShown(WINDOW, id) ~= false then
+    local text = API.windows.Text(WINDOW, id)
+    if text and text ~= "" and API.windows.ChildShown(WINDOW, id) ~= false then
       nButtons = nButtons + 1
       local b = entry(buttons, nButtons)
       b.id, b.text = id, text
@@ -58,7 +59,7 @@ local function gather()
   end
   for i = 1, MAX_BUFFS do
     local id = BUFF_IDS[i]
-    local spell, ms, name, good = eq.BuffSlot(WINDOW, id)
+    local spell, ms, name, good = API.buffs.Slot(WINDOW, id)
     if spell then
       nBuffs = nBuffs + 1
       local b = entry(buffs, nBuffs)
@@ -66,8 +67,8 @@ local function gather()
     end
   end
   for _, id in ipairs(OTHER_IDS) do
-    if eq.ChildShown(WINDOW, id) == true then
-      local frac, name = eq.ChildGauge(WINDOW, id)
+    if API.windows.ChildShown(WINDOW, id) == true then
+      local frac, name = API.windows.ChildGauge(WINDOW, id)
       if frac then
         nOthers = nOthers + 1
         local o = entry(others, nOthers)
@@ -98,17 +99,17 @@ local function draw_buttons(x, by, w, pad, s)
     local col, row = (k - 1) % PER_ROW, (k - 1) // PER_ROW
     local bx = x + pad + col * (bw + 4 * s)
     local byy = by + row * 28 * s
-    local enabled, checked = eq.ChildState(WINDOW, b.id)
+    local enabled, checked = API.windows.ChildState(WINDOW, b.id)
     local on = enabled ~= false
     buttonOpts.primary, buttonOpts.enabled = checked == true, on
     buttonOpts.tooltip = on and tooltip(b.text) or CHOOSE
     local clicked = T.Button(HIT[b.id], bx, byy, bx + bw, byy + 24 * s, s, b.text, buttonOpts)
     -- the right button (a "none" button's too) picks the command the button holds: the game's menu of the
     -- commands the pet takes
-    if ui.IsItemClicked(ui.Mouse.Right) then eq.ClickChild(WINDOW, b.id, "rightdown") end
+    if ui.IsItemClicked(ui.Mouse.Right) then API.windows.ClickChild(WINDOW, b.id, "rightdown") end
     -- a drag makes the command's hot button ("Pet <command>"), as the stock window's does
     local dragged = on and T.DragFrom(WINDOW, b.id)
-    if clicked and not dragged then eq.ClickChild(WINDOW, b.id, "left") end
+    if clicked and not dragged then API.windows.ClickChild(WINDOW, b.id, "left") end
   end
 end
 
@@ -131,16 +132,16 @@ end
 local function body(x, y, w, h, s)
   local extra = opts.extra
   local pad = 9 * s
-  local frac, name, raw = eq.Gauge(16)
+  local frac, name, raw = API.character.Gauge(16)
   local _, th = T.TextSize("Ag", T.font.small)
   local has = raw ~= nil and raw ~= -1
   T.Text(x + pad, y + pad - 2 * s, has and name or "No pet", has and C.text or C.muted, T.font.small)
   if has then T.Text(x + w - pad, y + pad - 2 * s, math.floor((frac or 0) * 100 + 0.5) .. "%", C.muted, T.font.small, "right") end
   local by = y + pad + th + 2 * s
   T.Bar("pet.hp", x + pad, by, x + w - pad, by + 10 * s, s, has and frac or nil, C.pet)
-  if T.Hit("##pethp", x + pad, by, x + w - pad, by + 10 * s) then eq.ClickChild(WINDOW, "PetHPGauge", "left") end
+  if T.Hit("##pethp", x + pad, by, x + w - pad, by + 10 * s) then API.windows.ClickChild(WINDOW, "PetHPGauge", "left") end
   by = by + 14 * s
-  local tf, tname, traw = eq.Gauge(41)
+  local tf, tname, traw = API.character.Gauge(41)
   local ttext = (traw ~= nil and traw ~= -1 and tname and tname ~= "") and tname or "No target"
   T.Text(x + pad, by, "\xC2\xBB " .. T.Fit(ttext, w * 0.55, T.font.tiny), C.muted, T.font.tiny)
   T.Bar("pet.target", x + w * 0.6, by + 4 * s, x + w - pad, by + 9 * s, s, (traw ~= -1) and tf or nil, C.hp)
@@ -151,7 +152,7 @@ local function body(x, y, w, h, s)
     T.Text(x + pad, by, T.Fit(o.name, w * 0.45, T.font.tiny), C.muted, T.font.tiny)
     T.Text(x + w * 0.5, by, math.floor(o.frac * 100 + 0.5) .. "%", C.muted, T.font.tiny)
     T.Bar("pet." .. o.id, x + w * 0.6, by + 4 * s, x + w - pad, by + 9 * s, s, o.frac, C.pet)
-    if T.Hit(HIT[o.id], x + pad, by, x + w - pad, by + 14 * s) then eq.ClickChild(WINDOW, o.id, "left") end
+    if T.Hit(HIT[o.id], x + pad, by, x + w - pad, by + 14 * s) then API.windows.ClickChild(WINDOW, o.id, "left") end
     by = by + 18 * s
   end
   if extra then by = extra.draw(x, by, w, s) end
@@ -173,7 +174,7 @@ local function body(x, y, w, h, s)
     local col, row = (k - 1) % 9, (k - 1) // 9
     local ix = x + pad + col * (ICON + 3) * s
     local yy = iy + row * (ICON + 3) * s
-    local tex, u0, v0, u1, v1 = eq.ChildArt(WINDOW, b.id, "decal")
+    local tex, u0, v0, u1, v1 = API.windows.ChildArt(WINDOW, b.id, "decal")
     if type(tex) ~= "userdata" then tex = nil end
     T.Icon(ix, yy, ICON * s, s, tex, u0, v0, u1, v1, b.good and C.good or C.bad, ICON_OPTS)
     T.Hit(HIT[b.id], ix, yy, ix + ICON * s, yy + ICON * s, false)
@@ -191,7 +192,7 @@ end
 local HUD_OPTS = { size = size }
 
 function M.window(o)
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   opts = o or NO_OPTS
   hud.Window(WINDOW, "Pet", HUD_OPTS, body)
 end

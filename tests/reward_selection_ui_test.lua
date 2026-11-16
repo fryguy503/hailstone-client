@@ -1,6 +1,7 @@
 -- Load each actual skin with a narrow mock. Unknown game APIs fail immediately;
 -- a hostile disabled-button mock still cannot bypass the UI's action guards.
 CLIENT_ROOT = CLIENT_ROOT or (arg and arg[1]) or "."
+local attachUI = assert(loadfile(CLIENT_ROOT .. "/tests/lua_ui_api_mock.lua"))()
 local checks = 0
 local function check(value, why) checks = checks + 1; assert(value, why) end
 local function key(label)
@@ -50,7 +51,7 @@ for _, pack in ipairs({"modern", "gamepad"}) do
     local result = {}; for field, child in pairs(value) do result[field] = copy(child) end
     return result
   end
-  eq=setmetatable({
+  hs=setmetatable({
     InGame=function()return inGame end,
     ItemIcon=function(icon)
       iconRequests[#iconRequests+1]=icon
@@ -76,6 +77,7 @@ for _, pack in ipairs({"modern", "gamepad"}) do
     ShowWindow=function(...)return record("window",...)end,
     ReplaceWindow=function()return false end,
   },{__index=function(_,name)error("Unexpected game/action API: "..name)end})
+  attachUI(hs)
   local function click(label,selected,width,height)
     local id=key(label);lastWidget=id
     labels[id]={label=label,selected=selected,width=width,height=height,child=currentChild}

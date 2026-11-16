@@ -1,5 +1,5 @@
--- Item comparison (Hailstone; docs/item-compare.md): the lines both packs show for eq.CompareItem /
--- eq.CompareSlotItem / eq.CompareBagSlotItem's table, as { text, kind } with kind one of "good", "bad", "mixed",
+-- Item comparison (Hailstone; docs/item-compare.md): the lines both packs show for hs.CompareItem /
+-- hs.CompareSlotItem / hs.CompareBagSlotItem's table, as { text, kind } with kind one of "good", "bad", "mixed",
 -- "muted" and "text" (each pack draws them in its own colours). Nothing here draws, so the packs share it: the
 -- gamepad pack's lib/compare_lines.lua is a copy of this file, kept the same (tests/item_compare_test.cpp).
 local M = {}

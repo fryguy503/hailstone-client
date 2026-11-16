@@ -24,6 +24,9 @@ class EqStrings;
 struct SpellData;
 namespace mechanics { class Character; }
 
+using ItemFlagsFormatter = std::function<std::optional<std::string>(const net::Item&, std::string_view)>;
+using ItemDescriptionAppender = std::function<std::optional<std::string>(const net::Item&)>;
+
 struct ItemDisplayContext {
     const EqStrings* strings = nullptr;
     // The player: CanUseItem, the "modified" stats (vtable +0x34), the damage bonus. Null outside the game.
@@ -44,6 +47,8 @@ struct ItemDisplayContext {
     // nullopt for a spell keeps the stock line).
     bool can_use_all = false;
     std::function<std::optional<std::string>(const SpellData&)> level_needed_line;
+    ItemFlagsFormatter item_flags;
+    ItemDescriptionAppender item_description_append;
     bool modified = false;               // the window's Modified view (+0x2e8)
     bool show_spell_descriptions = true; // eqclient.ini Defaults/ShowSpellDescriptions (default 1)
     // The player's heading (0..512, the compass's; pinstLocalPlayer +0x80): a compass item's direction. < 0 none.

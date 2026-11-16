@@ -19,6 +19,8 @@ hailstone/
                              by an update
   CHANGELOG.md               shipped: the release notes; the login screen's What's new shows this version's part
   ui/<pack>/                 UI packs (modern, gamepad), replaced by an update
+  ui-data/<pack-id>/         player-owned shared presentation Lua modules; LoadData reads only the selected ID and
+                             approved base IDs. Updates and add-on removal leave these files for later reinstalls
   ui/settings/<pack>.txt     each UI pack's script settings shared by every character, and the window layout a
                              character starts from (no ui.ini, so not a pack: a build or update leaves it alone;
                              ui-settings/ before 2026-11, moved here at start-up by move_old_ui_settings)
@@ -421,7 +423,7 @@ the spell and item icons, the game menu and the spell particles (`ClientApp::rel
 files as they load.
 
 The server list shows each world's name and whether it can be joined, never its player count: no UI pack is given
-the count (`eq.ServerSelect`). A test login's transient profile keeps a `worlds.ini` (the worlds listed last) as
+the count (`hs.ServerSelect`). A test login's transient profile keeps a `worlds.ini` (the worlds listed last) as
 well, without a `server.ini`, so it stays out of the list.
 
 Delete moves the server's folder to `servers/.deleted/<id>-<date>-<time>/` in one rename: nothing is half deleted
@@ -477,7 +479,7 @@ checked out (`--component nms`, `--component projecttriune`). A release includes
 replaces only the shipped parts (the binary, `shaders/`, the shipped UI packs ...); the player's files beside them stay. The updater
 (docs/updater.md) installs a release the same way, from zips that hold only the shipped parts, and refuses any
 package that would write one of the player's files or folders (`app::is_player_path`: `hailstone.ini`, `servers/`,
-`logs/`, `maps/`, `scripts/`, `textures/`, `ui/settings/`, `ui/loadingbackgrounds/` ...). A folder that has a
+`logs/`, `maps/`, `scripts/`, `textures/`, `ui-data/`, `ui/settings/`, `ui/loadingbackgrounds/` ...). A folder that has a
 CMakeCache.txt beside it (a dev build's `build/hailstone/`) never updates itself.
 
 CI builds nothing but macOS (docs/ci.md); a release's folder is installed and packed locally, the macOS one from

@@ -22,7 +22,7 @@ on 2026-11-02; they are in the workflow's history. Before a merge to `main`:
 |---|---|---|
 | Linux | `cmake --build build && build/hailstone_tests` (AGENTS.md "Build and test"), with `EQ_GAME_DIR` set when the change touches assets | every merge |
 | macOS arm64 | the macOS workflow (below): Apple Clang, `hailstone_tests` on GitHub's Apple Silicon runner | a change to `src/platform/`, the build files, or anything Apple Clang may treat differently; and every release |
-| Windows | MSVC, CI's old compiler, under Wine: `tools/docker/msvc_build.sh`, then `wine build-msvc/hailstone_tests.exe` ("MSVC under Wine" below) | a change to `src/platform/`, the build files, the Lua bridge (`app/lua_eq*`) or anything a compiler may treat differently; and every release |
+| Windows | MSVC, CI's old compiler, under Wine: `tools/docker/msvc_build.sh`, then `wine build-msvc/hailstone_tests.exe` ("MSVC under Wine" below) | a change to `src/platform/`, the build files, the Lua bridge (`app/lua_ui*`) or anything a compiler may treat differently; and every release |
 
 Releases are built the same way: Linux in the `hailstone-linux-build` container (Ubuntu 24.04, so the client runs
 on 24.04 and newer), Windows with MSVC under Wine (docs/updater.md "Making a release"). Run the sanitizer build
@@ -94,7 +94,7 @@ release and the Windows check use MSVC under Wine (below), and clang-cl warns ab
 
 CI's own compiler (MSVC 19.44 from Visual Studio 2022, as on the `windows-2022` runner) also runs on Linux, under
 Wine, with [msvc-wine](https://github.com/mstorsjo/msvc-wine). A crash or a warning that only MSVC's build shows can
-then be found without spending CI minutes: the Windows leg's `0xc0000409` in "eq API: bad arguments are Lua errors"
+then be found without spending CI minutes: the Windows leg's `0xc0000409` in "hs API: bad arguments are Lua errors"
 was found this way (`/EHs`, CMakeLists.txt). The download means accepting Microsoft's license. Everything runs in
 containers, so msvc-wine's scripts never run on the host:
 

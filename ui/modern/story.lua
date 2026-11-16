@@ -1,7 +1,8 @@
 -- Story: replaces the game's StoryWnd (the news and story pages, the game's storyline\story*.txt). The stories,
 -- newest first, beside the selected one's page, or above it when narrow; "Show new stories when I log in" is the
--- original's Automatic check box. The list, page and check box are the original's (app/lua_eq_story.cpp), so what
+-- original's Automatic check box. The list, page and check box are the original's (app/lua_ui_story.cpp), so what
 -- is marked read is the game's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -17,7 +18,7 @@ local function drawWindow(x, y, w, h, s)
   local _, lh = ui.CalcTextSize("Ag")
   local footer = lh + 14 * s
   local wide = w >= 560 * s
-  local rows = eq.ListInfo(WINDOW, "StoryList") or 0
+  local rows = API.windows.ListInfo(WINDOW, "StoryList") or 0
   local lw = wide and math.floor((w - 12 * s) * 0.5) or w
   local _, restH = ui.GetContentRegionAvail()
   local lh2 = wide and -footer or math.floor(((restH or 300) - footer) * 0.35)
@@ -33,6 +34,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Story", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Story", WINDOW_OPTS, drawWindow)
 end)

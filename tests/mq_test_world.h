@@ -16,12 +16,33 @@
 
 #include "core/game_dir.h"
 #include "game/coords.h"
+#include "game/mechanics/tables.h"
 #include "net/game_connection.h"
 #include "scratch_dir.h"
 
 namespace hailstone::net {
 
 struct GameConnectionTestAccess {
+    // Synthetic eligibility only; callers still provide their own connection state/player actor.
+    static void tracking_skill_fixture(GameConnection& c) {
+        if (!c.profile_) c.profile_.emplace();
+        c.profile_->class_ = 4;
+        c.profile_->skills.resize(100); c.profile_->skills[53] = 200;
+        c.tables();
+        std::string caps;
+        for (int level = 1; level <= 100; ++level) caps += "4^53^" + std::to_string(level) + "^250^1\n";
+        c.tables_->skill_caps.parse(caps);
+    }
+    static void enable_quest_discovery(GameConnection& c) { c.zone_ready_ = true; c.hailstone_script_ = true; }
+    static bool quest_discovery_requested(const GameConnection& c) { return c.quest_npcs_asked_; }
+    static void expire_find_batch(GameConnection& c) { c.expire_find_requests(GameConnection::now_ms() + 10001); }
+    static bool find_reply_quarantined(const GameConnection& c) { return c.find_reply_quarantine_; }
+    static std::size_t find_request_count(const GameConnection& c) { return c.find_requests_.size(); }
+    static void expire_tracking_request(GameConnection& c) {
+        c.tracking_request_at_ = GameConnection::now_ms() - 10001; c.maintain_tracking();
+    }
+    static bool has_tracking_request(const GameConnection& c) { return c.tracking_request_.has_value(); }
+    static void replace_spawn(GameConnection& c, const Spawn& spawn) { c.apply_spawn(spawn); }
     static game::WorldState& world(GameConnection& c) { return c.world_; }
     static PlayerStatus& status(GameConnection& c) { return c.pstatus_; }
     static game::SpellState& spells(GameConnection& c) { return c.spells_; }
@@ -31,6 +52,8 @@ struct GameConnectionTestAccess {
     static GameConnection::Leadership& leadership(GameConnection& c) { return c.leadership_; }
     static std::vector<std::pair<std::uint32_t, game::BuffSlot>>& pet_buffs(GameConnection& c) { return c.pet_buffs_; }
     static game::Inventory& inventory(GameConnection& c) { return c.inventory_; }
+    static std::optional<MerchantSession>& merchant(GameConnection& c) { return c.merchant_; }
+    static void apply_spawn(GameConnection& c, const Spawn& s) { c.apply_spawn(s); }
     // How often the evolving transfer's item list was built, and its pair compared with the snapshots.
     static std::pair<std::uint64_t, std::uint64_t> evolving_cache_work(const GameConnection& c) {
         return {c.evolving_cache_.builds, c.evolving_cache_.checks};
@@ -206,8 +229,10 @@ struct World {
 
     void add(std::uint32_t id, const std::string& name, bool npc, int level, glm::vec3 pos) {
         auto& w = net::GameConnectionTestAccess::world(*conn);
-        if (!w.spawns.contains(id)) ++w.spawn_set_serial; // as GameConnection::apply_spawn
+        const bool fresh = !w.spawns.contains(id);
+        if (fresh) ++w.spawn_set_serial; // as GameConnection::apply_spawn
         auto& s = w.spawns[id];
+        if (fresh) s.incarnation = core::next_process_identity();
         s.id = id;
         s.name = name;
         s.is_npc = npc;

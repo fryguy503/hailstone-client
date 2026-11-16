@@ -5,6 +5,7 @@
 --
 --   local K = dofile("lib/dialogs_kit.lua")
 --   K.TextBox("LargeDialogWindow", "LDW_TextBox", 0, -K.FooterH(s))   -- the dialog's text, scrolled
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local C = T.color
 local stml = dofile("lib/stml.lua")
@@ -24,12 +25,12 @@ function K.Centered(W, H, w, h) return W / 2 - w / 2, H * 0.42 - h / 2 end
 -- A text box: an inset, padded, scrolled area with the child's text. opts.plain: the text as lines (a book's
 -- page) rather than STML; opts.font; opts.color (the text's colour outside any <c>); opts.bg (the inset's colour);
 -- opts.border = false (no hairline: text that sits on the window itself); opts.empty (shown while there is no text).
--- w, h as for ui.BeginChild (0: the rest; negative: leave that much). Links go to the window (eq.StmlLink). A new
+-- w, h as for ui.BeginChild (0: the rest; negative: leave that much). Links go to the window (hs.StmlLink). A new
 -- text is shown from its top.
 local cache = {}
 function K.TextBox(win, id, w, h, opts)
   opts = opts or {}
-  local raw = eq.WindowText(win, id) or ""
+  local raw = API.windows.Text(win, id) or ""
   local byId = cache[win]
   if not byId then byId = {}; cache[win] = byId end
   local c = byId[id]
@@ -39,7 +40,7 @@ function K.TextBox(win, id, w, h, opts)
     if not opts.plain then lines = stml.Lines(raw, opts.color) end
     -- (the link handler is made with the lines, not once a line a frame)
     c = { raw = raw, plain = opts.plain, lines = lines,
-      onLink = function(link) eq.StmlLink(win, id, link[1], link[2]) end }
+      onLink = function(link) API.windows.StmlLink(win, id, link[1], link[2]) end }
     byId[id] = c
   end
   local bg = opts.bg or C.inset
@@ -83,7 +84,7 @@ end
 
 -- A child's decal tint (a tint or colour picker swatch), else white.
 function K.Tint(win, id)
-  local r, g, b = eq.ChildColor(win, id, "decal")
+  local r, g, b = API.windows.ChildColor(win, id, "decal")
   if not r then return 1, 1, 1 end
   return r, g, b
 end

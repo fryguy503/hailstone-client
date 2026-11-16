@@ -1,5 +1,5 @@
 -- Expeditions (gamepad pack), standing in for the stock windows and answered through them (lib/model.lua: the
--- original's DZ_* / DZSwitchList_* children, app/lua_eq_adventure.cpp), so who may be added and the head count are
+-- original's DZ_* / DZSwitchList_* children, app/lua_ui_adventure.cpp), so who may be added and the head count are
 -- the game's:
 --   Expedition (DynamicZoneWnd)        the expedition you are in (its name, leader and head count), its members (A
 --                                      selects one for the leader's buttons), Quit (asked first), the leader's tools
@@ -8,6 +8,7 @@
 --                                      lockouts on the right
 --   Choose an Expedition               a door or switch that leads into more than one of your expeditions: A picks
 --   (DynamicZoneSwitchListWnd)         one, Y (or Enter) goes in as OK does; B is Cancel
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -29,7 +30,7 @@ ui.window("Expedition", function()
     if not W.confirm(state) then
       local midX = x0 + (x1 - x0) * 0.52
       local lx1 = midX - T.px(24)
-      local leader = M.shown(DZ, "DZLeaderSection") and eq.ChildShown(DZ, "DZLeaderSection") == true
+      local leader = M.shown(DZ, "DZLeaderSection") and API.windows.ChildShown(DZ, "DZLeaderSection") == true
       local bh = T.px(70)
       local y = M.facts({ { "Leader", M.text(DZ, "DZ_LeaderValue") },
         { "Players", M.text(DZ, "DZ_NumPlayersValue") }, { "Most players", M.text(DZ, "DZ_MaxPlayersValue") } },
@@ -44,7 +45,7 @@ ui.window("Expedition", function()
       ui.SetCursorPos(x0 - wx, fy - wy)
       local enabled = M.state(DZ, "DZ_Quit")
       if T.button("##dzquit", "Quit Expedition", lx1 - x0, bh, { disabled = not enabled }, pad) then
-        state.confirm = { "Leave the expedition \"" .. name .. "\"?", function() eq.ClickChild(DZ, "DZ_Quit", "left") end }
+        state.confirm = { "Leave the expedition \"" .. name .. "\"?", function() API.windows.ClickChild(DZ, "DZ_Quit", "left") end }
       end
       if leader then
         local target = M.text(DZ, "DZ_Leader_TargetValue")
@@ -66,7 +67,7 @@ ui.window("Expedition", function()
         { empty = "No lockouts: expeditions you cannot enter again yet are listed here." })
     end
   end
-  if W.back(W.finish(), state, nil, members) then eq.ShowWindow(DZ, false) end
+  if W.back(W.finish(), state, nil, members) then API.windows.Show(DZ, false) end
 end)
 
 -- ---------------------------------------------------------------- the expedition choice (DynamicZoneSwitchListWnd)
@@ -82,11 +83,11 @@ ui.window("Choose an Expedition", function()
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     local bh = T.px(72)
-    local function go() eq.ClickChild(SW, "DZSwitchList_OK", "left") end
+    local function go() API.windows.ClickChild(SW, "DZSwitchList_OK", "left") end
     M.list(SW, "DZSwitchList_List", choices, x0, y0, x1, y1 - bh - T.px(14), {
       empty = "No expeditions to enter here.",
       activate = function(i)
-        eq.ListClick(SW, "DZSwitchList_List", i - 1, "left")
+        API.windows.ListClick(SW, "DZSwitchList_List", i - 1, "left")
         go()
       end,
     })
@@ -94,5 +95,5 @@ ui.window("Choose an Expedition", function()
     ui.SetCursorPos(x0 - wx, y1 - bh - wy)
     M.buttons(SW, { { "DZSwitchList_OK", "Enter", { primary = true, glyph = "y" } }, { "DZSwitchList_Cancel", "Cancel" } }, x0, x1, bh)
   end
-  if W.finish() then eq.ClickChild(SW, "DZSwitchList_Cancel", "left") end
+  if W.finish() then API.windows.ClickChild(SW, "DZSwitchList_Cancel", "left") end
 end)

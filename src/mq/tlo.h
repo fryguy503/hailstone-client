@@ -104,7 +104,7 @@ struct Type {
 class Registry;
 
 // What the TLOs read. The client fills it; null pieces answer nil.
-// An ability the player activates other than a spell, as the Ability Book sees it (app/lua_eq_abilitybook.cpp):
+// An ability the player activates other than a spell, as the Ability Book sees it (app/lua_ui_abilitybook.cpp):
 // Me.AbilityReady (a skill), Me.CombatAbilityReady (a discipline), Me.AltAbilityReady (an activated AA).
 enum class AbilityKind : std::uint8_t { Skill, Discipline, AltAbility };
 struct AbilityState {

@@ -7,8 +7,8 @@
 #include <fstream>
 
 #include "app/client_app_internal.h"
-#include "app/lua_eq.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_windows.h"
 #include "core/character_files.h"
 #include "core/log.h"
 #include "core/server_profile.h"
@@ -161,25 +161,25 @@ void ClientApp::outputfile_command(const std::string& args) {
         if (!g.in_guild()) return;
         if (file.empty()) file = g.name_of(g.guild_id) + "-" + date() + ".txt";
         c.show_eqstr(3188, {file});
-        if (!eq_api_) return;
-        game::DumpList members{eq_api_->list_rows("GuildManagementWnd", "MemberList"), 10};
-        game::DumpList tribute{eq_api_->list_rows("GuildManagementWnd", "TributeList"), 5};
-        game::DumpList notes{eq_api_->list_rows("GuildManagementWnd", "NoteList"), 3};
+        if (!ui_api_) return;
+        game::DumpList members{ui_api_->list_rows("GuildManagementWnd", "MemberList"), 10};
+        game::DumpList tribute{ui_api_->list_rows("GuildManagementWnd", "TributeList"), 5};
+        game::DumpList notes{ui_api_->list_rows("GuildManagementWnd", "NoteList"), 3};
         write(file, game::guild_roster_file(members, tribute, notes));
         return;
     }
     case game::OutputFileKind::Raid: {
         // CRaidWnd_DumpRosterToFile @0x72c320; a member's note from the notes list (CRaidWnd +0x2c0: OP_RaidUpdate
         // 0x24's notes).
-        if (!eq_api_) return;
+        if (!ui_api_) return;
         if (file.empty()) file = "RaidRoster-" + date() + ".txt";
         auto note = [&c](const std::string& name) {
             for (const auto& m : c.raid().members)
                 if (m.name == name) return m.note;
             return std::string();
         };
-        write(file, game::raid_roster_file(eq_api_->list_rows("RaidWindow", "RAID_PlayerList"),
-                                           eq_api_->list_rows("RaidWindow", "RAID_NotInGroupPlayerList"),
+        write(file, game::raid_roster_file(ui_api_->list_rows("RaidWindow", "RAID_PlayerList"),
+                                           ui_api_->list_rows("RaidWindow", "RAID_NotInGroupPlayerList"),
                                            c.strings().format(6699, {}), note));
         return;
     }

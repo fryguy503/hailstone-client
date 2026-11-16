@@ -2,12 +2,13 @@
 -- day on top, the members below (X shows or hides the offline ones, Y the alts), and on the right what can be done
 -- with the picked member: a tell, promote, demote, a rank picked from the ranks the game allows (the Access page's
 -- rank box), make leader, remove (each asked first), your personal note on them, renaming their rank (the stock
--- text entry), and inviting the target. Each is the stock window's control (eq.ClickChild, the rank box through
--- eq.ComboSelect), enabled as CGuildMgmtWnd::UpdateButtons enables it for the player's rank and the guild's
--- permissions (eq.ChildState), so the game decides what is allowed. The Tribute page is the picked member's tribute
+-- text entry), and inviting the target. Each is the stock window's control (hs.ClickChild, the rank box through
+-- hs.ComboSelect), enabled as CGuildMgmtWnd::UpdateButtons enables it for the player's rank and the guild's
+-- permissions (hs.ChildState), so the game decides what is allowed. The Tribute page is the picked member's tribute
 -- line (state, donations, last donation, from the stock TributeList, whose rows are MemberList's) and its opt-out
 -- (yourself, or others with the guild permission). The stock Banner page is left out: EQEmu sends no banner list,
 -- so the game would show an empty list with every banner action off.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -21,15 +22,15 @@ local state = {} -- the question (W.confirm)
 local kb = K.new()
 local side = {} -- W.toSide
 -- The window's ShowOffline / HideAlts toggles (its list shows only the members they let through; kept in UI.ini).
-local function toggle(id) local _, c = eq.ChildState(GW, id) return c == true end
+local function toggle(id) local _, c = API.windows.ChildState(GW, id) return c == true end
 
 -- The members as the stock list has them (MemberList: name, level, class, rank, alt, last on, zone, public note),
 -- with their row (0-based) and whether they are online (the zone is shown only for those).
 local function members()
-  local rows, _, selected = eq.ListInfo(GW, "MemberList")
+  local rows, _, selected = API.windows.ListInfo(GW, "MemberList")
   local out = {}
   for i = 0, (rows or 0) - 1 do
-    local r = eq.ListRow(GW, "MemberList", i)
+    local r = API.windows.ListRow(GW, "MemberList", i)
     if r then
       out[#out + 1] = { row = i, name = r[1] or "", level = r[2] or "", class = r[3] or "", rank = r[4] or "",
         alt = (r[5] or "") ~= "", lastOn = r[6] or "", zone = r[7] or "", note = r[8] or "", online = (r[7] or "") ~= "" }
@@ -39,20 +40,20 @@ local function members()
 end
 
 local function targetName()
-  local _, name, raw = eq.Gauge(6)
+  local _, name, raw = API.character.Gauge(6)
   if raw == -1 or not name or name == "" then return nil end
   return name
 end
 
-local function enabled(child) return eq.ChildState(GW, child) ~= false end
+local function enabled(child) return API.windows.ChildState(GW, child) ~= false end
 
 -- The Access page's rank box of a member (the child "GT_Member_List:<row>"): its child, choices and the chosen one.
 local function rankBox(name)
-  for i = 0, (eq.ListInfo(GW, "GT_Member_List") or 0) - 1 do
-    local r = eq.ListRow(GW, "GT_Member_List", i)
+  for i = 0, (API.windows.ListInfo(GW, "GT_Member_List") or 0) - 1 do
+    local r = API.windows.ListRow(GW, "GT_Member_List", i)
     if r and r[2] == name then
       local child = "GT_Member_List:" .. i
-      local choices, chosen = eq.ComboInfo(GW, child)
+      local choices, chosen = API.windows.ComboInfo(GW, child)
       return child, choices or {}, chosen
     end
   end
@@ -60,8 +61,8 @@ end
 
 -- The rank list's row of a rank name (for its rename: the list's double click).
 local function rankRow(rank)
-  for i = 0, (eq.ListInfo(GW, "GT_Rank_List") or 0) - 1 do
-    local r = eq.ListRow(GW, "GT_Rank_List", i)
+  for i = 0, (API.windows.ListInfo(GW, "GT_Rank_List") or 0) - 1 do
+    local r = API.windows.ListRow(GW, "GT_Rank_List", i)
     if r and r[2] == rank then return i end
   end
 end
@@ -74,7 +75,7 @@ local rankFocused = nil
 -- (the setting does not change in play: once it is read without guild, the hook stays off, as M.testShow does)
 local testAt, testOff
 local function testOpen()
-  if testOff or GPSTATE["test_guild"] or not eq.InGame() then return end
+  if testOff or GPSTATE["test_guild"] or not API.session.InGame() then return end
   if not (","..(ui.GetSetting("test.open") or "")..","):find(",guild,", 1, true) then
     testOff = true
     return
@@ -82,9 +83,9 @@ local function testOpen()
   testAt = testAt or ui.GetTime()
   if ui.GetTime() - testAt > 6 then
     GPSTATE["test_guild"] = true
-    eq.ShowWindow(GW, true)
+    API.windows.Show(GW, true)
   elseif ui.GetTime() - testAt > 5 then
-    eq.ShowWindow(GW, false)
+    API.windows.Show(GW, false)
   end
 end
 
@@ -115,7 +116,7 @@ ui.window("Guild", function()
   -- the pad's focus starts on the list
   if not wasShown then listState.focusNext = 1 end
   wasShown = true
-  local name = eq.WindowText(GW, "GuildName")
+  local name = API.windows.Text(GW, "GuildName")
   local inGuild = name ~= nil and name ~= ""
   local showOffline, hideAlts = toggle("ShowOfflineButton"), toggle("HideAltButton")
   local all, selectedRow = members()
@@ -133,8 +134,8 @@ ui.window("Guild", function()
     local x0, y0, x1, y1, cw = W.area()
     local wx, wy = ui.GetWindowPos()
     if not kb.open and not state.confirm then
-      if W.pressed("x") then eq.ClickChild(GW, "ShowOfflineButton", "left") end
-      if W.pressed("y") then eq.ClickChild(GW, "HideAltButton", "left") end
+      if W.pressed("x") then API.windows.ClickChild(GW, "ShowOfflineButton", "left") end
+      if W.pressed("y") then API.windows.ClickChild(GW, "HideAltButton", "left") end
     end
     if state.confirm then
       W.confirm(state)
@@ -157,7 +158,7 @@ ui.window("Guild", function()
             -- opened, and a row number would then set another member's rank; the choice is checked to still be
             -- the one shown
             local child, choices = rankBox(ranking.name)
-            if child and choices[i] == ch then eq.ComboSelect(GW, child, i - 1) end
+            if child and choices[i] == ch then API.windows.ComboSelect(GW, child, i - 1) end
           end
           ranking, rankFocused = nil, nil
           listState.focusNext = 1
@@ -169,8 +170,8 @@ ui.window("Guild", function()
       ui.Dummy(1, 1)
     else
       -- the message of the day
-      local motd = eq.WindowText(GW, "MOTDViewer") or ""
-      local author = eq.WindowText(GW, "MOTDAuthorLabel") or ""
+      local motd = API.windows.Text(GW, "MOTDViewer") or ""
+      local author = API.windows.Text(GW, "MOTDAuthorLabel") or ""
       local mh = T.px(96)
       local bw = T.px(260)
       T.rect(x0, y0, x1 - bw - T.px(14), y0 + mh, C.sunken, 1, T.px(12))
@@ -215,7 +216,7 @@ ui.window("Guild", function()
           T.textIn(rx0 + w * cols[3], ry0, rx0 + w * cols[4] - T.px(8), ry1, m.rank, col, 0)
           T.textIn(rx0 + w * cols[4], ry0, rx1 - T.px(12), ry1, m.online and m.zone or m.lastOn, col, 0)
           T.unfont()
-        end, function(i) eq.ListClick(GW, "MemberList", view[i].row, "left") end)
+        end, function(i) API.windows.ListClick(GW, "MemberList", view[i].row, "left") end)
         W.toSide(side, focusedRow)
       end
       -- the right side: the keyboard, or the actions
@@ -226,11 +227,11 @@ ui.window("Guild", function()
       if kb.open then
         local r = K.draw(kb, pad, rx0, ry, rw)
         if r == "ok" and kb.purpose == "motd" then
-          eq.SetWindowText(GW, "MOTDInput", kb.text)
-          eq.ClickChild(GW, "UpdateMOTDButton", "left")
+          API.windows.SetText(GW, "MOTDInput", kb.text)
+          API.windows.ClickChild(GW, "UpdateMOTDButton", "left")
         elseif r == "ok" and kb.purpose == "personal" then
-          eq.SetWindowText(GW, "PersonalInput", kb.text)
-          eq.ClickChild(GW, "UpdatePersonalButton", "left")
+          API.windows.SetText(GW, "PersonalInput", kb.text)
+          API.windows.ClickChild(GW, "UpdatePersonalButton", "left")
         end
       else
         local bh = T.px(54) -- (ten actions under the invite)
@@ -240,7 +241,7 @@ ui.window("Guild", function()
               disabled = not enabled("InviteButton"), align = 0 }, pad) then
           local who = target
           state.confirm = { "Invite " .. (who or "your target") .. " into the guild?", function()
-            eq.ClickChild(GW, "InviteButton", "left")
+            API.windows.ClickChild(GW, "InviteButton", "left")
           end }
         end
         ry = ry + bh + T.px(20)
@@ -251,10 +252,10 @@ ui.window("Guild", function()
         local who = selected and selected.name or ""
         local boxChild, boxChoices, boxChosen
         if selected then boxChild, boxChoices, boxChosen = rankBox(who) end
-        local personal = selected and (eq.ListRow(GW, "NoteList", selected.row) or {})[3] or ""
+        local personal = selected and (API.windows.ListRow(GW, "NoteList", selected.row) or {})[3] or ""
         local renameRow = selected and rankRow(selected.rank)
         -- the Tribute page's row of the member: name, tribute state, trophy state, donations, last donation
-        local trib = selected and eq.ListRow(GW, "TributeList", selected.row) or {}
+        local trib = selected and API.windows.ListRow(GW, "TributeList", selected.row) or {}
         local tribSub = selected and ("Tribute " .. (trib[2] or "") .. ", donated " .. (trib[4] or "0") ..
           ((trib[5] or "") ~= "" and (", last " .. trib[5]) or "")) or "Select a member"
         local actions = {
@@ -262,16 +263,16 @@ ui.window("Guild", function()
             W.chat("/tell " .. who .. " ")
           end },
           { "##promote", "Promote", "One rank up", enabled("PromoteButton"), function()
-            state.confirm = { "Promote " .. who .. "?", function() eq.ClickChild(GW, "PromoteButton", "left") end }
+            state.confirm = { "Promote " .. who .. "?", function() API.windows.ClickChild(GW, "PromoteButton", "left") end }
           end },
           { "##demote", "Demote", "One rank down", enabled("DemoteButton"), function()
-            state.confirm = { "Demote " .. who .. "?", function() eq.ClickChild(GW, "DemoteButton", "left") end }
+            state.confirm = { "Demote " .. who .. "?", function() API.windows.ClickChild(GW, "DemoteButton", "left") end }
           end },
           { "##leader", "Make leader", "Hand the guild over", enabled("MakeLeaderButton"), function()
-            state.confirm = { "Make " .. who .. " the guild leader?", function() eq.ClickChild(GW, "MakeLeaderButton", "left") end }
+            state.confirm = { "Make " .. who .. " the guild leader?", function() API.windows.ClickChild(GW, "MakeLeaderButton", "left") end }
           end },
           { "##remove", "Remove", "Out of the guild", enabled("RemoveButton") and selected ~= nil, function()
-            state.confirm = { "Remove " .. who .. " from the guild?", function() eq.ClickChild(GW, "RemoveButton", "left") end }
+            state.confirm = { "Remove " .. who .. " from the guild?", function() API.windows.ClickChild(GW, "RemoveButton", "left") end }
           end },
           { "##rank", "Set rank", "Pick from the ranks you may give", boxChild ~= nil and enabled(boxChild) and #boxChoices > 1,
             function() ranking = { name = who, child = boxChild, choices = boxChoices, chosen = boxChosen, at = ui.GetTime() } end },
@@ -281,12 +282,12 @@ ui.window("Guild", function()
           end },
           { "##tribute", "Tribute opt out", tribSub, enabled("TributeOptOutButton"), function()
             state.confirm = { "Opt " .. who .. " out of the guild tribute?", function()
-              eq.ClickChild(GW, "TributeOptOutButton", "left")
+              API.windows.ClickChild(GW, "TributeOptOutButton", "left")
             end }
           end },
           { "##renamerank", "Rename rank", selected and selected.rank or "", renameRow ~= nil, function()
             -- the rank list's double click: the stock text entry asks for the name (where the game allows it)
-            eq.ListClick(GW, "GT_Rank_List", renameRow, "double")
+            API.windows.ListClick(GW, "GT_Rank_List", renameRow, "double")
             if pad.navVisible() then pad.set_mode("cursor") end
           end },
         }
@@ -305,5 +306,5 @@ ui.window("Guild", function()
     close, ranking, rankFocused = false, nil, nil
     listState.focusNext = 1
   end -- B leaves the rank picker
-  if W.back(close, state, kb, listState) then eq.ShowWindow(GW, false) end
+  if W.back(close, state, kb, listState) then API.windows.Show(GW, false) end
 end)

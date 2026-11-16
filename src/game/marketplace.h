@@ -3,7 +3,7 @@
 // The marketplace window's rules (CMarketplaceWnd @0x6d1cc0..0x6e4100 and the
 // free functions around it). The catalog and the window's rows live on the
 // connection (GameConnection::marketplace(), net/game_connection_marketplace.cpp), the window model in
-// app/lua_eq_marketplace.cpp. Names given here to the original's unnamed functions:
+// app/lua_ui_marketplace.cpp. Names given here to the original's unnamed functions:
 //  - CMarketplaceWnd_CanBuy @0x6d2df0: kinds 4 and 6 (the Station Cash kinds) always, else price <= wallet.
 //  - CMarketplaceWnd_UpdateButtonStates @0x6d5850: Buy, Qty Up and Qty Down.
 //  - CMarketplaceWnd_FormatPrice @0x6dbefb (inline in several places): by the entry's money type.

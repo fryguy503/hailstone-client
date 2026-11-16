@@ -1,14 +1,15 @@
--- The gamepad as the gamepad pack's windows see it: eq.gamepad (docs/gamepad.md section 5) when the client has it,
+-- The gamepad as the gamepad pack's windows see it: hs.gamepad (docs/gamepad.md section 5) when the client has it,
 -- else a stand-in that reports no pad, so every window still works with the mouse and keyboard. Each call looks
--- eq.gamepad up again, so the real API is used as soon as it is there; what cannot change within a frame (whether a
+-- hs.gamepad up again, so the real API is used as soon as it is there; what cannot change within a frame (whether a
 -- pad is connected, its type and labels) is read once a frame, since every focusable row asks.
 --
 -- Also the ImGui navigation calls the pack needs (ui.IsItemFocused, ui.SetWindowFocus, ui.IsWindowAppearing,
 -- ui.GetIO().nav_active / nav_visible), with stand-ins for a client that does not have them yet.
+local API = hs.UI
 local pad = {}
 
 -- ---------------------------------------------------------------- stand-in
--- Labels per pad type (eq.gamepad.glyph's answers), for the stand-in and for drawing the face buttons.
+-- Labels per pad type (hs.gamepad.glyph's answers), for the stand-in and for drawing the face buttons.
 local GLYPHS = {
   xbox = { a = "A", b = "B", x = "X", y = "Y", lb = "LB", rb = "RB", lt = "LT", rt = "RT", back = "View",
     start = "Menu", guide = "Xbox", ls = "LS", rs = "RS", up = "Up", down = "Down", left = "Left", right = "Right",
@@ -21,7 +22,7 @@ local GLYPHS = {
 }
 GLYPHS.generic = GLYPHS.xbox
 pad.GLYPHS = GLYPHS
--- The default bindings (docs/gamepad.md section 3), shown by the Options page while the client has no eq.gamepad.
+-- The default bindings (docs/gamepad.md section 3), shown by the Options page while the client has no hs.gamepad.
 local DEFAULT_BINDINGS = {
   a = "interact", b = "cancel", x = "AUTOPRIM", y = "CMD_JUMP", lb = "target_prev", rb = "target_next",
   up = "target_group", down = "SIT_STAND", left = "hotpage_prev", right = "hotpage_next", ls = "AUTORUN",
@@ -89,9 +90,16 @@ local stub = {
   request_focus = function(window) if ui.SetWindowFocus then ui.SetWindowFocus(window) end end,
 }
 
+local MEMBERS = {
+  connected = "Connected", type = "Type", down = "Down", pressed = "Pressed", released = "Released",
+  axis = "Axis", mode = "Mode", set_mode = "SetMode", cross_set = "CrossSet", cross_slot = "CrossSlot",
+  set_cross_slot = "SetCrossSlot", glyph = "Glyph", binding = "Binding", set_binding = "SetBinding",
+  setting = "Setting", set_setting = "SetSetting", rumble = "Rumble", request_focus = "RequestFocus",
+  drop_cursor = "DropCursor", takes_b = "TakesB",
+}
 local function api(name)
-  local g = eq.gamepad
-  local f = g and g[name]
+  local member = MEMBERS[name]
+  local f = member and API.Supports("gamepad", member) and API.gamepad[member]
   if f then return f end
   return stub[name]
 end
@@ -99,15 +107,15 @@ end
 -- pad.connected(), pad.pressed("a"), ...: the real call or the stand-in's.
 setmetatable(pad, { __index = function(_, name) return api(name) end })
 
--- True when the client has eq.gamepad (the C++ side), not the stand-in.
-function pad.real() return eq.gamepad ~= nil end
+-- True when the client has hs.gamepad (the C++ side), not the stand-in.
+function pad.real() return API.Supports("gamepad", "Connected") end
 
 -- Whether a pad is connected and its type, read once a frame (the client reads the pad as the frame begins); the
--- labels per type (eq.gamepad.glyph answers by the type alone). Read again when eq.gamepad comes or goes.
+-- labels per type (hs.gamepad.glyph answers by the type alone). Read again when hs.gamepad comes or goes.
 local seenFrame, seenApi, isConnected, rawType, padKind = nil, nil, false, "generic", "generic"
 local labels = {}
 local function frameState()
-  local f, g = ui.GetFrameCount(), eq.gamepad
+  local f, g = ui.GetFrameCount(), API.Supports("gamepad", "Connected") and API.gamepad or nil
   if f == seenFrame and rawequal(g, seenApi) then return end
   if not rawequal(g, seenApi) then labels = {} end
   seenFrame, seenApi = f, g

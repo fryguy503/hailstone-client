@@ -13,7 +13,7 @@
 // is marked `assumed`.
 //
 // The zones the server allows (its current expansion and content flags) come with its list; a route passes only
-// through allowed zones (game::ZoneRoutes::route's `allowed`, app/lua_eq_map.cpp: the server's zones, else the
+// through allowed zones (game::ZoneRoutes::route's `allowed`, app/lua_ui_map.cpp: the server's zones, else the
 // account's expansions).
 
 #include <cstdint>

@@ -1,22 +1,24 @@
 -- Minimap: a frame of this UI's own (no stock window), from the gamepad UI's (ui/gamepad/hud.lua). The zone map in a
--- circle around the player (eq.DrawMinimap: the map window's lines, the group, a /find path; what the stock map shows,
+-- circle around the player (hs.DrawMinimap: the map window's lines, the group, a /find path; what the stock map shows,
 -- no other players or NPCs), the zone's name above it and the game clock below. A click opens the map window, the
 -- wheel or + / - zoom, a right click turns rotation with the player on or off; Alt+right-click the frame's menu (which also has Auto Z
 -- and its ranges above and below you, hud.AutoZControls).
 -- Shown or hidden from any frame's menu (All frames > Minimap: hud.minimap).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local FL = dofile("lib/find.lua")
 local T = hud.T
 local C = T.color
 
 local RANGES = { 150, 300, 600, 1200, 2400 }
+local NO_ROWS = {}
 
 local function zoom() return math.max(1, math.min(#RANGES, tonumber(ui.GetSetting("minimap.zoom")) or 3)) end
 local function setZoom(step) ui.SetSetting("minimap.zoom", math.max(1, math.min(#RANGES, zoom() + step))) end
 local function rotating() return ui.GetSetting("minimap.rotate") == "1" end
 
 local function clock()
-  local h, m = eq.GameTime()
+  local h, m = API.session.GameTime()
   if not h then return nil end
   local h12 = h % 12
   if h12 == 0 then h12 = 12 end
@@ -51,7 +53,7 @@ local function drawWindow(x, y, w, h, s)
   local r = 86 * s
   local cy = y + 30 * s + r
   -- the zone's name, on the world (no panel or drop shadow): light text with a dark shadow on every palette
-  local zone = eq.ZoneName() or ""
+  local zone = API.map.ZoneName() or ""
   if zone ~= "" then
     local name = T.Fit(zone, w - 24 * s, T.font.small)
     T.Text(cx, y + 4 * s, name, C.barText, T.font.small, "center", nil, C.barShadow)
@@ -67,14 +69,16 @@ local function drawWindow(x, y, w, h, s)
   local dragged = hud.DragItem() -- a drag moves the frame
   local mx, my = ui.GetMousePos()
   local hovered = ui.IsItemHovered() and (mx - cx) ^ 2 + (my - cy) ^ 2 <= r * r
-  local nx, ny, pmx, pmy, k = eq.DrawMinimap(cx, cy, r, RANGES[zoom()], rotating())
+  local nx, ny, pmx, pmy, k = API.map.DrawMinimap(cx, cy, r, RANGES[zoom()], rotating())
+  local F, all = FL.state, FL.marks()
+  -- Retire retained actor state promptly, without asking the host for NPCs when this minimap uses none.
+  local rows = (all or F.sel or F.hover or F.menu or F.why) and FL.rows() or NO_ROWS
   -- the Find window's NPCs (lib/find.lua): as the map marks them, inside the ring
-  if pmx and k then
-    local F, all = FL.state, FL.marks()
+  if FL.policy() and pmx and k then
     if all or F.sel then
       local sn, cs = nx, -ny -- north's screen direction is (sin, -cos) of the turn
-      for _, row in ipairs(FL.rows()) do
-        local lit = row.id == F.sel or row.id == F.hover
+      for _, row in ipairs(rows) do
+        local lit = FL.matches(row, F.sel, F.selToken) or FL.matches(row, F.hover, F.hoverToken)
         if all or lit then
           local dx, dy = (row.x - pmx) * k, (row.y - pmy) * k
           local sx, sy = dx * cs - dy * sn, dx * sn + dy * cs
@@ -97,7 +101,7 @@ local function drawWindow(x, y, w, h, s)
       rotating() and "north up" or "turn with the player"))
     local wheel = ui.GetIO().wheel or 0
     if wheel ~= 0 then setZoom(wheel > 0 and -1 or 1) end
-    if ui.IsMouseReleased(ui.Mouse.Left) and not dragged then eq.ShowWindow("MapViewWnd", true) end
+    if ui.IsMouseReleased(ui.Mouse.Left) and not dragged then API.windows.Show("MapViewWnd", true) end
     if ui.IsMouseClicked(ui.Mouse.Right) and not ui.GetIO().alt then
       ui.SetSetting("minimap.rotate", rotating() and "0" or "1")
       T.TakeRightClick()
@@ -114,6 +118,7 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Minimap", function()
-  if not eq.InGame() then return end
+  FL.policy()
+  if not API.session.InGame() then return end
   hud.Window(nil, "Minimap", WINDOW_OPTS, drawWindow)
 end)

@@ -2,13 +2,14 @@
 -- guild bank, training, tracking): a stock list as W.list rows, stock buttons, a stock window's edit boxes and
 -- drop-downs as buttons (A types the text on the on-screen keyboard, or picks a choice from a list drawn in the
 -- window's place), check buttons as On / Off buttons, coin buttons and prices. Every control is the stock window's
--- child: eq.ListClick, eq.ClickChild, eq.SetWindowText, eq.ComboSelect, so the rules and messages are the game's.
+-- child: hs.ListClick, hs.ClickChild, hs.SetWindowText, hs.ComboSelect, so the rules and messages are the game's.
 --
 --   local M = dofile("lib/markets.lua")
 --   local F = M.form()                       -- a window's keyboard and picker
 --   M.frame()                                -- once a frame, first (runs clicks waiting for A to be released)
 --   if not M.modal(F, x0, y0, x1, y1) then ... M.field(F, win, child, ...) ... end
 --   if M.back(F, W.finish()) then close end
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -82,19 +83,19 @@ function M.pressed(name, b)
 end
 
 -- ---------------------------------------------------------------- rows
--- A copy of a list child's rows: each frame a list is read it is built again (eq keeps it for the rest of that
+-- A copy of a list child's rows: each frame a list is read it is built again (hs keeps it for the rest of that
 -- frame) and each row read makes a table, so a long list (a bazaar search's results) is read whole only when its count or its first or last row changes (or after M.refresh), and
 -- else a few rows a frame.
 local cache = {}
 local function readRow(win, id, r)
-  local texts, cr, cg, cb, tex, u0, v0, u1, v1 = eq.ListRow(win, id, r)
+  local texts, cr, cg, cb, tex, u0, v0, u1, v1 = API.windows.ListRow(win, id, r)
   if not texts then return nil end
   return { texts = texts, color = cr and { cr, cg, cb, 1 } or nil, tex = tex, uv = { u0, v0, u1, v1 }, index = r }
 end
 -- Whether row r still is what `a` (a row read before) holds: the texts and the colour's red, as readRow would read
 -- it (without making the row's tables).
 local function sameAt(a, win, id, r)
-  local texts, cr = eq.ListRow(win, id, r)
+  local texts, cr = API.windows.ListRow(win, id, r)
   if not a or not texts then return a == nil and texts == nil end
   if (a.color and a.color[1]) ~= (cr or nil) or #a.texts ~= #texts then return false end
   for i, t in ipairs(a.texts) do if texts[i] ~= t then return false end end
@@ -104,7 +105,7 @@ end
 -- The rows ({ texts, color, tex, uv, index (0-based) }) and the selected row (0-based, -1 none).
 function M.rows(win, id)
   local key = win .. "." .. id
-  local n, _, selected = eq.ListInfo(win, id)
+  local n, _, selected = API.windows.ListInfo(win, id)
   if not n then return {}, -1 end
   local c = cache[key]
   local whole = not c or c.n ~= n or c.dirty
@@ -157,14 +158,14 @@ function M.list(win, id, state, x0, y0, x1, y1, opts)
       focusedRow = r
       if opts.select == "focus" and state.lastFocus ~= r.index then
         state.lastFocus = r.index
-        if r.index ~= selected then eq.ListClick(win, id, r.index, "left") end
+        if r.index ~= selected then API.windows.ListClick(win, id, r.index, "left") end
       end
-      if opts.inspect ~= false and W.pressed("y") then eq.ListClick(win, id, r.index, "right") end
+      if opts.inspect ~= false and W.pressed("y") then API.windows.ListClick(win, id, r.index, "right") end
     end
   end, function(i)
     local r = order[i]
     if not r then return end
-    if r.index ~= selected or opts.select ~= "focus" then eq.ListClick(win, id, r.index, "left") end
+    if r.index ~= selected or opts.select ~= "focus" then API.windows.ListClick(win, id, r.index, "left") end
     if opts.onA then opts.onA(r) end
   end)
   ui.EndGroup()
@@ -255,9 +256,9 @@ function M.grid(state, n, per, rows, x, gap, cell)
 end
 
 -- ---------------------------------------------------------------- buttons
-local function shown(win, child) return eq.ChildShown(win, child) ~= false end
+local function shown(win, child) return API.windows.ChildShown(win, child) ~= false end
 M.shown = shown
-local function enabled(win, child) return eq.ChildState(win, child) ~= false end
+local function enabled(win, child) return API.windows.ChildState(win, child) ~= false end
 M.enabled = enabled
 
 -- A stock button w x h at the cursor (left out when the game hides it): A clicks it (opts.afterA: once A is
@@ -267,15 +268,15 @@ function M.button(win, child, label, w, h, opts)
   opts = opts or {}
   local text = label
   if not text or opts.useText then
-    local t = eq.WindowText(win, child)
+    local t = API.windows.Text(win, child)
     if t and t ~= "" then text = t end
   end
   local o = { primary = opts.primary, sub = opts.sub, glyph = opts.glyph, align = opts.align,
     disabled = opts.disabled or not enabled(win, child) }
   local clicked, focused = T.button("##" .. win .. child, text or child, w, h, o, pad)
   if clicked then
-    if opts.afterA then M.afterA(function() eq.ClickChild(win, child, "left") end)
-    else eq.ClickChild(win, child, "left") end
+    if opts.afterA then M.afterA(function() API.windows.ClickChild(win, child, "left") end)
+    else API.windows.ClickChild(win, child, "left") end
   end
   return clicked, focused
 end
@@ -299,10 +300,10 @@ end
 -- A check button as a button: its label and On / Off under it (opts.on / opts.off the words). Returns clicked.
 function M.toggle(win, child, label, w, h, opts)
   opts = opts or {}
-  local _, checked = eq.ChildState(win, child)
+  local _, checked = API.windows.ChildState(win, child)
   local clicked = T.button("##" .. win .. child, label, w, h, { sub = checked and (opts.on or "On") or (opts.off or "Off"),
     primary = checked and not opts.plain, align = 0, disabled = not enabled(win, child) }, pad)
-  if clicked then eq.ClickChild(win, child, "left") end
+  if clicked then API.windows.ClickChild(win, child, "left") end
   return clicked
 end
 
@@ -317,13 +318,13 @@ function M.coinButtons(win, ids, x0, x1, h)
     if i > 1 then ui.SameLine(0, gap) end
     local clicked, _, bx0, by0, bx1, by1 = T.button("##" .. win .. id, "", bw, h, { disabled = not enabled(win, id) }, pad)
     T.font(22)
-    local v = tostring(tonumber(eq.WindowText(win, id) or "") or 0)
+    local v = tostring(tonumber(API.windows.Text(win, id) or "") or 0)
     T.textIn(bx0 + T.px(8), by0, bx1 - T.px(8), by0 + (by1 - by0) * 0.62, T.fit(v, bx1 - bx0 - T.px(16)), C.text, 0.5)
     T.unfont()
     T.font(15)
     T.textIn(bx0, by0 + (by1 - by0) * 0.55, bx1, by1 - T.px(4), M.COINS[i][1], M.COINS[i][2], 0.5)
     T.unfont()
-    if clicked then M.afterA(function() eq.ClickChild(win, id, "left") end) end
+    if clicked then M.afterA(function() API.windows.ClickChild(win, id, "left") end) end
   end
 end
 
@@ -400,12 +401,12 @@ local function focusBack(F, id)
 end
 
 -- An edit box of the stock window as a button w x h at the cursor: its label and text (opts.hint when empty); A
--- types it on the keyboard (opts.max characters), Done sets it (eq.SetWindowText) and calls opts.done.
+-- types it on the keyboard (opts.max characters), Done sets it (hs.SetWindowText) and calls opts.done.
 function M.field(F, win, child, label, w, h, opts)
   opts = opts or {}
   local id = "##f" .. win .. child
   focusBack(F, id)
-  local text = eq.WindowText(win, child) or ""
+  local text = API.windows.Text(win, child) or ""
   local clicked, focused = T.button(id, label, w, h, { sub = text ~= "" and text or (opts.hint or "-"), align = 0,
     disabled = not enabled(win, child) }, pad)
   if clicked then
@@ -419,7 +420,7 @@ end
 function M.combo(F, win, child, label, w, h)
   local id = "##c" .. win .. child
   focusBack(F, id)
-  local choices, chosen = eq.ComboInfo(win, child)
+  local choices, chosen = API.windows.ComboInfo(win, child)
   choices = choices or {}
   local clicked, focused = T.button(id, label, w, h, { sub = choices[(chosen or 0) + 1] or "-", align = 0,
     disabled = #choices == 0 or not enabled(win, child) }, pad)
@@ -438,7 +439,7 @@ function M.modal(F, x0, y0, x1, y1)
     local w = math.min(x1 - x0, T.px(1200))
     local r = K.draw(F.kb, pad, x0 + (x1 - x0 - w) / 2, y0, w)
     if r == "ok" and t then
-      eq.SetWindowText(t.win, t.child, F.kb.text)
+      API.windows.SetText(t.win, t.child, F.kb.text)
       if t.done then t.done(F.kb.text) end
     end
     if r and t then F.refocus = t.id end
@@ -492,7 +493,7 @@ function M.modal(F, x0, y0, x1, y1)
       end
     end
     if clicked and ui.GetFrameCount() - p.at > 10 then
-      if not current then eq.ComboSelect(p.win, p.child, i) end
+      if not current then API.windows.ComboSelect(p.win, p.child, i) end
       done = true
     end
   end
@@ -551,18 +552,18 @@ local function testSettings()
 end
 
 -- test.show = <screen>,<screen> in the pack's settings file (ui/settings/gamepad.txt) shows those stock windows once,
--- ten seconds in (eq.ShowWindow), for screenshots of windows only an NPC or a server opens; their children then
+-- ten seconds in (hs.ShowWindow), for screenshots of windows only an NPC or a server opens; their children then
 -- answer as for an empty window.
 function M.testShow(screen, t)
   t = t or testSettings()
-  if t.showRaw == "" or not eq.InGame() then return end
+  if t.showRaw == "" or not API.session.InGame() then return end
   GPSTATE.marketsShown = GPSTATE.marketsShown or {}
   if GPSTATE.marketsShown[screen] then return end
   if not t.show[screen] then return end
   GPSTATE.marketsShowAt = GPSTATE.marketsShowAt or ui.GetTime()
   if ui.GetTime() - GPSTATE.marketsShowAt > 10 then
     GPSTATE.marketsShown[screen] = true
-    eq.ShowWindow(screen, true)
+    API.windows.Show(screen, true)
   end
 end
 
@@ -573,7 +574,7 @@ local function forced(screen, t)
   if t.drawRaw == "" then -- (no screen is drawn: with test.draw.every, list[i] is never one)
     return false
   end
-  if not eq.InGame() then return false end
+  if not API.session.InGame() then return false end
   local list = t.draw
   local every = tonumber(ui.GetSetting("test.draw.every") or "")
   if not every then return t.drawSet[screen] == true end

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <unordered_set>
 
 #include "assets/zone.h"
 #include "game/animated_objects.h"
@@ -99,6 +100,14 @@ private:
 } // namespace
 
 CollisionMesh CollisionMesh::build(const assets::Zone& zone) {
+    return build_scene(zone, false);
+}
+
+CollisionMesh CollisionMesh::build_visual(const assets::Zone& zone) {
+    return build_scene(zone, true);
+}
+
+CollisionMesh CollisionMesh::build_scene(const assets::Zone& zone, bool visual) {
     CollisionMesh m;
     // `moving`: an animated object's vertex nodes; its moving triangles are game::AnimatedObjects', not ours.
     auto add_mesh = [&](const assets::Mesh& mesh, const glm::mat4& transform, bool terrain, bool ladder,
@@ -115,6 +124,8 @@ CollisionMesh CollisionMesh::build(const assets::Zone& zone) {
             if (part.material < mesh.materials.size() &&
                 mesh.materials[part.material].blend == assets::BlendMode::Invisible)
                 flags |= kTriangleInvisible;
+            if (part.material >= mesh.materials.size() || !visual_surface_material(mesh.materials[part.material]))
+                flags |= kTriangleNoVisualSurface;
             for (std::uint32_t i = 0; i + 2 < part.index_count; i += 3) {
                 // A part reaching past the index list (a damaged file) ends there.
                 if (std::size_t{part.first_index} + i + 2 >= mesh.indices.size()) break;
@@ -124,7 +135,9 @@ CollisionMesh CollisionMesh::build(const assets::Zone& zone) {
                 if (moving && moving_triangle_node(*moving, ia, ib, ic) != assets::kStillVertex) continue;
                 if (!finite(world[ia]) || !finite(world[ib]) || !finite(world[ic])) continue;
                 if (mesh.front_ccw) std::swap(ib, ic);
-                m.triangles_.push_back(CollisionTriangle::make(world[ia], world[ib], world[ic], flags));
+                const auto triangle = CollisionTriangle::make(world[ia], world[ib], world[ic], flags);
+                if (visual && !visual_surface(triangle)) continue;
+                m.triangles_.push_back(triangle);
                 m.light_.push_back(terrain ? vertex_alpha_light(mesh.vertices[ia].color, mesh.vertices[ib].color,
                                                                 mesh.vertices[ic].color)
                                            : std::numeric_limits<float>::quiet_NaN());
@@ -138,15 +151,24 @@ CollisionMesh CollisionMesh::build(const assets::Zone& zone) {
             }
         }
     };
-    for (const auto& mesh : zone.terrain) add_mesh(mesh, glm::mat4(1.0f), true, false);
+    const bool refined = visual && zone.draw_terrain.size() == zone.terrain.size() &&
+                         zone.draw_terrain_source.size() == zone.terrain.size();
+    for (const auto& mesh : refined ? zone.draw_terrain : zone.terrain)
+        add_mesh(mesh, glm::mat4(1.0f), true, false);
     for (const auto& p : zone.placements) {
         auto it = zone.objects.find(p.actor);
         if (it == zone.objects.end()) continue;
+        if (visual) {
+            if (const auto replacement = zone.draw_objects.find(p.actor); replacement != zone.draw_objects.end()) {
+                add_mesh(replacement->second, p.transform, false, false);
+                continue; // the renderer draws this static replacement instead of the original animated mesh
+            }
+        }
         const bool ladder = is_ladder_actor(p.actor);
         const auto anim = zone.object_animations.find(p.actor);
         add_mesh(it->second, p.transform, false, ladder,
                  anim != zone.object_animations.end() ? &anim->second.vertex_node : nullptr);
-        if (!ladder) continue;
+        if (!ladder || visual) continue;
         for (const CollisionTriangle& t : ladder_slab(it->second, p.transform)) {
             m.triangles_.push_back(t);
             m.light_.push_back(std::numeric_limits<float>::quiet_NaN());
@@ -186,29 +208,33 @@ void CollisionMesh::index() {
     // Find trails ask for thousands of exact ground heights per frame. Dense terrain can put several thousand
     // triangles in one coarse cell; narrow its ground-only candidates without changing any intersection maths.
     for (const auto& [key, candidates] : cells_) {
-        if (candidates.size() <= 128) continue;
+        if (candidates.size() <= 32) continue;
         const auto bits = std::bit_cast<std::uint64_t>(key);
         const auto cx = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(bits >> 32));
         const auto cy = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(bits));
-        std::array<std::vector<std::uint32_t>, kGroundDivisions * kGroundDivisions> bins;
-        for (const std::uint32_t t : candidates) {
-            const auto& tri = triangles_[t];
-            if (!visible_ground(tri) || !finite(tri.v0) || !finite(tri.v1) || !finite(tri.v2)) continue;
-            const glm::vec3 lo = glm::min(glm::min(tri.v0, tri.v1), tri.v2);
-            const glm::vec3 hi = glm::max(glm::max(tri.v0, tri.v1), tri.v2);
-            // Keep boundary neighbours too: a barycentric weight can round to zero a float's step beyond an edge.
-            const float inf = std::numeric_limits<float>::infinity();
-            const auto x0 = ground_subcell(std::nextafter(lo.x, -inf), cx);
-            const auto x1 = ground_subcell(std::nextafter(hi.x, inf), cx);
-            const auto y0 = ground_subcell(std::nextafter(lo.y, -inf), cy);
-            const auto y1 = ground_subcell(std::nextafter(hi.y, inf), cy);
-            for (auto x = x0; x <= x1; ++x)
-                for (auto y = y0; y <= y1; ++y) bins[y * kGroundDivisions + x].push_back(t);
+        for (const bool visual : {false, true}) {
+            if (!visual && candidates.size() <= 128) continue;
+            std::array<std::vector<std::uint32_t>, kGroundDivisions * kGroundDivisions> bins;
+            for (const std::uint32_t t : candidates) {
+                const auto& tri = triangles_[t];
+                if (!(visual ? visual_surface(tri) : visible_ground(tri)) ||
+                    !finite(tri.v0) || !finite(tri.v1) || !finite(tri.v2)) continue;
+                const glm::vec3 lo = glm::min(glm::min(tri.v0, tri.v1), tri.v2);
+                const glm::vec3 hi = glm::max(glm::max(tri.v0, tri.v1), tri.v2);
+                // Keep boundary neighbours too: a barycentric weight can round to zero a float's step beyond an edge.
+                const float inf = std::numeric_limits<float>::infinity();
+                const auto x0 = ground_subcell(std::nextafter(lo.x, -inf), cx);
+                const auto x1 = ground_subcell(std::nextafter(hi.x, inf), cx);
+                const auto y0 = ground_subcell(std::nextafter(lo.y, -inf), cy);
+                const auto y1 = ground_subcell(std::nextafter(hi.y, inf), cy);
+                for (auto x = x0; x <= x1; ++x)
+                    for (auto y = y0; y <= y1; ++y) bins[y * kGroundDivisions + x].push_back(t);
+            }
+            auto& grid = visual ? visual_cells_[key] : ground_cells_[key];
+            for (std::size_t part = 0; part < bins.size(); ++part) grid.offsets[part + 1] = grid.offsets[part] + bins[part].size();
+            grid.candidates.reserve(grid.offsets.back());
+            for (const auto& bin : bins) grid.candidates.insert(grid.candidates.end(), bin.begin(), bin.end());
         }
-        auto& grid = ground_cells_[key];
-        for (std::size_t part = 0; part < bins.size(); ++part) grid.offsets[part + 1] = grid.offsets[part] + bins[part].size();
-        grid.candidates.reserve(grid.offsets.back());
-        for (const auto& bin : bins) grid.candidates.insert(grid.candidates.end(), bin.begin(), bin.end());
     }
 }
 
@@ -297,6 +323,56 @@ std::optional<float> CollisionMesh::roof_above(const glm::vec3& p) const {
         if (z && *z > p.z && (!best || *z < *best)) best = z;
     });
     return best;
+}
+
+std::optional<float> CollisionMesh::visual_surface_below(const glm::vec3& p) const {
+    if (!finite(p)) return std::nullopt;
+    std::optional<float> best;
+    const auto check = [&](const CollisionTriangle& tri) {
+        const auto z = height_in(tri, glm::vec2(p));
+        if (z && std::isfinite(*z) && *z <= p.z && (!best || *z > *best)) best = z;
+    };
+    const auto cx = cell_of(p.x), cy = cell_of(p.y);
+    const auto key = cell_key(cx, cy);
+    if (const auto it = visual_cells_.find(key); it != visual_cells_.end()) {
+        const auto part = ground_subcell(p.y, cy) * kGroundDivisions + ground_subcell(p.x, cx);
+        const auto& grid = it->second;
+        for (auto i = grid.offsets[part]; i < grid.offsets[part + 1]; ++i) check(triangles_[grid.candidates[i]]);
+    } else if (const auto cell = cells_.find(key); cell != cells_.end()) {
+        for (const auto t : cell->second)
+            if (visual_surface(triangles_[t])) check(triangles_[t]);
+    }
+    for (const auto t : big_)
+        if (visual_surface(triangles_[t])) check(triangles_[t]);
+    return best;
+}
+
+bool CollisionMesh::visual_surfaces(const glm::vec2& low,const glm::vec2& high,
+                                   const std::function<bool(const CollisionTriangle&)>& visit,std::uint32_t& work) const {
+    if(!std::isfinite(low.x)||!std::isfinite(low.y)||!std::isfinite(high.x)||!std::isfinite(high.y)||
+       low.x>high.x||low.y>high.y)return false;
+    const auto x0=cell_of(low.x),x1=cell_of(high.x),y0=cell_of(low.y),y1=cell_of(high.y);
+    if((std::int64_t{x1}-x0+1)*(std::int64_t{y1}-y0+1)>static_cast<std::int64_t>(work))return false;
+    std::unordered_set<std::uint32_t> seen;
+    const auto sample=[&](std::uint32_t index){
+        if(work==0)return false;
+        --work;
+        if(!seen.insert(index).second)return true;
+        const auto& tri=triangles_[index];
+        if(!visual_surface(tri))return true;
+        const auto lo=glm::min(glm::min(glm::vec2(tri.v0),glm::vec2(tri.v1)),glm::vec2(tri.v2));
+        const auto hi=glm::max(glm::max(glm::vec2(tri.v0),glm::vec2(tri.v1)),glm::vec2(tri.v2));
+        if(hi.x<low.x||hi.y<low.y||lo.x>high.x||lo.y>high.y)return true;
+        return visit(tri);
+    };
+    for(auto x=x0;x<=x1;++x)for(auto y=y0;y<=y1;++y){
+        if(work==0)return false;
+        --work;
+        if(const auto cell=cells_.find(cell_key(x,y));cell!=cells_.end())
+            for(const auto index:cell->second)if(!sample(index))return false;
+    }
+    for(const auto index:big_)if(!sample(index))return false;
+    return true;
 }
 
 bool CollisionMesh::line_of_sight(const glm::vec3& a, const glm::vec3& b) const {

@@ -1,5 +1,5 @@
 // The group finder's posts and searches (CGroupSearchWnd; game/group_search.h). The window models
-// (app/lua_eq_group_search.cpp) edit the fields kept here; the code below is the original's button handlers.
+// (app/lua_ui_group_search.cpp) edit the fields kept here; the code below is the original's button handlers.
 
 #include <algorithm>
 #include <cctype>
@@ -71,8 +71,8 @@ void GameConnection::group_search_post_player(bool update) {
     c.match_filter = gs.filters.exclusive;
     gs.lfg = c;
     send_lfg(c);
-    // 0x678df0: the post's button hidden (checked), Update shown and disabled, LFG off enabled (unchecked);
-    // 0x678ea0 (Update) only disables Update. Both follow from `lfg` here (app/lua_eq_group_search.cpp).
+    // Posting hides the post button, disables Update and enables LFG off; updating only disables Update.
+    // Both follow from `lfg` here (app/lua_ui_group_search.cpp).
     if (!update) gs.lfg_remove_checked = false;
 }
 

@@ -1,9 +1,10 @@
 -- The menu a buff icon opens on a right click, shared by the buff trays (lib/bufftray.lua), the target window
--- (target.lua) and the pet window (lib/pet.lua): the spell's information (eq.ShowSpell), Add to Blocked Buffs (the
+-- (target.lua) and the pet window (lib/pet.lua): the spell's information (hs.ShowSpell), Add to Blocked Buffs (the
 -- Blocked Buffs window's own Add on the spell's id: the server stops landing it) or Add to Blocked Pet Spells (the
 -- Blocked Pet Buffs window's), and Remove (the game's own right click on that button) for the player's own buffs.
 -- The buff is kept when the menu opens, so a buff that fades or a target that changes while it is open does not move
 -- the menu to another spell.
+local API = hs.UI
 local M = {}
 local picked = {} -- window -> the buff its menu is for: { id, spell, name, block, remove }
 
@@ -32,20 +33,20 @@ function M.Draw(window)
   if b then
     ui.TextDisabled(b.name)
     ui.Separator()
-    if ui.MenuItem("Spell Info") then eq.ShowSpell(b.spell) end
+    if ui.MenuItem("Spell Info") then API.spells.Show(b.spell) end
     if b.block == "buff" then
       if ui.MenuItem("Add to Blocked Buffs") then
-        eq.SetWindowText("BlockedBuffWnd", "BW_EditSpellToBlock", tostring(b.spell))
-        eq.ClickChild("BlockedBuffWnd", "BW_AddSpellToBlock", "left")
+        API.windows.SetText("BlockedBuffWnd", "BW_EditSpellToBlock", tostring(b.spell))
+        API.windows.ClickChild("BlockedBuffWnd", "BW_AddSpellToBlock", "left")
       end
     elseif b.block == "pet" then
       if ui.MenuItem("Add to Blocked Pet Spells") then
-        eq.SetWindowText("BlockedPetBuffWnd", "BW_EditSpellToBlockFromPet", tostring(b.spell))
-        eq.ClickChild("BlockedPetBuffWnd", "BW_AddSpellToBlockFromPet", "left")
+        API.windows.SetText("BlockedPetBuffWnd", "BW_EditSpellToBlockFromPet", tostring(b.spell))
+        API.windows.ClickChild("BlockedPetBuffWnd", "BW_AddSpellToBlockFromPet", "left")
       end
     end
-    if b.remove and ui.MenuItem("Remove") and eq.BuffSlot(window, b.id) == b.spell then -- (still in that slot)
-      eq.WindowButton(window, b.id, 3)
+    if b.remove and ui.MenuItem("Remove") and API.buffs.Slot(window, b.id) == b.spell then -- (still in that slot)
+      API.windows.Button(window, b.id, 3)
     end
   end
   ui.EndPopup()

@@ -12,6 +12,7 @@
 --   esc.MenuItem(key)
 
 -- Shared by every window script (each dofile makes its own copy of this file).
+local API = hs.UI
 modern = modern or { windows = {}, resetAll = false }
 local shared = modern
 shared.esc = shared.esc or { seen = {}, front = {}, frame = -1 }
@@ -67,7 +68,7 @@ function E.Frame(key)
   -- last (a window drawn later this frame was last seen in the last one).
   if S.frame ~= frame then
     S.frame = frame
-    if eq.TakeCloseTopWindow and eq.TakeCloseTopWindow() then
+    if API.menus.TakeCloseTopWindow and API.menus.TakeCloseTopWindow() then
       local best, bestAt
       for k, f in pairs(S.seen) do
         if frame - f <= 1 and E.On(k) and (bestAt == nil or S.front[k] > bestAt) then best, bestAt = k, S.front[k] end

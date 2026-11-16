@@ -18,8 +18,8 @@
 #include "net/social_packets.h"
 #include "plugin/native_plugins.h"
 #include "plugin/ui_bridge.h"
-#include "app/lua_eq.h"
-#include "app/lua_eq_plugins.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_plugins.h"
 #include "ui/lua/lua_host.h"
 #include "mq_test_world.h"
 
@@ -443,16 +443,16 @@ std::string lua_eval_in(ui::lua::LuaUi& lua, const char* tag, const char* expr) 
 }
 } // namespace
 
-TEST_CASE("plugin windows: its ui/<pack>/ folder, eq.Plugin calls, options and menu entries") {
+TEST_CASE("plugin windows: its ui/<pack>/ folder, hs.Plugin calls, options and menu entries") {
     Host h;
     h.approve(plugin::kCapAll);
     // Its window, in its folder beside the binary (plugins/ExtendTest/ui/pack/).
     const fs::path ui_dir = h.plugin_dir / "ExtendTest" / "ui" / "pack";
     fs::create_directories(ui_dir);
-    std::ofstream(ui_dir / "ext.lua") << "opts = eq.PluginOptions()\n"
-                                         "menu = eq.PluginMenu()\n"
+    std::ofstream(ui_dir / "ext.lua") << "opts = hs.PluginOptions()\n"
+                                         "menu = hs.PluginMenu()\n"
                                          "ui.window('ExtWin', function()\n"
-                                         "  local p = eq.Plugin('ExtendTest')\n"
+                                         "  local p = hs.Plugin('ExtendTest')\n"
                                          "  info = p and p.info('hello', {key = 'k'})\n"
                                          "  via_call = p and p.call('info').level\n"
                                          "  missing = p and p.nope()\n"
@@ -470,11 +470,11 @@ TEST_CASE("plugin windows: its ui/<pack>/ folder, eq.Plugin calls, options and m
     {
         const fs::path pack = h.world.dir / "pack";
         fs::create_directories(pack);
-        app::EqHost eh;
+        app::UiHost eh;
         eh.conn = h.world.conn.get();
         eh.plugin_ui = &h.bridge;
         ui::lua::LuaUi lua(pack, h.world.dir / "ui.txt");
-        lua.add_eq_api([&](lua_State* L) { app::register_plugins_api(L, eh); });
+        lua.add_ui_api([&](lua_State* L) { app::register_plugins_api(L, eh); });
         auto frame = [&] {
             std::vector<ui::lua::LuaUi::Folder> folders;
             for (const auto& [name, folder] : h.bridge.folders()) folders.push_back({name, folder / "ui" / "pack"});
@@ -497,7 +497,7 @@ TEST_CASE("plugin windows: its ui/<pack>/ folder, eq.Plugin calls, options and m
         CHECK(lua_eval_in(lua, "plugin:ExtendTest", "opts[1].name .. ' ' .. opts[1].label .. ' ' .. opts[1].value .. ' ' .. opts[1].max") ==
               "mode Mode 2 3");
         CHECK(lua_eval_in(lua, "plugin:ExtendTest", "menu[1].label .. ' ' .. menu[1].command") == "Ext Window /exton");
-        CHECK(lua_eval(L, "(function() eq.SetPluginOption('ExtendTest', 'mode', 9) return eq.PluginOptions()[1].value end)()") ==
+        CHECK(lua_eval(L, "(function() hs.SetPluginOption('ExtendTest', 'mode', 9) return hs.PluginOptions()[1].value end)()") ==
               "3"); // clamped to its range
 
         // Unloaded: its windows, functions, options and menu go.
@@ -506,8 +506,8 @@ TEST_CASE("plugin windows: its ui/<pack>/ folder, eq.Plugin calls, options and m
         CHECK_FALSE(h.bridge.has_plugin("ExtendTest"));
         frame();
         CHECK(lua_eval_in(lua, "plugin:ExtendTest", "info") == "nil"); // its globals went with it
-        CHECK(lua_eval(L, "eq.Plugin('ExtendTest')") == "nil");
-        CHECK(lua_eval(L, "#eq.PluginOptions()") == "0");
+        CHECK(lua_eval(L, "hs.Plugin('ExtendTest')") == "nil");
+        CHECK(lua_eval(L, "#hs.PluginOptions()") == "0");
     }
     ImGui::DestroyContext(ctx);
 }

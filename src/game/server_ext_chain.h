@@ -49,6 +49,13 @@ public:
 
     const char* name() const override { return "chain"; }
 
+    std::optional<FollowProfile> follow_profile(const net::GameConnection& c) const override;
+    std::optional<MountProfile> mount_profile(const net::GameConnection& c) const override;
+    bool map_visible(const net::GameConnection& c, const Spawn& spawn, std::uint32_t purpose) const override;
+    MapPolicy map_policy(const net::GameConnection& c) const override;
+    std::uint64_t lifecycle_revision(const net::GameConnection& c) const override;
+    bool merchant_right_click(net::GameConnection& c, std::uint32_t merchant, const net::ItemSlot& slot,
+                              std::uint32_t item, std::uint32_t quantity) override;
     bool retry_zone_entry(net::GameConnection& c) override;
     bool handler_command(net::GameConnection& c, std::string_view handler, const std::string& args) override;
     std::optional<std::vector<std::string>> who_lines(const net::GameConnection& c,
@@ -87,11 +94,29 @@ public:
     const SkillRules* skill_rules(const net::GameConnection& c) const override;
     LevelNeededLine level_needed_line(const net::GameConnection& c) const override;
     std::optional<std::string> merchant_level(const net::GameConnection& c, const net::Item& item) const override;
+    std::optional<std::string> zone_display_name(const net::GameConnection&, std::uint32_t, std::uint32_t) const override;
+    std::optional<std::string> item_flags(const net::GameConnection&, const net::Item&, std::string_view) const override;
+    std::optional<std::string> item_description_append(const net::GameConnection&, const net::Item&) const override;
+    std::uint64_t item_presentation_revision(const net::GameConnection&) const override;
+    std::optional<std::string> loot_confirmation(const net::GameConnection&, const net::Item&,
+        std::span<const std::uint32_t>, bool) const override;
     void label_text(const net::GameConnection& c, int id, std::string& text) const override;
     void nameplate_text(const net::GameConnection& c, const Spawn& spawn, std::string& text) const override;
     bool hide_xtarget_slot(const net::GameConnection& c, int slot) const override;
 
 private:
+    struct PolicyStamp {
+        int member = 0;
+        std::uint32_t flags = 0;
+        std::uint64_t revision = 0;
+        std::uint64_t lifecycle = 0;
+        std::string name;
+        bool operator==(const PolicyStamp&) const = default;
+    };
+    mutable std::vector<PolicyStamp> policy_stamps_;
+    mutable std::uint64_t policy_revision_ = 0;
+    mutable std::vector<std::pair<int, std::uint64_t>> lifecycle_stamps_;
+    mutable std::uint64_t lifecycle_revision_ = 0;
     struct Member {
         int id = 0;
         std::shared_ptr<ServerExtension> ext;

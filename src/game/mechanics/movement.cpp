@@ -539,7 +539,8 @@ public:
     void set_accel(ControlWho, float target) override {
         std::optional<AccelRider> rider;
         if (ch_.riding) rider = AccelRider{true, ch_.in_combat};
-        s_.controlled.speed_run = mechanics::set_accel(s_.controlled.speed_run, target, false, rider, step_scale_,
+        s_.controlled.speed_run = mechanics::set_accel(s_.controlled.speed_run, target,
+                                                       ch_.riding && ch_.instant_ridden_acceleration, rider, step_scale_,
                                                        ch_.run_speed);
     }
     void print(std::uint32_t id, std::int32_t) override { ev_.message = id; }

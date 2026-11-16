@@ -2,13 +2,14 @@
 -- them (lib/model.lua), so the pages, the history and the settings are the game's:
 --   Help (HelpWindow)            the game's help\ page in a panel D-pad up / down scrolls (focused), its links as a list
 --                                beside it (A follows one inside the window as clicking it in the stock page does:
---                                eq.StmlLink; the web links are not followed, as the window does not); LB goes Back a
+--                                hs.StmlLink; the web links are not followed, as the window does not); LB goes Back a
 --                                page, X shows the Contents, and the Reset Tips and Customer Service (/petition)
---                                buttons (app/lua_eq_help.cpp)
+--                                buttons (app/lua_ui_help.cpp)
 --   Story (StoryWnd)             the storyline\ pages, newest first: A on one shows it (the window marks it read),
---                                the page beside the list, and "Show new stories" (Automatic) (app/lua_eq_story.cpp)
---   Alert History                the alerts closed (A selects one) and Open Alert (app/lua_eq_fellowship.cpp; EQEmu
+--                                the page beside the list, and "Show new stories" (Automatic) (app/lua_ui_story.cpp)
+--   Alert History                the alerts closed (A selects one) and Open Alert (app/lua_ui_fellowship.cpp; EQEmu
 --   (AlertHistoryWnd)            sends no alerts, so the list stays empty)
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -64,8 +65,8 @@ ui.window("Help", function()
       page.raw, page.scroll = raw, 0
       links.offset, links.focusNext = 0, 1
     end
-    if pressed("Help", "lb") and (M.state(HW, "BackButton")) then eq.ClickChild(HW, "BackButton", "left") end
-    if pressed("Help", "x") then eq.ClickChild(HW, "Contents", "left") end
+    if pressed("Help", "lb") and (M.state(HW, "BackButton")) then API.windows.ClickChild(HW, "BackButton", "left") end
+    if pressed("Help", "x") then API.windows.ClickChild(HW, "Contents", "left") end
     local bh = T.px(70)
     -- the buttons along the top
     ui.SetCursorPos(x0 - wx, y0 - wy)
@@ -91,11 +92,11 @@ ui.window("Help", function()
         T.font(20)
         T.textIn(rx0 + T.px(16), ry0, rx1 - T.px(16), ry1, T.fit(list[i][1], rx1 - rx0 - T.px(32)), C.link or C.accent, 0)
         T.unfont()
-      end, function(i) eq.StmlLink(HW, "Display", list[i][2], list[i][3]) end)
+      end, function(i) API.windows.StmlLink(HW, "Display", list[i][2], list[i][3]) end)
       ui.EndGroup()
     end
   end
-  if W.finish() then eq.ShowWindow(HW, false) end
+  if W.finish() then API.windows.Show(HW, false) end
 end)
 
 -- ---------------------------------------------------------------- the storyline (StoryWnd)
@@ -118,7 +119,7 @@ ui.window("Story", function()
     if story.raw ~= raw then story.raw, story.scroll = raw, 0 end
     P.draw("##storypage", story, raw, midX, y0, x1, y1, { empty = "Pick a story on the left to read it." })
   end
-  if W.finish() then eq.ShowWindow(SW, false) end
+  if W.finish() then API.windows.Show(SW, false) end
 end)
 
 -- ---------------------------------------------------------------- the alert history (AlertHistoryWnd)
@@ -138,5 +139,5 @@ ui.window("Alert History", function()
     ui.SetCursorPos(x0 - wx, y1 - bh - wy)
     M.buttons(AH, { { "AH_Open_Alert_Btn", "Open Alert", { primary = true } } }, x0, x1, bh)
   end
-  if W.finish() then eq.ShowWindow(AH, false) end
+  if W.finish() then API.windows.Show(AH, false) end
 end)

@@ -45,6 +45,42 @@ client with the same variables (and `HAILSTONE_GPU_IPC_SERVER_PID` set to the br
 private, as before. `HAILSTONE_GPU_BENCHMARK=1` logs the client's presented frames and the time spent waiting for
 the lease and for shared frames' fences.
 
+## Transient plugin geometry
+
+The generic world geometry service (`sdk/hailstone_world_geometry.h`) accepts complete, transient batches of
+colored triangles or one-pixel lines. A producer supplies the final world positions and compositing order;
+`render/WorldGeometryRenderer` never invents terrain heights. It depth-tests against the current scene with
+reverse Z, blends premultiplied linear-light color without writing depth, and writes the temporal reactive mask
+through the same scene attachments as the target ring. Thick lines, outlines and glyphs are authored triangles.
+The per-frame budget admits at most 256 batches and 98,304 vertices; invalid inputs and repeated owner/tag pairs
+cannot consume unbounded validation work. Buffers belong to fenced frame slots.
+
+The app offers a current scene frame only when its connection, zone, instance and scene epoch match the loaded
+collision scene. Effect floor queries choose the highest upward-facing drawn opaque/masked surface at or below
+the caller's ceiling: terrain, static props (passable parts included), current animated scenery, doors and placed
+scenery. A separate visual mesh uses the same selected smoothed terrain and replacement objects as the renderer;
+movement keeps its original mesh. It is rebuilt with the scene and unavailable during a scene rebuild or failed
+upload. Invisible collision, transparent materials, undersides and movement-only ladder slabs are excluded. These
+are visual surfaces, separate from movement floor policy; NPC/player/pet meshes, dropped items, missiles and
+placement ghosts are excluded. The producer bounds the ceiling to the desired layer; missing surfaces remain
+missing. Actor anchors use the model transform prepared for this render attempt, including the displayed position,
+model origin and mount seat, with a separate plausibility-checked floor sample when available. A hidden or clipped
+actor can have a prepared model pose: this is not evidence of visibility. Connection retirement, zoning, skipped
+render attempts and renderer failure withdraw the service, and changed scenery transforms or animation time
+advance its collision revision. Masked surfaces use their mesh footprint; this CPU query does not sample texture alpha.
+Animated visual surfaces use the renderer's exact clock, independently of the fixed-step movement pose. The
+optional surface-patch query clips current upward scene faces against a producer triangle, proves coplanar union
+coverage by polygon subtraction, and returns an interior witness and its highest source face for a mismatch.
+Off-grid or thin props cannot be certified flat just because point samples missed them. Coverage holes, incomplete
+enumeration, numeric uncertainty and exhausted shared work never produce a planar certificate.
+
+A recorded receipt means all admitted vertices reached `vkCmdDraw` for the exact batch identity. A submitted
+receipt additionally means the real frame reached a successful queue submission. A presented receipt means
+`vkQueuePresentKHR` accepted that real frame (`VK_SUCCESS` or `VK_SUBOPTIMAL_KHR`); an optional generated frame
+cannot confer a receipt on it. None of these receipts proves visible pixels, lack of occlusion or physical display.
+`world_geometry_probe` checks actual recording, frame submission/presentation and PNG readback for winding,
+alpha blending, depth occlusion, foreground geometry and lines without game assets.
+
 ## The frame
 
 `render::VkContext` (`src/render/vk_context.h`):

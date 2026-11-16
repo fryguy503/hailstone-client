@@ -1,5 +1,5 @@
 // The player's word on a server's compiled plugins (plugin/consent.h): servers/<profile>/plugin_approvals.txt, and
-// the eq API the UI packs ask it with (eq.PluginConsent, eq.AnswerPluginConsent; app/lua_eq_plugins.cpp), which a
+// the hs API the UI packs ask it with (hs.PluginConsent, hs.AnswerPluginConsent; app/lua_ui_plugins.cpp), which a
 // plugin's own code in the UI can neither read nor answer.
 #include <doctest/doctest.h>
 
@@ -13,7 +13,7 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "core/atomic_file.h"
 #include "core/sha256.h"
 #include "plugin/consent.h"
@@ -126,7 +126,7 @@ std::string in_folder(ui::lua::LuaUi& lua, const char* tag, const std::string& c
 struct Asking {
     std::optional<plugin::ConsentPrompt> prompt;
     std::vector<std::optional<bool>> answers;
-    void wire(app::EqHost& host) {
+    void wire(app::UiHost& host) {
         plugin::ConsentPrompt p;
         p.server = "Alpha";
         p.serial = 7;
@@ -143,43 +143,43 @@ struct Asking {
 
 } // namespace
 
-TEST_CASE("eq.PluginConsent and eq.AnswerPluginConsent: the question for the packs, and the player's answer") {
-    app::EqHost host;
-    app::EqApi api(host);
+TEST_CASE("hs.PluginConsent and hs.AnswerPluginConsent: the question for the packs, and the player's answer") {
+    app::UiHost host;
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
 
-    CHECK(run(L, "return eq.PluginConsent()") == "nil"); // no host function: nothing asked
-    CHECK(run(L, "return eq.AnswerPluginConsent(true, 7)") == "false");
+    CHECK(run(L, "return hs.PluginConsent()") == "nil"); // no host function: nothing asked
+    CHECK(run(L, "return hs.AnswerPluginConsent(true, 7)") == "false");
     Asking a;
     a.wire(host);
     const std::string hex = to_hex(sha256(std::string_view("bytes")));
-    CHECK(run(L, "return eq.PluginConsent().server") == "Alpha");
-    CHECK(run(L, "return eq.PluginConsent().serial") == "7");
-    CHECK(run(L, "return eq.PluginConsent().warning") == std::string(plugin::kConsentWarning));
-    CHECK(run(L, "return #eq.PluginConsent().plugins") == "1");
-    CHECK(run(L, "return eq.PluginConsent().plugins[1].name") == "MQ2Thing");
-    CHECK(run(L, "return eq.PluginConsent().plugins[1].file") == "MQ2Thing.so");
-    CHECK(run(L, "return eq.PluginConsent().plugins[1].size") == "123456");
-    CHECK(run(L, "return eq.PluginConsent().plugins[1].sha256") == hex);
-    CHECK(run(L, "return eq.PluginConsent().plugins[1].short") == hex.substr(0, 16));
-    CHECK(run(L, "return (pcall(eq.AnswerPluginConsent, 'yes', 7))") == "false"); // a boolean or nil only
-    CHECK(run(L, "return (pcall(eq.AnswerPluginConsent, true))") == "false");     // the question's serial is required
-    CHECK(run(L, "return eq.AnswerPluginConsent(true, 8)") == "false");           // another question's: refused
+    CHECK(run(L, "return hs.PluginConsent().server") == "Alpha");
+    CHECK(run(L, "return hs.PluginConsent().serial") == "7");
+    CHECK(run(L, "return hs.PluginConsent().warning") == std::string(plugin::kConsentWarning));
+    CHECK(run(L, "return #hs.PluginConsent().plugins") == "1");
+    CHECK(run(L, "return hs.PluginConsent().plugins[1].name") == "MQ2Thing");
+    CHECK(run(L, "return hs.PluginConsent().plugins[1].file") == "MQ2Thing.so");
+    CHECK(run(L, "return hs.PluginConsent().plugins[1].size") == "123456");
+    CHECK(run(L, "return hs.PluginConsent().plugins[1].sha256") == hex);
+    CHECK(run(L, "return hs.PluginConsent().plugins[1].short") == hex.substr(0, 16));
+    CHECK(run(L, "return (pcall(hs.AnswerPluginConsent, 'yes', 7))") == "false"); // a boolean or nil only
+    CHECK(run(L, "return (pcall(hs.AnswerPluginConsent, true))") == "false");     // the question's serial is required
+    CHECK(run(L, "return hs.AnswerPluginConsent(true, 8)") == "false");           // another question's: refused
     CHECK(a.answers.empty());
-    CHECK(run(L, "return eq.AnswerPluginConsent(nil, 7)") == "true");
+    CHECK(run(L, "return hs.AnswerPluginConsent(nil, 7)") == "true");
     REQUIRE(a.answers.size() == 1);
     CHECK_FALSE(a.answers[0].has_value());
-    CHECK(run(L, "return eq.AnswerPluginConsent(true, 7)") == "false"); // no question now
+    CHECK(run(L, "return hs.AnswerPluginConsent(true, 7)") == "false"); // no question now
     a.wire(host);
-    CHECK(run(L, "return eq.AnswerPluginConsent(false, eq.PluginConsent().serial)") == "true");
+    CHECK(run(L, "return hs.AnswerPluginConsent(false, hs.PluginConsent().serial)") == "true");
     a.wire(host);
     a.prompt->serial = 9; // a new question came up after the pack read serial 7
-    CHECK(run(L, "return eq.AnswerPluginConsent(true, 7)") == "false");
-    CHECK(run(L, "return eq.AnswerPluginConsent(true, 9)") == "true");
+    CHECK(run(L, "return hs.AnswerPluginConsent(true, 7)") == "false");
+    CHECK(run(L, "return hs.AnswerPluginConsent(true, 9)") == "true");
     REQUIRE(a.answers.size() == 3);
     CHECK(a.answers[1] == std::optional<bool>(false));
     CHECK(a.answers[2] == std::optional<bool>(true));
@@ -187,16 +187,16 @@ TEST_CASE("eq.PluginConsent and eq.AnswerPluginConsent: the question for the pac
 }
 
 // A server's own plugin windows run in the UI as that plugin: they must not see the question nor say yes to it.
-TEST_CASE("eq.PluginConsent in a plugin's code: nil, and its answer is refused") {
+TEST_CASE("hs.PluginConsent in a plugin's code: nil, and its answer is refused") {
     test::ScratchDir dir("plugin_consent_confined");
     const fs::path pack = dir.path() / "pack", plug = dir.path() / "plug";
     fs::create_directories(pack);
     fs::create_directories(plug);
-    std::ofstream(pack / "consent.lua") << "ui.window('Consent', function() pack_saw = eq.PluginConsent() ~= nil end)\n";
-    std::ofstream(plug / "sneak.lua") << "at_load = eq.AnswerPluginConsent(true, 7)\n"
+    std::ofstream(pack / "consent.lua") << "ui.window('Consent', function() pack_saw = hs.PluginConsent() ~= nil end)\n";
+    std::ofstream(plug / "sneak.lua") << "at_load = hs.AnswerPluginConsent(true, 7)\n"
                                          "ui.window('Sneak', function()\n"
-                                         "  saw = eq.PluginConsent() ~= nil\n"
-                                         "  in_draw = eq.AnswerPluginConsent(true, 7)\n"
+                                         "  saw = hs.PluginConsent() ~= nil\n"
+                                         "  in_draw = hs.AnswerPluginConsent(true, 7)\n"
                                          "end)\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
@@ -204,12 +204,12 @@ TEST_CASE("eq.PluginConsent in a plugin's code: nil, and its answer is refused")
     int w = 0, h = 0;
     ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
     {
-        app::EqHost host;
-        app::EqApi api(host);
+        app::UiHost host;
+        app::UiApi api(host);
         Asking a;
         a.wire(host);
         ui::lua::LuaUi lua(pack, dir.path() / "ui.txt");
-        lua.add_eq_api([&](lua_State* L) { api.register_functions(L); });
+        lua.add_ui_api([&](lua_State* L) { api.register_functions(L); });
         lua.set_caller_scope([&](std::string_view tag) -> std::shared_ptr<void> {
             return std::make_shared<plugin::CallerScope>(plugin::kCapAll, tag);
         });

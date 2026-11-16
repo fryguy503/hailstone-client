@@ -1,8 +1,9 @@
 -- Loot window: replaces the game's LootWnd. The corpse's items as tiles that reflow to the window's width (only the
 -- filled slots: the stock window's 34 places are the corpse's slots, which keep their numbers), Loot All, Link All
 -- and Done.
--- The slots are the game's (eq.SlotItem / eq.ClickChild): left click puts the item on the cursor, a right click
+-- The slots are the game's (hs.SlotItem / hs.ClickChild): left click puts the item on the cursor, a right click
 -- loots it straight into the inventory, holding the right button shows it.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local T = hud.T
@@ -31,7 +32,7 @@ local function body(x, y, w, h, s)
   local filled = 0
   for i = 0, SLOTS - 1 do
     local id = SLOT_IDS[i]
-    if eq.SlotItem(WINDOW, id) then
+    if API.inventory.SlotItem(WINDOW, id) then
       filled = filled + 1
       filledIds[filled] = id
     end
@@ -60,6 +61,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Loot", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Loot", OPTS, body)
 end)

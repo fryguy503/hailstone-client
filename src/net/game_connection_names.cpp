@@ -1,6 +1,6 @@
 // GameConnection: the name change windows (CNameChangeWnd, CNameChangePetWnd, CNameChangeMercWnd, their
 // commands and the rename answer's handler). The
-// three are one window with its own strings, opcodes and ini key; the window models are app/lua_eq_names.cpp.
+// three are one window with its own strings, opcodes and ini key; the window models are app/lua_ui_names.cpp.
 
 #include <format>
 

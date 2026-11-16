@@ -4,6 +4,7 @@
 -- item's display until it is let go. A slot of the character's own (opts.held) takes its left click on the release,
 -- as the game's CInvSlot::HandleLButtonUp does: holding the left button on it half a second (HandleLButtonHeld), or
 -- dragging off it, puts a hotbutton for it on the cursor instead ("leftheld"), to be let go of over a hot bar.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local tools = dofile("lib/itemtools.lua")
 local CL = dofile("lib/compare_lines.lua")
@@ -37,14 +38,14 @@ local function leftPressFrame(key, onClick, hovered)
   end
 end
 
--- Hailstone's item comparison under the item's lines (docs/item-compare.md): `compare` is eq.Compare*'s table.
+-- Hailstone's item comparison under the item's lines (docs/item-compare.md): `compare` is hs.Compare*'s table.
 -- Shift shows the other slot of a pair (ears, wrists, rings).
 local KIND = { good = "good", bad = "bad", mixed = "gold" } -- the palette's colour names (read as drawn: it may change)
 local function comparison(compare)
-  if not compare or eq.Option("item_compare") == 0 then return end
+  if not compare or API.settings.Option("item_compare") == 0 then return end
   ui.Separator()
   local index = (#compare.slots > 1 and ui.GetIO().shift) and 2 or 1
-  for _, line in ipairs(CL.lines(compare, index, { verdict = eq.Option("item_compare_verdict") ~= 0 })) do
+  for _, line in ipairs(CL.lines(compare, index, { verdict = API.settings.Option("item_compare_verdict") ~= 0 })) do
     local text, kind = line[1], line[2]
     local col = KIND[kind] and C[KIND[kind]]
     if col then ui.TextColored(col[1], col[2], col[3], 1, text)
@@ -65,7 +66,7 @@ function items.NameTooltip(name, compare, footer)
   ui.EndTooltip()
 end
 
--- items.Tooltip(item, where [, compare]): compare is eq.CompareItem's (or CompareSlotItem's ...) table or nil.
+-- items.Tooltip(item, where [, compare]): compare is hs.CompareItem's (or CompareSlotItem's ...) table or nil.
 function items.Tooltip(item, where, compare)
   ui.BeginTooltip()
   if item.magic then ui.TextColored(MAGIC[1], MAGIC[2], MAGIC[3], 1, item.name) else ui.Text(item.name) end
@@ -88,10 +89,10 @@ function items.Tooltip(item, where, compare)
 end
 
 -- items.Slot(id, x, y, size, s, item, placeholder, where, onClick [, opts])
---   item: eq.Item(...) or nil; placeholder: a short name drawn in an empty slot ("Head"); where: the tooltip's place
+--   item: hs.Item(...) or nil; placeholder: a short name drawn in an empty slot ("Head"); where: the tooltip's place
 --   onClick(button [, outside]): "left", "leftheld" (with opts.held; true when a hotbutton went on the cursor) or a
 --   right-button phase. opts: selected (a ring the window sets), held (the left click on release, the hold or a drag
---   "leftheld"), compare (a function giving eq.Compare*'s table for the slot's item, asked only while hovered)
+--   "leftheld"), compare (a function giving hs.Compare*'s table for the slot's item, asked only while hovered)
 -- items.HELD and items.SELECTED: opts tables for a caller to pass rather than a new one each slot each frame.
 items.HELD = { held = true }
 items.SELECTED = { selected = true }
@@ -101,7 +102,7 @@ local ICON_FULL, ICON_EMPTY = { radius = 6, wellAlpha = 1 }, { radius = 6, wellA
 function items.Slot(id, x, y, size, s, item, placeholder, where, onClick, opts)
   opts = opts or NO_OPTS
   local tex, u0, v0, u1, v1
-  if item then tex, u0, v0, u1, v1 = eq.ItemIcon(item.icon) end
+  if item then tex, u0, v0, u1, v1 = API.assets.ItemIcon(item.icon) end
   local ring = nil
   if item and item.magic then ring = MAGIC_RING end
   if opts.selected then ring = C.gold end
@@ -144,8 +145,8 @@ function items.Slot(id, x, y, size, s, item, placeholder, where, onClick, opts)
   end
 end
 
--- A slot of the character's inventory (eq.Item / eq.ClickSlot); while a marking mode is on (lib/itemtools.lua) a
--- click marks instead, and its marks show. Returns the slot's item (eq.Item(slot, bagSlot)), nil when empty.
+-- A slot of the character's inventory (hs.Item / hs.ClickSlot); while a marking mode is on (lib/itemtools.lua) a
+-- click marks instead, and its marks show. Returns the slot's item (hs.Item(slot, bagSlot)), nil when empty.
 -- Each slot keeps one record (its id, place and click handler, made the first time it draws); the handler reads the
 -- item the slot drew last, as a handler made for that frame would.
 local invSlots = {} -- [slot][bagSlot or -1] = { id, place, item, onClick }
@@ -158,15 +159,15 @@ local function invSlot(slot, bagSlot)
   rec = { id = "##inv" .. slot .. "." .. tostring(bagSlot), place = tools.Place("inventory", slot, bagSlot) }
   rec.onClick = function(button, outside)
     if tools.Intercept(rec.place, rec.item, button) then return end
-    return eq.ClickSlot(slot, bagSlot, button, outside)
+    return API.inventory.ClickSlot(slot, bagSlot, button, outside)
   end
-  rec.opts = { held = true, compare = function() return eq.CompareItem(slot, bagSlot) end }
+  rec.opts = { held = true, compare = function() return API.compare.Item(slot, bagSlot) end }
   bySub[k] = rec
   return rec
 end
 function items.InvSlot(slot, bagSlot, x, y, size, s, placeholder)
-  local item = eq.Item(slot, bagSlot)
-  local where = eq.SlotName(slot) or ""
+  local item = API.inventory.Item(slot, bagSlot)
+  local where = API.inventory.SlotName(slot) or ""
   local rec = invSlot(slot, bagSlot)
   rec.item = item
   items.Slot(rec.id, x, y, size, s, item, placeholder, where, rec.onClick, rec.opts)

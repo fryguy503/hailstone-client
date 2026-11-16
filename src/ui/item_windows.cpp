@@ -183,7 +183,8 @@ std::string weight_text(std::int32_t tenths) { return std::format("{}.{}", tenth
 
 } // namespace
 
-std::vector<std::string> item_info_lines(const Item& it) {
+std::vector<std::string> item_info_lines(const Item& it, const game::ItemFlagsFormatter& format_flags,
+                                         const game::ItemDescriptionAppender& description_append) {
     std::vector<std::string> out;
     // Flags (CItemDisplayWnd_CreateItemFlagsString).
     std::string flags;
@@ -204,6 +205,7 @@ std::vector<std::string> item_info_lines(const Item& it) {
     flag(it.placeable, "Placeable");
     flag(it.no_zone, "No Zone");
     flag(it.no_ground, "No Ground");
+    if (format_flags) if (auto changed = format_flags(it, flags)) flags = std::move(*changed);
     if (!flags.empty()) out.push_back(flags);
     if (it.item_class == 0) {
         out.push_back("Class: " + classes_text(it.classes));
@@ -280,6 +282,20 @@ std::vector<std::string> item_info_lines(const Item& it) {
     }
     if (!it.lore.empty() && it.lore != it.name && it.lore[0] != '*') out.push_back("Lore: " + it.lore);
     out.push_back(std::format("Item ID: {}", it.id));
+    if (description_append)
+        if (auto text = description_append(it); text && !text->empty()) {
+            // The fallback draws plain lines with TextUnformatted, so markup
+            // stays literal. CRLF is one break, as in the shared STML display.
+            std::size_t start = 0;
+            while (start < text->size()) {
+                const auto end = text->find_first_of("\r\n", start);
+                out.push_back(text->substr(start, end == std::string::npos ? end : end - start));
+                if (end == std::string::npos) break;
+                start = end + 1;
+                if ((*text)[end] == '\r' && start < text->size() && (*text)[start] == '\n') ++start;
+            }
+        }
+
     return out;
 }
 
@@ -396,7 +412,7 @@ ItemWindowsActions item_windows(ItemWindowsState& state, const ItemWindowsInput&
                 ItemSlot is = ItemSlot::possessions(static_cast<std::int16_t>(s));
                 const Item* item = inv->at(is);
                 bool right = false;
-                if (slot_button(std::format("eq{}", s).c_str(), item, short_slot(s), icons, &right)) act.click = is;
+                if (slot_button(std::format("hs{}", s).c_str(), item, short_slot(s), icons, &right)) act.click = is;
                 inspect_or_open(is, item, right);
             }
             ImGui::TextColored(kDim, "General (right click a bag to open it)");
@@ -505,7 +521,7 @@ ItemWindowsActions item_windows(ItemWindowsState& state, const ItemWindowsInput&
             ImGui::SameLine();
             ImGui::BeginGroup();
             ImGui::TextColored(kGold, "%s", it.name.c_str());
-            for (const auto& line : item_info_lines(it)) ImGui::TextUnformatted(line.c_str());
+            for (const auto& line : item_info_lines(it, in.item_flags, in.item_description_append)) ImGui::TextUnformatted(line.c_str());
             ImGui::EndGroup();
         }
         ImGui::End();

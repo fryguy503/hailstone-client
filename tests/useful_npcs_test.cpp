@@ -1,6 +1,6 @@
 // The Find window (a Hailstone addition, docs/navigation.md "Find"): the useful NPCs of a zone by class and by the
 // server's findable list (game/useful_npcs.h), OP_SendFindableNPCs (net/movement_packets.h) as GameConnection keeps
-// it, and the eq.Find* calls the packs draw it with (app/lua_eq_find.cpp).
+// it, and the hs.Find* calls the packs draw it with (app/lua_ui_find.cpp).
 #include <doctest/doctest.h>
 
 #include <string>
@@ -9,8 +9,9 @@
 
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "core/game_dir.h"
+#include "core/process_serial.h"
 #include "game/useful_npcs.h"
 #include "game/world_state.h"
 #include "net/game_connection.h"
@@ -18,6 +19,7 @@
 #include "net/quest_npc_packets.h"
 #include "net/world_packets.h"
 #include "scratch_dir.h"
+#include "mq_test_world.h"
 
 using namespace hailstone;
 using game::NpcCategory;
@@ -27,6 +29,7 @@ namespace {
 game::Spawn npc(std::uint32_t id, const std::string& name, std::uint8_t cls, glm::vec3 at = {}, std::string last = {}) {
     game::Spawn s;
     s.id = id;
+    s.incarnation = core::next_process_identity();
     s.name = name;
     s.last_name = std::move(last);
     s.class_id = cls;
@@ -150,19 +153,23 @@ TEST_CASE("Find: OP_SendFindableNPCs reads as Handle_OP_SendFindableNPCs does, a
     CHECK(conn.findable_npcs().empty());
 }
 
-TEST_CASE("Find: eq.FindNpcs lists the zone's NPCs for the packs; FindNpcTarget targets; FindOpen is the window") {
+TEST_CASE("Find: hs.FindNpcs lists the zone's NPCs for the packs; FindNpcTarget targets; FindOpen is the window") {
     hailstone::test::ScratchDir scratch("useful_npcs_eq");
     GameDir game(scratch.path());
     net::GameConnection conn(game, {});
-    app::EqHost host;
+    net::GameConnectionTestAccess::state(conn) = net::ConnectionState::InZone;
+    conn.world_for_test().player_id = 1;
+    conn.world_for_test().spawns[1] = npc(1, "Tester", 1);
+    conn.world_for_test().spawns[1].is_npc = false;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
 
     auto& w = conn.world_for_test();
     w.spawns[2] = npc(2, "Arms_Dealer01", 41, {10, 20, 3}, "Weapon Merchant");
@@ -173,19 +180,19 @@ TEST_CASE("Find: eq.FindNpcs lists the zone's NPCs for the packs; FindNpcTarget 
     f.spawn_id = 4;
     conn.receive_zone_packet_for_test(net::encode_findable_npc(f));
 
-    CHECK(run(L, "return #eq.FindNpcs()") == "3");
-    CHECK(run(L, "local r = eq.FindNpcs()[1] return r.name .. '|' .. r.category .. '|' .. r.label") ==
+    CHECK(run(L, "return #hs.FindNpcs()") == "3");
+    CHECK(run(L, "local r = hs.FindNpcs()[1] return r.name .. '|' .. r.category .. '|' .. r.label") ==
           "a rat|poi|Points of interest");
     // map units are the world's negated and swapped (game/map_data.h)
-    CHECK(run(L, "local r = eq.FindNpcs()[2] return r.id .. ' ' .. r.x .. ' ' .. r.y .. ' ' .. r.subtitle") ==
+    CHECK(run(L, "local r = hs.FindNpcs()[2] return r.id .. ' ' .. r.x .. ' ' .. r.y .. ' ' .. r.subtitle") ==
           "2 -20.0 -10.0 Weapon Merchant");
-    CHECK(run(L, "return #eq.FindNpcs('guildmaster')") == "1");
-    CHECK(run(L, "return #eq.FindNpcs('nobody')") == "0");
-    CHECK(run(L, "return #eq.FindCategories() .. eq.FindCategories()[1][1]") == "7merchant");
+    CHECK(run(L, "return #hs.FindNpcs('guildmaster')") == "1");
+    CHECK(run(L, "return #hs.FindNpcs('nobody')") == "0");
+    CHECK(run(L, "return #hs.FindCategories() .. hs.FindCategories()[1][1]") == "7merchant");
 
-    CHECK(run(L, "return eq.FindNpcTarget(3)") == "true");
+    CHECK(run(L, "return hs.FindNpcTarget(3)") == "true");
     CHECK(conn.target() == 3);
-    CHECK(run(L, "return eq.FindNpcTarget(99)") == "false");
+    CHECK(run(L, "return hs.FindNpcTarget(99)") == "false");
 
     // Walk there: through the host's walk (the navigator in the client), its refusal handed back
     std::vector<std::uint32_t> walked;
@@ -193,9 +200,9 @@ TEST_CASE("Find: eq.FindNpcs lists the zone's NPCs for the packs; FindNpcTarget 
         walked.push_back(id);
         return id == 3 ? "" : "no path to x";
     };
-    CHECK(run(L, "local ok, why = eq.FindNpcWalk(3) return tostring(ok) .. '|' .. why") == "true|");
-    CHECK(run(L, "local ok, why = eq.FindNpcWalk(2) return tostring(ok) .. '|' .. why") == "false|no path to x");
-    CHECK(run(L, "local ok, why = eq.FindNpcWalk(99) return tostring(ok) .. '|' .. why") == "false|no such NPC");
+    CHECK(run(L, "local ok, why = hs.FindNpcWalk(3) return tostring(ok) .. '|' .. why") == "true|");
+    CHECK(run(L, "local ok, why = hs.FindNpcWalk(2) return tostring(ok) .. '|' .. why") == "false|no path to x");
+    CHECK(run(L, "local ok, why = hs.FindNpcWalk(99) return tostring(ok) .. '|' .. why") == "false|no such NPC");
     CHECK(walked == std::vector<std::uint32_t>{3, 2});
     // Show path: the guide path when the host has one
     std::uint32_t guided = 0;
@@ -203,17 +210,17 @@ TEST_CASE("Find: eq.FindNpcs lists the zone's NPCs for the packs; FindNpcTarget 
         guided = id;
         return true;
     };
-    CHECK(run(L, "return eq.FindNpcPath(2)") == "true");
+    CHECK(run(L, "return hs.FindNpcPath(2)") == "true");
     CHECK(guided == 2);
     CHECK_FALSE(conn.player_path().active()); // not the server's find path
 
-    CHECK(run(L, "return eq.FindOpen()") == "false");
-    CHECK(run(L, "return eq.FindOpen(true)") == "true");
+    CHECK(run(L, "return hs.FindOpen()") == "false");
+    CHECK(run(L, "return hs.FindOpen(true)") == "true");
     CHECK(host.find_open);
-    CHECK(run(L, "return eq.FindOpen(false)") == "false");
+    CHECK(run(L, "return hs.FindOpen(false)") == "false");
 
     host.in_game = false;
-    CHECK(run(L, "return #eq.FindNpcs()") == "0");
+    CHECK(run(L, "return #hs.FindNpcs()") == "0");
     lua_close(L);
 }
 

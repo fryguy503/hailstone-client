@@ -2,9 +2,10 @@
 -- class, type, augment slot, glamours, levels, prices, results a trader) and the results as a sortable table: the
 -- item with its icon, how many, the price each as coins, the trader, and the stat's value when a stat was picked.
 -- A box over the results narrows what is shown (by item or trader) without asking again.
--- Everything is the game window's: the fields and drop-downs are its children (eq.SetWindowText, eq.ComboSelect),
+-- Everything is the game window's: the fields and drop-downs are its children (hs.SetWindowText, hs.ComboSelect),
 -- Find Items, Reset, Inspect, Buy, Find Trader, Hide Traders and Welcome its buttons, a row click selects in its list
 -- (a right or Shift click inspects, as on the stock list). Buy opens the game's quantity dialog and then the purchase confirmation.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -38,7 +39,7 @@ end
 
 local function find()
   if W.State(WINDOW, "BZR_QueryButton") then
-    eq.ClickChild(WINDOW, "BZR_QueryButton", "left")
+    API.windows.ClickChild(WINDOW, "BZR_QueryButton", "left")
     M.Refresh(WINDOW, LIST)
     searched = true
   end
@@ -68,7 +69,7 @@ local function filters(s, lh)
   ui.Dummy(0, 2 * s)
   local capW = 62 * s
   for _, c in ipairs(COMBOS) do
-    if eq.ComboInfo(WINDOW, c[1]) then
+    if API.windows.ComboInfo(WINDOW, c[1]) then
       local x, y = ui.GetCursorScreenPos()
       ui.DrawText(x, y + 3 * s, C.muted[1], C.muted[2], C.muted[3], 1, c[2])
       ui.SetCursorScreenPos(x + capW, y)
@@ -119,7 +120,7 @@ local function drawWindow(x, y, w, h, s)
   ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, n == 1 and "1 item" or (T.Thousands(n) .. " items"))
   ui.SameLine(0, 12 * s)
   local needle = M.Search("bzs", "Filter by item or trader", -1)
-  local _, _, _, labels = eq.ListInfo(WINDOW, LIST)
+  local _, _, _, labels = API.windows.ListInfo(WINDOW, LIST)
   local stat = labels and labels[10] or "Stat"
   local cols = {
     { "Item", 0, cell = M.IconName(2), sort = function(r) return r.texts[2] end, default = "asc" },
@@ -143,7 +144,7 @@ local function drawWindow(x, y, w, h, s)
     tooltip = function(r)
       return (r.texts[2] or "") .. "\nSold by " .. (r.texts[8] or "?") .. "\nDouble-click to buy, right-click to inspect"
     end,
-    doubleClick = function() eq.ClickChild(WINDOW, "BZR_BuyButton", "left") end,
+    doubleClick = function() API.windows.ClickChild(WINDOW, "BZR_BuyButton", "left") end,
   })
 
   -- ---------------------------------------------------------------- the selected result
@@ -182,7 +183,7 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Bazaar Search", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   if ui.GetTime() - lastDrawn > 1 then searched = false end -- (re)opened
   hud.Dialog(WINDOW, "Bazaar Search", WINDOW_OPTS, drawWindow)
 end)

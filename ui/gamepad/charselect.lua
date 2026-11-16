@@ -1,4 +1,4 @@
--- The character select (gamepad pack): eq.CharacterSelect stands in for the client's own (ui/dev_screens.cpp
+-- The character select (gamepad pack): hs.CharacterSelect stands in for the client's own (ui/dev_screens.cpp
 -- character_select_screen). A Hailstone screen, not the original's. The characters as tiles; with the pad the one
 -- focused is the one selected, so the scene in the middle of the screen shows its model (the panel goes to the left
 -- then). A or Start enters the world, X creates a character, Y deletes the selected one (asked first: A deletes, B
@@ -6,6 +6,7 @@
 -- selected character go home (asked first too). With the mouse a click selects and a double click enters.
 -- The keyboard's keys here (Enter, Escape, the arrows: the character select key slots 493..496) are the client's
 -- (ClientApp::screen_keys), so this window leaves them alone: taking them too would do each thing twice.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local W = dofile("lib/window.lua")
 local P = dofile("lib/pregame.lua")
@@ -26,19 +27,19 @@ local function focusRow(i, count, visible)
 end
 
 local function selectRow(i)
-  if eq.CharacterSelectDo("select", i) then st.sel = i end
+  if API.pregame.CharacterSelectDo("select", i) then st.sel = i end
 end
 
 -- A row's choice: with the pad A enters with it; with the mouse a click selects it, a second soon after enters.
 local function chosen(i)
   if P.padDrives() then
-    eq.CharacterSelectDo("enter", i)
+    API.pregame.CharacterSelectDo("enter", i)
     return
   end
   local now = ui.GetTime()
   if st.clickRow == i and now - st.clickAt < 0.45 then
     st.clickRow = 0
-    eq.CharacterSelectDo("enter", i)
+    API.pregame.CharacterSelectDo("enter", i)
   else
     selectRow(i)
     st.clickRow, st.clickAt = i, now
@@ -81,9 +82,9 @@ local function drawConfirm(v, wx0, wy0, wx1, wy1)
   if P.button(F, "##delyes", st.home and "Return Home" or "Delete", bw, px(72), { primary = true, glyph = "a" }) then
     st.confirm = nil
     if st.home then
-      eq.CharacterSelectDo("home")
+      API.pregame.CharacterSelectDo("home")
     else
-      eq.CharacterSelectDo("delete")
+      API.pregame.CharacterSelectDo("delete")
       F:want("##create")
     end
   end
@@ -101,10 +102,10 @@ local HINTS_NONE = { { "a", "Select" }, { "x", "Create" }, { "b", "Back" } }
 local HINTS = { { "a", "Enter World" }, { "x", "Create" }, { "y", "Delete" }, { "b", "Back" } }
 local OPTS = { close = false, alwaysFocus = true, title = "Characters" }
 local where = {}
-local held = nil -- the view drawn last frame: eq.CharacterSelect gives true while it still holds (its revision)
+local held = nil -- the view drawn last frame: hs.CharacterSelect gives true while it still holds (its revision)
 
 ui.window(NAME, function()
-  local v = eq.CharacterSelect and eq.CharacterSelect(held and held.revision)
+  local v = API.pregame.CharacterSelect and API.pregame.CharacterSelect(held and held.revision)
   if v == true then v = held else held = v end
   if not v then
     st.frame = -10
@@ -144,11 +145,11 @@ ui.window(NAME, function()
       if v.selected > 0 and P.padDrives() then focusRow(v.selected, n, shown) end
     end
     if not st.confirm and not busy then
-      if P.press("start") and v.selected > 0 then eq.CharacterSelectDo("enter") end
-      if P.press("x") then eq.CharacterSelectDo("create") end
+      if P.press("start") and v.selected > 0 then API.pregame.CharacterSelectDo("enter") end
+      if P.press("x") then API.pregame.CharacterSelectDo("create") end
       if P.press("y") and v.selected > 0 then askDelete(v) end
     end
-    if not st.confirm and P.press("b") then eq.CharacterSelectDo("back") end
+    if not st.confirm and P.press("b") then API.pregame.CharacterSelectDo("back") end
 
     if st.confirm then
       -- (in place of the list and buttons: the pad's focus cannot wander off the question)
@@ -209,7 +210,7 @@ ui.window(NAME, function()
       local canHome = canEnter and picked ~= nil and picked.canGoHome
       local hw = (w - 2 * gap) / 3
       if P.button(F, "##enter", "Enter World", w - hw - gap, bh, { primary = canEnter, disabled = not canEnter, glyph = "a" }) then
-        eq.CharacterSelectDo("enter")
+        API.pregame.CharacterSelectDo("enter")
       end
       ui.SameLine(0, gap)
       if P.button(F, "##home", "Return Home", hw, bh, { disabled = not canHome }) then askHome(v) end
@@ -217,12 +218,12 @@ ui.window(NAME, function()
       local cw = (w - 2 * gap) / 3
       P.at(x0, by + bh + gap)
       if P.button(F, "##create", "Create Character", cw, bh, { glyph = "x", disabled = busy }) then
-        eq.CharacterSelectDo("create")
+        API.pregame.CharacterSelectDo("create")
       end
       ui.SameLine(0, gap)
       if P.button(F, "##delete", "Delete", cw, bh, { glyph = "y", disabled = not canEnter }) then askDelete(v) end
       ui.SameLine(0, gap)
-      if P.button(F, "##back", "Back", cw, bh, { glyph = "b" }) then eq.CharacterSelectDo("back") end
+      if P.button(F, "##back", "Back", cw, bh, { glyph = "b" }) then API.pregame.CharacterSelectDo("back") end
       P.status(v.status, busy, x0, by - px(12), x1, { bottom = true, lines = 2 })
     end
     F:tick()

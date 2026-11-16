@@ -8,7 +8,8 @@
 --   Book (BookWindow)               the open spread (Page0 / Page1, the game pages the text), LB / RB turn the pages
 --                                   (its LeftButton / RightButton, greyed at the ends), Cast Spell / Scribe, Done (B)
 --   Spell (SpellDisplayWindow ...)  the spell's icon and name over the game's description; several can be open at
---                                   once (SpellDisplayWindow#2 ...: eq.ReplaceWindow numbers them); B closes one
+--                                   once (SpellDisplayWindow#2 ...: hs.ReplaceWindow numbers them); B closes one
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -52,7 +53,7 @@ ui.window("Tip", function()
     local wx, wy = ui.GetWindowPos()
     local gap, bh = T.px(12), T.px(64)
     local top = y0
-    local choices = eq.ComboInfo(TIP, "History")
+    local choices = API.windows.ComboInfo(TIP, "History")
     if G.shown(TIP, "History") and choices and #choices > 1 then
       ui.SetCursorPos(x0 - wx, top - wy)
       G.combo(TIP, "History", "Earlier tips", w, T.px(80))
@@ -69,7 +70,7 @@ ui.window("Tip", function()
     buttons(TIP, { { "NextTipButton", "Show Another Tip" }, { "CloseButton", "Close", { primary = true, glyph = "b" } } },
       x0, x1, by, bh)
   end
-  if W.finish() then eq.ClickChild(TIP, "CloseButton", "left") end
+  if W.finish() then API.windows.ClickChild(TIP, "CloseButton", "left") end
 end)
 
 -- ---------------------------------------------------------------- note
@@ -85,7 +86,7 @@ ui.window("Note", function()
     buttons(NOTE, { { "CastSpellButton", "Cast Spell" }, { "ScribeButton", "Scribe" },
       { "DoneButton", "Done", { primary = true, glyph = "b" } } }, x0, x1, y1 - bh, bh)
   end
-  if W.finish() then eq.ClickChild(NOTE, "DoneButton", "left") end
+  if W.finish() then API.windows.ClickChild(NOTE, "DoneButton", "left") end
 end)
 
 -- ---------------------------------------------------------------- book
@@ -119,7 +120,7 @@ ui.window("Book", function()
     end
     -- LB / RB (and the wheel over the pages) turn them
     local wheel = ui.IsMouseHoveringRect(x0, y0, x1, py1) and (ui.GetIO().wheel or 0) or 0
-    local function turn(id) if G.enabled(BOOK, id) then eq.ClickChild(BOOK, id, "left") end end
+    local function turn(id) if G.enabled(BOOK, id) then API.windows.ClickChild(BOOK, id, "left") end end
     if W.pressed("lb") or wheel > 0 then turn("LeftButton") end
     if W.pressed("rb") or wheel < 0 then turn("RightButton") end
     local wx, wy = ui.GetWindowPos()
@@ -131,7 +132,7 @@ ui.window("Book", function()
     buttons(BOOK, { { "CastSpellButton", "Cast Spell" }, { "ScribeButton", "Scribe" },
       { "DoneButton", "Done", { primary = true, glyph = "b" } } }, x0 + 2 * aw + T.px(40), x1, y1 - bh, bh)
   end
-  if W.finish() then eq.ClickChild(BOOK, "DoneButton", "left") end
+  if W.finish() then API.windows.ClickChild(BOOK, "DoneButton", "left") end
 end)
 
 -- ---------------------------------------------------------------- spell displays
@@ -142,13 +143,13 @@ for i = 1, 6 do
   ui.window(name, function()
     if not W.shown(window) then return end
     T.frame()
-    local title = eq.WindowTitle(window) or ""
+    local title = API.windows.Title(window) or ""
     -- (each further one a little lower and to the right, as the stock ones cascade)
     local off = (i - 1) * 40
     if W.begin(name, { w = 1000, h = 760, x = 460 + off, y = 160 + off, hints = { { "rs", "Scroll" }, { "b", "Close" } } }) then
       local x0, y0, x1, y1 = W.area()
       local size = T.px(72)
-      local tex, u0, v0, u1, v1 = eq.ChildArt(window, "SDW_IconButton", "decal")
+      local tex, u0, v0, u1, v1 = API.windows.ChildArt(window, "SDW_IconButton", "decal")
       T.rect(x0, y0, x0 + size, y0 + size, C.sunken, 1, T.px(10))
       if type(tex) == "userdata" then T.icon(tex, u0, v0, u1, v1, x0 + T.px(4), y0 + T.px(4), x0 + size - T.px(4), y0 + size - T.px(4)) end
       T.font(32)
@@ -157,6 +158,6 @@ for i = 1, 6 do
       local ty = y0 + size + T.px(16)
       textBox(window, "SDW_SpellDescription", x0, ty, x1, y1, desc)
     end
-    if W.finish() then eq.ShowWindow(window, false) end
+    if W.finish() then API.windows.Show(window, false) end
   end)
 end

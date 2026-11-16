@@ -3,6 +3,7 @@
 -- coins), what the selected line gives besides coins, and Sell. The lists and Sell are the original's children: a
 -- row click selects the line in the game's window, Sell is enabled only when you carry the item and asks how many
 -- through the game's amount dialog.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -55,7 +56,7 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Barter Merchant", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   WINDOW_OPTS.shown = M.Forced(WINDOW)
   hud.Dialog(WINDOW, "Buyer", WINDOW_OPTS, drawWindow)
 end)

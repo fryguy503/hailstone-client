@@ -188,13 +188,13 @@ TEST_CASE("Lua UI: a plugin's window covers the pack's of the same name; ui.base
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("Lua UI: a plugin's code keeps to its own globals, sees eq, ui and the libraries read-only, loads text only") {
+TEST_CASE("Lua UI: a plugin's code keeps to its own globals, sees hs, ui and the libraries read-only, loads text only") {
     hailstone::test::ScratchDir scratch("lua_folders_confine_test");
     const fs::path pack = scratch.path() / "pack", plug = scratch.path() / "plug";
     fs::create_directories(pack / "lib");
     fs::create_directories(plug);
     std::ofstream(pack / "lib" / "x.lua") << "shared_by_lib = (shared_by_lib or 0) + 1\nreturn 'pack'\n";
-    std::ofstream(pack / "a.lua") << "eq.Thing = function() return 'real' end\n"
+    std::ofstream(pack / "a.lua") << "hs.Thing = function() return 'real' end\n"
                                      "shared = { n = 1 }\n";
     std::ofstream(plug / "p.lua") << "seen_shared = shared.n\n"
                                      "shared = 'mine'\n"           // its own global, not the pack's
@@ -248,21 +248,21 @@ TEST_CASE("Lua UI: a plugin's code keeps to its own globals, sees eq, ui and the
         CHECK(pack_run("return shared_by_lib") == "nil"); // the pack's lib, dofile'd by the plugin, set the plugin's
         CHECK(folder_global(lua, "plug", "shared_by_lib") == "1");
 
-        // eq, ui and the libraries: read, not written; the pack's stay as they are.
-        CHECK(run_in(lua, "plug", "return eq.Thing()") == "real");
-        CHECK(run_in(lua, "plug", "eq.Thing = function() return 'evil' end").find("cannot be changed") != std::string::npos);
+        // hs, ui and the libraries: read, not written; the pack's stay as they are.
+        CHECK(run_in(lua, "plug", "return hs.Thing()") == "real");
+        CHECK(run_in(lua, "plug", "hs.Thing = function() return 'evil' end").find("cannot be changed") != std::string::npos);
         CHECK(run_in(lua, "plug", "ui.Begin = nil").find("cannot be changed") != std::string::npos);
         CHECK(run_in(lua, "plug", "ui.Col.Text = 99").find("cannot be changed") != std::string::npos);
         CHECK(run_in(lua, "plug", "string.format = nil").find("cannot be changed") != std::string::npos);
         CHECK(run_in(lua, "plug", "os.time = nil").find("cannot be changed") != std::string::npos);
         CHECK(run_in(lua, "plug", "return getmetatable('')") == "false");
-        CHECK(run_in(lua, "plug", "return getmetatable(eq)") == "false");
+        CHECK(run_in(lua, "plug", "return getmetatable(hs)") == "false");
         CHECK(run_in(lua, "plug", "return getmetatable(_G)") == "false");
-        CHECK(run_in(lua, "plug", "return rawget(_G, 'eq')") == "nil");
-        CHECK(run_in(lua, "plug", "_G.eq = {} eq = nil return type(eq.Thing)") == "function"); // its own, then the view
+        CHECK(run_in(lua, "plug", "return rawget(_G, 'hs')") == "nil");
+        CHECK(run_in(lua, "plug", "_G.hs = {} hs = nil return type(hs.Thing)") == "function"); // its own, then the view
         CHECK(run_in(lua, "plug", "local t = {} for k in pairs(_G) do t[#t+1] = k end table.sort(t) return table.concat(t, ',')")
                   .find("ui") == std::string::npos);
-        CHECK(pack_run("return eq.Thing()") == "real");
+        CHECK(pack_run("return hs.Thing()") == "real");
         CHECK(pack_run("return type(string.format) .. type(ui.Begin) .. ui.Col.Text") == "functionfunction0");
         // load: text only, with the plugin's own globals unless it names others.
         CHECK(run_in(lua, "plug", "return load('loaded_here = 1 return 2')()") == "2");
@@ -287,7 +287,7 @@ TEST_CASE("Lua UI: a plugin's code keeps to its own globals, sees eq, ui and the
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("Lua UI: a plugin's code runs as the plugin: its load, its windows, and the eq functions it took") {
+TEST_CASE("Lua UI: a plugin's code runs as the plugin: its load, its windows, and the hs functions it took") {
     hailstone::test::ScratchDir scratch("lua_folders_caller_test");
     const fs::path pack = scratch.path() / "pack", plug = scratch.path() / "plug";
     fs::create_directories(pack);
@@ -295,13 +295,13 @@ TEST_CASE("Lua UI: a plugin's code runs as the plugin: its load, its windows, an
     // The pack calls whatever a plugin put into a table they share (a plugin closure run by the pack's code).
     std::ofstream(pack / "a.lua") << "shared = {}\n"
                                      "ui.window('PackWin', function()\n"
-                                     "  pack_draw = eq.Who()\n"
+                                     "  pack_draw = hs.Who()\n"
                                      "  if shared.cb then via_pack = shared.cb() end\n"
                                      "end)\n";
-    std::ofstream(plug / "p.lua") << "at_load = eq.Who()\n"
-                                     "local who = eq.Who\n"
+    std::ofstream(plug / "p.lua") << "at_load = hs.Who()\n"
+                                     "local who = hs.Who\n"
                                      "shared.cb = function() return who() end\n"
-                                     "ui.window('PlugWin', function() at_draw = eq.Who() end)\n";
+                                     "ui.window('PlugWin', function() at_draw = hs.Who() end)\n";
     std::vector<std::string> scopes;
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
@@ -310,7 +310,7 @@ TEST_CASE("Lua UI: a plugin's code runs as the plugin: its load, its windows, an
     ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
     {
         hailstone::ui::lua::LuaUi lua(pack, scratch.path() / "ui.txt");
-        lua.add_eq_api([](lua_State* L) {
+        lua.add_ui_api([](lua_State* L) {
             lua_pushcfunction(L, [](lua_State* S) -> int {
                 const std::string tag(hailstone::ui::lua::LuaUi::caller_tag());
                 lua_pushstring(S, tag.empty() ? "pack" : tag.c_str());
@@ -344,7 +344,7 @@ TEST_CASE("Lua UI: a plugin's code runs as the plugin: its load, its windows, an
         CHECK(std::find(scopes.begin(), scopes.end(), "") == scopes.end()); // the pack's own code: none
         CHECK(hailstone::ui::lua::LuaUi::caller_tag().empty());
         // An error inside a wrapped call ends its scope too.
-        CHECK(run_in(lua, "plug", "return pcall(eq.Who, nil) and eq.Who()") == "plug");
+        CHECK(run_in(lua, "plug", "return pcall(hs.Who, nil) and hs.Who()") == "plug");
         CHECK(run_in(lua, "plug", "return select(2, pcall(ui.window, 'x'))").find("bad argument") != std::string::npos);
         CHECK(live == 0);
         CHECK(hailstone::ui::lua::LuaUi::caller_tag().empty());
@@ -352,7 +352,7 @@ TEST_CASE("Lua UI: a plugin's code runs as the plugin: its load, its windows, an
         // one registered after that is not taken.
         run_in(lua, "plug",
                "shared.cb = function()\n"
-               "  ui.window('Late', function() shared.late = eq.Who() end)\n"
+               "  ui.window('Late', function() shared.late = hs.Who() end)\n"
                "  return 'x'\n"
                "end");
         frame();

@@ -1,15 +1,16 @@
 -- Chat: replaces every game chat window (Chat1 .. Chat32) with a translucent panel: tabs along the top (the active one
 -- underlined, unread ones marked), the output, and an input with the channel plain text goes to. It works as the
--- the Classic UI's chat did: the lines are the original output box's (eq.ChatText, STML), typed lines
--- go through the original window (eq.ChatSubmit: channel, tells, history, commands), Enter and the chat keys move
--- what the game's input holds here (eq.ChatTakeFocus), item links open the item display, Up / Down walk the
--- history, Tab / Shift+Tab on a /tell line step through the players to reply to (eq.ChatCycleReply). A player's
+-- the Classic UI's chat did: the lines are the original output box's (hs.ChatText, STML), typed lines
+-- go through the original window (hs.ChatSubmit: channel, tells, history, commands), Enter and the chat keys move
+-- what the game's input holds here (hs.ChatTakeFocus), item links open the item display, Up / Down walk the
+-- history, Tab / Shift+Tab on a /tell line step through the players to reply to (hs.ChatCycleReply). A player's
 -- name in a line is a link: a click opens a tell to them (their tell window with Use Tell Windows, else
 -- "/tell <name> " in the input). Right-click: the chat menu (windows, tabs, Always Chat Here, filters, default channel,
 -- font, tell windows, timestamps, clear).
 -- A button at the strip's right end folds the window into the strip (the output and the input go, the tabs stay), as
 -- the combat ability window folds into its title bar; the frame's menu has the same (Roll up).
 -- Unlocked (any frame's menu), a chat window is moved by dragging and resized from its corner.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local stml = dofile("lib/stml.lua")
 local T = hud.T
@@ -33,23 +34,23 @@ local function state(slot)
   if not c then
     c = { version = -1, lines = {}, input = "", focus = 0, follow = true, links = {} }
     -- (what the window's widgets take, made once and not every frame)
-    c.onLink = function(link) eq.ChatLink(slot, link[1], link[2]) end
+    c.onLink = function(link) API.chat.Link(slot, link[1], link[2]) end
     c.inputOpts = {
       moveToEnd = false,
       history = function(older)
-        local line = eq.ChatHistory(slot, older)
+        local line = API.chat.History(slot, older)
         if line then c.links = {}; line = collapseLinks(c, line) end
         return line
       end,
       -- Tab / Shift+Tab on a "/tell" or "/rtarget" line: the next older / newer player from the reply list
       tab = function(text, back)
-        local line = eq.ChatCycleReply(expandLinks(c, text), back)
+        local line = API.chat.CycleReply(expandLinks(c, text), back)
         if line then c.links = {} end
         return line
       end,
     }
     c.panelOpts = { alpha = 0.7 }
-    c.closeWindow = function() eq.ChatCloseWindow(slot) end
+    c.closeWindow = function() API.chat.CloseWindow(slot) end
     c.winOpts = { size = SIZE, resizable = RESIZABLE, fit = slot == 1, panelOpts = c.panelOpts, closable = false,
       rollup = true, titleHeight = HEADER }
     chats[slot] = c
@@ -60,7 +61,7 @@ end
 local function update(slot, c)
   -- (players' names as links: a click opens a tell; with Timestamps each line's time first; only the lines that
   -- came since the last look, unless the window's lines changed otherwise)
-  local version, lines, reset, count = eq.ChatText(slot, c.version, true, ui.GetSetting("chat.timestamps") == "1", true)
+  local version, lines, reset, count = API.chat.Text(slot, c.version, true, ui.GetSetting("chat.timestamps") == "1", true)
   if version == c.version or not lines then return end
   c.version = version
   if reset then stml.UpdateLines(c, lines, C.chatText) else stml.AppendLines(c, lines, count, C.chatText) end
@@ -69,14 +70,14 @@ end
 
 -- ---------------------------------------------------------------- the chat menu (as classic's)
 -- Filters: the chat window manager's channels by its menus (Filters, Chat Channel, Melee, Spells, and Hailstone's
--- Extended (server) with its submenus; eq.ChatFilterGroups): each goes to one window; a ticked one comes to this tab,
+-- Extended (server) with its submenus; hs.ChatFilterGroups): each goes to one window; a ticked one comes to this tab,
 -- unticking sends it back to the main window. Show All is the menu's ALL (its own items only). A menu with no items
 -- (Chat Channel before joining one) is left out.
 local function filtersMenu(slot)
-  local filters = eq.ChatFilters(slot)
+  local filters = API.chat.Filters(slot)
   if #filters == 0 then return end
   if not ui.BeginMenu("Filters") then return end
-  local groups = eq.ChatFilterGroups()
+  local groups = API.chat.FilterGroups()
   local rootName = "Filters"
   for _, f in ipairs(filters) do
     if f.menu == 0 then rootName = f.group; break end
@@ -89,12 +90,12 @@ local function filtersMenu(slot)
     return false
   end
   local function drawGroup(id, name)
-    if ui.MenuItem("Show All##group" .. id) then eq.ChatSetFilter(slot, name, true) end
-    if ui.MenuItem("Hide All##group" .. id) then eq.ChatSetFilter(slot, name, false) end
+    if ui.MenuItem("Show All##group" .. id) then API.chat.SetFilter(slot, name, true) end
+    if ui.MenuItem("Hide All##group" .. id) then API.chat.SetFilter(slot, name, false) end
     ui.Separator()
     for _, f in ipairs(filters) do
       if f.menu == id and ui.MenuItem(f.name .. "##filter" .. f.id, f.on) then
-        eq.ChatSetFilter(slot, f.id, not f.on)
+        API.chat.SetFilter(slot, f.id, not f.on)
       end
     end
     for _, group in ipairs(groups) do
@@ -110,12 +111,12 @@ end
 
 local function hitModesMenu()
   if ui.BeginMenu("Hit Modes") then
-    local modes = eq.ChatHitModes()
+    local modes = API.chat.HitModes()
     local function drawMode(h)
       local id = h.id
       if ui.BeginMenu(h.name .. "##hit" .. id) then
         for m, label in ipairs(h.modes) do
-          if ui.MenuItem(label .. "##hitmode" .. id .. m, h.mode == m - 1) then eq.ChatSetHitMode(id, m - 1) end
+          if ui.MenuItem(label .. "##hitmode" .. id .. m, h.mode == m - 1) then API.chat.SetHitMode(id, m - 1) end
         end
         ui.EndMenu()
       end
@@ -128,39 +129,39 @@ end
 
 local function menu(slot, c, w)
   if ui.BeginPopup("chatmenu") then
-    if ui.MenuItem("New Chat Window") then eq.ChatNewWindow() end
-    if not w.tells and ui.MenuItem("New Tab") then eq.ChatNewTab(slot) end
+    if ui.MenuItem("New Chat Window") then API.chat.NewWindow() end
+    if not w.tells and ui.MenuItem("New Tab") then API.chat.NewTab(slot) end
     if ui.MenuItem("Rename Tab...") then c.rename = w.title or ""; c.renameOpen = true end
-    if #w.tabs > 1 and ui.MenuItem("Close Tab") then eq.ChatCloseTab(slot, w.tab) end
-    if not w.main and ui.MenuItem("Close Window") then eq.ChatCloseWindow(slot) end
+    if #w.tabs > 1 and ui.MenuItem("Close Tab") then API.chat.CloseTab(slot, w.tab) end
+    if not w.main and ui.MenuItem("Close Window") then API.chat.CloseWindow(slot) end
     -- (Enter and '/' start a line in this window, whichever was clicked last; the main window's by default)
-    local _, _, _, _, here = eq.ChatInfo(slot)
-    if ui.MenuItem("Always Chat Here", here) then eq.ChatSetAlwaysHere(slot, not here) end
+    local _, _, _, _, here = API.chat.Info(slot)
+    if ui.MenuItem("Always Chat Here", here) then API.chat.SetAlwaysHere(slot, not here) end
     ui.Separator()
     filtersMenu(slot)
     hitModesMenu()
-    local _, _, current = eq.ChatInfo(slot)
+    local _, _, current = API.chat.Info(slot)
     if not (w.tabs[w.tab] or {}).tell and ui.BeginMenu("Default Channel") then
-      for i, name in ipairs(eq.ChatDefaultChannels()) do
-        if ui.MenuItem(name, name == current) then eq.ChatSetDefault(slot, i - 1) end
+      for i, name in ipairs(API.chat.DefaultChannels()) do
+        if ui.MenuItem(name, name == current) then API.chat.SetDefault(slot, i - 1) end
       end
       ui.EndMenu()
     end
-    local font = eq.ChatInfo(slot)
+    local font = API.chat.Info(slot)
     if ui.BeginMenu("Font Size") then
       -- The chat font list (/chatfontsize 0..10), each by its height.
       for f = 0, 10 do
-        if ui.MenuItem(string.format("%d  (%d px)##f%d", f, ui.ChatFontSize(f), f), f == font) then eq.ChatSetFont(slot, f) end
+        if ui.MenuItem(string.format("%d  (%d px)##f%d", f, ui.ChatFontSize(f), f), f == font) then API.chat.SetFont(slot, f) end
       end
       ui.EndMenu()
     end
-    local tells = eq.ChatTellWindows()
-    if ui.MenuItem("Use Tell Windows", tells) then eq.ChatSetTellWindows(not tells) end
+    local tells = API.chat.TellWindows()
+    if ui.MenuItem("Use Tell Windows", tells) then API.chat.SetTellWindows(not tells) end
     -- Hailstone: each line's time, [hh:mm:ss], in every chat window
     local stamps = ui.GetSetting("chat.timestamps") == "1"
     if ui.MenuItem("Timestamps", stamps) then ui.SetSetting("chat.timestamps", stamps and "0" or "1") end
     ui.Separator()
-    if ui.MenuItem("Clear Chat") then eq.ChatClear(slot) end
+    if ui.MenuItem("Clear Chat") then API.chat.Clear(slot) end
     ui.TextDisabled("Alt+right-click: frame options")
     ui.EndPopup()
   end
@@ -174,7 +175,7 @@ local function menu(slot, c, w)
     local text, enter = ui.InputText("##title", c.rename or "", 64, ui.InputTextFlags.EnterReturnsTrue)
     c.rename = text
     if enter or ui.Button("OK") then
-      if c.rename ~= "" then eq.ChatSetTitle(slot, c.rename) end
+      if c.rename ~= "" then API.chat.SetTitle(slot, c.rename) end
       ui.CloseCurrentPopup()
     end
     ui.SameLine()
@@ -208,7 +209,7 @@ local function tabs(slot, w, x, y, width, s, title, right)
     elseif t.unread then
       ui.DrawCircleFilled(tx + tw + 4 * s, y + (HEADER * s - th) / 2 + 2 * s, 2.5 * s, C.accent[1], C.accent[2], C.accent[3], 1)
     end
-    if clicked and not up then eq.ChatSelectTab(slot, i) end
+    if clicked and not up then API.chat.SelectTab(slot, i) end
     tx = x1
   end
 end
@@ -233,7 +234,7 @@ local function collapseButton(slot, x, y, s, rolled)
 end
 
 local function body(slot, c, w, title, x, y, width, height, s)
-  local font, active, channel = eq.ChatInfo(slot)
+  local font, active, channel = API.chat.Info(slot)
   font = math.max(0, math.min(10, font or 3)) -- the chat font list (/chatfontsize 0..10)
   local pad = 8 * s
   -- rolled up: the tab strip is the title bar the window folds into, and all that is left of it (the frame's own:
@@ -263,7 +264,7 @@ local function body(slot, c, w, title, x, y, width, height, s)
   local probe = pw * 4096 + ph
   if c.keyW ~= lw or c.keyFont ~= probe then c.keyW, c.keyFont, c.key = lw, probe, lw .. ":" .. probe end
   stml.DrawLines(c, lw, viewH, c.key, c.onLink)
-  local page = eq.ChatPage(slot) -- the PAGEUP / PAGEDOWN keys: a page less 8 up or down
+  local page = API.chat.Page(slot) -- the PAGEUP / PAGEDOWN keys: a page less 8 up or down
   if page then
     ui.SetScrollY(math.max(0, ui.GetScrollY() + page * (viewH - 8 * s)))
   elseif atBottom or c.follow then
@@ -294,7 +295,7 @@ local function body(slot, c, w, title, x, y, width, height, s)
     end
     typed = c.expanded
   end
-  local taken, replace = eq.ChatTakeFocus(slot, typed)
+  local taken, replace = API.chat.TakeFocus(slot, typed)
   if taken then
     if replace then c.input, c.links = "", {} end
     local offset = #c.input
@@ -333,7 +334,7 @@ local function body(slot, c, w, title, x, y, width, height, s)
   if enter then
     local expanded, reason = chatlinks.ForSubmit(c.links, text)
     if expanded then
-      if expanded ~= "" then eq.ChatSubmit(slot, expanded) end
+      if expanded ~= "" then API.chat.Submit(slot, expanded) end
       c.input, c.links, c.inputError = "", {}, nil
       c.follow = true
     else c.inputError = reason end
@@ -341,9 +342,9 @@ local function body(slot, c, w, title, x, y, width, height, s)
   if c.inputError then ui.SetTooltip(c.inputError) end
 
   if ui.IsWindowHovered(ui.HoveredFlags.ChildWindows) then
-    if ui.IsMouseClicked(ui.Mouse.Left) and not active then eq.ChatActivate(slot) end
+    if ui.IsMouseClicked(ui.Mouse.Left) and not active then API.chat.Activate(slot) end
     if ui.IsMouseClicked(ui.Mouse.Right) and not ui.GetIO().alt then
-      if eq.ContextMenus() then ui.OpenPopup("chatmenu") end
+      if API.menus.Contexts() then ui.OpenPopup("chatmenu") end
       T.TakeRightClick()
     end
   end
@@ -358,7 +359,7 @@ local function chatWindow(slot)
   local frame = ui.GetFrameCount()
   if frame ~= listedFrame then
     listedFrame, bySlot = frame, {}
-    for _, w in ipairs(eq.ChatWindows()) do bySlot[w.slot] = w end
+    for _, w in ipairs(API.chat.Windows()) do bySlot[w.slot] = w end
   end
   return bySlot[slot]
 end
@@ -371,9 +372,9 @@ local function forgetOnCharacterChange()
   local frame = ui.GetFrameCount()
   if frame == checkedFrame then return end
   checkedFrame = frame
-  local gs = eq.GameState and eq.GameState()
+  local gs = API.session.GameState and API.session.GameState()
   local atSelect = gs == 1 or gs == 2
-  local name = eq.Name and eq.Name()
+  local name = API.character.Name and API.character.Name()
   if (atSelect and not lastAtSelect) or (name and lastName and name ~= lastName) then
     for k in pairs(chats) do chats[k] = nil end
   end
@@ -385,7 +386,7 @@ for slot = 1, 32 do
   local window = "Chat" .. slot
   ui.window("Chat " .. slot, function()
     forgetOnCharacterChange()
-    if not (eq.UiReady or eq.InGame)() then return end
+    if not (API.session.UiReady or API.session.InGame)() then return end
     local win = chatWindow(slot)
     if not win then chats[slot] = nil; return end
     local c = state(slot)

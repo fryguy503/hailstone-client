@@ -8,8 +8,9 @@
 --                             the platinum chosen with the Platinum button (the stock quantity dialog).
 --   Tribute         the Personal and Guild pages (LB / RB): the active benefits, a focused one's description, the
 --                   favour, cost and time left, Activate / Deactivate (and the guild's Opt In / Out).
--- The lists, texts and buttons are the stock windows' (eq.ListRow, eq.WindowText, eq.ChildState, eq.ClickChild); the
--- favour labels are their EQTypes (eq.Label).
+-- The lists, texts and buttons are the stock windows' (hs.ListRow, hs.WindowText, hs.ChildState, hs.ClickChild); the
+-- favour labels are their EQTypes (hs.Label).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -59,10 +60,10 @@ end
 -- A benefit list of `screen` at the cursor: one line a row (the stock list's first column, then its others dimmed).
 -- Focusing a row selects it (the stock list's click: its description). Returns the focused row.
 local function benefits(screen, child, state, visible, width)
-  local rows = eq.ListInfo(screen, child) or 0
+  local rows = API.windows.ListInfo(screen, child) or 0
   ui.BeginGroup() -- (the rows start at this x)
   local f = W.list(child, state, rows, visible, 54, width, function(i, rx0, ry0, rx1, ry1, focused)
-    local texts = eq.ListRow(screen, child, i - 1)
+    local texts = API.windows.ListRow(screen, child, i - 1)
     if not texts then return end
     local extra = {}
     for k = 2, #texts do if (texts[k] or "") ~= "" then extra[#extra + 1] = texts[k] end end
@@ -78,9 +79,9 @@ local function benefits(screen, child, state, visible, width)
     end
     if focused and state.lastFocus ~= i then
       state.lastFocus = i
-      eq.ListClick(screen, child, i - 1, "left")
+      API.windows.ListClick(screen, child, i - 1, "left")
     end
-  end, function(i) eq.ListClick(screen, child, i - 1, "left") end)
+  end, function(i) API.windows.ListClick(screen, child, i - 1, "left") end)
   ui.EndGroup()
   if rows == 0 then
     local x, y = ui.GetCursorScreenPos()
@@ -103,11 +104,11 @@ local function buttons(screen, list, x0, x1, h)
   T.font(20)
   for i, b in ipairs(list) do
     if i > 1 then ui.SameLine(0, gap) end
-    local text = eq.WindowText(screen, b[2])
-    local on = eq.ChildState(screen, b[2]) ~= false
+    local text = API.windows.Text(screen, b[2])
+    local on = API.windows.ChildState(screen, b[2]) ~= false
     if T.button("##" .. screen .. b[2], (text and text ~= "" and b.useText) and text or b[1], bw, h,
           { primary = b[3], disabled = not on }, pad) then
-      eq.ClickChild(screen, b[2], "left")
+      API.windows.ClickChild(screen, b[2], "left")
     end
   end
   T.unfont()
@@ -121,27 +122,27 @@ local desc = { scroll = 0 }
 
 ui.window("Tribute Master", function()
   if not W.shown(MW) then return end
-  local title = eq.WindowTitle(MW) or ""
-  local lock = eq.WindowText(MW, "TMW_LockButton") or ""
+  local title = API.windows.Title(MW) or ""
+  local lock = API.windows.Text(MW, "TMW_LockButton") or ""
   local hints = page == 1 and { { "back", lock ~= "" and lock or "Modify Benefits" }, { "x", "Upgrade" }, { "y", "Downgrade" },
     { "lb", "Benefits" }, { "rb", "Donate" }, { "b", "Close" } }
     or { { "a", "Pick up / put down" }, { "lb", "Benefits" }, { "rb", "Donate" }, { "b", "Close" } }
   if W.begin("Tribute Master", { w = 1680, h = 980, title = title ~= "" and title or "Tribute Master",
-        subtitle = "Tribute is " .. (eq.WindowText(MW, "TMW_StatusText") or ""), hints = hints }) then
+        subtitle = "Tribute is " .. (API.windows.Text(MW, "TMW_StatusText") or ""), hints = hints }) then
     if pressed("Tribute Master", "lb") then page = 1 end
     if pressed("Tribute Master", "rb") then page = 2 end
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     local top = tabs({ "Benefits", "Donate" }, page, x0, y0, function(i) page = i end)
-    local guild = (eq.WindowText(MW, "TMW_GuildCurrentPointsLabel") or "") ~= ""
+    local guild = (API.windows.Text(MW, "TMW_GuildCurrentPointsLabel") or "") ~= ""
     -- the favour and the cost, as the stock window's labels show them
     if guild then
-      facts({ { "Guild favor", eq.WindowText(MW, "TMW_GuildCurrentPointsLabel"), C.endurance },
-        { "Cost", (eq.WindowText(MW, "TMW_GuildCostLabel")) }, { "Time left", (eq.WindowText(MW, "TMW_GuildTimeLabel")) } },
+      facts({ { "Guild favor", API.windows.Text(MW, "TMW_GuildCurrentPointsLabel"), C.endurance },
+        { "Cost", (API.windows.Text(MW, "TMW_GuildCostLabel")) }, { "Time left", (API.windows.Text(MW, "TMW_GuildTimeLabel")) } },
         x0 + (x1 - x0) * 0.45, x1, y0 - T.px(6))
     else
-      facts({ { "Favor", (eq.Label(117)), C.endurance }, { "Career", (eq.Label(118)) }, { "Cost", (eq.Label(119)) },
-        { "Time left", (eq.Label(116)) } }, x0 + (x1 - x0) * 0.40, x1, y0 - T.px(6))
+      facts({ { "Favor", (API.character.Label(117)), C.endurance }, { "Career", (API.character.Label(118)) }, { "Cost", (API.character.Label(119)) },
+        { "Time left", (API.character.Label(116)) } }, x0 + (x1 - x0) * 0.40, x1, y0 - T.px(6))
     end
     local midX = x0 + (x1 - x0) * 0.42
     if page == 1 then
@@ -158,16 +159,16 @@ ui.window("Tribute Master", function()
       local dy = select(2, ui.GetCursorScreenPos()) + T.px(10)
       local bh = T.px(58)
       local by = y1 - 2 * bh - T.px(10)
-      P.draw("##tmdesc", desc, described(eq.WindowText(MW, "TMW_Description")), rx0, dy, x1, by - T.px(14),
+      P.draw("##tmdesc", desc, described(API.windows.Text(MW, "TMW_Description")), rx0, dy, x1, by - T.px(14),
         { empty = "Focus a benefit to read about it." })
       ui.SetCursorPos(rx0 - wx, by - wy)
       buttons(MW, { { "Modify Benefits", "TMW_LockButton", true, useText = true }, { "Upgrade", "TMW_UpgradeButton" },
         { "Downgrade", "TMW_DowngradeButton" } }, rx0, x1, bh)
-      local _, st = eq.ChildState(MW, "TMW_StatusButton")
+      local _, st = API.windows.ChildState(MW, "TMW_StatusButton")
       buttons(MW, { { st and "Turn Tribute Off" or "Turn Tribute On", "TMW_StatusButton" } }, rx0, x1, bh)
-      if pressed("Tribute Master", "back") then eq.ClickChild(MW, "TMW_LockButton", "left") end
-      if pressed("Tribute Master", "x") then eq.ClickChild(MW, "TMW_UpgradeButton", "left") end
-      if pressed("Tribute Master", "y") then eq.ClickChild(MW, "TMW_DowngradeButton", "left") end
+      if pressed("Tribute Master", "back") then API.windows.ClickChild(MW, "TMW_LockButton", "left") end
+      if pressed("Tribute Master", "x") then API.windows.ClickChild(MW, "TMW_UpgradeButton", "left") end
+      if pressed("Tribute Master", "y") then API.windows.ClickChild(MW, "TMW_DowngradeButton", "left") end
     else
       -- your bags: pick up the item to donate
       local size, gap = T.px(84), T.px(8)
@@ -185,37 +186,37 @@ ui.window("Tribute Master", function()
         local clicked, focused = T.slot(I.cellId("tm", slot, bag), item, size, { label = where }, pad)
         if focused then
           focusedItem, focusedWhere = item, where
-          if pressed("Tribute Master", "y") and item then eq.ClickSlot(slot, bag, "rightheld") end
+          if pressed("Tribute Master", "y") and item then API.inventory.ClickSlot(slot, bag, "rightheld") end
         end
         if clicked then
-          eq.ClickSlot(slot, bag, "left")
+          API.inventory.ClickSlot(slot, bag, "left")
           acted = true
         end
       end
       I.readBagSlots(bagSlots)
       for slot = 23, 32 do
         local it = bagSlots[slot]
-        if not it or (it.bagSlots or 0) == 0 then cell(slot, nil, it, eq.SlotName(slot)) end
+        if not it or (it.bagSlots or 0) == 0 then cell(slot, nil, it, API.inventory.SlotName(slot)) end
       end
       for slot = 23, 32 do
-        local bag = acted and eq.Item(slot) or bagSlots[slot]
+        local bag = acted and API.inventory.Item(slot) or bagSlots[slot]
         if bag and (bag.bagSlots or 0) > 0 then
-          for i = 0, bag.bagSlots - 1 do cell(slot, i, eq.Item(slot, i), bag.name) end
+          for i = 0, bag.bagSlots - 1 do cell(slot, i, API.inventory.Item(slot, i), bag.name) end
         end
       end
       ui.EndGroup()
       -- the right column: the held item, its tribute value, Donate and Platinum
       local rx0 = listX1 + T.px(24)
-      local held = eq.Item(eq.CursorSlot or 33)
+      local held = API.inventory.Item(API.inventory.CursorSlot or 33)
       I.summary(held or focusedItem, held and "Holding" or focusedWhere, rx0, top, x1, top + T.px(330))
-      facts({ { "Tribute value", eq.WindowText(MW, "TMW_ValueLabel"), C.endurance },
-        { "Platinum", (eq.WindowText(MW, "TMW_CoinButton")) } }, rx0, x1, top + T.px(350))
+      facts({ { "Tribute value", API.windows.Text(MW, "TMW_ValueLabel"), C.endurance },
+        { "Platinum", (API.windows.Text(MW, "TMW_CoinButton")) } }, rx0, x1, top + T.px(350))
       ui.SetCursorPos(rx0 - wx, y1 - 2 * T.px(64) - T.px(10) - wy)
       buttons(MW, { { held and "Donate the held item" or "Donate", "TMW_DonateButton", true } }, rx0, x1, T.px(64))
       buttons(MW, { { "Platinum...", "TMW_CoinButton" } }, rx0, x1, T.px(64))
     end
   end
-  if W.finish() then eq.ShowWindow(MW, false) end
+  if W.finish() then API.windows.Show(MW, false) end
 end)
 
 -- ---------------------------------------------------------------- the benefits window (TributeBenefitWnd)
@@ -236,29 +237,29 @@ ui.window("Tribute", function()
     local midX = x0 + (x1 - x0) * 0.45
     local bh = T.px(60)
     if bpage == 1 then
-      facts({ { "Favor", (eq.Label(117)), C.endurance }, { "Career", (eq.Label(118)) }, { "Cost", (eq.Label(119)) },
-        { "Time left", (eq.Label(116)) } }, midX + T.px(24), x1, top)
+      facts({ { "Favor", (API.character.Label(117)), C.endurance }, { "Career", (API.character.Label(118)) }, { "Cost", (API.character.Label(119)) },
+        { "Time left", (API.character.Label(116)) } }, midX + T.px(24), x1, top)
       ui.SetCursorPos(x0 - wx, top - wy)
       T.heading("Active benefits")
       local ly = select(2, ui.GetCursorScreenPos())
       benefits(BW, "ActiveBenefitList", mine, fits(y1 - ly, 54), midX - x0)
-      P.draw("##tbdesc", bdesc, described(eq.WindowText(BW, "Description")), midX + T.px(24), top + T.px(80), x1, y1 - bh - T.px(14),
+      P.draw("##tbdesc", bdesc, described(API.windows.Text(BW, "Description")), midX + T.px(24), top + T.px(80), x1, y1 - bh - T.px(14),
         { empty = "Focus a benefit to read about it." })
       ui.SetCursorPos(midX + T.px(24) - wx, y1 - bh - wy)
       buttons(BW, { { "Activate", "ActivateButton", true, useText = true } }, midX + T.px(24), x1, bh)
     else
-      facts({ { "Guild favor", (eq.Label(122)), C.endurance }, { "Cost", (eq.Label(123)) }, { "Time left", (eq.Label(121)) },
-        { "Opted in", (eq.WindowText(BW, "GuildStatusLabel")) } }, midX + T.px(24), x1, top)
+      facts({ { "Guild favor", (API.character.Label(122)), C.endurance }, { "Cost", (API.character.Label(123)) }, { "Time left", (API.character.Label(121)) },
+        { "Opted in", (API.windows.Text(BW, "GuildStatusLabel")) } }, midX + T.px(24), x1, top)
       ui.SetCursorPos(x0 - wx, top - wy)
       T.heading("Guild benefits")
       local ly = select(2, ui.GetCursorScreenPos())
       benefits(BW, "GuildBenefitList", guildList, fits(y1 - ly, 54), midX - x0)
-      P.draw("##tgdesc", gdesc, described(eq.WindowText(BW, "GuildDescription")), midX + T.px(24), top + T.px(80), x1, y1 - bh - T.px(14),
+      P.draw("##tgdesc", gdesc, described(API.windows.Text(BW, "GuildDescription")), midX + T.px(24), top + T.px(80), x1, y1 - bh - T.px(14),
         { empty = "Focus a benefit to read about it." })
       ui.SetCursorPos(midX + T.px(24) - wx, y1 - bh - wy)
       buttons(BW, { { "Opt In", "OptOutButton", false, useText = true }, { "Activate", "GuildActivateButton", true, useText = true } },
         midX + T.px(24), x1, bh)
     end
   end
-  if W.finish() then eq.ShowWindow(BW, false) end
+  if W.finish() then API.windows.Show(BW, false) end
 end)

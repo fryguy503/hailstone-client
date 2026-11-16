@@ -4,15 +4,16 @@
 -- HUD, the bars never take the pad's focus and B leaves them up: they are the mouse's, and the
 -- pad's in cursor mode (Back: the stick moves the pointer, A clicks, X right-clicks). The pad edits every bar's
 -- buttons from the main menu's Hot Bars (slotpicker.lua), and any slot of them can go on the cross hotbar.
--- The buttons are the game's (eq.HotButtonInfo / eq.ClickHotButton, as the crossbar's): a click uses what the button
+-- The buttons are the game's (hs.HotButtonInfo / hs.ClickHotButton, as the crossbar's): a click uses what the button
 -- holds (an empty one opens its menu), a quick right click is the game's (a social's editor), the right button held
 -- opens the button's menu, dragging one off takes it on the cursor and a hotbutton on the cursor is dropped onto the
--- button clicked. A right click on the page opens the bar's own menu (eq.HotBarMenu: sets, clear, Button Size,
--- Show Key Map, Show Spinner, Open New Bar); its Button Size and Show Spinner (eq.HotBarSetting) size the tiles and
+-- button clicked. A right click on the page opens the bar's own menu (hs.HotBarMenu: sets, clear, Button Size,
+-- Show Key Map, Show Spinner, Open New Bar); its Button Size and Show Spinner (hs.HotBarSetting) size the tiles and
 -- show the pager. A left click on the page number turns the bar vertical (or back): as the game's bar laid out taller
 -- than wide (CHotButtonWnd::OnCompleteMoveOrResize, rows > columns), a column of the twelve buttons with the page
 -- across its top; vertical bars stand on the right, left of the minimap, the newest furthest left (the setting
 -- hotbar.vertical.<window>).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local W = dofile("lib/window.lua")
 local CH = dofile("lib/child.lua") -- (testing: CH.testOpen)
@@ -28,7 +29,7 @@ for i = 1, BUTTONS do IDS[i] = "HB_Button" .. i end
 -- the page's pieces: the arrows' children and the page number between them
 local PAGE = { { "HB_PageUpButton", "up" }, { "", "page" }, { "HB_PageDownButton", "down" } }
 
--- Each tile's (n * 100 + i): the record eq.HotButtonInfo fills, its label's text colour and its fitted label.
+-- Each tile's (n * 100 + i): the record hs.HotButtonInfo fills, its label's text colour and its fitted label.
 local tiles = {}
 
 -- T.fit(label, w) in the current font, kept in `c` while the label, the width and the font's measure of the label
@@ -50,7 +51,7 @@ local function tile(window, n, i, x0, y0, size)
     tiles[k] = rec
   end
   -- what it holds; a social's colour and a Lua social's face (social); its check and cool-down, a gem's stage
-  local info = eq.HotButtonInfo(window, id, rec.info)
+  local info = API.hotbars.Info(window, id, rec.info)
   local kind, label, tex = info.kind, info.label, info.tex
   local face = info.social
   local x1, y1 = x0 + size, y0 + size
@@ -102,28 +103,28 @@ local function tile(window, n, i, x0, y0, size)
   end
   T.outline(x0, y0, x1, y1, hovered and C.accent or C.edge, hovered and 0.9 or 1, r, hovered and T.px(2) or 1)
   -- the key bound to it (Show Key Map: the button's text is its key, "" with the key map off)
-  local key = eq.WindowText(window, id) or ""
+  local key = API.windows.Text(window, id) or ""
   if key ~= "" then
     T.font(12)
     T.draw(x1 - T.px(4) - ui.CalcTextSize(key), y0 + T.px(2), key, C.faint) -- top right, as the game's (0x5506b0)
     T.unfont()
   end
   -- dragging it off takes it on the cursor
-  if active and ui.IsMouseDragging(ui.Mouse.Left) and not eq.HoldingButton() then eq.PickUp(window, id) end
+  if active and ui.IsMouseDragging(ui.Mouse.Left) and not API.cursor.HoldingButton() then API.cursor.PickUp(window, id) end
   if clicked then
-    eq.ClickHotButton(window, id, "left")
-  elseif eq.HoldingButton() and hovered and ui.IsMouseReleased(ui.Mouse.Left) then
-    eq.ClickHotButton(window, id, "left") -- a dragged hotbutton let go over it
+    API.hotbars.Click(window, id, "left")
+  elseif API.cursor.HoldingButton() and hovered and ui.IsMouseReleased(ui.Mouse.Left) then
+    API.hotbars.Click(window, id, "left") -- a dragged hotbutton let go over it
   end
   -- the right button as the game takes it: a quick click on release, held 500 ms the button's menu
   if hovered and ui.IsMouseClicked(ui.Mouse.Right) then rightPress = { key = k, at = ui.GetTime() } end
   if rightPress and rightPress.key == k then
     if not ui.IsMouseDown(ui.Mouse.Right) then
-      if not rightPress.held and hovered then eq.ClickHotButton(window, id, "right") end
+      if not rightPress.held and hovered then API.hotbars.Click(window, id, "right") end
       rightPress = nil
     elseif not rightPress.held and ui.GetTime() - rightPress.at > 0.5 then
       rightPress.held = true
-      eq.ClickHotButton(window, id, "rightheld")
+      API.hotbars.Click(window, id, "rightheld")
     end
   end
   if hovered and face and info.tooltip ~= "" then ui.SetTooltip(info.tooltip)
@@ -154,8 +155,8 @@ local function bar(n)
       place = #list
     end
     T.resetFonts()
-    local percent = eq.HotBarSetting and eq.HotBarSetting(n, "PercentSize") or 100
-    local spinner = not eq.HotBarSetting or eq.HotBarSetting(n, "ShowSpinner") ~= false
+    local percent = API.hotbars.Setting and API.hotbars.Setting(n, "PercentSize") or 100
+    local spinner = not API.hotbars.Setting or API.hotbars.Setting(n, "ShowSpinner") ~= false
     local size, gap = T.px(52 * percent / 100), T.px(5)
     local pager = spinner and T.px(40) or 0
     local p = T.px(8)
@@ -190,8 +191,8 @@ local function bar(n)
       if spinner then
         -- the page between its arrows (across the top of a vertical bar); a right click on it: the bar's menu, a
         -- left click on the number: horizontal / vertical
-        local page = eq.WindowText(window, "HB_HorizontalCurrentPageLabel")
-        if not page or page == "" then page = eq.WindowText(window, "HB_VerticalCurrentPageLabel") or "" end
+        local page = API.windows.Text(window, "HB_HorizontalCurrentPageLabel")
+        if not page or page == "" then page = API.windows.Text(window, "HB_VerticalCurrentPageLabel") or "" end
         local wx, wy = ui.GetWindowPos()
         local third = size / 3
         for k, a in ipairs(PAGE) do
@@ -205,7 +206,7 @@ local function bar(n)
           ui.PopID()
           if a[1] ~= "" then
             T.triangle(a[2], cx0 + cw / 2 - (vertical and 0 or T.px(3)), cy0 + chh / 2, T.px(6), hov and C.accent or C.dim, 1)
-            if clicked then eq.ClickChild(window, a[1], "left") end
+            if clicked then API.windows.ClickChild(window, a[1], "left") end
           else
             T.font(16)
             T.textIn(cx0, cy0, cx0 + cw, cy0 + chh, page, hov and C.accent or C.text, 0.5)
@@ -213,8 +214,8 @@ local function bar(n)
             if clicked then ui.SetSetting(key, vertical and "0" or "1") end
             if hov then ui.SetTooltip(vertical and "Lay the bar out across" or "Lay the bar out downward") end
           end
-          if hov and ui.IsMouseClicked(ui.Mouse.Right) and eq.HotBarMenu then
-            eq.HotBarMenu(n, cx0 + cw / 2, cy0 + chh / 2)
+          if hov and ui.IsMouseClicked(ui.Mouse.Right) and API.hotbars.Menu then
+            API.hotbars.Menu(n, cx0 + cw / 2, cy0 + chh / 2)
           end
         end
         if vertical then by = by + pager else bx = bx + pager end

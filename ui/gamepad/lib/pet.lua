@@ -1,4 +1,4 @@
--- The Pet window (pet.lua) in pieces, so a plugin's window can be the pack's with its own part added (eq.Plugin
+-- The Pet window (pet.lua) in pieces, so a plugin's window can be the pack's with its own part added (hs.Plugin
 -- windows: dofile("lib/pet.lua") finds this one):
 --   P.visible() -> shown, name    whether the window shows this frame (the stock PetInfoWindow and the Pet tile;
 --                                 call it once a frame), and the pet's name (nil: no pet)
@@ -7,6 +7,7 @@
 --   P.commands(x0, y, width, name, settled) -> y   the stock command buttons under a "Commands" heading
 --   P.buffs(rx0, y0, x1, y1)      the pet's buffs: icon, name, time left
 --   P.window()                    the pack's window: status and commands on the left, buffs on the right
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -26,7 +27,7 @@ P.HINTS = { { "a", "Command" }, { "x", "Assign" }, { "y", "Choose command" }, { 
 -- Set once, by the pack's own copy of this file: a plugin's Pet window that runs this file too would otherwise put its
 -- own copy there, which runs as the plugin and stops working when it unloads (docs/plugins.md "Plugin windows").
 GPSTATE.openPet = GPSTATE.openPet or function()
-  if not eq.WindowShown(PW) then eq.ShowWindow(PW, true) end
+  if not API.windows.Shown(PW) then API.windows.Show(PW, true) end
   GPSTATE.petOpen = true
   return true
 end
@@ -34,7 +35,7 @@ end
 local was = { shown = false, pet = false }
 
 local function petName()
-  local _, name, raw = eq.Gauge(16)
+  local _, name, raw = API.character.Gauge(16)
   if raw == -1 or not name or name == "" then return nil end
   return name
 end
@@ -54,16 +55,16 @@ end
 
 function P.status(x0, leftW, name)
   local wx, wy = ui.GetWindowPos()
-  local frac = eq.Gauge(16)
-  local pct = eq.Label(69) or ""
+  local frac = API.character.Gauge(16)
+  local pct = API.character.Label(69) or ""
   local clicked, _, bx0, by0, bx1, by1 = T.button("##pethp", "", leftW, T.px(92), { disabled = name == nil }, pad)
   T.font(24)
   T.textIn(bx0 + T.px(18), by0 + T.px(6), bx1 - T.px(18), by0 + T.px(46), name or "No Pet", C.text, 0)
   T.textIn(bx0 + T.px(18), by0 + T.px(6), bx1 - T.px(18), by0 + T.px(46), pct ~= "" and (pct .. "%") or "", C.dim, 1)
   T.unfont()
   if name then T.bar(bx0 + T.px(18), by1 - T.px(34), bx1 - T.px(18), by1 - T.px(16), frac, C.good) end
-  if clicked then eq.ClickChild(PW, "PetHPGauge", "left") end -- targets the pet
-  local tfrac, tname, traw = eq.Gauge(41)
+  if clicked then API.windows.ClickChild(PW, "PetHPGauge", "left") end -- targets the pet
+  local tfrac, tname, traw = API.character.Gauge(41)
   local ty = by1 + T.px(14)
   T.rect(x0, ty, x0 + leftW, ty + T.px(80), C.sunken, 1, T.px(12))
   T.font(18)
@@ -77,8 +78,8 @@ function P.status(x0, leftW, name)
   -- the other pets (Pet2HPGauge / Pet3HPGauge: shown only while the server has such a pet)
   local oy = ty + T.px(80)
   for _, id in ipairs({ "Pet2HPGauge", "Pet3HPGauge" }) do
-    if eq.ChildShown(PW, id) == true then
-      local ofrac, oname = eq.ChildGauge(PW, id)
+    if API.windows.ChildShown(PW, id) == true then
+      local ofrac, oname = API.windows.ChildGauge(PW, id)
       if ofrac then
         ui.SetCursorPos(x0 - wx, oy + T.px(10) - wy)
         local oc, _, ox0, oy0, ox1, oy1 = T.button("##" .. id, "", leftW, T.px(56), {}, pad)
@@ -88,7 +89,7 @@ function P.status(x0, leftW, name)
           math.floor(ofrac * 100 + 0.5) .. "%", C.dim, 1)
         T.unfont()
         T.bar(ox0 + leftW * 0.5, oy0 + T.px(20), ox1 - T.px(18), oy0 + T.px(36), ofrac, C.good)
-        if oc then eq.ClickChild(PW, id, "left") end -- targets that pet
+        if oc then API.windows.ClickChild(PW, id, "left") end -- targets that pet
         oy = oy1
       end
     end
@@ -107,11 +108,11 @@ function P.commands(x0, y, leftW, name, settled, cols)
   local bottom = y
   for i = 0, BUTTONS - 1 do
     local id = "Pet" .. i .. "_Button"
-    local label = eq.WindowText(PW, id) or ""
-    if label ~= "" and eq.ChildShown(PW, id) ~= false then
+    local label = API.windows.Text(PW, id) or ""
+    if label ~= "" and API.windows.ChildShown(PW, id) ~= false then
       if n % cols ~= 0 then ui.SameLine(0, gap) end
       n = n + 1
-      local enabled, checked = eq.ChildState(PW, id)
+      local enabled, checked = API.windows.ChildState(PW, id)
       local none = label == "none"
       local text = none and "(none)" or (label:sub(1, 1):upper() .. label:sub(2))
       local c2, focused, cx0, cy0, cx1, cy1 = T.button("##" .. id, text, bw, T.px(76),
@@ -122,14 +123,14 @@ function P.commands(x0, y, leftW, name, settled, cols)
         T.textIn(cx0, cy0 + T.px(4), cx1 - T.px(10), cy0 + T.px(24), "ON", C.onAccent, 1)
         T.unfont()
       end
-      if c2 and settled then eq.ClickChild(PW, id, "left") end
+      if c2 and settled then API.windows.ClickChild(PW, id, "left") end
       -- X: the hot button the stock button's drag makes (it needs no pet, as the drag does not)
       if focused and enabled ~= false and W.pressed("x") then
-        AS.start("Pet " .. label, function() return eq.PickUp(PW, id) end, "Pet")
+        AS.start("Pet " .. label, function() return API.cursor.PickUp(PW, id) end, "Pet")
       end
       -- Y: the command the button holds (the stock button's right button: the game's menu of the commands the pet
       -- takes, then "none"), a "none" button's too
-      if focused and W.pressed("y") then eq.ClickChild(PW, id, "rightdown") end
+      if focused and W.pressed("y") then API.windows.ClickChild(PW, id, "rightdown") end
     end
   end
   return bottom
@@ -146,11 +147,11 @@ function P.buffs(rx0, y0, x1, y1)
   T.font(19)
   local _, th = ui.CalcTextSize("Ag")
   for i = 0, BUFFS - 1 do
-    local spell, ms, bname = eq.BuffSlot(PW, BUFF_IDS[i])
+    local spell, ms, bname = API.buffs.Slot(PW, BUFF_IDS[i])
     if spell then
       if by + rowH > y1 then break end
       count = count + 1
-      local tex, u0, v0, u1, v1 = eq.ChildArt(PW, BUFF_IDS[i], "decal")
+      local tex, u0, v0, u1, v1 = API.windows.ChildArt(PW, BUFF_IDS[i], "decal")
       T.rect(rx0 - 2, by - 2, rx0 + size + 2, by + size + 2, C.raised, 1, T.px(6))
       T.icon(tex, u0, v0, u1, v1, rx0, by, rx0 + size, by + size)
       local tx = rx0 + size + T.px(14)

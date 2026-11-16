@@ -1,7 +1,8 @@
 -- Confirmation: replaces the game's ConfirmationDialogBox (the yes / no questions: dropping an item on the ground, a
 -- guild invitation, the server's and the windows' own questions). The question in a readable box with a question
 -- mark beside it, and the buttons the question has: Yes (the primary) and No, or OK alone. The answers are the
--- window's buttons (eq.ClickChild); the close box answers as No does, as the stock close box.
+-- window's buttons (hs.ClickChild); the close box answers as No does, as the stock close box.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -35,6 +36,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Confirmation Dialog Box", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Confirm", WINDOW_OPTS, drawWindow)
 end)

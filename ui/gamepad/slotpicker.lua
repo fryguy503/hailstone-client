@@ -1,13 +1,14 @@
 -- The slot picker (gamepad pack): where a window's "assign" (X) puts an ability, a skill, an AA or a discipline
 -- (lib/assign.lua). LB / RB go through the cross hotbar's three sets (LT, RT, LT + RT: the slots the triggers fire,
 -- docs/gamepad.md section 3) and the ten hot bars; A puts it on the focused slot, B cancels. A slot is a hot button
--- of the bar's current page, so the hotbutton goes there as a drop from the cursor does (eq.ClickHotButton with it on
+-- of the bar's current page, so the hotbutton goes there as a drop from the cursor does (hs.ClickHotButton with it on
 -- the cursor), and whatever the slot held is replaced.
 -- Opened from the main menu's Hot Bars (AS.edit) it holds nothing: A opens the focused slot's own menu, the game's
--- hotbutton menu the right button held on it opens (eq.ClickHotButton "rightheld" at the slot; menus.lua takes the
+-- hotbutton menu the right button held on it opens (hs.ClickHotButton "rightheld" at the slot; menus.lua takes the
 -- pad): Assign Social (a new social opens the social editor), Assign Label, Assign Icon, Change Size, Clear,
--- Activate ...; on a hot bar's page Y opens that bar's own menu (eq.HotBarMenu: hotbutton sets, Clear current
+-- Activate ...; on a hot bar's page Y opens that bar's own menu (hs.HotBarMenu: hotbutton sets, Clear current
 -- hotbuttons, Button Size, Show Key Map, Show Spinner, Open New Bar), as a right click on the bar does.
+local API = hs.UI
 local W = dofile("lib/window.lua")
 local T = W.T -- the window module's theme: the scale W.begin computed this frame
 local pad = W.pad
@@ -42,14 +43,14 @@ end
 
 local function close(a)
   GPSTATE.assign = nil
-  if not a.edit and eq.HoldingButton() then eq.ClearCursorButton() end -- cancelled, or what the slot held
+  if not a.edit and API.cursor.HoldingButton() then API.cursor.ClearButton() end -- cancelled, or what the slot held
   if a and a.from then pad.focus(a.from) end
 end
 
 ui.window("Assign To Slot", function()
   local a = GPSTATE.assign
   if not a then return end
-  if not eq.InGame() or (not a.edit and not eq.HoldingButton()) then GPSTATE.assign = nil return end -- (the mouse dropped it)
+  if not API.session.InGame() or (not a.edit and not API.cursor.HoldingButton()) then GPSTATE.assign = nil return end -- (the mouse dropped it)
   local title = a.edit and "Hot Bars" or ("Assign: " .. (a.label or ""))
   local hints = a.edit and page > 3 and { { "a", "Edit" }, { "y", "Bar menu" }, { "lb", "Previous" }, { "rb", "Next" }, { "b", "Close" } }
       or a.edit and { { "a", "Edit" }, { "lb", "Previous" }, { "rb", "Next" }, { "b", "Close" } }
@@ -58,7 +59,7 @@ ui.window("Assign To Slot", function()
     if W.pressed("lb") then page, focusFirst = (page + PAGES - 2) % PAGES + 1, true end
     if W.pressed("rb") then page, focusFirst = page % PAGES + 1, true end
     local x0, y0, x1, y1 = W.area()
-    if a.edit and page > 3 and W.pressed("y") then eq.HotBarMenu(page - 3, (x0 + x1) / 2, (y0 + y1) / 2) end
+    if a.edit and page > 3 and W.pressed("y") then API.hotbars.Menu(page - 3, (x0 + x1) / 2, (y0 + y1) / 2) end
     local list = slots(page)
     local size, gap = T.px(128), T.px(14)
     local perRow = page <= 3 and 8 or 6
@@ -79,7 +80,7 @@ ui.window("Assign To Slot", function()
       local focused = pad.focused()
       ui.PopID()
       local screen, child = screenOf(s[1]), "HB_Button" .. s[2]
-      local kind, label, tex, u0, v0, u1, v1 = eq.HotButton(screen, child)
+      local kind, label, tex, u0, v0, u1, v1 = API.hotbars.Button(screen, child)
       local cx1, cy1 = cx0 + size, cy0 + size
       local r = T.px(12)
       T.rect(cx0, cy0, cx1, cy1, kind == "empty" and C.sunken or C.raised, 1, r)
@@ -112,10 +113,10 @@ ui.window("Assign To Slot", function()
         else focusedLabel = (label and label ~= "") and ("Replaces " .. label) or "Empty slot" end
       end
       if clicked and a.edit then
-        eq.ClickHotButton(screen, child, "rightheld", cx0 + size / 2, cy0 + size / 2) -- the slot's menu
+        API.hotbars.Click(screen, child, "rightheld", cx0 + size / 2, cy0 + size / 2) -- the slot's menu
       elseif clicked then
         -- the drop; what the slot held comes back on the cursor and is let go
-        eq.ClickHotButton(screen, child, "left")
+        API.hotbars.Click(screen, child, "left")
         close(a)
       end
     end

@@ -61,6 +61,7 @@
 #include "game/mercenary.h"
 #include "game/mounts.h"
 #include "game/player_path.h"
+#include "game/server_path.h"
 #include "game/missiles.h"
 #include "game/server_ext.h"
 #include "game/server_ext_chain.h"
@@ -141,6 +142,7 @@ struct Confirmation {
     ItemSlot slot;     // the attune question's destination slot
     AppPacket offer;   // a server offer's packet the answer echoes (translocate, resurrection, shared task)
     int timeout_ms = 0;  // the dialog's time limit (answered no when it runs out); 0 none
+    bool plain_text = false; // escape extension/user text before rendering the confirmation as STML
     bool ok_only = false; // flags 1: an OK button alone (a refusal to read), else Yes / No (0xc)
     std::uint32_t data = 0, data2 = 0; // what the yes acts on (a corpse slot, an ability, an item id, ...)
 };
@@ -509,6 +511,7 @@ public:
     }
     // What set_player_motion last gave: whether the player is moving, and the heading (0..512).
     bool player_moving() const { return moving_; }
+    bool player_stationary() const { return !moving_ && velocity_ == glm::vec3(0.0f) && speed_run_ == 0.0f; }
     float player_heading() const { return heading_; }
     // Zone points of the current zone (OP_SendZonepoints): targets by zone_points.number.
     const std::vector<ZonePoint>& zone_points() const { return zone_points_; }
@@ -531,6 +534,11 @@ public:
         if (profile_ && new_zone_ && profile_->zone_id == new_zone_->zone_id && profile_->zone_instance != 0)
             return profile_->zone_instance;
         return new_zone_ ? new_zone_->zone_instance : 0;
+    }
+    // An instance-local presentation name. Never changes the shared zone catalogue.
+    std::string zone_display_name() const {
+        if (auto name = server_ext().zone_display_name(*this, zone_id(), zone_instance())) return *name;
+        return world_.zone_long_name;
     }
     // Asks to zone, as the original client does when it walks into a zone line
     // (DoTeleportB → MoveToZone): an OP_ClientUpdate with the current position
@@ -812,10 +820,21 @@ public:
     // /find [name] (a client extension, see game_connection_path.cpp): the path to the named spawn
     // (PlayerManagerClient::GetSpawnByName, then PlayerPath_FindSpawn, as 0x59da00), or to the target; nothing
     // to find ends the path.
+    struct ActorRef {
+        std::uint64_t context = 0;
+        std::uint32_t id = 0;
+        std::uint64_t incarnation = 0;
+        bool operator==(const ActorRef&) const = default;
+    };
+    std::uint64_t interaction_context() const;
+    std::optional<ActorRef> captureActorRef(std::uint32_t id) const;
+    bool matches(const ActorRef& actor) const;
     void find_target(const std::string& name = {});
     // The path to a spawn by id, the player facing it when it comes (PlayerPath_FindSpawnByID(id, 1)); for the Find
-    // window (app/lua_eq_find.cpp). False when there is no such spawn.
+    // window (app/lua_ui_find.cpp). False when there is no such spawn.
     bool find_spawn(std::uint32_t spawn_id);
+    bool npc_find_enabled() const;
+    bool npc_find_allowed(std::uint32_t spawn_id) const;
     // PlayerPath_FindMapLocation (MapViewMap::HandleRButtonDown): the path to a point of the map, world coordinates
     // at the player's height.
     void find_map_location(const glm::vec3& at);
@@ -826,9 +845,10 @@ public:
     // The navigation's server path (app/navigator.h, a Hailstone addition): the same OP_FindPersonRequest as a find
     // to a spawn, but its reply goes to take_quiet_path() alone: no path drawn, no sound, no chat line, and a shown
     // find path is left as it is.
-    void request_quiet_path(std::uint32_t spawn_id);
+    game::ServerPathLease request_quiet_path(std::uint32_t spawn_id, game::ServerPathOrigin origin = {});
     // The reply once it has come (the destination first, as sent; empty: the server has no path), then nullopt.
-    std::optional<std::vector<glm::vec3>> take_quiet_path() { return std::exchange(quiet_path_, std::nullopt); }
+    std::optional<std::vector<glm::vec3>> take_quiet_path(const game::ServerPathLease& lease);
+    void cancel_server_path(const game::ServerPathLease& lease);
     // 0x59a9c0 (zoning's position reset): the request again while a path is shown.
     void find_person_request();
     // A failed find the map shows (0x6c92e0: a one-point reply; the map window opens), taken by the map.
@@ -997,6 +1017,7 @@ public:
     struct Aggro {
         std::uint32_t lock_id = 0, target_id = 0, secondary_id = 0;
         std::array<std::uint16_t, kAggroTypes> pct{};
+        std::array<bool, kAggroTypes> received{}; // a default zero is not a server-supplied reading
         bool window_open = false; // AggroMeterWnd (shown once the server sends the meter)
     };
     const Aggro& aggro() const { return aggro_; }
@@ -1292,7 +1313,7 @@ public:
     // The target of target window is shown (the app tells; Leadership_ActivateAbility 0xe / 0x1d hide it then).
     void set_target_of_target_open(bool open) { target_of_target_open_ = open; }
     // The group finder (CGroupSearchWnd "GroupSearchWnd" and its additional filters, CGroupSearchFiltersWnd; rules in
-    // game/group_search.h, the windows in app/lua_eq_group_search.cpp): the fields as the original's children hold
+    // game/group_search.h, the windows in app/lua_ui_group_search.cpp): the fields as the original's children hold
     // them, what the window last sent (+0x340 the LFG record, +0xe7cc the LFP record; `on` = posted), the results
     // of the last searches and the filters (character ini [ADDITIONALFILTERS]).
     struct GroupSearch {
@@ -1782,6 +1803,7 @@ public:
     // Send_OP_ItemLinkResponse(id, name, flags) (net/item_packets.h ItemLinkRequest): `shift` adds flag 2.
     void request_item_link(std::uint32_t item_id, const std::string& name, std::uint32_t flags, bool shift);
     std::optional<Item> take_item_display();
+    void inspect_received_item(const Item& item);
     // An item the server sent again as OP_ItemPacket type 0x67, or whose evolving progress it updated: every open
     // item display showing the same two-part instance id is set to it in place.
     std::optional<Item> take_item_refresh();
@@ -1945,7 +1967,7 @@ public:
         pets_.focused = spawn_id;
         update_pet_presence();
     }
-    // The pet window's side of cmd_pet and of the pet's arrival (CPetInfoWnd; app/lua_eq_misc.cpp's PetWindow links
+    // The pet window's side of cmd_pet and of the pet's arrival (CPetInfoWnd; app/lua_ui_misc.cpp's PetWindow links
     // itself to each new connection, as InitGameUI makes the window again).
     struct PetWindowLink {
         // CharacterZoneClient_CanUsePetCommand for the pet now there (ReissueToggledPetCommands).
@@ -2395,6 +2417,12 @@ public:
     void set_raid_options_open(bool open) { raid_options_.open = open; }
     // /follow: the spawn to follow (0 none); the app runs PlayerClient::FollowPlayerAI (game/follow.h).
     std::uint32_t follow_target() const { return social_.follow_id; }
+    // Only host-routed manual controls call this. Profiles cannot initiate movement.
+    bool manual_follow(std::string_view action);
+    bool enhanced_follow_active() const { return enhanced_follow_.has_value(); }
+    bool enhanced_follow_current() const; // passive identity/readiness check, never calls an extension
+    std::optional<game::FollowProfile> active_follow_profile();
+    bool instant_mount_acceleration() const;
     void stop_follow(bool announce = true);
     // FollowPlayerAI's end: `eqstr` (12692 dead, 12693 too far) with the followed name, then TurnOffAutoFollow.
     void stop_follow_with(std::uint32_t eqstr);
@@ -2410,7 +2438,7 @@ public:
     // Sets an option as the Options window does: kept in options.ini, then acted on (apply_client_option: the
     // original's COptionsWnd page handlers, e.g. the anonymous flag's spawn appearance and the chat line).
     void change_client_option(game::ClientOption id, int value);
-    // Hailstone: the layout copy window's Chat and Options boxes (app/lua_eq.cpp copy_layout). What another
+    // Hailstone: the layout copy window's Chat and Options boxes (app/lua_ui.cpp copy_layout). What another
     // character's chat.ini (filters, user colours) and options.ini (game options) set, from its folder `from_dir`,
     // written over this character's; the filters are read and sent again, and each option that changed is acted on
     // as an Options window change. The anonymous / roleplay flags stay this character's. The original keeps these in
@@ -2562,11 +2590,12 @@ public:
         game::TrackList list;
     };
     const Tracking& tracking() const { return tracking_; }
+    bool tracking_admitted() const;
     // CTrackingWnd::AboutToShow: Activate (the list cleared, the controls), then OP_Track.
-    void open_tracking();
+    void open_tracking(bool skill_admitted = false);
     void close_tracking();
     void send_track();                     // Send_OP_Track (no payload)
-    void track_spawn(std::int32_t spawn_id); // the Track button: OP_TrackTarget {id}, "You begin tracking %1."
+    void track_spawn(std::int32_t spawn_id, std::uint32_t expected_revision = 0); // received list only
     // The window's auto update check box (CTrackingWnd::sub_00779310): kept and written as TrackAutoUpdate TRUE /
     // FALSE (the character's options.ini here); the window reads it back each time it opens.
     void set_track_auto_update(bool on);
@@ -3293,6 +3322,14 @@ private:
     // loot_all_queue_ by then, so the queue alone cannot tell.
     bool loot_all_active_ = false;
     std::int64_t loot_check_ms_ = 0;      // CLootWnd::nNextRefreshTime
+    std::uint64_t loot_session_generation_ = 0;
+    bool extension_loot_all_ = false, extension_loot_dispatch_ = false;
+    std::optional<std::string> loot_warning(const Item& item, bool& plain) const;
+    void continue_extension_loot_all();
+    void answer_extension_loot_question(const Confirmation& question, bool yes);
+    void loot_item_after_warning(std::int16_t slot, bool automatic, bool shift, bool ctrl, bool whole,
+                                 bool warning_after_quantity = false);
+    void confirm_extension_loot_quantity(std::int16_t slot, bool automatic, std::uint32_t quantity);
     void loot_all_now();              // CLootWnd::LootAll(1)
     void send_loot_item(std::int16_t corpse_slot, bool auto_loot, std::uint32_t quantity = 0); // OP_LootItem
     bool looting_own_corpse() const;  // the loot corpse's owner (+0xe4) is the player
@@ -3326,11 +3363,38 @@ private:
 
     // Doors and ground objects.
     std::vector<game::Door> doors_;
-    // The OP_FindPersonRequests waiting for their reply, in the order sent (each reply goes to the oldest; EQEmu's
-    // order is not guaranteed, see path_reply): true for request_quiet_path's, false for a shown find's; with when
-    // each went out (now_ms).
-    std::deque<std::pair<bool, std::int64_t>> find_requests_;
-    std::optional<std::vector<glm::vec3>> quiet_path_;
+    // OP_FindPersonRequest reservations and transmitted requests. Unsent reservations cannot own a reply or a
+    // timeout; overlapping transmitted requests all discard their ambiguous replies (see path_reply).
+    struct PendingFindRequest {
+        bool quiet = false;
+        std::int64_t sent_at = 0;
+        bool npc_origin = false;
+        bool discard = false;
+        game::ServerPathLease lease;
+        std::optional<ActorRef> actor;
+        std::uint64_t policy_revision = 0;
+        std::shared_ptr<bool> live;
+        std::weak_ptr<const bool> owner_lifetime;
+        bool has_owner_lifetime = false;
+        bool sent = false; // a reservation becomes reply-bearing only after transport accepts the packet
+    };
+    std::deque<PendingFindRequest> find_requests_;
+    bool find_reply_quarantine_ = false;
+    void expire_find_requests(std::int64_t now);
+    game::ServerPathLease queue_find_request(bool quiet, bool npc_origin, game::ServerPathOrigin origin,
+                                            std::optional<ActorRef> actor);
+    bool path_request_current(const PendingFindRequest& request) const;
+    void commit_find_request(const game::ServerPathLease& lease);
+    void rollback_find_request(const game::ServerPathLease& lease);
+    struct QuietPath { PendingFindRequest request; std::vector<glm::vec3> points; };
+    std::optional<QuietPath> quiet_path_;
+    game::ServerPathLease shown_find_lease_;
+    std::uint64_t shown_find_owner_ = 0, shown_find_generation_ = 0;
+    mutable std::uint64_t interaction_context_ = 0, interaction_player_ = 0;
+    mutable const void* interaction_session_ = nullptr;
+    mutable ConnectionState interaction_state_ = ConnectionState::Idle;
+    mutable bool interaction_dead_ = false;
+    void invalidate_interaction_context();
     game::SwitchClock switch_clock_;
     std::vector<game::GroundObject> ground_objects_;
     std::optional<game::WorldContainer> world_container_;
@@ -3418,6 +3482,8 @@ private:
 
     // Social, guilds, raids, the chat server.
     game::SocialState social_;
+    std::optional<game::FollowIdentity> enhanced_follow_;
+    std::uint64_t follow_generation_ = 0;
     game::GuildState guild_;
     struct PendingGuildPermissions {
         std::uint32_t guild_id = 0;
@@ -3427,6 +3493,19 @@ private:
     std::optional<PendingGuildPermissions> pending_guild_permissions_;
     void reset_guild_permissions(std::uint32_t next_guild_id);
     Tracking tracking_;
+    struct TrackingAdmission { std::uint64_t context = 0, lifecycle = 0; };
+    std::optional<TrackingAdmission> tracking_request_, tracking_data_;
+    std::int64_t tracking_request_at_ = 0;
+    std::uint64_t tracking_request_serial_ = 0;
+    std::uint64_t tracking_action_generation_ = 0;
+    bool tracking_request_retired_ = false;
+    mutable bool tracking_admission_running_ = false;
+    std::unordered_map<std::int32_t, ActorRef> tracking_actors_;
+    bool tracking_reply_quarantine_ = false;
+    std::optional<TrackingAdmission> tracking_admission() const;
+    bool tracking_admission_current(TrackingAdmission admission) const;
+    void retire_tracking();
+    void maintain_tracking();
     void handle_track_reply(const AppPacket& p);
     void track_filter_all();
     game::RaidState raid_;
@@ -3598,6 +3677,9 @@ private:
     RaidOptions raid_options_;
     bool target_of_target_open_ = false;
     game::PlayerPath path_;
+    // An NPC-origin Find never becomes a PC/unknown path when its id disappears or is reused.
+    struct NpcFindIdentity { std::uint32_t id; std::uint64_t actor, player, context, policy; };
+    std::optional<NpcFindIdentity> npc_find_identity_;
     game::PlayerPath::FloorFn path_floor_;
     std::optional<FailedFind> failed_find_;
     std::uint32_t find_replies_ = 0;
@@ -3615,6 +3697,8 @@ private:
     void send_find(const game::FindRequest& r, bool found = true);
     void path_reply(const AppPacket& p);        // PlayerPath_HandleFindPersonReply
     void path_tick();                           // PlayerPath_Update
+    bool find_path_allowed() const;             // retire only a currently restricted NPC Find path
+    void retire_npc_find();
     void play_wave(std::uint32_t id);           // EqSoundManager::WavePlay(id, 0)
     GuildBank guild_bank_;
     game::RealEstateManager real_estate_;

@@ -3,9 +3,10 @@
 -- and the actions under each table: Withdraw, View, Split and Merge, the item's permission and Change Member for
 -- the bank; Deposit (the item on your cursor) and Put in Bank for the deposits. Buttons a member may not use are
 -- greyed by the window itself.
--- Everything is the original's (eq.ListRow / eq.ListClick on ItemList and DepositList, eq.ComboSelect on
--- FilterCombo and PermissionCombo, eq.ClickChild on the buttons): one selection across both lists, as the window
+-- Everything is the original's (hs.ListRow / hs.ListClick on ItemList and DepositList, hs.ComboSelect on
+-- FilterCombo and PermissionCombo, hs.ClickChild on the buttons): one selection across both lists, as the window
 -- keeps it; Split asks how many in the game's quantity dialog.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local T = hud.T
@@ -111,6 +112,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Guild Bank", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Guild Bank", WINDOW_OPTS, drawWindow)
 end)

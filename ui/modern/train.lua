@@ -3,6 +3,7 @@
 -- of a point), with a search and a sort, and Train for the selected one. The trainer's name is the window's title.
 -- Rows are the original's list (a click selects in it, and the trainer answers in chat as the game does); Train is
 -- its button, enabled when the game allows the training (points, money, level).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -162,6 +163,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Training", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Training", DIALOG, body)
 end)

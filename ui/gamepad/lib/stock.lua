@@ -5,9 +5,10 @@
 --   local G = dofile("lib/stock.lua")
 --   G.button(WIN, "OK", "OK", w, h, { primary = true })     -- the child's click (greyed while it is disabled)
 --   G.check(WIN, "NoShowButton", "Don't show tips", w, h)   -- a check box: the box on the right, A toggles it
---   G.combo(WIN, "BugTypes", "Category", w, h)              -- A steps to the next choice (eq.ComboSelect)
---   G.list(WIN, "OptionsList", state, visible, rowH, w, drawRow)  -- a list child as a W.list (eq.ListClick)
+--   G.combo(WIN, "BugTypes", "Category", w, h)              -- A steps to the next choice (hs.ComboSelect)
+--   G.list(WIN, "OptionsList", state, visible, rowH, w, drawRow)  -- a list child as a W.list (hs.ListClick)
 --   G.edit(kb, WIN, "Entry", x0, x1, { max = 64 })          -- an edit box typed with the on-screen keys
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -15,10 +16,10 @@ local KF = dofile("lib/keyfield.lua")
 local C = T.C
 local G = { KF = KF }
 
-function G.text(win, id) return eq.WindowText(win, id) or "" end
-function G.enabled(win, id) return eq.ChildState(win, id) ~= false end
-function G.checked(win, id) return select(2, eq.ChildState(win, id)) == true end
-function G.shown(win, id) return eq.ChildShown(win, id) ~= false end
+function G.text(win, id) return API.windows.Text(win, id) or "" end
+function G.enabled(win, id) return API.windows.ChildState(win, id) ~= false end
+function G.checked(win, id) return select(2, API.windows.ChildState(win, id)) == true end
+function G.shown(win, id) return API.windows.ChildShown(win, id) ~= false end
 
 -- STML to plain text (a prompt: colours and links are not needed).
 function G.plain(stml)
@@ -74,9 +75,9 @@ end
 -- window hides it unless opts.always. Returns clicked (the child has been clicked).
 function G.button(win, id, label, w, h, opts)
   opts = opts or T.NO_OPTS
-  if not opts.always and eq.ChildShown(win, id) == false then return false end
+  if not opts.always and API.windows.ChildShown(win, id) == false then return false end
   local clicked = T.button("##" .. id, label, w, h, opts, pad, opts.disabled or not G.enabled(win, id))
-  if clicked then eq.ClickChild(win, id, "left") end
+  if clicked then API.windows.ClickChild(win, id, "left") end
   return clicked
 end
 
@@ -100,7 +101,7 @@ function G.check(win, id, label, w, h, opts)
     T.rect(bx0, by0, bx1, by1, C.sunken, 1, T.px(6))
     T.outline(bx0, by0, bx1, by1, C.dim, 0.8, T.px(6), math.max(1, T.px(2)))
   end
-  if clicked then eq.ClickChild(win, id, "left") end
+  if clicked then API.windows.ClickChild(win, id, "left") end
   return clicked
 end
 
@@ -108,14 +109,14 @@ end
 -- (opts.back: to the previous one instead). Returns the choices and the selected index (0-based).
 function G.combo(win, id, label, w, h, opts)
   opts = opts or {}
-  local choices, sel = eq.ComboInfo(win, id)
+  local choices, sel = API.windows.ComboInfo(win, id)
   choices = choices or {}
   local cur = sel and choices[sel + 1] or ""
   local n = #choices
   local clicked = T.button("##" .. id, label, w, h,
     { sub = cur ~= "" and (cur .. (n > 1 and "   (" .. ((sel or 0) + 1) .. " / " .. n .. ")" or "")) or "-",
       align = 0, disabled = n < 2 or not G.enabled(win, id) }, pad)
-  if clicked and n > 0 then eq.ComboSelect(win, id, ((sel or -1) + (opts.back and -1 or 1)) % n) end
+  if clicked and n > 0 then API.windows.ComboSelect(win, id, ((sel or -1) + (opts.back and -1 or 1)) % n) end
   return choices, sel
 end
 
@@ -137,24 +138,24 @@ function G.repeated(b)
   return false
 end
 
--- A list child as a W.list: rows 1..count from eq.ListInfo / eq.ListRow, the window's selection marked, A or a
--- click selects the row in the original (eq.ListClick). drawRow(i, texts, x0, y0, x1, y1, focused) draws a row
+-- A list child as a W.list: rows 1..count from hs.ListInfo / hs.ListRow, the window's selection marked, A or a
+-- click selects the row in the original (hs.ListClick). drawRow(i, texts, x0, y0, x1, y1, focused) draws a row
 -- (texts: the row's columns, plus color = { r, g, b } and icon = { tex, u0, v0, u1, v1 }). opts.onClick(i) after
 -- the click. Returns the row count and the focused row.
 function G.list(win, id, state, visible, rowH, width, drawRow, opts)
   opts = opts or {}
-  local rows, _, sel = eq.ListInfo(win, id)
+  local rows, _, sel = API.windows.ListInfo(win, id)
   rows = rows or 0
   state.selected = (sel and sel >= 0) and sel + 1 or nil
   state.shown = visible
   local focusedRow = W.list(win .. id, state, rows, visible, rowH, width, function(i, x0, y0, x1, y1, focused)
-    local texts, r, g, b, tex, u0, v0, u1, v1 = eq.ListRow(win, id, i - 1)
+    local texts, r, g, b, tex, u0, v0, u1, v1 = API.windows.ListRow(win, id, i - 1)
     texts = texts or {}
     if r then texts.color = { r, g, b, 1 } end
     if type(tex) == "userdata" then texts.icon = { tex, u0, v0, u1, v1 } end
     drawRow(i, texts, x0, y0, x1, y1, focused)
   end, function(i)
-    eq.ListClick(win, id, i - 1, "left")
+    API.windows.ListClick(win, id, i - 1, "left")
     if opts.onClick then opts.onClick(i) end
   end)
   return rows, focusedRow
@@ -169,7 +170,7 @@ end
 
 -- A child's decal tint (a tint or colour picker swatch), else white.
 function G.tint(win, id)
-  local r, g, b = eq.ChildColor(win, id, "decal")
+  local r, g, b = API.windows.ChildColor(win, id, "decal")
   if not r then return 1, 1, 1 end
   return r, g, b
 end
@@ -213,7 +214,7 @@ function G.field(win, id, label, w, h, placeholder, opts)
   return clicked
 end
 
--- The keys typing into the edit box child `id` (the window keeps the text: eq.SetWindowText), from x0 to x1 at the
+-- The keys typing into the edit box child `id` (the window keeps the text: hs.SetWindowText), from x0 to x1 at the
 -- cursor: an input box over them for a real keyboard (Enter: done), then the pad's keys. opts.max (the most
 -- characters), opts.multiline, opts.digits (only 0-9 kept). Returns "done" when Done (or Enter) was pressed.
 function G.edit(kb, win, id, x0, x1, opts)
@@ -223,7 +224,7 @@ function G.edit(kb, win, id, x0, x1, opts)
   local function set(t)
     if opts.digits then t = t:gsub("%D", "") end
     if #t > max then t = t:sub(1, max) end
-    if t ~= get() then eq.SetWindowText(win, id, t) end
+    if t ~= get() then API.windows.SetText(win, id, t) end
   end
   local wx, wy = ui.GetWindowPos()
   local _, cy = ui.GetCursorScreenPos()
@@ -261,11 +262,11 @@ function G.openKeys(kb, capital)
 end
 
 -- Testing: the pack's settings file (ui/settings/gamepad.txt) test.show = Screen[@seconds],... shows those stock
--- windows once, that many seconds (default 6) after zoning in (eq.ShowWindow; spell:<id> shows that spell's display,
--- eq.ShowSpell; read:<slot>[.<bag index>] right-clicks that possessions slot, as reading a note does), for screenshots of windows the game opens only on an event.
+-- windows once, that many seconds (default 6) after zoning in (hs.ShowWindow; spell:<id> shows that spell's display,
+-- hs.ShowSpell; read:<slot>[.<bag index>] right-clicks that possessions slot, as reading a note does), for screenshots of windows the game opens only on an event.
 local testStart
 function G.testShow()
-  if GPSTATE.testShown or not eq.InGame() then return end
+  if GPSTATE.testShown or not API.session.InGame() then return end
   local list = ui.GetSetting("test.show") or ""
   if list == "" then GPSTATE.testShown = true return end
   testStart = testStart or ui.GetTime()
@@ -276,11 +277,11 @@ function G.testShow()
     if screen and not GPSTATE.testShowDone[item] then
       if ui.GetTime() - testStart >= (tonumber(at) or 6) then
         GPSTATE.testShowDone[item] = true
-        if screen:match("^spell:%d+$") then eq.ShowSpell(tonumber(screen:sub(7)))
+        if screen:match("^spell:%d+$") then API.spells.Show(tonumber(screen:sub(7)))
         elseif screen:match("^read:%d+") then -- a right click on that slot (a note or book is read)
           local slot, bag = screen:match("^read:(%d+)%.?(%d*)")
-          eq.ClickSlot(tonumber(slot), tonumber(bag), "rightup")
-        else eq.ShowWindow(screen, true) end
+          API.inventory.ClickSlot(tonumber(slot), tonumber(bag), "rightup")
+        else API.windows.Show(screen, true) end
         ui.Log("gamepad test.show: " .. screen)
       else
         left = left + 1

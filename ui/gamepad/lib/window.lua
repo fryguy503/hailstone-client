@@ -2,13 +2,14 @@
 --
 --   local W = dofile("lib/window.lua")
 --   ui.window("Loot", function()
---     if not W.shown("LootWnd") then return end            -- eq.WindowShown: the game has it shown
+--     if not W.shown("LootWnd") then return end            -- hs.WindowShown: the game has it shown
 --     if W.begin("Loot", { w = 900, h = 640, title = "Loot", hints = {...} }) then ... end
---     if W.finish() then eq.ShowWindow("LootWnd", false) end -- B (or the close button) asked to close it
+--     if W.finish() then hs.ShowWindow("LootWnd", false) end -- B (or the close button) asked to close it
 --   end)
 --
--- A window takes the pad's focus when it appears (eq.gamepad.request_focus: menu mode), and B closes it while it
+-- A window takes the pad's focus when it appears (hs.gamepad.request_focus: menu mode), and B closes it while it
 -- has the focus. Sizes are design pixels (lib/theme.lua).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = { T = T, pad = pad }
@@ -35,18 +36,18 @@ W.NoNav = (1 << 16) | (1 << 17)
 function W.shown(screen, sizable)
   S.own = S.own or {}
   S.own[screen] = true -- drawn by this pack
-  if not eq.InGame() then
+  if not API.session.InGame() then
     S.inGameAt = nil
     return false
   end
   S.inGameAt = S.inGameAt or ui.GetTime()
-  local shown = eq.WindowShown(screen)
+  local shown = API.windows.Shown(screen)
   return shown
 end
 
 local current
 
--- Begins the window `name` (also its ImGui name, which eq.gamepad.request_focus is given). opts: w, h (design px),
+-- Begins the window `name` (also its ImGui name, which hs.gamepad.request_focus is given). opts: w, h (design px),
 -- x, y (design px from the top left; default centred), title, subtitle, hints ({ { button, text } }), close
 -- (false: no close button / B), noFocus (does not take the pad's focus when it appears), alwaysFocus (takes it even
 -- just after zoning in), noNav (no ImGui navigation: the window reads the pad's buttons itself), alpha.
@@ -61,9 +62,14 @@ function W.begin(name, opts)
   S.currentWindow = name -- (between W.begin and W.finish: the libraries' copies of this file have no `current`)
   S.appeared = S.appeared or {}
   if appearing then S.appeared[name] = frame end
-  local w, h = T.px(opts.w or 900), T.px(opts.h or 600)
+  -- The theme keeps text readable at small resolutions, so scaled design sizes can exceed the viewport.
+  local margin = T.px(12)
+  local w = math.min(math.max(1, T.px(opts.w or 900)), math.max(1, T.W - 2 * margin))
+  local h = math.min(math.max(1, T.px(opts.h or 600)), math.max(1, T.H - 2 * margin))
   local x = opts.x and T.px(opts.x) or (T.W - w) / 2
   local y = opts.y and T.px(opts.y) or (T.H - h) / 2
+  x = math.max(0, math.min(x, math.max(0, T.W - w)))
+  y = math.max(0, math.min(y, math.max(0, T.H - h)))
   ui.SetNextWindowPos(x, y, ui.Cond.Always)
   ui.SetNextWindowSize(w, h, ui.Cond.Always)
   -- (on top of the HUD; the client has no keyboard navigation, so the focus never takes the game's keys)

@@ -97,7 +97,7 @@ TEST_CASE("Asset folder: --game-dir / EQ_GAME_DIR first, then assets.path, then 
 
 TEST_CASE("Asset folder: the recent folders") {
     using V = std::vector<std::string>;
-    CHECK(push_recent_folder({}, "/eq") == V{"/eq"});
+    CHECK(push_recent_folder({}, "/hs") == V{"/hs"});
     CHECK(push_recent_folder({"/a", "/b"}, "/c") == V{"/c", "/a", "/b"});
     // The same folder moves to the front, also when written with a trailing separator or a dot.
     CHECK(push_recent_folder({"/a", "/b", "/c"}, "/b") == V{"/b", "/a", "/c"});
@@ -114,11 +114,11 @@ TEST_CASE("Asset folder: the recent folders") {
     CHECK(remove_recent_folder({"/a", "/b", "/c"}, "/b/") == V{"/a", "/c"});
     CHECK(remove_recent_folder({"/a"}, "/x") == V{"/a"});
 
-    CHECK(same_folder("/eq/rof2", "/eq/rof2/"));
-    CHECK(same_folder("/eq/x/../rof2", "/eq/rof2"));
-    CHECK_FALSE(same_folder("/eq/rof2", "/eq/rof"));
+    CHECK(same_folder("/hs/game", "/hs/game/"));
+    CHECK(same_folder("/hs/x/../game", "/hs/game"));
+    CHECK_FALSE(same_folder("/hs/game", "/hs/gam"));
 #ifndef _WIN32
-    CHECK_FALSE(same_folder("/eq/RoF2", "/eq/rof2")); // case matters off Windows
+    CHECK_FALSE(same_folder("/hs/Game", "/hs/game")); // case matters off Windows
 #endif
 
     // assets.recent: '|'-separated, empty entries and repeats skipped on reading.
@@ -142,85 +142,85 @@ TEST_CASE("Asset folder: the recent folders") {
 
 TEST_CASE("Asset folder: the EverQuest folder Hailstone sits in is the default when nothing saved works") {
     TempDir tmp("beside");
-    const fs::path eq = tmp.path / "EverQuest";
-    const fs::path hs = eq / "hailstone";
-    fs::create_directories(hs);
+    const fs::path game_folder = tmp.path / "EverQuest";
+    const fs::path client_folder = game_folder / "hailstone";
+    fs::create_directories(client_folder);
     Config config;
     // A first start: found, and not saved.
-    auto r = resolve_asset_folder({}, config, only(eq), hs, eq);
+    auto r = resolve_asset_folder({}, config, only(game_folder), client_folder, game_folder);
     CHECK(r.source == AssetFolderSource::Found);
-    CHECK(same_folder(r.path, eq));
+    CHECK(same_folder(r.path, game_folder));
     CHECK(r.reason.empty());
     CHECK(config.get_string("assets.path", "").empty());
     // Not an installation: the picker, as before.
-    CHECK(resolve_asset_folder({}, config, only(tmp.path / "other"), hs, eq).source == AssetFolderSource::Picker);
+    CHECK(resolve_asset_folder({}, config, only(tmp.path / "other"), client_folder, game_folder).source == AssetFolderSource::Picker);
     // No `beside` (a build without HAILSTONE_ALLOW_IN_EQ_FOLDER): the picker.
-    CHECK(resolve_asset_folder({}, config, only(eq), hs).source == AssetFolderSource::Picker);
+    CHECK(resolve_asset_folder({}, config, only(game_folder), client_folder).source == AssetFolderSource::Picker);
     // Hailstone's folder is the EverQuest folder itself: refused even as a default.
-    CHECK(resolve_asset_folder({}, config, only(eq), eq, eq).source == AssetFolderSource::Picker);
+    CHECK(resolve_asset_folder({}, config, only(game_folder), game_folder, game_folder).source == AssetFolderSource::Picker);
     // A saved folder that works wins; one that is gone falls back to the found one.
-    const fs::path other = tmp.path / "RoF2";
+    const fs::path other = tmp.path / "game-assets";
     fs::create_directories(other);
     config.set("assets.path", other.string());
     auto both = [&](const fs::path& p) {
         AssetFolderCheck c;
         c.is_directory = true;
-        c.ok = same_folder(p, eq) || same_folder(p, other);
+        c.ok = same_folder(p, game_folder) || same_folder(p, other);
         return c;
     };
-    CHECK(resolve_asset_folder({}, config, both, hs, eq).source == AssetFolderSource::Config);
+    CHECK(resolve_asset_folder({}, config, both, client_folder, game_folder).source == AssetFolderSource::Config);
     config.set("assets.path", (tmp.path / "moved").string());
-    CHECK(resolve_asset_folder({}, config, both, hs, eq).source == AssetFolderSource::Found);
+    CHECK(resolve_asset_folder({}, config, both, client_folder, game_folder).source == AssetFolderSource::Found);
     // "Change asset folder" asked for the picker: it shows.
     request_asset_folder_pick(config, true);
-    CHECK(resolve_asset_folder({}, config, both, hs, eq).source == AssetFolderSource::Picker);
+    CHECK(resolve_asset_folder({}, config, both, client_folder, game_folder).source == AssetFolderSource::Picker);
     request_asset_folder_pick(config, false);
     // An override that is no folder is not replaced by the found one: the picker says why.
-    auto bad = resolve_asset_folder(tmp.path / "nope", config, both, hs, eq);
+    auto bad = resolve_asset_folder(tmp.path / "nope", config, both, client_folder, game_folder);
     CHECK(bad.source == AssetFolderSource::Picker);
     CHECK_FALSE(bad.reason.empty());
 }
 
 TEST_CASE("Asset folder: never one Hailstone writes into") {
     TempDir tmp("conflict");
-    const fs::path eq = tmp.path / "RoF2";
-    fs::create_directories(eq / "hailstone");
+    const fs::path game_folder = tmp.path / "game-assets";
+    fs::create_directories(game_folder / "hailstone");
     for (bool allow : {false, true}) {
         CAPTURE(allow);
         // The data folder is the asset folder itself: refused, saying why, whatever the build.
-        CHECK_FALSE(data_folder_conflict(eq, eq, allow).empty());
-        CHECK_FALSE(data_folder_conflict(eq / "", eq / ".", allow).empty());
+        CHECK_FALSE(data_folder_conflict(game_folder, game_folder, allow).empty());
+        CHECK_FALSE(data_folder_conflict(game_folder / "", game_folder / ".", allow).empty());
         // Inside it: refused, unless the build allows a subfolder of Hailstone's own (HAILSTONE_ALLOW_IN_EQ_FOLDER).
-        CHECK(data_folder_conflict(eq, eq / "hailstone", allow).empty() == allow);
-        CHECK(data_folder_conflict(eq / "", eq / "hailstone" / ".", allow).empty() == allow);
-        CHECK(data_folder_conflict(eq, eq / "HailStone", allow).empty() == allow); // the name's case is ignored
+        CHECK(data_folder_conflict(game_folder, game_folder / "hailstone", allow).empty() == allow);
+        CHECK(data_folder_conflict(game_folder / "", game_folder / "hailstone" / ".", allow).empty() == allow);
+        CHECK(data_folder_conflict(game_folder, game_folder / "HailStone", allow).empty() == allow); // the name's case is ignored
         // Anywhere else inside it, at any depth, folders the game reads among them: refused whatever the build.
-        for (const fs::path& inside : {eq / "maps", eq / "maps" / "hailstone", eq / "uifiles" / "x", eq / "Resources",
-                                       eq / "hailstone" / "sub", eq / "hailstone2", eq / "my hailstone"}) {
+        for (const fs::path& inside : {game_folder / "maps", game_folder / "maps" / "hailstone", game_folder / "uifiles" / "x", game_folder / "Resources",
+                                       game_folder / "hailstone" / "sub", game_folder / "hailstone2", game_folder / "my hailstone"}) {
             CAPTURE(inside);
-            CHECK_FALSE(data_folder_conflict(eq, inside, allow).empty());
+            CHECK_FALSE(data_folder_conflict(game_folder, inside, allow).empty());
         }
         // Apart, or the asset folder inside the data folder (Hailstone never writes there): fine.
-        CHECK(data_folder_conflict(eq, tmp.path / "hailstone", allow).empty());
-        CHECK(data_folder_conflict(eq / "hailstone", eq, allow).empty());
-        CHECK(data_folder_conflict(tmp.path / "RoF", tmp.path / "RoF2", allow).empty());
-        CHECK(data_folder_conflict(eq, {}, allow).empty());
+        CHECK(data_folder_conflict(game_folder, tmp.path / "hailstone", allow).empty());
+        CHECK(data_folder_conflict(game_folder / "hailstone", game_folder, allow).empty());
+        CHECK(data_folder_conflict(tmp.path / "RoF", tmp.path / "game-assets", allow).empty());
+        CHECK(data_folder_conflict(game_folder, {}, allow).empty());
     }
 
     // A saved assets.path that holds the data folder goes to the picker, saying why (this build's rule).
     Config config;
-    config.set("assets.path", eq.string());
-    auto r = resolve_asset_folder({}, config, only(eq), eq);
+    config.set("assets.path", game_folder.string());
+    auto r = resolve_asset_folder({}, config, only(game_folder), game_folder);
     CHECK(r.source == AssetFolderSource::Picker);
     CHECK(r.reason.find("this same folder") != std::string::npos);
-    auto nested = resolve_asset_folder({}, config, only(eq), eq / "hailstone");
+    auto nested = resolve_asset_folder({}, config, only(game_folder), game_folder / "hailstone");
     if (data_folder_subfolder_allowed()) {
         CHECK(nested.source == AssetFolderSource::Config);
     } else {
         CHECK(nested.source == AssetFolderSource::Picker);
         CHECK(nested.reason.find("inside this folder") != std::string::npos);
     }
-    CHECK(resolve_asset_folder({}, config, only(eq), tmp.path / "data").source == AssetFolderSource::Config);
+    CHECK(resolve_asset_folder({}, config, only(game_folder), tmp.path / "data").source == AssetFolderSource::Config);
 }
 
 TEST_CASE("Asset folder: Hailstone's own folder inside a game folder is not indexed") {

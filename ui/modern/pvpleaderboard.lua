@@ -1,6 +1,7 @@
 -- PvP leaderboard: replaces the game's PvpLeaderboardWnd. What to rank by as a drop-down (the original's combo box:
 -- a pick asks the server), your own standing as tiles, the board as a sortable table with a name search (your row
 -- in gold), Refresh / Done (lib/quests_board.lua). All of it the original's PvpLeaderboard_* children.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local B = dofile("lib/quests_board.lua")
 local WINDOW = "PvpLeaderboardWnd"
@@ -29,6 +30,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("PvP Leaderboard", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "PvP Leaderboard", WINDOW_OPTS, drawWindow)
 end)

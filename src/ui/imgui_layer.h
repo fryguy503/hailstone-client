@@ -1,7 +1,6 @@
 #pragma once
 
-// Dear ImGui context and its SDL3 + Vulkan backends: the temporary developer
-// UI used until the SIDL UI engine (milestone M5) exists. See docs/dev-ui.md.
+// Dear ImGui context and SDL3/Vulkan backends for the client and Lua interfaces. See docs/dev-ui.md.
 
 #include <cstdint>
 #include <filesystem>
@@ -16,6 +15,22 @@ namespace hailstone::platform { class Window; }
 namespace hailstone::render { class VkContext; struct FrameInfo; }
 
 namespace hailstone::ui {
+
+namespace detail {
+// The context-only part of presentation visibility is also usable without SDL or a Vulkan device.
+class ImGuiVisibility {
+public:
+    void set_visible(bool visible);
+    bool visible() const { return visible_; }
+    void prepare_input(); // before and after NewFrame; hidden input/capture never survives to restoration
+    bool finish_frame(bool render); // closes the frame; false means there is no draw data to submit
+    bool wants_mouse() const;
+    bool wants_keyboard(int requested) const;
+
+private:
+    bool visible_ = true;
+};
+} // namespace detail
 
 struct ImGuiLayerDesc {
     float font_size = 15.0f;          // in points at 100% display scale
@@ -42,6 +57,9 @@ public:
     // end_frame_without_render() instead so ImGui's frame is closed.
     void render(const render::FrameInfo& frame);
     void end_frame_without_render();
+    // Presentation only: hiding retires input/drag/focus, not a window's shown state or saved layout.
+    void set_visible(bool visible);
+    bool visible() const { return visibility_.visible(); }
 
     // True while the UI uses the mouse or keyboard; the game should ignore them then. The keyboard: see
     // keyboard_for_ui.
@@ -97,6 +115,7 @@ private:
     bool plate_bold_ = false;
     bool fonts_dirty_ = false;
     bool frame_open_ = false;
+    detail::ImGuiVisibility visibility_;
     int keyboard_request_ = -1; // the last frame's SetNextFrameWantCaptureKeyboard (-1: none), read before NewFrame
     bool pad_nav_ = false;
     bool mouse_locked_ = false;

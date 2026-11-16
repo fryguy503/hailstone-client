@@ -3,6 +3,7 @@
 -- marked), the timer bar (the game's gauge, EQType 28) and Respawn, which the window
 -- enables once its delay has passed. A row click is the window's list click, Respawn its Select button, so the
 -- choice goes to the server as the stock window sends it.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -58,9 +59,9 @@ end
 
 local offerShown = false
 ui.window("Respawn", function()
-  if not eq.InGame() then return end
-  if not eq.WindowShown(WINDOW) then offerShown = false; return end
-  local offer = eq.WindowShown("ConfirmationDialogBox") and eq.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
+  if not API.session.InGame() then return end
+  if not API.windows.Shown(WINDOW) then offerShown = false; return end
+  local offer = API.windows.Shown("ConfirmationDialogBox") and API.windows.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
   local takeFocus, returnFocus = offer and not offerShown, offerShown and not offer
   offerShown = offer
   hud.Dialog(WINDOW, "Respawn", WINDOW_OPTS, drawWindow)

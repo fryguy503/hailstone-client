@@ -26,6 +26,10 @@ namespace client_internal {
 
 namespace {
 
+std::vector<std::string> addon_access(AddonKind kind, std::uint32_t caps) {
+    return kind == AddonKind::Ui ? std::vector<std::string>{"Full client interface access"} : plugin::caps_described(caps);
+}
+
 std::string state_text(const AddonStatus& s) {
     const std::string v = s.new_version.empty() ? std::string("A newer version") : "Version " + s.new_version;
     switch (s.state) {
@@ -167,6 +171,7 @@ void ClientApp::start_addons() {
     const std::filesystem::path data = platform::data_dir();
     addons_at_start(data);
     if (automation_) automation_->set_addon_ceilings(addon_ceilings(data));
+    if (automation_) automation_->refresh_managed_addons();
     ui::AddonsView& v = login_view_.addons;
     if (!opts_.updates) {
         v.why_off = "Add-ons are not fetched on a test run.";
@@ -264,6 +269,8 @@ void ClientApp::update_addons() {
         upscaler_providers_.reset(); // an upscaler may have come or gone
         addons_dirty_ = false;
         if (automation_) automation_->set_addon_ceilings(addon_ceilings(data));
+        if (automation_) automation_->refresh_managed_addons();
+        refresh_ui_packs(true);
         addons_listed_ = {};
     }
     if (!at_login) return;
@@ -312,6 +319,7 @@ void ClientApp::update_addons() {
         ov.version = o.manifest.version_text;
         ov.author = o.manifest.author;
         ov.description = o.manifest.description;
+        ov.autoload = o.manifest.autoload;
         ov.source = o.source;
         ov.page = o.page;
         ov.notes = o.manifest.notes;
@@ -319,7 +327,7 @@ void ClientApp::update_addons() {
         ov.installed_version = o.installed_version;
         ov.older = o.older;
         ov.blocked = o.blocked;
-        ov.caps = plugin::caps_described(o.caps);
+        ov.caps = addon_access(o.manifest.kind, o.caps);
         v.offer = std::move(ov);
     }
 
@@ -373,8 +381,9 @@ void ClientApp::update_addons() {
             if (!plugin::addon_allowed(rules.addons, source)) return "This server blocks this add-on.";
             if (plugin::addon_required(rules.addons, source)) return "Required to play on this server.";
         }
-        // A tool or an upscaler is no server's business: neither is a script or a plugin it rules.
-        if (profile.empty() || kind == AddonKind::Tool || kind == AddonKind::Upscaler) return {};
+        // Repository requirements/blocks apply to all installed kinds. Local interfaces, tools and upscalers do
+        // not run as scripts or plugins and do not borrow those capabilities or autorun rules.
+        if (profile.empty() || kind == AddonKind::Tool || kind == AddonKind::Upscaler || kind == AddonKind::Ui) return {};
         for (const auto& s : server_addons_)
             if (s.kind == kind && s.name == name) return "This server has its own " + name + ": that one runs there.";
         if (!rules.configured) return {};
@@ -416,7 +425,7 @@ void ClientApp::update_addons() {
         r.state = std::string(addon_state_word(s.state));
         r.state_text = state_text(s);
         r.new_version = s.new_version;
-        r.caps = plugin::caps_described(a.caps);
+        r.caps = addon_access(a.kind, a.caps);
         if (s.state == AddonState::NeedsApproval) r.new_caps = plugin::caps_described(s.new_caps & ~a.caps);
         r.approve_caps = s.state == AddonState::NeedsApproval ? s.new_caps : a.caps;
         r.approve_version = s.new_version;
@@ -424,6 +433,8 @@ void ClientApp::update_addons() {
         r.note = server_note(a.kind, a.name, a.caps);
         required_consent(r, a);
         r.auto_update = a.auto_update;
+        r.managed = a.kind == AddonKind::Script && a.autoload;
+        r.enabled = r.managed && a.enabled;
         r.signed_ = a.key.has_value();
         r.can_update = addons_ != nullptr && s.installed &&
                        (s.state == AddonState::Available || s.state == AddonState::NeedsApproval ||
@@ -445,10 +456,12 @@ void ClientApp::update_addons() {
             r.page = repo_page(a.source);
             r.author = a.author;
             r.description = a.description;
-            r.caps = plugin::caps_described(a.caps);
+            r.caps = addon_access(a.kind, a.caps);
             r.note = server_note(a.kind, a.name, a.caps);
             required_consent(r, a);
             r.auto_update = a.auto_update;
+            r.managed = a.kind == AddonKind::Script && a.autoload;
+            r.enabled = r.managed && a.enabled;
             r.signed_ = a.key.has_value();
             r.can_remove = true;
             r.folder = path_text(addon_folder(data, a.kind, a.name));
@@ -579,6 +592,17 @@ void ClientApp::addons_login_action(ui::LoginAction action) {
         } else {
             v.status = {why, true};
         }
+        break;
+    }
+    case A::AddonEnabled: {
+        if (!row || row->group != "installed" || !row->managed) break;
+        const bool ok = addons_ ? addons_->set_enabled(row->name, v.choice_on)
+                               : set_addon_enabled(data, row->name, v.choice_on);
+        if (ok) {
+            addons_dirty_ = true;
+            if (automation_) automation_->refresh_managed_addons();
+            v.status = {row->name + (v.choice_on ? " is enabled." : " is disabled."), false};
+        } else v.status = {"The add-on activation setting could not be saved.", true};
         break;
     }
     case A::AddonAuto:

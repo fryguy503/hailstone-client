@@ -1,5 +1,5 @@
 // A social's lines as a press runs them (game::split_social_line, social_passage_of_time) and the calls the social
-// editors use (app/lua_eq_socialedit.cpp: eq.SocialLine, eq.SocialEditorSocial; eq.SetLuaSocial's lines).
+// editors use (app/lua_ui_socialedit.cpp: hs.SocialLine, hs.SocialEditorSocial; hs.SetLuaSocial's lines).
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -14,7 +14,7 @@
 #include <lua.hpp>
 
 #include "app/actions_ui.h"
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "core/config.h"
 #include "core/game_dir.h"
 #include "game/hot_button_press.h"
@@ -103,52 +103,52 @@ TEST_CASE("Social lines: a press runs a line a step, waits a step after each and
     CHECK(q.current == -1);
 }
 
-TEST_CASE("Social editor: eq.SocialLine, eq.SocialEditorSocial and eq.SetLuaSocial's lines") {
+TEST_CASE("Social editor: hs.SocialLine, hs.SocialEditorSocial and hs.SetLuaSocial's lines") {
     ImGuiContext* ctx = ImGui::CreateContext();
     {
         test::ScratchDir scratch("social_editor");
         GameDir game(scratch.path());
         net::GameConnection conn(game, {});
         game::HotButtonStore store;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         host.hot_buttons = &store;
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
 
         CHECK(run(L, R"lua(
-local l = eq.SocialLine('/timer 600,/pause 10, /assist')
+local l = hs.SocialLine('/timer 600,/pause 10, /assist')
 return string.format('%s %d %d %s %s', l.kind, l.pause, l.timers[1], l.name, l.command)
 )lua") == "command 10 600 /assist  /assist");
-        CHECK(run(L, "local l = eq.SocialLine('#petcmd attack all') return l.kind .. ' ' .. tostring(l.pause)") ==
+        CHECK(run(L, "local l = hs.SocialLine('#petcmd attack all') return l.kind .. ' ' .. tostring(l.pause)") ==
               "text nil");
-        CHECK(run(L, "return eq.SocialLine('/nosuchcommand').kind") == "invalid");
-        CHECK(run(L, "return eq.SocialLine(';tell friend hi').kind") == "chatserver");
-        CHECK(run(L, "return eq.SocialLine('/pause 5').kind") == "empty");
+        CHECK(run(L, "return hs.SocialLine('/nosuchcommand').kind") == "invalid");
+        CHECK(run(L, "return hs.SocialLine(';tell friend hi').kind") == "chatserver");
+        CHECK(run(L, "return hs.SocialLine('/pause 5').kind") == "empty");
 
         // The editor's social: none until it opens, the one it opened on, none once Accept closes it.
-        CHECK(run(L, "return eq.SocialEditorSocial()") == "nil");
+        CHECK(run(L, "return hs.SocialEditorSocial()") == "nil");
         store.social(14).name = "Pet";
         store.social(14).lines[0] = "/pet attack";
         REQUIRE(host.open_social_editor);
         host.open_social_editor(14);
-        CHECK(run(L, "return eq.SocialEditorSocial()") == "14");
-        run(L, "eq.ClickChild('SocialEditWnd', 'SEW_Accept_Button', 'left')");
-        CHECK(run(L, "return eq.SocialEditorSocial()") == "nil");
+        CHECK(run(L, "return hs.SocialEditorSocial()") == "14");
+        run(L, "hs.ClickChild('SocialEditWnd', 'SEW_Accept_Button', 'left')");
+        CHECK(run(L, "return hs.SocialEditorSocial()") == "nil");
         host.open_social_editor(14);
-        CHECK(run(L, "eq.ShowWindow('SocialEditWnd', false) return eq.SocialEditorSocial()") == "nil");
+        CHECK(run(L, "hs.ShowWindow('SocialEditWnd', false) return hs.SocialEditorSocial()") == "nil");
 
         // A Lua social back to command lines: the lines given (cut to 255), the Lua gone.
-        CHECK(run(L, "return tostring(eq.SetLuaSocial(3, {name = 'Assist', press = \"mq.cmd('/assist')\"}))") ==
+        CHECK(run(L, "return tostring(hs.SetLuaSocial(3, {name = 'Assist', press = \"mq.cmd('/assist')\"}))") ==
               "true");
         CHECK(store.social(3).is_lua());
         CHECK(run(L, R"lua(
-return tostring(eq.SetLuaSocial(3, {name = 'Assist', color = 2, press = '', face = '',
+return tostring(hs.SetLuaSocial(3, {name = 'Assist', color = 2, press = '', face = '',
                                     lines = {'/assist', '/pause 5, /attack on', string.rep('x', 300)}}))
 )lua") == "true");
         CHECK_FALSE(store.social(3).is_lua());
@@ -158,7 +158,7 @@ return tostring(eq.SetLuaSocial(3, {name = 'Assist', color = 2, press = '', face
         CHECK(store.social(3).lines[2].size() == 255);
         CHECK(store.social(3).lines[3].empty());
         // Lines given with Lua are not kept: a Lua social has none.
-        CHECK(run(L, "return tostring(eq.SetLuaSocial(3, {name = 'Assist', press = 'x()', lines = {'/sit'}}))") ==
+        CHECK(run(L, "return tostring(hs.SetLuaSocial(3, {name = 'Assist', press = 'x()', lines = {'/sit'}}))") ==
               "true");
         CHECK(store.social(3).lines[0].empty());
         lua_close(L);
@@ -168,23 +168,23 @@ return tostring(eq.SetLuaSocial(3, {name = 'Assist', color = 2, press = '', face
 
 // lib/social_lines.lua (both editors): a line put together from its parts reads back the same, the timeline, and
 // command lines to Lua and back.
-TEST_CASE("Social editor: the modern pack's social_lines.lua over eq.SocialLine") {
+TEST_CASE("Social editor: the modern pack's social_lines.lua over hs.SocialLine") {
     ImGuiContext* ctx = ImGui::CreateContext();
     {
         test::ScratchDir scratch("social_lines");
         GameDir game(scratch.path());
         net::GameConnection conn(game, {});
         game::HotButtonStore store;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         host.hot_buttons = &store;
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
         const std::filesystem::path lib =
             std::filesystem::path(__FILE__).parent_path().parent_path() / "ui" / "modern" / "lib" / "social_lines.lua";
         REQUIRE(std::filesystem::exists(lib));
@@ -255,7 +255,7 @@ TEST_CASE("Social share text: a plain social's lines") {
     CHECK(back->lines.empty());
 }
 
-TEST_CASE("Social editor: eq.SlashCommands, the share text of an unsaved social, and pressing one from the editor") {
+TEST_CASE("Social editor: hs.SlashCommands, the share text of an unsaved social, and pressing one from the editor") {
     ImGuiContext* ctx = ImGui::CreateContext();
     {
         test::ScratchDir scratch("social_editor_press");
@@ -264,48 +264,48 @@ TEST_CASE("Social editor: eq.SlashCommands, the share text of an unsaved social,
         Config config;
         app::ActionsUi actions(config, scratch.path() / "hailstone.ini");
         game::HotButtonStore& store = actions.hot_buttons();
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         host.hot_buttons = &store;
         host.actions = &actions;
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
 
         // The game's commands that start with what was typed, in the order it tries them; none for a non-command.
-        CHECK(run(L, "return eq.SlashCommands('/ASSI')[1]") == "/assist");
-        CHECK(run(L, "local l = eq.SlashCommands('/g') return tostring(#l > 3) .. ' ' .. l[1]") == "true /gsay");
-        CHECK(run(L, "return #eq.SlashCommands('/zzzz')") == "0");
+        CHECK(run(L, "return hs.SlashCommands('/ASSI')[1]") == "/assist");
+        CHECK(run(L, "local l = hs.SlashCommands('/g') return tostring(#l > 3) .. ' ' .. l[1]") == "true /gsay");
+        CHECK(run(L, "return #hs.SlashCommands('/zzzz')") == "0");
         CHECK(run(L, R"lua(
-for _, c in ipairs(eq.SlashCommands('/')) do if c:sub(1, 1) ~= '/' then return c end end
+for _, c in ipairs(hs.SlashCommands('/')) do if c:sub(1, 1) ~= '/' then return c end end
 return 'all slash'
 )lua") == "all slash");
 
         // Share text of what the editor shows (unsaved), read back with its lines.
         CHECK(run(L, R"lua(
-local text = eq.LuaSocialExport(0, {name = 'Pull', color = 13, lines = {'/assist', '', '/g Incoming', '', ''}})
-local t = eq.LuaSocialImport(text)
+local text = hs.LuaSocialExport(0, {name = 'Pull', color = 13, lines = {'/assist', '', '/g Incoming', '', ''}})
+local t = hs.LuaSocialImport(text)
 return string.format('%s %d %s [%s] [%s] [%s] [%s]', t.name, t.color, tostring(t.lua), t.lines[1], t.lines[2],
                      t.lines[3], t.lines[5])
 )lua") == "Pull 13 false [/assist] [] [/g Incoming] []");
-        CHECK(run(L, "return tostring(eq.LuaSocialImport(eq.LuaSocialExport(0, {name = 'L', press = 'x()'})).lua)") ==
+        CHECK(run(L, "return tostring(hs.LuaSocialImport(hs.LuaSocialExport(0, {name = 'L', press = 'x()'})).lua)") ==
               "true");
         // A saved plain social's share text has its lines too.
         store.social(4).name = "Med";
         store.social(4).lines[0] = "/sit";
-        CHECK(run(L, "return eq.LuaSocialImport(eq.LuaSocialExport(4)).lines[1]") == "/sit");
+        CHECK(run(L, "return hs.LuaSocialImport(hs.LuaSocialExport(4)).lines[1]") == "/sit");
 
         // Test: queued as a hot button's press queues it; Stop as /stopsocial.
-        CHECK(run(L, "return eq.CurrentSocial()") == "nil");
-        CHECK(run(L, "return tostring(eq.PressSocial(4))") == "true");
+        CHECK(run(L, "return hs.CurrentSocial()") == "nil");
+        CHECK(run(L, "return tostring(hs.PressSocial(4))") == "true");
         CHECK(actions.current_social() == 4);
-        CHECK(run(L, "return eq.CurrentSocial()") == "4");
-        CHECK(run(L, "eq.StopSocial() return eq.CurrentSocial()") == "nil");
-        CHECK(run(L, "return eq.PressSocial(120)") == "nil");
+        CHECK(run(L, "return hs.CurrentSocial()") == "4");
+        CHECK(run(L, "hs.StopSocial() return hs.CurrentSocial()") == "nil");
+        CHECK(run(L, "return hs.PressSocial(120)") == "nil");
         // A Lua social runs its Lua instead of being queued.
         int lua_pressed = -1;
         app::HotButtonHooks hooks;
@@ -313,7 +313,7 @@ return string.format('%s %d %s [%s] [%s] [%s] [%s]', t.name, t.color, tostring(t
         actions.set_hooks(hooks);
         store.social(5).name = "L";
         store.social(5).lua.press = "mq.cmd('/sit')";
-        run(L, "eq.PressSocial(5)");
+        run(L, "hs.PressSocial(5)");
         CHECK(lua_pressed == 5);
         CHECK(actions.current_social() == -1);
         lua_close(L);

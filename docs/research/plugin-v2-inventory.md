@@ -36,7 +36,7 @@ missing something. So the rules for v2 are:
   spells, items, buffs, the group, options), and replacement at the points where a server's client differs: packets,
   commands, chat, labels, item display, rules, windows.
 - **The UI belongs to the plugin.** A plugin ships windows for each UI pack and can replace a stock window
-  (`eq.ReplaceWindow`), add EQ menu entries, options, key bindings and hot button actions, and read its own
+  (`hs.ReplaceWindow`), add EQ menu entries, options, key bindings and hot button actions, and read its own
   settings.
 - **What stays fixed:** capabilities (for the player's own plugins and scripts on a server with a `hailstone.cfg`),
   the player's game folder is never written, no real hardware identifiers, and portability (the SDK builds with
@@ -86,8 +86,8 @@ Gaps beyond NMS's needs, to cover in phases 2-5:
   Lua socials only from the zone-in, and they never get `extend` or `login`.
 - Phase 4a/4b, plugin windows: done. `LuaUi::set_folders` loads a plugin's `ui/<pack>/` beside the pack's own
   (dofile from the plugin's folder; gone with the plugin); a server may ship Lua in `plugins/<name>/ui/`.
-  `plugin::UiBridge` holds what plugins give the UI: functions (`eq.Plugin(name).fn(...)`, values as `UiValue`
-  trees), options (`eq.PluginOptions`) and menu entries (`eq.PluginMenu`); the C side is `add_ui_function`,
+  `plugin::UiBridge` holds what plugins give the UI: functions (`hs.Plugin(name).fn(...)`, values as `UiValue`
+  trees), options (`hs.PluginOptions`) and menu entries (`hs.PluginMenu`); the C side is `add_ui_function`,
   `arg` / `arg_field`, `out_*`, `add_option` and `add_menu` (`ui` capability).
 - Phase 4c, the packs: done. Modern's Options window has a Plugins tab while a plugin has options; Gamepad's has
   a Plugins page. The EQ menu has a "Plugins" submenu before "Report a Bug" (`CascadeMenu::set_plugin_entries`),
@@ -111,7 +111,7 @@ Gaps beyond NMS's needs, to cover in phases 2-5:
   SendCharacterSets, PetList, personal loot) and the ImGui fallback windows; `ServerExtension` lost the hooks only
   the module used (packets, checksums, stats, zone events, heartbeat, commands, chat, options, window toggles,
   draw), which plugins do through their own callbacks. The windows moved to `plugins/nms/ui/<pack>/` over
-  `eq.Plugin("nms")`; the waypoint window is Lua in both packs. Found on the way: plugin windows could not
+  `hs.Plugin("nms")`; the waypoint window is Lua in both packs. Found on the way: plugin windows could not
   `dofile` the pack's libraries (now they fall back to the pack), table keys from a plugin were always strings
   (whole numbers now become integers), a plugin's NULL level line dropped the stock line (now it keeps it),
   `HAILSTONE_PLUGIN` did not export C names from C++ (`HAILSTONE_API`), and `HailstonePlayer` lacked `in_zone`.
@@ -140,7 +140,7 @@ Gaps beyond NMS's needs, to cover in phases 2-5:
 | `command` | game_connection_social.cpp:161 | Have | `AddCommand` |
 | `handler_command` | game_connection_items.cpp:1010, _progress.cpp:866 | Callback | `OnGameCommand(handler, args)` → handled (`/loot`, `/alt toggle`) |
 | `hide_chat_line` | game_connection.cpp:116 | Have | `OnFilterChat` |
-| `who_lines` | game_connection_social.cpp:1923, lua_eq_social.cpp:1382 | Callback | `OnWhoLines(response)` → lines (the Who window reads it too, so dropping the packet is not enough) |
+| `who_lines` | game_connection_social.cpp:1923, lua_ui_social.cpp:1382 | Callback | `OnWhoLines(response)` → lines (the Who window reads it too, so dropping the packet is not enough) |
 | `class_mask`, `character_class_mask` | game_connection.h:1104, :334, game_connection.cpp:607 | Core | host `set_class_mask(mask)`, `set_character_classes(name, mask)` |
 | `cast_class` | game_connection_spells.cpp:43 | Callback | host `set_cast_class(c)` from `OnPulse` (the patch's cast spoof) |
 | `is_spellcaster` | game_connection_player.cpp:569 | Callback | `OnIsSpellcaster()` (decision 4: the server's rule) |
@@ -150,11 +150,11 @@ Gaps beyond NMS's needs, to cover in phases 2-5:
 | `can_use_gem` | game_connection_spells.cpp:313 | Callback | `OnCanUseGem(gem)` |
 | `combat_ability_timer`, `discipline_reuse_timer` | game_connection_cast.cpp:489, :493 | Callback | `OnAbilityTimerId(spell_id)`, `OnDisciplineReuse(timer_id)` |
 | `before_` / `after_combat_ability` | game_connection_cast.cpp:475, :478 | Callback | `OnCombatAbility(spell_id, phase, used)` |
-| `combat_effect_label` | lua_eq_abilities.cpp:191 | Callback | `OnLabel` (the same as `label_text` below) |
-| `can_use_all_items` | lua_eq_itemdisplay.cpp:390, game_connection_items.cpp ×3 | Flag | `items_any_class` |
-| `wide_item_links` | lua_eq_items.cpp:368 | Flag | `wide_item_links` |
+| `combat_effect_label` | lua_ui_abilities.cpp:191 | Callback | `OnLabel` (the same as `label_text` below) |
+| `can_use_all_items` | lua_ui_itemdisplay.cpp:390, game_connection_items.cpp ×3 | Flag | `items_any_class` |
+| `wide_item_links` | lua_ui_items.cpp:368 | Flag | `wide_item_links` |
 | `class_desc` | game_connection.h:1112 | Core | "War/Clr" from the mask; the patch's id encodings (≥1000, 200..449) are not needed once the core holds masks |
-| `guild_member_class` | lua_eq_social.cpp:210, social_ui.cpp:32 | Callback + Core | `OnGuildClass(value)` → mask (NMS stores 1000 + mask); the core draws it |
+| `guild_member_class` | lua_ui_social.cpp:210, social_ui.cpp:32 | Callback + Core | `OnGuildClass(value)` → mask (NMS stores 1000 + mask); the core draws it |
 | `window_title` | client_app_login.cpp:652 | Core | "Name [War/Clr]" from the mask |
 | `hide_check_class` | actions_ui.cpp:691 | Flag | `hide_any_class` |
 | `aa_any_level`, `aa_train_all` | game_connection_progress.cpp:346, :356, :388 | Flag | `aa_any_level`, `aa_train_all` (the core keeps the Train All box, shown under the flag) |
@@ -162,10 +162,10 @@ Gaps beyond NMS's needs, to cover in phases 2-5:
 | `character_vitals` | stats_ui.cpp:37, game_connection_cast.cpp:49, _spells.cpp:178, :924 | Core | host `set_vitals(...)` (the plugin sets the server's values) |
 | `item_right_click` | game_connection_item_use.cpp:58 | Callback | `OnItemRightClick(slot)` + host `right_click_item_original(slot)` |
 | `skill_rules` (`gate`, `spoof_class`, `tracking_allowed`) | stats_ui.cpp:36, actions_ui.cpp:374, mechanics/abilities.cpp | Callback | already plain function pointers: `OnSkillGate`, `OnSkillSpoofClass`, `OnTrackingAllowed` |
-| `level_needed_line` | lua_eq_itemdisplay.cpp:392 | Callback | `OnItemLevelLine(spell_id)` → text |
-| `merchant_level` | lua_eq_items.cpp:469 | Callback | `OnListLevel(item)` → text |
-| `label_text` | lua_eq_values.cpp:617 | Callback | `OnLabel(id, text buffer)` |
-| `hide_xtarget_slot` | game_connection_group.cpp:174, lua_eq_player.cpp:750 | Callback | `OnHideXTargetSlot(slot)` |
+| `level_needed_line` | lua_ui_itemdisplay.cpp:392 | Callback | `OnItemLevelLine(spell_id)` → text |
+| `merchant_level` | lua_ui_items.cpp:469 | Callback | `OnListLevel(item)` → text |
+| `label_text` | lua_ui_values.cpp:617 | Callback | `OnLabel(id, text buffer)` |
+| `hide_xtarget_slot` | game_connection_group.cpp:174, lua_ui_player.cpp:750 | Callback | `OnHideXTargetSlot(slot)` |
 | `option`, `set_option` | client_app_options.cpp:307, :363 | Host | `add_option(name, label, default)`: Options shows it and saves it under the plugin's key |
 | `window_toggle` | client_app_ui.cpp:284 | Host | `add_window(name)` so `/toggle` and the EQ menu know it |
 | `draw` | client_app_items.cpp:186 | Have | `OnUpdateImGui` (only the ImGui fallback loot window uses it; see §5) |
@@ -188,13 +188,13 @@ function pointer, which costs about the same as the current virtual call.
 | Personal loot list decode, `personal_loot_`, `personal_loot_action` | item_packets.h:451, .cpp:788, game_connection_items.cpp:284, game_connection.cpp:1316, game_connection.h:1424 | Plugin (it already owns the other four loot packets) |
 | The personal loot ImGui window, the UI demo's copy | item_windows.h:5, ui_demo.h:15, :68, ui_demo.cpp:286 | Plugin; removed from the demo |
 | `/fov` reaches the camera through `ExtensionAppContext` | client_app_internal.h:137, :1101 | host `set_camera_distance`, `set_max_camera_distance` (the Options zoom range stays core) |
-| `nms::add_lua_windows`, `nms::register_lua_api` | lua_eq.cpp:26, :298, :2477 | the plugin window and Lua bridge (§4) |
+| `nms::add_lua_windows`, `nms::register_lua_api` | lua_ui.cpp:26, :298, :2477 | the plugin window and Lua bridge (§4) |
 | NMS sources in `hailstone_engine` | CMakeLists.txt:157-166 | a separate `MODULE` library that can include `sdk/` only |
 
 These stay in the core because they are already general multiclass and multi-pet support: the classes on character
 select (dev_screens.h:192), the `player_classes` mask in the item display, inventory and item moves
 (item_display.h:33, inventory.h:61, item_moves.h:78), the social class masks (social.h:59), the AA class mask
-(alt_adv.h:80), the group pet state (group.h:61-88) and the pet window's gauges (lua_eq_misc.cpp:178, :232).
+(alt_adv.h:80), the group pet state (group.h:61-88) and the pet window's gauges (lua_ui_misc.cpp:178, :232).
 
 ## 3. Opcodes
 
@@ -220,7 +220,7 @@ answers the old ones.)
 
 ## 4. Lua and the UI packs
 
-The module adds 11 functions to the `eq` table: `NmsLoot`, `NmsLootSend`, `NmsLootRule`, `NmsLootWindow`,
+The module adds 11 functions to the `hs` table: `NmsLoot`, `NmsLootSend`, `NmsLootRule`, `NmsLootWindow`,
 `NmsVault`, `NmsVaultSay`, `NmsVaultWindow`, `NmsAutoplay`, `NmsAutoplayConsole`, `NmsAutoskill`, `NmsCooldowns`.
 It also adds a C++ `StockWindow` for its waypoint window (`WaypointsWnd`).
 
@@ -228,7 +228,7 @@ They push straight onto the client's `lua_State`. A DLL cannot do that: Lua is l
 and a plugin with its own copy of Lua would corrupt the state. v2 needs a bridge that passes values instead:
 - the plugin registers `name → fn(args, out)`, and the SDK provides a small value API (nil, bool, number, string,
   array, table) to build the answer;
-- Lua calls `eq.Plugin("nms").call("loot")` and similar. The `eq.Nms*` names are removed (decision 3).
+- Lua calls `hs.Plugin("nms").call("loot")` and similar. The `hs.Nms*` names are removed (decision 3).
 
 The waypoint `StockWindow` becomes a Lua window like the others.
 
@@ -307,8 +307,8 @@ world sends `OP_SendCharacterSets` before each `OP_SendCharInfo`, and the client
    says for plugins with the same name.
 2. **Early loading: yes.** A server's plugins load at server select, and a new `login` capability controls the
    world-stage hooks (§6).
-3. **Lua: `eq.Plugin("nms")` only.** There is no shim, so the `eq.Nms*` names go away, and user scripts that call them
-   break. The name is capitalised like the rest of the `eq` table.
+3. **Lua: `hs.Plugin("nms")` only.** There is no shim, so the `hs.Nms*` names go away, and user scripts that call them
+   break. The name is capitalised like the rest of the `hs` table.
 4. **Multiclass rules: the server decides.** `is_spellcaster` and `max_vitals_classes` become plugin callbacks
    (`OnIsSpellcaster`, `OnVitalsClasses`). The core keeps only the class masks and how they are displayed, and has
    no multiclass rule of its own.

@@ -4,11 +4,13 @@
 -- right: open their member menu, send a tell, move them to a group, or set their note (shown in their row).
 -- Right-clicking a member or pressing Y on one opens that same menu. Each is the stock window's own button, shown
 -- and enabled as the game
--- has it (eq.ChildShown, eq.ChildState); a note goes through the window's note list, note input and Update.
+-- has it (hs.ChildShown, hs.ChildState); a note goes through the window's note list, note input and Update.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local K = dofile("lib/keyboard.lua")
+local E = dofile("lib/extensions.lua")
 local C = T.C
 
 local RW = "RaidWindow"
@@ -21,8 +23,8 @@ local pickFocused, pickAt = nil, 0
 local picking = nil -- the member "Move to a group" picks a group for (a 12-button picker over the window)
 local kbNote = nil -- the member the keyboard types a note for (nil: the message of the day)
 
-local function shown(child) return eq.ChildShown(RW, child) ~= false end
-local function enabled(child) return eq.ChildState(RW, child) ~= false end
+local function shown(child) return API.windows.ChildShown(RW, child) ~= false end
+local function enabled(child) return API.windows.ChildState(RW, child) ~= false end
 
 -- By group (none last), then by name.
 local function byGroup(a, b)
@@ -35,9 +37,9 @@ end
 local function readMembers()
   local out = {}
   for _, l in ipairs({ "RAID_PlayerList", "RAID_NotInGroupPlayerList" }) do
-    local rows = eq.ListInfo(RW, l)
+    local rows = API.windows.ListInfo(RW, l)
     for i = 0, (rows or 0) - 1 do
-      local r = eq.ListRow(RW, l, i)
+      local r = API.windows.ListRow(RW, l, i)
       if r then
         out[#out + 1] = { list = l, row = i, group = tonumber(r[1] or ""), name = r[2] or "", level = r[3] or "",
           class = r[4] or "", role = r[5] or "", rank = r[6] or "" }
@@ -46,8 +48,8 @@ local function readMembers()
   end
   -- the members' notes (the note list: group, name, note)
   local notes = {}
-  for i = 0, (eq.ListInfo(RW, "RAID_NoteList") or 0) - 1 do
-    local r = eq.ListRow(RW, "RAID_NoteList", i)
+  for i = 0, (API.windows.ListInfo(RW, "RAID_NoteList") or 0) - 1 do
+    local r = API.windows.ListRow(RW, "RAID_NoteList", i)
     if r and r[2] then notes[r[2]] = { row = i, note = r[3] or "" } end
   end
   for _, m in ipairs(out) do
@@ -74,7 +76,7 @@ end
 -- The message of the day without its markup, on one line, shortened to `w` (kept while the text and the size are).
 local motdRaw, motdW, motdS, motdPlain, motdFit = nil, nil, nil, "", ""
 local function motdLine(w)
-  local raw = eq.WindowText(RW, "MOTDViewer") or ""
+  local raw = API.windows.Text(RW, "MOTDViewer") or ""
   if raw ~= motdRaw then
     motdRaw, motdW = raw, nil
     motdPlain = (raw:gsub("<[^>]*>", ""):gsub("%s+", " "))
@@ -90,11 +92,11 @@ end
 -- numbers can have changed. The picker also acts on the member it was opened for, even if selection moved.
 local function selectMember(name, button)
   for _, l in ipairs({ "RAID_PlayerList", "RAID_NotInGroupPlayerList" }) do
-    local rows, _, sel = eq.ListInfo(RW, l)
+    local rows, _, sel = API.windows.ListInfo(RW, l)
     for i = 0, (rows or 0) - 1 do
-      local r = eq.ListRow(RW, l, i)
+      local r = API.windows.ListRow(RW, l, i)
       if r and r[2] == name then
-        if button == "right" or sel ~= i then eq.ListClick(RW, l, i, button or "left") end
+        if button == "right" or sel ~= i then API.windows.ListClick(RW, l, i, button or "left") end
         return true
       end
     end
@@ -103,7 +105,7 @@ local function selectMember(name, button)
 end
 
 local function targetName()
-  local _, name, raw = eq.Gauge(6)
+  local _, name, raw = API.character.Gauge(6)
   if raw == -1 or not name or name == "" then return nil end
   return name
 end
@@ -113,7 +115,7 @@ end
 -- (the setting does not change in play: once it is read without raid, the hook stays off, as M.testShow does)
 local testAt, testOff
 local function testOpen()
-  if testOff or GPSTATE["test_raid"] or not eq.InGame() then return end
+  if testOff or GPSTATE["test_raid"] or not API.session.InGame() then return end
   if not (","..(ui.GetSetting("test.open") or "")..","):find(",raid,", 1, true) then
     testOff = true
     return
@@ -121,15 +123,16 @@ local function testOpen()
   testAt = testAt or ui.GetTime()
   if ui.GetTime() - testAt > 6 then
     GPSTATE["test_raid"] = true
-    eq.ShowWindow(RW, true)
+    API.windows.Show(RW, true)
   elseif ui.GetTime() - testAt > 5 then
-    eq.ShowWindow(RW, false)
+    API.windows.Show(RW, false)
   end
 end
 
 ui.window("Raid", function()
   testOpen()
   if not W.shown(RW) then
+    E.Reset()
     kb.open, state.confirm = false, nil
     picking, pickFocused = nil, nil -- (the picker is for the member picked while it was open)
     wasShown = false
@@ -140,25 +143,26 @@ ui.window("Raid", function()
   -- the pad's focus starts on the list
   if not wasShown then listState.focusNext = 1 end
   wasShown = true
-  local rowsIn, _, selIn = eq.ListInfo(RW, "RAID_PlayerList")
-  local rowsOut, _, selOut = eq.ListInfo(RW, "RAID_NotInGroupPlayerList")
+  local rowsIn, _, selIn = API.windows.ListInfo(RW, "RAID_PlayerList")
+  local rowsOut, _, selOut = API.windows.ListInfo(RW, "RAID_NotInGroupPlayerList")
   local list = members(rowsIn, rowsOut)
   local selected
   for i, m in ipairs(list) do
     local sel = m.list == "RAID_PlayerList" and selIn or selOut
     if sel == m.row then selected = i end
   end
-  local count = eq.WindowText(RW, "RAID_PlayerCountLabel") or "0"
-  local avg = eq.WindowText(RW, "RAID_LevelAverageLabel") or "0"
+  local count = API.windows.Text(RW, "RAID_PlayerCountLabel") or "0"
+  local avg = API.windows.Text(RW, "RAID_LevelAverageLabel") or "0"
   local inRaid = #list > 0
-  local contextMenus = eq.ContextMenus() ~= false
-  local hints = { { "a", "Select" }, { "b", (state.confirm or picking) and "Cancel" or "Close" } }
+  local contextMenus = API.menus.Contexts() ~= false
+  local hints = { { "a", "Select" }, { "b", (state.confirm or picking or E.HasReview()) and "Cancel" or "Close" } }
   if contextMenus and inRaid and not state.confirm and not picking then table.insert(hints, 2, { "y", "Member actions" }) end
   if W.begin("Raid", { w = 1720, h = 960, title = "Raid",
         subtitle = inRaid and (count .. " players, average level " .. avg) or "Not in a raid",
         hints = kb.open and K.HINTS or hints }) then
     local x0, y0, x1, y1, cw = W.area()
     local wx, wy = ui.GetWindowPos()
+    if state.confirm or picking or kb.open then E.Reset() end
     if state.confirm then
       W.confirm(state)
     elseif picking then
@@ -176,7 +180,7 @@ ui.window("Raid", function()
         local child = "RAID_Group" .. g .. "Button"
         -- (not in the first moment: the A that opened the picker is still down)
         if T.button("##g" .. g, "Group " .. g, gw, gh, { disabled = not enabled(child) }, pad) and ui.GetTime() - pickAt > 0.4 then
-          if selectMember(picking) then eq.ClickChild(RW, child, "left") end
+          if selectMember(picking) then API.windows.ClickChild(RW, child, "left") end
           picking, pickFocused = nil, nil
           listState.focusNext = 1
         end
@@ -210,13 +214,13 @@ ui.window("Raid", function()
         local on = child == "##motd" and enabled("UpdateMOTDButton") or (child ~= "##motd" and enabled(child))
         if T.button("##top" .. i, b[2], bw, bh, { sub = b[3], align = 0, disabled = not on, primary = b[4] == true }, pad) then
           if child == "##motd" then
-            local motd = (eq.WindowText(RW, "MOTDViewer") or ""):gsub("<[^>]*>", "")
+            local motd = (API.windows.Text(RW, "MOTDViewer") or ""):gsub("<[^>]*>", "")
             kbNote = nil
             K.open(kb, "The raid's message of the day", motd, 255)
           elseif b[5] then
-            state.confirm = { b[5], function() eq.ClickChild(RW, child, "left") end }
+            state.confirm = { b[5], function() API.windows.ClickChild(RW, child, "left") end }
           else
-            eq.ClickChild(RW, child, "left")
+            API.windows.ClickChild(RW, child, "left")
             if b[6] and pad.navVisible() then pad.set_mode("cursor") end -- the raid options are not a pad window
           end
         end
@@ -238,16 +242,17 @@ ui.window("Raid", function()
           -- the member's note row selected, its text in the note input, then Update
           for _, m in ipairs(list) do
             if m.name == kbNote and m.noteRow then
-              eq.ListClick(RW, "RAID_NoteList", m.noteRow, "left")
-              eq.SetWindowText(RW, "NoteEdit", kb.text)
-              eq.ClickChild(RW, "NoteUpdateButton", "left")
+              API.windows.ListClick(RW, "RAID_NoteList", m.noteRow, "left")
+              API.windows.SetText(RW, "NoteEdit", kb.text)
+              API.windows.ClickChild(RW, "NoteUpdateButton", "left")
             end
           end
         elseif r == "ok" then
-          eq.SetWindowText(RW, "MOTDInput", kb.text)
-          eq.ClickChild(RW, "UpdateMOTDButton", "left")
+          API.windows.SetText(RW, "MOTDInput", kb.text)
+          API.windows.ClickChild(RW, "UpdateMOTDButton", "left")
         end
       elseif not inRaid then
+        E.Reset()
         T.draw(x0, ly + T.px(10), "You are not in a raid. Target a player and Invite to start one.", C.dim)
         ui.Dummy(1, 1)
       else
@@ -296,14 +301,14 @@ ui.window("Raid", function()
         local who = m and m.name or ""
         local actions = {
           { "##memberactions", "Member actions", "Leadership, marking, looters and groups", m ~= nil and enabled("RAID_MemberActionsButton"),
-            function() if selectMember(who) then eq.ClickChild(RW, "RAID_MemberActionsButton", "left") end end },
+            function() if selectMember(who) then API.windows.ClickChild(RW, "RAID_MemberActionsButton", "left") end end },
           { "##tell", "Send a tell", "Opens the chat with /tell", m ~= nil, function() W.chat("/tell " .. who .. " ") end },
           -- (the game moves members only in a locked raid, CRaidWnd::UpdateButtons: for the leader of an unlocked
           -- one this locks it, and the picker's groups light up once the lock is back)
           { "##move", "Move to a group",
             enabled("RAID_Group1Button") and "Pick one of the 12" or (enabled("RAID_LockButton") and "Locks the raid first" or ""),
             m ~= nil and (enabled("RAID_Group1Button") or enabled("RAID_LockButton")), function()
-              if not enabled("RAID_Group1Button") then eq.ClickChild(RW, "RAID_LockButton", "left") end
+              if not enabled("RAID_Group1Button") then API.windows.ClickChild(RW, "RAID_LockButton", "left") end
               picking, pickAt = who, ui.GetTime()
             end },
           -- (the leader's: the window shows the MOTD's Update to the leader only)
@@ -318,7 +323,7 @@ ui.window("Raid", function()
           -- Turning off context menus keeps the same native actions reachable as direct controls.
           table.remove(actions, 1)
           local function memberButton(child)
-            return function() if selectMember(who) then eq.ClickChild(RW, child, "left") end end
+            return function() if selectMember(who) then API.windows.ClickChild(RW, child, "left") end end
           end
           local direct = {
             { "##assist", "Main Assist", "Delegate to the selected member", m ~= nil and enabled("RAID_MainAssistButton"),
@@ -341,21 +346,64 @@ ui.window("Raid", function()
           }
           for i, action in ipairs(direct) do table.insert(actions, i, action) end
         end
+        local extensionContext=E.RaidContext()
+        local extensionRows=E.Rows(RW,"member_actions",extensionContext)
+        if side.reviewActive and not E.HasReview() then
+          side.want,side.reviewFocus=nil,nil
+          listState.focusNext=1
+        end
+        side.reviewActive=E.HasReview()
+        local firstExtension=#actions+1
+        for _,row in ipairs(extensionRows)do
+          actions[#actions+1]={row.id,row.label,"",row.enabled,function()
+            local activated,phase=E.Activate(row,extensionContext)
+            if activated then
+              if phase=="review" then side.reviewFocus=true
+              elseif row.kind~="action" then
+                for index,action in ipairs(actions)do
+                  if action.extension and action.extension.kind=="action" and action.extension.action.handle==row.action.handle then
+                    side.want,side.at=index,ui.GetTime();break
+                  end
+                end
+              end
+            end
+          end,extension=row}
+        end
+        if side.reviewFocus then
+          for index,action in ipairs(actions)do
+            if action.extension and action.extension.kind=="cancel" then
+              side.want,side.at=index,ui.GetTime();side.reviewFocus=nil;break
+            end
+          end
+        end
         for k, a in ipairs(actions) do
+          if k==firstExtension then
+            ui.SetCursorScreenPos(ax,ry)
+            E.Before(RW,"member_actions",extensionContext);E.Message()
+            ui.Spacing();ui.Separator();ui.Spacing()
+            ui.TextDisabled("Addon actions");ui.Spacing()
+            _,ry=ui.GetCursorScreenPos()
+          end
           ui.SetCursorScreenPos(ax, ry)
           W.sideBefore(side, k)
           if T.button(a[1], a[2], actionW, abh, { sub = a[3] ~= "" and a[3] or nil, disabled = not a[4], align = 0 }, pad) then a[5]() end
           W.sideAfter(side, k, #actions, listState)
           ry = ry + abh + T.px(10)
         end
+        ui.SetCursorScreenPos(ax,ry)
+        if #extensionRows==0 then E.Before(RW,"member_actions",extensionContext);E.Message() end
+        E.After(RW,"member_actions",extensionContext)
         ui.EndChild()
       end
     end
   end
   local close = W.finish()
+  if close and E.Back(RW,"member_actions",E.RaidContext()) then
+    close=false;listState.focusNext=1
+  end
   if close and picking then
     close, picking, pickFocused = false, nil, nil
     listState.focusNext = 1
   end -- B leaves the picker
-  if W.back(close, state, kb, listState) then eq.ShowWindow(RW, false) end
+  if W.back(close, state, kb, listState) then API.windows.Show(RW, false) end
 end)

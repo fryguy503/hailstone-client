@@ -1,8 +1,9 @@
 -- Mercenary merchant: replaces the game's MMTW_MerchantWnd. The choice on the left (the type, then the mercenaries
 -- of that type, a membership the account lacks in red, then the chosen one's stances), on the right what it costs
 -- (purchase and upkeep as coins), its description, the picked stance's description, and Hire.
--- The drop-down, lists and Hire are the original's children (eq.ComboSelect, eq.ListClick, eq.ClickChild): picking a
+-- The drop-down, lists and Hire are the original's children (hs.ComboSelect, hs.ListClick, hs.ClickChild): picking a
 -- mercenary asks the game for its details as the stock window does.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -19,7 +20,7 @@ local function list(id, h, empty, tip)
   for i, r in ipairs(rows) do
     local c = r.color or C.text
     ui.PushStyleColor(ui.Col.Text, c[1], c[2], c[3], 1)
-    if ui.Selectable((r.texts[1] or "") .. "##" .. i, i - 1 == selected) then eq.ListClick(WINDOW, id, i - 1, "left") end
+    if ui.Selectable((r.texts[1] or "") .. "##" .. i, i - 1 == selected) then API.windows.ListClick(WINDOW, id, i - 1, "left") end
     ui.PopStyleColor(1)
     if tip then M.Tip(tip) end
   end
@@ -69,7 +70,7 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Mercenary Merchant", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   M.TestOpen(WINDOW)
   hud.Dialog(WINDOW, "Mercenary Merchant", OPTS, body)
 end)

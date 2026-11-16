@@ -1,6 +1,6 @@
 // The marketplace (CMarketplaceWnd): the catalog and the server's answers (CEverQuest::HandleWorldMessage's cases
 // 0x1e9f, 0x09bf, 0x77a7, 0x4b7f, 0x3171, 0x0a37, 0x0114, 0xb07f), and the window's buttons over the model in
-// game/marketplace.h. The window model for the UI packs is app/lua_eq_marketplace.cpp.
+// game/marketplace.h. The window model for the UI packs is app/lua_ui_marketplace.cpp.
 
 #include <cstdlib>
 #include <ctime>

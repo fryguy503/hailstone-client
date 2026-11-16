@@ -1,4 +1,4 @@
-// The guild window's roster over the eq API (app/lua_eq_social.cpp GuildWindow): the lists are built once a frame
+// The guild window's roster over the hs API (app/lua_ui_social.cpp GuildWindow): the lists are built once a frame
 // and again after the window's own state changes, so a sorted list reading every row stays cheap.
 #include <doctest/doctest.h>
 
@@ -7,8 +7,8 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_windows.h"
 #include "core/game_dir.h"
 #include "mq/commands.h"
 #include "mq/tlo.h"
@@ -55,31 +55,31 @@ TEST_CASE("guild window: the roster list is built once a frame, and again after 
         hailstone::test::ScratchDir scratch("guild_window");
         GameDir game(scratch.path());
         net::GameConnection conn(game, {});
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
 
         const std::string list = "'GuildManagementWnd', 'MemberList'";
         conn.receive_zone_packet_for_test(roster({"Alice", "Bob", "Carl"}));
         api.begin_frame();
-        CHECK(run(L, "return (eq.ListInfo(" + list + "))") == "3");
-        CHECK(run(L, "return eq.ListRow(" + list + ", 1)[1]") == "Bob");
-        CHECK(run(L, "return (select(3, eq.ListInfo(" + list + ")))") == "-1");
+        CHECK(run(L, "return (hs.ListInfo(" + list + "))") == "3");
+        CHECK(run(L, "return hs.ListRow(" + list + ", 1)[1]") == "Bob");
+        CHECK(run(L, "return (select(3, hs.ListInfo(" + list + ")))") == "-1");
         // A click selects at once, in the same frame.
-        CHECK(run(L, "return eq.ListClick(" + list + ", 2, 'left')") == "true");
-        CHECK(run(L, "return (select(3, eq.ListInfo(" + list + ")))") == "2");
+        CHECK(run(L, "return hs.ListClick(" + list + ", 2, 'left')") == "true");
+        CHECK(run(L, "return (select(3, hs.ListInfo(" + list + ")))") == "2");
         // A new roster shows from the next frame, the selection kept by name.
         conn.receive_zone_packet_for_test(roster({"Aaron", "Alice", "Bob", "Carl"}));
         api.begin_frame();
-        CHECK(run(L, "return (eq.ListInfo(" + list + "))") == "4");
-        CHECK(run(L, "return eq.ListRow(" + list + ", 0)[1]") == "Aaron");
-        CHECK(run(L, "return (select(3, eq.ListInfo(" + list + ")))") == "3");
+        CHECK(run(L, "return (hs.ListInfo(" + list + "))") == "4");
+        CHECK(run(L, "return hs.ListRow(" + list + ", 0)[1]") == "Aaron");
+        CHECK(run(L, "return (select(3, hs.ListInfo(" + list + ")))") == "3");
         lua_close(L);
     }
     ImGui::DestroyContext(ctx);
@@ -112,18 +112,18 @@ TEST_CASE("guild window: Go to URL and Join Channel send the guild's text as it 
             return plugin::Flow::Drop;
         });
 
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
         auto click = [&](const char* button) {
             api.begin_frame();
-            return run(L, std::string("return eq.ClickChild('GuildManagementWnd', '") + button + "', 'left')");
+            return run(L, std::string("return hs.ClickChild('GuildManagementWnd', '") + button + "', 'left')");
         };
         auto set = [&](std::uint32_t action, const std::string& text) {
             net::AppPacket p = net::encode_guild_update_text(action, text);

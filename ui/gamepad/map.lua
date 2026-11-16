@@ -1,12 +1,15 @@
 -- Map (gamepad pack): stands in for MapViewWnd, the large map the minimap opens. The zone's map fitted to a large
--- window, north up (eq.DrawZoneMap: the stock map's lines, labels, group, /find path, compass points and player),
+-- window, north up (hs.DrawZoneMap: the stock map's lines, labels, group, /find path, compass points and player),
 -- following the player until it is panned. A stick pans, LB / RB zoom out / in, Y centres on the player again,
--- X shows / hides the labels, RT turns Auto Z (eq.MapAutoZ: what is well above or below the player fades) on or off;
+-- X shows / hides the labels, RT turns Auto Z (hs.MapAutoZ: what is well above or below the player fades) on or off;
 -- with the mouse, dragging pans and the wheel zooms.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local C = T.C
+local E = dofile("lib/extensions.lua")
+local MC = dofile("lib/map_controls.lua")
 
 local MAP = "MapViewWnd"
 local ZOOMS = { 1, 1.5, 2.25, 3.4, 5, 7.5, 11 }
@@ -24,18 +27,29 @@ end
 
 ui.window("Map", function()
   if not W.shown(MAP) then
+    MC.Reset()
     M.open = false
     return
   end
   if not M.open then -- each time it opens: the whole zone, following the player
     M.open, M.zoom, M.follow = true, 1, true
   end
-  local zone = eq.ZoneName() or ""
-  if W.begin("Map", { w = 1500, h = 960, title = zone ~= "" and zone or "Map",
-        hints = { { "lb", "Zoom out" }, { "rb", "Zoom in" }, { "y", "Centre" },
-          { "x", M.labels and "Hide labels" or "Labels" }, { "rt", eq.MapAutoZ() and "Auto Z off" or "Auto Z" },
-          { "a", eq.FindPathShown() and "End find" or "Find path to centre" }, { "b", "Close" } } }) then
+  local zone = API.map.ZoneName() or ""
+  local hasControls = MC.Sync("zone")
+  local hints = { { "lb", "Zoom out" }, { "rb", "Zoom in" }, { "y", "Centre" },
+    { "x", M.labels and "Hide labels" or "Labels" }, { "rt", API.map.AutoZ() and "Auto Z off" or "Auto Z" },
+    { "a", API.map.FindPathShown() and "End find" or "Find path to centre" }, { "b", "Close" } }
+  if hasControls then table.insert(hints,1,{ "lt", "Map controls" }) end
+  if W.begin("Map", { w = 1500, h = 960, title = zone ~= "" and zone or "Map", close = not MC.Open(),
+        hints = hints }) then
     local x0, y0, x1, y1 = W.area()
+    local context = E.MapContext("zone")
+    local controlsWasOpen = MC.Open()
+    if hasControls then
+      if E.Component(MAP,"toolbar.mapcontrols",context,function()return ui.Button("Map controls")end) or W.pressed("lt") then MC.Toggle("zone")end
+      y0 = y0 + T.px(44)
+    end
+    local mapInput = not (controlsWasOpen or MC.Open())
     local wx, wy = ui.GetWindowPos()
     ui.SetCursorPos(x0 - wx, y0 - wy)
     ui.InvisibleButton("##maparea", x1 - x0, y1 - y0, ui.ButtonFlags.EnableNav)
@@ -43,7 +57,12 @@ ui.window("Map", function()
     T.rect(x0, y0, x1, y1, C.mapBg, 1, T.px(14))
     T.font(16)
     local cx, cy = M.cx, M.cy
-    local k, mx, my, px, py = eq.DrawZoneMap(x0, y0, x1, y1, ZOOMS[M.zoom], cx, cy, M.labels)
+    local canvasDefault = false
+    local k, mx, my, px, py = E.Component(MAP,"map.canvas",context,function()
+      canvasDefault=true
+      return API.map.DrawZone(x0, y0, x1, y1, ZOOMS[M.zoom], cx, cy, M.labels)
+    end)
+    mapInput = mapInput and canvasDefault
     T.unfont()
     T.outline(x0, y0, x1, y1, C.edge, 1, T.px(14), 1)
     if k then
@@ -54,10 +73,10 @@ ui.window("Map", function()
       -- panning: the mouse dragging, or a stick (map units per second at full deflection)
       local io = ui.GetIO()
       local dx, dy = 0, 0
-      if ui.IsItemActive() and ui.IsMouseDragging(ui.Mouse.Left) then
+      if mapInput and ui.IsItemActive() and ui.IsMouseDragging(ui.Mouse.Left) then
         dx, dy = -(io.mouseDX or 0) / k, -(io.mouseDY or 0) / k
       end
-      if W.focused() and pad.connected() then
+      if mapInput and W.focused() and pad.connected() then
         local sx = (pad.axis("lx") or 0) + (pad.axis("rx") or 0)
         local sy = (pad.axis("ly") or 0) + (pad.axis("ry") or 0)
         local speed = (x1 - x0) * 0.8 / k * (1 / math.max(io.fps or 60, 10))
@@ -67,17 +86,17 @@ ui.window("Map", function()
         M.follow = false
         M.cx, M.cy = (M.cx or mx) + dx, (M.cy or my) + dy
       end
-      if hovered and (io.wheel or 0) ~= 0 then setZoom(io.wheel > 0 and 1 or -1) end
+      if mapInput and hovered and (io.wheel or 0) ~= 0 then setZoom(io.wheel > 0 and 1 or -1) end
     end
-    if W.pressed("lb") then setZoom(-1) end
-    if W.pressed("rb") then setZoom(1) end
-    if W.pressed("y") then M.follow = true end
+    if mapInput and W.pressed("lb") then setZoom(-1) end
+    if mapInput and W.pressed("rb") then setZoom(1) end
+    if mapInput and W.pressed("y") then M.follow = true end
     -- the find path (the stock map's right click) to the point in the middle, or ending the shown one
-    if W.pressed("a") then
-      if eq.FindPathShown() then eq.EndFind() elseif M.cx then eq.FindMapLocation(M.cx, M.cy) end
+    if mapInput and W.pressed("a") then
+      if API.map.FindPathShown() then API.find.End() elseif M.cx then API.find.MapLocation(M.cx, M.cy) end
     end
-    if W.pressed("rt") then eq.MapAutoZ(not eq.MapAutoZ()) end
-    if W.pressed("x") then
+    if mapInput and W.pressed("rt") then API.map.AutoZ(not API.map.AutoZ()) end
+    if mapInput and W.pressed("x") then
       M.labels = not M.labels
       ui.SetSetting("map.labels", M.labels)
     end
@@ -85,6 +104,7 @@ ui.window("Map", function()
     T.font(17)
     T.draw(x0 + T.px(14), y1 - T.px(32), string.format("x%g%s", ZOOMS[M.zoom], M.follow and "" or "  (panned)"), C.dim)
     T.unfont()
+    MC.Draw("zone", MC.Open() and W.pressed("b"))
   end
-  if W.finish() then eq.ShowWindow(MAP, false) end
+  if W.finish() then API.windows.Show(MAP, false) end
 end)

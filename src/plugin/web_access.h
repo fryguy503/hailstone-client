@@ -4,7 +4,7 @@
 // web::BrowserHost (app/web_service.h). Every call names its caller, an owner:
 //   ""                  the player (the UI pack's own windows): any http(s) address, no messages from the pages
 //   "script:<name>"     a Lua script or Lua plugin (mq.web)
-//   "plugin:<name>"     a compiled plugin (the host table's web_*) or a plugin's window in the UI pack (eq.Web*)
+//   "plugin:<name>"     a compiled plugin (the host table's web_*) or a plugin's window in the UI pack (hs.Web*)
 // A caller sees and changes only its own tabs. One that is not the player needs kCapWeb in `caps`, and its addresses
 // must be http(s) on a host the server's [web] allow names (core/web_url.h; the helper checks every navigation too).
 

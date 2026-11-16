@@ -255,6 +255,9 @@ public:
     // The actor's own world matrix as last drawn (its place, turn and scale; the actor's vtable +0x2c4 matrix that
     // spell emitters on it take their axes from); false when it was not drawn.
     bool drawn_transform(std::uint32_t id, glm::mat4& world) const;
+    // This render attempt's model pose, also for intentionally hidden/clipped actors; not visibility evidence.
+    bool current_render_transform(std::uint32_t id, std::uint64_t frame, glm::mat4& world) const;
+    static ActorDraw render_pose(const game::Spawn& spawn, const assets::CharacterModel& model, const game::HeightTables* tables);
     // Actor vfFC(0): the authored head/name role's posed world translation.
     // Missing role metadata leaves the output alone and returns false.
     bool drawn_name_position(std::uint32_t id, glm::vec3& position) const;
@@ -519,6 +522,8 @@ private:
     std::uint32_t last_bone_sweep_ms_ = 0;
     static constexpr std::uint32_t kBoneCacheSweepMs = 1000;
     mutable std::vector<assets::BonePose> bone_local_, bone_previous_; // pose_bones' scratch for drawn_bone
+    std::unordered_map<std::uint32_t, glm::mat4> current_render_transforms_;
+    std::uint64_t current_render_frame_ = 0;
     std::unordered_map<std::uint32_t, std::pair<glm::vec3, float>> last_spawn_poses_; // their spawns' place, heading
     PlayerMotion player_motion_;
     std::uint32_t now_ms_ = 0; // the display clock

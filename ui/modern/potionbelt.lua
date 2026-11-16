@@ -3,6 +3,7 @@
 -- item on the cursor puts it on the belt, a right click uses it, holding the right button shows it. A clicky's
 -- recast shades its tile from below as it runs. A slot beyond the ones you may use, or one with nothing on it, is
 -- an empty well.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local tiles = dofile("lib/hudx_tiles.lua")
 local T = hud.T
@@ -21,7 +22,7 @@ for i = 0, SLOTS - 1 do
   local id = "PotionSlot" .. i
   SLOT[i] = { id = id, label = "PotionSlotLabel" .. i, hit = "##" .. id, number = tostring(i + 1),
     -- the right button as the game takes it on a slot (down, held after 500 ms, up)
-    onClick = function(phase, outside) eq.ClickChild(WINDOW, id, phase, outside) end }
+    onClick = function(phase, outside) API.windows.ClickChild(WINDOW, id, phase, outside) end }
 end
 
 local vert = false -- vertical(), read each frame the window is drawn
@@ -38,16 +39,16 @@ local function body(x, y, w, h, s)
     local id = slot.id
     local off = (PAD + i * (SIZE + GAP)) * s
     local bx, by = vert and x + PAD * s or x + off, vert and y + off or y + PAD * s
-    local name = eq.ChildTooltip(WINDOW, id) or ""
+    local name = API.windows.ChildTooltip(WINDOW, id) or ""
     if name ~= "" then
       tiles.Icon(WINDOW, id, bx, by, sz, s, nil, ICON_OPTS)
       -- the slot's recast cool-down (the game's belt button): the part still to go, from below
-      local top = eq.ButtonCoolDown(WINDOW, id, by, by + sz)
+      local top = API.spells.ButtonCoolDown(WINDOW, id, by, by + sz)
       if top then
         ui.DrawRectFilled(bx, top, bx + sz, by + sz, 0, 0, 0, 0.55, 6 * s)
         ui.DrawLine(bx, top, bx + sz, top, C.accent[1], C.accent[2], C.accent[3], 0.8, 1.5 * s)
       end
-      local count = eq.WindowText(WINDOW, slot.label) or ""
+      local count = API.windows.Text(WINDOW, slot.label) or ""
       if count ~= "" then
         local col = count == "0" and C.danger or C.text
         T.Text(bx + sz - 3 * s, by + sz - 13 * s, count, col, T.font.tiny, "right")
@@ -66,7 +67,7 @@ local function body(x, y, w, h, s)
         ui.SetTooltip("An empty belt slot: click it with a potion on the cursor to put it here")
       end
     end
-    if ui.IsItemClicked(ui.Mouse.Left) then eq.ClickChild(WINDOW, id, "left") end
+    if ui.IsItemClicked(ui.Mouse.Left) then API.windows.ClickChild(WINDOW, id, "left") end
     local onClick = slot.onClick
     if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
       T.RightPressStart(key, onClick)
@@ -77,7 +78,7 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Potion Belt", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   vert = vertical()
   hud.Window(WINDOW, "Potion Belt", OPTS, body)
 end)

@@ -3,7 +3,7 @@
 // The game options of the original's Options window (EQUI_OptionsWindow.xml; COptionsWnd's General, Display, Mouse
 // and Mail pages): the settings CEverQuest::loadOptions @0x544be0 reads from eqclient.ini [Options] / [Defaults]
 // (defaults.ini giving the defaults), and the few the UI ini keeps ([Main] ContextMenus, UseTellWindows). Each has a
-// name for the Options window (eq.Option / eq.SetOption) and an id for the code that acts on it.
+// name for the Options window (hs.Option / hs.SetOption) and an id for the code that acts on it.
 //
 // The asset folder's eqclient.ini gives the values a character has not set; every change goes to the character's
 // options.ini (core/character_files.h), as the chat filters go to chat.ini. Window, frame, audio, name and mouse
@@ -91,7 +91,7 @@ constexpr std::size_t kClientOptionCount = static_cast<std::size_t>(ClientOption
 
 struct ClientOptionInfo {
     ClientOption id;
-    const char* name;    // the Options window's name (eq.Option)
+    const char* name;    // the Options window's name (hs.Option)
     const char* section; // eqclient.ini's (or the UI ini's) section and key
     const char* key;
     int def;             // defaults.ini's default

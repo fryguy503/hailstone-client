@@ -12,7 +12,7 @@
 
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "game/coords.h"
 #include "game/mechanics/character.h"
 #include "mock_server/harness.h"
@@ -73,7 +73,7 @@ TEST_CASE("ability_state: the mock server's warrior has Kick ready, and no disci
     bool ran = false;
     net::GameConnectionTestAccess::with_character(conn, [&](game::mechanics::Character& ch) {
         ran = true;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         host.character = &ch;
@@ -105,7 +105,7 @@ TEST_CASE("ability_state: the mock server's warrior has Kick ready, and no disci
     CHECK(ran);
 }
 
-TEST_CASE("eq.AbilityBook lists the activated AAs and never a passive one") {
+TEST_CASE("hs.AbilityBook lists the activated AAs and never a passive one") {
     EmptyGameDir dir;
     GameDir game(dir.path());
     MockEqServer server(MockConfig::standard());
@@ -135,25 +135,25 @@ TEST_CASE("eq.AbilityBook lists the activated AAs and never a passive one") {
     bool ran = false;
     net::GameConnectionTestAccess::with_character(conn, [&](game::mechanics::Character& ch) {
         ran = true;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         host.character = &ch;
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
         // `true` once asked for the passive AAs too; it is ignored now.
         REQUIRE(luaL_dostring(L, "local keys = {} "
-                                 "for _, e in ipairs(eq.AbilityBook(true)) do "
+                                 "for _, e in ipairs(hs.AbilityBook(true)) do "
                                  "  if e.kind == 'aa' then keys[#keys + 1] = e.key end "
                                  "end "
                                  "return table.concat(keys, ',')") == LUA_OK);
         CHECK(std::string(lua_tostring(L, -1)) == "aa:701");
         // Its readiness, as ability_state gives it for the one AA.
-        REQUIRE(luaL_dostring(L, "for _, e in ipairs(eq.AbilityBook()) do "
+        REQUIRE(luaL_dostring(L, "for _, e in ipairs(hs.AbilityBook()) do "
                                  "  if e.key == 'aa:701' then return e.reuse, e.remaining, e.ready end "
                                  "end") == LUA_OK);
         const auto one = app::ability_state(host, mq::AbilityKind::AltAbility, "701");
@@ -193,7 +193,7 @@ TEST_CASE("ability_state finds an owned, activated AA by name or group among man
     bool ran = false;
     net::GameConnectionTestAccess::with_character(conn, [&](game::mechanics::Character& ch) {
         ran = true;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         host.character = &ch;

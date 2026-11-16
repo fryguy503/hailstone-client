@@ -19,12 +19,12 @@ no window that needs typing to work.
 | Bindings | `game/gamepad_bindings.*` (pure, unit-tested) | maps pad buttons and chords to key commands, or to the pad's own actions (cross hotbar slot, mode switch, camera) |
 | App | `app/client_app_gamepad.cpp` | in game mode, turns the bindings into key events, movement and camera; in menu and cursor modes, hands the pad to the windows |
 | ImGui | `ui/imgui_layer.cpp` | `NavEnableGamepad`; menu mode lets the SDL3 backend drive ImGui navigation |
-| Lua | `app/lua_eq_gamepad.cpp` (`eq.gamepad`), `ui/lua/lua_imgui.cpp` (navigation calls) | gives the windows the pad's state, its mode and its glyphs |
+| Lua | `app/lua_ui_gamepad.cpp` (`hs.gamepad`), `ui/lua/lua_imgui.cpp` (navigation calls) | gives the windows the pad's state, its mode and its glyphs |
 | UI pack | `ui/gamepad/` | the HUD, the cross hotbar, the main menu and the gamepad windows |
 
 ## 2. Modes
 
-The pad is in one of three modes at a time. `eq.gamepad.mode()` reports it.
+The pad is in one of three modes at a time. `hs.gamepad.mode()` reports it.
 
 - **game**: the pad plays: it moves, turns the camera, targets and fires hot buttons. ImGui gets no pad input.
 - **menu**: a gamepad window has the focus. The pad drives ImGui navigation (D-pad or left stick moves the focus,
@@ -44,7 +44,7 @@ The pad's commands act even while a window has the keyboard (typing in the chat)
 
 With the interface locked (/safelock) the pad loses what the mouse and the locked keys lose (__ProcessMouseEvents,
 __ExecuteCmd): its key commands go through the keys' refusal, its hot buttons, interact, cancel, targeting and camera
-do nothing, menu and cursor modes fall back to game mode, and `eq.gamepad.down` / `pressed` / `released` answer false,
+do nothing, menu and cursor modes fall back to game mode, and `hs.gamepad.down` / `pressed` / `released` answer false,
 all except for the chat input's windows (`pad_chat_window` in app/gamepad.h: the chat key still opens it, and its
 on-screen keyboard works). So a pad alone unlocks it: Back + Start, then `/safelock <password>` typed on the keys (or
 the quick-chat list's "/safelock ...", which opens the keys with "/safelock " typed).
@@ -57,7 +57,7 @@ screen appeared). It also takes screenshots, logs the pad's mode and ImGui's foc
 
 ## 3. Default bindings (game mode)
 
-Button names use Xbox labels. The UI shows each pad's own glyphs (`eq.gamepad.glyph`).
+Button names use Xbox labels. The UI shows each pad's own glyphs (`hs.gamepad.glyph`).
 
 | Input | Action | Key command |
 |---|---|---|
@@ -108,8 +108,8 @@ gamepad.cross.<set>.<slot> = <bar>:<button>
 cycle), `hotpage_prev`, `hotpage_next` (D-pad left / right), `chat`). `<input>` is a button name, a trigger chord
 (`lt+a`, `rt+up`, `lt+rt+x`) or `back+start`. Only the bindings that differ from the defaults are written. A chord
 with no binding of its own gives its cross hotbar slot (D-pad and face buttons) or the plain button's action. The
-gamepad pack's Options page edits them; the numbers are also Options window options (`eq.Option` /
-`eq.SetOption`): `gamepad_<setting>` in whole steps (the thresholds and dead zone in percent, the camera speed in
+gamepad pack's Options page edits them; the numbers are also Options window options (`hs.Option` /
+`hs.SetOption`): `gamepad_<setting>` in whole steps (the thresholds and dead zone in percent, the camera speed in
 tenths, booleans 0 / 1).
 
 Interact (A) uses the target's right-click action when it is within 15 units, else USE on what is at the middle
@@ -125,7 +125,7 @@ deletes, Y types a space, LB is shift, Start or Done accepts, and B cancels. On 
 still empty opens the keyboard on it.
 
 With the Gamepad UI the login, server select, character select and character creation screens are the pack's own
-(`ui/gamepad/login.lua`, `serverselect.lua`, `charselect.lua`, `charcreate.lua` over `eq.LoginScreen` and the rest,
+(`ui/gamepad/login.lua`, `serverselect.lua`, `charselect.lua`, `charcreate.lua` over `hs.LoginScreen` and the rest,
 docs/dev-ui.md); the above is the client's
 ImGui screens, which show with a pack that does not draw them. The pack's login starts on the character tiles of
 Continue as (A plays one; one with no saved password asks for it first), LB / RB change the server, Y opens More
@@ -139,28 +139,28 @@ every point is spent and the name has 4 letters or more, and B cancels. The box 
 description of the race, class, deity, city or stat focused.
 Testing: `test.login = server | more | notes | addons | keys | servers` in `ui/settings/gamepad.txt` opens that page once.
 
-## 5. Lua API (`eq.gamepad`)
+## 5. Lua API (`hs.gamepad`)
 
 This is the contract between the C++ side and `ui/gamepad`. Button names are `a b x y lb rb lt rt back start guide
 ls rs up down left right touchpad`. Axis names are `lx ly rx ry lt rt` (-1..1 after the dead zone, triggers 0..1).
 
 | Call | Returns |
 |---|---|
-| `eq.gamepad.connected()` | bool, plus the pad's name |
-| `eq.gamepad.type()` | `"xbox"`, `"playstation"`, `"nintendo"` or `"generic"` |
-| `eq.gamepad.down(b)` / `pressed(b)` / `released(b)` | bool: held / went down this frame / went up this frame |
-| `eq.gamepad.axis(a)` | number |
-| `eq.gamepad.mode()` / `set_mode(m)` | `"game"`, `"menu"` or `"cursor"` |
-| `eq.gamepad.cross_set()` | 0 none, 1 LT, 2 RT, 3 LT+RT: the set being held |
-| `eq.gamepad.cross_slot(set, slot)` | bar, button (1-based) of a cross hotbar slot (set 1..3, slot 1..8); nil out of range |
-| `eq.gamepad.set_cross_slot(set, slot, bar, button)` | bool: the slot set and saved (`gamepad.cross.*`) |
-| `eq.gamepad.glyph(b)` | the label for the connected pad: `"A"`/`"Cross"`/`"B"` ..., `"LB"`/`"L1"`/`"L"` ... |
-| `eq.gamepad.binding(input)` / `set_binding(input, action)` | the action string for an input such as `"x"` or `"lt+a"`: `""` for a chord with no binding of its own (its cross slot applies), nil for an unknown input; `set_binding` returns bool, and `""` or nil puts the default back |
-| `eq.gamepad.setting(name)` / `set_setting(name, value)` | the `gamepad.*` numbers above, by name with or without the `gamepad.` prefix (booleans 0 / 1; `set_setting` also takes true / false, clamps, saves and returns bool, false for NaN or an infinity); nil for an unknown name. A NaN or infinite value in `hailstone.ini` loads as the default |
-| `eq.gamepad.rumble(low, high, ms)` | bool (0..1 strengths, clamped; `ms` at most 5000); false without a pad, rumble, with `gamepad.rumble = 0`, or for a NaN or infinite strength |
-| `eq.gamepad.request_focus(window)` | puts the pad in menu mode with ImGui's focus on that Lua window (its `ui.Begin` title), from the next frame once the window exists. As `set_mode`, a plugin's code needs `commands` for it (docs/plugins.md "What plugin windows may do"): a plugin's window without it does not take the pad's focus when it appears |
-| `eq.gamepad.drop_cursor()` | bool: drops the cursor item on the ground as a click on the world with it does (`request_drop_cursor`, its confirmation when the game asks); false when nothing is held. The pad has no pointer to click the world with |
-| `eq.gamepad.takes_b()` | a UI window will close itself on B this frame (game mode), so the client's B (stop casting, close the top window, clear the target) leaves the target alone, as Escape closes only the top window |
+| `hs.gamepad.connected()` | bool, plus the pad's name |
+| `hs.gamepad.type()` | `"xbox"`, `"playstation"`, `"nintendo"` or `"generic"` |
+| `hs.gamepad.down(b)` / `pressed(b)` / `released(b)` | bool: held / went down this frame / went up this frame |
+| `hs.gamepad.axis(a)` | number |
+| `hs.gamepad.mode()` / `set_mode(m)` | `"game"`, `"menu"` or `"cursor"` |
+| `hs.gamepad.cross_set()` | 0 none, 1 LT, 2 RT, 3 LT+RT: the set being held |
+| `hs.gamepad.cross_slot(set, slot)` | bar, button (1-based) of a cross hotbar slot (set 1..3, slot 1..8); nil out of range |
+| `hs.gamepad.set_cross_slot(set, slot, bar, button)` | bool: the slot set and saved (`gamepad.cross.*`) |
+| `hs.gamepad.glyph(b)` | the label for the connected pad: `"A"`/`"Cross"`/`"B"` ..., `"LB"`/`"L1"`/`"L"` ... |
+| `hs.gamepad.binding(input)` / `set_binding(input, action)` | the action string for an input such as `"x"` or `"lt+a"`: `""` for a chord with no binding of its own (its cross slot applies), nil for an unknown input; `set_binding` returns bool, and `""` or nil puts the default back |
+| `hs.gamepad.setting(name)` / `set_setting(name, value)` | the `gamepad.*` numbers above, by name with or without the `gamepad.` prefix (booleans 0 / 1; `set_setting` also takes true / false, clamps, saves and returns bool, false for NaN or an infinity); nil for an unknown name. A NaN or infinite value in `hailstone.ini` loads as the default |
+| `hs.gamepad.rumble(low, high, ms)` | bool (0..1 strengths, clamped; `ms` at most 5000); false without a pad, rumble, with `gamepad.rumble = 0`, or for a NaN or infinite strength |
+| `hs.gamepad.request_focus(window)` | puts the pad in menu mode with ImGui's focus on that Lua window (its `ui.Begin` title), from the next frame once the window exists. As `set_mode`, a plugin's code needs `commands` for it (docs/plugins.md "What plugin windows may do"): a plugin's window without it does not take the pad's focus when it appears |
+| `hs.gamepad.drop_cursor()` | bool: drops the cursor item on the ground as a click on the world with it does (`request_drop_cursor`, its confirmation when the game asks); false when nothing is held. The pad has no pointer to click the world with |
+| `hs.gamepad.takes_b()` | a UI window will close itself on B this frame (game mode), so the client's B (stop casting, close the top window, clear the target) leaves the target alone, as Escape closes only the top window |
 
 Glyphs: Xbox `A B X Y LB RB LT RT View Menu Guide LS RS`, PlayStation `Cross Circle Square Triangle L1 R1 L2 R2
 Share Options PS L3 R3`, Nintendo `B A Y X L R ZL ZR - + Home LS RS` (its bottom face button is B), others
@@ -168,7 +168,7 @@ Share Options PS L3 R3`, Nintendo `B A Y X L R ZL ZR - + Home LS RS` (its bottom
 for a few frames (the last gamepad window closed).
 
 The pad's X is locked away from ImGui's navigation (ImGuiLayer::new_frame), which would otherwise open its window
-switcher while X is held: the windows read X from `eq.gamepad`. Y is ImGui's "input" key, which presses the focused
+switcher while X is held: the windows read X from `hs.gamepad`. Y is ImGui's "input" key, which presses the focused
 button as A does; the pack's buttons ignore a press made with Y down (`pad.yActivated`), as Y has its own meaning.
 
 The `ui` table adds the navigation calls that the gamepad windows need: `ui.IsItemFocused()`,
@@ -185,12 +185,12 @@ of at least 20 px at 1080p, targets of at least 48 px, and every action reachabl
   group role menu); the
   target with its con colour and distance; the group; the pet; the casting bar; short buff rows; the zone and the compass.
 - **Minimap** (top right, a client extension; the game has only the map window): the zone map in a circle
-  around the player (`eq.DrawMinimap`), north up or turning with the player (right click), with the zone name
+  around the player (`hs.DrawMinimap`), north up or turning with the player (right click), with the zone name
   above, the game clock below, and + / - zoom buttons (or the wheel). A click opens the large map.
-- **Map** (stands in for MapViewWnd): the zone fitted to a large window (`eq.DrawZoneMap`), north up, with the
+- **Map** (stands in for MapViewWnd): the zone fitted to a large window (`hs.DrawZoneMap`), north up, with the
   labels, the group, the /find path and the player. It follows the player until panned with a stick or by
   dragging. LB / RB zoom, Y centres on the player again, X shows or hides the labels, and RT turns Auto Z on or off
-  (what is well above or below the player fades; `eq.MapAutoZ`). Both maps draw the map window's map (the same
+  (what is well above or below the player fades; `hs.MapAutoZ`). Both maps draw the map window's map (the same
   files, layers, height filter and Auto Z), and lighten its dark line colours for the dark
   background. Neither shows other players or NPCs, because the game's map does not.
 - **Cross hotbar** (bottom centre): the three sets as two diamonds (D-pad, face buttons) each, shown in the pad's
@@ -206,7 +206,7 @@ of at least 20 px at 1080p, targets of at least 48 px, and every action reachabl
   EQ menu), More (`system.lua`, the game's other windows: help, a bug report, the storyline, the NPC journal,
   adventures, expeditions, PvP, the zone guide, alerts, trophies, the display and the user interface, the notes, the
   Lua scripts, the web browser; Tracking for a character with the Tracking skill, which uses the skill as its hot
-  button does (`eq.UseSkill(53)`: the skill opens the tracking window)), Hot Bars and Camp. Each tile opens the gamepad window, or, where there is none
+  button does (`hs.UseSkill(53)`: the skill opens the tracking window)), Hot Bars and Camp. Each tile opens the gamepad window, or, where there is none
   yet, the C++ window in cursor mode.
 - **Gamepad windows**: inventory and equipment (a slot grid, A picks up and moves an item, Y shows its details;
   holding an item, X puts it away, LB destroys it (the game's confirmation; with Fast Item Destroy on, a Yes / No of
@@ -305,7 +305,7 @@ of at least 20 px at 1080p, targets of at least 48 px, and every action reachabl
   NPC opens (empty), one at a time with `test.draw.every=<seconds>`.
 - **The NMS server's windows and the notes** (the NMS plugin's `ui/gamepad/`, in its own repository: nmsloot.lua, nmsvault.lua,
   nmswaypoints.lua and a Pet window over the pack's lib/pet.lua, through
-  `eq.Plugin("nms")`, the plugin's docs/nms.md; and the
+  `hs.Plugin("nms")`, the plugin's docs/nms.md; and the
   pack's playernotes.lua): Personal Loot, which takes the pad when loot
   needs a decision, on the first drop (LB / RB its tabs: Loot, Rules, History, Settings; on a drop A keeps it, X
   sells or destroys it, Y opens its menu: Always Keep / Always Sell now, a rule alone, inspect; RT loots all; the

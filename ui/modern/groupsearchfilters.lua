@@ -2,7 +2,8 @@
 -- buttons). Who the results leave out: your ignore list, or only your friends (one at a time, as the game keeps
 -- them); guilds to exclude or the only guilds to include (one at a time), each a drop-down of the guilds the game
 -- knows with Add, Remove and Remove All over its list; and whether only players who match your posted filters may
--- find you. Every check box, list and button is the window's (app/lua_eq_group_search.cpp), which saves each change.
+-- find you. Every check box, list and button is the window's (app/lua_ui_group_search.cpp), which saves each change.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -37,7 +38,7 @@ local function guilds(kind, combo, h, s)
   local list = "GSFW_" .. kind .. "GuildsList"
   local bh = K.ButtonH(s)
   local listH = math.max(40 * s, h - bh * 2 - 16 * s)
-  if (eq.ListInfo(WINDOW, list) or 0) == 0 then
+  if (API.windows.ListInfo(WINDOW, list) or 0) == 0 then
     local aw = ui.GetContentRegionAvail()
     S.Empty(aw, listH, "No guilds on this list.")
   else
@@ -50,7 +51,7 @@ local function guilds(kind, combo, h, s)
   ui.Unindent(22 * s)
 end
 
-local function testOpen() eq.ShowWindow(WINDOW, true) end
+local function testOpen() API.windows.Show(WINDOW, true) end
 local WINDOW_OPTS = {
   size = function() return 420, 560 end,
   resizable = { 320, 420 },
@@ -73,7 +74,7 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Group Search Filters", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   hud.Dialog(WINDOW, "Group Search Filters", WINDOW_OPTS, drawWindow)
 end)

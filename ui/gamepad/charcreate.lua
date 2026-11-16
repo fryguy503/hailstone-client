@@ -1,4 +1,4 @@
--- Character creation (gamepad pack): eq.CharacterCreate stands in for the client's own (ui/dev_screens.cpp
+-- Character creation (gamepad pack): hs.CharacterCreate stands in for the client's own (ui/dev_screens.cpp
 -- character_create_screen). A Hailstone screen, not CCharacterCreation's page. With the scene up the new
 -- character's model stands in the middle of the screen, so the panel keeps to the left of it.
 --   Main    the name (A types it on the keys; X asks the server for a random one), then gender, race, class, deity
@@ -8,6 +8,7 @@
 --           can take, LB resets them all; B or Done goes back
 -- Start creates once every point is spent and the name has 4 letters or more; B cancels (back to the character
 -- select) or leaves the keys or the stats. The rules are the client's (a race, class or deity resets the stats).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local W = dofile("lib/window.lua")
 local KF = dofile("lib/keyfield.lua")
@@ -59,7 +60,7 @@ end
 local function drawAbout(x0, y0, x1, y1)
   local a = st.about
   if not a then return end
-  local text, title = eq.CharacterCreateHelp(a.kind, a.id)
+  local text, title = API.pregame.CharacterCreateHelp(a.kind, a.id)
   T.rect(x0, y0, x1, y1, C.sunken, 1, px(12))
   T.font(20)
   local _, th = ui.CalcTextSize("Ag")
@@ -95,7 +96,7 @@ local function closeEdit(accept)
   local e = st.edit
   st.edit = nil
   F:want("##name")
-  if accept then eq.CharacterCreateDo("name", e.buf) end
+  if accept then API.pregame.CharacterCreateDo("name", e.buf) end
 end
 
 local function drawEdit(x0, y0, x1)
@@ -138,7 +139,7 @@ local function choiceRow(v, id, label, list, index, kind, w, h)
   if focused then st.about = cur and kind ~= "gender" and { kind = kind, id = cur.id } or nil end
   if step and #list > 1 then
     local nxt = stepped(list, index, step)
-    if nxt then eq.CharacterCreateDo(kind, nxt.id) end
+    if nxt then API.pregame.CharacterCreateDo(kind, nxt.id) end
   end
   return focused
 end
@@ -178,7 +179,7 @@ local function mainPage(v, x0, y0, x1, y1, w)
     P.at(x0, by)
     local aclicked, afocused = P.button(F, "##appearance", "Appearance", w, rh, { glyph = "y", disabled = v.busy })
     if afocused then st.about = nil end
-    if aclicked then eq.CharacterCreateDo("appearance") end
+    if aclicked then API.pregame.CharacterCreateDo("appearance") end
     by = by + rh + gap
   end
   -- the description of the row focused, down to the footer
@@ -200,16 +201,16 @@ local function statsPage(v, x0, y0, x1, y1, w)
     local step, focused = P.cycle(F, "##stat" .. i, s.name, tostring(s.value), w, rh, { note = note, disabled = v.busy })
     if focused then
       st.about = { kind = "stat", id = i }
-      if P.press("x") then eq.CharacterCreateDo("statMax", i) end
+      if P.press("x") then API.pregame.CharacterCreateDo("statMax", i) end
     end
-    if step == 1 then eq.CharacterCreateDo("statUp", i)
-    elseif step == -1 then eq.CharacterCreateDo("statDown", i) end
+    if step == 1 then API.pregame.CharacterCreateDo("statUp", i)
+    elseif step == -1 then API.pregame.CharacterCreateDo("statDown", i) end
     y = y + rh + gap
   end
-  if P.press("lb") then eq.CharacterCreateDo("resetStats") end
+  if P.press("lb") then API.pregame.CharacterCreateDo("resetStats") end
   local bw = (w - gap) / 2
   P.at(x0, y)
-  if P.button(F, "##reset", "Reset", bw, rh, { glyph = "lb", disabled = v.busy }) then eq.CharacterCreateDo("resetStats") end
+  if P.button(F, "##reset", "Reset", bw, rh, { glyph = "lb", disabled = v.busy }) then API.pregame.CharacterCreateDo("resetStats") end
   ui.SameLine(0, gap)
   if P.button(F, "##statsdone", "Done", bw, rh, { glyph = "b" }) then
     st.page = "main"
@@ -220,7 +221,7 @@ local function statsPage(v, x0, y0, x1, y1, w)
 end
 
 ui.window(NAME, function()
-  local v = eq.CharacterCreate and eq.CharacterCreate()
+  local v = API.pregame.CharacterCreate and API.pregame.CharacterCreate()
   if not v then
     st.frame = -10
     return
@@ -254,9 +255,9 @@ ui.window(NAME, function()
     else
       if not busy then
         if st.page == "main" then
-          if P.press("start") and v.ready then eq.CharacterCreateDo("create") end
-          if P.press("x") then eq.CharacterCreateDo("randomName") end
-          if P.press("y") and v.scene then eq.CharacterCreateDo("appearance") end
+          if P.press("start") and v.ready then API.pregame.CharacterCreateDo("create") end
+          if P.press("x") then API.pregame.CharacterCreateDo("randomName") end
+          if P.press("y") and v.scene then API.pregame.CharacterCreateDo("appearance") end
         end
       end
       if P.press("b") then
@@ -264,7 +265,7 @@ ui.window(NAME, function()
           st.page = "main"
           F:want("##stats")
         elseif not busy then
-          eq.CharacterCreateDo("cancel")
+          API.pregame.CharacterCreateDo("cancel")
         end
       end
       if st.page == "stats" then statsPage(v, x0, y0, x1, y1 - footer, w)
@@ -275,11 +276,11 @@ ui.window(NAME, function()
       local cw = (w - gap) / 2
       P.at(x0, by)
       if P.button(F, "##cancel", "Cancel", cw, bh, { glyph = "b", disabled = busy }) then
-        eq.CharacterCreateDo("cancel")
+        API.pregame.CharacterCreateDo("cancel")
       end
       ui.SameLine(0, gap)
       if P.button(F, "##create", "Create", cw, bh, { primary = v.ready, disabled = not v.ready, glyph = "start" }) then
-        eq.CharacterCreateDo("create")
+        API.pregame.CharacterCreateDo("create")
       end
       local status = v.status
       if (not status or status.text == "") and not busy then

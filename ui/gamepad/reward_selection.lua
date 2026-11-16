@@ -1,4 +1,5 @@
 -- Manual reward selection with controller focus and B-close support.
+local API = hs.UI
 local W=dofile("lib/window.lua")
 local T,pad=W.T,W.pad
 local C=T.C
@@ -41,7 +42,7 @@ local snapshots = {}
 local review, actionMessage
 
 local function readState()
-  local state = eq.RewardSelection(snapshots.pending and snapshots.pending.revision, snapshots.preview and snapshots.preview.revision)
+  local state = API.rewards.Selection(snapshots.pending and snapshots.pending.revision, snapshots.preview and snapshots.preview.revision)
   if not state or not state.shown then snapshots={};return state end
   for _,name in ipairs({"pending","preview"})do
     local lane=state[name] or {}
@@ -128,7 +129,7 @@ local function itemIcon(item,scale,designSize)
   local texture,u0,v0,u1,v1
   -- Reward packets carry item IDs, not icon IDs. Optional icons are shown only
   -- when supplied from a known item definition; rendering never requests one.
-  if item and item.icon and item.icon>0 then texture,u0,v0,u1,v1=eq.ItemIcon(item.icon)end
+  if item and item.icon and item.icon>0 then texture,u0,v0,u1,v1=API.assets.ItemIcon(item.icon)end
   if texture then ui.Image(texture,size,size,u0,v0,u1,v1)
   else
     local x,y=ui.GetCursorScreenPos()
@@ -166,7 +167,7 @@ local function entryDetails(lane,tab,option,entry,scale,ordinal)
     if index>1 then ui.Separator()end
     local inspectable=item.id and item.id~=0 and not lane.inspect_pending
     local function inspect()
-      result(eq.RewardSelectionInspect(laneName,lane.revision,tab.token,option.wire_id,entry.entry_id,item.id))
+      result(API.rewards.Inspect(laneName,lane.revision,tab.token,option.wire_id,entry.entry_id,item.id))
     end
     itemIcon(item,scale,look.inspectSize)
     if inspectable and ui.IsItemClicked(0)then inspect()end
@@ -313,7 +314,7 @@ local function footer(lane,tab,selected,scale)
     colored("The included rewards above will also be granted.",look.colors.muted)
     footerButton("Yes, claim reward###confirmreward",matchesReview(lane,tab,selected),function()
       local confirmed=review;cancelReview()
-      result(eq.RewardSelectionClaim(confirmed.revision,confirmed.token,confirmed.option))
+      result(API.rewards.Claim(confirmed.revision,confirmed.token,confirmed.option))
     end,true)
     footerButton("Cancel###cancelreward",true,cancelReview)
   else
@@ -327,10 +328,10 @@ local function footer(lane,tab,selected,scale)
   -- Keep maintenance actions on their own row so they never crowd the claim.
   ui.Spacing();used=0
   footerButton("Restore pending rewards###restorerewards",true,function()
-    cancelReview();changeLane("pending");result(eq.RestorePendingRewards())
+    cancelReview();changeLane("pending");result(API.rewards.RestorePending())
   end)
   footerButton("Close page###closerewardpage",true,function()
-    cancelReview();result(eq.RewardSelectionClose(laneName))
+    cancelReview();result(API.rewards.Close(laneName))
   end)
   if actionMessage then colored(actionMessage,look.colors.warning)end
 end
@@ -394,5 +395,5 @@ ui.window("Select Reward",function()
     draw(state,T.S)
     ui.EndChild()
   end
-  if W.finish()then closed();eq.ShowWindow(WINDOW,false)end
+  if W.finish()then closed();API.windows.Show(WINDOW,false)end
 end)

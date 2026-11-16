@@ -5,6 +5,7 @@
 -- button are the window's: selecting a row is the list's click (which marks the message read), Reply / Reply All /
 -- Forward open the composition window filled in by the game, Delete moves to the deleted items. The window's
 -- Export, Report, Spam and options buttons are not drawn: it does not handle them.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -38,10 +39,10 @@ local PAGES = {
 local function unread(r, g, b) return r and r > 0.95 and g and g < 0.85 and g > 0.7 and b < 0.65 end
 
 local function unreadCount()
-  local rows = eq.ListInfo(WINDOW, "InboxList") or 0
+  local rows = API.windows.ListInfo(WINDOW, "InboxList") or 0
   local n = 0
   for i = 0, rows - 1 do
-    local _, r, g, b = eq.ListRow(WINDOW, "InboxList", i)
+    local _, r, g, b = API.windows.ListRow(WINDOW, "InboxList", i)
     if unread(r, g, b) then n = n + 1 end
   end
   return n, rows
@@ -56,7 +57,7 @@ local function shortDate(t)
 end
 
 local function messageList(P, w, h, needle, s)
-  local rows = eq.ListInfo(WINDOW, P.list) or 0
+  local rows = API.windows.ListInfo(WINDOW, P.list) or 0
   if rows == 0 then
     ui.BeginChild("##mailempty", w, h, false)
     local aw, ah = ui.GetContentRegionAvail()
@@ -68,7 +69,7 @@ local function messageList(P, w, h, needle, s)
     columns = { [1] = { "From", 110 }, [2] = { "Subject", 0 }, [3] = { "Date", 92 } },
     filter = needle ~= "" and function(_, texts) return S.Matches(texts, needle, { 1, 2 }) end or nil,
     onRow = function(row, texts)
-      local _, r, g, b = eq.ListRow(WINDOW, P.list, row)
+      local _, r, g, b = API.windows.ListRow(WINDOW, P.list, row)
       local new = unread(r, g, b)
       local c = new and C.gold or C.text
       ui.TextColored(c[1], c[2], c[3], 1, texts[1] or "")
@@ -83,7 +84,7 @@ local function messageList(P, w, h, needle, s)
 end
 
 local function view(P, w, h, s)
-  local _, _, sel = eq.ListInfo(WINDOW, P.list)
+  local _, _, sel = API.windows.ListInfo(WINDOW, P.list)
   local btnH = S.ButtonHeight(s)
   ui.BeginChild("##mailview", w, h, false)
   local _, ah = ui.GetContentRegionAvail()
@@ -114,7 +115,7 @@ local function drawWindow(x, y, w, h, s)
   W.Button(WINDOW, "ButtonCompose", "Compose", { primary = true, height = btnH, tooltip = "Write a new message" })
   ui.SameLine()
   W.Button(WINDOW, "AddressBookButton", "Address Book", { height = btnH, tooltip = "Names and lists you send to" })
-  local choices = eq.ComboInfo(WINDOW, "CharacterBoxSelector")
+  local choices = API.windows.ComboInfo(WINDOW, "CharacterBoxSelector")
   if choices and #choices > 0 then
     ui.SameLine()
     local aw = ui.GetContentRegionAvail()
@@ -129,7 +130,7 @@ local function drawWindow(x, y, w, h, s)
   end
   -- the pages
   local unreadN = unreadCount()
-  local trashN = eq.ListInfo(WINDOW, "TrashList") or 0
+  local trashN = API.windows.ListInfo(WINDOW, "TrashList") or 0
   if ui.BeginTabBar("##mailtabs") then
     local tt = ui.GetSetting("test.mail.tab") -- testing: inbox | trash
     local function item(key, label)
@@ -147,7 +148,7 @@ local function drawWindow(x, y, w, h, s)
   local needle
   search, needle = S.Search("mailsearch", search, "Search sender or subject")
   local aw, ah = ui.GetContentRegionAvail()
-  if (eq.ListInfo(WINDOW, P.list) or 0) == 0 then
+  if (API.windows.ListInfo(WINDOW, P.list) or 0) == 0 then
     messageList(P, aw, ah, needle, s) -- nothing to read: the empty state alone
   elseif aw >= 640 * s then
     local lw = math.floor(aw * 0.46)
@@ -162,6 +163,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Messages", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Mail", WINDOW_OPTS, drawWindow)
 end)

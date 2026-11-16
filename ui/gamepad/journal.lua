@@ -1,5 +1,5 @@
 -- The conversation journal (gamepad pack), standing in for the stock windows and answered through them (lib/model.lua,
--- app/lua_eq_journal.cpp), so what is logged, kept, sorted and saved is the game's:
+-- app/lua_ui_journal.cpp), so what is logged, kept, sorted and saved is the game's:
 --   NPC Journal (JournalNPCWnd)        the NPCs who spoke to you (name, zone, the newest time) and what the one picked
 --                                      said; A picks an NPC or an entry (its text shows on the right), X adds it to the
 --                                      selection or takes it out (the lists select several, as ctrl-click does); the
@@ -9,6 +9,7 @@
 --   Journal Categories (JournalCatWnd) the categories (A picks one: its name and description fill the fields, X adds
 --                                      or removes it from the selection), the name and description typed on the
 --                                      on-screen keyboard, the default category for new entries, Add, Update, Delete
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -57,7 +58,7 @@ ui.window("NPC Journal", function()
       ui.SetCursorPos(x0 - wx, y1 - bh - wy)
       local npcOn = M.state(JW, "DeleteNPCButton")
       if T.button("##jdelnpc", "Delete NPC", midX - T.px(20) - x0, bh, { disabled = not npcOn }, pad) then
-        state.confirm = { "Delete the selected NPCs and all they said?", function() eq.ClickChild(JW, "DeleteNPCButton", "left") end }
+        state.confirm = { "Delete the selected NPCs and all they said?", function() API.windows.ClickChild(JW, "DeleteNPCButton", "left") end }
       end
       -- what the NPC said, the entry's text, its category and Delete Entry
       local ly1 = top + (y1 - top) * 0.48
@@ -72,11 +73,11 @@ ui.window("NPC Journal", function()
       ui.SameLine(0, gap)
       local entryOn = M.state(JW, "DeleteTextButton")
       if T.button("##jdelentry", "Delete Entry", half, bh, { disabled = not entryOn }, pad) then
-        state.confirm = { "Delete the selected entries?", function() eq.ClickChild(JW, "DeleteTextButton", "left") end }
+        state.confirm = { "Delete the selected entries?", function() API.windows.ClickChild(JW, "DeleteTextButton", "left") end }
       end
     end
   end
-  if M.back(W.finish(), pick, state, nil, npcs) then eq.ShowWindow(JW, false) end
+  if M.back(W.finish(), pick, state, nil, npcs) then API.windows.Show(JW, false) end
 end)
 
 -- ---------------------------------------------------------------- the categories (JournalCatWnd)
@@ -98,7 +99,7 @@ ui.window("Journal Categories", function()
     if kb.open then
       ui.SetCursorPos(x0 - wx, y0 - wy)
       local r = K.draw(kb, pad, x0, y0, math.min(x1 - x0, T.px(1100)))
-      if r == "ok" and editing then eq.SetWindowText(CW, editing, kb.text) end
+      if r == "ok" and editing then API.windows.SetText(CW, editing, kb.text) end
     elseif not M.picker(cpick, x0, y0, x1, y1) then
       local midX = x0 + (x1 - x0) * 0.5
       local bh = T.px(76)
@@ -130,6 +131,6 @@ ui.window("Journal Categories", function()
   if kb.open and close then
     kb.open = false
   elseif M.back(close, cpick, nil, nil, cats) then
-    eq.ShowWindow(CW, false)
+    API.windows.Show(CW, false)
   end
 end)

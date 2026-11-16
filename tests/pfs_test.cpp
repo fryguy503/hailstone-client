@@ -43,8 +43,12 @@ TEST_CASE("PfsArchive handles archives with stale names and a 0xffffffff name ta
     auto velketor = PfsArchive::open(gd->find("velketor_chr.s3d").value());
     CHECK_FALSE(velketor.contains("kael_chr.wld"));
     CHECK(velketor.contains("velketor_chr.wld"));
-    auto gequip = PfsArchive::open(gd->find("gequip_nms.s3d").value());
-    CHECK(gequip.contains("bat04.dds"));
+    if (const auto special = gd->find("gequip_nms.s3d")) {
+        auto gequip = PfsArchive::open(*special);
+        CHECK(gequip.contains("bat04.dds"));
+    } else {
+        MESSAGE("gequip_nms.s3d: optional server asset is absent; its name-table check was not exercised");
+    }
 }
 
 namespace {

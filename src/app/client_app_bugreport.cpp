@@ -42,7 +42,7 @@ std::string first_line_after(const std::string& text, std::string_view key) {
 }
 } // namespace
 
-void ClientApp::wire_bug_reports(EqHost& h) {
+void ClientApp::wire_bug_reports(UiHost& h) {
     if (!h.save_bug_report) {
         h.bug_report_capture = [this] {
             // The frame the window hides for; a smaller copy, so the report keeps room for more.
@@ -61,7 +61,7 @@ void ClientApp::wire_bug_reports(EqHost& h) {
         };
         h.crash_report_close = [this] {
             crash_saved_.reset();
-            eq_host_.crash_report = nullptr; // not left pointing at the freed report until the next frame
+            ui_host_.crash_report = nullptr; // not left pointing at the freed report until the next frame
         };
     }
     h.crash_report = crash_saved_ ? &*crash_saved_ : nullptr;

@@ -81,6 +81,7 @@ struct AddonOfferView {
     bool older = false;            // older than installed_version: AddonInstall needs choice_on (the player's yes)
     std::string blocked;           // why it cannot be installed ("" it can)
     std::vector<std::string> caps; // what it asks to do, in plain words
+    bool autoload = false;        // managed Lua addon: activate automatically when the rules allow it
 };
 // A suggested add-on (app/addon_suggest.h, docs/addons.md "Suggested add-ons"): the picked server has an add-on of
 // its own the player does not have.
@@ -114,6 +115,8 @@ struct AddonRowView {
     bool can_remove = false;  // installed and not busy (the server's own never)
     bool can_start = false;   // an installed tool whose program is there: AddonStart starts it
     std::string folder;       // its folder or file, to open
+    bool managed = false;    // installed Lua addon whose lifecycle the add-on manager owns
+    bool enabled = false;    // the player's activation choice, separate from automatic updates
 };
 // An add-on of the add-on index, in the store (docs/addons.md "Finding add-ons"): what its manifest says, and what the
 // player can do with it.
@@ -223,7 +226,7 @@ enum class LoginAction {
     UpdateDownload, UpdateRestart, UpdateSkip, UpdateNotes, OpenProject,
     AddonInspect, AddonInstall, AddonCancel, AddonUpdate, AddonRemove, AddonAuto, AddonFolder, AddonPage, AddonCheck,
     AddonRevoke, AddonAskAgain, AddonSuggestLook, AddonSuggestLater, AddonSuggestNever, AddonBrowse, AddonStoreLook,
-    AddonStart, ResumeToken
+    AddonStart, ResumeToken, AddonEnabled
 };
 
 // A row of the login screen's Characters list: a character one of the server's accounts was seen to have.
@@ -397,7 +400,7 @@ enum class CharacterCreateAction { None, Create, Cancel, Appearance };
 // Create is returned with a name, a valid view.option and every point spent.
 CharacterCreateAction character_create_screen(CharacterCreateView& view);
 
-// The rules of the screen, shared with the UI packs' creation windows (app/lua_eq_pregame.cpp). create_normalize keeps
+// The rules of the screen, shared with the UI packs' creation windows (app/lua_ui_pregame.cpp). create_normalize keeps
 // race and class among the options and view.option on a row of them (the first of race and class when the current
 // one is not), and resets the stats when the row changed. The lists: the races (by id), the race's classes (by id),
 // the deities of race and class (by name), the start zones of race, class and the chosen deity (by name, as
@@ -413,7 +416,7 @@ bool create_set_deity(CharacterCreateView& view, std::uint32_t deity);
 bool create_set_city(CharacterCreateView& view, std::uint32_t zone);
 bool create_ready(const CharacterCreateView& view);
 
-// The stats of CCharacterCreation (CC_AdvancedScreen), as app/lua_eq_login.cpp's window keeps them:
+// The stats of CCharacterCreation (CC_AdvancedScreen), as app/lua_ui_login.cpp's window keeps them:
 // ResetStatPoints puts each stat at its base and the points to spend at the sum of the allocation's points; Up adds
 // one while points are left, up to base + 25 and at most 150; Down takes one back, down to the base.
 void create_reset_stats(CharacterCreateView& view);
@@ -459,24 +462,24 @@ struct ChatLine {
     std::uint32_t rgb = 0; // 0xRRGGBB overriding the channel colour (consider lines), 0 = none
     std::uint32_t color = 0; // the original's colour index (net::ChatEvent::color), 0 = the channel's
     std::string peer;        // the player the line is from (a tell's other player; net::ChatEvent::peer)
-    std::uint32_t window = 0; // the chat window that wrote it (CChatWindow::AddOutputText; app/lua_eq_chat.cpp's
+    std::uint32_t window = 0; // the chat window that wrote it (CChatWindow::AddOutputText; app/lua_ui_chat.cpp's
                               // serial), 0: routed by its colour
     bool restored = false;    // Hailstone: from the character's chat history (an earlier session; no tell windows)
     std::int64_t time = 0;    // Hailstone: when it came (std::time; 0 unknown), for the chat's timestamps
     std::uint64_t seq = 0;    // its place in ChatView::revision's count (1-based); lines leave from anywhere in the
-                              // buffer (each chat window keeps its own last lines: app/lua_eq_chat.cpp)
+                              // buffer (each chat window keeps its own last lines: app/lua_ui_chat.cpp)
 };
 
 struct ChatView {
     std::deque<ChatLine> lines;
-    // Hailstone: each chat window keeps its own last 1000 lines (app/lua_eq_chat.cpp); this only bounds the whole
+    // Hailstone: each chat window keeps its own last 1000 lines (app/lua_ui_chat.cpp); this only bounds the whole
     // buffer (32 windows of them), for lines no window has taken yet.
     std::size_t max_lines = 32000;
     std::string input;
     bool scroll_to_bottom = true;
     // Set when the player clicks an item link in a line (lines keep the \x12 link tags).
     std::optional<game::ItemLink> clicked_link;
-    std::uint64_t revision = 0; // counts added lines (the Lua chat window's eq.ChatText version)
+    std::uint64_t revision = 0; // counts added lines (the Lua chat window's hs.ChatText version)
 
     void add(ChatChannel channel, std::string text, std::uint32_t rgb = 0, std::uint32_t color = 0, std::string peer = {});
 };

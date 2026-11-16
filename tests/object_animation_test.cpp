@@ -14,6 +14,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "app/player_movement.h"
+#include "app/world_geometry_queries.h"
 #include "app/zone_move_world.h"
 #include "assets/object_animation.h"
 #include "assets/wld.h"
@@ -256,6 +257,59 @@ TEST_CASE("Animated objects: the moving parts block where the animation has them
     // A full period later it is back.
     moving.set_time(400);
     CHECK(blocked(moving, {10, 0, 2}, {0, 0, 2}));
+}
+
+TEST_CASE("Animated objects: effect surfaces follow current passable moving scenery without changing movement") {
+    auto zone=slab_zone();
+    auto& mesh=zone.objects.at("SLAB_ACTORDEF");
+    for(auto& part:mesh.parts)part.solid=false;
+    auto moving=game::AnimatedObjects::build(zone);
+    REQUIRE_FALSE(moving.empty()); // a decorative-only animation still supplies visual surfaces
+    const auto stationary=game::CollisionMesh::build(zone);
+    const auto sample=[&](float x,float y) {
+        return app::world_geometry_surface_floor(stationary,&moving,
+            [](const glm::vec3&) {return std::optional<float>{};},{x,y,10});
+    };
+    moving.set_time(0);
+    REQUIRE(sample(5.5f,0));
+    CHECK(*sample(5.5f,0)==doctest::Approx(4));
+    CHECK_FALSE(moving.floor_below({5.5f,0,10},0));
+    moving.set_time(100);
+    REQUIRE(sample(0,5.5f));
+    CHECK(*sample(0,5.5f)==doctest::Approx(4));
+    REQUIRE(sample(5.5f,0));
+    CHECK(*sample(5.5f,0)==doctest::Approx(0)); // no stale animation floor at its earlier position
+    CHECK_FALSE(blocked(moving,{10,0,2},{0,0,2}));
+}
+
+TEST_CASE("Animated objects: a drawn static replacement cannot leak its original moving surface to effects") {
+    auto zone=slab_zone();
+    auto replacement=slab();
+    for(auto& vertex:replacement.vertices)vertex.position.z+=2;
+    zone.draw_objects["SLAB_ACTORDEF"]=replacement;
+    auto moving=game::AnimatedObjects::build(zone);
+    moving.set_time(100);
+    REQUIRE(moving.floor_below({0,5.5f,10},0));
+    CHECK(*moving.floor_below({0,5.5f,10},0)==doctest::Approx(4)); // original physics still animates
+    CHECK_FALSE(moving.visual_surface_below({0,5.5f,10})); // original actor is not the drawn geometry
+    const auto drawn=game::CollisionMesh::build_visual(zone);
+    REQUIRE(drawn.visual_surface_below({5.5f,0,10}));
+    CHECK(*drawn.visual_surface_below({5.5f,0,10})==doctest::Approx(6));
+}
+
+TEST_CASE("Animated objects: effect surfaces use the exact renderer clock between physics steps") {
+    auto moving=game::AnimatedObjects::build(slab_zone());
+    moving.set_time(0);
+    const auto physics=moving.part_transform(0);
+    moving.set_visual_time(100);
+    CHECK(moving.time()==0);
+    CHECK(moving.visual_time()==100);
+    CHECK(moving.part_transform(0)==physics);
+    CHECK(blocked(moving,{10,0,2},{0,0,2}));
+    CHECK_FALSE(blocked(moving,{0,10,2},{0,0,2}));
+    CHECK_FALSE(moving.visual_surface_below({5.5f,0,10}));
+    REQUIRE(moving.visual_surface_below({0,5.5f,10}));
+    CHECK(*moving.visual_surface_below({0,5.5f,10})==doctest::Approx(4));
 }
 
 TEST_CASE("Animated objects: the player's movement meets the moving part through ZoneMoveWorld") {

@@ -3,6 +3,7 @@
 -- the options: the sort and the players to list (pickers), pets, mercenaries and automatic update; Track (X) and
 -- Done. Every control is the stock window's child: the toggles and boxes its check buttons, the pickers its combo
 -- boxes, a row its list's row (TRW_TrackingList).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -30,13 +31,13 @@ ui.window("Tracking", function()
     return
   end
   M.frame()
-  local n = eq.ListInfo(TW, "TRW_TrackingList") or 0
+  local n = API.windows.ListInfo(TW, "TRW_TrackingList") or 0
   if W.begin("Tracking", { w = 1400, h = 960, title = "Tracking", subtitle = n == 1 and "1 nearby" or (n .. " nearby"),
         hints = M.hints(F, { { "a", "Track" }, { "x", "Track" }, { "b", "Close" } }) }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     if not M.modal(F, x0, y0, x1, y1) then
-      if M.pressed("Tracking", "x") then eq.ClickChild(TW, "TRW_TrackButton", "left") end
+      if M.pressed("Tracking", "x") then API.windows.ClickChild(TW, "TRW_TrackButton", "left") end
       local rx0 = x1 - T.px(440)
       -- the con filters
       M.caption(x0, y0, "Show")
@@ -46,7 +47,7 @@ ui.window("Tracking", function()
       ui.SetCursorPos(x0 - wx, y0 + T.px(28) - wy)
       for i, con in ipairs(CONS) do
         if i > 1 then ui.SameLine(0, gap) end
-        local enabled, hidden = eq.ChildState(TW, con[1]) -- a ranger's filters: disabled for anyone else
+        local enabled, hidden = API.windows.ChildState(TW, con[1]) -- a ranger's filters: disabled for anyone else
         local on = not hidden
         local c = con[2]
         local clicked, focused, bx0, by0, bx1, by1 = T.button("##" .. con[1], "", cw, ch, {}, pad)
@@ -56,7 +57,7 @@ ui.window("Tracking", function()
         T.font(15)
         T.textIn(bx0, by0 + T.px(36), bx1, by1 - T.px(4), on and con[3] or "hidden", on and C.text or C.faint, 0.5)
         T.unfont()
-        if clicked and enabled ~= false then eq.ClickChild(TW, con[1], "left") end
+        if clicked and enabled ~= false then API.windows.ClickChild(TW, con[1], "left") end
       end
       -- the names
       local top = y0 + T.px(28) + ch + T.px(16)
@@ -64,7 +65,7 @@ ui.window("Tracking", function()
         rowH = 56, select = "focus", inspect = false,
         empty = "Nothing to track nearby (or the filters hide it).",
         draw = function(r, a, b, c, d) M.row(r, a, b, c, d, r.texts[1], r.texts[2], { rightW = T.px(200) }) end,
-        onA = function() eq.ClickChild(TW, "TRW_TrackButton", "left") end })
+        onA = function() API.windows.ClickChild(TW, "TRW_TrackButton", "left") end })
       -- the options and the buttons
       local bh = T.px(64)
       local oy = y0
@@ -79,5 +80,5 @@ ui.window("Tracking", function()
       M.buttons(TW, { { "DoneButton", "Done" } }, rx0, x1, bh)
     end
   end
-  if M.back(F, W.finish()) then eq.ShowWindow(TW, false) end
+  if M.back(F, W.finish()) then API.windows.Show(TW, false) end
 end)

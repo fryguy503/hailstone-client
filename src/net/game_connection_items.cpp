@@ -10,6 +10,9 @@
 
 #include "core/atomic_file.h"
 #include "core/log.h"
+#include "core/sha256.h"
+#include "core/process_serial.h"
+#include "game/server_ext.h"
 #include "game/appearance.h"
 #include "game/augments.h"
 #include "game/bag_move.h"
@@ -29,6 +32,35 @@ namespace hailstone::net {
 namespace {
 
 ItemSlot cursor_slot() { return ItemSlot::possessions(kSlotCursor); }
+
+std::string loot_identity(const Item& item) {
+    // Include the serialized instance and its entire tree, not just the root ID: replacing an augment, a bag's
+    // contents or a stack while a question is open must require a new decision.
+    ItemPacket packet;
+    packet.item = item;
+    return to_hex(sha256(encode_item_packet(false, packet).data));
+}
+
+std::vector<std::uint32_t> loot_descendants(const Item& root, bool& complete) {
+    constexpr std::size_t maximum = 4096;
+    constexpr unsigned maximum_depth = 8;
+    std::vector<std::uint32_t> ids;
+    complete = true;
+    const auto visit = [&](const auto& self, const Item& parent, unsigned depth) -> void {
+        for (const auto& child : parent.contents) {
+            if (ids.size() == maximum || depth > maximum_depth) {
+                complete = false;
+                return;
+            }
+            ids.push_back(child.item.id);
+            self(self, child.item, depth + 1);
+            if (!complete) return;
+        }
+    };
+    visit(visit, root, 1);
+    return ids;
+}
+
 
 bool is_worn(const ItemSlot& s) { return s.type == kInvPossessions && s.sub < 0 && s.slot >= 0 && s.slot < kEquipmentSlots; }
 
@@ -335,6 +367,7 @@ void GameConnection::handle_item(Op op, const AppPacket& p) {
                 if (stack > 1 && count > 0 && count < stack) it->second.stack_count = static_cast<std::uint32_t>(stack - count);
                 else loot_->items.erase(it);
             }
+            if (extension_loot_all_) { continue_extension_loot_all(); break; }
             if (!loot_all_queue_.empty()) {
                 std::int16_t next = loot_all_queue_.front();
                 loot_all_queue_.pop_front();
@@ -551,10 +584,13 @@ void GameConnection::finish_quantity(std::uint32_t quantity) {
     if (!quantity_) return;
     QuantityRequest q = *quantity_;
     quantity_.reset();
-    if (q.loot) {
+    if (q.op == QuantityOp::Loot || q.op == QuantityOp::ExtensionLoot) {
         // CLootWnd::WndNotification @0x6be180 message 0x24: the kept request with the quantity, sent as it is (0
         // included).
-        if (state_ == ConnectionState::InZone) send_loot_item(q.slot.slot, q.auto_loot, quantity);
+        if (state_ == ConnectionState::InZone) {
+            if (q.op == QuantityOp::ExtensionLoot) confirm_extension_loot_quantity(q.slot.slot, q.auto_loot, quantity);
+            else send_loot_item(q.slot.slot, q.auto_loot, quantity);
+        }
         return;
     }
     if (state_ != ConnectionState::InZone || quantity == 0) return;
@@ -907,6 +943,8 @@ void GameConnection::loot(std::uint32_t corpse_id) {
         system(12390, {}, 0xd);
         return;
     }
+    loot_session_generation_ = core::next_process_identity();
+    extension_loot_all_ = false;
     loot_ = LootSession{};
     loot_->corpse_id = corpse_id;
     loot_->corpse_name = game::display_name(it->second.name);
@@ -918,6 +956,8 @@ void GameConnection::loot(std::uint32_t corpse_id) {
 }
 
 void GameConnection::loot_failed(std::uint32_t eqstr) {
+    extension_loot_all_ = false;
+    if (quantity_ && quantity_->op == QuantityOp::ExtensionLoot) quantity_.reset();
     // Handle_OP_MoneyOnCorpse's refusals: the line (0x111), and the corpse is let go without showing the window.
     if (eqstr) system(eqstr, {}, 0x111);
     loot_.reset();
@@ -926,6 +966,8 @@ void GameConnection::loot_failed(std::uint32_t eqstr) {
 }
 
 void GameConnection::reset_loot_session() {
+    extension_loot_all_ = false;
+    if (quantity_ && quantity_->op == QuantityOp::ExtensionLoot) quantity_.reset();
     // unk_CLootWnd_ResetLootSession @0x6bd0b0 (OP_LootComplete): no target, no corpse, a looting player stands
     // (100), the window hides. The target is cleared without telling the server (pinstTarget = 0).
     if (loot_) world_.target_id = 0;
@@ -970,6 +1012,54 @@ bool GameConnection::can_use_item_class(const Item& item) const {
     return game::can_use_item(item.item_class, item.classes, player_class_mask(), false, item.item_type, {}, {}, {}, {});
 }
 
+std::optional<std::string> GameConnection::loot_warning(const Item& item, bool& plain) const {
+    plain = false;
+    if (looting_own_corpse()) return {};
+    bool complete = false;
+    const auto descendants = loot_descendants(item, complete);
+    auto extra = server_ext().loot_confirmation(*this, item, descendants, complete);
+    const bool stock = loot_asks_no_drop(item);
+    if (extra && !extra->empty()) {
+        plain = true;
+        if (stock) *extra += "\n" + game::loot_no_drop_question(item.name);
+        return extra;
+    }
+    return stock ? std::optional(game::loot_no_drop_question(item.name)) : std::nullopt;
+}
+
+void GameConnection::answer_extension_loot_question(const Confirmation& question, bool yes) {
+    loot_popup_pending_ = false;
+    const auto slot = static_cast<std::int16_t>(question.data);
+    const auto current = loot_ ? loot_->items.find(slot) : std::map<std::int16_t, Item>::const_iterator{};
+    const bool valid = state_ == ConnectionState::InZone && !zone_change_pending_ && loot_ && loot_->open &&
+        current != loot_->items.end() && question.value == std::to_string(loot_session_generation_) + ":" +
+            std::to_string(loot_->corpse_id) + ":" + loot_identity(current->second);
+    if (yes && valid) {
+        if (question.data2 & 0x10000000u) {
+            if (question.offer.data.size() == sizeof(std::uint32_t)) {
+                ByteReader amount(question.offer.data);
+                send_loot_item(slot, (question.data2 & 1u) != 0, amount.le<std::uint32_t>());
+            }
+        } else send_loot_item(slot, (question.data2 & 1u) != 0);
+    }
+    else loot_close_on_complete_ = false;
+    continue_extension_loot_all();
+}
+
+void GameConnection::continue_extension_loot_all() {
+    if (!extension_loot_all_ || !loot_ || !loot_->open || loot_->pending_requests || loot_popup_pending_ || quantity_) return;
+    while (!loot_all_queue_.empty()) {
+        const auto slot = loot_all_queue_.front(); loot_all_queue_.pop_front();
+        if (!loot_->items.contains(slot)) continue;
+        extension_loot_dispatch_ = true;
+        loot_item(slot, true);
+        extension_loot_dispatch_ = false;
+        if (!loot_ || loot_->pending_requests || loot_popup_pending_ || quantity_) return;
+    }
+    extension_loot_all_ = false; loot_all_active_ = false;
+    if (loot_close_on_complete_) end_loot();
+}
+
 void GameConnection::loot_item(std::int16_t corpse_slot, bool auto_loot, bool shift, bool ctrl) {
     // CLootWnd::RequestLootSlot(slot, auto loot) @0x6be3a0: nothing while coin is held, or an item without auto loot;
     // a no-drop item may ask first ("%s is a NO DROP item, ...", 20 s; the window's popup flag set until answered).
@@ -978,22 +1068,82 @@ void GameConnection::loot_item(std::int16_t corpse_slot, bool auto_loot, bool sh
     // (WndNotification 0x24) puts the quantity in the request's last dword and sends it. The player's own corpse,
     // and a single item, send at once with quantity 0.
     if (!loot_ || !loot_->open) return;
-    loot_close_on_complete_ = false;
+    if (extension_loot_all_ && !extension_loot_dispatch_) return;
+    if (quantity_ && quantity_->op == QuantityOp::ExtensionLoot) return;
+    const auto extra_question = [](const Confirmation& question) {
+        return question.id == kConfirmLootNoDrop && (question.data2 & 0x80000000u);
+    };
+    if ((confirmation_ && extra_question(*confirmation_)) ||
+        std::any_of(confirm_queue_.begin(), confirm_queue_.end(), extra_question)) return;
+    if (!extension_loot_all_) loot_close_on_complete_ = false;
     if (std::any_of(cursor_coins_.begin(), cursor_coins_.end(), [](std::uint32_t c) { return c != 0; })) return;
     if (inventory_.cursor() && !auto_loot) return;
     auto it = loot_->items.find(corpse_slot);
     if (it == loot_->items.end()) return;
-    if (loot_asks_no_drop(it->second)) {
+    const auto generation = loot_session_generation_;
+    const auto corpse = loot_->corpse_id;
+    const Item item = it->second;
+    bool plain = false;
+    const auto warning = loot_warning(item, plain);
+    // An extension may retire or replace the received corpse synchronously.
+    if (!loot_ || !loot_->open || loot_session_generation_ != generation || loot_->corpse_id != corpse || !loot_->items.contains(corpse_slot) ||
+        loot_identity(loot_->items.at(corpse_slot)) != loot_identity(item)) return;
+    if (plain && loot_->pending_requests) return;
+    if (plain && !extension_loot_all_ && !loot_asks_no_drop(item) &&
+        game::loot_asks_quantity(looting_own_corpse(), static_cast<std::int32_t>(item.stack_count))) {
+        loot_item_after_warning(corpse_slot, auto_loot, shift, ctrl, false, true);
+        return;
+    }
+    if (warning) {
         loot_popup_pending_ = true;
         Confirmation c;
         c.id = kConfirmLootNoDrop;
-        c.text = game::loot_no_drop_question(it->second.name);
+        c.text = *warning;
+        c.plain_text = plain;
         c.timeout_ms = game::kLootConfirmMs;
         c.data = static_cast<std::uint16_t>(corpse_slot);
-        c.data2 = auto_loot ? 1 : 0;
+        c.data2 = auto_loot ? 1u : 0u;
+        if (plain || extension_loot_all_) {
+            c.data2 |= 0x80000000u;
+            c.value = std::to_string(loot_session_generation_) + ":" + std::to_string(loot_->corpse_id) + ":" + loot_identity(item);
+        }
         ask(std::move(c));
         return;
     }
+    loot_item_after_warning(corpse_slot, auto_loot, shift, ctrl, extension_loot_dispatch_);
+}
+
+void GameConnection::confirm_extension_loot_quantity(std::int16_t corpse_slot, bool automatic, std::uint32_t quantity) {
+    if (!quantity || state_ != ConnectionState::InZone || zone_change_pending_ || !loot_ || !loot_->open) return;
+    const auto found = loot_->items.find(corpse_slot);
+    if (found == loot_->items.end() || quantity > found->second.stack_count) return;
+    const auto generation = loot_session_generation_;
+    const auto corpse = loot_->corpse_id;
+    const Item item = found->second;
+    bool plain = false;
+    const auto warning = loot_warning(item, plain);
+    if (!loot_ || !loot_->open || generation != loot_session_generation_ || corpse != loot_->corpse_id ||
+        !loot_->items.contains(corpse_slot) || loot_identity(loot_->items.at(corpse_slot)) != loot_identity(item)) return;
+    if (!warning) { send_loot_item(corpse_slot, automatic, quantity); return; }
+    Confirmation question;
+    question.id = kConfirmLootNoDrop;
+    question.text = *warning + "\nQuantity: " + std::to_string(quantity);
+    question.plain_text = plain;
+    question.timeout_ms = game::kLootConfirmMs;
+    question.data = static_cast<std::uint16_t>(corpse_slot);
+    question.data2 = 0x90000000u | (automatic ? 1u : 0u);
+    question.value = std::to_string(generation) + ":" + std::to_string(corpse) + ":" + loot_identity(item);
+    ByteWriter amount; amount.le(quantity); question.offer.data = std::move(amount).take();
+    loot_popup_pending_ = true;
+    ask(std::move(question));
+}
+
+void GameConnection::loot_item_after_warning(std::int16_t corpse_slot, bool auto_loot, bool shift, bool ctrl,
+                                            bool whole, bool warning_after_quantity) {
+    if (!loot_ || !loot_->open) return;
+    const auto it = loot_->items.find(corpse_slot);
+    if (it == loot_->items.end()) return;
+    if (whole) { send_loot_item(corpse_slot, auto_loot); return; }
     if (game::loot_asks_quantity(looting_own_corpse(), static_cast<std::int32_t>(it->second.stack_count))) {
         game::QuantityOpen q;
         q.max = static_cast<std::int32_t>(it->second.stack_count);
@@ -1003,14 +1153,15 @@ void GameConnection::loot_item(std::int16_t corpse_slot, bool auto_loot, bool sh
         game::QuantityResult r = game::quantity_dialog_open(q);
         if (r.closed) return;
         if (r.accepted) {
-            send_loot_item(corpse_slot, auto_loot, static_cast<std::uint32_t>(r.quantity));
+            if (warning_after_quantity) confirm_extension_loot_quantity(corpse_slot, auto_loot, static_cast<std::uint32_t>(r.quantity));
+            else send_loot_item(corpse_slot, auto_loot, static_cast<std::uint32_t>(r.quantity));
             return;
         }
         QuantityRequest req;
         req.slot = ItemSlot::corpse(corpse_slot);
         req.max = static_cast<std::uint32_t>(q.max);
         req.start = static_cast<std::uint32_t>(r.slider);
-        req.loot = true;
+        req.op = warning_after_quantity ? QuantityOp::ExtensionLoot : QuantityOp::Loot;
         req.auto_loot = auto_loot;
         req.centred = true;
         quantity_ = req;
@@ -1034,6 +1185,7 @@ void GameConnection::send_loot_item(std::int16_t corpse_slot, bool auto_loot, st
         // the player can start it again.
         if (loot_->pending_requests != 0) --loot_->pending_requests;
         loot_all_queue_.clear();
+        extension_loot_all_ = false;
         loot_all_active_ = false;
         loot_close_on_complete_ = false;
     }
@@ -1043,6 +1195,7 @@ void GameConnection::loot_all() {
     // CLootWnd::WndNotification @0x6be180, Loot All: at once from the player's own corpse or without LootAllConfirm,
     // else "Loot all, are you sure?" (11018, 20 s) first.
     if (!loot_ || !loot_->open) return;
+    if (quantity_ && quantity_->op == QuantityOp::ExtensionLoot) return;
     // Hailstone's own: the original opens the question even while a Loot All runs, and its yes is then ignored by
     // LootAll's guard (loot_all_now); skip the question that would do nothing.
     if (loot_all_active_) return;
@@ -1070,7 +1223,25 @@ void GameConnection::loot_all_now() {
         loot_all_deferred_ = true;
         return;
     }
+    // Extra binding questions require a serial workflow so every consequential
+    // item can be approved independently. Keep the native scan unchanged when
+    // the extension supplies no warning for this corpse.
+    const auto generation = loot_session_generation_;
+    const auto snapshot = loot_->items;
+    bool custom = false;
+    for (const auto& [slot, item] : snapshot) {
+        (void)slot; bool plain = false; loot_warning(item, plain);
+        custom = custom || plain;
+    }
+    if (!loot_ || !loot_->open || loot_session_generation_ != generation) return;
     loot_close_on_complete_ = true; // LootAll(1): the window closes once the last answer is in
+    if (custom) {
+        extension_loot_all_ = loot_all_active_ = true;
+        for (const bool bags : {true, false}) for (const auto& [slot, item] : snapshot)
+            if (item.is_bag() == bags) loot_all_queue_.push_back(slot);
+        continue_extension_loot_all();
+        return;
+    }
     std::vector<game::LootAllItem> items;
     for (const auto& [slot, item] : loot_->items) items.push_back({slot, item.is_bag(), loot_asks_no_drop(item)});
     game::LootAllPlan plan = game::plan_loot_all(items, loot_popup_pending_);
@@ -1097,6 +1268,9 @@ void GameConnection::loot_all_now() {
 
 void GameConnection::end_loot() {
     if (!loot_) return;
+    extension_loot_all_ = false;
+    if (quantity_ && quantity_->op == QuantityOp::ExtensionLoot) quantity_.reset();
+    loot_session_generation_ = core::next_process_identity();
     send_zone(encode_end_loot_request(loot_->corpse_id));
     hide_looted_corpse(); // /hidecorpses looted (net/game_connection_game_commands.cpp)
     // The server answers OP_LootComplete, which closes the session.
@@ -1119,6 +1293,13 @@ void GameConnection::request_item(const game::ItemLink& link) {
 void GameConnection::request_item_link(std::uint32_t item_id, const std::string& name, std::uint32_t flags, bool shift) {
     if (state_ != ConnectionState::InZone) return;
     send_zone(encode(ItemLinkRequest{item_id, shift ? flags | 2 : flags, name}));
+}
+
+void GameConnection::inspect_received_item(const Item& item) {
+    if (state_ == ConnectionState::InZone && item.id) {
+        item_displays_.push_back(item);
+        if (item_displays_.size() > 16) item_displays_.pop_front();
+    }
 }
 
 std::optional<Item> GameConnection::take_item_display() {

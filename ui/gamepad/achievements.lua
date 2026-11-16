@@ -1,3 +1,4 @@
+local API = hs.UI
 local W = dofile("lib/window.lua")
 local K = dofile("lib/keyboard.lua")
 local T, pad = W.T, W.pad
@@ -38,7 +39,7 @@ local browser = dofile("lib/achievement_browser.lua").new({
   end,
 })
 ui.window("Achievements", function()
-  if not eq.InGame() then browser.reset(); return end
+  if not API.session.InGame() then browser.reset(); return end
   local open = W.shown("AchievementsWnd") -- every frame, hidden too: the achievement key toggles it only while claimed
   local state = browser.readState()
   if not state or not state.shown or not open then K.cancel(keyboard); return end
@@ -57,7 +58,7 @@ ui.window("Achievements", function()
   end
 end)
 ui.window("Achievement", function()
-  if not eq.InGame() then browser.reset(); return end
+  if not API.session.InGame() then browser.reset(); return end
   local detail = browser.floating()
   if not detail or not W.shown("AchievementWnd") then return end
   if W.begin("Achievement",{w=1320,h=940,title="Achievement",hints={{"a","Activate"},{"b","Close"}}}) then
@@ -67,5 +68,5 @@ ui.window("Achievement", function()
     browser.detail(detail,T.S,false)
     ui.EndChild()
   end
-  if W.finish() then eq.ShowWindow("AchievementWnd",false) end
+  if W.finish() then API.windows.Show("AchievementWnd",false) end
 end)

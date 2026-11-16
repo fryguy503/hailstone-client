@@ -2,6 +2,7 @@
 -- The worn slots as the inventory's grid (the weapons apart), the gear as a list of slot and item names beside it
 -- when the window is wide enough (the inspect answer has names and icons only), and the player's inspect message:
 -- yours is editable here, as in the stock window (the game saves it). Done is the window's button.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -10,7 +11,7 @@ local T = hud.T
 local C = T.color
 local WINDOW = "InspectWnd"
 
--- The window's slots InvSlot0..22 are the worn slots in eq.Item's numbering (0 charm .. 22 ammo).
+-- The window's slots InvSlot0..22 are the worn slots in hs.Item's numbering (0 charm .. 22 ammo).
 local GRID = {
   { 1, 2, 3, 4, 5 },     -- ear, head, face, ear, neck
   { 6, 7, 8, 17, 20 },   -- shoulders, arms, back, chest, waist
@@ -33,16 +34,16 @@ local GRID_W = 5 * SLOT + 4 * GAP
 local function slot(n, x, y, size, s)
   ui.SetCursorScreenPos(x, y)
   local id = "InvSlot" .. n
-  local item = eq.SlotItem(WINDOW, id)
-  items.Slot("##ins" .. n, x, y, size, s, item, SHORT[n], eq.SlotName(n) or SHORT[n],
-    function(button, outside) eq.ClickChild(WINDOW, id, button, outside) end)
+  local item = API.inventory.SlotItem(WINDOW, id)
+  items.Slot("##ins" .. n, x, y, size, s, item, SHORT[n], API.inventory.SlotName(n) or SHORT[n],
+    function(button, outside) API.windows.ClickChild(WINDOW, id, button, outside) end)
 end
 
 local function gearList(w, h, s)
   ui.BeginChild("##gear", w, h, false)
   local filled = 0
   for _, n in ipairs(ORDER) do
-    local item = eq.SlotItem(WINDOW, "InvSlot" .. n)
+    local item = API.inventory.SlotItem(WINDOW, "InvSlot" .. n)
     if item then
       filled = filled + 1
       ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, SHORT[n])
@@ -84,7 +85,7 @@ local function drawWindow(x, y, w, h, s)
   end
   ui.SetCursorScreenPos(x0, y0 + gridH + 8 * s)
   -- the inspect message (editable for your own)
-  local own = eq.ChildState(WINDOW, "INSW_Edit") ~= false
+  local own = API.windows.ChildState(WINDOW, "INSW_Edit") ~= false
   W.Heading(own and "Your inspect message" or "Message")
   local btnH = S.ButtonHeight(s)
   local _, left = ui.GetContentRegionAvail()
@@ -107,6 +108,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Inspect", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Inspect", WINDOW_OPTS, drawWindow)
 end)

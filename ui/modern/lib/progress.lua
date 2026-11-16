@@ -1,10 +1,11 @@
 -- Pieces the character-progress windows share (aa, train, leadership, tradeskill, title, tracking, the skill
 -- pickers): a list child of the game window drawn as rows of our own (P.Rows), a search box, an empty state, small
--- stat tiles. Like lib/widgets.lua they read the original child and hand clicks to it (eq.ListClick, eq.PickUp), so
+-- stat tiles. Like lib/widgets.lua they read the original child and hand clicks to it (hs.ListClick, hs.PickUp), so
 -- the window's own handler runs.
 --
 --   local P = dofile("lib/progress.lua")
 --   P.Rows("TitleWnd", "Title_AvailableTitles", 0, -40, { rowH = 22, filter = function(row, texts) ... end })
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local C = T.color
 
@@ -13,21 +14,21 @@ local P = {}
 -- ---------------------------------------------------------------- testing
 -- ui/settings/modern.txt test.open.<screen>=1: `open(...)` runs once, 6 s after zoning in (or =<n>: n s after), for
 -- screenshots of windows the game opens only from the world (a tradeskill bag, a right click on the Actions window).
--- Without `open` the window `screen` is shown (eq.ShowWindow(screen, true)). Arguments after `open` are passed to it,
--- so a caller drawing every frame need not make a closure: P.TestOpen(WINDOW, eq.ClickChild, "ActionsWindow", "X",
+-- Without `open` the window `screen` is shown (hs.ShowWindow(screen, true)). Arguments after `open` are passed to it,
+-- so a caller drawing every frame need not make a closure: P.TestOpen(WINDOW, hs.ClickChild, "ActionsWindow", "X",
 -- "right"). Once the setting is found missing the call returns at once.
 modern_progress_test = modern_progress_test or { done = {}, since = nil }
 local test = modern_progress_test
 test.noSelect = test.noSelect or {} -- [win][list] = true: no test.select setting for that list
 function P.TestOpen(screen, open, ...)
   if test.done[screen] then return end
-  if not eq.InGame() then test.since = nil return end
+  if not API.session.InGame() then test.since = nil return end
   local delay = tonumber(ui.GetSetting("test.open." .. screen) or "")
   if not delay then test.done[screen] = true return end
   test.since = test.since or ui.GetTime()
   if ui.GetTime() - test.since < math.max(delay, 6) then return end
   test.done[screen] = true
-  if open then open(...) else eq.ShowWindow(screen, true) end
+  if open then open(...) else API.windows.Show(screen, true) end
 end
 
 -- ---------------------------------------------------------------- small pieces
@@ -90,11 +91,11 @@ end
 
 -- ---------------------------------------------------------------- rows over a list child
 -- P.Rows(win, id, w, h, opts): the list child's rows (a copy of their texts, kept as below) as a
--- scrolled column of rows drawn by opts.draw, only those in view (each asks eq.ListRow for its colour). A click
--- selects the row in the original (eq.ListClick, so the window's handler runs), a right click is the original's,
+-- scrolled column of rows drawn by opts.draw, only those in view (each asks hs.ListRow for its colour). A click
+-- selects the row in the original (hs.ListClick, so the window's handler runs), a right click is the original's,
 -- a drag picks up the hot button the row makes where the original lets it (opts.drag).
 --   w, h            the area (0: the rest; negative h: leave that much below)
---   opts.rows       the list's rows when the caller has them already (eq.WindowList's answer this frame; not kept)
+--   opts.rows       the list's rows when the caller has them already (hs.WindowList's answer this frame; not kept)
 --   opts.rowH       a row's height in design pixels (default: a line of small text and padding)
 --   opts.scale      the containing dialog's effective scale (default: the global UI scale)
 --   opts.filter(row, texts) -> bool   leaves rows out (row 0-based)
@@ -103,9 +104,9 @@ end
 --   opts.sort(a, b) -> bool           orders rows (each { row, texts }); the same function from frame to frame
 --                                     sorts again only when the rows shown change
 --   opts.draw(row, texts, x0, y0, x1, y1, s, state)   state = { selected, hovered, color = { r, g, b }, colors (the
---                                     row's cell colours, eq.ListRow's texts.colors, or nil) }; default: the first
+--                                     row's cell colours, hs.ListRow's texts.colors, or nil) }; default: the first
 --                                     column's text. (state and its tables are reused: read them in the call.)
---   opts.drag        a drag picks the row up (eq.PickUp)
+--   opts.drag        a drag picks the row up (hs.PickUp)
 --   opts.empty, opts.emptySub         the text shown when no row is left
 --   opts.doubleClick(row)             a double click on a row (after its click)
 --   opts.tooltip(row, texts)          a tooltip for a hovered row
@@ -133,14 +134,14 @@ local function testSelect(win, id, count)
   if pick and count <= pick then return end -- (not yet listed)
   if pick then
     test.done[win .. "." .. id] = true
-    eq.ListClick(win, id, pick, "left")
+    API.windows.ListClick(win, id, pick, "left")
   end
   -- (none set, or done: do not ask again)
   if not none then none = {}; test.noSelect[win] = none end
   none[id] = true
 end
 
--- The list's rows are kept as a copy (eq.WindowList reads and makes every row's texts, and the sort ran over them,
+-- The list's rows are kept as a copy (hs.WindowList reads and makes every row's texts, and the sort ran over them,
 -- each frame): read whole when the row count, the first or the last row changes (or after a click on the list),
 -- else a few rows a frame, and the rows in view each frame, as lib/widgets.lua's sorted lists do. The rows shown are
 -- filtered again each frame over the copy (opts.filterKey, any value that changes when the filter would, keeps the
@@ -163,18 +164,18 @@ local function rowCopy(win, id, pool, n)
   end
   local whole = c.n ~= n or c.dirty
   if not whole and n > ROW_READS then -- (a shorter list is read whole below anyway)
-    whole = not sameTexts(c.rows[1], eq.ListRow(win, id, 0) or false)
-      or not sameTexts(c.rows[n], eq.ListRow(win, id, n - 1) or false)
+    whole = not sameTexts(c.rows[1], API.windows.ListRow(win, id, 0) or false)
+      or not sameTexts(c.rows[n], API.windows.ListRow(win, id, n - 1) or false)
   end
   if whole then
     local rows = c.rows
-    for r = 0, n - 1 do rows[r + 1] = eq.ListRow(win, id, r) or false end
+    for r = 0, n - 1 do rows[r + 1] = API.windows.ListRow(win, id, r) or false end
     for r = #rows, n + 1, -1 do rows[r] = nil end
     c.n, c.next, c.dirty, c.version = n, 0, false, c.version + 1
   elseif n > 0 then
     for _ = 1, math.min(n, ROW_READS) do
       local r = c.next
-      local texts = eq.ListRow(win, id, r) or false
+      local texts = API.windows.ListRow(win, id, r) or false
       if not sameTexts(c.rows[r + 1], texts) then
         c.rows[r + 1] = texts
         c.version = c.version + 1
@@ -225,7 +226,7 @@ local NO_OPTS = {}
 function P.Rows(win, id, w, h, opts)
   opts = opts or NO_OPTS
   local s = opts.scale or ui.GetIO().uiScale or 1
-  local count, _, selected = eq.ListInfo(win, id)
+  local count, _, selected = API.windows.ListInfo(win, id)
   selected = selected or -1
   local pool = rowPool(win, id)
   local c
@@ -263,17 +264,17 @@ function P.Rows(win, id, w, h, opts)
     local hovered = ui.IsItemHovered()
     if opts.drag and T.DragFrom(win, id, e.row + 1) then clicked = false end
     if clicked then
-      eq.ListClick(win, id, e.row, "left")
+      API.windows.ListClick(win, id, e.row, "left")
       if opts.doubleClick and ui.IsMouseDoubleClicked(ui.Mouse.Left) then opts.doubleClick(e.row) end
     end
     if ui.IsItemClicked(ui.Mouse.Right) and not io.alt then
-      eq.ListClick(win, id, e.row, "right")
+      API.windows.ListClick(win, id, e.row, "right")
       T.TakeRightClick()
       clicked = true
     end
     if clicked and pool.copy == c then c.dirty = true end -- (a click may rebuild the list: read it whole next frame)
     -- a row in view is drawn from what the list answers now, and brings the copy up to date
-    local full, r, g, b = eq.ListRow(win, id, e.row)
+    local full, r, g, b = API.windows.ListRow(win, id, e.row)
     if full and pool.copy == c and not sameTexts(c.rows[e.row + 1], full) then
       c.rows[e.row + 1] = full
       c.version = c.version + 1

@@ -403,9 +403,10 @@ ZoneRenderer::PreparedLand ZoneRenderer::prepared_land(const Prepared& p) {
         if (d.land_fade < out.triangles.size()) out.triangles[d.land_fade] += d.index_count / 3;
         if (d.land_fade != 0) continue;
         for (std::uint32_t i = d.first_index; i + 2 < d.first_index + d.index_count && i + 2 < p.indices.size(); i += 3) {
-            bool tinted = false;
-            for (std::uint32_t k = 0; k < 3; ++k) tinted |= (p.vertices[p.indices[i + k]].color2 >> 24) != 0;
-            out.tinted_triangles += tinted ? 1 : 0;
+            // Keep the loop-carried OR integral: optimized MSVC miscompiles bool |= in this counter.
+            std::uint32_t alpha = 0;
+            for (std::uint32_t k = 0; k < 3; ++k) alpha |= p.vertices[p.indices[i + k]].color2 >> 24;
+            out.tinted_triangles += alpha != 0 ? 1 : 0;
         }
     }
     out.tree_kinds = tree_models.size();

@@ -1,6 +1,7 @@
 -- Exercise the actual pack scripts. Getters return copied data and omit cached
 -- tables; unknown APIs and attempted background requests fail the fixture.
 CLIENT_ROOT = CLIENT_ROOT or (arg and arg[1]) or "."
+local attachUI = assert(loadfile(CLIENT_ROOT .. "/tests/lua_ui_api_mock.lua"))()
 local checks = 0
 local function check(value, why) checks = checks + 1; assert(value, why) end
 local function copy(value)
@@ -65,7 +66,7 @@ for _, pack in ipairs({ "modern", "gamepad" }) do
     if failure then local reason=failure;failure=nil;return false,reason end
     return true
   end
-  eq = setmetatable({
+  hs = setmetatable({
     InGame=function() return inGame end,
     UiAnimation=function(name)
       imageRequests[#imageRequests+1]=name
@@ -102,6 +103,7 @@ for _, pack in ipairs({ "modern", "gamepad" }) do
       if screen=="AchievementsWnd" then state.shown=shown elseif detail then detail.shown=shown end
     end,
   },{__index=function(_,name) error("Unexpected game/action API: "..name) end})
+  attachUI(hs)
   local function click(label,caption,width,height)
     labels[key(label)]=caption or label
     labelScopes[key(label)]=currentWindow

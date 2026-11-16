@@ -2,6 +2,7 @@
 -- names, the list in the game's colours, Track (or a double click), and the game's options (sort, players, pets,
 -- mercenaries, automatic update) folded under the list. Every control is the original's child: the toggles and
 -- boxes are its check buttons, the drop-downs its combo boxes, a row click selects in its list (TRW_TrackingList).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -38,7 +39,7 @@ local function conToggle(x, y, size, s, con)
     ui.SetTooltip(con[3] .. (not enabled and "\nOnly rangers filter by colour"
       or on and "\nListed: click to hide" or "\nHidden: click to list"))
   end
-  if clicked and enabled then eq.ClickChild(WINDOW, con[1], "left") end
+  if clicked and enabled then API.windows.ClickChild(WINDOW, con[1], "left") end
 end
 
 local OPTS = {
@@ -67,7 +68,7 @@ local function body(x, y, w, h, s)
       T.Text(x0 + 8 * s_, (y0 + y1 - th) / 2, T.Fit(texts[1] or "", x1 - x0 - 16 * s_, T.font.small), st.color,
         T.font.small)
     end,
-    doubleClick = function() eq.ClickChild(WINDOW, "TRW_TrackButton", "left") end,
+    doubleClick = function() API.windows.ClickChild(WINDOW, "TRW_TrackButton", "left") end,
     empty = needle ~= "" and "No name matches" or "Nothing to track nearby",
     emptySub = needle == "" and "Turn on more colours above, or move somewhere busier" or nil,
   })
@@ -100,9 +101,9 @@ local function body(x, y, w, h, s)
   }, btnH)
 end
 
-local function testOpen() eq.ShowWindow(WINDOW, true) end
+local function testOpen() API.windows.Show(WINDOW, true) end
 ui.window("Tracking", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen) -- testing: test.open.TrackingWnd=1
   hud.Dialog(WINDOW, "Tracking", OPTS, body)
 end)

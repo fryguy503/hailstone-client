@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include <imgui.h>
 
 #include "game/nameplate_style.h"
+#include "app/nameplate_canvas_painter.h"
 #include "render/vk_context.h"
 
 namespace hailstone::app {
@@ -31,6 +33,7 @@ struct NameplateText {
     bool highlight = false;         // the dark plate, edge and marker (the target's, option target_plate_highlight)
     float alpha = 1.0f;             // 0..1 on everything drawn (an overlapped name fades, game/nameplate_overlap.h)
     float scale = 1.0f;             // on the style's size (option plate_far_scale, game::plate_distance_factor)
+    std::optional<game::NameplateCanvasModel> canvas;
 };
 
 // How every plate's text is drawn (game/nameplate_style.h): the defaults are ImGui's current font at its size with a
@@ -41,6 +44,7 @@ struct NameplateDrawStyle {
     bool faux_bold = false;         // each letter struck twice, a pixel apart (a face with no bold file)
     game::PlateEdge edge = game::PlateEdge::Shadow;
     float tag_scale = 1.0f;         // the lines under the name, on the name's size
+    NameplateCanvasPaintStyle canvas;
 };
 
 class NameplateLayer {
@@ -54,9 +58,11 @@ public:
     // Starts a frame of plates on `dl`; `view`: the 3D view in window pixels (x, y, width, height), `near_plane` and
     // `far_plane` the projection's (they give the scene's view depth from its depth buffer).
     void begin(const render::FrameInfo& frame, ImDrawList* dl, const glm::vec4& view, float near_plane, float far_plane);
-    void draw(const NameplateText& plate);
+    bool draw(const NameplateText& plate);
     // The name's box under pos: the widest line by the lines' height (what the overlap rules measure).
     glm::vec2 size_of(const NameplateText& plate) const;
+    glm::vec4 bounds_of(const NameplateText& plate) const;
+    bool supports_canvas() const { return usable_ && depth_test_; }
     // From the next draw (the client's, set each frame from its options).
     void set_style(const NameplateDrawStyle& style) { style_ = style; }
     // Off: plates are drawn plain (the viewer's --plate-test-no-depth, the reference of its comparison).
@@ -77,7 +83,7 @@ private:
     };
     static void bind(const ImDrawList*, const ImDrawCmd* cmd);
     void create(const std::filesystem::path& shader_dir);
-    void paint(const NameplateText& plate) const;
+    bool paint(const NameplateText& plate) const;
     ImFont* font() const;
     float name_size(const NameplateText& plate) const; // the name's text size in ImGui pixels
 

@@ -6,9 +6,10 @@
 --            Y sends one: To and Note on the keyboard, then A on an item of your bags sends it (the stock Send
 --            button: a stack asks how many), or money: A on a coin of your purse (the inventory's coin buttons: the
 --            quantity dialog asks how much) picks it, and Send money sends what is picked, else asks the platinum
---            on the keyboard (eq.SendParcelMoney)
+--            on the keyboard (hs.SendParcelMoney)
 -- Y inspects the focused item. On Buy, X switches "Usable only" (the stock MW_UsableButton, on to start). The price
 -- and the merchant's rules are the stock window's.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -23,7 +24,7 @@ local buyList = { offset = 0 }
 local pendingBuy, pendingSell = nil, nil -- a row / slot selected this frame, its button pressed next frame
 local parcelList = { offset = 0 }
 local sendMode, pendingSend, parcelNote = false, nil, nil
--- the money picked with the purse's coins (eq.Parcels' money, by its serial), platinum first
+-- the money picked with the purse's coins (hs.Parcels' money, by its serial), platinum first
 local sendCoins, moneySerial = { 0, 0, 0, 0 }, nil
 local kb, kbFor = K.new(), nil -- the keyboard, and what it types ("to", "note", "money")
 -- The pad's focus: on the first row or slot when a page shows (the other page's item is gone), and on the slot now in
@@ -65,17 +66,17 @@ ui.window("Merchant", function()
   T.frame()
   X.frame() -- runs a purse coin's click once A is up (its quantity dialog)
   -- the stock button the previous frame asked for, once the selection is the game's
-  if pendingBuy then eq.ClickChild(MW, "MW_Buy_Button", "left") pendingBuy = nil end
-  if pendingSell then eq.ClickChild(MW, "MW_Sell_Button", "left") pendingSell = nil end
-  if pendingSend then eq.ClickChild(MW, "MW_Send_Button", "left") pendingSend = nil end
+  if pendingBuy then API.windows.ClickChild(MW, "MW_Buy_Button", "left") pendingBuy = nil end
+  if pendingSell then API.windows.ClickChild(MW, "MW_Sell_Button", "left") pendingSell = nil end
+  if pendingSend then API.windows.ClickChild(MW, "MW_Send_Button", "left") pendingSend = nil end
   -- (read once a frame, after the clicks above: each read builds the parcel list)
-  local parcelRows, parcelClaiming, _, parcelSending, _, parcelMoney = eq.Parcels()
+  local parcelRows, parcelClaiming, _, parcelSending, _, parcelMoney = API.inventory.Parcels()
   local parcelsHere = parcelRows ~= nil
   if page == 3 and not parcelsHere then page = 1 end
-  local title = eq.WindowTitle(MW) or ""
-  local pp, gp, sp, cp = eq.Money()
+  local title = API.windows.Title(MW) or ""
+  local pp, gp, sp, cp = API.character.Money()
   local hints = { { "a", page == 1 and "Buy" or "Sell" }, { "y", "Inspect" }, { "lb", "Previous page" }, { "rb", "Next page" }, { "b", "Close" } }
-  local _, usableOnly = eq.ChildState(MW, "MW_UsableButton")
+  local _, usableOnly = API.windows.ChildState(MW, "MW_UsableButton")
   if page == 1 then table.insert(hints, 3, { "x", usableOnly and "Show everything" or "Usable only" }) end
   if kb.open then
     hints = K.HINTS
@@ -95,7 +96,7 @@ ui.window("Merchant", function()
       lastPage = page
     end
     -- the stock window's page: Purchase (Buy and Sell) or Parcels, where the purse's coins pick money to send
-    eq.SetTabPage(MW, "MW_MerchantSubwindows", page == 3 and 2 or 0)
+    API.windows.SetTabPage(MW, "MW_MerchantSubwindows", page == 3 and 2 or 0)
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     local listX1 = x1 - T.px(420)
@@ -104,17 +105,17 @@ ui.window("Merchant", function()
     local focusedItem, focusedWhere, focusedRow, focusedCompare
     if page == 1 then
       if not kb.open and W.pressed("x") then
-        eq.ClickChild(MW, "MW_UsableButton", "left")
+        API.windows.ClickChild(MW, "MW_UsableButton", "left")
         buyList.focusNext, buyList.lastFocus = 1, nil
       end
-      local rows = eq.ListInfo(MW, "ItemList") or 0
+      local rows = API.windows.ListInfo(MW, "ItemList") or 0
       if rows == 0 then
         T.draw(x0, top, usableOnly and "Nothing here you can use. X shows everything." or "Nothing for sale.", C.dim)
       end
       local rowH = 64
       local visible = math.max(1, math.floor((y1 - top) / T.px(rowH + 10)))
       W.list("buy", buyList, rows, visible, rowH, listX1 - x0, function(i, rx0, ry0, rx1, ry1, focused)
-        local texts, _, _, _, tex, u0, v0, u1, v1 = eq.ListRow(MW, "ItemList", i - 1)
+        local texts, _, _, _, tex, u0, v0, u1, v1 = API.windows.ListRow(MW, "ItemList", i - 1)
         if not texts then return end
         local s = ry1 - ry0 - T.px(12)
         if tex then T.icon(tex, u0, v0, u1, v1, rx0 + T.px(8), ry0 + T.px(6), rx0 + T.px(8) + s, ry0 + T.px(6) + s) end
@@ -126,28 +127,28 @@ ui.window("Merchant", function()
         if focused then
           focusedWhere = "Price: " .. price
           focusedRow = { name = texts[2] or "", qty = texts[3] or "", price = price, tex = tex, uv = { u0, v0, u1, v1 } }
-          focusedCompare = eq.CompareSlotItem(MW, "ItemList:" .. (i - 1)) -- Hailstone: against what you wear
+          focusedCompare = API.compare.SlotItem(MW, "ItemList:" .. (i - 1)) -- Hailstone: against what you wear
           if buyList.lastFocus ~= i then -- select it in the stock window: the price and the item to inspect
             buyList.lastFocus = i
-            eq.ListClick(MW, "ItemList", i - 1, "left")
+            API.windows.ListClick(MW, "ItemList", i - 1, "left")
           end
-          if W.pressed("y") then eq.ListClick(MW, "ItemList", i - 1, "right") end
+          if W.pressed("y") then API.windows.ListClick(MW, "ItemList", i - 1, "right") end
         end
       end, function(i)
-        eq.ListClick(MW, "ItemList", i - 1, "left")
+        API.windows.ListClick(MW, "ItemList", i - 1, "left")
         pendingBuy = true
       end)
     elseif page == 3 and kb.open then
       local r = K.draw(kb, pad, x0, top, math.min(listX1 - x0, T.px(1100)))
       if r == "ok" then
         local t = kb.text:match("^%s*(.-)%s*$") or ""
-        if kbFor == "to" then eq.SetWindowText(MW, "MW_Send_To_Edit", t)
-        elseif kbFor == "note" then eq.SetWindowText(MW, "MW_Note_Edit", t)
+        if kbFor == "to" then API.windows.SetText(MW, "MW_Send_To_Edit", t)
+        elseif kbFor == "note" then API.windows.SetText(MW, "MW_Note_Edit", t)
         elseif kbFor == "money" then
           local n = tonumber(t:match("%d+") or "")
-          local to = eq.WindowText(MW, "MW_Send_To_Edit") or ""
+          local to = API.windows.Text(MW, "MW_Send_To_Edit") or ""
           if n and n > 0 then
-            parcelNote = eq.SendParcelMoney(to, eq.WindowText(MW, "MW_Note_Edit") or "", n, 0, 0, 0)
+            parcelNote = API.inventory.SendParcelMoney(to, API.windows.Text(MW, "MW_Note_Edit") or "", n, 0, 0, 0)
               or (n .. "pp sent to " .. to)
           end
         end
@@ -165,7 +166,7 @@ ui.window("Merchant", function()
           local p = list[i]
           local it = p.item
           local s = ry1 - ry0 - T.px(12)
-          local tex, u0, v0, u1, v1 = eq.ItemIcon(it.icon)
+          local tex, u0, v0, u1, v1 = API.assets.ItemIcon(it.icon)
           if tex then T.icon(tex, u0, v0, u1, v1, rx0 + T.px(8), ry0 + T.px(6), rx0 + T.px(8) + s, ry0 + T.px(6) + s) end
           local name = it.name .. ((it.stackable and it.count > 1) and (" x" .. it.count) or "")
           local from = p.from ~= "" and ("From " .. p.from) or "From the server"
@@ -175,9 +176,9 @@ ui.window("Merchant", function()
             focusedItem = it
             focusedWhere = from .. (p.sent > 0 and (", " .. os.date("%b %d", p.sent)) or "") .. (p.note ~= "" and (": " .. p.note) or "")
           end
-        end, function(i) eq.RetrieveParcel(list[i].slot) end)
+        end, function(i) API.inventory.RetrieveParcel(list[i].slot) end)
       end
-      if not kb.open and W.pressed("x") and #list > 0 and claiming == 0 then eq.ClaimAllParcels() end
+      if not kb.open and W.pressed("x") and #list > 0 and claiming == 0 then API.inventory.ClaimAllParcels() end
       if not kb.open and W.pressed("y") then sendMode, sellRefocus, parcelNote = true, 1, nil end
     elseif page == 3 then
       -- sending: To, Note and money, then your bags (A on an item sends it)
@@ -190,8 +191,8 @@ ui.window("Merchant", function()
       for i, u in ipairs({ "pp", "gp", "sp", "cp" }) do
         if sendCoins[i] > 0 then picked[#picked + 1] = sendCoins[i] .. u end
       end
-      local to = eq.WindowText(MW, "MW_Send_To_Edit") or ""
-      local note = eq.WindowText(MW, "MW_Note_Edit") or ""
+      local to = API.windows.Text(MW, "MW_Send_To_Edit") or ""
+      local note = API.windows.Text(MW, "MW_Note_Edit") or ""
       local gap = T.px(10)
       local bh, bw = T.px(84), (listX1 - x0 - 2 * gap) / 3
       if sellRefocus == 1 then ui.SetKeyboardFocusHere() sellRefocus = nil end
@@ -208,7 +209,7 @@ ui.window("Merchant", function()
       if T.button("##pmoney", "Send money", bw, bh,
           { sub = #picked > 0 and table.concat(picked, " ") or "Platinum", align = 0, disabled = to == "" or sending }, pad) then
         if #picked > 0 then
-          local why = eq.SendParcelMoney(to, note, sendCoins[1], sendCoins[2], sendCoins[3], sendCoins[4])
+          local why = API.inventory.SendParcelMoney(to, note, sendCoins[1], sendCoins[2], sendCoins[3], sendCoins[4])
           parcelNote = why or (table.concat(picked, " ") .. " sent to " .. to)
           if not why then sendCoins = { 0, 0, 0, 0 } end
         else
@@ -217,10 +218,10 @@ ui.window("Merchant", function()
         end
       end
       -- your purse: the inventory's coin buttons, which on this page pick money to send
-      local mine = { eq.Money() }
+      local mine = { API.character.Money() }
       X.coinRow("pcoin", x0, listX1 - x0, function(i) return mine[i + 1] end,
-        function(i) X.afterA(function() eq.ClickChild("InventoryWindow", "IW_Money" .. i, "left") end) end,
-        { outlined = function(i) return select(2, eq.ChildState("InventoryWindow", "IW_Money" .. i)) == true end })
+        function(i) X.afterA(function() API.windows.ClickChild("InventoryWindow", "IW_Money" .. i, "left") end) end,
+        { outlined = function(i) return select(2, API.windows.ChildState("InventoryWindow", "IW_Money" .. i)) == true end })
       local size = T.px(76)
       local per = math.max(1, math.floor((listX1 - x0 + gap) / (size + gap)))
       local n = 0
@@ -233,7 +234,7 @@ ui.window("Merchant", function()
           if to == "" then
             parcelNote = "Pick who it is for first (To)."
           elseif not sending then
-            eq.ClickSlot(slot, bag, "left") -- selects it for the merchant
+            API.inventory.ClickSlot(slot, bag, "left") -- selects it for the merchant
             pendingSend = true
             parcelNote = item.name .. " sent to " .. to
           end
@@ -243,13 +244,13 @@ ui.window("Merchant", function()
       I.readBagSlots(bagSlots)
       for slot = 23, 32 do
         local it = bagSlots[slot]
-        if it and (it.bagSlots or 0) == 0 then cell(slot, nil, it, eq.SlotName(slot)) end
+        if it and (it.bagSlots or 0) == 0 then cell(slot, nil, it, API.inventory.SlotName(slot)) end
       end
       for slot = 23, 32 do
         local bag = bagSlots[slot]
         if bag and (bag.bagSlots or 0) > 0 then
           for i = 0, bag.bagSlots - 1 do
-            local it = eq.Item(slot, i)
+            local it = API.inventory.Item(slot, i)
             if it then cell(slot, i, it, bag.name) end
           end
         end
@@ -268,11 +269,11 @@ ui.window("Merchant", function()
         local clicked, focused = T.slot(I.cellId("sell", slot, bag), item, size, {}, pad)
         if focused then
           focusedItem, focusedWhere, focusedAt = item, where, n
-          if item then focusedCompare = eq.CompareItem(slot, bag) end -- Hailstone: against what you wear
-          if W.pressed("y") and item then eq.ClickSlot(slot, bag, "rightheld") end
+          if item then focusedCompare = API.compare.Item(slot, bag) end -- Hailstone: against what you wear
+          if W.pressed("y") and item then API.inventory.ClickSlot(slot, bag, "rightheld") end
         end
         if clicked and item then
-          eq.ClickSlot(slot, bag, "left") -- selects it for the merchant
+          API.inventory.ClickSlot(slot, bag, "left") -- selects it for the merchant
           pendingSell = true
         end
       end
@@ -280,13 +281,13 @@ ui.window("Merchant", function()
       I.readBagSlots(bagSlots)
       for slot = 23, 32 do
         local it = bagSlots[slot]
-        if it and (it.bagSlots or 0) == 0 then cell(slot, nil, it, eq.SlotName(slot)) end
+        if it and (it.bagSlots or 0) == 0 then cell(slot, nil, it, API.inventory.SlotName(slot)) end
       end
       for slot = 23, 32 do
         local bag = bagSlots[slot]
         if bag and (bag.bagSlots or 0) > 0 then
           for i = 0, bag.bagSlots - 1 do
-            local it = eq.Item(slot, i)
+            local it = API.inventory.Item(slot, i)
             if it then cell(slot, i, it, bag.name) end
           end
         end
@@ -346,9 +347,9 @@ ui.window("Merchant", function()
       T.draw(listX1 + T.px(42), sy + T.px(16), "SELECTED", C.dim)
       T.unfont()
       T.font(22)
-      local selName = eq.WindowText(MW, "MW_SelectedItemLabel") or ""
+      local selName = API.windows.Text(MW, "MW_SelectedItemLabel") or ""
       T.draw(listX1 + T.px(42), sy + T.px(48), T.fit(selName ~= "" and selName or "-", x1 - listX1 - T.px(60)))
-      T.draw(listX1 + T.px(42), sy + T.px(88), eq.WindowText(MW, "MW_SelectedPriceLabel") or "", C.endurance)
+      T.draw(listX1 + T.px(42), sy + T.px(88), API.windows.Text(MW, "MW_SelectedPriceLabel") or "", C.endurance)
       T.unfont()
     end
   end
@@ -357,5 +358,5 @@ ui.window("Merchant", function()
     sendMode, close = false, false
     parcelList.focusNext = 1
   end
-  if close then eq.ShowWindow(MW, false) end
+  if close then API.windows.Show(MW, false) end
 end)

@@ -475,7 +475,7 @@ TEST_CASE("browser host: messages too long for the helper are refused, not sent"
     CHECK_FALSE(r.host.tab(id)->closed);
     CHECK(r.host.available());
 
-    // Through the service, as mq.web and eq.Web* reach it: false, and nothing sent.
+    // Through the service, as mq.web and hs.Web* reach it: false, and nothing sent.
     app::WebService web({[&] { return &r.host; }, [] { return nullptr; }, [] { return std::string(); },
                          [] { return std::vector<std::string>{}; }, [] {}});
     auto mine = web.open("script:big", plugin::kCapWeb, "https://example.org/", 64, 64);

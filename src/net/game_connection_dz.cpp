@@ -1,6 +1,6 @@
 // GameConnection: expeditions over EQEmu's packets (net/dz_packets.h). The server owns the expedition: the
 // leader's commands go to it as typed and its answers (the info, member list and leader packets, and its own chat
-// lines) update the window (app/lua_eq_dz.cpp). Its expiry warning comes with the server's own chat line.
+// lines) update the window (app/lua_ui_dz.cpp). Its expiry warning comes with the server's own chat line.
 
 #include <algorithm>
 #include <cctype>

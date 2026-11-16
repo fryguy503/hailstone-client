@@ -1,5 +1,4 @@
-// GameConnection: the guild bank as CGuildBankWnd keeps it (its functions and its helpers at
-// 0x67c9c0..0x67f860), over EQEmu's packets (net/guild_bank_packets.h). The window is app/lua_eq_social.cpp's
+// GameConnection: guild-bank state over EQEmu's packets (net/guild_bank_packets.h). The window is app/lua_ui_social.cpp's
 // GuildBankWnd. The server keeps the bank and sends each slot's change to the guild's members in the zone.
 
 #include <algorithm>

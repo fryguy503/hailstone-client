@@ -2,7 +2,8 @@
 -- picker on it), then a row per tintable slot: the armour's colour now (a click takes it as the brush) and its new
 -- dye (a click paints the brush on it), with a mark on the slots that will change; the reagents needed, Reset and
 -- Save Dye (a Vial of Prismatic Dye per changed slot; the window enables it when you have enough). Every swatch is
--- the window's own button (eq.ClickChild), so painting and dyeing are the window's.
+-- the window's own button (hs.ClickChild), so painting and dyeing are the window's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -24,7 +25,7 @@ local function drawWindow(x, y, w, h, s)
   -- the brush
   local br, bg, bb = K.Tint(WINDOW, "TINT_CurBrushBtn")
   if K.Swatch("##brush", br, bg, bb, 30 * s, s, { width = 54 * s, tooltip = "Choose the brush's color" }) then
-    eq.ClickChild(WINDOW, "TINT_CurBrushBtn", "left")
+    API.windows.ClickChild(WINDOW, "TINT_CurBrushBtn", "left")
   end
   ui.SameLine(0, 10 * s)
   ui.BeginGroup()
@@ -54,13 +55,13 @@ local function drawWindow(x, y, w, h, s)
       local nr, ng, nb = K.Tint(WINDOW, now)
       if K.Swatch("##" .. now, nr, ng, nb, rowH - 4 * s, s,
           { width = ui.GetContentRegionAvail(), tooltip = "Its color now (" .. K.Hex(nr, ng, nb) .. "); click to use it as the brush" }) then
-        eq.ClickChild(WINDOW, now, "left")
+        API.windows.ClickChild(WINDOW, now, "left")
       end
       ui.TableNextColumn()
       local dr, dg, db = K.Tint(WINDOW, dye)
       if K.Swatch("##" .. dye, dr, dg, db, rowH - 4 * s, s,
           { width = ui.GetContentRegionAvail(), tooltip = "Its new dye (" .. K.Hex(dr, dg, db) .. "); click to paint it with the brush" }) then
-        eq.ClickChild(WINDOW, dye, "left")
+        API.windows.ClickChild(WINDOW, dye, "left")
       end
       ui.TableNextColumn()
       if K.Hex(nr, ng, nb) ~= K.Hex(dr, dg, db) then
@@ -87,6 +88,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Body Tint", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Armor Dye", WINDOW_OPTS, drawWindow)
 end)

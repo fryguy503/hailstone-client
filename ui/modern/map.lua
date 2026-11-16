@@ -1,28 +1,32 @@
 -- Map: replaces the game's MapViewWnd (opened and closed by the game: the map key, the minimap, the EQ menu). The
--- zone's map in a resizable window (eq.DrawZoneMap: the stock map's lines and labels, the group, a /find path, the
+-- zone's map in a resizable window (hs.DrawZoneMap: the stock map's lines and labels, the group, a /find path, the
 -- player; north up), with:
 --   * zoom with the wheel (around the cursor, or around you while following) or the buttons, Fit (the whole zone),
 --     Follow (centred on you; zooming keeps it, panning stops it);
 --   * dragging pans, a double click centres there;
 --   * markers of your own, kept per zone (ui/settings/modern.txt, map.markers.<zone>): right-click the map to put
 --     one there, or "Mark my spot"; the list at the right centres on one, renames or removes it;
---   * Auto Z (eq.MapAutoZ): lines and labels well above or below you fade, here and on the minimap; the arrow
+--   * Auto Z (hs.MapAutoZ): lines and labels well above or below you fade, here and on the minimap; the arrow
 --     beside its button sets how far above (+) and below (-) you they stay whole;
 --   * the cursor's location (as /loc gives it) and its distance from you, under the map;
---   * your zone's exits (eq.ZoneExits: where each zone line leads), and a route followed (lib/atlas.lua) as a banner
+--   * your zone's exits (hs.ZoneExits: where each zone line leads), and a route followed (lib/atlas.lua) as a banner
 --     with the next zone and "Walk there";
 --   * World: the atlas and the zone finder (lib/atlas.lua); a zone's map can be shown from there, with a bar back to
 --     your own. The window opens in the view it was left in (map.view);
---   * Find (Hailstone's Find window, eq.FindNpcs; the find key opens the map on it): the zone's merchants, bankers,
+--   * Find (Hailstone's Find window, hs.FindNpcs; the find key opens the map on it): the zone's merchants, bankers,
 --     guildmasters, other services and the server's points of interest, nearest first, with a search and a filter
 --     per kind; a row clicked targets the NPC and centres the map on it, "Show path" draws the glowing guide path to
 --     it, "Walk there" walks you there (the navigator), and the NPCs button marks the listed NPCs on the map.
 -- The map's own editing (lines, labels, layers) is the classic map toolbar's: "Edit" opens it.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local atlas = dofile("lib/atlas.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "MapViewWnd"
+local E = dofile("lib/extensions.lua")
+local MC = dofile("lib/map_controls.lua")
+local componentContext = {}
 
 local SIDE_W, TOOL_H, STATUS_H = 250, 36, 24
 local ZMIN, ZMAX = 1, 40
@@ -39,7 +43,7 @@ local TEXT_COLORS = {}
 for k, c in ipairs(COLORS) do TEXT_COLORS[k] = { c[1], c[2], c[3], 1 } end
 
 -- ---------------------------------------------------------------- markers
-local function zoneKey() return select(2, eq.ZoneName()) or "" end
+local function zoneKey() return select(2, API.map.ZoneName()) or "" end
 
 -- The markers' setting name for this zone: made again only when the zone changes. The selected marker and the one
 -- being renamed are indexes into this zone's list, so a new zone forgets them.
@@ -104,7 +108,7 @@ local function distance(ax, ay, bx, by)
 end
 
 -- ---------------------------------------------------------------- pieces
-local function toolButton(id, x, y, w, s, label, on, tip)
+local function drawToolButton(id, x, y, w, s, label, on, tip)
   local clicked = T.Hit(id, x, y, x + w, y + 26 * s)
   local hov = ui.IsItemHovered()
   local a = C.accent
@@ -118,6 +122,20 @@ local function toolButton(id, x, y, w, s, label, on, tip)
   T.Text(x + w / 2, y + (26 * s - th) / 2, label, (on or hov) and C.text or C.muted, T.font.small, "center")
   if hov and tip then ui.SetTooltip(tip) end
   return clicked
+end
+
+local function toolButton(id,x,y,w,s,label,on,tip)
+  return E.Component(WINDOW,"toolbar."..id:gsub("^##",""),componentContext,function()
+    return drawToolButton(id,x,y,w,s,label,on,tip)
+  end)
+end
+local function mapControls(x,y,w,s)
+  local present=MC.Sync(M.view)
+  if present and toolButton("##mapcontrols",x,y+TOOL_H*s,122*s,s,"Map controls",MC.Open(),"Controls supplied by installed addons") then
+    MC.Toggle(M.view)
+  end
+  MC.Draw(M.view)
+  return present and 34 or 0
 end
 
 local function markersPage(x, y, w, h, s, list, px, py, own)
@@ -196,7 +214,7 @@ end
 
 local viewZone -- (the Zone / World section, below)
 
--- ---------------------------------------------------------------- Find (eq.FindNpcs; lib/find.lua)
+-- ---------------------------------------------------------------- Find (hs.FindNpcs; lib/find.lua)
 local FL = dofile("lib/find.lua")
 local F = FL.state
 local NONE = {} -- an empty list, never changed (no table a frame for "no markers" or "no NPCs")
@@ -204,20 +222,25 @@ local questText = nil -- the quest colour as a text colour, made once
 local CATS = FL.CATS
 local findRows = FL.rows
 
--- Walk there (eq.FindNpcWalk): the navigator walks you to it; why not, in the Find page, when it cannot.
-local function walkTo(id)
-  local ok, why = eq.FindNpcWalk(id)
+-- Walk there (hs.FindNpcWalk): the navigator walks you to it; why not, in the Find page, when it cannot.
+local function walkTo(row)
+  local current = row and FL.current(row.id, row.token)
+  if not current then return end
+  local ok, why = API.find.NpcWalk(current.id, current.token)
   F.why = (not ok and why ~= "") and why or nil
 end
 
 local function selectNpc(r)
-  F.sel = r.id
-  eq.FindNpcTarget(r.id)
+  r = FL.current(r.id, r.token)
+  if not r or API.find.NpcTarget(r.id, r.token) == false then return end
+  F.sel, F.selToken = r.id, r.token
   M.follow, M.cx, M.cy = false, r.x, r.y
   M.zoom = math.max(M.zoom, 3)
 end
 
 local function findPage(x, y, w, h, s, rows, own)
+  local _, allowed = FL.policy()
+  if not allowed then return end
   if not own then
     T.Text(x, y + 4 * s, "Find lists your own zone's", C.faint, T.font.small)
     T.Text(x, y + 20 * s, "NPCs, on its map.", C.faint, T.font.small)
@@ -248,7 +271,7 @@ local function findPage(x, y, w, h, s, rows, own)
   ui.BeginChild("##findlist", w, math.max(y + h - ly - footer, 1), false)
   local rw = ui.GetContentRegionAvail()
   local _, th = T.TextSize("Ag", T.font.small)
-  F.hover = nil
+  F.hover, F.hoverToken = nil, nil
   if #rows == 0 then
     local any = F.search:match("%S")
     T.Text(x, ly + 4 * s, any and "Nothing matches." or "Nothing to find here.", C.faint, T.font.small)
@@ -258,8 +281,8 @@ local function findPage(x, y, w, h, s, rows, own)
     local rx, ry = ui.GetCursorScreenPos()
     local rh = 40 * s
     ui.InvisibleButton("##fn" .. i, rw, rh)
-    local hov, on = ui.IsItemHovered(), F.sel == r.id
-    if hov then F.hover = r.id end
+    local hov, on = ui.IsItemHovered(), FL.matches(r, F.sel, F.selToken)
+    if hov then F.hover, F.hoverToken = r.id, r.token end
     if on then
       ui.DrawRectFilled(rx, ry, rx + rw, ry + rh, C.accent[1], C.accent[2], C.accent[3], 0.15, 6 * s)
     elseif hov then
@@ -283,7 +306,7 @@ local function findPage(x, y, w, h, s, rows, own)
     T.Text(rx + 24 * s, ry + 6 * s + th, T.Fit(r.subtitle ~= "" and r.subtitle or r.label, rw - 30 * s, T.font.tiny),
       C.faint, T.font.tiny)
     if ui.IsItemClicked(ui.Mouse.Left) then selectNpc(r) end
-    if hov and ui.IsMouseDoubleClicked(ui.Mouse.Left) then eq.FindNpcPath(r.id) end
+    if hov and ui.IsMouseDoubleClicked(ui.Mouse.Left) then API.find.NpcPath(r.id, r.token) end
     if ui.IsItemClicked(ui.Mouse.Right) then
       F.menu = r
       ui.OpenPopup("##findmenu")
@@ -291,43 +314,45 @@ local function findPage(x, y, w, h, s, rows, own)
     end
   end
   if ui.BeginPopup("##findmenu") then
-    local r = F.menu
+    local r = F.menu and FL.current(F.menu.id, F.menu.token)
     if r then
       ui.TextDisabled(r.name)
       ui.Separator()
-      if ui.MenuItem("Target") then eq.FindNpcTarget(r.id) end
-      if ui.MenuItem("Show the path") then eq.FindNpcPath(r.id) end
-      if ui.MenuItem("Walk there") then walkTo(r.id) end
+      if ui.MenuItem("Target") then API.find.NpcTarget(r.id, r.token) end
+      if ui.MenuItem("Show the path") then API.find.NpcPath(r.id, r.token) end
+      if ui.MenuItem("Walk there") then walkTo(r) end
       if ui.MenuItem("Centre the map here") then M.follow, M.cx, M.cy = false, r.x, r.y end
-    end
+    else ui.CloseCurrentPopup() end
     ui.EndPopup()
   end
   ui.EndChild()
   -- the selected NPC: its path, a walk there, and ending the path
   local fy = y + h - footer + 6 * s
-  local pathShown = eq.FindPathShown()
+  local pathShown = API.map.FindPathShown()
   local n = pathShown and 3 or 2
   local bw = (w - (n - 1) * 6 * s) / n
-  local on = F.sel ~= nil
+  local selected = FL.current(F.sel, F.selToken)
+  local on = selected ~= nil
   if T.Button("##findpath", x, fy, x + bw, fy + 26 * s, s, "Show path", { primary = true, enabled = on }) then
     F.why = nil
-    eq.FindNpcPath(F.sel)
+    if selected then API.find.NpcPath(selected.id, selected.token) end
   end
   if T.Button("##findwalk", x + bw + 6 * s, fy, x + 2 * bw + 6 * s, fy + 26 * s, s, "Walk there", { enabled = on }) then
-    walkTo(F.sel)
+    walkTo(selected)
   end
   if ui.IsItemHovered() then ui.SetTooltip("Walks you there (any movement key stops it)") end
   if pathShown and T.Button("##findend", x + 2 * (bw + 6 * s), fy, x + w, fy + 26 * s, s, "End") then
     F.why = nil
-    eq.EndFind()
+    API.find.End()
   end
   if F.why then T.Text(x, fy - 16 * s, T.Fit("Can't walk there: " .. F.why, w, T.font.tiny), C.faint, T.font.tiny) end
 end
 
 -- The listed NPCs on the map (the NPCs button), and the selected or hovered one always.
 local function drawNpcMarks(rows, toScreen, s, all)
+  if not FL.policy() then return end
   for _, r in ipairs(rows) do
-    local lit = r.id == F.sel or r.id == F.hover
+    local lit = FL.matches(r, F.sel, F.selToken) or FL.matches(r, F.hover, F.hoverToken)
     if all or lit then
       local sx, sy = toScreen(r.x, r.y)
       FL.drawMark(sx, sy, r, s, lit, lit or M.zoom >= 3, T)
@@ -338,8 +363,8 @@ end
 -- ---------------------------------------------------------------- Zone / World
 -- A zone's map in the Zone view (your own: nil).
 function viewZone(short)
-  eq.ShowZoneMap(short)
-  local _, here = eq.ZoneName()
+  API.map.ShowZone(short)
+  local _, here = API.map.ZoneName()
   M.view, M.zoom, M.cx, M.cy = "zone", 1, nil, nil
   ui.SetSetting("map.view", "zone")
   M.follow = short == nil or (here or ""):lower() == short:lower()
@@ -383,7 +408,8 @@ local function worldBody(x, y, w, h, s)
   if toolButton("##side", x + w - 30 * s, y, 30 * s, s, side and ">" or "<", false, side and "Hide the zone finder" or "Show the zone finder") then
     ui.SetSetting("map.sidebar", side and "0" or "1")
   end
-  local mx0, my0 = x, y + TOOL_H * s
+  local extra = mapControls(x,y,w,s)
+  local mx0, my0 = x, y + (TOOL_H + extra) * s
   local mx1 = x + w - (side and (SIDE_W + 12) * s or 0)
   local my1 = y + h - STATUS_H * s
   atlas.DrawView(mx0, my0, mx1, my1, s, viewZone)
@@ -401,10 +427,11 @@ local OPTS = {
 }
 local function body(x, y, w, h, s)
   if M.view == "world" then return worldBody(x, y, w, h, s) end
-  local _, shownZone, own = eq.MapZoneShown()
+  local _, shownZone, own = API.map.ZoneShown()
   local list = own and drawnMarkers() or NONE
   local side = ui.GetSetting("map.sidebar") ~= "0"
-  local findTab = ui.GetSetting("map.sideTab") ~= "markers"
+  local stockNpcs, npcFind = FL.policy()
+  local findTab = npcFind and ui.GetSetting("map.sideTab") ~= "markers"
   local showNpcs = FL.marks()
   -- Find's NPCs are your own zone's: listed and marked only on its map
   local npcs = (own and ((side and findTab) or showNpcs)) and findRows() or NONE
@@ -428,12 +455,14 @@ local function body(x, y, w, h, s)
     ui.SetSetting("map.showMarkers", showMarks and "0" or "1")
   end
   tx = tx + 84 * s
-  if toolButton("##npcs", tx, y, 60 * s, s, "NPCs", showNpcs, "Mark the NPCs Find lists on the map") then
-    ui.SetSetting("map.npcMarks", showNpcs and "0" or "1")
+  if stockNpcs then
+    if toolButton("##npcs", tx, y, 60 * s, s, "NPCs", showNpcs, "Mark the NPCs Find lists on the map") then
+      ui.SetSetting("map.npcMarks", showNpcs and "0" or "1")
+    end
+    tx = tx + 64 * s
   end
-  tx = tx + 64 * s
-  local autoZ = eq.MapAutoZ()
-  if toolButton("##autoz", tx, y, 64 * s, s, "Auto Z", autoZ, "Fade what is above or below you") then eq.MapAutoZ(not autoZ) end
+  local autoZ = API.map.AutoZ()
+  if toolButton("##autoz", tx, y, 64 * s, s, "Auto Z", autoZ, "Fade what is above or below you") then API.map.AutoZ(not autoZ) end
   tx = tx + 66 * s
   if toolButton("##autozrange", tx, y, 22 * s, s, "v", false, "How far above and below you") then ui.OpenPopup("##autozmenu") end
   if ui.BeginPopup("##autozmenu") then
@@ -442,27 +471,32 @@ local function body(x, y, w, h, s)
   end
   tx = tx + 26 * s
   if toolButton("##edit", tx, y, 54 * s, s, "Edit", false, "The map toolbar (lines, labels, layers)") then
-    eq.ShowWindow("MapToolbarWnd", true)
+    API.windows.Show("MapToolbarWnd", true)
   end
   if toolButton("##side", x + w - 30 * s, y, 30 * s, s, side and ">" or "<", false, side and "Hide the side panel" or "Find and markers") then
     ui.SetSetting("map.sidebar", side and "0" or "1")
-    if side and findTab then eq.FindOpen(false); M.findWas = false end
+    if side and findTab then API.find.Open(false); M.findWas = false end
   end
   if zoomIn then M.zoom = math.min(ZMAX, M.zoom * 1.5) end
   if zoomOut then M.zoom = math.max(ZMIN, M.zoom / 1.5) end
 
   -- the map
-  local mx0, my0 = x, y + TOOL_H * s
+  local extra = mapControls(x,y,w,s)
+  local mx0, my0 = x, y + (TOOL_H + extra) * s
   local mx1 = x + w - (side and (SIDE_W + 12) * s or 0)
   local my1 = y + h - STATUS_H * s
   ui.DrawRectFilled(mx0, my0, mx1, my1, C.mapBg[1], C.mapBg[2], C.mapBg[3], 0.95, 8 * s)
   local wx, wy = ui.GetWindowPos()
   ui.SetCursorPos(mx0 - wx, my0 - wy)
   ui.InvisibleButton("##maparea", math.max(mx1 - mx0, 1), math.max(my1 - my0, 1))
-  local hovered, active = ui.IsItemHovered(), ui.IsItemActive()
+  local hovered, active = not MC.Open() and ui.IsItemHovered(), not MC.Open() and ui.IsItemActive()
   ui.PushClipRect(mx0, my0, mx1, my1, true)
   ui.PushFont(T.font.small)
-  local k, midx, midy, px, py = eq.DrawZoneMap(mx0, my0, mx1, my1, M.zoom, M.cx, M.cy, labels)
+  local canvasDefault = false
+  local k, midx, midy, px, py = E.Component(WINDOW,"map.canvas",componentContext,function()
+    canvasDefault = true
+    return API.map.DrawZone(mx0, my0, mx1, my1, M.zoom, M.cx, M.cy, labels)
+  end)
   ui.PopFont()
   local ccx, ccy = (mx0 + mx1) / 2, (my0 + my1) / 2
   local mouseX, mouseY = ui.GetMousePos()
@@ -519,12 +553,12 @@ local function body(x, y, w, h, s)
       T.TakeRightClick()
     end
     if not M.follow and M.zoom <= ZMIN + 0.001 and not M.cx then M.cx, M.cy = nil, nil end
-  else
+  elseif canvasDefault then
     T.Text(ccx, ccy - 8 * s, "No map for this zone.", C.muted, T.font.small, "center")
   end
   -- another zone's map: a bar back to yours; your own: the route followed
   if not own then
-    local name = eq.MapZoneShown()
+    local name = API.map.ZoneShown()
     local bx0, by0, bx1 = mx0 + 10 * s, my0 + 8 * s, mx1 - 10 * s
     ui.DrawRectFilled(bx0, by0, bx1, by0 + 34 * s, 0, 0, 0, 0.6, 8 * s)
     local _, th = T.TextSize("Ag", T.font.small)
@@ -543,7 +577,8 @@ local function body(x, y, w, h, s)
   ui.DrawRect(mx0, my0, mx1, my1, C.ink[1], C.ink[2], C.ink[3], 0.08, 8 * s, 1)
   if ui.BeginPopup("##mapmenu") then
     local at = M.menuAt
-    if at then
+    if not canvasDefault then M.menuAt=nil;ui.CloseCurrentPopup()
+    elseif at then
       local ly, lx = locOf(at[1], at[2])
       ui.TextDisabled(string.format("Loc %d, %d", math.floor(ly), math.floor(lx)))
       ui.Separator()
@@ -551,8 +586,8 @@ local function body(x, y, w, h, s)
         M.sel = addMarker(at[1], at[2])
         M.rename = M.sel
       end
-      if ui.MenuItem("Find a path here") then eq.FindMapLocation(at[1], at[2]) end
-      if eq.FindPathShown() and ui.MenuItem("End the find path") then eq.EndFind() end
+      if ui.MenuItem("Find a path here") then API.find.MapLocation(at[1], at[2]) end
+      if API.map.FindPathShown() and ui.MenuItem("End the find path") then API.find.End() end
       if ui.MenuItem("Centre here") then M.follow, M.cx, M.cy = false, at[1], at[2] end
       if ui.MenuItem("Back to me") then M.follow = true end
       ui.Separator()
@@ -578,13 +613,17 @@ local function body(x, y, w, h, s)
   if side then
     local sx0, sw = mx1 + 12 * s, SIDE_W * s
     local tw = (sw - 4 * s) / 2
-    if toolButton("##tabfind", sx0, my0, tw, s, "Find", findTab, "Merchants, bankers, trainers and more") and not findTab then
-      ui.SetSetting("map.sideTab", "find")
-      eq.FindOpen(true); M.findWas = true
-    end
-    if toolButton("##tabmarks", sx0 + tw + 4 * s, my0, tw, s, "Markers", not findTab, "Your own markers") and findTab then
-      ui.SetSetting("map.sideTab", "markers")
-      eq.FindOpen(false); M.findWas = false
+    if npcFind then
+      if toolButton("##tabfind", sx0, my0, tw, s, "Find", findTab, "Merchants, bankers, trainers and more") and not findTab then
+        ui.SetSetting("map.sideTab", "find")
+        API.find.Open(true); M.findWas = true
+      end
+      if toolButton("##tabmarks", sx0 + tw + 4 * s, my0, tw, s, "Markers", not findTab, "Your own markers") and findTab then
+        ui.SetSetting("map.sideTab", "markers")
+        API.find.Open(false); M.findWas = false
+      end
+    else
+      T.Text(sx0, my0 + 6 * s, "Markers", C.text, T.font.small)
     end
     local py0 = my0 + 34 * s
     if findTab then findPage(sx0, py0, sw, my1 - py0, s, npcs, own)
@@ -616,12 +655,15 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Map", function()
-  if not eq.InGame() then return end
-  local shown = eq.WindowShown(WINDOW)
-  -- Find (eq.FindOpen) is this window's Find page: the find key opening it shows the map on that page, closing it
+  local _, npcFind = FL.policy()
+  if not API.session.InGame() then return end
+  local shown = API.windows.Shown(WINDOW)
+  -- Find (hs.FindOpen) is this window's Find page: the find key opening it shows the map on that page, closing it
   -- closes the map, and the map closing closes it.
-  local findOpen = eq.FindOpen()
-  if findOpen ~= M.findWas then
+  local findOpen = API.find.Open()
+  if not npcFind then
+    M.findWas = findOpen -- keep the preference and native open state; ownership retirement never calls an action
+  elseif findOpen ~= M.findWas then
     M.findWas = findOpen
     if findOpen then
       ui.SetSetting("map.sidebar", "1")
@@ -629,21 +671,22 @@ ui.window("Map", function()
       -- Find is your own zone's: the Zone view on your own map
       M.view = "zone"
       ui.SetSetting("map.view", "zone")
-      local _, _, own = eq.MapZoneShown()
-      if not own then eq.ShowZoneMap(nil) end
-      if not shown then eq.ShowWindow(WINDOW, true) end
+      local _, _, own = API.map.ZoneShown()
+      if not own then API.map.ShowZone(nil) end
+      if not shown then API.windows.Show(WINDOW, true) end
     elseif shown and ui.GetSetting("map.sideTab") ~= "markers" then
-      eq.ShowWindow(WINDOW, false)
+      API.windows.Show(WINDOW, false)
       shown = false
     end
   end
   if not shown then
+    MC.Reset()
     if M.open then
       -- closed while showing another zone's map: your own again (the minimap draws the same map)
-      local _, _, own = eq.MapZoneShown()
-      if not own then eq.ShowZoneMap(nil) end
-      if findOpen then
-        eq.FindOpen(false)
+      local _, _, own = API.map.ZoneShown()
+      if not own then API.map.ShowZone(nil) end
+      if npcFind and findOpen then
+        API.find.Open(false)
         M.findWas = false
       end
     end
@@ -655,7 +698,8 @@ ui.window("Map", function()
     M.view = ui.GetSetting("map.view") == "world" and "world" or "zone"
     if M.view == "world" then atlas.Opened() end
   end
-  local zone = eq.MapZoneShown() or ""
+  local zone = API.map.ZoneShown() or ""
   if M.view == "world" then zone = "World" end
+  componentContext = E.MapContext(M.view)
   hud.Dialog(WINDOW, zone ~= "" and zone or "Map", OPTS, body)
 end)

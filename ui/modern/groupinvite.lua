@@ -2,6 +2,7 @@
 -- sent it, Accept and Decline. The buttons are the group window's own (FollowButton, DeclineButton), so the answer
 -- is the game's; the group window offers them too. Its X puts the popup away for this invitation only. It stands in
 -- for the client's own prompt (ui/group_windows.cpp), which stays off while this runs.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color
@@ -36,16 +37,16 @@ local function body(x, y, w, h, s)
   for k, b in ipairs(BUTTONS) do
     local bx = x + pad + (k - 1) * (bw + 8 * s)
     if T.Button(b[3], bx, by, bx + bw, by + bh, s, b[2], b[4]) then
-      eq.ClickChild(WINDOW, b[1], "left")
+      API.windows.ClickChild(WINDOW, b[1], "left")
     end
   end
 end
 
 ui.window("Group Invite", function()
-  if not eq.InGame() then return end
-  eq.WindowShown("GroupInvite") -- turns the client's own invite prompt off while this popup runs
-  invited = eq.ChildShown(WINDOW, "FollowButton") == true
-  inviter = invited and (eq.WindowText(WINDOW, "Hailstone_Inviter") or "") or nil
+  if not API.session.InGame() then return end
+  API.windows.Shown("GroupInvite") -- turns the client's own invite prompt off while this popup runs
+  invited = API.windows.ChildShown(WINDOW, "FollowButton") == true
+  inviter = invited and (API.windows.Text(WINDOW, "Hailstone_Inviter") or "") or nil
   if not invited then dismissed = nil end
   GLOW[1], GLOW[2], GLOW[3] = C.accent[1], C.accent[2], C.accent[3]
   hud.Window(nil, "Group Invite", OPTS, body)

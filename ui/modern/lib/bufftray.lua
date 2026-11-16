@@ -1,7 +1,8 @@
 -- A buff tray: the buffs of a buff window (BuffWindow, ShortDurationBuffWindow) as a grid of icons, packed (empty
 -- slots left out), with a ring for beneficial / detrimental, the time left under each and the game's fade under 19
--- seconds left (eq.BuffSlot's fade: out once a second; a bard's own short songs do not fade); hover shows the spell
+-- seconds left (hs.BuffSlot's fade: out once a second; a bard's own short songs do not fade); hover shows the spell
 -- and time. Right-click: the buff's menu (lib/buffmenu.lua: Spell Info, Add to Blocked Buffs and Remove).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local buffmenu = dofile("lib/buffmenu.lua")
 local T = hud.T
@@ -30,8 +31,8 @@ function tray.Register(name, window, slots, opts)
     frame = f
     n = 0
     for i = 1, slots do
-      -- the spell and the counters the game puts on the button (hits left, counters): eq.BuffSlot's overlays
-      local spell, ms, spellName, good, fade, counter, cr, cg, cb, limit = eq.BuffSlot(window, ids[i], true)
+      -- the spell and the counters the game puts on the button (hits left, counters): hs.BuffSlot's overlays
+      local spell, ms, spellName, good, fade, counter, cr, cg, cb, limit = API.buffs.Slot(window, ids[i], true)
       if spell then
         n = n + 1
         local b = list[n]
@@ -81,7 +82,7 @@ function tray.Register(name, window, slots, opts)
       local ix = x + w - 6 * s - (col + 1) * icon * s - col * gap * s
       local iy = y + 5 * s + row * (icon + label + gap) * s
       local size = icon * s
-      local tex, u0, v0, u1, v1 = eq.ChildArt(window, b.id, "decal")
+      local tex, u0, v0, u1, v1 = API.windows.ChildArt(window, b.id, "decal")
       if type(tex) ~= "userdata" then tex = nil end
       b.icon.alpha = 0.2 + 0.8 * b.fade -- never quite gone, so the tray keeps its shape
       T.Icon(ix, iy, size, s, tex, u0, v0, u1, v1, b.good and C.good or C.bad, b.icon)
@@ -108,7 +109,7 @@ function tray.Register(name, window, slots, opts)
     buffmenu.Draw(window)
   end
   ui.window(name, function()
-    if not eq.InGame() then return end
+    if not API.session.InGame() then return end
     hud.Window(window, name, winOpts, body)
   end)
 end

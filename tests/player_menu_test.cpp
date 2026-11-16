@@ -8,8 +8,8 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_windows.h"
 #include "game/interact.h"
 #include "mock_server/harness.h"
 
@@ -63,8 +63,8 @@ TEST_CASE("player menu: the rows and what each sends") {
         Rig rig(MockConfig::standard(), options);
         auto& conn = rig.conn;
         REQUIRE(rig.to_zone());
-        app::EqHost host;
-        app::EqApi api{host};
+        app::UiHost host;
+        app::UiApi api{host};
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         const std::uint32_t bob = add_player(conn, 4100, "Bob");
@@ -103,18 +103,18 @@ TEST_CASE("player menu: the rows and what each sends") {
         rig.run_for(std::chrono::milliseconds(100));
         CHECK(count(Op::InspectRequest) == 1);
 
-        // It opens as a game menu, and not with context menus switched off (EqHost::context_menus).
+        // It opens as a game menu, and not with context menus switched off (UiHost::context_menus).
         add_player(conn, 4101, "Ann");
         CHECK(api.open_player_menu(4101, 100.0f, 120.0f));
         REQUIRE(host.menus.size() == 1);
         CHECK(host.menus[0].x == 100.0f);
         CHECK(host.menus[0].rows[0].text == "Ann");
         {
-            // eq.GameMenus(scale) measures the rows at that scale, for a pack that zooms its menus.
+            // hs.GameMenus(scale) measures the rows at that scale, for a pack that zooms its menus.
             lua_State* L = luaL_newstate();
             lua_newtable(L);
             api.register_functions(L);
-            lua_setglobal(L, "eq");
+            lua_setglobal(L, "hs");
             ImGuiIO& io = ImGui::GetIO();
             io.IniFilename = nullptr; // no imgui.ini in the working folder
             unsigned char* px = nullptr;
@@ -129,11 +129,11 @@ TEST_CASE("player menu: the rows and what each sends") {
                 lua_settop(L, 0);
                 return std::pair{w, h};
             };
-            auto one = size("local m = eq.GameMenus()[1]; return m.w, m.h");
-            auto two = size("local m = eq.GameMenus(2)[1]; return m.w, m.h");
+            auto one = size("local m = hs.GameMenus()[1]; return m.w, m.h");
+            auto two = size("local m = hs.GameMenus(2)[1]; return m.w, m.h");
             CHECK(two.first > one.first * 1.5);
             CHECK(two.second > one.second * 1.5);
-            CHECK(size("local m = eq.GameMenus(1)[1]; return m.w, m.h") == one);
+            CHECK(size("local m = hs.GameMenus(1)[1]; return m.w, m.h") == one);
             ImGui::EndFrame();
             lua_close(L);
         }

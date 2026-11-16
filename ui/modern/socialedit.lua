@@ -1,18 +1,19 @@
 -- Edit social: replaces the game's SocialEditWnd (a right click on a social's hot button or Actions window button).
--- The boxes, colours and buttons are the window's (app/lua_eq_socialedit.cpp: eq.SetWindowText, eq.ClickChild), so
+-- The boxes, colours and buttons are the window's (app/lua_ui_socialedit.cpp: hs.SetWindowText, hs.ClickChild), so
 -- what is saved is the game's: a name of 15 letters, a colour, five lines of 255.
 --
 -- Laid out for making macros: the button as it will look, the social's place and whether it has unsaved changes, a
 -- Commands / Lua switch (Lua saves the lines and opens them in the Lua social editor, luasocial.lua, as mq.cmd
 -- calls). Each line shows what it is (a game command, chat, a server # command, a command the game does not know)
 -- and has a wait box (its "/pause N", in seconds) and buttons to move it up or down or empty it; the cooldown box is
--- the social's "/timer N". The lines' parts are the press's own (eq.SocialLine, lib/social_lines.lua), and a
+-- the social's "/timer N". The lines' parts are the press's own (hs.SocialLine, lib/social_lines.lua), and a
 -- timeline under them shows when each line runs. Tab in a command box completes the game's slash commands (again:
--- the next match; a list of them shows while typing; eq.SlashCommands). Examples fill in a whole social.
+-- the next match; a list of them shows while typing; hs.SlashCommands). Examples fill in a whole social.
 -- The toolbar: Test (saves, then presses the social as its hot button does: the commands are really sent; "running"
--- and Stop while it runs), Put on bar (and dragging the preview: the social on the cursor, eq.SocialToCursor), Copy
--- and Paste share text (eq.LuaSocialExport / LuaSocialImport; a pasted Lua social goes to the Lua editor unsaved,
+-- and Stop while it runs), Put on bar (and dragging the preview: the social on the cursor, hs.SocialToCursor), Copy
+-- and Paste share text (hs.LuaSocialExport / LuaSocialImport; a pasted Lua social goes to the Lua editor unsaved,
 -- through the global hailstone_social_draft). Ctrl+Enter accepts.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -175,7 +176,7 @@ local function cooldownLine(lines)
   return nil
 end
 
-local function setLine(i, text) eq.SetWindowText(WINDOW, lineId(i), text:sub(1, LINE_MAX)) end
+local function setLine(i, text) API.windows.SetText(WINDOW, lineId(i), text:sub(1, LINE_MAX)) end
 
 local function swap(lines, a, b)
   setLine(a, lines[b])
@@ -198,7 +199,7 @@ local function completer(i)
     if c and c.last == text and #c.list > 1 then
       c.i = back and ((c.i - 2) % #c.list + 1) or (c.i % #c.list + 1)
     else
-      local list = eq.SlashCommands(word)
+      local list = API.socials.SlashCommands(word)
       if not list or #list == 0 then return nil end
       c = { list = list, i = 1 }
       comp[i] = c
@@ -214,7 +215,7 @@ local matches = { word = nil, list = {} }
 local function suggestions(i, text, x0, y1, s)
   local word = text:match("^%s*(/%S+)$")
   if not word then return end
-  if matches.word ~= word then matches.word, matches.list = word, eq.SlashCommands(word) or {} end
+  if matches.word ~= word then matches.word, matches.list = word, API.socials.SlashCommands(word) or {} end
   local list = matches.list
   if #list == 0 or (#list == 1 and list[1]:lower() == word:lower()) then return end
   local c = comp[i]
@@ -330,8 +331,8 @@ local pickUp, toolbar
 
 -- Saved (when changed: Accept, which closes the editor) and on the cursor, to drop on a hot button.
 pickUp = function(n, dirty)
-  if dirty then eq.ClickChild(WINDOW, "SEW_Accept_Button", "left") end
-  eq.SocialToCursor(n)
+  if dirty then API.windows.ClickChild(WINDOW, "SEW_Accept_Button", "left") end
+  API.socials.ToCursor(n)
 end
 
 -- Test, Put on bar, Copy, Paste, and "running" with Stop. True when the editor gave way to another.
@@ -340,10 +341,10 @@ toolbar = function(n, name, color, lines, anyLine, dirty, s)
   ui.BeginDisabled(not (named and anyLine))
   if ui.SmallButton("Test##sewtest") then
     if dirty then
-      eq.ClickChild(WINDOW, "SEW_Accept_Button", "left")
-      eq.OpenSocialEditor(n) -- (Accept closed it: back on the social, as saved)
+      API.windows.ClickChild(WINDOW, "SEW_Accept_Button", "left")
+      API.socials.OpenEditor(n) -- (Accept closed it: back on the social, as saved)
     end
-    eq.PressSocial(n)
+    API.socials.Press(n)
     say(dirty and "Saved and pressed." or "Pressed.")
   end
   if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then
@@ -358,7 +359,7 @@ toolbar = function(n, name, color, lines, anyLine, dirty, s)
   ui.SameLine()
   ui.BeginDisabled(not named)
   if ui.SmallButton("Copy##sewcopy") then
-    local t = eq.LuaSocialExport(n, { name = name, color = color or 0, lines = lines })
+    local t = API.luasocials.Export(n, { name = name, color = color or 0, lines = lines })
     if t then
       ui.SetClipboardText(t)
       say("The share text is on the clipboard.")
@@ -371,19 +372,19 @@ toolbar = function(n, name, color, lines, anyLine, dirty, s)
   ui.SameLine()
   ui.BeginDisabled(n == nil)
   if ui.SmallButton("Paste##sewpaste") then
-    local t, why = eq.LuaSocialImport(ui.GetClipboardText() or "")
+    local t, why = API.luasocials.Import(ui.GetClipboardText() or "")
     if not t then
       say(why or "The clipboard holds no social.")
     elseif t.lua then
       -- a Lua social: to the Lua editor, unsaved (luasocial.lua takes the draft)
       hailstone_social_draft = { social = n, t = t }
-      eq.ShowWindow(WINDOW, false)
-      eq.OpenLuaSocialEditor(n)
+      API.windows.Show(WINDOW, false)
+      API.luasocials.OpenEditor(n)
       ui.EndDisabled()
       return true
     else
-      if t.name ~= "" then eq.SetWindowText(WINDOW, "SEW_NameInput", t.name) end
-      if t.color >= 0 and t.color < 20 then eq.ClickChild(WINDOW, "SEW_TC" .. t.color .. "Button", "left") end
+      if t.name ~= "" then API.windows.SetText(WINDOW, "SEW_NameInput", t.name) end
+      if t.color >= 0 and t.color < 20 then API.windows.ClickChild(WINDOW, "SEW_TC" .. t.color .. "Button", "left") end
       for i = 1, 5 do setLine(i, t.lines[i] or "") end
       say("Pasted: Accept to keep it.")
     end
@@ -392,11 +393,11 @@ toolbar = function(n, name, color, lines, anyLine, dirty, s)
     ui.SetTooltip("Take a social someone shared from the clipboard (a Lua one opens in the Lua editor)")
   end
   ui.EndDisabled()
-  if n and eq.CurrentSocial() == n then
+  if n and API.socials.Current() == n then
     ui.SameLine(0, 12 * s)
     S.Chip("running", C.good)
     ui.SameLine()
-    if ui.SmallButton("Stop##sewstop") then eq.StopSocial() end
+    if ui.SmallButton("Stop##sewstop") then API.socials.Stop() end
   end
   if flash.text ~= "" and ui.GetTime() - flash.at < 5 then
     ui.SameLine(0, 12 * s)
@@ -412,10 +413,10 @@ local OPTS = {
 }
 
 local function body(x, y, w, h, s)
-  local n = eq.SocialEditorSocial()
-  local saved = n and eq.LuaSocial(n) or nil
-  local colors = eq.SocialColors() or {}
-  local nr, ng, nb = eq.ChildColor(WINDOW, "SEW_NameInput")
+  local n = API.socials.EditorSocial()
+  local saved = n and API.luasocials.Get(n) or nil
+  local colors = API.socials.Colors() or {}
+  local nr, ng, nb = API.windows.ChildColor(WINDOW, "SEW_NameInput")
   local name = W.Text(WINDOW, "SEW_NameInput")
   local lines = {}
   for i = 1, 5 do lines[i] = W.Text(WINDOW, lineId(i)) end
@@ -442,7 +443,7 @@ local function body(x, y, w, h, s)
   -- dragging the button puts the social on the cursor (saved first)
   if not ui.IsMouseDown(ui.Mouse.Left) then dragged = false end
   if n and name ~= "" and not dragged and ui.IsItemActive() and ui.IsMouseDragging(ui.Mouse.Left)
-      and not eq.HoldingButton() then
+      and not API.cursor.HoldingButton() then
     dragged = true
     pickUp(n, dirty)
   end
@@ -476,11 +477,11 @@ local function body(x, y, w, h, s)
     local keep = name
     if keep == "" and anyLine then
       keep = "Lua"
-      eq.SetWindowText(WINDOW, "SEW_NameInput", keep)
+      API.windows.SetText(WINDOW, "SEW_NameInput", keep)
     end
-    if keep ~= "" and (dirty or keep ~= name) then eq.ClickChild(WINDOW, "SEW_Accept_Button", "left") end
-    eq.ShowWindow(WINDOW, false)
-    eq.OpenLuaSocialEditor(n)
+    if keep ~= "" and (dirty or keep ~= name) then API.windows.ClickChild(WINDOW, "SEW_Accept_Button", "left") end
+    API.windows.Show(WINDOW, false)
+    API.luasocials.OpenEditor(n)
     return
   end
   ui.SetCursorScreenPos(x, hy + ph + 6 * s)
@@ -505,7 +506,7 @@ local function body(x, y, w, h, s)
     if (i - 1) % perRow ~= 0 then ui.SameLine(0, gap) end
     if K.Swatch("##sewc" .. i, c[1], c[2], c[3], sw * 0.75, s, { width = sw, selected = color == i - 1,
           tooltip = "Colour " .. (i - 1) }) then
-      eq.ClickChild(WINDOW, "SEW_TC" .. (i - 1) .. "Button", "left")
+      API.windows.ClickChild(WINDOW, "SEW_TC" .. (i - 1) .. "Button", "left")
     end
   end
 
@@ -521,7 +522,7 @@ local function body(x, y, w, h, s)
   if ui.BeginCombo("##sewexamples", ex, 0) then
     for _, e in ipairs(EXAMPLES) do
       if ui.Selectable(e[1]) then
-        eq.SetWindowText(WINDOW, "SEW_NameInput", e[2])
+        API.windows.SetText(WINDOW, "SEW_NameInput", e[2])
         for i = 1, 5 do setLine(i, e[3][i] or "") end
       end
       if ui.IsItemHovered() then ui.SetTooltip(table.concat(e[3], "\n")) end
@@ -555,13 +556,13 @@ local function body(x, y, w, h, s)
   local _, by = ui.GetCursorScreenPos()
   ui.SetCursorScreenPos(x, math.max(by + 4 * s, y + h - bh))
   local bw = math.max(70 * s, (w - 3 * 8) / 4)
-  if roleButton("Clear##sewclear", nil, bw, bh) then eq.ClickChild(WINDOW, "SEW_Clear_Button", "left") end
+  if roleButton("Clear##sewclear", nil, bw, bh) then API.windows.ClickChild(WINDOW, "SEW_Clear_Button", "left") end
   if ui.IsItemHovered() then ui.SetTooltip("Empty the name and every line (nothing is saved until Accept)") end
   ui.SameLine()
-  if roleButton("Revert##sewrevert", nil, bw, bh, dirty and saved ~= nil) then eq.OpenSocialEditor(n) end
+  if roleButton("Revert##sewrevert", nil, bw, bh, dirty and saved ~= nil) then API.socials.OpenEditor(n) end
   if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then ui.SetTooltip("Back to the social as it was saved") end
   ui.SameLine()
-  if roleButton("Cancel##sewcancel", nil, bw, bh) then eq.ShowWindow(WINDOW, false) end
+  if roleButton("Cancel##sewcancel", nil, bw, bh) then API.windows.Show(WINDOW, false) end
   if ui.IsItemHovered() then ui.SetTooltip("Close without saving") end
   ui.SameLine()
   local clears = name == "" and (saved ~= nil or anyLine)
@@ -574,12 +575,12 @@ local function body(x, y, w, h, s)
   if not accept and ui.GetIO().ctrl and ui.IsKeyPressed(ui.Key.Enter) and ui.IsWindowFocused(1) then
     accept = true -- (1: ImGuiFocusedFlags_ChildWindows)
   end
-  if accept then eq.ClickChild(WINDOW, "SEW_Accept_Button", "left") end
+  if accept then API.windows.ClickChild(WINDOW, "SEW_Accept_Button", "left") end
 end
 
-local function testOpen() eq.OpenSocialEditor(tonumber(ui.GetSetting("test.social") or "") or 0) end
+local function testOpen() API.socials.OpenEditor(tonumber(ui.GetSetting("test.social") or "") or 0) end
 ui.window("Edit Social", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   hud.Dialog(WINDOW, "Edit Social", OPTS, body)
 end)

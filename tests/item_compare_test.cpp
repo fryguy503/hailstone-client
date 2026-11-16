@@ -12,7 +12,7 @@
 
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "core/game_dir.h"
 #include "game/item_compare.h"
 #include "game/mechanics/character.h"
@@ -283,7 +283,7 @@ TEST_CASE("Item compare: the class weighting") {
     CHECK(r->slots.at(0).verdict == Verdict::Same);
 }
 
-TEST_CASE("Item compare: eq.CompareItem, eq.CompareSlotItem and eq.CompareBagSlotItem for the packs") {
+TEST_CASE("Item compare: hs.CompareItem, hs.CompareSlotItem and hs.CompareBagSlotItem for the packs") {
     hailstone::test::ScratchDir dir("item_compare_eq");
     GameDir game(dir.path());
     net::GameConnection conn(game, {});
@@ -305,40 +305,40 @@ TEST_CASE("Item compare: eq.CompareItem, eq.CompareSlotItem and eq.CompareBagSlo
     mech::Character ch(f.sheet, f.tables, f.no_spells);
     ch.process_all_stats();
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
     std::vector<net::Item> displays{carried};
     host.item_displays = &displays;
-    app::EqApi api(host);
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
 
     // Before the player's stats exist there is nothing to compare with.
-    CHECK(run(L, "return eq.CompareItem(23)") == "nil");
+    CHECK(run(L, "return hs.CompareItem(23)") == "nil");
     host.character = &ch;
 
-    CHECK(run(L, "local c = eq.CompareItem(23) return tostring(c.usable) .. ' ' .. #c.slots") == "true 1");
-    CHECK(run(L, "local s = eq.CompareItem(23).slots[1] return s.slot .. ' ' .. s.slotName .. ' ' .. s.current[1] .. ' ' .. s.verdict") ==
+    CHECK(run(L, "local c = hs.CompareItem(23) return tostring(c.usable) .. ' ' .. #c.slots") == "true 1");
+    CHECK(run(L, "local s = hs.CompareItem(23).slots[1] return s.slot .. ' ' .. s.slotName .. ' ' .. s.current[1] .. ' ' .. s.verdict") ==
           "2 Head Old Helm upgrade");
-    CHECK(run(L, "for _, c in ipairs(eq.CompareItem(23).slots[1].changes) do "
+    CHECK(run(L, "for _, c in ipairs(hs.CompareItem(23).slots[1].changes) do "
                  "if c.key == 'hp' then return c.name .. ' ' .. c.before .. ' ' .. c.after .. ' ' .. c.delta end end") ==
           "HP " + std::to_string(ch.max_hp(true)) + " " + std::to_string(ch.max_hp(true) + 40) + " 40");
-    CHECK(run(L, "return eq.CompareItem(2)") == "nil");  // a worn item is what the others compare against
-    CHECK(run(L, "return eq.CompareItem(24)") == "nil"); // not gear
-    CHECK(run(L, "return eq.CompareItem(25)") == "nil"); // an empty slot
+    CHECK(run(L, "return hs.CompareItem(2)") == "nil");  // a worn item is what the others compare against
+    CHECK(run(L, "return hs.CompareItem(24)") == "nil"); // not gear
+    CHECK(run(L, "return hs.CompareItem(25)") == "nil"); // an empty slot
 
     // A linked item, in the item display's icon.
-    CHECK(run(L, "return eq.CompareSlotItem('ItemDisplayWindow', 'Hailstone_Item').slots[1].verdict") == "upgrade");
-    CHECK(run(L, "return eq.CompareSlotItem('ItemDisplayWindow#2', 'Hailstone_Item')") == "nil");
-    CHECK(run(L, "return eq.CompareSlotItem('NoSuchWindow', 'x')") == "nil");
-    CHECK(run(L, "return eq.CompareBagSlotItem('Bag1', 0)") == "nil");
+    CHECK(run(L, "return hs.CompareSlotItem('ItemDisplayWindow', 'Hailstone_Item').slots[1].verdict") == "upgrade");
+    CHECK(run(L, "return hs.CompareSlotItem('ItemDisplayWindow#2', 'Hailstone_Item')") == "nil");
+    CHECK(run(L, "return hs.CompareSlotItem('NoSuchWindow', 'x')") == "nil");
+    CHECK(run(L, "return hs.CompareBagSlotItem('Bag1', 0)") == "nil");
 
     host.in_game = false;
-    CHECK(run(L, "return eq.CompareSlotItem('ItemDisplayWindow', 'Hailstone_Item')") == "nil");
+    CHECK(run(L, "return hs.CompareSlotItem('ItemDisplayWindow', 'Hailstone_Item')") == "nil");
     lua_close(L);
 }
 
@@ -370,20 +370,20 @@ TEST_CASE("Item compare: each place keeps its own comparison") {
     mech::Character ch2(f2.sheet, f2.tables, f2.no_spells);
     ch2.process_all_stats();
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
     host.character = &ch;
     std::vector<net::Item> displays{better, worse};
     host.item_displays = &displays;
-    app::EqApi api(host);
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
-    const std::string first = "return eq.CompareSlotItem('ItemDisplayWindow', 'Hailstone_Item').slots[1].verdict";
-    const std::string second = "return eq.CompareSlotItem('ItemDisplayWindow#2', 'Hailstone_Item').slots[1].verdict";
+    lua_setglobal(L, "hs");
+    const std::string first = "return hs.CompareSlotItem('ItemDisplayWindow', 'Hailstone_Item').slots[1].verdict";
+    const std::string second = "return hs.CompareSlotItem('ItemDisplayWindow#2', 'Hailstone_Item').slots[1].verdict";
 
     const auto start = std::chrono::steady_clock::now();
     CHECK(run(L, first) == "upgrade");
@@ -413,10 +413,10 @@ TEST_CASE("Item compare: each place keeps its own comparison") {
     conn.receive_zone_packet_for_test(net::encode_char_inventory(carried));
     host.character = &ch;
     for (int i = 0; i < 10; ++i)
-        CHECK(run(L, "return eq.CompareItem(" + std::to_string(23 + i) + ").slots[1].verdict") ==
+        CHECK(run(L, "return hs.CompareItem(" + std::to_string(23 + i) + ").slots[1].verdict") ==
               (i < 5 ? "downgrade" : "upgrade"));
     CHECK(run(L, first) == "upgrade");
-    CHECK(run(L, "return eq.CompareSlotItem('ItemDisplayWindow', 'Hailstone_Item').slots[1].current[1]") == "Old Helm");
+    CHECK(run(L, "return hs.CompareSlotItem('ItemDisplayWindow', 'Hailstone_Item').slots[1].current[1]") == "Old Helm");
     lua_close(L);
 }
 

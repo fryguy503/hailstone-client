@@ -1,4 +1,4 @@
-// The chat windows over the eq API (app/lua_eq_chat.cpp): new windows, per-window channels, default channel,
+// The chat windows over the hs API (app/lua_ui_chat.cpp): new windows, per-window channels, default channel,
 // clear, close, and the settings kept in the character's UI ini.
 #include <doctest/doctest.h>
 
@@ -12,8 +12,10 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_windows.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
+#include "app/lua_ui_windows.h"
 #include "core/ini_file.h"
 #include "game/chat_windows.h"
 #include "game/combat.h"
@@ -34,11 +36,11 @@ namespace {
 
 struct Lua {
     lua_State* L = luaL_newstate();
-    explicit Lua(app::EqApi& api) {
+    explicit Lua(app::UiApi& api) {
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
     }
     ~Lua() { lua_close(L); }
     // Runs `code` (which returns one value) and gives it as text.
@@ -57,7 +59,7 @@ struct Lua {
 // The texts of a window's lines, joined with '|' (the STML tags stripped).
 const char* kLines = R"(
 local function lines(slot)
-  local _, l = eq.ChatText(slot)
+  local _, l = hs.ChatText(slot)
   local out = {}
   for _, s in ipairs(l or {}) do out[#out + 1] = (s:gsub("<[^>]*>", "")) end
   return table.concat(out, "|")
@@ -93,13 +95,13 @@ TEST_CASE("Chat windows: lines go to the window of their colour's channel (Chann
     {
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
         host.submit_chat = [&](const std::string& t) { submitted.push_back(t); };
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         lua.run(kLines + std::string("_G.lines = lines"));
@@ -107,76 +109,76 @@ TEST_CASE("Chat windows: lines go to the window of their colour's channel (Chann
         view.add(ui::ChatChannel::Say, "hello");
         view.add(ui::ChatChannel::Tell, "psst");
         view.add(ui::ChatChannel::System, "You have been slain", 0, 277); // My Death (channel 28)
-        CHECK(lua.run("return #eq.ChatWindows()") == "1");
-        CHECK(lua.run("return eq.ChatWindows()[1].title") == "Main Chat");
+        CHECK(lua.run("return #hs.ChatWindows()") == "1");
+        CHECK(lua.run("return hs.ChatWindows()[1].title") == "Main Chat");
         CHECK(lua.run("return lines(1)") == "hello|psst|You have been slain"); // every channel starts in the main one
 
-        // A new window is a stock window that shows (eq.ReplaceWindow), empty, with no channels.
-        CHECK(lua.run("return tostring(eq.ReplaceWindow('Chat2'))") == "false");
-        CHECK(lua.run("return eq.ChatNewWindow()") == "2");
-        CHECK(lua.run("return eq.ChatWindows()[2].title") == "Chat 1");
-        CHECK(lua.run("return tostring(eq.ReplaceWindow('Chat2'))") == "true");
+        // A new window is a stock window that shows (hs.ReplaceWindow), empty, with no channels.
+        CHECK(lua.run("return tostring(hs.ReplaceWindow('Chat2'))") == "false");
+        CHECK(lua.run("return hs.ChatNewWindow()") == "2");
+        CHECK(lua.run("return hs.ChatWindows()[2].title") == "Chat 1");
+        CHECK(lua.run("return tostring(hs.ReplaceWindow('Chat2'))") == "true");
         CHECK(lua.run("return lines(2)") == "");
         // Melee's ALL: its 18 channels come here, and the window says so; lines already shown stay where they are.
-        lua.run("eq.ChatSetFilter(2, 'Melee', true)");
+        lua.run("hs.ChatSetFilter(2, 'Melee', true)");
         CHECK(lua.run("return lines(2)") == "All melee channels will now filter to this window.");
-        CHECK(lua.run("local n = 0; for _, f in ipairs(eq.ChatFilters(2)) do if f.on then n = n + 1 end end; return n") == "18");
+        CHECK(lua.run("local n = 0; for _, f in ipairs(hs.ChatFilters(2)) do if f.on then n = n + 1 end end; return n") == "18");
         view.add(ui::ChatChannel::System, "You have been slain", 0, 277);
         view.add(ui::ChatChannel::Combat, "You hit a rat for 3 points of damage.", 0, 265); // Your Hits (9)
         CHECK(lua.run("return lines(2)") ==
               "All melee channels will now filter to this window.|You have been slain|You hit a rat for 3 points of damage.");
         CHECK(lua.run("return lines(1)") == "hello|psst|You have been slain");
         // One channel back to the main window (its item a second time).
-        lua.run("eq.ChatSetFilter(2, 28, false)");
-        CHECK(lua.run("local _, l = eq.ChatText(2); return #l") == "4"); // "My Death will go to the main window."
+        lua.run("hs.ChatSetFilter(2, 28, false)");
+        CHECK(lua.run("local _, l = hs.ChatText(2); return #l") == "4"); // "My Death will go to the main window."
         view.add(ui::ChatChannel::System, "You died.", 0, 277);
         CHECK(lua.run("return lines(1)") == "hello|psst|You have been slain|You died.");
 
         // A tab in the main window: a chat window of its own (Say comes to it).
-        CHECK(lua.run("return eq.ChatNewTab(1, 'Social')") == "2");
-        lua.run("eq.ChatSetFilter(1, 0, true)");
-        CHECK(lua.run("local w = eq.ChatWindows()[1]; return w.tab .. #w.tabs .. w.title") == "22Social");
+        CHECK(lua.run("return hs.ChatNewTab(1, 'Social')") == "2");
+        lua.run("hs.ChatSetFilter(1, 0, true)");
+        CHECK(lua.run("local w = hs.ChatWindows()[1]; return w.tab .. #w.tabs .. w.title") == "22Social");
         view.add(ui::ChatChannel::Say, "news");
         CHECK(lua.run("return lines(1)") == "Say will go to this window.|news");
         view.add(ui::ChatChannel::Tell, "psst again");
-        CHECK(lua.run("return tostring(eq.ChatWindows()[1].tabs[1].unread)") == "true"); // the tab not up
-        lua.run("eq.ChatSelectTab(1, 1)");
+        CHECK(lua.run("return tostring(hs.ChatWindows()[1].tabs[1].unread)") == "true"); // the tab not up
+        lua.run("hs.ChatSelectTab(1, 1)");
         CHECK(lua.run("return lines(1)") == "hello|psst|You have been slain|You died.|psst again");
 
         // Plain text goes to the window's channel (the Channel menu); commands as typed.
-        lua.run("eq.ChatSetDefault(2, 2)"); // Group
-        lua.run("eq.ChatSubmit(2, 'inc')");
-        lua.run("eq.ChatSubmit(2, '/who')");
-        lua.run("eq.ChatSubmit(1, 'hi')");
+        lua.run("hs.ChatSetDefault(2, 2)"); // Group
+        lua.run("hs.ChatSubmit(2, 'inc')");
+        lua.run("hs.ChatSubmit(2, '/who')");
+        lua.run("hs.ChatSubmit(1, 'hi')");
         CHECK(submitted == std::vector<std::string>{"/gsay inc", "/who", "hi"});
-        CHECK(lua.run("local _, active, d = eq.ChatInfo(1); return tostring(active) .. d") == "trueSay");
-        lua.run("eq.ChatSetDefault(2, 1)"); // Tell: disabled in the menu
-        CHECK(lua.run("local _, _, d = eq.ChatInfo(2); return d") == "Group");
+        CHECK(lua.run("local _, active, d = hs.ChatInfo(1); return tostring(active) .. d") == "trueSay");
+        lua.run("hs.ChatSetDefault(2, 1)"); // Tell: disabled in the menu
+        CHECK(lua.run("local _, _, d = hs.ChatInfo(2); return d") == "Group");
 
         // Clear empties one window only.
-        lua.run("eq.ChatClear(2)");
+        lua.run("hs.ChatClear(2)");
         CHECK(lua.run("return lines(2)") == "");
         CHECK(lua.run("return lines(1)") != "");
 
         // Tell windows: a tell goes to its player's tell window, typed text back to that player.
-        lua.run("eq.ChatSetTellWindows(true)");
+        lua.run("hs.ChatSetTellWindows(true)");
         view.add(ui::ChatChannel::Tell, "Bob tells you, 'hi'", 0, 257, "Bob");
-        CHECK(lua.run("local w = eq.ChatWindows(); return #w .. tostring(w[3].tells) .. w[3].title") == "3trueBob");
-        CHECK(lua.run("return lines(eq.ChatWindows()[3].slot)") == "Bob tells you, 'hi'");
-        CHECK(lua.run("return eq.ChatWindows()[3].tellsIn") == "1"); // (the modern tell window flashes)
+        CHECK(lua.run("local w = hs.ChatWindows(); return #w .. tostring(w[3].tells) .. w[3].title") == "3trueBob");
+        CHECK(lua.run("return lines(hs.ChatWindows()[3].slot)") == "Bob tells you, 'hi'");
+        CHECK(lua.run("return hs.ChatWindows()[3].tellsIn") == "1"); // (the modern tell window flashes)
         view.add(ui::ChatChannel::Tell, "You told Ann, 'yo'", 0, 308, "Ann");
-        CHECK(lua.run("return #eq.ChatWindows()[3].tabs") == "2"); // Ann's is a tab of Bob's
-        CHECK(lua.run("return eq.ChatWindows()[3].tellsIn") == "1"); // our own tell's echo is not one
+        CHECK(lua.run("return #hs.ChatWindows()[3].tabs") == "2"); // Ann's is a tab of Bob's
+        CHECK(lua.run("return hs.ChatWindows()[3].tellsIn") == "1"); // our own tell's echo is not one
         view.add(ui::ChatChannel::Tell, "Ann tells you, 'ok'", 0, 257, "Ann");
-        CHECK(lua.run("return eq.ChatWindows()[3].tellsIn") == "2"); // Ann's tab counts for the window
+        CHECK(lua.run("return hs.ChatWindows()[3].tellsIn") == "2"); // Ann's tab counts for the window
         // Timestamps: "[hh:mm:ss] " before each line, another version than without.
-        CHECK(lua.run("local s = eq.ChatWindows()[3].slot; local _, l = eq.ChatText(s, nil, false, true) "
+        CHECK(lua.run("local s = hs.ChatWindows()[3].slot; local _, l = hs.ChatText(s, nil, false, true) "
                       "return (l[1]:gsub('<[^>]*>', '')):match('^%[%d%d:%d%d:%d%d%] Bob tells you') ~= nil") == "true");
-        CHECK(lua.run("local s = eq.ChatWindows()[3].slot; return eq.ChatText(s) ~= eq.ChatText(s, nil, false, true)") ==
+        CHECK(lua.run("local s = hs.ChatWindows()[3].slot; return hs.ChatText(s) ~= hs.ChatText(s, nil, false, true)") ==
               "true");
         // A stamped window that holds the current version gets only the version back, as an unstamped one does.
-        CHECK(lua.run("local s = eq.ChatWindows()[3].slot; local v = eq.ChatText(s, nil, false, true) "
-                      "local v2, l = eq.ChatText(s, v, false, true) return tostring(v2 == v) .. tostring(l)") ==
+        CHECK(lua.run("local s = hs.ChatWindows()[3].slot; local v = hs.ChatText(s, nil, false, true) "
+                      "local v2, l = hs.ChatText(s, v, false, true) return tostring(v2 == v) .. tostring(l)") ==
               "truenil");
         // The stamp is the line's local time, worked out once a minute: seconds within a minute, the next minute.
         for (std::int64_t t : {std::int64_t{1700000040}, std::int64_t{1700000041}, std::int64_t{1700000099},
@@ -185,18 +187,18 @@ TEST_CASE("Chat windows: lines go to the window of their colour's channel (Chann
                 if (l.peer == "Bob") l.time = t;
             auto tm = platform::local_time(static_cast<std::time_t>(t));
             REQUIRE(tm);
-            CHECK(lua.run("local s = eq.ChatWindows()[3].slot; local _, l = eq.ChatText(s, nil, false, true) "
+            CHECK(lua.run("local s = hs.ChatWindows()[3].slot; local _, l = hs.ChatText(s, nil, false, true) "
                           "return (l[1]:gsub('<[^>]*>', '')):sub(1, 10)") ==
                   std::format("[{:02d}:{:02d}:{:02d}]", tm->tm_hour, tm->tm_min, tm->tm_sec));
         }
-        CHECK(lua.run("return eq.ChatWindows()[3].title") == "Bob");
-        lua.run("local s = eq.ChatWindows()[3].slot; eq.ChatSubmit(s, 'back')");
+        CHECK(lua.run("return hs.ChatWindows()[3].title") == "Bob");
+        lua.run("local s = hs.ChatWindows()[3].slot; hs.ChatSubmit(s, 'back')");
         CHECK(submitted.back() == "/tell Bob back");
 
         // Hit modes: 0..2, ALL sets them all.
-        lua.run("eq.ChatSetHitMode(1, 1)");
+        lua.run("hs.ChatSetHitMode(1, 1)");
         CHECK(conn.hit_modes()[0] == 1);
-        lua.run("eq.ChatSetHitMode(7, 2)");
+        lua.run("hs.ChatSetHitMode(7, 2)");
         CHECK(conn.hit_modes()[5] == 2);
 
         // The Options window's chat page lists the filter table's 33 rows (the original's order and names).
@@ -206,7 +208,7 @@ TEST_CASE("Chat windows: lines go to the window of their colour's channel (Chann
         CHECK(filters[1] == "Guild Chat");
         CHECK(filters[7] == "PC Spells");
 
-        lua.run("eq.ChatSetFont(2, 5); eq.ChatSetTitle(2, 'Fights')");
+        lua.run("hs.ChatSetFont(2, 5); hs.ChatSetTitle(2, 'Fights')");
         api.save_layout();
         // the original's keys
         ui::UiIni* ini = app::chat_ui_ini();
@@ -221,8 +223,8 @@ TEST_CASE("Chat windows: lines go to the window of their colour's channel (Chann
         CHECK(ini->get("ChatManager", "HitMode0") == "2");
         // /channel on a chat server channel (Cmd_channel: ChatChannel 0x14, its name at +0x234 and its index at
         // +0x230) is kept too: the exe's "%s_ChatChannel" / "%s_TellTarget" / "%s_DefaultChannel" keys
-        lua.run("eq.ChatSetAlwaysHere(1, false)"); // (the main window's lock first: the last-clicked window)
-        lua.run("eq.ChatActivate(2)");
+        lua.run("hs.ChatSetAlwaysHere(1, false)"); // (the main window's lock first: the last-clicked window)
+        lua.run("hs.ChatActivate(2)");
         REQUIRE(app::set_active_chat_default(0x14, "nmsguild", 1));
         api.save_layout();
         CHECK(ini->get("ChatManager", "ChatWindow1_DefaultChannel") == "20");
@@ -233,35 +235,35 @@ TEST_CASE("Chat windows: lines go to the window of their colour's channel (Chann
         // The next session reads the windows back (not the tell windows).
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         lua.run(kLines + std::string("_G.lines = lines"));
-        CHECK(lua.run("local w = eq.ChatWindows(); return #w .. w[2].title .. #w[1].tabs") == "2Fights2");
-        CHECK(lua.run("return (eq.ChatInfo(2))") == "5");
-        CHECK(lua.run("return (select(3, eq.ChatInfo(2)))") == "nmsguild"); // the chat channel default, read back
-        CHECK(lua.run("return tostring(eq.ChatTellWindows())") == "true");
+        CHECK(lua.run("local w = hs.ChatWindows(); return #w .. w[2].title .. #w[1].tabs") == "2Fights2");
+        CHECK(lua.run("return (hs.ChatInfo(2))") == "5");
+        CHECK(lua.run("return (select(3, hs.ChatInfo(2)))") == "nmsguild"); // the chat channel default, read back
+        CHECK(lua.run("return tostring(hs.ChatTellWindows())") == "true");
         CHECK(conn.hit_modes()[0] == 2);
         view.add(ui::ChatChannel::System, "a rat hits YOU for 3 points of damage.", 0, 266); // You Being Hit (24)
         view.add(ui::ChatChannel::Say, "chatter");
         view.add(ui::ChatChannel::OOC, "ooc");
         CHECK(lua.run("return lines(2)") == "a rat hits YOU for 3 points of damage.");
-        lua.run("eq.ChatSelectTab(1, 2)");
+        lua.run("hs.ChatSelectTab(1, 2)");
         CHECK(lua.run("return lines(1)") == "chatter");
-        lua.run("eq.ChatSelectTab(1, 1)");
+        lua.run("hs.ChatSelectTab(1, 1)");
         CHECK(lua.run("return lines(1)") == "ooc");
         // Closing a window sends its channels back to the main window; the main window stays.
-        lua.run("eq.ChatCloseWindow(2)");
-        CHECK(lua.run("return #eq.ChatWindows()") == "1");
+        lua.run("hs.ChatCloseWindow(2)");
+        CHECK(lua.run("return #hs.ChatWindows()") == "1");
         view.add(ui::ChatChannel::System, "a rat hits YOU for 4 points of damage.", 0, 266);
         CHECK(lua.run("return lines(1)") == "ooc|a rat hits YOU for 4 points of damage.");
-        lua.run("eq.ChatCloseTab(1, 2); eq.ChatCloseWindow(1)");
-        CHECK(lua.run("return #eq.ChatWindows()[1].tabs") == "1");
+        lua.run("hs.ChatCloseTab(1, 2); hs.ChatCloseWindow(1)");
+        CHECK(lua.run("return #hs.ChatWindows()[1].tabs") == "1");
     }
     ImGui::DestroyContext(ctx);
     fs::remove_all(dir);
@@ -284,14 +286,14 @@ TEST_CASE("Chat windows: defaults.ini's extra windows are tabs of the main windo
     {
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         Lua lua(api);
-        const std::string tabs = "local t = {} for _, w in ipairs(eq.ChatWindows()) do local n = {} "
+        const std::string tabs = "local t = {} for _, w in ipairs(hs.UI.chat.Windows()) do local n = {} "
                                  "for _, x in ipairs(w.tabs) do n[#n + 1] = x.title end "
                                  "t[#t + 1] = table.concat(n, '+') end return table.concat(t, '|')";
         // A new character: one window, Other Chat a tab of it; again so at the next start.
@@ -301,17 +303,17 @@ TEST_CASE("Chat windows: defaults.ini's extra windows are tabs of the main windo
         api.load_layout(dir / "defaults.ini", layout, {});
         CHECK(lua.run(tabs) == "Main Chat+Other Chat");
         // The tab closed: it stays closed.
-        lua.run("eq.ChatCloseTab(1, 2)");
+        lua.run("hs.UI.chat.CloseTab(1, 2)");
         CHECK(lua.run(tabs) == "Main Chat");
         api.save_layout();
         api.load_layout(dir / "defaults.ini", layout, {});
         CHECK(lua.run(tabs) == "Main Chat");
         // A window of the player's own is kept, and closed stays closed.
-        CHECK(lua.run("return eq.ChatNewWindow()") == "2");
+        CHECK(lua.run("return hs.UI.chat.NewWindow()") == "2");
         api.save_layout();
         api.load_layout(dir / "defaults.ini", layout, {});
-        CHECK(lua.run("return #eq.ChatWindows()") == "2");
-        lua.run("eq.ChatCloseWindow(2)");
+        CHECK(lua.run("return #hs.UI.chat.Windows()") == "2");
+        lua.run("hs.UI.chat.CloseWindow(2)");
         api.save_layout();
         api.load_layout(dir / "defaults.ini", layout, {});
         CHECK(lua.run(tabs) == "Main Chat");
@@ -332,35 +334,35 @@ TEST_CASE("Chat hit modes: spell categories persist independently, ALL keeps ind
     for (int session = 0; session < 2; ++session) {
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", layout, {});
         Lua lua(api);
-        REQUIRE(lua.run("return #eq.ChatHitModes()") == "11");
-        CHECK(lua.run("return eq.ChatHitModes()[7].id .. ':' .. eq.ChatHitModes()[7].name") == "7:ALL");
-        CHECK(lua.run("return eq.ChatHitModes()[8].name") == "Direct Spell Damage");
-        CHECK(lua.run("return eq.ChatHitModes()[9].name") == "Damage Over Time");
-        CHECK(lua.run("return eq.ChatHitModes()[10].name") == "Healing");
-        CHECK(lua.run("return eq.ChatHitModes()[11].name") == "Healing Over Time");
-        CHECK(lua.run("return table.concat(eq.ChatHitModes()[8].modes, '|')") == "Normal|Abbreviated|Number Only");
-        CHECK(lua.run("return eq.ChatHitModes()[2].modes[3]") == "Miss Only");
+        REQUIRE(lua.run("return #hs.ChatHitModes()") == "11");
+        CHECK(lua.run("return hs.ChatHitModes()[7].id .. ':' .. hs.ChatHitModes()[7].name") == "7:ALL");
+        CHECK(lua.run("return hs.ChatHitModes()[8].name") == "Direct Spell Damage");
+        CHECK(lua.run("return hs.ChatHitModes()[9].name") == "Damage Over Time");
+        CHECK(lua.run("return hs.ChatHitModes()[10].name") == "Healing");
+        CHECK(lua.run("return hs.ChatHitModes()[11].name") == "Healing Over Time");
+        CHECK(lua.run("return table.concat(hs.ChatHitModes()[8].modes, '|')") == "Normal|Abbreviated|Number Only");
+        CHECK(lua.run("return hs.ChatHitModes()[2].modes[3]") == "Miss Only");
         if (session == 0) {
             // Older layouts' unused native modes 6/7 are not spell settings.
             CHECK(conn.hit_modes()[0] == 1);
             CHECK(conn.spell_hit_modes() == game::SpellHitModes{});
             for (std::size_t i = 0; i < expected.size(); ++i)
-                lua.run(std::format("eq.ChatSetHitMode({}, {})", i + 8, expected[i]));
+                lua.run(std::format("hs.ChatSetHitMode({}, {})", i + 8, expected[i]));
             CHECK(conn.hit_modes()[0] == 1);
             CHECK(conn.spell_hit_modes() == expected);
             CHECK(app::chat_ui_ini()->get("ChatManager", "HitMode6") == "2");
             CHECK(app::chat_ui_ini()->get("ChatManager", "HitMode7") == "1");
 
             // Native/shared context menus have the same four categories and working checkmarks/actions.
-            lua.run("eq.ChatMenu(1)");
+            lua.run("hs.ChatMenu(1)");
             REQUIRE(host.menus.size() == 1);
             auto hit = std::find_if(host.menus[0].rows.begin(), host.menus[0].rows.end(),
                                     [](const auto& row) { return row.text == "Hit Modes"; });
@@ -381,16 +383,16 @@ TEST_CASE("Chat hit modes: spell categories persist independently, ALL keeps ind
             }
 
             // Existing scripts' ALL index also sets every spell category.
-            lua.run("eq.ChatSetHitMode(7, 2)");
+            lua.run("hs.ChatSetHitMode(7, 2)");
             CHECK(conn.hit_modes() == game::HitModes{2, 2, 2, 2, 2, 2});
             CHECK(conn.spell_hit_modes() == game::SpellHitModes{2, 2, 2, 2});
-            CHECK(lua.run("return eq.ChatHitModes()[7].mode") == "2");
+            CHECK(lua.run("return hs.ChatHitModes()[7].mode") == "2");
             for (std::size_t i = 0; i < expected.size(); ++i)
-                lua.run(std::format("eq.ChatSetHitMode({}, {})", i + 8, expected[i]));
-            CHECK(lua.run("return eq.ChatHitModes()[7].mode") == "-1");
-            lua.run("eq.ChatSetHitMode(0, 0); eq.ChatSetHitMode(-1, 0); eq.ChatSetHitMode(12, 0); "
-                    "eq.ChatSetHitMode(math.mininteger, 0); eq.ChatSetHitMode(math.maxinteger, 0); "
-                    "eq.ChatSetHitMode(8, -1); eq.ChatSetHitMode(11, 3)");
+                lua.run(std::format("hs.ChatSetHitMode({}, {})", i + 8, expected[i]));
+            CHECK(lua.run("return hs.ChatHitModes()[7].mode") == "-1");
+            lua.run("hs.ChatSetHitMode(0, 0); hs.ChatSetHitMode(-1, 0); hs.ChatSetHitMode(12, 0); "
+                    "hs.ChatSetHitMode(math.mininteger, 0); hs.ChatSetHitMode(math.maxinteger, 0); "
+                    "hs.ChatSetHitMode(8, -1); hs.ChatSetHitMode(11, 3)");
             CHECK(conn.spell_hit_modes() == expected);
             CHECK(conn.hit_modes() == game::HitModes{2, 2, 2, 2, 2, 2});
             api.save_layout();
@@ -400,7 +402,7 @@ TEST_CASE("Chat hit modes: spell categories persist independently, ALL keeps ind
         } else {
             CHECK(conn.spell_hit_modes() == expected);
             for (std::size_t i = 0; i < expected.size(); ++i)
-                CHECK(lua.run(std::format("return eq.ChatHitModes()[{}].mode", i + 8)) == std::to_string(expected[i]));
+                CHECK(lua.run(std::format("return hs.ChatHitModes()[{}].mode", i + 8)) == std::to_string(expected[i]));
             // Changing character/layout resets absent or invalid spell modes to Normal.
             const auto other = dir / "UI_Other_Server.ini";
             std::ofstream(other) << "[ChatManager]\nSpellHitMode0=-1\nSpellHitMode1=3\nSpellHitMode2=bad\n";
@@ -422,7 +424,7 @@ for i = 1, 11 do
 end
 modes[7].name, modes[7].mode = 'ALL', -1
 modes[11].name, modes[11].mode = 'Healing Over Time', 1
-eq = {
+hs = {
   ChatFilters=function() return {{id=0, menu=0, group='Filters', name='Say', on=true}} end,
   ChatFilterGroups=function() return {} end,
   ChatHitModes=function() return modes end,
@@ -443,11 +445,12 @@ eq = {
         struct CloseLua { lua_State* state; ~CloseLua() { lua_close(state); } } close{state};
         luaL_openlibs(state);
         REQUIRE(luaL_dostring(state, fixture) == LUA_OK);
+        REQUIRE(hailstone::test::attach_mock_ui_api(state) == LUA_OK);
         std::string setup;
         std::string checks;
         if (gamepad) {
             setup = R"lua(
-ui = {window=function() end}
+ui = {window=function() end, GetSetting=function() end}
 local theme = {C={}, palettes={list={{id='test', name='Test'}}}, palette='test'}
 dofile = function(name) return name == 'lib/theme.lua' and theme or {} end
 )lua";
@@ -473,8 +476,8 @@ order = {}
 local depth = 0
 local filtersOpen = false
 local hitMenus = 0
-eq.ChatInfo = function() return 0, 0, 'Say', false, false end
-eq.ChatTellWindows = function() return false end
+hs.ChatInfo = function() return 0, 0, 'Say', false, false end
+hs.ChatTellWindows = function() return false end
 ui = {
   BeginPopup=function(name) return name == 'chatmenu' end,
   EndPopup=function() assert(depth == 0) end,
@@ -504,7 +507,7 @@ ui = {
 for scenario = 1, 3 do
   order, calls, hitMenus = {}, {}, 0
   filtersOpen = scenario == 3
-  eq.ChatFilters = function()
+  hs.ChatFilters = function()
     if scenario == 1 then return {} end
     return {{id=0, menu=0, group='Filters', name='Say', on=true}}
   end
@@ -516,7 +519,7 @@ for scenario = 1, 3 do
 end
 )lua";
         }
-        const auto code = setup + source + checks;
+        const auto code = std::string("local API = hs.UI\n") + setup + source + checks;
         const int result = luaL_dostring(state, code.c_str());
         INFO((result == LUA_OK ? "" : lua_tostring(state, -1)));
         CHECK(result == LUA_OK);
@@ -533,25 +536,25 @@ TEST_CASE("Chat windows: each window keeps its own last 1000 lines; a busy one d
     {
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         lua.run(kLines + std::string("_G.lines = lines"));
-        const char* count2 = "local _, l = eq.ChatText(2) return #l";
-        const char* first2 = "local _, l = eq.ChatText(2) return (l[1]:gsub('<[^>]*>', ''))";
+        const char* count2 = "local _, l = hs.ChatText(2) return #l";
+        const char* first2 = "local _, l = hs.ChatText(2) return (l[1]:gsub('<[^>]*>', ''))";
 
         view.add(ui::ChatChannel::Tell, "psst");
         view.add(ui::ChatChannel::Say, "hello");
-        CHECK(lua.run("return eq.ChatNewWindow()") == "2");
-        lua.run("eq.ChatSetFilter(2, 'Melee', true)"); // (and its line "All melee channels ...")
+        CHECK(lua.run("return hs.ChatNewWindow()") == "2");
+        lua.run("hs.ChatSetFilter(2, 'Melee', true)"); // (and its line "All melee channels ...")
         for (int i = 1; i <= 3500; ++i) { // (more than the whole buffer once held)
             view.add(ui::ChatChannel::Combat, std::format("hit {}", i), 0, 265); // Your Hits: window 2
-            if (i % 100 == 0) lua.run("return #eq.ChatWindows()"); // routed (and trimmed) as the scripts look
+            if (i % 100 == 0) lua.run("return #hs.ChatWindows()"); // routed (and trimmed) as the scripts look
         }
         CHECK(lua.run(count2) == "1000");
         CHECK(lua.run(first2) == "hit 2501");
@@ -559,7 +562,7 @@ TEST_CASE("Chat windows: each window keeps its own last 1000 lines; a busy one d
         CHECK(view.lines.size() == 1002);
 
         // Clearing still goes by each line's number, with lines gone from the middle of the buffer.
-        lua.run("eq.ChatClear(1)");
+        lua.run("hs.ChatClear(1)");
         CHECK(lua.run("return lines(1)") == "");
         view.add(ui::ChatChannel::Say, "again");
         CHECK(lua.run("return lines(1)") == "again");
@@ -570,7 +573,7 @@ TEST_CASE("Chat windows: each window keeps its own last 1000 lines; a busy one d
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("Chat windows: eq.ChatText's version is the window's own; the incremental form sends only the new lines") {
+TEST_CASE("Chat windows: hs.ChatText's version is the window's own; the incremental form sends only the new lines") {
     ImGuiContext* ctx = ImGui::CreateContext();
     hailstone::test::ScratchDir dir_scratch("chat_text_since_test");
     fs::path dir = dir_scratch.path();
@@ -580,12 +583,12 @@ TEST_CASE("Chat windows: eq.ChatText's version is the window's own; the incremen
     {
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         // A script's copy of a window's lines, kept up with the incremental form as the modern chat keeps it.
@@ -594,7 +597,7 @@ _G.held = {}
 function _G.follow(slot)
   local h = held[slot] or { version = -1, lines = {} }
   held[slot] = h
-  local v, l, reset, count = eq.ChatText(slot, h.version, false, false, true)
+  local v, l, reset, count = hs.ChatText(slot, h.version, false, false, true)
   if v == h.version then return "same" end
   h.version = v
   if reset then h.lines = {} end
@@ -604,23 +607,23 @@ function _G.follow(slot)
 end
 function _G.text(slot) return table.concat(held[slot].lines, "|") end
 function _G.all(slot)
-  local _, l = eq.ChatText(slot)
+  local _, l = hs.ChatText(slot)
   local out = {}
   for _, s in ipairs(l) do out[#out + 1] = (s:gsub("<[^>]*>", "")) end
   return table.concat(out, "|")
 end
 )");
         view.add(ui::ChatChannel::Say, "hello");
-        CHECK(lua.run("return eq.ChatNewWindow()") == "2");
-        lua.run("eq.ChatSetFilter(2, 'Melee', true)");
+        CHECK(lua.run("return hs.ChatNewWindow()") == "2");
+        lua.run("hs.ChatSetFilter(2, 'Melee', true)");
         CHECK(lua.run("return follow(1)") == "reset:1");
         CHECK(lua.run("return follow(2)") == "reset:1"); // (its "All melee channels ..." line)
         CHECK(lua.run("return follow(1)") == "same");
 
         // A line in one window leaves the other's version as it was; the window it went to gets that line alone.
-        CHECK(lua.run("_G.v1 = eq.ChatText(1) return 'ok'") == "ok");
+        CHECK(lua.run("_G.v1 = hs.ChatText(1) return 'ok'") == "ok");
         view.add(ui::ChatChannel::Combat, "hit 1", 0, 265);
-        CHECK(lua.run("return tostring(eq.ChatText(1) == v1)") == "true");
+        CHECK(lua.run("return tostring(hs.ChatText(1) == v1)") == "true");
         CHECK(lua.run("return follow(1)") == "same");
         CHECK(lua.run("return follow(2)") == "add:1");
         view.add(ui::ChatChannel::Say, "again");
@@ -629,8 +632,8 @@ end
         CHECK(lua.run("return text(1)") == "hello|again|and again");
         CHECK(lua.run("return text(1) == all(1)") == "true");
         // The old form still gives every line when the version differs, and the version alone when it is the same.
-        CHECK(lua.run("local v, l = eq.ChatText(1, -1) return #l") == "3");
-        CHECK(lua.run("local v = eq.ChatText(1) local v2, l = eq.ChatText(1, v) return tostring(l)") == "nil");
+        CHECK(lua.run("local v, l = hs.ChatText(1, -1) return #l") == "3");
+        CHECK(lua.run("local v = hs.ChatText(1) local v2, l = hs.ChatText(1, v) return tostring(l)") == "nil");
 
         // Past 1000 lines the oldest leave the front: the script drops them by the count.
         for (int i = 2; i <= 1003; ++i) view.add(ui::ChatChannel::Combat, std::format("hit {}", i), 0, 265);
@@ -639,15 +642,15 @@ end
         CHECK(lua.run("return text(2) == all(2)") == "true");
 
         // Clear: everything again (none), and from there new lines only.
-        lua.run("eq.ChatClear(1)");
+        lua.run("hs.ChatClear(1)");
         CHECK(lua.run("return follow(1)") == "reset:0");
         view.add(ui::ChatChannel::Say, "after");
         CHECK(lua.run("return follow(1)") == "add:1");
         CHECK(lua.run("return text(1)") == "after");
         // Another stamp setting, another window's version: everything again.
-        CHECK(lua.run("local v, l, reset = eq.ChatText(1, held[1].version, false, true, true) return tostring(reset)") ==
+        CHECK(lua.run("local v, l, reset = hs.ChatText(1, held[1].version, false, true, true) return tostring(reset)") ==
               "true");
-        CHECK(lua.run("local v, l, reset = eq.ChatText(2, held[1].version, false, false, true) return tostring(reset)") ==
+        CHECK(lua.run("local v, l, reset = hs.ChatText(2, held[1].version, false, false, true) return tostring(reset)") ==
               "true");
 
         // The buffer emptied (a camp): with no line since, everything again (none); with lines since, those, and
@@ -686,36 +689,36 @@ TEST_CASE("Chat windows: the extended channels take only the extended colours, i
     {
         net::GameConnection conn(game_dir);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game_dir;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         lua.run(kLines + std::string("_G.lines = lines"));
-        CHECK(lua.run("return eq.ChatNewWindow('Extended')") == "2");
+        CHECK(lua.run("return hs.ChatNewWindow('Extended')") == "2");
         const auto original_server_settings = conn.chat_filters().settings;
         for (const auto& item : game::chat_filter_items()) {
             if (item.channel < game::kChatChannelCountRoF2) continue;
             CAPTURE(item.channel);
             int color = extended_color_of(item.channel);
             REQUIRE(color != 0); // every extended channel in the menu is reached by an extended colour
-            lua.run(std::format("eq.ChatSetFilter(2, {}, true); eq.ChatClear(2)", item.channel));
+            lua.run(std::format("hs.ChatSetFilter(2, {}, true); hs.ChatClear(2)", item.channel));
             const std::string text = std::format("route {}", item.channel);
             view.add(ui::ChatChannel::System, text, 0, static_cast<std::uint32_t>(color));
             CHECK(lua.run("return lines(2)") == text);
         }
-        CHECK(lua.run("for _, f in ipairs(eq.ChatFilters(2)) do if f.id == 107 then return f.name end end") == "Alerts");
-        CHECK(lua.run("return #eq.ChatFilterGroups()") == "11");
-        CHECK(lua.run("for _, g in ipairs(eq.ChatFilterGroups()) do if g.name == 'Healing' then return g.parent end end") ==
+        CHECK(lua.run("for _, f in ipairs(hs.ChatFilters(2)) do if f.id == 107 then return f.name end end") == "Alerts");
+        CHECK(lua.run("return #hs.ChatFilterGroups()") == "11");
+        CHECK(lua.run("for _, g in ipairs(hs.ChatFilterGroups()) do if g.name == 'Healing' then return g.parent end end") ==
               std::to_string(static_cast<int>(game::ChatFilterMenu::Extended)));
-        CHECK(lua.run("for _, f in ipairs(eq.ChatFilters(2)) do if f.id == 101 then return f.menu end end") ==
+        CHECK(lua.run("for _, f in ipairs(hs.ChatFilters(2)) do if f.id == 101 then return f.menu end end") ==
               std::to_string(static_cast<int>(game::ChatFilterMenu::Healing)));
 
-        CHECK(lua.run("return eq.ChatNewWindow('Healing')") == "3");
-        lua.run("eq.ChatSetFilter(3, 'Healing', true); eq.ChatClear(3); eq.ChatClear(2)");
+        CHECK(lua.run("return hs.ChatNewWindow('Healing')") == "3");
+        lua.run("hs.ChatSetFilter(3, 'Healing', true); hs.ChatClear(3); hs.ChatClear(2)");
         view.add(ui::ChatChannel::System, "received heal", 0, 402);
         view.add(ui::ChatChannel::System, "other direct damage", 0, 379);
         CHECK(lua.run("return lines(3)") == "received heal");
@@ -724,9 +727,9 @@ TEST_CASE("Chat windows: the extended channels take only the extended colours, i
 
         // The Filters menu is InitContextMenu's (Randoms, Other and the Melee and Spells items where they were),
         // then Extended (server) after its ALL.
-        lua.run("eq.ChatMenu(2)");
+        lua.run("hs.ChatMenu(2)");
         REQUIRE(host.menus.size() == 1);
-        auto find = [](const std::vector<app::EqHost::MenuRow>& rows, const char* name) {
+        auto find = [](const std::vector<app::UiHost::MenuRow>& rows, const char* name) {
             return std::find_if(rows.begin(), rows.end(), [&](const auto& row) { return row.text == name; });
         };
         auto filters = find(host.menus[0].rows, "Filters");
@@ -757,19 +760,19 @@ TEST_CASE("Chat windows: the extended channels take only the extended colours, i
     {
         net::GameConnection conn(game_dir);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game_dir;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         lua.run(kLines + std::string("_G.lines = lines"));
         for (const auto& item : game::chat_filter_items()) {
             if (item.channel < game::kChatChannelCountRoF2) continue;
             const int window = item.menu == game::ChatFilterMenu::Healing ? 3 : 2;
-            CHECK(lua.run(std::format("for _, f in ipairs(eq.ChatFilters({})) do if f.id == {} then return f.on end end",
+            CHECK(lua.run(std::format("for _, f in ipairs(hs.ChatFilters({})) do if f.id == {} then return f.on end end",
                                       window, item.channel)) == "true");
         }
         view.add(ui::ChatChannel::System, "alert after reload", 0, 408);
@@ -795,16 +798,16 @@ TEST_CASE("Chat windows: a layout and colours saved before the extended channels
     {
         net::GameConnection conn(game_dir);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game_dir;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
-        CHECK(lua.run("return eq.ChatNewWindow('Combat')") == "2");
-        lua.run("eq.ChatSetFilter(2, 22, true); eq.ChatSetFilter(2, 40, true); eq.ChatSetFilter(2, 56, true)");
+        CHECK(lua.run("return hs.ChatNewWindow('Combat')") == "2");
+        lua.run("hs.ChatSetFilter(2, 22, true); hs.ChatSetFilter(2, 40, true); hs.ChatSetFilter(2, 56, true)");
         api.save_layout();
     }
     // As the client before the extended channels wrote it: ChannelMap0..56 only.
@@ -827,16 +830,16 @@ TEST_CASE("Chat windows: a layout and colours saved before the extended channels
     {
         net::GameConnection conn(game_dir);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game_dir;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         lua.run(kLines + std::string("_G.lines = lines"));
-        CHECK(lua.run("return #eq.ChatWindows()") == "2");
+        CHECK(lua.run("return #hs.ChatWindows()") == "2");
         view.add(ui::ChatChannel::System, "non melee", 0, 283); // Chat::NonMelee: Non Melee Hits (40)
         view.add(ui::ChatChannel::System, "red", 0, 13);        // Other (22)
         view.add(ui::ChatChannel::System, "pvp", 0, 350);       // PvP Messages (56)
@@ -870,12 +873,12 @@ TEST_CASE("Chat palette: extended colours load, edit, persist and reset without 
     for (int session = 0; session < 2; ++session) {
         net::GameConnection conn(game_dir);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game_dir;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         auto names = api.list_texts("OptionsWindow", "ColorChooseList");
         CHECK(names.size() == 151); // 97 existing visible rows plus all 54 extended colours
@@ -1043,16 +1046,16 @@ TEST_CASE("Chat windows: the chat keys fill the active window's input (TELL, CMD
     {
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
         host.submit_chat = [&](const std::string& t) { submitted.push_back(t); };
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
-        const char* take = "local t, r = eq.ChatTakeFocus(1, 'typed'); return tostring(t) .. '|' .. tostring(r)";
+        const char* take = "local t, r = hs.ChatTakeFocus(1, 'typed'); return tostring(t) .. '|' .. tostring(r)";
         CHECK(lua.run(take) == "nil|nil");
         app::tell_key(); // (no eqstr 13974 here: the English word)
         CHECK(lua.run(take) == "/tell |true");
@@ -1061,8 +1064,8 @@ TEST_CASE("Chat windows: the chat keys fill the active window's input (TELL, CMD
         CHECK(lua.run(take) == "'|true");
 
         // HISTORY_UP / HISTORY_DOWN: the lines sent before, as the input's Up / Down
-        lua.run("eq.ChatSubmit(1, 'one')");
-        lua.run("eq.ChatSubmit(1, 'two')");
+        lua.run("hs.ChatSubmit(1, 'one')");
+        lua.run("hs.ChatSubmit(1, 'two')");
         app::chat_history_key(true);
         CHECK(lua.run(take) == "two|true");
         app::chat_history_key(true);
@@ -1071,26 +1074,26 @@ TEST_CASE("Chat windows: the chat keys fill the active window's input (TELL, CMD
         CHECK(lua.run(take) == "two|true");
 
         // PAGEUP / PAGEDOWN: once, for the active window
-        CHECK(lua.run("return eq.ChatPage(1)") == "nil");
-        CHECK(lua.run("return eq.ChatNewWindow()") == "2");
+        CHECK(lua.run("return hs.ChatPage(1)") == "nil");
+        CHECK(lua.run("return hs.ChatNewWindow()") == "2");
         app::chat_page_key(-1);
-        CHECK(lua.run("return eq.ChatPage(2)") == "nil");
-        CHECK(lua.run("return eq.ChatPage(1)") == "-1");
-        CHECK(lua.run("return eq.ChatPage(1)") == "nil");
-        lua.run("eq.ChatSetAlwaysHere(1, false)");
-        lua.run("eq.ChatActivate(2)");
+        CHECK(lua.run("return hs.ChatPage(2)") == "nil");
+        CHECK(lua.run("return hs.ChatPage(1)") == "-1");
+        CHECK(lua.run("return hs.ChatPage(1)") == "nil");
+        lua.run("hs.ChatSetAlwaysHere(1, false)");
+        lua.run("hs.ChatActivate(2)");
         app::chat_page_key(1);
-        CHECK(lua.run("return eq.ChatPage(2)") == "1");
+        CHECK(lua.run("return hs.ChatPage(2)") == "1");
 
         // The chat input's Tab with nobody to reply to, or on another line: the input stays.
-        CHECK(lua.run("return eq.ChatCycleReply('/tell ', false)") == "nil");
-        CHECK(lua.run("return eq.ChatCycleReply('hello', true)") == "nil");
+        CHECK(lua.run("return hs.ChatCycleReply('/tell ', false)") == "nil");
+        CHECK(lua.run("return hs.ChatCycleReply('hello', true)") == "nil");
 
         // ':' and "'" lines are the emote and say commands whatever the window's channel (CMDMODE_EMOTE / _SAY).
-        lua.run("eq.ChatSetDefault(1, 2)"); // Group
-        lua.run("eq.ChatSubmit(1, ':waves')");
-        lua.run("eq.ChatSubmit(1, \"'hi\")");
-        lua.run("eq.ChatSubmit(1, 'inc')");
+        lua.run("hs.ChatSetDefault(1, 2)"); // Group
+        lua.run("hs.ChatSubmit(1, ':waves')");
+        lua.run("hs.ChatSubmit(1, \"'hi\")");
+        lua.run("hs.ChatSubmit(1, 'inc')");
         REQUIRE(submitted.size() >= 3);
         CHECK(std::vector<std::string>(submitted.end() - 3, submitted.end()) ==
               std::vector<std::string>{":waves", "'hi", "/gsay inc"});
@@ -1106,34 +1109,34 @@ TEST_CASE("Chat windows: Always Chat Here takes the chat keys; the main window h
     write_strings(dir / "game");
     GameDir game(dir / "game");
     auto takes = [](Lua& lua, int slot) {
-        return lua.run(std::format("local t = eq.ChatTakeFocus({}); return tostring(t)", slot));
+        return lua.run(std::format("local t = hs.ChatTakeFocus({}); return tostring(t)", slot));
     };
-    const char* here = "local s = '' for i = 1, 3 do s = s .. tostring(select(5, eq.ChatInfo(i))):sub(1, 1) end return s";
+    const char* here = "local s = '' for i = 1, 3 do s = s .. tostring(select(5, hs.ChatInfo(i))):sub(1, 1) end return s";
     {
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         lua.run(kLines + std::string("_G.lines = lines"));
-        CHECK(lua.run("return eq.ChatNewWindow()") == "2");
-        CHECK(lua.run("return eq.ChatNewWindow()") == "3");
+        CHECK(lua.run("return hs.ChatNewWindow()") == "2");
+        CHECK(lua.run("return hs.ChatNewWindow()") == "3");
         CHECK(lua.run(here) == "tff"); // a new character: the main window's
         // Another window clicked: the keys still start a line in the main window.
-        lua.run("eq.ChatActivate(2)");
+        lua.run("hs.ChatActivate(2)");
         app::tell_key();
         CHECK(takes(lua, 2) == "nil");
         CHECK(takes(lua, 1) == "/tell ");
-        CHECK(lua.run("return tostring(select(2, eq.ChatInfo(1)))") == "true");
+        CHECK(lua.run("return tostring(select(2, hs.ChatInfo(1)))") == "true");
 
         // Ticked on window 3: it takes the keys (and says so in itself).
         std::string before = lua.run("return lines(3)");
-        lua.run("eq.ChatSetAlwaysHere(3, true)");
+        lua.run("hs.ChatSetAlwaysHere(3, true)");
         CHECK(lua.run(here) == "fft");
         CHECK(lua.run("return lines(3)") != before);
         app::tell_key();
@@ -1145,16 +1148,16 @@ TEST_CASE("Chat windows: Always Chat Here takes the chat keys; the main window h
         CHECK(ini->get("ChatManager", "LockedActiveWindow") == "2");
 
         // Unticked there: back to the main window.
-        lua.run("eq.ChatSetAlwaysHere(3, false)");
+        lua.run("hs.ChatSetAlwaysHere(3, false)");
         CHECK(lua.run(here) == "tff");
         // Window 2 locked and closed: the main window again.
-        lua.run("eq.ChatSetAlwaysHere(2, true)");
-        lua.run("eq.ChatCloseWindow(2)");
-        CHECK(lua.run("return tostring(select(5, eq.ChatInfo(1)))") == "true");
+        lua.run("hs.ChatSetAlwaysHere(2, true)");
+        lua.run("hs.ChatCloseWindow(2)");
+        CHECK(lua.run("return tostring(select(5, hs.ChatInfo(1)))") == "true");
         // Unticked on the main window: no lock, the last-clicked window has the keys (the original's way).
-        lua.run("eq.ChatSetAlwaysHere(1, false)");
-        CHECK(lua.run("return tostring(select(5, eq.ChatInfo(1)))") == "false");
-        lua.run("eq.ChatActivate(3)");
+        lua.run("hs.ChatSetAlwaysHere(1, false)");
+        CHECK(lua.run("return tostring(select(5, hs.ChatInfo(1)))") == "false");
+        lua.run("hs.ChatActivate(3)");
         app::tell_key();
         CHECK(takes(lua, 3) == "/tell ");
         api.save_layout();
@@ -1164,15 +1167,15 @@ TEST_CASE("Chat windows: Always Chat Here takes the chat keys; the main window h
         // The next session keeps "no lock".
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
-        CHECK(lua.run("return tostring(select(5, eq.ChatInfo(1)))") == "false");
+        CHECK(lua.run("return tostring(select(5, hs.ChatInfo(1)))") == "false");
     }
     ImGui::DestroyContext(ctx);
 }
@@ -1188,18 +1191,18 @@ TEST_CASE("Chat windows: the chat history keeps each line's time; a version 1 fi
     auto session = [&](const std::function<void(Lua&, ui::ChatView&)>& check) {
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         check(lua, view);
         app::save_chat_history(true);
     };
-    const char* stamped = "local _, l = eq.ChatText(1, nil, false, true) local n = 0 "
+    const char* stamped = "local _, l = hs.ChatText(1, nil, false, true) local n = 0 "
                           "for _, s in ipairs(l) do if s:gsub('<[^>]*>', ''):match('^%[%d%d:%d%d:%d%d%] ') then n = n + 1 end end "
                           "return n .. '/' .. #l";
     session([&](Lua& lua, ui::ChatView& view) {
@@ -1217,7 +1220,7 @@ TEST_CASE("Chat windows: the chat history keeps each line's time; a version 1 fi
     std::ofstream(file) << "# Hailstone chat history 1\n" << "1\t0\t0\t\told line\n";
     session([&](Lua& lua, ui::ChatView&) {
         CHECK(lua.run(stamped) == "0/2");
-        CHECK(lua.run("local _, l = eq.ChatText(1) return (l[1]:gsub('<[^>]*>', ''))") == "old line");
+        CHECK(lua.run("local _, l = hs.ChatText(1) return (l[1]:gsub('<[^>]*>', ''))") == "old line");
     });
     ImGui::DestroyContext(ctx);
 }
@@ -1239,51 +1242,51 @@ TEST_CASE("Item display: a click on the icon links the item into the active chat
         net::Item& item = displays[0];
         item.id = 1001;
         item.name = "Cloth Cap";
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
         host.item_displays = &displays;
         host.item_display_ids = &ids;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         Lua lua(api);
         const std::string link = game::make_item_link(item, conn.server_ext().wide_item_links(conn));
         auto take = [&](int slot) {
-            return lua.run(std::format("local t, r = eq.ChatTakeFocus({}); return tostring(t) .. '|' .. tostring(r)",
+            return lua.run(std::format("local t, r = hs.ChatTakeFocus({}); return tostring(t) .. '|' .. tostring(r)",
                                        slot));
         };
-        const char* click = "return eq.ClickChild('ItemDisplayWindow', 'IconButton', 'left')";
+        const char* click = "return hs.ClickChild('ItemDisplayWindow', 'IconButton', 'left')";
 
         // By default the main window is the Always Chat Here one (Hailstone's default lock): it gets the link,
         // added after what is typed there, whichever window was used last.
-        CHECK(lua.run("return eq.ChatNewWindow()") == "2");
-        lua.run("eq.ChatActivate(2)");
+        CHECK(lua.run("return hs.ChatNewWindow()") == "2");
+        lua.run("hs.ChatActivate(2)");
         CHECK(lua.run(click) == "true");
         CHECK(take(2) == "nil|nil");
         CHECK(take(1) == link + "|false");
         CHECK(take(1) == "nil|nil"); // once
 
         // Without a lock: the window used last.
-        lua.run("eq.ChatSetAlwaysHere(1, false)");
-        lua.run("eq.ChatActivate(2)");
+        lua.run("hs.ChatSetAlwaysHere(1, false)");
+        lua.run("hs.ChatActivate(2)");
         lua.run(click);
         CHECK(take(1) == "nil|nil");
         CHECK(take(2) == link + "|false");
-        lua.run("eq.ChatActivate(1)");
+        lua.run("hs.ChatActivate(1)");
         lua.run(click);
         CHECK(take(2) == "nil|nil");
         CHECK(take(1) == link + "|false");
 
         // Always Chat Here ticked on the second window (its menu row): it gets the link.
-        lua.run("eq.ChatMenu(2)");
+        lua.run("hs.ChatMenu(2)");
         REQUIRE(host.menus.size() == 1);
         auto here = std::find_if(host.menus[0].rows.begin(), host.menus[0].rows.end(),
-                                 [](const app::EqHost::MenuRow& r) { return r.text == "Always Chat Here"; });
+                                 [](const app::UiHost::MenuRow& r) { return r.text == "Always Chat Here"; });
         REQUIRE(here != host.menus[0].rows.end());
         here->act();
-        lua.run("eq.ChatActivate(1)");
+        lua.run("hs.ChatActivate(1)");
         lua.run(click);
         CHECK(take(1) == "nil|nil");
         CHECK(take(2) == link + "|false");
@@ -1303,7 +1306,7 @@ TEST_CASE("Item display: a click on the icon links the item into the active chat
         item.contents.clear();
 
         // A right click is not the icon's.
-        CHECK(lua.run("return eq.ClickChild('ItemDisplayWindow', 'IconButton', 'right')") == "false");
+        CHECK(lua.run("return hs.ClickChild('ItemDisplayWindow', 'IconButton', 'right')") == "false");
         CHECK(take(2) == "nil|nil");
     }
     ImGui::DestroyContext(ctx);

@@ -9,7 +9,7 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq_values.h"
+#include "app/lua_ui_values.h"
 #include "core/byte_io.h"
 #include "mock_server/harness.h"
 #include "mock_server/profile_builder.h"
@@ -31,7 +31,7 @@ struct GaugeHost {
     test::EmptyGameDir dir;
     GameDir game{dir.path()};
     net::GameConnection conn{game, {}};
-    app::EqHost host;
+    app::UiHost host;
     GaugeHost() {
         host.game = &game;
         host.conn = &conn;
@@ -50,36 +50,36 @@ std::string drawn(lua_State* L) {
 
 TEST_CASE("fellowship vitality: native gauges preserve unsigned precision and bound empty or over-cap pools") {
     GaugeHost t;
-    CHECK(app::eq_gauge(t.host, 147).value == 0);
-    CHECK(app::eq_gauge(t.host, 147).text.empty());
-    CHECK(app::eq_gauge(t.host, 148).text.empty());
+    CHECK(app::ui_gauge(t.host, 147).value == 0);
+    CHECK(app::ui_gauge(t.host, 147).text.empty());
+    CHECK(app::ui_gauge(t.host, 148).text.empty());
     t.conn.receive_zone_packet_for_test(vitality(9, 0, 7, 0));
-    CHECK(app::eq_gauge(t.host, 147).value == 0);
-    CHECK(app::eq_gauge(t.host, 147).text == "9 / 0");
-    CHECK(app::eq_gauge(t.host, 148).value == 0);
+    CHECK(app::ui_gauge(t.host, 147).value == 0);
+    CHECK(app::ui_gauge(t.host, 147).text == "9 / 0");
+    CHECK(app::ui_gauge(t.host, 148).value == 0);
     t.conn.receive_zone_packet_for_test(vitality(1, 3, 2, 3));
-    CHECK(app::eq_gauge(t.host, 147).value == 333);
-    CHECK(app::eq_gauge(t.host, 148).value == 666);
+    CHECK(app::ui_gauge(t.host, 147).value == 333);
+    CHECK(app::ui_gauge(t.host, 148).value == 666);
     t.conn.receive_zone_packet_for_test(vitality(12, 10, 5, 4));
-    CHECK(app::eq_gauge(t.host, 147).value == 1000);
-    CHECK(app::eq_gauge(t.host, 148).value == 1000);
+    CHECK(app::ui_gauge(t.host, 147).value == 1000);
+    CHECK(app::ui_gauge(t.host, 148).value == 1000);
     constexpr auto max = std::numeric_limits<std::uint64_t>::max();
     constexpr auto max_aa = std::numeric_limits<std::uint32_t>::max();
     t.conn.receive_zone_packet_for_test(vitality(max - 1, max, max_aa - 1, max_aa));
-    CHECK(app::eq_gauge(t.host, 147).value == 999);
-    CHECK(app::eq_gauge(t.host, 148).value == 999);
-    CHECK(app::eq_gauge(t.host, 147).text == "18446744073709551614 / 18446744073709551615");
-    CHECK(app::eq_gauge(t.host, 148).text == "4294967294 / 4294967295");
+    CHECK(app::ui_gauge(t.host, 147).value == 999);
+    CHECK(app::ui_gauge(t.host, 148).value == 999);
+    CHECK(app::ui_gauge(t.host, 147).text == "18446744073709551614 / 18446744073709551615");
+    CHECK(app::ui_gauge(t.host, 148).text == "4294967294 / 4294967295");
     t.conn.receive_zone_packet_for_test(vitality(max / 2, max));
-    CHECK(app::eq_gauge(t.host, 147).value == 499);
+    CHECK(app::ui_gauge(t.host, 147).value == 499);
     t.conn.receive_zone_packet_for_test(vitality(max / 2 + 1, max));
-    CHECK(app::eq_gauge(t.host, 147).value == 500);
+    CHECK(app::ui_gauge(t.host, 147).value == 500);
     t.conn.receive_zone_packet_for_test(vitality(max, max, max_aa, max_aa));
-    CHECK(app::eq_gauge(t.host, 147).value == 1000);
-    CHECK(app::eq_gauge(t.host, 148).value == 1000);
+    CHECK(app::ui_gauge(t.host, 147).value == 1000);
+    CHECK(app::ui_gauge(t.host, 148).value == 1000);
     t.host.in_game = false;
-    CHECK(app::eq_gauge(t.host, 147).value == -1);
-    CHECK(app::eq_gauge(t.host, 148).value == -1);
+    CHECK(app::ui_gauge(t.host, 147).value == -1);
+    CHECK(app::ui_gauge(t.host, 148).value == -1);
 }
 
 TEST_CASE("fellowship vitality: profile pools and subsequent updates reach the native gauges") {
@@ -88,19 +88,19 @@ TEST_CASE("fellowship vitality: profile pools and subsequent updates reach the n
     profile.fellowship_vitality_normal = 5000000000ull;
     profile.fellowship_vitality_aa = 17;
     t.conn.receive_zone_packet_for_test(test::build_player_profile(profile));
-    CHECK(app::eq_gauge(t.host, 147).text == "5000000000 / 0");
-    CHECK(app::eq_gauge(t.host, 148).text == "17 / 0");
+    CHECK(app::ui_gauge(t.host, 147).text == "5000000000 / 0");
+    CHECK(app::ui_gauge(t.host, 148).text == "17 / 0");
     t.conn.receive_zone_packet_for_test(vitality(7500000000ull, 10000000000ull, 25, 50));
-    CHECK(app::eq_gauge(t.host, 147).value == 750);
-    CHECK(app::eq_gauge(t.host, 148).value == 500);
-    CHECK(app::eq_gauge(t.host, 147).text == "7500000000 / 10000000000");
+    CHECK(app::ui_gauge(t.host, 147).value == 750);
+    CHECK(app::ui_gauge(t.host, 148).value == 500);
+    CHECK(app::ui_gauge(t.host, 147).text == "7500000000 / 10000000000");
     REQUIRE(t.conn.profile());
     CHECK(t.conn.profile()->fellowship_vitality_normal == 7500000000ull);
     CHECK(t.conn.profile()->fellowship_vitality_aa == 25);
     t.conn.disconnect();
-    CHECK(app::eq_gauge(t.host, 147).value == 0);
-    CHECK(app::eq_gauge(t.host, 147).text.empty());
-    CHECK(app::eq_gauge(t.host, 148).text.empty());
+    CHECK(app::ui_gauge(t.host, 147).value == 0);
+    CHECK(app::ui_gauge(t.host, 147).text.empty());
+    CHECK(app::ui_gauge(t.host, 148).text.empty());
 }
 
 TEST_CASE("fellowship vitality: both inventory packs draw the received pools and refresh their progress") {
@@ -115,13 +115,13 @@ TEST_CASE("fellowship vitality: both inventory packs draw the received pools and
         unsigned char* pixels = nullptr;
         int width = 0, height = 0;
         ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-        app::EqHost host;
+        app::UiHost host;
         host.game = &rig.game;
         host.conn = &rig.conn;
         host.in_game = host.ui_ready = true;
-        app::EqApi api(host);
+        app::UiApi api(host);
         ui::lua::LuaUi lua(scripts, scratch.path() / "ui.txt");
-        lua.add_eq_api([&](lua_State* L) { api.register_functions(L); });
+        lua.add_ui_api([&](lua_State* L) { api.register_functions(L); });
         api.load_layout(scratch.path() / "defaults.ini", scratch.path() / "UI_Test_Server.ini", {});
         api.show("InventoryWindow", true);
         lua_State* L = lua.state();

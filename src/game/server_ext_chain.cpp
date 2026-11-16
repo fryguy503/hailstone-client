@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "core/process_serial.h"
 #include "game/spells.h"
 
 namespace hailstone::game {
@@ -62,6 +63,16 @@ bool ExtensionChain::empty() const {
 
 template <typename F> bool ExtensionChain::each(const net::GameConnection& c, F&& fn) const {
     ++depth_;
+    struct Finish {
+        const ExtensionChain& chain;
+        ~Finish() {
+            if (--chain.depth_ == 0 && chain.dirty_) {
+                auto& self = const_cast<ExtensionChain&>(chain);
+                std::erase_if(self.members_, [](const Member& m) { return !m.alive; });
+                chain.dirty_ = false;
+            }
+        }
+    } finish{*this};
     bool stopped = false;
     // By index: a member added meanwhile waits for the next call.
     for (std::size_t i = 0, n = members_.size(); i < n && !stopped; ++i) {
@@ -69,15 +80,78 @@ template <typename F> bool ExtensionChain::each(const net::GameConnection& c, F&
         if (!m.alive || (m.active && !m.active(c))) continue;
         stopped = fn(*m.ext);
     }
-    if (--depth_ == 0 && dirty_) {
-        auto& self = const_cast<ExtensionChain&>(*this);
-        std::erase_if(self.members_, [](const Member& m) { return !m.alive; });
-        dirty_ = false;
-    }
     return stopped;
 }
 
 // ---------------------------------------------------------------- the connection
+
+std::optional<FollowProfile> ExtensionChain::follow_profile(const net::GameConnection& c) const {
+    std::optional<FollowProfile> out;
+    each(c, [&](const ServerExtension& e) {
+        auto candidate = e.follow_profile(c);
+        if (candidate && valid_follow_profile(*candidate)) out = *candidate;
+        return out.has_value();
+    });
+    return out;
+}
+
+std::optional<MountProfile> ExtensionChain::mount_profile(const net::GameConnection& c) const {
+    std::optional<MountProfile> out;
+    each(c, [&](const ServerExtension& e) { return (out = e.mount_profile(c)).has_value(); });
+    return out;
+}
+
+bool ExtensionChain::map_visible(const net::GameConnection& c, const Spawn& spawn, std::uint32_t purpose) const {
+    const bool denied = each(c, [&](const ServerExtension& e) { return !e.map_visible(c, spawn, purpose); });
+    return !denied;
+}
+MapPolicy ExtensionChain::map_policy(const net::GameConnection& c) const {
+    MapPolicy out;
+    std::vector<PolicyStamp> stamps;
+    bool custom_owner = false;
+    each(c, [&](const ServerExtension& e) {
+        auto policy = e.map_policy(c);
+        const auto lifecycle = e.lifecycle_revision(c);
+        const auto member = std::find_if(members_.begin(), members_.end(), [&](const Member& m) {
+            return m.alive && m.ext.get() == &e;
+        });
+        if (member == members_.end()) return false;
+        // Every provider participates, including a visibility or Tracking restrictor with no map-owner flags.
+        stamps.push_back({member->id, policy.flags, policy.revision, lifecycle, policy.name});
+        out.flags |= policy.flags & (MapPolicyCustomSpawns | MapPolicyHideStockNpcs | MapPolicyDisableNpcFind);
+        if (!custom_owner && (policy.flags & MapPolicyCustomSpawns)) {
+            out.name = std::move(policy.name);
+            custom_owner = true;
+        } else if (!custom_owner && out.name.empty()) out.name = std::move(policy.name);
+        return false;
+    });
+    if (stamps != policy_stamps_) {
+        policy_stamps_ = std::move(stamps);
+        policy_revision_ = core::next_process_identity();
+    }
+    out.revision = policy_stamps_.empty() ? 0 : policy_revision_;
+    return out;
+}
+std::uint64_t ExtensionChain::lifecycle_revision(const net::GameConnection& c) const {
+    std::vector<std::pair<int, std::uint64_t>> stamps;
+    each(c, [&](const ServerExtension& e) {
+        const auto revision = e.lifecycle_revision(c);
+        const auto member = std::find_if(members_.begin(), members_.end(), [&](const Member& m) {
+            return m.alive && m.ext.get() == &e;
+        });
+        if (member != members_.end()) stamps.emplace_back(member->id, revision);
+        return false;
+    });
+    if (stamps != lifecycle_stamps_) {
+        lifecycle_stamps_ = std::move(stamps);
+        lifecycle_revision_ = core::next_process_identity();
+    }
+    return lifecycle_stamps_.empty() ? 0 : lifecycle_revision_;
+}
+bool ExtensionChain::merchant_right_click(net::GameConnection& c, std::uint32_t merchant, const net::ItemSlot& slot,
+                                         std::uint32_t item, std::uint32_t quantity) {
+    return each(c, [&](ServerExtension& e) { return e.merchant_right_click(c, merchant, slot, item, quantity); });
+}
 
 bool ExtensionChain::retry_zone_entry(net::GameConnection& c) {
     bool any = false;
@@ -169,7 +243,19 @@ std::optional<std::string> ExtensionChain::combat_effect_label(const net::GameCo
 
 std::optional<MapSpawnMark> ExtensionChain::map_spawn(const net::GameConnection& c, const Spawn& s,
                                                       const MapSpawnMark& defaults) const {
+    if (!map_visible(c, s, 0)) return std::nullopt;
     std::optional<MapSpawnMark> out;
+    const bool owned = each(c, [&](const ServerExtension& e) {
+        if (!(e.map_policy(c).flags & MapPolicyCustomSpawns)) return false;
+        // Ownership suppresses every other provider even when the owner has no mark.
+        const auto still_active = [&] {
+            return each(c, [&](const ServerExtension& current) { return &current == &e; });
+        };
+        if (still_active() && map_visible(c, s, 0) && still_active()) out = e.map_spawn(c, s, defaults);
+        if (!still_active() || !map_visible(c, s, 0)) out.reset();
+        return true;
+    });
+    if (owned) return out;
     each(c, [&](const ServerExtension& e) { return (out = e.map_spawn(c, s, defaults)).has_value(); });
     return out;
 }
@@ -281,6 +367,37 @@ void ExtensionChain::label_text(const net::GameConnection& c, int id, std::strin
 
 void ExtensionChain::nameplate_text(const net::GameConnection& c, const Spawn& spawn, std::string& text) const {
     each(c, [&](const ServerExtension& e) { return e.nameplate_text(c, spawn, text), false; });
+}
+
+std::optional<std::string> ExtensionChain::zone_display_name(const net::GameConnection& c, std::uint32_t zone, std::uint32_t instance) const {
+    std::optional<std::string> out;
+    each(c,[&](const ServerExtension& e) { return (out=e.zone_display_name(c,zone,instance)).has_value(); });
+    return out;
+}
+std::optional<std::string> ExtensionChain::item_flags(const net::GameConnection& c,const net::Item& item,std::string_view flags) const {
+    std::optional<std::string> out;
+    each(c,[&](const ServerExtension& e) { auto next=e.item_flags(c,item,out ? std::string_view(*out) : flags); if(next) out=std::move(next); return false; });
+    return out;
+}
+std::optional<std::string> ExtensionChain::item_description_append(const net::GameConnection& c,const net::Item& item) const {
+    std::optional<std::string> out;
+    each(c,[&](const ServerExtension& e) { auto next=e.item_description_append(c,item); if(next && !next->empty()) { if(!out) out=std::move(next); else *out+="\n\n"+*next; } return false; });
+    return out;
+}
+std::uint64_t ExtensionChain::item_presentation_revision(const net::GameConnection& c) const {
+    std::uint64_t out=0;
+    each(c,[&](const ServerExtension& e) {
+        const auto member=std::find_if(members_.begin(),members_.end(),[&](const Member& m) { return m.alive && m.ext.get()==&e; });
+        if(member!=members_.end()) out^=static_cast<std::uint64_t>(member->id)+0x9e3779b97f4a7c15ULL+(out<<6)+(out>>2);
+        out^=e.item_presentation_revision(c)+0x9e3779b97f4a7c15ULL+(out<<6)+(out>>2);
+        return false;
+    });
+    return out;
+}
+std::optional<std::string> ExtensionChain::loot_confirmation(const net::GameConnection& c,const net::Item& item,std::span<const std::uint32_t> descendants,bool complete) const {
+    std::optional<std::string> out;
+    each(c,[&](const ServerExtension& e) { auto next=e.loot_confirmation(c,item,descendants,complete); if(next && !next->empty()) { if(!out) out=std::move(next); else *out+="\n\n"+*next; } return false; });
+    return out;
 }
 
 bool ExtensionChain::hide_xtarget_slot(const net::GameConnection& c, int slot) const {

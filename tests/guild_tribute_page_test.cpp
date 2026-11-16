@@ -1,4 +1,4 @@
-// The guild window's Tribute and Banner pages (app/lua_eq_social.cpp GuildWindow) against the mock EQEmu: the
+// The guild window's Tribute and Banner pages (app/lua_ui_social.cpp GuildWindow) against the mock EQEmu: the
 // tribute list from OP_GuildMemberList, a member's row updated by OP_GuildOptInOut, the opt-out buttons as
 // CGuildMgmtWnd::UpdateButtons enables them and what they send, and the banner page without banner messages.
 #include <doctest/doctest.h>
@@ -11,7 +11,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "core/byte_io.h"
 #include "mock_server/harness.h"
 #include "mock_server/profile_builder.h"
@@ -76,36 +76,36 @@ TEST_CASE("mock server: the guild window's Tribute page lists the members' tribu
         server.zone.send_reliable(net::encode(l));
         REQUIRE(until([&] { return conn.guild().in_guild() && conn.guild().members.size() == 2; }));
 
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
         const std::string list = "'GuildManagementWnd', 'TributeList'";
         api.begin_frame();
-        CHECK(run(L, "return (eq.ListInfo(" + list + "))") == "2");
+        CHECK(run(L, "return (hs.ListInfo(" + list + "))") == "2");
         // name, tribute state (eqstr 12946 + on; the client's own fallback text here), trophy state, donations, date
-        CHECK(run(L, "local r = eq.ListRow(" + list + ", 0) return r[1]..'|'..r[2]..'|'..r[3]..'|'..r[4]..'|'..r[5]") ==
+        CHECK(run(L, "local r = hs.ListRow(" + list + ", 0) return r[1]..'|'..r[2]..'|'..r[3]..'|'..r[4]..'|'..r[5]") ==
               "Gennro|on|off|500|");
-        CHECK(run(L, "return eq.ListRow(" + list + ", 1)[4]") == "40");
-        CHECK(run(L, "return #eq.ListRow(" + list + ", 1)[5]") == "8"); // "%02d/%02d/%02d"
+        CHECK(run(L, "return hs.ListRow(" + list + ", 1)[4]") == "40");
+        CHECK(run(L, "return #hs.ListRow(" + list + ", 1)[5]") == "8"); // "%02d/%02d/%02d"
 
         // Nobody selected: the buttons are off. Alice (another member, no permission 22): off. Ourselves: on.
-        CHECK(run(L, "return (eq.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "false");
-        CHECK(run(L, "return eq.ListClick(" + list + ", 1, 'left')") == "true");
-        CHECK(run(L, "return (eq.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "false");
-        CHECK(run(L, "return eq.ListClick(" + list + ", 0, 'left')") == "true");
-        CHECK(run(L, "return (eq.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "true");
+        CHECK(run(L, "return (hs.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "false");
+        CHECK(run(L, "return hs.ListClick(" + list + ", 1, 'left')") == "true");
+        CHECK(run(L, "return (hs.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "false");
+        CHECK(run(L, "return hs.ListClick(" + list + ", 0, 'left')") == "true");
+        CHECK(run(L, "return (hs.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "true");
         // EQEmu has no trophy tribute: never on, so its button stays off.
-        CHECK(run(L, "return (eq.ChildState('GuildManagementWnd', 'TrophyTributeOptOutButton'))") == "false");
+        CHECK(run(L, "return (hs.ChildState('GuildManagementWnd', 'TrophyTributeOptOutButton'))") == "false");
         // The selection is the window's one member: the member list shows it too.
-        CHECK(run(L, "return (select(3, eq.ListInfo('GuildManagementWnd', 'MemberList')))") == "0");
+        CHECK(run(L, "return (select(3, hs.ListInfo('GuildManagementWnd', 'MemberList')))") == "0");
 
-        CHECK(run(L, "return eq.ClickChild('GuildManagementWnd', 'TributeOptOutButton', 'left')") == "true");
+        CHECK(run(L, "return hs.ClickChild('GuildManagementWnd', 'TributeOptOutButton', 'left')") == "true");
         auto sent = [&] {
             return std::find_if(server.zone_log.begin(), server.zone_log.end(),
                                 [](const net::AppPacket& p) { return net::is_op(p, net::Op::GuildOptInOut); });
@@ -126,8 +126,8 @@ TEST_CASE("mock server: the guild window's Tribute page lists the members' tribu
         CHECK(conn.guild_tribute().opted_in == false);
         CHECK_FALSE(conn.guild().members[0].tribute_flag);
         api.begin_frame();
-        CHECK(run(L, "return eq.ListRow(" + list + ", 0)[2]") == "off");
-        CHECK(run(L, "return (eq.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "false");
+        CHECK(run(L, "return hs.ListRow(" + list + ", 0)[2]") == "off");
+        CHECK(run(L, "return (hs.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "false");
         // An answer naming nobody in the roster changes nothing.
         server.zone.send_reliable(net::encode(net::GuildTributeOpt{"Nobody", true, false, 1, 1, 1}));
         server.zone.send_reliable(net::encode(net::GuildTributeOpt{"alice", false, false, 41, 1, 1}));
@@ -136,15 +136,15 @@ TEST_CASE("mock server: the guild window's Tribute page lists the members' tribu
 
         // The Banner page without banner messages: an empty kit list, "No active banner" (eqstr 636), the
         // controls that need a kit or a banner off, the filter, Show All and Refresh on (and nothing sent).
-        CHECK(run(L, "return (eq.ListInfo('GuildManagementWnd', 'BannerKitList'))") == "0");
-        CHECK(run(L, "return (eq.WindowText('GuildManagementWnd', 'TimeRemainingValueLabel'))") != "");
-        CHECK(run(L, "return (eq.ChildState('GuildManagementWnd', 'PlantBannerButton'))") == "false");
-        CHECK(run(L, "return (eq.ChildState('GuildManagementWnd', 'EditBannerButton'))") == "false");
-        CHECK(run(L, "return (eq.ChildState('GuildManagementWnd', 'RefreshBannerListButton'))") == "true");
+        CHECK(run(L, "return (hs.ListInfo('GuildManagementWnd', 'BannerKitList'))") == "0");
+        CHECK(run(L, "return (hs.WindowText('GuildManagementWnd', 'TimeRemainingValueLabel'))") != "");
+        CHECK(run(L, "return (hs.ChildState('GuildManagementWnd', 'PlantBannerButton'))") == "false");
+        CHECK(run(L, "return (hs.ChildState('GuildManagementWnd', 'EditBannerButton'))") == "false");
+        CHECK(run(L, "return (hs.ChildState('GuildManagementWnd', 'RefreshBannerListButton'))") == "true");
         std::size_t before = server.zone_log.size();
-        CHECK(run(L, "return eq.ClickChild('GuildManagementWnd', 'ShowAllPossibleBannersButton', 'left')") == "true");
-        CHECK(run(L, "return (select(2, eq.ChildState('GuildManagementWnd', 'ShowAllPossibleBannersButton')))") == "true");
-        CHECK(run(L, "return eq.ClickChild('GuildManagementWnd', 'RefreshBannerListButton', 'left')") == "true");
+        CHECK(run(L, "return hs.ClickChild('GuildManagementWnd', 'ShowAllPossibleBannersButton', 'left')") == "true");
+        CHECK(run(L, "return (select(2, hs.ChildState('GuildManagementWnd', 'ShowAllPossibleBannersButton')))") == "true");
+        CHECK(run(L, "return hs.ClickChild('GuildManagementWnd', 'RefreshBannerListButton', 'left')") == "true");
         pump([&] { conn.update(); server.poll(); }, [] { return false; }, std::chrono::milliseconds(300));
         for (std::size_t i = before; i < server.zone_log.size(); ++i) {
             CHECK(server.zone_log[i].opcode != 0x0d92);
@@ -193,22 +193,22 @@ TEST_CASE("guild tribute benefits require the received permission at the window 
         return conn.guild().rank == 5 && conn.guild_tribute().abilities.size() == 2 && conn.guild_tribute().master_id == 77;
     }));
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
     lua_State* L = lua.get();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
     api.begin_frame();
     auto click = [&](const char* child) {
-        CHECK(run(L, std::string("return eq.ClickChild('TributeMasterWnd', '") + child + "', 'left')") == "true");
+        CHECK(run(L, std::string("return hs.ClickChild('TributeMasterWnd', '") + child + "', 'left')") == "true");
     };
     auto enabled = [&](const char* child) {
-        return run(L, std::string("return (eq.ChildState('TributeMasterWnd', '") + child + "'))");
+        return run(L, std::string("return (hs.ChildState('TributeMasterWnd', '") + child + "'))");
     };
     auto count = [&](net::Op op) { return MockEqServer::count(server.zone_log, op); };
     auto no_changes = [&] {
@@ -221,11 +221,11 @@ TEST_CASE("guild tribute benefits require the received permission at the window 
     CHECK(enabled("TMW_StatusButton") == "false");
     CHECK(enabled("TMW_UpgradeButton") == "false");
     CHECK(enabled("TMW_DowngradeButton") == "false");
-    CHECK(run(L, "return (eq.ChildState('TributeBenefitWnd', 'GuildActivateButton'))") == "false");
+    CHECK(run(L, "return (hs.ChildState('TributeBenefitWnd', 'GuildActivateButton'))") == "false");
     click("TMW_LockButton");
     click("TMW_UpgradeButton");
     click("TMW_StatusButton");
-    CHECK(run(L, "return eq.ClickChild('TributeBenefitWnd', 'GuildActivateButton', 'left')") == "true");
+    CHECK(run(L, "return hs.ClickChild('TributeBenefitWnd', 'GuildActivateButton', 'left')") == "true");
     conn.guild_tribute_change(active);
     conn.guild_tribute_toggle(true);
     no_changes();
@@ -244,13 +244,13 @@ TEST_CASE("guild tribute benefits require the received permission at the window 
     api.begin_frame();
     CHECK(enabled("TMW_LockButton") == "true");
     CHECK(enabled("TMW_StatusButton") == "true");
-    CHECK(run(L, "return (eq.ChildState('TributeBenefitWnd', 'GuildActivateButton'))") == "true");
-    CHECK(run(L, "return (eq.ListInfo('TributeMasterWnd', 'TMW_ActiveBenefitList'))") == "2");
-    CHECK(run(L, "return eq.ListClick('TributeMasterWnd', 'TMW_ActiveBenefitList', 0, 'left')") == "true");
+    CHECK(run(L, "return (hs.ChildState('TributeBenefitWnd', 'GuildActivateButton'))") == "true");
+    CHECK(run(L, "return (hs.ListInfo('TributeMasterWnd', 'TMW_ActiveBenefitList'))") == "2");
+    CHECK(run(L, "return hs.ListClick('TributeMasterWnd', 'TMW_ActiveBenefitList', 0, 'left')") == "true");
     click("TMW_LockButton");
     click("TMW_UpgradeButton");
-    CHECK(run(L, "return (eq.ListInfo('TributeMasterWnd', 'TMW_AvailableBenefitList'))") == "2");
-    CHECK(run(L, "return eq.ListClick('TributeMasterWnd', 'TMW_AvailableBenefitList', 1, 'left')") == "true");
+    CHECK(run(L, "return (hs.ListInfo('TributeMasterWnd', 'TMW_AvailableBenefitList'))") == "2");
+    CHECK(run(L, "return hs.ListClick('TributeMasterWnd', 'TMW_AvailableBenefitList', 1, 'left')") == "true");
     click("TMW_UpgradeButton");
     click("TMW_LockButton");
     click("TMW_StatusButton");
@@ -282,7 +282,7 @@ TEST_CASE("guild tribute benefits require the received permission at the window 
     click("TMW_StatusButton");
     conn.guild_tribute_change(active);
     conn.guild_tribute_toggle(false);
-    CHECK(run(L, "return (eq.WindowText('TributeMasterWnd', 'TMW_LockButton'))") == "Modify Benefits");
+    CHECK(run(L, "return (hs.WindowText('TributeMasterWnd', 'TMW_LockButton'))") == "Modify Benefits");
     rig.run_for(30ms);
     CHECK(count(net::Op::GuildSaveActiveTributes) == 1);
     CHECK(count(net::Op::GuildModifyBenefits) == 1);
@@ -295,7 +295,7 @@ TEST_CASE("guild tribute benefits require the received permission at the window 
     server.zone.send_reliable(net::encode_guild_rank_permission(5, 23, false));
     REQUIRE(rig.until([&] { return !conn.can_change_guild_tribute(); }));
     api.begin_frame();
-    CHECK(run(L, "return (eq.WindowText('TributeMasterWnd', 'TMW_LockButton'))") == "Modify Benefits");
+    CHECK(run(L, "return (hs.WindowText('TributeMasterWnd', 'TMW_LockButton'))") == "Modify Benefits");
     CHECK(enabled("TMW_LockButton") == "false");
 
     server.zone.send_reliable(net::encode_guild_rank_permission(5, 23, true));
@@ -305,8 +305,8 @@ TEST_CASE("guild tribute benefits require the received permission at the window 
     CHECK_FALSE(conn.can_change_guild_tribute());
     conn.guild_tribute_change(active);
     conn.guild_tribute_toggle(true);
-    CHECK(run(L, "return (eq.ChildState('TributeBenefitWnd', 'GuildActivateButton'))") == "false");
-    CHECK(run(L, "return (eq.ChildState('TributeBenefitWnd', 'OptOutButton'))") == "false");
+    CHECK(run(L, "return (hs.ChildState('TributeBenefitWnd', 'GuildActivateButton'))") == "false");
+    CHECK(run(L, "return (hs.ChildState('TributeBenefitWnd', 'OptOutButton'))") == "false");
     rig.run_for(30ms);
     CHECK(count(net::Op::GuildSaveActiveTributes) == 1);
     CHECK(count(net::Op::GuildTributeToggleReq) == 1);
@@ -327,21 +327,21 @@ TEST_CASE("guild tribute participation permits self changes but requires permiss
     roster.members = {member("Gennro", 2, 0), member("Alice", 2, 0)};
     server.zone.send_reliable(net::encode(roster));
     REQUIRE(rig.until([&] { return conn.guild().rank == 5 && conn.guild().members.size() == 2; }));
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
     lua_State* L = lua.get();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
     api.begin_frame();
-    CHECK(run(L, "return (eq.ListInfo('GuildManagementWnd', 'TributeList'))") == "2");
-    CHECK(run(L, "return eq.ListClick('GuildManagementWnd', 'TributeList', 1, 'left')") == "true");
+    CHECK(run(L, "return (hs.ListInfo('GuildManagementWnd', 'TributeList'))") == "2");
+    CHECK(run(L, "return hs.ListClick('GuildManagementWnd', 'TributeList', 1, 'left')") == "true");
     conn.guild_tribute_opt_out("Alice");
-    CHECK(run(L, "return eq.ClickChild('GuildManagementWnd', 'TributeOptOutButton', 'left')") == "true");
+    CHECK(run(L, "return hs.ClickChild('GuildManagementWnd', 'TributeOptOutButton', 'left')") == "true");
     rig.run_for(30ms);
     CHECK(MockEqServer::count(server.zone_log, net::Op::GuildOptInOut) == 0);
 
@@ -350,8 +350,8 @@ TEST_CASE("guild tribute participation permits self changes but requires permiss
     REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, net::Op::GuildOptInOut) == 2; }));
     server.zone.send_reliable(net::encode_guild_rank_permission(5, 22, true));
     REQUIRE(rig.until([&] { return conn.guild().permissions.has(5, 22); }));
-    CHECK(run(L, "return (eq.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "true");
-    CHECK(run(L, "return eq.ClickChild('GuildManagementWnd', 'TributeOptOutButton', 'left')") == "true");
+    CHECK(run(L, "return (hs.ChildState('GuildManagementWnd', 'TributeOptOutButton'))") == "true");
+    CHECK(run(L, "return hs.ClickChild('GuildManagementWnd', 'TributeOptOutButton', 'left')") == "true");
     REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, net::Op::GuildOptInOut) == 3; }));
     auto sent = std::find_if(server.zone_log.rbegin(), server.zone_log.rend(),
                              [](const net::AppPacket& p) { return net::is_op(p, net::Op::GuildOptInOut); });
@@ -363,7 +363,7 @@ TEST_CASE("guild tribute participation permits self changes but requires permiss
     server.zone.send_reliable(net::encode_guild_rank_permission(5, 22, false));
     REQUIRE(rig.until([&] { return !conn.guild().permissions.has(5, 22); }));
     conn.guild_tribute_opt_out("Alice");
-    CHECK(run(L, "return eq.ClickChild('GuildManagementWnd', 'TributeOptOutButton', 'left')") == "true");
+    CHECK(run(L, "return hs.ClickChild('GuildManagementWnd', 'TributeOptOutButton', 'left')") == "true");
     rig.run_for(30ms);
     CHECK(MockEqServer::count(server.zone_log, net::Op::GuildOptInOut) == 3);
 }
@@ -533,25 +533,25 @@ TEST_CASE("the tribute master's Donate button is greyed while a guild platinum d
     conn.click_slot(net::ItemSlot::possessions(23), true, false);
     REQUIRE(conn.inventory().cursor());
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
     lua_State* L = lua.get();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
     api.begin_frame();
-    auto enabled = [&] { return run(L, "return (eq.ChildState('TributeMasterWnd', 'TMW_DonateButton'))"); };
+    auto enabled = [&] { return run(L, "return (hs.ChildState('TributeMasterWnd', 'TMW_DonateButton'))"); };
     CHECK(enabled() == "true");
 
     REQUIRE(conn.guild_tribute_donate_platinum(3));
     CHECK(conn.guild_platinum_pending());
     CHECK(enabled() == "false");
     // A click on the greyed button sends nothing.
-    CHECK(run(L, "return eq.ClickChild('TributeMasterWnd', 'TMW_DonateButton', 'left')") == "true");
+    CHECK(run(L, "return hs.ClickChild('TributeMasterWnd', 'TMW_DonateButton', 'left')") == "true");
     rig.run_for(std::chrono::milliseconds(30));
     CHECK(MockEqServer::count(rig.server.zone_log, net::Op::GuildTributeDonateItem) == 0);
     CHECK(conn.inventory().cursor());

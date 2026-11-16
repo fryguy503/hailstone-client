@@ -66,9 +66,9 @@ void apply_look(game::Appearance& a, const std::string& spec) {
         {"head", 0}, {"chest", 1}, {"arms", 2}, {"wrists", 3}, {"hands", 4}, {"legs", 5}, {"feet", 6}, {"pri", 7}, {"sec", 8},
     };
     for (const auto& kv : split(spec, '/')) {
-        auto eq = kv.find('=');
-        if (eq == std::string::npos) throw std::runtime_error("appearance setting without '=': " + kv);
-        std::string k = kv.substr(0, eq), v = kv.substr(eq + 1);
+        auto hs = kv.find('=');
+        if (hs == std::string::npos) throw std::runtime_error("appearance setting without '=': " + kv);
+        std::string k = kv.substr(0, hs), v = kv.substr(hs + 1);
         auto num = static_cast<std::uint32_t>(std::strtoul(v.c_str(), nullptr, k == "tint" ? 16 : 10));
         if (k == "tex") a.texture = static_cast<std::uint8_t>(num);
         else if (k == "helm") a.helm = static_cast<std::uint8_t>(num);

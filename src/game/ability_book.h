@@ -72,7 +72,7 @@ struct AutoskillRule {
 std::string format_autoskill_rules(const std::vector<AutoskillRule>& rules);
 std::vector<AutoskillRule> parse_autoskill_rules(std::string_view text);
 
-// Moves the rule for `key` `delta` places along the list (eq.AbilityBookAutoskillMove), stopping at either end; any
+// Moves the rule for `key` `delta` places along the list (hs.AbilityBookAutoskillMove), stopping at either end; any
 // delta, up to the int64 range, is safe. False when no rule has the key or it does not move.
 bool move_autoskill_rule(std::vector<AutoskillRule>& rules, std::string_view key, std::int64_t delta);
 

@@ -33,11 +33,20 @@
 #include "plugin/hooks.h"
 #include "plugin/policy.h"
 
-namespace hailstone::game { class ExtensionChain; }
+namespace hailstone::game { class ExtensionChain; class NameplateCanvasRegistry; }
 namespace hailstone::net { struct AppPacket; class GameConnection; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 
 namespace hailstone::mq {
+
+// An installed, explicitly managed Lua add-on. The installer supplies its exact entry and recorded bytes;
+// a disabled or unverified record remains present so an ordinary autorun cannot bypass activation.
+struct ManagedScript {
+    std::string name;
+    std::filesystem::path entry;
+    Sha256Digest hash{}, revision{};
+    bool enabled = false, verified = false;
+};
 
 struct ScriptEnv {
     plugin::Hooks* hooks = nullptr;
@@ -53,6 +62,7 @@ struct ScriptEnv {
     // script's server extension joins, where its windows, functions, options and menu entries go, and packets to the
     // server. Any may be null.
     game::ExtensionChain* extensions = nullptr;
+    game::NameplateCanvasRegistry* nameplates = nullptr;
     plugin::UiBridge* ui = nullptr;
     std::function<void(plugin::Stream stream, const net::AppPacket& p)> send;
     std::function<net::GameConnection*()> connection; // what the setters change (class masks, pets)
@@ -172,6 +182,7 @@ public:
     void policy_changed(const std::vector<std::string>& autoload = {});
     // Required scripts are running, and no running script is forbidden by the current add-on policy.
     bool required_addons_ready(std::string* problem = nullptr) const;
+    void set_managed_addons(std::vector<ManagedScript> addons);
     // The server's scripts/ folder (servers/<profile>/scripts), looked in before env.dirs; empty for none.
     void set_server_dir(const std::filesystem::path& dir);
 

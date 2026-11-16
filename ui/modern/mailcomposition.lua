@@ -3,6 +3,7 @@
 -- the message filling the rest of the window; Send and Cancel are the window's buttons, so sending is the game's
 -- (names from the address book expand when sent). The window's address-book sync button is not drawn: it does not
 -- handle it.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -43,6 +44,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Compose New Message", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "New Message", WINDOW_OPTS, drawWindow)
 end)

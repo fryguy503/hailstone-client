@@ -1,10 +1,11 @@
 -- Text tiles in a grid that reflows to the width (the Actions window's buttons, the map toolbar's tools), and an
 -- icon well for a child's own icon (the bandolier's weapons, the potion belt, blocked spells). Every tile is a game
--- window's child: a click goes to it (eq.ClickChild), a drag picks up the hot button it makes where the window lets
--- it (eq.PickUp: the Actions window's buttons), so the window's own handler runs.
+-- window's child: a click goes to it (hs.ClickChild), a drag picks up the hot button it makes where the window lets
+-- it (hs.PickUp: the Actions window's buttons), so the window's own handler runs.
 --
 --   local tiles = dofile("lib/hudx_tiles.lua")
 --   tiles.Grid(win, list, { minW = 96, h = 30 })   -- list = { { id, label, opts }, ... }
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local C = T.color
 
@@ -16,7 +17,7 @@ local tiles = {}
 -- Returns "left" / "right" when it was clicked (the click already went to the game).
 function tiles.Tile(win, id, label, w, h, s, opts)
   opts = opts or T.NO_OPTS
-  local e, checked = eq.ChildState(win, id)
+  local e, checked = API.windows.ChildState(win, id)
   local enabled = opts.enabled
   if enabled == nil then enabled = e ~= false end
   local on = opts.on
@@ -42,7 +43,7 @@ function tiles.Tile(win, id, label, w, h, s, opts)
   end
   -- the cool-down the game set on the child (CButtonWnd::SetCoolDown: the Actions window's skills and socials):
   -- the time still to go, shaded, shrinking toward the bottom
-  local top = eq.ButtonCoolDown(win, id, y, y + h)
+  local top = API.spells.ButtonCoolDown(win, id, y, y + h)
   if top then ui.DrawRectFilled(x, top, x + w, y + h, 0, 0, 0, 0.45, rad) end
   local color = (not enabled and C.faint) or (opts.empty and C.faint) or (opts.danger and C.danger) or C.text
   local font = T.font.small
@@ -59,11 +60,11 @@ function tiles.Tile(win, id, label, w, h, s, opts)
   if hovered and opts.tooltip and not dragged then ui.SetTooltip(opts.tooltip) end
   if dragged then return nil end
   if clicked and enabled then
-    eq.ClickChild(win, id, "left")
+    API.windows.ClickChild(win, id, "left")
     return "left"
   end
   if rclick and opts.right then
-    eq.ClickChild(win, id, "right")
+    API.windows.ClickChild(win, id, "right")
     T.TakeRightClick()
     return "right"
   end
@@ -79,7 +80,7 @@ function tiles.Grid(win, list, opts)
   local gap = (opts.gap or 6) * s
   local shown = {}
   for _, t in ipairs(list) do
-    if opts.keepHidden or eq.ChildShown(win, t[1]) ~= false then shown[#shown + 1] = t end
+    if opts.keepHidden or API.windows.ChildShown(win, t[1]) ~= false then shown[#shown + 1] = t end
   end
   local avail = ui.GetContentRegionAvail()
   local cols = math.max(1, math.floor((avail + gap) / ((opts.minW or 96) * s + gap)))
@@ -101,10 +102,10 @@ function tiles.Grid(win, list, opts)
   return hit, button
 end
 
--- A child's icon (eq.ChildArt part "decal", tinted as the window tints it) in a modern well at x, y, size square;
+-- A child's icon (hs.ChildArt part "decal", tinted as the window tints it) in a modern well at x, y, size square;
 -- ring: the well's ring colour. Returns whether the child shows an icon.
 function tiles.Icon(win, id, x, y, size, s, ring, opts)
-  local tex, u0, v0, u1, v1 = eq.ChildArt(win, id, "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(win, id, "decal")
   if type(tex) ~= "userdata" then tex = nil end -- (false: nothing shown; a string: stock art, not drawn here)
   T.Icon(x, y, size, s, tex, u0, v0, u1, v1, ring, opts)
   return tex ~= nil

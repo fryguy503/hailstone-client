@@ -57,6 +57,26 @@ std::int32_t stat(const net::Item& item, std::int32_t (*field)(const net::Item&)
 }
 
 // MakeStmlColorTag(argb): <c "#RRGGBB">; the caller writes "<C " + tag-body + ">".
+std::string description_plaintext(std::string_view text) {
+    std::string out;
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        switch (text[index]) {
+        case '&': out += "&amp;"; break;
+        case '<': out += "&lt;"; break;
+        case '>': out += "&gt;"; break;
+        case '"': out += "&quot;"; break;
+        case '\'': out += "&apos;"; break;
+        case '\r':
+            if (index + 1 < text.size() && text[index + 1] == '\n') ++index;
+            out += "<BR>";
+            break;
+        case '\n': out += "<BR>"; break;
+        default: out += text[index]; break;
+        }
+    }
+    return out;
+}
+
 std::string color_tag(std::uint32_t argb) { return std::format("\"#{:06X}\"", argb & 0xffffff); }
 
 // The stat grid as the window's helpers fill it.
@@ -544,6 +564,7 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
     // The name, then the flags (both always).
     d.measured[0] = item.name;
     d.measured[1] = item_flags(item, ctx);
+    if (ctx.item_flags) if (auto flags = ctx.item_flags(item, d.measured[1])) d.measured[1] = std::move(*flags);
     info(d.measured[0]);
     info(d.measured[1]);
 
@@ -825,6 +846,11 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
 
     // UpdateStrings: the effects, then the item's own text (the lore text this client has).
     d.description = effects_text(item, ctx);
+    if (ctx.item_description_append) if (auto text = ctx.item_description_append(item); text && !text->empty()) {
+        if (!d.description.empty() && !d.description.ends_with("<BR>")) d.description += "<BR>";
+        d.description += description_plaintext(*text);
+        if (!d.description.ends_with("<BR>")) d.description += "<BR>";
+    }
     return d;
 }
 

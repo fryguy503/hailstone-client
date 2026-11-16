@@ -79,7 +79,7 @@ TEST_CASE("Settings files: two clients with one hailstone.ini keep each other's 
     {
         Config first;
         first.set("ui.name", "classic");
-        first.set("assets.path", "/eq");
+        first.set("assets.path", "/hs");
         first.set("keys.jump", "space");
         REQUIRE(first.save(file));
     }
@@ -132,7 +132,7 @@ TEST_CASE("Settings files: a character's settings over hailstone.ini") {
     const fs::path two = tmp.path() / "servers" / "s" / "characters" / "w" / "Two" / "hailstone.ini";
     Config c;
     c.set("display.render_scale", "100");
-    c.set("assets.path", "/eq");
+    c.set("assets.path", "/hs");
     c.set("window.width", "1280");
     c.set("gamepad.bind.a", "jump");
     REQUIRE(c.save(shared_file));

@@ -11,7 +11,9 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "net/packet_io.h"
 #include "net/player_packets.h"
@@ -61,17 +63,18 @@ TEST_CASE("Inventory's Bandolier page: draws, and its Save and Activate reach th
         auto& conn = rig.conn;
         REQUIRE(conn.bandolier_sets() >= 4);
 
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &rig.game;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ui::lua::LuaUi lua(dir / "modern", dir / "modern.txt");
-        lua.add_eq_api([&](lua_State* L) {
+        lua.add_ui_api([&](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         lua_State* L = lua.state();
         REQUIRE(luaL_dostring(L, "ui.SetSetting('test.inv.page', 'bandolier')") == LUA_OK);
@@ -90,19 +93,19 @@ TEST_CASE("Inventory's Bandolier page: draws, and its Save and Activate reach th
         CHECK_FALSE(api.shown("BandolierWnd"));
 
         // Save on the selected set (row 0): the name asked for, then the set stored and sent.
-        REQUIRE(luaL_dostring(L, "eq.ClickChild('BandolierWnd', 'AddButton', 'left')") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ClickChild('BandolierWnd', 'AddButton', 'left')") == LUA_OK);
         REQUIRE(host.text_entry);
         host.text_entry->done("Melee");
         host.text_entry.reset();
         CHECK(conn.bandolier()[0].name == "Melee");
         frames(); // the page shows the named set
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-        REQUIRE(luaL_dostring(L, "return (eq.ListRow('BandolierWnd', 'WeaponSetList', 0) or {})[1]") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "return (hs.ListRow('BandolierWnd', 'WeaponSetList', 0) or {})[1]") == LUA_OK);
         CHECK(std::string(lua_tostring(L, -1)) == "Melee");
         lua_settop(L, 0);
 
         // Activate: OP_Bandolier action 2 for set 0.
-        REQUIRE(luaL_dostring(L, "eq.ClickChild('BandolierWnd', 'UseButton', 'left')") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ClickChild('BandolierWnd', 'UseButton', 'left')") == LUA_OK);
         auto sent = [&](std::uint32_t action) {
             return std::any_of(rig.server.zone_log.begin(), rig.server.zone_log.end(), [&](const net::AppPacket& p) {
                 if (!net::is_op(p, net::Op::Bandolier)) return false;

@@ -1,24 +1,25 @@
 -- Advanced Inventory (Hailstone's own window, InventoryManagerWnd: the EQ menu's "Advanced Inventory" and the
 -- inventory window's button): everything the character has, worn, carried, banked and in the shared bank, in one
--- list or grid (eq.AllItems).
+-- list or grid (hs.AllItems).
 --   * search by name; filter by place, kind, mark, flags (usable by you, magic, lore, no trade, temporary,
---     stackable, sellable) and a stat (eq.ItemStats: the items that have it, with its column), each choice with how
+--     stackable, sellable) and a stat (hs.ItemStats: the items that have it, with its column), each choice with how
 --     many items it would show; Clear filters beside the search. A click on a column's heading sorts by it (place
 --     grouped by bag, name, level, the stat, quantity, value, weight), a second click the other way; the grid has
 --     no headings, so it has a Sort menu instead;
 --   * a click on a row (not its icon or marks) selects it, Ctrl adds or takes one away, Shift selects from the
 --     last one clicked, Ctrl+A everything shown. The selection's bar along the bottom sells (at an open merchant),
 --     tributes (at an open tribute master) or destroys what is selected and carried, after one confirmation
---     (eq.BulkItems: one item at a time, never a kept one);
+--     (hs.BulkItems: one item at a time, never a kept one);
 --   * Keep and Sell marks per item (every copy of it): a kept item is not destroyed, dropped, traded, given, sold or
 --     sent by parcel (the client refuses: game/kept_items.h); Sell marked sells the carried ones to the open merchant
---     (eq.SellJunk). An item has one mark or the other. Marks for every item shown at once are in the ... menu;
+--     (hs.SellJunk). An item has one mark or the other. Marks for every item shown at once are in the ... menu;
 --   * /finditem (or /advi) shows or hides the window; /finditem <text> opens it searching for that, filters cleared;
 --   * each item's icon is its slot: a click picks it up, drops or swaps (Shift: the stack, Ctrl: one), a right click
 --     uses it, holding the right button shows its details, holding the left button (or dragging) puts a hot button
 --     for it on the cursor, as in a bag. A banked item moves only while the bank is open. A right click on the row
 --     opens its menu;
 --   * along the bottom: what is shown and marked, and Stack / Sort / Tidy of the bags (lib/itemtools.lua).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local items = dofile("lib/items.lua")
 local tools = dofile("lib/itemtools.lua")
@@ -54,7 +55,7 @@ for _, m in ipairs(SORTS) do SORT_OK[m] = true end
 local STATS, STAT_LABEL = nil, {}
 local function stats()
   if not STATS then
-    STATS = eq.ItemStats and eq.ItemStats() or {}
+    STATS = API.inventory.ItemStats and API.inventory.ItemStats() or {}
     for _, st in ipairs(STATS) do STAT_LABEL[st[1]] = st[2] end
   end
   return STATS
@@ -102,7 +103,7 @@ end
 -- Where a row is, for its line ("Backpack, slot 3") and its group header under the Place sort.
 local function placeText(r)
   local n = r.slot + 1
-  if r.where == "worn" then return eq.SlotName(r.slot) or "Worn" end
+  if r.where == "worn" then return API.inventory.SlotName(r.slot) or "Worn" end
   if r.where == "carried" then
     if r.sub >= 0 then return (r.bag or "Bag") .. ", slot " .. (r.sub + 1) end
     return "General " .. (r.slot - 22)
@@ -164,13 +165,13 @@ local function sameRows(old, new)
 end
 
 local function refresh()
-  local inv, keep = eq.ItemsRevision()
+  local inv, keep = API.inventory.ItemsRevision()
   local now = ui.GetTime()
   -- again when the inventory or the marks change, and each second (an item's charges, the bank's slots)
   if inv == data.inv and keep == data.keep and now - data.at < 1 and now >= data.at then return end
   local timed = inv == data.inv and keep == data.keep
   data.inv, data.keep, data.at = inv, keep, now
-  local fresh = eq.AllItems() or {}
+  local fresh = API.inventory.AllItems() or {}
   if timed and sameRows(data.rows, fresh) then
     -- nothing changed: the rows (and the view sorted from them) are kept, with this read's items
     for i, r in ipairs(data.rows) do
@@ -402,7 +403,7 @@ local function tags(it)
 end
 
 -- ---------------------------------------------------------------- acting on an item
-local function bankOpen() return eq.WindowShown("BankWnd") == true or eq.WindowShown("BigBankWnd") == true end
+local function bankOpen() return API.windows.Shown("BankWnd") == true or API.windows.Shown("BigBankWnd") == true end
 local function note(text) tools.state.note, tools.state.noteAt = text, ui.GetTime() end
 
 -- Each banked place keeps one click handler (as lib/items.lua keeps one per carried slot).
@@ -415,7 +416,7 @@ local function bankRec(r)
   rec = { id = "##advbank" .. r.place, place = shared and r.place or tools.Place("bank", r.slot, sub) }
   rec.onClick = function(button, outside)
     if tools.Intercept(rec.place, rec.item, button) then return end
-    -- a stale row is the bank as last seen (eq.BankSeen): nothing there to click until a banker sends the bank
+    -- a stale row is the bank as last seen (hs.BankSeen): nothing there to click until a banker sends the bank
     if rec.stale or not bankOpen() then
       if button == "left" or button == "right" or button == "rightup" then
         note(rec.stale and "That is your bank as you last saw it: visit a banker to move or use it."
@@ -423,7 +424,7 @@ local function bankRec(r)
       end
       return
     end
-    return eq.BankSlotClick(r.slot, sub, button, shared)
+    return API.inventory.BankSlotClick(r.slot, sub, button, shared)
   end
   bankRecs[r.place] = rec
   return rec
@@ -500,14 +501,14 @@ local function itemMenu(r)
   local banked = r.where == "bank" or r.where == "shared"
   local reach = not banked or (bankOpen() and not r.stale)
   if ui.MenuItem("Pick up", false, reach) then
-    if banked then eq.BankSlotClick(r.slot, r.sub >= 0 and r.sub or nil, "left", r.where == "shared")
-    else eq.ClickSlot(r.slot, r.sub >= 0 and r.sub or nil, "left") end
+    if banked then API.inventory.BankSlotClick(r.slot, r.sub >= 0 and r.sub or nil, "left", r.where == "shared")
+    else API.inventory.ClickSlot(r.slot, r.sub >= 0 and r.sub or nil, "left") end
   end
   if ui.MenuItem((it.bagSlots or 0) > 0 and "Open" or "Use", false, reach) then
-    if banked then eq.BankSlotClick(r.slot, r.sub >= 0 and r.sub or nil, "right", r.where == "shared")
-    else eq.ClickSlot(r.slot, r.sub >= 0 and r.sub or nil, "right") end
+    if banked then API.inventory.BankSlotClick(r.slot, r.sub >= 0 and r.sub or nil, "right", r.where == "shared")
+    else API.inventory.ClickSlot(r.slot, r.sub >= 0 and r.sub or nil, "right") end
   end
-  if r.sub >= 0 and r.where ~= "shared" and ui.MenuItem("Open its bag", false, reach) then eq.PlaceClick(r.place, "open") end
+  if r.sub >= 0 and r.where ~= "shared" and ui.MenuItem("Open its bag", false, reach) then API.inventory.PlaceClick(r.place, "open") end
   ui.Separator()
   if ui.MenuItem("Show only \"" .. T.Fit(it.name, 200, T.font.small) .. "\"") then search = it.name end
   if r.stale then ui.TextDisabled("Your bank as last seen: visit a banker to move or use it")
@@ -648,7 +649,7 @@ local function toolbar(x, y, w, s, v)
     ui.EndPopup()
   end
   -- what the bags hold, right of the view
-  local free, total = eq.InventorySpace()
+  local free, total = API.inventory.InventorySpace()
   local tx = mx1 - 40 * s
   local low = free <= 5
   T.Text(tx, y + 3 * s + (28 * s - th) / 2, string.format("%d / %d free", free, total), low and C.danger or C.muted,
@@ -1054,14 +1055,14 @@ end
 -- (the confirming click).
 local bulkCheck = { inv = nil, at = 0, places = nil, ok = false }
 local function bulkCurrent(fresh)
-  local inv = eq.ItemsRevision()
+  local inv = API.inventory.ItemsRevision()
   local now = ui.GetTime()
   if not fresh and bulkCheck.places == bulk.places and bulkCheck.inv == inv and now - bulkCheck.at < 1
     and now >= bulkCheck.at then
     return bulkCheck.ok
   end
   local live = {}
-  for _, r in ipairs(eq.AllItems() or {}) do live[r.place] = r.item end
+  for _, r in ipairs(API.inventory.AllItems() or {}) do live[r.place] = r.item end
   local ok = true
   for _, p in ipairs(bulk.places) do
     if not matches(bulk.identities[p], live[p]) then ok = false break end
@@ -1097,7 +1098,7 @@ local function bulkConfirm(s)
     return
   end
   local b = BULK[bulk.mode]
-  local n, err = eq.BulkItems(bulk.mode, bulk.places, true)
+  local n, err = API.inventory.BulkItems(bulk.mode, bulk.places, true)
   local names = bulk.names
   ui.Text(string.format("%s %d item%s?", b.verb, n, n == 1 and "" or "s"))
   ui.PushTextWrapPos(ui.GetCursorPos() + 340 * s)
@@ -1123,7 +1124,7 @@ local function bulkConfirm(s)
     -- Read live identities immediately before handing the places to the job. The modal must not adopt a
     -- replacement or a changed stack, even when the displayed rows or the selection have refreshed meanwhile.
     if bulkCurrent(true) then
-      local _, why = eq.BulkItems(bulk.mode, bulk.places)
+      local _, why = API.inventory.BulkItems(bulk.mode, bulk.places)
       note(why)
       if not why then selClear() end
       ui.CloseCurrentPopup()
@@ -1146,11 +1147,11 @@ local function selectionBar(x, y, s, v)
   local mv = money(worth)
   local tx = x + T.Text(x, y + 15 * s, string.format("%d selected%s", #places, mv ~= "" and (" (" .. mv .. ")") or ""),
     C.text, T.font.small) + 14 * s
-  local busy = eq.ItemJob()
+  local busy = API.inventory.ItemJob()
   local bw = 96 * s
   for _, mode in ipairs({ "withdraw", "sell", "tribute", "destroy" }) do
     local b = BULK[mode]
-    local n, err = eq.BulkItems(mode, places, true)
+    local n, err = API.inventory.BulkItems(mode, places, true)
     local ok = not busy and not err and n > 0
     local tip
     if busy then tip = "Wait for the items being moved"
@@ -1209,8 +1210,8 @@ local function footer(x, y, w, s, v)
     local mv = money(sellCp)
     tx = tx + 14 * s + T.Text(tx + 14 * s, y + 15 * s, sell .. " to sell" .. (mv ~= "" and (" (worth " .. mv .. ")") or ""),
       C.muted, T.font.small) + 18 * s
-    -- the bank's rows are the bank as last seen until a banker sends it in this zone (eq.BankSeen)
-    local live, age = eq.BankSeen()
+    -- the bank's rows are the bank as last seen until a banker sends it in this zone (hs.BankSeen)
+    local live, age = API.inventory.BankSeen()
     if not live and age then
       local bw = T.Text(tx, y + 15 * s, "Bank as last seen " .. ago(age) .. " ago", C.faint, T.font.small)
       if ui.IsMouseHoveringRect(tx, y + 15 * s, tx + bw, y + 15 * s + th) then
@@ -1224,9 +1225,9 @@ local function footer(x, y, w, s, v)
   local tw = tools.ToolbarWidth(s, true)
   local sellW = 130 * s
   local sx1 = x1 - tw - 10 * s
-  local merchant = eq.WindowShown("MerchantWnd") == true
+  local merchant = API.windows.Shown("MerchantWnd") == true
   local n = tools.JunkCarried()
-  local busy = eq.ItemJob()
+  local busy = API.inventory.ItemJob()
   if not busy and not (banner == 0 and selecting) then -- (the selection's bar has its own Sell)
     local tip = tools.Note() or (not merchant and "Open a merchant to sell what you marked"
       or (n > 0 and "Sell every item you carry that is marked to sell" or "Mark items to sell first"))
@@ -1250,7 +1251,7 @@ local DIALOG = {
 local function body(x, y, w, h, s)
   refresh()
   readSettings()
-  local q = eq.TakeItemSearch and eq.TakeItemSearch()
+  local q = API.inventory.TakeItemSearch and API.inventory.TakeItemSearch()
   if q then -- /finditem <text>: everything, searched
     resetFilters()
     readSettings()
@@ -1290,6 +1291,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Advanced Inventory", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Advanced Inventory", DIALOG, body)
 end)

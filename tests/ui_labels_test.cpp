@@ -1,4 +1,4 @@
-// Labels and gauges by EQType (app/lua_eq_values.cpp: __GetLabelFromEQ @0x763640, __GetGaugeValueFromEQ @0x762410)
+// Labels and gauges by EQType (app/lua_ui_values.cpp)
 // fed by packets: the combat timer, the aggro meter's percents and colours, the gauge's special values and the buff
 // windows' fade (game/buff_overlays.h).
 #include <doctest/doctest.h>
@@ -9,9 +9,9 @@
 
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_values.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_values.h"
+#include "app/lua_ui_windows.h"
 #include "game/buff_overlays.h"
 #include "game/mechanics/character.h"
 #include "game_files.h"
@@ -30,7 +30,7 @@ namespace {
 
 struct Host {
     net::GameConnection conn;
-    app::EqHost host;
+    app::UiHost host;
     explicit Host(const GameDir& game) : conn(game, {}) {
         host.in_game = true;
         host.game = &game;
@@ -82,18 +82,18 @@ TEST_CASE("Combat timer: label 137 and gauge 29 from OP_RestState") {
     const GameDir* game = test::game_dir();
     if (!game) return;
     Host t(*game);
-    CHECK(app::eq_label(t.host, 137).text.empty());
-    CHECK(app::eq_gauge(t.host, 29).value == -1);
+    CHECK(app::ui_label(t.host, 137).text.empty());
+    CHECK(app::ui_gauge(t.host, 29).value == -1);
     t.conn.receive_zone_packet_for_test(rest_state(false, 75));
-    auto text = app::eq_label(t.host, 137).text;
+    auto text = app::ui_label(t.host, 137).text;
     CHECK((text == "01:15" || text == "01:14")); // "%02d:%02d" of the seconds left
-    CHECK(app::eq_gauge(t.host, 29).value == 1000); // min(left, 30) * 1000 / 30
+    CHECK(app::ui_gauge(t.host, 29).value == 1000); // min(left, 30) * 1000 / 30
     t.conn.receive_zone_packet_for_test(rest_state(false, 15));
-    int v = app::eq_gauge(t.host, 29).value;
+    int v = app::ui_gauge(t.host, 29).value;
     CHECK((v == 500 || v == 466));
     t.conn.receive_zone_packet_for_test(rest_state(true, 0)); // in combat: no downtime
-    CHECK(app::eq_label(t.host, 137).text.empty());
-    CHECK(app::eq_gauge(t.host, 29).value == -1);
+    CHECK(app::ui_label(t.host, 137).text.empty());
+    CHECK(app::ui_gauge(t.host, 29).value == -1);
 }
 
 TEST_CASE("Discipline timer: gauge 26 counts down between ticks with whole seconds") {
@@ -114,82 +114,82 @@ TEST_CASE("Discipline timer: gauge 26 counts down between ticks with whole secon
     t.host.character = &character;
     auto& state = net::GameConnectionTestAccess::spells(t.conn);
     auto& b = state.buffs.back();
-    CHECK(app::eq_discipline_gauge(t.host, 1000).value == 0);
-    CHECK(app::eq_discipline_gauge(t.host, 1000).text.empty());
+    CHECK(app::ui_discipline_gauge(t.host, 1000).value == 0);
+    CHECK(app::ui_discipline_gauge(t.host, 1000).text.empty());
     b.spell = 4498;
     b.tics = 10;
     b.received_ms = 1000;
     b.level = 1; // The native denominator uses the player's level, rather than the caster level.
     net::GameConnectionTestAccess::status(t.conn).level = 50;
-    auto full = app::eq_discipline_gauge(t.host, 1000);
+    auto full = app::ui_discipline_gauge(t.host, 1000);
     CHECK(full.value == 1000);
     CHECK(full.text == "1:00");
-    auto partial = app::eq_discipline_gauge(t.host, 1250);
+    auto partial = app::ui_discipline_gauge(t.host, 1250);
     CHECK(partial.value < full.value);
     CHECK(partial.value > 990);
     CHECK(partial.text == "1:00");
-    CHECK(app::eq_discipline_gauge(t.host, 31000).value == 500);
-    CHECK(app::eq_discipline_gauge(t.host, 31000).text == "30s");
-    CHECK(app::eq_discipline_gauge(t.host, 31001).value == 499);
-    CHECK(app::eq_discipline_gauge(t.host, 31001).text == "30s");
-    CHECK(app::eq_discipline_gauge(t.host, 60001).text == "1s");
-    CHECK(app::eq_discipline_gauge(t.host, 61000).value == 0);
-    CHECK(app::eq_discipline_gauge(t.host, 61000).text == "0s");
-    CHECK(app::eq_discipline_gauge(t.host, 100000).value == 0);
+    CHECK(app::ui_discipline_gauge(t.host, 31000).value == 500);
+    CHECK(app::ui_discipline_gauge(t.host, 31000).text == "30s");
+    CHECK(app::ui_discipline_gauge(t.host, 31001).value == 499);
+    CHECK(app::ui_discipline_gauge(t.host, 31001).text == "30s");
+    CHECK(app::ui_discipline_gauge(t.host, 60001).text == "1s");
+    CHECK(app::ui_discipline_gauge(t.host, 61000).value == 0);
+    CHECK(app::ui_discipline_gauge(t.host, 61000).text == "0s");
+    CHECK(app::ui_discipline_gauge(t.host, 100000).value == 0);
 
-    const auto before_tick = app::eq_discipline_gauge(t.host, 11000);
+    const auto before_tick = app::ui_discipline_gauge(t.host, 11000);
     b.tics = 9;
     b.received_ms = 7000;
-    CHECK(app::eq_discipline_gauge(t.host, 11000).value == before_tick.value);
-    CHECK(app::eq_discipline_gauge(t.host, 11000).text == before_tick.text);
+    CHECK(app::ui_discipline_gauge(t.host, 11000).value == before_tick.value);
+    CHECK(app::ui_discipline_gauge(t.host, 11000).text == before_tick.text);
 
     state.buff_timers_on_hold = true;
-    CHECK(app::eq_discipline_gauge(t.host, 100000).value == 900);
-    CHECK(app::eq_discipline_gauge(t.host, 100000).text == "54s");
+    CHECK(app::ui_discipline_gauge(t.host, 100000).value == 900);
+    CHECK(app::ui_discipline_gauge(t.host, 100000).text == "54s");
     b.tics = 5;
     // Both the EQType and the window-specific child gauge expose the same frozen countdown.
-    CHECK(app::eq_gauge(t.host, 26).value == 500);
-    CHECK(app::eq_gauge(t.host, 26).text == "30s");
+    CHECK(app::ui_gauge(t.host, 26).value == 500);
+    CHECK(app::ui_gauge(t.host, 26).text == "30s");
     t.host.character = nullptr;
-    CHECK(app::eq_discipline_gauge(t.host, 100000).value == 0);
-    CHECK(app::eq_discipline_gauge(t.host, 100000).text == "30s");
+    CHECK(app::ui_discipline_gauge(t.host, 100000).value == 0);
+    CHECK(app::ui_discipline_gauge(t.host, 100000).text == "30s");
     t.host.character = &character;
-    app::EqApi api(t.host);
+    app::UiApi api(t.host);
     std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
     REQUIRE(lua);
     lua_newtable(lua.get());
     api.register_functions(lua.get());
-    lua_setglobal(lua.get(), "eq");
-    REQUIRE(luaL_dostring(lua.get(), "return eq.ChildGauge('CombatAbilityWnd', 'CAW_CombatEffectTimeRemainingGauge')") == LUA_OK);
+    lua_setglobal(lua.get(), "hs");
+    REQUIRE(luaL_dostring(lua.get(), "return hs.ChildGauge('CombatAbilityWnd', 'CAW_CombatEffectTimeRemainingGauge')") == LUA_OK);
     CHECK(lua_tonumber(lua.get(), -2) == doctest::Approx(0.5));
     CHECK(std::string(lua_tostring(lua.get(), -1)) == "30s");
 
     b.spell = 4499;
-    CHECK(app::eq_discipline_gauge(t.host, 100000).value == 1000);
-    CHECK(app::eq_discipline_gauge(t.host, 100000).text == "Permanent");
+    CHECK(app::ui_discipline_gauge(t.host, 100000).value == 1000);
+    CHECK(app::ui_discipline_gauge(t.host, 100000).text == "Permanent");
     b.spell = 4498;
     b.tics = -1;
-    CHECK(app::eq_discipline_gauge(t.host, 100000).text == "Permanent");
+    CHECK(app::ui_discipline_gauge(t.host, 100000).text == "Permanent");
     b.tics = 20;
-    CHECK(app::eq_discipline_gauge(t.host, 100000).value == 1000); // A server extension can exceed the base duration.
+    CHECK(app::ui_discipline_gauge(t.host, 100000).value == 1000); // A server extension can exceed the base duration.
     b.spell = 4500;
-    CHECK(app::eq_discipline_gauge(t.host, 100000).value == 0); // No division by an unknown or zero duration.
-    CHECK(app::eq_discipline_gauge(t.host, 100000).text == "2:00");
+    CHECK(app::ui_discipline_gauge(t.host, 100000).value == 0); // No division by an unknown or zero duration.
+    CHECK(app::ui_discipline_gauge(t.host, 100000).text == "2:00");
     b.spell = 65500;
-    CHECK(app::eq_discipline_gauge(t.host, 100000).value == 0);
-    CHECK(app::eq_discipline_gauge(t.host, 100000).text.empty());
+    CHECK(app::ui_discipline_gauge(t.host, 100000).value == 0);
+    CHECK(app::ui_discipline_gauge(t.host, 100000).text.empty());
     b.spell = 4498;
     b.tics = 0;
-    CHECK(app::eq_discipline_gauge(t.host, 100000).value == 0);
-    CHECK(app::eq_discipline_gauge(t.host, 100000).text == "0s");
+    CHECK(app::ui_discipline_gauge(t.host, 100000).value == 0);
+    CHECK(app::ui_discipline_gauge(t.host, 100000).text == "0s");
 
     net::BuffPacket fade;
     fade.slot = game::kBuffSlots - 1;
     fade.fade = 1;
     t.conn.receive_zone_packet_for_test(net::encode(fade));
     CHECK_FALSE(t.conn.discipline_active());
-    CHECK(app::eq_discipline_gauge(t.host, 100000).value == 0);
-    CHECK(app::eq_discipline_gauge(t.host, 100000).text.empty());
+    CHECK(app::ui_discipline_gauge(t.host, 100000).value == 0);
+    CHECK(app::ui_discipline_gauge(t.host, 100000).text.empty());
 }
 
 TEST_CASE("Aggro meter labels: percents, their colours and the lock") {
@@ -201,25 +201,25 @@ TEST_CASE("Aggro meter labels: percents, their colours and the lock") {
     net::AggroUpdate u;
     u.entries = {{0, 80}, {1, 100}, {2, 0}, {8, 40}};
     t.conn.receive_zone_packet_for_test(net::encode(u));
-    auto mine = app::eq_label(t.host, 305);
+    auto mine = app::ui_label(t.host, 305);
     CHECK(mine.text == "80");
     REQUIRE(mine.argb);
     CHECK(*mine.argb == (0xff000000u | (app::user_color_rgb(0x61) ? app::user_color_rgb(0x61) : 0xf0f0f0u)));
-    CHECK(app::eq_label(t.host, 306).text == "80");
-    CHECK(app::eq_label(t.host, 307).text == "100");
-    CHECK(app::eq_label(t.host, 315).text == "40"); // extended target slot 1: entry 8
-    CHECK(app::eq_label(t.host, 314).text.empty());  // below 1: empty
-    CHECK(app::eq_gauge(t.host, 149).value == 800);
+    CHECK(app::ui_label(t.host, 306).text == "80");
+    CHECK(app::ui_label(t.host, 307).text == "100");
+    CHECK(app::ui_label(t.host, 315).text == "40"); // extended target slot 1: entry 8
+    CHECK(app::ui_label(t.host, 314).text.empty());  // below 1: empty
+    CHECK(app::ui_gauge(t.host, 149).value == 800);
     // locked on another spawn: the player window's copies (304, 306, 308) go blank
     info.lock_id = 55;
     t.conn.receive_zone_packet_for_test(net::encode(info));
-    CHECK(app::eq_label(t.host, 306).text.empty());
-    CHECK(app::eq_label(t.host, 308).text.empty());
-    CHECK(app::eq_label(t.host, 305).text == "80");
+    CHECK(app::ui_label(t.host, 306).text.empty());
+    CHECK(app::ui_label(t.host, 308).text.empty());
+    CHECK(app::ui_label(t.host, 305).text == "80");
 }
 
 // The group window's labels find each member's spawn by name, ignoring case, by the spawn's name or its display name
-// (app/lua_eq_values.cpp spawn_by_name), and skip the player's own slot whatever its case (nth_other_member). The
+// (app/lua_ui_values.cpp spawn_by_name), and skip the player's own slot whatever its case (nth_other_member). The
 // lookup compares in place (game::display_name_iequals) instead of lower-casing every name each frame.
 TEST_CASE("Group labels: members are found by name or display name, ignoring case") {
     test::ScratchDir dir("ui_labels_group_lookup");
@@ -249,16 +249,16 @@ TEST_CASE("Group labels: members are found by name or display name, ignoring cas
     add(3, "carol00", 50);   // the display name ("carol")
     add(4, "#Dave_01", 60);  // "Dave " is not "Dave"
     add(5, "a_rat01", 70);   // not a member
-    CHECK(app::eq_label(t.host, 30).text == "Bob"); // "leader" is the player's slot
-    CHECK(app::eq_label(t.host, 35).text == "40");
-    CHECK(app::eq_label(t.host, 36).text == "50");
-    CHECK(app::eq_label(t.host, 37).text == "0");
-    CHECK(app::eq_label(t.host, 38).text == "0");
-    CHECK(app::eq_gauge(t.host, 11).value == 400);
-    CHECK(app::eq_gauge(t.host, 12).value == 500);
-    CHECK(app::eq_gauge(t.host, 13).value == -2); // no spawn: full in dark red
+    CHECK(app::ui_label(t.host, 30).text == "Bob"); // "leader" is the player's slot
+    CHECK(app::ui_label(t.host, 35).text == "40");
+    CHECK(app::ui_label(t.host, 36).text == "50");
+    CHECK(app::ui_label(t.host, 37).text == "0");
+    CHECK(app::ui_label(t.host, 38).text == "0");
+    CHECK(app::ui_gauge(t.host, 11).value == 400);
+    CHECK(app::ui_gauge(t.host, 12).value == 500);
+    CHECK(app::ui_gauge(t.host, 13).value == -2); // no spawn: full in dark red
     add(6, "#Dave01", 65);
-    CHECK(app::eq_label(t.host, 37).text == "65");
+    CHECK(app::ui_label(t.host, 37).text == "65");
 }
 
 TEST_CASE("display_name_iequals is iequals over display_name") {

@@ -6,6 +6,7 @@
 #include "core/build_info.h"
 #include "core/frame_sections.h"
 #include "core/wipe.h"
+#include "game/visual_surface_patch.h"
 
 namespace hailstone::app {
 
@@ -95,6 +96,13 @@ int ClientApp::run() {
         box_clients_.poll();
         update_updater();
         update_addons();
+        refresh_ui_packs();
+        // Without a connection, a deferred selection can be applied now. Connected clients wait until
+        // update_connection has applied the zone-in's asset rules, before the required-addon gate can hold it.
+        if (!conn_ && pending_ui_pack_) {
+            const auto next = std::exchange(pending_ui_pack_, std::nullopt);
+            use_ui_pack(*next, std::exchange(ui_reload_pending_, false));
+        }
         update_login();
         update_lap.mark("update login, updater, add-ons");
         update_connection();
@@ -120,6 +128,10 @@ int ClientApp::run() {
             update_missiles();
         }
         update_lap.mark("world objects update");
+        // Presentation hiding is local to play. Loading and pregame screens remain usable, and returning to
+        // character selection/login starts with the interface visible again.
+        if (screen_ != Screen::InGame && screen_ != Screen::Loading) ui_hidden_ = false;
+        ui_.set_visible(!ui_hidden_ || screen_ != Screen::InGame || zone_settling());
         // The gamepad before the UI frame: its mode decides what ImGui gets from it (docs/gamepad.md).
         update_gamepad(dt);
         // /safelock: the windows get no mouse while the interface is locked (__ProcessMouseEvents).
@@ -204,25 +216,25 @@ int ClientApp::run() {
         core::frame_sections::Lap lap;
         sync_item_preview();
         lap.mark("item preview sync");
-        draw_ui(fps);
+        if (ui_.visible()) draw_ui(fps);
         lap.mark("draw_ui");
         if (lua_ui_) {
-            update_eq_host();
+            update_ui_host();
             sync_plugin_windows();
-            lap.mark("eq host update");
-            eq_api_->begin_frame();
-            lap.mark("eq api begin_frame");
+            lap.mark("hs host update");
+            ui_api_->begin_frame();
+            lap.mark("hs api begin_frame");
             const std::size_t lua_bytes = lua_ui_->allocated_bytes();
-            lua_ui_->frame();
-            eq_host_.close_top_window = false; // (a press no window took this frame)
+            lua_ui_->frame(ui_.visible());
+            ui_host_.close_top_window = false; // (a press no window took this frame)
             static constexpr const char* kLuaFrame = "Lua UI frame"; // one address for both (names match by it)
             lap.mark(kLuaFrame);
             core::frame_sections::add_bytes(kLuaFrame, lua_ui_->allocated_bytes() - lua_bytes);
         }
-        window_.set_text_input(std::exchange(web_text_input_, false)); // a page that has the keys (app/lua_eq_web.cpp)
-        settle_frame_.ui = true; // the UI pack's in-game frame ran (or there is none)
+        window_.set_text_input(std::exchange(web_text_input_, false) && ui_.visible()); // a page that has the keys (app/lua_ui_web.cpp)
+        settle_frame_.ui = true; // UI maintenance ran; loading/settling presentations are always visible
         if (screen_ == Screen::InGame && zone_settling()) ui::loading_overlay(loading_view_);
-        if (automation_) automation_->imgui(game_view_.dev_windows);
+        if (automation_ && ui_.visible()) automation_->imgui(game_view_.dev_windows);
         // The select clock runs on through character creation (input scripts drive both screens).
         if (screen_ != Screen::Characters && screen_ != Screen::Create) select_shown_.reset();
         else if (!select_shown_) select_shown_ = Clock::now();
@@ -249,7 +261,7 @@ int ClientApp::run() {
             }
             perf.camera = camera_.position;
             perf.display = glm::vec2(ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
-            perf_ui_.draw(perf);
+            if (ui_.visible()) perf_ui_.draw(perf);
             lap.mark("perf window");
         }
         perf_ui_.mark(FramePhase::Ui);
@@ -308,6 +320,7 @@ int ClientApp::run() {
                 spell_bolts_->take_cues(*conn_, cues, bolt_now);
             update_guide();
             spell_particles_->set_guide_line(guide_.line());
+            spell_particles_->set_paths_visible(ui_.visible());
             spell_particles_->set_find_trail_style(game::normalize_find_trail_style(
                 config_.get_int("display.find_trail_style", 0)));
             spell_particles_->update(*conn_, cues, effect_packets, actor_renderer_.get(), dt);
@@ -392,12 +405,14 @@ int ClientApp::run() {
         perf_ui_.mark(FramePhase::Wait);
         if (f) last_drawn = now;
         if (!f) {
+            if (automation_) automation_->world_unavailable();
             ui_.end_frame_without_render();
             if (emitter_step_) std::exchange(emitter_step_, nullptr)();
             continue;
         }
         lap = core::frame_sections::Lap();
         const bool in_game = screen_ == Screen::InGame && player_ready_;
+        if (!in_game && automation_) automation_->world_unavailable();
         const bool scene = in_game || pre_game; // the world drawn: the zone, or character select's clz
         if (conn_)
             for (const auto& w : conn_->take_weather()) weather_.handle_message(w.kind, w.intensity);
@@ -444,9 +459,12 @@ int ClientApp::run() {
                 game::SceneLight scene_light = game::compute_scene_light(light);
                 if (zone_renderer_) zone_renderer_->set_scene_light(scene_light);
                 // The zone objects that play their own animation, drawn where the zone's animation clock has them now.
-                if (zone_renderer_)
-                    zone_renderer_->set_animation_time(zone_animation_ms(static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start_time_).count())));
+                if (zone_renderer_) {
+                    const auto animation_time=zone_animation_ms(static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start_time_).count()));
+                    zone_renderer_->set_animation_time(animation_time);
+                    if(animated_objects_)animated_objects_->set_visual_time(animation_time);
+                }
                 // modern or classic (/lighting, display.lighting): the same scene light for every renderer.
                 render::DynamicShadowLights moving_lights;
                 render::SceneLighting lighting = scene_lighting(scene_light, sky_hour, &moving_lights);
@@ -545,25 +563,25 @@ int ClientApp::run() {
                     zone_renderer_->set_lighting(lighting);
                     zone_renderer_->set_lod_scale(static_cast<float>(tree_detail_) / 100.0f);
                 }
-                // The zone's exits for the map and its zone finder (EqHost::zone_exits), once its zone points are in.
-                if (in_game && zone_ && conn_ && eq_host_.zone_exits_zone == 0 && conn_->zone_id() != 0 &&
+                // The zone's exits for the map and its zone finder (UiHost::zone_exits), once its zone points are in.
+                if (in_game && zone_ && conn_ && ui_host_.zone_exits_zone == 0 && conn_->zone_id() != 0 &&
                     !conn_->zone_points().empty()) {
                     std::vector<game::ZonePointTarget> points;
                     for (const auto& p : conn_->zone_points()) points.push_back({p.number, p.zone_id, p.x, p.y, p.z});
                     const auto zid = static_cast<std::uint32_t>(conn_->zone_id());
-                    eq_host_.zone_exits.clear();
+                    ui_host_.zone_exits.clear();
                     for (const auto& g : game::collect_neighbour_lines(zone_->regions, zone_->bounds_min, zone_->bounds_max,
                                                                        points, zid)) {
-                        EqHost::ZoneExit e;
+                        UiHost::ZoneExit e;
                         e.zone_id = g.zone_id;
                         for (int i = 0; i < 3; ++i) {
                             e.lo[i] = g.lo[i];
                             e.hi[i] = g.hi[i];
                         }
                         for (const auto& c : g.cells) e.cells.push_back({c.lo.x, c.lo.y, c.lo.z, c.hi.x, c.hi.y, c.hi.z});
-                        eq_host_.zone_exits.push_back(std::move(e));
+                        ui_host_.zone_exits.push_back(std::move(e));
                     }
-                    eq_host_.zone_exits_zone = zid;
+                    ui_host_.zone_exits_zone = zid;
                 }
                 if (neighbours_) {
                     // The zone past each outdoor zone line, once the zone points are in (app/neighbour_zones.h).
@@ -899,12 +917,13 @@ int ClientApp::run() {
             // The target ring lies on the depth copy (taken above, or by it in the classic lighting), under the
             // weather and particles. Character select draws no target. The markers ask the character renderer
             // (model_for): the characters' lane.
-            if (in_game)
+            if (in_game && ui_.visible())
                 rec.add(*f, actors_lane, [&](const render::FrameInfo& fr) {
                     draw_target_ring(fr, vp, lit.far_plane, modern, t);
                     draw_iso_marker(fr, vp, lit.far_plane, modern, t);
                     draw_iso_hover(fr, vp, lit.far_plane, modern, t);
                 });
+            if (in_game) record_world_geometry(*f, vp, rec);
             // Rain or snow: the precipitation manager's particles. The original draws them in every zone type,
             // with or without a sky (CRender's scene, 0x10097420).
             if (weather_renderer_ && in_game) {
@@ -950,13 +969,15 @@ int ClientApp::run() {
             rec.flush(*f); // before the name plates read the characters' poses, and before the scene ends
             lap.mark("scene record");
             if (in_game) { // character select draws no target, names or picking
-                if (nav_ && nav_->overlay())
-                    nav_->draw_overlay(ImGui::GetBackgroundDrawList(), plain_vp,
-                                       glm::vec4(view_area_.x, view_area_.y, view_area_.w, view_area_.h));
-                draw_nameplates(*f, plain_vp, f->extent, lit.far_plane);
-                lap.mark("nameplates");
-                draw_text_overlay();
-                lap.mark("text overlay");
+                if (ui_.visible()) {
+                    if (nav_ && nav_->overlay())
+                        nav_->draw_overlay(ImGui::GetBackgroundDrawList(), plain_vp,
+                                           glm::vec4(view_area_.x, view_area_.y, view_area_.w, view_area_.h));
+                    draw_nameplates(*f, plain_vp, vp, f->extent, lit.far_plane);
+                    lap.mark("nameplates");
+                    draw_text_overlay();
+                    lap.mark("text overlay");
+                }
                 // The camera as CCamera::GetScreenRay reads it, in the 3D view's window (mouse) coordinates.
                 auto fov = game::camera_fov(camera_.view_fov_units(), static_cast<int>(f->extent.width), static_cast<int>(f->extent.height));
                 pick_camera_.position = camera_.position;
@@ -978,13 +999,19 @@ int ClientApp::run() {
         if (emitter_step_) std::exchange(emitter_step_, nullptr)();
         lap.mark("actor effects step start");
         perf_ui_.mark(FramePhase::Record);
-        vk_.end_frame(*f);
+        try {
+            const auto outcome = vk_.end_frame(*f);
+            if (in_game && automation_) automation_->world_finish(outcome.submitted, outcome.presented);
+        } catch (...) {
+            retire_world_geometry();
+            throw;
+        }
         perf_ui_.set_presented(vk_.frames_presented(), vk_.frame_generated());
         perf_ui_.mark(FramePhase::Present);
         settle_frame_.scene = in_game;
         update_zone_settle();
     }
-    if (eq_api_) eq_api_->save_layout();
+    if (ui_api_) ui_api_->save_layout();
     save_chat_history(true);
     if (opts_.window_width == 1280 && opts_.window_height == 720) {
         // The game window's place for the next start (window_desc); not a --window-size run's.
@@ -998,11 +1025,183 @@ int ClientApp::run() {
         config_.set_bool("ui.perf_log_hitches", perf_ui_.log_hitches());
         config_.save(config_path_);
     }
+    retire_world_geometry();
     if (automation_) automation_->shutdown();
     if (conn_) conn_->disconnect();
     vk_.wait_idle();
     audio_.reset();
     return 0;
+}
+
+void ClientApp::retire_world_geometry() {
+    if (automation_) automation_->world_unavailable();
+    world_anchors_.clear();
+    world_scene_ = {};
+    if (++world_epoch_ == 0) ++world_epoch_;
+    if (++world_collision_revision_ == 0) ++world_collision_revision_;
+    world_floor_generation_ = world_objects_ ? world_objects_->visual_generation() : 0;
+    world_animation_time_ = animated_objects_ ? animated_objects_->visual_time() : 0;
+}
+
+bool ClientApp::world_geometry_scene_current() const {
+    if (!conn_ || !zone_ || !collision_ || !world_visual_collision_ || !world_objects_ ||
+        (conn_->state() != net::ConnectionState::InZone && conn_->state() != net::ConnectionState::Camping))
+        return false;
+    return world_scene_.matches(conn_.get(), world_epoch_, conn_->zone_id(), conn_->zone_instance(),
+                                conn_->world().zone_short_name);
+}
+
+int ClientApp::world_geometry_floor(float x, float y, float z, float& height) const {
+    if (!world_geometry_scene_current()) return HAILSTONE_WORLD_DEFERRED;
+    const glm::vec3 at{x, y, z};
+    const auto floor = world_geometry_surface_floor(*world_visual_collision_, animated_objects_ ? &*animated_objects_ : nullptr,
+        [this](const glm::vec3& query) { return world_objects_->visual_surface_below(query); }, at);
+    if (!floor) return HAILSTONE_WORLD_MISSING;
+    height = *floor;
+    return HAILSTONE_WORLD_RESOLVED;
+}
+
+int ClientApp::world_geometry_anchor(std::uint32_t id, HailstoneWorldAnchor& anchor) {
+    if (!world_geometry_scene_current() || !actor_renderer_) return HAILSTONE_WORLD_DEFERRED;
+    if (const auto cached = world_anchors_.find(id); cached != world_anchors_.end()) {
+        anchor = cached->second;
+        return HAILSTONE_WORLD_RESOLVED;
+    }
+    glm::mat4 transform;
+    if (!actor_renderer_->current_render_transform(id, vk_.frames_begun(), transform)) return HAILSTONE_WORLD_MISSING;
+    const glm::vec3 origin(transform[3]);
+    const auto heading = drawn_world_heading(transform);
+    if (!std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z) ||
+        !heading)
+        return HAILSTONE_WORLD_DEFERRED;
+    HailstoneWorldAnchor value{};
+    value.size = sizeof(value);
+    value.spawn_id = id;
+    value.flags = HAILSTONE_WORLD_DRAWN_POSE;
+    value.position[0] = origin.x;
+    value.position[1] = origin.y;
+    value.position[2] = origin.z;
+    value.heading = *heading;
+    float floor = 0.0f;
+    if (world_geometry_floor(origin.x, origin.y, origin.z, floor) == HAILSTONE_WORLD_RESOLVED) {
+        float height = 0.0f;
+        if (conn_)
+            if (const auto spawn = conn_->world().spawns.find(id); spawn != conn_->world().spawns.end())
+                height = spawn->second.heights.avatar_height;
+        if (const auto cached = cached_world_anchor_floor(origin.z, floor, height)) {
+            value.floor_z = *cached;
+            value.flags |= HAILSTONE_WORLD_CACHED_FLOOR;
+        }
+    }
+    world_anchors_.emplace(id, value);
+    anchor = value;
+    return HAILSTONE_WORLD_RESOLVED;
+}
+
+void ClientApp::record_world_geometry(const render::FrameInfo& frame, const glm::mat4& view_projection,
+                                      render::SceneRecorder& recorder) {
+    // Actor draws finish before author callbacks query their current poses. The callbacks and their admission
+    // checks stay on this thread; only the sealed geometry's GPU commands enter the recorder.
+    recorder.flush(frame);
+    world_anchors_.clear();
+    if (!automation_) return;
+    if (!world_geometry_scene_current() || !world_geometry_renderer_ || !vk_.frames_begun()) {
+        automation_->world_unavailable();
+        return;
+    }
+    const auto generation = world_objects_ ? world_objects_->visual_generation() : 0;
+    const auto animation_time = animated_objects_ && !animated_objects_->empty() ? animated_objects_->visual_time() : 0;
+    if (generation != world_floor_generation_ || animation_time != world_animation_time_) {
+        world_floor_generation_ = generation;
+        world_animation_time_ = animation_time;
+        if (++world_collision_revision_ == 0) ++world_collision_revision_;
+    }
+    HailstoneWorldFrame context{};
+    context.size = sizeof(context);
+    context.capabilities = HAILSTONE_WORLD_GEOMETRY | HAILSTONE_WORLD_PRESENT_RECEIPTS;
+    context.frame = vk_.frames_begun();
+    context.epoch = world_epoch_;
+    context.collision_revision = world_collision_revision_;
+    context.now_ms = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count());
+    context.maximum_batches = game::kWorldGeometryMaxBatches;
+    context.maximum_vertices = game::kWorldGeometryMaxVertices;
+    context.remaining_queries = plugin::WorldGeometryHost::kMaximumQueries;
+    context.camera_position[0] = camera_.position.x;
+    context.camera_position[1] = camera_.position.y;
+    context.camera_position[2] = camera_.position.z;
+    context.viewport[0] = view_area_.x;
+    context.viewport[1] = view_area_.y;
+    context.viewport[2] = view_area_.w;
+    context.viewport[3] = view_area_.h;
+    std::copy_n(&view_projection[0][0], 16, context.view_projection);
+    plugin::WorldQueries queries;
+    if (world_visual_collision_ && world_objects_) {
+        context.capabilities |= HAILSTONE_WORLD_TERRAIN | HAILSTONE_WORLD_SURFACE_PATCH;
+        queries.floor = [this](float x, float y, float z, float& floor) {
+            return world_geometry_floor(x, y, z, floor);
+        };
+        queries.surface_patch = [this](const HailstoneWorldSurfacePatch& input,HailstoneWorldSurfacePatchResult& output,
+                                       std::uint32_t& work) {
+            if(!world_geometry_scene_current())return HAILSTONE_WORLD_PATCH_DEFERRED;
+            game::VisualSurfacePatch query;
+            for(std::size_t n=0;n<3;++n)query.vertices[n]={input.vertices[n*3],input.vertices[n*3+1],input.vertices[n*3+2]};
+            query.maximum_rise=input.maximum_rise;query.tolerance=input.tolerance;
+            const auto result=game::certify_visual_surface_patch(query,
+                [this](const glm::vec2& low,const glm::vec2& high,const game::VisualTriangleVisitor& visit,std::uint32_t& budget) {
+                    if(!world_visual_collision_->visual_surfaces(low,high,visit,budget))return false;
+                    if(!world_objects_->visual_surfaces(low,high,visit,budget))return false;
+                    return !animated_objects_||animated_objects_->visual_surfaces(low,high,visit,budget);
+                },[this](const glm::vec3& at)->std::optional<float> {
+                    float height=0;
+                    return world_geometry_floor(at.x,at.y,at.z,height)==HAILSTONE_WORLD_RESOLVED?
+                        std::optional<float>(height):std::nullopt;
+                },work);
+            if(result.status==game::VisualSurfacePatchStatus::Deferred)return HAILSTONE_WORLD_PATCH_DEFERRED;
+            output.flags=result.height_known?HAILSTONE_WORLD_PATCH_HEIGHT_KNOWN:0;
+            if(result.source_face_known){
+                output.flags|=HAILSTONE_WORLD_PATCH_SOURCE_FACE;
+                for(std::size_t n=0;n<3;++n){
+                    output.source_face[n*3]=result.source_face[n].x;
+                    output.source_face[n*3+1]=result.source_face[n].y;
+                    output.source_face[n*3+2]=result.source_face[n].z;
+                }
+            }
+            if(result.region_count){
+                output.flags|=HAILSTONE_WORLD_PATCH_REGION;
+                output.region_count=result.region_count;
+                for(std::size_t n=0;n<result.region_count;++n){
+                    output.region_xy[n*2]=result.region[n].x;output.region_xy[n*2+1]=result.region[n].y;
+                }
+            }
+            output.witness[0]=result.witness.x;output.witness[1]=result.witness.y;output.witness[2]=result.witness.z;
+            if(result.status==game::VisualSurfacePatchStatus::Planar)return HAILSTONE_WORLD_PATCH_PLANAR;
+            return result.status==game::VisualSurfacePatchStatus::Mismatch?HAILSTONE_WORLD_PATCH_MISMATCH:HAILSTONE_WORLD_PATCH_MISSING;
+        };
+    }
+    if (actor_renderer_) {
+        context.capabilities |= HAILSTONE_WORLD_DRAWN_ANCHORS;
+        queries.anchor = [this](std::uint32_t id, HailstoneWorldAnchor& anchor) {
+            return world_geometry_anchor(id, anchor);
+        };
+    }
+    automation_->world_frame(context, std::move(queries));
+    const auto& batches = automation_->world_batches();
+    if (batches.empty()) return;
+    std::vector<render::WorldGeometryBatchResult> results(batches.size());
+    // No host callback or mutation runs between this borrow and the immediate flush. OwnedWorldBatch keeps every
+    // vertex span alive until recording joins; neither the source nor its vertices need another deep copy.
+    recorder.add(frame, world_geometry_renderer_.get(), [&](const render::FrameInfo& recorded_frame) {
+        for (std::size_t index = 0; index < batches.size(); ++index)
+            results[index] = world_geometry_renderer_->record(recorded_frame, view_projection, batches[index].view());
+    });
+    recorder.flush(frame);
+    for (std::size_t index = 0; index < batches.size(); ++index) {
+        const auto& result = results[index];
+        if (result.id == batches[index].id && result.frame == context.frame &&
+            result.status == render::WorldGeometryRecordStatus::Recorded)
+            automation_->world_recorded(index, result.recorded_vertices);
+    }
 }
 
 void ClientApp::update_guide() {
@@ -1012,10 +1211,9 @@ void ClientApp::update_guide() {
         guide_.stop();
         return;
     }
-    std::optional<glm::vec3> goal;
-    const auto& spawns = conn_->world().spawns;
-    if (auto it = spawns.find(guide_.spawn()); it != spawns.end() && !it->second.is_corpse)
-        goal = it->second.display_valid ? it->second.display_position : it->second.position;
+    const auto revision = guide_.revision();
+    const auto goal = guide_.eligible() ? guide_spawn_position(*conn_, guide_.spawn()) : std::nullopt;
+    if (revision != guide_.revision()) return; // an eligibility hook replaced the guide
     const double now = std::chrono::duration<double>(Clock::now() - start_time_).count();
     const std::string name = guide_.name();
     auto u = guide_.update(feet_, goal, now, [this](const glm::vec3& from, const glm::vec3& to) {

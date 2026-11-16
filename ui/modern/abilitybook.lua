@@ -1,16 +1,17 @@
 -- Ability Book (Hailstone's own window, AbilityBookWnd: the EQ menu's "Ability Book", /abilitybook): every ability
 -- you can activate apart from spells, in one list, in the spell book's look:
 --   * the activated alternate abilities, the combat abilities (disciplines) and the activated skills
---     (eq.AbilityBook; each is used as its own hot button is, so the game's and the server's rules hold);
+--     (hs.AbilityBook; each is used as its own hot button is, so the game's and the server's rules hold);
 --   * search (name or description), sort (name, kind, timer group, reuse, time left, level, cost, and class when
 --     you have more than one), filters (kind, ready now, favourites, on autoskill); passive AAs are not listed;
 --   * the ability's details at the right: its costs, reuse and timer group (with what shares the timer), its
---     description (a combat ability's is the game's spell display text: eq.SpellDetails);
+--     description (a combat ability's is the game's spell display text: hs.SpellDetails);
 --   * double-click to use, drag onto a hot bar, right-click for its menu;
 --   * Autoskill along the bottom: its list in order (the arrows move one), the switch, and the selected entry's
 --     conditions (a summary; the Conditions popup sets them). While on it uses the first ready ability of the list,
 --     one at a time, while you fight (auto attack on an NPC in melee range); a beneficial one may be set to any time
 --     or out of combat, and one with a buff to only when the buff has worn off. A server can turn it off (hailstone.cfg [abilities] autoskill = off).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local stml = dofile("lib/stml.lua")
 local T = hud.T
@@ -56,8 +57,8 @@ local mask = 0         -- the player's classes as a mask (bit c-1)
 local function refresh(force)
   if not force and ui.GetTime() - lastRead < 0.25 then return end
   lastRead = ui.GetTime()
-  list = eq.AbilityBook() or {}
-  st = eq.AbilityBookState() or st
+  list = API.abilities.Book() or {}
+  st = API.abilities.BookState() or st
   stamp = stamp + 1
   byKey = {}
   for _, e in ipairs(list) do
@@ -227,7 +228,7 @@ end
 
 local function icon(e, x, y, size, s, ring, alpha)
   local tex, u0, v0, u1, v1
-  if e.icon and e.icon >= 0 then tex, u0, v0, u1, v1 = eq.SpellIcon(e.icon) end
+  if e.icon and e.icon >= 0 then tex, u0, v0, u1, v1 = API.spells.Icon(e.icon) end
   T.Icon(x, y, size, s, tex, u0, v0, u1, v1, ring, { radius = 5, alpha = alpha or 1 })
   if not tex then
     T.Text(x + size / 2, y + size / 2 - 7 * s, e.name:sub(1, 2), C.muted, T.font.small, "center")
@@ -241,7 +242,7 @@ end
 
 local function use(e)
   if e then
-    eq.AbilityBookUse(e.key)
+    API.abilities.Use(e.key)
     lastRead = -1
   end
 end
@@ -347,13 +348,13 @@ local function abilityMenu(e)
   ui.Separator()
   if ui.MenuItem("Use") then use(e) end
   if ui.MenuItem(e.favorite and "Remove from favorites" or "Add to favorites") then
-    eq.AbilityBookFavorite(e.key, not e.favorite)
+    API.abilities.Favorite(e.key, not e.favorite)
     lastRead = -1
   end
   if e.autoable then
     local on = onAutoskill(e.key) ~= nil
     if ui.MenuItem(on and "Remove from autoskill" or "Add to autoskill") then
-      eq.AbilityBookAutoskill(e.key, not on)
+      API.abilities.Autoskill(e.key, not on)
       lastRead = -1
     end
   end
@@ -484,13 +485,13 @@ local function detailsPane(x, y, w, h, s)
   local bw = (w - 12 * s) / 3
   if T.Button("##use", x, by, x + bw, by + 26 * s, s, "Use", { primary = e.ready }) then use(e) end
   if T.Button("##fav", x + bw + 6 * s, by, x + 2 * bw + 6 * s, by + 26 * s, s, e.favorite and "Unfavorite" or "Favorite") then
-    eq.AbilityBookFavorite(e.key, not e.favorite)
+    API.abilities.Favorite(e.key, not e.favorite)
     lastRead = -1
   end
   local onAuto = onAutoskill(e.key) ~= nil
   if T.Button("##auto", x + 2 * bw + 12 * s, by, x + w, by + 26 * s, s, onAuto and "Off autoskill" or "To autoskill",
       { enabled = e.autoable, tooltip = (not e.autoable) and "Only combat skills, combat abilities and activated AAs" or nil }) then
-    eq.AbilityBookAutoskill(e.key, not onAuto)
+    API.abilities.Autoskill(e.key, not onAuto)
     if not onAuto then autoSel = e.key end
     lastRead = -1
   end
@@ -520,7 +521,7 @@ local function detailsPane(x, y, w, h, s)
   if details.key ~= e.key then
     local raw = e.description
     if e.kind == "disc" and e.spell > 0 then
-      local _, text = eq.SpellDetails(e.spell)
+      local _, text = API.spells.Details(e.spell)
       raw = text or ""
     end
     if raw == "" then raw = "No description." end
@@ -550,7 +551,7 @@ local function autoskillStrip(x, y, w, s)
         "(auto attack on an NPC in melee range); beneficial ones can be set to any time or out of combat.\n" ..
         "/abilitybook auto",
   }) then
-    eq.AbilityBookAutoskillEnable(not a.on)
+    API.abilities.AutoskillEnable(not a.on)
     lastRead = -1
   end
   -- the list
@@ -593,15 +594,15 @@ local function autoskillStrip(x, y, w, s)
   local e = byKey[r.key]
   T.Text(cx, y, T.Fit((i .. ". " .. (e and e.name or r.key)), condW - 70 * s, T.font.small), C.text, T.font.small)
   if T.Button("##up", cx + condW - 64 * s, y - 2 * s, cx + condW - 44 * s, y + 16 * s, s, "<", { tooltip = "Earlier" }) then
-    eq.AbilityBookAutoskillMove(r.key, -1)
+    API.abilities.AutoskillMove(r.key, -1)
     lastRead = -1
   end
   if T.Button("##down", cx + condW - 42 * s, y - 2 * s, cx + condW - 22 * s, y + 16 * s, s, ">", { tooltip = "Later" }) then
-    eq.AbilityBookAutoskillMove(r.key, 1)
+    API.abilities.AutoskillMove(r.key, 1)
     lastRead = -1
   end
   if T.Button("##remove", cx + condW - 20 * s, y - 2 * s, cx + condW, y + 16 * s, s, "x", { tooltip = "Take it off" }) then
-    eq.AbilityBookAutoskill(r.key, false)
+    API.abilities.Autoskill(r.key, false)
     autoSel = nil
     lastRead = -1
     return
@@ -653,7 +654,7 @@ local function autoskillStrip(x, y, w, s)
     local below = slider("below", r.targetHp, "Target health below %d%%", "Any target health")
     local above = slider("above", r.targetHpAbove, "Target health above %d%%", "No target minimum")
     if changed then
-      eq.AbilityBookAutoskillRule(r.key, endu, mana, below, above, mine, when, keep)
+      API.abilities.AutoskillRule(r.key, endu, mana, below, above, mine, when, keep)
       r.endurance, r.mana, r.targetHp, r.targetHpAbove, r.selfHp, r.when, r.keepBuff =
         endu, mana, below, above, mine, when, keep
     end
@@ -690,6 +691,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Ability Book", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Ability Book", DIALOG, body)
 end)

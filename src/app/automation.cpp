@@ -1,5 +1,6 @@
 #include "app/automation.h"
 
+#include <algorithm>
 #include <chrono>
 #include <set>
 #include <format>
@@ -11,7 +12,10 @@
 #include <imgui.h>
 
 #include "app/addon_install.h"
+#include "core/config.h"
 #include "core/log.h"
+#include "core/sha256.h"
+#include "game/nameplate_canvas.h"
 #include "mq/commands.h"
 #include "mq/lua_mq.h"
 #include "mq/tlo.h"
@@ -24,6 +28,30 @@
 namespace hailstone::app {
 
 namespace fs = std::filesystem;
+
+std::string configured_plugin_sdk_layout(const fs::path& shared_config, std::string_view hash) {
+    constexpr auto invalid = "invalid-shared-sdk-layout-config";
+    if (hash.size() != 64 || !std::all_of(hash.begin(), hash.end(), [](char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        })) return invalid;
+    std::error_code error;
+    const auto status = fs::symlink_status(shared_config, error);
+    if (status.type() == fs::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory)) return {};
+    if (error || !fs::is_regular_file(shared_config, error) || error) return invalid;
+    Config shared;
+    if (!shared.load(shared_config)) return invalid;
+    constexpr std::string_view prefix = "plugin.sdk_layout.";
+    const auto lower = [](char c) { return c >= 'A' && c <= 'F' ? static_cast<char>(c + ('a' - 'A')) : c; };
+    std::optional<std::string> selected;
+    for (const auto& [key, value] : shared.entries()) {
+        if (!key.starts_with(prefix) || key.size() != prefix.size() + hash.size()) continue;
+        const auto suffix = std::string_view(key).substr(prefix.size());
+        if (!std::equal(hash.begin(), hash.end(), suffix.begin(), [&](char a, char b) { return lower(a) == lower(b); })) continue;
+        if (selected && *selected != value) return invalid; // differently cased copies must agree, including empty values
+        selected = value;
+    }
+    return selected.value_or("");
+}
 
 namespace {
 // The data folder's own folder first, then the install's when that is another folder and exists (a non-portable
@@ -40,6 +68,7 @@ struct Automation::Impl {
     AutomationEnv env;
     plugin::Hooks hooks;
     std::shared_ptr<game::ExtensionChain> extensions = std::make_shared<game::ExtensionChain>();
+    game::NameplateCanvasRegistry nameplates;
     plugin::UiBridge plugin_ui;
     plugin::Policy policy;
     std::vector<plugin::Ceiling> registry_ceilings;
@@ -180,6 +209,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     se.config_dir = m.env.data_dir / "scripts" / "config";
     // Scripts as plugins (mq/lua_hailstone.cpp): the same chain, UI bridge and packets as the compiled plugins.
     se.extensions = m.extensions.get();
+    se.nameplates = &m.nameplates;
     se.ui = &m.plugin_ui;
     se.web = m.env.web;
     se.connection = [&m] { return m.conn(); };
@@ -225,6 +255,9 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     ne.ui = &m.plugin_ui;
     ne.web = m.env.web;
     ne.connection = [&m] { return m.conn(); };
+    ne.sdk_layout = [&m](const Sha256Digest& hash) {
+        return m.env.sdk_layout ? m.env.sdk_layout(to_hex(hash)) : std::string{};
+    };
     ne.max_camera_distance = m.env.max_camera_distance;
     ne.set_max_camera_distance = m.env.set_max_camera_distance;
     ne.hot_button = m.env.hot_button;
@@ -258,8 +291,13 @@ bool Automation::required_addons_ready(std::string* problem) const {
     return impl_->scripts->required_addons_ready(problem);
 }
 
+void Automation::refresh_managed_addons() {
+    impl_->scripts->set_managed_addons(managed_addon_scripts(impl_->env.data_dir));
+}
+
 plugin::Hooks& Automation::hooks() { return impl_->hooks; }
 std::shared_ptr<game::ExtensionChain> Automation::extensions() { return impl_->extensions; }
+game::NameplateCanvasRegistry& Automation::nameplates() { return impl_->nameplates; }
 plugin::UiBridge& Automation::plugin_ui() { return impl_->plugin_ui; }
 mq::ScriptHost& Automation::scripts() { return *impl_->scripts; }
 
@@ -324,8 +362,30 @@ void Automation::imgui(bool dev) {
     ui::lua::raise_guarded_windows(); // the question above every window drawn this frame
 }
 
+void Automation::world_frame(HailstoneWorldFrame frame, plugin::WorldQueries queries) {
+    if (impl_->plugins) impl_->plugins->world_frame(frame, std::move(queries));
+}
+
+const std::vector<plugin::OwnedWorldBatch>& Automation::world_batches() const {
+    static const std::vector<plugin::OwnedWorldBatch> empty;
+    return impl_->plugins ? impl_->plugins->world_batches() : empty;
+}
+
+void Automation::world_recorded(std::size_t batch, std::uint32_t vertices) {
+    if (impl_->plugins) impl_->plugins->world_recorded(batch, vertices);
+}
+
+void Automation::world_finish(bool submitted, bool presented) {
+    if (impl_->plugins) impl_->plugins->world_finish(submitted, presented);
+}
+
+void Automation::world_unavailable() {
+    if (impl_->plugins) impl_->plugins->world_unavailable();
+}
+
 void Automation::shutdown() {
     Impl& m = *impl_;
+    world_unavailable();
     if (m.scripts) m.scripts->stop_all();
     if (m.plugins) m.plugins->unload_all();
 }

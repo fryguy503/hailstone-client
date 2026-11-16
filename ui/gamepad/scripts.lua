@@ -1,8 +1,9 @@
 -- Lua Scripts (gamepad pack): Hailstone's own ScriptsWnd (docs/plugins.md "The Scripts window"), from More. The
--- MacroQuest Lua scripts found in the script folders (eq.Scripts), one row each with its state: A runs or stops it
+-- MacroQuest Lua scripts found in the script folders (hs.Scripts), one row each with its state: A runs or stops it
 -- (/lua run, /lua stop), X pauses or resumes it, Y puts it on this character's autorun list or takes it off (started
 -- at each login once the server's rules allow it). A script the rules do not allow is greyed with the reason; the
 -- server's own scripts under its hailstone.cfg cannot be stopped.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local W = dofile("lib/window.lua")
 local C = T.C
@@ -16,9 +17,9 @@ local STATUS = { running = "Running", paused = "Paused", exited = "Ended", error
 
 local function toggle(r)
   if r.status == "running" or r.status == "paused" then
-    eq.ScriptStop(r.name)
+    API.scripts.Stop(r.name)
   elseif r.allowed and r.found then
-    local ok, why = eq.ScriptRun(r.name)
+    local ok, why = API.scripts.Run(r.name)
     note = not ok and why or nil
   end
 end
@@ -29,7 +30,7 @@ ui.window("Lua Scripts", function()
     return
   end
   T.frame()
-  local list, info = eq.Scripts(not wasShown)
+  local list, info = API.scripts.List(not wasShown)
   if not wasShown then listState.focusNext = 1 end
   wasShown = true
   local running = 0
@@ -73,9 +74,9 @@ ui.window("Lua Scripts", function()
       if row then
         local r = list[row]
         if W.pressed("x") and (r.status == "running" or r.status == "paused") and not r.kept then
-          eq.ScriptPause(r.name)
+          API.scripts.Pause(r.name)
         end
-        if W.pressed("y") and info.autorun then eq.SetScriptAutorun(r.name, not r.autorun) end
+        if W.pressed("y") and info.autorun then API.scripts.SetAutorun(r.name, not r.autorun) end
       end
     end
     T.font(15)
@@ -83,5 +84,5 @@ ui.window("Lua Scripts", function()
       note and C.bad or C.faint)
     T.unfont()
   end
-  if W.finish() then eq.ShowWindow(WIN, false) end
+  if W.finish() then API.windows.Show(WIN, false) end
 end)

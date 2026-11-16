@@ -1,8 +1,9 @@
 -- Friends (gamepad pack): stands in for FriendsWindow (the friends key, the EQ menu's Friends/Ignore). LB / RB switch
 -- between the friends and the ignore list; A picks a name, and the buttons on the right act on it: a tell (the chat
 -- window's keyboard with "/tell name "), /who, remove (asked first). Names are added from the target or typed on an
--- on-screen keyboard. Every action is the stock window's own: its name box and buttons (eq.SetWindowText,
--- eq.ClickChild), so /friends and /ignore run as they do from the classic window.
+-- on-screen keyboard. Every action is the stock window's own: its name box and buttons (hs.SetWindowText,
+-- hs.ClickChild), so /friends and /ignore run as they do from the classic window.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -24,17 +25,17 @@ local side = {} -- W.toSide
 
 -- The target's name, when there is one.
 local function targetName()
-  local _, name, raw = eq.Gauge(6)
+  local _, name, raw = API.character.Gauge(6)
   if raw == -1 or not name or name == "" then return nil end
   return name
 end
 
 -- The names of a list (the stock window's rows) and its selected row (1-based, nil for none).
 local function names(p)
-  local rows, _, selected = eq.ListInfo(FW, p.list)
+  local rows, _, selected = API.windows.ListInfo(FW, p.list)
   local out = {}
   for i = 0, (rows or 0) - 1 do
-    local r = eq.ListRow(FW, p.list, i)
+    local r = API.windows.ListRow(FW, p.list, i)
     out[#out + 1] = r and r[1] or ""
   end
   return out, selected and selected >= 0 and selected + 1 or nil
@@ -43,8 +44,8 @@ end
 -- Adds `name` as the stock window does: its name box, then its Add button.
 local function add(p, name)
   if not name or name == "" then return end
-  eq.SetWindowText(FW, p.input, name)
-  eq.ClickChild(FW, p.add, "left")
+  API.windows.SetText(FW, p.input, name)
+  API.windows.ClickChild(FW, p.add, "left")
 end
 
 -- Testing: the pack's settings file test.open = ...,friends opens it once, 6 s after
@@ -52,7 +53,7 @@ end
 -- (the setting does not change in play: once it is read without friends, the hook stays off, as M.testShow does)
 local testAt, testOff
 local function testOpen()
-  if testOff or GPSTATE["test_friends"] or not eq.InGame() then return end
+  if testOff or GPSTATE["test_friends"] or not API.session.InGame() then return end
   if not (","..(ui.GetSetting("test.open") or "")..","):find(",friends,", 1, true) then
     testOff = true
     return
@@ -60,9 +61,9 @@ local function testOpen()
   testAt = testAt or ui.GetTime()
   if ui.GetTime() - testAt > 6 then
     GPSTATE["test_friends"] = true
-    eq.ShowWindow(FW, true)
+    API.windows.Show(FW, true)
   elseif ui.GetTime() - testAt > 5 then
-    eq.ShowWindow(FW, false)
+    API.windows.Show(FW, false)
   end
 end
 
@@ -81,7 +82,7 @@ ui.window("Friends", function()
         hints = kb.open and K.HINTS or { { "lb", "Friends" }, { "rb", "Ignore" }, { "a", "Select" }, { "b", "Close" } } }) then
     if not kb.open and not state.confirm and (W.pressed("lb") or W.pressed("rb")) then
       page = page == 1 and 2 or 1
-      eq.SetTabPage(FW, "Subwindows", page - 1)
+      API.windows.SetTabPage(FW, "Subwindows", page - 1)
       p = PAGES[page]
       list, selected = names(p)
       sel = selected and list[selected]
@@ -117,7 +118,7 @@ ui.window("Friends", function()
           T.font(24)
           T.textIn(rx0 + T.px(18), ry0, rx1 - T.px(18), ry1, list[i], i == selected and C.accent or C.text, 0)
           T.unfont()
-        end, function(i) eq.ListClick(FW, p.list, i - 1, "left") end)
+        end, function(i) API.windows.ListClick(FW, p.list, i - 1, "left") end)
         W.toSide(side, focusedRow)
       end
       -- the right side: the actions, or the keyboard
@@ -161,7 +162,7 @@ ui.window("Friends", function()
           at(y)
           W.sideBefore(side, 4)
           if T.button("##who", "Who", rw, bh, { sub = "Where they are (/who all)", disabled = none, align = 0 }, pad) then
-            eq.ClickChild(FW, "WhoButton", "left")
+            API.windows.ClickChild(FW, "WhoButton", "left")
             GPSTATE.whoOpen = true
           end
           W.sideAfter(side, 4, page == 1 and 5 or 3, lists[page])
@@ -176,14 +177,14 @@ ui.window("Friends", function()
             -- the stock Remove acts on its selected row: select the name again (the list may have changed)
             local again = names(p)
             for i, n in ipairs(again) do
-              if n == who then eq.ListClick(FW, list_, i - 1, "left") end
+              if n == who then API.windows.ListClick(FW, list_, i - 1, "left") end
             end
-            eq.ClickChild(FW, button, "left")
+            API.windows.ClickChild(FW, button, "left")
           end }
         end
         W.sideAfter(side, (page == 1 and 5 or 3), page == 1 and 5 or 3, lists[page])
       end
     end
   end
-  if W.back(W.finish(), state, kb, lists[page]) then eq.ShowWindow(FW, false) end
+  if W.back(W.finish(), state, kb, lists[page]) then API.windows.Show(FW, false) end
 end)

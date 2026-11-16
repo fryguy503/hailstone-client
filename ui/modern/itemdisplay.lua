@@ -6,6 +6,7 @@
 -- game's text (CItemDisplayWnd's children: the info lines, IDW_Row<r>Col<c>Stat / Value, IDW_Heroic<n>, the
 -- description STML); the Modified switch is the window's own button. The augment sockets are the window's socket
 -- rows (UpdateAugmentSlots) with its buttons.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local stml = dofile("lib/stml.lua")
@@ -34,7 +35,7 @@ end
 local function trim(s) return (s or ""):match("^%s*(.-)%s*$") end
 
 local function childColor(win, id, default)
-  local r, g, b = eq.ChildColor(win, id)
+  local r, g, b = API.windows.ChildColor(win, id)
   return r and { r, g, b, 1 } or default
 end
 
@@ -43,7 +44,7 @@ local function infoLines(win)
   local out = {}
   for n = 1, INFO_LINES do
     local id = INFO_IDS[n]
-    if eq.ChildShown(win, id) == false then break end
+    if API.windows.ChildShown(win, id) == false then break end
     out[#out + 1] = { W.Text(win, id), childColor(win, id, C.text) }
   end
   return out
@@ -80,13 +81,13 @@ end
 -- The stat grid by its columns: { { stat, value, color, tooltip, heroic } or false (a blank row between two
 -- blocks) ... } per column, blanks only between cells.
 local function statColumns(win)
-  -- the heroic labels sit beside their values (eq.ChildRect: x by column, y by row, 16 pixels a row)
+  -- the heroic labels sit beside their values (hs.ChildRect: x by column, y by row, 16 pixels a row)
   local heroic = {}
-  local _, y1 = eq.ChildRect(win, "IDW_Row1Col1Stat")
+  local _, y1 = API.windows.ChildRect(win, "IDW_Row1Col1Stat")
   for n = 1, 13 do
     local id = HEROIC_IDS[n]
-    if eq.ChildShown(win, id) == false then break end
-    local x, y = eq.ChildRect(win, id)
+    if API.windows.ChildShown(win, id) == false then break end
+    local x, y = API.windows.ChildRect(win, id)
     if x and y1 then
       local col = x >= 360 and 3 or x >= 240 and 2 or 1
       local row = math.floor((y - y1) / 16 + 0.5) + 1
@@ -99,12 +100,12 @@ local function statColumns(win)
     for r = 1, ROWS do
       local ids = CELL_IDS[c][r]
       local sid, vid = ids[1], ids[2]
-      local stat = eq.ChildShown(win, sid) ~= false and trim(W.Text(win, sid)) or ""
+      local stat = API.windows.ChildShown(win, sid) ~= false and trim(W.Text(win, sid)) or ""
       if stat ~= "" then
         if gap and #list > 0 then list[#list + 1] = false end
         gap = false
         list[#list + 1] = { stat:gsub(":$", ""), trim(W.Text(win, vid)), childColor(win, vid, C.text),
-          eq.ChildTooltip(win, sid) or "", heroic[r * 4 + c] }
+          API.windows.ChildTooltip(win, sid) or "", heroic[r * 4 + c] }
       else
         gap = true
       end
@@ -214,7 +215,7 @@ local function description(win, raw, width)
   if not c or c.raw ~= raw then
     -- (the link handler is made with the lines, not once a line a frame)
     c = { raw = raw, lines = stml.Lines(raw, C.text),
-      onLink = function(link) eq.StmlLink(win, "ItemDescription", link[1], link[2]) end }
+      onLink = function(link) API.windows.StmlLink(win, "ItemDescription", link[1], link[2]) end }
     stmlCache[win] = c
   end
   for _, line in ipairs(c.lines) do stml.DrawLine(line, width, c.onLink) end
@@ -232,7 +233,7 @@ local function socketText(win, id, width)
   local key = win .. "\0" .. id
   local c = socketCache[key]
   if not c or c.raw ~= raw then
-    c = { raw = raw, lines = stml.Lines(raw, C.text), onLink = function(link) eq.StmlLink(win, id, link[1], link[2]) end }
+    c = { raw = raw, lines = stml.Lines(raw, C.text), onLink = function(link) API.windows.StmlLink(win, id, link[1], link[2]) end }
     socketCache[key] = c
   end
   for _, line in ipairs(c.lines) do stml.DrawLine(line, width, c.onLink) end
@@ -242,10 +243,10 @@ local function socketButton(win, id, size, s)
   local x, y = ui.GetCursorScreenPos()
   ui.InvisibleButton("##sock" .. id, size, size)
   local key, hov = ui.GetItemID(), ui.IsItemHovered()
-  local tex, u0, v0, u1, v1 = eq.ChildArt(win, id, "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(win, id, "decal")
   if tex == false or type(tex) == "string" then tex = nil end
   T.Icon(x, y, size, s, tex, u0, v0, u1, v1, hov and C.accent or nil, RADIUS5)
-  local function send(phase, outside) eq.ClickChild(win, id, phase, outside) end
+  local function send(phase, outside) API.windows.ClickChild(win, id, phase, outside) end
   if ui.IsItemClicked(ui.Mouse.Left) then
     send("left")
   elseif ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
@@ -253,7 +254,7 @@ local function socketButton(win, id, size, s)
   end
   T.RightPressFrame(key, send, hov)
   if hov then
-    local tip = eq.ChildTooltip(win, id)
+    local tip = API.windows.ChildTooltip(win, id)
     if tip and tip ~= "" then ui.SetTooltip(tip) end
   end
 end
@@ -298,7 +299,7 @@ end
 local REREAD = 0.25
 local parsed = {}
 local function readItem(win, mod, desc, tex, u0, v0)
-  local name = eq.WindowText(win, INFO_IDS[1])
+  local name = API.windows.Text(win, INFO_IDS[1])
   local now = ui.GetTime()
   local p = parsed[win]
   if p and p.name == name and p.mod == mod and p.desc == desc and p.tex == tex and p.u0 == u0 and p.v0 == v0
@@ -313,7 +314,7 @@ local function readItem(win, mod, desc, tex, u0, v0)
 end
 
 -- ---------------------------------------------------------------- comparison
--- Hailstone: the item against what you wear (eq.CompareSlotItem over the window's Hailstone_Item;
+-- Hailstone: the item against what you wear (hs.CompareSlotItem over the window's Hailstone_Item;
 -- docs/item-compare.md), every change, with a button per slot when it fits two (ears, wrists, rings).
 -- The comparison is asked for again only when the item's name line or icon changes, or every COMPARE_REREAD
 -- seconds (what you wear changes); its lines are made again only with it, the slot shown or the verdict option.
@@ -322,13 +323,13 @@ local compareCache = {} -- [win] = { at, name, tex, u0, v0, c, lines, index, ver
 local COMPARE_REREAD = 0.5
 local CMP_KIND = { good = "good", bad = "bad", mixed = "gold" }
 local function comparison(win, item)
-  if eq.Option("item_compare") == 0 then return end
+  if API.settings.Option("item_compare") == 0 then return end
   local now = ui.GetTime()
   local k = compareCache[win]
   if not k then k = { at = -math.huge }; compareCache[win] = k end
   if k.name ~= item.name or k.tex ~= item.tex or k.u0 ~= item.u0 or k.v0 ~= item.v0
       or now - k.at >= COMPARE_REREAD or now < k.at then
-    k.c, k.lines = eq.CompareSlotItem(win, "Hailstone_Item"), nil
+    k.c, k.lines = API.compare.SlotItem(win, "Hailstone_Item"), nil
     k.at, k.name, k.tex, k.u0, k.v0 = now, item.name, item.tex, item.u0, item.v0
   end
   local c = k.c
@@ -343,7 +344,7 @@ local function comparison(win, item)
       if ui.Selectable(label, n == index, 0, (ui.CalcTextSize(slot.slotName)), 0) then compareIndex[win] = n end
     end
   end
-  local verdict = eq.Option("item_compare_verdict") ~= 0
+  local verdict = API.settings.Option("item_compare_verdict") ~= 0
   if not k.lines or k.index ~= index or k.verdict ~= verdict then
     k.lines, k.index, k.verdict = CL.lines(c, index, { verdict = verdict, full = true }), index, verdict
   end
@@ -359,7 +360,7 @@ local function comparison(win, item)
 end
 
 local function body(win, w, h, s)
-  local tex, u0, v0, u1, v1 = eq.ChildArt(win, "IconButton", "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(win, "IconButton", "decal")
   local mod = trim(W.Text(win, "IDW_ModButtonLabel"))
   local descRaw = W.Text(win, "ItemDescription")
   local item = readItem(win, mod, descRaw, tex, u0, v0)
@@ -372,10 +373,10 @@ local function body(win, w, h, s)
   -- the stock window's icon button: a click links the item into the chat window you last used (or the one set to
   -- Always Chat Here)
   ui.SetCursorScreenPos(x, y)
-  if ui.InvisibleButton("##linkicon", icon, icon) then eq.ClickChild(win, "IconButton", "left") end
+  if ui.InvisibleButton("##linkicon", icon, icon) then API.windows.ClickChild(win, "IconButton", "left") end
   T.HoverFx(x, y, x + icon, y + icon, s, 7)
   if ui.IsItemHovered() then ui.SetTooltip("Click to link this item in chat") end
-  local name = lines[1] or { eq.WindowTitle(win) or "", C.text }
+  local name = lines[1] or { API.windows.Title(win) or "", C.text }
   local tx = x + icon + 10 * s
   ui.SetCursorScreenPos(tx, y)
   ui.PushFont(T.font.large)
@@ -393,8 +394,8 @@ local function body(win, w, h, s)
   end
   local _, cy = ui.GetCursorScreenPos()
   ui.SetCursorScreenPos(x, math.max(cy, y + icon) + 6 * s)
-  if eq.ItemDisplayCanTransfer(win) then
-    if ui.Button("Transfer evolving experience##evolve", -1, 0) then eq.ItemDisplayTransfer(win) end
+  if API.evolving.CanTransferDisplayed(win) then
+    if ui.Button("Transfer evolving experience##evolve", -1, 0) then API.evolving.OpenFromDisplay(win) end
   end
 
   -- the rest scrolls
@@ -423,12 +424,12 @@ local function body(win, w, h, s)
     W.Heading("Stats")
     statGrid(cols, s, cw)
   end
-  if mod ~= "" and eq.ChildShown(win, "IDW_ModButton") ~= false then
+  if mod ~= "" and API.windows.ChildShown(win, "IDW_ModButton") ~= false then
     -- the window's Modified button: its label says which values the grid shows
     ui.Dummy(0, 2 * s)
     local _, changed = ui.Checkbox("Modified values##mod", mod:lower() == "modified")
     if changed then
-      eq.ClickChild(win, "IDW_ModButton", "left")
+      API.windows.ClickChild(win, "IDW_ModButton", "left")
       parsed[win] = nil
     end
     if ui.IsItemHovered() then
@@ -461,7 +462,7 @@ for i = 1, INSTANCES do
   }
   local function draw(x, y, w, h, s) body(window, w, h, s) end
   ui.window(title, function()
-    if not eq.InGame() then return end
+    if not API.session.InGame() then return end
     hud.Dialog(window, title, opts, draw)
   end)
 end

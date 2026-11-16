@@ -20,6 +20,7 @@
 #include "assets/object_animation.h"
 #include "core/byte_io.h"
 #include "core/worker_pool.h"
+#include "core/process_serial.h"
 #include "game/collision.h"
 #include "game/missiles.h"
 #include "game/path_trail.h"
@@ -207,6 +208,10 @@ TEST_CASE("Find's continuous rainbow strands retain terrain clearance and motion
 
 TEST_CASE("Server Find and guide trails each use rainbow particles and stop independently") {
     test::Rig rig;
+    REQUIRE(rig.to_zone());
+    rig.conn.set_path_floor([](const glm::vec3& p, float step_up) -> std::optional<float> {
+        return p.z + step_up >= 2.0f ? std::optional(2.0f) : std::nullopt;
+    });
     app::SpellParticles particles({assets::EmitterDefinition{}}, {});
     particles.set_find_trail_style(game::FindTrailStyle::Rainbow);
     particles.set_trail_floor([](const glm::vec3& p) -> std::optional<float> {
@@ -217,8 +222,11 @@ TEST_CASE("Server Find and guide trails each use rainbow particles and stop inde
     REQUIRE(particles.simulation().emitters().size() == 1);
     const auto guide_key = particles.simulation().emitters().front().key;
 
+    rig.conn.find_map_location({0, 60, 2});
     rig.conn.receive_zone_packet_for_test(net::encode_find_person_reply({{0, 60, 2}, {0, 0, 2}, {0, 60, 2}}));
     REQUIRE(rig.conn.player_path().active());
+    REQUIRE_FALSE(rig.conn.player_path().points().empty());
+    CHECK(rig.conn.player_path().points().front().z - rig.conn.player_path().floor_offset() == doctest::Approx(2.0f));
     particles.update(rig.conn, {}, {}, nullptr, 0.01f);
     REQUIRE(particles.simulation().emitters().size() == 2);
     for (const auto& emitter : particles.simulation().emitters()) {
@@ -238,6 +246,53 @@ TEST_CASE("Server Find and guide trails each use rainbow particles and stop inde
     particles.set_guide_line({});
     particles.update(rig.conn, {}, {}, nullptr, 0.01f);
     CHECK(particles.simulation().emitters().empty());
+}
+
+TEST_CASE("Find trail visibility retains both routes and keeps ordinary spell effects running") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    rig.conn.set_path_floor([](const glm::vec3& p, float step_up) -> std::optional<float> {
+        return p.z + step_up >= 2.0f ? std::optional(2.0f) : std::nullopt;
+    });
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(spell_line(600)) == 1);
+    rig.conn.set_spell_table_for_test(table);
+    assets::SpellEffect effect;
+    effect.stages[0].slots[0] = {1, 0, 1, 8}; // ordinary cast effect attached to the player
+    app::SpellParticles particles({assets::EmitterDefinition{}, dot()}, {assets::SpellEffect{}, effect});
+    particles.set_trail_floor([](const glm::vec3& p) -> std::optional<float> {
+        return p.z >= 2.0f ? std::optional(2.0f) : std::nullopt;
+    });
+    particles.set_guide_line({{0, 0, 2}, {60, 0, 2}});
+    rig.conn.find_map_location({0, 60, 2});
+    rig.conn.receive_zone_packet_for_test(net::encode_find_person_reply({{0, 60, 2}, {0, 0, 2}, {0, 60, 2}}));
+    REQUIRE(rig.conn.player_path().active());
+    const auto points = rig.conn.player_path().points();
+    net::SpellEffectCue cast;
+    cast.caster = rig.conn.world().player_id; cast.spell = 600; cast.duration_ms = 1000;
+    particles.update(rig.conn, std::span(&cast, 1), {}, nullptr, 0.01f);
+    const auto& emitters = particles.simulation().emitters();
+    REQUIRE(emitters.size() == 3);
+    CHECK(std::count_if(emitters.begin(), emitters.end(), [](const auto& emitter) { return emitter.still; }) == 2);
+    const auto spell_key = (cast.caster << 16) | cast.spell;
+    particles.set_paths_visible(false);
+    particles.update(rig.conn, {}, {}, nullptr, 0.01f);
+    REQUIRE(emitters.size() == 1);
+    CHECK(emitters.front().key == spell_key);
+    CHECK_FALSE(emitters.front().still);
+    REQUIRE_FALSE(emitters.front().particles.empty());
+    const auto age = emitters.front().age;
+    particles.update(rig.conn, {}, {}, nullptr, 0.02f);
+    REQUIRE(emitters.size() == 1);
+    CHECK(emitters.front().age > age);
+    CHECK(rig.conn.player_path().active());
+    CHECK(rig.conn.player_path().points() == points);
+    particles.set_paths_visible(true);
+    particles.update(rig.conn, {}, {}, nullptr, 0.01f);
+    REQUIRE(emitters.size() == 3); // guide input and server route both reappear without being replaced
+    CHECK(std::count_if(emitters.begin(), emitters.end(), [](const auto& emitter) { return emitter.still; }) == 2);
+    CHECK(std::any_of(emitters.begin(), emitters.end(), [&](const auto& emitter) { return emitter.key == spell_key; }));
+    CHECK(rig.conn.player_path().points() == points);
 }
 
 TEST_CASE("Find's rainbow replaces elevated travelling clouds and grounds large avatars and finish effects") {
@@ -260,10 +315,12 @@ TEST_CASE("Find's rainbow replaces elevated travelling clouds and grounds large 
     rig.conn.set_player_motion(me.position, 0, {}, false);
     game::Spawn target;
     target.id = 333;
+    target.incarnation = core::next_process_identity();
     target.name = "FixtureGuide";
     target.is_npc = true;
     target.position = {60, 0, 14};
     world.spawns.emplace(target.id, target);
+    ++world.spawn_set_serial;
     auto ground = [](const glm::vec3& p, float step_up) -> std::optional<float> {
         return p.z + step_up >= 2.0f ? std::optional(2.0f) : std::nullopt;
     };
@@ -301,19 +358,33 @@ TEST_CASE("Find's rainbow replaces elevated travelling clouds and grounds large 
         CHECK(p.height > p.width * 2.0f);
     }
 
+    bool visible = true;
     SUBCASE("completion effects start on supported ground") { supported = true; }
     SUBCASE("unsupported completion effects are omitted") { supported = false; }
+    SUBCASE("hidden completion effects are consumed without replay on reveal") {
+        visible = false; particles.set_paths_visible(false);
+    }
     rig.conn.set_player_motion({60, 0, 14}, 0, {}, false);
     rig.conn.update();
     REQUIRE_FALSE(path.active());
     REQUIRE(path.finished());
     particles.update(rig.conn, {}, {}, nullptr, 0.01f);
-    if (supported) {
+    if (supported && visible) {
         REQUIRE(emitters.size() == 1);
         CHECK_FALSE(emitters.front().still);
         CHECK(near(emitters.front().origin, {60, 0, 2.35f}));
+        particles.set_paths_visible(false);
+        particles.update(rig.conn, {}, {}, nullptr, 0.01f);
+        CHECK(emitters.empty()); // hide an already-playing completion emitter too
     } else {
         CHECK(emitters.empty());
+    }
+    if (!visible) {
+        CHECK_FALSE(rig.conn.take_path_finish());
+        particles.set_paths_visible(true);
+        particles.update(rig.conn, {}, {}, nullptr, 0.01f);
+        CHECK(emitters.empty());
+        CHECK(path.finished());
     }
 }
 

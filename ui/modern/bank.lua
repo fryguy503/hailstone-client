@@ -3,9 +3,10 @@
 -- match, and dims in the bank bags' windows too) and Stack / Sort of the bank's bags (Hailstone); the bank slots as
 -- tiles that rewrap to the window's width; the shared bank's two slots and its platinum; your banked coin; then
 -- Auto-Bank, Change and Done.
--- The slots and buttons are the game's (eq.SlotItem / eq.ClickChild on <prefix>BankSlot<n>, SharedBankSlot0..1,
+-- The slots and buttons are the game's (hs.SlotItem / hs.ClickChild on <prefix>BankSlot<n>, SharedBankSlot0..1,
 -- Money0..3, SharedMoney0, AutoButton, ChangeButton, DoneButton): click to pick up, drop or swap, right-click a bag
 -- to open it, hold the right button to see an item; a coin pile picks the coin up, or takes the coin on the cursor.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local TC = dofile("lib/trade_common.lua")
@@ -16,10 +17,10 @@ local C = T.color
 local bottomH = {} -- window -> the height the part under the slots took last frame
 
 -- Over the tile just placed: dimmed when the search does not match it, ringed when it is or holds a match (`found`:
--- eq.FindItems' counts by bank slot).
+-- hs.FindItems' counts by bank slot).
 local function dim(win, id, size, found)
   local x0, y0 = ui.GetItemRect()
-  tools.Mark(x0, y0, size, 1, eq.SlotItem(win, id), "bank", found and (found[tonumber(id:match("%d+$"))] or 0) > 0)
+  tools.Mark(x0, y0, size, 1, API.inventory.SlotItem(win, id), "bank", found and (found[tonumber(id:match("%d+$"))] or 0) > 0)
 end
 
 local function slots(win, prefix, first, last, size, gap, found)
@@ -40,7 +41,7 @@ local function bank(win, p, count, s)
   local btnH = lh + 10 * s
   -- header: the banker, the slots used, the search
   local used = 0
-  for i = 0, count - 1 do if eq.SlotItem(win, p .. "BankSlot" .. i) then used = used + 1 end end
+  for i = 0, count - 1 do if API.inventory.SlotItem(win, p .. "BankSlot" .. i) then used = used + 1 end end
   local banker = W.Text(win, p .. "BankerName")
   ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, banker ~= "" and banker or "Bank")
   ui.SameLine()
@@ -55,7 +56,7 @@ local function bank(win, p, count, s)
   local _, sy0, sx1 = ui.GetItemRect()
   tools.Toolbar("##bank", sx1 + 8 * s + tools.ToolbarWidth(s), sy0, s, "bank")
   local text = tools.Search("bank")
-  local found = text ~= "" and select(2, eq.FindItems("bank", text)) or nil
+  local found = text ~= "" and select(2, API.inventory.FindItems("bank", text)) or nil
 
   -- the slots fill what is left above the shared bank, the coin and the buttons
   ui.BeginChild("##bankslots", 0, -(bottomH[win] or 200 * s), false)
@@ -100,7 +101,7 @@ for _, b in ipairs({ { "BankWnd", "BW_", 16, "Bank" }, { "BigBankWnd", "BIGB_", 
   }
   local function body(x, y, w, h, s) bank(win, p, count, s) end
   ui.window(b[1] == "BankWnd" and "Bank" or "Big Bank", function()
-    if not eq.InGame() then return end
+    if not API.session.InGame() then return end
     hud.Dialog(win, title, opts, body)
   end)
 end

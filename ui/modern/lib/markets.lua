@@ -6,8 +6,9 @@
 -- long list (a bazaar search's results) every frame would cost rows x rows. The copy is read again whole when the
 -- row count, the first or the last row changes (or after M.Refresh), else a few rows a frame, so a long list
 -- stays current within a few seconds.
--- Clicks still go to the original (eq.ListClick with the original's row), so the window's own handler selects,
+-- Clicks still go to the original (hs.ListClick with the original's row), so the window's own handler selects,
 -- inspects or picks up.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local W = dofile("lib/widgets.lua")
 local C = T.color
@@ -115,7 +116,7 @@ end
 local cache = {}
 
 local function readRow(win, id, r)
-  local texts, cr, cg, cb, tex, u0, v0, u1, v1 = eq.ListRow(win, id, r)
+  local texts, cr, cg, cb, tex, u0, v0, u1, v1 = API.windows.ListRow(win, id, r)
   if not texts then return nil end
   return { texts = texts, color = cr and { cr, cg, cb, 1 } or nil, tex = tex, uv = { u0, v0, u1, v1 }, index = r }
 end
@@ -130,7 +131,7 @@ end
 -- A row read again: kept (brought up to date in place) when its texts and colour are the same, so a list read a few
 -- rows a frame does not make a row's tables each time; true when it changed (a new row was made).
 local function reread(c, win, id, r)
-  local texts, cr, cg, cb, tex, u0, v0, u1, v1 = eq.ListRow(win, id, r)
+  local texts, cr, cg, cb, tex, u0, v0, u1, v1 = API.windows.ListRow(win, id, r)
   local old = c.rows[r + 1]
   if old and texts and (old.color and old.color[1]) == cr and #old.texts == #texts then
     local ot = old.texts
@@ -153,7 +154,7 @@ end
 -- The list's rows (the copy; see the header), its selected row (0-based, -1 none), the column labels and a
 -- version that changes with the rows.
 function M.Rows(win, id)
-  local n, _, selected, labels = eq.ListInfo(win, id)
+  local n, _, selected, labels = API.windows.ListInfo(win, id)
   if not n then return {}, -1, {}, 0 end
   local byId = cache[win]
   if not byId then byId = {}; cache[win] = byId end
@@ -271,7 +272,7 @@ function M.Table(win, id, w, h, cols, opts)
       ui.SelectableFlags.SpanAllColumns | ui.SelectableFlags.AllowDoubleClick, 0, rowH)
     if opts.drag and T.DragFrom(win, id, r.index + 1) then picked = false end
     if picked then
-      eq.ListClick(win, id, r.index, "left", column)
+      API.windows.ListClick(win, id, r.index, "left", column)
       if opts.onClick then opts.onClick(r) end
       if opts.doubleClick and ui.IsMouseDoubleClicked(ui.Mouse.Left) then opts.doubleClick(r) end
     end
@@ -280,7 +281,7 @@ function M.Table(win, id, w, h, cols, opts)
       if tip and tip ~= "" then ui.SetTooltip(tip) end
     end
     if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
-      if opts.rightClick then opts.rightClick(r) else eq.ListClick(win, id, r.index, "right", column) end
+      if opts.rightClick then opts.rightClick(r) else API.windows.ListClick(win, id, r.index, "right", column) end
       T.TakeRightClick()
     end
     ui.SameLine(0, 0)
@@ -363,16 +364,16 @@ end
 -- platinum and gold, or an alternate currency's amount as well) as two captioned lines of coins.
 function M.MercCosts(win, s)
   local function line(caption, kind)
-    local pp = tonumber(eq.WindowText(win, kind .. "CostPlatText") or "") or 0
-    local gp = tonumber(eq.WindowText(win, kind .. "CostGoldText") or "") or 0
+    local pp = tonumber(API.windows.Text(win, kind .. "CostPlatText") or "") or 0
+    local gp = tonumber(API.windows.Text(win, kind .. "CostGoldText") or "") or 0
     ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, caption)
     ui.SameLine(80 * (s or 1))
     M.Price(pp * 1000 + gp * 100)
-    if eq.ChildShown(win, "Alt" .. kind .. "CostText") ~= false then
+    if API.windows.ChildShown(win, "Alt" .. kind .. "CostText") ~= false then
       ui.SameLine()
       ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1, "or")
       ui.SameLine()
-      ui.TextColored(C.gold[1], C.gold[2], C.gold[3], 1, eq.WindowText(win, "Alt" .. kind .. "CostText") or "")
+      ui.TextColored(C.gold[1], C.gold[2], C.gold[3], 1, API.windows.Text(win, "Alt" .. kind .. "CostText") or "")
       M.Tip("An alternate currency")
     end
   end
@@ -383,14 +384,14 @@ function M.MercCosts(win, s)
 end
 
 -- ---------------------------------------------------------------- testing
--- test.open.<screen>=1 in ui/settings/modern.txt shows the window once in game (eq.ShowWindow), for screenshots of
+-- test.open.<screen>=1 in ui/settings/modern.txt shows the window once in game (hs.ShowWindow), for screenshots of
 -- windows a test cannot reach (a mercenary window without a mercenary).
 -- The setting is read the first time (the windows ask each frame): set it before the UI starts.
 local testOpened = {}
 function M.TestOpen(win)
   if testOpened[win] then return end
   testOpened[win] = true
-  if ui.GetSetting("test.open." .. win) == "1" then eq.ShowWindow(win, true) end
+  if ui.GetSetting("test.open." .. win) == "1" then API.windows.Show(win, true) end
 end
 
 -- test.draw.<screen>=1: draw the window though the game has not opened it (hud.Dialog's opts.shown), for windows
@@ -408,7 +409,7 @@ end
 
 -- An STML child's text, or a faint line when it has none.
 function M.StmlOr(win, id, empty)
-  if (eq.WindowText(win, id) or "") == "" then
+  if (API.windows.Text(win, id) or "") == "" then
     ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1, empty)
   else
     W.Stml(win, id, 0, 0)

@@ -1,8 +1,8 @@
 # Item comparison
 
 Code: `src/game/item_compare.{h,cpp}` (the comparison and the verdict), `src/game/mechanics/shown_stats.{h,cpp}` (the
-AC and ATK the inventory window shows, shared with its labels), `src/app/lua_eq_compare.cpp` (`eq.CompareItem`,
-`eq.CompareSlotItem`, `eq.CompareBagSlotItem`), `ui/<pack>/lib/compare_lines.lua` (the lines both packs show; the
+AC and ATK the inventory window shows, shared with its labels), `src/app/lua_ui_compare.cpp` (`hs.CompareItem`,
+`hs.CompareSlotItem`, `hs.CompareBagSlotItem`), `ui/<pack>/lib/compare_lines.lua` (the lines both packs show; the
 gamepad pack's is a copy of the modern pack's), and the slots, tooltips and item displays of both packs.
 Tests: `tests/item_compare_test.cpp`, and "the item display compares the item with what you wear" in
 `tests/ui_pack_windows_test.cpp`.
@@ -76,10 +76,10 @@ enchanters). The table is `kWeights` in `src/game/item_compare.cpp`.
 ## For scripts
 
 ```lua
-local c = eq.CompareItem(slot [, bagSlot])     -- an item carried (nil for a worn one)
-local c = eq.CompareSlotItem(window, child)    -- a window's item slot; "MerchantWnd", "ItemList:<row>" for a
+local c = hs.CompareItem(slot [, bagSlot])     -- an item carried (nil for a worn one)
+local c = hs.CompareSlotItem(window, child)    -- a window's item slot; "MerchantWnd", "ItemList:<row>" for a
                                                -- merchant's row, "ItemDisplayWindow", "Hailstone_Item" for a display
-local c = eq.CompareBagSlotItem(bagWindow, i)  -- a bag window's slot
+local c = hs.CompareBagSlotItem(bagWindow, i)  -- a bag window's slot
 -- c = { usable, whyNot, notes = { ... }, slots = { { slot, slotName, current = { name or "" }, verdict, score,
 --       changes = { { key, name, before, after, delta, weight } }, weaponBefore, weaponAfter, gained, lost } } }
 ```

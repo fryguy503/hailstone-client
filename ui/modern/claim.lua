@@ -1,7 +1,8 @@
 -- Claim rewards: replaces the game's ClaimWnd (/claim: the account's veteran rewards). The rewards that may be
 -- claimed (greyed when none are left) and, beside them or below when the window is narrow, the items the selected
 -- one gives; Refresh, Cancel and Claim (the window enables it for a reward that can be claimed). The lists and
--- buttons are the window's (eq.ListClick, eq.ClickChild), so the claim the server gets is the window's.
+-- buttons are the window's (hs.ListClick, hs.ClickChild), so the claim the server gets is the window's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -42,6 +43,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Claim Rewards", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Claim Rewards", WINDOW_OPTS, drawWindow)
 end)

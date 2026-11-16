@@ -1,7 +1,8 @@
 -- Alarm: replaces the game's AlarmWnd (/alarm: a reminder after a time). Hours and minutes as number boxes, a row of
 -- quick choices that fill them, what the alarm will be ("in 1 h 30 min"), Set Alarm and Cancel. The boxes are the
--- window's own edit boxes (eq.SetWindowText; a quick choice types into both), and Set Alarm is its Set Time button,
+-- window's own edit boxes (hs.SetWindowText; a quick choice types into both), and Set Alarm is its Set Time button,
 -- so the window starts the alarm as the stock one does.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -17,7 +18,7 @@ local function number(id, width)
   local current = W.Text(WINDOW, id)
   ui.SetNextItemWidth(width)
   local text = ui.InputText("##" .. id, current, 4, ui.InputTextFlags.CharsDecimal | ui.InputTextFlags.AutoSelectAll)
-  if text ~= current then eq.SetWindowText(WINDOW, id, text) end
+  if text ~= current then API.windows.SetText(WINDOW, id, text) end
   return math.max(0, math.floor(tonumber(text) or 0))
 end
 
@@ -49,8 +50,8 @@ local function drawWindow(x, y, w, h, s)
       lineW = qw
     end
     if ui.Button(q[1] .. "##quick", qw, 0) then
-      eq.SetWindowText(WINDOW, HOURS, tostring(q[2]))
-      eq.SetWindowText(WINDOW, MINUTES, tostring(q[3]))
+      API.windows.SetText(WINDOW, HOURS, tostring(q[2]))
+      API.windows.SetText(WINDOW, MINUTES, tostring(q[3]))
     end
     if ui.IsItemHovered() then ui.SetTooltip("Fill in " .. q[1]) end
   end
@@ -78,6 +79,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Alarm", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Alarm", WINDOW_OPTS, drawWindow)
 end)

@@ -1,7 +1,7 @@
 -- Pad controls bound to a stock window's children (by ScreenID), for the gamepad windows that stand in for a stock
 -- window child by child (inspect, leadership, group search, the address book ...). Each asks the original child what
--- it shows (eq.WindowText, eq.ChildState, eq.ComboInfo, eq.ListInfo ...) and hands the press to it (eq.ClickChild,
--- eq.ComboSelect, eq.SetWindowText, eq.ListClick ...), so the window's own handler runs and the mechanics are the
+-- it shows (hs.WindowText, hs.ChildState, hs.ComboInfo, hs.ListInfo ...) and hands the press to it (hs.ClickChild,
+-- hs.ComboSelect, hs.SetWindowText, hs.ListClick ...), so the window's own handler runs and the mechanics are the
 -- game's. Every control is a focusable item at the layout cursor (A presses it, the mouse clicks it):
 --
 --   local CH = dofile("lib/child.lua")
@@ -13,7 +13,8 @@
 --       CH.combo(st, WIN, "TimeZoneCombo", "Time zone", w, h)   -- A: a list of the choices
 --     end
 --   end
---   if CH.back(st, W.finish()) then eq.ShowWindow(WIN, false) end
+--   if CH.back(st, W.finish()) then hs.ShowWindow(WIN, false) end
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -32,10 +33,10 @@ local function refocus(st, key)
   end
 end
 
-function CH.shown(win, id) return eq.ChildShown(win, id) ~= false end
-function CH.enabled(win, id) return eq.ChildState(win, id) ~= false end
-function CH.checked(win, id) return select(2, eq.ChildState(win, id)) == true end
-function CH.text(win, id) return eq.WindowText(win, id) or "" end
+function CH.shown(win, id) return API.windows.ChildShown(win, id) ~= false end
+function CH.enabled(win, id) return API.windows.ChildState(win, id) ~= false end
+function CH.checked(win, id) return select(2, API.windows.ChildState(win, id)) == true end
+function CH.text(win, id) return API.windows.Text(win, id) or "" end
 -- STML / a label's text as plain text (no tags).
 function CH.plain(win, id)
   local s = CH.text(win, id):gsub("<[Bb][Rr]%s*/?>", " "):gsub("<[^>]*>", "")
@@ -50,7 +51,7 @@ function CH.button(win, id, label, w, h, opts)
   if not shown and not opts.keep then return false end
   if T.button("##" .. win .. id, label or CH.text(win, id), w, h, opts, pad,
         opts.disabled or not shown or not CH.enabled(win, id)) then
-    eq.ClickChild(win, id, "left")
+    API.windows.ClickChild(win, id, "left")
     return true
   end
   return false
@@ -64,7 +65,7 @@ function CH.toggle(win, id, label, w, h, opts)
   local o = { sub = on and (opts.on or "On") or (opts.off or "Off"), align = opts.align or 0, primary = on,
     disabled = not CH.enabled(win, id) }
   if T.button("##" .. win .. id, label, w, h, o, pad) then
-    eq.ClickChild(win, id, "left")
+    API.windows.ClickChild(win, id, "left")
     return true
   end
   return false
@@ -110,7 +111,7 @@ end
 function CH.field(st, win, id, caption, w, h, opts)
   opts = opts or T.NO_OPTS
   if not CH.shown(win, id) and not opts.keep then return false end
-  return CH.edit(st, win .. id, caption, CH.text(win, id), function(t) eq.SetWindowText(win, id, t) end, w, h, opts,
+  return CH.edit(st, win .. id, caption, CH.text(win, id), function(t) API.windows.SetText(win, id, t) end, w, h, opts,
     opts.disabled or not CH.enabled(win, id))
 end
 
@@ -118,7 +119,7 @@ end
 function CH.combo(st, win, id, caption, w, h, opts)
   opts = opts or {}
   if not CH.shown(win, id) and not opts.keep then return false end
-  local choices, selected = eq.ComboInfo(win, id)
+  local choices, selected = API.windows.ComboInfo(win, id)
   choices = choices or {}
   local current = choices[(selected or -1) + 1] or "-"
   local enabled = CH.enabled(win, id) and #choices > 0
@@ -192,7 +193,7 @@ function CH.modal(st, x0, y0, x1, y1)
   if picked then
     st.pick, st.refocus = nil, st.from
     if p.onPick then p.onPick(picked)
-    elseif picked - 1 ~= p.selected then eq.ComboSelect(p.win, p.id, picked - 1) end
+    elseif picked - 1 ~= p.selected then API.windows.ComboSelect(p.win, p.id, picked - 1) end
   end
   return true
 end
@@ -220,14 +221,14 @@ function CH.hints(st, hints)
   return hints
 end
 
--- A list child as a W.list: its rows (eq.ListInfo / eq.ListRow, 0-based there), the original's selection, A (or a
--- click) selects the row in the original (eq.ListClick; opts.onA(row, texts) instead). opts: rowH (design px,
+-- A list child as a W.list: its rows (hs.ListInfo / hs.ListRow, 0-based there), the original's selection, A (or a
+-- click) selects the row in the original (hs.ListClick; opts.onA(row, texts) instead). opts: rowH (design px,
 -- default 58), columns = { { column (1-based), width fraction [, align] }, ... } (default: the first column),
 -- draw(row, texts, x0, y0, x1, y1, focused, rowColor) instead, filter(row, texts), color(row, texts) the text colour (default:
 -- the row's colour from the list), empty (a text shown when there are no rows). Returns the focused row (0-based)
 -- and its texts.
 local DEFAULT_COLUMNS = { { 1, 1 } }
--- Without opts.filter only the rows in view are read (eq.ListRow builds each row's texts), once a frame before they
+-- Without opts.filter only the rows in view are read (hs.ListRow builds each row's texts), once a frame before they
 -- are drawn, into tables the list's state keeps (state.rowBuf: the colours are reused).
 local function readRows(win, id, state, rows, filter, visible)
   local buf = state.rowBuf
@@ -245,7 +246,7 @@ local function readRows(win, id, state, rows, filter, visible)
     n = off -- (rows before the view are counted, not read)
   end
   for r = first, last do
-    local texts, cr, cg, cb = eq.ListRow(win, id, r)
+    local texts, cr, cg, cb = API.windows.ListRow(win, id, r)
     texts = texts or {}
     if not filter or filter(r, texts) then
       n = n + 1
@@ -274,7 +275,7 @@ end
 
 function CH.list(win, id, state, width, height, opts)
   opts = opts or T.NO_OPTS
-  local rows, _, selected = eq.ListInfo(win, id)
+  local rows, _, selected = API.windows.ListInfo(win, id)
   rows = rows or 0
   local rowH = opts.rowH or 58
   local visible = math.max(1, math.floor((height + T.px(10)) / (T.px(rowH) + T.px(10))))
@@ -313,7 +314,7 @@ function CH.list(win, id, state, width, height, opts)
     T.unfont()
   end, function(i)
     local s = shown[i]
-    if opts.onA then opts.onA(s.row, s.texts) else eq.ListClick(win, id, s.row, "left") end
+    if opts.onA then opts.onA(s.row, s.texts) else API.windows.ListClick(win, id, s.row, "left") end
   end)
   if f then focusedRow = shown[f] end
   return focusedRow and focusedRow.row, focusedRow and focusedRow.texts
@@ -321,8 +322,8 @@ end
 
 -- A line typed into the main chat window (the game's command interpreter), as who.lua does.
 function CH.say(line)
-  local windows = eq.ChatWindows()
-  eq.ChatSubmit(windows[1] and windows[1].slot or 1, line)
+  local windows = API.chat.Windows()
+  API.chat.Submit(windows[1] and windows[1].slot or 1, line)
 end
 
 -- A caption (dim, small capitals) at x, y; returns its height.
@@ -336,13 +337,13 @@ end
 
 -- Testing: the pack's settings file (ui/settings/gamepad.txt) test.show = <ScreenID> shows that stock window once,
 -- 10 s after zoning in (hidden first a second before, so it takes the pad as a window opened in play does; opener()
--- instead of eq.ShowWindow where the game opens it another way); test.click.<ScreenID> = child,list:row,tabbox=page,
+-- instead of hs.ShowWindow where the game opens it another way); test.click.<ScreenID> = child,list:row,tabbox=page,
 -- edit~text clicks its children 2 s after it shows (screenshots of the window's states).
 -- (Every window asks each frame before it knows it is shown: with test.show empty once in the world, as it is in
 -- play, nothing is asked again, as M.testShow and G.testShow do; the list is split once for every window, GPSTATE.)
 local testAt, tested = {}, {}
 function CH.testOpen(screen, opener)
-  if GPSTATE.testOpenOff or not eq.InGame() then return end
+  if GPSTATE.testOpenOff or not API.session.InGame() then return end
   local list = ui.GetSetting("test.show") or ""
   if list == "" then
     GPSTATE.testOpenOff = true
@@ -359,9 +360,9 @@ function CH.testOpen(screen, opener)
   local t = ui.GetTime() - testAt[screen]
   if t > 10 then
     GPSTATE["test_show_" .. screen] = true
-    if opener then opener() else eq.ShowWindow(screen, true) end
+    if opener then opener() else API.windows.Show(screen, true) end
   elseif t > 9 and not opener then
-    eq.ShowWindow(screen, false)
+    API.windows.Show(screen, false)
   end
 end
 function CH.testClicks(win)
@@ -375,9 +376,9 @@ function CH.testClicks(win)
     local id, row = item:match("^(.-):(%d+)$")
     local box, pg = item:match("^(.-)=(%d+)$")
     local edit, text = item:match("^(.-)~(.*)$")
-    if edit then eq.SetWindowText(win, edit, text)
-    elseif box then eq.SetTabPage(win, box, tonumber(pg))
-    elseif id then eq.ListClick(win, id, tonumber(row), "left") else eq.ClickChild(win, item, "left") end
+    if edit then API.windows.SetText(win, edit, text)
+    elseif box then API.windows.SetTabPage(win, box, tonumber(pg))
+    elseif id then API.windows.ListClick(win, id, tonumber(row), "left") else API.windows.ClickChild(win, item, "left") end
   end
 end
 

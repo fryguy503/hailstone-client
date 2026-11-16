@@ -1,5 +1,5 @@
 -- Forms and choices the game sends to the server (gamepad pack), each standing in for its stock window: every piece
--- is the window's child (eq.ComboSelect, eq.SetWindowText, eq.ListClick, eq.ClickChild), so what the server gets is
+-- is the window's child (hs.ComboSelect, hs.SetWindowText, hs.ListClick, hs.ClickChild), so what the server gets is
 -- the window's. Text is typed with the on-screen keys (A on the text field; B leaves them).
 --   Bug report (BugReportWindow, /bug)   category (A steps it), the location (Update takes where you stand now), the
 --                                        report, what to include (repeatable, crash, flags, the target), Cancel, Send
@@ -13,6 +13,7 @@
 --   Respawn (RespawnWnd)                 where to return after death: the server's choices (its default and
 --                                        unavailable choices marked), the timer, and Respawn after its delay;
 --                                        only the server closes it (no B)
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -65,7 +66,7 @@ local function form(p)
       if W.begin(p.title, { w = 1400, h = 700, title = p.title, hints = { { "a", "Select" }, { "b", "Done" } } }) then
         p.savedBody(W.area())
       end
-      if W.finish() then eq.ClickChild(p.screen, p.done, "left") end
+      if W.finish() then API.windows.ClickChild(p.screen, p.done, "left") end
       return
     end
     local hints = editing and G.editHints("Done")
@@ -86,7 +87,7 @@ local function form(p)
           editing = true
           G.openKeys(kb, true)
         end
-        if W.pressed("rb") and G.enabled(p.screen, p.send) then eq.ClickChild(p.screen, p.send, "left") end
+        if W.pressed("rb") and G.enabled(p.screen, p.send) then API.windows.ClickChild(p.screen, p.send, "left") end
         local bh = T.px(64)
         local list = { { p.cancel, p.cancelLabel or "Cancel", { glyph = "b", always = true } } }
         for _, b in ipairs(p.extra or {}) do list[#list + 1] = b end
@@ -95,7 +96,7 @@ local function form(p)
       end
     end
     if W.finish() then
-      if editing then editing, refocus = false, true else eq.ClickChild(p.screen, p.cancel, "left") end
+      if editing then editing, refocus = false, true else API.windows.ClickChild(p.screen, p.cancel, "left") end
     end
   end)
 end
@@ -173,7 +174,7 @@ ui.window("Claim Rewards", function()
         hints = { { "a", "Select" }, { "x", "Refresh" }, { "b", "Cancel" } } }) then
     local x0, y0, x1, y1, w = W.area()
     local wx, wy = ui.GetWindowPos()
-    if W.pressed("x") then eq.ClickChild(CLAIM, "ClaimRefreshButton", "left") end
+    if W.pressed("x") then API.windows.ClickChild(CLAIM, "ClaimRefreshButton", "left") end
     local gap, bh, rowH = T.px(24), T.px(64), 60
     local lw = (w - gap) * 0.55
     local iw = w - gap - lw
@@ -206,7 +207,7 @@ ui.window("Claim Rewards", function()
     buttons(CLAIM, { { "ClaimRefreshButton", "Refresh", { glyph = "x" } }, { "ClaimCancelButton", "Cancel", { glyph = "b" } },
       { "ClaimClaimButton", "Claim", { primary = true } } }, x0, x1, y1 - bh, bh)
   end
-  if W.finish() then eq.ClickChild(CLAIM, "ClaimCancelButton", "left") end
+  if W.finish() then API.windows.ClickChild(CLAIM, "ClaimCancelButton", "left") end
 end)
 
 -- ---------------------------------------------------------------- respawn
@@ -215,7 +216,7 @@ local choices = { offset = 0 }
 local respawnOfferShown = false
 ui.window("Respawn", function()
   if not W.shown(RESPAWN) then respawnOfferShown = false; return end
-  local offer = W.shown("ConfirmationDialogBox") and eq.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
+  local offer = W.shown("ConfirmationDialogBox") and API.windows.ChildShown("ConfirmationDialogBox", "ResurrectionOffer") == true
   local takeFocus, returnFocus = offer and not respawnOfferShown, respawnOfferShown and not offer
   respawnOfferShown = offer
   T.frame()
@@ -227,8 +228,8 @@ ui.window("Respawn", function()
     T.font(22)
     T.draw(x0, y0, "Choose an available destination", C.dim)
     T.unfont()
-    local frac, text = eq.ChildGauge(RESPAWN, "TimeGauge")
-    if frac == nil then frac, text = eq.Gauge(28) end
+    local frac, text = API.windows.ChildGauge(RESPAWN, "TimeGauge")
+    if frac == nil then frac, text = API.character.Gauge(28) end
     T.bar(x0, y0 + T.px(40), x1, y0 + T.px(68), frac or 0, C.hp, text)
     local bh, rowH = T.px(72), 64
     local top = y0 + T.px(90)

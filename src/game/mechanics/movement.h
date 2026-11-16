@@ -429,6 +429,7 @@ struct CharacterInput {
     // The local player rides: the body is its mount (pinstControlledPlayer), which has the player as rider. The
     // speeds, the modifier and the race above are then the mount's, the rest the rider's.
     bool riding = false;
+    bool instant_ridden_acceleration = false; // opt-in host profile; never changes the computed target speed
     bool remote_control = false; // an Eye: nonlocal controls without a rider/mount partner
     // The rider's PcClient virtual +0x80 (@0x57d190: the OP_RestState combat byte, +0x31bc), which slows a
     // ridden mount's SetAccel ramp.

@@ -1,7 +1,8 @@
 -- Group mentoring: replaces the game's GroupMentorWindow (the leadership window's Group Mentoring button). The
 -- protege (None, or a member of the group), the share of your experience to give (a slider and its number box,
 -- which the window keeps in step and holds to 100) and Accept (or Enter in the box), which sends the mentoring
--- and closes. The fields and Accept are the window's (app/lua_eq_progress.cpp), so what the server gets is its.
+-- and closes. The fields and Accept are the window's (app/lua_ui_progress.cpp), so what the server gets is its.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -22,7 +23,7 @@ local function body(x, y, w, h, s)
   W.Slider(WINDOW, "GM_Slider", { width = -(boxW + 8 * s), format = function(v) return v .. "%" end })
   ui.SameLine()
   local _, committed = W.Edit(WINDOW, "GM_SliderInput", { width = boxW, max = 4 })
-  if committed and ui.IsKeyPressed(ui.Key.Enter) then eq.ClickChild(WINDOW, "GM_SliderInput", "left") end
+  if committed and ui.IsKeyPressed(ui.Key.Enter) then API.windows.ClickChild(WINDOW, "GM_SliderInput", "left") end
   local bh = K.ButtonH(s)
   local _, cy = ui.GetCursorScreenPos()
   ui.SetCursorScreenPos(x, math.max(cy + 4 * s, y + h - bh))
@@ -31,9 +32,9 @@ local function body(x, y, w, h, s)
   }, bh)
 end
 
-local function testOpen() eq.ShowWindow(WINDOW, true) end
+local function testOpen() API.windows.Show(WINDOW, true) end
 ui.window("Group Mentoring", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   hud.Dialog(WINDOW, "Group Mentoring", OPTS, body)
 end)

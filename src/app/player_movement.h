@@ -186,6 +186,7 @@ public:
     const game::mechanics::MovementController& controller() const { return ctl_; }
     game::mechanics::ControlsState& controls_state() { return ctl_.controls_state(); }
     void set_autorun(std::uint8_t bits) { ctl_.set_autorun(bits); }
+    void set_instant_mount_acceleration(bool enabled) { instant_mount_acceleration_ = enabled; }
     // A movement key command pressed or released (MovementController::command).
     bool command(int command, bool down, bool accept, std::uint8_t autorun_bits = 0) {
         return ctl_.command(command, down, accept, autorun_bits);
@@ -259,6 +260,7 @@ public:
 
 private:
     game::mechanics::MovementController ctl_;
+    bool instant_mount_acceleration_ = false;
     game::mechanics::RegionSpawn feet_regions_; // CheckRegionChange's fields (+0x9c held flags, +0x2e1)
     std::int32_t encumbered_shown_ = 0;
     std::uint32_t last_second_ = 0;

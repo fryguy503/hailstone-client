@@ -123,7 +123,7 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
     }
 
     AddonManifest m;
-    bool header = false, have_name = false, have_kind = false, have_version = false, have_caps = false;
+    bool header = false, have_name = false, have_kind = false, have_version = false, have_caps = false, have_autoload = false;
     std::optional<Ed25519PublicKey> key;
     std::size_t at = 0;
     int line_no = 0;
@@ -148,13 +148,19 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
             have_name = true;
         } else if (f[0] == "kind") {
             if (f.size() != 2 || have_kind ||
-                (f[1] != "script" && f[1] != "plugin" && f[1] != "tool" && f[1] != "upscaler"))
-                return fail(error, where + ": the kind is script, plugin, tool or upscaler");
-            m.kind = f[1] == "script"   ? AddonKind::Script
-                     : f[1] == "plugin" ? AddonKind::Plugin
-                     : f[1] == "tool"   ? AddonKind::Tool
-                                        : AddonKind::Upscaler;
+                (f[1] != "script" && f[1] != "plugin" && f[1] != "tool" && f[1] != "upscaler" && f[1] != "ui"))
+                return fail(error, where + ": the kind is script, plugin, tool, upscaler or ui");
+            m.kind = f[1] == "script"     ? AddonKind::Script
+                     : f[1] == "plugin"   ? AddonKind::Plugin
+                     : f[1] == "tool"     ? AddonKind::Tool
+                     : f[1] == "upscaler" ? AddonKind::Upscaler
+                                           : AddonKind::Ui;
             have_kind = true;
+        } else if (f[0] == "autoload") {
+            if (f.size() != 2 || have_autoload || (f[1] != "0" && f[1] != "1"))
+                return fail(error, where + " has a bad autoload switch");
+            have_autoload = true;
+            m.autoload = f[1] == "1";
         } else if (f[0] == "version" || f[0] == "min_client") {
             auto v = f.size() == 2 ? parse_version(f[1]) : std::nullopt;
             const bool version = f[0] == "version";
@@ -215,12 +221,14 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
     if (!header) return fail(error, "this is not a Hailstone add-on manifest");
     if (!have_name) return fail(error, "the add-on's manifest has no name");
     if (!have_kind) return fail(error, "the add-on's manifest has no kind");
+    if (m.autoload && m.kind != AddonKind::Script) return fail(error, "autoload is only for managed Lua add-ons");
     if (!have_version) return fail(error, "the add-on's manifest has no version");
-    if (!have_caps) return fail(error, "the add-on's manifest does not say what it needs (caps)");
+    if (!have_caps && m.kind != AddonKind::Ui)
+        return fail(error, "the add-on's manifest does not say what it needs (caps)");
     if (m.packages.empty()) return fail(error, "the add-on's manifest has no package");
     for (const auto& p : m.packages) {
-        if (m.kind == AddonKind::Script && p.platform != "any")
-            return fail(error, "a script's package is for any platform (package any ...)");
+        if ((m.kind == AddonKind::Script || m.kind == AddonKind::Ui) && p.platform != "any")
+            return fail(error, "a script or UI package is for any platform (package any ...)");
         if (m.kind == AddonKind::Plugin && p.platform == "any")
             return fail(error, "a plugin's packages are each for one platform (package linux-x64 ...)");
         if (m.kind == AddonKind::Tool && p.platform == "any")
@@ -233,6 +241,7 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
     if (m.kind == AddonKind::Tool && !m.caps.empty()) return fail(error, "a tool asks for no capabilities (caps none)");
     if (m.kind == AddonKind::Upscaler && !m.caps.empty())
         return fail(error, "an upscaler asks for no capabilities (caps none)");
+    if (m.kind == AddonKind::Ui && !m.caps.empty()) return fail(error, "a UI pack asks for no capabilities (caps none)");
     if (key && !signature) return fail(error, "the add-on's manifest has a key but no signature");
     if (signature && !key) return fail(error, "the add-on's manifest is signed but does not give its key");
     if (key) {

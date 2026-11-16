@@ -1,10 +1,11 @@
 -- Menus: the game's context menus (a chat window's, a hot button's, an item's, ...) and the EQ button's cascading
 -- menu, drawn in this UI's look above every window. The rows and what a choice does are the game's, as in the
--- classic menus.lua: eq.GameMenus / eq.CascadeMenus give the open menus (text, check marks, disabled rows,
--- separators, submenus), a choice is a real click on that row of the game's menu (eq.GameMenuClick /
--- eq.CascadeClick), hovering a submenu row opens it, a click anywhere else closes them. What changes is the look:
+-- classic menus.lua: hs.GameMenus / hs.CascadeMenus give the open menus (text, check marks, disabled rows,
+-- separators, submenus), a choice is a real click on that row of the game's menu (hs.GameMenuClick /
+-- hs.CascadeClick), hovering a submenu row opens it, a click anywhere else closes them. What changes is the look:
 -- rounded panels with a shadow, rows lit in the accent colour, chevrons for submenus; and the game menu opens from
 -- the menu button wherever it was moved, with line icons of this UI's own.
+local API = hs.UI
 local style = dofile("lib/style.lua")
 local T = dofile("lib/theme.lua")
 local C = T.color
@@ -79,9 +80,9 @@ local function drawMenus(menus, s)
           -- closes the submenus of this menu), as the stock list does
           if ui.IsItemHovered() and hovered[m] ~= r then
             hovered[m] = r
-            eq.GameMenuHover(m, r - 1)
+            API.menus.GameMenuHover(m, r - 1)
           end
-          if clicked and row.enabled then eq.GameMenuClick(m, r - 1) end
+          if clicked and row.enabled then API.menus.GameMenuClick(m, r - 1) end
           ui.PopID()
         end
       end
@@ -98,17 +99,17 @@ local function drawMenus(menus, s)
   end
   -- A click outside every menu closes them (not on the frame they appeared: that click opened them).
   if shownBefore and not overAny and (ui.IsMouseClicked(ui.Mouse.Left) or ui.IsMouseClicked(ui.Mouse.Right)) then
-    eq.GameMenuClose()
+    API.menus.GameMenuClose()
   end
   shownBefore = true
 end
 
 ui.window("Game Menus", function()
-  if not (eq.UiReady or eq.InGame)() then return end
+  if not (API.session.UiReady or API.session.InGame)() then return end
   -- (the padding first: GameMenus measures the rows with it; nothing of style.Push changes what it measures)
   local s = menuScale()
   ui.PushStyleVar(ui.StyleVar.WindowPadding, PAD_X * s, PAD_Y * s)
-  local got, menus = pcall(eq.GameMenus, s)
+  local got, menus = pcall(API.menus.Game, s)
   if not got then
     ui.PopStyleVar()
     error(menus, 0)
@@ -127,8 +128,8 @@ end)
 
 -- ---------------------------------------------------------------- the game menu
 -- The EQ button's cascade menu, laid out by this UI. The rows, their order, what a row does and which submenu it
--- opens are the game's (eq.CascadeMenus; eq.CascadeHover / eq.CascadeClick by row), but the panels are placed here:
--- the menu opens from the menu button (eqmain.lua keeps its rectangle in modern.menuAnchor) toward the middle of
+-- opens are the game's (hs.CascadeMenus; hs.CascadeHover / hs.CascadeClick by row), but the panels are placed here:
+-- the menu opens from the menu button (game_menu.lua keeps its rectangle in modern.menuAnchor) toward the middle of
 -- the screen, each submenu beside the row that opened it, and every row has one of this UI's line icons
 -- (lib/menuicons.lua) in place of the game's.
 local icons = dofile("lib/menuicons.lua")
@@ -139,8 +140,8 @@ local openedAt = nil
 local function inRect(mx, my, r) return r and mx >= r[1] and mx < r[3] and my >= r[2] and my < r[4] end
 
 ui.window("EQ Menu", function()
-  if not (eq.UiReady or eq.InGame)() then return end
-  local menus = eq.CascadeMenus()
+  if not (API.session.UiReady or API.session.InGame)() then return end
+  local menus = API.menus.Cascades()
   if #menus == 0 then
     if cascadeShownBefore or openedAt or next(cascadeHovered) then
       cascadeHovered, cascadeShownBefore, openedAt = {}, false, nil
@@ -245,9 +246,9 @@ ui.window("EQ Menu", function()
           if hov and enabled and cascadeHovered[m] ~= i then
             cascadeHovered[m] = i
             for k = m + 1, #menus do cascadeHovered[k] = nil end
-            eq.CascadeHover(m, i)
+            API.menus.CascadeHover(m, i)
           end
-          if clicked and enabled then eq.CascadeClick(m, i) end
+          if clicked and enabled then API.menus.CascadeClick(m, i) end
           y = y + ROW
         end
       end
@@ -260,9 +261,9 @@ ui.window("EQ Menu", function()
   style.Pop()
   -- a click anywhere else, or Escape, closes the menus (the button's own click toggles them)
   if cascadeShownBefore and not overAny and (ui.IsMouseClicked(ui.Mouse.Left) or ui.IsMouseClicked(ui.Mouse.Right)) then
-    eq.CascadeClose()
+    API.menus.CascadeClose()
   elseif ui.IsKeyPressed(ui.Key.Escape) then
-    eq.CascadeClose()
+    API.menus.CascadeClose()
   end
   cascadeShownBefore = true
 end)

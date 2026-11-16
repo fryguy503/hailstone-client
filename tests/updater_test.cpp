@@ -192,10 +192,12 @@ TEST_CASE("update install: the player's files are never an update's") {
     for (const char* p : {"hailstone.ini", "HAILSTONE.INI", "servers/a/server.ini", "logs/hailstone.log",
                           "update/state.txt", "ui/settings/modern.txt", "ui/loadingbackgrounds/a.png", "maps/x.txt",
                           "scripts/a.lua", "textures/default/a.dds", "web/a/b", "notes.txt", "Servers/x",
-                          "tools/texstudio/texstudio", "Tools/x/data.txt"})
+                          "tools/texstudio/texstudio", "Tools/x/data.txt", "ui-data/modern/lib/style.lua",
+                          "UI-DATA/addon.bundle.skin/lib/compiled/window.lua", "ui-data/", "ui-data", "UI-DATA"})
         CHECK_MESSAGE(is_player_path(p), p);
     for (const char* p : {"hailstone", "hailstone.exe", "shaders/a.spv", "ui/modern/login.lua", "browser/libcef.so",
-                          "plugins/nms/nms.so", "icons/hailstone.png", "servers.txt"})
+                          "plugins/nms/nms.so", "icons/hailstone.png", "servers.txt", "ui-data-copy/file.lua",
+                          "ui-database/file.lua", "ui-data.lua"})
         CHECK_MESSAGE(!is_player_path(p), p);
 }
 

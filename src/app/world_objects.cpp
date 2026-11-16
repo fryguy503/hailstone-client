@@ -330,6 +330,7 @@ void WorldObjects::place(Placed& p, const glm::mat4& transform, float scale) {
     // Doors and placed items are placed again each update; most have not moved.
     if (!p.inverted || p.transform != transform) {
         if (p.solid && p.model) floor_changed_ = true;
+        if (p.visible && p.model) ++visual_generation_;
         p.transform = transform;
         p.inverse = glm::inverse(transform);
         p.inverted = true;
@@ -355,6 +356,7 @@ void WorldObjects::update(const net::GameConnection& conn) {
             // (game::door_blocks_movement).
             p.solid = game::door_blocks_movement(d);
             if (p.model && p.solid) floor_changed_ = true;
+            if (p.model && p.visible) ++visual_generation_;
         }
         p.floor_switch = game::is_floor_switch(d, conn.zone_id());
         p.type = d.type;
@@ -366,6 +368,7 @@ void WorldObjects::update(const net::GameConnection& conn) {
     std::erase_if(doors_, [&](const auto& kv) {
         const bool gone = kv.second.seen != serial;
         if (gone && kv.second.model && kv.second.solid) floor_changed_ = true;
+        if (gone && kv.second.model && kv.second.visible) ++visual_generation_;
         return gone;
     });
 
@@ -401,6 +404,7 @@ void WorldObjects::update(const net::GameConnection& conn) {
             placed_tags_[key] = o.tag;
             p.model = o.npc_item ? nullptr : placed_model(o.tag);
             floor_changed_ = true;
+            ++visual_generation_;
         }
         if (p.solid != game::placed_solid(o)) floor_changed_ = true;
         p.solid = game::placed_solid(o);
@@ -412,6 +416,7 @@ void WorldObjects::update(const net::GameConnection& conn) {
     std::erase_if(placed_, [&](const auto& kv) {
         const bool gone = kv.second.seen != serial;
         if (gone && kv.second.model && kv.second.solid) floor_changed_ = true;
+        if (gone && kv.second.model && kv.second.visible) ++visual_generation_;
         return gone;
     });
     if (placed_tags_.size() != placed_.size())
@@ -573,6 +578,44 @@ std::optional<float> WorldObjects::floor_below(const glm::vec3& at, float step_u
         if (auto z = game::floor_under(p.model->shape, p.inverse, at, step_up); z && (!best || *z > *best)) best = z;
     }
     return best;
+}
+
+std::optional<float> WorldObjects::visual_surface_below(const glm::vec3& at) const {
+    std::optional<float> best;
+    const auto sample = [&](const auto& objects) {
+        for (const auto& [id, p] : objects) {
+            if (!p.model || !p.visible) continue;
+            if (glm::length(glm::vec2(p.center) - glm::vec2(at)) > p.bound + 0.5f) continue;
+            if (auto z = game::visual_surface_under(p.model->shape, p.transform, at); z && (!best || *z > *best))
+                best = z;
+        }
+    };
+    sample(doors_);
+    sample(placed_);
+    return best;
+}
+
+bool WorldObjects::visual_surfaces(const glm::vec2& low,const glm::vec2& high,
+                                  const std::function<bool(const game::CollisionTriangle&)>& visit,std::uint32_t& work) const {
+    const auto sample=[&](const auto& objects){
+        for(const auto& [id,p]:objects){
+            if(work==0)return false;
+            --work;
+            if(!p.model||!p.visible||p.center.x+p.bound<low.x||p.center.y+p.bound<low.y||
+               p.center.x-p.bound>high.x||p.center.y-p.bound>high.y)continue;
+            for(const auto& tri:p.model->shape.visual){
+                if(work==0)return false;
+                --work;
+                const auto world=game::CollisionTriangle::make(glm::vec3(p.transform*glm::vec4(tri.v0,1)),
+                    glm::vec3(p.transform*glm::vec4(tri.v1,1)),glm::vec3(p.transform*glm::vec4(tri.v2,1)),0);
+                const auto lo=glm::min(glm::min(glm::vec2(world.v0),glm::vec2(world.v1)),glm::vec2(world.v2));
+                const auto hi=glm::max(glm::max(glm::vec2(world.v0),glm::vec2(world.v1)),glm::vec2(world.v2));
+                if(world.normal.z>0&&hi.x>=low.x&&hi.y>=low.y&&lo.x<=high.x&&lo.y<=high.y&&!visit(world))return false;
+            }
+        }
+        return true;
+    };
+    return sample(doors_)&&sample(placed_);
 }
 
 bool WorldObjects::sweep_sphere(game::SphereSweep& sweep, std::vector<DoorHit>* hits,

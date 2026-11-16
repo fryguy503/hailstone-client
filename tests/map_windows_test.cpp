@@ -1,4 +1,4 @@
-// The map windows over the eq API (app/lua_eq_map.cpp): the toolbar's lines and labels, saved as SaveEx writes
+// The map windows over the hs API (app/lua_ui_map.cpp): the toolbar's lines and labels, saved as SaveEx writes
 // them, and the map window's settings in the character's UI ini.
 #include <doctest/doctest.h>
 
@@ -11,7 +11,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "game_files.h"
 #include "scratch_dir.h"
 
@@ -38,10 +38,10 @@ std::string run(lua_State* L, const std::string& code) {
     return out;
 }
 
-// The Options window's map pack row: eq.ComboInfo / eq.ComboSelect on the map window's maps directory combo.
+// The Options window's map pack row: hs.ComboInfo / hs.ComboSelect on the map window's maps directory combo.
 struct MapLua {
-    app::EqHost host;
-    app::EqApi api{host};
+    app::UiHost host;
+    app::UiApi api{host};
     lua_State* L = nullptr;
     MapLua(const fs::path& global_maps, const fs::path& ui_ini) {
         host.in_game = host.ui_ready = true;
@@ -52,7 +52,7 @@ struct MapLua {
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
     }
     ~MapLua() { lua_close(L); }
     MapLua(const MapLua&) = delete;
@@ -60,7 +60,7 @@ struct MapLua {
     std::string operator()(const std::string& code) { return run(L, code); }
     // The choices and the chosen one, as "Default,a,b|1".
     std::string packs() {
-        return (*this)("local c, s = eq.ComboInfo('MapViewWnd', 'MVW_MapsDirCombobox') "
+        return (*this)("local c, s = hs.ComboInfo('MapViewWnd', 'MVW_MapsDirCombobox') "
                        "return table.concat(c, ',') .. '|' .. s");
     }
 };
@@ -77,14 +77,14 @@ TEST_CASE("Map windows: the toolbar walks a line, adds a label and saves the fou
     // The server's maps folder (servers/<profile>/maps) takes the edits.
     fs::path maps = dir / "server" / "maps";
     {
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = game;
         host.zone_short_name = "qeynos";
         host.maps_dir = maps;
         host.feet_valid = true;
         host.feet[0] = 100, host.feet[1] = 50, host.feet[2] = 3; // world: map (-50, -100, 3)
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         api.begin_frame(); // the zone's map is read
 
@@ -97,6 +97,7 @@ TEST_CASE("Map windows: the toolbar walks a line, adds a label and saves the fou
         CHECK(api.click_child("MapToolbarWnd", "MTW_EndLineButton"));
         CHECK(api.click_child("MapToolbarWnd", "MTW_AddLabelButton"));
         CHECK(api.shown("EditLabelWnd"));
+        CHECK(api.set_child_text("EditLabelWnd", "ELW_LabelTextEditbox", "Toolbar marker"));
         CHECK(api.click_child("EditLabelWnd", "ELW_LabelLargeButton"));
         CHECK(api.click_child("EditLabelWnd", "ELW_DoneButton"));
         CHECK_FALSE(api.shown("EditLabelWnd"));
@@ -108,10 +109,11 @@ TEST_CASE("Map windows: the toolbar walks a line, adds a label and saves the fou
     // box's max plus the point, so a point where the line already is still adds a line).
     // (After the game's own layer 1, read with the zone.)
     std::string layer1 = slurp(maps / "qeynos_1.txt");
+    std::erase(layer1, '\r');
     CHECK(layer1.rfind("L -50.0000, -120.0000, 3.0000,  -50.0000, -120.0000, 3.0000,  0, 0, 0\n"
                        "L -50.0000, -100.0000, 3.0000,  -50.0000, -120.0000, 3.0000,  0, 0, 0\n",
                        0) == 0);
-    CHECK(layer1.find("\nP ") == layer1.find("\nP -50.0000, -120.0000, 3.0000,  0, 0, 0,  3,  \n"));
+    CHECK(layer1.find("\nP -50.0000, -120.0000, 3.0000,  0, 0, 0,  3,  Toolbar_marker\n") != std::string::npos);
     // The other layers are written too: the stock base map as read, the empty ones empty.
     std::string base = slurp(maps / "qeynos.txt");
     auto stock = game->read("maps/qeynos.txt");
@@ -129,19 +131,20 @@ TEST_CASE("Map windows: the toolbar walks a line, adds a label and saves the fou
 
     // Read back: the player's saved layer comes before the game's.
     {
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = game;
         host.zone_short_name = "qeynos";
         host.maps_dir = maps;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         api.begin_frame();
         api.click_child("MapViewWnd", "MVW_ToolbarButton");
         api.click_child("MapToolbarWnd", "MTW_SaveMapButton");
     }
-    CHECK(slurp(maps / "qeynos_1.txt").find("P -50.0000, -120.0000, 3.0000,  0, 0, 0,  3,  \n") !=
-          std::string::npos);
+    std::string reloaded = slurp(maps / "qeynos_1.txt");
+    std::erase(reloaded, '\r');
+    CHECK(reloaded.find("P -50.0000, -120.0000, 3.0000,  0, 0, 0,  3,  Toolbar_marker\n") != std::string::npos);
     fs::remove_all(dir);
     ImGui::DestroyContext(ctx);
 }
@@ -168,9 +171,9 @@ TEST_CASE("Map windows: the maps directory is listed with the map closed and kep
         lua.api.begin_frame();
         lua.api.begin_frame();
         CHECK(lua.packs() == "Default,brewall,later|0");
-        CHECK(lua("return eq.ComboSelect('MapViewWnd', 'MVW_MapsDirCombobox', 1)") == "true");
+        CHECK(lua("return hs.ComboSelect('MapViewWnd', 'MVW_MapsDirCombobox', 1)") == "true");
         CHECK(lua.packs() == "Default,brewall,later|1");
-        CHECK(lua("return eq.UiIni('Main', 'MapSkin')") == "brewall");
+        CHECK(lua("return hs.UiIni('Main', 'MapSkin')") == "brewall");
         lua.api.begin_frame(); // the map is read again from the pack
         lua.api.save_layout();
     }
@@ -190,19 +193,19 @@ TEST_CASE("Map windows: the maps directory is listed with the map closed and kep
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("Map windows: Auto Z is set over eq.MapAutoZ and kept in the UI ini") {
+TEST_CASE("Map windows: Auto Z is set over hs.MapAutoZ and kept in the UI ini") {
     ImGuiContext* ctx = ImGui::CreateContext();
     hailstone::test::ScratchDir scratch("map_auto_z_test");
     const fs::path dir = scratch.path();
     fs::create_directories(dir / "maps");
-    auto get = "local on, a, b = eq.MapAutoZ() return tostring(on) .. ',' .. a .. ',' .. b";
+    auto get = "local on, a, b = hs.MapAutoZ() return tostring(on) .. ',' .. a .. ',' .. b";
     {
         MapLua lua(dir / "maps", dir / "UI.ini");
         lua.api.begin_frame();
         CHECK(lua(get) == "false,30,30");
-        CHECK(lua("local on, a, b = eq.MapAutoZ(true, 45) return tostring(on) .. ',' .. a .. ',' .. b") == "true,45,45");
-        CHECK(lua("local _, a, b = eq.MapAutoZ(true, 99999, 0) return a .. ',' .. b") == "1000,1"); // clamped
-        CHECK(lua("local _, a, b = eq.MapAutoZ(true, 45, 80) return a .. ',' .. b") == "45,80");
+        CHECK(lua("local on, a, b = hs.MapAutoZ(true, 45) return tostring(on) .. ',' .. a .. ',' .. b") == "true,45,45");
+        CHECK(lua("local _, a, b = hs.MapAutoZ(true, 99999, 0) return a .. ',' .. b") == "1000,1"); // clamped
+        CHECK(lua("local _, a, b = hs.MapAutoZ(true, 45, 80) return a .. ',' .. b") == "45,80");
         lua.api.save_layout();
     }
     std::string ini = slurp(dir / "UI.ini");
@@ -229,13 +232,13 @@ TEST_CASE("Map windows: an earlier version's AutoZRange sets both Auto Z ranges"
     {
         MapLua lua(dir / "maps", dir / "UI.ini");
         lua.api.begin_frame();
-        CHECK(lua("local on, a, b = eq.MapAutoZ() return tostring(on) .. ',' .. a .. ',' .. b") == "true,60,60");
+        CHECK(lua("local on, a, b = hs.MapAutoZ() return tostring(on) .. ',' .. a .. ',' .. b") == "true,60,60");
     }
     ImGui::DestroyContext(ctx);
 }
 
 // The map window's hover points into the view's labels: another zone's map loaded between the draw and the press
-// (eq.ShowZoneMap) frees them, and the press must not keep the freed label as the marked one (the toolbar's Edit
+// (hs.ShowZoneMap) frees them, and the press must not keep the freed label as the marked one (the toolbar's Edit
 // Label and Move Label to Me then write through it).
 TEST_CASE("Map windows: a press after another zone's map is loaded marks nothing") {
     ImGuiContext* ctx = ImGui::CreateContext();
@@ -248,18 +251,18 @@ TEST_CASE("Map windows: a press after another zone's map is loaded marks nothing
     fs::create_directories(dir / "maps");
     std::ofstream(dir / "maps" / "qeynos.txt") << "L -100, 0, 0,  100, 0, 0,  0, 0, 0\nP 0, 0, 0,  0, 0, 0,  3,  Here\n";
     {
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.zone_short_name = "qeynos";
         host.maps_dir = dir / "maps";
         host.feet_valid = true;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
         api.begin_frame();
         REQUIRE(api.click_child("MapViewWnd", "MVW_ToolbarButton")); // editing: a press marks the hovered label
         // One frame of the map window with the mouse at (x, y): the draw, `between`, then the press.
@@ -272,7 +275,7 @@ TEST_CASE("Map windows: a press after another zone's map is loaded marks nothing
             ImGui::SetNextWindowPos(ImVec2(0, 0));
             ImGui::SetNextWindowSize(ImVec2(600, 500));
             ImGui::Begin("map");
-            CHECK(run(L, "eq.DrawMap(0, 0, 600, 500, true) " + between + " eq.MapMouseDown() return 1") == "1");
+            CHECK(run(L, "hs.DrawMap(0, 0, 600, 500, true) " + between + " hs.MapMouseDown() return 1") == "1");
             ImGui::End();
             ImGui::Render();
             const bool marked = api.click_child("MapToolbarWnd", "MTW_EditLabelButton") && api.shown("EditLabelWnd");
@@ -286,7 +289,7 @@ TEST_CASE("Map windows: a press after another zone's map is loaded marks nothing
                 if (press(x, y, "")) at = ImVec2(x, y);
         REQUIRE(at);
         CHECK(press(at->x, at->y, ""));                              // the label is there
-        CHECK_FALSE(press(at->x, at->y, "eq.ShowZoneMap('freporte')")); // freed before the press: nothing marked
+        CHECK_FALSE(press(at->x, at->y, "hs.ShowZoneMap('freporte')")); // freed before the press: nothing marked
         lua_close(L);
     }
     ImGui::DestroyContext(ctx);

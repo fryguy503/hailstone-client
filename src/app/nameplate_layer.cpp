@@ -196,18 +196,20 @@ void NameplateLayer::bind(const ImDrawList*, const ImDrawCmd* cmd) {
     vkCmdBindDescriptorSets(rs->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, l.layout_, 1, 1, &l.sets_[l.slot_], 1, &offset);
 }
 
-void NameplateLayer::draw(const NameplateText& plate) {
-    if (!usable_ || !depth_test_ || plate.through_walls || plates_ >= kMaxPlates) {
-        paint(plate);
-        return;
+bool NameplateLayer::draw(const NameplateText& plate) {
+    if (plate.canvas && (!supports_canvas() || plate.canvas->hide)) return false;
+    if (usable_ && depth_test_ && !plate.through_walls && plates_ >= kMaxPlates - (plate.target ? 0u : 1u)) return false;
+    if (!usable_ || !depth_test_ || plate.through_walls) {
+        return paint(plate);
     }
     Params params{view_, glm::vec4(depth_terms_.x, depth_terms_.y, plate.depth, 3.0f), glm::vec4(occluded_alpha_, 0.0f, 0.0f, 0.0f)};
     std::memcpy(static_cast<char*>(mapped_[slot_]) + plates_ * stride_, &params, sizeof(params));
     vmaFlushAllocation(allocator_, allocations_[slot_], plates_ * stride_, sizeof(params));
     Callback data{this, plates_++};
     dl_->AddCallback(&NameplateLayer::bind, &data, sizeof(data)); // ImGui keeps a copy of the data
-    paint(plate);
+    const bool painted = paint(plate);
     dl_->AddCallback(ImDrawCallback_ResetRenderState, nullptr);   // and ImGui's own pipeline again
+    return painted;
 }
 
 ImFont* NameplateLayer::font() const { return style_.font ? style_.font : ImGui::GetFont(); }
@@ -218,6 +220,7 @@ float NameplateLayer::name_size(const NameplateText& p) const {
 }
 
 glm::vec2 NameplateLayer::size_of(const NameplateText& p) const {
+    if (p.canvas) return {p.canvas->bounds.w, p.canvas->bounds.h};
     ImFont* f = font();
     const float size = name_size(p), tag = size * style_.tag_scale;
     const float bold = style_.faux_bold ? 1.0f : 0.0f;
@@ -226,7 +229,18 @@ glm::vec2 NameplateLayer::size_of(const NameplateText& p) const {
     return {w, size + tag * static_cast<float>(p.lines.size())};
 }
 
-void NameplateLayer::paint(const NameplateText& p) const {
+glm::vec4 NameplateLayer::bounds_of(const NameplateText& p) const {
+    if (p.canvas) return nameplate_canvas_bounds(*p.canvas, p.pos);
+    const auto size = size_of(p);
+    return {p.pos.x - size.x * 0.5f, p.pos.y, p.pos.x + size.x * 0.5f, p.pos.y + size.y};
+}
+
+bool NameplateLayer::paint(const NameplateText& p) const {
+    if (p.canvas) {
+        auto style = style_.canvas;
+        if (!style.font) style.font = font();
+        return paint_nameplate_canvas(*dl_, *p.canvas, p.pos, style, p.alpha);
+    }
     const float px = p.pos.x, py = p.pos.y;
     // Every colour times the plate's alpha.
     auto fade = [&](ImU32 c) {
@@ -279,6 +293,7 @@ void NameplateLayer::paint(const NameplateText& p) const {
         line(y, tag, l);
         y += tag;
     }
+    return true;
 }
 
 } // namespace hailstone::app

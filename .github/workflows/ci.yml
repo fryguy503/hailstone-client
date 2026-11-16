@@ -37,3 +37,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check docs/, CONTRIBUTING.md and server/README.md
         run: python3 tools/sync_wiki.py --check
+
+  ui-api:
+    name: shared UI contract artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shipped interface migration
+        run: python3 tools/migrate_ui_api.py --check
+      - name: Check descriptor-generated fixtures and reference
+        run: |
+          python3 tools/migrate_ui_api.py --mock-adapter --check
+          python3 tools/gen_ui_api_docs.py --check
+      - name: Check UI tooling
+        run: |
+          python3 -m unittest discover -s tests -p 'test_migrate_ui_api.py' -v
+          python3 -m unittest discover -s tests -p 'test_gen_ui_api_docs.py' -v

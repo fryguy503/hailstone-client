@@ -25,7 +25,11 @@
 #include <string>
 #include <vector>
 
+#include <imgui.h>
+#include <imgui_internal.h>
+
 #include "game/chat_text.h"
+#include "core/process_serial.h"
 #include "game/item_links.h"
 #include "game/server_ext_chain.h"
 #include "game/spells.h"
@@ -38,6 +42,9 @@
 #include "plugin/policy.h"
 #include "plugin/raid_snapshot.h"
 #include "plugin/ui_bridge.h"
+#include "ui/lua/lua_nameplate_canvas.h"
+#include "ui/lua/lua_host.h"
+#include "ui/texture_ids.h"
 
 #define HAILSTONE_HOST
 #include "hailstone_plugin.h"
@@ -90,6 +97,27 @@ bool call_script(Script& s, int nargs, int nres) {
     lua_pop(L, 1);
     s.fail(why);
     return false;
+}
+
+bool call_canvas_script(Script& s, int nargs, int nres) {
+    struct UiRecovery {
+        bool active = ImGui::GetCurrentContext() && ImGui::GetCurrentContext()->WithinFrameScope;
+        ImGuiErrorRecoveryState recovery{};
+        std::size_t depth = 0;
+        UiRecovery() {
+            if (active) {
+                ImGui::ErrorRecoveryStoreState(&recovery);
+                depth = ui::lua::windows_begun();
+            }
+        }
+        ~UiRecovery() {
+            if (active) {
+                ImGui::ErrorRecoveryTryToRecoverState(&recovery);
+                ui::lua::end_script_windows(depth);
+            }
+        }
+    } recovery;
+    return call_script(s, nargs, nres);
 }
 
 void need_cap(lua_State* L, std::uint32_t cap, const char* what) { need_caps(L, cap, what); }
@@ -162,6 +190,7 @@ void push_item(lua_State* L, const net::Item& it, const net::GameConnection* c =
 // the spawn it held before.
 void fill_spawn(lua_State* L, const game::Spawn& s) {
     set_int(L, "id", s.id);
+    set_int(L, "incarnation", static_cast<lua_Integer>(s.incarnation));
     set_str(L, "name", s.name);
     set_int(L, "level", s.level);
     set_int(L, "class", s.class_id);
@@ -250,6 +279,58 @@ public:
         return s_ && s_->active && !s_->stop_requested && (s_->caps & plugin::kCapExtend) == plugin::kCapExtend;
     }
     const char* name() const override { return s_ ? s_->name.c_str() : "stopped script"; }
+    void invalidate_policy() { policy_generation_ = core::next_process_identity(); }
+    void invalidate_lifecycle() { lifecycle_generation_ = core::next_process_identity(); invalidate_policy(); }
+    std::uint64_t lifecycle_revision(const net::GameConnection&) const override { return lifecycle_generation_; }
+
+    game::MapPolicy map_policy(const net::GameConnection&) const override {
+        const auto neutral = [&] { return game::MapPolicy{0, {}, policy_generation_}; };
+        if (!active() || !(s_->caps & plugin::kCapUi) || !hook("map_policy")) return neutral();
+        if (!run(0)) return neutral();
+        lua_State* state = L();
+        if (!active() || !(s_->caps & plugin::kCapUi) || !lua_istable(state, -1)) {
+            lua_pop(state, 1); return neutral();
+        }
+        if (lua_getmetatable(state, -1)) { lua_pop(state, 2); return neutral(); }
+        std::uint32_t flags = 0;
+        for (const auto& field : {std::pair{"custom_spawns", game::MapPolicyCustomSpawns},
+                {"stock_npcs", game::MapPolicyHideStockNpcs}, {"npc_find", game::MapPolicyDisableNpcFind}}) {
+            raw_field(state, field.first);
+            if (!lua_isnil(state, -1) && !lua_isboolean(state, -1)) { lua_pop(state, 2); return neutral(); }
+            const bool set = lua_isboolean(state, -1) ? lua_toboolean(state, -1) != 0 : field.second != game::MapPolicyCustomSpawns;
+            if (set == (field.second == game::MapPolicyCustomSpawns)) flags |= field.second;
+            lua_pop(state, 1);
+        }
+        raw_field(state, "revision");
+        if (!lua_isnil(state, -1) && (!lua_isinteger(state, -1) || lua_tointeger(state, -1) < 0)) {
+            lua_pop(state, 2); return neutral();
+        }
+        const auto content = static_cast<std::uint64_t>(lua_tointeger(state, -1));
+        lua_pop(state, 1);
+        raw_field(state, "name");
+        std::size_t length = 0;
+        const char* text = lua_isnil(state, -1) ? "" : lua_type(state, -1) == LUA_TSTRING ? lua_tolstring(state, -1, &length) : nullptr;
+        if (!text || length > 63 || std::any_of(text, text + length, [](unsigned char c) { return c < 32 || c == 127; })) {
+            lua_pop(state, 2); return neutral();
+        }
+        game::MapPolicy out{flags, std::string(text, length), policy_generation_};
+        lua_pop(state, 2);
+        if (content != content_revision_) {
+            content_revision_ = content;
+            policy_generation_ = core::next_process_identity();
+            out.revision = policy_generation_;
+        }
+        return out;
+    }
+    bool map_visible(const net::GameConnection&, const game::Spawn& spawn, std::uint32_t purpose) const override {
+        if (!active() || !(s_->caps & plugin::kCapUi) || !hook("map_visible")) return true;
+        push_spawn(L(), spawn);
+        lua_pushstring(L(), purpose == HAILSTONE_MAP_FIND ? "find" : "map");
+        if (!run(2)) return false;
+        const bool allowed = !lua_isboolean(L(), -1) || lua_toboolean(L(), -1) != 0;
+        lua_pop(L(), 1);
+        return !active() || !(s_->caps & plugin::kCapUi) || allowed;
+    }
 
     bool retry_zone_entry(net::GameConnection&) override {
         return hook("zone_entry_retry") && run(0) && bool_result().value_or(false);
@@ -536,8 +617,14 @@ private:
     }
 
     Script* s_;
+    mutable std::uint64_t policy_generation_ = core::next_process_identity(), content_revision_ = 0;
+    std::uint64_t lifecycle_generation_ = core::next_process_identity();
     game::SkillRules rules_{};
 };
+
+void invalidate_plugin_lifecycle(Script& s) {
+    if (s.extension) s.extension->invalidate_lifecycle();
+}
 
 namespace {
 
@@ -564,12 +651,31 @@ int l_hooks(lua_State* L) {
     lua_pushvalue(L, 1);
     s.hooks_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     ensure_extension(s);
+    invalidate_plugin_lifecycle(s);
     return 0;
 }
+
+int set_map_hook(lua_State* L, const char* name) {
+    need_caps(L, plugin::kCapUi | plugin::kCapExtend, name);
+    const bool clear = lua_isnoneornil(L, 1);
+    if (!clear) luaL_checktype(L, 1, LUA_TFUNCTION);
+    Script& s = Script::of(L);
+    if (s.hooks_ref == LUA_NOREF) { lua_newtable(L); s.hooks_ref = luaL_ref(L, LUA_REGISTRYINDEX); }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, s.hooks_ref);
+    lua_pushstring(L, name);
+    if (clear) lua_pushnil(L); else lua_pushvalue(L, 1);
+    lua_rawset(L, -3); lua_pop(L, 1);
+    ensure_extension(s);
+    if (s.extension) s.extension->invalidate_policy();
+    return 0;
+}
+int l_map_policy(lua_State* L) { return set_map_hook(L, "map_policy"); }
+int l_map_visible(lua_State* L) { return set_map_hook(L, "map_visible"); }
 
 int l_set_active(lua_State* L) {
     need_cap(L, plugin::kCapExtend, "hailstone.set_active");
     Script& s = Script::of(L);
+    if (s.active != (lua_toboolean(L, 1) != 0)) invalidate_plugin_lifecycle(s);
     s.active = lua_toboolean(L, 1) != 0;
     ensure_extension(s);
     return 0;
@@ -746,7 +852,7 @@ void no_social(lua_State* L, const char* what) {
     if (Script::of(L).social >= 0) luaL_error(L, "%s: a Lua social cannot add to the UI (a script can)", what);
 }
 
-// hailstone.ui_function(name, fn): eq.Plugin("<script>").<name>(...) in the Lua UI calls fn(...); its result goes
+// hailstone.ui_function(name, fn): hs.Plugin("<script>").<name>(...) in the Lua UI calls fn(...); its result goes
 // back (plain values and tables).
 int l_ui_function(lua_State* L) {
     need_cap(L, plugin::kCapUi, "hailstone.ui_function");
@@ -1407,8 +1513,40 @@ int l_set_max_camera_distance(lua_State* L) {
 
 void register_hailstone(lua_State* L) {
     lua_newtable(L);
+    Script& script=Script::of(L);
+    ui::lua::NameplateCanvasLuaEnv canvas;
+    canvas.registry=script.host->env.nameplates;
+    canvas.registered=[sp=&script]{sp->registered=true;};
+    canvas.texture_valid=[](std::uintptr_t texture){return ui::texture_id_live(reinterpret_cast<void*>(texture));};
+    canvas.owner=[sp=&script](lua_State* state){
+        constexpr auto required=plugin::kCapRead|plugin::kCapUi|plugin::kCapExtend;
+        need_caps(state,required,"hailstone.nameplates");
+        const auto ceiling=sp->caps&sp->narrowed&plugin::caller_caps();
+        if((ceiling&required)!=required)return ui::lua::NameplateCanvasLuaOwner{};
+        ui::lua::NameplateCanvasLuaOwner owner;
+        owner.key="script:"+sp->name;
+        owner.valid=[sp]{constexpr auto caps=plugin::kCapRead|plugin::kCapUi|plugin::kCapExtend;return sp->L&&!sp->stop_requested&&sp->status==Script::Status::Running&&(sp->caps&caps)==caps;};
+        owner.ready=[sp,ceiling]{return usable(*sp)&&((sp->caps&sp->narrowed&ceiling&plugin::caller_caps()&required)==required);};
+        owner.invoke=[sp,ceiling](lua_State*,int args,int results){
+            const auto effective=sp->caps&sp->narrowed&ceiling&plugin::caller_caps();
+            if(!usable(*sp)||(effective&required)!=required)return false;
+            struct Narrowed {
+                Script& script;
+                std::uint32_t before;
+                Narrowed(Script& s,std::uint32_t caps):script(s),before(s.narrowed){s.narrowed=caps;}
+                ~Narrowed(){script.narrowed=before;}
+            } narrowed(*sp,effective);
+            plugin::CallerScope scope(effective,sp->name);
+            return call_canvas_script(*sp,args,results);
+        };
+        return owner;
+    };
+    ui::lua::push_nameplate_canvas(L,std::move(canvas));
+    lua_setfield(L,-2,"nameplates");
     for (auto [n, fn] : std::initializer_list<std::pair<const char*, lua_CFunction>>{
              {"hooks", l_hooks},
+             {"map_policy", l_map_policy},
+             {"map_visible", l_map_visible},
              {"set_active", l_set_active},
              {"set_flag", l_set_flag},
              {"set_player_classes", l_set_player_classes},
@@ -1471,6 +1609,7 @@ void register_hailstone(lua_State* L) {
 }
 
 void release_plugin(Script& s) {
+    ui::lua::release_nameplate_canvas(s.L);
     if (s.extension) {
         s.extension->detach();
         if (s.host->env.extensions) s.host->env.extensions->remove(s.chain_id);

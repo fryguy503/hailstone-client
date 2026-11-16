@@ -1,7 +1,8 @@
 -- Set appearance: replaces the game's PlayerCustomizationWnd (/facepick, the inventory's Face button). A row per
 -- feature with its two step buttons (greyed where the window disables them for your race and model), the heritage's
--- name, and Random, Cancel and Accept. Every button is the window's own (eq.ClickChild): the features are stepped
+-- name, and Random, Cancel and Accept. Every button is the window's own (hs.ClickChild): the features are stepped
 -- and tried on your model by the game's code, and Accept sends them.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -60,6 +61,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Set Appearance", function()
-  if not eq.InGame() and eq.GameState() ~= 2 then return end -- in game, or at character creation
+  if not API.session.InGame() and API.session.GameState() ~= 2 then return end -- in game, or at character creation
   hud.Dialog(WINDOW, "Set Appearance", WINDOW_OPTS, drawWindow)
 end)

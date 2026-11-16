@@ -9,7 +9,9 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
 #include "core/game_dir.h"
 #include "net/game_connection.h"
 #include "ui/dev_screens.h"
@@ -51,18 +53,19 @@ TEST_CASE("Chat window script: new windows and tabs draw without script errors")
         GameDir game(dir / "game");
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ui::lua::LuaUi lua(dir / "modern", dir / "modern.txt");
-        lua.add_eq_api([&](lua_State* L) {
+        lua.add_ui_api([&](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         view.add(ui::ChatChannel::Say, "hello");
         for (int i = 0; i < 3; ++i) {
@@ -74,7 +77,7 @@ TEST_CASE("Chat window script: new windows and tabs draw without script errors")
 
         // A new window from the menu's call, a second tab, a tell tab: all draw.
         lua_State* L = lua.state();
-        REQUIRE(luaL_dostring(L, "eq.ChatNewWindow('Fights'); eq.ChatNewTab(1, 'Social'); eq.ChatSetTellWindows(true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ChatNewWindow('Fights'); hs.ChatNewTab(1, 'Social'); hs.ChatSetTellWindows(true)") == LUA_OK);
         view.add(ui::ChatChannel::Tell, "Bob tells you, 'hi'", 0, 257, "Bob");
         for (int i = 0; i < 3; ++i) {
             api.begin_frame();
@@ -112,18 +115,19 @@ TEST_CASE("Chat window script: a chat rolls up into its tab strip") {
         GameDir game(dir / "game");
         net::GameConnection conn(game);
         ui::ChatView view;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ui::lua::LuaUi lua(dir / "modern", dir / "modern.txt");
-        lua.add_eq_api([&](lua_State* L) {
+        lua.add_ui_api([&](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         view.add(ui::ChatChannel::Say, "hello");
         lua_State* L = lua.state();

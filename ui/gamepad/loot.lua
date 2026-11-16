@@ -3,6 +3,7 @@
 -- Y shows the item's details (its held right button), LB loots everything, RB puts every item's link into the chat
 -- input (Link All), B closes the corpse. Every action is a
 -- click on the stock window's slot or button, so the game's loot rules (no drop, lore, confirmation) apply.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -21,7 +22,7 @@ ui.window("Loot", function()
     return
   end
   T.frame()
-  local corpse = eq.WindowText(LOOT, "LW_CorpseName") or ""
+  local corpse = API.windows.Text(LOOT, "LW_CorpseName") or ""
   if W.begin("Loot", { w = 1180, h = 700, title = "Loot", subtitle = corpse,
         hints = { { "a", "Loot" }, { "x", "Take" }, { "y", "Details" }, { "lb", "Loot all" }, { "rb", "Link all" },
         { "b", "Close" } } }) then
@@ -30,7 +31,7 @@ ui.window("Loot", function()
     -- the items present (the window's slots in order; empty ones are left out)
     local items = {}
     for i = 0, SLOTS - 1 do
-      local it = eq.SlotItem(LOOT, "LW_LootSlot" .. i)
+      local it = API.inventory.SlotItem(LOOT, "LW_LootSlot" .. i)
       if it then items[#items + 1] = { i = i, item = it } end
     end
     local focusedItem, focusedChild
@@ -48,34 +49,34 @@ ui.window("Loot", function()
       if focused then
         focusedItem, anyFocused, focusedAt = e.item, true, n
         focusedChild = child
-        if W.pressed("x") then eq.ClickChild(LOOT, child, "left") end
-        if W.pressed("y") then eq.ClickChild(LOOT, child, "rightheld") end
+        if W.pressed("x") then API.windows.ClickChild(LOOT, child, "left") end
+        if W.pressed("y") then API.windows.ClickChild(LOOT, child, "rightheld") end
       end
-      if clicked then eq.ClickChild(LOOT, child, "rightup") end -- A / click: auto-loot
-      if ui.IsItemClicked(ui.Mouse.Right) then eq.ClickChild(LOOT, child, "left") end
+      if clicked then API.windows.ClickChild(LOOT, child, "rightup") end -- A / click: auto-loot
+      if ui.IsItemClicked(ui.Mouse.Right) then API.windows.ClickChild(LOOT, child, "left") end
     end
     -- the focused item, on the right
     local gx1 = x0 + cols * size + (cols - 1) * gap
     I.summary(focusedItem, nil, gx1 + T.px(24), y0, x1, y1 - T.px(90),
-      focusedChild and eq.CompareSlotItem(LOOT, focusedChild) or nil)
+      focusedChild and API.compare.SlotItem(LOOT, focusedChild) or nil)
     -- Loot All, Link All and Done
     local wx, wy = ui.GetWindowPos()
     local bh = T.px(64)
     ui.SetCursorPos(gx1 + T.px(24) - wx, y1 - bh - wy)
     local bw = (x1 - gx1 - T.px(24) - 2 * T.px(12)) / 3
-    local enabled = eq.ChildState(LOOT, "LootAllButton")
+    local enabled = API.windows.ChildState(LOOT, "LootAllButton")
     local clicked, focused = T.button("##lootall", "Loot All", bw, bh, { glyph = "lb", disabled = enabled == false or #items == 0 }, pad)
-    if clicked then eq.ClickChild(LOOT, "LootAllButton", "left") end
+    if clicked then API.windows.ClickChild(LOOT, "LootAllButton", "left") end
     anyFocused = anyFocused or focused
     ui.SameLine(0, T.px(12))
     -- Link All (BroadcastButton): the game's handler links whatever the corpse holds
     clicked, focused = T.button("##linkall", "Link All", bw, bh, { glyph = "rb", disabled = #items == 0 }, pad)
-    if clicked then eq.ClickChild(LOOT, "BroadcastButton", "left") end
+    if clicked then API.windows.ClickChild(LOOT, "BroadcastButton", "left") end
     anyFocused = anyFocused or focused
     ui.SameLine(0, T.px(12))
     if refocus == 0 then ui.SetKeyboardFocusHere() refocus = nil end
     clicked, focused = T.button("##done", "Done", bw, bh, { glyph = "b" }, pad)
-    if clicked then eq.ClickChild(LOOT, "DoneButton", "left") end
+    if clicked then API.windows.ClickChild(LOOT, "DoneButton", "left") end
     anyFocused = anyFocused or focused
     if anyFocused then
       lastFocus = focusedAt or 0 -- 0: a button
@@ -83,8 +84,8 @@ ui.window("Loot", function()
       refocus = (lastFocus > 0 and #items > 0) and math.min(lastFocus, #items) or 0
       lastFocus = nil
     end
-    if W.pressed("lb") and #items > 0 then eq.ClickChild(LOOT, "LootAllButton", "left") end
-    if W.pressed("rb") and #items > 0 then eq.ClickChild(LOOT, "BroadcastButton", "left") end
+    if W.pressed("lb") and #items > 0 then API.windows.ClickChild(LOOT, "LootAllButton", "left") end
+    if W.pressed("rb") and #items > 0 then API.windows.ClickChild(LOOT, "BroadcastButton", "left") end
   end
-  if W.finish() then eq.ClickChild(LOOT, "DoneButton", "left") end
+  if W.finish() then API.windows.ClickChild(LOOT, "DoneButton", "left") end
 end)

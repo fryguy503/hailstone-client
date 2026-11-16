@@ -11,8 +11,8 @@
 #include <imgui.h>
 
 #include "app/client_app_internal.h"
-#include "app/lua_eq.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_windows.h"
 #include "core/msvc_atoi.h"
 #include "game/chat_windows.h"
 #include "game/hotbuttons.h"
@@ -112,10 +112,10 @@ void ClientApp::xtarget_command(const std::string& args) {
     };
     if (digit(word[0])) return target_slot(word[0]);
     if (prefix(word[0], "show", word[0].size())) {
-        if (!eq_api_) return;
-        if (prefix(word[1], "off", 3)) eq_api_->show("ExtendedTargetWnd", false);
-        else if (prefix(word[1], "on", 2)) eq_api_->show("ExtendedTargetWnd", true);
-        else eq_api_->toggle("ExtendedTargetWnd");
+        if (!ui_api_) return;
+        if (prefix(word[1], "off", 3)) ui_api_->show("ExtendedTargetWnd", false);
+        else if (prefix(word[1], "on", 2)) ui_api_->show("ExtendedTargetWnd", true);
+        else ui_api_->toggle("ExtendedTargetWnd");
         return;
     }
     if (prefix(word[0], "target", 6)) {
@@ -191,16 +191,16 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
     if (h == "Hailstone_abilitybook") {
         // The Ability Book (game/ability_book.h): no argument shows or hides it; "auto" toggles autoskill, "auto on"
         // / "auto off" set it.
-        if (!eq_api_) return true;
+        if (!ui_api_) return true;
         std::string_view rest = args;
         std::string word = game::next_cmd_arg(rest);
         for (char& ch : word) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
         if (word.empty()) {
-            eq_api_->show("AbilityBookWnd", !eq_api_->shown("AbilityBookWnd"));
+            ui_api_->show("AbilityBookWnd", !ui_api_->shown("AbilityBookWnd"));
         } else if (word == "auto") {
             std::string to = game::next_cmd_arg(rest);
             for (char& ch : to) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-            eq_api_->click_child("AbilityBookWnd", to == "on" ? "AutoskillOn" : to == "off" ? "AutoskillOff" : "AutoskillToggle");
+            ui_api_->click_child("AbilityBookWnd", to == "on" ? "AutoskillOn" : to == "off" ? "AutoskillOff" : "AutoskillToggle");
         } else {
             c.show_chat("Usage: /abilitybook [auto [on|off]]", 15);
         }
@@ -213,14 +213,14 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
     if (h == "Hailstone_finditem") {
         // The Advanced Inventory (/finditem, /advi): no argument shows or hides it; text opens it searching for that
         // (its filters cleared, so the search covers everything the character has).
-        if (!eq_api_) return true;
+        if (!ui_api_) return true;
         std::string text = args;
         while (!text.empty() && (text.back() == ' ' || text.back() == '\t')) text.pop_back();
         if (text.empty()) {
-            eq_api_->toggle("InventoryManagerWnd");
+            ui_api_->toggle("InventoryManagerWnd");
         } else {
-            eq_host_.item_search = text;
-            eq_api_->show("InventoryManagerWnd", true);
+            ui_host_.item_search = text;
+            ui_api_->show("InventoryManagerWnd", true);
         }
         return true;
     }
@@ -230,36 +230,36 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
     }
     if (h == "Cmd_filter") {
         // Cmd_filter @0x4e83a0: the options window shown on its chat filter page (4).
-        if (eq_api_) {
-            eq_api_->show("OptionsWindow", true);
-            eq_api_->set_tab_page("OptionsWindow", "OPTW_OptionsSubwindows", 4);
+        if (ui_api_) {
+            ui_api_->show("OptionsWindow", true);
+            ui_api_->set_tab_page("OptionsWindow", "OPTW_OptionsSubwindows", 4);
         }
         return true;
     }
     if (h == "Cmd_note") {
         // Cmd_note @0x4f5e50: no text opens the notes window; text is added to it (13224 when that fails).
-        if (!eq_api_) return true;
-        if (args.empty()) eq_api_->show("PlayerNotesWindow", true);
-        else if (!eq_api_->add_player_note(args)) c.show_eqstr(13224);
+        if (!ui_api_) return true;
+        if (args.empty()) ui_api_->show("PlayerNotesWindow", true);
+        else if (!ui_api_->add_player_note(args)) c.show_eqstr(13224);
         return true;
     }
     if (h == "Cmd_map") {
-        if (eq_api_)
-            for (std::uint32_t id : eq_api_->map_command(args)) c.show_eqstr(id);
+        if (ui_api_)
+            for (std::uint32_t id : ui_api_->map_command(args)) c.show_eqstr(id);
         return true;
     }
     if (h == "Cmd_loadskin") {
         // Cmd_loadskin @0x4f31e0: the skin is this client's user interface (ui/<pack>). No argument: the load-skin
-        // window (LoadskinWnd, app/lua_eq_layout.cpp: the user interfaces). Not while the give, trade or send-money window is
+        // window (LoadskinWnd, app/lua_ui_layout.cpp: the user interfaces). Not while the give, trade or send-money window is
         // open (3192, colour 0xf). "<skin> [flag]" writes the skin (the server's UI choice, as the Options window
         // does), says 3125 and loads it before the next frame; the flag (reload the window settings) is not used: the
         // window places are the character's and stay. (Its zone check, zone type 0xbc: 6028, has no such zone here.)
-        if (!eq_api_) return true;
+        if (!ui_api_) return true;
         if (args.empty()) {
-            eq_api_->show("LoadskinWnd", true);
+            ui_api_->show("LoadskinWnd", true);
             return true;
         }
-        if (eq_api_->shown("GiveWnd") || eq_api_->shown("TradeWnd") || c.trade().has_value()) {
+        if (ui_api_->shown("GiveWnd") || ui_api_->shown("TradeWnd") || c.trade().has_value()) {
             c.show_eqstr(3192, {}, 0xf);
             return true;
         }
@@ -269,8 +269,7 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
         c.show_eqstr(3125, {skin});
         for (std::size_t i = 0; i < ui_packs_.size(); ++i)
             if (game::same_no_case(ui_packs_[i].id, skin) || game::same_no_case(ui_packs_[i].name, skin)) {
-                set_video_option("ui_name", static_cast<int>(i));
-                pending_ui_pack_ = ui_packs_[i].id;
+                select_ui_pack(ui_packs_[i].id);
                 return true;
             }
         log::warn("/loadskin: no user interface named {}", skin);
@@ -279,18 +278,18 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
 
     if (h == "Cmd_copylayout") {
         // Cmd_copylayout @0x4f33d0: no argument opens the layout copy window
-        // (LayoutCopyWindow, app/lua_eq_layout.cpp); not while the give, trade or send-money window is open (3192,
+        // (LayoutCopyWindow, app/lua_ui_layout.cpp); not while the give, trade or send-money window is open (3192,
         // colour 0xf); "usage" / "help" print 6335; "restore" is the screen's size as "%dx%d", else the first two
         // words are the size and the ini file (none: the current one; neither: 6335). It prints 6336 and copies
-        // (EqHost::copy_layout, the boxes off). The ini file is UI_<name>_<server>.ini, default(s).ini or a
+        // (UiHost::copy_layout, the boxes off). The ini file is UI_<name>_<server>.ini, default(s).ini or a
         // character's name here; the posted message's own reading of it (WndProc 0x4646) is not decoded
         // (docs/unknowns.md).
-        if (!eq_api_) return true;
+        if (!ui_api_) return true;
         if (args.empty()) {
-            eq_api_->show("LayoutCopyWindow", true);
+            ui_api_->show("LayoutCopyWindow", true);
             return true;
         }
-        if (eq_api_->shown("GiveWnd") || eq_api_->shown("TradeWnd") || c.trade().has_value()) {
+        if (ui_api_->shown("GiveWnd") || ui_api_->shown("TradeWnd") || c.trade().has_value()) {
             c.show_eqstr(3192, {}, 0xf);
             return true;
         }
@@ -304,13 +303,13 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
             ini = game::next_cmd_arg(rest);
         }
         if (resolution.empty()) return c.show_eqstr(6335), true;
-        std::vector<EqHost::LayoutSource> sources = eq_host_.layout_sources ? eq_host_.layout_sources() : std::vector<EqHost::LayoutSource>{};
-        auto names = [&](const EqHost::LayoutSource& s) {
-            if (ini.empty()) return s.file == eq_api_->layout_file();
+        std::vector<UiHost::LayoutSource> sources = ui_host_.layout_sources ? ui_host_.layout_sources() : std::vector<UiHost::LayoutSource>{};
+        auto names = [&](const UiHost::LayoutSource& s) {
+            if (ini.empty()) return s.file == ui_api_->layout_file();
             if (s.label == "Defaults.ini") return game::same_no_case(ini, "defaults.ini") || game::same_no_case(ini, "default.ini");
             return game::same_no_case(ini, s.label) || game::same_no_case(ini, "UI_" + s.label + "_" + char_view_.server_name + ".ini");
         };
-        EqHost::LayoutSource from;
+        UiHost::LayoutSource from;
         from.mode = game::same_no_case(resolution, "windowed") ? "Windowed" : resolution;
         from.label = ini.empty() ? "UI.ini" : ini;
         for (const auto& s : sources)
@@ -322,13 +321,13 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
         // An ini no source names is looked for beside the current layout file, by its bare name only: a path (a
         // folder, "..", a drive) is no layout, and copy_layout gives 6338 for the empty file as for a missing one.
         if (from.file.empty()) {
-            if (ini.empty()) from.file = eq_api_->layout_file();
-            else if (game::bare_file_name(ini) && !eq_api_->layout_file().empty())
-                from.file = eq_api_->layout_file().parent_path() / ini;
+            if (ini.empty()) from.file = ui_api_->layout_file();
+            else if (game::bare_file_name(ini) && !ui_api_->layout_file().empty())
+                from.file = ui_api_->layout_file().parent_path() / ini;
         }
         c.show_eqstr(6336, {from.label, resolution});
-        if (eq_host_.copy_layout)
-            if (auto refused = eq_host_.copy_layout(from, {})) c.show_eqstr(refused->first, refused->second);
+        if (ui_host_.copy_layout)
+            if (auto refused = ui_host_.copy_layout(from, {})) c.show_eqstr(refused->first, refused->second);
         return true;
     }
 
@@ -362,7 +361,7 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
         if (u.index - 1 >= game::kChatUserColorCountRoF2) return true;
         std::uint32_t rgb = u.reset ? default_user_color_rgb(u.index - 1)
                                     : static_cast<std::uint32_t>(u.red << 16 | u.green << 8 | u.blue);
-        set_user_color(eq_host_, u.index - 1, rgb);
+        set_user_color(ui_host_, u.index - 1, rgb);
         return true;
     }
     if (h == "Cmd_hotbutton") {
@@ -378,8 +377,8 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
             game::HotButton b;
             b.type = game::HotButtonType::Social;
             b.slot = index;
-            eq_host_.cursor_button = b;
-            ++eq_host_.cursor_serial;
+            ui_host_.cursor_button = b;
+            ++ui_host_.cursor_serial;
         }
         c.show_eqstr(index >= 0 ? game::kStrHotButtonMade : game::kStrHotButtonFailed);
         return true;

@@ -447,19 +447,23 @@ LoginAction addons_window(AddonsView& a, bool busy, bool* open) {
     if (a.offer) {
         const AddonOfferView& o = *a.offer;
         ImGui::Separator();
-        ImGui::Text("%s %s (%s)", o.name.c_str(), o.version.c_str(), o.kind.c_str());
+        ImGui::Text("%s %s (%s)", o.name.c_str(), o.version.c_str(), o.autoload ? "managed add-on" : o.kind.c_str());
         if (!o.author.empty()) ImGui::TextDisabled("by %s, from %s", o.author.c_str(), o.source.c_str());
         else ImGui::TextDisabled("from %s", o.source.c_str());
         if (!o.description.empty()) ImGui::TextWrapped("%s", o.description.c_str());
+        if (o.autoload) ImGui::TextWrapped("Starts automatically when enabled. Manage it from My add-ons.");
         if (!o.installed_version.empty()) ImGui::Text("Installed now: %s", o.installed_version.c_str());
-        if (o.kind != "tool" && o.kind != "upscaler") {
+        if (o.kind != "tool" && o.kind != "upscaler" && o.kind != "ui") {
             ImGui::TextUnformatted("It asks to:");
             list(o.caps);
         }
         ImGui::TextWrapped("%s", o.key.empty() ? "Not signed: later versions are taken from whoever controls the "
                                                  "repository."
                                                : ("Signed with key " + o.key + ": later versions must carry it.").c_str());
-        if (o.kind == "plugin")
+        if (o.kind == "ui") {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Full client interface access");
+            ImGui::TextWrapped("A UI pack can call host interface, account and game actions. Install only interfaces you trust.");
+        } else if (o.kind == "plugin")
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s",
                                "A plugin is a program: the permissions limit what it does through Hailstone, not what "
                                "it can do on your computer. Install only plugins you trust.");
@@ -569,7 +573,8 @@ LoginAction addons_window(AddonsView& a, bool busy, bool* open) {
         for (const auto& r : a.rows) {
             if (r.group != group) continue;
             ImGui::PushID((group + ":" + r.name).c_str());
-            const std::string label = r.name + (r.version.empty() ? "" : " " + r.version) + "  (" + r.kind + ")";
+            const std::string label = r.name + (r.version.empty() ? "" : " " + r.version) + "  (" +
+                                      (r.managed ? std::string("add-on") : r.kind) + ")";
             if (ImGui::TreeNode("##row", "%s", label.c_str())) {
                 if (!r.description.empty()) ImGui::TextWrapped("%s", r.description.c_str());
                 if (!r.source.empty()) ImGui::TextDisabled("from %s%s", r.source.c_str(), r.signed_ ? ", signed" : "");
@@ -585,6 +590,17 @@ LoginAction addons_window(AddonsView& a, bool busy, bool* open) {
                 if (!r.modified.empty()) ImGui::TextDisabled("Changed by you: %zu file(s)", r.modified.size());
                 if (!r.note.empty()) ImGui::TextWrapped("%s", r.note.c_str());
                 if (r.group == "installed") {
+                    if (r.managed) {
+                        bool enabled = r.enabled;
+                        ImGui::BeginDisabled(busy);
+                        if (ImGui::Checkbox("Enabled", &enabled)) {
+                            a.choice = r.name;
+                            a.choice_on = enabled;
+                            action = LoginAction::AddonEnabled;
+                        }
+                        ImGui::EndDisabled();
+                        ImGui::TextDisabled("Starts automatically when this server allows it.");
+                    }
                     bool on = r.auto_update;
                     if (ImGui::Checkbox("Update by itself", &on)) {
                         a.choice = r.name;
@@ -871,15 +887,20 @@ LoginAction login_screen(LoginView& view) {
         if (ImGui::BeginCombo("##ui", ui_pack ? ui_pack->name.c_str() : view.ui.c_str())) {
             for (const auto& p : view.ui_packs) {
                 ImGui::PushID(p.id.c_str());
-                if (ImGui::Selectable(p.name.c_str(), &p == ui_pack)) view.ui = p.id;
-                if (ImGui::IsItemHovered() && !p.description.empty())
-                    ImGui::SetTooltip("%s\nMade for: %s", p.description.c_str(), p.input.c_str());
+                ImGui::BeginDisabled(!p.available);
+                if (ImGui::Selectable(p.name.c_str(), &p == ui_pack) && p.available) view.ui = p.id;
+                ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s\nMade for: %s%s%s", p.description.c_str(), p.input.c_str(),
+                        p.available ? "" : "\nUnavailable: ", p.available ? "" : p.unavailable_reason.c_str());
                 ImGui::PopID();
             }
             ImGui::EndCombo();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("The look and layout of the game's windows on this server. Kept with the server.");
+            ImGui::SetTooltip("The look and layout of the game's windows on this server. Kept with the server.%s%s",
+                ui_pack && !ui_pack->available ? "\nUnavailable: " : "",
+                ui_pack && !ui_pack->available ? ui_pack->unavailable_reason.c_str() : "");
     }
     label("Username");
     // The server's saved accounts in a list beside the field: picking one fills its saved password.

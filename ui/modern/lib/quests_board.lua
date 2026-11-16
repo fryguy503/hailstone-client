@@ -2,6 +2,7 @@
 -- the drop-downs that pick the board (the original's combo boxes: a pick asks the server, as the original does),
 -- your own line as tiles, the board as a sortable table with a name search (your row lit), and Refresh / Done.
 -- Everything is the original window's children; the board's columns come from its list.
+local API = hs.UI
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
 local T = dofile("lib/theme.lua")
@@ -40,7 +41,7 @@ function B.Draw(opts)
   K.StatRow(tiles, 80)
   ui.Dummy(0, 2 * s)
   -- the board
-  local rows = eq.ListInfo(win, opts.list) or 0
+  local rows = API.windows.ListInfo(win, opts.list) or 0
   K.Heading("Leaders", rows == 1 and "1 entry" or (rows .. " entries"))
   local needle = K.Search(search, win, "Search names")
   if rows == 0 then

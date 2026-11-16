@@ -1,12 +1,12 @@
 // The merchant's "Show only items I can use" (MW_UsableButton; CMerchantWnd::PurchasePageHandler::UpdateList @0x6f0bb0
-// with +0x60 clear) over the eq API: on to start, what the character's class or race cannot use and spell scrolls it
+// with +0x60 clear) over the hs API: on to start, what the character's class or race cannot use and spell scrolls it
 // knows (or knows a higher rank of) are left out of ItemList, and a click shows everything.
 #include <doctest/doctest.h>
 
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "game/spells.h"
 #include "mq_test_world.h"
 #include "net/item_packets.h"
@@ -18,11 +18,11 @@ namespace {
 
 struct Lua {
     lua_State* L = luaL_newstate();
-    explicit Lua(app::EqApi& api) {
+    explicit Lua(app::UiApi& api) {
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
     }
     ~Lua() { lua_close(L); }
     std::string text(const char* code) {
@@ -37,7 +37,7 @@ struct Lua {
 // The item names in the merchant's list, joined by ",".
 constexpr const char* kNames = R"(
     local out = {}
-    for r = 0, (eq.ListInfo('MerchantWnd', 'ItemList') or 0) - 1 do out[#out + 1] = eq.ListRow('MerchantWnd', 'ItemList', r)[2] end
+    for r = 0, (hs.ListInfo('MerchantWnd', 'ItemList') or 0) - 1 do out[#out + 1] = hs.ListRow('MerchantWnd', 'ItemList', r)[2] end
     return table.concat(out, ','))";
 
 net::ItemPacket goods(std::uint32_t slot, const char* name) {
@@ -55,7 +55,7 @@ net::ItemPacket goods(std::uint32_t slot, const char* name) {
 } // namespace
 
 TEST_CASE("merchant: Show only items I can use leaves out what the character cannot use, and is on to start") {
-    ImGuiContext* ctx = ImGui::CreateContext(); // the eq API reads the keyboard's modifiers
+    ImGuiContext* ctx = ImGui::CreateContext(); // the hs API reads the keyboard's modifiers
     mq_test::World w("hailstone_merchant_usable_test"); // Tester: a human cleric
     auto& c = *w.conn;
 
@@ -103,29 +103,29 @@ TEST_CASE("merchant: Show only items I can use leaves out what the character can
         c.receive_zone_packet_for_test(net::encode_item_packet(false, *ip));
     REQUIRE(c.merchant()->items.size() == 6);
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &c;
-    app::EqApi api(host);
+    app::UiApi api(host);
     Lua lua(api);
 
-    CHECK(lua.text("return tostring(select(2, eq.ChildState('MerchantWnd', 'MW_UsableButton')))") == "true");
+    CHECK(lua.text("return tostring(select(2, hs.ChildState('MerchantWnd', 'MW_UsableButton')))") == "true");
     CHECK(lua.text(kNames) == "Potion,Satchel,Spell: Shielding");
 
     // A row picked while filtered is still the one bought: the rows map to the merchant's slots.
-    lua.text("eq.ListClick('MerchantWnd', 'ItemList', 2, 'left')");
-    CHECK(lua.text("return (eq.WindowText('MerchantWnd', 'MW_SelectedItemLabel'))") == "Spell: Shielding");
+    lua.text("hs.ListClick('MerchantWnd', 'ItemList', 2, 'left')");
+    CHECK(lua.text("return (hs.WindowText('MerchantWnd', 'MW_SelectedItemLabel'))") == "Spell: Shielding");
 
     // Once known, the scroll goes too.
     net::GameConnectionTestAccess::spells(c).book[1] = 810;
     CHECK(lua.text(kNames) == "Potion,Satchel");
 
-    lua.text("eq.ClickChild('MerchantWnd', 'MW_UsableButton', 'left')");
-    CHECK(lua.text("return tostring(select(2, eq.ChildState('MerchantWnd', 'MW_UsableButton')))") == "false");
+    lua.text("hs.ClickChild('MerchantWnd', 'MW_UsableButton', 'left')");
+    CHECK(lua.text("return tostring(select(2, hs.ChildState('MerchantWnd', 'MW_UsableButton')))") == "false");
     CHECK(lua.text(kNames) == "Potion,Warrior Plate,Ogre Hat,Satchel,Spell: Healing Rk. 2,Spell: Shielding");
 
     // The checkbox belongs to the purchase page.
-    lua.text("eq.SetTabPage('MerchantWnd', 'MW_MerchantSubwindows', 1)");
-    CHECK(lua.text("return tostring(eq.ChildShown('MerchantWnd', 'MW_UsableButton'))") == "false");
+    lua.text("hs.SetTabPage('MerchantWnd', 'MW_MerchantSubwindows', 1)");
+    CHECK(lua.text("return tostring(hs.ChildShown('MerchantWnd', 'MW_UsableButton'))") == "false");
     ImGui::DestroyContext(ctx);
 }

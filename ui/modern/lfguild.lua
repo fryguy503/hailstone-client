@@ -8,6 +8,7 @@
 -- Every field is the window's own (typing and picking change its edit boxes and drop-downs) and every button is
 -- its button, so what is posted and searched is the game's. The window keeps no page of its own: the tabs here are
 -- this UI's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -65,7 +66,7 @@ local function classChips(prefix, s)
     ui.PushStyleColor(ui.Col.ButtonActive, col[1], col[2], col[3], 0.5)
     if checked then ui.PushStyleColor(ui.Col.Text, C.text[1], C.text[2], C.text[3], 1) else ui.PushStyleColor(ui.Col.Text, C.faint[1], C.faint[2], C.faint[3], 1) end
     ui.BeginDisabled(not enabled)
-    if ui.Button(c[2] .. "##" .. id, cw, lh + 8 * s) and enabled then eq.ClickChild(WINDOW, id, "left") end
+    if ui.Button(c[2] .. "##" .. id, cw, lh + 8 * s) and enabled then API.windows.ClickChild(WINDOW, id, "left") end
     ui.EndDisabled()
     ui.PopStyleColor(4)
     if ui.IsItemHovered() then ui.SetTooltip(c[1] .. " (" .. S.ROLE_NAME[c[3]] .. ")" .. (checked and "" or "  -  off")) end
@@ -99,13 +100,13 @@ local function postButtons(prefix, s, what)
   local bw = (avail - 16) / 3
   for i, b in ipairs(list) do
     if i > 1 then ui.SameLine() end
-    local enabled = eq.ChildState(WINDOW, b[1]) ~= false
+    local enabled = API.windows.ChildState(WINDOW, b[1]) ~= false
     if b[3] then
       ui.PushStyleColor(ui.Col.Button, C.accent[1], C.accent[2], C.accent[3], 0.24)
       ui.PushStyleColor(ui.Col.ButtonHovered, C.accent[1], C.accent[2], C.accent[3], 0.40)
     end
     ui.BeginDisabled(not enabled)
-    if ui.Button(b[2] .. "##" .. b[1], bw, btnH) and enabled then eq.ClickChild(WINDOW, b[1], "left") end
+    if ui.Button(b[2] .. "##" .. b[1], bw, btnH) and enabled then API.windows.ClickChild(WINDOW, b[1], "left") end
     ui.EndDisabled()
     if b[3] then ui.PopStyleColor(2) end
     if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then ui.SetTooltip(b[4]) end
@@ -126,7 +127,7 @@ local function findGuildPage(s)
 end
 
 local function recruitPage(s)
-  local inGuild = eq.ChildState(WINDOW, "GLFP_UpdateButton") ~= false
+  local inGuild = API.windows.ChildState(WINDOW, "GLFP_UpdateButton") ~= false
   status("GLFP_OnButton", "GLFP_ExpireLabel")
   if not inGuild then
     ui.SameLine()
@@ -150,7 +151,7 @@ end
 local function results(listId, commentId, s, emptyText)
   local _, ah = ui.GetContentRegionAvail()
   local commentH = math.max(50 * s, ah * 0.25)
-  local rows = eq.ListInfo(WINDOW, listId) or 0
+  local rows = API.windows.ListInfo(WINDOW, listId) or 0
   if rows == 0 then
     local aw = ui.GetContentRegionAvail()
     S.Empty(aw, math.max(30 * s, ah - commentH - 30 * s), emptyText, "Set the fields above and press Search.")
@@ -217,6 +218,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Looking for Guild", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Looking for Guild", WINDOW_OPTS, drawWindow)
 end)

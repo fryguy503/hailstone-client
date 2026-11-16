@@ -1,6 +1,6 @@
 -- The pieces the gamepad pack's pre-game screens share (login.lua, serverselect.lua, charselect.lua): the pad's
 -- buttons outside the world, focus aimed from code, the status line, and the rows those screens are built from.
--- The screens are the client's (app/lua_eq_pregame.cpp), not the original's: nothing here follows eqmain.dll.
+-- The screens are the client's (app/lua_ui_pregame.cpp), not the original's: nothing here follows eqmain.dll.
 --
 --   local P = dofile("lib/pregame.lua")
 --   local f = P.focus()                  -- one per window: f:want(id) aims the pad's focus at an item next frame

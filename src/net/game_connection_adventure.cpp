@@ -1,5 +1,5 @@
 // GameConnection: LDoN adventures over EQEmu's packets (net/adventure_packets.h). The windows are
-// app/lua_eq_adventure.cpp's; the world server chooses the adventure, checks the group and answers with the offer
+// app/lua_ui_adventure.cpp's; the world server chooses the adventure, checks the group and answers with the offer
 // (OP_AdventureDetails) or a refusal (OP_AdventureInfo).
 
 #include <algorithm>

@@ -92,7 +92,7 @@ struct MailState {
     std::uint32_t max_id = 0;    // MailMgr +0x68
     bool window_open = false;
     std::vector<std::string> delivery; // the last delivery results (eqstr 4530 / 4531 lines)
-    MailAddressBook address_book;      // loaded and saved by the app (app/lua_eq_mail.cpp)
+    MailAddressBook address_book;      // loaded and saved by the app (app/lua_ui_mail.cpp)
     MailAddressBook ignore_list;       // MailMgr +0xa4, the same kind of book (IgnoreList.txt), loaded and saved alike
 
     // MailMgr_StoreHeader / OnHeader: stores a header (replacing one with the same id).

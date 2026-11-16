@@ -1,9 +1,10 @@
--- Server select: the client's world list in this UI's look (eq.ServerSelect, app/lua_eq_pregame.cpp; the client's
+-- Server select: the client's world list in this UI's look (hs.ServerSelect, app/lua_ui_pregame.cpp; the client's
 -- screen, as ui/dev_screens.cpp server_select_screen draws it, not the original's page). A card in the middle of the
 -- screen: the world played last here as one button, then every world the login server listed as a row with its
 -- status (green when it can be joined). No player count is shown. A click picks a world, a double click or Play plays it,
 -- Enter plays the picked one, Back returns to the login screen. The star on a row marks the world a favourite: the
 -- favourites are listed first, then the other worlds, each by name (the client sorts them).
+local API = hs.UI
 local P = dofile("lib/pregame.lua")
 local T = P.T
 local C = T.color
@@ -36,7 +37,7 @@ local function card(view, s, bh)
   ui.BeginDisabled(view.busy)
   if last then
     if P.Primary("Play " .. last.name .. "  (last played)", -1, bh, last.canJoin) then
-      eq.ServerSelectDo("play", view.last)
+      API.pregame.ServerSelectDo("play", view.last)
     end
     P.Tip(last.canJoin and "The world you played last on this server" or (last.name .. ": " .. last.status))
     ui.Dummy(0, 4 * s)
@@ -56,10 +57,10 @@ local function card(view, s, bh)
     local sx0, sx1 = x0 + 10 * s, x0 + 10 * s + 2 * sr + 8 * s
     local onStar = ui.IsMouseHoveringRect(sx0, y0, sx1, y1)
     if clicked and onStar then
-      eq.ServerSelectDo("favorite", i)
+      API.pregame.ServerSelectDo("favorite", i)
     elseif clicked then
-      eq.ServerSelectDo("select", i)
-      if double and sv.canJoin then eq.ServerSelectDo("play", i) end
+      API.pregame.ServerSelectDo("select", i)
+      if double and sv.canJoin then API.pregame.ServerSelectDo("play", i) end
     end
     local hot = onStar and ui.IsItemHovered()
     star((sx0 + sx1) / 2, (y0 + y1) / 2, sr, sv.favorite, (sv.favorite or hot) and C.gold or C.faint,
@@ -91,20 +92,20 @@ local function card(view, s, bh)
   end
   local picked = view.servers[view.selected]
   local canPlay = not view.busy and picked ~= nil and picked.canJoin
-  if ui.Button("Back", 0, bh) then eq.ServerSelectDo("back") end
+  if ui.Button("Back", 0, bh) then API.pregame.ServerSelectDo("back") end
   P.Tip("Back to the login screen")
   ui.SameLine()
   local playW = P.ButtonsWidth(PLAY, s) + 40 * s
   P.AlignRight(playW)
-  if P.Primary("Play", playW, bh, canPlay) then eq.ServerSelectDo("play") end
+  if P.Primary("Play", playW, bh, canPlay) then API.pregame.ServerSelectDo("play") end
   -- Enter plays the picked world (the client binds no key on this screen; not while a field elsewhere is typed in)
-  if canPlay and ui.IsKeyPressed(ui.Key.Enter) and not ui.GetIO().typing then eq.ServerSelectDo("play") end
+  if canPlay and ui.IsKeyPressed(ui.Key.Enter) and not ui.GetIO().typing then API.pregame.ServerSelectDo("play") end
 end
 
-local held = nil -- the view drawn last frame: eq.ServerSelect gives true while it still holds (its revision)
+local held = nil -- the view drawn last frame: hs.ServerSelect gives true while it still holds (its revision)
 
 ui.window("Server Select", function()
-  local view = eq.ServerSelect(held and held.revision)
+  local view = API.pregame.ServerSelect(held and held.revision)
   if view == true then view = held else held = view end
   if not view then return end
   local s = P.Scale()

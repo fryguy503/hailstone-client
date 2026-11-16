@@ -1,5 +1,10 @@
 # Plugins, MacroQuest Lua scripts and the server's rules
 
+UI authors should use the shared [UI API](ui-api.md) (`hs.UI`), including its
+version and method discovery. The flat `hs.*` host bindings documented below
+have the same arguments, results and capability checks. Both
+forms refer to the same finalized guarded closures.
+
 The client can be extended in three ways. All three sit on one hook bus (`src/plugin/hooks.h`) that sees every
 world and zone packet in both directions, chat lines, typed commands, the game state, zoning, spawns and each
 frame:
@@ -13,7 +18,7 @@ frame:
 A player installs scripts and plugins from GitHub with the add-on manager on the login screen (docs/addons.md), or
 puts them in the folders by hand. An add-on gets no more than the capabilities its manifest declares (below).
 
-docs/scripting-reference.md lists every TLO and member, the `mq`, `hailstone`, `ui` and `eq` functions and the
+docs/scripting-reference.md lists every TLO and member, the `mq`, `hailstone`, `ui` and `hs` functions and the
 compiled plugins' host table, hooks and structs in one place. This page explains how they fit together and what the
 rules are.
 
@@ -96,7 +101,7 @@ per-server, per-hash approval.
   returns not visible and begins nothing, `ui.BeginChild` inside it likewise, and `ui.End` cannot close it. What a
   script's draw function leaves open, or sets for a next window it never begins, is closed and dropped when it
   returns, so it never reaches the question's window drawn after it.
-  Only the pack's own code puts the client's prompt away for a window of its own (`eq.WindowShown("PluginConsent")`
+  Only the pack's own code puts the client's prompt away for a window of its own (`hs.WindowShown("PluginConsent")`
   from a plugin's code does not), and a plugin's code neither sees the question nor answers it. A compiled plugin
   already loaded is native code and is not held by this.
 - **Other bytes ask again.** The answers are for a SHA-256, not a file name: a server that updates its plugin asks
@@ -116,17 +121,17 @@ the file cannot be written, the answer holds for this run only. A box set's wind
 one window settles the same question in the others within a second.
 
 The packs draw the question (`ui/modern/pluginconsent.lua`, the Gamepad UI's `dialogs.lua`) with
-`eq.PluginConsent()` (nil, or `{server, serial, warning, plugins = {{name, file, size, sha256, short}}}`) and
-`eq.AnswerPluginConsent(true | false | nil, serial)`, where `serial` is the question's: an answer to a question that has
+`hs.PluginConsent()` (nil, or `{server, serial, warning, plugins = {{name, file, size, sha256, short}}}`) and
+`hs.AnswerPluginConsent(true | false | nil, serial)`, where `serial` is the question's: an answer to a question that has
 since been replaced by another (another server's, or other bytes) is refused (false) and nothing is kept. Both packs
 leave Allow and Don't allow off for a second after a question shows or a new one takes its place, so a click or press
 meant for something else cannot answer it. A plugin's own code in the UI gets nil and cannot answer. Without a pack
-window for it (`eq.ReplaceWindow("PluginConsent")`) the client draws its own.
+window for it (`hs.ReplaceWindow("PluginConsent")`) the client draws its own.
 
 ## For players
 
 - `/lua run <script> [args...]`, `/lua stop [script]`, `/lua pause [script]`, `/lua list`. From a script or plugin
-  (`mq.cmd`, `DoCommand`, `eq.ChatSubmit`) `/lua stop` and `/lua pause` reach only a script that may do no more than
+  (`mq.cmd`, `DoCommand`, `hs.ChatSubmit`) `/lua stop` and `/lua pause` reach only a script that may do no more than
   it ("may not stop or pause" otherwise; with no name, the others are left alone): an add-on cannot end yours
 - `/plugin list`, `/plugin <name> [load|unload]`
 - A server's compiled plugins load only once you allow them: see "The server's compiled plugins ask first" above.
@@ -174,7 +179,7 @@ extension's `command_line`) from the moment it lost the bit, and its web tabs cl
 | 512 | `extend` | change the client's rules as a server's own client does (compiled plugins: the server extension below) |
 | 1024 | `login` | run before the zone-in: from the world login and at character select (above) |
 | 2048 | `net` | open the plugin's own TCP connections (compiled plugins: `tcp_open`, below), for a service the server runs beside the game |
-| 4096 | `web` | web pages: `/url`, `/www`, tabs of its own in the in-game browser (`mq.web`, `eq.Web*` in its windows, `web_*`); http and https only, on the hosts `[web] allow` names ("Web pages" below) |
+| 4096 | `web` | web pages: `/url`, `/www`, tabs of its own in the in-game browser (`mq.web`, `hs.Web*` in its windows, `web_*`); http and https only, on the hosts `[web] allow` names ("Web pages" below) |
 
 The check sits in one place, the command filter (`src/mq/commands.cpp`). It looks at the capabilities of the code
 running now (`plugin::caller_caps()`). So a command reaches the same check whether a script sends it with `mq.cmd`,
@@ -345,11 +350,11 @@ A script can extend the client as a compiled plugin does, with no native code: t
 | `set_player_classes(mask)`, `set_character_classes(name, mask)`, `set_pet_list{{spawn =, class =}}`, `set_vitals{max_hp =, ...}` | what the server knows (`extend`) |
 | `on_packet(stream, direction, opcode, fn)` | `fn(opcode, data)` for each such packet (`'world'` / `'zone'`, `'in'` / `'out'`, opcode 0 all): `true` drops it, a string replaces its data. With Lua's `string.pack` / `string.unpack` a script reads and writes any layout (`packets`) |
 | `send_packet(stream, opcode, data)` | a packet to the server (`packets`) |
-| `ui_function(name, fn)`, `option{name, label, min, max, get, set}`, `menu(label, command)` | for its windows, as a compiled plugin's (`ui`); `eq.Plugin("<script name>")`. A Lua social cannot call them (an error): its state goes whenever the social is edited, and its name is only its title |
+| `ui_function(name, fn)`, `option{name, label, min, max, get, set}`, `menu(label, command)` | for its windows, as a compiled plugin's (`ui`); `hs.UI.plugins.Get("<script name>")`. A Lua social cannot call them (an error): its state goes whenever the social is edited, and its name is only its title |
 | `player()`, `spawn(id)`, `spawns()`, `spell(id)`, `item(slot [, sub])`, `buff(i)`, `xtarget(i)`, `raid()`, `eqstr(id, ...)`, `zone_name(id)`, `server()` | the game state as tables (`read`); `server()` is the server this login is on (`{name, host, port, world, world_host}`, nil before the world login); `player()`'s `cur_hp` and `max_hp`, like a compiled plugin's `HailstonePlayer` and `Me.CurrentHPs`, include the items' HP that EQEmu's own HP update leaves out, as the windows show them |
 | `raid()` | the raid roster as columnar tables: `active, locked, loot_type, count, leader, target, spawn_id[], name[], group[], flags[], level[], class[], pct_hp[], pct_mana[], pct_endurance[], pet_spawn_id[], pet_pct_hp[], x[], y[], z[], distance[]` (members 1-based; `leader`/`target` 1-based, 0 none; `-1` an unknown percentage). The `hailstone` module also has the flag bits as `RAID_LEADER`, `RAID_GROUP_LEADER`, `RAID_MAIN_ASSIST`, `RAID_MARKER`, `RAID_WAYPOINTER`, `RAID_LOOTER`, `RAID_PRESENT` and `RAID_ME`, with the SDK's `HS_BULK_RAID_*` values |
 | `spell(id)` display fields | raw spell data: `range`, `ae_range`, `push_back`, `duration_formula`, `duration_cap` (ticks), `spell_type`, `resist`, `resist_adj`, `spell_icon`, `category`, `subcategory`, `cast_on_you`, `cast_on_other`, `wear_off`, and `effects` (12 1-based entries with `effect`, `base`, `base2`, `max`, `formula`). These are the loaded record values, not computed duration or effect descriptions; a script decides how to present them. |
-| `eq.DisplaySpellId(n)`, `eq.DisplayItemData(n)` | in a Lua UI window, read the actual spell ID or item in display instance 1..6, or nil when absent. Item data gives `id`, `name`, `icon`, `lore`, `value` (copper), `stackCount`, `damage`, `delay`, `itemType` and `favor` (`stack_count` and `item_type`, the names before, are kept); this is the inspected item, not necessarily one in inventory. |
+| `hs.DisplaySpellId(n)`, `hs.DisplayItemData(n)` | in a Lua UI window, read the actual spell ID or item in display instance 1..6, or nil when absent. Item data gives `id`, `name`, `icon`, `lore`, `value` (copper), `stackCount`, `damage`, `delay`, `itemType` and `favor` (`stack_count` and `item_type`, the names before, are kept); this is the inspected item, not necessarily one in inventory. |
 | `right_click_item(slot [, class])`, `close_spell_book()`, `clear_spell_recovery()`, `set_window_pet(id)`, `inspect_item(id [, augments])`, `set_max_camera_distance(d)` | the client's own actions (`actions`) |
 | `chat(text [, color])`, `server_dir()`, `character_dir()`, `max_camera_distance()` | a chat line in one of the game's colours; its folders for the server and the character (below: `plugin-config/<name>/`, the name written as for `mq.configDir`; a Lua social's dry run and face get the path and make no folder). A script with the name of a compiled plugin (installed, loaded or the add-on manager's, in any case) gets `plugin-config/script%3A<name>/` instead, so it cannot read or change what the plugin keeps there (a server's key); the add-on manager installs no script and plugin of one name either (docs/addons.md) |
 | `server_rule(section, key)` | a setting from a section of the server's `hailstone.cfg` that is not the client's own (`[autocombat] hunter = off`), as written; nil when the server has no `hailstone.cfg` or does not set it |
@@ -389,7 +394,7 @@ the path must match exactly one file or folder that differs from it only in case
 
 ## The Scripts window
 
-Hailstone's own window (`ScriptsWnd`; `ui/<pack>/scripts.lua`, `app/lua_eq_scripts.cpp`), opened from the EQ menu's
+Hailstone's own window (`ScriptsWnd`; `ui/<pack>/scripts.lua`, `app/lua_ui_scripts.cpp`), opened from the EQ menu's
 **Lua Scripts** row (Gamepad UI: More > Lua Scripts), so a player does not need `/lua`. It lists every script in the
 script folders (`ScriptHost::found`: `<name>.lua` and `<name>/init.lua`, the server's `scripts/` first, then
 `scripts/` and the install's; `config/` left out; a name in two folders is listed once, as the one `/lua run` would
@@ -473,12 +478,12 @@ plugin's own build sets `CMAKE_SHARED_MODULE_SUFFIX` to `.dylib` (or the target'
 this for the plugins built in its tree. It follows MacroQuest's plugin shape: export the callbacks you need and use the MQ-style helpers.
 
 **Licence.** The client is GPL-2.0-or-later, but `sdk/` is MIT (`sdk/LICENSE`), and NOTICE.md's plugin and add-on
-exception lets a plugin built against it, or a script using the `mq` module and `eq.*`, use any licence, closed ones
+exception lets a plugin built against it, or a script using the `mq` module and `hs.*`, use any licence, closed ones
 included. A plugin that copies the client's own code (anything outside `sdk/`) is covered by the GPL instead.
 
 ```c
 #include "hailstone_plugin.h"
-HAILSTONE_PLUGIN   /* the two required exports and the `host` global (the host table) */
+HAILSTONE_PLUGIN   /* the required exports and the `host` global (the host table) */
 
 static void hello(void* user, const char* args) { WriteChatf("Hello, %s!", *args ? args : "world"); }
 
@@ -514,9 +519,10 @@ types, the `NMSC_*` macros, the global `nmsc`, the namespace `nmsc` for `ByteRea
 `nmsc_plugin_abi`, `nmsc_plugin_set_host` and `nmsc_plugin_hooks`. A plugin written against them builds unchanged:
 the two old headers are still in `sdk/`, include the new ones and add the old names back (`nmsc` is a macro for
 `host`; define `NMSC_NO_OLD_GLOBAL` before the include to leave the name free). A built plugin loads unchanged: the
-client looks for each export under its new name, then its old one. `HAILSTONE_PLUGIN` exports the two required
-functions under both names, so a plugin built with this SDK loads in a 0.6 client too; one with hooks that should
-work there exports `nmsc_plugin_hooks` as well.
+client looks for the released binding exports under their new names, then their old ones. Rebuilding against this
+SDK keeps those source aliases but uses the layout marker and versioned host binding described below. Clients
+without that binding refuse the rebuilt library before initialization; new SDK builds do not promise old-client
+binary compatibility.
 
 The client calls a plugin on its own thread, and the host functions are for that thread only, from inside one of the
 plugin's callbacks (`InitializePlugin`, `OnPulse`, a command, a hook, ...): the client's state has no locks. A call
@@ -628,6 +634,47 @@ call, since a client older than the call has a shorter table; `use_ability`, `ab
 ..., `HailstoneWebState`) carry their size too and the client fills what both know; `HailstoneWebState`'s `size` is a `size_t`
 (as ABI 3 shipped it), the others' a `uint32_t`.
 
+Released unmarked ABI 1–3 libraries retain their original binding export and canonical prefix. New SDK builds use
+`hailstone_plugin_layout()` and `hailstone_plugin_set_host_v2(host, layout)`: the host validates the published
+host/hook and packed bulk-payload contract fingerprint before binding or calling `InitializePlugin`. Unknown contracts, a missing matching
+setter, or a refused binding do not initialize the library. The SDK macro deliberately omits the unversioned setter,
+so older clients refuse new builds instead of binding incompatible optional slots. Optional services still need
+`HAILSTONE_HOST_HAS`; a recognized layout is not a permission grant or promise of service availability. The layout
+model test detects table signature/order and packed bulk-schema drift; incompatible declarations or payload
+semantics must never reuse an accepted ID. `HAILSTONE_PLUGIN_DECLARATION_MODEL_SHA256` records the host/hook model,
+`HAILSTONE_PLUGIN_BULK_MODEL_SHA256` records packed bulk declarations/constants and their semantic version, and
+`HAILSTONE_PLUGIN_LAYOUT_MODEL_SHA256` covers both. A semantic change without changed declarations must increment
+`HAILSTONE_PLUGIN_BULK_SCHEMA_VERSION`.
+
+The current marked contract is `34d3d5d48cd4eba7`: a 864-byte table with the released `use_ability`, `ability_state`
+and `get_ability_data_bulk` entries before the appended services. All three preceding marked contracts are
+recognized automatically: `f6b34b37061be009` receives its original 832-byte table, and `e7faba7b569803ce` and
+`dbf47b044fcdb052` their original 840-byte tables. Each gets its own ID at the versioned setter; the old views do
+not include the new ability services. The `dbf47b044fcdb052` view retains its eight-byte count/total list headers.
+The F6 and E7 contracts retain four-byte headers for target buffs, AA and disciplines: target's count is total held,
+AA/disc counts are records written. The raid header's renamed `total` field keeps its original offset and value.
+These byte sizes describe 64-bit builds. Each library keeps its own table for its loaded lifetime. A future table
+append must retain accepted older IDs and their frozen typed views; a newer SDK declaration is not automatically
+accepted by an older client. The model test and explicit current-ID check require that maintenance deliberately.
+Unmarked libraries use the current upstream bulk format; an unmarked build expecting the earlier optional reader
+formats must be rebuilt because neither ABI 3 nor its table size identifies those semantics reliably.
+
+Earlier unmarked UI API previews placed draft functions where upstream later added released bulk and ability services.
+Rebuilding those old preview libraries is recommended. ABI 3 and table size alone cannot distinguish them from released
+libraries; the loader does not guess from a filename or hash. A temporary, explicit alternative for a known old
+binary is `plugin.sdk_layout.<exact SHA-256>=ui-preview-1` in the player's shared `hailstone.ini`.
+The fingerprint accepts either hex case; conflicting case variants and an unreadable existing shared config fail
+closed. A character or server configuration cannot select this adapter. Remove or blank the entry after rebuilding.
+It selects the earlier preview's 800-byte (64-bit) per-library table only for those exact admitted bytes; marked
+previews use automatic recognition instead. Unknown values and any
+override on a marked library are refused before initialization. Changing the binary's bytes leaves the old setting
+inapplicable; a new binary uses the canonical default unless explicitly identified again. Remove this setting after
+rebuilding. Permission checks, consent and live owner lifetime rules still apply; this is a table-layout adapter,
+not an authority bypass. No server-specific libraries, names or hashes are built into this compatibility path.
+
+The host contains C++ allocation/provider exceptions at its SDK entry points and returns the ordinary zero/void
+failure result. It does not retry actions or promise to undo side effects completed before an exception.
+
 The cursor item's origin: `cursor_origin(host)` (with `read`; added later in ABI 3, so test
 `HAILSTONE_HOST_HAS(host, cursor_origin)` first) says how the item on the cursor now got there, for a plugin that
 puts away or destroys what the server hands the player:
@@ -683,6 +730,8 @@ and `total`, how many the client holds. `count < total` means `out_size` was too
 buffer. The first four lead with `HS_Bulk_ListHeader` (`HS_BULK_LIST_HEADER_SIZE` = 8 bytes: i32 `count`, then i32
 `total`), the raid read with its own `HS_Bulk_RaidHeader`, whose `count` and `total` mean the same. Below the header's
 size nothing is written and 0 comes back; with nothing to list the header alone goes out, `count` 0 and `total` 0.
+This describes the current SDK contract and unmarked upstream libraries. The recognized F6 and E7 marked contracts
+keep their original four-byte headers for the first three reads, as described under compatibility above.
 
 - `get_buff_data_bulk`: one record of `HAILSTONE_BUFF_RECORD_SIZE` (29) bytes per buff slot, slot 0 first, in the
   client's order: the long buff slots, then the song slots, then the one discipline slot, always last. RoF2 has 42
@@ -993,7 +1042,7 @@ not take the name back (with several plugins, the later-loaded covers the earlie
 stock window in place while it has nothing to add, on another server for example:
 
 ```lua
-local p = eq.Plugin("MyPlugin")
+local p = hs.Plugin("MyPlugin")
 ui.window("Pet", function()
   local state = p and p.pets()       -- nil until the plugin has seen its server
   if not state then return ui.base_window() end
@@ -1016,7 +1065,7 @@ width until the player resizes it); the screen coordinates `draw` is given alrea
 ```lua
 local ok, xtarget = pcall(dofile, "lib/xtarget.lua")   -- an older client has no lib/xtarget.lua
 ui.window("Extended Target", function()
-  local p = eq.Plugin("MyScript")
+  local p = hs.Plugin("MyScript")
   if not ok or not p then return ui.base_window() end
   xtarget.window{ width = 250, row = { width = 50, draw = function(r, x0, y0, x1, y1, s) ... end } }
 end)
@@ -1033,13 +1082,13 @@ calls it covers the pack's, as above.
 
 They load with the player's pack while the plugin is loaded (it needs the `ui` capability) and go when it unloads. A
 pack without a folder of its own shows none of the plugin's windows. They are written like the pack's own windows
-(`ui.window`, the `ui` and `eq` tables). A server ships them in its `client_files/plugins/<name>/ui/` (Lua is
+(`ui.window`, the `ui` and `hs` tables). A server ships them in its `client_files/plugins/<name>/ui/` (Lua is
 taken there and in `scripts/` only).
 
 The plugin gives its windows data and takes their actions through functions they call:
 
 ```lua
-local p = eq.Plugin("MyPlugin")        -- nil while it is not loaded
+local p = hs.Plugin("MyPlugin")        -- nil while it is not loaded
 local rows = p and p.rows("open")      -- or p.call("rows", "open")
 ```
 
@@ -1056,25 +1105,25 @@ does not reach the plugin.
 It can also add:
 - **options**: `add_option(name, label, min, max, get, set, user)`. A switch when max is 1, else a slider. The
   packs' Options windows list them under the plugin's name (Modern: a Plugins tab; Gamepad: a Plugins page;
-  `eq.PluginOptions`, `eq.SetPluginOption`), and the plugin keeps the value itself.
+  `hs.PluginOptions`, `hs.SetPluginOption`), and the plugin keeps the value itself.
 - **menu entries**: `add_menu(label, command)`. The EQ menu (a Plugins submenu) and the gamepad pack's More page
   list them
-  (`eq.PluginMenu`, `eq.PluginMenuClick`), and choosing one runs the command, usually a command of the plugin's that
+  (`hs.PluginMenu`, `hs.PluginMenuClick`), and choosing one runs the command, usually a command of the plugin's that
   shows its window. The command is the plugin's, so it runs with the plugin's capabilities even though the player
   chose it: an entry whose command needs more than its plugin may do is refused like any command the plugin sends.
 
 Each window folder belongs to an owner, told apart by kind as well as by name: `plugin:<name>` for a compiled
 plugin's, `script:<name>` for a Lua plugin's (a script's `ui/`). A script named after a compiled plugin (a script
 add-on called `nms` beside the NMS server's plugin) gets neither the plugin's capabilities nor its folder, functions,
-options or menu entries; each owner's stay its own and go only with it. `eq.Plugin(name)` with a bare name finds a
-compiled plugin's functions before a script's of that name; `eq.Plugin("script:<name>")` names the script's.
-`eq.PluginOptions` and `eq.PluginMenu` give each entry's `owner` beside its `plugin` name, and `eq.SetPluginOption`
+options or menu entries; each owner's stay its own and go only with it. `hs.Plugin(name)` with a bare name finds a
+compiled plugin's functions before a script's of that name; `hs.Plugin("script:<name>")` names the script's.
+`hs.PluginOptions` and `hs.PluginMenu` give each entry's `owner` beside its `plugin` name, and `hs.SetPluginOption`
 takes either. The add-on manager installs no script with the name of a compiled plugin in the player's folders, nor
 the other way round (docs/addons.md).
 
 These windows share the pack's Lua state but not its authority. A plugin folder's code (its files' top level, its
-windows, and any function it took from `eq` or `ui`, whoever calls it later) runs as the plugin: with its
-capabilities for whatever it does through the client (a command it sends with `eq.ChatSubmit`, a script it starts,
+windows, and any function it took from `hs` or `ui`, whoever calls it later) runs as the plugin: with its
+capabilities for whatever it does through the client (a command it sends with `hs.ChatSubmit`, a script it starts,
 a web page), as `LuaUi::caller_tag` and a `plugin::CallerScope` say. A server's own plugins and scripts have every
 capability (above), so their windows can do what the pack's do; a player's add-on gets at most what its manifest
 declared (docs/addons.md). Whatever its capabilities, a plugin's code:
@@ -1082,11 +1131,11 @@ declared (docs/addons.md). Whatever its capabilities, a plugin's code:
 - has globals of its own: it reads the pack's globals (the shared state tables the pack's libraries keep, such as
   `modern_colors` or `GPSTATE`), but a global it sets is its own, and so is every global a pack library it runs with
   `dofile` sets;
-- sees `eq`, `ui` and the standard libraries read-only, so it cannot change what the pack's windows call;
-- reaches only its own owner's exported functions, options and menu entries: `eq.Plugin` gives nil for another
-  plugin (and an object for another that it finds elsewhere does nothing), `eq.PluginOptions` and `eq.PluginMenu`
-  list only its own (`eq.PluginMenuClick(i)` numbers its entries as that list does), and `eq.SetPluginOption` and
-  `eq.PluginMenuClick` leave another's alone, since those run the other plugin's code
+- sees `hs`, `ui` and the standard libraries read-only, so it cannot change what the pack's windows call;
+- reaches only its own owner's exported functions, options and menu entries: `hs.Plugin` gives nil for another
+  plugin (and an object for another that it finds elsewhere does nothing), `hs.PluginOptions` and `hs.PluginMenu`
+  list only its own (`hs.PluginMenuClick(i)` numbers its entries as that list does), and `hs.SetPluginOption` and
+  `hs.PluginMenuClick` leave another's alone, since those run the other plugin's code
   with the other's capabilities. The pack's own windows reach every plugin's;
 - keeps settings of its own: `ui.SetSetting(key, v)` writes `plugin.<owner>.<key>` in the pack's settings file (a
   window's place under `hud.` is the character's, as the pack's are), `ui.GetSetting(key)` reads that, else the
@@ -1106,25 +1155,25 @@ declared (docs/addons.md). Whatever its capabilities, a plugin's code:
   and `"step"`;
 - uses the player's clipboard (`ui.GetClipboardText`, `ui.SetClipboardText`) only when its owner has every
   capability, as for a script: it holds whatever the player copied, a password too;
-- gets nil from the pre-game screens (`eq.LoginScreen` and the others hold the typed or saved password) and cannot
-  act on them, may not run, stop or pause scripts or change the autorun list (`eq.ScriptRun` and the others), and
+- gets nil from the pre-game screens (`hs.LoginScreen` and the others hold the typed or saved password) and cannot
+  act on them, may not run, stop or pause scripts or change the autorun list (`hs.ScriptRun` and the others), and
   opens web pages as its owner (`plugin:<name>`, or `script:<name>`: a Lua plugin's windows share the script's
   `mq.web` tabs) with its own permissions.
 
-What plugin windows may do: reading the game and drawing need no capability beyond `ui`; an `eq` function that acts
+What plugin windows may do: reading the game and drawing need no capability beyond `ui`; an `hs` function that acts
 needs the plugin's capability for it, from the plugin's own code or from a pack function it calls (the list is
-`app/lua_eq_caps.cpp`, and a function missing from it is taken to act). Refused, it does nothing and returns nil, with
+`app/lua_ui_caps.cpp`, and a function missing from it is taken to act). Refused, it does nothing and returns nil, with
 a line in the log once.
 
-| Needs | `eq` functions |
+| Needs | `hs` functions |
 |---|---|
-| never | the player's one-shot keys and requests, which the pack's windows take once: the chat input's (`eq.ChatTakeFocus`, with a pending Link All; `eq.ChatPage`, `eq.ChatHistory`) and the Lua social editor's (`eq.LuaSocialEditRequest`); nil to a plugin's code. `eq.ReplaceWindow` and `eq.WindowShown` do not put away the client's consent prompt nor its dialogs that act when answered (a confirmation, among them a destroy's; a trade, give, quantity, bazaar purchase, group invitation, respawn, large dialog or task offer) for a plugin |
-| nothing | everything that reads or draws (`eq.Item`, `eq.AllItems`, `eq.ItemStats`, `eq.ItemKept`, `eq.ItemJob`, `eq.ChildState`, `eq.ListRow`, `eq.SpellBook`, `eq.DrawMap`, ...), a window's place and size (`eq.ReplaceWindow`, `eq.WindowPlaced`, `eq.SizeWindow`), the map's zoom and pan, opening a menu (`eq.WindowContextMenu`, `eq.ChatMenu`, `eq.HotBarMenu`; choosing a row is below), the close-top-window key's press (`eq.TakeCloseTopWindow`) |
-| `commands` | `eq.ShowWindow`, `eq.SetOption`, `eq.SetUiIni`, `eq.ShowSpell`, the chat windows' setup (`eq.ChatNewWindow`, `eq.ChatSetFilter`, ...), the spell sets' and the autoskill list's editing, the map's find path, the Find window (`eq.FindOpen`) and its guide path (`eq.FindNpcPath`), the social editors, `eq.gamepad.set_*` and `eq.gamepad.request_focus` (menu mode, as `set_mode`) |
-| `target` | `eq.FindNpcTarget` (the Find window's row) |
-| `move` | `eq.FindNpcWalk` (the Find window's Walk there) and `eq.ZoneExitWalk` (the zone finder's), both `/nav` walks. (`/nav` itself needs `move`, and the doors a walk opens on its way come with it; `/nav door ... click`, which clicks the door on arrival, needs `actions` too) |
-| `actions` | a stock window's controls (`eq.ClickChild`, `eq.ClickChildAt`, `eq.WindowButton`, `eq.StmlLink`, `eq.SetWindowText`, `eq.ListClick`, `eq.ListHeaderClick`, `eq.ComboSelect`, `eq.SetSlider`, `eq.SetTabPage`), the menus' rows (`eq.CascadeClick`, `eq.GameMenuClick`), items and the cursor (`eq.ClickSlot`, `eq.BagSlotClick`, `eq.BankSlotClick`, `eq.PlaceClick`, `eq.PickUp`, `eq.SortItems`, `eq.SellJunk`, `eq.BulkItems` (sell, tribute, destroy or withdraw chosen items), `eq.StopItemJob`, `eq.SetItemKept` / `eq.SetItemsKept` (a Keep mark taken off lets the item be destroyed), the parcels, `eq.gamepad.drop_cursor`), hot buttons and gems (`eq.ClickHotButton`, `eq.PressButtonFrom`, `eq.ClearCursorButton`, `eq.SpellGemClick`), spells and abilities (`eq.SpellBookClick`, `eq.SpellBookMemorize`, `eq.SpellBookSwap`, `eq.MemorizeSpellSet`, `eq.UseSkill`, `eq.AbilityBookUse`, `eq.AbilityBookAutoskillEnable`; `eq.AbilityBookAutoskill` and `eq.AbilityBookAutoskillRule`, which choose what the autoskill list uses later, need `commands` too), socials (`eq.PressLuaSocial`, `eq.PressSocial`, `eq.StopSocial`, `eq.SocialToCursor`; `eq.SetLuaSocial` and `eq.LuaSocialDryRun`, which runs the code it is given with the server's Lua social capabilities, need `commands` too) |
-| checked by the function | the plugins' (above), the scripts' (refused; `eq.Scripts` lists only a script of the plugin's own name, with no folders), the pre-game screens' (nil), the web's (`web`); `eq.ChatSubmit`'s line goes through the command filter, which holds it to the plugin's capabilities as any command it sends (plain text needs `chat`, `/cast` needs `actions`) |
+| never | the player's one-shot keys and requests, which the pack's windows take once: the chat input's (`hs.ChatTakeFocus`, with a pending Link All; `hs.ChatPage`, `hs.ChatHistory`) and the Lua social editor's (`hs.LuaSocialEditRequest`); nil to a plugin's code. `hs.ReplaceWindow` and `hs.WindowShown` do not put away the client's consent prompt nor its dialogs that act when answered (a confirmation, among them a destroy's; a trade, give, quantity, bazaar purchase, group invitation, respawn, large dialog or task offer) for a plugin |
+| nothing | everything that reads or draws (`hs.Item`, `hs.AllItems`, `hs.ItemStats`, `hs.ItemKept`, `hs.ItemJob`, `hs.ChildState`, `hs.ListRow`, `hs.SpellBook`, `hs.DrawMap`, ...), a window's place and size (`hs.ReplaceWindow`, `hs.WindowPlaced`, `hs.SizeWindow`), the map's zoom and pan, opening a menu (`hs.WindowContextMenu`, `hs.ChatMenu`, `hs.HotBarMenu`; choosing a row is below), the close-top-window key's press (`hs.TakeCloseTopWindow`) |
+| `commands` | `hs.ShowWindow`, `hs.SetOption`, `hs.SetUiIni`, `hs.ShowSpell`, the chat windows' setup (`hs.ChatNewWindow`, `hs.ChatSetFilter`, ...), the spell sets' and the autoskill list's editing, the map's find path, the Find window (`hs.FindOpen`) and its guide path (`hs.FindNpcPath`), the social editors, `hs.gamepad.set_*` and `hs.gamepad.request_focus` (menu mode, as `set_mode`) |
+| `target` | `hs.FindNpcTarget` (the Find window's row) |
+| `move` | `hs.FindNpcWalk` (the Find window's Walk there) and `hs.ZoneExitWalk` (the zone finder's), both `/nav` walks. (`/nav` itself needs `move`, and the doors a walk opens on its way come with it; `/nav door ... click`, which clicks the door on arrival, needs `actions` too) |
+| `actions` | a stock window's controls (`hs.ClickChild`, `hs.ClickChildAt`, `hs.WindowButton`, `hs.StmlLink`, `hs.SetWindowText`, `hs.ListClick`, `hs.ListHeaderClick`, `hs.ComboSelect`, `hs.SetSlider`, `hs.SetTabPage`), the menus' rows (`hs.CascadeClick`, `hs.GameMenuClick`), items and the cursor (`hs.ClickSlot`, `hs.BagSlotClick`, `hs.BankSlotClick`, `hs.PlaceClick`, `hs.PickUp`, `hs.SortItems`, `hs.SellJunk`, `hs.BulkItems` (sell, tribute, destroy or withdraw chosen items), `hs.StopItemJob`, `hs.SetItemKept` / `hs.SetItemsKept` (a Keep mark taken off lets the item be destroyed), the parcels, `hs.gamepad.drop_cursor`), hot buttons and gems (`hs.ClickHotButton`, `hs.PressButtonFrom`, `hs.ClearCursorButton`, `hs.SpellGemClick`), spells and abilities (`hs.SpellBookClick`, `hs.SpellBookMemorize`, `hs.SpellBookSwap`, `hs.MemorizeSpellSet`, `hs.UseSkill`, `hs.AbilityBookUse`, `hs.AbilityBookAutoskillEnable`; `hs.AbilityBookAutoskill` and `hs.AbilityBookAutoskillRule`, which choose what the autoskill list uses later, need `commands` too), socials (`hs.PressLuaSocial`, `hs.PressSocial`, `hs.StopSocial`, `hs.SocialToCursor`; `hs.SetLuaSocial` and `hs.LuaSocialDryRun`, which runs the code it is given with the server's Lua social capabilities, need `commands` too) |
+| checked by the function | the plugins' (above), the scripts' (refused; `hs.Scripts` lists only a script of the plugin's own name, with no folders), the pre-game screens' (nil), the web's (`web`); `hs.ChatSubmit`'s line goes through the command filter, which holds it to the plugin's capabilities as any command it sends (plain text needs `chat`, `/cast` needs `actions`) |
 
 What stays shared: a plugin can still write into the tables the pack keeps in its globals (that is how its windows
 take part in the pack's focus and palette), so a plugin can upset how the pack's windows look or behave. It sees
@@ -1136,7 +1185,7 @@ view (`pairs`, `ipairs`, `#` and `table.*` work). The pack's tables reach the pl
 a pack function it calls (one of the pack's globals, one in a shared table, one the pack put in `ui`) returns views,
 and raises them; the tables the pack passes the plugin's functions as arguments are views (its own tables handed back
 are its own); and `getmetatable` gives a metatable the plugin did not set itself (a pack table's, a userdata's) as a
-view. It cannot get the pack's own `eq` or `ui` functions to do something under the player's authority. What is not
+view. It cannot get the pack's own `hs` or `ui` functions to do something under the player's authority. What is not
 covered: a function or table the plugin hands a pack function as an argument, or returns to the pack from a
 function the pack calls, which the pack may keep as it is (docs/todo.md). A player who copies the same files into a UI
 pack makes them the pack's own, with the player's authority.
@@ -1239,7 +1288,7 @@ is sent. While 32 MB still wait for the helper to read them, `open`, `navigate`,
 the same way; try again a frame or so later. An empty queue takes the largest message.
 
 The page and its owner talk through `window.hailstone`: the page's `hailstone.post(text)` is queued for the owner
-(`mq.web.messages(tab)`, `eq.WebMessages(tab)`, `web_message`; a message is at most 1 MB, and at most 256 and 8 MB
+(`mq.web.messages(tab)`, `hs.WebMessages(tab)`, `web_message`; a message is at most 1 MB, and at most 256 and 8 MB
 wait, the oldest going first; `web_message` with a buffer takes the message off the queue even when it is cut, and
 with `out` NULL gives only its length and leaves it queued, so a plugin can make room for a long one first), and the
 owner's `post` calls the page's `hailstone.onmessage(text)` when it set one. A tab is closed (Refused, with why)
@@ -1248,17 +1297,17 @@ message does is up to its owner, within the owner's own permissions.
 
 | | Lua scripts and Lua plugins | A plugin's windows (UI pack) | Compiled plugins (ABI 3) |
 |---|---|---|---|
-| open | `mq.web.open(url [, w, h])` | `eq.WebOpen(url [, w, h])` | `web_open(host, url, w, h)` |
-| go to an address | `mq.web.navigate(tab, url)` | `eq.WebNavigate` | `web_navigate` |
-| back, forward, reload, stop | `mq.web.nav(tab, what)` | `eq.WebNav` | `web_nav` |
-| run script in the page | `mq.web.eval(tab, js)` | `eq.WebEval` | `web_eval` |
-| to the page / from the page | `mq.web.post`, `mq.web.messages` | `eq.WebPost`, `eq.WebMessages` | `web_post`, `web_message` |
-| type at the page's cursor | `mq.web.text` | `eq.WebText` | `web_text` |
-| state, tabs | `mq.web.state`, `mq.web.tabs` | `eq.WebState`, `eq.WebTabs` | `web_state` |
-| draw it (mouse and keyboard) | `mq.web.view(tab, w, h)` in `mq.imgui` | `eq.WebView(tab, w, h)` | `web_view` in `OnUpdateImGui` (needs `ui` too) |
-| close | `mq.web.close` | `eq.WebClose` | `web_close` |
+| open | `mq.web.open(url [, w, h])` | `hs.WebOpen(url [, w, h])` | `web_open(host, url, w, h)` |
+| go to an address | `mq.web.navigate(tab, url)` | `hs.WebNavigate` | `web_navigate` |
+| back, forward, reload, stop | `mq.web.nav(tab, what)` | `hs.WebNav` | `web_nav` |
+| run script in the page | `mq.web.eval(tab, js)` | `hs.WebEval` | `web_eval` |
+| to the page / from the page | `mq.web.post`, `mq.web.messages` | `hs.WebPost`, `hs.WebMessages` | `web_post`, `web_message` |
+| type at the page's cursor | `mq.web.text` | `hs.WebText` | `web_text` |
+| state, tabs | `mq.web.state`, `mq.web.tabs` | `hs.WebState`, `hs.WebTabs` | `web_state` |
+| draw it (mouse and keyboard) | `mq.web.view(tab, w, h)` in `mq.imgui` | `hs.WebView(tab, w, h)` | `web_view` in `OnUpdateImGui` (needs `ui` too) |
+| close | `mq.web.close` | `hs.WebClose` | `web_close` |
 
-A refusal in Lua (`mq.web` without `web`) is an error, as for `mq.imgui`; `eq.Web*` in a plugin's window give nil
+A refusal in Lua (`mq.web` without `web`) is an error, as for `mq.imgui`; `hs.Web*` in a plugin's window give nil
 or false; the host table's functions return 0 and say why in the chat window once. A plugin's window acts with its
 plugin's permissions (a compiled plugin's while it is loaded, a Lua plugin's while its script runs; never one for
 the other); the player's own windows act as the player. The example plugin's `/webexample` (plugins/example/MQ2Example.c) shows the compiled side.
@@ -1456,3 +1505,136 @@ Any EQEmu server can send its files with the Lua quest script in `server/` (no C
 `python3 server/install.py <server dir>`, then restart the zones. Put `hailstone.cfg`, `scripts/` and `plugins/` in
 `client_files/` beside `eqemu_config.json`, and check the folder with `hailstone_check`. `server/README.md` has the
 rest.
+
+## Server add-on services
+
+These fields follow the released ABI 3 prefix, including `get_target_buff_data_bulk`, `get_avail_aa_data_bulk`,
+`get_avail_disc_data_bulk`, `get_buff_name_data_bulk` and `get_raid_data_bulk`. Their order and offsets remain unchanged. Check
+`HAILSTONE_HOST_HAS` before calling a host function and the struct's
+returned size before reading an appended field. Plugins compiled against earlier tables retain their existing
+layout. New functions do not imply that an older host supplies the service.
+
+- `follow_profile` and `mount_profile` (`extend`) return bounded data for host-owned movement. A profile never
+  starts a follow. `manual_follow(host, "start" | "stop" | "toggle")` requires `move` and `extend`, validates the
+  current selected living player, and pins both actor incarnations. `get_follow_status` requires `read` and reports
+  the live target identity. Turning and pitch smoothing are time-scaled. Movement cancellation is optional;
+  death, zoning, target replacement and profile retirement stop enhanced follow. A mount's instant acceleration
+  changes its ramp only, preserving the computed speed limits. `sdk/hailstone_follow.h` lists all field bounds.
+- `map_visible(spawn, purpose)` (`ui` and `extend`) returns -1 to abstain, 0 to deny or 1 to allow. Purpose
+  `HAILSTONE_MAP_MARKER` gates extension map/minimap markers; `HAILSTONE_MAP_FIND` gates Find results and their
+  target/path/walk actions, including the modern map and minimap's service NPC overlays. A denial takes precedence
+  over another extension's marker. An active guide rechecks eligibility before observing its destination's current
+  position and retires its trail on denial. With no policy, stock behavior remains. This controls supported UI presentation,
+  not the availability of spawn data to scripts or native code. The player and ordinary group map remain available.
+- `map_policy(out)` (`ui` and `extend`) optionally returns `HailstoneMapPolicy`: `size`, `flags`, an optional
+  NUL-terminated plain display `name[64]`, and optional content `revision`. Advance that revision when eligibility
+  or provider data changes without changing the flags/name. Return zero to abstain. `CUSTOM_SPAWNS` makes the first active claiming
+  provider the exclusive extension-marker source, even when it returns no mark; every provider's `map_visible`
+  denial still wins. `HIDE_STOCK_NPCS` removes the packs' Find/service NPC overlays and competing stock controls;
+  `DISABLE_NPC_FIND` blocks discovery requests, result rows, targets, guides, server paths and Find-owned walks.
+  Restrictive flags combine across active providers. Removing or deactivating them restores stock defaults without
+  changing saved UI preferences. These flags do not affect PC group/raid Find, coordinates, ordinary navigation,
+  static map labels, user pins or raw spawn getters. Guides and Find walks pin connection/player/NPC identity and
+  recheck eligibility before observing destinations or moving. Invalid hook sizes, unknown flags, unterminated names
+  and control characters abstain. `get_map_policy(host,out)` requires `read`, the main thread and an initialized
+  output size; it copies only the caller's prefix. Querying it recursively from the same plugin's policy hook fails
+  without writing output. Both declarations are optional ABI3 tails: use `HAILSTONE_HOST_HAS` and hook-table sizes.
+  The original 72-byte prefix remains accepted, including four-byte-aligned old reader records. The 80-byte
+  prefix adds `revision`; the 88-byte record adds `context`. Missing optional fields default to zero. A reader
+  must zero-initialize its record before setting `size`. The host preserves that requested size; success
+  or a returned size of 88 alone does not establish tail support on an older host. A nonzero `context` identifies
+  support for context-bound observations.
+  A provider supplies its own content revision and cannot choose `context`; a reader receives the host's effective
+  revision and connection/zone/player context. The effective revision includes every active provider's identity and
+  lifetime, including independent visibility/Tracking restrictors, activation and permission transitions.
+  A same-name replacement or an off/on interval invalidates old policy-derived interactions even if no frame
+  observed the intermediate state. `hs.UI.map.Policy()` exposes these tokens as opaque decimal strings; `name`
+  remains presentation only. Tracking uses a separate internal provider-lifecycle stamp: provider replacement,
+  activation and permission transitions retire its source-owned requests, while map-only flags, names and content
+  revisions do not. Saved preferences and raw spawn access are unaffected.
+  Lua providers may use `hailstone.hooks{map_policy=fn,map_visible=fn}` or the registration shorthands
+  `hailstone.map_policy(fn)` and `hailstone.map_visible(fn)` (nil removes that hook). Both execute only with
+  live `ui` and `extend`. Policy callbacks return a plain table with optional booleans `custom_spawns=false`,
+  `stock_npcs=true`, `npc_find=true`, optional printable `name` of at most 63 bytes, and a nonnegative integer
+  `revision`. Nil or malformed answers abstain. Visibility callbacks receive the current spawn and purpose
+  `"map"` or `"find"`, and return false to deny, true to allow, or nil to abstain; denials combine across providers.
+  Callbacks keep the script's ordinary protected lifetime and execution budget. Neither helper grants authority
+  over Tracking's own skill policy, nameplates or other discovery surfaces.
+- `merchant_right_click(context)` (`packets` and `extend`) may consume a carried item's right click while an NPC
+  merchant is open. The host checks range and the carried slot, and flags an occupied cursor, stock sell refusal or Keep protection,
+  pending operations and modifiers. Containers are excluded. The copied context includes the merchant, item,
+  full stack quantity, top-level inventory slot and lossless `HailstoneItemSlot`; it grants no inventory ownership.
+  An add-on supplies its private packet and consumes the click when its option is enabled; any context flag requires consuming without sending. Returning zero keeps
+  the ordinary item path. The client ships no private sale opcode or server-specific slot translation.
+- `get_raid_roster` / `get_raid_member` (`read`) copy the received roster with a process-unique revision. Off-zone
+  members have zero actor identity. `select_raid_member` (`read` and `target`) requires that exact revision and
+  current actor incarnation, including a current member's pet. `raid_action` (`read` and `actions`) supports
+  `HAILSTONE_RAID_MOVE`, group 0 ungrouped or 1..12; current raid leadership, locking, membership and capacity are
+  checked again. Direct subgroup leader promotion is not implemented by this service. These are requests: the
+  server remains authoritative. The host never invents remote HP, mana or endurance.
+- `HailstoneSpawn.incarnation` identifies a full actor record. Resource fields count only with the corresponding
+  `HAILSTONE_SPAWN_*_KNOWN` bit, so an absent percentage is not zero or full. Resource observations are retired on
+  actor replacement/removal. `display_name` is the ordinary cleaned name; social flags and guild text are received
+  observations. `HailstonePlayer.zone_instance` distinguishes the current instance. `HAILSTONE_PLAYER_PROMPT_SAFE`
+  is a local quiet standing/resting observation without motion, combat, casting, stun or known detrimental buffs;
+  it is not permission for a game action.
+- `decode_item_packet` (`read`) decodes a bounded, at most 256 KiB, serialized received item locally.
+  A failed decode leaves both its slot and item outputs unchanged, including an invalid item output size.
+  `inspect_item_packet` (`read` and `ui`) shows that copied item without inventory mutation or a link request.
+  `HailstoneItem.serial`, `instance_id`, `augment_ids` and `configuration_complete` distinguish received instances
+  and installed configurations. Bag contents are never reported as augment IDs.
+- `item_flags`, `item_description_append`, `item_presentation_revision` and `loot_confirmation` let an active
+  extension supply plain text metadata and an additional loot question. They do not suppress stock no-drop
+  confirmation. `zone_display_name(zone_id, instance_id)` changes a display label only, never protocol identity.
+- `get_memorized_spell` (`read`) returns a received usable gem's spell ID, zero for empty or unavailable.
+  `monotonic_ms` (`read`) uses the same epoch as a world frame's `now_ms`, independent of wall-clock time.
+- `measure_binary(kind, out)` (`read`, main thread) measures either the platform-resolved running executable file
+  (`HAILSTONE_BINARY_EXECUTABLE`) or the calling plugin's actual admitted private library copy
+  (`HAILSTONE_BINARY_CALLING_PLUGIN`). It returns byte count, whole-file SHA-256 and FNV-1a64 with bit 63 cleared.
+  It accepts no arbitrary file path and exposes no hardware identifiers. Updating the installed plugin file does
+  not change the loaded copy's identity; a private-copy SHA-256 mismatch, observed size/mtime change, read error
+  or unknown kind fails without changing the output. Reads stream in bounded storage, up to 4 GiB. This describes
+  measured file bytes and does not attest process memory. A server integration owns its challenge, report format,
+  allowlist and admission decisions; the generic host supplies no legacy-client or server-specific identity claim.
+
+### Transient world geometry
+
+`sdk/hailstone_world_geometry.h` describes `world_frame`, `world_frame_result`, `world_capabilities`,
+`world_floor_below`, `world_anchor` and `world_submit`. They require `ui` and `extend`. The application supplies
+acquired scene frames, terrain queries and drawn actor anchors; an add-on converts its private protocol to these
+generic coordinates. Query results distinguish unavailable/deferred from a completed query with no surface.
+Frame and epoch tokens expire, query/vertex/batch budgets are bounded, and a complete submission is copied before
+admission. Owners come from the host and cannot be supplied by an add-on. Every batch must be resubmitted each
+frame. Unloading, deactivation and permission loss retire owned geometry.
+
+`world_floor_below` returns the highest upward drawn opaque or masked surface at or below `seed_z`,
+which is the caller's bounded ceiling for choosing a floor layer. It includes terrain, static and passable
+props, current animated scenery, doors and placed objects. Invisible collision, undersides, transparent
+surfaces, creatures, dropped items, ghosts and missiles are excluded. Masked triangles use their geometric
+footprint; this CPU query does not sample texture alpha. These visual effect surfaces do not change movement
+collision.
+
+Hosts advertising `HAILSTONE_WORLD_SURFACE_PATCH` also provide `world_surface_patch`. Supply three XYZ floor
+vertices defining the proposed patch, a vertical tolerance, and a nonnegative `maximum_rise`. Its local ceiling
+is the interpolated candidate plane plus that rise. `HAILSTONE_WORLD_PATCH_PLANAR` certifies the entire triangle's
+drawn-surface coverage within tolerance and absence of higher surfaces below that ceiling, including current
+props and animation. This is a geometric coverage proof, rather than agreement among point samples. A
+`MISMATCH` or `MISSING` result supplies an interior XY refinement witness; Z is meaningful only with
+`HAILSTONE_WORLD_PATCH_HEIGHT_KNOWN`. `HAILSTONE_WORLD_PATCH_SOURCE_FACE` additionally supplies the actual selected
+drawn source triangle at that witness, allowing exact boundary splits. Its vertex order follows the native upward
+`CollisionTriangle` convention. Derived patches must each be certified again. `MISSING` denotes a hole in the candidate plane's coverage and can have a
+lower surface below it. Incomplete geometry, invalid/stale tokens or exhausted work return `DEFERRED` without
+changing the output. Candidate inspection and clipping spend the same finite frame budget as point queries.
+`HAILSTONE_WORLD_PATCH_REGION` optionally provides up to 32 double-precision XY vertices of the selected convex
+refinement region: a higher-face overlap or uncovered piece. It is a boundary hint inside the input triangle,
+can overlap other surfaces, and does not certify a resulting mesh. Intersect it with the supplied source face
+when refining, and certify every resulting triangle before submitting it.
+A float witness may round onto or just outside the producer boundary only when both a valid source face and
+positive-area convex region are present. The region's actual double-precision centroid must lie strictly inside
+the producer and source face, and the float witness XY must exactly equal `float(centroid)`. The height and source
+face then refer to that double centroid. A point-only witness still requires strict interior coordinates. This
+exception supplies refinement information and never turns an incomplete patch into a planar certificate.
+
+Admission is not rendering. A recorded receipt means that the complete batch was recorded; a presented receipt
+means its frame was accepted for presentation. Neither proves visible monitor pixels, visibility or attention,
+and no receipt authorizes gameplay actions. A frame-unavailable notification clears earlier availability.

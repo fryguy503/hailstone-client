@@ -1,3 +1,4 @@
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local X = dofile("lib/item_exp_transfer.lua")
 local WINDOW = "ItemExpTransferWnd"
@@ -9,8 +10,8 @@ local OPTIONS = {
 }
 
 ui.window("Evolving Item Transfer", function()
-  if not eq.InGame() then X.reset(); return end
-  local state = eq.ItemExpTransfer()
+  if not API.session.InGame() then X.reset(); return end
+  local state = API.evolving.State()
   X.sync(state)
   if not state.shown then return end
   hud.Dialog(WINDOW, "Evolving Item Experience Transfer", OPTIONS, function(_, _, _, _, s)

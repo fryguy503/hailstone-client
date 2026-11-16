@@ -4,6 +4,7 @@
 -- in the fields, X adds it to an open message's To field (the list's own right click). The fields on the right
 -- are the window's edit boxes, typed with the on-screen keyboard: Name, Addresses (names separated by commas),
 -- Private and Note; then Save (the window's Add / Modify), Delete, New and, in the address book, Ignore List.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -24,7 +25,7 @@ local function book(WIN, title, empty)
     T.frame()
     if not wasShown then listState.focusNext = 1 end
     wasShown = true
-    local compose = eq.WindowShown("MailCompositionWindow") -- (an open message: X adds to its To)
+    local compose = API.windows.Shown("MailCompositionWindow") -- (an open message: X adds to its To)
     local hints = { { "a", "Show" }, { "b", "Close" } }
     if compose then table.insert(hints, 2, { "x", "Add to To" }) end
     if W.begin(title, { w = 1600, h = 940, title = title, hints = CH.hints(st, hints) }) then
@@ -34,7 +35,7 @@ local function book(WIN, title, empty)
         local listW = cw * 0.38
         ui.SetCursorPos(x0 - wx, y0 - wy)
         local row = CH.list(WIN, "NameList", listState, listW, y1 - y0, { rowH = 58, empty = empty })
-        if row and compose and W.pressed("x") then eq.ListClick(WIN, "NameList", row, "right") end
+        if row and compose and W.pressed("x") then API.windows.ListClick(WIN, "NameList", row, "right") end
         W.toSide(side, row)
         -- the selected entry's fields and the buttons
         local rx0 = x0 + listW + T.px(24)
@@ -78,7 +79,7 @@ local function book(WIN, title, empty)
         end
       end
     end
-    if CH.back(st, W.finish()) then eq.ShowWindow(WIN, false) end
+    if CH.back(st, W.finish()) then API.windows.Show(WIN, false) end
   end)
 end
 

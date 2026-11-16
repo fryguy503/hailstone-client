@@ -391,7 +391,9 @@ Each camera (first person, overhead, chase, user 1, user 2, tether) also has a k
 
 Housing item placement has its keys on Shift+Z, Shift+Q, Shift+W, Shift+E, Shift+R, Shift+D, Shift+F and Shift+G.
 
-Bound by default but doing nothing in Hailstone yet: F10 (full screen), F11 (network statistics), Alt+W (selector
+F10 toggles all in-game UI presentations, including addon windows, captions and selection/navigation overlays. Press it again to restore the interface; its window visibility and layout settings are retained. Remap **Toggle UI Display** in Options > Keys > Windows (either binding). Loading and pregame screens remain visible.
+
+Bound by default but doing nothing in Hailstone yet: F11 (network statistics), Alt+W (selector
 window), Alt+K (music player), Alt+V (adventure request window), Shift+Alt+R (release the mouse cursor), and the voice
 keys Num + and Ctrl+Tab (Hailstone has no voice chat).
 

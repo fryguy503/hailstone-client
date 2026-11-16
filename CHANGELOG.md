@@ -10,12 +10,28 @@
 - Frame cap: `display.max_fps` (and `--max-fps`) is now held to the frame on every system. On Windows a cap of 144 ran at about 128, because each frame's wait woke up to a millisecond late and the next frame was timed from that late start
 - Frame cap: Options > Display > Frame Rate Limit has Auto (`display.max_fps = -1`, `--max-fps auto`), a little under the display's refresh rate (138 at 144 Hz, 116 at 120 Hz). With FreeSync or G-Sync it keeps every frame inside the display's range, so play is as smooth as with vsync without vsync's delay
 - Graphics: the frame now shares its work with the processor's other cores: characters are posed, the other characters' movement is worked out, particles are built, the characters' and held items' effects are moved and the 3D scene's and the shadows' drawing commands are recorded on worker threads, and a character's skeleton is posed once a frame however many effects, spells and name plates ask for it. Zoning is quicker too: a zone's collision, ladders and lighting are built side by side while its graphics load. `display.worker_threads` sets how many (0 for none), and `display.parallel_record` 0 keeps the scene's and shadows' recording on the main thread
+- Gamepad windows fit the available viewport at narrow and short resolutions, keeping their title bars and close controls onscreen.
+- Lua UI: all public window flags are exposed, including horizontal and forced scrollbar flags, so interfaces can use their native values in windows and child windows.
+- Addon actions use compact wrapping rows with readable labels and separate review controls; Gamepad Raid retains full-width controller rows with clear grouping.
+
 - Name plates: mercenaries' names are amber, the original's colour; they were drawn light blue from the original's colour bytes read in the wrong order
 - Name plates: GM names show green as the original client does, your own GM character's too, and stay green when targeted; an anonymous or roleplaying GM's name, and a GM's corpse, keep the ordinary colour
 - Chat: spell hit modes now also shorten complete non-melee damage and healing reports sent as generic or plain-text server messages, including reports with a spell name in parentheses and stock EQEmu's "You have been healed for N points of damage.". A line spoken by someone ("Somebody says, Bob hit Fred for ...") stays whole. Full sentences remain in logs and incoming-chat hooks
 - Performance: keeping moving NPCs on the ground no longer searches the zone's collision a second time when a physics step has just landed the spawn on its floor
 - Frame rate: the login, server select, character select/creation and loading screens (including the last stretch of a zone-in) no longer run as fast as they can when `display.max_fps` is unlimited; they are capped at 240 fps; any other `display.max_fps` value is still followed exactly
 - Modern lighting: the distant land past a zone's edge has trees: the zone's own trees stand in groves and here and there across the far hills, and over the zones you have visited they stand where those zones' own trees do. They go with Horizon Hills
+- F10 hides and restores in-game UI presentations without changing window settings. The existing Toggle UI Display action is remappable in Options > Keys > Windows.
+- UI composition accepts Lua-declared component slots with before/after content and reversible replacement or hiding. Both maps expose addon controls; map marker policy also applies to group markers without changing player Find.
+
+- Addon compatibility preserves the released native SDK prefix and adds layout negotiation for new builds, with an
+  explicit exact-binary preview adapter. Legacy addon UI calls share the guarded host API while built-in interfaces
+  keep the modular namespace. Nameplate callbacks and extension removal now retain their caller's permissions and
+  lifetime across reloads and reentrant calls. Portable UI bundles reject conflicting nested path spellings.
+
+- Navigation retires `/stick` across actor replacement, player-life changes and zoning, including a stationary or
+  paused stick. Rejected unsent server-path requests preserve earlier valid replies, and malformed Tracking lists
+  no longer consume a pending refresh.
+
 - Modern lighting: the land beyond a zone's neighbours now takes the shape of the zones you have been to on that server, instead of made-up hills and mountains. From Qeynos Hills, South Qeynos and the open sea past its harbour now show behind North Qeynos. It fills in as you travel; a server admin with a GM character can fill it ahead of time with playprobe's `--atlas-crawl`. Those zones take on the colours of their own ground (South Qeynos's cobbles and brick rather than more grass). The sea now goes on to the horizon past a zone's shore, its own or a neighbour's, instead of rising into made-up mountains, and the distant sea is drawn as water: before, it showed as a flat green plain
 - For plugin authors: a new host function, `get_buff_name_data_bulk`, reads the player's buffs as `get_buff_data_bulk` does but with each caster's name in place of the caster's spawn id: a 29-byte `HS_Bulk_BuffNameFixedRecord` followed by the name for each slot (docs/plugins.md "Buff and spawn records"). `get_buff_data_bulk` is unchanged
 - For plugin authors: `get_buff_data_bulk`, `get_pet_buff_data_bulk` and `get_target_buff_data_bulk` give each buff's ticks left (the server's count less the 6 s ticks since it came), not the count as the server last sent it, and a permanent buff as the negative count the server sent (EQEmu: -1, -4 for an aura's, -1000 for one a script made permanent); `hailstone.buff(i).tics` in Lua is that negative count too, where it was a large unsigned number; `get_avail_aa_data_bulk` and `get_avail_disc_data_bulk` give an empty list (count 0, total 0) before the character's profile or with no game connection
@@ -28,7 +44,24 @@
 - A required add-on that is missing, changed or refused at the zone-in keeps the character out, with the add-on panel open on it. Once in the world, a required add-on that fails (a required plugin whose code hits an error counts) is a warning in chat, never a disconnect. The check uses the rules the zone-in brings, so a server that fixes its policy never locks players out
 - Scripts: on Linux, `/lua run` and a server's required scripts find a script whatever the case of its name, as on Windows and macOS (`/lua run autoloot` starts `scripts/AutoLoot`); before, a script add-on whose folder had capitals could not be started there
 - An upscaler a server blocks keeps the character out of that server until another is picked and the client restarted
+- Server map extensions can own spawn markers, suppress stock NPC overlays and disable NPC Find in both UI packs.
+  Live policy and actor identity changes retire only Find-owned guides and walks; ordinary navigation remains available.
+- Shared UI services reject stale actor selections and delayed navigation replies across provider reloads, stops and
+  zone changes. Tracking applies its own admission checks to opening, refreshing, selecting and receiving replies;
+  changing map presentation alone preserves valid tracking.
+
+- UI API: explicitly audited methods support owner-scoped before/after/around hooks, with live permissions,
+  source lifetime, copied observations and single-use synchronous continuations. Private methods stay closed.
+
+- UI extensions: addons can register named actions and protected before/after display callbacks in the Raid window's member-actions area. Modern and Gamepad expose the same current-member context; action metadata is callback-free, and execution retains source lifetime and live permission checks.
+- UI API: optional addons can replace world nameplates through an owner-scoped, depth-tested generic drawing canvas. Addons own their appearance and layout; the host validates current-frame claims, geometry budgets and real mouse selection. Invalid or retired callbacks restore ordinary captions.
+- Add-ons: Lua packages can opt into managed automatic startup and an Enabled control. Activation survives updates independently of auto-update settings, and disabling an addon retires its callbacks.
+- UI drawing: visible RGB swatches, hue-wheel pickers and RGB editors are available to interfaces and addon settings.
+
 - Modern lighting: volumetric clouds over the open skies, with real depth, drifting with the wind, lit by the sun (glowing at their edges, warm at sunrise and sunset, silver under the moon) and closing over into a dark overcast as a storm comes in, lit up by its lightning. They replace the painted cloud layer; Options > Graphics > Volumetric Clouds turns them off, and the Low graphics setting leaves them off
+- Server add-ons can supply enhanced follow and mount profiles, consistent NPC map/Find restrictions, optional direct merchant selling, copied raid rosters, local serialized-item previews, item metadata and transient world geometry. These services preserve stock behavior without an active extension; private server protocols remain in the add-on.
+- Native add-ons can measure the running executable and their own loaded library copy with SHA-256, FNV-1a63 and byte counts, without reading arbitrary paths or hardware identifiers. Server integrations own their report and admission protocols.
+
 - Luclin player models: combat swings, casting, socials (wave, cheer) and every other animation of more than 15 frames play at the original's speed; before, they ran at about half speed. The classic models are unchanged
 - Graphics: the upscaler is off by default on every computer, so the 3D world is drawn at full size. A player who never chose an upscaler, and was on AMD FSR 1, is now at Off; Options > Graphics > Upscaler turns FSR 1, Temporal or FSR 3.1 back on
 - AMD FSR 3.1: about 30 % faster on integrated graphics (on an Intel Iris Xe, 5.6 ms a frame down to 3.9 ms at 1280x720), by reprojecting the history with FSR's Lanczos table, as AMD's own runtime does on its graphics cards
@@ -42,6 +75,15 @@
 - Held MPL coverage textures and scrolling WaterFall/Lava materials retain their authored maps and coordinates; legacy epic-weapon shader aliases use the same packed illumination and reflection path as their native render class.
 - Held items: Lava2 materials draw their lava like Lava ones, as the zones do. A held item's effects no longer gather a new copy each time its model is built again during a long stay in one zone, and their textures load without making the game wait for a character being dressed
 - Zones: the zones' own particle clouds now step through their animated bitmaps; the lava of EQG zones shows its second layer; doors, ground objects and real estate placements play their particle effects (before, only missiles did)
+
+- UI authors: Modern and Gamepad now use the same versioned `hs.UI` API, with named modules, feature discovery and
+  one method/capability catalog. Existing flat calls stay compatible. A new interface can declare `base=modern`
+  or `base=gamepad` and override selected windows or helpers while inheriting the rest. `interfaces.LoadBase` lets
+  a helper decorate its inherited implementation without copying it or changing global registration hooks.
+  Shared presentation modules can use `interfaces.LoadData` under player-owned `ui-data/<id>/`, preserved across
+  core and interface add-on updates/removal.
+- Interface addons appear automatically in the interface selector. Options shows the selected and loaded
+  interface, source, inherited packs, loading counts and diagnostics; switching is applied safely between frames.
 
 ## 0.7.1-beta (2026-11-15)
 

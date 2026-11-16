@@ -29,10 +29,11 @@
 #include "plugin/hooks.h"
 #include "plugin/ability_bulk.h"
 #include "plugin/policy.h"
+#include "plugin/world_geometry.h"
 
 namespace hailstone::net { class GameConnection; }
 namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
-namespace hailstone::game { class ExtensionChain; }
+namespace hailstone::game { class ExtensionChain; class NameplateCanvasRegistry; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 namespace hailstone::nav { class NavControl; }
 
@@ -43,11 +44,13 @@ struct AutomationEnv {
     std::filesystem::path data_dir;    // the folder Hailstone writes to (platform::data_dir())
     std::string autoload = "*";       // plugins.autoload
     std::string script_autoload;      // scripts.autoload: the player's scripts started when the rules allow them
+    // The player's shared config only: plugin.sdk_layout.<exact SHA-256, either case>. Empty selects canonical.
+    std::function<std::string(std::string_view hash)> sdk_layout;
     std::function<net::GameConnection*()> connection;
     std::function<std::string()> server_name;
     std::function<std::string()> server_profile; // the saved server's id (servers/<id>/), "" for a test login
     std::function<std::string()> profile_name;   // the saved server's name as the player knows it ("" none)
-    std::function<bool(std::string_view window)> window_open;  // a stock window shows (eq API)
+    std::function<bool(std::string_view window)> window_open;  // a stock window shows (hs API)
     std::function<void(double degrees, bool fast)> face;       // MQ degrees, clockwise from north
     std::function<bool(std::string_view command, int mode)> keypress; // /keypress (0 tap, 1 hold, 2 release)
     std::function<nav::NavControl*()> nav; // /nav, /moveto and the Navigation TLO (app/navigator.h); null: none
@@ -73,6 +76,10 @@ struct AutomationEnv {
     std::function<std::optional<bool>(const std::array<float, 3>&, const std::array<float, 3>&)> line_of_sight;
 };
 
+// Fresh, unlayered read: server/character settings cannot choose the native SDK table layout. Missing config is
+// canonical; an existing unreadable/non-file config or malformed hash returns an invalid layout for fail-closed load.
+std::string configured_plugin_sdk_layout(const std::filesystem::path& shared_config, std::string_view hash);
+
 class Automation {
 public:
     explicit Automation(AutomationEnv env);
@@ -84,6 +91,7 @@ public:
     // The plugins' server extensions as one (game/server_ext_chain.h): a connection asks it
     // (net::ConnectionOptions::plugins).
     std::shared_ptr<game::ExtensionChain> extensions();
+    game::NameplateCanvasRegistry& nameplates();
     // What the plugins give the Lua UI: their windows' folders, functions, options and menu entries.
     plugin::UiBridge& plugin_ui();
     // The script host (the Lua socials run there too) and MQ's TLOs and types.
@@ -103,8 +111,9 @@ public:
     // False with an empty problem while required native add-ons await consent or scripts start; a nonempty
     // problem identifies refusal/failure. The login's package check separately handles missing installations.
     bool required_addons_ready(std::string* problem = nullptr) const;
+    void refresh_managed_addons();
     // The server's compiled plugins waiting for the player's word (plugin/consent.h, docs/plugins.md "The server's
-    // compiled plugins ask first"), with the server's name; nullopt none. The UI packs show it (eq.PluginConsent),
+    // compiled plugins ask first"), with the server's name; nullopt none. The UI packs show it (hs.PluginConsent),
     // else imgui() does.
     std::optional<plugin::ConsentPrompt> plugin_consent() const;
     // true: allowed (they load now), false: refused, both remembered for these bytes; nullopt: put away for now.
@@ -114,9 +123,14 @@ public:
     // Once a frame after the connection's update: the server's rules, OnPulse, the scripts.
     void frame();
     // Inside the ImGui frame: the scripts' and plugins' windows, the server plugins' question when no UI pack window
-    // stands in for it ("PluginConsent", eq.ReplaceWindow), and with `dev` the "Plugins & Lua" window.
+    // stands in for it ("PluginConsent", hs.ReplaceWindow), and with `dev` the "Plugins & Lua" window.
     void imgui(bool dev);
     // Before the connection goes: the plugins unload, the scripts stop.
+    void world_frame(HailstoneWorldFrame frame, plugin::WorldQueries queries);
+    const std::vector<plugin::OwnedWorldBatch>& world_batches() const;
+    void world_recorded(std::size_t batch, std::uint32_t vertices);
+    void world_finish(bool submitted, bool presented);
+    void world_unavailable();
     void shutdown();
 
     struct Impl;

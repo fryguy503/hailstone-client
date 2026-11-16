@@ -1,4 +1,4 @@
--- Character select: the account's characters in this UI's look (eq.CharacterSelect, app/lua_eq_pregame.cpp; the
+-- Character select: the account's characters in this UI's look (hs.CharacterSelect, app/lua_ui_pregame.cpp; the
 -- client's screen, as ui/dev_screens.cpp character_select_screen draws it, not CCharacterListWnd). With the 3D scene
 -- up the picked character's model stands in the middle of the screen, so the card sits at the left; without it the
 -- card is centred. Each character is a row (name, level and class, race, zone); a click picks it (the scene shows
@@ -7,6 +7,7 @@
 --
 -- The keyboard is the client's key binds' here (app/client_app_input.cpp screen_keys: Enter World, next and
 -- previous character, quit), so the card does not take Enter or the arrows itself: a second Enter World would go.
+local API = hs.UI
 local P = dofile("lib/pregame.lua")
 local T = P.T
 local C = T.color
@@ -21,7 +22,7 @@ local function card(view, s, bh)
     P.Muted("No characters on this account yet.")
     P.Faint("Create one to start playing on " .. title .. ".")
     ui.Dummy(0, 10 * s)
-    if P.Primary("Create Character", -1, bh * 1.2, not view.busy) then eq.CharacterSelectDo("create") end
+    if P.Primary("Create Character", -1, bh * 1.2, not view.busy) then API.pregame.CharacterSelectDo("create") end
   else
     local _, lh = ui.CalcTextSize("Ag")
     local rowH = lh * 2 + 12 * s
@@ -31,8 +32,8 @@ local function card(view, s, bh)
     for i, c in ipairs(view.characters) do
       ui.PushID(i)
       local clicked, double, x0, y0, x1 = P.Row("##char", view.selected == i, rowH, s)
-      if clicked and view.selected ~= i then eq.CharacterSelectDo("select", i) end
-      if double then eq.CharacterSelectDo("enter", i) end
+      if clicked and view.selected ~= i then API.pregame.CharacterSelectDo("select", i) end
+      if double then API.pregame.CharacterSelectDo("enter", i) end
       if ui.IsItemHovered() and c.className ~= "" then
         ui.SetTooltip(string.format("%s\nLevel %d %s %s", c.name, c.level, c.raceName, c.className))
       end
@@ -51,10 +52,10 @@ local function card(view, s, bh)
     ui.PopStyleVar()
     ui.Dummy(0, 2 * s)
     if P.Primary(picked and ("Enter World as " .. picked.name) or "Enter World", -1, bh * 1.2, picked ~= nil) then
-      eq.CharacterSelectDo("enter")
+      API.pregame.CharacterSelectDo("enter")
     end
     local half = (ui.GetContentRegionAvail() - 8 * s) / 2
-    if ui.Button("Create Character", half, 0) then eq.CharacterSelectDo("create") end
+    if ui.Button("Create Character", half, 0) then API.pregame.CharacterSelectDo("create") end
     ui.SameLine()
     if P.Danger("Delete", half, 0, picked ~= nil) then ui.OpenPopup("##deletecharacter") end
     -- Return Home: only when the server lets this character go home (asked first)
@@ -67,22 +68,22 @@ local function card(view, s, bh)
 
   ui.Separator()
   P.Status(view.status, view.busy, s)
-  if ui.Button("Back") then eq.CharacterSelectDo("back") end
+  if ui.Button("Back") then API.pregame.CharacterSelectDo("back") end
   P.Tip("Log out, back to the login screen")
 
   if picked and P.Confirm("##deletecharacter", string.format("Delete %s permanently?", picked.name),
       "The server removes the character; this cannot be undone.", "Delete", s) then
-    eq.CharacterSelectDo("delete")
+    API.pregame.CharacterSelectDo("delete")
   end
   if picked and picked.canGoHome and P.Confirm("##returnhome", picked.homeQuestion, nil, "Return Home", s) then
-    eq.CharacterSelectDo("home")
+    API.pregame.CharacterSelectDo("home")
   end
 end
 
-local held = nil -- the view drawn last frame: eq.CharacterSelect gives true while it still holds (its revision)
+local held = nil -- the view drawn last frame: hs.CharacterSelect gives true while it still holds (its revision)
 
 ui.window("Character Select", function()
-  local view = eq.CharacterSelect(held and held.revision)
+  local view = API.pregame.CharacterSelect(held and held.revision)
   if view == true then view = held else held = view end
   if not view then return end
   local s = P.Scale()

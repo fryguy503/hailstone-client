@@ -3,7 +3,7 @@
 // CChatWindowManager's routing tables (and CChatWindow's WndNotification): every line a chat window shows
 // goes by its colour (dsp_chat's) to one of 57 chat channels (GetChannelFromColor @0x6504c0), and the channel to one
 // window (ChannelMap, +0x8c; the main window unless the Filters menu moved it). The tables here are the original's
-// data; app/lua_eq_chat.cpp keeps the windows.
+// data; app/lua_ui_chat.cpp keeps the windows.
 // Hailstone (a deliberate difference, docs/mechanics.md "Extended chat routing"): channels 57..107 and the user
 // colours 355..408 extend the tables for a server that sends a later client's extended chat colours. Stock EQEmu
 // sends none of them and the client makes none itself, so they change nothing on a stock server.

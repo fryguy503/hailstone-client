@@ -2,6 +2,7 @@
 -- original's combo boxes: a pick asks the server for that board), your own standing as tiles, the top adventurers
 -- as a sortable table with a name search (your row in gold), Refresh / Done (lib/quests_board.lua). All of it the
 -- original's AdvLeaderboard_* children.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local B = dofile("lib/quests_board.lua")
 local WINDOW = "AdventureLeaderboardWnd"
@@ -13,7 +14,7 @@ local WINDOW_OPTS = {
   place = function(sw, sh, w, h) return sw / 2 - w / 2 + 120, sh / 2 - h / 2 - 20 end,
 }
 local function drawWindow(x, y, w, h, s)
-  local status = eq.WindowText(WINDOW, "AdvLeaderboard_StatusLabel") or ""
+  local status = API.windows.Text(WINDOW, "AdvLeaderboard_StatusLabel") or ""
   B.Draw({
     s = s, win = WINDOW, list = "AdvLeaderboard_LeaderList", nameCol = 2,
     combos = {
@@ -34,6 +35,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Adventure Leaderboard", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Adventure Leaderboard", WINDOW_OPTS, drawWindow)
 end)

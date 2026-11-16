@@ -7,6 +7,7 @@
 --   Mentoring    the protege (the window's drop-down), the share of experience to give (D-pad left / right on it,
 --                LB / RB ten; the window's slider) and Accept.
 -- Rows, buttons, the drop-down and the slider are the stock windows' children, so the game decides what each does.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -39,7 +40,7 @@ local function card(x0, y0, x1, y1, title, points, gauge, colour)
   local pts = CH.text(LW, points)
   T.textIn(x0 + p, y0 + p - T.px(4), x1 - p, y0 + p + T.px(40), (pts ~= "" and pts or "0") .. " pt", C.text, 1)
   T.unfont()
-  local frac, text = eq.ChildGauge(LW, gauge)
+  local frac, text = API.windows.ChildGauge(LW, gauge)
   T.font(17)
   T.bar(x0 + p, y1 - p - T.px(26), x1 - p, y1 - p, frac or 0, colour, "Toward the next point", text or "")
   T.unfont()
@@ -62,7 +63,7 @@ ui.window("Leadership", function()
     local wx, wy = ui.GetWindowPos()
     if W.pressed("lb") and tab ~= 1 then tab = 1 lists[1].focusNext = 1 end
     if W.pressed("rb") and tab ~= 2 then tab = 2 lists[2].focusNext = 1 end
-    if W.pressed("x") and CH.enabled(LW, "LEW_PurchaseButton") then eq.ClickChild(LW, "LEW_PurchaseButton", "left") end
+    if W.pressed("x") and CH.enabled(LW, "LEW_PurchaseButton") then API.windows.ClickChild(LW, "LEW_PurchaseButton", "left") end
     -- the two kinds
     local ch = T.px(130)
     local half = (cw - T.px(16)) / 2
@@ -107,7 +108,7 @@ ui.window("Leadership", function()
       { "LEW_DoneButton", "Done", nil },
     }
     local by = ly + math.min(T.px(170), (y1 - ly) * 0.28)
-    TB.draw(eq.WindowText(LW, "LEW_Description") or "", rx0, ly, x1, by - T.px(16), desc)
+    TB.draw(API.windows.Text(LW, "LEW_Description") or "", rx0, ly, x1, by - T.px(16), desc)
     ui.SetCursorPos(rx0 - wx, by - wy)
     -- Navigation scrolls the selected action into view, even on a smaller display.
     ui.BeginChild("##leadershipactions", rw, y1 - by, false)
@@ -118,12 +119,12 @@ ui.window("Leadership", function()
       ui.SetCursorScreenPos(ax, by)
       W.sideBefore(side, k)
       local on = CH.checked(LW, b[1])
-      local tip = eq.ChildTooltip(LW, b[1]) or ""
+      local tip = API.windows.ChildTooltip(LW, b[1]) or ""
       local opts = { sub = on and "(now)" or (tip ~= "" and tip or b[3]), align = 0, primary = b[4] or on, keep = true }
       if b[1]:find("LEW_HotkeyButton", 1, true) == 1 then
         opts.disabled = not CH.enabled(LW, b[1])
         if T.button("##" .. LW .. b[1], b[2], actionW, bh, opts, pad) then
-          AS.start(tip ~= "" and tip or b[2], function() eq.ClickChild(LW, b[1], "left") return true end, "Leadership")
+          AS.start(tip ~= "" and tip or b[2], function() API.windows.ClickChild(LW, b[1], "left") return true end, "Leadership")
         end
       else
         CH.button(LW, b[1], b[2], actionW, bh, opts)
@@ -133,7 +134,7 @@ ui.window("Leadership", function()
     end
     ui.EndChild()
   end
-  if W.finish() then eq.ShowWindow(LW, false) end
+  if W.finish() then API.windows.Show(LW, false) end
 end)
 
 -- ---------------------------------------------------------------- group mentoring
@@ -147,10 +148,10 @@ ui.window("Group Mentoring", function()
     return
   end
   T.frame()
-  local _, _, value, count = eq.ChildState(GM, "GM_Slider")
+  local _, _, value, count = API.windows.ChildState(GM, "GM_Slider")
   value, count = value or 0, count or 1
   local maxv = math.max(0, count - 1)
-  local function set(v) eq.SetSlider(GM, "GM_Slider", math.max(0, math.min(maxv, v))) end
+  local function set(v) API.windows.SetSlider(GM, "GM_Slider", math.max(0, math.min(maxv, v))) end
   if W.begin("Group Mentoring", { w = 900, h = 560, title = "Group Mentoring", subtitle = "Share your experience with a protege",
         hints = CH.hints(gst, { { "a", "Select" }, { "left", "Less" }, { "right", "More" }, { "b", "Close" } }) }) then
     local x0, y0, x1, y1, cw = W.area()
@@ -186,5 +187,5 @@ ui.window("Group Mentoring", function()
       CH.button(GM, "GM_AcceptButton", "Accept", cw - T.px(220), bh, { primary = true, keep = true })
     end
   end
-  if CH.back(gst, W.finish()) then eq.ShowWindow(GM, false) end
+  if CH.back(gst, W.finish()) then API.windows.Show(GM, false) end
 end)

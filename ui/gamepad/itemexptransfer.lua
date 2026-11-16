@@ -1,3 +1,4 @@
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -5,8 +6,8 @@ local X = dofile("lib/item_exp_transfer.lua")
 local WINDOW = "ItemExpTransferWnd"
 
 ui.window("Evolving Item Transfer", function()
-  if not eq.InGame() then X.reset(); return end
-  local state = eq.ItemExpTransfer()
+  if not API.session.InGame() then X.reset(); return end
+  local state = API.evolving.State()
   X.sync(state)
   if not state.shown or not W.shown(WINDOW) then X.reset(); return end
   if W.begin("Evolving Item Transfer", {
@@ -24,5 +25,5 @@ ui.window("Evolving Item Transfer", function()
     })
     ui.EndChild()
   end
-  if W.finish() and not X.back() then X.reset(); eq.ShowWindow(WINDOW, false) end
+  if W.finish() and not X.back() then X.reset(); API.windows.Show(WINDOW, false) end
 end)

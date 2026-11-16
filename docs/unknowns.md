@@ -24,6 +24,29 @@ What the client does not implement yet, or implements with an approximation it c
   them; a server can block the Texture Studio tool, not the packs a player already built. A required tool is met by
   its installation: the client does not start it and cannot tell whether it runs.
 
+## Server map ownership
+
+- Optional ownership and NPC Find suppression have synthetic host/presentation coverage; live tracking-class/GM
+  changes, zoning, retirement and real server replies still require acceptance in both UI packs. Find replies have
+  no request nonce: ambiguous overlapping NPC batches are discarded, and an unresolved expired batch quarantines
+  server-path replies until zoning. Local mesh navigation stays available (`docs/navigation.md`, Find).
+
+## Modular interfaces
+
+- Older unmarked preview SDK binaries cannot always be distinguished from released plugins with the same ABI
+  number. Released layouts remain the default. Rebuild preview addons, or explicitly select the documented
+  temporary layout for their exact binary hash; selecting an incompatible layout can call the wrong host function.
+  New SDK builds negotiate their layout before initialization (`docs/plugins.md`).
+
+- The generic world-nameplate canvas has synthetic parser, painter, ownership and input coverage. Actual GPU depth,
+  dense scenes, sustained zoning and physical mouse/controller acceptance remain unverified; addons own visual
+  recipes and must validate them against a live session.
+
+- The shared `hs.UI` contract and migrated Modern/Gamepad presentations require live acceptance of normal mouse,
+  keyboard and controller workflows, zoning and interface changes. Declared base packs inherit presentations;
+  exposing a new data/action method does not automatically design its screen. Host feature discovery is separate
+  from server-provided data and the caller's permissions.
+
 ## Evolving items
 
 - Final Result (action 4), progress updates (action 0) and the experience transfer's actions (1 open, 2 details,
@@ -322,7 +345,7 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
 
 - The NPC target keys (game/targeting.h): whether the scene graph query that offers the cycle's spawns (EQGraphicsDX9.dll, vtable +0x98) tests line of sight is not traced; the client offers every NPC within 500 units, and the Hailstone option `tab_line_of_sight` (on by default) adds a sight test of its own. Settled by reading that query, or by pressing Tab in the original client with an NPC behind a wall.
 
-- Labels and gauges (`app/lua_eq_values.cpp`): ATK leaves out the profile's `+0x3468` bonus. Not tracked: the leadership experience gauges (23, 24), the loyalty velocity (146), the skill damage labels (228..236), the item bonus caps (277..295), the loyalty tokens (296), the trophy tribute labels (297..301), the leadership experience labels (130, 131), the mercenary label (72), the subscription time (334) and the achievement gauges. The HP gauges' `PlayerZoneClient +0x194` test (the pink band) is not known.
+- Labels and gauges (`app/lua_ui_values.cpp`): ATK leaves out the profile's `+0x3468` bonus. Not tracked: the leadership experience gauges (23, 24), the loyalty velocity (146), the skill damage labels (228..236), the item bonus caps (277..295), the loyalty tokens (296), the trophy tribute labels (297..301), the leadership experience labels (130, 131), the mercenary label (72), the subscription time (334) and the achievement gauges. The HP gauges' `PlayerZoneClient +0x194` test (the pink band) is not known.
 - The modern pack's hot bars lay out vertically by their own "Buttons per row"; the stock window's vertical page buttons (`HB_VerticalBarPageButtons`) stay hidden in the model. The gamepad pack's bars turn vertical (a column left of the minimap, the buttons smaller when the screen is short) by a click on their page number, kept as its own setting `hotbar.vertical.<window>`; with Show Spinner off there is no page number to click.
 - The spell book's Mem. This Page buttons do nothing in RoF2: the window looks them up but never handles them, and its layout makes them 1 x 1; neither pack shows them.
 - The trophy tribute, zone guide and zone path windows have no data on EQEmu servers.
@@ -380,3 +403,14 @@ Real estate is built to the original (docs/protocol/rof2-packets.md "Real estate
 
 - Ability Book class filter on an NMS multiclass server: the server sends every AA one of the character's classes may use with the class mask 0xFFFFFFF (zone/aa.cpp, the AA rank packet), so the book counts all of them as Shared and a class filter or the class sort cannot tell them apart. Only the AA's real mask, from the server or the AA tables, would settle it. Skills get their classes from the skill cap table at the character's level, and combat abilities from the spell's class levels.
 - Autoskill's "only when its buff has worn off" looks for the ability's own spell id among the player's buffs. An AA or combat ability whose spell only triggers another spell (the buff then carries the other's id) is never seen as buffed, so it is used again whenever its reuse timer allows. The spell's trigger effects (SPA 340, 374, 470 and similar) would settle which id to look for. Its "out of combat" trusts the server's OP_RestState flag, which EQEmu sends only while rest regen is on (`Character:RestRegenEnabled`); without it, out of combat is only "auto attack off".
+
+## Server add-on host services
+
+- Generic follow, map/Find eligibility, raid actor selection and merchant click admission have deterministic
+  local coverage. Live movement on slopes, underwater and mounted, controller cancellation, private merchant
+  acknowledgments, raid changes across zones, instance labels and world overlay presentation still require
+  acceptance against an announcing server. Successful local decoding or geometry admission does not establish
+  live interoperability or visible presentation.
+- The generic raid service supports subgroup moves and removal to ungrouped. There is no verified native direct
+  subgroup-leader promotion operation here; an add-on must expose any separate server command explicitly rather
+  than claiming the host performed it.

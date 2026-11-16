@@ -4,6 +4,7 @@
 -- risk visible while its actions are unavailable; an offer gets Accept / Decline; View Stats opens your record.
 -- Every value, choice and button is the original's (AdvRqst_*), so what may be requested, accepted or left is the
 -- game's; leaving the current adventure is a separate action and asks first.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -101,6 +102,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Adventure", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Adventure", WINDOW_OPTS, drawWindow)
 end)

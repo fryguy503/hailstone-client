@@ -1,7 +1,8 @@
 -- Offered tasks: replaces the game's TaskSelectWnd (an NPC's task offer). The offers as cards (title, how long it
 -- runs), the selected one's description and first objectives at the right, Accept, Preview Reward and Decline All.
--- The cards are the original's TaskList (a click selects there: eq.ListClick), the text its Description, the buttons
+-- The cards are the original's TaskList (a click selects there: hs.ListClick), the text its Description, the buttons
 -- its own, so accepting is the game's (closing the window declines, as the stock window does).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -32,7 +33,7 @@ local function drawWindow(x, y, w, h, s)
       T.Text(cx, ty, T.Fit(r.texts[1] or "", cw - 8 * s), C.text)
       if dur ~= "" then T.Text(cx, ty + th + 2 * s, "Time limit " .. dur, C.muted, T.font.small) end
     end) then
-      eq.ListClick(WINDOW, "TaskList", r.row, "left", 0)
+      API.windows.ListClick(WINDOW, "TaskList", r.row, "left", 0)
     end
     if ui.IsItemHovered() then ui.SetTooltip(r.texts[1] or "") end
   end
@@ -89,6 +90,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Task Window", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Offered Tasks", WINDOW_OPTS, drawWindow)
 end)

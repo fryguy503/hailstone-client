@@ -48,7 +48,10 @@ AnimatedObjects AnimatedObjects::build(const assets::Zone& zone) {
                     if (kept.index_count) part.parts.push_back(kept);
                 }
                 ObjectShape shape = ObjectShape::from_mesh(part);
-                if (shape.records.empty()) continue;
+                // A render-only replacement is drawn as a static instance in ZoneRenderer. Its original mesh
+                // still supplies physics, but must not supply an invisible moving floor to effects.
+                if (zone.draw_objects.contains(p.actor)) shape.visual.clear();
+                if (shape.records.empty() && shape.visual.empty()) continue;
                 // The farthest its triangles get from the object's origin, at every key and between keys.
                 float reach = 0.0f;
                 std::vector<glm::mat4> pose;
@@ -56,6 +59,9 @@ AnimatedObjects AnimatedObjects::build(const assets::Zone& zone) {
                 for (std::uint32_t k = 0; k <= samples; ++k) {
                     d.animation.pose(std::uint64_t{d.animation.period_ms} * k / samples, pose);
                     for (const auto& r : shape.records)
+                        for (const glm::vec3& v : {r.v0, r.v1, r.v2})
+                            reach = std::max(reach, glm::length(glm::vec3(pose[n] * glm::vec4(v, 1.0f))));
+                    for (const auto& r : shape.visual)
                         for (const glm::vec3& v : {r.v0, r.v1, r.v2})
                             reach = std::max(reach, glm::length(glm::vec3(pose[n] * glm::vec4(v, 1.0f))));
                 }
@@ -115,11 +121,24 @@ glm::mat4 AnimatedObjects::part_transform(std::size_t i) const {
 
 void AnimatedObjects::set_time(std::uint64_t ms) {
     time_ms_ = ms;
+    visual_time_ms_ = ms;
     for (Definition& d : definitions_) {
         d.animation.pose(ms, d.pose);
+        d.visual_pose=d.pose;
         d.pose_inverse.resize(d.pose.size());
         for (std::size_t i = 0; i < d.pose.size(); ++i) d.pose_inverse[i] = glm::inverse(d.pose[i]);
     }
+}
+
+void AnimatedObjects::set_visual_time(std::uint64_t ms) {
+    visual_time_ms_=ms;
+    for(auto& definition:definitions_)definition.animation.pose(ms,definition.visual_pose);
+}
+
+glm::mat4 AnimatedObjects::placed_visual(const Part& part) const {
+    const auto& definition=definitions_[part.definition];
+    const auto node=definition.nodes[part.shape];
+    return node<definition.visual_pose.size()?part.placement*definition.visual_pose[node]:part.placement;
 }
 
 void AnimatedObjects::near(const glm::vec3& lo, const glm::vec3& hi, std::vector<std::uint32_t>& out) const {
@@ -182,6 +201,43 @@ bool AnimatedObjects::blocks(const glm::vec3& a, const glm::vec3& b) const {
         if (game::blocks(definitions_[p.definition].shapes[p.shape], transform, inverse, p.scale, a, b)) return true;
     }
     return false;
+}
+
+std::optional<float> AnimatedObjects::visual_surface_below(const glm::vec3& at) const {
+    if (parts_.empty()) return std::nullopt;
+    std::vector<std::uint32_t> candidates;
+    near(at, at, candidates);
+    std::optional<float> best;
+    for (std::uint32_t i : candidates) {
+        const Part& p = parts_[i];
+        if (glm::distance(glm::vec2(p.centre), glm::vec2(at)) > p.reach) continue;
+        const auto transform=placed_visual(p);
+        if (auto z = game::visual_surface_under(definitions_[p.definition].shapes[p.shape], transform, at);
+            z && (!best || *z > *best)) best = z;
+    }
+    return best;
+}
+
+bool AnimatedObjects::visual_surfaces(const glm::vec2& low,const glm::vec2& high,
+                                     const std::function<bool(const CollisionTriangle&)>& visit,std::uint32_t& work) const {
+    std::vector<std::uint32_t> candidates;
+    near(glm::vec3(low,0),glm::vec3(high,0),candidates);
+    for(const auto i:candidates){
+        if(work==0)return false;
+        --work;
+        const auto& part=parts_[i];
+        const auto transform=placed_visual(part);
+        for(const auto& tri:definitions_[part.definition].shapes[part.shape].visual){
+            if(work==0)return false;
+            --work;
+            const auto world=CollisionTriangle::make(glm::vec3(transform*glm::vec4(tri.v0,1)),
+                glm::vec3(transform*glm::vec4(tri.v1,1)),glm::vec3(transform*glm::vec4(tri.v2,1)),0);
+            const auto lo=glm::min(glm::min(glm::vec2(world.v0),glm::vec2(world.v1)),glm::vec2(world.v2));
+            const auto hi=glm::max(glm::max(glm::vec2(world.v0),glm::vec2(world.v1)),glm::vec2(world.v2));
+            if(world.normal.z>0&&hi.x>=low.x&&hi.y>=low.y&&lo.x<=high.x&&lo.y<=high.y&&!visit(world))return false;
+        }
+    }
+    return true;
 }
 
 } // namespace hailstone::game

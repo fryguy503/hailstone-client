@@ -8,6 +8,7 @@
 --
 -- One table for the whole pack (every file's dofile gets the same one): T.frame() sets the screen's scale once a frame
 -- for every window, so no file's T.px stays at the scale it was loaded with.
+local API = hs.UI
 if GPTHEME then return GPTHEME end
 local T = {}
 
@@ -222,18 +223,18 @@ function T.focusRing(x0, y0, x1, y1, r)
   T.outline(x0 - o, y0 - o, x1 + o, y1 + o, C.accent, 1, (r or T.px(10)) + o, T.px(3))
 end
 
--- An icon from a sheet (eq.ItemIcon / eq.ChildArt: texture, u0, v0, u1, v1).
+-- An icon from a sheet (hs.ItemIcon / hs.ChildArt: texture, u0, v0, u1, v1).
 function T.icon(tex, u0, v0, u1, v1, x0, y0, x1, y1, a)
   if tex and type(tex) == "userdata" then ui.DrawImage(tex, x0, y0, x1, y1, u0, v0, u1, v1, 1, 1, 1, a or 1) end
 end
 function T.itemIcon(icon, x0, y0, x1, y1, a)
   if not icon then return end
-  local tex, u0, v0, u1, v1 = eq.ItemIcon(icon)
+  local tex, u0, v0, u1, v1 = API.assets.ItemIcon(icon)
   T.icon(tex, u0, v0, u1, v1, x0, y0, x1, y1, a)
 end
 
 -- ---------------------------------------------------------------- button glyphs
--- The pad's buttons, drawn as shapes in the connected pad's style (eq.gamepad.type / glyph).
+-- The pad's buttons, drawn as shapes in the connected pad's style (hs.gamepad.type / glyph).
 local FACE = {
   xbox = { a = { 0.36, 0.78, 0.30 }, b = { 0.92, 0.32, 0.30 }, x = { 0.27, 0.56, 0.96 }, y = { 0.96, 0.80, 0.26 } },
   playstation = { a = { 0.50, 0.66, 0.98 }, b = { 0.95, 0.38, 0.42 }, x = { 0.92, 0.52, 0.80 }, y = { 0.32, 0.86, 0.72 } },

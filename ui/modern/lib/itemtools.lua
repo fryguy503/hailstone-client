@@ -1,13 +1,14 @@
 -- Item search, Sort, Stack and Tidy for the bag, inventory and bank windows, and the marks they keep (Hailstone;
--- eq.SortItems, eq.SellJunk, eq.ItemJob, eq.FindItems):
+-- hs.SortItems, hs.SellJunk, hs.ItemJob, hs.FindItems):
 --   a bag's filter (a kind of item: Sort fills the bag with it first, Tidy moves it there; after looting too when
 --   "Tidy after looting" is on), locked slots (Sort, Stack and Tidy leave them alone), Sell (items, by id, that the
 --   merchant's Sell marked sells; "junk" in the settings and the code). They are kept per server and character in the
 --   UI settings ("items.<name>.*", the character's own settings file).
---   Keep (items, by id, the client will not destroy, drop, trade, give, sell or send: eq.SetItemKept, kept by the
+--   Keep (items, by id, the client will not destroy, drop, trade, give, sell or send: hs.SetItemKept, kept by the
 --   client in the character's kept_items.txt, game/kept_items.h). An item is marked Keep or Sell, not both.
 -- The searches are kept in one global table so a bag window dims what the search of the inventory or bank it is in
--- does not match. Places are eq.FindItems' ("i:<slot>[:<sub>]" carried, "b:<slot>[:<sub>]" banked).
+-- does not match. Places are hs.FindItems' ("i:<slot>[:<sub>]" carried, "b:<slot>[:<sub>]" banked).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local C = T.color
 
@@ -35,7 +36,7 @@ local function prefs()
   local frame = ui.GetFrameCount()
   if S.prefs and S.prefsFrame == frame then return S.prefs end
   S.prefsFrame = frame
-  local who = (eq.Label(1)) or ""
+  local who = (API.character.Label(1)) or ""
   if S.prefs and S.prefs.who == who then return S.prefs end
   local key = "items." .. who .. "."
   local p = { who = who, key = key, locks = {}, filters = {}, junk = {},
@@ -79,14 +80,14 @@ end
 function M.Locked(place) return prefs().locks[place] == true end
 function M.Junk(item) return item ~= nil and prefs().junk[item.id] == true end
 
--- The Keep marks, read again only when the client says they changed (eq.ItemsRevision's second count), at most once
+-- The Keep marks, read again only when the client says they changed (hs.ItemsRevision's second count), at most once
 -- a frame: asked for per slot drawn.
 local kept = { frame = -1, rev = -1, ids = {} }
 local function keptIds()
   local frame = ui.GetFrameCount()
   if kept.frame == frame then return kept.ids end
   kept.frame = frame
-  local _, rev = eq.ItemsRevision()
+  local _, rev = API.inventory.ItemsRevision()
   if rev ~= kept.rev then
     kept.rev, kept.ids = rev, {}
   end
@@ -97,7 +98,7 @@ function M.Kept(item)
   local ids = keptIds()
   local v = ids[item.id]
   if v == nil then
-    v = eq.ItemKept(item.id) == true
+    v = API.inventory.ItemKept(item.id) == true
     ids[item.id] = v
   end
   return v
@@ -109,7 +110,7 @@ function M.SetKeep(item, on)
     prefs().junk[item.id] = nil
     save("junk")
   end
-  eq.SetItemKept(item.id, item.name or "", on)
+  API.inventory.SetItemKept(item.id, item.name or "", on)
   kept.frame = -1
 end
 function M.SetKeepMany(items, on)
@@ -118,7 +119,7 @@ function M.SetKeepMany(items, on)
     if on and M.Junk(item) then prefs().junk[item.id], changedSell = nil, true end
   end
   if changedSell then save("junk") end
-  eq.SetItemsKept(items, on)
+  API.inventory.SetItemsKept(items, on)
   kept.frame = -1
 end
 function M.SetSell(item, on)
@@ -158,10 +159,10 @@ function M.JunkCarried()
     return S.junkCount
   end
   for slot = 23, 32 do
-    local it = eq.Item(slot)
+    local it = API.inventory.Item(slot)
     if it and (it.bagSlots or 0) > 0 then
       for i = 0, it.bagSlots - 1 do
-        local c = eq.Item(slot, i)
+        local c = API.inventory.Item(slot, i)
         if c and p.junk[c.id] and c.sellable then n = n + 1 end
       end
     elseif it and p.junk[it.id] and it.sellable then
@@ -263,8 +264,8 @@ end
 -- ---------------------------------------------------------------- running
 local function note(err) if err then S.note, S.noteAt = err, ui.GetTime() end end
 
-function M.Run(where, mode) note(eq.SortItems(where, mode, options())) end
-function M.SellJunk() note(eq.SellJunk(M.JunkIds())) end
+function M.Run(where, mode) note(API.inventory.SortItems(where, mode, options())) end
+function M.SellJunk() note(API.inventory.SellJunk(M.JunkIds())) end
 
 -- The last refusal (why a job did not start) for a few seconds after it, else nil.
 function M.Note()
@@ -274,9 +275,9 @@ end
 -- After the loot window closes: Tidy the inventory, when that is on (from a frame function run every frame).
 local lootWasOpen = false
 function M.WatchLoot()
-  local open = eq.WindowShown("LootWnd") == true
-  if lootWasOpen and not open and M.TidyAfterLoot() and not eq.ItemJob() then
-    eq.SortItems("inventory", "tidy", options())
+  local open = API.windows.Shown("LootWnd") == true
+  if lootWasOpen and not open and M.TidyAfterLoot() and not API.inventory.ItemJob() then
+    API.inventory.SortItems("inventory", "tidy", options())
   end
   lootWasOpen = open
 end
@@ -292,13 +293,13 @@ local JOB_WORD = { sort = "Sorting", stack = "Stacking", tidy = "Tidying", sell 
 -- `left`; else the window shows Note) for a few seconds. `where`: "inventory", "bank" or a bag window.
 function M.Toolbar(id, x1, y, s, where, left, more)
   local bw, h = 54 * s, 24 * s
-  local done, total, mode = eq.ItemJob()
+  local done, total, mode = API.inventory.ItemJob()
   local x0 = x1 - M.ToolbarWidth(s, more)
   local _, th = T.TextSize("Ag", T.font.small)
   if done then
     local text = string.format("%s %d / %d", JOB_WORD[mode] or "Sorting", done, total)
     T.Text(x1 - bw - 8 * s, y + (h - th) / 2, text, C.muted, T.font.small, "right")
-    if T.Button(id .. "stop", x1 - bw, y, x1, y + h, s, "Stop") then eq.StopItemJob() end
+    if T.Button(id .. "stop", x1 - bw, y, x1, y + h, s, "Stop") then API.inventory.StopItemJob() end
     return
   end
   if T.Button(id .. "stack", x0, y, x0 + bw, y + h, s, "Stack",

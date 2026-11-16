@@ -104,6 +104,33 @@ struct Harness {
 
 } // namespace
 
+TEST_CASE("addon_manager: managed activation stays separate from update preferences through install and upgrade") {
+    Harness h;
+    h.publish("1.0.0", "read,ui", "-- managed\n", nullptr, "autoload 1\n");
+    h.start();
+    h.install();
+    REQUIRE(h.row("autoloot"));
+    CHECK(h.row("autoloot")->addon.autoload);
+    CHECK(h.row("autoloot")->addon.enabled);
+    CHECK_FALSE(h.row("autoloot")->addon.auto_update);
+    h.manager->set_auto_update("autoloot", true);
+    const auto serial = h.manager->serial();
+    CHECK(h.manager->set_enabled("autoloot", false));
+    CHECK(h.manager->serial() != serial);
+    CHECK_FALSE(h.row("autoloot")->addon.enabled);
+    CHECK(h.row("autoloot")->addon.auto_update);
+    CHECK_FALSE(read_installed_addons(h.dir.path()).front().enabled);
+    CHECK_FALSE(h.manager->set_enabled("missing", true));
+    h.publish("1.0.1", "read,ui", "-- managed update\n", nullptr, "autoload 1\n");
+    h.install();
+    REQUIRE(h.row("autoloot"));
+    CHECK(h.row("autoloot")->addon.version == "1.0.1");
+    CHECK_FALSE(h.row("autoloot")->addon.enabled);
+    CHECK(h.row("autoloot")->addon.auto_update);
+    CHECK(h.manager->set_enabled("autoloot", true));
+    CHECK(h.row("autoloot")->addon.enabled);
+}
+
 TEST_CASE("addon_manager: a link's manifest is the install card, and yes installs it") {
     Harness h;
     h.publish("1.0.0", "read,ui,actions");
@@ -147,6 +174,44 @@ TEST_CASE("addon_manager: a link's manifest is the install card, and yes install
     const AddonsStatus again = h.inspect("owner/autoloot");
     REQUIRE(again.offer);
     CHECK(again.offer->installed_version == "1.0.0");
+}
+
+TEST_CASE("addon_manager: signed UI bundles install without scripts and preserve their kind and pinned signer") {
+    Harness h;
+    Keys author(43), other(44);
+    auto publish = [&](const std::string& version, const Keys& key, const std::string& kind = "ui") {
+        const auto zip = zip_of({{"ui/example/ui.ini", "name=Example\nbase=builtin:modern\n"}});
+        const auto manifest = manifest_for("interfaces", kind, version, "none", "any", zip, "interfaces.zip");
+        h.github.release("owner/interfaces", key.sign(manifest), "interfaces.zip", zip);
+    };
+    publish("1.0.0", author);
+    h.settings.allow_unsigned = false;
+    h.start();
+    h.install("owner/interfaces");
+    const auto folder = h.dir.path() / "ui-addons/interfaces";
+    CHECK(fs::is_regular_file(folder / "ui/example/ui.ini"));
+    CHECK_FALSE(fs::exists(h.dir.path() / "scripts/interfaces"));
+    const auto* installed = h.row("interfaces");
+    REQUIRE(installed);
+    CHECK(installed->addon.kind == AddonKind::Ui);
+    CHECK(installed->addon.caps == 0);
+    publish("2.0.0", other);
+    auto offer = h.inspect("owner/interfaces");
+    REQUIRE(offer.offer);
+    CHECK_FALSE(offer.offer->blocked.empty());
+    publish("2.0.0", author);
+    h.install("owner/interfaces");
+    CHECK(read_installed_addons(h.dir.path()).front().version == "2.0.0");
+    // The trust grant belongs to this kind; another kind cannot silently inherit it.
+    const auto script = zip_of({{"init.lua", "return true"}});
+    h.github.release("owner/interfaces", author.sign(manifest_for("interfaces", "script", "3.0.0", "read,ui", "any", script, "script.zip")),
+                     "script.zip", script);
+    offer = h.inspect("owner/interfaces");
+    REQUIRE(offer.offer);
+    CHECK_FALSE(offer.offer->blocked.empty());
+    std::string why;
+    REQUIRE_MESSAGE(h.manager->remove("interfaces", &why), why);
+    CHECK_FALSE(fs::exists(folder / "ui/example/ui.ini"));
 }
 
 // A link to an older release than the one installed (a tag, or a release taken back) shows as older, and only the

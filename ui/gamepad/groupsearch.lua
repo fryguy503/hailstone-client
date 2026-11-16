@@ -8,8 +8,9 @@
 --                  X sorts by the next column (the list's header click).
 --   Filters        use my ignore list, only my friends, the guilds to leave out or keep to (a drop-down to pick one,
 --                  Add, Remove, Remove All) and "only players who match my filters can query me".
--- Each page, field, check box and button is the stock windows' own (eq.SetTabPage, eq.SetWindowText,
--- eq.ClickChild, eq.ComboSelect), so what is posted and searched is the game's.
+-- Each page, field, check box and button is the stock windows' own (hs.SetTabPage, hs.SetWindowText,
+-- hs.ClickChild, hs.ComboSelect), so what is posted and searched is the game's.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -98,10 +99,10 @@ local function searchPage(groups, x0, y, x1, y1, wx, wy)
     empty = "No matches: Get Matches asks the server.",
     columns = groups and { { 1, 0.28 }, { 2, 0.08 }, { 3, 0.14 }, { 4, 0.22 }, { 5, 0.28 } }
       or { { 1, 0.25 }, { 2, 0.1 }, { 3, 0.15 }, { 4, 0.22 }, { 5, 0.28 } } })
-  if r and W.pressed("y") then eq.ListClick(WIN, listId, r, "double") end -- a tell
+  if r and W.pressed("y") then API.windows.ListClick(WIN, listId, r, "double") end -- a tell
   if W.pressed("x") then
     sortCol[key] = (sortCol[key] + 1) % 5
-    eq.ListHeaderClick(WIN, listId, sortCol[key])
+    API.windows.ListHeaderClick(WIN, listId, sortCol[key])
   end
   if groups then
     -- the selected group's members and the classes it wants
@@ -112,7 +113,7 @@ local function searchPage(groups, x0, y, x1, y1, wx, wy)
     ui.SetCursorPos(x0 - wx, dy + T.px(26) - wy)
     local d = CH.list(WIN, "GLP_GroupDetailList", lists.detail, half, y1 - dy - T.px(26), { rowH = 44, font = 18,
       empty = "Select a group.", columns = { { 1, 0.5 }, { 2, 0.3 }, { 3, 0.2, 1 } } })
-    if d and W.pressed("y") then eq.ListClick(WIN, "GLP_GroupDetailList", d, "double") end
+    if d and W.pressed("y") then API.windows.ListClick(WIN, "GLP_GroupDetailList", d, "double") end
     ui.SetCursorPos(x0 + half + T.px(16) - wx, dy + T.px(26) - wy)
     CH.list(WIN, "GLP_ClassesWantedList", lists.wanted, cw - half - T.px(16), y1 - dy - T.px(26), { rowH = 44, font = 18,
       empty = "-", onA = function() end })
@@ -128,36 +129,36 @@ ui.window("Group Search", function()
   T.frame()
   local appearing = not wasShown
   wasShown = true
-  local info = eq.TabPage(WIN, "GSW_InfoPages") or 0
-  local search = eq.TabPage(WIN, "GSW_SearchPages") or 0
+  local info = API.windows.TabPage(WIN, "GSW_InfoPages") or 0
+  local search = API.windows.TabPage(WIN, "GSW_SearchPages") or 0
   if W.begin("Group Search", { w = 1800, h = 1010, title = "Group Search",
         subtitle = info == 1 and "Your group looks for players" or "You look for a group",
         hints = CH.hints(st, { { "lb", "Players" }, { "rb", "Groups" }, { "a", "Select" }, { "y", "Tell" }, { "x", "Sort" }, { "b", "Close" } }) }) then
     local x0, y0, x1, y1, cw = W.area()
     local wx, wy = ui.GetWindowPos()
     if not CH.modal(st, x0, y0, x1, y1) then
-      if W.pressed("lb") then eq.SetTabPage(WIN, "GSW_SearchPages", 0) end
-      if W.pressed("rb") then eq.SetTabPage(WIN, "GSW_SearchPages", 1) end
+      if W.pressed("lb") then API.windows.SetTabPage(WIN, "GSW_SearchPages", 0) end
+      if W.pressed("rb") then API.windows.SetTabPage(WIN, "GSW_SearchPages", 1) end
       local leftW = cw * 0.44
       local rx0 = x0 + leftW + T.px(30)
       -- "I am a" and "Show me" as tab buttons over each side
       ui.SetCursorPos(x0 - wx, y0 - wy)
       local tw = (leftW - T.px(10)) / 2
       if appearing then ui.SetKeyboardFocusHere() end
-      if T.button("##gsiam0", "I am a player", tw, T.px(56), { primary = info == 0 }, pad) then eq.SetTabPage(WIN, "GSW_InfoPages", 0) end
+      if T.button("##gsiam0", "I am a player", tw, T.px(56), { primary = info == 0 }, pad) then API.windows.SetTabPage(WIN, "GSW_InfoPages", 0) end
       ui.SameLine(0, T.px(10))
-      if T.button("##gsiam1", "We are a group", tw, T.px(56), { primary = info == 1 }, pad) then eq.SetTabPage(WIN, "GSW_InfoPages", 1) end
+      if T.button("##gsiam1", "We are a group", tw, T.px(56), { primary = info == 1 }, pad) then API.windows.SetTabPage(WIN, "GSW_InfoPages", 1) end
       local sw = (x1 - rx0 - T.px(10)) / 2
       ui.SetCursorPos(rx0 - wx, y0 - wy)
-      if T.button("##gsshow0", "Players looking for a group", sw, T.px(56), { primary = search == 0, glyph = "lb" }, pad) then eq.SetTabPage(WIN, "GSW_SearchPages", 0) end
+      if T.button("##gsshow0", "Players looking for a group", sw, T.px(56), { primary = search == 0, glyph = "lb" }, pad) then API.windows.SetTabPage(WIN, "GSW_SearchPages", 0) end
       ui.SameLine(0, T.px(10))
-      if T.button("##gsshow1", "Groups looking for players", sw, T.px(56), { primary = search == 1, glyph = "rb" }, pad) then eq.SetTabPage(WIN, "GSW_SearchPages", 1) end
+      if T.button("##gsshow1", "Groups looking for players", sw, T.px(56), { primary = search == 1, glyph = "rb" }, pad) then API.windows.SetTabPage(WIN, "GSW_SearchPages", 1) end
       ui.DrawLine(rx0 - T.px(15), y0 + T.px(70), rx0 - T.px(15), y1, C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
       infoPage(info == 1, x0, y0 + T.px(72), x0 + leftW, y1, wx, wy)
       searchPage(search == 1, rx0, y0 + T.px(72), x1, y1, wx, wy)
     end
   end
-  if CH.back(st, W.finish()) then eq.ShowWindow(WIN, false) end
+  if CH.back(st, W.finish()) then API.windows.Show(WIN, false) end
 end)
 
 -- ---------------------------------------------------------------- additional filters
@@ -215,5 +216,5 @@ ui.window("Group Search Filters", function()
       guilds(x0 + half + T.px(30), y + T.px(10), half, y1, wx, wy, 2, "Only these guilds")
     end
   end
-  if CH.back(fst, W.finish()) then eq.ShowWindow(FW, false) end
+  if CH.back(fst, W.finish()) then API.windows.Show(FW, false) end
 end)

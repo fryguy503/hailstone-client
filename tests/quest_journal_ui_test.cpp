@@ -11,7 +11,9 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
 #include "core/game_dir.h"
 #include "net/game_connection.h"
 #include "net/task_packets.h"
@@ -29,8 +31,8 @@ struct JournalSession {
     GameDir game;
     std::unique_ptr<net::GameConnection> conn;
     ui::ChatView chat;
-    app::EqHost host;
-    std::unique_ptr<app::EqApi> api;
+    app::UiHost host;
+    std::unique_ptr<app::UiApi> api;
     std::unique_ptr<ui::lua::LuaUi> lua;
 
     JournalSession() {
@@ -48,13 +50,14 @@ struct JournalSession {
         host.chat = &chat;
         host.in_game = host.ui_ready = true;
         host.zone_short_name = "qeynos";
-        api = std::make_unique<app::EqApi>(host);
+        api = std::make_unique<app::UiApi>(host);
         api->load_layout(root / "defaults.ini", root / "UI_Test_Server.ini", {});
         lua = std::make_unique<ui::lua::LuaUi>(root / "modern", root / "ui.txt");
-        lua->add_eq_api([this](lua_State* L) {
+        lua->add_ui_api([this](lua_State* L) {
             api->register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         auto& io = ImGui::GetIO();
         io.IniFilename = nullptr;
@@ -140,7 +143,7 @@ TEST_CASE("quest journal UI: real task state, individual hidden rows and separat
             journalSeen[value] = (journalSeen[value] or 0) + 1
             return wrapped(value)
         end
-        assert(eq.OpenTask(101))
+        assert(hs.OpenTask(101))
         ui.SetSetting('tasks.tracker.visible', '0')
         ui.SetSetting('tasks.section.101', 'objectives')
     )lua");
@@ -148,7 +151,7 @@ TEST_CASE("quest journal UI: real task state, individual hidden rows and separat
     CHECK(session.run("return tostring(journalSeen['Known objective'] ~= nil)") == "true");
     CHECK(session.run("return tostring((journalSeen['? ? ?'] or 0) >= 2)") == "true");
     CHECK(session.run("return tostring(journalSeen['Step 1'] == nil and journalSeen['Step 2'] == nil)") == "true");
-    CHECK(session.run("return tostring(eq.Tasks()[1].total)") == "4");
+    CHECK(session.run("return tostring(hs.Tasks()[1].total)") == "4");
 
     session.run("journalSeen = {}; ui.SetSetting('tasks.section.101', 'description')");
     session.frames();
@@ -173,7 +176,7 @@ TEST_CASE("quest tracker UI: journal closed, saved dimensions and roll-up over D
         ui.SetSetting('tasks.tracked.202', '1')
         ui.SetSetting('tasks.tracker.visible', '1')
         ui.SetSetting('hud.size.Quest Tracker', '240,150')
-        eq.ShowWindow('TaskWnd', false)
+        hs.ShowWindow('TaskWnd', false)
     )lua");
     session.frames();
     auto* tracker = ImGui::FindWindowByName("###modern.Quest Tracker");
@@ -181,7 +184,7 @@ TEST_CASE("quest tracker UI: journal closed, saved dimensions and roll-up over D
     CHECK(tracker->Active);
     CHECK(tracker->Size.x == doctest::Approx(240));
     CHECK(tracker->Size.y == doctest::Approx(150));
-    CHECK(session.run("return tostring(eq.WindowShown('TaskWnd'))") == "false");
+    CHECK(session.run("return tostring(hs.WindowShown('TaskWnd'))") == "false");
 
     session.run("ui.SetSetting('hud.size.Quest Tracker', '220,100')");
     session.frames();
@@ -190,7 +193,7 @@ TEST_CASE("quest tracker UI: journal closed, saved dimensions and roll-up over D
     session.run("ui.SetSetting('hud.size.Quest Tracker', '240,150')");
     session.frames();
 
-    session.run("assert(eq.OpenTask(202)); eq.ShowWindow('TaskWnd', false)");
+    session.run("assert(hs.OpenTask(202)); hs.ShowWindow('TaskWnd', false)");
     session.frames();
     CHECK(tracker->Active);
     CHECK(session.run("local Q=dofile('lib/task_journal.lua'); return tostring(#Q.getTracked(Q.tasks()))") == "2");
@@ -235,13 +238,13 @@ TEST_CASE("quest journal UI: native shared roster popup and membership updates w
             end
             return clicked
         end
-        assert(eq.OpenTask(202))
+        assert(hs.OpenTask(202))
         ui.SetSetting('tasks.category', 'shared')
-        eq.SetTabPage('TaskWnd', 'TaskSubwindows', 1)
+        hs.SetTabPage('TaskWnd', 'TaskSubwindows', 1)
     )lua");
     session.frames();
     CHECK(session.run("return ui.GetSetting('tasks.category')") == "active");
-    CHECK(session.run("return tostring(eq.TabPage('TaskWnd','TaskSubwindows'))") == "0");
+    CHECK(session.run("return tostring(hs.TabPage('TaskWnd','TaskSubwindows'))") == "0");
     CHECK(session.run("return tostring(sharedRosterSeen['Aster'] and sharedRosterSeen['Beryl'])") == "true");
     auto& context = *ImGui::GetCurrentContext();
     REQUIRE(context.OpenPopupStack.Size == 1);
@@ -249,7 +252,7 @@ TEST_CASE("quest journal UI: native shared roster popup and membership updates w
     CHECK(context.OpenPopupStack.back().Window->Active);
     for (const char* id : {"STASK_AddPlayerButton", "STASK_RemovePlayerButton", "STASK_MakeLeaderButton",
                            "STASK_InviteRaidButton", "STASK_InviteExpedButton"}) {
-        CHECK(session.run("return tostring(eq.ChildState('TaskWnd','" + std::string(id) + "'))") == "false");
+        CHECK(session.run("return tostring(hs.ChildState('TaskWnd','" + std::string(id) + "'))") == "false");
     }
 
     session.conn->receive_zone_packet_for_test(net::encode(net::SharedTaskMemberChange{true, "Cyra"}));
@@ -269,6 +272,6 @@ TEST_CASE("quest journal UI: native shared roster popup and membership updates w
     session.run("sharedSmokeClick = 'sharedMembers'");
     session.frames();
     CHECK(context.OpenPopupStack.Size == 1);
-    CHECK(session.run("return tostring(eq.Tasks().selectedId)") == "202");
-    CHECK(session.run("return tostring(eq.TabPage('TaskWnd','TaskSubwindows'))") == "0");
+    CHECK(session.run("return tostring(hs.Tasks().selectedId)") == "202");
+    CHECK(session.run("return tostring(hs.TabPage('TaskWnd','TaskSubwindows'))") == "0");
 }

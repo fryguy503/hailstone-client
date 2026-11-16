@@ -13,7 +13,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "net/spell_packets.h"
 
@@ -141,7 +141,7 @@ TEST_CASE("spell book: a right click picks a slot up, the next sends OP_SwapSpel
     CHECK(conn.spell_state().book[0] == 201);
 }
 
-TEST_CASE("eq.SpellBookMemorize: with replace_gem_spell off, an empty gem only (StartSpellMemorization, bReplace 0)") {
+TEST_CASE("hs.SpellBookMemorize: with replace_gem_spell off, an empty gem only (StartSpellMemorization, bReplace 0)") {
     Rig rig;
     auto& conn = rig.conn;
     REQUIRE(rig.to_zone());
@@ -158,19 +158,19 @@ TEST_CASE("eq.SpellBookMemorize: with replace_gem_spell off, an empty gem only (
     conn.set_sitting(true);
     ImGuiContext* ctx = ImGui::CreateContext();
     {
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         host.get_option = [](std::string_view o) { return o == "replace_gem_spell" ? 0 : 1; };
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
-        REQUIRE(luaL_dostring(L, "eq.SpellBookMemorize(1, 0)") == LUA_OK); // gem 0 is taken: nothing
+        lua_setglobal(L, "hs");
+        REQUIRE(luaL_dostring(L, "hs.SpellBookMemorize(1, 0)") == LUA_OK); // gem 0 is taken: nothing
         CHECK_FALSE(conn.spell_state().memorizing.has_value());
-        REQUIRE(luaL_dostring(L, "eq.SpellBookMemorize(1, 1)") == LUA_OK); // gem 1 is empty
+        REQUIRE(luaL_dostring(L, "hs.SpellBookMemorize(1, 1)") == LUA_OK); // gem 1 is empty
         REQUIRE(conn.spell_state().memorizing.has_value());
         CHECK(conn.spell_state().memorizing->gem == 1);
         CHECK(conn.spell_state().memorizing->spell == 201);
@@ -183,7 +183,7 @@ TEST_CASE("eq.SpellBookMemorize: with replace_gem_spell off, an empty gem only (
 // there as into an empty gem. OP_MemorizeSpell goes out for that gem; EQEmu's Client::MemSpell forgets the old spell
 // (OP_MemorizeSpell 2) and memorizes the new (1), and the forget says nothing ("You forget" is for a forget asked
 // for). The gem keeps its spell until then. A spell already in a gem is still refused.
-TEST_CASE("eq.SpellBookMemorize: with replace_gem_spell on, a spell memorizes over the gem's spell") {
+TEST_CASE("hs.SpellBookMemorize: with replace_gem_spell on, a spell memorizes over the gem's spell") {
     Rig rig;
     auto& conn = rig.conn;
     REQUIRE(rig.to_zone());
@@ -199,7 +199,7 @@ TEST_CASE("eq.SpellBookMemorize: with replace_gem_spell on, a spell memorizes ov
     conn.set_sitting(true);
     ImGuiContext* ctx = ImGui::CreateContext();
     {
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
         bool replace = true;
@@ -212,16 +212,16 @@ TEST_CASE("eq.SpellBookMemorize: with replace_gem_spell on, a spell memorizes ov
         CHECK_FALSE(host.gem_takes_book_spell(0));
         CHECK(host.gem_takes_book_spell(1));
         replace = true;
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
         // the gem's own spell again: refused as already memorized
-        REQUIRE(luaL_dostring(L, "eq.SpellBookMemorize(0, 0)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.SpellBookMemorize(0, 0)") == LUA_OK);
         CHECK_FALSE(conn.spell_state().memorizing.has_value());
-        REQUIRE(luaL_dostring(L, "eq.SpellBookMemorize(1, 0)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.SpellBookMemorize(1, 0)") == LUA_OK);
         REQUIRE(conn.spell_state().memorizing.has_value());
         CHECK(conn.spell_state().memorizing->gem == 0);
         CHECK(conn.spell_state().memorizing->spell == 201);
@@ -258,10 +258,10 @@ TEST_CASE("eq.SpellBookMemorize: with replace_gem_spell on, a spell memorizes ov
         // with the option off it does not.
         host.cursor_spell = 0; // Minor Healing
         replace = false;
-        REQUIRE(luaL_dostring(L, "eq.SpellGemClick('CSPW_Spell0', 'left')") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.SpellGemClick('CSPW_Spell0', 'left')") == LUA_OK);
         CHECK_FALSE(conn.spell_state().memorizing.has_value());
         replace = true;
-        REQUIRE(luaL_dostring(L, "eq.SpellGemClick('CSPW_Spell0', 'left')") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.SpellGemClick('CSPW_Spell0', 'left')") == LUA_OK);
         REQUIRE(conn.spell_state().memorizing.has_value());
         CHECK(conn.spell_state().memorizing->gem == 0);
         CHECK(conn.spell_state().memorizing->spell == 200);

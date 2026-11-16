@@ -10,7 +10,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "game/eq_strings.h"
 #include "game/item_links.h"
 #include "game/task_window.h"
@@ -72,24 +72,24 @@ TEST_CASE("stml links: a crafted chat item link injects no markup and still asks
     REQUIRE(rig.to_zone());
     Context context;
     ui::ChatView view;
-    app::EqHost host;
+    app::UiHost host;
     host.conn = &rig.conn;
     host.game = &rig.game;
     host.chat = &view;
     host.in_game = host.ui_ready = true;
     std::optional<game::ItemLink> clicked;
     host.click_link = [&](const game::ItemLink& l) { clicked = l; };
-    app::EqApi api{host};
+    app::UiApi api{host};
     api.load_layout(rig.dir.path() / "defaults.ini", rig.dir.path() / "UI_fixture.ini", {});
     std::unique_ptr<lua_State, decltype(&lua_close)> lua{luaL_newstate(), &lua_close};
     auto* L = lua.get();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
 
     view.add(ui::ChatChannel::Say, "Look: \x12" + kTag + "\x12 ok");
-    lua_getglobal(L, "eq");
+    lua_getglobal(L, "hs");
     lua_getfield(L, -1, "ChatText");
     lua_remove(L, -2);
     lua_pushinteger(L, 1);
@@ -113,7 +113,7 @@ TEST_CASE("stml links: a crafted chat item link injects no markup and still asks
 
     const std::string data = notify_data(line);
     REQUIRE_FALSE(data.empty());
-    lua_getglobal(L, "eq");
+    lua_getglobal(L, "hs");
     lua_getfield(L, -1, "ChatLink");
     lua_remove(L, -2);
     lua_pushinteger(L, 1);

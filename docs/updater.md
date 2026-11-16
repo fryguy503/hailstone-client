@@ -28,9 +28,9 @@ a separate patcher before the game started. The code is `src/app/updater.*` (che
   notice shows, before its automatic download has begun, stops that download from starting.
 - A release with no package for the player's system (say, no Linux arm64 build) is shown with its Release notes only.
 - The notice is part of the login view (`ui::LoginView::update`), so the Modern and Gamepad packs (`ui/*/login.lua`,
-  `view.update`, `eq.LoginDo("updateDownload" | "updateRestart" | "updateSkip" | "updateNotes")`) and the client's own
+  `view.update`, `hs.LoginDo("updateDownload" | "updateRestart" | "updateSkip" | "updateNotes")`) and the client's own
   ImGui screen all show it the same way (`ui::update_notice_text`). The corner is `view.about` (`version`, `build`,
-  `status`, `text`, `notes`, `page`) and `eq.LoginDo("openProject")`.
+  `status`, `text`, `notes`, `page`) and `hs.LoginDo("openProject")`.
 
 ## Settings (`hailstone.ini`)
 

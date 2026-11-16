@@ -1,7 +1,7 @@
 // ClientApp: Key commands, chat keys, combat input and the remaining test drivers.
 
 #include "app/client_app_internal.h"
-#include "app/lua_eq_menu.h"
+#include "app/lua_ui_menu.h"
 #include "game/mechanics/abilities.h"
 #include "game/boats.h"
 #include "game/slash_commands.h"
@@ -53,8 +53,16 @@ void ClientApp::key_command(const game::KeyMap::Event& e) {
     const auto& world = conn_->world();
     const game::mechanics::Character* ch = stats_ui_ ? stats_ui_->character() : nullptr;
     int cmd = e.command;
+    if (cmd == static_cast<int>(C::FULLSCREEN)) {
+        ui_hidden_ = !ui_hidden_;
+        ui_.set_visible(!ui_hidden_);
+        plate_hits_.clear();
+        plate_gesture_.clear();
+        if (ui_hidden_ && gamepad_) gamepad_->set_mode(PadMode::Game);
+        return;
+    }
     if (cmd == kAbilityBookCommand || cmd == kInventoryManagerCommand) { // the EQ menu's windows of Hailstone's own
-        if (eq_api_) eq_api_->toggle(toggle_command_window(cmd));
+        if (ui_api_) ui_api_->toggle(toggle_command_window(cmd));
         return;
     }
     if (cmd >= game::kChatKeyFirst) {
@@ -74,18 +82,18 @@ void ClientApp::key_command(const game::KeyMap::Event& e) {
         return;
     }
     if (cmd == static_cast<int>(C::CMD_TOGGLE_FIND_WINDOW)) {
-        // Hailstone's Find window (app/lua_eq_find.cpp) in place of the original's FindLocationWnd, toggled as
+        // Hailstone's Find window (app/lua_ui_find.cpp) in place of the original's FindLocationWnd, toggled as
         // __ExecuteCmd case 100 toggles that: shown, it goes; else a shown find path stops (0x66bf80:
         // PlayerPath_Stop); else it shows.
-        if (eq_host_.find_open) eq_host_.find_open = false;
+        if (ui_host_.find_open) ui_host_.find_open = false;
         else if (guide_.active()) guide_.stop(); // its guide path likewise
         else if (conn_ && conn_->player_path().active()) conn_->stop_find_path();
-        else eq_host_.find_open = true;
+        else if (!conn_ || conn_->npc_find_enabled()) ui_host_.find_open = true;
         return;
     }
     // The window keys and EQ menu entries of the Lua windows: the stock window's show / hide.
-    if (const char* screen = toggle_command_window(cmd); screen && eq_api_ && eq_api_->replaces(screen)) {
-        eq_api_->toggle(screen);
+    if (const char* screen = toggle_command_window(cmd); screen && ui_api_ && ui_api_->replaces(screen)) {
+        ui_api_->toggle(screen);
         return;
     }
     if (cmd >= static_cast<int>(C::TARGET_XTARGET_1) && cmd <= static_cast<int>(C::TARGET_XTARGET_20)) {
@@ -129,8 +137,8 @@ void ClientApp::key_command(const game::KeyMap::Event& e) {
                 conn_->set_target(*id);
         break;
     case C::CLOSE_TOP_WINDOW:
-        // The client's own windows first, then the UI pack's (a window with "Close with Esc" ticked: eq.TakeCloseTopWindow).
-        if (!actions_ui_->close_top_window()) eq_host_.close_top_window = true;
+        // The client's own windows first, then the UI pack's (a window with "Close with Esc" ticked: hs.TakeCloseTopWindow).
+        if (!actions_ui_->close_top_window()) ui_host_.close_top_window = true;
         break;
     case C::REPLY: reply_to_last_tell(); break; // __ExecuteCmd case 0x23 (default key R)
     case C::CLEAR_TARGET:
@@ -208,45 +216,45 @@ void ClientApp::key_command(const game::KeyMap::Event& e) {
         if (!was && conn_->player_status().stand_state == net::kStandStanding)
             if (const game::Spawn* me = world.player())
                 if (auto t = world.spawns.find(world.target_id); t != world.spawns.end() && t->first != world.player_id)
-                    if (game::red_con_tip_due(target_manager_, t->first, me->level, t->second.level) && eq_api_ &&
-                        eq_api_->activate_tip(0x20))
+                    if (game::red_con_tip_due(target_manager_, t->first, me->level, t->second.level) && ui_api_ &&
+                        ui_api_->activate_tip(0x20))
                         break;
         if (conn_->toggle_auto_attack()) face_target();
         break;
     }
     case C::INVENTORY:
-        if (eq_api_ && eq_api_->replaces("InventoryWindow")) eq_api_->toggle("InventoryWindow");
+        if (ui_api_ && ui_api_->replaces("InventoryWindow")) ui_api_->toggle("InventoryWindow");
         else if (item_ui_) item_ui_->toggle_inventory();
         break;
     // __ExecuteCmd cases 115..117: CInvSlotMgr_OpenAllBags, CloseAllBags and their toggle (0x6989e0).
     case C::OPEN_INV_BAGS:
-        if (eq_api_ && eq_api_->replaces("Bag1")) eq_api_->open_all_bags();
+        if (ui_api_ && ui_api_->replaces("Bag1")) ui_api_->open_all_bags();
         else if (item_ui_) item_ui_->open_all_bags(*conn_);
         break;
     case C::CLOSE_INV_BAGS:
-        if (eq_api_ && eq_api_->replaces("Bag1")) eq_api_->close_all_bags();
+        if (ui_api_ && ui_api_->replaces("Bag1")) ui_api_->close_all_bags();
         else if (item_ui_) item_ui_->close_all_bags();
         break;
     case C::TOGGLE_INV_BAGS:
-        if (eq_api_ && eq_api_->replaces("Bag1")) eq_api_->toggle_all_bags();
+        if (ui_api_ && ui_api_->replaces("Bag1")) ui_api_->toggle_all_bags();
         else if (item_ui_) item_ui_->toggle_all_bags(*conn_);
         break;
     case C::SPELLBOOK: if (spell_ui_) spell_ui_->toggle_book(); break;
     case C::CMD_STOP_CAST: conn_->stop_cast(); break;
     case C::MAIN:
-        if (eq_api_ && eq_api_->replaces("ActionsWindow")) eq_api_->actions_key(0);
+        if (ui_api_ && ui_api_->replaces("ActionsWindow")) ui_api_->actions_key(0);
         else actions_ui_->toggle_actions(0);
         break;
     case C::ABILITIES:
-        if (eq_api_ && eq_api_->replaces("ActionsWindow")) eq_api_->actions_key(1);
+        if (ui_api_ && ui_api_->replaces("ActionsWindow")) ui_api_->actions_key(1);
         else actions_ui_->toggle_actions(1);
         break;
     case C::COMBAT:
-        if (eq_api_ && eq_api_->replaces("ActionsWindow")) eq_api_->actions_key(2);
+        if (ui_api_ && ui_api_->replaces("ActionsWindow")) ui_api_->actions_key(2);
         else actions_ui_->toggle_actions(2);
         break;
     case C::SOCIALS:
-        if (eq_api_ && eq_api_->replaces("ActionsWindow")) eq_api_->actions_key(3);
+        if (ui_api_ && ui_api_->replaces("ActionsWindow")) ui_api_->actions_key(3);
         else actions_ui_->toggle_actions(3);
         break;
     case C::TOGGLE_MAINMENUWIN:
@@ -256,7 +264,7 @@ void ClientApp::key_command(const game::KeyMap::Event& e) {
     case C::TOGGLE_OPTIONSWIN: actions_ui_->toggle_keys(); break;
     case C::SCREENCAP: take_screenshot(); break;
     // The chat keys, while the keys go to the game (a chat input that has them takes its own keys, so these never
-    // come then): the active chat window's input is filled and takes the keyboard (app/lua_eq_chat.cpp).
+    // come then): the active chat window's input is filled and takes the keyboard (app/lua_ui_chat.cpp).
     case C::TELL: tell_key(); break;                       // __ExecuteCmd case 15: "/tell "
     case C::RTARGET: reply_target_key(); break;            // case 69: "/rtarget <the player at the reply index>"
     case C::CMDMODE_SAY: put_chat_input("'"); break;       // case 57 (@0x4d7f88): the say command's "'"
@@ -265,7 +273,7 @@ void ClientApp::key_command(const game::KeyMap::Event& e) {
     case C::HISTORY_DOWN: chat_history_key(false); break;
     case C::PAGEUP: chat_page_key(-1); break;              // cases 55 / 56: the active window's output, a page
     case C::PAGEDOWN: chat_page_key(1); break;
-    // Case 36 acts only while the chat input has the keys: there the input's Tab / Shift+Tab (eq.ChatCycleReply).
+    // Case 36 acts only while the chat input has the keys: there the input's Tab / Shift+Tab (hs.ChatCycleReply).
     case C::CYCLEREPLY:
     case C::CYCLEREPLY_BACK: break;
     // __ExecuteCmd cases 44..46: Who_BuildAndSendRequest (as the Actions window's Who button), the invite or follow
@@ -289,7 +297,7 @@ void ClientApp::key_command(const game::KeyMap::Event& e) {
         break;
     // __ExecuteCmd case 163 (0x698d60): the bank's and the shared bank's bags open or close.
     case C::CMD_TOGGLE_BANK_BAGS:
-        if (eq_api_ && eq_api_->replaces("Bag1")) eq_api_->toggle_all_bank_bags();
+        if (ui_api_ && ui_api_->replaces("Bag1")) ui_api_->toggle_all_bank_bags();
         break;
     default: break;
     }
@@ -601,7 +609,7 @@ void ClientApp::chat_key(int slot) {
     case A::InsertCharacter: {
         game::ChatInputWorld w;
         w.mode = 1;
-        w.active_chat_window = eq_api_ != nullptr;
+        w.active_chat_window = ui_api_ != nullptr;
         const auto& held = movement_.controller().held_keys();
         w.forward = held.forward;
         w.backward = held.backward;
@@ -633,7 +641,7 @@ void ClientApp::player_customization_key() {
     // the Luclin or Planes of Power expansion (bits 0x4 / 0x8; a PcClient vtable +0x8c answer and a non-English
     // client pass too, docs/unknowns.md); a model neither Luclin nor new-style gets 12377 (colour 0xd), else the
     // player customization window shows (vtable +0x90: shown, never toggled off, as 0xde0a2c is always 1).
-    if (!conn_ || !eq_api_ || !actor_renderer_) return;
+    if (!conn_ || !ui_api_ || !actor_renderer_) return;
     const game::Spawn* me = conn_->world().player();
     auto model = me ? actor_renderer_->model_for(*me) : nullptr;
     if (!model) return;
@@ -643,7 +651,7 @@ void ClientApp::player_customization_key() {
         conn_->system_message(game::kStrPreLuclinCustomization, 0xd);
         return;
     }
-    eq_api_->show("PlayerCustomizationWnd", true);
+    ui_api_->show("PlayerCustomizationWnd", true);
 }
 
 // The character select and creation key slots (493..498) outside the game.

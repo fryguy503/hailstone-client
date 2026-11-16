@@ -1,7 +1,8 @@
 -- Help: replaces the game's HelpWindow (the game's help\ pages). A tool row (Back, Contents, the page's title, Reset
--- Tips, Customer Service) over the page, which scrolls; its links are followed by the window (eq.StmlLink), with
+-- Tips, Customer Service) over the page, which scrolls; its links are followed by the window (hs.StmlLink), with
 -- Back through its history (the window enables it while there is one). The buttons are the original's
--- (app/lua_eq_help.cpp): Reset Tips brings up the tip of the day, Customer Service files a /petition.
+-- (app/lua_ui_help.cpp): Reset Tips brings up the tip of the day, Customer Service files a /petition.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -35,6 +36,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Help", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Help", WINDOW_OPTS, drawWindow)
 end)

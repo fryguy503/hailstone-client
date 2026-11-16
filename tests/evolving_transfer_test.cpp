@@ -300,7 +300,7 @@ TEST_CASE("mock evolving transfer: after a refused transfer a new selection star
     CHECK(requests(rig)[3].action == EvolvingAction::Transfer);
 }
 
-// update(), eq.ItemExpTransfer and each item display ask every frame; the item list and the snapshot comparison are
+// update(), hs.ItemExpTransfer and each item display ask every frame; the item list and the snapshot comparison are
 // built again only when the inventory changes.
 TEST_CASE("mock evolving transfer: an unchanged inventory costs no rebuild per frame") {
     Rig rig(evolving_config());

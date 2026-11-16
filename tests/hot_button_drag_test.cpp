@@ -1,4 +1,4 @@
-// Hotbuttons on the cursor (app/lua_eq.cpp eq.PickUp, app/lua_eq_hud.cpp): dragged from the Actions window or
+// Hotbuttons on the cursor (app/lua_ui.cpp hs.PickUp, app/lua_ui_hud.cpp): dragged from the Actions window or
 // off a bar, put on a bar by a click on a hotbutton (what was there goes on the cursor).
 #include <doctest/doctest.h>
 
@@ -7,7 +7,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "game/hotbuttons.h"
 #include "scratch_dir.h"
 
@@ -32,52 +32,52 @@ TEST_CASE("Hotbuttons: an Actions button dragged to a bar, moved off it and swap
     ImGuiContext* ctx = ImGui::CreateContext();
     {
         game::HotButtonStore store;
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.hot_buttons = &store;
         host.set_hot_button = [&](int bar, int button, const game::HotButton& b) { store.current(bar, button) = b; };
         int pressed = -1;
         host.press_hot_button = [&](int, int button, bool) { pressed = button; };
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
 
-        CHECK(run(L, "return eq.HoldingButton()") == "false");
-        CHECK(run(L, "return eq.PickUp('ActionsWindow', 'AMP_WhoButton')") == "true");
-        CHECK(run(L, "return eq.HoldingButton()") == "true");
+        CHECK(run(L, "return hs.HoldingButton()") == "false");
+        CHECK(run(L, "return hs.PickUp('ActionsWindow', 'AMP_WhoButton')") == "true");
+        CHECK(run(L, "return hs.HoldingButton()") == "true");
         // only one button on the cursor at a time
-        CHECK(run(L, "return eq.PickUp('ActionsWindow', 'AMP_CampButton')") == "false");
+        CHECK(run(L, "return hs.PickUp('ActionsWindow', 'AMP_CampButton')") == "false");
         // an empty social makes no button
-        run(L, "eq.ClearCursorButton()");
-        CHECK(run(L, "return eq.PickUp('ActionsWindow', 'ASP_SocialButton1')") == "false");
+        run(L, "hs.ClearCursorButton()");
+        CHECK(run(L, "return hs.PickUp('ActionsWindow', 'ASP_SocialButton1')") == "false");
 
-        CHECK(run(L, "return eq.PickUp('ActionsWindow', 'AMP_WhoButton')") == "true");
-        CHECK(run(L, "return eq.ClickHotButton('HotButtonWnd', 'HB_Button3', 'left')") == "true");
+        CHECK(run(L, "return hs.PickUp('ActionsWindow', 'AMP_WhoButton')") == "true");
+        CHECK(run(L, "return hs.ClickHotButton('HotButtonWnd', 'HB_Button3', 'left')") == "true");
         CHECK(pressed == -1); // put there, not pressed
         CHECK(store.current(0, 2).type == game::HotButtonType::MenuButton);
         CHECK(store.current(0, 2).slot == static_cast<int>(game::MenuButton::Who));
-        CHECK(run(L, "return eq.HoldingButton()") == "false");
+        CHECK(run(L, "return hs.HoldingButton()") == "false");
 
         // a click on it now presses it
-        run(L, "eq.ClickHotButton('HotButtonWnd', 'HB_Button3', 'left')");
+        run(L, "hs.ClickHotButton('HotButtonWnd', 'HB_Button3', 'left')");
         CHECK(pressed == 2);
 
         // the melee button on button 1, then Who dragged onto it: Melee comes onto the cursor
-        CHECK(run(L, "return eq.PickUp('ActionsWindow', 'ACP_MeleeAttackButton')") == "true");
-        run(L, "eq.ClickHotButton('HotButtonWnd', 'HB_Button1', 'left')");
+        CHECK(run(L, "return hs.PickUp('ActionsWindow', 'ACP_MeleeAttackButton')") == "true");
+        run(L, "hs.ClickHotButton('HotButtonWnd', 'HB_Button1', 'left')");
         CHECK(store.current(0, 0).type == game::HotButtonType::WeaponSlot);
-        CHECK(run(L, "return eq.PickUp('HotButtonWnd', 'HB_Button3')") == "true");
+        CHECK(run(L, "return hs.PickUp('HotButtonWnd', 'HB_Button3')") == "true");
         CHECK(store.current(0, 2).empty()); // moved off the bar
-        run(L, "eq.ClickHotButton('HotButtonWnd', 'HB_Button1', 'left')");
+        run(L, "hs.ClickHotButton('HotButtonWnd', 'HB_Button1', 'left')");
         CHECK(store.current(0, 0).type == game::HotButtonType::MenuButton);
         CHECK(host.cursor_button);
         CHECK(host.cursor_button->type == game::HotButtonType::WeaponSlot);
         // an empty button gives nothing to drag
-        run(L, "eq.ClearCursorButton()");
-        CHECK(run(L, "return eq.PickUp('HotButtonWnd', 'HB_Button5')") == "false");
+        run(L, "hs.ClearCursorButton()");
+        CHECK(run(L, "return hs.PickUp('HotButtonWnd', 'HB_Button5')") == "false");
         lua_close(L);
     }
     ImGui::DestroyContext(ctx);
@@ -91,15 +91,15 @@ TEST_CASE("Window places: a moved window is where it was after the layout is sav
     std::filesystem::path dir = dir_scratch.path();
     std::filesystem::create_directories(dir);
     auto place = [&](const char* code) {
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
+        lua_setglobal(L, "hs");
         api.begin_frame();
         std::string out = run(L, code);
         api.begin_frame(); // stores what moved
@@ -108,9 +108,9 @@ TEST_CASE("Window places: a moved window is where it was after the layout is sav
         return out;
     };
     // placed (where ReplaceWindow put it: not kept), then moved by the player (kept)
-    place("local _, x, y, w, h = eq.ReplaceWindow('Chat1'); eq.WindowPlaced('Chat1', x, y, w, h, true); "
-          "eq.WindowPlaced('Chat1', 321, 234, 400, 300, true); return ''");
-    CHECK(place("local shown, x, y, w, h = eq.ReplaceWindow('Chat1'); return x .. ',' .. y .. ',' .. w .. ',' .. h") ==
+    place("local _, x, y, w, h = hs.ReplaceWindow('Chat1'); hs.WindowPlaced('Chat1', x, y, w, h, true); "
+          "hs.WindowPlaced('Chat1', 321, 234, 400, 300, true); return ''");
+    CHECK(place("local shown, x, y, w, h = hs.ReplaceWindow('Chat1'); return x .. ',' .. y .. ',' .. w .. ',' .. h") ==
           "321,234,400,300");
     std::filesystem::remove_all(dir);
     ImGui::DestroyContext(ctx);

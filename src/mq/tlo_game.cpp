@@ -1107,11 +1107,11 @@ void register_group() {
 void register_misc_types() {
     Type& zone = const_cast<Type&>(*g.zone);
     zone.to_value = [](const Context& c, const Value&) {
-        return c.conn ? V::string(c.conn->world().zone_long_name) : V::nil();
+        return c.conn ? V::string(c.conn->zone_display_name()) : V::nil();
     };
     add(g.zone, "ID", [](const Context& c, const Value&, std::string_view) { return c.conn ? V::integer(c.conn->zone_id()) : V::nil(); });
     add(g.zone, "Name", [](const Context& c, const Value&, std::string_view) {
-        return c.conn ? V::string(c.conn->world().zone_long_name) : V::nil();
+        return c.conn ? V::string(c.conn->zone_display_name()) : V::nil();
     });
     add(g.zone, "ShortName", [](const Context& c, const Value&, std::string_view) {
         return c.conn ? V::string(c.conn->world().zone_short_name) : V::nil();

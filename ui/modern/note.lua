@@ -1,6 +1,7 @@
 -- Note: replaces the game's NoteWindow (a note or scroll read from the inventory). The note's text (STML) on a warm
 -- paper-toned page that scrolls, and the window's buttons: Cast Spell and Scribe when the note teaches a spell (they
 -- show only then, as on the stock window), and Done.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -25,6 +26,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("A Note", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Note", WINDOW_OPTS, drawWindow)
 end)

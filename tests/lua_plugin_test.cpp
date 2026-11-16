@@ -3,9 +3,13 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <array>
 #include <fstream>
+#include <imgui.h>
+#include <imgui_internal.h>
 
 #include "core/ascii_case.h"
+#include "game/nameplate_canvas.h"
 #include "game/server_ext_chain.h"
 #include "game/spells.h"
 #include "mq/commands.h"
@@ -27,6 +31,7 @@ struct Host {
     mq::Registry reg;
     mq::Context ctx;
     game::ExtensionChain chain;
+    game::NameplateCanvasRegistry canvas; // outlives ScriptHost and its Lua states
     plugin::UiBridge bridge;
     std::vector<std::string> printed, sent;
     std::vector<std::pair<plugin::Stream, net::AppPacket>> packets;
@@ -60,6 +65,7 @@ struct Host {
         se.config_dir = world.dir / "config";
         se.now_ms = [this] { return clock; };
         se.extensions = &chain;
+        se.nameplates = &canvas;
         se.ui = &bridge;
         se.connection = [this] { return world.conn.get(); };
         se.send = [this](plugin::Stream s, const net::AppPacket& p) { packets.emplace_back(s, p); };
@@ -127,7 +133,7 @@ hs.on_packet('zone', 'out', 0x7e58, function(op, data) return 'xyz' end)
 mode = 2
 hs.ui_function('info', function(a, t)
   local p = hs.player()
-  return {echo = a, field = t and t.key, level = p.level, rat = hs.spawn(10).name, spell = hs.spell(11).name,
+  return {echo = a, field = t and t.key, level = p.level, rat = hs.spawn(10).name, incarnation = hs.spawn(10).incarnation, spell = hs.spell(11).name,
           spawns = #hs.spawns(), buff = hs.buff(1).spell_id, item = hs.item(24, 0).name}
 end)
 hs.option{name = 'mode', label = 'Mode', min = 0, max = 3, get = function() return mode end,
@@ -139,6 +145,291 @@ mq.bind('/exton', function() hs.set_active(true) end)
 )lua";
 
 } // namespace
+
+TEST_CASE("Lua plugin: a standalone canvas registration retains its script and retires before VM close") {
+    Host h;
+    h.write("canvas/init.lua", R"lua(
+local hs=require('hailstone')
+hs.nameplates.Register('main',function(f)
+  return {{token=f.candidates[1].token,bounds={x=-20,y=-10,w=40,h=10},
+    commands={{kind='Text',x=-20,y=-10,size=10,text='live'}}}}
+end)
+)lua");
+    REQUIRE(h.scripts->run("canvas", {}));
+    h.scripts->pulse();
+    REQUIRE(h.scripts->running("canvas")); // the main chunk returned; the registration owns its lifetime
+    game::NameplateCanvasFrame frame;
+    frame.viewport = {0,0,640,480};
+    game::NameplateCanvasCandidate candidate;
+    candidate.spawn.id = 10;
+    candidate.spawn.incarnation = 17;
+    candidate.x = 200;
+    candidate.y = 100;
+    candidate.depth = 40;
+    frame.candidates.push_back(candidate);
+    auto painted = h.canvas.frame(frame);
+    REQUIRE(painted.size() == 1);
+    REQUIRE(painted[0].model.commands.size() == 1);
+    CHECK(painted[0].model.commands[0].text == "live");
+    const auto owner = painted[0].owner;
+    h.allow(plugin::kCapRead);
+    h.scripts->policy_changed();
+    CHECK(h.canvas.frame(frame).empty()); // a retained callback cannot keep old capabilities
+    CHECK_FALSE(h.canvas.owner_valid(owner));
+    CHECK(h.scripts->stop("canvas"));
+    CHECK(h.canvas.frame(frame).empty());
+    CHECK(h.canvas.empty());
+}
+
+TEST_CASE("Lua plugin: a canvas registration rejects each missing required capability") {
+    constexpr std::uint32_t required = plugin::kCapRead | plugin::kCapUi | plugin::kCapExtend;
+    for (const auto missing : std::array<std::uint32_t,3>{plugin::kCapRead,plugin::kCapUi,plugin::kCapExtend}) {
+        Host h;
+        h.allow(required & ~missing);
+        h.write("denied.lua", R"lua(
+local n=require('hailstone').nameplates
+assert(not pcall(n.Register,function() return {} end))
+print('canvas denied')
+)lua");
+        REQUIRE(h.scripts->run("denied", {}));
+        h.scripts->pulse();
+        CHECK(h.printed_part("canvas denied"));
+        CHECK_FALSE(h.scripts->running("denied"));
+        CHECK(h.canvas.empty());
+    }
+}
+
+TEST_CASE("Lua plugin: canvas callbacks retain their registering thread ceiling and intersect the current caller") {
+    Host h;
+    h.write("canvas.lua",R"lua(
+local hs,mq=require('hailstone'),require('mq')
+hs.ui_function('keepalive',function()return true end)
+local function register(name)
+ hs.nameplates.Register('main',function(f)
+  local ok=pcall(hs.set_max_camera_distance,77)
+  print(name..':'..tostring(ok))
+  return {{token=f.candidates[1].token,bounds={x=0,y=0,w=20,h=10},
+   commands={{kind='RectFilled',x0=0,y0=0,x1=20,y1=10}}}}
+ end)
+end
+mq.bind('/canvasnarrow',function()register('narrow')end)
+mq.bind('/canvasfull',function()register('full')end)
+)lua");
+    REQUIRE(h.scripts->run("canvas",{}));
+    h.scripts->pulse();
+    REQUIRE(h.scripts->running("canvas"));
+    constexpr auto required=plugin::kCapRead|plugin::kCapUi|plugin::kCapExtend;
+    {
+        plugin::CallerScope scope(required,"limited-starter");
+        std::string command="/canvasnarrow";
+        REQUIRE(h.hooks.command(command));
+    }
+    game::NameplateCanvasFrame frame;frame.viewport={0,0,640,480};
+    game::NameplateCanvasCandidate candidate;
+    candidate.spawn.id=10;candidate.spawn.incarnation=17;candidate.x=100;candidate.y=100;candidate.depth=10;
+    frame.candidates.push_back(candidate);
+    auto painted=h.canvas.frame(frame);
+    REQUIRE(painted.size()==1);
+    const auto owner=painted[0].owner;
+    CHECK(h.printed_part("narrow:false"));
+    CHECK(h.max_zoom==50.0f);
+    {
+        plugin::CallerScope scope(plugin::kCapRead,"insufficient-draw");
+        CHECK(h.canvas.frame(frame).empty());
+    }
+    CHECK(h.canvas.owner_valid(owner));
+    CHECK(h.canvas.frame(frame).size()==1);
+    CHECK(h.max_zoom==50.0f);
+    std::string command="/canvasfull";
+    REQUIRE(h.hooks.command(command));
+    painted=h.canvas.frame(frame);
+    REQUIRE(painted.size()==1);
+    CHECK(painted[0].owner!=owner);
+    CHECK(h.printed_part("full:true"));
+    CHECK(h.max_zoom==77.0f);
+    h.max_zoom=50.0f;
+    h.allow(required);h.scripts->policy_changed();
+    CHECK(h.canvas.frame(frame).size()==1);
+    CHECK(h.printed_part("full:false"));
+    CHECK(h.max_zoom==50.0f);
+    h.allow(plugin::kCapAll);h.scripts->policy_changed();
+    CHECK(h.canvas.frame(frame).size()==1);
+    CHECK(h.max_zoom==77.0f);
+    CHECK(h.scripts->running("canvas"));
+}
+
+TEST_CASE("Lua plugin: canvas callbacks restore ImGui windows styles and pending data on return and error") {
+    struct Context {
+        ImGuiContext* previous=ImGui::GetCurrentContext();
+        ImGuiContext* current=ImGui::CreateContext();
+        Context(){
+            auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={640,480};io.DeltaTime=1.0f/60.0f;
+            io.ConfigErrorRecoveryEnableAssert=false;io.ConfigErrorRecoveryEnableDebugLog=false;io.ConfigErrorRecoveryEnableTooltip=false;
+            unsigned char* pixels=nullptr;int w=0,h=0;io.Fonts->GetTexDataAsRGBA32(&pixels,&w,&h);
+        }
+        ~Context(){if(current->WithinFrameScope)ImGui::EndFrame();ImGui::DestroyContext(current);ImGui::SetCurrentContext(previous);}
+    } imgui;
+    for(const bool fail:{false,true}){
+        Host h;
+        h.write("canvas.lua",std::string("local fail=")+(fail?"true":"false")+R"lua(
+local hs,ui=require('hailstone'),require('ImGui')
+hs.nameplates.Register(function(f)
+ ui.Begin('Unbalanced canvas window')
+ ui.PushStyleColor(0,1,0,0,1)
+ ui.PushStyleVar(0,0.5)
+ ui.SetNextWindowSize(123,456)
+ if fail then error('canvas error') end
+ return {{token=f.candidates[1].token,bounds={x=0,y=0,w=20,h=10},commands={{kind='RectFilled',x0=0,y0=0,x1=20,y1=10}}}}
+end)
+)lua");
+        REQUIRE(h.scripts->run("canvas",{}));h.scripts->pulse();
+        ImGui::NewFrame();
+        const int windows=imgui.current->CurrentWindowStack.Size,colors=imgui.current->ColorStack.Size,vars=imgui.current->StyleVarStack.Size;
+        game::NameplateCanvasFrame frame;frame.viewport={0,0,640,480};
+        game::NameplateCanvasCandidate candidate;candidate.spawn.id=10;candidate.x=100;candidate.y=100;candidate.depth=10;frame.candidates.push_back(candidate);
+        const auto painted=h.canvas.frame(frame);
+        CHECK(painted.size()==(fail?0u:1u));
+        CHECK(imgui.current->CurrentWindowStack.Size==windows);
+        CHECK(imgui.current->ColorStack.Size==colors);CHECK(imgui.current->StyleVarStack.Size==vars);
+        CHECK(imgui.current->NextWindowData.HasFlags==0);CHECK(imgui.current->NextItemData.HasFlags==0);
+        ImGui::Render();
+    }
+}
+
+TEST_CASE("Lua plugin: a canvas callback that stops itself commits no stale plate") {
+    Host h;
+    h.write("canvas.lua", R"lua(
+local hs,mq=require('hailstone'),require('mq')
+hs.nameplates.Register(function(f)
+ mq.cmd('/lua stop canvas')
+ return {{token=f.candidates[1].token,bounds={x=0,y=0,w=20,h=10},
+  commands={{kind='RectFilled',x0=0,y0=0,x1=20,y1=10}}}}
+end)
+)lua");
+    REQUIRE(h.scripts->run("canvas", {}));
+    h.scripts->pulse();
+    REQUIRE(h.scripts->running("canvas"));
+    game::NameplateCanvasFrame frame;
+    frame.viewport = {0,0,640,480};
+    game::NameplateCanvasCandidate candidate;
+    candidate.spawn.id = 10;
+    candidate.spawn.incarnation = 17;
+    candidate.x = 200;
+    candidate.y = 100;
+    candidate.depth = 40;
+    frame.candidates.push_back(candidate);
+    CHECK(h.canvas.frame(frame).empty());
+    CHECK_FALSE(h.scripts->running("canvas"));
+    h.scripts->pulse(); // deferred VM cleanup after the in-flight callback returned
+    CHECK(h.canvas.empty());
+    CHECK(h.canvas.frame(frame).empty());
+}
+
+TEST_CASE("Lua plugin: managed installed add-ons start disable update and remove without script commands") {
+    Host h;
+    const std::string first = "hailstone.ui_function('label', function() return 'managed one' end)";
+    h.write("managed/init.lua", first);
+    mq::ManagedScript a;
+    a.name = "managed"; a.entry = h.lua_dir / "managed" / "init.lua";
+    a.hash = sha256(first); a.revision = sha256(std::string_view("package one"));
+    a.enabled = a.verified = true;
+    h.policy.set_ceilings({{plugin::FileKind::Script, a.hash, plugin::kCapRead | plugin::kCapUi | plugin::kCapExtend}});
+    h.scripts->set_managed_addons({a});
+    h.scripts->pulse();
+    REQUIRE(h.scripts->running("managed"));
+    CHECK(h.scripts->caps_of("managed") == (plugin::kCapRead | plugin::kCapUi | plugin::kCapExtend));
+    auto p = h.bridge.call("managed", "label", {});
+    REQUIRE(p); CHECK(p->s == "managed one");
+    a.enabled = false; h.scripts->set_managed_addons({a});
+    CHECK_FALSE(h.scripts->running("managed"));
+    CHECK_FALSE(h.bridge.call("managed", "label", {}));
+    CHECK_FALSE(h.scripts->run("managed", {})); // ordinary autorun cannot bypass Add-ons disabled
+    for (const auto* alias : {"managed/init", "managed/init.lua", "managed.lua", "managed/./init"})
+        CHECK_FALSE(h.scripts->run(alias, {})); // all of these resolve to the installed init.lua
+    a.enabled = true; h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK(h.scripts->running("managed"));
+    CHECK_FALSE(h.scripts->run("managed/init", {})); // an enabled add-on has one canonical runtime owner
+    const std::string second = "hailstone.ui_function('label', function() return 'managed two' end)";
+    h.write("managed/init.lua", second);
+    a.hash = sha256(second); a.revision = sha256(std::string_view("package two"));
+    h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    p = h.bridge.call("managed", "label", {});
+    REQUIRE(p); CHECK(p->s == "managed two");
+    h.scripts->set_managed_addons({});
+    CHECK_FALSE(h.scripts->running("managed"));
+    CHECK_FALSE(h.bridge.call("managed", "label", {}));
+}
+
+TEST_CASE("Lua plugin: managed activation honors game-state policy source identity and modified records") {
+    Host h;
+    const std::string text = "hailstone.ui_function('label', function() return 'managed' end)";
+    h.write("managed/init.lua", text);
+    mq::ManagedScript a;
+    a.name = "managed"; a.entry = h.lua_dir / "managed" / "init.lua";
+    a.hash = sha256(text); a.revision = a.hash; a.enabled = a.verified = true;
+    h.policy.clear();
+    h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("managed"));
+    h.allow(0); h.scripts->policy_changed(); h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("managed"));
+    h.allow(plugin::kCapAll); h.scripts->policy_changed(); h.scripts->pulse();
+    CHECK(h.scripts->running("managed"));
+    a.verified = false; h.scripts->set_managed_addons({a});
+    CHECK_FALSE(h.scripts->running("managed"));
+    CHECK_FALSE(h.scripts->run("managed", {}));
+    a.verified = true;
+    h.write("server/managed/init.lua", "print('a server-owned shadow must not be started as this add-on')");
+    h.scripts->set_server_dir(h.lua_dir / "server");
+    h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("managed"));
+    h.scripts->set_server_dir({});
+    a.hash = sha256(std::string_view("wrong expected bytes"));
+    h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("managed"));
+}
+
+TEST_CASE("Lua plugin: adopting managed metadata also stops an already running path alias") {
+    Host h;
+    const std::string text = "hailstone.ui_function('label', function() return 'alias' end)";
+    h.write("managed/init.lua", text);
+    REQUIRE(h.scripts->run("managed/init", {}));
+    h.scripts->pulse();
+    REQUIRE(h.scripts->running("managed/init"));
+    mq::ManagedScript a;
+    a.name = "managed"; a.entry = h.lua_dir / "managed" / "init.lua";
+    a.hash = sha256(text); a.revision = a.hash; a.enabled = false; a.verified = true;
+    h.scripts->set_managed_addons({a});
+    CHECK_FALSE(h.scripts->running("managed/init"));
+    CHECK_FALSE(h.scripts->run("managed/init.lua", {}));
+    a.enabled = true; h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK(h.scripts->running("managed"));
+    CHECK_FALSE(h.scripts->running("managed/init"));
+}
+
+TEST_CASE("Lua plugin: require cannot load a managed entry under another script owner") {
+    Host h;
+    h.allow(plugin::kCapRead | plugin::kCapUi | plugin::kCapExtend);
+    const std::string text = "hailstone.ui_function('label', function() return 'managed' end)";
+    h.write("managed/init.lua", text);
+    mq::ManagedScript a;
+    a.name = "managed"; a.entry = h.lua_dir / "managed" / "init.lua";
+    a.hash = sha256(text); a.revision = a.hash; a.enabled = false; a.verified = true;
+    h.scripts->set_managed_addons({a});
+    const std::string loader = R"lua(
+assert(not pcall(require, 'managed'))
+assert(not pcall(require, 'managed.init'))
+print('managed module entry refused')
+)lua";
+    h.write("loader.lua", loader);
+    REQUIRE(h.scripts->run("loader", {})); h.scripts->pulse();
+    CHECK(h.printed_part("managed module entry refused"));
+    a.enabled = true; h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    h.printed.clear();
+    h.write("loader2.lua", loader);
+    REQUIRE(h.scripts->run("loader2", {})); h.scripts->pulse();
+    CHECK(h.printed_part("managed module entry refused"));
+    CHECK(h.scripts->running("managed"));
+}
 
 TEST_CASE("Lua plugin: nameplate text hooks follow the script lifetime") {
     Host h;
@@ -187,6 +478,58 @@ require('hailstone').hooks{
     // The same table both times, and nothing of the first spawn left in the second.
     CHECK(a == "true:10:" + rat.name + ":false");
     CHECK(b == "true:13:" + corpse.name + ":true");
+}
+
+TEST_CASE("Lua plugin: map policy and visibility share native ownership and source lifetime rules") {
+    Host h;
+    h.write("map.lua",R"lua(
+local hs=require('hailstone')
+local revision=1
+hs.hooks{map_policy=function()return {custom_spawns=true,stock_npcs=false,npc_find=false,name='Script map',revision=revision} end}
+hs.map_visible(function(spawn,purpose) return purpose~='find' end)
+mq.bind('/mapcycle',function()hs.set_active(false);hs.set_active(true)end)
+mq.bind('/mapcontent',function()revision=revision+1 end)
+mq.bind('/mapreplace',function()hs.map_policy(function()return {custom_spawns=true,stock_npcs=false,npc_find=false,name='Script map',revision=revision}end)end)
+mq.bind('/mapclear',function()hs.map_policy();hs.map_visible()end)
+)lua");
+    REQUIRE(h.scripts->run("map",{}));h.scripts->pulse();
+    auto& c=*h.world.conn;
+    const auto current=[&]{return h.chain.map_policy(c);};
+    const auto lifecycle=[&]{return h.chain.lifecycle_revision(c);};
+    auto policy=current();CHECK(policy.flags==7);CHECK(policy.name=="Script map");CHECK(policy.revision!=0);
+    const auto& spawn=c.world().spawns.at(10);
+    CHECK(h.chain.map_visible(c,spawn,0));CHECK_FALSE(h.chain.map_visible(c,spawn,1));
+    auto before=policy.revision;CHECK(current().revision==before);
+    for(const char* command:{"/mapcycle","/mapcontent","/mapreplace"}) {
+        const auto source=lifecycle();
+        h.run(command);h.scripts->pulse();
+        policy=current();CHECK(policy.flags==7);CHECK(policy.name=="Script map");CHECK(policy.revision!=before);before=policy.revision;
+        CHECK((lifecycle()!=source)==(std::string_view(command)=="/mapcycle"));
+    }
+    const auto before_caps=lifecycle();
+    h.allow(plugin::kCapAll&~plugin::kCapUi);h.scripts->policy_changed();
+    h.allow(plugin::kCapAll);h.scripts->policy_changed();
+    CHECK(current().revision!=before); // no policy query observed the denied interval
+    CHECK(lifecycle()!=before_caps);
+    h.run("/mapclear");h.scripts->pulse();CHECK(current().flags==0);CHECK(h.chain.map_visible(c,spawn,1));
+    const auto retired=current().revision;
+    REQUIRE(h.scripts->stop("map"));CHECK(current().revision==0);
+    REQUIRE(h.scripts->run("map",{}));h.scripts->pulse();CHECK(current().revision!=retired);
+}
+
+TEST_CASE("Lua plugin: map policy requires UI and malformed plain fields abstain") {
+    for(const std::string answer:{"{custom_spawns=1}","{stock_npcs=0}","{npc_find='no'}",
+            "{name=string.rep('x',64)}","{name='bad\\n'}","{revision=-1}","setmetatable({custom_spawns=true},{})"}) {
+        CAPTURE(answer);Host h;
+        h.write("map.lua","hailstone.map_policy(function()return "+answer+" end)");
+        REQUIRE(h.scripts->run("map",{}));h.scripts->pulse();
+        const auto policy=h.chain.map_policy(*h.world.conn);
+        CHECK(policy.flags==0);CHECK(policy.name.empty());CHECK(h.scripts->running("map"));
+    }
+    Host h;h.allow(plugin::kCapRead|plugin::kCapExtend);
+    h.write("map.lua","hailstone.map_policy(function()return {custom_spawns=true}end)");
+    REQUIRE(h.scripts->run("map",{}));h.scripts->pulse();
+    CHECK(h.chain.empty());CHECK(h.printed_part("ui"));
 }
 
 TEST_CASE("Lua plugin: the hailstone module's extension, packets, UI and readers; it stays after its main chunk") {
@@ -281,6 +624,8 @@ TEST_CASE("Lua plugin: the hailstone module's extension, packets, UI and readers
     CHECK(r->field("field")->s == "k");
     CHECK(r->field("level")->i == 50);
     CHECK(r->field("rat")->s == "a_rat01");
+    REQUIRE(r->field("incarnation"));
+    CHECK(r->field("incarnation")->i == static_cast<std::int64_t>(c.world().spawns.at(10).incarnation));
     CHECK(r->field("spell")->s == "Holy Armor");
     CHECK(r->field("spawns")->i == 5);
     CHECK(r->field("buff")->i == 11);

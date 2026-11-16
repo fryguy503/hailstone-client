@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstdint>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -20,14 +21,18 @@
 #include <lua.hpp>
 
 #include "core/atomic_file.h"
+#include "core/asset_folder_choice.h"
 #include "core/frame_sections.h"
 #include "core/log.h"
+#include "plugin/lua_keep.h"
 
 namespace hailstone::ui::lua {
 
 namespace fs = std::filesystem;
 
 namespace {
+
+std::optional<fs::path> inside(const fs::path& root, std::string_view given);
 
 struct Script {
     std::string file;    // its name in the UI's folder, "<tag>/<name>" in a plugin's (LuaUi::set_folders)
@@ -55,6 +60,9 @@ using Clock = std::chrono::steady_clock;
 
 std::string g_drawing; // the ui.window whose draw function runs (LuaUi::drawing_window; one LuaUi per process)
 std::string g_caller_tag; // whose code runs (LuaUi::caller_tag)
+const LuaUi::CallbackOwner* g_callback_source=nullptr;
+char kSourceFunctions;
+char kMaintenanceHost;
 
 // The collector runs in LuaUi::frame, a slice of time each frame (collect_garbage): the windows make a few hundred
 // KB of garbage a frame over a live heap of tens of MB, and Lua's own pacing charges a sweep about one unit an
@@ -92,6 +100,9 @@ struct LuaUi::Impl {
     lua_State* L = nullptr;
     fs::path dir;      // the scripts
     fs::path root;     // dofile paths are relative to it (the UI's folder)
+    std::vector<fs::path> bases; // approved pack bases, nearest first; no settings/global environment of their own
+    LuaUi::DataRoots presentation_data;
+    std::vector<fs::path> active_import_files; // protected source/data imports; a file cannot enter itself again
     std::vector<LuaUi::Folder> folders; // more folders of windows (plugins'), set_folders
     std::vector<std::string> entries;   // set_entry_scripts: the only scripts of the UI's folder loaded (none: all)
     bool folders_changed = false;
@@ -100,11 +111,17 @@ struct LuaUi::Impl {
     std::vector<Window> windows;
     std::string running_file, running_tag; // the script loading or the window drawing (ui.window's file)
     std::string drawing_tag; // the tag of the layer drawing (ui.base_window)
+    std::shared_ptr<void> callback_lifetime=std::make_shared<int>(0);
+    std::map<std::string,std::shared_ptr<void>,std::less<>> callback_generations;
+    std::map<std::string,std::shared_ptr<LuaUi::CallbackMaintenance>,std::less<>> callback_maintenance;
+    const LuaUi::CallbackMaintenance* active_maintenance = nullptr;
+    int maintenance_runner_ref = LUA_NOREF;
+    bool maintaining_callbacks = false, closing = false;
     LuaUi::CallerScope scope; // what a folder's code runs under (set_caller_scope)
     LuaUi::ClipboardCheck clipboard; // whether a folder's code may use the clipboard (set_clipboard_check)
     int envs_ref = LUA_NOREF; // registry: tag -> the folder's globals (push_env)
     int views_ref = LUA_NOREF; // registry: every shared-table view of any folder -> its table (weak keys; make_env)
-    int eq_ref = LUA_NOREF, ui_ref = LUA_NOREF; // the pack's eq and ui tables
+    int host_api_ref = LUA_NOREF, ui_ref = LUA_NOREF; // the pack's hs and ui tables
     bool show_demo = false;
     bool show_control = false;
     using Settings = std::map<std::string, std::string, std::less<>>;
@@ -118,6 +135,7 @@ struct LuaUi::Impl {
     std::map<std::string, std::size_t, std::less<>> plugin_settings; // each plugin's count of keys (plugin_keys)
     std::size_t plugin_sections = 0; // plugin windows' timed sections kept by name (kPluginSections)
     Clock::time_point last_scan{};
+    bool scanned = false;
     std::size_t memory = 0; // what the state holds now (alloc)
     std::size_t allocated = 0; // every byte the state has allocated (alloc: what grew), freed or not; it wraps
     std::size_t memory_limit = kMemoryLimit;
@@ -217,6 +235,42 @@ struct LuaUi::Impl {
     };
     Clock::duration budget_for(const std::string& tag) const { return tag.empty() ? pack_budget : plugin_budget; }
 
+    static int maintenance_runner(lua_State* state) {
+        const auto* callback = of(state).active_maintenance;
+        if (callback) plugin::cxx_guard(state,[&]{ (*callback)(state); });
+        return 0;
+    }
+    void maintain_callbacks() {
+        if (!L || maintaining_callbacks || callback_maintenance.empty() || !lua_checkstack(L,2)) return;
+        const int top = lua_gettop(L);
+        // A cleanup may replace its own service; retain this bounded snapshot until its protected call returns.
+        std::vector<std::shared_ptr<LuaUi::CallbackMaintenance>> pending;
+        try {
+            pending.reserve(callback_maintenance.size());
+            for (const auto& item : callback_maintenance) pending.push_back(item.second);
+        } catch (...) { return; } // an allocation failure defers metadata cleanup to the next lifecycle point
+        struct Reset {
+            Impl& host;
+            ~Reset(){host.active_maintenance=nullptr;host.maintaining_callbacks=false;}
+        } reset{*this};
+        maintaining_callbacks=true;
+        for (const auto& callback : pending) {
+            active_maintenance=callback.get();
+            lua_rawgeti(L,LUA_REGISTRYINDEX,maintenance_runner_ref);
+            int status=LUA_OK;
+            {
+                Budget budget(*this,std::chrono::milliseconds(50));
+                status=lua_pcall(L,0,0,0);
+            }
+            active_maintenance=nullptr;
+            if (status!=LUA_OK) {
+                const char* why=lua_type(L,-1)==LUA_TSTRING?lua_tostring(L,-1):"non-string error";
+                log::warn("UI callback maintenance failed: {}",why);
+            }
+            lua_settop(L,top);
+        }
+    }
+
     // ---- settings: key=value lines, for window options the scripts keep
     static Settings read_settings(const fs::path& file) {
         Settings out;
@@ -224,7 +278,8 @@ struct LuaUi::Impl {
         std::string line;
         while (std::getline(f, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (auto eq = line.find('='); eq != std::string::npos) out[line.substr(0, eq)] = line.substr(eq + 1);
+            if (auto separator = line.find('='); separator != std::string::npos)
+                out[line.substr(0, separator)] = line.substr(separator + 1);
         }
         return out;
     }
@@ -374,7 +429,8 @@ struct LuaUi::Impl {
             before = g_caller_tag;
             if (g_caller_tag != tag) m.deadline = std::min(m.deadline, Clock::now() + m.plugin_budget);
             g_caller_tag = tag;
-            if (m.scope) held = m.scope(tag);
+            try { if (m.scope) held = m.scope(tag); }
+            catch (...) { g_caller_tag=std::move(before);m.deadline=deadline_before;throw; }
         }
         ~Acting() {
             held.reset();
@@ -411,7 +467,9 @@ struct LuaUi::Impl {
     void make_env(const std::string& tag);
 
     void report(Script& s, const char* message) {
+        callback_generations.erase(s.file);
         s.error = message ? message : "(error)";
+        maintain_callbacks();
         log::warn("ui script error: {}", s.error);
     }
     // A window's draw function failed: the error goes to its script, or, for a window registered outside its folder's
@@ -430,6 +488,8 @@ struct LuaUi::Impl {
     }
 
     void load_file(Script& s) {
+        callback_generations[s.file]=std::make_shared<int>(0);
+        maintain_callbacks();
         // Drop the windows this file registered before; the reloaded script registers them again.
         for (std::size_t i = 0; i < windows.size();) {
             if (windows[i].file == s.file) {
@@ -493,6 +553,7 @@ struct LuaUi::Impl {
 
     // Drops a script and the windows it registered.
     void unload_file(const std::string& file) {
+        callback_generations.erase(file);
         for (std::size_t i = 0; i < windows.size();) {
             if (windows[i].file == file) {
                 luaL_unref(L, LUA_REGISTRYINDEX, windows[i].draw_ref);
@@ -502,6 +563,7 @@ struct LuaUi::Impl {
             }
         }
         std::erase_if(scripts, [&](const Script& x) { return x.file == file; });
+        maintain_callbacks();
     }
 
     // The UI's folder, then each plugin folder: new and changed scripts load. A folder no longer listed takes its
@@ -534,22 +596,35 @@ struct LuaUi::Impl {
         }
         scan_folder("", dir, force_all);
         for (const LuaUi::Folder& f : folders) scan_folder(f.tag, f.dir, force_all);
+        scanned = true;
+        maintain_callbacks();
     }
 
     void scan_folder(const std::string& tag, const fs::path& folder, bool force_all) {
         std::error_code ec;
-        std::vector<std::pair<fs::path, std::string>> files; // each file and its name in errors
-        if (tag.empty() && !entries.empty()) {
-            for (const std::string& e : entries)
-                if (fs::is_regular_file(folder / e, ec)) files.emplace_back(folder / e, e);
-        } else {
-            for (const auto& e : fs::directory_iterator(folder, ec))
-                if (e.is_regular_file(ec) && e.path().extension() == ".lua")
-                    files.emplace_back(e.path(), tag.empty() ? e.path().filename().string()
-                                                             : tag + "/" + e.path().filename().string());
-            std::sort(files.begin(), files.end());
-        }
-        for (const auto& [p, name] : files) {
+        std::map<std::string, fs::path, std::less<>> files; // nearest file of each entry name wins
+        auto add = [&](const fs::path& source) {
+            auto file = [&](const std::string& name) {
+                const auto path = inside(source, name);
+                if (path && fs::is_regular_file(*path, ec))
+                    files.try_emplace(tag.empty() ? name : tag + "/" + name, *path);
+            };
+            if (tag.empty() && !entries.empty()) {
+                for (const std::string& entry : entries) file(entry);
+            } else {
+                for (const auto& entry : fs::directory_iterator(source, ec))
+                    if (entry.is_regular_file(ec) && entry.path().extension() == ".lua")
+                        file(entry.path().filename().string());
+            }
+        };
+        add(folder);
+        if (tag.empty())
+            for (const auto& base : bases) add(base);
+        std::vector<std::string> gone;
+        for (const auto& script : scripts)
+            if (script.tag == tag && !files.contains(script.file)) gone.push_back(script.file);
+        for (const auto& name : gone) unload_file(name);
+        for (const auto& [name, p] : files) {
             Script* s = nullptr;
             for (Script& x : scripts)
                 if (x.file == name) s = &x;
@@ -561,6 +636,9 @@ struct LuaUi::Impl {
                 n.tag = tag;
                 scripts.push_back(std::move(n));
                 s = &scripts.back();
+                force = true;
+            } else if (s->path != p) {
+                s->path = p; // an override appeared or was removed, even when both files have the same timestamp
                 force = true;
             }
             auto written = fs::last_write_time(p, ec);
@@ -811,7 +889,16 @@ int lua_dofile(lua_State* L) {
         const fs::path* folder = tag ? ui.folder_dir(tag) : nullptr;
         std::optional<fs::path> p = folder ? inside(*folder, given) : std::nullopt;
         std::error_code ec;
-        if (!p || !fs::exists(*p, ec)) p = inside(ui.root, given);
+        if (!p || !fs::is_regular_file(*p, ec)) {
+            p = inside(ui.root, given);
+            if (!p || !fs::is_regular_file(*p, ec)) {
+                p.reset();
+                for (const auto& base : ui.bases) {
+                    const auto candidate = inside(base, given);
+                    if (candidate && fs::is_regular_file(*candidate, ec)) { p = candidate; break; }
+                }
+            }
+        }
         if (p) {
             const std::string text = p->string();
             lua_pushlstring(L, text.data(), text.size());
@@ -825,6 +912,144 @@ int lua_dofile(lua_State* L) {
         lua_setupvalue(L, -2, 1); // its _ENV: the plugin's globals
     }
     lua_call(L, 0, LUA_MULTRET);
+    return lua_gettop(L) - 2;
+}
+
+struct FileImport {
+    fs::path file;
+    std::string path, tag, error;
+};
+
+bool beneath_folder(const fs::path& root, const fs::path& file) {
+    std::error_code ec;
+    const auto base = fs::weakly_canonical(root, ec);
+    if (ec) return false;
+    const auto relative = file.lexically_relative(base);
+    return !relative.empty() && !relative.is_absolute() && *relative.begin() != "..";
+}
+
+// This protected frame includes loading and environment setup, so every error returns through the recursion guard.
+int call_import_file(lua_State* L) {
+    const auto& load = *static_cast<FileImport*>(lua_touserdata(L, lua_upvalueindex(1)));
+    if (luaL_loadfilex(L, load.path.c_str(), "t") != LUA_OK) return lua_error(L);
+    if (!load.tag.empty()) {
+        LuaUi::Impl::of(L).push_env(load.tag);
+        lua_setupvalue(L, -2, 1);
+    }
+    lua_call(L, 0, LUA_MULTRET);
+    return lua_gettop(L);
+}
+
+enum class ImportKind { Base, Data };
+
+int lua_import_file(lua_State* L, ImportKind kind) {
+    std::size_t length = 0;
+    const char* given = luaL_checklstring(L, 1, &length);
+    const bool data = kind == ImportKind::Data;
+    const bool base_only = data && lua_toboolean(L, 2);
+    const char* method = data ? "LoadData" : "LoadBase";
+    const bool managed = lua_getfield(L, LUA_REGISTRYINDEX, kPackStateKey) == LUA_TBOOLEAN && lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    if (!managed) return luaL_error(L, "%s requires the client UI state", method);
+    lua_settop(L, 1);
+    auto& ui = LuaUi::Impl::of(L);
+    auto& load = plugin::lua_keep<FileImport>(L);
+    plugin::cxx_guard(L, [&] {
+        load.tag = g_caller_tag;
+        if (!load.tag.empty() && !ui.folder_dir(load.tag)) {
+            load.error = "the caller's UI folder is no longer active";
+            return;
+        }
+        const std::string_view raw(given, length);
+        if (raw.empty() || raw.size() > 4096 || raw.find(':') != std::string_view::npos ||
+            std::any_of(raw.begin(), raw.end(), [](unsigned char c) { return c < 32 || c == 127; })) {
+            load.error = "expected a relative Lua file";
+            return;
+        }
+        std::string relative(raw);
+        std::replace(relative.begin(), relative.end(), '\\', '/');
+        const fs::path rel(relative);
+        if (rel.has_root_path() || rel.extension() != ".lua" ||
+            std::any_of(rel.begin(), rel.end(), [](const fs::path& part) { return part == "." || part == ".."; })) {
+            load.error = "expected a relative Lua file without traversal";
+            return;
+        }
+        std::vector<fs::path> roots;
+        std::optional<fs::path> selected_data;
+        if (data) {
+            const auto& approved = ui.presentation_data;
+            if (!approved.root.empty()) {
+                std::error_code anchor_error;
+                const auto anchor = fs::weakly_canonical(approved.root, anchor_error);
+                if (anchor_error) {
+                    load.error = "invalid approved presentation-data root";
+                    return;
+                }
+                for (std::size_t i = 0; i < approved.ids.size(); ++i) {
+                    const auto& id = approved.ids[i];
+                    if (id.empty() || id == "." || id == ".." || id.find_first_of("/\\:") != std::string::npos ||
+                        std::any_of(id.begin(), id.end(), [](unsigned char c) { return c < 32 || c == 127; })) {
+                        load.error = "invalid approved presentation-data ID";
+                        return;
+                    }
+                    const auto folder = inside(anchor, id);
+                    if (!folder) {
+                        load.error = "presentation-data folder escapes its approved root";
+                        return;
+                    }
+                    // Each approved stable ID owns its directory, even when another ID is inside the anchor.
+                    if (!same_folder(*folder, anchor / id)) {
+                        load.error = "presentation-data folder redirects its approved ID";
+                        return;
+                    }
+                    if (i == 0) selected_data = *folder;
+                    if (!base_only || i != 0) roots.push_back(*folder);
+                }
+            }
+        } else {
+            // A base helper can decorate its parent while still importing a selected pack's different helper.
+            std::size_t first = 0;
+            lua_Debug frame{};
+            for (int level = 1; lua_getstack(L, level, &frame); ++level) {
+                if (!lua_getinfo(L, "S", &frame) || !frame.what || std::string_view(frame.what) == "C") continue;
+                if (frame.source && frame.source[0] == '@') {
+                    std::error_code ec;
+                    const auto caller = fs::weakly_canonical(fs::path(frame.source + 1), ec);
+                    if (!ec && !beneath_folder(ui.root, caller))
+                        for (std::size_t i = 0; i < ui.bases.size(); ++i)
+                            if (beneath_folder(ui.bases[i], caller)) { first = i + 1; break; }
+                }
+                break;
+            }
+            roots.assign(ui.bases.begin() + static_cast<std::ptrdiff_t>(first), ui.bases.end());
+        }
+        std::error_code ec;
+        for (const auto& root : roots) {
+            const auto candidate = inside(root, relative);
+            if (!candidate || !fs::is_regular_file(*candidate, ec)) continue;
+            if ((!data && beneath_folder(ui.root, *candidate)) ||
+                (data && base_only && selected_data && beneath_folder(*selected_data, *candidate))) {
+                load.error = "a base-only import cannot load the selected UI's own files";
+                return;
+            }
+            for (const auto& active : ui.active_import_files)
+                if (fs::equivalent(active, *candidate, ec)) {
+                    load.error = data ? "recursive presentation-data load" : "recursive base-file load";
+                    return;
+                }
+            load.file = *candidate;
+            load.path = candidate->string();
+            return;
+        }
+        load.error = data ? "no approved presentation-data root supplies that Lua file" : "no approved base supplies that Lua file";
+    });
+    if (!load.error.empty()) return luaL_error(L, "%s: %s", method, load.error.c_str());
+    lua_pushvalue(L, 2); // keep the request alive as the protected loader's upvalue
+    lua_pushcclosure(L, &call_import_file, 1);
+    plugin::cxx_guard(L, [&] { ui.active_import_files.push_back(load.file); });
+    const int status = lua_pcall(L, 0, LUA_MULTRET, 0);
+    ui.active_import_files.pop_back();
+    if (status != LUA_OK) return lua_error(L);
     return lua_gettop(L) - 2;
 }
 
@@ -883,7 +1108,7 @@ void push_read_only(lua_State* L, int real) {
 
 void push_in(lua_State* L, int v, int S, int tag);
 
-// A function a plugin took from eq or ui, or one it left in a table the pack shares (shared-table views, below):
+// A function a plugin took from hs or ui, or one it left in a table the pack shares (shared-table views, below):
 // runs the real one (upvalue 1) as the plugin (upvalue 2, its tag), whoever calls it. Only the pack's code or the
 // plugin's own may call it: another plugin would act with this one's capabilities. Once the plugin's folder is gone
 // (it unloaded) it does nothing. A plugin's own Lua function (upvalue 3: its folder's view state, below) is handed
@@ -893,6 +1118,8 @@ int call_as(lua_State* L) {
     auto& ui = LuaUi::Impl::of(L);
     const char* tag = lua_tostring(L, lua_upvalueindex(2));
     if (!tag || !ui.folder_dir(tag)) return 0;
+    const auto* source=lua_type(L,lua_upvalueindex(4))==LUA_TUSERDATA?static_cast<LuaUi::CallbackOwner*>(lua_touserdata(L,lua_upvalueindex(4))):nullptr;
+    if(source&&(!source->valid||!source->valid()))return luaL_error(L,"this callback registration belongs to a retired UI source");
     const bool same = g_caller_tag == tag;
     if (!same && !g_caller_tag.empty())
         return luaL_error(L, "this function is %s's: %s's code cannot call it", tag, g_caller_tag.c_str());
@@ -906,12 +1133,14 @@ int call_as(lua_State* L) {
     }
     lua_pushvalue(L, lua_upvalueindex(1));
     lua_insert(L, 1);
-    if (same) { // already the plugin: as it is
+    if (same&&!source) { // already the plugin: as it is
         lua_call(L, n, LUA_MULTRET);
         return lua_gettop(L);
     }
     int status = LUA_OK;
     {
+        struct SourceScope { const LuaUi::CallbackOwner* before=g_callback_source; ~SourceScope(){g_callback_source=before;} } source_scope;
+        if(source)g_callback_source=source;
         LuaUi::Impl::Acting acting(ui, tag);
         status = lua_pcall(L, n, LUA_MULTRET, 0);
     }
@@ -1292,13 +1521,26 @@ void push_view_state(lua_State* L, int tag) {
 
 void push_wrapping(lua_State* L, int real, int cache, int tag);
 
-// The __index of a plugin's view of eq (and its tables): upvalues the real table, the cache (real value -> what the
+// The __index of a plugin's view of hs (and its tables): upvalues the real table, the cache (real value -> what the
 // plugin gets), the tag. A function comes wrapped to run as the plugin (call_as); a table as such a view.
 int wrapping_index(lua_State* L) {
     lua_settop(L, 2);
     lua_pushvalue(L, 2);
     const int type = lua_gettable(L, lua_upvalueindex(1)); // 3: the real value
     if (type != LUA_TFUNCTION && type != LUA_TTABLE) return 1;
+    bool source_bound=false;
+    if(type==LUA_TFUNCTION){
+        lua_rawgetp(L,LUA_REGISTRYINDEX,&kSourceFunctions);
+        if(lua_istable(L,-1)){lua_pushvalue(L,3);source_bound=lua_rawget(L,-2)!=LUA_TNIL;lua_pop(L,1);}
+        lua_pop(L,1);
+    }
+    if(source_bound){
+        lua_pushvalue(L,3);lua_pushvalue(L,lua_upvalueindex(3));lua_pushnil(L);
+        auto& owner=plugin::lua_keep<LuaUi::CallbackOwner>(L);
+        plugin::cxx_guard(L,[&]{if(auto current=LuaUi::callback_owner(L))owner=std::move(*current);});
+        lua_pushcclosure(L,&call_as,4);
+        return 1;
+    }
     lua_pushvalue(L, 3);
     if (lua_gettable(L, lua_upvalueindex(2)) != LUA_TNIL) return 1;
     lua_pop(L, 1);
@@ -1336,8 +1578,11 @@ void push_wrapping(lua_State* L, int real, int cache, int tag) {
 
 } // namespace
 
+int load_base_file(lua_State* L) { return lua_import_file(L, ImportKind::Base); }
+int load_data_file(lua_State* L) { return lua_import_file(L, ImportKind::Data); }
+
 // A plugin folder's globals: its own table, over a layer it cannot reach that holds its _G (the table itself), its
-// eq (functions running as the folder), its ui (read-only, ui.window running as the folder), its dofile and load,
+// hs (functions running as the folder), its ui (read-only, ui.window running as the folder), its dofile and load,
 // and read-only standard libraries, over the pack's globals (read only through the layer: a write lands in the
 // folder's own table). Leaves it on the stack.
 void LuaUi::Impl::make_env(const std::string& tag) {
@@ -1358,9 +1603,15 @@ void LuaUi::Impl::make_env(const std::string& tag) {
     lua_setfield(L, -2, "__mode");
     lua_setmetatable(L, -2);
     const int cache = lua_gettop(L);
-    lua_rawgeti(L, LUA_REGISTRYINDEX, eq_ref);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, host_api_ref);
     push_wrapping(L, -1, cache, tag_at);
-    lua_setfield(L, layer, "eq");
+    // Temporary compatibility for existing addon windows; both names are the same owner-guarded view.
+    // Selected-interface root compatibility is configured separately when its VM is created.
+    if (!tag.empty()) {
+        lua_pushvalue(L, -1);
+        lua_setfield(L, layer, "eq");
+    }
+    lua_setfield(L, layer, "hs");
     lua_pop(L, 1);
 
     // ui: its constant tables read-only, ui.window as the folder, the rest the UI's own (they act on ImGui only).
@@ -1467,10 +1718,14 @@ bool replaces(std::string_view screen) {
 
 void set_replaced_check(std::function<bool(std::string_view)> check) { replaced_check() = std::move(check); }
 
-LuaUi::LuaUi(fs::path scripts, fs::path settings) : impl_(std::make_unique<Impl>()) {
+LuaUi::LuaUi(fs::path scripts, fs::path settings, std::vector<fs::path> approved_bases, DataRoots presentation_data,
+             bool legacy_alias)
+    : impl_(std::make_unique<Impl>()) {
     Impl& m = *impl_;
     m.dir = std::move(scripts);
     m.root = m.dir;
+    m.bases = std::move(approved_bases);
+    m.presentation_data = std::move(presentation_data);
     m.settings_file = std::move(settings);
     m.L = lua_newstate(&Impl::alloc, &m);
     lua_State* L = m.L;
@@ -1484,6 +1739,9 @@ LuaUi::LuaUi(fs::path scripts, fs::path settings) : impl_(std::make_unique<Impl>
     lua_gc(L, LUA_GCINC, 0, 1, 0);
     lua_gc(L, LUA_GCSTOP);
     *static_cast<Impl**>(lua_getextraspace(L)) = &m;
+    lua_pushlightuserdata(L,&m);lua_rawsetp(L,LUA_REGISTRYINDEX,&kMaintenanceHost);
+    lua_pushcfunction(L,&Impl::maintenance_runner);
+    m.maintenance_runner_ref=luaL_ref(L,LUA_REGISTRYINDEX);
     lua_pushboolean(L, 1); // the pack's state (pack_code)
     lua_setfield(L, LUA_REGISTRYINDEX, kPackStateKey);
     // The clipboard (ui/lua/lua_code_editor.cpp asks this before ui.GetClipboardText / SetClipboardText, as a script's
@@ -1556,15 +1814,24 @@ LuaUi::LuaUi(fs::path scripts, fs::path settings) : impl_(std::make_unique<Impl>
     lua_pop(L, 1);
     lua_newtable(L);
     lua_pushvalue(L, -1);
-    m.eq_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    lua_setglobal(L, "eq");
+    m.host_api_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    if (legacy_alias) {
+        lua_pushvalue(L, -1);
+        lua_setglobal(L, "eq");
+    }
+    lua_setglobal(L, "hs");
     m.load_settings();
     log::info("ui: Lua started, scripts in {}", m.dir.string());
 }
 
 LuaUi::~LuaUi() {
+    impl_->closing=true;
+    impl_->callback_lifetime.reset();
+    impl_->callback_generations.clear();
+    impl_->maintain_callbacks(); // the registry and its state still exist; no callback may survive lua_close
+    impl_->callback_maintenance.clear();
     impl_->save_settings_now(); // (a change of the last second is not lost)
-    if (impl_->L) lua_close(impl_->L);
+    if (impl_->L) {lua_close(impl_->L);impl_->L=nullptr;}
 }
 
 bool LuaUi::layout_setting(std::string_view key) { return key.starts_with("hud.") || key == "tasks.listw"; }
@@ -1609,6 +1876,24 @@ void LuaUi::copy_character_layout(const fs::path& from) {
 
 lua_State* LuaUi::state() const { return impl_->L; }
 
+LuaUi::LoadStatus LuaUi::load_status() const {
+    LoadStatus out;
+    out.scanned = impl_->scanned;
+    for (const auto& script : impl_->scripts) {
+        if (!script.tag.empty()) continue;
+        ++out.script_count;
+        if (script.error.empty()) ++out.loaded_script_count;
+        else out.errors.push_back(script.file + ": " + script.error);
+    }
+    for (const auto& window : impl_->windows) {
+        if (!window.tag.empty()) continue;
+        ++out.window_count;
+        if (!window.error.empty()) out.errors.push_back(window.name + ": " + window.error);
+    }
+    out.error_count = out.errors.size();
+    return out;
+}
+
 std::size_t LuaUi::allocated_bytes() const { return impl_->allocated; }
 
 void LuaUi::set_gc_steps_for_test(int steps) { impl_->gc_steps = steps; }
@@ -1621,6 +1906,82 @@ void LuaUi::set_limits_for_test(std::size_t memory, std::chrono::milliseconds pa
 
 std::string_view LuaUi::drawing_window() { return g_drawing; }
 std::string_view LuaUi::caller_tag() { return g_caller_tag; }
+
+std::optional<LuaUi::CallbackOwner> LuaUi::callback_owner(lua_State* L) {
+    if(g_callback_source)return *g_callback_source;
+    const bool pack_state=lua_getfield(L,LUA_REGISTRYINDEX,kPackStateKey)==LUA_TBOOLEAN;
+    lua_pop(L,1);
+    if(!pack_state)return std::nullopt;
+    Impl& m=Impl::of(L);
+    const std::string tag(g_caller_tag);
+    if(!tag.empty()&&!m.folder_dir(tag))return std::nullopt;
+    const std::string file=m.running_tag==tag?m.running_file:std::string();
+    const std::string generation=file.empty()?"@owner:"+tag:file;
+    auto& token=m.callback_generations[generation];
+    if(!token)token=std::make_shared<int>(0);
+    const std::weak_ptr<void> vm=m.callback_lifetime,source=token;
+    CallbackOwner owner;
+    owner.tag=tag;
+    owner.key="ui:"+std::to_string(reinterpret_cast<std::uintptr_t>(m.L))+":"+tag+":"+generation;
+    owner.valid=[vm,source,tag,host=&m]{return !vm.expired()&&!source.expired()&&(tag.empty()||host->folder_dir(tag));};
+    owner.invoke=[vm,source,tag,file,host=&m](lua_State* state,int args,int results){
+        if(vm.expired()||source.expired()||state!=host->L||(!tag.empty()&&!host->folder_dir(tag)))return false;
+        struct SourceState {
+            Impl& host;
+            std::string file, tag;
+            explicit SourceState(Impl& owner) : host(owner), file(owner.running_file), tag(owner.running_tag) {}
+            ~SourceState() { host.running_file=std::move(file);host.running_tag=std::move(tag); }
+        } source_state(*host);
+        host->running_file=file;host->running_tag=tag;
+        const bool imgui=ImGui::GetCurrentContext()!=nullptr&&ImGui::GetCurrentContext()->WithinFrameScope&&GImGui->CurrentWindow;
+        struct DrawingState {
+            bool active;
+            std::size_t begun;
+            explicit DrawingState(bool on) : active(on), begun(on?windows_begun(true):0) {}
+            ~DrawingState() { if(active){recover_script_windows();end_script_windows(begun);} }
+        } drawing_state(imgui);
+        int status=LUA_OK;
+        {
+            Impl::Budget budget(*host,std::min(host->budget_for(tag),std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(50))));
+            Impl::Acting acting(*host,tag);
+            status=lua_pcall(state,args,results,0);
+        }
+        if(status==LUA_OK)return true;
+        const char* why=lua_tostring(state,-1);
+        bool reported=false;
+        for(auto& script:host->scripts)if(script.file==file){host->report(script,why);reported=true;break;}
+        if(!reported)log::warn("ui retained callback error: {}",why?why:"error");
+        lua_pop(state,1);
+        return false;
+    };
+    return owner;
+}
+
+void LuaUi::source_generation_function(lua_State* L,int index) {
+    index=lua_absindex(L,index);
+    if(lua_rawgetp(L,LUA_REGISTRYINDEX,&kSourceFunctions)!=LUA_TTABLE){
+        lua_pop(L,1);lua_newtable(L);lua_newtable(L);lua_pushliteral(L,"k");lua_setfield(L,-2,"__mode");lua_setmetatable(L,-2);
+        lua_pushvalue(L,-1);lua_rawsetp(L,LUA_REGISTRYINDEX,&kSourceFunctions);
+    }
+    lua_pushvalue(L,index);lua_pushboolean(L,1);lua_rawset(L,-3);lua_pop(L,1);
+}
+
+bool LuaUi::set_callback_maintenance(lua_State* L,std::string_view name,const CallbackMaintenance& callback) {
+    if (!L || name.empty() || name.size()>64 || !lua_checkstack(L,1)) return false;
+    for (const unsigned char c : name) if (c<33 || c>126) return false;
+    const int top=lua_gettop(L);
+    lua_rawgetp(L,LUA_REGISTRYINDEX,&kMaintenanceHost);
+    auto* host=lua_type(L,-1)==LUA_TLIGHTUSERDATA?static_cast<Impl*>(lua_touserdata(L,-1)):nullptr;
+    lua_settop(L,top);
+    if (!host || host->L!=L || host->closing) return false;
+    try {
+        if (!callback) {host->callback_maintenance.erase(std::string(name));return true;}
+        if (!host->callback_maintenance.contains(name) && host->callback_maintenance.size()>=16) return false;
+        auto held=std::make_shared<CallbackMaintenance>(callback);
+        host->callback_maintenance.insert_or_assign(std::string(name),std::move(held));
+        return true;
+    } catch (...) { return false; }
+}
 
 void LuaUi::set_caller_scope(CallerScope scope) { impl_->scope = std::move(scope); }
 
@@ -1660,14 +2021,16 @@ std::string LuaUi::run_for_test(std::string_view tag_view, const std::string& co
     return out;
 }
 
-void LuaUi::add_eq_api(const Registrar& r) {
+void LuaUi::add_ui_api(const Registrar& r) {
     lua_State* L = impl_->L;
-    lua_rawgeti(L, LUA_REGISTRYINDEX, impl_->eq_ref);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, impl_->host_api_ref);
     r(L);
     lua_pop(L, 1);
 }
 
 void LuaUi::set_show_control(bool show) { impl_->show_control = show; }
+
+void LuaUi::rescan_for_test() { impl_->last_scan = Clock::time_point{}; }
 
 void LuaUi::set_entry_scripts(std::vector<std::string> files) { impl_->entries = std::move(files); }
 
@@ -1676,11 +2039,20 @@ void LuaUi::set_folders(std::vector<Folder> folders) {
                 std::equal(folders.begin(), folders.end(), impl_->folders.begin(),
                            [](const Folder& a, const Folder& b) { return a.tag == b.tag && a.dir == b.dir; });
     if (same) return;
+    // Invalidate retained callbacks immediately, before the next script scan closes their windows.
+    for(const auto& old:impl_->folders) {
+        const auto found=std::find_if(folders.begin(),folders.end(),[&](const Folder& f){return f.tag==old.tag&&f.dir==old.dir;});
+        if(found==folders.end()) {
+            impl_->callback_generations.erase("@owner:"+old.tag);
+            for(const auto& script:impl_->scripts)if(script.tag==old.tag)impl_->callback_generations.erase(script.file);
+        }
+    }
     impl_->folders = std::move(folders);
     impl_->folders_changed = true;
+    impl_->maintain_callbacks();
 }
 
-void LuaUi::frame() {
+void LuaUi::frame(bool draw) {
     Impl& m = *impl_;
     lua_State* L = m.L;
     core::frame_sections::Lap lap;
@@ -1691,13 +2063,14 @@ void LuaUi::frame() {
         m.last_scan = Clock::now();
         m.scan(false);
     }
+    m.maintain_callbacks();
     lap.mark("Lua script scan");
-    if (m.show_control) m.draw_control();
+    if (draw && m.show_control) m.draw_control();
     // Each name's top layer draws (Window); by index, since a draw function can add windows.
     // (Only with plugin windows; each window's layer found once, and names compared only among the plugins' and the
     // pack's windows they could cover.)
     std::vector<bool> covered;
-    if (std::any_of(m.windows.begin(), m.windows.end(), [](const Window& w) { return !w.tag.empty(); })) {
+    if (draw && std::any_of(m.windows.begin(), m.windows.end(), [](const Window& w) { return !w.tag.empty(); })) {
         const std::size_t n = m.windows.size();
         std::vector<int> layers(n);
         for (std::size_t i = 0; i < n; ++i) layers[i] = m.layer(m.windows[i].tag);
@@ -1708,7 +2081,7 @@ void LuaUi::frame() {
                 if (j != i && layers[j] < layers[i] && m.windows[j].name == m.windows[i].name) covered[j] = true;
         }
     }
-    for (std::size_t i = 0; i < m.windows.size(); ++i) {
+    for (std::size_t i = 0; draw && i < m.windows.size(); ++i) {
         Window& w = m.windows[i];
         if (!w.enabled || w.failed || (i < covered.size() && covered[i])) continue;
         ImGuiErrorRecoveryState state;
@@ -1754,7 +2127,7 @@ void LuaUi::frame() {
         lap.mark(drawn.section);
         core::frame_sections::add_bytes(drawn.section, m.allocated - allocated_before);
     }
-    m.draw_errors();
+    if (draw) m.draw_errors();
     m.save_settings_if_due();
     lap.mark("Lua errors, settings");
     m.collect_garbage();

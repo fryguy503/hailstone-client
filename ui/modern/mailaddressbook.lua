@@ -4,6 +4,7 @@
 -- fields; a right-click adds it to an open message's To field (the list's own right-click). The fields and buttons
 -- are the window's, so the book is the game's (saved with the character). Its Ignore button opens the ignore list
 -- (MailIgnoreListWindow), the same window over the second book the game keeps: names whose mail you do not want.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -20,7 +21,7 @@ local function fields(WINDOW, s)
   if ui.IsItemHovered() then ui.SetTooltip("Character names, separated by commas") end
   W.Check(WINDOW, "NameFieldIsPrivateCheckbox", "Private", { tooltip = "Keep this entry to yourself" })
   S.Caption("Note")
-  local ignore = eq.ChildShown(WINDOW, "IgnoreListButton") == true -- the address book's only
+  local ignore = API.windows.ChildShown(WINDOW, "IgnoreListButton") == true -- the address book's only
   local _, ah = ui.GetContentRegionAvail()
   local below = (ignore and 2 or 1) * (btnH + 8 * s)
   W.Edit(WINDOW, "NoteField", { multiline = true, width = -1, height = math.max(40 * s, ah - below), max = 256 })
@@ -53,7 +54,7 @@ local function book(WINDOW, title, empty)
       ui.BeginChild("##abnames" .. WINDOW, lw, ah, false)
       local needle
       search[WINDOW], needle = S.Search("absearch" .. WINDOW, search[WINDOW] or "", "Search names")
-      local rows = eq.ListInfo(WINDOW, "NameList") or 0
+      local rows = API.windows.ListInfo(WINDOW, "NameList") or 0
       if rows == 0 then
         local cw, chh = ui.GetContentRegionAvail()
         S.Empty(cw, chh, empty, "Fill in the fields and press Add.")
@@ -76,11 +77,11 @@ local function book(WINDOW, title, empty)
 end
 
 ui.window("Address Book", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   book("MailAddressBookWindow", "Address Book", "No entries yet.")
 end)
 
 ui.window("Ignore List", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   book("MailIgnoreListWindow", "Ignore List", "Nobody is ignored.")
 end)

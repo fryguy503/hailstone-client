@@ -1,9 +1,10 @@
 -- Bug report: replaces the game's BugReportWindow (/bugreport). The category, the report in a large text box, the
 -- location the report is about (taken when the window opens; Update Location takes it again), the optional
 -- information as check boxes (with the target's name beside its box), Cancel and Send (the window enables it once
--- there is text). Every piece is the window's child (eq.ComboSelect, eq.SetWindowText, eq.ClickChild), so the
+-- there is text). Every piece is the window's child (hs.ComboSelect, hs.SetWindowText, hs.ClickChild), so the
 -- report the server gets is the window's. After Send the window shows the report saved for the player to post in
 -- the bug report forum (bug-reports/<file>.zip): Open Folder, Copy Summary (the forum post) and Done.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -91,7 +92,7 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Bug Report", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Bug Report", WINDOW_OPTS, drawWindow)
 end)
 

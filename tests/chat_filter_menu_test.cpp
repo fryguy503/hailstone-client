@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 #include <lua.hpp>
 
+#include "lua_ui_api_mock.h"
+
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -15,7 +17,7 @@ TEST_CASE("Modern chat menu: nested categories retain their parent and send the 
     REQUIRE(start != std::string::npos);
     const auto end = source.find("\nlocal function ", start + 1);
     REQUIRE(end != std::string::npos);
-    const std::string menu = source.substr(start, end - start) + "\nfiltersMenu(2)";
+    const std::string menu = "local API = hs.UI\n" + source.substr(start, end - start) + "\nfiltersMenu(2)";
     lua_State* L = luaL_newstate();
     REQUIRE(L != nullptr);
     struct CloseLua { lua_State* state; ~CloseLua() { lua_close(state); } } close{L};
@@ -36,7 +38,7 @@ ui = {
     return name == "Heals received##filter101" or name == "Show All##group4"
   end,
 }
-eq = {
+hs = {
   ChatFilters = function()
     return {
       {id=106, menu=0, parent=0, group="Filters", name="Client messages", on=false},
@@ -61,6 +63,7 @@ eq = {
 }
 )lua";
     REQUIRE(luaL_dostring(L, fixture) == LUA_OK);
+    REQUIRE(hailstone::test::attach_mock_ui_api(L) == LUA_OK);
     const int result = luaL_dostring(L, menu.c_str());
     INFO((result == LUA_OK ? "" : lua_tostring(L, -1)));
     REQUIRE(result == LUA_OK);

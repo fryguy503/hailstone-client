@@ -1,5 +1,5 @@
 // GameConnection: personal tribute over EQEmu's packets (net/tribute_packets.h). The tribute list is asked for
-// while zoning in (OP_SendTributes, which EQEmu takes only then); the windows are app/lua_eq_progress.cpp's.
+// while zoning in (OP_SendTributes, which EQEmu takes only then); the windows are app/lua_ui_progress.cpp's.
 
 #include <algorithm>
 #include <cctype>

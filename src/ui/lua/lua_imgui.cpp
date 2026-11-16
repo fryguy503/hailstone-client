@@ -1,10 +1,11 @@
 // The `ui` Lua table: Dear ImGui for scripts. Functions keep ImGui's names; values that ImGui changes through
 // pointers are returned instead (value, changed = ui.Checkbox("x", value)). Colours are r, g, b, a in 0..1.
-// Textures (for example item icons from eq.ItemIcon) are light userdata.
+// Textures (for example item icons from hs.ItemIcon) are light userdata.
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "imgui.h"
@@ -12,6 +13,7 @@
 #include "ui/imgui_layer.h"
 #include "ui/lua/lua_host.h"
 #include "ui/texture_ids.h"
+#include "plugin/lua_keep.h"
 
 #include <lua.hpp>
 
@@ -39,7 +41,7 @@ int Ret(lua_State *L, bool v) { lua_pushboolean(L, v); return 1; }
 
 // --- the plugin consent question's windows (lua_host.h set_consent_guard) ---
 bool g_guard = false;
-std::string g_guardLuaWindow; // the pack's Lua window that asked eq.PluginConsent this frame
+std::string g_guardLuaWindow; // the pack's Lua window that asked hs.PluginConsent this frame
 int g_guardLuaFrame = -1;
 std::vector<ImGuiID> g_guarded, g_guardedBefore; // this frame's guarded ImGui windows, and last frame's
 int g_guardedFrame = -1;
@@ -73,13 +75,20 @@ int WindowFlags(lua_State *L, int i) { return I(L, i) & ((1 << 24) - 1); }
 struct Begun {
 	ImGuiWindow *window; // nullptr: refused, nothing was begun
 	bool child;
+	int clips = 0;
 };
 std::vector<Begun> g_begun;
+std::vector<ImGuiTabBar*> g_tabItems;
+enum class PopupKind { Popup, Combo, Menu, Tooltip };
+struct PopupBegin { ImGuiWindow* window; PopupKind kind; };
+std::vector<PopupBegin> g_popups;
 ImGuiContext *g_begunContext = nullptr;
 int g_begunFrame = -1;
 std::vector<Begun> &begun() {
 	if (g_begunContext != GImGui || g_begunFrame != ImGui::GetFrameCount()) {
 		g_begun.clear();
+		g_tabItems.clear();
+		g_popups.clear();
 		g_begunContext = GImGui;
 		g_begunFrame = ImGui::GetFrameCount();
 	}
@@ -88,12 +97,37 @@ std::vector<Begun> &begun() {
 // The ImGui stacks' sizes as each script's draw function began (windows_begun), innermost last: its PopStyleColor,
 // PopStyleVar and PopFont pop only what it pushed, never what the C++ code that drew around it pushed.
 struct Floor {
-	int colors, vars, fonts;
+	ImGuiErrorRecoveryState stacks;
+	ImGuiWindow* window = nullptr;
+	ImDrawList* clipList = nullptr;
+	ImDrawList* trackedClipList = nullptr;
+	std::size_t begun = 0, tabItems = 0, popupRecords = 0;
+	int tables = 0, tabs = 0, combos = 0, wraps = 0, clips = 0;
+	int trackedClipFrame = -1, trackedClipDepth = 0, foregroundFrame = -1;
+	float fontScale = 1;
+	bool preserveParent = false;
+	ImGuiNextWindowData nextWindow;
+	ImGuiNextItemData nextItem;
+	ImGuiLastItemData lastItem;
 };
 std::vector<Floor> g_floors;
-int PoppableColors() { return GImGui->ColorStack.Size - (g_floors.empty() ? 0 : g_floors.back().colors); }
-int PoppableVars() { return GImGui->StyleVarStack.Size - (g_floors.empty() ? 0 : g_floors.back().vars); }
-int PoppableFonts() { return GImGui->FontStack.Size - (g_floors.empty() ? 0 : g_floors.back().fonts); }
+ImDrawList *g_clipList = nullptr;
+int g_clipFrame = -1, g_clipDepth = 0;
+extern int g_foregroundFrame;
+int PoppableColors() { return GImGui->ColorStack.Size - (g_floors.empty() ? 0 : g_floors.back().stacks.SizeOfColorStack); }
+int PoppableVars() { return GImGui->StyleVarStack.Size - (g_floors.empty() ? 0 : g_floors.back().stacks.SizeOfStyleVarStack); }
+int PoppableFonts() { return GImGui->FontStack.Size - (g_floors.empty() ? 0 : g_floors.back().stacks.SizeOfFontStack); }
+bool OwnWindow() { return g_floors.empty() || GImGui->CurrentWindowStack.Size > g_floors.back().stacks.SizeOfWindowStack; }
+bool FloorWindow() { return !g_floors.empty() && GImGui->CurrentWindow == g_floors.back().window; }
+bool RememberPopup(bool opened, PopupKind kind) {
+	if (opened) { begun(); g_popups.push_back({GImGui->CurrentWindow, kind}); }
+	return opened;
+}
+bool OwnPopup(PopupKind kind) {
+	begun();
+	return OwnWindow() && !g_popups.empty() && g_popups.size() > (g_floors.empty() ? 0 : g_floors.back().popupRecords) &&
+		g_popups.back().window == GImGui->CurrentWindow && g_popups.back().kind == kind;
+}
 
 // Whether code that is not the pack's may not draw into `w` (or a child of it): it shows the consent question.
 bool refused_to(lua_State *L, const ImGuiWindow *w) {
@@ -132,7 +166,7 @@ int Begin(lua_State *L) {
 	if (lua_toboolean(L, 4)) style.WindowMenuButtonPosition = ImGuiDir_Right;
 	bool visible = ImGui::Begin(name, hasOpen ? &open : nullptr, flags);
 	style.WindowMenuButtonPosition = menuButton;
-	begun().push_back({ImGui::GetCurrentWindow(), false});
+	begun().push_back({ImGui::GetCurrentWindow(), false, ImGui::GetWindowDrawList()->_ClipRectStack.Size});
 	if (g_guard && g_guardLuaFrame == ImGui::GetFrameCount() && LuaUi::drawing_window() == g_guardLuaWindow &&
 		pack_code(L))
 		guard(ImGui::GetCurrentWindow());
@@ -143,16 +177,19 @@ int Begin(lua_State *L) {
 // Closes the window on top of g_begun when it is the current one and of the kind asked.
 void end_begun(lua_State *L, bool child) {
 	std::vector<Begun> &b = begun();
+	if (!g_floors.empty() && b.size() <= g_floors.back().begun) return;
 	if (b.empty() || b.back().child != child) return;
 	if (!b.back().window) { // a refused Begin: nothing to end
 		b.pop_back();
 		return;
 	}
 	ImGuiWindow *w = GImGui->CurrentWindow;
+	if (!OwnWindow()) return;
 	if (!w || w != b.back().window || GImGui->CurrentWindowStack.Size <= 1) return;
 	if (((w->Flags & ImGuiWindowFlags_ChildWindow) != 0) != child) return;
 	if (w->Flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip)) return; // EndPopup's, EndTooltip's
 	if (refused_to(L, w)) return;
+	while (w->DrawList->_ClipRectStack.Size > b.back().clips) w->DrawList->PopClipRect();
 	b.pop_back();
 	if (child)
 		ImGui::EndChild();
@@ -172,7 +209,7 @@ int BeginChild(lua_State *L) {
 		return Ret(L, false);
 	}
 	const bool visible = ImGui::BeginChild(id, size, childFlags, flags);
-	begun().push_back({ImGui::GetCurrentWindow(), true});
+	begun().push_back({ImGui::GetCurrentWindow(), true, ImGui::GetWindowDrawList()->_ClipRectStack.Size});
 	return Ret(L, visible);
 }
 int EndChild(lua_State *L) { end_begun(L, true); return 0; }
@@ -198,7 +235,7 @@ int TextWrapped(lua_State *L) { ImGui::TextWrapped("%s", S(L, 1)); return 0; }
 // ui.PushTextWrapPos([x])   0: wrap at the window's edge / ui.PopTextWrapPos()
 int PushTextWrapPos(lua_State *L) { ImGui::PushTextWrapPos(F(L, 1, 0)); return 0; }
 int PopTextWrapPos(lua_State *) {
-	if (GImGui->CurrentWindow && GImGui->CurrentWindow->DC.TextWrapPosStack.Size > 0) {
+	if (GImGui->CurrentWindow && GImGui->CurrentWindow->DC.TextWrapPosStack.Size > (FloorWindow() ? g_floors.back().wraps : 0)) {
 		ImGui::PopTextWrapPos();
 	}
 	return 0;
@@ -241,6 +278,75 @@ int Checkbox(lua_State *L) {
 	lua_pushboolean(L, changed);
 	return 2;
 }
+// Colour widgets accept normalized RGB only. Keep invalid numbers and assertion-prone flag combinations out
+// of ImGui; a Lua argument error is raised before any widget opens its own groups, popup or ID stack.
+void ColorFrame(lua_State *L) {
+	if (!GImGui || !GImGui->WithinFrameScope || !GImGui->CurrentWindow)
+		luaL_error(L, "colour widgets require an active ImGui frame");
+}
+float ColorComponent(lua_State *L, int at, float fallback = 0.0f) {
+	const double value = luaL_optnumber(L, at, fallback);
+	if (!std::isfinite(value)) luaL_argerror(L, at, "finite colour component expected");
+	return static_cast<float>(std::clamp(value, 0.0, 1.0));
+}
+float ColorButtonSize(lua_State *L, int at) {
+	const double value = luaL_optnumber(L, at, 0.0);
+	if (!std::isfinite(value)) luaL_argerror(L, at, "finite colour button size expected");
+	return static_cast<float>(std::clamp(value, 0.0, 4096.0));
+}
+int ColorWidgetFlags(lua_State *L, int at, bool picker, bool button = false) {
+	constexpr int kCommon = ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoOptions |
+		ImGuiColorEditFlags_NoSmallPreview | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoTooltip |
+		ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoDragDrop |
+		ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_AlphaOpaque | ImGuiColorEditFlags_AlphaNoBg |
+		ImGuiColorEditFlags_AlphaPreviewHalf;
+	constexpr int kOptions = ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHSV |
+		ImGuiColorEditFlags_DisplayHex | ImGuiColorEditFlags_Uint8 | ImGuiColorEditFlags_Float |
+		ImGuiColorEditFlags_PickerHueBar | ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_InputRGB;
+	constexpr int kButton = ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop |
+		ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_AlphaOpaque | ImGuiColorEditFlags_AlphaNoBg |
+		ImGuiColorEditFlags_AlphaPreviewHalf;
+	if (!lua_isnoneornil(L, at) && lua_type(L, at) != LUA_TNUMBER)
+		luaL_argerror(L, at, "integer colour flags expected");
+	const lua_Integer raw = luaL_optinteger(L, at, 0);
+	if (raw < 0) luaL_argerror(L, at, "nonnegative colour flags expected");
+	int flags = static_cast<int>(static_cast<lua_Unsigned>(raw) & static_cast<lua_Unsigned>(button ? kButton : kCommon | kOptions));
+	if (button) return flags;
+	// No HDR or HSV input: callers always receive finite RGB in 0..1. The editor cannot change global options.
+	flags |= ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_NoOptions;
+	const int picker_flags = flags & ImGuiColorEditFlags_PickerMask_;
+	if (picker_flags != ImGuiColorEditFlags_PickerHueBar && picker_flags != ImGuiColorEditFlags_PickerHueWheel)
+		flags = (flags & ~ImGuiColorEditFlags_PickerMask_) | ImGuiColorEditFlags_PickerHueWheel;
+	const int data_flags = flags & ImGuiColorEditFlags_DataTypeMask_;
+	if (data_flags != ImGuiColorEditFlags_Uint8 && data_flags != ImGuiColorEditFlags_Float)
+		flags = (flags & ~ImGuiColorEditFlags_DataTypeMask_) | ImGuiColorEditFlags_Uint8;
+	const int display_flags = flags & ImGuiColorEditFlags_DisplayMask_;
+	if (display_flags == 0 || (!picker && (display_flags & (display_flags - 1)) != 0))
+		flags = (flags & ~ImGuiColorEditFlags_DisplayMask_) | ImGuiColorEditFlags_DisplayRGB;
+	return flags;
+}
+// pressed = ui.ColorButton(id, r, g, b [, a=1 [, flags=0 [, w=0, h=0]]])
+int ColorButton(lua_State *L) {
+	ColorFrame(L);
+	const char *label = S(L, 1);
+	const ImVec4 color(ColorComponent(L, 2), ColorComponent(L, 3), ColorComponent(L, 4), ColorComponent(L, 5, 1));
+	const int flags = ColorWidgetFlags(L, 6, false, true);
+	const ImVec2 size(ColorButtonSize(L, 7), ColorButtonSize(L, 8));
+	return Ret(L, ImGui::ColorButton(label, color, flags, size));
+}
+int ColorRgbWidget(lua_State *L, bool picker) {
+	ColorFrame(L);
+	const char *label = S(L, 1);
+	float color[] = {ColorComponent(L, 2), ColorComponent(L, 3), ColorComponent(L, 4)};
+	const int flags = ColorWidgetFlags(L, 5, picker);
+	const bool changed = picker ? ImGui::ColorPicker3(label, color, flags) : ImGui::ColorEdit3(label, color, flags);
+	for (const float component : color) lua_pushnumber(L, std::isfinite(component) ? std::clamp(component, 0.0f, 1.0f) : 0.0f);
+	lua_pushboolean(L, changed);
+	return 4;
+}
+// r, g, b, changed = ui.ColorPicker3(label, r, g, b [, flags=0])
+int ColorPicker3(lua_State *L) { return ColorRgbWidget(L, true); }
+int ColorEdit3(lua_State *L) { return ColorRgbWidget(L, false); }
 int SliderFloat(lua_State *L) {
 	float v = F(L, 2);
 	bool changed = ImGui::SliderFloat(S(L, 1), &v, F(L, 3), F(L, 4, 1));
@@ -416,18 +522,19 @@ int InputTextWithHint(lua_State *L) {
 	return 2;
 }
 // open = ui.BeginCombo(label, preview [, flags]) ... ui.EndCombo()
-int BeginCombo(lua_State *L) { return Ret(L, ImGui::BeginCombo(S(L, 1), S(L, 2), I(L, 3, 0))); }
+int BeginCombo(lua_State *L) { return Ret(L, RememberPopup(ImGui::BeginCombo(S(L, 1), S(L, 2), I(L, 3, 0)), PopupKind::Combo)); }
 // The popup BeginPopup, BeginCombo or BeginMenu began is the current window: what EndPopup, EndCombo and EndMenu
 // need (unchecked in a release build; EndMenu reads a null ParentWindow in a top-level window).
 bool InPopup(ImGuiWindowFlags also = 0) {
 	const ImGuiContext &g = *GImGui;
 	const ImGuiWindow *w = g.CurrentWindow;
-	return w && (w->Flags & ImGuiWindowFlags_Popup) && (w->Flags & also) == also && g.BeginPopupStack.Size > 0 &&
+	return OwnWindow() && w && (w->Flags & ImGuiWindowFlags_Popup) && (w->Flags & also) == also && g.BeginPopupStack.Size > 0 &&
 		   g.BeginPopupStack.back().Window == w;
 }
 int EndCombo(lua_State *) {
-	if (InPopup() && GImGui->BeginComboDepth > 0) {
+	if (OwnPopup(PopupKind::Combo) && InPopup() && GImGui->BeginComboDepth > (g_floors.empty() ? 0 : g_floors.back().combos)) {
 		ImGui::EndCombo();
+		g_popups.pop_back();
 	}
 	return 0;
 }
@@ -443,7 +550,7 @@ int ProgressBar(lua_State *L) {
 int CollapsingHeader(lua_State *L) { return Ret(L, ImGui::CollapsingHeader(S(L, 1), I(L, 2))); }
 int TreeNode(lua_State *L) { return Ret(L, ImGui::TreeNode(S(L, 1))); }
 int TreePop(lua_State *) {
-	if (ImGui::GetCurrentWindow()->DC.TreeDepth > 0) {
+	if (ImGui::GetCurrentWindow()->DC.TreeDepth > (FloorWindow() ? g_floors.back().stacks.SizeOfTreeStack : 0)) {
 		ImGui::TreePop();
 	}
 	return 0;
@@ -490,7 +597,7 @@ int BeginGroup(lua_State *) { ImGui::BeginGroup(); return 0; }
 // The bindings refuse calls ImGui would only assert on (IM_ASSERT logs and carries on in this build): unbalanced
 // pops and ends, and out-of-range indices, which would otherwise write outside ImGui's arrays.
 int EndGroup(lua_State *) {
-	if (GImGui->GroupStack.Size > 0) {
+	if (GImGui->GroupStack.Size > (g_floors.empty() ? 0 : g_floors.back().stacks.SizeOfGroupStack)) {
 		ImGui::EndGroup();
 	}
 	return 0;
@@ -505,7 +612,7 @@ int PushID(lua_State *L) {
 	return 0;
 }
 int PopID(lua_State *) {
-	if (ImGui::GetCurrentWindow()->IDStack.Size > 1) {
+	if (ImGui::GetCurrentWindow()->IDStack.Size > (FloorWindow() ? g_floors.back().stacks.SizeOfIDStack : 1)) {
 		ImGui::PopID();
 	}
 	return 0;
@@ -556,8 +663,6 @@ int FindWindowRect(lua_State *L) {
 // ui.PushClipRect(x0, y0, x1, y1 [, intersect]) ... ui.PopClipRect()   -- drawing limited to that rectangle (screen
 // pixels), not intersected with the current one unless asked: a window can draw its own frame at its very edge
 // Scripts may pop only what they pushed: their pushes are counted per draw list and frame.
-ImDrawList *g_clipList = nullptr;
-int g_clipFrame = -1, g_clipDepth = 0;
 int PushClipRect(lua_State *L) {
 	ImDrawList *dl = ImGui::GetWindowDrawList();
 	if (dl != g_clipList || ImGui::GetFrameCount() != g_clipFrame) {
@@ -571,7 +676,8 @@ int PushClipRect(lua_State *L) {
 }
 int PopClipRect(lua_State *) {
 	ImDrawList *dl = ImGui::GetWindowDrawList();
-	if (dl == g_clipList && ImGui::GetFrameCount() == g_clipFrame && g_clipDepth > 0) {
+	const int floor = !g_floors.empty() && dl == g_floors.back().clipList ? g_floors.back().clips : 1;
+	if (dl == g_clipList && ImGui::GetFrameCount() == g_clipFrame && g_clipDepth > 0 && dl->_ClipRectStack.Size > floor) {
 		dl->PopClipRect();
 		--g_clipDepth;
 	}
@@ -604,7 +710,10 @@ int BeginTable(lua_State *L) {
 	}
 	return Ret(L, ImGui::BeginTable(S(L, 1), columns, I(L, 3), ImVec2(F(L, 4), F(L, 5))));
 }
-int EndTable(lua_State *) { ImGui::EndTable(); return 0; }
+int EndTable(lua_State *) {
+	if (GImGui->CurrentTable && GImGui->TablesTempDataStacked > (g_floors.empty() ? 0 : g_floors.back().tables)) ImGui::EndTable();
+	return 0;
+}
 // The calls below refuse what ImGui would dereference or only assert on: TableNextRow (and so the header row) with
 // no current table reads through a null table, and a column or freeze set up after the first row asserts.
 bool TableLayoutOpen() { return GImGui->CurrentTable && !GImGui->CurrentTable->IsLayoutLocked; }
@@ -614,7 +723,7 @@ int TableNextRow(lua_State *) {
 	}
 	return 0;
 }
-int TableNextColumn(lua_State *L) { return Ret(L, ImGui::TableNextColumn()); }
+int TableNextColumn(lua_State *L) { return Ret(L, GImGui->CurrentTable && ImGui::TableNextColumn()); }
 // BeginDisabled(disabled) / EndDisabled(): greys out and blocks the items between; ends without a begin this frame
 // are ignored (ImGui asserts on them).
 int g_disabledFrame = -1, g_disabledDepth = 0;
@@ -628,7 +737,8 @@ int BeginDisabled(lua_State *L) {
 	return 0;
 }
 int EndDisabled(lua_State *) {
-	if (ImGui::GetFrameCount() == g_disabledFrame && g_disabledDepth > 0) {
+	if (ImGui::GetFrameCount() == g_disabledFrame && g_disabledDepth > 0 &&
+		GImGui->DisabledStackSize > (g_floors.empty() ? 0 : g_floors.back().stacks.SizeOfDisabledStack)) {
 		ImGui::EndDisabled();
 		--g_disabledDepth;
 	}
@@ -695,49 +805,66 @@ int TableGetSortSpecs(lua_State *L) {
 // --- tabs ---
 int BeginTabBar(lua_State *L) { return Ret(L, ImGui::BeginTabBar(S(L, 1), I(L, 2))); }
 int EndTabBar(lua_State *) {
-	if (GImGui->CurrentTabBar) {
+	if (GImGui->CurrentTabBar && GImGui->CurrentTabBarStack.Size > (g_floors.empty() ? 0 : g_floors.back().tabs)) {
 		ImGui::EndTabBar();
 	}
 	return 0;
 }
 // ui.BeginTabItem(label [, flags]): flags ui.TabItemFlags (SetSelected selects it this frame, UnsavedDocument marks it)
-int BeginTabItem(lua_State *L) { return Ret(L, ImGui::BeginTabItem(S(L, 1), nullptr, I(L, 2, 0))); }
+int BeginTabItem(lua_State *L) {
+    if (!g_floors.empty() && GImGui->CurrentTabBarStack.Size <= g_floors.back().tabs) return Ret(L, false);
+	const bool open = ImGui::BeginTabItem(S(L, 1), nullptr, I(L, 2, 0));
+	if (open) g_tabItems.push_back(GImGui->CurrentTabBar);
+	return Ret(L, open);
+}
 int EndTabItem(lua_State *) {
-	if (GImGui->CurrentTabBar && GImGui->CurrentTabBar->LastTabItemIdx >= 0) {
+	if (GImGui->CurrentTabBar && GImGui->CurrentTabBar->LastTabItemIdx >= 0 && !g_tabItems.empty() &&
+		g_tabItems.back() == GImGui->CurrentTabBar && g_tabItems.size() > (g_floors.empty() ? 0 : g_floors.back().tabItems)) {
 		ImGui::EndTabItem();
+		g_tabItems.pop_back();
 	}
 	return 0;
 }
 
 // --- tooltips, popups ---
-int BeginTooltip(lua_State *L) { return Ret(L, ImGui::BeginTooltip()); }
+int BeginTooltip(lua_State *L) { return Ret(L, RememberPopup(ImGui::BeginTooltip(), PopupKind::Tooltip)); }
 int EndTooltip(lua_State *) {
-	if (GImGui->CurrentWindow && (GImGui->CurrentWindow->Flags & ImGuiWindowFlags_Tooltip)) {
+	if (OwnPopup(PopupKind::Tooltip) && GImGui->CurrentWindow && (GImGui->CurrentWindow->Flags & ImGuiWindowFlags_Tooltip)) {
 		ImGui::EndTooltip();
+		g_popups.pop_back();
 	}
 	return 0;
 }
 int SetTooltip(lua_State *L) { ImGui::SetTooltip("%s", S(L, 1)); return 0; }
 int OpenPopup(lua_State *L) { ImGui::OpenPopup(S(L, 1)); return 0; }
-int BeginPopup(lua_State *L) { return Ret(L, ImGui::BeginPopup(S(L, 1))); }
-int BeginPopupContextItem(lua_State *L) { return Ret(L, ImGui::BeginPopupContextItem(lua_isnoneornil(L, 1) ? nullptr : S(L, 1))); }
+int BeginPopup(lua_State *L) { return Ret(L, RememberPopup(ImGui::BeginPopup(S(L, 1)), PopupKind::Popup)); }
+int BeginPopupContextItem(lua_State *L) { return Ret(L, RememberPopup(ImGui::BeginPopupContextItem(lua_isnoneornil(L, 1) ? nullptr : S(L, 1)), PopupKind::Popup)); }
 // open = ui.BeginPopupContextWindow([id])   -- right-click on the window where no item (button, slot) is
 int BeginPopupContextWindow(lua_State *L) {
-	return Ret(L, ImGui::BeginPopupContextWindow(lua_isnoneornil(L, 1) ? nullptr : S(L, 1),
-		ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems));
+	return Ret(L, RememberPopup(ImGui::BeginPopupContextWindow(lua_isnoneornil(L, 1) ? nullptr : S(L, 1),
+		ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems), PopupKind::Popup));
 }
 int EndPopup(lua_State *) {
-	if (InPopup()) {
+	if (OwnPopup(PopupKind::Popup) && InPopup()) {
 		ImGui::EndPopup();
+		g_popups.pop_back();
 	}
 	return 0;
 }
-int CloseCurrentPopup(lua_State *) { ImGui::CloseCurrentPopup(); return 0; }
+int CloseCurrentPopup(lua_State *) {
+	const int floor = g_floors.empty() ? 0 : g_floors.back().stacks.SizeOfBeginPopupStack;
+	if (GImGui->BeginPopupStack.Size > floor) {
+		if (floor) ImGui::ClosePopupToLevel(GImGui->BeginPopupStack.Size - 1, true);
+		else ImGui::CloseCurrentPopup();
+	}
+	return 0;
+}
 // open = ui.BeginMenu(label [, enabled])   -- a submenu inside a popup or menu; ui.EndMenu() when it returned true
-int BeginMenu(lua_State *L) { return Ret(L, ImGui::BeginMenu(S(L, 1), B(L, 2, true))); }
+int BeginMenu(lua_State *L) { return Ret(L, RememberPopup(ImGui::BeginMenu(S(L, 1), B(L, 2, true)), PopupKind::Menu)); }
 int EndMenu(lua_State *) {
-	if (InPopup(ImGuiWindowFlags_ChildMenu)) {
+	if (OwnPopup(PopupKind::Menu) && InPopup(ImGuiWindowFlags_ChildMenu)) {
 		ImGui::EndMenu();
+		g_popups.pop_back();
 	}
 	return 0;
 }
@@ -759,6 +886,9 @@ int IsItemHovered(lua_State *L) { return Ret(L, ImGui::IsItemHovered(I(L, 1))); 
 bool MouseButtonOk(int b) { return b >= 0 && b < ImGuiMouseButton_COUNT; }
 int IsItemClicked(lua_State *L) { return Ret(L, MouseButtonOk(I(L, 1)) && ImGui::IsItemClicked(I(L, 1))); }
 int IsItemActive(lua_State *L) { return Ret(L, ImGui::IsItemActive()); }
+int IsItemDisabled(lua_State *L) {
+	return Ret(L, (ImGui::GetCurrentContext()->LastItemData.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+}
 int IsItemFocused(lua_State *L) { return Ret(L, ImGui::IsItemFocused()); } // the gamepad's navigation cursor is on it
 int IsWindowHovered(lua_State *L) { return Ret(L, ImGui::IsWindowHovered(I(L, 1))); }
 int IsMouseDoubleClicked(lua_State *L) { return Ret(L, MouseButtonOk(I(L, 1)) && ImGui::IsMouseDoubleClicked(I(L, 1))); }
@@ -977,11 +1107,15 @@ int PopStyleVar(lua_State *L) {
 }
 
 // --- drawing on the window (borders, overlays on icons) ---
+// ui.GetItemRect([controlOnly]): total last-item bounds, or its native interaction frame when true.
 int GetItemRect(lua_State *L) {
-	ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+	const bool control_only = B(L, 1);
+	ImVec2 a = control_only ? ImGui::GetCurrentContext()->LastItemData.NavRect.Min : ImGui::GetItemRectMin();
+	ImVec2 b = control_only ? ImGui::GetCurrentContext()->LastItemData.NavRect.Max : ImGui::GetItemRectMax();
 	lua_pushnumber(L, a.x); lua_pushnumber(L, a.y); lua_pushnumber(L, b.x); lua_pushnumber(L, b.y);
 	return 4;
 }
+int GetStyleAlpha(lua_State *L) { lua_pushnumber(L, ImGui::GetStyle().Alpha); return 1; }
 // ui.DrawRect(x0, y0, x1, y1, r, g, b, a [, rounding [, thickness]])  ui.DrawRectFilled(... same, no thickness)
 // ui.Foreground(on)   -- the Draw* functions draw above every window (ImGui's foreground list) until turned off;
 // reset each frame
@@ -1059,9 +1193,9 @@ int GetCursorScreenPos(lua_State *L) {
 	lua_pushnumber(L, v.y);
 	return 2;
 }
-// ui.PushFont(eqFont) / ui.PopFont()   -- EQ UI font 1..6; an unknown number keeps the current font
+// ui.PushFont(fontIndex) / ui.PopFont()   -- EQ UI font 1..6; an unknown number keeps the current font
 int PushFont(lua_State *L) {
-	ImGui::PushFont(eq_font(static_cast<int>(I(L, 1, 3))));
+	ImGui::PushFont(ui_font(static_cast<int>(I(L, 1, 3))));
 	return 0;
 }
 // ui.PushChatFont(index)   -- a chat window's font 0..10 (/chatfontsize; the original's font list); pop with PopFont
@@ -1092,16 +1226,101 @@ void SetInts(lua_State *L, const char *table, std::initializer_list<std::pair<co
 
 } // namespace
 
-std::size_t windows_begun() {
-	g_floors.push_back({GImGui->ColorStack.Size, GImGui->StyleVarStack.Size, GImGui->FontStack.Size});
-	return begun().size();
+std::size_t windows_begun(bool preserve_parent) {
+	Floor floor;
+	if (GImGui && GImGui->WithinFrameScope && GImGui->CurrentWindow) {
+		floor.begun = begun().size();
+		ImGui::ErrorRecoveryStoreState(&floor.stacks);
+		floor.window = GImGui->CurrentWindow;
+		floor.tables = GImGui->TablesTempDataStacked;
+		floor.tabs = GImGui->CurrentTabBarStack.Size;
+		floor.tabItems = g_tabItems.size();
+		floor.popupRecords = g_popups.size();
+		floor.combos = GImGui->BeginComboDepth;
+		if (floor.window) {
+			floor.wraps = floor.window->DC.TextWrapPosStack.Size;
+			floor.clipList = floor.window->DrawList;
+			floor.clips = floor.clipList->_ClipRectStack.Size;
+		}
+		floor.trackedClipList = g_clipList; floor.trackedClipFrame = g_clipFrame; floor.trackedClipDepth = g_clipDepth;
+		floor.foregroundFrame = g_foregroundFrame;
+		floor.fontScale = floor.window->FontWindowScale;
+		floor.preserveParent = preserve_parent;
+		if (preserve_parent) {
+			floor.nextWindow = GImGui->NextWindowData; floor.nextItem = GImGui->NextItemData; floor.lastItem = GImGui->LastItemData;
+			GImGui->NextWindowData.ClearFlags(); GImGui->NextItemData.ClearFlags();
+		}
+	}
+	g_floors.push_back(floor);
+	return floor.begun;
 }
 void end_script_windows(std::size_t depth) {
-	if (!g_floors.empty()) g_floors.pop_back();
+	if (!GImGui || !GImGui->WithinFrameScope) { if (!g_floors.empty()) g_floors.pop_back(); return; }
 	std::vector<Begun> &b = begun();
+	for (std::size_t i = depth; i < b.size(); ++i)
+		if (b[i].window && b[i].clips > 0) {
+			int target = b[i].clips - 1;
+			if (!g_floors.empty() && b[i].window == g_floors.back().window) target = std::max(target, g_floors.back().clips);
+			while (b[i].window->DrawList->_ClipRectStack.Size > target) b[i].window->DrawList->PopClipRect();
+		}
+	if (!g_floors.empty()) {
+		const Floor& floor = g_floors.back();
+		if (floor.clipList) while (floor.clipList->_ClipRectStack.Size > floor.clips) floor.clipList->PopClipRect();
+		if (floor.window) while (floor.window->DC.TextWrapPosStack.Size > floor.wraps) ImGui::PopTextWrapPos();
+		if (g_tabItems.size() > floor.tabItems) g_tabItems.resize(floor.tabItems);
+		if (g_popups.size() > floor.popupRecords) g_popups.resize(floor.popupRecords);
+		if (GImGui->BeginComboDepth > floor.combos) GImGui->BeginComboDepth = floor.combos;
+		g_clipList = floor.trackedClipList; g_clipFrame = floor.trackedClipFrame; g_clipDepth = floor.trackedClipDepth;
+		g_foregroundFrame = floor.foregroundFrame;
+		if (floor.preserveParent && floor.window == GImGui->CurrentWindow) {
+			const bool written = floor.window->WriteAccessed;
+			ImGui::SetWindowFontScale(floor.fontScale);
+			floor.window->WriteAccessed = written;
+		}
+		if (floor.preserveParent) {
+			GImGui->NextWindowData = floor.nextWindow; GImGui->NextItemData = floor.nextItem; GImGui->LastItemData = floor.lastItem;
+		}
+		const bool preserve = floor.preserveParent;
+		g_floors.pop_back();
+		if (preserve) { if (b.size() > depth) b.resize(depth); return; }
+	}
 	if (b.size() > depth) b.resize(depth);
 	GImGui->NextWindowData.ClearFlags();
 	GImGui->NextItemData.ClearFlags();
+}
+
+void recover_script_windows() {
+	if (!GImGui || !GImGui->WithinFrameScope || g_floors.empty()) return;
+	const Floor& floor = g_floors.back();
+	while (GImGui->CurrentWindowStack.Size > floor.stacks.SizeOfWindowStack) {
+		ImGuiWindow* window = GImGui->CurrentWindow;
+		if (g_popups.size() > floor.popupRecords && g_popups.back().window == window) {
+			switch (g_popups.back().kind) {
+			case PopupKind::Combo: ImGui::EndCombo(); break;
+			case PopupKind::Menu: ImGui::EndMenu(); break;
+			case PopupKind::Tooltip: ImGui::EndTooltip(); break;
+			case PopupKind::Popup: ImGui::EndPopup(); break;
+			}
+			g_popups.pop_back();
+		} else if (GImGui->CurrentTable && GImGui->TablesTempDataStacked > floor.tables && GImGui->CurrentTable->InnerWindow == window)
+			ImGui::EndTable();
+		else if (window->Flags & ImGuiWindowFlags_ChildWindow) ImGui::EndChild();
+		else ImGui::End();
+	}
+	while (GImGui->CurrentTable && GImGui->TablesTempDataStacked > floor.tables) ImGui::EndTable();
+	while (g_tabItems.size() > floor.tabItems && GImGui->CurrentTabBar && g_tabItems.back() == GImGui->CurrentTabBar) {
+		ImGui::EndTabItem(); g_tabItems.pop_back();
+	}
+	while (GImGui->CurrentTabBar && GImGui->CurrentTabBarStack.Size > floor.tabs) ImGui::EndTabBar();
+	// ImGui's generic recovery closes all current tables/tab bars. Hide only the
+	// caller's preserved pointers while it recovers the callback's other stacks.
+	auto* table = GImGui->CurrentTable;
+	auto* tab = GImGui->CurrentTabBar;
+	GImGui->CurrentTable = nullptr;
+	GImGui->CurrentTabBar = nullptr;
+	ImGui::ErrorRecoveryTryToRecoverState(&floor.stacks);
+	GImGui->CurrentTable = table;
+	GImGui->CurrentTabBar = tab;
 }
 
 void set_consent_guard(bool on) { g_guard = on; }
@@ -1124,6 +1343,20 @@ bool pack_code(lua_State *L) {
 	return pack;
 }
 
+bool ContextOnly(std::string_view name) {
+	// These operations use context state, not a live window or its draw list. They remain
+	// valid between frames; scoped stack changes and current-window queries do not.
+	for (const char* allowed : {"GetIO", "GetTime", "GetFrameCount", "GetStyleAlpha", "GetMousePos",
+		"IsMouseDoubleClicked", "IsMouseClicked", "IsMouseReleased", "IsMouseDown", "IsMouseDragging",
+		"IsKeyDown", "IsKeyPressed", "GetItemID", "GetItemRect", "IsItemActive", "IsItemDisabled",
+		"IsItemFocused", "IsItemDeactivatedAfterEdit", "IsWindowAppearing", "FindWindowRect", "SetWindowFocus",
+		"SetNextWindowSize", "SetNextWindowPos", "SetNextWindowBgAlpha", "SetNextWindowCollapsed", "SetNextWindowFocus",
+		"SetNextItemWidth", "SetNextItemAllowOverlap", "CaptureKeyboard", "SetNavCursorVisible",
+		"SetClipboardText", "GetClipboardText"})
+		if (name == allowed) return true;
+	return false;
+}
+
 void register_ui_api(lua_State *L) {
 	static const luaL_Reg fns[] = {
 		{"Begin", Begin}, {"End", End}, {"BeginChild", BeginChild}, {"EndChild", EndChild},
@@ -1134,6 +1367,7 @@ void register_ui_api(lua_State *L) {
 		{"CalcTextSize", CalcTextSize},
 		{"Button", Button}, {"SmallButton", SmallButton}, {"InvisibleButton", InvisibleButton}, {"EdgeButton", EdgeButton},
 		{"Selectable", Selectable}, {"Checkbox", Checkbox}, {"SliderFloat", SliderFloat}, {"SliderInt", SliderInt},
+		{"ColorButton", ColorButton}, {"ColorPicker3", ColorPicker3}, {"ColorEdit3", ColorEdit3},
 		{"InputText", InputText}, {"InputTextWithHint", InputTextWithHint}, {"InputTextMultiline", InputTextMultiline}, {"CodeEditor", CodeEditor}, {"SetClipboardText", SetClipboardText}, {"GetClipboardText", GetClipboardText}, {"SetKeyboardFocusHere", SetKeyboardFocusHere}, {"SetNavCursorVisible", SetNavCursorVisible}, {"BeginCombo", BeginCombo}, {"EndCombo", EndCombo},
 		{"SetItemDefaultFocus", SetItemDefaultFocus}, {"IsItemDeactivatedAfterEdit", IsItemDeactivatedAfterEdit}, {"ProgressBar", ProgressBar}, {"CollapsingHeader", CollapsingHeader},
 		{"TreeNode", TreeNode}, {"TreePop", TreePop},
@@ -1152,25 +1386,53 @@ void register_ui_api(lua_State *L) {
 		{"BeginTooltip", BeginTooltip}, {"EndTooltip", EndTooltip}, {"SetTooltip", SetTooltip},
 		{"OpenPopup", OpenPopup}, {"BeginPopup", BeginPopup}, {"BeginPopupContextItem", BeginPopupContextItem},
 		{"BeginPopupContextWindow", BeginPopupContextWindow}, {"EndPopup", EndPopup}, {"BeginMenu", BeginMenu}, {"EndMenu", EndMenu}, {"CloseCurrentPopup", CloseCurrentPopup}, {"MenuItem", MenuItem}, {"SetNextWindowFocus", SetNextWindowFocus}, {"SetNextItemAllowOverlap", SetNextItemAllowOverlap},
-		{"IsItemHovered", IsItemHovered}, {"IsItemClicked", IsItemClicked}, {"IsItemActive", IsItemActive}, {"IsWindowHovered", IsWindowHovered},
+		{"IsItemHovered", IsItemHovered}, {"IsItemClicked", IsItemClicked}, {"IsItemActive", IsItemActive}, {"IsItemDisabled", IsItemDisabled}, {"IsWindowHovered", IsWindowHovered},
 		{"IsMouseDoubleClicked", IsMouseDoubleClicked}, {"IsMouseClicked", IsMouseClicked}, {"IsMouseReleased", IsMouseReleased}, {"IsMouseDown", IsMouseDown}, {"IsMouseDragging", IsMouseDragging}, {"IsMouseHoveringRect", IsMouseHoveringRect}, {"GetTime", GetTime}, {"GetFrameCount", GetFrameCount}, {"GetItemID", GetItemID}, {"IsKeyDown", IsKeyDown}, {"IsKeyPressed", IsKeyPressed}, {"CaptureKeyboard", CaptureKeyboard}, {"GetIO", GetIO},
 		{"BeginDragDropSource", BeginDragDropSource}, {"SetDragDropPayload", SetDragDropPayload},
 		{"EndDragDropSource", EndDragDropSource}, {"BeginDragDropTarget", BeginDragDropTarget},
 		{"AcceptDragDropPayload", AcceptDragDropPayload}, {"EndDragDropTarget", EndDragDropTarget},
 		{"PushStyleColor", PushStyleColor}, {"PopStyleColor", PopStyleColor}, {"PushStyleVar", PushStyleVar},
 		{"PushStyleColors", PushStyleColors}, {"PushStyleVars", PushStyleVars},
-		{"PopStyleVar", PopStyleVar}, {"GetItemRect", GetItemRect}, {"DrawRect", DrawRect}, {"DrawRectGradient", DrawRectGradient},
+		{"PopStyleVar", PopStyleVar}, {"GetItemRect", GetItemRect}, {"GetStyleAlpha", GetStyleAlpha}, {"DrawRect", DrawRect}, {"DrawRectGradient", DrawRectGradient},
 		{"DrawLine", DrawLine}, {"DrawCircleFilled", DrawCircleFilled}, {"DrawCircle", DrawCircle},
 		{"DrawTriangleFilled", DrawTriangleFilled},
 		{"DrawRectFilled", DrawRectFilled}, {"DrawText", DrawText}, {"DrawImage", DrawImage}, {"GetCursorScreenPos", GetCursorScreenPos},
 		{"PushFont", PushFont}, {"PopFont", PopFont}, {"PushChatFont", PushChatFont}, {"ChatFontSize", ChatFontSize},
 		{nullptr, nullptr}};
 	luaL_newlib(L, fns);
+	// Retained callbacks may run while files load, before NewFrame. Context-only
+	// operations remain available; widget/drawing calls need a live window.
+	for (const luaL_Reg* entry = fns; entry->name; ++entry) {
+		const std::string_view name(entry->name);
+		if (name == "ChatFontSize" || name == "ColorButton" || name == "ColorEdit3" || name == "ColorPicker3") continue;
+		const int requirement = name == "CalcTextSize" ? 1 : ContextOnly(name) ? 0 : 2;
+		lua_pushcfunction(L, entry->func);
+		lua_pushstring(L, entry->name);
+		lua_pushinteger(L, requirement);
+		lua_pushcclosure(L, [](lua_State* state) -> int {
+			if (!GImGui) return luaL_error(state, "ui.%s requires an ImGui context", lua_tostring(state, lua_upvalueindex(2)));
+			const auto need = lua_tointeger(state, lua_upvalueindex(3));
+			if (need == 1 && !GImGui->Font)
+				return luaL_error(state, "ui.%s requires an initialized ImGui font", lua_tostring(state, lua_upvalueindex(2)));
+			if (need == 2 && (!GImGui->WithinFrameScope || !GImGui->CurrentWindow))
+				return luaL_error(state, "ui.%s requires an active ImGui frame/window", lua_tostring(state, lua_upvalueindex(2)));
+			int result = 0;
+			plugin::cxx_guard(state, [&] { result = lua_tocfunction(state, lua_upvalueindex(1))(state); });
+			return result;
+		}, 3);
+		lua_setfield(L, -2, entry->name);
+	}
 	SetInts(L, "WindowFlags", {{"None", ImGuiWindowFlags_None}, {"NoTitleBar", ImGuiWindowFlags_NoTitleBar},
 		{"NoResize", ImGuiWindowFlags_NoResize}, {"NoMove", ImGuiWindowFlags_NoMove},
 		{"NoScrollbar", ImGuiWindowFlags_NoScrollbar}, {"NoScrollWithMouse", ImGuiWindowFlags_NoScrollWithMouse}, {"NoCollapse", ImGuiWindowFlags_NoCollapse},
 		{"AlwaysAutoResize", ImGuiWindowFlags_AlwaysAutoResize}, {"NoBackground", ImGuiWindowFlags_NoBackground},
-		{"NoSavedSettings", ImGuiWindowFlags_NoSavedSettings}, {"MenuBar", ImGuiWindowFlags_MenuBar},
+		{"NoSavedSettings", ImGuiWindowFlags_NoSavedSettings}, {"NoMouseInputs", ImGuiWindowFlags_NoMouseInputs},
+		{"MenuBar", ImGuiWindowFlags_MenuBar},
+		{"HorizontalScrollbar", ImGuiWindowFlags_HorizontalScrollbar},
+		{"AlwaysVerticalScrollbar", ImGuiWindowFlags_AlwaysVerticalScrollbar},
+		{"AlwaysHorizontalScrollbar", ImGuiWindowFlags_AlwaysHorizontalScrollbar},
+		{"NoNavInputs", ImGuiWindowFlags_NoNavInputs}, {"NoNavFocus", ImGuiWindowFlags_NoNavFocus},
+		{"UnsavedDocument", ImGuiWindowFlags_UnsavedDocument}, {"NoNav", ImGuiWindowFlags_NoNav},
 		{"NoFocusOnAppearing", ImGuiWindowFlags_NoFocusOnAppearing}, {"NoDecoration", ImGuiWindowFlags_NoDecoration},
 		{"NoInputs", ImGuiWindowFlags_NoInputs}, {"NoBringToFrontOnFocus", ImGuiWindowFlags_NoBringToFrontOnFocus}});
 	SetInts(L, "Cond", {{"Always", ImGuiCond_Always}, {"Once", ImGuiCond_Once}, {"FirstUseEver", ImGuiCond_FirstUseEver},
@@ -1224,6 +1486,17 @@ void register_ui_api(lua_State *L) {
 		{"CharsDecimal", ImGuiInputTextFlags_CharsDecimal}, {"ReadOnly", ImGuiInputTextFlags_ReadOnly}});
 	SetInts(L, "ComboFlags", {{"None", 0}, {"NoArrowButton", ImGuiComboFlags_NoArrowButton},
 		{"HeightLarge", ImGuiComboFlags_HeightLarge}});
+	SetInts(L, "ColorEditFlags", {{"None", 0}, {"NoAlpha", ImGuiColorEditFlags_NoAlpha},
+		{"NoPicker", ImGuiColorEditFlags_NoPicker}, {"NoOptions", ImGuiColorEditFlags_NoOptions},
+		{"NoSmallPreview", ImGuiColorEditFlags_NoSmallPreview}, {"NoInputs", ImGuiColorEditFlags_NoInputs},
+		{"NoTooltip", ImGuiColorEditFlags_NoTooltip}, {"NoLabel", ImGuiColorEditFlags_NoLabel},
+		{"NoSidePreview", ImGuiColorEditFlags_NoSidePreview}, {"NoDragDrop", ImGuiColorEditFlags_NoDragDrop},
+		{"NoBorder", ImGuiColorEditFlags_NoBorder}, {"AlphaOpaque", ImGuiColorEditFlags_AlphaOpaque},
+		{"AlphaNoBg", ImGuiColorEditFlags_AlphaNoBg}, {"AlphaPreviewHalf", ImGuiColorEditFlags_AlphaPreviewHalf},
+		{"DisplayRGB", ImGuiColorEditFlags_DisplayRGB}, {"DisplayHSV", ImGuiColorEditFlags_DisplayHSV},
+		{"DisplayHex", ImGuiColorEditFlags_DisplayHex}, {"Uint8", ImGuiColorEditFlags_Uint8},
+		{"Float", ImGuiColorEditFlags_Float}, {"PickerHueBar", ImGuiColorEditFlags_PickerHueBar},
+		{"PickerHueWheel", ImGuiColorEditFlags_PickerHueWheel}, {"InputRGB", ImGuiColorEditFlags_InputRGB}});
 	SetInts(L, "SelectableFlags", {{"None", 0}, {"SpanAllColumns", ImGuiSelectableFlags_SpanAllColumns},
 		{"AllowDoubleClick", ImGuiSelectableFlags_AllowDoubleClick}});
 	SetInts(L, "Mouse", {{"Left", 0}, {"Right", 1}, {"Middle", 2}});

@@ -4,6 +4,115 @@
 
 namespace hailstone::app::client_internal {
 
+bool ClientApp::plate_input_blocked(bool ignore_right_button) const {
+    return !ui_.visible() || !window_.focused() || !conn_ || screen_ != Screen::InGame || !player_ready_ || zone_settling() ||
+           conn_->state() != net::ConnectionState::InZone || conn_->interface_locked() || conn_->player_down() ||
+           conn_->player_status().stand_state == net::kStandFreeze || conn_->placement().active() ||
+           conn_->inventory().cursor() || ui_host_.cursor_button || ui_host_.cursor_spell ||
+           ui_.wants_mouse() || mouse_look_.active || (!ignore_right_button && window_.input().right_button) ||
+           ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+}
+
+bool ClientApp::nameplate_spawn_clickable(const game::Spawn& spawn) const {
+    if (!conn_ || spawn.id == 0) return false;
+    game::MaskSpawn mask;
+    mask.type = spawn.is_corpse ? 2 : spawn.is_npc ? 1 : 0;
+    mask.click_through = spawn.click_through;
+    mask.mercenary = spawn.mercenary;
+    if (spawn.pet_owner_id != 0) {
+        const auto owner = conn_->world().spawns.find(spawn.pet_owner_id);
+        mask.owner_is_player = owner != conn_->world().spawns.end() && !owner->second.is_npc && !owner->second.is_corpse;
+    }
+    return nameplate_mouse_eligible(mask, conn_->click_through_mask(), spawn.id == conn_->world().player_id, camera_type_);
+}
+
+std::optional<float> ClientApp::nameplate_pixel_depth(glm::vec2 at) const {
+    const auto unknown = std::numeric_limits<float>::quiet_NaN();
+    if (!collision_ || plate_hit_view_.z <= 0.0f || plate_hit_view_.w <= 0.0f) return unknown;
+    const auto query = nameplate_click_ray(plate_inverse_view_, plate_hit_view_, plate_camera_, at);
+    if (!query) return unknown;
+    const auto& ray = *query;
+    std::vector<game::PickActor> actors;
+    const auto see_invisible = viewer_see_invisible_rank();
+    const auto hidden = hidden_spawn();
+    for (const auto& [id, spawn] : conn_->world().spawns) {
+        if (id == hidden || conn_->spawn_invisible(spawn, see_invisible)) continue;
+        glm::vec3 origin{};
+        float radius = 0.0f;
+        const bool have_bounds = actor_renderer_ && actor_renderer_->spawn_bounds(id, origin, radius);
+        if (have_bounds && game::point_segment_distance_squared(ray, origin) > (radius + 2.0f) * (radius + 2.0f)) continue;
+        game::PickActor actor;
+        render::ActorRenderer::SpawnPose pose;
+        if (have_bounds && actor_renderer_->spawn_pose(id, pose)) {
+            actor.position = origin;
+            actor.bound_center = pose.center;
+            actor.bound_radius = pose.radius;
+            auto triangles = std::make_shared<std::vector<glm::vec3>>(std::move(pose.triangles));
+            actor.triangles = [triangles](const game::PickTriangleSink& sink) {
+                for (std::size_t i = 0; i + 2 < triangles->size(); i += 3)
+                    sink({(*triangles)[i], (*triangles)[i + 1], (*triangles)[i + 2], {}, 0});
+            };
+        } else {
+            // A not-yet-available posed mesh is conservatively bounded, never treated as transparent to clicks.
+            actor.volume = 2;
+            actor.position = have_bounds ? origin : spawn.display_valid ? spawn.display_position : spawn.position;
+            actor.sphere_radius = have_bounds ? radius : std::max(1.5f, (spawn.size > 0.0f ? spawn.size : 6.0f) * 0.9f);
+        }
+        actors.push_back(std::move(actor));
+    }
+    if (world_objects_) {
+        std::vector<WorldObjects::PickRef> unused;
+        world_objects_->pick_actors(actors, unused);
+    }
+    game::PickScene scene;
+    scene.world = pick_world();
+    scene.actors = actors;
+    return nameplate_scene_depth(ray, scene, plate_forward_);
+}
+
+std::optional<std::uint32_t> ClientApp::nameplate_at(glm::vec2 at) const {
+    if (plate_input_blocked() || !pick_camera_valid_ || !view_area_.contains(at.x, at.y) ||
+        plate_hit_connection_ != conn_.get() || plate_hit_zone_ != conn_->zone_id() ||
+        plate_hit_serial_ != conn_->world().spawn_set_serial || Clock::now() - plate_hit_time_ > std::chrono::milliseconds(250) ||
+        plate_hit_view_ != glm::vec4(view_area_.x, view_area_.y, view_area_.w, view_area_.h))
+        return std::nullopt;
+    const auto see_invisible = viewer_see_invisible_rank();
+    std::optional<float> scene_depth;
+    bool scene_read = false;
+    return pick_nameplate(plate_hits_, at, [&](const NameplateHit& hit) {
+        const auto spawn = conn_->world().spawns.find(hit.id);
+        if (spawn == conn_->world().spawns.end() || !nameplate_spawn_clickable(spawn->second) || !game::is_targetable(spawn->second) || !spawn->second.show_name ||
+            spawn->second.body_type == 11 || conn_->spawn_invisible(spawn->second, see_invisible)) return false;
+        if (!automation_ || !automation_->nameplates().owner_valid(hit.owner) || hit.incarnation != spawn->second.incarnation) return false;
+        if (hit.through_walls) return true;
+        if (!scene_read) { scene_depth = nameplate_pixel_depth(at); scene_read = true; }
+        if (!nameplate_depth_visible(hit.depth, scene_depth)) return false;
+        return collision_ && collision_->line_of_sight(pick_camera_.position, hit.head) &&
+               (!world_objects_ || world_objects_->line_of_sight(pick_camera_.position, hit.head));
+    });
+}
+
+bool ClientApp::activate_nameplate(std::uint32_t id) {
+    if (plate_input_blocked() || plate_hit_connection_ != conn_.get() || plate_hit_zone_ != conn_->zone_id() ||
+        plate_hit_serial_ != conn_->world().spawn_set_serial) return false;
+    const auto spawn = conn_->world().spawns.find(id);
+    if (spawn == conn_->world().spawns.end() || !nameplate_spawn_clickable(spawn->second) || !game::is_targetable(spawn->second) || !spawn->second.show_name ||
+        spawn->second.body_type == 11 || conn_->spawn_invisible(spawn->second, viewer_see_invisible_rank())) return false;
+    const auto hit = std::find_if(plate_hits_.begin(), plate_hits_.end(), [id](const NameplateHit& h) { return h.id == id; });
+    if (hit == plate_hits_.end()) return false;
+    const NameplateHit observation = *hit;
+    if (!automation_ || !automation_->nameplates().owner_valid(observation.owner) ||
+        observation.incarnation != spawn->second.incarnation) return false;
+    if (!observation.through_walls && !nameplate_depth_visible(observation.depth,
+        nameplate_pixel_depth({window_.input().mouse_x, window_.input().mouse_y}))) return false;
+    if (!observation.through_walls && (!collision_ || !collision_->line_of_sight(pick_camera_.position, observation.head) ||
+        (world_objects_ && !world_objects_->line_of_sight(pick_camera_.position, observation.head)))) return false;
+    const std::uint32_t old = conn_->world().target_id;
+    if (old != id && conn_->world().spawns.contains(old)) target_manager_.previous = old;
+    conn_->set_target(id); // a physical click selects only: never give an item, attack, or run a right-click action
+    return true;
+}
+
 bool ClientApp::click_world(const PickTarget& hit) {
     if (!world_objects_ || !conn_) return false;
     // CEverQuest::LMouseUp without a spawn: an item on the cursor is a key for ClickedSwitch when it is a key
@@ -439,7 +548,7 @@ void ClientApp::left_click_spawn(std::uint32_t id) {
     if (!r.handled) return;
     if (r.save_old_target) target_manager_.previous = old; // CTargetManager +0x168
     if (r.target_is_clicked) conn_->set_target(id);
-    if (r.show_tip && eq_api_) eq_api_->activate_tip(0x22); // the interactive object's context tip (class 62)
+    if (r.show_tip && ui_api_) ui_api_->activate_tip(0x22); // the interactive object's context tip (class 62)
     if (r.lines) {
         const auto& strings = conn_->strings();
         std::vector<std::string> kind{strings.format(r.kind, {})};
@@ -472,7 +581,7 @@ void ClientApp::use_key(bool at_cursor) {
 // The open tradeskill container (OP_ClickObjectAction): its ten slots, Combine and Close.
 void ClientApp::draw_world_container() {
     if (!conn_) return;
-    if (drop_confirm_ && !(eq_api_ && eq_api_->replaces("ConfirmationDialogBox"))) {
+    if (drop_confirm_ && !(ui_api_ && ui_api_->replaces("ConfirmationDialogBox"))) {
         const net::Item* item = conn_->inventory().cursor();
         if (!item) {
             drop_confirm_ = false;
@@ -495,8 +604,8 @@ void ClientApp::draw_world_container() {
     // The fallback when no UI pack draws it: its own window (game::WorldContainer::window), or with no pack's
     // tradeskill window to show it in, any open container.
     const auto& wc = conn_->world_container();
-    const bool lua_tradeskill = eq_api_ && eq_api_->replaces("TradeskillWnd");
-    if (!wc || (eq_api_ && eq_api_->replaces("WorldContainer")) || (!wc->window && lua_tradeskill)) return;
+    const bool lua_tradeskill = ui_api_ && ui_api_->replaces("TradeskillWnd");
+    if (!wc || (ui_api_ && ui_api_->replaces("WorldContainer")) || (!wc->window && lua_tradeskill)) return;
     ImGui::SetNextWindowSize(ImVec2(260, 0), ImGuiCond_FirstUseEver);
     bool open = true;
     std::string title = (wc->name.empty() ? std::string("Container") : wc->name) + "###world_container";

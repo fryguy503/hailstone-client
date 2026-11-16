@@ -3,6 +3,7 @@
 -- for the raid leader and sends the pick), the looters as the game lists them (the leader, then the group leaders or
 -- the looters the raid window's Add / Remove Looter set, or the entire raid), and the sixteen class buttons: each
 -- opens the colour picker, and the colour picked is that class's in the raid window.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -70,14 +71,14 @@ ui.window("Raid Options", function()
         local id = "RAIDOPTIONS_ClassColor" .. i
         ui.SetCursorPos(rx0 + (i % 2) * (bw + T.px(10)) - wx, y0 + T.px(30) + (i // 2) * (bh + T.px(8)) - wy)
         local clicked, _, bx0, by0, bx1, by1 = T.button("##" .. id, "", bw, bh, {}, pad)
-        local r, g, b = eq.ChildColor(WIN, id)
+        local r, g, b = API.windows.ChildColor(WIN, id)
         T.rect(bx0 + T.px(14), by0 + T.px(18), bx0 + T.px(40), by1 - T.px(18), { r or 1, g or 1, b or 1, 1 }, 1, T.px(6))
         T.font(21)
         T.textIn(bx0 + T.px(54), by0, bx1 - T.px(10), by1, CLASSES[i + 1], { r or 1, g or 1, b or 1, 1 }, 0)
         T.unfont()
-        if clicked then eq.ClickChild(WIN, id, "left") end
+        if clicked then API.windows.ClickChild(WIN, id, "left") end
       end
     end
   end
-  if CH.back(st, W.finish()) then eq.ShowWindow(WIN, false) end
+  if CH.back(st, W.finish()) then API.windows.Show(WIN, false) end
 end)

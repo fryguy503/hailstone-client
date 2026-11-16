@@ -3,6 +3,7 @@
 -- arrows, Cast Spell / Scribe (shown when the book teaches a spell) and Done. The pages are the window's Page0 and
 -- Page1 (the game pages the text, 12 lines of under 31 characters each); the arrows, or the mouse wheel over the
 -- pages, are clicks on its LeftButton / RightButton, which go grey at the book's ends as the stock ones do.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -59,7 +60,7 @@ local function body(x, y, w, h, s)
   if wheel ~= 0 and ui.IsWindowHovered(ui.HoveredFlags.ChildWindows)
       and ui.IsMouseHoveringRect(x0, y0, x0 + w, y0 + ph) then
     local id = wheel < 0 and "RightButton" or "LeftButton"
-    if W.State(WINDOW, id) then eq.ClickChild(WINDOW, id, "left") end
+    if W.State(WINDOW, id) then API.windows.ClickChild(WINDOW, id, "left") end
   end
   -- the footer: the arrows on the left, the other buttons on the right
   local aw = 44 * s
@@ -69,8 +70,8 @@ local function body(x, y, w, h, s)
   RIGHT_OPTS.width, RIGHT_OPTS.height = aw, bh
   W.Button(WINDOW, "RightButton", ">", RIGHT_OPTS)
   for i = #right, 1, -1 do right[i] = nil end
-  if eq.ChildShown(WINDOW, "CastSpellButton") == true then right[#right + 1] = CAST end
-  if eq.ChildShown(WINDOW, "ScribeButton") == true then right[#right + 1] = SCRIBE end
+  if API.windows.ChildShown(WINDOW, "CastSpellButton") == true then right[#right + 1] = CAST end
+  if API.windows.ChildShown(WINDOW, "ScribeButton") == true then right[#right + 1] = SCRIBE end
   right[#right + 1] = DONE
   local bw = 96 * s
   local rowW = #right * bw + (#right - 1) * 8
@@ -84,6 +85,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Book", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Book", OPTS, body)
 end)

@@ -1,6 +1,7 @@
 -- Tips: replaces the game's TipWindow (the context tips the game shows the first time a window or event comes up).
 -- The tip's title, its page (STML) in a readable box that scrolls, the earlier tips in a drop-down (the window's
 -- History combo), the two "don't show" check boxes (the window writes them to the UI ini's [Tips]) and Close.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -15,7 +16,7 @@ local WINDOW_OPTS = {
 local function drawWindow(x, y, w, h, s)
   local bh = K.ButtonH(s)
   -- the earlier tips
-  local choices = eq.ComboInfo(WINDOW, "History")
+  local choices = API.windows.ComboInfo(WINDOW, "History")
   if W.Shown(WINDOW, "History") and choices and #choices > 1 then
     K.Caption("Earlier tips")
     ui.SameLine()
@@ -35,6 +36,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Tip of the Day", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Tip", WINDOW_OPTS, drawWindow)
 end)

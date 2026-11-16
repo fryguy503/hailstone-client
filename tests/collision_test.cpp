@@ -40,12 +40,14 @@ hailstone::assets::Zone flat_zone() {
 
 // The original ground query without its spatial index. Keeping the same float intersection arithmetic isolates
 // candidate-selection errors, including boundaries and triangles shared by several cells.
-std::optional<float> reference_ground(std::span<const hailstone::game::CollisionTriangle> triangles, const glm::vec3& p) {
+std::optional<float> reference_ground(std::span<const hailstone::game::CollisionTriangle> triangles, const glm::vec3& p,
+                                      bool effect = false) {
     using namespace hailstone::game;
     if (!std::isfinite(p.x) || !std::isfinite(p.y)) return std::nullopt;
     std::optional<float> best;
     for (const auto& tri : triangles) {
-        if (tri.flags & (kTrianglePassable | kTriangleTransparent | 0x10 | kTriangleLadderSlab | kTriangleInvisible)) continue;
+        if (tri.flags & (kTriangleTransparent | 0x10 | kTriangleLadderSlab | kTriangleInvisible |
+                        (effect ? kTriangleNoVisualSurface : kTrianglePassable))) continue;
         if (!(tri.normal.z > 0.0f)) continue;
         const glm::vec2 a(tri.v0), b(tri.v1), c(tri.v2), q(p);
         const float d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
@@ -369,6 +371,32 @@ TEST_CASE("ground_below: refined candidates leave movement and roof probes uncha
     CHECK(mesh.floor_below({8, 8, 50}, 0).value() == doctest::Approx(20));
     CHECK(mesh.ceiling_above({8, 8, 5}).value() == doctest::Approx(10));
     CHECK(mesh.roof_above({8, 8, 5}).value() == doctest::Approx(20));
+}
+
+TEST_CASE("visual_surface_below: dense spatial candidates preserve exact layered results including passable props") {
+    using namespace hailstone::game;
+    std::vector<CollisionTriangle> triangles;
+    for(int x=-16;x<32;++x)
+        for(int y=-16;y<32;++y) {
+            ground_quad(triangles,static_cast<float>(x)*4,static_cast<float>(y)*4,4,
+                static_cast<float>((x+y)%3),.08f,.025f);
+            const auto flags=static_cast<std::uint8_t>((x-y)%4==0?kTriangleInvisible:
+                (x-y)%4==1?kTriangleNoVisualSurface:kTrianglePassable);
+            ground_quad(triangles,static_cast<float>(x)*4,static_cast<float>(y)*4,4,
+                6+static_cast<float>((x+y)%3),.08f,.025f,flags);
+        }
+    ground_quad(triangles,-10000,-10000,20000,-40,0,0); // huge-triangle fallback is independent of fine cells
+    const auto mesh=CollisionMesh::from_triangles(triangles);
+    std::mt19937 random(29);
+    std::uniform_real_distribution<float> xy(-70,135),z(-45,15);
+    for(int sample=0;sample<2000;++sample) {
+        const glm::vec3 point{sample%5?xy(random):static_cast<float>(sample%32)*4,
+                              sample%7?xy(random):static_cast<float>(sample%32)*4,z(random)};
+        const auto expected=reference_ground(triangles,point,true);
+        const auto actual=mesh.visual_surface_below(point);
+        REQUIRE(actual.has_value()==expected.has_value());
+        if(actual)CHECK(*actual==doctest::Approx(*expected));
+    }
 }
 
 TEST_CASE("a triangle too large for the grid is met by every query") {

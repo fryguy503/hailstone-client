@@ -10,8 +10,9 @@
 --                  menu (enter a house, store, ...)
 --   Neighborhoods  RealEstateNeighborhoodWnd: the neighborhoods with their free plots, a row's players and guilds, Go
 --   Plot Search    RealEstatePlotSearchWnd: search plots by owner, Go travels to the one picked
--- Everything is the stock window's (eq.ClickChild, eq.ListClick, eq.ComboSelect, eq.SetWindowText); the windows grey
+-- Everything is the stock window's (hs.ClickChild, hs.ListClick, hs.ComboSelect, hs.SetWindowText); the windows grey
 -- what you may not do.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local T = hud.T
@@ -64,7 +65,7 @@ local function plotBody(x, y, w, h, s)
   W.ButtonRow(PW, PLOT_PAGES, btnH())
 end
 ui.window("Real Estate Plot", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(PW, "Plot", PLOT_OPTS, plotBody)
 end)
 
@@ -149,7 +150,7 @@ local function manageBody(x, y, w, h, s)
   end
 end
 ui.window("Real Estate Manage", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(MW, "Manage Plot", MANAGE_OPTS, manageBody)
 end)
 
@@ -178,7 +179,7 @@ local function itemsBody(x, y, w, h, s)
   W.ButtonRow(IW, PLACE_BUTTONS, bh)
 end
 ui.window("Real Estate Items", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(IW, "Real Estate Items", ITEMS_OPTS, itemsBody)
 end)
 
@@ -205,7 +206,7 @@ local function neighborhoodBody(x, y, w, h, s)
   W.ButtonRow(NW, NEIGHBORHOOD_BUTTONS, bh)
 end
 ui.window("Real Estate Neighborhoods", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(NW, "Neighborhoods", NEIGHBORHOOD_OPTS, neighborhoodBody)
 end)
 
@@ -213,9 +214,9 @@ end)
 local SW = "RealEstatePlotSearchWnd"
 local SEARCH_OPTS = { size = function() return 560, 460 end, resizable = { 400, 320 } }
 local NAME_EDIT = { hint = "Owner name (empty: every plot)",
-  onCommit = function() eq.ClickChild(SW, "SearchButton", "left") end }
+  onCommit = function() API.windows.ClickChild(SW, "SearchButton", "left") end }
 local SEARCH_BUTTON = { hidden = false }
-local PLOT_LIST = { sortable = true, doubleClick = function() eq.ClickChild(SW, "GoButton", "left") end }
+local PLOT_LIST = { sortable = true, doubleClick = function() API.windows.ClickChild(SW, "GoButton", "left") end }
 local GO_BUTTONS = { { "GoButton", "Go", { primary = true, hidden = false, tooltip = "Go to the selected plot" } } }
 local function searchBody(x, y, w, h, s)
   local bh = btnH()
@@ -229,6 +230,6 @@ local function searchBody(x, y, w, h, s)
   W.ButtonRow(SW, GO_BUTTONS, bh)
 end
 ui.window("Real Estate Plot Search", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(SW, "Plot Search", SEARCH_OPTS, searchBody)
 end)

@@ -4,7 +4,8 @@
 
 #include "app/client_app_internal.h"
 #include "app/connection_frontend.h"
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
+#include "app/addon_install.h"
 #include "core/asset_folder.h"
 #include "net/server_files.h"
 #include "ui/ui_ini.h"
@@ -50,6 +51,7 @@ void ClientApp::start_token_login(bool named_server, const std::filesystem::path
     launcher_view_ = true;
     login_view_.busy = true;
     login_view_.status = {"Signing in with launcher ticket...", false};
+    ui_selection_error_.clear(); // the launcher starts a new login context
     server_profile_ = std::move(profile);
     token_login_active_ = true;
     login_ = std::make_unique<net::LoginClient>();
@@ -301,6 +303,7 @@ void ClientApp::login_action(ui::LoginAction action) {
     case ui::LoginAction::AddonUpdate:
     case ui::LoginAction::AddonRemove:
     case ui::LoginAction::AddonAuto:
+    case ui::LoginAction::AddonEnabled:
     case ui::LoginAction::AddonFolder:
     case ui::LoginAction::AddonPage:
     case ui::LoginAction::AddonCheck:
@@ -319,6 +322,7 @@ void ClientApp::login_action(ui::LoginAction action) {
 }
 
 void ClientApp::apply_server_profile(const ServerProfile& profile) {
+    ui_selection_error_.clear(); // each explicit login/session attempt starts a new profile context
     server_profile_ = profile;
     // The server's assets folder over the asset folder (GameDir's overlay); a test login's has none.
     std::optional<std::filesystem::path> overlay;
@@ -341,19 +345,132 @@ void ClientApp::apply_server_profile(const ServerProfile& profile) {
     overlay_loaded_ = with_files;
 }
 
-void ClientApp::use_ui_pack(std::string_view id) {
-    const ui::UiPack* pack = ui::find_ui_pack(ui_packs_, id.empty() ? config_.get_string("ui.name", "modern") : id);
-    if (!pack || pack->id == ui_name_) return;
+void ClientApp::refresh_ui_packs(bool force) {
+    const auto policy_context = conn_ ? conn_->interaction_context() : 0;
+    const auto policy_serial = conn_ ? conn_->server_rules_serial() : 0;
+    force = force || policy_context != ui_policy_context_ || policy_serial != ui_policy_serial_;
+    const auto now = std::chrono::steady_clock::now();
+    if (!force && now < ui_registry_rescan_) return;
+    ui_policy_context_ = policy_context;
+    ui_policy_serial_ = policy_serial;
+    ui_registry_rescan_ = now + std::chrono::seconds(1);
+    std::vector<std::string> installed;
+    std::map<std::string, std::pair<std::string, std::string>, std::less<>> generations;
+    const auto installed_addons = read_installed_addons(platform::data_dir());
+    for (const auto& addon : installed_addons) {
+        if (addon.kind != AddonKind::Ui) continue;
+        installed.push_back(addon.name);
+        Sha256 generation;
+        generation.update(addon.version);
+        for (const auto& file : addon.files) {
+            generation.update(std::string_view("\0", 1));
+            generation.update(file.path);
+            generation.update(std::as_bytes(std::span(file.sha256)));
+        }
+        generations[addon.name] = {addon.version, to_hex(generation.finish())};
+    }
+    ui_diagnostics_.clear();
+    auto packs = ui::list_ui_packs(platform::ui_packs_dir(), platform::data_dir() / "ui-addons", installed,
+                                  &ui_diagnostics_);
+    const auto* rules = conn_ && conn_->server_rules() ? &*conn_->server_rules() : nullptr;
+    apply_ui_addon_policy(packs, rules, installed_addons);
+    for (auto& pack : packs) {
+        Sha256 generation;
+        auto add = [&](const ui::UiPack& source) {
+            if (const auto found = generations.find(source.addon); found != generations.end()) {
+                generation.update(found->second.second);
+                if (&source == &pack) pack.version = found->second.first;
+            }
+        };
+        add(pack);
+        for (const auto& base : pack.base_ids) if (const auto* source = ui::find_ui_pack_exact(packs, base)) add(*source);
+        pack.revision = to_hex(generation.finish());
+    }
+    if (packs == ui_packs_) return;
+    ui_packs_ = std::move(packs);
+    login_view_.ui_packs = ui_packs_;
+    const auto requested = screen_ == Screen::Login && !login_view_.ui.empty() ? login_view_.ui : wanted_ui_pack();
+    const auto* current = ui::find_ui_pack_exact(ui_packs_, ui_name_);
+    const auto* target = ui::find_ui_pack(ui_packs_, requested);
+    if (lua_ui_ && (!current || !current->available || !loaded_ui_pack_ || *current != *loaded_ui_pack_ ||
+                    (target && target->id != ui_name_))) {
+        pending_ui_pack_ = requested;
+        ui_reload_pending_ = true;
+    }
+}
+
+ui::InterfaceStatus ClientApp::interface_status() const {
+    ui::InterfaceStatus status;
+    const auto selected = screen_ == Screen::Login && !login_view_.ui.empty() ? login_view_.ui : wanted_ui_pack();
+    if (const auto* pack = ui::find_ui_pack_exact(ui_packs_, selected)) status.selected = *pack;
+    else {
+        status.selected.id = selected;
+        status.selected.name = selected;
+        status.selected.available = false;
+        status.selected.unavailable_reason = "The selected interface is not installed";
+    }
+    if (loaded_ui_pack_) status.loaded = *loaded_ui_pack_;
+    status.bases = status.loaded.base_ids;
+    status.diagnostics = ui_diagnostics_;
+    if (!ui_selection_error_.empty()) status.diagnostics.push_back(ui_selection_error_);
+    if (!status.selected.available) status.diagnostics.push_back(status.selected.unavailable_reason);
+    if (lua_ui_) {
+        const auto loaded = lua_ui_->load_status();
+        status.script_count = loaded.script_count;
+        status.loaded_script_count = loaded.loaded_script_count;
+        status.error_count = loaded.error_count;
+        status.window_count = loaded.window_count;
+        status.diagnostics.insert(status.diagnostics.end(), loaded.errors.begin(), loaded.errors.end());
+        if (loaded.scanned) status.state = "ready";
+    }
+    if (!status.selected.available) status.state = "fallback";
+    else if (status.selected.id != status.loaded.id || pending_ui_pack_) status.state = "pending";
+    if (status.error_count || !ui_selection_error_.empty()) status.state = "error";
+    return status;
+}
+
+ui::lua::LuaUi::DataRoots ClientApp::ui_data_roots(const ui::UiPack* pack) const {
+    ui::lua::LuaUi::DataRoots data{platform::data_dir() / "ui-data", {pack ? pack->id : ui_name_}};
+    if (pack) data.ids.insert(data.ids.end(), pack->base_ids.begin(), pack->base_ids.end());
+    return data;
+}
+
+void ClientApp::use_ui_pack(std::string_view id, bool force) {
+    const auto requested = id.empty() ? config_.get_string("ui.name", "modern") : std::string(id);
+    // Every entrypoint, including Login's direct presenter switch, sees current policy before choosing a VM.
+    // Copy the requested ID first: refreshing the registry may replace the storage an incoming view references.
+    refresh_ui_packs();
+    if (pending_ui_pack_ && *pending_ui_pack_ == requested) {
+        pending_ui_pack_.reset();
+        force = std::exchange(ui_reload_pending_, false) || force;
+    }
+    const auto context = (screen_ == Screen::Login ? ui::selected_profile_id(login_view_) : server_profile_.id) + '\n' + requested;
+    if (ui_selection_context_ != context) {
+        ui_selection_error_.clear();
+        ui_selection_context_ = context;
+    }
+    const ui::UiPack* pack = ui::find_ui_pack(ui_packs_, requested);
+    if (!pack || (!force && pack->id == ui_name_)) return;
     ui_name_ = pack->id;
-    lua_ui_.reset(); // its settings saved; the eq.* functions keep nothing of a Lua state
-    lua_ui_ = std::make_unique<ui::lua::LuaUi>(pack->dir, platform::ui_settings_file(ui_name_));
+    loaded_ui_pack_ = *pack;
+    const bool options_open = ui_api_ && ui_api_->shown("OptionsWindow");
+    const std::string options_section = lua_ui_ ? lua_ui_->setting("options.section") : std::string();
+    lua_ui_.reset(); // its settings saved; the hs.* functions keep nothing of a Lua state
+    // Even a same-ID helper update creates a new state with no plugin folders. The old state's scan cache cannot
+    // suppress set_folders on this one, or running add-on windows disappear until the next filesystem rescan.
+    plugin_ui_pack_.clear();
+    plugin_ui_rescan_ = {};
+    lua_ui_ = std::make_unique<ui::lua::LuaUi>(pack->dir, platform::ui_settings_file(ui_name_), pack->base_dirs,
+                                            ui_data_roots(pack), ui_name_ != "modern" && ui_name_ != "gamepad");
     lua_ui_->set_character_settings(CharacterFiles{ui_character_dir_}.ui_settings(ui_name_));
+    if (options_open && !options_section.empty()) lua_ui_->set_setting("options.section", options_section);
     lua_ui_->set_show_control(game_view_.dev_windows);
-    lua_ui_->add_eq_api([this](lua_State* L) { register_eq_api(L); });
+    lua_ui_->add_ui_api([this](lua_State* L) { register_ui_api(L); });
     lua_ui_->set_caller_scope(lua_caller_scope());
     lua_ui_->set_clipboard_check(lua_clipboard_check());
     ui_textures_->set_all_art(pack->game_art);
-    if (eq_api_) eq_api_->reload_game_files(); // (the EQ menu's rows follow the pack's windows: read again)
+    if (ui_api_) ui_api_->reload_game_files(); // (the EQ menu's rows follow the pack's windows: read again)
+    if (options_open) ui_api_->show("OptionsWindow", true);
     log::info("user interface: {}", ui_name_);
 }
 
@@ -370,10 +487,20 @@ ui::lua::LuaUi::ClipboardCheck ClientApp::lua_clipboard_check() {
 
 void ClientApp::sync_plugin_windows() {
     plugin::UiBridge* bridge = automation_ ? &automation_->plugin_ui() : nullptr;
-    eq_host_.plugin_ui = bridge;
+    ui_host_.plugin_ui = bridge;
+    const auto now = std::chrono::steady_clock::now();
+    const bool same_sources = bridge ? bridge->folders() == plugin_ui_sources_ : plugin_ui_sources_.empty();
+    if (plugin_ui_pack_ == ui_name_ && same_sources && now < plugin_ui_rescan_) return;
+    plugin_ui_pack_ = ui_name_;
+    plugin_ui_sources_ = bridge ? bridge->folders() : decltype(plugin_ui_sources_){};
+    plugin_ui_rescan_ = now + std::chrono::seconds(1);
     std::vector<ui::lua::LuaUi::Folder> folders;
-    if (bridge)
-        for (const auto& [name, folder] : bridge->folders()) folders.push_back({name, folder / "ui" / ui_name_});
+    const auto* pack = ui::find_ui_pack(ui_packs_, ui_name_);
+    if (bridge && pack)
+        for (const auto& [name, folder] : plugin_ui_sources_) {
+            const auto path = ui::plugin_ui_folder(folder, *pack);
+            if (!path.empty()) folders.push_back({name, path});
+        }
     lua_ui_->set_folders(std::move(folders));
 }
 
@@ -411,11 +538,11 @@ void ClientApp::reload_server_files(bool at_login) {
     // art still lives until this frame is submitted, so a caller that ran after something was drawn with it (none
     // does now) cannot free a texture a draw list names.
     bool all_art = ui_textures_ ? ui_textures_->all_art() : true;
-    eq_host_.textures = nullptr;
+    ui_host_.textures = nullptr;
     retired_ui_textures_ = std::move(ui_textures_);
     ui_textures_ = std::make_unique<ui::UiTextures>(vk_, game_);
     ui_textures_->set_all_art(all_art);
-    eq_host_.textures = ui_textures_.get();
+    ui_host_.textures = ui_textures_.get();
     if (audio_) {
         // The sound archives (snd*.pfs), soundassets.txt, mp3index.txt and racedata.txt are listed and read when the
         // audio system is made: a new one, with the settings the Options window left.
@@ -429,7 +556,7 @@ void ClientApp::reload_server_files(bool at_login) {
     characters_.clear(); // global_chr.s3d and the other global archives, the EQG models, the appearance tables
     actor_kept_.reset(); // the meshes and textures read from them
     if (world_objects_) world_objects_->reset_game_files();
-    if (eq_api_) eq_api_->reload_game_files();
+    if (ui_api_) ui_api_->reload_game_files();
     vk_.wait_idle();
     // Their icon sheets (spells<nn>.tga, dragitem<n>.dds); the old ones' destructors wait for the GPU.
     spell_ui_.reset();
@@ -450,15 +577,16 @@ void ClientApp::back_to_login(std::string message, bool is_error) {
     core::wipe(opts_.login_launch.ticket);
     if (is_error) login_token_session_.clear();
     link_death_since_.reset();
-    if (eq_api_) eq_api_->save_layout();
+    if (ui_api_) ui_api_->save_layout();
     // Hailstone: the chat's lines to the character's history (a link death, a camp to the server list, a lost
     // connection); entering the world again puts them back.
     save_chat_history(true);
     game_view_.chat.lines.clear();
     ++game_view_.chat.revision;
     if (stats_ui_) stats_ui_->forget(); // its player reads the connection's spell table
+    retire_world_geometry(); // retire callbacks before the connection they may inspect
     conn_.reset();
-    eq_host_.conn = nullptr; // (update_eq_host sets it each frame; the windows must not reach the freed one before)
+    ui_host_.conn = nullptr; // (update_ui_host sets it each frame; the windows must not reach the freed one before)
     login_.reset();
     unload_zone();
     leave_character();
@@ -510,7 +638,7 @@ void ClientApp::leave_character() {
     ui_character_dir_.clear();
     if (lua_ui_) lua_ui_->set_character_settings({});
     use_character_settings({}); // hailstone.ini's settings again
-    eq_host_.drop_session_dialogs();
+    ui_host_.drop_session_dialogs();
     pre_game_failed_ = false;
 }
 
@@ -716,7 +844,7 @@ void ClientApp::start_game(const net::WorldTicket& ticket) {
     }
     if (stats_ui_) stats_ui_->forget(); // its player reads the last connection's spell table
     conn_ = std::make_unique<net::GameConnection>(game_, copts);
-    eq_host_.conn = conn_.get(); // the last connection is gone
+    ui_host_.conn = conn_.get(); // the last connection is gone
     // The new connection's rules are its own: the last one's serial must not hide them, and character select's
     // scene is tried again.
     asset_rules_serial_ = 0;
@@ -764,10 +892,11 @@ void ClientApp::camp_finished(std::uint32_t kind) {
     // StartNetworkGame: character select. Here a new connection on the same ticket.
     log::info("camped out: back to character select");
     net::WorldTicket ticket = conn_->ticket();
-    if (eq_api_) eq_api_->save_layout();
+    if (ui_api_) ui_api_->save_layout();
     if (stats_ui_) stats_ui_->forget(); // its player reads the connection's spell table
+    retire_world_geometry(); // retire callbacks before the connection they may inspect
     conn_.reset();
-    eq_host_.conn = nullptr; // (update_eq_host sets it each frame; the windows must not reach the freed one before)
+    ui_host_.conn = nullptr; // (update_ui_host sets it each frame; the windows must not reach the freed one before)
     unload_zone();
     leave_character();
     player_ready_ = false;
@@ -784,7 +913,7 @@ void ClientApp::camp_finished(std::uint32_t kind) {
     // Hailstone: the text is kept in the character's chat history first, and comes back on entering the world.
     save_chat_history(true);
     game_view_.chat.lines.clear();
-    ++game_view_.chat.revision; // the Lua chat windows ask again (eq.ChatText's version)
+    ++game_view_.chat.revision; // the Lua chat windows ask again (hs.ChatText's version)
     char_view_.status = {};
     char_view_.busy = false;
     start_game(ticket);
@@ -829,6 +958,7 @@ void ClientApp::update_link_death() {
         loading_view_.title = conn_->strings().format(12353, {});
         if (loading_view_.title.starts_with('[')) loading_view_.title = "YOU HAVE BEEN DISCONNECTED.";
         loading_view_.waiting = false;
+        if (screen_ == Screen::InGame) retire_world_geometry();
         screen_ = Screen::Loading;
         window_.set_mouse_captured(false);
     }
@@ -885,7 +1015,8 @@ void ClientApp::update_connection() {
     conn_->update();
     // A new hailstone.cfg may change which of the server's assets folder counts ([assets] player).
     bool assets_ruled = false;
-    if (conn_->server_rules_serial() != asset_rules_serial_) {
+    const bool rules_changed = conn_->server_rules_serial() != asset_rules_serial_;
+    if (rules_changed) {
         asset_rules_serial_ = conn_->server_rules_serial();
         // (Not from the provisional rules before the zone-in: the server's files are checked then.)
         if (conn_->server_rules() && !conn_->server_rules()->provisional && !conn_->server_rules()->dir.empty())
@@ -899,10 +1030,11 @@ void ClientApp::update_connection() {
         reload_server_files(false);
         overlay_loaded_ = true;
     }
+    if (rules_changed) refresh_ui_packs(true); // retire a blocked UI before the frontend/add-on gate can hold it
     // /loadskin's user interface (loaded between frames: its Lua state may have run the command), /quit and /exit,
     // and a dropped connection, after the new rules' assets and before the add-on gate can hold the frame.
     if (!connection_frontend(*conn_, pending_ui_pack_,
-        [this](const std::string& skin) { use_ui_pack(skin); },
+        [this](const std::string& skin) { use_ui_pack(skin, std::exchange(ui_reload_pending_, false)); },
         [this](net::GameConnection::QuitRequest request) {
             log::info("{}: quitting", request == net::GameConnection::QuitRequest::Exit ? "/exit" : "/quit");
             conn_->disconnect();
@@ -1009,6 +1141,7 @@ void ClientApp::update_connection() {
             loading_view_.title = "Downloading server files";
             loading_view_.detail = files->status();
             loading_view_.progress = files->progress();
+            if (screen_ == Screen::InGame) retire_world_geometry();
             screen_ = Screen::Loading;
             break;
         }
@@ -1021,6 +1154,7 @@ void ClientApp::update_connection() {
         case S::ZoneConnecting: loading_view_.progress = 0.1f; break;
         default: loading_view_.progress = zone_loaded_ms_ >= 0 ? 0.5f : 0.2f; break;
         }
+        if (screen_ == Screen::InGame) retire_world_geometry();
         screen_ = Screen::Loading;
         break;
     case S::InZone:

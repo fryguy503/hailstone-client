@@ -1,10 +1,11 @@
--- The server select (gamepad pack): eq.ServerSelect stands in for the client's own (ui/dev_screens.cpp
+-- The server select (gamepad pack): hs.ServerSelect stands in for the client's own (ui/dev_screens.cpp
 -- server_select_screen). A Hailstone screen, not the original's. The world played last here comes first as a tile of
 -- its own (the focus starts on it), then every world the login server lists, each with whether it can be joined (no
 -- player count is shown). A plays the focused world, Start the selected one, B goes back to the login screen. With the
 -- mouse a click selects a world and a double click plays it; Enter plays the selected one. Y (or a click on a row's
 -- star) marks the world a favourite: the favourites are listed first, then the other worlds, each by name (the client
 -- sorts them).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local W = dofile("lib/window.lua")
 local P = dofile("lib/pregame.lua")
@@ -45,7 +46,7 @@ local function star(cx, cy, r, filled, c, a)
 end
 
 local function play(v, i)
-  if not eq.ServerSelectDo("play", i) then
+  if not API.pregame.ServerSelectDo("play", i) then
     local s = v.servers[i]
     if s and not s.canJoin then st.note, st.noteAt = s.name .. " cannot be joined now.", ui.GetTime() end
   end
@@ -55,7 +56,7 @@ end
 local function chosen(v, i)
   local r = st.stars[i]
   if not P.padDrives() and r and ui.IsMouseHoveringRect(r[1], r[2], r[3], r[4]) then
-    eq.ServerSelectDo("favorite", i)
+    API.pregame.ServerSelectDo("favorite", i)
     st.clickRow = 0
     return
   end
@@ -68,7 +69,7 @@ local function chosen(v, i)
     st.clickRow = 0
     play(v, i)
   else
-    eq.ServerSelectDo("select", i)
+    API.pregame.ServerSelectDo("select", i)
     st.clickRow, st.clickAt = i, now
   end
 end
@@ -76,10 +77,10 @@ end
 -- (kept from frame to frame: tables made each frame are garbage the collector works through)
 local OPTS = { w = 1040, subtitle = "Choose a world to play on", close = false, alwaysFocus = true,
   hints = { { "a", "Play" }, { "y", "Favorite" }, { "start", "Play selected" }, { "b", "Back" } } }
-local held = nil -- the view drawn last frame: eq.ServerSelect gives true while it still holds (its revision)
+local held = nil -- the view drawn last frame: hs.ServerSelect gives true while it still holds (its revision)
 
 ui.window(NAME, function()
-  local v = eq.ServerSelect and eq.ServerSelect(held and held.revision)
+  local v = API.pregame.ServerSelect and API.pregame.ServerSelect(held and held.revision)
   if v == true then v = held else held = v end
   if not v then
     st.frame = -10
@@ -110,11 +111,11 @@ ui.window(NAME, function()
     local busy = v.busy
     -- (the keyboard's Enter and Escape: only while this window has the focus and nothing is being typed)
     local keys = W.focused() and not ui.GetIO().typing
-    if P.press("b") or (keys and ui.IsKeyPressed(ui.Key.Escape)) then eq.ServerSelectDo("back") end
+    if P.press("b") or (keys and ui.IsKeyPressed(ui.Key.Escape)) then API.pregame.ServerSelectDo("back") end
     if P.press("y") and v.selected > 0 and not st.follow then
       local sel = v.servers[v.selected]
       -- the list is sorted again with the world's new mark: the focus goes with the world to its new row
-      if eq.ServerSelectDo("favorite", v.selected) then
+      if API.pregame.ServerSelectDo("favorite", v.selected) then
         st.follow = { name = sel.name, fav = sel.favorite, untilF = frame + 30 }
       end
     end
@@ -193,7 +194,7 @@ ui.window(NAME, function()
       end
       -- with the pad the selection follows the focus
       if row and P.padDrives() and row ~= v.selected and not busy and not st.follow then
-        eq.ServerSelectDo("select", row)
+        API.pregame.ServerSelectDo("select", row)
       end
       st.list.selected = v.selected
     end
@@ -207,7 +208,7 @@ ui.window(NAME, function()
     P.status(note, busy, x0, by - px(12), x1, { bottom = true, lines = 2 })
     local bw = px(240)
     P.at(x1 - 2 * bw - px(12), by)
-    if P.button(F, "##back", "Back", bw, px(72), { glyph = "b" }) then eq.ServerSelectDo("back") end
+    if P.button(F, "##back", "Back", bw, px(72), { glyph = "b" }) then API.pregame.ServerSelectDo("back") end
     ui.SameLine(0, px(12))
     local sel = v.servers[v.selected]
     local canPlay = not busy and sel ~= nil and sel.canJoin

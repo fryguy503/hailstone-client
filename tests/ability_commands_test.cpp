@@ -14,7 +14,7 @@
 
 #include "app/actions_ui.h"
 #include "app/ability_bulk.h"
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "core/byte_io.h"
 #include "core/config.h"
 #include "core/ini_file.h"
@@ -560,12 +560,12 @@ TEST_CASE("an active discipline refreshes and its icon asks the server for its s
     REQUIRE(c.spell_table().get(4498));
     Config config;
     app::ActionsUi actions(config, dir.path() / "hailstone.ini");
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &c;
     host.actions = &actions;
     host.hot_buttons = &actions.hot_buttons();
-    app::EqApi api(host);
+    app::UiApi api(host);
     constexpr auto disc_slot = static_cast<std::uint32_t>(game::kBuffSlots - 1);
     const auto& discipline = c.spell_state().buffs[disc_slot];
 
@@ -641,21 +641,21 @@ TEST_CASE("discipline buttons share server reuse timers despite different recast
     app::ActionsUi actions(config, dir.path() / "hailstone.ini");
     for (int i = 0; i < 5; ++i)
         actions.hot_buttons().combat_abilities[static_cast<std::size_t>(i)] = game::kCombatAbilityValueBase + i;
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &c;
     host.actions = &actions;
     host.hot_buttons = &actions.hot_buttons();
-    app::EqApi api(host);
+    app::UiApi api(host);
     std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
     REQUIRE(lua);
     lua_newtable(lua.get());
     api.register_functions(lua.get());
-    lua_setglobal(lua.get(), "eq");
+    lua_setglobal(lua.get(), "hs");
     struct CoolDown { bool shown; std::int64_t top, left, reuse; };
     auto cooldown = [&](int button) {
         lua_settop(lua.get(), 0);
-        const auto code = "return eq.ButtonCoolDown('CombatAbilityWnd','CAW_Button" + std::to_string(button) + "',0,100)";
+        const auto code = "return hs.ButtonCoolDown('CombatAbilityWnd','CAW_Button" + std::to_string(button) + "',0,100)";
         REQUIRE(luaL_dostring(lua.get(), code.c_str()) == LUA_OK);
         REQUIRE(lua_gettop(lua.get()) == 7);
         return CoolDown{lua_isnumber(lua.get(), 1) != 0, lua_tointeger(lua.get(), 1),
@@ -676,7 +676,7 @@ TEST_CASE("discipline buttons share server reuse timers despite different recast
     CHECK(api.child_checked("CombatAbilityWnd", "CAW_Button3") == false);
     CHECK(cooldown(4).shown); // Timer id zero is valid.
     CHECK(cooldown(4).left > 0);
-    REQUIRE(luaL_dostring(lua.get(), "local d=eq.Disciplines(); return #d==5 and d[1].timer==1 and d[2].timer==1 "
+    REQUIRE(luaL_dostring(lua.get(), "local d=hs.Disciplines(); return #d==5 and d[1].timer==1 and d[2].timer==1 "
         "and d[1].remaining>0 and d[1].remaining==d[2].remaining and d[1].remaining==d[5].remaining "
         "and d[3].remaining==0 and d[4].timer==0 and d[4].remaining>0") == LUA_OK);
     CHECK(lua_toboolean(lua.get(), -1));
@@ -861,7 +861,7 @@ TEST_CASE("the Ability Book's plugin bulk rows: order, ids, names and readiness"
 
     Config config;
     app::ActionsUi actions(config, dir.path() / "hailstone.ini");
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &c;
     host.actions = &actions;
@@ -940,7 +940,7 @@ TEST_CASE("/doability by name: a skill, then a discipline, then an activated AA,
 
     Config config;
     app::ActionsUi actions(config, dir.path() / "hailstone.ini");
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &c;
     host.actions = &actions;

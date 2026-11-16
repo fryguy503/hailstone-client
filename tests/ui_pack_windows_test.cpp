@@ -24,7 +24,9 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
 #include "app/gamepad.h"
 #include "core/byte_io.h"
 #include "core/config.h"
@@ -57,8 +59,8 @@ struct Session {
     GameDir game;
     net::GameConnection conn;
     ui::ChatView view;
-    app::EqHost host;
-    app::EqApi api;
+    app::UiHost host;
+    app::UiApi api;
     ui::lua::LuaUi lua;
     Session(const fs::path& dir, const std::string& pack, net::ConnectionOptions options = {}, bool in_game = true)
         : game(dir / "game"), conn(game, std::move(options)), api(host), lua(dir / pack, dir / "ui.txt") {
@@ -66,12 +68,13 @@ struct Session {
         host.conn = &conn;
         host.chat = &view;
         host.in_game = host.ui_ready = in_game;
-        lua.add_eq_api([this, in_game](lua_State* L) {
+        lua.add_ui_api([this, in_game](lua_State* L) {
             api.register_functions(L);
             if (in_game) {
                 lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
                 lua_setfield(L, -2, "InGame");
             }
+            hailstone::test::sync_ui_api_aliases(L);
         });
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
     }
@@ -80,6 +83,7 @@ struct Session {
             ImGuiIO& io = ImGui::GetIO();
             io.DisplaySize = ImVec2(1600, 900);
             io.DeltaTime = 1.0f / 60.0f;
+            hailstone::test::sync_ui_api_aliases(lua.state());
             api.begin_frame();
             ImGui::NewFrame();
             if (fallback) (void)ui::in_game_overlay(*fallback);
@@ -90,7 +94,7 @@ struct Session {
 };
 
 struct ReplacementCheck {
-    explicit ReplacementCheck(const app::EqApi& api) {
+    explicit ReplacementCheck(const app::UiApi& api) {
         ui::lua::set_replaced_check([p = &api](std::string_view screen) { return p->replaces(screen); });
     }
     ~ReplacementCheck() { ui::lua::set_replaced_check({}); }
@@ -150,6 +154,164 @@ constexpr const char* kScreens[] = {
 
 } // namespace
 
+TEST_CASE("UI packs (gamepad): real window chrome fits resized viewports and explicit positions") {
+    struct ScaleGuard {
+        float previous = ui::ui_scale();
+        ~ScaleGuard() { ui::set_ui_scale(previous); }
+    } scale_guard;
+    for (float scale : {1.0f, 2.0f, 0.5f}) {
+        CAPTURE(scale);
+        test::ScratchDir scratch("ui_gamepad_window_bounds");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::create_directories(dir / "gamepad");
+        fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui/gamepad/lib", dir / "gamepad/lib",
+                 fs::copy_options::recursive);
+        std::ofstream(dir / "gamepad/bounds.lua") << R"lua(
+            local W = dofile('lib/window.lua')
+            desiredWidth = 1720
+            local invisible, line = ui.InvisibleButton, ui.DrawLine
+            ui.InvisibleButton = function(id, ...)
+                local clicked = invisible(id, ...)
+                if id == '##close' then closeRect = {ui.GetItemRect()} end
+                return clicked
+            end
+            ui.DrawLine = function(x0,y0,x1,y1,...)
+                if y0 == y1 then dividers[#dividers+1] = {x0,y0,x1,y1} end
+                return line(x0,y0,x1,y1,...)
+            end
+            ui.window('Geometry', function()
+                dividers = {}
+                if W.begin('Geometry', {w=desiredWidth,h=960,x=requestX,y=requestY,title='Title',subtitle='Subtitle',
+                        hints={{'a','Select'},{'b','Close'}},noFocus=true}) then
+                    contentRect = {W.area()}
+                    ui.InvisibleButton('Content', 40, 12)
+                    bodyRect = {ui.GetItemRect()}
+                end
+                closed = W.finish()
+            end)
+        )lua";
+        std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+        auto& io = ImGui::GetIO(); io.IniFilename = nullptr;
+        ImFontConfig font; font.SizePixels = 20.0f * scale;
+        io.Fonts->AddFontDefault(&font);
+        unsigned char* pixels = nullptr; int texture_width = 0, texture_height = 0;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &texture_width, &texture_height);
+        ui::set_ui_scale(scale);
+        Session s(dir, "gamepad");
+        auto frame = [&](float width, float height) {
+            io.DisplaySize = ImVec2(width, height); io.DeltaTime = 1.0f / 60.0f;
+            s.api.begin_frame(); ImGui::NewFrame(); s.lua.frame(); ImGui::Render();
+            CHECK(s.lua.load_status().error_count == 0);
+        };
+        auto table = [&](const char* name) {
+            std::vector<double> values;
+            lua_State* L = s.lua.state(); lua_getglobal(L, name); REQUIRE(lua_istable(L, -1));
+            for (std::size_t i = 1; i <= lua_rawlen(L, -1); ++i) {
+                lua_rawgeti(L, -1, static_cast<lua_Integer>(i)); values.push_back(lua_tonumber(L, -1)); lua_pop(L, 1);
+            }
+            lua_pop(L, 1); return values;
+        };
+        auto check_bounds = [&](float width, float height) {
+            const auto* w = ImGui::FindWindowByName("Geometry"); REQUIRE(w);
+            CHECK(w->Pos.x >= 0); CHECK(w->Pos.y >= 0);
+            CHECK(w->Pos.x + w->Size.x <= width + 0.01f); CHECK(w->Pos.y + w->Size.y <= height + 0.01f);
+            const auto area = table("contentRect"), close = table("closeRect"), body = table("bodyRect");
+            REQUIRE(area.size() == 6); REQUIRE(close.size() == 4); REQUIRE(body.size() == 4);
+            CHECK(area[0] >= w->Pos.x); CHECK(area[1] > w->Pos.y);
+            CHECK(area[2] <= w->Pos.x + w->Size.x); CHECK(area[3] < w->Pos.y + w->Size.y);
+            CHECK(area[4] > 0); CHECK(area[5] > 0);
+            CHECK(close[0] >= w->Pos.x); CHECK(close[1] >= w->Pos.y);
+            CHECK(close[2] <= width); CHECK(close[3] <= height);
+            CHECK(body[0] >= area[0]); CHECK(body[1] >= area[1]);
+            CHECK(body[2] <= area[2]); CHECK(body[3] <= area[3]);
+            bool header = false, footer = false;
+            lua_State* L = s.lua.state(); lua_getglobal(L, "dividers");
+            for (std::size_t i = 1; i <= lua_rawlen(L, -1); ++i) {
+                lua_rawgeti(L, -1, static_cast<lua_Integer>(i)); lua_rawgeti(L, -1, 2);
+                const double y = lua_tonumber(L, -1); lua_pop(L, 2);
+                header = header || (y > w->Pos.y && y < area[1]);
+                footer = footer || (y > area[3] && y < w->Pos.y + w->Size.y);
+            }
+            lua_pop(L, 1); CHECK(header); CHECK(footer);
+        };
+        for (int desired : {1720, 1500}) {
+            REQUIRE(s.lua.run_for_test("", "desiredWidth=" + std::to_string(desired) + " return true") == "true");
+            for (const auto [width, height] : {std::pair{1920.0f,1080.0f}, {720.0f,700.0f}, {1280.0f,360.0f}, {1920.0f,1080.0f}}) {
+                CAPTURE(desired); CAPTURE(width); CAPTURE(height);
+                frame(width, height); frame(width, height); check_bounds(width, height);
+                const auto* w = ImGui::FindWindowByName("Geometry"); REQUIRE(w);
+                if (width == 1920) {
+                    CHECK(w->Size.x == desired); CHECK(w->Size.y == 960);
+                    CHECK(w->Pos.x == doctest::Approx((1920.0f - static_cast<float>(desired)) / 2)); CHECK(w->Pos.y == 60);
+                } else if (width == 720) {
+                    CHECK(w->Size.x == 708); CHECK(w->Size.y == 480); CHECK(w->Pos.x == 6); CHECK(w->Pos.y == 110);
+                }
+            }
+        }
+        for (const auto [x,y] : {std::pair{-10000, -10000}, {0,0}, {10000,10000}}) {
+            CAPTURE(x); CAPTURE(y);
+            REQUIRE(s.lua.run_for_test("", "requestX="+std::to_string(x)+" requestY="+std::to_string(y)+" return true") == "true");
+            frame(720,700); frame(720,700); check_bounds(720,700);
+            const auto* w = ImGui::FindWindowByName("Geometry"); REQUIRE(w);
+            CHECK(w->Pos.x == (x > 0 ? 12 : 0)); CHECK(w->Pos.y == (y > 0 ? 220 : 0));
+        }
+        const auto close = table("closeRect");
+        io.AddMousePosEvent(static_cast<float>((close[0]+close[2])/2), static_cast<float>((close[1]+close[3])/2));
+        io.AddMouseButtonEvent(0,true); frame(720,700);
+        io.AddMouseButtonEvent(0,false); frame(720,700);
+        CHECK(s.lua.run_for_test("", "return closed") == "true");
+    }
+}
+
+TEST_CASE("UI packs (gamepad): stock Raid and Map stay inside narrow and short native viewports") {
+    test::ScratchDir scratch("ui_gamepad_stock_bounds"); const auto dir = scratch.path();
+    fs::create_directories(dir / "game");
+    fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui/gamepad", dir / "gamepad", fs::copy_options::recursive);
+    std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+    auto& io = ImGui::GetIO(); io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr; int width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    Session s(dir, "gamepad"); s.lua.set_entry_scripts({"raid.lua", "map.lua"});
+    for (int member = 0; member < 72; ++member) {
+        net::RaidUpdate update; update.general.action = net::kRaidAddMember;
+        update.general.player_name = "Member"+std::to_string(member); update.general.parameter = static_cast<std::uint32_t>(member/6);
+        update.class_ = 2; update.level = 60;
+        s.conn.receive_zone_packet_for_test(net::encode_raid_update(update));
+    }
+    REQUIRE(s.conn.raid().active); REQUIRE(s.conn.raid().members.size() == 72);
+    REQUIRE(s.lua.run_for_test("", "hs.UI.windows.Show('RaidWindow',true) hs.UI.windows.Show('MapViewWnd',true) return true") == "true");
+    auto frame = [&](float w, float h) {
+        io.DisplaySize = ImVec2(w,h); io.DeltaTime = 1.0f/60.0f;
+        s.api.begin_frame(); ImGui::NewFrame(); s.lua.frame(); ImGui::Render();
+        CHECK(s.lua.load_status().error_count == 0);
+    };
+    for (const auto [w,h] : {std::pair{720.0f,700.0f}, {1280.0f,360.0f}}) {
+        CAPTURE(w); CAPTURE(h); frame(w,h); frame(w,h);
+        REQUIRE(s.lua.run_for_test("", "return hs.UI.windows.ListClick('RaidWindow','RAID_PlayerList',0,'left')") == "true");
+        frame(w,h); frame(w,h);
+        for (const char* name : {"Raid", "Map"}) {
+            CAPTURE(name); const auto* window = ImGui::FindWindowByName(name); REQUIRE(window);
+            CHECK(window->Active); CHECK(window->Pos.x >= 0); CHECK(window->Pos.y >= 0);
+            CHECK(window->Pos.x+window->Size.x <= w); CHECK(window->Pos.y+window->Size.y <= h);
+            CHECK(window->Size.x > 0); CHECK(window->Size.y > 0);
+        }
+        const auto* raid = ImGui::FindWindowByName("Raid"); REQUIRE(raid);
+        const ImGuiWindow* actions = nullptr;
+        for (const auto* child : raid->DC.ChildWindows) if (child->Name && std::string_view(child->Name).find("##raidactions") != std::string_view::npos) actions=child;
+        REQUIRE(actions); CHECK(actions->Active); CHECK(actions->Size.y > 0);
+        CHECK(actions->Pos.x >= raid->Pos.x); CHECK(actions->Pos.y > raid->Pos.y);
+        CHECK(actions->Pos.x+actions->Size.x <= raid->Pos.x+raid->Size.x);
+        CHECK(actions->Pos.y+actions->Size.y < raid->Pos.y+raid->Size.y);
+        if (h <= 360) {
+            CHECK(actions->ScrollMax.y > 0);
+            ImGui::SetScrollY(const_cast<ImGuiWindow*>(actions), actions->ScrollMax.y);
+            frame(w,h); frame(w,h);
+            CHECK(actions->Scroll.y == doctest::Approx(actions->ScrollMax.y));
+        }
+    }
+}
+
 TEST_CASE("UI packs: every script of the shipped UIs loads, and their windows draw without script errors") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
@@ -173,11 +335,11 @@ TEST_CASE("UI packs: every script of the shipped UIs loads, and their windows dr
             lua_State* L = s.lua.state();
             for (const char* screen : kScreens) {
                 INFO(screen);
-                std::string show = std::string("eq.ShowWindow('") + screen + "', true)";
+                std::string show = std::string("hs.ShowWindow('") + screen + "', true)";
                 REQUIRE(luaL_dostring(L, show.c_str()) == LUA_OK);
                 s.frames(2);
                 CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-                std::string hide = std::string("eq.ShowWindow('") + screen + "', false)";
+                std::string hide = std::string("hs.ShowWindow('") + screen + "', false)";
                 REQUIRE(luaL_dostring(L, hide.c_str()) == LUA_OK);
             }
         }
@@ -261,10 +423,10 @@ TEST_CASE("UI packs: evolving transfer reviews server previews and drawn confirm
                 end
                 ui.SetSetting('hud.size.ItemExpTransferWnd','760,620')
                 ui.SetSetting('test.pos.ItemExpTransferWnd','20,20')
-                eq.ShowWindow('TipWindow',false)
+                hs.ShowWindow('TipWindow',false)
             )lua");
             if (gamepad_pack) run(R"lua(
-                eq.gamepad={
+                hs.gamepad={
                   connected=function() return true end,type=function() return 'xbox' end,
                   mode=function() return 'menu' end,set_mode=function() return 'menu' end,
                   pressed=function(button) return button==padPress end,
@@ -390,30 +552,30 @@ TEST_CASE("UI packs: active discipline shows seconds and its icon cancels on a m
             };
             run(R"lua(
 discActive, discFraction, discTime, endClicks = true, 1, "1:00", 0
-local shown, replace, child, text, art, gauge, click = eq.WindowShown, eq.ReplaceWindow,
-  eq.ChildShown, eq.WindowText, eq.ChildArt, eq.Gauge, eq.ClickChild
-eq.WindowShown = function(win) if win == "CombatAbilityWnd" then return true end return shown(win) end
-eq.ReplaceWindow = function(win)
+local shown, replace, child, text, art, gauge, click = hs.WindowShown, hs.ReplaceWindow,
+  hs.ChildShown, hs.WindowText, hs.ChildArt, hs.Gauge, hs.ClickChild
+hs.WindowShown = function(win) if win == "CombatAbilityWnd" then return true end return shown(win) end
+hs.ReplaceWindow = function(win)
   if win == "CombatAbilityWnd" then return true, 40, 40, 360, 190 end
   return replace(win)
 end
-eq.ChildShown = function(win, id)
+hs.ChildShown = function(win, id)
   if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return discActive end
   return child(win, id)
 end
-eq.WindowText = function(win, id)
+hs.WindowText = function(win, id)
   if win == "CombatAbilityWnd" and id == "CAW_CombatEffectLabel" then return "Test Discipline" end
   return text(win, id)
 end
-eq.ChildArt = function(win, id, kind)
+hs.ChildArt = function(win, id, kind)
   if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return nil end
   return art(win, id, kind)
 end
-eq.Gauge = function(kind)
+hs.Gauge = function(kind)
   if kind == 26 then gaugeReads = (gaugeReads or 0) + 1; return discFraction, discTime end
   return gauge(kind)
 end
-eq.ClickChild = function(win, id, button)
+hs.ClickChild = function(win, id, button)
   if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then
     assert(button == "left")
     endClicks, discActive = endClicks + 1, false
@@ -490,7 +652,7 @@ TEST_CASE("UI packs: the gamepad's first focus is the discipline list, and LB en
         // A pad in menu mode; padPress is the button that went down this frame.
         run(R"lua(
 padPress, windowShown, discActive, endClicks, uses = nil, false, true, 0, 0
-eq.gamepad = {
+hs.gamepad = {
   connected = function() return true end,
   type = function() return 'xbox' end,
   mode = function() return 'menu' end,
@@ -503,32 +665,32 @@ eq.gamepad = {
   takes_b = function() end,
   request_focus = function(window) ui.SetWindowFocus(window) end,
 }
-local shown, replace, child, text, art, click = eq.WindowShown, eq.ReplaceWindow, eq.ChildShown, eq.WindowText,
-  eq.ChildArt, eq.ClickChild
-eq.WindowShown = function(win) if win == "CombatAbilityWnd" then return windowShown end return shown(win) end
-eq.ReplaceWindow = function(win)
+local shown, replace, child, text, art, click = hs.WindowShown, hs.ReplaceWindow, hs.ChildShown, hs.WindowText,
+  hs.ChildArt, hs.ClickChild
+hs.WindowShown = function(win) if win == "CombatAbilityWnd" then return windowShown end return shown(win) end
+hs.ReplaceWindow = function(win)
   if win == "CombatAbilityWnd" then return true, 40, 40, 360, 190 end
   return replace(win)
 end
-eq.ChildShown = function(win, id)
+hs.ChildShown = function(win, id)
   if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return discActive end
   return child(win, id)
 end
-eq.WindowText = function(win, id)
+hs.WindowText = function(win, id)
   if win == "CombatAbilityWnd" and id == "CAW_CombatEffectLabel" then return "Test Discipline" end
   return text(win, id)
 end
-eq.ChildArt = function(win, id, kind)
+hs.ChildArt = function(win, id, kind)
   if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return nil end
   return art(win, id, kind)
 end
-eq.Gauge = function() return 0.5, "30s" end
-eq.Disciplines = function()
+hs.Gauge = function() return 0.5, "30s" end
+hs.Disciplines = function()
   return { { index = 0, spell = 101, name = "Guard", icon = 0, level = 50, endurance = 0, reuse = 60,
     remaining = 0, timer = 1 } }
 end
-eq.PressButtonFrom = function() uses = uses + 1 end
-eq.ClickChild = function(win, id, button)
+hs.PressButtonFrom = function() uses = uses + 1 end
+hs.ClickChild = function(win, id, button)
   if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then
     endClicks, discActive = endClicks + 1, false
     return true
@@ -596,24 +758,24 @@ TEST_CASE("UI packs: offered-task starting-zone hint and explicit preview follow
 offerSelected, offerPreviewEnabled, offerPreviewClicks = 0, true, {}
 offerWindowShown, activeTaskShown, activePreviewEnabled, activePreviewClicks = true, false, true, 0
 offerTexts = {}
-assert(type(eq.ChildState) == "function", "ChildState must be registered before the fixture wraps it")
+assert(type(hs.ChildState) == "function", "ChildState must be registered before the fixture wraps it")
 local shown, replace, childShown, childState, text, list, row, listClick, click =
-  eq.WindowShown, eq.ReplaceWindow, eq.ChildShown, eq.ChildState,
-  eq.WindowText, eq.ListInfo, eq.ListRow, eq.ListClick, eq.ClickChild
-eq.WindowShown = function(win)
+  hs.WindowShown, hs.ReplaceWindow, hs.ChildShown, hs.ChildState,
+  hs.WindowText, hs.ListInfo, hs.ListRow, hs.ListClick, hs.ClickChild
+hs.WindowShown = function(win)
   if win == "TaskSelectWnd" then return offerWindowShown end
   if win == "TaskWnd" then return activeTaskShown end
   return shown(win)
 end
-eq.ReplaceWindow = function(win)
+hs.ReplaceWindow = function(win)
   if win == "TaskSelectWnd" then return true, 40, 40, 600, 400 end
   return replace(win)
 end
-eq.ChildShown = function(win, id)
+hs.ChildShown = function(win, id)
   if win == "TaskSelectWnd" then return true end
   return childShown(win, id)
 end
-eq.ChildState = function(win, id)
+hs.ChildState = function(win, id)
   if win == "TaskSelectWnd" then
     if id == "TSEL_PreviewRewardButton" then return offerPreviewEnabled, false end
     return true, false
@@ -621,7 +783,7 @@ eq.ChildState = function(win, id)
   if win == "TaskWnd" and id == "TASK_PreviewRewardButton" then return activePreviewEnabled, false end
   return childState(win, id)
 end
-eq.ListInfo = function(win, id)
+hs.ListInfo = function(win, id)
   if win == "TaskSelectWnd" and id == "TaskList" then return 2, 2, offerSelected end
   if win == "TaskWnd" then
     if id == "TASK_TaskList" then return 1, 3, 0 end
@@ -629,7 +791,7 @@ eq.ListInfo = function(win, id)
   end
   return list(win, id)
 end
-eq.ListRow = function(win, id, index)
+hs.ListRow = function(win, id, index)
   if win == "TaskSelectWnd" and id == "TaskList" then
     return {index == 0 and "First offer" or "Second offer", ""}
   end
@@ -640,19 +802,19 @@ eq.ListRow = function(win, id, index)
   end
   return row(win, id, index)
 end
-eq.ListClick = function(win, id, index, ...)
+hs.ListClick = function(win, id, index, ...)
   if win == "TaskSelectWnd" and id == "TaskList" then offerSelected = index; return end
   if win == "TaskWnd" and id == "TASK_TaskList" then assert(index == 0); return end
   return listClick(win, id, index, ...)
 end
-eq.WindowText = function(win, id)
+hs.WindowText = function(win, id)
   if win == "TaskSelectWnd" and id == "Description" then
     return offerSelected == 0 and "FirstDescription<br>TaskBeginsInFirst" or "SecondDescription<br>TaskBeginsInSecond"
   end
   if win == "TaskWnd" and id == "TASK_Description" then return "ActiveTaskDescription" end
   return text(win, id)
 end
-eq.ClickChild = function(win, id, button)
+hs.ClickChild = function(win, id, button)
   if win == "TaskSelectWnd" then
     assert(id == "TSEL_PreviewRewardButton" and button == "left", "Preview must use its matching native action")
     offerPreviewClicks[#offerPreviewClicks + 1] = offerSelected
@@ -766,24 +928,24 @@ TEST_CASE("UI packs: linked discipline cooldowns show red fills and matching sec
             };
             run(R"lua(
 sharedLeft, expectedTime, timerDraws, redArea, redFills, abilityClicks = 600, "10:00", 0, 0, 0, 0
-local shown, replace, child, text, cooldown, click = eq.WindowShown, eq.ReplaceWindow,
-  eq.ChildShown, eq.WindowText, eq.ButtonCoolDown, eq.ClickChild
+local shown, replace, child, text, cooldown, click = hs.WindowShown, hs.ReplaceWindow,
+  hs.ChildShown, hs.WindowText, hs.ButtonCoolDown, hs.ClickChild
 local names, reuse = { "Long Guard", "Short Guard", "Independent" }, { 600, 300, 120 }
-eq.WindowShown = function(win) if win == "CombatAbilityWnd" then return true end return shown(win) end
-eq.ReplaceWindow = function(win)
+hs.WindowShown = function(win) if win == "CombatAbilityWnd" then return true end return shown(win) end
+hs.ReplaceWindow = function(win)
   if win == "CombatAbilityWnd" then return true, 40, 40, 360, 190 end
   return replace(win)
 end
-eq.ChildShown = function(win, id)
+hs.ChildShown = function(win, id)
   if win == "CombatAbilityWnd" and id == "CAW_CombatEffectButton" then return false end
   return child(win, id)
 end
-eq.WindowText = function(win, id)
+hs.WindowText = function(win, id)
   local n = id:match("^CAW_Button(%d)$")
   if win == "CombatAbilityWnd" and n then return names[tonumber(n)] or "" end
   return text(win, id)
 end
-eq.ButtonCoolDown = function(win, id, y0, y1)
+hs.ButtonCoolDown = function(win, id, y0, y1)
   local n = id:match("^CAW_Button(%d)$")
   n = n and tonumber(n)
   if win == "CombatAbilityWnd" and n and n <= 2 and sharedLeft > 0 then
@@ -792,7 +954,7 @@ eq.ButtonCoolDown = function(win, id, y0, y1)
   return cooldown(win, id, y0, y1)
 end
 local row = 0
-eq.Disciplines = function()
+hs.Disciplines = function()
   row = 0
   local out = {}
   for i = 1, 3 do
@@ -801,13 +963,13 @@ eq.Disciplines = function()
   end
   return out
 end
-eq.ClickChild = function(win, id, button)
+hs.ClickChild = function(win, id, button)
   if win == "CombatAbilityWnd" and id == "CAW_Button1" and button == "left" then
     abilityClicks = abilityClicks + 1; return true
   end
   return click(win, id, button)
 end
-eq.PressButtonFrom = function(win, id, n)
+hs.PressButtonFrom = function(win, id, n)
   assert(win == "CombatAbilityWnd" and id == "Discipline" and n == 1)
   abilityClicks = abilityClicks + 1
 end
@@ -934,7 +1096,7 @@ TEST_CASE("UI packs: the respawn window leaves the focus alone for a question th
             s.conn.receive_zone_packet_for_test(respawn_window_packet(1));
             clock.advance(std::chrono::milliseconds(1));
             s.frames(3);
-            app::EqHost::Confirm q;
+            app::UiHost::Confirm q;
             q.text = "A question of a window's own";
             s.host.confirm = std::move(q);
             s.frames(3);
@@ -945,7 +1107,7 @@ TEST_CASE("UI packs: the respawn window leaves the focus alone for a question th
             REQUIRE(respawn);
             CHECK(confirm->Active);
             REQUIRE(luaL_dostring(s.lua.state(),
-                "assert(eq.ChildShown('ConfirmationDialogBox', 'ResurrectionOffer') == false)") == LUA_OK);
+                "assert(hs.ChildShown('ConfirmationDialogBox', 'ResurrectionOffer') == false)") == LUA_OK);
             ImGui::FocusWindow(respawn);
             s.frames(3);
             REQUIRE(GImGui->NavWindow);
@@ -990,7 +1152,7 @@ TEST_CASE("UI packs: resurrection keeps the original respawn choices and timer u
                 s.host.gamepad = &pad;
                 // Observe the actual pack's paint and selected-row input, rather than only its shared model.
                 REQUIRE(luaL_dostring(s.lua.state(), R"lua(
-local TextColored, DrawText, ListInfo = ui.TextColored, ui.DrawText, eq.ListInfo
+local TextColored, DrawText, ListInfo = ui.TextColored, ui.DrawText, hs.ListInfo
 ui.TextColored = function(r, g, b, a, text, ...)
   if text == "Resurrect" then RespawnPaintColor = { r, g, b } end
   return TextColored(r, g, b, a, text, ...)
@@ -999,7 +1161,7 @@ ui.DrawText = function(x, y, r, g, b, a, text, ...)
   if text == "Resurrect" then RespawnPaintColor = { r, g, b } end
   return DrawText(x, y, r, g, b, a, text, ...)
 end
-eq.ListInfo = function(win, child)
+hs.ListInfo = function(win, child)
   local rows, columns, selected, labels, widths, multi = ListInfo(win, child)
   if win == "RespawnWnd" and child == "OptionsList" then RespawnPaintSelected = selected end
   return rows, columns, selected, labels, widths, multi
@@ -1052,7 +1214,7 @@ end
                     CHECK(std::find(requests.begin(), requests.end(), "Respawn") == requests.end());
                 }
                 REQUIRE(luaL_dostring(s.lua.state(),
-                    "assert(eq.ChildShown('ConfirmationDialogBox', 'ResurrectionOffer') == true)") == LUA_OK);
+                    "assert(hs.ChildShown('ConfirmationDialogBox', 'ResurrectionOffer') == true)") == LUA_OK);
                 // Another window taken in hand while the offer waits (typing in chat) keeps the focus: the offer
                 // was put in front once, as it appeared, not every frame (which would take the active widget).
                 ImGui::FocusWindow(respawn);
@@ -1130,7 +1292,7 @@ TEST_CASE("UI packs: each draws the login, server select and character select sc
         {
             Session s(dir, pack);
             s.host.in_game = s.host.ui_ready = false;
-            REQUIRE(luaL_dostring(s.lua.state(), "eq.InGame = function() return false end") == LUA_OK);
+            REQUIRE(luaL_dostring(s.lua.state(), "hs.InGame = function() return false end; hs.UI.session.InGame = hs.InGame") == LUA_OK);
 
             // The login screen: saved servers with accounts and characters (no keyring), then a new server, then a
             // test login's.
@@ -1157,6 +1319,35 @@ TEST_CASE("UI packs: each draws the login, server select and character select sc
             CHECK(s.api.replaces("LoginScreen"));
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
             if (std::string(pack) == "modern") CHECK(ImGui::FindWindowByName("###modern.pregame.login.boxset") != nullptr);
+            if (std::string(pack) == "gamepad") {
+                // An unavailable installed descriptor remains in the list, while controller cycling skips it.
+                ui::UiPack unavailable;
+                unavailable.id = "addon.example.unavailable";
+                unavailable.name = "Unavailable interface";
+                unavailable.available = false;
+                unavailable.unavailable_reason = "No native runtime";
+                login.ui_packs.insert(login.ui_packs.begin() + 1, unavailable);
+                login.ui = "modern";
+                REQUIRE(luaL_dostring(s.lua.state(), R"lua(
+local original = ui.InvisibleButton
+INTERFACE_PICKED, INTERFACE_SEEN = false, 0
+ui.InvisibleButton = function(id, ...)
+  local hit = original(id, ...)
+  if id == '##ui' then
+    INTERFACE_SEEN = INTERFACE_SEEN + 1
+    if not INTERFACE_PICKED then INTERFACE_PICKED = true; return true end
+  end
+  return hit
+end
+RESTORE_INTERFACE_BUTTON = function() ui.InvisibleButton = original end
+)lua") == LUA_OK);
+                s.frames(2);
+                CHECK(login.ui == "gamepad");
+                CHECK(s.lua.run_for_test("", "return INTERFACE_SEEN > 0") == "true");
+                REQUIRE(luaL_dostring(s.lua.state(), "RESTORE_INTERFACE_BUTTON()") == LUA_OK);
+                login.ui_packs.erase(login.ui_packs.begin() + 1);
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            }
             // A returned ticket is an optional action, usable without a password, and hidden while busy.
             lua_State* login_lua = s.lua.state();
             REQUIRE(luaL_dostring(login_lua, R"lua(
@@ -1386,10 +1577,10 @@ end
             login.addons.suggestions.front().text = "Required to play on this server: servplug.";
             s.frames(2);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-            REQUIRE(luaL_dostring(s.lua.state(), "assert(eq.LoginScreen().addons.suggestions[1].required); "
-                                 "assert(not eq.LoginDo('addonSuggestLater', 'owner/servplug')); "
-                                 "assert(not eq.LoginDo('addonSuggestNever', 'owner/servplug')); "
-                                 "assert(eq.LoginDo('addonSuggestLook', 'owner/servplug'))") == LUA_OK);
+            REQUIRE(luaL_dostring(s.lua.state(), "assert(hs.UI.pregame.LoginScreen().addons.suggestions[1].required); "
+                                 "assert(not hs.UI.pregame.LoginDo('addonSuggestLater', 'owner/servplug')); "
+                                 "assert(not hs.UI.pregame.LoginDo('addonSuggestNever', 'owner/servplug')); "
+                                 "assert(hs.UI.pregame.LoginDo('addonSuggestLook', 'owner/servplug'))") == LUA_OK);
             login.addons = {};
             s.frames(2);
             ui::new_profile(login);
@@ -1409,8 +1600,8 @@ end
             s.host.login_server = "Alpha";
             s.frames(3);
             CHECK(s.api.replaces("serverselect"));
-            REQUIRE(luaL_dostring(s.lua.state(), "local v=eq.ServerSelect(); assert(v.servers[2].status=='Locked' and v.servers[2].canJoin); "
-                                     "assert(eq.ServerSelectDo('play',2)); assert(not eq.ServerSelectDo('play',3))") == LUA_OK);
+            REQUIRE(luaL_dostring(s.lua.state(), "local v=hs.ServerSelect(); assert(v.servers[2].status=='Locked' and v.servers[2].canJoin); "
+                                     "assert(hs.ServerSelectDo('play',2)); assert(not hs.ServerSelectDo('play',3))") == LUA_OK);
             CHECK(s.host.server_select_action == static_cast<int>(ui::ServerSelectAction::Play));
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
             worlds.addon_hint = "Open World has a Hailstone add-on: go Back and open Add-ons to look at it.";
@@ -1472,7 +1663,7 @@ end
     }
 }
 
-TEST_CASE("UI packs: the login screen's More options pick the texture pack (eq.Option texture_pack)") {
+TEST_CASE("UI packs: the login screen's More options pick the texture pack (hs.Option texture_pack)") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
         fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
@@ -1488,7 +1679,7 @@ TEST_CASE("UI packs: the login screen's More options pick the texture pack (eq.O
         {
             Session s(dir, pack);
             s.host.in_game = s.host.ui_ready = false;
-            REQUIRE(luaL_dostring(s.lua.state(), "eq.InGame = function() return false end") == LUA_OK);
+            REQUIRE(luaL_dostring(s.lua.state(), "hs.InGame = function() return false end") == LUA_OK);
             // A new server (no saved accounts, so the gamepad pack's More page has no box set list above).
             ui::LoginView login;
             login.servers_dir = dir / "servers";
@@ -1621,7 +1812,7 @@ TEST_CASE("UI packs: the marketplace draws its shelves, details and pages from a
                 s.frames(2);
                 CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
             }
-            REQUIRE(luaL_dostring(L, "local n = eq.ListInfo('MarketplaceWnd', 'MKPW_CategoriesTree') return n") == LUA_OK);
+            REQUIRE(luaL_dostring(L, "local n = hs.ListInfo('MarketplaceWnd', 'MKPW_CategoriesTree') return n") == LUA_OK);
             CHECK(lua_tointeger(L, -1) >= 4);
             lua_settop(L, 0);
         }
@@ -1648,7 +1839,7 @@ std::shared_ptr<game::SpellTable> book_spells() {
 
 } // namespace
 
-TEST_CASE("UI packs: the spell book's sets and set editor draw; eq.SaveSpellSet / EditSpellSet save, memorizing nothing") {
+TEST_CASE("UI packs: the spell book's sets and set editor draw; hs.SaveSpellSet / EditSpellSet save, memorizing nothing") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
         fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
@@ -1692,31 +1883,31 @@ TEST_CASE("UI packs: the spell book's sets and set editor draw; eq.SaveSpellSet 
             const auto gems_before = conn.spell_state().gems;
             // Saved from a table, not the gems: a spell not in the book (999) is kept; nil, -1, negatives and
             // non-numbers are empty gems.
-            CHECK(number("return eq.SaveSpellSet('Heals', { 200, -1, 201, nil, 999 })") == 1);
+            CHECK(number("return hs.SaveSpellSet('Heals', { 200, -1, 201, nil, 999 })") == 1);
             CHECK(sets.at(0).name == "Heals");
             CHECK(sets.at(0).spells[0] == 200);
             CHECK(sets.at(0).spells[1] == -1);
             CHECK(sets.at(0).spells[2] == 201);
             CHECK(sets.at(0).spells[3] == -1);
             CHECK(sets.at(0).spells[4] == 999);
-            CHECK(number("return eq.SaveSpellSet('', { 200 }) or -1") == -1);
-            CHECK(number("return eq.EditSpellSet(1, 'Alpha', { 'x', 202, -5 })") == 1);
+            CHECK(number("return hs.SaveSpellSet('', { 200 }) or -1") == -1);
+            CHECK(number("return hs.EditSpellSet(1, 'Alpha', { 'x', 202, -5 })") == 1);
             CHECK(sets.at(0).name == "Alpha");
             CHECK(sets.at(0).spells[0] == -1);
             CHECK(sets.at(0).spells[1] == 202);
             CHECK(sets.at(0).spells[2] == -1);
-            CHECK(number("return eq.EditSpellSet(2, 'Beta', {}) or -1") == -1); // set 2 is not in use
-            CHECK(number("return eq.SaveSpellSet('Pulls', { 202, 201 })") == 2);
+            CHECK(number("return hs.EditSpellSet(2, 'Beta', {}) or -1") == -1); // set 2 is not in use
+            CHECK(number("return hs.SaveSpellSet('Pulls', { 202, 201 })") == 2);
             // nothing was memorized: no gem, no memorize, no set being memorized
             for (int g = 0; g < game::kSpellGems; ++g)
                 CHECK(conn.spell_state().gems[static_cast<std::size_t>(g)].spell ==
                       gems_before[static_cast<std::size_t>(g)].spell);
             CHECK_FALSE(conn.spell_state().memorizing.has_value());
             CHECK_FALSE(conn.memorizing_set());
-            run("local t = eq.SpellSets() assert(t[1].name == 'Alpha' and t[1].spells[2] == 202 and t[2].name == 'Pulls')");
+            run("local t = hs.SpellSets() assert(t[1].name == 'Alpha' and t[1].spells[2] == 202 and t[2].name == 'Pulls')");
 
             // The views: the list of sets, the editor of set 1, a new set, a new set from the gems, back.
-            run("eq.ShowWindow('SpellBookWnd', true)");
+            run("hs.ShowWindow('SpellBookWnd', true)");
             REQUIRE(conn.spell_book_open());
             s.frames(3);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
@@ -1735,11 +1926,11 @@ TEST_CASE("UI packs: the spell book's sets and set editor draw; eq.SaveSpellSet 
             CHECK(ImGui::FindWindowByName(modern ? "###modern.SpellBookWnd" : "Spell Book") != nullptr);
             // all ten in use: a new name is refused, an existing one still saves
             for (int i = 0; i < 8; ++i) {
-                std::string code = "return eq.SaveSpellSet('Set" + std::to_string(i) + "', { 200 })";
+                std::string code = "return hs.SaveSpellSet('Set" + std::to_string(i) + "', { 200 })";
                 CHECK(number(code.c_str()) > 0);
             }
-            CHECK(number("return eq.SaveSpellSet('Eleventh', { 200 }) or -1") == -1);
-            CHECK(number("return eq.SaveSpellSet('pulls', { 201 })") > 0);
+            CHECK(number("return hs.SaveSpellSet('Eleventh', { 200 }) or -1") == -1);
+            CHECK(number("return hs.SaveSpellSet('pulls', { 201 })") > 0);
             s.frames(3);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
@@ -1770,7 +1961,7 @@ TEST_CASE("UI packs (modern): an add-on's Remove asks, and its answer removes th
         // Every row unfolded; a button labelled `press` reports a click at its `press_at`th drawing in a frame; the
         // texts drawn are kept.
         REQUIRE(luaL_dostring(L, R"(
-            eq.InGame = function() return false end
+            hs.InGame = function() return false end
             press, press_at, seen, texts = nil, 0, 0, {}
             local tn, b, t = ui.TreeNode, ui.Button, ui.Text
             ui.TreeNode = function(l) tn(l) return true end
@@ -1860,7 +2051,7 @@ TEST_CASE("UI packs (modern): no two of the spell book's widgets share an ID") {
         for (std::uint32_t i = 0; i < 3; ++i)
             conn.receive_zone_packet_for_test(net::encode(net::MemorizeSpell{i, 200 + i, net::kMemScribe, 0}));
         lua_State* L = s.lua.state();
-        REQUIRE(luaL_dostring(L, "eq.ShowWindow('SpellBookWnd', true) ui.SetSetting('test.book.tab', 'details')"
+        REQUIRE(luaL_dostring(L, "hs.ShowWindow('SpellBookWnd', true) ui.SetSetting('test.book.tab', 'details')"
                                  " ui.SetSetting('test.book.select', '200')") == LUA_OK);
         s.frames(3);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
@@ -1938,7 +2129,7 @@ TEST_CASE("UI packs (modern): the spell book's Memorize replaces the spell of a 
                     static_cast<std::uint32_t>(g), 200 + static_cast<std::uint32_t>(g), net::kMemMemorize, 0}));
             conn.set_sitting(true);
             lua_State* L = s.lua.state();
-            REQUIRE(luaL_dostring(L, "eq.ShowWindow('SpellBookWnd', true) ui.SetSetting('test.book.tab', 'details')"
+            REQUIRE(luaL_dostring(L, "hs.ShowWindow('SpellBookWnd', true) ui.SetSetting('test.book.tab', 'details')"
                                      " ui.SetSetting('test.book.select', '212') ui.SetSetting('test.book.gem', '3')") ==
                     LUA_OK);
             s.frames(3);
@@ -1996,17 +2187,17 @@ TEST_CASE("UI packs: the inventory's alternate currencies draw, and a row select
             s.conn.receive_zone_packet_for_test(net::encode_alt_currency_populate(entries));
             s.conn.receive_zone_packet_for_test(net::encode_alt_currency_update({31, 7}));
             lua_State* L = s.lua.state();
-            REQUIRE(luaL_dostring(L, "ui.SetSetting('test.inv.page', 'currency') eq.ShowWindow('InventoryWindow', true)") ==
+            REQUIRE(luaL_dostring(L, "ui.SetSetting('test.inv.page', 'currency') hs.ShowWindow('InventoryWindow', true)") ==
                     LUA_OK);
             s.frames(3);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
             // the page keeps the stock Display Missing off with nothing held (modern: Show all off)
-            REQUIRE(luaL_dostring(L, "return (select(2, eq.ChildState('InventoryWindow', 'AltCurr_DisplayMissingButton')))") ==
+            REQUIRE(luaL_dostring(L, "return (select(2, hs.ChildState('InventoryWindow', 'AltCurr_DisplayMissingButton')))") ==
                     LUA_OK);
             CHECK_FALSE(lua_toboolean(L, -1));
             lua_settop(L, 0);
-            REQUIRE(luaL_dostring(L, "eq.ListClick('InventoryWindow', 'AltCurr_PointList', 0, 'left') "
-                                     "return (eq.ChildState('InventoryWindow', 'AltCurr_CreateItemButton'))") == LUA_OK);
+            REQUIRE(luaL_dostring(L, "hs.ListClick('InventoryWindow', 'AltCurr_PointList', 0, 'left') "
+                                     "return (hs.ChildState('InventoryWindow', 'AltCurr_CreateItemButton'))") == LUA_OK);
             CHECK(lua_toboolean(L, -1)); // 31, held: Claim is on
             lua_settop(L, 0);
             s.frames(2);
@@ -2016,9 +2207,9 @@ TEST_CASE("UI packs: the inventory's alternate currencies draw, and a row select
     }
 }
 
-// Hailstone's Find window (app/lua_eq_find.cpp): the find key's state opens it (modern: the map on its Find page;
+// Hailstone's Find window (app/lua_ui_find.cpp): the find key's state opens it (modern: the map on its Find page;
 // gamepad: a window of its own), it draws the zone's NPCs, and the map closing closes it.
-TEST_CASE("UI packs: the Find window draws the zone's NPCs and follows eq.FindOpen") {
+TEST_CASE("UI packs: the Find window draws the zone's NPCs and follows hs.FindOpen") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
         fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
@@ -2049,22 +2240,22 @@ TEST_CASE("UI packs: the Find window draws the zone's NPCs and follows eq.FindOp
             add(4, "Wilt00", 20, 30);
             ++world.spawn_set_serial;
             lua_State* L = s.lua.state();
-            REQUIRE(luaL_dostring(L, "ui.SetSetting('map.npcMarks', '1') eq.FindOpen(true)") == LUA_OK);
+            REQUIRE(luaL_dostring(L, "ui.SetSetting('map.npcMarks', '1') hs.FindOpen(true)") == LUA_OK);
             s.frames(3);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
             if (std::string(pack) == "modern") {
                 CHECK(s.api.shown("MapViewWnd")); // the map opened on its Find page
-                REQUIRE(luaL_dostring(L, "eq.ShowWindow('MapViewWnd', false)") == LUA_OK);
+                REQUIRE(luaL_dostring(L, "hs.ShowWindow('MapViewWnd', false)") == LUA_OK);
                 s.frames(2);
                 CHECK_FALSE(s.host.find_open); // the map closing closed Find
-                REQUIRE(luaL_dostring(L, "eq.FindOpen(true)") == LUA_OK);
+                REQUIRE(luaL_dostring(L, "hs.FindOpen(true)") == LUA_OK);
                 s.frames(2);
                 CHECK(s.api.shown("MapViewWnd"));
                 s.host.find_open = false; // the find key again: the map goes
                 s.frames(2);
                 CHECK_FALSE(s.api.shown("MapViewWnd"));
             } else {
-                REQUIRE(luaL_dostring(L, "eq.FindOpen(false)") == LUA_OK);
+                REQUIRE(luaL_dostring(L, "hs.FindOpen(false)") == LUA_OK);
                 s.frames(2);
             }
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
@@ -2117,7 +2308,7 @@ end)
         }
         s.lua.set_folders({{"plug", dir / "plug"}});
         lua_State* L = s.lua.state();
-        REQUIRE(luaL_dostring(L, "eq.ShowWindow('ExtendedTargetWnd', true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ShowWindow('ExtendedTargetWnd', true)") == LUA_OK);
         s.frames(3);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         // (the plugin's globals are its own: run in them)
@@ -2168,7 +2359,7 @@ TEST_CASE("UI packs (modern): the extended target window shows empty slots and s
         m.is_npc = true;
         m.hp_percent = 80;
         lua_State* L = s.lua.state();
-        REQUIRE(luaL_dostring(L, "eq.ShowWindow('ExtendedTargetWnd', true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ShowWindow('ExtendedTargetWnd', true)") == LUA_OK);
         s.frames(3);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         auto rows = []() -> ImGuiWindow* {
@@ -2225,7 +2416,7 @@ TEST_CASE("UI packs (modern): the extended target window starts six rows tall an
         }
         s.conn.receive_zone_packet_for_test(net::AppPacket(net::to_wire(net::Op::XTargetResponse), b.take()));
         lua_State* L = s.lua.state();
-        REQUIRE(luaL_dostring(L, "eq.ShowWindow('ExtendedTargetWnd', true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.UI.windows.Show('ExtendedTargetWnd', true)") == LUA_OK);
         s.frames(3);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         auto rows = []() -> ImGuiWindow* {
@@ -2331,12 +2522,12 @@ end)
         // the one list: both tabs' abilities, each with its tab, era and activated
         REQUIRE(luaL_dostring(L, R"lua(
 local out = {}
-for _, t in ipairs(eq.WindowList('AAWindow', 'ModernList') or {}) do out[#out + 1] = table.concat(t, '|') end
+for _, t in ipairs(hs.WindowList('AAWindow', 'ModernList') or {}) do out[#out + 1] = table.concat(t, '|') end
 return table.concat(out, ';'))lua") == LUA_OK);
         CHECK(std::string(lua_tostring(L, -1)) ==
               "Innate Strength|0/3|2||1||0|0;Mystical Shielding|0/3|5|Defense|3|The Planes of Power|1|5");
         lua_settop(L, 0);
-        REQUIRE(luaL_dostring(L, "eq.ShowWindow('AAWindow', true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ShowWindow('AAWindow', true)") == LUA_OK);
         s.frames(3);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         REQUIRE(luaL_loadstring(L, "return table.concat(drawn, ','), #styled, banners") == LUA_OK);
@@ -2352,11 +2543,11 @@ return table.concat(out, ';'))lua") == LUA_OK);
         lua_settop(L, 0);
         // A selected ability brings the details part; a row of the one list selects that ability (the second row:
         // the Class tab's), and the list and the stock tab's list both show it selected.
-        REQUIRE(luaL_dostring(L, "eq.ListClick('AAWindow', 'ModernList', 1, 'left')") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ListClick('AAWindow', 'ModernList', 1, 'left')") == LUA_OK);
         s.frames(2);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-        REQUIRE(luaL_dostring(L, "local _, _, a = eq.ListInfo('AAWindow', 'ModernList') local _, _, b = "
-                                 "eq.ListInfo('AAWindow', 'List3') return a, b, (eq.WindowText('AAWindow', "
+        REQUIRE(luaL_dostring(L, "local _, _, a = hs.ListInfo('AAWindow', 'ModernList') local _, _, b = "
+                                 "hs.ListInfo('AAWindow', 'List3') return a, b, (hs.WindowText('AAWindow', "
                                  "'ModernSelected'))") == LUA_OK);
         CHECK(lua_tointeger(L, -3) == 1);
         CHECK(lua_tointeger(L, -2) == 0);
@@ -2405,14 +2596,14 @@ TEST_CASE("UI packs (modern): the AA window's selection follows its ability to t
         }
         lua_State* L = s.lua.state();
         auto selected = [&] {
-            REQUIRE(luaL_dostring(L, "eq.WindowList('AAWindow', 'ModernList') "
-                                     "return (eq.WindowText('AAWindow', 'ModernSelected'))") == LUA_OK);
+            REQUIRE(luaL_dostring(L, "hs.WindowList('AAWindow', 'ModernList') "
+                                     "return (hs.WindowText('AAWindow', 'ModernSelected'))") == LUA_OK);
             std::string out = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
             lua_settop(L, 0);
             return out.substr(0, out.find('\t'));
         };
-        REQUIRE(luaL_dostring(L, "eq.WindowList('AAWindow', 'ModernList') "
-                                 "eq.ListClick('AAWindow', 'ModernList', 0, 'left')") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.WindowList('AAWindow', 'ModernList') "
+                                 "hs.ListClick('AAWindow', 'ModernList', 0, 'left')") == LUA_OK);
         lua_settop(L, 0);
         CHECK(selected() == "100");
         auto own = [&](std::uint32_t id) {
@@ -2481,7 +2672,7 @@ end)
         }
         s.lua.set_folders({{"plug", dir / "plug"}});
         lua_State* L = s.lua.state();
-        REQUIRE(luaL_dostring(L, "eq.ShowWindow('AAWindow', true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ShowWindow('AAWindow', true)") == LUA_OK);
         s.frames(3);
         REQUIRE(ImGui::FindWindowByName("UI errors") == nullptr);
         auto read = [&](double& part_x, double& top_y) {
@@ -2601,8 +2792,8 @@ return table.concat(missing, ", ")
 
 #ifdef HAILSTONE_MOCK_WEB_HELPER
 // The browser window in both packs with a browser behind it (the stand-in helper, tests/mock_web_helper.cpp, over
-// real pipes): eq.Web* from the window's Lua, and the window drawing the tabs without script errors.
-TEST_CASE("UI packs: the Lua Scripts window and eq.Scripts*: list, run, pause, stop, autorun") {
+// real pipes): hs.Web* from the window's Lua, and the window drawing the tabs without script errors.
+TEST_CASE("UI packs: the Lua Scripts window and hs.Scripts*: list, run, pause, stop, autorun") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
         fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
@@ -2640,55 +2831,55 @@ TEST_CASE("UI packs: the Lua Scripts window and eq.Scripts*: list, run, pause, s
                 REQUIRE(ok);
             };
             // Before the zone-in's rules: listed, not allowed, with the reason; no character's list yet.
-            run("local l, info = eq.Scripts(true); assert(#l == 2 and l[1].name == 'loop' and l[2].name == 'other');"
+            run("local l, info = hs.Scripts(true); assert(#l == 2 and l[1].name == 'loop' and l[2].name == 'other');"
                 "assert(not l[1].allowed and l[1].why:find('zone%-in') and l[1].status == '' and l[1].found);"
                 "assert(not info.autorun and info.folders[1]:find('scripts'));"
-                "local ok, why = eq.ScriptRun('loop'); assert(not ok and why:find('may not run'))");
-            run("eq.ShowWindow('ScriptsWnd', true)");
+                "local ok, why = hs.ScriptRun('loop'); assert(not ok and why:find('may not run'))");
+            run("hs.ShowWindow('ScriptsWnd', true)");
             s.frames(2);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
             policy.set(plugin::Rules{}); // no hailstone.cfg: the player's scripts run
-            run("local l = eq.Scripts(true); assert(l[1].allowed and l[1].caps ~= '')");
+            run("local l = hs.Scripts(true); assert(l[1].allowed and l[1].caps ~= '')");
             // A plugin's code: a script of its own name alone, and no folders.
             fs::create_directories(dir / "pf" / "a");
             fs::create_directories(dir / "pf" / "b");
             std::ofstream(dir / "pf" / "a" / "w.lua") << "x = 1\n";
             std::ofstream(dir / "pf" / "b" / "w.lua") << "x = 1\n";
             s.lua.set_folders({{"loop", dir / "pf" / "a"}, {"plugin:x", dir / "pf" / "b"}});
-            CHECK(s.lua.run_for_test("loop", "local l, info = eq.Scripts() return #l .. ' ' .. l[1].name .. ' ' .. "
+            CHECK(s.lua.run_for_test("loop", "local l, info = hs.Scripts() return #l .. ' ' .. l[1].name .. ' ' .. "
                                              "#info.folders") == "1 loop 0");
-            CHECK(s.lua.run_for_test("plugin:x", "local l, info = eq.Scripts() return #l .. ' ' .. #info.folders") ==
+            CHECK(s.lua.run_for_test("plugin:x", "local l, info = hs.Scripts() return #l .. ' ' .. #info.folders") ==
                   "0 0");
-            run("local l, info = eq.Scripts(); assert(#l == 2 and #info.folders >= 1)"); // the pack: all, as before
-            run("assert(eq.ScriptRun('loop', 'a \\\"b c\\\"'))");
+            run("local l, info = hs.Scripts(); assert(#l == 2 and #info.folders >= 1)"); // the pack: all, as before
+            run("assert(hs.ScriptRun('loop', 'a \\\"b c\\\"'))");
             CHECK(scripts.running("loop"));
-            run("local l = eq.Scripts(); assert(l[1].status == 'running' and not l[1].kept)");
+            run("local l = hs.Scripts(); assert(l[1].status == 'running' and not l[1].kept)");
             s.frames(2);
             bool drawn = false; // the window is there (not only free of errors)
             for (ImGuiWindow* win : ImGui::GetCurrentContext()->Windows)
                 drawn |= win->Active && std::string(win->Name).find("Lua Scripts") != std::string::npos;
             CHECK(drawn);
-            run("assert(eq.ScriptPause('loop')); assert(eq.Scripts()[1].status == 'paused')");
+            run("assert(hs.ScriptPause('loop')); assert(hs.Scripts()[1].status == 'paused')");
             s.frames(2);
-            run("assert(eq.ScriptStop('loop')); assert(not eq.ScriptStop('nope'))");
+            run("assert(hs.ScriptStop('loop')); assert(not hs.ScriptStop('nope'))");
             CHECK_FALSE(scripts.running("loop"));
             // The character's autorun list: refused before a character, kept in its scripts.ini after.
-            run("assert(not eq.SetScriptAutorun('other', true))");
+            run("assert(not hs.SetScriptAutorun('other', true))");
             scripts.set_autorun_file(dir / "chars" / "scripts.ini");
-            run("local _, info = eq.Scripts(); assert(info.autorun); assert(eq.SetScriptAutorun('other', true));"
-                "local l = eq.Scripts(true); assert(l[2].autorun and not l[1].autorun)");
+            run("local _, info = hs.Scripts(); assert(info.autorun); assert(hs.SetScriptAutorun('other', true));"
+                "local l = hs.Scripts(true); assert(l[2].autorun and not l[1].autorun)");
             CHECK(scripts.autorun("other"));
             CHECK(fs::exists(dir / "chars" / "scripts.ini"));
             s.frames(2);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-            run("eq.ShowWindow('ScriptsWnd', false)");
+            run("hs.ShowWindow('ScriptsWnd', false)");
             s.host.scripts = nullptr;
         }
         ImGui::DestroyContext(ctx);
     }
 }
 
-TEST_CASE("UI packs: the web browser window and eq.Web* with a browser") {
+TEST_CASE("UI packs: the web browser window and hs.Web* with a browser") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
         fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
@@ -2715,15 +2906,15 @@ TEST_CASE("UI packs: the web browser window and eq.Web* with a browser") {
                 if (!ok) std::fprintf(stderr, "lua: %s: %s\n", code, lua_tostring(L, -1));
                 REQUIRE(ok);
             };
-            run("assert(eq.WebAvailable())");
-            run("local id, why = eq.WebOpen('file:///etc/passwd'); assert(id == nil and why:find('not an http'))");
-            run("TAB = eq.WebOpen('example.org', 64, 48); assert(TAB)");
+            run("assert(hs.WebAvailable())");
+            run("local id, why = hs.WebOpen('file:///etc/passwd'); assert(id == nil and why:find('not an http'))");
+            run("TAB = hs.WebOpen('example.org', 64, 48); assert(TAB)");
             // A script's tab is not the player's: the window does not list it.
             web::TabOptions theirs;
             theirs.owner = "somescript";
             REQUIRE(browser.open("https://example.org/", theirs) != 0);
-            run("assert(#eq.WebTabs() == 1 and eq.WebTabs()[1] == TAB)");
-            run("eq.ShowWindow('BrowserWnd', true)");
+            run("assert(#hs.WebTabs() == 1 and hs.WebTabs()[1] == TAB)");
+            run("hs.ShowWindow('BrowserWnd', true)");
             const web::Tab* t = browser.tab(1);
             REQUIRE(t);
             for (int i = 0; i < 2000 && t->title.empty(); ++i) {
@@ -2732,21 +2923,21 @@ TEST_CASE("UI packs: the web browser window and eq.Web* with a browser") {
             }
             CHECK(t->title == "Mock https://example.org");
             CHECK(t->options.profile == (dir / "web" / "server").string());
-            run("local st = eq.WebState(TAB); assert(st.url == 'https://example.org' and not st.closed)");
-            run("local ok, why = eq.WebNavigate(TAB, 'file:///etc/passwd'); assert(not ok and why)");
+            run("local st = hs.WebState(TAB); assert(st.url == 'https://example.org' and not st.closed)");
+            run("local ok, why = hs.WebNavigate(TAB, 'file:///etc/passwd'); assert(not ok and why)");
             // Typed text without a scheme gets https:// in front: "javascript:..." is a (bad) web address, no script.
-            run("assert(eq.WebNavigate(TAB, 'javascript:alert(1)'))");
+            run("assert(hs.WebNavigate(TAB, 'javascript:alert(1)'))");
             CHECK(t->url == "https://javascript:alert(1)");
-            run("assert(eq.WebNavigate(TAB, 'https://example.org/b'))");
-            run("eq.WebNav(TAB, 'reload'); eq.WebText(TAB, 'hi')");
+            run("assert(hs.WebNavigate(TAB, 'https://example.org/b'))");
+            run("hs.WebNav(TAB, 'reload'); hs.WebText(TAB, 'hi')");
             s.frames(3);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
             CHECK(wants_text == 0); // the page was never clicked: it has not the keyboard
-            run("eq.ShowWindow('BrowserWnd', false)");
-            // The page's input (eq.WebView): a click reaches the page (the stand-in paints the pixel white) and gives
+            run("hs.ShowWindow('BrowserWnd', false)");
+            // The page's input (hs.WebView): a click reaches the page (the stand-in paints the pixel white) and gives
             // it the keyboard; a click elsewhere takes the keyboard back.
             run("ui.window('ViewTest', function() ui.SetNextWindowPos(0, 0); ui.Begin('ViewTest');"
-                " eq.WebView(TAB, 64, 48); VX, VY = ui.GetItemRect(); ui.End() end)");
+                " hs.WebView(TAB, 64, 48); VX, VY = ui.GetItemRect(); ui.End() end)");
             s.frames(1);
             lua_getglobal(L, "VX");
             lua_getglobal(L, "VY");
@@ -2781,9 +2972,9 @@ TEST_CASE("UI packs: the web browser window and eq.Web* with a browser") {
             s.frames(2);
             CHECK(wants_text == before); // the keyboard is back with the game
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-            run("eq.WebClose(TAB); assert(eq.WebState(TAB) == nil)");
+            run("hs.WebClose(TAB); assert(hs.WebState(TAB) == nil)");
 
-            // A plugin's window (its folder's ui/<pack>/): eq.Web* as "plugin:<name>", with the plugin's permissions.
+            // A plugin's window (its folder's ui/<pack>/): hs.Web* as "plugin:<name>", with the plugin's permissions.
             std::uint32_t plug_caps = plugin::kCapAll & ~plugin::kCapWeb;
             s.host.plugin_caps = [&](std::string_view name) { return name == "plugin:Plug" ? plug_caps : 0u; };
             fs::create_directories(dir / "plug");
@@ -2791,9 +2982,9 @@ TEST_CASE("UI packs: the web browser window and eq.Web* with a browser") {
                 << "ui.window('PlugWeb', function()\n"
                    "  if PW_DONE then return end\n"
                    "  PW_DONE = true\n"
-                   "  PW_TAB, PW_WHY = eq.WebOpen('https://example.org/')\n"
-                   "  PW_PLAYER_TABS = #eq.WebTabs()\n"
-                   "  PW_EXTERNAL = eq.WebOpenExternal('https://example.org/')\n"
+                   "  PW_TAB, PW_WHY = hs.WebOpen('https://example.org/')\n"
+                   "  PW_PLAYER_TABS = #hs.WebTabs()\n"
+                   "  PW_EXTERNAL = hs.WebOpenExternal('https://example.org/')\n"
                    "end)\n";
             s.lua.set_folders({{"plugin:Plug", dir / "plug"}});
             s.frames(2);
@@ -2855,12 +3046,12 @@ TEST_CASE("UI packs (modern): the Options window's Window Transparency and a win
         s.frames(3);
         REQUIRE(max_alpha(player) == 255);
         // Window Transparency: every window at most that opaque (eased over the fade's half second).
-        REQUIRE(luaL_dostring(L, "eq.SetUiIni('Main', 'GlobalAlpha', '128')") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.SetUiIni('Main', 'GlobalAlpha', '128')") == LUA_OK);
         s.frames(40);
         CHECK(max_alpha(player) <= 128);
         CHECK(max_alpha(player) >= 120);
         // Fades: after the delay (2 s) and the fade (0.5 s) with the mouse away, the Fade-to Transparency.
-        REQUIRE(luaL_dostring(L, "eq.SetUiIni('Main', 'GlobalAlpha', '255') eq.SetUiIni('Main', 'GlobalFadeToAlpha', '64') "
+        REQUIRE(luaL_dostring(L, "hs.SetUiIni('Main', 'GlobalAlpha', '255') hs.SetUiIni('Main', 'GlobalFadeToAlpha', '64') "
                                  "ui.SetSetting('hud.fades.PlayerWindow', '1')") == LUA_OK);
         s.frames(60); // back to full first (the mouse counts as over at the start)
         CHECK(max_alpha(player) == 255); // within the delay
@@ -2893,7 +3084,7 @@ TEST_CASE("UI packs (modern): a resizable dialog's Scale zooms the whole window"
         lua_State* L = s.lua.state();
         const char* guild = "Guild###modern.GuildManagementWnd";
         REQUIRE(luaL_dostring(L, "ui.SetSetting('hud.size.GuildManagementWnd', '600,450') "
-                                 "eq.ShowWindow('GuildManagementWnd', true)") == LUA_OK);
+                                 "hs.ShowWindow('GuildManagementWnd', true)") == LUA_OK);
         s.frames(3);
         ImGuiWindow* win = ImGui::FindWindowByName(guild);
         REQUIRE(win);
@@ -2940,7 +3131,7 @@ TEST_CASE("UI packs (modern): an invitation to a group pops up with who sent it"
         s.frames(2);
         CHECK(shown());
         CHECK(s.api.replaces("GroupInvite")); // the client's own prompt stays off: one popup, not two
-        REQUIRE(luaL_dostring(L, "return (eq.WindowText('GroupWindow', 'Hailstone_Inviter'))") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "return (hs.WindowText('GroupWindow', 'Hailstone_Inviter'))") == LUA_OK);
         CHECK(std::string(lua_tostring(L, -1)) == "Bob");
         lua_settop(L, 0);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
@@ -2949,8 +3140,8 @@ TEST_CASE("UI packs (modern): an invitation to a group pops up with who sent it"
 }
 
 // A server's compiled plugins ask before they load (docs/plugins.md): each pack draws the question in the client's
-// place (eq.PluginConsent; "PluginConsent" replaced), and nothing while there is none.
-// A window key reaches a pack's window only while the pack claims it (eq.ReplaceWindow, each frame): the achievement
+// place (hs.PluginConsent; "PluginConsent" replaced), and nothing while there is none.
+// A window key reaches a pack's window only while the pack claims it (hs.ReplaceWindow, each frame): the achievement
 // and reward keys must work while their windows are hidden.
 TEST_CASE("UI packs: each claims the achievement and reward windows while they are hidden, so their keys open them") {
     for (const char* pack : {"modern", "gamepad"}) {
@@ -3151,7 +3342,7 @@ TEST_CASE("UI packs (modern): a dialog's corner and edge resize it, neither scal
             return v;
         };
         REQUIRE(luaL_dostring(L, "ui.SetSetting('hud.size.AAWindow', '600,450') ui.SetSetting('test.pos.AAWindow', "
-                                 "'40,40') eq.ShowWindow('AAWindow', true)") == LUA_OK);
+                                 "'40,40') hs.ShowWindow('AAWindow', true)") == LUA_OK);
         s.frames(3);
         ImGuiWindow* win = ImGui::FindWindowByName("Alternate Advancement###modern.AAWindow");
         REQUIRE(win);
@@ -3278,7 +3469,7 @@ TEST_CASE("UI packs (modern): a dialog rolls up from the button beside its close
             lua_settop(L, 0);
             return v;
         };
-        run("ui.SetSetting('test.pos.AAWindow', '40,40') eq.ShowWindow('AAWindow', true)");
+        run("ui.SetSetting('test.pos.AAWindow', '40,40') hs.ShowWindow('AAWindow', true)");
         s.frames(3);
         ImGuiWindow* win = ImGui::FindWindowByName("Alternate Advancement###modern.AAWindow");
         REQUIRE(win);
@@ -3305,11 +3496,11 @@ TEST_CASE("UI packs (modern): a dialog rolls up from the button beside its close
         CHECK(win->Collapsed);
         CHECK(win->Size.y < fullHeight / 2);
         CHECK(run("return ui.GetSetting('hud.rolled.AAWindow')") == "1");
-        CHECK(run("return tostring(eq.WindowShown('AAWindow'))") == "true"); // (rolled up, not closed)
+        CHECK(run("return tostring(hs.WindowShown('AAWindow'))") == "true"); // (rolled up, not closed)
         // closed and opened again: still rolled up
-        run("eq.ShowWindow('AAWindow', false)");
+        run("hs.ShowWindow('AAWindow', false)");
         s.frames(2);
-        run("eq.ShowWindow('AAWindow', true)");
+        run("hs.ShowWindow('AAWindow', true)");
         s.frames(2);
         CHECK(win->Active);
         CHECK(win->Collapsed);
@@ -3524,8 +3715,8 @@ TEST_CASE("UI packs (gamepad): a click deferred to A's release is dropped when i
 local W = dofile("lib/window.lua")
 local function check(ok, what) if not ok then error(what, 2) end end
 local held = false
-local real = eq.gamepad
-eq.gamepad = setmetatable({ down = function(b) return b == "a" and held end }, { __index = real or {} })
+local real = hs.UI.gamepad.Down
+hs.UI.gamepad.Down = function(b) return b == "a" and held end
 local frame = ui.GetFrameCount()
 local ran = 0
 local slot = {}
@@ -3554,7 +3745,7 @@ check(ran == 1 and slot.fn == nil, "a closed window's click fired")
 ask(nil)
 W.runDeferred(slot)
 check(ran == 2, "a click without a window did not run")
-eq.gamepad = real
+hs.UI.gamepad.Down = real
 return "ok"
 )lua";
     CHECK(run_gamepad_lib_script(kScript, "ui_pack_gamepad_deferred_test") == "ok");
@@ -3664,8 +3855,8 @@ TEST_CASE("UI packs (gamepad): cached window contents follow a change") {
               guildMotd = "Guild message one", desc = "The first description",
               who = 1, players = { { name = "Echo", line = "[50 Warrior] Echo (Human) <Guild> ZONE: qeynos" } },
             }
-            local ListInfo, ListRow, WindowText, WhoResults = eq.ListInfo, eq.ListRow, eq.WindowText, eq.WhoResults
-            eq.ListInfo = function(win, child, ...)
+            local ListInfo, ListRow, WindowText, WhoResults = hs.ListInfo, hs.ListRow, hs.WindowText, hs.WhoResults
+            hs.ListInfo = function(win, child, ...)
               if win == "RaidWindow" then
                 if child == "RAID_PlayerList" then return #fake.members, 6, -1 end
                 return 0, 0, -1
@@ -3673,29 +3864,29 @@ TEST_CASE("UI packs (gamepad): cached window contents follow a change") {
               if win == "GuildManagementWnd" and child == "MemberList" then return 0, 0, -1 end
               return ListInfo(win, child, ...)
             end
-            eq.ListRow = function(win, child, row, ...)
+            hs.ListRow = function(win, child, row, ...)
               if win == "RaidWindow" then
                 return child == "RAID_PlayerList" and fake.members[row + 1] or nil
               end
               return ListRow(win, child, row, ...)
             end
-            eq.WindowText = function(win, child, ...)
+            hs.WindowText = function(win, child, ...)
               if win == "RaidWindow" and child == "MOTDViewer" then return fake.raidMotd end
               if win == "GuildManagementWnd" and child == "MOTDViewer" then return fake.guildMotd end
               if win == "GuildManagementWnd" and child == "GuildName" then return "The Guild" end
               if win == "ItemDisplayWindow" and child == "ItemDescription" then return fake.desc end
               return WindowText(win, child, ...)
             end
-            eq.WhoResults = function() return fake.who, fake.players end
+            hs.WhoResults = function() return fake.who, fake.players end
             -- (the stock guild and item windows show only in a guild / for an item: shown here on asking)
             fake.shown = {}
-            local ReplaceWindow, WindowShown = eq.ReplaceWindow, eq.WindowShown
-            eq.ReplaceWindow = function(win, ...)
+            local ReplaceWindow, WindowShown = hs.ReplaceWindow, hs.WindowShown
+            hs.ReplaceWindow = function(win, ...)
               local r = ReplaceWindow(win, ...)
               if fake.shown[win] ~= nil then return fake.shown[win] end
               return r
             end
-            eq.WindowShown = function(win)
+            hs.WindowShown = function(win)
               local r = WindowShown(win)
               if fake.shown[win] ~= nil then return fake.shown[win] end
               return r
@@ -3703,7 +3894,7 @@ TEST_CASE("UI packs (gamepad): cached window contents follow a change") {
         )lua");
 
         // the raid: its message of the day at once, a new member at once (the row count), a renamed one within 0.25 s
-        run("eq.ShowWindow('RaidWindow', true) seen = {}");
+        run("hs.ShowWindow('RaidWindow', true) seen = {}");
         s.frames(2);
         CHECK(saw("MOTD: Raid message one"));
         CHECK(saw("Alpha"));
@@ -3719,7 +3910,7 @@ TEST_CASE("UI packs (gamepad): cached window contents follow a change") {
         s.frames(1);
         CHECK(saw("Charlie"));
         CHECK_FALSE(saw("Bravo"));
-        run("eq.ShowWindow('RaidWindow', false)");
+        run("hs.ShowWindow('RaidWindow', false)");
 
         // the guild's message of the day
         run("fake.shown.GuildManagementWnd = true seen = {}");
@@ -3782,32 +3973,32 @@ TEST_CASE("UI packs (gamepad): Final Result stays reachable and dispatches only 
         };
         run(R"lua(
             finalTest = { shown = true, enabled = true, click = false, calls = 0, drawn = 0 }
-            local WindowShown, ChildShown = eq.WindowShown, eq.ChildShown
-            local WindowText, ChildState, ClickChild = eq.WindowText, eq.ChildState, eq.ClickChild
-            eq.WindowShown = function(win, ...)
+            local WindowShown, ChildShown = hs.WindowShown, hs.ChildShown
+            local WindowText, ChildState, ClickChild = hs.WindowText, hs.ChildState, hs.ClickChild
+            hs.WindowShown = function(win, ...)
               if win == "ItemDisplayWindow" then return true end
               return WindowShown(win, ...)
             end
-            eq.ChildShown = function(win, child, ...)
+            hs.ChildShown = function(win, child, ...)
               if win == "ItemDisplayWindow" and child == "Hailstone_EvolvingFinalResult" then
                 return finalTest.shown
               end
               return ChildShown(win, child, ...)
             end
-            eq.ChildState = function(win, child, ...)
+            hs.ChildState = function(win, child, ...)
               if win == "ItemDisplayWindow" and child == "Hailstone_EvolvingFinalResult" then
                 return finalTest.enabled
               end
               return ChildState(win, child, ...)
             end
-            eq.WindowText = function(win, child, ...)
+            hs.WindowText = function(win, child, ...)
               if win == "ItemDisplayWindow" then
                 if child == "Hailstone_EvolvingFinalResult" then return "Final Result" end
                 if child == "ItemDescription" then return ("A very long item description. "):rep(500) end
               end
               return WindowText(win, child, ...)
             end
-            eq.ClickChild = function(win, child, button, ...)
+            hs.ClickChild = function(win, child, button, ...)
               if win == "ItemDisplayWindow" and child == "Hailstone_EvolvingFinalResult" then
                 assert(button == "left")
                 finalTest.calls = finalTest.calls + 1
@@ -3889,10 +4080,10 @@ TEST_CASE("UI packs (modern): an item display draws the shown item's stats, and 
               local n, missing = 0, {}
               for c = 1, 3 do
                 for r = 1, 26 do
-                  local st = eq.WindowText("ItemDisplayWindow", "IDW_Row" .. r .. "Col" .. c .. "Stat") or ""
-                  local v = (eq.WindowText("ItemDisplayWindow", "IDW_Row" .. r .. "Col" .. c .. "Value") or "")
+                  local st = hs.WindowText("ItemDisplayWindow", "IDW_Row" .. r .. "Col" .. c .. "Stat") or ""
+                  local v = (hs.WindowText("ItemDisplayWindow", "IDW_Row" .. r .. "Col" .. c .. "Value") or "")
                     :match("^%s*(.-)%s*$")
-                  if eq.ChildShown("ItemDisplayWindow", "IDW_Row" .. r .. "Col" .. c .. "Stat") ~= false
+                  if hs.ChildShown("ItemDisplayWindow", "IDW_Row" .. r .. "Col" .. c .. "Stat") ~= false
                       and st:match("%S") and v ~= "" then
                     n = n + 1
                     if not test_seen[v] then missing[#missing + 1] = v end
@@ -4030,10 +4221,10 @@ TEST_CASE("UI packs (modern): the inventory, loot, trade, raid, guild, merchant,
                                    "MarketplaceWnd", "PointMerchantWnd", "MMTW_MerchantWnd", "MMGW_ManageWnd",
                                    "MIW_InfoWnd", "SpellDisplayWindow"}) {
             INFO(screen);
-            REQUIRE(luaL_dostring(L, (std::string("eq.ShowWindow('") + screen + "', true)").c_str()) == LUA_OK);
+            REQUIRE(luaL_dostring(L, (std::string("hs.ShowWindow('") + screen + "', true)").c_str()) == LUA_OK);
             s.frames(2);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
-            REQUIRE(luaL_dostring(L, (std::string("eq.ShowWindow('") + screen + "', false)").c_str()) == LUA_OK);
+            REQUIRE(luaL_dostring(L, (std::string("hs.ShowWindow('") + screen + "', false)").c_str()) == LUA_OK);
         }
         // the map's World view (the atlas and the zone finder, lib/atlas.lua) over the small atlas above, then a search
         // and a route followed (the banner over the Zone view)
@@ -4043,18 +4234,18 @@ TEST_CASE("UI packs (modern): the inventory, loot, trade, raid, guild, merchant,
                 if (std::string_view(win->Name).find("##zonelist") != std::string_view::npos && win->Active) return true;
             return false;
         };
-        REQUIRE(luaL_dostring(L, "ui.SetSetting('map.view', 'world') eq.ShowWindow('MapViewWnd', true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "ui.SetSetting('map.view', 'world') hs.ShowWindow('MapViewWnd', true)") == LUA_OK);
         s.frames(3);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         CHECK(finder_drawn());
-        REQUIRE(luaL_dostring(L, "eq.ShowWindow('MapViewWnd', false)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ShowWindow('MapViewWnd', false)") == LUA_OK);
         s.frames(1);
         REQUIRE(luaL_dostring(L, "ui.SetSetting('atlas.route', 'qeytoqrg') ui.SetSetting('map.view', 'zone')"
-                                 " eq.ShowWindow('MapViewWnd', true)") == LUA_OK);
+                                 " hs.ShowWindow('MapViewWnd', true)") == LUA_OK);
         s.frames(3);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         CHECK_FALSE(finder_drawn()); // the Zone view
-        REQUIRE(luaL_dostring(L, "eq.ShowWindow('MapViewWnd', false) ui.SetSetting('atlas.route', '') ui.SetSetting('map.view', '')") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ShowWindow('MapViewWnd', false) ui.SetSetting('atlas.route', '') ui.SetSetting('map.view', '')") == LUA_OK);
         s.frames(1);
         // the dialogs a test setting draws though the game has not opened them (their opts.shown, set each frame)
         REQUIRE(luaL_dostring(L, "ui.SetSetting('test.draw.MarketplaceWnd', '1') ui.SetSetting('test.draw.ZonePathWnd', '1')"
@@ -4146,7 +4337,7 @@ TEST_CASE("UI packs (modern): the raid leader drags a member onto another group"
             end
             ui.SetSetting('hud.size.RaidWindow', '1200,640')
             ui.SetSetting('test.pos.RaidWindow', '20,20')
-            eq.ShowWindow('RaidWindow', true)
+            hs.ShowWindow('RaidWindow', true)
         )lua");
         s.frames(4);
         REQUIRE(ImGui::FindWindowByName("UI errors") == nullptr);
@@ -4303,11 +4494,11 @@ TEST_CASE("UI packs: raid member context menus and leadership hotkeys are reacha
                 end
                 ui.SetSetting('hud.size.RaidWindow', '1000,700')
                 ui.SetSetting('test.pos.RaidWindow', '20,20')
-                eq.ShowWindow('RaidWindow', true)
+                hs.ShowWindow('RaidWindow', true)
             )lua");
             s.frames(4);
             // The gamepad pack's initial help tip covers the action column; dismiss unrelated onboarding first.
-            run("eq.ShowWindow('TipWindow', false)");
+            run("hs.ShowWindow('TipWindow', false)");
             s.frames(2);
             auto rectangle = [&](const std::string& id) {
                 lua_getglobal(L, "controls");
@@ -4440,24 +4631,24 @@ TEST_CASE("UI packs: raid member context menus and leadership hotkeys are reacha
             }));
             conn.set_client_option_for_session(game::ClientOption::ContextMenus, 1);
 
-            run("eq.ShowWindow('RaidWindow', false) eq.ShowWindow('LeadershipWindow', true)"
-                " eq.ListInfo('LeadershipWindow', 'LEList2') eq.ListClick('LeadershipWindow', 'LEList2', 0, 'left')");
+            run("hs.ShowWindow('RaidWindow', false) hs.ShowWindow('LeadershipWindow', true)"
+                " hs.ListInfo('LeadershipWindow', 'LEList2') hs.ListClick('LeadershipWindow', 'LEList2', 0, 'left')");
             s.frames(20); // let the gamepad window's focus-settling interval finish before pressing its actions
             {
                 // Purchase is offered with any point, below the RoF2 cost too: the server's costs decide.
                 net::LeadershipExp points;
                 points.raid_points = 1;
                 conn.receive_zone_packet_for_test(net::encode(points));
-                run("assert(eq.ChildState('LeadershipWindow', 'LEW_PurchaseButton') == true)");
+                run("assert(hs.ChildState('LeadershipWindow', 'LEW_PurchaseButton') == true)");
                 points.raid_points = 0;
                 conn.receive_zone_packet_for_test(net::encode(points));
-                run("assert(eq.ChildState('LeadershipWindow', 'LEW_PurchaseButton') == false)");
+                run("assert(hs.ChildState('LeadershipWindow', 'LEW_PurchaseButton') == false)");
             }
             for (int n = 1; n <= 3; ++n) {
                 CAPTURE(n);
                 const std::string id = modern ? "Create Hotkey " + std::to_string(n) + "##LEW_HotkeyButton" + std::to_string(n)
                                              : "##LeadershipWindowLEW_HotkeyButton" + std::to_string(n);
-                run("assert(eq.ChildState('LeadershipWindow', 'LEW_HotkeyButton" + std::to_string(n) + "'))");
+                run("assert(hs.ChildState('LeadershipWindow', 'LEW_HotkeyButton" + std::to_string(n) + "'))");
                 click(id);
                 REQUIRE(s.host.cursor_button);
                 CHECK(s.host.cursor_button->type == game::HotButtonType::Leadership);
@@ -4476,7 +4667,7 @@ TEST_CASE("UI packs: raid member context menus and leadership hotkeys are reacha
                 }
             }
             // A passive selection disables all three creation controls instead of making inert hot buttons.
-            run("eq.ListInfo('LeadershipWindow', 'LEList2') eq.ListClick('LeadershipWindow', 'LEList2', 1, 'left')");
+            run("hs.ListInfo('LeadershipWindow', 'LEList2') hs.ListClick('LeadershipWindow', 'LEList2', 1, 'left')");
             s.frames(2);
             click(modern ? "Create Hotkey 1##LEW_HotkeyButton1" : "##LeadershipWindowLEW_HotkeyButton1");
             CHECK_FALSE(s.host.cursor_button);
@@ -4554,10 +4745,10 @@ TEST_CASE("UI packs: leadership names follow received ranks, purchases and train
                     return draw(x, y, r, g, b, a, text, ...)
                 end
                 function checkLeadershipColor(list, name, r, g, b, rendered)
-                    local count = eq.ListInfo('LeadershipWindow', list)
+                    local count = hs.ListInfo('LeadershipWindow', list)
                     local found
                     for i = 0, count - 1 do
-                        local row, cr, cg, cb = eq.ListRow('LeadershipWindow', list, i)
+                        local row, cr, cg, cb = hs.ListRow('LeadershipWindow', list, i)
                         if row[1] == name then found = {cr, cg, cb} break end
                     end
                     assert(found, 'Missing leadership row: ' .. name)
@@ -4573,7 +4764,7 @@ TEST_CASE("UI packs: leadership names follow received ranks, purchases and train
                 end
                 ui.SetSetting('hud.size.LeadershipWindow', '1000,700')
                 ui.SetSetting('test.pos.LeadershipWindow', '20,20')
-                eq.ShowWindow('LeadershipWindow', true)
+                hs.ShowWindow('LeadershipWindow', true)
             )lua");
             auto render = [&] {
                 run("leadershipDrawn = {}");
@@ -4731,7 +4922,7 @@ TEST_CASE("UI packs (modern): the Options window's Textures section picks the te
             return o == "texture_pack" ? std::vector<std::string>{"Off", "default", "hd"} : std::vector<std::string>{};
         };
         lua_State* L = s.lua.state();
-        REQUIRE(luaL_dostring(L, "eq.ShowWindow('OptionsWindow', true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ShowWindow('OptionsWindow', true)") == LUA_OK);
         s.frames(3);
         // a click on the Graphics tab (found in the window's tab bar)
         ImGuiContext& g = *ImGui::GetCurrentContext();
@@ -4817,7 +5008,7 @@ TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
                     end
                     return text(...)
                 end
-                eq.ShowWindow("OptionsWindow", true)
+                hs.ShowWindow("OptionsWindow", true)
             )lua") == LUA_OK);
             s.frames(3);
             auto point = [&](const char* name) {
@@ -4876,7 +5067,7 @@ TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
 }
 
 // A bag window resized: as many slots to a row as its width holds, its height grown to fit the rows; unsized, rows
-// of five. A click lands on the slot drawn under the mouse (eq.BagSlotClick's index).
+// of five. A click lands on the slot drawn under the mouse (hs.BagSlotClick's index).
 TEST_CASE("UI packs (modern): a resized bag window lays its slots out to its width") {
     fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / "modern";
     hailstone::test::ScratchDir dir_scratch("ui_pack_bag_reflow_test");
@@ -4893,11 +5084,11 @@ TEST_CASE("UI packs (modern): a resized bag window lays its slots out to its wid
         lua_State* L = s.lua.state();
         REQUIRE(luaL_dostring(L, R"(
             bagClicked = nil
-            eq.BagInfo = function(win) if win == 'Bag1' then return 'Test Bag', 10, false, 'inventory', 23 end end
-            eq.BagSlotItem = function() return nil end
-            local WindowShown = eq.WindowShown -- (the game opens a bag window only on a bag it has)
-            eq.WindowShown = function(win) if win == 'Bag1' then return true end return WindowShown(win) end
-            eq.BagSlotClick = function(win, i, button) if button == 'left' then bagClicked = i end end
+            hs.BagInfo = function(win) if win == 'Bag1' then return 'Test Bag', 10, false, 'inventory', 23 end end
+            hs.BagSlotItem = function() return nil end
+            local WindowShown = hs.WindowShown -- (the game opens a bag window only on a bag it has)
+            hs.WindowShown = function(win) if win == 'Bag1' then return true end return WindowShown(win) end
+            hs.BagSlotClick = function(win, i, button) if button == 'left' then bagClicked = i end end
             ui.SetSetting('test.pos.Bag1', '100,100')
         )") == LUA_OK);
         s.frames(3);
@@ -4993,30 +5184,30 @@ targetShown, petShown = true, true
 targetIcon, petIcon = nil, nil
 menuLabels, menuPick, shownSpell, blocked = {}, nil, nil, {}
 local buffSlot, label, shown, gauge, menuItem, showSpell, setText, clickChild =
-  eq.BuffSlot, eq.Label, eq.WindowShown, eq.Gauge, ui.MenuItem, eq.ShowSpell, eq.SetWindowText, eq.ClickChild
-eq.BuffSlot = function(win, id, overlays)
+  hs.BuffSlot, hs.Label, hs.WindowShown, hs.Gauge, ui.MenuItem, hs.ShowSpell, hs.SetWindowText, hs.ClickChild
+hs.BuffSlot = function(win, id, overlays)
   if win == "TargetWindow" and id == "Buff0" then return 11, 60000, "Holy Armor", true end
   if win == "PetInfoWindow" and id == "PetBuff0" then return 11, 60000, "Holy Armor", true end
   return buffSlot(win, id, overlays)
 end
-eq.Label = function(n) if n == 28 then return "a rat" end return label(n) end
-eq.WindowShown = function(win)
+hs.Label = function(n) if n == 28 then return "a rat" end return label(n) end
+hs.WindowShown = function(win)
   if win == "TargetWindow" then return targetShown end
   if win == "PetInfoWindow" then return petShown end
   return shown(win)
 end
-eq.Gauge = function(k)
+hs.Gauge = function(k)
   if k == 6 then return 1, 0, 100 end
   if k == 16 then return 1, "Pet", 100 end
   if k == 27 or k == 41 or k == 149 then return 0, "", -1 end
   return gauge(k)
 end
-eq.ShowSpell = function(id) shownSpell = id end
-eq.SetWindowText = function(win, id, text)
+hs.ShowSpell = function(id) shownSpell = id end
+hs.SetWindowText = function(win, id, text)
   if win == "BlockedPetBuffWnd" then blocked.edit = id .. "=" .. text end
   return setText(win, id, text)
 end
-eq.ClickChild = function(win, id, button)
+hs.ClickChild = function(win, id, button)
   if win == "BlockedPetBuffWnd" then blocked.add = id .. ":" .. tostring(button); return true end
   return clickChild(win, id, button)
 end
@@ -5131,11 +5322,11 @@ TEST_CASE("UI packs (modern): the Options search draws every tab, and only the s
                 if name == optTab then flags = (flags or 0) | ui.TabItemFlags.SetSelected end
                 return tabItem(name, flags)
             end
-            eq.PluginOptions = function()
+            hs.PluginOptions = function()
                 return { { plugin = "Demo Helper", owner = "plugin:demo", name = "on", label = "Enabled", min = 0,
                            max = 1, value = 0 } }
             end
-            eq.ShowWindow("OptionsWindow", true)
+            hs.ShowWindow("OptionsWindow", true)
         )lua") == LUA_OK);
         s.frames(3);
         auto lua_string = [&](const char* code) {

@@ -2409,7 +2409,7 @@ std::optional<std::uint32_t> VkContext::finish_frame_gen(const FrameInfo& frame)
     return generated;
 }
 
-void VkContext::end_frame(const FrameInfo& frame) {
+FrameOutcome VkContext::end_frame(const FrameInfo& frame) {
     Frame& f = frames_[frame.frame_slot];
     VkImage image = images_[frame.image_index];
     begin_overlay(frame);
@@ -2685,6 +2685,7 @@ void VkContext::end_frame(const FrameInfo& frame) {
     }
 
     frame_index_ = (frame_index_ + 1) % kFramesInFlight;
+    return {true, r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR};
 }
 
 namespace {

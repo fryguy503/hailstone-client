@@ -718,10 +718,12 @@ struct StickHarness {
     game::CollisionMesh collision = scene.collision();
     std::vector<std::string> chat;
     game::Spawn mob;
+    std::uint64_t context = 1;
     app::Navigator nav{[this] {
         app::Navigator::Env e;
         e.chat = [this](const std::string& t) { chat.push_back(t); };
         e.spawn = [this](std::uint32_t id) -> const game::Spawn* { return id == mob.id ? &mob : nullptr; };
+        e.interaction_context = [this] { return context; };
         e.melee_range = [](std::uint32_t) -> std::optional<float> { return 8.0f; };
         e.line_of_sight = [this](const glm::vec3& a, const glm::vec3& b) { return collision.line_of_sight(a, b); };
         return e;
@@ -747,6 +749,105 @@ struct StickHarness {
     float away() const { return glm::length(glm::vec2(feet - mob.position)); }
 };
 } // namespace
+
+TEST_CASE("nav: a Find-owned walk retires before movement while replacement navigation keeps its own lifetime") {
+    StickHarness h;
+    h.nav.zone_loaded(h.collision, nullptr, {});
+    bool eligible = true;
+    REQUIRE(h.nav.go_to_spawn_guarded(7, 5, [&] { return eligible; }).empty());
+    REQUIRE(h.nav.status().active);
+    h.nav.set_paused(true); eligible = false;
+    CHECK_FALSE(h.frame().active); CHECK_FALSE(h.nav.status().active); // even paused/waiting for a mesh
+    eligible = true;
+    REQUIRE(h.nav.go_to_spawn_guarded(7, 5, [&] { return eligible; }).empty());
+    REQUIRE(h.nav.go_to_spawn(7, 5).empty()); eligible = false;
+    h.frame(); CHECK(h.nav.status().active); // a manual walk to the SAME spawn does not inherit Find ownership
+    REQUIRE(h.nav.go_to_point({60, 20, 0}, 2, "Manual point", true).empty());
+    h.frame(); CHECK(h.nav.status().active);
+    CHECK_FALSE(h.nav.go_to_spawn_guarded(7, 5, []() -> bool { throw 7; }).empty());
+    CHECK(h.nav.status().active); CHECK(h.nav.status().goal == "Manual point");
+    REQUIRE(h.nav.stick(7, {}).empty()); h.frame(); CHECK(h.nav.status().stick_spawn == 7);
+}
+
+TEST_CASE("nav: eligibility lost during planning cannot start a quiet server fallback") {
+    Scene scene = walled_room();
+    auto collision = scene.collision();
+    game::Spawn mob; mob.id = 7; mob.is_npc = true; mob.name = "Destination"; mob.position = {20, 50, 0};
+    unsigned reads = 0, requests = 0, started = 0, checks = 0;
+    app::Navigator::Env env;
+    env.spawn = [&](std::uint32_t id) -> const game::Spawn* { ++reads; return id == mob.id ? &mob : nullptr; };
+    env.request_server_path = [&](std::uint32_t, game::ServerPathOrigin) { ++requests; return game::ServerPathLease{}; };
+    env.started = [&] { ++started; };
+    app::Navigator nav{std::move(env)};
+    nav.zone_loaded(collision, nullptr, {});
+    // The entry check succeeds. The check before the planner's destination read then loses eligibility.
+    CHECK_FALSE(nav.go_to_spawn_guarded(7, 5, [&] { return ++checks == 1; }).empty());
+    CHECK_FALSE(nav.status().active);
+    CHECK(reads == 1); CHECK(requests == 0); CHECK(started == 0);
+    // A manual walk has no Find guard and can still use the same ordinary navigation fallback.
+    CHECK(nav.go_to_spawn(7, 5).empty()); CHECK(nav.status().active); CHECK(started == 1);
+}
+
+TEST_CASE("nav: ordinary spawn goals stop on incarnation replacement while a deliberate new goal remains valid") {
+    StickHarness h;
+    h.mob.incarnation = 101;
+    h.nav.zone_loaded(h.collision, nullptr, {});
+    REQUIRE(h.nav.go_to_spawn(7, 5).empty());
+    ++h.mob.incarnation;
+    CHECK_FALSE(h.frame().active); CHECK_FALSE(h.nav.status().active);
+    REQUIRE(h.nav.go_to_spawn(7, 5).empty());
+    CHECK(h.nav.status().active);
+}
+
+TEST_CASE("nav: a stick retires actor and player-life replacements even while paused") {
+    StickHarness h;
+    h.mob.incarnation = 101;
+    h.mob.position = h.feet + glm::vec3(3, 0, 0);
+    h.nav.zone_loaded(h.collision, nullptr, {});
+    REQUIRE(h.nav.stick(7, {}).empty());
+    REQUIRE(h.frame().active); CHECK(h.nav.status().stick_spawn == 7);
+    ++h.mob.incarnation;
+    CHECK_FALSE(h.frame().active); CHECK(h.nav.status().stick_spawn == 0);
+    REQUIRE(h.nav.stick(7, {}).empty()); // a new explicit intent may select the replacement actor
+    REQUIRE(h.frame().active);
+    h.nav.set_paused(true);
+    ++h.context; // same zone and target ID, new player/connection life
+    CHECK_FALSE(h.frame().active); CHECK(h.nav.status().stick_spawn == 0);
+    REQUIRE(h.nav.stick(7, {}).empty()); CHECK(h.frame().active);
+}
+
+TEST_CASE("nav: unloading a zone clears a direct stick with no current path") {
+    StickHarness h;
+    h.mob.incarnation = 101;
+    h.mob.position = h.feet + glm::vec3(3, 0, 0);
+    h.nav.zone_loaded(h.collision, nullptr, {});
+    REQUIRE(h.nav.stick(7, {}).empty()); REQUIRE(h.frame().active);
+    REQUIRE(h.nav.status().stick_spawn == 7); REQUIRE_FALSE(h.nav.status().active);
+    h.nav.zone_unloaded();
+    CHECK(h.nav.status().stick_spawn == 0);
+    ++h.context; ++h.mob.incarnation;
+    h.nav.zone_loaded(h.collision, nullptr, {});
+    CHECK_FALSE(h.frame().active); // a same-ID actor in the new zone does not reactivate the old stick
+    REQUIRE(h.nav.stick(7, {}).empty()); CHECK(h.frame().active);
+}
+
+TEST_CASE("nav: a reentrant eligibility result cannot retire a replacement manual goal") {
+    StickHarness h;
+    h.nav.zone_loaded(h.collision, nullptr, {});
+    bool replace = false;
+    REQUIRE(h.nav.go_to_spawn_guarded(7, 5, [&] {
+        if (replace) {
+            replace = false;
+            CHECK(h.nav.go_to_point({60, 20, 0}, 2, "Replacement", true).empty());
+            return false;
+        }
+        return true;
+    }).empty());
+    replace = true;
+    CHECK_FALSE(h.frame().active); // old goal does not drive this frame
+    CHECK(h.nav.status().active); CHECK(h.nav.status().goal == "Replacement");
+    h.frame(); CHECK(h.nav.status().active);
+}
 
 TEST_CASE("nav: /stick closes to inside melee range, holds facing the spawn, follows it, and the keys end it") {
     StickHarness h;
@@ -1157,27 +1258,29 @@ TEST_CASE("nav: the server's path is asked quietly: nothing drawn, and the reply
             if (p.opcode == net::to_wire(net::Op::FindPersonRequest)) ++n;
         return n;
     };
-    rig.conn.request_quiet_path(42);
+    auto lease = rig.conn.request_quiet_path(101);
+    REQUIRE(lease);
     REQUIRE(rig.until([&] { return requests() == 1; }));
-    CHECK_FALSE(rig.conn.take_quiet_path());
+    CHECK_FALSE(rig.conn.take_quiet_path(lease));
     std::vector<glm::vec3> path{{0, 0, 0}, {10, 5, 0}, {20, 5, 1}};
     rig.server.zone.send_reliable(net::encode_find_person_reply(path));
     std::optional<std::vector<glm::vec3>> got;
     REQUIRE(rig.until([&] {
-        got = rig.conn.take_quiet_path();
+        got = rig.conn.take_quiet_path(lease);
         return got.has_value();
     }));
     REQUIRE(got->size() == 4); // as sent: the destination first, EQEmu's repeated last point
     CHECK((*got)[0].x == doctest::Approx(20.0f));
     CHECK_FALSE(rig.conn.player_path().active()); // no find path shown
     CHECK(rig.conn.find_path().empty());
-    CHECK_FALSE(rig.conn.take_quiet_path()); // once
+    CHECK_FALSE(rig.conn.take_quiet_path(lease)); // once
     // An empty reply: the server has no path.
-    rig.conn.request_quiet_path(43);
+    lease = rig.conn.request_quiet_path(102);
+    REQUIRE(lease);
     REQUIRE(rig.until([&] { return requests() == 2; }));
     rig.server.zone.send_reliable(net::encode_find_person_reply({}));
     REQUIRE(rig.until([&] {
-        got = rig.conn.take_quiet_path();
+        got = rig.conn.take_quiet_path(lease);
         return got.has_value();
     }));
     CHECK(got->empty());
@@ -2276,40 +2379,41 @@ TEST_CASE("nav: real zones: Lower Guk, walked from the undead side's entrance to
 TEST_CASE("nav: a quiet path asked and not answered before a zone change does not take the next zone's /find reply") {
     test::Rig rig(test::MockConfig::standard(), test::quick_options());
     REQUIRE(rig.to_zone());
-    rig.conn.request_quiet_path(42);
+    const auto lease = rig.conn.request_quiet_path(101); REQUIRE(lease);
     // The zone change comes before the reply (the old zone's link dropped with it unanswered).
     rig.conn.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 7001}));
     const auto finds = rig.conn.find_replies();
     std::vector<glm::vec3> path{{0, 0, 0}, {10, 5, 0}};
     rig.conn.receive_zone_packet_for_test(net::encode_find_person_reply(path));
-    CHECK_FALSE(rig.conn.take_quiet_path()); // the reply is a /find's: the find window counts it
-    CHECK(rig.conn.find_replies() == finds + 1);
+    CHECK_FALSE(rig.conn.take_quiet_path(lease));
+    CHECK(rig.conn.find_replies() == finds); // there is no current-zone request to own this orphan
+    CHECK_FALSE(rig.conn.player_path().active());
 }
 
-TEST_CASE("nav: a shown find and a quiet path in flight together each get their own reply, in order") {
-    // The server answers in the order asked: the find's reply first, then the navigation's. One flag for "the next
-    // reply is quiet" gave the find's path to the navigation and drew the navigation's.
+TEST_CASE("nav: overlapping shown and quiet replies are discarded in either order and fresh retries work") {
+    for (const bool quiet_first : {false, true}) {
     test::Rig rig(test::MockConfig::standard(), test::quick_options());
     REQUIRE(rig.to_zone());
-    rig.conn.find_map_location({30.0f, 40.0f, 0.0f}); // shown (the map's right click)
-    rig.conn.request_quiet_path(42);
+    game::ServerPathLease lease;
+    if (quiet_first) lease = rig.conn.request_quiet_path(101);
+    rig.conn.find_map_location({30.0f, 40.0f, 0.0f});
+    if (!quiet_first) lease = rig.conn.request_quiet_path(101);
+    REQUIRE(lease);
     const auto finds = rig.conn.find_replies();
     std::vector<glm::vec3> shown{{0, 0, 0}, {30, 40, 0}};
     std::vector<glm::vec3> quiet{{0, 0, 0}, {10, 5, 0}, {20, 5, 1}};
     rig.conn.receive_zone_packet_for_test(net::encode_find_person_reply(shown));
-    CHECK(rig.conn.find_replies() == finds + 1);
-    CHECK_FALSE(rig.conn.take_quiet_path());
+    CHECK(rig.conn.find_replies() == finds);
+    CHECK_FALSE(rig.conn.take_quiet_path(lease));
     rig.conn.receive_zone_packet_for_test(net::encode_find_person_reply(quiet));
-    auto got = rig.conn.take_quiet_path();
-    REQUIRE(got);
-    CHECK(got->size() == 4);
-    CHECK(rig.conn.find_replies() == finds + 1);
-    // The other way round: the quiet one first.
-    rig.conn.request_quiet_path(42);
+    CHECK_FALSE(rig.conn.take_quiet_path(lease));
+    CHECK(rig.conn.find_replies() == finds); CHECK_FALSE(rig.conn.player_path().active());
+    lease = rig.conn.request_quiet_path(101); REQUIRE(lease);
+    rig.conn.receive_zone_packet_for_test(net::encode_find_person_reply(quiet));
+    const auto got = rig.conn.take_quiet_path(lease); REQUIRE(got); CHECK(got->size() == 4);
     rig.conn.find_map_location({30.0f, 40.0f, 0.0f});
-    rig.conn.receive_zone_packet_for_test(net::encode_find_person_reply(quiet));
-    CHECK(rig.conn.take_quiet_path());
     rig.conn.receive_zone_packet_for_test(net::encode_find_person_reply(shown));
-    CHECK(rig.conn.find_replies() == finds + 2);
-    CHECK_FALSE(rig.conn.take_quiet_path());
+    CHECK(rig.conn.find_replies() == finds + 1); CHECK(rig.conn.player_path().active());
+    CHECK_FALSE(rig.conn.take_quiet_path(lease));
+    }
 }

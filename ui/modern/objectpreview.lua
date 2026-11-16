@@ -1,7 +1,8 @@
 -- Item preview: replaces the game's ObjectPreviewWnd (an Alt + right click on an item opens it). A card with the
--- client's 3D view of the item on your character, or of the item alone (eq.ItemPreviewImage): drag with the left
+-- client's 3D view of the item on your character, or of the item alone (hs.ItemPreviewImage): drag with the left
 -- button to turn it, with the right button to move it, the wheel zooms; the row below has the game's own turn, zoom
 -- and Reset buttons (OPW_*). An item with nothing to show says so, as the game does.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local T = hud.T
@@ -16,7 +17,7 @@ local BUTTONS = {
   { "OPW_ResetButton", "Reset", "Fit the view again" },
 }
 
-local preview = nil -- this frame's eq.ItemPreview() (the body reads it)
+local preview = nil -- this frame's hs.ItemPreview() (the body reads it)
 local WINDOW_OPTS = {
   size = function() return 300, 380 end,
   resizable = { 200, 240 },
@@ -29,7 +30,7 @@ local function drawWindow(x, y, w, h, s)
   local vh = math.max(h - (top - y) - btnH - 8 * s, 16)
   local p = preview
   if p and p.show then
-    local tex = eq.ItemPreviewImage(w, vh)
+    local tex = API.preview.Image(w, vh)
     ui.DrawRectFilled(x, top, x + w, top + vh, 0, 0, 0, 0.25, 6 * s)
     if tex then ui.DrawImage(tex, x, top, x + w, top + vh, 0, 0, 1, 1) end
     ui.SetCursorScreenPos(x, top)
@@ -37,13 +38,13 @@ local function drawWindow(x, y, w, h, s)
     local io = ui.GetIO()
     if ui.IsItemHovered() then
       T.TakeRightClick()
-      if io.wheel ~= 0 then eq.ItemPreviewControl("zoom", io.wheel > 0 and 0.9 or 1.1) end
+      if io.wheel ~= 0 then API.preview.Control("zoom", io.wheel > 0 and 0.9 or 1.1) end
     end
     if ui.IsItemActive() then
       if ui.IsMouseDown(ui.Mouse.Left) then
-        eq.ItemPreviewControl("rotate", io.mouseDX * 0.01, -io.mouseDY * 0.01)
+        API.preview.Control("rotate", io.mouseDX * 0.01, -io.mouseDY * 0.01)
       elseif ui.IsMouseDown(ui.Mouse.Right) then
-        eq.ItemPreviewControl("pan", -io.mouseDX / w, io.mouseDY / vh)
+        API.preview.Control("pan", -io.mouseDX / w, io.mouseDY / vh)
       end
     end
     ui.SetCursorScreenPos(x, top + vh + 6 * s)
@@ -61,8 +62,8 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Item Preview", function()
-  if not eq.InGame() then return end
-  preview = eq.ItemPreview()
+  if not API.session.InGame() then return end
+  preview = API.preview.Draw()
   local p = preview
   if p and p.serial ~= lastSerial then -- a new answer: to the front (BringWndToTop)
     lastSerial = p.serial

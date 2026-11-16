@@ -19,6 +19,26 @@ using hailstone::ByteWriter;
 using hailstone::render::TextureUse;
 using hailstone::render::prepare_texture_image;
 
+TEST_CASE("UI image paths: relative raster assets are normalized without admitting disk or metadata paths") {
+    using hailstone::ui::ui_image_path;
+    for (const auto& entry : std::vector<std::pair<std::string, std::string>>{
+             {"UIFiles\\Example Pack\\Atlas.PNG", "uifiles/example pack/atlas.png"},
+             {"images/ui.dds", "images/ui.dds"}, {"image.tga", "image.tga"}, {"image.bmp", "image.bmp"},
+             {"image.jpg", "image.jpg"}, {"image.JPEG", "image.jpeg"}}) {
+        CAPTURE(entry.first);
+        CHECK(ui_image_path(entry.first) == entry.second);
+    }
+    for (const auto& path : std::vector<std::string>{"", ".", "..", "../atlas.png", "a/../atlas.png",
+             "a/./atlas.png", "a//atlas.png", "/atlas.png", "\\atlas.png", "//server/share/atlas.png",
+             "C:/atlas.png", "C:atlas.png", "https://host/atlas.png", "folder/", "folder./atlas.png",
+             "folder /atlas.png", "bad*.png", "bad?.png", "bad\".png", "bad<.png", "bad>.png",
+             "bad\n.png", "bad\r.png", std::string("bad\0.png", 8), std::string("bad\x7f.png"),
+             "atlas.xml", "interface.lua", "atlas.png.lua", "atlas", std::string(4097, 'a') + ".png"}) {
+        CAPTURE(path);
+        CHECK_FALSE(ui_image_path(path));
+    }
+}
+
 TEST_CASE("UI animation art: XML frame crops retain original dimensions and aspect") {
     const std::string xml = R"xml(<XML><Ui2DAnimation item="FixtureBadge"><Frames>
       <Texture>fixture-atlas.tga</Texture><Location><X>64</X><Y>32</Y></Location>

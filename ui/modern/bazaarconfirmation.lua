@@ -3,6 +3,7 @@
 -- original's BZC_UseTokenButton, method 2: the server takes that many vouchers), or to your parcels for the
 -- platinum fee the game asks (BZC_UsePlatButton, method 1); Cancel. The buttons are the original's (the purchase
 -- goes out from its handler).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -26,7 +27,7 @@ local function drawWindow(x, y, w, h, s)
   -- the item
   local icon = 44 * s
   local cx, cy = ui.GetCursorScreenPos()
-  local tex, u0, v0, u1, v1 = eq.ChildArt(WINDOW, "BZC_ItemIcon", "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(WINDOW, "BZC_ItemIcon", "decal")
   T.Icon(cx, cy, icon, s, tex or nil, u0, v0, u1, v1)
   ui.SetCursorScreenPos(cx + icon + 10 * s, cy + 2 * s)
   ui.BeginGroup()
@@ -71,6 +72,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Bazaar Confirmation", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Confirm Purchase", WINDOW_OPTS, drawWindow)
 end)

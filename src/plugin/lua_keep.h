@@ -1,6 +1,6 @@
 #pragma once
 
-// C++ objects a lua_CFunction needs across Lua calls that can raise an error, for the UI's state (app/lua_eq*.cpp)
+// C++ objects a lua_CFunction needs across Lua calls that can raise an error, for the UI's state (app/lua_ui*.cpp)
 // and the scripts' (mq/lua_mq.cpp, mq/lua_hailstone.cpp).
 //
 // Lua is built as C (CMakeLists.txt), so its errors are longjmps: one raised by a failed argument check, a push that

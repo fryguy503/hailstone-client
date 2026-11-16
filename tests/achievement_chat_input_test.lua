@@ -1,4 +1,5 @@
 CLIENT_ROOT = CLIENT_ROOT or (arg and arg[1]) or "."
+local attachUI = assert(loadfile(CLIENT_ROOT .. "/tests/lua_ui_api_mock.lua"))()
 local checks=0
 local function check(value,why)checks=checks+1;assert(value,why)end
 local function achievement(name,extra)
@@ -77,7 +78,7 @@ for _,pack in ipairs({"modern","gamepad"})do
     Col=enum,StyleVar=enum,Mouse=enum,Key=enum,InputTextFlags=enum,HoveredFlags=enum,ButtonFlags=enum,
   },{__index=function()return no end})
   local chatWindow={slot=1,title="Main",main=true,tab=1,tabs={{title="Main"}}}
-  eq=setmetatable({InGame=function()return true end,UiReady=function()return true end,
+  hs=setmetatable({InGame=function()return true end,UiReady=function()return true end,
     GameState=function()return gameState end,Name=function()return charName end,
     ChatWindows=function()return {chatWindow}end,ChatText=function()return 0,{},true,0 end,
     ChatInfo=function()return 3,true,"Say"end,ChatPage=function()return nil end,
@@ -90,6 +91,7 @@ for _,pack in ipairs({"modern","gamepad"})do
     end,
     ChatSubmit=function(slot,text)sent[#sent+1]={slot,text}end,
   },{__index=function(_,name)error("Unexpected game API: "..name)end})
+  attachUI(hs)
   local original=dofile
   dofile=function(path)
     if path=="lib/chatlinks.lua"then return helpers[pack]end

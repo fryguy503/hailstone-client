@@ -1,8 +1,9 @@
 -- Tribute Trophies (gamepad pack): stands in for TributeTrophyWnd, answered through it (lib/model.lua,
--- app/lua_eq_fellowship.cpp; the game refuses it without the House of Thule expansion). The Personal and Guild views
+-- app/lua_ui_fellowship.cpp; the game refuses it without the House of Thule expansion). The Personal and Guild views
 -- (LB / RB, the stock window's two view buttons): the trophy benefits available and active (focusing one selects it:
 -- its description shows), Upgrade (X), Downgrade (Y) and Modify, the favour, cost and time left, and in the guild view
 -- the guild's opt in / out. EQEmu sends no trophy tribute, so the lists stay empty.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -31,7 +32,7 @@ local function tabs(guild, x0, y0)
     local w = ui.CalcTextSize(t[1]) + T.px(40)
     T.rect(x, y0, x + w, y0 + h, on and C.accent or C.raised, on and 0.9 or 1, T.px(10))
     T.textIn(x, y0, x + w, y0 + h, t[1], on and C.onAccent or C.text, 0.5)
-    if ui.IsMouseHoveringRect(x, y0, x + w, y0 + h) and ui.IsMouseClicked(ui.Mouse.Left) then eq.ClickChild(TW, t[2], "left") end
+    if ui.IsMouseHoveringRect(x, y0, x + w, y0 + h) and ui.IsMouseClicked(ui.Mouse.Left) then API.windows.ClickChild(TW, t[2], "left") end
     x = x + w + T.px(10)
   end
   T.unfont()
@@ -47,10 +48,10 @@ ui.window("Tribute Trophies", function()
         hints = { { "x", "Upgrade" }, { "y", "Downgrade" }, { "lb", "Personal" }, { "rb", "Guild" }, { "b", "Close" } } }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
-    if pressed("Tribute Trophies", "lb") then eq.ClickChild(TW, "TTW_ViewPersonal_Btn", "left") end
-    if pressed("Tribute Trophies", "rb") then eq.ClickChild(TW, "TTW_ViewGuild_Btn", "left") end
-    if pressed("Tribute Trophies", "x") then eq.ClickChild(TW, "TTW_UpgradeButton", "left") end
-    if pressed("Tribute Trophies", "y") then eq.ClickChild(TW, "TTW_DowngradeButton", "left") end
+    if pressed("Tribute Trophies", "lb") then API.windows.ClickChild(TW, "TTW_ViewPersonal_Btn", "left") end
+    if pressed("Tribute Trophies", "rb") then API.windows.ClickChild(TW, "TTW_ViewGuild_Btn", "left") end
+    if pressed("Tribute Trophies", "x") then API.windows.ClickChild(TW, "TTW_UpgradeButton", "left") end
+    if pressed("Tribute Trophies", "y") then API.windows.ClickChild(TW, "TTW_DowngradeButton", "left") end
     local top = tabs(guild, x0, y0)
     -- the favour, cost and time, as the view's labels show them
     local facts
@@ -87,5 +88,5 @@ ui.window("Tribute Trophies", function()
         { "TTW_StatusButton", opted and "Opt Out" or "Opt In" } }, midX, x1, bh)
     end
   end
-  if W.finish() then eq.ShowWindow(TW, false) end
+  if W.finish() then API.windows.Show(TW, false) end
 end)

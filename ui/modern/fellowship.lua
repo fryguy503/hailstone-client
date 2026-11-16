@@ -4,8 +4,9 @@
 --     End Fellowship (the game enables each as you lead, belong or neither);
 --   * Camp: your campsite (where it is, Create Camp and Destroy Camp), the campsite kits with their filter and
 --     "Show all possible", the selected kit's description, and Refresh List.
--- Every field, list and button uses the shared model (app/lua_eq_fellowship.cpp). The server decides membership,
+-- Every field, list and button uses the shared model (app/lua_ui_fellowship.cpp). The server decides membership,
 -- permissions and campsite availability; the member list scrolls through rosters of up to 64 players.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -27,10 +28,10 @@ local function fellowshipPage(s)
   ui.SameLine()
   local clicked = W.Button(WINDOW, "UpdateMOTDButton", "Update", { width = updW,
     tooltip = "Set this as your fellowship's message of the day" })
-  if enter and not clicked and W.State(WINDOW, "UpdateMOTDButton") then eq.ClickChild(WINDOW, "UpdateMOTDButton", "left") end
+  if enter and not clicked and W.State(WINDOW, "UpdateMOTDButton") then API.windows.ClickChild(WINDOW, "UpdateMOTDButton", "left") end
   ui.Dummy(0, 2 * s)
   W.Label(WINDOW, "FellowshipVitality", C.muted, true)
-  local count = eq.ListInfo(WINDOW, "MemberList") or 0
+  local count = API.windows.ListInfo(WINDOW, "MemberList") or 0
   K.Caption(count > 0 and ("Members (" .. count .. ")") or "Members")
   local below = bh * 2 + 12 * s
   if count == 0 then
@@ -75,7 +76,7 @@ local function campPage(s)
   W.Check(WINDOW, "ShowAllButton", "Show all possible", { tooltip = "Also list the kits you cannot use yet" })
   local descH = 70 * s
   local below = descH + bh + 14 * s
-  if (eq.ListInfo(WINDOW, "CampsiteKitList") or 0) == 0 then
+  if (API.windows.ListInfo(WINDOW, "CampsiteKitList") or 0) == 0 then
     local aw, ah = ui.GetContentRegionAvail()
     S.Empty(aw, math.max(30 * s, ah - below), "No campsite kits listed.", "Press Refresh List to ask for them.")
   else
@@ -107,9 +108,9 @@ local function body(x, y, w, h, s)
   end
 end
 
-local function testOpen() eq.ShowWindow(WINDOW, true) end
+local function testOpen() API.windows.Show(WINDOW, true) end
 ui.window("Fellowship", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   S.TestClicks(WINDOW)
   hud.Dialog(WINDOW, "Fellowship", OPTS, body)

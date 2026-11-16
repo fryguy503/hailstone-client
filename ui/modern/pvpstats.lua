@@ -2,6 +2,7 @@
 -- infamy, vitality, the streaks), your last kill and last death as cards, and the kills of the last day as a sortable
 -- table; Refresh / Leaderboard / Done. The numbers are the original's labels (PvpStats_*, whose text is the XML's
 -- word and the number after it), the lists and buttons its own.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -63,7 +64,7 @@ local function drawWindow(x, y, w, h, s)
   ui.BeginChild("##pvplastdeath", 0, lh * 2 + 8 * s, false)
   entry("Last death", "PvpStats_LastDeathList", C.text)
   ui.EndChild()
-  local rows = eq.ListInfo(WINDOW, "PvpStats_KillsList") or 0
+  local rows = API.windows.ListInfo(WINDOW, "PvpStats_KillsList") or 0
   K.Heading("Kills in the last day", rows == 1 and "1 kill" or (rows .. " kills"))
   if rows == 0 then
     ui.BeginChild("##pvpkillsempty", 0, -(btnH + 8 * s), false)
@@ -80,6 +81,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("PvP Stats", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "PvP Record", WINDOW_OPTS, drawWindow)
 end)

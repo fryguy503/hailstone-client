@@ -1,23 +1,45 @@
 -- The zone guide's windows (gamepad pack), standing in for the stock windows and answered through them
--- (lib/model.lua, app/lua_eq_zoneguide.cpp):
---   Find (eq.FindNpcs, Hailstone's Find window in place of the game's FindLocationWnd; app/lua_eq_find.cpp)
+-- (lib/model.lua, app/lua_ui_zoneguide.cpp):
+--   Find (hs.FindNpcs, Hailstone's Find window in place of the game's FindLocationWnd; app/lua_ui_find.cpp)
 --                                the zone's merchants, bankers, guildmasters, other services and points of interest,
 --                                nearest first, one kind or all: A on one targets it and starts the path to it (the
 --                                window then closes, as the game's find window did); X walks there (the navigator)
 --   Zone Path (ZonePathWnd)      the steps of the zone guide's active path (the game refuses to show it without one)
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local M = dofile("lib/model.lua")
 local C = T.C
 
--- ---------------------------------------------------------------- find (Hailstone's Find window, eq.FindNpcs)
+-- ---------------------------------------------------------------- find (Hailstone's Find window, hs.FindNpcs)
 local findList = { offset = 0 }
-local findKind = 0 -- 0 all, else the index into eq.FindCategories()
-local CATS = eq.FindCategories and eq.FindCategories() or {}
+local findKind = 0 -- 0 all, else the index into hs.FindCategories()
+local CATS = API.find.Categories and API.find.Categories() or {}
+local findPolicy, findPolicyName, findPolicyCustom, findPolicyStock = nil, nil, nil, nil
+local findRevision, findContext, findZone = nil, nil, nil
+local function npcFindAllowed()
+  local query = API.map.Policy
+  local policy = type(query) == "function" and query() or nil
+  local allowed = type(policy) ~= "table" or policy.npc_find ~= false
+  local name = type(policy) == "table" and policy.name or ""
+  local custom = type(policy) == "table" and policy.custom_spawns == true
+  local stock = type(policy) ~= "table" or policy.stock_npcs ~= false
+  local revision = type(policy) == "table" and policy.revision or nil
+  local context = type(policy) == "table" and policy.context or nil
+  local zone = select(2, API.map.ZoneName())
+  if findPolicy ~= allowed or findPolicyName ~= name or findPolicyCustom ~= custom or findPolicyStock ~= stock
+      or findRevision ~= revision or findContext ~= context or findZone ~= zone or not allowed then
+    findList = { offset = 0 }
+    findPolicy, findPolicyName, findPolicyCustom, findPolicyStock = allowed, name, custom, stock
+    findRevision, findContext, findZone = revision, context, zone
+  end
+  return allowed
+end
 
 ui.window("Find", function()
-  if not eq.InGame() or not eq.FindOpen() then return end
+  if not npcFindAllowed() then return end
+  if not API.session.InGame() or not API.find.Open() then return end
   T.frame()
   if W.begin("Find", { w = 1200, h = 860, title = "Find", subtitle = "Merchants, bankers, trainers and more in this zone",
         hints = { { "a", "Show the path" }, { "x", "Walk there" }, { "b", "Close" } } }) then
@@ -31,7 +53,7 @@ ui.window("Find", function()
       findList.offset = 0
     end
     local rows = {}
-    for _, r in ipairs(eq.FindNpcs()) do
+    for _, r in ipairs(API.find.Npcs()) do
       if not kind or r.category == kind[1] then rows[#rows + 1] = r end
     end
     local top = y0 + bh + T.px(18)
@@ -52,18 +74,19 @@ ui.window("Find", function()
         T.textIn(rx1 - T.px(150), ry0, rx1 - T.px(20), ry1, string.format("%d away", math.floor(r.distance)), C.dim, 1)
       end, function(i)
         -- as the original's find window: the path to the row, and the window goes
-        eq.FindNpcTarget(rows[i].id)
-        eq.FindNpcPath(rows[i].id)
-        eq.FindOpen(false)
+        local row = rows[i]
+        if API.find.NpcTarget(row.id, row.token) ~= false and API.find.NpcPath(row.id, row.token) ~= false then
+          API.find.Open(false)
+        end
       end)
       -- X: walk there (the navigator; any movement stops it), the window closing
       if focused and W.pressed("x") then
-        eq.FindNpcTarget(rows[focused].id)
-        if eq.FindNpcWalk(rows[focused].id) then eq.FindOpen(false) end
+        local row = rows[focused]
+        if API.find.NpcTarget(row.id, row.token) ~= false and API.find.NpcWalk(row.id, row.token) then API.find.Open(false) end
       end
     end
   end
-  if W.finish() then eq.FindOpen(false) end
+  if W.finish() then API.find.Open(false) end
 end)
 
 -- ---------------------------------------------------------------- the zone path (ZonePathWnd)
@@ -78,5 +101,5 @@ ui.window("Zone Path", function()
     local x0, y0, x1, y1 = W.area()
     M.list(ZW, "ZPW_ZoneList", steps, x0, y0, x1, y1, { empty = "No path is set." })
   end
-  if W.finish() then eq.ShowWindow(ZW, false) end
+  if W.finish() then API.windows.Show(ZW, false) end
 end)

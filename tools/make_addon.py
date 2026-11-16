@@ -5,8 +5,9 @@ A script is one folder (its init.lua at the top); a plugin is one folder for eac
 with its library (<name>.so, <name>.dll or <name>.dylib) at the top and its windows in ui/<pack>/; a tool (a program
 of its own) is one folder for each platform, with its program (<name>, <name>.exe on Windows) and its libraries at
 the top and its data anywhere; an upscaler (sdk/hailstone_upscaler.h) is one folder for each platform, with its
-provider (<name>.dll, <name>.so, <name>.dylib) and the libraries it loads at the top and data anywhere. Upload
-everything in --out to a GitHub release of the add-on's repository: the client finds the manifest as the newest
+provider (<name>.dll, <name>.so, <name>.dylib) and the libraries it loads at the top and data anywhere. UI packs use
+one portable folder containing ui/<pack>/ui.ini plus presentation Lua/assets and optional notices; they require no
+startup script. Upload everything in --out to a GitHub release of the add-on's repository: the client finds the manifest as the newest
 release's asset and the packages beside it.
 
 usage:
@@ -90,6 +91,35 @@ def check(name, kind, files, platform):
         low = f.lower()
         return low.endswith(PROGRAMS) or bool(VERSIONED_SO.match(low.rsplit("/", 1)[-1]))
 
+    if kind == "ui":
+        packs, manifests = {}, set()
+        paths = {}
+        for f in files:
+            components = f.split("/")
+            for count in range(1, len(components) + 1):
+                prefix = "/".join(components[:count])
+                role = count == len(components)
+                previous = paths.setdefault(prefix.lower(), (prefix, role))
+                if previous[0] != prefix:
+                    sys.exit(f"{f}: UI path components differ only in case")
+                if previous[1] != role:
+                    sys.exit(f"{f}: a UI path is both a file and a directory")
+            if is_program(f):
+                sys.exit(f"{f}: a UI package holds presentation Lua and assets, no programs")
+            if f in {"LICENSE", "NOTICE", "NOTICE.md", "README.md"}:
+                continue
+            parts = f.split("/", 2)
+            if len(parts) != 3 or parts[0] != "ui" or not NAME.fullmatch(parts[1]):
+                sys.exit(f"{f}: UI files go in ui/<pack>/ with a safe pack name")
+            key = parts[1].lower()
+            if key in packs and packs[key] != parts[1]:
+                sys.exit(f"{f}: UI pack folders differ only in case")
+            packs[key] = parts[1]
+            if parts[2] == "ui.ini":
+                manifests.add(key)
+        if not packs or manifests != set(packs):
+            sys.exit("every UI pack has ui/<pack>/ui.ini")
+        return
     if kind == "script":
         if "init.lua" not in files:
             sys.exit("a script has init.lua at its top")
@@ -174,26 +204,29 @@ def one_line(text, what):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--name", required=True)
-    ap.add_argument("--kind", required=True, choices=["script", "plugin", "tool", "upscaler"])
+    ap.add_argument("--kind", required=True, choices=["script", "plugin", "tool", "upscaler", "ui"])
     ap.add_argument("--version", required=True)
-    ap.add_argument("--caps", default="", help="what it needs: read,ui,actions ... (docs/plugins.md); a tool or an upscaler none")
-    ap.add_argument("--dir", help="a script's folder")
+    ap.add_argument("--caps", default="", help="what it needs: read,ui,actions ... (docs/plugins.md); tool/upscaler/UI packages none")
+    ap.add_argument("--dir", help="a script or UI package's folder")
     ap.add_argument("--platform", action="append", default=[], help="a plugin's, a tool's or an upscaler's PLATFORM=FOLDER, once for each")
     ap.add_argument("--author", default="")
     ap.add_argument("--description", default="")
     ap.add_argument("--notes", default="", help="the release's page")
     ap.add_argument("--min-client", default="", help="the oldest Hailstone it works with")
+    ap.add_argument("--autoload", action="store_true", help="managed Lua add-on: activate after installation, controlled in Add-ons")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    if a.autoload and a.kind != "script":
+        sys.exit("--autoload is only for a managed Lua add-on (--kind script)")
     if not NAME.match(a.name):
         sys.exit(f"{a.name}: 1 to 32 letters, digits, '-' and '_', starting with a letter or digit")
     for v in (a.version, a.min_client or "0.0.0"):
         if not VERSION.match(v):
             sys.exit(f"{v}: not a version (1.2.3, 1.2.3-beta.1)")
     caps = [c.strip().lower() for c in a.caps.replace(" ", ",").split(",") if c.strip() and c.strip() != "none"]
-    if a.kind == "tool":
+    if a.kind in ("tool", "ui"):
         if caps:
-            sys.exit("--caps: a tool asks for none (it is a program of its own, not run by the client)")
+            sys.exit(f"--caps: a {a.kind} package asks for none")
     elif a.kind == "upscaler":
         if caps:
             sys.exit("--caps: an upscaler asks for none (it sees only the frames it upscales)")
@@ -205,9 +238,9 @@ def main():
         one_line(a.notes, "notes")
 
     builds = []  # (platform, folder)
-    if a.kind == "script":
+    if a.kind in ("script", "ui"):
         if not a.dir or a.platform:
-            sys.exit("a script takes --dir (and no --platform)")
+            sys.exit(f"a {a.kind} takes --dir (and no --platform)")
         builds.append(("any", a.dir))
     else:
         if a.dir or not a.platform:
@@ -220,6 +253,8 @@ def main():
     os.makedirs(a.out, exist_ok=True)
 
     lines = ["hailstone-addon 1", f"name {a.name}", f"kind {a.kind}", f"version {a.version}"]
+    if a.autoload:
+        lines.append("autoload 1")
     if a.min_client:
         lines.append(f"min_client {a.min_client}")
     if a.author:

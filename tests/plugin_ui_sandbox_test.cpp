@@ -1,7 +1,7 @@
-// What a plugin's windows (ui::lua::LuaUi::set_folders, docs/plugins.md "Plugin windows") may do: through the eq
-// table's plugin part (app/lua_eq_plugins.cpp) and the UI bridge (plugin/ui_bridge.h) the bridge's lists stay sound
-// while plugin code runs from them and one owner's code does not drive another's; eq functions that act need the
-// plugin's capability (app/lua_eq_caps.h); the consent question, the pack's shared tables, its settings and the Lua
+// What a plugin's windows (ui::lua::LuaUi::set_folders, docs/plugins.md "Plugin windows") may do: through the hs
+// table's plugin part (app/lua_ui_plugins.cpp) and the UI bridge (plugin/ui_bridge.h) the bridge's lists stay sound
+// while plugin code runs from them and one owner's code does not drive another's; hs functions that act need the
+// plugin's capability (app/lua_ui_caps.h); the consent question, the pack's shared tables, its settings and the Lua
 // state's time and memory are guarded (ui/lua/lua_host.h).
 #include <doctest/doctest.h>
 
@@ -20,9 +20,9 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_caps.h"
-#include "app/lua_eq_plugins.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_caps.h"
+#include "app/lua_ui_plugins.h"
 #include "plugin/policy.h"
 #include "plugin/ui_bridge.h"
 #include "scratch_dir.h"
@@ -33,18 +33,18 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// A pack, the plugin part of eq over a bridge, and plugin folders by tag (each with a file, so its globals exist).
+// A pack, the plugin part of hs over a bridge, and plugin folders by tag (each with a file, so its globals exist).
 struct SandboxUi {
     test::ScratchDir scratch{"plugin_ui_sandbox"};
     ImGuiContext* ctx = nullptr;
     plugin::UiBridge bridge;
-    app::EqHost host;
-    std::unique_ptr<app::EqApi> api;
+    app::UiHost host;
+    std::unique_ptr<app::UiApi> api;
     std::unique_ptr<ui::lua::LuaUi> lua;
     std::map<std::string, std::uint32_t> caps; // each folder tag's capabilities (the app's plugin_caps)
     std::vector<ui::lua::LuaUi::Folder> folders;
 
-    SandboxUi() {
+    explicit SandboxUi(bool legacy_root = false) {
         ctx = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
         unsigned char* px = nullptr;
@@ -52,9 +52,10 @@ struct SandboxUi {
         ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
         fs::create_directories(scratch.path() / "pack");
         host.plugin_ui = &bridge;
-        api = std::make_unique<app::EqApi>(host);
-        lua = std::make_unique<ui::lua::LuaUi>(scratch.path() / "pack", scratch.path() / "ui.txt");
-        lua->add_eq_api([this](lua_State* L) { api->register_functions(L); });
+        api = std::make_unique<app::UiApi>(host);
+        lua = std::make_unique<ui::lua::LuaUi>(scratch.path() / "pack", scratch.path() / "ui.txt",
+            std::vector<fs::path>{}, ui::lua::LuaUi::DataRoots{}, legacy_root);
+        lua->add_ui_api([this](lua_State* L) { api->register_functions(L); });
         // As the app does (ClientApp::lua_caller_scope): a folder's code runs with its owner's capabilities.
         lua->set_caller_scope([this](std::string_view tag) -> std::shared_ptr<void> {
             auto it = caps.find(std::string(tag));
@@ -90,9 +91,9 @@ struct SandboxUi {
 
 } // namespace
 
-// eq.PluginOptions runs each option's get; a get that adds options (moving the bridge's list) or replaces its own
+// hs.PluginOptions runs each option's get; a get that adds options (moving the bridge's list) or replaces its own
 // option (destroying the function running) leaves the call sound.
-TEST_CASE("Plugin UI: eq.PluginOptions with a get that adds and replaces options") {
+TEST_CASE("Plugin UI: hs.PluginOptions with a get that adds and replaces options") {
     SandboxUi s;
     int added = 0;
     std::function<int()> get = [&]() -> int {
@@ -105,7 +106,7 @@ TEST_CASE("Plugin UI: eq.PluginOptions with a get that adds and replaces options
     s.bridge.add_option({"P", "first", "First", 0, 1, get, [](int) {}});
     s.bridge.add_option({"P", "second", "Second", 0, 1, [] { return 2; }, [](int) {}});
     s.frame();
-    CHECK(s.run("", "local o = eq.PluginOptions() return #o .. ' ' .. o[1].value .. ' ' .. o[2].value") == "2 1 2");
+    CHECK(s.run("", "local o = hs.PluginOptions() return #o .. ' ' .. o[1].value .. ' ' .. o[2].value") == "2 1 2");
     CHECK(added == 64);
     CHECK(s.bridge.options().size() == 66);
 }
@@ -129,7 +130,7 @@ TEST_CASE("Plugin UI: a menu entry's command runs as its owner") {
     s.bridge.add_menu({"P", "Cast", "/cast 1"});
     s.bridge.add_menu({"P", "Theirs", "/say hi", plugin::UiBridge::Kind::Script});
     s.frame();
-    CHECK(s.run("", "eq.PluginMenuClick(1) eq.PluginMenuClick(2) eq.PluginMenuClick(3) return #eq.PluginMenu()") ==
+    CHECK(s.run("", "hs.PluginMenuClick(1) hs.PluginMenuClick(2) hs.PluginMenuClick(3) return #hs.PluginMenu()") ==
           "2");
     REQUIRE(sent.size() == 2);
     CHECK(sent[0].line == "/cast 1");
@@ -163,31 +164,31 @@ TEST_CASE("Plugin UI: a plugin cannot drive another's functions, options or menu
     s.frame();
 
     // The pack: everyone's.
-    CHECK(s.run("", "PB = eq.Plugin('B') return PB.f() .. eq.Plugin('A').f()") == "BA");
-    CHECK(s.run("", "eq.SetPluginOption('B', 'o', 4) return #eq.PluginOptions()") == "2");
+    CHECK(s.run("", "PB = hs.Plugin('B') return PB.f() .. hs.Plugin('A').f()") == "BA");
+    CHECK(s.run("", "hs.SetPluginOption('B', 'o', 4) return #hs.PluginOptions()") == "2");
     CHECK(b_value == 4);
     calls.clear();
 
     // Plugin A: its own only.
-    CHECK(s.run("plugin:A", "return eq.Plugin('A').f() .. ' ' .. eq.Plugin('A').name .. ' ' .. eq.Plugin('A').owner") ==
+    CHECK(s.run("plugin:A", "return hs.Plugin('A').f() .. ' ' .. hs.Plugin('A').name .. ' ' .. hs.Plugin('A').owner") ==
           "A A plugin:A");
-    CHECK(s.run("plugin:A", "return eq.Plugin('B')") == "nil");
-    CHECK(s.run("plugin:A", "return eq.Plugin('plugin:B')") == "nil");
-    CHECK(s.run("plugin:A", "return eq.Plugin('script:A')") == "nil"); // the script of its name is another owner
+    CHECK(s.run("plugin:A", "return hs.Plugin('B')") == "nil");
+    CHECK(s.run("plugin:A", "return hs.Plugin('plugin:B')") == "nil");
+    CHECK(s.run("plugin:A", "return hs.Plugin('script:A')") == "nil"); // the script of its name is another owner
     CHECK(s.run("plugin:A", "return PB.f()") == "nil");                // B's object the pack left in its globals
     CHECK(s.run("plugin:A", "return PB.call('f')") == "nil");
     CHECK(calls == std::vector<std::string>{"A"});
-    CHECK(s.run("plugin:A", "eq.SetPluginOption('B', 'o', 7) eq.SetPluginOption('A', 'o', 3) return 1") == "1");
+    CHECK(s.run("plugin:A", "hs.SetPluginOption('B', 'o', 7) hs.SetPluginOption('A', 'o', 3) return 1") == "1");
     CHECK(b_value == 4);
     CHECK(a_value == 3);
-    CHECK(s.run("plugin:A", "local o = eq.PluginOptions() return #o .. o[1].owner") == "1plugin:A");
-    CHECK(s.run("plugin:A", "eq.PluginMenuClick(1) return #eq.PluginMenu()") == "0"); // B's entry: not listed
+    CHECK(s.run("plugin:A", "local o = hs.PluginOptions() return #o .. o[1].owner") == "1plugin:A");
+    CHECK(s.run("plugin:A", "hs.PluginMenuClick(1) return #hs.PluginMenu()") == "0"); // B's entry: not listed
     CHECK(sent.empty());
-    CHECK(s.run("", "eq.PluginMenuClick(1) return 1") == "1");
+    CHECK(s.run("", "hs.PluginMenuClick(1) return 1") == "1");
     CHECK(sent == std::vector<std::string>{"/b"});
 }
 
-// A plugin's eq.PluginMenu lists its own entries alone, and eq.PluginMenuClick numbers them as that list does; the
+// A plugin's hs.PluginMenu lists its own entries alone, and hs.PluginMenuClick numbers them as that list does; the
 // pack's lists and numbers every entry.
 TEST_CASE("Plugin UI: a plugin's menu list and clicks are its own entries") {
     SandboxUi s;
@@ -198,13 +199,13 @@ TEST_CASE("Plugin UI: a plugin's menu list and clicks are its own entries") {
     s.bridge.add_menu({"A", "A's", "/a"});
     s.add_folder("plugin:A");
     s.frame();
-    CHECK(s.run("plugin:A", "local m = eq.PluginMenu() return #m .. m[1].label .. m[1].owner") == "1A'splugin:A");
-    CHECK(s.run("plugin:A", "eq.PluginMenuClick(2) return 1") == "1"); // past its own list: nothing
+    CHECK(s.run("plugin:A", "local m = hs.PluginMenu() return #m .. m[1].label .. m[1].owner") == "1A'splugin:A");
+    CHECK(s.run("plugin:A", "hs.PluginMenuClick(2) return 1") == "1"); // past its own list: nothing
     CHECK(sent.empty());
-    CHECK(s.run("plugin:A", "eq.PluginMenuClick(1) return 1") == "1");
+    CHECK(s.run("plugin:A", "hs.PluginMenuClick(1) return 1") == "1");
     CHECK(sent == std::vector<std::string>{"/a"});
-    CHECK(s.run("", "return #eq.PluginMenu()") == "2");
-    CHECK(s.run("", "eq.PluginMenuClick(1) return 1") == "1");
+    CHECK(s.run("", "return #hs.PluginMenu()") == "2");
+    CHECK(s.run("", "hs.PluginMenuClick(1) return 1") == "1");
     CHECK(sent == std::vector<std::string>{"/a", "/b"});
 }
 
@@ -220,37 +221,37 @@ TEST_CASE("Plugin UI: a plugin cannot take the player's keys and requests, nor r
     s.frame();
 
     s.host.lua_social_edit = 3;
-    CHECK(s.run("plugin:A", "return eq.LuaSocialEditRequest()") == "nil");
+    CHECK(s.run("plugin:A", "return hs.LuaSocialEditRequest()") == "nil");
     CHECK(s.host.lua_social_edit == 3);
-    CHECK(s.run("", "return eq.LuaSocialEditRequest()") == "3");
+    CHECK(s.run("", "return hs.LuaSocialEditRequest()") == "3");
     CHECK(s.host.lua_social_edit == -1);
 
     app::chat_page_key(-1);
-    CHECK(s.run("plugin:A", "return eq.ChatPage(1)") == "nil");
+    CHECK(s.run("plugin:A", "return hs.ChatPage(1)") == "nil");
     app::chat_history_key(true);
-    CHECK(s.run("plugin:A", "return eq.ChatHistory(1, true)") == "nil");
+    CHECK(s.run("plugin:A", "return hs.ChatHistory(1, true)") == "nil");
     app::request_chat_link_all({"tag"});
-    CHECK(s.run("plugin:A", "return eq.ChatTakeFocus(1, '')") == "nil");
+    CHECK(s.run("plugin:A", "return hs.ChatTakeFocus(1, '')") == "nil");
     CHECK(sent.empty());
     app::tell_key();
-    CHECK(s.run("plugin:A", "return eq.ChatTakeFocus(1)") == "nil");
+    CHECK(s.run("plugin:A", "return hs.ChatTakeFocus(1)") == "nil");
     // (whatever the pack's chat windows here make of them, the pending keys are taken by the pack)
-    s.run("", "eq.ChatTakeFocus(1, '') eq.ChatTakeFocus(1) eq.ChatPage(1) return 1");
+    s.run("", "hs.ChatTakeFocus(1, '') hs.ChatTakeFocus(1) hs.ChatPage(1) return 1");
 
     for (const char* dialog : {"ConfirmationDialogBox", "TradeWnd", "GiveWnd", "QuantityWnd", "GroupInvite",
                                "RespawnWnd", "PluginConsent"}) {
         CAPTURE(dialog);
-        s.run("plugin:A", std::string("eq.ReplaceWindow('") + dialog + "') eq.WindowShown('" + dialog + "') return 1");
+        s.run("plugin:A", std::string("hs.ReplaceWindow('") + dialog + "') hs.WindowShown('" + dialog + "') return 1");
         CHECK_FALSE(s.api->replaces(dialog));
-        s.run("", std::string("eq.WindowShown('") + dialog + "') return 1");
+        s.run("", std::string("hs.WindowShown('") + dialog + "') return 1");
         CHECK(s.api->replaces(dialog));
     }
-    s.run("plugin:A", "eq.WindowShown('InventoryWindow') return 1"); // a window that does not act: as before
+    s.run("plugin:A", "hs.WindowShown('InventoryWindow') return 1"); // a window that does not act: as before
     CHECK(s.api->replaces("InventoryWindow"));
 }
 
-// Every eq function says what a plugin's code needs to call it (app/lua_eq_caps.h): a new one must be put in a group.
-TEST_CASE("Plugin UI: every eq function is listed with what a plugin needs to call it") {
+// Every hs function says what a plugin's code needs to call it (app/lua_ui_caps.h): a new one must be put in a group.
+TEST_CASE("Plugin UI: every hs function is listed with what a plugin needs to call it") {
     SandboxUi s;
     lua_State* L = s.lua->state();
     std::vector<std::string> unlisted;
@@ -260,13 +261,13 @@ TEST_CASE("Plugin UI: every eq function is listed with what a plugin needs to ca
         while (lua_next(L, t)) {
             if (lua_type(L, -2) == LUA_TSTRING) {
                 const std::string name = prefix + lua_tostring(L, -2);
-                if (lua_isfunction(L, -1) && !app::eq_call_caps(name)) unlisted.push_back(name);
-                else if (lua_istable(L, -1) && prefix.empty()) walk(-1, name + ".");
+                if (lua_isfunction(L, -1) && !app::ui_call_caps(name)) unlisted.push_back(name);
+                else if (lua_istable(L, -1)) walk(-1, name + ".");
             }
             lua_pop(L, 1);
         }
     };
-    lua_getglobal(L, "eq");
+    lua_getglobal(L, "hs");
     walk(-1, "");
     lua_pop(L, 1);
     std::sort(unlisted.begin(), unlisted.end());
@@ -275,48 +276,203 @@ TEST_CASE("Plugin UI: every eq function is listed with what a plugin needs to ca
     CHECK_MESSAGE(unlisted.empty(), all);
 }
 
-// A plugin's code calls an eq function that acts in the game only with the capability it needs (app/lua_eq_caps.h);
+// A plugin's code calls an hs function that acts in the game only with the capability it needs (app/lua_ui_caps.h);
 // refused, it does nothing and gives nil. The pack's own code calls everything.
-TEST_CASE("Plugin UI: eq functions that act need the plugin's capability") {
+TEST_CASE("Plugin UI: hs functions that act need the plugin's capability") {
     SandboxUi s;
     s.caps["plugin:R"] = plugin::kCapRead | plugin::kCapUi;
     s.caps["plugin:A"] = plugin::kCapRead | plugin::kCapUi | plugin::kCapActions;
     s.add_folder("plugin:R");
     s.add_folder("plugin:A");
     s.frame();
-    CHECK(app::eq_call_caps("ClickSlot") == plugin::kCapActions);
-    CHECK(app::eq_call_caps("ShowWindow") == plugin::kCapCommands);
-    CHECK(app::eq_call_caps("Item") == 0u);
-    CHECK(app::eq_call_caps("ItemJob") == 0u); // reads the job; StopItemJob acts
-    CHECK(app::eq_call_caps("StopItemJob") == plugin::kCapActions);
+    CHECK(app::ui_call_caps("ClickSlot") == plugin::kCapActions);
+    CHECK(app::ui_call_caps("ShowWindow") == plugin::kCapCommands);
+    CHECK(app::ui_call_caps("Item") == 0u);
+    CHECK(app::ui_call_caps("ItemJob") == 0u); // reads the job; StopItemJob acts
+    CHECK(app::ui_call_caps("StopItemJob") == plugin::kCapActions);
     // Walks: a /nav walk is movement, the Find window's and the zone finder's alike.
-    CHECK(app::eq_call_caps("ZoneExitWalk") == plugin::kCapMove);
-    CHECK(app::eq_call_caps("FindNpcWalk") == plugin::kCapMove);
+    CHECK(app::ui_call_caps("ZoneExitWalk") == plugin::kCapMove);
+    CHECK(app::ui_call_caps("FindNpcWalk") == plugin::kCapMove);
     // Menu mode, as set_mode("menu"): the pad's buttons stop driving the character.
-    CHECK(app::eq_call_caps("gamepad.request_focus") == plugin::kCapCommands);
-    CHECK(app::eq_call_caps("gamepad.set_mode") == plugin::kCapCommands);
-    CHECK(app::eq_call_caps("gamepad.rumble") == 0u);
+    CHECK(app::ui_call_caps("gamepad.request_focus") == plugin::kCapCommands);
+    CHECK(app::ui_call_caps("gamepad.set_mode") == plugin::kCapCommands);
+    CHECK(app::ui_call_caps("gamepad.rumble") == 0u);
     // A dry run runs the code it is given with the server's Lua social capabilities: as SetLuaSocial.
-    CHECK(app::eq_call_caps("LuaSocialDryRun") == (plugin::kCapCommands | plugin::kCapActions));
+    CHECK(app::ui_call_caps("LuaSocialDryRun") == (plugin::kCapCommands | plugin::kCapActions));
     // The autoskill list's entries and rules choose what it uses later, on its own: actions as well.
-    CHECK(app::eq_call_caps("AbilityBookAutoskill") == (plugin::kCapCommands | plugin::kCapActions));
-    CHECK(app::eq_call_caps("AbilityBookAutoskillRule") == (plugin::kCapCommands | plugin::kCapActions));
-    CHECK_FALSE(app::eq_call_caps("NoSuchFunction"));
+    CHECK(app::ui_call_caps("AbilityBookAutoskill") == (plugin::kCapCommands | plugin::kCapActions));
+    CHECK(app::ui_call_caps("AbilityBookAutoskillRule") == (plugin::kCapCommands | plugin::kCapActions));
+    CHECK_FALSE(app::ui_call_caps("NoSuchFunction"));
     // (no such window: the real functions give false; a refused call gives nil)
-    const std::string calls = "return tostring(eq.ClickChild('NoWnd', 'X')) .. ' ' .. tostring(eq.WindowButton('NoWnd', "
-                              "'X')) .. ' ' .. tostring(eq.InGame())";
+    const std::string calls = "return tostring(hs.ClickChild('NoWnd', 'X')) .. ' ' .. tostring(hs.WindowButton('NoWnd', "
+                              "'X')) .. ' ' .. tostring(hs.InGame())";
     CHECK(s.run("", calls) == "false false false");
     CHECK(s.run("plugin:A", calls) == "false false false");
     CHECK(s.run("plugin:R", calls) == "nil nil false");
     // Through a function of the pack's that the plugin calls, and through one it took earlier: the same.
-    CHECK(s.run("", "function PackClick() return tostring(eq.ClickChild('NoWnd', 'X')) end return 1") == "1");
+    CHECK(s.run("", "function PackClick() return tostring(hs.ClickChild('NoWnd', 'X')) end return 1") == "1");
     CHECK(s.run("plugin:R", "return PackClick()") == "nil");
-    CHECK(s.run("plugin:R", "local f = eq.ClickChild return tostring(f('NoWnd', 'X'))") == "nil");
+    CHECK(s.run("plugin:R", "local f = hs.ClickChild return tostring(f('NoWnd', 'X'))") == "nil");
     CHECK(s.run("", "return PackClick()") == "false");
 }
 
+TEST_CASE("Plugin UI: modular contract aliases retain caller identity and nested read-only views") {
+    SandboxUi s;
+    s.caps["plugin:R"] = plugin::kCapRead | plugin::kCapUi;
+    s.caps["plugin:A"] = plugin::kCapRead | plugin::kCapUi | plugin::kCapActions;
+    s.add_folder("plugin:R");
+    s.add_folder("plugin:A");
+    s.frame();
+
+    CHECK(s.run("", "return hs.UI ~= nil and eq == nil") == "true");
+    CHECK(s.run("plugin:R", "return hs.UI ~= nil and eq == hs") == "true");
+
+    const std::string action = "return tostring(hs.UI.windows.ClickChild('NoWnd', 'X'))";
+    CHECK(s.run("", action) == "false");
+    CHECK(s.run("plugin:A", action) == "false");
+    CHECK(s.run("plugin:R", action) == "nil");
+    CHECK(s.run("plugin:R", "return hs.UI.windows.ClickChild == hs.ClickChild and "
+                            "hs.UI.gamepad.SetMode == hs.gamepad.set_mode") == "true");
+    CHECK(s.run("plugin:R", "return hs.UI.Supports('windows', 'ClickChild')") == "true");
+    CHECK(s.run("plugin:R", "return hs.UI.Describe('windows', 'ClickChild').requiredCaps") ==
+          std::to_string(plugin::kCapActions));
+    CHECK(s.run("plugin:R", "hs.UI.windows.Show = function() end").find("cannot be changed") != std::string::npos);
+    CHECK(s.run("plugin:R", "hs.UI.version.major = 999").find("cannot be changed") != std::string::npos);
+    // rawset can shadow a field on this folder's proxy, as on the legacy hs proxy, without changing the real API.
+    CHECK(s.run("plugin:R", "rawset(hs.UI.windows, 'Show', function() return 'local' end) "
+                            "return hs.UI.windows.Show()") == "local");
+    CHECK(s.run("", "return hs.UI.windows.Show == hs.ShowWindow") == "true");
+    CHECK(s.run("plugin:A", "return hs.UI.windows.Show == hs.ShowWindow") == "true");
+    CHECK(s.run("plugin:R", "return getmetatable(hs.UI.windows)") == "false");
+
+    CHECK(s.run("", "function ModularPackClick() return tostring(hs.UI.windows.ClickChild('NoWnd', 'X')) end "
+                    "return 1") == "1");
+    CHECK(s.run("plugin:R", "return ModularPackClick()") == "nil");
+    CHECK(s.run("plugin:R", "saved = hs.UI.windows.ClickChild return tostring(saved('NoWnd', 'X'))") == "nil");
+    CHECK(s.run("", "return ModularPackClick()") == "false");
+
+    s.host.lua_social_edit = 7;
+    CHECK(s.run("plugin:A", "return hs.UI.luasocials.EditRequest()") == "nil");
+    CHECK(s.host.lua_social_edit == 7);
+    CHECK(s.run("", "return hs.UI.luasocials.EditRequest()") == "7");
+    CHECK(s.host.lua_social_edit == -1);
+
+    // A folder's saved alias keeps its owner when the pack calls it, and stops after that folder goes away.
+    CHECK(s.run("", "MODULAR_SHARED = {} return 1") == "1");
+    CHECK(s.run("plugin:R", "MODULAR_SHARED.click = hs.UI.windows.ClickChild return 1") == "1");
+    CHECK(s.run("", "local result = MODULAR_SHARED.click('NoWnd', 'X') return tostring(result)") == "nil");
+    CHECK(s.run("plugin:A", "return MODULAR_SHARED.click('NoWnd', 'X')").find("plugin:R's") != std::string::npos);
+    s.folders.erase(s.folders.begin());
+    s.lua->set_folders(s.folders);
+    s.frame();
+    CHECK(s.run("", "local result = MODULAR_SHARED.click('NoWnd', 'X') return tostring(result)") == "nil");
+    CHECK(s.run("", "return ModularPackClick()") == "false");
+}
+
+TEST_CASE("Plugin UI: retained modular aliases keep caller checks after real API registration repeats") {
+    SandboxUi s;
+    s.caps["plugin:R"] = plugin::kCapRead | plugin::kCapUi;
+    s.add_folder("plugin:R");
+    s.frame();
+    CHECK(s.run("plugin:R", "oldUI=hs.UI oldClick=hs.UI.windows.ClickChild "
+                            "return tostring(oldClick('NoWnd','X'))") == "nil");
+    s.lua->add_ui_api([&](lua_State* L) { s.api->register_functions(L); });
+    CHECK(s.run("plugin:R", "return oldUI ~= hs.UI and hs.UI.windows.ClickChild == hs.ClickChild") == "true");
+    CHECK(s.run("plugin:R", "return tostring(oldClick('NoWnd','X')) .. ':' .. "
+                            "tostring(hs.UI.windows.ClickChild('NoWnd','X'))") == "nil:nil");
+    s.caps["plugin:R"] |= plugin::kCapActions;
+    CHECK(s.run("plugin:R", "return tostring(oldClick('NoWnd','X')) .. ':' .. "
+                            "tostring(hs.UI.windows.ClickChild('NoWnd','X'))") == "false:false");
+}
+
+TEST_CASE("Plugin UI: deprecated addon namespace is the same guarded view without a root alias") {
+    SandboxUi s;
+    s.host.in_game = true;
+    s.caps["plugin:legacy"] = plugin::kCapRead | plugin::kCapUi;
+    s.caps["script:legacy"] = plugin::kCapRead | plugin::kCapUi | plugin::kCapActions;
+    s.bridge.add_function("legacy", "read", [](const std::vector<plugin::UiValue>&) {
+        return plugin::UiValue::string("native");
+    });
+    s.bridge.add_function("legacy", "read", [](const std::vector<plugin::UiValue>&) {
+        return plugin::UiValue::string("script");
+    }, plugin::UiBridge::Kind::Script);
+    for (const char* tag : {"plugin:legacy", "script:legacy"})
+        s.add_folder(tag, R"lua(
+local owner=eq.Plugin('legacy')
+legacyRead=eq.InGame() and owner.read()
+ui.window('Legacy addon##'..owner.owner,function() legacyDraw=eq.InGame() end)
+)lua");
+    s.frame();
+    CHECK(s.run("", "return hs.UI ~= nil and eq == nil and rawget(_G,'eq') == nil") == "true");
+    CHECK(s.run("plugin:legacy", "return legacyRead .. ':' .. tostring(legacyDraw)") == "native:true");
+    CHECK(s.run("script:legacy", "return legacyRead .. ':' .. tostring(legacyDraw)") == "script:true");
+    for (const char* tag : {"plugin:legacy", "script:legacy"}) {
+        CHECK(s.run(tag, "return eq == hs and eq.UI == hs.UI and eq.ClickChild == hs.ClickChild") == "true");
+        CHECK(s.run(tag, "return type(eq.SpellBook)..':'..type(eq.AbilityBook)..':'..type(eq.ItemIcon)..':'.."
+                         "type(eq.SpellIcon)..':'..type(eq.ShowSpell)") == "function:function:function:function:function");
+        CHECK(s.run(tag, "eq.InGame = function() return false end").find("cannot be changed") != std::string::npos);
+        CHECK(s.run(tag, "eq.UI.windows.ClickChild = function() return true end").find("cannot be changed") != std::string::npos);
+    }
+    CHECK(s.run("plugin:legacy", "return tostring(eq.ClickChild('NoWnd','X'))") == "nil");
+    CHECK(s.run("script:legacy", "return tostring(eq.ClickChild('NoWnd','X'))") == "false");
+    s.caps["plugin:legacy"] |= plugin::kCapActions;
+    CHECK(s.run("plugin:legacy", "return tostring(eq.ClickChild('NoWnd','X'))") == "false");
+    s.caps["plugin:legacy"] &= ~plugin::kCapActions;
+    CHECK(s.run("plugin:legacy", "return tostring(eq.ClickChild('NoWnd','X'))") == "nil");
+}
+
+TEST_CASE("Plugin UI: deprecated addon aliases retain reload generations and removed-owner checks") {
+    SandboxUi s;
+    s.caps["plugin:legacy"] = plugin::kCapRead | plugin::kCapUi;
+    s.add_pack_file("shared.lua", "LEGACY_SAVED={}\n");
+    s.add_folder("plugin:legacy", R"lua(
+LEGACY_SAVED.click=eq.ClickChild
+LEGACY_SAVED.register=eq.UI.extensions.RegisterAction
+version=1
+)lua");
+    s.frame();
+    CHECK(s.run("", "return tostring(LEGACY_SAVED.click('NoWnd','X'))") == "nil");
+    const auto file = s.folders[0].dir / "w.lua";
+    const auto before = fs::last_write_time(file);
+    std::ofstream(file) << "version=2;legacy_reload=eq==hs\n";
+    fs::last_write_time(file, before + std::chrono::seconds(2));
+    s.lua->rescan_for_test();s.frame();
+    CHECK(s.run("plugin:legacy", "return version==2 and legacy_reload") == "true");
+    CHECK(s.run("plugin:legacy", "return pcall(LEGACY_SAVED.register,'RaidWindow','member_actions','stale','Stale',{},function()end)") == "false");
+    s.caps["plugin:legacy"] |= plugin::kCapActions;
+    CHECK(s.run("", "return tostring(LEGACY_SAVED.click('NoWnd','X'))") == "false");
+    s.lua->set_folders({});s.frame();
+    CHECK(s.run("", "local result=LEGACY_SAVED.click('NoWnd','X');return tostring(result)") == "nil");
+    CHECK(s.run("", "return hs.UI ~= nil and eq == nil") == "true");
+}
+
+TEST_CASE("Plugin UI: selected legacy interface roots share the finalized API without widening addon views") {
+    SandboxUi s(true);
+    s.host.in_game = true;
+    s.caps["plugin:legacy"] = plugin::kCapRead | plugin::kCapUi;
+    s.add_pack_file("legacy.lua", R"lua(
+rootLoaded=eq.InGame() and eq==hs and eq.UI==hs.UI
+rootClick=eq.ClickChild
+ui.window('Legacy root',function() rootDraw=eq.InGame() end)
+)lua");
+    s.add_folder("plugin:legacy", "addonLoaded=eq==hs and eq.InGame()\n");
+    s.frame();
+    CHECK(s.run("", "return rootLoaded and rootDraw and eq.UI.Supports('windows','ClickChild')") == "true");
+    CHECK(s.run("", "return eq==hs and eq.UI.windows.ClickChild==hs.ClickChild") == "true");
+    CHECK(s.run("", "return tostring(eq.ClickChild('NoWnd','X'))") == "false");
+    CHECK(s.run("plugin:legacy", "return addonLoaded and eq==hs and eq.UI==hs.UI") == "true");
+    CHECK(s.run("plugin:legacy", "return tostring(eq.ClickChild('NoWnd','X')) .. ':' .. tostring(rootClick('NoWnd','X'))") == "nil:nil");
+    CHECK(s.run("plugin:legacy", "eq.ClickChild=function()return true end").find("cannot be changed") != std::string::npos);
+    CHECK(s.run("", "return eq.ClickChild==hs.ClickChild") == "true");
+    s.lua->add_ui_api([&](lua_State* L) { s.api->register_functions(L); });
+    CHECK(s.run("", "return eq==hs and eq.UI==hs.UI and eq.UI.windows.ClickChild==hs.ClickChild") == "true");
+    CHECK(s.run("plugin:legacy", "return tostring(eq.UI.windows.ClickChild('NoWnd','X'))") == "nil");
+    s.caps["plugin:legacy"] |= plugin::kCapActions;
+    CHECK(s.run("plugin:legacy", "return tostring(eq.ClickChild('NoWnd','X'))") == "false");
+}
+
 // While the player is asked about a server's compiled plugins, no plugin can draw over the question (ui.Foreground),
-// find where it is (ui.FindWindowRect) or put the client's own prompt away (eq.WindowShown("PluginConsent")), and the
+// find where it is (ui.FindWindowRect) or put the client's own prompt away (hs.WindowShown("PluginConsent")), and the
 // question's windows are raised above the rest at the end of the frame.
 TEST_CASE("Plugin UI: the consent question's windows are the pack's alone") {
     SandboxUi s;
@@ -329,8 +485,8 @@ TEST_CASE("Plugin UI: the consent question's windows are the pack's alone") {
         return std::nullopt;
     };
     s.add_pack_file("consent.lua", "ui.window('Server Plugins', function()\n"
-                                   "  if not eq.PluginConsent() or NO_PACK_CONSENT then return end\n"
-                                   "  eq.WindowShown('PluginConsent')\n"
+                                   "  if not hs.PluginConsent() or NO_PACK_CONSENT then return end\n"
+                                   "  hs.WindowShown('PluginConsent')\n"
                                    "  ui.SetNextWindowPos(100, 100)\n"
                                    "  ui.Begin('Consent##q') ui.Text('Allow?') ui.End()\n"
                                    "end)\n");
@@ -339,7 +495,7 @@ TEST_CASE("Plugin UI: the consent question's windows are the pack's alone") {
                              "  ui.Begin('Cover##c') ui.Text('cover') ui.End()\n"
                              "  ui.Foreground(true) ui.DrawRectFilled(0, 0, 50, 50, 1, 0, 0, 1) ui.Foreground(false)\n"
                              "  local x = ui.FindWindowRect('Consent##q') RECT = x and math.floor(x) or false\n"
-                             "  eq.WindowShown('PluginConsent')\n"
+                             "  hs.WindowShown('PluginConsent')\n"
                              "  INTO = ui.Begin('Consent##q') ui.Button('inject')\n"
                              "  if ui.BeginChild('c', 10, 10) then ui.Text('inject') end ui.EndChild()\n"
                              "  ui.End()\n"
@@ -395,8 +551,8 @@ TEST_CASE("Plugin UI: the consent question's windows are the pack's alone") {
 TEST_CASE("Plugin UI: what a plugin leaves in the pack's shared tables runs as the plugin") {
     SandboxUi s;
     s.add_pack_file("state.lua", "SHARED = { focus = 'pack', list = { 1, 2 }, nested = { deep = { v = 1 } } }\n"
-                                 "function Who() return eq.Who() end\n");
-    s.lua->add_eq_api([](lua_State* L) {
+                                 "function Who() return hs.Who() end\n");
+    s.lua->add_ui_api([](lua_State* L) {
         lua_pushcfunction(L, [](lua_State* S) -> int {
             const std::string tag(ui::lua::LuaUi::caller_tag());
             lua_pushstring(S, tag.empty() ? "pack" : tag.c_str());
@@ -428,7 +584,7 @@ TEST_CASE("Plugin UI: what a plugin leaves in the pack's shared tables runs as t
 
     // A function it leaves there, or in a table of its own it leaves there: the plugin's, whoever calls it.
     CHECK(s.run("plugin:A", "SHARED.cb = function() return Who() end "
-                            "SHARED.mine = { cb = function() return eq.Who() end, n = 5 } return 1") == "1");
+                            "SHARED.mine = { cb = function() return hs.Who() end, n = 5 } return 1") == "1");
     CHECK(s.run("", "return SHARED.cb() .. ' ' .. SHARED.mine.cb() .. ' ' .. SHARED.mine.n .. ' ' .. Who()") ==
           "plugin:A plugin:A 5 pack");
     // Another plugin cannot use them to act as A, nor change them.
@@ -441,7 +597,7 @@ TEST_CASE("Plugin UI: what a plugin leaves in the pack's shared tables runs as t
     CHECK(s.run("plugin:A", "rawset(SHARED.nested, 'cb', function() end)").find("rawset") != std::string::npos);
     // (Its own table, read back through the pack's, is its own again: rawset there still leaves a function the pack
     // reads through the owned view, which runs it as the plugin.)
-    CHECK(s.run("plugin:A", "rawset(SHARED.mine, 'raw', function() return eq.Who() end) "
+    CHECK(s.run("plugin:A", "rawset(SHARED.mine, 'raw', function() return hs.Who() end) "
                             "return tostring(rawequal(SHARED.mine, SHARED.mine))") == "true");
     CHECK(s.run("", "return SHARED.mine.raw()") == "plugin:A");
     CHECK(s.run("plugin:A", "setmetatable({}, { __gc = function() end })").find("__gc") != std::string::npos);
@@ -572,7 +728,7 @@ TEST_CASE("Plugin UI: the clipboard is the pack's, and a plugin's only with ever
 }
 
 namespace {
-const char kThingMeta = 0; // (the registry key of eq.Thing's metatable, below)
+const char kThingMeta = 0; // (the registry key of hs.Thing's metatable, below)
 } // namespace
 
 // What crosses from the pack to a plugin comes as a view whatever way it comes: a pack function the plugin calls
@@ -584,8 +740,8 @@ TEST_CASE("Plugin UI: what pack functions return and pass to a plugin comes as v
                                  "function GetShared() return SHARED end\n"
                                  "function Fail() error(SHARED.other) end\n"
                                  "SHARED.get = function() return SHARED.nested end\n"
-                                 "function Who() return eq.Who() end\n");
-    s.lua->add_eq_api([](lua_State* L) {
+                                 "function Who() return hs.Who() end\n");
+    s.lua->add_ui_api([](lua_State* L) {
         lua_pushcfunction(L, [](lua_State* S) -> int {
             const std::string tag(ui::lua::LuaUi::caller_tag());
             lua_pushstring(S, tag.empty() ? "pack" : tag.c_str());
@@ -635,8 +791,8 @@ TEST_CASE("Plugin UI: what pack functions return and pass to a plugin comes as v
 
     // getmetatable: its own metatables as they are, the client's as views.
     CHECK(s.run("plugin:A", "local mt = {} return rawequal(getmetatable(setmetatable({}, mt)), mt)") == "true");
-    CHECK(s.run("plugin:A", "getmetatable(eq.Thing()).__index = function() return Who() end return 1") == "1");
-    CHECK(s.run("", "return eq.Thing().anything") == "plugin:A");
+    CHECK(s.run("plugin:A", "getmetatable(hs.Thing()).__index = function() return Who() end return 1") == "1");
+    CHECK(s.run("", "return hs.Thing().anything") == "plugin:A");
     CHECK(s.run("plugin:A", "return getmetatable('')") == "false");
 }
 

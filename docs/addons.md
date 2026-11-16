@@ -6,11 +6,18 @@ keeps it up to date. It is a Hailstone
 feature with no counterpart in the original client. It is built on the updater's parts (docs/updater.md): the HTTPS
 download (`platform/http_get`), the zip reader (`core/zip_read`), SHA-256 and Ed25519 (`core/ed25519`).
 
+A script manifest may opt into managed startup with `autoload 1`. Installation enables that script, and **Enabled**
+in **My add-ons** controls whether it starts when the server permits it. Other addon kinds do not use this flag.
+Updates preserve the installed management and the player's activation switch until removal/reinstallation, even
+if a later manifest drops `autoload`; an update cannot bypass a disabled switch through ordinary script autorun.
+An ordinary script that first opts in through an update waits for the player to enable it. Automatic updates remain
+a separate choice.
+
 ## What the player sees
 
 **Add-ons** on the login screen opens a card in the Modern pack (beside the characters card, so Play stays in reach;
 it stays open until Close), a page under More in the Gamepad pack, and a window in the client's own ImGui screen. All
-three draw `ui::LoginView::addons` (`view.addons` in Lua, app/lua_eq_pregame.cpp), as the update notice is drawn. The
+three draw `ui::LoginView::addons` (`view.addons` in Lua, app/lua_ui_pregame.cpp), as the update notice is drawn. The
 Modern card has two tabs: **Find add-ons** (the store, below), where it opens, and **My add-ons** (the list).
 
 **Find add-ons** lists every add-on of the add-on index (see Finding add-ons), so a player can find one without a
@@ -34,7 +41,7 @@ The client fetches the add-on's manifest and shows a card before it writes anyth
   a permission this Hailstone does not know, or its name is taken;
 - when it is an older version than the one installed (a link to an older release's tag, or a release taken back),
   a warning that installing it goes back to that version, and **Install the older version** in place of Install:
-  `eq.LoginDo("addonInstall")` alone does not take it, `eq.LoginDo("addonInstall", "older")` does
+  `hs.LoginDo("addonInstall")` alone does not take it, `hs.LoginDo("addonInstall", "older")` does
   (`AddonOffer::older`, `AddonManager::install_offer(true)`);
 - **Install**, **Cancel** and **Repository**.
 
@@ -290,6 +297,53 @@ paste that one's link. The Project Triune plugin is released that way (projectha
 the NMS plugin and the Auto Combat script from their own repositories. Each has a `tools/release.sh` that builds,
 packs, signs and uploads.
 
+## UI packs
+
+A `kind ui` addon installs interfaces under
+`ui-addons/<addon>/ui/<pack>/ui.ini` in the Hailstone data folder. They appear
+automatically in **Interface** after installation; they do not use `/lua run`,
+Script Autorun or a script entrypoint. Each interface has the stable ID
+`addon.<addon>.<pack>`. Built-in IDs remain unchanged. Each addon and pack name
+uses letters, digits, underscores or hyphens, beginning with a letter or digit.
+
+**Full client interface access:** installing a UI pack explicitly trusts its
+presentation code as a complete client interface, like manually installed UI
+code. It can call host interface, account and game actions. This is not a
+script/plugin capability sandbox. The install card discloses this trust;
+same-kind updates retain it, and an addon cannot change its kind in place.
+
+A UI manifest uses `package any`; `caps` may be absent or `caps none`, and does
+not limit the full-interface trust grant. Archives contain one or more
+`ui/<pack>/ui.ini` entries, optional presentation Lua/assets below those folders,
+and optional top-level license/readme notices. They contain no programs or
+root-level startup script. Lua is compiled as text during installation and is
+only run through the selected interface's presentation lifecycle. ZIP path,
+case-collision, CRC and Lua size checks still apply. Nested directories must use
+consistent spelling and cannot also name a file, so a portable bundle behaves
+the same on case-sensitive and case-insensitive filesystems. UI bundles are limited to
+4,096 files and 64 MiB unpacked. Updates/removal preserve files the addon did
+not own, and use the existing transactional journal and pinned signing keys.
+
+Player-derived presentation modules belong outside those managed code files,
+under `ui-data/<stable-interface-id>/` in the data folder. Interfaces can import
+them with `hs.UI.interfaces.LoadData`; only selected and approved base IDs are
+searched. These are shared, non-secret styles/layouts, not credentials or private
+settings. Core and add-on updates preserve them, and removing the add-on leaves
+them available for a later reinstall. Portable UI packages contain the original
+presentation code and metadata; local presentation data is managed separately.
+
+Build a UI package with:
+
+```sh
+python tools/make_addon.py --name my-interface --kind ui --version 1.0.0 \
+    --dir path/to/package --out release/
+```
+
+Use `base=builtin:modern` to inherit the built-in Modern interface, or an
+installed qualified interface ID for an explicit cross-addon base. A runtime
+or game source that is unavailable is reported separately from installation;
+installing metadata does not supply missing game resources.
+
 ## GitHub only
 
 Only `github.com` links are taken. A download may end only on GitHub's own hosts, whatever redirects it took:
@@ -441,11 +495,11 @@ in the Modern pack `test.addontab=store` (or `mine`) picks its tab.
 | `app/addon_manager.*` | the worker: fetch, check, download, unpack; `install_ready` on the main thread; the store's manifests (`browse`); the server's and the hand-installed lists |
 | `app/client_app_addons.cpp` | the client's part: the view, the actions, when files may move, starting a tool (`start_addon_tool`) |
 | `plugin/policy.*` | `Ceiling`, `parse_caps_strict`, `caps_described` |
-| `app/lua_eq_pregame.cpp` | `view.addons`, `eq.LoginSet("addonLink" \| "addonsOpen")`, `eq.LoginDo("addonInspect" \| "addonInstall" \| "addonCancel" \| "addonUpdate" \| "addonRemove" \| "addonAuto" \| "addonFolder" \| "addonPage" \| "addonCheck" \| "addonRevoke" \| "addonAskAgain" \| "addonSuggestLook" \| "addonSuggestLater" \| "addonSuggestNever" \| "addonBrowse" \| "addonStoreLook" \| "addonStart")`, `view.addons.suggestions`, `view.addons.store`; `eq.ServerSelect().addonHint` |
+| `app/lua_ui_pregame.cpp` | `view.addons`, `hs.LoginSet("addonLink" \| "addonsOpen")`, `hs.LoginDo("addonInspect" \| "addonInstall" \| "addonCancel" \| "addonUpdate" \| "addonRemove" \| "addonAuto" \| "addonFolder" \| "addonPage" \| "addonCheck" \| "addonRevoke" \| "addonAskAgain" \| "addonSuggestLook" \| "addonSuggestLater" \| "addonSuggestNever" \| "addonBrowse" \| "addonStoreLook" \| "addonStart")`, `view.addons.suggestions`, `view.addons.store`; `hs.ServerSelect().addonHint` |
 | `ui/modern/login.lua`, `ui/gamepad/login.lua`, `ui/dev_screens.cpp` | the panel, and the suggestions under the login card |
 | `ui/modern/serverselect.lua`, `ui/gamepad/serverselect.lua` | the server select's line about a suggested add-on |
 
-A plugin's windows get none of this: `eq.LoginScreen` is nil for them, as for every pre-game screen, so a plugin
+A plugin's windows get none of this: `hs.LoginScreen` is nil for them, as for every pre-game screen, so a plugin
 cannot install another.
 
 ## Tests and what is not checked
@@ -465,7 +519,7 @@ cannot install another.
   what keeps one from being installed, once a run unless refreshed, no index).
 - `tests/addon_upscaler_test.cpp`: an upscaler's manifest, what its package may hold, its install, the hand-put list,
   the manager installing one, and the copy the client loads.
-- `tests/plugin_policy_test.cpp` (the ceiling), `tests/lua_eq_pregame_test.cpp` (the Lua view and actions),
+- `tests/plugin_policy_test.cpp` (the ceiling), `tests/lua_ui_pregame_test.cpp` (the Lua view and actions),
   `tests/ui_pack_windows_test.cpp` (both packs draw the panel and the store in each state), `tests/dev_ui_test.cpp`
   (the client's own window and store).
 

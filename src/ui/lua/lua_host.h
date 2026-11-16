@@ -1,7 +1,7 @@
 #pragma once
 
 // The Lua UI: windows written as Lua scripts over Dear ImGui (the `ui` table)
-// and the game (the `eq` table). Scripts are loaded from the UI's folder (ui/<name>), reloaded
+// and the game (the `hs` table). Scripts are loaded from the UI's folder (ui/<name>), reloaded
 // when they change, and each window they register with ui.window(name, draw)
 // is drawn once per frame. A script error never stops the client: it shows in
 // the "UI errors" window and the failed window stays off until it reloads.
@@ -13,6 +13,7 @@
 #include <functional>
 #include <string_view>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,7 +25,7 @@ namespace hailstone::ui {
 
 // EQ UI font 1..6 (the <Font> numbers in the stock XML); null outside that
 // range or before the ImGui layer loaded them.
-ImFont* eq_font(int index);
+ImFont* ui_font(int index);
 // The chat windows' font list (/chatfontsize 0..10; ui/imgui_layer.cpp): null outside 0..10 or before it is loaded;
 // and each one's cell height in pixels at UI scale 1.
 inline constexpr std::size_t kChatFonts = 11;
@@ -40,7 +41,7 @@ void register_ui_api(lua_State* L); // the global `ui` table (lua_imgui.cpp)
 
 // Whether a Lua window stands in for the stock window `screen` (its XML screen name: "PlayerWindow",
 // "CastSpellWnd", ...). The temporary C++ windows ask before drawing, so each Lua window turns its C++ counterpart
-// off while it runs; the app sets the check (app/lua_eq.h EqApi::replaces).
+// off while it runs; the app sets the check (app/lua_ui.h UiApi::replaces).
 bool replaces(std::string_view screen);
 void set_replaced_check(std::function<bool(std::string_view)> check);
 
@@ -53,7 +54,7 @@ bool consent_guard();
 // The ImGui window just begun shows the question (the client's own prompt, after its Begin).
 void guard_current_window();
 // The pack's window drawing now (LuaUi::drawing_window) shows the question: the ImGui windows it begins this frame
-// are guarded (eq.PluginConsent asked from the pack's own code).
+// are guarded (hs.PluginConsent asked from the pack's own code).
 void guard_drawing_window();
 // At the end of the frame's windows: the guarded ones to the front.
 void raise_guarded_windows();
@@ -65,11 +66,18 @@ inline constexpr const char* kConsentWindowName = "Allow this server's plugin?##
 // there, so it cannot pop what the code around it pushed); after it returns (normally or not, once ImGui's stacks are
 // restored) that count is put back and anything the script set for the next window or item is dropped, so nothing it
 // left reaches the windows drawn after it.
-std::size_t windows_begun();
+std::size_t windows_begun(bool preserve_parent = false);
+// Recover only the innermost callback's additions; preserve caller-owned tables and tab bars.
+void recover_script_windows();
 void end_script_windows(std::size_t depth);
 // Whether `L` runs the pack's own code now: the UI pack's state (LuaUi; its registry holds kPackStateKey), with no
 // plugin folder's code running.
 bool pack_code(lua_State* L);
+// Execute a text Lua file from the caller's next approved UI base, retaining its environment and presenter owner.
+// Only the managed UI VM can call this; the public host binding is hs.UI.interfaces.LoadBase.
+int load_base_file(lua_State* L);
+// Shared presentation-data modules use separately approved data roots, retaining the same caller restrictions.
+int load_data_file(lua_State* L);
 // How many ui.CodeEditor states (lua_code_editor.cpp) are kept now; for the tests.
 std::size_t code_editors_kept();
 // The frame the longest-kept of them was first drawn in (-1 with none); for the tests.
@@ -90,38 +98,71 @@ void unview(lua_State* L, int idx);
 
 class LuaUi {
 public:
+    struct DataRoots {
+        std::filesystem::path root; // common presentation-data anchor, outside manager-owned code
+        std::vector<std::string> ids; // selected stable interface ID first, then approved bases in order
+    };
     // `scripts`: the UI's folder (ui/<name>, ui/ui_packs.h) holding the *.lua windows; dofile paths are
     // relative to it ("lib/sidl.lua"). The settings file keeps the scripts' key=value options.
-    LuaUi(std::filesystem::path scripts, std::filesystem::path settings);
+    // approved_bases is the nearest-first chain validated by list_ui_packs, not paths supplied by Lua code.
+    // legacy_alias temporarily gives a selected third-party interface root the same table under its old name.
+    LuaUi(std::filesystem::path scripts, std::filesystem::path settings,
+          std::vector<std::filesystem::path> approved_bases = {}, DataRoots presentation_data = {},
+          bool legacy_alias = false);
     ~LuaUi();
     LuaUi(const LuaUi&) = delete;
     LuaUi& operator=(const LuaUi&) = delete;
 
-    // Adds functions to the `eq` table (on the top of the stack); called once
+    // Adds functions to the `hs` table (on the top of the stack); called once
     // at start and again for every later registrar.
     using Registrar = std::function<void(lua_State*)>;
-    void add_eq_api(const Registrar& r);
+    void add_ui_api(const Registrar& r);
 
-    // Between ImGuiLayer::new_frame and render: reloads changed scripts (once
-    // a second) and draws the windows.
-    void frame();
+    // Between ImGuiLayer::new_frame and render: reloads changed scripts (once a second), maintains callback
+    // lifetimes, saves settings and collects garbage. draw=false skips window/control/error rendering only;
+    // source initializers still run under their ordinary owner scope when files change.
+    void frame(bool draw = true);
 
     lua_State* state() const;
     // Every byte the state has allocated since it was made, freed since or not (it wraps: take differences). Each
     // window's share of a frame goes to core::frame_sections::add_bytes under its section ("Lua window <name>").
     std::size_t allocated_bytes() const;
+    struct LoadStatus {
+        bool scanned = false;
+        std::size_t script_count = 0, loaded_script_count = 0, window_count = 0, error_count = 0;
+        std::vector<std::string> errors;
+    };
+    // Actual selected-pack loading/drawing errors, excluding independently owned plugin folders.
+    LoadStatus load_status() const;
     // Tests: each frame's collector slice is `steps` LUA_GCSTEPs instead of its time (0: the time), so a cycle spreads
     // over frames the same way on every machine.
     void set_gc_steps_for_test(int steps);
+    // Tests: let the next frame scan changed/removed overlays without waiting for the one-second scan interval.
+    void rescan_for_test();
     // Tests: the state's memory limit and how long the pack's and a plugin's code may run at a time (lua_host.cpp
     // kMemoryLimit, kPackBudget, kPluginBudget).
     void set_limits_for_test(std::size_t memory, std::chrono::milliseconds pack, std::chrono::milliseconds plugin);
     // The ui.window being drawn (its name) while its draw function runs, else "".
     static std::string_view drawing_window();
     // Whose code runs now: "" the pack's own (and the player's), a plugin folder's tag (set_folders) while that
-    // folder's code runs: its scripts loading, its windows drawing, and any function it took from `eq` or `ui`,
+    // folder's code runs: its scripts loading, its windows drawing, and any function it took from `hs` or `ui`,
     // whoever calls it. A pack window a plugin's draws (ui.base_window) runs as the plugin.
     static std::string_view caller_tag();
+    struct CallbackOwner {
+        std::string key, tag;
+        std::function<bool()> valid;
+        std::function<bool(lua_State*,int,int)> invoke;
+    };
+    // Captures the current file generation and normal caller scope for a retained callback. A reload,
+    // removed folder or closed VM invalidates it, even when another window retained the Lua closure.
+    static std::optional<CallbackOwner> callback_owner(lua_State* L);
+    // A callback-registration function taken from a host view retains its source generation as well as its tag.
+    static void source_generation_function(lua_State* L, int index);
+    // Host-private metadata cleanup only: no user callbacks, drawing or gameplay. At most 16 named services,
+    // replaced by name. Runs after source retirement/loading and each idle frame, protected while L is alive.
+    // Returning false leaves the caller's stack unchanged (not a UI state, closing, invalid name or capacity).
+    using CallbackMaintenance = std::function<void(lua_State*)>;
+    static bool set_callback_maintenance(lua_State* L, std::string_view name, const CallbackMaintenance& callback);
 
     // What a plugin folder's code runs under (the app: a plugin::CallerScope with that plugin's capabilities): made
     // when its code starts, released when it ends. Unset: nothing.
@@ -147,8 +188,8 @@ public:
     // folder's *.lua load like the UI's (named "<tag>/<file>" in errors), their dofile paths are relative to their
     // folder, and a folder no longer listed takes its windows with it. Applied at the next frame.
     // A folder's code is confined (docs/plugins.md "Plugin windows"): its globals are its own table (reads fall back
-    // to the pack's globals; writes stay its own), it sees `eq`, `ui` and the standard libraries read-only, every
-    // `eq` and `ui.window` function it takes runs as the folder (caller_tag, set_caller_scope), and dofile stays
+    // to the pack's globals; writes stay its own), it sees `hs`, `ui` and the standard libraries read-only, every
+    // `hs` and `ui.window` function it takes runs as the folder (caller_tag, set_caller_scope), and dofile stays
     // inside its folder or the pack's.
     struct Folder {
         std::string tag;

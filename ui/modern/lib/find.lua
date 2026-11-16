@@ -1,21 +1,49 @@
--- The Find window's state and look (eq.FindNpcs; Hailstone's Find window, the map's Find page), shared by the map
+-- The Find window's state and look (hs.FindNpcs; Hailstone's Find window, the map's Find page), shared by the map
 -- (map.lua) and the minimap (minimap.lua), so both mark the same NPCs: those of the kinds not left out that match the
 -- search.
 --
 --   local FL = dofile("lib/find.lua")
 --   FL.state             -- { search, sel (the selected NPC's id), hover (the hovered row's id), why, menu }
---   FL.CATS              -- eq.FindCategories(): { { key, label }, ... }
---   FL.rows()            -- the rows shown, nearest first (kept a moment, shared: do not change it)
+--   FL.CATS              -- hs.FindCategories(): { { key, label }, ... }
+--   FL.rows()            -- the rows authorized this frame, nearest first (shared: do not change it)
+--   FL.current(id, token) -- the same currently authorized actor, or nil
 --   FL.hidden()          -- the kinds left out, as a set of keys (find.hidden in ui/settings/modern.txt)
 --   FL.setHidden(key, hide)
 --   FL.marks()           -- whether the maps mark every listed NPC (map.npcMarks; the selected and hovered always)
 --   FL.drawMark(sx, sy, row, s, lit, label, T) -- a diamond in the kind's colour, named (with T, lib/theme) when `label`
+local API = hs.UI
 local FL = {}
+local NO_ROWS = {} -- shared, read-only empty result while NPC Find is unavailable
 
 FIND_STATE = FIND_STATE or { search = "", sel = nil, hover = nil, why = nil, menu = nil }
 FL.state = FIND_STATE
 
-FL.CATS = eq.FindCategories and eq.FindCategories() or {}
+local function clearState()
+  FIND_STATE.sel, FIND_STATE.selToken, FIND_STATE.hover, FIND_STATE.hoverToken = nil, nil, nil, nil
+  FIND_STATE.menu, FIND_STATE.why, FIND_STATE.rowsCache = nil, nil, nil
+end
+
+-- Policy is live state, not a saved display preference. The two map scripts share the same cache and selection.
+function FL.policy()
+  local query = API.map.Policy
+  local policy = type(query) == "function" and query() or nil
+  local stock = type(policy) ~= "table" or policy.stock_npcs ~= false
+  local find = type(policy) ~= "table" or policy.npc_find ~= false
+  local custom = type(policy) == "table" and policy.custom_spawns == true
+  local name = type(policy) == "table" and policy.name or ""
+  local revision = type(policy) == "table" and policy.revision or nil
+  local context = type(policy) == "table" and policy.context or nil
+  if FIND_STATE.policyStock ~= stock or FIND_STATE.policyFind ~= find or FIND_STATE.policyCustom ~= custom
+      or FIND_STATE.policyName ~= name or FIND_STATE.policyRevision ~= revision or FIND_STATE.policyContext ~= context then
+    clearState()
+    FIND_STATE.policyStock, FIND_STATE.policyFind, FIND_STATE.policyCustom, FIND_STATE.policyName = stock, find, custom, name
+    FIND_STATE.policyRevision, FIND_STATE.policyContext = revision, context
+  end
+  if not find then clearState() end
+  return stock, find
+end
+
+FL.CATS = API.find.Categories and API.find.Categories() or {}
 FL.SHORT = { merchant = "Merchants", banker = "Bankers", guildmaster = "Guildmasters", special = "Special",
   service = "Services", quest = "Quests", poi = "Points" }
 FL.COLORS = {
@@ -48,32 +76,53 @@ function FL.setHidden(key, hide)
   ui.SetSetting("find.hidden", table.concat(parts, ","))
 end
 
--- The rows are kept (in FIND_STATE, so the map and the minimap, each with its own copy of this file, share them)
--- until the zone, the search or the kinds left out change, or ROWS_REREAD seconds pass (the game makes its list again
--- every 200 ms for the distances and positions). The table returned is shared: read it, do not change it.
-local ROWS_REREAD = 0.2
+-- Geometry may be cached by the host, but authorization is live on every Npcs read. Share only within this
+-- ImGui frame; a clock-based cache could keep an NPC visible after the provider stopped admitting it.
+function FL.matches(row, id, token)
+  return row ~= nil and row.id == id and row.token == token
+end
+
 function FL.rows()
+  local _, allowed = FL.policy()
+  if not allowed then return NO_ROWS end
   -- a new zone: its spawn ids are its own, so the old selection would name another NPC
-  local zone = select(2, eq.ZoneName()) or ""
+  local zone = select(2, API.map.ZoneName()) or ""
   if zone ~= FIND_STATE.zone then
-    FIND_STATE.zone, FIND_STATE.sel, FIND_STATE.hover = zone, nil, nil
+    clearState()
+    FIND_STATE.zone = zone
   end
   local hidden = FL.hidden()
-  local now = ui.GetTime()
+  local frame = type(ui.GetFrameCount) == "function" and ui.GetFrameCount() or nil
   local c = FIND_STATE.rowsCache
-  if c and c.zone == zone and c.search == FIND_STATE.search and c.hidden == hiddenRaw
-      and now - c.at < ROWS_REREAD and now >= c.at then
+  if frame ~= nil and c and c.frame == frame and c.zone == zone and c.search == FIND_STATE.search and c.hidden == hiddenRaw then
     return c.rows
   end
-  local out = {}
-  for _, r in ipairs(eq.FindNpcs and eq.FindNpcs(FIND_STATE.search) or {}) do
-    if not hidden[r.category] then out[#out + 1] = r end
+  local out, byId = {}, {}
+  for _, r in ipairs(API.find.Npcs and API.find.Npcs(FIND_STATE.search) or {}) do
+    if not hidden[r.category] then out[#out + 1], byId[r.id] = r, r end
   end
-  FIND_STATE.rowsCache = { zone = zone, search = FIND_STATE.search, hidden = hiddenRaw, at = now, rows = out }
+  if FIND_STATE.sel ~= nil and not FL.matches(byId[FIND_STATE.sel], FIND_STATE.sel, FIND_STATE.selToken) then
+    FIND_STATE.sel, FIND_STATE.selToken, FIND_STATE.why = nil, nil, nil
+  end
+  if FIND_STATE.hover ~= nil and not FL.matches(byId[FIND_STATE.hover], FIND_STATE.hover, FIND_STATE.hoverToken) then
+    FIND_STATE.hover, FIND_STATE.hoverToken = nil, nil
+  end
+  local menu = FIND_STATE.menu
+  if menu then
+    local current = byId[menu.id]
+    if FL.matches(current, menu.id, menu.token) then FIND_STATE.menu = current
+    else FIND_STATE.menu, FIND_STATE.why = nil, nil end
+  end
+  FIND_STATE.rowsCache = { zone = zone, search = FIND_STATE.search, hidden = hiddenRaw, frame = frame, rows = out }
   return out
 end
 
-function FL.marks() return ui.GetSetting("map.npcMarks") == "1" end
+function FL.current(id, token)
+  if id == nil then return nil end
+  for _, row in ipairs(FL.rows()) do if FL.matches(row, id, token) then return row end end
+end
+
+function FL.marks() return FL.policy() and ui.GetSetting("map.npcMarks") == "1" end
 
 function FL.drawMark(sx, sy, r, s, lit, label, T)
   local col = FL.COLORS[r.category] or FL.COLORS.poi

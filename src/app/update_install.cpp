@@ -310,10 +310,11 @@ InstalledUpdate read_installed_update(const fs::path& install_dir) {
 
 bool is_player_path(std::string_view path) {
     const std::string p = lower(path);
+    if (p == "ui-data") return true;
     const std::string_view first = std::string_view(p).substr(0, p.find('/'));
     static const std::set<std::string_view> folders = {"update", "servers", "logs",  "cache", "screenshots",
                                                        "bug-reports", "maps", "scripts", "textures", "web",
-                                                       "addons", "tools"};
+                                                       "addons", "tools", "ui-data"};
     static const std::set<std::string_view> files = {"hailstone.ini", "hailstone-windows.ini", "notes.txt"};
     if (first.size() < p.size() && folders.count(first)) return true;
     if (files.count(p)) return true;

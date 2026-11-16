@@ -1,10 +1,11 @@
 -- Menus (gamepad pack):
 --   Game menus     the game's context menus (a hot button's, an item's, ...), drawn large where the game opened
 --                  them; A chooses a row (a real click on that row of the game's menu), a submenu row opens its
---                  submenu, B or a click elsewhere closes them (eq.GameMenus)
---   All Windows    the EQ button's menu as a focus list (eq.CascadeMenus): every window the game's menu reaches,
+--                  submenu, B or a click elsewhere closes them (hs.GameMenus)
+--   All Windows    the EQ button's menu as a focus list (hs.CascadeMenus): every window the game's menu reaches,
 --                  whether this pack has it or not, each with its line icon (lib/menuicons.lua, the modern pack's);
 --                  A opens a submenu or runs the entry, B goes back
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -45,8 +46,8 @@ local shownBefore = false
 local lastCount = 0
 
 ui.window("Game Menus", function()
-  if not (eq.UiReady or eq.InGame)() then return end
-  local menus = eq.GameMenus()
+  if not (API.session.UiReady or API.session.InGame)() then return end
+  local menus = API.menus.Game()
   if #menus == 0 then
     if shownBefore or lastCount ~= 0 or next(hovered) then hovered, shownBefore, lastCount = {}, false, 0 end
     return
@@ -85,22 +86,22 @@ ui.window("Game Menus", function()
             row.enabled and readable({ row.r or 1, row.g or 1, row.b or 1, 1 }, C.window, C.text) or C.faint, 0)
           if focused and row.submenu and hovered[m] ~= r then
             hovered[m] = r
-            eq.GameMenuHover(m, r - 1)
+            API.menus.GameMenuHover(m, r - 1)
           end
-          if clicked and row.enabled then eq.GameMenuClick(m, r - 1) end
+          if clicked and row.enabled then API.menus.GameMenuClick(m, r - 1) end
           ui.PopID()
         end
       end
       T.unfont()
       overAny = overAny or ui.IsWindowHovered(ui.HoveredFlags.AllowWhenBlockedByActiveItem)
-      if newest and W.pressed("b") then eq.GameMenuClose() end
+      if newest and W.pressed("b") then API.menus.GameMenuClose() end
     end
     ui.End()
     menuStyle(false)
   end
   lastCount = #menus
   if shownBefore and not overAny and (ui.IsMouseClicked(ui.Mouse.Left) or ui.IsMouseClicked(ui.Mouse.Right)) then
-    eq.GameMenuClose()
+    API.menus.GameMenuClose()
   end
   shownBefore = true
 end)
@@ -111,21 +112,21 @@ local lists = {} -- each level's list state
 
 -- Makes the game's open menus match `path` (opening the EQ menu first).
 local function sync()
-  local menus = eq.CascadeMenus()
+  local menus = API.menus.Cascades()
   if #menus == #path + 1 then return menus end
-  if #menus > 0 then eq.CascadeClose() end
-  eq.ClickChild("EQMainWnd", "EQButton", "left")
-  for level, i in ipairs(path) do eq.CascadeHover(level, i) end
-  return eq.CascadeMenus()
+  if #menus > 0 then API.menus.CascadeClose() end
+  API.windows.ClickChild("EQMainWnd", "EQButton", "left")
+  for level, i in ipairs(path) do API.menus.CascadeHover(level, i) end
+  return API.menus.Cascades()
 end
 
 ui.window("All Windows", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   if not GPSTATE.eqMenuOpen then
     if #path > 0 or GPSTATE.eqMenuWasOpen then
       path = {}
       GPSTATE.eqMenuWasOpen = false
-      if #eq.CascadeMenus() > 0 then eq.CascadeClose() end
+      if #API.menus.Cascades() > 0 then API.menus.CascadeClose() end
     end
     return
   end
@@ -147,7 +148,7 @@ ui.window("All Windows", function()
     end
     lists[level] = lists[level] or { offset = 0 }
     local visible = math.max(1, math.floor((ch + T.px(10)) / T.px(64)))
-    W.list("eq" .. level, lists[level], #items, visible, 54, cw, function(n, x0, y0, x1, y1, focused)
+    W.list("hs" .. level, lists[level], #items, visible, 54, cw, function(n, x0, y0, x1, y1, focused)
       local item = items[n].item
       local enabled = item.enabled ~= false
       local d = T.px(28)
@@ -163,7 +164,7 @@ ui.window("All Windows", function()
         lists[level + 1] = { offset = 0, focusNext = 1 } -- (the pad's focus on its first row: the old rows are gone)
         lists[level].backTo = n - lists[level].offset
       else
-        eq.CascadeClick(level, e.i)
+        API.menus.CascadeClick(level, e.i)
         path = {}
         GPSTATE.eqMenuOpen = false
         -- a window this pack does not have opens as it is: chosen with the pad, the pad's pointer comes up to use

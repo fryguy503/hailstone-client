@@ -9,6 +9,7 @@
 --   Search Players   selected match's comment; the players' search has the classes, levels, AA and time zone.
 -- Every field is the window's own edit box or drop-down (the keyboard types the numbers and comments; a drop-down's
 -- choices come up as a list) and every button is its button, so what is posted and searched is the game's.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -96,7 +97,7 @@ local function results(k, listId, commentId, x0, y, x1, y1, wx, wy, empty)
     columns = { { 1, 0.3 }, { 2, 0.2 }, { 3, 0.2 }, { 4, 0.15 }, { 5, 0.15 } } })
   local cy = y1 - commentH
   ui.DrawLine(x0, cy - T.px(6), x1, cy - T.px(6), C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
-  local text = eq.WindowText(WIN, commentId) or ""
+  local text = API.windows.Text(WIN, commentId) or ""
   if text == "" then
     T.font(19)
     T.draw(x0, cy + T.px(4), "Select a match to read its comment.", C.faint)
@@ -172,5 +173,5 @@ ui.window("Looking for Guild", function()
       DRAW[page](x0, y0 + T.px(68), x1, y1, cw, wx, wy)
     end
   end
-  if CH.back(st, W.finish()) then eq.ShowWindow(WIN, false) end
+  if CH.back(st, W.finish()) then API.windows.Show(WIN, false) end
 end)

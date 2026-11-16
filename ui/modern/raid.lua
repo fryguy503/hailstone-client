@@ -15,9 +15,11 @@
 -- once the lock has come back from the server; a strip over the cards says so and holds Lock / Unlock. A drop on a
 -- full group (six) is refused here rather than sent (EQEmu ignores it). Leadership and invitation controls follow
 -- the window's permissions and ability ranks. The Notes page has the members' notes and the message of the day.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
+local E = dofile("lib/extensions.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "RaidWindow"
@@ -86,8 +88,8 @@ end
 
 -- The raid leader (the window shows the MOTD's Update to the leader only), and whether the game takes moves now
 -- (its group buttons: the leader of a locked raid).
-local function isLeader() return eq.ChildShown(WINDOW, "UpdateMOTDButton") == true end
-local function movesOpen() return eq.ChildState(WINDOW, "RAID_Group1Button") == true end
+local function isLeader() return API.windows.ChildShown(WINDOW, "UpdateMOTDButton") == true end
+local function movesOpen() return API.windows.ChildState(WINDOW, "RAID_Group1Button") == true end
 
 -- The group button for card g (0: no group).
 local function groupButton(g) return g == 0 and "RAID_NoGroupButton" or ("RAID_Group" .. g .. "Button") end
@@ -112,9 +114,9 @@ end
 
 -- Select the member in the game's list, then press the group's button (the game checks who may move whom).
 local function moveTo(m, g)
-  eq.ListClick(WINDOW, m.list, m.row, "left")
+  API.windows.ListClick(WINDOW, m.list, m.row, "left")
   local id = groupButton(g)
-  if eq.ChildState(WINDOW, id) ~= false then eq.ClickChild(WINDOW, id, "left") end
+  if API.windows.ChildState(WINDOW, id) ~= false then API.windows.ClickChild(WINDOW, id, "left") end
 end
 
 -- A move the player asked for: made now in a locked raid; in an unlocked one, the raid is locked first and the move
@@ -123,11 +125,11 @@ local function requestMove(raid, m, g)
   if (m.group or 0) == g or not hasRoom(raid, g, m.group) then return end
   if movesOpen() then
     moveTo(m, g)
-  elseif isLeader() and eq.ChildState(WINDOW, "RAID_LockButton") == true then
+  elseif isLeader() and API.windows.ChildState(WINDOW, "RAID_LockButton") == true then
     for i = #pending, 1, -1 do
       if pending[i].name == m.name then table.remove(pending, i) end -- (the last ask for a member wins)
     end
-    if #pending == 0 then eq.ClickChild(WINDOW, "RAID_LockButton", "left") end
+    if #pending == 0 then API.windows.ClickChild(WINDOW, "RAID_LockButton", "left") end
     pending[#pending + 1] = { name = m.name, group = g, at = ui.GetTime() }
   end
 end
@@ -167,9 +169,9 @@ local function noteOf(name)
   local now = ui.GetTime()
   if name == noteName and now >= noteAt and now - noteAt < NOTE_EVERY then return noteText end
   noteName, noteText, noteAt = name, "", now
-  local rows = eq.ListInfo(WINDOW, "RAID_NoteList") or 0
+  local rows = API.windows.ListInfo(WINDOW, "RAID_NoteList") or 0
   for r = 0, rows - 1 do
-    local t = eq.ListRow(WINDOW, "RAID_NoteList", r)
+    local t = API.windows.ListRow(WINDOW, "RAID_NoteList", r)
     if t and t[2] == name then noteText = t[3] or ""; break end
   end
   return noteText
@@ -231,9 +233,9 @@ local function memberLine(m, x, y, w, s, raid, needle, drags)
   T.Text(x + 12 * s, ty, T.Fit(m.name, nameW, T.font.small), C.text, T.font.small, nil, a)
 
   -- a click selects the row in the game's list; right-click is the list's own; a drag carries the member
-  if hit and not drag then eq.ListClick(WINDOW, m.list, m.row, "left") end
+  if hit and not drag then API.windows.ListClick(WINDOW, m.list, m.row, "left") end
   if not drag and ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
-    eq.ListClick(WINDOW, m.list, m.row, "right")
+    API.windows.ListClick(WINDOW, m.list, m.row, "right")
     T.TakeRightClick()
   end
   if drags and ui.IsItemActive() and ui.IsMouseDragging(ui.Mouse.Left) and not drag then
@@ -248,7 +250,7 @@ local function memberLine(m, x, y, w, s, raid, needle, drags)
     local note = noteOf(m.name)
     if note ~= "" then lines[#lines + 1] = "Note: " .. note end
     if waiting then lines[#lines + 1] = "Moving once the raid is locked..." end
-    if eq.ContextMenus() then lines[#lines + 1] = "Right-click for member actions" end
+    if API.menus.Contexts() then lines[#lines + 1] = "Right-click for member actions" end
     if drags then lines[#lines + 1] = "Drag onto another group to move" end
     ui.SetTooltip(table.concat(lines, "\n"))
   end
@@ -347,7 +349,7 @@ local function summary(raid, s)
   -- (locked or open: the window tells only its leader, through Lock / Unlock)
   if isLeader() then
     ui.SameLine(0, 6 * s)
-    local locked = eq.ChildShown(WINDOW, "RAID_UnlockButton") == true
+    local locked = API.windows.ChildShown(WINDOW, "RAID_UnlockButton") == true
     S.Chip(locked and "locked" or "open", locked and C.danger or C.good,
       locked and "No one can join while the raid is locked" or "Players can be invited")
   end
@@ -414,7 +416,7 @@ local DIRECT_ACTIONS = {
   { "RAID_NoGroupButton", "Ungroup", { tooltip = "Take the selected player out of their group" } },
 }
 for i = 2, #ACTIONS do DIRECT_ACTIONS[#DIRECT_ACTIONS + 1] = ACTIONS[i] end
-local function actionList() return eq.ContextMenus() and ACTIONS or DIRECT_ACTIONS end
+local function actionList() return API.menus.Contexts() and ACTIONS or DIRECT_ACTIONS end
 local function actionColumns(w, s)
   return w >= 680 * s and 4 or (w >= 510 * s and 3 or 2)
 end
@@ -432,7 +434,7 @@ local function actions(raid, s)
       sel.level .. " " .. sel.class .. "  -  " .. (sel.group and ("Group " .. sel.group) or "not in a group"))
   end
   ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1,
-    eq.ContextMenus() and "Right-click a member for actions." or "Select a member, then choose an action.")
+    API.menus.Contexts() and "Right-click a member for actions." or "Select a member, then choose an action.")
   local choices = actionList()
   local cols = actionColumns(ui.GetContentRegionAvail(), s)
   for first = 1, #choices, cols do
@@ -440,6 +442,7 @@ local function actions(raid, s)
     for i = first, math.min(first + cols - 1, #choices) do row[#row + 1] = choices[i] end
     W.ButtonRow(WINDOW, row, btnH)
   end
+  E.Draw(WINDOW,"member_actions",E.RaidContext())
 end
 
 local function membersPage(raid, s)
@@ -595,7 +598,7 @@ local function body(x, y, w, h, s)
   flushPending(raid)
   local btnH = S.ButtonHeight(s)
   -- an invitation to answer
-  if eq.ChildShown(WINDOW, "RAID_AcceptButton") == true then
+  if API.windows.ChildShown(WINDOW, "RAID_AcceptButton") == true then
     local bx, by = ui.GetCursorScreenPos()
     local aw = ui.GetContentRegionAvail()
     local bh = btnH + 16 * s
@@ -612,6 +615,7 @@ local function body(x, y, w, h, s)
     ui.SetCursorScreenPos(bx, by + bh + 6 * s)
   end
   if raid.count == 0 then
+    E.Reset()
     -- not in a raid: what to do, and the buttons that start one
     pending = {}
     local aw, ah = ui.GetContentRegionAvail()
@@ -625,6 +629,7 @@ local function body(x, y, w, h, s)
   summary(raid, s)
   local shown = W.Tabs(WINDOW, "Subwindows", { { "Members", 0 }, { "Notes", 1 } })
   if shown == 1 then
+    E.Reset()
     drag = nil -- (a drag is the members page's)
     notesPage(s)
   else
@@ -634,10 +639,11 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Raid", function()
-  if not eq.InGame() then
+  if not API.session.InGame() then
     drag, pending = nil, {}
+    E.Reset()
     return
   end
   hud.Dialog(WINDOW, "Raid", OPTS, body)
-  if bodyFrame ~= ui.GetFrameCount() then drag = nil end -- closed (or no raid): a drag ends
+  if bodyFrame ~= ui.GetFrameCount() then drag = nil;E.Reset() end -- closed (or no raid): a drag ends
 end)

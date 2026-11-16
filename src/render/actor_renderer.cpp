@@ -306,6 +306,8 @@ std::unique_ptr<ActorRenderer::Kept> ActorRenderer::release_kept() {
     prepared_ids_.clear();
     last_draws_.clear();
     bone_cache_.clear();
+    current_render_transforms_.clear();
+    current_render_frame_ = 0;
     return kept;
 }
 
@@ -954,6 +956,25 @@ bool ActorRenderer::drawn_transform(std::uint32_t id, glm::mat4& world) const {
     return true;
 }
 
+bool ActorRenderer::current_render_transform(std::uint32_t id, std::uint64_t frame, glm::mat4& world) const {
+    if (!frame || frame != current_render_frame_ || frame != vk_.frames_begun()) return false;
+    const auto it = current_render_transforms_.find(id);
+    if (it == current_render_transforms_.end()) return false;
+    world = it->second;
+    return true;
+}
+
+ActorDraw ActorRenderer::render_pose(const game::Spawn& spawn, const assets::CharacterModel& model,
+                                    const game::HeightTables* tables) {
+    ActorDraw actor;
+    actor.model = &model;
+    actor.scale = spawn.heights.model_scale;
+    const auto position = spawn.display_valid ? spawn.display_position : spawn.position;
+    actor.position = position + glm::vec3(0.0f, 0.0f, model_z_offset(model, actor.scale, tables));
+    actor.yaw = game::heading_to_yaw(spawn.display_valid ? spawn.display_heading : spawn.heading);
+    return actor;
+}
+
 bool ActorRenderer::bone_world(const ActorDraw& a, int bone, glm::mat4& world) {
     if (!a.model || !a.clip || bone < 0) return false;
     std::vector<assets::BonePose> local, previous;
@@ -1453,6 +1474,8 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
                                    const game::WorldState& world, std::uint32_t hide_id, float dt) {
     drawn_.clear();
     last_draws_.clear();
+    current_render_transforms_.clear();
+    current_render_frame_ = vk_.frames_begun();
     last_spawn_poses_.clear();
     empty_ids_.clear();
     stats_.dressed = 0;
@@ -1481,6 +1504,13 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         if (s.mount_id) order.push_back(id);
     for (std::uint32_t id : order) {
         const game::Spawn& s = world.spawns.at(id);
+        auto actor = choose_model(s);
+        if (actor.model) {
+            ActorDraw pose = render_pose(s, *actor.model, world.height_tables.get());
+            if (const auto mount = last_draws_.find(s.mount_id); s.mount_id && mount != last_draws_.end())
+                seat_rider(mount->second, pose, world.height_tables.get());
+            current_render_transforms_[id] = instance_matrix(pose);
+        }
         // A spawn hidden on purpose (the player in first person, a market-hidden one) keeps its state, and so the
         // look it wears: evict_idle_looks frees only looks no state holds, so it is drawn again in that look at once.
         // Otherwise it is as if it were gone: its dressing is dropped and it comes back as a new state.
@@ -1499,7 +1529,6 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
             empty_ids_.push_back(id);
             continue;
         }
-        auto actor = choose_model(s);
         glm::vec3 pos = s.display_valid ? s.display_position : s.position;
         // The camera's actor clip (game::actor_clip_distance): a spawn past it is not drawn, and is not handed to
         // the placeholder boxes either.
@@ -1743,6 +1772,7 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         ids.push_back(id);
         last_draws_[id] = a;
         if (auto cached = bone_cache_.find(id); cached != bone_cache_.end()) cached->second.valid = false;
+        current_render_transforms_[id] = instance_matrix(a);
         last_spawn_poses_[id] = {pos, heading};
     }
     // drawn_bone's poses of spawns no longer drawn are dropped once every kBoneCacheSweepMs, not each frame: such an

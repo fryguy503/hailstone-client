@@ -3,7 +3,7 @@
 // The group finder's rules (CGroupSearchWnd "GroupSearchWnd" @0x676470..0x67aa90, CGroupSearchFiltersWnd
 // "GroupSearchFiltersWnd" @0x674bd0..0x676400 and the
 // unnamed helpers between them). The window state lives on the connection (GameConnection::group_search()), the
-// window models in app/lua_eq_group_search.cpp. Names given here to the original's unnamed functions:
+// window models in app/lua_ui_group_search.cpp. Names given here to the original's unnamed functions:
 //  - ClassSortOrder_GetClassId @0x677c40: the "Want classes" checkbox index (the XML's alphabetical order, Brd .. Wiz)
 //    to the class id.
 //  - GroupSearch_ClassMask @0x678830: the checked boxes as class bits (1 << class id).

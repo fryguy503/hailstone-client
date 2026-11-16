@@ -1,6 +1,7 @@
 -- Air meter: replaces the game's BreathWindow (shown by the game while you are short of air: under water). A small
 -- borderless frame like the cast bar: "Air" and the percent left over a bar (the game's gauge, EQType 8) that turns
 -- from cyan to red as the air runs out, pulsing in the last quarter. Moves by dragging; its scale is the right-click menu's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color
@@ -11,7 +12,7 @@ local WINDOW_OPTS = {
   size = function() return 240, 38 end,
 }
 local function drawWindow(x, y, w, h, s)
-  local frac = eq.Gauge(8) or 0
+  local frac = API.character.Gauge(8) or 0
   local pad = 8 * s
   local col = AIR
   if frac < 0.5 then -- toward red as it runs out
@@ -30,6 +31,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Breath", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Window("BreathWindow", "Air", WINDOW_OPTS, drawWindow)
 end)

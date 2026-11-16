@@ -5,7 +5,8 @@
 --                search (A types it, then it searches) and the sort head the column
 --   Item         the selected item: price, quantity (- / +), total and Buy, then the game's pages in turn: the zip
 --                code, the confirmation, the result; Y inspects the item
--- Your funds head the window. The lists and buttons are the stock window's (app/lua_eq_marketplace.cpp).
+-- Your funds head the window. The lists and buttons are the stock window's (app/lua_ui_marketplace.cpp).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -15,10 +16,10 @@ local WIN = "MarketplaceWnd"
 local F = M.form()
 local cats, items, news, feats = {}, {}, {}, {}
 
-local function text(id) return eq.WindowText(WIN, id) or "" end
-local function shown(id) return eq.ChildShown(WIN, id) ~= false end
+local function text(id) return API.windows.Text(WIN, id) or "" end
+local function shown(id) return API.windows.ChildShown(WIN, id) ~= false end
 
-local function find() eq.ClickChild(WIN, "MKPW_FindBtn", "left") end
+local function find() API.windows.ClickChild(WIN, "MKPW_FindBtn", "left") end
 
 local function itemRow(r, a, b, c, d, nameCol, priceCol)
   M.row(r, a, b, c, d, r.texts[nameCol], r.texts[priceCol], { rightColor = C.endurance, rightW = T.px(140) })
@@ -50,7 +51,7 @@ local function details(x0, y0, x1, y1)
   if shown("MKPW_DetailsPlayerStudioLabel") then line(text("MKPW_DetailsPlayerStudioLabel")) end
   if shown("MKPW_DetailsAvailableTimeLeft_Label") then line("Available for " .. text("MKPW_DetailsAvailableTimeLeft_Label")) end
   if shown("MKPW_DetailsSaleTimeLeft_Label") then line("On sale for " .. text("MKPW_DetailsSaleTimeLeft_Label")) end
-  local page = eq.TabPage(WIN, "MKPW_Subwindows") or 0
+  local page = API.windows.TabPage(WIN, "MKPW_Subwindows") or 0
   if page == 0 then
     line("Price " .. text("MKPW_BuyPrice") .. (shown("MKPW_WasPrice") and ("  (was " .. text("MKPW_WasPrice") .. ")") or ""), C.endurance)
     line("Quantity " .. text("MKPW_QtyEdit") .. "    Total " .. text("MKPW_BuyTotal"), C.text)
@@ -107,7 +108,7 @@ ui.window("Marketplace", function()
           local depth = tonumber(r.texts[2]) or 0
           local mark = r.texts[3] == "1" and (r.texts[4] == "1" and "- " or "+ ") or "  "
           M.row(r, a + T.px(24) * depth, b, c, d, mark .. r.texts[1], nil, { icon = false })
-          if focused and W.pressed("x") and r.texts[3] == "1" then eq.ListClick(WIN, "MKPW_CategoriesTree", r.index, "left", 1) end
+          if focused and W.pressed("x") and r.texts[3] == "1" then API.windows.ListClick(WIN, "MKPW_CategoriesTree", r.index, "left", 1) end
         end })
       -- the shelf
       local sx0, sx1 = cx1 + gap, dx0 - gap
@@ -123,7 +124,7 @@ ui.window("Marketplace", function()
         M.list(WIN, "MKPW_ItemList", items, sx0, top, sx1, y1, {
           rowH = 60, select = "focus", empty = "Nothing on this shelf.",
           draw = function(r, a, b, c, d) itemRow(r, a, b, c, d, 3, 5) end,
-          onA = function() eq.ClickChild(WIN, "MKPW_BuyBtn", "left") end })
+          onA = function() API.windows.ClickChild(WIN, "MKPW_BuyBtn", "left") end })
       else
         local mid = (y0 + y1) / 2
         M.caption(sx0, y0, "New")
@@ -136,9 +137,9 @@ ui.window("Marketplace", function()
           draw = function(r, a, b, c, d) itemRow(r, a, b, c, d, 1, 2) end })
       end
       -- the selected item
-      if W.pressed("y") then eq.ClickChild(WIN, "MKPW_DetailsInspect", "left") end
+      if W.pressed("y") then API.windows.ClickChild(WIN, "MKPW_DetailsInspect", "left") end
       details(dx0, y0, x1, y1)
     end
   end
-  if M.back(F, W.finish()) then eq.ShowWindow(WIN, false) end
+  if M.back(F, W.finish()) then API.windows.Show(WIN, false) end
 end)

@@ -83,13 +83,15 @@ struct BankSession {
 
 // CQuantityWnd opened by a click on a stack (CInvSlot::HandleLButtonUp):
 // how many to pick up, 1..max; its answer goes to CInvSlot::SliderComplete.
-// Or by CLootWnd::RequestLootSlot for a stack on someone else's corpse (`loot`): the answer completes the loot
+// Or by CLootWnd::RequestLootSlot for a stack on someone else's corpse: the answer completes the loot
 // request (CLootWnd::WndNotification message 0x24).
+enum class QuantityOp : std::uint8_t { Inventory, Loot, ExtensionLoot };
+static_assert(sizeof(QuantityOp) == sizeof(bool) && alignof(QuantityOp) == alignof(bool));
 struct QuantityRequest {
     ItemSlot slot;
     std::uint32_t max = 1;
     std::uint32_t start = 1; // the slider's starting value (CQuantityWnd::Open's `start` - min)
-    bool loot = false;       // a corpse slot's loot request
+    QuantityOp op = QuantityOp::Inventory;
     bool auto_loot = false;  // that request's auto loot
     bool centred = false;    // opened at (-1, -1): the dialog shows centred
 };

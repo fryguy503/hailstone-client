@@ -26,6 +26,30 @@
 
 namespace hailstone::ui {
 
+std::optional<std::string> ui_image_path(std::string_view relative) {
+    if (relative.empty() || relative.size() > 4096 || relative.find_first_of(":*?\"<>") != std::string_view::npos ||
+        std::any_of(relative.begin(), relative.end(), [](unsigned char c) { return c < 32 || c == 127; }))
+        return std::nullopt;
+    const std::string path = GameDir::normalize(relative);
+    std::size_t begin = 0;
+    while (begin < path.size()) {
+        const auto end = path.find('/', begin);
+        const auto part = std::string_view(path).substr(begin, end == std::string::npos ? path.size() - begin : end - begin);
+        if (part.empty() || part == "." || part == ".." || part.back() == '.' || part.back() == ' ')
+            return std::nullopt;
+        if (end == std::string::npos) break;
+        begin = end + 1;
+        if (begin == path.size()) return std::nullopt;
+    }
+    const auto dot = path.rfind('.');
+    if (dot == std::string::npos) return std::nullopt;
+    const auto extension = std::string_view(path).substr(dot);
+    if (extension != ".dds" && extension != ".tga" && extension != ".png" && extension != ".bmp" &&
+        extension != ".jpg" && extension != ".jpeg")
+        return std::nullopt;
+    return path;
+}
+
 std::optional<GridCell> gem_icon_cell(std::int32_t icon) {
     // A_SpellGems: gemicons01..03.tga, 256 x 256, 24 x 24 cells: 10 per row, 10 rows (100 per sheet).
     if (icon < 0 || icon >= 300) return std::nullopt;

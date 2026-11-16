@@ -33,6 +33,9 @@ namespace hailstone::game {
 
 inline constexpr std::uint8_t kTrianglePassable = 0x1;   // the terrain record's bit 0 (WLD 0x10)
 inline constexpr std::uint8_t kTriangleTransparent = 0x2; // bit 1: no or transparent material
+// Render-effect queries only: the material's actual draw class is blended, additive or unmapped even when its
+// legacy collision BlendMode is Masked. Movement collision deliberately does not inspect this flag.
+inline constexpr std::uint8_t kTriangleNoVisualSurface = 0x8;
 // Not a record flag: the triangle belongs to a placed object, which the original collides as an actor
 // (CActorData::FindIntersectionSphere, which never asks the info's floor-only slot), not as the zone's terrain.
 inline constexpr std::uint8_t kTriangleObject = 0x20;

@@ -1,5 +1,6 @@
 -- Achievement browser presentation. All progress is received state; drawing,
 -- filtering and expanding categories never requests data or awards anything.
+local API = hs.UI
 local M = {}
 function M.new(look)
   local B = {}
@@ -51,7 +52,7 @@ function M.new(look)
     end
   end
   function B.readState()
-    local state = eq.Achievements(catalogToken, stateRevision)
+    local state = API.achievements.List(catalogToken, stateRevision)
     if not state then B.reset(); return nil end
     if state.message ~= serverMessage then actionMessage = nil; serverMessage = state.message end
     if catalogToken ~= state.catalog_token then
@@ -131,9 +132,9 @@ function M.new(look)
       -- These XML animations are wide badges with baked lettering. Resolve
       -- live handles each frame: the texture cache can retire an old handle.
       local suffix = selected and "Selected" or focused and "Hover" or ""
-      texture, u0, v0, u1, v1, imageWidth, imageHeight = eq.UiAnimation(value.icon .. suffix)
+      texture, u0, v0, u1, v1, imageWidth, imageHeight = API.assets.Animation(value.icon .. suffix)
       if not texture and suffix ~= "" then
-        texture, u0, v0, u1, v1, imageWidth, imageHeight = eq.UiAnimation(value.icon)
+        texture, u0, v0, u1, v1, imageWidth, imageHeight = API.assets.Animation(value.icon)
       end
     end
     ui.PushClipRect(x, y, x + width, y + height, true)
@@ -299,10 +300,10 @@ function M.new(look)
     if detail.source == "own" then
       ui.Separator()
       button("View reward###achievementreward", detail.has_reward == true,
-        function() result(eq.AchievementReward(detail.catalog_token, detail.definition_index)) end)
+        function() result(API.achievements.Reward(detail.catalog_token, detail.definition_index)) end)
       ui.SameLine()
       button("Link###achievementlink", own.known == true,
-        function() result(eq.AchievementLink(detail.catalog_token, detail.definition_index)) end)
+        function() result(API.achievements.Link(detail.catalog_token, detail.definition_index)) end)
       if actionMessage then colored(actionMessage, colors.warning)
       elseif detail.has_reward then muted("Preview the reward before choosing it.")
       else muted("No reward is listed for this achievement.") end
@@ -359,7 +360,7 @@ function M.new(look)
         local selected = state.detail_source ~= "link" and state.selected_index == definition.index
         if look.select(definition.name .. "###achievement:" .. state.catalog_token .. ":" .. definition.index,
             selected, nil, 30 * scale, true) then
-          result(eq.AchievementOpen(state.catalog_token, definition.index))
+          result(API.achievements.Open(state.catalog_token, definition.index))
         end
         if ui.IsItemHovered() then ui.SetTooltip(definition.name .. "\n" .. (definition.description or "")) end
         ui.TableNextColumn(); colored(statusName(own.status), statusColor(own.status))
@@ -431,7 +432,7 @@ function M.new(look)
       ui.Spacing()
       ui.BeginChild("##achievementdetailpane", 0, 0, true, ui.WindowFlags.NoScrollbar | ui.WindowFlags.NoScrollWithMouse)
     end
-    local detail = eq.Achievement()
+    local detail = API.achievements.Get()
     local visible = false
     if detail and detail.source == "own" and detail.catalog_token == state.catalog_token then
       for _, row in ipairs(rows) do if row.definition.index == detail.definition_index then visible = true; break end end
@@ -440,14 +441,14 @@ function M.new(look)
     ui.EndChild(); ui.EndChild()
     ui.Spacing()
     button(state.refresh_pending and "Refreshing...###refreshachievements" or "Refresh###refreshachievements",
-      not state.refresh_pending, function() result(eq.AchievementRefresh()) end)
+      not state.refresh_pending, function() result(API.achievements.Refresh()) end)
     ui.SameLine()
     local compare = state.comparison or {}
     button("Compare target###compareachievements", state.ready and not compare.pending,
-      function() result(eq.AchievementCompare()) end)
+      function() result(API.achievements.Compare()) end)
     if compare.ready or compare.pending then
       ui.SameLine()
-      button("Clear comparison###clearachievementcompare", true, function() result(eq.AchievementClearCompare()) end)
+      button("Clear comparison###clearachievementcompare", true, function() result(API.achievements.ClearCompare()) end)
     end
     if compare.pending then muted("Waiting for the comparison result.")
     elseif compare.ready then muted("Comparing with " .. (compare.name or "player")) end
@@ -459,12 +460,12 @@ function M.new(look)
     end
   end
   function B.closeMain()
-    eq.ShowWindow("AchievementsWnd", false)
-    local detail = eq.Achievement()
-    if detail and detail.source == "own" then eq.ShowWindow("AchievementWnd", false) end
+    API.windows.Show("AchievementsWnd", false)
+    local detail = API.achievements.Get()
+    if detail and detail.source == "own" then API.windows.Show("AchievementWnd", false) end
   end
   function B.floating()
-    local detail = eq.Achievement()
+    local detail = API.achievements.Get()
     if not detail or not detail.shown then return nil end
     local state = B.readState()
     if state and state.shown and detail.source == "own" then return nil end

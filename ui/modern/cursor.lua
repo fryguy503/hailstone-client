@@ -1,8 +1,9 @@
 -- Cursor: what the game carries on the mouse (an item, a spell from the book, a hot button being dragged, money;
--- eq.CursorAttachment) drawn above every window in this UI's look: the icon in a rounded well, a hot button's label
+-- hs.CursorAttachment) drawn above every window in this UI's look: the icon in a rounded well, a hot button's label
 -- on its face (wrapped, as on the action bars), money as a coin in its colour with its letter, and a stack's size
 -- or the coin's count in a small pill at the bottom right. Places and sizes are the game's attachment's (the icon
 -- at the mouse).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local C = T.color
 local COINS = { [0] = { "p", C.platinum }, { "g", C.gold }, { "s", C.silver }, { "c", C.copper } }
@@ -23,8 +24,8 @@ local function wrap(text, width, font)
 end
 
 ui.window("Cursor Item", function()
-  if not eq.InGame() then return end
-  local a = eq.CursorAttachment()
+  if not API.session.InGame() then return end
+  local a = API.cursor.Attachment()
   if not a then return end
   local s = ui.GetIO().uiScale or 1
   ui.Foreground(true)

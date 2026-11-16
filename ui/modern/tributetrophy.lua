@@ -3,8 +3,9 @@
 -- career favour; the guild's with whether you are opted in), the available and active benefits side by side, or
 -- stacked when narrow, the selected one's description, and Upgrade / Downgrade / Modify. Which numbers and buttons
 -- show is the window's (the personal or guild ones); the numbers are its labels, else their EQTypes (297..300, 117,
--- 118, 122), and every list and button the original's (app/lua_eq_fellowship.cpp). EQEmu sends no trophy tribute,
+-- 118, 122), and every list and button the original's (app/lua_ui_fellowship.cpp). EQEmu sends no trophy tribute,
 -- so the lists stay empty there.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -18,7 +19,7 @@ local DRAW_KEY = "test.draw." .. WINDOW -- testing: draws the window though the 
 -- a label child's text (the window's), else its EQType's
 local function value(id, eqtype)
   local t = W.Text(WINDOW, id)
-  if t == "" and eqtype then t = eq.Label(eqtype) or "" end
+  if t == "" and eqtype then t = API.character.Label(eqtype) or "" end
   return t
 end
 
@@ -30,7 +31,7 @@ local function view(id, label, tip)
   else
     ui.PushStyleColor(ui.Col.Button, C.ink[1], C.ink[2], C.ink[3], 0.06)
   end
-  if ui.Button(label .. "##" .. id) and not on then eq.ClickChild(WINDOW, id, "left") end
+  if ui.Button(label .. "##" .. id) and not on then API.windows.ClickChild(WINDOW, id, "left") end
   ui.PopStyleColor(1)
   if ui.IsItemHovered() then ui.SetTooltip(tip) end
 end
@@ -38,7 +39,7 @@ end
 local function benefits(id, caption, w, h, s, empty)
   ui.BeginGroup()
   K.Heading(caption, nil)
-  local rows = eq.ListInfo(WINDOW, id) or 0
+  local rows = API.windows.ListInfo(WINDOW, id) or 0
   local x, y = ui.GetCursorScreenPos()
   W.List(WINDOW, id, w, h, {})
   if rows == 0 then
@@ -48,7 +49,7 @@ local function benefits(id, caption, w, h, s, empty)
   ui.EndGroup()
 end
 
-local function testOpen() eq.ShowWindow(WINDOW, true) end
+local function testOpen() API.windows.Show(WINDOW, true) end
 local OPTS = {
   size = function() return 640, 500 end,
   resizable = { 380, 360 },
@@ -109,7 +110,7 @@ end
 
 ui.window("Tribute Trophies", function()
   P.TestOpen(WINDOW, testOpen) -- testing: test.open.TributeTrophyWnd=1
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   OPTS.shown = T.Setting(DRAW_KEY) == "1" or nil -- testing: test.draw.TributeTrophyWnd=1
   hud.Dialog(WINDOW, "Tribute Trophies", OPTS, body)
 end)

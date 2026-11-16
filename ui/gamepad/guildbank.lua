@@ -5,7 +5,8 @@
 --   Deposits  the deposits waiting for a banker (A selects one, Put in Bank moves it into the bank) and your
 --             bags: A picks an item up, Deposit (X) gives the held item
 -- One selection across both lists, as the window keeps it; buttons a member may not use are greyed by the game.
--- Everything is the stock window's (eq.ListClick, eq.ComboSelect, eq.ClickChild).
+-- Everything is the stock window's (hs.ListClick, hs.ComboSelect, hs.ClickChild).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -25,7 +26,7 @@ local function row(r, x0, y0, x1, y1)
 end
 
 local function free(x1, y, id)
-  local t = eq.WindowText(GW, id) or ""
+  local t = API.windows.Text(GW, id) or ""
   local n = tonumber(t:match("(%d+)"))
   T.font(19)
   local tw = ui.CalcTextSize(t)
@@ -56,8 +57,8 @@ ui.window("Guild Bank", function()
         local _, sel = M.list(GW, "ItemList", items, x0, top, rx0 - T.px(24), y1, {
           rowH = 60, select = "focus", inspect = false, empty = "The bank is empty (or the filter hides it all).",
           draw = row,
-          onA = function() eq.ClickChild(GW, "WithdrawButton", "left") end })
-        if sel and W.pressed("y") then eq.ClickChild(GW, "ViewItemButton", "left") end
+          onA = function() API.windows.ClickChild(GW, "WithdrawButton", "left") end })
+        if sel and W.pressed("y") then API.windows.ClickChild(GW, "ViewItemButton", "left") end
         ui.SetCursorPos(rx0 - wx, top - wy)
         M.combo(F, GW, "FilterCombo", "Show", x1 - rx0, bh)
         ui.SetCursorPos(rx0 - wx, select(2, ui.GetCursorScreenPos()) + T.px(10) - wy)
@@ -83,7 +84,7 @@ ui.window("Guild Bank", function()
         local bx0 = mid + T.px(24)
         local per = math.max(1, math.floor((x1 - bx0 + T.px(X.GAP)) / T.px(X.SIZE + X.GAP)))
         ui.SetCursorPos(bx0 - wx, top - wy)
-        X.bags(ctx, bags, bx0, x1 - bx0, per, { put = function() eq.ClickChild(GW, "DepositButton", "left") end })
+        X.bags(ctx, bags, bx0, x1 - bx0, per, { put = function() API.windows.ClickChild(GW, "DepositButton", "left") end })
         local hy = y1 - bh - T.px(14) - X.holdingHeight(ctx)
         X.holding(ctx, bx0, hy, x1, "Deposit (X) gives it to the guild")
         ui.SetCursorPos(bx0 - wx, y1 - bh - wy)
@@ -91,5 +92,5 @@ ui.window("Guild Bank", function()
       end
     end
   end
-  if M.back(F, W.finish()) then eq.ShowWindow(GW, false) end
+  if M.back(F, W.finish()) then API.windows.Show(GW, false) end
 end)

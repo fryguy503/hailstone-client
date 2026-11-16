@@ -1,8 +1,8 @@
 #pragma once
 
 // Temporary ImGui debug windows for duels, inspect, the bazaar and mail, each
-// off while its stock Lua window runs (app/lua_eq_player.cpp, lua_eq_market.cpp,
-// lua_eq_mail.cpp; ui.cpp_windows=1 keeps them): the inspect window, the
+// off while its stock Lua window runs (app/lua_ui_player.cpp, lua_ui_market.cpp,
+// lua_ui_mail.cpp; ui.cpp_windows=1 keeps them): the inspect window, the
 // confirmation question, a book's text, the trader window (/trader), a
 // trader's shop, the bazaar search (/bazaar) and the barter window appear
 // while their state is open; the mail window with HAILSTONE_MAIL_WINDOW=1 (or

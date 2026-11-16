@@ -88,7 +88,7 @@ void SocialUi::draw(net::GameConnection& conn) {
     if (!ui::lua::replaces("RaidWindow")) ui::raid_window(raid_, a);
     if (!ui::lua::replaces("FriendsWindow")) ui::friends_window(friends_, a);
 
-    // The buttons' command lines go as they are: no ${...} (mq::LiteralLine; app/lua_eq_social.cpp says why).
+    // The buttons' command lines go as they are: no ${...} (mq::LiteralLine; app/lua_ui_social.cpp says why).
     mq::LiteralLine literal;
     if (a.guild_invite) conn.send_command("/guildinvite");
     if (a.guild_remove) conn.send_command("/guildremove " + *a.guild_remove);

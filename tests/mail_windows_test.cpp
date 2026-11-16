@@ -1,4 +1,4 @@
-// The mail address book window over the eq API (app/lua_eq_mail.cpp): entries typed into its fields are saved to
+// The mail address book window over the hs API (app/lua_ui_mail.cpp): entries typed into its fields are saved to
 // the character's address book file and read back with the layout.
 #include <doctest/doctest.h>
 
@@ -8,7 +8,7 @@
 
 #include <imgui.h>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "core/game_dir.h"
 #include "net/game_connection.h"
 #include "scratch_dir.h"
@@ -24,11 +24,11 @@ TEST_CASE("Mail address book window: add, modify, delete, saved and read back") 
     GameDir game(dir / "game");
     {
         net::GameConnection conn(game);
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
 
         const char* W = "MailAddressBookWindow";
@@ -85,11 +85,11 @@ TEST_CASE("Mail address book window: add, modify, delete, saved and read back") 
     {
         // A new session reads the file back with the layout.
         net::GameConnection conn(game);
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         REQUIRE(conn.mail_address_book().find("Friends"));
         CHECK(conn.mail_address_book().find("Friends")->addresses.size() == 3);
@@ -112,11 +112,11 @@ TEST_CASE("Mail ignore list window: the address book's Ignore button, its own bo
     GameDir game(dir / "game");
     {
         net::GameConnection conn(game);
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         CHECK(conn.mail_ignore_list().find("pest"));
         CHECK(fs::exists(dir / "IgnoreList.txt")); // made from the shared one
@@ -155,11 +155,11 @@ TEST_CASE("Mail ignore list window: the address book's Ignore button, its own bo
         CHECK(text.str().starts_with("EverQuest Address Book v1.0\n"));
         CHECK(text.str().find("Name: spammer\nAddresses: ") != std::string::npos);
         net::GameConnection conn(game);
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         CHECK(conn.mail_ignore_list().find("spammer"));
         CHECK_FALSE(conn.mail_ignore_list().find("pest"));

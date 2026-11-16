@@ -2,6 +2,7 @@
 -- titles or the suffixes the server offers (LB / RB), Use and Remove, and the game's "tell me about new titles" box.
 -- The rows are the original's lists (Title_AvailableTitles / Title_AvailableSuffixes): A picks in the game's list,
 -- X uses the pick (its Change button), Y removes the title or suffix (its Clear button); the buttons are its own.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -31,8 +32,8 @@ ui.window("Titles", function()
     if W.pressed("lb") then kind = 1 end
     if W.pressed("rb") then kind = 2 end
     k = KINDS[kind]
-    if W.pressed("x") and G.enabled(TW, k.change) then eq.ClickChild(TW, k.change, "left") end
-    if W.pressed("y") and G.enabled(TW, k.clear) then eq.ClickChild(TW, k.clear, "left") end
+    if W.pressed("x") and G.enabled(TW, k.change) then API.windows.ClickChild(TW, k.change, "left") end
+    if W.pressed("y") and G.enabled(TW, k.clear) then API.windows.ClickChild(TW, k.clear, "left") end
     -- the name now and with the picks
     local cur, new = G.text(TW, "Title_CurrentName"), G.text(TW, "Title_ProposedName")
     local changed = new ~= "" and new ~= cur
@@ -52,7 +53,7 @@ ui.window("Titles", function()
     local tx = x0
     T.font(20)
     for i, kk in ipairs(KINDS) do
-      local label = string.format("%s (%d)", kk.label, eq.ListInfo(TW, kk.list) or 0)
+      local label = string.format("%s (%d)", kk.label, API.windows.ListInfo(TW, kk.list) or 0)
       local tw = ui.CalcTextSize(label) + T.px(40)
       T.rect(tx, ty, tx + tw, ty + T.px(48), kind == i and C.accent or C.raised, kind == i and 0.9 or 1, T.px(10))
       T.textIn(tx, ty, tx + tw, ty + T.px(48), label, kind == i and C.onAccent or C.text, 0.5)
@@ -90,5 +91,5 @@ ui.window("Titles", function()
       W.sideAfter(side, i, #actions, state)
     end
   end
-  if W.finish() then eq.ShowWindow(TW, false) end
+  if W.finish() then API.windows.Show(TW, false) end
 end)

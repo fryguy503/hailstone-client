@@ -3,8 +3,9 @@
 -- for the list of every combat ability (CombatSkillSelectWnd), and the eight ability buttons as tiles that reflow
 -- to the width: each shows its ability and its reuse time shaded, a click uses it (or, holding an ability on the
 -- cursor, puts that one on the button), a right click picks the ability from the game's menu, a drag takes it off
--- onto the cursor (for a hot bar). Everything is the window's (app/lua_eq_abilities.cpp: eq.ClickChild,
--- eq.ButtonCoolDown, eq.PickUp), so the abilities and timers are the game's.
+-- onto the cursor (for a hot bar). Everything is the window's (app/lua_ui_abilities.cpp: hs.ClickChild,
+-- hs.ButtonCoolDown, hs.PickUp), so the abilities and timers are the game's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -26,13 +27,13 @@ local function abilityTile(n, w, h, s)
   local name = W.Text(WINDOW, id)
   local empty = name == ""
   local x, y = ui.GetCursorScreenPos()
-  local _, _, _, _, _, left, reuse = eq.ButtonCoolDown(WINDOW, id, y, y + h)
+  local _, _, _, _, _, left, reuse = API.spells.ButtonCoolDown(WINDOW, id, y, y + h)
   local cooling = not empty and (left or 0) > 0
   local fraction = cooling and math.min(1, left / math.max(left, reuse or 0, 1)) or 0
   local clicked = T.Hit("##caw" .. n, x, y, x + w, y + h)
   local hovered, active = ui.IsItemHovered(), ui.IsItemActive()
   if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
-    eq.ClickChild(WINDOW, id, "rightup") -- the game's ability menu, at this tile
+    API.windows.ClickChild(WINDOW, id, "rightup") -- the game's ability menu, at this tile
     T.TakeRightClick()
   end
   local dragged = not empty and T.DragFrom(WINDOW, id)
@@ -67,10 +68,10 @@ local function abilityTile(n, w, h, s)
         "\nClick to use it; right-click to choose another\nDrag onto an action bar to make a hot button")
     end
   end
-  if clicked and not dragged then eq.ClickChild(WINDOW, id, "left") end
+  if clicked and not dragged then API.windows.ClickChild(WINDOW, id, "left") end
 end
 
-local function testOpen() eq.ShowWindow(WINDOW, true) end
+local function testOpen() API.windows.Show(WINDOW, true) end
 local OPTS = {
   size = function() return 360, 190 end,
   resizable = { 200, 150 },
@@ -78,13 +79,13 @@ local OPTS = {
 local function body(x, y, w, h, s)
   -- the active discipline
   local icon = 32 * s
-  local active = eq.ChildShown(WINDOW, "CAW_CombatEffectButton") ~= false
+  local active = API.windows.ChildShown(WINDOW, "CAW_CombatEffectButton") ~= false
   local ix, iy = ui.GetCursorScreenPos()
-  local tex, u0, v0, u1, v1 = eq.ChildArt(WINDOW, "CAW_CombatEffectButton", "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(WINDOW, "CAW_CombatEffectButton", "decal")
   if type(tex) ~= "userdata" then tex = nil end
   T.Icon(ix, iy, icon, s, active and tex or nil, u0, v0, u1, v1, active and C.accent or nil)
   if active then
-    if T.Hit("##cawEffect", ix, iy, ix + icon, iy + icon) then eq.ClickChild(WINDOW, "CAW_CombatEffectButton", "left") end
+    if T.Hit("##cawEffect", ix, iy, ix + icon, iy + icon) then API.windows.ClickChild(WINDOW, "CAW_CombatEffectButton", "left") end
     T.HoverFx(ix, iy, ix + icon, iy + icon, s)
     if ui.IsItemHovered() then ui.SetTooltip("Click to end this discipline") end
   end
@@ -94,7 +95,7 @@ local function body(x, y, w, h, s)
   local _, th = T.TextSize("Ag", T.font.small)
   local effect = W.Text(WINDOW, "CAW_CombatEffectLabel")
   local fraction, remaining
-  if active then fraction, remaining = eq.Gauge(26) end
+  if active then fraction, remaining = API.character.Gauge(26) end
   local timerW = remaining and remaining ~= "" and (T.TextSize(remaining, T.font.small) + 8 * s) or 0
   local nameW = math.max(0, textW - timerW)
   local name = nameW >= T.TextSize("...", T.font.small) and T.Fit(effect, nameW, T.font.small) or ""
@@ -128,7 +129,7 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Combat Abilities", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   OPTS.shown = T.Setting(DRAW_KEY) == "1" or nil
   hud.Dialog(WINDOW, "Combat Abilities", OPTS, body)

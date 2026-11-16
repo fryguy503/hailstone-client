@@ -2,6 +2,7 @@
 -- with the D-pad or the left stick, A opens one, B or Start closes the menu. A tile opens its window the way its key
 -- or the EQ menu does (lib/actions.lua): this pack's window where the pack has one, else the game's own window,
 -- which is then used in cursor mode (the left stick moves the pointer).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -159,8 +160,8 @@ local TILES = {
   { "Inventory", "bag", "Equipment and bags", function() return A.open("Inventory", "InventoryWindow") end },
   { "Spells", "book", "Spell book and gems", function() return A.open("Spell Book", "SpellBookWnd") end },
   { "Abilities", "sword", "Disciplines, skills, actions", function() -- (abilities.lua) the disciplines where the class has them, else the ABILITIES key's page
-    if #eq.Disciplines() > 0 then return A.open("Combat Abilities", "CombatAbilityWnd") end
-    eq.SetTabPage("ActionsWindow", "ACTW_ActionsSubwindows", 1) eq.ShowWindow("ActionsWindow", true) return true end },
+    if #API.abilities.Disciplines() > 0 then return A.open("Combat Abilities", "CombatAbilityWnd") end
+    API.windows.SetTabPage("ActionsWindow", "ACTW_ActionsSubwindows", 1) API.windows.Show("ActionsWindow", true) return true end },
   { "AA", "star", "Alternate advancement", function() return A.open("Alternate Advancement", "AAWindow") end },
   { "Skills", "bars", "Skill levels", function() return A.open("Skills", "SkillsWindow") end },
   { "Map", "map", "The zone map", function() A.toggle("MapViewWnd") return true end },
@@ -189,7 +190,7 @@ local lastTile, frame, drawnFrame, focusFrames = 1, 0, -10, 0
 
 ui.window("Main Menu", function()
   frame = frame + 1 -- (frames, not seconds: a slow frame must not look like the menu opening again)
-  if not eq.InGame() then
+  if not API.session.InGame() then
     if GPSTATE.wasInGame then -- left the world (camped): the pad's own windows close
       GPSTATE.menuOpen, GPSTATE.chatOpen, GPSTATE.groupOpen, GPSTATE.eqMenuOpen = false, false, false, false
     end
@@ -200,7 +201,7 @@ ui.window("Main Menu", function()
   if GPSTATE.testSlot then -- testing (lib/window.lua test.open)
     GPSTATE.testAt = GPSTATE.testAt or ui.GetTime()
     if ui.GetTime() - GPSTATE.testAt > 8 then
-      eq.ClickSlot(GPSTATE.testSlot[1], nil, GPSTATE.testSlot[2])
+      API.inventory.ClickSlot(GPSTATE.testSlot[1], nil, GPSTATE.testSlot[2])
       GPSTATE.testSlot = nil
     end
   end
@@ -211,7 +212,7 @@ ui.window("Main Menu", function()
   local rows = math.ceil(#TILES / COLS)
   local w = COLS * tileW + (COLS - 1) * gap + 48
   local h = rows * tileH + (rows - 1) * gap + 48 + 70 + 66
-  local name = eq.Name() or ""
+  local name = API.character.Name() or ""
   if frame - drawnFrame > 1 then focusFrames = 3 end -- (a few frames: the window takes the focus after it appears)
   drawnFrame = frame
   if W.begin("Main Menu", { w = w, h = h, title = "Menu", subtitle = name,

@@ -1,5 +1,5 @@
 -- The modern UI's default layout: where each HUD frame (lib/hud.lua hud.Window) sits until the player moves it, on
--- any screen size and UI scale. Pure Lua (no ui.* or eq.*), so tests/lua_scripts_test.cpp runs it at many sizes.
+-- any screen size and UI scale. Pure Lua (no ui.* or hs.*), so tests/lua_scripts_test.cpp runs it at many sizes.
 --
 --   local layout = dofile("lib/layout.lua")
 --   local rects = layout.Solve(W, H, s, frames)

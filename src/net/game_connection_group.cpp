@@ -323,7 +323,7 @@ void GameConnection::update_pet_presence() {
     // ~PlayerClient when the pet goes, and every 100 ms): there is a pet when PetID's spawn is here; when that
     // changes to there being one, ReissueToggledPetCommands (game::pet_commands_to_reissue) sends the toggles that
     // are on to the new pet, before the packets after its spawn (the server's OP_PetCommandState among them). The
-    // window's showing and hiding (PopupOnPet) is the window's own (app/lua_eq_misc.cpp).
+    // window's showing and hiding (PopupOnPet) is the window's own (app/lua_ui_misc.cpp).
     bool has = pet_window_linked() && pets_.focused && world_.spawns.count(pets_.focused);
     if (has == pet_present_) return;
     pet_present_ = has;

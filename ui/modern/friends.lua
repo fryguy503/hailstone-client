@@ -2,6 +2,7 @@
 -- Muted page is voice chat, which this server does not have), each with an add field at the top (Enter adds), a
 -- search over the names once the list is long, and the actions under it. Adding and removing are the window's
 -- own buttons (/friends and /ignore toggle a name), so the lists are the game's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -24,7 +25,7 @@ local PAGES = {
 }
 
 local function count(id)
-  local rows = eq.ListInfo(WINDOW, id)
+  local rows = API.windows.ListInfo(WINDOW, id)
   return rows or 0
 end
 
@@ -36,7 +37,7 @@ local function page(p, s)
   local enter = committed and ui.IsKeyPressed(ui.Key.Enter)
   ui.SameLine()
   local clicked = W.Button(WINDOW, P.add, "Add", { width = btnW, primary = true })
-  if enter and not clicked and W.Text(WINDOW, P.edit) ~= "" then eq.ClickChild(WINDOW, P.add, "left") end
+  if enter and not clicked and W.Text(WINDOW, P.edit) ~= "" then API.windows.ClickChild(WINDOW, P.add, "left") end
 
   local rows = count(P.list)
   local needle = ""
@@ -54,7 +55,7 @@ local function page(p, s)
       filter = needle ~= "" and function(_, texts) return S.Matches(texts, needle) end or nil,
     })
   end
-  local _, _, selected = eq.ListInfo(WINDOW, P.list)
+  local _, _, selected = API.windows.ListInfo(WINDOW, P.list)
   local has = (selected or -1) >= 0
   ui.BeginDisabled(not has)
   if p == 0 then
@@ -86,6 +87,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Friends", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Friends", WINDOW_OPTS, drawWindow)
 end)

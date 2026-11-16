@@ -3,6 +3,7 @@
 -- choice, which sends it), the looters as the game lists them (the leader, then the group leaders or the looters
 -- set from the raid window's Add / Remove Looter, or the entire raid), and the sixteen class buttons: each opens
 -- the colour picker, and the colour picked is that class's in the raid window (kept in the UI ini).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -40,12 +41,12 @@ local function drawWindow(x, y, w, h, s)
     for _, k in ipairs(TYPES) do
       lines[#lines + 1] = k .. ": " .. MEANING[k]
     end
-    if eq.ChildState(WINDOW, "RAIDOPTIONS_SetLootTypeCombo") == false then lines[#lines + 1] = "(The raid leader sets it.)" end
+    if API.windows.ChildState(WINDOW, "RAIDOPTIONS_SetLootTypeCombo") == false then lines[#lines + 1] = "(The raid leader sets it.)" end
     ui.SetTooltip(table.concat(lines, "\n"))
   end
   W.Heading("Looters")
   local classH = 4 * (S.ButtonHeight(s) + 4 * s) + 34 * s -- the class colours below
-  local rows = eq.ListInfo(WINDOW, "RAIDOPTIONS_LooterList") or 0
+  local rows = API.windows.ListInfo(WINDOW, "RAIDOPTIONS_LooterList") or 0
   if rows == 0 then
     local aw, ah = ui.GetContentRegionAvail()
     S.Empty(aw, math.max(30 * s, ah - classH), "No looters.", "Select a raid member and press Add Looter.")
@@ -59,7 +60,7 @@ local function drawWindow(x, y, w, h, s)
   for i = 0, 15 do
     local id = "RAIDOPTIONS_ClassColor" .. i
     if i % 4 ~= 0 then ui.SameLine(0, 6 * s) end
-    local r, g, b = eq.ChildColor(WINDOW, id)
+    local r, g, b = API.windows.ChildColor(WINDOW, id)
     ui.PushStyleColor(ui.Col.Text, r or 1, g or 1, b or 1, 1)
     W.Button(WINDOW, id, CLASSES[i + 1], { width = bw, tooltip = "Choose this class's colour" })
     ui.PopStyleColor(1)
@@ -67,6 +68,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Raid Options", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Raid Options", WINDOW_OPTS, drawWindow)
 end)

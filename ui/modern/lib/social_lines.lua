@@ -1,10 +1,11 @@
 -- A social's command lines for the editors (socialedit.lua, luasocial.lua): a line's parts as a press runs it
--- (eq.SocialLine: game::split_social_line), a line put back together from them, about how long the lines take, and
+-- (hs.SocialLine: game::split_social_line), a line put back together from them, about how long the lines take, and
 -- the lines to Lua and back.
 --
 -- A press runs one line a step (a step: just over 100 ms), then waits a step, or N steps after "/pause N". The
 -- original skips only the comma after a prefix, so a second prefix follows it with no space: "/timer 600,/pause 10,
 -- /assist" (with a space, ", /pause 10" would be the command).
+local API = hs.UI
 local L = {}
 
 L.STEP = 0.1 -- seconds a step takes, about
@@ -15,7 +16,7 @@ local cache, cached = {}, 0
 function L.Parts(text, split)
   local p = cache[text]
   if p then return p end
-  local r = (split or eq.SocialLine)(text) or {}
+  local r = (split or API.socials.Line)(text) or {}
   local cmd = r.command or text
   if r.pause or (r.timers and #r.timers > 0) then cmd = cmd:gsub("^%s+", "") end
   local timer = nil

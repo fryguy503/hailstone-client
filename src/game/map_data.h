@@ -2,7 +2,7 @@
 
 // The in-game map's data and rules as the original's MapViewMap keeps them (MapViewMap, CMapViewWnd
 // and the helpers at the addresses given below). Pure state: the
-// files are read and written by the caller (app/lua_eq_map.cpp), the drawing is the caller's too.
+// files are read and written by the caller (app/lua_ui_map.cpp), the drawing is the caller's too.
 //
 // Map files: <maps dir>/<zone>.txt is layer 0 (the base map), <zone>_1.txt .. <zone>_3.txt layers 1..3
 // (MapViewMap_BuildMapFilePath @0x6c90f0: "%s%s%s.txt" of the maps directory, the zone's short name from the zone

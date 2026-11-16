@@ -1,6 +1,6 @@
 -- Inventory (gamepad pack): stands in for InventoryWindow, so the inventory key (I) and the EQ menu open it.
 -- Equipment, the ten bag slots and the contents of the bag last focused, the character's numbers, and the focused
--- item described on the right (nothing is hover-only). Every slot goes through the game's slot logic (eq.ClickSlot):
+-- item described on the right (nothing is hover-only). Every slot goes through the game's slot logic (hs.ClickSlot):
 --   A   pick up / put down / swap (the left click: the item goes on the cursor, shown here as "Holding")
 --   X   use the item (the quick right click: open a bag, read a book, cast a clicky); holding one: put it away
 --   Y   the item's full details (the held right button: the item display)
@@ -14,6 +14,7 @@
 -- the cursor as items (Create Item: the quantity dialog, up to a stack), A holding its item puts it back (Reclaim;
 -- both OP_AltCurrencyReclaim). While something is held every currency is listed (Display Missing), so one claimed
 -- down to 0 still takes its item back.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -33,7 +34,7 @@ local CURRENCY_LIST = "AltCurr_PointList"
 local currencies = {} -- W.list state
 local currencyFocused = false -- last frame's focus was on a currency row (the hints)
 
-local function label(t) return eq.Label(t) or "" end
+local function label(t) return API.character.Label(t) or "" end
 
 -- The slots' ImGui ids and names (fixed), made once rather than every frame.
 local SLOT_IDS, SLOT_NAMES = {}, {}
@@ -44,7 +45,7 @@ for slot = 23, 32 do SLOT_IDS[slot] = "##gen" .. slot end
 local function slotName(slot)
   local n = SLOT_NAMES[slot]
   if not n then
-    n = eq.SlotName(slot)
+    n = API.inventory.SlotName(slot)
     SLOT_NAMES[slot] = n
   end
   return n
@@ -71,7 +72,7 @@ local function stat(x, y, w, name, value, c)
 end
 
 local function vitality(x0, y, x1, gauge, name, color)
-  local fill, amount = eq.Gauge(gauge)
+  local fill, amount = API.character.Gauge(gauge)
   if not amount or amount == "" then return y end
   T.font(17)
   stat(x0, y, x1 - x0, name, string.format("%.1f%%", (fill or 0) * 100), C.text)
@@ -115,20 +116,20 @@ local function sheet(x0, y, x1)
   local RES = { { "Poison", 12 }, { "Disease", 13 }, { "Fire", 14 }, { "Cold", 15 }, { "Magic", 16 }, { "Corrupt", 136 } }
   local ys = y
   for i, s in ipairs(STATS) do
-    local v, r, g, b = eq.Label(s[2])
+    local v, r, g, b = API.character.Label(s[2])
     stat(x0, ys + (i - 1) * lh, half, s[1], v or "", r and { r, g, b, 1 } or nil)
   end
   for i, s in ipairs(RES) do
-    local v, r, g, b = eq.Label(s[2])
+    local v, r, g, b = API.character.Label(s[2])
     stat(x0 + half + T.px(20), ys + (i - 1) * lh, half, s[1], v or "", r and { r, g, b, 1 } or nil)
   end
   y = ys + #STATS * lh + T.px(10)
-  local wv, wr, wg, wb = eq.Label(24)
+  local wv, wr, wg, wb = API.character.Label(24)
   stat(x0, y, w, "Weight", (wv or "") .. " / " .. label(25), wr and { wr, wg, wb, 1 } or nil) y = y + lh
   T.unfont()
   -- money
   y = y + T.px(10)
-  local pp, gp, sp, cp = eq.Money()
+  local pp, gp, sp, cp = API.character.Money()
   T.font(20)
   local coins = { { pp, "pp", C.platinum }, { gp, "gp", C.gold }, { sp, "sp", C.silver }, { cp, "cp", C.copper } }
   local x = x0
@@ -145,9 +146,9 @@ end
 
 -- The currencies from y in x0 .. x1, down to y1.
 local function currencyList(x0, y, x1, y1, holding)
-  local _, missing = eq.ChildState(INV, "AltCurr_DisplayMissingButton")
-  if (missing == true) ~= holding then eq.ClickChild(INV, "AltCurr_DisplayMissingButton", "left") end
-  local list = eq.AltCurrencies(holding) or {}
+  local _, missing = API.windows.ChildState(INV, "AltCurr_DisplayMissingButton")
+  if (missing == true) ~= holding then API.windows.ClickChild(INV, "AltCurr_DisplayMissingButton", "left") end
+  local list = API.character.AltCurrencies(holding) or {}
   local wx, wy = ui.GetWindowPos()
   ui.SetCursorPos(x0 - wx, y - wy)
   T.heading("Currencies")
@@ -173,8 +174,8 @@ local function currencyList(x0, y, x1, y1, holding)
     T.textIn(rx1 - cw - T.px(14), ry0, rx1 - T.px(14), ry1, count, none and C.faint or C.gold, 1)
     T.unfont()
   end, function(i)
-    eq.ListClick(INV, CURRENCY_LIST, i - 1, "left")
-    eq.ClickChild(INV, holding and "AltCurr_ReclaimButton" or "AltCurr_CreateItemButton", "left")
+    API.windows.ListClick(INV, CURRENCY_LIST, i - 1, "left")
+    API.windows.ClickChild(INV, holding and "AltCurr_ReclaimButton" or "AltCurr_CreateItemButton", "left")
   end)
   return focused ~= nil
 end
@@ -182,7 +183,7 @@ end
 ui.window("Inventory", function()
   if not W.shown(INV) then return end
   T.frame()
-  local held = eq.Item(eq.CursorSlot or 33)
+  local held = API.inventory.Item(API.inventory.CursorSlot or 33)
   local holding = held ~= nil
   if not holding then destroyQ.confirm = nil end -- (the question is about the held item)
   local hints = destroyQ.confirm and { { "a", "Select" }, { "b", "Cancel" } }
@@ -200,15 +201,15 @@ ui.window("Inventory", function()
       local focusedItem, focusedWhere, focusedSlot, focusedBag
       if held and W.pressed("lb") then
         -- (LB is "previous page" in other windows: with Fast Item Destroy on, the game would not ask, so this does)
-        if (eq.Option("fast_item_destroy") or 0) ~= 0 then
+        if (API.settings.Option("fast_item_destroy") or 0) ~= 0 then
           destroyQ.confirm = { "Destroy " .. (held.name or "the held item") .. "?", function()
-            eq.ClickChild(INV, "IW_Destroy", "left")
+            API.windows.ClickChild(INV, "IW_Destroy", "left")
           end }
         else
-          eq.ClickChild(INV, "IW_Destroy", "left")
+          API.windows.ClickChild(INV, "IW_Destroy", "left")
         end
       end
-      if held and W.pressed("rb") and eq.gamepad and eq.gamepad.drop_cursor then eq.gamepad.drop_cursor() end
+      if held and W.pressed("rb") and API.gamepad and API.gamepad.DropCursor then API.gamepad.DropCursor() end
       local size, gap = T.px(84), T.px(10)
       local bagName -- (a slot in the open bag is named "<bag>, slot <n>" only when it has the focus)
       local function slotAt(id, slot, bag, item, where, sz)
@@ -218,19 +219,19 @@ ui.window("Inventory", function()
           focusedSlot, focusedBag = slot, bag
           if bag == nil and slot >= 23 and slot <= 32 and item and (item.bagSlots or 0) > 0 then openBag = slot end
           if W.pressed("x") then
-            if held then eq.ChatSubmit(1, "/autoinventory") else eq.ClickSlot(slot, bag, "rightup") end
+            if held then API.chat.Submit(1, "/autoinventory") else API.inventory.ClickSlot(slot, bag, "rightup") end
           end
-          if W.pressed("y") and item then eq.ClickSlot(slot, bag, "rightheld") end
+          if W.pressed("y") and item then API.inventory.ClickSlot(slot, bag, "rightheld") end
           -- the item on a hot button (the game's left button held on the slot: an item link that follows the item)
           if not held and item and W.pressed("lb") then
-            AS.start(item.name, function() return eq.ClickSlot(slot, bag, "leftheld") end, "Inventory")
+            AS.start(item.name, function() return API.inventory.ClickSlot(slot, bag, "leftheld") end, "Inventory")
           end
           if held then -- what A would put here: the held item's icon at the slot's corner
             T.itemIcon(held.icon, sx1 - T.px(30), sy0 - T.px(14), sx1 + T.px(10), sy0 + T.px(26))
           end
         end
-        if clicked then eq.ClickSlot(slot, bag, "left") end
-        if ui.IsItemClicked(ui.Mouse.Right) then eq.ClickSlot(slot, bag, "rightup") end
+        if clicked then API.inventory.ClickSlot(slot, bag, "left") end
+        if ui.IsItemClicked(ui.Mouse.Right) then API.inventory.ClickSlot(slot, bag, "rightup") end
       end
       -- equipment
       ui.SetCursorPos(midX - wx, y0 - wy)
@@ -239,7 +240,7 @@ ui.window("Inventory", function()
         ui.SetCursorPos(midX - wx, select(2, ui.GetCursorScreenPos()) - wy)
         for i, slot in ipairs(row) do
           if i > 1 then ui.SameLine(0, gap) end
-          slotAt(SLOT_IDS[slot], slot, nil, eq.Item(slot), slotName(slot))
+          slotAt(SLOT_IDS[slot], slot, nil, API.inventory.Item(slot), slotName(slot))
         end
       end
       -- the bag slots
@@ -249,14 +250,14 @@ ui.window("Inventory", function()
       local bsize = T.px(76)
       for slot = 23, 32 do
         if slot > 23 then ui.SameLine(0, T.px(8)) end
-        slotAt(SLOT_IDS[slot], slot, nil, eq.Item(slot), slotName(slot), bsize)
+        slotAt(SLOT_IDS[slot], slot, nil, API.inventory.Item(slot), slotName(slot), bsize)
       end
       -- the open bag's contents (the first bag until one is focused); read after the slots' clicks above
-      local bag = openBag and eq.Item(openBag)
+      local bag = openBag and API.inventory.Item(openBag)
       if not (bag and (bag.bagSlots or 0) > 0) then
         openBag = nil
         for slot = 23, 32 do
-          local it = eq.Item(slot)
+          local it = API.inventory.Item(slot)
           if it and (it.bagSlots or 0) > 0 then
             openBag, bag = slot, it
             break
@@ -270,7 +271,7 @@ ui.window("Inventory", function()
         local per = 10
         for i = 0, bag.bagSlots - 1 do
           if i % per == 0 then ui.SetCursorPos(midX - wx, select(2, ui.GetCursorScreenPos()) - wy) else ui.SameLine(0, T.px(8)) end
-          slotAt(bagId(openBag, i), openBag, i, eq.Item(openBag, i), nil, bsize)
+          slotAt(bagId(openBag, i), openBag, i, API.inventory.Item(openBag, i), nil, bsize)
         end
       else
         openBag = nil
@@ -279,7 +280,7 @@ ui.window("Inventory", function()
       local rx0 = x1 - rightW
       local holdH = held and T.px(110) or 0
       I.summary(focusedItem, focusedWhere, rx0, y0, x1, y1 - holdH - (held and T.px(12) or 0),
-        focusedItem and focusedSlot and eq.CompareItem(focusedSlot, focusedBag) or nil)
+        focusedItem and focusedSlot and API.compare.Item(focusedSlot, focusedBag) or nil)
       if held then
         local hy0 = y1 - holdH
         T.rect(rx0, hy0, x1, y1, C.accent, 0.16, T.px(14))
@@ -298,5 +299,5 @@ ui.window("Inventory", function()
       end
     end
   end
-  if W.back(W.finish(), destroyQ) then eq.ShowWindow(INV, false) end
+  if W.back(W.finish(), destroyQ) then API.windows.Show(INV, false) end
 end)

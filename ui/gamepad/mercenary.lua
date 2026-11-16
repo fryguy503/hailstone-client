@@ -8,8 +8,9 @@
 --                       Call Assist, Set Owner, Info, Suspend / Unsuspend, Dismiss) and Switch (your mercenaries:
 --                       A selects one; Switch).
 --   Mercenary Info      MIW_InfoWnd (the manager's Info): your mercenary's costs, description and stance.
--- The drop-down, lists and buttons are the stock windows' (eq.ComboSelect, eq.ListClick, eq.ClickChild), enabled
+-- The drop-down, lists and buttons are the stock windows' (hs.ComboSelect, hs.ListClick, hs.ClickChild), enabled
 -- and labelled as the game sets them.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -27,15 +28,15 @@ end
 -- well when the game shows it) as two lines at x0, y.
 local function costs(win, x0, x1, y)
   local function line(caption, kind, ly)
-    local pp = tonumber(eq.WindowText(win, kind .. "CostPlatText") or "") or 0
-    local gp = tonumber(eq.WindowText(win, kind .. "CostGoldText") or "") or 0
+    local pp = tonumber(API.windows.Text(win, kind .. "CostPlatText") or "") or 0
+    local gp = tonumber(API.windows.Text(win, kind .. "CostGoldText") or "") or 0
     T.font(21)
     local _, th = ui.CalcTextSize("Ag")
     T.draw(x0, ly, caption, C.dim)
     local px = x0 + T.px(130)
     px = px + M.price(pp * 1000 + gp * 100, px, ly, ly + th, 0)
     if M.shown(win, "Alt" .. kind .. "CostText") then
-      T.draw(px + T.px(14), ly, "or " .. (eq.WindowText(win, "Alt" .. kind .. "CostText") or ""), C.gold)
+      T.draw(px + T.px(14), ly, "or " .. (API.windows.Text(win, "Alt" .. kind .. "CostText") or ""), C.gold)
     end
     T.unfont()
     return th
@@ -62,7 +63,7 @@ ui.window("Mercenary Merchant", function()
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     if not M.modal(F, x0, y0, x1, y1) then
-      if M.pressed("Mercenary Merchant", "x") then eq.ClickChild(MW, "HireButton", "left") end
+      if M.pressed("Mercenary Merchant", "x") then API.windows.ClickChild(MW, "HireButton", "left") end
       local mid = x0 + (x1 - x0) * 0.42
       local bh = T.px(64)
       ui.SetCursorPos(x0 - wx, y0 - wy)
@@ -80,16 +81,16 @@ ui.window("Mercenary Merchant", function()
       local ty = y0 + ch + T.px(20)
       local by = y1 - bh
       local th = by - T.px(16) - ty
-      P.draw("##mmtwinfo", info, eq.WindowText(MW, "InfoText") or "", rx0, ty, x1, ty + th * 0.6,
+      P.draw("##mmtwinfo", info, API.windows.Text(MW, "InfoText") or "", rx0, ty, x1, ty + th * 0.6,
         { empty = "Pick a mercenary to read about it.", size = 19 })
       M.caption(rx0, ty + th * 0.6 + T.px(10), "Stance")
-      P.draw("##mmtwstance", sinfo, eq.WindowText(MW, "StanceInfoText") or "", rx0, ty + th * 0.6 + T.px(38), x1, by - T.px(16),
+      P.draw("##mmtwstance", sinfo, API.windows.Text(MW, "StanceInfoText") or "", rx0, ty + th * 0.6 + T.px(38), x1, by - T.px(16),
         { empty = "Pick a stance to read about it.", size = 19 })
       ui.SetCursorPos(rx0 - wx, by - wy)
       M.button(MW, "HireButton", "Hire", x1 - rx0, bh, { primary = true, glyph = "x" })
     end
   end
-  if M.back(F, W.finish()) then eq.ShowWindow(MW, false) end
+  if M.back(F, W.finish()) then API.windows.Show(MW, false) end
 end)
 
 -- ---------------------------------------------------------------- the manager (MMGW_ManageWnd)
@@ -101,8 +102,8 @@ ui.window("Manage Mercenaries", function()
   if not M.visible(GW) then return end
   M.frame()
   if W.begin("Manage Mercenaries", { w = 1400, h = 900, title = "Mercenary",
-        subtitle = page == 1 and ("Next upkeep in " .. (eq.WindowText(GW, "TimeLeftText") or "?")) or
-          ("Slots: " .. (eq.WindowText(GW, "TotalSlotsText") or "?")),
+        subtitle = page == 1 and ("Next upkeep in " .. (API.windows.Text(GW, "TimeLeftText") or "?")) or
+          ("Slots: " .. (API.windows.Text(GW, "TotalSlotsText") or "?")),
         hints = { { "a", page == 1 and "Switch stance" or "Select" }, { "lb", "Manage" }, { "rb", "Switch" }, { "b", "Close" } } }) then
     if M.pressed("Manage Mercenaries", "lb") then page = 1 end
     if M.pressed("Manage Mercenaries", "rb") then page = 2 end
@@ -122,7 +123,7 @@ ui.window("Manage Mercenaries", function()
       M.buttons(GW, { { "SetActiveStanceButton", "Set Active" }, { "CallForAssistButton", "Call Assist" } }, rx0, x1, bh)
       M.buttons(GW, { { "SetOwnerButton", "Set Owner" }, { "InfoButton", "Info" } }, rx0, x1, bh)
       M.buttons(GW, { { "SuspendButton", nil }, { "DismissButton", "Dismiss" } }, rx0, x1, bh)
-      local tip = eq.ChildTooltip and eq.ChildTooltip(GW, "SuspendButton") or ""
+      local tip = API.windows.ChildTooltip and API.windows.ChildTooltip(GW, "SuspendButton") or ""
       if tip ~= "" then
         T.font(18)
         T.draw(rx0, select(2, ui.GetCursorScreenPos()) + T.px(6), T.fit(tip, x1 - rx0), C.dim)
@@ -139,7 +140,7 @@ ui.window("Manage Mercenaries", function()
       T.unfont()
     end
   end
-  if W.finish() then eq.ShowWindow(GW, false) end
+  if W.finish() then API.windows.Show(GW, false) end
 end)
 
 -- ---------------------------------------------------------------- the info (MIW_InfoWnd)
@@ -154,10 +155,10 @@ ui.window("Mercenary Info", function()
     local ch = costs(IW, x0, x1, y0)
     local ty = y0 + ch + T.px(20)
     local th = y1 - ty
-    P.draw("##miwinfo", iinfo, eq.WindowText(IW, "InfoText") or "", x0, ty, x1, ty + th * 0.6, { empty = "No mercenary.", size = 19 })
+    P.draw("##miwinfo", iinfo, API.windows.Text(IW, "InfoText") or "", x0, ty, x1, ty + th * 0.6, { empty = "No mercenary.", size = 19 })
     M.caption(x0, ty + th * 0.6 + T.px(10), "Stance")
-    P.draw("##miwstance", istance, eq.WindowText(IW, "StanceInfoText") or "", x0, ty + th * 0.6 + T.px(38), x1, y1,
+    P.draw("##miwstance", istance, API.windows.Text(IW, "StanceInfoText") or "", x0, ty + th * 0.6 + T.px(38), x1, y1,
       { empty = "", size = 19 })
   end
-  if W.finish() then eq.ShowWindow(IW, false) end
+  if W.finish() then API.windows.Show(IW, false) end
 end)

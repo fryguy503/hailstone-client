@@ -5,6 +5,7 @@
 -- Every list, field and button is the original's child: Sell is the selected line's own Sell button (the list's
 -- column 5, as CBarterSearchWnd puts one on each line), which asks how many through the game's amount dialog; Find
 -- Buyer gives the path to a buyer in this zone; Greeting asks the buyer's welcome text, Welcome the hall's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -35,7 +36,7 @@ local searched = false
 local lastDrawn = 0
 
 local function search()
-  eq.ClickChild(WINDOW, "SearchButton", "left")
+  API.windows.ClickChild(WINDOW, "SearchButton", "left")
   M.Refresh(WINDOW, "BuyLineList")
   searched = true
 end
@@ -96,7 +97,7 @@ local function drawWindow(x, y, w, h, s)
   local bw4 = (ui.GetContentRegionAvail() - 3 * 8) / 4
   ui.PushStyleColor(ui.Col.Button, C.accent[1], C.accent[2], C.accent[3], 0.24)
   ui.BeginDisabled(sel == nil)
-  if ui.Button("Sell##btssell", bw4, btnH) and sel then eq.ListClick(WINDOW, "BuyLineList", sel.index, "left", 5) end
+  if ui.Button("Sell##btssell", bw4, btnH) and sel then API.windows.ListClick(WINDOW, "BuyLineList", sel.index, "left", 5) end
   ui.EndDisabled()
   ui.PopStyleColor(1)
   if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then
@@ -113,7 +114,7 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Barter Search", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   if ui.GetTime() - lastDrawn > 1 then searched = false end
   hud.Dialog(WINDOW, "Barter Search", WINDOW_OPTS, drawWindow)
 end)

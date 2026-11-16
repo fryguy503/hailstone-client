@@ -9,7 +9,8 @@
 --                               From gems make one. The editor puts spells from the whole book into the set's
 --                               twelve slots without memorizing anything; Y saves, B steps back.
 -- The book and gems are clicks on the stock windows' children, so memorizing, scribing and casting follow the game;
--- the sets are eq.SpellSets and friends (src/app/lua_eq_spellbook.cpp).
+-- the sets are hs.SpellSets and friends (src/app/lua_ui_spellbook.cpp).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -18,19 +19,19 @@ local C = T.C
 
 local GEMS = "CastSpellWnd"
 local BOOK = "SpellBookWnd"
-local GEM_IDS, gemInfo = {}, {} -- each gem's child, and the record eq.GemInfo fills for it
+local GEM_IDS, gemInfo = {}, {} -- each gem's child, and the record hs.GemInfo fills for it
 for g = 0, 11 do
   GEM_IDS[g] = "CSPW_Spell" .. g
   gemInfo[g] = {}
 end
 local tintEdge = { 1, 1, 1, 1 } -- a gem's tint, as its edge's colour
 
--- One gem at x0, y0 (size): its holder, icon, cool-down (eq.GemInfo: the gem's art, tint, cool-down and tooltip).
+-- One gem at x0, y0 (size): its holder, icon, cool-down (hs.GemInfo: the gem's art, tint, cool-down and tooltip).
 -- Returns the spell name ("" when empty).
 local function drawGem(g, x0, y0, size, alpha)
   local x1, y1 = x0 + size, y0 + size
   local r = T.px(10)
-  local info = eq.GemInfo(GEMS, GEM_IDS[g], gemInfo[g], y0, y1)
+  local info = API.spells.GemInfo(GEMS, GEM_IDS[g], gemInfo[g], y0, y1)
   local tex = info.tex
   local has = type(tex) == "userdata"
   T.rect(x0, y0, x1, y1, has and C.raised or C.sunken, alpha, r)
@@ -65,7 +66,7 @@ ui.window("HUD Spell Gems", function()
   -- the stock window hides the rest)
   local any, count = false, 0
   for g = 0, 11 do
-    local info = eq.GemInfo(GEMS, GEM_IDS[g], gemInfo[g])
+    local info = API.spells.GemInfo(GEMS, GEM_IDS[g], gemInfo[g])
     if type(info.tex) == "userdata" then any = true end
     if info.shown ~= false then
       count = count + 1
@@ -97,9 +98,9 @@ ui.window("HUD Spell Gems", function()
       if hovered then
         T.outline(x0, y0, x0 + size, y0 + size, C.accent, 1, T.px(10), T.px(2))
         if name ~= "" then ui.SetTooltip(name) end
-        if ui.IsMouseClicked(ui.Mouse.Right) then eq.SpellGemClick(GEM_IDS[g], "right") end
+        if ui.IsMouseClicked(ui.Mouse.Right) then API.spells.GemClick(GEM_IDS[g], "right") end
       end
-      if clicked then eq.SpellGemClick(GEM_IDS[g], "left") end
+      if clicked then API.spells.GemClick(GEM_IDS[g], "left") end
     end
   end
   ui.End()
@@ -121,7 +122,7 @@ end
 
 -- ---------------------------------------------------------------- spell sets
 -- The book's Y page: the game's spell sets (hotbuttons.ini [SpellLoadouts], /memspellset) as cards, A loads one, X
--- edits it. The editor (Hailstone's own: eq.SaveSpellSet(name, spells) / eq.EditSpellSet) puts spells into a set's
+-- edits it. The editor (Hailstone's own: hs.SaveSpellSet(name, spells) / hs.EditSpellSet) puts spells into a set's
 -- twelve slots without memorizing them: A on a spell then A on a slot (or A on an empty slot, then the spell),
 -- X empties a slot, A on a full slot then on another swaps the two; Y saves.
 local SLOTS = 12
@@ -139,7 +140,7 @@ local testView = nil    -- the last test.book.view applied
 local function refreshBook()
   if ui.GetTime() - bookRead < 0.25 then return end
   bookRead = ui.GetTime()
-  book, byId = eq.SpellBook() or {}, {}
+  book, byId = API.spells.Book() or {}, {}
   for _, e in ipairs(book) do byId[e.id] = e end
   table.sort(book, function(a, b)
     if a.level ~= b.level then return a.level < b.level end
@@ -169,11 +170,11 @@ end
 local function iconOf(id)
   local e = byId[id]
   if not e then return nil end
-  return eq.SpellIcon(e.icon)
+  return API.spells.Icon(e.icon)
 end
 
 local function openEditor(n, set, fromGems)
-  local st = eq.SpellBookState() or {}
+  local st = API.spells.BookState() or {}
   local spells = set and copySpells(set.spells) or copySpells(fromGems and st.gems or nil)
   ed = { n = n, name = set and set.name or "", spells = spells }
   ed.saved = { name = ed.name, spells = copySpells(spells) }
@@ -207,7 +208,7 @@ local function save(sets)
   if not saveCheck(sets) then return end
   local name = trim(ed.name)
   local at
-  if ed.n then at = eq.EditSpellSet(ed.n, name, ed.spells) else at = eq.SaveSpellSet(name, ed.spells) end
+  if ed.n then at = API.spells.EditSet(ed.n, name, ed.spells) else at = API.spells.SaveSet(name, ed.spells) end
   if at then
     flash = { "Saved " .. name, ui.GetTime() + 3 }
     ed, view = nil, "sets"
@@ -233,7 +234,7 @@ local function setIcons(spells, x0, y0, size, gap)
 end
 
 local function drawSets(x0, y0, x1, y1, wx, wy)
-  local sets = eq.SpellSets() or {}
+  local sets = API.spells.Sets() or {}
   local used = {}
   for n, set in ipairs(sets) do
     if set.inUse then used[#used + 1] = n end
@@ -287,15 +288,15 @@ local function drawSets(x0, y0, x1, y1, wx, wy)
     end
     if rightClicked then openEditor(n, set, false) end
     if clicked and view == "sets" then
-      eq.MemorizeSpellSet(n)
+      API.spells.MemorizeSet(n)
       view = "book" -- to watch the gems fill
     end
   end
 end
 
 local function drawEditor(x0, y0, x1, y1, wx, wy)
-  local sets = eq.SpellSets() or {}
-  local st = eq.SpellBookState() or {}
+  local sets = API.spells.Sets() or {}
+  local st = API.spells.BookState() or {}
   local usable = st.usableGems or 8
   refreshBook()
   local L = T.px(440)
@@ -393,7 +394,7 @@ local function drawEditor(x0, y0, x1, y1, wx, wy)
     if T.button("##eddelete", "Delete set", L, T.px(60), {}, pad) then
       local n, name = ed.n, ed.name
       state.confirm = { "Delete the spell set " .. name .. "?", function()
-        eq.DeleteSpellSet(n)
+        API.spells.DeleteSet(n)
         ed, view = nil, "sets"
         jump = { new = 1 }
       end }
@@ -453,7 +454,7 @@ local function drawEditor(x0, y0, x1, y1, wx, wy)
       if e then
         if ed.held and ed.held.id == e.id then T.rect(rx0, ry0, rx1, ry1, C.accent, 0.25, T.px(10)) end
         local is = rowH - T.px(12)
-        local tex, u0, v0, u1, v1 = eq.SpellIcon(e.icon)
+        local tex, u0, v0, u1, v1 = API.spells.Icon(e.icon)
         if tex then T.icon(tex, u0, v0, u1, v1, rx0 + T.px(6), ry0 + T.px(6), rx0 + T.px(6) + is, ry0 + T.px(6) + is) end
         local badge = inSet[e.id]
         local right = badge and T.px(56) or T.px(10)
@@ -504,7 +505,7 @@ local function drawBook(x0, y0, x1, y1, wx, wy, holding, holdingSpell)
   T.heading("Gems")
   local gy = select(2, ui.GetCursorScreenPos())
   for g = 0, 11 do
-    if eq.ChildShown(GEMS, "CSPW_Spell" .. g) == false then goto nextgem end -- a gem the character cannot use
+    if API.windows.ChildShown(GEMS, "CSPW_Spell" .. g) == false then goto nextgem end -- a gem the character cannot use
     local col, row = g // 6, g % 6
     local gx0, gy0 = x0 + col * (gsize + ggap), gy + row * (gsize + ggap)
     ui.SetCursorPos(gx0 - wx, gy0 - wy)
@@ -517,19 +518,19 @@ local function drawBook(x0, y0, x1, y1, wx, wy, holding, holdingSpell)
     local name = drawGem(g, gx0, gy0, gsize)
     if focused then
       T.focusRing(gx0, gy0, gx0 + gsize, gy0 + gsize, T.px(10))
-      if W.pressed("x") then eq.SpellGemClick("CSPW_Spell" .. g, "right") end
+      if W.pressed("x") then API.spells.GemClick("CSPW_Spell" .. g, "right") end
       if col == 1 and W.pressed("right") then jump = { spell = row } end
     end
-    if clicked then eq.SpellGemClick("CSPW_Spell" .. g, "left") end
-    if ui.IsItemClicked(ui.Mouse.Right) then eq.SpellGemClick("CSPW_Spell" .. g, "right") end
+    if clicked then API.spells.GemClick("CSPW_Spell" .. g, "left") end
+    if ui.IsItemClicked(ui.Mouse.Right) then API.spells.GemClick("CSPW_Spell" .. g, "right") end
     ::nextgem::
   end
   local gx1 = x0 + 2 * gsize + ggap
   -- the memorize / scribe progress, under the gems
-  if eq.ChildShown(BOOK, "SBW_Memorize_Gauge") == true then
+  if API.windows.ChildShown(BOOK, "SBW_Memorize_Gauge") == true then
     -- (the memorize gauge's EQType 9 reads 0, not nothing, while a scroll is scribed: the state picks the gauge)
-    local scribing = (eq.SpellBookState() or {}).scribing
-    local frac = eq.Gauge(scribing and 10 or 9)
+    local scribing = (API.spells.BookState() or {}).scribing
+    local frac = API.character.Gauge(scribing and 10 or 9)
     local by = gy + 6 * (gsize + ggap) + T.px(10)
     T.font(18)
     T.bar(x0, by, gx1, by + T.px(28), frac, C.cast, scribing and "Scribing" or "Memorizing")
@@ -544,7 +545,7 @@ local function drawBook(x0, y0, x1, y1, wx, wy, holding, holdingSpell)
       local m = page * 8 + i
       local rx0, ry0 = px0 + page * (pageW + T.px(30)), y0 + i * (rowH + T.px(10))
       ui.SetCursorPos(rx0 - wx, ry0 - wy)
-      local name = eq.WindowText(BOOK, "SBW_SpellName" .. m) or ""
+      local name = API.windows.Text(BOOK, "SBW_SpellName" .. m) or ""
       ui.PushID("spell" .. m)
       jumpHere("spell", m)
       local clicked = ui.InvisibleButton("##s", pageW, rowH, ui.ButtonFlags.EnableNav)
@@ -553,7 +554,7 @@ local function drawBook(x0, y0, x1, y1, wx, wy, holding, holdingSpell)
       ui.PopID()
       local rx1, ry1 = rx0 + pageW, ry0 + rowH
       T.rect(rx0, ry0, rx1, ry1, name ~= "" and C.raised or C.sunken, 0.9, T.px(10))
-      local tex, u0, v0, u1, v1 = eq.ChildArt(BOOK, "SBW_Spell" .. m, "decal")
+      local tex, u0, v0, u1, v1 = API.windows.ChildArt(BOOK, "SBW_Spell" .. m, "decal")
       local is = rowH - T.px(12)
       if type(tex) == "userdata" then T.icon(tex, u0, v0, u1, v1, rx0 + T.px(6), ry0 + T.px(6), rx0 + T.px(6) + is, ry0 + T.px(6) + is) end
       T.textIn(rx0 + is + T.px(20), ry0, rx1 - T.px(10), ry1, name ~= "" and T.fit(name, pageW - is - T.px(30)) or "", C.text, 0)
@@ -563,12 +564,12 @@ local function drawBook(x0, y0, x1, y1, wx, wy, holding, holdingSpell)
         if page == 0 and W.pressed("right") then jump = { spell = m + 8 } end
         if page == 1 and W.pressed("left") then jump = { spell = m - 8 } end
       end
-      if clicked and name ~= "" then eq.ClickChild(BOOK, "SBW_Spell" .. m, "left") end
+      if clicked and name ~= "" then API.windows.ClickChild(BOOK, "SBW_Spell" .. m, "left") end
     end
   end
   -- (the book's PageUp arrow turns forward and PageDown back, as the game has them: LB back, RB forward)
-  if W.pressed("lb") then eq.ClickChild(BOOK, "SBW_PageDown_Button", "left") end
-  if W.pressed("rb") then eq.ClickChild(BOOK, "SBW_PageUp_Button", "left") end
+  if W.pressed("lb") then API.windows.ClickChild(BOOK, "SBW_PageDown_Button", "left") end
+  if W.pressed("rb") then API.windows.ClickChild(BOOK, "SBW_PageUp_Button", "left") end
   if holdingSpell then -- under the gems (and their memorize bar): the spell held, waiting for a gem
     T.font(20)
     local _, lh = ui.CalcTextSize("Ag")
@@ -587,7 +588,7 @@ end
 -- character's name) clears them, so Save cannot write into the next character's set of that number.
 local edWho = nil
 local function forCharacter()
-  local who = eq.InGame() and (eq.Label(1) or "") or nil
+  local who = API.session.InGame() and (API.character.Label(1) or "") or nil
   if who == edWho then return end
   edWho = who
   ed, view, state.confirm, flash, jump, edPage = nil, "book", nil, nil, nil, 0
@@ -610,16 +611,16 @@ ui.window("Spell Book", function()
       view = tv
     elseif tv:match("^edit") then
       local n = tonumber(tv:match("%d+"))
-      openEditor(n, n and (eq.SpellSets() or {})[n], false)
+      openEditor(n, n and (API.spells.Sets() or {})[n], false)
     end
   end
   if view == "edit" and not ed then view = "sets" end
-  local holding = eq.CursorAttachment and eq.CursorAttachment()
+  local holding = API.cursor.Attachment and API.cursor.Attachment()
   local holdingSpell = holding and holding.spell ~= nil
   local title, subtitle, hints
   if view == "book" then
     title = "Spell Book"
-    subtitle = "Pages " .. (eq.WindowText(BOOK, "SBW_LeftPageNum") or "") .. " - " .. (eq.WindowText(BOOK, "SBW_RightPageNum") or "")
+    subtitle = "Pages " .. (API.windows.Text(BOOK, "SBW_LeftPageNum") or "") .. " - " .. (API.windows.Text(BOOK, "SBW_RightPageNum") or "")
     hints = { { "a", holdingSpell and "Memorize here" or "Take spell" }, { "x", "Forget" }, { "lb", "Page" },
       { "rb", "Page" }, { "y", "Spell sets" }, { "b", "Close" } }
   elseif view == "sets" then
@@ -667,7 +668,7 @@ ui.window("Spell Book", function()
     elseif view ~= "book" then
       view = "book"
     else
-      eq.ShowWindow(BOOK, false)
+      API.windows.Show(BOOK, false)
     end
   end
 end)

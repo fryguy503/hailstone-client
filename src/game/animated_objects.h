@@ -14,6 +14,7 @@
 // node of its first moving corner. Some zones have tens of thousands of such parts (Emerald Jungle's trees).
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -44,12 +45,20 @@ public:
     // Poses everything `ms` milliseconds into the zone's animation clock.
     void set_time(std::uint64_t ms);
     std::uint64_t time() const { return time_ms_; }
+    // The renderer's current clock can be between physics steps. Visual queries use this separately posed mesh;
+    // collision and part_transform keep the physics pose unchanged.
+    void set_visual_time(std::uint64_t ms);
+    std::uint64_t visual_time() const { return visual_time_ms_; }
 
     // The movement sweep against the moving parts (CActorData::FindIntersectionSphere's polygon path): a hit at
     // t <= the sweep's t sets t, collided and the normal. True on a hit.
     bool sweep_sphere(SphereSweep& sweep) const;
     // The highest moving surface under (x, y) no higher than p.z + step_up, as CollisionMesh::floor_below.
     std::optional<float> floor_below(const glm::vec3& p, float step_up) const;
+    // Render effects: current upward drawn opaque/masked parts, including passable decorative parts.
+    std::optional<float> visual_surface_below(const glm::vec3& p) const;
+    bool visual_surfaces(const glm::vec2& low,const glm::vec2& high,
+                         const std::function<bool(const CollisionTriangle&)>& visit,std::uint32_t& work) const;
     // True when a moving part blocks the segment a -> b.
     bool blocks(const glm::vec3& a, const glm::vec3& b) const;
 
@@ -64,6 +73,7 @@ private:
         std::vector<float> reach;          // per shape: the farthest its triangles get from the object's origin
         std::vector<glm::mat4> pose;       // the last set_time's motion per node (ObjectAnimation::pose)
         std::vector<glm::mat4> pose_inverse;
+        std::vector<glm::mat4> visual_pose;
     };
     struct Part {
         std::uint32_t definition = 0, shape = 0;
@@ -80,12 +90,14 @@ private:
     void near(const glm::vec3& lo, const glm::vec3& hi, std::vector<std::uint32_t>& out) const;
     // A part's transform now and its inverse.
     void placed(const Part& part, glm::mat4& transform, glm::mat4& inverse) const;
+    glm::mat4 placed_visual(const Part& part) const;
 
     std::vector<Definition> definitions_;
     std::vector<Part> parts_;
     std::unordered_map<std::int64_t, std::vector<std::uint32_t>> grid_;
     std::vector<std::uint32_t> big_; // parts whose reach spans too many cells: in every query
     std::uint64_t time_ms_ = 0;
+    std::uint64_t visual_time_ms_ = 0;
 };
 
 } // namespace hailstone::game

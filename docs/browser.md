@@ -63,7 +63,7 @@ that ships with the client. The player's scripts may have `web`, as above. Serve
 original.
 
 ```
-app        BrowserWindow, eq.web (Lua), the plugin host's web functions
+app        BrowserWindow, hs.web (Lua), the plugin host's web functions
 src/web/   browser_protocol.h: the messages; browser_host.h: the tabs, the helper's life
 platform/  helper_process.h: the helper's pipes (SDL3's process I/O), binary stdio in the helper
 render     one texture per tab, changed rectangles copied in each frame
@@ -92,7 +92,7 @@ tools/hailstone-web/   the helper: links CEF, nothing of the client's but browse
   digit, `-` or `_` as `_`, and its FNV-1a hash), and the helper a request context for each profile: an add-on's page
   never sees the player's sign-ins or another add-on's. The server's links (OP_Weblink) have `server-links/` below it. Nothing goes in the game folder. A generic user agent naming
   Hailstone; no hardware identifiers.
-- **Scripts and plugins** (docs/plugins.md "Web pages"): `mq.web` for scripts, `eq.Web*` in a plugin's windows,
+- **Scripts and plugins** (docs/plugins.md "Web pages"): `mq.web` for scripts, `hs.Web*` in a plugin's windows,
   `web_*` in the host table (ABI 3). The page sees only `window.hailstone.post()` and `window.hailstone.onmessage`,
   and only its tab's owner gets what it posts: a page never runs commands or reads the game itself.
 - **Rules.** Tabs that scripts and plugins open follow the address rules above, at every navigation, not only the
@@ -163,7 +163,7 @@ tools/hailstone-web/   the helper: links CEF, nothing of the client's but browse
   `hailstone_web_protocol`, built with the client's. MSVC uses the DLL runtime (`/MD`) for both.
 - `libcef.so` comes with its symbols (1.4 GB); the install strips it to about 264 MB.
 
-### The window (`ui/<pack>/browser.lua`, `app/lua_eq_web.cpp`, `ui/web_textures.h`)
+### The window (`ui/<pack>/browser.lua`, `app/lua_ui_web.cpp`, `ui/web_textures.h`)
 
 - **Modern:** tabs along the top (the newest comes to the front; x closes one, + opens an empty one), back,
   forward, reload / stop, the address (Enter goes; a refused address is said under it), "Your browser" (the page in
@@ -171,7 +171,7 @@ tools/hailstone-web/   the helper: links CEF, nothing of the client's but browse
 - **Gamepad:** the page with buttons down the right: Address (the on-screen keys), Back, Forward, Reload, Type into
   the page (the keys' text goes where the page has its cursor), Point at the page (the pad's cursor mode: the left
   stick moves the pointer, A clicks), Close the tab; LB / RB go through the tabs. In the More page.
-- **The page:** `eq.WebView` draws the tab's texture and its popup, sends the mouse (moves with the held buttons,
+- **The page:** `hs.WebView` draws the tab's texture and its popup, sends the mouse (moves with the held buttons,
   clicks, double clicks, the wheel, leaving) and, once clicked, the keyboard: the editing and arrow keys as keys,
   Ctrl / Cmd with a letter (copy, paste, select all), and typed text as characters. While a page has the keyboard the
   game's key binds are off (ImGui's keyboard capture) and SDL's text input is on (`Window::set_text_input`). The tab
@@ -192,12 +192,12 @@ tools/hailstone-web/   the helper: links CEF, nothing of the client's but browse
    its helper apps and framework: `HAILSTONE_BROWSER` is off there), and a moment for CEF to write its cookies at
    shutdown (done since: below).
 4. **Done (unit and window tests; not tried in a live session):** the browser window, BrowserWnd, in the Modern and
-   Gamepad packs (below), `eq.Web*` for the packs (docs/dev-ui.md), OP_Weblink and `/web` in it. The texture path
+   Gamepad packs (below), `hs.Web*` for the packs (docs/dev-ui.md), OP_Weblink and `/web` in it. The texture path
    was seen once in the client on Linux (2026-10-30, the Modern window opened at the login screen by a local change
    that was not kept, Vulkan validation on: the page drawn, no validation messages).
 5. **Done (unit tests, the stand-in helper):** scripts and plugins (docs/plugins.md "Web pages"): `plugin::WebAccess`
    (`app/web_service.h`) holds every caller to its own tabs, its `web` permission and the server's sites; `mq.web`,
-   `eq.Web*` in a plugin's window, the host table's `web_*` (ABI 3; polled with `web_message` rather than a
+   `hs.Web*` in a plugin's window, the host table's `web_*` (ABI 3; polled with `web_message` rather than a
    callback), the example plugin's `/webexample`. Tabs close as their owner stops or unloads.
 6. **Done:** OP_Weblink and `/survey` in the in-game window, a "Web Browser" row in the Modern pack's EQ menu (and
    the gamepad pack's More page). Open: what of `CHtmlWnd` and `WebManager_CreateHtmlWnd` can be traced

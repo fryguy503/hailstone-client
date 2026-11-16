@@ -2,6 +2,7 @@
 -- character's combat abilities (disciplines) with a search, level and reuse, the selected one's description and
 -- Make Hotkey (or a double click), which puts it on the cursor for a hot button or a combat ability button. Rows
 -- and the button are the original's (CSSW_SkillSelectorList, CSSW_MakeHotkeyButton).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -37,7 +38,7 @@ local function body(x, y, w, h, s)
         T.font.small)
       T.Text(x1 - 8 * s_ - rw, (y0 + y1 - th) / 2, right, C.muted, T.font.small)
     end,
-    doubleClick = function() eq.ClickChild(WINDOW, "CSSW_MakeHotkeyButton", "left") end,
+    doubleClick = function() API.windows.ClickChild(WINDOW, "CSSW_MakeHotkeyButton", "left") end,
     empty = "You have no combat abilities",
   })
   local _, dy = ui.GetCursorScreenPos()
@@ -54,9 +55,9 @@ local function body(x, y, w, h, s)
     tooltip = "Puts the selected ability on the cursor: drop it on a hot button or a combat ability button" })
 end
 
-local function testOpen() eq.ClickChild("CombatAbilityWnd", "CAW_OpenCombatSkillSelectWnd", "left") end
+local function testOpen() API.windows.ClickChild("CombatAbilityWnd", "CAW_OpenCombatSkillSelectWnd", "left") end
 ui.window("Combat Skills", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   hud.Dialog(WINDOW, "Combat Abilities", OPTS, body)
 end)

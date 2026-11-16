@@ -4,6 +4,7 @@
 -- cursor; the offer on hover) and Done. Everything is the window's children: a row click selects in the game's list,
 -- the buttons send from its handler, and a right click on a good inspects it (the original's list right click).
 --   draw(cfg, w, h, s)  cfg = { window, prefix, currency() -> name, icon() -> tex.. | nil, columns (extra) }
+local API = hs.UI
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
 local T = dofile("lib/theme.lua")
@@ -78,7 +79,7 @@ function P.Draw(cfg, w, h, s)
   else
     ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1, "Select a good to buy it.")
   end
-  local sellTip = eq.ChildTooltip(win, pre .. "SellButton")
+  local sellTip = API.windows.ChildTooltip(win, pre .. "SellButton")
   W.ButtonRow(win, {
     { pre .. "PurchaseButton", "Purchase", { primary = true,
       tooltip = sel and (short(sel) and ("Not enough " .. label) or "Buy the selected good") or "Select a good first" } },

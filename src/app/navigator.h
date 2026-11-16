@@ -30,6 +30,7 @@
 #include <glm/glm.hpp>
 
 #include "nav/nav_control.h"
+#include "game/server_path.h"
 #include "nav/path_follower.h"
 
 struct ImDrawList;
@@ -60,8 +61,10 @@ public:
         std::function<void(const std::string&)> chat;
         // The server's path to a spawn (OP_FindPersonRequest, quietly: GameConnection::request_quiet_path): ask, then
         // the reply once it has come (the destination first, as sent; empty: the server has none).
-        std::function<void(std::uint32_t spawn_id)> request_server_path;
-        std::function<std::optional<std::vector<glm::vec3>>()> server_path;
+        std::function<game::ServerPathLease(std::uint32_t spawn_id, game::ServerPathOrigin)> request_server_path;
+        std::function<std::optional<std::vector<glm::vec3>>(const game::ServerPathLease&)> server_path;
+        std::function<void(const game::ServerPathLease&)> cancel_server_path;
+        std::function<std::uint64_t()> interaction_context;
         std::function<void()> started; // a walk began: /follow ends
         // The player's melee range of a spawn (the original's __get_melee_range), for /stick's default distance.
         std::function<std::optional<float>(std::uint32_t spawn)> melee_range;
@@ -133,6 +136,9 @@ public:
     // NavControl
     std::string go_to_point(const glm::vec3& world, float distance, std::string label, bool straight) override;
     std::string go_to_spawn(std::uint32_t id, float distance) override;
+    // A Find-owned walk: its caller must remain eligible before any destination read or movement. Ordinary
+    // navigation never supplies this guard; replacing the goal also replaces its guard.
+    std::string go_to_spawn_guarded(std::uint32_t id, float distance, std::function<bool()> eligible);
     std::string go_to_door(std::uint8_t id, bool click) override;
     // The isometric camera's click to move (game/click_intent.h, docs/isometric.md): a walk to a point that says
     // nothing when the mesh goes only part of the way (each click or held button would say it again), and goes
@@ -170,24 +176,30 @@ private:
         GoalKind kind = GoalKind::None;
         glm::vec3 point{0.0f};   // where the path ends (a spawn's: where it stood when the path was found)
         std::uint32_t spawn = 0;
+        std::uint64_t incarnation = 0, context = 0;
+        std::shared_ptr<bool> live;
         std::uint8_t door = 0;
         bool click = false;
         bool straight = false;
         bool quiet = false; // a click to move: no word in the chat when the mesh only goes part of the way
         float distance = 2.0f;
         std::string label;
+        std::function<bool()> eligible;
     };
     struct Stick {
         std::uint32_t spawn = 0;
+        std::uint64_t incarnation = 0, context = 0;
         nav::StickOptions options;
         std::string label;
     };
     std::string begin(Goal g);
     nav::SteerOutput walk_frame(const Frame& f);
     nav::SteerOutput stick_frame(const Frame& f);
+    bool stick_current() const;
     float stick_distance() const;
     bool plan(const glm::vec3& from);
     std::optional<glm::vec3> goal_point() const;
+    bool goal_allowed() const;
     void finish(const std::string& message);
     bool open_door_ahead(const Frame& f);
     // A closed door on the path a little way ahead, within reach: clicked without stopping.
@@ -226,8 +238,12 @@ private:
     void start_zone(bool use_cache);
     bool water_at(const glm::vec3& p) const; // the zone's regions; false without them
     void ensure_zone(); // the mesh is being read or built
+    void retire_server_path();
 
     Env env_;
+    std::uint64_t goal_revision_ = 0;
+    std::uint64_t server_owner_ = 0;
+    game::ServerPathLease server_lease_;
     nav::PathOptions options_;
     nav::PathFollower follower_;
     nav::PathFollower follow_path_;     // /follow's detour (assist_follow), apart from /nav's walk

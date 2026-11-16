@@ -5,6 +5,7 @@
 --   T.Panel(x0, y0, x1, y1, s)
 --   T.Bar("player.hp", x0, y0, x1, y1, s, fraction, T.color.hp, { text = "1200 / 1500" })
 
+local API = hs.UI
 local T = {}
 
 -- ---------------------------------------------------------------- colours
@@ -398,13 +399,13 @@ function T.RightPressStart(key, onClick)
   onClick("rightdown")
 end
 
--- Dragging the item just drawn puts the hotbutton it makes on the cursor (eq.PickUp), once per press; that press's
+-- Dragging the item just drawn puts the hotbutton it makes on the cursor (hs.PickUp), once per press; that press's
 -- click is then not a click.
 function T.DragFrom(window, id, row)
   if not ui.IsMouseDown(ui.Mouse.Left) and not ui.IsMouseReleased(ui.Mouse.Left) then mouse.pickedUp = false end
   if window and id and not mouse.pickedUp and ui.IsItemActive() and ui.IsMouseDragging(ui.Mouse.Left)
-      and not eq.HoldingButton() then
-    mouse.pickedUp = eq.PickUp(window, id, row)
+      and not API.cursor.HoldingButton() then
+    mouse.pickedUp = API.cursor.PickUp(window, id, row)
   end
   return mouse.pickedUp
 end

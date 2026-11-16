@@ -223,7 +223,7 @@ void ClientApp::show_select_model() {
 
 void ClientApp::sync_create_model() {
     // The client's own creation screen (the stock CharacterCreation draws its own and dresses the model itself,
-    // app/lua_eq_login.cpp): its race, gender and class onto the model, with CCharacterCreation's look.
+    // app/lua_ui_login.cpp): its race, gender and class onto the model, with CCharacterCreation's look.
     game::Spawn* m = model_player();
     if (!m) return;
     std::uint32_t cls = create_view_.class_id;
@@ -237,7 +237,7 @@ void ClientApp::sync_create_model() {
     m->gender = static_cast<std::uint8_t>(choice[1]);
     m->class_id = static_cast<std::uint8_t>(choice[2]);
     m->appearance.class_id = m->class_id;
-    ModelPlayerActor a(eq_host_, pre_game_rng_);
+    ModelPlayerActor a(ui_host_, pre_game_rng_);
     if (was[0] != choice[0]) char_create_look_.race_changed(a);
     else if (was[1] != choice[1]) char_create_look_.gender_changed(a);
     else char_create_look_.class_changed(a);
@@ -247,7 +247,7 @@ void ClientApp::sync_create_model() {
 void ClientApp::update_pre_game(float dt) {
     const bool select = screen_ == Screen::Characters || screen_ == Screen::Create;
     if (!select || !conn_) {
-        eq_host_.model_player = nullptr;
+        ui_host_.model_player = nullptr;
         return;
     }
     if (!pre_game_loaded_) {
@@ -263,11 +263,11 @@ void ClientApp::update_pre_game(float dt) {
     game::Spawn* m = model_player();
     if (!m) return;
     // What the windows reach of the model (the creation window and the customization window dress it).
-    eq_host_.model_player = m;
-    eq_host_.char_create_look = &char_create_look_;
-    eq_host_.char_library = actor_renderer_ ? &actor_renderer_->library() : nullptr;
-    if (!eq_host_.model_for)
-        eq_host_.model_for = [this](const game::Spawn& s) -> std::shared_ptr<const assets::CharacterModel> {
+    ui_host_.model_player = m;
+    ui_host_.char_create_look = &char_create_look_;
+    ui_host_.char_library = actor_renderer_ ? &actor_renderer_->library() : nullptr;
+    if (!ui_host_.model_for)
+        ui_host_.model_for = [this](const game::Spawn& s) -> std::shared_ptr<const assets::CharacterModel> {
             return actor_renderer_ ? actor_renderer_->choose_model(s).model : nullptr;
         };
     if (screen_ == Screen::Characters) {
@@ -294,7 +294,7 @@ void ClientApp::update_pre_game(float dt) {
         }
         pre_game_shown_ = "create";
         pre_game_hidden_ = false;
-        const bool stock = eq_api_ && eq_api_->replaces("CharacterCreation");
+        const bool stock = ui_api_ && ui_api_->replaces("CharacterCreation");
         if (!stock) sync_create_model();
         else if (create_choice_ == std::array<std::uint32_t, 3>{})
             create_choice_ = {m->race, m->gender, m->class_id}; // the stock window dressed it
@@ -312,12 +312,12 @@ void ClientApp::update_pre_game(float dt) {
             ++m->action_seq;
         }
     };
-    const bool customizing = screen_ == Screen::Create && eq_host_.customization_shown;
+    const bool customizing = screen_ == Screen::Create && ui_host_.customization_shown;
     if (customizing) {
-        for (const auto& call : std::exchange(eq_host_.customization_camera, {}))
+        for (const auto& call : std::exchange(ui_host_.customization_camera, {}))
             apply(game::customization_camera(pre_game_camera_, call, in));
-        pre_game_zoom_ = eq_host_.customization_zoom;
-        pre_game_feature_ = eq_host_.customization_feature;
+        pre_game_zoom_ = ui_host_.customization_zoom;
+        pre_game_feature_ = ui_host_.customization_feature;
     } else if (pre_game_zoom_ >= 0) {
         apply(game::set_ccreate_camera(pre_game_camera_, 0, in));
         pre_game_zoom_ = -1;

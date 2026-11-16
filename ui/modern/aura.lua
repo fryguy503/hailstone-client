@@ -2,6 +2,7 @@
 -- in the corner; the state is kept as the stock window's). A borderless frame with each aura's icon and name; a
 -- right click on one removes it (the game's list takes the click). Its height follows the number of auras; its
 -- scale is the right-click menu's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color
@@ -15,10 +16,10 @@ local RADIUS = { radius = 4 }
 local rows = 0
 local OPTS = {
   size = function()
-    rows = eq.ListInfo(WINDOW, LIST) or 0
+    rows = API.windows.ListInfo(WINDOW, LIST) or 0
     return 190, HEAD + PAD * 2 + math.max(rows, 1) * ROW
   end,
-  onClose = function() eq.ShowWindow(WINDOW, false) end,
+  onClose = function() API.windows.Show(WINDOW, false) end,
 }
 local function body(x, y, w, h, s)
   T.Text(x + PAD * s + 2 * s, y + 4 * s, "AURAS", C.faint, T.font.tiny)
@@ -29,7 +30,7 @@ local function body(x, y, w, h, s)
   end
   local isz = (ROW - 4) * s
   for r = 0, rows - 1 do
-    local texts, _, _, _, tex, u0, v0, u1, v1 = eq.ListRow(WINDOW, LIST, r)
+    local texts, _, _, _, tex, u0, v0, u1, v1 = API.windows.ListRow(WINDOW, LIST, r)
     local name = texts and texts[1] or ""
     local rx0, rx1 = x + PAD * s, x + w - PAD * s
     local y0 = ry + r * ROW * s
@@ -42,13 +43,13 @@ local function body(x, y, w, h, s)
     T.Text(tx, y0 + (ROW * s - th) / 2, T.Fit(name, rx1 - tx - 4 * s, T.font.small), C.text, T.font.small)
     if hov then ui.SetTooltip(name .. "\nRight-click to remove it") end
     if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
-      eq.ListClick(WINDOW, LIST, r, "right")
+      API.windows.ListClick(WINDOW, LIST, r, "right")
       T.TakeRightClick()
     end
   end
 end
 
 ui.window("Auras", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Window(WINDOW, "Auras", OPTS, body)
 end)

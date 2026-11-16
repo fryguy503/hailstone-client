@@ -1,5 +1,5 @@
 -- Adventures and PvP (gamepad pack), each standing in for its stock window and answered through it (lib/model.lua:
--- the original's children, app/lua_eq_adventure.cpp), so what may be requested, accepted or left is the game's:
+-- the original's children, app/lua_ui_adventure.cpp), so what may be requested, accepted or left is the game's:
 --   Adventure (AdventureRequestWnd)          an adventure recruiter: their words (or the adventure offered, or the
 --                                            current one's briefing) in a panel D-pad up / down scrolls; on an
 --                                            adventure the time to enter / to finish and the progress; the kind and
@@ -14,6 +14,7 @@
 --                                            death, the kills of the last day; Refresh, Leaderboard, Done
 --   PvP Leaderboard (PvpLeaderboardWnd)      what to rank by, your standing, the board; Refresh, Done
 -- X refreshes where the window has Refresh. B closes (B with a choice list up takes it down).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -95,7 +96,7 @@ ui.window("Adventure", function()
       if M.shown(AR, "AdvRqst_LeaveButton") then
         T.heading("Current adventure")
         if T.button("##advleave", "Leave Adventure", cw, bh, { sub = "Give up the current adventure" , align = 0 }, pad) then
-          arState.confirm = { "Give up the current adventure?", function() eq.ClickChild(AR, "AdvRqst_LeaveButton", "left") end }
+          arState.confirm = { "Give up the current adventure?", function() API.windows.ClickChild(AR, "AdvRqst_LeaveButton", "left") end }
         end
       end
       T.heading("Your record")
@@ -103,7 +104,7 @@ ui.window("Adventure", function()
       ui.EndGroup()
     end
   end
-  if M.back(W.finish(), arPick, arState) then eq.ShowWindow(AR, false) end
+  if M.back(W.finish(), arPick, arState) then API.windows.Show(AR, false) end
 end)
 
 -- ---------------------------------------------------------------- a leaderboard (adventure, PvP)
@@ -117,7 +118,7 @@ local function board(name, o, pick, state)
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     if not M.picker(pick, x0, y0, x1, y1) then
-      if pressed(name, "x") then eq.ClickChild(o.win, o.refresh, "left") end
+      if pressed(name, "x") then API.windows.ClickChild(o.win, o.refresh, "left") end
       -- the choices, then Refresh and Done, along the top
       local bh = T.px(76)
       local n = #o.combos + 2
@@ -151,7 +152,7 @@ local function board(name, o, pick, state)
       })
     end
   end
-  if M.back(W.finish(), pick, nil, nil, state) then eq.ShowWindow(o.win, false) end
+  if M.back(W.finish(), pick, nil, nil, state) then API.windows.Show(o.win, false) end
 end
 
 local ALB = { win = "AdventureLeaderboardWnd", list = "AdvLeaderboard_LeaderList", nameCol = 2,
@@ -187,7 +188,7 @@ ui.window("Adventure Stats", function()
         hints = { { "x", "Refresh" }, { "b", "Close" } } }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
-    if pressed("Adventure Stats", "x") then eq.ClickChild(AS, "AdvStats_RefreshButton", "left") end
+    if pressed("Adventure Stats", "x") then API.windows.ClickChild(AS, "AdvStats_RefreshButton", "left") end
     -- the totals: the points to spend and the list's final totals row
     local rows = M.rows(AS, "AdvStats_ThemeList")
     local all = rows[#rows] or {}
@@ -201,7 +202,7 @@ ui.window("Adventure Stats", function()
     M.buttons(AS, { { "AdvStats_RefreshButton", "Refresh", { glyph = "x" } },
       { "AdvStats_LeaderboardButton", "Leaderboard" }, { "AdvStats_DoneButton", "Done" } }, x0, x1, bh)
   end
-  if W.finish() then eq.ShowWindow(AS, false) end
+  if W.finish() then API.windows.Show(AS, false) end
 end)
 
 -- ---------------------------------------------------------------- PvP stats (PvPStatsWnd)
@@ -225,7 +226,7 @@ ui.window("PvP Stats", function()
         hints = { { "x", "Refresh" }, { "b", "Close" } } }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
-    if pressed("PvP Stats", "x") then eq.ClickChild(PS, "PvpStats_RefreshButton", "left") end
+    if pressed("PvP Stats", "x") then API.windows.ClickChild(PS, "PvpStats_RefreshButton", "left") end
     local y = M.facts({ { "Points to spend", M.text(PS, "PvpStats_AvailableValue"), C.endurance },
       { "Career points", value("PvpStats_TotalPointsLabel"), C.accent }, { "Kills", value("PvpStats_YourKillsLabel") },
       { "Deaths", value("PvpStats_YourDeathsLabel") }, { "Infamy", value("PvpStats_YourInfamyLevelLabel"), C.danger } },
@@ -245,5 +246,5 @@ ui.window("PvP Stats", function()
     M.buttons(PS, { { "PvpStats_RefreshButton", "Refresh", { glyph = "x" } },
       { "PvpStats_LeaderboardButton", "Leaderboard" }, { "PvpStats_DoneButton", "Done" } }, x0, x1, bh)
   end
-  if W.finish() then eq.ShowWindow(PS, false) end
+  if W.finish() then API.windows.Show(PS, false) end
 end)

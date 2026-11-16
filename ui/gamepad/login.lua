@@ -1,4 +1,4 @@
--- The login screen (gamepad pack): eq.LoginScreen stands in for the client's own (ui/dev_screens.cpp login_screen),
+-- The login screen (gamepad pack): hs.LoginScreen stands in for the client's own (ui/dev_screens.cpp login_screen),
 -- laid out around what a player does most, the rest a page away. A Hailstone screen, not the original's.
 --   Main            the characters seen on this server's accounts as tiles (A plays one at once: its account, world
 --                   and character), the server (LB / RB step through the saved ones and New server, A lists them),
@@ -11,11 +11,12 @@
 --   Add-ons         a GitHub link to an add-on (docs/addons.md) and its install card, the store (every add-on of the
 --                   add-on index: A on one installs it through its card), then every script and plugin: A on one
 --                   lists what can be done with it and what it may do (the server's own: nothing that removes or
---                   stops them). The page follows view.addons.open (eq.LoginSet "addonsOpen").
+--                   stops them). The page follows view.addons.open (hs.LoginSet "addonsOpen").
 --   What's new      this release's part of CHANGELOG.md (view.about.notes): A on an entry shows it whole
 -- The build and the updater's word on it (view.about) sit in the screen's top left corner.
 -- B goes back from a page, a list or the keys. A text is typed on the keys or, with a real keyboard, in the box over
 -- them (Enter accepts, Escape cancels).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -53,9 +54,11 @@ end
 
 local function packName(v, id)
   for _, p in ipairs(v.uiPacks) do
-    if p.id == id then return p.name, p.description end
+    if p.id == id then
+      return p.name, p.available == false and ("Unavailable: " .. (p.reason or "")) or p.description, p.available ~= false
+    end
   end
-  return id, ""
+  return id, "", false
 end
 
 -- Shortens text with "..." from its start (a folder: the end is what tells them apart).
@@ -71,7 +74,7 @@ local function fitStart(text, w)
 end
 
 -- ---------------------------------------------------------------- the keys
--- Opens the keys for a field. e: field (eq.LoginSet's name, or nil with done), title, text, password, digits,
+-- Opens the keys for a field. e: field (hs.LoginSet's name, or nil with done), title, text, password, digits,
 -- noBlank, capital, back (the item the focus returns to), submit (Enter logs in, as the client's fields do),
 -- done(text) (after the field is set), byPad (Start opened it: the keys take the focus).
 local function openEdit(e)
@@ -96,12 +99,12 @@ local function closeEdit(accept, enter)
   if not accept then return end
   if e.field == "port" then
     local n = tonumber(e.buf)
-    if n then eq.LoginSet("port", n) end
+    if n then API.pregame.LoginSet("port", n) end
   elseif e.field then
-    eq.LoginSet(e.field, e.buf)
+    API.pregame.LoginSet(e.field, e.buf)
   end
   if e.done then e.done(e.buf) end
-  if enter and e.submit then eq.LoginDo("login") end
+  if enter and e.submit then API.pregame.LoginDo("login") end
 end
 
 -- The field to fill before the login can go (the client's Start asks for it): host, username, password.
@@ -193,7 +196,7 @@ local function stepServer(v, dir)
   local n = #v.servers
   if v.transient or n == 0 then return end
   local i = (v.selected + dir) % (n + 1)
-  if i == 0 then eq.LoginDo("new") else eq.LoginDo("select", i) end
+  if i == 0 then API.pregame.LoginDo("new") else API.pregame.LoginDo("select", i) end
 end
 
 local function serverList(v)
@@ -201,11 +204,11 @@ local function serverList(v)
   for i, s in ipairs(v.servers) do
     local where = s.host ~= "" and (s.host .. ":" .. s.port) or "No address yet"
     items[#items + 1] = { label = s.name, sub = where .. "  ·  " .. (packName(v, s.ui)),
-      current = v.selected == i, fn = function() eq.LoginDo("select", i) end }
+      current = v.selected == i, fn = function() API.pregame.LoginDo("select", i) end }
   end
   items[#items + 1] = { label = "New server", sub = "Type its address and port", current = v.selected == 0,
     fn = function()
-      eq.LoginDo("new")
+      API.pregame.LoginDo("new")
       st.page = "server"
       F:want("##name")
     end }
@@ -218,7 +221,7 @@ local function accountList(v)
     local sub = a.passwordSaved and "Password saved" or "No saved password"
     if a.character ~= "" then sub = a.character .. "  ·  " .. sub end
     items[#items + 1] = { label = a.username, sub = sub, current = a.username == v.username,
-      fn = function() eq.LoginDo("account", a.username) end }
+      fn = function() API.pregame.LoginDo("account", a.username) end }
   end
   return items
 end
@@ -230,16 +233,16 @@ local TILE_H = 104
 local function playTile(v, i)
   local q = v.characters[i]
   if q.passwordSaved then
-    eq.LoginDo("play", i)
+    API.pregame.LoginDo("play", i)
     return
   end
   -- (no saved password: the account goes in the fields, and the password typed now plays the character)
-  eq.LoginSet("quick", i)
-  eq.LoginDo("account", q.account)
+  API.pregame.LoginSet("quick", i)
+  API.pregame.LoginDo("account", q.account)
   openEdit({ title = "Password for " .. q.account, password = true, back = "##tile" .. i,
     byPad = P.padDrives(), done = function(text)
-      eq.LoginSet("password", text)
-      if text ~= "" then eq.LoginDo("play", i) end
+      API.pregame.LoginSet("password", text)
+      if text ~= "" then API.pregame.LoginDo("play", i) end
     end })
 end
 
@@ -306,13 +309,23 @@ end
 -- client loads that pack, which may be another than this one), and a saved server keeps it at once.
 local function interfaceRow(v, x0, y, w, h)
   P.at(x0, y)
-  local pname, pdesc = packName(v, v.ui)
-  local step = P.cycle(F, "##ui", "Interface", pname, w, h, { note = pdesc, disabled = v.busy or #v.uiPacks < 2 })
+  local pname, pdesc, currentAvailable = packName(v, v.ui)
+  local availableCount = 0
+  for _, p in ipairs(v.uiPacks) do if p.available ~= false then availableCount = availableCount + 1 end end
+  local disabled = v.busy or availableCount == 0 or (availableCount == 1 and currentAvailable)
+  local step = P.cycle(F, "##ui", "Interface", pname, w, h, { note = pdesc, disabled = disabled })
+  if pdesc ~= "" and ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then ui.SetTooltip(pdesc) end
   if step then
     local cur = 1
     for i, p in ipairs(v.uiPacks) do if p.id == v.ui then cur = i end end
-    local n = v.uiPacks[(cur - 1 + step) % #v.uiPacks + 1]
-    if n then eq.LoginSet("ui", n.id) end
+    for _ = 1, #v.uiPacks do
+      cur = (cur - 1 + step) % #v.uiPacks + 1
+      local n = v.uiPacks[cur]
+      if n.available ~= false then
+        if n.id ~= v.ui then API.pregame.LoginSet("ui", n.id) end
+        break
+      end
+    end
   end
 end
 
@@ -327,7 +340,7 @@ end
 local function loginOrAsk(v, byPad)
   if v.busy then return end
   if v.ready then
-    eq.LoginDo("login")
+    API.pregame.LoginDo("login")
   else
     local e = missing(v)
     e.text, e.byPad = v[e.field] or "", byPad
@@ -353,7 +366,7 @@ local function updateRow(v, x0, y, x1, w)
   P.at(x0, y)
   for i, it in ipairs(items) do
     if i > 1 then ui.SameLine(0, gap) end
-    if P.button(F, it[1], it[2], bw, rh) then eq.LoginDo(it[3]) end
+    if P.button(F, it[1], it[2], bw, rh) then API.pregame.LoginDo(it[3]) end
   end
   return y + rh
 end
@@ -370,16 +383,16 @@ local function suggestionRows(v, x0, y, x1, w)
     P.at(x0, y)
     if P.button(F, "##sglook" .. i, sg.required and "Review required add-on" or "Look at it", bw, rh,
         { primary = true, disabled = v.busy }) then
-      eq.LoginDo("addonSuggestLook", sg.source)
+      API.pregame.LoginDo("addonSuggestLook", sg.source)
     end
     if not sg.required then
       ui.SameLine(0, gap)
       if P.button(F, "##sglater" .. i, "Not now", bw, rh, { disabled = v.busy }) then
-        eq.LoginDo("addonSuggestLater", sg.source)
+        API.pregame.LoginDo("addonSuggestLater", sg.source)
       end
       ui.SameLine(0, gap)
       if P.button(F, "##sgnever" .. i, "Don't ask again", bw, rh, { disabled = v.busy }) then
-        eq.LoginDo("addonSuggestNever", sg.source)
+        API.pregame.LoginDo("addonSuggestNever", sg.source)
       end
     end
     y = y + rh
@@ -451,14 +464,14 @@ local function mainPage(v, x0, y, x1, w)
     local half = (w - gap) / 2
     if P.toggle(F, "##remember", "Remember account", v.remember, half, rh,
           { disabled = busy, note = "Keep the username in this server's list" }) then
-      eq.LoginSet("remember", not v.remember)
+      API.pregame.LoginSet("remember", not v.remember)
     end
     ui.SameLine(0, gap)
     local why = not v.canSavePasswords and "No system keyring to keep it in"
       or (not v.remember and "Needs Remember account") or "Kept in the system keyring"
     if P.toggle(F, "##savepw", "Save password", v.savePassword, half, rh,
           { disabled = busy or not v.remember or not v.canSavePasswords, note = why }) then
-      eq.LoginSet("savePassword", not v.savePassword)
+      API.pregame.LoginSet("savePassword", not v.savePassword)
     end
     y = y + rh + gap
   end
@@ -483,7 +496,7 @@ local function mainPage(v, x0, y, x1, w)
   y = y + lh
   if v.sessionTicketAvailable and not busy then
     P.at(x0, y + gap)
-    if P.button(F, "##resume_token", "Sign in with session", w, rh) then eq.LoginDo("resume_token") end
+    if P.button(F, "##resume_token", "Sign in with session", w, rh) then API.pregame.LoginDo("resume_token") end
     y = y + gap + rh
   end
   if v.update then y = updateRow(v, x0, y + px(14), x1, w) end
@@ -513,19 +526,19 @@ local function serverPage(v, x0, y, x1, w)
   local files = picked and v.assetsDir or "A folder made when the server is saved"
   if P.field(F, "##files", "Server files", picked and fitStart(files, w - px(420)) or files, w, rh,
         { disabled = busy or not picked, note = picked and "A opens the folder: the server's own files go here" or nil }) then
-    eq.LoginDo("openAssets")
+    API.pregame.LoginDo("openAssets")
   end
   y = y + rh + px(22)
   P.at(x0, y)
   local bw = (w - 2 * gap) / 3
   if P.button(F, "##save", "Save", bw, px(72), { primary = v.host ~= "", disabled = busy or v.host == "" }) then
-    eq.LoginDo("save")
+    API.pregame.LoginDo("save")
   end
   ui.SameLine(0, gap)
   if P.button(F, "##delete", "Delete", bw, px(72), { disabled = busy or not picked }) then
     local name = serverName(v)
     st.confirm = { "Delete " .. name .. "? Its folder moves to servers/.deleted/.", function()
-      eq.LoginDo("delete")
+      API.pregame.LoginDo("delete")
       st.page = "main"
       F:want("##server")
     end }
@@ -549,16 +562,16 @@ local function boxRows(v, x0, y, x1, w)
     P.at(x0, y)
     local note = a.canBox and (a.box and "In the box set" or "Not in the box set") or "Save its password to box it"
     if P.toggle(F, "##box" .. i, a.username, a.box, px(330), rh, { disabled = busy or not a.canBox, note = note }) then
-      eq.LoginDo("box", a.username, not a.box)
+      API.pregame.LoginDo("box", a.username, not a.box)
     end
     ui.SameLine(0, gap)
     if P.field(F, "##world" .. i, "World", a.world ~= "" and a.world or "Last played", cw, rh,
           { labelW = 86, chevron = true, disabled = busy }) then
       local items = { { label = "Last played", sub = "The world it played last", current = a.world == "",
-        fn = function() eq.LoginDo("world", a.username, "") end } }
+        fn = function() API.pregame.LoginDo("world", a.username, "") end } }
       for _, wname in ipairs(v.worlds) do
         items[#items + 1] = { label = wname, current = a.world == wname,
-          fn = function() eq.LoginDo("world", a.username, wname) end }
+          fn = function() API.pregame.LoginDo("world", a.username, wname) end }
       end
       if #v.worlds == 0 then items[1].sub = "The worlds show here once this server has listed them (log in once)" end
       openPick("World for " .. a.username, items, "##world" .. i)
@@ -567,13 +580,13 @@ local function boxRows(v, x0, y, x1, w)
     if P.field(F, "##char" .. i, "Enters", a.character ~= "" and a.character or "Choose", cw, rh,
           { labelW = 96, chevron = true, disabled = busy }) then
       local items = { { label = "Choose", sub = "Pick it at character select", current = a.character == "",
-        fn = function() eq.LoginDo("character", a.username, "") end } }
+        fn = function() API.pregame.LoginDo("character", a.username, "") end } }
       for _, c in ipairs(a.characters) do
         if a.world == "" or c.world == a.world then
           local sub = (c.level > 0 and ("Level " .. c.level .. " " .. c.classes) or c.classes)
           if a.world == "" then sub = sub .. "  ·  " .. c.world end
           items[#items + 1] = { label = c.name, sub = sub, current = a.character == c.name,
-            fn = function() eq.LoginDo("character", a.username, c.name) end }
+            fn = function() API.pregame.LoginDo("character", a.username, c.name) end }
         end
       end
       openPick("Character for " .. a.username, items, "##char" .. i)
@@ -581,7 +594,7 @@ local function boxRows(v, x0, y, x1, w)
     ui.SameLine(0, gap)
     if P.button(F, "##forget" .. i, "Forget", fw, rh, { disabled = busy }) then
       st.confirm = { "Forget " .. a.username .. "? Its saved password leaves the keyring.", function()
-        eq.LoginDo("forget", a.username)
+        API.pregame.LoginDo("forget", a.username)
         F:want(nil)
       end }
     end
@@ -609,7 +622,7 @@ local function morePage(v, x0, y, x1, w)
       P.at(x0, y)
       if P.button(F, "##loginbox", "Log in box set (" .. v.boxCount .. ")", w, px(72),
             { primary = v.boxReady, disabled = busy or not v.boxReady }) then
-        eq.LoginDo("loginBox")
+        API.pregame.LoginDo("loginBox")
       end
       y = y + px(72) + gap
     end
@@ -627,19 +640,19 @@ local function morePage(v, x0, y, x1, w)
     for i, f in ipairs(v.gameFolders) do
       items[#items + 1] = { label = f.label, sub = f.usable and f.path or (f.path .. "  (not usable now)"),
         current = i == 1, disabled = not f.usable,
-        fn = function() if i > 1 then eq.LoginDo("gameFolder", i) end end }
+        fn = function() if i > 1 then API.pregame.LoginDo("gameFolder", i) end end }
     end
-    items[#items + 1] = { label = "Browse...", sub = "Pick another EverQuest folder", fn = function() eq.LoginDo("browse") end }
+    items[#items + 1] = { label = "Browse...", sub = "Pick another EverQuest folder", fn = function() API.pregame.LoginDo("browse") end }
     openPick("Game files", items, "##game", "In use")
   end
   y = y + px(76) + gap
 
-  -- the texture pack (eq.Option "texture_pack", display.texture_folder; the Options page's row too): Off, then each
+  -- the texture pack (hs.Option "texture_pack", display.texture_folder; the Options page's row too): Off, then each
   -- folder of Hailstone's textures/, such as a pack Hailstone Texture Studio built. Read at the next start.
-  local pack = eq.Option("texture_pack")
+  local pack = API.settings.Option("texture_pack")
   if pack ~= nil then
     st.packAtStart = st.packAtStart or pack
-    local choices = eq.OptionChoices("texture_pack")
+    local choices = API.settings.OptionChoices("texture_pack")
     P.at(x0, y)
     local packNote = pack ~= st.packAtStart and "Used from the next start" or "Replacement textures, from the next start"
     if P.field(F, "##texpack", "Texture pack", choices[pack + 1] or "A folder of its own", w, px(76),
@@ -647,7 +660,7 @@ local function morePage(v, x0, y, x1, w)
       local items = {}
       for i, name in ipairs(choices) do
         items[#items + 1] = { label = name, sub = i == 1 and "The game's own textures" or nil, current = i == pack + 1,
-          fn = function() if i ~= pack + 1 then eq.SetOption("texture_pack", i - 1) end end }
+          fn = function() if i ~= pack + 1 then API.settings.SetOption("texture_pack", i - 1) end end }
       end
       openPick("Texture pack", items, "##texpack", "Chosen")
     end
@@ -661,7 +674,7 @@ local function morePage(v, x0, y, x1, w)
   P.at(x0, y)
   if P.field(F, "##addons", "Add-ons", installed == 1 and "1 installed" or (installed .. " installed"), w, px(76),
         { chevron = true, note = "Find and install extra windows and features", disabled = busy }) then
-    eq.LoginSet("addonsOpen", true)
+    API.pregame.LoginSet("addonsOpen", true)
     F:want("##addonlink")
   end
   y = y + px(76) + gap
@@ -679,7 +692,7 @@ local function morePage(v, x0, y, x1, w)
     }
     if about.page ~= "" then
       items[#items + 1] = { label = "Open Hailstone's GitHub page", sub = about.page,
-        fn = function() eq.LoginDo("openProject") end }
+        fn = function() API.pregame.LoginDo("openProject") end }
     end
     if about.build ~= "" then items[#items + 1] = { label = "This build: " .. about.build, disabled = true, fn = noop } end
     openPick("Hailstone " .. about.version, items, "##about")
@@ -689,10 +702,10 @@ local function morePage(v, x0, y, x1, w)
   P.at(x0, y)
   local half = (w - gap) / 2
   if P.toggle(F, "##music", "Music", v.music, half, rh, { disabled = busy, note = "On the login and character screens" }) then
-    eq.LoginSet("music", not v.music)
+    API.pregame.LoginSet("music", not v.music)
   end
   ui.SameLine(0, gap)
-  if P.button(F, "##quit", "Quit Hailstone", half, rh) then eq.LoginDo("quit") end
+  if P.button(F, "##quit", "Quit Hailstone", half, rh) then API.pregame.LoginDo("quit") end
   y = y + rh + gap
   P.at(x0, y)
   if P.button(F, "##back", "Back", w, px(64), { glyph = "b", align = 0.5 }) then
@@ -714,37 +727,42 @@ end
 local function addonActions(r, back)
   local items = {}
   if r.canStart then
-    items[#items + 1] = { label = "Start", sub = "It opens a window of its own", fn = function() eq.LoginDo("addonStart", r.name) end }
+    items[#items + 1] = { label = "Start", sub = "It opens a window of its own", fn = function() API.pregame.LoginDo("addonStart", r.name) end }
   end
   if r.group == "installed" then
     if r.canUpdate then
       local what = r.state == "approval" and "Approve and update" or r.state == "modified" and "Update anyway"
         or r.state == "failed" and "Try again" or "Update"
-      items[#items + 1] = { label = what, sub = r.stateText, fn = function() eq.LoginDo("addonUpdate", r.name) end }
+      items[#items + 1] = { label = what, sub = r.stateText, fn = function() API.pregame.LoginDo("addonUpdate", r.name) end }
+    end
+    if r.managed then
+      items[#items + 1] = { label = r.enabled and "Disable add-on" or "Enable add-on",
+        sub = "Runs automatically when enabled and allowed by this server",
+        fn = function() API.pregame.LoginDo("addonEnabled", r.name, not r.enabled) end }
     end
     items[#items + 1] = { label = r.autoUpdate and "Stop updating by itself" or "Update by itself",
       sub = "Newer versions that ask for nothing more install at start",
-      fn = function() eq.LoginDo("addonAuto", r.name, not r.autoUpdate) end }
+      fn = function() API.pregame.LoginDo("addonAuto", r.name, not r.autoUpdate) end }
     if r.page ~= "" then
-      items[#items + 1] = { label = "Open its repository", sub = r.page, fn = function() eq.LoginDo("addonPage", r.name) end }
+      items[#items + 1] = { label = "Open its repository", sub = r.page, fn = function() API.pregame.LoginDo("addonPage", r.name) end }
     end
     items[#items + 1] = { label = "Remove", sub = "Its own files go; yours in its folder stay", disabled = not r.canRemove,
       fn = function()
         st.confirm = { "Remove " .. r.name .. "? Its own files go; yours in its folder stay.", function()
-          eq.LoginDo("addonRemove", r.name)
+          API.pregame.LoginDo("addonRemove", r.name)
         end }
       end }
   end
   -- the server's compiled plugin: the player's word on it (docs/plugins.md "The server's compiled plugins ask first")
   if r.consent == "allowed" then
     items[#items + 1] = { label = "Don't allow it any more", sub = "It stops running on this server",
-      fn = function() eq.LoginDo("addonRevoke", r.name) end }
+      fn = function() API.pregame.LoginDo("addonRevoke", r.name) end }
   elseif r.consent == "denied" then
     items[#items + 1] = { label = "Ask me again", sub = "Your next visit asks whether it may run",
-      fn = function() eq.LoginDo("addonAskAgain", r.name) end }
+      fn = function() API.pregame.LoginDo("addonAskAgain", r.name) end }
   end
   if r.folder ~= "" then
-    items[#items + 1] = { label = "Open its folder", sub = r.folder, fn = function() eq.LoginDo("addonFolder", r.name) end }
+    items[#items + 1] = { label = "Open its folder", sub = r.folder, fn = function() API.pregame.LoginDo("addonFolder", r.name) end }
   end
   if r.note ~= "" then items[#items + 1] = { label = r.note, disabled = true, fn = noop } end
   for _, c in ipairs(r.caps) do items[#items + 1] = { label = "May " .. c, disabled = true, fn = noop } end
@@ -763,7 +781,7 @@ local function addonsPage(v, x0, y, x1, w)
           { placeholder = "https://github.com/owner/repo", disabled = a.inspecting }) then
       openEdit({ field = "addonLink", title = "GitHub link to an add-on", text = a.link, noBlank = true, max = 400,
         back = "##addonlink", byPad = P.padDrives(),
-        done = function(text) if text ~= "" then eq.LoginDo("addonInspect") end end })
+        done = function(text) if text ~= "" then API.pregame.LoginDo("addonInspect") end end })
     end
     y = y + rh + gap
   else
@@ -774,13 +792,19 @@ local function addonsPage(v, x0, y, x1, w)
   local o = a.offer
   if o then
     y = heading(o.name .. " " .. o.version, x0, y, w)
-    y = lines("A " .. o.kind .. (o.author ~= "" and (" by " .. o.author) or "") .. ", from " .. o.source
+    y = lines("A " .. (o.autoload and "managed add-on" or o.kind) .. (o.author ~= "" and (" by " .. o.author) or "") .. ", from " .. o.source
       .. (o.installedVersion ~= "" and ("  ·  installed now: " .. o.installedVersion) or ""), x0, y, x1)
     y = lines(o.description, x0, y, x1)
-    if o.kind ~= "tool" and o.kind ~= "upscaler" then y = lines("It asks to: " .. table.concat(o.caps, "; ") .. ".", x0, y, x1, false, 4) end
+    if o.autoload then y = lines("Starts automatically when enabled. Manage it from My add-ons.", x0, y, x1) end
+    if o.kind ~= "tool" and o.kind ~= "upscaler" and o.kind ~= "ui" then
+      y = lines("It asks to: " .. table.concat(o.caps, "; ") .. ".", x0, y, x1, false, 4)
+    end
     y = lines(o.key ~= "" and ("Signed with key " .. o.key .. ": later versions must carry it.")
       or "Not signed: later versions come from whoever controls the repository.", x0, y, x1)
-    if o.kind == "plugin" then
+    if o.kind == "ui" then
+      y = lines("Full client interface access", x0, y, x1, true, 3)
+      y = lines("A UI pack can call host interface, account and game actions. Install only interfaces you trust.", x0, y, x1, false, 4)
+    elseif o.kind == "plugin" then
       y = lines("A plugin is a program: these permissions limit what it does through Hailstone, not what it can do "
         .. "on your computer. Install only plugins you trust.", x0, y, x1, true)
     elseif o.kind == "tool" then
@@ -802,19 +826,19 @@ local function addonsPage(v, x0, y, x1, w)
       or (o.installedVersion == "" and "Install" or "Install this version")
     if P.button(F, "##addoninstall", label, bw, px(64),
           { primary = o.blocked == "", disabled = o.blocked ~= "" }) then
-      eq.LoginDo("addonInstall", o.older and "older" or nil)
+      API.pregame.LoginDo("addonInstall", o.older and "older" or nil)
       F:want("##addonlink")
     end
     ui.SameLine(0, gap)
-    if P.button(F, "##addoncancel", "Cancel", bw, px(64)) then eq.LoginDo("addonCancel") end
+    if P.button(F, "##addoncancel", "Cancel", bw, px(64)) then API.pregame.LoginDo("addonCancel") end
     ui.SameLine(0, gap)
-    if P.button(F, "##addonpage", "Repository", bw, px(64)) then eq.LoginDo("addonPage") end
+    if P.button(F, "##addonpage", "Repository", bw, px(64)) then API.pregame.LoginDo("addonPage") end
     y = y + px(64) + gap
   end
 
   -- the store (view.addons.store, docs/addons.md "Finding add-ons")
   y = heading("Find add-ons", x0, y, w)
-  if a.available and not a.browsed and not a.browsing then eq.LoginDo("addonBrowse") end
+  if a.available and not a.browsed and not a.browsing then API.pregame.LoginDo("addonBrowse") end
   local store = a.store
   if a.browsing then
     y = y + P.status({ text = "Finding add-ons..." }, true, x0, y, x1) + gap
@@ -850,7 +874,7 @@ local function addonsPage(v, x0, y, x1, w)
       if it.state == "install" or it.state == "update" then
         items[#items + 1] = { label = it.state == "install" and "Install" or ("Update to " .. it.version),
           sub = "What it is and what it asks to do: nothing is installed yet", disabled = a.inspecting,
-          fn = function() eq.LoginDo("addonStoreLook", it.source) end }
+          fn = function() API.pregame.LoginDo("addonStoreLook", it.source) end }
       end
       if it.description ~= "" then items[#items + 1] = { label = it.description, disabled = true, fn = noop } end
       if it.worlds ~= "" then items[#items + 1] = { label = "Made for " .. it.worlds, disabled = true, fn = noop } end
@@ -880,7 +904,7 @@ local function addonsPage(v, x0, y, x1, w)
       local pw = P.pill(rx1 - px(16), mid, group[r.group] or r.group, r.group == "server" and C.endurance or C.accent, 1)
       local right = rx1 - px(32) - pw
       T.textIn(rx0 + px(18), mid - th, right, mid, T.fit(r.name .. (r.version ~= "" and ("  " .. r.version) or "")
-        .. "  ·  " .. r.kind, right - rx0 - px(18)), C.text, 0)
+        .. "  ·  " .. (r.managed and "add-on" or r.kind), right - rx0 - px(18)), C.text, 0)
       T.unfont()
       T.font(17)
       local sub = r.stateText ~= "" and r.stateText or r.note ~= "" and r.note or r.description
@@ -894,15 +918,15 @@ local function addonsPage(v, x0, y, x1, w)
   P.at(x0, y)
   local bw = (w - 2 * gap) / 3
   if P.button(F, "##addoncheck", "Check for updates", bw, px(64), { disabled = not a.available }) then
-    eq.LoginDo("addonCheck")
+    API.pregame.LoginDo("addonCheck")
   end
   ui.SameLine(0, gap)
   if P.button(F, "##addonrefresh", "Refresh the list", bw, px(64), { disabled = not a.available or a.browsing }) then
-    eq.LoginDo("addonBrowse", true)
+    API.pregame.LoginDo("addonBrowse", true)
   end
   ui.SameLine(0, gap)
   if P.button(F, "##back", "Back", bw, px(64), { glyph = "b", align = 0.5 }) then
-    eq.LoginSet("addonsOpen", false)
+    API.pregame.LoginSet("addonsOpen", false)
     F:want("##addons")
   end
   return y + px(64)
@@ -1021,7 +1045,7 @@ local function shortcuts(v)
   -- (the keyboard's Enter and Escape: only while this window has the focus and nothing is being typed)
   local keys = W.focused() and not ui.GetIO().typing
   if P.press("start") then loginOrAsk(v, true) end
-  if keys and ui.IsKeyPressed(ui.Key.Enter) and v.ready then eq.LoginDo("login") end
+  if keys and ui.IsKeyPressed(ui.Key.Enter) and v.ready then API.pregame.LoginDo("login") end
   if st.page == "main" then
     -- (B drops ImGui's focus in a window like this one: it goes back where it was)
     if P.press("b") then F:want(F.last) end
@@ -1035,7 +1059,7 @@ local function shortcuts(v)
     end
   elseif st.page == "addons" then
     if P.press("b") or (keys and ui.IsKeyPressed(ui.Key.Escape)) then
-      eq.LoginSet("addonsOpen", false)
+      API.pregame.LoginSet("addonsOpen", false)
       F:want("##addons")
     end
   elseif st.page == "notes" then
@@ -1055,10 +1079,10 @@ local function shortcuts(v)
 end
 
 local OPTS = { w = WIDTH, close = false, alwaysFocus = true }
-local held = nil -- the view drawn last frame: eq.LoginScreen gives true while it still holds (its revision)
+local held = nil -- the view drawn last frame: hs.LoginScreen gives true while it still holds (its revision)
 
 ui.window(NAME, function()
-  local v = eq.LoginScreen and eq.LoginScreen(held and held.revision)
+  local v = API.pregame.LoginScreen and API.pregame.LoginScreen(held and held.revision)
   if v == true then v = held else held = v end
   if not v then
     st.frame = -10
@@ -1076,7 +1100,7 @@ ui.window(NAME, function()
     local test = ui.GetSetting("test.login") or ""
     if test == st.tested then test = "" else st.tested = test end
     if test == "server" or test == "more" or test == "notes" then st.page = test
-    elseif test == "addons" then eq.LoginSet("addonsOpen", true)
+    elseif test == "addons" then API.pregame.LoginSet("addonsOpen", true)
     elseif test == "keys" then openEdit({ field = "username", title = "Username", text = v.username, back = "##user", byPad = true })
     elseif test == "servers" and not v.transient then openPick("Server", serverList(v), "##server") end
   end

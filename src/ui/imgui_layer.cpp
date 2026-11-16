@@ -31,8 +31,8 @@ void check_vk(VkResult r) {
 
 // EQ UI fonts 1..6 (the <Font> numbers in the stock XML): Arial at these pixel sizes,
 // here the Arial-class font found below.
-constexpr std::array<float, 7> kEqFontSizes = {0, 10, 12, 13, 14, 16, 20};
-std::array<ImFont*, 7> g_eq_fonts{};
+constexpr std::array<float, 7> kUiFontSizes = {0, 10, 12, 13, 14, 16, 20};
+std::array<ImFont*, 7> g_ui_fonts{};
 // The font list a chat window's font indexes (/chatfontsize 0..10, CChatWindow::SetChatFont: CXWndManager +0x118):
 // EQGraphicsDX9's font table @0x100b2100, Arial at these cell heights, fonts 5, 6 and 10 bold (weight 700; the
 // others 100 or 0, drawn regular).
@@ -102,6 +102,68 @@ std::filesystem::path find_bold_font(const std::filesystem::path& regular) {
 }
 
 } // namespace
+
+namespace {
+void clear_ui_interaction() {
+    ImGuiContext* g = ImGui::GetCurrentContext();
+    if (!g) return;
+    ImGuiIO& io = ImGui::GetIO();
+    io.ClearEventsQueue();
+    io.ClearInputKeys();
+    io.ClearInputMouse();
+    ImGui::ClearActiveID();
+    ImGui::ClearDragDrop();
+    // Drop keyboard focus without FocusWindow's popup-closing side effect: confirmations remain open.
+    ImGui::SetNavWindow(nullptr);
+    g->NavId = 0;
+    g->NavFocusScopeId = 0;
+    ImGui::NavMoveRequestCancel();
+    ImGui::SetNavCursorVisible(false);
+    g->MovingWindow = nullptr;
+    g->NavActivateId = g->NavActivateDownId = g->NavActivatePressedId = g->NavNextActivateId = 0;
+    g->NavNextActivateFlags = ImGuiActivateFlags_None;
+    g->WantCaptureMouseNextFrame = g->WantCaptureKeyboardNextFrame = -1;
+    g->WantTextInputNextFrame = 0;
+    g->PlatformImeData.WantVisible = false;
+    io.WantCaptureMouse = io.WantCaptureKeyboard = io.WantTextInput = false;
+}
+void clear_ui_draw_data() {
+    if (ImGuiContext* g = ImGui::GetCurrentContext())
+        for (ImGuiViewportP* viewport : g->Viewports) viewport->DrawDataP.Clear();
+}
+} // namespace
+
+void detail::ImGuiVisibility::set_visible(bool visible) {
+    if (visible_ == visible) return;
+    visible_ = visible;
+    clear_ui_interaction();
+    clear_ui_draw_data();
+    if (ImGui::GetCurrentContext()) ImGui::GetIO().SetAppAcceptingEvents(visible);
+}
+
+void detail::ImGuiVisibility::prepare_input() {
+    if (visible_ || !ImGui::GetCurrentContext()) return;
+    clear_ui_interaction();
+    ImGui::GetIO().SetAppAcceptingEvents(false);
+}
+
+bool detail::ImGuiVisibility::finish_frame(bool render) {
+    if (visible_ && render) {
+        ImGui::Render();
+        return true;
+    }
+    ImGui::EndFrame();
+    clear_ui_draw_data();
+    if (!visible_) clear_ui_interaction();
+    return false;
+}
+
+bool detail::ImGuiVisibility::wants_mouse() const {
+    return visible_ && ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureMouse;
+}
+bool detail::ImGuiVisibility::wants_keyboard(int requested) const {
+    return visible_ && ImGui::GetCurrentContext() && keyboard_for_ui(requested);
+}
 
 ImGuiLayer::ImGuiLayer(platform::Window& window, render::VkContext& vk, const ImGuiLayerDesc& desc)
     : window_(window), vk_(vk) {
@@ -191,7 +253,7 @@ ImGuiLayer::~ImGuiLayer() {
 void ImGuiLayer::build_fonts() {
     ImGuiIO& io = ImGui::GetIO();
     io.Fonts->Clear();
-    g_eq_fonts.fill(nullptr);
+    g_ui_fonts.fill(nullptr);
     g_chat_fonts.fill(nullptr);
     g_plate_font = nullptr;
     g_plate_font_size = std::round(plate_size_ * scale_);
@@ -215,7 +277,7 @@ void ImGuiLayer::build_fonts() {
     }
     auto use_default = [&] {
         io.Fonts->Clear();
-        g_eq_fonts.fill(nullptr);
+        g_ui_fonts.fill(nullptr);
         g_chat_fonts.fill(nullptr);
         g_plate_font = nullptr;
         g_plate_faux_bold = plate_bold_;
@@ -233,11 +295,11 @@ void ImGuiLayer::build_fonts() {
     log::debug("UI font: {} at {:.0f} px, scale {:.2f}", utf8(font), size, scale_);
 
     {
-        for (std::size_t i = 1; i < kEqFontSizes.size(); ++i) {
-            ImFontConfig eq_cfg;
-            eq_cfg.RasterizerDensity = window_.pixel_density();
-            g_eq_fonts[i] = io.Fonts->AddFontFromFileTTF(utf8(font).c_str(), std::round(kEqFontSizes[i] * scale_),
-                                                         &eq_cfg);
+        for (std::size_t i = 1; i < kUiFontSizes.size(); ++i) {
+            ImFontConfig ui_cfg;
+            ui_cfg.RasterizerDensity = window_.pixel_density();
+            g_ui_fonts[i] = io.Fonts->AddFontFromFileTTF(utf8(font).c_str(), std::round(kUiFontSizes[i] * scale_),
+                                                         &ui_cfg);
         }
         for (std::size_t i = 0; i < kChatFonts; ++i) {
             ImFontConfig chat_cfg;
@@ -312,6 +374,7 @@ void ImGuiLayer::new_frame() {
                 ++i;
         }
     }
+    visibility_.prepare_input();
     // Minimized (or not sized yet) the display is 0 x 0: ImGui would pull every window onto that empty screen, and
     // the UI ini would keep those places. The last real size stands in until the window is back.
     ImGuiIO& io = ImGui::GetIO();
@@ -324,9 +387,10 @@ void ImGuiLayer::new_frame() {
     keyboard_request_ = GImGui->WantCaptureKeyboardNextFrame; // (NewFrame applies it to io, then clears it)
     keep_tab_from_windows();
     ImGui::NewFrame();
+    visibility_.prepare_input();
     frame_open_ = true;
     // The pad's X (ImGui's "menu" key) is the windows' own shortcut (use, take, none, ...; the Lua windows read it from
-    // eq.gamepad). Held, ImGui would start its window switcher (a list of every window, the focus moved on release)
+    // hs.gamepad). Held, ImGui would start its window switcher (a list of every window, the focus moved on release)
     // and, tapped, toggle the menu layer. Locked to an owner (from the frame it goes down until it is let go), ImGui's
     // navigation does not see it; the on-screen keyboard asks for it with that owner.
     ImGui::SetKeyOwner(ImGuiKey_GamepadFaceLeft, ImHashStr("##PadX"), ImGuiInputFlags_LockUntilRelease);
@@ -388,6 +452,7 @@ void ImGuiLayer::feed_pad_pointer() {
 }
 
 void ImGuiLayer::request_window_focus(std::string name) {
+    if (!visible()) return;
     std::erase(pad_windows_, name);
     pad_windows_.push_back(name);
     focus_request_ = std::move(name);
@@ -395,6 +460,7 @@ void ImGuiLayer::request_window_focus(std::string name) {
 }
 
 bool ImGuiLayer::pad_window_open() {
+    if (!visible()) return false;
     // Between frames: a window drawn in the last frame is Active (its Begin ran) until the next NewFrame.
     const std::string top = pad_windows_.empty() ? std::string() : pad_windows_.back();
     std::erase_if(pad_windows_, [](const std::string& name) {
@@ -409,17 +475,20 @@ bool ImGuiLayer::pad_window_open() {
 }
 
 bool ImGuiLayer::pad_window_focused() const {
+    if (!visible()) return false;
     const ImGuiContext* g = ImGui::GetCurrentContext();
     return g && g->NavWindow && !pad_windows_.empty() && pad_windows_.back() == g->NavWindow->RootWindow->Name;
 }
 
 std::string ImGuiLayer::pad_focus_window() const {
+    if (!visible()) return {};
     if (!focus_request_.empty()) return focus_request_;
     const ImGuiContext* g = ImGui::GetCurrentContext();
     return g && g->NavWindow ? std::string(g->NavWindow->RootWindow->Name) : std::string();
 }
 
 void ImGuiLayer::refocus_pad_window() {
+    if (!visible()) return;
     if (!pad_windows_.empty() && focus_request_.empty()) request_window_focus(pad_windows_.back());
 }
 
@@ -449,8 +518,9 @@ std::string ImGuiLayer::debug_state() const {
 void ImGuiLayer::render(const render::FrameInfo& frame) {
     vk_.begin_overlay(frame);
     if (!frame_open_) return;
-    ImGui::Render();
+    const bool draw = visibility_.finish_frame(true);
     frame_open_ = false;
+    if (!draw) return;
     ImDrawData* data = ImGui::GetDrawData();
     if (data->DisplaySize.x <= 0.0f || data->DisplaySize.y <= 0.0f) return;
     // The backend sets its own viewport and scissor, replacing the frame's Y-flipped viewport.
@@ -459,12 +529,22 @@ void ImGuiLayer::render(const render::FrameInfo& frame) {
 
 void ImGuiLayer::end_frame_without_render() {
     if (!frame_open_) return;
-    ImGui::EndFrame();
+    (void)visibility_.finish_frame(false);
     frame_open_ = false;
 }
 
-bool ImGuiLayer::wants_mouse() const { return ImGui::GetIO().WantCaptureMouse; }
-bool ImGuiLayer::wants_keyboard() const { return keyboard_for_ui(keyboard_request_); }
+void ImGuiLayer::set_visible(bool visible) {
+    const bool changed = visible != visibility_.visible();
+    visibility_.set_visible(visible);
+    if (changed) {
+        keyboard_request_ = -1;
+        focus_request_.clear();
+        focus_frames_ = 0;
+        pad_windows_.clear();
+    }
+}
+bool ImGuiLayer::wants_mouse() const { return visibility_.wants_mouse(); }
+bool ImGuiLayer::wants_keyboard() const { return visibility_.wants_keyboard(keyboard_request_); }
 
 void configure_keys() { ImGui::GetIO().ConfigMacOSXBehaviors = false; }
 
@@ -500,8 +580,8 @@ ImFont* plate_font() { return g_plate_font; }
 float plate_font_size() { return g_plate_font_size; }
 bool plate_font_faux_bold() { return g_plate_faux_bold; }
 
-ImFont* eq_font(int index) {
-    return index >= 1 && index < static_cast<int>(kEqFontSizes.size()) ? g_eq_fonts[static_cast<std::size_t>(index)]
+ImFont* ui_font(int index) {
+    return index >= 1 && index < static_cast<int>(kUiFontSizes.size()) ? g_ui_fonts[static_cast<std::size_t>(index)]
                                                                          : nullptr;
 }
 

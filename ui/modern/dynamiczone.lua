@@ -3,6 +3,7 @@
 -- Make Leader / Invite Raid / Invite Task, shown only to the leader as the game shows DZLeaderSection), and your
 -- lockouts, searchable, filling the rest. Every value and button is the original's child (DZ_*), so the rules
 -- (who may be added, the head count) are the game's; Quit asks first.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -68,11 +69,11 @@ local function drawWindow(x, y, w, h, s)
     }, 140)
     ui.Dummy(0, 2 * s)
     -- the members (a click selects one for the leader's buttons) and Quit
-    local rows = eq.ListInfo(WINDOW, "DZ_MemberList") or 0
+    local rows = API.windows.ListInfo(WINDOW, "DZ_MemberList") or 0
     local membersH = math.min(math.max(rows, 2) * (lh + 4 * s) + lh + 12 * s, 170 * s)
     W.List(WINDOW, "DZ_MemberList", 0, membersH, { sortable = true })
     quitButton(s, btnH)
-    if eq.ChildShown(WINDOW, "DZLeaderSection") == true then
+    if API.windows.ChildShown(WINDOW, "DZLeaderSection") == true then
       leaderTools(s, btnH)
     end
   else
@@ -96,6 +97,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Expedition", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Expedition", WINDOW_OPTS, drawWindow)
 end)

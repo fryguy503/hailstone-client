@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <sstream>
 #include <vector>
 
@@ -16,6 +17,146 @@
 #include "game/eq_names.h"
 #include "platform/open_folder.h"
 #include "ui/dev_screens.h"
+#include "ui/imgui_layer.h"
+
+namespace {
+struct VisibilityUi {
+    std::unique_ptr<ImGuiContext, void (*)(ImGuiContext*)> context{ImGui::CreateContext(), ImGui::DestroyContext};
+    hailstone::ui::detail::ImGuiVisibility visibility;
+    char text[96] = "saved";
+    bool shown = true;
+    ImGuiID edit = 0;
+    ImVec2 position{}, size{};
+    VisibilityUi() {
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.ConfigInputTrickleEventQueue = false;
+        unsigned char* pixels = nullptr; int width = 0, height = 0;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    }
+    void begin() {
+        auto& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(800, 600); io.DeltaTime = 1.0f / 60.0f;
+        io.AddMousePosEvent(140, 140);
+        visibility.prepare_input();
+        ImGui::NewFrame();
+        visibility.prepare_input();
+    }
+    void editor(bool focus = false) {
+        ImGui::SetNextWindowPos(ImVec2(100, 100), ImGuiCond_Once);
+        ImGui::SetNextWindowSize(ImVec2(300, 180), ImGuiCond_Once);
+        ImGui::Begin("Persistent editor", &shown);
+        if (focus) ImGui::SetKeyboardFocusHere();
+        ImGui::InputText("Text", text, sizeof(text));
+        edit = ImGui::GetItemID();
+        position = ImGui::GetWindowPos(); size = ImGui::GetWindowSize();
+        ImGui::End();
+    }
+    void frame(bool focus = false) { begin(); editor(focus); (void)visibility.finish_frame(true); }
+};
+}
+
+TEST_CASE("UI visibility: hiding discards every draw list while preserving the window and modal state") {
+    VisibilityUi ui;
+    ui.begin(); ui.editor();
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(1, 1), ImVec2(20, 20), IM_COL32_WHITE);
+    ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(25, 1), ImVec2(45, 20), IM_COL32_WHITE);
+    REQUIRE(ui.visibility.finish_frame(true));
+    REQUIRE(ImGui::GetDrawData());
+    CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
+    CHECK(ImGui::GetDrawData()->CmdListsCount >= 3);
+    const auto position = ui.position, size = ui.size;
+
+    ui.begin(); ui.editor();
+    ImGui::OpenPopup("Still open");
+    REQUIRE(ImGui::BeginPopupModal("Still open"));
+    ImGui::TextUnformatted("Keep this confirmation"); ImGui::EndPopup();
+    const auto popups = GImGui->OpenPopupStack.Size;
+    REQUIRE(popups > 0);
+    ui.visibility.set_visible(false); // also tests hiding after content was already emitted in this frame
+    CHECK(GImGui->OpenPopupStack.Size == popups);
+    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(1, 1), ImVec2(20, 20), IM_COL32_WHITE);
+    ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(25, 1), ImVec2(45, 20), IM_COL32_WHITE);
+    CHECK_FALSE(ui.visibility.finish_frame(true));
+    CHECK(ImGui::GetDrawData() == nullptr);
+    CHECK(ui.shown);
+
+    ui.visibility.set_visible(true);
+    ui.begin(); ui.editor();
+    REQUIRE(ImGui::BeginPopupModal("Still open"));
+    ImGui::TextUnformatted("Still a confirmation"); ImGui::EndPopup();
+    REQUIRE(ui.visibility.finish_frame(true));
+    REQUIRE(ImGui::GetDrawData());
+    CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
+    CHECK(ui.position.x == position.x); CHECK(ui.position.y == position.y);
+    CHECK(ui.size.x == size.x); CHECK(ui.size.y == size.y);
+    CHECK(ui.shown);
+}
+
+TEST_CASE("UI visibility: text and mouse input from hidden frames cannot replay into the restored editor") {
+    VisibilityUi ui;
+    ui.frame(true); ui.frame(); ui.frame();
+    REQUIRE(GImGui->ActiveId == ui.edit);
+    CHECK(ui.visibility.wants_keyboard(-1));
+    auto& io = ImGui::GetIO();
+    io.AddInputCharactersUTF8("kept");
+    ui.visibility.set_visible(true); // an idempotent visible update must not discard ordinary input
+    ui.frame();
+    const std::string kept = ui.text;
+    CHECK(kept != "saved");
+    io.AddInputCharactersUTF8("discarded");
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    REQUIRE(GImGui->InputEventsQueue.Size > 0);
+    ui.visibility.set_visible(false);
+    CHECK(GImGui->ActiveId == 0);
+    CHECK_FALSE(io.WantTextInput);
+    CHECK(GImGui->InputEventsQueue.empty());
+    // Even stale capture flags cannot claim the game's input while presentation is hidden.
+    io.WantCaptureMouse = io.WantCaptureKeyboard = true;
+    CHECK_FALSE(ui.visibility.wants_mouse()); CHECK_FALSE(ui.visibility.wants_keyboard(1));
+    for (int n = 0; n < 2; ++n) {
+        io.AddInputCharactersUTF8("hidden"); io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        ui.begin();
+        CHECK_FALSE(io.WantTextInput);
+        CHECK_FALSE(ui.visibility.finish_frame(true));
+    }
+    // A queue written just before restoration must be discarded too, not only in the hidden-frame path.
+    io.SetAppAcceptingEvents(true);
+    io.AddInputCharactersUTF8("late hidden"); io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    REQUIRE(GImGui->InputEventsQueue.Size > 0);
+    ui.visibility.set_visible(true);
+    CHECK(GImGui->InputEventsQueue.empty());
+    ui.frame();
+    CHECK(std::string(ui.text) == kept);
+    CHECK(GImGui->ActiveId == 0);
+    CHECK_FALSE(io.MouseDown[ImGuiMouseButton_Left]);
+    ui.frame(true); ui.frame();
+    REQUIRE(GImGui->ActiveId == ui.edit);
+    io.AddInputCharactersUTF8("!"); ui.frame();
+    CHECK(std::string(ui.text) != kept);
+    CHECK(std::string(ui.text).find('!') != std::string::npos);
+}
+
+TEST_CASE("UI visibility: hiding cancels an actual drag payload and skipped frames expose no old draw data") {
+    VisibilityUi ui;
+    ui.begin(); ui.editor();
+    REQUIRE(ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceExtern));
+    const int value = 17;
+    ImGui::SetDragDropPayload("TEST_ITEM", &value, sizeof(value));
+    ImGui::EndDragDropSource();
+    REQUIRE(ImGui::GetDragDropPayload());
+    ui.visibility.set_visible(false);
+    CHECK(ImGui::GetDragDropPayload() == nullptr);
+    CHECK_FALSE(GImGui->DragDropActive);
+    CHECK_FALSE(ui.visibility.finish_frame(true));
+    ui.visibility.set_visible(true);
+    ui.frame();
+    REQUIRE(ImGui::GetDrawData());
+    CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
+    ui.begin(); ui.editor();
+    CHECK_FALSE(ui.visibility.finish_frame(false));
+    CHECK(ImGui::GetDrawData() == nullptr);
+}
 
 TEST_CASE("Race and class names") {
     using namespace hailstone::game;
@@ -438,7 +579,7 @@ TEST_CASE("Login accounts: the worlds the login server listed, for the World lis
     ui::LoginView view;
     ui::load_login_settings(view, cfg, servers.path);
     view.name = "Triune";
-    view.host = "eq.example.org";
+    view.host = "hs.example.org";
     view.username = "me";
     REQUIRE(ui::store_login_settings(view, cfg));
     CHECK(listed_worlds("triune", servers.path).empty());

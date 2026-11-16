@@ -12,7 +12,7 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui_windows.h"
 #include "core/byte_io.h"
 #include "core/game_dir.h"
 #include "manual_clock.h"
@@ -79,7 +79,7 @@ std::vector<net::FellowshipMember> members(std::size_t count) {
 }
 
 struct Window {
-    app::EqHost host;
+    app::UiHost host;
     std::vector<std::unique_ptr<app::StockWindow>> windows;
     app::StockWindow* window = nullptr;
     explicit Window(test::Rig& rig) {
@@ -395,16 +395,16 @@ TEST_CASE("fellowship UI packs: a full roster draws with vitality at normal and 
         unsigned char* pixels = nullptr;
         int width = 0, height = 0;
         ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-        app::EqHost host;
+        app::UiHost host;
         ui::ChatView chat;
         host.game = &rig.game;
         host.conn = &rig.conn;
         host.unix_time = [] { return std::int64_t{2000000000}; };
         host.chat = &chat;
         host.in_game = host.ui_ready = true;
-        app::EqApi api(host);
+        app::UiApi api(host);
         ui::lua::LuaUi lua(scripts, settings);
-        lua.add_eq_api([&](lua_State* L) { api.register_functions(L); });
+        lua.add_ui_api([&](lua_State* L) { api.register_functions(L); });
         api.load_layout(scratch.path() / "defaults.ini", scratch.path() / "UI_Test_Server.ini", {});
         api.show("FellowshipWnd", true);
         REQUIRE(api.list_rows("FellowshipWnd", "CampsiteKitList").size() == 1);

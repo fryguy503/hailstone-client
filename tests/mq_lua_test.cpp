@@ -797,7 +797,9 @@ mq._write_config('written.lua', 'return function(m) return m end')
 print('written', loadfile('written.lua'))
 )");
     REQUIRE(h.scripts->run("cfg_data", {}));
-    h.pulses(1);
+    // File work can use the host's time slice; observe completion before checking the final refusal messages.
+    for (int pulse = 0; pulse < 64 && h.scripts->running("cfg_data"); ++pulse) h.pulses(1);
+    REQUIRE_FALSE(h.scripts->running("cfg_data"));
     CHECK(h.printed_line("data 1 y true second"));
     CHECK(h.printed_line("again 1 1"));
     for (const char* name : {"closure.lua", "bare.lua", "method.lua", "key.lua"}) {

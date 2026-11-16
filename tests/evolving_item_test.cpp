@@ -10,7 +10,7 @@
 
 #include <imgui.h>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "game/item_display.h"
 #include "game/item_links.h"
 #include "mock_server/harness.h"
@@ -76,8 +76,8 @@ struct ImGuiScope {
 struct Display {
     ImGuiScope context;
     ui::ItemWindowsState windows;
-    app::EqHost host;
-    app::EqApi api;
+    app::UiHost host;
+    app::UiApi api;
 
     explicit Display(GameConnection& conn) : api(host) {
         host.in_game = host.ui_ready = true;

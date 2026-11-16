@@ -1,16 +1,17 @@
 -- The map window's World view and zone finder (docs/navigation.md "Zone atlas"; Hailstone's, not the original's
 -- atlas page). map.lua draws it; this file keeps the state.
---   * the atlas: the game folder's Atlas pages (eq.AtlasIndex, eq.AtlasPageData), zoomed with the wheel and panned
+--   * the atlas: the game folder's Atlas pages (hs.AtlasIndex, hs.AtlasPageData), zoomed with the wheel and panned
 --     by dragging, a breadcrumb back to the world; a region click opens it, a zone click selects it, a double click
 --     shows its map; your zone pulses, the selected zone and a route's zones are marked;
 --   * the finder: every atlas zone by name (the zone table's long name or the atlas' own), the zones of the page
---     shown when nothing is typed; the selected zone's card with its route from here (eq.ZoneRoute) and buttons to
+--     shown when nothing is typed; the selected zone's card with its route from here (hs.ZoneRoute) and buttons to
 --     find it on the atlas, view its map and follow the route;
 --   * a route followed (ui/settings/modern.txt, atlas.route): a banner over your zone's map with the next zone and
---     "Walk there" (eq.ZoneExitWalk: a /nav walk through that zone line), and the exits marked on the map.
+--     "Walk there" (hs.ZoneExitWalk: a /nav walk through that zone line), and the exits marked on the map.
 -- Routes come from the server's zone list (Hailstone's server script) or, without it, from the zone lines of the
--- zones you have been to on this server (eq.ZoneLinks). Only the zones the server has are listed and routed through
+-- zones you have been to on this server (hs.ZoneLinks). Only the zones the server has are listed and routed through
 -- (its current expansion and content flags, from the script; else the account's expansions); the atlas dims the rest.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color
@@ -34,7 +35,7 @@ local allowedCount = 0
 
 -- What decides which zones the server has; the index is read again when it changes.
 local function limitKey()
-  local server, _, limit, expansion = eq.ZoneLinks()
+  local server, _, limit, expansion = API.map.ZoneLinks()
   return tostring(server) .. ":" .. tostring(limit) .. ":" .. tostring(expansion)
 end
 
@@ -44,7 +45,7 @@ local function loadIndex()
   if index and key == indexKey then return end
   indexKey = key
   allowedCount = 0
-  local raw = eq.AtlasIndex and eq.AtlasIndex() or { pages = {}, zones = {} }
+  local raw = API.map.AtlasIndex and API.map.AtlasIndex() or { pages = {}, zones = {} }
   index, byZone, byPage, pageTitles, pageParents = {}, {}, {}, {}, {}
   for _, p in ipairs(raw.pages) do
     pageTitles[p.file:lower()] = p.title
@@ -72,7 +73,7 @@ function A.Zone(short) loadIndex(); return short and byZone[short:lower()] end
 local pages = {}
 local function pageData(file)
   local key = file:lower()
-  if pages[key] == nil then pages[key] = eq.AtlasPageData and eq.AtlasPageData(file) or false end
+  if pages[key] == nil then pages[key] = API.map.AtlasPageData and API.map.AtlasPageData(file) or false end
   return pages[key] or nil
 end
 
@@ -80,14 +81,14 @@ end
 local routeCache = { key = nil, routes = {} }
 local function routeTo(short)
   if not short then return nil end
-  local _, here = eq.ZoneName()
-  local server, known, limit, expansion = eq.ZoneLinks()
+  local _, here = API.map.ZoneName()
+  local server, known, limit, expansion = API.map.ZoneLinks()
   local key = (here or "") .. ":" .. tostring(server) .. ":" .. known .. ":" .. tostring(limit) .. ":" .. tostring(expansion)
   if routeCache.key ~= key then routeCache.key, routeCache.routes = key, {} end
   local k = short:lower()
   local r = routeCache.routes[k]
   if r == nil then
-    r = eq.ZoneRoute(short) or false
+    r = API.map.ZoneRoute(short) or false
     routeCache.routes[k] = r
   end
   return r or nil
@@ -137,7 +138,7 @@ end
 
 -- Each time the World view opens: your zone's page, when nothing was chosen yet.
 function A.Opened()
-  local _, here = eq.ZoneName()
+  local _, here = API.map.ZoneName()
   if not A.sel and here and A.Show(here) then A.sel = nil end
 end
 
@@ -178,7 +179,7 @@ function A.DrawView(x0, y0, x1, y1, s, onView)
   ui.PushClipRect(x0, y0, x1, y1, true)
   -- the pictures (the page's tiled backdrop under them)
   if page.background and (page.bgw or 0) > 0 then
-    local tex = eq.AtlasTexture(page.background)
+    local tex = API.map.AtlasTexture(page.background)
     if tex then
       local tw, th = page.bgw * k, page.bgh * k
       local sx0, sy0 = P(0, 0)
@@ -190,7 +191,7 @@ function A.DrawView(x0, y0, x1, y1, s, onView)
     end
   end
   for _, im in ipairs(page.images) do
-    local tex, tw, th = eq.AtlasTexture(im.file)
+    local tex, tw, th = API.map.AtlasTexture(im.file)
     if tex and tw > 0 and th > 0 then
       local ax, ay = P(im.x0, im.y0)
       local bx, by = P(im.x1, im.y1)
@@ -205,7 +206,7 @@ function A.DrawView(x0, y0, x1, y1, s, onView)
   end
 
   -- the route's zones on this page, in order
-  local _, here = eq.ZoneName()
+  local _, here = API.map.ZoneName()
   here = (here or ""):lower()
   local target = A.Target()
   local route = routeTo(target)
@@ -441,7 +442,7 @@ end
 function A.DrawFinder(x, y, w, h, s, onView)
   loadIndex()
   local wx, wy = ui.GetWindowPos()
-  local server, known, limit, expansion = eq.ZoneLinks()
+  local server, known, limit, expansion = API.map.ZoneLinks()
   T.Text(x, y, "Zones", C.text, T.font.normal)
   T.Text(x + w, y + 3 * s, allowedCount > 0 and string.format("%d on this server", allowedCount) or "", C.faint, T.font.tiny, "right")
   ui.SetCursorPos(x - wx, y + 24 * s - wy)
@@ -470,7 +471,7 @@ function A.DrawFinder(x, y, w, h, s, onView)
   ui.BeginChild("##zonelist", w, listH, false)
   local rw = ui.GetContentRegionAvail()
   local _, th = T.TextSize("Ag", T.font.small)
-  local _, here = eq.ZoneName()
+  local _, here = API.map.ZoneName()
   here = (here or ""):lower()
   if #results == 0 then
     local rx, ry = ui.GetCursorScreenPos()
@@ -575,7 +576,7 @@ function A.DrawRouteBanner(x0, y0, x1, s, onWorld)
   local target = A.Target()
   if not target then return end
   local nextHop, route = A.NextHop()
-  local _, here = eq.ZoneName()
+  local _, here = API.map.ZoneName()
   local h = 34 * s
   local bx0, bx1 = x0 + 10 * s, x1 - 10 * s
   local by0 = y0 + 8 * s
@@ -612,7 +613,7 @@ function A.DrawRouteBanner(x0, y0, x1, s, onWorld)
     if T.Button("##routewalk", cx1 - 90 * s, by0 + 4 * s, cx1, by0 + h - 4 * s, s, "Walk there",
       { primary = true, enabled = canWalk, tooltip = canWalk and ("Walk to the zone line to " .. nextHop.name .. " and through it (/nav)") or
         "No zone line to it found here (it may be a teleporter or a boat)" }) then
-      eq.ZoneExitWalk(nextHop.zone)
+      API.map.ZoneExitWalk(nextHop.zone)
     end
     cx1 = cx1 - 94 * s
   end
@@ -621,11 +622,11 @@ function A.DrawRouteBanner(x0, y0, x1, s, onWorld)
   T.Text(tx + 10 * s, ty, T.Fit(text, bx1 - bx0 - btnW - 34 * s, T.font.small), color, T.font.small)
 end
 
--- The exit to a zone in your zone (eq.ZoneExits), or nil.
+-- The exit to a zone in your zone (hs.ZoneExits), or nil.
 local exitsCache = { frame = -1, list = {} }
 local function exits()
   local f = ui.GetFrameCount()
-  if exitsCache.frame ~= f then exitsCache.frame, exitsCache.list = f, eq.ZoneExits and eq.ZoneExits() or {} end
+  if exitsCache.frame ~= f then exitsCache.frame, exitsCache.list = f, API.map.ZoneExits and API.map.ZoneExits() or {} end
   return exitsCache.list
 end
 function A.ExitTo(short)

@@ -1,6 +1,7 @@
 -- Skills window: replaces the game's SkillsWindow. The skill list as a sortable table (click a header) with a
 -- search box; a row click selects the skill in the game's list, so Make Hot Key works on it, and dragging a row
 -- puts its hot button on the cursor, as on the stock list.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local T = hud.T
@@ -30,6 +31,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Skills", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Skills", WINDOW_OPTS, drawWindow)
 end)

@@ -3,6 +3,7 @@
 -- (its arrows), LT steps the icon type and RT how many a page shows (its two combo boxes), X types the icon's number
 -- (its ID box, on the on-screen keys), A is Accept (the hot button takes the icon) and B closes it. The mouse clicks
 -- icons and the buttons, and the wheel scrolls a long page. (No ImGui navigation while the grid has the pad.)
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -20,7 +21,7 @@ ui.window("Icon Selection", function()
     return
   end
   T.frame()
-  local first, last, selected = eq.IconSelectionIcons()
+  local first, last, selected = API.hotbars.IconSelectionIcons()
   first, last, selected = first or 0, last or -1, selected or -1
   local hints = typing and G.editHints("Done")
       or { { "up", "Move" }, { "lb", "Page" }, { "lt", "Type" }, { "rt", "Per page" }, { "x", "Number" }, { "a", "Accept" }, { "b", "Close" } }
@@ -32,15 +33,15 @@ ui.window("Icon Selection", function()
     -- the selected icon, its number and the page
     local sel = T.px(96)
     T.rect(x0, y0, x0 + sel, y0 + sel, C.sunken, 1, T.px(12))
-    local tex, u0, v0, u1, v1 = eq.IconSelectionIcon(selected)
+    local tex, u0, v0, u1, v1 = API.hotbars.IconSelectionIcon(selected)
     if tex then T.icon(tex, u0, v0, u1, v1, x0 + T.px(8), y0 + T.px(8), x0 + sel - T.px(8), y0 + sel - T.px(8)) end
     local cx = x0 + sel + T.px(20)
     local cw = (x1 - cx - 3 * gap) / 4
     local bh = T.px(84)
     ui.SetCursorPos(cx - wx, y0 + (sel - bh) / 2 - wy)
     local function pick(id, back)
-      local choices, cur = eq.ComboInfo(ISW, id)
-      if choices and #choices > 0 then eq.ComboSelect(ISW, id, ((cur or -1) + (back and -1 or 1)) % #choices) end
+      local choices, cur = API.windows.ComboInfo(ISW, id)
+      if choices and #choices > 0 then API.windows.ComboSelect(ISW, id, ((cur or -1) + (back and -1 or 1)) % #choices) end
     end
     if typing then
       T.font(24)
@@ -80,7 +81,7 @@ ui.window("Icon Selection", function()
         if idx < 0 or idx >= count then idx = -1 end
         local function go(i)
           i = math.max(0, math.min(count - 1, i))
-          eq.ClickChild(ISW, "ISW_Icon:" .. (first + i), "left")
+          API.windows.ClickChild(ISW, "ISW_Icon:" .. (first + i), "left")
           local r = i // perRow
           if r < top then top = r elseif r >= top + shownRows then top = r - shownRows + 1 end
         end
@@ -90,15 +91,15 @@ ui.window("Icon Selection", function()
           if G.repeated("up") then go(idx < 0 and 0 or idx - perRow) end
           if G.repeated("down") then go(idx < 0 and 0 or idx + perRow) end
         end
-        if pad.menuPressed("lb") then eq.ClickChild(ISW, "ISW_PageLeft_Button", "left") top = 0 end
-        if pad.menuPressed("rb") then eq.ClickChild(ISW, "ISW_PageRight_Button", "left") top = 0 end
+        if pad.menuPressed("lb") then API.windows.ClickChild(ISW, "ISW_PageLeft_Button", "left") top = 0 end
+        if pad.menuPressed("rb") then API.windows.ClickChild(ISW, "ISW_PageRight_Button", "left") top = 0 end
         if pad.menuPressed("lt") then pick("ISW_Type_Combobox") top = 0 end
         if pad.menuPressed("rt") then pick("ISW_PerPage_Combobox") top = 0 end
         if pad.menuPressed("x") then
           typing = true
           G.openKeys(kb)
         end
-        if T.settledPress(pad, "a") then eq.ClickChild(ISW, "ISW_Accept_Button", "left") end
+        if T.settledPress(pad, "a") then API.windows.ClickChild(ISW, "ISW_Accept_Button", "left") end
       end
       if ui.IsMouseHoveringRect(x0, gy, x1, gy1) then
         local wheel = ui.GetIO().wheel or 0
@@ -112,9 +113,9 @@ ui.window("Icon Selection", function()
           if n > last then break end
           local ix, iy = x0 + T.px(6) + c * cell, gy + T.px(6) + (r - top) * cell
           ui.SetCursorPos(ix - wx, iy - wy)
-          if ui.InvisibleButton("##icon" .. n, cell - T.px(4), cell - T.px(4)) then eq.ClickChild(ISW, "ISW_Icon:" .. n, "left") end
+          if ui.InvisibleButton("##icon" .. n, cell - T.px(4), cell - T.px(4)) then API.windows.ClickChild(ISW, "ISW_Icon:" .. n, "left") end
           local hovered = ui.IsItemHovered()
-          local t2, a0, b0, a1, b1 = eq.IconSelectionIcon(n)
+          local t2, a0, b0, a1, b1 = API.hotbars.IconSelectionIcon(n)
           if t2 then T.icon(t2, a0, b0, a1, b1, ix + T.px(4), iy + T.px(4), ix + cell - T.px(8), iy + cell - T.px(8)) end
           if n == selected then T.focusRing(ix, iy, ix + cell - T.px(4), iy + cell - T.px(4), T.px(8))
           elseif hovered then T.outline(ix, iy, ix + cell - T.px(4), iy + cell - T.px(4), C.text, 0.6, T.px(8)) end
@@ -128,12 +129,12 @@ ui.window("Icon Selection", function()
       end
       local hw = (w - gap) / 2
       ui.SetCursorPos(x0 - wx, y1 - fh - wy)
-      if T.button("##iswclose", "Close", hw, fh, { glyph = "b" }, pad) then eq.ShowWindow(ISW, false) end
+      if T.button("##iswclose", "Close", hw, fh, { glyph = "b" }, pad) then API.windows.Show(ISW, false) end
       ui.SameLine(0, gap)
       G.button(ISW, "ISW_Accept_Button", "Accept", hw, fh, { primary = true, glyph = "a", always = true })
     end
   end
   if W.finish() then
-    if typing then typing = false else eq.ShowWindow(ISW, false) end
+    if typing then typing = false else API.windows.Show(ISW, false) end
   end
 end)

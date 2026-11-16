@@ -1,11 +1,11 @@
-// The inventory and bank windows' Auto-Inventory button (Hailstone_AutoInventory, app/lua_eq_items.cpp; the modern
-// pack's inventory.lua and bank.lua draw it) over the eq API, against the mock server.
+// The inventory and bank windows' Auto-Inventory button (Hailstone_AutoInventory, app/lua_ui_items.cpp; the modern
+// pack's inventory.lua and bank.lua draw it) over the hs API, against the mock server.
 #include <doctest/doctest.h>
 
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "net/item_packets.h"
 #include "net/packet_io.h"
@@ -14,7 +14,7 @@ using namespace hailstone;
 using namespace hailstone::test;
 
 TEST_CASE("Auto-Inventory button: enabled with an item on the cursor; a click puts it in the inventory") {
-    ImGuiContext* ctx = ImGui::CreateContext(); // the eq API reads the keyboard's modifiers
+    ImGuiContext* ctx = ImGui::CreateContext(); // the hs API reads the keyboard's modifiers
     net::Item held;
     held.id = 13005;
     held.name = "Iron Ration";
@@ -26,23 +26,23 @@ TEST_CASE("Auto-Inventory button: enabled with an item on the cursor; a click pu
     REQUIRE(rig.to_zone());
     REQUIRE(conn.inventory().cursor());
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
     auto enabled = [&] {
-        REQUIRE(luaL_dostring(L, "return (eq.ChildState('InventoryWindow', 'Hailstone_AutoInventory'))") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "return (hs.ChildState('InventoryWindow', 'Hailstone_AutoInventory'))") == LUA_OK);
         bool on = lua_toboolean(L, -1);
         lua_settop(L, 0);
         return on;
     };
     CHECK(enabled());
-    REQUIRE(luaL_dostring(L, "return eq.ClickChild('InventoryWindow', 'Hailstone_AutoInventory', 'left')") == LUA_OK);
+    REQUIRE(luaL_dostring(L, "return hs.ClickChild('InventoryWindow', 'Hailstone_AutoInventory', 'left')") == LUA_OK);
     CHECK(lua_toboolean(L, -1));
     lua_settop(L, 0);
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::MoveItem) >= 1; }));

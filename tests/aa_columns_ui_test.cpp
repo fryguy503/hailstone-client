@@ -13,7 +13,9 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
 #include "core/game_dir.h"
 #include "net/game_connection.h"
 #include "scratch_dir.h"
@@ -33,8 +35,8 @@ struct AaSession {
     GameDir game;
     net::GameConnection conn;
     ui::ChatView chat;
-    app::EqHost host;
-    app::EqApi api;
+    app::UiHost host;
+    app::UiApi api;
     ui::lua::LuaUi lua;
 
     explicit AaSession(const fs::path& dir)
@@ -43,10 +45,11 @@ struct AaSession {
         host.conn = &conn;
         host.chat = &chat;
         host.in_game = host.ui_ready = true;
-        lua.add_eq_api([this](lua_State* L) {
+        lua.add_ui_api([this](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* state) { lua_pushboolean(state, true); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         lua.set_folders({{"plug", dir / "plug"}});
@@ -125,23 +128,24 @@ aa_rows = {}
 for i = 1, 80 do
   aa_rows[i] = {string.format("Ability %03d", i), "0/123", "7", "Combat", "3", "Shadow", "1", "1"}
 end
-local WindowList, ListInfo, ListRow = eq.WindowList, eq.ListInfo, eq.ListRow
-eq.WindowList = function(win, id, ...)
+local WindowList, ListInfo, ListRow = hs.WindowList, hs.ListInfo, hs.ListRow
+hs.WindowList = function(win, id, ...)
   if win == "AAWindow" and id == "ModernList" then return aa_rows end
   return WindowList(win, id, ...)
 end
-eq.ListInfo = function(win, id, ...)
+hs.ListInfo = function(win, id, ...)
   if win == "AAWindow" and id == "ModernList" then return #aa_rows, 8, -1 end
   return ListInfo(win, id, ...)
 end
-eq.ListRow = function(win, id, row, ...)
+hs.ListRow = function(win, id, row, ...)
   if win == "AAWindow" and id == "ModernList" then return aa_rows[row + 1], 1, 1, 1 end
   return ListRow(win, id, row, ...)
 end
 ui.SetSetting('plugin.plug.hud.size.AAWindow', '1400,650')
 ui.SetSetting('plugin.plug.test.pos.AAWindow', '20,20')
-eq.ShowWindow('AAWindow', true)
+hs.ShowWindow('AAWindow', true)
 )lua");
+        hailstone::test::sync_ui_api_aliases(state());
     }
 
     ~AaColumns() {

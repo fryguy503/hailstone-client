@@ -3,16 +3,17 @@
 --   * search (name or category), sort (level, name, category, mana, cast time, book order), beneficial /
 --     detrimental, memorized only, usable at your level; a list or a grid of icons;
 --   * categories and subcategories at the left, with counts;
---   * the spell's details at the right (the game's own spell display text: eq.SpellDetails);
+--   * the spell's details at the right (the game's own spell display text: hs.SpellDetails);
 --   * spell sets (the game's sets: hotbuttons.ini [SpellLoadouts], /memspellset): load (memorize), edit or delete
 --     one; a new set is made empty or from the gems. The editor takes spells dragged from the book onto its twelve
 --     slots (or a double-click: the slot picked, else the first empty one), moves them between slots, and saves
---     without memorizing anything (Hailstone's own: eq.SaveSpellSet(name, spells) / eq.EditSpellSet); a spell
+--     without memorizing anything (Hailstone's own: hs.SaveSpellSet(name, spells) / hs.EditSpellSet); a spell
 --     dropped on a set's card goes straight into that set;
 --   * the gems along the bottom: drag a spell onto a gem (or double-click it: the selected gem, else the first
 --     empty one) to memorize it, right-click a gem to forget it; the memorize under way shows on its gem.
 -- Memorizing and scribing follow the game's rules (sitting, one at a time, the level, the gems you can use); a
 -- scroll on the cursor is scribed into the first empty page slot ("Scribe").
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local stml = dofile("lib/stml.lua")
 local T = hud.T
@@ -100,7 +101,7 @@ local bookStamp = 0 -- counts the changes to the book: the filtered lists below 
 local function refresh()
   if ui.GetTime() - lastRead < 0.25 then return end
   lastRead = ui.GetTime()
-  local read = eq.SpellBook() or {}
+  local read = API.spells.Book() or {}
   if sameBook(read, book) then return end -- nothing changed: the entries, lists and categories made are kept
   book = read
   bookStamp = bookStamp + 1
@@ -188,14 +189,14 @@ end
 local function spellIcon(id)
   local e = byId[id]
   if not e then return nil end
-  local tex, u0, v0, u1, v1 = eq.SpellIcon(e.icon)
+  local tex, u0, v0, u1, v1 = API.spells.Icon(e.icon)
   return tex, u0, v0, u1, v1
 end
 
--- Whether a gem that holds a spell takes another (Hailstone's replace_gem_spell, EqHost::gem_takes_book_spell); the
+-- Whether a gem that holds a spell takes another (Hailstone's replace_gem_spell, UiHost::gem_takes_book_spell); the
 -- game memorizes only into an empty gem.
 local function replaces()
-  return eq.Option("replace_gem_spell") ~= 0
+  return API.settings.Option("replace_gem_spell") ~= 0
 end
 
 -- The gem a double-click or the Memorize button uses: the one picked, while it is empty or replace_gem_spell lets a
@@ -213,7 +214,7 @@ end
 local function memorize(e, gem, st)
   if not e or not gem then return end
   if e.gem then return end
-  eq.SpellBookMemorize(e.slot, gem)
+  API.spells.BookMemorize(e.slot, gem)
 end
 
 -- ---------------------------------------------------------------- spell sets
@@ -466,9 +467,9 @@ local function entryInput(e, st, hovered)
   if ui.IsItemActive() and ui.IsMouseDragging(ui.Mouse.Left) and not drag then drag = e end
   if ui.IsItemClicked(ui.Mouse.Right) then
     sel = e.id
-    -- a spell picked up to move (the stock book's right click, eq.SpellBookSwap): this one swaps places with it
+    -- a spell picked up to move (the stock book's right click, hs.SpellBookSwap): this one swaps places with it
     -- (itself puts it back)
-    if st.swapSlot then eq.SpellBookSwap(e.slot) else ui.OpenPopup("##spellmenu") end
+    if st.swapSlot then API.spells.BookSwap(e.slot) else ui.OpenPopup("##spellmenu") end
     T.TakeRightClick()
   end
   if hovered and not drag and not ui.IsMouseDown(ui.Mouse.Left) then rowTooltip(e) end
@@ -520,7 +521,7 @@ local function gridEntry(i, e)
   ui.InvisibleButton(e._gridId, GRID * s, GRID * s)
   if py + GRID * s >= lv.top and py <= lv.bottom then
     local hovered = ui.IsItemHovered()
-    local tex, u0, v0, u1, v1 = eq.SpellIcon(e.icon)
+    local tex, u0, v0, u1, v1 = API.spells.Icon(e.icon)
     local pad = 5 * s
     GRID_ICON.alpha = e.level > lv.myLevel and 0.35 or 1
     T.Icon(px + pad, py + pad, GRID * s - 2 * pad, s, tex, u0, v0, u1, v1,
@@ -554,7 +555,7 @@ local function listEntry(_, e)
       ui.DrawRect(px, py, px + cw, py + ROW_H * s, C.gold[1], C.gold[2], C.gold[3], 0.9, 6 * s, 2 * s)
     end
     local dim = e.level > lv.myLevel
-    local tex, u0, v0, u1, v1 = eq.SpellIcon(e.icon)
+    local tex, u0, v0, u1, v1 = API.spells.Icon(e.icon)
     local isz = (ROW_H - 6) * s
     ROW_ICON.alpha = dim and 0.4 or 1
     T.Icon(px + 4 * s, py + 3 * s, isz, s, tex, u0, v0, u1, v1, ringOf(e.beneficial and C.good or C.bad, 0.5), ROW_ICON)
@@ -619,9 +620,9 @@ local function listView(list, x, y, w, h, s, st, myLevel)
         ui.EndMenu()
       end
       if editor and ui.MenuItem("Add to the set being edited") then editorAdd(e.id, st) end
-      if ui.MenuItem("Pick up (click a gem to memorize)") then eq.SpellBookClick(e.slot) end
-      if ui.MenuItem("Move in the book (right-click another spell)") then eq.SpellBookSwap(e.slot) end
-      if ui.MenuItem("Spell display window") then eq.ShowSpell(e.id) end
+      if ui.MenuItem("Pick up (click a gem to memorize)") then API.spells.BookClick(e.slot) end
+      if ui.MenuItem("Move in the book (right-click another spell)") then API.spells.BookSwap(e.slot) end
+      if ui.MenuItem("Spell display window") then API.spells.Show(e.id) end
     end
     ui.EndPopup()
   end
@@ -645,7 +646,7 @@ local function detailsTab(x, y, w, h, s, st)
     T.Text(x, y + 6 * s, "Select a spell to see its details.", C.muted, T.font.small)
     return
   end
-  local tex, u0, v0, u1, v1 = eq.SpellIcon(e.icon)
+  local tex, u0, v0, u1, v1 = API.spells.Icon(e.icon)
   T.Icon(x, y, 52 * s, s, tex, u0, v0, u1, v1, e.beneficial and C.good or C.bad, DETAIL_ICON)
   local _, th = T.TextSize("Ag", T.font.large)
   T.Text(x + 62 * s, y + 2 * s, T.Fit(e.name, w - 62 * s, T.font.large), C.text, T.font.large)
@@ -681,11 +682,11 @@ local function detailsTab(x, y, w, h, s, st)
     label = "Memorize (gem " .. (gem + 1) .. ")"
   end
   if T.Button("##memorize", x, by, x + bw, by + 26 * s, s, label, { primary = canMem, enabled = canMem }) then memorize(e, gem, st) end
-  if T.Button("##show", x + bw + 6 * s, by, x + w, by + 26 * s, s, "Spell window") then eq.ShowSpell(e.id) end
+  if T.Button("##show", x + bw + 6 * s, by, x + w, by + 26 * s, s, "Spell window") then API.spells.Show(e.id) end
   -- the game's spell display text
   local dy = by + 36 * s
   if details.id ~= e.id then
-    local _, raw = eq.SpellDetails(e.id)
+    local _, raw = API.spells.Details(e.id)
     details = { id = e.id, lines = stml.Lines(raw or "", C.text) }
   end
   local wx, wy = ui.GetWindowPos()
@@ -823,7 +824,7 @@ local function setEditor(x, y, w, h, s, st, sets)
   if T.Button("##edsave", bx(4), by, bx(4) + bw, by + 24 * s, s, clash and "Replace" or "Save",
       { primary = canSave, enabled = canSave }) or (enter and canSave) then
     local at
-    if ed.n then at = eq.EditSpellSet(ed.n, name, ed.spells) else at = eq.SaveSpellSet(name, ed.spells) end
+    if ed.n then at = API.spells.EditSet(ed.n, name, ed.spells) else at = API.spells.SaveSet(name, ed.spells) end
     if at then
       flash = { "Saved " .. name, ui.GetTime() + 3 }
       editor, slotDrag = nil, nil
@@ -926,7 +927,7 @@ local function setList(x, y, w, h, s, st, sets)
         local k = dropAt or slotFor(spells, nil, st.usableGems)
         if k then
           putSpell(spells, k, drag.id)
-          if eq.EditSpellSet(n, set.name, spells) then
+          if API.spells.EditSet(n, set.name, spells) then
             flash = { string.format("%s is in gem %d of %s", drag.name, k, set.name), ui.GetTime() + 3 }
           end
         else
@@ -935,7 +936,7 @@ local function setList(x, y, w, h, s, st, sets)
       end
       if T.Button("##load" .. n, cx + cw - 154 * s, ry + 4 * s, cx + cw - 104 * s, ry + 24 * s, s, "Load",
           { primary = true, tooltip = "Memorize this set" }) then
-        eq.MemorizeSpellSet(n)
+        API.spells.MemorizeSet(n)
       end
       if T.Button("##edit" .. n, cx + cw - 100 * s, ry + 4 * s, cx + cw - 58 * s, ry + 24 * s, s, "Edit") then
         openEditor(n, set, false, st)
@@ -957,7 +958,7 @@ local function setList(x, y, w, h, s, st, sets)
     local set = confirmDelete and sets[confirmDelete]
     ui.Text("Delete the spell set '" .. (set and set.name or "") .. "'?")
     if ui.Button("Delete") then
-      if confirmDelete then eq.DeleteSpellSet(confirmDelete) end
+      if confirmDelete then API.spells.DeleteSet(confirmDelete) end
       confirmDelete = nil
       ui.CloseCurrentPopup()
     end
@@ -971,7 +972,7 @@ local function setList(x, y, w, h, s, st, sets)
 end
 
 local function setsTab(x, y, w, h, s, st)
-  local sets = eq.SpellSets() or {}
+  local sets = API.spells.Sets() or {}
   if editor and editor.n and not (sets[editor.n] and sets[editor.n].inUse) then editor = nil end -- deleted meanwhile
   if editor then setEditor(x, y, w, h, s, st, sets) else setList(x, y, w, h, s, st, sets) end
 end
@@ -981,7 +982,7 @@ local function gemStrip(x, y, w, s, st)
   local count = 12
   local total = count * size + (count - 1) * gap
   local gx0 = x + (w - total) / 2
-  local memFrac = eq.Gauge(9) -- the memorize gauge: the ticks left over 92
+  local memFrac = API.character.Gauge(9) -- the memorize gauge: the ticks left over 92
   for g = 0, count - 1 do
     local gx = gx0 + g * (size + gap)
     local id = st.gems[g + 1] or -1
@@ -1019,13 +1020,13 @@ local function gemStrip(x, y, w, s, st)
     end
     if hit and usable then
       if st.cursorSpell then
-        eq.SpellGemClick("CSPW_Spell" .. g, "left") -- the spell picked up in the book goes here
+        API.spells.GemClick("CSPW_Spell" .. g, "left") -- the spell picked up in the book goes here
       else
         targetGem = (targetGem == g) and nil or g
       end
     end
     if ui.IsItemClicked(ui.Mouse.Right) and id ~= -1 then
-      eq.SpellGemClick("CSPW_Spell" .. g, "rightup") -- forget it
+      API.spells.GemClick("CSPW_Spell" .. g, "rightup") -- forget it
       T.TakeRightClick()
     end
     if ui.IsItemHovered() and not drag then
@@ -1089,14 +1090,14 @@ local function body(x, y, w, h, s)
   if tsel and not sel then sel = tsel end
   local tgem = tonumber(ui.GetSetting("test.book.gem"))
   if tgem and not targetGem then targetGem = tgem - 1 end
-  local st = eq.SpellBookState() or { gems = {}, usableGems = 8 }
-  local myLevel = tonumber((eq.Label(2))) or 1
+  local st = API.spells.BookState() or { gems = {}, usableGems = 8 }
+  local myLevel = tonumber((API.character.Label(2))) or 1
   if targetGem and targetGem >= (st.usableGems or 8) then targetGem = nil end
   local te = ui.GetSetting("test.book.edit")
   if te and te ~= testEdit then
     testEdit, tab = te, "sets"
     local n = tonumber(te)
-    openEditor(n, n and (eq.SpellSets() or {})[n], te == "gems", st)
+    openEditor(n, n and (API.spells.Sets() or {})[n], te == "gems", st)
   end
   toolbar(x, y, w, s, st)
   readSettings()
@@ -1130,7 +1131,7 @@ local function body(x, y, w, h, s)
     local slot = firstEmptyBookSlot()
     if slot and T.Button("##scribe", x + w - 150 * s, y + h - GEMS_H * s + 4 * s, x + w, y + h - GEMS_H * s + 30 * s, s,
         "Scribe the scroll", { primary = true, enabled = st.sitting }) then
-      eq.SpellBookClick(slot)
+      API.spells.BookClick(slot)
     end
   end
   ui.DrawLine(x, y + h - GEMS_H * s, x + w, y + h - GEMS_H * s, C.ink[1], C.ink[2], C.ink[3], 0.06, 1)
@@ -1138,7 +1139,7 @@ local function body(x, y, w, h, s)
   -- the spell being dragged follows the mouse; let go anywhere else and it is dropped
   if drag then
     local mx, my = ui.GetMousePos()
-    local tex, u0, v0, u1, v1 = eq.SpellIcon(drag.icon)
+    local tex, u0, v0, u1, v1 = API.spells.Icon(drag.icon)
     ui.Foreground(true)
     if tex then ui.DrawImage(tex, mx - 18 * s, my - 18 * s, mx + 18 * s, my + 18 * s, u0, v0, u1, v1, 1, 1, 1, 0.85) end
     ui.Foreground(false)
@@ -1160,7 +1161,7 @@ end
 -- What belongs to the character the book was open for (the set being edited, a drag, the picks): camping, or another
 -- character's name, clears it, so Save cannot write into the next character's set of that number.
 local function forCharacter()
-  local who = eq.InGame() and (eq.Label(1) or "") or nil
+  local who = API.session.InGame() and (API.character.Label(1) or "") or nil
   if who == bookWho then return end
   bookWho = who
   editor, slotDrag, drag, confirmDelete, flash, targetGem, sel = nil, nil, nil, nil, nil, nil, nil
@@ -1170,7 +1171,7 @@ end
 
 ui.window("My Spell Book", function()
   forCharacter()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Spell Book", DIALOG, body)
   if bodyFrame ~= ui.GetFrameCount() then -- the book is closed: a drag from it ends
     drag = nil

@@ -1,8 +1,8 @@
 #pragma once
 
 // What plugins give the Lua UI (docs/plugins.md "Plugin windows"): functions their Lua windows call
-// (eq.Plugin(name)), options the Options window lists (eq.PluginOptions), entries for the packs' menus
-// (eq.PluginMenu), and each plugin's folder, whose ui/<pack>/ holds its windows for each UI pack (the app hands
+// (hs.Plugin(name)), options the Options window lists (hs.PluginOptions), entries for the packs' menus
+// (hs.PluginMenu), and each plugin's folder, whose ui/<pack>/ holds its windows for each UI pack (the app hands
 // them to ui::lua::LuaUi::set_folders). Compiled plugins add theirs through the host table (plugin/native_plugins.h),
 // Lua plugins (scripts) through hailstone.ui_function and the rest (mq/lua_hailstone.cpp); everything of a plugin
 // goes when it unloads. Values cross as UiValue trees, so nothing here depends on Lua. Single threaded.
@@ -11,7 +11,7 @@
 // "script:<name>"; owner_tag) is what its windows run as (LuaUi::caller_tag) and what its capabilities are looked up
 // by (app::Automation::plugin_caps), so a script can never take a compiled plugin's place, folder or functions by
 // naming itself after it: a registration replaces or removes only its own kind's entries. Names compare without
-// case. A lookup by a bare name ("nms", what the packs' eq.Plugin passes) finds a compiled plugin's before a
+// case. A lookup by a bare name ("nms", what the packs' hs.Plugin passes) finds a compiled plugin's before a
 // script's; a lookup by tag finds that owner alone.
 
 #include <cstddef>
@@ -65,7 +65,7 @@ public:
     static std::optional<std::pair<Kind, std::string>> parse_tag(std::string_view tag);
 
     using Fn = std::function<UiValue(const std::vector<UiValue>& args)>;
-    // The most arguments one call passes (eq.Plugin(...).fn(table.unpack(t)) could pass a million): past it the call
+    // The most arguments one call passes (hs.Plugin(...).fn(table.unpack(t)) could pass a million): past it the call
     // is refused (nullopt). Each one is a slot on the callee's Lua stack.
     static constexpr std::size_t kMaxCallArgs = 64;
     struct Option {

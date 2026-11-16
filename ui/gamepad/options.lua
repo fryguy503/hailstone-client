@@ -1,13 +1,15 @@
 -- Options (gamepad pack): stands in for OptionsWindow, so the options key and the EQ menu open it. Pages (LB / RB):
---   Gamepad       the pad's settings (eq.gamepad.setting / set_setting: dead zone, thresholds, camera, rumble)
---   Buttons       what each button does in game mode (eq.gamepad.binding / set_binding), A picks a new action
---   Cross Hotbar  which hot button each cross hotbar slot fires (eq.gamepad.cross_slot / set_cross_slot)
---   Interface, Game, Display, Audio   the client options (eq.Option / eq.SetOption), as the classic Options window
+--   Gamepad       the pad's settings (hs.gamepad.setting / set_setting: dead zone, thresholds, camera, rumble)
+--   Buttons       what each button does in game mode (hs.gamepad.binding / set_binding), A picks a new action
+--   Cross Hotbar  which hot button each cross hotbar slot fires (hs.gamepad.cross_slot / set_cross_slot)
+--   Interface, Game, Display, Audio   the client options (hs.Option / hs.SetOption), as the classic Options window
 --   Camera        the isometric camera's (the iso_* options, docs/isometric.md)
 -- Every row is changed with the D-pad left / right (or A); the mouse clicks a row (right click: back).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
+local interfaceStatus = dofile("lib/interface_status.lua")
 local C = T.C
 
 local OW = "OptionsWindow"
@@ -28,20 +30,20 @@ local function gamepadRow(label, name, lo, hi, step, fmt)
 end
 
 local function optionRow(label, name, choices, values)
-  local v = eq.Option(name)
+  local v = API.settings.Option(name)
   if v == nil then return nil end
   if choices == "bool" then
-    return { label, v ~= 0 and "On" or "Off", function() eq.SetOption(name, v ~= 0 and 0 or 1) end }
+    return { label, v ~= 0 and "On" or "Off", function() API.settings.SetOption(name, v ~= 0 and 0 or 1) end }
   elseif type(choices) == "table" and type(choices[1]) ~= "number" then -- names (a range starts with a number)
     local idx = 1
     for i = 1, #choices do if (values and values[i] or (i - 1)) == v then idx = i end end
     return { label, choices[idx] or tostring(v), function(dir)
       local n = (idx - 1 + dir) % #choices + 1
-      eq.SetOption(name, values and values[n] or (n - 1))
+      API.settings.SetOption(name, values and values[n] or (n - 1))
     end }
   else -- a number range { lo, hi, step, suffix }
     local r = choices
-    return { label, tostring(v) .. (r[4] or ""), function(dir) eq.SetOption(name, math.max(r[1], math.min(r[2], v + dir * r[3]))) end }
+    return { label, tostring(v) .. (r[4] or ""), function(dir) API.settings.SetOption(name, math.max(r[1], math.min(r[2], v + dir * r[3]))) end }
   end
 end
 
@@ -49,29 +51,29 @@ end
 -- upscaler_choice: 4 on).
 local function upscalerChoices()
   local choices = { "Off", "FSR 1", "Temporal", "FSR 3.1" }
-  for _, name in ipairs(eq.OptionChoices("upscaler_providers") or {}) do choices[#choices + 1] = name end
+  for _, name in ipairs(API.settings.OptionChoices("upscaler_providers") or {}) do choices[#choices + 1] = name end
   return choices
 end
 
 -- The upscale quality presets (render/temporal.h UpscaleQuality: 0 Native AA .. 4 Ultra Performance), each a render
 -- scale; 5 Custom (another render scale) shows but is stepped past.
 local function upscaleQualityRow()
-  local v = eq.Option("upscale_quality")
+  local v = API.settings.Option("upscale_quality")
   if v == nil then return nil end
   local names = { "Native AA", "Quality", "Balanced", "Performance", "Ultra performance", "Custom" }
   return { "Upscale quality", names[v + 1] or "Custom", function(dir)
     local n = v >= 5 and (dir > 0 and 0 or 4) or (v + dir) % 5
-    eq.SetOption("upscale_quality", n)
+    API.settings.SetOption("upscale_quality", n)
   end }
 end
 
 -- The graphics this computer suits (render/graphics_tier.h: 0 Low, 1 Medium, 2 High); A applies them again, as the
 -- first start did.
 local function detectGraphicsRow()
-  local tier = eq.Option("gpu_tier")
+  local tier = API.settings.Option("gpu_tier")
   if tier == nil then return nil end
   local name = ({ [0] = "Low", [1] = "Medium", [2] = "High" })[tier] or "High"
-  return { "Graphics for this computer", "Use " .. name, function() eq.SetOption("detect_graphics", 1) end }
+  return { "Graphics for this computer", "Use " .. name, function() API.settings.SetOption("detect_graphics", 1) end }
 end
 
 -- What a binding can be (docs/gamepad.md section 4), with friendly names.
@@ -165,7 +167,7 @@ local PAGES = {
         local bar, button = pad.cross_slot(s, n)
         if bar then
           local label = SETS[s] .. " + " .. pad.label(SLOT_BUTTONS[n])
-          local kind, hb = eq.HotButton(bar == 1 and "HotButtonWnd" or ("HotButtonWnd" .. bar), "HB_Button" .. button)
+          local kind, hb = API.hotbars.Button(bar == 1 and "HotButtonWnd" or ("HotButtonWnd" .. bar), "HB_Button" .. button)
           local what = (hb and hb ~= "") and ("  (" .. hb .. ")") or (kind == "empty" and "  (empty)" or "")
           rows[#rows + 1] = { label, "Bar " .. bar .. ", button " .. button .. what, function(dir)
             -- left / right: the button (1..12), wrapping into the next bar
@@ -181,13 +183,26 @@ local PAGES = {
     local rows = {}
     local trail = optionRow("Find trail", "find_trail_style", { "Gold line (default)", "Rainbow trail" })
     if trail then rows[#rows + 1] = trail end
-    local uiName = eq.Option("ui_name")
+    local uiName = API.settings.Option("ui_name")
     if uiName ~= nil then
-      local names = eq.OptionChoices("ui_name")
+      local names = API.settings.OptionChoices("ui_name")
       local r = optionRow("User interface", "ui_name", names)
+      if r and API.Supports("interfaces", "List") then
+        local packs = API.interfaces.List()
+        r[3] = function(dir)
+          for step = 1, #names do
+            local idx = (uiName + dir * step) % #names
+            if not packs[idx + 1] or packs[idx + 1].available ~= false then
+              API.settings.SetOption("ui_name", idx)
+              return
+            end
+          end
+        end
+      end
       if r then rows[#rows + 1] = r end
-      local now = eq.Option("ui_name_now")
-      if now ~= nil and now ~= uiName then rows[#rows + 1] = { "", "Log in again to switch", nil } end
+    end
+    if API.Supports("interfaces", "Status") then
+      for _, entry in ipairs(interfaceStatus(API.interfaces.Status(), 42)) do rows[#rows + 1] = entry end
     end
     do -- this pack's colour palettes (lib/palettes.lua): left / right picks the next one, shown at once
       local list, idx = T.palettes.list, 1
@@ -197,10 +212,10 @@ local PAGES = {
       end }
     end
     -- The map pack: the map's maps directory (MVW_MapsDirCombobox, "Main" "MapSkin" in the character's UI ini).
-    local packs, pack = eq.ComboInfo("MapViewWnd", "MVW_MapsDirCombobox")
+    local packs, pack = API.windows.ComboInfo("MapViewWnd", "MVW_MapsDirCombobox")
     if packs and #packs > 0 then
       rows[#rows + 1] = { "Map pack", packs[pack + 1] or packs[1], function(dir)
-        eq.ComboSelect("MapViewWnd", "MVW_MapsDirCombobox", (pack + dir) % #packs)
+        API.windows.ComboSelect("MapViewWnd", "MVW_MapsDirCombobox", (pack + dir) % #packs)
       end }
     end
     local r = optionRow("UI scale", "ui_scale", { "Automatic", "75 %", "100 %", "125 %", "150 %", "175 %", "200 %", "250 %" },
@@ -217,7 +232,7 @@ local PAGES = {
       if x then rows[#rows + 1] = x end
     end
     -- The name plates' text (game/nameplate_style.h).
-    local faces = eq.OptionChoices("plate_font_face")
+    local faces = API.settings.OptionChoices("plate_font_face")
     if faces and #faces > 0 then
       local x = optionRow("Name font", "plate_font_face", faces)
       if x then rows[#rows + 1] = x end
@@ -240,10 +255,10 @@ local PAGES = {
     sizeNames[#sizeNames + 1] = "Off"; sizeValues[#sizeValues + 1] = 0
     local x = optionRow("Target ring max size", "target_ring_max_size", sizeNames, sizeValues)
     if x then rows[#rows + 1] = x end
-    local modes = eq.ChatHitModes()
+    local modes = API.chat.HitModes()
     local function addHitMode(h)
       rows[#rows + 1] = { "Hit mode: " .. h.name, h.modes[h.mode + 1] or "Mixed", function(dir)
-        eq.ChatSetHitMode(h.id, (math.max(0, h.mode) + dir) % #h.modes)
+        API.chat.SetHitMode(h.id, (math.max(0, h.mode) + dir) % #h.modes)
       end }
     end
     for i, h in ipairs(modes) do if i ~= 7 then addHitMode(h) end end
@@ -289,7 +304,7 @@ local PAGES = {
       optionRow("Max camera zoom", "max_camera_distance", { 10, 150, 10, " units" }),
       optionRow("Ground floating NPCs", "ground_npcs", "bool"),
       -- the texture pack (display.texture_folder, from the next start): Off, then each folder of textures/
-      optionRow("Texture pack (next start)", "texture_pack", eq.OptionChoices("texture_pack"))
+      optionRow("Texture pack (next start)", "texture_pack", API.settings.OptionChoices("texture_pack"))
     )
     -- table.pack counts the nil rows (options this client lacks) too, so none past them is dropped.
     for i = 1, list.n do if list[i] then rows[#rows + 1] = list[i] end end
@@ -330,18 +345,18 @@ local PAGES = {
     for i = 1, list.n do if list[i] then rows[#rows + 1] = list[i] end end
     return rows
   end },
-  -- The plugins' options (eq.PluginOptions; docs/plugins.md "Plugin windows"): a switch, or left / right over its range.
+  -- The plugins' options (hs.PluginOptions; docs/plugins.md "Plugin windows"): a switch, or left / right over its range.
   { "Plugins", function()
     local rows = {}
-    for _, o in ipairs(eq.PluginOptions()) do
+    for _, o in ipairs(API.plugins.Options()) do
       local label = o.plugin .. ": " .. o.label
       if o.max == 1 and o.min == 0 then
         rows[#rows + 1] = { label, o.value ~= 0 and "On" or "Off", function()
-          eq.SetPluginOption(o.owner, o.name, o.value ~= 0 and 0 or 1)
+          API.plugins.SetOption(o.owner, o.name, o.value ~= 0 and 0 or 1)
         end }
       else
         rows[#rows + 1] = { label, tostring(o.value), function(dir)
-          eq.SetPluginOption(o.owner, o.name, math.max(o.min, math.min(o.max, o.value + dir)))
+          API.plugins.SetOption(o.owner, o.name, math.max(o.min, math.min(o.max, o.value + dir)))
         end }
       end
     end
@@ -349,6 +364,10 @@ local PAGES = {
     return rows
   end },
 }
+
+local restoreSection = ui.GetSetting("options.section")
+for i, p in ipairs(PAGES) do if p[1] == restoreSection then showPage(i) end end
+local savedSection = nil
 
 local function pageTabs(x0, y0, x1)
   T.font(19)
@@ -411,6 +430,10 @@ ui.window("Options", function()
       local top = pageTabs(x0, y0, x1)
       ui.SetCursorPos(x0 - wx, top - wy)
       local rows = PAGES[page][2]()
+      if savedSection ~= PAGES[page][1] then
+        savedSection = PAGES[page][1]
+        ui.SetSetting("options.section", savedSection)
+      end
       lists[page] = lists[page] or { offset = 0 }
       local visible = math.max(1, math.floor((y1 - top + T.px(10)) / T.px(66)))
       aim(lists[page], #rows, visible)
@@ -442,6 +465,6 @@ ui.window("Options", function()
     picking = nil
     lists[page].want = lists[page].last -- back on the button's row
   elseif closed then
-    eq.ShowWindow(OW, false)
+    API.windows.Show(OW, false)
   end
 end)

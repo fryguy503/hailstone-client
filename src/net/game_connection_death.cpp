@@ -150,6 +150,7 @@ void GameConnection::handle_death(const Death& d) {
         respawn_placement_.reset();
         death_tip_pending_ = true; // 0x531730: CEverQuest +0x39580 = 1 (the death tip at the next zone-in)
         pstatus_.dead = true;
+        invalidate_interaction_context();
         pstatus_.owner_status = 4;
         pstatus_.hp = 0;
         set_auto_attack(false);
@@ -162,6 +163,7 @@ void GameConnection::handle_death(const Death& d) {
     }
     dead->is_corpse = true;
     dead->hp_percent = 0;
+    dead->hp_known = true;
     dead->stand_state = 115;
     // IDied zeroes the velocities (+0x70..+0x78, speed_run +0x7c, speed_heading +0x8c) and sets fly mode 0, so a
     // spawn killed while moving drops where it died instead of sliding on with the last update's motion.
@@ -210,6 +212,7 @@ void GameConnection::handle_zone_to_bind(const AppPacket& p) {
         }
         drunkenness_ = 0;
         pstatus_.dead = same_zone_hover;
+        invalidate_interaction_context();
         pstatus_.owner_status = same_zone_hover ? 4 : 0;
         // In a raid: CRaid::SetTargetRaidPlayer(0) and ClearInvitedState (a pending invitation is dropped).
         if (raid_.active) {

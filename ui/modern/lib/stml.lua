@@ -54,7 +54,7 @@ function stml.Parse(line, color)
         -- (an unclosed quote ends at the tag's end: storyline pages written as href="file:///x.txt>, which the
         -- original's STML box follows)
         local href = tag:match('[Hh][Rr][Ee][Ff]%s*=%s*"([^"]*)"') or tag:match('[Hh][Rr][Ee][Ff]%s*=%s*"([^"]*)$')
-        -- an href link: message -1, the target (the STML window follows it: eq.StmlLink)
+        -- an href link: message -1, the target (the STML window follows it: hs.StmlLink)
         link = message and { tonumber(message), data } or (href and { -1, href }) or true
       end
     end
@@ -172,7 +172,7 @@ function stml.DrawLine(segments, width, onLink, key)
 end
 
 
--- An output's lines (eq.ChatText's STML strings) parsed into `view` (view.lines; view.raws, the strings), reusing
+-- An output's lines (hs.ChatText's STML strings) parsed into `view` (view.lines; view.raws, the strings), reusing
 -- the last parse of a line still there (with its wrap and height): a new line costs one parse, not the whole output's.
 function stml.UpdateLines(view, raws, color)
   local old = {}
@@ -186,7 +186,7 @@ function stml.UpdateLines(view, raws, color)
   view.raws, view.lines, view.cumKey = raws, lines, nil
 end
 
--- eq.ChatText's incremental form: `raws` added at the end, then the oldest dropped until `count` are left.
+-- hs.ChatText's incremental form: `raws` added at the end, then the oldest dropped until `count` are left.
 function stml.AppendLines(view, raws, count, color)
   local lines, rs = view.lines or {}, view.raws or {}
   local n = #lines

@@ -2,6 +2,7 @@
 -- a field for a spell's name or id with Add (the game's edit box and button: Add is enabled once the field names a
 -- spell, Enter adds it too), then the blocked spells as a list, icon and name, each with a remove button (the
 -- game's slot takes it as its right click, which unblocks the spell).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local T = hud.T
@@ -11,7 +12,7 @@ local SLOTS = 30
 
 return function(cfg) -- { window, title, slot (prefix), add, edit, who ("you" / "your pet") }
   ui.window(cfg.title, function()
-    if not eq.InGame() then return end
+    if not API.session.InGame() then return end
     hud.Dialog(cfg.window, cfg.title, {
       size = function() return 280, 360 end,
       resizable = { 220, 200 },
@@ -23,8 +24,8 @@ return function(cfg) -- { window, title, slot (prefix), add, edit, who ("you" / 
       W.Edit(cfg.window, cfg.edit, {
         width = avail - btnW - 8, hint = "Spell name or ID", max = 64,
         onCommit = function()
-          if ui.IsKeyPressed(ui.Key.Enter) and eq.ChildState(cfg.window, cfg.add) ~= false then
-            eq.ClickChild(cfg.window, cfg.add, "left")
+          if ui.IsKeyPressed(ui.Key.Enter) and API.windows.ChildState(cfg.window, cfg.add) ~= false then
+            API.windows.ClickChild(cfg.window, cfg.add, "left")
           end
         end,
       })
@@ -35,7 +36,7 @@ return function(cfg) -- { window, title, slot (prefix), add, edit, who ("you" / 
       local list = {}
       for i = 0, SLOTS - 1 do
         local id = cfg.slot .. i
-        local name = eq.ChildTooltip(cfg.window, id) or ""
+        local name = API.windows.ChildTooltip(cfg.window, id) or ""
         if name ~= "" then list[#list + 1] = { id = id, name = name } end
       end
       ui.Dummy(0, 2 * s)
@@ -57,7 +58,7 @@ return function(cfg) -- { window, title, slot (prefix), add, edit, who ("you" / 
         ui.InvisibleButton("##row", cw, rowH)
         local hov = ui.IsItemHovered()
         if hov then ui.DrawRectFilled(rx, ry, rx + cw, ry + rowH, C.ink[1], C.ink[2], C.ink[3], 0.05, 5 * s) end
-        local tex, u0, v0, u1, v1 = eq.ChildArt(cfg.window, b.id, "decal")
+        local tex, u0, v0, u1, v1 = API.windows.ChildArt(cfg.window, b.id, "decal")
         if type(tex) ~= "userdata" then tex = nil end
         local isz = rowH - 4 * s
         T.Icon(rx + 2 * s, ry + 2 * s, isz, s, tex, u0, v0, u1, v1, nil, { radius = 4 })
@@ -81,7 +82,7 @@ return function(cfg) -- { window, title, slot (prefix), add, edit, who ("you" / 
         ui.Dummy(0, 0)
         ui.PopID()
         if removed or (hov and ui.IsMouseClicked(ui.Mouse.Right) and not ui.GetIO().alt) then
-          eq.ClickChild(cfg.window, b.id, "right")
+          API.windows.ClickChild(cfg.window, b.id, "right")
           T.TakeRightClick()
         end
       end

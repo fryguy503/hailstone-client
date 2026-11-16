@@ -204,8 +204,8 @@ TEST_CASE("bug report: account names and the home folder taken out") {
     CHECK(app::redact_private("login as Bob, bobby and bobcat (box: bob)", accounts, home) ==
           "login as <account>, <account> and bobcat (box: <account>)");
     // The home folder in either separator; its name as a folder name elsewhere; not a longer folder name.
-    CHECK(app::redact_private("/home/alice/eq and /home/alice and \\home\\alice\\x", {}, home) ==
-          "~/eq and ~ and ~\\x");
+    CHECK(app::redact_private("/home/alice/hs and /home/alice and \\home\\alice\\x", {}, home) ==
+          "~/hs and ~ and ~\\x");
     CHECK(app::redact_private("/run/media/alice/Games /home/alicex alice", {}, home) ==
           "/run/media/<user>/Games /home/alicex alice");
     CHECK(app::redact_private("/home/alice/x", {}, "/home/alice/") == "~/x");

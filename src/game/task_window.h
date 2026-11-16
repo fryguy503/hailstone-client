@@ -9,7 +9,7 @@
 //   - the quest history (QUEST_TaskList / QUEST_TaskElementList; CTaskWnd_FillHistoryList @0x76fb90,
 //     CTaskWnd_FillHistoryElements @0x76f700);
 //   - the compass mark for a task's NPC (0x76ff70).
-// Pure functions over game::TaskState; app/lua_eq_progress.cpp's TaskWindow keeps the window's own state.
+// Pure functions over game::TaskState; app/lua_ui_progress.cpp's TaskWindow keeps the window's own state.
 
 #include <cstdint>
 #include <functional>

@@ -2,7 +2,8 @@
 -- to rename the character, pet or mercenary, or /changename, /changepetname, /changemercname). One dialog each: the
 -- prompt, the name box (15 characters), Submit Name (it reads "Request Pending" and is disabled while a request is
 -- out), Disable Reminder (shown with the server's reminder; it asks first) and Remind Me Later or Close. Every piece
--- is the window's own (app/lua_eq_names.cpp); Enter in the box submits, as the original's message 6 does.
+-- is the window's own (app/lua_ui_names.cpp); Enter in the box submits, as the original's message 6 does.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -26,7 +27,7 @@ for _, def in ipairs(WINDOWS) do
     hint = hint,
     max = 16,
     onCommit = function()
-      if ui.IsKeyPressed(ui.Key.Enter) then eq.WindowButton(win, editId) end
+      if ui.IsKeyPressed(ui.Key.Enter) then API.windows.Button(win, editId) end
     end,
   }
   local buttons = {
@@ -46,7 +47,7 @@ for _, def in ipairs(WINDOWS) do
     W.ButtonRow(win, buttons, bh)
   end
   ui.window(title, function()
-    if not eq.InGame() then return end
+    if not API.session.InGame() then return end
     hud.Dialog(win, title, OPTS, body)
   end)
 end

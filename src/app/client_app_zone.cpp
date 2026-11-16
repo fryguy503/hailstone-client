@@ -141,6 +141,13 @@ void ClientApp::load_zone(const std::string& short_name) {
         distant_hidden_key_ = 0;
         vk_.reset_history(); // the temporal upscaler's history shows the last zone
         mark("zone renderer");
+        try {
+            world_geometry_renderer_ = std::make_unique<render::WorldGeometryRenderer>(vk_, shader_dir_);
+        } catch (const std::exception& e) {
+            world_geometry_renderer_.reset();
+            if (automation_) automation_->world_unavailable();
+            log::warn("world geometry rendering unavailable in {}: {}", short_name, e.what());
+        }
         flora_renderer_.reset();
         if (!zone_->flora.empty()) flora_renderer_ = std::make_unique<render::FloraRenderer>(vk_, *zone_, shader_dir_);
         mark("flora renderer");
@@ -152,6 +159,10 @@ void ClientApp::load_zone(const std::string& short_name) {
         collision_ = tested_collision ? std::move(*tested_collision) : std::move(*built_collision);
         animated_task.wait();
         animated_objects_ = std::move(*built_animated);
+        // Built only after the renderer selected/uploaded this zone's refined terrain and replacement objects.
+        // World scene availability is not published until this finishes; an upload/build failure retires it all.
+        world_visual_collision_ = game::CollisionMesh::build_visual(*zone_);
+        if (++world_collision_revision_ == 0) ++world_collision_revision_;
         zone_animation_origin_ms_ = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start_time_).count());
         if (!animated_objects_->empty())
@@ -191,9 +202,9 @@ void ClientApp::load_zone(const std::string& short_name) {
     world_objects_->set_zone(zone_ ? &*zone_ : nullptr, nullptr);
     try {
         auto library = characters_.library_for_zone(game_, short_name);
-        eq_host_.char_library = nullptr; // the old renderer's library goes with it
+        ui_host_.char_library = nullptr; // the old renderer's library goes with it
         actor_renderer_ = std::make_unique<render::ActorRenderer>(vk_, library, shader_dir_, std::move(actor_kept_));
-        eq_host_.char_library = &actor_renderer_->library();
+        ui_host_.char_library = &actor_renderer_->library();
         actor_library_ = library;
         world_objects_->set_zone(zone_ ? &*zone_ : nullptr, library); // item models for dropped items
     } catch (const std::exception& e) {
@@ -240,6 +251,9 @@ void ClientApp::load_zone(const std::string& short_name) {
     }
     if (loading_since_)
         zone_loaded_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - *loading_since_).count();
+    // A retained scene or another instance must not answer for the current world.
+    if (conn_ && zone_ && collision_ && short_name == conn_->world().zone_short_name)
+        world_scene_ = {conn_.get(), world_epoch_, conn_->zone_id(), conn_->zone_instance(), short_name};
 }
 
 namespace {
@@ -322,20 +336,22 @@ void ClientApp::update_zone_settle() {
 }
 
 void ClientApp::unload_zone() {
+    retire_world_geometry();
     zone_settle_.cancel();
     if (pre_game_loaded_) {
         // Character select's scene goes with its zone: the model player and its camera's field of view.
         pre_game_loaded_ = false;
-        eq_host_.model_player = nullptr;
+        ui_host_.model_player = nullptr;
         camera_.fov_units = pre_game_saved_fov_;
     }
     pre_game_world_.reset();
     missiles_.clear(); // CEverQuest_ClearZoneWorldState -> EQMissile_UpdateAll
     if (audio_) audio_->set_zone("");
-    if (zone_renderer_) vk_.wait_idle();
+    if (zone_renderer_ || world_geometry_renderer_) vk_.wait_idle();
+    world_geometry_renderer_.reset();
     if (neighbours_) neighbours_->clear();
-    eq_host_.zone_exits.clear();
-    eq_host_.zone_exits_zone = 0;
+    ui_host_.zone_exits.clear();
+    ui_host_.zone_exits_zone = 0;
     zone_renderer_.reset();
     flora_renderer_.reset(); // holds the zone's plants
     zone_particles_.reset(); // reads the zone's archives
@@ -348,7 +364,7 @@ void ClientApp::unload_zone() {
     sky_renderer_.reset();
     if (actor_renderer_) actor_kept_ = actor_renderer_->release_kept();
     actor_renderer_.reset();
-    eq_host_.char_library = nullptr; // its library went with it (update_eq_host sets it again)
+    ui_host_.char_library = nullptr; // its library went with it (update_ui_host sets it again)
     for (auto& slot : previews_) {
         slot.view.reset();
         slot.serial = 0xffffffffu;
@@ -356,6 +372,7 @@ void ClientApp::unload_zone() {
     actor_library_.reset();
     if (nav_) nav_->zone_unloaded();
     collision_.reset();
+    world_visual_collision_.reset();
     animated_objects_.reset();
     zone_ladders_.clear();
     zone_line_.set_buried({});
@@ -594,33 +611,33 @@ void ClientApp::enter_zone() {
             if (actions_ui_) actions_ui_->write_char_ini(section, key, value);
         });
     conn_->load_name_change_flags();
-    if (eq_api_) {
+    if (ui_api_) {
         // The window places: the character's UI.ini over the game's defaults.ini; the game's own
         // UI_<name>_<server>.ini, when there is one, is the starting layout (InitCharacterIniFilenames). Both are
         // only read. The map edits go to the server's maps folder.
         std::string file = files.ui_ini().string();
         if (file != layout_for_) {
             layout_for_ = file;
-            eq_host_.maps_dir = profile_maps_dir(profile);
-            eq_host_.server_dir = profile_dir(profile);
+            ui_host_.maps_dir = profile_maps_dir(profile);
+            ui_host_.server_dir = profile_dir(profile);
             // Made empty, so the player sees where maps for every server go.
-            eq_host_.global_maps_dir = platform::maps_dir();
+            ui_host_.global_maps_dir = platform::maps_dir();
             std::error_code maps_ec;
-            std::filesystem::create_directories(eq_host_.global_maps_dir, maps_ec);
+            std::filesystem::create_directories(ui_host_.global_maps_dir, maps_ec);
             auto defaults = game_.find("defaults.ini");
             auto seed = game_.find("UI_" + game::display_name(me->name) + "_" + char_view_.server_name + ".ini");
             std::error_code ui_ec;
             bool first_entry = !files.empty() && !seed && !std::filesystem::exists(files.ui_ini(), ui_ec);
-            eq_api_->load_layout(defaults ? *defaults : std::filesystem::path(), files.ui_ini(),
+            ui_api_->load_layout(defaults ? *defaults : std::filesystem::path(), files.ui_ini(),
                                  seed ? *seed : std::filesystem::path());
             // CDisplay::InitGameUI: the story window when there is a new story and Automatic is on, above level 1.
-            if (conn_->player_status().level > 1) eq_api_->activate_window("StoryWnd", 0);
+            if (conn_->player_status().level > 1) ui_api_->activate_window("StoryWnd", 0);
             // Hailstone: a character with no layout of its own yet is offered another character's (the layout copy
-            // window's activate, app/lua_eq_layout.cpp; not in the original).
-            if (first_entry) eq_api_->activate_window("LayoutCopyWindow", 0);
+            // window's activate, app/lua_ui_layout.cpp; not in the original).
+            if (first_entry) ui_api_->activate_window("LayoutCopyWindow", 0);
         }
         // CEverQuest::ProcessGame at each zone-in: the tip of the day (CTipWnd::Activate(pinstCTipWnd_1, -1, 0)).
-        eq_api_->activate_tip_of_day(false);
+        ui_api_->activate_tip_of_day(false);
     }
     if (!opts_.abilities_test.empty()) {
         std::vector<std::uint32_t> skills;

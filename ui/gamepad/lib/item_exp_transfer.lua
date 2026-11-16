@@ -1,5 +1,6 @@
 -- Experience transfer uses the server's approval for one exact pair of evolving records. Record IDs and the
 -- approval revision remain strings: converting either to a Lua number would lose large uint64 values.
+local API = hs.UI
 local X = {}
 local confirmation
 
@@ -54,13 +55,13 @@ local function selector(state, role, caption, other, width, changed)
   ui.BeginDisabled(state.pending)
   if ui.BeginCombo("##evolve-" .. role, item and item.name or "Choose an evolving item") then
     if ui.Selectable("None###evolve-" .. role .. "-none", state[role] == "") and not state.pending then
-      changed.value = eq.ItemExpTransferSelect(role, "") or changed.value
+      changed.value = API.evolving.Select(role, "") or changed.value
     end
     for _, candidate in ipairs(state.items) do
       if candidate.id ~= other then
         if ui.Selectable(candidate.name .. "###evolve-" .. role .. "-" .. candidate.id,
             candidate.id == state[role]) and not state.pending then
-          changed.value = eq.ItemExpTransferSelect(role, candidate.id) or changed.value
+          changed.value = API.evolving.Select(role, candidate.id) or changed.value
         end
       end
     end
@@ -87,7 +88,7 @@ function X.draw(state, look)
     if look.button("##evolve-confirm", "Confirm transfer", current(state) and source ~= nil and destination ~= nil) then
       local approved = confirmation
       confirmation = nil
-      eq.ItemExpTransferConfirm(approved.source, approved.destination, approved.revision)
+      API.evolving.Confirm(approved.source, approved.destination, approved.revision)
     end
     return
   end

@@ -1,5 +1,6 @@
 -- Mercenary info: replaces the game's MIW_InfoWnd (the Info button of the mercenary manager). Your mercenary's
 -- purchase and upkeep as coins, its description and its current stance's description, from the original's children.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -25,7 +26,7 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Mercenary Info", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   M.TestOpen(WINDOW)
   hud.Dialog(WINDOW, "Mercenary Info", OPTS, body)
 end)

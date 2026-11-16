@@ -1,7 +1,7 @@
 // An inventory slot onto a hot bar (game/hot_button_menu.h inventory_hot_button, hot_button_item_slot): the left
 // button held on a slot puts an item link or an inventory slot hotbutton on the cursor (CInvSlotWnd::
 // HandleLButtonHeld, 0x6947f0), a click on a bar puts it there (0x552e00), and a link finds its item where it
-// is now. The Lua side (eq.ClickSlot "leftheld", eq.BagSlotClick) against the mock server.
+// is now. The Lua side (hs.ClickSlot "leftheld", hs.BagSlotClick) against the mock server.
 #include <doctest/doctest.h>
 
 #include <array>
@@ -10,7 +10,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "game/hot_button_menu.h"
 #include "game/hotbuttons.h"
 #include "game/inventory.h"
@@ -139,7 +139,7 @@ TEST_CASE("inventory hot button: a link finds its item by serial, else by id") {
 }
 
 TEST_CASE("inventory hot button: held on a slot, dropped on a bar") {
-    ImGuiContext* ctx = ImGui::CreateContext(); // the eq API reads the keyboard's modifiers
+    ImGuiContext* ctx = ImGui::CreateContext(); // the hs API reads the keyboard's modifiers
     MockConfig config = MockConfig::standard();
     config.characters[0].inventory.push_back(item(1003, "Backpack", 23, "0000000000000010", true));
     config.characters[0].inventory.push_back(item(13005, "Potion", 25, "0000000000000020"));
@@ -148,71 +148,71 @@ TEST_CASE("inventory hot button: held on a slot, dropped on a bar") {
     REQUIRE(rig.to_zone());
 
     game::HotButtonStore store;
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
     host.hot_buttons = &store;
     host.set_hot_button = [&](int bar, int button, const game::HotButton& b) { store.current(bar, button) = b; };
     int pressed = -1;
     host.press_hot_button = [&](int, int button, bool) { pressed = button; };
-    app::EqApi api(host);
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
 
-    // eq.HasSlot: a possessions slot, and a bag place only inside the bag that slot holds (empty places count).
-    CHECK(run(L, "return eq.HasSlot(0)") == "true");
-    CHECK(run(L, "return eq.HasSlot(33)") == "true");
-    CHECK(run(L, "return eq.HasSlot(34)") == "false");
-    CHECK(run(L, "return eq.HasSlot(-1)") == "false");
-    CHECK(run(L, "return eq.HasSlot(23, 0)") == "true");
-    CHECK(run(L, "return eq.HasSlot(23, 7)") == "true");
-    CHECK(run(L, "return eq.HasSlot(23, 8)") == "false"); // the backpack has 8 places
-    CHECK(run(L, "return eq.HasSlot(25, 0)") == "false"); // a potion is no bag
-    CHECK(run(L, "return eq.HasSlot(24, 0)") == "false"); // nothing there
-    CHECK(run(L, "return eq.HasSlot(13, 0)") == "false"); // a worn slot holds no open bag
+    // hs.HasSlot: a possessions slot, and a bag place only inside the bag that slot holds (empty places count).
+    CHECK(run(L, "return hs.HasSlot(0)") == "true");
+    CHECK(run(L, "return hs.HasSlot(33)") == "true");
+    CHECK(run(L, "return hs.HasSlot(34)") == "false");
+    CHECK(run(L, "return hs.HasSlot(-1)") == "false");
+    CHECK(run(L, "return hs.HasSlot(23, 0)") == "true");
+    CHECK(run(L, "return hs.HasSlot(23, 7)") == "true");
+    CHECK(run(L, "return hs.HasSlot(23, 8)") == "false"); // the backpack has 8 places
+    CHECK(run(L, "return hs.HasSlot(25, 0)") == "false"); // a potion is no bag
+    CHECK(run(L, "return hs.HasSlot(24, 0)") == "false"); // nothing there
+    CHECK(run(L, "return hs.HasSlot(13, 0)") == "false"); // a worn slot holds no open bag
     host.in_game = false;
-    CHECK(run(L, "return eq.HasSlot(23)") == "false");
+    CHECK(run(L, "return hs.HasSlot(23)") == "false");
     host.in_game = true;
 
     // The mock's profile has coin on the cursor (a type 3 attachment: nothing attaches over it). Into the purse first.
-    CHECK(run(L, "return eq.ClickSlot(25, nil, 'leftheld')") == "false");
+    CHECK(run(L, "return hs.ClickSlot(25, nil, 'leftheld')") == "false");
     for (int t = 0; t < 4; ++t)
         if (conn.cursor_coins()[static_cast<std::size_t>(3 - t)]) conn.inventory_money_button(t, -1, nullptr);
     REQUIRE(conn.cursor_coins() == std::array<std::uint32_t, 4>{});
 
     // The potion held: a link on the cursor, the potion still in its slot.
-    CHECK(run(L, "return eq.ClickSlot(25, nil, 'leftheld')") == "true");
-    CHECK(run(L, "return eq.HoldingButton()") == "true");
+    CHECK(run(L, "return hs.ClickSlot(25, nil, 'leftheld')") == "true");
+    CHECK(run(L, "return hs.HoldingButton()") == "true");
     CHECK(conn.inventory().at(net::ItemSlot::possessions(25)) != nullptr);
     CHECK(conn.inventory().cursor() == nullptr);
     // only one on the cursor at a time
-    CHECK(run(L, "return eq.ClickSlot(23, nil, 'leftheld')") == "false");
-    CHECK(run(L, "return eq.ClickHotButton('HotButtonWnd', 'HB_Button4', 'left')") == "true");
+    CHECK(run(L, "return hs.ClickSlot(23, nil, 'leftheld')") == "false");
+    CHECK(run(L, "return hs.ClickHotButton('HotButtonWnd', 'HB_Button4', 'left')") == "true");
     CHECK(pressed == -1); // put there, not pressed
-    CHECK(run(L, "return eq.HoldingButton()") == "false");
+    CHECK(run(L, "return hs.HoldingButton()") == "false");
     CHECK(store.current(0, 3).type == game::HotButtonType::ItemLink);
     CHECK(store.current(0, 3).guid == "0000000000000020");
     CHECK(store.current(0, 3).item_id == 13005);
-    CHECK(run(L, "return (eq.HotButton('HotButtonWnd', 'HB_Button4'))") == "item");
+    CHECK(run(L, "return (hs.HotButton('HotButtonWnd', 'HB_Button4'))") == "item");
 
     // Shift: the slot itself.
     ImGui::GetIO().KeyShift = true;
-    CHECK(run(L, "return eq.ClickSlot(25, nil, 'leftheld')") == "true");
-    CHECK(run(L, "return eq.ClickHotButton('HotButtonWnd', 'HB_Button5', 'left')") == "true");
+    CHECK(run(L, "return hs.ClickSlot(25, nil, 'leftheld')") == "true");
+    CHECK(run(L, "return hs.ClickHotButton('HotButtonWnd', 'HB_Button5', 'left')") == "true");
     CHECK(store.current(0, 4).type == game::HotButtonType::InventorySlot);
     CHECK(store.current(0, 4).slot == 25);
     // Shift on a bag's slot: nothing
-    CHECK(run(L, "return eq.ClickSlot(23, 0, 'leftheld')") == "false");
+    CHECK(run(L, "return hs.ClickSlot(23, 0, 'leftheld')") == "false");
     ImGui::GetIO().KeyShift = false;
 
     // An item on the cursor: no hotbutton (CCursorAttachment::RemoveAttachment), and the click still picks up.
-    CHECK(run(L, "return eq.ClickSlot(25, nil, 'left')") == "true");
+    CHECK(run(L, "return hs.ClickSlot(25, nil, 'left')") == "true");
     REQUIRE(conn.inventory().cursor() != nullptr);
-    CHECK(run(L, "return eq.ClickSlot(23, nil, 'leftheld')") == "false");
-    CHECK(run(L, "return eq.HoldingButton()") == "false");
+    CHECK(run(L, "return hs.ClickSlot(23, nil, 'leftheld')") == "false");
+    CHECK(run(L, "return hs.HoldingButton()") == "false");
 
     lua_close(L);
     ImGui::DestroyContext(ctx);
@@ -230,30 +230,30 @@ TEST_CASE("cursor attachment: a single stackable item has a quantity of 1, an it
     auto& conn = rig.conn;
     REQUIRE(rig.to_zone());
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
 
     // (the mock's profile has coin on the cursor: into the purse first)
     for (int t = 0; t < 4; ++t)
         if (conn.cursor_coins()[static_cast<std::size_t>(3 - t)]) conn.inventory_money_button(t, -1, nullptr);
     REQUIRE(conn.cursor_coins() == std::array<std::uint32_t, 4>{});
 
-    CHECK(run(L, "return eq.ClickSlot(25, nil, 'left')") == "true");
+    CHECK(run(L, "return hs.ClickSlot(25, nil, 'left')") == "true");
     REQUIRE(conn.inventory().cursor() != nullptr);
-    CHECK(run(L, "return eq.CursorAttachment().quantity") == "1");
-    CHECK(run(L, "return eq.ClickSlot(25, nil, 'left')") == "true"); // put back
+    CHECK(run(L, "return hs.CursorAttachment().quantity") == "1");
+    CHECK(run(L, "return hs.ClickSlot(25, nil, 'left')") == "true"); // put back
     REQUIRE(conn.inventory().cursor() == nullptr);
 
-    CHECK(run(L, "return eq.ClickSlot(26, nil, 'left')") == "true");
+    CHECK(run(L, "return hs.ClickSlot(26, nil, 'left')") == "true");
     REQUIRE(conn.inventory().cursor() != nullptr);
-    CHECK(run(L, "return eq.CursorAttachment().quantity") == "nil");
+    CHECK(run(L, "return hs.CursorAttachment().quantity") == "nil");
 
     lua_close(L);
     ImGui::DestroyContext(ctx);
@@ -265,20 +265,20 @@ TEST_CASE("cursor attachment: coin on the cursor is reported with its type and c
     auto& conn = rig.conn;
     REQUIRE(rig.to_zone());
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     lua_State* L = luaL_newstate();
     luaL_openlibs(L);
     lua_newtable(L);
     api.register_functions(L);
-    lua_setglobal(L, "eq");
+    lua_setglobal(L, "hs");
 
     for (int t = 0; t < 4; ++t)
         if (conn.cursor_coins()[static_cast<std::size_t>(3 - t)]) conn.inventory_money_button(t, -1, nullptr);
     REQUIRE(conn.cursor_coins() == std::array<std::uint32_t, 4>{});
-    CHECK(run(L, "return eq.CursorAttachment()") == "nil");
+    CHECK(run(L, "return hs.CursorAttachment()") == "nil");
 
     // 5 of the first coin the purse has (0 platinum .. 3 copper) onto the cursor
     int taken = -1;
@@ -287,14 +287,14 @@ TEST_CASE("cursor attachment: coin on the cursor is reported with its type and c
         if (conn.cursor_coins()[static_cast<std::size_t>(3 - t)] == 5) taken = t;
     }
     REQUIRE(taken >= 0);
-    CHECK(run(L, "return eq.CursorAttachment().coin") == std::to_string(taken));
-    CHECK(run(L, "return eq.CursorAttachment().quantity") == "5");
-    CHECK(run(L, "return eq.CursorAttachment().icon") == "nil");
-    CHECK(run(L, "return eq.CursorAttachment().iconRect ~= nil") == "true");
+    CHECK(run(L, "return hs.CursorAttachment().coin") == std::to_string(taken));
+    CHECK(run(L, "return hs.CursorAttachment().quantity") == "5");
+    CHECK(run(L, "return hs.CursorAttachment().icon") == "nil");
+    CHECK(run(L, "return hs.CursorAttachment().iconRect ~= nil") == "true");
 
     // back into the purse: nothing on the cursor
     conn.inventory_money_button(taken, -1, nullptr);
-    CHECK(run(L, "return eq.CursorAttachment()") == "nil");
+    CHECK(run(L, "return hs.CursorAttachment()") == "nil");
 
     lua_close(L);
     ImGui::DestroyContext(ctx);

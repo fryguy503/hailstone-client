@@ -34,7 +34,7 @@ struct PlateStyle {
 PlateStyle load_plate_style(const Config& config);
 void store_plate_style(const PlateStyle& style, Config& config);
 
-// The numeric options (eq.Option / eq.SetOption): plate_font_size, plate_font_bold, plate_edge, plate_far_scale,
+// The numeric options (hs.Option / hs.SetOption): plate_font_size, plate_font_bold, plate_edge, plate_far_scale,
 // plate_tag_scale. nullopt / false for another name; a value set out of range is clamped. The face is the client's
 // (its list of families is the system's).
 std::optional<int> plate_style_option(const PlateStyle& style, std::string_view name);

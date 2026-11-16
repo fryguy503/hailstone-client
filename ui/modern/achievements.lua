@@ -1,3 +1,4 @@
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local T, C = hud.T, hud.T.color
 local browser = dofile("lib/achievement_browser.lua").new({
@@ -30,8 +31,8 @@ local MAIN_OPTS = {shown=true,size=size,resizable={760,580},
 local mainState
 local function mainBody(_,_,_,_,scale) browser.main(mainState,scale) end
 ui.window("Achievements", function()
-  if not eq.InGame() then browser.reset(); return end
-  eq.ReplaceWindow("AchievementsWnd") -- every frame, hidden too: the achievement key toggles it only while claimed
+  if not API.session.InGame() then browser.reset(); return end
+  API.windows.Replace("AchievementsWnd") -- every frame, hidden too: the achievement key toggles it only while claimed
   local state = browser.readState()
   if not state or not state.shown then return end
   mainState = state
@@ -39,11 +40,11 @@ ui.window("Achievements", function()
   mainState = nil
 end)
 local DETAIL_OPTS = {shown=true,size=function() return 680,580 end,
-  resizable={480,350},onClose=function() eq.ShowWindow("AchievementWnd",false) end}
+  resizable={480,350},onClose=function() API.windows.Show("AchievementWnd",false) end}
 local shownDetail
 local function detailBody(_,_,_,_,scale) browser.detail(shownDetail,scale,false) end
 ui.window("Achievement", function()
-  if not eq.InGame() then browser.reset(); return end
+  if not API.session.InGame() then browser.reset(); return end
   local detail = browser.floating()
   if not detail then return end
   shownDetail = detail

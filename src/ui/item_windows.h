@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "game/inventory.h"
+#include "game/item_display.h"
 #include "net/item_packets.h"
 
 namespace hailstone { class GameDir; }
@@ -76,6 +77,8 @@ struct ItemWindowsInput {
     std::string corpse_name;
     const std::map<std::int16_t, net::Item>* loot = nullptr;
     net::Coins loot_money;
+    game::ItemFlagsFormatter item_flags;
+    game::ItemDescriptionAppender item_description_append;
 };
 
 struct ItemWindowsActions {
@@ -97,6 +100,7 @@ ItemWindowsActions item_windows(ItemWindowsState& state, const ItemWindowsInput&
 
 // The stat lines of the item information window (CItemDisplayWnd_BuildItemInfo
 // order, simplified), for tests and the window.
-std::vector<std::string> item_info_lines(const net::Item& item);
+std::vector<std::string> item_info_lines(const net::Item& item, const game::ItemFlagsFormatter& flags = {},
+                                         const game::ItemDescriptionAppender& description = {});
 
 } // namespace hailstone::ui

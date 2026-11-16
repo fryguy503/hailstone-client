@@ -53,7 +53,7 @@ TEST_CASE("addon tool: the manifest's kind, caps and packages") {
     CHECK_FALSE(parse_addon_manifest(tool_manifest("texstudio", "any"), &why));
     CHECK(why.find("one platform") != std::string::npos);
     CHECK_FALSE(parse_addon_manifest(manifest_for("x", "program", "1.0.0", "none", "any", "x", "t.zip"), &why));
-    CHECK(why.find("script, plugin, tool or upscaler") != std::string::npos);
+    CHECK(why.find("script, plugin, tool, upscaler or ui") != std::string::npos);
     CHECK(addon_tool_program("texstudio", "windows-x64") == "texstudio.exe");
     CHECK(addon_tool_program("texstudio", "linux-x64") == "texstudio");
     CHECK(addon_tool_program("texstudio", "macos-arm64") == "texstudio");

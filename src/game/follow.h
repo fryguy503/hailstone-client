@@ -47,6 +47,40 @@ inline constexpr std::uint8_t kFollowDeadAnimation = 0x78;
 inline constexpr float kFollowTooFar = 200.0f;     // 0x9c58e4
 inline constexpr std::uint32_t kStrFollowDead = 12692, kStrFollowTooFar = 12693;
 
+// Optional data supplied by an active server extension. No profile means the
+// original follow_step below; enhanced following never invokes navigation.
+enum FollowFlags : std::uint32_t {
+    FollowAllowUngrouped = 1, FollowCancelOnMove = 2,
+    FollowLookPitch = 4, FollowPreserveRun = 8
+};
+struct FollowProfile {
+    std::uint32_t flags = 0;
+    float stop_distance = 0, restart_margin = 0, start_range = 0;
+    float turn_snap = 0, turn_slow = 0, turn_fast = 0, turn_fast_angle = 0;
+    float move_angle = 0, move_far_margin = 0;
+    float pitch_gain = 0, pitch_down_scale = 0, pitch_limit = 0;
+    bool operator==(const FollowProfile&) const = default;
+};
+struct MountProfile { bool instant_acceleration = false; };
+bool valid_follow_profile(const FollowProfile& profile);
+struct ProfiledFollowStep {
+    float heading = 0, pitch = 0;
+    bool move = false;
+};
+// Pure host controller: time-scaled turning/pitch and a true stop/restart band.
+// Run/walk selection, collision and ordinary movement remain the caller's.
+ProfiledFollowStep profiled_follow_step(const FollowInput& in, const FollowProfile& profile,
+                                      bool moving, float pitch, float seconds);
+
+// Process-unique actor identities bind a manually initiated link to this owner
+// and target. Numeric spawn-id reuse never continues an enhanced follow.
+struct FollowIdentity {
+    std::uint32_t owner = 0, target = 0;
+    std::uint64_t owner_incarnation = 0, target_incarnation = 0;
+    bool matches(std::uint32_t player, std::uint64_t player_incarnation,
+                 std::uint32_t followed, std::uint64_t followed_incarnation) const;
+};
+
 // The step. `fpu` is the x87 precision the arithmetic rounds to (24-bit in game).
 FollowStep follow_step(const FollowInput& in, const mechanics::Fpu& fpu = mechanics::Fpu{});
 

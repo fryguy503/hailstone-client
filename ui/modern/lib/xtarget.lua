@@ -23,6 +23,7 @@
 -- scroll inside it. With Auto expand on (hud.expand.ExtendedTargetWnd: that menu's row, or the frame's own menu) it
 -- grows past that height to show every row down to the last filled one, and shrinks back as they empty, never taller
 -- than the screen.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color
@@ -62,12 +63,12 @@ local function gather()
     local id = ids.gauge
     -- a row the game does not show: past the server's count, or a slot a server's plugin leaves out (NMS: your own
     -- pets, which the server puts in the last slots; Options "Hide My Pets in Extended Target")
-    local shown = eq.ChildShown(WINDOW, id) ~= false
+    local shown = API.windows.ChildShown(WINDOW, id) ~= false
     if shown then slots = slots + 1 end
-    local frac, name, raw = eq.Gauge(42 + n)
-    local filled = shown and eq.ChildShown(WINDOW, ids.hpLabel) == true
+    local frac, name, raw = API.character.Gauge(42 + n)
+    local filled = shown and API.windows.ChildShown(WINDOW, ids.hpLabel) == true
     if shown then -- every slot the game shows, an empty one too: its row is where its right click picks it
-      local r, g, b = eq.ChildColor(WINDOW, id)
+      local r, g, b = API.windows.ChildColor(WINDOW, id)
       local row = rowOf[n]
       if not row then
         row = {}
@@ -86,16 +87,16 @@ local function gather()
       if not filled then name = (name and name ~= "") and name or "(empty)" end
       row.n, row.id, row.hp, row.name, row.filled, row.raw, row.con = n, id, frac, name, filled, raw, con
       row.mana, row.endurance, row.aggro, row.role = nil, nil, nil, nil
-      if eq.ChildShown(WINDOW, ids.mana) == true then row.mana = eq.Gauge(62 + n) end
-      if eq.ChildShown(WINDOW, ids.stamina) == true then row.endurance = eq.Gauge(82 + n) end
-      if eq.ChildShown(WINDOW, ids.aggro) == true then row.aggro = eq.WindowText(WINDOW, ids.aggro) end
-      local role = eq.ChildShown(WINDOW, ids.role) ~= false and eq.ChildTooltip(WINDOW, ids.role) or ""
+      if API.windows.ChildShown(WINDOW, ids.mana) == true then row.mana = API.character.Gauge(62 + n) end
+      if API.windows.ChildShown(WINDOW, ids.stamina) == true then row.endurance = API.character.Gauge(82 + n) end
+      if API.windows.ChildShown(WINDOW, ids.aggro) == true then row.aggro = API.windows.Text(WINDOW, ids.aggro) end
+      local role = API.windows.ChildShown(WINDOW, ids.role) ~= false and API.windows.ChildTooltip(WINDOW, ids.role) or ""
       if role ~= "" and role ~= "Auto Hater" then row.role = role end
       nRows = nRows + 1
       rows[nRows] = row
     end
   end
-  target = eq.Label(28) or ""
+  target = API.character.Label(28) or ""
   base = HEAD + 4 + FOOT
   full = base
   filledCount = 0
@@ -214,9 +215,9 @@ local function body(x0, y, w0, h, s)
       end
     end
     if keep > 0 then extra.draw(r, x + wr, cy, x + w, cy + rh, s) end
-    if clicked and r.filled then eq.ClickChild(WINDOW, r.id, "left") end
+    if clicked and r.filled then API.windows.ClickChild(WINDOW, r.id, "left") end
     if hovered and ui.IsMouseClicked(ui.Mouse.Right) and not ui.GetIO().alt then
-      eq.ClickChild(WINDOW, ids.role, "rightup") -- this slot's menu
+      API.windows.ClickChild(WINDOW, ids.role, "rightup") -- this slot's menu
       T.TakeRightClick()
     end
     cy = cy + rh + 3 * s
@@ -231,7 +232,7 @@ local HUD_OPTS = { size = size, grow = grow, menu = menu, panelOpts = { opaque =
 function M.window(o)
   opts = o or NO_OPTS
   extra = opts.row
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Window(WINDOW, "Extended Target", HUD_OPTS, body)
 end
 

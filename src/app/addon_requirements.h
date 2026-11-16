@@ -13,7 +13,7 @@
 #include "app/addon_suggest.h"
 #include "plugin/consent.h"
 
-namespace hailstone::ui { struct LoginView; }
+namespace hailstone::ui { struct LoginView; struct UiPack; }
 
 namespace hailstone::app {
 
@@ -43,6 +43,12 @@ bool required_script_found(const std::filesystem::path& data_dir, std::string_vi
 // cannot tell whether it runs).
 std::vector<AddonRequirementProblem> addon_requirement_problems(
     const plugin::Rules& rules, const std::vector<RequiredAddonCandidate>& candidates);
+
+// Restricts installed interfaces and their approved dependents by repository identity. Fresh pack metadata is
+// supplied on each refresh; provisional/cached rules never retire an interface, and built-ins remain available.
+// This changes availability only: requirements do not select an interface or turn it into an autorun script.
+void apply_ui_addon_policy(std::vector<ui::UiPack>& packs, const plugin::Rules* rules,
+                           const std::vector<InstalledAddon>& installed);
 
 // Required offers ignore optional-suggestion preferences and dismissals, retaining an index entry's name/key.
 std::vector<AddonSuggestion> required_addon_suggestions(

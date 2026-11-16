@@ -384,6 +384,13 @@ void SpellParticles::draw_trail(std::uint32_t key, std::span<const glm::vec3> li
 }
 
 void SpellParticles::update_path(net::GameConnection& conn) {
+    if (!paths_visible_) {
+        particles_.stop(kPathLineKey);
+        particles_.stop(kGuideLineKey);
+        particles_.stop(kPathFinishKey);
+        (void)conn.take_path_finish(); // a hidden arrival must not play its old completion effect on reveal
+        return;
+    }
     if (particles_.empty()) return;
     const game::PlayerPath& path = conn.player_path();
     const game::PathSettings& ps = path.settings();

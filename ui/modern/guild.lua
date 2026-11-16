@@ -16,6 +16,7 @@
 --   * Banner: the game's banner page. EQEmu sends no banner messages, so its kit list stays empty and the game
 --     leaves its banner actions off; the page says so rather than inventing a banner.
 -- Dump writes the roster to a file.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -30,10 +31,10 @@ local function online(texts) return (texts[7] or "") ~= "" end
 
 -- The members listed and how many are on: the rows' texts only (S.Rows would make two more tables a row, every frame).
 local function rosterCounts()
-  local rows = eq.ListInfo(WINDOW, "MemberList")
+  local rows = API.windows.ListInfo(WINDOW, "MemberList")
   local total, on = 0, 0
   for r = 0, (rows or 0) - 1 do
-    local texts = eq.ListRow(WINDOW, "MemberList", r)
+    local texts = API.windows.ListRow(WINDOW, "MemberList", r)
     if texts then
       total = total + 1
       if online(texts) then on = on + 1 end
@@ -62,7 +63,7 @@ local function roster(s)
   ui.SameLine()
   W.Check(WINDOW, "HideAltButton", "Hide alts")
   local needle = search:lower()
-  local total = eq.ListInfo(WINDOW, "MemberList") or 0
+  local total = API.windows.ListInfo(WINDOW, "MemberList") or 0
   local wide = ui.GetContentRegionAvail() >= 7 * 96 * s -- the actions on one row, else two
   local below = (wide and 2 or 3) * btnH + (wide and 16 or 22) * s
   if total == 0 then
@@ -76,9 +77,9 @@ local function roster(s)
     W.List(WINDOW, "MemberList", 0, -below, ROSTER)
   end
   -- the selected member, then the actions
-  local rows, _, sel = eq.ListInfo(WINDOW, "MemberList")
+  local rows, _, sel = API.windows.ListInfo(WINDOW, "MemberList")
   if rows and sel and sel >= 0 then
-    local t = eq.ListRow(WINDOW, "MemberList", sel)
+    local t = API.windows.ListRow(WINDOW, "MemberList", sel)
     if t then
       ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, "Selected")
       ui.SameLine()
@@ -163,8 +164,8 @@ end
 
 local function tribute(s)
   local btnH = S.ButtonHeight(s)
-  W.Field("Guild favour", eq.Label(122) or "")
-  local total = eq.ListInfo(WINDOW, "TributeList") or 0
+  W.Field("Guild favour", API.character.Label(122) or "")
+  local total = API.windows.ListInfo(WINDOW, "TributeList") or 0
   if total == 0 then
     local aw, ah = ui.GetContentRegionAvail()
     S.Empty(aw, math.max(40 * s, ah - btnH - 16 * s), "No guild members to show.")
@@ -186,7 +187,7 @@ local function banner(s)
   W.Check(WINDOW, "ShowAllPossibleBannersButton", "Show all possible banners")
   ui.SameLine()
   W.Button(WINDOW, "RefreshBannerListButton", "Refresh", { tooltip = "Ask for the banner kit list again" })
-  local total = eq.ListInfo(WINDOW, "BannerKitList") or 0
+  local total = API.windows.ListInfo(WINDOW, "BannerKitList") or 0
   local aw, ah = ui.GetContentRegionAvail()
   if total == 0 then
     S.Empty(aw, math.max(40 * s, ah - btnH - 16 * s), "No banner kits.",
@@ -203,7 +204,7 @@ end
 
 local function ranks(s)
   -- the game's two views of the list above the permissions: the members (a rank drop-down each) or the ranks
-  local members = eq.ChildShown(WINDOW, "GT_Member_List") ~= false
+  local members = API.windows.ChildShown(WINDOW, "GT_Member_List") ~= false
   W.Button(WINDOW, "GT_ViewMembers_Btn", "Members", { primary = members, tooltip = "Each member's rank" })
   ui.SameLine()
   W.Button(WINDOW, "GT_ViewRanks_Btn", "Ranks", { primary = not members, tooltip = "The ranks and how many hold each" })
@@ -251,6 +252,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Guild Management", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Guild", OPTS, body)
 end)

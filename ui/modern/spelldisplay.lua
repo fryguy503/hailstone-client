@@ -1,9 +1,10 @@
 -- Spell displays: replace the game's SpellDisplayWindow. The game shows one for a spell gem held with the right
 -- button (the Modern bar keeps it if released over it), the book's "Spell window", a link, ...; several can be open at once, as
--- SpellDisplayWindow, SpellDisplayWindow#2, ... (eq.ReplaceWindow numbers windows that share a screen name). Each is
+-- SpellDisplayWindow, SpellDisplayWindow#2, ... (hs.ReplaceWindow numbers windows that share a screen name). Each is
 -- a small resizable dialog: the spell's icon and name over the game's own description (SDW_SpellDescription: level,
 -- mana, cast and recast times, duration, the effects), which scrolls when the window is short. Opening and closing
 -- stay the game's: the close box closes that display.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -14,9 +15,9 @@ local ICON_OPTS = { radius = 6 }
 
 -- testing (test.open.SpellDisplayWindow=1): the first gem's spell, else Complete Heal
 local function testOpen()
-  local st = eq.SpellBookState()
+  local st = API.spells.BookState()
   local id = st and st.gems and st.gems[1] or -1
-  eq.ShowSpell(id ~= -1 and id or 13)
+  API.spells.Show(id ~= -1 and id or 13)
 end
 local function size() return 360, 300 end
 
@@ -31,8 +32,8 @@ for i = 1, INSTANCES do
     place = function(W_, H, w, h, s, x, y) return x + (i - 1) * 24, y + (i - 1) * 24 end,
   }
   local function body(x, y, w, h, s)
-    local name = eq.WindowTitle(window) or ""
-    local tex, u0, v0, u1, v1 = eq.ChildArt(window, "SDW_IconButton", "decal")
+    local name = API.windows.Title(window) or ""
+    local tex, u0, v0, u1, v1 = API.windows.ChildArt(window, "SDW_IconButton", "decal")
     if type(tex) ~= "userdata" then tex = nil end
     local size = 40 * s
     T.Icon(x, y, size, s, tex, u0, v0, u1, v1, nil, ICON_OPTS)
@@ -47,7 +48,7 @@ for i = 1, INSTANCES do
     ui.PopFont()
   end
   ui.window("Spell Display" .. (i == 1 and "" or (" " .. i)), function()
-    if not eq.InGame() then return end
+    if not API.session.InGame() then return end
     if i == 1 then P.TestOpen(window, testOpen) end
     hud.Dialog(window, "Spell", opts, body)
   end)

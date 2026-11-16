@@ -16,7 +16,11 @@ movement rules' own (`docs/mechanics.md`), so a navigating character moves exact
 The heading is set at once, as `/follow`'s FollowPlayerAI sets it (`game/follow.h`). Nothing writes the position.
 
 The player's own forward, back, turn or strafe keys end a walk, as they end `/follow`. Starting a walk ends `/follow`.
-Nothing moves while the player cannot (sitting, frozen, dead, `/safelock`); the walk carries on when they can.
+Nothing moves while the player cannot. A temporary pause (sitting, frozen, `/safelock`) carries on when they can.
+
+Spawn walks and `/stick` keep the selected actor's incarnation and the connection/player context. Despawning,
+reusing its ID, zoning or replacing the player's life retires that intent, including a paused or stationary stick.
+An explicit new command can select the new actor. Zone unloading also clears the follow helper's mesh detour.
 
 The isometric camera's click to move (`docs/isometric.md`) walks with it too: `Navigator::walk_to_click` for the
 ground (quiet when the mesh goes only part of the way, straight at the point in a zone without a mesh), `go_to_spawn`
@@ -316,9 +320,30 @@ search. Lua reads it as `mq.TLO.Navigation.Active()`; plugins with the SDK's `pa
 
 ## Find
 
+An active server extension may disable NPC Find or own map spawn presentation (`ServerExtension::map_policy`,
+`hs.UI.map.Policy()`). Both packs then retire cached NPC overlays and competing controls without writing settings.
+Native discovery, targeting, guide, path and walk entry points enforce the same policy. Find-owned guides and walks
+pin the original connection, player and NPC incarnations: denial, replacement or zoning retires them before another
+destination read or movement. Replacing the walk with ordinary navigation removes that ownership; PC group/raid Find
+and coordinate navigation retain their normal behavior.
+
+Find replies contain no request identity and the server can reorder them. Shown Find paths and quiet navigation
+requests share an ownership ledger: each records its origin, connection/player context, actor incarnation and goal
+generation. Unsolicited replies and replies belonging to cancelled or replaced goals cannot start a route. Overlapping
+transmitted requests discard the whole ambiguous reply batch; retry after it drains. Reserving a request for admission
+does not consume replies or start its timeout; a request rejected before transport leaves an earlier valid request
+intact. Outgoing callbacks may receive an earlier reply or issue a nested request before this reservation is sent.
+An unanswered request reaching the existing
+ten-second timeout quarantines server-path replies until a new zone/session instead of admitting a possibly late route.
+Local mesh navigation remains available. This is a conservative protocol limit, not exact reply correlation.
+
+Tracking has its own serialized reply stream. A truncated list does not acknowledge its pending refresh; complete
+lists, including an empty list, and the stock timer reply do. This prevents a malformed packet from freeing a slot
+for a later refresh before the original reply arrives.
+
 A Hailstone addition, in place of the original's Find window (FindLocationWnd, whose code is gone): a list of the
 NPCs a new player looks for in the zone, from what every stock EQEmu server sends (`game/useful_npcs.h`,
-`app/lua_eq_find.cpp`). The find key (`CMD_TOGGLE_FIND_WINDOW`), the EQ menu's Find and the Actions window's Find
+`app/lua_ui_find.cpp`). The find key (`CMD_TOGGLE_FIND_WINDOW`), the EQ menu's Find and the Actions window's Find
 open and close it as the original's key did its window: open, it closes; closed with a find path shown, the path ends;
 else it opens. The modern pack draws it as the map's Find page (the map opens on it; closing the map closes it), the
 gamepad pack as a window of its own (More > Find).
@@ -391,11 +416,11 @@ Not yet: the gamepad pack's minimap marks, and a key of the client's own for a w
 ## Zone atlas
 
 Code: `game/zone_routes.h` (the links and routes), `game/atlas.h` (`index_atlas`), `net/zone_link_packets.h`, the
-`eq.Atlas*` / `eq.Zone*` functions in `app/lua_eq_map.cpp`, and the modern pack's `ui/modern/lib/atlas.lua` (drawn
+`hs.Atlas*` / `hs.Zone*` functions in `app/lua_ui_map.cpp`, and the modern pack's `ui/modern/lib/atlas.lua` (drawn
 by `map.lua`). Tests: `tests/zone_routes_test.cpp`, the index cases in `tests/atlas_test.cpp`.
 
 The map window's **World** view, a Hailstone addition. RoF2 had an atlas page in the map window (the game folder's
-`Atlas\<skin>\*.xml`, kept as the stock window's MVW_AtlasRenderArea, `eq.DrawAtlas`) and a zone guide fed by the
+`Atlas\<skin>\*.xml`, kept as the stock window's MVW_AtlasRenderArea, `hs.DrawAtlas`) and a zone guide fed by the
 server, which EQEmu does not send (`docs/unknowns.md`). The World view draws the same atlas pages, with:
 
 - **The atlas.** Every page reachable from `Default.xml`, zoomed with the wheel (up to 5x) and panned by dragging,

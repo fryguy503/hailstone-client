@@ -7,7 +7,8 @@
 --   Compose Mail   To, Subject and the message as rows; A on one opens the on-screen keyboard on it (a keyboard
 --                  types into it too), RB sends (the stock Send button), B cancels (the stock Cancel); Address Book
 --                  opens the book (mailbook.lua), whose X adds the focused name to To.
--- The texts, rows and buttons are the stock windows' (eq.ListRow, eq.WindowText, eq.SetWindowText, eq.ClickChild).
+-- The texts, rows and buttons are the stock windows' (hs.ListRow, hs.WindowText, hs.SetWindowText, hs.ClickChild).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -51,7 +52,7 @@ local function tabs(labels, page, x0, y0, set)
 end
 
 local function enabled(screen, child)
-  local e = eq.ChildState(screen, child)
+  local e = API.windows.ChildState(screen, child)
   return e ~= false
 end
 
@@ -67,11 +68,11 @@ local mailShown = false
 local unreadCount, unreadAt, unreadRows = 0, nil, -1
 local function unreadMessages()
   local now = ui.GetTime()
-  local rows = eq.ListInfo(MW, "InboxList") or 0
+  local rows = API.windows.ListInfo(MW, "InboxList") or 0
   if not unreadAt or now - unreadAt >= 0.25 or now < unreadAt or rows ~= unreadRows then
     local unread = 0
     for i = 0, rows - 1 do
-      local _, r, g, b = eq.ListRow(MW, "InboxList", i)
+      local _, r, g, b = API.windows.ListRow(MW, "InboxList", i)
       if r and b and b < 0.7 then unread = unread + 1 end
     end
     unreadCount, unreadAt, unreadRows = unread, now, rows
@@ -87,9 +88,9 @@ ui.window("Mail", function()
   end
   local trash = page == 2
   local list = trash and "TrashList" or "InboxList"
-  local rows, _, sel = eq.ListInfo(MW, list)
+  local rows, _, sel = API.windows.ListInfo(MW, list)
   rows = rows or 0
-  local boxes, boxSel = eq.ComboInfo(MW, "CharacterBoxSelector")
+  local boxes, boxSel = API.windows.ComboInfo(MW, "CharacterBoxSelector")
   local unread = unreadMessages()
   local hints = { { "a", "Read" }, { "x", trash and "Undelete" or "Delete" } }
   if not trash then hints[#hints + 1] = { "y", "Reply" } end
@@ -104,7 +105,7 @@ ui.window("Mail", function()
     if not mailShown then lists[page].focusNext, mailShown = 1, true end
     if pressed("Mail", "lb") and page ~= 1 then page, lists[1].focusNext = 1, 1 end
     if pressed("Mail", "rb") and page ~= 2 then page, lists[2].focusNext = 2, 1 end
-    if boxes and #boxes > 1 and pressed("Mail", "back") then eq.ComboSelect(MW, "CharacterBoxSelector", ((boxSel or 0) + 1) % #boxes) end
+    if boxes and #boxes > 1 and pressed("Mail", "back") then API.windows.ComboSelect(MW, "CharacterBoxSelector", ((boxSel or 0) + 1) % #boxes) end
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     local top = tabs({ "Inbox", "Trash" }, page, x0, y0, function(i) page = i end)
@@ -116,7 +117,7 @@ ui.window("Mail", function()
     local focusedRow = W.list(list, st, rows, shownRows, rowH, leftX1 - x0,
       function(i, rx0, ry0, rx1, ry1, focused)
         if focused then stayInColumn(st, i, rows, shownRows) end
-        local texts, r, g, b = eq.ListRow(MW, list, i - 1)
+        local texts, r, g, b = API.windows.ListRow(MW, list, i - 1)
         if not texts then return end
         local new = b and b < 0.7
         local p = T.px(16)
@@ -132,22 +133,22 @@ ui.window("Mail", function()
         T.textIn(nx, ry1 - sh - T.px(10), rx1 - p, ry1 - T.px(10), texts[3] or "", C.faint, 1)
         T.unfont()
       end,
-      function(i) eq.ListClick(MW, list, i - 1, "left") bodies[page].scroll = 0 end)
+      function(i) API.windows.ListClick(MW, list, i - 1, "left") bodies[page].scroll = 0 end)
     if rows == 0 then T.draw(x0, top, trash and "The trash is empty." or "No mail.", C.faint) end
     -- X and Y act on the focused message (selected first, as a click on it does)
     if focusedRow and pressed("Mail", "x") then
-      eq.ListClick(MW, list, focusedRow - 1, "left")
-      eq.ClickChild(MW, trash and "ButtonTrashUndelete" or "ButtonDelete", "left")
+      API.windows.ListClick(MW, list, focusedRow - 1, "left")
+      API.windows.ClickChild(MW, trash and "ButtonTrashUndelete" or "ButtonDelete", "left")
     end
     if focusedRow and not trash and pressed("Mail", "y") then
-      eq.ListClick(MW, list, focusedRow - 1, "left")
-      eq.ClickChild(MW, "ButtonReply", "left")
+      API.windows.ListClick(MW, list, focusedRow - 1, "left")
+      API.windows.ClickChild(MW, "ButtonReply", "left")
     end
     -- the selected message and the buttons
     local rx0 = leftX1 + T.px(24)
     local bh = T.px(60)
     local by = y1 - bh
-    P.draw("##body" .. page, bodies[page], eq.WindowText(MW, trash and "TrashBody" or "Body") or "", rx0, top, x1, by - T.px(16),
+    P.draw("##body" .. page, bodies[page], API.windows.Text(MW, trash and "TrashBody" or "Body") or "", rx0, top, x1, by - T.px(16),
       { empty = sel and sel >= 0 and "Loading..." or "Choose a message and press A to read it." })
     local buttons = trash
       and { { "Compose", "ButtonTrashCompose" }, { "Reply", "ButtonTrashReply" }, { "Reply All", "ButtonTrashReplyAll" },
@@ -161,11 +162,11 @@ ui.window("Mail", function()
     for i, b in ipairs(buttons) do
       if i > 1 then ui.SameLine(0, gap) end
       local on = enabled(MW, b[2])
-      if T.button("##mb" .. b[2], b[1], bw, bh, { disabled = not on, primary = i == 1 }, pad) then eq.ClickChild(MW, b[2], "left") end
+      if T.button("##mb" .. b[2], b[1], bw, bh, { disabled = not on, primary = i == 1 }, pad) then API.windows.ClickChild(MW, b[2], "left") end
     end
     T.unfont()
   end
-  if W.finish() then eq.ShowWindow(MW, false) end
+  if W.finish() then API.windows.Show(MW, false) end
 end)
 
 -- ---------------------------------------------------------------- composing (MailCompositionWindow)
@@ -184,19 +185,19 @@ ui.window("Compose Mail", function()
     wasShown = true
     editing = nil
   end
-  local title = eq.WindowTitle(CW) or ""
+  local title = API.windows.Title(CW) or ""
   local hints = editing
     and { K.hints[1], K.hints[2], K.hints[3], K.hints[4], { "b", "Done" }, { "rb", "Send" } }
     or { { "a", "Edit" }, { "rb", "Send" }, { "b", "Cancel" } }
   if W.begin("Compose Mail", { w = 1500, h = 980, title = title ~= "" and title or "Compose Mail",
-        subtitle = "From " .. (eq.WindowText(CW, "FromAddressLabel") or ""), hints = hints }) then
+        subtitle = "From " .. (API.windows.Text(CW, "FromAddressLabel") or ""), hints = hints }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
-    if pressed("Compose Mail", "rb") then eq.ClickChild(CW, "SendButton", "left") end
+    if pressed("Compose Mail", "rb") then API.windows.ClickChild(CW, "SendButton", "left") end
     -- the fields
     local labelW = T.px(150)
     for i, f in ipairs(FIELDS) do
-      local text = eq.WindowText(CW, f[2]) or ""
+      local text = API.windows.Text(CW, f[2]) or ""
       local h = T.px(i == 3 and (editing and 120 or 300) or 64)
       ui.SetCursorPos(x0 - wx, select(2, ui.GetCursorScreenPos()) - wy)
       local fx0, fy0 = ui.GetCursorScreenPos()
@@ -214,7 +215,7 @@ ui.window("Compose Mail", function()
           t = ui.InputText("##mailfield" .. i, text, 256, 0, { moveToEnd = true })
           ui.Dummy(1, h - T.px(60))
         end
-        if t ~= text then eq.SetWindowText(CW, f[2], t) end
+        if t ~= text then API.windows.SetText(CW, f[2], t) end
       else
         if focusField == i then -- the keyboard just closed: the pad's focus back on its field
           ui.SetKeyboardFocusHere()
@@ -250,20 +251,20 @@ ui.window("Compose Mail", function()
     ui.SetCursorPos(x0 - wx, select(2, ui.GetCursorScreenPos()) + T.px(6) - wy)
     if editing then
       local f = FIELDS[editing]
-      local done = K.draw(kb, function() return eq.WindowText(CW, f[2]) end, function(t) eq.SetWindowText(CW, f[2], t) end,
+      local done = K.draw(kb, function() return API.windows.Text(CW, f[2]) end, function(t) API.windows.SetText(CW, f[2], t) end,
         x0, x1, { newline = editing == 3 })
       if done == "done" then editing, focusField = nil, editing end
     else
       local bw = (x1 - x0 - 2 * T.px(10)) / 3
-      if T.button("##send", "Send", bw, T.px(64), { primary = true, glyph = "rb" }, pad) then eq.ClickChild(CW, "SendButton", "left") end
+      if T.button("##send", "Send", bw, T.px(64), { primary = true, glyph = "rb" }, pad) then API.windows.ClickChild(CW, "SendButton", "left") end
       ui.SameLine(0, T.px(10))
-      if T.button("##addresses", "Address Book", bw, T.px(64), {}, pad) then eq.ClickChild(CW, "AddressBookButton", "left") end
+      if T.button("##addresses", "Address Book", bw, T.px(64), {}, pad) then API.windows.ClickChild(CW, "AddressBookButton", "left") end
       ui.SameLine(0, T.px(10))
-      if T.button("##cancel", "Cancel", bw, T.px(64), { glyph = "b" }, pad) then eq.ClickChild(CW, "CancelButton", "left") end
+      if T.button("##cancel", "Cancel", bw, T.px(64), { glyph = "b" }, pad) then API.windows.ClickChild(CW, "CancelButton", "left") end
     end
   end
   if W.finish() then
     -- B: leaves the keyboard first, then cancels (the stock Cancel: "Message cancelled and not sent.")
-    if editing then editing, focusField = nil, editing else eq.ClickChild(CW, "CancelButton", "left") end
+    if editing then editing, focusField = nil, editing else API.windows.ClickChild(CW, "CancelButton", "left") end
   end
 end)

@@ -23,12 +23,14 @@ void ClientApp::update_mouse_look() {
     // down when they last were, 12095 every frame. A frozen player (StandState 0x66) returns before that check.
     // Behind the loading screen (zone_settle_) the same, without the message.
     if (zone_settling()) {
+        plate_gesture_.clear();
         mouse_look_.cancel();
         left_click_pending_.reset();
         window_.set_mouse_captured(false);
         return;
     }
     if (conn_->state() == net::ConnectionState::InZone && conn_->interface_locked()) {
+        plate_gesture_.clear();
         mouse_look_.cancel();
         left_click_pending_.reset();
         window_.set_mouse_captured(false);
@@ -46,9 +48,49 @@ void ClientApp::update_mouse_look() {
     // __ProcessMouseEvents: dead or knocked out, mouse look ends and only the windows get the mouse.
     const bool down = conn_->state() == net::ConnectionState::InZone && conn_->player_down();
     if (down) {
+        plate_gesture_.clear();
         mouse_look_.cancel();
         left_click_pending_.reset();
     } else {
+        // Nameplate selection consumes a complete real mouse gesture before ordinary world picking. Waiting for
+        // release lets a drag, a modal UI or a right-button camera look cancel without targeting anything.
+        const glm::vec2 plate_at(in.mouse_x, in.mouse_y);
+        bool plate_left = plate_gesture_.id.has_value();
+        if (left_pressed && !plate_input_blocked()) {
+            if (auto hit = nameplate_at(plate_at)) {
+                const auto observation = std::find_if(plate_hits_.begin(), plate_hits_.end(), [&](const NameplateHit& value) { return value.id == *hit; });
+                if (observation != plate_hits_.end())
+                    plate_gesture_.begin(*hit, plate_at, observation->owner, observation->incarnation, conn_.get(), conn_->zone_id());
+                left_click_pending_.reset();
+                plate_left = true;
+            }
+        }
+        if (plate_gesture_.id) {
+            if (right_pressed && in.left_button && !plate_gesture_.captured_elsewhere && !plate_input_blocked(true)) {
+                // Replay the held left press before the ordinary right press below, preserving the normal
+                // two-button camera/movement state while cancelling selection of the plate.
+                mouse_look_.left_down(options, camera6, now);
+                plate_gesture_.clear();
+                left_click_pending_.reset();
+            } else {
+                const auto actor = conn_->world().spawns.find(*plate_gesture_.id);
+                const bool live = actor != conn_->world().spawns.end() && automation_ &&
+                    automation_->nameplates().owner_valid(plate_gesture_.owner) &&
+                    plate_gesture_.identity_matches(plate_gesture_.owner, actor->second.incarnation, conn_.get(), conn_->zone_id());
+                plate_gesture_.update(plate_at, plate_input_blocked() || !live);
+            }
+            if (plate_gesture_.transfer_drag(in.left_button, !iso())) {
+                mouse_look_.left_down(options, camera6, now);
+                left_click_pending_.reset(); // the transferred camera drag must never become a world click
+            } else if (plate_gesture_.id && left_released) {
+                const auto hit = nameplate_at(plate_at);
+                const auto observation = std::find_if(plate_hits_.begin(), plate_hits_.end(), [&](const NameplateHit& value) { return hit && value.id == *hit; });
+                const auto selected = plate_gesture_.release(plate_at, hit, plate_input_blocked(),
+                    observation != plate_hits_.end() ? observation->owner : 0,
+                    observation != plate_hits_.end() ? observation->incarnation : 0, conn_.get(), conn_->zone_id());
+                if (selected) activate_nameplate(*selected);
+            }
+        }
         // A press goes to the world when the windows do not take it (or during mouse look); a release during mouse
         // look always, else when the windows do not take it.
         if (right_pressed && (mouse_look_.active || !ui_.wants_mouse())) {
@@ -66,17 +108,17 @@ void ClientApp::update_mouse_look() {
             // frame: the cursor itself comes back where the look took it, platform/mouse_capture.h.)
             right_click_ = up.click;
         }
-        if (left_pressed && iso() && !ui_.wants_mouse()) {
+        if (!plate_left && left_pressed && iso() && !ui_.wants_mouse()) {
             // The isometric camera (Hailstone's own): the left button only clicks; it never starts a mouse look.
             if (!mouse_look_.active) left_click_ = glm::vec2(in.mouse_x, in.mouse_y);
-        } else if (left_pressed && (mouse_look_.active || !ui_.wants_mouse())) {
+        } else if (!plate_left && left_pressed && (mouse_look_.active || !ui_.wants_mouse())) {
             mouse_look_.left_down(options, camera6, now);
             // This client clicks at the press; during MouseTurnZoom's look the click waits for the release, as
             // CEverQuest::LMouseUp makes every click (held under 0x2ef ms, mouse look off by then).
             if (mouse_look_.active && !mouse_look_.by_right) left_click_pending_ = glm::vec2(in.mouse_x, in.mouse_y);
             else if (!mouse_look_.active) left_click_ = glm::vec2(in.mouse_x, in.mouse_y);
         }
-        if (left_released && (mouse_look_.active || left_click_pending_ || !ui_.wants_mouse())) {
+        if (!plate_left && left_released && (mouse_look_.active || left_click_pending_ || !ui_.wants_mouse())) {
             bool click = mouse_look_.left_up(now);
             if (left_click_pending_ && click) left_click_ = left_click_pending_;
             left_click_pending_.reset();
@@ -466,7 +508,7 @@ void ClientApp::update_player(float dt) {
                 return true;
             }
             if (handler == "Cmd_bodytint") { // Cmd_bodytint @0x4ebca0: toggles CBodyTintWnd
-                if (eq_api_) eq_api_->toggle("BodyTintWnd");
+                if (ui_api_) ui_api_->toggle("BodyTintWnd");
                 return true;
             }
             if (handler == "Cmd_facepick") { // Cmd_facepick @0x4ebc80: __ExecuteCmd(0x1ec, 1, 0)
@@ -475,15 +517,17 @@ void ClientApp::update_player(float dt) {
             }
             if (handler != "Cmd_doability" || !actions_ui_) return false;
             actions_ui_->doability_command(*conn_, stats_ui_ ? stats_ui_->character() : nullptr, ability_view(), args,
-                                           [this](std::string_view name) { return use_ability_named(eq_host_, name); });
+                                           [this](std::string_view name) { return use_ability_named(ui_host_, name); });
             return true;
         });
     }
     // The player's own move, turn or strafe keys this frame (not a script's /keypress): they end /nav's walk, and
     // they alone end /follow when its mesh help strafed (below).
     bool player_moved = false;
+    bool player_autorun_pressed = false;
     for (std::size_t i = 0; i < key_events_.size(); ++i) {
         const auto& e = key_events_[i];
+        if ((i < player_keys || i >= pad_first) && e.down && e.command == 0) player_autorun_pressed = true;
         if ((i < player_keys || i >= pad_first) && e.down && e.command >= game::mechanics::kCmdForward &&
             e.command <= game::mechanics::kCmdStrafeRight)
             player_moved = true;
@@ -495,7 +539,9 @@ void ClientApp::update_player(float dt) {
     } else {
         // A window has the keyboard (typing in the chat): the scripts' /keypress and the pad are not the keyboard,
         // their commands still act (a script's press would be lost otherwise: script_keys_ is not kept).
-        for (std::size_t i = player_keys; i < key_events_.size(); ++i) key_command(key_events_[i]);
+        for (std::size_t i = 0; i < key_events_.size(); ++i)
+            if (i >= player_keys || key_events_[i].command == static_cast<int>(game::KeyCommand::FULLSCREEN))
+                key_command(key_events_[i]);
     }
     update_placement();
     update_item_input();
@@ -520,14 +566,14 @@ void ClientApp::update_player(float dt) {
             }
             return out;
         };
-        if (auto p = parts(name); eq_api_ && p.size() >= 4 && p[0] == "MENU") {
+        if (auto p = parts(name); ui_api_ && p.size() >= 4 && p[0] == "MENU") {
             // "MENU:<screen>:<x>:<y>" right-clicks a stock window there (its context menu)
-            bool ok = eq_api_->context_menu(p[1], static_cast<float>(std::atof(p[2].c_str())),
+            bool ok = ui_api_->context_menu(p[1], static_cast<float>(std::atof(p[2].c_str())),
                                             static_cast<float>(std::atof(p[3].c_str())));
             log::info("auto key {}: {}", name, ok ? "menu open" : "no menu");
-        } else if (p.size() >= 2 && eq_api_ && p[0] == "INSPECT") {
+        } else if (p.size() >= 2 && ui_api_ && p[0] == "INSPECT") {
             // "INSPECT:<slot>[:<bag index>]" right-clicks a possessions slot (an item's display, a bag's window)
-            eq_api_->right_click_item(net::ItemSlot::possessions(static_cast<std::int16_t>(std::atoi(p[1].c_str())),
+            ui_api_->right_click_item(net::ItemSlot::possessions(static_cast<std::int16_t>(std::atoi(p[1].c_str())),
                                                                  static_cast<std::int16_t>(p.size() >= 3 ? std::atoi(p[2].c_str()) : -1)));
             log::info("auto key {}: inspected", name);
         } else if (p.size() >= 2 && conn_ && p[0] == "PREVIEW") {
@@ -536,7 +582,7 @@ void ClientApp::update_player(float dt) {
                                                                static_cast<std::int16_t>(p.size() >= 3 ? std::atoi(p[2].c_str()) : -1)),
                                     {false, false, true});
             log::info("auto key {}: preview asked", name);
-        } else if (eq_api_ && p[0] == "CORPSE") {
+        } else if (ui_api_ && p[0] == "CORPSE") {
             // "CORPSE[:<name>]" targets the nearest corpse (whose name starts with <name>)
             std::uint32_t best = 0;
             float best_d = 1e9f;
@@ -585,37 +631,37 @@ void ClientApp::update_player(float dt) {
             // "LOOT" loots the target, as a right click on the corpse does (a server's client may take /loot over)
             conn_->loot(conn_->world().target_id);
             log::info("auto key {}: loot {}", name, conn_->world().target_id);
-        } else if (p.size() >= 3 && eq_api_ && p[0] == "MENUROW") {
+        } else if (p.size() >= 3 && ui_api_ && p[0] == "MENUROW") {
             // "MENUROW:<menu>:<row>" chooses a row of an open context menu (0-based)
-            bool ok = eq_api_->menu_click(std::atoi(p[1].c_str()), std::atoi(p[2].c_str()));
+            bool ok = ui_api_->menu_click(std::atoi(p[1].c_str()), std::atoi(p[2].c_str()));
             log::info("auto key {}: {}", name, ok ? "chosen" : "no such row");
-        } else if (eq_api_ && p.size() >= 3 && p[0] == "HOTBTN") {
+        } else if (ui_api_ && p.size() >= 3 && p[0] == "HOTBTN") {
             // "HOTBTN:<screen>:<child>[:right|rightheld]" clicks a hot bar's button (places the cursor's hot button,
             // else presses it; an empty one's click and a held right button open its menu)
-            bool ok = eq_api_->click_hot_button(p[1], p[2], p.size() >= 4 ? std::string_view(p[3]) : "left");
+            bool ok = ui_api_->click_hot_button(p[1], p[2], p.size() >= 4 ? std::string_view(p[3]) : "left");
             log::info("auto key {}: {}", name, ok ? "clicked" : "no such button");
         } else if (p[0] == "RCLICK") {
             // "RCLICK" right-clicks the target (its window: a merchant, a buyer, ...)
             bool ok = right_click_spawn(conn_->world().target_id);
             log::info("auto key {}: {}", name, ok ? "right-clicked" : "nothing");
-        } else if (eq_api_ && p.size() >= 4 && p[0] == "TEXT") {
+        } else if (ui_api_ && p.size() >= 4 && p[0] == "TEXT") {
             // "TEXT:<screen>:<child>:<text>" sets an edit box's text as typing it would
-            bool ok = eq_api_->set_child_text(p[1], p[2], p[3]);
+            bool ok = ui_api_->set_child_text(p[1], p[2], p[3]);
             log::info("auto key {}: {}", name, ok ? "typed" : "no such edit");
-        } else if (eq_api_ && p.size() >= 4 && p[0] == "DLIST") {
+        } else if (ui_api_ && p.size() >= 4 && p[0] == "DLIST") {
             // "DLIST:<screen>:<list>:<row>" double-clicks a list row
-            bool ok = eq_api_->double_click_list(p[1], p[2], std::atoi(p[3].c_str()));
+            bool ok = ui_api_->double_click_list(p[1], p[2], std::atoi(p[3].c_str()));
             log::info("auto key {}: {}", name, ok ? "double-clicked" : "no such list");
-        } else if (eq_api_ && p.size() >= 4 && p[0] == "COMBO") {
+        } else if (ui_api_ && p.size() >= 4 && p[0] == "COMBO") {
             // "COMBO:<screen>:<child>:<index>" picks a combo box choice (the child may hold ':', a list cell's box)
             std::string child = p[2];
             for (std::size_t i = 3; i + 1 < p.size(); ++i) child += ":" + p[i];
-            bool ok = eq_api_->select_combo(p[1], child, std::atoi(p.back().c_str()));
+            bool ok = ui_api_->select_combo(p[1], child, std::atoi(p.back().c_str()));
             log::info("auto key {}: {}", name, ok ? "picked" : "no such combo box");
-        } else if (eq_api_ && p.size() >= 3 && (p[0] == "UI" || p[0] == "LIST")) {
+        } else if (ui_api_ && p.size() >= 3 && (p[0] == "UI" || p[0] == "LIST")) {
             // "UI:<screen>:<child>:<button>" another button phase ("rightup": a quick right click)
-            bool ok = p[0] == "UI" ? eq_api_->click_child(p[1], p[2], p.size() >= 4 ? p[3] : std::string("left"))
-                                   : p.size() >= 4 && eq_api_->click_list(p[1], p[2], std::atoi(p[3].c_str()),
+            bool ok = p[0] == "UI" ? ui_api_->click_child(p[1], p[2], p.size() >= 4 ? p[3] : std::string("left"))
+                                   : p.size() >= 4 && ui_api_->click_list(p[1], p[2], std::atoi(p[3].c_str()),
                                                                           p.size() >= 5 ? std::atoi(p[4].c_str()) : 0);
             log::info("auto key {}: {}", name, ok ? "clicked" : "no such child");
         } else if (auto cmd = game::command_by_name(name)) {
@@ -651,6 +697,8 @@ void ClientApp::update_player(float dt) {
     motion_.jumped = motion_.land_sound = false; // this frame's events, gathered over its steps
     motion_.fall_damage.reset();
     auto run_step = [&](const core::StepClock::Step& st) {
+        // Query extensions before retaining any pointers into the received actor set.
+        movement_.set_instant_mount_acceleration(conn_->instant_mount_acceleration());
         mk = frame_keys;
         const glm::vec3 step_from_feet = feet_;
         const float step_from_yaw = yaw_, step_from_pitch = pitch_;
@@ -675,6 +723,19 @@ void ClientApp::update_player(float dt) {
                          : 1.0f;
         }
         follow_assist_strafed_ = false;
+        const bool was_enhanced = conn_->enhanced_follow_active();
+        auto enhanced_profile = conn_->active_follow_profile();
+        if (enhanced_profile && (enhanced_profile->flags & game::FollowCancelOnMove) &&
+            (player_moved || player_autorun_pressed)) {
+            conn_->stop_follow(true);
+            enhanced_profile.reset();
+        }
+        if ((was_enhanced || enhanced_follow_motion_) && !enhanced_profile) {
+            movement_.set_autorun(0);
+            follow_logged_ = 0;
+            follow_move_ = false;
+        }
+        enhanced_follow_motion_ = enhanced_profile.has_value();
         // /follow: ProcessControls runs PlayerClient::FollowPlayerAI (game/follow.h) while the player can move
         // (standing or ducking, not frozen); it turns the heading, sets autorun (0xddf720) and the run mode
         // (0xddf670). Turn, strafe and back keys end it (TurnOffAutoFollow, after the movement update).
@@ -708,12 +769,22 @@ void ClientApp::update_player(float dt) {
                 fi.distance = game::true_distance(me, to, 0.0f); // CDisplay::TrueDistance(..., 0): flat
                 // __CastRay(target, player): the line between them is clear.
                 fi.clear_line = !collision_ || collision_->line_of_sight(t.position, feet_ + glm::vec3(0, 0, floor_offset_));
-                const bool assist = nav_ && nav_->follow_assist_on();
+                const bool assist = !enhanced_profile && nav_ && nav_->follow_assist_on();
                 const float distance = fi.distance;
                 // With the mesh's help the follow keeps on past the original's 200, to the navigator's leash.
                 if (assist && fi.distance > game::kFollowTooFar && fi.distance <= Navigator::kFollowLeash)
                     fi.distance = game::kFollowTooFar;
-                game::FollowStep step = game::follow_step(fi);
+                game::FollowStep step;
+                if (enhanced_profile) {
+                    const auto direct = game::profiled_follow_step(fi, *enhanced_profile,
+                        follow_logged_ == follow && follow_move_, pitch_ * 256.0f / glm::pi<float>(), dt_step);
+                    step.heading = direct.heading;
+                    step.move = direct.move;
+                    step.run = (enhanced_profile->flags & game::FollowPreserveRun) ? conn_->running() : game::follow_step(fi).run;
+                    pitch_ = direct.pitch * glm::pi<float>() / 256.0f;
+                } else {
+                    step = game::follow_step(fi);
+                }
                 if (step.stop_message) {
                     conn_->stop_follow_with(*step.stop_message);
                     if (nav_) nav_->end_follow();
@@ -871,7 +942,7 @@ void ClientApp::update_player(float dt) {
                     const std::string& name = t->second.name;
                     bool grouped = g.active && (g.has_member(game::display_name(name)) || g.has_member(name));
                     if (!grouped && game::red_con_tip_due(target_manager_, t->first, me->level, t->second.level)) {
-                        if (eq_api_) eq_api_->activate_tip(0x20);
+                        if (ui_api_) ui_api_->activate_tip(0x20);
                         conn_->set_auto_attack(false);
                         conn_->set_auto_fire(false);
                     }
@@ -1006,7 +1077,8 @@ void ClientApp::update_player(float dt) {
         last_velocity_ = frame.velocity;
         last_speed_run_ = frame.speed_run;
         // EQPlayer::TurnOffAutoFollow; not for the strafe /follow's mesh help pressed itself (the player's own keys still).
-        if (frame.follow_off && conn_->follow_target() && (!follow_assist_strafed_ || player_moved)) conn_->stop_follow(true);
+        if (frame.follow_off && conn_->follow_target() && (!follow_assist_strafed_ || player_moved) &&
+            (!enhanced_profile || (enhanced_profile->flags & game::FollowCancelOnMove))) conn_->stop_follow(true);
         motion_body_wet_ = frame.body_wet;
         if (!local_body_movement_) conn_->set_player_body_wet(frame.body_wet);
         if (actor_renderer_ && !local_body_movement_)
@@ -1137,7 +1209,7 @@ void ClientApp::update_player(float dt) {
         }
     }
     const game::Spawn* me = conn_->world().player();
-    if (eq_host_.customization_shown && me) {
+    if (ui_host_.customization_shown && me) {
         // The player customization window in game: AboutToShow's SetCameraType(7) puts the view on Cameras[7], the
         // EQCamera_User of character creation, placed by the window's calls as there (its face camera from the
         // player's heading, CharSelect_PositionCameraForModel when a step zooms; game/char_select_camera.h) and
@@ -1150,7 +1222,7 @@ void ClientApp::update_player(float dt) {
         }
         game::CCreateInputs cc_in = ccreate_inputs_for(*me, conn_->world().height_tables.get());
         cc_in.heading = game::yaw_to_heading(yaw_); // PlayerBase +0x80
-        for (const auto& call : std::exchange(eq_host_.customization_camera, {}))
+        for (const auto& call : std::exchange(ui_host_.customization_camera, {}))
             if (auto fov = game::customization_camera(customization_camera_, call, cc_in).fov) camera_.fov_units = *fov;
         game::UserCameraTarget target;
         target.position = feet_ + glm::vec3(0, 0, floor_offset_);

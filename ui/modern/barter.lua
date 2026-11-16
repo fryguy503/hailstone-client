@@ -2,8 +2,9 @@
 -- right as the steps of a buy line: the item to buy (a search and its results), the offer (the price each as four
 -- coin buttons, how many, and up to ten of your items given as well), and the buy lines with the status text and
 -- the welcome message. The buyer state (a chip) and Start / Stop Buyer head the window.
--- Every list, field and button is the original's child (eq.ListClick, eq.SetWindowText, eq.ClickChild): the coin
+-- Every list, field and button is the original's child (hs.ListClick, hs.SetWindowText, hs.ClickChild): the coin
 -- buttons open the game's amount dialog, a buy line's click puts its values back into the offer to change them.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -166,6 +167,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Barter Buyer", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Barter Buyer", WINDOW_OPTS, drawWindow)
 end)

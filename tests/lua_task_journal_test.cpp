@@ -7,6 +7,8 @@
 
 #include <lua.hpp>
 
+#include "lua_ui_api_mock.h"
+
 TEST_CASE("UI quest journal: task identity, sections, tracking and native history actions") {
     const auto pack = std::filesystem::path(__FILE__).parent_path().parent_path() / "ui" / "modern";
     REQUIRE(std::filesystem::exists(pack / "tasks.lua"));
@@ -112,7 +114,7 @@ for _,name in ipairs({"PushStyleColor","PopStyleColor","PushStyleVar","PopStyleV
   "Dummy","Separator","BeginChild","EndChild","TableHeadersRow","TableNextColumn","TableSetupScrollFreeze",
   "EndTable","SetTooltip","EndPopup","SetNextWindowSize"}) do ui[name]=noop end
 
-eq = {
+hs = {
   InGame=function() return inGame end,
   Tasks=function() snapshotCalls=snapshotCalls+1;return snapshot end,
   TabPage=function() return page end,
@@ -166,6 +168,7 @@ eq = {
   end,
   StmlLink=function(win,child,message,data) linked={win,child,message,data} end,
 }
+TEST_UI_API_ATTACH(hs)
 local colors=setmetatable({}, {__index=function(t,key) local c={0.6,0.7,0.8,1};rawset(t,key,c);return c end})
 local T={color=colors,font={small=3,normal=5,large=6}}
 T.Text=function(_,_,value) record(value) end
@@ -283,7 +286,7 @@ render()
 assert(texts["Second objective"],"The native task is the only shared quest")
 render("category.active")
 assert(texts["Second objective"] and not texts["No tasks here."],"Active includes a shared-only roster of quests")
-eq.OpenTask(20)
+hs.OpenTask(20)
 settings["tasks.category"]="active";settings["tasks.section.20"]="objectives"
 render()
 assert(texts["Second objective"],"A tracker-opened shared task uses Active even when its native task ID is unchanged")
@@ -291,7 +294,7 @@ assert(texts["Second objective"],"A tracker-opened shared task uses Active even 
 snapshot[1],snapshot[2]=otherShared,onlyShared
 settings["tasks.tracked.99"]="1"
 render("category.history")
-eq.OpenTask(20)
+hs.OpenTask(20)
 settings["tasks.category"]="active"
 render()
 assert(texts["Second objective"] and not texts["Shared objective"],"An external category change follows the exact native task rather than the first tracked quest")
@@ -354,6 +357,7 @@ return true
     lua_State* L = luaL_newstate();
     REQUIRE(L != nullptr);
     luaL_openlibs(L);
+    REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
     int rc = luaL_loadstring(L, script);
     if (rc == LUA_OK) {
         const auto path = pack.generic_string();

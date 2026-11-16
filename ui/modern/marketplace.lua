@@ -7,8 +7,9 @@
 --     item of the week, the new and the featured items);
 --   * the selected item: its icon, name, maker, timers, description, price, quantity and Buy; Inspect and Preview;
 --     the 3D preview on its own tab; the zip code, confirmation and results pages in turn while buying.
--- Your funds head the window. Every field, list and button is the game window's (app/lua_eq_marketplace.cpp), so
+-- Your funds head the window. Every field, list and button is the game window's (app/lua_ui_marketplace.cpp), so
 -- what is bought, and when the buttons work, is the game's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -23,7 +24,7 @@ local function muted(text) ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1,
 local function faint(text) ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1, text) end
 
 local function childIcon(id, size, s)
-  local tex, u0, v0, u1, v1 = eq.ChildArt(WINDOW, id, "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(WINDOW, id, "decal")
   local x, y = ui.GetCursorScreenPos()
   if tex then T.Icon(x, y, size, s, tex, u0, v0, u1, v1, nil, { radius = 4 })
   else ui.DrawRectFilled(x, y, x + size, y + size, C.ink[1], C.ink[2], C.ink[3], 0.06, 4 * s) end
@@ -42,7 +43,7 @@ local function tree(w, h, s)
     ui.SetCursorPos(cx + depth * 12 * s, cy)
     if branch then
       if ui.SmallButton((open and "v" or ">") .. "##arrow" .. r.index) then
-        eq.ListClick(WINDOW, "MKPW_CategoriesTree", r.index, "left", 1)
+        API.windows.ListClick(WINDOW, "MKPW_CategoriesTree", r.index, "left", 1)
         M.Refresh(WINDOW, "MKPW_CategoriesTree")
       end
       ui.SameLine(0, 4 * s)
@@ -51,7 +52,7 @@ local function tree(w, h, s)
       ui.SetCursorPos(ax + 18 * s, ay)
     end
     if ui.Selectable(r.texts[1] .. "##cat" .. r.index, r.index == selected) then
-      eq.ListClick(WINDOW, "MKPW_CategoriesTree", r.index, "left", 0)
+      API.windows.ListClick(WINDOW, "MKPW_CategoriesTree", r.index, "left", 0)
       M.Refresh(WINDOW, "MKPW_CategoriesTree")
     end
   end
@@ -84,7 +85,7 @@ local function tile(list, r, selected, s)
       (t[4] == "sale" and "Sale ends " or "Leaves in ") .. t[5])
   end
   ui.InvisibleButton("##tile" .. list .. r.index, tw, th)
-  if ui.IsItemClicked(ui.Mouse.Left) then eq.ListClick(WINDOW, list, r.index, "left") end
+  if ui.IsItemClicked(ui.Mouse.Left) then API.windows.ListClick(WINDOW, list, r.index, "left") end
   if ui.IsItemHovered() then ui.SetTooltip(t[1] or "") end
 end
 
@@ -127,7 +128,7 @@ local function landing(w, h, s)
 end
 
 local function find()
-  eq.ClickChild(WINDOW, "MKPW_FindBtn", "left")
+  API.windows.ClickChild(WINDOW, "MKPW_FindBtn", "left")
 end
 
 local function header(w, s, btnH)
@@ -178,20 +179,20 @@ local function preview(w, h, s, btnH)
     faint("No item preview available.")
     return
   end
-  local tex = eq.ItemPreviewImage(w, vh, "marketplace")
+  local tex = API.preview.Image(w, vh, "marketplace")
   ui.DrawRectFilled(x, y, x + w, y + vh, 0, 0, 0, 0.25, 6 * s)
   if tex then ui.DrawImage(tex, x, y, x + w, y + vh, 0, 0, 1, 1) end
   ui.InvisibleButton("##mkpwview", w, vh, ui.ButtonFlags.MouseButtonLeft + ui.ButtonFlags.MouseButtonRight)
   local io = ui.GetIO()
-  if ui.IsItemHovered() and io.wheel ~= 0 then eq.ItemPreviewControl("zoom", io.wheel > 0 and 0.9 or 1.1, 0, "marketplace") end
+  if ui.IsItemHovered() and io.wheel ~= 0 then API.preview.Control("zoom", io.wheel > 0 and 0.9 or 1.1, 0, "marketplace") end
   if ui.IsItemActive() then
     if ui.IsMouseDown(ui.Mouse.Left) then
-      eq.ItemPreviewControl("rotate", io.mouseDX * 0.01, -io.mouseDY * 0.01, "marketplace")
+      API.preview.Control("rotate", io.mouseDX * 0.01, -io.mouseDY * 0.01, "marketplace")
     elseif ui.IsMouseDown(ui.Mouse.Right) then
-      eq.ItemPreviewControl("pan", -io.mouseDX / w, io.mouseDY / vh, "marketplace")
+      API.preview.Control("pan", -io.mouseDX / w, io.mouseDY / vh, "marketplace")
     end
   end
-  if ui.Button("Reset view##mkpw", -1, btnH) then eq.ItemPreviewControl("reset", 0, 0, "marketplace") end
+  if ui.Button("Reset view##mkpw", -1, btnH) then API.preview.Control("reset", 0, 0, "marketplace") end
   if W.Shown(WINDOW, "MKPW_PreviewPlayerStudioLabel") then muted(W.Text(WINDOW, "MKPW_PreviewPlayerStudioLabel")) end
 end
 
@@ -211,7 +212,7 @@ local function mainPage(s, btnH)
 end
 
 local function page(s, btnH)
-  local p = eq.TabPage(WINDOW, "MKPW_Subwindows") or 0
+  local p = API.windows.TabPage(WINDOW, "MKPW_Subwindows") or 0
   if p == 0 then return mainPage(s, btnH) end
   if p == 1 then
     W.Heading("Billing zip code")
@@ -245,7 +246,7 @@ local function details(w, h, s, lh, btnH)
     return
   end
   childIcon("MKPW_DetailsIcon", 40 * s, s)
-  if ui.IsItemClicked(ui.Mouse.Right) then eq.ClickChild(WINDOW, "MKPW_DetailsIcon", "right") end
+  if ui.IsItemClicked(ui.Mouse.Right) then API.windows.ClickChild(WINDOW, "MKPW_DetailsIcon", "right") end
   ui.SameLine(0, 8 * s)
   ui.BeginGroup()
   ui.PushTextWrapPos(0)
@@ -293,7 +294,7 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Marketplace", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   M.TestOpen(WINDOW)
   OPTS.shown = M.Forced(WINDOW)
   hud.Dialog(WINDOW, "Marketplace", OPTS, body)

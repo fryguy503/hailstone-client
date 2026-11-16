@@ -1,22 +1,29 @@
 // What a shipped UI window keeps between frames must not outlive what it was for: a right click slid off a spell gem
 // forgets nothing, a spell dragged from a closed book memorizes nothing, the spell set editor of one character is
 // gone for the next, and the gamepad book's progress bar is the scribe gauge while a scroll is scribed. The stock
-// windows' state is stood in for from Lua (eq.* replaced), and the mouse is ImGui's own input.
+// windows' state is stood in for from Lua (hs.* replaced), and the mouse is ImGui's own input.
 #include <doctest/doctest.h>
 
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
+#include "app/addon_requirements.h"
+#include "core/config.h"
 #include "core/game_dir.h"
 #include "net/game_connection.h"
 #include "ui/dev_screens.h"
 #include "ui/lua/lua_host.h"
+#include "ui/ui_packs.h"
 #include "scratch_dir.h"
 
 using namespace hailstone;
@@ -28,8 +35,8 @@ struct Session {
     GameDir game;
     net::GameConnection conn;
     ui::ChatView view;
-    app::EqHost host;
-    app::EqApi api;
+    app::UiHost host;
+    app::UiApi api;
     ui::lua::LuaUi lua;
     Session(const fs::path& dir, const std::string& pack)
         : game(dir / "game"), conn(game), api(host), lua(dir / pack, dir / "ui.txt") {
@@ -37,10 +44,11 @@ struct Session {
         host.conn = &conn;
         host.chat = &view;
         host.in_game = host.ui_ready = true;
-        lua.add_eq_api([this](lua_State* L) {
+        lua.add_ui_api([this](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
     }
@@ -49,6 +57,7 @@ struct Session {
             ImGuiIO& io = ImGui::GetIO();
             io.DisplaySize = ImVec2(1600, 900);
             io.DeltaTime = 1.0f / 60.0f;
+            hailstone::test::sync_ui_api_aliases(lua.state());
             api.begin_frame();
             ImGui::NewFrame();
             lua.frame();
@@ -57,7 +66,7 @@ struct Session {
     }
 };
 
-// Every theme text ends in ui.DrawText (seen, saw); the eq calls a test watches are listed in `calls`; each
+// Every theme text ends in ui.DrawText (seen, saw); the hs calls a test watches are listed in `calls`; each
 // InvisibleButton's rectangle by id (rects); fake.shown / fake.inGame / fake.name stand in for the game.
 constexpr const char* kPrelude = R"lua(
 seen, calls, rects = {}, {}, {}
@@ -85,19 +94,19 @@ ui.InvisibleButton = function(id, w, h, ...)
   return IB(id, w, h, ...)
 end
 fake = { shown = {}, inGame = true, name = "Alpha" }
-eq.InGame = function() return fake.inGame end
-local Label = eq.Label
-eq.Label = function(n, ...)
+hs.InGame = function() return fake.inGame end
+local Label = hs.Label
+hs.Label = function(n, ...)
   if n == 1 then return fake.name end
   return Label(n, ...)
 end
-local ReplaceWindow, WindowShown = eq.ReplaceWindow, eq.WindowShown
-eq.ReplaceWindow = function(win, ...)
+local ReplaceWindow, WindowShown = hs.ReplaceWindow, hs.WindowShown
+hs.ReplaceWindow = function(win, ...)
   local r = table.pack(ReplaceWindow(win, ...))
   if fake.shown[win] ~= nil then r[1] = fake.shown[win] end
   return table.unpack(r, 1, math.max(r.n, 1))
 end
-eq.WindowShown = function(win)
+hs.WindowShown = function(win)
   if fake.shown[win] ~= nil then return fake.shown[win] end
   return WindowShown(win)
 end
@@ -168,15 +177,126 @@ struct PackRig {
 // The spell bar (modern spellgems.lua) with every gem shown, empty, and the clicks on them listed.
 constexpr const char* kGems = R"lua(
 fake.shown.CastSpellWnd = true
-eq.GemInfo = function(win, id, info)
+hs.GemInfo = function(win, id, info)
   info.shown, info.tex, info.tooltip, info.overlay = true, nil, "", nil
   return info
 end
-eq.SpellGemClick = function(id, phase) calls[#calls + 1] = "gem " .. id .. " " .. tostring(phase) return true end
-eq.SpellBookMemorize = function(slot, gem) calls[#calls + 1] = "memorize " .. slot .. " " .. gem return true end
+hs.SpellGemClick = function(id, phase) calls[#calls + 1] = "gem " .. id .. " " .. tostring(phase) return true end
+hs.SpellBookMemorize = function(slot, gem) calls[#calls + 1] = "memorize " .. slot .. " " .. gem return true end
 )lua";
 
 } // namespace
+
+TEST_CASE("UI packs: blocked bases cannot start or retain a Lua presentation and keep the saved selection") {
+    struct PolicyUi {
+        test::ScratchDir scratch{"ui_pack_policy_lifetime"};
+        fs::path builtin = scratch.path() / "ui", managed = scratch.path() / "ui-addons";
+        std::unique_ptr<ImGuiContext, void (*)(ImGuiContext*)> context{ImGui::CreateContext(), ImGui::DestroyContext};
+        std::unique_ptr<ui::lua::LuaUi> lua;
+        std::vector<ui::UiPack> packs;
+        std::vector<app::InstalledAddon> installed;
+        std::string loaded;
+        int builtin_frames = 0, leaf_frames = 0, inherited_frames = 0;
+
+        PolicyUi() {
+            ImGui::GetIO().IniFilename = nullptr;
+            unsigned char* pixels = nullptr;
+            int width = 0, height = 0;
+            ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+            auto put = [](const fs::path& file, const char* text) {
+                fs::create_directories(file.parent_path());
+                std::ofstream(file) << text;
+            };
+            put(builtin / "modern/ui.ini", "name=Modern\n");
+            put(builtin / "modern/policy.lua", "POLICY_UI='builtin' ui.window('PolicySurface',function() recordPolicyFrame(1) end)");
+            put(managed / "interfaces/ui/base/ui.ini", "base=builtin:modern\n");
+            put(managed / "interfaces/ui/base/inherited.lua", "ui.window('PolicyInherited',function() recordPolicyFrame(3) end)");
+            put(managed / "decor/ui/leaf/ui.ini", "base=addon.interfaces.base\n");
+            put(managed / "decor/ui/leaf/policy.lua", "POLICY_UI='managed' ui.window('PolicySurface',function() recordPolicyFrame(2) end)");
+            for (const char* name : {"interfaces", "decor"}) {
+                app::InstalledAddon addon;
+                addon.name = name; addon.kind = AddonKind::Ui; addon.source = std::string("maker/") + name;
+                installed.push_back(std::move(addon));
+            }
+        }
+        ~PolicyUi() { lua.reset(); }
+        void refresh(const plugin::Rules* rules) {
+            packs = ui::list_ui_packs(builtin, managed, {"interfaces", "decor"});
+            app::apply_ui_addon_policy(packs, rules, installed);
+        }
+        bool load_requested(const Config& config) {
+            const auto* pack = ui::find_ui_pack(packs, config.get_string("ui.name"));
+            if (!pack) return false;
+            if (lua && loaded == pack->id) return true;
+            lua.reset();
+            loaded = pack->id;
+            lua = std::make_unique<ui::lua::LuaUi>(pack->dir, scratch.path() / (loaded + "-settings.txt"), pack->base_dirs);
+            lua->add_ui_api([this](lua_State* L) {
+                lua_pushlightuserdata(L, this);
+                lua_pushcclosure(L, [](lua_State* state) -> int {
+                    auto* self = static_cast<PolicyUi*>(lua_touserdata(state, lua_upvalueindex(1)));
+                    const auto kind = luaL_checkinteger(state, 1);
+                    if (kind == 1) ++self->builtin_frames;
+                    else if (kind == 2) ++self->leaf_frames;
+                    else if (kind == 3) ++self->inherited_frames;
+                    return 0;
+                }, 1);
+                lua_setglobal(L, "recordPolicyFrame");
+            });
+            return true;
+        }
+        void frames(int count) {
+            for (int i = 0; i < count; ++i) {
+                ImGui::GetIO().DisplaySize = ImVec2(800, 600);
+                ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+                ImGui::NewFrame(); lua->frame(); ImGui::Render();
+            }
+        }
+    } rig;
+    Config saved;
+    const auto config_file = rig.scratch.path() / "hailstone.ini";
+    saved.set("ui.name", "addon.decor.leaf");
+    REQUIRE(saved.save(config_file));
+    const auto saved_text = saved.to_string();
+    plugin::Rules blocked;
+    blocked.configured = true; blocked.addons.enabled = true;
+    blocked.addons.block = {"maker/interfaces"};
+
+    // A cached/provisional rule cannot block loading. The live rule blocks the inherited base and its leaf.
+    auto provisional = blocked; provisional.provisional = true;
+    rig.refresh(&provisional);
+    REQUIRE(ui::find_ui_pack_exact(rig.packs, "addon.decor.leaf"));
+    CHECK(ui::find_ui_pack_exact(rig.packs, "addon.decor.leaf")->available);
+    rig.refresh(&blocked);
+    REQUIRE(ui::find_ui_pack_exact(rig.packs, "addon.interfaces.base"));
+    CHECK_FALSE(ui::find_ui_pack_exact(rig.packs, "addon.interfaces.base")->available);
+    CHECK_FALSE(ui::find_ui_pack_exact(rig.packs, "addon.decor.leaf")->available);
+    REQUIRE(rig.load_requested(saved));
+    rig.frames(2);
+    CHECK(rig.loaded == "modern");
+    CHECK(rig.lua->run_for_test("", "return POLICY_UI") == "builtin");
+    CHECK(rig.builtin_frames > 0); CHECK(rig.leaf_frames == 0); CHECK(rig.inherited_frames == 0);
+
+    // Explicitly selecting the still-saved request after leaving the policy loads both managed presentations.
+    rig.refresh(nullptr);
+    REQUIRE(rig.load_requested(saved));
+    rig.frames(2);
+    CHECK(rig.lua->run_for_test("", "return POLICY_UI") == "managed");
+    CHECK(rig.leaf_frames > 0); CHECK(rig.inherited_frames > 0);
+    const int leaf_frames = rig.leaf_frames, inherited_frames = rig.inherited_frames, builtin_frames = rig.builtin_frames;
+    rig.refresh(&blocked);
+    REQUIRE(rig.load_requested(saved));
+    rig.frames(4);
+    CHECK(rig.loaded == "modern");
+    CHECK(rig.lua->run_for_test("", "return POLICY_UI") == "builtin");
+    CHECK(rig.leaf_frames == leaf_frames); CHECK(rig.inherited_frames == inherited_frames);
+    CHECK(rig.builtin_frames > builtin_frames);
+    CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+    CHECK(saved.get_string("ui.name") == "addon.decor.leaf");
+    Config reread;
+    REQUIRE(reread.load(config_file));
+    CHECK(reread.to_string() == saved_text);
+}
 
 TEST_CASE("UI packs (modern): a right click slid off a spell gem forgets nothing; let go on it, it does") {
     PackRig r("modern");
@@ -202,25 +322,25 @@ TEST_CASE("UI packs (modern): held spell gem display stays only when released ov
     PackRig r("modern");
     r.run(kGems);
     r.run(R"lua(
-eq.SpellBookState = function() return { gems = { 200, -1 } } end
-local shown = eq.WindowShown
+hs.SpellBookState = function() return { gems = { 200, -1 } } end
+local shown = hs.WindowShown
 local rect = ui.FindWindowRect
-eq.WindowShown = function(window)
+hs.WindowShown = function(window)
   if window == 'SpellDisplayWindow' then return fake.display end
   return shown(window)
 end
-eq.SpellDetails = function() return 'Test spell' end
-eq.WindowTitle = function() return fake.otherTitle and 'Another spell' or 'Test spell' end
+hs.SpellDetails = function() return 'Test spell' end
+hs.WindowTitle = function() return fake.otherTitle and 'Another spell' or 'Test spell' end
 ui.FindWindowRect = function(name)
   if name == '###modern.SpellDisplayWindow' then return 100, 100, 200, 100 end
   return rect(name)
 end
-eq.SpellGemClick = function(id, phase)
+hs.SpellGemClick = function(id, phase)
   calls[#calls + 1] = 'gem ' .. id .. ' ' .. phase
   if phase == 'rightheld' and id == 'CSPW_Spell0' then fake.display = true end
   if phase == 'rightupheld' then fake.display = false end
 end
-eq.ShowSpell = function(id) calls[#calls + 1] = 'show ' .. id fake.display = true end
+hs.ShowSpell = function(id) calls[#calls + 1] = 'show ' .. id fake.display = true end
 )lua");
     r.s->frames(3);
     const ImVec2 gem = r.centre("##CSPW_Spell0");
@@ -273,13 +393,13 @@ TEST_CASE("UI packs (modern): a spell dragged from a book that closed memorizes 
 
 // The spell sets the stand-in game has: one in use (Heals), nine free.
 constexpr const char* kSets = R"lua(
-eq.SpellSets = function()
+hs.SpellSets = function()
   local t = { { name = "Heals", inUse = true, spells = { 200, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 } } }
   for n = 2, 10 do t[n] = { name = "", inUse = false, spells = {} } end
   return t
 end
-eq.EditSpellSet = function(n, ...) calls[#calls + 1] = "edit " .. n return n end
-eq.SaveSpellSet = function(...) calls[#calls + 1] = "save" return 1 end
+hs.EditSpellSet = function(n, ...) calls[#calls + 1] = "edit " .. n return n end
+hs.SaveSpellSet = function(...) calls[#calls + 1] = "save" return 1 end
 fake.shown.SpellBookWnd = true
 )lua";
 
@@ -325,13 +445,13 @@ TEST_CASE("UI packs (gamepad): the spell book's bar is the scribe gauge while a 
     r.run(R"lua(
 fake.shown.SpellBookWnd = true
 fake.state = { scribing = { slot = 3 }, gems = {} }
-eq.SpellBookState = function() return fake.state end
-local ChildShown, Gauge = eq.ChildShown, eq.Gauge
-eq.ChildShown = function(win, child, ...)
+hs.SpellBookState = function() return fake.state end
+local ChildShown, Gauge = hs.ChildShown, hs.Gauge
+hs.ChildShown = function(win, child, ...)
   if win == "SpellBookWnd" and child == "SBW_Memorize_Gauge" then return true end
   return ChildShown(win, child, ...)
 end
-eq.Gauge = function(n, ...)
+hs.Gauge = function(n, ...)
   if n == 9 or n == 10 then
     calls[#calls + 1] = "gauge " .. n
     return n == 9 and 0 or 0.5
@@ -361,16 +481,16 @@ TEST_CASE("UI packs: adventure controls remain visible away from a recruiter and
         PackRig r(pack);
         r.run(R"lua(
 fake.shown.AdventureRequestWnd = true
-local ChildState, ChildShown, WindowText, ComboInfo = eq.ChildState, eq.ChildShown, eq.WindowText, eq.ComboInfo
-eq.ChildState = function(win, child, ...)
+local ChildState, ChildShown, WindowText, ComboInfo = hs.ChildState, hs.ChildShown, hs.WindowText, hs.ComboInfo
+hs.ChildState = function(win, child, ...)
   if win == 'AdventureRequestWnd' then return child == 'AdvRqst_ViewStatsButton' end
   return ChildState(win, child, ...)
 end
-eq.ChildShown = function(win, child, ...)
+hs.ChildShown = function(win, child, ...)
   if win == 'AdventureRequestWnd' then return child ~= 'AdvRqst_LeaveButton' end
   return ChildShown(win, child, ...)
 end
-eq.WindowText = function(win, child, ...)
+hs.WindowText = function(win, child, ...)
   if win == 'AdventureRequestWnd' then
     if child == 'AdvRqst_NPCText' then return 'No adventure is assigned.' end
     return ''
@@ -378,7 +498,7 @@ eq.WindowText = function(win, child, ...)
   if win == 'AdventureStatsWnd' and child == 'AdvStats_AvailableValue' then return '901' end
   return WindowText(win, child, ...)
 end
-eq.ComboInfo = function(win, child, ...)
+hs.ComboInfo = function(win, child, ...)
   if win == 'AdventureRequestWnd' then return { 'Normal', 'High' }, 0 end
   return ComboInfo(win, child, ...)
 end
@@ -390,7 +510,7 @@ ui.Button = function(label, ...)
   rects[label] = { x0, y0, x1 - x0, y1 - y0 }
   return clicked
 end
-eq.ClickChild = function(win, child) calls[#calls + 1] = 'click ' .. win .. '.' .. child end
+hs.ClickChild = function(win, child) calls[#calls + 1] = 'click ' .. win .. '.' .. child end
 )lua");
         r.s->frames(3);
         if (modern) {
@@ -418,19 +538,19 @@ eq.ClickChild = function(win, child) calls[#calls + 1] = 'click ' .. win .. '.' 
         r.run(R"lua(
 fake.shown.AdventureRequestWnd = false
 fake.shown.AdventureStatsWnd = true
-local ListInfo, ListRow = eq.ListInfo, eq.ListRow
+local ListInfo, ListRow = hs.ListInfo, hs.ListRow
 local records = {
   { 'Deepest Guk', '5', '2', '1', '66.7%', '8', '88' },
   { 'Totals', '7', '37', '9', '80.4%', '12', '901' },
 }
-eq.ListInfo = function(win, child, ...)
+hs.ListInfo = function(win, child, ...)
   if win == 'AdventureStatsWnd' and child == 'AdvStats_ThemeList' then
     return #records, 7, -1, { 'Theme', 'Rank', 'Successes', 'Failures', 'Percent', 'Rank (%)', 'Points' },
       { 150, 60, 70, 70, 60, 60, 60 }
   end
   return ListInfo(win, child, ...)
 end
-eq.ListRow = function(win, child, row, ...)
+hs.ListRow = function(win, child, row, ...)
   if win == 'AdventureStatsWnd' and child == 'AdvStats_ThemeList' then return records[row + 1] end
   return ListRow(win, child, row, ...)
 end
@@ -448,8 +568,8 @@ end
         r.run(R"lua(
 fake.shown.AdventureStatsWnd = false
 fake.shown.AdventureLeaderboardWnd = true
-local WindowText = eq.WindowText
-eq.WindowText = function(win, child, ...)
+local WindowText = hs.WindowText
+hs.WindowText = function(win, child, ...)
   if win == 'AdventureLeaderboardWnd' and child == 'AdvLeaderboard_StatusLabel' then return 'Updating leaderboard...' end
   return WindowText(win, child, ...)
 end
@@ -473,16 +593,16 @@ TEST_CASE("UI packs (gamepad): ending an adventure clears its abandon confirmati
     r.run(R"lua(
 fake.shown.AdventureRequestWnd = true
 fake.activeAdventure = true
-local ChildShown, ChildState, WindowText = eq.ChildShown, eq.ChildState, eq.WindowText
-eq.ChildShown = function(win, child, ...)
+local ChildShown, ChildState, WindowText = hs.ChildShown, hs.ChildState, hs.WindowText
+hs.ChildShown = function(win, child, ...)
   if win == 'AdventureRequestWnd' then return child ~= 'AdvRqst_LeaveButton' or fake.activeAdventure end
   return ChildShown(win, child, ...)
 end
-eq.ChildState = function(win, child, ...)
+hs.ChildState = function(win, child, ...)
   if win == 'AdventureRequestWnd' then return child == 'AdvRqst_LeaveButton' or child == 'AdvRqst_ViewStatsButton' end
   return ChildState(win, child, ...)
 end
-eq.WindowText = function(win, child, ...)
+hs.WindowText = function(win, child, ...)
   if win == 'AdventureRequestWnd' then return '' end
   return WindowText(win, child, ...)
 end

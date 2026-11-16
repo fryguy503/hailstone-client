@@ -7,6 +7,7 @@
 -- picks the cooldown (/timer), copies or pastes share text (a pasted Lua social goes to the Lua editor unsaved) and
 -- edits the social as Lua (saved first, its lines as mq.cmd calls); Test saves and presses it (Stop while it runs);
 -- Hot bar saves it and picks the slot to put it on (lib/assign.lua).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -20,7 +21,7 @@ local st = CH.new()
 local wasShown = false
 local message, messageAt = "", -100
 local function say(text) message, messageAt = text, ui.GetTime() end
-local function setLine(i, text) eq.SetWindowText(WIN, "SEW_Line" .. (i - 1) .. "Input", text:sub(1, 255)) end
+local function setLine(i, text) API.windows.SetText(WIN, "SEW_Line" .. (i - 1) .. "Input", text:sub(1, 255)) end
 
 -- The waits a line may have (/pause, in tenths of a second) and the cooldowns (/timer), as pickers.
 local WAITS = { 0, 5, 10, 15, 20, 30, 50, 100, 200, 300, 600 }
@@ -49,7 +50,7 @@ end
 
 -- The colour button whose colour the name box has (the social's colour; -1 when none matches).
 local function currentColour(colours)
-  local r, g, b = eq.ChildColor(WIN, "SEW_NameInput")
+  local r, g, b = API.windows.ChildColor(WIN, "SEW_NameInput")
   if not r then return -1 end
   for i, c in ipairs(colours) do
     if math.abs(c[1] - r) < 0.02 and math.abs(c[2] - g) < 0.02 and math.abs(c[3] - b) < 0.02 then return i - 1 end
@@ -76,7 +77,7 @@ ui.window("Edit Social", function()
       if appearing then ui.SetKeyboardFocusHere() end
       CH.field(st, WIN, "SEW_NameInput", "Name", cw, fh, { max = 15, capital = true, prompt = "The social's name", keep = true })
       -- the colours: ten a row, each the colour it gives the name
-      local colours = eq.SocialColors and eq.SocialColors() or {}
+      local colours = API.socials.Colors and API.socials.Colors() or {}
       local cur = currentColour(colours)
       local cy = y0 + fh + T.px(16)
       local th = CH.caption(x0, cy, "Colour")
@@ -94,10 +95,10 @@ ui.window("Edit Social", function()
         T.textIn(bx0 + T.px(6), by0, bx1 - T.px(6), by1, T.fit(name ~= "" and name or "Social", sw - T.px(12)), { c[1], c[2], c[3], 1 }, 0.5)
         T.unfont()
         if i == cur then T.outline(bx0 + T.px(2), by0 + T.px(2), bx1 - T.px(2), by1 - T.px(2), C.accent, 1, T.px(10), T.px(3)) end
-        if clicked then eq.ClickChild(WIN, id, "left") end
+        if clicked then API.windows.ClickChild(WIN, id, "left") end
       end
       -- the five lines: each the command (its /pause and /timer kept apart), what it is, and its wait
-      local social = eq.SocialEditorSocial and eq.SocialEditorSocial()
+      local social = API.socials.EditorSocial and API.socials.EditorSocial()
       local lines, anyLine = {}, false
       for i = 1, 5 do
         lines[i] = CH.text(WIN, "SEW_Line" .. (i - 1) .. "Input")
@@ -130,7 +131,7 @@ ui.window("Edit Social", function()
         end
       end
       -- Clear, More (cooldown, share text, Lua), Test, Put on a hot bar, Accept
-      local saved = social and eq.LuaSocial(social) or nil
+      local saved = social and API.luasocials.Get(social) or nil
       local dirty = not saved and (name ~= "" or anyLine)
       if saved then
         dirty = name ~= saved.name or (cur >= 0 and cur ~= saved.color)
@@ -138,8 +139,8 @@ ui.window("Edit Social", function()
       end
       local function save()
         if dirty then
-          eq.ClickChild(WIN, "SEW_Accept_Button", "left")
-          eq.OpenSocialEditor(social) -- (Accept closed it: back on the social, as saved)
+          API.windows.ClickChild(WIN, "SEW_Accept_Button", "left")
+          API.socials.OpenEditor(social) -- (Accept closed it: back on the social, as saved)
         end
       end
       local ready = social ~= nil and name ~= ""
@@ -178,42 +179,42 @@ ui.window("Edit Social", function()
                 if v or ci then setLine(at, SL.Compose(v, q.pause, q.command)) end
               end, "sewmore")
             elseif k == 2 then
-              local t = name ~= "" and eq.LuaSocialExport(social, { name = name, color = math.max(cur, 0), lines = lines })
+              local t = name ~= "" and API.luasocials.Export(social, { name = name, color = math.max(cur, 0), lines = lines })
               if t then ui.SetClipboardText(t) say("The share text is on the clipboard.")
               else say("Give the social a name first.") end
             elseif k == 3 then
-              local t, why = eq.LuaSocialImport(ui.GetClipboardText() or "")
+              local t, why = API.luasocials.Import(ui.GetClipboardText() or "")
               if not t then
                 say(why or "The clipboard holds no social.")
               elseif t.lua then
                 hailstone_social_draft = { social = social, t = t } -- (luasocial.lua takes it, unsaved)
-                eq.ShowWindow(WIN, false)
-                eq.OpenLuaSocialEditor(social)
+                API.windows.Show(WIN, false)
+                API.luasocials.OpenEditor(social)
               else
-                if t.name ~= "" then eq.SetWindowText(WIN, "SEW_NameInput", t.name) end
-                if t.color >= 0 and t.color < 20 then eq.ClickChild(WIN, "SEW_TC" .. t.color .. "Button", "left") end
+                if t.name ~= "" then API.windows.SetText(WIN, "SEW_NameInput", t.name) end
+                if t.color >= 0 and t.color < 20 then API.windows.ClickChild(WIN, "SEW_TC" .. t.color .. "Button", "left") end
                 for i = 1, 5 do setLine(i, t.lines[i] or "") end
                 say("Pasted: Accept to keep it.")
               end
             else
-              if anyLine and name == "" then eq.SetWindowText(WIN, "SEW_NameInput", "Lua") end
+              if anyLine and name == "" then API.windows.SetText(WIN, "SEW_NameInput", "Lua") end
               if CH.text(WIN, "SEW_NameInput") ~= "" and (dirty or name == "") then
-                eq.ClickChild(WIN, "SEW_Accept_Button", "left")
+                API.windows.ClickChild(WIN, "SEW_Accept_Button", "left")
               end
-              eq.ShowWindow(WIN, false)
-              eq.OpenLuaSocialEditor(social)
+              API.windows.Show(WIN, false)
+              API.luasocials.OpenEditor(social)
             end
           end, "sewmore")
       end
       ui.SameLine(0, bgap)
-      local running = social ~= nil and eq.CurrentSocial() == social
+      local running = social ~= nil and API.socials.Current() == social
       if T.button("##sewtest", running and "Stop" or "Test", bw, bh, { sub = running and "It is running" or
             "Saves, then presses it", align = 0, disabled = not (running or (ready and anyLine)) }, pad) then
         if running then
-          eq.StopSocial()
+          API.socials.Stop()
         elseif ready and anyLine then
           save()
-          eq.PressSocial(social)
+          API.socials.Press(social)
           say(dirty and "Saved and pressed." or "Pressed.")
         end
       end
@@ -221,11 +222,11 @@ ui.window("Edit Social", function()
       if T.button("##sewbar", "Hot bar", bw, bh, { sub = "Pick a slot", align = 0, disabled = not ready }, pad)
           and ready then
         save()
-        AS.start(name, function() return eq.SocialToCursor(social) == true end, "Edit Social")
+        AS.start(name, function() return API.socials.ToCursor(social) == true end, "Edit Social")
       end
       ui.SameLine(0, bgap)
       CH.button(WIN, "SEW_Accept_Button", "Accept", bw, bh, { primary = true, keep = true })
     end
   end
-  if CH.back(st, W.finish()) then eq.ShowWindow(WIN, false) end
+  if CH.back(st, W.finish()) then API.windows.Show(WIN, false) end
 end)

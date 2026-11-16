@@ -3,7 +3,35 @@
 #include <cmath>
 #include <limits>
 
+#include "game/server_ext.h"
+#include "net/game_connection.h"
+
 namespace hailstone::app {
+
+std::function<bool()> find_walk_eligibility(std::function<const net::GameConnection*()> current,
+                                          const net::GameConnection& connection, std::uint32_t spawn) {
+    const auto found = connection.world().spawns.find(spawn);
+    if (found == connection.world().spawns.end() || !found->second.is_npc || found->second.is_corpse)
+        return [] { return false; };
+    const auto incarnation = found->second.incarnation;
+    const auto* player = connection.world().player();
+    if (!player) return [] { return false; };
+    const auto player_incarnation = player->incarnation;
+    const auto context = connection.interaction_context();
+    const auto policy = connection.server_ext().map_policy(connection).revision;
+    const auto* expected = &connection;
+    return [current = std::move(current), expected, spawn, incarnation, player_incarnation, context, policy] {
+        if (!current || current() != expected || expected->state() != net::ConnectionState::InZone ||
+            expected->interaction_context() != context || expected->server_ext().map_policy(*expected).revision != policy ||
+            !expected->npc_find_allowed(spawn) || current() != expected ||
+            expected->interaction_context() != context || expected->server_ext().map_policy(*expected).revision != policy)
+            return false;
+        const auto* owner = expected->world().player();
+        if (!owner || owner->incarnation != player_incarnation) return false;
+        const auto actor = expected->world().spawns.find(spawn);
+        return actor != expected->world().spawns.end() && actor->second.incarnation == incarnation;
+    };
+}
 
 namespace {
 
@@ -19,7 +47,22 @@ glm::vec3 nearest_on(const glm::vec3& a, const glm::vec3& b, const glm::vec3& p,
 
 } // namespace
 
-void GuidePath::start(std::uint32_t spawn, std::string name) {
+std::optional<glm::vec3> guide_spawn_position(const net::GameConnection& connection, std::uint32_t spawn) {
+    const auto& spawns = connection.world().spawns;
+    auto target = spawns.find(spawn);
+    if (target == spawns.end() || target->second.is_corpse) return std::nullopt;
+    const auto incarnation = target->second.incarnation;
+    if (target->second.is_npc) {
+        if (!connection.npc_find_allowed(spawn)) return std::nullopt;
+    } else if (!connection.server_ext().map_visible(connection, target->second, 1)) return std::nullopt;
+    target = spawns.find(spawn);
+    if (target == spawns.end() || target->second.incarnation != incarnation) return std::nullopt;
+    return target->second.display_valid ? target->second.display_position : target->second.position;
+}
+
+void GuidePath::start(std::uint32_t spawn, std::string name, std::function<bool()> eligible) {
+    ++revision_;
+    eligible_ = std::move(eligible);
     spawn_ = spawn;
     name_ = std::move(name);
     line_.clear();
@@ -28,7 +71,15 @@ void GuidePath::start(std::uint32_t spawn, std::string name) {
     next_plan_ = 0.0;
 }
 
+bool GuidePath::eligible() const {
+    const auto check = eligible_; // the callback may replace/retire this guide
+    try { return !check || check(); }
+    catch (...) { return false; }
+}
+
 void GuidePath::stop() {
+    ++revision_;
+    eligible_ = {};
     spawn_ = 0;
     name_.clear();
     line_.clear();

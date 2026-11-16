@@ -1,7 +1,8 @@
--- Skills (gamepad pack): stands in for SkillsWindow. The stock list (eq.ListRow: name, rank, value / cap in the
+-- Skills (gamepad pack): stands in for SkillsWindow. The stock list (hs.ListRow: name, rank, value / cap in the
 -- stock colours: red under the trained value, green over it, yellow over the cap), then the languages. A uses a skill
 -- the player can activate (the skills the Actions window's buttons take, with their reuse time left), as its hot
 -- button does; X puts the skill on a hot button or cross hotbar slot (the stock Make Hotkey button's hotbutton).
+local API = hs.UI
 local W = dofile("lib/window.lua")
 local T = W.T -- the window module's theme: the scale W.begin computed this frame
 local pad = W.pad
@@ -15,8 +16,8 @@ ui.window("Skills", function()
   if not W.shown(SW) then return end
   -- the skills that can be used, by name (the list's first column)
   local usable = {}
-  for _, s in ipairs(eq.UsableSkills()) do usable[s.name] = s end
-  local rows = eq.ListInfo(SW, "SkillList") or 0
+  for _, s in ipairs(API.abilities.UsableSkills()) do usable[s.name] = s end
+  local rows = API.windows.ListInfo(SW, "SkillList") or 0
   if W.begin("Skills", { w = 1100, h = 900, title = "Skills", subtitle = rows .. " skills and languages",
         hints = { { "a", "Use" }, { "x", "Assign to slot" }, { "b", "Close" } } }) then
     local settled = AS.settled("Skills")
@@ -33,7 +34,7 @@ ui.window("Skills", function()
     local rowH = 54
     local visible = math.max(1, math.floor((y1 - top + T.px(10)) / T.px(rowH + 10)))
     W.list("skills", list, rows, visible, rowH, x1 - x0, function(i, rx0, ry0, rx1, ry1, focused)
-      local texts, r, g, b = eq.ListRow(SW, "SkillList", i - 1)
+      local texts, r, g, b = API.windows.ListRow(SW, "SkillList", i - 1)
       if not texts then return end
       local name = texts[1] or ""
       local u = usable[name]
@@ -52,15 +53,15 @@ ui.window("Skills", function()
       if focused then
         if W.pressed("x") then
           local row = i
-          AS.start(name, function() return eq.PickUp(SW, "SkillList", row) end, "Skills")
+          AS.start(name, function() return API.cursor.PickUp(SW, "SkillList", row) end, "Skills")
         end
       end
     end, function(i)
       if not settled then return end
-      local texts = eq.ListRow(SW, "SkillList", i - 1)
-      eq.ListClick(SW, "SkillList", i - 1, "left")
-      if texts and usable[texts[1] or ""] then eq.PressButtonFrom(SW, "SkillList", i) end
+      local texts = API.windows.ListRow(SW, "SkillList", i - 1)
+      API.windows.ListClick(SW, "SkillList", i - 1, "left")
+      if texts and usable[texts[1] or ""] then API.cursor.PressButtonFrom(SW, "SkillList", i) end
     end)
   end
-  if W.finish() then eq.ShowWindow(SW, false) end
+  if W.finish() then API.windows.Show(SW, false) end
 end)

@@ -775,7 +775,7 @@ The catalog, funding and state feeds are read as the original's `CUnSerializeBuf
 
 Opcodes the original sends that this client does not (their meaning is unknown or belongs to the publisher's services): 0x2a44, 0x3e15, 0x14c3, 0x6c8b, 0x7679, 0x54e6. Opcodes it accepts that this client ignores: 0x1eba (a funding preview's debug line), 0x3036, and the eight the original also ignores (0x1b5d, 0x1f6e, 0x20d9, 0x3042, 0x4ffc, 0x6e2a, 0x740d, 0x7aa9).
 
-### Personal tribute (`net/tribute_packets.h`, `GameConnection` in `net/game_connection_tribute.cpp`, windows in `app/lua_eq_progress.cpp`)
+### Personal tribute (`net/tribute_packets.h`, `GameConnection` in `net/game_connection_tribute.cpp`, windows in `app/lua_ui_progress.cpp`)
 
 From EQEmu (zone/tribute.cpp and the RoF2 translator). Not tried live.
 
@@ -829,7 +829,7 @@ zone connection orders that open after any earlier donation answer); a local tim
 transaction. The existing decoder fuzz tests and mock tests cover malformed replies, overlap, duplicates, the
 greyed button, making change and reset. No server changes are needed.
 
-### Mercenaries (`game/mercenary.{h,cpp}`, `GameConnection` in `net/game_connection_merc.cpp`, windows in `app/lua_eq_merc.cpp`)
+### Mercenaries (`game/mercenary.{h,cpp}`, `GameConnection` in `net/game_connection_merc.cpp`, windows in `app/lua_ui_merc.cpp`)
 
 The handlers and senders are checked against 25 recorded vector files (`tests/merc_vectors_test.cpp`, 0 mismatches). EQEmu's `patch_RoF2.conf` names only fourteen of the opcodes, the first thirteen and the switch 0x1b37 (in `net/opcodes_rof2.inc`); the others have no EQEmu name and are constants in `game/mercenary.h` (`kOpMerc*`). The test server has `Mercs:AllowMercs` false and no class-71 NPC, so none of the server's answers were seen live; on zone-in the client sends 0x31e4 and 0x4820 {8} (unanswered).
 

@@ -4,6 +4,7 @@
 -- description, Opt In / Out, Activate). The numbers are the game's labels (EQTypes 116..119, 121..123), the lists,
 -- descriptions and buttons the original's children, so turning tribute on or off is the game's. The trophy pages
 -- are left out (the client does not build them). The page shown is kept here: the original's tab box has none.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -13,11 +14,11 @@ local WINDOW = "TributeBenefitWnd"
 
 local testTabDone = false
 
-local function label(t) return eq.Label(t) or "" end
+local function label(t) return API.character.Label(t) or "" end
 
 -- the chosen benefits as a list and the selected one's description under it, then the buttons
 local function benefits(list, desc, s, btnH, buttons, emptyText, emptyHint)
-  local rows = eq.ListInfo(WINDOW, list) or 0
+  local rows = API.windows.ListInfo(WINDOW, list) or 0
   K.Heading("Benefits", rows == 1 and "1 chosen" or (rows .. " chosen"))
   local descH = 90 * s
   if rows == 0 then
@@ -99,6 +100,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Tribute Benefits", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Tribute", WINDOW_OPTS, drawWindow)
 end)

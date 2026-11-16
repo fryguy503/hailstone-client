@@ -1,7 +1,7 @@
 #pragma once
 
 // The gamepad's mode, settings and bindings (docs/gamepad.md), shared by the client (app/client_app_gamepad.cpp,
-// which plays them) and the eq.gamepad table of the Lua UI (app/lua_eq_gamepad.cpp, which shows and edits them).
+// which plays them) and the hs.gamepad table of the Lua UI (app/lua_ui_gamepad.cpp, which shows and edits them).
 // A client extension: RoF2 has no gamepad support.
 
 #include <cstdint>
@@ -56,21 +56,21 @@ public:
 
     game::GamepadBindings& bindings() { return bindings_; }
     const game::GamepadBindings& bindings() const { return bindings_; }
-    // eq.gamepad.binding: the input's own action text, the default for a plain input, "" for a chord without one
+    // hs.gamepad.binding: the input's own action text, the default for a plain input, "" for a chord without one
     // (its cross hotbar slot or the plain button's action applies); nullopt for text that is no input.
     std::optional<std::string> binding_text(std::string_view input) const;
     // An empty action puts the default back; false for an unknown input or action.
     bool set_binding_text(std::string_view input, std::string_view action);
     bool set_cross_slot(int set, int slot, int bar, int button);
 
-    // eq.gamepad.request_focus: menu mode, with ImGui's focus on that window (the client hands the requests to
+    // hs.gamepad.request_focus: menu mode, with ImGui's focus on that window (the client hands the requests to
     // ui::ImGuiLayer::request_window_focus at the next frame, in order, so the last one has the focus and the ones
     // before it are the pad windows under it: two windows appearing in one frame, a Tip over the merchant, both
     // count, and the one below gets the pad back when the top one closes).
     void request_focus(std::string window);
     std::vector<std::string> take_focus_requests();
 
-    // eq.gamepad.takes_b: a UI window closes itself on B this frame (game mode), so B does nothing else (the
+    // hs.gamepad.takes_b: a UI window closes itself on B this frame (game mode), so B does nothing else (the
     // original's Escape: the top window closes, the target stays).
     void window_takes_b() { window_takes_b_ = true; }
     bool take_window_takes_b() { return std::exchange(window_takes_b_, false); }

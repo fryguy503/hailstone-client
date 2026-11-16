@@ -2,6 +2,7 @@
 -- then the titles or the suffixes the server offers (tabs) with a search, Change and Clear, and the game's "tell me
 -- about new titles" box. The rows are the original's lists (Title_AvailableTitles / Title_AvailableSuffixes): a click
 -- picks in the game's list, a double click also changes to it; the buttons are its own.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -37,7 +38,7 @@ local function drawWindow(x, y, w, h, s)
   -- titles or suffixes
   if ui.BeginTabBar("##titletabs") then
     for i, k in ipairs(KINDS) do
-      local rows = eq.ListInfo(WINDOW, k.list) or 0
+      local rows = API.windows.ListInfo(WINDOW, k.list) or 0
       if ui.BeginTabItem(string.format("%s (%d)##%d", k.label, rows, i)) then kind = i; ui.EndTabItem() end
     end
     ui.EndTabBar()
@@ -54,7 +55,7 @@ local function drawWindow(x, y, w, h, s)
     empty = needle ~= "" and ("No " .. k.noun .. " matches") or ("No " .. k.label:lower() .. " to choose from"),
     emptySub = needle == "" and ("The server has given you no " .. k.label:lower() .. " yet") or nil,
     doubleClick = function()
-      if W.State(WINDOW, k.change) then eq.ClickChild(WINDOW, k.change, "left") end
+      if W.State(WINDOW, k.change) then API.windows.ClickChild(WINDOW, k.change, "left") end
     end,
   })
   ui.SetCursorScreenPos(x, y + h - foot + 6 * s)
@@ -66,6 +67,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Titles", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Titles", WINDOW_OPTS, drawWindow)
 end)

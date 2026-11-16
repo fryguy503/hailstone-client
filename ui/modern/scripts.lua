@@ -1,8 +1,9 @@
 -- Lua Scripts: Hailstone's own window (ScriptsWnd; docs/plugins.md "The Scripts window"), the EQ menu's Lua Scripts
--- row. The MacroQuest Lua scripts found in the script folders (eq.Scripts), each with its state and Run / Stop and
+-- row. The MacroQuest Lua scripts found in the script folders (hs.Scripts), each with its state and Run / Stop and
 -- Pause / Resume, as /lua run, /lua stop and /lua pause do; Autorun puts it on this character's list, started at
 -- each login once the server's rules allow it (and kept running across zones, as every script is). A script the
 -- rules do not allow is greyed with the reason; the server's own scripts under its hailstone.cfg cannot be stopped.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color
@@ -40,7 +41,7 @@ local WINDOW_OPTS = {
   resizable = { 380, 260 },
 }
 local function drawWindow(x, y, w, h, s)
-  local list, info = eq.Scripts(not wasShown) -- the folders read again when the window opens
+  local list, info = API.scripts.List(not wasShown) -- the folders read again when the window opens
   wasShown = true
 
   ui.SetNextItemWidth(160 * s)
@@ -50,7 +51,7 @@ local function drawWindow(x, y, w, h, s)
   args = ui.InputTextWithHint("##args", "Arguments for Run", args, 256)
   if ui.IsItemHovered() then ui.SetTooltip("Run passes these to the script, as /lua run <name> <arguments>") end
   ui.SameLine()
-  if ui.SmallButton("Rescan") then list, info = eq.Scripts(true) end
+  if ui.SmallButton("Rescan") then list, info = API.scripts.List(true) end
 
   local _, lh = ui.CalcTextSize("Ag")
   local footer = 2 * lh + 10 * s
@@ -84,7 +85,7 @@ local function drawWindow(x, y, w, h, s)
         ui.TableNextColumn()
         ui.BeginDisabled(not info.autorun)
         local on, changed = ui.Checkbox("##autorun", r.autorun)
-        if changed then eq.SetScriptAutorun(r.name, on) end
+        if changed then API.scripts.SetAutorun(r.name, on) end
         ui.EndDisabled()
         if ui.IsItemHovered(ui.HoveredFlags.AllowWhenDisabled) then
           ui.SetTooltip(info.autorun and "Start it each time this character logs in" or "No character yet")
@@ -93,13 +94,13 @@ local function drawWindow(x, y, w, h, s)
         local live = r.status == "running" or r.status == "paused"
         if live then
           ui.BeginDisabled(r.kept)
-          if ui.SmallButton("Stop") then eq.ScriptStop(r.name) end
+          if ui.SmallButton("Stop") then API.scripts.Stop(r.name) end
           ui.SameLine()
-          if ui.SmallButton(r.status == "paused" and "Resume" or "Pause") then eq.ScriptPause(r.name) end
+          if ui.SmallButton(r.status == "paused" and "Resume" or "Pause") then API.scripts.Pause(r.name) end
           ui.EndDisabled()
         else
           ui.BeginDisabled(not r.allowed or not r.found)
-          if ui.SmallButton("Run") then eq.ScriptRun(r.name, args) end
+          if ui.SmallButton("Run") then API.scripts.Run(r.name, args) end
           ui.EndDisabled()
         end
         ui.PopID()
@@ -119,7 +120,7 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Lua Scripts", function()
-  if not eq.InGame() then
+  if not API.session.InGame() then
     wasShown = false
     return
   end

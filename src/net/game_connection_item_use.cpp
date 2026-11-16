@@ -10,11 +10,13 @@
 #include <cstdlib>
 #include <ctime>
 #include <format>
+#include <glm/geometric.hpp>
 
 #include "core/log.h"
 #include "core/wrap_math.h"
 #include "game/augments.h"
 #include "game/item_preview.h"
+#include "game/merchant.h"
 #include "game/mechanics/character.h"
 #include "game/server_ext.h"
 #include "game/slash_commands.h"
@@ -55,6 +57,25 @@ bool GameConnection::bard_cast_bard(const game::SpellData& spell, std::uint8_t c
 }
 
 GameConnection::SlotRightClick GameConnection::right_click_item(const ItemSlot& slot, KeyFlags keys) {
+    // A server may supply an optional direct-sale protocol. Validate the actual
+    // carried click before exposing a context; the extension owns no inventory state.
+    if (!keys.alt && !keys.ctrl && !keys.shift && state_ == ConnectionState::InZone && !zone_change_pending_ &&
+        !pstatus_.dead && !interface_locked() && merchant_ && merchant_->open && !merchant_->trader &&
+        !merchant_->pending && !quantity_ && slot.type == kInvPossessions && slot.slot >= 0 &&
+        slot.slot <= kSlotGeneral10 && slot.aug < 0 && slot.sub >= -1) {
+        const auto* me = world_.player();
+        const auto vendor = world_.spawns.find(merchant_->npc_id);
+        const auto* item = inventory_.at(slot);
+        const auto* parent = slot.sub >= 0 ? inventory_.at(slot.parent()) : nullptr;
+        const bool carried = slot.sub == -1 || (slot.slot >= kSlotGeneral1 && parent && parent->is_bag() &&
+            static_cast<std::uint32_t>(slot.sub) < parent->bag_slots);
+        if (me && vendor != world_.spawns.end() && item && !item->is_bag() && item->id && carried &&
+            glm::distance(me->position, vendor->second.position) < 20.0f) {
+            const auto quantity = item->stackable() ? item->stack_count : 1u;
+            if (quantity && server_ext().merchant_right_click(*this, merchant_->npc_id, slot, item->id, quantity))
+                return SlotRightClick::None;
+        }
+    }
     // The server's client may take the click first (NMS: the scroll and tome scribe path).
     if (server_ext().item_right_click(*this, slot)) return SlotRightClick::None;
     return right_click_item_original(slot, keys);

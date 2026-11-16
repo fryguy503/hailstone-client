@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <format>
+#include <limits>
 
 #include "core/log.h"
 #include "game/coords.h"
@@ -125,6 +126,8 @@ bool GameConnection::other_deity_team(const game::Spawn& s) const {
 
 void GameConnection::reset_social_for_zone() {
     social_.follow_id = 0;
+    enhanced_follow_.reset();
+    if (follow_generation_ != std::numeric_limits<std::uint64_t>::max()) ++follow_generation_;
     raid_.inviter.clear();
 }
 
@@ -929,6 +932,17 @@ void GameConnection::assist_command(const std::string& args) {
 
 void GameConnection::follow_command() {
     // Cmd_follow @0x4f5ef0.
+    const auto generation = follow_generation_;
+    const auto state = state_;
+    const auto owner = world_.player() ? world_.player()->incarnation : 0;
+    const auto selected = world_.target_id;
+    const auto profile = server_ext().follow_profile(*this);
+    if (follow_generation_ != generation || state_ != state || world_.target_id != selected ||
+        (world_.player() ? world_.player()->incarnation : 0) != owner) return;
+    if (profile && game::valid_follow_profile(*profile)) {
+        manual_follow("toggle");
+        return;
+    }
     auto it = world_.spawns.find(world_.target_id);
     // The target must be a player of our group (13225).
     if (it == world_.spawns.end() || it->second.is_npc || it->second.is_corpse ||
@@ -940,12 +954,98 @@ void GameConnection::follow_command() {
     system(13231);
     system(13232);
     social_.follow_id = it->first;
+    enhanced_follow_.reset();
+}
+
+bool GameConnection::manual_follow(std::string_view action) {
+    if (action == "stop" || (action == "toggle" && social_.follow_id)) {
+        stop_follow(true);
+        return true;
+    }
+    if (action != "start" && action != "toggle") return false;
+    if (action == "start" && social_.follow_id) return true;
+    if (state_ != ConnectionState::InZone || zone_change_pending_ || pstatus_.dead ||
+        interface_locked() || eye_id() || pstatus_.stand_state != kStandStanding ||
+        follow_generation_ == std::numeric_limits<std::uint64_t>::max()) return false;
+    const auto* player = world_.player();
+    auto target = world_.spawns.find(world_.target_id);
+    if (!player || !player->incarnation || target == world_.spawns.end() ||
+        !target->second.incarnation || target->first == player->id || target->second.is_npc ||
+        target->second.is_corpse || target->second.stand_state == game::kFollowDeadAnimation) return false;
+    const game::FollowIdentity identity{player->id, target->first, player->incarnation, target->second.incarnation};
+    const auto generation = follow_generation_;
+    auto profile = server_ext().follow_profile(*this);
+    // A hook can retire this session, actor or another manual follow synchronously.
+    player = world_.player();
+    target = world_.spawns.find(identity.target);
+    if (generation != follow_generation_ || state_ != ConnectionState::InZone || zone_change_pending_ ||
+        !player || target == world_.spawns.end() ||
+        !identity.matches(player->id, player->incarnation, target->first, target->second.incarnation) ||
+        world_.target_id != identity.target || pstatus_.dead || interface_locked() || eye_id() ||
+        !profile || !game::valid_follow_profile(*profile)) return false;
+    if (!(profile->flags & game::FollowAllowUngrouped) && !group_.has_member(base_name(target->second.name))) return false;
+    const auto& t = target->second;
+    const float distance = std::hypot(player->position.x - t.position.x, player->position.y - t.position.y);
+    if (!std::isfinite(distance) || distance > profile->start_range) return false;
+    social_.follow_id = identity.target;
+    enhanced_follow_ = identity;
+    ++follow_generation_;
+    const std::string name = game::display_name(t.name);
+    system(13230, {name});
+    return true;
+}
+
+std::optional<game::FollowProfile> GameConnection::active_follow_profile() {
+    if (!enhanced_follow_) return std::nullopt;
+    const auto identity = *enhanced_follow_;
+    const auto generation = follow_generation_;
+    auto valid = [&] {
+        const auto* player = world_.player();
+        auto target = world_.spawns.find(identity.target);
+        return state_ == ConnectionState::InZone && !zone_change_pending_ && !pstatus_.dead &&
+               !eye_id() && social_.follow_id == identity.target && player && target != world_.spawns.end() &&
+               !target->second.is_corpse && target->second.stand_state != game::kFollowDeadAnimation &&
+               identity.matches(player->id, player->incarnation, target->first, target->second.incarnation);
+    };
+    if (!valid()) { stop_follow(false); return std::nullopt; }
+    auto profile = server_ext().follow_profile(*this);
+    if (generation != follow_generation_) return std::nullopt;
+    if (!valid() || !profile || !game::valid_follow_profile(*profile)) {
+        stop_follow(false);
+        return std::nullopt;
+    }
+    return profile;
+}
+
+bool GameConnection::enhanced_follow_current() const {
+    if (!enhanced_follow_ || state_ != ConnectionState::InZone || zone_change_pending_ || pstatus_.dead || eye_id()) return false;
+    const auto* player = world_.player();
+    const auto target = world_.spawns.find(enhanced_follow_->target);
+    return player && social_.follow_id == enhanced_follow_->target && target != world_.spawns.end() &&
+           !target->second.is_corpse && target->second.stand_state != game::kFollowDeadAnimation &&
+           enhanced_follow_->matches(player->id, player->incarnation, target->first, target->second.incarnation);
+}
+
+bool GameConnection::instant_mount_acceleration() const {
+    if (state_ != ConnectionState::InZone || zone_change_pending_ || !world_.player() || !mount_id()) return false;
+    const auto owner = world_.player()->incarnation;
+    const auto mount = mount_id();
+    const auto found = world_.spawns.find(mount);
+    if (!owner || found == world_.spawns.end() || !found->second.incarnation) return false;
+    const auto mount_incarnation = found->second.incarnation;
+    auto profile = server_ext().mount_profile(*this);
+    const auto current = world_.spawns.find(mount);
+    return state_ == ConnectionState::InZone && !zone_change_pending_ && world_.player() &&
+           world_.player()->incarnation == owner && mount_id() == mount && current != world_.spawns.end() &&
+           current->second.incarnation == mount_incarnation && profile && profile->instant_acceleration;
 }
 
 void GameConnection::stop_follow(bool announce) {
     std::uint32_t id = social_.follow_id;
     if (!id) return;
     social_.follow_id = 0;
+    enhanced_follow_.reset();
+    if (follow_generation_ != std::numeric_limits<std::uint64_t>::max()) ++follow_generation_;
     auto it = world_.spawns.find(id);
     if (announce && it != world_.spawns.end()) system(12694, {game::display_name(it->second.name)}); // You are no longer auto-following %1.
 }

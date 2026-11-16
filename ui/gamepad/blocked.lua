@@ -2,6 +2,7 @@
 -- BlockedPetBuffWnd (on your pet), drawn alike. A field for a spell's name or id (the window's edit box, typed on
 -- the on-screen keyboard) with Add (the game enables it once the field names a spell), then the blocked spells,
 -- icon and name: A on one unblocks it, as the stock slot's right click does.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -26,7 +27,7 @@ local function blocked(cfg) -- { window, title, slot (prefix), add, edit, who }
     local list = {}
     for i = 0, SLOTS - 1 do
       local id = cfg.slot .. i
-      local name = eq.ChildTooltip(cfg.window, id) or ""
+      local name = API.windows.ChildTooltip(cfg.window, id) or ""
       if name ~= "" then list[#list + 1] = { id = id, name = name } end
     end
     if W.begin(cfg.title, { w = 1200, h = 900, title = cfg.title,
@@ -56,16 +57,16 @@ local function blocked(cfg) -- { window, title, slot (prefix), add, edit, who }
           W.list(cfg.window, listState, #list, visible, rowH, cw, function(i, rx0, ry0, rx1, ry1)
             local b = list[i]
             local s = ry1 - ry0 - T.px(12)
-            local tex, u0, v0, u1, v1 = eq.ChildArt(cfg.window, b.id, "decal")
+            local tex, u0, v0, u1, v1 = API.windows.ChildArt(cfg.window, b.id, "decal")
             if type(tex) == "userdata" then T.icon(tex, u0, v0, u1, v1, rx0 + T.px(10), ry0 + T.px(6), rx0 + T.px(10) + s, ry0 + T.px(6) + s) end
             T.font(22)
             T.textIn(rx0 + s + T.px(26), ry0, rx1 - T.px(14), ry1, T.fit(b.name, rx1 - rx0 - s - T.px(40)), C.text, 0)
             T.unfont()
-          end, function(i) eq.ClickChild(cfg.window, list[i].id, "right") end)
+          end, function(i) API.windows.ClickChild(cfg.window, list[i].id, "right") end)
         end
       end
     end
-    if CH.back(st, W.finish()) then eq.ShowWindow(cfg.window, false) end
+    if CH.back(st, W.finish()) then API.windows.Show(cfg.window, false) end
   end)
 end
 

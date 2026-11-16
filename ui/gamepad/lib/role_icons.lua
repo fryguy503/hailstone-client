@@ -1,4 +1,5 @@
 -- Small, original line icons for server-confirmed group roles. Kept the same in both UI packs.
+local API = hs.UI
 local R = {}
 R.Labels = { [0] = "", "Main Tank", "Main Assist", "Main Tank / Main Assist", "Puller",
   "Main Tank / Puller", "Main Assist / Puller", "Main Tank / Main Assist / Puller" }
@@ -6,9 +7,9 @@ local NAMES = { "Main Tank", "Main Assist", "Puller" }
 
 function R.Mask(window, suffix)
   suffix = suffix or ""
-  return (eq.ChildShown(window, "GroupRoleTank" .. suffix) == true and 1 or 0)
-    | (eq.ChildShown(window, "GroupRoleAssist" .. suffix) == true and 2 or 0)
-    | (eq.ChildShown(window, "GroupRolePuller" .. suffix) == true and 4 or 0)
+  return (API.windows.ChildShown(window, "GroupRoleTank" .. suffix) == true and 1 or 0)
+    | (API.windows.ChildShown(window, "GroupRoleAssist" .. suffix) == true and 2 or 0)
+    | (API.windows.ChildShown(window, "GroupRolePuller" .. suffix) == true and 4 or 0)
 end
 
 function R.Width(mask, size, gap)

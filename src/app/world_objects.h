@@ -95,6 +95,12 @@ public:
     // where they swung to); the same queries as game::CollisionMesh.
     bool line_of_sight(const glm::vec3& a, const glm::vec3& b) const;
     std::optional<float> floor_below(const glm::vec3& p, float step_up) const;
+    // Drawn doors and placed scenery, including passable parts, at their current transform. Never dropped items,
+    // placement ghosts, missiles or creature actors. This does not affect movement collision.
+    std::optional<float> visual_surface_below(const glm::vec3& p) const;
+    std::uint32_t visual_generation() const { return visual_generation_; }
+    bool visual_surfaces(const glm::vec2& low,const glm::vec2& high,
+                         const std::function<bool(const game::CollisionTriangle&)>& visit,std::uint32_t& work) const;
     // Counts the updates that changed what floor_below finds: a solid door or placed object came, went, got its model
     // or moved. Spawns measured against the floor (game::WorldState::reground) are measured again when it changes.
     std::uint32_t floor_generation() const { return floor_generation_; }
@@ -213,6 +219,7 @@ private:
     std::string ghost_tag_;
     std::uint32_t update_serial_ = 0; // update()'s count, for Placed::seen
     std::uint32_t floor_generation_ = 0;
+    std::uint32_t visual_generation_ = 0;
     bool floor_changed_ = false; // within update(): floor_generation_ moves at its end
     const Model* placed_model(const std::string& tag);
     std::vector<render::ObjectRenderer::Instance> instances_;

@@ -1,7 +1,7 @@
 -- The pieces the modern pre-game screens share (login.lua, serverselect.lua, charselect.lua): a borderless card
 -- window in this UI's style over the client's backdrop picture, placed by the script (centred, or beside another
 -- card), and the status line, buttons, pills and confirmations drawn inside it. The screens are the client's own
--- (app/lua_eq_pregame.cpp: eq.LoginScreen and the rest), not the original's, so nothing here follows eqmain.dll's
+-- (app/lua_ui_pregame.cpp: hs.LoginScreen and the rest), not the original's, so nothing here follows eqmain.dll's
 -- pages. Sizes are design pixels times s, the UI scale.
 --
 --   local P = dofile("lib/pregame.lua")

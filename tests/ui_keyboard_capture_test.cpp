@@ -3,11 +3,16 @@
 #include <doctest/doctest.h>
 
 #include <functional>
+#include <algorithm>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 
 #include "ui/imgui_layer.h"
+#include "app/actions_ui.h"
+#include "core/config.h"
+#include "platform/window.h"
+#include "scratch_dir.h"
 
 using namespace hailstone;
 
@@ -171,4 +176,96 @@ TEST_CASE("UI keys: Tab with nothing typed in stays the game's; in an edit box i
     tap_tab();
     CHECK_FALSE(ui.edit_active);
     CHECK(second_active);
+}
+
+TEST_CASE("UI visibility key: F10 remains available during keyboard capture without starting game actions") {
+    test::ScratchDir dir("ui_visibility_key");
+    Config config;
+    app::ActionsUi actions(config, dir.path() / "hailstone.ini");
+    const int toggle = static_cast<int>(game::KeyCommand::FULLSCREEN);
+    REQUIRE(actions.keymap().binding(toggle, 0) == game::KeyCombo{0x44});
+    CHECK_FALSE(actions.keymap().binding(toggle, 1).bound());
+    CHECK(game::command_label_eqstr(toggle) == 3153u); // Toggle UI Display
+    CHECK(game::command_category(toggle) == 0x40u); // Options > Keys > Windows
+    CHECK(std::find(game::listed_commands().begin(), game::listed_commands().end(), toggle) != game::listed_commands().end());
+    platform::InputState input;
+    input.key_events = {{0x11, true, false}}; // held W before an edit box takes the keyboard
+    const auto movement = actions.process_keys(input, true);
+    REQUIRE(std::any_of(movement.begin(), movement.end(), [](const auto& event) {
+        return event.command == static_cast<int>(game::KeyCommand::FORWARD) && event.down;
+    }));
+    input.key_events = {{0x44, true, false}, {0x44, true, true}, {0x10, true, false}}; // F10, repeat, Q
+    auto events = actions.process_keys(input, false);
+    CHECK(std::count_if(events.begin(), events.end(), [&](const auto& event) { return event.command == toggle && event.down; }) == 1);
+    CHECK(std::none_of(events.begin(), events.end(), [&](const auto& event) { return event.down && event.command != toggle; }));
+    CHECK(std::any_of(events.begin(), events.end(), [](const auto& event) {
+        return event.command == static_cast<int>(game::KeyCommand::FORWARD) && !event.down;
+    }));
+    CHECK_FALSE(actions.keymap().held(game::KeyCommand::FORWARD));
+    input.key_events = {{0x44, true, true}, {0x44, false, false}};
+    CHECK(actions.process_keys(input, false).empty()); // neither holding nor releasing toggles again
+    input.key_events = {{0x44, true, false}};
+    events = actions.process_keys(input, true);
+    REQUIRE(events.size() == 1);
+    CHECK(events.front().command == toggle); CHECK(events.front().down);
+    input.key_events = {{0x44, false, false}};
+    events = actions.process_keys(input, true);
+    REQUIRE(events.size() == 1);
+    CHECK(events.front().command == toggle); CHECK_FALSE(events.front().down);
+    input.key_events = {{0x44, true, false}};
+    events = actions.process_keys(input, true);
+    REQUIRE(events.size() == 1);
+    CHECK(events.front().command == toggle); CHECK(events.front().down); // a second press can restore the UI
+}
+
+TEST_CASE("UI visibility key: Options capture, both remapped banks and reset persist through the real key map") {
+    test::ScratchDir dir("ui_visibility_remap");
+    const auto path = dir.path() / "hailstone.ini";
+    Config config;
+    app::ActionsUi actions(config, path);
+    const int toggle = static_cast<int>(game::KeyCommand::FULLSCREEN);
+    platform::InputState input;
+    // Changing another action to F10 consumes it rather than hiding the key-binding editor.
+    actions.capture_key(static_cast<int>(game::KeyCommand::INVENTORY), 1, true);
+    input.key_events = {{0x44, true, false}};
+    CHECK(actions.process_keys(input, false).empty());
+    CHECK(actions.keymap().binding(static_cast<int>(game::KeyCommand::INVENTORY), 1) == game::KeyCombo{0x44});
+    CHECK(actions.key_capture().first == -1);
+    actions.capture_key(toggle, 0, true);
+    input.key_down[0x1d] = true; input.key_events = {{0x57, true, false}}; // Ctrl+F11
+    CHECK(actions.process_keys(input, false).empty());
+    actions.capture_key(toggle, 1, true);
+    input.key_down[0x1d] = false; input.key_down[0x2a] = true; input.key_events = {{0x58, true, false}}; // Shift+F12
+    CHECK(actions.process_keys(input, false).empty());
+    Config saved;
+    REQUIRE(saved.load(path));
+    CHECK(saved.get_int("KEYMAPPING_FULLSCREEN_1", 0) == 0x20000057);
+    CHECK(saved.get_int("KEYMAPPING_FULLSCREEN_2", 0) == 0x40000058);
+    app::ActionsUi restored(saved, path);
+    input.key_down.fill(false); input.key_events = {{0x44, true, false}};
+    CHECK(restored.process_keys(input, false).empty()); // no hardcoded F10 escape after remapping
+    input.key_down[0x1d] = true; input.key_events = {{0x57, true, false}};
+    auto events = restored.process_keys(input, false);
+    REQUIRE(events.size() == 1);
+    CHECK(events.front().command == toggle); CHECK(events.front().down);
+    input.key_down[0x1d] = false; input.key_events = {{0x57, true, false}};
+    CHECK(restored.process_keys(input, false).empty()); // modifiers remain part of the binding
+    input.key_down[0x2a] = true; input.key_events = {{0x58, true, false}};
+    events = restored.process_keys(input, false);
+    REQUIRE(events.size() == 1);
+    CHECK(events.front().command == toggle); CHECK(events.front().down);
+    restored.capture_key(toggle, 0, true);
+    input.key_down.fill(false); input.key_events = {{0x01, true, false}};
+    CHECK(restored.process_keys(input, false).empty());
+    CHECK_FALSE(restored.keymap().binding(toggle, 0).bound());
+    Config cleared;
+    REQUIRE(cleared.load(path));
+    CHECK(cleared.get_int("KEYMAPPING_FULLSCREEN_1", -1) == 0);
+    restored.reset_keys();
+    CHECK(restored.keymap().binding(toggle, 0) == game::KeyCombo{0x44});
+    CHECK_FALSE(restored.keymap().binding(toggle, 1).bound());
+    Config defaults;
+    REQUIRE(defaults.load(path));
+    CHECK_FALSE(defaults.get("KEYMAPPING_FULLSCREEN_1"));
+    CHECK_FALSE(defaults.get("KEYMAPPING_FULLSCREEN_2"));
 }

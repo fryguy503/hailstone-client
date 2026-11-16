@@ -12,15 +12,20 @@
 
 #include "game/swept_sphere.h"
 
-namespace hailstone::assets { struct Mesh; }
+namespace hailstone::assets { struct Mesh; struct Material; }
 
 namespace hailstone::game {
+
+// The draw class has a depth-writing opaque/masked mesh footprint. Texture alpha is not sampled by CPU queries.
+bool visual_surface_material(const assets::Material& material);
 
 struct ObjectShape {
     std::vector<glm::vec3> tris; // solid triangles, 3 vertices each, model space (sight and floor probes)
     // Every non-passable triangle as a collision record (game/swept_sphere.h),
     // model space, for the movement sweep (CActorData::FindIntersectionSphere).
     std::vector<CollisionTriangle> records;
+    // Drawn opaque/masked triangles, including passable parts, kept separately from movement collision.
+    std::vector<CollisionTriangle> visual;
     glm::vec3 lo{0.0f}, hi{0.0f}; // bounds of the solid triangles
     float radius = 0.0f;          // largest vertex distance from the model origin
 
@@ -51,6 +56,11 @@ bool blocks(const ObjectShape& shape, const glm::mat4& transform, const glm::mat
 // z + step_up, as CollisionMesh::floor_below.
 std::optional<float> floor_under(const ObjectShape& shape, const glm::mat4& inverse, const glm::vec3& at,
                                  float step_up);
+
+// A visual effect's surface: current transformed upward-facing drawn triangles (passable parts included), never
+// invisible collision or an underside. The world-space ceiling selects the layer; actor meshes are not queried.
+std::optional<float> visual_surface_under(const ObjectShape& shape, const glm::mat4& transform,
+                                         const glm::vec3& at);
 
 
 } // namespace hailstone::game

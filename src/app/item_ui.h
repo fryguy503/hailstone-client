@@ -31,7 +31,7 @@ public:
     ui::ItemIconCache* icons() { return icons_.get(); }
     void open_bag(std::int16_t general_slot) { state_.open_bags.insert(general_slot); }
     // The bag keys on the temporary bag windows (CInvSlotMgr_OpenAllBags / CloseAllBags; the Lua windows' are
-    // EqApi::open_all_bags and the rest).
+    // UiApi::open_all_bags and the rest).
     void open_all_bags(const net::GameConnection& conn);
     void close_all_bags() {
         state_.open_bags.clear();
@@ -50,7 +50,7 @@ public:
 private:
     std::unique_ptr<ui::ItemIconCache> icons_;
     ui::ItemWindowsState state_;
-    bool bags_closed_ = true; // CInvSlotMgr +0x2010 (app/lua_eq_items.cpp's Containers::all_closed)
+    bool bags_closed_ = true; // CInvSlotMgr +0x2010 (app/lua_ui_items.cpp's Containers::all_closed)
     CommerceUi commerce_; // merchant, trade and give windows (app/commerce_ui.h)
 };
 

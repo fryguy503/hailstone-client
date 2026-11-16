@@ -2,9 +2,10 @@
 -- numbers beside them (the game's own labels by EQType, in the colours the game gives them), the ten carried slots,
 -- coins, and the game's buttons, with Advanced Inventory (Hailstone: inventorymanager.lua, where the search of
 -- everything you have, Stack / Sort and the item marks are). The Stats page has every number the game gives (each attribute and resist as
--- total, base, heroic and cap; the item bonuses; regeneration and the pools without buffs: eq.CharacterStats), the
+-- total, base, heroic and cap; the item bonuses; regeneration and the pools without buffs: hs.CharacterStats), the
 -- Bandolier page the game's BandolierWnd (Hailstone: the stock inventory has no such page; lib/bandolier.lua, as the
 -- Bandolier window draws it), the Alt. Currency page the alternate currencies. Slots are the game's (lib/items.lua).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local items = dofile("lib/items.lua")
 local tools = dofile("lib/itemtools.lua")
@@ -13,7 +14,7 @@ local T = hud.T
 local C = T.color
 local WINDOW = "InventoryWindow"
 
--- Worn slots (eq.Item numbers), as rows of the grid.
+-- Worn slots (hs.Item numbers), as rows of the grid.
 local WORN = {
   { 1, 2, 3, 4, 5 },        -- ear, head, face, ear, neck
   { 6, 7, 8, 17, 20 },      -- shoulders, arms, back, chest, waist
@@ -21,7 +22,7 @@ local WORN = {
   { 18, 19, 0, 21, 22 },    -- legs, feet, charm, power source, ammo
 }
 local WEAPONS = { 13, 14, 11 } -- primary, secondary, range
-local SHORT = { -- names to show in an empty slot (eq.SlotName's are long)
+local SHORT = { -- names to show in an empty slot (hs.SlotName's are long)
   [0] = "Charm", [1] = "Ear", [2] = "Head", [3] = "Face", [4] = "Ear", [5] = "Neck", [6] = "Shoulder", [7] = "Arms",
   [8] = "Back", [9] = "Wrist", [10] = "Wrist", [11] = "Range", [12] = "Hands", [13] = "Primary", [14] = "Offhand",
   [15] = "Ring", [16] = "Ring", [17] = "Chest", [18] = "Legs", [19] = "Feet", [20] = "Waist", [21] = "Power",
@@ -44,9 +45,9 @@ local page = "character" -- character, stats, bandolier, currency
 local GAME_PAGE = { character = 0, stats = 1, bandolier = 0, currency = 4 }
 local showMissing = false
 
-local function label(t) local text, r, g, b = eq.Label(t) return text or "", r and { r, g, b, 1 } or nil end
+local function label(t) local text, r, g, b = API.character.Label(t) return text or "", r and { r, g, b, 1 } or nil end
 
--- A label type the stock client has none of (eq.Label gives "Unknown\tLabel<n>" for it) is filled in only by a
+-- A label type the stock client has none of (hs.Label gives "Unknown\tLabel<n>" for it) is filled in only by a
 -- server's own client (the NMS plugin's mitigation 6668 and avoidance 6667), so its row is drawn only when that
 -- server's client gives a value; nil otherwise.
 local function serverLabel(t)
@@ -66,7 +67,7 @@ local function statRow(x, y, w, name, t, s, font)
 end
 
 local function pool(x, y, w, s, name, cur, max, color)
-  local c, m = tonumber((eq.Label(cur))) or 0, tonumber((eq.Label(max))) or 0
+  local c, m = tonumber((API.character.Label(cur))) or 0, tonumber((API.character.Label(max))) or 0
   T.Text(x, y, name, C.muted, T.font.small)
   T.Text(x + w, y, T.Thousands(c) .. " / " .. T.Thousands(m), C.text, T.font.small, "right")
   local _, th = T.TextSize("Ag", T.font.small)
@@ -80,10 +81,10 @@ local function characterPage(x, y, s)
   -- on the cursor and dropped between the slots goes to the window (CInventoryWnd::HandleLButtonUp: the item is
   -- equipped or put away, eqstr 5290 when it stays; coin goes back to the purse). The slots, drawn after it, keep
   -- their own drops.
-  if eq.Item(eq.CursorSlot) or eq.CursorCoin() then
+  if API.inventory.Item(API.inventory.CursorSlot) or API.cursor.Coin() then
     local dx1, dy1 = x + LEFT_W * s, y + 4 * (sz + gap) + 10 * s + sz
     if T.Hit("##doll", x - 4 * s, y - 4 * s, dx1 + 4 * s, dy1 + 4 * s) then
-      eq.ClickChild(WINDOW, "IW_CharacterView", "left")
+      API.windows.ClickChild(WINDOW, "IW_CharacterView", "left")
     end
     if ui.IsItemHovered() then
       ui.DrawRect(x - 4 * s, y - 4 * s, dx1 + 4 * s, dy1 + 4 * s, C.accent[1], C.accent[2], C.accent[3], 0.6, 6 * s, 1.5 * s)
@@ -107,7 +108,7 @@ local function characterPage(x, y, s)
   ui.DrawRectFilled(sx - 9 * s, y - 2 * s, sx - 8 * s, y + BODY_H * s - 14 * s, C.ink[1], C.ink[2], C.ink[3], 0.06)
   local yy = y
   yy = yy + pool(sx, yy, sw, s, "Health", 17, 18, C.hp)
-  local _, _, manaRaw = eq.Gauge(2)
+  local _, _, manaRaw = API.character.Gauge(2)
   if manaRaw ~= -1 then yy = yy + pool(sx, yy, sw, s, "Mana", 124, 125, C.mana) end
   yy = yy + pool(sx, yy, sw, s, "Endurance", 126, 127, C.endurance)
   yy = yy + 4 * s
@@ -139,9 +140,9 @@ end
 -- count (both OP_AltCurrencyReclaim).
 local CURRENCY_LIST = "AltCurr_PointList"
 local function currencyPage(x, y, s)
-  local _, gameMissing = eq.ChildState(WINDOW, "AltCurr_DisplayMissingButton")
-  if (gameMissing == true) ~= showMissing then eq.ClickChild(WINDOW, "AltCurr_DisplayMissingButton", "left") end
-  local list = eq.AltCurrencies(showMissing) or {}
+  local _, gameMissing = API.windows.ChildState(WINDOW, "AltCurr_DisplayMissingButton")
+  if (gameMissing == true) ~= showMissing then API.windows.ClickChild(WINDOW, "AltCurr_DisplayMissingButton", "left") end
+  local list = API.character.AltCurrencies(showMissing) or {}
   local _, th = T.TextSize("Ag", T.font.small)
   local held = 0
   for _, c in ipairs(list) do if (c.count or 0) > 0 then held = held + 1 end end
@@ -155,7 +156,7 @@ local function currencyPage(x, y, s)
     T.Text(x, y + 34 * s, "No alternate currencies.", C.faint, T.font.small)
     return
   end
-  local _, _, sel = eq.ListInfo(WINDOW, CURRENCY_LIST)
+  local _, _, sel = API.windows.ListInfo(WINDOW, CURRENCY_LIST)
   local wx, wy = ui.GetWindowPos()
   ui.SetCursorPos(x - wx, y + 30 * s - wy)
   ui.BeginChild("##currencies", W * s, (BODY_H - 30 - 54) * s, false)
@@ -166,7 +167,7 @@ local function currencyPage(x, y, s)
   for i, c in ipairs(list) do
     if (i - 1) % cols ~= 0 then ui.SameLine(0, 8 * s) end
     local cx, cy = ui.GetCursorScreenPos()
-    if ui.InvisibleButton("##cur" .. i, cardW, cardH) then eq.ListClick(WINDOW, CURRENCY_LIST, i - 1, "left") end
+    if ui.InvisibleButton("##cur" .. i, cardW, cardH) then API.windows.ListClick(WINDOW, CURRENCY_LIST, i - 1, "left") end
     local hov = ui.IsItemHovered()
     local picked = sel == i - 1
     local none = (c.count or 0) == 0
@@ -175,7 +176,7 @@ local function currencyPage(x, y, s)
     if picked then
       ui.DrawRect(cx, cy, cx + cardW, cy + cardH, C.accent[1], C.accent[2], C.accent[3], 0.8, 8 * s, 1.5 * s)
     end
-    local tex, u0, v0, u1, v1 = eq.ItemIcon(c.icon or 0)
+    local tex, u0, v0, u1, v1 = API.assets.ItemIcon(c.icon or 0)
     T.Icon(cx + 6 * s, cy + 6 * s, 32 * s, s, tex, u0, v0, u1, v1, nil, { radius = 5, alpha = none and 0.4 or 1 })
     T.Text(cx + 46 * s, cy + 6 * s, T.Fit(c.name or "", cardW - 140 * s, T.font.small), none and C.faint or C.text, T.font.small)
     T.Text(cx + cardW - 10 * s, cy + (cardH - th) / 2, T.Thousands(c.count or 0), none and C.faint or C.gold, T.font.normal, "right")
@@ -193,9 +194,9 @@ local function currencyPage(x, y, s)
   }
   for k, a in ipairs(actions) do
     local bx1 = x + W * s - (#actions - k) * (bw + 6 * s)
-    local enabled = eq.ChildState(WINDOW, a[1])
+    local enabled = API.windows.ChildState(WINDOW, a[1])
     if T.Button("##" .. a[1], bx1 - bw, by, bx1, by + 26 * s, s, a[2], { enabled = enabled == true, tooltip = a[3] }) then
-      eq.ClickChild(WINDOW, a[1], "left")
+      API.windows.ClickChild(WINDOW, a[1], "left")
     end
   end
   if not sel or sel < 0 then T.Text(x, by + 5 * s, "Select a currency", C.faint, T.font.small) end
@@ -291,7 +292,7 @@ local function statsPage(x, y, s)
   local cw = ui.GetContentRegionAvail()
   local colW = (cw - 24 * s) / 2
   local lx, rx = cx + 4 * s, cx + colW + 20 * s
-  local st = eq.CharacterStats() or {}
+  local st = API.character.Stats() or {}
   kvHits = 0
   local function n(v) return v and T.Thousands(v) or "-" end
   -- left: pools, regeneration, defense and offense, progress
@@ -299,7 +300,7 @@ local function statsPage(x, y, s)
   local hp, maxHp = label(17), label(18)
   local mana, maxMana = label(124), label(125)
   local en, maxEn = label(126), label(127)
-  local _, _, manaRaw = eq.Gauge(2)
+  local _, _, manaRaw = API.character.Gauge(2)
   local rows = {
     { "Health", T.Thousands(hp) .. " / " .. T.Thousands(maxHp), nil,
       st.maxHpBase and ("Without buffs: " .. T.Thousands(st.maxHpBase)) or nil },
@@ -340,7 +341,7 @@ local function statsPage(x, y, s)
   if atk ~= "" then table.insert(fight, #fight - 1, { "Attack", atk }) end
   yl = kv(lx, yl, colW, fight, s) + 6 * s
   yl = section(lx, yl, colW, "Progress", s)
-  local xp, aa = eq.Gauge(4) or 0, eq.Gauge(5) or 0
+  local xp, aa = API.character.Gauge(4) or 0, API.character.Gauge(5) or 0
   local wv, wc = label(24)
   local progress = {
     { "Level", label(2) .. (st.maxLevel and (" of " .. st.maxLevel) or "") },
@@ -395,13 +396,13 @@ local COINS = {
 }
 
 local function hasVitality()
-  local _, normal = eq.Gauge(147)
-  local _, aa = eq.Gauge(148)
-  return normal ~= "" or ((tonumber((eq.Label(2))) or 0) >= 51 and aa ~= "")
+  local _, normal = API.character.Gauge(147)
+  local _, aa = API.character.Gauge(148)
+  return normal ~= "" or ((tonumber((API.character.Label(2))) or 0) >= 51 and aa ~= "")
 end
 
 local function vitality(x, y, w, s, gauge, name, color)
-  local fill, amount = eq.Gauge(gauge)
+  local fill, amount = API.character.Gauge(gauge)
   if not amount or amount == "" then return end
   T.Text(x, y, name, C.muted, T.font.small)
   T.Text(x + w, y, string.format("%.1f%%", (fill or 0) * 100), C.text, T.font.small, "right")
@@ -427,7 +428,7 @@ local function body(x, y, w, h, s)
   local sub = "Level " .. lvl .. "  \xC2\xB7  " .. cls .. (deity ~= "" and ("  \xC2\xB7  " .. deity) or "")
   T.Text(x, y + th + 2 * s, sub, C.muted, T.font.small)
   -- experience at the right of the header
-  local xp, aa = eq.Gauge(4) or 0, eq.Gauge(5) or 0
+  local xp, aa = API.character.Gauge(4) or 0, API.character.Gauge(5) or 0
   local bw = 150 * s
   local bx = x + w - bw
   T.Text(bx, y + 2 * s, "XP", C.muted, T.font.tiny)
@@ -454,7 +455,7 @@ local function body(x, y, w, h, s)
   local tp = ui.GetSetting("test.inv.page") -- testing: test.inv.page=character|stats|bandolier|currency
   if tp then page = tp end
   local gamePage = GAME_PAGE[page] or 0
-  if eq.TabPage(WINDOW, "IW_Subwindows") ~= gamePage then eq.SetTabPage(WINDOW, "IW_Subwindows", gamePage) end
+  if API.windows.TabPage(WINDOW, "IW_Subwindows") ~= gamePage then API.windows.SetTabPage(WINDOW, "IW_Subwindows", gamePage) end
   local by = ty + TABS_H * s + 4 * s
   tools.ModeBanner("##inv", math.max(tx, x + 260 * s), x + w, ty, s) -- after the tabs
   if page == "stats" then statsPage(x, by, s)
@@ -470,18 +471,18 @@ local function body(x, y, w, h, s)
   for i = 0, 9 do
     items.InvSlot(GENERAL_FIRST + i, nil, x + i * (sz + gap), fy, sz, s, SLOT_NUMBERS[i])
   end
-  local free, total = eq.InventorySpace()
+  local free, total = API.inventory.InventorySpace()
   local low = free <= 5
   local note = tools.Note() -- (a refusal of Sort / Stack started from a bag's window or the Advanced Inventory)
   T.Text(x + w, fy + sz + 1 * s, note or string.format("%d / %d free", free, total),
     (note or low) and C.danger or C.faint, T.font.tiny, "right")
   -- coins, then the buttons
   local cy = fy + sz + 12 * s
-  local plat, gold, silver, copper = eq.Money()
+  local plat, gold, silver, copper = API.character.Money()
   local amounts = { plat, gold, silver, copper }
   local cx = x
   -- the merchant's Parcels page is up: a coin picks money to send there (the game outlines the coin picked)
-  local parcels = eq.Parcels() ~= nil and eq.TabPage("MerchantWnd", "MW_MerchantSubwindows") == 2
+  local parcels = API.inventory.Parcels() ~= nil and API.windows.TabPage("MerchantWnd", "MW_MerchantSubwindows") == 2
   for k, coin in ipairs(COINS) do
     local text = T.Thousands(amounts[k] or 0)
     local tw = T.TextSize(text, T.font.small)
@@ -489,7 +490,7 @@ local function body(x, y, w, h, s)
     local clicked = T.Hit("##" .. coin[1], cx, cy, cx + cw, cy + 24 * s)
     local hov = ui.IsItemHovered()
     ui.DrawRectFilled(cx, cy, cx + cw, cy + 24 * s, C.ink[1], C.ink[2], C.ink[3], hov and 0.08 or 0.04, 12 * s)
-    if select(2, eq.ChildState(WINDOW, coin[1])) then
+    if select(2, API.windows.ChildState(WINDOW, coin[1])) then
       ui.DrawRect(cx, cy, cx + cw, cy + 24 * s, C.gold[1], C.gold[2], C.gold[3], 0.9, 12 * s, 1.5 * s)
     end
     ui.DrawCircleFilled(cx + 12 * s, cy + 12 * s, 6 * s, coin[3][1], coin[3][2], coin[3][3], 1)
@@ -499,10 +500,10 @@ local function body(x, y, w, h, s)
     if hov then
       ui.SetTooltip(parcels and ("Send " .. coin[2] .. " by parcel (Shift: all)") or ("Pick up " .. coin[2] .. " (Shift: all)"))
     end
-    if clicked then eq.ClickChild(WINDOW, coin[1], "left") end
+    if clicked then API.windows.ClickChild(WINDOW, coin[1], "left") end
     cx = cx + cw + 6 * s
   end
-  local cursor = eq.Item(eq.CursorSlot)
+  local cursor = API.inventory.Item(API.inventory.CursorSlot)
   if cursor then
     T.Text(x + w, cy + 4 * s, T.Fit("Holding: " .. cursor.name, w - (cx - x) - 8 * s, T.font.small), C.gold, T.font.small, "right")
   end
@@ -511,7 +512,7 @@ local function body(x, y, w, h, s)
   if hasVitality() then
     local half = (w - 16 * s) / 2
     vitality(x, btnY, half, s, 147, "XP vitality", C.xp)
-    if (tonumber((eq.Label(2))) or 0) >= 51 then
+    if (tonumber((API.character.Label(2))) or 0) >= 51 then
       vitality(x + half + 16 * s, btnY, half, s, 148, "AA vitality", C.aa)
     end
     btnY = btnY + 40 * s
@@ -522,9 +523,9 @@ local function body(x, y, w, h, s)
     local col, rowN = (k - 1) % per, (k - 1) // per
     local bx0 = x + col * (bw + 6 * s)
     local by0 = btnY + rowN * 32 * s
-    local enabled = b.window and true or eq.ChildState(WINDOW, b[1])
+    local enabled = b.window and true or API.windows.ChildState(WINDOW, b[1])
     if b.danger and not cursor then enabled = false end
-    local open = b.window and eq.WindowShown(b.window) == true
+    local open = b.window and API.windows.Shown(b.window) == true
     -- (each button's id and options are made once and kept with it)
     local bo = b.buttonOpts
     if not bo then
@@ -533,14 +534,14 @@ local function body(x, y, w, h, s)
     end
     bo.enabled, bo.primary = enabled ~= false, b.primary or open
     if T.Button(b.buttonId, bx0, by0, bx0 + bw, by0 + 26 * s, s, b[2], bo) then
-      if b.window then eq.ShowWindow(b.window, not open)
-      elseif b[1] == "IW_DoneButton" then eq.ShowWindow(WINDOW, false)
-      else eq.ClickChild(WINDOW, b[1], "left") end
+      if b.window then API.windows.Show(b.window, not open)
+      elseif b[1] == "IW_DoneButton" then API.windows.Show(WINDOW, false)
+      else API.windows.ClickChild(WINDOW, b[1], "left") end
     end
   end
 end
 
 ui.window("Inventory", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Inventory", OPTS, body)
 end)

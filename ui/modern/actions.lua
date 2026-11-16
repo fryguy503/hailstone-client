@@ -6,7 +6,8 @@
 --     the skill), melee attack lit while auto attack is on;
 --   * Socials: the page's twelve socials, with the page arrows.
 -- Every tile is the window's button: a click is its click, and dragging one puts its hot button on the cursor to
--- drop on an action bar (eq.PickUp), as on the stock window.
+-- drop on an action bar (hs.PickUp), as on the stock window.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local tiles = dofile("lib/hudx_tiles.lua")
 local W = dofile("lib/widgets.lua")
@@ -112,7 +113,7 @@ local COMBAT_OFF = {
 }
 
 local function combatPage(s)
-  local _, melee = eq.ChildState(WINDOW, "ACP_MeleeAttackButton")
+  local _, melee = API.windows.ChildState(WINDOW, "ACP_MeleeAttackButton")
   tiles.Grid(WINDOW, melee and COMBAT_ON or COMBAT_OFF, COMBAT_GRID)
   ui.Dummy(0, 2 * s)
   W.Heading("Combat abilities")
@@ -135,10 +136,10 @@ local function socialsPage(s)
   local w = ui.GetContentRegionAvail()
   local bh, bw = 24 * s, 30 * s
   if T.Button("##socleft", x, y, x + bw, y + bh, s, "<", PREV_OPTS) then
-    eq.ClickChild(WINDOW, "ASP_SocialPageLeftButton", "left")
+    API.windows.ClickChild(WINDOW, "ASP_SocialPageLeftButton", "left")
   end
   if T.Button("##socright", x + w - bw, y, x + w, y + bh, s, ">", NEXT_OPTS) then
-    eq.ClickChild(WINDOW, "ASP_SocialPageRightButton", "left")
+    API.windows.ClickChild(WINDOW, "ASP_SocialPageRightButton", "left")
   end
   local _, th = T.TextSize("Ag", T.font.small)
   local pageText = PAGE_TEXT[page]
@@ -174,7 +175,7 @@ local function body(x, y, w, h, s)
   if not testTab then -- testing: test.tab.ActionsWindow.ACTW_ActionsSubwindows=n opens page n once
     testTab = true
     local t = tonumber(ui.GetSetting("test.tab." .. WINDOW .. "." .. TABS) or "")
-    if t then eq.SetTabPage(WINDOW, TABS, t) end
+    if t then API.windows.SetTabPage(WINDOW, TABS, t) end
   end
   local page = W.Tabs(WINDOW, TABS, TAB_PAGES)
   ui.BeginChild("##actionspage", 0, 0, false)
@@ -185,6 +186,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Actions", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Actions", OPTS, body)
 end)

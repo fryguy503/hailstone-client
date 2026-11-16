@@ -3,8 +3,9 @@
 -- Categories), the NPCs beside their lines, or above them when narrow, and the selected line's text with the
 -- category to give it and Delete Entry. The categories: the list, the name and description to add or update, the
 -- default category of new lines, Delete. Both lists select several rows with Shift / Ctrl and sort by a header click,
--- as the original's do; every list, combo, edit and button is the original's (app/lua_eq_journal.cpp), so what is
+-- as the original's do; every list, combo, edit and button is the original's (app/lua_ui_journal.cpp), so what is
 -- kept, sorted, deleted and saved is the game's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/quests_kit.lua")
@@ -16,7 +17,7 @@ local NPC = "JournalNPCWnd"
 local CAT = "JournalCatWnd"
 
 local function list(win, id, w, h, emptyText, emptyHint, columns)
-  local rows = eq.ListInfo(win, id) or 0
+  local rows = API.windows.ListInfo(win, id) or 0
   local x, y = ui.GetCursorScreenPos()
   W.List(win, id, w, h, { multi = true, headerClick = true, columns = columns })
   if rows == 0 then
@@ -95,14 +96,14 @@ local function body(x, y, w, h, s)
   ui.EndGroup()
 end
 
-local function testOpen() eq.ShowWindow(NPC, true) end
+local function testOpen() API.windows.Show(NPC, true) end
 ui.window("Conversation Journal", function()
   P.TestOpen(NPC, testOpen) -- testing: test.open.JournalNPCWnd=1
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(NPC, "Conversation Journal", OPTS, body)
 end)
 
-local function testOpen2() eq.ShowWindow(CAT, true) end
+local function testOpen2() API.windows.Show(CAT, true) end
 local CAT_OPTS = {
   size = function() return 420, 400 end,
   resizable = { 300, 280 },
@@ -137,6 +138,6 @@ end
 
 ui.window("Journal Categories", function()
   P.TestOpen(CAT, testOpen2) -- testing: test.open.JournalCatWnd=1
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(CAT, "Journal Categories", CAT_OPTS, catBody)
 end)

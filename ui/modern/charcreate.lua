@@ -1,14 +1,15 @@
--- Character creation: the client's own creation screen in this UI's look (eq.CharacterCreate, app/lua_eq_pregame.cpp;
+-- Character creation: the client's own creation screen in this UI's look (hs.CharacterCreate, app/lua_ui_pregame.cpp;
 -- the client's screen, as ui/dev_screens.cpp character_create_screen draws it, not CCharacterCreation's page). With
 -- the 3D scene up the new character's model stands in the middle of the screen, so two cards flank it: at the left
 -- who the character is (name, with a random one from the server, gender, race and class as tiles), at the right
 -- where they start (deity and start city), their stats with the points to spend, the game's description of what was
--- picked or is pointed at (dbstr_us.txt, eq.CharacterCreateHelp), Appearance (the customization window on the model),
+-- picked or is pointed at (dbstr_us.txt, hs.CharacterCreateHelp), Appearance (the customization window on the model),
 -- Cancel and Create. Without the scene the two cards stand side by side in the middle.
 --
 -- The rules are the client's (a race, class or deity resets the stats; a stat goes from its base up to base + 25, at
 -- most 150; Create once every point is spent and the name has 4 letters or more). Escape is the client's key bind
 -- here (CreationEscape), so the cards leave it alone.
+local API = hs.UI
 local P = dofile("lib/pregame.lua")
 local T = P.T
 local C = T.color
@@ -87,11 +88,11 @@ local function whoCard(view, s, bh)
   ui.SetNextItemWidth(ui.GetContentRegionAvail() - randomW - 8 * s)
   local text, enter = ui.InputTextWithHint("##name", "Character name", view.name, 64, ui.InputTextFlags.EnterReturnsTrue)
   text = text:gsub("[^%a]", "") -- (the client keeps the letters alone)
-  if text ~= view.name then eq.CharacterCreateDo("name", text) end
-  if enter and view.ready then eq.CharacterCreateDo("create") end
+  if text ~= view.name then API.pregame.CharacterCreateDo("name", text) end
+  if enter and view.ready then API.pregame.CharacterCreateDo("create") end
   ui.SameLine()
   ui.BeginDisabled(view.namePending)
-  if ui.Button(view.namePending and "..." or "Random", randomW, 0) then eq.CharacterCreateDo("randomName") end
+  if ui.Button(view.namePending and "..." or "Random", randomW, 0) then API.pregame.CharacterCreateDo("randomName") end
   ui.EndDisabled()
   P.Tip("A name from the server for this race and gender")
   P.Faint("4 to 15 letters; the first is made a capital.")
@@ -99,18 +100,18 @@ local function whoCard(view, s, bh)
   P.Heading("Gender")
   local half = (ui.GetContentRegionAvail() - 6 * s) / 2
   ui.PushStyleVar(ui.StyleVar.ItemSpacing, 6 * s, 6 * s)
-  if tile("Male", view.gender == 0, half, bh, s) then eq.CharacterCreateDo("gender", 0) end
+  if tile("Male", view.gender == 0, half, bh, s) then API.pregame.CharacterCreateDo("gender", 0) end
   ui.SameLine()
-  if tile("Female", view.gender == 1, half, bh, s) then eq.CharacterCreateDo("gender", 1) end
+  if tile("Female", view.gender == 1, half, bh, s) then API.pregame.CharacterCreateDo("gender", 1) end
   ui.PopStyleVar()
 
   P.Heading("Race")
   grid("race", view.races, view.race, "race", 3, s, bh, function(c)
-    if eq.CharacterCreateDo("race", c.id) then pick("race", c.id) end
+    if API.pregame.CharacterCreateDo("race", c.id) then pick("race", c.id) end
   end)
   P.Heading("Class")
   grid("class", view.classes, view.class, "class", 3, s, bh, function(c)
-    if eq.CharacterCreateDo("class", c.id) then pick("class", c.id) end
+    if API.pregame.CharacterCreateDo("class", c.id) then pick("class", c.id) end
   end)
 end
 
@@ -126,7 +127,7 @@ local function statsRows(view, s, bh)
     rowLabel(st.name, st.favored and C.pet or C.text, ui.GetContentRegionAvail() - controls - 8 * s, s)
     point("stat", i)
     ui.BeginDisabled(st.value <= st.base)
-    if ui.Button("-", button, 0) then eq.CharacterCreateDo("statDown", i) end
+    if ui.Button("-", button, 0) then API.pregame.CharacterCreateDo("statDown", i) end
     ui.EndDisabled()
     point("stat", i)
     ui.SameLine()
@@ -137,9 +138,9 @@ local function statsRows(view, s, bh)
     ui.SameLine()
     local canUp = view.pointsLeft > 0 and st.value < st.cap
     ui.BeginDisabled(not canUp)
-    if ui.Button("+", button, 0) then eq.CharacterCreateDo("statUp", i) end
+    if ui.Button("+", button, 0) then API.pregame.CharacterCreateDo("statUp", i) end
     ui.EndDisabled()
-    if canUp and ui.IsItemClicked(ui.Mouse.Right) then eq.CharacterCreateDo("statMax", i) end
+    if canUp and ui.IsItemClicked(ui.Mouse.Right) then API.pregame.CharacterCreateDo("statMax", i) end
     P.Tip(string.format("%s %d to %d. Right click: as many points as it takes", st.short, st.base, st.cap))
     point("stat", i)
     ui.PopID()
@@ -149,7 +150,7 @@ end
 local function aboutBox(view, s)
   local cur = hover or about
   if cur.kind == "race" and cur.id == 0 then cur = { kind = "race", id = view.race } end
-  local text, title = eq.CharacterCreateHelp(cur.kind, cur.id)
+  local text, title = API.pregame.CharacterCreateHelp(cur.kind, cur.id)
   text = (text or ""):gsub("<[Bb][Rr]%s*/?>", "\n"):gsub("<[^>]*>", "")
   P.Heading(title ~= "" and title or "About")
   local _, lh = ui.CalcTextSize("Ag")
@@ -164,10 +165,10 @@ local function detailsCard(view, s, bh)
   P.Title("Beginnings", view.raceName ~= "" and (view.raceName .. " " .. view.className) or nil, s)
   P.Heading("Faith and home")
   combo("##deity", "Deity", view.deities, view.deityIndex, "deity", function(c)
-    if eq.CharacterCreateDo("deity", c.id) then pick("deity", c.id) end
+    if API.pregame.CharacterCreateDo("deity", c.id) then pick("deity", c.id) end
   end)
   combo("##city", "Start city", view.cities, view.cityIndex, "city", function(c)
-    if eq.CharacterCreateDo("city", c.id) then pick("city", c.id) end
+    if API.pregame.CharacterCreateDo("city", c.id) then pick("city", c.id) end
   end)
 
   P.Heading("Stats")
@@ -176,7 +177,7 @@ local function detailsCard(view, s, bh)
   local resetW = P.ButtonsWidth({ "Reset" }, s)
   P.Pill(x0, y0 + 3 * s, left, view.pointsLeft > 0 and C.gold or C.pet, s)
   P.AlignRight(resetW)
-  if ui.SmallButton("Reset") then eq.CharacterCreateDo("resetStats") end
+  if ui.SmallButton("Reset") then API.pregame.CharacterCreateDo("resetStats") end
   P.Tip("Every stat back to its base")
   statsRows(view, s, bh)
 
@@ -189,17 +190,17 @@ local function detailsCard(view, s, bh)
   elseif #view.name < 4 and not view.busy then
     P.Faint("Give the character a name to create.")
   end
-  if ui.Button("Cancel", 0, bh) then eq.CharacterCreateDo("cancel") end
+  if ui.Button("Cancel", 0, bh) then API.pregame.CharacterCreateDo("cancel") end
   P.Tip("Back to the character select")
   if view.scene then
     ui.SameLine()
-    if ui.Button("Appearance", 0, bh) then eq.CharacterCreateDo("appearance") end
+    if ui.Button("Appearance", 0, bh) then API.pregame.CharacterCreateDo("appearance") end
     P.Tip("Face, hair, eyes and the rest, on the model")
   end
   ui.SameLine()
   local createW = P.ButtonsWidth({ "Create" }, s) + 40 * s
   P.AlignRight(createW)
-  if P.Primary("Create", createW, bh, view.ready) then eq.CharacterCreateDo("create") end
+  if P.Primary("Create", createW, bh, view.ready) then API.pregame.CharacterCreateDo("create") end
 end
 
 -- One card: P.Begin / P.End around the drawing, an error re-raised after the window is closed.
@@ -216,7 +217,7 @@ local function card(key, x, y, w, s, draw, view, bh)
 end
 
 ui.window("Character Creation", function()
-  local view = eq.CharacterCreate()
+  local view = API.pregame.CharacterCreate()
   if not view then return end
   hover = nil
   local s = P.Scale()

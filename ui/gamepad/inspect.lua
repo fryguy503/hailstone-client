@@ -3,6 +3,7 @@
 -- the whole gear listed, and the player's inspect message: yours is set with the on-screen keyboard (the game saves
 -- it), another's is shown. The inspect answer has names and icons only, so a slot has nothing to press. Done is the
 -- window's button (B too).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -10,7 +11,7 @@ local CH = dofile("lib/child.lua")
 local C = T.C
 local WIN = "InspectWnd"
 
--- InvSlot0..22 are the worn slots in eq.Item's numbering (0 charm .. 22 ammo).
+-- InvSlot0..22 are the worn slots in hs.Item's numbering (0 charm .. 22 ammo).
 local GRID = {
   { 1, 2, 3, 4, 5 },     -- ear, head, face, ear, neck
   { 6, 7, 8, 17, 20 },   -- shoulders, arms, back, chest, waist
@@ -37,7 +38,7 @@ ui.window("Inspect", function()
   T.frame()
   local appearing = not wasShown
   wasShown = true
-  local title = eq.WindowTitle(WIN) or ""
+  local title = API.windows.Title(WIN) or ""
   local own = CH.enabled(WIN, "INSW_Edit")
   if W.begin("Inspect", { w = 1500, h = 940, title = "Inspect", subtitle = title,
         hints = CH.hints(st, own and { { "a", "Edit message" }, { "b", "Close" } } or { { "b", "Close" } }) }) then
@@ -54,7 +55,7 @@ ui.window("Inspect", function()
         for c, n in ipairs(row) do
           ui.SetCursorPos(sx + (c - 1) * (size + gap) - wx, sy - wy)
           if appearing and r == 1 and c == 1 then ui.SetKeyboardFocusHere() end
-          local item = eq.SlotItem(WIN, "InvSlot" .. n)
+          local item = API.inventory.SlotItem(WIN, "InvSlot" .. n)
           local _, focused = T.slot("##ins" .. n, item, size, { label = NAME[n] }, pad)
           if focused then focusedSlot = n end
         end
@@ -63,7 +64,7 @@ ui.window("Inspect", function()
       local gx = x0 + 5 * size + 4 * gap + T.px(40)
       local gy = y0
       if focusedSlot then
-        local item = eq.SlotItem(WIN, "InvSlot" .. focusedSlot)
+        local item = API.inventory.SlotItem(WIN, "InvSlot" .. focusedSlot)
         T.font(18)
         T.draw(gx, gy, NAME[focusedSlot]:upper(), C.dim)
         T.unfont()
@@ -83,7 +84,7 @@ ui.window("Inspect", function()
       local maxY = y0 + 5 * (size + gap) + T.px(14)
       local any = false
       for _, n in ipairs(ORDER) do
-        local item = eq.SlotItem(WIN, "InvSlot" .. n)
+        local item = API.inventory.SlotItem(WIN, "InvSlot" .. n)
         if item and gy + lh <= maxY then
           any = true
           T.draw(gx, gy, NAME[n], n == focusedSlot and C.accent or C.dim)
@@ -115,5 +116,5 @@ ui.window("Inspect", function()
       CH.button(WIN, "DoneButton", "Done", bw, bh, { primary = true })
     end
   end
-  if CH.back(st, W.finish()) then eq.ClickChild(WIN, "DoneButton", "left") end
+  if CH.back(st, W.finish()) then API.windows.ClickChild(WIN, "DoneButton", "left") end
 end)

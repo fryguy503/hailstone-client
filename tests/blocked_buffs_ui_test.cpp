@@ -1,5 +1,5 @@
 // The modern buff trays' "Add to Blocked Buffs" (ui/modern/lib/bufftray.lua): the Blocked Buffs window's own edit box
-// and Add over the eq API (app/lua_eq_dialogs.cpp BlockedBuffWindow), with a buff's spell id, against the mock server.
+// and Add over the hs API (app/lua_ui_dialogs.cpp BlockedBuffWindow), with a buff's spell id, against the mock server.
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -10,7 +10,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
 #include "net/packet_io.h"
@@ -38,17 +38,17 @@ TEST_CASE("Blocked buffs: a buff's spell id in the window's edit box, then Add, 
         conn.enter_world("Gennro");
         REQUIRE(until([&] { return conn.state() == net::ConnectionState::InZone && conn.player_status().max_hp != 0; }));
         REQUIRE(conn.spell_table().get(11));
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         lua_State* L = luaL_newstate();
         luaL_openlibs(L);
         lua_newtable(L);
         api.register_functions(L);
-        lua_setglobal(L, "eq");
-        REQUIRE(luaL_dostring(L, "eq.SetWindowText('BlockedBuffWnd', 'BW_EditSpellToBlock', '11') "
-                                 "return eq.ClickChild('BlockedBuffWnd', 'BW_AddSpellToBlock', 'left')") == LUA_OK);
+        lua_setglobal(L, "hs");
+        REQUIRE(luaL_dostring(L, "hs.SetWindowText('BlockedBuffWnd', 'BW_EditSpellToBlock', '11') "
+                                 "return hs.ClickChild('BlockedBuffWnd', 'BW_AddSpellToBlock', 'left')") == LUA_OK);
         CHECK(lua_toboolean(L, -1));
         lua_close(L);
         auto sent = [&] {

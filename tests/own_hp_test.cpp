@@ -7,8 +7,8 @@
 
 #include <functional>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_values.h"
+#include "app/lua_ui.h"
+#include "app/lua_ui_values.h"
 #include "app/stats_ui.h"
 #include "game/mechanics/character.h"
 #include "game/mechanics/tables.h"
@@ -71,20 +71,20 @@ TEST_CASE("Own HP: the windows add the items' HP that EQEmu's HP update leaves o
     u.max_hp = 200;
     conn.receive_zone_packet_for_test(net::encode(u));
 
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.conn = &conn;
     // Before the player's sheet: the server's points as they came.
-    CHECK(app::eq_label(host, 17).text == "100");
-    CHECK(app::eq_label(host, 18).text == "200");
+    CHECK(app::ui_label(host, 17).text == "100");
+    CHECK(app::ui_label(host, 18).text == "200");
 
     host.character = &ch;
     app::share_own_hp_items(conn, &ch); // as StatsUi::draw does each in-zone frame
-    CHECK(app::eq_label(host, 17).text == "362"); // Cur_HP
-    CHECK(app::eq_label(host, 18).text == "462"); // Max_HP
-    CHECK(app::eq_label(host, 19).text == "78");  // 362 / 462
-    CHECK(app::eq_label(host, 70).text == "362/462");
-    CHECK(app::eq_gauge(host, 1).value == 780);   // the HP gauge: the percent times 10
+    CHECK(app::ui_label(host, 17).text == "362"); // Cur_HP
+    CHECK(app::ui_label(host, 18).text == "462"); // Max_HP
+    CHECK(app::ui_label(host, 19).text == "78");  // 362 / 462
+    CHECK(app::ui_label(host, 70).text == "362/462");
+    CHECK(app::ui_gauge(host, 1).value == 780);   // the HP gauge: the percent times 10
 
     // A server extension's vitals (the NMS and Project Triune plugins' set_vitals) are the whole value: nothing added.
     mech::CharacterSheet given = warrior_with(262);
@@ -94,8 +94,8 @@ TEST_CASE("Own HP: the windows add the items' HP that EQEmu's HP update leaves o
     ext.process_all_stats();
     host.character = &ext;
     app::share_own_hp_items(conn, &ext);
-    CHECK(app::eq_label(host, 17).text == "100");
-    CHECK(app::eq_label(host, 18).text == "200");
+    CHECK(app::ui_label(host, 17).text == "100");
+    CHECK(app::ui_label(host, 18).text == "200");
 
     // Leaving the zone (no character): the server's points as they came.
     app::share_own_hp_items(conn, nullptr);

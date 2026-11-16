@@ -153,6 +153,7 @@ public:
     // reviewed again) and the version ("" any).
     void update(std::string name, std::uint32_t approved_caps, std::string approved_version);
     void set_auto_update(std::string_view name, bool on);
+    bool set_enabled(std::string_view name, bool on);
     // Reads the cached add-on index (addons/index.txt), then fetches it again when the cached one is older than
     // addons.check_hours (`now`: whatever its age). Nothing without env.index_url and env.index_key.
     void refresh_index(bool now);

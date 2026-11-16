@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "core/byte_io.h"
 #include "mock_server/harness.h"
 #include "net/dz_packets.h"
@@ -65,10 +65,10 @@ TEST_CASE("raid window: expedition and task buttons invite missing roster member
     Rig rig;
     REQUIRE(rig.to_zone());
     auto& conn = rig.conn;
-    app::EqHost host;
+    app::UiHost host;
     host.conn = &conn;
     host.in_game = host.ui_ready = true;
-    app::EqApi api(host);
+    app::UiApi api(host);
     raid_update(conn, kRaidCreate, "Gennro");
     raid_update(conn, kRaidAddMember, "Gennro");
     raid_update(conn, kRaidAddMember, "Existing");
@@ -98,10 +98,10 @@ TEST_CASE("raid roster invitations recheck lock, leadership, capacity and source
     Rig rig;
     REQUIRE(rig.to_zone());
     auto& conn = rig.conn;
-    app::EqHost host;
+    app::UiHost host;
     host.conn = &conn;
     host.in_game = host.ui_ready = true;
-    app::EqApi api(host);
+    app::UiApi api(host);
     raid_update(conn, kRaidCreate, "Gennro");
     raid_update(conn, kRaidAddMember, "Gennro");
     CHECK(api.child_state("RaidWindow", "RAID_InviteExpedButton") == false);
@@ -153,10 +153,10 @@ TEST_CASE("raid roster invitations refuse stale clicks while the interface is lo
     Rig rig;
     REQUIRE(rig.to_zone());
     auto& conn = rig.conn;
-    app::EqHost host;
+    app::UiHost host;
     host.conn = &conn;
     host.in_game = host.ui_ready = true;
-    app::EqApi api(host);
+    app::UiApi api(host);
     expedition(conn);
     shared_task(conn);
     conn.send_command("/safelock test");
@@ -239,10 +239,10 @@ TEST_CASE("raid delegation refuses stale clicks after rank or leadership changes
     };
     ranks("Gennro", 1);
     conn.set_raid_target("Member0");
-    app::EqHost host;
+    app::UiHost host;
     host.conn = &conn;
     host.in_game = host.ui_ready = true;
-    app::EqApi api(host);
+    app::UiApi api(host);
     auto count = [&] {
         std::size_t result = 0;
         for (const auto& packet : rig.server.zone_log)

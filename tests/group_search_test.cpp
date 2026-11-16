@@ -5,7 +5,7 @@
 
 #include <cstdlib>
 
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui_windows.h"
 #include "core/byte_io.h"
 #include "core/ini_file.h"
 #include "game/chat_text.h"

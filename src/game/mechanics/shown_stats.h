@@ -1,7 +1,7 @@
 #pragma once
 
 // The numbers the inventory window shows for the player (__GetLabelFromEQ's AC and ATK cases), from a Character
-// that has run process_all_stats. The stock labels (app/lua_eq_values.cpp) and the item comparison
+// that has run process_all_stats. The stock labels (app/lua_ui_values.cpp) and the item comparison
 // (game/item_compare.h) read them here so both show the same values.
 
 #include <cstdint>

@@ -10,7 +10,8 @@
 --   Compass (CompassWindow)    a heading strip
 --   Minimap (a client extension, no stock window): the zone map around the player, top right; a click opens the
 --                              map window (MapViewWnd), the wheel or + / - zoom, a right click turns rotation on/off
--- Every value is the game's (eq.Label / eq.Gauge by EQType, the stock windows' children); nothing is computed here.
+-- Every value is the game's (hs.Label / hs.Gauge by EQType, the stock windows' children); nothing is computed here.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -43,7 +44,7 @@ local function hud(name, x, y, w, h, inputs, draw)
 end
 
 local function num(type)
-  local t = eq.Label(type)
+  local t = API.character.Label(type)
   return t or ""
 end
 
@@ -70,22 +71,22 @@ local nameRow = { shown = false }
 
 ui.window("HUD Player", function()
   if not W.shown("PlayerWindow") then return end
-  local mana, _, mraw = eq.Gauge(2)
+  local mana, _, mraw = API.character.Gauge(2)
   nameRow.shown = false
   hud("HUD Player", 32, 28, 470, mraw ~= -1 and 176 or 148, false, function(x0, y0, x1, y1)
     T.panel(x0, y0, x1, y1, 0.9)
     -- auto attack (PlayerWindow's A_AttackIndicatorAnim*): a pulsing red wash and a thick red ring
-    if eq.ChildShown("PlayerWindow", "A_AttackIndicatorAnimTop") == true then
+    if API.windows.ChildShown("PlayerWindow", "A_AttackIndicatorAnimTop") == true then
       local pulse = math.abs(math.sin(ui.GetTime() * 4))
       T.rect(x0, y0, x1, y1, C.bad, 0.06 + 0.12 * pulse, T.px(14))
       local t = T.px(4)
       T.outline(x0 - t / 2, y0 - t / 2, x1 + t / 2, y1 + t / 2, C.bad, 0.55 + 0.45 * pulse, T.px(14) + t / 2, t)
     end
     local p = T.px(16)
-    local name = (eq.Label(1) or ""):gsub("\n.*", "")
+    local name = (API.character.Label(1) or ""):gsub("\n.*", "")
     local lvl, cls = num(2), num(3)
     local level = (lvl ~= "" and ("Level " .. lvl) or "") .. (cls ~= "" and ("  " .. cls) or "")
-    local timer = eq.Label(137) or ""
+    local timer = API.character.Label(137) or ""
     T.font(18)
     level = T.fit(level, (x1 - x0 - 2 * p) * 0.45)
     local levelW = ui.CalcTextSize(level)
@@ -103,7 +104,7 @@ ui.window("HUD Player", function()
     local iconX, iconY = x0 + p + nameW + T.px(6), nameY + (nh - iconSize) / 2
     -- in a group the name row takes the mouse (its own window, below) and draws the icons, for their tooltips;
     -- the rest of the panel takes no input, so a click there reaches the world as it did before
-    if eq.ChildState("GroupWindow", "DisbandButton") == true or mask ~= 0 then
+    if API.windows.ChildState("GroupWindow", "DisbandButton") == true or mask ~= 0 then
       nameRow.shown = true
       nameRow.x0, nameRow.y0, nameRow.x1, nameRow.y1 = x0 + p, nameY, nameRight, nameY + nh
       nameRow.mask, nameRow.ix, nameRow.iy, nameRow.size, nameRow.gap = mask, iconX, iconY, iconSize, iconGap
@@ -120,7 +121,7 @@ ui.window("HUD Player", function()
     T.unfont()
     local y = y0 + p + nh + T.px(8)
     local bh = T.px(30)
-    local hp = eq.Gauge(1)
+    local hp = API.character.Gauge(1)
     T.bar(x0 + p, y, x1 - p, y + bh, hp, C.hp, num(17) .. " / " .. num(18), num(19) .. "%")
     y = y + bh + T.px(6)
     local small = T.px(22)
@@ -129,11 +130,11 @@ ui.window("HUD Player", function()
       T.bar(x0 + p, y, x1 - p, y + small, mana, C.mana, num(124) .. " / " .. num(125), num(20) .. "%")
       y = y + small + T.px(5)
     end
-    local en = eq.Gauge(3)
+    local en = API.character.Gauge(3)
     T.bar(x0 + p, y, x1 - p, y + small, en, C.endurance, num(126) .. " / " .. num(127), num(21) .. "%")
     T.unfont()
     -- experience: a thin line along the bottom edge
-    local xp = eq.Gauge(4) or 0
+    local xp = API.character.Gauge(4) or 0
     local ey = y1 - T.px(7)
     T.rect(x0 + p, ey, x1 - p, ey + T.px(4), C.sunken, 1, T.px(2))
     if xp > 0 then T.rect(x0 + p, ey, x0 + p + (x1 - x0 - 2 * p) * math.min(1, xp), ey + T.px(4), C.exp, 1, T.px(2)) end
@@ -142,19 +143,19 @@ ui.window("HUD Player", function()
   local r = nameRow
   hitArea("HUD Player Name", r.x0, r.y0, r.x1, r.y1, function(x0, y0, x1, y1)
     -- a left click targets the player (CPlayerWnd's click on its gauges), a right click opens the group role menu
-    if ui.InvisibleButton("##name", x1 - x0, y1 - y0) then eq.ClickChild("PlayerWindow", "PlayerHP", "left") end
+    if ui.InvisibleButton("##name", x1 - x0, y1 - y0) then API.windows.ClickChild("PlayerWindow", "PlayerHP", "left") end
     local hovered = ui.IsItemHovered()
     local roleHovered = roles.Draw(r.mask, r.ix, r.iy, r.size, r.gap, ROLE_COLORS)
     if hovered and not roleHovered then ui.SetTooltip("Right-click for group roles") end
-    if hovered and ui.IsMouseClicked(ui.Mouse.Right) then eq.ClickChild("PlayerWindow", "PlayerHP", "right") end
+    if hovered and ui.IsMouseClicked(ui.Mouse.Right) then API.windows.ClickChild("PlayerWindow", "PlayerHP", "right") end
   end)
 end)
 
 -- ---------------------------------------------------------------- target
 local conRgba, conBar = { 0, 0, 0, 1 }, { 0, 0, 0, 1 } -- the target's con colour, and its bar's (darker)
 local function conColour()
-  if eq.ChildShown("TargetWindow", "A_TargetBoxStaticAnimFill") == false then return nil end
-  local r, g, b = eq.ChildColor("TargetWindow", "A_TargetBoxStaticAnimFill", "decal")
+  if API.windows.ChildShown("TargetWindow", "A_TargetBoxStaticAnimFill") == false then return nil end
+  local r, g, b = API.windows.ChildColor("TargetWindow", "A_TargetBoxStaticAnimFill", "decal")
   if r then
     conRgba[1], conRgba[2], conRgba[3] = r, g, b
     return conRgba
@@ -169,13 +170,13 @@ local distFeet, distText -- the target's distance and its text, made again only 
 
 ui.window("HUD Target", function()
   if not W.shown("TargetWindow") then return end
-  local frac, name, raw = eq.Gauge(6)
+  local frac, name, raw = API.character.Gauge(6)
   if raw == -1 or not name or name == "" then return end
-  -- a second row only for the target's buffs or its target (eq.Gauge(27))
-  local tfrac, tname, traw = eq.Gauge(27)
+  -- a second row only for the target's buffs or its target (hs.Gauge(27))
+  local tfrac, tname, traw = API.character.Gauge(27)
   local nBuffs = 0
   for i = 1, #TARGET_BUFFS do
-    if eq.BuffSlot("TargetWindow", TARGET_BUFFS[i]) then
+    if API.buffs.Slot("TargetWindow", TARGET_BUFFS[i]) then
       nBuffs = nBuffs + 1
       targetBuffs[nBuffs] = TARGET_BUFFS[i]
     end
@@ -192,9 +193,9 @@ ui.window("HUD Target", function()
     local _, nh = ui.CalcTextSize("Ag")
     T.textIn(x0 + p + T.px(4), y0 + p - T.px(2), x1 - p - T.px(90), y0 + p + nh, name, con or C.text, 0)
     T.unfont()
-    -- the distance (a client that gives it: eq.TargetDistance)
-    if eq.TargetDistance then
-      local d = eq.TargetDistance()
+    -- A distance is optional; the current host does not export this capability.
+    if API.Supports("session", "TargetDistance") then
+      local d = API.session.TargetDistance()
       if d then
         T.font(18)
         local feet = math.floor(d + 0.5)
@@ -205,7 +206,7 @@ ui.window("HUD Target", function()
     end
     local y = y0 + p + nh + T.px(6)
     local bh = T.px(30)
-    local pct = eq.Label(29) or ""
+    local pct = API.character.Label(29) or ""
     if con then conBar[1], conBar[2], conBar[3] = con[1] * 0.85, con[2] * 0.85, con[3] * 0.85 end
     T.bar(x0 + p + T.px(4), y, x1 - p, y + bh, raw == -3 and 0 or frac, con and conBar or C.hp,
       raw == -3 and "Corpse" or "", pct ~= "" and (pct .. "%") or "")
@@ -214,7 +215,7 @@ ui.window("HUD Target", function()
     local s = T.px(28)
     local x = x0 + p + T.px(4)
     for i = 1, nBuffs do
-      local tex, u0, v0, u1, v1 = eq.ChildArt("TargetWindow", targetBuffs[i], "decal")
+      local tex, u0, v0, u1, v1 = API.windows.ChildArt("TargetWindow", targetBuffs[i], "decal")
       if type(tex) == "userdata" then
         T.icon(tex, u0, v0, u1, v1, x, y, x + s, y + s)
         x = x + s + T.px(3)
@@ -240,7 +241,7 @@ ui.window("HUD Group", function()
   if not W.shown("GroupWindow") then return end
   local count = 0
   for i = 1, 5 do
-    local frac, name, raw, tr, tg, tb = eq.Gauge(10 + i)
+    local frac, name, raw, tr, tg, tb = API.character.Gauge(10 + i)
     -- tr, tg, tb: a special value's tint (-2, not in the zone: full in the game's dark red)
     if raw ~= -1 and name and name ~= "" then
       count = count + 1
@@ -268,10 +269,10 @@ ui.window("HUD Group", function()
       local ry1 = y + T.px(rowH)
       ui.SetCursorPos(0, y - y0)
       local clicked = ui.InvisibleButton(MEMBER_IDS[m.i].button, x1 - x0, T.px(rowH))
-      if clicked then eq.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "left") end -- targets the member (F2..F6)
+      if clicked then API.windows.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "left") end -- targets the member (F2..F6)
       local hovered = ui.IsItemHovered()
       if hovered and not ui.GetIO().alt and ui.IsMouseClicked(ui.Mouse.Right) then
-        eq.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "right")
+        API.windows.ClickChild("GroupWindow", MEMBER_IDS[m.i].gauge, "right")
       end
       T.panel(x0, y, x1, ry1, hovered and 1 or 0.85, T.px(12))
       local p = T.px(12)
@@ -284,13 +285,13 @@ ui.window("HUD Group", function()
       T.draw(x0 + p, y + T.px(6), name)
       roles.Draw(m.roles, x0 + p + nameW + T.px(6), y + T.px(6) + (th - iconSize) / 2,
         iconSize, iconGap, ROLE_COLORS)
-      local pct = eq.Label(34 + m.i) or ""
+      local pct = API.character.Label(34 + m.i) or ""
       T.textIn(x0 + p, y + T.px(6), x1 - p, y + T.px(6) + th, pct ~= "" and (pct .. "%") or "", C.dim, 1)
       T.unfont()
       local by = y + T.px(10) + th
       T.bar(x0 + p, by, x1 - p, by + T.px(12), m.hp, m.tint or C.hp)
-      local mana, _, mraw = eq.Gauge(30 + m.i)
-      local en = eq.Gauge(35 + m.i)
+      local mana, _, mraw = API.character.Gauge(30 + m.i)
+      local en = API.character.Gauge(35 + m.i)
       local half = (x1 - x0 - 2 * p - T.px(6)) / 2
       by = by + T.px(16)
       if mraw ~= -1 and mana then T.bar(x0 + p, by, x0 + p + half, by + T.px(7), mana, C.mana) end
@@ -317,19 +318,19 @@ ui.window("HUD Extended Target", function()
     local ids = XT_IDS[n]
     -- a slot the game shows: in the server's count and not left out by a server's plugin (NMS: your own pets)
     -- (a hidden slot can sit between shown ones: all twenty are asked)
-    local shown = eq.ChildShown(WINDOW, ids.gauge) ~= false
+    local shown = API.windows.ChildShown(WINDOW, ids.gauge) ~= false
     if shown then slots = slots + 1 end
-    if shown and eq.ChildShown(WINDOW, ids.hpLabel) == true then
-      local frac, name = eq.Gauge(42 + n)
-      local r, g, b = eq.ChildColor(WINDOW, ids.gauge)
-      local role = eq.ChildTooltip(WINDOW, ids.role) or ""
+    if shown and API.windows.ChildShown(WINDOW, ids.hpLabel) == true then
+      local frac, name = API.character.Gauge(42 + n)
+      local r, g, b = API.windows.ChildColor(WINDOW, ids.gauge)
+      local role = API.windows.ChildTooltip(WINDOW, ids.role) or ""
       nRows = nRows + 1
       local row = xtRows[nRows]
       if not row then
         row = { conRgba = { 0, 0, 0, 1 }, conBar = { 0, 0, 0, 1 } }
         xtRows[nRows] = row
       end
-      row.n, row.name, row.hp, row.pct = n, name or "", frac, eq.Label(151 + n) or ""
+      row.n, row.name, row.hp, row.pct = n, name or "", frac, API.character.Label(151 + n) or ""
       row.role = role ~= "" and role ~= "Auto Hater" and role or nil
       if r then
         row.con = row.conRgba
@@ -354,7 +355,7 @@ ui.window("HUD Extended Target", function()
       local r = rows[k]
       local ry1 = y + T.px(rowH)
       ui.SetCursorPos(0, y - y0)
-      if ui.InvisibleButton(XT_IDS[r.n].button, x1 - x0, T.px(rowH)) then eq.ClickChild(WINDOW, XT_IDS[r.n].gauge, "left") end
+      if ui.InvisibleButton(XT_IDS[r.n].button, x1 - x0, T.px(rowH)) then API.windows.ClickChild(WINDOW, XT_IDS[r.n].gauge, "left") end
       T.panel(x0, y, x1, ry1, ui.IsItemHovered() and 1 or 0.85, T.px(10))
       local p = T.px(10)
       T.font(17)
@@ -374,7 +375,7 @@ end)
 -- ---------------------------------------------------------------- pet
 ui.window("HUD Pet", function()
   if not W.shown("PetInfoWindow") then return end
-  local frac, name, raw = eq.Gauge(16)
+  local frac, name, raw = API.character.Gauge(16)
   if raw == -1 or not name or name == "" then return end
   hud("HUD Pet", 32, -350, 400, 70, false, function(x0, y0, x1, y1)
     local hp = GPSTATE.hudPet or {} -- (the chat ticker stays under it)
@@ -385,7 +386,7 @@ ui.window("HUD Pet", function()
     T.font(18)
     local _, th = ui.CalcTextSize("Ag")
     T.draw(x0 + p, y0 + T.px(6), "Pet: " .. T.fit(name, x1 - x0 - T.px(140)))
-    local pct = eq.Label(69) or ""
+    local pct = API.character.Label(69) or ""
     T.textIn(x0 + p, y0 + T.px(6), x1 - p, y0 + T.px(6) + th, pct ~= "" and (pct .. "%") or "", C.dim, 1)
     T.unfont()
     T.bar(x0 + p, y0 + T.px(12) + th, x1 - p, y0 + T.px(26) + th, frac, C.good)
@@ -395,12 +396,12 @@ end)
 -- ---------------------------------------------------------------- casting
 ui.window("HUD Casting", function()
   if not W.shown("CastingWindow") then return end
-  local frac, _, raw = eq.Gauge(7)
+  local frac, _, raw = API.character.Gauge(7)
   if raw == -1 then return end
   hud("HUD Casting", 710, -330, 500, 64, false, function(x0, y0, x1, y1)
     T.panel(x0, y0, x1, y1, 0.9, T.px(14))
     local p = T.px(12)
-    T.bar(x0 + p, y0 + p, x1 - p, y1 - p, frac, C.cast, eq.Label(134) or "")
+    T.bar(x0 + p, y0 + p, x1 - p, y1 - p, frac, C.cast, API.character.Label(134) or "")
   end)
 end)
 
@@ -414,7 +415,7 @@ local function buffBlock(screen, count)
   local list = blocks[screen]
   local n = 0
   for i = 0, count - 1 do
-    local spell, ms, name, _, fade = eq.BuffSlot(screen, BUFF_IDS[i])
+    local spell, ms, name, _, fade = API.buffs.Slot(screen, BUFF_IDS[i])
     if spell then
       n = n + 1
       local b = list[n]
@@ -441,7 +442,7 @@ local function drawBuffs(screen, list, x0, y0, x1, size)
   local _, th = ui.CalcTextSize("0")
   for k = 1, list.n do
     local b = list[k]
-    local tex, u0, v0, u1, v1 = eq.ChildArt(screen, b.id, "decal")
+    local tex, u0, v0, u1, v1 = API.windows.ChildArt(screen, b.id, "decal")
     T.rect(x - 2, y - 2, x + size + 2, y + size + 2, C.sunken, 1, T.px(6))
     T.icon(tex, u0, v0, u1, v1, x, y, x + size, y + size, 0.2 + 0.8 * b.fade) -- the game's fade under 19 s
     if b.ms and b.ms > 0 then
@@ -480,7 +481,7 @@ local CARDINALS = { { 0, "N" }, { 45, "NW" }, { 90, "W" }, { 135, "SW" }, { 180,
 
 ui.window("HUD Compass", function()
   if not W.shown("CompassWindow") then return end
-  local _, _, _, heading = eq.CompassStrips()
+  local _, _, _, heading = API.compass.Strips()
   if not heading then return end
   hud("HUD Compass", 760, 22, 400, 44, false, function(x0, y0, x1, y1)
     T.panel(x0, y0, x1, y1, 0.8, T.px(22))
@@ -506,7 +507,7 @@ ui.window("HUD Compass", function()
 end)
 
 -- ---------------------------------------------------------------- minimap
--- The zone map in a circle around the player (eq.DrawMinimap: the map window's lines, group, /find path and compass
+-- The zone map in a circle around the player (hs.DrawMinimap: the map window's lines, group, /find path and compass
 -- points), its zone name above and the game clock below. The range and rotation are kept in the pack's settings.
 local RANGES = { 150, 300, 600, 1200, 2400 }
 local mini = {
@@ -521,7 +522,7 @@ end
 
 local clockH, clockM, clockText -- the clock's text, made again only when the time changes
 local function clock()
-  local h, m = eq.GameTime()
+  local h, m = API.session.GameTime()
   if not h then return nil end
   if h ~= clockH or m ~= clockM then
     local h12 = h % 12
@@ -547,12 +548,12 @@ local function ringButton(id, cx, cy, r, label)
 end
 
 ui.window("HUD Minimap", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud("HUD Minimap", -24, 20, 300, 352, true, function(x0, y0, x1, y1)
     local cx, r = (x0 + x1) / 2, T.px(128)
     local cy = y0 + T.px(44) + r
     -- the zone name
-    local zone = eq.ZoneName() or ""
+    local zone = API.map.ZoneName() or ""
     if zone ~= "" then
       T.font(19)
       zone = T.fit(zone, x1 - x0 - T.px(24))
@@ -568,7 +569,7 @@ ui.window("HUD Minimap", function()
     ui.SetCursorPos(cx - r - wx, cy - r - wy)
     ui.InvisibleButton("##minimap", r * 2, r * 2)
     local hovered = ui.IsItemHovered()
-    local nx, ny = eq.DrawMinimap(cx, cy, r, RANGES[mini.zoom], mini.rotate)
+    local nx, ny = API.map.DrawMinimap(cx, cy, r, RANGES[mini.zoom], mini.rotate)
     ui.DrawCircle(cx, cy, r, C.edge[1], C.edge[2], C.edge[3], 0.35, T.px(2))
     ui.DrawCircle(cx, cy, r + T.px(4), 0, 0, 0, 0.5, T.px(3))
     -- north on the ring
@@ -614,7 +615,7 @@ end)
 
 -- ---------------------------------------------------------------- the menu button (mouse; Start on the pad)
 ui.window("HUD Menu Button", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   local open = GPSTATE and GPSTATE.menuOpen
   if open then return end
   hud("HUD Menu Button", 24, -24, 210, 52, true, function(x0, y0, x1, y1)

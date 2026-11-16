@@ -12,7 +12,7 @@
 #include "game/eq_strings.h"
 #include "game/task_window.h"
 #include "game/tasks.h"
-#include "app/lua_eq_windows.h"
+#include "app/lua_ui_windows.h"
 #include "core/byte_io.h"
 #include "mock_server/harness.h"
 #include "net/task_packets.h"
@@ -312,7 +312,7 @@ TEST_CASE("task offers: Preview Reward uses the selected received offer and refu
         offers.offers = {first, second};
         rig.conn.receive_zone_packet_for_test(net::encode_task_select(offers, op));
 
-        app::EqHost host;
+        app::UiHost host;
         host.conn = &rig.conn;
         host.game = &rig.game;
         host.in_game = host.ui_ready = true;
@@ -422,7 +422,7 @@ TEST_CASE("task offers: selecting an offer without a preview hides a shown previ
     offers.offers = {plain, previewed, other};
     rig.conn.receive_zone_packet_for_test(net::encode_task_select(offers, net::Op::TaskSelectWindow));
 
-    app::EqHost host;
+    app::UiHost host;
     host.conn = &rig.conn;
     host.game = &rig.game;
     host.in_game = host.ui_ready = true;
@@ -490,7 +490,7 @@ TEST_CASE("task window: Preview Reward sends the selected task ID and refuses st
     rig.server.zone.send_reliable(net::encode_task_description(zebra));
     REQUIRE(rig.until([&] { return rig.conn.tasks().find_id(alpha.task_id) && rig.conn.tasks().find_id(zebra.task_id); }));
 
-    app::EqHost host;
+    app::UiHost host;
     host.conn = &rig.conn;
     host.game = &rig.game;
     host.in_game = host.ui_ready = true;

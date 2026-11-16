@@ -1,7 +1,7 @@
 # Scripting and plugin reference
 
 This page lists everything a script or plugin can use: the TLOs and their members, the spawn search words, the
-commands, the Lua modules (`mq`, `hailstone`, `ImGui`, `ui`, `eq`) and the compiled plugin SDK
+commands, the Lua modules (`mq`, `hailstone`, `ImGui`, `ui`, `hs`) and the compiled plugin SDK
 (`sdk/hailstone_plugin.h`). It is for people writing add-ons by hand.
 
 Read docs/plugins.md first. It covers where scripts and plugins live, how they are loaded, what a server's
@@ -23,7 +23,7 @@ this page says so.
 - [Commands for scripts](#commands-for-scripts)
 - [The `mq` module](#the-mq-module)
 - [The `hailstone` module (Lua plugins)](#the-hailstone-module-lua-plugins)
-- [Windows: `ImGui`, `ui` and `eq`](#windows-imgui-ui-and-eq)
+- [Windows: `ImGui`, `ui` and `hs`](#windows-imgui-ui-and-hs)
 - [Compiled plugins: the C SDK](#compiled-plugins-the-c-sdk)
 
 ## Conventions
@@ -73,7 +73,7 @@ Each function below names the capability it needs. docs/plugins.md "Capabilities
 | 0x200 | `extend` | hooks, `set_flag`, `set_*` server knowledge |
 | 0x400 | `login` | running before the zone-in |
 | 0x800 | `net` | `tcp_*` |
-| 0x1000 | `web` | `mq.web`, `eq.Web*`, `web_*`, `/url`, `/www` |
+| 0x1000 | `web` | `mq.web`, `hs.Web*`, `web_*`, `/url`, `/www` |
 
 The C names are `HAILSTONE_CAP_READ` ... `HAILSTONE_CAP_WEB`. A script asks for the bits it needs in its add-on
 manifest's `caps` (docs/addons.md).
@@ -520,7 +520,7 @@ code. A script that registers any of these stays loaded after its main chunk ret
 | `chat(text [, color])` | | a chat line in one of the game's chat colours (15 yellow, 2 green, 6 grey, ...) |
 | `on_packet(stream, direction, opcode, fn)` | `packets` | `fn(opcode, data)` for each matching packet; `stream` is `'world'` or `'zone'`, `direction` `'in'` or `'out'`, and opcode 0 matches every packet. Return `true` to drop the packet, or a string to replace its data. Use `string.pack` / `string.unpack` for the layout |
 | `send_packet(stream, opcode, data)` | `packets` | sends a packet to the server |
-| `ui_function(name, fn)` | `ui` | a function the script's windows call as `eq.Plugin("<script>").<name>(...)`. Not from a Lua social, nor `option` or `menu` |
+| `ui_function(name, fn)` | `ui` | a function the script's windows call as `hs.Plugin("<script>").<name>(...)`. Not from a Lua social, nor `option` or `menu` |
 | `option{name, label, min, max, get, set}` | `ui` | an option in the Options window's Plugins section; `max = 1` makes a switch, otherwise a slider |
 | `menu(label, command)` | `ui` | an entry in the EQ menu's Plugins submenu that runs `command` |
 
@@ -575,13 +575,13 @@ the script's own Lua state and must finish within 50 ms. An error in a hook ends
 
 `command_line` is for compiled plugins only.
 
-## Windows: `ImGui`, `ui` and `eq`
+## Windows: `ImGui`, `ui` and `hs`
 
 Three Lua APIs draw windows:
 
 - **`ImGui`** is MQ's ImGui table, for an MQ-style script drawing in an `mq.imgui.init` function.
 - **`ui`** is the client's own ImGui layer, which `ImGui` is built on. The UI packs, plugin windows and scripts use it.
-- **`eq`** is the game's state and the stock windows' logic, for a UI pack's windows and the windows a plugin or Lua
+- **`hs`** is the game's state and the stock windows' logic, for a UI pack's windows and the windows a plugin or Lua
   plugin ships in its `ui/<pack>/` folder (docs/plugins.md "Plugin windows (ABI 2)"). Scripts do not have it.
 
 ### `ImGui` (MQ scripts)
@@ -605,7 +605,7 @@ to take MQ's argument and return order:
 Colours are `r, g, b, a` in 0..1. A value ImGui would change through a pointer comes back as a return value:
 `value, changed = ui.Checkbox('Show', value)`. `ui` needs no capability, since it only draws, except the clipboard
 functions, which raise an error unless the caller may do everything. A plugin's code sees `ui` read-only. Textures
-(`tex`) are the light userdata that functions such as `eq.ItemIcon` and `eq.SpellIcon` return, with their UV
+(`tex`) are the light userdata that functions such as `hs.ItemIcon` and `hs.SpellIcon` return, with their UV
 rectangle (`u0, v0, u1, v1`).
 
 #### Host functions (lua_host.cpp)
@@ -791,7 +791,7 @@ rectangle (`u0, v0, u1, v1`).
 | PushStyleVar | (idx, x [, y]) → — | idx from ui.StyleVar |
 | PopStyleVar | ([n=1]) → — | Pops no more than the window's code pushed |
 | PushStyleVars | ({idx,x,y\|false, …}) → n | |
-| PushFont | ([eqFont=3]) → — | EQ UI font 1..6 |
+| PushFont | ([fontIndex=3]) → — | EQ UI font 1..6 |
 | PushChatFont | ([index=2]) → — | Chat font 0..10. Pop with PopFont |
 | PopFont | () → — | Pops no more than the window's code pushed |
 | ChatFontSize | ([index=2]) → px | |
@@ -817,23 +817,23 @@ rectangle (`u0, v0, u1, v1`).
 `SelectableFlags`, `Mouse` (Left/Right/Middle), `ButtonFlags`, `Key` (Escape, Enter, arrows, Space, A..Z, "0".."9"),
 `TabItemFlags`, `TabBarFlags`, `HoveredFlags`. Each holds a subset of ImGui's enum: see `register_ui_api`.
 
-### `eq`
+### `hs`
 
-The tables below include `eq.gamepad.*`. The **Cap** column is what a plugin's code needs to call it; `—` means
+The tables below include `hs.gamepad.*`. The **Cap** column is what a plugin's code needs to call it; `—` means
 nothing beyond `ui`. A UI pack's own code may call everything. A refused call does nothing and gives `nil`, with one
-line in the log. The list is `src/app/lua_eq_caps.cpp`; a function missing from it is taken to act and needs
+line in the log. The list is `src/app/lua_ui_caps.cpp`; a function missing from it is taken to act and needs
 `actions`. `self` means the function checks the caller itself, as each group's note says.
 
 Conventions: `[x]` is optional and `a | b` is one or the other. `name, child` is a stock window's name and a child's
 XML name (`"InventoryWindow", "IW_Money0"`). `slot` is a [possessions slot](#inventory-slots) and `bagSlot` a place
-in the bag at that slot, from 0. `eq.FirstWornSlot` (0), `LastWornSlot` (22), `FirstBagSlot` (23), `LastBagSlot` (32)
+in the bag at that slot, from 0. `hs.FirstWornSlot` (0), `LastWornSlot` (22), `FirstBagSlot` (23), `LastBagSlot` (32)
 and `CursorSlot` (33) are fields, not functions.
 
-The **item table** that `eq.Item`, `SlotItem`, `BagSlotItem`, `BankItem` and others return is `{name, id, icon,
+The **item table** that `hs.Item`, `SlotItem`, `BagSlotItem`, `BankItem` and others return is `{name, id, icon,
 count, charges, stackSize, stackable, bagSlots, weight, magic, lore, type, size, ac, hp, mana, category, sellable}`,
 plus `cooldown` (0..1 of the recast left) on the slot readers while a recast runs.
 
-#### Session and client state (lua_eq.cpp)
+#### Session and client state (lua_ui.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -858,7 +858,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | DebugTree | () → {} | Stub: always an empty table | — |
 | VoiceChat | () → false | Stub: no voice chat | — |
 
-#### Window replacement and layout (lua_eq.cpp)
+#### Window replacement and layout (lua_ui.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -874,7 +874,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | TakeCloseTopWindow | () → bool | Escape (close top window) went down this frame (once) | — |
 | ContextMenus | () → bool | Right click may open context menus | — |
 
-#### Stock window children, lists and controls (lua_eq.cpp)
+#### Stock window children, lists and controls (lua_ui.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -903,7 +903,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | ListClick | (name, child, row [, "left"\|"right"\|"double" [, column [, mods]]]) → ok | Click a list row. mods: 1 shift, 2 ctrl | actions |
 | ListHeaderClick | (name, child, column) → ok | Click a column header (0-based) | actions |
 
-#### Active tasks and quest journal (lua_eq_progress.cpp)
+#### Active tasks and quest journal (lua_ui_progress.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -922,7 +922,7 @@ available. `currentZone` is false for hidden objectives and those that count any
 list-group value, not a parent-objective ID or an invented numbered stage. Reading tasks does not select one or
 send a request. `OpenTask` changes the journal selection and visibility, not task or tracking state.
 
-#### Spell gems, buffs, cool-downs (lua_eq.cpp)
+#### Spell gems, buffs, cool-downs (lua_ui.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -934,7 +934,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | BuffOverlay | (name, child, "timer"\|"counter"\|"limit") → text, r, g, b \| nil | Overlay text on a buff button | — |
 | SpellGemClick | (child [, "left"\|"right"]) → ok | Cast, or forget (right) | actions |
 
-#### Hot buttons and the cursor (lua_eq.cpp)
+#### Hot buttons and the cursor (lua_ui.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -950,7 +950,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | ClearCursorButton | () → — | Drop the cursor's hotbutton | actions |
 | CursorAttachment | () → {icon, iconRect, rect, quantity, font, spell, coin, …} \| nil | What the mouse carries. Images are {texture,u0,v0,u1,v1}, rects are {x,y,w,h}. Money on the cursor has `coin` (0 pp .. 3 cp) and its count in `quantity`, and no `icon` | — |
 
-#### Items, bags, item jobs, item preview (lua_eq.cpp)
+#### Items, bags, item jobs, item preview (lua_ui.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -973,7 +973,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | ItemPreviewImage | (w, h [, "marketplace"]) → tex\|nil | The preview's 3D view for this frame | — |
 | ItemPreviewControl | (what [, x [, y [, view]]]) → — | "rotate", "pan", "zoom" or "reset" the preview camera | — |
 
-#### Parcels (lua_eq.cpp)
+#### Parcels (lua_ui.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -983,7 +983,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | SendParcel | (to, note, count [, place]) → err\|nil | Send the picked item (or the item at `place`) | actions |
 | SendParcelMoney | (to, note, pp, gp, sp, cp) → err\|nil | Send money | actions |
 
-#### Menus (lua_eq.cpp)
+#### Menus (lua_ui.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -996,14 +996,14 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | GameMenuHover | (menu, row) → — | Hover a row | — |
 | GameMenuClose | () → — | Close the menus | — |
 
-#### Compass (lua_eq_misc.cpp)
+#### Compass (lua_ui_misc.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
 | CompassStrips | () → left1, left2, w, degrees \| nil | Compass strip offsets and the shown heading | — |
 | CompassMarkers | () → {x…} | Window x of the client's compass points | — |
 
-#### Bank and trade (lua_eq_exchange.cpp)
+#### Bank and trade (lua_ui_exchange.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1012,11 +1012,11 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | CursorCoin | () → button, amount \| nil | Coin on the cursor (0 pp .. 3 cp) | — |
 | TradeState | () → {npc, partner, requested, open, myReady, theirReady} \| nil | Open trade or give window | — |
 
-#### Inventory manager (lua_eq_inventory_manager.cpp)
+#### Inventory manager (lua_ui_inventory_manager.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
-| AllItems | () → {{item, place, where, slot, sub, bag, kept, stale}} | Everything worn, carried, banked and shared. item has extra fields (value, noTrade, temporary, attuned, reqLevel, recLevel, equipSlots, tradeskill, augment, usable, tribute, noDestroy, stats). stale: a banked row from the bank as last seen (eq.BankSeen), not in reach | — |
+| AllItems | () → {{item, place, where, slot, sub, bag, kept, stale}} | Everything worn, carried, banked and shared. item has extra fields (value, noTrade, temporary, attuned, reqLevel, recLevel, equipSlots, tradeskill, augment, usable, tribute, noDestroy, stats). stale: a banked row from the bank as last seen (hs.BankSeen), not in reach | — |
 | ItemsRevision | () → inv, keep | Change counters | — |
 | BankSeen | () → live, age | live: the bank's rows are the bank as the server has it now; else they are the copy as last seen at a bank, age seconds ago (nil: never seen) | — |
 | ItemKept | (id) → bool | Item is marked Keep | — |
@@ -1026,7 +1026,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | BulkItems | (mode, {place…} [, dry]) → count, err\|nil | Bulk "sell", "destroy", "tribute" or "withdraw" (bank to your packs, never equipped) of the chosen items; Keep-marked items are refused | actions |
 | TakeItemSearch | () → text\|nil | /finditem's search, once | — |
 
-#### Abilities (lua_eq_abilities.cpp)
+#### Abilities (lua_ui_abilities.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1034,7 +1034,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | UsableSkills | () → {{id, name, combat, remaining}} | Skills the Actions window takes | — |
 | UseSkill | (id) → ok | Use a skill as its hot button does | actions |
 
-#### Ability book (lua_eq_abilitybook.cpp)
+#### Ability book (lua_ui_abilitybook.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1047,7 +1047,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | AbilityBookAutoskillRule | (key, endurance, mana, targetHp, targetHpAbove, selfHp, when, keepBuff) → — | Set an entry's rule | commands, actions |
 | AbilityBookAutoskillEnable | (on) → — | Autoskill master switch | actions |
 
-#### Achievements and rewards (lua_eq_achievements.cpp, lua_eq_rewards.cpp)
+#### Achievements and rewards (lua_ui_achievements.cpp, lua_ui_rewards.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1071,7 +1071,7 @@ through `tonumber`. Definition indices and wire ids are unsigned 32-bit integers
 server granted a reward. The full table shapes and cache rules are in [docs/dev-ui.md](dev-ui.md), under the
 achievement and reward-selection APIs.
 
-#### Spell book and spell sets (lua_eq_spellbook.cpp)
+#### Spell book and spell sets (lua_ui_spellbook.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1091,14 +1091,14 @@ achievement and reward-selection APIs.
 | MemorizeSpellSet | (n) → ok | Memorize set n (1-based) | actions |
 | DeleteSpellSet | (n) → — | Delete set n | commands |
 
-#### Character stats and /who (lua_eq_stats.cpp, lua_eq_social.cpp)
+#### Character stats and /who (lua_ui_stats.cpp, lua_ui_social.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
 | CharacterStats | () → {hpRegen, manaRegen, enduranceRegen, hpRegenBase, manaRegenBase, enduranceRegenBase, maxHp, maxMana, maxEndurance, maxHpBase, maxManaBase, maxEnduranceBase, ac, defense, weight, maxAir, maxLevel} \| nil | Computed stats that no label shows | — |
 | WhoResults | () → count, {{name, level, class, race, raceName, guild, zone, anonymous, roleplay, afk, linkdead, trader, buyer, offline, line}} | Last /who reply | — |
 
-#### Chat windows (lua_eq_chat.cpp)
+#### Chat windows (lua_ui_chat.cpp)
 
 `slot` is a chat window, 1..32.
 
@@ -1134,7 +1134,7 @@ achievement and reward-selection APIs.
 | ChatHitModes | () → {{id, name, mode, modes={names}}} | 1..6 melee, 7 ALL, 8 direct spell damage, 9 DoT damage, 10 healing, 11 HoT healing; ALL mode is -1 when mixed | — |
 | ChatSetHitMode | (index, mode) → — | Indices above; 0 Normal, 1 Abbreviated, 2 Number Only (Miss Only for melee misses); 7 sets all categories | commands |
 
-#### Hot bars and icon selection (lua_eq_hotbar.cpp)
+#### Hot bars and icon selection (lua_ui_hotbar.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1143,7 +1143,7 @@ achievement and reward-selection APIs.
 | HotBarSetting | (bar, name) → value | Bar 1..10: "PercentSize", "ShowKeyMap" or "ShowSpinner" | commands |
 | HotBarMenu | (bar [, x, y]) → ok | The bar's window menu | — |
 
-#### Social editor (lua_eq_socialedit.cpp)
+#### Social editor (lua_ui_socialedit.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1155,7 +1155,7 @@ achievement and reward-selection APIs.
 | CurrentSocial | () → n\|nil | Social a press is running | — |
 | StopSocial | () → — | /stopsocial | actions |
 
-#### Lua socials (lua_eq_luasocial.cpp)
+#### Lua socials (lua_ui_luasocial.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1175,7 +1175,7 @@ achievement and reward-selection APIs.
 | SocialToCursor | (n) → ok | Social as a hot button on the cursor | actions |
 | SocialColors | () → {{r,g,b} ×20} | Social colours | — |
 
-#### Map, atlas and zones (lua_eq_map.cpp)
+#### Map, atlas and zones (lua_ui_map.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1204,7 +1204,7 @@ achievement and reward-selection APIs.
 | ShowZoneMap | ([zone]) → — | Map window shows another zone (or own) | — |
 | MapZoneShown | () → long, short, own | Zone the map shows | — |
 
-#### Item comparison (lua_eq_compare.cpp)
+#### Item comparison (lua_ui_compare.cpp)
 
 The item against what the player wears (docs/item-compare.md). `c` = {usable, whyNot, notes, slots = {{slot, slotName, current, verdict, score, changes = {{key, name, before, after, delta, weight}}, weaponBefore, weaponAfter, gained, lost}}}, the best swap first; nil for no comparison.
 
@@ -1214,7 +1214,7 @@ The item against what the player wears (docs/item-compare.md). `c` = {usable, wh
 | CompareSlotItem | (window, child) → c\|nil | The item in a window's item slot (as SlotItem) | — |
 | CompareBagSlotItem | (bagWindow, index) → c\|nil | The item in a bag window's slot | — |
 
-#### Find window (lua_eq_find.cpp)
+#### Find window (lua_ui_find.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1225,7 +1225,7 @@ The item against what the player wears (docs/item-compare.md). `c` = {usable, wh
 | FindNpcWalk | (id) → ok, why | Walk there (/nav) | move |
 | FindOpen | ([open]) → bool | Find window state (get or set) | commands |
 
-#### Gamepad: `eq.gamepad.*` (lua_eq_gamepad.cpp)
+#### Gamepad: `hs.gamepad.*` (lua_ui_gamepad.cpp)
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1250,7 +1250,7 @@ The item against what the player wears (docs/item-compare.md). `c` = {usable, wh
 | gamepad.drop_cursor | () → ok | Drop the cursor item on the ground | actions |
 | gamepad.takes_b | () → — | A window closes itself on B this frame | — |
 
-#### Plugins (lua_eq_plugins.cpp)
+#### Plugins (lua_ui_plugins.cpp)
 
 `self`: from a plugin's code these reach only that plugin's own entries. PluginConsent and AnswerPluginConsent are
 refused to plugin code (nil / false).
@@ -1265,7 +1265,7 @@ refused to plugin code (nil / false).
 | PluginConsent | () → {server, serial, warning, plugins={{name, file, size, sha256, short}}} \| nil | Pending consent question for the server's compiled plugins | self |
 | AnswerPluginConsent | (true\|false\|nil, serial) → ok | Answer the question with that serial (nil = ask later); false when it is not the one pending | self |
 
-#### Scripts (lua_eq_scripts.cpp)
+#### Scripts (lua_ui_scripts.cpp)
 
 `self`: Run, Stop, Pause and Autorun are refused to plugin code. Scripts gives plugin code only the row of a script
 named as its tag, and no folders.
@@ -1278,7 +1278,7 @@ named as its tag, and no folders.
 | ScriptPause | (name) → ok | Pause | self |
 | SetScriptAutorun | (name, on) → ok | Character autorun | self |
 
-#### In-game browser (lua_eq_web.cpp)
+#### In-game browser (lua_ui_web.cpp)
 
 `self`: plugin code needs the 'web' permission and reaches its own tabs only. WebOpenExternal works only from the
 player's own windows.
@@ -1299,14 +1299,14 @@ player's own windows.
 | WebMessages | (tab) → {strings} | Page posts since the last call (plugin tabs only) | self |
 | WebOpenExternal | (url) → ok | Open in the system browser (http(s)) | self |
 
-#### Pre-game: login, server and character select, creation (lua_eq_pregame.cpp)
+#### Pre-game: login, server and character select, creation (lua_ui_pregame.cpp)
 
 `self`: these give nil / false to plugin windows (`plugin_window()`). The views take a `[revision]` argument and
 return `true` while nothing changed. Reading a view draws that screen in the client's place.
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
-| LoginScreen | ([revision]) → view\|true\|nil | Login view: revision, busy, status, sessionTicketAvailable (no token value), servers, accounts, characters, gameFolders, addons{…} and more (the comment in src/app/lua_eq_pregame.cpp lists them) | self |
+| LoginScreen | ([revision]) → view\|true\|nil | Login view: revision, busy, status, sessionTicketAvailable (no token value), servers, accounts, characters, gameFolders, addons{…} and more (the comment in src/app/lua_ui_pregame.cpp lists them) | self |
 | LoginSet | (field, value) → — | Edit a login field ("name", "host", "port", "username", "password", "ui", "remember", …) | self |
 | LoginDo | (action [, arg [, value]]) → ok | Login buttons: "login", "resume_token" (consume a returned token for this endpoint), "quit", "play", "select", "save", "delete", update* and addon* actions, … | self |
 | ServerSelect | ([revision]) → {revision, busy, status, server, servers={{name, status, canJoin, favorite}}, selected, last, addonHint}\|true\|nil | Server select view | self |
@@ -1409,7 +1409,7 @@ or -1 and say so in the chat window. Only call these on the client's thread, fro
 | `get_xtarget_data_bulk(out, size)` | `read` | every extended target slot: type, spawn id, aggro meter percent and HP percent, 16 bytes a slot, as many whole records as fit (layout in docs/plugins.md "Buff, spawn, extended target and raid records"); returns the bytes written. Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, get_xtarget_data_bulk)` first |
 | `get_raid_data_bulk(out, size)` | `read` | the raid roster: a 40-byte `HS_Bulk_RaidHeader`, then one `HS_Bulk_RaidData` per member, as many whole records as fit; the header says `active` 0 and `count` 0 outside a raid. Step records by the header's `recordSize` for `count` of them; `total` is the roster's member count, so `count < total` means the buffer was too small. Returns the bytes written. Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, get_raid_data_bulk)` first |
 | `cursor_origin()` | `read` | how the item on the cursor got there: `HAILSTONE_CURSOR_ORIGIN_UNKNOWN` (0, also empty), `_INVENTORY` (1, the player's pickup) or `_SERVER` (2, the server put it on the empty cursor); docs/plugins.md "The cursor item's origin". Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, cursor_origin)` first |
-| `add_ui_function(name, fn, user)`, `remove_ui_function` | `ui` | a function the plugin's windows call as `eq.Plugin("<name>").<name>(...)` |
+| `add_ui_function(name, fn, user)`, `remove_ui_function` | `ui` | a function the plugin's windows call as `hs.Plugin("<name>").<name>(...)` |
 | `arg_count`, `arg(i, out)`, `arg_field(i, key, out)` | | a UI function's arguments |
 | `out_value`, `out_begin_array`, `out_begin_table`, `out_key`, `out_end` | | a UI function's result |
 | `add_option(name, label, min, max, get, set, user)` | `ui` | an option in the Options window |

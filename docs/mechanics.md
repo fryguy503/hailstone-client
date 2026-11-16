@@ -739,7 +739,7 @@ Vectors in `tests/item_moves_vectors_test.cpp` (can-item-go-in-equip-slot 4000; 
   window's own item and list row are cleared (0x6f2120). Any later SelectSlot clears the outline. The original's
   answer still comes onto the cursor, to be dropped on its SendMoneyWnd (CTradeWnd's coin, location 3). Hailstone
   (deliberate difference: no SendMoneyWnd here) makes the answer the money picked for sending
-  (`set_parcel_money`, `eq.Parcels()`' sixth value): the coin stays in the inventory until Send money moves it
+  (`set_parcel_money`, `hs.Parcels()`' sixth value): the coin stays in the inventory until Send money moves it
   (inventory -> trade, then OP_ShopSendParcel), so none can be lost on the cursor or counted twice.
 
 ## Marketplace: the shelf after an open
@@ -817,7 +817,7 @@ find affect slot 1600). Each record is replayed call for call against the record
 - A book spell dropped or clicked onto a gem (HandleSpellLeftClick, StartSpellMemorization(slot, gem, bReplace 0)
   @0x75bf30): the original memorizes only into an empty gem and refuses one that holds a spell. Enhancement (option
   `replace_gem_spell`, hailstone.ini `spells.replace_gem`, Options > Interface "Drop Replaces a Memorized Spell", on
-  by default; `EqHost::gem_takes_book_spell`): a usable gem that holds another spell takes it too, and the memorize
+  by default; `UiHost::gem_takes_book_spell`): a usable gem that holds another spell takes it too, and the memorize
   runs as into an empty one. At 0 ticks OP_MemorizeSpell goes out for that gem; a stock EQEmu server's
   `Client::MemSpell` forgets the old spell (OP_MemorizeSpell 2, no "You forget" since the gem is being replaced)
   and memorizes the new. The gem keeps the old spell until then. The modern book's double-click and Memorize button
@@ -930,7 +930,7 @@ it with X.
 A deliberate difference, with no counterpart in the original: the Advanced Inventory window (Hailstone's own,
 `InventoryManagerWnd`, `ui/modern/inventorymanager.lua`; the EQ menu's row after Inventory and the inventory window's
 button) marks items Keep or Sell, by item id, so every copy of an item has the mark. Sell is the marks the merchant
-window's Sell marked sells (`eq.SellJunk`; called junk in the code and the settings). Keep is the client's own
+window's Sell marked sells (`hs.SellJunk`; called junk in the code and the settings). Keep is the client's own
 (`game/kept_items.h`, `GameConnection::set_item_kept`), kept per character in `kept_items.txt` in the character's
 folder. While an item is kept, or a bag holds one, the client refuses, with a line in the chat saying why and the item
 left where it is:
@@ -948,7 +948,7 @@ Nothing goes to the server: the refusals are the client not sending the move, so
 Checks run again at confirmation, not only when a quantity dialog opens. Marking an offered item Keep ends the
 active trader or buyer session; it cannot remain available for a later remote sale. A satchel item that is not listed
 (no price) does not end it. An item is marked Keep or Sell,
-not both: marking one clears the other. `eq.SetItemsKept` validates a batch before applying it, then persists it and
+not both: marking one clears the other. `hs.SetItemsKept` validates a batch before applying it, then persists it and
 changes the Keep revision once.
 
 ## The bank as last seen
@@ -965,8 +965,8 @@ the world. The bank counts as known (`bank_live`) from an OP_CharInventory that 
 for a bank or shared bank slot, or from the bank window opening. It counts as not known from an OP_CharInventory
 without any.
 
-While the bank is not known, `eq.AllItems` and `eq.FindItems` list the copy in the bank's place. Its rows are marked
-`stale`, and `eq.BankSeen` says how long ago it was taken. The window shows them dimmed, says "Bank as last seen ..."
+While the bank is not known, `hs.AllItems` and `hs.FindItems` list the copy in the bank's place. Its rows are marked
+`stale`, and `hs.BankSeen` says how long ago it was taken. The window shows them dimmed, says "Bank as last seen ..."
 in its footer, and refuses to move or use them. The copy is never put in the inventory, so no click, bulk job, lore
 check, item count or hot button can reach what it holds. Moving or using a banked item still needs the bank window
 open, which needs a banker in reach. The copy may be out of date: for one, the shared bank can be changed by the
@@ -975,7 +975,7 @@ account's other characters. Opening the bank shows what the server has.
 ## The Advanced Inventory's bulk actions
 
 Also Hailstone's own: selected rows in either the Advanced Inventory list or grid can be sold, donated as tribute,
-destroyed or withdrawn from the bank (`GameConnection::start_bulk_job`, `eq.BulkItems`). Each runs as a job, one
+destroyed or withdrawn from the bank (`GameConnection::start_bulk_job`, `hs.BulkItems`). Each runs as a job, one
 item at a time, through the same packets a player's clicks would send. Sell and tribute take only carried items
 (the general slots and their bags); destroy can also take banked items while the bank is open. These three actions
 exclude kept items. Withdraw only moves banked items into inventory, so Keep does not block it. Nothing worn is
@@ -1343,7 +1343,7 @@ Vectors in `tests/chat_trade_vectors_test.cpp` (set chat input mode 1500, toggle
   Enter (488) toggles the chat focus and, with movement keys held, AUTORUN with the mask forward 1 / back 2,
   left 4 / right 8, 0x10 while strafing; ';', '/', '[' (481, 482, 499) go into the input; 493..496 are the character
   select keys, 498 leaves character creation.
-- The chat keys with names (`ClientApp::key_command`, `app/lua_eq_chat.cpp`), while the keys go to the game: TELL
+- The chat keys with names (`ClientApp::key_command`, `app/lua_ui_chat.cpp`), while the keys go to the game: TELL
   puts "/tell " into the active chat window's input, CMDMODE_SAY "'" and CMDMODE_EMOTE ":" (InterpretCmd's say and
   emote commands, whatever the window's default channel), RTARGET "/rtarget <name>" (12365 without one),
   HISTORY_UP / HISTORY_DOWN the lines sent before (the input's own Up / Down); each replaces what the input held and
@@ -1379,7 +1379,7 @@ at most one member; mercenaries may only hold Main Tank.
 On stock EQEmu, assigning a role requires the member to be in the leader's zone. An existing role can also be
 cleared while its holder is in another zone; the menus explain this restriction.
 
-Deliberate differences from RoF2 (Hailstone's, marked in `app/lua_eq_hud.cpp` and `GameConnection::send_group_role`):
+Client-specific group-role behavior (`app/lua_ui_hud.cpp` and `GameConnection::send_group_role`):
 
 - The original's roles are a "Roles" submenu of the Group and Player windows' own context menu (added by
   CGroupWnd::sub_0067ac60 @0x67ac60 and CPlayerWnd::sub_00717f60 @0x717f60). Hailstone opens the role menu on its
@@ -1510,7 +1510,7 @@ Vectors in `tests/hotbutton_tracking_vectors_test.cpp` (do-hot-button 4000, hot-
 ## Hot button checks and cool-downs
 
 `game/hot_button_state.*` (unit tests `tests/hot_button_state_test.cpp`, no vectors), drawn by both UIs through
-`eq.HotButtonState` and `eq.ButtonCoolDown`:
+`hs.HotButtonState` and `hs.ButtonCoolDown`:
 
 - A button's cool-down (begin, duration, in client time): set-cool-down sets it unless its time is up (then it
   stops) and answers whether it runs; the draw makes the same rectangle as a spell gem: user colour 0x15f at alpha
@@ -1531,7 +1531,7 @@ Vectors in `tests/hotbutton_tracking_vectors_test.cpp` (do-hot-button 4000, hot-
   100 ms); the cast's item location and id are kept for OP_ItemRecastDelay (with the cast item valid or the packet's
   ignore byte, set the item recast timer (the cast item when it is an item cast, else none, delay, type)) and for
   OP_MemorizeSpell 3 (the cast item's timer = recast + the client time offset, in client-time ms). The inventory slot
-  draw on every item slot (`eq.Item` / `eq.BagSlotItem` / `eq.SlotItem` give `cooldown`) and on inventory hot
+  draw on every item slot (`hs.Item` / `hs.BagSlotItem` / `hs.SlotItem` give `cooldown`) and on inventory hot
   buttons: left = timer - now; restarted by set-cool-down-completion(timer, recast x 1000) when the button has none
   or is 1000 ms or more off, stopped when done. The potion belt starts a belt slot's the same way only while its
   button has none and the timer is ahead.
@@ -1937,7 +1937,7 @@ An illusion received while mounted runs the form-change unseat before rebuilding
 ## Mercenaries
 
 Vectors in `tests/merc_vectors_test.cpp` (25 files, every handler and sender of the client mercenary manager).
-`game/mercenary.*`, `net/game_connection_merc.cpp`, `app/lua_eq_merc.cpp`:
+`game/mercenary.*`, `net/game_connection_merc.cpp`, `app/lua_ui_merc.cpp`:
 
 - The manager: has-mercenary flag, state (5 active, 1 suspended, 2 suspended and not allowed in this zone, 0 dead; 3
   and 4 only from OP_MercenaryTimer), restoration timer, the active record, the owned list, slot count (reset to 1),
@@ -2058,3 +2058,18 @@ matches RoF2 when EQEmu's header carries a zero-based found-player rank. Both se
 current selection across window closes. Hailstone queues the latest changed category during a request rather than
 disabling selectors as RoF2 does; ten-second refresh guards and bounded missing-reply recovery are described in
 `docs/protocol/rof2-packets.md`.
+
+## Optional host movement profiles
+
+An active server extension may provide a bounded follow profile. The stock follow path is unchanged when no
+profile is supplied. Enhanced follow starts only through `/follow` or an admitted `manual_follow` control and
+targets a current living player within the supplied start range. The host retains both actor incarnations, uses
+an absolute planar stop distance with a restart margin, and time-scales turn and pitch smoothing. A profile can
+allow ungrouped targets, preserve the player's run mode and cancel on manual movement. It does not navigate
+around obstacles or add pathfinding. The ordinary movement/collision controller still moves the actor. An optional
+mount profile can remove acceleration ramping without raising the calculated speed limit.
+
+See docs/plugins.md "Server add-on services" for optional map visibility, merchant click interception and raid
+controls. Find eligibility also applies to an already active guide: each update checks the policy before observing
+the destination's current position, and denial retires the trail. The stock policy continues to allow ordinary
+guidance. All private protocol, class policies and content names belong to the extension.

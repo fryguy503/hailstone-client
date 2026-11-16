@@ -58,7 +58,7 @@ New plugins and Lua scripts are add-ons and are not part of this repository. Put
 
 Players install it by pasting its link into **Add-ons** on the login screen. [docs/addons.md](docs/addons.md) "For authors" shows how, and [docs/plugins.md](docs/plugins.md) describes the API.
 
-If an add-on needs something the client does not offer yet (a host function, TLO, event or `eq.*` call), send that as a change to this repository, with tests and docs. Only `plugins/example/` (the SDK example) lives here; the server plugins (NMS, Project Triune) are add-ons in repositories of their own too.
+If an add-on needs something the client does not offer yet (a host function, TLO, event or `hs.*` call), send that as a change to this repository, with tests and docs. Only `plugins/example/` (the SDK example) lives here; the server plugins (NMS, Project Triune) are add-ons in repositories of their own too.
 
 ## Clean-room rule
 

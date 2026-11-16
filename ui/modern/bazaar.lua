@@ -5,6 +5,7 @@
 -- The tiles are the game's slots (a click selects the item, a right click inspects it), each coin button is the
 -- original's money button (it opens the game's amount dialog), every other button the original's: the rules and
 -- messages are the game's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local M = dofile("lib/markets.lua")
@@ -21,7 +22,7 @@ local function selectedWare()
   for i = 0, SLOTS - 1 do
     local id = "BZR_BazaarSlot" .. i
     local _, checked = W.State(WINDOW, id)
-    if checked then return id, eq.SlotItem(WINDOW, id) end
+    if checked then return id, API.inventory.SlotItem(WINDOW, id) end
   end
   return nil, nil
 end
@@ -73,7 +74,7 @@ local function drawWindow(x, y, w, h, s)
   ui.BeginChild("##bzwaresscroll", 0, 0, false)
   for i = 0, SLOTS - 1 do
     local id = "BZR_BazaarSlot" .. i
-    if eq.SlotItem(WINDOW, id) then
+    if API.inventory.SlotItem(WINDOW, id) then
       if n % perRow ~= 0 then ui.SameLine(0, gap) end
       W.Slot(WINDOW, id, size, nil, "Trader's Satchel")
       n = n + 1
@@ -138,6 +139,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Bazaar Trader", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Bazaar Trader", WINDOW_OPTS, drawWindow)
 end)

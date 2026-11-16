@@ -28,7 +28,7 @@ inline constexpr std::size_t kPadAxes = static_cast<std::size_t>(PadAxis::Count)
 // The pad's family (SDL_GetGamepadType), for its button labels.
 enum class PadType : std::uint8_t { Generic, Xbox, PlayStation, Nintendo };
 
-// The names of docs/gamepad.md section 5 (eq.gamepad, the gamepad.bind.<input> settings).
+// The names of docs/gamepad.md section 5 (hs.gamepad, the gamepad.bind.<input> settings).
 inline constexpr std::array<std::string_view, kPadButtons> kPadButtonNames = {
     "a", "b", "x", "y", "lb", "rb", "lt", "rt", "back", "start", "guide", "ls", "rs", "up", "down", "left", "right",
     "touchpad"};

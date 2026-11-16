@@ -1,4 +1,4 @@
-// The Advanced Inventory (ui/modern/inventorymanager.lua over app/lua_eq_inventory_manager.cpp) and the Keep marks
+// The Advanced Inventory (ui/modern/inventorymanager.lua over app/lua_ui_inventory_manager.cpp) and the Keep marks
 // (game/kept_items.h), against the mock server: the window draws in both views without script errors and lists what
 // the character wears and carries; a kept item is not destroyed or dropped; the marks are kept per character; the
 // bulk sell, destroy and tribute of chosen slots (GameConnection::start_bulk_job); /finditem and /advi.
@@ -14,8 +14,10 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_menu.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
+#include "app/lua_ui_menu.h"
 #include "mock_server/harness.h"
 #include "net/merchant_packets.h"
 #include "net/tribute_packets.h"
@@ -91,17 +93,18 @@ TEST_CASE("Advanced Inventory: lists what is worn and carried, draws in both vie
         auto& conn = rig.conn;
         put_coin_away(conn);
 
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &rig.game;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ui::lua::LuaUi lua(dir / "modern", dir / "modern.txt");
-        lua.add_eq_api([&](lua_State* L) {
+        lua.add_ui_api([&](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         lua_State* L = lua.state();
         auto frames = [&] {
@@ -120,7 +123,7 @@ TEST_CASE("Advanced Inventory: lists what is worn and carried, draws in both vie
 
         // the mock's character: a Short Sword in Primary, five Rations in the first general slot
         REQUIRE(luaL_dostring(L, R"lua(
-local l = eq.AllItems()
+local l = hs.AllItems()
 return #l, l[1].where, l[1].item.name, l[1].place, l[2].where, l[2].item.count, l[2].place, l[2].kept, l[2].item.serial
 )lua") == LUA_OK);
         CHECK(lua_tointeger(L, 1) == 2);
@@ -138,22 +141,22 @@ return #l, l[1].where, l[1].item.name, l[1].place, l[2].where, l[2].item.count, 
         // Keep through the shared tools: the client has it, and a Sell mark on the same item clears it
         REQUIRE(luaL_dostring(L, R"lua(
 local tools = dofile("lib/itemtools.lua")
-local rations = eq.Item(23)
+local rations = hs.Item(23)
 tools.SetKeep(rations, true)
 local kept = tools.Kept(rations)
 tools.SetSell(rations, true)
-return kept, eq.ItemKept(rations.id), tools.Junk(rations)
+return kept, hs.ItemKept(rations.id), tools.Junk(rations)
 )lua") == LUA_OK);
         CHECK(lua_toboolean(L, 1));
         CHECK_FALSE(lua_toboolean(L, 2)); // Sell took the Keep mark off
         CHECK(lua_toboolean(L, 3));
         lua_settop(L, 0);
-        REQUIRE(luaL_dostring(L, "local t = dofile('lib/itemtools.lua') t.SetKeep(eq.Item(23), true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "local t = dofile('lib/itemtools.lua') t.SetKeep(hs.Item(23), true)") == LUA_OK);
         CHECK(conn.kept_items().kept(1002));
         const auto before_batch = conn.kept_items_revision();
         REQUIRE(luaL_dostring(L, R"lua(
-local invalid = pcall(eq.SetItemsKept, {{id=1001, name="Sword"}, {id=0}}, true)
-return invalid, eq.ItemKept(1001)
+local invalid = pcall(hs.SetItemsKept, {{id=1001, name="Sword"}, {id=0}}, true)
+return invalid, hs.ItemKept(1001)
 )lua") == LUA_OK);
         CHECK_FALSE(lua_toboolean(L, 1));
         CHECK_FALSE(lua_toboolean(L, 2));
@@ -161,8 +164,8 @@ return invalid, eq.ItemKept(1001)
         lua_settop(L, 0);
         REQUIRE(luaL_dostring(L, R"lua(
 local tools = dofile("lib/itemtools.lua")
-tools.SetKeepMany({eq.Item(13), eq.Item(23), eq.Item(13)}, true)
-return eq.ItemKept(1001), eq.ItemKept(1002), tools.Junk(eq.Item(23))
+tools.SetKeepMany({hs.Item(13), hs.Item(23), hs.Item(13)}, true)
+return hs.ItemKept(1001), hs.ItemKept(1002), tools.Junk(hs.Item(23))
 )lua") == LUA_OK);
         CHECK(lua_toboolean(L, 1));
         CHECK(lua_toboolean(L, 2));
@@ -181,11 +184,11 @@ return eq.ItemKept(1001), eq.ItemKept(1002), tools.Junk(eq.Item(23))
 
         // the stats, and the bulk actions' counts (the Rations are kept, the Short Sword worn: neither is taken)
         REQUIRE(luaL_dostring(L, R"lua(
-local st = eq.ItemStats()
-local l = eq.AllItems()
-local nd, ed = eq.BulkItems("destroy", { "i:23", "i:13", "b:0", "nonsense" }, true)
-local ns, es = eq.BulkItems("sell", { "i:23" }, true)
-local bad = pcall(eq.BulkItems, "juggle", {})
+local st = hs.ItemStats()
+local l = hs.AllItems()
+local nd, ed = hs.BulkItems("destroy", { "i:23", "i:13", "b:0", "nonsense" }, true)
+local ns, es = hs.BulkItems("sell", { "i:23" }, true)
+local bad = pcall(hs.BulkItems, "juggle", {})
 return st[1][1], st[1][2], #st, type(l[1].item.stats), l[2].item.tribute, nd, ed, ns, es, bad
 )lua") == LUA_OK);
         CHECK(std::string(lua_tostring(L, 1)) == "ac");
@@ -199,8 +202,8 @@ return st[1][1], st[1][2], #st, type(l[1].item.stats), l[2].item.tribute, nd, ed
         CHECK(std::string(lua_tostring(L, 9)) == "Open a merchant first.");
         CHECK_FALSE(lua_toboolean(L, 10));
         lua_settop(L, 0);
-        REQUIRE(luaL_dostring(L, "local t = dofile('lib/itemtools.lua') t.SetKeep(eq.Item(23), false) "
-                                 "return eq.BulkItems('destroy', { 'i:23', 'i:23' }, true)") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "local t = dofile('lib/itemtools.lua') t.SetKeep(hs.Item(23), false) "
+                                 "return hs.BulkItems('destroy', { 'i:23', 'i:23' }, true)") == LUA_OK);
         CHECK(lua_tointeger(L, 1) == 1); // once, chosen twice
         lua_settop(L, 0);
 
@@ -211,7 +214,7 @@ return st[1][1], st[1][2], #st, type(l[1].item.stats), l[2].item.tribute, nd, ed
         frames();
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         REQUIRE(luaL_dostring(L, "ui.SetSetting('advinv.stat', '') ui.SetSetting('advinv.sort', 'Value') "
-                                 "local s = ADVANCED_INVENTORY.sel local it = eq.AllItems()[2].item "
+                                 "local s = ADVANCED_INVENTORY.sel local it = hs.AllItems()[2].item "
                                  "s.places['i:23'] = {id=it.id, serial=it.serial, quantity=it.count} s.n = 1") == LUA_OK);
         frames();
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
@@ -258,17 +261,18 @@ TEST_CASE("Advanced Inventory selection and confirmation retain item instance an
         net::GameConnection* conn;
         net::Item replacement;
     } mutation{&conn, *conn.inventory().at(at(23))};
-    app::EqHost host;
+    app::UiHost host;
     host.in_game = host.ui_ready = true;
     host.game = &rig.game;
     host.conn = &conn;
-    app::EqApi api(host);
+    app::UiApi api(host);
     api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
     ui::lua::LuaUi lua(dir / "modern", dir / "modern.txt");
-    lua.add_eq_api([&](lua_State* state) {
+    lua.add_ui_api([&](lua_State* state) {
         api.register_functions(state);
         lua_pushcfunction(state, [](lua_State* s) { lua_pushboolean(s, 1); return 1; });
         lua_setfield(state, -2, "InGame");
+        hailstone::test::sync_ui_api_aliases(state);
     });
     lua_State* state = lua.state();
     lua_pushlightuserdata(state, &mutation);
@@ -281,7 +285,7 @@ TEST_CASE("Advanced Inventory selection and confirmation retain item instance an
     REQUIRE(luaL_dostring(state, R"lua(
 ui.SetSetting("advinv.view", "grid")
 test_started, test_confirm_drawn = 0, 0
-local invisible, button, bulk = ui.InvisibleButton, ui.Button, eq.BulkItems
+local invisible, button, bulk = ui.InvisibleButton, ui.Button, hs.BulkItems
 ui.InvisibleButton = function(id, ...)
   local clicked = invisible(id, ...)
   if test_hit == id then test_hit = nil return true end
@@ -297,17 +301,18 @@ ui.Button = function(label, ...)
   end
   return clicked
 end
-eq.BulkItems = function(mode, places, dry)
+hs.BulkItems = function(mode, places, dry)
   if not dry then test_started = test_started + 1 end
   return bulk(mode, places, dry)
 end
 test_all_items = 0
-local all_items = eq.AllItems
-eq.AllItems = function(...)
+local all_items = hs.AllItems
+hs.AllItems = function(...)
   test_all_items = test_all_items + 1
   return all_items(...)
 end
 )lua") == LUA_OK);
+    hailstone::test::sync_ui_api_aliases(state);
     auto one_frame = [&] {
         api.begin_frame();
         frame(lua);
@@ -666,17 +671,18 @@ TEST_CASE("Advanced Inventory: the bank as last seen is listed, marked stale, an
         REQUIRE(rig.until([&] { return conn.player_status().max_hp != 0; }));
         REQUIRE_FALSE(conn.bank_live());
 
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &rig.game;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ui::lua::LuaUi lua(dir / "modern", dir / "modern.txt");
-        lua.add_eq_api([&](lua_State* L) {
+        lua.add_ui_api([&](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         lua_State* L = lua.state();
         auto frames = [&] {
@@ -688,14 +694,14 @@ TEST_CASE("Advanced Inventory: the bank as last seen is listed, marked stale, an
         };
 
         REQUIRE(luaL_dostring(L, R"lua(
-local rows, bank, ring = eq.AllItems(), nil, nil
+local rows, bank, ring = hs.AllItems(), nil, nil
 for _, r in ipairs(rows) do
   if r.place == "b:3" then bank = r end
   if r.place == "b:3:1" then ring = r end
 end
-local live, age = eq.BankSeen()
-local n, _, found = eq.FindItems("bank", "steel ring")
-local carried = eq.AllItems()[2]
+local live, age = hs.BankSeen()
+local n, _, found = hs.FindItems("bank", "steel ring")
+local carried = hs.AllItems()[2]
 return bank and bank.stale, ring and ring.stale, ring and ring.bag, live, age, n, found[1] and found[1].stale,
   carried.stale == nil
 )lua") == LUA_OK);
@@ -712,10 +718,10 @@ return bank and bank.stale, ring and ring.stale, ring and ring.bag, live, age, n
         // Nothing reaches the copy: a bank click, a withdraw, a destroy.
         const int moves = MockEqServer::count(rig.server.zone_log, net::Op::MoveItem);
         REQUIRE(luaL_dostring(L, R"lua(
-eq.BankSlotClick(3, nil, "left", false)
-eq.BankSlotClick(3, 1, "left", false)
-local w = eq.BulkItems("withdraw", { "b:3:1" }, true)
-local d = eq.BulkItems("destroy", { "b:3" }, true)
+hs.BankSlotClick(3, nil, "left", false)
+hs.BankSlotClick(3, 1, "left", false)
+local w = hs.BulkItems("withdraw", { "b:3:1" }, true)
+local d = hs.BulkItems("destroy", { "b:3" }, true)
 return w, d
 )lua") == LUA_OK);
         CHECK(lua_tointeger(L, 1) == 0);
@@ -737,8 +743,8 @@ return w, d
         REQUIRE(conn.activate_bank(rig.server.config.own_spawn_id));
         REQUIRE(luaL_dostring(L, R"lua(
 local stale = 0
-for _, r in ipairs(eq.AllItems()) do if r.stale then stale = stale + 1 end end
-return stale, (eq.BankSeen())
+for _, r in ipairs(hs.AllItems()) do if r.stale then stale = stale + 1 end end
+return stale, (hs.BankSeen())
 )lua") == LUA_OK);
         CHECK(lua_tointeger(L, 1) == 0);
         CHECK(lua_toboolean(L, 2));

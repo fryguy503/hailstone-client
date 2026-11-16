@@ -2,11 +2,12 @@
 -- has, the price in coins, the level) with a search box, sorting by any column (the price by its whole value),
 -- "Usable only" (the game's MW_UsableButton, on to start) and "Affordable only"; prices you cannot pay are dimmed. Below it the item being considered (the merchant's, or
 -- one of yours picked in your bags to sell) with its price, Buy or Sell, Inspect, and your purse.
--- The rows, the selection and the buttons are the game's (eq.ListRow / eq.ListClick / eq.ClickChild on ItemList,
+-- The rows, the selection and the buttons are the game's (hs.ListRow / hs.ListClick / hs.ClickChild on ItemList,
 -- MW_Buy_Button, MW_Sell_Button, ...): a row click selects in the original, a right click inspects, Buy and Sell
 -- open the game's quantity dialog. The Recover and Parcels pages are the window's tab pages, with its buttons.
 -- Hailstone: Sell junk sells every carried item marked as junk (lib/itemtools.lua), one after the other; the
 -- Parcels page lists the parcels waiting, with Retrieve and Claim all, and sends an item or money by parcel.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local TC = dofile("lib/trade_common.lua")
@@ -35,9 +36,9 @@ end
 local function readRows()
   local out = rowList
   local n = 0
-  local rows = eq.ListInfo(WINDOW, LIST) or 0
+  local rows = API.windows.ListInfo(WINDOW, LIST) or 0
   for r = 0, rows - 1 do
-    local t, _, _, _, tex, u0, v0, u1, v1 = eq.ListRow(WINDOW, LIST, r)
+    local t, _, _, _, tex, u0, v0, u1, v1 = API.windows.ListRow(WINDOW, LIST, r)
     if t then
       local e = rowCache[r]
       if not (e and same(e, t, tex, u0, v0, u1, v1)) then
@@ -79,7 +80,7 @@ local view = {}
 local viewNeedle, viewAffordable, viewPurse, viewSortCol, viewSortAsc = nil, nil, nil, nil, nil
 
 local function goods(s, h)
-  local _, _, selected = eq.ListInfo(WINDOW, LIST)
+  local _, _, selected = API.windows.ListInfo(WINDOW, LIST)
   local all = readRows()
   local purse = TC.Purse()
   local needle = search:lower()
@@ -125,15 +126,15 @@ local function goods(s, h)
     ui.PushID(e.row)
     local x, y = ui.GetCursorScreenPos()
     if ui.Selectable("##row", e.row == selected, ui.SelectableFlags.SpanAllColumns, 0, icon) then
-      eq.ListClick(WINDOW, LIST, e.row, "left")
+      API.windows.ListClick(WINDOW, LIST, e.row, "left")
     end
     if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
-      eq.ListClick(WINDOW, LIST, e.row, "right") -- the item's display
+      API.windows.ListClick(WINDOW, LIST, e.row, "right") -- the item's display
       T.TakeRightClick()
     end
     if ui.IsItemHovered() and not ui.IsMouseDown(ui.Mouse.Right) then
       -- Hailstone: the row's item against what you wear (docs/item-compare.md)
-      items.NameTooltip(e.name, eq.CompareSlotItem(WINDOW, LIST .. ":" .. e.row), "Right-click for the item's details")
+      items.NameTooltip(e.name, API.compare.SlotItem(WINDOW, LIST .. ":" .. e.row), "Right-click for the item's details")
     end
     if e.tex then ui.DrawImage(e.tex, x, y, x + icon, y + icon, e.uv[1], e.uv[2], e.uv[3], e.uv[4]) end
     local tooMuch = e.copper > purse
@@ -164,11 +165,11 @@ local function considered(s, btnH)
   local x, y = ui.GetCursorScreenPos()
   local w = ui.GetContentRegionAvail()
   local size = 40 * s
-  local tex, u0, v0, u1, v1 = eq.ChildArt(WINDOW, "MW_SelectedItem", "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(WINDOW, "MW_SelectedItem", "decal")
   if tex == false then tex = nil end
   ui.DrawRectFilled(x - 4 * s, y - 4 * s, x + w + 4 * s, y + size + 4 * s, C.ink[1], C.ink[2], C.ink[3], 0.035, 7 * s)
   T.Icon(x, y, size, s, tex, u0, v0, u1, v1, nil, { radius = 6 })
-  local selling = eq.ChildShown(WINDOW, "MW_Sell_Button") == true
+  local selling = API.windows.ChildShown(WINDOW, "MW_Sell_Button") == true
   local tx = x + size + 10 * s
   local bw = 74 * s
   local textW = w - size - 10 * s - 2 * (bw + 6 * s)
@@ -232,7 +233,7 @@ local function purchasePage(s, h, btnH)
   consideredH = bottom - top
 end
 
--- The parcels waiting here (EQEmu's: eq.Parcels): a row picks one for Retrieve, which takes the first when none is
+-- The parcels waiting here (EQEmu's: hs.Parcels): a row picks one for Retrieve, which takes the first when none is
 -- picked; Claim all takes every one, one after another (Hailstone). Above the game's own Send fields.
 local pickedParcel = nil
 -- a parcel's "From ..." line by sender and date, made once rather than a frame
@@ -249,7 +250,7 @@ local function fromLine(from, sent)
   return line
 end
 local function parcels(s, btnH)
-  local list, claiming, busy = eq.Parcels()
+  local list, claiming, busy = API.inventory.Parcels()
   list = list or {}
   local _, availH = ui.GetContentRegionAvail()
   local listH = math.max(40 * s, availH - 6 * (btnH + 8 * s) - 16 * s) -- (room for the buttons and the Send fields)
@@ -274,7 +275,7 @@ local function parcels(s, btnH)
         local col = picked and C.accent or C.ink
         ui.DrawRectFilled(cx, y, cx + cw, y + rh - 2 * s, col[1], col[2], col[3], a, 5 * s)
       end
-      local tex, u0, v0, u1, v1 = eq.ItemIcon(it.icon)
+      local tex, u0, v0, u1, v1 = API.assets.ItemIcon(it.icon)
       T.Icon(cx + 4 * s, y + (rh - isz) / 2 - 1 * s, isz, s, tex, u0, v0, u1, v1, nil, { radius = 5 })
       local nx = cx + isz + 14 * s
       local name = it.name .. ((it.stackable and it.count > 1) and ("  x" .. it.count) or "")
@@ -296,13 +297,13 @@ local function parcels(s, btnH)
   if T.Button("##retrieve", x, y, x + bw, y + btnH, s, "Retrieve",
       { enabled = take ~= nil and not busy and claiming == 0,
         tooltip = pickedParcel and "Take the parcel picked above" or "Take the first parcel (or click one above)" }) then
-    eq.RetrieveParcel(take)
+    API.inventory.RetrieveParcel(take)
   end
   local label = claiming > 0 and string.format("Claiming... %d left", claiming)
     or (#list > 0 and ("Claim all (" .. #list .. ")") or "Claim all")
   if T.Button("##claimall", x + bw + 8 * s, y, x + w, y + btnH, s, label,
       { primary = true, enabled = #list > 0 and claiming == 0, tooltip = "Take every parcel here into your bags" }) then
-    eq.ClaimAllParcels()
+    API.inventory.ClaimAllParcels()
   end
   ui.Dummy(w, btnH + 6 * s)
 end
@@ -310,7 +311,7 @@ end
 -- Sending a parcel (Hailstone over EQEmu's OP_ShopSendParcel): an item picked in the bags (a click on it while
 -- the merchant is open), or money typed in or picked with the inventory's coin buttons (the game's quantity dialog
 -- asks how much; that coin's box takes it); To and Note are the window's boxes. An item's Send is the window's
--- (a stack asks how many); money goes by eq.SendParcelMoney. The server's answer comes in the chat.
+-- (a stack asks how many); money goes by hs.SendParcelMoney. The server's answer comes in the chat.
 local sendMoney, coins, sendNote, moneySerial = false, { "", "", "", "" }, nil, nil
 local COIN_NAMES = { "pp", "gp", "sp", "cp" }
 local COIN_LONG = { "platinum", "gold", "silver", "copper" }
@@ -323,7 +324,7 @@ local function amountText(n)
   return table.concat(parts, ", ")
 end
 local function sendParcel(s, btnH)
-  local _, _, _, sending, picked, money = eq.Parcels()
+  local _, _, _, sending, picked, money = API.inventory.Parcels()
   -- a pick with the inventory's coin buttons: that coin for sending, the Money side shown
   if money and money.serial ~= moneySerial then
     moneySerial = money.serial
@@ -340,7 +341,7 @@ local function sendParcel(s, btnH)
   end
   local rx = x + 2 * segW + 14 * s
   if sendMoney then
-    local p = { eq.Money() }
+    local p = { API.character.Money() }
     local cw = (x + w - rx - 3 * 6 * s) / 4
     for i = 1, 4 do
       ui.SetCursorScreenPos(rx + (i - 1) * (cw + 6 * s), y + 1 * s)
@@ -349,7 +350,7 @@ local function sendParcel(s, btnH)
       if changed then coins[i] = t:gsub("%D", "") end
     end
   elseif picked then
-    local tex, u0, v0, u1, v1 = eq.ItemIcon(picked.icon)
+    local tex, u0, v0, u1, v1 = API.assets.ItemIcon(picked.icon)
     local isz = btnH
     T.Icon(rx, y, isz, s, tex, u0, v0, u1, v1, nil, { radius = 4 })
     local name = picked.name .. ((picked.stackable and picked.count > 1) and ("  x" .. picked.count) or "")
@@ -385,7 +386,7 @@ local function sendParcel(s, btnH)
         ui.Dummy(0, 4 * s)
         if ui.Button("Send") then
           local m = ask.coins
-          sendNote = eq.SendParcelMoney(ask.to, ask.note, m[1], m[2], m[3], m[4])
+          sendNote = API.inventory.SendParcelMoney(ask.to, ask.note, m[1], m[2], m[3], m[4])
           if not sendNote then coins = { "", "", "", "" } end
           moneyAsk = nil
           ui.CloseCurrentPopup()
@@ -448,14 +449,14 @@ local function body(x, y, w, h, s)
   ui.SetCursorScreenPos(fx, fy + (btnH - lh) / 2)
   ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, "You have")
   ui.SameLine()
-  local p, g, sv, c = eq.Money()
+  local p, g, sv, c = API.character.Money()
   TC.Amount({ p, g, sv, c })
-  local done, total, mode = eq.ItemJob()
+  local done, total, mode = API.inventory.ItemJob()
   local junkW = 130 * s
   local jx = fx + fw - 90 * s - 8 * s - junkW
   if done and mode == "sell" then
     if T.Button("##selljunk", jx, fy, jx + junkW, fy + btnH, s, string.format("Selling %d / %d", done, total),
-        SELLING_OPTS) then eq.StopItemJob() end
+        SELLING_OPTS) then API.inventory.StopItemJob() end
   else
     local n = tools.JunkCarried()
     if T.Button("##selljunk", jx, fy, jx + junkW, fy + btnH, s, n > 0 and ("Sell marked (" .. n .. ")") or "Sell marked",
@@ -467,6 +468,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Merchant", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Merchant", OPTS, body)
 end)

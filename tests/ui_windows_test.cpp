@@ -1,5 +1,5 @@
-// Stock windows over the eq API driven by packets (app/lua_eq_misc.cpp, lua_eq_player.cpp, lua_eq_tint.cpp,
-// lua_eq_dialogs.cpp): the respawn window, the context tip window, the colour picker, the options window's Colors
+// Stock windows over the hs API driven by packets (app/lua_ui_misc.cpp, lua_ui_player.cpp, lua_ui_tint.cpp,
+// lua_ui_dialogs.cpp): the respawn window, the context tip window, the colour picker, the options window's Colors
 // page, the extended target window's context menu, and the pet window's gauges for several pets.
 #include <doctest/doctest.h>
 
@@ -21,16 +21,20 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
-#include "app/lua_eq_hotbar.h"
-#include "app/lua_eq_windows.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
+#include "app/lua_ui_hotbar.h"
+#include "app/lua_ui_windows.h"
 #include "core/byte_io.h"
 #include "core/ini_file.h"
+#include "core/process_serial.h"
 #include "game/bazaar.h"
 #include "game/hot_button_menu.h"
 #include "game/hotbuttons.h"
 #include "game_files.h"
 #include "mock_server/harness.h"
+#include "mq_test_world.h"
 #include "net/game_connection.h"
 #include "net/group_packets.h"
 #include "net/market_packets.h"
@@ -99,15 +103,15 @@ struct Harness {
     hailstone::test::ScratchDir dir_scratch{"ui_windows_test"};
     fs::path dir = dir_scratch.path();
     net::GameConnection conn;
-    app::EqHost host;
-    std::unique_ptr<app::EqApi> api;
+    app::UiHost host;
+    std::unique_ptr<app::UiApi> api;
     explicit Harness(const GameDir& game, net::ConnectionOptions options = {}) : conn(game, std::move(options)) {
         fs::remove_all(dir);
         fs::create_directories(dir);
         host.in_game = host.ui_ready = true;
         host.game = &game;
         host.conn = &conn;
-        api = std::make_unique<app::EqApi>(host);
+        api = std::make_unique<app::UiApi>(host);
         api->load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ImGui::GetIO().DisplaySize = ImVec2(1280, 720);
     }
@@ -226,15 +230,15 @@ TEST_CASE("Raid member menus: clicked identities, grouped and ungrouped rows, an
         test::Rig rig;
         REQUIRE(rig.to_zone());
         auto& conn = rig.conn;
-        app::EqHost host;
+        app::UiHost host;
         host.conn = &conn;
         host.in_game = host.ui_ready = true;
-        app::EqApi api(host);
+        app::UiApi api(host);
         std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
         luaL_openlibs(lua.get());
         lua_newtable(lua.get());
         api.register_functions(lua.get());
-        lua_setglobal(lua.get(), "eq");
+        lua_setglobal(lua.get(), "hs");
         auto run = [&](const std::string& code) {
             INFO(code);
             REQUIRE(luaL_dostring(lua.get(), code.c_str()) == LUA_OK);
@@ -266,9 +270,9 @@ TEST_CASE("Raid member menus: clicked identities, grouped and ungrouped rows, an
                 return row.size() > 1 && row[1] == name;
             });
             REQUIRE(found != rows.end());
-            run("eq.ListClick('RaidWindow', '" + list + "', " + std::to_string(found - rows.begin()) + ", 'right')");
+            run("hs.ListClick('RaidWindow', '" + list + "', " + std::to_string(found - rows.begin()) + ", 'right')");
         };
-        auto action = [&](const std::string& label) -> app::EqHost::MenuRow {
+        auto action = [&](const std::string& label) -> app::UiHost::MenuRow {
             REQUIRE(host.menus.size() == 1);
             const auto& rows = host.menus[0].rows;
             auto found = std::find_if(rows.begin(), rows.end(), [&](const auto& row) { return row.text == label; });
@@ -487,10 +491,11 @@ TEST_CASE("Group role UI packs: icons beside fitted names and name right clicks 
         ui::lua::LuaUi lua(source, scratch.path() / "pack.txt");
         lua.set_entry_scripts(pack == "modern" ? std::vector<std::string>{"player.lua", "group.lua"}
                                                 : std::vector<std::string>{"hud.lua", "group.lua"});
-        lua.add_eq_api([&](lua_State* state) {
+        lua.add_ui_api([&](lua_State* state) {
             t.api->register_functions(state);
             lua_pushcfunction(state, [](lua_State* L) { lua_pushboolean(L, true); return 1; });
             lua_setfield(state, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(state);
         });
         // Observe the real shipped helper and text drawing without substituting either renderer.
         REQUIRE(lua.run_for_test("", R"lua(
@@ -647,10 +652,11 @@ struct RolePackRig {
         const auto source = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
         lua = std::make_unique<ui::lua::LuaUi>(source, scratch.path() / "pack.txt");
         lua->set_entry_scripts(std::move(scripts));
-        lua->add_eq_api([this](lua_State* state) {
+        lua->add_ui_api([this](lua_State* state) {
             t.api->register_functions(state);
             lua_pushcfunction(state, [](lua_State* L) { lua_pushboolean(L, true); return 1; });
             lua_setfield(state, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(state);
         });
     }
     ~RolePackRig() { lua.reset(); }
@@ -659,6 +665,8 @@ struct RolePackRig {
         for (int i = 0; i < count; ++i) {
             ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
             t.api->begin_frame();
+            // This fixture intentionally replaces legacy bindings after registration (including the whole pad table).
+            hailstone::test::sync_ui_api_aliases(lua->state());
             ImGui::NewFrame();
             if (before) before();
             lua->frame();
@@ -820,7 +828,7 @@ TEST_CASE("Group role UI packs: Y on a gamepad Group window row opens that membe
     // A pad in menu mode; padPress is the button that went down this frame.
     REQUIRE(r.run(R"lua(
       padPress = nil
-      eq.gamepad = {
+      hs.gamepad = {
         connected = function() return true end,
         type = function() return 'xbox' end,
         mode = function() return 'menu' end,
@@ -1036,11 +1044,11 @@ TEST_CASE("Respawn window: an accepted resurrection enables its line and leaves 
     luaL_openlibs(L.get());
     lua_newtable(L.get());
     t.api->register_functions(L.get());
-    lua_setglobal(L.get(), "eq");
+    lua_setglobal(L.get(), "hs");
     auto selected = [&] {
         t.api->begin_frame();
         lua_settop(L.get(), 0);
-        const int status = luaL_dostring(L.get(), "return (select(3, eq.ListInfo('RespawnWnd', 'OptionsList')))");
+        const int status = luaL_dostring(L.get(), "return (select(3, hs.ListInfo('RespawnWnd', 'OptionsList')))");
         CHECK(status == LUA_OK);
         if (status != LUA_OK || !lua_isinteger(L.get(), -1)) return -2;
         return static_cast<int>(lua_tointeger(L.get(), -1));
@@ -1049,7 +1057,7 @@ TEST_CASE("Respawn window: an accepted resurrection enables its line and leaves 
     auto row = [&](int r) {
         t.api->begin_frame();
         lua_settop(L.get(), 0);
-        const std::string code = "local t = eq.ListRow('RespawnWnd', 'OptionsList', " + std::to_string(r) +
+        const std::string code = "local t = hs.ListRow('RespawnWnd', 'OptionsList', " + std::to_string(r) +
                                  ") return t[1] .. (t.disabled and ':disabled' or '')";
         const int status = luaL_dostring(L.get(), code.c_str());
         CHECK(status == LUA_OK);
@@ -1400,7 +1408,7 @@ TEST_CASE("Options window: the Colors page saves a user colour to the character'
     hailstone::test::ScratchDir root_scratch("ui_windows_game");
     fs::path root = root_scratch.path();
     fs::create_directories(root);
-    if (auto s = real->find("eqstr_us.txt")) fs::create_symlink(*s, root / "eqstr_us.txt");
+    if (auto s = real->find("eqstr_us.txt")) fs::copy_file(*s, root / "eqstr_us.txt");
     const std::string eqclient = "[TextColors]\nUser_3_Red=1\nUser_3_Green=2\nUser_3_Blue=3\n";
     { std::ofstream(root / "eqclient.ini", std::ios::binary) << eqclient; }
     {
@@ -1651,15 +1659,26 @@ TEST_CASE("Tracking window: its controls run the /track commands, auto update ke
     opts.servers_dir = game_scratch.path() / "servers";
     Harness t(game, opts);
     const char* W = "TrackingWnd";
+    // These controls require current in-zone skill admission, even though this fixture sends no Track request.
+    net::GameConnectionTestAccess::state(t.conn) = net::ConnectionState::InZone;
+    auto& world = t.conn.world_for_test();
+    world.player_id = 1;
+    auto& player = world.spawns[1];
+    player.id = 1;
+    player.incarnation = core::next_process_identity();
     net::PlayerProfile pp;
+    pp.level = 1;
     pp.class_ = 1; // a warrior: the con filters and the sort are disabled and read 0
     t.conn.set_profile_for_test(pp);
+    REQUIRE_FALSE(t.conn.tracking_admitted());
     CHECK(t.api->child_state(W, "TRW_FilterRedButton") == false);
     CHECK(t.api->child_state(W, "TRW_TrackSortCombobox") == false);
     CHECK(t.api->child_state(W, "TRW_TrackPlayersCombobox") != false);
 
     pp.class_ = 4; // a ranger
     t.conn.set_profile_for_test(pp);
+    net::GameConnectionTestAccess::tracking_skill_fixture(t.conn); // real profile skill and synthetic table cap
+    REQUIRE(t.conn.tracking_admitted());
     CHECK(t.api->child_state(W, "TRW_FilterRedButton") == true);
     CHECK(t.api->click_child(W, "TRW_FilterRedButton"));
     CHECK((t.conn.tracking().filter.con_mask & game::kTrackRed) != 0);
@@ -1694,7 +1713,7 @@ TEST_CASE("Tracking window: its controls run the /track commands, auto update ke
 }
 
 // The hot bar's Lock layout row (Hailstone's): on the window's own menu (the modern UI's frames), with the layout
-// setting it toggles; not on eq.HotBarMenu's (the gamepad pack's pages, which have no frame to lock).
+// setting it toggles; not on hs.HotBarMenu's (the gamepad pack's pages, which have no frame to lock).
 TEST_CASE("Hot bar: Lock layout on the window's menu only, toggling hud.lock.<window>") {
     const GameDir* g = test::game_dir();
     if (!g) return;
@@ -1707,14 +1726,14 @@ TEST_CASE("Hot bar: Lock layout on the window's menu only, toggling hud.lock.<wi
     t.host.set_layout_setting = [&](std::string_view key, std::string_view value) {
         settings[std::string(key)] = std::string(value);
     };
-    auto lock_row = [&]() -> const app::EqHost::MenuRow* {
+    auto lock_row = [&]() -> const app::UiHost::MenuRow* {
         REQUIRE(t.host.menus.size() == 1);
         for (const auto& r : t.host.menus[0].rows)
             if (r.text == "Lock layout") return &r;
         return nullptr;
     };
     CHECK(t.api->context_menu("HotButtonWnd2", 10, 10));
-    const app::EqHost::MenuRow* lock = lock_row();
+    const app::UiHost::MenuRow* lock = lock_row();
     REQUIRE(lock);
     CHECK_FALSE(lock->check);
     const int at = static_cast<int>(lock - t.host.menus[0].rows.data());
@@ -1725,7 +1744,7 @@ TEST_CASE("Hot bar: Lock layout on the window's menu only, toggling hud.lock.<wi
     CHECK(lock_row()->check);
     CHECK(t.api->menu_click(0, at));
     CHECK(settings["hud.lock.HotButtonWnd2"] == "0");
-    // eq.HotBarMenu's path (no layout lock): the row is not there
+    // hs.HotBarMenu's path (no layout lock): the row is not there
     t.host.menus.clear();
     app::open_hot_bar_menu(t.host, 1, 10, 10);
     CHECK(lock_row() == nullptr);

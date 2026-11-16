@@ -131,14 +131,14 @@ TEST_CASE("Layout: the data folder is the Hailstone folder, or a problem to repo
 
     // Unpacked into an EverQuest folder (the asset folder, never written): a problem, without even the write test's
     // probe file.
-    const fs::path eq = tmp.path / "RoF2";
-    write(eq / "eqgame.exe", "exe");
-    CHECK(choose(eq).dir == eq);
-    CHECK(choose(eq).problem.find("EverQuest folder") != std::string::npos);
-    CHECK_FALSE(fs::exists(eq / ".hailstone-write-test"));
-    const fs::path eq2 = tmp.path / "RoF2b";
-    write(eq2 / "Spells_US.txt", "spells");
-    CHECK_FALSE(choose(eq2).problem.empty());
+    const fs::path hs = tmp.path / "game-assets";
+    write(hs / "eqgame.exe", "exe");
+    CHECK(choose(hs).dir == hs);
+    CHECK(choose(hs).problem.find("EverQuest folder") != std::string::npos);
+    CHECK_FALSE(fs::exists(hs / ".hailstone-write-test"));
+    const fs::path ui2 = tmp.path / "RoF2b";
+    write(ui2 / "Spells_US.txt", "spells");
+    CHECK_FALSE(choose(ui2).problem.empty());
 
     // A folder that cannot be written: a problem that names it (where the system lets a test take the permission away;
     // an administrator can write anywhere).

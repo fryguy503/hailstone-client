@@ -603,7 +603,7 @@ TEST_CASE("loot: a stack on someone else's corpse asks how many (CLootWnd::Reque
     // The stack opens the quantity dialog centred, from 7 down; nothing is sent until the answer.
     conn.click_slot(ItemSlot::corpse(23));
     REQUIRE(conn.quantity_request().has_value());
-    CHECK(conn.quantity_request()->loot);
+    CHECK(conn.quantity_request()->op == QuantityOp::Loot);
     CHECK(conn.quantity_request()->centred);
     CHECK(conn.quantity_request()->max == 7);
     CHECK(conn.quantity_request()->start == 7);

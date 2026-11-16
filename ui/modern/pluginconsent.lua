@@ -1,8 +1,9 @@
--- Server plugins (Hailstone): the question a server's compiled plugins ask before they load (eq.PluginConsent; docs/
+-- Server plugins (Hailstone): the question a server's compiled plugins ask before they load (hs.PluginConsent; docs/
 -- plugins.md "The server's compiled plugins ask first"). Which server, each plugin's name, file, size and the start of
 -- its SHA-256, the warning that a compiled plugin is a program with full access to the computer, and Allow / Don't
 -- allow (both kept for those bytes on this server). Its close box puts the question away until the next zone-in. It
 -- stands in for the client's own prompt ("PluginConsent"), which stays off while this runs.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local K = dofile("lib/dialogs_kit.lua")
 local T = hud.T
@@ -20,7 +21,7 @@ local function sizeText(n)
 end
 
 ui.window("Server Plugins", function()
-  local q = eq.PluginConsent()
+  local q = API.plugins.Consent()
   if not q then
     shownSerial = nil
   elseif q.serial ~= shownSerial then
@@ -32,7 +33,7 @@ ui.window("Server Plugins", function()
     rollup = false, -- (a question to answer: kept whole)
     size = function() return 460, 150 + 38 * (q and #q.plugins or 1) end,
     place = K.Centered,
-    onClose = function() if q then eq.AnswerPluginConsent(nil, q.serial) end end,
+    onClose = function() if q then API.plugins.AnswerConsent(nil, q.serial) end end,
   }, function(x, y, w, h, s)
     local cx = ui.GetCursorPos()
     ui.PushTextWrapPos(cx + w)
@@ -55,9 +56,9 @@ ui.window("Server Plugins", function()
     local bw = 150 * s
     local armed = ui.GetTime() - shownAt >= ARM_SECONDS
     if not armed then ui.BeginDisabled() end
-    if ui.Button("Allow##consent", bw, K.ButtonH(s)) and armed then eq.AnswerPluginConsent(true, q.serial) end
+    if ui.Button("Allow##consent", bw, K.ButtonH(s)) and armed then API.plugins.AnswerConsent(true, q.serial) end
     ui.SameLine()
-    if ui.Button("Don't allow##consent", bw, K.ButtonH(s)) and armed then eq.AnswerPluginConsent(false, q.serial) end
+    if ui.Button("Don't allow##consent", bw, K.ButtonH(s)) and armed then API.plugins.AnswerConsent(false, q.serial) end
     if not armed then ui.EndDisabled() end
   end)
 end)

@@ -25,6 +25,8 @@
 #include "app/input_script.h"
 #include "app/zone_settle.h"
 #include "app/server_links.h"
+#include "app/world_geometry_queries.h"
+#include "render/world_geometry_renderer.h"
 
 #include <algorithm>
 #include <atomic>
@@ -59,6 +61,7 @@
 #include "core/log.h"
 #include "core/wipe.h"
 #include "app/nameplate_layer.h"
+#include "app/nameplate_input.h"
 #include "game/nameplate_overlap.h"
 #include "game/sky_colours.h"
 #include "game/option_commands.h"
@@ -146,7 +149,7 @@
 #include "ui/lua/lua_host.h"
 #include "ui/ui_packs.h"
 #include "ui/ui_textures.h"
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "app/gamepad.h"
 #include "game/hotbuttons.h"
 #include "game/option_commands.h"
@@ -257,9 +260,9 @@ public:
                              heaps[i].allocations));
     }
 
-    // The Lua UI goes first: its state's finalizers may still reach what the eq.* functions hold (eq_host_, eq_api_,
+    // The Lua UI goes first: its state's finalizers may still reach what the hs.* functions hold (ui_host_, ui_api_,
     // the views), which members declared after it would already have destroyed.
-    ~ClientApp() { lua_ui_.reset(); }
+    ~ClientApp() { retire_world_geometry(); lua_ui_.reset(); }
     ClientApp(const ClientApp&) = delete;
     ClientApp& operator=(const ClientApp&) = delete;
     explicit ClientApp(ClientOptions& options)
@@ -344,28 +347,34 @@ public:
         // The user interface (ui/ui_packs.h): the picked server's (ServerProfile::ui), else hailstone.ini ui.name, a
         // folder of <client>/ui; its scripts' settings in ui/settings/<name>.txt of the data folder (the first-start
         // migration brings the old ones).
-        ui_packs_ = ui::list_ui_packs(platform::ui_packs_dir());
+        refresh_ui_packs(true);
         const ui::UiPack* pack = ui::find_ui_pack(ui_packs_, login_view_.ui);
         ui_name_ = pack ? pack->id : "modern";
+        ui_selection_context_ = ui::selected_profile_id(login_view_) + '\n' +
+            (login_view_.ui.empty() ? config_.get_string("ui.name", "modern") : login_view_.ui);
+        if (pack) loaded_ui_pack_ = *pack;
         lua_ui_ = std::make_unique<ui::lua::LuaUi>(pack ? pack->dir : platform::ui_packs_dir() / "modern",
-                                                   platform::ui_settings_file(ui_name_));
+                                                   platform::ui_settings_file(ui_name_),
+                                                   pack ? pack->base_dirs : std::vector<std::filesystem::path>{},
+                                                   ui_data_roots(pack), ui_name_ != "modern" && ui_name_ != "gamepad");
         login_view_.ui_packs = ui_packs_; // the login screen picks one per server (use_ui_pack at the login)
         refresh_game_folders();
         ui_textures_ = std::make_unique<ui::UiTextures>(vk_, game_);
         ui_textures_->set_all_art(pack && pack->game_art);
         log_memory("startup: Lua and UI textures");
-        eq_host_.textures = ui_textures_.get();
-        eq_host_.keep_cpp_windows = config_.get_bool("ui.cpp_windows", false);
+        ui_host_.textures = ui_textures_.get();
+        ui_host_.interface_list = [this] { return ui_packs_; };
+        ui_host_.interface_status = [this] { return interface_status(); };
+        ui_host_.keep_cpp_windows = config_.get_bool("ui.cpp_windows", false);
         // the layout copy brings the UI's window layout of the character copied from (none: the shared layout)
-        eq_host_.copy_ui_layout = [this](const std::filesystem::path& dir) {
+        ui_host_.copy_ui_layout = [this](const std::filesystem::path& dir) {
             if (lua_ui_) lua_ui_->copy_character_layout(CharacterFiles{dir}.ui_settings(ui_name_));
         };
         apply_video_options();
         game_view_.dev_windows = config_.get_bool("ui.dev_windows", false);
         lua_ui_->set_show_control(game_view_.dev_windows);
-        eq_api_ = std::make_unique<EqApi>(eq_host_);
-        ui::lua::set_replaced_check([this](std::string_view screen) { return eq_api_ && eq_api_->replaces(screen); });
-        lua_ui_->add_eq_api([this](lua_State* L) { register_eq_api(L); });
+        ui_api_ = std::make_unique<UiApi>(ui_host_);
+        ui::lua::set_replaced_check([this](std::string_view screen) { return ui_api_ && ui_api_->replaces(screen); });
         lua_ui_->set_caller_scope(lua_caller_scope());
         lua_ui_->set_clipboard_check(lua_clipboard_check());
         // Plugins and MacroQuest Lua scripts (app/automation.h): under the server's hailstone.cfg, from the zone-in.
@@ -420,10 +429,12 @@ public:
             if (conn_) conn_->ui_message(t);
             else game_view_.chat.add(ui::ChatChannel::System, t);
         };
-        nenv.request_server_path = [this](std::uint32_t id) {
-            if (conn_) conn_->request_quiet_path(id);
+        nenv.request_server_path = [this](std::uint32_t id, game::ServerPathOrigin origin) {
+            return conn_ ? conn_->request_quiet_path(id, origin) : game::ServerPathLease{};
         };
-        nenv.server_path = [this] { return conn_ ? conn_->take_quiet_path() : std::nullopt; };
+        nenv.server_path = [this](const game::ServerPathLease& lease) { return conn_ ? conn_->take_quiet_path(lease) : std::nullopt; };
+        nenv.cancel_server_path = [this](const game::ServerPathLease& lease) { if (conn_) conn_->cancel_server_path(lease); };
+        nenv.interaction_context = [this] { return conn_ ? conn_->interaction_context() : 0; };
         nenv.started = [this] {
             if (conn_ && conn_->follow_target()) conn_->stop_follow(false);
         };
@@ -439,11 +450,12 @@ public:
         aenv.data_dir = platform::data_dir();
         aenv.autoload = config_.get("plugins.autoload").value_or("*");
         aenv.script_autoload = config_.get("scripts.autoload").value_or("");
+        aenv.sdk_layout = [this](std::string_view hash) { return configured_plugin_sdk_layout(config_path_, hash); };
         aenv.connection = [this] { return conn_.get(); };
         aenv.server_name = [this] { return char_view_.server_name; };
         aenv.server_profile = [this] { return server_profile_.id; };
         aenv.profile_name = [this] { return server_profile_.name; };
-        aenv.window_open = [this](std::string_view w) { return eq_api_ && eq_api_->shown(w); };
+        aenv.window_open = [this](std::string_view w) { return ui_api_ && ui_api_->shown(w); };
         aenv.face = [this](double degrees, bool) { face_degrees(degrees); };
         aenv.keypress = [this](std::string_view command, int mode) { return script_keypress(command, mode); };
         aenv.max_camera_distance = [this] { return max_camera_distance_; };
@@ -462,11 +474,11 @@ public:
             if (actions_ui_) actions_ui_->set_hot_bar_page(bar, page);
         };
         aenv.ability = [this](mq::AbilityKind kind, std::string_view name) {
-            return ability_state(eq_host_, kind, name);
+            return ability_state(ui_host_, kind, name);
         };
-        aenv.autoskill_list = [this] { return autoskill_list(eq_host_); };
-        aenv.use_ability = [this](mq::AbilityKind kind, std::string_view name) { return use_ability(eq_host_, kind, name); };
-        aenv.ability_bulk = [this] { return ability_bulk_rows(eq_host_); };
+        aenv.autoskill_list = [this] { return autoskill_list(ui_host_); };
+        aenv.use_ability = [this](mq::AbilityKind kind, std::string_view name) { return use_ability(ui_host_, kind, name); };
+        aenv.ability_bulk = [this] { return ability_bulk_rows(ui_host_); };
         aenv.can_see = [this](std::uint32_t id) -> std::optional<bool> {
             return conn_ ? can_see_spawn(id) : std::nullopt;
         };
@@ -475,6 +487,8 @@ public:
             return collision_->line_of_sight(glm::vec3(a[0], a[1], a[2]), glm::vec3(b[0], b[1], b[2]));
         };
         automation_ = std::make_unique<Automation>(aenv);
+        ui_host_.nameplates = &automation_->nameplates();
+        lua_ui_->add_ui_api([this](lua_State* L) { register_ui_api(L); });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/lighting",
                                          [this](std::string_view args) { lighting_command(args); });
         stats_ui_->set_open(opts_.show_stats);
@@ -501,7 +515,7 @@ public:
             }
             while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
             if (args.empty()) {
-                if (eq_api_) eq_api_->toggle("BrowserWnd");
+                if (ui_api_) ui_api_->toggle("BrowserWnd");
                 return;
             }
             std::string url(args);
@@ -521,7 +535,7 @@ public:
         gamepad_ = std::make_unique<Gamepad>(config_, config_path_);
         gamepad_->set_state(&window_.input().pad);
         gamepad_->set_rumble([this](float low, float high, int ms) { return window_.rumble_gamepad(low, high, ms); });
-        eq_host_.gamepad = gamepad_.get();
+        ui_host_.gamepad = gamepad_.get();
         if (!opts_.input_script.empty())
             input_script_ = std::make_unique<InputScript>(
                 opts_.input_script, window_,
@@ -679,9 +693,13 @@ private:
     std::uint32_t asset_rules_serial_ = 0;             // the connection's server_rules_serial() last seen
     // Makes the user interface `id` (a folder of ui/; empty: hailstone.ini ui.name) the running one, when it is not
     // already: a new Lua state with its scripts and settings. Only before character select, where no Lua window is up.
-    void use_ui_pack(std::string_view id);
+    void use_ui_pack(std::string_view id, bool force = false);
+    ui::lua::LuaUi::DataRoots ui_data_roots(const ui::UiPack* pack) const;
+    bool select_ui_pack(std::string_view id); // persist an exact installed choice, then queue its safe-frame load
+    void refresh_ui_packs(bool force = false);
+    ui::InterfaceStatus interface_status() const;
     // The loaded plugins' windows for this UI pack (<plugin folder>/ui/<pack>/) into the Lua UI, and the bridge into
-    // the eq API (plugin/ui_bridge.h).
+    // the hs API (plugin/ui_bridge.h).
     void sync_plugin_windows();
     // What a plugin's code in the Lua UI runs under: a plugin::CallerScope with that plugin's capabilities
     // (LuaUi::set_caller_scope).
@@ -772,12 +790,13 @@ private:
     void update_listener();
     game::SceneFogFrame scene_fog_frame(float sky_hour, double t);
     void update_music();
-    // The `eq` table of the Lua UI over this client's state.
-    void register_eq_api(lua_State* L);
+    // The `hs` table of the Lua UI over this client's state.
+    void register_ui_api(lua_State* L);
     void trace_spawn(float dt);
     // The floor game::WorldState::ground_npcs measures a spawn against: the zone's and the doors', the higher.
     std::optional<float> grounding_floor(const glm::vec3& p) const;
-    void draw_nameplates(const render::FrameInfo& frame, const glm::mat4& view_proj, VkExtent2D extent, float far_plane);
+    void draw_nameplates(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::mat4& scene_view_proj,
+                         VkExtent2D extent, float far_plane);
     // The 3D target indicator (app/target_ring.cpp, game/target_indicator.h): the ring at the target's feet, drawn
     // over the scene's depth (render/target_ring_renderer.h), so in the scene after begin_translucent (the classic
     // lighting, which has no other use for the copy, takes it when target_ring_shown).
@@ -810,7 +829,7 @@ private:
     void pad_cursor(const platform::GamepadState& pad, float dt);
     void pad_interact();
     void pad_cancel();
-    bool pad_window_takes_b_ = false; // a UI window closed itself on this B (eq.gamepad.takes_b)
+    bool pad_window_takes_b_ = false; // a UI window closed itself on this B (hs.gamepad.takes_b)
     void pad_target_group();
     void release_pad_game_input();
     // The original's key map (app/actions_ui.h, game/keymap.h): one command started or ended by a key.
@@ -837,11 +856,11 @@ private:
     // Config::get_float: NaN and the infinities are the fallback, so a bad hailstone.ini value never reaches a
     // matrix or a clamp that lets NaN through.
     float config_float(std::string_view key, float fallback) const { return config_.get_float(key, fallback); }
-    // The Options window's Display page (app/lua_eq_dialogs.cpp OptionsWindow): its controls as whole steps (combo box
+    // The Options window's Display page (app/lua_ui_dialogs.cpp OptionsWindow): its controls as whole steps (combo box
     // choices, slider ticks 0..20); nullopt for a name that is not a display setting.
     std::optional<int> display_option(std::string_view name) const;
     bool set_display_option(std::string_view name, int value);
-    // Every option the Options window (ui/<pack>/options.lua: eq.Option / eq.SetOption) shows, by name
+    // Every option the Options window (ui/<pack>/options.lua: hs.Option / hs.SetOption) shows, by name
     // (app/client_app_options.cpp): the display ones above, the window and frame ones (video_option), the names,
     // mouse and sound settings; nullopt for a name the client does not have.
     std::optional<int> option_value(std::string_view name) const;
@@ -879,9 +898,9 @@ private:
     // The screenshot key (the key map's SCREENCAP, or Print Screen while no other command has it) and /screenshot:
     // the next frame goes to a new screenshots/hailstone-<date>-<time>.png (platform::new_screenshot_path).
     void take_screenshot();
-    // Bug reports (app/client_app_bugreport.cpp): the EqHost hooks, a report with the client's facts and files
+    // Bug reports (app/client_app_bugreport.cpp): the UiHost hooks, a report with the client's facts and files
     // added, and the report made at the start from the last run's crash.
-    void wire_bug_reports(EqHost& h);
+    void wire_bug_reports(UiHost& h);
     void leave_character(); // the connection gone (camp, logout, link death): the character's state let go
     // The settings read into the client and applied: at start, and again when a character's settings take over from
     // hailstone.ini or give way to it (use_character_settings). The settings taken only at start are shared
@@ -914,7 +933,7 @@ private:
     game::PlateFade plate_fade_; // each overlapped name's fade toward its target alpha (game/nameplate_overlap.h)
     // The spawn not to draw: the player's own in first person (camera 0's activate hides it; no other camera does).
     std::uint32_t hidden_spawn() const {
-        return camera_type_ != game::kCameraFirstPerson || eq_host_.customization_zoom >= 0 ? 0u
+        return camera_type_ != game::kCameraFirstPerson || ui_host_.customization_zoom >= 0 ? 0u
             : (conn_->world().view_id ? conn_->world().view_id : conn_->world().player_id);
     }
     // display.msaa (samples, read at start-up), display.tonemap (auto | none | agx | aces; auto is AgX with the modern
@@ -1013,6 +1032,11 @@ private:
     void update_placement();
     // `why` names the pick in the log; null picks quietly.
     PickTarget pick_at(float x, float y, std::uint32_t required, std::uint32_t skip, const char* why);
+    bool plate_input_blocked(bool ignore_right_button = false) const;
+    bool nameplate_spawn_clickable(const game::Spawn& spawn) const;
+    std::optional<float> nameplate_pixel_depth(glm::vec2 at) const;
+    std::optional<std::uint32_t> nameplate_at(glm::vec2 at) const;
+    bool activate_nameplate(std::uint32_t id);
     // CEverQuest::LeftClickedOnPlayer.
     void left_click_spawn(std::uint32_t id);
     // CEverQuest::RightClickedOnPlayer (update_item_input): false when the spawn has no right-click action.
@@ -1077,12 +1101,23 @@ private:
     struct PlateEntry {
         std::uint32_t id = 0;
         NameplateText plate;
+        glm::vec3 head{0.0f};
+        std::uint64_t canvas_owner = 0;
     };
     std::vector<PlateEntry> plates_;
     std::size_t plate_count_ = 0;
     std::vector<game::PlateBox> plate_boxes_;
     std::vector<float> plate_alpha_;
     std::vector<std::size_t> plate_order_;
+    std::vector<NameplateHit> plate_hits_; // actual draw order, from the most recent displayed frame only
+    const net::GameConnection* plate_hit_connection_ = nullptr;
+    std::uint64_t plate_hit_serial_ = 0;
+    std::uint16_t plate_hit_zone_ = 0;
+    Clock::time_point plate_hit_time_{};
+    glm::mat4 plate_inverse_view_{1.0f};
+    glm::vec3 plate_camera_{0.0f}, plate_forward_{1, 0, 0};
+    glm::vec4 plate_hit_view_{0.0f};
+    NameplateGesture plate_gesture_;
     ui::ImGuiLayer ui_;
     bool quit_ = false;
     bool close_pending_ = false; // a window close request held through a loading screen
@@ -1189,6 +1224,18 @@ private:
     PerfUi perf_ui_;                    // performance window (app/perf_ui.h)
     std::unique_ptr<ui::lua::LuaUi> lua_ui_; // the Lua script windows (ui/<name>, src/ui/lua)
     std::vector<ui::UiPack> ui_packs_;      // the user interfaces installed (ui/ui_packs.h)
+    std::optional<ui::UiPack> loaded_ui_pack_;
+    std::vector<std::string> ui_diagnostics_;
+    std::string ui_selection_error_;
+    std::string ui_selection_context_; // profile plus logical requested ID, including a selection using a fallback
+    std::chrono::steady_clock::time_point ui_registry_rescan_{};
+    std::uint64_t ui_policy_context_ = 0;
+    std::uint32_t ui_policy_serial_ = 0;
+    bool ui_reload_pending_ = false;
+    bool ui_hidden_ = false; // session presentation only; window visibility and layout settings remain unchanged
+    std::string plugin_ui_pack_;          // filesystem fallback is rescanned with the UI, not on every frame
+    std::vector<std::pair<std::string, std::filesystem::path>> plugin_ui_sources_;
+    std::chrono::steady_clock::time_point plugin_ui_rescan_{};
     std::string ui_name_;                    // the one running
     AssetFolderSource asset_source_ = AssetFolderSource::Picker; // where game_'s base folder came from
     std::string layout_for_;                 // the character's UI.ini the windows are placed from
@@ -1211,9 +1258,9 @@ private:
     std::unique_ptr<ui::UiTextures> ui_textures_; // the stock UI art for them (ui/ui_textures.h)
     // The art reload_server_files replaced, kept until the frame whose draw lists may still name it is submitted.
     std::unique_ptr<ui::UiTextures> retired_ui_textures_;
-    EqHost eq_host_;                         // what their eq.* API reads (app/lua_eq.h)
-    std::unique_ptr<EqApi> eq_api_;
-    void update_eq_host();
+    UiHost ui_host_;                         // what their hs.* API reads (app/lua_ui.h)
+    std::unique_ptr<UiApi> ui_api_;
+    void update_ui_host();
     // The in-game browser (docs/browser.md): its tab host, made on first use when browser/hailstone-web is installed
     // (null without it: pages go to the system's browser); open_web_page opens one in its window (true), else there.
     web::BrowserHost* browser();
@@ -1255,6 +1302,7 @@ private:
     bool follow_assist_strafed_ = false;  // this frame's strafe was /follow's mesh help, not the player's
     float last_speed_run_ = 0.0f;                 // the last frame's SpeedRun (+0x7c, /follow's bands)
     bool follow_move_ = false, follow_run_ = false; // the last follow step (for the log)
+    bool enhanced_follow_motion_ = false; // only this controller owns the generated autorun bit
     std::uint32_t follow_logged_ = 0;
     std::size_t abilities_test_step_ = 0;         // --abilities-test
     Clock::time_point abilities_test_at_{};
@@ -1284,13 +1332,24 @@ private:
     // models load as eqclient.ini [Defaults] UseLuclin* enables them.
     assets::CharacterArchiveCache characters_{true};
     std::unique_ptr<render::ActorRenderer> actor_renderer_; // character models; boxes for the rest
+    std::unique_ptr<render::WorldGeometryRenderer> world_geometry_renderer_;
+    std::uint32_t world_epoch_ = 1, world_collision_revision_ = 1, world_floor_generation_ = 0;
+    std::uint64_t world_animation_time_ = 0;
+    WorldSceneKey world_scene_;
+    std::unordered_map<std::uint32_t, HailstoneWorldAnchor> world_anchors_; // this render attempt's drawn poses
+    void retire_world_geometry();
+    bool world_geometry_scene_current() const;
+    void record_world_geometry(const render::FrameInfo& frame, const glm::mat4& view_projection,
+                               render::SceneRecorder& recorder);
+    int world_geometry_floor(float x, float y, float z, float& height) const;
+    int world_geometry_anchor(std::uint32_t id, HailstoneWorldAnchor& anchor);
     // The last zone's character meshes and textures from the global archives, for the next zone's renderer
     // (render::ActorRenderer::release_kept): a zone change does not build and upload them again.
     std::unique_ptr<render::ActorRenderer::Kept> actor_kept_;
     std::shared_ptr<const assets::CharacterLibrary> actor_library_; // the zone's, for the item preview
     // The library actor_emitters_'s texture reader holds (it is set again when actor_library_ changes).
     std::shared_ptr<const assets::CharacterLibrary> emitter_reader_library_;
-    std::array<PreviewSlot, 2> previews_; // 0 the object preview window, 1 the marketplace's (EqHost's view index)
+    std::array<PreviewSlot, 2> previews_; // 0 the object preview window, 1 the marketplace's (UiHost's view index)
     bool browser_tried_ = false;
     bool web_text_input_ = false;                    // a page has the keyboard this frame
     std::unique_ptr<WorldObjects> world_objects_;           // doors and ground objects (app/world_objects.h)
@@ -1442,6 +1501,7 @@ private:
     std::set<std::uint32_t> auto_drop_seen_;  // --auto-door 4: ground objects before the drop
     Clock::time_point auto_door_at_{};
     std::optional<game::CollisionMesh> collision_;
+    std::optional<game::CollisionMesh> world_visual_collision_; // exact renderer-selected mesh; never movement physics
     // The zone objects that play their own animation (game/animated_objects.h): their moving parts, out of
     // collision_, posed each movement step on the zone's animation clock (zone_animation_ms).
     std::optional<game::AnimatedObjects> animated_objects_;
@@ -1626,7 +1686,7 @@ private:
     void update_iso_hover();
     void draw_iso_hover(const render::FrameInfo& frame, const glm::mat4& view_proj, float far_plane, bool modern,
                         double seconds);
-    // The isometric camera's options (eq.Option / eq.SetOption "iso_*") and settings (hailstone.ini camera.iso_*).
+    // The isometric camera's options (hs.Option / hs.SetOption "iso_*") and settings (hailstone.ini camera.iso_*).
     std::optional<int> iso_option(std::string_view o) const;
     bool set_iso_option(std::string_view o, int v);
     void load_iso_settings();
@@ -1672,7 +1732,7 @@ private:
     game::UserCamera customization_camera_;
     bool customization_camera_on_ = false;
     float customization_saved_fov_ = 0.0f;
-    game::CharCreateLook char_create_look_;          // creation's copy of the model's look (EqHost::char_create_look)
+    game::CharCreateLook char_create_look_;          // creation's copy of the model's look (UiHost::char_create_look)
     std::mt19937 pre_game_rng_{std::random_device{}()};
     game::PickCamera pick_camera_;   // last frame's, for mouse picking (CCamera as GetScreenRay reads it)
     bool pick_camera_valid_ = false;

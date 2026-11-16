@@ -7,7 +7,7 @@
 #include <lua.hpp>
 
 #include "achievement_test_packets.h"
-#include "app/lua_eq.h"
+#include "app/lua_ui.h"
 #include "game/item_links.h"
 #include "mock_server/harness.h"
 #include "ui/dev_screens.h"
@@ -24,20 +24,20 @@ struct Context {
 struct Chat {
     Context context;
     ui::ChatView view;
-    app::EqHost host;
-    app::EqApi api{host};
+    app::UiHost host;
+    app::UiApi api{host};
     std::unique_ptr<lua_State, decltype(&lua_close)> lua{luaL_newstate(), &lua_close};
     explicit Chat(test::Rig& rig) {
         host.conn = &rig.conn; host.game = &rig.game; host.chat = &view;
         host.in_game = host.ui_ready = true;
         api.load_layout(rig.dir.path() / "defaults.ini", rig.dir.path() / "UI_fixture.ini", {});
         luaL_openlibs(lua.get()); lua_newtable(lua.get()); api.register_functions(lua.get());
-        lua_setglobal(lua.get(), "eq");
+        lua_setglobal(lua.get(), "hs");
     }
     struct Lines { lua_Integer version = 0; std::vector<std::string> text; bool returned = false; };
     Lines lines(std::optional<lua_Integer> held = std::nullopt) {
         auto* L = lua.get(); lua_settop(L, 0);
-        lua_getglobal(L, "eq"); lua_getfield(L, -1, "ChatText"); lua_remove(L, -2);
+        lua_getglobal(L, "hs"); lua_getfield(L, -1, "ChatText"); lua_remove(L, -2);
         lua_pushinteger(L, 1);
         if (held) lua_pushinteger(L, *held); else lua_pushnil(L);
         const int status = lua_pcall(L, 2, 2, 0);
@@ -51,7 +51,7 @@ struct Chat {
     }
     void click(std::string_view data, int message = 1002) {
         auto* L = lua.get(); lua_settop(L, 0);
-        lua_getglobal(L, "eq"); lua_getfield(L, -1, "ChatLink"); lua_remove(L, -2);
+        lua_getglobal(L, "hs"); lua_getfield(L, -1, "ChatLink"); lua_remove(L, -2);
         lua_pushinteger(L, 1); lua_pushinteger(L, message); lua_pushlstring(L, data.data(), data.size());
         const int status = lua_pcall(L, 3, 0, 0);
         REQUIRE_MESSAGE(status == LUA_OK, lua_tostring(L, -1));

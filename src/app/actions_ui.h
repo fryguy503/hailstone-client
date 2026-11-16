@@ -131,8 +131,8 @@ public:
     game::CompassError& compass() { return compass_; }
 
     // The key events of a frame through the key map (HandleKeyDown / HandleKeyUp). With keyboard_free false (chat
-    // input has the keyboard) held commands are released and nothing starts. A key binding being captured in the
-    // key window takes the next key instead.
+    // input has the keyboard) held commands are released and only the UI visibility toggle can start. A key
+    // binding being captured in the key window takes the next key instead, including the visibility shortcut.
     std::vector<game::KeyMap::Event> process_keys(const platform::InputState& in, bool keyboard_free);
 
     // Loads the character's hotbuttons.ini (CharacterFiles::hot_buttons(); once per character) and resets the skill

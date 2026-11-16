@@ -7,8 +7,9 @@
 --   * "Show me": the players or the groups found, as sortable tables with a search over the rows, Matches / All,
 --     and Get Matches (the game counts down its lock in the button); a group's members (red when the filters drop
 --     them) and the classes it wants show under the groups. A double click on a result starts a tell to it.
--- Every field, check box, list and button is the window's (app/lua_eq_group_search.cpp), so what is posted and
+-- Every field, check box, list and button is the window's (app/lua_ui_group_search.cpp), so what is posted and
 -- searched is the game's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local S = dofile("lib/social.lua")
@@ -115,7 +116,7 @@ end
 
 -- A results list with its empty state; h as for W.List.
 local function resultList(id, w, h, empty, hint, needle)
-  local rows = eq.ListInfo(WINDOW, id) or 0
+  local rows = API.windows.ListInfo(WINDOW, id) or 0
   if rows == 0 then
     local aw, ah = ui.GetContentRegionAvail()
     if w and w > 0 then aw = w end
@@ -201,9 +202,9 @@ local function body(x, y, w, h, s)
   ui.EndChild()
 end
 
-local function testOpen() eq.ShowWindow(WINDOW, true) end
+local function testOpen() API.windows.Show(WINDOW, true) end
 ui.window("Group Search", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   S.TestClicks(WINDOW)
   hud.Dialog(WINDOW, "Group Search", OPTS, body)

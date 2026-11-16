@@ -1,6 +1,7 @@
 -- The bandolier, over the game's BandolierWnd: drawn by the Bandolier window (bandolier.lua) and the inventory's
 -- Bandolier page (inventory.lua). Both act on the same game window, so its list selection, Auto Swap and buttons
 -- are one state whichever draws them; the game window need not be shown for them to work.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local tiles = dofile("lib/hudx_tiles.lua")
 local W = dofile("lib/widgets.lua")
@@ -14,9 +15,9 @@ local SLOTS = { "Primary", "Secondary", "Range", "Ammo" }
 
 -- The selected set's name, "" when none is selected.
 function M.SetName()
-  local rows, _, selected = eq.ListInfo(WINDOW, "WeaponSetList")
+  local rows, _, selected = API.windows.ListInfo(WINDOW, "WeaponSetList")
   if not rows or not selected or selected < 0 then return "" end
-  local texts = eq.ListRow(WINDOW, "WeaponSetList", selected)
+  local texts = API.windows.ListRow(WINDOW, "WeaponSetList", selected)
   return texts and texts[1] or ""
 end
 
@@ -42,8 +43,8 @@ function M.Weapons(s)
     local id = "DisplayButton" .. i
     local cx = x + i * (cellW + gap)
     local ix = cx + (cellW - size) / 2
-    local name = eq.ChildTooltip(WINDOW, id) or ""
-    local r, g = eq.ChildColor(WINDOW, id, "decal")
+    local name = API.windows.ChildTooltip(WINDOW, id) or ""
+    local r, g = API.windows.ChildColor(WINDOW, id, "decal")
     local ring = nil
     if name ~= "" and r then
       ring = (g or 0) > (r or 0) and C.pet or C.danger
@@ -69,7 +70,7 @@ function M.Weapons(s)
 end
 
 -- The sets, w x h as W.List takes them; a double click activates one.
-local LIST_OPTS = { doubleClick = function() eq.ClickChild(WINDOW, "UseButton", "left") end }
+local LIST_OPTS = { doubleClick = function() API.windows.ClickChild(WINDOW, "UseButton", "left") end }
 function M.List(w, h)
   W.List(WINDOW, "WeaponSetList", w, h, LIST_OPTS)
 end

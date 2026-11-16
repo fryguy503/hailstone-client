@@ -10,7 +10,9 @@
 #include <imgui_internal.h>
 #include <lua.hpp>
 
-#include "app/lua_eq.h"
+#include "lua_ui_api_mock.h"
+
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "net/trade_packets.h"
 #include "ui/lua/lua_host.h"
@@ -72,17 +74,18 @@ TEST_CASE("Trade window (modern): the partner's accept and ours show in the wind
         REQUIRE(conn.trade().has_value());
         REQUIRE(conn.trade()->open);
 
-        app::EqHost host;
+        app::UiHost host;
         host.in_game = host.ui_ready = true;
         host.game = &rig.game;
         host.conn = &conn;
-        app::EqApi api(host);
+        app::UiApi api(host);
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
         ui::lua::LuaUi lua(dir / "modern", dir / "modern.txt");
-        lua.add_eq_api([&](lua_State* L) {
+        lua.add_ui_api([&](lua_State* L) {
             api.register_functions(L);
             lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
             lua_setfield(L, -2, "InGame");
+            hailstone::test::sync_ui_api_aliases(L);
         });
         lua_State* L = lua.state();
         // Record what is drawn: the status line and the offers' titles are TextColored, the tag is T.Text (DrawText),
@@ -125,7 +128,7 @@ TEST_CASE("Trade window (modern): the partner's accept and ours show in the wind
         CHECK(s.find("Trade##TRDW_Trade_Button") != std::string::npos);
 
         // We click Trade too: both accepted, and our button says so.
-        REQUIRE(luaL_dostring(L, "eq.ClickChild('TradeWnd', 'TRDW_Trade_Button', 'left')") == LUA_OK);
+        REQUIRE(luaL_dostring(L, "hs.ClickChild('TradeWnd', 'TRDW_Trade_Button', 'left')") == LUA_OK);
         REQUIRE(conn.trade().has_value());
         CHECK(conn.trade()->my_ready);
         frames();

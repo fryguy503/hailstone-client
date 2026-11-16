@@ -1,15 +1,16 @@
 -- The cross hotbar (gamepad pack), bottom centre: stands in for hot bar 1 (HotButtonWnd), whose key shows and hides
 -- it. Three sets of eight slots (docs/gamepad.md section 3): hold LT, RT or both and the D-pad (left, up, right,
 -- down) and the face buttons (X, Y, B, A) fire that set's slots. Each set is drawn as two diamonds in the pad's own
--- glyphs; the set being held (eq.gamepad.cross_set) is enlarged and the others dimmed.
+-- glyphs; the set being held (hs.gamepad.cross_set) is enlarged and the others dimmed.
 --
--- A slot is a hot button the player already has (eq.gamepad.cross_slot: bar and button; by default bars 1, 2 and 3,
--- buttons 1..8), shown and used through the stock hot bar windows (eq.HotButtonInfo / eq.ClickHotButton), so the slots
+-- A slot is a hot button the player already has (hs.gamepad.cross_slot: bar and button; by default bars 1, 2 and 3,
+-- buttons 1..8), shown and used through the stock hot bar windows (hs.HotButtonInfo / hs.ClickHotButton), so the slots
 -- are the same buttons the classic hot bars show and edit. A spell's slot shows its gem's cool-down and fades as the
--- gem does (eq.GemOverlay / eq.GemTint of the gem holding that spell). The mouse works too: a click uses the slot
+-- gem does (hs.GemOverlay / hs.GemTint of the gem holding that spell). The mouse works too: a click uses the slot
 -- (an empty one opens its menu), a quick right click is the game's (a social's editor), the right button held opens
 -- the slot's menu (assign a social, a label, clear), a hot button on the cursor is dropped onto it. With the pad the
 -- menu opens from the main menu's Hot Bars (slotpicker.lua).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -26,7 +27,7 @@ local function childOf(button) return CHILDREN[button] or ("HB_Button" .. button
 
 local rightPress = nil -- the slot the right button went down on: { key, at, held }
 
--- Each slot's (set * 10 + n): the record eq.HotButtonInfo fills, its label's text colour and its fitted label.
+-- Each slot's (set * 10 + n): the record hs.HotButtonInfo fills, its label's text colour and its fitted label.
 local slots = {}
 
 -- T.fit(label, w) in the current font, kept in `c` while the label, the width and the font's measure of the label
@@ -51,7 +52,7 @@ local function slot(set, n, cx, cy, size, alpha, held)
   local screen, child = screenOf(bar), childOf(button)
   -- what it holds; a social's colour and a Lua social's face (social); its check (on: auto attack / fire, a skill not
   -- ready) and cool-down, a gem's tint stage (state, iconAlpha)
-  local info = eq.HotButtonInfo(screen, child, rec.info)
+  local info = API.hotbars.Info(screen, child, rec.info)
   local kind, label, tex = info.kind, info.label, info.tex
   local face = info.social
   local x0, y0 = cx - size / 2, cy - size / 2
@@ -108,16 +109,16 @@ local function slot(set, n, cx, cy, size, alpha, held)
   T.font(size >= T.px(64) and 15 or 12)
   T.glyph(pad, SLOT_BUTTONS[n], x1 - gs * 0.25, y1 - gs * 0.25, gs, alpha)
   T.unfont()
-  if clicked then eq.ClickHotButton(screen, child, "left") end
+  if clicked then API.hotbars.Click(screen, child, "left") end
   -- the right button as the game takes it: a quick click on release, held 500 ms the slot's menu
   if hovered and ui.IsMouseClicked(ui.Mouse.Right) then rightPress = { key = key, at = ui.GetTime() } end
   if rightPress and rightPress.key == key then
     if not ui.IsMouseDown(ui.Mouse.Right) then
-      if not rightPress.held and hovered then eq.ClickHotButton(screen, child, "right") end
+      if not rightPress.held and hovered then API.hotbars.Click(screen, child, "right") end
       rightPress = nil
     elseif not rightPress.held and ui.GetTime() - rightPress.at > 0.5 then
       rightPress.held = true
-      eq.ClickHotButton(screen, child, "rightheld")
+      API.hotbars.Click(screen, child, "rightheld")
     end
   end
   if hovered and face and info.tooltip ~= "" then ui.SetTooltip(info.tooltip)

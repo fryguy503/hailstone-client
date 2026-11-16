@@ -7,7 +7,8 @@
 --   Items          the items where you stand: A selects, Y opens the item's menu (the server's), and the moves
 --   Neighborhoods  the neighborhoods (A selects one, showing its players and guilds), Go, My Plots, My Items
 --   Plot Search    an owner name (the keyboard), Search, the plots (A selects), Go
--- Everything is the stock window's (eq.ClickChild, eq.ListClick, eq.ComboSelect, eq.SetWindowText).
+-- Everything is the stock window's (hs.ClickChild, hs.ListClick, hs.ComboSelect, hs.SetWindowText).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local W = dofile("lib/window.lua")
 local M = dofile("lib/markets.lua")
@@ -30,7 +31,7 @@ ui.window("Real Estate Plot", function()
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     if not M.modal(PF, x0, y0, x1, y1) then
-      local t = function(id) return eq.WindowText(PW, id) or "" end
+      local t = function(id) return API.windows.Text(PW, id) or "" end
       M.facts({ { "Address", t("AddressLabel") }, { "Owner", t("OwnerLabel") }, { "Kind", t("TypeLabel") } }, x0, x1, y0)
       M.facts({ { "Items", t("CapacityLabel") }, { "Vault", t("VaultLabel") }, { "Pets", t("PetLabel") },
         { "Category", t("CategoryLabel") } }, x0, x1, y0 + T.px(80))
@@ -48,7 +49,7 @@ ui.window("Real Estate Plot", function()
       M.buttons(PW, { { "ItemsButton", "Items", always = true }, { "ManageButton", "Manage", always = true } }, x0, x1, bh)
     end
   end
-  if M.back(PF, W.finish()) then eq.ShowWindow(PW, false) end
+  if M.back(PF, W.finish()) then API.windows.Show(PW, false) end
 end)
 
 -- ---------------------------------------------------------------- manage
@@ -94,7 +95,7 @@ ui.window("Real Estate Manage", function()
         ui.SetCursorPos(mid - wx, y1 - bh - wy)
         M.buttons(MW, { { "AddMemberButton", "Add", always = true }, { "RemoveMemberButton", "Remove", always = true } }, mid, x1, bh)
       else
-        local t = eq.WindowText(MW, "TimeLeftLabel") or ""
+        local t = API.windows.Text(MW, "TimeLeftLabel") or ""
         M.facts({ { "Time left", t, t == "Expired" and C.bad or nil } }, x0, mid, top)
         M.caption(x0, top + T.px(80), "Balance")
         M.list(MW, "BalanceList", balances, x0, top + T.px(110), mid - T.px(20), y1 - 2 * bh - T.px(30), {
@@ -116,7 +117,7 @@ ui.window("Real Estate Manage", function()
       end
     end
   end
-  if M.back(MF, W.finish()) then eq.ShowWindow(MW, false) end
+  if M.back(MF, W.finish()) then API.windows.Show(MW, false) end
 end)
 
 -- ---------------------------------------------------------------- items
@@ -145,7 +146,7 @@ ui.window("Real Estate Items", function()
       ui.SetCursorPos(rx0 - wx, select(2, ui.GetCursorScreenPos()) + T.px(6) - wy)
     end
   end
-  if W.finish() then eq.ShowWindow(IW, false) end
+  if W.finish() then API.windows.Show(IW, false) end
 end)
 
 -- ---------------------------------------------------------------- neighborhoods
@@ -174,7 +175,7 @@ ui.window("Real Estate Neighborhoods", function()
     M.buttons(NW, { { "GoButton", "Go", { primary = true }, always = true }, { "MyPlotsButton", "My Plots", always = true },
       { "MyItemsButton", "My Items", always = true } }, x0, x1, bh)
   end
-  if W.finish() then eq.ShowWindow(NW, false) end
+  if W.finish() then API.windows.Show(NW, false) end
 end)
 
 -- ---------------------------------------------------------------- plot search
@@ -196,17 +197,17 @@ ui.window("Real Estate Plot Search", function()
       local bw = T.px(260)
       ui.SetCursorPos(x0 - wx, y0 - wy)
       M.field(SF, SW, "NameEdit", "Owner", x1 - x0 - bw - T.px(10), bh, { hint = "Every plot",
-        done = function() eq.ClickChild(SW, "SearchButton", "left") end })
+        done = function() API.windows.ClickChild(SW, "SearchButton", "left") end })
       ui.SameLine(0, T.px(10))
       M.button(SW, "SearchButton", "Search", bw, bh)
       M.list(SW, "PlotList", plots, x0, y0 + bh + T.px(16), x1, y1 - bh - T.px(20), {
         rowH = 60, inspect = false, empty = "No plots found.", draw = function(r, ax0, ay0, ax1, ay1)
           M.row(r, ax0, ay0, ax1, ay1, r.texts[4] or "", r.texts[3], { sub = r.texts[2] })
         end, onA = function() end })
-      if W.pressed("x") then eq.ClickChild(SW, "GoButton", "left") end
+      if W.pressed("x") then API.windows.ClickChild(SW, "GoButton", "left") end
       ui.SetCursorPos(x0 - wx, y1 - bh - wy)
       M.buttons(SW, { { "GoButton", "Go", { primary = true, glyph = "x" }, always = true } }, x0, x1, bh)
     end
   end
-  if M.back(SF, W.finish()) then eq.ShowWindow(SW, false) end
+  if M.back(SF, W.finish()) then API.windows.Show(SW, false) end
 end)

@@ -1,6 +1,6 @@
 -- Alternate Advancement: replaces the game's AAWindow. A header with the points to spend, the points spent, the AA
 -- experience and the share of experience that goes to it (- / +); one list of every ability on the game's four tabs
--- (General, Archetype, Class, Special: AAWindow's ModernList, app/lua_eq_progress.cpp), with a search and filters over
+-- (General, Archetype, Class, Special: AAWindow's ModernList, app/lua_ui_progress.cpp), with a search and filters over
 -- all of it (the tab, the category, owned / not owned and the game's own "trainable only"), and columns for the tab,
 -- the era (the expansion the ability came with), activated or passive, the rank and the next rank's cost (a head's
 -- click sorts by it, its drag moves the column, and dragging its right edge resizes it; sorted by name to start
@@ -8,7 +8,7 @@
 -- needs, its reuse time, the game's description, Train (with "all ranks": the server's buy all, else the client buys rank after rank) and Hotkey;
 -- the selection stays on the ability as its ranks are bought.
 -- Deliberate differences: the stock window shows one tab's list at a time, in the game's order. Rows are the game's
--- (eq.ListClick selects the ability, so Train and Hotkey act on it; dragging a row puts the ability's hot button on
+-- (hs.ListClick selects the ability, so Train and Hotkey act on it; dragging a row puts the ability's hot button on
 -- the cursor, as on the stock list); an ability greyed is one the game will not train now. The requirements come from
 -- the window's Modern* children.
 --
@@ -27,6 +27,7 @@
 -- r, a row: name, rank, max, cost (the next rank's, as text; "" at the maximum), category, trainable (the game
 -- would train it now), maxed, page (its tab, 0-based). sel, the selected ability: id (its rank's), name, rank, max,
 -- cost (text).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -117,7 +118,7 @@ local function header(x, y, w, s)
   -- the AA experience, and at its right the share of experience going to it
   local gx = x + 2 * tileW + 16 * s
   local gw = w - (gx - x)
-  local frac, text = eq.Gauge(5)
+  local frac, text = API.character.Gauge(5)
   T.Text(gx, y + 3 * s, "AA experience", C.muted, F.small)
   local ew = T.TextSize("AA experience", F.small)
   T.Text(gx + ew + 8 * s, y + 3 * s, frac and string.format("%.1f%%", frac * 100) or (text or ""), C.text,
@@ -669,7 +670,7 @@ local function details(x, y, w, h, s)
   -- the game's description, then the buttons
   local _, lh = ui.CalcTextSize("Ag")
   local btnH = lh + 10 * s
-  local trainAll = eq.ChildShown(WINDOW, "TrainAllButton") ~= false
+  local trainAll = API.windows.ChildShown(WINDOW, "TrainAllButton") ~= false
   local foot = btnH + 8 * s + (trainAll and (lh + 8 * s) or 0)
   ui.DrawLine(ix, yy, ix + iw, yy, C.ink[1], C.ink[2], C.ink[3], 0.06, 1)
   yy = yy + 6 * s
@@ -716,7 +717,7 @@ local function body(x, y, w, h, s)
     local bh = opts.banner(bx, by, w, s) or 0
     ui.SetCursorScreenPos(bx, by + (bh > 0 and bh + 6 * s or 0))
   end
-  local rows = eq.WindowList(WINDOW, LIST) or {}
+  local rows = API.windows.List(WINDOW, LIST) or {}
   filters(w, s, rows)
   needle = search:lower()
   local stacked = w < STACK_W * s
@@ -767,7 +768,7 @@ end
 local M = {}
 
 function M.window(o)
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   opts = o
   if not order then loadColumns() end
   -- testing: test.open.AAWindow.class=<s> shows the Class tab's abilities

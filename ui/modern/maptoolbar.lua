@@ -2,6 +2,7 @@
 -- grouped as Lines, Labels, Colours and Map, each group a grid of tiles that reflows to the window's width. The
 -- tools are the game's buttons: lines and points are set down where you stand, the colours open the colour picker,
 -- Clear asks first, Auto Map stays lit while it runs, and Join At Intersect with Ctrl held moves only the first line.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local tiles = dofile("lib/hudx_tiles.lua")
 local W = dofile("lib/widgets.lua")
@@ -61,10 +62,10 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Map Toolbar", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   if not testShown then -- testing: test.show.MapToolbarWnd=1 opens it once
     testShown = true
-    if ui.GetSetting("test.show." .. WINDOW) == "1" then eq.ShowWindow(WINDOW, true) end
+    if ui.GetSetting("test.show." .. WINDOW) == "1" then API.windows.Show(WINDOW, true) end
   end
   hud.Dialog(WINDOW, "Map Editing", WINDOW_OPTS, drawWindow)
 end)

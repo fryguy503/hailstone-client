@@ -703,6 +703,7 @@ PlayerMovement::Frame PlayerMovement::update(const MovementKeys& keys, float yaw
     if (cp && cp->run_speed > 0.0f) ch.run_speed = cp->run_speed;
     if (cp && cp->walk_speed > 0.0f) ch.walk_speed = cp->walk_speed;
     ch.riding = mount != nullptr;
+    ch.instant_ridden_acceleration = mount && instant_mount_acceleration_;
     ch.remote_control = eye;
     ch.in_combat = conn.in_combat();
     ch.avatar_height = cp ? cp->heights.avatar_height : floor_offset;

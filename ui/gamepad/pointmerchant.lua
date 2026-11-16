@@ -5,7 +5,8 @@
 --   Sell  your bags: A picks an item up (the game's slot logic), then Sell offers the held item to the merchant
 --         (what it is worth is the Sell button's own text)
 -- How much of the currency you hold heads the window; Done (or B) closes it as the stock Done button does.
--- The list and the buttons are the stock window's (eq.ListClick, eq.ClickChild).
+-- The list and the buttons are the stock window's (hs.ListClick, hs.ClickChild).
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -30,10 +31,10 @@ local function merchant(cfg)
     if not M.visible(win) then return end
     M.frame()
     local ctx = X.frame(nav, {})
-    local have = tonumber(((eq.WindowText(win, pre .. "PointsAvailableValue") or ""):gsub(",", "")))
+    local have = tonumber(((API.windows.Text(win, pre .. "PointsAvailableValue") or ""):gsub(",", "")))
     local label = cfg.currency()
     if label == "" then label = "points" end
-    local name = eq.WindowText(win, pre .. "NameLabel") or ""
+    local name = API.windows.Text(win, pre .. "NameLabel") or ""
     local hints = page == 1 and { { "a", "Buy" }, { "y", "Inspect" }, { "lb", "Buy" }, { "rb", "Sell" }, { "b", "Done" } }
       or { { "a", "Pick up / put down" }, { "x", "Put away" }, { "lb", "Buy" }, { "rb", "Sell" }, { "b", "Done" } }
     if W.begin(cfg.name, { w = 1500, h = 920, title = name ~= "" and name or "Merchant",
@@ -53,7 +54,7 @@ local function merchant(cfg)
             M.row(r, a, b, c, d, r.texts[1], thousands(cost(r)) .. " " .. label,
               { rightColor = short(r) and C.bad or C.endurance, sub = cfg.theme and r.texts[3] or nil, rightW = T.px(300) })
           end,
-          onA = function() eq.ClickChild(win, pre .. "PurchaseButton", "left") end })
+          onA = function() API.windows.ClickChild(win, pre .. "PurchaseButton", "left") end })
         -- the selected good
         T.rect(rx0, top, x1, y1 - 2 * bh - T.px(40), C.sunken, 1, T.px(14))
         local p = T.px(18)
@@ -82,7 +83,7 @@ local function merchant(cfg)
         X.bags(ctx, bags, x0, rx0 - T.px(24) - x0, per)
         X.holding(ctx, rx0, top, x1, "Sell offers it to the merchant")
         local hy = top + X.holdingHeight(ctx) + T.px(14)
-        local offer = eq.ChildTooltip and eq.ChildTooltip(win, pre .. "SellButton") or ""
+        local offer = API.windows.ChildTooltip and API.windows.ChildTooltip(win, pre .. "SellButton") or ""
         T.font(20)
         T.draw(rx0, hy, ctx.held and (offer ~= "" and ("Offer: " .. offer) or "The merchant may not take it.")
           or "Pick up an item this merchant takes.", C.dim)
@@ -92,17 +93,17 @@ local function merchant(cfg)
         M.buttons(win, { { pre .. "DoneButton", "Done" } }, rx0, x1, bh)
       end
     end
-    if W.finish() then eq.ClickChild(win, pre .. "DoneButton", "left") end
+    if W.finish() then API.windows.ClickChild(win, pre .. "DoneButton", "left") end
   end)
 end
 
 -- The alternate currency merchant: the point list's one row names the currency.
 merchant({ window = "PointMerchantWnd", name = "Point Merchant", prefix = "PointMerchant_",
   currency = function()
-    local row = eq.ListRow("PointMerchantWnd", "PointMerchant_PointList", 0)
+    local row = API.windows.ListRow("PointMerchantWnd", "PointMerchant_PointList", 0)
     return row and row[1] or ""
   end })
 
 -- The adventure merchant: its points label names them; each good has a theme.
 merchant({ window = "NewPointMerchantWnd", name = "Adventure Merchant", prefix = "NewPointMerchant_", theme = true,
-  currency = function() return eq.WindowText("NewPointMerchantWnd", "NewPointMerchant_PointsNameLabel") or "" end })
+  currency = function() return API.windows.Text("NewPointMerchantWnd", "NewPointMerchant_PointsNameLabel") or "" end })

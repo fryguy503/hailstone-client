@@ -40,6 +40,9 @@ namespace hailstone::game {
 class CollisionMesh {
 public:
     static CollisionMesh build(const assets::Zone& zone);
+    // Effects only: the renderer's refined terrain/replacement objects when selected by the loaded zone. Keeps
+    // upward opaque/masked drawn surfaces and excludes moving parts, which AnimatedObjects poses separately.
+    static CollisionMesh build_visual(const assets::Zone& zone);
     // From triangles (tests and tools).
     static CollisionMesh from_triangles(std::vector<CollisionTriangle> triangles);
 
@@ -62,6 +65,13 @@ public:
     // invisible lid over a zone line is not a roof.
     std::optional<float> ground_below(const glm::vec3& p) const;
     std::optional<float> roof_above(const glm::vec3& p) const;
+
+    // Visual effects: highest upward-facing drawn opaque/masked surface no higher than p.z, including passable
+    // decorative props. Excludes transparent surfaces, invisible collision and movement-only ladder slabs.
+    // This deliberately does not change the movement/ground probes' collision policy.
+    std::optional<float> visual_surface_below(const glm::vec3& p) const;
+    bool visual_surfaces(const glm::vec2& low,const glm::vec2& high,
+                         const std::function<bool(const CollisionTriangle&)>& visit,std::uint32_t& work) const;
 
     // True when no solid triangle blocks the segment from a to b.
     bool line_of_sight(const glm::vec3& a, const glm::vec3& b) const;
@@ -115,6 +125,7 @@ public:
     std::span<const CollisionTriangle> triangles() const { return triangles_; }
 
 private:
+    static CollisionMesh build_scene(const assets::Zone& zone, bool visual);
     static constexpr float kCell = 64.0f;
     static constexpr std::size_t kGroundDivisions = 16;
     static constexpr float kGroundCell = kCell / static_cast<float>(kGroundDivisions);
@@ -153,6 +164,10 @@ private:
     static bool visible_ground(const CollisionTriangle& t) {
         return probe_solid(t) && !(t.flags & kTriangleInvisible) && t.normal.z > 0.0f;
     }
+    static bool visual_surface(const CollisionTriangle& t) {
+        return t.normal.z > 0.0f &&
+            !(t.flags & (kTriangleTransparent | kTriangleInvisible | kTriangleLadderSlab | kTriangleNoVisualSurface | 0x10));
+    }
     // Whether the movement's queries take the triangle: the slab with solid_ladders_, else the ladder's own polygons
     // (a polygon of a ladder that is not passable means the ladder has a slab).
     bool movement_kept(const CollisionTriangle& t) const {
@@ -170,6 +185,9 @@ private:
     // Immutable finer candidate lists only for dense cells, used by ground_below. Movement and other probes keep
     // their original coarse lists; only visible, upward-facing probe surfaces enter these 4-unit subdivisions.
     std::unordered_map<std::int64_t, GroundSubgrid> ground_cells_;
+    // The effect query has a separate policy: passable drawn props are surfaces too. Its immutable fine index
+    // keeps dense EQG scenery from making each terrain sample inspect hundreds of irrelevant coarse candidates.
+    std::unordered_map<std::int64_t, GroundSubgrid> visual_cells_;
     std::vector<std::uint32_t> big_; // triangles too large for the grid
     std::optional<std::pair<glm::vec3, glm::vec3>> bounds_;
     bool solid_ladders_ = false;

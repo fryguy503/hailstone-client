@@ -35,7 +35,9 @@ void ClientApp::update_gamepad(float dt) {
     const game::GamepadSettings& s = gp.settings();
     window_.set_gamepad_tuning(s.deadzone, s.trigger_threshold);
     ui::set_screen_gamepad(gp.active(), pad.type); // the login, server and character screens' buttons
-    for (auto& name : gp.take_focus_requests()) ui_.request_window_focus(std::move(name));
+    for (auto& name : gp.take_focus_requests())
+        if (ui_.visible()) ui_.request_window_focus(std::move(name));
+    if (!ui_.visible()) gp.set_mode(PadMode::Game);
     pad_window_takes_b_ = gp.take_window_takes_b(); // (the UI's last frame: B closes one of its windows)
     const bool in_world = screen_ == Screen::InGame && player_ready_ && conn_;
     const bool active = gp.active();
@@ -69,7 +71,7 @@ void ClientApp::update_gamepad(float dt) {
         pad_cursor(pad, dt);
         return;
     }
-    if (mode == PadMode::Menu) return; // the windows have the pad (ImGui's navigation, eq.gamepad)
+    if (mode == PadMode::Menu) return; // the windows have the pad (ImGui's navigation, hs.gamepad)
     if (!in_world) {
         if (pad.was_released(PadButton::Back) && !pad.is_down(PadButton::Start)) gp.set_mode(PadMode::Cursor);
         return;

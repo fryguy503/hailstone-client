@@ -1,6 +1,6 @@
 #pragma once
 
-// The stock UI's art as ImGui textures, for the Lua windows (src/app/lua_eq.h): any file of uifiles/default
+// The stock UI's art as ImGui textures, for the Lua windows (src/app/lua_ui.h): any file of uifiles/default
 // (window pieces, gauges, buttons; the layouts name them through EQUI_Animations.xml), plus the icon grids the
 // game's widgets draw from:
 //   item icons   A_DragItem   dragitem1.dds.. : 40 x 40 cells, 6 x 6 per sheet, down each column first; icon n >= 500
@@ -8,7 +8,7 @@
 //   gem icons    A_SpellGems  gemicons01.tga..: 24 x 24 cells, 10 x 10 per sheet, across each row first (the spell's
 //                                              SpellIcon, EQ_Spell +0x168: CSpellGemWnd::Init / SetSpellIconIndex)
 // Files load on first use and stay loaded, up to kMaxFiles: past that the one asked for least recently goes (a
-// script may ask eq.UiTexture for any file), its texture once the frames that may draw it are done.
+// script may ask hs.UiTexture for any file), its texture once the frames that may draw it are done.
 
 #include <cstdint>
 #include <filesystem>
@@ -127,6 +127,10 @@ private:
 std::optional<UiTextures::AnimationFrame> find_ui_animation_frame(const std::string& xml, std::string_view name);
 std::optional<UiTextures::AnimationImage> ui_animation_crop(const UiTextures::Texture& texture,
                                                           const UiTextures::AnimationFrame& frame);
+
+// A raster asset's relative GameDir path, normalized for its index. Absolute paths, ambiguous components,
+// traversal, control characters and non-image extensions are refused. This grants no arbitrary disk access.
+std::optional<std::string> ui_image_path(std::string_view relative);
 
 // Grid arithmetic (tested): the sheet (1-based) and the top-left pixel of an icon's cell.
 struct GridCell {

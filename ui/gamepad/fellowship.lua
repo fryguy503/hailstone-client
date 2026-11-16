@@ -5,7 +5,8 @@
 --                leader's are the leader's).
 --   Camp         the current campsite, Create / Destroy Camp, the campsite kits (Refresh List asks for them, Show All
 --                Possible, the kind filter) and the selected kit's description.
--- Every list, field and button is the stock window's (app/lua_eq_fellowship.cpp), so the requests are the game's.
+-- Every list, field and button is the stock window's (app/lua_ui_fellowship.cpp), so the requests are the game's.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -22,7 +23,7 @@ local wasShown = false
 
 local function setPage(p)
   page = p
-  eq.SetTabPage(WIN, "Subwindows", p - 1)
+  API.windows.SetTabPage(WIN, "Subwindows", p - 1)
   if p == 1 then members.focusNext = 1 else kits.focusNext = 1 end
 end
 
@@ -35,7 +36,7 @@ ui.window("Fellowship", function()
   T.frame()
   if not wasShown then setPage(page) end
   wasShown = true
-  local count = eq.ListInfo(WIN, "MemberList") or 0
+  local count = API.windows.ListInfo(WIN, "MemberList") or 0
   if W.begin("Fellowship", { w = 1700, h = 960, title = "Fellowship", subtitle = page == 1
           and (count .. (count == 1 and " member" or " members") .. " | L marks the leader") or "Campsite",
         hints = CH.hints(st, { { "lb", "Fellowship" }, { "rb", "Camp" }, { "a", "Select" }, { "b", "Close" } }) }) then
@@ -91,7 +92,7 @@ ui.window("Fellowship", function()
         local row = CH.list(WIN, "CampsiteKitList", kits, listW, listH, { rowH = 52, font = 19,
           empty = "No campsite kits: Refresh List asks for them.", columns = { { 2, 1 } } })
         W.toSide(side, row)
-        TB.draw(eq.WindowText(WIN, "CampsiteDescription") or "", x0, ly + listH + T.px(14), x0 + listW, y1, desc)
+        TB.draw(API.windows.Text(WIN, "CampsiteDescription") or "", x0, ly + listH + T.px(14), x0 + listW, y1, desc)
         buttons = {
           { "CreateCampsite", "Create Camp", "Here" },
           { "DestroyCampsite", "Destroy Camp", "The current one" },
@@ -108,5 +109,5 @@ ui.window("Fellowship", function()
       end
     end
   end
-  if CH.back(st, W.finish()) then eq.ShowWindow(WIN, false) end
+  if CH.back(st, W.finish()) then API.windows.Show(WIN, false) end
 end)

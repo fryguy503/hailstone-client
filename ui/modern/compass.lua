@@ -1,12 +1,13 @@
 -- Compass: replaces the game's CompassWindow with a heading band across the top of the screen: the four points,
 -- ticks every 15 degrees and the heading in degrees under the centre mark. The expedition and adventure marks
--- (eq.CompassMarkers) are shown where the stock compass would put them.
+-- (hs.CompassMarkers) are shown where the stock compass would put them.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color
 
 local PX_PER_DEG = 1.4 -- on the band (the stock strip is 0.5)
-local STOCK_CENTRE = 49  -- the stock compass's centre column, where eq.CompassMarkers' x are measured from
+local STOCK_CENTRE = 49  -- the stock compass's centre column, where hs.CompassMarkers' x are measured from
 
 local NAMES = { [0] = "N", [45] = "NW", [90] = "W", [135] = "SW", [180] = "S", [225] = "SE", [270] = "E", [315] = "NE" }
 local NO_MARKERS = {}
@@ -17,7 +18,7 @@ local OPTS = {
 }
 
 local function body(x, y, w, h, s)
-  local _, _, _, heading = eq.CompassStrips()
+  local _, _, _, heading = API.compass.Strips()
   heading = heading or 0
   local cx = x + w / 2
   ui.PushClipRect(x + 10 * s, y, x + w - 10 * s, y + h, true)
@@ -39,7 +40,7 @@ local function body(x, y, w, h, s)
     end
   end
   -- the stock compass's marks, moved onto the band (they are pixels at 0.5 per degree from its centre)
-  for _, mx in ipairs(eq.CompassMarkers() or NO_MARKERS) do
+  for _, mx in ipairs(API.compass.Markers() or NO_MARKERS) do
     local d = (STOCK_CENTRE - mx) / 0.5
     local px = cx - d * PX_PER_DEG * s
     ui.DrawTriangleFilled(px - 5 * s, y + 3 * s, px + 5 * s, y + 3 * s, px, y + 10 * s, C.pet[1], C.pet[2], C.pet[3], 1)
@@ -52,6 +53,6 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Compass", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Window("CompassWindow", "Compass", OPTS, body)
 end)

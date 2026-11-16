@@ -26,7 +26,7 @@ This code base is numeric and emulation-heavy, with float and x87 behaviour that
 |---|---|
 | `bugprone-easily-swappable-parameters` | noise; packet and record builders take many ints |
 | `bugprone-narrowing-conversions`, `bugprone-implicit-widening-of-multiplication-result`, `bugprone-misplaced-widening-cast` | intentional float/int conversions, 32-bit wraparound that is part of the specified behaviour (59 hits of the last one) |
-| `bugprone-integer-division` | the pixel and icon-grid arithmetic is integer on purpose (`lua_eq_*`, `particle_renderer`) |
+| `bugprone-integer-division` | the pixel and icon-grid arithmetic is integer on purpose (`lua_ui_*`, `particle_renderer`) |
 | `bugprone-signed-char-misuse` | the sign extension of a byte is intentional (`text_overlay.cpp`) or a wire field (`game_connection_group.cpp`) |
 | `bugprone-assignment-in-if-condition` | idiom `if ((x = f()))` |
 | `bugprone-empty-catch` | the two empty catches (`eqg_zone.cpp`, `game_connection_group.cpp`) deliberately ignore a bad optional record |
@@ -65,4 +65,4 @@ Nothing in `src/game/mechanics` was edited and no float arithmetic or evaluation
 - `nullPointerRedundantCheck` (`game_connection_group.cpp`): false positive; `target` is null only when `name` is non-empty, and then it is not dereferenced.
 - `incorrectLogicOperator` in `game/swept_sphere.cpp` (`normalize_or_zero`): part of the swept-sphere maths; left alone.
 - `uninitMemberVarNoCtor` on plain aggregates (GPU vertex and push-constant structs, small records): they are always brace- or value-initialised.
-- `passedByValue` for Lua/chat `args`, `uselessCallsSubstr`, `shiftTooManyBitsSigned`, `constStatement` in `lua_eq_windows.h` macros: style or performance only; not changed.
+- `passedByValue` for Lua/chat `args`, `uselessCallsSubstr`, `shiftTooManyBitsSigned`, `constStatement` in `lua_ui_windows.h` macros: style or performance only; not changed.

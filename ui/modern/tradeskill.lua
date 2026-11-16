@@ -5,7 +5,8 @@
 -- or all; each result is put away before the next, and it stops when the inventory is full), Auto-Inventory and
 -- Experiment (the container's own window). The fields are the window's edit boxes (Search sends what they hold),
 -- a row click selects in its list (the server sends the components); ComponentList, MakeableLabel and the
--- Combine* children are Hailstone's (src/app/lua_eq_items.cpp).
+-- Combine* children are Hailstone's (src/app/lua_ui_items.cpp).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local P = dofile("lib/progress.lua")
@@ -34,9 +35,9 @@ end
 local function testOpen()
   -- testing (test.open.TradeskillWnd=1): a right click on the first carried tradeskill bag the game opens here
   for slot = 23, 32 do
-    local it = eq.Item(slot)
+    local it = API.inventory.Item(slot)
     if it and (it.bagSlots or 0) > 0 and (it.name or ""):find("Mixing Bowl", 1, true) then
-      eq.ClickSlot(slot, nil, "right")
+      API.inventory.ClickSlot(slot, nil, "right")
       return
     end
   end
@@ -45,7 +46,7 @@ end
 -- (the controls' options: made once, their sizes set each frame)
 local NUMBER_EDIT = { MinTrivialEdit = { hint = "any" }, MaxTrivialEdit = { hint = "any" } }
 local SEARCH_EDIT = { hint = "Recipe name contains...", width = -1,
-  onCommit = function() if ui.IsKeyPressed(ui.Key.Enter) then eq.ClickChild(WINDOW, "SearchButton", "left") end end }
+  onCommit = function() if ui.IsKeyPressed(ui.Key.Enter) then API.windows.ClickChild(WINDOW, "SearchButton", "left") end end }
 local SEARCH_BUTTON = { primary = true, width = -1,
   tooltip = "Find the recipes you know that match (Enter in the name field does too)" }
 local SHOW_FAVORITES = { tooltip = "List your favourite recipes" }
@@ -151,7 +152,7 @@ local function container(x, y, w, h, s)
   local ix, iw = x + pad, w - 2 * pad
   local yy = y + pad
   -- the container
-  local tex, u0, v0, u1, v1 = eq.ChildArt(WINDOW, "ContainerIcon", "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(WINDOW, "ContainerIcon", "decal")
   if type(tex) ~= "userdata" then tex = nil end
   T.Icon(ix, yy, 36 * s, s, tex, u0, v0, u1, v1)
   T.Text(ix + 44 * s, yy + 2 * s, "CONTAINER", C.faint, T.font.tiny)
@@ -163,9 +164,9 @@ local function container(x, y, w, h, s)
   yy = yy + 16 * s
   -- the recipe picked: the list's selected row
   local name, trivial
-  local _, _, selected = eq.ListInfo(WINDOW, LIST)
+  local _, _, selected = API.windows.ListInfo(WINDOW, LIST)
   if selected and selected >= 0 then
-    local row = eq.ListRow(WINDOW, LIST, selected)
+    local row = API.windows.ListRow(WINDOW, LIST, selected)
     if row then name, trivial = row[1], row[2] end
   end
   ui.DrawLine(ix, yy, ix + iw, yy, C.ink[1], C.ink[2], C.ink[3], 0.06, 1)
@@ -189,10 +190,10 @@ local function container(x, y, w, h, s)
     T.Text(ix + iw, yy, "CAN MAKE " .. make:upper(), ok and C.good or C.danger, T.font.tiny, "right")
   end
   yy = yy + 16 * s
-  local rows = eq.ListInfo(WINDOW, "ComponentList") or 0
+  local rows = API.windows.ListInfo(WINDOW, "ComponentList") or 0
   local size, gap = 28 * s, 4 * s
   for i = 0, rows - 1 do
-    local texts, r, g, b, ctex, cu0, cv0, cu1, cv1 = eq.ListRow(WINDOW, "ComponentList", i)
+    local texts, r, g, b, ctex, cu0, cv0, cu1, cv1 = API.windows.ListRow(WINDOW, "ComponentList", i)
     if texts then
       local col = { r, g, b, 1 }
       if type(ctex) ~= "userdata" then ctex = nil end
@@ -244,7 +245,7 @@ local function container(x, y, w, h, s)
 end
 
 local TEST_SEARCH = WINDOW .. ".search"
-local function testSearch() eq.ClickChild(WINDOW, "SearchButton", "left") end
+local function testSearch() API.windows.ClickChild(WINDOW, "SearchButton", "left") end
 
 local DIALOG = {
   size = function() return 640, 560 end,
@@ -268,7 +269,7 @@ local function body(x, y, w, h, s)
 end
 
 ui.window("Tradeskills", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   P.TestOpen(TEST_SEARCH, testSearch)
   hud.Dialog(WINDOW, "Tradeskills", DIALOG, body)

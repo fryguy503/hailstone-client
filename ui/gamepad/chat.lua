@@ -3,7 +3,8 @@
 --   Chat Log       from the main menu (or Back + Start, or the chat keys: Enter, / ...): the chat windows' lines,
 --                  read only, and ways to talk without a keyboard: quick-chat phrases and an on-screen keyboard.
 --                  LB / RB pick the chat window, D-pad up / down scroll the log (on the log), X changes the channel.
--- What is sent goes through the stock chat window (eq.ChatSubmit): its history and the game's command interpreter.
+-- What is sent goes through the stock chat window (hs.ChatSubmit): its history and the game's command interpreter.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -14,7 +15,7 @@ local C = T.C
 S.LINK = C.chatLink -- (this copy of stml: chat links in the colour made for the chat's page)
 
 local cache = {} -- by slot: { version, lines = { segments } }
--- The window's lines, parsed; only the lines that came since the last look are asked for and parsed (eq.ChatText's
+-- The window's lines, parsed; only the lines that came since the last look are asked for and parsed (hs.ChatText's
 -- incremental form), unless the window's lines changed otherwise.
 local function lines(slot)
   local c = cache[slot]
@@ -22,7 +23,7 @@ local function lines(slot)
     c = { version = -1, lines = {} }
     cache[slot] = c
   end
-  local version, raw, reset, count = eq.ChatText(slot, c.version, false, false, true)
+  local version, raw, reset, count = API.chat.Text(slot, c.version, false, false, true)
   if version and raw and version ~= c.version then
     c.version, c.changed = version, ui.GetTime()
     if reset then c.lines = {} end
@@ -59,7 +60,7 @@ local slotIdx = 1
 local windowsFrame, windowsList = nil, nil
 local function chatWindows()
   local f = ui.GetFrameCount()
-  if f ~= windowsFrame or not windowsList then windowsFrame, windowsList = f, eq.ChatWindows() end
+  if f ~= windowsFrame or not windowsList then windowsFrame, windowsList = f, API.chat.Windows() end
   return windowsList
 end
 -- The input with its links' tags put back, worked out again only when the input or its links change (the ticker
@@ -75,12 +76,12 @@ end
 
 -- ---------------------------------------------------------------- ticker
 ui.window("Chat Ticker", function()
-  if not eq.InGame() then input, inputLinks, inputError, typed = "", {}, nil, nil; return end
+  if not API.session.InGame() then input, inputLinks, inputError, typed = "", {}, nil, nil; return end
   if not W.shown("Chat1") then return end
   local start, replace
   local text = expandedInput()
   for index, window in ipairs(chatWindows()) do
-    start, replace = eq.ChatTakeFocus(window.slot, text)
+    start, replace = API.chat.TakeFocus(window.slot, text)
     if start then slotIdx = index; break end
   end
   if start then
@@ -181,13 +182,13 @@ local function send(text, composed)
   local prefix = text:sub(1, 1) == "/" and "" or CHANNELS[channel][2]
   local expanded, reason = chatlinks.ForSubmit(composed and inputLinks or {}, text, prefix)
   if not expanded then inputError = reason; return false end
-  eq.ChatSubmit(slot, expanded)
+  API.chat.Submit(slot, expanded)
   inputError = nil
   return true
 end
 
 ui.window("Chat Log", function()
-  if not eq.InGame() then input, inputLinks, inputError, typed = "", {}, nil, nil; return end
+  if not API.session.InGame() then input, inputLinks, inputError, typed = "", {}, nil, nil; return end
   -- Back + Start: the chat input (here, the keyboard)
   -- (in game mode the client's own back+start binding opens it, through the chat key: the ticker above, this frame)
   if ((pad.down("back") and pad.pressed("start")) or (pad.down("start") and pad.pressed("back")))

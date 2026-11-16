@@ -1,4 +1,4 @@
-// Modern pack windows run against stub helpers (lib/*.lua written here) and a stub eq: the parcel money
+// Modern pack windows run against stub helpers (lib/*.lua written here) and a stub hs: the parcel money
 // confirmation (merchant.lua), the Lua Scripts search (scripts.lua) and the quantity dialog's minimum
 // (quantity.lua). Each window file is the pack's own, copied into a scratch pack beside the stubs.
 #include <doctest/doctest.h>
@@ -11,6 +11,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <lua.hpp>
+
+#include "lua_ui_api_mock.h"
 
 #include "ui/lua/lua_host.h"
 #include "scratch_dir.h"
@@ -45,6 +47,7 @@ struct ModernPack {
         {
             hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
             lua_State* L = lua.state();
+            REQUIRE(hailstone::test::register_mock_ui_api(L) == LUA_OK);
             auto frames = [&](int n) {
                 for (int i = 0; i < n; ++i) {
                     ImGui::GetIO().DisplaySize = ImVec2(1000, 800);
@@ -110,13 +113,14 @@ return { Caption = function() end, Empty = function() end, Amount = function() e
     pack.write("lib/items.lua", "return { NameTooltip = function() end }");
     pack.write("a_eq.lua", R"lua(
 B = { sent = {}, to = "Bob", coin = "5" }
-eq = {
+hs = {
   InGame = function() return true end,
   Money = function() return 100, 0, 0, 0 end,
   Parcels = function() return {}, 0, false, false, nil, nil end,
   ItemJob = function() return nil end,
   SendParcelMoney = function(...) B.sent[#B.sent + 1] = table.concat({ ... }, ",") end,
 }
+TEST_UI_API_ATTACH(hs)
 -- the platinum box holds B.coin; a ui.Button is pressed for one frame when B.button names its label; the popup's
 -- question is kept
 local input, button, text = ui.InputTextWithHint, ui.Button, ui.Text
@@ -169,10 +173,11 @@ local function script(name)
   return { name = name, status = "", allowed = true, found = true, autorun = false, server = false, caps = "",
     why = "", error = "", kept = false }
 end
-eq = {
+hs = {
   InGame = function() return true end,
   Scripts = function() return { script("MyScript"), script("other") }, { autorun = true, folders = {} } end,
 }
+TEST_UI_API_ATTACH(hs)
 local input, push = ui.InputTextWithHint, ui.PushID
 ui.InputTextWithHint = function(label, ...)
   if label == "##filter" then return B.filter end
@@ -204,7 +209,7 @@ return {
 )lua");
     pack.write("a_eq.lua", R"lua(
 Q = { shown = true, place = true, text = "5", value = 4, count = 10 }
-eq = {
+hs = {
   InGame = function() return true end,
   ReplaceWindow = function()
     local place = Q.place
@@ -214,6 +219,7 @@ eq = {
   ChildState = function() return nil, nil, Q.value, Q.count end,
   SetSlider = function() end, WindowButton = function() end, ShowWindow = function() end,
 }
+TEST_UI_API_ATTACH(hs)
 )lua");
     pack.run([](const auto& frames, const auto& eval, lua_State* L) {
         frames(2);

@@ -5,10 +5,11 @@
 --                                  does; on a skill button Y chooses its skill (the stock right click) and X puts it
 --                                  on a hot button / cross hotbar slot (the stock drag).
 --   Select Skill (SkillsSelectWindow)   the skill chooser a skill button of either page opens: A picks.
---   Combat Abilities (CombatAbilityWnd)   the disciplines (eq.Disciplines: icon, level, endurance, reuse time left)
+--   Combat Abilities (CombatAbilityWnd)   the disciplines (hs.Disciplines: icon, level, endurance, reuse time left)
 --                                  with the focused one's description; A uses it as its hot button does
 --                                  (doCombatAbility), X assigns it to a slot.
 -- Everything goes through the stock windows' models, so the game's rules apply.
+local API = hs.UI
 local W = dofile("lib/window.lua")
 local T = W.T -- the window module's theme: the scale W.begin computed this frame
 local pad = W.pad
@@ -49,21 +50,21 @@ local function tabs(x0, y0, page, names, onClick)
   return y0 + th + T.px(28)
 end
 
--- The usable skills by name, with their reuse time left (eq.UsableSkills).
+-- The usable skills by name, with their reuse time left (hs.UsableSkills).
 local function usableByName()
   local out = {}
-  for _, s in ipairs(eq.UsableSkills()) do out[s.name] = s end
+  for _, s in ipairs(API.abilities.UsableSkills()) do out[s.name] = s end
   return out
 end
 
 -- One of the Actions window's buttons, `w` x `h` at the cursor. kind: "skill" (an ability / combat skill button),
 -- else a plain button. Returns whether it is focused.
 local function actionButton(id, kind, w, h, usable)
-  if eq.ChildShown(AW, id) == false then return false end
-  local text, set = eq.WindowText(AW, id)
+  if API.windows.ChildShown(AW, id) == false then return false end
+  local text, set = API.windows.Text(AW, id)
   text = text or ""
   if not set and text == "" and kind ~= "skill" then text = XML_TEXT[id] or "" end
-  local enabled, checked = eq.ChildState(AW, id)
+  local enabled, checked = API.windows.ChildState(AW, id)
   local label, sub = text, nil
   if kind == "skill" then
     if text == "" then label, sub = "Empty", "Y: choose a skill"
@@ -79,14 +80,14 @@ local function actionButton(id, kind, w, h, usable)
     focusFirst = false
   end
   local clicked, focused = T.button("##" .. id, label, w, h, { sub = sub, disabled = enabled == false, align = 0 }, pad)
-  if clicked and settled then eq.ClickChild(AW, id, "left") end
+  if clicked and settled then API.windows.ClickChild(AW, id, "left") end
   if focused and kind == "skill" then
-    if W.pressed("y") then eq.ClickChild(AW, id, "right") end
+    if W.pressed("y") then API.windows.ClickChild(AW, id, "right") end
     if W.pressed("x") then
-      if text == "" or not AS.start(text, function() return eq.PickUp(AW, id) end, "Actions") then say("Nothing to assign.") end
+      if text == "" or not AS.start(text, function() return API.cursor.PickUp(AW, id) end, "Actions") then say("Nothing to assign.") end
     end
   elseif focused and W.pressed("x") then
-    if not AS.start(label, function() return eq.PickUp(AW, id) end, "Actions") then say("Nothing to assign.") end
+    if not AS.start(label, function() return API.cursor.PickUp(AW, id) end, "Actions") then say("Nothing to assign.") end
   end
   return focused
 end
@@ -97,7 +98,7 @@ local function grid(ids, kind, cols, x0, x1, h, usable)
   local w = (x1 - x0 - (cols - 1) * gap) / cols
   local n = 0
   for _, id in ipairs(ids) do
-    if eq.ChildShown(AW, id) ~= false then
+    if API.windows.ChildShown(AW, id) ~= false then
       if n % cols ~= 0 then ui.SameLine(0, gap) end
       n = n + 1
       actionButton(id, kind, w, h, usable)
@@ -114,12 +115,12 @@ for i = 1, 4 do COMBAT_IDS[i] = "ACP_" .. ORD[i] .. "AbilityButton" end
 for i = 1, 12 do SOCIAL_IDS[i] = "ASP_SocialButton" .. i end
 local ATTACK_IDS = { "ACP_MeleeAttackButton", "ACP_RangeAttackButton" }
 
--- How many disciplines are known (the Disciplines button's text), read every 0.25 s: eq.Disciplines builds them all.
+-- How many disciplines are known (the Disciplines button's text), read every 0.25 s: hs.Disciplines builds them all.
 local discCount, discCountAt = 0, nil
 local function disciplineCount()
   local now = ui.GetTime()
   if not discCountAt or now - discCountAt >= 0.25 or now < discCountAt then
-    discCount, discCountAt = #eq.Disciplines(), now
+    discCount, discCountAt = #API.abilities.Disciplines(), now
   end
   return discCount
 end
@@ -129,17 +130,17 @@ ui.window("Actions", function()
     discCountAt = nil
     return
   end
-  local page = eq.TabPage(AW, "ACTW_ActionsSubwindows") or 0
+  local page = API.windows.TabPage(AW, "ACTW_ActionsSubwindows") or 0
   if W.begin("Actions", { w = 1200, h = 800, title = "Actions", subtitle = PAGES[page + 1],
         hints = { { "a", "Use" }, { "y", "Choose skill" }, { "x", "Assign to slot" }, { "lb", "Page" }, { "rb", "Page" }, { "b", "Close" } } }) then
     settled = AS.settled("Actions")
     local function setPage(p)
-      eq.SetTabPage(AW, "ACTW_ActionsSubwindows", p)
+      API.windows.SetTabPage(AW, "ACTW_ActionsSubwindows", p)
       focusFirst = true
     end
     if W.pressed("lb") then setPage((page + 3) % 4) end
     if W.pressed("rb") then setPage((page + 1) % 4) end
-    page = eq.TabPage(AW, "ACTW_ActionsSubwindows") or page
+    page = API.windows.TabPage(AW, "ACTW_ActionsSubwindows") or page
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     local top = tabs(x0, y0, page, PAGES, setPage)
@@ -157,20 +158,20 @@ ui.window("Actions", function()
       local n = disciplineCount()
       if T.button("##disc", "Disciplines", x1 - x0, h, { sub = n > 0 and (n .. " combat abilities") or "None known",
             disabled = n == 0, align = 0 }, pad) and settled then
-        eq.ShowWindow("CombatAbilityWnd", true)
+        API.windows.Show("CombatAbilityWnd", true)
       end
     else
       local gap = T.px(14)
       local bw = T.px(84)
-      if T.button("##prev", "<", bw, T.px(60), {}, pad) then eq.ClickChild(AW, "ASP_SocialPageLeftButton", "left") end
+      if T.button("##prev", "<", bw, T.px(60), {}, pad) then API.windows.ClickChild(AW, "ASP_SocialPageLeftButton", "left") end
       ui.SameLine(0, gap)
       local cx, cy = ui.GetCursorScreenPos()
       T.font(22)
-      T.textIn(cx, cy, cx + T.px(160), cy + T.px(60), "Page " .. (eq.WindowText(AW, "ASP_CurrentSocialPageLabel") or ""), C.text, 0.5)
+      T.textIn(cx, cy, cx + T.px(160), cy + T.px(60), "Page " .. (API.windows.Text(AW, "ASP_CurrentSocialPageLabel") or ""), C.text, 0.5)
       T.unfont()
       ui.Dummy(T.px(160), T.px(60))
       ui.SameLine(0, gap)
-      if T.button("##next", ">", bw, T.px(60), {}, pad) then eq.ClickChild(AW, "ASP_SocialPageRightButton", "left") end
+      if T.button("##next", ">", bw, T.px(60), {}, pad) then API.windows.ClickChild(AW, "ASP_SocialPageRightButton", "left") end
       grid(SOCIAL_IDS, "plain", 3, x0, x1, T.px(70), usable)
     end
     if message and ui.GetTime() - messageAt < 3 then
@@ -179,7 +180,7 @@ ui.window("Actions", function()
       T.unfont()
     end
   end
-  if W.finish() then eq.ShowWindow(AW, false) end
+  if W.finish() then API.windows.Show(AW, false) end
 end)
 
 -- ---------------------------------------------------------------- the skill choosers
@@ -190,20 +191,20 @@ local function chooser(screen, title, listId, makeHotkey)
     if W.begin(title, { w = 760, h = 820, title = title, subtitle = "For the Actions window's button",
           hints = { { "a", "Choose" }, { "b", "Cancel" } } }) then
       local x0, y0, x1, y1 = W.area()
-      local rows = eq.ListInfo(screen, listId) or 0
+      local rows = API.windows.ListInfo(screen, listId) or 0
       local rowH = 54
       local visible = math.max(1, math.floor((y1 - y0 + T.px(10)) / T.px(rowH + 10)))
       W.list(listId, state, rows, visible, rowH, x1 - x0, function(i, rx0, ry0, rx1, ry1)
-        local texts = eq.ListRow(screen, listId, i - 1)
+        local texts = API.windows.ListRow(screen, listId, i - 1)
         T.textIn(rx0 + T.px(20), ry0, rx1 - T.px(20), ry1, texts and texts[1] or "", C.text, 0)
       end, function(i)
-        eq.ListClick(screen, listId, i - 1, "left")
-        if makeHotkey then eq.ClickChild(screen, makeHotkey, "left") end
+        API.windows.ListClick(screen, listId, i - 1, "left")
+        if makeHotkey then API.windows.ClickChild(screen, makeHotkey, "left") end
         pad.focus("Actions")
       end)
     end
     if W.finish() then
-      eq.ShowWindow(screen, false)
+      API.windows.Show(screen, false)
       pad.focus("Actions")
     end
   end)
@@ -223,11 +224,11 @@ end
 
 ui.window("Combat Abilities", function()
   if not W.shown(CW) then return end
-  local discs = eq.Disciplines()
+  local discs = API.abilities.Disciplines()
   local focusedDisc
   -- The active discipline's icon stays out of the pad's navigation: as the window's first item it would take the
   -- first focus, and A on opening the window would end the discipline. LB ends it instead (a click still does).
-  local discActive = eq.ChildShown(CW, "CAW_CombatEffectButton") == true
+  local discActive = API.windows.ChildShown(CW, "CAW_CombatEffectButton") == true
   local hints = discActive
       and { { "a", "Use" }, { "x", "Assign to slot" }, { "y", "Actions" }, { "lb", "End discipline" }, { "b", "Close" } }
       or { { "a", "Use" }, { "x", "Assign to slot" }, { "y", "Actions" }, { "b", "Close" } }
@@ -235,8 +236,8 @@ ui.window("Combat Abilities", function()
         hints = hints }) then
     local discSettled = AS.settled("Combat Abilities")
     if W.pressed("y") then -- the Actions window's combat page (the COMBAT key)
-      eq.SetTabPage(AW, "ACTW_ActionsSubwindows", 2)
-      eq.ShowWindow(AW, true)
+      API.windows.SetTabPage(AW, "ACTW_ActionsSubwindows", 2)
+      API.windows.Show(AW, true)
     end
     local x0, y0, x1, y1 = W.area()
     if discActive then
@@ -249,16 +250,16 @@ ui.window("Combat Abilities", function()
       if hovered then T.rect(x0, y0, x0 + icon, y0 + icon, C.accent, ui.IsItemActive() and 0.30 or 0.18, r) end
       T.outline(x0, y0, x0 + icon, y0 + icon, C.edge, 1, r)
       if (clicked or W.pressed("lb")) and discSettled then
-        eq.ClickChild(CW, "CAW_CombatEffectButton", "left")
+        API.windows.ClickChild(CW, "CAW_CombatEffectButton", "left")
       end
       if hovered then ui.SetTooltip("End this discipline") end
-      local tex, u0, v0, u1, v1 = eq.ChildArt(CW, "CAW_CombatEffectButton", "decal")
+      local tex, u0, v0, u1, v1 = API.windows.ChildArt(CW, "CAW_CombatEffectButton", "decal")
       T.icon(tex, u0, v0, u1, v1, x0, y0, x0 + icon, y0 + icon)
       local tx = x0 + icon + T.px(16)
-      local fraction, remaining = eq.Gauge(26)
+      local fraction, remaining = API.character.Gauge(26)
       T.font(22)
       local timerW = remaining and remaining ~= "" and (ui.CalcTextSize(remaining) + T.px(16)) or 0
-      local name = eq.WindowText(CW, "CAW_CombatEffectLabel") or ""
+      local name = API.windows.Text(CW, "CAW_CombatEffectLabel") or ""
       T.textIn(tx, y0, x1 - timerW, y0 + T.px(32), T.fit(name, math.max(0, x1 - tx - timerW)), C.text, 0)
       T.textIn(tx, y0, x1, y0 + T.px(32), remaining or "", C.dim, 1)
       T.unfont()
@@ -279,7 +280,7 @@ ui.window("Combat Abilities", function()
           ry1 - T.px(2), C.bad, 0.75, T.px(2))
       end
       local s = ry1 - ry0 - T.px(12)
-      local tex, u0, v0, u1, v1 = eq.SpellIcon(d.icon)
+      local tex, u0, v0, u1, v1 = API.spells.Icon(d.icon)
       if tex then T.icon(tex, u0, v0, u1, v1, rx0 + T.px(8), ry0 + T.px(6), rx0 + T.px(8) + s, ry0 + T.px(6) + s, d.remaining > 0 and 0.45 or 1) end
       T.textIn(rx0 + s + T.px(24), ry0, rx1 - T.px(330), ry1, T.fit(d.name, rx1 - rx0 - s - T.px(360)),
         d.remaining > 0 and C.dim or C.text, 0)
@@ -292,7 +293,7 @@ ui.window("Combat Abilities", function()
       if focused then
         focusedDisc = d
         if W.pressed("x") then
-          if not AS.start(d.name, function() return eq.PickUp(CW, "Discipline", d.index + 1) end, "Combat Abilities") then
+          if not AS.start(d.name, function() return API.cursor.PickUp(CW, "Discipline", d.index + 1) end, "Combat Abilities") then
             message, messageAt = "Nothing to assign.", ui.GetTime()
           end
         end
@@ -300,7 +301,7 @@ ui.window("Combat Abilities", function()
     end, function(i)
       if not discSettled then return end
       local d = discs[i]
-      if d then eq.PressButtonFrom(CW, "Discipline", d.index + 1) end
+      if d then API.cursor.PressButtonFrom(CW, "Discipline", d.index + 1) end
     end)
     if #discs == 0 then T.draw(x0, y0, "You have no combat abilities.", C.dim) end
     -- the focused discipline: its icon, name and the spell display's text
@@ -309,7 +310,7 @@ ui.window("Combat Abilities", function()
     if focusedDisc then
       local px, py = rx0 + T.px(18), y0 + T.px(16)
       local is = T.px(64)
-      local tex, u0, v0, u1, v1 = eq.SpellIcon(focusedDisc.icon)
+      local tex, u0, v0, u1, v1 = API.spells.Icon(focusedDisc.icon)
       if tex then T.icon(tex, u0, v0, u1, v1, px, py, px + is, py + is) end
       T.font(24)
       T.textIn(px + is + T.px(14), py, x1 - T.px(18), py + is, T.fit(focusedDisc.name, x1 - px - is - T.px(40)), C.text, 0)
@@ -320,7 +321,7 @@ ui.window("Combat Abilities", function()
       T.draw(px, py, reuse .. (focusedDisc.remaining > 0 and ("   (ready in " .. cooldownTime(focusedDisc.remaining) .. ")") or ""), C.dim)
       T.unfont()
       py = py + T.px(34)
-      local _, stml = eq.SpellDetails(focusedDisc.spell)
+      local _, stml = API.spells.Details(focusedDisc.spell)
       T.font(19)
       TB.draw(stml or "", px, py, x1 - T.px(14), y1 - T.px(14), discDesc)
       T.unfont()
@@ -331,5 +332,5 @@ ui.window("Combat Abilities", function()
       T.unfont()
     end
   end
-  if W.finish() then eq.ShowWindow(CW, false) end
+  if W.finish() then API.windows.Show(CW, false) end
 end)

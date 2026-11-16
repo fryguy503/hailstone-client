@@ -2,6 +2,7 @@
 -- label's text, its size as three segments (the window's Small / Medium / Large buttons, the chosen one lit), the
 -- colour button (it opens the colour picker on the label's colour), Cancel and Done. Every piece is the window's
 -- child, so the label is made by the map's own handler.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -54,7 +55,7 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Edit Map Label", function()
-  if not eq.InGame() then return end
-  if not eq.WindowShown(WINDOW) then focus = true return end
+  if not API.session.InGame() then return end
+  if not API.windows.Shown(WINDOW) then focus = true return end
   hud.Dialog(WINDOW, "Map Label", WINDOW_OPTS, drawWindow)
 end)

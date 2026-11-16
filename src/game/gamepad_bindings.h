@@ -154,7 +154,7 @@ struct GamepadSettings {
     static const std::vector<std::string_view>& names();
 };
 
-// The label the connected pad has for a button (eq.gamepad.glyph): the Xbox names, PlayStation's Cross, Circle,
+// The label the connected pad has for a button (hs.gamepad.glyph): the Xbox names, PlayStation's Cross, Circle,
 // Square, Triangle, L1 ..., and Nintendo's, whose face buttons are lettered the other way round (the bottom one is B).
 const char* pad_glyph(PadType type, PadButton b);
 

@@ -1,8 +1,9 @@
 -- Give: replaces the game's GiveWnd (handing items and coin to an NPC). Who you are giving to, your four item slots
 -- as tiles that rewrap to the width, your coin piles, then Give and Cancel.
--- Everything is the game's (eq.SlotItem / eq.ClickChild on GVW_MyItemSlot0..3, GVW_MyMoney0..3, GVW_Give_Button,
+-- Everything is the game's (hs.SlotItem / hs.ClickChild on GVW_MyItemSlot0..3, GVW_MyMoney0..3, GVW_Give_Button,
 -- GVW_Cancel_Button): drop an item from your bags on a slot to add it, click a coin pile with coin on the cursor
 -- to add that coin.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local TC = dofile("lib/trade_common.lua")
@@ -30,7 +31,7 @@ local function drawWindow(x, y, w, h, s)
   local size = math.min(52 * s, math.max(36 * s, (cw - 3 * gap) / 4))
   local n = W.SlotGrid(WINDOW, "GVW_MyItemSlot", 0, 3, size, 0, gap)
   local any = false
-  for i = 0, 3 do if eq.SlotItem(WINDOW, "GVW_MyItemSlot" .. i) then any = true end end
+  for i = 0, 3 do if API.inventory.SlotItem(WINDOW, "GVW_MyItemSlot" .. i) then any = true end end
   if not any and n > 0 then
     ui.TextColored(C.faint[1], C.faint[2], C.faint[3], 1, "Drop items from your bags on the slots.")
   end
@@ -46,6 +47,6 @@ local function drawWindow(x, y, w, h, s)
 end
 
 ui.window("Give", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   hud.Dialog(WINDOW, "Give", WINDOW_OPTS, drawWindow)
 end)

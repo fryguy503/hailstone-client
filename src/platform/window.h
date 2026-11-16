@@ -34,6 +34,8 @@ struct WindowDesc {
     // Pad input while another window has the focus (SDL drops it by default): for tests (--input-script), whose
     // windows often open in the background.
     bool pad_input_in_background = false;
+    // Render probes can own a Vulkan surface without showing or activating a desktop window.
+    bool hidden = false;
 };
 
 // How the window fills the screen: a normal window, a borderless window the size of its display, or exclusive

@@ -14,12 +14,14 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "game/tracking.h"
+#include "game/follow.h"
 
 namespace hailstone::net {
 class GameConnection;
@@ -38,6 +40,17 @@ struct MapSpawnMark {
     std::uint32_t rgb = 0xffffff;
     int layer = 0;     // the map's layer 0..3
     std::string label; // "" the dot alone
+};
+
+enum MapPolicyFlags : std::uint32_t {
+    MapPolicyCustomSpawns = 1,
+    MapPolicyHideStockNpcs = 2,
+    MapPolicyDisableNpcFind = 4,
+};
+struct MapPolicy {
+    std::uint32_t flags = 0;
+    std::string name;
+    std::uint64_t revision = 0; // provider content revision; the chain publishes an effective lifetime revision
 };
 
 // The skill rules an extension changes (CharacterZoneClient::HasSkill / CSkillMgr::IsAvailable and the tracking
@@ -72,6 +85,14 @@ using LevelNeededLine = std::function<std::optional<std::string>(const SpellData
 class ServerExtension {
 public:
     virtual ~ServerExtension() = default;
+    virtual std::optional<FollowProfile> follow_profile(const net::GameConnection&) const { return std::nullopt; }
+    virtual std::optional<MountProfile> mount_profile(const net::GameConnection&) const { return std::nullopt; }
+    virtual bool map_visible(const net::GameConnection&, const Spawn&, std::uint32_t) const { return true; }
+    virtual MapPolicy map_policy(const net::GameConnection&) const { return {}; }
+    // Internal provider lifetime, independent of map flags/content; changes retire source-owned interactions.
+    virtual std::uint64_t lifecycle_revision(const net::GameConnection&) const { return 0; }
+    virtual bool merchant_right_click(net::GameConnection&, std::uint32_t, const net::ItemSlot&,
+                                      std::uint32_t, std::uint32_t) { return false; }
     virtual const char* name() const { return "stock"; }
 
     // ---- the connection (net/game_connection*.cpp) ----
@@ -122,7 +143,7 @@ public:
     // CharacterZoneClient::GetFocusReuseMod gives 0 for the spell: no reuse focus shortens the cool-down the client
     // shows (the server keeps that timer).
     virtual bool reuse_focus_dropped(const net::GameConnection&, const SpellData&) const { return false; }
-    // The game's maps (app/lua_eq_map.cpp), which on their own show only the group: a spawn other than the player's
+    // The game's maps (app/lua_ui_map.cpp), which on their own show only the group: a spawn other than the player's
     // shown as the mark says; nullopt = not shown. `defaults` is the mark a plugin starts from.
     virtual std::optional<MapSpawnMark> map_spawn(const net::GameConnection&, const Spawn&,
                                                   const MapSpawnMark&) const {
@@ -177,20 +198,30 @@ public:
     bool tracking_allowed(const net::GameConnection& c, std::uint8_t class_id, std::uint32_t class_mask,
                           std::uint32_t tracking_skill) const;
 
-    // ---- item display, lists and labels (app/lua_eq_*.cpp) ----
+    // ---- item display, lists and labels (app/lua_ui_*.cpp) ----
     // The item display's "Level Needed" line for a spell scroll; empty = the stock line.
     virtual LevelNeededLine level_needed_line(const net::GameConnection&) const { return {}; }
     // The merchant list's Lvl column for an item; nullopt = the stock column.
     virtual std::optional<std::string> merchant_level(const net::GameConnection&, const net::Item&) const {
         return std::nullopt;
     }
+    virtual std::optional<std::string> zone_display_name(const net::GameConnection&, std::uint32_t,
+                                                         std::uint32_t) const { return std::nullopt; }
+    virtual std::optional<std::string> item_flags(const net::GameConnection&, const net::Item&,
+                                                  std::string_view) const { return std::nullopt; }
+    // Plain text: escaped once by the common item presentation builder.
+    virtual std::optional<std::string> item_description_append(const net::GameConnection&,
+                                                               const net::Item&) const { return std::nullopt; }
+    virtual std::uint64_t item_presentation_revision(const net::GameConnection&) const { return 0; }
+    virtual std::optional<std::string> loot_confirmation(const net::GameConnection&, const net::Item&,
+        std::span<const std::uint32_t>, bool) const { return std::nullopt; }
     // __GetLabelFromEQ(type): may replace the stock text (in game only).
     virtual void label_text(const net::GameConnection&, int, std::string&) const {}
 
     // The text of a world nameplate, after its stock name and marks have been assembled.
     virtual void nameplate_text(const net::GameConnection&, const Spawn&, std::string&) const {}
 
-    // ---- the extended target list (net/game_connection_group.cpp, app/lua_eq_player.cpp) ----
+    // ---- the extended target list (net/game_connection_group.cpp, app/lua_ui_player.cpp) ----
     // True = the slot is left out on this side: no row in the window, not targeted by a click, the slot keys or
     // the cycle key, not taken by /xtarget add (GameConnection::xtarget_slot_hidden). The slot keeps its number.
     virtual bool hide_xtarget_slot(const net::GameConnection&, int) const { return false; }

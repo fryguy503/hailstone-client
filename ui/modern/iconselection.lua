@@ -2,8 +2,9 @@
 -- the icons a page and the page arrows (with the page and the range of icons it holds), then the page's icons in a
 -- grid that reflows to the width (a click selects one, the selected one ringed), and at the bottom the selected icon,
 -- its number (type one to jump to it) and Accept, which gives the hot button that icon. The toolbar, the number box
--- and Accept are the window's children, the icons eq.IconSelectionIcons / eq.IconSelectionIcon with clicks as
--- "ISW_Icon:<n>" (app/lua_eq_hotbar.cpp), so the icon set is the game's.
+-- and Accept are the window's children, the icons hs.IconSelectionIcons / hs.IconSelectionIcon with clicks as
+-- "ISW_Icon:<n>" (app/lua_ui_hotbar.cpp), so the icon set is the game's.
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
 local K = dofile("lib/dialogs_kit.lua")
@@ -14,7 +15,7 @@ local WINDOW = "IconSelectionWnd"
 
 -- The page's icons in a scrolled grid, w x h (only the rows in view are drawn).
 local function icons(w, h, s)
-  local first, last, selected = eq.IconSelectionIcons()
+  local first, last, selected = API.hotbars.IconSelectionIcons()
   ui.PushStyleColor(ui.Col.ChildBg, C.inset[1], C.inset[2], C.inset[3], C.inset[4] or 1)
   ui.BeginChild("##iswicons", w, h, true)
   ui.PopStyleColor(1)
@@ -37,9 +38,9 @@ local function icons(w, h, s)
       if n > last then break end
       local x0, y0 = ox + col * cell, oy + row * cell
       ui.SetCursorScreenPos(x0, y0)
-      if ui.InvisibleButton("##icon" .. n, cell, cell) then eq.ClickChild(WINDOW, "ISW_Icon:" .. n, "left") end
+      if ui.InvisibleButton("##icon" .. n, cell, cell) then API.windows.ClickChild(WINDOW, "ISW_Icon:" .. n, "left") end
       local hovered = ui.IsItemHovered()
-      local tex, u0, v0, u1, v1 = eq.IconSelectionIcon(n)
+      local tex, u0, v0, u1, v1 = API.hotbars.IconSelectionIcon(n)
       local ring = (n == selected and C.accent) or (hovered and C.borderHi) or nil
       T.Icon(x0 + pad, y0 + pad, icon, s, tex, u0, v0, u1, v1, ring, { radius = 4 })
       if n == selected then
@@ -84,7 +85,7 @@ local function body(x, y, w, h, s)
   -- the selected icon, its number and Accept
   ui.Dummy(0, 4 * s)
   local fx, fy = ui.GetCursorScreenPos()
-  local tex, u0, v0, u1, v1 = eq.ChildArt(WINDOW, "ISW_SelectedItem_Button", "decal")
+  local tex, u0, v0, u1, v1 = API.windows.ChildArt(WINDOW, "ISW_SelectedItem_Button", "decal")
   if type(tex) ~= "userdata" then tex = nil end
   T.Icon(fx, fy, well, s, tex, u0, v0, u1, v1, C.accent, { radius = 5 })
   local _, lh = ui.CalcTextSize("Ag")
@@ -103,9 +104,9 @@ local function body(x, y, w, h, s)
   ui.Dummy(w, well)
 end
 
-local function testOpen() eq.ShowWindow(WINDOW, true) end
+local function testOpen() API.windows.Show(WINDOW, true) end
 ui.window("Icon Selection", function()
-  if not eq.InGame() then return end
+  if not API.session.InGame() then return end
   P.TestOpen(WINDOW, testOpen)
   hud.Dialog(WINDOW, "Icon Selection", OPTS, body)
 end)

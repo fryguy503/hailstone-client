@@ -3,10 +3,11 @@
 -- right click is the game's (a social's editor), the right button held opens the button's menu (assign a social,
 -- label, icon, clear ...), dragging a button off takes it on the cursor, and letting go of a held button over a tile
 -- puts it there. A right click on the bar opens the bar's own menu (hotbutton sets, clear, Button Size, Show Key Map,
--- Show Spinner, Open New Bar); its settings (eq.HotBarSetting) size the tiles, show each tile's key and the pager.
+-- Show Spinner, Open New Bar); its settings (hs.HotBarSetting) size the tiles, show each tile's key and the pager.
 -- As the game's bar (CHotButtonWnd::OnCompleteMoveOrResize), a bar laid out taller than wide (more rows than
 -- columns: "Buttons per row" in the frame's menu) is vertical, with its pager across the top instead of at the left;
 -- the key map text sits in each tile's top-right corner, right-aligned (0x5506b0).
+local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local T = hud.T
 local C = T.color
@@ -46,7 +47,7 @@ local function bar(n)
   local window = n == 1 and "HotButtonWnd" or ("HotButtonWnd" .. n)
   local name = n == 1 and "Hotbuttons" or ("Hotbuttons " .. n)
   local perRowKey = "hud.perRow." .. window
-  -- each tile's: the record eq.HotButtonInfo fills, its wrapped label, text colour and icon options, and its right
+  -- each tile's: the record hs.HotButtonInfo fills, its wrapped label, text colour and icon options, and its right
   -- button: as the game takes it, a quick click on release (a social's stop or editor; an empty tile's menu: assign
   -- a social, a new one opening the social editor), held 500 ms the button's menu
   local tiles = {}
@@ -55,8 +56,8 @@ local function bar(n)
     tiles[i] = {
       info = {}, wrap = {}, tc = { 0, 0, 0, 1 }, icon = { radius = 6 },
       onRight = function(phase, outside)
-        if phase == "rightheld" then eq.ClickHotButton(window, id, "rightheld")
-        elseif phase == "rightup" and not outside then eq.ClickHotButton(window, id, "right") end
+        if phase == "rightheld" then API.hotbars.Click(window, id, "rightheld")
+        elseif phase == "rightup" and not outside then API.hotbars.Click(window, id, "right") end
       end,
     }
   end
@@ -64,8 +65,8 @@ local function bar(n)
   -- layout they make: read by opts.size, which hud.Window calls first once the bar shows
   local size, gap, spinner, perRow, rows, vertical, pager, left, top
   local function settings()
-    local percent = eq.HotBarSetting and eq.HotBarSetting(n, "PercentSize") or 100
-    spinner = not eq.HotBarSetting or eq.HotBarSetting(n, "ShowSpinner") ~= false
+    local percent = API.hotbars.Setting and API.hotbars.Setting(n, "PercentSize") or 100
+    spinner = not API.hotbars.Setting or API.hotbars.Setting(n, "ShowSpinner") ~= false
     size, gap = 44 * percent // 100, 4
     perRow = math.max(1, math.min(BUTTONS, tonumber(ui.GetSetting(perRowKey)) or BUTTONS))
     rows = math.ceil(BUTTONS / perRow)
@@ -108,8 +109,8 @@ local function bar(n)
     if spinner and vertical then
       local cx, py0, py1 = x + w / 2, y + 5 * s, y + (5 + pager) * s
       local cy = (py0 + py1) / 2
-      local page = eq.WindowText(window, "HB_VerticalCurrentPageLabel")
-      if not page or page == "" then page = eq.WindowText(window, "HB_HorizontalCurrentPageLabel") or "" end
+      local page = API.windows.Text(window, "HB_VerticalCurrentPageLabel")
+      if not page or page == "" then page = API.windows.Text(window, "HB_HorizontalCurrentPageLabel") or "" end
       local _, th = T.TextSize("8", T.font.small)
       T.Text(cx, cy - th / 2, page, C.text, T.font.small, "center")
       local function arrow(id, up, ax)
@@ -121,15 +122,15 @@ local function bar(n)
         else
           ui.DrawTriangleFilled(ax - d, cy - d / 2, ax + d, cy - d / 2, ax, cy + d / 2, c[1], c[2], c[3], 1)
         end
-        if clicked then eq.ClickChild(window, id, "left") end
+        if clicked then API.windows.ClickChild(window, id, "left") end
       end
       arrow("HB_PageUpButton", true, cx - 20 * s)
       arrow("HB_PageDownButton", false, cx + 20 * s)
       ui.DrawLine(x + 8 * s, py1 + 3 * s, x + w - 8 * s, py1 + 3 * s, C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
     elseif spinner then
       local cy = y + h / 2
-      local page = eq.WindowText(window, "HB_HorizontalCurrentPageLabel")
-      if not page or page == "" then page = eq.WindowText(window, "HB_VerticalCurrentPageLabel") or "" end
+      local page = API.windows.Text(window, "HB_HorizontalCurrentPageLabel")
+      if not page or page == "" then page = API.windows.Text(window, "HB_VerticalCurrentPageLabel") or "" end
       local _, th = T.TextSize("8", T.font.small)
       T.Text((px0 + px1) / 2, cy - th / 2, page, C.text, T.font.small, "center")
       local function arrow(id, up, ay)
@@ -142,14 +143,14 @@ local function bar(n)
         else
           ui.DrawTriangleFilled(mx - d, ay - d / 2, mx + d, ay - d / 2, mx, ay + d / 2, c[1], c[2], c[3], 1)
         end
-        if clicked then eq.ClickChild(window, id, "left") end
+        if clicked then API.windows.ClickChild(window, id, "left") end
       end
       arrow("HB_PageUpButton", true, cy - 17 * s)
       arrow("HB_PageDownButton", false, cy + 17 * s)
       ui.DrawLine(px1 + 3 * s, y + 8 * s, px1 + 3 * s, y + h - 8 * s, C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
     end
 
-    local holding = eq.HoldingButton()
+    local holding = API.cursor.HoldingButton()
     local bx0 = vertical and x + 7 * s or px1 + 6 * s
     local by0 = vertical and y + (7 + top + 6) * s or y + 7 * s
     local sz = size * s
@@ -160,7 +161,7 @@ local function bar(n)
       local by = by0 + row * (size + gap) * s
       -- what it holds; a social's colour and a Lua social's face (social); its check (on: auto attack / fire, a
       -- skill not ready) and cool-down (state); a gem's stage (iconAlpha)
-      local info = eq.HotButtonInfo(window, id, t.info)
+      local info = API.hotbars.Info(window, id, t.info)
       local kind, label, tex = info.kind, info.label, info.tex
       local face = info.social
       t.icon.wellAlpha = kind == "empty" and 0.5 or 1
@@ -211,8 +212,8 @@ local function bar(n)
         ui.DrawRectFilled(bx, by, bx + sz, by + sz, C.accent[1], C.accent[2], C.accent[3], 0.16, 6 * s)
         ui.DrawRect(bx + 1, by + 1, bx + sz - 1, by + sz - 1, C.accent[1], C.accent[2], C.accent[3], 0.95, 6 * s, 2 * s)
       end
-      -- the key bound to it (Show Key Map: eq.WindowText of the button is its key, "" with the key map off)
-      local keyText = eq.WindowText(window, id) or ""
+      -- the key bound to it (Show Key Map: hs.WindowText of the button is its key, "" with the key map off)
+      local keyText = API.windows.Text(window, id) or ""
       if keyText ~= "" then T.Text(bx + sz - 4 * s, by + 2 * s, keyText, C.faint, T.font.tiny, "right") end
       local clicked = T.Hit(HIT_IDS[i], bx, by, bx + sz, by + sz)
       local key, hovered = ui.GetItemID(), ui.IsItemHovered()
@@ -221,10 +222,10 @@ local function bar(n)
       elseif ui.IsItemHovered() and label ~= "" then ui.SetTooltip(label) end
       T.DragFrom(window, id)
       if clicked then
-        eq.ClickHotButton(window, id, "left")
+        API.hotbars.Click(window, id, "left")
       elseif holding and ui.IsMouseReleased(ui.Mouse.Left) and ui.IsMouseHoveringRect(bx, by, bx + sz, by + sz)
           and ui.IsWindowHovered(ui.HoveredFlags.ChildWindows | ui.HoveredFlags.AllowWhenBlockedByActiveItem) then
-        eq.ClickHotButton(window, id, "left")
+        API.hotbars.Click(window, id, "left")
       end
       if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
         T.RightPressStart(key, t.onRight)
@@ -234,7 +235,7 @@ local function bar(n)
     end
   end
   ui.window(name, function()
-    if not eq.InGame() then return end
+    if not API.session.InGame() then return end
     hud.Window(window, name, opts, body)
   end)
 end

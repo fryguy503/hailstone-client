@@ -1,7 +1,7 @@
 -- Lua Social (gamepad pack): Hailstone's editor for Lua socials (game/lua_social.h; not a stock window), as the
 -- classic pack's luasocial.lua has it, laid out for the pad. A social's Lua runs on its hot button instead of five
 -- command lines: "Press" on the key press, "Face" (optional) how the button looks. What it may do is the server's
--- choice (eq.LuaSocialRules), said at the top; a dry run lists the commands a press would send without sending them.
+-- choice (hs.LuaSocialRules), said at the top; a dry run lists the commands a press would send without sending them.
 --
 -- The code is a list of lines (LB / RB: Press or Face): A types the focused line on the on-screen keyboard (with a
 -- row of code keys: braces, operators, quotes, an indent, mq.cmd), X adds a line under it, Y deletes it; the line a
@@ -11,7 +11,8 @@
 -- share text (the clipboard), Delete (asks first) and Stop while it runs.
 --
 -- It opens on a right click on a Lua social, from the stock social editor's socials when they are Lua, and with
--- /luasocial [1..120 | new]. eq.*: app/lua_eq_luasocial.cpp.
+-- /luasocial [1..120 | new]. hs.*: app/lua_ui_luasocial.cpp.
+local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
@@ -82,7 +83,7 @@ local lastLine = nil -- the line the keyboard typed: the pad's focus back on it 
 
 local function load(n)
   social = n
-  local s = eq.LuaSocial(n)
+  local s = API.luasocials.Get(n)
   ed = { name = s and s.name or "Lua", color = s and s.color or 0, press = s and s.press or "", face = s and s.face or "" }
   if s and not s.lua then
     -- A plain social becomes a Lua one: its lines as mq.cmd calls, their waits as mq.delay (lib/social_lines.lua).
@@ -118,7 +119,7 @@ end
 
 local function save()
   if ed.name == "" then ed.name = "Lua" end
-  eq.SetLuaSocial(social, { name = ed.name, color = ed.color, press = ed.press, face = ed.face })
+  API.luasocials.Set(social, { name = ed.name, color = ed.color, press = ed.press, face = ed.face })
   ed.saved = { name = ed.name, color = ed.color, press = ed.press, face = ed.face }
   message = "Saved."
 end
@@ -176,7 +177,7 @@ local function testOpen()
     testOff = true
     return
   end
-  if GPSTATE.test_luasocial or not eq.InGame() then return end
+  if GPSTATE.test_luasocial or not API.session.InGame() then return end
   testAt = testAt or ui.GetTime()
   if ui.GetTime() - testAt > 10 then
     GPSTATE.test_luasocial = true
@@ -186,14 +187,14 @@ end
 
 ui.window("Lua Social", function()
   testOpen()
-  local req = eq.LuaSocialEditRequest()
+  local req = API.luasocials.EditRequest()
   if req then load(req) end
-  if not open or not ed or not eq.InGame() then
+  if not open or not ed or not API.session.InGame() then
     st.kb.open, st.pick, state.confirm = false, nil, nil
     return
   end
   T.frame()
-  local s = eq.LuaSocial(social)
+  local s = API.luasocials.Get(social)
   local hints
   if st.kb.open or st.pick then hints = CH.hints(st, {})
   elseif state.confirm then hints = { { "a", "Select" }, { "b", "No" } }
@@ -212,7 +213,7 @@ ui.window("Lua Social", function()
       end
       local leftW = cw * 0.64
       -- the name and colour
-      local colours = eq.SocialColors()
+      local colours = API.socials.Colors()
       local fh = T.px(76)
       ui.SetCursorPos(x0 - wx, y0 - wy)
       CH.edit(st, "lsname", "Name", ed.name, function(t) ed.name = t end, leftW * 0.6, fh, { max = 15, capital = true })
@@ -235,7 +236,7 @@ ui.window("Lua Social", function()
         st.pick.colors = cols
       end
       -- what the server allows
-      local rules = s and s.rules or eq.LuaSocialRules()
+      local rules = s and s.rules or API.luasocials.Rules()
       local rt, rc = rulesText(rules)
       T.font(18)
       local ry = wrapped(rt, x0, y0 + fh + T.px(10), leftW, rc, y0 + fh + T.px(70))
@@ -258,7 +259,7 @@ ui.window("Lua Social", function()
       local focusedRow
       if typing then
         local t, ch = ui.CodeEditor("##code" .. part, ed[part], leftW, bottom - cy,
-          { complete = eq.LuaComplete, error_line = errors[part] })
+          { complete = API.luasocials.Complete, error_line = errors[part] })
         if ch then ed[part] = t end
       else
         local code = split(ed[part])
@@ -329,14 +330,14 @@ ui.window("Lua Social", function()
       local actions = {
         { dirty() and "Save *" or "Save", function() save() end, primary = true },
         { "Dry run", function()
-          result = eq.LuaSocialDryRun(social, { press = ed.press, face = ed.face }, mods)
+          result = API.luasocials.DryRun(social, { press = ed.press, face = ed.face }, mods)
           errorLines(result and result.error)
           message = ""
         end },
         { "mods" },
         { "Put on a hot bar", function()
           if dirty() then save() end
-          AS.start(ed.name, function() eq.SocialToCursor(social) return true end, "Lua Social")
+          AS.start(ed.name, function() API.socials.ToCursor(social) return true end, "Lua Social")
         end, sub = "Pick a slot" },
         { "Examples", function(k)
           local names = {}
@@ -351,11 +352,11 @@ ui.window("Lua Social", function()
         { "Revert", function() load(social) end, sub = "Back to the saved social" },
         { "Copy share text", function()
           if dirty() then save() end
-          local t = eq.LuaSocialExport(social)
+          local t = API.luasocials.Export(social)
           if t then ui.SetClipboardText(t) message = "The share text is on the clipboard." end
         end },
         { "Paste share text", function()
-          local t, why = eq.LuaSocialImport(ui.GetClipboardText())
+          local t, why = API.luasocials.Import(ui.GetClipboardText())
           if t then
             ed.name, ed.color, ed.press, ed.face = t.name ~= "" and t.name or ed.name, t.color, t.press, t.face
             if not t.lua then ed.press = SL.ToLua(t.lines or {}) end -- a plain social's lines, as Lua
@@ -366,12 +367,12 @@ ui.window("Lua Social", function()
         end },
         { "Delete", function()
           state.confirm = { "Delete this social?", function()
-            eq.SetLuaSocial(social, { name = "" })
+            API.luasocials.Set(social, { name = "" })
             open = false
           end }
         end },
       }
-      if s and s.running then table.insert(actions, 1, { "Stop", function() eq.StopLuaSocial(social) end, sub = "It is running" }) end
+      if s and s.running then table.insert(actions, 1, { "Stop", function() API.luasocials.Stop(social) end, sub = "It is running" }) end
       local by = y0
       local n = #actions
       for k, a in ipairs(actions) do
