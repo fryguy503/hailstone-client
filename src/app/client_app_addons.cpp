@@ -76,6 +76,7 @@ void ClientApp::start_addons() {
     const std::filesystem::path data = platform::data_dir();
     addons_at_start(data);
     if (automation_) automation_->set_addon_ceilings(addon_ceilings(data));
+    if (automation_) automation_->refresh_managed_addons();
     ui::AddonsView& v = login_view_.addons;
     if (!opts_.updates) {
         v.why_off = "Add-ons are not fetched on a test run.";
@@ -163,6 +164,7 @@ void ClientApp::update_addons() {
         addons_serial_ = serial;
         addons_dirty_ = false;
         if (automation_) automation_->set_addon_ceilings(addon_ceilings(data));
+        if (automation_) automation_->refresh_managed_addons();
         addons_listed_ = {};
     }
     if (!at_login) return;
@@ -207,6 +209,7 @@ void ClientApp::update_addons() {
         ov.version = o.manifest.version_text;
         ov.author = o.manifest.author;
         ov.description = o.manifest.description;
+        ov.autoload = o.manifest.autoload;
         ov.source = o.source;
         ov.page = o.page;
         ov.notes = o.manifest.notes;
@@ -294,6 +297,8 @@ void ClientApp::update_addons() {
         r.modified = s.modified;
         r.note = server_note(a.kind, a.name, a.caps);
         r.auto_update = a.auto_update;
+        r.managed = a.kind == AddonKind::Script && a.autoload;
+        r.enabled = r.managed && a.enabled;
         r.signed_ = a.key.has_value();
         r.can_update = addons_ != nullptr && s.installed &&
                        (s.state == AddonState::Available || s.state == AddonState::NeedsApproval ||
@@ -318,6 +323,8 @@ void ClientApp::update_addons() {
             r.caps = plugin::caps_described(a.caps);
             r.note = server_note(a.kind, a.name, a.caps);
             r.auto_update = a.auto_update;
+            r.managed = a.kind == AddonKind::Script && a.autoload;
+            r.enabled = r.managed && a.enabled;
             r.signed_ = a.key.has_value();
             r.can_remove = true;
             r.folder = path_text(addon_folder(data, a.kind, a.name));
@@ -440,6 +447,17 @@ void ClientApp::addons_login_action(ui::LoginAction action) {
         } else {
             v.status = {why, true};
         }
+        break;
+    }
+    case A::AddonEnabled: {
+        if (!row || row->group != "installed" || !row->managed) break;
+        const bool ok = addons_ ? addons_->set_enabled(row->name, v.choice_on)
+                               : set_addon_enabled(data, row->name, v.choice_on);
+        if (ok) {
+            addons_dirty_ = true;
+            if (automation_) automation_->refresh_managed_addons();
+            v.status = {row->name + (v.choice_on ? " is enabled." : " is disabled."), false};
+        } else v.status = {"The add-on activation setting could not be saved.", true};
         break;
     }
     case A::AddonAuto:

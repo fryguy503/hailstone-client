@@ -241,6 +241,69 @@ int Checkbox(lua_State *L) {
 	lua_pushboolean(L, changed);
 	return 2;
 }
+// Colour widgets accept normalized RGB only. Keep invalid numbers and assertion-prone flag combinations out
+// of ImGui; a Lua argument error is raised before any widget opens its own groups, popup or ID stack.
+float ColorComponent(lua_State *L, int at, float fallback = 0.0f) {
+	const double value = luaL_optnumber(L, at, fallback);
+	if (!std::isfinite(value)) luaL_argerror(L, at, "finite colour component expected");
+	return static_cast<float>(std::clamp(value, 0.0, 1.0));
+}
+float ColorButtonSize(lua_State *L, int at) {
+	const double value = luaL_optnumber(L, at, 0.0);
+	if (!std::isfinite(value)) luaL_argerror(L, at, "finite colour button size expected");
+	return static_cast<float>(std::clamp(value, 0.0, 4096.0));
+}
+int ColorWidgetFlags(lua_State *L, int at, bool picker, bool button = false) {
+	constexpr int kCommon = ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoOptions |
+		ImGuiColorEditFlags_NoSmallPreview | ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoTooltip |
+		ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_NoDragDrop |
+		ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_AlphaOpaque | ImGuiColorEditFlags_AlphaNoBg |
+		ImGuiColorEditFlags_AlphaPreviewHalf;
+	constexpr int kOptions = ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHSV |
+		ImGuiColorEditFlags_DisplayHex | ImGuiColorEditFlags_Uint8 | ImGuiColorEditFlags_Float |
+		ImGuiColorEditFlags_PickerHueBar | ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_InputRGB;
+	constexpr int kButton = ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop |
+		ImGuiColorEditFlags_NoBorder | ImGuiColorEditFlags_AlphaOpaque | ImGuiColorEditFlags_AlphaNoBg |
+		ImGuiColorEditFlags_AlphaPreviewHalf;
+	if (!lua_isnoneornil(L, at) && lua_type(L, at) != LUA_TNUMBER)
+		luaL_argerror(L, at, "integer colour flags expected");
+	const lua_Integer raw = luaL_optinteger(L, at, 0);
+	if (raw < 0) luaL_argerror(L, at, "nonnegative colour flags expected");
+	int flags = static_cast<int>(static_cast<lua_Unsigned>(raw) & static_cast<lua_Unsigned>(button ? kButton : kCommon | kOptions));
+	if (button) return flags;
+	// No HDR or HSV input: callers always receive finite RGB in 0..1. The editor cannot change global options.
+	flags |= ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_NoOptions;
+	const int picker_flags = flags & ImGuiColorEditFlags_PickerMask_;
+	if (picker_flags != ImGuiColorEditFlags_PickerHueBar && picker_flags != ImGuiColorEditFlags_PickerHueWheel)
+		flags = (flags & ~ImGuiColorEditFlags_PickerMask_) | ImGuiColorEditFlags_PickerHueWheel;
+	const int data_flags = flags & ImGuiColorEditFlags_DataTypeMask_;
+	if (data_flags != ImGuiColorEditFlags_Uint8 && data_flags != ImGuiColorEditFlags_Float)
+		flags = (flags & ~ImGuiColorEditFlags_DataTypeMask_) | ImGuiColorEditFlags_Uint8;
+	const int display_flags = flags & ImGuiColorEditFlags_DisplayMask_;
+	if (display_flags == 0 || (!picker && (display_flags & (display_flags - 1)) != 0))
+		flags = (flags & ~ImGuiColorEditFlags_DisplayMask_) | ImGuiColorEditFlags_DisplayRGB;
+	return flags;
+}
+// pressed = ui.ColorButton(id, r, g, b [, a=1 [, flags=0 [, w=0, h=0]]])
+int ColorButton(lua_State *L) {
+	const char *label = S(L, 1);
+	const ImVec4 color(ColorComponent(L, 2), ColorComponent(L, 3), ColorComponent(L, 4), ColorComponent(L, 5, 1));
+	const int flags = ColorWidgetFlags(L, 6, false, true);
+	const ImVec2 size(ColorButtonSize(L, 7), ColorButtonSize(L, 8));
+	return Ret(L, ImGui::ColorButton(label, color, flags, size));
+}
+int ColorRgbWidget(lua_State *L, bool picker) {
+	const char *label = S(L, 1);
+	float color[] = {ColorComponent(L, 2), ColorComponent(L, 3), ColorComponent(L, 4)};
+	const int flags = ColorWidgetFlags(L, 5, picker);
+	const bool changed = picker ? ImGui::ColorPicker3(label, color, flags) : ImGui::ColorEdit3(label, color, flags);
+	for (const float component : color) lua_pushnumber(L, std::isfinite(component) ? std::clamp(component, 0.0f, 1.0f) : 0.0f);
+	lua_pushboolean(L, changed);
+	return 4;
+}
+// r, g, b, changed = ui.ColorPicker3(label, r, g, b [, flags=0])
+int ColorPicker3(lua_State *L) { return ColorRgbWidget(L, true); }
+int ColorEdit3(lua_State *L) { return ColorRgbWidget(L, false); }
 int SliderFloat(lua_State *L) {
 	float v = F(L, 2);
 	bool changed = ImGui::SliderFloat(S(L, 1), &v, F(L, 3), F(L, 4, 1));
@@ -1134,6 +1197,7 @@ void register_ui_api(lua_State *L) {
 		{"CalcTextSize", CalcTextSize},
 		{"Button", Button}, {"SmallButton", SmallButton}, {"InvisibleButton", InvisibleButton}, {"EdgeButton", EdgeButton},
 		{"Selectable", Selectable}, {"Checkbox", Checkbox}, {"SliderFloat", SliderFloat}, {"SliderInt", SliderInt},
+		{"ColorButton", ColorButton}, {"ColorPicker3", ColorPicker3}, {"ColorEdit3", ColorEdit3},
 		{"InputText", InputText}, {"InputTextWithHint", InputTextWithHint}, {"InputTextMultiline", InputTextMultiline}, {"CodeEditor", CodeEditor}, {"SetClipboardText", SetClipboardText}, {"GetClipboardText", GetClipboardText}, {"SetKeyboardFocusHere", SetKeyboardFocusHere}, {"SetNavCursorVisible", SetNavCursorVisible}, {"BeginCombo", BeginCombo}, {"EndCombo", EndCombo},
 		{"SetItemDefaultFocus", SetItemDefaultFocus}, {"IsItemDeactivatedAfterEdit", IsItemDeactivatedAfterEdit}, {"ProgressBar", ProgressBar}, {"CollapsingHeader", CollapsingHeader},
 		{"TreeNode", TreeNode}, {"TreePop", TreePop},
@@ -1224,6 +1288,17 @@ void register_ui_api(lua_State *L) {
 		{"CharsDecimal", ImGuiInputTextFlags_CharsDecimal}, {"ReadOnly", ImGuiInputTextFlags_ReadOnly}});
 	SetInts(L, "ComboFlags", {{"None", 0}, {"NoArrowButton", ImGuiComboFlags_NoArrowButton},
 		{"HeightLarge", ImGuiComboFlags_HeightLarge}});
+	SetInts(L, "ColorEditFlags", {{"None", 0}, {"NoAlpha", ImGuiColorEditFlags_NoAlpha},
+		{"NoPicker", ImGuiColorEditFlags_NoPicker}, {"NoOptions", ImGuiColorEditFlags_NoOptions},
+		{"NoSmallPreview", ImGuiColorEditFlags_NoSmallPreview}, {"NoInputs", ImGuiColorEditFlags_NoInputs},
+		{"NoTooltip", ImGuiColorEditFlags_NoTooltip}, {"NoLabel", ImGuiColorEditFlags_NoLabel},
+		{"NoSidePreview", ImGuiColorEditFlags_NoSidePreview}, {"NoDragDrop", ImGuiColorEditFlags_NoDragDrop},
+		{"NoBorder", ImGuiColorEditFlags_NoBorder}, {"AlphaOpaque", ImGuiColorEditFlags_AlphaOpaque},
+		{"AlphaNoBg", ImGuiColorEditFlags_AlphaNoBg}, {"AlphaPreviewHalf", ImGuiColorEditFlags_AlphaPreviewHalf},
+		{"DisplayRGB", ImGuiColorEditFlags_DisplayRGB}, {"DisplayHSV", ImGuiColorEditFlags_DisplayHSV},
+		{"DisplayHex", ImGuiColorEditFlags_DisplayHex}, {"Uint8", ImGuiColorEditFlags_Uint8},
+		{"Float", ImGuiColorEditFlags_Float}, {"PickerHueBar", ImGuiColorEditFlags_PickerHueBar},
+		{"PickerHueWheel", ImGuiColorEditFlags_PickerHueWheel}, {"InputRGB", ImGuiColorEditFlags_InputRGB}});
 	SetInts(L, "SelectableFlags", {{"None", 0}, {"SpanAllColumns", ImGuiSelectableFlags_SpanAllColumns},
 		{"AllowDoubleClick", ImGuiSelectableFlags_AllowDoubleClick}});
 	SetInts(L, "Mouse", {{"Left", 0}, {"Right", 1}, {"Middle", 2}});

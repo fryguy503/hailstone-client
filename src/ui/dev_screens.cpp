@@ -444,10 +444,11 @@ LoginAction addons_window(AddonsView& a, bool busy, bool* open) {
     if (a.offer) {
         const AddonOfferView& o = *a.offer;
         ImGui::Separator();
-        ImGui::Text("%s %s (%s)", o.name.c_str(), o.version.c_str(), o.kind.c_str());
+        ImGui::Text("%s %s (%s)", o.name.c_str(), o.version.c_str(), o.autoload ? "managed add-on" : o.kind.c_str());
         if (!o.author.empty()) ImGui::TextDisabled("by %s, from %s", o.author.c_str(), o.source.c_str());
         else ImGui::TextDisabled("from %s", o.source.c_str());
         if (!o.description.empty()) ImGui::TextWrapped("%s", o.description.c_str());
+        if (o.autoload) ImGui::TextWrapped("Starts automatically when enabled. Manage it from My add-ons.");
         if (!o.installed_version.empty()) ImGui::Text("Installed now: %s", o.installed_version.c_str());
         if (o.kind != "tool") {
             ImGui::TextUnformatted("It asks to:");
@@ -560,7 +561,8 @@ LoginAction addons_window(AddonsView& a, bool busy, bool* open) {
         for (const auto& r : a.rows) {
             if (r.group != group) continue;
             ImGui::PushID((group + ":" + r.name).c_str());
-            const std::string label = r.name + (r.version.empty() ? "" : " " + r.version) + "  (" + r.kind + ")";
+            const std::string label = r.name + (r.version.empty() ? "" : " " + r.version) + "  (" +
+                                      (r.managed ? std::string("add-on") : r.kind) + ")";
             if (ImGui::TreeNode("##row", "%s", label.c_str())) {
                 if (!r.description.empty()) ImGui::TextWrapped("%s", r.description.c_str());
                 if (!r.source.empty()) ImGui::TextDisabled("from %s%s", r.source.c_str(), r.signed_ ? ", signed" : "");
@@ -576,6 +578,17 @@ LoginAction addons_window(AddonsView& a, bool busy, bool* open) {
                 if (!r.modified.empty()) ImGui::TextDisabled("Changed by you: %zu file(s)", r.modified.size());
                 if (!r.note.empty()) ImGui::TextWrapped("%s", r.note.c_str());
                 if (r.group == "installed") {
+                    if (r.managed) {
+                        bool enabled = r.enabled;
+                        ImGui::BeginDisabled(busy);
+                        if (ImGui::Checkbox("Enabled", &enabled)) {
+                            a.choice = r.name;
+                            a.choice_on = enabled;
+                            action = LoginAction::AddonEnabled;
+                        }
+                        ImGui::EndDisabled();
+                        ImGui::TextDisabled("Starts automatically when this server allows it.");
+                    }
                     bool on = r.auto_update;
                     if (ImGui::Checkbox("Update by itself", &on)) {
                         a.choice = r.name;

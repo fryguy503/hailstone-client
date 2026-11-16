@@ -490,6 +490,8 @@ std::optional<AddonManager::Staged> AddonManager::download(const AddonManifest& 
     a.caps = caps;
     a.key = m.key;
     a.auto_update = auto_update;
+    a.autoload = m.autoload;
+    a.enabled = m.autoload;
     a.author = m.author;
     a.description = m.description;
     a.notes = m.notes;
@@ -731,6 +733,14 @@ void AddonManager::set_auto_update(std::string_view name, bool on) {
     if (AddonStatus* r = row(name)) r->addon.auto_update = on;
 }
 
+bool AddonManager::set_enabled(std::string_view name, bool on) {
+    if (!set_addon_enabled(env_.data_dir, name, on)) return false;
+    std::lock_guard lock(mutex_);
+    if (AddonStatus* r = row(name)) r->addon.enabled = on;
+    ++status_.serial;
+    return true;
+}
+
 bool AddonManager::remove(std::string_view name, std::string* error) {
     {
         std::lock_guard lock(mutex_);
@@ -807,6 +817,8 @@ std::vector<std::string> AddonManager::install_ready() {
         if (const AddonStatus* r = row(st.addon.name)) s = *r;
         if (ok) {
             s.addon = st.addon;
+            const auto installed = read_installed_addons(env_.data_dir);
+            if (const auto* current = find_addon(installed, st.addon.name)) s.addon = *current;
             s.installed = true;
             s.state = AddonState::UpToDate;
             s.new_version.clear();

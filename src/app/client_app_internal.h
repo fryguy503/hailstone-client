@@ -748,7 +748,8 @@ private:
     void trace_spawn(float dt);
     // The floor game::WorldState::ground_npcs measures a spawn against: the zone's and the doors', the higher.
     std::optional<float> grounding_floor(const glm::vec3& p) const;
-    void draw_nameplates(const render::FrameInfo& frame, const glm::mat4& view_proj, VkExtent2D extent, float far_plane);
+    void draw_nameplates(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::mat4& scene_view_proj,
+                         VkExtent2D extent, float far_plane);
     // The 3D target indicator (app/target_ring.cpp, game/target_indicator.h): the ring at the target's feet, drawn
     // over the scene's depth (render/target_ring_renderer.h), so in the scene after begin_translucent (the classic
     // lighting, which has no other use for the copy, takes it when target_ring_shown).
@@ -972,6 +973,11 @@ private:
     void update_placement();
     // `why` names the pick in the log; null picks quietly.
     PickTarget pick_at(float x, float y, std::uint32_t required, std::uint32_t skip, const char* why);
+    bool plate_input_blocked(bool ignore_right_button = false) const;
+    bool nameplate_spawn_clickable(const game::Spawn& spawn) const;
+    std::optional<float> nameplate_pixel_depth(glm::vec2 at) const;
+    std::optional<std::uint32_t> nameplate_at(glm::vec2 at) const;
+    bool activate_nameplate(std::uint32_t id);
     // CEverQuest::LeftClickedOnPlayer.
     void left_click_spawn(std::uint32_t id);
     // CEverQuest::RightClickedOnPlayer (update_item_input): false when the spawn has no right-click action.
@@ -1023,12 +1029,23 @@ private:
     struct PlateEntry {
         std::uint32_t id = 0;
         NameplateText plate;
+        glm::vec3 head{0.0f};
     };
     std::vector<PlateEntry> plates_;
     std::size_t plate_count_ = 0;
     std::vector<game::PlateBox> plate_boxes_;
+    std::vector<NameplateStack> plate_stack_;
     std::vector<float> plate_alpha_;
     std::vector<std::size_t> plate_order_;
+    std::vector<NameplateHit> plate_hits_; // actual draw order, from the most recent displayed frame only
+    const net::GameConnection* plate_hit_connection_ = nullptr;
+    std::uint64_t plate_hit_serial_ = 0;
+    std::uint16_t plate_hit_zone_ = 0;
+    Clock::time_point plate_hit_time_{};
+    glm::mat4 plate_inverse_view_{1.0f};
+    glm::vec3 plate_camera_{0.0f}, plate_forward_{1, 0, 0};
+    glm::vec4 plate_hit_view_{0.0f};
+    NameplateGesture plate_gesture_;
     ui::ImGuiLayer ui_;
     bool quit_ = false;
     bool close_pending_ = false; // a window close request held through a loading screen

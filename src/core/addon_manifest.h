@@ -50,6 +50,7 @@ struct AddonPackage {
 struct AddonManifest {
     std::string name;      // addon_name_ok: its folder, scripts/<name>/, plugins/<name>/ or tools/<name>/
     AddonKind kind = AddonKind::Script;
+    bool autoload = false; // a managed Lua add-on: installed activation is controlled by the player
     Version version;
     std::string version_text;
     std::optional<Version> min_client;

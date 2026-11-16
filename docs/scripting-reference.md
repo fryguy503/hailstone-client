@@ -571,6 +571,7 @@ the script's own Lua state and must finish within 50 ms. An error in a hook ends
 | `reuse_focus_dropped` | (spell_id) → true: no reuse focus |
 | `map_spawn` | (spawn table) → true shows it as the defaults say, a table `{color, layer, label}` changes them, falsy leaves it off |
 | `nameplate` | (spawn table, text) → the text for its nameplate. Lua only. The spawn table is reused for every plate, so copy what you need |
+| `nameplate_style` | (spawn table, context) → nil or bounded presentation table; Lua only, `read` + `ui` + `extend`. `hailstone.nameplate_api_version` is 2. Context, structural skins, optional through-wall display and manual plate targeting: docs/plugins.md "World nameplate presentation". The host retains awareness, projection and input checks; invalid output falls back to the ordinary plate |
 
 `command_line` is for compiled plugins only.
 
@@ -667,6 +668,9 @@ rectangle (`u0, v0, u1, v1`).
 | ImageButton | (id, tex, w, h [, u0, v0, u1, v1]) → bool | A plain Button if tex is invalid |
 | Selectable | (label [, selected [, flags [, w, h]]]) → bool | |
 | Checkbox | (label, value) → value, changed | |
+| ColorButton | (id, r, g, b [, a=1 [, flags=0 [, w=0, h=0]]]) → pressed | A visible colour swatch; default size follows the current frame height |
+| ColorPicker3 | (label, r, g, b [, flags=0]) → r, g, b, changed | Hue wheel with RGB inputs by default; `ColorEditFlags` selects its appearance |
+| ColorEdit3 | (label, r, g, b [, flags=0]) → r, g, b, changed | Compact RGB fields and a preview that opens a colour picker |
 | SliderFloat | (label, value [, min=0, max=1]) → value, changed | |
 | SliderInt | (label, value [, min=0, max=100 [, text]]) → value, changed | text replaces the shown number |
 | InputText | (label [, text [, cap=256 [, flags [, {history, tab, moveToEnd}]]]]) → text, changed | history(older)→text, tab(text, shift)→text |
@@ -685,6 +689,15 @@ rectangle (`u0, v0, u1, v1`).
 | TreeNode | (label) → bool | |
 | TreePop | () → — | |
 | Image | (tex, w, h [, u0, v0, u1, v1 [, r, g, b, a]]) → — | r, g, b, a tint it (white by default). Draws a Dummy if tex is invalid |
+
+Colour-widget components are normalized RGB (0..1), including the values returned by `ColorPicker3` and
+`ColorEdit3`; their default numeric controls display 0..255. Finite components are clamped to 0..1; NaN and
+infinite components or button sizes raise a Lua argument error before drawing. Button sizes are clamped to
+0..4096. Flags must be nonnegative integers; unknown bits are ignored. RGB editors always use RGB input,
+disable alpha/HDR editing and leave ImGui's global colour options alone. Conflicting picker/data-type choices
+fall back to hue wheel/0..255; `ColorEdit3` also falls back to RGB when multiple display choices are combined.
+`ColorPicker3` permits multiple display choices, for example `DisplayRGB | DisplayHex`. These functions and
+`ColorEditFlags` are inherited unchanged by `require('ImGui')`.
 
 #### Layout and cursor
 
@@ -812,7 +825,7 @@ rectangle (`u0, v0, u1, v1`).
 
 #### Constant tables on `ui` (not functions)
 
-`WindowFlags`, `Cond`, `TableFlags`, `Col`, `StyleVar`, `TableColumnFlags`, `InputTextFlags`, `ComboFlags`,
+`WindowFlags`, `Cond`, `TableFlags`, `Col`, `StyleVar`, `TableColumnFlags`, `InputTextFlags`, `ComboFlags`, `ColorEditFlags`,
 `SelectableFlags`, `Mouse` (Left/Right/Middle), `ButtonFlags`, `Key` (Escape, Enter, arrows, Space, A..Z, "0".."9"),
 `TabItemFlags`, `TabBarFlags`, `HoveredFlags`. Each holds a subset of ImGui's enum: see `register_ui_api`.
 

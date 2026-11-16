@@ -4,6 +4,7 @@
 #include "app/nameplate_layer.h"
 
 #include "game/item_preview.h"
+#include "ui/texture_ids.h"
 
 #include <algorithm>
 #include <charconv>
@@ -63,8 +64,11 @@ void ClientApp::update_market_hidden(bool in_game) {
         if (conn_->spawn_invisible(s, see_invisible)) market_hidden_.insert(id);
 }
 
-void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4& view_proj, VkExtent2D extent, float far_plane) {
-    if (!conn_) return;
+void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::mat4& scene_view_proj,
+                               VkExtent2D extent, float far_plane) {
+    plate_hits_.clear();
+    plate_hit_connection_ = nullptr;
+    if (!conn_ || extent.width == 0 || extent.height == 0 || view_area_.w <= 0.0f || view_area_.h <= 0.0f) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     // The 3D view's pixels to its place in the window (/viewport).
     float sx = view_area_.w / static_cast<float>(extent.width), sy = view_area_.h / static_cast<float>(extent.height);
@@ -97,9 +101,19 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         style.faux_bold = ui::plate_font_faux_bold();
         style.edge = plate_style_.edge;
         style.tag_scale = static_cast<float>(plate_style_.tag_scale) / 100.0f;
+        style.spell_icon = [this](std::uint32_t id) -> std::optional<NameplateDrawStyle::Icon> {
+            if (!ui_textures_) return std::nullopt;
+            const auto cell = ui_textures_->spell_icon(static_cast<std::int32_t>(id));
+            if (!cell || !ui::texture_id_live(cell->id)) return std::nullopt;
+            return NameplateDrawStyle::Icon{reinterpret_cast<ImTextureID>(cell->id),
+                                            ImVec2(cell->u0, cell->v0), ImVec2(cell->u1, cell->v1)};
+        };
         plate_layer_->set_style(style);
     }
     plate_count_ = 0;
+    game::NameplateContext context; // reuse the assembled-name allocation across visible actors
+    context.now_ms = static_cast<double>(net::GameConnection::now_ms());
+    context.dt_ms = static_cast<double>(ImGui::GetIO().DeltaTime) * 1000.0;
     for (const auto& [id, s] : world.spawns) {
         if (market_hidden_.contains(id)) continue; // the same viewer awareness as actors and picking
         // ToggleNpcNameSprites / ToggleCharacterNameSprites; the player's own name too, as the original draws it (not
@@ -127,16 +141,18 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         if (glm::vec3 seated; actor_renderer_ && actor_renderer_->drawn_rider_top(id, seated))
             head = seated + glm::vec3(0, 0, 1.5f);
         const float head_distance = glm::distance(head, camera_.position);
-        if (head_distance > kNameplateRange) continue;
+        if (!std::isfinite(head_distance) || head_distance > kNameplateRange) continue;
         glm::vec4 clip = view_proj * glm::vec4(head, 1.0f);
-        if (clip.w <= 0.1f) continue;
+        if (!std::isfinite(clip.w) || clip.w <= 0.1f) continue;
         glm::vec2 ndc(clip.x / clip.w, clip.y / clip.w);
-        if (std::abs(ndc.x) > 1.0f || std::abs(ndc.y) > 1.0f) continue;
+        if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || std::abs(ndc.x) > 1.0f || std::abs(ndc.y) > 1.0f) continue;
         float px = view_area_.x + (ndc.x * 0.5f + 0.5f) * static_cast<float>(extent.width) * sx;
         float py = view_area_.y + (0.5f - ndc.y * 0.5f) * static_cast<float>(extent.height) * sy;
         if (plate_count_ == plates_.size()) plates_.emplace_back();
         PlateEntry& entry = plates_[plate_count_];
         NameplateText& plate = entry.plate;
+        // Entries are reused across spawns and frames: an unloaded or failed script restores stock immediately.
+        plate.presentation.reset();
         std::string& label = plate.name; // (built in place: the string keeps its capacity from frame to frame)
         label = game::display_name(s.name);
         // An NPC's last name is its owner line under the name (below); a player's follows the name.
@@ -184,12 +200,31 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
             const std::uint32_t rgb = game::con_rgb(game::con_level(s, conn_->player_status().level, conn_->pvp_rules()));
             plate.color = IM_COL32((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff, 255);
         }
+        context.name = label;
+        context.target = plate.target;
+        context.self = me;
+        context.distance = head_distance;
+        if (auto presentation = conn_->server_ext().nameplate_style(*conn_, s, context)) {
+            if (plate_layer_->supports_presentations()) {
+                if (presentation->hide) continue;
+                plate.presentation = std::move(presentation);
+                plate.through_walls = plate.presentation->through_walls;
+                plate.pos.y -= plate.presentation->offset_y * plate.scale * plate.presentation->scale;
+            } else {
+                // Missing depth shaders: preserve an ordinary caption only when the camera's collision ray is
+                // known clear. A replacement's failure must not expose extra bars or labels through a wall.
+                if (!plate.through_walls && (!collision_ || !collision_->line_of_sight(camera_.position, head) ||
+                    (world_objects_ && !world_objects_->line_of_sight(camera_.position, head)))) continue;
+            }
+        }
         entry.id = id;
+        entry.head = head;
         ++plate_count_;
     }
     // Hailstone (game/nameplate_overlap.h): the nearer name is drawn over the farther, and a name a nearer one covers
     // fades toward a tenth of its alpha, smoothly (tau 0.3 s). The target stays at full alpha at its projected head.
     plate_boxes_.clear();
+    plate_stack_.clear();
     for (std::size_t i = 0; i < plate_count_; ++i) {
         NameplateText& p = plates_[i].plate;
         const glm::vec2 size = plate_layer_->size_of(p);
@@ -197,7 +232,18 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         p.pos.y -= size.y;
         plate_boxes_.push_back({p.pos.x - size.x * 0.5f, p.pos.y, p.pos.x + size.x * 0.5f, p.pos.y + size.y, p.depth,
                                 p.target});
+        NameplateStack stack;
+        stack.id = plates_[i].id;
+        if (p.presentation) {
+            const float scale = p.scale * p.presentation->scale;
+            stack.enabled = p.presentation->stack;
+            stack.gap = p.presentation->stack_gap * scale;
+            stack.max_offset = p.presentation->max_stack * scale;
+        }
+        plate_stack_.push_back(stack);
     }
+    stack_nameplate_boxes(plate_boxes_, plate_stack_);
+    for (std::size_t i = 0; i < plate_count_; ++i) plates_[i].plate.pos.y = plate_boxes_[i].y0;
     if (plate_overlap_fade_) game::plate_target_alpha(plate_boxes_, plate_alpha_);
     else plate_alpha_.assign(plate_boxes_.size(), 1.0f);
     game::plate_draw_order(plate_boxes_, plate_order_);
@@ -205,7 +251,30 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
     for (std::size_t i = 0; i < plate_count_; ++i)
         plates_[i].plate.alpha = plate_fade_.step(plates_[i].id, plate_alpha_[i], dt, plates_[i].plate.target);
     plate_fade_.end_frame();
-    for (std::size_t i : plate_order_) plate_layer_->draw(plates_[i].plate);
+    for (std::size_t i : plate_order_) {
+        const auto& entry = plates_[i];
+        const auto& plate = entry.plate;
+        if (!plate_layer_->draw(plate)) continue;
+        if (plate.presentation && plate.presentation->clickable && plate.alpha * plate.presentation->alpha > 0.05f && plate_hits_.size() < 1024) {
+            glm::vec4 bounds = plate_layer_->bounds_of(plate);
+            bounds.x = std::max(bounds.x, view_area_.x);
+            bounds.y = std::max(bounds.y, view_area_.y);
+            bounds.z = std::min(bounds.z, view_area_.x + view_area_.w);
+            bounds.w = std::min(bounds.w, view_area_.y + view_area_.h);
+            if (bounds.z > bounds.x && bounds.w > bounds.y)
+                plate_hits_.push_back({entry.id, bounds, entry.head, plate.through_walls, plate.depth});
+        }
+    }
+    plate_hit_connection_ = conn_.get();
+    plate_hit_serial_ = world.spawn_set_serial;
+    plate_hit_zone_ = conn_->zone_id();
+    plate_hit_time_ = Clock::now();
+    if (!plate_hits_.empty()) {
+        plate_inverse_view_ = glm::inverse(scene_view_proj); // the scene's actual projection, including temporal jitter
+        plate_camera_ = camera_.position;
+        plate_forward_ = camera_.forward();
+        plate_hit_view_ = {view_area_.x, view_area_.y, view_area_.w, view_area_.h};
+    }
     dl->PopClipRect();
 }
 

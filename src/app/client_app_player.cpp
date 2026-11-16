@@ -23,12 +23,14 @@ void ClientApp::update_mouse_look() {
     // down when they last were, 12095 every frame. A frozen player (StandState 0x66) returns before that check.
     // Behind the loading screen (zone_settle_) the same, without the message.
     if (zone_settling()) {
+        plate_gesture_.clear();
         mouse_look_.cancel();
         left_click_pending_.reset();
         window_.set_mouse_captured(false);
         return;
     }
     if (conn_->state() == net::ConnectionState::InZone && conn_->interface_locked()) {
+        plate_gesture_.clear();
         mouse_look_.cancel();
         left_click_pending_.reset();
         window_.set_mouse_captured(false);
@@ -46,9 +48,37 @@ void ClientApp::update_mouse_look() {
     // __ProcessMouseEvents: dead or knocked out, mouse look ends and only the windows get the mouse.
     const bool down = conn_->state() == net::ConnectionState::InZone && conn_->player_down();
     if (down) {
+        plate_gesture_.clear();
         mouse_look_.cancel();
         left_click_pending_.reset();
     } else {
+        // Nameplate selection consumes a complete real mouse gesture before ordinary world picking. Waiting for
+        // release lets a drag, a modal UI or a right-button camera look cancel without targeting anything.
+        const glm::vec2 plate_at(in.mouse_x, in.mouse_y);
+        bool plate_left = plate_gesture_.id.has_value();
+        if (left_pressed && !plate_input_blocked()) {
+            if (auto hit = nameplate_at(plate_at)) {
+                plate_gesture_.begin(*hit, plate_at);
+                left_click_pending_.reset();
+                plate_left = true;
+            }
+        }
+        if (plate_gesture_.id) {
+            if (right_pressed && in.left_button && !plate_gesture_.captured_elsewhere && !plate_input_blocked(true)) {
+                // Replay the held left press before the ordinary right press below, preserving the normal
+                // two-button camera/movement state while cancelling selection of the plate.
+                mouse_look_.left_down(options, camera6, now);
+                plate_gesture_.clear();
+                left_click_pending_.reset();
+            } else plate_gesture_.update(plate_at, plate_input_blocked());
+            if (plate_gesture_.transfer_drag(in.left_button, !iso())) {
+                mouse_look_.left_down(options, camera6, now);
+                left_click_pending_.reset(); // the transferred camera drag must never become a world click
+            } else if (plate_gesture_.id && left_released) {
+                const auto selected = plate_gesture_.release(plate_at, nameplate_at(plate_at), plate_input_blocked());
+                if (selected) activate_nameplate(*selected);
+            }
+        }
         // A press goes to the world when the windows do not take it (or during mouse look); a release during mouse
         // look always, else when the windows do not take it.
         if (right_pressed && (mouse_look_.active || !ui_.wants_mouse())) {
@@ -66,17 +96,17 @@ void ClientApp::update_mouse_look() {
             // frame: the cursor itself comes back where the look took it, platform/mouse_capture.h.)
             right_click_ = up.click;
         }
-        if (left_pressed && iso() && !ui_.wants_mouse()) {
+        if (!plate_left && left_pressed && iso() && !ui_.wants_mouse()) {
             // The isometric camera (Hailstone's own): the left button only clicks; it never starts a mouse look.
             if (!mouse_look_.active) left_click_ = glm::vec2(in.mouse_x, in.mouse_y);
-        } else if (left_pressed && (mouse_look_.active || !ui_.wants_mouse())) {
+        } else if (!plate_left && left_pressed && (mouse_look_.active || !ui_.wants_mouse())) {
             mouse_look_.left_down(options, camera6, now);
             // This client clicks at the press; during MouseTurnZoom's look the click waits for the release, as
             // CEverQuest::LMouseUp makes every click (held under 0x2ef ms, mouse look off by then).
             if (mouse_look_.active && !mouse_look_.by_right) left_click_pending_ = glm::vec2(in.mouse_x, in.mouse_y);
             else if (!mouse_look_.active) left_click_ = glm::vec2(in.mouse_x, in.mouse_y);
         }
-        if (left_released && (mouse_look_.active || left_click_pending_ || !ui_.wants_mouse())) {
+        if (!plate_left && left_released && (mouse_look_.active || left_click_pending_ || !ui_.wants_mouse())) {
             bool click = mouse_look_.left_up(now);
             if (left_click_pending_ && click) left_click_ = left_click_pending_;
             left_click_pending_.reset();

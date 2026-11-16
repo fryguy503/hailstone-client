@@ -300,6 +300,7 @@ void ClientApp::login_action(ui::LoginAction action) {
     case ui::LoginAction::AddonUpdate:
     case ui::LoginAction::AddonRemove:
     case ui::LoginAction::AddonAuto:
+    case ui::LoginAction::AddonEnabled:
     case ui::LoginAction::AddonFolder:
     case ui::LoginAction::AddonPage:
     case ui::LoginAction::AddonCheck:

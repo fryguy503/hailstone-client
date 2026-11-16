@@ -20,6 +20,7 @@
 #include <array>
 #include <cctype>
 #include <cstddef>
+#include <cmath>
 #include <ctime>
 #include <optional>
 #include <string>
@@ -196,7 +197,218 @@ void push_spawn_scratch(lua_State* L, const game::Spawn& s) {
         lua_pushvalue(L, -1);
         lua_rawsetp(L, LUA_REGISTRYINDEX, &g_spawn_scratch_key);
     }
+    // A hook may have decorated its borrowed table. Refilling it must never call script __newindex code.
+    lua_pushnil(L);
+    lua_setmetatable(L, -2);
     fill_spawn(L, s);
+}
+
+// Presentation is data: no __index, __len or conversion metamethod runs while the renderer reads it.
+bool plain_table(lua_State* L, int index) {
+    if (!lua_istable(L, index)) return false;
+    if (!lua_getmetatable(L, index)) return true;
+    lua_pop(L, 1);
+    return false;
+}
+
+bool plate_number(lua_State* L, const char* key, float& out, float lo, float hi, bool required = false) {
+    raw_field(L, key);
+    const bool absent = lua_isnil(L, -1);
+    const bool number = lua_type(L, -1) == LUA_TNUMBER;
+    const double n = number ? lua_tonumber(L, -1) : 0.0;
+    lua_pop(L, 1);
+    if (absent) return !required;
+    if (!number || !std::isfinite(n) || n < lo || n > hi) return false;
+    out = static_cast<float>(n);
+    return true;
+}
+
+bool plate_color(lua_State* L, const char* key, std::uint32_t& out) {
+    raw_field(L, key);
+    const bool absent = lua_isnil(L, -1);
+    const bool integer = lua_isinteger(L, -1);
+    const lua_Integer n = integer ? lua_tointeger(L, -1) : -1;
+    lua_pop(L, 1);
+    if (absent) return true;
+    if (!integer || n < 0 || n > 0xffffff) return false;
+    out = static_cast<std::uint32_t>(n);
+    return true;
+}
+
+bool plate_spell_icon(lua_State* L, std::optional<std::uint32_t>& out) {
+    raw_field(L, "spell_icon");
+    const bool absent = lua_isnil(L, -1);
+    const bool integer = lua_isinteger(L, -1);
+    const lua_Integer n = integer ? lua_tointeger(L, -1) : -1;
+    lua_pop(L, 1);
+    if (absent) return true;
+    if (!integer || n < 0 || n > 65535) return false;
+    out = static_cast<std::uint32_t>(n);
+    return true;
+}
+
+bool plate_bool(lua_State* L, const char* key, bool& out) {
+    const int kind = raw_field(L, key);
+    if (kind == LUA_TBOOLEAN) out = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    return kind == LUA_TNIL || kind == LUA_TBOOLEAN;
+}
+
+bool plate_string(lua_State* L, const char* key, std::optional<std::string>& out, std::size_t limit) {
+    const int kind = raw_field(L, key);
+    bool valid = kind == LUA_TNIL;
+    if (kind == LUA_TSTRING) {
+        std::size_t n = 0;
+        const char* value = lua_tolstring(L, -1, &n);
+        valid = n <= limit;
+        for (std::size_t i = 0; valid && i < n; ++i) {
+            const auto ch = static_cast<unsigned char>(value[i]);
+            if (ch < 32 || ch == 127) valid = false;
+        }
+        if (valid) out = std::string(value, n);
+    }
+    lua_pop(L, 1);
+    return valid;
+}
+
+bool plate_string(lua_State* L, const char* key, std::string& out, std::size_t limit) {
+    std::optional<std::string> value;
+    if (!plate_string(L, key, value, limit)) return false;
+    if (value) out = std::move(*value);
+    return true;
+}
+
+bool plate_choice(lua_State* L, const char* key, std::string& out, std::initializer_list<std::string_view> choices) {
+    return plate_string(L, key, out, 16) && std::find(choices.begin(), choices.end(), out) != choices.end();
+}
+
+bool plate_bar(lua_State* L, const char* key, std::optional<game::NameplateBar>& out) {
+    raw_field(L, key);
+    if (lua_isnil(L, -1)) { lua_pop(L, 1); return true; }
+    game::NameplateBar bar;
+    const bool valid = plain_table(L, -1) && plate_number(L, "value", bar.value, 0.0f, 100.0f, true) &&
+                       plate_color(L, "color", bar.color) && plate_string(L, "text", bar.text, 128);
+    lua_pop(L, 1);
+    if (valid) out = std::move(bar);
+    return valid;
+}
+
+bool plate_badges(lua_State* L, std::vector<game::NameplateBadge>& out) {
+    raw_field(L, "badges");
+    if (lua_isnil(L, -1)) { lua_pop(L, 1); return true; }
+    if (!plain_table(L, -1) || lua_rawlen(L, -1) > 8) { lua_pop(L, 1); return false; }
+    constexpr std::array<std::string_view, 12> icons{
+        "eye", "peace", "sleep", "star", "sun", "moon", "diamond", "triangle", "cross", "skull", "sword", "circle"};
+    const std::size_t count = lua_rawlen(L, -1);
+    bool valid = true;
+    for (std::size_t i = 0; valid && i < count; ++i) {
+        lua_rawgeti(L, -1, static_cast<lua_Integer>(i + 1));
+        game::NameplateBadge badge;
+        valid = plain_table(L, -1) && plate_string(L, "icon", badge.icon, 16) &&
+                std::find(icons.begin(), icons.end(), badge.icon) != icons.end() &&
+                plate_string(L, "label", badge.label, 32) && plate_color(L, "color", badge.color) &&
+                plate_spell_icon(L, badge.spell_icon);
+        lua_pop(L, 1);
+        if (valid) out.push_back(std::move(badge));
+    }
+    lua_pop(L, 1);
+    return valid;
+}
+
+std::optional<game::NameplatePresentation> plate_presentation(lua_State* L) {
+    game::NameplatePresentation p;
+    const bool valid = plain_table(L, -1) && plate_bool(L, "hide", p.hide) &&
+        plate_bool(L, "show_name", p.show_name) && plate_bool(L, "show_marker", p.show_marker) &&
+        plate_bool(L, "stack", p.stack) &&
+        plate_bool(L, "through_walls", p.through_walls) && plate_bool(L, "clickable", p.clickable) &&
+        plate_string(L, "name", p.name, 256) && plate_string(L, "subtitle", p.subtitle, 256) &&
+        plate_number(L, "width", p.width, 24.0f, 512.0f) && plate_number(L, "height", p.height, 2.0f, 64.0f) &&
+        plate_number(L, "mana_height", p.mana_height, 1.0f, 24.0f) &&
+        plate_number(L, "cast_height", p.cast_height, 1.0f, 32.0f) &&
+        plate_number(L, "font_scale", p.font_scale, 0.5f, 2.0f) &&
+        plate_number(L, "alpha", p.alpha, 0.0f, 1.0f) && plate_number(L, "scale", p.scale, 0.5f, 2.0f) &&
+        plate_number(L, "offset_y", p.offset_y, -128.0f, 128.0f) &&
+        plate_number(L, "stack_gap", p.stack_gap, 0.0f, 20.0f) &&
+        plate_number(L, "max_stack", p.max_stack, 0.0f, 200.0f) &&
+        plate_number(L, "border_width", p.border_width, 0.0f, 4.0f) &&
+        plate_number(L, "rounding", p.rounding, 0.0f, 12.0f) &&
+        plate_number(L, "badge_scale", p.badge_scale, 0.5f, 2.5f) &&
+        plate_number(L, "cast_gap", p.cast_gap, 0.0f, 24.0f) &&
+        plate_number(L, "cast_width", p.cast_width, 0.0f, 600.0f) &&
+        plate_choice(L, "texture", p.texture, {"flat", "gradient", "gloss", "segments"}) &&
+        plate_choice(L, "frame_style", p.frame_style, {"minimal", "solid", "bevel", "glass", "runic"}) &&
+        plate_choice(L, "target_style", p.target_style, {"arrow", "chevrons", "brackets", "glow", "none"}) &&
+        plate_choice(L, "badge_position", p.badge_position, {"above", "below", "left", "right"}) &&
+        plate_choice(L, "name_position", p.name_position, {"above", "inside", "below"}) &&
+        plate_choice(L, "text_align", p.text_align, {"left", "center", "right"}) &&
+        plate_choice(L, "health_text_align", p.health_text_align, {"left", "center", "right"}) &&
+        plate_choice(L, "cast_text_align", p.cast_text_align, {"left", "center", "right"}) &&
+        plate_color(L, "text_color", p.text_color) && plate_color(L, "border_color", p.border_color) &&
+        plate_color(L, "background_color", p.background_color) && plate_bar(L, "health", p.health) &&
+        plate_bar(L, "mana", p.mana) && plate_bar(L, "cast", p.cast) && plate_badges(L, p.badges);
+    lua_pop(L, 1);
+    return valid ? std::optional<game::NameplatePresentation>(std::move(p)) : std::nullopt;
+}
+
+void push_plate_context(lua_State* L, const net::GameConnection& c, const game::Spawn& s,
+                        const game::NameplateContext& ctx) {
+    lua_createtable(L, 0, 18);
+    set_str(L, "name", ctx.name);
+    const bool self = s.id == c.world().player_id;
+    set_bool(L, "target", s.id == c.world().target_id);
+    set_bool(L, "self", self);
+    set_bool(L, "in_group", c.group().active && c.group().has_member(game::display_name(s.name)));
+    set_bool(L, "in_raid", c.raid().active && c.raid().is_member(game::display_name(s.name)));
+    set_num(L, "distance", ctx.distance);
+    set_num(L, "now_ms", ctx.now_ms);
+    set_num(L, "dt_ms", ctx.dt_ms);
+    const auto percent = [&](const char* key, double value) {
+        if (std::isfinite(value) && value >= 0.0 && value <= 100.0) set_num(L, key, value);
+    };
+    percent("hp_percent", s.hp_percent);
+    if (self) {
+        const auto hp = c.own_hp();
+        if (hp.max > 0) percent("hp_percent", 100.0 * static_cast<double>(hp.cur) / static_cast<double>(hp.max));
+        const auto& ps = c.player_status();
+        if (ps.max_mana > 0) percent("mana_percent", 100.0 * static_cast<double>(ps.mana) / ps.max_mana);
+        if (ps.max_endurance > 0) percent("endurance_percent", 100.0 * static_cast<double>(ps.endurance) / ps.max_endurance);
+    } else {
+        if (auto it = c.group().mana_percent.find(s.id); it != c.group().mana_percent.end()) percent("mana_percent", it->second);
+        if (auto it = c.group().endurance_percent.find(s.id); it != c.group().endurance_percent.end()) percent("endurance_percent", it->second);
+    }
+    const auto& leader = c.leadership();
+    int group_mark = 0, raid_mark = 0;
+    for (std::size_t i = 0; i < leader.group_marks.size(); ++i) {
+        if (leader.group_marks[i] == s.id) group_mark = static_cast<int>(i + 1);
+        if (leader.raid_marks[i] == s.id) raid_mark = static_cast<int>(i + 1);
+    }
+    set_int(L, "group_mark", group_mark);
+    set_int(L, "raid_mark", raid_mark);
+    // The meter's target identifies what the percentage describes. No readings for unrelated spawns.
+    if (c.aggro().target_id != 0 && c.aggro().target_id == s.id && c.aggro().received[net::kAggroPlayer])
+        percent("aggro_percent", c.aggro().pct[net::kAggroPlayer]);
+    const auto& spells = c.spell_state();
+    std::uint32_t spell = game::kNoSpell, duration = 0;
+    std::int64_t started = 0;
+    if (self && spells.casting.casting()) {
+        spell = spells.casting.spell;
+        duration = spells.casting.cast_time;
+        started = spells.casting.eta_ms - duration;
+    } else if (const auto it = spells.others.find(s.id); it != spells.others.end()) {
+        spell = it->second.spell;
+        duration = it->second.cast_time;
+        started = it->second.started_ms;
+    }
+    const auto now = net::GameConnection::now_ms();
+    if (spell != game::kNoSpell && duration > 0 && now >= started && now - started < duration) {
+        lua_createtable(L, 0, 4);
+        set_int(L, "spell_id", spell);
+        if (const auto* data = c.spell_table().get(spell)) set_str(L, "name", data->name);
+        else set_str(L, "name", "");
+        set_int(L, "duration_ms", duration);
+        set_int(L, "elapsed_ms", now - started);
+        lua_setfield(L, -2, "casting");
+    }
 }
 
 void push_slot(lua_State* L, const net::ItemSlot& slot) {
@@ -464,6 +676,17 @@ public:
         lua_pushlstring(L(), text.data(), text.size());
         if (!run(2)) return;
         if (auto t = string_result()) text = *t;
+    }
+    std::optional<game::NameplatePresentation> nameplate_style(const net::GameConnection& c, const game::Spawn& spawn,
+                                                             const game::NameplateContext& context) const override {
+        if (!s_ || (s_->caps & (plugin::kCapRead | plugin::kCapUi)) != (plugin::kCapRead | plugin::kCapUi))
+            return std::nullopt;
+        if (!hook("nameplate_style")) return std::nullopt;
+        push_spawn_scratch(L(), spawn);
+        push_plate_context(L(), c, spawn, context);
+        if (!run(2)) return std::nullopt;
+        if (!usable(*s_)) { lua_pop(L(), 1); return std::nullopt; }
+        return plate_presentation(L());
     }
     bool hide_xtarget_slot(const net::GameConnection&, int slot) const override {
         if (!hook("hide_xtarget_slot")) return false;
@@ -1347,6 +1570,7 @@ int l_set_max_camera_distance(lua_State* L) {
 
 void register_hailstone(lua_State* L) {
     lua_newtable(L);
+    set_int(L, "nameplate_api_version", 2);
     for (auto [n, fn] : std::initializer_list<std::pair<const char*, lua_CFunction>>{
              {"hooks", l_hooks},
              {"set_active", l_set_active},

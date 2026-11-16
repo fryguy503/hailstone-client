@@ -27,6 +27,15 @@ What the client does not implement yet, or implements with an approximation it c
 - AdventureData's risk: RoF2 sets the window's risk choice to risk - 1 (`0x618790`, the 1 normal / 2 high of its own request), while stock EQEmu sends 0 normal / 1 high. Hailstone shows nonzero as high, which is right for EQEmu and would show a server sending RoF2's 1 for normal as high. A capture from the original live servers would settle what the field held.
 - The native meaning of AdventureData's leading/trailing reserved words and leaderboard header +4 remains unestablished. Hailstone follows EQEmu's all-zero adventure clear and ignores the leaderboard reserved word. Some native actor interaction predicates beyond recruiter class, corpse status and range are not reproduced.
 
+## Add-on nameplate presentation
+
+- The Lua appearance hook is covered by bounded-data and lifecycle tests, but replacement plates have not been
+  accepted in live crowded zones, groups/raids, mounted play or physical controller use. A live session with an
+  appearance add-on would settle visibility, readability and interaction acceptance.
+- API 2 structural skins, explicit through-wall display and manual plate targeting have headless geometry,
+  parser and gesture coverage. Pixel-depth occlusion, conservative click visibility, real UI/modal capture,
+  dragging over live plates and rapid zone/actor turnover still require live acceptance.
+
 ## Fellowships
 
 - Stock EQEmu does not send RoF2 fellowship packets, so nothing here has met a server. Native requests and roster/vitality fields were checked against the original handlers, and against EQEmu PR #5134 "TOB: Fellowships" (open, unmerged) as a protocol reference. Unit, mock-server and both UI-pack rendering tests cover native twelve-member and expanded 64-member rosters. Live cross-zone synchronization, XP awards and camp gameplay remain untested.

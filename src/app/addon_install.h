@@ -27,6 +27,7 @@
 #include "core/ed25519.h"
 #include "core/sha256.h"
 #include "plugin/policy.h"
+#include "mq/lua_mq.h"
 
 namespace hailstone::app {
 
@@ -44,6 +45,7 @@ struct InstalledAddon {
     std::uint32_t caps = 0; // the capabilities the player accepted (plugin/policy.h): the ceiling
     std::optional<Ed25519PublicKey> key; // pinned at the first install: later versions must carry the same
     bool auto_update = false; // only when the player switches it on: nothing updates unasked
+    bool autoload = false, enabled = false; // managed Lua add-on; the player controls activation independently of updates
     std::string author, description, notes;
     std::vector<AddonFile> files;
 };
@@ -79,6 +81,9 @@ AddonRegistry read_addon_registry(const std::filesystem::path& data_dir);
 
 // read_addon_registry's records that read.
 std::vector<InstalledAddon> read_installed_addons(const std::filesystem::path& data_dir);
+// Managed activation records, including disabled/modified ones so they cannot fall back to manual autorun.
+std::vector<mq::ManagedScript> managed_addon_scripts(const std::filesystem::path& data_dir);
+bool set_addon_enabled(const std::filesystem::path& data_dir, std::string_view name, bool enabled);
 // Writes installed.txt and its backup, installed.bak.txt; false (written nowhere) when it cannot, or may not be
 // written now (AddonRegistry::writable).
 bool write_installed_addons(const std::filesystem::path& data_dir, const std::vector<InstalledAddon>& addons);

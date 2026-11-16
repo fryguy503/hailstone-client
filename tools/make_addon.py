@@ -165,8 +165,11 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--notes", default="", help="the release's page")
     ap.add_argument("--min-client", default="", help="the oldest Hailstone it works with")
+    ap.add_argument("--autoload", action="store_true", help="managed Lua add-on: activate after installation, controlled in Add-ons")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    if a.autoload and a.kind != "script":
+        sys.exit("--autoload is only for a managed Lua add-on (--kind script)")
     if not NAME.match(a.name):
         sys.exit(f"{a.name}: 1 to 32 letters, digits, '-' and '_', starting with a letter or digit")
     for v in (a.version, a.min_client or "0.0.0"):
@@ -199,6 +202,8 @@ def main():
     os.makedirs(a.out, exist_ok=True)
 
     lines = ["hailstone-addon 1", f"name {a.name}", f"kind {a.kind}", f"version {a.version}"]
+    if a.autoload:
+        lines.append("autoload 1")
     if a.min_client:
         lines.append(f"min_client {a.min_client}")
     if a.author:

@@ -675,6 +675,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         auras_.clear();
         aggro_.lock_id = aggro_.target_id = aggro_.secondary_id = 0;
         aggro_.pct = {};
+        aggro_.received = {};
         stun_timer_ms_ = 0;
         stun_state_ = false;
         // The helm goes with the zone: the new zone may reuse the boat's id for another vehicle, which must smooth.
@@ -1447,6 +1448,15 @@ void GameConnection::handle_zone(const AppPacket& p) {
             if (trade_ && trade_->partner_id == *id) trade_cancel();
             spawn_leaving(*id);
             forget_leadership_spawn(*id);
+            // Observations belong to this actor's lifetime, not the numerical id a later actor may reuse.
+            group_.mana_percent.erase(*id);
+            group_.endurance_percent.erase(*id);
+            spells_.others.erase(*id);
+            if (spells_.target_buffs_entity == *id) {
+                spells_.target_buffs_entity = 0;
+                spells_.target_buffs.clear();
+            }
+            if (aggro_.target_id == *id) aggro_.received = {};
             if (world_.spawns.erase(*id)) ++world_.spawn_set_serial;
             forget_pet_spawn(*id);
             // msgEQRmPlayer @0x4b8380: the target leaving stops auto attack and clears the target (no OP_TargetMouse).
@@ -1909,6 +1919,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
     case Op::AggroMeterTargetInfo:
         if (auto v = decode_aggro_target_info(p)) {
             aggro_.lock_id = v->lock_id;
+            if (aggro_.target_id != v->target_id) aggro_.received = {};
             aggro_.target_id = v->target_id;
         }
         break;
@@ -1916,7 +1927,10 @@ void GameConnection::handle_zone(const AppPacket& p) {
         if (auto v = decode_aggro_update(p)) {
             if (v->secondary_id) aggro_.secondary_id = *v->secondary_id;
             for (auto [type, pct] : v->entries)
-                if (type < kAggroTypes) aggro_.pct[type] = pct;
+                if (type < kAggroTypes) {
+                    aggro_.pct[type] = pct;
+                    aggro_.received[type] = true;
+                }
             if (!aggro_seen_) aggro_.window_open = aggro_seen_ = true;
         }
         break;

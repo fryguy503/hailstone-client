@@ -655,6 +655,7 @@ TEST_CASE("eq.LoginScreen: the add-on manager's view and its actions (docs/addon
     installed.caps = {"read the game state"};
     installed.new_caps = {"speak for you"};
     installed.can_update = installed.can_remove = true;
+    installed.managed = installed.enabled = true;
     installed.folder = "/x/scripts/autoloot";
     ui::AddonRowView server;
     server.name = "hud";
@@ -667,6 +668,8 @@ TEST_CASE("eq.LoginScreen: the add-on manager's view and its actions (docs/addon
     CHECK(ui("return eq.LoginScreen().addons.available") == "false");
     CHECK(ui("return #eq.LoginScreen().addons.rows") == "2");
     CHECK(ui("return eq.LoginScreen().addons.rows[1].newCaps[1]") == "speak for you");
+    CHECK(ui("return eq.LoginScreen().addons.rows[1].managed") == "true");
+    CHECK(ui("return eq.LoginScreen().addons.rows[1].enabled") == "true");
     CHECK(ui("return eq.LoginScreen().addons.rows[2].group") == "server");
     CHECK(ui("return eq.LoginScreen().addons.offer") == "nil");
 
@@ -687,8 +690,10 @@ TEST_CASE("eq.LoginScreen: the add-on manager's view and its actions (docs/addon
     offer.name = "autoloot";
     offer.blocked = "needs Hailstone 9.0.0 or newer";
     offer.caps = {"read the game state"};
+    offer.autoload = true;
     v.addons.offer = offer;
     CHECK(ui("return eq.LoginScreen().addons.offer.blocked") == "needs Hailstone 9.0.0 or newer");
+    CHECK(ui("return eq.LoginScreen().addons.offer.autoload") == "true");
     CHECK(ui("return eq.LoginDo('addonInstall')") == "false");
     v.addons.offer->blocked.clear();
     CHECK(ui("return eq.LoginDo('addonInstall')") == "true");
@@ -709,6 +714,11 @@ TEST_CASE("eq.LoginScreen: the add-on manager's view and its actions (docs/addon
     CHECK(ui("return eq.LoginDo('addonUpdate', 'autoloot')") == "true");
     CHECK(ui.host.login_action == static_cast<int>(A::AddonUpdate));
     CHECK(v.addons.choice == "autoloot");
+    CHECK(ui("return eq.LoginDo('addonEnabled', 'autoloot', false)") == "true");
+    CHECK(ui.host.login_action == static_cast<int>(A::AddonEnabled));
+    CHECK_FALSE(v.addons.choice_on);
+    CHECK(ui("return eq.LoginDo('addonEnabled', 'autoloot', true)") == "true");
+    CHECK(v.addons.choice_on);
     CHECK(ui("return eq.LoginDo('addonAuto', 'autoloot', false)") == "true");
     CHECK_FALSE(v.addons.choice_on);
     CHECK(ui("return eq.LoginDo('addonRemove', 'autoloot')") == "true");
@@ -717,6 +727,9 @@ TEST_CASE("eq.LoginScreen: the add-on manager's view and its actions (docs/addon
     CHECK(ui("return eq.LoginDo('addonRemove', 'hud')") == "false");
     CHECK(ui("return eq.LoginDo('addonUpdate', 'hud')") == "false");
     CHECK(ui("return eq.LoginDo('addonAuto', 'hud', true)") == "false");
+    CHECK(ui("return eq.LoginDo('addonEnabled', 'hud', true)") == "false");
+    CHECK(ui("return eq.LoginDo('addonEnabled', 'nothing', true)") == "false");
+    CHECK(ui("return eq.LoginDo('addonEnabled', 'autoloot', 'yes')") == "false");
     CHECK(ui("return eq.LoginDo('addonRemove', 'nothing')") == "false");
     CHECK_FALSE(ui.host.login_action);
     CHECK(ui("return eq.LoginDo('addonFolder', 'hud')") == "true");
@@ -742,6 +755,7 @@ TEST_CASE("eq.LoginScreen: the add-on manager's view and its actions (docs/addon
     // While a login is under way nothing is removed.
     v.busy = true;
     CHECK(ui("return eq.LoginDo('addonRemove', 'autoloot')") == "false");
+    CHECK(ui("return eq.LoginDo('addonEnabled', 'autoloot', false)") == "false");
     v.busy = false;
 
     // The server's compiled plugin: the player's word on it, taken back when given, asked again when refused.

@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <array>
 #include <fstream>
 
 #include "core/ascii_case.h"
@@ -140,6 +141,114 @@ mq.bind('/exton', function() hs.set_active(true) end)
 
 } // namespace
 
+TEST_CASE("Lua plugin: managed installed add-ons start disable update and remove without script commands") {
+    Host h;
+    const std::string first = "hailstone.hooks{nameplate_style=function() return {name='managed one'} end}";
+    h.write("managed/init.lua", first);
+    mq::ManagedScript a;
+    a.name = "managed"; a.entry = h.lua_dir / "managed" / "init.lua";
+    a.hash = sha256(first); a.revision = sha256(std::string_view("package one"));
+    a.enabled = a.verified = true;
+    h.policy.set_ceilings({{plugin::FileKind::Script, a.hash, plugin::kCapRead | plugin::kCapUi | plugin::kCapExtend}});
+    h.scripts->set_managed_addons({a});
+    h.scripts->pulse();
+    REQUIRE(h.scripts->running("managed"));
+    CHECK(h.scripts->caps_of("managed") == (plugin::kCapRead | plugin::kCapUi | plugin::kCapExtend));
+    auto& c = *h.world.conn;
+    const auto& rat = c.world().spawns.at(10);
+    auto p = h.chain.nameplate_style(c, rat, {});
+    REQUIRE(p); CHECK(p->name == "managed one");
+    a.enabled = false; h.scripts->set_managed_addons({a});
+    CHECK_FALSE(h.scripts->running("managed"));
+    CHECK_FALSE(h.chain.nameplate_style(c, rat, {}));
+    CHECK_FALSE(h.scripts->run("managed", {})); // ordinary autorun cannot bypass Add-ons disabled
+    for (const auto* alias : {"managed/init", "managed/init.lua", "managed.lua", "managed/./init"})
+        CHECK_FALSE(h.scripts->run(alias, {})); // all of these resolve to the installed init.lua
+    a.enabled = true; h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK(h.scripts->running("managed"));
+    CHECK_FALSE(h.scripts->run("managed/init", {})); // an enabled add-on has one canonical runtime owner
+    const std::string second = "hailstone.hooks{nameplate_style=function() return {name='managed two'} end}";
+    h.write("managed/init.lua", second);
+    a.hash = sha256(second); a.revision = sha256(std::string_view("package two"));
+    h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    p = h.chain.nameplate_style(c, rat, {});
+    REQUIRE(p); CHECK(p->name == "managed two");
+    h.scripts->set_managed_addons({});
+    CHECK_FALSE(h.scripts->running("managed"));
+    CHECK_FALSE(h.chain.nameplate_style(c, rat, {}));
+}
+
+TEST_CASE("Lua plugin: managed activation honors game-state policy source identity and modified records") {
+    Host h;
+    const std::string text = "hailstone.hooks{nameplate_style=function() return {name='managed'} end}";
+    h.write("managed/init.lua", text);
+    mq::ManagedScript a;
+    a.name = "managed"; a.entry = h.lua_dir / "managed" / "init.lua";
+    a.hash = sha256(text); a.revision = a.hash; a.enabled = a.verified = true;
+    h.policy.clear();
+    h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("managed"));
+    h.allow(0); h.scripts->policy_changed(); h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("managed"));
+    h.allow(plugin::kCapAll); h.scripts->policy_changed(); h.scripts->pulse();
+    CHECK(h.scripts->running("managed"));
+    a.verified = false; h.scripts->set_managed_addons({a});
+    CHECK_FALSE(h.scripts->running("managed"));
+    CHECK_FALSE(h.scripts->run("managed", {}));
+    a.verified = true;
+    h.write("server/managed/init.lua", "print('a server-owned shadow must not be started as this add-on')");
+    h.scripts->set_server_dir(h.lua_dir / "server");
+    h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("managed"));
+    h.scripts->set_server_dir({});
+    a.hash = sha256(std::string_view("wrong expected bytes"));
+    h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("managed"));
+}
+
+TEST_CASE("Lua plugin: adopting managed metadata also stops an already running path alias") {
+    Host h;
+    const std::string text = "hailstone.hooks{nameplate_style=function() return {name='alias'} end}";
+    h.write("managed/init.lua", text);
+    REQUIRE(h.scripts->run("managed/init", {}));
+    h.scripts->pulse();
+    REQUIRE(h.scripts->running("managed/init"));
+    mq::ManagedScript a;
+    a.name = "managed"; a.entry = h.lua_dir / "managed" / "init.lua";
+    a.hash = sha256(text); a.revision = a.hash; a.enabled = false; a.verified = true;
+    h.scripts->set_managed_addons({a});
+    CHECK_FALSE(h.scripts->running("managed/init"));
+    CHECK_FALSE(h.scripts->run("managed/init.lua", {}));
+    a.enabled = true; h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    CHECK(h.scripts->running("managed"));
+    CHECK_FALSE(h.scripts->running("managed/init"));
+}
+
+TEST_CASE("Lua plugin: require cannot load a managed entry under another script owner") {
+    Host h;
+    h.allow(plugin::kCapRead | plugin::kCapUi | plugin::kCapExtend);
+    const std::string text = "hailstone.hooks{nameplate_style=function() return {name='managed'} end}";
+    h.write("managed/init.lua", text);
+    mq::ManagedScript a;
+    a.name = "managed"; a.entry = h.lua_dir / "managed" / "init.lua";
+    a.hash = sha256(text); a.revision = a.hash; a.enabled = false; a.verified = true;
+    h.scripts->set_managed_addons({a});
+    const std::string loader = R"lua(
+assert(not pcall(require, 'managed'))
+assert(not pcall(require, 'managed.init'))
+print('managed module entry refused')
+)lua";
+    h.write("loader.lua", loader);
+    REQUIRE(h.scripts->run("loader", {})); h.scripts->pulse();
+    CHECK(h.printed_part("managed module entry refused"));
+    a.enabled = true; h.scripts->set_managed_addons({a}); h.scripts->pulse();
+    h.printed.clear();
+    h.write("loader2.lua", loader);
+    REQUIRE(h.scripts->run("loader2", {})); h.scripts->pulse();
+    CHECK(h.printed_part("managed module entry refused"));
+    CHECK(h.scripts->running("managed"));
+}
+
 TEST_CASE("Lua plugin: nameplate text hooks follow the script lifetime") {
     Host h;
     auto& c = *h.world.conn;
@@ -187,6 +296,305 @@ require('hailstone').hooks{
     // The same table both times, and nothing of the first spawn left in the second.
     CHECK(a == "true:10:" + rat.name + ":false");
     CHECK(b == "true:13:" + corpse.name + ":true");
+}
+
+TEST_CASE("Lua plugin: nameplate presentation has bounded data and follows script lifetime") {
+    Host h;
+    auto& c = *h.world.conn;
+    const auto& rat = c.world().spawns.at(10);
+    h.write("plate_style.lua", R"lua(
+local hs = require('hailstone')
+assert(hs.nameplate_api_version == 2)
+hs.hooks{nameplate_style = function(s, ctx)
+  assert(ctx.target and not ctx.self and ctx.name == 'assembled rat')
+  assert(ctx.hp_percent == 80 and ctx.mana_percent == nil and ctx.aggro_percent == nil)
+  assert(ctx.distance == 50 and ctx.now_ms == 1000 and ctx.dt_ms == 16)
+  assert(ctx.group_mark == 0 and ctx.raid_mark == 0 and ctx.casting == nil)
+  return {name='rat', subtitle='NPC', width=160, height=14, mana_height=5, cast_height=8,
+    font_scale=1.1, alpha=0.9, scale=1.2, offset_y=8, show_name=true, show_marker=false,
+    stack=true,stack_gap=6,max_stack=128,texture='gradient',name_position='inside',text_align='right',border_width=3,rounding=5,
+    health={value=ctx.hp_percent,color=0x12ff34,text='80%'},
+    badges={{icon='eye',label='Sees invis',color=0xffa500,spell_icon=37},{icon='diamond',label='1'}}}
+end}
+mq.bind('/plate_off', function() hs.set_active(false) end)
+mq.bind('/plate_on', function() hs.set_active(true) end)
+)lua");
+    REQUIRE(h.scripts->run("plate_style", {}));
+    h.scripts->pulse();
+    game::NameplateContext context;
+    context.name = "assembled rat";
+    context.distance = 50.0f;
+    context.now_ms = 1000.0;
+    context.dt_ms = 16.0;
+    auto p = h.chain.nameplate_style(c, rat, context);
+    REQUIRE(p);
+    CHECK(p->name == "rat");
+    CHECK(p->subtitle == "NPC");
+    CHECK(p->width == 160.0f);
+    CHECK(p->height == 14.0f);
+    CHECK_FALSE(p->show_marker);
+    CHECK(p->stack);
+    CHECK(p->stack_gap == 6.0f);
+    CHECK(p->max_stack == 128.0f);
+    CHECK(p->texture == "gradient");
+    CHECK(p->name_position == "inside");
+    CHECK(p->text_align == "right");
+    CHECK(p->border_width == 3.0f);
+    CHECK(p->rounding == 5.0f);
+    REQUIRE(p->health);
+    CHECK(p->health->color == 0x12ff34);
+    CHECK(p->health->value == 80.0f);
+    CHECK(p->health->text == "80%");
+    CHECK_FALSE(p->mana);
+    REQUIRE(p->badges.size() == 2);
+    CHECK(p->badges[0].icon == "eye");
+    REQUIRE(p->badges[0].spell_icon);
+    CHECK(*p->badges[0].spell_icon == 37);
+    CHECK_FALSE(p->badges[1].spell_icon);
+    h.run("/plate_off");
+    h.scripts->pulse();
+    CHECK_FALSE(h.chain.nameplate_style(c, rat, context));
+    h.run("/plate_on");
+    h.scripts->pulse();
+    CHECK(h.chain.nameplate_style(c, rat, context));
+    h.scripts->stop("plate_style");
+    CHECK_FALSE(h.chain.nameplate_style(c, rat, context));
+}
+
+TEST_CASE("Lua plugin: malformed nameplate presentation always leaves the normal plate") {
+    for (const std::string expression : {
+        "nil", "false", "42", "'text'", "{width=0/0}", "{alpha=math.huge}", "{width=513}",
+        "{show_name='yes'}", "{stack=1}", "{stack_gap=-1}", "{stack_gap=21}", "{max_stack=201}",
+        "{texture='bogus'}", "{frame_style='picture'}", "{target_style='sparkles'}", "{badge_position='center'}",
+        "{health_text_align='middle'}", "{cast_text_align=false}", "{badge_scale=0.4}", "{badge_scale=2.6}",
+        "{cast_gap=-1}", "{cast_gap=25}", "{cast_width=601}", "{cast_width=math.huge}",
+        "{through_walls=1}", "{clickable='yes'}",
+        "{name_position='top'}", "{text_align='middle'}", "{rounding=13}", "{border_width=-1}",
+        "{health={value=-1}}", "{health={value=101}}", "{health={color=1}}",
+        "{text_color=-1}", "{text_color=0x1000000}", "{text_color=1.5}",
+        "{name=string.rep('x',257)}", "{name='a\\0b'}", "{subtitle='a\\nb'}",
+        "{health={value=50,text=string.rep('x',129)}}", "{badges={{icon='invalid'}}}",
+        "{badges={{icon='eye',label=string.rep('x',33)}}}", "{badges={1}}",
+        "{badges={{icon='circle',spell_icon=-1}}}", "{badges={{icon='circle',spell_icon=65536}}}",
+        "{badges={{icon='circle',spell_icon=1.5}}}", "{badges={{icon='circle',spell_icon='1'}}}",
+        "{badges={{icon='eye'},{icon='eye'},{icon='eye'},{icon='eye'},{icon='eye'},"
+                   "{icon='eye'},{icon='eye'},{icon='eye'},{icon='eye'}}}",
+        "setmetatable({}, {__index=function() error('must not run') end})",
+        "{health=setmetatable({value=50}, {__index=function() error('must not run') end})}",
+        "{badges=setmetatable({}, {__len=function() error('must not run') end})}",
+        "{badges={setmetatable({icon='eye'}, {__index=function() error('must not run') end})}}"
+    }) {
+        CAPTURE(expression);
+        Host h;
+        auto& c = *h.world.conn;
+        h.write("bad_plate.lua", "require('hailstone').hooks{nameplate_style=function() return " + expression + " end}");
+        REQUIRE(h.scripts->run("bad_plate", {}));
+        h.scripts->pulse();
+        CHECK_FALSE(h.chain.nameplate_style(c, c.world().spawns.at(10), {}));
+        CHECK(h.scripts->running("bad_plate")); // invalid data is ignored; no metamethod runs
+    }
+}
+
+TEST_CASE("Lua plugin: nameplate context only exposes known resources and active observed casts") {
+    Host h;
+    auto& c = *h.world.conn;
+    auto& group = net::GameConnectionTestAccess::group(c);
+    group.mana_percent[12] = 37;
+    group.endurance_percent[12] = 65;
+    auto& spells = net::GameConnectionTestAccess::spells(c);
+    spells.others[12] = {200, net::GameConnection::now_ms(), 60000};
+    h.write("known_plate.lua", R"lua(
+require('hailstone').hooks{nameplate_style=function(s,c)
+  if s.id == 12 then
+    assert(c.in_group and not c.self and not c.target)
+    assert(c.mana_percent == 37 and c.endurance_percent == 65)
+    assert(c.casting.spell_id == 200 and c.casting.name == 'Minor Healing')
+    assert(c.casting.duration_ms == 60000 and c.casting.elapsed_ms >= 0)
+    return {mana={value=c.mana_percent},cast={value=50,text=c.casting.name}}
+  end
+  assert(c.mana_percent == nil and c.endurance_percent == nil and c.casting == nil)
+  return {hide=true}
+end}
+)lua");
+    REQUIRE(h.scripts->run("known_plate", {}));
+    h.scripts->pulse();
+    auto p = h.chain.nameplate_style(c, c.world().spawns.at(12), {});
+    REQUIRE(p);
+    REQUIRE(p->mana);
+    CHECK(p->mana->value == 37.0f);
+    REQUIRE(p->cast);
+    CHECK(p->cast->text == "Minor Healing");
+    auto absent = h.chain.nameplate_style(c, c.world().spawns.at(10), {});
+    REQUIRE(absent);
+    CHECK(absent->hide);
+}
+
+TEST_CASE("Lua plugin: presentation API 2 validates structural skins and explicit manual interaction") {
+    Host h;
+    h.write("crest_skin.lua", R"lua(
+local hs=require('hailstone')
+assert(hs.nameplate_api_version == 2)
+hs.hooks{nameplate_style=function()
+  return {frame_style='runic',texture='segments',target_style='chevrons',badge_position='left',
+          badge_scale=2.5,cast_gap=24,cast_width=600,health_text_align='left',cast_text_align='right',
+          through_walls=true,clickable=false}
+end}
+)lua");
+    REQUIRE(h.scripts->run("crest_skin", {}));
+    h.scripts->pulse();
+    const auto& c = *h.world.conn;
+    const auto p = h.chain.nameplate_style(c, c.world().spawns.at(10), {});
+    REQUIRE(p);
+    CHECK(p->frame_style == "runic");
+    CHECK(p->texture == "segments");
+    CHECK(p->target_style == "chevrons");
+    CHECK(p->badge_position == "left");
+    CHECK(p->badge_scale == 2.5f);
+    CHECK(p->cast_gap == 24.0f);
+    CHECK(p->cast_width == 600.0f);
+    CHECK(p->health_text_align == "left");
+    CHECK(p->cast_text_align == "right");
+    CHECK(p->through_walls);
+    CHECK_FALSE(p->clickable);
+    h.scripts->stop("crest_skin");
+    h.write("crest_defaults.lua", "require('hailstone').hooks{nameplate_style=function() return {} end}");
+    REQUIRE(h.scripts->run("crest_defaults", {}));
+    h.scripts->pulse();
+    const auto defaults = h.chain.nameplate_style(c, c.world().spawns.at(10), {});
+    REQUIRE(defaults);
+    CHECK_FALSE(defaults->through_walls);
+    CHECK(defaults->clickable);
+    CHECK(defaults->frame_style == "solid");
+}
+
+TEST_CASE("Lua plugin: nameplate presentation needs read UI and extension capabilities") {
+    for (const std::uint32_t caps : std::array<std::uint32_t, 3>{plugin::kCapExtend, plugin::kCapExtend | plugin::kCapRead,
+                                                             plugin::kCapExtend | plugin::kCapUi}) {
+        Host h;
+        h.allow(caps);
+        h.write("limited_plate.lua", "hailstone.hooks{nameplate_style=function() return {hide=true} end}");
+        REQUIRE(h.scripts->run("limited_plate", {}));
+        h.scripts->pulse();
+        const auto& c = *h.world.conn;
+        CHECK_FALSE(h.chain.nameplate_style(c, c.world().spawns.at(10), {}));
+    }
+}
+
+TEST_CASE("Lua plugin: own nameplate context uses real vitals including an authoritative zero") {
+    Host h;
+    auto& c = *h.world.conn;
+    auto& status = net::GameConnectionTestAccess::status(c);
+    status.mana = 0;
+    auto& cast = net::GameConnectionTestAccess::spells(c).casting;
+    cast.spell = 200;
+    cast.cast_time = 60000;
+    cast.eta_ms = net::GameConnection::now_ms() + cast.cast_time;
+    h.write("own_plate.lua", R"lua(
+hailstone.hooks{nameplate_style=function(s,c)
+  assert(c.self and c.in_group and not c.target)
+  assert(c.hp_percent == 75 and c.mana_percent == 0 and c.endurance_percent == 50)
+  assert(c.casting.spell_id == 200 and c.casting.duration_ms == 60000)
+  return {health={value=c.hp_percent},mana={value=c.mana_percent}}
+end}
+)lua");
+    REQUIRE(h.scripts->run("own_plate", {}));
+    h.scripts->pulse();
+    auto p = h.chain.nameplate_style(c, c.world().spawns.at(1), {});
+    REQUIRE(p);
+    REQUIRE(p->mana);
+    CHECK(p->mana->value == 0.0f);
+}
+
+TEST_CASE("Lua plugin: a removed actor cannot leave resources casts or buffs on a reused spawn id") {
+    Host h;
+    auto& c = *h.world.conn;
+    auto& group = net::GameConnectionTestAccess::group(c);
+    auto& spells = net::GameConnectionTestAccess::spells(c);
+    group.mana_percent[12] = 37;
+    group.endurance_percent[12] = 65;
+    spells.others[12] = {200, net::GameConnection::now_ms(), 60000};
+    spells.target_buffs_entity = 12;
+    game::BuffSlot buff;
+    buff.spell = 200;
+    spells.target_buffs.emplace_back(0, buff);
+    c.receive_zone_packet_for_test(net::encode(net::AggroTargetInfo{0, 12}));
+    net::AggroUpdate update;
+    update.entries = {{net::kAggroPlayer, 75}};
+    c.receive_zone_packet_for_test(net::encode(update));
+    c.receive_zone_packet_for_test(net::encode_delete_spawn(12));
+    CHECK_FALSE(group.mana_percent.contains(12));
+    CHECK_FALSE(group.endurance_percent.contains(12));
+    CHECK_FALSE(spells.others.contains(12));
+    CHECK(spells.target_buffs.empty());
+    CHECK(spells.target_buffs_entity == 0);
+    CHECK_FALSE(c.aggro().received[net::kAggroPlayer]);
+    h.world.add(12, "Replacement", false, 50, {0, 0, 0});
+    h.write("reused_plate.lua", R"lua(
+hailstone.hooks{nameplate_style=function(s,c)
+  assert(c.mana_percent == nil and c.endurance_percent == nil and c.casting == nil and c.aggro_percent == nil)
+  assert(not mq.TLO.Spawn(s.id).BuffsPopulated())
+  return {name='safe'}
+end}
+)lua");
+    REQUIRE(h.scripts->run("reused_plate", {}));
+    h.scripts->pulse();
+    CHECK(h.chain.nameplate_style(c, c.world().spawns.at(12), {}));
+}
+
+TEST_CASE("Lua plugin: nameplate aggro distinguishes authoritative zero and target changes") {
+    Host h;
+    auto& c = *h.world.conn;
+    h.write("aggro_plate.lua", R"lua(
+hailstone.hooks{nameplate_style=function(s,c)
+  return {subtitle=c.aggro_percent == nil and 'unknown' or tostring(c.aggro_percent)}
+end}
+)lua");
+    REQUIRE(h.scripts->run("aggro_plate", {}));
+    h.scripts->pulse();
+    const auto& rat = c.world().spawns.at(10);
+    const auto& fippy = c.world().spawns.at(11);
+    auto subtitle = [&](const game::Spawn& spawn) {
+        auto p = h.chain.nameplate_style(c, spawn, {});
+        REQUIRE(p);
+        REQUIRE(p->subtitle);
+        return *p->subtitle;
+    };
+    CHECK(subtitle(rat) == "unknown");
+    c.receive_zone_packet_for_test(net::encode(net::AggroTargetInfo{0, 10}));
+    CHECK(subtitle(rat) == "unknown");
+    net::AggroUpdate update;
+    update.entries = {{net::kAggroPlayer, 75}};
+    c.receive_zone_packet_for_test(net::encode(update));
+    CHECK(subtitle(rat) == "75.0");
+    CHECK(subtitle(fippy) == "unknown");
+    // A new target's target-info precedes its own resource update. The old 75 must never appear there.
+    c.receive_zone_packet_for_test(net::encode(net::AggroTargetInfo{0, 11}));
+    CHECK(subtitle(fippy) == "unknown");
+    CHECK(subtitle(rat) == "unknown");
+    update.entries = {{net::kAggroPlayer, 0}};
+    c.receive_zone_packet_for_test(net::encode(update));
+    CHECK(subtitle(fippy) == "0.0");
+    c.receive_zone_packet_for_test(net::encode(net::AggroTargetInfo{0, 11}));
+    CHECK(subtitle(fippy) == "0.0"); // repeat target info keeps a valid reading
+    c.receive_zone_packet_for_test(net::encode(net::AggroTargetInfo{0, 0}));
+    CHECK(subtitle(fippy) == "unknown");
+}
+
+TEST_CASE("Lua plugin: a borrowed nameplate spawn table cannot poison the next refill") {
+    Host h;
+    h.write("poison_plate.lua", R"lua(
+hailstone.hooks{nameplate_style=function(s,c)
+  setmetatable(s,{__newindex=function() error('must not run') end})
+  s.name=nil
+  return {name='safe'}
+end}
+)lua");
+    REQUIRE(h.scripts->run("poison_plate", {}));
+    h.scripts->pulse();
+    const auto& c = *h.world.conn;
+    CHECK(h.chain.nameplate_style(c, c.world().spawns.at(10), {}));
+    CHECK(h.chain.nameplate_style(c, c.world().spawns.at(12), {}));
+    CHECK(h.scripts->running("poison_plate"));
 }
 
 TEST_CASE("Lua plugin: the hailstone module's extension, packets, UI and readers; it stays after its main chunk") {

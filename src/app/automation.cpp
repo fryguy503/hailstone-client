@@ -229,6 +229,10 @@ void Automation::set_addon_ceilings(std::vector<plugin::Ceiling> ceilings) {
     impl_->recheck();
 }
 
+void Automation::refresh_managed_addons() {
+    impl_->scripts->set_managed_addons(managed_addon_scripts(impl_->env.data_dir));
+}
+
 plugin::Hooks& Automation::hooks() { return impl_->hooks; }
 std::shared_ptr<game::ExtensionChain> Automation::extensions() { return impl_->extensions; }
 plugin::UiBridge& Automation::plugin_ui() { return impl_->plugin_ui; }

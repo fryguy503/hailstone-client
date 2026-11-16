@@ -449,9 +449,10 @@ end
 local function offerCard(o, s, bh)
   ui.Dummy(0, 4 * s)
   P.Heading(string.format("%s %s", o.name, o.version))
-  P.Muted(string.format("A %s%s, from %s", o.kind, o.author ~= "" and (" by " .. o.author) or "", o.source))
+  P.Muted(string.format("A %s%s, from %s", o.autoload and "managed add-on" or o.kind, o.author ~= "" and (" by " .. o.author) or "", o.source))
   ui.PushTextWrapPos(0)
   if o.description ~= "" then ui.TextWrapped(o.description) end
+  if o.autoload then ui.TextWrapped("Starts automatically when enabled. Manage it from My add-ons.") end
   if o.installedVersion ~= "" then P.Faint("Installed now: " .. o.installedVersion) end
   if o.kind ~= "tool" then
     ui.Text("It asks to:")
@@ -482,9 +483,9 @@ local function offerCard(o, s, bh)
   P.Tip(o.page)
 end
 
-local function addonRow(a, r, s)
+local function addonRow(a, r, s, busy)
   ui.PushID(r.group .. ":" .. r.name)
-  local label = r.name .. (r.version ~= "" and (" " .. r.version) or "") .. "  \194\183  " .. r.kind
+  local label = r.name .. (r.version ~= "" and (" " .. r.version) or "") .. "  \194\183  " .. (r.managed and "add-on" or r.kind)
   if r.state ~= "" and r.state ~= "uptodate" and r.state ~= "idle" then label = label .. "  \194\183  " .. r.state end
   if ui.TreeNode(label .. "##row") then
     ui.PushTextWrapPos(0)
@@ -511,6 +512,13 @@ local function addonRow(a, r, s)
       ui.SameLine()
     end
     if r.group == "installed" then
+      if r.managed then
+        ui.BeginDisabled(busy == true)
+        local enabled, changedEnabled = ui.Checkbox("Enabled", r.enabled)
+        if changedEnabled then eq.LoginDo("addonEnabled", r.name, enabled) end
+        ui.EndDisabled()
+        ui.TextDisabled("Starts automatically when this server allows it.")
+      end
       local v, changed = ui.Checkbox("Update by itself", r.autoUpdate)
       if changed then eq.LoginDo("addonAuto", r.name, v) end
       P.Tip("Install newer versions at start when they ask for nothing more")
@@ -646,7 +654,7 @@ local function storeTab(a, s, lh)
   end
 end
 
-local function mineTab(a, s, lh)
+local function mineTab(a, s, lh, busy)
   local groups = ADDON_GROUPS
   groups[3][2] = a.server ~= "" and ("From " .. a.server) or "From this server"
   ui.BeginChild("##addonlist", 0, 19 * lh, false)
@@ -660,7 +668,7 @@ local function mineTab(a, s, lh)
           first = false
         end
         any = true
-        addonRow(a, r, s)
+        addonRow(a, r, s, busy)
       end
     end
   end
@@ -694,7 +702,7 @@ local function addonsCard(view, s, bh)
     for _, r in ipairs(a.rows) do if r.group == "installed" then mine = mine + 1 end end
     local label = mine > 0 and string.format("My add-ons (%d)###mine", mine) or "My add-ons###mine"
     if ui.BeginTabItem(label, addonTab == "mine" and ui.TabItemFlags.SetSelected or 0) then
-      mineTab(a, s, lh)
+      mineTab(a, s, lh, view.busy)
       ui.EndTabItem()
     end
     ui.EndTabBar()

@@ -97,6 +97,7 @@ public:
     // The installed add-ons' capability ceilings (docs/addons.md, app/addon_install.h addon_ceilings): what runs is
     // checked again against them.
     void set_addon_ceilings(std::vector<plugin::Ceiling> ceilings);
+    void refresh_managed_addons();
     // The server's compiled plugins waiting for the player's word (plugin/consent.h, docs/plugins.md "The server's
     // compiled plugins ask first"), with the server's name; nullopt none. The UI packs show it (eq.PluginConsent),
     // else imgui() does.

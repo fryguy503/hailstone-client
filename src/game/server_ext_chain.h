@@ -89,6 +89,8 @@ public:
     std::optional<std::string> merchant_level(const net::GameConnection& c, const net::Item& item) const override;
     void label_text(const net::GameConnection& c, int id, std::string& text) const override;
     void nameplate_text(const net::GameConnection& c, const Spawn& spawn, std::string& text) const override;
+    std::optional<NameplatePresentation> nameplate_style(const net::GameConnection& c, const Spawn& spawn,
+                                                        const NameplateContext& context) const override;
     bool hide_xtarget_slot(const net::GameConnection& c, int slot) const override;
 
 private:

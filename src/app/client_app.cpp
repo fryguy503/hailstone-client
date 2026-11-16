@@ -779,7 +779,7 @@ int ClientApp::run() {
                 if (nav_ && nav_->overlay())
                     nav_->draw_overlay(ImGui::GetBackgroundDrawList(), plain_vp,
                                        glm::vec4(view_area_.x, view_area_.y, view_area_.w, view_area_.h));
-                draw_nameplates(*f, plain_vp, f->extent, lit.far_plane);
+                draw_nameplates(*f, plain_vp, vp, f->extent, lit.far_plane);
                 lap.mark("nameplates");
                 draw_text_overlay();
                 lap.mark("text overlay");

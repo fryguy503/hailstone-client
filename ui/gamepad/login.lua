@@ -719,6 +719,11 @@ local function addonActions(r, back)
         or r.state == "failed" and "Try again" or "Update"
       items[#items + 1] = { label = what, sub = r.stateText, fn = function() eq.LoginDo("addonUpdate", r.name) end }
     end
+    if r.managed then
+      items[#items + 1] = { label = r.enabled and "Disable add-on" or "Enable add-on",
+        sub = "Runs automatically when enabled and allowed by this server",
+        fn = function() eq.LoginDo("addonEnabled", r.name, not r.enabled) end }
+    end
     items[#items + 1] = { label = r.autoUpdate and "Stop updating by itself" or "Update by itself",
       sub = "Newer versions that ask for nothing more install at start",
       fn = function() eq.LoginDo("addonAuto", r.name, not r.autoUpdate) end }
@@ -771,7 +776,7 @@ local function addonsPage(v, x0, y, x1, w)
   local o = a.offer
   if o then
     y = heading(o.name .. " " .. o.version, x0, y, w)
-    y = lines("A " .. o.kind .. (o.author ~= "" and (" by " .. o.author) or "") .. ", from " .. o.source
+    y = lines("A " .. (o.autoload and "managed add-on" or o.kind) .. (o.author ~= "" and (" by " .. o.author) or "") .. ", from " .. o.source
       .. (o.installedVersion ~= "" and ("  ·  installed now: " .. o.installedVersion) or ""), x0, y, x1)
     y = lines(o.description, x0, y, x1)
     if o.kind ~= "tool" then y = lines("It asks to: " .. table.concat(o.caps, "; ") .. ".", x0, y, x1, false, 4) end
@@ -873,7 +878,7 @@ local function addonsPage(v, x0, y, x1, w)
       local pw = P.pill(rx1 - px(16), mid, group[r.group] or r.group, r.group == "server" and C.endurance or C.accent, 1)
       local right = rx1 - px(32) - pw
       T.textIn(rx0 + px(18), mid - th, right, mid, T.fit(r.name .. (r.version ~= "" and ("  " .. r.version) or "")
-        .. "  ·  " .. r.kind, right - rx0 - px(18)), C.text, 0)
+        .. "  ·  " .. (r.managed and "add-on" or r.kind), right - rx0 - px(18)), C.text, 0)
       T.unfont()
       T.font(17)
       local sub = r.stateText ~= "" and r.stateText or r.note ~= "" and r.note or r.description

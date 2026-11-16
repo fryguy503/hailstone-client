@@ -226,6 +226,7 @@ void emit_addons(Out& o, const ui::AddonsView& a) {
         o.str("key", of.key);
         o.str("installedVersion", of.installed_version);
         o.boolean("older", of.older);
+        o.boolean("autoload", of.autoload);
         o.str("blocked", of.blocked);
         emit_strings(o, "caps", of.caps);
         o.close("offer");
@@ -251,6 +252,8 @@ void emit_addons(Out& o, const ui::AddonsView& a) {
         o.str("note", r.note);
         o.str("consent", r.consent);
         o.boolean("autoUpdate", r.auto_update);
+        o.boolean("managed", r.managed);
+        o.boolean("enabled", r.enabled);
         o.boolean("signed", r.signed_);
         o.boolean("canUpdate", r.can_update);
         o.boolean("canRemove", r.can_remove);
@@ -586,7 +589,7 @@ int LoginDo(lua_State* L) {
                                                              "addonAuto",    "addonFolder",  "addonPage",
                                                              "addonRevoke",  "addonAskAgain", "addonSuggestLook",
                                                              "addonSuggestLater", "addonSuggestNever",
-                                                             "addonBrowse",  "addonStoreLook", "addonStart"};
+                                                             "addonBrowse",  "addonStoreLook", "addonStart", "addonEnabled"};
         if (std::find(std::begin(kAddonActions), std::end(kAddonActions), what) == std::end(kAddonActions))
             return luaL_error(L, "eq.LoginDo: no action %s", lua_tostring(L, 1));
         if (what != "addonBrowse") luaL_optstring(L, 2, ""); // (addonBrowse's is a flag: any value)
@@ -619,6 +622,12 @@ int LoginDo(lua_State* L) {
         } else if (what == "addonRemove") {
             ok = row && row->group == "installed" && row->can_remove && !v.busy;
             if (ok) action = A::AddonRemove;
+        } else if (what == "addonEnabled") {
+            ok = row && row->group == "installed" && row->managed && !v.busy && lua_type(L, 3) == LUA_TBOOLEAN;
+            if (ok) {
+                a.choice_on = lua_toboolean(L, 3) != 0;
+                action = A::AddonEnabled;
+            }
         } else if (what == "addonAuto") {
             ok = row && row->group == "installed";
             if (ok) {

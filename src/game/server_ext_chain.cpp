@@ -283,6 +283,13 @@ void ExtensionChain::nameplate_text(const net::GameConnection& c, const Spawn& s
     each(c, [&](const ServerExtension& e) { return e.nameplate_text(c, spawn, text), false; });
 }
 
+std::optional<NameplatePresentation> ExtensionChain::nameplate_style(const net::GameConnection& c, const Spawn& spawn,
+                                                                   const NameplateContext& context) const {
+    std::optional<NameplatePresentation> out;
+    each(c, [&](const ServerExtension& e) { return (out = e.nameplate_style(c, spawn, context)).has_value(); });
+    return out;
+}
+
 bool ExtensionChain::hide_xtarget_slot(const net::GameConnection& c, int slot) const {
     return each(c, [&](const ServerExtension& e) { return e.hide_xtarget_slot(c, slot); });
 }

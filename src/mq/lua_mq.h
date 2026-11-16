@@ -39,6 +39,15 @@ namespace hailstone::plugin { class UiBridge; class WebAccess; }
 
 namespace hailstone::mq {
 
+// An installed, explicitly managed Lua add-on. The installer supplies its exact entry and recorded bytes;
+// a disabled or unverified record remains present so an ordinary autorun cannot bypass activation.
+struct ManagedScript {
+    std::string name;
+    std::filesystem::path entry;
+    Sha256Digest hash{}, revision{};
+    bool enabled = false, verified = false;
+};
+
 struct ScriptEnv {
     plugin::Hooks* hooks = nullptr;
     const plugin::Policy* policy = nullptr;
@@ -170,6 +179,7 @@ public:
     // and starts the server's scripts its hailstone.cfg names ([scripts] run) and the allowed ones `autoload` names
     // (hailstone.ini scripts.autoload) or the character's autorun list does.
     void policy_changed(const std::vector<std::string>& autoload = {});
+    void set_managed_addons(std::vector<ManagedScript> addons);
     // The server's scripts/ folder (servers/<profile>/scripts), looked in before env.dirs; empty for none.
     void set_server_dir(const std::filesystem::path& dir);
 

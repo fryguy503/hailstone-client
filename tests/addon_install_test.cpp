@@ -56,6 +56,59 @@ void install_script(const fs::path& dir, const std::string& name, const std::str
 
 } // namespace
 
+TEST_CASE("addon_install: managed activation persists independently of updates and verifies all installed files") {
+    test::ScratchDir dir("addon_managed");
+    auto m = manifest("managed", AddonKind::Script);
+    m.autoload = true;
+    std::string why;
+    auto files = unpack(dir.path(), m, {{"init.lua", "print('managed')\n"}, {"helper.lua", "return 1\n"}}, &why);
+    REQUIRE_MESSAGE(files, why);
+    auto a = record(m, *files);
+    a.autoload = true;
+    a.enabled = true;
+    REQUIRE_MESSAGE(apply_addon(dir.path(), a, &why), why);
+    auto specs = managed_addon_scripts(dir.path());
+    REQUIRE(specs.size() == 1);
+    CHECK(specs[0].enabled);
+    CHECK(specs[0].verified);
+    CHECK(specs[0].hash == sha256(std::string_view("print('managed')\n")));
+    CHECK(set_addon_enabled(dir.path(), "MANAGED", false));
+    CHECK_FALSE(managed_addon_scripts(dir.path())[0].enabled);
+    put_file(addon_folder(dir.path(), AddonKind::Script, "managed") / "helper.lua", "return 2\n");
+    CHECK_FALSE(managed_addon_scripts(dir.path())[0].verified);
+    m = manifest("managed", AddonKind::Script, "1.0.1");
+    m.autoload = true;
+    files = unpack(dir.path(), m, {{"init.lua", "print('managed v2')\n"}}, &why);
+    REQUIRE(files);
+    a = record(m, *files); a.autoload = true; a.enabled = true;
+    REQUIRE(apply_addon(dir.path(), a, &why));
+    specs = managed_addon_scripts(dir.path());
+    REQUIRE(specs.size() == 1);
+    CHECK_FALSE(specs[0].enabled); // a download never reverses the user's disabled switch
+    CHECK(specs[0].verified);
+    CHECK(set_addon_enabled(dir.path(), "managed", true));
+    CHECK(managed_addon_scripts(dir.path())[0].enabled);
+    CHECK_FALSE(set_addon_enabled(dir.path(), "missing", true));
+    REQUIRE(remove_addon(dir.path(), "managed", &why));
+    CHECK(managed_addon_scripts(dir.path()).empty());
+}
+
+TEST_CASE("addon_install: an update that newly opts into managed loading requires player activation") {
+    test::ScratchDir dir("addon_managed_optin");
+    install_script(dir.path(), "managed", "1.0.0", {{"init.lua", "print('ordinary')\n"}});
+    auto m = manifest("managed", AddonKind::Script, "1.0.1");
+    m.autoload = true;
+    std::string why;
+    auto files = unpack(dir.path(), m, {{"init.lua", "print('managed')\n"}}, &why);
+    REQUIRE(files);
+    auto a = record(m, *files); a.autoload = true; a.enabled = true;
+    REQUIRE(apply_addon(dir.path(), a, &why));
+    const auto specs = managed_addon_scripts(dir.path());
+    REQUIRE(specs.size() == 1);
+    CHECK_FALSE(specs[0].enabled);
+    CHECK(set_addon_enabled(dir.path(), "managed", true));
+}
+
 TEST_CASE("addon_install: a script's package, checked and unpacked") {
     test::ScratchDir dir("addon_script");
     const AddonManifest m = manifest("autoloot", AddonKind::Script);

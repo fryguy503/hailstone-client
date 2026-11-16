@@ -994,6 +994,7 @@ public:
     struct Aggro {
         std::uint32_t lock_id = 0, target_id = 0, secondary_id = 0;
         std::array<std::uint16_t, kAggroTypes> pct{};
+        std::array<bool, kAggroTypes> received{}; // a default zero is not a server-supplied reading
         bool window_open = false; // AggroMeterWnd (shown once the server sends the meter)
     };
     const Aggro& aggro() const { return aggro_; }

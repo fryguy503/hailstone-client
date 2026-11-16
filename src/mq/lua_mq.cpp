@@ -1056,6 +1056,13 @@ void search_module(const Script& s, std::string_view given, ModuleFile& out) {
                     continue;
                 auto text = read_file(cand);
                 if (!text) continue;
+                for (const auto& addon : s.host->managed) {
+                    std::error_code entry_error;
+                    if (fs::equivalent(cand, addon.entry, entry_error)) {
+                        out.msg = "managed add-on '" + addon.name + "'s entry cannot be loaded as another script's module";
+                        return;
+                    }
+                }
                 Sha256Digest h = sha256(*text);
                 const std::uint32_t module_caps =
                     s.host->env.policy ? s.host->env.policy->caps(plugin::FileKind::Script, h) : 0;
@@ -1525,6 +1532,17 @@ bool ScriptHost::run(const std::string& name, const std::vector<std::string>& ar
     auto text = read_file(*entry);
     if (!text) return refuse("cannot read " + entry->string());
     Sha256Digest hash = sha256(*text);
+    const ManagedScript* managed = nullptr;
+    for (const auto& addon : m.managed) {
+        std::error_code ec;
+        if (fs::equivalent(*entry, addon.entry, ec)) { managed = &addon; break; }
+    }
+    // Activation follows the installed file, not its spelling in /lua run. Paths such as addon/init.lua,
+    // dotted aliases and in-folder links must never bypass disabled state or create a second owner of its UI.
+    if (managed && (!managed->enabled || !managed->verified || hash != managed->hash))
+        return refuse(key + ": the installed add-on is disabled or its installed files do not verify");
+    if (managed && key != managed->name)
+        return refuse(key + ": use the installed add-on's name " + managed->name);
     if (!m.env.policy) return refuse("scripts are off");
     std::uint32_t caps = m.env.policy->caps(plugin::FileKind::Script, hash);
     if (caps == 0) return refuse(std::format("{} may not run: {}", key, m.env.policy->refusal(plugin::FileKind::Script)));
@@ -1543,6 +1561,8 @@ bool ScriptHost::run(const std::string& name, const std::vector<std::string>& ar
     sc.entry = *entry;
     sc.root = entry->parent_path();
     sc.hash = hash;
+    sc.managed = managed != nullptr;
+    if (managed) sc.managed_revision = managed->revision;
     sc.caps = caps;
     sc.args = args;
     sc.owner = m.env.hooks->new_guest("lua:" + key);
@@ -1870,6 +1890,49 @@ void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
     // The player's own the settings and the character's autorun list name.
     m.start_allowed(autoload);
     m.start_allowed(m.autorun);
+    m.start_managed();
+}
+
+void ScriptHost::Impl::start_managed() {
+    if (!env.policy || !env.policy->received()) return;
+    for (const auto& addon : managed) {
+        if (!addon.enabled || !addon.verified || self->running(addon.name)) continue;
+        auto entry = resolve(addon.name);
+        std::error_code ec;
+        if (!entry || !fs::equivalent(*entry, addon.entry, ec)) continue; // never start a shadowing server/manual file
+        const auto hash = file_hash(*entry);
+        if (!hash || *hash != addon.hash || env.policy->caps(plugin::FileKind::Script, *hash) == 0) continue;
+        self->run(addon.name, {});
+    }
+}
+
+void ScriptHost::set_managed_addons(std::vector<ManagedScript> addons) {
+    Impl& m = *impl_;
+    for (auto& addon : addons) addon.name = lower(addon.name);
+    // No unverified manifest or changed file can turn into a hand-installed script through this path.
+    for (auto& sp : m.scripts) {
+        Script& s = *sp;
+        const auto found = std::find_if(addons.begin(), addons.end(), [&](const ManagedScript& a) {
+            std::error_code path_error;
+            return fs::equivalent(s.entry, a.entry, path_error);
+        });
+        std::error_code ec;
+        const bool owns_entry = found != addons.end() && fs::equivalent(s.entry, found->entry, ec);
+        if (s.managed && (found == addons.end() || !owns_entry || !found->enabled || !found->verified ||
+                          s.hash != found->hash || s.managed_revision != found->revision)) {
+            if (!s.stop_requested) m.end(s, "managed add-on deactivated or changed");
+        } else if (owns_entry) {
+            if (s.name != found->name || !found->enabled || !found->verified || s.hash != found->hash) {
+                if (!s.stop_requested) m.end(s, "managed add-on is disabled or modified");
+            } else {
+                s.managed = true;
+                s.managed_revision = found->revision;
+            }
+        }
+    }
+    m.managed = std::move(addons);
+    m.reap();
+    m.start_managed();
 }
 
 void ScriptHost::Impl::start_allowed(const std::vector<std::string>& names) {

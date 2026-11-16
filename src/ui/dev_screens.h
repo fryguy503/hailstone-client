@@ -81,6 +81,7 @@ struct AddonOfferView {
     bool older = false;            // older than installed_version: AddonInstall needs choice_on (the player's yes)
     std::string blocked;           // why it cannot be installed ("" it can)
     std::vector<std::string> caps; // what it asks to do, in plain words
+    bool autoload = false;        // managed Lua addon: activate automatically when the rules allow it
 };
 // A suggested add-on (app/addon_suggest.h, docs/addons.md "Suggested add-ons"): the picked server has an add-on of
 // its own the player does not have.
@@ -113,6 +114,8 @@ struct AddonRowView {
     bool can_remove = false;  // installed and not busy (the server's own never)
     bool can_start = false;   // an installed tool whose program is there: AddonStart starts it
     std::string folder;       // its folder or file, to open
+    bool managed = false;    // installed Lua addon whose lifecycle the add-on manager owns
+    bool enabled = false;    // the player's activation choice, separate from automatic updates
 };
 // An add-on of the add-on index, in the store (docs/addons.md "Finding add-ons"): what its manifest says, and what the
 // player can do with it.
@@ -222,7 +225,7 @@ enum class LoginAction {
     UpdateDownload, UpdateRestart, UpdateSkip, UpdateNotes, OpenProject,
     AddonInspect, AddonInstall, AddonCancel, AddonUpdate, AddonRemove, AddonAuto, AddonFolder, AddonPage, AddonCheck,
     AddonRevoke, AddonAskAgain, AddonSuggestLook, AddonSuggestLater, AddonSuggestNever, AddonBrowse, AddonStoreLook,
-    AddonStart, ResumeToken
+    AddonStart, ResumeToken, AddonEnabled
 };
 
 // A row of the login screen's Characters list: a character one of the server's accounts was seen to have.

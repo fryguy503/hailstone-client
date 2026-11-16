@@ -1862,7 +1862,48 @@ The plates are a 2D overlay. Each name is drawn through a pipeline of ours (`app
 
 Where geometry hides a name its pixels are dropped; there is no ghost in the client. The viewer's `--plate-test-ghost A` can still draw the test names behind the scene with an alpha A (the shader's `extra.x`). The overlap fade is the option `plate_overlap_fade` (Options > Display "Fade Overlapping Names", `display.plate_overlap_fade`, default on); off, every name is drawn at full alpha, still nearer over farther.
 
-Every name stays at its natural projected head position: 1.5 units above the top of its model, the plate's bottom edge there, so a larger name or more lines under it grow upward, off the head. A rider's head is measured from where it is drawn, its model's top in its mount's seat bone frame (`ActorRenderer::rider_top`), not from its spawn's place on the ground. There is no stacking, distance fade, height timer or runtime tuning command in this version.
+Ordinary names stay at their natural projected head position: 1.5 units above the top of the model, the plate's bottom edge there, so a larger name or more lines grow upward, off the head. A rider's head is measured from where it is drawn, its model's top in its mount's seat bone frame (`ActorRenderer::rider_top`), not from its spawn's place on the ground.
+
+Lua add-ons can replace a plate's appearance with `nameplate_style` (presentation API 2, docs/plugins.md). The
+client still owns every visibility switch, concealed-spawn exclusion, body-type exclusion, head projection, range,
+viewport clip and scene-depth test. Health, mana and cast bars, text and the twelve generic vector badge symbols
+all draw inside the same depth callback; there is no separate foreground overlay. A badge may select a local spell
+icon from the player's game folder; unavailable art uses its vector symbol, and no game artwork is shipped.
+Unknown resources have no bar
+unless an add-on explicitly supplies one. Replacement names and subtitles clip with an ellipsis to the selected
+width, badges wrap within it, and the entire resulting box drives overlap fading. Names can be above, inside or
+below the bars; an inside name reserves space for the HP text. Structural frames include minimal tracks, solid
+casings, raised bevels, rounded dark glass and original cut-metal ornaments. Fills can be flat, shaded, glossy or
+segmented. Target accents include arrows, paired chevrons, corner brackets and a soft outline glow. Badge rows can
+sit above or below, or in a column at either side; a separate cast width and gap allow detached cast layouts. Every
+decoration contributes to the measured bounds. No reference artwork or game textures are copied into these skins.
+
+An add-on may opt into upward stacking, with a configurable gap and maximum displacement (positive `offset_y`
+also raises the whole plate). The target stays pinned. Other plates are considered nearest first, with spawn ID
+breaking equal-depth ties, and ordinary captions are never displaced. At most 256 replacements stack per frame,
+with 4,096 blocker comparisons per plate; any overlaps remaining at the limits use the existing fade. Depth stays
+the original head depth even after a plate moves. The renderer has 1,024 depth slots, reserves the last for the
+target, and drops excess depth-tested plates instead of drawing them over walls. A replacement explicitly controls
+`through_walls` (default false), including its target: enabling it deliberately bypasses only scene-depth occlusion.
+The ordinary target-through-walls preference still governs ordinary captions. Concealment, show-name, body-type,
+range, frustum and viewport checks apply to either custom display choice.
+
+A missing or failed presentation restores the ordinary caption on the next frame; no hide flag is persisted.
+If the depth pipeline is unavailable, a requested replacement instead falls back to a plain caption only when
+the camera-to-head collision ray is known clear (or the player explicitly enabled target names through walls).
+Unknown or blocked fallback visibility hides that caption. Custom plates default to manual click targeting. A
+short physical left press and release on the same displayed plate selects its spawn; a drag, UI/modal capture,
+camera look or stale entity/frame state cancels. Non-through-wall plates also require a conservative clear camera
+ray through terrain and current doors/objects before clicking, plus a clicked-pixel scene ray against visible posed
+actors and scene meshes. The ray uses the scene's actual viewport/projection and three-unit axial depth margin;
+it does not allow a hidden plate fragment to click through a foreground actor or pillar. The gesture is consumed before normal scene
+picking, so it cannot also give an item, activate a door or attack. Turning clickability off leaves normal world
+picking in place. Scripts receive no ability to synthesize these trusted manual selections.
+
+`cmake --build build --target hailstone_plate_preview` builds an optional offline fixture. Running
+`build/hailstone_plate_preview output.png [font.ttf]` creates a synthetic sheet through the production painter, without game
+assets, a GPU or a server. Headless tests check bar percentages, combined alpha, all vector symbols, layout bounds
+at extreme dimensions, name placements and bounded stacking; this does not establish live depth or gameplay.
 
 How the names' text looks is Hailstone's to choose (the original's name sprites have one fixed font), set in Options > Display "Name Plates" (`game/nameplate_style.h`, hailstone.ini keys `display.plate_*`, kept per character like the other display options). The defaults draw the names as before these options:
 

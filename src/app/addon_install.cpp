@@ -341,6 +341,11 @@ ParsedRegistry parse_registry(const fs::path& file) {
             a.key = hex_decode<32>(rest);
             bad = bad || !a.key;
         } else if (what == "autoupdate") a.auto_update = rest == "1";
+        else if (what == "autoload" || what == "enabled") {
+            if (rest != "0" && rest != "1") bad = true;
+            else if (what == "autoload") a.autoload = rest == "1";
+            else a.enabled = rest == "1";
+        }
         // ("auto", up to 0.7.0-beta, was written as 1 for every install without asking the player: it is read as off)
         else if (what == "author") a.author = std::string(rest);
         else if (what == "description") a.description = std::string(rest);
@@ -417,6 +422,38 @@ std::vector<InstalledAddon> read_installed_addons(const fs::path& data_dir) {
     return read_addon_registry(data_dir).addons;
 }
 
+std::vector<mq::ManagedScript> managed_addon_scripts(const fs::path& data_dir) {
+    std::vector<mq::ManagedScript> out;
+    for (const auto& addon : read_installed_addons(data_dir)) {
+        if (addon.kind != AddonKind::Script || !addon.autoload) continue;
+        mq::ManagedScript script;
+        script.name = lower(addon.name);
+        script.entry = addon_folder(data_dir, addon.kind, addon.name) / "init.lua";
+        script.enabled = addon.enabled;
+        bool have_entry = false;
+        std::string revision = addon.version + "\n" + std::to_string(addon.caps) + "\n";
+        for (const auto& file : addon.files) {
+            if (file.path == "init.lua") { script.hash = file.sha256; have_entry = true; }
+            revision += file.path + " " + to_hex(file.sha256) + "\n";
+        }
+        script.revision = sha256(revision);
+        script.verified = have_entry && modified_addon_files(data_dir, addon).empty();
+        out.push_back(std::move(script));
+    }
+    return out;
+}
+
+bool set_addon_enabled(const fs::path& data_dir, std::string_view name, bool enabled) {
+    auto registry = read_addon_registry(data_dir);
+    if (!registry.writable()) return false;
+    for (auto& addon : registry.addons) {
+        if (!iequal(addon.name, name) || addon.kind != AddonKind::Script || !addon.autoload) continue;
+        addon.enabled = enabled;
+        return write_installed_addons(data_dir, registry.addons);
+    }
+    return false;
+}
+
 namespace {
 std::string registry_text(const std::vector<InstalledAddon>& addons) {
     std::string text = "# The add-ons Hailstone installed (docs/addons.md). Written by the client.\n";
@@ -429,6 +466,8 @@ std::string registry_text(const std::vector<InstalledAddon>& addons) {
         text += "caps " + plugin::caps_text(a.caps) + "\n";
         if (a.key) text += "key " + hex_encode(*a.key) + "\n";
         text += std::string("autoupdate ") + (a.auto_update ? "1" : "0") + "\n";
+        text += std::string("autoload ") + (a.autoload ? "1" : "0") + "\n";
+        text += std::string("enabled ") + (a.enabled ? "1" : "0") + "\n";
         if (!a.author.empty()) text += "author " + a.author + "\n";
         if (!a.description.empty()) text += "description " + a.description + "\n";
         if (!a.notes.empty()) text += "notes " + a.notes + "\n";
@@ -849,7 +888,11 @@ bool apply_addon(const fs::path& data_dir, const InstalledAddon& addon, std::str
     InstalledAddon entry = addon;
     // An update keeps the player's auto-update switch as installed.txt has it now (they may have changed it while
     // the update downloaded).
-    if (old) entry.auto_update = old->auto_update;
+    if (old) {
+        entry.auto_update = old->auto_update;
+        // An update cannot silently activate a formerly ordinary script or undo the player's disabled switch.
+        entry.enabled = entry.autoload && old->autoload && old->enabled;
+    }
     std::erase_if(all, [&](const InstalledAddon& a) { return iequal(a.name, addon.name); });
     all.push_back(std::move(entry));
     std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) { return lower(a.name) < lower(b.name); });

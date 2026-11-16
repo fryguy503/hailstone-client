@@ -11,6 +11,14 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 
 ## 1. Gameplay a player will hit
 
+### Add-on nameplates
+- [x] Installed Lua add-on activation through manifest opt-in and Add-ons enabled controls, preserving capability ceilings, verified source identity, policy gates and unload cleanup.
+
+- [x] Shared Lua UI colour widgets: swatches, normalized RGB editors and hue-wheel pickers, bounded values and curated flags; headless interaction and invalid-argument tests. Live use remains to check.
+- [x] Lua appearance hooks for health, known resources, observed casts and bounded vector badges, with ordinary-plate fallback and host-owned visibility, projection and occlusion.
+- [x] Nameplate API 2: structural frames, glossy/segmented fills, target decorations, side indicators, detached casts and explicit wall/click settings; bounded parser, geometry and manual-gesture tests.
+- [ ] Validate replacement plates live in crowded groups and raids, while zoning, mounting and changing UI scale.
+
 ### Adventures (LDoN)
 - [x] Alt+V and recruiter request/offer windows in both UI packs, entry/completion timers and progress, profile point balances, seven-column theme stats and native leaderboard categories, risk choices and tied ranks; native protocol investigation, unit and mock-server coverage.
 - [ ] Complete an adventure live: request, accept/decline, zone in, objective updates, finish, leave and cross-zone refresh; confirm stats, leaderboard standings and physical controller operation. Remaining protocol ambiguity is in unknowns.md.

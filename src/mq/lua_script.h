@@ -126,6 +126,8 @@ struct ScriptHost::Impl {
     std::vector<std::string> autorun;
     // Starts those of `names` that are not running and the rules allow, quietly (not asked for by a command).
     void start_allowed(const std::vector<std::string>& names);
+    std::vector<ManagedScript> managed;
+    void start_managed();
     // found()'s hashes, by file, kept while the file's size and time stay the same (the window asks each frame).
     struct HashEntry {
         std::uintmax_t size = 0;
@@ -150,6 +152,8 @@ struct Script {
     std::string name;
     fs::path entry, root;
     Sha256Digest hash{};
+    bool managed = false;
+    Sha256Digest managed_revision{};
     std::uint32_t caps = 0;
     lua_State* L = nullptr;
     lua_State* co = nullptr;

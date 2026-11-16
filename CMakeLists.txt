@@ -921,6 +921,22 @@ if(HAILSTONE_BROWSER)
 endif()
 
 # Command-line tools.
+add_executable(hailstone_addon_install_local EXCLUDE_FROM_ALL tools/addon_install_local.cpp ${HAILSTONE_WIN_MANIFEST})
+target_compile_options(hailstone_addon_install_local PRIVATE ${HAILSTONE_WARNINGS})
+target_link_libraries(hailstone_addon_install_local PRIVATE hailstone_engine)
+if(WIN32)
+  add_custom_command(TARGET hailstone_addon_install_local POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:hailstone_addon_install_local> $<TARGET_FILE_DIR:hailstone_addon_install_local>
+    COMMAND_EXPAND_LISTS)
+endif()
+add_executable(hailstone_plate_preview EXCLUDE_FROM_ALL tools/plate_preview.cpp ${HAILSTONE_WIN_MANIFEST})
+target_compile_options(hailstone_plate_preview PRIVATE ${HAILSTONE_WARNINGS})
+target_link_libraries(hailstone_plate_preview PRIVATE hailstone_engine)
+if(WIN32)
+  add_custom_command(TARGET hailstone_plate_preview POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:hailstone_plate_preview> $<TARGET_FILE_DIR:hailstone_plate_preview>
+    COMMAND_EXPAND_LISTS)
+endif()
 set(HAILSTONE_TOOLS pfsdump texdump texpack wlddump florascan chrdump netprobe playprobe eqgdump audiodump hailstone_check hailstone_sign)
 foreach(tool ${HAILSTONE_TOOLS})
   add_executable(${tool} tools/${tool}.cpp ${HAILSTONE_WIN_MANIFEST})
@@ -1226,6 +1242,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/plate_test_test.cpp
     tests/nameplate_overlap_test.cpp
     tests/nameplate_style_test.cpp
+    tests/nameplate_renderer_test.cpp
     tests/spells_test.cpp
     tests/spell_hit_modes_test.cpp
     tests/proc_cast_stage_test.cpp
@@ -1242,6 +1259,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/spell_ui_test.cpp
     tests/lua_gc_test.cpp
     tests/lua_ui_api_test.cpp
+    tests/lua_color_widgets_test.cpp
     tests/lua_ui_modern_windows_test.cpp
     tests/tradeskill_batch_test.cpp
     tests/tradeskill_combine_test.cpp

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "game/tracking.h"
+#include "game/nameplate_presentation.h"
 
 namespace hailstone::net {
 class GameConnection;
@@ -189,6 +190,12 @@ public:
 
     // The text of a world nameplate, after its stock name and marks have been assembled.
     virtual void nameplate_text(const net::GameConnection&, const Spawn&, std::string&) const {}
+
+    // Appearance only, after nameplate_text. No answer keeps the normal world plate.
+    virtual std::optional<NameplatePresentation> nameplate_style(const net::GameConnection&, const Spawn&,
+                                                                const NameplateContext&) const {
+        return std::nullopt;
+    }
 
     // ---- the extended target list (net/game_connection_group.cpp, app/lua_eq_player.cpp) ----
     // True = the slot is left out on this side: no row in the window, not targeted by a click, the slot keys or

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add-ons: managed Lua add-ons can opt into automatic activation after installation, with an Enabled switch independent of updates; their capabilities and installed source remain verified, and disabling removes their UI and renderer hooks
+
+- Lua UI: colour swatches, RGB editors and a hue-wheel picker are available to UI packs and add-ons, with bounded finite RGB values and validated display flags
+- Lua add-ons can replace world nameplates with configurable health, known mana, observed cast bars and vector status badges; the host keeps visibility and scene occlusion, and stopping an add-on restores ordinary nameplates
+- Nameplate API 2 adds structural frame skins, glossy or segmented bars, target chevrons/brackets/glow, side indicators and detached cast bars, with optional through-wall display and guarded manual click targeting
+- Spawn observations: removing an actor clears its resource, cast, target-buff and aggro observations so a reused spawn id cannot inherit the previous actor's readings; a received zero aggro reading is distinguished from an unknown value
+
 - Modern lighting: the sky and the haze behind it are drawn only where the zone leaves the background open, which saves GPU time outdoors
 - Auras window: no longer opens by itself on a character that has never opened it; the EQ menu's Auras opens it
 - Chat: on a new character the game's "Other Chat" is a tab of the main chat window instead of a window of its own, and a chat window or tab you close stays closed after a restart

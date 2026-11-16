@@ -125,6 +125,21 @@ TEST_CASE("addon_source: the GitHub links a player pastes") {
     }
 }
 
+TEST_CASE("addon_manifest: managed Lua activation is an explicit strict script-only opt-in") {
+    const auto ordinary = parse_addon_manifest(script_manifest());
+    REQUIRE(ordinary);
+    CHECK_FALSE(ordinary->autoload);
+    const auto managed = parse_addon_manifest(script_manifest("autoload 1\n"));
+    REQUIRE(managed);
+    CHECK(managed->autoload);
+    CHECK(parse_addon_manifest(script_manifest("autoload 0\n")));
+    for (const auto* bad : {"autoload yes\n", "autoload 2\n", "autoload\n", "autoload 1 0\n", "autoload 1\nautoload 1\n"})
+        CHECK_FALSE(parse_addon_manifest(script_manifest(bad)));
+    auto plugin = script_manifest("autoload 1\n");
+    plugin.replace(plugin.find("kind script"), std::string("kind script").size(), "kind plugin");
+    CHECK_FALSE(parse_addon_manifest(plugin));
+}
+
 TEST_CASE("addon_source: the manifest's addresses, and only GitHub's hosts") {
     auto latest = addon_manifest_urls(*parse_addon_link("owner/repo"));
     REQUIRE(latest.size() == 2);

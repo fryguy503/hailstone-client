@@ -123,7 +123,7 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
     }
 
     AddonManifest m;
-    bool header = false, have_name = false, have_kind = false, have_version = false, have_caps = false;
+    bool header = false, have_name = false, have_kind = false, have_version = false, have_caps = false, have_autoload = false;
     std::optional<Ed25519PublicKey> key;
     std::size_t at = 0;
     int line_no = 0;
@@ -151,6 +151,11 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
                 return fail(error, where + ": the kind is script, plugin or tool");
             m.kind = f[1] == "script" ? AddonKind::Script : f[1] == "plugin" ? AddonKind::Plugin : AddonKind::Tool;
             have_kind = true;
+        } else if (f[0] == "autoload") {
+            if (f.size() != 2 || have_autoload || (f[1] != "0" && f[1] != "1"))
+                return fail(error, where + " has a bad autoload switch");
+            have_autoload = true;
+            m.autoload = f[1] == "1";
         } else if (f[0] == "version" || f[0] == "min_client") {
             auto v = f.size() == 2 ? parse_version(f[1]) : std::nullopt;
             const bool version = f[0] == "version";
@@ -211,6 +216,7 @@ std::optional<AddonManifest> parse_addon_manifest(std::string_view text, std::st
     if (!header) return fail(error, "this is not a Hailstone add-on manifest");
     if (!have_name) return fail(error, "the add-on's manifest has no name");
     if (!have_kind) return fail(error, "the add-on's manifest has no kind");
+    if (m.autoload && m.kind != AddonKind::Script) return fail(error, "autoload is only for managed Lua add-ons");
     if (!have_version) return fail(error, "the add-on's manifest has no version");
     if (!have_caps) return fail(error, "the add-on's manifest does not say what it needs (caps)");
     if (m.packages.empty()) return fail(error, "the add-on's manifest has no package");

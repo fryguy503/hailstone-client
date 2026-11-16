@@ -328,6 +328,12 @@ one it may not. MQ's filter sends the line on through the filters again, its fin
 
 ## Lua plugins
 
+Installed Lua add-ons with manifest `autoload 1` are managed by Add-ons (docs/addons.md "Managed Lua add-ons").
+Hailstone activates their exact installed entry under the current server policy; their Enabled switch removes
+all registrations when off. This lifecycle uses the same sandbox and capabilities as scripts, without requiring
+players to issue script-run commands or change autorun settings. Native rendering is supplied by the generic host
+presentation APIs; a compiled library is not needed solely for automatic addon activation.
+
 A script can extend the client as a compiled plugin does, with no native code: the `hailstone` module
 (`require('hailstone')`, or the global `hailstone`). Each part needs the same capability as in a compiled plugin.
 
@@ -373,6 +379,93 @@ as a module: those files are data. That holds for the folder in any case and wit
 (`Config/`, `config./`), as Windows and macOS would open it, and through links. A script or module name is a path
 inside the script folders: an absolute one (`/lua run /home/x/evil`, `require('/x')`) or one whose file is a link
 leading out of the folder is not found.
+
+### World nameplate presentation
+
+`hailstone.nameplate_api_version == 2` identifies the Lua presentation API. A script with `read`, `ui` and `extend`
+can register `hailstone.hooks{nameplate_style = function(spawn, context) ... end}`. It is called after the ordinary
+`nameplate` text hook, for a plate the host would draw. The spawn table is borrowed, as for the text hook: copy
+needed fields rather than keeping it. The context table describes this frame:
+
+- `name`: the assembled name after the text hook; `target`, `self`, `in_group`, `in_raid`: booleans.
+- `distance`: camera to the model's projected head; `now_ms`, `dt_ms`: the host's monotonic frame time and delta.
+- `hp_percent`, `mana_percent`, `endurance_percent`, `aggro_percent`: numbers in 0..100, or nil when unknown.
+  Own HP uses real vitals; other HP is a server percentage. Mana/endurance are present only when the host knows
+  them (own vitals or received group updates). Aggro describes the meter's exact target only after a received
+  reading, including an authoritative zero. Changing the meter's target invalidates its earlier readings.
+- `group_mark`, `raid_mark`: the server's leadership mark 1..3, or 0.
+- `casting`: nil, or `{spell_id, name, elapsed_ms, duration_ms}` for an observed cast still in progress. A missing
+  spell record gives an empty name. No cast timing or resource value is inferred for an unknown spawn.
+
+Return nil to keep the ordinary plate, or a plain table describing its replacement. The first active extension
+with a valid answer supplies the appearance. The host keeps ownership of visibility, world projection, depth
+occlusion, target priority and mouse picking; this hook cannot reveal an invisible actor. API 2 adds structural
+skins, explicit through-wall presentation and manual plate targeting. Earlier API 1 clients cannot provide these
+fields, so add-ons requiring them must test the version before registering their presentation.
+An error stops the script and restores the ordinary plate. Stopping or disabling the script does the same.
+
+| Return field | Default / limits |
+|---|---|
+| `hide`, `show_name`, `show_marker` | false, true, true; booleans |
+| `through_walls`, `clickable` | false and true; explicit custom-plate wall visibility and real mouse targeting |
+| `stack`, `stack_gap`, `max_stack` | false, 4, 96; optional vertical stacking, gap 0..20 and maximum upward displacement 0..200 pixels; the target stays anchored |
+| `frame_style` | `minimal` / `solid` / `bevel` / `glass` / `runic`; default `solid`; independent authored frame geometry |
+| `texture` | `flat` / `gradient` / `gloss` / `segments`; default `flat` |
+| `target_style` | `arrow` / `chevrons` / `brackets` / `glow` / `none`; default `arrow`; `show_marker=false` disables it |
+| `name_position`, `text_align` | `above` / `inside` / `below`; `left` / `center` / `right`; defaults `above`, `center` |
+| `health_text_align`, `cast_text_align` | `left` / `center` / `right`; default `center`; health alignment also applies to resource text |
+| `badge_position`, `badge_scale` | `above` / `below` / `left` / `right`; default `above`; icon and label scale 0.5..2.5, default 1 |
+| `cast_gap`, `cast_width` | 2 and 0; gap 0..24 pixels, width 0..600; 0 inherits the main width, positive widths have an effective minimum of 24 |
+| `border_width`, `rounding` | 1 and 2; ranges 0..4 and 0..12 pixels |
+| `name`, `subtitle` | optional strings, at most 256 bytes each; omitted name keeps the assembled name; omitted subtitle draws none |
+| `width`, `height` | 132 and 12; ranges 24..512 and 2..64 pixels |
+| `mana_height`, `cast_height` | 4 and 7; ranges 1..24 and 1..32 pixels |
+| `font_scale`, `scale` | 1; each 0.5..2 |
+| `alpha`, `offset_y` | 1 and 0; ranges 0..1 and -128..128 pixels; positive offset raises the plate |
+| `text_color`, `border_color`, `background_color` | `0xffffff`, `0x20252e`, `0x11151d`; integer `0xRRGGBB` |
+| `health`, `mana`, `cast` | optional bar `{value, color, text}`; required value 0..100, optional RGB color (default white), optional text (128 bytes) |
+| `badges` | array of at most eight `{icon, label, color, spell_icon}`; icon required, label at most 32 bytes, RGB color defaults white; optional spell art index `spell_icon` is an integer 0..65535 |
+
+Badge icons are the host's vector symbols: `eye`, `peace`, `sleep`, `star`, `sun`, `moon`, `diamond`, `triangle`,
+`cross`, `skull`, `sword`, `circle`. A replacement omits the native owner/guild lines: supply a subtitle when
+wanted. A badge's optional `spell_icon` reads its art from the player's loaded game folder and uses the vector
+icon when no art is available; add-ons ship no game art. An absent bar is not drawn. Long visible names and bar labels are fitted to the plate width with an
+ellipsis; badges wrap above or below, or form a bounded column at either side. Frame outlines, cast widths,
+target decorations and side columns participate in plate bounds and overlap handling. `show_marker` controls the
+selected target treatment independently of the ordinary target-highlight option. All strings must have no control characters or embedded NULs. Wrong types,
+out-of-range or non-finite numbers, overlong strings, unknown icons, or a metatable on any presentation table
+reject that answer completely and leave the normal plate. Presentation fields are read raw; their metamethods
+never run. The compiled-plugin SDK ABI is unchanged: this is a Lua hook only.
+
+```lua
+if hailstone.nameplate_api_version >= 2 then
+    hailstone.hooks{nameplate_style = function(spawn, context)
+        if not spawn.npc or spawn.corpse then return nil end
+        return {health = context.hp_percent and {value = context.hp_percent, color = 0x48bb78},
+                mana = context.mana_percent and {value = context.mana_percent, color = 0x4299e1}}
+    end}
+end
+```
+
+`through_walls=true` deliberately displays that custom plate behind scene geometry; false retains depth testing,
+including the target, independently of the ordinary target-name-through-walls preference. The host still enforces
+concealment awareness, show-name switches, non-target body types, range, frustum and viewport. This is display
+only: it changes no server targeting, spell range or line-of-sight rule.
+
+With `clickable=true`, a physical left press and release on the same displayed plate selects its spawn through the
+normal host target path. Target ordering and nearest draw order determine overlapping hits. A drag over five
+pixels, UI or modal capture, right-button look, stale frame, zone/connection change or spawn-set change cancels the
+gesture. Without through-wall display, conservative camera-to-head terrain and door/object visibility must also
+pass. The clicked screen ray uses the displayed scene projection, including temporal jitter, and rejects geometry
+in front of the plate pixel: terrain, posed visible actors, doors and objects. Axial depth uses the same three-unit
+margin as the nameplate shader; conservative bounds cover unavailable poses. No GPU pixel readback is used.
+The host rechecks the scoped presentation at release, so stopping the add-on
+or disabling its clickability cannot leave an active hit region. A consumed plate gesture never reaches actor or
+ground picking, and never attacks, gives an item or invokes a right-click action. This trusted manual input does
+not grant the add-on a `target` capability or any way to synthesize clicks.
+Native click-through masks and local-player view exclusions remain authoritative. An item, spell or hotbutton on
+the cursor leaves the gesture to its existing handling. A movement drag from a plate transfers to ordinary camera
+look where that camera supports left-button look, without producing a selection or an underlying world click.
 
 ## The Scripts window
 

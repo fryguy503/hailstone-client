@@ -8,6 +8,30 @@ download (`platform/http_get`), the zip reader (`core/zip_read`), SHA-256 and Ed
 
 ## What the player sees
 
+### Managed Lua add-ons
+
+A script add-on can declare `autoload 1` in its manifest. Installing one enables it as an installed add-on:
+Hailstone starts it automatically when the connected server's game state and policy allow its capabilities.
+There is no separate script command or per-character autorun setup. Its **Enabled** switch in Add-ons controls
+activation independently of auto-update; disabling it removes its windows, menus and renderer hooks immediately.
+The implementation stays in Lua's sandbox, with the same accepted capability ceiling as any installed add-on.
+
+Existing manifests without `autoload` retain the ordinary script behavior. Only `kind script` may opt in.
+An update preserves the player's activation switch. An update that newly adds `autoload 1` starts disabled until
+the player enables it, so an ordinary script cannot begin running automatically just because it updated.
+The install card identifies managed activation before installation.
+
+Managed startup checks the installed entry path and SHA-256, verifies the installed package files, and uses the
+ordinary ScriptHost policy checks. A server's or manually installed same-name script is never automatically
+started as that installed add-on. Missing, modified or unreadable installed records do not become unrestricted
+manual autoruns. Disabling, removing or replacing the managed record stops that add-on's running state; failed
+scripts are not restarted every frame.
+
+For authors, `tools/make_addon.py --autoload` writes the opt-in. Local preview tools may install a verified archive
+through `hailstone_addon_install_local --root <install> --package <zip> --manifest <manifest> --source <owner/repo>`.
+This explicit tool follows the normal package size/hash, unpacking, registry and rollback path, honors signing
+pins, and changes no client or character autorun settings. It does not start code or publish anything.
+
 **Add-ons** on the login screen opens a card in the Modern pack (beside the characters card, so Play stays in reach;
 it stays open until Close), a page under More in the Gamepad pack, and a window in the client's own ImGui screen. All
 three draw `ui::LoginView::addons` (`view.addons` in Lua, app/lua_eq_pregame.cpp), as the update notice is drawn. The
