@@ -750,7 +750,7 @@ int UiAnimation(lua_State* L) {
 // otherwise put the client's away and draw a question of its own in its place.
 bool may_replace(std::string_view name) {
     static constexpr std::string_view kPackOnly[] = {
-        "PluginConsent", "ConfirmationDialogBox", "TradeWnd",    "GiveWnd",          "QuantityWnd",
+        "PluginConsent", "AddonPolicy", "ConfirmationDialogBox", "TradeWnd",    "GiveWnd",          "QuantityWnd",
         "BazaarConfirmationWnd", "GroupInvite", "RespawnWnd", "LargeDialogWindow", "TaskSelectWnd"};
     if (ui::lua::LuaUi::caller_tag().empty()) return true;
     return std::find(std::begin(kPackOnly), std::end(kPackOnly), name) == std::end(kPackOnly);

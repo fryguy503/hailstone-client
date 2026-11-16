@@ -2,6 +2,14 @@
 
 What the client does not implement yet, or implements with an approximation it cannot confirm. Entries are removed once settled.
 
+## Server add-on policy
+
+- The optional required/allow/block policy is covered by parser, package identity, runtime and gate regressions.
+  Live acceptance still needs a first visit and a cached return visit, installing missing requirements, native
+  consent allowed/refused/closed, a required add-on failing after startup, both UI packs and a physical controller,
+  and an external upscaler allowed/blocked/updated followed by restart. The server does not send this policy until
+  the first zone-in; it is a client extension, not a server-side attestation or anti-cheat mechanism.
+
 ## Evolving items
 
 - Final Result (action 4), progress updates (action 0) and the experience transfer's actions (1 open, 2 details,

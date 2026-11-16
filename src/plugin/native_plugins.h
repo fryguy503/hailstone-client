@@ -45,6 +45,7 @@ struct NativeEnv {
     // connection its setters change (class masks, the pet list). Either may be null.
     game::ExtensionChain* extensions = nullptr;
     std::function<net::GameConnection*()> connection;
+    std::function<bool()> can_load; // empty: legacy behavior; false: a fresh admission check has not finished
     // ABI 2: where a plugin's Lua windows, their functions, options and menu entries go (plugin/ui_bridge.h); null:
     // none.
     UiBridge* ui = nullptr;
@@ -106,6 +107,16 @@ public:
     // After the server's rules changed: unloads what they no longer allow; loads the server's own plugins and the
     // allowed ones `autoload` names ("*" all) that are not loaded yet.
     void policy_changed(const std::vector<std::string>& autoload);
+    // Required add-ons are active, and no loaded plugin is forbidden by the current add-on rules. False with an
+    // empty problem waits for native-code consent; a nonempty problem is a refusal or a load failure.
+    bool required_addons_ready(std::string* problem = nullptr) const;
+    std::uint64_t required_addons_serial() const;
+    // Client-owned recovery controls; a plugin cannot use them to bypass required unloading protection.
+    void stop_required_addons();
+    void resume_required_addons();
+    // Explicit recovery unloads only failed required plugins. policy_changed starts them again; a busy plugin
+    // finishes its callback before a one-shot deferred restart. Healthy required plugins keep running.
+    void retry_required_addons();
     // The server's plugins/ folder (servers/<profile>/plugins), looked in before env.dirs; empty for none.
     void set_server_dir(const std::filesystem::path& dir);
     // Inside the ImGui frame: OnUpdateImGui.
@@ -129,7 +140,8 @@ private:
     // Who loads: the player (asks, after a "Don't allow" too), the rules' automatic loads (ask only about a plugin
     // never answered) or a plugin or script (never asks).
     enum class Asker : std::uint8_t { Player, Rules, Script };
-    bool load_file(std::string_view name, std::string* why, Asker asker);
+    bool load_file(std::string_view name, std::string* why, Asker asker, const Sha256Digest* expected_hash = nullptr);
+    bool unload_file(std::string_view name);
 
     std::unique_ptr<Impl> impl_;
 };

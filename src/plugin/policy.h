@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "core/sha256.h"
@@ -100,6 +101,21 @@ struct ServerFile {
 // The file's name in the server's client_files/ and in servers/<profile>/.
 inline constexpr std::string_view kServerCfgName = "hailstone.cfg";
 
+// Opt-in add-on identities, by GitHub owner/repository only. Repository identities ignore the installed release
+// tag or branch. These checks restrict identities; the script/plugin capabilities still apply.
+struct AddonRules {
+    bool enabled = false;
+    bool default_allow = true;
+    std::vector<std::string> required, allow, block;
+    std::string error; // an invalid enabled policy refuses every add-on until the server fixes it
+};
+
+std::optional<std::string> normalize_addon_identity(std::string_view identity);
+// A runtime/manifest name is not repository evidence; matching needs the installed package's source.
+bool addon_identity_matches(std::string_view identity, std::string_view name, std::string_view source = {});
+bool addon_required(const AddonRules& rules, std::string_view name, std::string_view source = {});
+bool addon_allowed(const AddonRules& rules, std::string_view name, std::string_view source = {});
+
 // The server's rules: its hailstone.cfg, or none.
 struct Rules {
     bool configured = false; // false: no hailstone.cfg, no rules
@@ -129,6 +145,7 @@ struct Rules {
     // [addons] suggest: add-ons the server suggests to its players (docs/addons.md "Suggested add-ons"), as
     // addon_source_text writes them; the login screen offers each one the player does not have.
     std::vector<std::string> suggest_addons;
+    AddonRules addons;
     std::vector<ServerFile> server_files; // the server's scripts and plugins
     // Sections that are not the client's own, for scripts (hailstone.server_rule) to read as they like: names and
     // keys lower-cased, values as written (comments and quotes taken off).
@@ -155,6 +172,9 @@ struct Ceiling {
     FileKind kind = FileKind::Script;
     Sha256Digest sha256{};
     std::uint32_t caps = 0;
+    std::string addon_name{}, addon_source{};
+    bool verified = true; // false: edited/extra bytes retain source identity only for opt-in blocking
+    bool entry_point = true; // scripts: only init.lua; modules still carry identity/capability restrictions
 };
 
 class Policy {
@@ -171,7 +191,13 @@ public:
     std::uint32_t serial() const { return serial_; }
 
     // The capabilities for a file with this hash; 0 = it may not run. An add-on's file gets no more than its ceiling.
-    std::uint32_t caps(FileKind kind, const Sha256Digest& hash) const;
+    std::uint32_t caps(FileKind kind, const Sha256Digest& hash, std::string_view name = {}) const;
+    // A required installed/server file whose hash still identifies it, even when another rule refuses it.
+    // Autostart must check caps too; readiness must retain refused requirements so they cannot be skipped.
+    bool required_file(FileKind kind, const Sha256Digest& hash) const;
+    // Expected entrypoints from the registry/server listing, independent of disk discovery or permission. A
+    // missing/shadowed runtime file must still fail readiness instead of disappearing from the requirements.
+    std::vector<std::pair<std::string, Sha256Digest>> required_entries(FileKind kind) const;
     // One of the server's own files (under a hailstone.cfg: it always runs, and the player cannot stop it).
     bool server_file(FileKind kind, const Sha256Digest& hash) const;
     // Why a file with caps 0 may not run, for the player.
@@ -179,6 +205,7 @@ public:
     ButtonRules button_rules() const;
 
 private:
+    bool addon_file_allowed(FileKind kind, const Sha256Digest& hash, std::string_view name) const;
     std::optional<Rules> rules_;
     std::vector<Ceiling> ceilings_;
     std::uint32_t serial_ = 0;

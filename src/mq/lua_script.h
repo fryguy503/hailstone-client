@@ -73,6 +73,15 @@ struct ScriptHost::Impl {
     ScriptEnv env;
     plugin::Hooks::Owner owner = 0;
     std::vector<std::unique_ptr<Script>> scripts;
+    std::vector<std::pair<std::string, Sha256Digest>> required;
+    bool required_stopped = false;
+    std::uint64_t lifecycle_serial = 1;
+    mutable std::uint64_t checked_lifecycle = 0, readiness_serial = 0;
+    mutable std::uint32_t checked_policy = 0;
+    mutable bool required_ready = true;
+    mutable std::string required_problem;
+    bool compute_required(std::string* problem) const;
+    void refresh_required() const;
     Clock::time_point start = Clock::now();
 
     std::int64_t runaway_ms() const { return env.runaway_ms > 0 ? env.runaway_ms : kRunawayMs; }
@@ -150,6 +159,8 @@ struct Script {
     std::string name;
     fs::path entry, root;
     Sha256Digest hash{};
+    // Modules already loaded into this state remain subject to a later server policy change.
+    std::vector<std::pair<std::string, Sha256Digest>> modules;
     std::uint32_t caps = 0;
     lua_State* L = nullptr;
     lua_State* co = nullptr;
@@ -249,6 +260,7 @@ struct Script {
         }
         if (status == Status::Failed || status == Status::Exited) return;
         status = Status::Failed;
+        ++host->lifecycle_serial;
         error = std::move(why);
         host->say(std::format("[Lua] {} ended with an error: {}", name, error));
         log::warn("lua script {}: {}", name, error);

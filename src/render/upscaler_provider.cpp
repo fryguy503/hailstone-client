@@ -237,6 +237,7 @@ std::unique_ptr<UpscalerProvider> UpscalerProvider::load(const std::filesystem::
     p->label_ = p->name_;
     p->config_utf8_ = path_utf8(file.parent_path());
     const std::filesystem::path library = load_from.empty() ? file : load_from / file.filename();
+    p->loaded_folder_ = library.parent_path();
     p->folder_utf8_ = path_utf8(library.parent_path());
     p->library_ = platform::SharedLibrary(library);
     if (!p->library_.loaded()) {

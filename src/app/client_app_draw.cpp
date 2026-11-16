@@ -283,8 +283,10 @@ void ClientApp::update_eq_host() {
         h.answer_plugin_consent = [this](std::optional<bool> allow) {
             if (automation_) automation_->answer_plugin_consent(allow);
         };
+        h.addon_policy_action = [this](std::string_view action) { addon_policy_action(action); };
     }
     h.web = web_service_.get();
+    h.addon_policy = &addon_policy_view_;
     h.scripts = automation_ ? &automation_->scripts() : nullptr;
     h.registry = automation_ ? &automation_->registry() : nullptr;
     if (!h.tlo_context && automation_) h.tlo_context = [this]() -> const mq::Context& { return automation_->context(); };

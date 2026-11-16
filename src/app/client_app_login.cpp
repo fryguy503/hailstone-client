@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "app/client_app_internal.h"
+#include "app/connection_frontend.h"
 #include "app/lua_eq.h"
 #include "core/asset_folder.h"
 #include "net/server_files.h"
@@ -457,6 +458,7 @@ void ClientApp::back_to_login(std::string message, bool is_error) {
     ++game_view_.chat.revision;
     if (stats_ui_) stats_ui_->forget(); // its player reads the connection's spell table
     conn_.reset();
+    reset_addon_admission();
     eq_host_.conn = nullptr; // (update_eq_host sets it each frame; the windows must not reach the freed one before)
     login_.reset();
     unload_zone();
@@ -688,6 +690,8 @@ void ClientApp::draw_kick_question() {
 }
 
 void ClientApp::start_game(const net::WorldTicket& ticket) {
+    // Cached requirements describe the last visit; they must never prevent obtaining this server's fresh rules.
+    reset_addon_admission();
     net::ConnectionOptions copts;
     if (automation_) {
         copts.hooks = &automation_->hooks();
@@ -880,31 +884,34 @@ void ClientApp::update_connection() {
     if (!conn_) return;
     if (window_.input().user_activity) conn_->note_user_activity();
     conn_->update();
-    // A new hailstone.cfg may change which of the server's assets folder counts ([assets] player).
-    bool assets_ruled = false;
-    if (conn_->server_rules_serial() != asset_rules_serial_) {
-        asset_rules_serial_ = conn_->server_rules_serial();
-        // (Not from the provisional rules before the zone-in: the server's files are checked then.)
-        if (conn_->server_rules() && !conn_->server_rules()->provisional && !conn_->server_rules()->dir.empty())
-            assets_ruled = apply_asset_rules(conn_->server_rules()->dir);
-    }
-    if (conn_->take_server_files_changed() || assets_ruled) {
-        // The server's files came at this zone-in: read again what was read from the old ones, before the zone
-        // loads.
-        game_.rescan();
-        conn_->reload_game_files();
-        reload_server_files(false);
-        overlay_loaded_ = true;
-    }
-    // /loadskin's user interface, loaded between frames (its Lua state may have run the command).
-    if (pending_ui_pack_) use_ui_pack(*std::exchange(pending_ui_pack_, std::nullopt));
-    // /quit and /exit: the connection closes and the client unloads.
-    if (auto q = conn_->take_quit_request(); q != net::GameConnection::QuitRequest::None) {
-        log::info("{}: quitting", q == net::GameConnection::QuitRequest::Exit ? "/exit" : "/quit");
-        conn_->disconnect();
-        quit_ = true;
-        return;
-    }
+    if (!connection_frontend(*conn_, pending_ui_pack_,
+        [this] {
+            // A fresh hailstone.cfg may change which server assets the UI pack can read.
+            bool assets_ruled = false;
+            if (conn_->server_rules_serial() != asset_rules_serial_) {
+                asset_rules_serial_ = conn_->server_rules_serial();
+                if (conn_->server_rules() && !conn_->server_rules()->provisional && !conn_->server_rules()->dir.empty())
+                    assets_ruled = apply_asset_rules(conn_->server_rules()->dir);
+            }
+            if (conn_->take_server_files_changed() || assets_ruled) {
+                game_.rescan();
+                conn_->reload_game_files();
+                reload_server_files(false);
+                overlay_loaded_ = true;
+            }
+        },
+        [this](const std::string& skin) { use_ui_pack(skin); },
+        [this](net::GameConnection::QuitRequest request) {
+            log::info("{}: quitting", request == net::GameConnection::QuitRequest::Exit ? "/exit" : "/quit");
+            conn_->disconnect();
+            quit_ = true;
+        },
+        [this] {
+            if (auto kind = conn_->camped_out()) camp_finished(*kind);
+            else if (conn_->link_death()) update_link_death();
+            else back_to_login(conn_->error(), true);
+        })) return;
+    if (!addon_world_allowed()) return;
     using S = net::ConnectionState;
     switch (conn_->state()) {
     case S::CharacterSelect: {
@@ -1021,19 +1028,12 @@ void ClientApp::update_connection() {
             if (player_ready_) begin_zone_settle();
         }
         screen_ = Screen::InGame;
+        if (player_ready_) {
+            addon_admission_.admit();
+            update_addon_policy_view();
+        }
         break;
-    case S::Disconnected: {
-        if (auto kind = conn_->camped_out()) {
-            camp_finished(*kind);
-            return;
-        }
-        if (conn_->link_death()) {
-            update_link_death();
-            return;
-        }
-        back_to_login(conn_->error(), true);
-        return;
-    }
+    case S::Disconnected: // Handled before the required-addon gate, even while its consent prompt is open.
     case S::Idle:
         break;
     }

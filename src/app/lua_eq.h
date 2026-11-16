@@ -40,6 +40,7 @@ namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
 namespace hailstone::ui {
 class UiTextures; class UiIni; struct ChatView; struct ServerSelectView; struct LoginView; struct CharacterSelectView;
 struct CharacterCreateView;
+struct AddonPolicyView;
 }
 namespace hailstone::game { struct ItemLink; struct QuantityOpen; struct Spawn; class CharCreateLook; }
 
@@ -176,6 +177,8 @@ struct EqHost {
     // the answer (true allow, false refuse, nullopt put away). Empty: none.
     std::function<std::optional<plugin::ConsentPrompt>()> plugin_consent;
     std::function<void(std::optional<bool> allow)> answer_plugin_consent;
+    const ui::AddonPolicyView* addon_policy = nullptr;
+    std::function<void(std::string_view action)> addon_policy_action;
     std::function<const mq::Context&()> tlo_context;
     int lua_social_edit = -1;
     std::function<std::string(std::uint32_t skill)> skill_name;

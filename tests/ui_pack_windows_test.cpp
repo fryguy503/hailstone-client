@@ -60,16 +60,18 @@ struct Session {
     app::EqHost host;
     app::EqApi api;
     ui::lua::LuaUi lua;
-    Session(const fs::path& dir, const std::string& pack, net::ConnectionOptions options = {})
+    Session(const fs::path& dir, const std::string& pack, net::ConnectionOptions options = {}, bool in_game = true)
         : game(dir / "game"), conn(game, std::move(options)), api(host), lua(dir / pack, dir / "ui.txt") {
         host.game = &game;
         host.conn = &conn;
         host.chat = &view;
-        host.in_game = host.ui_ready = true;
-        lua.add_eq_api([this](lua_State* L) {
+        host.in_game = host.ui_ready = in_game;
+        lua.add_eq_api([this, in_game](lua_State* L) {
             api.register_functions(L);
-            lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
-            lua_setfield(L, -2, "InGame");
+            if (in_game) {
+                lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
+                lua_setfield(L, -2, "InGame");
+            }
         });
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
     }
@@ -1380,6 +1382,14 @@ end
                 {"", "owner/extra", "Alpha suggests a Hailstone add-on: owner/extra.", true}};
             s.frames(2);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            login.addons.suggestions.front().required = true;
+            login.addons.suggestions.front().text = "Required to play on this server: servplug.";
+            s.frames(2);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            REQUIRE(luaL_dostring(s.lua.state(), "assert(eq.LoginScreen().addons.suggestions[1].required); "
+                                 "assert(not eq.LoginDo('addonSuggestLater', 'owner/servplug')); "
+                                 "assert(not eq.LoginDo('addonSuggestNever', 'owner/servplug')); "
+                                 "assert(eq.LoginDo('addonSuggestLook', 'owner/servplug'))") == LUA_OK);
             login.addons = {};
             s.frames(2);
             ui::new_profile(login);
@@ -2970,7 +2980,9 @@ TEST_CASE("UI packs: each claims the achievement and reward windows while they a
 
 TEST_CASE("UI packs: the server plugins' question draws in each pack in the client's place") {
     for (const char* pack : {"modern", "gamepad"}) {
+      for (const bool in_game : {false, true}) {
         CAPTURE(pack);
+        CAPTURE(in_game);
         fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
         hailstone::test::ScratchDir dir_scratch(std::string("ui_pack_consent_") + pack);
         fs::path dir = dir_scratch.path();
@@ -2982,7 +2994,7 @@ TEST_CASE("UI packs: the server plugins' question draws in each pack in the clie
         int w = 0, h = 0;
         ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
         {
-            Session s(dir, pack);
+            Session s(dir, pack, {}, in_game);
             std::optional<plugin::ConsentPrompt> prompt;
             s.host.plugin_consent = [&] { return prompt; };
             s.host.answer_plugin_consent = [&](std::optional<bool>) { prompt.reset(); };
@@ -3011,6 +3023,7 @@ TEST_CASE("UI packs: the server plugins' question draws in each pack in the clie
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
         ImGui::DestroyContext(ctx);
+      }
     }
 }
 
@@ -5173,4 +5186,127 @@ TEST_CASE("UI packs (modern): the Options search draws every tab, and only the s
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
     }
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("UI packs: server add-on recovery remains nonmodal and every action is explicit") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        CAPTURE(pack);
+        const fs::path source = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        test::ScratchDir scratch(std::string("ui_addon_policy_") + pack);
+        const fs::path dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(source, dir / pack, fs::copy_options::recursive);
+        ImGuiContext* context = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        {
+            Session session(dir, pack);
+            ui::AddonPolicyView view;
+            session.host.addon_policy = &view;
+            std::vector<std::string> actions;
+            session.host.addon_policy_action = [&](std::string_view action) { actions.emplace_back(action); };
+            lua_State* L = session.lua.state();
+            REQUIRE(luaL_dostring(L, R"lua(
+local button, invisible = ui.Button, ui.InvisibleButton
+local actions = { ["Retry##addonpolicy"] = "retry", ["Camp##addonpolicy"] = "camp",
+  ["Emergency stop required add-ons##addonpolicy"] = "stop",
+  ["##addonpolicyretry"] = "retry", ["##addonpolicycamp"] = "camp", ["##addonpolicystop"] = "stop" }
+policyButtons = {}
+local function recovery(id, clicked)
+  local action = actions[id]
+  if action then
+    policyButtons[action] = true
+    if policyClick == action then policyClick = nil return true end
+  end
+  return clicked
+end
+ui.Button = function(label, ...) return recovery(label, button(label, ...)) end
+ui.InvisibleButton = function(id, ...)
+  local hit = invisible(id, ...)
+  local tile = tonumber(id:match("^##tile(%d+)$"))
+  if tile then
+    policyLastTile = math.max(policyLastTile or 0, tile)
+    if policyClickTile == tile then policyClickTile = nil return true end
+  end
+  return recovery(id, hit)
+end
+ui.window("Gameplay focus", function()
+  ui.Begin("Gameplay focus", nil, ui.WindowFlags.NoSavedSettings)
+  ui.End()
+end)
+)lua") == LUA_OK);
+            auto drawn = [&] {
+                for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows)
+                    if (window->WasActive && std::string(window->Name).find("Server add-ons") != std::string::npos)
+                        return true;
+                return false;
+            };
+            session.frames(2);
+            CHECK(session.api.replaces("AddonPolicy"));
+            CHECK_FALSE(drawn());
+            ImGuiWindow* gameplay = ImGui::FindWindowByName("Gameplay focus");
+            REQUIRE(gameplay != nullptr);
+            ImGui::FocusWindow(gameplay);
+            view.enabled = view.can_stop = true;
+            view.serial = 7;
+            view.phase = "Ready";
+            view.message = "Required add-ons are running.";
+            view.required = {"maker/helper"};
+            session.frames(3);
+            CHECK(drawn());
+            CHECK(ImGui::GetCurrentContext()->NavWindow == gameplay);
+            CHECK(ImGui::GetCurrentContext()->OpenPopupStack.empty());
+            CHECK(actions.empty());
+            REQUIRE(luaL_dostring(L, "assert(policyButtons.stop); assert(not policyButtons.camp)") == LUA_OK);
+
+            view.degraded = view.can_retry = true;
+            view.phase = "Degraded";
+            view.message = "Required add-on stopped. You can retry or camp normally.";
+            ++view.serial;
+            session.frames(3);
+            CHECK(drawn());
+            CHECK(ImGui::GetCurrentContext()->OpenPopupStack.empty());
+            CHECK(actions.empty()); // showing a failure cannot camp, stop or restart anything
+            for (const char* action : {"retry", "camp", "stop"}) {
+                lua_pushstring(L, action);
+                lua_setglobal(L, "policyClick");
+                session.frames(1);
+                REQUIRE(actions.size() > 0);
+                CHECK(actions.back() == action);
+            }
+            CHECK(actions == std::vector<std::string>{"retry", "camp", "stop"});
+            view.can_retry = view.can_stop = false;
+            REQUIRE(luaL_dostring(L, "policyClick = 'retry'") == LUA_OK);
+            session.frames(1);
+            REQUIRE(luaL_dostring(L, "policyClick = 'stop'") == LUA_OK);
+            session.frames(1);
+            CHECK(actions.size() == 3);
+
+            if (std::string_view(pack) == "gamepad") {
+                REQUIRE(luaL_dostring(L, R"lua(
+eq.gamepad = eq.gamepad or {}
+eq.gamepad.connected = function() return true end
+eq.gamepad.request_focus = function(window) if window == 'Server add-ons' then policyFocused = true end end
+GPSTATE.menuOpen = true
+policyClick, policyClickTile, policyLastTile = nil, nil, 0
+)lua") == LUA_OK);
+                session.frames(20); // controller settling after the player's menu action
+                REQUIRE(luaL_dostring(L, "assert(policyLastTile > 0); policyClickTile = policyLastTile") == LUA_OK);
+                session.frames(2);
+                REQUIRE(luaL_dostring(L, "assert(policyFocused); assert(not GPSTATE.menuOpen)") == LUA_OK);
+                CHECK(actions.size() == 3); // opening recovery is not a recovery action
+            }
+            view.enabled = false;
+            session.frames(2);
+            CHECK_FALSE(drawn());
+            view.enabled = true;
+            REQUIRE(luaL_dostring(L, "eq.InGame = function() return false end") == LUA_OK);
+            session.frames(2);
+            CHECK_FALSE(drawn()); // the pre-entry flow uses its own admission/consent screens
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        }
+        ImGui::DestroyContext(context);
+    }
 }

@@ -49,6 +49,7 @@ struct ScriptEnv {
     std::vector<std::filesystem::path> dirs;            // where scripts are looked for, in order
     std::filesystem::path config_dir;                   // mq.configDir: mq.pickle and data loadfile
     std::function<std::int64_t()> now_ms;               // the clock mq.delay and mq.gettime read (null: steady)
+    std::function<bool()> can_start;                    // empty: legacy behavior; false: admission is checking files
     // Scripts as plugins (the hailstone module, mq/lua_hailstone.cpp; docs/plugins.md "Lua plugins"): the chain a
     // script's server extension joins, where its windows, functions, options and menu entries go, and packets to the
     // server. Any may be null.
@@ -170,6 +171,14 @@ public:
     // and starts the server's scripts its hailstone.cfg names ([scripts] run) and the allowed ones `autoload` names
     // (hailstone.ini scripts.autoload) or the character's autorun list does.
     void policy_changed(const std::vector<std::string>& autoload = {});
+    // Required scripts are running, and no running script is forbidden by the current add-on policy.
+    bool required_addons_ready(std::string* problem = nullptr) const;
+    // Readiness changes only with script/policy lifecycle events; reading it performs no repeated file work.
+    std::uint64_t required_addons_serial() const;
+    // The client's emergency control, not exposed to Lua: stop required scripts and suppress their restarts
+    // until recovery or a fresh session explicitly resumes them. Ordinary stop/pause keep their protection.
+    void stop_required_addons();
+    void resume_required_addons();
     // The server's scripts/ folder (servers/<profile>/scripts), looked in before env.dirs; empty for none.
     void set_server_dir(const std::filesystem::path& dir);
 
@@ -196,6 +205,10 @@ private:
 
 // The hex SHA-256 of a script file (for the developer window).
 std::optional<std::string> script_file_hash(const std::filesystem::path& file);
+// Resolves a safe relative path's spelling: exact components win, otherwise each case-insensitive match must be
+// unique. The caller separately checks file kind and that followed symlinks remain within its script folder.
+std::optional<std::filesystem::path> script_spelled_path(const std::filesystem::path& root,
+                                                     const std::filesystem::path& relative);
 // A script's name as one folder name (its mq.configDir under config/, its hailstone.server_dir and character_dir under
 // plugin-config/), the same for no two names: bytes no system keeps as written are %XX (lua_mq.cpp).
 std::string script_folder_name(std::string_view name);

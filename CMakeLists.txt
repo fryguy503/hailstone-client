@@ -325,6 +325,11 @@ add_library(hailstone_engine STATIC
   src/app/addon_install.cpp
   src/app/addon_manager.cpp
   src/app/addon_suggest.cpp
+  src/app/addon_requirements.cpp
+  src/app/addon_admission.cpp
+  src/app/addon_policy_check.cpp
+  src/app/connection_frontend.cpp
+  src/app/addon_upscaler_policy.cpp
   src/app/window_icon.cpp
   src/app/item_preview_view.cpp
   src/app/item_ui.cpp
@@ -1050,6 +1055,11 @@ if(HAILSTONE_BUILD_TESTS)
     tests/addon_index_test.cpp
     tests/changelog_test.cpp
     tests/addon_install_test.cpp
+    tests/addon_requirements_test.cpp
+    tests/addon_admission_test.cpp
+    tests/addon_policy_check_test.cpp
+    tests/connection_frontend_test.cpp
+    tests/addon_upscaler_policy_test.cpp
     tests/addon_manager_test.cpp
     tests/bug_report_test.cpp
     tests/bug_report_window_test.cpp
@@ -1074,6 +1084,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/mq_combat_test.cpp
     tests/automation_test.cpp
     tests/mq_lua_test.cpp
+    tests/mq_script_path_test.cpp
     tests/mq_event_pattern_test.cpp
     tests/lua_social_test.cpp
     tests/code_syntax_test.cpp
@@ -1409,6 +1420,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/fuzz_alloc_guard.cpp
     tests/fuzz_net_test.cpp
     tests/fuzz_assets_test.cpp
+    tests/fuzz_server_cfg_test.cpp
     tests/movement_inputs_test.cpp
     tests/mock_server/profile_builder.cpp
     tests/mock_server/soe_endpoint.cpp
@@ -1520,7 +1532,7 @@ if(HAILSTONE_LIBFUZZER)
   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "HAILSTONE_LIBFUZZER needs Clang")
   endif()
-  foreach(target pfs wld texture soe packets decoders zip gpucache models)
+  foreach(target pfs wld texture soe packets decoders zip gpucache models server_cfg)
     string(TOUPPER ${target} upper)
     add_executable(fuzz_${target} tests/fuzz_libfuzzer.cpp)
     target_compile_definitions(fuzz_${target} PRIVATE HAILSTONE_FUZZ_${upper})

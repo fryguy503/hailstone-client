@@ -6,10 +6,12 @@
 
 #include "app/addon_install.h"
 #include "app/addon_manager.h"
+#include "app/addon_requirements.h"
 #include "app/addon_suggest.h"
 #include "app/client_app_internal.h"
 #include "core/addon_source.h"
 #include "core/build_info.h"
+#include "core/binary_header.h"
 #include "core/server_profile.h"
 #include "core/update_manifest.h"
 #include "core/version.h"
@@ -70,7 +72,192 @@ bool tool_program_there(const std::filesystem::path& data, const InstalledAddon&
         addon_folder(data, a.kind, a.name) / addon_tool_program(a.name, update_platform()), ec);
 }
 
+std::filesystem::path addon_rel(std::string_view text) {
+    return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
+}
+
+std::vector<Sha256Digest> addon_plugin_hashes(const InstalledAddon& addon) {
+    std::vector<Sha256Digest> out;
+    if (addon.kind == AddonKind::Plugin)
+        for (const auto& f : addon.files)
+            if (same_name(addon_rel(f.path).extension().string(), plugin_extension(update_platform())))
+                out.push_back(f.sha256);
+    return out;
+}
+
 } // namespace
+
+void ClientApp::show_addon_requirement(const std::vector<AddonRequirementProblem>& problems, std::string message) {
+    addons_listed_ = {};
+    const AddonsStatus st = addons_ ? addons_->status() : AddonsStatus{};
+    present_addon_requirement(login_view_, problems, st.index ? &*st.index : nullptr, std::move(message));
+}
+
+void ClientApp::reset_addon_admission() {
+    addon_check_worker_.cancel();
+    addon_check_generation_ = 0;
+    addon_rules_checked_serial_ = ~0u;
+    addon_installs_checked_serial_ = ~0u;
+    addon_runtime_checked_serial_ = ~std::uint64_t{0};
+    addon_runtime_wait_frame_ = false;
+    addon_retry_pending_ = false;
+    addon_check_problems_.clear();
+    addon_admission_.reset();
+    addon_policy_view_ = {};
+    addon_policy_view_.serial = ++addon_view_serial_;
+    addon_view_revision_ = ~std::uint64_t{0};
+    if (automation_) automation_->reset_required_addons_session();
+}
+
+bool ClientApp::addon_world_allowed() {
+    if (!conn_ || !conn_->server_rules() || conn_->server_rules()->provisional ||
+        !conn_->server_rules()->addons.enabled) {
+        if (automation_) automation_->set_addon_verification_pending(false);
+        if (addon_admission_.phase() != AddonAdmissionPhase::Inactive) {
+            addon_check_worker_.cancel();
+            addon_check_generation_ = 0;
+            addon_admission_.disable();
+            update_addon_policy_view();
+        }
+        return true;
+    }
+    const auto& rules = *conn_->server_rules();
+    if (addon_rules_checked_serial_ != conn_->server_rules_serial() ||
+        addon_installs_checked_serial_ != addons_serial_) {
+        addon_rules_checked_serial_ = conn_->server_rules_serial();
+        addon_installs_checked_serial_ = addons_serial_;
+        addon_admission_.begin_check(addon_rules_checked_serial_);
+        if (automation_) automation_->set_addon_verification_pending(true);
+        addon_check_problems_.clear();
+        AddonPolicyCheckRequest request;
+        request.rules = rules;
+        request.data_dir = platform::data_dir();
+        request.platform = update_platform();
+        if (const auto* provider = vk_.upscaler_provider()) {
+            request.active_upscaler = provider->name();
+            request.loaded_upscaler_folder = provider->loaded_folder();
+        }
+        addon_check_generation_ = addon_check_worker_.submit(std::move(request));
+        addon_runtime_checked_serial_ = ~std::uint64_t{0};
+    }
+    bool published = false;
+    if (auto result = addon_check_worker_.poll(); result && result->generation == addon_check_generation_) {
+        if (!result->ceilings_ready && result->problem.empty())
+            result->problem = "The required add-on verification did not complete. Try joining again.";
+        addon_check_problems_ = std::move(result->problems);
+        addon_admission_.verification_finished(std::move(result->problem));
+        const bool retry = std::exchange(addon_retry_pending_, false);
+        if (automation_ && result->ceilings_ready) {
+            automation_->set_addon_ceilings(std::move(result->ceilings));
+            if (retry && addon_admission_.problem().empty())
+                automation_->retry_required_addons();
+        }
+        // Automation applies the connection's rules at the end of this frame. Never admit using the last rules'
+        // cached readiness, even when a small worker check completed within its submission frame.
+        addon_runtime_wait_frame_ = true;
+        published = true;
+    }
+    if (!published && std::exchange(addon_runtime_wait_frame_, false))
+        addon_runtime_checked_serial_ = ~std::uint64_t{0};
+    if (!addon_runtime_wait_frame_ && automation_ &&
+        addon_runtime_checked_serial_ != automation_->required_addons_serial()) {
+        addon_runtime_checked_serial_ = automation_->required_addons_serial();
+        std::string problem;
+        const bool ready = automation_->required_addons_ready(&problem);
+        const bool awaiting_consent = !ready && problem.empty() && automation_->plugin_consent().has_value();
+        addon_admission_.runtime_changed(ready, awaiting_consent, std::move(problem));
+    }
+    update_addon_policy_view();
+    if (addon_admission_.phase() == AddonAdmissionPhase::Refused) {
+        const std::string message = addon_admission_.problem();
+        const auto problems = addon_check_problems_;
+        back_to_login(message, true);
+        show_addon_requirement(problems, message);
+        return false;
+    }
+    if (!addon_admission_.may_enter()) {
+        screen_ = Screen::Loading;
+        loading_view_.title = "Checking required add-ons";
+        switch (addon_admission_.phase()) {
+        case AddonAdmissionPhase::Checking: loading_view_.detail = "Verifying this server's required add-ons..."; break;
+        case AddonAdmissionPhase::AwaitingConsent:
+            loading_view_.detail = "Review the required plugin's permission request to continue."; break;
+        default: loading_view_.detail = "Starting this server's required add-ons..."; break;
+        }
+        return false;
+    }
+    return true;
+}
+
+void ClientApp::update_addon_policy_view() {
+    if (addon_view_revision_ == addon_admission_.revision()) return;
+    addon_view_revision_ = addon_admission_.revision();
+    auto& view = addon_policy_view_;
+    view.serial = ++addon_view_serial_;
+    view.enabled = conn_ && conn_->server_rules() && !conn_->server_rules()->provisional &&
+                   conn_->server_rules()->addons.enabled;
+    view.required = view.enabled ? conn_->server_rules()->addons.required : std::vector<std::string>{};
+    view.degraded = addon_admission_.phase() == AddonAdmissionPhase::Degraded;
+    view.can_stop = view.enabled && automation_ && automation_->has_required_addons() &&
+                    !automation_->required_addons_stopped();
+    view.can_retry = view.enabled && addon_admission_.phase() != AddonAdmissionPhase::Checking;
+    view.message = addon_admission_.problem();
+    switch (addon_admission_.phase()) {
+    case AddonAdmissionPhase::Checking: view.phase = "checking"; break;
+    case AddonAdmissionPhase::AwaitingConsent: view.phase = "approval"; break;
+    case AddonAdmissionPhase::Starting: view.phase = "starting"; break;
+    case AddonAdmissionPhase::Ready: view.phase = "ready"; break;
+    case AddonAdmissionPhase::Degraded: view.phase = "degraded"; break;
+    case AddonAdmissionPhase::Refused: view.phase = "refused"; break;
+    default: view.phase = "off"; break;
+    }
+    if (view.degraded && conn_)
+        conn_->ui_message("Required add-ons: " + view.message + " You can keep playing; restore them before rejoining.");
+}
+
+void ClientApp::addon_policy_action(std::string_view action) {
+    if (!conn_ || !addon_policy_view_.enabled) return;
+    if (action == "stop" && addon_policy_view_.can_stop && automation_) {
+        // Stop is newer than any queued Retry. Neither its worker nor its deferred restart may undo this action.
+        addon_check_worker_.cancel();
+        addon_check_generation_ = 0;
+        addon_retry_pending_ = false;
+        addon_runtime_wait_frame_ = false;
+        addon_rules_checked_serial_ = conn_->server_rules_serial();
+        addon_installs_checked_serial_ = addons_serial_;
+        automation_->emergency_stop_required_addons();
+        addon_admission_.emergency_stop("Required add-ons were stopped for this session.");
+        update_addon_policy_view();
+    } else if (action == "retry" && addon_policy_view_.can_retry) {
+        addon_retry_pending_ = true;
+        addon_rules_checked_serial_ = ~0u;
+    } else if (action == "camp" && addon_admission_.admitted()) {
+        conn_->send_command("/camp");
+    }
+}
+
+void ClientApp::addon_policy_window() {
+    const auto& view = addon_policy_view_;
+    if (screen_ != Screen::InGame || !view.enabled || (view.required.empty() && !view.degraded) ||
+        ui::lua::replaces("AddonPolicy")) return;
+    ImGui::SetNextWindowSize(ImVec2(390, 0), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Server add-ons", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing)) {
+        if (view.degraded) {
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 29.0f);
+            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.25f, 1.0f), "%s", view.message.c_str());
+            ImGui::TextWrapped("You can keep playing. Restore the required add-ons before joining again.");
+            ImGui::PopTextWrapPos();
+        } else if (view.phase == "checking") ImGui::TextUnformatted("Checking this server's add-ons...");
+        else ImGui::TextUnformatted("This server requires add-ons while you play.");
+        if (view.can_retry && ImGui::Button("Retry required add-ons")) addon_policy_action("retry");
+        if (view.degraded) {
+            ImGui::SameLine();
+            if (ImGui::Button("Camp")) addon_policy_action("camp");
+        }
+        if (view.can_stop && ImGui::Button("Emergency stop required add-ons")) addon_policy_action("stop");
+    }
+    ImGui::End();
+}
 
 void ClientApp::start_addons() {
     const std::filesystem::path data = platform::data_dir();
@@ -117,9 +304,17 @@ std::vector<AddonSuggestion> ClientApp::suggestions_for(std::string_view profile
                                                         const std::vector<std::string>& worlds,
                                                         const AddonIndex* index, const plugin::Rules& rules,
                                                         const std::vector<ServerAddon>& server_own) {
-    if (!addons_ || profile.empty() || !config_.get_bool("addons.suggest", true)) return {};
+    // Cached rules provide hints only. Full integrity and consent verification belongs to fresh-rule admission.
+    const auto installed = addons_ ? addons_->installed() : read_installed_addons(platform::data_dir());
+    std::vector<RequiredAddonCandidate> candidates;
+    for (const auto& addon : installed)
+        if (plugin::addon_required(rules.addons, addon.name, addon.source))
+            candidates.push_back({addon.name, addon.source, addon.kind, addon.caps, !addon.files.empty(), false});
+    auto required = required_addon_suggestions(
+        addon_requirement_problems(rules, candidates), index);
+    if (!addons_ || profile.empty() || !config_.get_bool("addons.suggest", true)) return required;
     AddonsHad had;
-    for (const auto& a : read_installed_addons(platform::data_dir())) {
+    for (const auto& a : installed) {
         had.names.push_back(a.name);
         had.sources.push_back(a.source);
     }
@@ -129,7 +324,14 @@ std::vector<AddonSuggestion> ClientApp::suggestions_for(std::string_view profile
     const std::string later_prefix = std::string(profile) + "\n";
     for (const auto& k : suggest_later_)
         if (k.starts_with(later_prefix)) dismissed.push_back(k.substr(later_prefix.size()));
-    return addon_suggestions(index, host, worlds, rules.suggest_addons, had, dismissed);
+    auto optional = addon_suggestions(index, host, worlds, rules.suggest_addons, had, dismissed);
+    for (auto& sg : optional) {
+        const bool duplicate = std::any_of(required.begin(), required.end(), [&](const AddonSuggestion& a) {
+            return addon_repo_key(a.source) == addon_repo_key(sg.source);
+        });
+        if (!duplicate) required.push_back(std::move(sg));
+    }
+    return required;
 }
 
 void ClientApp::update_server_select_hint() {
@@ -163,7 +365,10 @@ void ClientApp::update_addons() {
         addons_serial_ = serial;
         upscaler_providers_.reset(); // an upscaler may have come or gone
         addons_dirty_ = false;
-        if (automation_) automation_->set_addon_ceilings(addon_ceilings(data));
+        // An enforced connection keeps its last complete provenance snapshot until the worker publishes the
+        // replacement. Registry-only ceilings would temporarily forget edited/extra files' blocked sources.
+        const bool enforcing = conn_ && conn_->server_rules() && conn_->server_rules()->addons.enabled;
+        if (automation_ && !enforcing) automation_->set_addon_ceilings(addon_ceilings(data));
         addons_listed_ = {};
     }
     if (!at_login) return;
@@ -197,8 +402,12 @@ void ClientApp::update_addons() {
     }
     v.server = profile.empty() ? std::string() : login_view_.name;
     v.suggestions.clear();
-    for (const AddonSuggestion& sg : suggestions_)
-        v.suggestions.push_back({sg.name, sg.source, addon_suggestion_text(sg, v.server), sg.from_server});
+    for (const AddonSuggestion& sg : suggestions_) {
+        const bool required = plugin::addon_required(addons_rules_.addons, sg.name, sg.source);
+        const std::string text = required ? "Required to play on this server: " + (sg.name.empty() ? sg.source : sg.name) + "."
+                                          : addon_suggestion_text(sg, v.server);
+        v.suggestions.push_back({sg.name, sg.source, text, sg.from_server, required});
+    }
     v.offer.reset();
     if (st.offer) {
         const AddonOffer& o = *st.offer;
@@ -261,7 +470,14 @@ void ClientApp::update_addons() {
 
     // What this server does with the player's own: its hailstone.cfg as the last login left it.
     const plugin::Rules& rules = addons_rules_;
+    const auto installed_for_notes = read_installed_addons(data);
     auto server_note = [&](AddonKind kind, const std::string& name, std::uint32_t caps) -> std::string {
+        const auto* installed = find_addon(installed_for_notes, name);
+        const auto source = installed ? installed->source : std::string();
+        if (rules.addons.enabled) {
+            if (!plugin::addon_allowed(rules.addons, name, source)) return "This server blocks this add-on.";
+            if (plugin::addon_required(rules.addons, name, source)) return "Required to play on this server.";
+        }
         // A tool or an upscaler is no server's business: neither is a script or a plugin it rules.
         if (profile.empty() || kind == AddonKind::Tool || kind == AddonKind::Upscaler) return {};
         for (const auto& s : server_addons_)
@@ -272,6 +488,22 @@ void ClientApp::update_addons() {
         if (allowed == 0) return std::string("This server runs only its own ") + what + ": it does not run here.";
         if (caps & ~allowed) return "This server allows only part of what it may do.";
         return {};
+    };
+    auto required_consent = [&](ui::AddonRowView& row, const InstalledAddon& addon) {
+        if (profile.empty() || !plugin::addon_required(rules.addons, addon.name, addon.source) ||
+            addon.kind != AddonKind::Plugin) return;
+        const auto hashes = addon_plugin_hashes(addon);
+        plugin::Consent consent = plugin::Consent::Allowed;
+        for (const auto& hash : hashes) {
+            const auto c = plugin::plugin_consent(login_view_.servers_dir / profile, hash);
+            if (c == plugin::Consent::Denied) { consent = c; break; }
+            if (c == plugin::Consent::Unasked) consent = c;
+        }
+        if (hashes.empty()) return;
+        row.consent = consent == plugin::Consent::Allowed ? "allowed"
+                      : consent == plugin::Consent::Denied ? "denied" : "unasked";
+        if (consent == plugin::Consent::Denied) row.note += " You did not allow this plugin to run on this server.";
+        else if (consent == plugin::Consent::Unasked) row.note += " Your next visit asks whether it may run.";
     };
 
     v.rows.clear();
@@ -295,6 +527,7 @@ void ClientApp::update_addons() {
         r.approve_version = s.new_version;
         r.modified = s.modified;
         r.note = server_note(a.kind, a.name, a.caps);
+        required_consent(r, a);
         r.auto_update = a.auto_update;
         r.signed_ = a.key.has_value();
         r.can_update = addons_ != nullptr && s.installed &&
@@ -319,6 +552,7 @@ void ClientApp::update_addons() {
             r.description = a.description;
             r.caps = plugin::caps_described(a.caps);
             r.note = server_note(a.kind, a.name, a.caps);
+            required_consent(r, a);
             r.auto_update = a.auto_update;
             r.signed_ = a.key.has_value();
             r.can_remove = true;
@@ -353,6 +587,7 @@ void ClientApp::update_addons() {
             r.note = by + ": it always runs there, and cannot be removed or turned off.";
         }
         r.folder = path_text(login_view_.servers_dir / profile / (s.kind == AddonKind::Script ? "scripts" : "plugins"));
+        if (plugin::addon_required(rules.addons, s.name)) r.note = "Required to play on this server. " + r.note;
         v.rows.push_back(std::move(r));
     }
 }
@@ -385,6 +620,14 @@ bool ClientApp::start_addon_tool(std::string_view name, std::string* error) {
     const InstalledAddon* a = find_addon(all, name);
     if (!a || a->kind != AddonKind::Tool || !tool_program_there(data, *a)) {
         if (error) *error = std::string(name) + " is not installed (Add-ons, on the login screen)";
+        return false;
+    }
+    const std::string profile = ui::selected_profile_id(login_view_);
+    const auto rules = conn_ && conn_->server_rules() ? *conn_->server_rules()
+                       : profile.empty() ? plugin::Rules{}
+                                         : net::cached_server_rules(login_view_.servers_dir / profile);
+    if (!plugin::addon_allowed(rules.addons, a->name, a->source)) {
+        if (error) *error = a->name + " is blocked by this server's add-on policy.";
         return false;
     }
     const std::filesystem::path program =
@@ -457,10 +700,15 @@ void ClientApp::addons_login_action(ui::LoginAction action) {
         break;
     case A::AddonRevoke:
     case A::AddonAskAgain: {
-        // The picked server's own compiled plugin: the player's word on it (plugin/consent.h).
+        // The picked server's compiled plugin, or an installed plugin its opted-in policy requires.
         const std::string profile = ui::selected_profile_id(login_view_);
         bool found = false;
         for (const auto& r : v.rows) found = found || (r.group == "server" && r.kind == "plugin" && r.name == v.choice);
+        const auto installed = read_installed_addons(data);
+        const auto* managed = find_addon(installed, v.choice);
+        const bool required = managed && managed->kind == AddonKind::Plugin &&
+                              plugin::addon_required(addons_rules_.addons, managed->name, managed->source);
+        found = found || required;
         if (!found || profile.empty()) break;
         const std::filesystem::path dir = login_view_.servers_dir / profile;
         // By the plugin's bytes as the server has them now as well as by its name: the answers are kept by hash, and
@@ -468,6 +716,10 @@ void ClientApp::addons_login_action(ui::LoginAction action) {
         std::vector<Sha256Digest> hashes;
         for (const auto& s : server_addons(dir))
             if (s.kind == AddonKind::Plugin && s.name == v.choice) hashes = s.hashes;
+        if (required) {
+            const auto managed_hashes = addon_plugin_hashes(*managed);
+            hashes.insert(hashes.end(), managed_hashes.begin(), managed_hashes.end());
+        }
         const bool revoke = action == A::AddonRevoke;
         bool ok = revoke ? plugin::revoke_plugin_consent(dir, v.choice, hashes)
                          : plugin::forget_plugin_consent(dir, v.choice, hashes);
@@ -499,6 +751,10 @@ void ClientApp::addons_login_action(ui::LoginAction action) {
             v.open = true;
             v.link = sg->source;
             addons_->inspect(sg->source, std::move(expect));
+            break;
+        }
+        if (plugin::addon_required(addons_rules_.addons, sg->name, sg->source)) {
+            v.status = {"This add-on is required to play on this server. Install it, or choose another server.", true};
             break;
         }
         if (action == A::AddonSuggestNever) {

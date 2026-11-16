@@ -130,7 +130,8 @@ next start (docs/graphics.md "Upscaler providers"):
 
 - **Its card** asks for no permissions (an upscaler sees only the frames it upscales, so its manifest says
   `caps none` and one that asks for any is refused), and warns that it is still a program running inside Hailstone
-  with the player's rights. No server sends one, rules on one or is told of one.
+  with the player's rights. Servers do not send providers or receive a provider report. A server can opt in to
+  an add-on policy that refuses joining with a disallowed active provider (docs/plugins.md "Opt-in add-on policies").
 - **What its package holds** (`unpack_upscaler`): at its top its provider, a library for this platform named after it
   (`xess.dll`, `xess.so`), and the libraries it loads beside it (`libxess.dll`, `libnvidia-ngx-dlss.so.310.9.16`);
   data anywhere (the vendor's licence and notices). No library in a folder or for another platform, and nothing that
@@ -162,6 +163,10 @@ the store, so an add-on reaches it by a pull request to the index's repository, 
 record with no `world` record is for any server and is listed but never suggested.
 
 ## Suggested add-ons
+
+For required packages and named allow/block lists, see docs/plugins.md "Opt-in add-on policies". Those rules are
+off by default. Required offers retain the normal install and native-code approval steps; a server can prevent
+play until its requirements are met. Suggestions below remain optional and grant no permission by themselves.
 
 Some servers have an add-on of their own: a plugin with the server's windows and features, say Project Triune's. A
 player who logs in to such a server for the first time does not know it exists, so the login screen tells them.

@@ -862,7 +862,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
-| ReplaceWindow | (name [, sizable]) → shown, x, y, w, h, sized, place | Call every frame from a replacing window. Marks the stock window replaced and gives its INI place. A plugin cannot replace "PluginConsent" nor the dialogs that act when answered (ConfirmationDialogBox, TradeWnd, GiveWnd, QuantityWnd, BazaarConfirmationWnd, GroupInvite, RespawnWnd, LargeDialogWindow, TaskSelectWnd) | — |
+| ReplaceWindow | (name [, sizable]) → shown, x, y, w, h, sized, place | Call every frame from a replacing window. Marks the stock window replaced and gives its INI place. A plugin cannot replace "PluginConsent", "AddonPolicy" nor the dialogs that act when answered (ConfirmationDialogBox, TradeWnd, GiveWnd, QuantityWnd, BazaarConfirmationWnd, GroupInvite, RespawnWnd, LargeDialogWindow, TaskSelectWnd) | — |
 | WindowShown | (name) → bool | ReplaceWindow's `shown` alone (also counts as replaced), with no place worked out | — |
 | WindowPlaced | (name, x, y, w, h [, sizable]) → — | Report where the window is this frame, stored in the UI ini | — |
 | ShowWindow | (name, show) → — | Show or hide a game window | commands |
@@ -1252,8 +1252,9 @@ The item against what the player wears (docs/item-compare.md). `c` = {usable, wh
 
 #### Plugins (lua_eq_plugins.cpp)
 
-`self`: from a plugin's code these reach only that plugin's own entries. PluginConsent and AnswerPluginConsent are
-refused to plugin code (nil / false).
+`self`: from a plugin's code these reach only that plugin's own entries. PluginConsent, AnswerPluginConsent,
+AddonPolicy and AddonPolicyAction are refused to plugin code (nil / false). AddonPolicyAction additionally requires
+the client's own UI pack and the current view's serial; recovery is always the player's action.
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
@@ -1264,6 +1265,8 @@ refused to plugin code (nil / false).
 | PluginMenuClick | (i) → — | Run entry i of PluginMenu's list as its owner | self |
 | PluginConsent | () → {server, serial, warning, plugins={{name, file, size, sha256, short}}} \| nil | Pending consent question for the server's compiled plugins | self |
 | AnswerPluginConsent | (true\|false\|nil, serial) → ok | Answer the question with that serial (nil = ask later); false when it is not the one pending | self |
+| AddonPolicy | () → {enabled, phase, message, required, can_stop, can_retry, degraded, serial} \| nil | Active server requirements and recovery state; required is a list of repository identities | self |
+| AddonPolicyAction | ("stop"\|"retry"\|"camp", serial) → ok | Explicit recovery against the current view; stale or unavailable actions return false. Camp uses the normal camp command | pack |
 
 #### Scripts (lua_eq_scripts.cpp)
 

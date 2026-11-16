@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -92,7 +93,9 @@ const InstalledAddon* find_pinned_addon(const std::vector<InstalledAddon>& addon
                                         AddonKind kind, std::string_view repo, const Ed25519PublicKey& key);
 
 // The files of an installed add-on that are gone or no longer what it shipped (the player changed them).
-std::vector<std::string> modified_addon_files(const std::filesystem::path& data_dir, const InstalledAddon& addon);
+// A cancelable caller must discard the partial result once canceled reports true.
+std::vector<std::string> modified_addon_files(const std::filesystem::path& data_dir, const InstalledAddon& addon,
+                                             const std::function<bool()>& canceled = {});
 
 // Why `name` cannot be installed as a new add-on of this kind ("" it can): a reserved name, another add-on's, or a
 // folder already there that is not an add-on's (installed by hand, or by Hailstone's own updates).
@@ -126,7 +129,15 @@ std::vector<plugin::Ceiling> addon_ceilings(const std::vector<InstalledAddon>& a
 // The ceilings of the data folder's add-ons: addon_ceilings of the records that read, and a ceiling of no
 // capabilities on each Lua file and library now in the folder of an add-on whose record does not
 // (AddonRegistry::unreadable), each logged.
-std::vector<plugin::Ceiling> addon_ceilings(const std::filesystem::path& data_dir);
+// Only an opted-in server needs the additional scan of readable add-ons for changed/extra code identities.
+// Cancellation stops between bounded file reads and returns no ceilings; it is not a successful empty registry.
+std::vector<plugin::Ceiling> addon_ceilings(const std::filesystem::path& data_dir, bool scan_for_enforcement = false,
+                                          const std::function<bool()>& canceled = {});
+// A verification job uses the same registry snapshot for its requirements and runtime identities. Re-reading
+// installed.txt between those decisions could lose a requirement while another client changes the registry.
+std::vector<plugin::Ceiling> addon_ceilings(const std::filesystem::path& data_dir, const AddonRegistry& registry,
+                                          bool scan_for_enforcement = false,
+                                          const std::function<bool()>& canceled = {});
 
 // First thing at start: an install or a removal that was cut off is undone, and what it left in new/ and previous/
 // goes. A lost or damaged installed.txt is written again from its backup when that has every add-on it names; else

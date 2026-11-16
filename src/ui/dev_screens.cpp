@@ -409,11 +409,14 @@ LoginAction addon_suggestions(const AddonsView& a, std::string& choice) {
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
         };
-        button("Look at it", LoginAction::AddonSuggestLook, "What it is and what it asks to do; nothing is installed yet");
-        ImGui::SameLine();
-        button("Not now", LoginAction::AddonSuggestLater, "Not suggested again until Hailstone starts again");
-        ImGui::SameLine();
-        button("Don't ask again", LoginAction::AddonSuggestNever, "Not suggested again for this server");
+        button(sg.required ? "Review required add-on" : "Look at it", LoginAction::AddonSuggestLook,
+               "What it is and what it asks to do; nothing is installed yet");
+        if (!sg.required) {
+            ImGui::SameLine();
+            button("Not now", LoginAction::AddonSuggestLater, "Not suggested again until Hailstone starts again");
+            ImGui::SameLine();
+            button("Don't ask again", LoginAction::AddonSuggestNever, "Not suggested again for this server");
+        }
         ImGui::PopID();
     }
     return action;

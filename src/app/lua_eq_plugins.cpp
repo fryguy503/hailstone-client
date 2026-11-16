@@ -19,6 +19,7 @@
 #include "plugin/lua_value.h"
 #include "plugin/policy.h"
 #include "plugin/ui_bridge.h"
+#include "ui/dev_screens.h"
 #include "ui/lua/lua_host.h"
 
 namespace hailstone::app {
@@ -367,6 +368,58 @@ int AnswerPluginConsent(lua_State* L) {
     return 1;
 }
 
+int AddonPolicy(lua_State* L) {
+    const EqHost& h = host_of(L);
+    const auto* view = h.addon_policy;
+    if (plugin_code() || !view || !view->enabled) {
+        lua_pushnil(L);
+        return 1;
+    }
+    // This recovery panel is nonmodal: reading it does not guard drawing or take the player's focus.
+    lua_createtable(L, 0, 8);
+    lua_pushboolean(L, view->enabled);
+    lua_setfield(L, -2, "enabled");
+    lua_pushboolean(L, view->can_stop);
+    lua_setfield(L, -2, "can_stop");
+    lua_pushboolean(L, view->can_retry);
+    lua_setfield(L, -2, "can_retry");
+    lua_pushboolean(L, view->degraded);
+    lua_setfield(L, -2, "degraded");
+    lua_pushinteger(L, static_cast<lua_Integer>(view->serial));
+    lua_setfield(L, -2, "serial");
+    lua_pushlstring(L, view->phase.data(), view->phase.size());
+    lua_setfield(L, -2, "phase");
+    lua_pushlstring(L, view->message.data(), view->message.size());
+    lua_setfield(L, -2, "message");
+    lua_createtable(L, static_cast<int>(view->required.size()), 0);
+    lua_Integer i = 0;
+    for (const auto& identity : view->required) {
+        lua_pushlstring(L, identity.data(), identity.size());
+        lua_rawseti(L, -2, ++i);
+    }
+    lua_setfield(L, -2, "required");
+    return 1;
+}
+
+int AddonPolicyAction(lua_State* L) {
+    EqHost& h = host_of(L);
+    const auto* view = h.addon_policy;
+    if (plugin_code() || !ui::lua::pack_code(L) || !view || !view->enabled || !h.addon_policy_action) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    std::size_t size = 0;
+    const char* text = luaL_checklstring(L, 1, &size);
+    const std::string_view action(text, size);
+    const lua_Integer serial = luaL_checkinteger(L, 2);
+    const bool current = serial >= 0 && static_cast<std::uint64_t>(serial) == view->serial;
+    const bool allowed = current && ((action == "stop" && view->can_stop) ||
+                                     (action == "retry" && view->can_retry) || (action == "camp" && view->degraded));
+    if (allowed) plugin::cxx_guard(L, [&] { h.addon_policy_action(action); });
+    lua_pushboolean(L, allowed);
+    return 1;
+}
+
 } // namespace
 
 bool run_plugin_menu(EqHost& h, std::size_t i) {
@@ -386,7 +439,9 @@ void register_plugins_api(lua_State* L, EqHost& host) {
              {"PluginMenu", PluginMenu},
              {"PluginMenuClick", PluginMenuClick},
              {"PluginConsent", PluginConsent},
-             {"AnswerPluginConsent", AnswerPluginConsent}}) {
+             {"AnswerPluginConsent", AnswerPluginConsent},
+             {"AddonPolicy", AddonPolicy},
+             {"AddonPolicyAction", AddonPolicyAction}}) {
         lua_pushlightuserdata(L, &host);
         lua_pushcclosure(L, fn, 1);
         lua_setfield(L, -2, name);

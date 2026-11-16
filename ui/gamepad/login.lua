@@ -366,18 +366,21 @@ local function suggestionRows(v, x0, y, x1, w)
     y = y + px(14)
     y = y + P.status({ text = sg.text, error = false }, false, x0, y, x1)
     y = y + gap
-    local bw = (w - 2 * gap) / 3
+    local bw = sg.required and w or (w - 2 * gap) / 3
     P.at(x0, y)
-    if P.button(F, "##sglook" .. i, "Look at it", bw, rh, { primary = true, disabled = v.busy }) then
+    if P.button(F, "##sglook" .. i, sg.required and "Review required add-on" or "Look at it", bw, rh,
+        { primary = true, disabled = v.busy }) then
       eq.LoginDo("addonSuggestLook", sg.source)
     end
-    ui.SameLine(0, gap)
-    if P.button(F, "##sglater" .. i, "Not now", bw, rh, { disabled = v.busy }) then
-      eq.LoginDo("addonSuggestLater", sg.source)
-    end
-    ui.SameLine(0, gap)
-    if P.button(F, "##sgnever" .. i, "Don't ask again", bw, rh, { disabled = v.busy }) then
-      eq.LoginDo("addonSuggestNever", sg.source)
+    if not sg.required then
+      ui.SameLine(0, gap)
+      if P.button(F, "##sglater" .. i, "Not now", bw, rh, { disabled = v.busy }) then
+        eq.LoginDo("addonSuggestLater", sg.source)
+      end
+      ui.SameLine(0, gap)
+      if P.button(F, "##sgnever" .. i, "Don't ask again", bw, rh, { disabled = v.busy }) then
+        eq.LoginDo("addonSuggestNever", sg.source)
+      end
     end
     y = y + rh
   end

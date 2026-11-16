@@ -1,8 +1,8 @@
 ; hailstone.cfg: the rules Hailstone clients follow on this server (docs/plugins.md). Copy it to client_files/
 ; as hailstone.cfg. Players get it at their next login. Without this file the client sets no rules at all.
 ;
-; The server's own scripts (client_files/scripts/) and plugins (client_files/plugins/<platform>/) always run, with
-; every capability. These settings are about the player's own.
+; Server-provided scripts (client_files/scripts/) and plugins (client_files/plugins/<platform>/) have every
+; capability. The player's own follow the settings below; optional [addons] enforcement checks both identities.
 ;
 ; Capabilities: read, commands, target, actions, move, chat, events, ui, packets, or all.
 
@@ -34,3 +34,13 @@ passable_ladders = on     ; walking or swimming into a ladder whose polygons are
 [addons]
 ;suggest = owner/repo     ; add-ons of this server's own on GitHub: the login screen suggests each to players who do not
                           ; have it (docs/addons.md "Suggested add-ons")
+;enforce = off            ; opt in to required/allowed/blocked add-ons; off preserves the existing behavior
+;required =              ; comma-separated owner/repo identities required before play; normal approval applies
+;allow =                 ; optional permitted owner/repo identities; this does not enable player code or grant caps
+;block = owner/unwanted   ; excluded repositories; blocks win, including over required/allow
+;default = allow          ; deny: block every player add-on not listed by required or allow
+;
+; WARNING when actively blocking add-ons: external upscalers such as FSR4 and XeSS are add-ons too. With
+; default = deny, list every upscaler's owner/repo in allow, unless you explicitly want to exclude it.
+; A disallowed upscaler already loaded at startup prevents joining this server: the player must choose an allowed
+; or built-in upscaler and restart. See hailstone-addon-policy.cfg.example for a separate opt-in setup.

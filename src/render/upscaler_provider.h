@@ -102,6 +102,9 @@ public:
 
     const std::string& name() const { return name_; }   // its folder's (display.upscaler)
     const std::string& label() const { return label_; } // its own ("Intel XeSS")
+    // The bytes actually loaded, which may be an older copy after an add-on update. An opted-in server policy
+    // checks this folder rather than mistaking the newly installed provider for the one Vulkan is using.
+    const std::filesystem::path& loaded_folder() const { return loaded_folder_; }
     bool sharpens() const { return (flags_ & HAILSTONE_UPSCALER_SHARPENS) != 0; }
 
     // Each false means the provider is out (logged); the caller drops it.
@@ -125,6 +128,7 @@ private:
     const HailstoneUpscaler* table_ = nullptr;
     HailstoneUpscalerHost host_{};
     std::string name_, label_, folder_utf8_, config_utf8_;
+    std::filesystem::path loaded_folder_;
     std::uint32_t flags_ = 0;
     bool created_ = false;
 };

@@ -95,8 +95,20 @@ public:
     // "" (the player) always.
     bool web_owner_alive(const std::string& owner) const;
     // The installed add-ons' capability ceilings (docs/addons.md, app/addon_install.h addon_ceilings): what runs is
-    // checked again against them.
+    // checked again against them. The caller supplies any changed/extra code identities from its background scan.
     void set_addon_ceilings(std::vector<plugin::Ceiling> ceilings);
+    // Keep the trusted policy and refuse new starts until its fresh integrity snapshot can be published.
+    void set_addon_verification_pending(bool pending);
+    // False with an empty problem while required native add-ons await consent or scripts start; a nonempty
+    // problem identifies refusal/failure. The login's package check separately handles missing installations.
+    bool required_addons_ready(std::string* problem = nullptr) const;
+    std::uint64_t required_addons_serial() const;
+    bool has_required_addons() const; // runtime scripts/plugins only; an upscaler is not stopped by these controls
+    bool required_addons_stopped() const;
+    // Host/UI controls only: keep an emergency stop effective across policy refreshes until explicit recovery.
+    void emergency_stop_required_addons();
+    void retry_required_addons();
+    void reset_required_addons_session();
     // The server's compiled plugins waiting for the player's word (plugin/consent.h, docs/plugins.md "The server's
     // compiled plugins ask first"), with the server's name; nullopt none. The UI packs show it (eq.PluginConsent),
     // else imgui() does.

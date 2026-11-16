@@ -767,11 +767,24 @@ TEST_CASE("eq.LoginScreen: the add-on manager's view and its actions (docs/addon
     CHECK(ui("return eq.LoginDo('addonRevoke', 'hud')") == "false");
     CHECK(ui("return eq.LoginDo('addonAskAgain', 'autoloot')") == "false");
     CHECK_FALSE(ui.host.login_action);
+    // A required installed native plugin also exposes its per-server consent, so a refusal can be reviewed.
+    plug.name = "requiredplug";
+    plug.group = "installed";
+    plug.consent = "denied";
+    v.addons.rows.push_back(plug);
+    CHECK(ui("return eq.LoginDo('addonAskAgain', 'requiredplug')") == "true");
+    CHECK(ui.host.login_action == static_cast<int>(A::AddonAskAgain));
+    v.addons.rows.back().consent = "allowed";
+    CHECK(ui("return eq.LoginDo('addonRevoke', 'requiredplug')") == "true");
+    CHECK(ui.host.login_action == static_cast<int>(A::AddonRevoke));
+    v.addons.rows.pop_back();
+    ui.host.login_action.reset();
 
     // A suggested add-on (docs/addons.md "Suggested add-ons"): by its source; not while a login is under way.
     v.addons.suggestions = {{"servplug", "owner/servplug", "Alpha World has a Hailstone add-on.", false}};
     CHECK(ui("return eq.LoginScreen().addons.suggestions[1].source") == "owner/servplug");
     CHECK(ui("return eq.LoginScreen().addons.suggestions[1].fromServer") == "false");
+    CHECK(ui("return eq.LoginScreen().addons.suggestions[1].required") == "false");
     CHECK(ui("return eq.LoginDo('addonSuggestLook', 'owner/servplug')") == "true");
     CHECK(ui.host.login_action == static_cast<int>(A::AddonSuggestLook));
     CHECK(v.addons.choice == "owner/servplug");
@@ -785,6 +798,14 @@ TEST_CASE("eq.LoginScreen: the add-on manager's view and its actions (docs/addon
     CHECK(ui("return eq.LoginDo('addonSuggestLook', 'owner/servplug')") == "false");
     v.busy = false;
     CHECK_FALSE(ui.host.login_action);
+    v.addons.suggestions.front().required = true;
+    CHECK(ui("return eq.LoginScreen().addons.suggestions[1].required") == "true");
+    CHECK(ui("return eq.LoginDo('addonSuggestLater', 'owner/servplug')") == "false");
+    CHECK(ui("return eq.LoginDo('addonSuggestNever', 'owner/servplug')") == "false");
+    CHECK_FALSE(ui.host.login_action);
+    CHECK(ui("return eq.LoginDo('addonSuggestLook', 'owner/servplug')") == "true");
+    CHECK(ui.host.login_action == static_cast<int>(A::AddonSuggestLook));
+    ui.host.login_action.reset();
 
     // The store (docs/addons.md "Finding add-ons"): fetched on the pack's word, and Install opens an item's card
     // only for one that can be installed or updated.

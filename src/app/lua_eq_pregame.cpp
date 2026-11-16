@@ -209,6 +209,7 @@ void emit_addons(Out& o, const ui::AddonsView& a) {
         o.str("source", sg.source);
         o.str("text", sg.text);
         o.boolean("fromServer", sg.from_server);
+        o.boolean("required", sg.required);
         o.close(i);
     }
     o.close("suggestions");
@@ -434,8 +435,9 @@ void emit_login(Out& o, const ui::LoginView& v) {
 //   gameFolders {path, label, live, usable} (the one in use first), gameFolderFixed, assetsDir, boxCount, boxReady,
 //   addons (docs/addons.md): open (the panel shown: eq.LoginSet "addonsOpen"), available (links can be installed;
 //     else whyOff says why), link, inspecting, status,
-//     server (the picked server's name), suggestions {name ("" a server's suggestion), source, text, fromServer} (the
-//     picked server's suggested add-ons the player does not have: docs/addons.md "Suggested add-ons"), offer {name, kind, version, author, description, source, page, notes, key
+//     server (the picked server's name), suggestions {name ("" a server's suggestion), source, text, fromServer,
+//       required} (the picked server's offered add-ons: docs/addons.md "Suggested add-ons"),
+//     offer {name, kind, version, author, description, source, page, notes, key
 //     (the signing key's start, "" unsigned), installedVersion, blocked (why not, "" it can), caps (in words)},
 //     rows {name, kind ("script"/"plugin"/"tool"/"upscaler"), group ("installed", "manual", "server"), version, source, page, author,
 //     description, state, stateText, newVersion, caps, newCaps, modified, note, autoUpdate, signed, canUpdate,
@@ -626,16 +628,19 @@ int LoginDo(lua_State* L) {
                 action = A::AddonAuto;
             }
         } else if (what == "addonRevoke" || what == "addonAskAgain") {
-            // The server's own compiled plugin of that name (an installed add-on may share it).
-            const ui::AddonRowView* server = nullptr;
-            for (const auto& r : a.rows)
-                if (r.group == "server" && r.kind == "plugin" && r.name == name) server = &r;
-            ok = server && (what == "addonRevoke" ? server->consent == "allowed" : server->consent == "denied");
+            // A server-provided or required installed plugin whose per-server consent the client exposes.
+            const std::string_view wanted = what == "addonRevoke" ? "allowed" : "denied";
+            ok = std::any_of(a.rows.begin(), a.rows.end(), [&](const ui::AddonRowView& r) {
+                return (r.group == "server" || r.group == "installed") && r.kind == "plugin" &&
+                       r.name == name && r.consent == wanted;
+            });
             if (ok) action = what == "addonRevoke" ? A::AddonRevoke : A::AddonAskAgain;
         } else if (what.starts_with("addonSuggest")) {
             // A suggestion of the picked server's, by its source.
             ok = !v.busy && std::any_of(a.suggestions.begin(), a.suggestions.end(),
-                                        [&](const ui::AddonSuggestionView& sg) { return sg.source == name; });
+                                        [&](const ui::AddonSuggestionView& sg) {
+                                            return sg.source == name && (!sg.required || what == "addonSuggestLook");
+                                        });
             if (ok)
                 action = what == "addonSuggestLook"    ? A::AddonSuggestLook
                          : what == "addonSuggestLater" ? A::AddonSuggestLater

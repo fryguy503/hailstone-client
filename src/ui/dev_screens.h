@@ -39,6 +39,18 @@ struct StatusLine {
     bool is_error = false;
 };
 
+// The connection's required add-ons, read without touching the filesystem. Recovery actions are the player's.
+struct AddonPolicyView {
+    bool enabled = false;
+    bool can_stop = false;
+    bool can_retry = false;
+    bool degraded = false;
+    std::uint64_t serial = 0;
+    std::string phase;
+    std::string message;
+    std::vector<std::string> required;
+};
+
 // ---- Login ----------------------------------------------------------------
 
 // A game folder the login screen offers (hailstone.ini assets.path and assets.recent), with what its check found.
@@ -89,6 +101,7 @@ struct AddonSuggestionView {
     std::string source; // owner/repo: what AddonSuggestLook, AddonSuggestLater and AddonSuggestNever are for
     std::string text;   // the sentence the screen shows
     bool from_server = false;
+    bool required = false; // required to play: review/install, without optional-suggestion dismissal buttons
 };
 struct AddonRowView {
     std::string name, kind;   // kind: "script", "plugin" or "tool"

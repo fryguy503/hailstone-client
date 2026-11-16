@@ -215,13 +215,50 @@ bool known_caps(std::string_view text) {
     return true;
 }
 
+bool identity_in(const std::vector<std::string>& identities, std::string_view name, std::string_view source) {
+    return std::any_of(identities.begin(), identities.end(), [&](const std::string& identity) {
+        return addon_identity_matches(identity, name, source);
+    });
+}
+
 } // namespace
+
+std::optional<std::string> normalize_addon_identity(std::string_view identity) {
+    std::string normalized = lower(trim(identity));
+    if (auto source = parse_addon_link(normalized)) {
+        if (source->repo.size() > 4 && source->repo.ends_with(".git")) source->repo.resize(source->repo.size() - 4);
+        return lower(source->owner + "/" + source->repo);
+    }
+    return std::nullopt;
+}
+
+bool addon_identity_matches(std::string_view identity, std::string_view, std::string_view source) {
+    const auto normalized = normalize_addon_identity(identity);
+    if (!normalized) return false;
+    const auto repository = normalize_addon_identity(source);
+    return repository && *normalized == *repository;
+}
+
+bool addon_required(const AddonRules& rules, std::string_view name, std::string_view source) {
+    return rules.enabled && identity_in(rules.required, name, source);
+}
+
+bool addon_allowed(const AddonRules& rules, std::string_view name, std::string_view source) {
+    if (!rules.enabled) return true;
+    if (!rules.error.empty() || identity_in(rules.block, name, source)) return false;
+    return identity_in(rules.required, name, source) || identity_in(rules.allow, name, source) || rules.default_allow;
+}
 
 Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings) {
     Rules r;
     r.configured = true;
     auto warn = [&](std::string w) {
         if (warnings) warnings->push_back(std::move(w));
+    };
+    std::string addon_error;
+    auto invalid_addons = [&](const std::string& message) {
+        if (addon_error.empty()) addon_error = message;
+        warn(message);
     };
     IniFile ini;
     ini.parse(text);
@@ -339,6 +376,35 @@ Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings
                     continue;
                 }
             } else if (section == "addons") {
+                if (key == "enforce") {
+                    if (auto enabled = on_off(v)) r.addons.enabled = *enabled;
+                    else {
+                        r.addons.enabled = true; // a misspelt opt-in must not silently turn enforcement off
+                        invalid_addons(where + ": expected on or off");
+                    }
+                    continue;
+                }
+                if (key == "default") {
+                    if (v == "allow" || v == "deny") r.addons.default_allow = v == "allow";
+                    else invalid_addons(where + ": expected allow or deny");
+                    continue;
+                }
+                if (key == "required" || key == "allow" || key == "block") {
+                    auto& identities = key == "required" ? r.addons.required : key == "allow" ? r.addons.allow : r.addons.block;
+                    std::string_view rest = v;
+                    while (!rest.empty()) {
+                        const std::size_t comma = rest.find(',');
+                        const std::string_view item = trim(rest.substr(0, comma));
+                        if (auto identity = normalize_addon_identity(item)) {
+                            if (std::find(identities.begin(), identities.end(), *identity) == identities.end())
+                                identities.push_back(std::move(*identity));
+                        } else invalid_addons(std::format("{}: \"{}\" is not a GitHub owner/repo identity", where, item));
+                        if (comma == std::string_view::npos) break;
+                        rest.remove_prefix(comma + 1);
+                        if (trim(rest).empty()) invalid_addons(where + ": an empty add-on identity follows ','");
+                    }
+                    continue;
+                }
                 if (key == "suggest") {
                     std::string_view rest = v;
                     while (!rest.empty()) {
@@ -352,6 +418,8 @@ Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings
                     }
                     continue;
                 }
+                invalid_addons(std::format("{}: not a setting Hailstone knows; ignored", where));
+                continue;
             }
             warn(std::format("{}: not a setting Hailstone knows; ignored", where));
         }
@@ -361,6 +429,30 @@ Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings
             warn(std::format("[{}] player_caps: has no effect without player = on", scripts ? "scripts" : "plugins"));
         (scripts ? r.player_script_caps : r.player_plugin_caps) = player_on[scripts] ? player_caps[scripts].value_or(kCapAll) : 0;
     }
+    for (const auto& identity : r.addons.required)
+        if (std::find(r.addons.block.begin(), r.addons.block.end(), identity) != r.addons.block.end())
+            invalid_addons("[addons] " + identity + " is both required and blocked");
+    if (r.addons.enabled) {
+        // IniFile also reads permissive, hand-edited game files and skips malformed lines. An enabled add-on
+        // policy must not turn a misspelt restriction into its default permission instead.
+        bool in_addons = false;
+        std::string_view rest = text;
+        while (!rest.empty()) {
+            const std::size_t newline = rest.find('\n');
+            const std::string line = value_of(rest.substr(0, newline));
+            rest = newline == std::string_view::npos ? std::string_view() : rest.substr(newline + 1);
+            if (line.empty()) continue;
+            if (line.front() == '[') {
+                const std::size_t close = line.find(']');
+                in_addons = trim(std::string_view(line).substr(1, close == std::string::npos ? close : close - 1)) == "addons";
+                if (in_addons && (close == std::string::npos || !trim(std::string_view(line).substr(close + 1)).empty()))
+                    invalid_addons("[addons]: malformed section header");
+            } else if (in_addons && line.find('=') == std::string::npos) {
+                invalid_addons("[addons]: expected key = value in \"" + line + "\"");
+            }
+        }
+    }
+    if (r.addons.enabled) r.addons.error = std::move(addon_error);
     return r;
 }
 
@@ -398,7 +490,7 @@ std::optional<std::uint32_t> Policy::ceiling(FileKind kind, const Sha256Digest& 
     std::optional<std::uint32_t> out;
     // A file two add-ons both ship gets what both allow.
     for (const auto& c : ceilings_)
-        if (c.kind == kind && c.sha256 == hash) out = out.value_or(kCapAll) & c.caps;
+        if (c.verified && c.kind == kind && c.sha256 == hash) out = out.value_or(kCapAll) & c.caps;
     return out;
 }
 
@@ -419,8 +511,63 @@ bool Policy::server_file(FileKind kind, const Sha256Digest& hash) const {
                        [&](const ServerFile& f) { return f.kind == kind && f.sha256 == hash; });
 }
 
-std::uint32_t Policy::caps(FileKind kind, const Sha256Digest& hash) const {
+bool Policy::addon_file_allowed(FileKind kind, const Sha256Digest& hash, std::string_view name) const {
+    if (!rules_) return false;
+    const AddonRules& addons = rules_->addons;
+    if (!addons.enabled) return true;
+    if (!addons.error.empty()) return false;
+    // Files can be edited after the registry's hash scan. A known runtime name can still carry its recorded
+    // source's explicit block; it never proves permission, a requirement or a capability ceiling.
+    if (!name.empty()) {
+        const std::string runtime_name = lower(trim(name));
+        for (const auto& c : ceilings_)
+            if (c.kind == kind && lower(c.addon_name) == runtime_name &&
+                identity_in(addons.block, c.addon_name, c.addon_source)) return false;
+    }
+    bool identified = false;
+    // A shared module is subject to every add-on that supplied its bytes, just as its capability ceilings are.
+    for (const auto& c : ceilings_) {
+        if (c.kind != kind || c.sha256 != hash || (c.addon_name.empty() && c.addon_source.empty())) continue;
+        if (!c.verified) {
+            if (!addons.default_allow || identity_in(addons.block, c.addon_name, c.addon_source)) return false;
+            continue;
+        }
+        identified = true;
+        if (!addon_allowed(addons, c.addon_name, c.addon_source)) return false;
+    }
+    // The server's own verified files keep their existing permissions. Their paths are not repository identity
+    // evidence, so they cannot satisfy a managed requirement. Any matched managed source above still restricts
+    // shared bytes, including explicit blocks and closed allowlists.
+    if (server_file(kind, hash)) return true;
+    // A typed name is not proof of identity: renaming or editing an allowlisted file cannot admit unknown bytes.
+    return identified || addons.default_allow;
+}
+
+bool Policy::required_file(FileKind kind, const Sha256Digest& hash) const {
+    if (!rules_ || !rules_->addons.enabled) return false;
+    for (const auto& c : ceilings_)
+        if (c.verified && c.kind == kind && c.sha256 == hash &&
+            addon_required(rules_->addons, c.addon_name, c.addon_source)) return true;
+    return false;
+}
+
+std::vector<std::pair<std::string, Sha256Digest>> Policy::required_entries(FileKind kind) const {
+    std::vector<std::pair<std::string, Sha256Digest>> out;
+    if (!rules_ || !rules_->addons.enabled) return out;
+    auto add = [&](std::string name, const Sha256Digest& hash) {
+        if (name.empty()) return;
+        std::pair<std::string, Sha256Digest> entry{lower(name), hash};
+        if (std::find(out.begin(), out.end(), entry) == out.end()) out.push_back(std::move(entry));
+    };
+    for (const auto& c : ceilings_)
+        if (c.verified && c.entry_point && c.kind == kind &&
+            addon_required(rules_->addons, c.addon_name, c.addon_source)) add(c.addon_name, c.sha256);
+    return out;
+}
+
+std::uint32_t Policy::caps(FileKind kind, const Sha256Digest& hash, std::string_view name) const {
     if (!rules_) return 0;
+    if (!addon_file_allowed(kind, hash, name)) return 0;
     std::uint32_t caps = kCapAll;
     if (rules_->configured && !server_file(kind, hash))
         caps = (kind == FileKind::Plugin ? rules_->player_plugin_caps : rules_->player_script_caps) & kCapAll;
@@ -435,6 +582,10 @@ std::uint32_t Policy::caps(FileKind kind, const Sha256Digest& hash) const {
 std::string Policy::refusal(FileKind kind) const {
     const char* what = kind == FileKind::Plugin ? "plugins" : "scripts";
     if (!rules_) return std::format("{} are off until the zone-in has checked the server's files", what);
+    if (rules_->addons.enabled) {
+        if (!rules_->addons.error.empty()) return "the server's add-on policy is invalid: " + rules_->addons.error;
+        return "this add-on is not permitted by the server's add-on policy or capabilities";
+    }
     if (rules_->provisional)
         return std::format("before the zone-in only {} with the server's 'login' permission run", what);
     return std::format("this server runs only its own {} (its {})", what, kServerCfgName);

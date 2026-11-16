@@ -238,7 +238,7 @@ TEST_CASE("Plugin UI: a plugin cannot take the player's keys and requests, nor r
     s.run("", "eq.ChatTakeFocus(1, '') eq.ChatTakeFocus(1) eq.ChatPage(1) return 1");
 
     for (const char* dialog : {"ConfirmationDialogBox", "TradeWnd", "GiveWnd", "QuantityWnd", "GroupInvite",
-                               "RespawnWnd", "PluginConsent"}) {
+                               "RespawnWnd", "PluginConsent", "AddonPolicy"}) {
         CAPTURE(dialog);
         s.run("plugin:A", std::string("eq.ReplaceWindow('") + dialog + "') eq.WindowShown('" + dialog + "') return 1");
         CHECK_FALSE(s.api->replaces(dialog));

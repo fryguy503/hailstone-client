@@ -39,7 +39,7 @@ struct Host {
     std::unique_ptr<mq::ScriptHost> scripts;
 
     explicit Host(std::uint32_t unlisted_caps = plugin::kCapAll, plugin::WebAccess* web = nullptr,
-                  std::int64_t runaway_ms = 0) {
+                  std::int64_t runaway_ms = 0, std::function<bool()> can_start = {}) {
         fs::create_directories(lua_dir);
         mq::register_game_tlos(reg);
         ctx.registry = &reg;
@@ -65,6 +65,7 @@ struct Host {
         se.now_ms = [this] { return clock; };
         se.web = web;
         se.runaway_ms = runaway_ms;
+        se.can_start = std::move(can_start);
         scripts = std::make_unique<mq::ScriptHost>(se);
     }
     ~Host() {
@@ -318,6 +319,221 @@ TEST_CASE("MQ Lua: a module must be allowed too") {
     REQUIRE(h.scripts->run("main", {}));
     h.pulses(1);
     CHECK(h.printed_line("got 42"));
+}
+
+TEST_CASE("MQ Lua: required managed scripts start without autorun and cannot be stopped or paused") {
+    Host h;
+    const std::string text = "while true do require('mq').delay(10) end\n";
+    h.write("needed/init.lua", text);
+    h.policy.set_ceilings({{plugin::FileKind::Script, sha256(text), plugin::kCapRead, "needed", "owner/needed"}});
+    h.policy.set(plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\ndefault = deny\n"
+                                          "required = owner/needed\n"));
+    h.scripts->policy_changed();
+    REQUIRE(h.scripts->running("needed"));
+    std::string problem;
+    CHECK_FALSE(h.scripts->required_addons_ready(&problem)); // the entry has not run yet
+    CHECK(problem.empty());
+    h.pulses(1);
+    CHECK(h.scripts->required_addons_ready(&problem));
+    CHECK(h.scripts->list().front().kept);
+    CHECK(h.scripts->stop("needed"));
+    CHECK(h.scripts->pause("needed", true));
+    h.run("/lua stop");
+    h.run("/lua pause");
+    CHECK(h.scripts->running("needed"));
+    CHECK(h.scripts->list().front().status == "RUNNING");
+    CHECK(h.printed_line("[Lua] needed is required by this server: it keeps running"));
+    h.policy.clear();
+    h.scripts->policy_changed();
+    CHECK_FALSE(h.scripts->running("needed"));
+}
+
+TEST_CASE("MQ Lua: required script startup failures prevent readiness") {
+    Host h;
+    const std::string text = "error('required startup failed')\n";
+    h.write("needed/init.lua", text);
+    h.policy.set_ceilings({{plugin::FileKind::Script, sha256(text), plugin::kCapRead, "needed", "owner/needed"}});
+    h.policy.set(plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/needed\n"));
+    h.scripts->policy_changed();
+    h.pulses(1);
+    std::string problem;
+    CHECK_FALSE(h.scripts->required_addons_ready(&problem));
+    CHECK(problem.find("Required add-on needed") != std::string::npos);
+}
+
+TEST_CASE("MQ Lua: a required hash also supplied by a blocked add-on refuses readiness") {
+    Host h;
+    const std::string text = "while true do require('mq').delay(10) end\n";
+    h.write("needed/init.lua", text);
+    h.policy.set_ceilings({{plugin::FileKind::Script, sha256(text), plugin::kCapRead, "needed", "owner/needed"},
+                          {plugin::FileKind::Script, sha256(text), plugin::kCapRead, "blocked", "owner/blocked"}});
+    h.policy.set(plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\ndefault = deny\n"
+                                          "required = owner/needed\nblock = owner/blocked\n"));
+    h.scripts->policy_changed();
+    CHECK_FALSE(h.scripts->running("needed"));
+    std::string problem;
+    CHECK_FALSE(h.scripts->required_addons_ready(&problem));
+    CHECK(problem.find("not permitted") != std::string::npos);
+}
+
+TEST_CASE("MQ Lua: missing or shadowed required entry points cannot disappear from readiness checks") {
+    Host h;
+    const std::string text = "while true do require('mq').delay(10) end\n";
+    h.write("needed/init.lua", text);
+    h.policy.set_ceilings({{plugin::FileKind::Script, sha256(text), plugin::kCapRead, "needed", "owner/needed"}});
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\ndefault = deny\n"
+                                          "required = owner/needed\nallow = owner/needed\n");
+    SUBCASE("the managed entry is missing") {
+        fs::remove(h.lua_dir / "needed/init.lua");
+    }
+    SUBCASE("a different server script shadows the managed entry") {
+        const fs::path server = h.world.dir / "server/scripts";
+        fs::create_directories(server);
+        const std::string shadow = "while true do require('mq').delay(20) end\n";
+        std::ofstream(server / "needed.lua", std::ios::binary) << shadow;
+        h.scripts->set_server_dir(server);
+        rules.server_files.push_back({plugin::FileKind::Script, "scripts/needed.lua", sha256(shadow)});
+    }
+    h.policy.set(rules);
+    h.scripts->policy_changed();
+    CHECK_FALSE(h.scripts->running("needed"));
+    std::string problem;
+    CHECK_FALSE(h.scripts->required_addons_ready(&problem));
+    CHECK_FALSE(problem.empty());
+}
+
+TEST_CASE("MQ Lua: repository blocks apply to managed scripts and already-loaded modules") {
+    Host h;
+    const std::string entry = "print('blocked entry')\n", module = "return {value = 42}\n";
+    h.write("blocked/init.lua", entry);
+    h.write("blocked/helper.lua", module);
+    h.policy.set_ceilings({{plugin::FileKind::Script, sha256(entry), plugin::kCapAll, "blocked", "owner/blocked"},
+                           {plugin::FileKind::Script, sha256(module), plugin::kCapAll, "blocked", "owner/blocked", true, false}});
+    h.write("main.lua", "local helper = require('blocked.helper') while true do require('mq').delay(10) end\n");
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\ndefault = allow\n");
+    h.policy.set(rules);
+    REQUIRE(h.scripts->run("main", {}));
+    h.pulses(1);
+    REQUIRE(h.scripts->running("main"));
+    rules.addons.block = {"owner/blocked"};
+    h.policy.set(rules);
+    std::string problem;
+    CHECK_FALSE(h.scripts->required_addons_ready(&problem)); // before policy_changed retires the loaded module
+    CHECK(problem.find("module") != std::string::npos);
+    h.scripts->policy_changed();
+    CHECK_FALSE(h.scripts->running("main"));
+    CHECK(h.scripts->required_addons_ready());
+    CHECK_FALSE(h.scripts->run("blocked", {}));
+    CHECK_FALSE(h.scripts->run("blocked/init", {}));
+    CHECK_FALSE(h.scripts->run("blocked/init.lua", {}));
+    CHECK_FALSE(h.scripts->run("./blocked/init.lua", {}));
+    CHECK_FALSE(h.scripts->run("blocked/./init.lua", {}));
+    CHECK_FALSE(h.scripts->run("blocked\\init.lua", {}));
+    REQUIRE(h.scripts->run("main", {}));
+    h.pulses(1);
+    CHECK_FALSE(h.scripts->running("main")); // require cannot reopen the blocked module
+}
+
+TEST_CASE("MQ Lua: relative script paths retain their existing meaning with case-preserving lookup") {
+    Host h;
+    h.write("Relative/init.lua", "print('relative entry')\n");
+    REQUIRE(h.scripts->run("./Relative", {}));
+    h.pulses(1);
+    CHECK(h.printed_line("relative entry"));
+}
+
+TEST_CASE("MQ Lua: required mixed-case package entry points retain their filesystem spelling") {
+    Host h;
+    const std::string code = "while true do require('mq').delay(10) end\n";
+    h.write("MiXeD/InIt.LuA", code);
+    h.policy.set_ceilings({{plugin::FileKind::Script, sha256(code), plugin::kCapRead, "MiXeD", "owner/mixed"}});
+    h.policy.set(plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\ndefault = deny\n"
+                                          "required = owner/mixed\n"));
+    h.scripts->policy_changed();
+    REQUIRE(h.scripts->running("mixed"));
+    h.pulses(1);
+    CHECK(h.scripts->required_addons_ready());
+    const auto serial = h.scripts->required_addons_serial();
+    for (int frame = 0; frame < 8; ++frame) {
+        h.pulses(1);
+        CHECK(h.scripts->required_addons_ready());
+        CHECK(h.scripts->required_addons_serial() == serial);
+    }
+}
+
+TEST_CASE("MQ Lua: admission start gate runs before looking for a script file") {
+    bool allowed = false;
+    Host h(plugin::kCapAll, nullptr, 0, [&] { return allowed; });
+    std::string why;
+    CHECK_FALSE(h.scripts->run("missing", {}, &why));
+    CHECK(why.find("verification") != std::string::npos);
+    h.write("later.lua", "while true do require('mq').delay(10) end\n");
+    CHECK_FALSE(h.scripts->run("later", {}));
+    allowed = true;
+    CHECK(h.scripts->run("later", {}));
+}
+
+TEST_CASE("MQ Lua: host recovery stops only required scripts and suppresses their automatic restart") {
+    Host h;
+    const std::string code = "while true do require('mq').delay(10) end\n";
+    h.write("needed/init.lua", code);
+    h.write("optional.lua", "-- optional\n" + code);
+    h.policy.set_ceilings({{plugin::FileKind::Script, sha256(code), plugin::kCapRead, "needed", "owner/needed"}});
+    h.policy.set(plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\n"
+                                          "required = owner/needed\n"));
+    h.scripts->policy_changed();
+    REQUIRE(h.scripts->run("optional", {}));
+    h.pulses(1);
+    REQUIRE(h.scripts->required_addons_ready());
+    const auto serial = h.scripts->required_addons_serial();
+    h.scripts->stop_required_addons();
+    CHECK_FALSE(h.scripts->running("needed"));
+    CHECK(h.scripts->running("optional"));
+    std::string problem;
+    CHECK_FALSE(h.scripts->required_addons_ready(&problem));
+    CHECK(problem.find("recovery") != std::string::npos);
+    CHECK(h.scripts->required_addons_serial() != serial);
+    h.scripts->policy_changed({"needed"});
+    CHECK_FALSE(h.scripts->running("needed"));
+    CHECK_FALSE(h.scripts->run("needed", {}));
+    h.scripts->resume_required_addons();
+    h.scripts->policy_changed();
+    h.pulses(1);
+    CHECK(h.scripts->required_addons_ready());
+}
+
+TEST_CASE("MQ Lua: cached required readiness changes when a running required script fails") {
+    Host h;
+    const std::string code = "require('mq').delay(0) error('after startup')\n";
+    h.write("needed/init.lua", code);
+    h.policy.set_ceilings({{plugin::FileKind::Script, sha256(code), plugin::kCapRead, "needed", "owner/needed"}});
+    h.policy.set(plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/needed\n"));
+    h.scripts->policy_changed();
+    h.pulses(1);
+    REQUIRE(h.scripts->required_addons_ready());
+    const auto serial = h.scripts->required_addons_serial();
+    h.pulses(1);
+    std::string problem;
+    CHECK_FALSE(h.scripts->required_addons_ready(&problem));
+    CHECK_FALSE(problem.empty());
+    CHECK(h.scripts->required_addons_serial() != serial);
+}
+
+TEST_CASE("MQ Lua: loaded module rechecks are confined to opted-in add-on rules") {
+    Host h(plugin::kCapRead);
+    const std::string helper = "return {}\n";
+    h.write("helper.lua", helper);
+    h.write("main.lua", "require('helper') while true do require('mq').delay(10) end\n");
+    h.policy.set_ceilings({{plugin::FileKind::Script, sha256(helper), plugin::kCapRead, "helper", "owner/helper"}});
+    REQUIRE(h.scripts->run("main", {}));
+    h.pulses(1);
+    h.allow_unlisted(plugin::kCapAll);
+    h.scripts->policy_changed();
+    CHECK(h.scripts->running("main"));
+    CHECK(h.scripts->caps_of("main") == plugin::kCapAll);
+    h.policy.set(plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\ndefault = allow\n"));
+    h.scripts->policy_changed();
+    CHECK_FALSE(h.scripts->running("main"));
 }
 
 TEST_CASE("MQ Lua: a module whose file may do less than the requiring script is refused") {

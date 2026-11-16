@@ -199,6 +199,7 @@ int ClientApp::run() {
         settle_frame_.ui = true; // the UI pack's in-game frame ran (or there is none)
         if (screen_ == Screen::InGame && zone_settling()) ui::loading_overlay(loading_view_);
         if (automation_) automation_->imgui(game_view_.dev_windows);
+        addon_policy_window();
         // The select clock runs on through character creation (input scripts drive both screens).
         if (screen_ != Screen::Characters && screen_ != Screen::Create) select_shown_.reset();
         else if (!select_shown_) select_shown_ = Clock::now();

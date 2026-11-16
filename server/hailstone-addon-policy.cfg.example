@@ -1,0 +1,34 @@
+; Optional server add-on policy. Copy this file to client_files/hailstone.cfg and configure its identities.
+; Servers that do not enable [addons] enforce keep the existing client behavior.
+; Use GitHub owner/repo identities, not manifest or DLL names. Repository identities distinguish
+; add-ons whose manifest name differs from their repository's name. A required repository needs an installable
+; package for the player's platform and client version. Required installs keep the normal approval prompts.
+
+[scripts]
+player = off
+;player_caps = read,ui
+
+[plugins]
+player = off
+;player_caps = read
+
+[addons]
+enforce = on
+;required =
+;allow =
+;suggest = owner/repo
+;block = owner/unwanted-addon
+default = allow
+
+; required, allow and block accept comma-separated GitHub owner/repo identities. Required and allow are blank
+; here so this template names no add-ons. To admit player-installed code, explicitly enable its scripts/plugins
+; section and choose the capabilities it needs; naming it in a list does not grant those capabilities.
+
+; WARNING: default = deny blocks ALL unlisted player add-ons, including external upscalers. List the repositories
+; of FSR4, XeSS and any other upscalers you want to permit in allow, unless you explicitly do not want them.
+; Built-in rendering options do not need an entry. External upscalers load at client startup;
+; a blocked active provider prevents joining until the player changes the option and restarts Hailstone.
+;
+; To block only certain repositories, use default = allow with block. To require add-ons without excluding
+; other add-ons, use required with default = allow. Suggested add-ons remain optional: suggest does not grant
+; permission under default = deny, so add a suggestion to allow too if you want it to run here.

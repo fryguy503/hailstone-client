@@ -174,6 +174,7 @@ TEST_CASE("upscaler provider: the example loads, and its table is read") {
     REQUIRE_MESSAGE(p, error);
     CHECK(p->name() == "example");
     CHECK(p->label() == "Example (linear blit)");
+    CHECK(p->loaded_folder() == kFixtures / "example");
     CHECK_FALSE(p->sharpens());
     std::vector<std::string> extensions{"VK_KHR_surface"};
     std::uint32_t min_api = 0;

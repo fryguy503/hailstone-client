@@ -855,14 +855,18 @@ local function suggestionNotice(view, s)
     ui.PushStyleColor(ui.Col.Text, C.accent[1], C.accent[2], C.accent[3], C.accent[4] or 1)
     ui.TextWrapped(sg.text)
     ui.PopStyleColor()
-    if P.Primary("Look at it", 0, 0, not view.busy) then eq.LoginDo("addonSuggestLook", sg.source) end
+    if P.Primary(sg.required and "Review required add-on" or "Look at it", 0, 0, not view.busy) then
+      eq.LoginDo("addonSuggestLook", sg.source)
+    end
     P.Tip("What it is and what it asks to do: nothing is installed yet")
-    ui.SameLine()
-    if ui.Button("Not now") then eq.LoginDo("addonSuggestLater", sg.source) end
-    P.Tip("Not suggested again until Hailstone starts again")
-    ui.SameLine()
-    if ui.Button("Don't ask again") then eq.LoginDo("addonSuggestNever", sg.source) end
-    P.Tip("Not suggested again for this server")
+    if not sg.required then
+      ui.SameLine()
+      if ui.Button("Not now") then eq.LoginDo("addonSuggestLater", sg.source) end
+      P.Tip("Not suggested again until Hailstone starts again")
+      ui.SameLine()
+      if ui.Button("Don't ask again") then eq.LoginDo("addonSuggestNever", sg.source) end
+      P.Tip("Not suggested again for this server")
+    end
     ui.Dummy(0, 2 * s)
     ui.PopID()
   end

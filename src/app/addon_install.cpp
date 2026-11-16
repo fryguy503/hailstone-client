@@ -1,6 +1,7 @@
 #include "app/addon_install.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <fstream>
@@ -480,11 +481,14 @@ const InstalledAddon* find_pinned_addon(const std::vector<InstalledAddon>& addon
     return a;
 }
 
-std::vector<std::string> modified_addon_files(const fs::path& data_dir, const InstalledAddon& addon) {
+std::vector<std::string> modified_addon_files(const fs::path& data_dir, const InstalledAddon& addon,
+                                             const std::function<bool()>& canceled) {
     std::vector<std::string> out;
     const fs::path folder = addon_folder(data_dir, addon.kind, addon.name);
-    for (const auto& f : addon.files)
-        if (!package_file_matches(folder / rel(f.path), f.size, f.sha256)) out.push_back(f.path);
+    for (const auto& f : addon.files) {
+        if (canceled && canceled()) break;
+        if (!package_file_matches(folder / rel(f.path), f.size, f.sha256, canceled)) out.push_back(f.path);
+    }
     return out;
 }
 
@@ -990,14 +994,72 @@ bool library_file(std::string_view path) {
     const std::string ext = extension_of(path);
     return ext == ".so" || ext == ".dll" || ext == ".dylib";
 }
+
+std::optional<Sha256Digest> current_file_hash(const fs::path& file, const std::function<bool()>& canceled) {
+    if (canceled && canceled()) return std::nullopt;
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return std::nullopt;
+    Sha256 hash;
+    std::array<char, 65536> bytes{};
+    while (in) {
+        if (canceled && canceled()) return std::nullopt;
+        in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (const auto count = in.gcount(); count > 0)
+            hash.update(std::string_view(bytes.data(), static_cast<std::size_t>(count)));
+    }
+    if (in.bad() || (canceled && canceled())) return std::nullopt;
+    return hash.finish();
+}
 } // namespace
 
-std::vector<plugin::Ceiling> addon_ceilings(const fs::path& data_dir) {
-    const AddonRegistry reg = read_addon_registry(data_dir);
+std::vector<plugin::Ceiling> addon_ceilings(const fs::path& data_dir, bool scan_for_enforcement,
+                                          const std::function<bool()>& canceled) {
+    if (canceled && canceled()) return {};
+    return addon_ceilings(data_dir, read_addon_registry(data_dir), scan_for_enforcement, canceled);
+}
+
+std::vector<plugin::Ceiling> addon_ceilings(const fs::path& data_dir, const AddonRegistry& reg, bool scan_for_enforcement,
+                                          const std::function<bool()>& canceled) {
+    if (canceled && canceled()) return {};
     std::vector<plugin::Ceiling> out = addon_ceilings(reg.addons);
+    // Changed or extra code in a managed folder still belongs to that source for explicit blocks. Its bytes are
+    // not manifest-verified, so it cannot satisfy a closed allowlist or a requirement. With enforcement off it
+    // keeps the existing behavior of a player-edited file, rather than gaining the original manifest's ceiling.
+    if (scan_for_enforcement) {
+        for (const auto& a : reg.addons) {
+            if (canceled && canceled()) return {};
+            if (a.kind != AddonKind::Script && a.kind != AddonKind::Plugin) continue;
+            const fs::path folder = addon_folder(data_dir, a.kind, a.name);
+            std::error_code ec;
+            if (!fs::is_directory(folder, ec)) continue;
+            auto take = [&](const fs::path& file, plugin::FileKind kind) {
+                const auto hash = current_file_hash(file, canceled);
+                if (!hash) return;
+                const auto relative = file.lexically_relative(folder).generic_string();
+                if (std::any_of(a.files.begin(), a.files.end(), [&](const AddonFile& f) {
+                        return iequal(f.path, relative) && f.sha256 == *hash;
+                    })) return;
+                out.push_back({kind, *hash, 0, a.name, a.source, false, false});
+            };
+            if (a.kind == AddonKind::Script) {
+                for (auto it = fs::recursive_directory_iterator(folder, ec); !ec && it != fs::recursive_directory_iterator() &&
+                     !(canceled && canceled());
+                     it.increment(ec))
+                    if (it->is_regular_file(ec) && extension_of(it->path().filename().string()) == ".lua")
+                        take(it->path(), plugin::FileKind::Script);
+            } else {
+                for (const auto& e : fs::directory_iterator(folder, ec)) {
+                    if (canceled && canceled()) return {};
+                    if (e.is_regular_file(ec) && library_file(e.path().filename().string()))
+                        take(e.path(), plugin::FileKind::Plugin);
+                }
+            }
+        }
+    }
     // An add-on whose record does not read: what it was allowed is not known, so its files may do nothing (not what
     // a file put in by hand may). Every Lua file of its folder, and every library at its top, by their bytes now.
     for (const auto& u : reg.unreadable) {
+        if (canceled && canceled()) return {};
         std::size_t refused = 0;
         for (AddonKind k : {AddonKind::Script, AddonKind::Plugin}) {
             if (u.kind && *u.kind != k) continue;
@@ -1005,20 +1067,23 @@ std::vector<plugin::Ceiling> addon_ceilings(const fs::path& data_dir) {
             std::error_code ec;
             if (!fs::is_directory(folder, ec)) continue;
             auto take = [&](const fs::path& file, plugin::FileKind fk) {
-                if (auto bytes = read_text_file(file)) {
-                    out.push_back({fk, sha256(*bytes), 0});
+                if (auto hash = current_file_hash(file, canceled)) {
+                    out.push_back({fk, *hash, 0, u.name, {}, true, false});
                     ++refused;
                 }
             };
             if (k == AddonKind::Script) {
-                for (auto it = fs::recursive_directory_iterator(folder, ec); !ec && it != fs::recursive_directory_iterator();
+                for (auto it = fs::recursive_directory_iterator(folder, ec); !ec && it != fs::recursive_directory_iterator() &&
+                     !(canceled && canceled());
                      it.increment(ec))
                     if (it->is_regular_file(ec) && extension_of(it->path().filename().string()) == ".lua")
                         take(it->path(), plugin::FileKind::Script);
             } else {
-                for (const auto& e : fs::directory_iterator(folder, ec))
+                for (const auto& e : fs::directory_iterator(folder, ec)) {
+                    if (canceled && canceled()) return {};
                     if (e.is_regular_file(ec) && library_file(e.path().filename().string()))
                         take(e.path(), plugin::FileKind::Plugin);
+                }
             }
         }
         log::warn("Add-ons: {} is named in addons/installed.txt, but its record cannot be read ({}): its {} file(s) "
@@ -1027,7 +1092,7 @@ std::vector<plugin::Ceiling> addon_ceilings(const fs::path& data_dir) {
     }
     if (reg.from_backup && reg.unreadable.empty())
         log::warn("Add-ons: {}: its add-ons are read from addons/{}", reg.problem, kRegistryBackup);
-    return out;
+    return canceled && canceled() ? std::vector<plugin::Ceiling>{} : out;
 }
 
 std::vector<plugin::Ceiling> addon_ceilings(const std::vector<InstalledAddon>& addons) {
@@ -1035,11 +1100,12 @@ std::vector<plugin::Ceiling> addon_ceilings(const std::vector<InstalledAddon>& a
     for (const auto& a : addons)
         for (const auto& f : a.files) {
             const std::string ext = extension_of(f.path);
-            if (a.kind == AddonKind::Script && ext == ".lua") out.push_back({plugin::FileKind::Script, f.sha256, a.caps});
+            if (a.kind == AddonKind::Script && ext == ".lua")
+                out.push_back({plugin::FileKind::Script, f.sha256, a.caps, a.name, a.source, true, iequal(f.path, "init.lua")});
             else if (a.kind == AddonKind::Plugin && (ext == ".so" || ext == ".dll" || ext == ".dylib") &&
                      f.path.find('/') == std::string::npos &&
                      iequal(plugin::plugin_name(rel(f.path)), a.name))
-                out.push_back({plugin::FileKind::Plugin, f.sha256, a.caps});
+                out.push_back({plugin::FileKind::Plugin, f.sha256, a.caps, a.name, a.source});
         }
     return out;
 }

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "app/automation.h"
+#include "app/addon_install.h"
 #include "mq/lua_mq.h"
 #include "mq_test_world.h"
 #include "core/sha256.h"
@@ -86,6 +87,161 @@ TEST_CASE("Automation: a script holds autoskill off while it runs; stopping it l
     }
     CHECK(released);
     CHECK(h.automation->scripts().running("brief"));
+}
+
+TEST_CASE("Automation: prepared enforcement identities are applied after profile and managed-install changes") {
+    AutomationHost h;
+    const fs::path data = h.world.dir / "data";
+    const std::string original = "local tag = 0 while true do require('mq').delay(10) end\n";
+    app::InstalledAddon addon;
+    addon.name = "managed";
+    addon.source = "owner/managed";
+    addon.version = "1.0.0";
+    addon.caps = plugin::kCapRead;
+    addon.files = {{"init.lua", original.size(), sha256(original)}};
+    fs::create_directories(app::addons_dir(data));
+    REQUIRE(app::write_installed_addons(data, {addon}));
+    h.write("managed/init.lua", original);
+    auto change = [&](int tag) {
+        const std::string code = "local tag = " + std::to_string(tag) +
+                                 " while true do require('mq').delay(10) end\n";
+        h.write("managed/extra.lua", code);
+        h.write("copy.lua", code); // a renamed copy needs the scanned hash's source, not a runtime name match
+    };
+    change(1);
+    h.automation->set_addon_ceilings(app::addon_ceilings(data));
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().run("copy", {}));
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().running("copy"));
+
+    auto enforced = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\ndefault = allow\n"
+                                             "block = owner/managed\n");
+    enforced.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, enforced);
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true)); // the completed worker snapshot
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("copy"));
+    CHECK_FALSE(h.automation->scripts().run("copy", {}));
+
+    // A managed update publishes another completed scan; Automation applies it without scanning the folders itself.
+    change(2);
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true));
+    CHECK_FALSE(h.automation->scripts().run("copy", {}));
+
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, plugin::Rules{});
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().run("copy", {}));
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("copy"));
+    REQUIRE(h.automation->scripts().stop("copy"));
+    change(3);
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, enforced);
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true));
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().run("copy", {}));
+
+    auto closed = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\ndefault = deny\n"
+                                          "required = owner/managed\n");
+    closed.dir = enforced.dir;
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, closed);
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("managed"));
+    CHECK(h.automation->scripts().caps_of("managed") == plugin::kCapRead);
+    CHECK_FALSE(h.automation->scripts().run("copy", {}));
+}
+
+TEST_CASE("Automation: recovery stays stopped across rule refreshes and retries explicitly") {
+    AutomationHost h;
+    const std::string code = "while true do require('mq').delay(10) end\n";
+    h.write("needed/init.lua", code);
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/needed\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->set_addon_ceilings({{plugin::FileKind::Script, sha256(code), plugin::kCapRead,
+                                      "needed", "owner/needed"}});
+    h.automation->frame();
+    REQUIRE(h.automation->required_addons_ready());
+    CHECK(h.automation->has_required_addons());
+    const auto serial = h.automation->required_addons_serial();
+    for (int frame = 0; frame < 8; ++frame) {
+        h.automation->frame();
+        CHECK(h.automation->required_addons_ready());
+        CHECK(h.automation->required_addons_serial() == serial);
+    }
+    h.automation->emergency_stop_required_addons();
+    CHECK(h.automation->required_addons_stopped());
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    CHECK_FALSE(h.automation->required_addons_ready());
+    CHECK(h.automation->required_addons_serial() != serial);
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    h.automation->retry_required_addons();
+    CHECK_FALSE(h.automation->required_addons_stopped());
+    h.automation->frame();
+    CHECK(h.automation->required_addons_ready());
+    h.automation->emergency_stop_required_addons();
+    // Resetting a connection's session does not run anything against its old rules.
+    h.automation->reset_required_addons_session();
+    CHECK_FALSE(h.automation->has_required_addons());
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, std::nullopt);
+    h.automation->frame();
+    CHECK(h.automation->required_addons_ready());
+    CHECK_FALSE(h.automation->has_required_addons());
+}
+
+TEST_CASE("Automation: fresh enforcement waits for complete identities before any new start") {
+    AutomationHost h;
+    const auto data = h.world.dir / "data";
+    const std::string needed = "while true do require('mq').delay(10) end\n";
+    const std::string original = "-- original\n" + needed, copied = "-- changed code\n" + needed;
+    app::InstalledAddon required;
+    required.name = "needed";
+    required.source = "owner/needed";
+    required.version = "1.0.0";
+    required.caps = plugin::kCapRead;
+    required.files = {{"init.lua", needed.size(), sha256(needed)}};
+    auto blocked = required;
+    blocked.name = "blocked";
+    blocked.source = "owner/blocked";
+    blocked.files = {{"init.lua", original.size(), sha256(original)}};
+    fs::create_directories(app::addons_dir(data));
+    REQUIRE(app::write_installed_addons(data, {required, blocked}));
+    h.write("needed/init.lua", needed);
+    h.write("blocked/init.lua", original);
+    h.write("blocked/extra.lua", copied);
+    h.write("copy.lua", copied);
+    h.write("new.lua", "-- new\n" + needed);
+    h.automation->set_addon_ceilings(app::addon_ceilings(data));
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().run("copy", {}));
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().running("copy"));
+
+    h.automation->set_addon_verification_pending(true);
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\n"
+                                          "required = owner/needed\nblock = owner/blocked\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("copy")); // last trusted policy stays active during checking
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    std::string why;
+    CHECK_FALSE(h.automation->scripts().run("new", {}, &why));
+    CHECK(why.find("verification") != std::string::npos);
+    CHECK_FALSE(h.automation->required_addons_ready());
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true));
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("copy"));
+    CHECK_FALSE(h.automation->scripts().run("copy", {}));
+    CHECK(h.automation->scripts().running("needed"));
+    CHECK(h.automation->required_addons_ready());
+    CHECK(h.automation->scripts().run("new", {}));
 }
 
 TEST_CASE("Automation: hailstone.autoskill_list gives the player's list with names and conditions") {

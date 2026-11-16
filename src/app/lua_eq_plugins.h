@@ -14,6 +14,9 @@
 //   ok = eq.AnswerPluginConsent(allow, serial)   true allow, false refuse (both kept for those bytes), nil put away
 //                                until the next zone-in; serial the question's. False when there is no question or
 //                                it is not that one any more. A plugin's code gets nil / false.
+//   q = eq.AddonPolicy()         active server requirements and recovery state, else nil; a plugin gets nil.
+//   ok = eq.AddonPolicyAction(action, serial)   player's pack only: "stop", "retry" or "camp" against the
+//                                current snapshot; stale or unavailable actions return false.
 
 // The Lua scripts' part (mq/lua_mq.h; the Scripts window, docs/plugins.md "The Scripts window"; app/lua_eq_scripts.cpp):
 //   list, info = eq.Scripts([rescan])   {name, status ("" | "running" | "paused" | "exited" | "error"), error,

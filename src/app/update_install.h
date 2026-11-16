@@ -34,7 +34,8 @@ namespace hailstone::app {
 std::filesystem::path update_dir(const std::filesystem::path& install_dir);
 
 // Whether the file at `path` has this size and SHA-256 (a downloaded package).
-bool package_file_matches(const std::filesystem::path& path, std::uint64_t size, const Sha256Digest& sha256);
+bool package_file_matches(const std::filesystem::path& path, std::uint64_t size, const Sha256Digest& sha256,
+                          const std::function<bool()>& canceled = {});
 
 struct InstalledUpdate {
     std::map<std::string, Sha256Digest> components;              // component -> its package's hash

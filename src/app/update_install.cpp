@@ -275,7 +275,9 @@ bool write_installed(const fs::path& install_dir, const InstalledUpdate& in) {
 
 fs::path update_dir(const fs::path& install_dir) { return install_dir / "update"; }
 
-bool package_file_matches(const fs::path& path, std::uint64_t size, const Sha256Digest& sha256) {
+bool package_file_matches(const fs::path& path, std::uint64_t size, const Sha256Digest& sha256,
+                          const std::function<bool()>& canceled) {
+    if (canceled && canceled()) return false;
     std::error_code ec;
     const auto actual = fs::file_size(path, ec);
     if (ec || actual != size) return false;
@@ -283,12 +285,18 @@ bool package_file_matches(const fs::path& path, std::uint64_t size, const Sha256
     if (!in) return false;
     Sha256 h;
     std::vector<char> buf(1 << 16);
+    std::uint64_t bytes_read = 0;
     while (in) {
+        if (canceled && canceled()) return false;
         in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
         const auto n = static_cast<std::size_t>(in.gcount());
-        if (n) h.update(std::as_bytes(std::span(buf.data(), n)));
+        if (n) {
+            bytes_read += n;
+            if (bytes_read > size) return false;
+            h.update(std::as_bytes(std::span(buf.data(), n)));
+        }
     }
-    return h.finish() == sha256;
+    return !in.bad() && bytes_read == size && !(canceled && canceled()) && h.finish() == sha256;
 }
 
 InstalledUpdate read_installed_update(const fs::path& install_dir) {

@@ -83,7 +83,8 @@ constexpr Entry kCalls[] = {
     {"gamepad.rumble", 0}, {"gamepad.takes_b", 0},
     // These check a plugin's code themselves (the file's head)
     {"Plugin", 0}, {"PluginOptions", 0}, {"SetPluginOption", 0}, {"PluginMenu", 0}, {"PluginMenuClick", 0},
-    {"PluginConsent", 0}, {"AnswerPluginConsent", 0}, {"Scripts", 0}, {"ScriptRun", 0}, {"ScriptStop", 0},
+    {"PluginConsent", 0}, {"AnswerPluginConsent", 0}, {"AddonPolicy", 0}, {"AddonPolicyAction", 0},
+    {"Scripts", 0}, {"ScriptRun", 0}, {"ScriptStop", 0},
     {"ScriptPause", 0}, {"SetScriptAutorun", 0}, {"LoginScreen", 0}, {"LoginSet", 0}, {"LoginDo", 0},
     {"ServerSelect", 0}, {"ServerSelectDo", 0}, {"CharacterSelect", 0}, {"CharacterSelectDo", 0},
     {"CharacterCreate", 0}, {"CharacterCreateHelp", 0}, {"CharacterCreateDo", 0}, {"WebAvailable", 0}, {"WebOpen", 0},
