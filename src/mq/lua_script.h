@@ -76,26 +76,15 @@ struct ScriptHost::Impl {
     plugin::Hooks::Owner owner = 0;
     std::vector<std::unique_ptr<Script>> scripts;
     std::vector<std::pair<std::string, Sha256Digest>> required;
-    // What required_addons_ready answered, and what it answered from: it is asked each frame, and works it out again
-    // (the policy's identity checks for each script and module) only when the rules or the running scripts change.
-    struct ReadyScript {
-        std::string name, error;
-        Sha256Digest hash{};
-        int status = 0;
-        bool started = false, stop_requested = false;
-        std::vector<std::pair<std::string, Sha256Digest>> modules;
-        bool operator==(const ReadyScript&) const = default;
-    };
-    struct ReadyInputs {
-        std::uint32_t policy_serial = 0;
-        std::vector<std::pair<std::string, Sha256Digest>> required;
-        std::vector<ReadyScript> scripts;
-        bool operator==(const ReadyInputs&) const = default;
-    };
-    std::optional<ReadyInputs> ready_inputs;
-    bool ready_answer = true;
-    std::string ready_problem;
-    bool check_required_addons(std::string* problem) const; // required_addons_ready's work, uncached
+    bool required_stopped = false;
+    std::vector<std::pair<std::string, Sha256Digest>> stopped_required; // kept until explicit recovery or reconnect
+    std::uint64_t lifecycle_serial = 1;
+    mutable std::uint64_t checked_lifecycle = 0, readiness_serial = 0;
+    mutable std::uint32_t checked_policy = 0;
+    mutable bool required_ready = true;
+    mutable std::string required_problem;
+    bool compute_required(std::string* problem) const;
+    void refresh_required() const;
     Clock::time_point start = Clock::now();
 
     std::int64_t runaway_ms() const { return env.runaway_ms > 0 ? env.runaway_ms : kRunawayMs; }
@@ -278,6 +267,7 @@ struct Script {
         }
         if (status == Status::Failed || status == Status::Exited) return;
         status = Status::Failed;
+        ++host->lifecycle_serial;
         error = std::move(why);
         host->say(std::format("[Lua] {} ended with an error: {}", name, error));
         log::warn("lua script {}: {}", name, error);

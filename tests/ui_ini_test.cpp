@@ -50,6 +50,9 @@ TEST_CASE("window_ini_info: the window classes' IniFlags and versions") {
     // Hailstone: the aura window keeps its Show but starts closed (CAuraWnd's 0xffffffff has bit 9, bInitVisibility).
     CHECK(ui::window_ini_info("AuraWindow").flags == 0xfffffdffu);
     CHECK((ui::window_ini_info("ExtendedTargetWnd").flags & 0x200u) != 0);
+    const auto addons = ui::window_ini_info("AddonPolicy");
+    CHECK(addons.section == "AddonPolicy");
+    CHECK((addons.flags & 0x300u) == 0x300u); // remember visibility and show on first use
     CHECK(ui::window_ini_info("LootWnd").flags == 0xfffffcffu); // CSidlScreenWnd2
     // CItemDisplayManager::CreateWindowInstance: "ItemDisplay%d" by the displays made before.
     auto id = ui::window_ini_info("ItemDisplayWindow");

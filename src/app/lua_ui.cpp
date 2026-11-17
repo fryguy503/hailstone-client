@@ -51,6 +51,7 @@
 #include "game/spells.h"
 #include "game/world_state.h"
 #include "net/game_connection.h"
+#include "ui/dev_screens.h"
 #include "ui/ui_ini.h"
 #include "ui/ui_textures.h"
 #include "ui/texture_ids.h"
@@ -783,9 +784,9 @@ int UiAnimation(lua_State* L) {
 // interface the client draws it, as that interface cannot answer it (hs.AnswerPluginConsent).
 bool may_replace(std::string_view name, const UiHost& host) {
     static constexpr std::string_view kPackOnly[] = {
-        "PluginConsent", "ConfirmationDialogBox", "TradeWnd",    "GiveWnd",          "QuantityWnd",
+        "PluginConsent", "AddonPolicy", "ConfirmationDialogBox", "TradeWnd",    "GiveWnd",          "QuantityWnd",
         "BazaarConfirmationWnd", "GroupInvite", "RespawnWnd", "LargeDialogWindow", "TaskSelectWnd"};
-    if (!host.trusted_ui && name == "PluginConsent") return false;
+    if (!host.trusted_ui && (name == "PluginConsent" || name == "AddonPolicy")) return false;
     if (ui::lua::LuaUi::caller_tag().empty()) return true;
     return std::find(std::begin(kPackOnly), std::end(kPackOnly), name) == std::end(kPackOnly);
 }
@@ -899,7 +900,10 @@ int WindowPlaced(lua_State* L) {
 // hs.ShowWindow(name, show)   -- shows or hides the game window (and with it the replacement)
 int ShowWindow(lua_State* L) {
     auto& m = Impl::of(L);
-    if (StockWindow* w = m.window(luaL_checkstring(L, 1))) w->set_shown(m.host, lua_toboolean(L, 2) != 0);
+    const char* name = luaL_checkstring(L, 1);
+    // The player's recovery controls remain theirs even after the window has a normal show/hide state.
+    if (std::string_view(name) == "AddonPolicy" && (!m.host.trusted_ui || !ui::lua::pack_code(L))) return 0;
+    if (StockWindow* w = m.window(name)) w->set_shown(m.host, lua_toboolean(L, 2) != 0);
     return 0;
 }
 
@@ -2508,6 +2512,11 @@ int CursorAttachment(lua_State* L) {
     return 1;
 }
 
+bool addon_policy_available(const UiHost& host) {
+    const auto* view = host.addon_policy;
+    return view && view->enabled && (view->degraded || !view->required.empty());
+}
+
 // menus = hs.CascadeMenus()   -- the open EQ menu and submenus: { x, y, w, h, items = { { kind, text, rect, icon,
 // decalW, decalH, textX, enabled, arrow, arrowRect, background } } } (app/lua_ui_menu.h)
 int CascadeMenus(lua_State* L) {
@@ -2549,7 +2558,9 @@ int CascadeMenus(lua_State* L) {
             if (it.background) cell(*it.background), lua_setfield(L, -2, "background");
             lua_pushnumber(L, 24), lua_setfield(L, -2, "decalW");
             lua_pushnumber(L, 24), lua_setfield(L, -2, "decalH");
-            lua_pushboolean(L, it.enabled), lua_setfield(L, -2, "enabled");
+            const bool policy = m.cascade.command(static_cast<int>(k), static_cast<int>(i)) == kMenuAddonPolicy;
+            const bool enabled = it.enabled && (!policy || (m.host.trusted_ui && addon_policy_available(m.host)));
+            lua_pushboolean(L, enabled), lua_setfield(L, -2, "enabled");
             if (it.arrow) {
                 cell(*it.arrow), lua_setfield(L, -2, "arrow");
                 rect(it.arrow_rect), lua_setfield(L, -2, "arrowRect");
@@ -2572,6 +2583,9 @@ int CascadeClick(lua_State* L) {
         if (StockWindow* w = m.window("ScriptsWnd")) w->set_shown(m.host, true);
     } else if (cmd && *cmd == kMenuWebBrowser) {
         if (StockWindow* w = m.window("BrowserWnd")) w->set_shown(m.host, true);
+    } else if (cmd && *cmd == kMenuAddonPolicy) {
+        if (m.host.trusted_ui && ui::lua::pack_code(L) && addon_policy_available(m.host))
+            if (StockWindow* w = m.window("AddonPolicy")) w->set_shown(m.host, true);
     } else if (cmd && *cmd >= kMenuPluginFirst) { // a plugin's entry: its command line, as the plugin
         run_plugin_menu(m.host, static_cast<std::size_t>(*cmd - kMenuPluginFirst));
     } else if (cmd && m.host.run_command) m.host.run_command(*cmd);

@@ -23,9 +23,11 @@
 #include "app/lua_ui.h"
 #include "app/lua_ui_caps.h"
 #include "app/lua_ui_plugins.h"
+#include "core/game_dir.h"
 #include "plugin/policy.h"
 #include "plugin/ui_bridge.h"
 #include "scratch_dir.h"
+#include "ui/dev_screens.h"
 #include "ui/lua/lua_host.h"
 
 using namespace hailstone;
@@ -239,7 +241,7 @@ TEST_CASE("Plugin UI: a plugin cannot take the player's keys and requests, nor r
     s.run("", "hs.ChatTakeFocus(1, '') hs.ChatTakeFocus(1) hs.ChatPage(1) return 1");
 
     for (const char* dialog : {"ConfirmationDialogBox", "TradeWnd", "GiveWnd", "QuantityWnd", "GroupInvite",
-                               "RespawnWnd", "PluginConsent"}) {
+                               "RespawnWnd", "PluginConsent", "AddonPolicy"}) {
         CAPTURE(dialog);
         s.run("plugin:A", std::string("hs.ReplaceWindow('") + dialog + "') hs.WindowShown('" + dialog + "') return 1");
         CHECK_FALSE(s.api->replaces(dialog));
@@ -248,6 +250,50 @@ TEST_CASE("Plugin UI: a plugin cannot take the player's keys and requests, nor r
     }
     s.run("plugin:A", "hs.WindowShown('InventoryWindow') return 1"); // a window that does not act: as before
     CHECK(s.api->replaces("InventoryWindow"));
+}
+
+TEST_CASE("Plugin UI: only the client's own interface can read, operate or replace add-on recovery") {
+    for (const bool trusted : {false, true}) {
+        CAPTURE(trusted);
+        SandboxUi s;
+        s.host.trusted_ui = trusted;
+        ui::AddonPolicyView view;
+        view.enabled = view.can_stop = view.can_retry = view.degraded = true;
+        view.serial = 7;
+        view.required = {"owner/required"};
+        s.host.addon_policy = &view;
+        std::vector<std::string> actions;
+        s.host.addon_policy_action = [&](std::string_view action) { actions.emplace_back(action); };
+        int option = 0;
+        s.host.set_option = [&](std::string_view name, int value) {
+            CHECK(name == "music");
+            option = value;
+        };
+        s.caps[""] = s.caps["plugin:all"] = plugin::kCapAll;
+        s.add_folder("plugin:all");
+        s.frame();
+
+        CHECK(s.run("plugin:all", "return hs.UI.addons.Policy()") == "nil");
+        CHECK(s.run("plugin:all", "return hs.UI.addons.PolicyAction('stop', 7)") == "false");
+        CHECK(s.run("plugin:all", "hs.WindowShown('AddonPolicy') return true") == "true");
+        CHECK_FALSE(s.api->replaces("AddonPolicy"));
+        CHECK(actions.empty());
+
+        CHECK(s.run("", "return hs.UI.addons.Policy() ~= nil") == (trusted ? "true" : "false"));
+        CHECK(s.run("", "return hs.UI.addons.PolicyAction('stop', 6)") == "false");
+        for (const char* action : {"stop", "retry", "camp"}) {
+            CAPTURE(action);
+            CHECK(s.run("", std::string("return hs.UI.addons.PolicyAction('") + action + "', 7)") ==
+                  (trusted ? "true" : "false"));
+        }
+        CHECK(actions == (trusted ? std::vector<std::string>{"stop", "retry", "camp"} : std::vector<std::string>{}));
+        CHECK(s.run("", "hs.WindowShown('AddonPolicy') return true") == "true");
+        CHECK(s.api->replaces("AddonPolicy") == trusted);
+
+        // The recovery restriction does not remove ordinary custom-interface actions.
+        CHECK(s.run("", "hs.SetOption('music', 41) return true") == "true");
+        CHECK(option == 41);
+    }
 }
 
 // Every hs function says what a plugin's code needs to call it (app/lua_ui_caps.h): a new one must be put in a group.
@@ -470,6 +516,75 @@ ui.window('Legacy root',function() rootDraw=eq.InGame() end)
     CHECK(s.run("plugin:legacy", "return tostring(eq.UI.windows.ClickChild('NoWnd','X'))") == "nil");
     s.caps["plugin:legacy"] |= plugin::kCapActions;
     CHECK(s.run("plugin:legacy", "return tostring(eq.ClickChild('NoWnd','X'))") == "false");
+}
+
+// Registering recovery as a normal window must not let an add-on hide the player's controls or open them by driving
+// the EQ menu. The UI pack and native menu keep their ordinary show/hide path.
+TEST_CASE("Plugin UI: server add-on visibility and its menu are the player's controls") {
+    test::ScratchDir game_scratch("addon_policy_menu");
+    GameDir game(game_scratch.path());
+    SandboxUi s;
+    s.host.game = &game;
+    s.host.in_game = s.host.ui_ready = true;
+    ui::AddonPolicyView policy;
+    s.host.addon_policy = &policy;
+    for (const char* tag : {"plugin:X", "script:X"}) {
+        s.caps[tag] = plugin::kCapAll;
+        s.add_folder(tag);
+    }
+    s.frame();
+    CHECK(s.api->shown("AddonPolicy"));
+    for (const char* tag : {"plugin:X", "script:X"}) {
+        CAPTURE(tag);
+        CHECK(s.run(tag, "hs.ShowWindow('AddonPolicy', false) return hs.WindowShown('AddonPolicy')") == "true");
+    }
+    CHECK(s.run("", "hs.ShowWindow('AddonPolicy', false) return hs.WindowShown('AddonPolicy')") == "false");
+    for (const char* tag : {"plugin:X", "script:X"}) {
+        CAPTURE(tag);
+        CHECK(s.run(tag, "hs.ShowWindow('AddonPolicy', true) return hs.WindowShown('AddonPolicy')") == "false");
+    }
+
+    const std::string open_from_menu = R"lua(
+hs.ClickChild('EQMainWnd', 'EQButton', 'left')
+for i, row in ipairs(hs.CascadeMenus()[1].items) do
+  if row.text == 'Server add-ons' then
+    hs.CascadeClick(1, i)
+    return tostring(row.enabled) .. ' ' .. tostring(hs.WindowShown('AddonPolicy'))
+  end
+end
+return 'missing menu row'
+)lua";
+    CHECK(s.run("", open_from_menu) == "false false"); // unavailable: disabled and cannot open
+    s.bridge.add_menu({"X", "Server add-ons", "/say add-on menu"});
+    CHECK(s.run("", "hs.CascadeMenus() return true") == "true"); // publish the new plugin rows before opening
+    CHECK(s.run("", R"lua(
+hs.ClickChild('EQMainWnd', 'EQButton', 'left')
+for i, row in ipairs(hs.CascadeMenus()[1].items) do
+  if row.text == 'Plugins' then
+    hs.CascadeHover(1, i)
+    local row = hs.CascadeMenus()[2].items[1]
+    local enabled = row.text == 'Server add-ons' and row.enabled
+    hs.CascadeClose()
+    return enabled
+  end
+end
+return 'missing plugins submenu'
+)lua") == "true"); // a plugin's identically named entry is a different command and remains enabled
+    policy.enabled = true;
+    CHECK(s.run("", open_from_menu) == "false false"); // no requirements or recovery either
+    policy.required = {"maker/helper"};
+    CHECK(s.run("plugin:X", open_from_menu) == "true false");
+    CHECK(s.run("", open_from_menu) == "true true");
+    s.api->show("AddonPolicy", false);
+    policy.required.clear();
+    policy.degraded = true;
+    CHECK(s.run("", open_from_menu) == "true true"); // code stopped earlier still needs its recovery controls
+    s.api->show("AddonPolicy", false);
+    s.host.trusted_ui = false;
+    CHECK(s.run("", "hs.ShowWindow('AddonPolicy', true) return hs.WindowShown('AddonPolicy')") == "false");
+    CHECK(s.run("", open_from_menu) == "false false"); // a custom pack leaves recovery to the native fallback
+    s.api->show("AddonPolicy", true);
+    CHECK(s.run("", "hs.ShowWindow('AddonPolicy', false) return hs.WindowShown('AddonPolicy')") == "true");
 }
 
 // While the player is asked about a server's compiled plugins, no plugin can draw over the question (ui.Foreground),

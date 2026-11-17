@@ -34,6 +34,10 @@ UI_METHOD("AchievementOpen", "achievements", "Open", kCapCommands)
 UI_METHOD("AchievementRefresh", "achievements", "Refresh", kCapActions)
 UI_METHOD("AchievementReward", "achievements", "Reward", kCapActions)
 
+// addons
+UI_METHOD("AddonPolicy", "addons", "Policy", 0)
+UI_METHOD("AddonPolicyAction", "addons", "PolicyAction", 0)
+
 // assets
 UI_METHOD("UiAnimation", "assets", "Animation", 0)
 UI_METHOD("UiImage", "assets", "Image", 0)

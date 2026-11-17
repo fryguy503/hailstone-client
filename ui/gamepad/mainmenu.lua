@@ -183,7 +183,18 @@ local TILES = {
 }
 
 -- (wide enough that every row fits a 1080p screen)
-local COLS = #TILES > 20 and 6 or 5
+local POLICY_TILES = {}
+for i, tile in ipairs(TILES) do POLICY_TILES[i] = tile end
+local function policyAvailable()
+  local q = API.addons.Policy()
+  return q and (q.degraded or #q.required > 0)
+end
+POLICY_TILES[#POLICY_TILES + 1] = { "Server add-ons", "shield", "Required add-ons and recovery", function()
+  if not policyAvailable() then return false end
+  API.windows.Show("AddonPolicy", true)
+  pad.focus("Server add-ons")
+  return true
+end }
 local message, messageAt = nil, 0
 -- The menu opens on the tile chosen last (ImGui's own memory of the focus depends on which window had it before).
 local lastTile, frame, drawnFrame, focusFrames = 1, 0, -10, 0
@@ -208,17 +219,19 @@ ui.window("Main Menu", function()
   -- Start opens the menu (from the game) and closes it
   if pad.pressed("start") and not pad.down("back") then GPSTATE.menuOpen = not GPSTATE.menuOpen end
   if not GPSTATE.menuOpen then return end
+  local tiles = policyAvailable() and POLICY_TILES or TILES
+  local cols = #tiles > 20 and 6 or 5
   local tileW, tileH, gap = 240, 150, 18
-  local rows = math.ceil(#TILES / COLS)
-  local w = COLS * tileW + (COLS - 1) * gap + 48
+  local rows = math.ceil(#tiles / cols)
+  local w = cols * tileW + (cols - 1) * gap + 48
   local h = rows * tileH + (rows - 1) * gap + 48 + 70 + 66
   local name = API.character.Name() or ""
   if frame - drawnFrame > 1 then focusFrames = 3 end -- (a few frames: the window takes the focus after it appears)
   drawnFrame = frame
   if W.begin("Main Menu", { w = w, h = h, title = "Menu", subtitle = name,
         hints = { { "a", "Open" }, { "b", "Close" }, { "start", "Close" } } }) then
-    for i, t in ipairs(TILES) do
-      if (i - 1) % COLS ~= 0 then ui.SameLine(0, T.px(gap)) end
+    for i, t in ipairs(tiles) do
+      if (i - 1) % cols ~= 0 then ui.SameLine(0, T.px(gap)) end
       if focusFrames > 0 and i == lastTile then
         ui.SetKeyboardFocusHere()
         pad.showCursor()

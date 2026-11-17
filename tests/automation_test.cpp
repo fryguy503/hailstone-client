@@ -6,13 +6,17 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <exception>
+#include <stdexcept>
 #include <string>
 
 #include "app/automation.h"
 #include "app/addon_install.h"
 #include "app/addon_requirements.h"
+#include "core/game_dir.h"
 #include "mq/lua_mq.h"
 #include "mq_test_world.h"
+#include "mock_server/harness.h"
 #include "core/sha256.h"
 #include "plugin/policy.h"
 #include "plugin/ui_bridge.h"
@@ -25,11 +29,12 @@ struct AutomationHost {
     mq_test::World world{"hailstone_automation_test"};
     std::unique_ptr<app::Automation> automation;
     std::vector<std::pair<mq::AbilityKind, std::string>> used;
-    AutomationHost() {
+    explicit AutomationHost(std::string script_autoload = {}) {
         net::GameConnectionTestAccess::set_server_rules(*world.conn, plugin::Rules{}); // no hailstone.cfg: free
         app::AutomationEnv env;
         env.data_dir = world.dir / "data";
         env.install_dir = world.dir / "install";
+        env.script_autoload = std::move(script_autoload);
         env.connection = [this] { return world.conn.get(); };
         env.autoskill_list = [] {
             game::AutoskillRule kick;
@@ -90,7 +95,7 @@ TEST_CASE("Automation: a script holds autoskill off while it runs; stopping it l
     CHECK(h.automation->scripts().running("brief"));
 }
 
-TEST_CASE("Automation: enforcement lazily attributes current code and refreshes identities after managed installs") {
+TEST_CASE("Automation: prepared enforcement identities are applied after profile and managed-install changes") {
     AutomationHost h;
     const fs::path data = h.world.dir / "data";
     const std::string original = "local tag = 0 while true do require('mq').delay(10) end\n";
@@ -120,13 +125,14 @@ TEST_CASE("Automation: enforcement lazily attributes current code and refreshes 
                                              "block = owner/managed\n");
     enforced.dir = h.world.dir / "profile";
     net::GameConnectionTestAccess::set_server_rules(*h.world.conn, enforced);
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true)); // the completed worker snapshot
     h.automation->frame();
     CHECK_FALSE(h.automation->scripts().running("copy"));
     CHECK_FALSE(h.automation->scripts().run("copy", {}));
 
-    // The normal install/update call passes registry ceilings; an enforced server must refresh current identities.
+    // A managed update publishes another completed scan; Automation applies it without scanning the folders itself.
     change(2);
-    h.automation->set_addon_ceilings(app::addon_ceilings(data));
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true));
     CHECK_FALSE(h.automation->scripts().run("copy", {}));
 
     net::GameConnectionTestAccess::set_server_rules(*h.world.conn, plugin::Rules{});
@@ -137,8 +143,9 @@ TEST_CASE("Automation: enforcement lazily attributes current code and refreshes 
     REQUIRE(h.automation->scripts().stop("copy"));
     change(3);
     net::GameConnectionTestAccess::set_server_rules(*h.world.conn, enforced);
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true));
     h.automation->frame();
-    CHECK_FALSE(h.automation->scripts().run("copy", {})); // re-enabling scans current bytes again
+    CHECK_FALSE(h.automation->scripts().run("copy", {}));
 
     auto closed = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\ndefault = deny\n"
                                           "required = owner/managed\n");
@@ -150,7 +157,54 @@ TEST_CASE("Automation: enforcement lazily attributes current code and refreshes 
     CHECK_FALSE(h.automation->scripts().run("copy", {}));
 }
 
-TEST_CASE("Automation: required managed scripts preserve activation and UI packages never become autorun scripts") {
+TEST_CASE("Automation: managed autoload added or enabled during verification waits for its completed snapshot") {
+    AutomationHost h;
+    const auto data = h.world.dir / "data";
+    fs::create_directories(app::addons_dir(data));
+    const std::string code = "while true do require('mq').delay(10) end\n";
+    h.write("managed/init.lua", code);
+    app::InstalledAddon addon;
+    addon.name = "managed";
+    addon.source = "maker/managed";
+    addon.version = "1.0.0";
+    addon.caps = plugin::kCapRead;
+    addon.autoload = true;
+    addon.files = {{"init.lua", code.size(), sha256(code)}};
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer=off\n[addons]\nenforce=on\ndefault=deny\n"
+                                          "allow=maker/managed\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->set_addon_ceilings({});
+    h.automation->frame();
+
+    SUBCASE("a newly installed managed add-on") {
+        REQUIRE(app::write_installed_addons(data, {}));
+        h.automation->refresh_managed_addons();
+        addon.enabled = true;
+        REQUIRE(app::write_installed_addons(data, {addon}));
+    }
+    SUBCASE("an existing managed add-on is enabled") {
+        REQUIRE(app::write_installed_addons(data, {addon}));
+        h.automation->refresh_managed_addons();
+        CHECK_FALSE(h.automation->scripts().running("managed"));
+        REQUIRE(app::set_addon_enabled(data, "managed", true));
+    }
+
+    h.automation->set_addon_verification_pending(true);
+    h.automation->refresh_managed_addons();
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("managed"));
+    CHECK_FALSE(h.automation->required_addons_ready());
+
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true));
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("managed"));
+    CHECK(h.automation->scripts().caps_of("managed") == plugin::kCapRead);
+    CHECK(h.automation->required_addons_ready());
+    CHECK_FALSE(h.automation->has_required_addons()); // permission and managed autoload do not make it required
+}
+
+TEST_CASE("Automation: requirements override only managed activation preferences and UI packages never become scripts") {
     AutomationHost h;
     const auto data = h.world.dir / "data";
     const std::string code = "while true do require('mq').delay(10) end\n";
@@ -193,12 +247,224 @@ TEST_CASE("Automation: required managed scripts preserve activation and UI packa
     REQUIRE(app::set_addon_enabled(data, "managed", false));
     h.automation->refresh_managed_addons();
     h.automation->frame();
-    CHECK_FALSE(h.automation->scripts().running("managed"));
-    CHECK_FALSE(h.automation->required_addons_ready(&problem));
-    CHECK_FALSE(problem.empty());
+    CHECK(h.automation->scripts().running("managed"));
+    CHECK(h.automation->required_addons_ready(&problem));
+    CHECK(problem.empty());
     const auto registry = app::read_installed_addons(data);
     REQUIRE(app::find_addon(registry, "managed"));
     CHECK_FALSE(app::find_addon(registry, "managed")->enabled); // server requirements do not rewrite player activation
+
+    // The saved preference takes effect as soon as this script is optional, even while it remains allowed.
+    auto optional = rules;
+    optional.addons.required.clear();
+    optional.addons.allow = {"maker/managed", "maker/interface"};
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, optional);
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("managed"));
+    h.automation->set_addon_verification_pending(true);
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->refresh_managed_addons();
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("managed"));
+    CHECK_FALSE(h.automation->required_addons_ready());
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true));
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("managed"));
+    CHECK(h.automation->required_addons_ready());
+
+    h.automation->emergency_stop_required_addons();
+    h.automation->refresh_managed_addons();
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("managed"));
+    CHECK_FALSE(h.automation->required_addons_ready());
+    h.automation->retry_required_addons();
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("managed"));
+    CHECK(h.automation->required_addons_ready());
+    const auto retained = app::read_installed_addons(data);
+    REQUIRE(app::find_addon(retained, "managed"));
+    CHECK_FALSE(app::find_addon(retained, "managed")->enabled);
+
+    auto blocked = rules;
+    blocked.addons.block = {"maker/managed"};
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, blocked);
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("managed"));
+    CHECK_FALSE(h.automation->required_addons_ready());
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("managed"));
+
+    h.write("managed/init.lua", "-- changed\n" + code);
+    h.automation->refresh_managed_addons();
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("managed"));
+    CHECK_FALSE(h.automation->required_addons_ready());
+}
+
+TEST_CASE("Automation: recovery stays stopped across rule refreshes and retries explicitly") {
+    AutomationHost h;
+    const std::string code = "while true do require('mq').delay(10) end\n";
+    h.write("needed/init.lua", code);
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/needed\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->set_addon_ceilings({{plugin::FileKind::Script, sha256(code), plugin::kCapRead,
+                                      "needed", "owner/needed"}});
+    h.automation->frame();
+    REQUIRE(h.automation->required_addons_ready());
+    CHECK(h.automation->has_required_addons());
+    const auto serial = h.automation->required_addons_serial();
+    for (int frame = 0; frame < 8; ++frame) {
+        h.automation->frame();
+        CHECK(h.automation->required_addons_ready());
+        CHECK(h.automation->required_addons_serial() == serial);
+    }
+    h.automation->emergency_stop_required_addons();
+    CHECK(h.automation->required_addons_stopped());
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    CHECK_FALSE(h.automation->required_addons_ready());
+    CHECK(h.automation->required_addons_serial() != serial);
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    h.automation->retry_required_addons();
+    CHECK_FALSE(h.automation->required_addons_stopped());
+    h.automation->frame();
+    CHECK(h.automation->required_addons_ready());
+    h.automation->emergency_stop_required_addons();
+    // Resetting a connection's session does not run anything against its old rules.
+    h.automation->reset_required_addons_session();
+    CHECK_FALSE(h.automation->has_required_addons());
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, std::nullopt);
+    h.automation->frame();
+    CHECK(h.automation->required_addons_ready());
+    CHECK_FALSE(h.automation->has_required_addons());
+}
+
+TEST_CASE("Automation: emergency stop keeps pending verification closed and survives its completed snapshot") {
+    AutomationHost h;
+    const std::string code = "while true do require('mq').delay(10) end\n";
+    h.write("needed/init.lua", code);
+    h.write("optional.lua", "-- optional\n" + code);
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/needed\n");
+    rules.dir = h.world.dir / "profile";
+    const std::vector<plugin::Ceiling> ceilings{{plugin::FileKind::Script, sha256(code), plugin::kCapRead,
+                                                "needed", "owner/needed"}};
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->set_addon_ceilings(ceilings);
+    h.automation->frame();
+    REQUIRE(h.automation->required_addons_ready());
+
+    h.automation->set_addon_verification_pending(true);
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->emergency_stop_required_addons();
+    h.automation->frame();
+    CHECK(h.automation->required_addons_stopped());
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    std::string why;
+    CHECK_FALSE(h.automation->scripts().run("optional", {}, &why));
+    CHECK(why.find("verification") != std::string::npos);
+
+    h.automation->set_addon_ceilings(ceilings);
+    h.automation->frame();
+    CHECK(h.automation->required_addons_stopped());
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    CHECK_FALSE(h.automation->required_addons_ready());
+    CHECK(h.automation->scripts().run("optional", {}));
+}
+
+TEST_CASE("Automation: removing a requirement cannot restart stopped code before Retry or a new connection") {
+    AutomationHost h("needed");
+    const std::string code = "while true do require('mq').delay(10) end\n";
+    h.write("needed/init.lua", code);
+    h.write("optional.lua", "-- optional\n" + code);
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/needed\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->set_addon_ceilings({{plugin::FileKind::Script, sha256(code), plugin::kCapRead,
+                                      "needed", "owner/needed"}});
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().running("needed"));
+    REQUIRE(h.automation->scripts().run("optional", {}));
+    h.automation->emergency_stop_required_addons();
+
+    auto relaxed_policy = [&](bool enforce) {
+        rules.addons.required.clear();
+        rules.addons.enabled = enforce;
+        net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+        h.automation->frame();
+        CHECK_FALSE(h.automation->scripts().running("needed"));
+        CHECK(h.automation->scripts().running("optional"));
+        // A changed file and a typed path still identify the stopped runtime entry.
+        h.write("needed/init.lua", "-- changed\n" + code);
+        CHECK_FALSE(h.automation->scripts().run("./needed/init.lua", {}));
+
+        SUBCASE("the player explicitly retries") { h.automation->retry_required_addons(); }
+        SUBCASE("a new connection resets recovery") {
+            h.automation->reset_required_addons_session();
+            net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+        }
+        h.automation->frame();
+        CHECK_FALSE(h.automation->required_addons_stopped());
+        CHECK(h.automation->scripts().running("needed"));
+        CHECK(h.automation->scripts().running("optional"));
+    };
+    SUBCASE("the server removes the requirement") { relaxed_policy(true); }
+    SUBCASE("the server disables enforcement") { relaxed_policy(false); }
+}
+
+TEST_CASE("Automation: fresh enforcement waits for complete identities before any new start") {
+    AutomationHost h;
+    const auto data = h.world.dir / "data";
+    const std::string needed = "while true do require('mq').delay(10) end\n";
+    const std::string original = "-- original\n" + needed, copied = "-- changed code\n" + needed;
+    app::InstalledAddon required;
+    required.name = "needed";
+    required.source = "owner/needed";
+    required.version = "1.0.0";
+    required.caps = plugin::kCapRead;
+    required.files = {{"init.lua", needed.size(), sha256(needed)}};
+    auto blocked = required;
+    blocked.name = "blocked";
+    blocked.source = "owner/blocked";
+    blocked.files = {{"init.lua", original.size(), sha256(original)}};
+    fs::create_directories(app::addons_dir(data));
+    REQUIRE(app::write_installed_addons(data, {required, blocked}));
+    h.write("needed/init.lua", needed);
+    h.write("blocked/init.lua", original);
+    h.write("blocked/extra.lua", copied);
+    h.write("copy.lua", copied);
+    h.write("new.lua", "-- new\n" + needed);
+    h.automation->set_addon_ceilings(app::addon_ceilings(data));
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().run("copy", {}));
+    h.automation->frame();
+    REQUIRE(h.automation->scripts().running("copy"));
+
+    h.automation->set_addon_verification_pending(true);
+    auto rules = plugin::parse_server_cfg("[scripts]\nplayer = on\n[addons]\nenforce = on\n"
+                                          "required = owner/needed\nblock = owner/blocked\n");
+    rules.dir = h.world.dir / "profile";
+    net::GameConnectionTestAccess::set_server_rules(*h.world.conn, rules);
+    h.automation->frame();
+    CHECK(h.automation->scripts().running("copy")); // last trusted policy stays active during checking
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+    std::string why;
+    CHECK_FALSE(h.automation->scripts().run("new", {}, &why));
+    CHECK(why.find("verification") != std::string::npos);
+    CHECK_FALSE(h.automation->required_addons_ready());
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("needed"));
+
+    h.automation->set_addon_ceilings(app::addon_ceilings(data, true));
+    h.automation->frame();
+    CHECK_FALSE(h.automation->scripts().running("copy"));
+    CHECK_FALSE(h.automation->scripts().run("copy", {}));
+    CHECK(h.automation->scripts().running("needed"));
+    CHECK(h.automation->required_addons_ready());
+    CHECK(h.automation->scripts().run("new", {}));
 }
 
 TEST_CASE("Automation: hailstone.autoskill_list gives the player's list with names and conditions") {
@@ -312,6 +578,93 @@ print('[max] train ' .. tostring(hs.train_aa(10)) .. ' ' .. tostring(hs.train_aa
 }
 
 #ifdef HAILSTONE_EXAMPLE_PLUGIN
+TEST_CASE("Automation: exception cleanup stops native and required script code before releasing the connection") {
+    test::ScratchDir scratch("automation_exception_shutdown");
+    test::EmptyGameDir game_dir;
+    GameDir game(game_dir.path());
+    test::MockEqServer server;
+    std::vector<std::string> cleanup_chat;
+    bool disconnect_hook = false, cleared = false, unwinding = false, primary_caught = false;
+    struct RunningClient {
+        std::unique_ptr<app::Automation> automation;
+        std::unique_ptr<net::GameConnection> connection;
+        net::GameConnection* ui_connection = nullptr;
+        bool& cleared;
+        bool& unwinding;
+        RunningClient(bool& c, bool& u) : cleared(c), unwinding(u) {}
+        ~RunningClient() {
+            unwinding = std::uncaught_exceptions() != 0;
+            app::shutdown_automation_connection(automation, connection, ui_connection);
+            cleared = !automation && !connection && !ui_connection;
+        }
+    };
+    try {
+        auto client = std::make_unique<RunningClient>(cleared, unwinding);
+        app::AutomationEnv env;
+        env.data_dir = scratch.path() / "data";
+        env.connection = [c = client.get()] { return c->connection.get(); };
+        const auto data = env.data_dir;
+        const std::string code = "while true do require('mq').delay(10) end\n";
+        fs::create_directories(data / "scripts/needed");
+        std::ofstream(data / "scripts/needed/init.lua", std::ios::binary) << code;
+        const fs::path built = HAILSTONE_EXAMPLE_PLUGIN;
+        fs::create_directories(data / "plugins/MQ2Example");
+        fs::copy_file(built, data / "plugins/MQ2Example" / built.filename());
+        client->automation = std::make_unique<app::Automation>(std::move(env));
+        auto options = test::quick_options();
+        options.hooks = &client->automation->hooks();
+        options.plugins = client->automation->extensions();
+        options.servers_dir = scratch.path() / "servers";
+        client->connection = std::make_unique<net::GameConnection>(game, std::move(options));
+        client->ui_connection = client->connection.get();
+        auto& conn = *client->connection;
+        auto& automation = *client->automation;
+        conn.start(server.ticket());
+        const auto step = [&] { conn.update(); server.poll(); };
+        REQUIRE(test::pump(step, [&] { return conn.state() == net::ConnectionState::CharacterSelect; }));
+        conn.enter_world("Gennro");
+        REQUIRE(test::pump(step, [&] { return conn.in_zone() && conn.player_status().max_hp != 0; }));
+        auto rules = plugin::parse_server_cfg("[scripts]\nplayer=on\n[plugins]\nplayer=on\n"
+                                              "[addons]\nenforce=on\nrequired=owner/needed\n");
+        rules.dir = scratch.path() / "profile";
+        net::GameConnectionTestAccess::set_server_rules(conn, std::move(rules));
+        automation.set_addon_ceilings({{plugin::FileKind::Script, sha256(code), plugin::kCapRead,
+                                       "needed", "owner/needed"}});
+        automation.frame();
+        REQUIRE(automation.scripts().running("needed"));
+        REQUIRE(automation.plugin_caps("plugin:MQ2Example") == plugin::kCapAll);
+        REQUIRE(automation.required_addons_ready());
+        automation.hooks().on_chat(plugin::Hooks::kClient, [&](plugin::ChatLine& line) {
+            cleanup_chat.push_back(line.text);
+            return plugin::Flow::Continue;
+        });
+        automation.hooks().on_packet(plugin::Hooks::kClient, plugin::Stream::Zone, plugin::Direction::Out,
+            net::to_wire(net::Op::AckPacket), [&, c = client.get()](net::AppPacket&) {
+                // disconnect() releases an Eye through the real packet hook bus after code has stopped, while the
+                // connection is being destroyed and its UI's raw pointer is still valid.
+                CHECK(c->automation != nullptr);
+                CHECK(c->ui_connection != nullptr);
+                CHECK_FALSE(c->automation->scripts().running("needed"));
+                CHECK(c->automation->plugin_caps("plugin:MQ2Example") == 0);
+                CHECK(c->ui_connection->world().eye_id == 0);
+                disconnect_hook = true;
+                return plugin::Flow::Continue;
+            });
+        auto& world = net::GameConnectionTestAccess::world(conn);
+        world.eye_id = world.view_id = world.controlled_id = 987;
+        throw std::runtime_error("primary exception survives client cleanup");
+    } catch (const std::runtime_error& e) {
+        CHECK(std::string(e.what()) == "primary exception survives client cleanup");
+        primary_caught = true;
+    }
+    CHECK(primary_caught);
+    CHECK(unwinding);
+    CHECK(cleared);
+    CHECK(disconnect_hook);
+    CHECK(std::count(cleanup_chat.begin(), cleanup_chat.end(), "[Lua] needed stopped") == 1);
+    CHECK(std::count(cleanup_chat.begin(), cleanup_chat.end(), "[Plugin] MQ2Example unloaded") == 1);
+}
+
 // A script add-on that names itself after a compiled plugin (a "read,ui" script called "nms" beside the NMS server's
 // plugin) gets neither the plugin's capabilities in its windows nor its folder, functions, options or menu: each is
 // the owner's by kind and name (plugin::UiBridge::owner_tag).

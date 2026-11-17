@@ -10,7 +10,7 @@ does not bypass a function's own caller, screen or server-state checks.
 `API.version`, `API.Supports(module[, member])` and `API.Describe([module[, member]])`
 provide contract version and structural discovery. They confer no permissions.
 
-Coverage: **330/330 method implementation links**, **205/330 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
+Coverage: **332/332 method implementation links**, **207/332 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
 
 Unresolved method implementations: none.
 Unresolved constant implementations: none.
@@ -43,6 +43,13 @@ Unresolved constant implementations: none.
 | `API.achievements.Open` | **See binding** | `hs.AchievementOpen` · [source](../src/app/lua_ui_achievements.cpp) | commands | closed |
 | `API.achievements.Refresh` | **See binding** | `hs.AchievementRefresh` · [source](../src/app/lua_ui_achievements.cpp) | actions | closed |
 | `API.achievements.Reward` | **See binding** | `hs.AchievementReward` · [source](../src/app/lua_ui_achievements.cpp) | actions | closed |
+
+## addons
+
+| Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
+| --- | --- | --- | --- | --- |
+| `API.addons.Policy` | `p = hs.AddonPolicy(): the client's own interface reads the current server add-on recovery state; nil otherwise.` | `hs.AddonPolicy` · [source](../src/app/lua_ui_plugins.cpp) | none (outer gate) | closed |
+| `API.addons.PolicyAction` | `ok = hs.AddonPolicyAction(action, serial): the client's own interface requests stop, retry or camp for this view.` | `hs.AddonPolicyAction` · [source](../src/app/lua_ui_plugins.cpp) | none (outer gate) | closed |
 
 ## assets
 

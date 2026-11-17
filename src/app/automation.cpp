@@ -44,9 +44,11 @@ struct Automation::Impl {
     game::NameplateCanvasRegistry nameplates;
     plugin::UiBridge plugin_ui;
     plugin::Policy policy;
-    std::vector<plugin::Ceiling> registry_ceilings;
-    bool enforcement_identities_ready = false;
-    fs::path enforcement_profile;
+    bool required_stopped = false;
+    bool has_required = false;
+    bool verification_pending = false;
+    mutable std::pair<std::uint64_t, std::uint64_t> checked_required{};
+    mutable std::uint64_t required_serial = 0;
     mq::Registry registry;
     mq::Context ctx;
     std::unique_ptr<mq::Commands> commands;
@@ -55,6 +57,7 @@ struct Automation::Impl {
     std::set<std::string> autoskill_holds; // the scripts holding autoskill off
     std::uint32_t policy_serial = 0;
     bool had_policy = false;
+    net::GameConnection* policy_connection = nullptr;
     char run_name[128] = {};
     std::chrono::steady_clock::time_point consent_checked{};
     // The dev window's compiled plugins: NativePlugins::list() reads and hashes every plugin file and reads the
@@ -93,11 +96,15 @@ struct Automation::Impl {
         return out;
     }
 
-    void sync_policy() {
+    void sync_policy(bool apply = true) {
         net::GameConnection* c = conn();
         std::uint32_t serial = c ? c->server_rules_serial() : 0;
         bool has = c && c->server_rules();
-        if (serial == policy_serial && has == had_policy) return;
+        // Applying fresh rules before their full provenance scan could start a renamed copy under old ceilings.
+        if (verification_pending && has && c->server_rules()->addons.enabled && !c->server_rules()->provisional)
+            return;
+        if (c == policy_connection && serial == policy_serial && has == had_policy) return;
+        policy_connection = c;
         policy_serial = serial;
         had_policy = has;
         fs::path dir;
@@ -113,28 +120,17 @@ struct Automation::Impl {
         if (!has || c->server_rules()->provisional) scripts->set_autorun_file({});
         scripts->set_server_dir(dir.empty() ? fs::path() : dir / "scripts");
         plugins->set_server_dir(dir.empty() ? fs::path() : dir / "plugins");
-        recheck();
+        if (apply) recheck();
     }
 
     // What runs, checked again against the policy (the server's rules, or the add-ons' ceilings, changed).
     void recheck() {
-        const auto& rules = policy.current();
-        if (!rules || !rules->addons.enabled) {
-            enforcement_identities_ready = false;
-        } else if (!enforcement_identities_ready || enforcement_profile != rules->dir) {
-            // Ordinary startup/install reads only the registry. Attribute changed/extra code before an opted-in
-            // policy is applied, and again after a managed install refreshes its baseline ceilings.
-            auto ceilings = registry_ceilings;
-            for (auto& c : addon_ceilings(env.data_dir, true))
-                if (!c.verified) ceilings.push_back(std::move(c));
-            policy.set_ceilings(std::move(ceilings));
-            enforcement_identities_ready = true;
-            enforcement_profile = rules->dir;
-        }
         std::vector<std::string> script_autoload;
         for (auto& s : mq::split_index(env.script_autoload)) script_autoload.push_back(s);
         scripts->policy_changed(script_autoload);
         plugins->policy_changed(autoload());
+        has_required = !policy.required_entries(plugin::FileKind::Script).empty() ||
+                       !policy.required_entries(plugin::FileKind::Plugin).empty();
     }
 
     // The server as the player knows it: the saved server's name, else the world's.
@@ -178,6 +174,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     se.context = ce.context;
     se.print = ce.echo;
     se.run = ce.run;
+    se.can_start = [&m] { return !m.verification_pending; };
     se.dirs = search_dirs(m.env.data_dir / "scripts", m.env.install_dir / "scripts");
     se.config_dir = m.env.data_dir / "scripts" / "config";
     // Scripts as plugins (mq/lua_hailstone.cpp): the same chain, UI bridge and packets as the compiled plugins.
@@ -228,6 +225,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     ne.ui = &m.plugin_ui;
     ne.web = m.env.web;
     ne.connection = [&m] { return m.conn(); };
+    ne.can_load = [&m] { return !m.verification_pending; };
     ne.max_camera_distance = m.env.max_camera_distance;
     ne.set_max_camera_distance = m.env.set_max_camera_distance;
     ne.hot_button = m.env.hot_button;
@@ -248,21 +246,71 @@ Automation::~Automation() { shutdown(); }
 
 void Automation::set_addon_ceilings(std::vector<plugin::Ceiling> ceilings) {
     Impl& m = *impl_;
-    m.registry_ceilings = std::move(ceilings);
-    m.enforcement_identities_ready = false;
-    if (!m.policy.current() || !m.policy.current()->addons.enabled)
-        m.policy.set_ceilings(m.registry_ceilings);
+    // Integrity scans belong to the caller's worker; do not repeat that scan while applying its completed snapshot.
+    m.verification_pending = false;
+    m.sync_policy(false);
+    m.policy.set_ceilings(std::move(ceilings));
     m.recheck();
+}
+
+void Automation::set_addon_verification_pending(bool pending) {
+    if (impl_->verification_pending == pending) return;
+    impl_->verification_pending = pending;
+    ++impl_->required_serial;
 }
 
 bool Automation::required_addons_ready(std::string* problem) const {
     if (problem) problem->clear();
+    if (impl_->verification_pending) return false;
     if (!impl_->plugins->required_addons_ready(problem)) return false;
     return impl_->scripts->required_addons_ready(problem);
 }
 
 void Automation::refresh_managed_addons() {
     impl_->scripts->set_managed_addons(managed_addon_scripts(impl_->env.data_dir));
+}
+
+std::uint64_t Automation::required_addons_serial() const {
+    Impl& m = *impl_;
+    const auto current = std::pair(m.plugins->required_addons_serial(), m.scripts->required_addons_serial());
+    if (current != m.checked_required) {
+        m.checked_required = current;
+        ++m.required_serial;
+    }
+    return m.required_serial;
+}
+
+bool Automation::required_addons_stopped() const { return impl_->required_stopped; }
+bool Automation::has_required_addons() const { return impl_->has_required; }
+
+void Automation::emergency_stop_required_addons() {
+    Impl& m = *impl_;
+    m.required_stopped = true;
+    m.scripts->stop_required_addons();
+    m.plugins->stop_required_addons();
+}
+
+void Automation::retry_required_addons() {
+    Impl& m = *impl_;
+    m.required_stopped = false;
+    m.scripts->resume_required_addons();
+    m.sync_policy(false);
+    m.plugins->retry_required_addons();
+    m.recheck();
+}
+
+void Automation::reset_required_addons_session() {
+    Impl& m = *impl_;
+    m.required_stopped = false;
+    m.has_required = false;
+    m.verification_pending = false;
+    // A new connection may reuse both an old allocation's address and its rules serial. Do not recheck the old
+    // policy here, but require the next sync to take its rules from the current connection.
+    m.policy_connection = nullptr;
+    m.policy_serial = ~std::uint32_t{0};
+    m.had_policy = false;
+    m.scripts->resume_required_addons();
+    m.plugins->resume_required_addons();
 }
 
 plugin::Hooks& Automation::hooks() { return impl_->hooks; }
@@ -360,6 +408,15 @@ void Automation::shutdown() {
     world_unavailable();
     if (m.scripts) m.scripts->stop_all();
     if (m.plugins) m.plugins->unload_all();
+}
+
+void shutdown_automation_connection(std::unique_ptr<Automation>& automation,
+                                    std::unique_ptr<net::GameConnection>& connection,
+                                    net::GameConnection*& ui_connection) {
+    if (automation) automation->shutdown();
+    connection.reset();
+    ui_connection = nullptr;
+    automation.reset();
 }
 
 // The server plugins' question when no UI pack draws it: the server, each plugin's file, size and hash, the

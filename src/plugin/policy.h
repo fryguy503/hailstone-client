@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "core/sha256.h"
+#include "core/version.h"
 
 namespace hailstone::game { class EqStrings; }
 
@@ -104,12 +105,13 @@ inline constexpr std::string_view kServerCfgName = "hailstone.cfg";
 // Opt-in add-on identities ([addons] in hailstone.cfg, docs/plugins.md "Opt-in add-on policies"): GitHub
 // repositories, "owner/repo" (a GitHub link to one is taken too), compared without case and without the installed
 // release tag or branch. A bare manifest name is not an identity: any package of that name would satisfy it. These
-// checks restrict identities; the script/plugin capabilities still apply. The server's own files are not add-ons and
-// are never named or refused by them.
+// checks restrict identities. Explicitly named add-ons use their manifest capabilities; unlisted player code keeps
+// the general script/plugin permissions. The server's own files are not add-ons and are never named or refused.
 struct AddonRules {
     bool enabled = false;
     bool default_allow = true;
     std::vector<std::string> required, allow, block; // in normalize_addon_identity's form
+    std::map<std::string, Version> minimum_versions; // required repository -> minimum installed release
     std::string error; // an invalid enabled policy refuses every add-on until the server fixes it
 };
 
@@ -149,7 +151,8 @@ struct Rules {
     // [web] allow: the hosts scripts and plugins may open (and those below them); empty: any (core/web_url.h).
     std::vector<std::string> web_allow;
     // [addons] suggest: add-ons the server suggests to its players (docs/addons.md "Suggested add-ons"), as
-    // addon_source_text writes them; the login screen offers each one the player does not have.
+    // addon_source_text writes them; the login screen offers each one the player does not have. When enforcement
+    // is enabled their repositories also enter addons.allow, authorizing their manifest without requiring startup.
     std::vector<std::string> suggest_addons;
     AddonRules addons;
     std::vector<ServerFile> server_files; // the server's scripts and plugins
@@ -197,7 +200,8 @@ public:
     // Changes whenever set() or clear() is called (holders re-check what they run).
     std::uint32_t serial() const { return serial_; }
 
-    // The capabilities for a file with this hash; 0 = it may not run. An add-on's file gets no more than its ceiling.
+    // The capabilities for a file with this hash; 0 = it may not run. A verified add-on named in required or allow
+    // bypasses general player-code permissions, but every add-on file still gets no more than its manifest ceiling.
     std::uint32_t caps(FileKind kind, const Sha256Digest& hash, std::string_view name = {}) const;
     // A required installed add-on's file whose hash still identifies it, even when another rule refuses it.
     // Autostart must check caps too; readiness must retain refused requirements so they cannot be skipped.

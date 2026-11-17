@@ -30,6 +30,12 @@ TEST_CASE("fuzz: server cfg survives truncated mutated and binary text with opt-
         "[addons]\nenforce = on\ndefault deny\n",
         "[addons]\nenforce = maybe\nallow = optional,\n",
         "[addons]\nenforce = on\nrequired = Maker/Required\nblock = https://github.com/maker/required/\n",
+        "[addons]\nenforce = on\ndefault = deny\nrequired = maker/required:1.0.0-preview.4\n"
+        "suggest = maker/optional@v2, https://github.com/maker/blocked/tree/next\nblock = maker/blocked\n",
+        "[addons]\nenforce = on\nrequired = maker/repo:1.0.0-Preview.A+Build.1, maker/repo:1.0.0-preview.10\n",
+        "[addons]\nenforce = off\nrequired = maker/repo:1.0, maker/other:bad\nallow = maker/other:2.0.0\n",
+        "[scripts]\nplayer = off\n[plugins]\nplayer = off\n[addons]\nenforce = on\ndefault = deny\n"
+        "required = maker/required\nallow = maker/allowed\nsuggest = maker/suggested\nblock = maker/blocked\n",
         "[ADDONS]\r\nENFORCE = YES\r\nALLOW = https://GitHub.com/Maker/Optional.git/\r\nDEFAULT = DENY\r\n",
         "[addons]\nenforce = on\nallow = a,,b\n[addons] trailing text\nblock = helper\n",
         "[addons]\nenforce = on\nallow = \"maker/repo\" ; comment\n# whole line comment\n",

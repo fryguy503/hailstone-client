@@ -1970,10 +1970,14 @@ void loading_screen(const LoadingView& view) {
 }
 
 void loading_overlay(const LoadingView& view) {
-    // Drawn into the foreground list, over every window of the frame (the UI pack's windows draw beneath it), on
-    // the loading screen's background, with loading_screen's panel: title, detail, bar.
+    loading_overlay(view, true);
+}
+
+void loading_overlay(const LoadingView& view, bool cover_ui) {
+    // A foreground cover also hides guarded permission windows, regardless of their drawing order. While a
+    // question waits, keep this art and panel behind normal windows so the player can see and answer it.
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImDrawList* dl = cover_ui ? ImGui::GetForegroundDrawList() : ImGui::GetBackgroundDrawList();
     if (view.picture.id) draw_screen_picture(dl, view.picture);
     else dl->AddRectFilled(vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y), IM_COL32(0, 0, 0, 255));
     const ImGuiStyle& style = ImGui::GetStyle();

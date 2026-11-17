@@ -28,6 +28,12 @@ inline void check_rules(const plugin::Rules& rules) {
             const auto normalized = plugin::normalize_addon_identity(identity);
             require(normalized && *normalized == identity, "server cfg retained a non-normalized add-on identity");
         }
+    for (const auto& [identity, minimum] : addons.minimum_versions) {
+        require(std::find(addons.required.begin(), addons.required.end(), identity) != addons.required.end(),
+                "minimum version retained without its required repository");
+        const auto parsed = parse_version(minimum.to_string());
+        require(parsed && compare_versions(*parsed, minimum) == 0, "server cfg retained an invalid minimum version");
+    }
 
     if (!addons.enabled) {
         require(plugin::addon_allowed(addons, "maker/helper"), "disabled add-on policy refused an identity");
@@ -53,6 +59,30 @@ inline void check_rules(const plugin::Rules& rules) {
     }
     for (const auto& identity : addons.block)
         require(!plugin::addon_allowed(addons, identity), "an explicit add-on block did not win");
+    for (const auto& source : rules.suggest_addons) {
+        const auto identity = plugin::addon_identity(source);
+        require(!identity.empty(), "server cfg retained an invalid suggestion");
+        if (std::find(addons.block.begin(), addons.block.end(), identity) == addons.block.end())
+            require(plugin::addon_allowed(addons, source), "an unblocked suggestion was not permitted");
+    }
+    for (const auto* named : {&addons.required, &addons.allow})
+        for (const auto& identity : *named) {
+            if (!plugin::addon_allowed(addons, identity)) continue;
+            auto restricted = rules;
+            restricted.player_script_caps = 0;
+            restricted.player_plugin_caps = 0;
+            const auto hash = sha256(std::string_view("named configuration fuzz fixture"));
+            for (const auto kind : {plugin::FileKind::Script, plugin::FileKind::Plugin}) {
+                plugin::Policy policy;
+                policy.set(restricted);
+                policy.set_ceilings({{kind, hash, plugin::kCapRead | plugin::kCapUi, "fixture", identity}});
+                require(policy.caps(kind, hash) == (plugin::kCapRead | plugin::kCapUi),
+                        "a named managed add-on lost its manifest authorization to general player permissions");
+                policy.set_ceilings({{kind, hash, plugin::kCapRead | plugin::kCapUi, "fixture", identity, false}});
+                require(policy.caps(kind, hash, "fixture") == 0,
+                        "an unverified add-on gained manifest authorization from its identity or runtime name");
+            }
+        }
 }
 
 inline void feed(std::span<const std::byte> input) {

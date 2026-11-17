@@ -6,8 +6,14 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 
 ## Server add-on policy
 
-- [x] Optional required/allow/block lists by GitHub repository (owner/repo; bare names refused) for every kind the add-on manager installs, intact package identities, required autostart that the player cannot stop, consent gates, and active upscaler checks; disabled unless `[addons] enforce = on`.
+- [x] Suggested repositories also allowed under default deny, with explicit blocks and manifest capability limits preserved; optional minimum installed versions on required repositories.
+- [x] Managed scripts/plugins explicitly named by required, suggest or allow authorized by their verified manifest capabilities without enabling unlisted player code.
+- [x] Optional required/allow/block lists by GitHub repository (owner/repo; bare names refused) for every kind the add-on manager installs, intact package identities, required autostart protected from ordinary stop controls, consent gates, and active upscaler checks; disabled unless `[addons] enforce = on`.
 - [x] Decided at the zone-in by its own rules (the cached copy only informs the login screen); before the world shows a problem refuses entry, once in it a failure warns once in chat and never disconnects; readiness and approvals cached by the rules, approvals and running set; package hashes remembered by size and time.
+- [x] Cancellable background integrity/provenance checks use one registry snapshot and validate current-platform entrypoints before starting new scripts or plugins.
+- [x] Server add-ons recovery in Modern, Gamepad and fallback UI: emergency stop persists across policy refreshes until explicit Retry or a new connection; ordinary Camp remains the player's choice.
+- [x] Server add-ons opens on first use, can be closed and reopened from the game menu, and persists visibility in the character's UI layout across login and interface changes.
+- [x] Native-plugin permission windows remain above the loading art during loading and zone settling; draw-order, mouse-lock and armed Allow/Don't allow regressions cover both UI packs.
 - [ ] Live acceptance of a first visit and a return visit, a policy fixed by the server, missing/refused/failed requirements at the zone-in and mid-session, both UI packs and controller input, and an upscaler allowed/blocked/updated followed by restart.
 
 ## Launcher login
@@ -306,6 +312,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] `mq.event` patterns match as MacroQuest's Lua events do (Blech): case-insensitive, every `#...#` up to the first place the next literal is, `#name#`, `|${...}|`, `##` / `||`, arguments by number with gaps, item links shown as their text unless `keepLinks` (`mq/event_pattern.h`; tests/mq_event_pattern_test.cpp).
 - [x] Host functions only on the client's thread: off-thread calls do nothing (`MainOnly`), the caller's capabilities are none there (tests/native_plugins_test.cpp, tests/plugins/HostProbe.cpp).
 - [x] C++ exceptions out of a plugin caught at every entry point (`guarded`); a failed `InitializePlugin` leaves nothing registered (tests/native_plugins_test.cpp).
+- [x] Client exception cleanup stops scripts and plugins before releasing their connection, keeps connection hooks alive through disconnect, and preserves the original error; real native-plugin/mock-zone regression.
 - [x] `web_state` fills what a shorter `HailstoneWebState` holds; its `size_t` size kept for ABI 3 (tests/native_plugins_test.cpp).
 - [ ] The server plugins' prompt live: a first visit to a server that ships a plugin (NMS), Allow mid-zone and Don't allow, in both packs and with a gamepad; whether a server extension allowed mid-zone needs the next zone-in.
 - [x] Plugin windows' functions left in the tables the pack keeps in its globals (`GPSTATE`, `modern`, `ui_palette`) ran as the player when the pack called them: the plugin now sees those tables through views that wrap what it writes to run as the plugin (and to stop when it unloads), and refuse setmetatable, rawset and `__gc` (ui/lua/lua_host.cpp).

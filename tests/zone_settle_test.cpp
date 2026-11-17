@@ -15,6 +15,37 @@ ZoneSettleFrame drawn(std::size_t waiting = 0, std::size_t shadows = 0) {
 }
 } // namespace
 
+TEST_CASE("zone settle: plugin questions accept the mouse without bypassing the interface lock") {
+    struct Case {
+        bool in_game, interface_locked, settling, consent_pending, mouse_locked;
+    };
+    const Case cases[] = {
+        {false, false, false, false, false}, // Loading and the other pregame screens retain their mouse.
+        {false, false, false, true, false},
+        {false, false, true, false, false},
+        {false, false, true, true, false},
+        {false, true, false, false, false},
+        {false, true, false, true, false},
+        {false, true, true, false, false},
+        {false, true, true, true, false},
+        {true, false, false, false, false}, // Ordinary play remains unlocked.
+        {true, false, false, true, false},
+        {true, false, true, false, true},   // Settling keeps other windows from taking presses.
+        {true, false, true, true, false},   // The native question is reachable during settling.
+        {true, true, false, false, true},   // /safelock always wins in game, including during a question.
+        {true, true, false, true, true},
+        {true, true, true, false, true},
+        {true, true, true, true, true},
+    };
+    for (const auto& c : cases) {
+        CAPTURE(c.in_game);
+        CAPTURE(c.interface_locked);
+        CAPTURE(c.settling);
+        CAPTURE(c.consent_pending);
+        CHECK(ui_mouse_locked(c.in_game, c.interface_locked, c.settling, c.consent_pending) == c.mouse_locked);
+    }
+}
+
 TEST_CASE("zone settle: at least kMinFrames drawn frames, even with nothing left to build") {
     ZoneSettle s;
     CHECK_FALSE(s.active());

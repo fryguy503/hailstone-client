@@ -356,6 +356,13 @@ SDK ABI. It also describes host support, not the capabilities of a particular
 server. Flat host bindings under `hs` use the same guarded closures as the
 namespaced methods.
 
+API 1.6 adds `API.addons.Policy()` and `API.addons.PolicyAction(action, serial)` for
+the client's Server add-ons panel. The former returns its current recovery view
+or nil; the latter accepts `stop`, `retry` or `camp` only when the view permits
+the action and its serial still matches. These services are restricted to the
+client's own interfaces; add-on interfaces and plugin code cannot read or act
+through them. Ordinary game UI actions keep their existing permissions.
+
 ## Service policy and observed identities
 
 API 1.4 adds read-only `hs.UI.map.Policy()`, returning `custom_spawns`, `stock_npcs`, `npc_find`, `name`,

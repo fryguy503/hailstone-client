@@ -614,6 +614,7 @@ void ClientApp::back_to_login(std::string message, bool is_error) {
     if (stats_ui_) stats_ui_->forget(); // its player reads the connection's spell table
     retire_world_geometry(); // retire callbacks before the connection they may inspect
     conn_.reset();
+    reset_addon_admission();
     ui_host_.conn = nullptr; // (update_ui_host sets it each frame; the windows must not reach the freed one before)
     login_.reset();
     unload_zone();
@@ -845,8 +846,8 @@ void ClientApp::draw_kick_question() {
 }
 
 void ClientApp::start_game(const net::WorldTicket& ticket) {
-    // The add-on policy is decided against the rules this world session's zone-in brings, never the cached ones.
-    addon_admission_.reset();
+    // Cached requirements describe the last visit; they must never prevent obtaining this server's fresh rules.
+    reset_addon_admission();
     net::ConnectionOptions copts;
     if (automation_) {
         copts.hooks = &automation_->hooks();
@@ -1041,27 +1042,24 @@ void ClientApp::update_connection() {
     if (!conn_) return;
     if (window_.input().user_activity) conn_->note_user_activity();
     conn_->update();
-    // A new hailstone.cfg may change which of the server's assets folder counts ([assets] player).
-    bool assets_ruled = false;
-    const bool rules_changed = conn_->server_rules_serial() != asset_rules_serial_;
-    if (rules_changed) {
-        asset_rules_serial_ = conn_->server_rules_serial();
-        // (Not from the provisional rules before the zone-in: the server's files are checked then.)
-        if (conn_->server_rules() && !conn_->server_rules()->provisional && !conn_->server_rules()->dir.empty())
-            assets_ruled = apply_asset_rules(conn_->server_rules()->dir);
-    }
-    if (conn_->take_server_files_changed() || assets_ruled) {
-        // The server's files came at this zone-in: read again what was read from the old ones, before the zone
-        // loads.
-        game_.rescan();
-        conn_->reload_game_files();
-        reload_server_files(false);
-        overlay_loaded_ = true;
-    }
-    if (rules_changed) refresh_ui_packs(true); // retire a blocked UI before the frontend/add-on gate can hold it
-    // /loadskin's user interface (loaded between frames: its Lua state may have run the command), /quit and /exit,
-    // and a dropped connection, after the new rules' assets and before the add-on gate can hold the frame.
     if (!connection_frontend(*conn_, pending_ui_pack_,
+        [this] {
+            // A fresh hailstone.cfg may change which server assets the UI pack can read.
+            bool assets_ruled = false;
+            const bool rules_changed = conn_->server_rules_serial() != asset_rules_serial_;
+            if (rules_changed) {
+                asset_rules_serial_ = conn_->server_rules_serial();
+                if (conn_->server_rules() && !conn_->server_rules()->provisional && !conn_->server_rules()->dir.empty())
+                    assets_ruled = apply_asset_rules(conn_->server_rules()->dir);
+            }
+            if (conn_->take_server_files_changed() || assets_ruled) {
+                game_.rescan();
+                conn_->reload_game_files();
+                reload_server_files(false);
+                overlay_loaded_ = true;
+            }
+            if (rules_changed) refresh_ui_packs(true); // retire blocked UIs before a frontend/add-on gate holds the frame
+        },
         [this](const std::string& skin) { use_ui_pack(skin, std::exchange(ui_reload_pending_, false)); },
         [this](net::GameConnection::QuitRequest request) {
             log::info("{}: quitting", request == net::GameConnection::QuitRequest::Exit ? "/exit" : "/quit");
@@ -1192,6 +1190,10 @@ void ClientApp::update_connection() {
             if (player_ready_) begin_zone_settle();
         }
         screen_ = Screen::InGame;
+        if (player_ready_) {
+            addon_admission_.admit();
+            update_addon_policy_view();
+        }
         break;
     case S::Disconnected: // Handled before the required-addon gate, even while its consent prompt is open.
     case S::Idle:

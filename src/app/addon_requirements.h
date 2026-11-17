@@ -4,8 +4,6 @@
 // downloads nor executes anything, so a missing requirement still goes through the manager's install card.
 
 #include <cstdint>
-#include <functional>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +22,7 @@ struct RequiredAddonCandidate {
     bool intact = false; // readable registry and every shipped file unchanged
     bool startable = true; // a script: where the script loader looks for it (required_script_found)
     plugin::Consent consent = plugin::Consent::Unasked;
+    std::string version{}; // the installed package's manifest version, checked only for a minimum requirement
 };
 
 struct AddonRequirementProblem {
@@ -40,7 +39,9 @@ bool required_script_found(const std::filesystem::path& data_dir, std::string_vi
 // Unasked native-code consent is handled by the existing prompt after connecting. A refusal blocks joining.
 // Upscaler selection and activation are checked separately against the provider loaded at process startup. A tool
 // is a program of its own: a required one is met by its intact installation (the client does not start it, and
-// cannot tell whether it runs).
+// cannot tell whether it runs). A versioned requirement also needs an installed manifest version at least as new
+// as its minimum, using SemVer precedence. Required managed scripts and plugins use their manifest capabilities
+// independently of the general player-code switches and caps; an empty capability set still cannot run.
 std::vector<AddonRequirementProblem> addon_requirement_problems(
     const plugin::Rules& rules, const std::vector<RequiredAddonCandidate>& candidates);
 
@@ -58,38 +59,5 @@ std::vector<AddonSuggestion> required_addon_suggestions(
 // Review action, just like any other add-on link; presenting a failed login never contacts that repository.
 void present_addon_requirement(ui::LoginView& view, const std::vector<AddonRequirementProblem>& problems,
                                const AddonIndex* index, std::string message);
-
-// The opted-in policy's gate on a world session, each frame (ClientApp::addon_world_allowed). Decided against the
-// rules the zone-in brought, never the cached ones. Before the world is first shown in the session (admission), a
-// problem refuses entry and a pending consent or autostart holds the loading screen; once admitted, a problem
-// (a later zone's rules, a required add-on that failed) is a warning, once for each failure, and play goes on.
-class AddonAdmission {
-public:
-    enum class Step : std::uint8_t {
-        Play,    // go on (the world shows)
-        Start,   // hold the loading screen a frame: the new rules' autostart and consent prompt run first
-        Consent, // hold the loading screen: a required plugin's permission question is open
-        Refuse,  // back to login with `message`
-    };
-    struct Result {
-        Step step = Step::Play;
-        std::string message; // Refuse: why
-        std::string warning; // non-empty: say it to the player (in the world, once for each failure)
-    };
-    // `rules`: the connection's, nullptr none (out of the world). `zone_problem` runs once for each new rules serial
-    // of an enforcing server (the installed add-ons against them: "" none); `ready` asks the running add-ons
-    // (nullopt: waiting for consent or a start, "" ready, else the failure).
-    Result update(const plugin::Rules* rules, std::uint32_t serial, bool in_world,
-                  const std::function<std::string()>& zone_problem,
-                  const std::function<std::optional<std::string>()>& ready);
-    void reset(); // a new world session
-    bool admitted() const { return admitted_; }
-
-private:
-    Result warn(std::string problem);
-    std::optional<std::uint32_t> serial_;
-    bool admitted_ = false, wait_frame_ = false;
-    std::string zone_problem_, warned_;
-};
 
 } // namespace hailstone::app

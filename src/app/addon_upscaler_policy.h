@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -13,6 +14,7 @@ namespace hailstone::app {
 // refuses entry if the active provider is disallowed, changed, or different from a required provider. The loaded
 // folder may be a copy: checking only the current installation would accept an update that is not running yet.
 std::string addon_upscaler_problem(const plugin::AddonRules& rules, const AddonRegistry& registry,
-                                  std::string_view active_name, const std::filesystem::path& loaded_folder);
+                                  std::string_view active_name, const std::filesystem::path& loaded_folder,
+                                  const std::function<bool()>& canceled = {});
 
 } // namespace hailstone::app

@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -97,13 +98,17 @@ const InstalledAddon* find_pinned_addon(const std::vector<InstalledAddon>& addon
                                         AddonKind kind, std::string_view repo, const Ed25519PublicKey& key);
 
 // The files of an installed add-on that are gone or no longer what it shipped (the player changed them).
-std::vector<std::string> modified_addon_files(const std::filesystem::path& data_dir, const InstalledAddon& addon);
+// A canceled caller must discard the partial result.
+std::vector<std::string> modified_addon_files(const std::filesystem::path& data_dir, const InstalledAddon& addon,
+                                             const std::function<bool()>& canceled = {});
 // A file's SHA-256, remembered by its path, size and modification time so that an unchanged file is not read again
-// (the opted-in add-on policy checks the required packages and the running upscaler at each zone-in, on the client's
-// thread). nullopt when it cannot be read. Any thread.
-std::optional<Sha256Digest> addon_file_sha256(const std::filesystem::path& file);
+// (the opted-in add-on policy checks required packages and the running upscaler on a worker). nullopt when it
+// cannot be read or the caller cancels. Any thread; cancellation is checked between bounded reads.
+std::optional<Sha256Digest> addon_file_sha256(const std::filesystem::path& file,
+                                            const std::function<bool()>& canceled = {});
 // The file is there with this size and SHA-256 (by addon_file_sha256).
-bool addon_file_matches(const std::filesystem::path& file, std::uint64_t size, const Sha256Digest& sha256);
+bool addon_file_matches(const std::filesystem::path& file, std::uint64_t size, const Sha256Digest& sha256,
+                         const std::function<bool()>& canceled = {});
 
 // Why `name` cannot be installed as a new add-on of this kind ("" it can): a reserved name, another add-on's, or a
 // folder already there that is not an add-on's (installed by hand, or by Hailstone's own updates).
@@ -138,7 +143,14 @@ std::vector<plugin::Ceiling> addon_ceilings(const std::vector<InstalledAddon>& a
 // capabilities on each Lua file and library now in the folder of an add-on whose record does not
 // (AddonRegistry::unreadable), each logged.
 // Only an opted-in server needs the additional scan of readable add-ons for changed/extra code identities.
-std::vector<plugin::Ceiling> addon_ceilings(const std::filesystem::path& data_dir, bool scan_for_enforcement = false);
+// A canceled scan returns no ceilings and must not be published as a successful empty registry.
+std::vector<plugin::Ceiling> addon_ceilings(const std::filesystem::path& data_dir, bool scan_for_enforcement = false,
+                                          const std::function<bool()>& canceled = {});
+// A worker uses the same registry snapshot for requirements and runtime identities, even if another client
+// updates installed.txt while the files are checked.
+std::vector<plugin::Ceiling> addon_ceilings(const std::filesystem::path& data_dir, const AddonRegistry& registry,
+                                          bool scan_for_enforcement = false,
+                                          const std::function<bool()>& canceled = {});
 
 // First thing at start: an install or a removal that was cut off is undone, and what it left in new/ and previous/
 // goes. A lost or damaged installed.txt is written again from its backup when that has every add-on it names; else

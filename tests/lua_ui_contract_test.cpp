@@ -123,7 +123,7 @@ TEST_CASE("UI interfaces: installed records and actual loading status are indepe
 
 TEST_CASE("UI contract: discovery reports client structure independently of game and permission state") {
     ContractUi ui;
-    CHECK(ui.run("return hs.UI.version.major .. '.' .. hs.UI.version.minor") == "1.5");
+    CHECK(ui.run("return hs.UI.version.major .. '.' .. hs.UI.version.minor") == "1.6");
     CHECK(ui.run("return hs.UI.session.InGame()") == "false");
     CHECK(ui.run("return hs.UI.Supports('session', 'InGame') and hs.UI.Supports('chat')") == "true");
     CHECK(ui.run("return hs.UI.Supports('missing') or hs.UI.Supports('chat', 'Missing')") == "false");
@@ -141,6 +141,36 @@ TEST_CASE("UI contract: discovery reports client structure independently of game
     CHECK(ui.run("local d = hs.UI.Describe() d.modules[1].name='changed' d.version.major=999 "
                  "return hs.UI.Describe().version.major == 1 and hs.UI.Describe().modules[1].name ~= 'changed'") == "true");
     CHECK(ui.run("return hs.UI.Supports()").starts_with("error:"));
+}
+
+TEST_CASE("UI contract: add-on recovery is discoverable and restricted to the client's own interface") {
+    ContractUi ui;
+    ui::AddonPolicyView view;
+    view.enabled = view.can_stop = view.can_retry = true;
+    view.serial = 7;
+    view.required = {"owner/required"};
+    ui.host.addon_policy = &view;
+    int actions = 0;
+    ui.host.addon_policy_action = [&](std::string_view) { ++actions; };
+    CHECK(ui.run("return hs.UI.Supports('addons', 'Policy') and hs.UI.Supports('addons', 'PolicyAction')") == "true");
+    CHECK(ui.run("return hs.UI.addons.Policy == hs.AddonPolicy and hs.UI.addons.PolicyAction == hs.AddonPolicyAction") == "true");
+    CHECK(ui.run("return hs.UI.addons.Policy().required[1]") == "owner/required");
+    CHECK(app::ui_call_caps("UI.addons.Policy") == 0);
+    CHECK(app::ui_call_caps("UI.addons.PolicyAction") == 0);
+    const auto* policy = app::ui_api_method("addons.Policy");
+    const auto* action = app::ui_api_method("addons.PolicyAction");
+    REQUIRE(policy);
+    REQUIRE(action);
+    CHECK_FALSE(policy->hookable);
+    CHECK_FALSE(action->hookable);
+
+    ui.host.trusted_ui = false;
+    CHECK(ui.run("return hs.UI.addons.Policy()") == "nil");
+    CHECK(ui.run("return hs.UI.addons.PolicyAction('stop', 7)") == "false");
+    CHECK(actions == 0);
+
+    // Real plugin-folder callers are covered by the Plugin UI recovery sandbox case. A raw Lua state here
+    // has no LuaUi folder identity; CallerScope alone does not turn its code into a plugin's UI callback.
 }
 
 TEST_CASE("UI contract: unlisted, missing and mistyped registered fields fail validation") {

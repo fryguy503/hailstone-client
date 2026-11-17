@@ -12,6 +12,9 @@ Updates preserve the installed management and the player's activation switch unt
 if a later manifest drops `autoload`; an update cannot bypass a disabled switch through ordinary script autorun.
 An ordinary script that first opts in through an update waits for the player to enable it. Automatic updates remain
 a separate choice.
+An intact script required by the current server runs even when its saved Enabled preference is off. The preference
+is retained and takes effect again when the script is optional; emergency stop in **Server add-ons** still keeps
+required code off until Retry or a new connection.
 
 ## What the player sees
 
@@ -178,7 +181,16 @@ A server can also require, allow or block add-ons by their GitHub repository (do
 policies"), off unless its `hailstone.cfg` says `[addons] enforce = on`. A required add-on the player does not have
 shows on the login screen as "Required to play on this server", with one button, Review required add-on (no Not now
 or Don't ask again), and goes through the usual card and approvals. Missing at the zone-in, it keeps the character
-out, with the panel open on it. Suggestions below stay optional and grant nothing by themselves.
+out, with the panel open on it. A requirement may set a minimum installed version with
+`required = owner/repo:1.0.0`; later versions satisfy it too. Suggestions below stay optional. Repositories named
+in the server's `suggest` list are also allowed by its add-on policy, including under `default = deny`, unless
+explicitly blocked. Such a verified package may use its declared capabilities despite general player-code
+restrictions, but a suggestion does not install or start the add-on automatically.
+
+While playing, **Server add-ons** opens on first use, remembers whether the player leaves it open or closed, and
+can be reopened from the game menu. It offers emergency stop for required scripts and plugins, explicit **Retry** and
+ordinary **Camp** (docs/plugins.md "Opt-in add-on policies"). Emergency stop leaves the character connected with a
+warning and keeps those requirements off until Retry or a new connection.
 
 Some servers have an add-on of their own: a plugin with the server's windows and features, say Project Triune's. A
 player who logs in to such a server for the first time does not know it exists, so the login screen tells them.
@@ -329,6 +341,10 @@ the same on case-sensitive and case-insensitive filesystems. UI bundles are limi
 4,096 files and 64 MiB unpacked. Updates/removal preserve files the addon did
 not own, and use the existing transactional journal and pinned signing keys.
 
+A server-required UI package is verified through its direct `ui/<pack>/ui.ini`
+manifests and the sizes and hashes of every recorded file. This installation
+requirement is independent of which interface the player selects.
+
 Player-derived presentation modules belong outside those managed code files,
 under `ui-data/<stable-interface-id>/` in the data folder. Interfaces can import
 them with `hs.UI.interfaces.LoadData`; only selected and approved base IDs are
@@ -360,9 +376,11 @@ link parser (`core/addon_source.h`) keeps the hosts in one place, so others can 
 
 ## Capabilities: the manifest's `caps` are a ceiling
 
-The player's own scripts and plugins get every capability on a server without a `hailstone.cfg`, and the server's
-`player_caps` under one (docs/plugins.md). An add-on the manager installed gets no more than its manifest declared
-and the player accepted on its card:
+The player's own scripts and plugins get every capability on a server without a `hailstone.cfg`, and normally the
+server's `player_caps` under one (docs/plugins.md). With add-on enforcement enabled, a verified managed repository
+named by `required`, `allow` or `suggest` is explicitly authorized to use its manifest capabilities, even with
+general player code off or more restricted. An add-on the manager installed never gets more than its manifest
+declared and the player accepted on its card:
 
 > what the add-on gets = what the server allows ∩ what its manifest declared
 
@@ -371,6 +389,7 @@ and the player accepted on its card:
 | no `hailstone.cfg` | `read,ui` (a script put in by hand: everything) |
 | `player_caps = read,ui,actions` | `read,ui` |
 | `player_caps = read` | `read` |
+| enforcement on, explicitly required/allowed/suggested, `player = off` | `read,ui` |
 
 A script that goes past them gets the client's usual message (`[MQ] buffs: /tell needs the 'chat' permission`). One
 without `login` does not run before the zone-in, whatever the server allows.

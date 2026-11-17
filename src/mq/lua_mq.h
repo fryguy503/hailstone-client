@@ -58,6 +58,7 @@ struct ScriptEnv {
     std::vector<std::filesystem::path> dirs;            // where scripts are looked for, in order
     std::filesystem::path config_dir;                   // mq.configDir: mq.pickle and data loadfile
     std::function<std::int64_t()> now_ms;               // the clock mq.delay and mq.gettime read (null: steady)
+    std::function<bool()> can_start;                    // empty: legacy behavior; false: admission is checking files
     // Scripts as plugins (the hailstone module, mq/lua_hailstone.cpp; docs/plugins.md "Lua plugins"): the chain a
     // script's server extension joins, where its windows, functions, options and menu entries go, and packets to the
     // server. Any may be null.
@@ -183,6 +184,12 @@ public:
     // Required scripts are running, and no running script is forbidden by the current add-on policy.
     bool required_addons_ready(std::string* problem = nullptr) const;
     void set_managed_addons(std::vector<ManagedScript> addons);
+    // Readiness changes only with script/policy lifecycle events; reading it performs no repeated file work.
+    std::uint64_t required_addons_serial() const;
+    // The client's emergency control, not exposed to Lua: stop required scripts and suppress their restarts
+    // until recovery or a fresh session explicitly resumes them. Ordinary stop/pause keep their protection.
+    void stop_required_addons();
+    void resume_required_addons();
     // The server's scripts/ folder (servers/<profile>/scripts), looked in before env.dirs; empty for none.
     void set_server_dir(const std::filesystem::path& dir);
 

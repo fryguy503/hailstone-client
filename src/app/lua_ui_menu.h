@@ -62,6 +62,8 @@ inline constexpr int kMenuWebBrowser = 0x10001;
 // Hailstone's "Lua Scripts" row (the Scripts window, ScriptsWnd: run, stop and autorun the MacroQuest Lua scripts;
 // docs/plugins.md "The Scripts window"), before Web Browser.
 inline constexpr int kMenuScripts = 0x10002;
+// Hailstone's "Server add-ons" row: requirements and recovery in the AddonPolicy window.
+inline constexpr int kMenuAddonPolicy = 0x10003;
 // Hailstone: the plugins' menu entries (plugin/ui_bridge.h) in a "Plugins" submenu; entry i's row returns
 // kMenuPluginFirst + i.
 inline constexpr int kMenuPluginFirst = 0x20000;
@@ -73,7 +75,8 @@ public:
     // the ETN help entry needs 0xddfd42, which EQEmu never sets. A command row is kept when `offered(command)`
     // (menu_command_offered; every row when it is empty); a command name the key map does not know (a later
     // client's) drops its row. A submenu left empty goes, and so do the separators that no longer part two rows.
-    // Hailstone adds "Lua Scripts", "Web Browser" and "Report a Bug" (kMenuScripts, kMenuWebBrowser, kMenuReportBug)
+    // Hailstone adds "Server add-ons", "Lua Scripts", "Web Browser" and "Report a Bug"
+    // (kMenuAddonPolicy, kMenuScripts, kMenuWebBrowser, kMenuReportBug)
     // to the top menu before Help, else before Camp & Quit.
     //
     // Hailstone: the rows come from hailstone_layout(), the same whatever game folder the player uses (a live
@@ -104,9 +107,11 @@ public:
     std::vector<CascadeMenuView> views(ui::UiTextures* textures) const;
     // Hovering a submenu row opens its submenu (closing deeper ones); another row closes this menu's submenus.
     void hover(int menu, int item, int screen_w, int screen_h);
+    // A command row's identity without selecting it or closing the menu; the open menu and row are zero-based.
+    std::optional<int> command(int menu, int item) const;
     // A click on a command row: its key command (FindMappableCommand), and every menu closes; nullopt otherwise.
     std::optional<int> click(int menu, int item);
-    // The plugins' entries (labels, in order): a "Plugins" submenu of the top menu, before Hailstone's rows ("Lua Scripts", "Web Browser", "Report a Bug"); none when
+    // The plugins' entries (labels, in order): a "Plugins" submenu of the top menu, before Hailstone's own rows; none when
     // empty. A change closes the menus.
     void set_plugin_entries(std::vector<std::string> labels);
 

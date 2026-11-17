@@ -15,6 +15,12 @@
 
 namespace hailstone::app {
 
+// The loading cover keeps the in-game windows from taking mouse presses while the world settles. A native plugin
+// question must remain answerable above it; /safelock still owns the mouse even while that question is open.
+inline bool ui_mouse_locked(bool in_game, bool interface_locked, bool settling, bool consent_pending) {
+    return in_game && (interface_locked || (settling && !consent_pending));
+}
+
 // What a frame drawn behind the loading screen still left undone.
 struct ZoneSettleFrame {
     std::size_t actors_waiting = 0; // spawns in view drawn without their appearance (ActorRenderer stats, undressed)

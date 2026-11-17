@@ -193,9 +193,13 @@ std::string_view trim(std::string_view s) {
 }
 
 // A value without its trailing "; comment" or "# comment".
-std::string value_of(std::string_view v) {
+std::string value_without_comment(std::string_view v) {
     std::size_t c = v.find_first_of(";#");
-    return lower(trim(c == std::string_view::npos ? v : v.substr(0, c)));
+    return std::string(trim(c == std::string_view::npos ? v : v.substr(0, c)));
+}
+
+std::string value_of(std::string_view v) {
+    return lower(value_without_comment(v));
 }
 
 std::optional<bool> on_off(std::string_view v) {
@@ -401,11 +405,36 @@ Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings
                 }
                 if (key == "required" || key == "allow" || key == "block") {
                     auto& identities = key == "required" ? r.addons.required : key == "allow" ? r.addons.allow : r.addons.block;
-                    std::string_view rest = v;
+                    // Repository identities ignore case; SemVer prerelease identifiers do not.
+                    const std::string list = key == "required"
+                        ? value_without_comment(ini.get_string(section_name, key_name)) : v;
+                    std::string_view rest = list;
                     while (!rest.empty()) {
                         const std::size_t comma = rest.find(',');
                         const std::string_view item = trim(rest.substr(0, comma));
-                        if (auto identity = normalize_addon_identity(item)) {
+                        auto identity = normalize_addon_identity(item);
+                        std::optional<Version> minimum;
+                        bool invalid_minimum = false;
+                        if (key == "required" && !identity) {
+                            const auto colon = item.rfind(':');
+                            if (colon != std::string_view::npos) {
+                                identity = normalize_addon_identity(trim(item.substr(0, colon)));
+                                if (identity) {
+                                    minimum = parse_version(trim(item.substr(colon + 1)));
+                                    invalid_minimum = !minimum;
+                                }
+                            }
+                        }
+                        if (invalid_minimum) {
+                            invalid_addons(std::format("{}: \"{}\" has an invalid minimum version; use owner/repo:version "
+                                                       "with a SemVer release", where, item));
+                        } else if (identity) {
+                            if (minimum) {
+                                auto previous = r.addons.minimum_versions.find(*identity);
+                                if (previous == r.addons.minimum_versions.end() ||
+                                    compare_versions(previous->second, *minimum) < 0)
+                                    r.addons.minimum_versions.insert_or_assign(*identity, std::move(*minimum));
+                            }
                             if (std::find(identities.begin(), identities.end(), *identity) == identities.end())
                                 identities.push_back(std::move(*identity));
                         } else if (!item.empty() && item.find('/') == std::string_view::npos) {
@@ -441,6 +470,11 @@ Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings
         if (player_caps[scripts] && !player_on[scripts])
             warn(std::format("[{}] player_caps: has no effect without player = on", scripts ? "scripts" : "plugins"));
         (scripts ? r.player_script_caps : r.player_plugin_caps) = player_on[scripts] ? player_caps[scripts].value_or(kCapAll) : 0;
+    }
+    for (const auto& source : r.suggest_addons) {
+        const auto identity = addon_identity(source);
+        if (!identity.empty() && std::find(r.addons.allow.begin(), r.addons.allow.end(), identity) == r.addons.allow.end())
+            r.addons.allow.push_back(identity);
     }
     for (const auto& identity : r.addons.required)
         if (std::find(r.addons.block.begin(), r.addons.block.end(), identity) != r.addons.block.end())
@@ -580,8 +614,18 @@ std::uint32_t Policy::caps(FileKind kind, const Sha256Digest& hash, std::string_
     if (!rules_) return 0;
     if (!addon_file_allowed(kind, hash, name)) return 0;
     std::uint32_t caps = kCapAll;
-    if (rules_->configured && !server_file(kind, hash))
-        caps = (kind == FileKind::Plugin ? rules_->player_plugin_caps : rules_->player_script_caps) & kCapAll;
+    if (rules_->configured && !server_file(kind, hash)) {
+        // Naming a verified managed add-on authorizes its manifest independently of the general player-code
+        // switches. Suggestions enter allow; addon_file_allowed still enforces blocks and shared source rules.
+        const auto& addons = rules_->addons;
+        const bool named = addons.enabled && addons.error.empty() &&
+            std::any_of(ceilings_.begin(), ceilings_.end(), [&](const Ceiling& c) {
+                return c.verified && c.kind == kind && c.sha256 == hash &&
+                    (identity_in(addons.required, c.addon_source) || identity_in(addons.allow, c.addon_source));
+            });
+        if (!named)
+            caps = (kind == FileKind::Plugin ? rules_->player_plugin_caps : rules_->player_script_caps) & kCapAll;
+    }
     // An add-on's file: no more than its manifest declared (the server's own files keep every capability).
     if (!server_file(kind, hash))
         if (auto c = ceiling(kind, hash)) caps &= *c;

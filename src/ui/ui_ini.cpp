@@ -66,6 +66,8 @@ WindowIniInfo window_ini_info(std::string_view screen) {
         {"InventoryWindow", {}, 0xfffffcff, 2},   {"MerchantWnd", {}, 0xfffffcff, 3},
         {"GuildManagementWnd", {}, 0xfffffcff, 1}, {"TipWindow", {}, 0xfffffcff, 1},
         {"EQMainWnd", {}, 0xfffffeff, 1},
+        // Hailstone's recovery panel starts shown and remembers the player's choice for this character.
+        {"AddonPolicy", {}, 0xffffffff, 1},
         {"MapViewWnd", {}, 0xfffffdff, 1},        {"EditLabelWnd", {}, 0xfffffdff, 1},
         // CChatWindowManager: the first chat window is "MainChat" (EnableIniStorage 0xfffffeff).
         {"Chat1", "MainChat", 0xfffffeff, 1},

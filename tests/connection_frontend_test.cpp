@@ -19,6 +19,7 @@ TEST_CASE("connection front end: a required-addon wait cannot consume quit or ex
         std::vector<std::string> trace;
         connection.send_command(command);
         const bool proceed = app::connection_frontend(connection, skin,
+            [&] { trace.push_back("assets"); },
             [&](const std::string& name) { trace.push_back("skin:" + name); },
             [&](net::GameConnection::QuitRequest request) {
                 CHECK(request == (command == "/exit" ? net::GameConnection::QuitRequest::Exit
@@ -30,7 +31,7 @@ TEST_CASE("connection front end: a required-addon wait cannot consume quit or ex
         if (proceed) trace.push_back("addon gate");
         CHECK_FALSE(proceed);
         CHECK_FALSE(skin);
-        CHECK(trace == std::vector<std::string>{"skin:modern", "quit"});
+        CHECK(trace == std::vector<std::string>{"quit"});
         CHECK(connection.take_quit_request() == net::GameConnection::QuitRequest::None);
     }
 }
@@ -43,13 +44,14 @@ TEST_CASE("connection front end: a disconnected loading connection leaves before
     std::optional<std::string> skin = "gamepad";
     std::vector<std::string> trace;
     const bool proceed = app::connection_frontend(connection, skin,
+        [&] { trace.push_back("assets"); },
         [&](const std::string& name) { trace.push_back("skin:" + name); },
         [&](net::GameConnection::QuitRequest) { trace.push_back("quit"); },
         [&] { trace.push_back("disconnected"); });
     if (proceed) trace.push_back("addon gate");
     CHECK_FALSE(proceed);
     CHECK_FALSE(skin);
-    CHECK(trace == std::vector<std::string>{"skin:gamepad", "disconnected"});
+    CHECK(trace == std::vector<std::string>{"disconnected"});
 }
 
 TEST_CASE("connection front end: a pending skin loads before a required-addon wait") {
@@ -59,11 +61,12 @@ TEST_CASE("connection front end: a pending skin loads before a required-addon wa
     std::optional<std::string> skin = "gamepad";
     std::vector<std::string> trace;
     const bool proceed = app::connection_frontend(connection, skin,
+        [&] { trace.push_back("assets"); },
         [&](const std::string& name) { trace.push_back("skin:" + name); },
         [&](net::GameConnection::QuitRequest) { trace.push_back("quit"); },
         [&] { trace.push_back("disconnected"); });
     if (proceed) trace.push_back("addon gate");
     CHECK(proceed);
     CHECK_FALSE(skin);
-    CHECK(trace == std::vector<std::string>{"skin:gamepad", "addon gate"});
+    CHECK(trace == std::vector<std::string>{"assets", "skin:gamepad", "addon gate"});
 }

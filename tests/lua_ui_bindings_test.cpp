@@ -107,7 +107,7 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     app::CascadeMenu menu;
     menu.load_text(text, 0xffffffffu, 0, offered);
     CHECK(menu.row_texts(0) == std::vector<std::string>{"Actions >", "Character >", "Quests >", "-", "Mail",
-                                                        "Mercenaries", "-", "Options", "Lua Scripts", "Web Browser",
+                                                        "Mercenaries", "-", "Options", "Server add-ons", "Lua Scripts", "Web Browser",
                                                         "Report a Bug", "Camp & Quit"});
     CHECK(menu.row_texts(1) == std::vector<std::string>{"Actions", "Alarm"});
     CHECK(menu.row_texts(3) == std::vector<std::string>{"Auras"});
@@ -118,7 +118,7 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     app::CascadeMenu pad;
     pad.load_text(text, 0xffffffffu, 0, offered);
     CHECK(pad.row_texts(0) == std::vector<std::string>{"Actions >", "Quests >", "-", "Mail", "Mercenaries", "-",
-                                                       "Options", "Lua Scripts", "Web Browser", "Report a Bug",
+                                                       "Options", "Server add-ons", "Lua Scripts", "Web Browser", "Report a Bug",
                                                        "Camp & Quit"});
     // Hailstone's Lua Scripts row returns its own number (the Scripts window).
     {
@@ -127,6 +127,16 @@ TEST_CASE("EQ menu: only the rows this client runs") {
         const int at = static_cast<int>(std::find(rows.begin(), rows.end(), "Lua Scripts") - rows.begin());
         CHECK(pad.click(0, at) == app::kMenuScripts);
     }
+    {
+        const auto rows = pad.row_texts(0);
+        pad.toggle({0, 0, 50, 20}, 1920, 1080);
+        const int at = static_cast<int>(std::find(rows.begin(), rows.end(), "Server add-ons") - rows.begin());
+        CHECK(pad.command(0, at) == app::kMenuAddonPolicy);
+        CHECK(pad.open());
+        CHECK_FALSE(pad.command(-1, at));
+        CHECK_FALSE(pad.command(0, -1));
+        CHECK(pad.click(0, at) == app::kMenuAddonPolicy);
+    }
 
     // The plugins' entries: a "Plugins" submenu before Hailstone's rows (Lua Scripts, Web Browser, Report a Bug), each
     // row its entry's number; none, none.
@@ -134,7 +144,7 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     pad.set_plugin_entries({"Ext Window", "Ext Two"});
     auto top = pad.row_texts(0);
     CHECK(top == std::vector<std::string>{"Actions >", "Quests >", "-", "Mail", "Mercenaries", "-", "Options",
-                                          "Plugins >", "Lua Scripts", "Web Browser", "Report a Bug", "Camp & Quit"});
+                                          "Plugins >", "Server add-ons", "Lua Scripts", "Web Browser", "Report a Bug", "Camp & Quit"});
     REQUIRE(pad.menu_count() == menus + 1);
     CHECK(pad.row_texts(menus) == std::vector<std::string>{"Ext Window", "Ext Two"});
     pad.toggle({0, 0, 50, 20}, 1920, 1080);
@@ -146,7 +156,7 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     pad.set_plugin_entries({});
     CHECK(pad.menu_count() == menus);
     CHECK(pad.row_texts(0) == std::vector<std::string>{"Actions >", "Quests >", "-", "Mail", "Mercenaries", "-",
-                                                       "Options", "Lua Scripts", "Web Browser", "Report a Bug",
+                                                       "Options", "Server add-ons", "Lua Scripts", "Web Browser", "Report a Bug",
                                                        "Camp & Quit"});
 
     using C = game::KeyCommand;
@@ -207,7 +217,7 @@ TEST_CASE("EQ menu: Hailstone's layout") {
     CHECK(menu.row_texts(0) == std::vector<std::string>{"Actions >", "Character >", "Hotkeys >", "Inventory >",
                                                         "Navigation >", "Players >", "Quests >", "Real Estate >", "-",
                                                         "Claims", "Lua Scripts", "Mail", "Marketplace", "Options",
-                                                        "Web Browser", "-", "Help", "Report a Bug", "Camp & Quit"});
+                                                        "Server add-ons", "Web Browser", "-", "Help", "Report a Bug", "Camp & Quit"});
     // (the Advanced Inventory, added after Inventory, first)
     CHECK(menu.row_texts(2) == std::vector<std::string>{"Advanced Inventory", "Bandolier", "Barter Search",
                                                         "Bazaar Search", "Inventory"});
@@ -261,7 +271,7 @@ TEST_CASE("EQ menu: Hailstone's layout over the game folder's file, a server's f
     menu.reload();
     menu.load(game, 0xffffffffu, 1);
     CHECK(menu.row_texts(0) ==
-          std::vector<std::string>{"Server Mail", "Lua Scripts", "Web Browser", "Report a Bug", "Camp & Quit"});
+          std::vector<std::string>{"Server Mail", "Server add-ons", "Lua Scripts", "Web Browser", "Report a Bug", "Camp & Quit"});
 }
 
 namespace {
@@ -302,6 +312,56 @@ ui::ServerEntry world(const char* name) {
 }
 
 } // namespace
+
+TEST_CASE("Server add-ons: visibility starts shown and is saved with each character's UI layout") {
+    std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+    ImGui::GetIO().DisplaySize = ImVec2(1600, 900);
+    test::ScratchDir scratch("addon_policy_visibility");
+    const auto defaults = scratch.path() / "defaults.ini";
+    const auto first = scratch.path() / "first_server_character.ini";
+    const auto second = scratch.path() / "second_server_character.ini";
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    ui::AddonPolicyView policy;
+    policy.enabled = true;
+    policy.required = {"maker/helper"};
+    host.addon_policy = &policy;
+    {
+        UiTable hs(host);
+        hs.api.load_layout(defaults, first, {});
+        CHECK(hs.api.shown("AddonPolicy"));
+        CHECK(hs.run("return hs.WindowShown('AddonPolicy')") == "true");
+        hs.api.begin_frame();
+        hs.api.show("AddonPolicy", false);
+        hs.api.begin_frame();
+        hs.api.save_layout();
+
+        // Failures and fresh rules change recovery data, never the player's visibility choice.
+        policy.degraded = true;
+        policy.serial = 1;
+        policy.message = "Required add-on stopped.";
+        hs.api.begin_frame();
+        CHECK_FALSE(hs.api.shown("AddonPolicy"));
+        policy.degraded = false;
+        ++policy.serial;
+        hs.api.begin_frame();
+        CHECK_FALSE(hs.api.shown("AddonPolicy"));
+
+        hs.api.load_layout(defaults, second, {});
+        CHECK(hs.api.shown("AddonPolicy")); // another character starts with its own default
+        hs.api.load_layout(defaults, first, {});
+        CHECK_FALSE(hs.api.shown("AddonPolicy"));
+        hs.api.begin_frame();
+        hs.api.toggle("AddonPolicy");
+        hs.api.begin_frame();
+        hs.api.save_layout();
+    }
+    {
+        UiTable hs(host);
+        hs.api.load_layout(defaults, first, {});
+        CHECK(hs.api.shown("AddonPolicy")); // the reopened state also survives a new UI model
+    }
+}
 
 TEST_CASE("Fellowship window: the default shortcut and EQ menu resolve to its toggle") {
     std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);

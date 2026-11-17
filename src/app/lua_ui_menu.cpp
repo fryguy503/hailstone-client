@@ -294,7 +294,8 @@ void CascadeMenu::load_text(std::string_view file, std::uint32_t expansions, std
     const int icon = where != top.end() ? where->icon : -1;
     where = top.insert(where, {1, icon, "Report a Bug", kMenuReportBug, -1});
     where = top.insert(where, {1, icon, "Web Browser", kMenuWebBrowser, -1});
-    top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
+    where = top.insert(where, {1, icon, "Lua Scripts", kMenuScripts, -1});
+    top.insert(where, {1, icon, "Server add-ons", kMenuAddonPolicy, -1});
     plugin_menu_ = -1;
     apply_plugin_entries();
     if (!left_out.empty()) {
@@ -434,9 +435,10 @@ void CascadeMenu::apply_plugin_entries() {
     plugin_menu_ = static_cast<int>(menus_.size());
     menus_.push_back(std::move(m));
     auto& rows = menus_[0].items; // (push_back may have moved menus_)
-    // Before Hailstone's own rows (Lua Scripts, Web Browser, Report a Bug).
+    // Before Hailstone's own rows (Server add-ons, Lua Scripts, Web Browser, Report a Bug).
     auto where = std::find_if(rows.begin(), rows.end(), [](const Item& it) {
-        return it.command == kMenuScripts || it.command == kMenuWebBrowser || it.command == kMenuReportBug;
+        return it.command == kMenuAddonPolicy || it.command == kMenuScripts ||
+               it.command == kMenuWebBrowser || it.command == kMenuReportBug;
     });
     rows.insert(where, {5, -1, "Plugins", -1, plugin_menu_});
     if (sorted_) arrange();
@@ -484,14 +486,19 @@ void CascadeMenu::arrange() {
     }
 }
 
-std::optional<int> CascadeMenu::click(int menu, int item) {
+std::optional<int> CascadeMenu::command(int menu, int item) const {
     if (menu < 0 || menu >= static_cast<int>(open_.size())) return std::nullopt;
     const auto& items = menus_[static_cast<std::size_t>(open_[static_cast<std::size_t>(menu)].menu)].items;
     if (item < 0 || item >= static_cast<int>(items.size())) return std::nullopt;
     const Item& it = items[static_cast<std::size_t>(item)];
     if (it.kind != 1 || it.command < 0) return std::nullopt;
-    close();
     return it.command;
+}
+
+std::optional<int> CascadeMenu::click(int menu, int item) {
+    const auto selected = command(menu, item);
+    if (selected) close();
+    return selected;
 }
 
 } // namespace hailstone::app

@@ -68,17 +68,13 @@ struct Session {
         host.conn = &conn;
         host.chat = &view;
         host.in_game = host.ui_ready = in_game;
-        lua.add_ui_api([this, in_game](lua_State* L) {
+        lua.add_ui_api([this](lua_State* L) {
             api.register_functions(L);
-            if (in_game) {
-                lua_pushcfunction(L, [](lua_State* S) { lua_pushboolean(S, 1); return 1; });
-                lua_setfield(L, -2, "InGame");
-            }
             hailstone::test::sync_ui_api_aliases(L);
         });
         api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
     }
-    void frames(int n, ui::InGameView* fallback = nullptr) {
+    void frames(int n, ui::InGameView* fallback = nullptr, const ui::LoadingView* loading = nullptr) {
         for (int i = 0; i < n; ++i) {
             ImGuiIO& io = ImGui::GetIO();
             io.DisplaySize = ImVec2(1600, 900);
@@ -87,7 +83,11 @@ struct Session {
             api.begin_frame();
             ImGui::NewFrame();
             if (fallback) (void)ui::in_game_overlay(*fallback);
+            const bool cover_ui = !loading || !host.plugin_consent || !host.plugin_consent().has_value();
+            // Match the app's two call sites: Loading draws before the pack, zone settling after it.
+            if (loading && !host.in_game) ui::loading_overlay(*loading, cover_ui);
             lua.frame();
+            if (loading && host.in_game) ui::loading_overlay(*loading, cover_ui);
             ImGui::Render();
         }
     }
@@ -2748,7 +2748,7 @@ local rows = {
   "Blocked Buffs", "Blocked Pet Buffs", "Auras",
   "Miscellaneous", "Bazaar Search", "Barter Search", "Tribute", "PvP Stats", "Mail", "Mercenaries",
   "Inventory", "Options", "Help", "Everquest Help", "Lua Scripts", "Web Browser", "Report a Bug", "Camp & Quit",
-  "Marketplace", "Real Estate", "Manage", "Plot Search", "Real Estate Items", "Plugins",
+  "Marketplace", "Real Estate", "Manage", "Plot Search", "Real Estate Items", "Plugins", "Server add-ons",
 }
 local missing = {}
 ui.Begin("menu icons test")
@@ -3169,7 +3169,7 @@ TEST_CASE("UI packs: each claims the achievement and reward windows while they a
     }
 }
 
-TEST_CASE("UI packs: the server plugins' question draws in each pack in the client's place") {
+TEST_CASE("UI packs: the server plugins' question draws above the loading cover in each pack") {
     // In the world, and on the loading screen, where a required plugin's question holds the zone-in (no game or
     // character UI is ready there).
     for (const bool in_game : {true, false})
@@ -3191,41 +3191,69 @@ TEST_CASE("UI packs: the server plugins' question draws in each pack in the clie
             std::optional<plugin::ConsentPrompt> prompt;
             s.host.plugin_consent = [&] { return prompt; };
             s.host.answer_plugin_consent = [&](std::optional<bool>) { prompt.reset(); };
-            auto drawn = [&] {
+            ui::LoadingView loading;
+            loading.title = "Checking required add-ons";
+            loading.detail = "Review the required plugin's permission request to continue.";
+            auto consent_window = [&]() -> ImGuiWindow* {
                 for (ImGuiWindow* win : ImGui::GetCurrentContext()->Windows)
                     if (win->WasActive && (std::string(win->Name).find("###modern.PluginConsent") != std::string::npos ||
                                            std::string(win->Name) == "Server Plugins"))
-                        return true;
-                return false;
+                        return win;
+                return nullptr;
             };
-            s.frames(2);
+            auto draw_index = [](const ImDrawList* list) {
+                const ImDrawData* data = ImGui::GetDrawData();
+                for (int i = 0; i < data->CmdListsCount; ++i)
+                    if (data->CmdLists[i] == list) return i;
+                return -1;
+            };
+            auto foreground_cover = [&] {
+                const ImDrawList* foreground = ImGui::GetForegroundDrawList();
+                CHECK_FALSE(foreground->VtxBuffer.empty());
+                CHECK(draw_index(foreground) == ImGui::GetDrawData()->CmdListsCount - 1);
+                CHECK(ImGui::GetBackgroundDrawList()->VtxBuffer.empty());
+            };
+            s.frames(2, nullptr, &loading);
             CHECK(s.api.replaces("PluginConsent")); // the client's own prompt stays off
-            CHECK_FALSE(drawn());
+            CHECK(consent_window() == nullptr);
+            foreground_cover();
             plugin::ConsentPrompt p;
             p.server = "Alpha";
             p.serial = 1;
             p.files.push_back({"MQ2Thing", "MQ2Thing.so", 2u * 1024 * 1024, {}});
             p.files.push_back({"MQ2Other", "MQ2Other.so", 4096, {}});
             prompt = p;
-            s.frames(3);
-            CHECK(drawn());
+            s.frames(3, nullptr, &loading);
+            ImGuiWindow* consent = consent_window();
+            REQUIRE(consent);
+            const ImDrawList* background = ImGui::GetBackgroundDrawList();
+            CHECK_FALSE(background->VtxBuffer.empty());
+            CHECK(draw_index(background) == 0);
+            CHECK(draw_index(consent->DrawList) > draw_index(background));
+            CHECK(ImGui::GetForegroundDrawList()->VtxBuffer.empty());
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
             prompt.reset();
-            s.frames(2);
-            CHECK_FALSE(drawn());
+            s.frames(2, nullptr, &loading);
+            CHECK(consent_window() == nullptr);
+            foreground_cover();
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
         ImGui::DestroyContext(ctx);
     }
 }
 
-// A click meant for something else the instant the question pops up must not answer it: each pack's Allow waits a
-// second after the question shows (or a new one takes its place), and answers with the question's serial.
-TEST_CASE("UI packs: the server plugins' question takes no answer in its first second") {
+// A click meant for something else the instant the question pops up must not answer it: both buttons wait a
+// second after the question shows. The real loading cover must leave both answers reachable afterward.
+TEST_CASE("UI packs: both plugin answers arm and remain reachable above the loading cover") {
+    for (const bool in_game : {true, false})
+    for (const bool allow : {true, false})
     for (const char* pack : {"modern", "gamepad"}) {
         CAPTURE(pack);
+        CAPTURE(in_game);
+        CAPTURE(allow);
         fs::path src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
-        hailstone::test::ScratchDir dir_scratch(std::string("ui_pack_consent_arm_") + pack);
+        hailstone::test::ScratchDir dir_scratch(std::string("ui_pack_consent_arm_") + pack +
+                                               (in_game ? "_game" : "_load") + (allow ? "_allow" : "_deny"));
         fs::path dir = dir_scratch.path();
         fs::create_directories(dir / "game");
         fs::copy(src, dir / pack, fs::copy_options::recursive);
@@ -3235,7 +3263,10 @@ TEST_CASE("UI packs: the server plugins' question takes no answer in its first s
         int w = 0, h = 0;
         ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
         {
-            Session s(dir, pack);
+            Session s(dir, pack, {}, in_game);
+            ui::LoadingView loading;
+            loading.title = "Checking required add-ons";
+            loading.detail = "Review the required plugin's permission request to continue.";
             std::optional<plugin::ConsentPrompt> prompt;
             std::vector<std::optional<bool>> answers;
             s.host.plugin_consent = [&] { return prompt; };
@@ -3249,16 +3280,18 @@ local button, invisible = ui.Button, ui.InvisibleButton
 ui.Button = function(label, ...)
   local hit = button(label, ...)
   if label == "Allow##consent" then allowRect = { ui.GetItemRect() } end
+  if label == "Don't allow##consent" then denyRect = { ui.GetItemRect() } end
   return hit
 end
 ui.InvisibleButton = function(id, ...)
   local hit = invisible(id, ...)
   if id == "##consentallow" then allowRect = { ui.GetItemRect() } end
+  if id == "##consentdeny" then denyRect = { ui.GetItemRect() } end
   return hit
 end
 )lua") == LUA_OK);
-            auto click_allow = [&] {
-                lua_getglobal(L, "allowRect");
+            auto click_answer = [&] {
+                lua_getglobal(L, allow ? "allowRect" : "denyRect");
                 REQUIRE(lua_istable(L, -1));
                 float rect[4]{};
                 for (int i = 0; i < 4; ++i) {
@@ -3269,25 +3302,25 @@ end
                 lua_settop(L, 0);
                 auto& io = ImGui::GetIO();
                 io.AddMousePosEvent((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2);
-                s.frames(1);
+                s.frames(1, nullptr, &loading);
                 io.AddMouseButtonEvent(0, true);
-                s.frames(1);
+                s.frames(1, nullptr, &loading);
                 io.AddMouseButtonEvent(0, false);
-                s.frames(1);
+                s.frames(1, nullptr, &loading);
             };
             plugin::ConsentPrompt p;
             p.server = "Alpha";
             p.serial = 4;
             p.files.push_back({"MQ2Thing", "MQ2Thing.so", 4096, {}});
             prompt = p;
-            s.frames(3);
-            click_allow(); // within its first second: nothing
+            s.frames(3, nullptr, &loading);
+            click_answer(); // within its first second: nothing
             CHECK(answers.empty());
             CHECK(prompt.has_value());
-            s.frames(65);
-            click_allow();
+            s.frames(65, nullptr, &loading);
+            click_answer();
             REQUIRE(answers.size() == 1);
-            CHECK(answers[0] == std::optional<bool>(true));
+            CHECK(answers[0] == std::optional<bool>(allow));
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
         ImGui::DestroyContext(ctx);
@@ -5378,4 +5411,282 @@ TEST_CASE("UI packs (modern): the Options search draws every tab, and only the s
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
     }
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("UI packs: server add-on recovery remains nonmodal and every action is explicit") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        CAPTURE(pack);
+        const fs::path source = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        test::ScratchDir scratch(std::string("ui_addon_policy_") + pack);
+        const fs::path dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(source, dir / pack, fs::copy_options::recursive);
+        ImGuiContext* context = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        {
+            Session session(dir, pack);
+            session.host.trusted_ui = true;
+            ui::AddonPolicyView view;
+            session.host.addon_policy = &view;
+            std::vector<std::string> actions;
+            session.host.addon_policy_action = [&](std::string_view action) { actions.emplace_back(action); };
+            lua_State* L = session.lua.state();
+            REQUIRE(luaL_dostring(L, R"lua(
+local button, invisible, begin, finish = ui.Button, ui.InvisibleButton, ui.Begin, ui.End
+ui.Begin = function(name, ...)
+  policyDrawing = name:find("Server add-ons", 1, true) ~= nil
+  return begin(name, ...)
+end
+ui.End = function(...) policyDrawing = false return finish(...) end
+local actions = { ["Retry##addonpolicy"] = "retry", ["Camp##addonpolicy"] = "camp",
+  ["Emergency stop required add-ons##addonpolicy"] = "stop",
+  ["##addonpolicyretry"] = "retry", ["##addonpolicycamp"] = "camp", ["##addonpolicystop"] = "stop" }
+policyButtons = {}
+local function recovery(id, clicked)
+  local action = actions[id]
+  if action then
+    policyButtons[action] = true
+    if policyClick == action then policyClick = nil return true end
+  end
+  return clicked
+end
+ui.Button = function(label, ...) return recovery(label, button(label, ...)) end
+ui.InvisibleButton = function(id, ...)
+  local hit = invisible(id, ...)
+  if policyDrawing and (id == "##hudclose" or id == "##close") then
+    policyCloseRect = { ui.GetItemRect() }
+  end
+  local tile = tonumber(id:match("^##tile(%d+)$"))
+  if tile then
+    policyLastTile = math.max(policyLastTile or 0, tile)
+    if policyClickTile == tile then policyClickTile = nil return true end
+  end
+  return recovery(id, hit)
+end
+ui.window("Gameplay focus", function()
+  ui.Begin("Gameplay focus", nil, ui.WindowFlags.NoSavedSettings)
+  ui.End()
+end)
+)lua") == LUA_OK);
+            auto drawn = [&] {
+                const ImDrawData* data = ImGui::GetDrawData();
+                for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows)
+                    if (window->Active && std::string(window->Name).find("Server add-ons") != std::string::npos)
+                        for (int i = 0; i < data->CmdListsCount; ++i)
+                            if (data->CmdLists[i] == window->DrawList) return true;
+                return false;
+            };
+            session.frames(2);
+            CHECK(session.api.replaces("AddonPolicy"));
+            CHECK_FALSE(drawn());
+            ImGuiWindow* gameplay = ImGui::FindWindowByName("Gameplay focus");
+            REQUIRE(gameplay != nullptr);
+            ImGui::FocusWindow(gameplay);
+            view.enabled = view.can_stop = true;
+            view.serial = 7;
+            view.phase = "Ready";
+            view.message = "Required add-ons are running.";
+            view.required = {"maker/helper"};
+            session.frames(3);
+            CHECK(drawn());
+            CHECK(ImGui::GetCurrentContext()->NavWindow == gameplay);
+            CHECK(ImGui::GetCurrentContext()->OpenPopupStack.empty());
+            CHECK(actions.empty());
+            REQUIRE(luaL_dostring(L, "assert(policyButtons.stop); assert(not policyButtons.camp)") == LUA_OK);
+
+            // Both packs expose a real close box. Putting the panel away changes visibility alone.
+            lua_getglobal(L, "policyCloseRect");
+            REQUIRE(lua_istable(L, -1));
+            float close_rect[4]{};
+            for (int i = 0; i < 4; ++i) {
+                lua_rawgeti(L, -1, i + 1);
+                close_rect[i] = static_cast<float>(lua_tonumber(L, -1));
+                lua_pop(L, 1);
+            }
+            lua_settop(L, 0);
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddMousePosEvent((close_rect[0] + close_rect[2]) / 2, (close_rect[1] + close_rect[3]) / 2);
+            session.frames(1);
+            io.AddMouseButtonEvent(0, true);
+            session.frames(1);
+            io.AddMouseButtonEvent(0, false);
+            session.frames(3);
+            CHECK_FALSE(drawn());
+            CHECK_FALSE(session.api.shown("AddonPolicy"));
+            CHECK(actions.empty());
+            CHECK(view.can_stop); // closing is not Emergency stop
+
+            view.degraded = view.can_retry = true;
+            view.phase = "Degraded";
+            view.message = "Required add-on stopped. You can retry or camp normally.";
+            ++view.serial;
+            session.frames(3);
+            CHECK_FALSE(drawn()); // a new failure does not reopen the player's closed window
+            CHECK_FALSE(session.api.shown("AddonPolicy"));
+            session.host.in_game = session.host.ui_ready = false;
+            session.frames(2);
+            session.host.in_game = session.host.ui_ready = true;
+            ++view.serial;
+            session.frames(2);
+            CHECK_FALSE(drawn()); // zoning keeps the same visibility choice
+            CHECK(actions.empty());
+            REQUIRE(luaL_dostring(L, R"lua(
+hs.UI.windows.ClickChild('EQMainWnd', 'EQButton', 'left')
+local reopened = false
+for i, row in ipairs(hs.UI.menus.Cascades()[1].items) do
+  if row.text == 'Server add-ons' then hs.UI.menus.CascadeClick(1, i); reopened = true; break end
+end
+assert(reopened and hs.UI.windows.Shown('AddonPolicy'))
+)lua") == LUA_OK);
+            session.frames(3);
+            CHECK(drawn());
+            CHECK(ImGui::GetCurrentContext()->OpenPopupStack.empty());
+            CHECK(actions.empty()); // showing a failure cannot camp, stop or restart anything
+            for (const char* action : {"retry", "camp", "stop"}) {
+                lua_pushstring(L, action);
+                lua_setglobal(L, "policyClick");
+                session.frames(1);
+                REQUIRE(actions.size() > 0);
+                CHECK(actions.back() == action);
+            }
+            CHECK(actions == std::vector<std::string>{"retry", "camp", "stop"});
+            view.can_retry = view.can_stop = false;
+            REQUIRE(luaL_dostring(L, "policyClick = 'retry'") == LUA_OK);
+            session.frames(1);
+            REQUIRE(luaL_dostring(L, "policyClick = 'stop'") == LUA_OK);
+            session.frames(1);
+            CHECK(actions.size() == 3);
+
+            if (std::string_view(pack) == "gamepad") {
+                session.api.show("AddonPolicy", false);
+                REQUIRE(luaL_dostring(L, R"lua(
+hs.gamepad = hs.gamepad or {}
+hs.gamepad.connected = function() return true end
+hs.gamepad.request_focus = function(window)
+  if window == 'Server add-ons' then
+    assert(hs.UI.windows.Shown('AddonPolicy')) -- the tile must reopen it before requesting focus
+    policyFocused = true
+  end
+end
+GPSTATE.menuOpen = true
+policyClick, policyClickTile, policyLastTile = nil, nil, 0
+)lua") == LUA_OK);
+                session.frames(20); // controller settling after the player's menu action
+                REQUIRE(luaL_dostring(L, "assert(policyLastTile > 0); policyClickTile = policyLastTile") == LUA_OK);
+                session.frames(2);
+                REQUIRE(luaL_dostring(L, "assert(policyFocused); assert(not GPSTATE.menuOpen)") == LUA_OK);
+                CHECK(session.api.shown("AddonPolicy"));
+                CHECK(drawn());
+                CHECK(actions.size() == 3); // opening recovery is not a recovery action
+
+                REQUIRE(luaL_dostring(L, R"lua(
+policyPadMode = 'menu'
+hs.gamepad.mode = function() return policyPadMode end
+hs.gamepad.set_mode = function(mode) policyPadMode = mode return mode end
+hs.gamepad.pressed = function(button) return button == 'b' end
+hs.gamepad.takes_b = function() policyBackConsumed = true end
+)lua") == LUA_OK);
+                ImGui::FocusWindow(gameplay);
+                session.frames(1);
+                REQUIRE(luaL_dostring(L, "assert(policyPadMode == 'menu'); assert(not policyBackConsumed)") == LUA_OK);
+                ImGuiWindow* recovery = ImGui::FindWindowByName("Server add-ons");
+                REQUIRE(recovery != nullptr);
+                ImGui::FocusWindow(recovery);
+                session.frames(1);
+                REQUIRE(luaL_dostring(L, "assert(policyPadMode == 'game'); assert(policyBackConsumed)") == LUA_OK);
+                session.frames(2);
+                CHECK_FALSE(drawn());
+                CHECK_FALSE(session.api.shown("AddonPolicy"));
+                CHECK(actions.size() == 3); // B never retries, stops or camps
+                REQUIRE(luaL_dostring(L, "hs.gamepad.pressed = function() return false end") == LUA_OK);
+            }
+            session.api.show("AddonPolicy", true);
+            // Dropping the requirements must leave Retry accessible for code stopped earlier in this session.
+            view.required.clear();
+            view.degraded = view.can_retry = true;
+            view.phase = "off";
+            view.message = "Required add-ons were stopped for this session.";
+            ++view.serial;
+            session.frames(2);
+            CHECK(drawn());
+            REQUIRE(luaL_dostring(L, "policyClick = 'retry'") == LUA_OK);
+            session.frames(1);
+            CHECK(actions == std::vector<std::string>{"retry", "camp", "stop", "retry"});
+            view.enabled = false;
+            session.frames(2);
+            CHECK_FALSE(drawn());
+            view.enabled = true;
+            session.host.in_game = session.host.ui_ready = false;
+            session.frames(2);
+            CHECK_FALSE(drawn()); // the pre-entry flow uses its own admission/consent screens
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        }
+        ImGui::DestroyContext(context);
+    }
+}
+
+TEST_CASE("UI packs: server add-on visibility survives layout reloads and switching packs") {
+    for (const char* initial_pack : {"modern", "gamepad"}) {
+        CAPTURE(initial_pack);
+        test::ScratchDir scratch(std::string("ui_addon_policy_visibility_") + initial_pack);
+        const fs::path dir = scratch.path();
+        fs::create_directories(dir / "game");
+        for (const char* pack : {"modern", "gamepad"})
+            fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack,
+                     dir / pack, fs::copy_options::recursive);
+        for (int visit = 0; visit < 3; ++visit) {
+            CAPTURE(visit);
+            const char* pack = initial_pack;
+            if (visit == 1) pack = std::string_view(initial_pack) == "modern" ? "gamepad" : "modern";
+            ImGuiContext* context = ImGui::CreateContext();
+            ImGui::GetIO().IniFilename = nullptr;
+            unsigned char* pixels = nullptr;
+            int width = 0, height = 0;
+            ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+            {
+                // Each visit recreates UiApi and loads the same character's UI ini. A pack switch shares that choice.
+                Session session(dir, pack);
+                session.host.trusted_ui = true;
+                ui::AddonPolicyView view;
+                view.enabled = view.can_stop = true;
+                view.serial = static_cast<std::uint64_t>(visit + 1);
+                view.required = {"maker/helper"};
+                view.degraded = view.can_retry = visit == 1;
+                view.phase = view.degraded ? "Degraded" : "Ready";
+                view.message = view.degraded ? "Required add-on stopped." : "Required add-ons are running.";
+                session.host.addon_policy = &view;
+                std::vector<std::string> actions;
+                session.host.addon_policy_action = [&](std::string_view action) { actions.emplace_back(action); };
+                const bool expected_shown = visit != 1;
+                CHECK(session.api.shown("AddonPolicy") == expected_shown);
+                session.frames(3);
+                auto drawn = [] {
+                    for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows)
+                        if (window->WasActive && std::string(window->Name).find("Server add-ons") != std::string::npos)
+                            return true;
+                    return false;
+                };
+                CHECK(drawn() == expected_shown);
+                CHECK(ImGui::GetCurrentContext()->OpenPopupStack.empty());
+                CHECK(actions.empty());
+                if (visit == 0) {
+                    session.api.show("AddonPolicy", false);
+                    session.frames(2);
+                    CHECK_FALSE(drawn());
+                } else if (visit == 1) {
+                    // Reopening a hidden degraded panel is presentation only; it does not Retry or stop anything.
+                    REQUIRE(luaL_dostring(session.lua.state(), "hs.UI.windows.Show('AddonPolicy', true)") == LUA_OK);
+                    session.frames(3);
+                    CHECK(drawn());
+                }
+                session.api.save_layout();
+                CHECK(actions.empty());
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            }
+            ImGui::DestroyContext(context);
+        }
+    }
 }

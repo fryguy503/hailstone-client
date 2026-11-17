@@ -4,6 +4,7 @@
 #include <set>
 #include <utility>
 
+#include "core/version.h"
 #include "mq/lua_mq.h"
 #include "ui/dev_screens.h"
 #include "ui/ui_packs.h"
@@ -78,21 +79,31 @@ std::vector<AddonRequirementProblem> addon_requirement_problems(
         return out;
     }
     for (const auto& required : rules.addons.required) {
-        std::string problem = "Required add-on " + required + " is not installed. Open Add-ons to install it.";
+        const auto minimum = rules.addons.minimum_versions.find(required);
+        const bool versioned = minimum != rules.addons.minimum_versions.end();
+        const std::string version_needed = versioned ? " version " + minimum->second.to_string() + " or newer" : "";
+        std::string problem = "Required add-on " + required + version_needed +
+                              " is not installed. Open Add-ons to install it.";
         bool found = false;
         for (const auto& a : candidates) {
             if (!plugin::addon_identity_matches(required, a.source)) continue;
-            const auto allowed_caps = a.kind == AddonKind::Script ? rules.player_script_caps : rules.player_plugin_caps;
+            const auto installed_version = versioned ? parse_version(a.version) : std::optional<Version>{};
             if (!plugin::addon_allowed(rules.addons, a.source)) {
                 problem = "Required add-on " + required + " is blocked by this server's add-on policy.";
             } else if (!a.intact) {
                 problem = "Required add-on " + required + " has missing or changed files. Reinstall it in Add-ons.";
+            } else if (versioned && !installed_version) {
+                problem = "Required add-on " + required + " has no valid installed version;" + version_needed +
+                          " is required. Reinstall it in Add-ons.";
+            } else if (versioned && compare_versions(*installed_version, minimum->second) < 0) {
+                problem = "Required add-on " + required + " needs" + version_needed + "; installed version is " +
+                          installed_version->to_string() + ". Open Add-ons to update it.";
             } else if (a.kind == AddonKind::Script && !a.startable) {
                 problem = "Required add-on " + required + " cannot be started here: another folder beside scripts/" +
                           a.name + " has the same name in other letter case.";
             } else if ((a.kind == AddonKind::Script || a.kind == AddonKind::Plugin) &&
-                       (a.caps == 0 || (a.caps & ~allowed_caps))) {
-                problem = "Required add-on " + required + " needs capabilities this server does not allow.";
+                       !(a.caps & plugin::kCapAll)) {
+                problem = "Required add-on " + required + " declares no capabilities and cannot run.";
             } else if (a.kind == AddonKind::Plugin && a.consent == plugin::Consent::Denied) {
                 problem = "Required plugin " + required + " was not allowed to run. Open Add-ons to review your answer.";
             } else {
@@ -140,58 +151,6 @@ void present_addon_requirement(ui::LoginView& view, const std::vector<AddonRequi
     view.addons.status = {std::move(message), true};
     const auto offers = required_addon_suggestions(problems, index);
     if (!offers.empty()) view.addons.link = offers.front().source;
-}
-
-AddonAdmission::Result AddonAdmission::warn(std::string problem) {
-    Result out;
-    if (problem == warned_) return out;
-    warned_ = problem;
-    out.warning = std::move(problem);
-    return out;
-}
-
-void AddonAdmission::reset() {
-    serial_.reset();
-    admitted_ = wait_frame_ = false;
-    zone_problem_.clear();
-    warned_.clear();
-}
-
-AddonAdmission::Result AddonAdmission::update(const plugin::Rules* rules, std::uint32_t serial, bool in_world,
-                                              const std::function<std::string()>& zone_problem,
-                                              const std::function<std::optional<std::string>()>& ready) {
-    if (!rules || rules->provisional) {
-        // Out of the world (character select, a login): the next zone-in decides again, with its own rules.
-        reset();
-        return {};
-    }
-    if (serial_ != serial) {
-        serial_ = serial;
-        zone_problem_ = rules->addons.enabled ? zone_problem() : std::string();
-        if (!admitted_ && !zone_problem_.empty()) return {Step::Refuse, zone_problem_, {}};
-        // Automation applies new rules after the connection's frame: let required autostart and the consent prompt
-        // run before asking whether the add-ons are ready.
-        wait_frame_ = rules->addons.enabled;
-    }
-    if (admitted_) {
-        std::string problem = zone_problem_;
-        if (problem.empty()) {
-            if (std::exchange(wait_frame_, false)) return {};
-            if (rules->addons.enabled) problem = ready().value_or(std::string());
-        }
-        return warn(std::move(problem));
-    }
-    if (!in_world) return {};
-    if (!rules->addons.enabled) {
-        admitted_ = true;
-        return {};
-    }
-    if (std::exchange(wait_frame_, false)) return {Step::Start, {}, {}};
-    const auto state = ready();
-    if (!state) return {Step::Consent, {}, {}};
-    if (!state->empty()) return {Step::Refuse, *state, {}};
-    admitted_ = true;
-    return {};
 }
 
 } // namespace hailstone::app

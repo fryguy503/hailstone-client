@@ -2,6 +2,9 @@
 
 #include "app/client_app_internal.h"
 #include "app/ui_visibility.h"
+
+#include <exception>
+
 #include "app/frame_pace.h"
 #include "platform/precise_sleep.h"
 #include "core/build_info.h"
@@ -138,8 +141,9 @@ int ClientApp::run() {
         // The gamepad before the UI frame: its mode decides what ImGui gets from it (docs/gamepad.md).
         update_gamepad(dt);
         // /safelock: the windows get no mouse while the interface is locked (__ProcessMouseEvents).
-        // Behind the loading screen (zone_settle_) neither do they.
-        ui_.set_mouse_locked(conn_ && screen_ == Screen::InGame && (conn_->interface_locked() || zone_settling()));
+        // Behind the loading screen (zone_settle_) neither do they, except to answer a native plugin question.
+        ui_.set_mouse_locked(ui_mouse_locked(conn_ && screen_ == Screen::InGame, conn_ && conn_->interface_locked(),
+                                             zone_settling(), automation_ && automation_->plugin_consent().has_value()));
         ui_.new_frame();
         update_lap.mark("gamepad, UI new frame");
         // The boats move first: the player is carried by, and collides with, a boat where it is drawn this frame.
@@ -236,8 +240,10 @@ int ClientApp::run() {
         }
         window_.set_text_input(std::exchange(web_text_input_, false) && ui_.visible()); // a page that has the keys (app/lua_ui_web.cpp)
         settle_frame_.ui = true; // UI maintenance ran; loading/settling presentations are always visible
-        if (screen_ == Screen::InGame && zone_settling()) ui::loading_overlay(loading_view_);
+        if (screen_ == Screen::InGame && zone_settling())
+            ui::loading_overlay(loading_view_, !(automation_ && automation_->plugin_consent().has_value()));
         if (automation_ && ui_.visible()) automation_->imgui(game_view_.dev_windows);
+        if (ui_.visible()) addon_policy_window();
         // The select clock runs on through character creation (input scripts drive both screens).
         if (screen_ != Screen::Characters && screen_ != Screen::Create) select_shown_.reset();
         else if (!select_shown_) select_shown_ = Clock::now();
@@ -1250,8 +1256,17 @@ int run_client(ClientOptions& options) {
         auto app = std::make_unique<client_internal::ClientApp>(options);
         core::wipe(options.auto_password);
         core::wipe(options.login_launch.ticket);
-        code = app->run();
-        update = app->update_exit();
+        try {
+            code = app->run();
+            update = app->update_exit();
+        } catch (const std::exception& e) {
+            // Record the initiating failure before stack unwinding runs plugin and renderer teardown.
+            log::error("Client stopped: {}", e.what());
+            throw;
+        } catch (...) {
+            log::error("Client stopped by an unknown exception");
+            throw;
+        }
     }
     // The client is gone (its window, the browser helper, the plugins): a downloaded update goes in now.
     if (update.install) finish_update_at_exit(update.restart);

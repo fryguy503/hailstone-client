@@ -2,6 +2,15 @@
 
 What the client does not implement yet, or implements with an approximation it cannot confirm. Entries are removed once settled.
 
+## Graphics error during play
+
+- Two live zone crashes begin with a runtime error from ordinary `vkQueueSubmit2` frame submission. Their
+  exception message is outside the captured minidump memory; the surviving number suffix is consistent with
+  `VK_ERROR_DEVICE_LOST`, but the original signed result is not retained. Exception cleanup then tried to send a
+  plugin unload message through a destroyed connection. The cleanup lifetime is fixed with a real native-plugin,
+  required-script and mock-zone regression; the primary graphics failure still needs live diagnosis. Client errors
+  are now logged before cleanup so that failure cannot be hidden by teardown.
+
 ## Legacy environmental particles
 
 - Legacy particle switches (`app/switch_particles.*`, `assets/legacy_particles.*`): explicit-position stage-2 slots
@@ -14,12 +23,22 @@ What the client does not implement yet, or implements with an approximation it c
 
 ## Server add-on policy
 
+- Server add-ons visibility has model, persistence, menu and UI-pack regressions; live closing/reopening,
+  relogging and switching interfaces with the saved visibility still need acceptance.
 - The optional required/allow/block policy is covered by parser, package identity, admission, runtime and gate
   regressions, not live. Live acceptance still needs a first visit and a return visit, a server fixing its policy,
   installing missing requirements, native consent allowed/refused/closed, a required add-on failing in the world
-  (the chat warning), both UI packs and a physical controller, and an external upscaler allowed/blocked/updated
+  (the chat warning and recovery panel), emergency stop followed by policy refresh and explicit Retry, both UI packs
+  and a physical controller, and an external upscaler allowed/blocked/updated
   followed by restart. The server does not send its policy until the zone-in; it is a client extension, not a
   server-side attestation or anti-cheat mechanism.
+- Suggested permission and minimum required versions have parser and requirement regressions; live acceptance
+  still needs a suggested add-on under default deny, exact/older/newer installed versions at admission, and required
+  scripts/plugins starting while general player code is off, with optional named add-ons available without forced startup.
+- Required native-plugin consent was hidden beneath the loading foreground. The loading presentation now stays
+  behind a pending request, with draw-order, mouse-lock and button-arming regressions for both UI packs and loading phases;
+  the player confirmed Modern's request is visible during live login. Live refusal, the fallback interface and
+  physical controller input still need acceptance on the corrected build.
 - Texture packs (Texture Studio's output in `textures/`) are not add-ons and have no repository, so no list names
   them; a server can block the Texture Studio tool, not the packs a player already built. A required tool is met by
   its installation: the client does not start it and cannot tell whether it runs.

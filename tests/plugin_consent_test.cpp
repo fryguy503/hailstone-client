@@ -19,6 +19,7 @@
 #include "plugin/consent.h"
 #include "plugin/policy.h"
 #include "scratch_dir.h"
+#include "ui/dev_screens.h"
 #include "ui/lua/lua_host.h"
 
 using namespace hailstone;
@@ -249,6 +250,115 @@ TEST_CASE("hs.PluginConsent in a plugin's code: nil, and its answer is refused")
         CHECK(in_folder(lua, "plug", "return in_draw") == "false");
         CHECK(a.answers.empty()); // the plugin answered nothing
         CHECK(a.prompt.has_value());
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("eq.AddonPolicy: recovery uses current pack state and rejects stale or unavailable actions") {
+    app::UiHost host;
+    host.trusted_ui = true;
+    app::UiApi api(host);
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    lua_newtable(L);
+    api.register_functions(L);
+    lua_setglobal(L, "eq");
+    CHECK(run(L, "return eq.AddonPolicy()") == "nil");
+
+    ui::AddonPolicyView view;
+    host.addon_policy = &view;
+    CHECK(run(L, "return eq.AddonPolicy()") == "nil");
+    view.enabled = view.can_stop = true;
+    view.serial = 7;
+    view.phase = "Ready";
+    view.message = "Required add-ons are running";
+    view.required = {"maker/helper", "maker/other"};
+    std::vector<std::string> actions;
+    host.addon_policy_action = [&](std::string_view action) { actions.emplace_back(action); };
+    CHECK(run(L, "return eq.AddonPolicy().enabled") == "true");
+    CHECK(run(L, "return eq.AddonPolicy().phase") == "Ready");
+    CHECK(run(L, "return eq.AddonPolicy().message") == view.message);
+    CHECK(run(L, "return eq.AddonPolicy().can_stop") == "true");
+    CHECK(run(L, "return eq.AddonPolicy().can_retry") == "false");
+    CHECK(run(L, "return eq.AddonPolicy().degraded") == "false");
+    CHECK(run(L, "return #eq.AddonPolicy().required") == "2");
+    CHECK(run(L, "return eq.AddonPolicy().required[1]") == "maker/helper");
+    CHECK(run(L, "return eq.AddonPolicyAction('stop', 7)") == "false"); // not a UI pack state
+    lua_pushboolean(L, 1);
+    lua_setfield(L, LUA_REGISTRYINDEX, ui::lua::kPackStateKey);
+    CHECK(run(L, "return (pcall(eq.AddonPolicyAction, 'stop'))") == "false");
+    CHECK(run(L, "return eq.AddonPolicyAction('stop', -1)") == "false");
+    CHECK(run(L, "return eq.AddonPolicyAction('stop', 6)") == "false");
+    CHECK(run(L, "return eq.AddonPolicyAction('unknown', 7)") == "false");
+    CHECK(run(L, "return eq.AddonPolicyAction('retry', 7)") == "false");
+    CHECK(run(L, "return eq.AddonPolicyAction('camp', 7)") == "false");
+    CHECK(actions.empty());
+    CHECK(run(L, "return eq.AddonPolicyAction('stop', 7)") == "true");
+    CHECK(actions == std::vector<std::string>{"stop"});
+    view.serial = 8;
+    view.can_stop = false;
+    view.can_retry = view.degraded = true;
+    CHECK(run(L, "return eq.AddonPolicyAction('retry', 7)") == "false");
+    CHECK(run(L, "return eq.AddonPolicyAction('stop', 8)") == "false");
+    CHECK(run(L, "return eq.AddonPolicyAction('retry', 8)") == "true");
+    CHECK(run(L, "return eq.AddonPolicyAction('camp', 8)") == "true");
+    CHECK(actions == std::vector<std::string>{"stop", "retry", "camp"});
+    view.enabled = false;
+    CHECK(run(L, "return eq.AddonPolicy()") == "nil");
+    CHECK(run(L, "return eq.AddonPolicyAction('retry', 8)") == "false");
+    host.addon_policy = nullptr;
+    CHECK(run(L, "return eq.AddonPolicy()") == "nil");
+    lua_close(L);
+}
+
+TEST_CASE("eq.AddonPolicy in plugin code: requirements and recovery remain the player's controls") {
+    test::ScratchDir dir("addon_policy_confined");
+    const fs::path pack = dir.path() / "pack", plug = dir.path() / "plug";
+    fs::create_directories(pack);
+    fs::create_directories(plug);
+    std::ofstream(pack / "policy.lua") << "ui.window('Policy', function() pack_saw = eq.AddonPolicy() ~= nil end)\n";
+    std::ofstream(plug / "sneak.lua") << "at_load = eq.AddonPolicyAction('stop', 7)\n"
+                                         "ui.window('Sneak', function()\n"
+                                         "  eq.WindowShown('AddonPolicy')\n"
+                                         "  saw = eq.AddonPolicy() ~= nil\n"
+                                         "  in_draw = eq.AddonPolicyAction('retry', 7)\n"
+                                         "  camped = eq.AddonPolicyAction('camp', 7)\n"
+                                         "end)\n";
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    unsigned char* px = nullptr;
+    int w = 0, h = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    {
+        app::UiHost host;
+        host.trusted_ui = true;
+        app::UiApi api(host);
+        ui::AddonPolicyView view;
+        view.enabled = view.can_stop = view.can_retry = view.degraded = true;
+        view.serial = 7;
+        view.required = {"maker/helper"};
+        host.addon_policy = &view;
+        std::vector<std::string> actions;
+        host.addon_policy_action = [&](std::string_view action) { actions.emplace_back(action); };
+        ui::lua::LuaUi lua(pack, dir.path() / "ui.txt");
+        lua.add_eq_api([&](lua_State* L) { api.register_functions(L); });
+        lua.set_caller_scope([&](std::string_view tag) -> std::shared_ptr<void> {
+            return std::make_shared<plugin::CallerScope>(plugin::kCapAll, tag);
+        });
+        lua.set_folders({{"plug", plug}});
+        ImGui::GetIO().DisplaySize = ImVec2(800, 600);
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        lua.frame();
+        ImGui::Render();
+        CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        CHECK(run(lua.state(), "return pack_saw") == "true");
+        CHECK(in_folder(lua, "plug", "return saw") == "false");
+        CHECK(in_folder(lua, "plug", "return at_load") == "false");
+        CHECK(in_folder(lua, "plug", "return in_draw") == "false");
+        CHECK(in_folder(lua, "plug", "return camped") == "false");
+        CHECK_FALSE(api.replaces("AddonPolicy")); // a plugin cannot hide the client's recovery controls
+        CHECK(actions.empty());
     }
     ImGui::DestroyContext(ctx);
 }

@@ -332,6 +332,8 @@ add_library(hailstone_engine STATIC
   src/app/addon_manager.cpp
   src/app/addon_suggest.cpp
   src/app/addon_requirements.cpp
+  src/app/addon_admission.cpp
+  src/app/addon_policy_check.cpp
   src/app/connection_frontend.cpp
   src/app/addon_upscaler_policy.cpp
   src/app/window_icon.cpp
@@ -886,7 +888,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/plugins/projecttriune/CMakeLists.txt)
   set(HAILSTONE_HAS_TRIUNE ON)
 endif()
 
-add_executable(hailstone src/app/main.cpp src/app/client_app.cpp src/app/client_app_ui.cpp src/app/client_app_draw.cpp src/app/target_ring.cpp src/app/client_app_input.cpp src/app/client_app_testdrive.cpp src/app/client_app_pick.cpp src/app/client_app_iso.cpp src/app/client_app_items.cpp src/app/client_app_player.cpp src/app/client_app_zone.cpp src/app/client_app_pregame.cpp src/app/client_app_options.cpp src/app/client_app_commands.cpp src/app/client_app_info.cpp src/app/client_app_web.cpp src/app/client_app_login.cpp src/app/client_app_gamepad.cpp src/app/client_app_bugreport.cpp src/app/client_app_update.cpp src/app/client_app_addons.cpp src/app/client_app_addon_upscaler.cpp src/app/input_script.cpp src/app/model_viewer.cpp ${HAILSTONE_WIN_MANIFEST} ${HAILSTONE_WIN_CLIENT_RESOURCES})
+add_executable(hailstone src/app/main.cpp src/app/client_app.cpp src/app/client_app_ui.cpp src/app/client_app_draw.cpp src/app/target_ring.cpp src/app/client_app_input.cpp src/app/client_app_testdrive.cpp src/app/client_app_pick.cpp src/app/client_app_iso.cpp src/app/client_app_items.cpp src/app/client_app_player.cpp src/app/client_app_zone.cpp src/app/client_app_pregame.cpp src/app/client_app_options.cpp src/app/client_app_commands.cpp src/app/client_app_info.cpp src/app/client_app_web.cpp src/app/client_app_login.cpp src/app/client_app_gamepad.cpp src/app/client_app_bugreport.cpp src/app/client_app_update.cpp src/app/client_app_addons.cpp src/app/input_script.cpp src/app/model_viewer.cpp ${HAILSTONE_WIN_MANIFEST} ${HAILSTONE_WIN_CLIENT_RESOURCES})
 target_compile_options(hailstone PRIVATE ${HAILSTONE_WARNINGS})
 # Windows: a Release (or MinSizeRel) client is a GUI program, so no console window opens beside it; main() stays the
 # entry point. Other builds keep the console for the log. Errors that stop a start are shown in a dialog either way
@@ -1094,6 +1096,8 @@ if(HAILSTONE_BUILD_TESTS)
     tests/changelog_test.cpp
     tests/addon_install_test.cpp
     tests/addon_requirements_test.cpp
+    tests/addon_admission_test.cpp
+    tests/addon_policy_check_test.cpp
     tests/connection_frontend_test.cpp
     tests/addon_upscaler_policy_test.cpp
     tests/addon_manager_test.cpp

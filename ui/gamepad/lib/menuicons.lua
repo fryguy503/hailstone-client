@@ -428,7 +428,7 @@ local BY_TEXT = {
   ["Bazaar Search"] = "bazaar", ["Barter Search"] = "barter", ["Looking for Group"] = "lfgroup",
   ["Looking for Guild"] = "lfguild", ["Map"] = "map", ["Atlas/Map"] = "map", ["Miscellaneous"] = "misc",
   ["Marketplace"] = "marketplace", ["Real Estate"] = "house", ["Manage"] = "key", ["Plot Search"] = "pin",
-  ["Real Estate Items"] = "chair", ["Plugins"] = "plug",
+  ["Real Estate Items"] = "chair", ["Plugins"] = "plug", ["Server add-ons"] = "plug",
   -- the same windows under other skins' and later clients' row texts
   ["Actions Window"] = "bolt", ["Alarm Window"] = "alarm", ["Group Window"] = "group",
   ["Player Info Window"] = "card", ["Buffs (Short Duration)"] = "shortbuffs", ["Instance Information"] = "expedition",

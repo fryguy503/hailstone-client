@@ -861,6 +861,12 @@ or the windows, and the zone-in clocks (the input script's, the test drivers') s
 the network steps to the zone loaded (half), then over the settle. Each zone-in logs `zone-in: loading screen up N ms
 (...)`.
 
+While a native-plugin permission request waits, the same loading art and progress panel draw in the background
+list instead. The guarded permission window stays above them in Modern, Gamepad and the fallback interface;
+the opaque foreground cover returns once the player answers. Loading still waits for consent and the world
+remains blocked. During the final zone settle, the request also keeps its mouse input; `/safelock` still takes
+precedence. Draw-order, mouse-lock and button-arming regressions cover both loading and the final zone settle.
+
 Measured on a dev server, zone connect to the first frame shown, before and after: poknowledge 2.2
 → 3.0-3.3 s, qeynos2 1.6 → 2.0 s, commonlands (EQG) 4.6 → 4.9 s. Before, the first frames showed spawns undressed
 for up to 3 s in poknowledge, a large EQG object missing for a frame in commonlands and the HUD without the

@@ -93,6 +93,51 @@ TEST_CASE("UI visibility: hiding discards every draw list while preserving the w
     CHECK(ui.shown);
 }
 
+TEST_CASE("Loading presentation: questions stay above its background and ordinary loading keeps its foreground cover") {
+    for (const bool cover_ui : {false, true})
+    for (const bool presentation_first : {false, true}) {
+        CAPTURE(cover_ui);
+        CAPTURE(presentation_first);
+        VisibilityUi ui;
+        hailstone::ui::LoadingView loading;
+        loading.title = "Checking required add-ons";
+        loading.detail = "Review the plugin's permission request.";
+        loading.progress = 0.5f;
+        for (int frame = 0; frame < 2; ++frame) {
+            ui.begin();
+            auto present = [&] {
+                if (cover_ui) hailstone::ui::loading_overlay(loading); // retain the existing one-argument contract
+                else hailstone::ui::loading_overlay(loading, false);
+            };
+            if (presentation_first) present();
+            ImGui::SetNextWindowPos(ImVec2(100, 100));
+            ImGui::SetNextWindowSize(ImVec2(360, 180));
+            ImGui::Begin("Server plugin permission", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            ImGui::TextUnformatted("Allow this server's plugin?");
+            ImGui::Button("Allow");
+            ImGui::SameLine();
+            ImGui::Button("Don't allow");
+            const ImDrawList* question = ImGui::GetWindowDrawList();
+            ImGui::End();
+            if (!presentation_first) present();
+            const ImDrawList* presentation = cover_ui ? ImGui::GetForegroundDrawList() : ImGui::GetBackgroundDrawList();
+            REQUIRE(ui.visibility.finish_frame(true));
+            const ImDrawData* data = ImGui::GetDrawData();
+            REQUIRE(data);
+            auto position = [&](const ImDrawList* list) {
+                for (int i = 0; i < data->CmdListsCount; ++i)
+                    if (data->CmdLists[i] == list) return i;
+                return -1;
+            };
+            REQUIRE(position(question) >= 0);
+            REQUIRE(position(presentation) >= 0);
+            CHECK(presentation->VtxBuffer.Size > 0);
+            if (cover_ui) CHECK(position(question) < position(presentation));
+            else CHECK(position(presentation) < position(question));
+        }
+    }
+}
+
 TEST_CASE("UI visibility: text and mouse input from hidden frames cannot replay into the restored editor") {
     VisibilityUi ui;
     ui.frame(true); ui.frame(); ui.frame();

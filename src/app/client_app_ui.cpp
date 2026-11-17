@@ -258,7 +258,8 @@ void ClientApp::draw_ui(float fps) {
     case Screen::Loading:
         // The same screen as the zone settling behind it (ui::loading_overlay), so it goes on unchanged after the
         // zone-in; the disconnected screen (no waiting) stays a window.
-        if (loading_view_.waiting) ui::loading_overlay(loading_view_);
+        if (loading_view_.waiting)
+            ui::loading_overlay(loading_view_, !(automation_ && automation_->plugin_consent().has_value()));
         else ui::loading_screen(loading_view_);
         break;
     case Screen::InGame: {

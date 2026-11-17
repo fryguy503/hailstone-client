@@ -39,6 +39,18 @@ struct StatusLine {
     bool is_error = false;
 };
 
+// The connection's required add-ons, read without touching the filesystem. Recovery actions are the player's.
+struct AddonPolicyView {
+    bool enabled = false;
+    bool can_stop = false;
+    bool can_retry = false;
+    bool degraded = false;
+    std::uint64_t serial = 0;
+    std::string phase;
+    std::string message;
+    std::vector<std::string> required;
+};
+
 // ---- Login ----------------------------------------------------------------
 
 // A game folder the login screen offers (hailstone.ini assets.path and assets.recent), with what its check found.
@@ -440,6 +452,9 @@ void loading_screen(const LoadingView& view);
 // The same screen over everything else drawn this frame (an opaque black backdrop and the panel, in the foreground
 // draw list): the world and its windows run beneath it while the zone settles (app/zone_settle.h).
 void loading_overlay(const LoadingView& view);
+// A pending question must remain above the loading art. False puts the same presentation behind normal windows;
+// true keeps the opaque foreground cover used during ordinary loading and zone settling.
+void loading_overlay(const LoadingView& view, bool cover_ui);
 
 // ---- In game --------------------------------------------------------------
 

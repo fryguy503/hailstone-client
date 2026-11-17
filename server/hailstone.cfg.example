@@ -5,6 +5,8 @@
 ; every capability. These settings are about the player's own.
 ;
 ; Capabilities: read, commands, target, actions, move, chat, events, ui, packets, or all.
+; With enforcement on, managed add-ons named by required, allow or suggest use their declared capabilities even
+; when general player code below is off or more restricted. Explicit blocks still win.
 
 [scripts]
 player = off              ; the player's own Lua scripts: on / off
@@ -37,9 +39,11 @@ passable_ladders = on     ; walking or swimming into a ladder whose polygons are
 ;enforce = off            ; on: the lists below apply (docs/plugins.md "Opt-in add-on policies"); off: they do not
 ;required = owner/repo    ; add-ons the player must have, by GitHub repository (never a bare name); checked at each
                           ; zone-in, they start by themselves and cannot be stopped here
-;allow = owner/repo       ; add-ons permitted under default = deny; this grants no capabilities ([scripts] above does)
+                          ; owner/repo:1.0.0-preview.4 requires that installed version or newer; no suffix accepts any
+;allow = owner/repo       ; permitted add-ons use their verified manifest capabilities, even with player code off
 ;block = owner/repo       ; add-ons refused, whatever else says
-;default = allow          ; deny: refuse every add-on that required or allow does not name, upscalers included
+;default = allow          ; deny: refuse every add-on that required, allow or suggest does not name, upscalers included
+                          ; suggestions stay optional; named packages keep their manifest limits and blocks still win
 ;
 ; With default = deny, name in allow every upscaler (XeSS, FSR 4 ...) you permit: one already loaded at start that
 ; this refuses keeps the player out until they pick an allowed or built-in one and restart. A fuller example:

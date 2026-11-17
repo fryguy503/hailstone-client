@@ -156,8 +156,10 @@ window for it (`hs.ReplaceWindow("PluginConsent")`) the client draws its own.
 ## Capabilities
 
 Each running file carries a set of capability bits: every one for the server's files and on a server without a
-`hailstone.cfg`; for the player's under a `hailstone.cfg`, those its `player_caps` grant. A file of an add-on the
-manager installed gets no more than its manifest's `caps`, whatever the server allows (docs/addons.md "Capabilities":
+`hailstone.cfg`; for the player's under a `hailstone.cfg`, normally those its `player_caps` grant. An enforced
+required/allow/suggest entry instead authorizes the named verified managed package's manifest capabilities, while
+unlisted player code retains the general limits. A file of an add-on the manager installed gets no more than its
+manifest's `caps`, whatever the server allows (docs/addons.md "Capabilities":
 `plugin::Policy::set_ceilings`, by the file's hash).
 
 The bits are checked again whenever they change (the server's `hailstone.cfg` arriving at the zone-in after a first
@@ -535,6 +537,11 @@ stock answer), the chat window says so once and the log names each place once, a
 `InitializePlugin` or `hailstone_plugin_hooks` unloads the plugin with everything it registered. That is best effort: an
 exception crossing a C interface is undefined behaviour, and one from a plugin built with another compiler or runtime
 may end the client.
+
+When a client error ends the session, scripts and plugins shut down while the connection, UI host and browser
+still exist. The connection is then released while its hook bus is still alive. This also applies during exception
+unwinding: a plugin's unload message must not access a connection already destroyed. The initiating client error
+is logged before teardown, independently of plugin cleanup.
 
 `plugins/example/MQ2Example.c` uses all of it and builds with the client into `build/hailstone/plugins/`. To build one
 yourself:
@@ -1372,9 +1379,13 @@ default = allow
   the add-on manager recorded when it installed the package, not a folder or manifest name. A bare name
   (`dpsmeter`) is refused: any package of that name, from anyone, would satisfy it. A refused or malformed entry
   makes the policy invalid (below), and the client's log names it (`hailstone.cfg: [addons] required: "dpsmeter" is a
-  bare name; add-ons are named by their GitHub repository (owner/repo)`). These are not version pins: the manager's
-  usual update rules still apply.
-- **`allow`, `block` and `default`.** `default = deny` refuses every add-on not named by `allow` or `required`,
+  bare name; add-ons are named by their GitHub repository (owner/repo)`). An unversioned requirement accepts any
+  installed version. To set a minimum, use `required = owner/repo:1.0.0-preview.4`: that version or newer is accepted,
+  using semantic version ordering (`preview.10` is newer than `preview.4`, and `1.0.0` is newer than its previews).
+  A missing or invalid installed version cannot satisfy a minimum. Repeated requirements keep the highest minimum;
+  omit the suffix to keep the existing unversioned behavior. Version suffixes apply only to `required`; the manager's
+  usual update and installation rules still apply.
+- **`allow`, `block` and `default`.** `default = deny` refuses every add-on not named by `allow`, `required` or `suggest`,
   so a closed list can shut out every add-on, visual ones included; `default = allow` (the default) admits the rest.
   `block` wins over everything; an identity both required and blocked makes the policy invalid. An add-on put in by
   hand (not by the manager) has no repository: no list names it, so it runs under `default = allow` (unless it uses
@@ -1385,15 +1396,22 @@ default = allow
   (its base, else Modern) without changing the player's choice. A pack put in `ui/` by hand is refused under
   `default = deny` as any hand-placed add-on is; the built-in `ui/modern` and `ui/gamepad` never are.
 - **`required`** add-ons must be installed with every file intact. Required scripts and compiled plugins start at the
-  zone-in even when they are not in the player's autorun, and the player cannot stop, pause or unload them on that
-  server. A required compiled plugin still asks for the player's approval of its bytes on this server ("The server's
+  zone-in even when they are not in the player's autorun; normal stop, pause and unload controls keep them running.
+  A verified required managed script also runs when its local Enabled preference is off. The saved preference is
+  unchanged and takes effect once that script is optional again.
+  Emergency stop in Server add-ons is the recovery exception (below). A required compiled plugin still asks for
+  the player's approval of its bytes on this server ("The server's
   compiled plugins ask first"). A required upscaler must be the one picked under Options, Graphics, Upscaler and
   loaded (it loads only at start). A required tool is a program of its own: its intact installation meets the
   requirement; the client neither starts it nor can tell whether it runs.
-- **Permission is not capability.** Naming an add-on in `allow` or `required` does not turn on `[scripts] player` or
-  `[plugins] player`, nor grant more than `player_caps` and the add-on's manifest. A required script or plugin that
-  needs capabilities the server does not give is a requirement not met. A `suggest` stays optional and grants nothing;
-  under `default = deny`, also name it in `allow` if it should run.
+- **Named code is explicitly authorized.** A managed script or plugin named by `required`, `allow` or `suggest`
+  uses its verified package's declared capabilities even with `[scripts] player = off` or `[plugins] player = off`,
+  or a narrower `player_caps`.
+  The exception applies only to those named repositories and never grants more than the installed manifest allows.
+  Integrity checks, minimum versions, explicit blocks and native-code approval still apply.
+- **Optional remains optional.** `allow` and `suggest` do not force startup or installation; only `required` forces
+  scripts and plugins to start. A suggestion also grants add-on permission under `default = deny` and never
+  overrides an explicit block. Unlisted or unverified player code still follows the general player settings.
 - **The server's own files** (its `scripts/` and `plugins/`, listed by hash at the zone-in) are not add-ons: no
   list names them and the policy never refuses them. The server decides by sending them or not.
 
@@ -1403,8 +1421,8 @@ When it is decided:
   last visit: so a server that fixed a mistake in its policy is never locked out by the old one. The cached copy only
   informs the login screen (its add-on panel shows "Required to play on this server" and offers each missing one).
 - **Before the world is shown**, the loading screen reads "Checking required add-ons": required add-ons start, and a
-  required plugin's question waits for the player's answer. A requirement that is missing, changed, refused, needs
-  more than the server allows, or fails to start returns to the login screen with the add-on panel open on what is
+  required plugin's question waits for the player's answer. A requirement that is missing, changed, refused or
+  fails to start returns to the login screen with the add-on panel open on what is
   missing. Reviewing it fetches its manifest and opens the usual install card; nothing is fetched before that click,
   and installing keeps every usual check (signatures, pinned keys, platform, capabilities, approval of native code).
   An invalid policy refuses entry the same way, with the reason.
@@ -1413,6 +1431,24 @@ When it is decided:
   installed add-ons do not meet, is a warning in chat (`[Add-ons] Required add-on owner/repo did not remain
   running. You can keep playing on this server.`), said once for each failure. Leaving to character select starts the
   check over for the next entry.
+
+Package and active-upscaler integrity checks run on a cancellable worker using copied rules and paths. One registry
+snapshot supplies both requirement checks and runtime permissions, including the platform's script or library
+entrypoint. A check superseded by a newer policy or connection cannot publish its result. New scripts and plugins
+wait until the complete snapshot is applied; normal execution-time validation still applies. Readiness uses policy,
+consent and lifecycle serials to avoid scanning unchanged runtime state each frame.
+
+**Recovery while playing.** The **Server add-ons** panel in Modern, Gamepad and the fallback UI opens on first use.
+It can be closed, reopened from the game menu, and keeps its open or closed state in the character's UI layout.
+A later failure still warns in chat without reopening a panel the player closed. The panel shows the problem
+and offers **Retry** and ordinary **Camp**. **Emergency stop required add-ons**
+stops the required scripts and plugins and keeps them off across rule changes until the player presses Retry or a
+new connection starts. Showing the panel never restarts, camps or disconnects the character automatically, and
+normal zoning remains playable. The Gamepad main menu can open and focus the panel without taking a recovery action.
+Recovery cannot repair a native library that crashes the whole process, and an active native callback must finish
+before its library can unload. Only the client's UI pack can replace this panel or invoke its actions through
+`eq.AddonPolicy()` and `eq.AddonPolicyAction(action, serial)` (docs/scripting-reference.md); plugin and script code
+cannot operate these controls.
 
 **When blocking upscalers.** An upscaler loads at start, before any server is known, and Vulkan cannot change it
 while the client runs. An active upscaler the policy refuses (or whose loaded files no longer match its installed

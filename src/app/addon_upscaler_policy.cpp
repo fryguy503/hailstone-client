@@ -9,9 +9,11 @@ namespace hailstone::app {
 
 namespace {
 
-bool loaded_files_match(const InstalledAddon& addon, const std::filesystem::path& folder) {
+bool loaded_files_match(const InstalledAddon& addon, const std::filesystem::path& folder,
+                        const std::function<bool()>& canceled) {
     if (addon.files.empty() || folder.empty()) return false;
     for (const auto& file : addon.files) {
+        if (canceled && canceled()) return false;
         const std::filesystem::path relative(
             std::u8string(reinterpret_cast<const char8_t*>(file.path.data()), file.path.size()));
         // Registries are checked when read, but keep this helper safe for a caller's own records too.
@@ -19,7 +21,7 @@ bool loaded_files_match(const InstalledAddon& addon, const std::filesystem::path
         for (const auto& part : relative)
             if (part == "..") return false;
         // Remembered by size and time: a provider's vendor libraries can be tens of MB, checked at each zone-in.
-        if (!addon_file_matches(folder / relative, file.size, file.sha256)) return false;
+        if (!addon_file_matches(folder / relative, file.size, file.sha256, canceled)) return false;
     }
     return true;
 }
@@ -27,7 +29,8 @@ bool loaded_files_match(const InstalledAddon& addon, const std::filesystem::path
 } // namespace
 
 std::string addon_upscaler_problem(const plugin::AddonRules& rules, const AddonRegistry& registry,
-                                  std::string_view active_name, const std::filesystem::path& loaded_folder) {
+                                  std::string_view active_name, const std::filesystem::path& loaded_folder,
+                                  const std::function<bool()>& canceled) {
     if (!rules.enabled) return {};
     if (!rules.error.empty()) return rules.error;
     const InstalledAddon* active = nullptr;
@@ -46,7 +49,7 @@ std::string addon_upscaler_problem(const plugin::AddonRules& rules, const AddonR
         if (!plugin::addon_allowed(rules, source) || (!rules.default_allow && !active))
             return std::format("This server does not allow the active upscaler '{}'. Choose an allowed upscaler "
                                "or a built-in option in Graphics, then restart Hailstone before joining.", active_name);
-        if (active && !loaded_files_match(*active, loaded_folder))
+        if (active && !loaded_files_match(*active, loaded_folder, canceled))
             return std::format("The running upscaler '{}' does not match its installed add-on. Reinstall it if "
                                "needed, then restart Hailstone before joining this server.", active_name);
     }

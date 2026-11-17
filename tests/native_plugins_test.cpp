@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <thread>
 #include <stdexcept>
 
@@ -19,7 +20,7 @@
 #include "plugin/native_plugins.h"
 #include "mq_test_world.h"
 #include "plugin_consent_helper.h"
-#include "app/addon_requirements.h"
+#include "app/addon_admission.h"
 #include "app/web_service.h"
 #include "plugin/web_access.h"
 #include "web/browser_host.h"
@@ -43,6 +44,7 @@ struct Host {
     mq::Registry reg;
     mq::Context ctx;
     std::vector<std::string> printed, sent;
+    std::function<void(const std::string&)> on_print;
     std::vector<std::pair<int, std::string>> used, checked; // use_ability, ability_state (kind and name)
     bool ability_ready = true;
     std::vector<plugin::AbilityBulkRow> ability_rows; // get_ability_data_bulk's rows
@@ -53,7 +55,8 @@ struct Host {
 
     // own_folder: the binary in the plugin's own folder, plugins/MQ2Example/, not directly in plugins/.
     // `built`: the plugin to put in the folder (the example; tests/plugins/HostProbe.cpp ...).
-    explicit Host(bool own_folder = false, plugin::WebAccess* web = nullptr, fs::path built = HAILSTONE_EXAMPLE_PLUGIN) {
+    explicit Host(bool own_folder = false, plugin::WebAccess* web = nullptr, fs::path built = HAILSTONE_EXAMPLE_PLUGIN,
+                  std::function<bool()> can_load = {}) {
         fs::path dir = own_folder ? plugin_dir / "MQ2Example" : plugin_dir;
         fs::create_directories(dir);
         file = dir / built.filename();
@@ -73,7 +76,10 @@ struct Host {
         ne.policy = &policy;
         ne.registry = &reg;
         ne.context = ce.context;
-        ne.print = [this](const std::string& t, std::uint32_t) { printed.push_back(t); };
+        ne.print = [this](const std::string& t, std::uint32_t) {
+            printed.push_back(t);
+            if (on_print) on_print(t);
+        };
         ne.run = ce.run;
         ne.send = [this](plugin::Stream s, const net::AppPacket& p) { packets.emplace_back(s, p); };
         ne.dirs = {plugin_dir};
@@ -82,6 +88,7 @@ struct Host {
         ne.web = web;
         ne.connection = [this] { return world.conn.get(); };
         ne.extensions = extensions.get();
+        ne.can_load = std::move(can_load);
         ne.use_ability = [this](mq::AbilityKind kind, std::string_view name) {
             used.emplace_back(static_cast<int>(kind), std::string(name));
             return true;
@@ -721,6 +728,37 @@ TEST_CASE("native plugins: the player's own plugins do not ask") {
     CHECK_FALSE(fs::exists(profile / plugin::kApprovalsName));
 }
 
+TEST_CASE("native plugins: explicitly named managed plugins load with general player plugins off and existing consent rules") {
+    for (const std::string key : {"required", "allow", "suggest"}) {
+        CAPTURE(key);
+        Host h;
+        const fs::path profile = h.world.dir / "servers" / "selected";
+        fs::create_directories(profile / "plugins");
+        h.plugins->set_server_dir(profile / "plugins");
+        auto rules = plugin::parse_server_cfg("[plugins]\nplayer = off\n[addons]\nenforce = on\ndefault = deny\n" +
+                                              key + " = owner/example\n");
+        rules.dir = profile;
+        h.policy.set_ceilings({{plugin::FileKind::Plugin, h.hash(), plugin::kCapAll, "MQ2Example", "owner/example"}});
+        h.policy.set(rules);
+        h.plugins->policy_changed({});
+        CHECK_FALSE(h.plugins->loaded("MQ2Example"));
+        if (key != "required") {
+            CHECK_FALSE(h.plugins->consent()); // an optional named plugin is not started automatically
+            REQUIRE(h.plugins->load("MQ2Example")); // ordinary player-owned plugins keep their existing approval path
+            CHECK_FALSE(h.plugins->consent());
+        } else {
+            REQUIRE(h.plugins->consent());
+            h.plugins->answer_consent(true);
+        }
+        REQUIRE(h.plugins->loaded("MQ2Example"));
+        if (key != "required") {
+            CHECK(h.plugins->unload("MQ2Example"));
+            h.plugins->policy_changed({});
+            CHECK_FALSE(h.plugins->loaded("MQ2Example"));
+        }
+    }
+}
+
 TEST_CASE("native plugins: required managed plugins autoload with consent and stay loaded") {
     Host h;
     const fs::path profile = h.world.dir / "servers" / "required";
@@ -746,6 +784,11 @@ TEST_CASE("native plugins: required managed plugins autoload with consent and st
     REQUIRE(h.plugins->loaded("MQ2Example"));
     CHECK(h.plugins->required_addons_ready(&problem));
     CHECK(problem.empty());
+    h.hooks.pulse();
+    const auto pulses = h.p("${Example.Pulses}");
+    h.plugins->retry_required_addons();
+    h.plugins->policy_changed({});
+    CHECK(h.p("${Example.Pulses}") == pulses); // healthy required code is not needlessly restarted
     CHECK_FALSE(h.plugins->unload("MQ2Example"));
     h.run("/plugin MQ2Example unload");
     CHECK(h.plugins->loaded("MQ2Example"));
@@ -799,6 +842,188 @@ TEST_CASE("native plugins: blocks name an installed plugin by its repository, no
     CHECK_FALSE(h.plugins->load("mq2example"));
     CHECK_FALSE(h.plugins->loaded("MQ2Example"));
     CHECK_FALSE(h.plugins->consent());
+}
+
+TEST_CASE("native plugins: cached required readiness is stable until lifecycle or policy changes") {
+    Host h;
+    auto rules = plugin::parse_server_cfg("[plugins]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/example\n");
+    rules.dir = h.world.dir / "profile";
+    h.policy.set_ceilings({{plugin::FileKind::Plugin, h.hash(), plugin::kCapAll, "MQ2Example", "owner/example"}});
+    h.policy.set(rules);
+    h.plugins->policy_changed({});
+    REQUIRE(h.plugins->consent());
+    const auto pending = h.plugins->required_addons_serial();
+    for (int frame = 0; frame < 8; ++frame) {
+        std::string problem;
+        CHECK_FALSE(h.plugins->required_addons_ready(&problem));
+        CHECK(problem.empty());
+        CHECK(h.plugins->required_addons_serial() == pending);
+    }
+    h.plugins->answer_consent(true);
+    REQUIRE(h.plugins->required_addons_ready());
+    const auto ready = h.plugins->required_addons_serial();
+    CHECK(ready != pending);
+    for (int frame = 0; frame < 8; ++frame) {
+        CHECK(h.plugins->required_addons_ready());
+        CHECK(h.plugins->required_addons_serial() == ready);
+    }
+    rules.addons.block = {"owner/example"};
+    h.policy.set(rules);
+    CHECK_FALSE(h.plugins->required_addons_ready());
+    CHECK(h.plugins->required_addons_serial() != ready);
+}
+
+TEST_CASE("native plugins: admission load gate runs before looking for a library") {
+    bool allowed = false;
+    Host h(false, nullptr, HAILSTONE_EXAMPLE_PLUGIN, [&] { return allowed; });
+    h.policy.set(plugin::Rules{});
+    std::string why;
+    CHECK_FALSE(h.plugins->load("missing", &why));
+    CHECK(why.find("verification") != std::string::npos);
+    CHECK_FALSE(h.plugins->load("MQ2Example"));
+    CHECK_FALSE(h.plugins->consent());
+    allowed = true;
+    CHECK(h.plugins->load("MQ2Example"));
+}
+
+TEST_CASE("native plugins: host recovery defers unloading busy required code and suppresses automatic reload") {
+    Host h;
+    auto rules = plugin::parse_server_cfg("[plugins]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/example\n");
+    rules.dir = h.world.dir / "profile";
+    h.policy.set_ceilings({{plugin::FileKind::Plugin, h.hash(), plugin::kCapAll, "MQ2Example", "owner/example"}});
+    h.policy.set(rules);
+    h.plugins->policy_changed({});
+    REQUIRE(h.plugins->consent());
+    h.plugins->answer_consent(true);
+    REQUIRE(h.plugins->required_addons_ready());
+    bool stopped_inside = false;
+    h.on_print = [&](const std::string& text) {
+        if (stopped_inside || text != "[MQ2Example] Hello, recovery!") return;
+        stopped_inside = true;
+        h.plugins->stop_required_addons();
+        CHECK(h.plugins->loaded("MQ2Example")); // Busy keeps the library alive until this callback returns.
+    };
+    h.run("/hello recovery");
+    REQUIRE(stopped_inside);
+    CHECK(h.plugins->loaded("MQ2Example"));
+    CHECK_FALSE(h.plugins->required_addons_ready());
+    h.hooks.pulse();
+    CHECK_FALSE(h.plugins->loaded("MQ2Example"));
+    h.plugins->policy_changed({"*"});
+    CHECK_FALSE(h.plugins->loaded("MQ2Example"));
+    CHECK_FALSE(h.plugins->load("MQ2Example"));
+    h.plugins->resume_required_addons();
+    h.plugins->policy_changed({});
+    CHECK(h.plugins->loaded("MQ2Example"));
+    CHECK(h.plugins->required_addons_ready());
+}
+
+TEST_CASE("native plugins: removing a requirement preserves emergency stop until explicit recovery") {
+    Host h;
+    fs::copy_file(fs::path(HAILSTONE_PROBE_PLUGIN), h.plugin_dir / fs::path(HAILSTONE_PROBE_PLUGIN).filename());
+    auto rules = plugin::parse_server_cfg("[plugins]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/example\n");
+    rules.dir = h.world.dir / "profile";
+    h.policy.set_ceilings({{plugin::FileKind::Plugin, h.hash(), plugin::kCapAll, "MQ2Example", "owner/example"}});
+    h.policy.set(rules);
+    h.plugins->policy_changed({"*"});
+    REQUIRE(h.plugins->consent());
+    h.plugins->answer_consent(true);
+    REQUIRE(h.plugins->loaded("MQ2Example"));
+    REQUIRE(h.plugins->loaded("HostProbe"));
+    h.plugins->stop_required_addons();
+
+    rules.addons.required.clear();
+    SUBCASE("the server removes the requirement") {}
+    SUBCASE("the server disables enforcement") { rules.addons.enabled = false; }
+    h.policy.set(rules);
+    h.plugins->policy_changed({"*"});
+    CHECK_FALSE(h.plugins->loaded("MQ2Example"));
+    CHECK(h.plugins->loaded("HostProbe"));
+    std::string why;
+    CHECK_FALSE(h.plugins->load("mq2example", &why));
+    CHECK(why.find("recovery") != std::string::npos);
+    h.plugins->resume_required_addons();
+    h.plugins->policy_changed({"*"});
+    CHECK(h.plugins->loaded("MQ2Example"));
+    CHECK(h.plugins->loaded("HostProbe"));
+}
+
+TEST_CASE("native plugins: explicit recovery reloads a faulted requirement once") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    auto rules = plugin::parse_server_cfg("[plugins]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/probe\n");
+    rules.dir = h.world.dir / "profile";
+    h.policy.set_ceilings({{plugin::FileKind::Plugin, h.hash(), plugin::kCapAll, "HostProbe", "owner/probe"}});
+    h.policy.set(rules);
+    h.plugins->policy_changed({});
+    REQUIRE(h.plugins->consent());
+    h.plugins->answer_consent(true);
+    REQUIRE(h.plugins->required_addons_ready());
+    h.run("/probethrow");
+    REQUIRE_FALSE(h.plugins->required_addons_ready());
+    h.plugins->retry_required_addons();
+    CHECK_FALSE(h.plugins->loaded("HostProbe"));
+    h.plugins->policy_changed({});
+    REQUIRE(h.plugins->loaded("HostProbe"));
+    CHECK(h.plugins->required_addons_ready());
+    h.run("/probethrow");
+    CHECK_FALSE(h.plugins->required_addons_ready());
+    h.hooks.pulse(); // a later fault does not keep retrying without another explicit request
+    CHECK_FALSE(h.plugins->required_addons_ready());
+}
+
+TEST_CASE("native plugins: a busy failed requirement retries once unless a newer stop reset or policy cancels it") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    auto rules = plugin::parse_server_cfg("[plugins]\nplayer = on\n[addons]\nenforce = on\nrequired = owner/probe\n");
+    rules.dir = h.world.dir / "profile";
+    h.policy.set_ceilings({{plugin::FileKind::Plugin, h.hash(), plugin::kCapAll, "HostProbe", "owner/probe"}});
+    h.policy.set(rules);
+    h.plugins->policy_changed({});
+    REQUIRE(h.plugins->consent());
+    h.plugins->answer_consent(true);
+    h.run("/probethrow");
+    REQUIRE_FALSE(h.plugins->required_addons_ready());
+    bool retry_inside = false;
+    h.on_print = [&](const std::string& text) {
+        if (retry_inside || !text.starts_with("[Probe] state ")) return;
+        retry_inside = true;
+        h.plugins->retry_required_addons();
+        h.plugins->policy_changed({});
+        CHECK(h.plugins->loaded("HostProbe")); // still executing this callback
+    };
+    h.run("/probestate 0");
+    REQUIRE(retry_inside);
+    CHECK(h.plugins->loaded("HostProbe"));
+    bool canceled = false;
+    SUBCASE("the queued explicit recovery completes") {}
+    SUBCASE("a later emergency stop cancels recovery") {
+        canceled = true;
+        h.plugins->stop_required_addons();
+    }
+    SUBCASE("a session reset cancels recovery") {
+        canceled = true;
+        h.plugins->resume_required_addons();
+    }
+    SUBCASE("shutdown cancels recovery") {
+        canceled = true;
+        h.plugins->unload_all();
+    }
+    SUBCASE("changed library bytes are not reloaded") {
+        canceled = true;
+        std::ofstream(h.file, std::ios::binary | std::ios::app) << "changed before recovery";
+    }
+    SUBCASE("a newer policy cancels recovery") {
+        canceled = true;
+        h.policy.set(rules);
+        h.plugins->policy_changed({});
+    }
+    h.hooks.pulse();
+    CHECK(h.plugins->loaded("HostProbe") == !canceled);
+    CHECK(h.plugins->required_addons_ready() == !canceled);
+    if (!canceled) {
+        h.run("/probethrow");
+        h.hooks.pulse();
+        CHECK_FALSE(h.plugins->required_addons_ready());
+    }
 }
 
 TEST_CASE("native plugins: a required hash also supplied by a blocked add-on refuses readiness without consent") {
@@ -894,27 +1119,31 @@ TEST_CASE("native plugins: a required plugin that throws in the world is a warni
 
     // The gate as ClientApp::addon_world_allowed drives it.
     app::AddonAdmission admission;
+    admission.begin_check(1);
+    admission.verification_finished({});
     auto frame = [&] {
-        return admission.update(&rules, 1, true, [] { return std::string(); }, [&]() -> std::optional<std::string> {
-            std::string problem;
-            if (h.plugins->required_addons_ready(&problem)) return std::string();
-            if (problem.empty()) return std::nullopt;
-            return problem;
-        });
+        std::string problem;
+        const bool ready = h.plugins->required_addons_ready(&problem);
+        const bool awaiting_consent = !ready && problem.empty();
+        admission.runtime_changed(ready, awaiting_consent, std::move(problem));
     };
-    CHECK(frame().step == app::AddonAdmission::Step::Start);
-    REQUIRE(frame().step == app::AddonAdmission::Step::Play);
+    CHECK(admission.phase() == app::AddonAdmissionPhase::Starting);
+    frame();
+    REQUIRE(admission.may_enter());
+    admission.admit();
     REQUIRE(admission.admitted());
-    CHECK(frame().warning.empty()); // readiness worked out, and kept
+    frame();
+    CHECK(admission.take_warning().empty()); // readiness worked out, and kept
 
     h.run("/probethrow"); // the command's callback lets an exception out
     std::string problem;
     CHECK_FALSE(h.plugins->required_addons_ready(&problem)); // seen although nothing else changed
     CHECK(problem == "Required add-on hostprobe failed with an error in a command");
-    auto r = frame();
-    CHECK(r.step == app::AddonAdmission::Step::Play); // never a disconnect or a hold
-    CHECK(r.warning == problem);
-    CHECK(frame().warning.empty()); // said once
+    frame();
+    CHECK(admission.may_enter()); // never a disconnect or a hold
+    CHECK(admission.take_warning() == problem);
+    frame();
+    CHECK(admission.take_warning().empty()); // said once
     CHECK(h.plugins->loaded("HostProbe"));
     CHECK(admission.admitted());
 }

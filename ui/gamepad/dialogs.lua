@@ -374,3 +374,47 @@ ui.window("Server Plugins", function()
   -- B / the close button: not now (asked again at the next zone-in)
   if W.finish() then API.plugins.AnswerConsent(nil, q.serial) end
 end)
+
+-- Requirements and recovery stay nonmodal and do not take the controls away during a fight. The main menu's
+-- Server add-ons tile explicitly gives this panel the controller focus when the player wants it.
+ui.window("Server add-ons", function()
+  local shown = API.windows.Shown("AddonPolicy")
+  if not API.session.InGame() or not shown then return end
+  local q = API.addons.Policy()
+  if not q or (not q.degraded and #q.required == 0) then return end
+  T.frame()
+  local height = 280 + math.min(#q.required, 3) * 28 + (q.degraded and 70 or 0)
+  if W.begin("Server add-ons", { w = 700, h = height, x = T.W / T.S - 724, y = 36,
+        title = "Server add-ons", noFocus = true,
+        hints = { { "a", "Select" }, { "b", "Close" } } }) then
+    local x0, y0, x1, y1, w = W.area()
+    local y = wrapped(q.message ~= "" and q.message or "This server requires these add-ons while you play.",
+      x0, y0, w, q.degraded and C.bad or C.text)
+    for i, identity in ipairs(q.required) do
+      if i > 3 then
+        y = wrapped(string.format("and %d more", #q.required - 3), x0, y, w, C.dim)
+        break
+      end
+      T.draw(x0, y, T.fit(identity, w), C.dim)
+      y = y + T.px(28)
+    end
+    local wx, wy = ui.GetWindowPos()
+    ui.SetCursorPos(x0 - wx, y + T.px(10) - wy)
+    if q.degraded then
+      if T.button("##addonpolicyretry", "Retry", T.px(210), T.px(52), { disabled = not q.can_retry }, pad) then
+        API.addons.PolicyAction("retry", q.serial)
+      end
+      ui.SameLine(0, T.px(12))
+      if T.button("##addonpolicycamp", "Camp", T.px(210), T.px(52), {}, pad) then
+        API.addons.PolicyAction("camp", q.serial)
+      end
+    end
+    if T.button("##addonpolicystop", "Emergency stop required add-ons", w, T.px(52),
+        { disabled = not q.can_stop }, pad) then API.addons.PolicyAction("stop", q.serial) end
+  end
+  if W.finish() then
+    API.windows.Show("AddonPolicy", false)
+    pad.takes_b()
+    pad.set_mode("game")
+  end
+end)

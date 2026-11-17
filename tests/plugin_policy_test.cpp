@@ -398,6 +398,100 @@ TEST_CASE("add-on rules: identities are GitHub repositories, without a release o
     CHECK(addon_allowed(open.addons, ""));
 }
 
+TEST_CASE("add-on rules: suggestions authorize optional manifests without bypassing blocks or forcing startup") {
+    using namespace plugin;
+    const auto r = parse_server_cfg("[scripts]\nplayer = on\nplayer_caps = read,ui\n"
+                                    "[addons]\nenforce = on\ndefault = deny\nallow = owner/manual\n"
+                                    "suggest = Owner/Optional@v2, https://github.com/Owner/Branches/tree/next, "
+                                    "owner/blocked, owner/manual\nblock = owner/blocked\n");
+    REQUIRE(r.addons.error.empty());
+    CHECK(r.addons.allow == std::vector<std::string>{"owner/manual", "owner/optional", "owner/branches", "owner/blocked"});
+    CHECK(addon_allowed(r.addons, "owner/optional@v9"));
+    CHECK(addon_allowed(r.addons, "OWNER/BRANCHES"));
+    CHECK_FALSE(addon_allowed(r.addons, "owner/blocked"));
+    CHECK_FALSE(addon_allowed(r.addons, "owner/unlisted"));
+    CHECK_FALSE(addon_required(r.addons, "owner/optional"));
+
+    const auto optional = sha256(std::string_view("optional script"));
+    const auto blocked = sha256(std::string_view("blocked script"));
+    Policy p;
+    p.set_ceilings({{FileKind::Script, optional, kCapRead | kCapUi | kCapMove, "optional", "owner/optional"},
+                    {FileKind::Script, blocked, kCapRead, "blocked", "owner/blocked"}});
+    p.set(r);
+    CHECK(p.caps(FileKind::Script, optional) == (kCapRead | kCapUi | kCapMove));
+    CHECK(p.caps(FileKind::Script, blocked) == 0);
+    CHECK(p.required_entries(FileKind::Script).empty());
+
+    p.set(parse_server_cfg("[addons]\nenforce = on\ndefault = deny\nsuggest = owner/optional\n"));
+    CHECK(p.caps(FileKind::Script, optional) == (kCapRead | kCapUi | kCapMove));
+    CHECK(p.required_entries(FileKind::Script).empty());
+}
+
+TEST_CASE("add-on rules: required minimum versions keep repository identity separate and preserve SemVer case") {
+    using namespace plugin;
+    std::vector<std::string> warnings;
+    const auto r = parse_server_cfg("[addons]\nenforce = on\ndefault = deny\n"
+                                    "required = Owner/Need:1.0.0-preview.4, "
+                                    "https://github.com/Owner/Other.git:V2.3.4-Preview.X+Build.9, Owner/Plain ; comment\n",
+                                    &warnings);
+    REQUIRE(r.addons.error.empty());
+    CHECK(warnings.empty());
+    CHECK(r.addons.required == std::vector<std::string>{"owner/need", "owner/other", "owner/plain"});
+    REQUIRE(r.addons.minimum_versions.size() == 2);
+    CHECK(r.addons.minimum_versions.at("owner/need").to_string() == "1.0.0-preview.4");
+    CHECK(r.addons.minimum_versions.at("owner/other").to_string() == "2.3.4-Preview.X");
+    CHECK_FALSE(r.addons.minimum_versions.contains("owner/plain"));
+    CHECK(addon_required(r.addons, "OWNER/NEED@v0.9.0")); // installed-version validation is admission's job
+    CHECK(addon_allowed(r.addons, "owner/need"));
+    CHECK_FALSE(addon_allowed(r.addons, "another/need"));
+}
+
+TEST_CASE("add-on rules: duplicate requirements retain the strongest minimum regardless of order") {
+    using namespace plugin;
+    for (const char* list : {
+            "owner/repo, owner/repo:1.0.0-preview.10, OWNER/REPO:1.0.0-preview.4, owner/repo:1.0.0, owner/repo",
+            "owner/repo:1.0.0, owner/repo:1.0.0-preview.4, owner/repo, owner/repo:1.0.0-preview.10"}) {
+        CAPTURE(list);
+        const auto r = parse_server_cfg(std::string("[addons]\nenforce = on\nrequired = ") + list + "\n");
+        REQUIRE(r.addons.error.empty());
+        CHECK(r.addons.required == std::vector<std::string>{"owner/repo"});
+        REQUIRE(r.addons.minimum_versions.size() == 1);
+        CHECK(r.addons.minimum_versions.at("owner/repo").to_string() == "1.0.0");
+    }
+    const auto pre = parse_server_cfg("[addons]\nenforce = on\n"
+                                      "required = owner/repo:1.0.0-preview.4, owner/repo:1.0.0-preview.10\n");
+    REQUIRE(pre.addons.error.empty());
+    CHECK(pre.addons.minimum_versions.at("owner/repo").to_string() == "1.0.0-preview.10");
+}
+
+TEST_CASE("add-on rules: malformed minimums fail closed only when enforcement is enabled") {
+    using namespace plugin;
+    for (const char* item : {"owner/repo:", "owner/repo:1.2", "owner/repo:01.2.3", "owner/repo:>=1.2.3",
+                             "owner/repo:1.2.3.4", "owner/repo:1.2.3-pre..1", "owner/repo:1.2.3+bad!",
+                             "owner/repo:1.2.3:2.0.0", "repo:1.2.3", "owner/repo:1.0.0-preview.04"}) {
+        CAPTURE(item);
+        const std::string policy = std::string("[addons]\ndefault = deny\nrequired = ") + item + "\n";
+        const auto enabled = parse_server_cfg(policy + "enforce = on\n");
+        CHECK(enabled.addons.enabled);
+        CHECK_FALSE(enabled.addons.error.empty());
+        CHECK_FALSE(addon_allowed(enabled.addons, "owner/repo"));
+        CHECK_FALSE(addon_required(enabled.addons, "owner/repo"));
+        CHECK(enabled.addons.minimum_versions.empty());
+        const auto disabled = parse_server_cfg(policy + "enforce = off\n");
+        CHECK_FALSE(disabled.addons.enabled);
+        CHECK(disabled.addons.error.empty());
+        CHECK(addon_allowed(disabled.addons, "owner/repo"));
+    }
+    for (const char* key : {"allow", "block"}) {
+        CAPTURE(key);
+        const auto r = parse_server_cfg(std::string("[addons]\nenforce = on\n") + key + " = owner/repo:1.2.3\n");
+        CHECK_FALSE(r.addons.error.empty());
+        CHECK(r.addons.minimum_versions.empty());
+    }
+    const auto conflict = parse_server_cfg("[addons]\nenforce = on\nrequired = Owner/Repo:1.2.3\nblock = owner/repo\n");
+    CHECK(conflict.addons.error.find("both required and blocked") != std::string::npos);
+}
+
 TEST_CASE("add-on rules: a bare name is refused with a message for the server owner") {
     using namespace plugin;
     for (const char* key : {"required", "allow", "block"}) {
@@ -476,12 +570,112 @@ TEST_CASE("Policy: required and allowed add-ons are identified by every register
 
     r.player_script_caps = kCapRead | kCapActions;
     p.set(r);
-    CHECK(p.caps(FileKind::Script, entry) == kCapRead);
-    r.player_script_caps = 0; // identity permission never overrides the existing capability restrictions
+    CHECK(p.caps(FileKind::Script, entry) == (kCapRead | kCapUi));
+    r.player_script_caps = 0;
     p.set(r);
-    CHECK(p.caps(FileKind::Script, entry) == 0);
+    CHECK(p.caps(FileKind::Script, entry) == (kCapRead | kCapUi));
     p.clear();
     CHECK(p.caps(FileKind::Script, entry) == 0);
+}
+
+TEST_CASE("Policy: explicitly named scripts and plugins use manifest caps with general player code disabled") {
+    using namespace plugin;
+    for (const auto kind : {FileKind::Script, FileKind::Plugin}) {
+        CAPTURE(static_cast<unsigned>(kind));
+        const auto required = sha256(std::string_view("required code"));
+        const auto optional = sha256(std::string_view("optional code"));
+        const auto suggested = sha256(std::string_view("suggested code"));
+        const auto unlisted = sha256(std::string_view("unlisted code"));
+        const auto changed = sha256(std::string_view("changed required code"));
+        const auto caps = kCapRead | kCapUi | kCapMove;
+        Policy p;
+        p.set_ceilings({{kind, required, caps, "needed", "owner/needed"},
+                        {kind, optional, caps, "optional", "owner/optional"},
+                        {kind, suggested, caps, "suggested", "owner/suggested"},
+                        {kind, unlisted, caps, "unlisted", "owner/unlisted"}});
+        auto r = parse_server_cfg("[addons]\nenforce = on\ndefault = deny\nrequired = owner/needed\n"
+                                  "allow = owner/optional\nsuggest = owner/suggested\n");
+        p.set(r);
+        CHECK(p.caps(kind, required) == caps);
+        CHECK(p.caps(kind, optional) == caps);
+        CHECK(p.caps(kind, suggested) == caps);
+        CHECK(p.caps(kind, unlisted) == 0);
+        CHECK(p.caps(kind, changed, "needed") == 0);
+        CHECK_FALSE(p.required_file(kind, changed));
+        CHECK_FALSE(p.required_file(kind, optional));
+        CHECK_FALSE(p.required_file(kind, suggested));
+
+        r.addons.default_allow = true;
+        p.set(r);
+        CHECK(p.caps(kind, unlisted) == 0); // default allow does not authorize a manifest past player permissions
+        CHECK(p.caps(kind, changed, "needed") == 0);
+
+        r.player_script_caps = kCapRead;
+        r.player_plugin_caps = kCapRead;
+        p.set(r);
+        CHECK(p.caps(kind, required) == caps);
+        CHECK(p.caps(kind, optional) == caps);
+        CHECK(p.caps(kind, suggested) == caps);
+        CHECK(p.caps(kind, unlisted) == kCapRead);
+        CHECK(p.caps(kind, changed, "needed") == kCapRead); // edited bytes only get the ordinary player permission
+
+        r.addons.enabled = false;
+        p.set(r);
+        CHECK(p.caps(kind, required) == kCapRead);
+        CHECK(p.caps(kind, optional) == kCapRead);
+        CHECK(p.caps(kind, suggested) == kCapRead);
+    }
+}
+
+TEST_CASE("Policy: required authorization retains source verification blocks and shared-file ceilings") {
+    using namespace plugin;
+    for (const auto kind : {FileKind::Script, FileKind::Plugin}) {
+        CAPTURE(static_cast<unsigned>(kind));
+        const auto shared = sha256(std::string_view("shared required module"));
+        Policy p;
+        auto r = parse_server_cfg("[addons]\nenforce = on\ndefault = deny\nrequired = owner/needed\n"
+                                  "allow = owner/shared\n");
+        p.set_ceilings({{kind, shared, kCapRead | kCapUi | kCapMove, "needed", "owner/needed", true, false},
+                        {kind, shared, kCapRead | kCapUi, "shared", "owner/shared"}});
+        p.set(r);
+        CHECK(p.caps(kind, shared) == (kCapRead | kCapUi));
+        CHECK(p.required_file(kind, shared)); // imported modules keep the required package's permissions
+
+        r.addons.block = {"owner/shared"};
+        p.set(r);
+        CHECK(p.caps(kind, shared) == 0);
+        r.addons.block.clear();
+        r.addons.error = "invalid policy";
+        p.set(r);
+        CHECK(p.caps(kind, shared) == 0);
+
+        r.addons.error.clear();
+        r.addons.default_allow = true;
+        r.addons.required.clear();
+        r.addons.allow = {"owner/needed", "owner/shared"};
+        p.set(r);
+        p.set_ceilings({{kind, shared, kCapRead | kCapUi, "needed", "owner/needed", false}});
+        CHECK(p.caps(kind, shared, "needed") == 0); // a name or unverified identity cannot grant capabilities
+        CHECK_FALSE(p.required_file(kind, shared));
+        p.set_ceilings({{kind, shared, 0, "needed", "owner/needed"}});
+        CHECK(p.caps(kind, shared) == 0);
+    }
+}
+
+TEST_CASE("Policy: explicitly named authorization preserves the provisional login capability gate") {
+    using namespace plugin;
+    const auto hash = sha256(std::string_view("required plugin"));
+    for (const char* key : {"required", "allow", "suggest"}) {
+        CAPTURE(key);
+        auto r = parse_server_cfg(std::string("[addons]\nenforce = on\n") + key + " = owner/needed\n");
+        r.provisional = true;
+        Policy p;
+        p.set(r);
+        p.set_ceilings({{FileKind::Plugin, hash, kCapRead | kCapUi, "needed", "owner/needed"}});
+        CHECK(p.caps(FileKind::Plugin, hash) == 0);
+        p.set_ceilings({{FileKind::Plugin, hash, kCapRead | kCapLogin, "needed", "owner/needed"}});
+        CHECK(p.caps(FileKind::Plugin, hash) == (kCapRead | kCapLogin));
+    }
 }
 
 TEST_CASE("Policy: shared bytes obey all add-on identities and explicit blocks win") {

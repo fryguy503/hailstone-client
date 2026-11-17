@@ -20,6 +20,8 @@ local descriptors = {
   {"AchievementOpen", "achievements", "Open", "function", 2, false},
   {"AchievementRefresh", "achievements", "Refresh", "function", 8, false},
   {"AchievementReward", "achievements", "Reward", "function", 8, false},
+  {"AddonPolicy", "addons", "Policy", "function", 0, false},
+  {"AddonPolicyAction", "addons", "PolicyAction", "function", 0, false},
   {"UiAnimation", "assets", "Animation", "function", 0, false},
   {"UiImage", "assets", "Image", "function", 0, false},
   {"ItemIcon", "assets", "ItemIcon", "function", 0, false},
@@ -348,7 +350,7 @@ return function(root)
     end
     return value
   end
-  local API, modules = {version={major=1,minor=5}}, {}
+  local API, modules = {version={major=1,minor=6}}, {}
   for _, row in ipairs(descriptors) do
     local module = modules[row[2]]
     if not module then module={};modules[row[2]]=module end
@@ -389,7 +391,7 @@ return function(root)
       if member~=nil then local row=modules[module][member];return row and describeMember(row) or nil end
       return describeModule(module)
     end
-    local names,result={}, {version={major=1,minor=5},modules={}}
+    local names,result={}, {version={major=1,minor=6},modules={}}
     for name in pairs(modules) do names[#names+1]=name end
     table.sort(names)
     for _, name in ipairs(names) do result.modules[#result.modules+1]=describeModule(name) end
