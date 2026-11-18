@@ -24,6 +24,7 @@ layout(location = 1) in vec3 in_normal;
 layout(location = 2) in vec2 in_uv;
 layout(location = 3) in uvec4 in_bones;
 layout(location = 4) in vec4 in_weights;
+layout(location = 5) in vec2 in_uv2;
 
 layout(location = 0) out vec2 v_uv;
 layout(location = 1) out vec3 v_world;
@@ -32,6 +33,7 @@ layout(location = 3) out float v_fog;
 layout(location = 4) out vec3 v_normal; // world space (the modern lighting, actor.frag)
 layout(location = 5) out vec4 v_now;    // the motion (shaders/motion.glsl): this frame's place, unjittered
 layout(location = 6) out vec4 v_then;   // and the last frame's
+layout(location = 7) out vec2 v_uv2;
 
 #define MOTION_SET 1
 #include "motion.glsl"
@@ -75,6 +77,7 @@ void main() {
     v_light = 0.85 + 0.15 * dot(n, normalize(vec3(0.4, 0.3, 0.85)));
     v_normal = n;
     v_uv = in_uv;
+    v_uv2 = in_uv2;
     v_world = world.xyz;
     v_fog = fog_factor(world.xyz);
     gl_Position = pc.view_proj * world;

@@ -31,6 +31,38 @@
 using namespace hailstone;
 using namespace hailstone::assets;
 
+TEST_CASE("RoF2 guild banner uses its cloth layers, second UVs and independent tints") {
+    const auto game_dir = test::game_dir();
+    if (!game_dir) return;
+    auto library = CharacterLibrary::load(*game_dir, "");
+    const auto model = library.model("G00");
+    REQUIRE(model);
+    const game::Appearance plain;
+    const auto base = library.dress(*model, plain);
+    REQUIRE(base);
+    game::Appearance banner = plain;
+    banner.banner = core::BannerAppearance{{2, 5}, {0xff123456u, 0xff000000u}};
+    const auto dressed = library.dress(*model, banner);
+    REQUIRE(dressed);
+    REQUIRE(dressed->materials.size() == 2);
+    CHECK(dressed->materials[0].frames == std::vector<std::string>{"C_GDB_FLAG1_S02_M00_C.DDS"});
+    CHECK(dressed->materials[0].tint_layer == "C_GDB_FLAG2_S05_M00_C.DDS");
+    CHECK(dressed->materials[0].banner_base_tint == 0xff123456u);
+    CHECK(dressed->tints[0] == 0xff010101u);
+    CHECK(dressed->materials[1].frames == base->materials[1].frames);
+    CHECK(dressed->materials[1].banner_base_tint == 0);
+    CHECK(base->materials[0].banner_base_tint == 0);
+    CHECK(std::any_of(dressed->vertices.begin(), dressed->vertices.end(), [](const SkinnedVertex& v) {
+        return v.uv != v.uv2;
+    }));
+    banner.banner->pattern[1] = 6;
+    const auto changed = library.dress(*model, banner);
+    REQUIRE(changed);
+    CHECK(changed != dressed);
+    CHECK(changed->materials[0].tint_layer == "C_GDB_FLAG2_S06_M00_C.DDS");
+    CHECK(dressed->materials[0].tint_layer == "C_GDB_FLAG2_S05_M00_C.DDS");
+}
+
 TEST_CASE("WLD blood attachment uses the authored DAG name, independently of its track") {
     using namespace test::wld_fixtures;
     struct NameRole { const char* code; const char* dag; int bone; };

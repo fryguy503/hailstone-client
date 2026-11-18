@@ -716,6 +716,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         reset_group_for_zone();
         reset_social_for_zone();
         reset_fellowship(true);
+        reset_guild_banner();
         reset_commerce_for_zone();
         reset_tribute_donations();
         reset_tribute_bonuses();
@@ -989,6 +990,7 @@ void GameConnection::apply_spawn(const Spawn& s) {
     a.drakkin_details = s.drakkin_details;
     a.npc_tint = s.npc_tint_id;
     a.class_id = s.class_;
+    if (s.interactive) a.banner = s.interactive->banner;
     for (std::size_t i = 0; i < 9; ++i) {
         a.material[i] = s.equipment[i].material;
         a.material_variation[i] = s.equipment[i].unknown1;
@@ -1313,6 +1315,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
     Op op = from_wire(p.opcode);
     handle_ability(op, p); // only looks (net/game_connection_abilities.cpp)
     if (handle_fellowship(p)) return;
+    if (handle_guild_banner(op, p)) return;
     switch (op) {
     case Op::PlayerProfile:
         profile_ = decode_player_profile(p);
@@ -1410,6 +1413,17 @@ void GameConnection::handle_zone(const AppPacket& p) {
         }
         break;
     }
+    case Op::GuildBannerAppearance:
+        if (auto update = decode_guild_banner_appearance(p)) {
+            if (auto it = world_.spawns.find(update->spawn_id); it != world_.spawns.end() && it->second.is_npc) {
+                it->second.appearance.banner = update->appearance;
+                if (it->second.name != update->name) {
+                    it->second.name = std::move(update->name);
+                    ++world_.spawn_set_serial;
+                }
+            }
+        }
+        break;
     case Op::ControlBoat:
         handle_control_boat(p);
         break;
@@ -2063,6 +2077,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 send_zone(encode_delete_own_spawn(world_.player_id));
                 state_ = ConnectionState::Zoning;
                 reset_fellowship(true);
+                reset_guild_banner();
                 reset_achievements();
                 reset_rewards();
                 status_ = "Leaving the zone";

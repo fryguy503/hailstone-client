@@ -45,6 +45,7 @@ struct GpuVertex {
     glm::vec2 uv;
     std::array<std::uint16_t, 4> bones;
     glm::vec4 weights;
+    glm::vec2 uv2;
 };
 
 // Matches the push_constant block in actor.vert / actor.frag.
@@ -497,7 +498,7 @@ ActorRenderer::MeshPlan ActorRenderer::plan_mesh(const assets::CharacterMesh& mo
     MeshPlan plan;
     std::vector<GpuVertex> vertices;
     vertices.reserve(model.vertices.size());
-    for (const auto& v : model.vertices) vertices.push_back({v.position, v.normal, v.uv, v.bones, v.weights});
+    for (const auto& v : model.vertices) vertices.push_back({v.position, v.normal, v.uv, v.bones, v.weights, v.uv2});
     auto bytes = std::as_bytes(std::span(vertices));
     plan.vertices.assign(bytes.begin(), bytes.end());
     for (const auto& p : model.parts) {
@@ -518,7 +519,8 @@ ActorRenderer::MeshPlan ActorRenderer::plan_mesh(const assets::CharacterMesh& mo
         pp.normal = {m.frames.front(), false, TextureUse::Data, assets::TextureMap::Normal};
         pp.rough = {m.frames.front(), false, TextureUse::Data, assets::TextureMap::Roughness};
         const bool lava = actor_lava_surface(m.eqg_shader); // Lava2 too, as material_state keeps its layers' alpha
-        part.native_surface = has_actor_surface(m.effect) || m.eqg_shader == assets::EqgShader::WaterFall || lava;
+        const bool banner = m.banner_base_tint != 0;
+        part.native_surface = has_actor_surface(m.effect) || m.eqg_shader == assets::EqgShader::WaterFall || lava || banner;
         if (part.native_surface) {
             part.surface = actor_surface(m.effect, 0, 0);
             pp.packed_normal = m.effect.packed_normal;
@@ -527,8 +529,12 @@ ActorRenderer::MeshPlan ActorRenderer::plan_mesh(const assets::CharacterMesh& mo
                 pp.native_normal = TextureRef{m.effect.normal_map, false, TextureUse::Data, std::nullopt};
             if (m.effect.reflective && !m.effect.textures.empty() && !m.effect.textures[0].empty())
                 pp.environment = TextureRef{m.effect.textures[0], false, TextureUse::Color, std::nullopt, true};
-            if (actor_takes_coverage(m))
+            if (banner) {
+                part.surface.slots.z |= kActorSurfaceBanner;
+                part.surface.slots.w = m.banner_base_tint;
+            } else if (actor_takes_coverage(m)) {
                 pp.coverage = TextureRef{m.effect.coverage_map, false, TextureUse::OpaqueColor, std::nullopt};
+            }
             if (m.eqg_shader == assets::EqgShader::WaterFall) part.surface.slots.z |= kActorSurfaceWaterFall;
             if (lava) {
                 part.surface.slots.z |= kActorSurfaceLava;
@@ -577,7 +583,10 @@ const ActorRenderer::GpuModel* ActorRenderer::install(const assets::CharacterMes
         Part part = pp.part;
         for (const auto& frame : pp.frames) part.frames.push_back(resolve(frame));
         part.texture = part.frames.front();
-        if (pp.texture2) part.texture2 = resolve(*pp.texture2);
+        if (pp.texture2) {
+            const auto slot = resolve(*pp.texture2);
+            if (slot != 0 || (part.surface.slots.z & kActorSurfaceBanner) == 0) part.texture2 = slot;
+        }
         part.normal_map = resolve(pp.normal);
         part.rough_map = resolve(pp.rough);
         if (pp.native_normal) part.surface.slots.x = resolve(*pp.native_normal);
@@ -1854,11 +1863,12 @@ void ActorRenderer::create_pipelines(const std::filesystem::path& shader_dir) {
         {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(GpuVertex, uv)},
         {3, 0, VK_FORMAT_R16G16B16A16_UINT, offsetof(GpuVertex, bones)},
         {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(GpuVertex, weights)},
+        {5, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(GpuVertex, uv2)},
     };
     VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vi.vertexBindingDescriptionCount = 1;
     vi.pVertexBindingDescriptions = &vb;
-    vi.vertexAttributeDescriptionCount = 5;
+    vi.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(std::size(attrs));
     vi.pVertexAttributeDescriptions = attrs;
     VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;

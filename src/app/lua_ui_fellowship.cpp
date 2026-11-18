@@ -239,7 +239,7 @@ private:
     }
     void load_categories(UiHost& host) {
         const auto old_mask = category_mask();
-        categories_ = host.game ? game::load_fellowship_categories(*host.game) : std::vector<game::FellowshipCategory>{};
+        categories_ = host.game ? game::load_kit_categories(*host.game, "Resources/campsitecategories.txt") : std::vector<game::KitCategory>{};
         filter_.choices = {"All categories"};
         filter_.selected = 0;
         for (const auto& category : categories_) {
@@ -280,7 +280,7 @@ private:
     std::uint32_t selected_member_ = 0, selected_kit_ = 0, fellowship_id_ = 0;
     std::string motd_, received_motd_;
     ComboData filter_;
-    std::vector<game::FellowshipCategory> categories_;
+    std::vector<game::KitCategory> categories_;
     const GameDir* category_game_ = nullptr;
     bool categories_loaded_ = false;
     bool show_all_ = false;

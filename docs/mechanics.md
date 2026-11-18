@@ -2026,6 +2026,24 @@ sound's HP. The bare packet value goes below 1 while a geared player still stand
 it. The developer stats window compares its computed Max_HP with that sum. The regeneration ticks and the sheet's
 stored HP keep the packet's value (Cur_HP adds the item sum to it).
 
+## Guild banners
+
+The Guild window's Banner page requests the guild's current design, the active banner and its timer, and a
+kit list filtered by category and inventory. Categories come from the player's `Resources/BannerCategories.txt`.
+Both UI packs show the active banner and available kits. The original's two design layers are previewed using
+the textures in the player's game folder, with separate pattern and colour controls. Cancel discards the draft.
+Saving requires a modification item reported by the server. The next received design replaces the saved preview.
+
+Change, Plant and Remove require separate guild permissions and ownership of The Buried Sea. Plant also checks
+zone placement and proximity to the floor. The server decides where banners can actually be planted, nearby
+member requirements, kit consumption, removal, benefits and portal travel. The countdown is display-only.
+An inactive kit can stay in the list when Show All is selected. Banner state clears with the guild window,
+guild membership or zone context. Stock EQEmu leaves the kit list empty and the banner actions disabled.
+
+The Guild Hall portal uses the server's normal merchant, interaction and zone-transfer paths, including the
+server's destination and entry checks. Planted actors use the client assets' cloth background and emblem
+with their received colours. See [the RoF2 packet notes](protocol/rof2-packets.md#guild-banners).
+
 ## Fellowships
 
 Fellowship state comes from the server. Create, invitations, MOTD, leadership, removal, leaving, disbanding,

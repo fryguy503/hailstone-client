@@ -2,6 +2,9 @@
 // and again after the window's own state changes, so a sorted list reading every row stays cheap.
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 #include <imgui.h>
@@ -9,7 +12,9 @@
 
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "core/byte_io.h"
 #include "core/game_dir.h"
+#include "mock_server/harness.h"
 #include "mq/commands.h"
 #include "mq/tlo.h"
 #include "net/game_connection.h"
@@ -150,6 +155,192 @@ TEST_CASE("guild window: Go to URL and Join Channel send the guild's text as it 
         CHECK(click("GotoURL") == "true");
         REQUIRE(lines.size() == 1);
         CHECK(lines[0] == "/url http://www.guild.example.org");
+        lua_close(L);
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("mock server: guild banner page selects kits, edits a draft, and saves the chosen appearance") {
+    using namespace hailstone::test;
+    auto config = MockConfig::standard();
+    auto& zone = config.zones.at(2);
+    zone.start_x = 40.0f;
+    zone.start_y = -15.0f;
+    zone.start_z = 4.0f;
+    ManualClock clock;
+    auto options = quick_options();
+    options.session.clock = clock.source();
+    Rig rig(std::move(config), std::move(options));
+    REQUIRE(rig.to_zone());
+    constexpr std::uint32_t guild_id = 3, rank = 5;
+    rig.conn.receive_zone_packet_for_test(net::encode(net::SpawnAppearance{0, 22, guild_id}));
+    rig.conn.receive_zone_packet_for_test(net::encode(net::SpawnAppearance{0, 23, rank}));
+    for (std::uint32_t permission : {1u, 2u, 3u})
+        rig.conn.receive_zone_packet_for_test(net::encode_guild_rank_permission(rank, permission, true, guild_id));
+
+    ScratchDir scratch("guild_banner_categories");
+    std::filesystem::create_directories(scratch.path() / "Resources");
+    std::ofstream(scratch.path() / "Resources" / "BannerCategories.txt") << "7^Fixture category\n";
+    GameDir game(scratch.path());
+    ImGuiContext* ctx = ImGui::CreateContext();
+    {
+        app::UiHost host;
+        host.in_game = host.ui_ready = true;
+        host.conn = &rig.conn;
+        host.game = &game;
+        app::UiApi api(host);
+        lua_State* L = luaL_newstate();
+        luaL_openlibs(L);
+        lua_newtable(L);
+        api.register_functions(L);
+        lua_setglobal(L, "hs");
+        REQUIRE(run(L, "g = 'GuildManagementWnd'; list = 'BannerKitList'; "
+                       "function click(child) return hs.ClickChild(g, child, 'left') end; "
+                       "function enabled(child) return (hs.ChildState(g, child)) end; "
+                       "function value(child) return (hs.WindowText(g, child)) end; "
+                       "hs.ShowWindow(g, true); hs.SetTabPage(g, 'Subwindows', 4); return true") == "true");
+        CHECK(run(L, "return hs.ChildShown(g, 'BannerData')") == "false");
+        CHECK(run(L, "return (hs.ComboInfo(g, 'BannerFilter'))[2]") == "Fixture category");
+        CHECK(run(L, "return hs.ComboSelect(g, 'BannerFilter', 1)") == "true");
+        const auto filtered = [&] {
+            return std::ranges::any_of(rig.server.zone_log, [](const auto& packet) {
+                if (packet.opcode != net::to_wire(net::Op::GuildBannerKitRequest) || packet.data.size() != 141) return false;
+                ByteReader reader(packet.data);
+                reader.seek(137);
+                return reader.le<std::uint32_t>() == (1u << 7);
+            });
+        };
+        REQUIRE(rig.until(filtered));
+        clock.hold();
+
+        ByteWriter kits;
+        kits.zeros(4);
+        kits.le<std::uint32_t>(2);
+        kits.le<std::uint32_t>(5);
+        kits.le<std::uint32_t>(3);
+        kits.le<std::uint32_t>(50);
+        kits.fixed_string("Fixture available kit", 128);
+        kits.le<std::uint8_t>(1);
+        kits.le<std::uint32_t>(100);
+        kits.le<std::uint32_t>(60);
+        kits.fixed_string("Fixture unavailable kit", 128);
+        kits.le<std::uint8_t>(0);
+        kits.le<std::uint32_t>(101);
+        rig.conn.receive_zone_packet_for_test({net::to_wire(net::Op::GuildBannerKitList), kits.take()});
+        ByteWriter status;
+        status.zeros(12);
+        status.le<std::uint32_t>(40);
+        status.le<std::uint32_t>(102);
+        status.le<std::int32_t>(3661000);
+        status.fixed_string("Fixture active banner", 128);
+        status.zeros(16);
+        status.le<std::uint32_t>(40);
+        status.le<std::uint32_t>(4);
+        status.le<std::uint32_t>(1);
+        status.le<std::uint32_t>(0x102030);
+        status.le<std::uint32_t>(0xabcdef);
+        rig.conn.receive_zone_packet_for_test({net::to_wire(net::Op::GuildBannerStatus), status.take()});
+        api.begin_frame();
+
+        CHECK(run(L, "return hs.ChildShown(g, 'BannerData')") == "true");
+        CHECK(run(L, "return (hs.ListInfo(g, list))") == "3");
+        CHECK(run(L, "return hs.ListRow(g, list, 0)[2]") == "Fixture active banner");
+        CHECK(run(L, "return value('TimeRemainingValueLabel')") == "01:01:01");
+        CHECK(run(L, "return enabled('RemoveBannerButton')") == "false");
+        CHECK(run(L, "return hs.ListClick(g, list, 0, 'left')") == "true");
+        CHECK(run(L, "return enabled('RemoveBannerButton')") == "true");
+        CHECK(run(L, "return hs.ListClick(g, list, 1, 'left')") == "true");
+        CHECK(run(L, "return enabled('PlantBannerButton')") == "true");
+        CHECK(run(L, "return enabled('RemoveBannerButton')") == "false");
+        CHECK(run(L, "return click('PlantBannerButton')") == "true");
+        REQUIRE(rig.until([&] {
+            clock.advance(2ms);
+            return MockEqServer::count(rig.server.zone_log, net::Op::GuildBannerPlant) == 1;
+        }));
+        const auto plant = std::ranges::find_if(rig.server.zone_log, [](const auto& packet) {
+            return packet.opcode == net::to_wire(net::Op::GuildBannerPlant);
+        });
+        REQUIRE(plant != rig.server.zone_log.end());
+        ByteReader placement(plant->data);
+        CHECK(placement.le<std::uint32_t>() == 50);
+        placement.seek(68);
+        CHECK(placement.f32() == -15.0f); // native plant puts server Y first, unlike ordinary spawn positions
+        CHECK(placement.f32() == 40.0f);
+        CHECK(placement.f32() == 4.0f);
+        CHECK(placement.le<std::uint8_t>() == 1);
+
+        REQUIRE(rig.conn.zone_info());
+        const auto allowed = *rig.conn.zone_info();
+        auto prohibited = allowed;
+        prohibited.banner_placement = net::BannerPlacement::CannotPlace;
+        rig.conn.receive_zone_packet_for_test(net::encode(prohibited));
+        CHECK(run(L, "return enabled('PlantBannerButton')") == "false");
+        rig.conn.receive_zone_packet_for_test(net::encode(allowed));
+        CHECK(run(L, "return enabled('PlantBannerButton')") == "true");
+        CHECK(run(L, "return hs.ListClick(g, list, 2, 'left')") == "true");
+        CHECK(run(L, "return enabled('PlantBannerButton')") == "false");
+
+        CHECK(run(L, "return click('EditBannerButton')") == "true");
+        CHECK(run(L, "return hs.ChildShown(g, 'SaveBannerSettings')") == "true");
+        CHECK(run(L, "click('Layer1TextureNext'); return value('BannerBackgroundPattern')") == "0");
+        CHECK(run(L, "click('CancelEditBanner'); return value('BannerBackgroundPattern')") == "4");
+        CHECK(run(L, "click('EditBannerButton'); click('Layer2TextureNext'); return value('BannerEmblemPattern')") == "2");
+        CHECK(run(L, "return click('Layer1ColorBtn')") == "true");
+        REQUIRE(host.color_pick);
+        CHECK(host.color_pick->rgb == 0x102030u);
+        auto choose = std::move(host.color_pick->done);
+        host.color_pick.reset();
+        choose(0xff304050u);
+        CHECK(run(L, "click('SaveBannerSettings'); return hs.ChildShown(g, 'SaveBannerSettings')") == "true");
+        ByteWriter token;
+        token.zeros(8);
+        token.le<std::uint32_t>(4001);
+        token.zeros(4);
+        token.fixed_string("Fixture modification token", 64);
+        rig.conn.receive_zone_packet_for_test({net::to_wire(net::Op::GuildBannerModificationToken), token.take()});
+        CHECK(run(L, "click('SaveBannerSettings'); return hs.ChildShown(g, 'SaveBannerSettings')") == "false");
+        CHECK(run(L, "return value('BannerEmblemPattern')") == "1"); // saved draft yields to server-authoritative preview
+        REQUIRE(rig.until([&] {
+            clock.advance(2ms);
+            return MockEqServer::count(rig.server.zone_log, net::Op::GuildBannerSave) == 1;
+        }));
+        const auto save = std::ranges::find_if(rig.server.zone_log, [](const auto& packet) {
+            return packet.opcode == net::to_wire(net::Op::GuildBannerSave);
+        });
+        REQUIRE(save != rig.server.zone_log.end());
+        ByteReader style(save->data);
+        style.skip(4);
+        CHECK(style.le<std::uint32_t>() == 4);
+        CHECK(style.le<std::uint32_t>() == 2);
+        CHECK(style.le<std::uint32_t>() == 0x304050u);
+        CHECK(style.le<std::uint32_t>() == 0xabcdefu);
+        CHECK(style.le<std::uint32_t>() == 4001);
+        REQUIRE(rig.until([&] {
+            clock.advance(2ms);
+            return MockEqServer::count(rig.server.zone_log, net::Op::GuildBannerPlant) == 2;
+        }));
+        const auto reapply = std::ranges::find_if(rig.server.zone_log.rbegin(), rig.server.zone_log.rend(),
+            [](const auto& packet) { return packet.opcode == net::to_wire(net::Op::GuildBannerPlant); });
+        REQUIRE(reapply != rig.server.zone_log.rend());
+        ByteReader reapply_request(reapply->data);
+        CHECK(reapply_request.le<std::uint32_t>() == 40);
+        reapply_request.seek(80);
+        CHECK(reapply_request.le<std::uint8_t>() == 0);
+        CHECK(reapply_request.le<std::uint8_t>() == 1);
+
+        CHECK(run(L, "hs.ListClick(g, list, 0, 'left'); return click('RemoveBannerButton')") == "true");
+        REQUIRE(rig.until([&] {
+            clock.advance(2ms);
+            return MockEqServer::count(rig.server.zone_log, net::Op::GuildBannerRemove) == 1;
+        }));
+        CHECK(run(L, "return (hs.ListInfo(g, list))") == "3"); // server still owns the active banner
+        const auto status_requests = MockEqServer::count(rig.server.zone_log, net::Op::GuildBannerStatusRequest);
+        CHECK(run(L, "hs.ShowWindow(g, false); return hs.ChildShown(g, 'BannerData')") == "false");
+        CHECK(run(L, "hs.ShowWindow(g, true); return hs.ChildShown(g, 'BannerData')") == "false");
+        REQUIRE(rig.until([&] {
+            clock.advance(2ms);
+            return MockEqServer::count(rig.server.zone_log, net::Op::GuildBannerStatusRequest) > status_requests;
+        }));
         lua_close(L);
     }
     ImGui::DestroyContext(ctx);

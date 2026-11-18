@@ -48,6 +48,9 @@ bool local_pc_has_guild_permission(bool have_character, bool is_gm, std::int32_t
                                    const GuildPermissions& table);
 
 // The permission numbers the client checks (EQEmu GuildAction names).
+inline constexpr std::int32_t kGuildPermBannerChange = 1;
+inline constexpr std::int32_t kGuildPermBannerPlant = 2;
+inline constexpr std::int32_t kGuildPermBannerRemove = 3;
 inline constexpr std::int32_t kGuildPermInvite = 7;          // Send_OP_GuildInvite
 inline constexpr std::int32_t kGuildPermPromote = 8;         // Send_OP_GuildPromote (and the remove button)
 inline constexpr std::int32_t kGuildPermDemote = 9;          // Send_OP_GuildDemote (another member)

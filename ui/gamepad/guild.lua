@@ -6,13 +6,14 @@
 -- hs.ComboSelect), enabled as CGuildMgmtWnd::UpdateButtons enables it for the player's rank and the guild's
 -- permissions (hs.ChildState), so the game decides what is allowed. The Tribute page is the picked member's tribute
 -- line (state, donations, last donation, from the stock TributeList, whose rows are MemberList's) and its opt-out
--- (yourself, or others with the guild permission). The stock Banner page is left out: EQEmu sends no banner list,
--- so the game would show an empty list with every banner action off.
+-- (yourself, or others with the guild permission). The Banner page shows the active banner, kits and appearance.
 local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local K = dofile("lib/keyboard.lua")
+local CH = dofile("lib/child.lua")
+local TB = dofile("lib/textbox.lua")
 local C = T.C
 
 local GW = "GuildManagementWnd"
@@ -21,6 +22,9 @@ local wasShown = false
 local state = {} -- the question (W.confirm)
 local kb = K.new()
 local side = {} -- W.toSide
+local bannerPage = false
+local bannerControls, bannerList, bannerDescription, bannerSide = CH.new(), {}, {}, {}
+local bannerWasEditing = false
 -- The window's ShowOffline / HideAlts toggles (its list shows only the members they let through; kept in UI.ini).
 local function toggle(id) local _, c = API.windows.ChildState(GW, id) return c == true end
 
@@ -104,17 +108,96 @@ local function motdLine(raw, w)
   return motdPlain, motdFit
 end
 
+local BANNER_LAYERS = { "BannerBackgroundPreview", "BannerEmblemPreview" }
+
+local function bannerPreview(x, y, size)
+  local drawn = false
+  for _, id in ipairs(BANNER_LAYERS) do
+    local tex, u0, v0, u1, v1 = API.windows.ChildArt(GW, id, "decal")
+    if type(tex) == "userdata" then
+      local r, g, b, a = API.windows.ChildColor(GW, id, "decal")
+      ui.DrawImage(tex, x, y, x + size, y + size, u0, v0, u1, v1, r or 1, g or 1, b or 1, a or 1)
+      drawn = true
+    end
+  end
+  return drawn
+end
+
+local function banners(x0, y0, x1, y1, wx, wy)
+  local leftW = (x1 - x0) * 0.59
+  local rightX = x0 + leftW + T.px(24)
+  local bw, bh = x1 - rightX, T.px(64)
+  local buttons, focusedRow
+  local editing = API.windows.ChildShown(GW, "SaveBannerSettings") == true
+  local enteredEditor = editing and not bannerWasEditing
+  if bannerWasEditing and not editing then bannerList.focusNext = 1 end
+  bannerWasEditing = editing
+  T.font(22)
+  T.draw(x0, y0, CH.text(GW, "TimeRemainingValueLabel"), C.text)
+  T.unfont()
+  if editing then
+    local size = math.min(leftW, T.px(320))
+    local y = y0 + T.px(48)
+    if bannerPreview(x0, y, size) then y = y + size + T.px(20) end
+    T.font(20)
+    T.draw(x0, y, "Background pattern " .. CH.text(GW, "BannerBackgroundPattern"), C.dim)
+    T.draw(x0, y + T.px(30), "Emblem pattern " .. CH.text(GW, "BannerEmblemPattern"), C.dim)
+    T.unfont()
+    buttons = {
+      { "Layer1TexturePrev", "Previous background" }, { "Layer1TextureNext", "Next background" },
+      { "Layer1ColorBtn", "Background color" }, { "Layer2TexturePrev", "Previous emblem" },
+      { "Layer2TextureNext", "Next emblem" }, { "Layer2ColorBtn", "Emblem color" },
+      { "SaveBannerSettings", "Save" }, { "CancelEditBanner", "Cancel" },
+    }
+  else
+    local y = y0 + T.px(48)
+    local half = (leftW - T.px(10)) / 2
+    ui.SetCursorPos(x0 - wx, y - wy)
+    CH.combo(bannerControls, GW, "BannerFilter", "Kit type", half, T.px(70), { keep = true })
+    ui.SameLine(0, T.px(10))
+    CH.toggle(GW, "ShowAllPossibleBannersButton", "Show all kits", half, T.px(70), { keep = true })
+    y = y + T.px(86)
+    local listH = (y1 - y) * 0.57
+    ui.SetCursorPos(x0 - wx, y - wy)
+    local noData = API.windows.ChildShown(GW, "BannerData") == false
+    focusedRow = CH.list(GW, "BannerKitList", bannerList, leftW, listH, { rowH = 52, font = 19,
+      empty = noData and "No banner data from this server." or "No banner kits listed.", columns = { { 2, 1 } } })
+    W.toSide(bannerSide, focusedRow)
+    y = y + listH + T.px(15)
+    local size = math.min(T.px(154), y1 - y)
+    local textX = x0
+    if size > 0 and bannerPreview(x0, y, size) then textX = x0 + size + T.px(15) end
+    TB.draw(CH.text(GW, "BannerDescription"), textX, y, x0 + leftW, y1, bannerDescription)
+    buttons = {
+      { "PlantBannerButton", "Plant banner", "At your location" }, { "RemoveBannerButton", "Remove banner" },
+      { "EditBannerButton", "Edit appearance" }, { "RefreshBannerListButton", "Refresh kits" },
+    }
+  end
+  for i, b in ipairs(buttons) do
+    ui.SetCursorPos(rightX - wx, y0 + (i - 1) * (bh + T.px(9)) - wy)
+    if not editing then W.sideBefore(bannerSide, i) end
+    if enteredEditor and i == 3 then ui.SetKeyboardFocusHere() end
+    CH.button(GW, b[1], b[2], bw, bh, { sub = b[3], align = 0, primary = b[1] == "SaveBannerSettings" })
+    if not editing then W.sideAfter(bannerSide, i, #buttons, bannerList) end
+  end
+end
+
 ui.window("Guild", function()
   testOpen()
   if not W.shown(GW) then
     kb.open, state.confirm = false, nil
     ranking, rankFocused = nil, nil -- (the picker is for the member picked while it was open)
+    bannerControls.pick, bannerWasEditing = nil, false
     wasShown = false
     return
   end
   T.frame()
   -- the pad's focus starts on the list
-  if not wasShown then listState.focusNext = 1 end
+  local selectedPage = API.windows.TabPage(GW, "Subwindows") == 4
+  if not wasShown or selectedPage ~= bannerPage then
+    bannerPage = selectedPage
+    if bannerPage then bannerList.focusNext = 1 else listState.focusNext = 1 end
+  end
   wasShown = true
   local name = API.windows.Text(GW, "GuildName")
   local inGuild = name ~= nil and name ~= ""
@@ -127,15 +210,40 @@ ui.window("Guild", function()
     if (showOffline or m.online) and not (hideAlts and m.alt) then view[#view + 1] = m end
     if m.row == selectedRow then selected = m end
   end
-  local hints = not inGuild and { { "b", "Close" } } or { { "x", showOffline and "Hide offline" or "Show offline" }, { "y", hideAlts and "Show alts" or "Hide alts" },
-    { "a", "Select" }, { "b", (kb.open or state.confirm) and "Cancel" or "Close" } }
+  local hints = { { "b", "Close" } }
+  if inGuild then
+    local bannerBack = API.windows.ChildShown(GW, "SaveBannerSettings") == true and "Cancel" or "Close"
+    hints = bannerPage and CH.hints(bannerControls, { { "lb", "Roster" }, { "a", "Select" }, { "b", bannerBack } })
+      or { { "rb", "Banner" }, { "x", showOffline and "Hide offline" or "Show offline" },
+        { "y", hideAlts and "Show alts" or "Hide alts" }, { "a", "Select" },
+        { "b", (kb.open or state.confirm) and "Cancel" or "Close" } }
+  end
   if W.begin("Guild", { w = 1720, h = 960, title = inGuild and name or "Guild",
-        subtitle = inGuild and (#all .. " members, " .. online .. " online") or "", hints = kb.open and K.HINTS or hints }) then
+        subtitle = inGuild and (bannerPage and "Banner" or #all .. " members, " .. online .. " online") or "",
+        hints = kb.open and K.HINTS or hints }) then
     local x0, y0, x1, y1, cw = W.area()
     local wx, wy = ui.GetWindowPos()
-    if not kb.open and not state.confirm then
-      if W.pressed("x") then API.windows.ClickChild(GW, "ShowOfflineButton", "left") end
-      if W.pressed("y") then API.windows.ClickChild(GW, "HideAltButton", "left") end
+    if inGuild and not kb.open and not state.confirm and not ranking and not CH.busy(bannerControls) then
+      ui.SetCursorPos(x0 - wx, y0 - wy)
+      local rosterButton = T.button("##guildRosterPage", "Roster", T.px(150), T.px(50), { primary = not bannerPage }, pad)
+      ui.SameLine()
+      local bannerButton = T.button("##guildBannerPage", "Banner", T.px(150), T.px(50), { primary = bannerPage }, pad)
+      if bannerPage and (rosterButton or W.pressed("lb")) then
+        bannerPage = false
+        API.windows.SetTabPage(GW, "Subwindows", 0)
+        listState.focusNext = 1
+      elseif not bannerPage and (bannerButton or W.pressed("rb")) then
+        bannerPage = true
+        API.windows.SetTabPage(GW, "Subwindows", 4)
+        bannerList.focusNext = 1
+      end
+      y0 = y0 + T.px(64)
+      if not bannerPage then
+        if W.pressed("x") then API.windows.ClickChild(GW, "ShowOfflineButton", "left") end
+        if W.pressed("y") then API.windows.ClickChild(GW, "HideAltButton", "left") end
+      end
+    elseif inGuild and kb.open then
+      y0 = y0 + T.px(64)
     end
     if state.confirm then
       W.confirm(state)
@@ -168,6 +276,8 @@ ui.window("Guild", function()
     elseif not inGuild then
       T.draw(x0, y0, "You are not in a guild.", C.dim)
       ui.Dummy(1, 1)
+    elseif bannerPage then
+      if not CH.modal(bannerControls, x0, y0, x1, y1) then banners(x0, y0, x1, y1, wx, wy) end
     else
       -- the message of the day
       local motd = API.windows.Text(GW, "MOTDViewer") or ""
@@ -306,5 +416,12 @@ ui.window("Guild", function()
     close, ranking, rankFocused = false, nil, nil
     listState.focusNext = 1
   end -- B leaves the rank picker
+  if bannerPage then
+    if not CH.back(bannerControls, close) then return end
+    if API.windows.ChildShown(GW, "SaveBannerSettings") == true then
+      API.windows.ClickChild(GW, "CancelEditBanner", "left")
+      return
+    end
+  end
   if W.back(close, state, kb, listState) then API.windows.Show(GW, false) end
 end)

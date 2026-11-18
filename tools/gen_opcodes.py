@@ -32,6 +32,8 @@ LINE = re.compile(r"^OP_([A-Za-z0-9_]+)\s*=\s*0x([0-9A-Fa-f]{1,4})\b")
 # Native fellowship routes were independently checked at CFellowshipWnd sends
 # 0x669440/0x6688e0 and receive routes 0x4c5733/0x4c55cd/0x6691d0/0x4cd4d3.
 # UpdateAltResponse is the campsite kit list, not an alternate roster.
+# Native guild banner sends: 0x684ad0 (kit and status requests), 0x6833a0 (save),
+# 0x54e340 (plant), 0x683870 (remove). Receive routes: 0x4d19ab and 0x4d1970.
 STOCK_ROF2_ADDITIONS = (
     ("AchievementReward", 0x6411), ("RewardSelection", 0x6471),
     ("AchievementDefinitions", 0xDAB0), ("AchievementUpdate", 0x618F),
@@ -42,6 +44,11 @@ STOCK_ROF2_ADDITIONS = (
     ("FellowshipUpdate", 0x7121), ("FellowshipCampRefresh", 0x0C12),
     ("FellowshipInvite", 0x62AB), ("FellowshipUpdateResponse", 0x6E4D),
     ("FellowshipUpdateAltResponse", 0x074D), ("FellowshipVitalityUpdate", 0x2CC6),
+    ("GuildBannerKitRequest", 0x0D92), ("GuildBannerKitList", 0x0001),
+    ("GuildBannerStatusRequest", 0x4924), ("GuildBannerStatus", 0x56C9),
+    ("GuildBannerModificationToken", 0x1E50),
+    ("GuildBannerSave", 0x4377), ("GuildBannerPlant", 0x765B), ("GuildBannerRemove", 0x9E18),
+    ("GuildBannerAppearance", 0x4683),
 )
 
 

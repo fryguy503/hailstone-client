@@ -15,6 +15,7 @@
 #include <cctype>
 #include <charconv>
 #include <cstdio>
+#include <format>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -69,6 +70,30 @@ int part_slot(std::string_view part) {
 // palette's SetTint1 treats RGB 0 as untinted; the alpha byte the server sends does not matter.
 bool tint_visible(std::uint32_t tint) { return (tint & 0x00ffffffu) != 0; }
 
+void dress_banner(EqgCharacterStore& store, const std::string& code,
+                  const core::BannerAppearance& banner, CharacterMesh& mesh) {
+    const auto file = store.mesh_file(code);
+    if (!file || file->materials.empty()) return;
+    const auto& cloth = file->materials.front();
+    // ActorClient @0x40af50 sets both textures and tints on material slot zero. Stock banners use the two-UV
+    // cloth shader there, with a separate material for the pole.
+    if (lower(cloth.shader) != "opaque_maxcbst2_2uv.fx") return;
+    const auto* background = store.layer(std::format("C_GDB_FLAG1_S{:02d}_M00", banner.pattern[0]));
+    const auto* emblem = store.layer(std::format("C_GDB_FLAG2_S{:02d}_M00", banner.pattern[1]));
+    const auto banner_tint = [](std::uint32_t argb) {
+        // Black means no tint to the original material, so the actor substitutes near-black.
+        return tint_visible(argb) ? (argb | 0xff000000u) : 0xff010101u;
+    };
+    for (std::size_t i = 0; i < mesh.materials.size(); ++i) {
+        auto& material = mesh.materials[i];
+        if (material.name != cloth.name) continue;
+        if (background && !background->diffuse.empty()) material.frames = {background->diffuse};
+        material.tint_layer = emblem && !emblem->diffuse.empty() ? emblem->diffuse : cloth.diffuse2;
+        material.banner_base_tint = banner_tint(banner.tint[0]);
+        mesh.tints[i] = banner_tint(banner.tint[1]);
+    }
+}
+
 std::string appearance_key(const CharacterModel& m, const game::Appearance& a) {
     std::string k = m.code;
     auto add = [&](std::uint32_t v) {
@@ -94,6 +119,10 @@ std::string appearance_key(const CharacterModel& m, const game::Appearance& a) {
                             std::uint32_t{a.eye_color2}, a.drakkin_heritage, a.drakkin_tattoo, a.drakkin_details,
                             a.npc_tint, std::uint32_t{a.class_id}})
         add(v);
+    if (a.banner) {
+        for (const auto pattern : a.banner->pattern) add(static_cast<std::uint32_t>(pattern));
+        for (const auto tint : a.banner->tint) add(tint);
+    }
     return k;
 }
 
@@ -263,6 +292,7 @@ std::shared_ptr<const CharacterMesh> CharacterLibrary::dress(const CharacterMode
                 }
         }
         apply_npc_tint(model, a, mesh);
+        if (a.banner && model.eqg && eqg_) dress_banner(*eqg_, model.code, *a.banner, mesh);
         attach_items(model, a, mesh);
         result = std::make_shared<const CharacterMesh>(std::move(mesh));
         log::debug("dressed {}: {} vertices, {} materials", key, result->vertices.size(), result->materials.size());

@@ -175,6 +175,7 @@ MeshFile parse_mesh(std::span<const std::byte> data, std::string_view label) {
                 // Keep the character loader's exact-name, last-wins diffuse
                 // selection; the retained definition also supplies armor maps.
                 if (property.name == "e_TextureDiffuse0") m.diffuse = property.text;
+                if (property.name == "e_TextureDiffuse1") m.diffuse2 = property.text;
             }
             def.properties.push_back(std::move(property));
         }
@@ -222,7 +223,11 @@ MeshFile parse_mesh(std::span<const std::byte> data, std::string_view label) {
             // the 10th anniversary shield's lettering reads upside down and the Haunting Nightmares ornament shows
             // the inside of its pumpkin.
             v.uv = {u, nb > 0 ? 1.0f - w : w};
-            if (f.version >= 3) r.skip(8); // second uv
+            if (f.version >= 3) {
+                const float u2 = r.f32();
+                const float v2 = r.f32();
+                v.uv2 = {u2, nb > 0 ? 1.0f - v2 : v2};
+            }
         }
     };
     auto read_triangles = [&](Piece& p, std::uint32_t n) {

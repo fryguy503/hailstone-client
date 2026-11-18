@@ -14,6 +14,7 @@
 using namespace hailstone;
 
 namespace {
+constexpr auto kCampsiteCategories = "Resources/campsitecategories.txt";
 std::span<const std::byte> bytes(const std::string& text) { return std::as_bytes(std::span(text)); }
 void write(const std::filesystem::path& file, const std::string& text) {
     std::filesystem::create_directories(file.parent_path());
@@ -26,7 +27,7 @@ void write(const std::filesystem::path& file, const std::string& text) {
 TEST_CASE("fellowship categories: external labels and bit identifiers are bounded and independent") {
     const std::string text = "# category fixture\r\nCATEGORY_ID^LABEL\n 1 ^ Fixture first \r\n31^Fixture top\n"
         "1^Duplicate\n0^Reserved\n32^Too large\n-1^Negative\n4294967296^Overflow\n2^\n3^Bad^field\n4^Bad\tcontrol\n";
-    const auto categories = game::parse_fellowship_categories(bytes(text));
+    const auto categories = game::parse_kit_categories(bytes(text));
     REQUIRE(categories.size() == 2);
     CHECK(categories[0].id == 1);
     CHECK(categories[0].name == "Fixture first");
@@ -34,11 +35,11 @@ TEST_CASE("fellowship categories: external labels and bit identifiers are bounde
     CHECK(categories[1].id == 31);
     CHECK(categories[1].name == "Fixture top");
     CHECK(categories[1].mask() == 0x80000000u);
-    CHECK(game::FellowshipCategory{}.mask() == 0);
-    CHECK((game::FellowshipCategory{32, "Invalid"}.mask()) == 0);
-    CHECK(game::parse_fellowship_categories(bytes(std::string("1^Before\0\n2^After", 18))).empty());
-    CHECK(game::parse_fellowship_categories(bytes("2^" + std::string(256, 'x'))).empty());
-    CHECK(game::parse_fellowship_categories(bytes(std::string(game::kMaxFellowshipCategoryBytes + 1, 'x'))).empty());
+    CHECK(game::KitCategory{}.mask() == 0);
+    CHECK((game::KitCategory{32, "Invalid"}.mask()) == 0);
+    CHECK(game::parse_kit_categories(bytes(std::string("1^Before\0\n2^After", 18))).empty());
+    CHECK(game::parse_kit_categories(bytes("2^" + std::string(256, 'x'))).empty());
+    CHECK(game::parse_kit_categories(bytes(std::string(game::kMaxKitCategoryBytes + 1, 'x'))).empty());
 }
 
 TEST_CASE("fellowship categories: layered files reload without retaining a previous server catalog") {
@@ -48,19 +49,19 @@ TEST_CASE("fellowship categories: layered files reload without retaining a previ
     write(base / "Resources" / "CampsiteCategories.txt", "1^Base fixture\n");
     write(overlay / "resources" / "campsitecategories.txt", "3^Overlay fixture\n");
     GameDir folder(base);
-    auto result = game::load_fellowship_categories(folder);
+    auto result = game::load_kit_categories(folder, kCampsiteCategories);
     REQUIRE(result.size() == 1);
     CHECK(result[0].name == "Base fixture");
     folder.set_overlay(overlay);
-    result = game::load_fellowship_categories(folder);
+    result = game::load_kit_categories(folder, kCampsiteCategories);
     REQUIRE(result.size() == 1);
     CHECK(result[0].id == 3);
     CHECK(result[0].name == "Overlay fixture");
-    write(overlay / "resources" / "campsitecategories.txt", std::string(game::kMaxFellowshipCategoryBytes + 1, 'x'));
-    CHECK(game::load_fellowship_categories(folder).empty());
+    write(overlay / "resources" / "campsitecategories.txt", std::string(game::kMaxKitCategoryBytes + 1, 'x'));
+    CHECK(game::load_kit_categories(folder, kCampsiteCategories).empty());
     folder.set_overlay(std::nullopt);
-    CHECK(game::load_fellowship_categories(folder).size() == 1);
-    CHECK(game::load_fellowship_categories(GameDir{}).empty());
+    CHECK(game::load_kit_categories(folder, kCampsiteCategories).size() == 1);
+    CHECK(game::load_kit_categories(GameDir{}, kCampsiteCategories).empty());
 }
 
 TEST_CASE("fellowship categories: truncated and mutated metadata remains bounded") {
@@ -68,10 +69,10 @@ TEST_CASE("fellowship categories: truncated and mutated metadata remains bounded
     fuzz::Bytes seed(bytes(text).begin(), bytes(text).end());
     fuzz::Rng random(0xca7e90);
     for (std::size_t size = 0; size <= seed.size(); ++size)
-        CHECK_NOTHROW(game::parse_fellowship_categories(std::span(seed).first(size)));
+        CHECK_NOTHROW(game::parse_kit_categories(std::span(seed).first(size)));
     for (int i = 0; i < 300; ++i) {
         const auto mutated = fuzz::mutate(seed, random);
-        const auto parsed = game::parse_fellowship_categories(mutated);
+        const auto parsed = game::parse_kit_categories(mutated);
         REQUIRE(parsed.size() <= 31);
         for (const auto& category : parsed) {
             CHECK(category.mask() != 0);
@@ -81,7 +82,7 @@ TEST_CASE("fellowship categories: truncated and mutated metadata remains bounded
 }
 
 TEST_CASE("fellowship categories: installed catalog supplies the player's labels" * doctest::skip(!test::game_dir())) {
-    const auto result = game::load_fellowship_categories(*test::game_dir());
+    const auto result = game::load_kit_categories(*test::game_dir(), kCampsiteCategories);
     REQUIRE_FALSE(result.empty());
     CHECK(result.size() <= 31);
     std::set<std::uint32_t> identifiers;

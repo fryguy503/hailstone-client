@@ -747,7 +747,7 @@ TEST_CASE("spawn with an interactive (LDoN chest) block round-trips") {
     s.race = 378;
     s.class_ = 62;
     s.long_equipment = false;
-    s.interactive = InteractiveObject{"CHEST", "name2", "str", 1, 2, {}, 1, 3};
+    s.interactive = InteractiveObject{"CHEST", "name2", "str", 1, 2, {}, 1, 3, std::nullopt};
     s.interactive->sound_ids[9] = 99;
     AppPacket p = encode(s);
     CHECK((byte_at(p, 8 + 4 + 1 + 4 + 1 + 4) & 0x04) != 0);
@@ -758,6 +758,41 @@ TEST_CASE("spawn with an interactive (LDoN chest) block round-trips") {
     CHECK(d->interactive->sound_ids[9] == 99);
     CHECK(d->interactive->object_type == 3);
     CHECK(d->class_ == 62);
+}
+
+TEST_CASE("spawn reads the two guild banner patterns and tints after its status words") {
+    Spawn s;
+    s.name = "Guild_Banner";
+    s.npc = 1;
+    s.race = 553;
+    s.long_equipment = false;
+    s.interactive.emplace().object_type = 4;
+    s.spawn_status[5] = 0x11223344u;
+    auto p = encode(s);
+    REQUIRE(decode_spawn(p));
+    REQUIRE(decode_spawn(p)->interactive);
+    CHECK_FALSE(decode_spawn(p)->interactive->banner);
+    const auto tail = p.data.size();
+    CHECK(u32_at(p, tail - 4) == 0x11223344u);
+    ByteWriter w;
+    w.le<std::int32_t>(7);
+    w.le<std::int32_t>(-1);
+    w.le<std::uint32_t>(0xff123456u);
+    w.le<std::uint32_t>(0xffabcdefu);
+    auto bytes = w.take();
+    p.data.insert(p.data.end(), bytes.begin(), bytes.end());
+    auto decoded = decode_spawn(p);
+    REQUIRE(decoded);
+    REQUIRE(decoded->interactive);
+    REQUIRE(decoded->interactive->banner);
+    const core::BannerAppearance expected{{7, -1}, {0xff123456u, 0xffabcdefu}};
+    CHECK(*decoded->interactive->banner == expected);
+    CHECK(encode(*decoded).data == p.data);
+    p.data.pop_back();
+    decoded = decode_spawn(p);
+    REQUIRE(decoded);
+    REQUIRE(decoded->interactive);
+    CHECK_FALSE(decoded->interactive->banner);
 }
 
 // ---------------------------------------------------------------- zone: player profile
@@ -887,6 +922,7 @@ TEST_CASE("OP_NewZone round-trips at the rof2_structs.h offsets") {
     z.zone_short_name2 = "qeynos2";
     z.zone_id = 2;
     z.zone_instance = 5;
+    z.banner_placement = BannerPlacement::CanOnlyPlace;
     z.fog_density = 0.33f;
     AppPacket p = encode(z);
     REQUIRE(p.data.size() == 948);
@@ -902,6 +938,7 @@ TEST_CASE("OP_NewZone round-trips at the rof2_structs.h offsets") {
     CHECK(f32_at(p, 612) == 450);
     CHECK(f32_at(p, 616) == 1800);
     CHECK(u32_at(p, 852) == (2u | (5u << 16)));
+    CHECK(u32_at(p, 912) == 1u);
     CHECK(f32_at(p, 916) == 0.33f);
     auto d = decode_new_zone(p);
     REQUIRE(d);
@@ -911,7 +948,11 @@ TEST_CASE("OP_NewZone round-trips at the rof2_structs.h offsets") {
     CHECK(d->safe_z == 3);
     CHECK(d->underworld == -1000);
     CHECK(d->zone_instance == 5);
+    CHECK(d->banner_placement == BannerPlacement::CanOnlyPlace);
     CHECK(encode(*d).data == p.data);
+    p.data[912] = std::byte{9};
+    REQUIRE(decode_new_zone(p));
+    CHECK(decode_new_zone(p)->banner_placement == BannerPlacement::CannotPlace);
 }
 
 TEST_CASE("the game clock runs on from OP_TimeOfDay as EQWorldData::AdvanceTime") {

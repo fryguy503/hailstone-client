@@ -22,6 +22,7 @@
 #include "core/ascii_case.h"
 #include "core/web_url.h"
 #include "game/eq_names.h"
+#include "game/fellowship_categories.h"
 #include "game/guild_notes.h"
 #include "game/guild_ranks.h"
 #include "game/quantity_dialog.h"
@@ -144,9 +145,8 @@ private:
 // GuildNotes.txt); Dump writes /outputfile guild's file. The Tribute page lists each member's tribute and trophy
 // tribute states, donations and last donation (CGuildMgmtWnd_UpdateTributeListMember); its two buttons opt the
 // selected member out (UpdateButtons: the member opted in, and yourself or permission 22 / 24); the favour label
-// is EQType 122. The Banner page shows what the original shows without banner messages (EQEmu sends none): an
-// empty kit list, "No active banner" (eqstr 636), an empty description, and its controls as
-// CGuildMgmtWnd_UpdateBannerPage enables them with no kit selected and no planted banner (docs/unknowns.md).
+// is EQType 122. Banner kits and the active banner come from the server. This window owns the list selection,
+// filter and unsaved appearance, shared by the Modern and Gamepad packs.
 class GuildWindow : public StockWindow {
 public:
     GuildWindow() : StockWindow("GuildManagementWnd", false) {}
@@ -154,7 +154,25 @@ public:
     // The lists are built once a frame, and again after the window's own state changed (a click, a toggle, a
     // selection): a sorted or filtered list reads every row (hs.ListRow), each read asking for the list again, so
     // building it on every ask cost the roster's size squared a frame.
-    void frame(UiHost&) override { ++generation_; }
+    void frame(UiHost& host) override {
+        ++generation_;
+        sync_banner(host);
+        if (open_ && banner_open_pending_) open_banner(host);
+    }
+
+    void set_shown(UiHost& host, bool show) override {
+        if (show == open_) return;
+        open_ = show;
+        if (show) {
+            sync_banner(host);
+            banner_open_pending_ = true;
+            open_banner(host);
+        } else {
+            if (host.conn) host.conn->guild_banner_close();
+            banner_open_pending_ = false;
+            cancel_banner_edit(host);
+        }
+    }
 
     void ini_loaded(UiHost&, ui::UiIni& ini, const std::filesystem::path&) override {
         ++generation_;
@@ -222,23 +240,7 @@ public:
             out.enabled = m && m->tribute_on && (m->name == c.character_name() || c.has_guild_permission(kPermTributeOthers));
         else if (id == "TrophyTributeOptOutButton")
             out.enabled = m && m->trophy_on && (m->name == c.character_name() || c.has_guild_permission(kPermTrophyOthers));
-        // OnProcessFrame: without a planted banner's countdown (+0x618 -1, as AboutToShow leaves it until a banner
-        // message sets it) the label shows string 0x27c.
-        else if (id == "TimeRemainingValueLabel") out.text = eqstr(host, 636);
-        else if (id == "BannerDescription") out.text = std::string(); // no kit row selected
-        // UpdateBannerPage, never editing (+0x364) and no kit row: the filter, Show All and Refresh enabled; Plant
-        // and Remove need a kit row (and Remove a planted banner); Edit, the layer and colour buttons, Save and
-        // Cancel also need a character flag (bit 0x1000 of PcBase's virtual +0x5c) whose meaning is not known, so
-        // they stay off (docs/unknowns.md).
-        else if (id == "BannerFilter" || id == "RefreshBannerListButton") out.enabled = true;
-        else if (id == "ShowAllPossibleBannersButton") {
-            out.enabled = true;
-            out.checked = show_all_banners_;
-        } else if (id == "PlantBannerButton" || id == "RemoveBannerButton" || id == "EditBannerButton" ||
-                   id == "SaveBannerSettings" || id == "CancelEditBanner" || id == "Layer1TextureNext" ||
-                   id == "Layer1TexturePrev" || id == "Layer2TextureNext" || id == "Layer2TexturePrev" ||
-                   id == "Layer1ColorBtn" || id == "Layer2ColorBtn")
-            out.enabled = false;
+        else banner_child(host, id, out);
     }
     const ListData* list(UiHost& host, std::string_view id) override {
         if (!host.conn) return nullptr;
@@ -304,9 +306,22 @@ public:
             return &tribute_;
         }
         if (id == "BannerKitList") {
-            // HandleBannerKitList fills it from a server message EQEmu does not send; 0x681960 adds a row only
-            // for a planted banner.
+            sync_banner(host);
+            if (fresh(banners_built_)) return &banner_kits_;
+            const auto& banner = host.conn->guild_banner();
             banner_kits_ = make_list({{"", 0}, {"Banner", 400}});
+            if (banner.status && banner.status->active()) {
+                std::string name = banner.status->name;
+                if (name.empty()) name = eqstr(host, 634);
+                if (name.empty()) name = "Currently active banner";
+                const auto color = banner.status->can_remove() ? 0xff00ff00u : 0xffffff00u;
+                banner_kits_.rows.push_back({{"", std::move(name)}, argb_to_rgb(color), std::nullopt});
+                if (active_banner_selected_) banner_kits_.selected = 0;
+            }
+            for (const auto& kit : banner.kits) {
+                if (selected_banner_kit_ == kit.id) banner_kits_.selected = static_cast<int>(banner_kits_.rows.size());
+                banner_kits_.rows.push_back({{"", kit.name}, kit.available ? Rgb{1, 1, 1} : argb_to_rgb(0xff404040), std::nullopt});
+            }
             return &banner_kits_;
         }
         if (id == "GT_Rank_List") {
@@ -372,7 +387,25 @@ public:
                                                  !host.conn->guild().permissions.has(r, p));
             return true;
         }
-        return id == "GT_Rank_List" || id == "GT_Member_List" || id == "BannerKitList";
+        if (id == "BannerKitList") {
+            if (right || row < 0) return true;
+            sync_banner(host);
+            if (banner_draft_) return true;
+            const auto& banner = host.conn->guild_banner();
+            const bool active = banner.status && banner.status->active();
+            if (active && row == 0) {
+                selected_banner_kit_.reset();
+                active_banner_selected_ = true;
+            } else {
+                const auto index = static_cast<std::size_t>(row - (active ? 1 : 0));
+                if (index < banner.kits.size()) {
+                    selected_banner_kit_ = banner.kits[index].id;
+                    active_banner_selected_ = false;
+                }
+            }
+            return true;
+        }
+        return id == "GT_Rank_List" || id == "GT_Member_List";
     }
     bool list_double_click(UiHost& host, std::string_view id, int row, int) override {
         ++generation_;
@@ -399,6 +432,10 @@ public:
         return true;
     }
     const ComboData* combo(UiHost& host, std::string_view id) override {
+        if (id == "BannerFilter") {
+            load_banner_categories(host);
+            return &banner_filter_;
+        }
         const game::GuildMemberInfo* m = host.conn ? access_member(host, id) : nullptr;
         if (!m) return nullptr;
         RankChoices r = rank_choices(host, *m);
@@ -409,6 +446,15 @@ public:
     }
     bool combo_select(UiHost& host, std::string_view id, int index) override {
         ++generation_;
+        if (id == "BannerFilter") {
+            load_banner_categories(host);
+            if (host.conn && !banner_draft_ && index >= 0 && index < static_cast<int>(banner_filter_.choices.size()) &&
+                index != banner_filter_.selected) {
+                banner_filter_.selected = index;
+                refresh_banners(host);
+            }
+            return true;
+        }
         const game::GuildMemberInfo* m = host.conn ? access_member(host, id) : nullptr;
         if (!m) return false;
         // The choice's data is its rank: a promotion or demotion when allowed, else the box keeps the member's rank.
@@ -483,24 +529,203 @@ public:
                 if (id == "TributeOptOutButton") c.guild_tribute_opt_out(m->name);
                 else c.guild_trophy_opt_out(m->name);
             }
-        } else if (id == "ShowAllPossibleBannersButton") {
-            // The original then asks for the kit list (CGuildMgmtWnd_RequestBannerKitList: opcodes 0x0d92 and
-            // 0x4924, which EQEmu does not know); not sent here (docs/unknowns.md).
-            show_all_banners_ = !show_all_banners_;
-        } else if (id == "RefreshBannerListButton") {
-            // RequestBannerKitList as above: nothing is sent.
         } else if (id == "GT_ViewMembers_Btn") view_ranks_ = false;
         else if (id == "GT_ViewRanks_Btn") view_ranks_ = true;
-        else return false;
+        else return click_banner(host, id);
         return true;
     }
     std::optional<int> tab_page(UiHost&, std::string_view id) override { return id == "Subwindows" ? std::optional<int>(page_) : std::nullopt; }
-    void set_tab_page(UiHost&, std::string_view id, int page) override {
+    void set_tab_page(UiHost& host, std::string_view id, int page) override {
         ++generation_;
-        if (id == "Subwindows") page_ = page;
+        if (id != "Subwindows" || page == page_) return;
+        if (page_ == kBannerPage) cancel_banner_edit(host);
+        page_ = page;
+        if (open_ && page_ == kBannerPage) refresh_banners(host);
     }
 
 private:
+    static constexpr int kBannerPage = 4;
+
+    void sync_banner(UiHost& host) {
+        const auto guild_id = host.conn ? host.conn->guild().guild_id : 0;
+        const auto revision = host.conn ? host.conn->guild_banner_revision() : 0;
+        if (host.conn != banner_connection_ || guild_id != banner_guild_id_ || revision != banner_context_revision_) {
+            banner_connection_ = host.conn;
+            banner_guild_id_ = guild_id;
+            banner_context_revision_ = revision;
+            banner_open_pending_ = true;
+            selected_banner_kit_.reset();
+            active_banner_selected_ = false;
+            cancel_banner_edit(host);
+        }
+        if (!host.conn) return;
+        const auto& banner = host.conn->guild_banner();
+        if (active_banner_selected_ && (!banner.status || !banner.status->active())) {
+            active_banner_selected_ = false;
+            cancel_banner_edit(host);
+        }
+        if (selected_banner_kit_ && !selected_banner_kit(*host.conn)) {
+            selected_banner_kit_.reset();
+            cancel_banner_edit(host);
+        }
+        if (banner_draft_ && !host.conn->guild_banner_can_edit()) cancel_banner_edit(host);
+    }
+
+    void open_banner(UiHost& host) {
+        if (!host.conn || host.conn->state() != net::ConnectionState::InZone) return;
+        banner_open_pending_ = false;
+        load_banner_categories(host, true);
+        host.conn->guild_banner_open();
+        if (page_ == kBannerPage) refresh_banners(host);
+    }
+
+    const net::GuildBannerKit* selected_banner_kit(const net::GameConnection& c) const {
+        if (!selected_banner_kit_) return nullptr;
+        const auto& kits = c.guild_banner().kits;
+        const auto it = std::find_if(kits.begin(), kits.end(), [&](const auto& kit) { return kit.id == *selected_banner_kit_; });
+        return it != kits.end() ? &*it : nullptr;
+    }
+
+    std::optional<std::uint32_t> plant_kit(const net::GameConnection& c) const {
+        if (const auto* kit = selected_banner_kit(c)) return kit->id;
+        const auto& status = c.guild_banner().status;
+        if (active_banner_selected_ && status && status->active()) return status->kit_id;
+        return std::nullopt;
+    }
+
+    void banner_child(UiHost& host, std::string_view id, Child& out) {
+        const auto& c = *host.conn;
+        const auto& banner = c.guild_banner();
+        const auto& status = banner.status;
+        const bool editing = banner_draft_.has_value();
+        const auto* style = editing ? &*banner_draft_ : status ? &status->style : nullptr;
+        if (id == "TimeRemainingValueLabel") {
+            const auto remaining = c.guild_banner_remaining_seconds();
+            if (remaining >= 0) out.text = std::format("{:02}:{:02}:{:02}", remaining / 3600, (remaining / 60) % 60, remaining % 60);
+            else {
+                out.text = eqstr(host, 636);
+                if (out.text->empty()) out.text = "No active banner";
+            }
+        } else if (id == "BannerData") {
+            out.shown = banner.received();
+        } else if (id == "BannerDescription") {
+            const auto* kit = selected_banner_kit(c);
+            const auto description = kit ? kit->description_id : active_banner_selected_ && status ? status->description_id : 0;
+            out.text = description ? c.strings().db_string(description, 0) : std::string();
+        } else if (id == "BannerFilter" || id == "RefreshBannerListButton") {
+            out.enabled = !editing;
+        } else if (id == "ShowAllPossibleBannersButton") {
+            out.enabled = !editing;
+            out.checked = show_all_banners_;
+        } else if (id == "PlantBannerButton") {
+            const auto item = plant_kit(c);
+            out.enabled = !editing && item && c.guild_banner_can_plant(*item, active_banner_selected_);
+        } else if (id == "RemoveBannerButton") {
+            out.enabled = !editing && active_banner_selected_ && c.guild_banner_can_remove();
+        } else if (id == "EditBannerButton") {
+            out.enabled = !editing && style && c.guild_banner_can_edit();
+        } else if (id == "SaveBannerSettings" || id == "CancelEditBanner") {
+            out.enabled = out.shown = editing;
+        } else if (id == "Layer1TextureNext" || id == "Layer1TexturePrev") {
+            out.shown = editing;
+            out.enabled = editing && banner.background_count > 1;
+        } else if (id == "Layer2TextureNext" || id == "Layer2TexturePrev") {
+            out.shown = editing;
+            out.enabled = editing && banner.emblem_count > 1;
+        } else if (id == "Layer1ColorBtn" || id == "Layer2ColorBtn") {
+            out.enabled = out.shown = editing;
+            if (editing) out.color = argb_to_rgb(id == "Layer1ColorBtn" ? style->background_color : style->emblem_color);
+        } else if (id == "BannerBackgroundPattern" || id == "BannerEmblemPattern") {
+            if (style) out.text = std::to_string(id == "BannerBackgroundPattern" ? style->background : style->emblem);
+        } else if (id == "BannerBackgroundPreview" || id == "BannerEmblemPreview") {
+            const bool background = id == "BannerBackgroundPreview";
+            if (style) banner_preview(host, out, background, *style);
+            out.shown = out.decal.kind == ChildArt::Image;
+        }
+    }
+
+    static void banner_preview(UiHost& host, Child& out, bool background, const net::GuildBannerStyle& style) {
+        if (!host.textures) return;
+        const auto pattern = background ? style.background : style.emblem;
+        const auto path = std::format("uifiles/default/gdb_{}_{:02}.dds", background ? "background" : "logo", pattern);
+        if (const auto* image = host.textures->game_file(path)) {
+            out.decal.kind = ChildArt::Image;
+            out.decal.cell.id = image->id;
+            const auto rgb = argb_to_rgb(background ? style.background_color : style.emblem_color);
+            out.tint = std::array{rgb[0], rgb[1], rgb[2], 1.f};
+        }
+    }
+
+    bool click_banner(UiHost& host, std::string_view id) {
+        auto& c = *host.conn;
+        sync_banner(host);
+        Child state;
+        banner_child(host, id, state);
+        if (state.enabled == false) return true;
+        const auto& banner = c.guild_banner();
+        if (id == "ShowAllPossibleBannersButton") {
+            show_all_banners_ = !show_all_banners_;
+            refresh_banners(host);
+        } else if (id == "RefreshBannerListButton") {
+            refresh_banners(host);
+        } else if (id == "PlantBannerButton") {
+            if (const auto item = plant_kit(c)) c.guild_banner_plant(*item, active_banner_selected_);
+        } else if (id == "RemoveBannerButton") {
+            c.guild_banner_remove();
+        } else if (id == "EditBannerButton") {
+            if (banner.status) banner_draft_ = banner.status->style;
+        } else if (id == "SaveBannerSettings") {
+            if (c.guild_banner_save(*banner_draft_)) cancel_banner_edit(host);
+        } else if (id == "CancelEditBanner") {
+            cancel_banner_edit(host);
+        } else if (id == "Layer1TextureNext" || id == "Layer1TexturePrev") {
+            cycle_banner_pattern(banner_draft_->background, banner.background_count, id == "Layer1TextureNext");
+        } else if (id == "Layer2TextureNext" || id == "Layer2TexturePrev") {
+            cycle_banner_pattern(banner_draft_->emblem, banner.emblem_count, id == "Layer2TextureNext");
+        } else if (id == "Layer1ColorBtn" || id == "Layer2ColorBtn") {
+            const auto layer = id == "Layer1ColorBtn" ? &net::GuildBannerStyle::background_color : &net::GuildBannerStyle::emblem_color;
+            host.pick_color((*banner_draft_).*layer, [this, &host, layer](std::uint32_t color) {
+                sync_banner(host);
+                if (banner_draft_) (*banner_draft_).*layer = color;
+            }, this);
+        } else return false;
+        return true;
+    }
+
+    static void cycle_banner_pattern(std::uint32_t& index, std::uint32_t count, bool next) {
+        if (next) index = index < count - 1 ? index + 1 : 0;
+        else index = index > 0 && index < count ? index - 1 : count - 1;
+    }
+
+    void cancel_banner_edit(UiHost& host) {
+        banner_draft_.reset();
+        if (host.color_pick && host.color_pick->caller == this) host.color_pick.reset();
+    }
+
+    void refresh_banners(UiHost& host) {
+        if (!open_ || !host.conn) return;
+        load_banner_categories(host);
+        const auto choice = static_cast<std::size_t>(banner_filter_.selected);
+        const auto id = choice == 0 ? 0 : banner_categories_[choice - 1].id;
+        host.conn->guild_banner_refresh(id, show_all_banners_);
+    }
+
+    void load_banner_categories(UiHost& host, bool reload = false) {
+        if (!reload && banner_categories_loaded_ && banner_category_game_ == host.game) return;
+        const auto choice = static_cast<std::size_t>(banner_filter_.selected);
+        const auto previous = choice == 0 ? 0 : banner_categories_[choice - 1].id;
+        banner_category_game_ = host.game;
+        banner_categories_loaded_ = true;
+        banner_categories_ = host.game ? game::load_kit_categories(*host.game, "Resources/BannerCategories.txt")
+                                       : std::vector<game::KitCategory>{};
+        banner_filter_.choices = {"None - show all"};
+        banner_filter_.selected = 0;
+        for (const auto& category : banner_categories_) {
+            banner_filter_.choices.push_back(category.name);
+            if (category.id == previous) banner_filter_.selected = static_cast<int>(banner_filter_.choices.size()) - 1;
+        }
+    }
+
     static constexpr std::int32_t kPermPublicNote = 12, kPermMotd = 0x12, kPermRankPermissions = 5, kPermRankNames = 6,
                                   kPermTributeOthers = 0x16, kPermTrophyOthers = 0x18;
     static constexpr std::uint32_t kStrOff = 0x3292; // "off"; + 1 "on"
@@ -653,14 +878,22 @@ private:
     ListData members_, notes_, tribute_, ranks_, access_, permissions_, banner_kits_;
     std::uint64_t generation_ = 1; // the lists' generation (frame and changes); each list's when it was built
     std::uint64_t members_built_ = 0, notes_built_ = 0, tribute_built_ = 0, ranks_built_ = 0, access_built_ = 0,
-                  permissions_built_ = 0;
+                  permissions_built_ = 0, banners_built_ = 0;
     ComboData rank_combo_;
+    ComboData banner_filter_{{"None - show all"}, 0};
+    std::vector<game::KitCategory> banner_categories_;
+    const GameDir* banner_category_game_ = nullptr;
+    const net::GameConnection* banner_connection_ = nullptr;
+    std::uint32_t banner_guild_id_ = 0;
+    std::uint64_t banner_context_revision_ = 0;
+    std::optional<std::uint32_t> selected_banner_kit_;
+    std::optional<net::GuildBannerStyle> banner_draft_;
     std::vector<const game::GuildMemberInfo*> shown_;
     game::GuildPersonalNotes notes_file_;
     std::filesystem::path notes_path_;
     int page_ = 0;
     bool show_offline_ = true, hide_alts_ = true, view_ranks_ = false;
-    bool show_all_banners_ = false; // ShowAllPossibleBannersButton (the constructor leaves it unchecked)
+    bool show_all_banners_ = false, active_banner_selected_ = false, banner_categories_loaded_ = false, banner_open_pending_ = false;
     std::string public_, personal_, selected_name_;
     std::optional<std::string> motd_, url_, channel_; // what is being typed (none: the guild's)
 };

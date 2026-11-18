@@ -209,6 +209,7 @@ add_library(hailstone_engine STATIC
   src/net/door_packets.cpp
   src/net/game_connection_group.cpp
   src/net/game_connection_fellowship.cpp
+  src/net/game_connection_guild_banner.cpp
   src/net/game_connection_group_search.cpp
   src/net/game_connection_marketplace.cpp
   src/net/game_connection_social.cpp
@@ -262,6 +263,7 @@ add_library(hailstone_engine STATIC
   src/game/slash_commands.cpp
   src/net/group_packets.cpp
   src/net/fellowship_packets.cpp
+  src/net/guild_banner_packets.cpp
   src/game/fellowship_categories.cpp
   src/net/pet_packets.cpp
   src/net/item_packets.cpp
@@ -1382,6 +1384,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/hot_button_state_test.cpp
     tests/group_packets_test.cpp
     tests/fellowship_packets_test.cpp
+    tests/guild_banner_packets_test.cpp
     tests/fellowship_connection_test.cpp
     tests/fellowship_ui_test.cpp
     tests/fellowship_categories_test.cpp

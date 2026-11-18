@@ -90,6 +90,7 @@
 #include "net/dz_packets.h"
 #include "net/guild_bank_packets.h"
 #include "net/fellowship_packets.h"
+#include "net/guild_banner_packets.h"
 #include "net/item_packets.h"
 #include "net/evolving_packets.h"
 #include "net/commerce.h"
@@ -2344,6 +2345,18 @@ public:
     bool has_guild_permission(std::int32_t permission) const;
     // Tagged SendGuildRanks rows can arrive before the own GuildID appearance during a membership change.
     std::uint32_t received_guild_permission_context() const;
+    const GuildBannerState& guild_banner() const { return guild_banner_; }
+    std::uint64_t guild_banner_revision() const { return guild_banner_revision_; }
+    void guild_banner_open();
+    void guild_banner_close();
+    void guild_banner_refresh(unsigned filter, bool show_all);
+    bool guild_banner_can_plant(std::uint32_t kit_id, bool active = false) const;
+    bool guild_banner_can_remove() const;
+    bool guild_banner_can_edit() const;
+    void guild_banner_plant(std::uint32_t kit_id, bool active = false);
+    void guild_banner_remove();
+    bool guild_banner_save(const GuildBannerStyle& style);
+    std::int32_t guild_banner_remaining_seconds() const;
     const game::RaidState& raid() const { return raid_; }
     const FellowshipState& fellowship() const { return fellowship_; }
     void fellowship_create();
@@ -2899,6 +2912,11 @@ private:
     void handle_group(Op op, const AppPacket& p);
     bool handle_fellowship(const AppPacket& p);
     void reset_fellowship(bool zoning = false);
+    bool handle_guild_banner(Op op, const AppPacket& p);
+    void reset_guild_banner();
+    bool guild_banner_context() const;
+    bool guild_banner_permitted(std::int32_t permission) const;
+    void guild_banner_request_kits();
     void fellowship_invite_tick();
     bool fellowship_request_allowed(FellowshipAction action, std::uint32_t target) const;
     void send_fellowship_request(FellowshipAction action, std::uint32_t target = 0,
@@ -3512,6 +3530,12 @@ private:
     };
     std::optional<PendingGuildPermissions> pending_guild_permissions_;
     void reset_guild_permissions(std::uint32_t next_guild_id);
+    GuildBannerState guild_banner_;
+    std::uint64_t guild_banner_revision_ = 0;
+    std::int64_t guild_banner_received_ms_ = 0;
+    bool guild_banner_requested_ = false;
+    unsigned guild_banner_filter_ = 0;
+    bool guild_banner_show_all_ = false;
     Tracking tracking_;
     struct TrackingAdmission { std::uint64_t context = 0, lifecycle = 0; };
     std::optional<TrackingAdmission> tracking_request_, tracking_data_;

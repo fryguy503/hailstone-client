@@ -1317,6 +1317,7 @@ std::uint32_t GameConnection::received_guild_permission_context() const {
 }
 
 void GameConnection::reset_guild_permissions(std::uint32_t next_guild_id) {
+    reset_guild_banner();
     guild_.permissions.clear();
     guild_.rank_names = {};
     if (pending_guild_permissions_ && next_guild_id != 0 && next_guild_id != 0xffffffff &&

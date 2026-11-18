@@ -4418,6 +4418,67 @@ TEST_CASE("UI packs (modern): the inventory, loot, trade, raid, guild, merchant,
     ImGui::DestroyContext(ctx);
 }
 
+TEST_CASE("UI packs: both guild banner pages draw the catalog and appearance editor") {
+    const auto ui_source = fs::path(__FILE__).parent_path().parent_path() / "ui";
+    for (const std::string pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        hailstone::test::ScratchDir scratch("ui_pack_guild_banners");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(ui_source / pack, dir / pack, fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        {
+            Session s(dir, pack);
+            s.frames(2);
+            lua_State* L = s.lua.state();
+            REQUIRE(luaL_dostring(L, R"lua(
+                local g = 'GuildManagementWnd'
+                local shown, text, info, row = hs.ChildShown, hs.WindowText, hs.ListInfo, hs.ListRow
+                fixture = { editing = false, lists = 0, layers = 0 }
+                hs.ChildShown = function(win, child, ...)
+                    if win == g and child == 'SaveBannerSettings' then return fixture.editing end
+                    return shown(win, child, ...)
+                end
+                hs.WindowText = function(win, child, ...)
+                    if win == g then
+                        if child == 'GuildName' then return 'Fixture guild' end
+                        if child == 'BannerDescription' then return 'Fixture description' end
+                        if child == 'BannerBackgroundPattern' or child == 'BannerEmblemPattern' then
+                            fixture.layers = fixture.layers + 1
+                            return '1'
+                        end
+                    end
+                    return text(win, child, ...)
+                end
+                hs.ListInfo = function(win, child, ...)
+                    if win == g and child == 'BannerKitList' then
+                        fixture.lists = fixture.lists + 1
+                        return 1, 2, 0, {'', 'Banner'}, {0, 400}, false
+                    end
+                    return info(win, child, ...)
+                end
+                hs.ListRow = function(win, child, ...)
+                    if win == g and child == 'BannerKitList' then return {'', 'Fixture kit'}, 1, 1, 1 end
+                    return row(win, child, ...)
+                end
+                hs.SetTabPage(g, 'Subwindows', 4)
+                hs.ShowWindow(g, true)
+            )lua") == LUA_OK);
+            s.frames(3);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            REQUIRE(luaL_dostring(L, "assert(fixture.lists > 0); fixture.editing = true") == LUA_OK);
+            s.frames(3);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            CHECK(luaL_dostring(L, "assert(fixture.layers > 0)") == LUA_OK);
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
 // The raid window's members move between groups for the raid leader: a member dragged onto another group's card
 // in an unlocked raid locks it first (the game moves members only in a locked raid, CRaidWnd::UpdateButtons) and is
 // moved once the lock comes back; in a locked raid at once; a full group is refused. Each is the stock window's row

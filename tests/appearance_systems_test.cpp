@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include <algorithm>
+#include "core/byte_io.h"
 #include "game/appearance.h"
 #include "game/light_list.h"
 #include "mock_server/harness.h"
@@ -8,6 +9,46 @@
 #include "net/spell_packets.h"
 using namespace hailstone;
 using namespace hailstone::test;
+
+TEST_CASE("Guild banner appearance follows spawn, in-place updates and replacement") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    auto spawn = make_spawn("Guild_Banner", 301, 1, 553, 20, 30, 3);
+    auto& interactive = spawn.interactive.emplace();
+    interactive.object_type = 4;
+    interactive.banner = core::BannerAppearance{{1, 2}, {0xff123456u, 0xffabcdefu}};
+    rig.conn.receive_zone_packet_for_test(net::encode(spawn));
+    const auto live = [&]() -> const auto& { return rig.conn.world().spawns.at(301).appearance.banner; };
+    CHECK(live() == interactive.banner);
+    const auto incarnation = rig.conn.world().spawns.at(301).incarnation;
+    const auto update = [](std::uint32_t id, const std::string& name) {
+        ByteWriter w;
+        w.zeros(8);
+        w.le(id);
+        w.le<std::int32_t>(10);
+        w.le<std::int32_t>(26);
+        w.le<std::uint32_t>(0xff669944u);
+        w.le<std::uint32_t>(0xff112266u);
+        w.bytes(std::as_bytes(std::span{name.c_str(), name.size() + 1}));
+        return net::AppPacket(net::to_wire(net::Op::GuildBannerAppearance), w.take());
+    };
+    auto packet = update(301, "Renamed_Guild_Banner");
+    rig.conn.receive_zone_packet_for_test(packet);
+    const core::BannerAppearance expected{{10, 26}, {0xff669944u, 0xff112266u}};
+    CHECK(live() == expected);
+    CHECK(rig.conn.world().spawns.at(301).name == "Renamed_Guild_Banner");
+    CHECK(rig.conn.world().spawns.at(301).incarnation == incarnation);
+    auto unterminated = update(301, "Unterminated");
+    unterminated.data.pop_back();
+    rig.conn.receive_zone_packet_for_test(unterminated);
+    rig.conn.receive_zone_packet_for_test(update(301, std::string(64, 'A')));
+    CHECK(rig.conn.world().spawns.at(301).name == "Renamed_Guild_Banner");
+    rig.conn.receive_zone_packet_for_test(update(rig.conn.world().player_id, "Non_Banner"));
+    CHECK_FALSE(rig.conn.world().player()->appearance.banner);
+    spawn.interactive.reset();
+    rig.conn.receive_zone_packet_for_test(net::encode(spawn));
+    CHECK_FALSE(live());
+}
 
 TEST_CASE("Visibility: corpse and zero-HP gates, group awareness and GM ranks") {
     game::Spawn viewer, target;

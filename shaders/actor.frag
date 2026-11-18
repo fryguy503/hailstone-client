@@ -33,7 +33,7 @@ layout(set = 1, binding = 4) uniform sampler2DArrayShadow point_map;  // the zon
 // render/scene_lighting.h SceneLighting.
 struct ActorSurface {
     vec4 params; // shininess, gloss, environment strength, coverage UV scale
-    uvec4 slots; // native normal, octahedral environment, flags, coverage/second diffuse
+    uvec4 slots; // native normal, octahedral environment, flags, coverage/second diffuse/banner cloth tint
     vec4 slide; // authored colour and alpha UV velocities
 };
 layout(std430, set = 0, binding = 1) readonly buffer Lighting {
@@ -49,6 +49,7 @@ layout(location = 4) in vec3 v_normal;
 
 layout(location = 5) in vec4 v_now;
 layout(location = 6) in vec4 v_then;
+layout(location = 7) in vec2 v_uv2;
 
 layout(location = 0) out vec4 o_color;
 layout(location = 1) out vec4 o_motion;   // the opaque and blended passes' (render/vk_context.h SceneOutput); blue
@@ -105,6 +106,11 @@ vec3 armor_shine(ActorSurface surface, vec3 n, vec3 view, float sun, float gloss
     return shine;
 }
 
+vec3 material_tint(uint argb) {
+    if ((argb >> 24) == 0u) return vec3(1.0);
+    return vec3(float((argb >> 16) & 0xffu), float((argb >> 8) & 0xffu), float(argb & 0xffu)) / 255.0;
+}
+
 void main() {
     uint material = uint(pc.camera_pos.w);
     bool unlit = (material & 4096u) != 0u, fogged = (material & 8192u) == 0u;
@@ -136,12 +142,15 @@ void main() {
     gl_SampleMask[0] = kAlphaToCoverage ? alpha_coverage_samples(out_alpha, gl_FragCoord.xy) : -1;
     if (kAlphaToCoverage) out_alpha = 1.0;
 #endif
-    // The actor's SetTint colour (the effect's Tint parameter; none = white).
-    vec3 tint = (pc.tint >> 24) != 0u
-        ? vec3(float((pc.tint >> 16) & 0xffu), float((pc.tint >> 8) & 0xffu), float(pc.tint & 0xffu)) / 255.0
-        : vec3(1.0);
+    vec3 tint = material_tint(pc.tint);
     vec3 base;
-    if (second_slot != 0xffffu) {
+    if ((surface.slots.z & 128u) != 0u) {
+        base = tex.rgb * material_tint(surface.slots.w);
+        if (second_slot != 0xffffu) {
+            vec4 emblem = texture(textures[second_slot], v_uv2);
+            base = mix(base, emblem.rgb * tint, emblem.a);
+        }
+    } else if (second_slot != 0xffffu) {
         // SkinMeshLuclin (ps_1_1): lerp(t1.a, t1.rgb * Tint.rgb, t0.rgb), lit after.
         vec4 t1 = texture(textures[second_slot], v_uv);
         base = mix(tex.rgb, t1.rgb * tint, t1.a);

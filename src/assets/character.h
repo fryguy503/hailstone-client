@@ -229,6 +229,7 @@ struct SkinnedVertex {
     glm::vec2 uv{0.0f};
     std::array<std::uint16_t, 4> bones{};
     glm::vec4 weights{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec2 uv2{0.0f}; // EQG v3's second texture coordinates
 };
 
 // Geometry of a model in one appearance (armour textures, head and robe

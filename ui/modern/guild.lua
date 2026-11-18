@@ -13,8 +13,7 @@
 --   * Tribute: each member's guild tribute and trophy tribute state, donations and last donation (yellow states
 --     are the game's own colouring), the guild's favour, and the opt-out buttons for the selected member (the game
 --     enables them for yourself, or for others with the guild permission).
---   * Banner: the game's banner page. EQEmu sends no banner messages, so its kit list stays empty and the game
---     leaves its banner actions off; the page says so rather than inventing a banner.
+--   * Banner: the guild's active banner, catalog of kits, and appearance editor on servers that send banner data.
 -- Dump writes the roster to a file.
 local API = hs.UI
 local hud = dofile("lib/hud.lua")
@@ -181,19 +180,65 @@ local function tribute(s)
   }, btnH)
 end
 
+local BANNER_LAYERS = { "BannerBackgroundPreview", "BannerEmblemPreview" }
+
+local function bannerPreview(size)
+  local x, y = ui.GetCursorScreenPos()
+  local drawn = false
+  for _, id in ipairs(BANNER_LAYERS) do
+    local tex, u0, v0, u1, v1 = API.windows.ChildArt(WINDOW, id, "decal")
+    if type(tex) == "userdata" then
+      local r, g, b, a = API.windows.ChildColor(WINDOW, id, "decal")
+      ui.DrawImage(tex, x, y, x + size, y + size, u0, v0, u1, v1, r or 1, g or 1, b or 1, a or 1)
+      drawn = true
+    end
+  end
+  if drawn then ui.Dummy(size, size) end
+  return drawn
+end
+
 local function banner(s)
   local btnH = S.ButtonHeight(s)
   W.Field("Banner time left", W.Text(WINDOW, "TimeRemainingValueLabel"))
-  W.Check(WINDOW, "ShowAllPossibleBannersButton", "Show all possible banners")
+  if W.Shown(WINDOW, "SaveBannerSettings") then
+    if ui.BeginChild("##bannerAppearance", 0, -(btnH + 4 * s), false) then
+      bannerPreview(80 * s)
+      W.Field("Background pattern", W.Text(WINDOW, "BannerBackgroundPattern"))
+      W.ButtonRow(WINDOW, {
+        { "Layer1TexturePrev", "Previous" }, { "Layer1TextureNext", "Next" }, { "Layer1ColorBtn", "Choose color" },
+      }, btnH)
+      W.Field("Emblem pattern", W.Text(WINDOW, "BannerEmblemPattern"))
+      W.ButtonRow(WINDOW, {
+        { "Layer2TexturePrev", "Previous" }, { "Layer2TextureNext", "Next" }, { "Layer2ColorBtn", "Choose color" },
+      }, btnH)
+    end
+    ui.EndChild()
+    W.ButtonRow(WINDOW, {
+      { "SaveBannerSettings", "Save", { primary = true } }, { "CancelEditBanner", "Cancel" },
+    }, btnH)
+    return
+  end
+  W.Combo(WINDOW, "BannerFilter", { width = -210 * s })
+  if ui.IsItemHovered() then ui.SetTooltip("Filter banner kits by type") end
+  ui.SameLine()
+  W.Check(WINDOW, "ShowAllPossibleBannersButton", "Show all kits")
   ui.SameLine()
   W.Button(WINDOW, "RefreshBannerListButton", "Refresh", { tooltip = "Ask for the banner kit list again" })
   local total = API.windows.ListInfo(WINDOW, "BannerKitList") or 0
   local aw, ah = ui.GetContentRegionAvail()
+  local detail = W.Text(WINDOW, "BannerDescription")
+  local showPreview = API.windows.ChildShown(WINDOW, "BannerBackgroundPreview") == true
+  local detailH = (detail ~= "" or showPreview) and math.min(105 * s, math.max(30 * s, ah / 3)) or 0
+  local below = btnH + 16 * s + detailH
   if total == 0 then
-    S.Empty(aw, math.max(40 * s, ah - btnH - 16 * s), "No banner kits.",
-      "The server has sent no banner list (EQEmu has no guild banners).")
+    local noData = API.windows.ChildShown(WINDOW, "BannerData") == false
+    S.Empty(aw, math.max(30 * s, ah - below), noData and "No banner data from this server." or "No banner kits listed.")
   else
-    W.List(WINDOW, "BannerKitList", 0, -(btnH + 16 * s), { hide = { [1] = true }, columns = { [2] = { "Banner", 0 } } })
+    W.List(WINDOW, "BannerKitList", 0, -below, { hide = { [1] = true }, columns = { [2] = { "Banner", 0 } } })
+  end
+  if detailH > 0 then
+    if bannerPreview(detailH) and detail ~= "" then ui.SameLine() end
+    if detail ~= "" then W.Stml(WINDOW, "BannerDescription", 0, detailH - 4 * s) end
   end
   W.ButtonRow(WINDOW, {
     { "PlantBannerButton", "Plant Banner", { primary = true, tooltip = "Place the selected banner where you stand" } },

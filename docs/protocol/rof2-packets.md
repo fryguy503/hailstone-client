@@ -940,6 +940,33 @@ cstr name; u32 spawn id; u8 level; f32 melee radius (size − 0.7); u8 type (0 P
 
 u32 checksum (eq_crc32 of bytes [8, size−1)), u32 size−9, 2×u32; u8 gender, u32 race, u8 class, u8 level ×2; u32 5 + 5 binds {u32 zone, f32 x, y, z, heading}; u32 deity, u32 intoxication; u32 10 + 10×u32; u32 22 + 22×{5 u32} equipment; u32 9 + 9×{5 u32}; u32 9 + 9 tints; u32 9 + 9 tints; u8 hair colour, beard colour, u32, eye 1, eye 2, hair style, beard, face; 3×u32 drakkin; 5 B; f32 height, 3 f32, 2 u32; u32 points, mana, current HP; STR, STA, CHA, DEX, INT, AGI, WIS; 7 u32; counted arrays: AAs (12 B each), skills, innate skills, disciplines, timestamps, recast timers, timestamps 2, spell book, memorised gems, gem refresh; u8; counted buffs (80 B each: u8, f32 instrument mod, u32 caster, u8, u32 counters, u32 duration, u8 level, u32 spell, u8 effect type, u32 hits, u32, u32 counters, 44 B); coin ×4, cursor coin ×4, 3 u32, thirst, hunger, AA spent, u32 5 + assigned + 5 tab values (last = unspent), 2 B; counted bandoliers (cstr + 4×{cstr, u32 id, i32 icon}, kept as `PlayerProfile::bandoliers`); counted potion belt ({cstr, u32, i32}, `potion_belt`); 4 i32; 12 u32 (resists etc.); u32 20; 4 u32; endurance; 2 u32; u32 64 + `char[64]` name; u32 32 + `char[32]` last name; birthday, account start, last login, minutes played, entitled, expansions; counted languages (bytes); u16 zone, u16 instance, f32 y, x, z, heading; u8, pvp, u8, gm; u32 guild, u8 rank, u32, u8, u32; u64 exp; u8; bank coin ×4, shared platinum, … `character_id` after 663 unknown bytes; … AA exp; …; u8 show helm; u32 rest timer; counted 1024 B; 2 u32; u8. The decoder reads every array by its own count prefix, so it follows the server's sizes (20 bandoliers × 4 items is the one fixed count).
 
+### Guild banners
+
+These are zone-session application messages. REA on the RoF2 executable (`2a8702ad…`) identified the Guild
+window's kit request and readers at `0x684ad0`, `0x6836c0`, `0x685670` and `0x6830c0`. M5's zone dispatch
+shows that the corresponding receive selectors are the wire opcodes. M5's profile installation trace maps
+the guild and unique player IDs to the existing profile fields and the character expansion getter to the profile's
+expansion mask. The native actions use The Buried Sea bit `0x1000` and guild permission 1 Change, 2 Plant or 3 Remove.
+
+| Message | Direction | Wire | Payload |
+| --- | --- | --- | --- |
+| Open guild window | C→Z | `0x0276` | 8 B. Guild ID, character ID |
+| Request kits | C→Z | `0x0d92` | 141 B. Character ID, u8 owned-only, 32 u32 slots for unique possessed type-58 item IDs, u32 count, u32 category mask. All categories uses `0xffffffff`, otherwise one bit per category ID |
+| Kit list | Z→C | `0x0001` | 16 B header with count at +4 and the background and emblem counts at +8/+12. Up to 1023 rows of 137 B with kit ID, 128 B name, u8 availability and u32 description ID |
+| Request banner status | C→Z | `0x4924` | 80 B. Character ID, guild ID, 72 reserved bytes |
+| Banner status | Z→C | `0x56c9` | 188 B. Mode +4, active kit ID +12, description ID +16, signed ms remaining +20, name +24, planted kit ID +168, two u32 pattern IDs and two RGB values in four-byte slots starting +172. Kit ID `0xffffffff` means absent. Mode 1 retains the previous state. Mode 2 is a status response, while an event update also refreshes the kit list |
+| Modification token | Z→C | `0x1e50` | Item ID +8 and item name +16 (up to 63 characters). ID `0xffffffff` names the requirement when the item is unavailable |
+| Save design | C→Z | `0x4377` | 24 B. Character ID, background and emblem pattern IDs, two RGB fields each with one padding byte, server-supplied modification token ID |
+| Plant or reapply style | C→Z | `0x765b` | 87 B. Kit ID +0, native actor position Y/X/Z +68/+72/+76, u8 list-row flag +80, u8 reapply flag +81. Saving reapplies an active kit using a zero vector when the native floor-distance check passes |
+| Remove | C→Z | `0x9e18` | 12 B. `0xffffffff`, guild ID, reserved u32 |
+| Update planted actor | Z→C | `0x4683` | Spawn ID +8, two pattern indices +12/+16, two tints +20/+24, NUL-terminated spawn name +28 (at most 63 bytes). Applies to an existing NPC |
+
+The client zeroes reserved bytes in its requests. Kit and status replies apply to the requested guild window
+context. The receive headers' unused fields are left uninterpreted. `OP_NewZone` +912 is the zone's banner
+placement policy (0 disallows placement, 1 permits placement, 2 permits placement and portal travel). Interactive
+type-4 spawns carry the two pattern indices and two tints after the usual status tail (`0x591e90`). The cloth uses
+both native texture layers (`0x40af50`). Stock EQEmu sends none of the banner manager replies.
+
 ### Fellowships
 
 `net/fellowship_packets.*` handles the native fellowship messages independently of whether a server implements
