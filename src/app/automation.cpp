@@ -145,6 +145,15 @@ struct Automation::Impl {
     }
     void dev_window();
     void consent_window();
+    void refresh_consent() {
+        // Another Hailstone of a box set may answer the same question: its answer is taken from the file.
+        const auto now = std::chrono::steady_clock::now();
+        if (plugins->consent() && now - consent_checked > std::chrono::seconds(1)) {
+            consent_checked = now;
+            plugins->recheck_consent();
+        }
+        ui::lua::set_consent_guard(plugins->consent().has_value());
+    }
 };
 
 Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
@@ -313,16 +322,17 @@ void Automation::answer_plugin_consent(std::optional<bool> allow) {
     if (impl_->plugins) impl_->plugins->answer_consent(allow);
 }
 
+bool Automation::login_plugins_ready() {
+    Impl& m = *impl_;
+    m.sync_policy();
+    m.refresh_consent();
+    return !m.plugins->consent();
+}
+
 void Automation::frame() {
     Impl& m = *impl_;
     m.sync_policy();
-    ui::lua::set_consent_guard(m.plugins->consent().has_value()); // (the question's windows: lua_host.h)
-    // Another Hailstone of a box set may answer the same question: its answer is taken from the file.
-    const auto now = std::chrono::steady_clock::now();
-    if (m.plugins->consent() && now - m.consent_checked > std::chrono::seconds(1)) {
-        m.consent_checked = now;
-        m.plugins->recheck_consent();
-    }
+    m.refresh_consent();
     m.hooks.pulse();
     m.scripts->pulse();
 }

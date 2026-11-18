@@ -219,6 +219,18 @@ void ClientApp::note_entered_character(const std::string& name) {
         reload_saved_accounts();
 }
 
+bool ClientApp::try_enter_character(const std::string& name, bool return_home) {
+    if (!conn_ || !automation_) return false;
+    if (!enter_character(*conn_, *automation_, name, return_home)) {
+        if (automation_->plugin_consent())
+            char_view_.status = {"Answer the add-on permission question before entering the world.", false};
+        return false;
+    }
+    char_view_.status = {};
+    note_entered_character(name);
+    return true;
+}
+
 void ClientApp::login_action(ui::LoginAction action) {
     switch (action) {
     case ui::LoginAction::ResumeToken:
@@ -1124,18 +1136,20 @@ void ClientApp::update_connection() {
             screen_ = Screen::Characters;
         }
         if (!opts_.auto_character.empty() && opts_.account.empty() && !auto_enter_sent_) {
-            auto_enter_sent_ = true;
-            conn_->enter_world(opts_.auto_character);
+            auto_enter_sent_ = try_enter_character(opts_.auto_character);
         } else if (!box_character_.empty() && !auto_enter_sent_) {
             // A box login's character, when the account has it (else character select, as the player chooses).
-            auto_enter_sent_ = true;
-            std::string name = std::exchange(box_character_, {});
+            const std::string name = box_character_;
             bool here = false;
             for (const auto& c : conn_->characters()) here |= c.name == name;
             if (here) {
-                note_entered_character(name);
-                conn_->enter_world(name);
+                if (try_enter_character(name)) {
+                    auto_enter_sent_ = true;
+                    box_character_.clear();
+                }
             } else {
+                auto_enter_sent_ = true;
+                box_character_.clear();
                 char_view_.status = {name + " is not on this account: choose a character.", true};
             }
         }

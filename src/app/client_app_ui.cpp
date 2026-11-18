@@ -140,17 +140,13 @@ void ClientApp::draw_ui(float fps) {
         };
         switch (action) {
         case ui::CharacterSelectAction::EnterWorld:
-            char_view_.status = {};
-            note_entered_character(selected());
-            conn_->enter_world(selected());
+            try_enter_character(selected());
             break;
         case ui::CharacterSelectAction::ReturnHome:
             // only for a character the list lets go home: world drops the connection otherwise
             if (char_view_.selected >= 0 && char_view_.selected < static_cast<int>(char_view_.characters.size()) &&
                 char_view_.characters[static_cast<std::size_t>(char_view_.selected)].can_go_home) {
-                char_view_.status = {};
-                note_entered_character(selected());
-                conn_->enter_world(selected(), true);
+                try_enter_character(selected(), true);
             }
             break;
         case ui::CharacterSelectAction::Delete:

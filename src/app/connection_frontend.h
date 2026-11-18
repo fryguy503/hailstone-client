@@ -8,6 +8,13 @@
 
 namespace hailstone::app {
 
+class Automation;
+
+// Shared by manual and automatic character selection. No world entry is sent while a native LOGIN add-on awaits
+// consent. False leaves an automatic request available for retry; ordinary zone transfers do not use this path.
+bool enter_character(net::GameConnection& connection, Automation& automation, const std::string& name,
+                     bool return_home = false);
+
 // Processes front-end actions before a required-addon wait can stop the frame: a pending /loadskin, then /quit or
 // /exit, then a dropped connection. ClientApp::update_connection runs it after a new hailstone.cfg's assets are
 // applied (as /loadskin always was) and before its add-on gate. False means a quit or disconnected callback handled

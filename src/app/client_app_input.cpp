@@ -669,9 +669,7 @@ void ClientApp::screen_keys() {
             else if (a == A::EnterWorld && char_view_.selected >= 0 && char_view_.selected < n) {
                 // as the Enter World button: the character is the account's last played (the login's Characters list)
                 const std::string& name = char_view_.characters[static_cast<std::size_t>(char_view_.selected)].name;
-                char_view_.status = {};
-                note_entered_character(name);
-                conn_->enter_world(name);
+                try_enter_character(name);
             }
         } else if (screen_ == Screen::Create && a == A::CreationEscape) {
             screen_ = Screen::Characters; // CCharacterCreation_Escape

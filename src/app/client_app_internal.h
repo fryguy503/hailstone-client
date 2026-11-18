@@ -626,6 +626,7 @@ private:
     // Records the character entered in the account's SavedAccount::character and world, for the next box login and
     // the Characters list.
     void note_entered_character(const std::string& name);
+    bool try_enter_character(const std::string& name, bool return_home = false);
     // Records the characters this account's character select lists on this world (the Characters list), when they
     // changed since the last frame's.
     void note_listed_characters();

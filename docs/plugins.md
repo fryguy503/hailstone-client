@@ -84,8 +84,13 @@ per-server, per-hash approval.
 - **The question.** When such a plugin would load (the zone-in, the world login for a `login` one, `/plugin <name>
   load`) and the player has not answered for its SHA-256 on this server, it stays unloaded and a window asks: which
   server, each plugin's name, file, size and the start of its SHA-256, and that a compiled plugin runs with full
-  access to the computer. Plugins found together are asked about together. The game goes on meanwhile: nothing waits
-  for the answer, and the network keeps running.
+  access to the computer. Plugins found together are asked about together. In-world play and networking continue
+  while the question waits.
+- **Before entering the world.** A pending question for a native `login` plugin holds Enter World and Return Home
+  at character select. Manual entry (the buttons, keyboard and gamepad) and automatic character entry use the same
+  check; automatic entry waits without losing the chosen character. Allowing, refusing or putting away the question
+  lets entry proceed; refusing or putting away an optional plugin's question leaves it unloaded. No unapproved
+  library executes. Zone transfers continue without this character-select wait.
 - **Allow** loads them at once (from a copy of the bytes that were hashed, as every plugin loads) and keeps the yes.
   A plugin allowed in the middle of a zone missed what came before it loaded (the zone-in's packets), so a server
   extension may need the next zone-in to start working.

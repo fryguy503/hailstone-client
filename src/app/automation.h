@@ -114,6 +114,9 @@ public:
     // compiled plugins ask first"), with the server's name; nullopt none. The UI packs show it (hs.PluginConsent),
     // else imgui() does.
     std::optional<plugin::ConsentPrompt> plugin_consent() const;
+    // Refresh the world's provisional rules before character entry, without pulsing add-ons. A pending native
+    // LOGIN consent question must be answered before the login's world connection is left behind.
+    bool login_plugins_ready();
     // true: allowed (they load now), false: refused, both remembered for these bytes; nullopt: put away for now.
     void answer_plugin_consent(std::optional<bool> allow);
     // A running script holds the Ability Book's autoskill off (hailstone.hold_autoskill); a stopped one's hold goes.
