@@ -56,9 +56,13 @@ local function picker(screen, title, accept, close)
       local tabWidth = (width - T.px(20)) / #DETAIL_TABS
       for i, label in ipairs(DETAIL_TABS) do
         if i > 1 then ui.SameLine(0, T.px(10)) end
-        if T.button("##shroudTab" .. i, label, tabWidth, T.px(47), { primary = i == tab }, pad) and i ~= tab then
-          tab, detail = i, {}
+        local active, height = i == tab, T.px(47)
+        local hit, _, bx, by = T.button("##shroudTab" .. i, active and "" or label, tabWidth, height, { primary = active }, pad)
+        if active then
+          local tw, th = ui.CalcTextSize(label)
+          ui.DrawText(bx + (tabWidth - tw) / 2, by + (height - th) / 2, C.onAccent[1], C.onAccent[2], C.onAccent[3], 1, label)
         end
+        if hit and not active then tab, detail = i, {} end
       end
 
       ui.SetCursorPos(detailsX - wx, y0 + T.px(56) - wy)
@@ -82,6 +86,7 @@ local function picker(screen, title, accept, close)
         detailTop = detailTop + T.px(100)
         ui.SetCursorPos(detailsX - wx, detailTop - wy)
       end
+      ui.BeginGroup()
       W.list("shroud" .. id, detail, count or 0, fits(footer - detailTop, 44), 44, width,
         function(i, rx0, ry0, rx1, ry1)
           local v = API.windows.ListRow(screen, id, i - 1)
@@ -94,6 +99,7 @@ local function picker(screen, title, accept, close)
           API.windows.ListClick(screen, id, i - 1, "left")
           abilityDescription = {}
         end or nil)
+      ui.EndGroup()
 
       ui.SetCursorPos(detailsX - wx, footer - wy)
       local enabled = API.windows.ChildState(screen, "Accept") == true
