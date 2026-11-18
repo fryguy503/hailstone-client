@@ -130,7 +130,7 @@ local function body(x, y, w, h, s)
   combatState(cx, cy, r, s)
 
   local bx0, bx1 = cx + r + 10 * s, x + w - pad
-  local hpFrac, hpLabel = API.character.Gauge(1)
+  local hpFrac, hpLabel = API.character.Gauge(1, true)
   local name = (hpLabel or API.character.Name() or ""):match("^[^\n]*")
   local nameColor = C.text
   do

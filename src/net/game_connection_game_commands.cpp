@@ -277,7 +277,7 @@ void GameConnection::hide_looted_corpse() {
     if (!loot_->items.empty()) send_zone(encode_hide_corpse(kHideCorpseThis, corpse));
     auto it = world_.spawns.find(corpse);
     if (it == world_.spawns.end() || it->second.name.find(character_) != std::string::npos) return;
-    if (world_.target_id == corpse) world_.target_id = 0;
+    if (world_.target_id == corpse) assign_target(0);
     spawn_leaving(corpse);
     world_.spawns.erase(corpse);
     ++world_.spawn_set_serial;

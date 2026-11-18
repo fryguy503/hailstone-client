@@ -16,7 +16,7 @@ struct LabelValue {
     std::string text;
     std::optional<std::uint32_t> argb; // the colour the label is drawn in when the function sets one
 };
-LabelValue ui_label(const UiHost& host, int type);
+LabelValue ui_label(const UiHost& host, int type, bool mark_invisibility = false);
 
 // Gauge values as CGaugeWnd::Draw reads them: 0..1000; -1 draws nothing; -2 full in dark red; -3 (a corpse)
 // empty; -2000..-1001 drawn pink, -110..-10 purple.
@@ -24,7 +24,7 @@ struct GaugeValue {
     int value = -2;
     std::string text;
 };
-GaugeValue ui_gauge(const UiHost& host, int type);
+GaugeValue ui_gauge(const UiHost& host, int type, bool mark_invisibility = false);
 
 // Gauge 26 at a supplied frame time: the active discipline's remaining duration, with seconds in its text.
 GaugeValue ui_discipline_gauge(const UiHost& host, std::int64_t now_ms);

@@ -6,6 +6,7 @@
 #include "ui/lua/lua_host.h"
 #include "ui/texture_ids.h"
 
+#include "game/appearance.h"
 #include "game/item_preview.h"
 
 #include <algorithm>
@@ -170,6 +171,7 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         if (!s.title.empty() && (!player || level > 3) && !market.replaces_title) label = s.title + " " + label;
         if (!s.suffix.empty() && (!player || level > 3)) label += " " + s.suffix;
         if (!market.prefix.empty()) label.insert(0, market.prefix);
+        game::apply_name_invisibility(label, conn_->name_invisibility(s, show_invis_undead_));
         if (!player) label = game::name_sprite_with_marks(s, label, marks);
         conn_->server_ext().nameplate_text(*conn_, s, label);
         plate.pos = glm::vec2(px, py);

@@ -287,6 +287,7 @@ local PAGES = {
     local rows = {}
     local list = table.pack(
       optionRow("Display mode", "window_mode", { "Windowed", "Borderless", "Fullscreen" }),
+      optionRow("Bracket Invis vs. Undead", "show_invis_undead", "bool"),
       optionRow("Vertical sync", "vsync", { "Off", "On", "Adaptive" }),
       detectGraphicsRow(),
       optionRow("Shadows", "shadows", { "Off", "Low", "Medium", "High" }),

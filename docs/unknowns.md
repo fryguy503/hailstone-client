@@ -45,6 +45,9 @@ What the client does not implement yet, or implements with an approximation it c
 - The generic world-nameplate canvas has synthetic parser, painter, ownership and input coverage. Actual GPU depth,
   dense scenes, sustained zoning and physical mouse/controller acceptance remain unverified; addons own visual
   recipes and must validate them against a live session.
+- Invisibility versus undead on a remote spawn is marked only while it is the current target and its buff data
+  contains the effect. EQEmu's RoF2 spawn and appearance messages do not transmit that effect, and the server
+  controls which targets and buff slots it sends. A server would need to provide more state to mark other spawns.
 
 - The shared `hs.UI` contract and migrated Modern/Gamepad presentations require live acceptance of normal mouse,
   keyboard and controller workflows, zoning and interface changes. Declared base packs inherit presentations;

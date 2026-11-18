@@ -33,6 +33,7 @@
 #include "core/server_profile.h"
 #include "game/alt_adv.h"
 #include "game/animation_types.h"
+#include "game/appearance.h"
 #include "game/augments.h"
 #include "game/bank.h"
 #include "game/placement.h"
@@ -1646,6 +1647,8 @@ public:
     // cycling. Compute the effect rank once for a batch of spawns.
     std::int32_t see_invisible_rank() const;
     bool spawn_invisible(const game::Spawn& spawn, std::int32_t see_invisible_rank) const;
+    // Marks for an already visible spawn. Remote invisibility versus undead requires current target buffs.
+    game::NameInvisibility name_invisibility(const game::Spawn& spawn, bool include_undead = false) const;
     // /stopcast: asks the server to interrupt (empty OP_ManaChange).
     void stop_cast();
     // CSpellBookWnd::StartSpellMemorization: memorize the book slot's spell into a gem.
@@ -2827,6 +2830,7 @@ private:
     void finish_zone_in();
     void send_position(bool force);
     void apply_spawn(const Spawn& s);
+    void assign_target(std::uint32_t spawn_id);
     void set_spawn_motion(game::Spawn& s, const Motion& m);
     void connect_world(bool zoning);
     void chat(ChatEvent::Kind kind, std::string text, std::uint32_t rgb = 0, std::uint32_t color = 0,

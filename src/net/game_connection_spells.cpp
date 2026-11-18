@@ -19,6 +19,7 @@
 #include "game/mechanics/character.h"
 #include "game/mechanics/sheet_builder.h"
 #include "game/mechanics/spell_gems.h"
+#include "game/spa_ids.h"
 
 #include "game/distance.h"
 #include "net/packet_io.h"
@@ -664,6 +665,27 @@ bool GameConnection::spawn_invisible(const game::Spawn& s, std::int32_t rank) co
     if (market_hidden(s)) return true;
     const auto* player = world_.player();
     return player && game::spawn_invisible(*player, s, rank, group_.has_member(s.name));
+}
+
+game::NameInvisibility GameConnection::name_invisibility(const game::Spawn& s, bool include_undead) const {
+    if (s.id == 0 || s.is_corpse || s.hp_percent == 0) return {};
+
+    game::NameInvisibility marks;
+    marks.normal = s.invis_rank > 0;
+    if (s.id == world_.player_id) {
+        marks.normal = marks.normal || hidden_ || own_effect_with(game::SPA_INVISIBILITY) >= 0 ||
+                       own_effect_with(game::SPA_IMPROVED_INVIS) >= 0;
+        marks.undead = include_undead && (own_effect_with(game::SPA_INVIS_VS_UNDEAD) >= 0 ||
+                                          own_effect_with(game::SPA_IMPROVED_INVIS_UNDEAD) >= 0);
+    } else if (include_undead && s.id == world_.target_id && s.id == spells_.target_buffs_entity) {
+        // EQEmu's spawn invisibility rank does not include invisibility versus undead.
+        marks.undead = std::any_of(spells_.target_buffs.begin(), spells_.target_buffs.end(), [&](const auto& record) {
+            const auto* spell = spell_table_->get(record.second.spell);
+            return spell && (spell->has_effect(game::SPA_INVIS_VS_UNDEAD) ||
+                             spell->has_effect(game::SPA_IMPROVED_INVIS_UNDEAD));
+        });
+    }
+    return marks;
 }
 
 void GameConnection::make_me_visible(bool appearance) {

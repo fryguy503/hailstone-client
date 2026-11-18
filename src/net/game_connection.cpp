@@ -1493,7 +1493,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
             if (world_.target_id == *id) {
                 if (attack_until_xtarget_clear_ && auto_attack_ && xtarget_holds_spawn(*id)) attack_held_for_xtarget_ = true;
                 else set_auto_attack(false);
-                world_.target_id = 0;
+                assign_target(0);
                 auto_target_due_ = true;
             }
             std::erase(xtarget_attackers_, *id);
@@ -2469,9 +2469,17 @@ void GameConnection::disconnect() {
 
 // ---------------------------------------------------------------- combat
 
-void GameConnection::set_target(std::uint32_t spawn_id) {
+void GameConnection::assign_target(std::uint32_t spawn_id) {
     if (spawn_id == world_.target_id) return;
     world_.target_id = spawn_id;
+    // The server stops sending updates for the old target when the selection changes.
+    spells_.target_buffs_entity = 0;
+    spells_.target_buffs.clear();
+}
+
+void GameConnection::set_target(std::uint32_t spawn_id) {
+    if (spawn_id == world_.target_id) return;
+    assign_target(spawn_id);
     // CTargetWnd::OnProcessFrame on a new target: the selected group member is its slot (-1 when it is no member
     // or there is no group).
     if (spawn_id) {
@@ -2965,7 +2973,7 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
         break;
     case Op::TargetCommand:
         // The server accepted a target (or targets our pet for us).
-        if (auto t = decode_target(p)) world_.target_id = *t;
+        if (auto t = decode_target(p)) assign_target(*t);
         break;
     case Op::ZonePlayerToBind:
         handle_zone_to_bind(p); // net/game_connection_death.cpp

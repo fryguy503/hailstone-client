@@ -1444,6 +1444,7 @@ private:
     bool own_name_ = true; // Hailstone's switch for the player's own name sprite (display.own_name; game::NameSpriteSwitches)
     bool player_menu_ = true; // Hailstone's right-click menu on players (mouse.player_menu; game::opens_player_menu)
     bool con_name_colour_ = true;     // Hailstone: NPC names in their consider colour (display.con_name_colour)
+    bool show_invis_undead_ = false;
     bool plate_overlap_fade_ = true; // Hailstone: a covered name fades (display.plate_overlap_fade)
     bool target_plate_through_walls_ = false; // Hailstone: the target's name shown behind walls (display.target_plate_through_walls)
     bool target_plate_highlight_ = true; // Hailstone: the target's name on a dark plate with a marker (display.target_plate_highlight)

@@ -59,7 +59,7 @@ local function read()
   frame = f
   name = API.character.Label(28) or ""
   if name ~= "" then targetBuffs() else nBuffs = 0 end
-  tot, totText, totRaw = API.character.Gauge(27)
+  tot, totText, totRaw = API.character.Gauge(27, true)
   hasTot = totRaw ~= nil and totRaw ~= -1 and totText and totText ~= ""
   rows = math.ceil(nBuffs / PER_ROW)
   -- the aggro meter, while it is on this target (the server sends it for the player's target or the locked one)
@@ -96,6 +96,7 @@ local function body(x, y, w, h, s)
   T.Panel(x, y, x + w, y + frameH, s, PANEL_OPTS)
   local pad = 10 * s
   local frac, _, raw = API.character.Gauge(6)
+  local caption = API.character.Label(28, true) or name
   local pct = API.character.Label(29) or ""
   -- name and the con dot
   local nx = x + pad
@@ -104,7 +105,7 @@ local function body(x, y, w, h, s)
     nx = nx + 15 * s
   end
   local _, nh = T.TextSize("Ag", T.font.normal)
-  T.Text(nx, y + pad - 2 * s, T.Fit(name, x + w - pad - 52 * s - nx, T.font.normal), con or C.text, T.font.normal)
+  T.Text(nx, y + pad - 2 * s, T.Fit(caption, x + w - pad - 52 * s - nx, T.font.normal), con or C.text, T.font.normal)
   if pct ~= "" then T.Text(x + w - pad, y + pad - 3 * s, pct .. "%", C.text, T.font.large, "right") end
   local by = y + pad + nh + 4 * s
   local dead = raw == -3

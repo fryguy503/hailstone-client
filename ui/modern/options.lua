@@ -485,6 +485,8 @@ local function displayTab()
   -- Hailstone's name plate text (game/nameplate_style.h; docs/graphics.md "Name plates"): the names over heads in
   -- their own face and size. Changes show at once.
   section("Name Plates", function()
+    check("show_invis_undead", "Bracket Invis vs. Undead",
+      "Show square brackets around names when Invisibility versus Undead is active and the client knows about it.")
     local faces = API.settings.OptionChoices("plate_font_face")
     if faces and #faces > 0 then
       combo("plate_font_face", "Font", faces,

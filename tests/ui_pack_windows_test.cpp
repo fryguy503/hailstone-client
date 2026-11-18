@@ -5106,10 +5106,10 @@ TEST_CASE("UI packs (modern): the Options window's Textures section picks the te
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
+TEST_CASE("UI packs: Options changes the Find trail style and invisibility brackets") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
-        test::ScratchDir scratch("ui_pack_find_trail_options");
+        test::ScratchDir scratch("ui_pack_display_options");
         const fs::path dir = scratch.path();
         fs::create_directories(dir / "game");
         fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
@@ -5122,45 +5122,56 @@ TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
         {
             Session s(dir, pack);
             int selected = 0;
+            int brackets = 0;
             std::vector<int> changes;
+            std::vector<int> bracket_changes;
             s.host.find_option = [&](std::string_view name) -> std::optional<int> {
-                return name == "find_trail_style" ? std::optional(selected) : std::nullopt;
+                if (name == "find_trail_style") return selected;
+                if (name == "show_invis_undead") return brackets;
+                return std::nullopt;
             };
             s.host.set_option = [&](std::string_view name, int value) {
                 if (name == "find_trail_style") {
                     changes.push_back(value);
                     selected = value;
+                } else if (name == "show_invis_undead") {
+                    bracket_changes.push_back(value);
+                    brackets = value;
                 }
             };
             lua_State* L = s.lua.state();
             // Record real control coordinates without changing their activation or rendering.
             REQUIRE(luaL_dostring(L, R"lua(
-                findTrailWidgets = {}
-                local combo, selectable, text = ui.BeginCombo, ui.Selectable, ui.DrawText
+                widgets = {}
+                local combo, selectable, checkbox, text = ui.BeginCombo, ui.Selectable, ui.Checkbox, ui.DrawText
+                local function record(name)
+                    local x0, y0, x1, y1 = ui.GetItemRect()
+                    widgets[name] = { (x0 + x1) / 2, (y0 + y1) / 2 }
+                end
                 ui.BeginCombo = function(label, ...)
                     local open = combo(label, ...)
-                    if label == "##find_trail_style" then
-                        local x0, y0, x1, y1 = ui.GetItemRect()
-                        findTrailWidgets.combo = { (x0 + x1) / 2, (y0 + y1) / 2 }
-                    end
+                    if label == "##find_trail_style" then record("combo") end
                     return open
                 end
                 ui.Selectable = function(label, ...)
                     local clicked = selectable(label, ...)
                     local name = label:match("^Rainbow trail##") and "rainbow"
                         or label:match("^Gold line %(default%)##") and "navigation"
-                    if name then
-                        local x0, y0, x1, y1 = ui.GetItemRect()
-                        findTrailWidgets[name] = { (x0 + x1) / 2, (y0 + y1) / 2 }
-                    end
+                    if name then record(name) end
                     return clicked
+                end
+                ui.Checkbox = function(label, ...)
+                    local value, changed = checkbox(label, ...)
+                    if label == "##show_invis_undead" then record("Bracket Invis vs. Undead") end
+                    return value, changed
                 end
                 ui.DrawText = function(...)
                     local label = select(7, ...)
-                    if label == "Interface" or label == "Find trail" then
+                    if label == "Interface" or label == "Find trail" or label == "Display"
+                        or label == "Bracket Invis vs. Undead" then
                         local x, y = ...
                         local w, h = ui.CalcTextSize(label)
-                        findTrailWidgets[label] = { x + w / 2, y + h / 2 }
+                        widgets[label] = { x + w / 2, y + h / 2 }
                     end
                     return text(...)
                 end
@@ -5168,7 +5179,7 @@ TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
             )lua") == LUA_OK);
             s.frames(3);
             auto point = [&](const char* name) {
-                lua_getglobal(L, "findTrailWidgets");
+                lua_getglobal(L, "widgets");
                 lua_getfield(L, -1, name);
                 REQUIRE_MESSAGE(lua_istable(L, -1), name);
                 lua_rawgeti(L, -1, 1);
@@ -5211,11 +5222,18 @@ TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
                 click(point("Find trail"));
                 REQUIRE(selected == 1);
                 click(point("Find trail"));
+                click(point("Display"));
             }
             CHECK(selected == 0);
             REQUIRE(changes.size() == 2);
             CHECK(changes[0] == 1);
             CHECK(changes[1] == 0);
+            CHECK(bracket_changes.empty());
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(brackets == 1);
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(brackets == 0);
+            CHECK(bracket_changes == std::vector<int>{1, 0});
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
         ImGui::DestroyContext(ctx);

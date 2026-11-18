@@ -970,7 +970,7 @@ void GameConnection::reset_loot_session() {
     if (quantity_ && quantity_->op == QuantityOp::ExtensionLoot) quantity_.reset();
     // unk_CLootWnd_ResetLootSession @0x6bd0b0 (OP_LootComplete): no target, no corpse, a looting player stands
     // (100), the window hides. The target is cleared without telling the server (pinstTarget = 0).
-    if (loot_) world_.target_id = 0;
+    if (loot_) assign_target(0);
     loot_.reset();
     loot_all_queue_.clear();
     loot_all_active_ = false;

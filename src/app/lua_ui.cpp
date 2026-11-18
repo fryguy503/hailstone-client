@@ -601,9 +601,11 @@ int Money(lua_State* L) {
     return 4;
 }
 
-// text [, r, g, b] = hs.Label(eqType)   -- the text a game label with this EQType shows
+// text [, r, g, b] = hs.Label(eqType [, markInvisibility])
+// The text a game label with this EQType shows. markInvisibility applies to player (1) and target (28) names.
 int Label(lua_State* L) {
-    LabelValue v = ui_label(Impl::of(L).host, held_int(luaL_checkinteger(L, 1)));
+    const bool mark_invisibility = lua_isboolean(L, 2) && lua_toboolean(L, 2);
+    LabelValue v = ui_label(Impl::of(L).host, held_int(luaL_checkinteger(L, 1)), mark_invisibility);
     lua_pushstring(L, v.text.c_str());
     if (!v.argb) return 1;
     Rgb c = argb_to_rgb(*v.argb);
@@ -611,12 +613,14 @@ int Label(lua_State* L) {
     return 4;
 }
 
-// fraction, text, value [, r, g, b] = hs.Gauge(eqType)   -- fraction 0..1, nil when the gauge is empty/unavailable;
+// fraction, text, value [, r, g, b] = hs.Gauge(eqType [, markInvisibility])
+// fraction 0..1, nil when the gauge is empty/unavailable; markInvisibility is for name captions (1, 6 and 27).
 // value is __GetGaugeValueFromEQ's own (0..1000, -1 nothing drawn at all, -2 full in dark red, -3 empty: a corpse,
 // -110..-10 and -2000..-1000 the special bands); r, g, b the fill tint CGaugeWnd::Draw gives a special value
 // (gauge_fill), nil for a normal one.
 int Gauge(lua_State* L) {
-    GaugeValue g = ui_gauge(Impl::of(L).host, held_int(luaL_checkinteger(L, 1)));
+    const bool mark_invisibility = lua_isboolean(L, 2) && lua_toboolean(L, 2);
+    GaugeValue g = ui_gauge(Impl::of(L).host, held_int(luaL_checkinteger(L, 1)), mark_invisibility);
     GaugeFill f = gauge_fill(g.value);
     if (f.fill < 0) lua_pushnil(L);
     else lua_pushnumber(L, std::min(f.fill, 1000) / 1000.0);

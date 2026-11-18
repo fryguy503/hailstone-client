@@ -6,6 +6,7 @@
 #include <cctype>
 #include <format>
 
+#include "game/appearance.h"
 #include "game/eq_names.h"
 #include "game/item_moves.h"
 #include "game/mechanics/character.h"
@@ -560,18 +561,37 @@ LabelValue stock_label(const UiHost& host, int type) {
     }
 }
 
-LabelValue ui_label(const UiHost& host, int type) {
+namespace {
+
+void mark_visible_name(const UiHost& host, const net::GameConnection& conn,
+                       const game::Spawn& spawn, std::string& name) {
+    const bool show_undead = host.get_option && host.get_option("show_invis_undead") != 0;
+    const auto marker = conn.name_invisibility(spawn, show_undead);
+    if (!marker.normal && !marker.undead) return;
+    const auto rank = spawn.id != conn.world().player_id && spawn.invis_rank > 0
+        ? conn.see_invisible_rank() : 0;
+    if (!conn.spawn_invisible(spawn, rank)) game::apply_name_invisibility(name, marker);
+}
+
+} // namespace
+
+LabelValue ui_label(const UiHost& host, int type, bool mark_invisibility) {
     LabelValue v = stock_label(host, type);
     const net::GameConnection* c = host.conn;
     if (!c || !host.in_game) return v;
     // A server's client may replace the text (the NMS patch's __GetLabelFromEQ hook: the NMS plugin's labels).
     c->server_ext().label_text(*c, type, v.text);
+    if (mark_invisibility && (type == 1 || type == 28)) {
+        const auto& world = c->world();
+        const auto* named = type == 1 ? world.player() : spawn(world, world.target_id);
+        if (named) mark_visible_name(host, *c, *named, v.text);
+    }
     return v;
 }
 
 namespace {
 
-GaugeValue stock_gauge(const UiHost& host, int type) {
+GaugeValue stock_gauge(const UiHost& host, int type, bool mark_invisibility) {
     const net::GameConnection* cp = host.conn;
     if (!cp || !host.in_game) return {-1, {}};
     const auto& c = *cp;
@@ -583,6 +603,7 @@ GaugeValue stock_gauge(const UiHost& host, int type) {
         GaugeValue g{ui_percent(hp.cur, hp.max) * 10, {}};
         const auto* me = world.player();
         std::string name = me ? me->name : my_name(c);
+        if (mark_invisibility && me) mark_visible_name(host, c, *me, name);
         std::string last = me ? me->last_name : std::string();
         g.text = last.empty() ? name : name + "\n" + last;
         return g;
@@ -649,6 +670,7 @@ GaugeValue stock_gauge(const UiHost& host, int type) {
         const auto* t = spawn(world, world.target_id);
         if (!t) return {-1, {}};
         GaugeValue g{t->is_corpse ? -3 : spawn_hp_percent(host, c, *t) * 10, trim_name(t->name)};
+        if (mark_invisibility) mark_visible_name(host, c, *t, g.text);
         return g;
     }
     case 7: { // GetCastingGaugeValue @0x761fb0: (ETA - now) * 1000 / the spell's cast time
@@ -742,7 +764,9 @@ GaugeValue stock_gauge(const UiHost& host, int type) {
     case 27: { // the target of target's HP (OP_TargetHoTT); its name
         const auto* t = spawn(world, c.target_of_target());
         if (!t) return {-1, {}};
-        return {t->is_corpse ? -3 : spawn_hp_percent(host, c, *t) * 10, trim_name(t->name)};
+        GaugeValue g{t->is_corpse ? -3 : spawn_hp_percent(host, c, *t) * 10, trim_name(t->name)};
+        if (mark_invisibility) mark_visible_name(host, c, *t, g.text);
+        return g;
     }
     case 28: { // the respawn timer (case 0x1c): with the respawn window up and the corpse's time set,
         // trunc((1 - min(now - corpse time + 500, total) / total) * 1000), total = CRespawnWnd +0x230 (the packet's
@@ -797,8 +821,8 @@ GaugeFill gauge_fill(int value) {
     return {std::min(value, 1000), std::nullopt};
 }
 
-GaugeValue ui_gauge(const UiHost& host, int type) {
-    GaugeValue g = stock_gauge(host, type);
+GaugeValue ui_gauge(const UiHost& host, int type, bool mark_invisibility) {
+    GaugeValue g = stock_gauge(host, type, mark_invisibility);
     // The switch's common tail: above 1000 is 1000, below -2000 is -2000, and -999..-111 is -110 (the purple band's
     // empty end). The early returns (-1, -2, -3, -9) skip it in the original and are unchanged by it.
     if (g.value > 1000) g.value = 1000;

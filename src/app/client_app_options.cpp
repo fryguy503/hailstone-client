@@ -413,6 +413,7 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     if (o == "npc_names") return npc_names_ ? 1 : 0;
     // Hailstone: NPC names in their consider colour, on by default (draw_nameplates).
     if (o == "con_name_colour") return con_name_colour_ ? 1 : 0;
+    if (o == "show_invis_undead") return show_invis_undead_ ? 1 : 0;
     // Hailstone: the item comparison in the item tooltips and displays (docs/item-compare.md), and its verdict; on by
     // default. Read by the UI packs only.
     if (o == "item_compare") return config_.get_bool("items.compare", true) ? 1 : 0;
@@ -572,6 +573,12 @@ void ClientApp::set_option_value(std::string_view o, int v) {
     if (o == "con_name_colour") {
         con_name_colour_ = v != 0;
         config_.set_bool("display.con_name_colour", v != 0);
+        config_.save(config_path_);
+        return;
+    }
+    if (o == "show_invis_undead") {
+        show_invis_undead_ = v != 0;
+        config_.set_bool("display.show_invis_undead", show_invis_undead_);
         config_.save(config_path_);
         return;
     }
@@ -739,6 +746,7 @@ void ClientApp::apply_settings() {
     pc_names_ = config_.get_bool("display.pc_names", true);
     npc_names_ = config_.get_bool("display.npc_names", true);
     con_name_colour_ = config_.get_bool("display.con_name_colour", true);
+    show_invis_undead_ = config_.get_bool("display.show_invis_undead", false);
     // display.extra_shields (Hailstone, a deliberate difference): later shields on the shield point, not in the hand.
     // Read at start only: dressed models are cached.
     if (!settings_applied_) game::set_extra_shields(config_.get_bool("display.extra_shields", true));

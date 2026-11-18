@@ -1336,6 +1336,11 @@ and `npc_owner_line`
   takes the title's place (`game::name_sprite_market_words`). An offline trader reads "Offline Trader Name". Only a
   player's (spawn type 0): an NPC the server marks as a trader keeps its plain name, as in the original. Stock EQEmu
   sets neither offline flag, so its traders and buyers show only "Trader " / "Buyer ".
+- A living spawn under regular invisibility is shown as `(Name)` when the viewer can see it. The nameplate and
+  player, target and target-of-target HUD captions use the same visibility rules as the actors. Options > Display
+  **Bracket Invis vs. Undead** (`display.show_invis_undead`, off by default) adds `[Name]` for a confirmed invisibility
+  versus undead buff and shows `([Name])` when both apply. The client checks its own buffs and the current target's
+  buff list when the server supplies one. The RoF2 spawn invisibility rank only carries regular invisibility.
 - A GM's name is green (`#1da64b`) as in the original (PlayerClient::SetNameSpriteTint @0x58bf00,
   `game::gm_name_colour`): the gm flag, not a live NPC (type 1), and Anon 0, so an anonymous or roleplaying GM shows
   the ordinary colour. A deliberate difference: the original keeps the green on a corpse that carries the gm flag,
