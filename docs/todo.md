@@ -38,6 +38,7 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 
 - [x] Generic owner-scoped world nameplate canvas, bounded drawing and measurements, whole-caption claims, guarded physical clicks, automatic Lua addon activation and color widgets.
 - [ ] Live acceptance of custom nameplate callbacks, scene depth, dense layouts, click/drag/focus handling, reloads and zoning.
+- [x] Nameplate canvas exposes observed concealment for already visible actors and identifies regular or undead invisibility when spell data supports it.
 
 - [x] Shared versioned UI data/action API, module discovery, preserved guarded closures and a central method/capability catalog; Modern and Gamepad call the same contract.
 - [x] Declared UI base chains, window/helper overrides, per-interface settings, sandboxed inherited resources and a starter interface.

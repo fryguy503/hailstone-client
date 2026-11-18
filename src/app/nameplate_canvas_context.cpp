@@ -1,10 +1,32 @@
 #include "app/nameplate_canvas_context.h"
 
 #include <cmath>
+#include "game/spa_ids.h"
 #include "game/world_state.h"
 #include "net/game_connection.h"
 
 namespace hailstone::app {
+namespace {
+void observe_concealment(game::CanvasContext& context, const game::SpellData& spell) {
+    for (const auto effect : spell.effect) {
+        switch (effect) {
+        case game::SPA_INVISIBILITY:
+        case game::SPA_IMPROVED_INVIS:
+            context.invisible = true;
+            break;
+        case game::SPA_INVIS_VS_UNDEAD:
+        case game::SPA_IMPROVED_INVIS_UNDEAD:
+            context.invisible_undead = true;
+            break;
+        case game::SPA_INVIS_VS_ANIMALS:
+        case game::SPA_IMPROVED_INVIS_ANIMALS:
+            context.concealed = true;
+            break;
+        }
+    }
+}
+} // namespace
+
 void fill_nameplate_canvas_candidate(game::NameplateCanvasCandidate& candidate,
                                     const net::GameConnection& connection, const game::Spawn& spawn,
                                     std::string_view caption, double distance) {
@@ -49,6 +71,30 @@ void fill_nameplate_canvas_candidate(game::NameplateCanvasCandidate& candidate,
     if (connection.aggro().target_id == spawn.id && connection.aggro().received[net::kAggroPlayer])
         context.aggro_percent = percent(connection.aggro().pct[net::kAggroPlayer]);
     const auto& spells = connection.spell_state();
+    const auto now = net::GameConnection::now_ms();
+    if (!spawn.is_corpse) {
+        // The received HideMode may reflect Hide as well as ordinary invisibility. Only a known
+        // spell effect can identify the type from the stock protocol.
+        context.concealed = spawn.invis_rank > 0;
+        const auto& table = connection.spell_table();
+        if (context.self) {
+            for (const auto& buff : spells.buffs) {
+                if (buff.empty()) continue;
+                if (const auto* spell = table.get(buff.spell)) observe_concealment(context, *spell);
+            }
+            if (!context.concealed && !context.invisible && !context.invisible_undead)
+                context.concealed = connection.invisible();
+        } else if (context.target && spells.target_buffs_entity == spawn.id) {
+            for (const auto& [slot, buff] : spells.target_buffs) {
+                if (buff.empty()) continue;
+                const auto* spell = table.get(buff.spell);
+                if (spell && (game::buff_is_permanent(buff.tics, spell) ||
+                              game::buff_ms_left(buff, spell, false, spells.zone_suspends_buffs, now) > 0))
+                    observe_concealment(context, *spell);
+            }
+        }
+        context.concealed = context.concealed || context.invisible || context.invisible_undead;
+    }
     std::uint32_t spell = game::kNoSpell, duration = 0;
     std::int64_t started = 0;
     if (context.self && spells.casting.casting()) {
@@ -60,7 +106,6 @@ void fill_nameplate_canvas_candidate(game::NameplateCanvasCandidate& candidate,
         duration = it->second.cast_time;
         started = it->second.started_ms;
     }
-    const auto now = net::GameConnection::now_ms();
     if (spell != game::kNoSpell && duration > 0 && now >= started && now - started < duration) {
         game::CanvasCast cast;
         cast.spell_id = spell;

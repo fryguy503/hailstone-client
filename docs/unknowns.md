@@ -45,6 +45,9 @@ What the client does not implement yet, or implements with an approximation it c
 - The generic world-nameplate canvas has synthetic parser, painter, ownership and input coverage. Actual GPU depth,
   dense scenes, sustained zoning and physical mouse/controller acceptance remain unverified; addons own visual
   recipes and must validate them against a live session.
+- Stock spawn appearance combines regular invisibility with Hide and omits invisibility versus undead. A nameplate
+  can identify spell-specific concealment from the player's own buffs or the current target's received buffs.
+  Typed status for other actors requires an additional server signal.
 
 - The shared `hs.UI` contract and migrated Modern/Gamepad presentations require live acceptance of normal mouse,
   keyboard and controller workflows, zoning and interface changes. Declared base packs inherit presentations;

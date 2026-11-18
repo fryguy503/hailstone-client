@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Nameplate add-ons can mark visible actors with observed concealment and distinguish regular invisibility from invisibility versus undead when the relevant buff data is available.
 - UI addons can load their own packaged raster artwork through `hs.UI.assets.InterfaceImage`, including artwork inherited from approved base interfaces, without a separate local art install.
 - Grass: it now grows where a zone line's region lies over the ground. Some classic zone lines are boxes the size of a field: the whole field north of North Qeynos, by the gate to Qeynos Hills, had none
 - Modern lighting: the grass goes on for about 300 units past the edge of an outdoor zone onto the distant land, so it no longer stops in a line where the zone's ground ends

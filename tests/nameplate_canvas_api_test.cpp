@@ -30,6 +30,8 @@ NameplateCanvasFrame canvas_frame(std::size_t count = 1) {
         c.spawn.npc = true;
         c.context.name = "Example unit";
         c.context.hp_percent = 60;
+        c.context.concealed = true;
+        c.context.invisible_undead = true;
         c.x = 200;
         c.y = 100;
         c.depth = 40;
@@ -119,6 +121,8 @@ handle=np.Register('example',function(f)
  assert(f.candidates[1].spawn.class==0 and f.candidates[1].spawn.incarnation==17)
  assert(f.candidates[1].context.hp_percent==60 and f.candidates[1].context.mana_percent==nil)
  assert(f.candidates[1].context.now_ms==100 and f.candidates[1].context.dt_ms==16)
+ assert(f.candidates[1].context.concealed==true and f.candidates[1].context.invisible_undead==true)
+ assert(f.candidates[1].context.invisible==false)
  return {model(f)}
 end)
 assert(type(handle)=='string')

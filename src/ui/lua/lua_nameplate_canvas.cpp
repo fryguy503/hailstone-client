@@ -321,13 +321,16 @@ void push_frame(lua_State *L, const NameplateCanvasFrame &f) {
         bool_field(L, "mercenary", s.mercenary);
         bool_field(L, "gm", s.gm);
         lua_setfield(L, -2, "spawn");
-        lua_createtable(L, 0, 18);
+        lua_createtable(L, 0, 21);
         const auto &x = c.context;
         str_field(L, "name", x.name);
         bool_field(L, "target", x.target);
         bool_field(L, "self", x.self);
         bool_field(L, "in_group", x.in_group);
         bool_field(L, "in_raid", x.in_raid);
+        bool_field(L, "concealed", x.concealed);
+        bool_field(L, "invisible", x.invisible);
+        bool_field(L, "invisible_undead", x.invisible_undead);
         number_field(L, "distance", x.distance);
         number_field(L, "now_ms", f.now_ms);
         number_field(L, "dt_ms", f.dt_ms);

@@ -40,6 +40,11 @@ with other clocks. Each candidate has a current-frame `token`, projected head `x
 the context includes the assembled caption, target/self/group/raid state, distance and only genuinely known
 health/resources/cast/aggro/marker values. Tokens are opaque drawing claims, not target-action handles.
 
+The `context.invisible` and `context.invisible_undead` booleans identify observed regular and undead
+invisibility spell effects. `context.concealed` also covers an untyped spawn concealment update, Hide and
+observed invisibility versus animals. The host uses your own buffs and current target buffs the server has
+provided. A false value means the host has no positive evidence for that flag. Older hosts omit these fields.
+
 The host applies its normal awareness, hidden-actor, range and frustum gates before publishing candidates.
 The addon owns its appearance, text, resource bars, shapes, icons, animation, placement and stacking.
 The callback returns an array of models:
