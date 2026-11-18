@@ -591,6 +591,8 @@ add_library(hailstone_engine STATIC
   src/app/lua_ui_mail.cpp
   src/app/lua_ui_merc.cpp
   src/app/lua_ui_chat.cpp
+  src/app/chat_tab_bar.cpp
+  src/app/chat_tabs_command.cpp
   src/app/lua_ui_spellbook.cpp
   src/app/lua_ui_abilities.cpp
   src/app/lua_ui_abilitybook.cpp
@@ -1286,6 +1288,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/raid_invites_test.cpp
     tests/group_search_test.cpp
     tests/chat_ui_test.cpp
+    tests/chat_tabs_command_test.cpp
     tests/inventory_bandolier_ui_test.cpp
     tests/inventory_server_labels_ui_test.cpp
     tests/trade_ui_test.cpp

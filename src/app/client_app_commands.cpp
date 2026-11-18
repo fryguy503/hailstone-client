@@ -10,6 +10,7 @@
 
 #include <imgui.h>
 
+#include "app/chat_tabs_command.h"
 #include "app/client_app_internal.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
@@ -332,6 +333,10 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
     }
 
     // ---- chat windows
+    if (h == "Hailstone_chattabs") {
+        run_chat_tabs_command(c, args);
+        return true;
+    }
     if (h == "Cmd_chatfontsize") {
         // Cmd_chatfontsize @0x4e9a10: atoi 0..10 for the active chat window (a word that is not a number is 0);
         // otherwise 13270 (colour 0x111, to the active window in the original).

@@ -14,6 +14,7 @@
 
 #include "lua_ui_api_mock.h"
 
+#include "app/chat_context_menu.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
 #include "core/ini_file.h"
@@ -361,12 +362,17 @@ TEST_CASE("Chat hit modes: spell categories persist independently, ALL keeps ind
             CHECK(app::chat_ui_ini()->get("ChatManager", "HitMode6") == "2");
             CHECK(app::chat_ui_ini()->get("ChatManager", "HitMode7") == "1");
 
-            // Native/shared context menus have the same four categories and working checkmarks/actions.
+            // Stock Modern's native menu and hs.ChatMenu use the same rows.
             lua.run("hs.ChatMenu(1)");
             REQUIRE(host.menus.size() == 1);
-            auto hit = std::find_if(host.menus[0].rows.begin(), host.menus[0].rows.end(),
+            const auto native = app::chat_context_rows(1);
+            const auto& bound = host.menus[0].rows;
+            CHECK(std::equal(native.begin(), native.end(), bound.begin(), bound.end(), [](const auto& a, const auto& b) {
+                return a.text == b.text && a.enabled == b.enabled && a.check == b.check && a.separator == b.separator;
+            }));
+            auto hit = std::find_if(native.begin(), native.end(),
                                     [](const auto& row) { return row.text == "Hit Modes"; });
-            REQUIRE(hit != host.menus[0].rows.end());
+            REQUIRE(hit != native.end());
             REQUIRE(hit->submenu);
             auto rows = hit->submenu();
             REQUIRE(rows.size() == 11);
@@ -414,7 +420,7 @@ TEST_CASE("Chat hit modes: spell categories persist independently, ALL keeps ind
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("Chat hit mode UI: modern and gamepad controls use stable spell indices and put ALL last") {
+TEST_CASE("Chat hit mode UI: gamepad controls use stable spell indices and put ALL last") {
     const auto root = fs::path(__FILE__).parent_path().parent_path();
     const char* fixture = R"lua(
 calls = {}
@@ -425,8 +431,6 @@ end
 modes[7].name, modes[7].mode = 'ALL', -1
 modes[11].name, modes[11].mode = 'Healing Over Time', 1
 hs = {
-  ChatFilters=function() return {{id=0, menu=0, group='Filters', name='Say', on=true}} end,
-  ChatFilterGroups=function() return {} end,
   ChatHitModes=function() return modes end,
   ChatSetHitMode=function(id, mode) calls[#calls+1] = {id, mode} end,
   Option=function() return nil end,
@@ -434,27 +438,21 @@ hs = {
   ComboInfo=function() return nil end,
 }
 )lua";
-    for (bool gamepad : {false, true}) {
-        CAPTURE(gamepad);
-        const auto file = root / (gamepad ? "ui/gamepad/options.lua" : "ui/modern/chat.lua");
-        std::ifstream input(file);
-        REQUIRE(input.good());
-        std::string source(std::istreambuf_iterator<char>{input}, {});
-        lua_State* state = luaL_newstate();
-        REQUIRE(state);
-        struct CloseLua { lua_State* state; ~CloseLua() { lua_close(state); } } close{state};
-        luaL_openlibs(state);
-        REQUIRE(luaL_dostring(state, fixture) == LUA_OK);
-        REQUIRE(hailstone::test::attach_mock_ui_api(state) == LUA_OK);
-        std::string setup;
-        std::string checks;
-        if (gamepad) {
-            setup = R"lua(
+    std::ifstream input(root / "ui/gamepad/options.lua");
+    REQUIRE(input.good());
+    const std::string source(std::istreambuf_iterator<char>{input}, {});
+    lua_State* state = luaL_newstate();
+    REQUIRE(state);
+    struct CloseLua { lua_State* state; ~CloseLua() { lua_close(state); } } close{state};
+    luaL_openlibs(state);
+    REQUIRE(luaL_dostring(state, fixture) == LUA_OK);
+    REQUIRE(hailstone::test::attach_mock_ui_api(state) == LUA_OK);
+    const char* setup = R"lua(
 ui = {window=function() end, GetSetting=function() end}
 local theme = {C={}, palettes={list={{id='test', name='Test'}}}, palette='test'}
 dofile = function(name) return name == 'lib/theme.lua' and theme or {} end
 )lua";
-            checks = R"lua(
+    const char* checks = R"lua(
 local rows = PAGES[4][2]()
 assert(rows[#rows][1] == 'Hit mode: ALL')
 local hot
@@ -465,65 +463,10 @@ rows[#rows][3](-1)
 assert(#calls == 2 and calls[1][1] == 11 and calls[1][2] == 2)
 assert(calls[2][1] == 7 and calls[2][2] == 2)
 )lua";
-        } else {
-            const auto start = source.find("local function filtersMenu(slot)");
-            REQUIRE(start != std::string::npos);
-            const auto end = source.find("\n-- ---------------------------------------------------------------- drawing", start);
-            REQUIRE(end != std::string::npos);
-            source = source.substr(start, end - start);
-            setup = R"lua(
-order = {}
-local depth = 0
-local filtersOpen = false
-local hitMenus = 0
-hs.ChatInfo = function() return 0, 0, 'Say', false, false end
-hs.ChatTellWindows = function() return false end
-ui = {
-  BeginPopup=function(name) return name == 'chatmenu' end,
-  EndPopup=function() assert(depth == 0) end,
-  BeginMenu=function(name)
-    if name == 'Filters' then
-      assert(depth == 0)
-      if not filtersOpen then return false end
-    elseif name == 'Hit Modes' then
-      assert(depth == 0, 'Hit Modes must be beside Filters')
-      hitMenus = hitMenus + 1
-    elseif not name:match('##hit%d+$') then
-      return false
-    end
-    local id = name:match('##hit(%d+)$')
-    if id then order[#order+1] = tonumber(id) end
-    depth = depth + 1
-    return true
-  end,
-  EndMenu=function() depth = depth - 1; assert(depth >= 0) end,
-  Separator=function() end,
-  MenuItem=function(name) return name == 'Number Only##hitmode113' end,
-  GetSetting=function() return '0' end,
-  TextDisabled=function() end,
-}
-)lua";
-            checks = R"lua(
-for scenario = 1, 3 do
-  order, calls, hitMenus = {}, {}, 0
-  filtersOpen = scenario == 3
-  hs.ChatFilters = function()
-    if scenario == 1 then return {} end
-    return {{id=0, menu=0, group='Filters', name='Say', on=true}}
-  end
-  menu(1, {}, {main=true, tab=1, tabs={{title='Main'}}})
-  assert(hitMenus == 1 and depth == 0)
-  assert(#order == 11 and order[#order] == 7)
-  assert(order[7] == 8 and order[10] == 11)
-  assert(#calls == 1 and calls[1][1] == 11 and calls[1][2] == 2)
-end
-)lua";
-        }
-        const auto code = std::string("local API = hs.UI\n") + setup + source + checks;
-        const int result = luaL_dostring(state, code.c_str());
-        INFO((result == LUA_OK ? "" : lua_tostring(state, -1)));
-        CHECK(result == LUA_OK);
-    }
+    const auto code = std::string("local API = hs.UI\n") + setup + source + checks;
+    const int result = luaL_dostring(state, code.c_str());
+    INFO((result == LUA_OK ? "" : lua_tostring(state, -1)));
+    CHECK(result == LUA_OK);
 }
 
 TEST_CASE("Chat windows: each window keeps its own last 1000 lines; a busy one does not push out a quiet one's") {
@@ -679,7 +622,7 @@ int extended_color_of(int channel) {
     return 0;
 }
 
-TEST_CASE("Chat windows: the extended channels take only the extended colours, in their own menu after ALL") {
+TEST_CASE("Chat windows: extended channels take only the extended colours and keep their own filter menu") {
     ImGuiContext* ctx = ImGui::CreateContext();
     test::ScratchDir scratch("chat_extended_routes");
     fs::path dir = scratch.path();
@@ -725,8 +668,7 @@ TEST_CASE("Chat windows: the extended channels take only the extended colours, i
         CHECK(lua.run("return lines(2)") == "other direct damage");
         CHECK(conn.chat_filters().settings == original_server_settings);
 
-        // The Filters menu is InitContextMenu's (Randoms, Other and the Melee and Spells items where they were),
-        // then Extended (server) after its ALL.
+        // Keep RoF2's categories and the extended submenu, with the same bulk controls in every scope.
         lua.run("hs.ChatMenu(2)");
         REQUIRE(host.menus.size() == 1);
         auto find = [](const std::vector<app::UiHost::MenuRow>& rows, const char* name) {
@@ -736,25 +678,34 @@ TEST_CASE("Chat windows: the extended channels take only the extended colours, i
         REQUIRE(filters != host.menus[0].rows.end());
         REQUIRE(filters->submenu);
         auto filter_rows = filters->submenu();
-        REQUIRE(filter_rows.size() >= 2);
-        CHECK(filter_rows[filter_rows.size() - 2].text == "ALL");
+        auto check_bulk_controls = [](const std::vector<app::UiHost::MenuRow>& rows) {
+            REQUIRE(rows.size() >= 3);
+            CHECK(rows[0].text == "Show All");
+            CHECK(rows[1].text == "Hide All");
+            CHECK(rows[2].separator);
+        };
+        check_bulk_controls(filter_rows);
         CHECK(filter_rows.back().text == "Extended (server)");
         auto spells = find(filter_rows, "Spells");
         REQUIRE(spells != filter_rows.end());
         REQUIRE(spells->submenu);
-        CHECK(spells->submenu().size() == 9); // the eight RoF2 items and ALL
+        const auto spell_rows = spells->submenu();
+        check_bulk_controls(spell_rows);
+        CHECK(spell_rows.size() == 11); // eight RoF2 items and three bulk control rows
         auto melee = find(filter_rows, "Melee");
         REQUIRE(melee != filter_rows.end());
         REQUIRE(melee->submenu);
-        CHECK(melee->submenu().size() == 19); // the 18 RoF2 items and ALL
+        const auto melee_rows = melee->submenu();
+        check_bulk_controls(melee_rows);
+        CHECK(melee_rows.size() == 21); // 18 RoF2 items and three bulk control rows
         REQUIRE(filter_rows.back().submenu);
         auto extended_rows = filter_rows.back().submenu();
         auto healing = find(extended_rows, "Healing");
         REQUIRE(healing != extended_rows.end());
         REQUIRE(healing->submenu);
         auto healing_rows = healing->submenu();
-        CHECK(healing_rows.size() == 6); // five channels and ALL
-        CHECK(healing_rows.back().text == "ALL");
+        check_bulk_controls(healing_rows);
+        CHECK(healing_rows.size() == 8); // five channels and three bulk control rows
         api.save_layout();
     }
     {
@@ -1341,6 +1292,101 @@ TEST_CASE("Chat windows: a kept list is refilled in place, with no garbage while
         CHECK(lua.run("local w=hs.ChatWindows(into); return #w .. tostring(w[2]) .. w[1].title") == "1nilMain Chat");
         // Without it, a new list with the same windows, as before.
         CHECK(lua.run("local w=hs.ChatWindows(); return tostring(not rawequal(w, into)) .. #w") == "true1");
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("Chat tab API: moving a tab preserves its identity, routing and preferences") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    test::ScratchDir scratch("chat_tab_api");
+    const auto dir = scratch.path();
+    fs::create_directories(dir / "game");
+    write_strings(dir / "game");
+    GameDir game(dir / "game");
+    const auto layout = dir / "UI_Test_Server.ini";
+    {
+        net::GameConnection conn(game);
+        ui::ChatView view;
+        app::UiHost host;
+        host.in_game = host.ui_ready = true;
+        host.game = &game;
+        host.conn = &conn;
+        host.chat = &view;
+        app::UiApi api(host);
+        api.load_layout(dir / "defaults.ini", layout, {});
+        Lua lua(api);
+        lua.run(kLines + std::string("_G.lines = lines"));
+        REQUIRE(lua.run(R"(
+            chat, into = hs.UI.chat, {}
+            assert(hs.UI.Supports('chat', 'SplitTab'))
+            assert(chat.NewTab(1, 'Social') == 2)
+            chat.SetFilter(1, 0, true)
+            assert(chat.SetWindowTitle(1, 'Messages'))
+            chat.SetTitle(1, 'Conversation', 2)
+            assert(chat.SetTabFlash(1, 2, false))
+            assert(chat.SetTabFlashColor(1, 2, 0x2457CA))
+            assert(chat.SetTabScrollbar(1, 2, false))
+            chat.SelectTab(1, 1)
+            tabSlot = chat.Windows(into)[1].tabs[2].slot
+            assert(not chat.SetTabFlashColor(1, 2, -1))
+            assert(not chat.SetTabFlashColor(1, 2, 0x1000000))
+            assert(not chat.ReorderTab(1, 2, math.maxinteger))
+            assert(chat.SplitTab(1, math.mininteger) == nil)
+            return true
+        )") == "true");
+
+        view.add(ui::ChatChannel::Say, "before split");
+        REQUIRE(lua.run(R"(
+            local w = chat.Windows(into)[1]
+            local t = w.tabs[2]
+            assert(t.unread and not t.flash and not t.highlighted and not t.scrollbar)
+            assert(t.flashColor == 0x2457CA and t.title == 'Conversation')
+            detached = assert(chat.SplitTab(1, 2))
+            assert(detached ~= 1 and #chat.Windows(into) == 2)
+            assert(chat.Windows(into)[2].tabs[1].slot == tabSlot)
+            assert(lines(detached):find('before split', 1, true))
+            assert(chat.SplitTab(detached, 1) == nil)
+            return true
+        )") == "true");
+
+        view.add(ui::ChatChannel::Say, "after split");
+        REQUIRE(lua.run(R"(
+            assert(lines(detached):find('after split', 1, true))
+            assert(chat.JoinTab(detached, 1, 1))
+            assert(#chat.Windows(into) == 1)
+            assert(chat.ReorderTab(1, 2, -1))
+            local w = chat.Windows(into)[1]
+            assert(w.main and w.windowTitle == 'Messages' and w.tab == 1)
+            assert(w.title == 'Conversation' and w.tabs[1].slot == tabSlot)
+            assert(w.tabs[1].flashColor == 0x2457CA and not w.tabs[1].flash and not w.tabs[1].scrollbar)
+            assert(chat.SetTabFlashColor(1, 1, nil))
+            assert(chat.Windows(into)[1].tabs[1].flashColor == nil)
+            assert(chat.SetTabFlashColor(1, 1, 0))
+            local extra = assert(chat.NewWindow('Extra'))
+            assert(chat.CombineTabs(1) == 1)
+            assert(chat.CombineTabs(extra) == 0 and #chat.Windows(into)[1].tabs == 3)
+            chat.Clear(1, 1)
+            chat.SelectTab(1, 1)
+            assert(lines(1) == '')
+            return true
+        )") == "true");
+
+        api.save_layout();
+        api.load_layout(dir / "defaults.ini", layout, {});
+        CHECK(lua.run(R"(
+            local w = chat.Windows()[1]
+            local t = w.tabs[1]
+            return #chat.Windows() == 1 and #w.tabs == 3 and w.windowTitle == 'Messages'
+                and w.tab == 1 and t.title == 'Conversation' and t.flashColor == 0
+                and not t.flash and not t.scrollbar and t.slot == tabSlot
+        )") == "true");
+        CHECK(lua.run(R"(
+            chat.CloseWindow(1)
+            assert(#chat.Windows()[1].tabs == 3)
+            chat.CloseTab(1, 1)
+            local w = chat.Windows()[1]
+            return w.main and #w.tabs == 2 and w.tabs[1].title == 'Main Chat'
+        )") == "true");
     }
     ImGui::DestroyContext(ctx);
 }

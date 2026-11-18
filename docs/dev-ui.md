@@ -62,14 +62,29 @@ while (window.poll_events()) {
 }
 ```
 
+### Modern chat tabs
+
+Right-click any tab or the chat output to open the same chat menu. From there you can create,
+rename, and close tabs and windows, detach or move a tab, reorder tabs, and combine the windows
+into the one you clicked. **Switch Tab** lists the tabs in that window, and **Chat Windows**
+shows the window IDs and tabs across all windows. The menu also has the tab's scrollbar and
+highlight settings, the chat routing controls, and the **Window** layout menu. The overflow
+button lists all tabs when the strip fills.
+
+Moving a tab keeps its filters, output and scroll position. Background tabs flash in their chosen
+colour every half second for five seconds, then stay highlighted until selected. Highlighting
+defaults to on in red. Each tab can also hide its scrollbar. Chat groups, names, order, selection
+and tab settings are saved per character. The native model is shared by the Modern controls,
+[`hs.UI.chat`](ui-api.md#chat-tabs-and-windows) and [`/chattabs`](commands.md).
+
 ### Extended chat channels
 
 The chat windows' channels 57..107 and user colours 355..408 (docs/mechanics.md "Extended chat routing") are
 Hailstone's, used only when a server sends those colours. `hs.ChatFilterGroups()` gives the Filters menu's submenus
 as `{id, parent, name}` (parent 0 is the Filters menu): Chat Channel, Melee and Spells, then Extended (server) and
 its submenus. `hs.ChatFilters(slot)` keeps `id`, `group`, `name` and `on` and adds `menu` and `parent` (the item's
-menu and the menu that holds it); `hs.ChatSetFilter` still takes a channel or a menu's name, a menu's ALL moving its
-own items only. The modern pack draws the menus from these; the gamepad pack has no filter menu. The channels are
+menu and the menu that holds it). `hs.ChatSetFilter` takes a channel or a menu's name. The native chat menu's
+**Show All** and **Hide All** apply only to the current submenu's channels. The gamepad pack has no filter menu. The channels are
 kept as `ChannelMap0..107` in the character's UI ini and the colours as `User_1..153` in its `chat.ini`; a file
 written before them (ChannelMap0..56, User_1..99) loads as it was, the new ones on the main window and at their
 defaults.

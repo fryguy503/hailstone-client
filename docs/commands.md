@@ -14,7 +14,7 @@ follow the RoF2 client; the ones Hailstone adds are marked as Hailstone's. For t
   original did.
 - **`#` commands** (`#help`, `#zone` and the rest) are EQEmu's server commands. Hailstone sends them on as said text,
   and the server answers. What a character may use depends on its status on the server, not on the client.
-- **While dead**, only the chat commands (say, tell, group, guild, raid, channels and the like), `/consent`, `/deny`,
+- **While dead**, only the chat commands (say, tell, group, guild, raid, channels, `/chattabs` and the like), `/consent`, `/deny`,
   `/ignore`, `/friends`, `/petition`, `/help`, `/location`, `/marketplace` and the mercenary commands work. Anything else answers
   "You may not use that command while dead."
 - **Locked interface.** With the interface locked (`/safelock`), only `/safelock` gets through.
@@ -58,6 +58,13 @@ follow the RoF2 client; the ones Hailstone adds are marked as Hailstone's. For t
 | `/usercolor` | Chat colours: no argument shows the help page. |
 | `/chatfontsize <0..10>` | The active chat window's font size. |
 | `/clearchat`, `/clearallchat` | Empty the active chat window, or all of them. |
+| `/chattabs [help]` | List Hailstone's chat tab commands. |
+| `/chattabs status` | List chat windows by ID and bracket the selected tab in each window. |
+| `/chattabs next`, `/chattabs prev` | Cycle through tabs in the current chat window. |
+| `/chattabs new [title]`, `/chattabs close`, `/chattabs clear` | Add a tab to the current window, close the current tab, or clear its text. |
+| `/chattabs rename [title]`, `/chattabs renamewindow [title]` | Change the tab name or the window title. Omit the title to open the rename dialog. |
+| `/chattabs left`, `/chattabs right` | Move the current tab one place in its window. |
+| `/chattabs detach`, `/chattabs move <window ID>`, `/chattabs combine` | Give the current tab its own window, move it to another window, or bring all tabs into the current window. |
 | `/log [on\|off] [name]` | Log chat to a file in the character's folder. |
 | `/secondslog [on\|off]` | Kept as a setting; nothing reads it, as in the original. |
 

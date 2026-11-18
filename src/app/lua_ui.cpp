@@ -27,6 +27,8 @@
 #include <lua.hpp>
 
 #include "app/actions_ui.h"
+#include "app/chat_tab_bar.h"
+#include "app/chat_tabs.h"
 #include "app/lua_ui_menu.h"
 #include "app/lua_ui_values.h"
 #include "app/lua_ui_windows.h"
@@ -59,8 +61,6 @@
 
 namespace hailstone::app {
 
-bool chat_window_used(int slot);  // app/lua_ui_chat.cpp: chat window 1..32 is open
-void chat_window_closed(int slot); // its close button: the window goes with its tabs
 // app/lua_ui_chat.cpp: the chat windows' settings, and the user colours from the character's chat.ini in `user_dir`.
 void chat_layout_loaded(ui::UiIni& ini, UiHost& host, const std::filesystem::path& user_dir);
 void chat_host_gone(const UiHost& host, const ui::UiIni& ini);
@@ -314,13 +314,16 @@ struct UiApi::Impl {
         struct Chat : StockWindow {
             int slot;
             explicit Chat(int s) : StockWindow("Chat" + std::to_string(s), true), slot(s) {}
-            bool shown(UiHost& h2) override { return h2.in_game && (slot == 1 ? open_ : chat_window_used(slot)); }
+            bool shown(UiHost& h2) override {
+                const auto group = chat_tabs::group(slot);
+                return h2.in_game && group.slot && (!group.main || open_);
+            }
             void set_shown(UiHost& h2, bool show) override {
-                if (slot == 1) StockWindow::set_shown(h2, show);
-                else if (!show) chat_window_closed(slot);
+                if (chat_tabs::group(slot).main) StockWindow::set_shown(h2, show);
+                else if (!show) chat_tabs::close_group(slot);
             }
         };
-        for (int slot = 1; slot <= 32; ++slot) windows.push_back(std::make_unique<Chat>(slot));
+        for (int slot = 1; slot <= chat_tabs::kMaxSlots; ++slot) windows.push_back(std::make_unique<Chat>(slot));
         // CEQMainWnd: the EQ button (a check box, pressed while its menu is open), the Marketplace button (SCButton:
         // the window's toggle) and the flash sale button (SCFSButton: hidden by the constructor, shown only by a flash
         // sale notice this client does not get).
@@ -3148,6 +3151,7 @@ void UiApi::register_functions(lua_State* L) {
     lua_pop(L,1);
     lua_pushinteger(L,1);lua_setfield(L,-2,"NameplateCanvasVersion");
     register_chat_api(L, impl_->host);
+    register_modern_chat_tabs(L, impl_->host);
     register_gamepad_api(L, impl_->host);
     register_spellbook_api(L, impl_->host);
     register_abilities_api(L, impl_->host);

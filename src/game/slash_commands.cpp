@@ -14,6 +14,8 @@ constexpr SlashCommand kCommands[] = {
 #define HAILSTONE_SLASH(name, eqstr, handler, restriction, category, flags) {name, eqstr, handler, restriction, category, flags},
 #include "game/slash_commands.inc"
 #undef HAILSTONE_SLASH
+    // Hailstone's client commands follow the original table to preserve its prefix priority.
+    {"/chattabs", -1, "Hailstone_chattabs", 0, 1, 1},
 };
 
 char lower(char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }

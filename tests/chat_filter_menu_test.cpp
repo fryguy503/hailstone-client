@@ -1,86 +1,90 @@
 #include <doctest/doctest.h>
-#include <lua.hpp>
 
-#include "lua_ui_api_mock.h"
-
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <string>
+#include <string_view>
+#include <vector>
 
-TEST_CASE("Modern chat menu: nested categories retain their parent and send the selected route") {
-    const auto path = std::filesystem::path(__FILE__).parent_path().parent_path() / "ui/modern/chat.lua";
-    std::ifstream file(path);
-    REQUIRE(file.good());
-    const std::string source{std::istreambuf_iterator<char>{file}, std::istreambuf_iterator<char>{}};
-    const auto start = source.find("local function filtersMenu(slot)");
-    REQUIRE(start != std::string::npos);
-    const auto end = source.find("\nlocal function ", start + 1);
-    REQUIRE(end != std::string::npos);
-    const std::string menu = "local API = hs.UI\n" + source.substr(start, end - start) + "\nfiltersMenu(2)";
-    lua_State* L = luaL_newstate();
-    REQUIRE(L != nullptr);
-    struct CloseLua { lua_State* state; ~CloseLua() { lua_close(state); } } close{L};
-    luaL_openlibs(L);
-    const char* fixture = R"lua(
-paths, clicks, stack = {}, {}, {}
-ui = {
-  BeginMenu = function(name)
-    if name == "Hit Modes" then return false end
-    stack[#stack + 1] = name:match("^(.-)##") or name
-    return true
-  end,
-  EndMenu = function() table.remove(stack) end,
-  Separator = function() end,
-  MenuItem = function(name)
-    local label = name:match("^(.-)##") or name
-    paths[table.concat(stack, "/") .. "/" .. label] = true
-    return name == "Heals received##filter101" or name == "Show All##group4"
-  end,
+#include "app/chat_context_menu.h"
+#include "app/chat_tabs.h"
+#include "app/lua_ui.h"
+#include "core/game_dir.h"
+#include "net/game_connection.h"
+#include "scratch_dir.h"
+#include "ui/dev_screens.h"
+#include "ui/ui_ini.h"
+
+using namespace hailstone;
+
+namespace {
+
+const app::UiHost::MenuRow& row_named(const std::vector<app::UiHost::MenuRow>& rows, std::string_view name) {
+    CAPTURE(name);
+    const auto row = std::find_if(rows.begin(), rows.end(), [name](const auto& item) { return item.text == name; });
+    REQUIRE(row != rows.end());
+    return *row;
 }
-hs = {
-  ChatFilters = function()
-    return {
-      {id=106, menu=0, parent=0, group="Filters", name="Client messages", on=false},
-      {id=81, menu=3, parent=0, group="Spells", name="Spell notices", on=false},
-      {id=80, menu=4, parent=3, group="Direct damage", name="Other damage", on=false},
-      {id=101, menu=6, parent=3, group="Healing", name="Heals received", on=false},
-      {id=60, menu=9, parent=0, group="Random rolls", name="Others", on=false},
-    }
-  end,
-  ChatFilterGroups = function()
-    return {
-      {id=3, parent=0, name="Spells"},
-      {id=4, parent=3, name="Direct damage"},
-      {id=6, parent=3, name="Healing"},
-      {id=9, parent=0, name="Random rolls"},
-      {id=1, parent=0, name="Chat Channel"},
-    }
-  end,
-  ChatSetFilter = function(slot, category, on)
-    clicks[#clicks + 1] = {slot, category, on}
-  end,
-}
-)lua";
-    REQUIRE(luaL_dostring(L, fixture) == LUA_OK);
-    REQUIRE(hailstone::test::attach_mock_ui_api(L) == LUA_OK);
-    const int result = luaL_dostring(L, menu.c_str());
-    INFO((result == LUA_OK ? "" : lua_tostring(L, -1)));
-    REQUIRE(result == LUA_OK);
-    const char* checks = R"lua(
-assert(paths["Filters/Client messages"])
-assert(paths["Filters/Spells/Spell notices"])
-assert(paths["Filters/Spells/Direct damage/Other damage"])
-assert(paths["Filters/Spells/Healing/Heals received"])
-assert(paths["Filters/Random rolls/Others"])
-assert(not paths["Filters/Healing/Heals received"])
-assert(not paths["Filters/Chat Channel/Show All"]) -- no joined channel: no Chat Channel menu
-assert(#stack == 0)
-assert(#clicks == 2)
-assert(clicks[1][1] == 2 and clicks[1][2] == "Direct damage" and clicks[1][3])
-assert(clicks[2][1] == 2 and clicks[2][2] == 101 and clicks[2][3])
-)lua";
-    const int checked = luaL_dostring(L, checks);
-    INFO((checked == LUA_OK ? "" : lua_tostring(L, -1)));
-    CHECK(checked == LUA_OK);
+
+} // namespace
+
+TEST_CASE("Native chat filters preserve nested categories and route only the selected scope") {
+    const test::ScratchDir scratch("native_chat_filters");
+    const auto dir = scratch.path();
+    std::filesystem::create_directories(dir / "game");
+    std::ofstream(dir / "game/eqstr_us.txt") << "EQST0002\n6645 Filters\n6638 Chat Channel\n6640 Spells\n"
+                                             << "3135 will go to this window.\n3136 will go to the main window.\n";
+    GameDir game(dir / "game");
+    net::GameConnection conn(game);
+    ui::ChatView view;
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.game = &game;
+    host.conn = &conn;
+    host.chat = &view;
+    app::UiApi api(host);
+    api.load_layout(dir / "defaults.ini", dir / "UI_Test_Server.ini", {});
+    const int window = app::chat_tabs::new_window("Combat");
+    const int tab = app::chat_tabs::group(window).selected;
+    REQUIRE(tab > 1);
+
+    const auto root = app::chat_context_rows(tab);
+    const auto& filters_row = row_named(root, "Filters");
+    REQUIRE(filters_row.submenu);
+    const auto filters = filters_row.submenu();
+    CHECK_FALSE(row_named(filters, "Chat Channel").enabled);
+    CHECK(row_named(filters, "Spells").enabled);
+    const auto& extended = row_named(filters, "Extended (server)");
+    REQUIRE(extended.submenu);
+    const auto categories = extended.submenu();
+    CHECK(std::none_of(filters.begin(), filters.end(), [](const auto& item) { return item.text == "Healing"; }));
+    CHECK(row_named(categories, "Random Rolls").enabled);
+    const auto& healing_row = row_named(categories, "Healing");
+    const auto& damage_row = row_named(categories, "Direct Damage");
+    REQUIRE(healing_row.submenu);
+    REQUIRE(damage_row.submenu);
+
+    const auto healing = healing_row.submenu();
+    const auto& received = row_named(healing, "Healing received");
+    CHECK_FALSE(received.check);
+    REQUIRE(received.act);
+    received.act();
+    CHECK(row_named(healing_row.submenu(), "Healing received").check);
+    const auto damage = damage_row.submenu();
+    const auto& show = row_named(damage, "Show All");
+    const auto& hide = row_named(damage, "Hide All");
+    REQUIRE(show.act);
+    REQUIRE(hide.act);
+    show.act();
+    const auto* ini = app::chat_ui_ini();
+    REQUIRE(ini);
+    const auto target = std::to_string(tab - 1);
+    CHECK(ini->get("ChatManager", "ChannelMap101") == target);
+    CHECK(ini->get("ChatManager", "ChannelMap80") == target);
+    CHECK(ini->get("ChatManager", "ChannelMap97") == target);
+    hide.act();
+    CHECK(ini->get("ChatManager", "ChannelMap101") == target);
+    CHECK(ini->get("ChatManager", "ChannelMap80") == "0");
+    CHECK(ini->get("ChatManager", "ChannelMap97") == "0");
 }

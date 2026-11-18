@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cctype>
 #include <cstdlib>
 #include <ctime>
@@ -21,6 +22,10 @@
 #include <imgui.h>
 #include <lua.hpp>
 
+#include "app/chat_context_menu.h"
+#include "app/chat_tab_bar.h"
+#include "app/chat_tabs.h"
+#include "app/chat_tabs.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_record.h"
 #include "core/character_files.h"
@@ -411,15 +416,15 @@ namespace {
 // window wrote itself (CChatWindow::AddOutputText: the menus' answers) shows only there. Each window keeps its name, the channel its plain typed text
 // goes to (ChatChannel, with the tell target or the chat channel's index), its language, scrollbar and font.
 //
-// This client's addition: a window can be shown as a tab of another (`dock`); every tab is still a chat window of
-// its own, with its own channels. Tell windows (the Options' Use Tell Windows: CEverQuest::DoTellWindow instead of
-// the routed line) are tabs of the first one.
+// Hailstone's frames group chat windows as tabs. Routing and history use the logical windows, independent of
+// which frame shows them. Temporary tell tabs normally share their own frame (Use Tell Windows).
 //
 // Kept in the character's UI ini as the original keeps them ([ChatManager] NumWindows, ChatWindow<n>_Name /
 // _DefaultChannel / _ChatChannel / _TellTarget / _Scrollbar / _FontStyle / _LanguageId, LockedActiveWindow,
-// ChannelMap<n>, HitMode<n>); the tabs as ChatWindow<n>_Dock and _Up.
+// ChannelMap<n>, HitMode<n>). ChatWindow<n>_Group and _TabOrder place tabs, and ChatGroup<n>_Selected and _Name
+// describe the frame. Earlier profiles describe grouping and selection with ChatWindow<n>_Dock and _Up.
 
-constexpr int kMaxChatWindows = 32;
+constexpr int kMaxChatWindows = chat_tabs::kMaxSlots;
 
 struct ChatWnd {
     bool used = false;
@@ -433,10 +438,12 @@ struct ChatWnd {
     int font = 3;               // CChatWindow::SetChatFont's index
     int language = 0;           // +0x274
     bool tell = false;          // bIsTellWnd
-    int dock = -1;              // shown as a tab of this window (-1: a window of its own)
-    int up = -1;                // a window with tabs: the one that is up (-1 itself)
-    bool select = false;        // the script is to bring `up` up (it changed here)
-    std::uint64_t cleared = 0, seen = 0; // ChatView::revision when cleared / last shown
+    int group = 0;              // visible frame slot (1-based)
+    bool flash = true;
+    bool unread = false;
+    std::optional<std::uint32_t> flash_color;
+    std::optional<double> unread_at;
+    std::uint64_t cleared = 0;  // ChatView::revision when cleared
     std::uint64_t tells_in = 0; // Hailstone: the tells from others routed to it (the modern tell window flashes)
     // What hs.ChatText shows of it (scan_windows): the first and last line's seq and the count, and a generation
     // that changes whenever its lines change in another way than lines added at the end or leaving from the front.
@@ -444,8 +451,17 @@ struct ChatWnd {
     std::size_t count = 0;
 };
 
+struct ChatGroup {
+    std::vector<int> tabs;      // stable logical slots in display order (1-based)
+    std::string name;           // an explicit frame title, independent of tab labels
+    int selected = 0;           // logical slot (1-based)
+    bool select = false;
+    std::uint32_t serial = 0;   // guards dialogs targeting a reused frame slot
+};
+
 struct ChatManager {
     std::array<ChatWnd, kMaxChatWindows> wnd{};
+    std::array<ChatGroup, kMaxChatWindows> groups{};
     int num_windows = 1;        // NumWindows: the slots below it are in use or freed
     int active = 0;             // CurrentActive
     int locked = 0;             // LockedActive (Always Chat Here; -1: none); the main window by default (set_locked)
@@ -465,8 +481,13 @@ struct ChatManager {
     ChatManager() { reset(); }
     void reset() {
         wnd = {};
+        groups = {};
         wnd[0].used = true;
         wnd[0].serial = next_serial++;
+        wnd[0].group = 1;
+        groups[0].tabs = {1};
+        groups[0].selected = 1;
+        groups[0].serial = next_serial++;
         num_windows = 1;
         active = 0;
         locked = 0;
@@ -486,6 +507,10 @@ ChatManager& manager() {
 
 ChatWnd& wnd(int w) { return manager().wnd[static_cast<std::size_t>(w)]; }
 bool used(int w) { return w >= 0 && w < kMaxChatWindows && wnd(w).used; }
+
+bool valid_slot(int slot) { return slot >= 1 && slot <= kMaxChatWindows; }
+ChatGroup& group_at(int slot) { return manager().groups[static_cast<std::size_t>(slot - 1)]; }
+bool group_used(int slot) { return valid_slot(slot) && !group_at(slot).tabs.empty(); }
 
 UiHost* chat_host() { return state().host; }
 
@@ -525,8 +550,12 @@ void save_window(int w) {
     put("Scrollbar", c.scrollbar ? "1" : "0");
     put("FontStyle", std::to_string(c.font));
     put("Name", c.name);
-    put("Dock", std::to_string(c.dock));
-    put("Up", std::to_string(c.up));
+    put("Group", std::to_string(c.group));
+    const auto& tabs = group_at(c.group).tabs;
+    put("TabOrder", std::to_string(std::find(tabs.begin(), tabs.end(), w + 1) - tabs.begin()));
+    put("Highlight", c.flash ? "1" : "0");
+    if (c.flash_color) put("HighlightColor", std::to_string(*c.flash_color));
+    else m.ini->erase("ChatManager", k + "HighlightColor");
 }
 
 // CChatWindowManager::SaveChatSettings @0x64fe40. The original counts NumWindows less its tell windows, which then
@@ -548,6 +577,24 @@ void save_manager() {
         if (w == 0) continue;
         m.ini->erase("ChatManager", std::format("ChatWindow{}_Language", w));
         m.ini->erase("ChatManager", std::format("ChatWindow{}_LanguageId", w));
+        m.ini->erase("ChatManager", std::format("ChatWindow{}_Group", w));
+        m.ini->erase("ChatManager", std::format("ChatWindow{}_TabOrder", w));
+        m.ini->erase("ChatManager", std::format("ChatWindow{}_Highlight", w));
+        m.ini->erase("ChatManager", std::format("ChatWindow{}_HighlightColor", w));
+    }
+    for (int g = 1; g <= kMaxChatWindows; ++g) {
+        const auto& group = group_at(g);
+        const std::string key = std::format("ChatGroup{}_", g);
+        const auto first = std::find_if(group.tabs.begin(), group.tabs.end(), [](int slot) { return !wnd(slot - 1).tell; });
+        if (first == group.tabs.end()) {
+            m.ini->erase("ChatManager", key + "Selected");
+            m.ini->erase("ChatManager", key + "Name");
+            continue;
+        }
+        const int selected = wnd(group.selected - 1).tell ? *first : group.selected;
+        m.ini->put("ChatManager", key + "Selected", std::to_string(selected));
+        if (group.name.empty()) m.ini->erase("ChatManager", key + "Name");
+        else m.ini->put("ChatManager", key + "Name", group.name);
     }
     for (int ch = 0; ch < game::kChatChannelCount; ++ch) {
         int w = m.channel_map[static_cast<std::size_t>(ch)];
@@ -674,12 +721,24 @@ void trim_windows(ui::ChatView& v) {
     v.lines.resize(out);
 }
 
+void note_tab_update(int w, std::uint64_t seq, double now) {
+    ChatWnd& c = wnd(w);
+    if (seq <= c.cleared || group_at(c.group).selected == w + 1) return;
+    c.unread = true;
+    if (!c.flash) return;
+    // Messages during a pulse leave its timing alone. A later message starts a fresh pulse.
+    if (!c.unread_at || now - *c.unread_at >= 5.0) c.unread_at = now;
+}
+
+double tab_clock() { return ImGui::GetCurrentContext() ? ImGui::GetTime() : 0.0; }
+
 // CChatWindow::AddOutputText: a line in this window alone.
 void window_text(int w, const std::string& text, std::uint32_t color) {
     UiHost* h = chat_host();
     if (!h || !h->chat || !used(w)) return;
     h->chat->add(ui::ChatChannel::System, text, 0, color);
     h->chat->lines.back().window = wnd(w).serial;
+    note_tab_update(w, h->chat->lines.back().seq, tab_clock());
 }
 
 // CEverQuest::dsp_chat: a routed line.
@@ -721,42 +780,60 @@ int create_window(bool quiet = false) {
     return w;
 }
 
-// The window whose tabs `w` is in.
-int host_of(int w) { return used(w) && wnd(w).dock >= 0 && used(wnd(w).dock) ? wnd(w).dock : w; }
-
-// A window's tabs: itself, then the windows docked in it.
-std::vector<int> tabs_of(int host) {
-    std::vector<int> out{host};
-    for (int w = 0; w < kMaxChatWindows; ++w)
-        if (w != host && used(w) && wnd(w).dock == host) out.push_back(w);
-    return out;
+// A logical window's visible group (1-based), and the group's selected logical window (0-based).
+int host_of(int w) { return used(w) ? wnd(w).group : 0; }
+int up_of(int host) { return group_used(host) ? group_at(host).selected - 1 : -1; }
+bool tell_group(int host) {
+    return group_used(host) && std::all_of(group_at(host).tabs.begin(), group_at(host).tabs.end(),
+                                          [](int tab) { return wnd(tab - 1).tell; });
 }
 
-// The tab that is up in a window.
-int up_of(int host) {
-    if (!used(host)) return -1;
-    int up = wnd(host).up;
-    return used(up) && (up == host || wnd(up).dock == host) ? up : host;
+// Prefer the old frame number where possible, so unchanged layouts keep their positions.
+int vacant_group(int preferred) {
+    if (valid_slot(preferred) && !group_used(preferred)) return preferred;
+    for (int g = 1; g <= kMaxChatWindows; ++g)
+        if (!group_used(g)) return g;
+    return 0;
 }
 
-// CChatWindow::Deactivate @0x655780 (not the main window): its channels back to the main window (ClearChannelMaps),
-// the main window active, the slot freed (FreeChatWindow: Always Chat Here dropped). Its tabs go with it.
-void free_window(int w) {
+void select_tab(int host, int tab) {
+    ChatGroup& group = group_at(host);
+    group.select = group.select || group.selected != tab;
+    group.selected = tab;
+    auto& c = wnd(tab - 1);
+    c.unread = false;
+    c.unread_at.reset();
+}
+
+void insert_tab(int host, int tab) {
+    ChatGroup& group = group_at(host);
+    if (group.tabs.empty()) {
+        group.serial = manager().next_serial++;
+        group.name = wnd(tab - 1).tell ? "Tells" : wnd(tab - 1).name;
+    }
+    group.tabs.push_back(tab);
+    wnd(tab - 1).group = host;
+    if (group.selected == 0) select_tab(host, tab);
+}
+
+void remove_tab(int host, int tab) {
+    auto& group = group_at(host);
+    const auto pos = std::find(group.tabs.begin(), group.tabs.end(), tab);
+    const auto next = group.tabs.erase(pos);
+    if (group.tabs.empty()) group = {};
+    else if (group.selected == tab) select_tab(host, next == group.tabs.end() ? group.tabs.back() : *next);
+}
+
+// CChatWindow::Deactivate @0x655780: channels from closed tabs return to Main Chat, and its logical slot is freed.
+void free_tab(int w) {
     ChatManager& m = manager();
-    if (w <= 0 || !used(w)) return;
-    for (int t : tabs_of(w))
-        if (t != w) free_window(t);
     for (int& c : m.channel_map)
         if (c == w) c = 0;
-    m.active = 0;
     if (m.locked == w) m.locked = 0; // (the original: -1; Hailstone's default lock, set_locked)
-    int host = wnd(w).dock;
+    const int host = wnd(w).group;
+    remove_tab(host, w + 1);
     wnd(w) = {};
-    if (used(host) && wnd(host).up == w) {
-        wnd(host).up = -1;
-        wnd(host).select = true;
-    }
-    changed();
+    if (m.active == w) m.active = group_used(host) ? up_of(host) : 0;
 }
 
 // GetActiveChatWindow @0x650460: the locked one, else the current one.
@@ -791,16 +868,16 @@ void set_locked(int w, bool on) {
 int tell_window(const std::string& peer) {
     int w = tell_window_of(peer);
     if (w >= 0 || (w = create_window(true)) < 0) return w;
-    int first = -1;
-    for (int t = 1; t < kMaxChatWindows && first < 0; ++t)
-        if (t != w && used(t) && wnd(t).tell && wnd(t).dock < 0) first = t;
+    int host = 1;
+    while (host <= kMaxChatWindows && !tell_group(host)) ++host;
     ChatWnd& c = wnd(w);
     c.tell = true;
     c.name = peer;
     c.channel = 7;
     c.tell_target = peer;
-    c.dock = first;
-    changed();
+    if (host > kMaxChatWindows) host = vacant_group(w + 1);
+    insert_tab(host, w + 1);
+    ++manager().serial; // tell tabs live only for the session
     return w;
 }
 
@@ -812,43 +889,62 @@ void sync_lines(ui::ChatView& v) {
     if (v.revision == m.synced) return;
     std::uint64_t from = m.synced;
     m.synced = v.revision;
-    for (std::size_t i = 0; i < v.lines.size(); ++i) {
-        auto& l = v.lines[i];
-        if (line_seq(v, i) <= from || l.window) continue; // (restored lines came with their window)
+    const double now = tab_clock();
+    auto first = std::upper_bound(v.lines.begin(), v.lines.end(), from,
+                                  [](std::uint64_t seq, const ui::ChatLine& line) { return seq < line.seq; });
+    for (auto it = first; it != v.lines.end(); ++it) {
+        auto& l = *it;
+        if (l.window) continue; // direct output and restored lines were already assigned
         if (tell_windows_on() && is_tell_line(l)) {
             int w = tell_window(l.peer);
             if (w >= 0) {
                 l.window = wnd(w).serial;
                 if (is_incoming_tell(l)) ++wnd(w).tells_in;
+                note_tab_update(w, l.seq, now);
                 continue;
             }
         }
         int w = m.channel_map[static_cast<std::size_t>(game::chat_channel_of_color(static_cast<std::int32_t>(color_of(l))))];
-        l.window = wnd(used(w) ? w : 0).serial;
+        if (!used(w)) w = 0;
+        l.window = wnd(w).serial;
+        note_tab_update(w, l.seq, now);
     }
     trim_windows(v);
 }
 
-// slot (1-based) -> window, or -1.
-int window_of(lua_State* L, int arg) {
-    lua_Integer slot = luaL_checkinteger(L, arg);
-    if (slot < 1 || slot > kMaxChatWindows || !used(static_cast<int>(slot - 1))) return -1;
-    return static_cast<int>(slot - 1);
+void sync_current_chat() {
+    if (UiHost* h = chat_host(); h && h->chat) sync_lines(*h->chat);
+}
+
+void set_tell_windows(bool on) {
+    sync_current_chat(); // apply the change from the next tell on
+    manager().tell_windows = on;
+    // The Options window's Use Tell Windows box shares this setting.
+    if (net::GameConnection* c = character_conn())
+        c->change_client_option(game::ClientOption::UseTellWindows, on ? 1 : 0);
+    changed();
+}
+
+// Existing calls take the displayed frame slot. A docked logical slot was also accepted as an alias.
+int group_arg(lua_State* L, int arg) {
+    const lua_Integer value = luaL_checkinteger(L, arg);
+    if (value < 1 || value > kMaxChatWindows) return 0;
+    const int slot = static_cast<int>(value);
+    return group_used(slot) ? slot : host_of(slot - 1);
+}
+
+int tab_arg(lua_State* L, int arg, int host, bool optional = false) {
+    if (optional && lua_isnoneornil(L, arg)) return up_of(host) + 1;
+    const lua_Integer pos = luaL_checkinteger(L, arg);
+    if (!group_used(host)) return 0;
+    const auto& tabs = group_at(host).tabs;
+    if (pos < 1 || pos > static_cast<lua_Integer>(tabs.size())) return 0;
+    return tabs[static_cast<std::size_t>(pos - 1)];
 }
 
 // The tab that is up in the window of a slot (its own window for a slot that is not a tab), or -1.
 int up_window(lua_State* L, int arg) {
-    int w = window_of(L, arg);
-    return w < 0 ? -1 : up_of(host_of(w));
-}
-
-bool unread(const ui::ChatView& v, int w) {
-    for (std::size_t i = v.lines.size(); i-- > 0;) {
-        std::uint64_t seq = line_seq(v, i);
-        if (seq <= wnd(w).seen || seq <= wnd(w).cleared) return false;
-        if (window_of_line(v.lines[i]) == w) return true;
-    }
-    return false;
+    return up_of(group_arg(L, arg));
 }
 
 // Each window's first and last line, count and generation (ChatWnd::gen) as hs.ChatText shows them, worked out again
@@ -924,6 +1020,28 @@ std::function<void()> on_window(int w, std::function<void(int)> fn) {
     };
 }
 
+std::function<void()> on_group(int host, std::function<void(int)> fn) {
+    const std::uint32_t serial = group_at(host).serial;
+    return [host, serial, fn = std::move(fn)] {
+        if (group_used(host) && group_at(host).serial == serial) fn(host);
+    };
+}
+
+Row action(std::string text, std::function<void()> act, bool enabled = true, bool check = false) {
+    Row row;
+    row.text = std::move(text);
+    row.act = std::move(act);
+    row.check = check;
+    return enabled ? std::move(row) : disabled(std::move(row));
+}
+
+Row submenu_row(std::string text, std::function<std::vector<Row>()> children, bool enabled = true) {
+    Row row;
+    row.text = std::move(text);
+    row.submenu = std::move(children);
+    return enabled ? std::move(row) : disabled(std::move(row));
+}
+
 std::vector<std::string> joined_channels() {
     UiHost* h = chat_host();
     std::vector<std::string> out = h && h->conn ? h->conn->chat_channels() : std::vector<std::string>{};
@@ -985,10 +1103,20 @@ void all_channels(int w, game::ChatFilterMenu menu) {
     changed();
 }
 
+void hide_channels(int w, game::ChatFilterMenu menu) {
+    auto& channels = manager().channel_map;
+    for (const auto& it : game::chat_filter_items())
+        if (it.menu == menu && channels[it.channel] == w) channels[it.channel] = 0;
+    changed();
+}
+
 std::vector<Row> filter_menu(int w, game::ChatFilterMenu menu) {
     std::vector<Row> rows;
     auto joined = joined_channels();
     const ChatManager& m = manager();
+    rows.push_back(action("Show All", on_window(w, [menu](int win) { all_channels(win, menu); })));
+    rows.push_back(action("Hide All", on_window(w, [menu](int win) { hide_channels(win, menu); })));
+    rows.push_back(separator());
     auto add_items = [&](auto pred) {
         for (const auto& it : game::chat_filter_items()) {
             if (it.menu != menu || !pred(it)) continue;
@@ -1008,7 +1136,9 @@ std::vector<Row> filter_menu(int w, game::ChatFilterMenu menu) {
         Row r;
         r.text = filter_group_text(sub);
         if (!enabled) return disabled(std::move(r));
-        r.submenu = [w, sub] { return used(w) ? filter_menu(w, sub) : std::vector<Row>{}; };
+        r.submenu = [w, sub, serial = wnd(w).serial] {
+            return used(w) && wnd(w).serial == serial ? filter_menu(w, sub) : std::vector<Row>{};
+        };
         return r;
     };
     auto add_submenus = [&](game::ChatFilterMenu parent) {
@@ -1024,12 +1154,7 @@ std::vector<Row> filter_menu(int w, game::ChatFilterMenu menu) {
         add_submenus(menu); // (Hailstone's extended submenus)
         add_items([](const game::ChatFilterItem&) { return true; });
     }
-    Row all;
-    all.text = eqstr(game::kStrAll);
-    all.act = on_window(w, [menu](int win) { all_channels(win, menu); });
-    rows.push_back(std::move(all));
-    // Hailstone: the extended channels' submenu after the original menu (its ALL included), so the rows above are
-    // InitContextMenu's.
+    // Hailstone's extended channels follow the original filters.
     if (menu == game::ChatFilterMenu::Filters) rows.push_back(submenu(game::ChatFilterMenu::Extended, true));
     return rows;
 }
@@ -1070,9 +1195,9 @@ std::vector<Row> channel_menu(int w) {
         rows.push_back(disabled(std::move(sub)));
         return rows;
     }
-    sub.submenu = [w] {
+    sub.submenu = [w, serial = c.serial] {
         std::vector<Row> out;
-        if (!used(w)) return out;
+        if (!used(w) || wnd(w).serial != serial) return out;
         auto names = joined_channels();
         for (std::size_t k = 0; k < names.size(); ++k) {
             Row r;
@@ -1119,19 +1244,20 @@ std::vector<Row> hit_modes_menu(int w) {
     for (int cat : {0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 6}) {
         Row r;
         r.text = hit_category_name(cat);
-        r.submenu = [w, cat] {
+        r.submenu = [w, cat, serial = wnd(w).serial] {
             std::vector<Row> out;
+            if (!used(w) || wnd(w).serial != serial) return out;
             for (int mode = 0; mode < 3; ++mode) {
                 Row m;
                 m.text = eqstr(game::hit_mode_eqstr(cat, mode));
                 m.check = hit_mode_value(cat) == mode;
                 if (cat != 6) {
                     // The original categories use ids 0x190 + 10 cat + mode; spell categories use Hailstone's labels.
-                    m.act = [cat, mode] {
+                    m.act = on_window(w, [cat, mode](int) {
                         set_hit_mode(cat, mode);
                         dsp_chat(std::format("{} {}", hit_category_name(cat),
                                              eqstr(game::hit_mode_eqstr(cat, mode))), 0x111);
-                    };
+                    });
                 } else {
                     // 0x1cc..0x1ce: all eight native modes, plus Hailstone's spell modes.
                     m.act = on_window(w, [mode](int win) {
@@ -1149,9 +1275,9 @@ std::vector<Row> hit_modes_menu(int w) {
 }
 
 // The tell menus (UpdateTellMenus @0x6509e0): the names put "/tell <name> " into the active window's input.
-Row tell_names_row(std::uint32_t text, std::vector<std::string> names) {
+Row tell_names_row(std::uint32_t text, std::string_view fallback, std::vector<std::string> names) {
     Row r;
-    r.text = eqstr(text);
+    r.text = filter_label(text, fallback);
     if (names.empty()) return disabled(std::move(r));
     r.submenu = [names] {
         std::vector<Row> out;
@@ -1184,8 +1310,8 @@ void open_tell(const std::string& name) {
         if (int w = tell_window(name); w >= 0) {
             int host = host_of(w);
             if (up_of(host) != w) {
-                wnd(host).up = w;
-                changed();
+                select_tab(host, w + 1);
+                save_manager();
             }
             s.take_focus = std::string();
             s.focus_window = w;
@@ -1200,115 +1326,164 @@ void open_tell(const std::string& name) {
 std::vector<Row> chat_menu(int w) {
     std::vector<Row> rows;
     UiHost* h = chat_host();
-    ChatManager& m = manager();
-    int host = host_of(w);
-    {
-        Row r; // Window: the window's own menu (CContextMenuManager's default menu; sidl.lua's window menu here)
-        r.text = eqstr(game::kStrWindow);
-        std::string screen = std::format("Chat{}", host + 1);
-        r.act = [screen] {
-            if (UiHost* hh = chat_host()) hh->window_menu = screen;
-        };
-        rows.push_back(std::move(r));
-    }
-    {
-        Row r; // 0x2d: the output's scrollbar
-        r.text = eqstr(game::kStrScrollbar);
-        r.check = wnd(w).scrollbar;
-        r.act = on_window(w, [](int win) {
-            wnd(win).scrollbar = !wnd(win).scrollbar;
-            changed();
-        });
-        rows.push_back(std::move(r));
-    }
-    rows.push_back(separator());
-    {
-        Row r; // 0x2a
-        r.text = eqstr(game::kStrNewChatWindow);
-        r.act = [] {
-            if (create_window() >= 0) changed();
-        };
-        rows.push_back(std::move(r));
-    }
-    {
-        Row r; // 0x2c: CTextEntryWnd::Activate(this, 0, eqstr 3141, 1, 15, the name); OK renames it
-        r.text = eqstr(game::kStrRenameWindow);
-        r.act = on_window(w, [](int win) {
-            UiHost* hh = chat_host();
-            if (!hh) return;
-            UiHost::TextEntry e;
-            e.prompt = eqstr(game::kStrRenamePrompt);
-            e.max_chars = 15;
-            e.text = wnd(win).name;
-            std::uint32_t serial = wnd(win).serial;
-            e.done = [win, serial](const std::string& text) {
-                if (!used(win) || wnd(win).serial != serial || text.empty()) return;
-                wnd(win).name = text;
-                changed();
-            };
-            hh->text_entry = std::move(e);
-        });
-        rows.push_back(std::move(r));
-    }
-    {
-        Row r; // 0x2b: Always Chat Here (checked while it is the locked window)
-        r.text = eqstr(game::kStrAlwaysChatHere);
-        r.check = m.locked == w;
-        r.act = on_window(w, [](int win) { set_locked(win, manager().locked != win); });
-        rows.push_back(std::move(r));
-    }
-    rows.push_back(separator());
-    if (h && h->conn) {
-        rows.push_back(tell_names_row(game::kStrReplyTo, h->conn->social().last_tells));
-        rows.push_back(tell_names_row(game::kStrTellFriend, h->conn->social().friends));
-        std::vector<std::string> raid;
-        for (const auto& mem : h->conn->raid().members)
-            if (!mem.name.empty() && raid.size() < 0x48) raid.push_back(mem.name);
-        rows.push_back(tell_names_row(game::kStrTellRaidMember, std::move(raid)));
-    }
-    rows.push_back(separator());
-    auto sub = [&](std::uint32_t text, std::function<std::vector<Row>(int)> fn) {
-        Row r;
-        r.text = eqstr(text);
-        r.submenu = [w, fn = std::move(fn)] { return used(w) ? fn(w) : std::vector<Row>{}; };
-        rows.push_back(std::move(r));
+    const int host = host_of(w);
+    const int tab = w + 1;
+    const auto group = chat_tabs::group(host);
+    const auto position = std::find(group.tabs.begin(), group.tabs.end(), tab);
+    if (position == group.tabs.end()) return rows;
+    const bool multiple_tabs = group.tabs.size() > 1;
+    bool other_windows = false;
+    for (int slot = 1; slot <= kMaxChatWindows; ++slot)
+        other_windows = other_windows || (slot != host && group_used(slot));
+    auto logical = [&](std::string text, std::function<void(int)> fn, bool enabled = true, bool check = false) {
+        rows.push_back(action(std::move(text), on_window(w, std::move(fn)), enabled, check));
     };
-    sub(game::kStrFilters, [](int win) { return filter_menu(win, game::ChatFilterMenu::Filters); });
-    sub(game::kStrChannel, channel_menu);
-    sub(game::kStrLanguage, language_menu);
-    sub(game::kStrHitModes, hit_modes_menu);
-    if (!wnd(host).tell) {
-        // this client's tabs
-        rows.push_back(separator());
-        Row r;
-        r.text = "New Tab";
-        r.act = [host] {
-            if (!used(host)) return;
-            int t = create_window();
-            if (t < 0) return;
-            wnd(t).dock = host;
-            wnd(host).up = t;
-            wnd(host).select = true;
-            changed();
-        };
-        rows.push_back(std::move(r));
-        if (w != host) {
-            Row c;
-            c.text = "Close Tab";
-            c.act = on_window(w, [](int win) { free_window(win); });
-            rows.push_back(std::move(c));
+    auto frame = [&](std::string text, std::function<void(int)> fn, bool enabled = true) {
+        rows.push_back(action(std::move(text), on_group(host, std::move(fn)), enabled));
+    };
+    auto sub = [&](std::string text, std::function<std::vector<Row>(int)> fn, bool enabled = true) {
+        rows.push_back(submenu_row(std::move(text), [w, serial = wnd(w).serial, fn = std::move(fn)] {
+            return used(w) && wnd(w).serial == serial ? fn(w) : std::vector<Row>{};
+        }, enabled));
+    };
+    const auto window_label = [](const chat_tabs::Group& target) {
+        return std::format("{} [{}]", target.title.empty() ? "Chat Window" : target.title, target.slot);
+    };
+    const auto tab_rows = [](int slot) {
+        std::vector<Row> out;
+        const auto target = chat_tabs::group(slot);
+        for (int page : target.tabs) {
+            const auto info = chat_tabs::tab(page);
+            out.push_back(action(info.title.empty() ? std::format("Chat Tab {}", page) : std::string(info.title),
+                on_window(page - 1, [slot](int win) { chat_tabs::select(slot, win + 1); }), true, page == target.selected));
         }
+        return out;
+    };
+
+    frame(filter_label(game::kStrWindow, "Window"), [](int slot) {
+        if (UiHost* hh = chat_host()) hh->window_menu = std::format("Chat{}", slot);
+    });
+    logical(filter_label(game::kStrScrollbar, "Scroll bar"), [](int win) {
+        chat_tabs::set_scrollbar(win + 1, !wnd(win).scrollbar);
+    }, true, wnd(w).scrollbar);
+    logical("Highlight New Messages", [](int win) {
+        chat_tabs::set_highlight(win + 1, !wnd(win).flash);
+    }, true, wnd(w).flash);
+    logical("Tab Highlight Color", [](int win) {
+        if (UiHost* hh = chat_host()) {
+            const auto& c = wnd(win);
+            hh->pick_color(c.flash_color.value_or(chat_tabs::kDefaultHighlightColor), [win, serial = c.serial](std::uint32_t argb) {
+                if (used(win) && wnd(win).serial == serial) chat_tabs::set_color(win + 1, argb & 0xffffffu);
+            });
+        }
+    });
+    logical("Reset Tab Highlight Color", [](int win) { chat_tabs::set_color(win + 1, std::nullopt); },
+            wnd(w).flash_color.has_value());
+    rows.push_back(separator());
+    rows.push_back(action(filter_label(game::kStrNewChatWindow, "New Chat Window"), [] { chat_tabs::new_window(); }));
+    frame(filter_label(game::kStrRenameWindow, "Rename Window"), [](int slot) { chat_tabs::prompt_rename_group(slot); });
+    logical(filter_label(game::kStrAlwaysChatHere, "Always Chat Here"), [](int win) {
+        set_locked(win, manager().locked != win);
+    }, true, manager().locked == w);
+    rows.push_back(separator());
+    frame("New Tab", [](int slot) { chat_tabs::new_tab(slot); });
+    logical("Close Tab", [](int win) { chat_tabs::close(win + 1); }, tab != 1);
+    logical("Rename Tab", [](int win) { chat_tabs::prompt_rename_tab(win + 1); });
+    logical("Move Tab Left", [](int win) { chat_tabs::reorder(win + 1, -1); }, position != group.tabs.begin());
+    logical("Move Tab Right", [](int win) { chat_tabs::reorder(win + 1, 1); }, position + 1 != group.tabs.end());
+    sub("Move Tab to Window", [window_label](int win) {
+        std::vector<Row> out;
+        for (int slot = 1; slot <= kMaxChatWindows; ++slot) {
+            const auto target = chat_tabs::group(slot);
+            if (!target.slot || target.slot == host_of(win)) continue;
+            auto move = on_window(win, [slot, serial = group_at(slot).serial](int page) {
+                if (group_used(slot) && group_at(slot).serial == serial) chat_tabs::move(page + 1, slot);
+            });
+            out.push_back(action(window_label(target), std::move(move)));
+        }
+        return out;
+    }, other_windows);
+    logical("Detach Tab", [](int win) { chat_tabs::detach(win + 1); }, multiple_tabs);
+    logical("Clear Tab Text", [](int win) { chat_tabs::clear(win + 1); });
+    rows.push_back(separator());
+    const net::GameConnection* conn = h ? h->conn : nullptr;
+    const std::vector<std::string> empty;
+    rows.push_back(tell_names_row(game::kStrReplyTo, "Reply to...", conn ? conn->social().last_tells : empty));
+    rows.push_back(tell_names_row(game::kStrTellFriend, "Tell a friend...", conn ? conn->social().friends : empty));
+    std::vector<std::string> raid;
+    if (conn) {
+        for (const auto& mem : conn->raid().members)
+            if (!mem.name.empty() && raid.size() < 0x48) raid.push_back(mem.name);
     }
+    rows.push_back(tell_names_row(game::kStrTellRaidMember, "Tell a raidmember...", std::move(raid)));
+    rows.push_back(separator());
+    sub(filter_label(game::kStrFilters, "Filters"), [](int win) { return filter_menu(win, game::ChatFilterMenu::Filters); });
+    sub(filter_label(game::kStrChannel, "Channel"), channel_menu, !wnd(w).tell);
+    sub(filter_label(game::kStrLanguage, "Language"), language_menu);
+    sub(filter_label(game::kStrHitModes, "Hit Modes"), hit_modes_menu);
+
+    rows.push_back(separator());
+    sub("Switch Tab", [tab_rows](int win) {
+        const int slot = host_of(win);
+        const bool can_cycle = group_at(slot).tabs.size() > 1;
+        auto cycle = [slot](int delta) {
+            return on_group(slot, [delta](int target) {
+                const auto current = chat_tabs::group(target);
+                const auto at = std::find(current.tabs.begin(), current.tabs.end(), current.selected);
+                const auto index = static_cast<std::size_t>(at - current.tabs.begin());
+                const auto count = current.tabs.size();
+                const auto step = delta > 0 ? 1 : count - 1;
+                chat_tabs::select(target, current.tabs[(index + step) % count]);
+            });
+        };
+        std::vector<Row> out;
+        out.push_back(action("Next Tab", cycle(1), can_cycle));
+        out.push_back(action("Previous Tab", cycle(-1), can_cycle));
+        out.push_back(separator());
+        auto pages = tab_rows(slot);
+        for (auto& page : pages) out.push_back(std::move(page));
+        return out;
+    });
+    sub("Chat Windows", [window_label, tab_rows](int) {
+        std::vector<Row> out;
+        for (int slot = 1; slot <= kMaxChatWindows; ++slot) {
+            const auto target = chat_tabs::group(slot);
+            if (!target.slot) continue;
+            out.push_back(submenu_row(window_label(target), [slot, serial = group_at(slot).serial, tab_rows] {
+                return group_used(slot) && group_at(slot).serial == serial ? tab_rows(slot) : std::vector<Row>{};
+            }));
+        }
+        return out;
+    });
+    frame("Combine Chat Windows", [](int slot) { chat_tabs::combine(slot); }, other_windows);
+    frame("Close Window", [](int slot) { chat_tabs::close_group(slot); }, !group.main);
+
+    rows.push_back(separator());
+    sub("Font Size", [](int win) {
+        std::vector<Row> out;
+        for (int font = 0; font <= 10; ++font) {
+            out.push_back(action(std::format("{} ({:.0f} px)", font, ui::chat_font_size(font)), on_window(win, [font](int page) {
+                wnd(page).font = font;
+                changed();
+            }), true, wnd(win).font == font));
+        }
+        return out;
+    });
+    rows.push_back(action("Use Tell Windows", [] { set_tell_windows(!tell_windows_on()); }, true, tell_windows_on()));
+    const bool can_set_timestamps = h && h->layout_setting && h->set_layout_setting;
+    rows.push_back(action("Timestamps", [] {
+        if (UiHost* hh = chat_host(); hh && hh->layout_setting && hh->set_layout_setting)
+            hh->set_layout_setting("chat.timestamps", hh->layout_setting("chat.timestamps") == "1" ? "0" : "1");
+    }, can_set_timestamps, can_set_timestamps && h->layout_setting("chat.timestamps") == "1"));
     return rows;
 }
 
 // ---------------------------------------------------------------- the hs functions
 
-// windows = hs.ChatWindows([into])   -- per chat window shown (not the tabs of another) { slot, title (the tab's
-// that is up), main, tells, tab (the one up, 1-based), select (bring that tab up), tellsIn (Hailstone: how many tells
-// from others its tabs have had; it grows with each), tabs = { { title, unread, tell } } }. `into`, a list the caller
-// keeps from frame to frame, is refilled in place instead of a new list, and so are the window records in it and
-// their tabs (app/lua_ui_record.h): a caller passing it keeps none of them past its next call.
+// windows = hs.ChatWindows([into])   -- visible windows in slot order with slot, title (selected tab), windowTitle,
+// main, tells, tab (selected position, 1-based), select (a selection request), tellsIn (received tell count), and
+// ordered tabs with slot, title, unread, tell, scrollbar, flash, flashColor (RGB or nil), and highlighted (current phase).
+// A caller supplying `into` receives the same list and reusable records. Copy any data needed past the next fill.
 int ChatWindows(lua_State* L) {
     UiHost& h = host(L);
     record::push(L, 1, 0);
@@ -1318,42 +1493,54 @@ int ChatWindows(lua_State* L) {
         return 1;
     }
     sync_lines(*h.chat);
-    for (int w = 0; w < kMaxChatWindows; ++w) {
-        if (!used(w) || host_of(w) != w) continue;
-        auto tabs = tabs_of(w);
-        int up = up_of(w);
-        ChatWnd& c = wnd(w);
-        record::element(L, n + 1, 8);
-        lua_pushinteger(L, w + 1);
+    const double now = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0;
+    for (int w = 1; w <= chat_tabs::kMaxSlots; ++w) {
+        const auto group = chat_tabs::group(w);
+        if (!group.slot) continue;
+        const auto tabs = group.tabs;
+        record::element(L, n + 1, 9);
+        lua_pushinteger(L, w);
         lua_setfield(L, -2, "slot");
-        record::text(L, "title", wnd(up).name.c_str());
-        lua_pushboolean(L, w == 0);
+        record::text(L, "title", chat_tabs::tab(group.selected).title);
+        record::text(L, "windowTitle", group.title);
+        lua_pushboolean(L, group.main);
         lua_setfield(L, -2, "main");
-        lua_pushboolean(L, c.tell);
+        lua_pushboolean(L, group.tells);
         lua_setfield(L, -2, "tells");
-        int at = static_cast<int>(std::find(tabs.begin(), tabs.end(), up) - tabs.begin());
-        lua_pushinteger(L, at + 1);
+        const auto selected = std::find(tabs.begin(), tabs.end(), group.selected);
+        lua_pushinteger(L, selected - tabs.begin() + 1);
         lua_setfield(L, -2, "tab");
-        lua_pushboolean(L, c.select);
+        lua_pushboolean(L, group.select);
         lua_setfield(L, -2, "select");
-        c.select = false;
+        chat_tabs::consume_selection(w);
         std::uint64_t tells_in = 0;
-        for (int tw : tabs) tells_in += wnd(tw).tells_in;
-        lua_pushinteger(L, static_cast<lua_Integer>(tells_in));
-        lua_setfield(L, -2, "tellsIn");
         record::subrecord(L, "tabs", 0);
         for (std::size_t t = 0; t < tabs.size(); ++t) {
-            int tw = tabs[t];
-            record::element(L, static_cast<lua_Integer>(t + 1), 3);
-            record::text(L, "title", wnd(tw).name.c_str());
-            lua_pushboolean(L, tw != up && unread(*h.chat, tw));
+            const auto tab = chat_tabs::tab(tabs[t]);
+            tells_in += tab.tells_in;
+            record::element(L, static_cast<lua_Integer>(t + 1), 8);
+            lua_pushinteger(L, tab.slot);
+            lua_setfield(L, -2, "slot");
+            record::text(L, "title", tab.title);
+            lua_pushboolean(L, tab.slot != group.selected && tab.unread);
             lua_setfield(L, -2, "unread");
-            lua_pushboolean(L, wnd(tw).tell);
+            lua_pushboolean(L, tab.tell);
             lua_setfield(L, -2, "tell");
+            lua_pushboolean(L, tab.scrollbar);
+            lua_setfield(L, -2, "scrollbar");
+            lua_pushboolean(L, tab.highlight);
+            lua_setfield(L, -2, "flash");
+            if (tab.highlight_color) lua_pushinteger(L, *tab.highlight_color);
+            else lua_pushnil(L);
+            lua_setfield(L, -2, "flashColor");
+            lua_pushboolean(L, chat_tabs::highlight_visible(tab.slot, now));
+            lua_setfield(L, -2, "highlighted");
             lua_rawseti(L, -2, static_cast<lua_Integer>(t + 1));
         }
         record::trim(L, static_cast<lua_Integer>(tabs.size()) + 1);
         lua_pop(L, 1); // (the tabs, in their field)
+        lua_pushinteger(L, static_cast<lua_Integer>(tells_in));
+        lua_setfield(L, -2, "tellsIn");
         lua_rawseti(L, -2, ++n);
     }
     record::trim(L, n + 1);
@@ -1377,7 +1564,6 @@ int ChatText(lua_State* L) {
     }
     sync_lines(*h.chat);
     scan_windows(*h.chat, w);
-    wnd(w).seen = h.chat->revision;
     const ChatWnd& c = wnd(w);
     bool names = lua_toboolean(L, 3) != 0;
     bool stamps = lua_toboolean(L, 4) != 0;
@@ -1488,10 +1674,10 @@ bool plugin_code() { return !ui::lua::LuaUi::caller_tag().empty(); }
 // without it the links are added after what is typed (game::link_all_into_chat).
 int ChatTakeFocus(lua_State* L) {
     ChatState& s = state();
-    int w = window_of(L, 1);
+    const int w = group_arg(L, 1);
     if (plugin_code()) return 0;
     int to = used(s.focus_window) ? s.focus_window : active_window();
-    if (s.link_all && w >= 0 && host_of(active_window()) == w) {
+    if (s.link_all && w > 0 && host_of(active_window()) == w) {
         bool have_typed = lua_type(L, 2) == LUA_TSTRING;
         std::string typed = have_typed ? lua_tostring(L, 2) : std::string();
         game::LinkAllChat r = game::link_all_into_chat(typed, *s.link_all);
@@ -1502,7 +1688,7 @@ int ChatTakeFocus(lua_State* L) {
         lua_pushboolean(L, have_typed);
         return 2;
     }
-    if (!s.take_focus || w < 0 || host_of(to) != w) return 0;
+    if (!s.take_focus || w == 0 || host_of(to) != w) return 0;
     lua_pushlstring(L, s.take_focus->data(), s.take_focus->size());
     lua_pushboolean(L, s.replace_focus);
     s.take_focus.reset();
@@ -1559,9 +1745,9 @@ int ChatCycleReply(lua_State* L) {
 // dir = hs.ChatPage(slot)   -- the PAGEUP (-1) / PAGEDOWN (1) key for this window's output, once; nil otherwise
 int ChatPage(lua_State* L) {
     ChatState& s = state();
-    int w = window_of(L, 1);
+    const int w = group_arg(L, 1);
     if (plugin_code()) return 0;
-    if (s.page == 0 || w < 0 || host_of(s.page_window) != w) return 0;
+    if (s.page == 0 || w == 0 || host_of(s.page_window) != w) return 0;
     lua_pushinteger(L, s.page);
     s.page = 0;
     return 1;
@@ -1616,81 +1802,128 @@ int ChatMenu(lua_State* L) {
     int w = up_window(L, 1);
     if (w < 0) return 0;
     ImVec2 mp = ImGui::GetMousePos();
-    h.open_menu(mp.x, mp.y, chat_menu(w));
+    h.open_menu(mp.x, mp.y, chat_context_rows(w + 1));
     return 0;
 }
 
 // slot = hs.ChatNewWindow([title])   -- a new chat window (New Chat Window); nil when all 32 are in use
 int ChatNewWindow(lua_State* L) {
-    int w = create_window();
-    if (w < 0) return 0;
-    if (lua_isstring(L, 1)) wnd(w).name = lua_tostring(L, 1);
-    changed();
-    lua_pushinteger(L, w + 1);
+    const int w = chat_tabs::new_window(lua_isstring(L, 1) ? lua_tostring(L, 1) : "");
+    if (w == 0) return 0;
+    lua_pushinteger(L, w);
     return 1;
 }
 
 // hs.ChatCloseWindow(slot)   -- closes a window (not the main one) with its tabs
 int ChatCloseWindow(lua_State* L) {
-    free_window(window_of(L, 1));
+    const lua_Integer slot = luaL_checkinteger(L, 1);
+    if (slot < 1 || slot > kMaxChatWindows) return 0;
+    const int w = static_cast<int>(slot);
+    if (group_used(w)) chat_tabs::close_group(w);
+    else chat_tabs::close(w);
     return 0;
 }
 
 // tab = hs.ChatNewTab(slot [, title])   -- a new chat window as a tab of this one, brought up; nil when all 32 are in
 // use
 int ChatNewTab(lua_State* L) {
-    int w = window_of(L, 1);
-    if (w < 0) return 0;
-    int host = host_of(w);
-    if (wnd(host).tell) return 0;
-    int t = create_window();
-    if (t < 0) return 0;
-    if (lua_isstring(L, 2)) wnd(t).name = lua_tostring(L, 2);
-    wnd(t).dock = host;
-    wnd(host).up = t;
-    wnd(host).select = true;
-    changed();
-    auto tabs = tabs_of(host);
-    lua_pushinteger(L, static_cast<lua_Integer>(std::find(tabs.begin(), tabs.end(), t) - tabs.begin()) + 1);
+    const int host = group_arg(L, 1);
+    if (tell_group(host) || !chat_tabs::new_tab(host, lua_isstring(L, 2) ? lua_tostring(L, 2) : "")) return 0;
+    lua_pushinteger(L, static_cast<lua_Integer>(group_at(host).tabs.size()));
     return 1;
 }
 
-// hs.ChatCloseTab(slot, tab)   -- closes a tab's window (the window's own tab: the window with its tabs; the main
-// window stays)
+// hs.ChatCloseTab(slot, tab)   -- closes one tab and returns its channels to Main Chat
 int ChatCloseTab(lua_State* L) {
-    int w = window_of(L, 1);
-    const lua_Integer tab = luaL_checkinteger(L, 2);
-    const lua_Integer t = tab < 1 ? -1 : tab - 1; // (math.mininteger - 1 would overflow)
-    if (w < 0) return 0;
-    auto tabs = tabs_of(host_of(w));
-    if (t < 0 || t >= static_cast<lua_Integer>(tabs.size())) return 0;
-    free_window(tabs[static_cast<std::size_t>(t)]);
+    chat_tabs::close(tab_arg(L, 2, group_arg(L, 1)));
     return 0;
 }
 
 // hs.ChatSelectTab(slot, tab)   -- the tab that is up (a click on it)
 int ChatSelectTab(lua_State* L) {
-    int w = window_of(L, 1);
-    const lua_Integer tab = luaL_checkinteger(L, 2);
-    const lua_Integer t = tab < 1 ? -1 : tab - 1; // (math.mininteger - 1 would overflow)
-    if (w < 0) return 0;
-    int host = host_of(w);
-    auto tabs = tabs_of(host);
-    if (t < 0 || t >= static_cast<lua_Integer>(tabs.size())) return 0;
-    int up = tabs[static_cast<std::size_t>(t)];
-    if (up_of(host) == up) return 0;
-    wnd(host).up = up;
-    changed();
+    const int host = group_arg(L, 1);
+    chat_tabs::select(host, tab_arg(L, 2, host));
     return 0;
 }
 
-// hs.ChatSetTitle(slot, title)   -- renames the tab that is up (Rename Window)
+// slot = hs.ChatSplitTab(windowSlot, tab)   -- detaches that tab into its own window; nil when unavailable.
+int ChatSplitTab(lua_State* L) {
+    const int result = chat_tabs::detach(tab_arg(L, 2, group_arg(L, 1)));
+    if (result) lua_pushinteger(L, result);
+    else lua_pushnil(L);
+    return 1;
+}
+
+// moved = hs.ChatJoinTab(windowSlot, tab, targetWindowSlot)   -- appends and selects the tab in the target window.
+int ChatJoinTab(lua_State* L) {
+    const int tab = tab_arg(L, 2, group_arg(L, 1));
+    const int target = group_arg(L, 3);
+    lua_pushboolean(L, chat_tabs::move(tab, target));
+    return 1;
+}
+
+// moved = hs.ChatReorderTab(windowSlot, tab, delta)   -- moves left for a negative offset or right for a positive one.
+int ChatReorderTab(lua_State* L) {
+    const int tab = tab_arg(L, 2, group_arg(L, 1));
+    const lua_Integer delta = luaL_checkinteger(L, 3);
+    const bool in_range = delta > -chat_tabs::kMaxSlots && delta < chat_tabs::kMaxSlots;
+    lua_pushboolean(L, in_range && chat_tabs::reorder(tab, static_cast<int>(delta)));
+    return 1;
+}
+
+// movedCount = hs.ChatCombineTabs(targetWindowSlot)   -- appends every tab from the other windows to the target.
+int ChatCombineTabs(lua_State* L) {
+    lua_pushinteger(L, chat_tabs::combine(group_arg(L, 1)));
+    return 1;
+}
+
+// renamed = hs.ChatSetWindowTitle(windowSlot, title)   -- renames the containing window independently of its tabs.
+int ChatSetWindowTitle(lua_State* L) {
+    const int group = group_arg(L, 1);
+    std::size_t size = 0;
+    const char* title = luaL_checklstring(L, 2, &size);
+    lua_pushboolean(L, chat_tabs::rename_group(group, std::string_view(title, size)));
+    return 1;
+}
+
+// updated = hs.ChatSetTabFlash(windowSlot, tab, enabled)   -- enables or disables background-message highlights.
+int ChatSetTabFlash(lua_State* L) {
+    const int tab = tab_arg(L, 2, group_arg(L, 1));
+    luaL_checktype(L, 3, LUA_TBOOLEAN);
+    lua_pushboolean(L, chat_tabs::set_highlight(tab, lua_toboolean(L, 3) != 0));
+    return 1;
+}
+
+// updated = hs.ChatSetTabFlashColor(windowSlot, tab [, rgb])   -- sets 0xRRGGBB, or restores red with nil or omission.
+int ChatSetTabFlashColor(lua_State* L) {
+    const int tab = tab_arg(L, 2, group_arg(L, 1));
+    std::optional<std::uint32_t> color;
+    if (!lua_isnoneornil(L, 3)) {
+        const lua_Integer rgb = luaL_checkinteger(L, 3);
+        if (rgb < 0 || rgb > 0xffffff) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        color = static_cast<std::uint32_t>(rgb);
+    }
+    lua_pushboolean(L, chat_tabs::set_color(tab, color));
+    return 1;
+}
+
+// updated = hs.ChatSetTabScrollbar(windowSlot, tab, enabled)   -- enables or disables the tab's output scrollbar.
+int ChatSetTabScrollbar(lua_State* L) {
+    const int tab = tab_arg(L, 2, group_arg(L, 1));
+    luaL_checktype(L, 3, LUA_TBOOLEAN);
+    lua_pushboolean(L, chat_tabs::set_scrollbar(tab, lua_toboolean(L, 3) != 0));
+    return 1;
+}
+
+// hs.ChatSetTitle(slot, title [, tab])   -- renames the selected tab or the given tab position.
 int ChatSetTitle(lua_State* L) {
-    int w = up_window(L, 1);
-    std::string title = luaL_checkstring(L, 2);
-    if (w < 0 || title.empty()) return 0;
-    wnd(w).name = title.substr(0, 64);
-    changed();
+    const int tab = tab_arg(L, 3, group_arg(L, 1), true);
+    std::size_t size = 0;
+    const char* title = luaL_checklstring(L, 2, &size);
+    chat_tabs::rename_tab(tab, std::string_view(title, size));
     return 0;
 }
 
@@ -1755,13 +1988,8 @@ int ChatSetFilter(lua_State* L) {
         std::string group = lua_tostring(L, 2);
         auto apply_group = [&](game::ChatFilterMenu menu) {
             if (group != filter_group_text(menu)) return false;
-            if (on) {
-                all_channels(w, menu);
-            } else {
-                for (const auto& it : game::chat_filter_items())
-                    if (it.menu == menu && manager().channel_map[it.channel] == w) manager().channel_map[it.channel] = 0;
-                changed();
-            }
+            if (on) all_channels(w, menu);
+            else hide_channels(w, menu);
             return true;
         };
         if (apply_group(game::ChatFilterMenu::Filters)) return 0;
@@ -1811,13 +2039,9 @@ int ChatSetDefault(lua_State* L) {
     return 0;
 }
 
-// hs.ChatClear(slot)   -- empties the tab that is up (CChatWindow::Clear: its lines so far are not shown again)
+// hs.ChatClear(slot [, tab])   -- empties the selected tab or the given tab position.
 int ChatClear(lua_State* L) {
-    UiHost& h = host(L);
-    int w = up_window(L, 1);
-    if (w < 0 || !h.chat) return 0;
-    wnd(w).cleared = h.chat->revision;
-    ++manager().serial;
+    chat_tabs::clear(tab_arg(L, 2, group_arg(L, 1), true));
     return 0;
 }
 
@@ -1827,13 +2051,7 @@ int ChatTellWindows(lua_State* L) {
     return 1;
 }
 int ChatSetTellWindows(lua_State* L) {
-    ChatManager& m = manager();
-    if (UiHost* h = chat_host(); h && h->chat) sync_lines(*h->chat); // from the next tell on
-    m.tell_windows = lua_toboolean(L, 1) != 0;
-    // The Options window's UseTellWindows box is the same setting (kept in the character's options.ini).
-    if (net::GameConnection* c = character_conn())
-        c->change_client_option(game::ClientOption::UseTellWindows, m.tell_windows ? 1 : 0);
-    changed();
+    set_tell_windows(lua_toboolean(L, 1) != 0);
     return 0;
 }
 
@@ -1890,6 +2108,243 @@ int ChatLink(lua_State* L) {
 }
 
 } // namespace
+
+std::vector<UiHost::MenuRow> chat_context_rows(int tab) {
+    return valid_slot(tab) && used(tab - 1) ? chat_menu(tab - 1) : std::vector<UiHost::MenuRow>{};
+}
+
+namespace chat_tabs {
+
+Group group(int host) {
+    if (!group_used(host)) return {};
+    const ChatGroup& g = group_at(host);
+    const bool tells = tell_group(host);
+    const std::string_view title = !g.name.empty() ? std::string_view(g.name)
+        : tells ? std::string_view("Tells") : std::string_view(wnd(g.tabs.front() - 1).name);
+    return {host, title, g.tabs, g.selected, host_of(0) == host, tells, g.select};
+}
+
+Tab tab(int slot) {
+    if (!valid_slot(slot) || !used(slot - 1)) return {};
+    const ChatWnd& c = wnd(slot - 1);
+    return {slot, c.serial, c.name, c.tell, c.unread, c.flash, c.flash_color, c.tells_in, c.scrollbar};
+}
+
+int group_of(int tab) { return valid_slot(tab) ? host_of(tab - 1) : 0; }
+int active_group() { return host_of(used(manager().active) ? manager().active : 0); }
+int active_tab() { return up_of(active_group()) + 1; }
+
+void consume_selection(int host) {
+    if (group_used(host)) group_at(host).select = false;
+}
+
+namespace {
+
+bool valid_title(std::string_view title) {
+    return !title.empty() && title.find_first_of("\r\n\0", 0, 3) == std::string_view::npos;
+}
+
+void move_tab(int tab, int source, int destination) {
+    remove_tab(source, tab);
+    insert_tab(destination, tab);
+    select_tab(destination, tab);
+    set_active(tab - 1);
+}
+
+bool prompt_title(std::string_view title, const char* prompt, std::function<void(const std::string&)> done) {
+    UiHost* h = chat_host();
+    if (!h) return false;
+    UiHost::TextEntry entry;
+    entry.prompt = prompt;
+    entry.max_chars = 64;
+    entry.text = title;
+    entry.done = std::move(done);
+    h->text_entry = std::move(entry);
+    return true;
+}
+
+} // namespace
+
+int new_window(std::string_view title) {
+    const int w = create_window();
+    if (w < 0) return 0;
+    const int host = vacant_group(w + 1);
+    if (valid_title(title)) wnd(w).name = title.substr(0, 64);
+    insert_tab(host, w + 1);
+    changed();
+    return host;
+}
+
+int new_tab(int host, std::string_view title) {
+    if (!group_used(host)) return 0;
+    sync_current_chat();
+    const int w = create_window();
+    if (w < 0) return 0;
+    if (valid_title(title)) wnd(w).name = title.substr(0, 64);
+    insert_tab(host, w + 1);
+    select_tab(host, w + 1);
+    set_active(w);
+    changed();
+    return w + 1;
+}
+
+bool select(int host, int tab) {
+    if (group_of(tab) != host || !group_used(host)) return false;
+    sync_current_chat();
+    const bool was_selected = group_at(host).selected == tab;
+    select_tab(host, tab);
+    set_active(tab - 1);
+    if (!was_selected) save_manager();
+    return true;
+}
+
+bool close(int tab) {
+    if (tab <= 1 || !group_of(tab)) return false;
+    free_tab(tab - 1);
+    changed();
+    return true;
+}
+
+bool close_group(int host) {
+    if (!group_used(host) || host == host_of(0)) return false;
+    while (group_used(host)) free_tab(group_at(host).tabs.back() - 1);
+    changed();
+    return true;
+}
+
+int detach(int tab) {
+    const int source = group_of(tab);
+    if (!source || group_at(source).tabs.size() < 2) return 0;
+    sync_current_chat();
+    const int destination = vacant_group(tab);
+    move_tab(tab, source, destination);
+    group_at(destination).name = wnd(tab - 1).name;
+    if (UiHost* h = chat_host()) position_detached_chat(*h, source, destination);
+    save_manager();
+    return destination;
+}
+
+bool move(int tab, int host) {
+    const int source = group_of(tab);
+    if (!source || source == host || !group_used(host)) return false;
+    sync_current_chat();
+    move_tab(tab, source, host);
+    save_manager();
+    return true;
+}
+
+bool reorder(int tab, int delta) {
+    const int host = group_of(tab);
+    if (!host || !delta) return false;
+    sync_current_chat();
+    auto& tabs = group_at(host).tabs;
+    const auto position = std::find(tabs.begin(), tabs.end(), tab);
+    const auto index = position - tabs.begin();
+    const auto next = static_cast<std::int64_t>(index) + delta;
+    if (next < 0 || next >= static_cast<std::int64_t>(tabs.size())) return false;
+    const auto target = tabs.begin() + static_cast<std::ptrdiff_t>(next);
+    if (target < position) std::rotate(target, position, position + 1);
+    else std::rotate(position, position + 1, target + 1);
+    select_tab(host, tab);
+    set_active(tab - 1);
+    save_manager();
+    return true;
+}
+
+int combine(int host) {
+    if (!group_used(host)) return 0;
+    sync_current_chat();
+    int moved = 0;
+    for (int source = 1; source <= kMaxChatWindows; ++source) {
+        if (source == host) continue;
+        while (group_used(source)) {
+            move_tab(group_at(source).tabs.front(), source, host);
+            ++moved;
+        }
+    }
+    if (moved) save_manager();
+    return moved;
+}
+
+bool rename_group(int host, std::string_view title) {
+    if (!group_used(host) || !valid_title(title)) return false;
+    group_at(host).name = title.substr(0, 64);
+    save_manager();
+    return true;
+}
+
+bool rename_tab(int tab, std::string_view title) {
+    if (!group_of(tab) || !valid_title(title)) return false;
+    wnd(tab - 1).name = title.substr(0, 64);
+    save_manager();
+    return true;
+}
+
+bool prompt_rename_group(int host) {
+    if (!group_used(host)) return false;
+    const std::uint32_t serial = group_at(host).serial;
+    return prompt_title(group(host).title, "Window title:", [host, serial](const std::string& title) {
+        if (group_used(host) && group_at(host).serial == serial) rename_group(host, title);
+    });
+}
+
+bool prompt_rename_tab(int slot) {
+    if (!group_of(slot)) return false;
+    const Tab c = tab(slot);
+    return prompt_title(c.title, "Tab title:", [slot, serial = c.serial](const std::string& title) {
+        if (used(slot - 1) && wnd(slot - 1).serial == serial) rename_tab(slot, title);
+    });
+}
+
+bool clear(int tab) {
+    UiHost* h = chat_host();
+    if (!group_of(tab) || !h || !h->chat) return false;
+    auto& c = wnd(tab - 1);
+    c.cleared = h->chat->revision;
+    c.unread = false;
+    c.unread_at.reset();
+    ++manager().serial;
+    return true;
+}
+
+bool set_highlight(int tab, bool on) {
+    if (!group_of(tab)) return false;
+    auto& c = wnd(tab - 1);
+    if (c.flash == on) return true;
+    sync_current_chat();
+    c.flash = on;
+    if (!on) c.unread_at.reset();
+    if (!c.tell && manager().ini) save_window(tab - 1);
+    return true;
+}
+
+bool set_color(int tab, std::optional<std::uint32_t> rgb) {
+    if (!group_of(tab) || (rgb && *rgb > 0xffffff)) return false;
+    auto& c = wnd(tab - 1);
+    if (c.flash_color == rgb) return true;
+    c.flash_color = rgb;
+    if (!c.tell && manager().ini) save_window(tab - 1);
+    return true;
+}
+
+bool set_scrollbar(int tab, bool on) {
+    if (!group_of(tab)) return false;
+    auto& c = wnd(tab - 1);
+    if (c.scrollbar == on) return true;
+    c.scrollbar = on;
+    if (!c.tell && manager().ini) save_window(tab - 1);
+    return true;
+}
+
+bool highlight_visible(int tab, double now) {
+    if (!group_of(tab)) return false;
+    const auto start = wnd(tab - 1).unread_at;
+    if (!start) return false;
+    const double elapsed = std::max(now - *start, 0.0);
+    return elapsed >= 5.0 || static_cast<int>(elapsed * 2.0) % 2 == 0;
+}
+
+} // namespace chat_tabs
 
 namespace {
 
@@ -2060,7 +2515,6 @@ void chat_layout_loaded(ui::UiIni& ini, UiHost& host, const std::filesystem::pat
     main.chat_index = num("ChatWindow0_ChatChannel", 0);
     main.scrollbar = num("ChatWindow0_Scrollbar", 1) != 0;
     main.font = num("ChatWindow0_FontStyle", 3);
-    main.up = num("ChatWindow0_Up", -1);
     // Hailstone (a deliberate change from RoF2): a character whose file keeps no chat windows of its own yet (no
     // NumWindows) takes defaults.ini's, as tabs of the main window; the game's defaults.ini makes "Other Chat"
     // (ChatWindow1) a window of its own. Once the file has its own (save_manager writes them at every change), only
@@ -2087,14 +2541,46 @@ void chat_layout_loaded(ui::UiIni& ini, UiHost& host, const std::filesystem::pat
         c.scrollbar = num(k + "Scrollbar", 1) != 0;
         int font = num(k + "FontStyle", 3);
         c.font = font < 0 || font > 7 ? 3 : font;
-        c.dock = own_windows ? num(k + "Dock", -1) : 0;
-        c.up = num(k + "Up", -1);
     }
-    for (int w = 1; w < kMaxChatWindows; ++w) {
-        ChatWnd& c = m.wnd[static_cast<std::size_t>(w)];
-        if (c.used && (c.dock == w || !used(c.dock) || wnd(c.dock).dock >= 0)) c.dock = -1; // only one level of tabs
+    m.groups = {};
+    std::array<int, kMaxChatWindows> legacy_dock{};
+    legacy_dock[0] = -1;
+    for (int w = 1; w < m.num_windows; ++w)
+        legacy_dock[static_cast<std::size_t>(w)] = own_windows ? num(std::format("ChatWindow{}_Dock", w), -1) : 0;
+    std::array<int, kMaxChatWindows> tab_order{};
+    for (int w = 0; w < m.num_windows; ++w) {
+        if (!used(w)) continue;
+        const std::string key = std::format("ChatWindow{}_", w);
+        const int dock = legacy_dock[static_cast<std::size_t>(w)];
+        const bool docked = dock != w && used(dock) && legacy_dock[static_cast<std::size_t>(dock)] < 0;
+        const int saved_group = num(key + "Group", 0);
+        const int group_slot = valid_slot(saved_group) ? saved_group : (docked ? dock + 1 : w + 1);
+        tab_order[static_cast<std::size_t>(w)] = num(key + "TabOrder", w);
+        auto& c = wnd(w);
+        c.flash = num(key + "Highlight", 1) != 0;
+        if (auto rgb = ini.get("ChatManager", key + "HighlightColor")) {
+            std::uint32_t value = 0;
+            const char* end = rgb->data() + rgb->size();
+            const auto [ptr, ec] = std::from_chars(rgb->data(), end, value);
+            if (ec == std::errc{} && ptr == end && (value <= 0xffffff || (value >> 24) == 0xff))
+                c.flash_color = value & 0xffffff;
+        }
+        insert_tab(group_slot, w + 1);
     }
-    for (int w = 0; w < kMaxChatWindows; ++w) m.wnd[static_cast<std::size_t>(w)].select = true;
+    for (int group_slot = 1; group_slot <= kMaxChatWindows; ++group_slot) {
+        if (!group_used(group_slot)) continue;
+        auto& g = group_at(group_slot);
+        std::stable_sort(g.tabs.begin(), g.tabs.end(), [&](int a, int b) {
+            return tab_order[static_cast<std::size_t>(a - 1)] < tab_order[static_cast<std::size_t>(b - 1)];
+        });
+        const std::string key = std::format("ChatGroup{}_", group_slot);
+        g.name = text(key + "Name", g.name);
+        const int legacy_up = num(std::format("ChatWindow{}_Up", group_slot - 1), -1);
+        const int selected = num(key + "Selected", used(legacy_up) ? legacy_up + 1 : 0);
+        select_tab(group_slot, chat_tabs::group_of(selected) == group_slot ? selected : g.tabs.front());
+        g.select = true;
+    }
+    m.active = up_of(host_of(0));
     int locked = num("LockedActiveWindow", 0); // (the original's default: -1; set_locked)
     m.locked = locked >= 0 && locked < m.num_windows && used(locked) ? locked : (locked < 0 ? -1 : 0);
     for (int ch = 0; ch < game::kChatChannelCount; ++ch) {
@@ -2110,20 +2596,10 @@ void chat_layout_loaded(ui::UiIni& ini, UiHost& host, const std::filesystem::pat
         if (mode >= 0 && mode < 3) m.spell_hit_modes[i] = mode;
     }
     restore_chat_history(host, CharacterFiles{user_dir}.chat_history());
-    if (host.chat) {
-        m.synced = host.chat->revision;
-        for (auto& c : m.wnd) c.seen = host.chat->revision;
-    }
+    if (host.chat) m.synced = host.chat->revision;
     push_hit_modes();
     ++m.serial;
 }
-
-bool chat_window_used(int slot) {
-    int w = slot - 1;
-    return used(w) && host_of(w) == w;
-}
-
-void chat_window_closed(int slot) { free_window(slot - 1); }
 
 void request_chat_link_all(std::vector<std::string> tags) {
     if (tags.empty()) return;
@@ -2251,8 +2727,12 @@ void clear_chat_windows(bool all) {
     ChatState& s = state();
     if (!s.host || !s.host->chat) return;
     int active = active_window();
-    for (int w = 0; w < kMaxChatWindows; ++w)
-        if (used(w) && (all || w == active)) wnd(w).cleared = s.host->chat->revision;
+    for (int w = 0; w < kMaxChatWindows; ++w) {
+        if (!used(w) || (!all && w != active)) continue;
+        wnd(w).cleared = s.host->chat->revision;
+        wnd(w).unread = false;
+        wnd(w).unread_at.reset();
+    }
     ++manager().serial;
 }
 
@@ -2260,6 +2740,10 @@ void clear_chat_buffer() {
     ChatState& s = state();
     if (!s.host || !s.host->chat) return;
     s.host->chat->lines.clear();
+    for (auto& c : manager().wnd) {
+        c.unread = false;
+        c.unread_at.reset();
+    }
     ++s.host->chat->revision;
 }
 
@@ -2277,6 +2761,10 @@ void register_chat_api(lua_State* L, UiHost& h) {
                                    {"ChatDefaultChannels", ChatDefaultChannels}, {"ChatSetDefault", ChatSetDefault},
                                    {"ChatClear", ChatClear}, {"ChatNewTab", ChatNewTab},
                                    {"ChatCloseTab", ChatCloseTab}, {"ChatSelectTab", ChatSelectTab},
+                                   {"ChatSplitTab", ChatSplitTab}, {"ChatJoinTab", ChatJoinTab},
+                                   {"ChatReorderTab", ChatReorderTab}, {"ChatCombineTabs", ChatCombineTabs},
+                                   {"ChatSetWindowTitle", ChatSetWindowTitle}, {"ChatSetTabFlash", ChatSetTabFlash},
+                                   {"ChatSetTabFlashColor", ChatSetTabFlashColor}, {"ChatSetTabScrollbar", ChatSetTabScrollbar},
                                    {"ChatTellWindows", ChatTellWindows}, {"ChatSetTellWindows", ChatSetTellWindows},
                                    {"ChatHitModes", ChatHitModes}, {"ChatSetHitMode", ChatSetHitMode},
                                    {"ChatMenu", ChatMenu},

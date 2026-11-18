@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The Modern chat context menu can detach and rejoin tabs, reorder or switch tabs, and combine chat windows. Each tab keeps its filters and history when it moves and has its own unread flash toggle, highlight colour and scrollbar setting. Window titles, tab names and grouping are saved per character. The shared UI API and `/chattabs` can manage the same tabs.
+
 - Tradeskills: clicking a recipe in a tradeskill container shows its components again on an EQEmu server built since June 2026, so Combine, Combine N and Combine All work there. The server now adds the recipe's trivial after the components, and the client threw the whole reply away, leaving the window "Waiting for the components..." for good
 - Chat channels: a chat server link that stops answering is now noticed after 60 seconds with nothing heard from the server and reconnected (as a dropped link already was), instead of staying dead for the rest of the session with channel text going nowhere. After a reconnect the client joins your auto-join channels again; it does not rejoin channels you joined by hand
 - GM commands: after `#gm on` the GM-only slash commands (`/goto`, `/summon`, `/find` and the rest) work at once, as in the original client; they no longer stay refused as "not a valid command" until the next zone change
