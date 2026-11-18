@@ -547,7 +547,8 @@ std::optional<PlayerProfile> decode_player_profile(const AppPacket& p) {
 
         v.checksum = u32();
         v.checksum_size = u32();
-        skip_u32(2);
+        v.shroud_type = u32();
+        u32(); // PlayerProfileData +4, copied to PcBase +0x3410.
         v.gender = u8();
         v.race = u32();
         v.class_ = u8();

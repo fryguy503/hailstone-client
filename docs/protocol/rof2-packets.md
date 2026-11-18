@@ -681,6 +681,51 @@ The leaderboard reply has no reliable category identifier on stock EQEmu, so Hai
 holds the latest selection until the preceding reply and ten-second guard allow it. A missing reply is released
 after thirty seconds, a Hailstone recovery choice. See `docs/unknowns.md` for the residual late-reply ambiguity.
 
+### Spirit Shrouds and Monster Missions (`net/shroud_packets.h`)
+
+| Opcode | Direction | RoF2 | Body |
+| --- | --- | --- | --- |
+| ShroudSelectionWindow | Z→C | 0x2ec3 | u32 shroudkeeper spawn ID, u32 status, u32 reserved, BEL-separated progression, branch, and form records. Nonzero status directs the player to the Shroud Bank. |
+| ShroudRequestStats / ShroudSelect | C→Z | 0x2b37 / 0x1cd0 | u32 selection ID |
+| ShroudSelectCancel | C→Z | 0x79da | empty |
+| ShroudRespondStats | Z→C | 0x6c04 | u32 selection ID, u32 has-data flag, caret-separated name, description, class, level, stats, AA ranks and items |
+| ShroudRequestAbility / ShroudRequestItem | C→Z | 0x3acc / 0x4b25 | u32 selection ID, u32 detail ID |
+| ShroudRespondAbility / ShroudRespondItem | Z→C | 0x006e / 0x2507 | u32 selection ID, u32 detail ID, followed by the item instance for the item response. Ability definitions are provided by `OP_SendAATable`. |
+| ShroudProgress / ShroudProgress2 | Z→C | 0x541d / 0x3823 | u32 row count followed by BEL-separated progression records |
+| Shroud | Z→C | 0x6562 | u32 spawn ID, u16 profile offset, ZoneEntry spawn body. For the local player the offset begins a fixed 0x4ff8-byte base profile followed by a CharInventory body for the new form's possessions. |
+| ShroudRemove | Z→C | 0x67e8 | empty. In the EQEmu draft, precedes the local transition back to the original form. |
+| AltStorage | both | 0x7b71 | u32 action. Open (0) adds u32 entity ID. Withdraw (2) adds a reserved u32 and u64 storage key. Item inspection (5) adds a preview flag and a reserved u32 to the key fields. |
+| AltStorageList / AltStorageNoItems | Z→C | 0x1115 / 0x0728 | u32 retention seconds, u32 count, {name, u32 icon, u64 key, u32 quantity} per row. NoItems is empty. |
+
+| Native Monster Mission opcode | Direction | RoF2 | Body |
+| --- | --- | --- | --- |
+| MonsterMissionCatalog | both | 0x3c54 | Refresh requests carry two zero u32s. Replies carry four u32 fields with task ID at +8, u8 lock existing assignments, u32 count, then {u32 template ID, i32 minimum, i32 maximum, u32 reserved, u8 selectable, name} per role. Nonpositive maximum means unlimited. |
+| MonsterMissionStats | both | 0x3d20 | {u32, u32, u32 template ID, u32} followed by 4096 zero bytes in the request and caret-separated details in the reply. |
+| MonsterMissionAbility | both | 0x34f4 | {u32, u32, u32 template ID, u32 rank ID} |
+| MonsterMissionItem | both | 0x5f08 | The request uses the ability header with an item ID. The reply carries u32 item ID followed by the item instance. |
+| MonsterMissionSelect | C→Z | 0x4eea | {u32, u32, u32 template ID} |
+| MonsterMissionAssignment | Z→C | 0x2e8d | {u32, u32, `char[64]` member name, u32 template ID} |
+| MonsterMissionResult | Z→C | 0x5a67 | {u32, u32, u32 template ID, u32 result}. Zero acknowledges the selection. |
+
+The first u32 after the regular player profile checksum and checksum size carries the profile type. The RoF2
+profile reader at 0x57c650 and the M5 profile-install trace route it through 0x7bf270 to the live profile's
+`+0x340c` (1 Spirit Shroud, 2 Monster Mission). The form snapshot uses the same base-profile destinations,
+as confirmed by REA's trace of 0x4c2ea0. Character selection applies the roster's alternate race and class
+to the model through 0x51c050.
+
+The native Spirit Shroud sends at 0x41375f, 0x413842 and 0x413912 count the application's opcode in their total
+length. The payload sizes above exclude it. The M5 dispatch listing and the stock Monster Mission handlers at
+0x481e80 and 0x482ae0 establish the native mission catalog. The Quest Journal can reopen an offered catalog while
+that task is active. The client uses the catalog's role names and the roster's assignments to show capacity.
+The server decides all form admission, storage, mission progress and rewards. A successful mission selection
+acknowledges a role assignment. The actual profile and inventory still change only when the server sends them.
+
+The local EQEmu draft supplies the form snapshot and a shared-task catalog through `ShroudSelectionWindow`,
+using the active task ID in place of the shroudkeeper spawn ID.
+Its roster uses each role's class in the template field. Its inbound decoders need to use the native payload
+sizes above for selection, cancellation, stats and details. In that draft, a withdrawal acknowledgement with
+the matching key removes the displayed row. A rejected withdrawal uses the all-ones key.
+
 ### Bazaar and barter (`net/market_packets.h`, `GameConnection` in `net/game_connection_market.cpp`, rules in `game/bazaar.{h,cpp}`)
 
 Tried live with two clients (a trader on a rug stall, type 155, and a shopper): Begin Trader on the stall, the slot selection and price load, the search, Find Trader (the path, the button's 15 s wait), a row's Buy (the quantity dialog), /offlinemode's refusal 771. Earlier in the Bazaar of an EQEmu server (playprobe `--shop-trader`, `--bazaar`, `--bazaar-buy`): the trader list (OP_TraderBulkSend), the search (17 and 23 results from simulated traders), a shop at a simulated trader (17 items, close), a purchase's answers (a search purchase without coin: sub action 7).

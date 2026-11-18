@@ -2060,6 +2060,22 @@ keep an all-category filter and the server-supplied kit name. The camp countdown
 does not mutate membership or grant permission to place a camp before the server updates it.
 
 
+## Spirit Shrouds and Monster Missions
+
+A shroudkeeper on a supporting server opens the Spirit Shroud picker. Both interfaces show the offered forms,
+unlock progress, levels, abilities and equipment previews. Returning to the shroudkeeper can restore the original
+form. A shared task with an offered Monster Mission catalog adds Monster Select to the Quest Journal. The picker
+shows required and optional roles and counts assignments against each role's capacity. A server acknowledgement
+confirms the assignment. The server sends the form change when the character actually takes on the role.
+
+A form change replaces the server-supplied profile and carried items, including spells, buffs and alternate
+abilities. The character-select model also uses alternate appearance data when the server supplies it. The
+inventory shows shroud progress when received. At an eligible banker, the Shroud Bank can inspect and retrieve
+items the server stored. The server supplies the storage contents and confirms each withdrawal.
+
+See [the RoF2 packet layouts](protocol/rof2-packets.md#spirit-shrouds-and-monster-missions-netshroud_packetsh)
+and [the remaining server-compatibility and gameplay checks](unknowns.md#spirit-shrouds-and-monster-missions).
+
 ## Adventures (LDoN)
 
 Alt+V (`TOGGLE_ADVREQUESTWIN`, index 351) toggles the adventure window independently of a recruiter. A right click

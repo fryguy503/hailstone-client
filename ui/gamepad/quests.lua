@@ -202,8 +202,16 @@ ui.window("Quest Journal", function()
         P.draw("##taskdesc", desc, API.windows.Text(TW, "TASK_Description") or "", rx0, descY, x1, y1 - previewH - T.px(8), { empty = "No description." })
         ui.SetCursorPos(rx0 - wx, y1 - previewH - wy)
         local previewEnabled = API.windows.ChildState(TW, "TASK_PreviewRewardButton") == true
-        if T.button("##taskpreview", "Preview Reward", x1 - rx0, previewH, { disabled = not previewEnabled }, pad) then
+        local canSelectMonster = API.windows.ChildShown(TW, "TASK_MonsterButton") == true
+        local actionWidth = canSelectMonster and (x1 - rx0 - T.px(10)) / 2 or x1 - rx0
+        if T.button("##taskpreview", "Preview Reward", actionWidth, previewH, { disabled = not previewEnabled }, pad) then
           API.windows.ClickChild(TW, "TASK_PreviewRewardButton", "left")
+        end
+        if canSelectMonster then
+          ui.SameLine(0, T.px(10))
+          if T.button("##taskmonster", "Select Monster", actionWidth, previewH, {}, pad) then
+            API.windows.ClickChild(TW, "TASK_MonsterButton", "left")
+          end
         end
         -- X abandons the focused task (the list's row, which is the selected one) through the stock Remove, which
         -- asks first
@@ -217,7 +225,10 @@ ui.window("Quest Journal", function()
         local texts = API.windows.ListRow(TW, "STASK_MemberList", i - 1)
         if not texts then return end
         T.textIn(rx0_ + T.px(16), ry0, rx1 - T.px(16), ry1, texts[1] or "", C.text, 0)
-        if (texts[2] or "") ~= "" then T.textIn(rx0_, ry0, rx1 - T.px(16), ry1, texts[2], C.dim, 1) end
+        local role = texts[2] or ""
+        local monster = texts[3] or ""
+        if monster ~= "" then role = role ~= "" and (role .. "  /  " .. monster) or monster end
+        if role ~= "" then T.textIn(rx0_, ry0, rx1 - T.px(16), ry1, role, C.dim, 1) end
       end)
       if n == 0 then T.draw(x0, top + T.px(40), "You are not in a shared task.", C.faint) end
     else

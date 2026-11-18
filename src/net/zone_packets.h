@@ -216,6 +216,7 @@ struct ProfileBandolier {
 struct PlayerProfile {
     std::uint32_t checksum = 0;      // eq_crc32 of bytes [8, size - 1)
     std::uint32_t checksum_size = 0; // size - 9
+    std::uint32_t shroud_type = 0;   // PlayerProfileData +0, copied to PcBase +0x340c.
     std::uint8_t gender = 0;
     std::uint32_t race = 0;
     std::uint8_t class_ = 0; // NMS multiclass characters are created as Bard (16)

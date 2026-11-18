@@ -267,7 +267,7 @@ public:
     AAWindow() : StockWindow("AAWindow", false) {}
 
     const ListData* list(UiHost& host, std::string_view id) override {
-        if (host.conn) follow_selection(host.conn->alt_adv());
+        if (host.conn) follow_selection(*host.conn);
         if (id == "ModernList") return host.conn ? &modern_list(host) : nullptr;
         int tab = index_of(id);
         if (tab < 0 || !host.conn) return nullptr;
@@ -351,7 +351,7 @@ public:
     }
     static std::optional<game::HotButton> aa_button(UiHost& host, std::uint32_t id) {
         const game::AltAbility* a = host.conn && id ? host.conn->alt_adv().get(id) : nullptr;
-        if (!a || a->group <= 0) return std::nullopt;
+        if (!a || a->group <= 0 || a->monster_only() != host.conn->shrouded()) return std::nullopt;
         game::HotButton b;
         b.type = game::HotButtonType::Social;
         b.slot = game::kSocialCount + a->group;
@@ -362,13 +362,13 @@ public:
         if (!host.conn) return;
         const auto& c = *host.conn;
         const auto& aa = c.alt_adv();
-        follow_selection(aa);
+        follow_selection(c);
         if (id == "CurrentCount") out.text = std::to_string(aa.points);
         else if (id == "TotalCount") out.text = std::to_string(aa.spent);
         else if (id == "AssignedCount") out.text = std::to_string(aa.assigned[0]);
         else if (id == "ExpCount") out.text = std::to_string(aa.percent) + "%";
-        else if (id == "MonsterLabel" || id == "AAW_LoadSaveLabel" || id == "AAW_LoadButton" || id == "AAW_SaveButton")
-            out.shown = false; // monster abilities: not on this server
+        else if (id == "MonsterLabel") out.shown = c.shrouded();
+        else if (id == "AAW_LoadSaveLabel" || id == "AAW_LoadButton" || id == "AAW_SaveButton") out.shown = false;
         else if (id == "Description") {
             const game::AltAbility* a = selected_ ? aa.get(selected_) : nullptr;
             out.text = a ? c.aa_description(*a) : std::string();
@@ -439,7 +439,7 @@ public:
         if (!host.conn || button != "left") return false;
         auto& c = *host.conn;
         std::uint32_t pct = c.alt_adv().percent;
-        follow_selection(c.alt_adv());
+        follow_selection(c);
         if (id == "CanPurchaseFilter") {
             // CAAWnd's filter (+0x22c): the check box sets "trainable only"; the kind, expansion and category
             // combos stay at "any" (their contents are not traced).
@@ -487,7 +487,9 @@ private:
     // The selection follows its ability: once the selected rank is bought (owned, with a next rank the table
     // knows), the next rank is selected, the one the list now shows, so that Train buys it without a click on the
     // row again. Deliberate difference: not traced in CAAWnd, whose list refill after a purchase is not settled.
-    void follow_selection(const game::AltAdvState& aa) {
+    void follow_selection(const net::GameConnection& c) {
+        const auto& aa = c.alt_adv();
+        if (const auto* ability = aa.get(selected_); ability && ability->monster_only() != c.shrouded()) selected_ = 0;
         for (int hops = 0; hops < 64 && selected_ && aa.has(selected_); ++hops) {
             const game::AltAbility* a = aa.get(selected_);
             if (!a || a->next_id <= 0 || !aa.get(static_cast<std::uint32_t>(a->next_id))) break;
@@ -625,6 +627,276 @@ private:
     int selected_ = -1;
 };
 
+class ShroudSelectionWindow : public StockWindow {
+public:
+    explicit ShroudSelectionWindow(bool mission)
+        : StockWindow(mission ? "TaskTemplateSelectWnd" : "ProgressionSelectionWnd", false), mission_(mission) {}
+
+    bool shown(UiHost& host) override {
+        return host.conn && host.conn->shroud_selection_open() && host.conn->shroud_selection() &&
+               host.conn->shroud_selection()->status == 0 &&
+               (host.conn->shroud_selection()->context_id != 0) == mission_;
+    }
+    void set_shown(UiHost& host, bool show) override {
+        if (!show && shown(host)) host.conn->cancel_shroud_selection(host.conn->shroud_selection_revision());
+    }
+    void frame(UiHost& host) override {
+        if (!shown(host)) {
+            selected_ = -1;
+            inspected_ability_.reset();
+            forms_.clear();
+        }
+    }
+
+    const ListData* list(UiHost& host, std::string_view id) override {
+        if (!shown(host)) return nullptr;
+        auto& c = *host.conn;
+        if (id == "Forms") return catalog(c);
+        const auto* stats = details(c);
+        if (id == "Stats") {
+            stats_ = {};
+            stats_.columns = 2;
+            stats_.labels = {"Stat", "Value"};
+            stats_.widths = {150, 75};
+            if (!stats || !stats->has_data) return &stats_;
+            stats_.rows = {ListRow{{"Class", game::class_name(stats->class_)}},
+                           ListRow{{"Level", std::to_string(stats->level)}},
+                           ListRow{{"Hit Points", std::to_string(stats->hp)}},
+                           ListRow{{"Mana", std::to_string(stats->mana)}},
+                           ListRow{{"Endurance", std::to_string(stats->endurance)}},
+                           ListRow{{"Strength", std::to_string(stats->str)}},
+                           ListRow{{"Stamina", std::to_string(stats->sta)}},
+                           ListRow{{"Charisma", std::to_string(stats->cha)}},
+                           ListRow{{"Dexterity", std::to_string(stats->dex)}},
+                           ListRow{{"Intelligence", std::to_string(stats->int_)}},
+                           ListRow{{"Agility", std::to_string(stats->agi)}},
+                           ListRow{{"Wisdom", std::to_string(stats->wis)}}};
+            return &stats_;
+        }
+        if (id == "Abilities") {
+            abilities_ = {};
+            abilities_.columns = 2;
+            abilities_.labels = {"Ability", "Rank"};
+            abilities_.widths = {210, 60};
+            if (stats && stats->has_data) {
+                for (const auto& ability : stats->abilities) {
+                    const auto* known = c.alt_adv().get(ability.rank_id);
+                    abilities_.rows.push_back(ListRow{{known ? c.aa_name(*known) : std::format("Ability {}", ability.rank_id),
+                                                       std::to_string(ability.rank_value)}});
+                    if (inspected_ability_ == ability.rank_id) abilities_.selected = static_cast<int>(abilities_.rows.size()) - 1;
+                }
+            }
+            return &abilities_;
+        }
+        if (id == "Equipment") {
+            items_ = {};
+            items_.labels = {"Item"};
+            items_.widths = {240};
+            if (stats && stats->has_data)
+                for (const auto& item : stats->items) items_.rows.push_back(ListRow{{item.name}});
+            return &items_;
+        }
+        return nullptr;
+    }
+
+    bool list_click(UiHost& host, std::string_view id, int row, bool right, int) override {
+        if (!shown(host) || row < 0) return false;
+        auto& c = *host.conn;
+        if (id == "Forms" && !right) {
+            if (revision_ != c.shroud_selection_revision() || c.shroud_selection_pending() ||
+                static_cast<std::size_t>(row) >= forms_.size()) return false;
+            if (selected_ != row) {
+                selected_ = row;
+                inspected_ability_.reset();
+                if (const auto* form = selected(c); form && form->unlocked)
+                    c.request_shroud_stats(revision_, form->selection_id);
+            }
+            return true;
+        }
+        const auto* stats = details(c);
+        if (!stats || !stats->has_data) return false;
+        const auto index = static_cast<std::size_t>(row);
+        if (id == "Abilities" && index < stats->abilities.size()) {
+            inspected_ability_ = stats->abilities[index].rank_id;
+            c.request_shroud_ability(revision_, stats->selection_id, *inspected_ability_);
+            return true;
+        }
+        if (id == "Equipment" && index < stats->items.size()) {
+            c.request_shroud_item(revision_, stats->selection_id, stats->items[index].item_id);
+            return true;
+        }
+        return false;
+    }
+
+    void child(UiHost& host, std::string_view id, Child& out) override {
+        if (!shown(host)) return;
+        const auto& c = *host.conn;
+        const auto* form = selected(c);
+        const auto* stats = details(c);
+        if (id == "Accept") out.enabled = form && form->unlocked && !c.shroud_selection_pending();
+        if (id == "Description") {
+            if (!form) out.text = "Choose a form to see its details.";
+            else if (stats && stats->has_data) out.text = stats->description;
+            else out.text = branch(c, forms_[static_cast<std::size_t>(selected_)]).description;
+        }
+        if (id == "DetailStatus") {
+            if (c.shroud_selection_pending()) out.text = "Waiting for the server to confirm your selection…";
+            else if (form && !form->unlocked) {
+                if (!mission_) out.text = "This form is locked.";
+                else out.text = at_capacity(*form) ? "This role is full." : "This role is unavailable.";
+            }
+            else if (form && !stats) out.text = "Waiting for the form's details…";
+            else if (stats && !stats->has_data) out.text = "The server has no details for this form.";
+        }
+        if (id == "RoleRequirement" && form && form->minimum_players)
+            out.text = std::format("Required players for this role: {}", form->minimum_players);
+        if (id == "AbilityDescription" && stats && inspected_ability_) {
+            const auto* ability = c.shroud_ability_detail() == *inspected_ability_ ? c.alt_adv().get(*inspected_ability_) : nullptr;
+            out.text = ability ? c.aa_description(*ability) : "Waiting for ability details…";
+        }
+    }
+
+    bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
+        if (!shown(host) || button != "left") return false;
+        if (id == "Cancel") host.conn->cancel_shroud_selection(revision_);
+        else if (id == "Accept") {
+            if (const auto* form = selected(*host.conn); form && form->unlocked)
+                host.conn->select_shroud(revision_, form->selection_id);
+        } else return false;
+        return true;
+    }
+
+private:
+    struct FormRow { std::size_t category, branch, form; };
+
+    static bool at_capacity(const net::ShroudForm& form) {
+        return form.maximum_players && form.assigned_players >= form.maximum_players;
+    }
+
+    static const auto& branch(const net::GameConnection& c, const FormRow& index) {
+        return c.shroud_selection()->categories[index.category].branches[index.branch];
+    }
+    const net::ShroudForm* selected(const net::GameConnection& c) const {
+        if (revision_ != c.shroud_selection_revision() || selected_ < 0 ||
+            static_cast<std::size_t>(selected_) >= forms_.size()) return nullptr;
+        const auto& index = forms_[static_cast<std::size_t>(selected_)];
+        return &branch(c, index).forms[index.form];
+    }
+    const net::ShroudStats* details(const net::GameConnection& c) const {
+        const auto* form = selected(c);
+        const auto& stats = c.shroud_stats();
+        return form && stats && stats->selection_id == form->selection_id ? &*stats : nullptr;
+    }
+    const ListData* catalog(const net::GameConnection& c) {
+        const bool same_offer = !forms_.empty() && revision_ == c.shroud_selection_revision();
+        if (!same_offer) {
+            revision_ = c.shroud_selection_revision();
+            selected_ = -1;
+            inspected_ability_.reset();
+        } else if (!mission_) {
+            catalog_.selected = selected_;
+            return &catalog_;
+        }
+        forms_.clear();
+        catalog_ = {};
+        catalog_.selected = selected_;
+        catalog_.columns = mission_ ? 5 : 4;
+        catalog_.labels = {"Category", "Form", "Level", "Availability"};
+        catalog_.widths = {125, 190, 52, 95};
+        if (mission_) {
+            catalog_.labels.push_back("Assigned");
+            catalog_.widths.push_back(65);
+        }
+        const auto& categories = c.shroud_selection()->categories;
+        for (std::size_t category = 0; category < categories.size(); ++category) {
+            const auto& group = categories[category];
+            for (std::size_t branch = 0; branch < group.branches.size(); ++branch) {
+                const auto& choice = group.branches[branch];
+                for (std::size_t form = 0; form < choice.forms.size(); ++form) {
+                    const auto& level = choice.forms[form];
+                    forms_.push_back({category, branch, form});
+                    std::string availability;
+                    if (level.unlocked) availability = "Available";
+                    else if (at_capacity(level)) availability = "Full";
+                    else if (mission_) availability = "Unavailable";
+                    else availability = std::format("Locked · {}%", choice.progress);
+                    const bool level_label = level.name.empty() || level.name == std::format("Level {}", level.level);
+                    const auto& name = level_label && !choice.name.empty() ? choice.name : level.name;
+                    const auto& category_name = c.shroud_selection()->native_mission ? choice.name : group.name;
+                    ListRow row{{category_name, name, level.level ? std::to_string(level.level) : "", std::move(availability)},
+                                level.unlocked ? Rgb{1, 1, 1} : Rgb{0.7f, 0.7f, 0.7f}};
+                    if (mission_) {
+                        if (level.maximum_players)
+                            row.texts.push_back(std::format("{} / {}", level.assigned_players, level.maximum_players));
+                        else row.texts.push_back(level.assigned_players ? std::to_string(level.assigned_players) : "");
+                    }
+                    catalog_.rows.push_back(std::move(row));
+                }
+            }
+        }
+        return &catalog_;
+    }
+
+    bool mission_;
+    std::uint64_t revision_ = 0;
+    int selected_ = -1;
+    std::optional<std::uint32_t> inspected_ability_;
+    std::vector<FormRow> forms_;
+    ListData catalog_, stats_, abilities_, items_;
+};
+
+class ShroudProgressWindow : public StockWindow {
+public:
+    ShroudProgressWindow() : StockWindow("ShroudProgressWnd", false) {}
+    bool shown(UiHost& host) override {
+        return host.conn && host.conn->shroud_progress_available() && StockWindow::shown(host);
+    }
+    void frame(UiHost& host) override {
+        if (!host.conn || !host.conn->shroud_progress_available()) set_shown(host, false);
+    }
+    void set_shown(UiHost& host, bool show) override {
+        if (!show) selected_.reset();
+        StockWindow::set_shown(host, show);
+    }
+    const ListData* list(UiHost& host, std::string_view id) override {
+        if (!shown(host) || id != "Progress") return nullptr;
+        progress_ = {};
+        progress_.columns = 3;
+        progress_.labels = {"Category", "Forms unlocked", "Next form"};
+        progress_.widths = {150, 105, 200};
+        for (const auto& entry : host.conn->shroud_progress()) {
+            if (selected_ == entry.category_id) progress_.selected = static_cast<int>(progress_.rows.size());
+            progress_.rows.push_back(ListRow{{entry.name, std::format("{} / {}", entry.unlocked, entry.total),
+                                              entry.next_name.empty() ? "" : std::format("{} ({}%)", entry.next_name, entry.percent)}});
+        }
+        return &progress_;
+    }
+    bool list_click(UiHost& host, std::string_view id, int row, bool right, int) override {
+        if (!shown(host) || id != "Progress" || right || row < 0) return false;
+        const auto& progress = host.conn->shroud_progress();
+        if (static_cast<std::size_t>(row) >= progress.size()) return false;
+        selected_ = progress[static_cast<std::size_t>(row)].category_id;
+        return true;
+    }
+    void child(UiHost& host, std::string_view id, Child& out) override {
+        if (!shown(host) || id != "Description" || !selected_) return;
+        const auto& progress = host.conn->shroud_progress();
+        const auto row = std::find_if(progress.begin(), progress.end(), [&](const auto& entry) {
+            return entry.category_id == *selected_;
+        });
+        if (row == progress.end()) return;
+        out.text = row->description;
+        if (!row->next_name.empty() && !row->next_description.empty()) {
+            if (!out.text->empty()) *out.text += "\n\n";
+            *out.text += row->next_name + "\n" + row->next_description;
+        }
+    }
+
+private:
+    ListData progress_;
+    std::optional<std::uint32_t> selected_;
+};
+
 // CTaskWnd (game/task_window.h builds the rows): the active tasks with their type, title and time left, the selected
 // task's objectives and description, Remove (asked first), the shared task's members and the leader's buttons, and the
 // quest history with a completed task's objectives.
@@ -702,9 +974,7 @@ public:
             return &history_elements_;
         }
         if (id == "STASK_MemberList") {
-            // CTaskWnd_FillMemberList @0x770470: each member, "Leader" (0x9e9988) in the role column and the row yellow
-            // (0xffff ff00) for the leader. The Template column (the member's monster mission template) stays empty:
-            // EQEmu sends no templates.
+            // CTaskWnd_FillMemberList @0x770470: the leader's row is yellow; the roster can carry a mission role.
             members_ = {};
             members_.columns = 3;
             members_.labels = {"Member", "Role", "Template"};
@@ -714,7 +984,8 @@ public:
             for (const auto& n : ts.shared_members) {
                 bool leader = !ts.shared_leader.empty() && n == ts.shared_leader;
                 Rgb col = argb_to_rgb(leader ? 0xffffff00 : 0xffffffff);
-                members_.rows.push_back({{n, leader ? "Leader" : "", ""}, col, std::nullopt, {col, col, col}});
+                members_.rows.push_back({{n, leader ? "Leader" : "", c.shared_task_member_template_name(n)},
+                                         col, std::nullopt, {col, col, col}});
             }
             return &members_;
         }
@@ -783,7 +1054,8 @@ public:
         } else if (id == "TASK_AbandonButton") {
             out.enabled = abandon_enabled_ && selected_task(c) != nullptr;
         } else if (id == "TASK_MonsterButton") {
-            out.enabled = false; // the entry's monster mission templates (+0x3be8): EQEmu sends none
+            const auto* task = selected_task(c);
+            out.shown = out.enabled = task && c.shared_task_monster_select_available(task->task_id);
         } else if (id == "TASK_PreviewRewardButton") {
             const game::Task* t = selected_task(c);
             out.enabled = preview_enabled_ && t && t->reward_set;
@@ -825,7 +1097,7 @@ public:
             return true;
         }
         if (id == "TASK_MonsterButton") {
-            // Monster Select needs the entry's monster mission templates, which EQEmu does not send here.
+            if (const auto* task = selected_task(c)) c.shared_task_monster_select(task->task_id);
             return true;
         }
         // The shared task page (CTaskWnd::WndNotification @0x7716b0).
@@ -1686,6 +1958,9 @@ private:
 void add_progress_windows(std::vector<std::unique_ptr<StockWindow>>& out) {
     out.push_back(std::make_unique<TaskSelectWindow>());
     out.push_back(std::make_unique<TaskWindow>());
+    out.push_back(std::make_unique<ShroudSelectionWindow>(false));
+    out.push_back(std::make_unique<ShroudSelectionWindow>(true));
+    out.push_back(std::make_unique<ShroudProgressWindow>());
     out.push_back(std::make_unique<SkillsWindow>());
     out.push_back(std::make_unique<TrainWindow>());
     out.push_back(std::make_unique<AAWindow>());

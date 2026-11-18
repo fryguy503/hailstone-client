@@ -4,6 +4,11 @@ What is left before the client is feature complete, in the order to work on it. 
 
 Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 
+## Spirit Shrouds and Monster Missions
+
+- [x] Server-supplied form catalogs, stats and detail requests, character and observer form updates, shared-task template rows, shroud progress and Shroud Bank item recovery in both UI packs.
+- [ ] Live acceptance on a RoF2 server with configured shroud forms and missions, including zoning or relogging in a form, mission completion, and withdrawal of stored possessions.
+
 ## Server add-on policy
 
 - [x] Optional required/allow/block lists by GitHub repository (owner/repo; bare names refused) for every kind the add-on manager installs, intact package identities, required autostart that the player cannot stop, consent gates, and active upscaler checks; disabled unless `[addons] enforce = on`.

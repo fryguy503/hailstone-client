@@ -169,9 +169,9 @@ struct AltAdvState {
     // The same into `out`, reusing its elements' storage (the per-frame character: no allocation while the owned
     // list stays as it is).
     void sheet_abilities_into(std::vector<mechanics::SheetAbility>& out) const;
-    // AltAdvManager::CanSeeAbility @0x4a40f0 (a normal profile): the first rank of an ability not
+    // AltAdvManager::CanSeeAbility @0x4a40f0: the first rank of an ability not
     // owned, the rank after an owned one, or the owned last rank.
-    bool can_see(const AltAbility& a, std::uint8_t class_id) const;
+    bool can_see(const AltAbility& a, std::uint8_t class_id, bool monster_profile = false) const;
     // The visible ranks of one AA window tab (type; 0 = all), in ascending rank id order (CAAWnd's list fill
     // 0x608ac0 walks the ids 0..49998), each one the filter accepts; `who` is CanTrainAbility's player.
     std::vector<const AltAbility*> visible(std::int32_t type, std::uint8_t class_id) const;

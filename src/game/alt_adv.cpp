@@ -73,7 +73,7 @@ bool AltAdvState::can_train(const AltAbility& a, const AATrainer& who) const {
     if (static_cast<std::int32_t>(points) < a.cost) return false;
     if (who.spend_limit != -1 && static_cast<std::int32_t>(spent) + a.cost > who.spend_limit) return false;
     if (!who.ignore_level && who.level < a.level_req) return false;
-    if (a.monster_only() && !who.monster_profile) return false;
+    if (a.monster_only() != who.monster_profile) return false;
     if (!a.class_allowed(who.class_id)) return false;
     if (a.grant_only) return false;
     if (!meets_prerequisites(a)) return false;
@@ -139,9 +139,8 @@ void AltAdvState::sheet_abilities_into(std::vector<mechanics::SheetAbility>& out
     out.resize(n);
 }
 
-// AltAdvManager::CanSeeAbility @0x4a40f0 for a normal (non-monster) profile.
-bool AltAdvState::can_see(const AltAbility& a, std::uint8_t class_id) const {
-    if (a.monster_only()) return false;
+bool AltAdvState::can_see(const AltAbility& a, std::uint8_t class_id, bool monster_profile) const {
+    if (a.monster_only() != monster_profile) return false;
     if (!a.class_allowed(class_id)) return false;
     if ((a.next_id <= 0 || a.rank == a.max_rank) && has(a.id)) return true; // the owned last rank
     if (const AltAbility* prev = get(static_cast<std::uint32_t>(a.prev_id))) {
@@ -162,7 +161,9 @@ std::vector<const AltAbility*> AltAdvState::visible(std::int32_t type, std::uint
 std::vector<const AltAbility*> AltAdvState::visible(std::int32_t type, std::uint8_t class_id, const AAFilter& filter,
                                                     const AATrainer& who) const {
     std::vector<const AltAbility*> out;
-    for (const AltAbility* a : visible(type, class_id)) {
+    for (const auto& [id, ability] : table) {
+        if ((type != 0 && ability.type != type) || !can_see(ability, class_id, who.monster_profile)) continue;
+        const AltAbility* a = &ability;
         // AltAbility_FirstPersistentEffect: the persistent effects are the ability's effect list (EQEmu sends them
         // all as such); its first value is the first effect's SPA record, non-zero when there is one.
         bool persistent = !a->effects.empty();

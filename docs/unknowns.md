@@ -2,6 +2,22 @@
 
 What the client does not implement yet, or implements with an approximation it cannot confirm. Entries are removed once settled.
 
+## Spirit Shrouds and Monster Missions
+
+- Live acceptance requires a server with Spirit Shrouds, Monster Mission roles, and Shroud Bank storage enabled.
+  The matching EQEmu server draft leaves the profile type zero in some snapshots. Hailstone uses the accepted
+  catalog context for local transitions and recognizes alternate class or race from the character list on relog.
+  A same-class, same-race form in that draft needs a populated profile type to be identifiable after reconnecting.
+- Check a real mission through role selection, zoning, rejoining, failure and successful completion. Confirm the
+  client receives the normal profile and possessions before the mission's rewards arrive. Confirm the shroudkeeper
+  return path and inspect and withdraw stored items near the banker using both interfaces.
+- The RoF2 bank's Shroud Bank button sends `OP_AltStorage` action 0 to the current banker. The draft server
+  accepts this only after it has authorized that NPC. The shroudkeeper can authorize and open storage on the
+  same interaction. Ordinary bankers need server-side authorization for first-time access in the draft.
+- The draft server's Spirit Shroud request decoders count two extra bytes. Those bytes are the application
+  opcode in the stock RoF2 sends. A server using the draft needs to correct those decoders before form
+  requests work. It also needs to resend the role offer when a player rejoins a mission before selecting a role.
+
 ## Legacy environmental particles
 
 - Legacy particle switches (`app/switch_particles.*`, `assets/legacy_particles.*`): explicit-position stage-2 slots
@@ -238,7 +254,7 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
   - A row in state 1 is shown but cannot be bought. The original re-checks it every 2 s through the local player (vfunc +0x38, 0x57d9d0, read as "owns this lore item" from a neighbouring function's name) and sets it to 0 when that fails; this client leaves it to the server's next state feed. A capture of a state-1 row and the item it names would settle it.
   - Kind 3 (a quest-reward gate): the original refuses Buy (exe text @0x9f1368) when PendingRewardMgr is missing or its pending rewards reached a cap. The stock pending manager is now tracked, but the marketplace's cap and Inspect route (PendingRewardMgr 0x463c10) remain unconnected and it buys kind 3 as kind 0. Trace the native purchase gate and inspect route before binding these controls.
   - The zip-code and quest-reward popups: the original's callback (0x6d8570) is read for the purchase answer (Results OK, then the buttons enabled); for the other popups this client only enables the window again and stays on the page.
-  - Not done: the Alt modifier on MKPW_DetailsIcon's right click (the preview instead of Inspect), the monster shroud check (profile +0x340c, not kept), 0x5f8920 → 0x5f84c0 after a wallet or result (may send 0x7679), what the Results OK click's 0x88e060(1) does, and the tree's starting state of a new branch (closed is assumed; only the toggle of "All Items" was read).
+  - Open work includes the Alt modifier on MKPW_DetailsIcon's right click, 0x5f8920 → 0x5f84c0 after a wallet or result (may send 0x7679), what the Results OK click's 0x88e060(1) does, and the tree's starting state of a new branch. Only the toggle of "All Items" was read.
   - The original's ResetView, SyncShelfToSelection and NavigateToEntry set the shelf to array[1] ("Player Studio") while they highlight "All Items"; this client uses "All Items" (a deliberate difference, docs/mechanics.md).
 - Merchant sell price for a unit price outside int32 (a tiny, negative or NaN rate): `game::sell_value` gives 0x80000000, the x86 conversion's result. A capture with an odd merchant rate would settle it.
 

@@ -57,6 +57,7 @@
 #include "net/social_packets.h"
 #include "net/spell_packets.h"
 #include "net/task_packets.h"
+#include "net/shroud_packets.h"
 #include "net/trade_packets.h"
 #include "net/training_packets.h"
 #include "net/tribute_packets.h"

@@ -106,9 +106,10 @@ local assignedText, spentTip = nil, nil
 
 local function header(x, y, w, s)
   local h = 36 * s
-  local tileW = 80 * s
+  local monster = API.windows.ChildShown(WINDOW, "MonsterLabel") == true
+  local tileW = (monster and 110 or 80) * s
   local points = W.Text(WINDOW, "CurrentCount")
-  P.Tile("##aapts", x, y, tileW, h, s, "UNSPENT", points ~= "" and points or "0", POINTS_TILE)
+  P.Tile("##aapts", x, y, tileW, h, s, monster and "MONSTER POINTS" or "UNSPENT", points ~= "" and points or "0", POINTS_TILE)
   local assigned = W.Text(WINDOW, "AssignedCount")
   if assigned ~= assignedText then
     assignedText, spentTip = assigned, "Points spent on abilities (assigned: " .. assigned .. ")"

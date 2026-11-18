@@ -342,6 +342,7 @@ void GameConnection::update() {
     guild_invite_tick();
     fellowship_invite_tick();
     guild_bank_tick();
+    update_shroud_bank();
     real_estate_tick();
     adventure_frame();
     if (alarm_due_ms_ && now_ms() >= alarm_due_ms_) {
@@ -840,6 +841,15 @@ std::optional<ServerProfile> GameConnection::saved_server() const {
 void GameConnection::enter_world(const std::string& name, bool return_home) {
     if (state_ != ConnectionState::CharacterSelect) return;
     adventure_ = {};
+    reset_shroud_selection();
+    monster_mission_catalog_.reset();
+    shroud_mode_ = ShroudMode::Normal;
+    typed_shroud_mode_ = false;
+    shroud_restoring_ = false;
+    shroud_progress_available_ = false;
+    shroud_progress_.clear();
+    shroud_bank_available_ = false;
+    close_shroud_bank();
     recruiter_state_ = 0;
     character_ = name;
     {
@@ -1318,6 +1328,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
         profile_ = decode_player_profile(p);
         if (profile_) drunkenness_ = static_cast<std::int32_t>(std::min(profile_->intoxication, 200u));
         if (profile_) {
+            sync_shroud_mode();
             fellowship_.vitality.normal = profile_->fellowship_vitality_normal;
             fellowship_.vitality.aa = profile_->fellowship_vitality_aa;
             pstatus_.hp = profile_->cur_hp;
@@ -1761,6 +1772,29 @@ void GameConnection::handle_zone(const AppPacket& p) {
     case Op::SharedTaskMemberList:
     case Op::SharedTaskMemberChange:
         handle_progress(op, p);
+        break;
+    case Op::ShroudSelectionWindow:
+    case Op::ShroudRespondStats:
+    case Op::ShroudRespondAbility:
+    case Op::ShroudRespondItem:
+    case Op::ShroudProgress:
+    case Op::ShroudProgress2:
+    case Op::Shroud:
+    case Op::ShroudRemove:
+        handle_shroud(op, p);
+        break;
+    case Op::MonsterMissionCatalog:
+    case Op::MonsterMissionStats:
+    case Op::MonsterMissionAbility:
+    case Op::MonsterMissionItem:
+    case Op::MonsterMissionAssignment:
+    case Op::MonsterMissionResult:
+        handle_monster_mission(op, p);
+        break;
+    case Op::AltStorage:
+    case Op::AltStorageList:
+    case Op::AltStorageNoItems:
+        handle_shroud_bank(op, p);
         break;
     case Op::Trader:
     case Op::BecomeTrader:

@@ -47,8 +47,9 @@ ui.window("Alternate Advancement", function()
   local page = API.windows.TabPage(AW, "Subwindows") or 0
   local timer = label("Timer")
   local canUse = timer ~= ""
+  local pointsLabel = API.windows.ChildShown(AW, "MonsterLabel") == true and "Monster points" or "AA points"
   if W.begin("Alternate Advancement", { w = 1700, h = 940, title = "Alternate Advancement",
-        subtitle = "AA points: " .. label("CurrentCount") .. "   Spent: " .. label("TotalCount"),
+        subtitle = pointsLabel .. ": " .. label("CurrentCount") .. "   Spent: " .. label("TotalCount"),
         hints = { { "a", "Train" }, { "y", canUse and "Use" or "Use (owned, with a timer)" }, { "x", "Assign to slot" },
           { "lb", "Tab" }, { "rb", "Tab" }, { "b", "Close" } } }) then
     local settled = AS.settled("Alternate Advancement")
@@ -151,7 +152,7 @@ ui.window("Alternate Advancement", function()
     ui.DrawLine(px, by - T.px(8), x1 - T.px(18), by - T.px(8), C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
     T.font(20)
     local _, lh = ui.CalcTextSize("Ag")
-    T.draw(px, by, "AA points: " .. label("CurrentCount"), C.text)
+    T.draw(px, by, pointsLabel .. ": " .. label("CurrentCount"), C.text)
     T.draw(px, by + lh + T.px(8), "Spent: " .. label("TotalCount") .. "    Assigned: " .. label("AssignedCount"), C.dim)
     T.draw(px, by + 2 * (lh + T.px(8)), "Experience to AA: " .. label("ExpCount"), C.exp)
     T.unfont()

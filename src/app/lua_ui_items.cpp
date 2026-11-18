@@ -145,6 +145,10 @@ public:
             out.shown = c.player_status().level >= 51;
         } else if (id == "IW_ConsumeKrono" || id == "InvSlotKrono" || id == "IW_SubscriptionTime") {
             out.shown = false; // no Krono and no subscription on this server (KronoManager status never comes)
+        } else if (id == "ShroudProgressButton") {
+            out.shown = out.enabled = c.shroud_progress_available();
+        } else if (id == "ShroudModeLabel") {
+            if (c.shrouded()) out.text = c.monster_shrouded() ? "Monster Mission" : "Shrouded";
         } else if (int m = index_after(id, "IW_Money"); m >= 0 && m < 4) {
             out.text = std::to_string(coin_of(c.coins(), coin_type(m)));
             // the outline 0x698290 puts on the button picked for the Parcels page (CButtonWnd +0x259)
@@ -210,6 +214,9 @@ public:
         }
         else if (id == "IW_Skills") { // CInventoryWnd::WndNotification @0x693490: toggles CSkillsWnd
             if (host.run_command) host.run_command(static_cast<int>(game::KeyCommand::TOGGLE_SKILLS_WND));
+        }
+        else if (id == "ShroudProgressButton") {
+            if (c.shroud_progress_available() && host.show_window) host.show_window("ShroudProgressWnd");
         }
         else if (id == "DoneButton" || id == "IW_DoneButton") open_ = false;
         else if (id == "AltCurr_DisplayMissingButton") show_missing_ = !show_missing_;
@@ -870,7 +877,8 @@ public:
         if (id == p_ + "BankerName") out.text = c.bank()->name;
         else if (int m = index_after(id, p_ + "Money"); m >= 0 && m < 4) out.text = std::to_string(*bc.of(coin_type(m), false));
         else if (id == p_ + "SharedMoney0") out.text = std::to_string(bc.shared_platinum);
-        else if (id == "AltStorageButton" || id == "ChangeButton") out.enabled = false; // not built
+        else if (id == "AltStorageButton") out.shown = out.enabled = c.can_open_shroud_bank();
+        else if (id == "ChangeButton") out.enabled = false; // not built
         else if (id == kAutoInventoryChild) out.enabled = c.inventory().cursor() != nullptr;
     }
     const net::Item* slot_item(UiHost& host, std::string_view id) override {
@@ -890,6 +898,7 @@ public:
         if (int m = index_after(id, p_ + "Money"); m >= 0 && m < 4) money_click(c, net::kCoinBank, coin_type(m), *bc.of(coin_type(m), false));
         else if (id == p_ + "SharedMoney0") money_click(c, net::kCoinSharedBank, 3, bc.shared_platinum, true);
         else if (id == "AutoButton") c.auto_bank();
+        else if (id == "AltStorageButton") c.open_shroud_bank();
         else if (id == kAutoInventoryChild) c.say("/autoinventory");
         else if (id == "DoneButton") c.close_bank();
         else return false;
@@ -906,6 +915,84 @@ private:
     }
     int size_;
     std::string p_;
+};
+
+class ShroudBankWindow : public StockWindow {
+public:
+    ShroudBankWindow() : StockWindow("AltStorageWnd", false) {}
+    bool shown(UiHost& host) override { return host.conn && host.conn->shroud_bank().has_value(); }
+    void set_shown(UiHost& host, bool show) override {
+        if (!show && shown(host)) host.conn->close_shroud_bank();
+    }
+    void frame(UiHost& host) override {
+        if (!shown(host)) selected_.reset();
+    }
+    const ListData* list(UiHost& host, std::string_view id) override {
+        if (!shown(host) || id != "ItemList") return nullptr;
+        const auto& bank = *host.conn->shroud_bank();
+        revision_ = bank.revision;
+        keys_.clear();
+        list_ = {};
+        list_.columns = 2;
+        list_.labels = {"Item", "Quantity"};
+        list_.widths = {220, 70};
+        list_.alt_right_click = true;
+        if (!bank.loaded) return &list_;
+        for (const auto& entry : bank.entries) {
+            if (selected_ == entry.key) list_.selected = static_cast<int>(keys_.size());
+            keys_.push_back(entry.key);
+            ListRow row{{entry.name, std::to_string(entry.quantity)}};
+            if (host.textures) row.icon = host.textures->item_icon(entry.icon);
+            list_.rows.push_back(std::move(row));
+        }
+        if (list_.selected < 0) selected_.reset();
+        return &list_;
+    }
+    bool list_click(UiHost& host, std::string_view id, int row, bool right, int) override {
+        if (!shown(host) || id != "ItemList" || row < 0 || static_cast<std::size_t>(row) >= keys_.size() ||
+            revision_ != host.conn->shroud_bank()->revision) return false;
+        selected_ = keys_[static_cast<std::size_t>(row)];
+        if (right) host.conn->inspect_shroud_bank(revision_, *selected_, ImGui::GetIO().KeyAlt);
+        return true;
+    }
+    void child(UiHost& host, std::string_view id, Child& out) override {
+        if (!shown(host)) return;
+        const auto& bank = *host.conn->shroud_bank();
+        if (id == "GetButton" || id == "InspectButton") {
+            out.enabled = selected_.has_value() && bank.loaded && revision_ == bank.revision &&
+                          (id == "InspectButton" || !bank.pending_key);
+        } else if (id == "CountLabel") {
+            if (bank.loaded) out.text = std::to_string(bank.entries.size());
+        } else if (id == "TimerLabel") {
+            if (bank.loaded && bank.retention_seconds) {
+                const auto time = bank.retention_seconds;
+                out.text = std::format("{:02d}:{:02d}:{:02d}", time / 3600, time / 60 % 60, time % 60);
+            }
+        } else if (id == "Status") {
+            if (!bank.loaded) out.text = "Waiting for the Shroud Bank inventory…";
+            else if (bank.pending_key) out.text = "Withdrawing item…";
+            else if (bank.entries.empty()) out.text = "The Shroud Bank is empty.";
+        } else if (id == "Coins") {
+            const auto& coins = bank.coins;
+            if (coins.platinum || coins.gold || coins.silver || coins.copper)
+                out.text = std::format("{} pp  {} gp  {} sp  {} cp", coins.platinum, coins.gold, coins.silver, coins.copper);
+        }
+    }
+    bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
+        if (!shown(host) || button != "left") return false;
+        auto& c = *host.conn;
+        if (id == "DoneButton") c.close_shroud_bank();
+        else if (id == "GetButton" && selected_) c.withdraw_shroud_bank(revision_, *selected_);
+        else if (id == "InspectButton" && selected_) c.inspect_shroud_bank(revision_, *selected_, false);
+        else return false;
+        return true;
+    }
+
+private:
+    std::uint64_t revision_ = 0;
+    std::optional<std::uint64_t> selected_;
+    std::vector<std::uint64_t> keys_;
+    ListData list_;
 };
 
 // ---------------------------------------------------------------- TradeWnd (CTradeWnd) / GiveWnd (CGiveWnd)
@@ -1244,6 +1331,7 @@ void add_item_windows(std::vector<std::unique_ptr<StockWindow>>& out) {
     out.push_back(std::move(merchant));
     out.push_back(std::make_unique<BankWindow>("BankWnd", 16, "BW_"));
     out.push_back(std::make_unique<BankWindow>("BigBankWnd", 24, "BIGB_"));
+    out.push_back(std::make_unique<ShroudBankWindow>());
     out.push_back(std::make_unique<TradeWindow>("TradeWnd", false, "TRDW_"));
     out.push_back(std::make_unique<TradeWindow>("GiveWnd", true, "GVW_"));
 }

@@ -305,6 +305,31 @@ TEST_CASE("aa: CanTrainAbility, MeetsPrerequisites and CanSeeAbility") {
     CHECK_FALSE(s.can_train(*s.get(400), who));
 }
 
+TEST_CASE("aa: the active form controls which ranks can be listed or trained") {
+    game::AltAdvState state;
+    state.add(rank(100, 10, 1, -1, -1));
+    auto shroud = rank(200, 20, 1, -1, 201);
+    shroud.flags[0] = 1;
+    state.add(shroud);
+    auto next_shroud = rank(201, 20, 2, 200, -1);
+    next_shroud.flags[0] = 1;
+    state.add(next_shroud);
+    state.points = 10;
+    game::AATrainer who;
+    who.class_id = 2;
+    who.level = 60;
+    game::AAFilter filter;
+    filter.trainable_only = true;
+    CHECK(state.visible(1, who.class_id, filter, who) == std::vector{state.get(100)});
+    CHECK_FALSE(state.can_train(*state.get(200), who));
+
+    who.monster_profile = true;
+    CHECK(state.visible(1, who.class_id, filter, who) == std::vector{state.get(200)});
+    CHECK_FALSE(state.can_train(*state.get(100), who));
+    state.owned = {{200, 2, 0}};
+    CHECK(state.visible(1, who.class_id, filter, who) == std::vector{state.get(201)});
+}
+
 // "Buy every rank" on a server without the buy-all action (a stock EQEmu): the client sends OP_AAAction 3 for the next
 // rank each time EQEmu's answer to the last purchase (the owned list, then the points) shows it bought, waits through
 // other updates, and stops at the last rank and on a plain train.

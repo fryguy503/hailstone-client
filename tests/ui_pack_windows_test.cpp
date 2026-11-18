@@ -36,8 +36,10 @@
 #include "net/evolving_packets.h"
 #include "net/group_packets.h"
 #include "net/merchant_packets.h"
+#include "net/packet_io.h"
 #include "net/social_packets.h"
 #include "net/spell_packets.h"
+#include "net/task_packets.h"
 #include "game/mechanics/character.h"
 #include "game/mechanics/tables.h"
 #include "ui/dev_screens.h"
@@ -3173,6 +3175,178 @@ TEST_CASE("UI packs: each claims the achievement and reward windows while they a
             CHECK_FALSE(s.api.shown("RewardSelectionWnd"));
             CHECK(s.api.replaces("AchievementsWnd"));
             CHECK(s.api.replaces("RewardSelectionWnd"));
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
+TEST_CASE("UI packs: server shroud catalogs and storage draw in both packs") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        CAPTURE(pack);
+        test::ScratchDir scratch("ui_pack_shroud_test");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
+                 fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        {
+            test::Rig rig;
+            REQUIRE(rig.to_zone());
+            Session s(dir, pack);
+            s.host.conn = &rig.conn;
+            lua_State* L = s.lua.state();
+            auto run = [&](const char* code) {
+                INFO(code);
+                const int result = luaL_dostring(L, code);
+                INFO((lua_tostring(L, -1) ? lua_tostring(L, -1) : ""));
+                REQUIRE(result == LUA_OK);
+                lua_settop(L, 0);
+            };
+            auto offer = [&](std::uint32_t context) {
+                ByteWriter payload;
+                payload.le(context);
+                payload.zeros(8);
+                net::detail::write_cstring(payload, "PROGRESSION\a" "12\a" "Scouts\a" "Scout forms\a"
+                    "BRANCH\a" "44\a" "Trackers\a" "Track a target\a" "50\a"
+                    "TEMPLATE\a" "Kobold\a" "391\a" "20\a" "1\a"
+                    "TEMPLATE\a" "Gnoll\a" "392\a" "25\a" "0");
+                rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::ShroudSelectionWindow, std::move(payload)));
+            };
+            auto drawn = [&](std::string title, std::string_view screen) {
+                if (std::string_view(pack) == "modern") title += "###modern." + std::string(screen);
+                const auto* window = ImGui::FindWindowByName(title.c_str());
+                return window && window->WasActive;
+            };
+            s.frames(2);
+            CHECK_FALSE(s.api.shown("ProgressionSelectionWnd"));
+            offer(0);
+            s.frames(2);
+            CHECK(s.api.shown("ProgressionSelectionWnd"));
+            CHECK(s.api.replaces("ProgressionSelectionWnd"));
+            CHECK(drawn("Spirit Shroud Selection", "ProgressionSelectionWnd"));
+            run(R"lua(
+                local screen = "ProgressionSelectionWnd"
+                local windows = hs.UI.windows
+                assert(windows.ListInfo(screen, "Forms") == 2)
+                assert(windows.ListRow(screen, "Forms", 0)[2] == "Kobold")
+                assert(windows.ListClick(screen, "Forms", 1, "left"))
+                assert(windows.ChildState(screen, "Accept") == false)
+                windows.Show(screen, false)
+            )lua");
+            CHECK_FALSE(s.api.shown("ProgressionSelectionWnd"));
+
+            game::Task mission;
+            mission.task_id = 926;
+            mission.title = "Scout the ruins";
+            mission.type = game::kTaskTypeShared;
+            rig.conn.receive_zone_packet_for_test(net::encode_task_description(mission));
+            offer(mission.task_id);
+            s.frames(2);
+            CHECK(s.api.shown("TaskTemplateSelectWnd"));
+            CHECK(s.api.replaces("TaskTemplateSelectWnd"));
+            CHECK(drawn("Monster Mission Selection", "TaskTemplateSelectWnd"));
+            run(R"lua(hs.UI.windows.Show("TaskTemplateSelectWnd", false))lua");
+            CHECK_FALSE(s.api.shown("TaskTemplateSelectWnd"));
+
+            ByteWriter roles;
+            roles.zeros(8);
+            roles.le(mission.task_id);
+            roles.zeros(5);
+            roles.le<std::uint32_t>(1);
+            roles.le<std::uint32_t>(913);
+            roles.le<std::int32_t>(1);
+            roles.le<std::int32_t>(1);
+            roles.zeros(4);
+            roles.le<std::uint8_t>(1);
+            net::detail::write_cstring(roles, "Watch Captain");
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::MonsterMissionCatalog, std::move(roles)));
+            s.frames(2);
+            CHECK(drawn("Monster Mission Selection", "TaskTemplateSelectWnd"));
+            run(R"lua(
+                local screen = "TaskTemplateSelectWnd"
+                local windows = hs.UI.windows
+                local role = windows.ListRow(screen, "Forms", 0)
+                assert(role[1] == "Required" and role[2] == "Watch Captain" and role[5] == "0 / 1")
+                assert(windows.ListClick(screen, "Forms", 0, "left"))
+                assert(windows.ChildState(screen, "Accept"))
+                assert(windows.ClickChild(screen, "Accept", "left"))
+                assert(windows.ChildState(screen, "Accept") == false)
+            )lua");
+            ByteWriter refused;
+            refused.zeros(8);
+            refused.le<std::uint32_t>(913);
+            refused.le<std::uint32_t>(1);
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::MonsterMissionResult, std::move(refused)));
+            run(R"lua(assert(hs.UI.windows.ChildState("TaskTemplateSelectWnd", "Accept")))lua");
+            rig.conn.receive_zone_packet_for_test(net::encode(std::vector<net::SharedTaskMember>{{"Helper", true, 0}}));
+            ByteWriter assignment;
+            assignment.zeros(8);
+            assignment.fixed_string("Helper", 64);
+            assignment.le<std::uint32_t>(913);
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::MonsterMissionAssignment, std::move(assignment)));
+            s.frames(2);
+            run(R"lua(
+                local screen = "TaskTemplateSelectWnd"
+                local windows = hs.UI.windows
+                local role = windows.ListRow(screen, "Forms", 0)
+                assert(role[4] == "Full" and role[5] == "1 / 1")
+                assert(windows.ChildState(screen, "Accept") == false)
+                windows.Show(screen, false)
+            )lua");
+
+            ByteWriter progress;
+            progress.le<std::uint32_t>(1);
+            constexpr std::string_view progress_text = "PROGRESSION\a" "12\a" "Scouts\a" "Scout forms\a"
+                "1\a" "2\a" "Gnoll\a" "Gnoll form\a" "50";
+            progress.bytes(std::as_bytes(std::span(progress_text.data(), progress_text.size())));
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::ShroudProgress, std::move(progress)));
+            run(R"lua(
+                local windows = hs.UI.windows
+                assert(windows.ChildShown("InventoryWindow", "ShroudProgressButton") == true)
+                assert(windows.ClickChild("InventoryWindow", "ShroudProgressButton", "left"))
+            )lua");
+            s.frames(2);
+            CHECK(drawn("Spirit Shroud Progress", "ShroudProgressWnd"));
+            run(R"lua(hs.UI.windows.Show("ShroudProgressWnd", false))lua");
+
+            REQUIRE(rig.conn.profile());
+            net::Spawn banker;
+            banker.spawn_id = 133;
+            banker.name = "Shroud Banker";
+            banker.npc = 1;
+            banker.class_ = 40;
+            banker.motion.x = rig.conn.profile()->x;
+            banker.motion.y = rig.conn.profile()->y;
+            banker.motion.z = rig.conn.profile()->z;
+            rig.conn.receive_zone_packet_for_test(net::encode(banker));
+            ByteWriter open;
+            open.le<std::uint32_t>(0);
+            open.le(banker.spawn_id);
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::AltStorage, std::move(open)));
+            ByteWriter items;
+            items.le<std::uint32_t>(3600);
+            items.le<std::uint32_t>(1);
+            net::detail::write_cstring(items, "Tracker's Ledger");
+            items.le<std::uint32_t>(431);
+            items.le<std::uint64_t>(937);
+            items.le<std::uint32_t>(2);
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::AltStorageList, std::move(items)));
+            s.frames(2);
+            CHECK(s.api.shown("AltStorageWnd"));
+            CHECK(s.api.replaces("AltStorageWnd"));
+            CHECK(drawn("Shroud Bank", "AltStorageWnd"));
+            run(R"lua(
+                local windows = hs.UI.windows
+                local screen = "AltStorageWnd"
+                assert(windows.ListRow(screen, "ItemList", 0)[1] == "Tracker's Ledger")
+                assert(windows.Text(screen, "TimerLabel") == "01:00:00")
+                assert(windows.ChildState(screen, "GetButton") == false)
+            )lua");
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
         ImGui::DestroyContext(ctx);

@@ -80,6 +80,7 @@ AppPacket encode_task_history_request(std::uint32_t index);
 struct SharedTaskMember {
     std::string name;
     bool leader = false;
+    std::uint32_t template_id = 0;
 };
 std::optional<std::vector<SharedTaskMember>> decode_shared_task_members(const AppPacket& p);
 struct SharedTaskMemberChange {

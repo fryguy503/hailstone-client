@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Spirit Shrouds and Monster Missions have form selection and previews in both interfaces when the server supplies them. The Quest Journal shows shared-task roles, and the inventory gives access to shroud progress and the Shroud Bank when available.
 - Grass: it now grows where a zone line's region lies over the ground. Some classic zone lines are boxes the size of a field: the whole field north of North Qeynos, by the gate to Qeynos Hills, had none
 - Modern lighting: the grass goes on for about 300 units past the edge of an outdoor zone onto the distant land, so it no longer stops in a line where the zone's ground ends
 - Modern lighting: Plane of Sky and Plane of Air show the sky under them again, its clouds going on below the islands, instead of grey or black, and their far islands fade into the sky's haze, not black. No distant land or edge fog is drawn round them

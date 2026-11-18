@@ -422,7 +422,12 @@ void GameConnection::marketplace_frame(std::int64_t now) {
     if (state_ != ConnectionState::InZone) return;
     if (!m.built) marketplace_build();
     if (!m.open) return;
-    // The profile type 2 (monster shroud: eqstr 7510, the window hidden) is not kept here (always 0).
+    if (monster_shrouded()) {
+        system(7510);
+        m.open = false;
+        m.preview.open = false;
+        return;
+    }
     // The keep-alive while shown; wnd +0x320 is zeroed at every show, so the first frame sends it (against the
     // original's tick count, 0 is always 30 s past).
     if (m.ping_ms == 0 || now - m.ping_ms > 30000) {

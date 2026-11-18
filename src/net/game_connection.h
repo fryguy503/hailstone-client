@@ -105,6 +105,7 @@
 #include "net/tribute_packets.h"
 #include "net/marketplace_packets.h"
 #include "net/session.h"
+#include "net/shroud_packets.h"
 #include "net/social_packets.h"
 #include "net/spell_packets.h"
 #include "net/world_packets.h"
@@ -128,6 +129,16 @@ struct ChannelMessage;
 struct Action;
 struct ChatServerEvent;
 struct DuelRefusal;
+
+struct ShroudBankState {
+    std::uint32_t entity_id = 0;
+    std::uint32_t retention_seconds = 0;
+    std::vector<AltStorageEntry> entries;
+    Coins coins;
+    std::optional<std::uint64_t> pending_key;
+    std::uint64_t revision = 0;
+    bool loaded = false;
+};
 struct InspectAnswer;
 struct ReadBook;
 struct TraderMessage;
@@ -2324,6 +2335,33 @@ public:
     void shared_task_invite_raid();
     void shared_task_invite_expedition();
 
+    // ---- Spirit Shrouds, Monster Missions and Shroud Bank ----
+    bool shrouded() const { return shroud_mode_ != ShroudMode::Normal; }
+    bool monster_shrouded() const { return shroud_mode_ == ShroudMode::MonsterMission; }
+    const std::optional<ShroudSelection>& shroud_selection() const { return shroud_selection_; }
+    bool shroud_selection_open() const { return shroud_selection_open_; }
+    bool shroud_selection_pending() const { return monster_mission_pending_ != 0 || now_ms() < shroud_transition_until_ms_; }
+    std::uint64_t shroud_selection_revision() const { return shroud_selection_revision_; }
+    const std::optional<ShroudStats>& shroud_stats() const { return shroud_stats_; }
+    const std::vector<ShroudProgress>& shroud_progress() const { return shroud_progress_; }
+    bool shroud_progress_available() const { return shroud_progress_available_; }
+    std::uint32_t shroud_ability_detail() const { return shroud_ability_detail_; }
+    bool request_shroud_stats(std::uint64_t revision, std::uint32_t selection_id);
+    bool select_shroud(std::uint64_t revision, std::uint32_t selection_id);
+    bool cancel_shroud_selection(std::uint64_t revision);
+    bool request_shroud_ability(std::uint64_t revision, std::uint32_t selection_id, std::uint32_t rank_id);
+    bool request_shroud_item(std::uint64_t revision, std::uint32_t selection_id, std::uint32_t item_id);
+    bool shared_task_monster_select_available(std::uint32_t task_id) const;
+    bool shared_task_monster_select(std::uint32_t task_id);
+    std::uint32_t shared_task_member_template(std::string_view member) const;
+    std::string shared_task_member_template_name(std::string_view member) const;
+    const std::optional<ShroudBankState>& shroud_bank() const { return shroud_bank_; }
+    bool can_open_shroud_bank() const;
+    bool open_shroud_bank();
+    bool inspect_shroud_bank(std::uint64_t revision, std::uint64_t key, bool preview);
+    bool withdraw_shroud_bank(std::uint64_t revision, std::uint64_t key);
+    void close_shroud_bank();
+
     // ---- chat, social commands, guilds and raids (game/social.h; net/game_connection_social.cpp)
     void say(const std::string& text);
     // CEverQuest::InterpretCmd @0x51fce0: a typed line. Slash words run the
@@ -2840,6 +2878,22 @@ private:
     void handle_ability(Op op, const AppPacket& p);
     void handle_door(Op op, const AppPacket& p);
     void handle_progress(Op op, const AppPacket& p);
+    void handle_shroud(Op op, const AppPacket& p);
+    void handle_shroud_bank(Op op, const AppPacket& p);
+    void apply_shroud_transition(ShroudTransition transition);
+    void handle_monster_mission(Op op, const AppPacket& p);
+    void set_monster_mission_catalog(MonsterMissionCatalog catalog);
+    void refresh_monster_mission_availability();
+    const MonsterMissionTemplate* monster_mission_template(std::uint32_t id) const;
+    void receive_shroud_stats(std::optional<ShroudStats> stats);
+    void receive_shroud_ability(std::optional<ShroudAbilityReply> ability);
+    void receive_shroud_item(std::optional<ShroudItemReply> item);
+    void reset_shroud_selection();
+    void sync_shroud_mode();
+    void update_shroud_bank();
+    bool shroud_form_offered(std::uint64_t revision, std::uint32_t selection_id, bool require_unlocked) const;
+    bool shroud_npc_in_range(std::uint32_t id) const;
+    bool shroud_bank_has_entry(std::uint64_t revision, std::uint64_t key) const;
     bool handle_rewards(const AppPacket& p);
     bool handle_achievements(const AppPacket& p);
     void reset_achievements();
@@ -3592,6 +3646,27 @@ private:
     // The cursor item into game::put_away_slot's place; false when there is none.
     bool put_away_cursor();
     game::TaskState tasks_;
+    enum class ShroudMode { Normal, Spirit, MonsterMission, Unknown };
+    ShroudMode shroud_mode_ = ShroudMode::Normal;
+    bool typed_shroud_mode_ = false;
+    bool shroud_restoring_ = false;
+    bool shroud_progress_available_ = false;
+    bool shroud_bank_available_ = false;
+    bool shroud_selection_open_ = false;
+    std::optional<ShroudSelection> shroud_selection_;
+    std::optional<MonsterMissionCatalog> monster_mission_catalog_;
+    std::uint32_t monster_mission_pending_ = 0;
+    std::int64_t shroud_transition_until_ms_ = 0;
+    std::uint64_t shroud_selection_revision_ = 0;
+    std::uint32_t shroud_offer_npc_ = 0;
+    std::uint32_t shroud_requested_stats_ = 0;
+    std::uint32_t shroud_requested_ability_ = 0;
+    std::uint32_t shroud_requested_item_ = 0;
+    std::uint32_t shroud_ability_detail_ = 0;
+    std::optional<ShroudStats> shroud_stats_;
+    std::vector<ShroudProgress> shroud_progress_;
+    std::optional<ShroudBankState> shroud_bank_;
+    std::uint32_t shroud_bank_requested_entity_ = 0;
     game::RewardSelection rewards_;
     game::Achievements achievements_;
     std::uint64_t achievement_view_intent_ = 0;
