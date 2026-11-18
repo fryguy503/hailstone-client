@@ -43,6 +43,8 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Declared UI base chains, window/helper overrides, per-interface settings, sandboxed inherited resources and a starter interface.
 - [x] Managed interface addons register in the native selector without script startup; Options exposes selected and
   loaded interface metadata, fallback state and loading diagnostics through the shared interface API.
+- [x] Packaged interface raster artwork through a discoverable, owner-scoped API, approved base inheritance,
+  confined paths and a bounded cache that refreshes replaced files.
 - [ ] Live acceptance of both migrated interfaces and a derived interface, including zoning, switching, input focus and controller workflows. Local tests and offline rendering do not establish live acceptance.
 
 ### Adventures (LDoN)

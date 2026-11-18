@@ -15,6 +15,7 @@
 #include "plugin/policy.h"
 #include "scratch_dir.h"
 #include "ui/lua/lua_host.h"
+#include "ui/ui_textures.h"
 
 using namespace hailstone;
 namespace fs = std::filesystem;
@@ -60,6 +61,16 @@ struct ComposedUi {
                 return 1;
             });
             lua_setfield(L, -2, "Who");
+            lua_pushcfunction(L, [](lua_State* state) -> int {
+                std::size_t size = 0;
+                const char* name = luaL_checklstring(state, 1, &size);
+                const auto path = ui::lua::interface_image_path(state, std::string_view(name, size));
+                if (!path) { lua_pushnil(state); return 1; }
+                const auto text = path->generic_string();
+                lua_pushlstring(state, text.data(), text.size());
+                return 1;
+            });
+            lua_setfield(L, -2, "ResolveImage");
         });
     }
     void frame(bool rescan = false, bool draw = true) {
@@ -74,6 +85,103 @@ struct ComposedUi {
 };
 
 } // namespace
+
+TEST_CASE("UI interface images: selected and approved bases resolve independently of local presentation data") {
+    ComposedUi ui;
+    ui.put(ui.root / "leaf/assets/Atlas.PNG", "selected raster fixture");
+    ui.put(ui.root / "middle/assets/Atlas.PNG", "near base raster fixture");
+    ui.put(ui.root / "base/assets/Atlas.PNG", "far base raster fixture");
+    ui.put(ui.root / "base/assets/shared.png", "shared raster fixture");
+    const auto data = ui.scratch.path() / "ui-data";
+    ui.data_roots = {data, {"leaf", "base"}};
+    ui.put(data / "leaf/assets/local-only.png", "local presentation data fixture");
+    ui.put(ui.root / "unapproved/assets/secret.png", "unapproved sibling fixture");
+    ui.start(true);
+    ui.frame();
+    const auto resolve = [&](const char* path) { return ui::lua::interface_image_path(ui.lua->state(), path); };
+    CHECK(resolve("assets/Atlas.PNG") == fs::weakly_canonical(ui.root / "leaf/assets/Atlas.PNG"));
+    CHECK(resolve("assets\\Atlas.PNG") == resolve("assets/Atlas.PNG"));
+    CHECK(resolve("assets/shared.png") == fs::weakly_canonical(ui.root / "base/assets/shared.png"));
+    REQUIRE(fs::remove(ui.root / "leaf/assets/Atlas.PNG"));
+    CHECK(resolve("assets/Atlas.PNG") == fs::weakly_canonical(ui.root / "middle/assets/Atlas.PNG"));
+    REQUIRE(fs::remove(ui.root / "middle/assets/Atlas.PNG"));
+    CHECK(resolve("assets/Atlas.PNG") == fs::weakly_canonical(ui.root / "base/assets/Atlas.PNG"));
+    for (const auto* path : {"assets/local-only.png", "assets/secret.png", "../base/assets/shared.png",
+                             "assets/../assets/shared.png", "/assets/shared.png", "C:/assets/shared.png",
+                             "assets/shared.png/", "assets//shared.png", "assets./shared.png", "assets/shared.txt"}) {
+        CAPTURE(path);
+        CHECK_FALSE(resolve(path));
+    }
+    CHECK_FALSE(ui::lua::interface_image_path(ui.lua->state(), std::string("assets/shared.png\0", 18)));
+    // The public binding keeps its single-nil result with no GPU/artwork provider.
+    CHECK(ui.run("return select('#',hs.UI.assets.InterfaceImage('assets/shared.png'))") == "1");
+    CHECK(ui.run("return hs.UI.assets.InterfaceImage('assets/shared.png')") == "nil");
+}
+
+TEST_CASE("UI interface images: plugin ownership survives saved closures and ends with folder removal") {
+    ComposedUi ui;
+    const auto plugin = ui.scratch.path() / "plugin", other = ui.scratch.path() / "other";
+    ui.put(ui.root / "leaf/assets/owned.png", "selected raster fixture");
+    ui.put(ui.root / "base/assets/shared.png", "base raster fixture");
+    ui.put(plugin / "assets/owned.png", "plugin raster fixture");
+    ui.put(other / "assets/private.png", "other plugin fixture");
+    ui.put(plugin / "a.lua", "OWNER_IMAGE=hs.ResolveImage('assets/owned.png') "
+        "SHARED_IMAGE=hs.ResolveImage('assets/shared.png') PRIVATE_IMAGE=hs.ResolveImage('assets/private.png') "
+        "SAVED_IMAGE=hs.ResolveImage");
+    ui.start();
+    ui.lua->set_folders({{"plugin:Image", plugin}, {"plugin:Other", other}});
+    ui.frame();
+    CHECK(ui.run("return OWNER_IMAGE", "plugin:Image") == fs::weakly_canonical(plugin / "assets/owned.png").generic_string());
+    CHECK(ui.run("return SHARED_IMAGE", "plugin:Image") == fs::weakly_canonical(ui.root / "base/assets/shared.png").generic_string());
+    CHECK(ui.run("return PRIVATE_IMAGE", "plugin:Image") == "nil");
+    CHECK(ui.run("return hs.ResolveImage('../other/assets/private.png')", "plugin:Image") == "nil");
+    CHECK(ui.run("return hs.ResolveImage('assets/owned.png')") == fs::weakly_canonical(ui.root / "leaf/assets/owned.png").generic_string());
+    ui.lua->push_folder_env_for_test("plugin:Image");
+    lua_getfield(ui.lua->state(), -1, "SAVED_IMAGE");
+    lua_setglobal(ui.lua->state(), "PLUGIN_IMAGE");
+    lua_pop(ui.lua->state(), 1);
+    CHECK(ui.run("return PLUGIN_IMAGE('assets/owned.png')") == fs::weakly_canonical(plugin / "assets/owned.png").generic_string());
+    ui.lua->set_folders({});
+    ui.frame();
+    CHECK(ui.run("return PLUGIN_IMAGE('assets/owned.png')") == "nil");
+    CHECK(ui.run("return PLUGIN_IMAGE('assets/shared.png')") == "nil");
+    CHECK(ui.run("return hs.ResolveImage('assets/owned.png')") == fs::weakly_canonical(ui.root / "leaf/assets/owned.png").generic_string());
+}
+
+TEST_CASE("UI interface images: symlinks cannot reach outside approved roots") {
+    ComposedUi ui;
+    ui.put(ui.root / "base/assets/good.png", "base raster fixture");
+    const auto outside = ui.scratch.path() / "outside/secret.png";
+    ui.put(outside, "outside raster fixture");
+    fs::create_directories(ui.root / "leaf/assets");
+    std::error_code ec;
+    fs::create_symlink(outside, ui.root / "leaf/assets/escape.png", ec);
+    if (ec) { MESSAGE("File link creation is unavailable on this host"); return; }
+    ui.start();
+    ui.frame();
+    CHECK_FALSE(ui::lua::interface_image_path(ui.lua->state(), "assets/escape.png"));
+    fs::create_directory_symlink(outside.parent_path(), ui.root / "leaf/linked", ec);
+    REQUIRE_FALSE(ec);
+    CHECK_FALSE(ui::lua::interface_image_path(ui.lua->state(), "linked/secret.png"));
+    CHECK(ui::lua::interface_image_path(ui.lua->state(), "assets/good.png") ==
+          fs::weakly_canonical(ui.root / "base/assets/good.png"));
+}
+
+TEST_CASE("UI interface images: empty and oversized files are refused before texture allocation") {
+    ComposedUi ui;
+    const auto file = ui.root / "leaf/assets/bounded.png";
+    ui.put(file, "");
+    ui.start();
+    ui.frame();
+    CHECK_FALSE(ui::lua::interface_image_path(ui.lua->state(), "assets/bounded.png"));
+    // Resize exercises the byte limit without allocating a 64 MiB fixture in memory.
+    fs::resize_file(file, ui::UiTextures::kMaxInterfaceImageBytes);
+    CHECK(ui::lua::interface_image_path(ui.lua->state(), "assets/bounded.png") == fs::weakly_canonical(file));
+    fs::resize_file(file, ui::UiTextures::kMaxInterfaceImageBytes + 1);
+    CHECK_FALSE(ui::lua::interface_image_path(ui.lua->state(), "assets/bounded.png"));
+    REQUIRE(fs::remove(file));
+    CHECK_FALSE(ui::lua::interface_image_path(ui.lua->state(), "assets/bounded.png"));
+}
 
 TEST_CASE("UI hidden frames: reload maintenance and garbage collection continue without any window callbacks") {
     ComposedUi ui;

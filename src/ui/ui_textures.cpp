@@ -316,6 +316,15 @@ const UiTextures::Texture* UiTextures::load(const std::string& key, const std::s
         it->second.used = lookups_;
         return it->second.entry ? &it->second.entry->info : nullptr;
     }
+    make_room();
+    std::unique_ptr<Entry> e;
+    if (auto data = game_.read(path)) e = make(*data, path);
+    else log::warn("ui art: {} is missing", path);
+    File& slot = files_[key] = File{std::move(e), lookups_, std::nullopt};
+    return slot.entry ? &slot.entry->info : nullptr;
+}
+
+void UiTextures::make_room() {
     // Room for it: the file asked for least recently goes.
     while (files_.size() >= kMaxFiles) {
         auto oldest = least_recently_used(files_, [](const File& f) { return f.used; });
@@ -323,10 +332,42 @@ const UiTextures::Texture* UiTextures::load(const std::string& key, const std::s
         retire(std::move(oldest->second.entry));
         files_.erase(oldest);
     }
+}
+
+const UiTextures::Texture* UiTextures::interface_file(const std::filesystem::path& file) {
+    // A UI archive is limited to 64 MiB unpacked; one image may not read more
+    // than that, including a file edited after its package was verified.
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(file, ec)) return nullptr;
+    const auto size = std::filesystem::file_size(file, ec);
+    if (ec || size == 0 || size > kMaxInterfaceImageBytes) return nullptr;
+    const auto written = std::filesystem::last_write_time(file, ec);
+    if (ec) return nullptr;
+    const File::DiskVersion version{size, written};
+    const std::string key = "ui:" + file.generic_string();
+    ++lookups_;
+    if (auto it = files_.find(key); it != files_.end()) {
+        if (it->second.disk_version == version) {
+            it->second.used = lookups_;
+            return it->second.entry ? &it->second.entry->info : nullptr;
+        }
+        retire(std::move(it->second.entry));
+        files_.erase(it);
+    }
+    make_room();
     std::unique_ptr<Entry> e;
-    if (auto data = game_.read(path)) e = make(*data, path);
-    else log::warn("ui art: {} is missing", path);
-    File& slot = files_[key] = File{std::move(e), lookups_};
+    std::ifstream input(file, std::ios::binary);
+    if (input) {
+        std::vector<char> bytes(static_cast<std::size_t>(size));
+        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (input.gcount() == static_cast<std::streamsize>(bytes.size()) &&
+            input.peek() == std::char_traits<char>::eof()) {
+            const auto after_size = std::filesystem::file_size(file, ec);
+            const auto after_written = ec ? std::filesystem::file_time_type{} : std::filesystem::last_write_time(file, ec);
+            if (!ec && after_size == size && after_written == written) e = make(std::as_bytes(std::span(bytes)), key);
+        }
+    }
+    File& slot = files_[key] = File{std::move(e), lookups_, version};
     return slot.entry ? &slot.entry->info : nullptr;
 }
 

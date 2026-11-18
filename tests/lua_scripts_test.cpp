@@ -92,7 +92,7 @@ hs=setmetatable({InGame=function() return 4 end,CursorSlot=33,
  gamepad=setmetatable({connected=function() return true end},{__index=function() return noop end})},
  {__index=function() return noop end})
 local API=TEST_UI_API_ATTACH(hs)
-assert(API.version.major==1 and API.version.minor==6)
+assert(API.version.major==1 and API.version.minor==7)
 assert(API.Supports('session') and API.Supports('session','InGame'))
 assert(not API.Supports('session','UiReady') and not API.Supports('invented'))
 assert(API.Supports('inventory','CursorSlot') and API.inventory.CursorSlot==33)

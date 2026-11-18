@@ -258,6 +258,32 @@ its existing default-art behavior. Image handles use the client's existing
 bounded texture cache and deferred GPU retirement. Reacquire the handle when
 drawing: an evicted or retired handle stops drawing safely.
 
+API 1.7 adds `API.assets.InterfaceImage(relativeUiPath)` for raster artwork
+shipped with an interface. It returns the same texture, width and height, or a
+single nil. In the managed UI VM it searches the selected interface folder and
+its approved bases in order; a plugin window first searches its own active
+folder. It never searches another plugin, `ui-data` or arbitrary disk folders.
+The path uses the same raster formats and restrictions as `Image`, but preserves
+case, so use the package's exact spelling on every platform. Links outside an
+approved folder are refused. Saved plugin closures retain their owner and stop
+resolving files when that owner is removed.
+
+```lua
+if API.Supports("assets", "InterfaceImage") then
+  local texture, width, height = API.assets.InterfaceImage("assets/atlas.png")
+  if texture then
+    ui.DrawImage(texture, x, y, x + width, y + height, 0, 0, 1, 1)
+  end
+end
+```
+
+This lets an addon include its own artwork without an extra local install.
+Images share the bounded texture cache, keyed by their resolved package file;
+replacing a file with a changed size or modification time refreshes it on the
+next request. Each file is limited to 64 MiB, the UI archive's unpacked limit.
+Reacquire handles when drawing as with `Image`. Outside the managed UI VM, or
+without an artwork provider, `InterfaceImage` returns nil.
+
 For custom widget artwork, `ui.IsItemDisabled()` observes the last submitted
 widget's disabled state, including after `ui.EndDisabled()`. It preserves that
 widget's identity and input behavior, like the other item-state queries.

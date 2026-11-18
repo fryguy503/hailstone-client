@@ -754,6 +754,24 @@ int UiImage(lua_State* L) {
     return 3;
 }
 
+// texture, width, height = hs.UI.assets.InterfaceImage(relativeUiPath)
+// A raster owned by the active UI, its approved bases, or the current plugin folder.
+int UiInterfaceImage(lua_State* L) {
+    auto& h = Impl::of(L).host;
+    std::size_t length = 0;
+    const char* relative = luaL_checklstring(L, 1, &length);
+    const ui::UiTextures::Texture* texture = nullptr;
+    plugin::cxx_guard(L, [&] {
+        const auto path = ui::lua::interface_image_path(L, std::string_view(relative, length));
+        if (path && h.textures) texture = h.textures->interface_file(*path);
+    });
+    if (!texture) { lua_pushnil(L); return 1; }
+    lua_pushlightuserdata(L, texture->id);
+    lua_pushinteger(L, texture->width);
+    lua_pushinteger(L, texture->height);
+    return 3;
+}
+
 // texture, u0, v0, u1, v1, width, height = hs.UiAnimation(name)
 // Explicitly requested stock XML art retains the frame's original aspect.
 int UiAnimation(lua_State* L) {
@@ -3202,7 +3220,7 @@ void UiApi::register_functions(lua_State* L) {
     static const luaL_Reg fns[] = {
         {"InGame", InGame}, {"UiReady", UiReady}, {"GameState", GameState}, {"Name", Name}, {"SlotName", SlotName},
         {"Item", Item}, {"ItemIcon", ItemIcon}, {"Money", Money}, {"Label", Label}, {"Gauge", Gauge},
-        {"ClickSlot", ClickSlot}, {"HasSlot", HasSlot}, {"AltCurrencies", AltCurrencies}, {"UiTexture", UiTexture}, {"UiImage", UiImage}, {"UiAnimation", UiAnimation},
+        {"ClickSlot", ClickSlot}, {"HasSlot", HasSlot}, {"AltCurrencies", AltCurrencies}, {"UiTexture", UiTexture}, {"UiImage", UiImage}, {"UiInterfaceImage", UiInterfaceImage}, {"UiAnimation", UiAnimation},
         {"ReplaceWindow", ReplaceWindow}, {"WindowPlaced", WindowPlaced}, {"ShowWindow", ShowWindow}, {"WindowButton", WindowButton},
         {"WindowText", WindowText}, {"ChildShown", ChildShown}, {"WindowList", WindowList}, {"ChildArt", ChildArtFn},
         {"GemTint", GemTint}, {"GemOverlay", GemOverlay}, {"GemInfo", GemInfo}, {"ButtonCoolDown", ButtonCoolDown}, {"CoolDownColor", CoolDownColor}, {"ItemPreview", ItemPreview}, {"ItemPreviewImage", ItemPreviewImage}, {"ItemPreviewControl", ItemPreviewControl}, {"BuffSlot", BuffSlot}, {"BuffOverlay", BuffOverlay}, {"ClickChild", ClickChild}, {"ClickChildAt", ClickChildAt},
@@ -3235,7 +3253,7 @@ void UiApi::register_functions(lua_State* L) {
     // this frame (Impl::list) before it runs. A function missing here costs only a list built again.
     static constexpr std::string_view kReads[] = {
         "InGame", "UiReady", "GameState", "Name", "SlotName", "Item", "ItemIcon", "Money", "Label", "Gauge", "HasSlot",
-        "AltCurrencies", "UiTexture", "UiImage", "UiAnimation", "ReplaceWindow", "WindowShown", "WindowPlaced", "WindowText", "ChildShown",
+        "AltCurrencies", "UiTexture", "UiImage", "UiInterfaceImage", "UiAnimation", "ReplaceWindow", "WindowShown", "WindowPlaced", "WindowText", "ChildShown",
         "WindowList", "ChildArt", "GemTint", "GemOverlay", "ButtonCoolDown", "CoolDownColor", "ItemPreviewImage",
         "BuffSlot", "BuffOverlay", "HotButton", "HotButtonFace", "HotButtonChecked", "HotButtonState", "HotButtonInfo",
         "GemInfo", "HoldingButton", "SlotItem", "ListInfo", "ListRow", "ChildState", "WindowTitle", "ChildGauge",

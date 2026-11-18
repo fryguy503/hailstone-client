@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- UI addons can load their own packaged raster artwork through `hs.UI.assets.InterfaceImage`, including artwork inherited from approved base interfaces, without a separate local art install.
 - NPCs, pets and other players that have stopped no longer walk in place with their footsteps sounding: a spawn that has not moved for a second plays its standing and idle animations
 - Permission requests for required plugins appear above the loading screen, where players can allow or refuse them.
 - Achievements: objective counts and live state updates now arrive as the original client reads them. A progress record whose type is a requirement kind (3 or 4, as some servers send) was refused, so the window kept saying "Objective counts have not arrived yet"; and a state update whose leading number was not newer than the last was dropped, which the original never checks. A progress record for an unknown achievement or a descriptive-only objective is now skipped instead of throwing away the whole packet

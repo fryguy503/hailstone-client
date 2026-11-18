@@ -78,6 +78,9 @@ bool pack_code(lua_State* L);
 int load_base_file(lua_State* L);
 // Shared presentation-data modules use separately approved data roots, retaining the same caller restrictions.
 int load_data_file(lua_State* L);
+// A raster file in the active caller's UI folder, selected interface or approved
+// bases. Unlike game assets this follows UI ownership; no arbitrary disk paths.
+std::optional<std::filesystem::path> interface_image_path(lua_State* L, std::string_view relative);
 // How many ui.CodeEditor states (lua_code_editor.cpp) are kept now; for the tests.
 std::size_t code_editors_kept();
 // The frame the longest-kept of them was first drawn in (-1 with none); for the tests.

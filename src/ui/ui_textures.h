@@ -48,6 +48,8 @@ public:
     // The files (and game_file pictures) held at most, loaded or not found: well past the stock UI's art and icon
     // sheets, so a UI does not load the same file again and again.
     static constexpr std::size_t kMaxFiles = 1024;
+    // A UI archive's whole unpacked limit also bounds each packaged raster.
+    static constexpr std::uintmax_t kMaxInterfaceImageBytes = 64ull * 1024 * 1024;
 
     UiTextures(render::VkContext& vk, const GameDir& game);
     ~UiTextures();
@@ -66,6 +68,9 @@ public:
     // A picture file of the disk (PNG, JPEG, BMP, TGA, DDS: the pre-game screens' pictures, app/screen_pictures.h);
     // null when it cannot be read or decoded. A few stay loaded; older ones are let go (VkContext::retire).
     const Texture* picture(const std::filesystem::path& file);
+    // A caller-approved UI package raster, sharing the bounded art LRU. The
+    // resolver owns scope checks; changed size/mtime refreshes a replaced file.
+    const Texture* interface_file(const std::filesystem::path& file);
     std::optional<Cell> item_icon(std::uint32_t icon);
     std::optional<Cell> spell_icon(std::int32_t icon);
     std::optional<Cell> gem_icon(std::int32_t icon);
@@ -91,6 +96,7 @@ private:
     struct Entry;
     std::optional<Cell> grid(const char* pattern, int sheet, int cell_size, int x, int y);
     const Texture* load(const std::string& key, const std::string& path);
+    void make_room();
     // Decodes and uploads; null (with a warning naming `what`) when it cannot.
     std::unique_ptr<Entry> make(std::span<const std::byte> data, const std::string& what);
     // Lets the entry's texture go once no frame may draw it (VkContext::retire); the Lua bindings stop drawing its
@@ -103,6 +109,12 @@ private:
     struct File {
         std::unique_ptr<Entry> entry; // null: missing or not decoded
         std::uint64_t used = 0;       // lookups_ when last asked for
+        struct DiskVersion {
+            std::uintmax_t size = 0;
+            std::filesystem::file_time_type written{};
+            bool operator==(const DiskVersion&) const = default;
+        };
+        std::optional<DiskVersion> disk_version;
     };
     std::map<std::string, File> files_;
     std::uint64_t lookups_ = 0;

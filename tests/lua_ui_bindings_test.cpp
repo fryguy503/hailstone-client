@@ -23,6 +23,7 @@
 #include "core/game_dir.h"
 #include "game/keymap.h"
 #include "ui/dev_screens.h"
+#include "ui/lua/lua_host.h"
 #include "ui/ui_textures.h"
 #include "scratch_dir.h"
 
@@ -389,6 +390,25 @@ TEST_CASE("hs UI image: read-only public binding preserves nil results and struc
         CHECK(hs.run("return hs.UI.assets.Image('images/bad' .. string.char(0) .. '.png')") == "nil");
         CHECK(hs.run("return hs.UI.assets.Image('metadata.xml')") == "nil");
         CHECK(app::ui_call_caps("UiImage") == std::optional<std::uint32_t>{0});
+    }
+    ImGui::DestroyContext(context);
+}
+
+TEST_CASE("hs UI interface image: discoverable read-only binding refuses unmanaged states and invalid paths") {
+    ImGuiContext* context = ImGui::CreateContext();
+    {
+        app::UiHost host;
+        UiTable hs(host);
+        CHECK(hs.run("return hs.UI.assets.InterfaceImage == hs.UiInterfaceImage") == "true");
+        CHECK(hs.run("return hs.UI.Supports('assets', 'InterfaceImage')") == "true");
+        CHECK(hs.run("return hs.UI.Describe('assets', 'InterfaceImage').requiredCaps") == "0");
+        CHECK(hs.run("return hs.UI.assets.InterfaceImage('assets/atlas.png')") == "nil");
+        CHECK(hs.run("return select('#',hs.UI.assets.InterfaceImage('assets/atlas.png'))") == "1");
+        CHECK(hs.run("return hs.UI.assets.InterfaceImage('../outside.png')") == "nil");
+        CHECK(hs.run("return hs.UI.assets.InterfaceImage('assets/bad'..string.char(0)..'.png')") == "nil");
+        CHECK(hs.run("return hs.UI.assets.InterfaceImage('metadata.lua')") == "nil");
+        CHECK(app::ui_call_caps("UiInterfaceImage") == std::optional<std::uint32_t>{0});
+        CHECK_FALSE(ui::lua::interface_image_path(hs.L, "assets/atlas.png"));
     }
     ImGui::DestroyContext(context);
 }

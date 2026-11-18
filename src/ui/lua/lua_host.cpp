@@ -25,6 +25,7 @@
 #include "core/frame_sections.h"
 #include "core/log.h"
 #include "core/lua_keep.h"
+#include "ui/ui_textures.h"
 
 namespace hailstone::ui::lua {
 
@@ -1580,6 +1581,33 @@ void push_wrapping(lua_State* L, int real, int cache, int tag) {
 
 int load_base_file(lua_State* L) { return lua_import_file(L, ImportKind::Base); }
 int load_data_file(lua_State* L) { return lua_import_file(L, ImportKind::Data); }
+
+std::optional<fs::path> interface_image_path(lua_State* L, std::string_view relative) {
+    const bool managed = lua_getfield(L, LUA_REGISTRYINDEX, kPackStateKey) == LUA_TBOOLEAN && lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    if (!managed || !ui_image_path(relative)) return std::nullopt;
+    // Validate with the game-raster grammar, but preserve the package's actual
+    // spelling: addon paths must also work on case-sensitive filesystems.
+    std::string name(relative);
+    std::replace(name.begin(), name.end(), '\\', '/');
+    auto& ui = LuaUi::Impl::of(L);
+    std::vector<fs::path> roots;
+    if (!g_caller_tag.empty()) {
+        const auto* own = ui.folder_dir(g_caller_tag);
+        if (!own) return std::nullopt;
+        roots.push_back(*own);
+    }
+    roots.push_back(ui.root);
+    roots.insert(roots.end(), ui.bases.begin(), ui.bases.end());
+    std::error_code ec;
+    for (const auto& root : roots) {
+        const auto file = inside(root, name);
+        if (!file || !fs::is_regular_file(*file, ec)) continue;
+        const auto size = fs::file_size(*file, ec);
+        if (!ec && size > 0 && size <= UiTextures::kMaxInterfaceImageBytes) return file;
+    }
+    return std::nullopt;
+}
 
 // A plugin folder's globals: its own table, over a layer it cannot reach that holds its _G (the table itself), its
 // hs (functions running as the folder), its ui (read-only, ui.window running as the folder), its dofile and load,

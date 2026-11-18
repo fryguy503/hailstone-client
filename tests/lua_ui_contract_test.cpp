@@ -123,7 +123,7 @@ TEST_CASE("UI interfaces: installed records and actual loading status are indepe
 
 TEST_CASE("UI contract: discovery reports client structure independently of game and permission state") {
     ContractUi ui;
-    CHECK(ui.run("return hs.UI.version.major .. '.' .. hs.UI.version.minor") == "1.6");
+    CHECK(ui.run("return hs.UI.version.major .. '.' .. hs.UI.version.minor") == "1.7");
     CHECK(ui.run("return hs.UI.session.InGame()") == "false");
     CHECK(ui.run("return hs.UI.Supports('session', 'InGame') and hs.UI.Supports('chat')") == "true");
     CHECK(ui.run("return hs.UI.Supports('missing') or hs.UI.Supports('chat', 'Missing')") == "false");

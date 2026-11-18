@@ -330,6 +330,15 @@ the same on case-sensitive and case-insensitive filesystems. UI bundles are limi
 4,096 files and 64 MiB unpacked. Updates/removal preserve files the addon did
 not own, and use the existing transactional journal and pinned signing keys.
 
+An interface can ship its own raster artwork under its UI folder, for example
+`ui/<pack>/assets/atlas.png`. API 1.7's
+`hs.UI.assets.InterfaceImage("assets/atlas.png")` reads it from the selected
+interface or its approved bases, without a separate local art install. It
+accepts DDS, TGA, PNG, BMP and JPEG; paths must match the package's spelling.
+Use `hs.UI.Supports("assets", "InterfaceImage")` for hosts with an older API.
+The same relative name in another addon is a different cached resource; a
+relative path cannot reach an unapproved addon or a link outside its UI folder.
+
 Player-derived presentation modules belong outside those managed code files,
 under `ui-data/<stable-interface-id>/` in the data folder. Interfaces can import
 them with `hs.UI.interfaces.LoadData`; only selected and approved base IDs are

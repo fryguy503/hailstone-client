@@ -10,7 +10,7 @@ does not bypass a function's own caller, screen or server-state checks.
 `API.version`, `API.Supports(module[, member])` and `API.Describe([module[, member]])`
 provide contract version and structural discovery. They confer no permissions.
 
-Coverage: **332/332 method implementation links**, **207/332 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
+Coverage: **333/333 method implementation links**, **208/333 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
 
 Unresolved method implementations: none.
 Unresolved constant implementations: none.
@@ -57,6 +57,7 @@ Unresolved constant implementations: none.
 | --- | --- | --- | --- | --- |
 | `API.assets.Animation` | `texture, u0, v0, u1, v1, width, height = hs.UiAnimation(name)`<br>`Explicitly requested stock XML art retains the frame's original aspect.` | `hs.UiAnimation` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.assets.Image` | `texture, width, height = hs.UiImage(relativeGamePath)`<br>`A read-only raster image in the indexed game-asset layers, independent of game_art; nil when missing or invalid.`<br>`Supports DDS, TGA, PNG, BMP and JPEG. The caller supplies atlas UVs to ui.DrawImage; no layout metadata is read.` | `hs.UiImage` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
+| `API.assets.InterfaceImage` | `texture, width, height = hs.UI.assets.InterfaceImage(relativeUiPath)`<br>`A raster owned by the active UI, its approved bases, or the current plugin folder.` | `hs.UiInterfaceImage` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.assets.ItemIcon` | `texture, u0, v0, u1, v1 = hs.ItemIcon(icon)   -- nil when the icon's sheet is missing` | `hs.ItemIcon` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.assets.Texture` | `texture, w, h = hs.UiTexture(file)   -- a texture from uifiles/default (window art), nil if missing` | `hs.UiTexture` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 

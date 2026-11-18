@@ -41,6 +41,7 @@ UI_METHOD("AddonPolicyAction", "addons", "PolicyAction", 0)
 // assets
 UI_METHOD("UiAnimation", "assets", "Animation", 0)
 UI_METHOD("UiImage", "assets", "Image", 0)
+UI_METHOD("UiInterfaceImage", "assets", "InterfaceImage", 0)
 UI_METHOD("ItemIcon", "assets", "ItemIcon", 0)
 UI_METHOD("UiTexture", "assets", "Texture", 0)
 
