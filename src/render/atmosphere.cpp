@@ -178,15 +178,19 @@ glm::vec3 lightning_haze(const glm::vec3& color, float flash, float overcast) {
 }
 
 HazeTarget haze_target(const game::ViewDistance& original, float multiplier, bool extend, bool outdoor, bool sky_drawn,
-                       const glm::vec3& to_sun, float overcast, float snow) {
+                       const glm::vec3& to_sun, float overcast, float snow, bool in_the_sky) {
     HazeTarget out;
     const glm::vec3 fog = linear_color(original.fog_color);
     out.extend = extend ? 1.0f : 0.0f;
     out.length = modern_view(original, multiplier, extend).haze_length;
-    out.color = outdoor ? haze_sky_color(fog, sky_light(to_sun).horizon, sky_drawn, original.fog_end) : fog;
+    out.color = in_the_sky ? sky_light(to_sun).horizon
+              : outdoor    ? haze_sky_color(fog, sky_light(to_sun).horizon, sky_drawn, original.fog_end)
+                           : fog;
     weather_haze(out, overcast, snow);
     return out;
 }
+
+glm::vec3 open_sky_below(const glm::vec3& to_sun) { return sky_radiance(glm::vec3(0.0f, 0.0f, 1.0f), to_sun); }
 
 ColorGrade color_grade(const Daylight& d, bool outdoor, const glm::vec3& fog, float overcast) {
     ColorGrade g;

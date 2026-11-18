@@ -14,6 +14,7 @@
 
 #include "core/wrap_math.h"
 #include "game/mechanics/item_stats.h"
+#include "game/spa_ids.h"
 #include "game/spells.h"
 
 namespace hailstone::game::mechanics {
@@ -24,6 +25,8 @@ std::int32_t add(std::int32_t a, std::int32_t b) {
     return static_cast<std::int32_t>(static_cast<std::uint32_t>(a) + static_cast<std::uint32_t>(b));
 }
 std::uint32_t u(std::int32_t v) { return static_cast<std::uint32_t>(v); }
+
+constexpr float kPercent = 0.01f; // 0x9c4be4
 
 // value * percent / 100 (a 32-bit product, divided toward zero).
 std::int32_t scale(std::int32_t value, std::int32_t percent) { return core::wrapped_div(u(value) * u(percent), 100); }
@@ -437,6 +440,47 @@ std::int32_t Character::focus_casting_time_modifier(const SpellData& cast, bool 
     if (buff.found) total = add(total, cast_time_share(cast, scale(buff.value, buff.percent)));
     FocusFound aa = best_aa_focus(cast, kType);
     if (aa.found) total = add(total, cast_time_share(cast, scale(aa.value, aa.percent)));
+    return total;
+}
+
+// GetFocusRangeModifier @0x42cb80 (focus type 0x81, SPA 129): for the best item (its focus spell, null-checked),
+// buff (4th argument 0) and AA, (int)(Range x the scaled base x 0.01f); each share is truncated, then added.
+std::int32_t Character::focus_range_modifier(const SpellData& cast) const {
+    constexpr std::int32_t kType = SPA_FOCUS_RANGE_MOD;
+    auto share = [&](std::int32_t value, std::int32_t percent) {
+        double v = fpu_.mul(static_cast<double>(cast.range), static_cast<double>(scale(value, percent)));
+        return Fpu::ftol(fpu_.mul(v, static_cast<double>(kPercent)));
+    };
+    std::int32_t total = 0;
+    last_focus_item_ = nullptr;
+    FocusFound item = best_item_focus(cast, kType);
+    if (item.found) {
+        // ItemClient::GetSpellID(item, extra) and the spell manager's spell, as focus_casting_time_modifier.
+        std::pair<std::int32_t, bool> id{0, false};
+        bool hooked = false;
+        if (hooks.item_spell_id)
+            if (auto v = hooks.item_spell_id(item.extra)) {
+                id = *v;
+                hooked = true;
+            }
+        if (!hooked && last_focus_item_ && item.extra >= 0 && item.extra < net::kEffectCount) {
+            id.first = last_focus_item_->effects[static_cast<std::size_t>(item.extra)].effect;
+            id.second = valid_spell(id.first);
+        }
+        if (id.second) {
+            std::optional<std::pair<bool, std::int32_t>> base;
+            if (hooks.spell_focus_base) base = hooks.spell_focus_base(id.first);
+            if (!base) {
+                const SpellData* s = spell(id.first);
+                base = std::pair<bool, std::int32_t>{s != nullptr, s ? s->base[0] : 0};
+            }
+            if (base->first) total = share(base->second, item.percent);
+        }
+    }
+    FocusFound buff = best_buff_focus(cast, kType, false);
+    if (buff.found) total = add(total, share(buff.value, buff.percent));
+    FocusFound aa = best_aa_focus(cast, kType);
+    if (aa.found) total = add(total, share(aa.value, aa.percent));
     return total;
 }
 

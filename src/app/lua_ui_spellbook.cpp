@@ -256,7 +256,7 @@ int DisplayItemData(lua_State* L) {
         return 1;
     }
     const auto& item = (*displays)[static_cast<std::size_t>(n - 1)];
-    lua_createtable(L, 0, 12);
+    lua_createtable(L, 0, 17);
     set_int(L, "id", item.id);
     set_int(L, "icon", item.icon);
     set_str(L, "name", item.name);
@@ -269,6 +269,15 @@ int DisplayItemData(lua_State* L) {
     set_int(L, "item_type", item.item_type);
     set_int(L, "itemType", item.item_type);
     set_int(L, "favor", item.favor);
+    auto spell_id = [&](net::ItemEffectKind kind) {
+        const auto& effect = item.effects[kind];
+        return effect.present() ? effect.effect : 0;
+    };
+    set_int(L, "scrollSpell", spell_id(net::kEffectScroll));
+    set_int(L, "focusSpell", spell_id(net::kEffectFocus));
+    set_int(L, "procSpell", spell_id(net::kEffectProc));
+    set_int(L, "wornSpell", spell_id(net::kEffectWorn));
+    set_int(L, "clickSpell", spell_id(net::kEffectClick));
     return 1;
 }
 

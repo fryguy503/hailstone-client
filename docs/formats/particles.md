@@ -38,7 +38,7 @@ Code: `src/assets/spell_effects.{h,cpp}` (files), `src/game/particles.{h,cpp}` (
 
 The file starts with `"EDD\0"` and a 4-byte ASCII version. Version `110` is read directly: (size - 8) / 0x1a0 records; record 0 is the file's own `None` sentinel. Other versions are converted field by field and a file without the magic is the legacy headerless format with 0xc4-byte records; neither occurs in a RoF2 install (`spellsnew.edd` 2,577 records, `actoremittersnew.edd` 944, `environmentemittersnew.edd` 626) and `assets::parse_edd` refuses them.
 
-The record layout is `assets::EmitterDefinition` (offsets in its comments). Texture names are searched in `SpellEffects\`, `EnvEmitterEffects\`, `ActorEffects\`. Fields +0x13c, +0x140, +0x178 and +0x148..+0x168 are not used.
+The record layout is `assets::EmitterDefinition` (offsets in its comments). Texture names are searched in `SpellEffects\`, `EnvEmitterEffects\`, `ActorEffects\`. An emitter whose texture no folder has, that does not decode, or whose name is empty (six `spellsnew.edd` records) draws nothing (`render::particle_texture_slot`), as in the RoF2 client: EQGraphicsDX9's particle batch draw @0x10071b90 tries the three folders, then a resource already loaded under that name, and otherwise disables the batch and skips its draw (spell effect 226's impact emitter 1351 names `spear2.dds`, which no install has). A texture past Hailstone's own texture cap is not drawn either. Fields +0x13c, +0x140, +0x178 and +0x148..+0x168 are not used.
 
 ## spellsnew.eff stages
 

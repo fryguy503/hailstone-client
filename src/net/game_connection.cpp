@@ -851,6 +851,7 @@ void GameConnection::enter_world(const std::string& name, bool return_home) {
     load_chat_filters(); // the character's chat.ini over eqclient.ini's
     load_client_options(); // and options.ini
     load_kept_items();     // Hailstone: the Keep marks (kept_items.txt)
+    blocked_buffs_ = {};   // the character's own come from its ini at the zone-in (restore_blocked_buffs)
     load_bank_snapshot();  // Hailstone: the bank as last seen (bank.dat)
     EnterWorld e;
     e.name = name;
@@ -1155,7 +1156,9 @@ void GameConnection::finish_zone_in() {
         death_tip_pending_ = false;
         window_toggle_ = "tip:31";
     }
-    resend_blocked_buffs();
+    // ProcessLocalPCIni sends the lists from the character ini after each zone-in (restore_blocked_buffs, which the
+    // app calls once it has given the ini); without one, the lists this session has.
+    if (!char_ini_get_) resend_blocked_buffs();
     // CEverQuest's zone-in (before "Initialization complete."): with /hidecorpses looted on, OP_HideCorpse action 3
     // again (the second word is a stack value in the original).
     if (hide_looted_corpses_) send_zone(encode_hide_corpse(kHideCorpseLooted));
@@ -2083,14 +2086,19 @@ std::optional<std::string> GameConnection::take_zone_to_load() {
     return z;
 }
 
+void GameConnection::set_combat_report_range(float range) {
+    combat_report_range_ = std::isfinite(range) && range > 0.0f ? range : 0.0f;
+}
+
 bool GameConnection::hit_reported(std::uint32_t target, std::uint32_t source) const {
-    // Handle_OP_Damage reports no hit between others more than 75 units away (@0x4b5a8a).
+    // Handle_OP_Damage reports no hit between others more than 75 units away (@0x4b5a8a). Hailstone extension:
+    // combat.report_range replaces the 75 when set.
     const std::uint32_t me = world_.player_id;
     if (target == me || source == me) return true;
     auto t = world_.spawns.find(target);
     auto m = world_.spawns.find(me);
     return t != world_.spawns.end() && m != world_.spawns.end() &&
-           glm::distance(t->second.position, m->second.position) <= 75.0f;
+           glm::distance(t->second.position, m->second.position) <= (combat_report_range_ > 0.0f ? combat_report_range_ : kRof2HitReportRange);
 }
 
 void GameConnection::report_successful_hit(const CombatDamage& d, bool reported) {

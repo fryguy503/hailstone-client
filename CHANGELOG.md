@@ -3,6 +3,18 @@
 ## Unreleased
 
 - UI addons can load their own packaged raster artwork through `hs.UI.assets.InterfaceImage`, including artwork inherited from approved base interfaces, without a separate local art install.
+- Grass: it now grows where a zone line's region lies over the ground. Some classic zone lines are boxes the size of a field: the whole field north of North Qeynos, by the gate to Qeynos Hills, had none
+- Modern lighting: the grass goes on for about 300 units past the edge of an outdoor zone onto the distant land, so it no longer stops in a line where the zone's ground ends
+- Modern lighting: Plane of Sky and Plane of Air show the sky under them again, its clouds going on below the islands, instead of grey or black, and their far islands fade into the sky's haze, not black. No distant land or edge fog is drawn round them
+- Modern lighting: the distant land past a zone's edge rises gently: it stays near the edge's height for a few hundred units, its hills grow over the next few thousand and the mountains stand far off, no longer climbing steeply right at the zone line
+- Blocked buffs and blocked pet buffs are kept across sessions, in the character ini as the RoF2 client keeps them, and sent to the server at each zone-in. A spell the server takes as newly blocked comes off the player or the pet at once ("Now blocking ..."), with the effects of the same spell group
+- Scripts: an item's `TimerReady` gives the seconds left on its click reuse, as MacroQuest's does (NULL for an item without a click effect)
+- Lua add-ons can read the scroll, focus, proc, worn and click spell IDs of an inspected item (`hs.DisplayItemData`: `scrollSpell`, `focusSpell`, `procSpell`, `wornSpell`, `clickSpell`).
+- Combat chat: `combat.report_range` in the character's `hailstone.ini` sets how far away others' melee hits and misses (your pet's included), killing blows and death messages are shown. Unset, the original's 75 units for hits and 50 for deaths stay. The server still decides which damage it sends: stock EQEmu sends others' melee damage only within 50 units unless its `Range:DamageMessages` rule is raised. Hiding others' hits or misses no longer lets your pet's out-of-range lines through.
+- Merchants: **Usable only** now checks all of your classes on multiclass servers, so unlearned scrolls for those classes are no longer hidden by the profile's class.
+- Casting now counts spell-range focus from equipment, buffs and AAs when checking whether a target is in reach.
+- Spell effects: a particle whose texture is missing from the game folder is no longer drawn as a white square. Spear of Decay and other spells using effect 226 left a large white square on the caster. An emitter with no texture name is not drawn either
+- Options: the explanation that shows when you hover a setting is now a block of text with a fixed width that wraps, instead of one long line that ran off the screen; the notes under a setting wrap too
 - NPCs, pets and other players that have stopped no longer walk in place with their footsteps sounding: a spawn that has not moved for a second plays its standing and idle animations
 - Permission requests for required plugins appear above the loading screen, where players can allow or refuse them.
 - Character entry, including Return Home and automatic logins, waits for a pending native login-plugin question to be allowed, refused or put away. Optional plugins stay unloaded unless allowed; zone transfers continue normally.

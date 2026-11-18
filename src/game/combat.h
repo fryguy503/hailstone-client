@@ -112,9 +112,11 @@ std::optional<HitLine> damage_report(const EqStrings& strings, const WorldState&
                                      std::uint32_t special);
 // ReportSuccessfulHit's chat filters (ChatFilters_GetMode, mode 1 hides) on a melee line, starting from its
 // `report` argument: a hit by somebody else on somebody else under filter 15 (others' hits, @0x53092c) is shown
-// exactly when the player's pet hit (even unreported); an NPC hitting itself never shows; a miss on the player is
+// exactly when the player's pet hit; an NPC hitting itself never shows; a miss on the player is
 // hidden under filter 16 (@0x530768), the player's own under filter 13 (@0x5305ce), and somebody else's on
 // somebody else under filter 14 (@0x53078b) is shown exactly when the player's pet missed.
+// Deliberate change from RoF2 (a fix): an unreported line stays hidden, the pet exceptions above included; the
+// original lets the pet's line through unreported.
 // `by_my_pet`: the attacker is the local player's PetID, or a temporary pet (bTempPet +0x3dc) whose MasterID is
 // the player's SpawnID (ReportSuccessfulHit @0x52efd3). Its lines on others are coloured 0x148.
 bool hit_line_shown(const HitLine& line, bool by_my_pet, const ChatFilters& filters, bool report = true);

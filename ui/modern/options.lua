@@ -45,8 +45,17 @@ local function matches(label, tooltip)
   return fuzzy.match(search, label, tooltip)
 end
 
+-- A tooltip as a block of text: it wraps at a fixed width (never wider than the screen) and does not run off it.
+local function showTip(text)
+  if not ui.BeginTooltip() then return end
+  ui.PushTextWrapPos(math.min(320 * U, (ui.GetIO().width or 1280) * 0.6))
+  ui.Text(text)
+  ui.PopTextWrapPos()
+  ui.EndTooltip()
+end
+
 local function tip(text)
-  if text and ui.IsItemHovered(ui.HoveredFlags.DelayShort) then ui.SetTooltip(text) end
+  if text and ui.IsItemHovered(ui.HoveredFlags.DelayShort) then showTip(text) end
 end
 
 local function beginSection(title)
@@ -81,7 +90,9 @@ local function note(text)
   ui.TableNextRow()
   ui.TableNextColumn()
   ui.TableNextColumn()
+  ui.PushTextWrapPos(0)
   ui.TextDisabled(text)
+  ui.PopTextWrapPos()
 end
 
 -- A heading and a table of rows. While a search is typed, a section none of whose rows match is left out whole; the
@@ -390,7 +401,7 @@ local function displayTab()
             if ui.Selectable(n .. "##ui" .. i, i - 1 == uiName) then API.settings.SetOption("ui_name", i - 1) end
             ui.EndDisabled()
             if ui.IsItemHovered(ui.HoveredFlags.DelayShort | ui.HoveredFlags.AllowWhenDisabled) then
-              ui.SetTooltip(infoOf(i) .. (available and "" or ("\nUnavailable: " .. (packs[i].reason or ""))))
+              showTip(infoOf(i) .. (available and "" or ("\nUnavailable: " .. (packs[i].reason or ""))))
             end
           end
           ui.EndCombo()
@@ -904,7 +915,7 @@ local function keyBindings()
           API.windows.ListClick(WINDOW, KEYS_LIST, r, "left", c - 1)
         end
         if kc then ui.PopStyleColor() end
-        if kc and ui.IsItemHovered() then ui.SetTooltip("This key is bound to another command too.") end
+        if kc and ui.IsItemHovered() then showTip("This key is bound to another command too.") end
       end
     end
     if search == "" then

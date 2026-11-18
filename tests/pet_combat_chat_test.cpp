@@ -1,10 +1,13 @@
 #include <doctest/doctest.h>
 
 #include <fstream>
+#include <limits>
 #include <string>
 #include <utility>
 
 #include "core/byte_io.h"
+#include "core/config.h"
+#include "game/death_report.h"
 #include "mq_test_world.h"
 #include "net/opcodes.h"
 
@@ -160,22 +163,163 @@ TEST_CASE("Pet combat chat: current owner and replacement records determine temp
     w.expect_line(false); // No local player must not make an ownerless temporary pet ours.
 }
 
-TEST_CASE("Pet combat chat: owned temporary killing blows follow the permanent pet filter exception") {
+TEST_CASE("Pet combat chat: killing blows obey the death range with either others filter") {
     PetCombatWorld w;
     w.spawn(20, 0, 1);
     w.spawn(21, 1, 1);
     w.spawn(22, 1, 12);
-    w.conn->set_chat_filter(15, 0);
-    for (std::uint32_t killer : {20u, 21u, 22u}) {
-        CAPTURE(killer);
-        w.spawn(30, 0, 0);
-        w.conn->world_for_test().spawns.at(30).position = {200, 0, 0}; // Ordinary distant death reports are hidden.
-        net::Death death;
-        death.spawn_id = 30;
-        death.killer_id = killer;
-        death.attack_skill = 0;
-        death.damage = 7;
-        w.conn->receive_zone_packet_for_test(net::encode(death));
-        w.expect_line(killer != 22);
+    for (float setting : {0.0f, 75.0f, 200.0f, 300.0f}) {
+        w.conn->set_combat_report_range(setting);
+        // Unset: RoF2's 50 for OP_Death (game::report_death).
+        const float range = setting > 0.0f ? setting : net::GameConnection::kRof2DeathReportRange;
+        for (bool hide_others : {false, true}) {
+            w.conn->set_chat_filter(15, hide_others ? 0 : 1);
+            for (std::uint32_t killer : {20u, 21u, 22u}) {
+                for (float distance : {range, range + 1.0f}) {
+                    CAPTURE(range);
+                    CAPTURE(hide_others);
+                    CAPTURE(killer);
+                    CAPTURE(distance);
+                    w.spawn(30, 0, 0);
+                    w.conn->world_for_test().spawns.at(30).position = {distance, 0, 0};
+                    net::Death death;
+                    death.spawn_id = 30;
+                    death.killer_id = killer;
+                    death.attack_skill = 0;
+                    death.damage = 7;
+                    w.conn->receive_zone_packet_for_test(net::encode(death));
+                    const bool hit_shown = distance <= range && (!hide_others || killer != 22);
+                    if (hit_shown) {
+                        auto hit = w.conn->poll_chat();
+                        REQUIRE(hit.has_value());
+                        CHECK(hit->kind == net::ChatEvent::Kind::Combat);
+                        CHECK(hit->color == (killer != 22 ? 0x148u : 279u));
+                    }
+                    // The separate death announcement follows range, not the others' melee filter.
+                    auto announcement = w.conn->poll_chat();
+                    REQUIRE(announcement.has_value() == (distance <= range));
+                    if (announcement) CHECK(announcement->color == game::kOtherDeathColor);
+                    CHECK_FALSE(w.conn->poll_chat());
+                }
+            }
+        }
     }
+}
+
+TEST_CASE("Pet combat chat: the hit range defaults to RoF2's 75 from the target and filters cannot bypass it") {
+    PetCombatWorld w;
+    w.spawn(20, 0, 1);
+    w.spawn(21, 1, 1);
+    w.spawn(22, 0, 0);
+    // Range is measured to the victim, not to the attacker.
+    for (auto id : {20u, 21u, 22u}) w.conn->world_for_test().spawns.at(id).position = {1000, 0, 0};
+    for (float setting : {0.0f, 200.0f}) {
+        w.conn->set_combat_report_range(setting);
+        const float range = setting > 0.0f ? setting : 75.0f;
+        for (bool hide_others : {false, true}) {
+            w.conn->set_chat_filter(14, hide_others ? 0 : 1);
+            w.conn->set_chat_filter(15, hide_others ? 0 : 1);
+            for (float distance : {50.0f, 75.0f, 75.25f, 135.0f, 200.0f, 200.25f}) {
+                w.conn->world_for_test().spawns.at(10).position = {0, distance, 0};
+                for (std::uint16_t source : {std::uint16_t{20}, std::uint16_t{21}, std::uint16_t{22}}) {
+                    for (std::int32_t amount : {7, 0}) {
+                        CAPTURE(setting);
+                        CAPTURE(hide_others);
+                        CAPTURE(distance);
+                        CAPTURE(source);
+                        CAPTURE(amount);
+                        w.damage(source, amount);
+                        w.expect_line(distance <= range && (!hide_others || source != 22),
+                                      source != 22 ? 0x148u : (amount ? 279u : 280u));
+                    }
+                }
+            }
+        }
+    }
+    // Damage by or on the player is never range-limited.
+    w.damage(1);
+    w.expect_line(true, 265);
+    w.damage(20, 7, 1);
+    w.expect_line(true, 266);
+}
+
+TEST_CASE("Pet combat chat: the ini range overrides and invalid values keep RoF2's range") {
+    PetCombatWorld w;
+    w.spawn(20, 0, 1);
+    for (const auto& [value, range] :
+         {std::pair{"40", 40.0f}, {"300.5", 300.5f}, {"", 75.0f}, {"invalid", 75.0f},
+          {"nan", 75.0f}, {"inf", 75.0f}, {"0", 75.0f}, {"-1", 75.0f}}) {
+        CAPTURE(value);
+        Config config;
+        config.parse(std::string("combat.report_range = ") + value);
+        w.conn->set_combat_report_range(config.get_float("combat.report_range", 0.0f));
+        for (float distance : {range, range + 0.25f}) {
+            w.conn->world_for_test().spawns.at(10).position = {distance, 0, 0};
+            w.damage(20);
+            w.expect_line(distance <= range);
+        }
+    }
+    for (float range : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}) {
+        w.conn->set_combat_report_range(range);
+        w.conn->world_for_test().spawns.at(10).position = {75, 0, 0};
+        w.damage(20);
+        w.expect_line(true);
+        w.conn->world_for_test().spawns.at(10).position.x = 76;
+        w.damage(20);
+        w.expect_line(false);
+    }
+}
+
+TEST_CASE("Pet combat chat: death announcements use combat range and retain local exceptions") {
+    PetCombatWorld w;
+    {
+        std::ofstream strings(w.dir / "eqstr_us.txt", std::ios::app);
+        strings << "12114 %1 has been slain by %2!\n12113 You have slain %1!\n"
+                << "12115 %1 died.\n12112 %1 has been slain!\n12107 You have been slain by %1!\n";
+    }
+    w.game->rescan();
+    w.conn->reload_game_files();
+    w.spawn(20, 0, 1);
+    for (float setting : {0.0f, 75.0f, 200.0f, 300.0f}) {
+        w.conn->set_combat_report_range(setting);
+        const float range = setting > 0.0f ? setting : 50.0f; // unset: RoF2's 50
+        for (std::uint32_t killer : {0u, 1u, 20u, 999u}) {
+            for (float distance : {40.0f, range, range + 1.0f}) {
+                CAPTURE(setting);
+                CAPTURE(killer);
+                CAPTURE(distance);
+                w.spawn(30, 0, 0);
+                w.conn->world_for_test().spawns.at(30).position = {distance, 0, 0};
+                net::Death death;
+                death.spawn_id = 30;
+                death.killer_id = killer;
+                death.attack_skill = 231; // Test death text without a second melee hit/miss line.
+                death.damage = 7;
+                w.conn->receive_zone_packet_for_test(net::encode(death));
+                auto event = w.conn->poll_chat();
+                REQUIRE(event.has_value() == (distance <= range || killer == 1));
+                if (event) {
+                    CHECK(event->kind == net::ChatEvent::Kind::Combat);
+                    CHECK(event->color == game::kOtherDeathColor);
+                    CHECK_FALSE(event->text.empty());
+                }
+                CHECK_FALSE(w.conn->poll_chat());
+                CHECK(w.conn->world().spawns.at(30).is_corpse); // Range never suppresses death handling.
+            }
+        }
+    }
+    // The player's own death is never hidden, even with the killer outside the configured range.
+    w.conn->set_combat_report_range(1);
+    w.conn->world_for_test().spawns.at(20).position = {1000, 0, 0};
+    net::Death death;
+    death.spawn_id = 1;
+    death.killer_id = 20;
+    death.attack_skill = 231;
+    death.damage = 7;
+    w.conn->receive_zone_packet_for_test(net::encode(death));
+    auto event = w.conn->poll_chat();
+    REQUIRE(event.has_value());
+    CHECK(event->color == game::kOwnDeathColor);
+    CHECK(event->text == "You have been slain by Pet!"); // Display names strip the spawn's numeric suffix.
+    CHECK(w.conn->world().spawns.at(1).is_corpse);
 }

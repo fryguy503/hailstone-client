@@ -1491,6 +1491,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/tracking_death_test.cpp
     tests/mock_eqemu_compat_test.cpp
     tests/item_use_test.cpp
+    tests/game_connection_cast_test.cpp
     tests/spell_book_swap_test.cpp
     tests/feign_death_spell_test.cpp
     tests/loot_test.cpp

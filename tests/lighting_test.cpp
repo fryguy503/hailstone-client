@@ -1183,3 +1183,24 @@ TEST_CASE("actor surfaces: Lava2 draws as Lava, and lava keeps its second layer 
     m.effect.coverage_map.clear();
     CHECK_FALSE(render::actor_takes_coverage(m));
 }
+
+TEST_CASE("a zone floating in the sky: its haze and what is under its dome are the sky's, not its black fog") {
+    // Plane of Sky in PEQ's zone table: fog 0,0,0 from 500 to 2000 at 0.33, a sky, outdoor.
+    game::ViewDistance v;
+    v.far_plane = 2000.0f;
+    v.fog_start = 500.0f;
+    v.fog_end = 2000.0f;
+    v.fog_density = 0.33f;
+    v.fog_color = glm::vec3(0.0f);
+    const glm::vec3 noon_sun = glm::normalize(glm::vec3(-0.3f, 0.0f, 0.9f));
+    const auto plain = render::haze_target(v, 2.5f, true, true, true, noon_sun, 0.0f, 0.0f);
+    const auto sky = render::haze_target(v, 2.5f, true, true, true, noon_sun, 0.0f, 0.0f, true);
+    CHECK(glm::length(plain.color) < 0.03f); // the black fog keeps an ordinary zone's haze dark
+    CHECK(sky.color.r == doctest::Approx(render::sky_light(noon_sun).horizon.r));
+    CHECK(sky.color.b == doctest::Approx(render::sky_light(noon_sun).horizon.b));
+    CHECK(glm::length(sky.color) > 10.0f * glm::length(plain.color) + 0.01f);
+    // Under the dome: the sky straight up, blue by day.
+    const glm::vec3 below = render::open_sky_below(noon_sun);
+    CHECK(below.b > below.r);
+    CHECK(below.b > 0.0f);
+}

@@ -283,8 +283,9 @@ public:
     }
     // SpellReqAssociationID (SpellManager vtable +8): the client has no requirement data (docs/unknowns.md).
     bool spell_allowed(cast::Spawn*, std::int32_t) override { return true; }
-    // GetFocusRangeModifier: not ported yet (docs/unknowns.md).
-    std::int32_t focus_range_modifier(const cast::Spell&) override { return 0; }
+    std::int32_t focus_range_modifier(const cast::Spell& s) override {
+        return ch_ ? ch_->focus_range_modifier(*data_.at(&s)) : 0;
+    }
     std::uint32_t player_distance(cast::Spawn& from, cast::Spawn& to, std::uint32_t) override {
         // CDisplay::PlayerDistance with no z scale: the 2-D distance.
         if (&from == &to) return 0;

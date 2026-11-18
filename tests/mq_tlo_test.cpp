@@ -447,6 +447,37 @@ TEST_CASE("TLO: Group, items, Zone and the rest") {
     CHECK(f.p("${Heading[0].ShortName}") == "N");
 }
 
+TEST_CASE("TLO: an item's TimerReady, its own and its recast type's click reuse, as MQ's") {
+    Fixture f;
+    auto& conn = *f.world.conn;
+    auto& inventory = net::GameConnectionTestAccess::inventory(conn);
+    auto* item = inventory.at(net::ItemSlot::possessions(net::kSlotGeneral1 + 1, 0));
+    REQUIRE(item != nullptr);
+    item->name = "Fixture Clicky";
+    auto& click = item->effects[net::kEffectClick];
+    click.effect = 1;
+    click.extra[3] = 17;
+
+    CHECK(f.p("${FindItem[=Missing Clicky].TimerReady}") == "NULL");
+    CHECK(f.p("${FindItem[=Fixture Clicky].TimerReady}") == "0");
+    // MQ's: NULL for an item without a click effect.
+    click.effect = 0;
+    CHECK(f.p("${FindItem[=Fixture Clicky].TimerReady}") == "NULL");
+    click.effect = 1;
+
+    conn.set_item_recast_timer(item, 120, -1);
+    const int left = std::stoi(f.p("${FindItem[=Fixture Clicky].TimerReady}"));
+    CHECK(left > 0);
+    CHECK(left <= 120);
+
+    conn.reset_all_item_recast_timers();
+    conn.set_item_recast_timer(nullptr, 120, 17);
+    CHECK(std::stoi(f.p("${Me.Inventory[pack2].Item[1].TimerReady}")) > 0);
+
+    conn.reset_all_item_recast_timers();
+    CHECK(f.p("${FindItem[=Fixture Clicky].TimerReady}") == "0");
+}
+
 TEST_CASE("TLO: Math, If and Range follow MQ's") {
     Fixture f;
     CHECK(f.p("${Math.Calc[1+2*3]}") == "7.00");

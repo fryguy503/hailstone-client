@@ -79,3 +79,28 @@ TEST_CASE("Particle textures: the zone's copy, else the effect folders in order;
     CHECK_FALSE(none.image);
     CHECK(none.color == glm::vec3(1.0f));
 }
+
+TEST_CASE("Particle textures: a missing, unnamed or over-limit one is not drawn, not drawn white") {
+    // Spell effect 226's impact emitter 1351 names spear2.dds, which no install has: RoF2 puts nothing on the caster.
+    const std::unordered_map<std::string, std::uint32_t> slots{
+        {"bloba.dds", 3},
+        {"spear2.dds", render::kMissingParticleTexture},
+        {"pastlimit.dds", render::kMissingParticleTexture}};
+    const std::unordered_set<std::string> loading{"zapmuza.dds"};
+    CHECK(render::particle_texture_slot("bloba.dds", slots, loading) == std::optional<std::uint32_t>(3u));
+    CHECK_FALSE(render::particle_texture_slot("spear2.dds", slots, loading));
+    CHECK_FALSE(render::particle_texture_slot("zapmuza.dds", slots, loading)); // not up yet
+    // An empty name is not drawn either (the original finds no file for it), nor is one that came past the texture
+    // limit (prepare records it as missing) or one never put up.
+    CHECK_FALSE(render::particle_texture_slot("", slots, loading));
+    CHECK_FALSE(render::particle_texture_slot("pastlimit.dds", slots, loading));
+    CHECK_FALSE(render::particle_texture_slot("unasked.dds", slots, loading));
+}
+
+TEST_CASE("Particle textures: one past the texture limit, or that did not decode, gets no slot") {
+    // Slot 0 is the white texture; the next decoded one takes the next slot while there is room.
+    CHECK(render::particle_upload_slot(true, 1, 4) == 1u);
+    CHECK(render::particle_upload_slot(true, 3, 4) == 3u);
+    CHECK(render::particle_upload_slot(true, 4, 4) == render::kMissingParticleTexture); // past Hailstone's cap
+    CHECK(render::particle_upload_slot(false, 1, 4) == render::kMissingParticleTexture);
+}

@@ -37,6 +37,9 @@ struct SkyFrame {
     // (SkyRenderer::has_atmosphere), lit by the sun at `to_sun` (render::Daylight), with the clouds lit by
     // `cloud_light` (linear) instead of the sky colour table.
     bool atmosphere = false;
+    // Under a zone floating in the sky (render::horizon_open_below): the painted dome and its cloud layers drawn
+    // again mirrored under the horizon, behind themselves, so the sky goes on down to the nadir past the dome's foot.
+    bool mirror_below = false;
     glm::vec3 to_sun{0.0f, 0.0f, 1.0f};
     glm::vec3 to_moon{0.0f, 0.0f, -1.0f}; // render::Daylight::to_moon, its phase from where it stands to the sun
     float blood_moon = 0.0f;              // render::Daylight::blood_moon: the moon red

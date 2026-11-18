@@ -778,11 +778,21 @@ widest a third of the way up, and comes to a point. In South Karana, on the AMD 
 costs about 0.4 ms a frame at the default reach.
 
 **Where.** On level ground (45 degrees by default) of a drawn, opaque or cut-out surface: not the invisible collision
-surfaces, nor the translucent water. Not in water, lava or a zone line, nor on the water's surface (the region just
-under the foot). Not where the zone's own drawn terrain lies overhead: a dungeon's ceiling, a roof, a bridge, an
+surfaces, nor the translucent water. Not in water or lava, nor on the water's surface (the region just under the
+foot); in a zone line's region it grows (up to 0.7 it did not, and North Qeynos's line to Qeynos Hills is a box over
+the whole field north of the city, which was left bare). Not where the zone's own drawn terrain lies overhead: a dungeon's ceiling, a roof, a bridge, an
 overhang. The outdoor zones' invisible collision ceiling and cloud layers do not count, and neither do the placed
 objects, so grass grows under the trees. Each plant takes the colour of the ground texel it stands on (the classic
 outdoor vertices carry none).
+
+**Past the zone's edge.** In the modern lighting the land round an outdoor zone (Horizon hills) grows the zone's
+flora too, out to 300 units past the zone's terrain (`render::horizon_lawn_ground`: its ground there, not rock, sand,
+the sea, nor what lies tucked under the zone), so the lawn does not stop in a line where the zone's ground ends; the
+fog past the edge takes it from there. Its triangles are the zone's ground of the land's ground texture, their
+texture coordinates the land's own (`assets::FloraExtraGround`). The land is built after the zone has loaded, so when
+it is ready the zone's flora is set up again with it (`assets::add_zone_flora_ground`, some 25 ms on the frame's
+thread once a zone) and the grass renderer lets go of the tiles it has grown (`FloraRenderer::restart`); only a zone
+whose flora Hailstone's rules grow, not an EQG zone's own.
 
 **When.** The zone keeps the ground triangles that may grow plants, split into pieces of at most a quarter tile, binned
 by 128-unit tile (`assets::ZoneFloraGrower`); the renderer grows the tiles within reach as they come into it, nearest
@@ -1618,7 +1628,7 @@ does not move) and a saturation after it. Subtle by design:
 ## Horizon hills
 
 In the modern lighting, outdoors, land stands round the zone past its edges, out to about the modern view's reach, so
-the world does not end in a blank haze (Hailstone's own; the classic client drew nothing past a zone's geometry). It is
+the world does not end in a blank haze (not round a zone floating in the sky: Sky zones, below) (Hailstone's own; the classic client drew nothing past a zone's geometry). It is
 real geometry: a mesh built while `ZoneRenderer::prepare` builds the zone (`render::horizon_mesh`, `render/horizon.h`)
 and drawn with the zone's own materials through `zone.frag`, so it takes the zone's textures (a texture pack's photo
 materials and normal maps too), its light, the sun and the haze exactly as the zone's ground does, and the depth test
@@ -1644,8 +1654,10 @@ general rule fixed across the game's zones, and they were removed).
   where only water is beside it), so the land meets the zone's edge
   without a gap and stays under its ground; the squares under the zone are drawn too (they show only through the back
   of its walls, which have only their inner faces). Past the edge the land starts at the edge's height and turns over
-  1200 units into rolling hills (200 to 650 units high with the relief) and, from 800 to 5000 units out, ridged
-  mountains (900 to 2250 units, up to half again where a broad mass lifts them), all seeded by the zone's short name
+  2500 units into rolling hills (200 to 650 units high with the relief, growing from 300 to 3000 units out) and, from
+  2500 to 8000 units out, ridged mountains (900 to 2250 units, up to half again where a broad mass lifts them), so it
+  rises gently by the zone and the steep ground stands far off, behind the fog past the edge (up to 0.7 the hills were
+  full height 800 units out and the mountains rose from there to 5000, steep right at the zone line), all seeded by the zone's short name
   (`render::horizon_seed`), so it is the same every visit. The hills are warped noise, their lines bending and
   branching (the coordinates pushed up to 900 units by a noise of their own before the hills and ridges are taken),
   not a value noise's grid of blobs, as up to 0.7. A pocket the zone's terrain closes round (a gap between its walls,
@@ -1725,8 +1737,28 @@ general rule fixed across the game's zones, and they were removed).
   them takes 16 to 58 ms of the zone's build; in South Karana at 2560 x 1440 the frame took 1.29 ms with them and
   1.22 without (178 more draw calls).
 
+Out to 300 units past the zone's terrain it grows the zone's grass (Zone flora, "Past the zone's edge").
+
 `display.horizon_hills` (Options, Horizon Hills) turns it off, its trees with it; the viewer takes `--no-horizon`, and
 `--no-land-trees` for the land without its trees.
+
+## Sky zones
+
+A zone that floats in the sky, with open sky under its ground (`render::horizon_open_below`: Plane of Sky `airplane`,
+Plane of Air `poair`), gets in the modern lighting:
+
+- **No land round it and no fog past its edge**: they would be ground where there is none.
+- **Its own painted sky dome**, not the atmosphere, which goes into the haze below the horizon; and the dome and its
+  cloud layers drawn again mirrored under the horizon, behind themselves (`SkyFrame::mirror_below`), so the sky goes on
+  to the nadir past the dome's foot, and past that the background is the open sky's colour straight up
+  (`render::open_sky_below`), not the zone's fog.
+- **The haze in the sky's own colour** at the horizon (`render::haze_target`, `in_the_sky`), whatever the zone's fog:
+  PEQ's zone table gives Plane of Sky a black fog, which turned its far islands, and everything under them, black.
+
+Its sky is the plain one (sky 1 in PEQ's zone table), so nothing the server sends says so, and the zone's shape does
+not either: the share of open air between the zone's pieces of ground was 14 % in Plane of Sky but 3 % in Plane of
+Air, against up to 6 % in the ordinary outdoor zones measured (and 27 to 35 % in the box round East Karana's, North
+Ro's and Trakanon's level ground). So the zones are listed by name (docs/unknowns.md, World rendering).
 
 ## Zone edge fog
 
@@ -1743,8 +1775,9 @@ showed walls, filler and seams there.
   hundreds of units over the open ground and into the sky; walls and cliff tops stand out of it instead. On the zone's
   own squares and in a pocket its terrain closes round there is none. Packed into an RGBA8 texture (distance in steps
   of 16 units, floor over the zone's range of floors); past the grid the distance goes on growing.
-- **How thick**: density 0.006 a unit (1000 units of it leave 0.25 % of the light) times a ramp from 0 at the zone's
-  terrain to 1 at 1000 units past it, smooth, up to a top 250 units over its floor, thinning out over 100 either
+- **How thick**: density 0.0025 a unit (1000 units of it leave 8 % of the light; 0.006 until it was found a little
+  strong) times a ramp from 0 at the zone's
+  terrain to 1 at 1400 units past it, smooth, up to a top 250 units over its floor, thinning out over 100 either
   side of it. So across open ground at a zone line it thickens until nothing shows, looking up the sky is clear (30
   degrees up, under 10 % of it is hidden), and from a hill one looks down on the bank's top.
 - **Never round the player** (the camera is always in the zone, whatever the field says): none within 300 units of the
@@ -1760,7 +1793,8 @@ showed walls, filler and seams there.
   the AO, the bloom and the upscalers, so they all see the fogged picture. Each pixel's line of sight is marched from
   the camera to the depth (the sky's to 16000 units, at most the far plane) in 40 steps, closer together near the
   camera (t = length s^2), with a 4 x 4 ordered dither, stopping where under 0.1 % shows through; the fog's colour is
-  the haze's with its sun glow (as `apply_haze`), blended over the scene by what shows through. The field is uploaded
+  the haze's 1.35 times as bright (`kZoneFogLift`: the haze's own read a little dark as a mist close by) with its sun
+  glow (as `apply_haze`), blended over the scene by what shows through. The field is uploaded
   when the zone's land is built (a new zone), the old one retired with the frames that use it. In North Karana at
   1280 x 720 on an RX 9060 XT the pass took 0.21 ms of the GPU (the AO 0.26).
 

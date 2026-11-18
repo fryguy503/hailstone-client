@@ -1476,6 +1476,10 @@ public:
     const std::vector<std::int32_t>& blocked_buffs(bool pet) const { return blocked_buffs_[pet ? 1 : 0]; }
     void block_buff(bool pet, std::int32_t spell);
     void unblock_buff(bool pet, std::int32_t spell);
+    // CEverQuest::ProcessLocalPCIni's blocked buffs, after each zone-in: the lists read from the character ini
+    // (set_character_ini; every change is written there) and sent to the server as initialise packets. Without a
+    // character ini, the lists this session has are sent.
+    void restore_blocked_buffs();
     // ---- using items (net/game_connection_item_use.cpp)
     // A right click on an item slot (CInvSlot::HandleRButtonUp @0x697250): a book is read, a common item in the
     // possessions is used (use_item), a corpse slot looted; what is left to the windows comes back. The server
@@ -2438,6 +2442,12 @@ public:
     // The chat filters (eqclient.ini [Options] Channel00.., BadWord, Spam ...; game/chat_text.h).
     const game::ChatFilters& chat_filters() const { return chat_filters_; }
     void set_chat_filter(int filter, std::int32_t value) { chat_filters_.set(filter, value); }
+    // Hailstone extension (hailstone.ini combat.report_range): one distance from the player to the victim for
+    // others' melee lines, killing blows and death text. Not finite or not above 0 (the default) keeps RoF2's
+    // ranges: 75 for OP_Damage (Handle_OP_Damage @0x4b5a8a) and 50 for OP_Death.
+    static constexpr float kRof2HitReportRange = 75.0f;
+    static constexpr float kRof2DeathReportRange = 50.0f;
+    void set_combat_report_range(float range);
     // The Options window's chat filters: the setting changed, kept in eqclient.ini [Options] and sent to the zone
     // (OP_SetServerFilter: EQEmu leaves out what the filters hide, Client::ServerFilter).
     void change_chat_filter(int filter, std::int32_t value);
@@ -2852,7 +2862,8 @@ private:
     game::TraineeView trainee() const;
     const game::mechanics::GameTables& tables() const;
     void melee_sound(std::uint32_t target, std::uint32_t source, std::int32_t damage);
-    // Handle_OP_Damage's report flag: the hit involves the player, or its target is within 75 units.
+    // Handle_OP_Damage's report flag: the hit involves the player, or its target is within 75 units (or
+    // combat_report_range_ when set).
     bool hit_reported(std::uint32_t target, std::uint32_t source) const;
     // CEverQuest::ReportSuccessfulHit @0x52ee40 for a hit (OP_Damage, or the player's own environmental damage):
     // its chat line, sounds and the target's animation.
@@ -3534,6 +3545,7 @@ private:
     std::optional<std::string> window_toggle_;
     bool death_tip_pending_ = false;
     game::ChatFilters chat_filters_;
+    float combat_report_range_ = 0.0f; // 0: RoF2's ranges
     game::ClientOptions client_options_;
     game::SeededChatRandom chat_random_;
     bool garbling_on_ = true;  // 0xddfd50, OP_LogServer +0x14 (EQEmu sends 1)
@@ -3642,6 +3654,8 @@ private:
     std::map<std::uint32_t, AltCurrency> alt_currencies_;
     PointMerchant point_merchant_;
     std::array<std::vector<std::int32_t>, 2> blocked_buffs_; // player, pet
+    void save_blocked_buffs(bool pet) const;
+    void remove_newly_blocked(bool pet, std::int32_t spell_id);
     void resend_blocked_buffs();
     Tribute tribute_;
     GuildTribute guild_tribute_;

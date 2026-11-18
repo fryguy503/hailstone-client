@@ -26,15 +26,17 @@ namespace hailstone::render {
 struct HorizonField;
 
 // The fog reaches full density this far past the zone's terrain.
-inline constexpr float kZoneFogRamp = 1000.0f;
+inline constexpr float kZoneFogRamp = 1400.0f;
 // The bank's top over its floor, and how far either side of it it thins out.
 inline constexpr float kZoneFogTop = 250.0f;
 inline constexpr float kZoneFogSoft = 100.0f;
 // The shader breaks the bank up round the mean these functions give: its top rises and falls by up to kZoneFogSwell
 // over broad swells, its thickness varies in patches (0.45 to 1.55 times), both drifting slowly with the time.
 inline constexpr float kZoneFogSwell = 100.0f;
-// Its optical depth per unit at full density on its floor: through 1000 units of it, 0.25 % of the light is left.
-inline constexpr float kZoneFogDensity = 0.006f;
+// Its optical depth per unit at full density on its floor: through 1000 units of it, 8 % of the light is left.
+inline constexpr float kZoneFogDensity = 0.0025f;
+// Its colour: the haze's (SceneLighting::haze_color) this many times as bright, a lighter mist than the far air.
+inline constexpr float kZoneFogLift = 1.35f;
 // The sky's line of sight is marched this far.
 inline constexpr float kZoneFogReach = 16000.0f;
 // The field's texels hold the distance past the zone in steps of this many units (0..255: past kZoneFogRamp the

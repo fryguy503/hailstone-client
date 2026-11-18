@@ -39,4 +39,18 @@ LoadedParticleTexture load_particle_texture(const std::string& name, std::option
     return out;
 }
 
+std::uint32_t particle_upload_slot(bool decoded, std::size_t textures, std::uint32_t max_textures) {
+    if (!decoded || textures >= max_textures) return kMissingParticleTexture;
+    return static_cast<std::uint32_t>(textures);
+}
+
+std::optional<std::uint32_t> particle_texture_slot(const std::string& name,
+                                                   const std::unordered_map<std::string, std::uint32_t>& slots,
+                                                   const std::unordered_set<std::string>& loading) {
+    if (name.empty() || loading.contains(name)) return std::nullopt;
+    auto found = slots.find(name);
+    if (found == slots.end() || found->second == kMissingParticleTexture) return std::nullopt;
+    return found->second;
+}
+
 } // namespace hailstone::render

@@ -33,6 +33,8 @@ struct DeathInput {
     bool dead_is_target = false;
     bool in_group = false, group_member = false;
     float distance = 0.0f;               // CDisplay::PlayerDistance(local, dead)
+    // RoF2's 50; the connection passes hailstone.ini combat.report_range instead when it is set (extension).
+    float report_range = 50.0f;
     // Names: +0xa4 (dead's and ours) and the displayed +0xe4 ones.
     std::string dead_name, local_name, dead_shown, killer_shown;
 };

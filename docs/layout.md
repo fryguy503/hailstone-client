@@ -446,7 +446,7 @@ formats:
 | File | What |
 |---|---|
 | `UI.ini` | window places and the chat windows |
-| `hotbuttons.ini` | hot buttons and socials |
+| `hotbuttons.ini` | the original's character ini (`<name>_<server>.ini`): hot buttons and socials, and the blocked buff lists (`[BlockedSpells]` `BlockedSpellID0..29`, `[BlockedPetSpells]` `BlockedPetSpellID0..29`, -1 for an empty slot), sent to the server at each zone-in |
 | `BZR.ini` | trader prices |
 | `AddressBook.txt` | the mail address book |
 | `IgnoreList.txt` | the mail ignore list (the address book's Ignore button), the same format |

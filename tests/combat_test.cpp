@@ -430,10 +430,13 @@ TEST_CASE("ReportSuccessfulHit's chat filters 13 to 16 on melee lines") {
     CHECK_FALSE(game::hit_line_shown(others, false, f));       // 15
     CHECK_FALSE(game::hit_line_shown(missed_me, false, f));    // 16
     CHECK_FALSE(game::hit_line_shown(self_miss, false, f));
-    // The player's pet gets through 14 and 15, even unreported.
+    // The player's pet gets through 14 and 15, but cannot revive an unreported line.
     CHECK(game::hit_line_shown(others, true, f));
     CHECK(game::hit_line_shown(others_miss, true, f));
-    CHECK(game::hit_line_shown(others, true, f, false));
+    CHECK_FALSE(game::hit_line_shown(others, true, f, false));
+    CHECK_FALSE(game::hit_line_shown(others_miss, true, f, false));
+    CHECK_FALSE(game::hit_line_shown(others, true, game::ChatFilters{}, false));
+    CHECK_FALSE(game::hit_line_shown(others_miss, true, game::ChatFilters{}, false));
     // Only the one filter counts.
     game::ChatFilters g;
     g.set(16, 0);

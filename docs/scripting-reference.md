@@ -271,6 +271,7 @@ An item in a slot. Its plain value is the item's name.
 | `Stackable` | bool | |
 | `StackSize` | int | the largest stack |
 | `Charges` | int | -1 for unlimited |
+| `TimerReady` | int | seconds left on its click reuse (the later of its own timer and its recast type's), 0 when ready; NULL for an item without a click effect |
 | `Weight` | float | |
 | `Value` | int | in copper |
 | `Type` | string | `Container`, `1H Slashing`, `Armor`, `Food`, `Scroll`, `Augmentation`, ... |
@@ -1084,7 +1085,7 @@ achievement and reward-selection APIs.
 | ShowSpell | (id [, temporary]) → — | Open the spell display window | commands |
 | SpellDetails | (id) → title, stml \| nil | Spell display text | — |
 | DisplaySpellId | (n) → spellId\|nil | Spell id of the nth open spell display (1-based) | — |
-| DisplayItemData | (n) → {id, icon, name, lore, value, stackCount, damage, delay, itemType, favor} \| nil | nth open item display's data (`stack_count` and `item_type` are kept too) | — |
+| DisplayItemData | (n) → {id, icon, name, lore, value, stackCount, damage, delay, itemType, favor, scrollSpell, focusSpell, procSpell, wornSpell, clickSpell} \| nil | nth open item display's data (`stack_count` and `item_type` are kept too); the spell fields are its effects' spell IDs, 0 for none | — |
 | SpellSets | () → {{name, inUse, spells={id\|-1 ×12}} ×10} | Spell sets | — |
 | SaveSpellSet | (name [, spells]) → n\|nil | Save the gems (or the given spells) as a set | commands |
 | EditSpellSet | (n, name, spells) → n\|nil | Rename a set and replace its spells | commands |

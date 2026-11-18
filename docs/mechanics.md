@@ -588,7 +588,11 @@ lookup 1500, follow AI 3000):
   attack or CastNotStanding, and a sitting caster stands up (ChangePosition 100). Line of sight goes through the
   app's collision (eqstr 108). The target-type switch measures the 2D distance (the player distance with a z scale
   of 0) against Range + focus (at most 5 x Range), MinRange (4602), targeted AE's 39.99 height and the body types
-  (the spawn's body type).
+  (the spawn's body type). The focus is GetFocusRangeModifier @0x42cb80 (`Character::focus_range_modifier`,
+  SPA 129): the best eligible item, buff and AA focus, each giving Range x its scaled base x 0.01 truncated toward
+  zero, the three added. EQEmu's server check (Mob::GetActSpellRange) takes the same three best foci but applies
+  their sum untruncated, adds the target's size and measures in 3D: it accepts what the client lets out, unless
+  the height difference puts the target past its 3D reach.
 - Combat abilities (`game/mechanics/combat_ability.h`): doCombatAbility refuses an ability whose reuse timer (ids
   0..19, the profile's timers at zone-in, then OP_DisciplineTimer; the client never stamps them itself) still runs
   and a duration self discipline while one is active (5821); the server's timer packet is the only thing that
@@ -621,9 +625,22 @@ lookup 1500, follow AI 3000):
   random helpers are a `ChatRandom`, replayed from the vectors' recorded calls).
 - Melee lines (`game::damage_report`, `hit_line_shown`; no vectors, unit tests in `tests/combat_test.cpp`):
   ReportSuccessfulHit's chat filters, a filter hiding when its mode is 1 (setting 0). A hit by somebody else on
-  somebody else under filter 15 shows exactly when the player's pet hit (even an unreported killing blow); an NPC
+  somebody else under filter 15 shows exactly when the player's pet hit (and was reported, see below); an NPC
   hitting itself is never reported; a miss on the player is hidden under 16, the player's own under 13, somebody
   else's on somebody else under 14 shows exactly when the player's pet missed. The pet's lines take colour 0x148.
+  Which lines are reported at all follows the original's distances: Handle_OP_Damage reports a hit between two
+  others only when the victim is within 75 units of the player (@0x4b5a8a), and OP_Death reports the killing
+  blow and the death text only within 50 (`game::report_death`); damage by or on the player always reports.
+  **Extension** (hailstone.ini `combat.report_range`, unset by default): one distance from the player to the
+  victim in place of both, for others' melee hit and miss lines (the pet's included), their hit sounds, killing
+  blows and the "X has been slain by Y" text. Unset, not a number or not above 0 keeps RoF2's 75 and 50. It
+  can only show what the server sends: stock EQEmu sends OP_Damage only within its `Range:DamageMessages`
+  (50 by default) of the attacker, so a larger value helps only where the server raises that rule. Spell and
+  server text messages are not affected. It is a character setting (`servers/<profile>/characters/<world>/
+  <character>/hailstone.ini`, or the main `hailstone.ini` as the default for every character).
+  **Deliberate change from RoF2 (a fix):** with filter 15 or 14 hiding others' lines, the original replaces
+  the report flag with the pet flag (@0x53092c, @0x53078b), so the pet's lines beyond the report range showed
+  only while others' were hidden. Here an unreported line stays hidden whatever the filters.
   Owned-pet classification matches ReportSuccessfulHit @0x52efd3: the focused pet (PetID), or an attacker with
   the spawn record's temporary-pet byte set and MasterID equal to the local player's SpawnID. The summoned bit
   alone does not qualify. The temporary flag is retained on every full spawn update and ownership changes apply
@@ -921,9 +938,10 @@ constructor: SetCheck(1), and PurchasePageHandler +0x60 cleared). While it is ti
 whose class mask lacks the character's class or whose race mask lacks the race's bit (0x6f7160: races below 13 as they
 are, Iksar 13, Vah Shir 14, Froglok 15, Drakkin 16, any other 17), and a spell scroll whose spell is in the book, or
 whose group has a higher rank in the book (from the top rank down while above the scroll's). Bags and books always
-show. Level, deity and lore are not looked at. A click on the box flips +0x60 and rebuilds the list; the state lasts
-for the session. The modern pack's box is "Usable only" beside "Affordable only"; the gamepad pack's Buy page switches
-it with X.
+show. As a Hailstone extension, if the server supplies a multiclass mask, any class in that mask can match instead
+of the profile's class. Level, deity and lore are not looked at. A click on the box flips +0x60 and rebuilds the
+list; the state lasts for the session. The modern pack's box is "Usable only" beside "Affordable only"; the
+gamepad pack's Buy page switches it with X.
 
 ## Kept items: Hailstone's Keep mark
 

@@ -21,13 +21,14 @@ layout(push_constant) uniform Push {
 layout(location = 0) out vec4 o_color;
 
 // render/zone_fog.h
-const float kRamp = 1000.0;
+const float kRamp = 1400.0;
 const float kTop = 250.0;
 const float kSoft = 100.0;
 const float kSwell = 100.0;
 const float kClear = 300.0;
 const float kClearFade = 900.0;
-const float kDensity = 0.006;
+const float kDensity = 0.0025;
+const float kLift = 1.35;
 const float kDistanceStep = 16.0;
 const int kSteps = 40;
 
@@ -88,5 +89,5 @@ void main() {
     }
     float t = exp(-tau);
     float sun = pow(max(dot(dir, pc.to_sun.xyz), 0.0), 6.0);
-    o_color = vec4((pc.color.rgb + pc.glow.rgb * sun) * (1.0 - t), t);
+    o_color = vec4((pc.color.rgb * kLift + pc.glow.rgb * sun) * (1.0 - t), t);
 }

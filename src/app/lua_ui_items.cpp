@@ -638,10 +638,12 @@ public:
         // While an inventory item is being considered no merchant row is.
         bool selling = m->selected && host.conn->inventory().at(*m->selected);
         const auto& prof = host.conn->profile();
+        const auto server_classes = host.conn->server_class_mask();
         int row = 0;
         for (const auto& [mslot, item] : m->items) {
             if (!show_all_ && prof &&
-                game::merchant_usable_hides(item, prof->class_, prof->race, [&] { return scroll_known(host, item); }))
+                game::merchant_usable_hides(
+                    item, prof->class_, prof->race, [&] { return scroll_known(host, item); }, server_classes))
                 continue;
             ListRow r;
             std::int64_t price = item.price;

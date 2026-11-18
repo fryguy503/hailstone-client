@@ -799,3 +799,46 @@ TEST_CASE("lawn: levels of detail and the far patches' stride") {
     CHECK(render::lawn_patch_stride({-0.5f * c, 0.5f * c}) == 1);  // -1
     CHECK(render::lawn_stride(std::numeric_limits<float>::infinity()) >= 1);
 }
+
+TEST_CASE("zone flora: extra ground past the zone (the land by its edge) grows as the zone's of its texture") {
+    Zone zone;
+    zone.name = "test";
+    zone.terrain.push_back(square("grass.bmp", 128.0f)); // tile (0, 0)
+    const auto rules = parse_zone_flora_rules("ground grass* 0 lawn\n");
+    // A level square beside it, past the zone's own ground (tile (1, 0)), either winding, and one on bare ground.
+    FloraExtraGround extra;
+    extra.texture = "GRASS.BMP";
+    extra.density = 0.01f;
+    extra.triangles = {{128, 0, 0}, {256, 0, 0}, {256, 128, 0}, {128, 0, 0}, {128, 128, 0}, {256, 128, 0}};
+    ZoneFloraGrower plain(zone, rules, {}, {});
+    ZoneFloraGrower grower(zone, rules, {}, {}, &extra);
+    CHECK(plain.tiles().size() < grower.tiles().size());
+    std::size_t past = 0;
+    for (std::size_t t = 0; t < grower.tiles().size(); ++t) {
+        std::vector<FloraInstance> plants;
+        grower.grow(t, plants);
+        for (const auto& p : plants)
+            if (p.position.x >= 128.0f + kLawnCell && p.definition == kLawnDefinition) ++past;
+    }
+    CHECK(past > 1200); // most of its 40 x 40 squares
+    // A texture the rules do not grow on: nothing more.
+    extra.texture = "road.bmp";
+    ZoneFloraGrower bare(zone, rules, {}, {}, &extra);
+    CHECK(bare.tiles().size() == plain.tiles().size());
+}
+
+TEST_CASE("zone flora: grass grows in a zone line's region (a classic zone's can be a field's size)") {
+    // North Qeynos's line to Qeynos Hills is a box over the whole field north of the city: no grass grew there.
+    Zone zone;
+    zone.name = "test";
+    zone.terrain.push_back(square("grass.bmp", 128.0f));
+    zone.regions = ZoneRegions::from_boxes({{"ATP_00001", {64, 64, 0}, {0, 0, 0}, {200, 200, 100}}});
+    REQUIRE(zone.regions.lookup({64, 64, 1}).is_zone_line());
+    ZoneFlora flora;
+    place_zone_flora(zone, parse_zone_flora_rules("ground grass* 0 lawn\n"), {}, flora);
+    CHECK(flora.instances.size() == 1600);
+    // Water still keeps it out.
+    zone.regions = ZoneRegions::from_boxes({{"AWT_pond", {64, 64, 0}, {0, 0, 0}, {200, 200, 100}}});
+    place_zone_flora(zone, parse_zone_flora_rules("ground grass* 0 lawn\n"), {}, flora);
+    CHECK(flora.instances.empty());
+}

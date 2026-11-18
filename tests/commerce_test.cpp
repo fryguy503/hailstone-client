@@ -520,4 +520,12 @@ TEST_CASE("merchant list: Show only items I can use (PurchasePageHandler::Update
     net::Item potion = sword;
     potion.classes = potion.races = 0xffff;
     CHECK_FALSE(game::merchant_usable_hides(potion, 1, 1, known)); // not a scroll: what it knows does not matter
+    // Hailstone extension: a multiclass server's mask of the player's classes takes the place of the profile's class
+    sword.races = 1u << 0;
+    constexpr std::uint32_t cleric = 1u << 1, wizard = 1u << 11;
+    CHECK_FALSE(game::merchant_usable_hides(sword, 2, 1, unknown, wizard | 1u)); // Warrior is one of them
+    CHECK(game::merchant_usable_hides(sword, 1, 1, unknown, cleric | wizard));   // the profile's Warrior is not
+    // a stock server (mask 0) keeps the original's bit, also for a class value past 16
+    sword.classes = 1u << 19;
+    CHECK_FALSE(game::merchant_usable_hides(sword, 20, 1, unknown, 0));
 }

@@ -93,8 +93,10 @@ std::string merchant_level_text(std::int32_t level);
 // +0x60 clear): a common item (item class 0; bags and books always stay) is left out unless its class mask takes
 // `class_id` and its race mask the race's bit (0x6f7160, the same bits as game::item_race_bit_of), and a spell
 // scroll (item type 20) is left out when `scroll_known` says the character knows its spell or a higher rank of it.
-// The level, deity and lore are not looked at.
+// The level, deity and lore are not looked at. Hailstone extension: a nonzero `server_classes`
+// (GameConnection::server_class_mask, a multiclass server's classes of the player) takes the place of `class_id`, and
+// the item is kept when its class mask has any of them.
 bool merchant_usable_hides(const net::Item& item, std::uint32_t class_id, std::uint32_t race,
-                           const std::function<bool()>& scroll_known);
+                           const std::function<bool()>& scroll_known, std::uint32_t server_classes = 0);
 
 } // namespace hailstone::game

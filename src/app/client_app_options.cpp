@@ -796,6 +796,7 @@ void ClientApp::apply_settings() {
 }
 
 void ClientApp::apply_connection_settings() {
+    conn_->set_combat_report_range(config_.get_float("combat.report_range", 0.0f)); // unset: RoF2's ranges
     conn_->set_attack_until_xtarget_clear(config_.get_bool("combat.attack_until_xtarget_clear", false));
     conn_->set_auto_target_xtarget(config_.get_bool("combat.auto_target_xtarget", true));
     conn_->set_face_on_attack(config_.get_bool("combat.face_on_attack", true));

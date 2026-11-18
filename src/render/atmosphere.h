@@ -80,9 +80,16 @@ glm::vec3 lightning_haze(const glm::vec3& color, float flash, float overcast);
 // (`original`, SceneFogFrame::view: its fog colour and distances), drawn out by `multiplier` (display.view_distance)
 // when `extend` (the sky flag: not under water, in lava or a thick-fog region); outdoors (time types 1, 2, 5) its colour
 // drawn towards the sky's (haze_sky_color, `sky_drawn` a sky drawn, the sun at `to_sun`); then the weather's band
-// (`overcast` WeatherLook::storm, `snow` WeatherLook::snowing).
+// (`overcast` WeatherLook::storm, `snow` WeatherLook::snowing). `in_the_sky` (render::horizon_open_below: a zone
+// floating in the sky, its sky all round it): the sky's own colour at the horizon, whatever the zone's fog (Plane of
+// Sky's is black in PEQ's zone table, which turned its far islands and the sky under it black).
 HazeTarget haze_target(const game::ViewDistance& original, float multiplier, bool extend, bool outdoor, bool sky_drawn,
-                       const glm::vec3& to_sun, float overcast, float snow);
+                       const glm::vec3& to_sun, float overcast, float snow, bool in_the_sky = false);
+
+// What shows past the painted dome's foot under a zone floating in the sky (render::horizon_open_below) in the
+// modern lighting, the sun at `to_sun` (Daylight::to_sun): the open sky overhead's colour (sky_radiance straight up),
+// so the gap under the dome is sky, not the zone's fog (Plane of Sky's black). Linear.
+glm::vec3 open_sky_below(const glm::vec3& to_sun);
 
 // ---- The colour grade ----
 

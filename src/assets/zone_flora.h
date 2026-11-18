@@ -141,12 +141,22 @@ inline constexpr float kMinGreenShare = 0.002f;
 // construction it keeps the ground triangles that may grow plants (by `rules`: the texture's rule, level enough, a
 // surface that is drawn), binned by tile, with the zone's regions and its cover; it holds no reference to the zone.
 // Each triangle's plants come from its own seeded sequence, so a tile grows the same plants every time.
+// Ground past the zone's own that may grow its flora (Hailstone's own: the land round an outdoor zone near its edge,
+// render::horizon_lawn_ground), taken as the zone's ground of `texture` is: triangles (three corners each, any
+// winding), their texture coordinates the position times `density` (texture units a world unit), as the land draws it.
+struct FloraExtraGround {
+    std::vector<glm::vec3> triangles;
+    std::string texture;
+    float density = 0.0f;
+    bool empty() const { return triangles.size() < 3 || texture.empty() || !(density > 0.0f); }
+};
+
 class ZoneFloraGrower {
 public:
     // `textures` gives the ground textures for +green and the tint (without it, or for a texture it cannot read,
-    // +green grows nothing); each is read once, here, and kept scaled down.
+    // +green grows nothing); each is read once, here, and kept scaled down. `extra`: more ground (FloraExtraGround).
     ZoneFloraGrower(const Zone& zone, const ZoneFloraRules& rules, std::vector<eqg::FloraDefinition> definitions,
-                    const GroundTextures& textures);
+                    const GroundTextures& textures, const FloraExtraGround* extra = nullptr);
     ~ZoneFloraGrower();
     ZoneFloraGrower(const ZoneFloraGrower&) = delete;
     ZoneFloraGrower& operator=(const ZoneFloraGrower&) = delete;
@@ -209,6 +219,12 @@ bool flora_kind_matches(std::string_view kind, std::string_view definition);
 // `game` and sets zone.flora up to grow (ZoneFlora::grower). Returns how many tiles may grow plants (0 when the zone
 // has flora already, no rules apply, or nothing would grow: no lawn and no donor's definitions; each logged). The
 // lawn needs no donor.
-std::size_t add_zone_flora(const GameDir& game, Zone& zone, const std::filesystem::path& rules_dir, bool outdoor);
+std::size_t add_zone_flora(const GameDir& game, Zone& zone, const std::filesystem::path& rules_dir, bool outdoor,
+                           const FloraExtraGround* extra = nullptr);
+// The zone's flora set up again with `extra` ground too (the land near its edge, once the zone renderer has built
+// it): only a zone whose flora Hailstone's rules grow (ZoneFlora::grower), not an EQG zone's own. Returns whether it
+// was; the plants a renderer has grown are then out of date (render::FloraRenderer::restart).
+bool add_zone_flora_ground(const GameDir& game, Zone& zone, const std::filesystem::path& rules_dir, bool outdoor,
+                           const FloraExtraGround& extra);
 
 } // namespace hailstone::assets

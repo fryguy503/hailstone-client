@@ -506,6 +506,25 @@ void SkyRenderer::draw(const FrameInfo& frame, const glm::mat4& projection, cons
         vkCmdDraw(cmd, 3, 1, 0, 0);
     }
     int bound = -1;
+    // The dome mirrored under the horizon first, for a zone floating in the sky: the real one is drawn over it.
+    if (sky.mirror_below && !atmosphere) {
+        const glm::mat4 mirrored = sky_vp * glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 1.0f, -1.0f));
+        for (const auto& d : draws_) {
+            if (d.kind == Kind::Bodies) continue;
+            if (d.pipeline != bound) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_[d.pipeline]);
+                bound = d.pipeline;
+            }
+            PushConstants pc{};
+            pc.view_proj = mirrored;
+            pc.tint = glm::vec4(glm::vec3(1.0f), d.opacity);
+            pc.texture = d.texture;
+            pc.use_table = 1u;
+            pc.haze = sky.horizon_haze;
+            vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+            vkCmdDrawIndexed(cmd, d.index_count, 1, d.first_index, 0, 0);
+        }
+    }
     for (const auto& d : draws_) {
         // The atmosphere has its own sun and moon (shaders/atmosphere.frag) in place of the dome and the sprites.
         if (atmosphere && (d.kind == Kind::Dome || d.kind == Kind::Bodies)) continue;

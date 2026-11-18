@@ -56,6 +56,8 @@ struct HorizonLook {
 // each square lies past the zone's edge), its ground and rock materials.
 struct HorizonBuild {
     HorizonField field;
+    // Its ground near the zone's edge that grows the zone's grass (render::horizon_lawn_ground), drawn with `ground`.
+    std::vector<glm::vec3> lawn;
     HorizonLook ground, rock;
 };
 

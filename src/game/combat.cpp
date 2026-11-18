@@ -318,6 +318,10 @@ std::optional<HitLine> damage_report(const EqStrings& strings, const WorldState&
 }
 
 bool hit_line_shown(const HitLine& line, bool by_my_pet, const ChatFilters& filters, bool report) {
+    // Deliberate change from RoF2 (a fix): with filter 14 or 15 hiding others' lines, the original replaces
+    // `report` with the pet flag (@0x53092c, @0x53078b), so the pet's lines beyond the report range showed only
+    // while others' were hidden. Here an unreported line stays hidden either way.
+    if (!report) return false;
     auto hidden = [&filters](int filter) { return filters.mode(filter) == 1; };
     bool shown = report;
     if (line.damage > 0) {

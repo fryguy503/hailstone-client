@@ -118,11 +118,42 @@ TEST_CASE("merchant: Show only items I can use leaves out what the character can
 
     // Once known, the scroll goes too.
     net::GameConnectionTestAccess::spells(c).book[1] = 810;
+    api.begin_frame();
+    CHECK(lua.text(kNames) == "Potion,Satchel");
+
+    // A multiclass server can report Bard in the profile, but the merchant must use the actual classes.
+    auto prof = *c.profile();
+    prof.class_ = 8; // Bard
+    prof.level = 1;
+    c.set_profile_for_test(prof);
+    constexpr auto mage = 1u << (13 - 1);
+    constexpr auto enc = 1u << (14 - 1);
+    constexpr auto nec = 1u << (11 - 1);
+    auto mage_scroll = goods(7, "Spell: Mage Upgrade");
+    mage_scroll.item.classes = mage;
+    mage_scroll.item.item_type = 20;
+    mage_scroll.item.effects[net::kEffectScroll].effect = 811;
+    text += mq_test::spell_line({{0, "811"}, {1, "Mage Upgrade"}, {116, "50"}}) + "\n";
+    auto multiclass_table = std::make_shared<game::SpellTable>();
+    REQUIRE(multiclass_table->parse(text) == 5);
+    REQUIRE(multiclass_table->get(811));
+    REQUIRE(multiclass_table->get(811)->class_level[12] == 50);
+    REQUIRE(prof.level < 50);
+    c.set_spell_table_for_test(multiclass_table);
+    c.receive_zone_packet_for_test(net::encode_item_packet(false, mage_scroll));
+    api.begin_frame();
+    CHECK(lua.text(kNames) == "Potion,Satchel");
+    c.set_player_classes(mage | enc | nec);
+    api.begin_frame();
+    CHECK(lua.text(kNames) == "Potion,Satchel,Spell: Mage Upgrade");
+    net::GameConnectionTestAccess::spells(c).book[2] = 811;
+    api.begin_frame();
     CHECK(lua.text(kNames) == "Potion,Satchel");
 
     lua.text("hs.ClickChild('MerchantWnd', 'MW_UsableButton', 'left')");
     CHECK(lua.text("return tostring(select(2, hs.ChildState('MerchantWnd', 'MW_UsableButton')))") == "false");
-    CHECK(lua.text(kNames) == "Potion,Warrior Plate,Ogre Hat,Satchel,Spell: Healing Rk. 2,Spell: Shielding");
+    CHECK(lua.text(kNames) ==
+          "Potion,Warrior Plate,Ogre Hat,Satchel,Spell: Healing Rk. 2,Spell: Shielding,Spell: Mage Upgrade");
 
     // The checkbox belongs to the purchase page.
     lua.text("hs.SetTabPage('MerchantWnd', 'MW_MerchantSubwindows', 1)");

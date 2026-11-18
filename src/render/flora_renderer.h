@@ -105,6 +105,12 @@ public:
     // How far the plants are drawn: kFloraReach .. kMaxFloraReach (display.flora_distance).
     void set_reach(float reach);
     float reach() const { return reach_; }
+    // Lets go of every grown tile, so they grow again from the zone's flora as it is now (it was set up again:
+    // assets::add_zone_flora_ground). On the frame's thread, before the frame's draws are recorded.
+    void restart() {
+        grown_.clear();
+        near_tiles_.clear();
+    }
     // How thick the lawn is: kMinGrassDensity .. kMaxGrassDensity (display.grass_density).
     void set_density(float density);
     float density() const { return density_; }

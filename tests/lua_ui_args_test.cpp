@@ -84,6 +84,17 @@ TEST_CASE("hs API: bad arguments are Lua errors before anything is made; odd num
         displays[0].item_type = 20;
         CHECK(run(L, "local d = hs.DisplayItemData(1) return d.stackCount .. ' ' .. d.stack_count") == "7 7");
         CHECK(run(L, "local d = hs.DisplayItemData(1) return d.itemType .. ' ' .. d.item_type") == "20 20");
+        displays[0].effects[net::kEffectScroll].effect = 200;
+        displays[0].effects[net::kEffectFocus].effect = -1;
+        displays[1].effects[net::kEffectFocus].effect = 201;
+        displays[1].effects[net::kEffectProc].effect = 202;
+        displays[1].effects[net::kEffectWorn].effect = 203;
+        displays[1].effects[net::kEffectClick].effect = 204;
+        CHECK(run(L, "local d = hs.DisplayItemData(1) return d.scrollSpell") == "200");
+        CHECK(run(L, "local d = hs.DisplayItemData(1) return d.focusSpell") == "0");
+        CHECK(run(L, "local d = hs.DisplayItemData(2) "
+                     "return table.concat({d.scrollSpell, d.focusSpell, d.procSpell, "
+                     "d.wornSpell, d.clickSpell}, ' ')") == "0 201 202 203 204");
         auto fails = [&](const std::string& call) { return run(L, "return (pcall(" + call + "))") == "false"; };
         CHECK(fails("hs.WindowPlaced, 'Chat1', 10, 'x'"));
         CHECK(fails("hs.FindItems, 'all'"));

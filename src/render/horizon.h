@@ -51,18 +51,31 @@ HorizonLand horizon_land(std::span<const HorizonTriangle> triangles, float seed)
 // A zone's seed for its land, from its short name: the same hills every visit, different from zone to zone.
 float horizon_seed(std::string_view zone);
 
+// A zone that floats in the sky, with open sky under its ground (by its short name, any case): Plane of Sky
+// (airplane), Plane of Air (poair). No land stands round it and no fog lies past its edge (they would be ground where
+// there is none), and in the modern lighting its sky is its own painted dome, clouds below it, not the atmosphere,
+// which goes into the haze below the horizon. Its sky is the plain one (sky 1 in PEQ's zone table), so the server
+// does not say so; the list is the zones' own design (docs/unknowns.md: others may belong in it).
+bool horizon_open_below(std::string_view zone);
+
 // The zone's terrain is laid on a grid of kHorizonCell squares (terrain anywhere in a square covers it; geometry
 // further than kHorizonStray past the level ground is left out). Past the covered squares (and in the pockets they
 // close round: a gap between the zone's walls, a hole in it) the land starts at the zone's edge, the height of its
-// terrain there (a wall's top, the open ground at a zone line), and turns over kHorizonBlend into rolling hills and
-// then, further out, mountains, as rugged as the zone's relief says; where the zone's edge is water, the sea, with
+// terrain there (a wall's top, the open ground at a zone line), and turns over kHorizonBlend into rolling hills (they
+// grow from kHorizonHillsFrom to kHorizonHillsFull past the edge) and then, further out, mountains (from
+// kHorizonMountainsFrom to kHorizonMountainsFull), as rugged as the zone's relief says, so it rises gently by the zone
+// and the steep ground stands far off; where the zone's edge is water, the sea, with
 // land rising from it far out. Its vertices in covered squares are tucked kHorizonTuck under the zone's terrain there,
 // and those in the empty squares beside them just under the lowest of it (a wall's foot), so the land meets the zone's
 // edge with no gap. Its squares are kHorizonCell across over the grid and kHorizonFine past it (more for a big zone:
 // at most kHorizonMaxFine of them across), then grow by kHorizonGrowth a step out to kHorizonReach past the grid.
 inline constexpr float kHorizonCell = 64.0f;
 inline constexpr float kHorizonStray = 4000.0f;
-inline constexpr float kHorizonBlend = 1200.0f;
+inline constexpr float kHorizonBlend = 2500.0f;
+inline constexpr float kHorizonHillsFrom = 300.0f;
+inline constexpr float kHorizonHillsFull = 3000.0f;
+inline constexpr float kHorizonMountainsFrom = 2500.0f;
+inline constexpr float kHorizonMountainsFull = 8000.0f;
 inline constexpr float kHorizonTuck = 40.0f;
 inline constexpr float kHorizonReach = 10000.0f;
 inline constexpr float kHorizonFine = 2500.0f;
@@ -171,6 +184,14 @@ struct HorizonMesh {
 
 // The land round the zone; empty when the field is not valid.
 HorizonMesh horizon_mesh(const HorizonField& field);
+
+// The land's ground near the zone's edge that grows the zone's grass (assets::FloraExtraGround; Hailstone's own), so
+// the lawn does not stop in a line where the zone's ground ends: its ground triangles whose middle lies in an open
+// square at most kHorizonLawnReach past the zone's terrain (not those tucked under it, nor in a pocket it closes
+// round), mostly neither rock nor sand, and not on the sea. Three corners each.
+inline constexpr float kHorizonLawnReach = 300.0f;
+std::vector<glm::vec3> horizon_lawn_ground(const HorizonField& field, const HorizonMesh& mesh,
+                                           float reach = kHorizonLawnReach);
 // The land round the zone from its terrain alone.
 HorizonMesh horizon_mesh(std::span<const HorizonTriangle> triangles, const HorizonLand& land);
 

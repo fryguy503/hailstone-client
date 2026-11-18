@@ -43,6 +43,7 @@ struct GameConnectionTestAccess {
     static bool has_tracking_request(const GameConnection& c) { return c.tracking_request_.has_value(); }
     static void replace_spawn(GameConnection& c, const Spawn& spawn) { c.apply_spawn(spawn); }
     static game::WorldState& world(GameConnection& c) { return c.world_; }
+    static glm::vec3& position(GameConnection& c) { return c.position_; } // the player's own (world coordinates)
     static PlayerStatus& status(GameConnection& c) { return c.pstatus_; }
     static game::SpellState& spells(GameConnection& c) { return c.spells_; }
     static std::int32_t& drunkenness(GameConnection& c) { return c.drunkenness_; }

@@ -1335,7 +1335,8 @@ int main(int argc, char** argv) {
                 const render::Daylight sun = render::daylight(sky_hour, true, moon_phase, blood_moon);
                 haze = haze_blend.update(render::haze_target(view, opts.view_distance, fog_frame.sky, outdoor,
                                                              sky_renderer != nullptr && fog_frame.sky, sun.to_sun,
-                                                             weather_look.storm, weather_look.snowing),
+                                                             weather_look.storm, weather_look.snowing,
+                                                             render::horizon_open_below(zone->name)),
                                          dt);
                 modern_view = render::modern_view(view, opts.view_distance, haze.extend);
             }
@@ -1411,7 +1412,8 @@ int main(int argc, char** argv) {
                         cover = render::fit_cover_map(camera.position, vk.shadow_size());
                         render::set_cover(lighting, cover, covering, watering);
                     }
-                    horizon_haze = glm::vec4(glm::vec3(lighting.haze_color), 1.0f);
+                    if (!render::horizon_open_below(zone->name))
+                        horizon_haze = glm::vec4(glm::vec3(lighting.haze_color), 1.0f);
                     std::vector<std::uint32_t> point_builds;
                     if (vk.point_shadow_slots() > 0) {
                         // --spell-effect's glow casts shadows as a spell's does in the client.
@@ -1460,7 +1462,8 @@ int main(int argc, char** argv) {
             if (zone_renderer && opts.modern) {
                 render::Daylight day = render::daylight(sky_hour, true, moon_phase, blood_moon);
                 render::apply_storm(day, weather_look.storm);
-                sky_frame.atmosphere = true;
+                sky_frame.atmosphere = !render::horizon_open_below(zone->name);
+                sky_frame.mirror_below = !sky_frame.atmosphere;
                 sky_frame.to_sun = day.to_sun;
                 sky_frame.to_moon = day.to_moon;
                 sky_frame.blood_moon = day.blood_moon;
@@ -1478,7 +1481,10 @@ int main(int argc, char** argv) {
             vk.gpu_mark(*f, "sky prepare (clouds)");
             // The plain camera first: begin_scene hands it to the scene's shaders for their own motion.
             if (zone_renderer) vk.set_temporal_view(camera.view(), camera.projection(width, height, draw_view.far_plane));
-            vk.begin_scene(*f, glm::vec4(water_color ? *water_color : view.fog_color, 1.0f));
+            vk.begin_scene(*f, glm::vec4(water_color                                               ? *water_color
+                                         : opts.modern && render::horizon_open_below(zone->name) ? render::open_sky_below(render::daylight(sky_hour, true, moon_phase, blood_moon).to_sun)
+                                                                                                 : view.fog_color,
+                                         1.0f));
             if (zone_renderer && opts.modern) {
                 vk.set_ao_view(camera.ao_view(width, height, draw_view.far_plane));
                 if (zone_renderer->horizon_build() != zone_fog_build) {
@@ -1493,6 +1499,12 @@ int main(int argc, char** argv) {
                                   field.floor_lo + field.floor_range, field.distance_at(glm::vec2(camera.position)),
                                   field.floor_at(glm::vec2(camera.position)));
                     vk.set_zone_fog_field(field);
+                    if (zone_fog_build && !zone_fog_build->lawn.empty() &&
+                        assets::add_zone_flora_ground(zone_fx_game, *zone, platform::flora_dir(), outdoor,
+                                                      {zone_fog_build->lawn, zone_fog_build->ground.frames.front(),
+                                                       zone_fog_build->ground.density}) &&
+                        flora_renderer)
+                        flora_renderer->restart();
                 }
                 if (zone_fog) vk.set_zone_fog(*zone_fog);
                 const render::Daylight day = render::daylight(sky_hour, outdoor, moon_phase, blood_moon);

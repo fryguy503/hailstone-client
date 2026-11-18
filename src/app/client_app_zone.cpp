@@ -605,6 +605,7 @@ void ClientApp::enter_zone() {
             if (actions_ui_) actions_ui_->write_char_ini(section, key, value);
         });
     conn_->load_name_change_flags();
+    conn_->restore_blocked_buffs();
     if (ui_api_) {
         // The window places: the character's UI.ini over the game's defaults.ini; the game's own
         // UI_<name>_<server>.ini, when there is one, is the starting layout (InitCharacterIniFilenames). Both are

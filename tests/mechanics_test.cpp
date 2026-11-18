@@ -1079,6 +1079,53 @@ TEST_CASE("Spell Display: \"(x sec)\" when a cast time modifier is non-zero, eve
     CHECK(build_spell_display(nuke, ctx).description.find("Cast: 4.0<BR>") != std::string::npos);
 }
 
+TEST_CASE("Spell range: eligible SPA 129 sources extend range, truncating each share separately") {
+    World w;
+    SpellData& cast = w.spell(600, {{0, -100, 100}});
+    cast.range = 205;
+    cast.class_level[1] = 50;
+    CharacterSheet c = warrior(60);
+    c.class_id = 2;
+    auto bonus = [&] { return Character(c, w.tables, w.lookup()).focus_range_modifier(cast); };
+    CHECK(bonus() == 0);
+    w.spell(500, {{129, 20, 100}});
+    net::Item ear = item();
+    ear.effects[net::kEffectFocus].effect = 500;
+    c.possessions[1] = ear;
+    CHECK(bonus() == 41);
+    w.spell(501, {{129, 15, 100}});
+    c.buffs[0] = buff(501);
+    w.spell(502, {{129, 5, 100}});
+    c.buffs[1] = buff(502);
+    SheetAbility aa;
+    aa.class_mask = 1u << 2;
+    aa.effects = {{129, 15, 0}};
+    c.abilities.push_back(aa);
+    CHECK(bonus() == 101); // 41 + 30 + 30, not 50% of 205 truncated once
+    cast.not_focusable = true;
+    CHECK(bonus() == 0);
+}
+
+TEST_CASE("Spell range: a level falloff scales the SPA 129 share, and pure melee classes get none") {
+    World w;
+    SpellData& cast = w.spell(600, {{0, -100, 100}});
+    cast.range = 205;
+    cast.class_level[0] = 50;
+    cast.class_level[1] = 50;
+    // Max level 45 with 10% falloff per level: 5 levels over leaves 50% of 20% = 10% of 205 = 20.5 -> 20.
+    SpellData& focus = w.spell(500, {{129, 20, 100}, {0x86, 45, 100}});
+    focus.base2[1] = 10;
+    net::Item ear = item();
+    ear.effects[net::kEffectFocus].effect = 500;
+    CharacterSheet c = warrior(60);
+    c.class_id = 2;
+    c.possessions[1] = ear;
+    auto bonus = [&] { return Character(c, w.tables, w.lookup()).focus_range_modifier(cast); };
+    CHECK(bonus() == 20);
+    c.class_id = 1; // a warrior: IsSpellcaster_2 gives no focus without a class limit
+    CHECK(bonus() == 0);
+}
+
 TEST_CASE("Focus over a server extension's classes: SPA 411 and an AA's classes") {
     World w;
     SpellData& nuke = w.spell(600, {{0, -100, 100}});

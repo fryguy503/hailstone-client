@@ -1425,6 +1425,8 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
     // is. Its draws are `distant`: no shadows, shown by set_distant.
     {
         prep.horizon = horizon_land(horizon_triangles, horizon_seed(zone.name));
+        // A zone floating in the sky has open sky under it: no land round it (and so no fog past its edge).
+        if (horizon_open_below(zone.name)) prep.horizon.valid = false;
         HorizonField field = horizon_field(horizon_triangles, prep.horizon);
         // Its hills worn (render::horizon_terrain): read back from the cache when worn from the same ground before.
         if (field.valid()) {
@@ -1487,6 +1489,7 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                 land_triangles += add_land(water_key, looks.at(*pick.water), water, land, land.water);
             }
             if (options.land_trees) add_land_trees(field, land);
+            build->lawn = horizon_lawn_ground(field, land);
             build->field = std::move(field);
             prep.horizon_build = std::move(build);
         }
@@ -1498,7 +1501,10 @@ ZoneRenderer::PreparedPtr ZoneRenderer::prepare(const assets::Zone& zone, const 
                       pick.water ? land.water.size() / 3 : 0, h.lo.x, h.lo.y, h.hi.x, h.hi.y, h.ground, h.relief);
         else
             log::info("zone renderer: no land round the zone ({} terrain triangles{})", horizon_triangles.size(),
-                      !h.valid ? ", too little level ground" : pick.ground ? "" : ", no plain ground material");
+                      horizon_open_below(zone.name) ? ", open sky under it"
+                      : !h.valid                    ? ", too little level ground"
+                      : pick.ground                 ? ""
+                                                    : ", no plain ground material");
     }
 
     // The instanced models join the geometry: their meshes' vertices and triangles at the end, their placements in the

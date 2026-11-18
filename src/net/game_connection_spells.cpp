@@ -275,6 +275,73 @@ void GameConnection::unblock_buff(bool pet, std::int32_t spell) {
     send_zone(encode(b, true));
 }
 
+// The character ini's lists (<name>_<server>.ini, the app's hotbuttons.ini): [BlockedSpells] BlockedSpellID0..29
+// and [BlockedPetSpells] BlockedPetSpellID0..29, -1 for an empty slot, as CEverQuest::ProcessLocalPCIni @0x51e770
+// reads them and Handle_OP_BlockedBuffs @0x4bed90 (and the Clear / Remove handlers) write all 30 after each change.
+namespace {
+const char* blocked_buffs_section(bool pet) { return pet ? "BlockedPetSpells" : "BlockedSpells"; }
+std::string blocked_buffs_key(bool pet, int slot) {
+    return (pet ? "BlockedPetSpellID" : "BlockedSpellID") + std::to_string(slot);
+}
+} // namespace
+
+void GameConnection::restore_blocked_buffs() {
+    if (char_ini_get_) {
+        for (int k = 0; k < 2; ++k) {
+            const bool pet = k == 1;
+            auto& list = blocked_buffs_[static_cast<std::size_t>(k)];
+            list.clear();
+            for (int slot = 0; slot < kBlockedBuffSlots; ++slot) {
+                // The original sends every id >= 0; 0 is no spell here (block_buff refuses it too).
+                const int id = char_ini_get_(blocked_buffs_section(pet), blocked_buffs_key(pet, slot), -1);
+                if (id > 0 && std::find(list.begin(), list.end(), id) == list.end()) list.push_back(id);
+            }
+        }
+    }
+    resend_blocked_buffs();
+}
+
+void GameConnection::save_blocked_buffs(bool pet) const {
+    if (!char_ini_put_) return;
+    const auto& list = blocked_buffs_[pet ? 1 : 0];
+    for (int slot = 0; slot < kBlockedBuffSlots; ++slot) {
+        const auto i = static_cast<std::size_t>(slot);
+        char_ini_put_(blocked_buffs_section(pet), blocked_buffs_key(pet, slot),
+                      std::to_string(i < list.size() ? list[i] : -1));
+    }
+}
+
+void GameConnection::remove_newly_blocked(bool pet, std::int32_t spell_id) {
+    // Handle_OP_BlockedBuffs @0x4bed90, for each spell its list did not have yet (PcBase vf19 @0x7c4fc0 adds it and
+    // says so) in a packet that is not an initialise: "Now blocking %1." (4566; the pet's 4560), then every effect
+    // of that spell or of its SpellGroup (when > 0) comes off the player (RemoveMyAffect) or the pet
+    // (RemovePetEffect). Both go through the client's own click-off here, OP_BuffRemoveRequest, which stock EQEmu
+    // honours for the player and the pet alike; RemoveMyAffect removes the player's locally and tells the server
+    // through NotifyPCAffectChange instead.
+    const game::SpellData* blocked = spell_table_->get(static_cast<std::uint32_t>(spell_id));
+    if (!blocked) return;
+    system(pet ? 4560 : 4566, {blocked->name}, 10);
+    auto same = [&](std::uint32_t spell) {
+        if (spell == blocked->id) return true;
+        const game::SpellData* s = blocked->spell_group > 0 ? spell_table_->get(spell) : nullptr;
+        return s && s->spell_group == blocked->spell_group;
+    };
+    if (!pet) {
+        for (int slot = 0; slot < game::kBuffSlots; ++slot) {
+            const auto& buff = spells_.buffs[static_cast<std::size_t>(slot)];
+            if (!buff.empty() && same(buff.spell)) remove_buff(slot);
+        }
+        return;
+    }
+    if (pets_.focused == 0) return;
+    for (const auto& [slot, buff] : pet_buffs_) {
+        if (buff.empty() || !same(buff.spell)) continue;
+        // Only a beneficial effect, as remove_buff (the server refuses the others).
+        if (const auto* s = spell_table_->get(buff.spell); s && !s->beneficial()) continue;
+        send_zone(encode_buff_remove_request(slot, pets_.focused));
+    }
+}
+
 void GameConnection::resend_blocked_buffs() {
     for (int k = 0; k < 2; ++k) {
         if (blocked_buffs_[static_cast<std::size_t>(k)].empty()) continue;
@@ -866,16 +933,30 @@ void GameConnection::handle_spell(Op op, const AppPacket& p) {
     }
     case Op::BlockedBuffs:
         // The server's list (EQEmu: the whole list after a change, flags 0x54).
-        if (auto b = decode_blocked_buffs(p)) blocked_buffs_[b->pet ? 1 : 0] = std::move(b->spells);
+        if (auto b = decode_blocked_buffs(p)) {
+            auto& list = blocked_buffs_[b->pet ? 1 : 0];
+            std::vector<std::int32_t> added;
+            if (!b->initialise)
+                for (auto id : b->spells)
+                    if (std::find(list.begin(), list.end(), id) == list.end()) added.push_back(id);
+            list = std::move(b->spells);
+            save_blocked_buffs(b->pet);
+            for (auto id : added) remove_newly_blocked(b->pet, id);
+        }
         break;
     case Op::ClearBlockedBuffs:
         // EQEmu echoes /blockspell clear's packet once it has cleared the list.
-        if (!p.data.empty()) blocked_buffs_[p.data[0] != std::byte{0} ? 1 : 0].clear();
+        if (!p.data.empty()) {
+            const bool pet = p.data[0] != std::byte{0};
+            blocked_buffs_[pet ? 1 : 0].clear();
+            save_blocked_buffs(pet);
+        }
         break;
     case Op::RemoveBlockedBuffs:
         if (auto b = decode_blocked_buffs(p)) {
             auto& list = blocked_buffs_[b->pet ? 1 : 0];
             for (auto id : b->spells) std::erase(list, id);
+            save_blocked_buffs(b->pet);
         }
         break;
     case Op::MemorizeSpell: {

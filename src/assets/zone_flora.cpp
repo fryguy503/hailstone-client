@@ -402,7 +402,8 @@ void add_split(std::vector<ZoneFloraGrower::Piece>& out, const ZoneFloraGrower::
 } // namespace
 
 ZoneFloraGrower::ZoneFloraGrower(const Zone& zone, const ZoneFloraRules& rules,
-                                 std::vector<eqg::FloraDefinition> definitions, const GroundTextures& textures)
+                                 std::vector<eqg::FloraDefinition> definitions, const GroundTextures& textures,
+                                 const FloraExtraGround* extra)
     : d_(std::make_unique<Data>()) {
     Data& d = *d_;
     d.rules = rules;
@@ -453,6 +454,30 @@ ZoneFloraGrower::ZoneFloraGrower(const Zone& zone, const ZoneFloraRules& rules,
                                                                    kMinGreenShare * static_cast<float>(g.rgb.size()));
         return std::pair<Data::Ground, bool>(std::move(g), none);
     };
+    // A ground texture's rule and index, when its ground may grow plants (its rule grows some, +green finds grass in it).
+    auto ground_of = [&](const std::string& tex) -> std::optional<std::pair<std::uint32_t, std::uint32_t>> {
+        if (tex.empty()) return std::nullopt;
+        auto found = rule_by_texture.find(tex);
+        if (found == rule_by_texture.end()) {
+            int rule = -1;
+            for (std::size_t g = 0; g < rules.ground.size() && rule < 0; ++g)
+                if (iglob(rules.ground[g].texture, tex)) rule = static_cast<int>(g);
+            found = rule_by_texture.emplace(tex, rule).first;
+        }
+        if (found->second < 0) return std::nullopt;
+        const auto rule = static_cast<std::uint32_t>(found->second);
+        const auto& ground_rule = rules.ground[rule];
+        if (!ground_rule.lawn && (ground_rule.density <= 0.0f || d.picks[rule].total <= 0.0f)) return std::nullopt;
+        auto [ti, added] = texture_index.emplace(tex, static_cast<std::uint32_t>(d.textures.size()));
+        if (added) {
+            d.textures.push_back(tex);
+            auto [ground, none] = read_ground(tex, rules.ground[rule]);
+            d.grounds.push_back(std::move(ground));
+            barren.push_back(none);
+        }
+        if (barren[ti->second]) return std::nullopt;
+        return std::pair<std::uint32_t, std::uint32_t>(rule, ti->second);
+    };
     // On the ground as drawn: the smoothed ground's (assets/ground_refine.h) when the zone has it, so the plants stand
     // on its curves rather than in or over them.
     const std::vector<Mesh>& drawn = drawn_terrain(zone);
@@ -465,27 +490,9 @@ ZoneFloraGrower::ZoneFloraGrower(const Zone& zone, const ZoneFloraRules& rules,
             if (const BlendMode blend = mesh.materials[part.material].blend;
                 blend != BlendMode::Opaque && blend != BlendMode::Masked)
                 continue;
-            std::string tex = lower(texture_of(mesh.materials[part.material]));
-            if (tex.empty()) continue;
-            auto found = rule_by_texture.find(tex);
-            if (found == rule_by_texture.end()) {
-                int rule = -1;
-                for (std::size_t g = 0; g < rules.ground.size() && rule < 0; ++g)
-                    if (iglob(rules.ground[g].texture, tex)) rule = static_cast<int>(g);
-                found = rule_by_texture.emplace(tex, rule).first;
-            }
-            if (found->second < 0) continue;
-            const auto rule = static_cast<std::uint32_t>(found->second);
-            const auto& ground_rule = rules.ground[rule];
-            if (!ground_rule.lawn && (ground_rule.density <= 0.0f || d.picks[rule].total <= 0.0f)) continue;
-            auto [ti, added] = texture_index.emplace(tex, static_cast<std::uint32_t>(d.textures.size()));
-            if (added) {
-                d.textures.push_back(tex);
-                auto [ground, none] = read_ground(tex, rules.ground[rule]);
-                d.grounds.push_back(std::move(ground));
-                barren.push_back(none);
-            }
-            if (barren[ti->second]) continue;
+            const auto growing = ground_of(lower(texture_of(mesh.materials[part.material])));
+            if (!growing) continue;
+            const auto [rule, texture] = *growing;
             const std::uint32_t end = std::min<std::uint32_t>(part.first_index + part.index_count,
                                                               static_cast<std::uint32_t>(mesh.indices.size()));
             for (std::uint32_t i = part.first_index; i + 3 <= end; i += 3) {
@@ -508,13 +515,37 @@ ZoneFloraGrower::ZoneFloraGrower(const Zone& zone, const ZoneFloraRules& rules,
                 t.uv[1] = b.uv;
                 t.uv[2] = c.uv;
                 t.seed = triangle_seed(mi, i / 3);
-                t.texture = ti->second;
+                t.texture = texture;
                 t.rule = rule;
                 t.area = len * 0.5f;
                 add_split(d.tris, t, 0);
             }
         }
     }
+    // The extra ground (the land near the zone's edge), as the zone's own of its texture; seeded as a mesh past the
+    // zone's last.
+    if (extra && !extra->empty())
+        if (const auto growing = ground_of(lower(extra->texture))) {
+            const auto [rule, texture] = *growing;
+            for (std::size_t i = 0; i + 3 <= extra->triangles.size(); i += 3) {
+                const glm::vec3 &a = extra->triangles[i], &b = extra->triangles[i + 1], &c = extra->triangles[i + 2];
+                if (!sane_position(a) || !sane_position(b) || !sane_position(c)) continue;
+                glm::vec3 n = glm::cross(b - a, c - a);
+                const float len = glm::length(n);
+                if (!(len > 1e-6f)) continue;
+                if (std::abs(n.z) / len < min_up) continue;
+                Data::Tri t;
+                t.p[0] = a;
+                t.p[1] = b;
+                t.p[2] = c;
+                for (int k = 0; k < 3; ++k) t.uv[k] = glm::vec2(t.p[k]) * extra->density;
+                t.seed = triangle_seed(drawn.size(), i / 3);
+                t.texture = texture;
+                t.rule = rule;
+                t.area = len * 0.5f;
+                add_split(d.tris, t, 0);
+            }
+        }
     if (d.tris.empty()) return;
 
     // Binned by the tiles their bounds touch (a plant belongs to the tile its foot is in). The pieces' corners are
@@ -558,7 +589,8 @@ std::size_t ZoneFloraGrower::triangles() const { return d_->tris.size(); }
 namespace {
 
 // Whether a plant may stand at `p` with the texel `under` beneath it: +green's test (a texture that cannot be read
-// grows nothing with +green: no telling grass from stone), out of water, lava and zone lines, and not under cover.
+// grows nothing with +green: no telling grass from stone), out of water and lava, and not under cover. A zone line's
+// region does not keep it out: a classic zone's can be a box over a whole field (North Qeynos's to Qeynos Hills).
 bool green_enough(const ZoneFloraRules::Ground& ground, const std::optional<std::uint32_t>& under) {
     if (!under) return false;
     const auto r = static_cast<std::uint8_t>(*under & 0xff), g = static_cast<std::uint8_t>(*under >> 8 & 0xff),
@@ -572,9 +604,9 @@ bool may_grow(const ZoneFloraGrower::Data& d, const ZoneFloraRules::Ground& grou
               const glm::vec3& p, bool green = true, bool cover = true) {
     if (green && ground.green_only && !green_enough(ground, under)) return false;
     if (!d.regions.empty()) {
-        // In the water or lava, or standing on its surface (the region just under the foot), or in a zone line.
+        // In the water or lava, or standing on its surface (the region just under the foot).
         const RegionInfo r = d.regions.lookup(p + glm::vec3(0.0f, 0.0f, 1.0f));
-        if (r.is_water() || r.is_lava() || r.is_zone_line()) return false;
+        if (r.is_water() || r.is_lava()) return false;
         const RegionInfo below = d.regions.lookup(p - glm::vec3(0.0f, 0.0f, 1.0f));
         if (below.is_water() || below.is_lava()) return false;
     }
@@ -960,7 +992,15 @@ std::optional<FloraDonor> open_flora_donor(const GameDir& game, std::string_view
     return out;
 }
 
-std::size_t add_zone_flora(const GameDir& game, Zone& zone, const std::filesystem::path& rules_dir, bool outdoor) {
+bool add_zone_flora_ground(const GameDir& game, Zone& zone, const std::filesystem::path& rules_dir, bool outdoor,
+                           const FloraExtraGround& extra) {
+    if (!zone.flora.grower || extra.empty()) return false;
+    zone.flora = ZoneFlora{};
+    return add_zone_flora(game, zone, rules_dir, outdoor, &extra) > 0;
+}
+
+std::size_t add_zone_flora(const GameDir& game, Zone& zone, const std::filesystem::path& rules_dir, bool outdoor,
+                           const FloraExtraGround* extra) {
     if (!zone.flora.empty()) return 0;
     std::string source;
     auto rules = load_zone_flora_rules(rules_dir, zone.name, outdoor, &source);
@@ -977,7 +1017,7 @@ std::size_t add_zone_flora(const GameDir& game, Zone& zone, const std::filesyste
     }
     const auto t0 = std::chrono::steady_clock::now();
     auto grower = std::make_shared<const ZoneFloraGrower>(zone, *rules, std::move(donor.definitions),
-                                                          zone_ground_textures(zone));
+                                                          zone_ground_textures(zone), extra);
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
     zone.flora = ZoneFlora{};
     zone.flora.definitions = grower->definitions();

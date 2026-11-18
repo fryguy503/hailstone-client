@@ -290,8 +290,8 @@ void ParticleRenderer::prepare(const game::ParticleSystem& particles) {
         else if (reader_) zone_bytes = reader_(name);
         loading_.insert(name);
         const GameDir* game = &game_;
-        // A job that throws would hand back no result, and the name would stay in loading_ for the session, its
-        // emitters never drawn; failing here, it comes back empty and is drawn with slot 0 like a missing texture.
+        // A job that throws would hand back no result, and the name would stay in loading_ for the session; failing
+        // here, it comes back empty and counts as a missing texture.
         loader_->submit(name, [name, bytes = std::move(zone_bytes), late = std::move(late), game]() mutable {
             try {
                 if (late) bytes = late(name);
@@ -305,13 +305,16 @@ void ParticleRenderer::prepare(const game::ParticleSystem& particles) {
     UploadBatch upload(vk_);
     for (auto& [name, t] : done) {
         loading_.erase(name);
-        std::uint32_t slot = 0;
-        if (t.image && textures_.size() < max_textures_) {
+        // A missing texture's particles are not drawn (particle_texture_slot), nor are those of one past the limit.
+        const std::uint32_t slot = particle_upload_slot(t.image.has_value(), textures_.size(), max_textures_);
+        if (slot != kMissingParticleTexture) {
             colors_[name] = t.color;
-            slot = static_cast<std::uint32_t>(textures_.size());
             textures_.push_back(upload.texture(*t.image, TextureUse::Color));
+        } else if (!t.image) {
+            log::debug("particle texture {} not found", name);
+        } else {
+            log::debug("particle texture {} past the limit of {}", name, max_textures_);
         }
-        if (slot == 0) log::debug("particle texture {} not found", name);
         slots_.emplace(name, slot);
     }
     upload.submit();
@@ -412,8 +415,8 @@ void ParticleRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, 
                 l.grid = texture_frame_info.grid;
                 // Lowered once into the scratch buffer for both lookups, no string made.
                 const std::string& name = lowered(texture_frame_info.texture);
-                auto found = slots_.find(name);
-                l.frames.push_back({found == slots_.end() ? 0u : found->second, loading_.contains(name)});
+                const auto texture_slot = particle_texture_slot(name, slots_, loading_);
+                l.frames.push_back({texture_slot.value_or(0u), !texture_slot});
             }
         }
         return l;
@@ -456,7 +459,7 @@ void ParticleRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, 
                 const auto& p = e.particles[item.particle];
                 const DefinitionLook& dl = looks[e.definition];
                 const FrameLook& fl = dl.frames[p.frame % dl.frames.size()];
-                if (fl.loading) {
+                if (fl.skip) {
                     empty_quad(dst);
                     continue;
                 }
@@ -482,7 +485,7 @@ void ParticleRenderer::draw(const FrameInfo& frame, const glm::mat4& view_proj, 
         auto shows = [&](const game::Particle& p, const DefinitionLook& dl) {
             return !p.hidden && classic_in_range(p) &&
                    particle_in_view(frustum, p.position, extent(p), p.height, p.size_factor) &&
-                   !dl.frames[p.frame % dl.frames.size()].loading;
+                   !dl.frames[p.frame % dl.frames.size()].skip;
         };
         for (std::size_t ei = 0; ei < emitters.size(); ++ei)
             if (!(ei < hidden.size() && hidden[ei]) && !emitters[ei].particles.empty()) look(emitters[ei].definition);

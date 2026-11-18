@@ -207,7 +207,8 @@ Point land_point(const HorizonField& g, const Shape& k, glm::vec2 p) {
     const float ridge = fbm(q / 3600.0f, 6, k.seed + 7u, true);
     const float mass = smooth(0.3f, 0.75f, fbm(q / 7000.0f, 3, k.seed + 9u, false));
     const float mtn = std::pow(ridge, 1.5f) * (0.75f + 0.75f * mass);
-    const float rise = k.near_amp * roll * smooth(0.0f, 800.0f, d) + k.far_amp * mtn * smooth(800.0f, 5000.0f, d);
+    const float rise = k.near_amp * roll * smooth(kHorizonHillsFrom, kHorizonHillsFull, d) +
+                       k.far_amp * mtn * smooth(kHorizonMountainsFrom, kHorizonMountainsFull, d);
     const float start = g.edge[i] - 20.0f;
     float h = glm::mix(start, g.land.ground + rise, smooth(0.0f, kHorizonBlend, d));
     // Past a shore the sea goes on to the land's reach: nothing says where the next coast is (docs/unknowns.md).
@@ -259,6 +260,43 @@ HorizonLand horizon_land(std::span<const HorizonTriangle> triangles, float seed)
     out.relief = std::clamp(z90 - z10, kHorizonMinRelief, kHorizonMaxRelief);
     out.valid = true;
     return out;
+}
+
+std::vector<glm::vec3> horizon_lawn_ground(const HorizonField& field, const HorizonMesh& mesh, float reach) {
+    std::vector<glm::vec3> out;
+    if (!field.valid()) return out;
+    for (std::size_t i = 0; i + 2 < mesh.ground.size(); i += 3) {
+        const std::uint32_t a = mesh.ground[i], b = mesh.ground[i + 1], c = mesh.ground[i + 2];
+        if (a >= mesh.positions.size() || b >= mesh.positions.size() || c >= mesh.positions.size()) continue;
+        const glm::vec3 mid = (mesh.positions[a] + mesh.positions[b] + mesh.positions[c]) / 3.0f;
+        float extra = 0.0f;
+        const std::size_t sq = field.square(glm::vec2(mid), extra);
+        if (extra > 0.0f || !field.open[sq]) continue;
+        if (field.dist[sq] * field.cell > reach + 0.5f * field.cell) continue;
+        if (sq < field.sea.size() && field.sea[sq] > 0.5f) continue;
+        if (!mesh.splat.empty()) {
+            const glm::vec2 s = (mesh.splat[a] + mesh.splat[b] + mesh.splat[c]) / 3.0f;
+            if (s.x > 0.5f || s.y > 0.5f) continue;
+        }
+        out.push_back(mesh.positions[a]);
+        out.push_back(mesh.positions[b]);
+        out.push_back(mesh.positions[c]);
+    }
+    return out;
+}
+
+bool horizon_open_below(std::string_view zone) {
+    static constexpr std::string_view kZones[] = {"airplane", "poair"};
+    for (std::string_view z : kZones) {
+        if (z.size() != zone.size()) continue;
+        bool same = true;
+        for (std::size_t i = 0; i < z.size() && same; ++i) {
+            const char c = zone[i];
+            same = (c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c) == z[i];
+        }
+        if (same) return true;
+    }
+    return false;
 }
 
 float horizon_seed(std::string_view zone) {
@@ -938,10 +976,11 @@ namespace hailstone::render {
 
 namespace {
 constexpr std::uint32_t kTerrainMagic = 0x31525448u; // "HTR1"
-// 2: from the zone alone (1: shaped by the neighbour zones' ground too); warped ridged hills, droplet wear
+// 3: hills and mountains further out (kHorizonHillsFrom..kHorizonMountainsFull); 2: from the zone alone (1: shaped
+// by the neighbour zones' ground too); warped ridged hills, droplet wear
 // (kHorizonDroplets, kHorizonDropletSteps) and slumping. Raise it whenever the generator changes what it makes from
 // the same ground.
-constexpr std::uint32_t kTerrainVersion = 2;
+constexpr std::uint32_t kTerrainVersion = 3;
 
 // FNV-1a over the bytes of what the terrain is worn from.
 struct Fnv {

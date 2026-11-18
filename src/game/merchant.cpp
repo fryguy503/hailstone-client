@@ -242,11 +242,14 @@ std::int32_t merchant_list_level(const net::Item& item, const std::function<std:
 std::string merchant_level_text(std::int32_t level) { return level < 2 ? std::string("--") : std::to_string(level); }
 
 bool merchant_usable_hides(const net::Item& item, std::uint32_t class_id, std::uint32_t race,
-                           const std::function<bool()>& scroll_known) {
+                           const std::function<bool()>& scroll_known, std::uint32_t server_classes) {
     if (item.item_class != 0) return false;
     // UpdateList: 1 << ((class - 1) & 31) against GetUsableClasses(item, 0, 0), 1 << ((0x6f7160 - 1) & 31) against
-    // ItemBase_GetRaces(item, 0, 0).
-    if (!item_mask_has_bit(item.classes, static_cast<std::int32_t>(class_id))) return true;
+    // ItemBase_GetRaces(item, 0, 0). Hailstone extension: a server that gives the player several classes
+    // (server_classes, 0 on a stock server) has any of them match.
+    if (server_classes != 0 ? (item.classes & server_classes) == 0
+                            : !item_mask_has_bit(item.classes, static_cast<std::int32_t>(class_id)))
+        return true;
     if (!item_mask_has_bit(item.races, item_race_bit_of(static_cast<std::int32_t>(race)))) return true;
     return item.item_type == 20 && scroll_known();
 }

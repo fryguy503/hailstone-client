@@ -149,8 +149,8 @@ private:
     TextureReader reader_;
     bool reader_any_thread_ = false;
     bool rows_bottom_up_ = false;
-    std::vector<Texture> textures_;               // slot 0: white
-    std::unordered_map<std::string, std::uint32_t> slots_; // lower-case name -> slot (0 = missing)
+    std::vector<Texture> textures_;               // slot 0: white (no particle draws it now)
+    std::unordered_map<std::string, std::uint32_t> slots_; // lower-case name -> slot (kMissingParticleTexture: none)
     std::unordered_map<std::string, glm::vec3> colors_;    // lower-case name -> texture_color
     mutable std::string lower_scratch_;                    // lowered's buffer (main thread only)
     std::uint32_t version_ = 1;
@@ -166,10 +166,11 @@ private:
     VkPipeline modern_pipeline_ = VK_NULL_HANDLE; // premultiplied: both kinds in one sorted stream, no depth write
 
     // draw()'s lists, kept so their memory is reused frame to frame: the modern stream's particles in order, each
-    // definition's texture slot and flipbook grid (`loading`: its texture is not up yet, so its particles are not
-    // drawn rather than drawn white), and whether its particles are lit (-1 not known yet).
+    // definition's texture slot and flipbook grid (`skip`: its texture is not up yet, missing, unnamed or past the
+    // limit, so its particles are not drawn rather than drawn white; particle_texture_slot), and whether its particles
+    // are lit (-1 not known yet).
     struct OrderItem { float dist2; std::uint32_t emitter, particle; };
-    struct FrameLook { std::uint32_t tex = 0; bool loading = false; };
+    struct FrameLook { std::uint32_t tex = 0; bool skip = false; };
     struct DefinitionLook {
         std::vector<FrameLook> frames;
         glm::uvec2 grid{1};
