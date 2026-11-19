@@ -66,6 +66,67 @@ TEST_CASE("nameplate canvas context: own HP includes items and cast observations
     CHECK(*candidate.context.aggro_percent == 0);
 }
 
+TEST_CASE("nameplate canvas context: typed concealment requires current observed spell effects") {
+    mq_test::World world("canvas_context_concealment");
+    auto& connection = *world.conn;
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(mq_test::spell_line({{0, "1000"}, {1, "Test regular invis"}, {86, "12"}}) + "\n" +
+                         mq_test::spell_line({{0, "1001"}, {1, "Test improved undead invis"}, {87, "315"}})) == 2);
+    connection.set_spell_table_for_test(table);
+    auto& state = net::GameConnectionTestAccess::world(connection);
+    auto& spells = net::GameConnectionTestAccess::spells(connection);
+    game::NameplateCanvasCandidate candidate;
+    const auto context = [&](std::uint32_t id) -> const game::CanvasContext& {
+        app::fill_nameplate_canvas_candidate(candidate, connection, state.spawns.at(id), "caption", 50);
+        return candidate.context;
+    };
+    auto& target = state.spawns.at(10);
+    CHECK_FALSE(context(10).concealed);
+    target.invis_rank = 1;
+    CHECK(context(10).concealed);
+    CHECK_FALSE(candidate.context.invisible);
+    CHECK_FALSE(candidate.context.invisible_undead);
+
+    game::BuffSlot regular, undead;
+    regular.spell = 1000;
+    regular.tics = 10;
+    regular.received_ms = net::GameConnection::now_ms();
+    undead = regular;
+    undead.spell = 1001;
+    spells.target_buffs_entity = 11;
+    spells.target_buffs = {{0, regular}, {1, undead}};
+    CHECK_FALSE(context(10).invisible);
+    CHECK_FALSE(context(11).concealed);
+    spells.target_buffs_entity = 10;
+    CHECK(context(10).invisible);
+    CHECK(candidate.context.invisible_undead);
+    CHECK(candidate.context.concealed);
+
+    spells.target_buffs[0].second.received_ms -= 120000;
+    target.invis_rank = 0;
+    CHECK(context(10).invisible_undead);
+    CHECK_FALSE(candidate.context.invisible);
+    CHECK(candidate.context.concealed);
+    state.target_id = 11;
+    CHECK_FALSE(context(10).concealed);
+
+    spells.buffs[1] = regular;
+    CHECK(context(1).invisible);
+    CHECK_FALSE(candidate.context.invisible_undead);
+    spells.buffs[2] = undead;
+    CHECK(context(1).invisible);
+    CHECK(candidate.context.invisible_undead);
+    spells.buffs[1] = {};
+    spells.buffs[2] = {};
+    connection.note_hide_state(true, false);
+    CHECK(context(1).concealed);
+    CHECK_FALSE(candidate.context.invisible);
+    CHECK_FALSE(candidate.context.invisible_undead);
+    target.is_corpse = true;
+    target.invis_rank = 1;
+    CHECK_FALSE(context(10).concealed);
+}
+
 TEST_CASE("nameplate canvas context: full identity replacement and removal retire prior observations") {
     mq_test::World world("canvas_context_identity");
     auto& connection = *world.conn;
