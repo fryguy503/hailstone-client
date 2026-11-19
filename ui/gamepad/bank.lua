@@ -84,7 +84,8 @@ ui.window("Bank", function()
     ui.SetCursorPos(midX - wx, y0 - wy)
     X.bags(ctx, mine, midX, rx0 - midX - T.px(40), 5)
     -- the right column: the focused item, what is held, the coin
-    local coinH = T.px(300)
+    local canOpenShroudBank = API.windows.ChildShown(BW, "AltStorageButton") == true
+    local coinH = T.px(canOpenShroudBank and 360 or 300)
     local holdH = X.holdingHeight(ctx)
     local sumY1 = y1 - coinH - (holdH > 0 and holdH + T.px(12) or 0) - T.px(12)
     I.summary(ctx.focusedItem, ctx.focusedWhere, rx0, y0, x1, sumY1)
@@ -107,6 +108,9 @@ ui.window("Bank", function()
     local shared = API.windows.Text(BW, P .. "SharedMoney0") or "0"
     if T.button("##sharedcoin", "Shared: " .. shared .. " pp", bw, T.px(60), {}, pad) then
       API.windows.ClickChild(BW, P .. "SharedMoney0", "left")
+    end
+    if canOpenShroudBank and T.button("##openShroudBank", "Shroud Bank", cw, T.px(50), {}, pad) then
+      API.windows.ClickChild(BW, "AltStorageButton", "left")
     end
   end
   if W.finish() then API.windows.ClickChild(BW, "DoneButton", "left") end

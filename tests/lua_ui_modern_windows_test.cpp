@@ -230,3 +230,46 @@ TEST_UI_API_ATTACH(hs)
         CHECK(eval("Q.shownMin") == "20 of 49");
     });
 }
+
+TEST_CASE("Modern UI: the quantity box shows the new request's amount when the dialog opens again while focused") {
+    ModernPack pack("lua_ui_quantity_reopen_test", "quantity.lua");
+    if (!pack.ok) return;
+    pack.write("lib/hud.lua", kHud);
+    // The box is a real InputText, as W.Edit's is: focused when the dialog opens, it keeps the text it was given.
+    pack.write("lib/widgets.lua", R"lua(
+return {
+  Edit = function(_, id, opts) ui.InputText("##" .. id, Q.text, 256) end,
+  Button = function() end,
+  Text = function(_, id) if id == "QTYW_SliderInput" then return Q.text end return "" end,
+  Slider = function() end,
+}
+)lua");
+    pack.write("a_eq.lua", R"lua(
+Q = { shown = true, place = true, text = "100", value = 99, count = 100 }
+hs = {
+  InGame = function() return true end,
+  ReplaceWindow = function()
+    local place = Q.place
+    Q.place = false
+    return Q.shown, 10, 10, nil, nil, nil, place
+  end,
+  ChildState = function() return nil, nil, Q.value, Q.count end,
+  SetSlider = function() end, WindowButton = function() end, ShowWindow = function() end,
+}
+TEST_UI_API_ATTACH(hs)
+)lua");
+    pack.run([](const auto& frames, const auto&, lua_State* L) {
+        auto box_text = [] {
+            const ImGuiContext& g = *ImGui::GetCurrentContext();
+            REQUIRE(g.ActiveId != 0);
+            REQUIRE(g.InputTextState.ID == g.ActiveId);
+            return std::string(g.InputTextState.TextA.Data);
+        };
+        frames(3);
+        CHECK(box_text() == "100"); // the Buy dialog's box, focused
+        // Sell asks while it is still up: the box shows that request's amount, not the 100 it was editing.
+        REQUIRE(luaL_dostring(L, "Q.place, Q.text, Q.value, Q.count = true, '5', 4, 5") == LUA_OK);
+        frames(3);
+        CHECK(box_text() == "5");
+    });
+}

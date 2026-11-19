@@ -118,7 +118,9 @@ void GameConnection::handle_progress(Op op, const AppPacket& p) {
         if (auto r = decode_recipe_reply(p); r && tradeskill_.open) tradeskill_.add_recipe(*r);
         break;
     case Op::RecipeDetails:
-        if (auto d = decode_recipe_details(p); d && tradeskill_.open && d->recipe_id == tradeskill_.selected)
+        if (auto d = decode_recipe_details(p); !d)
+            log::warn("could not decode OP_RecipeDetails ({} bytes)", p.data.size());
+        else if (tradeskill_.open && d->recipe_id == tradeskill_.selected)
             tradeskill_.details = std::move(*d);
         break;
     case Op::RecipeAutoCombine:
@@ -148,6 +150,10 @@ void GameConnection::handle_progress(Op op, const AppPacket& p) {
             t->received_ms = now_ms();
             bool open = t->open_window;
             const game::Task& task = tasks_.describe(std::move(*t));
+            if (task.type == game::kTaskTypeShared && shroud_selection_ && shroud_selection_->context_id != 0 &&
+                shroud_selection_->context_id != task.task_id) reset_shroud_selection();
+            if (task.type == game::kTaskTypeShared && monster_mission_catalog_ &&
+                monster_mission_catalog_->task_id != task.task_id) monster_mission_catalog_.reset();
             ++tasks_.revision;
             task_compass_dirty_ = true;
             if (open) window_toggle_ = "show:TaskWnd";
@@ -216,6 +222,9 @@ void GameConnection::handle_progress(Op op, const AppPacket& p) {
             if (c->type == game::kTaskTypeShared) {
                 tasks_.shared_members.clear();
                 tasks_.shared_leader.clear();
+                tasks_.shared_member_templates.clear();
+                monster_mission_catalog_.reset();
+                if (shroud_selection_ && shroud_selection_->context_id != 0) reset_shroud_selection();
             }
             ++tasks_.revision;
             task_compass_dirty_ = true;
@@ -228,10 +237,13 @@ void GameConnection::handle_progress(Op op, const AppPacket& p) {
         if (auto v = decode_shared_task_members(p)) {
             tasks_.shared_members.clear();
             tasks_.shared_leader.clear();
+            tasks_.shared_member_templates.clear();
             for (auto& m : *v) {
                 if (m.leader) tasks_.shared_leader = m.name;
+                if (m.template_id != 0) tasks_.shared_member_templates.insert_or_assign(m.name, m.template_id);
                 tasks_.shared_members.push_back(std::move(m.name));
             }
+            refresh_monster_mission_availability();
         }
         break;
     case Op::SharedTaskMemberChange:
@@ -245,6 +257,7 @@ void GameConnection::handle_progress(Op op, const AppPacket& p) {
             if (v->added) {
                 m.push_back(v->name);
             } else if (!m.empty()) {
+                tasks_.shared_member_templates.erase(v->name);
                 if (m.front() == v->name) {
                     if (tasks_.shared_leader == m.front()) tasks_.shared_leader.clear();
                     m.erase(m.begin());
@@ -260,6 +273,7 @@ void GameConnection::handle_progress(Op op, const AppPacket& p) {
                     }
                 }
             }
+            refresh_monster_mission_availability();
             system(v->added ? 0x2165 : 0x2166, {v->name});
         }
         break;
@@ -277,6 +291,9 @@ void GameConnection::reset_progress_for_zone() {
     training_requested_ = 0;
     combine_pending_ = false;
     tasks_.offers.reset();
+    reset_shroud_selection();
+    close_shroud_bank();
+    shroud_restoring_ = false;
     aa_requested_ = false;
     aa_buy_all_ = 0;
 }
@@ -347,6 +364,14 @@ std::string GameConnection::aa_name(const game::AltAbility& a) const {
     return strings_.db_string(static_cast<std::uint32_t>(a.title_sid), 1);
 }
 
+std::string GameConnection::aa_display_name(const game::AltAbility& a) const {
+    std::string name = aa_name(a);
+    if (name.empty() && a.activated() && spell_table_)
+        if (const game::SpellData* s = spell_table_->get(static_cast<std::uint32_t>(a.spell))) name = s->name;
+    if (name.empty()) name = std::format("Ability {}", a.group);
+    return name;
+}
+
 std::string GameConnection::aa_description(const game::AltAbility& a) const {
     return strings_.db_string(static_cast<std::uint32_t>(a.desc_sid), 4);
 }
@@ -364,6 +389,7 @@ bool GameConnection::aa_can_train(std::uint32_t rank_id) const {
     who.class_id = profile_->class_;
     who.level = pstatus_.level ? pstatus_.level : profile_->level;
     who.expansions = profile_->expansions;
+    who.monster_profile = shrouded();
     who.ignore_level = server_ext().aa_any_level(*this); // the NMS patch: AAs from level 1
     return alt_adv_.can_train(*a, who);
 }
@@ -374,6 +400,7 @@ std::vector<const game::AltAbility*> GameConnection::aa_list(std::int32_t type, 
     who.class_id = profile_->class_;
     who.level = pstatus_.level ? pstatus_.level : profile_->level;
     who.expansions = profile_->expansions;
+    who.monster_profile = shrouded();
     who.ignore_level = server_ext().aa_any_level(*this);
     return alt_adv_.visible(type, who.class_id, filter, who);
 }
@@ -463,7 +490,7 @@ void GameConnection::aa_train_button(std::uint32_t rank_id, bool train_all) {
     if (!a) return;
     Confirmation c;
     c.id = kConfirmAATrain;
-    c.text = strings_.format(game::aa_train_question(a->cost), std::vector<std::string>{std::to_string(a->cost), aa_name(*a)});
+    c.text = strings_.format(game::aa_train_question(a->cost), std::vector<std::string>{std::to_string(a->cost), aa_display_name(*a)});
     c.timeout_ms = game::kPurchaseConfirmMs;
     c.data = rank_id;
     c.data2 = train_all ? 1 : 0;

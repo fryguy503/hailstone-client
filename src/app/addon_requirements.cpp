@@ -154,6 +154,16 @@ void present_addon_requirement(ui::LoginView& view, const std::vector<AddonRequi
     if (!offers.empty()) view.addons.link = offers.front().source;
 }
 
+std::vector<std::string> addon_refusal_log_lines(const std::vector<AddonRequirementProblem>& problems,
+                                                 std::string_view message) {
+    std::vector<std::string> out;
+    for (const auto& p : problems)
+        out.push_back("Add-ons: entry refused by this server's add-on policy: " + p.message);
+    if (out.empty() && !message.empty())
+        out.push_back("Add-ons: entry refused by this server's add-on policy: " + std::string(message));
+    return out;
+}
+
 AddonAdmission::Result AddonAdmission::warn(std::string problem, bool retriable) {
     Result out;
     if (problem != failure_ || (!problem.empty() && retriable != failure_retriable_)) {

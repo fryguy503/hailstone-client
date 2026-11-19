@@ -33,6 +33,7 @@
 #include "core/server_profile.h"
 #include "game/alt_adv.h"
 #include "game/animation_types.h"
+#include "game/appearance.h"
 #include "game/augments.h"
 #include "game/bank.h"
 #include "game/placement.h"
@@ -90,6 +91,7 @@
 #include "net/dz_packets.h"
 #include "net/guild_bank_packets.h"
 #include "net/fellowship_packets.h"
+#include "net/guild_banner_packets.h"
 #include "net/item_packets.h"
 #include "net/evolving_packets.h"
 #include "net/commerce.h"
@@ -105,6 +107,7 @@
 #include "net/tribute_packets.h"
 #include "net/marketplace_packets.h"
 #include "net/session.h"
+#include "net/shroud_packets.h"
 #include "net/social_packets.h"
 #include "net/spell_packets.h"
 #include "net/world_packets.h"
@@ -128,6 +131,15 @@ struct ChannelMessage;
 struct Action;
 struct ChatServerEvent;
 struct DuelRefusal;
+
+struct ShroudBankState {
+    std::uint32_t entity_id = 0;
+    std::uint32_t retention_seconds = 0;
+    std::vector<AltStorageEntry> entries;
+    std::optional<std::uint64_t> pending_key;
+    std::uint64_t revision = 0;
+    bool loaded = false;
+};
 struct InspectAnswer;
 struct ReadBook;
 struct TraderMessage;
@@ -1646,6 +1658,9 @@ public:
     // cycling. Compute the effect rank once for a batch of spawns.
     std::int32_t see_invisible_rank() const;
     bool spawn_invisible(const game::Spawn& spawn, std::int32_t see_invisible_rank) const;
+    // The marks round a spawn's name (SetNameSpriteState's parentheses; Hailstone's brackets with include_undead,
+    // known for another spawn only from its OP_TargetBuffs list while it is the target). Visibility is the caller's.
+    game::NameInvisibility name_invisibility(const game::Spawn& spawn, bool include_undead = false) const;
     // /stopcast: asks the server to interrupt (empty OP_ManaChange).
     void stop_cast();
     // CSpellBookWnd::StartSpellMemorization: memorize the book slot's spell into a gem.
@@ -2071,8 +2086,12 @@ public:
     // Alternate advancement: the ranks the server sent, the owned ranks, points, AA experience and
     // percentage, the reuse timers (game/alt_adv.h).
     const game::AltAdvState& alt_adv() const { return alt_adv_; }
-    // The rank's name and description (dbstr types 1 and 4).
+    // The rank's name and description (dbstr types 1 and 4); empty for a title the dbstr does not have.
     std::string aa_name(const game::AltAbility& a) const;
+    // The name the windows show: aa_name, else (Hailstone's) the ability's spell's name when it has one, else
+    // "Ability <group>", never empty. A live game folder's dbstr_us.txt numbers many AAs differently from a RoF2
+    // server's ranks, and a server's own export can lack some titles.
+    std::string aa_display_name(const game::AltAbility& a) const;
     std::string aa_description(const game::AltAbility& a) const;
     // The AA window's Category column: the category (dbstr type 0x13), else the expansion (0x14); empty for neither.
     std::string aa_category(const game::AltAbility& a) const;
@@ -2324,6 +2343,33 @@ public:
     void shared_task_invite_raid();
     void shared_task_invite_expedition();
 
+    // ---- Spirit Shrouds, Monster Missions and Shroud Bank ----
+    bool shrouded() const { return shroud_mode_ != ShroudMode::Normal; }
+    bool monster_shrouded() const { return shroud_mode_ == ShroudMode::MonsterMission; }
+    const std::optional<ShroudSelection>& shroud_selection() const { return shroud_selection_; }
+    bool shroud_selection_open() const { return shroud_selection_open_; }
+    bool shroud_selection_pending() const { return monster_mission_pending_ != 0 || now_ms() < shroud_transition_until_ms_; }
+    std::uint64_t shroud_selection_revision() const { return shroud_selection_revision_; }
+    const std::optional<ShroudStats>& shroud_stats() const { return shroud_stats_; }
+    const std::vector<ShroudProgress>& shroud_progress() const { return shroud_progress_; }
+    bool shroud_progress_available() const { return shroud_progress_available_; }
+    std::uint32_t shroud_ability_detail() const { return shroud_ability_detail_; }
+    bool request_shroud_stats(std::uint64_t revision, std::uint32_t selection_id);
+    bool select_shroud(std::uint64_t revision, std::uint32_t selection_id);
+    bool cancel_shroud_selection(std::uint64_t revision);
+    bool request_shroud_ability(std::uint64_t revision, std::uint32_t selection_id, std::uint32_t rank_id);
+    bool request_shroud_item(std::uint64_t revision, std::uint32_t selection_id, std::uint32_t item_id);
+    bool shared_task_monster_select_available(std::uint32_t task_id) const;
+    bool shared_task_monster_select(std::uint32_t task_id);
+    std::uint32_t shared_task_member_template(std::string_view member) const;
+    std::string shared_task_member_template_name(std::string_view member) const;
+    const std::optional<ShroudBankState>& shroud_bank() const { return shroud_bank_; }
+    bool can_open_shroud_bank() const;
+    bool open_shroud_bank();
+    bool inspect_shroud_bank(std::uint64_t revision, std::uint64_t key, bool preview);
+    bool withdraw_shroud_bank(std::uint64_t revision, std::uint64_t key);
+    void close_shroud_bank();
+
     // ---- chat, social commands, guilds and raids (game/social.h; net/game_connection_social.cpp)
     void say(const std::string& text);
     // CEverQuest::InterpretCmd @0x51fce0: a typed line. Slash words run the
@@ -2344,6 +2390,20 @@ public:
     bool has_guild_permission(std::int32_t permission) const;
     // Tagged SendGuildRanks rows can arrive before the own GuildID appearance during a membership change.
     std::uint32_t received_guild_permission_context() const;
+    const GuildBannerState& guild_banner() const { return guild_banner_; }
+    std::uint64_t guild_banner_revision() const { return guild_banner_revision_; }
+    void guild_banner_open();
+    void guild_banner_close();
+    void guild_banner_refresh(unsigned filter, bool show_all);
+    // The Guild window's design editor is open (CGuildMgmtWnd +0x364): a mode 2 status reply then asks again.
+    void guild_banner_set_editing(bool editing);
+    bool guild_banner_can_plant(std::uint32_t kit_id, bool active = false) const;
+    bool guild_banner_can_remove() const;
+    bool guild_banner_can_edit() const;
+    void guild_banner_plant(std::uint32_t kit_id, bool active = false);
+    void guild_banner_remove();
+    bool guild_banner_save(const GuildBannerStyle& style);
+    std::int32_t guild_banner_remaining_seconds() const;
     const game::RaidState& raid() const { return raid_; }
     const FellowshipState& fellowship() const { return fellowship_; }
     void fellowship_create();
@@ -2840,6 +2900,22 @@ private:
     void handle_ability(Op op, const AppPacket& p);
     void handle_door(Op op, const AppPacket& p);
     void handle_progress(Op op, const AppPacket& p);
+    void handle_shroud(Op op, const AppPacket& p);
+    void handle_shroud_bank(Op op, const AppPacket& p);
+    void apply_shroud_transition(ShroudTransition transition);
+    void handle_monster_mission(Op op, const AppPacket& p);
+    void set_monster_mission_catalog(MonsterMissionCatalog catalog);
+    void refresh_monster_mission_availability();
+    const MonsterMissionTemplate* monster_mission_template(std::uint32_t id) const;
+    void receive_shroud_stats(std::optional<ShroudStats> stats);
+    void receive_shroud_ability(std::optional<ShroudAbilityReply> ability);
+    void receive_shroud_item(std::optional<ShroudItemReply> item);
+    void reset_shroud_selection();
+    void sync_shroud_mode();
+    void update_shroud_bank();
+    bool shroud_form_offered(std::uint64_t revision, std::uint32_t selection_id, bool require_unlocked) const;
+    bool shroud_npc_in_range(std::uint32_t id) const;
+    bool shroud_bank_has_entry(std::uint64_t revision, std::uint64_t key) const;
     bool handle_rewards(const AppPacket& p);
     bool handle_achievements(const AppPacket& p);
     void reset_achievements();
@@ -2899,6 +2975,11 @@ private:
     void handle_group(Op op, const AppPacket& p);
     bool handle_fellowship(const AppPacket& p);
     void reset_fellowship(bool zoning = false);
+    bool handle_guild_banner(Op op, const AppPacket& p);
+    void reset_guild_banner();
+    bool guild_banner_context() const;
+    bool guild_banner_permitted(std::int32_t permission) const;
+    void guild_banner_request();
     void fellowship_invite_tick();
     bool fellowship_request_allowed(FellowshipAction action, std::uint32_t target) const;
     void send_fellowship_request(FellowshipAction action, std::uint32_t target = 0,
@@ -3512,6 +3593,13 @@ private:
     };
     std::optional<PendingGuildPermissions> pending_guild_permissions_;
     void reset_guild_permissions(std::uint32_t next_guild_id);
+    GuildBannerState guild_banner_;
+    std::uint64_t guild_banner_revision_ = 0;
+    std::int64_t guild_banner_received_ms_ = 0;
+    bool guild_banner_requested_ = false;
+    unsigned guild_banner_filter_ = 0;
+    bool guild_banner_show_all_ = false;
+    bool guild_banner_editing_ = false;
     Tracking tracking_;
     struct TrackingAdmission { std::uint64_t context = 0, lifecycle = 0; };
     std::optional<TrackingAdmission> tracking_request_, tracking_data_;
@@ -3592,6 +3680,27 @@ private:
     // The cursor item into game::put_away_slot's place; false when there is none.
     bool put_away_cursor();
     game::TaskState tasks_;
+    enum class ShroudMode { Normal, Spirit, MonsterMission, Unknown };
+    ShroudMode shroud_mode_ = ShroudMode::Normal;
+    bool typed_shroud_mode_ = false;
+    bool shroud_restoring_ = false;
+    bool shroud_progress_available_ = false;
+    bool shroud_bank_available_ = false;
+    bool shroud_selection_open_ = false;
+    std::optional<ShroudSelection> shroud_selection_;
+    std::optional<MonsterMissionCatalog> monster_mission_catalog_;
+    std::uint32_t monster_mission_pending_ = 0;
+    std::int64_t shroud_transition_until_ms_ = 0;
+    std::uint64_t shroud_selection_revision_ = 0;
+    std::uint32_t shroud_offer_npc_ = 0;
+    std::uint32_t shroud_requested_stats_ = 0;
+    std::uint32_t shroud_requested_ability_ = 0;
+    std::uint32_t shroud_requested_item_ = 0;
+    std::uint32_t shroud_ability_detail_ = 0;
+    std::optional<ShroudStats> shroud_stats_;
+    std::vector<ShroudProgress> shroud_progress_;
+    std::optional<ShroudBankState> shroud_bank_;
+    std::uint32_t shroud_bank_requested_entity_ = 0;
     game::RewardSelection rewards_;
     game::Achievements achievements_;
     std::uint64_t achievement_view_intent_ = 0;

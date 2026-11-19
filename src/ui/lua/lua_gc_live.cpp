@@ -15,4 +15,11 @@ std::size_t gc_live_bytes(lua_State* L) {
     return static_cast<std::size_t>(G(L)->GCestimate);
 }
 
+bool gc_left_generational(lua_State* L) { return G(L)->gckind != KGC_GEN || G(L)->lastatomic != 0; }
+
+void gc_full_generational(lua_State* L) {
+    if (G(L)->gckind == KGC_GEN) lua_gc(L, LUA_GCCOLLECT); // (fullgen: atomic2gen clears lastatomic)
+    else lua_gc(L, LUA_GCGEN, 0, 0);                       // (entergen, from incremental: a full collection)
+}
+
 } // namespace hailstone::ui::lua

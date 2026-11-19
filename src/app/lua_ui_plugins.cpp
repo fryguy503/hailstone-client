@@ -300,11 +300,13 @@ int PluginConsent(lua_State* L) {
     // The question and each file's texts live in a box the state owns across the pushes (plugin/lua_keep.h).
     struct Consent {
         std::optional<plugin::ConsentPrompt> q;
+        plugin::ConsentWording words;
         std::string hex, file;
     };
     Consent& c = plugin::lua_keep<Consent>(L);
     plugin::cxx_guard(L, [&] {
         c.q = h.plugin_consent && !plugin_code() && h.trusted_ui ? h.plugin_consent() : std::nullopt;
+        if (c.q) c.words = plugin::consent_wording(*c.q, c.q->server);
     });
     const auto& q = c.q;
     if (!q) {
@@ -312,12 +314,17 @@ int PluginConsent(lua_State* L) {
         return 1;
     }
     if (ui::lua::pack_code(L)) ui::lua::guard_drawing_window(); // the window asking shows it: guarded (lua_host.h)
-    lua_createtable(L, 0, 4);
+    lua_createtable(L, 0, 7);
     lua_pushstring(L, q->server.c_str());
     lua_setfield(L, -2, "server");
     lua_pushinteger(L, static_cast<lua_Integer>(q->serial));
     lua_setfield(L, -2, "serial");
-    lua_pushlstring(L, plugin::kConsentWarning.data(), plugin::kConsentWarning.size());
+    // Worded for what is asked about: the server's plugins, or the player's own add-ons it requires.
+    lua_pushlstring(L, c.words.title.data(), c.words.title.size());
+    lua_setfield(L, -2, "title");
+    lua_pushlstring(L, c.words.intro.data(), c.words.intro.size());
+    lua_setfield(L, -2, "intro");
+    lua_pushlstring(L, c.words.warning.data(), c.words.warning.size());
     lua_setfield(L, -2, "warning");
     lua_createtable(L, static_cast<int>(q->files.size()), 0);
     lua_Integer i = 0;
@@ -327,7 +334,7 @@ int PluginConsent(lua_State* L) {
             const auto u8 = f.file.filename().u8string();
             c.file.assign(reinterpret_cast<const char*>(u8.data()), u8.size());
         });
-        lua_createtable(L, 0, 5);
+        lua_createtable(L, 0, 6);
         lua_pushstring(L, f.name.c_str());
         lua_setfield(L, -2, "name");
         lua_pushlstring(L, c.file.data(), c.file.size());
@@ -338,6 +345,8 @@ int PluginConsent(lua_State* L) {
         lua_setfield(L, -2, "sha256");
         lua_pushlstring(L, c.hex.data(), std::min<std::size_t>(c.hex.size(), 16));
         lua_setfield(L, -2, "short");
+        lua_pushboolean(L, f.required_addon ? 1 : 0);
+        lua_setfield(L, -2, "required");
         lua_rawseti(L, -2, ++i);
     }
     lua_setfield(L, -2, "plugins");

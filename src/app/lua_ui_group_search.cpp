@@ -11,6 +11,7 @@
 
 #include "app/lua_ui_windows.h"
 #include "game/chat_text.h"
+#include "game/eq_names.h"
 #include "game/group_search.h"
 #include "game/zone_names.h"
 #include "net/game_connection.h"
@@ -24,8 +25,10 @@ std::string fmt(const net::GameConnection& c, std::uint32_t id, std::vector<std:
 }
 
 // CEverQuest::GetClassThreeLetterCode @0x5153c0: "WAR" .. "BER" (eqstr 3065.., the shadow knight and ranger swapped),
-// "UNKNOWN CLASS" (2456) for any other id.
+// "UNKNOWN CLASS" (2456) for any other id; the server's short name for a class it renamed (game/eq_names.h).
 std::string class_code(const net::GameConnection& c, std::int32_t id) {
+    if (id >= 1 && id <= 16)
+        if (auto own = game::class_name_override(static_cast<std::uint32_t>(id), true)) return *own;
     static constexpr std::uint32_t kCodes[16] = {3065, 3066, 3067, 3069, 3068, 3070, 3071, 3072,
                                                  3073, 3074, 3075, 3076, 3077, 3078, 3079, 5810};
     return fmt(c, id >= 1 && id <= 16 ? kCodes[id - 1] : 2456);

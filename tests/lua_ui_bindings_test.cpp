@@ -107,10 +107,11 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     auto offered = [&](int c) { return app::menu_command_offered(c, replaces); };
     app::CascadeMenu menu;
     menu.load_text(text, 0xffffffffu, 0, offered);
-    CHECK(menu.row_texts(0) == std::vector<std::string>{"Actions >", "Character >", "Quests >", "-", "Mail",
+    CHECK(menu.row_texts(0) == std::vector<std::string>{"Actions >", "Alerts >", "Character >", "Quests >", "-", "Mail",
                                                         "Mercenaries", "-", "Options", "Lua Scripts", "Web Browser",
                                                         "Report a Bug", "Camp & Quit"});
     CHECK(menu.row_texts(1) == std::vector<std::string>{"Actions", "Alarm"});
+    CHECK(menu.row_texts(2) == std::vector<std::string>{"Alert History"}); // the event calendar is a later client's
     CHECK(menu.row_texts(3) == std::vector<std::string>{"Auras"});
     CHECK(menu.row_texts(4) == std::vector<std::string>{"Quest Journal"});
 
@@ -118,7 +119,7 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     drawn.erase("AuraWindow");
     app::CascadeMenu pad;
     pad.load_text(text, 0xffffffffu, 0, offered);
-    CHECK(pad.row_texts(0) == std::vector<std::string>{"Actions >", "Quests >", "-", "Mail", "Mercenaries", "-",
+    CHECK(pad.row_texts(0) == std::vector<std::string>{"Actions >", "Alerts >", "Quests >", "-", "Mail", "Mercenaries", "-",
                                                        "Options", "Lua Scripts", "Web Browser", "Report a Bug",
                                                        "Camp & Quit"});
     // Hailstone's Lua Scripts row returns its own number (the Scripts window).
@@ -134,7 +135,7 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     const int menus = pad.menu_count();
     pad.set_plugin_entries({"Ext Window", "Ext Two"});
     auto top = pad.row_texts(0);
-    CHECK(top == std::vector<std::string>{"Actions >", "Quests >", "-", "Mail", "Mercenaries", "-", "Options",
+    CHECK(top == std::vector<std::string>{"Actions >", "Alerts >", "Quests >", "-", "Mail", "Mercenaries", "-", "Options",
                                           "Plugins >", "Lua Scripts", "Web Browser", "Report a Bug", "Camp & Quit"});
     REQUIRE(pad.menu_count() == menus + 1);
     CHECK(pad.row_texts(menus) == std::vector<std::string>{"Ext Window", "Ext Two"});
@@ -146,18 +147,21 @@ TEST_CASE("EQ menu: only the rows this client runs") {
     CHECK(pad.row_texts(pad.menu_count() - 1) == std::vector<std::string>{"Other"});
     pad.set_plugin_entries({});
     CHECK(pad.menu_count() == menus);
-    CHECK(pad.row_texts(0) == std::vector<std::string>{"Actions >", "Quests >", "-", "Mail", "Mercenaries", "-",
+    CHECK(pad.row_texts(0) == std::vector<std::string>{"Actions >", "Alerts >", "Quests >", "-", "Mail", "Mercenaries", "-",
                                                        "Options", "Lua Scripts", "Web Browser", "Report a Bug",
                                                        "Camp & Quit"});
 
     using C = game::KeyCommand;
     for (C c : {C::CMD_MARKETPLACE_SILVER, C::CMD_MARKETPLACE_GOLD, C::CMD_TOGGLE_CLAIM_WIN,
-                C::CMD_VOTE_RESULTS, C::CMD_HISTORIC_ALERTS,
+                C::CMD_VOTE_RESULTS,
                 C::CMD_REAL_ESTATE_TROPHIES_WINDOW, C::CMD_REAL_ESTATE_LEAVE, C::OPEN_ETN_HELP,
                 C::CMD_TOGGLE_TCG, C::CMD_SOCIAL_SHARE})
         CHECK_FALSE(app::menu_command_offered(static_cast<int>(c), [](std::string_view) { return true; }));
     CHECK(std::string(app::toggle_command_window(static_cast<int>(C::CMD_TOGGLE_AURAWND))) == "AuraWindow");
-    CHECK(app::toggle_command_window(static_cast<int>(C::CMD_HISTORIC_ALERTS)) == nullptr);
+    // The alerts key shows and hides the alert history window (__ExecuteCmd case 168), offered where the pack draws it.
+    CHECK(std::string(app::toggle_command_window(static_cast<int>(C::CMD_HISTORIC_ALERTS))) == "AlertHistoryWnd");
+    CHECK(app::menu_command_offered(static_cast<int>(C::CMD_HISTORIC_ALERTS), [](std::string_view s) { return s == "AlertHistoryWnd"; }));
+    CHECK_FALSE(app::menu_command_offered(static_cast<int>(C::CMD_HISTORIC_ALERTS), [](std::string_view) { return false; }));
     const int reward = static_cast<int>(C::CMD_TOGGLE_REWARD_SELECTION_WIN);
     CHECK(std::string(app::toggle_command_window(static_cast<int>(C::CMD_ACHIEVEMENT_WINDOW))) == "AchievementsWnd");
     CHECK(app::menu_command_offered(static_cast<int>(C::CMD_ACHIEVEMENT_WINDOW), [](std::string_view screen) { return screen == "AchievementsWnd"; }));

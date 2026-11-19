@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
 #include "net/packet_io.h"
@@ -178,4 +179,35 @@ TEST_CASE("player trade distance: separation cancels once and items and coin ret
     REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::ChannelMessage) >= 1; }));
     CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::CancelTrade) == 1);
     CHECK_FALSE(c.trade());
+}
+
+TEST_CASE("trade windows: hiding the window not showing the trade leaves it open") {
+    // CTradeWnd::AboutToHide / the Give window's hiding cancel the trade they show; a window that is not shown has
+    // nothing to hide. Hiding the player trade window (a layout, a script's hs.ShowWindow) while giving to an NPC
+    // used to cancel the hand-in all the same.
+    mq_test::World world("trade_window_hide");
+    auto& c = *world.conn;
+    game::Spawn npc;
+    npc.id = kPartner;
+    npc.name = "Guard_Hanlon000";
+    npc.is_npc = true;
+    npc.position = c.world().player()->position + glm::vec3{3, 0, 0};
+    npc.heights.avatar_height = 6;
+    c.world_for_test().spawns[kPartner] = npc;
+    c.give_to(kPartner);
+    c.receive_zone_packet_for_test(net::encode_trade_request_ack({c.world().player_id, kPartner}));
+    REQUIRE(c.trade());
+    REQUIRE(c.trade()->open);
+    REQUIRE(c.trade()->with_npc);
+
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &c;
+    app::UiApi api(host);
+    CHECK(api.shown("GiveWnd"));
+    CHECK_FALSE(api.shown("TradeWnd"));
+    api.show("TradeWnd", false);
+    CHECK(c.trade()); // the hand-in stays
+    api.show("GiveWnd", false);
+    CHECK_FALSE(c.trade()); // its own window hidden: cancelled (OP_CancelTrade, the server returns the items)
 }

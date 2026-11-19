@@ -28,6 +28,16 @@ std::optional<float> nameplate_scene_depth(const game::PickSegment& ray, const g
                                           const glm::vec3& forward);
 bool nameplate_depth_visible(float plate_depth, const std::optional<float>& scene_depth);
 
+// A nameplate sits this far above the head (or the eye, for a spawn without a body top).
+inline constexpr float kNameplateHeadOffset = 1.5f;
+// Where a spawn's nameplate is anchored: kNameplateHeadOffset above its head. `body_top`: the drawn model's rest-pose
+// top above `base` (the model origin), nullopt for a spawn without one (no model, or a meshless skeleton such as a
+// bare IVM, whose bounds are empty): its eye, `eye` above `base`, stands in. `seat`: a rider's top on its mount
+// (ActorRenderer::drawn_rider_top: the seat bone raised by the body's top, the seat itself without a body), where the
+// head is measured from instead of `base`; a rider without a body top takes its eye height above the seat.
+glm::vec3 nameplate_head(const glm::vec3& base, std::optional<float> body_top, float eye,
+                         const std::optional<glm::vec3>& seat);
+
 struct NameplateGesture {
     std::optional<std::uint32_t> id;
     glm::vec2 pressed{0.0f};

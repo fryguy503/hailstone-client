@@ -21,14 +21,17 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <glm/glm.hpp>
 
 #include "assets/flora.h"
+#include "render/flora_growth.h"
 #include "render/gpu.h"
 #include "render/scene_lighting.h"
 #include "render/vk_context.h"
@@ -61,9 +64,9 @@ inline constexpr float kLawnFull = 40.0f, kLawnNear = 90.0f, kLawnMid = 250.0f;
 inline constexpr float kLawnBladeWidth = 0.24f;
 // Hailstone's Grass Density (display.grass_density, a share): how many of kLawnLods' blades each draw has, the
 // blades keeping their width, so less is sparser (and cheaper) and more is thicker.
-inline constexpr float kMinGrassDensity = 0.25f, kMaxGrassDensity = 2.0f;
-// The option in percent (the Options window's slider), clamped to 25 .. 200.
-inline int grass_density_percent(int percent) { return percent < 25 ? 25 : percent > 200 ? 200 : percent; }
+inline constexpr float kMinGrassDensity = 0.25f, kMaxGrassDensity = 3.0f;
+// The option in percent (the Options window's slider), clamped to 25 .. 300.
+inline int grass_density_percent(int percent) { return percent < 25 ? 25 : percent > 300 ? 300 : percent; }
 // kLawnLods[k]'s blades at `density` (clamped to the bounds above): at least one.
 std::uint32_t lawn_lod_blades(std::size_t k, float density = 1.0f);
 // How many of a patch's blades stand at distance `d`, smoothly fewer: kLawnLods[0]'s count to kLawnFull, [1]'s at
@@ -108,12 +111,23 @@ public:
     // Lets go of every grown tile, so they grow again from the zone's flora as it is now (it was set up again:
     // assets::add_zone_flora_ground). On the frame's thread, before the frame's draws are recorded.
     void restart() {
-        grown_.clear();
+        growth_.restart(); // the tiles growing were grown from the flora as it was
         near_tiles_.clear();
     }
     // How thick the lawn is: kMinGrassDensity .. kMaxGrassDensity (display.grass_density).
     void set_density(float density);
     float density() const { return density_; }
+
+    // Cover the zone's files do not hold (the server's doors and objects, a campfire; assets::FloraCover), asked
+    // for each tile as it grows with the tile's square and assets::kFloraCoverMargin round it: a test the tile's
+    // plants are grown with, or an empty one when nothing there covers. Kept until changed; the tiles already grown
+    // keep their plants until regrow.
+    using CoverTest = std::function<bool(const glm::vec3& at)>;
+    using CoverSource = std::function<CoverTest(glm::vec2 lo, glm::vec2 hi)>;
+    void set_cover(CoverSource source) { cover_ = std::move(source); }
+    // Grows again the grown tiles whose square, with assets::kFloraCoverMargin round it, touches [lo, hi] (cover
+    // there came or went). Each keeps its plants until its new ones have grown, nearest first.
+    void regrow(glm::vec2 lo, glm::vec2 hi);
 
     // Who the plants bend away from (Hailstone's own): xyz a foot, w how far round it (the player, the spawns walking
     // through the grass); at most kMaxPushers, nearest first. Kept until changed.
@@ -129,9 +143,11 @@ private:
     void create_pipelines(const std::filesystem::path& shader_dir);
     VkPipeline create_pipeline(const std::filesystem::path& vert, const std::filesystem::path& frag);
 
-    // Hailstone's zone flora (assets::ZoneFloraGrower): drops the tiles out of reach, grows the missing ones within it.
+    // Hailstone's zone flora (assets::ZoneFloraGrower): drops the tiles out of reach, takes the tiles grown since the
+    // last frame and queues the missing and stale ones within reach on growth_, nearest first.
     void grow_tiles(const glm::vec3& camera);
-    static constexpr std::chrono::microseconds kGrowBudget{3000};
+    // How many tiles are queued or growing at once: few, so the next ones queued are the nearest as the camera moves.
+    static constexpr std::size_t kGrowInFlight = 3;
 
     VkContext& vk_;
     // The clock a frame ago (the plants' motion under the temporal upscaler): `seconds_` is this frame's, for the
@@ -145,8 +161,10 @@ private:
     struct Grown {
         std::vector<assets::FloraInstance> plants;
         std::array<std::uint32_t, 3> lawn_end{};
+        bool stale = false; // drawn until grown again (regrow)
     };
-    std::unordered_map<std::uint32_t, Grown> grown_; // by index into ZoneFlora::tiles
+    // A tile's plants, on growth_'s thread: touches only the grower (read-only, shared) and the cover test (its own).
+    static Grown grow_tile(const assets::ZoneFloraGrower& grower, std::uint32_t t, const CoverTest& extra);
     std::vector<std::pair<float, std::uint32_t>> near_tiles_; // per draw: tiles in reach by distance
     std::uint32_t max_textures_ = 0; // kMaxTextures, within DeviceCaps::max_sampled_images
     const assets::Zone& zone_;
@@ -159,6 +177,7 @@ private:
     std::unique_ptr<FrameBuffers> lighting_buffers_; // SceneLighting, per frame in flight
     std::unique_ptr<FrameBuffers> frame_buffers_;    // FloraFrame
     std::vector<glm::vec4> pushers_;
+    CoverSource cover_;
     std::array<Buffer, VkContext::kFramesInFlight> instances_{};
     std::array<void*, VkContext::kFramesInFlight> mapped_{};
     struct GpuPlant; // flora_renderer.cpp
@@ -166,6 +185,9 @@ private:
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkPipeline lawn_pipeline_ = VK_NULL_HANDLE;
+    // The grown tiles (by index into ZoneFlora::tiles) and those growing off the frame (grow_tile), one thread.
+    // Last: stopped and joined first as this goes.
+    FloraGrowth<Grown> growth_{kGrowInFlight};
 };
 
 } // namespace hailstone::render

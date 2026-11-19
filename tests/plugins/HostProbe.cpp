@@ -46,6 +46,7 @@ static_assert(offsetof(PluginHostApi, get_buff_name_data_bulk) == offsetof(Plugi
 static_assert(offsetof(PluginHostApi, get_raid_data_bulk) == offsetof(PluginHostApi, caps) + 85 * sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, get_ability_data_bulk) == offsetof(PluginHostApi, caps) + 88 * sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, select_raid_member) == offsetof(PluginHostApi, caps) + 89 * sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, set_class_name) == offsetof(PluginHostApi, get_map_policy) + sizeof(PluginHostApi::caps));
 
 namespace {
 

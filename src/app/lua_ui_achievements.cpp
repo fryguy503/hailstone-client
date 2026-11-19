@@ -6,6 +6,7 @@
 
 #include <lua.hpp>
 
+#include "app/lua_ui_record.h"
 #include "net/game_connection.h"
 
 namespace hailstone::app {
@@ -116,31 +117,41 @@ void push_catalog(lua_State* L, const net::AchievementCatalog& catalog) {
     }
     lua_setfield(L, -2, "definitions");
 }
+// state = hs.Achievements([catalogToken, stateRevision [, into]])   -- the achievements: shown, detail_shown, ready,
+// progress_ready, refresh_pending, message, catalog_token and state_revision (opaque), catalog_unchanged and
+// states_unchanged (the tokens given are current), selected_index (with a selection), detail_source, comparison
+// { pending, ready, name, message }, catalog (only when the token given is not current) and states (only when the
+// revision given is not current), points, total_points, completed, total. `into`, a table the caller keeps from frame
+// to frame, is filled in place instead of a new table (app/lua_ui_record.h: every field written, catalog and states
+// nil while unchanged; comparison refilled in place).
 int Achievements(lua_State* L) {
     auto* c = connection(L);
     if (!c) { lua_pushnil(L); return 1; }
     const auto& model = c->achievements();
-    lua_settop(L, 2);
+    lua_settop(L, 3);
     std::uint64_t cached_catalog = 0, cached_state = 0;
     const bool catalog_unchanged = token(L, 1, cached_catalog) && cached_catalog == model.catalog_token();
     const bool states_unchanged = token(L, 2, cached_state) && cached_state == model.revision();
-    lua_createtable(L, 0, 20);
+    record::push(L, 3, 20);
     boolean(L, "shown", model.shown()); boolean(L, "detail_shown", model.detail_shown());
     boolean(L, "ready", model.primary_ready()); boolean(L, "progress_ready", model.progress_ready());
     boolean(L, "refresh_pending", c->achievement_refresh_pending());
-    text(L, "message", c->achievement_message());
-    text(L, "catalog_token", std::to_string(model.catalog_token())); text(L, "state_revision", std::to_string(model.revision()));
+    record::text(L, "message", c->achievement_message());
+    record::text(L, "catalog_token", std::to_string(model.catalog_token()));
+    record::text(L, "state_revision", std::to_string(model.revision()));
     boolean(L, "catalog_unchanged", catalog_unchanged); boolean(L, "states_unchanged", states_unchanged);
     const auto& selection = model.selection();
     if (selection) integer(L, "selected_index", selection->definition_index);
+    else record::clear(L, "selected_index");
     text(L, "detail_source", selection && selection->source == game::AchievementDetailSource::Link ? "link" : "own");
-    lua_createtable(L, 0, 4);
+    record::subrecord(L, "comparison", 4);
     boolean(L, "pending", model.compare_pending()); boolean(L, "ready", !model.comparison_name().empty());
-    text(L, "name", model.comparison_name()); text(L, "message", c->achievement_message());
-    lua_setfield(L, -2, "comparison");
+    record::text(L, "name", model.comparison_name()); record::text(L, "message", c->achievement_message());
+    lua_pop(L, 1); // (the comparison, in its field)
     if (!catalog_unchanged && model.catalog()) { push_catalog(L, *model.catalog()); lua_setfield(L, -2, "catalog"); }
+    else record::clear(L, "catalog");
     std::uint64_t points = 0, total_points = 0, completed = 0, total = 0;
-    if (!states_unchanged) lua_createtable(L, static_cast<int>(model.states().size()), 0);
+    if (!states_unchanged) record::list(L, "states", model.states().size());
     for (std::size_t i = 0; i < model.states().size(); ++i) {
         const auto& state = model.states()[i];
         if (!states_unchanged) {
@@ -152,6 +163,7 @@ int Achievements(lua_State* L) {
         if (state->status == net::AchievementStatus::Completed) { ++completed; points += model.catalog()->definitions[i].points; }
     }
     if (!states_unchanged) lua_setfield(L, -2, "states");
+    else record::clear(L, "states");
     integer(L, "points", points); integer(L, "total_points", total_points);
     integer(L, "completed", completed); integer(L, "total", total);
     return 1;

@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -101,6 +102,15 @@ public:
     std::uint32_t visual_generation() const { return visual_generation_; }
     bool visual_surfaces(const glm::vec2& low,const glm::vec2& high,
                          const std::function<bool(const game::CollisionTriangle&)>& visit,std::uint32_t& work) const;
+    // Hailstone's grass (render::FloraRenderer::set_cover): the drawn doors, ground objects and placed items whose
+    // bounds touch [lo, hi], their opaque triangles copied into the world (a fire's footprint; as the zone's own
+    // objects, assets::append_object_cover); the test is true where one lies over a spot
+    // as assets::covers_from_above takes a placed object's (kObjectCoverClearance, kObjectCoverReach). Empty when none
+    // touches. The test holds no reference to this.
+    std::function<bool(const glm::vec3&)> flora_cover(glm::vec2 lo, glm::vec2 hi) const;
+    // Where such cover came, went or moved since the last call (each an object's bounds, lo and hi), emptied by it.
+    // A door swinging is not counted: the grass keeps the place it was grown by.
+    std::vector<std::pair<glm::vec2, glm::vec2>> take_flora_changes() { return std::exchange(flora_changes_, {}); }
     // Counts the updates that changed what floor_below finds: a solid door or placed object came, went, got its model
     // or moved. Spawns measured against the floor (game::WorldState::reground) are measured again when it changes.
     std::uint32_t floor_generation() const { return floor_generation_; }
@@ -168,6 +178,11 @@ private:
     struct Model {
         int gpu = -1;              // ObjectRenderer handle
         game::ObjectShape shape;   // solid triangles in model space
+        bool plant = false;        // assets::is_plant: the grass grows under it (flora_cover)
+        bool fire = false;         // assets::is_fire_object: a campfire covers its footprint (flora_cover)
+        // Its grass cover in model space (assets::cover_triangles, 3 a triangle): the opaque surfaces, and for a fire
+        // all it draws; empty for a plant.
+        std::vector<glm::vec3> cover_surfaces, cover_drawn;
         // Model emitters (EQG point records or WLD node clouds), bone 0 = the model's own space; null without.
         std::unique_ptr<assets::CharacterMesh> emitters;
     };
@@ -186,6 +201,12 @@ private:
         std::uint32_t seen = 0;       // the update that last found it in the connection's lists
         bool inverted = false;        // `inverse` is transform's (computed again only when the transform changes)
         std::uint32_t emitter_actor = 0; // allocated once for this placement; independent of server object IDs
+        // Its grass cover (assets::append_object_cover, in the world), made by flora_cover when first asked for and
+        // again when the transform it was made at changes: each tile that grows near it would otherwise transform
+        // the whole mesh again. Written only by flora_cover, which the grass's recording job alone calls.
+        mutable std::vector<glm::vec3> flora_tris;
+        mutable glm::mat4 flora_at{0.0f};
+        mutable const Model* flora_model = nullptr; // the model flora_tris was made from; null before any
     };
 
     const Model* model_for(const std::string& name);
@@ -197,6 +218,8 @@ private:
     void load_zone_assets();
     std::shared_ptr<const assets::PfsArchive> archive(const std::string& file);
     void place(Placed& p, const glm::mat4& transform, float scale);
+    // Records `p`'s bounds in flora_changes_ when it is drawn with a model.
+    void note_flora(const Placed& p);
 
     render::VkContext& vk_;
     const GameDir& game_;
@@ -220,6 +243,7 @@ private:
     std::uint32_t update_serial_ = 0; // update()'s count, for Placed::seen
     std::uint32_t floor_generation_ = 0;
     std::uint32_t visual_generation_ = 0;
+    std::vector<std::pair<glm::vec2, glm::vec2>> flora_changes_;
     bool floor_changed_ = false; // within update(): floor_generation_ moves at its end
     const Model* placed_model(const std::string& tag);
     std::vector<render::ObjectRenderer::Instance> instances_;

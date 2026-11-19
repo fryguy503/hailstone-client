@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/banner_appearance.h"
 #include "net/packet.h"
 
 namespace hailstone::net {
@@ -110,6 +111,7 @@ struct InteractiveObject {
     std::array<std::uint32_t, 10> sound_ids{};
     std::uint8_t collidable = 0;
     std::uint32_t object_type = 0;
+    std::optional<core::BannerAppearance> banner;
 };
 struct Spawn {
     std::string name;
@@ -173,6 +175,14 @@ bool is_pc_model_race(std::uint32_t race);
 AppPacket encode(const Spawn& v); // server direction (OP_ZoneEntry), for tests
 std::optional<Spawn> decode_spawn(const AppPacket& p);
 
+// OP_GuildBannerAppearance: replaces a planted banner's cloth layers and name.
+struct GuildBannerAppearance {
+    std::uint32_t spawn_id = 0;
+    core::BannerAppearance appearance;
+    std::string name;
+};
+std::optional<GuildBannerAppearance> decode_guild_banner_appearance(const AppPacket& p);
+
 // OP_ClientUpdate, zone → client (24 bytes, PlayerPositionUpdateServer_Struct,
 // passed through untranslated).
 struct SpawnPositionUpdate {
@@ -216,6 +226,7 @@ struct ProfileBandolier {
 struct PlayerProfile {
     std::uint32_t checksum = 0;      // eq_crc32 of bytes [8, size - 1)
     std::uint32_t checksum_size = 0; // size - 9
+    std::uint32_t shroud_type = 0;   // PlayerProfileData +0, copied to PcBase +0x340c.
     std::uint8_t gender = 0;
     std::uint32_t race = 0;
     std::uint8_t class_ = 0; // NMS multiclass characters are created as Bard (16)
@@ -302,6 +313,12 @@ struct PlayerProfile {
 };
 std::optional<PlayerProfile> decode_player_profile(const AppPacket& p);
 
+enum class BannerPlacement : std::uint32_t {
+    CannotPlace = 0,
+    CanOnlyPlace = 1,
+    CanPlaceAndGoto = 2,
+};
+
 // OP_NewZone (948 bytes, NewZone_Struct).
 struct NewZone {
     std::string char_name;
@@ -327,6 +344,7 @@ struct NewZone {
     std::uint32_t underworld_teleport_index = 0;
     std::uint32_t lava_damage = 0, min_lava_damage = 0;
     std::uint8_t no_bind = 0, no_attack = 0, fall_damage_off = 0;
+    BannerPlacement banner_placement = BannerPlacement::CanPlaceAndGoto; // +912, EQEmu's default
     float fog_density = 0;
     std::uint32_t no_levitate = 0;
 };

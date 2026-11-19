@@ -28,30 +28,39 @@ T.NO_OPTS = NO_OPTS
 -- every frame, and each read is a call into the host and a lookup there). ui.SetSetting is wrapped, once, so that a
 -- write drops the key it writes: a value set mid-frame is read back at once, as it was without the cache. (A script
 -- that kept its own reference to ui.SetSetting from before the wrap is seen from the next frame.)
-modern_settings = modern_settings or { frame = -1, values = {} }
+-- The tables are kept from frame to frame, each key stamped with the frame it was read in: a table made anew each
+-- frame grew again as the windows asked for their keys, about 6 KB of garbage a frame. Past MAX_SETTING_KEYS keys
+-- (a script asking for ever new ones) they start afresh.
+local MAX_SETTING_KEYS = 1024
+modern_settings = modern_settings or { values = {} }
 local settings = modern_settings
+settings.seen = settings.seen or {} -- key -> the frame its value was read in
+settings.count = settings.count or 0
 if ui.SetSetting ~= settings.set then
   local SetSetting = ui.SetSetting
   settings.set = function(key, value)
     SetSetting(key, value)
-    settings.values[key] = nil
+    if settings.seen[key] then settings.seen[key] = false end -- (read again; still counted)
   end
   ui.SetSetting = settings.set
 end
 
 function T.Setting(key)
   local frame = ui.GetFrameCount()
-  local values = settings.values
-  if settings.frame ~= frame then
-    values = {}
-    settings.values, settings.frame = values, frame
+  local seen = settings.seen
+  local at = seen[key]
+  if at ~= frame then
+    if at == nil then
+      if settings.count >= MAX_SETTING_KEYS then
+        seen = {}
+        settings.seen, settings.values, settings.count = seen, {}, 0
+      end
+      settings.count = settings.count + 1
+    end
+    settings.values[key] = ui.GetSetting(key) or false -- (false: no value; nil is not kept in a table)
+    seen[key] = frame
   end
-  local v = values[key]
-  if v == nil then
-    v = ui.GetSetting(key) or false -- (false: no value; nil is not kept in a table)
-    values[key] = v
-  end
-  return v or nil
+  return settings.values[key] or nil
 end
 
 -- The colours of palette `id` (its base's, then its own).

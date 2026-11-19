@@ -374,3 +374,29 @@ TEST_CASE("hs reward bridge: plugin UI without actions cannot inspect claim or r
     caps |= plugin::kCapActions;
     in_plugin("local ok,why=hs.RewardSelectionClaim(" + args + ");return ok==false and why~=nil");
 }
+
+TEST_CASE("hs reward bridge: a kept record is refilled in place, with no garbage while nothing changes") {
+    RewardGui gui;
+    mq_test::World world("lua_ui_reward_into");
+    deliver(*world.conn, fixture::collection());
+    RewardLua lua(*world.conn);
+    lua.check(R"lua(
+      into={}
+      local s=hs.RewardSelection(nil, nil, into)
+      lanes={s.pending, s.preview}
+      return rawequal(s, into) and s.shown and #s.pending.tabs>=1 and s.preview.tabs~=nil
+    )lua");
+    lua.check(R"lua(
+      local pr, vr=into.pending.revision, into.preview.revision
+      collectgarbage('stop') local b=collectgarbage('count')
+      local s=hs.RewardSelection(pr, vr, into)
+      local a=collectgarbage('count') collectgarbage('restart')
+      return rawequal(s, into) and rawequal(s.pending, lanes[1]) and rawequal(s.preview, lanes[2])
+        and s.pending.unchanged and s.pending.tabs==nil and s.preview.unchanged and s.preview.tabs==nil and a==b
+    )lua");
+    // Changed again: the tabs come back in a new list.
+    lua.check(R"lua(
+      local s=hs.RewardSelection(nil, nil, into)
+      return not s.pending.unchanged and #s.pending.tabs>=1
+    )lua");
+}

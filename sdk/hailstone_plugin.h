@@ -980,6 +980,16 @@ typedef struct PluginHostApi {
     int (*measure_binary)(void* host, uint32_t kind, HailstoneBinaryMeasurement* out);
     /* READ. Current aggregate map policy. Initialize out->size; zero flags is stock. */
     int (*get_map_policy)(void* host, HailstoneMapPolicy* out);
+    /* EXTEND: the server's name for a player class (1-16), shown wherever the client names the class (the
+     * inventory, group and raid windows, /who, character select, ${Me.Class}, ...), and its short name ("VAN",
+     * shown where the client abbreviates); a guildmaster of the class (20-35) reads "<name> Guildmaster". NULL or ""
+     * shows the stock name. Display only: class ids, class checks and packets stay the stock ones. At most 32 bytes
+     * for the name and 4 for the short name, no control characters: a longer name or another class id is refused
+     * (nothing changes; the first refusal writes a line in the log). The names are the plugin's: they go when it
+     * unloads, when the server's rules take `extend` away, and when the session leaves the server. When two plugins
+     * or scripts name one class the latest call wins; a call with both empty takes this plugin's back. Added later
+     * in ABI 3: test HAILSTONE_HOST_HAS(host, set_class_name) first. */
+    void (*set_class_name)(void* host, uint32_t class_id, const char* name, const char* short_name);
 } PluginHostApi;
 /* What use_ability and ability_state take: the kinds of ability the Ability Book lists. The values are stable. */
 enum HS_AbilityKinds {

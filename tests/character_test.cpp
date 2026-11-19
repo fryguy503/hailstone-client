@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -30,6 +31,38 @@
 
 using namespace hailstone;
 using namespace hailstone::assets;
+
+TEST_CASE("RoF2 guild banner uses its cloth layers, second UVs and independent tints") {
+    const auto game_dir = test::game_dir();
+    if (!game_dir) return;
+    auto library = CharacterLibrary::load(*game_dir, "");
+    const auto model = library.model("G00");
+    REQUIRE(model);
+    const game::Appearance plain;
+    const auto base = library.dress(*model, plain);
+    REQUIRE(base);
+    game::Appearance banner = plain;
+    banner.banner = core::BannerAppearance{{2, 5}, {0xff123456u, 0xff000000u}};
+    const auto dressed = library.dress(*model, banner);
+    REQUIRE(dressed);
+    REQUIRE(dressed->materials.size() == 2);
+    CHECK(dressed->materials[0].frames == std::vector<std::string>{"C_GDB_FLAG1_S02_M00_C.DDS"});
+    CHECK(dressed->materials[0].tint_layer == "C_GDB_FLAG2_S05_M00_C.DDS");
+    CHECK(dressed->materials[0].banner_base_tint == 0xff123456u);
+    CHECK(dressed->tints[0] == 0xff010101u);
+    CHECK(dressed->materials[1].frames == base->materials[1].frames);
+    CHECK(dressed->materials[1].banner_base_tint == 0);
+    CHECK(base->materials[0].banner_base_tint == 0);
+    CHECK(std::any_of(dressed->vertices.begin(), dressed->vertices.end(), [](const SkinnedVertex& v) {
+        return v.uv != v.uv2;
+    }));
+    banner.banner->pattern[1] = 6;
+    const auto changed = library.dress(*model, banner);
+    REQUIRE(changed);
+    CHECK(changed != dressed);
+    CHECK(changed->materials[0].tint_layer == "C_GDB_FLAG2_S06_M00_C.DDS");
+    CHECK(dressed->materials[0].tint_layer == "C_GDB_FLAG2_S05_M00_C.DDS");
+}
 
 TEST_CASE("WLD blood attachment uses the authored DAG name, independently of its track") {
     using namespace test::wld_fixtures;
@@ -213,6 +246,32 @@ TEST_CASE("race model table") {
     CHECK(game::animation_source("DAM", true) == "ELM");
 }
 
+TEST_CASE("the wood-elf prefix group borrows the wood elf's clips; codes the table names keep their donor") {
+    // GetAlternateAnimTag @0x406a60: a code under one of its wood-elf prefixes takes the wood elf's two letters and
+    // keeps its last one, the tunic flag aside, for the codes the table does not name: race 127's IVM among them.
+    CHECK(game::animation_source("IVM") == "ELM");
+    CHECK(game::animation_source("IVM", true) == "ELM");
+    CHECK(game::animation_source("IVF") == "ELF");
+    CHECK(game::animation_source("GEM") == "ELM");
+    // Every table donor of a code under those prefixes, and of the codes the original names before them (ERO, BRI
+    // and the like), is unchanged: the table is asked first. Apart from those early codes (BRI and HAG take other donors than the
+    // rule would give), it agrees with the rule wherever both apply.
+    const std::pair<std::string_view, std::string_view> kTableDonors[] = {
+        {"BRF", "ELF"}, {"BRM", "ELM"}, {"DAF", "ELF"}, {"DAM", "ELM"}, {"EGM", "ELM"}, {"FEF", "ELF"},
+        {"FEM", "ELM"}, {"FPM", "ELM"}, {"GFF", "ELF"}, {"GFM", "ELM"}, {"GHF", "ELF"}, {"GHM", "ELM"},
+        {"HAF", "ELF"}, {"HAM", "ELM"}, {"HHM", "ELM"}, {"HIF", "ELF"}, {"HIM", "ELM"}, {"HLF", "ELF"},
+        {"HLM", "ELM"}, {"NGM", "ELM"}, {"QCF", "ELF"}, {"QCM", "ELM"}, {"ZOF", "ELF"}, {"ZOM", "ELM"},
+        {"ABH", "ELF"}, {"ERO", "ELF"}, {"HAG", "ELF"}, {"SIR", "ELF"}, {"BRI", "DWM"}, {"COK", "DWM"},
+        {"BWD", "TRK"}, {"CCD", "TRK"}, {"DR2", "TRK"}, {"PRI", "TRK"}};
+    for (const auto& [code, donor] : kTableDonors) {
+        CAPTURE(code);
+        CHECK(game::animation_source(code) == donor);
+    }
+    // Outside the group nothing new is lent.
+    CHECK(game::animation_source("ELM").empty());
+    CHECK(game::animation_source("WOL").empty());
+}
+
 TEST_CASE("the female froglok takes the male's clips: she sits instead of holding the rest pose" *
           doctest::skip(!hailstone::test::game_dir())) {
     // globalpcfroglok_chr.wld has tracks for FRM only (GetAlternateAnimTag @0x406a60: FRF -> FRM).
@@ -291,8 +350,8 @@ TEST_CASE("every global character model builds" * doctest::skip(!hailstone::test
     auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "");
     std::size_t built = 0;
     for (const auto& code : lib.model_codes()) {
-        // BOAT is a static actor and IVM has no visible mesh in the shipped files.
-        if (code == "BOAT" || code == "IVM") continue;
+        // BOAT is a static actor without a mesh; IVM is now built as a meshless skeleton.
+        if (code == "BOAT") continue;
         CHECK_NOTHROW(lib.build(code));
         ++built;
     }
@@ -623,7 +682,7 @@ void armor_fixture_folder(const std::filesystem::path& dir, bool maps = true, bo
 
 } // namespace
 
-TEST_CASE("a held item with a 0x2d mesh keeps it when its skeleton cannot be built") {
+TEST_CASE("a held item with a 0x2d mesh keeps it when its skeleton has no mesh of its own") {
     using namespace test::wld_fixtures;
     WldBuilder b;
     auto bitmap = b.add(0x03, b.str("A_SPRITE"), bitmap_name("fixture.bmp"));
@@ -647,7 +706,8 @@ TEST_CASE("a held item with a 0x2d mesh keeps it when its skeleton cannot be bui
     track.le<std::int32_t>(0);
     track.le<std::uint32_t>(0);
     auto root_track = b.add(0x13, b.str("IT9_ROOT_TRACK"), track);
-    // A skeleton of one node with no mesh and no cloud: building it fails ("no visible mesh").
+    // A skeleton of one node with no mesh and no cloud now builds as an empty model: the static 0x2d mesh
+    // of the item is still the one kept.
     ByteWriter skeleton;
     skeleton.le<std::uint32_t>(0);
     skeleton.le<std::uint32_t>(1);
@@ -672,11 +732,222 @@ TEST_CASE("a held item with a 0x2d mesh keeps it when its skeleton cannot be bui
         test::pfs_fixtures::make_pfs({{"fixture.wld", b.build()}}), "held_fixture.s3d"));
     archive->wlds.push_back(wld::WldFile::parse(*archive->archive->read("fixture.wld"), "fixture.wld"));
     CharacterLibrary library({archive});
-    CHECK_THROWS(library.build("IT9"));
+    CHECK_NOTHROW(library.build("IT9"));
     auto item = library.actor_mesh("IT9");
     REQUIRE(item);
     CHECK_FALSE(item->mesh.indices.empty());
     CHECK(item->mesh.emitters.empty());
+}
+
+TEST_CASE("a skeleton without a mesh loads and dresses its held item, but shows nothing bare") {
+    using namespace test::wld_fixtures;
+    // Fixture facts: item IT9 has the static 0x2d fixture mesh. The skeleton has a root with the R_POINT and L_POINT
+    // bones under it, and no clips: the wood elf it borrows from (ELM) is not in this WLD.
+    constexpr std::uint32_t kItemModel = 9;
+    const std::string item_code = "IT" + std::to_string(kItemModel);
+    constexpr std::size_t kRootBone = 0, kRightHandBone = 1, kLeftHandBone = 2;
+    constexpr std::array<std::uint32_t, 2> kHandBones{kRightHandBone, kLeftHandBone};
+    constexpr std::size_t kSkeletonNodes = 1 + kHandBones.size();
+    constexpr std::array kHeldSlots{game::kSlotPrimary, game::kSlotSecondary};
+    WldBuilder b;
+    auto bitmap = b.add(kBitmapName, b.str("A_SPRITE"), bitmap_name("fixture.bmp"));
+    const std::array bitmaps{bitmap};
+    ByteWriter info;
+    info.le<std::uint32_t>(0); // flags
+    info.le(static_cast<std::uint32_t>(bitmaps.size()));
+    for (auto bm : bitmaps) info.le(bm);
+    auto sprite_info = b.add(kBitmapInfo, 0, info);
+    // A reference fragment: the referenced fragment, then its flags (none).
+    auto reference = [](std::int32_t to) {
+        ByteWriter w;
+        w.le(to);
+        w.le<std::uint32_t>(0);
+        return w;
+    };
+    auto sprite = b.add(kSimpleSprite, 0, reference(sprite_info));
+    auto mat = b.add(kMaterialDef, b.str("A_MDF"), material(kOpaqueRenderMethod, sprite));
+    auto materials = b.add(kMaterialPalette, 0, refs({mat, mat, mat}));
+    auto item_geometry = b.add(kMeshDef, b.str(item_code + "_DMSPRITEDEF"), mesh(materials, false));
+    auto item_mesh_ref = b.add(kMeshRef, 0, reference(item_geometry));
+
+    // A 0x10 skeleton without a mesh list: flags, node count, collision volume, then per node its name, flags,
+    // track, sprite (none: no body mesh) and child list.
+    auto skeleton_def = [&](const std::vector<std::string>& dags, const std::vector<std::int32_t>& tracks,
+                            const std::vector<std::vector<std::uint32_t>>& children) {
+        ByteWriter w;
+        w.le<std::uint32_t>(0);
+        w.le(static_cast<std::uint32_t>(dags.size()));
+        w.le<std::int32_t>(0);
+        for (std::size_t i = 0; i < dags.size(); ++i) {
+            w.le(b.str(dags[i]));
+            w.le<std::uint32_t>(0);
+            w.le(tracks[i]);
+            w.le<std::int32_t>(0);
+            w.le(static_cast<std::uint32_t>(children[i].size()));
+            for (std::uint32_t c : children[i]) w.le(c);
+        }
+        return w;
+    };
+    // A 0x14 actor definition with no actions: flags, callback, action count, sprite count, bounds reference, then
+    // the sprite references.
+    auto actor_def = [](std::initializer_list<std::int32_t> sprites) {
+        ByteWriter w;
+        w.le<std::uint32_t>(0);
+        w.le<std::int32_t>(0);
+        w.le<std::uint32_t>(0);
+        w.le(static_cast<std::uint32_t>(sprites.size()));
+        w.le<std::int32_t>(0);
+        for (std::int32_t sp : sprites) w.le(sp);
+        return w;
+    };
+    // A one-key track reference: the rest pose of a bone with no track definition of its own.
+    auto rest_track = reference(0);
+    auto item_root_track = b.add(kTrackRef, b.str(item_code + "_ROOT_TRACK"), rest_track);
+    auto item_skeleton =
+        b.add(kSkeletonDef, b.str(item_code + "_HS_DEF"), skeleton_def({item_code + "_ROOT_DAG"}, {item_root_track}, {{}}));
+    auto item_skeleton_ref = b.add(kSkeletonRef, 0, reference(item_skeleton));
+    b.add(kActorDef, b.str(item_code + "_ACTORDEF"), actor_def({item_mesh_ref, item_skeleton_ref}));
+
+    // Race 127's IVM: bones naming the hand attach points, no node sprite and no mesh list.
+    auto root_track = b.add(kTrackRef, b.str("IVM_ROOT_TRACK"), rest_track);
+    auto left_point_track = b.add(kTrackRef, b.str("IVML_POINT_TRACK"), rest_track);
+    auto r_point_track = b.add(kTrackRef, b.str("IVMR_POINT_TRACK"), rest_track);
+    std::vector<std::string> dags(kSkeletonNodes);
+    std::vector<std::int32_t> tracks(kSkeletonNodes);
+    std::vector<std::vector<std::uint32_t>> children(kSkeletonNodes);
+    dags[kRootBone] = "IVM_ROOT_DAG";
+    dags[kRightHandBone] = "IVMR_POINT_DAG";
+    dags[kLeftHandBone] = "IVML_POINT_DAG";
+    tracks[kRootBone] = root_track;
+    tracks[kRightHandBone] = r_point_track;
+    tracks[kLeftHandBone] = left_point_track;
+    children[kRootBone].assign(kHandBones.begin(), kHandBones.end());
+    auto skeleton = b.add(kSkeletonDef, b.str("IVM_HS_DEF"), skeleton_def(dags, tracks, children));
+    auto skeleton_ref = b.add(kSkeletonRef, 0, reference(skeleton));
+    b.add(kActorDef, b.str("IVM_ACTORDEF"), actor_def({skeleton_ref}));
+
+    // A static actor without a mesh is still a build error.
+    b.add(kActorDef, b.str("BOAT_ACTORDEF"), actor_def({0}));
+
+    auto archive = std::make_shared<CharacterArchive>();
+    archive->archive = std::make_shared<PfsArchive>(PfsArchive::from_memory(
+        test::pfs_fixtures::make_pfs({{"fixture.wld", b.build()}}), "meshless_fixture.s3d"));
+    archive->wlds.push_back(wld::WldFile::parse(*archive->archive->read("fixture.wld"), "fixture.wld"));
+    CharacterLibrary library({archive});
+    auto item = library.actor_mesh(item_code);
+    REQUIRE(item);
+    const std::size_t item_vertices = item->mesh.vertices.size();
+    REQUIRE(item_vertices > 0);
+
+    auto model = library.model("IVM");
+    REQUIRE(model);
+    CHECK(bodiless_skeleton(*model));
+    CHECK(model->vertices.empty());
+    CHECK(model->indices.empty());
+    CHECK(model->clouds.empty());
+    REQUIRE(model->parents.size() == kSkeletonNodes);
+    for (auto hand : kHandBones) CHECK(model->parents[hand] == static_cast<std::int32_t>(kRootBone));
+    CHECK(model->find_bone_prefix("R_POINT") == static_cast<int>(kRightHandBone));
+    CHECK(model->find_bone_prefix("L_POINT") == static_cast<int>(kLeftHandBone));
+    CHECK(model->animation_donor == "ELM");
+    REQUIRE(model->clip(""));
+    CHECK_THROWS(library.build("BOAT"));
+
+    game::Appearance a;
+    auto bare = library.dress(*model, a);
+    REQUIRE(bare);
+    CHECK(bare->vertices.empty());
+    CHECK(bare->indices.empty());
+    CHECK(bare->parts.empty()); // no draw parts for a bare meshless skeleton
+    CHECK(bare->held_reach == 0.0f);
+    glm::vec3 lo, hi;
+    CHECK_FALSE(dressed_bounds(*model, *bare, lo, hi));
+
+    a.material[kHeldSlots.front()] = kItemModel;
+    auto armed = library.dress(*model, a);
+    REQUIRE(armed);
+    REQUIRE_FALSE(armed->indices.empty());
+    CHECK(armed->vertices.size() == item_vertices);
+    REQUIRE_FALSE(armed->parts.empty());
+    CHECK(armed->parts.front().material < armed->materials.size());
+    for (const auto& v : armed->vertices) CHECK(v.bones[0] == kRightHandBone);
+    REQUIRE(dressed_bounds(*model, *armed, lo, hi));
+    CHECK(lo.x < hi.x); // the item gives the empty body usable bounds
+    // Its reach, found once when dressed, holds every item vertex where the rest clip puts it.
+    std::vector<glm::mat4> world;
+    model->sample(*model->clip(""), 0.0f, false, world);
+    for (const auto& v : armed->vertices)
+        CHECK(armed->held_reach >= glm::length(glm::vec3(world[v.bones[0]] * glm::vec4(v.position, 1.0f))));
+
+    for (auto slot : kHeldSlots) a.material[slot] = kItemModel;
+    auto both = library.dress(*model, a);
+    REQUIRE(both);
+    CHECK(both->vertices.size() == kHeldSlots.size() * item_vertices);
+    CHECK(both->parts.size() >= kHeldSlots.size());
+    for (auto hand : kHandBones)
+        CHECK(static_cast<std::size_t>(std::count_if(both->vertices.begin(), both->vertices.end(), [hand](const auto& v) {
+                  return v.bones[0] == hand;
+              })) == item_vertices);
+}
+
+TEST_CASE("real IVM from the game folder loads with no body mesh and dresses IT10649" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "");
+    auto model = lib.model("IVM");
+    REQUIRE(model);
+    // Its 0x2d mesh references name 0x2c fragments (IVM_DMSPRITEDEF), which this client does not support: no body.
+    CHECK(model->vertices.empty());
+    CHECK(model->indices.empty());
+    // chrdump IVM: the right hand point's chain up to the root.
+    const std::array<std::string_view, 8> kHandChain{"IVMR_POINT_TRACK", "IVMFI_R2_TRACK", "IVMFI_R_TRACK",
+                                                      "IVMFO_R_TRACK",    "IVMBI_R_TRACK",  "IVMCH_TRACK",
+                                                      "IVMPE_TRACK",      "IVM_TRACK"};
+    const int hand = model->find_bone_prefix("R_POINT");
+    REQUIRE(hand >= 0);
+    std::int32_t at = hand;
+    for (std::size_t i = 0; i < kHandChain.size(); ++i) {
+        CAPTURE(i);
+        REQUIRE(at >= 0);
+        REQUIRE(static_cast<std::size_t>(at) < model->bone_names.size());
+        std::string name = model->bone_names[static_cast<std::size_t>(at)];
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        CHECK(name == kHandChain[i]);
+        at = model->parents[static_cast<std::size_t>(at)];
+    }
+    CHECK(at < 0); // the chain ends at the root
+    // It plays the wood elf's clips (GetAlternateAnimTag @0x406a60): in ELM's idle its hands are where an elf's
+    // are, close together at its sides, not spread as in its own T-shaped rest pose.
+    CHECK(model->animation_donor == "ELM");
+    auto elf = lib.model("ELM");
+    REQUIRE(elf);
+    const auto hands_apart = [](const CharacterModel& m, std::string_view clip) {
+        const int right = m.find_bone_prefix("R_POINT"), left = m.find_bone_prefix("L_POINT");
+        REQUIRE(right >= 0);
+        REQUIRE(left >= 0);
+        const AnimationClip* c = m.clip(clip);
+        REQUIRE(c);
+        std::vector<glm::mat4> world;
+        m.sample(*c, 0.0f, false, world);
+        return glm::distance(glm::vec3(world[static_cast<std::size_t>(right)][3]),
+                             glm::vec3(world[static_cast<std::size_t>(left)][3]));
+    };
+    const float idle = hands_apart(*model, "P01");
+    CHECK(idle == doctest::Approx(hands_apart(*elf, "P01")));
+    CHECK(idle < hands_apart(*model, ""));
+    constexpr std::uint32_t kHeldItem = 10649;
+    REQUIRE(lib.has_item(kHeldItem));
+
+    game::Appearance a;
+    a.material[game::kSlotPrimary] = kHeldItem;
+    auto armed = lib.dress(*model, a);
+    REQUIRE(armed);
+    REQUIRE_FALSE(armed->indices.empty());
+    CHECK(std::any_of(armed->vertices.begin(), armed->vertices.end(),
+                      [hand](const auto& v) { return v.bones[0] == hand; }));
+    glm::vec3 lo, hi;
+    REQUIRE(dressed_bounds(*model, *armed, lo, hi));
+    CHECK(glm::length(glm::max(glm::abs(lo), glm::abs(hi))) > 0.0f);
 }
 
 TEST_CASE("held EQG items keep native surface maps without taking armor aliases") {

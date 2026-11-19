@@ -6,5 +6,8 @@
 namespace hailstone::plugin {
 using core::cxx_guard;
 using core::lua_keep;
+using core::LuaScratch;
+using core::lua_state_value;
+using core::set_string_field;
 using core::push_made;
 } // namespace hailstone::plugin

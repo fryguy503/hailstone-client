@@ -45,7 +45,7 @@ const RaceModel* find_race_model(std::uint16_t race, std::uint8_t gender) {
     return nullptr;
 }
 
-std::string_view animation_source(std::string_view code, bool tunic_point) {
+std::string animation_source(std::string_view code, bool tunic_point) {
     if (tunic_point && code.size() == 3) {
         const std::string_view two = code.substr(0, 2);
         if (two == "HU") return {};
@@ -54,7 +54,17 @@ std::string_view animation_source(std::string_view code, bool tunic_point) {
         if (code == "SKE") return "HUM";
     }
     for (const auto& a : kAnimSources)
-        if (a.model == code) return a.donor;
+        if (a.model == code) return std::string(a.donor);
+    // GetAlternateAnimTag @0x406a60: a code under one of these prefixes, unless an earlier test named it (those,
+    // ERO and BRI among them, are all in the table), takes the wood elf's two letters and keeps its last one, the
+    // tunic flag aside (0x4077f0). The table names most of them; race 127's IVM it leaves out.
+    static constexpr std::string_view kWoodElfPrefixes[] = {"DA", "HI", "HA", "HH", "QC", "NG", "FP", "EG", "BR",
+                                                            "HL", "ZO", "FEM", "FEF", "IV", "GHM", "GHF", "GF", "GE"};
+    constexpr std::string_view kWoodElf = "EL";
+    constexpr std::size_t kCodeLength = 3;
+    if (code.size() == kCodeLength)
+        for (std::string_view prefix : kWoodElfPrefixes)
+            if (code.starts_with(prefix)) return std::string(kWoodElf) + code.back();
     return {};
 }
 

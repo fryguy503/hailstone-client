@@ -585,6 +585,29 @@ TEST_CASE("mock server: camping sits, sends OP_Camp and ends when the zone drops
     CHECK(conn.link_death()->camp_kind == 0);
 }
 
+TEST_CASE("mock server: a zone change ends a camp, and the next zone starts without one") {
+    // EnterZone's ResetClientStateForZone(1) @0x5319f0 clears the camp's time and kind: no OP_Logout, no camp's end,
+    // and a link death in the next zone is not the camp's desktop.
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ClientReady) == 1; }));
+    conn.say("/camp desk");
+    REQUIRE(conn.state() == ConnectionState::Camping);
+    REQUIRE(rig.until([&] { return server.camp_requests == 1; }));
+    server.request_zone_change(2, -285.0f, -148.0f, 3.5f);
+    REQUIRE(rig.until([&] { return server.zone_entries == 2 && conn.state() == ConnectionState::InZone; }));
+    CHECK(conn.zone_id() == 2);
+    CHECK(server.logouts == 0);
+    CHECK_FALSE(conn.camped_out());
+    server.zone.send_disconnect();
+    REQUIRE(rig.until_state(ConnectionState::Disconnected));
+    REQUIRE(conn.link_death());
+    CHECK(conn.link_death()->in_game);
+    CHECK(conn.link_death()->camp_kind == 0);
+}
+
 TEST_CASE("mock server: fast camp sends OP_Logout right after OP_Camp and ends the camp") {
     // Hailstone's fast_camp option (not the original's): no 30 s wait. Off, the camp waits (the test above).
     Rig rig;

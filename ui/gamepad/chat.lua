@@ -77,10 +77,17 @@ end
 -- ---------------------------------------------------------------- ticker
 ui.window("Chat Ticker", function()
   if not API.session.InGame() then input, inputLinks, inputError, typed = "", {}, nil, nil; return end
-  if not W.shown("Chat1") then return end
+  local shown = W.shown("Chat1")
+  local main = 1
+  local windows = chatWindows()
+  for _, window in ipairs(windows) do
+    if window.main then main = window.slot; break end
+  end
+  if main ~= 1 then shown = W.shown("Chat" .. main) end
+  if not shown then return end
   local start, replace
   local text = expandedInput()
-  for index, window in ipairs(chatWindows()) do
+  for index, window in ipairs(windows) do
     start, replace = API.chat.TakeFocus(window.slot, text)
     if start then slotIdx = index; break end
   end
@@ -92,7 +99,7 @@ ui.window("Chat Ticker", function()
     GPSTATE.chatOpenedFrame = ui.GetFrameCount()
   end
   if GPSTATE.chatOpen then return end
-  local c = lines(1)
+  local c = lines(main)
   local n = #c.lines
   if n == 0 then return end
   T.frame()

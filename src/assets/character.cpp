@@ -245,6 +245,113 @@ CharacterMesh CharacterModel::default_mesh() const {
     return m;
 }
 
+namespace {
+
+// A dressed vertex's position in its influences' frames: the skinned palette (the model's bones with the inverse
+// bind applied, then the mesh's skin bindings) as the renderer's skinning builds it, weighted.
+template <typename Bound>
+void for_each_influence(const SkinnedVertex& v, std::size_t palette_size, Bound&& bound) {
+    for (std::size_t k = 0; k < v.bones.size(); ++k) {
+        const float w = v.weights[static_cast<glm::length_t>(k)];
+        if (k > 0 && !(w > 0.0f)) continue;
+        if (v.bones[k] < palette_size) bound(static_cast<std::size_t>(v.bones[k]), w);
+    }
+}
+
+} // namespace
+
+bool bodiless_skeleton(const CharacterModel& model) {
+    return !model.parents.empty() && model.indices.empty() && model.clouds.empty();
+}
+
+bool dressed_bounds(const CharacterModel& model, const CharacterMesh& mesh, glm::vec3& lo, glm::vec3& hi,
+                    const AnimationClip* clip) {
+    if (mesh.vertices.empty() && mesh.emitters.empty()) return false;
+    std::vector<glm::mat4> frames;
+    if (const AnimationClip* pose = clip ? clip : model.clip(""))
+        model.sample(*pose, 0.0f, false, frames);
+    else
+        frames.assign(model.parents.size(), glm::mat4(1.0f));
+    // Vertices hang from the skinning palette (WLD vertices are in bone space, EQG's need the inverse bind, and
+    // attached EQG pieces their skin bindings); emitters from the bone's own frame, as actor_emitters places them.
+    std::vector<glm::mat4> palette = frames;
+    model.skin(palette);
+    if (!mesh.append_skin_bones(palette)) palette.resize(frames.size());
+    lo = glm::vec3(std::numeric_limits<float>::max());
+    hi = glm::vec3(std::numeric_limits<float>::lowest());
+    auto add = [&](const glm::vec3& at) {
+        lo = glm::min(lo, at);
+        hi = glm::max(hi, at);
+    };
+    for (const auto& v : mesh.vertices) {
+        glm::mat4 skin(0.0f);
+        for_each_influence(v, palette.size(), [&](std::size_t b, float w) { skin += palette[b] * w; });
+        add(glm::vec3(skin * glm::vec4(v.position, 1.0f)));
+    }
+    for (const MeshEmitter& e : mesh.emitters) {
+        const bool on_bone = e.bone >= 0 && static_cast<std::size_t>(e.bone) < frames.size();
+        add(glm::vec3((on_bone ? frames[static_cast<std::size_t>(e.bone)] * e.local : e.local)[3]));
+    }
+    return true;
+}
+
+float dressed_reach(const CharacterModel& model, const CharacterMesh& mesh) {
+    if (mesh.vertices.empty() && mesh.emitters.empty()) return 0.0f; // bare: nothing to reach with
+    const std::size_t n = model.parents.size();
+    // Per bone, over every key of every clip: the longest translation and the largest scale factor, never below
+    // the identity's (a missing or empty track samples as it). Sampling interpolates between keys (and blends between clips)
+    // with mix and a normalised slerp, which never exceed those, and a rotation keeps lengths.
+    std::vector<float> longest(n, 0.0f), largest(n, 1.0f);
+    for (const auto& [code, clip] : model.clips)
+        for (std::size_t b = 0; b < n && b < clip.tracks.size(); ++b)
+            for (std::size_t k = 0; k < clip.tracks[b].size(); ++k) {
+                const BonePose p = clip.tracks[b][k];
+                longest[b] = std::max(longest[b], glm::length(p.translation));
+                const glm::vec3 s = glm::abs(p.scale);
+                largest[b] = std::max({largest[b], s.x, s.y, s.z});
+            }
+    // Composed down the hierarchy: a bone's origin lies within `origin` of the model origin, and its frame
+    // stretches a length by at most `stretch`.
+    std::vector<float> origin(n, 0.0f), stretch(n, 1.0f);
+    for (auto b : model.order) {
+        const auto parent = model.parents[b];
+        const float parent_origin = parent < 0 ? 0.0f : origin[static_cast<std::size_t>(parent)];
+        const float parent_stretch = parent < 0 ? 1.0f : stretch[static_cast<std::size_t>(parent)];
+        origin[b] = parent_origin + parent_stretch * longest[b];
+        stretch[b] = parent_stretch * largest[b];
+    }
+    const auto reach = [&](std::size_t b, const glm::vec3& p) {
+        return b < n ? origin[b] + stretch[b] * glm::length(p) : glm::length(p);
+    };
+    // The skin bindings and the inverse bind (EQG) are fixed: they move a vertex into a bone's frame, so its
+    // length there is exact. A binding hangs from its host bone's skinned matrix (append_skin_bones).
+    const auto local = [&](std::size_t b, glm::vec3 p, std::size_t& host) {
+        host = b;
+        if (b >= n) {
+            const auto& binding = mesh.skin_bindings[b - n];
+            host = binding.host_bone;
+            p = glm::vec3(binding.local * glm::vec4(p, 1.0f));
+        }
+        return host < model.inverse_bind.size() ? glm::vec3(model.inverse_bind[host] * glm::vec4(p, 1.0f)) : p;
+    };
+    const std::size_t palette = n + mesh.skin_bindings.size();
+    float out = 0.0f;
+    for (const auto& v : mesh.vertices) {
+        float r = 0.0f;
+        for_each_influence(v, palette, [&](std::size_t b, float w) {
+            std::size_t host = 0;
+            const glm::vec3 p = local(b, v.position, host);
+            r += std::abs(w) * reach(host, p);
+        });
+        out = std::max(out, r);
+    }
+    for (const MeshEmitter& e : mesh.emitters) {
+        const glm::vec3 p(e.local[3]);
+        out = std::max(out, e.bone >= 0 ? reach(static_cast<std::size_t>(e.bone), p) : glm::length(p));
+    }
+    return out;
+}
+
 namespace detail {
 
 void append_wld_mesh(const wld::WldFile& w, const wld::Fragment& mf, std::size_t n, std::int64_t owner,
@@ -1094,7 +1201,10 @@ CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld:
     m.indices = std::move(geometry.indices);
     m.parts = std::move(geometry.parts);
     m.materials = std::move(geometry.materials);
-    if (m.indices.empty() && m.clouds.empty()) throw std::runtime_error("no visible mesh");
+    // A skeleton can be its own reason to exist: race 127's IVM (the enchanter pet and the aura spawns, also race
+    // 600) has no supported mesh of its own (its 0x2d references name 0x2c meshes) and no named clips: it plays the
+    // wood elf's (ELM, game::animation_source). Keep it so the held items can be skinned to R_POINT / L_POINT; with no
+    // item dressed the mesh stays empty and draws nothing. Only a static actor without a mesh is an error (build_static_actor).
 
     // Clips. Codes come from tracks named <code><bone track>, for the model's
     // own bones and for the donor's equivalent bones (donor code + the same
@@ -1106,7 +1216,7 @@ CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld:
     for (const auto& b : m.bone_names)
         if (b.size() > code.size() && b.starts_with(code) && std::string_view(b).substr(code.size()) == "TUNIC_POINT_TRACK")
             tunic_point = true;
-    m.animation_donor = std::string(game::animation_source(code, tunic_point));
+    m.animation_donor = game::animation_source(code, tunic_point);
     std::vector<std::string> donor_names(n);
     if (!m.animation_donor.empty())
         for (std::size_t i = 0; i < n; ++i)

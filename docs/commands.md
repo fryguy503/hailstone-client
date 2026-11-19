@@ -235,6 +235,13 @@ These are not in the original client.
 | `/lighting [modern \| smooth \| classic]` | Switch the lighting (docs/graphics.md); without a mode, between modern and classic. |
 | `/screenshot` | Take a screenshot. |
 | `/perf` | The performance window. |
+| `/chattabs [help]` | List Hailstone's chat tab commands. |
+| `/chattabs status` | List chat windows by ID and bracket the selected tab in each window. |
+| `/chattabs next`, `/chattabs prev` | Cycle through tabs in the current chat window. |
+| `/chattabs new [title]`, `/chattabs close`, `/chattabs clear` | Add a tab to the current window, close the current tab, or clear its text. |
+| `/chattabs rename [title]`, `/chattabs renamewindow [title]` | Change the tab name or the window title. Omit the title to open the rename dialog. |
+| `/chattabs left`, `/chattabs right` | Move the current tab one place in its window. |
+| `/chattabs detach`, `/chattabs move <window ID>`, `/chattabs combine` | Give the current tab its own window, move it to another window, or bring all tabs into the current window. |
 
 ## Add-on and script commands
 

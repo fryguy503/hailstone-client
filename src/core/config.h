@@ -47,6 +47,11 @@ public:
     void set_bool(std::string_view key, bool value) { set(key, value ? "1" : "0"); }
     void erase(std::string_view key);
 
+    // A value for this run only (a command-line flag of the client: --lighting, --msaa ...): get() gives it over
+    // hailstone.ini's and the character's, and save() never writes it. Setting or erasing the key (the Options
+    // window) drops it, so the player's own change takes over and is saved as usual.
+    void set_run_override(std::string_view key, std::string_view value);
+
     // The keys as get() sees them: with a character layer, hailstone.ini's shared keys and the character's others.
     std::vector<std::pair<std::string, std::string>> entries() const;
 
@@ -63,12 +68,16 @@ public:
 
 private:
     Config* layer_for(std::string_view key) const;
+    std::optional<std::string> stored(std::string_view key) const; // get() without the run's overrides
+    void drop_run_override(std::string_view key);
+    void store(std::string_view key, std::string_view value); // set() without dropping a run's override
     std::vector<std::pair<std::string, std::string>> entries_;
     std::vector<std::string> changed_;   // keys set (to a new value) or erased since the last load or save
     std::filesystem::path disk_path_;    // the file last read or written
     std::optional<std::string> disk_text_; // what it held then
     std::unique_ptr<Config> layer_;        // the character's settings (attach_character), none when no character
     std::filesystem::path layer_path_;
+    std::vector<std::pair<std::string, std::string>> run_overrides_; // set_run_override's, never saved
 };
 
 // The settings file of the client: hailstone.ini in the data folder (platform::config_file()).

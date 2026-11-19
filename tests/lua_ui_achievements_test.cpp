@@ -403,3 +403,30 @@ TEST_CASE("hs achievement bridge: literal packet ingress is passive and reward u
     lua.check("return hs.AchievementRefresh()==false");
     CHECK(outgoing.size() == after);
 }
+
+TEST_CASE("hs achievement bridge: a kept record is refilled in place, with no garbage while nothing changes") {
+    AchievementGui gui;
+    mq_test::World world("lua_ui_achievement_into");
+    initialize(*world.conn);
+    AchievementLua lua(*world.conn);
+    lua.check(R"lua(
+      into={selected_index=9}
+      local s=hs.Achievements(nil, nil, into)
+      cmp=s.comparison
+      return rawequal(s, into) and s.catalog~=nil and s.states~=nil and s.selected_index==nil and type(cmp)=='table'
+    )lua");
+    lua.check(R"lua(
+      local t, r=into.catalog_token, into.state_revision
+      collectgarbage('stop') local b=collectgarbage('count')
+      local s=hs.Achievements(t, r, into)
+      local a=collectgarbage('count') collectgarbage('restart')
+      return rawequal(s, into) and s.catalog_unchanged and s.states_unchanged and s.catalog==nil and s.states==nil
+        and rawequal(s.comparison, cmp) and a==b
+    )lua");
+    // The cached parts a caller writes back (as the Modern browser does) are cleared by the next call.
+    lua.check(R"lua(
+      into.catalog, into.states={}, {}
+      local s=hs.Achievements(into.catalog_token, into.state_revision, into)
+      return s.catalog==nil and s.states==nil
+    )lua");
+}

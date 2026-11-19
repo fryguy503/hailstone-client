@@ -81,7 +81,7 @@ void ProgressUi::draw_panel(net::GameConnection& conn) {
             ImGui::PushID(static_cast<int>(a->id));
             auto ready = conn.aa_readiness(a->id);
             bool owned = aa.has(a->id);
-            ImGui::Text("%s %d/%d cost %d%s%s", conn.aa_name(*a).c_str(), owned ? a->rank : a->rank - 1, a->max_rank,
+            ImGui::Text("%s %d/%d cost %d%s%s", conn.aa_display_name(*a).c_str(), owned ? a->rank : a->rank - 1, a->max_rank,
                         a->cost, owned ? " (owned)" : "", ready.ready ? "" : " (not ready)");
             if (!owned && conn.aa_can_train(a->id)) {
                 ImGui::SameLine();

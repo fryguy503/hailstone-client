@@ -20,6 +20,19 @@ namespace hailstone::game {
         // player's group, with no equivalent raid exemption.
         return !group_member;
     }
+
+    void apply_name_invisibility(std::string& name, NameInvisibility invisibility) {
+        if (name.empty()) return;
+        if (invisibility.undead) {
+            name.insert(name.begin(), '[');
+            name.push_back(']');
+        }
+        if (invisibility.normal) {
+            name.insert(name.begin(), '(');
+            name.push_back(')');
+        }
+    }
+
 	std::uint8_t new_armor_bits(std::uint8_t spawn_type, bool local_player, bool group_member, bool raid_member) {
 		if (spawn_type == 1) return 0x10;
 		if (spawn_type != 0) return 0;

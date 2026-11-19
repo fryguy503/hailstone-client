@@ -107,6 +107,7 @@ struct TaskState {
     std::int64_t request_timer_until_ms = 0; // OP_TaskRequestTimer: no new shared task requests before this
     std::vector<std::string> shared_members; // OP_SharedTaskMemberList / MemberChange: the shared task's members
     std::string shared_leader;               // the member the list flags as leader (STPR_Leader), "" none
+    std::map<std::string, std::uint32_t, std::less<>> shared_member_templates;
 
     Task* find(std::uint32_t type, std::uint32_t sequence);
     const Task* find(std::uint32_t type, std::uint32_t sequence) const;

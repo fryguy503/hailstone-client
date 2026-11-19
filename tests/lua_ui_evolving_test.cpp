@@ -172,3 +172,26 @@ TEST_CASE("hs evolving transfer: clearing, removed items and inactive sessions i
         and not hs.ItemExpTransferConfirm('11','12','1')
     )lua");
 }
+
+TEST_CASE("hs evolving transfer: a kept record is refilled in place, with no garbage while nothing changes") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    TransferLua lua(rig.conn);
+    lua.check(R"lua(
+      into={previewSource={}, items={}}
+      local s=hs.ItemExpTransfer(into)
+      return rawequal(s, into) and not s.shown and #s.items==0 and s.previewSource==nil
+    )lua");
+    lua.check(R"lua(
+      local items=into.items
+      collectgarbage('stop') local b=collectgarbage('count')
+      local s=hs.ItemExpTransfer(into)
+      local a=collectgarbage('count') collectgarbage('restart')
+      return rawequal(s, into) and rawequal(s.items, items) and a==b
+    )lua");
+    // Without it, a new table with the same fields, as before.
+    lua.check(R"lua(
+      local n=hs.ItemExpTransfer()
+      return not rawequal(n, into) and n.shown==into.shown and n.revision==into.revision and n.status==into.status
+    )lua");
+}

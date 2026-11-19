@@ -68,6 +68,7 @@ const char* toggle_command_window(int command) {
         {C::CMD_TOGGLE_AURAWND, "AuraWindow"},           {C::CMD_TOGGLE_COMBAT_ABILITY_WIN, "CombatAbilityWnd"},           {C::TOGGLE_LFGUILDWIN, "LFGuildWnd"},
         {C::TOGGLE_LFGROUPWIN, "GroupSearchWnd"},
         {C::CMD_TOGGLE_ALARM, "AlarmWnd"},
+        {C::CMD_HISTORIC_ALERTS, "AlertHistoryWnd"}, // __ExecuteCmd case 168: its show / hide
         {C::TOGGLE_HELPWIN, "HelpWindow"},         {C::TOGGLE_VIDEOMODEWIN, "VideoModesWindow"},
         {C::TOGGLE_STORYWIN, "StoryWnd"},
         {C::TOGGLE_JOURNAL, "JournalNPCWnd"},

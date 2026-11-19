@@ -79,7 +79,10 @@ a `hailstone.cfg`. The server's Lua scripts and its plugins' Lua windows are not
 Hailstone's limits.
 
 A compiled plugin an opted-in policy requires ("Opt-in add-on policies") asks the same question, by the same
-per-server, per-hash approval.
+per-server, per-hash approval. It is the player's own add-on, not the server's, so the question says so: "Allow your
+add-on this server requires?", the server requiring that plugin from the player's add-ons, and a warning to allow it
+only when the add-on's author is trusted (the server's own plugins: "Allow this server's plugin?" and trust in the
+server; both at once: "Allow these plugins?"). The words are Hailstone's own; the original has no plugins.
 
 - **The question.** When such a plugin would load (the zone-in, the world login for a `login` one, `/plugin <name>
   load`) and the player has not answered for its SHA-256 on this server, it stays unloaded and a window asks: which
@@ -126,7 +129,9 @@ the file cannot be written, the answer holds for this run only. A box set's wind
 one window settles the same question in the others within a second.
 
 The packs draw the question (`ui/modern/pluginconsent.lua`, the Gamepad UI's `dialogs.lua`) with
-`hs.PluginConsent()` (nil, or `{server, serial, warning, plugins = {{name, file, size, sha256, short}}}`) and
+`hs.PluginConsent()` (nil, or `{server, serial, title, intro, warning, plugins = {{name, file, size, sha256, short,
+required}}}`: the title, the line before the list and the warning worded for what is asked about, `required` true for
+the player's own add-on the server requires) and
 `hs.AnswerPluginConsent(true | false | nil, serial)`, where `serial` is the question's: an answer to a question that has
 since been replaced by another (another server's, or other bytes) is refused (false) and nothing is kept. Both packs
 leave Allow and Don't allow off for a second after a question shows or a new one takes its place, so a click or press
@@ -252,6 +257,8 @@ Left out on purpose:
 The data types use MQ's member names and inheritance:
 - `character` → `spawn`, `buff` → `spell`, `groupmember` → `spawn`.
 - `class`, `race`, `heading` (`Degrees`, `ShortName`, ...), `timestamp` (`TotalSeconds`, `TimeHMS`, ...), `item`.
+  A class's `Name` and `ShortName` (and `${Me.Class}`) are the server's where its plugin or script named the class
+  ("Class names" below); compare `Class.ID` in a macro that must work on any server.
 - MQ's pure types, with all of MQ's members: `int` (`Hex`, `Reverse`, `Float`, `Double`, `LowPart`, `HighPart`,
   `Prettify`), `float` (`Deci`, `Centi`, `Milli`, `Precision`, `Int`, `Raw`, `Prettify`), `string` (`Length`, `Upper`,
   `Lower`, `Left`, `Right`, `Mid`, `Find`, `Compare`, `CompareCS`, `Equal`, `NotEqual`, `EqualCS`, `NotEqualCS`, `Arg`,
@@ -356,6 +363,7 @@ A script can extend the client as a compiled plugin does, with no native code: t
 | `hailstone.hooks{ nameplate = function(spawn, text) ... end }` | a Lua-only hook (no compiled plugin counterpart; `extend`): called for each visible world nameplate with the spawn table and its assembled name (title, last name, suffix and marks included). The spawn table is one the client refills for every plate (nothing is allocated per plate), so it is valid during the call only: copy the fields you need, do not keep the table. Return a string to replace the text, or nil to keep it; extensions run in order. It changes the world nameplate only, not the target window's labels or the spawn's data, and is gone when the script stops |
 | `set_active(on)`, `set_flag(name, on)` | the switches: `wide_item_links`, `items_any_class`, `hide_any_class`, `aa_any_level`, `aa_train_all`, `augment_classes`, `research_classes`, `focus_classes`, `backstab_either_hand`, `solo_adventure` (`extend`) |
 | `set_player_classes(mask)`, `set_character_classes(name, mask)`, `set_pet_list{{spawn =, class =}}`, `set_vitals{max_hp =, ...}` | what the server knows (`extend`) |
+| `set_class_name(class_id, name [, short_name])` | the server's name for a player class (1-16) and its short name, as the compiled plugins' `set_class_name` (below); nil or `""` shows the stock one. A class id outside 1-16, a name over 32 bytes, a short name over 4 or a control character is an error (nothing changes). The names are the script's: they go when it stops (a script that names classes stays after its main chunk returns, for them), when the rules take `extend` away, and when the session leaves the server (`extend`) |
 | `on_packet(stream, direction, opcode, fn)` | `fn(opcode, data)` for each such packet (`'world'` / `'zone'`, `'in'` / `'out'`, opcode 0 all): `true` drops it, a string replaces its data. With Lua's `string.pack` / `string.unpack` a script reads and writes any layout (`packets`) |
 | `send_packet(stream, opcode, data)` | a packet to the server (`packets`) |
 | `ui_function(name, fn)`, `option{name, label, min, max, get, set}`, `menu(label, command)` | for its windows, as a compiled plugin's (`ui`); `hs.UI.plugins.Get("<script name>")`. A Lua social cannot call them (an error): its state goes whenever the social is edited, and its name is only its title |
@@ -579,9 +587,44 @@ same changes as a plugin, with no change to Hailstone itself. With the `extend` 
 - **tell the client what its server knows**:
   - `set_player_classes` and `set_character_classes`: multiclass masks, which the client shows as "War/Clr" in the
     window title, character select and the guild window;
+  - `set_class_name(class_id, name, short_name)`: the server's own name for a player class (1-16) and its short
+    name, for a server whose classes are other than the stock ones (class 1 shown as "Vanguard", "VAN"); see
+    "Class names" below;
   - `set_pet_list`: several pets, with their gauges and the focused pet;
   - `set_vitals`: the server's HP, mana and endurance in place of the client's formulas; the values given also
     become the player's current points until the next update changes them.
+
+#### Class names
+
+`set_class_name(host, class_id, name, short_name)` (added later in ABI 3: test `HAILSTONE_HOST_HAS(host,
+set_class_name)` first; Lua: `hailstone.set_class_name(class_id, name [, short_name])`; `extend`) is an extension past
+RoF2: it changes only what the player reads. Class ids, class checks, packets and everything sent to the server keep
+the stock classes.
+
+- **Where it shows.** Everywhere the client names a player class: the inventory and stats windows, the group, raid,
+  guild and fellowship windows, `/who` (the server's name, without the stock class's level titles), character select,
+  the window title's multiclass list ("Van/Clr"), the item and spell displays' class lists, the Ability Book, the
+  Find window and the guildmasters of the class (20-35 read "<name> Guildmaster"). MQ's `${Me.Class}`,
+  `${Spawn.Class}`, `Class.Name` and `Class.ShortName` give the server's names; `Class.ID` stays the id. NPC-only
+  classes (banker, merchant, ...) are not renamed.
+- **What keeps the stock names.** What names a class to the game rather than to the player: the layouts' child names
+  (`CC_Class_Warrior_Button`), a bug report's facts, and the saved account list on the login screen (shown before any
+  server names its classes).
+- **Searches take both.** A spawn search (`${Spawn[vanguard]}`, `class Vanguard`) and a `/who` class word take the
+  stock name and the server's, long or short, for the same class; a `/who` word is matched against the stock names
+  first, so it means what it does on a stock server.
+- **Input.** An empty name or short name (NULL in C, nil in Lua) shows the stock one; both empty take the caller's names
+  for the class back. A name is at most 32 bytes and a short name at most 4 (UTF-8 counts bytes), with no control
+  characters; longer input, or a class id outside 1-16, is refused, not cut: nothing changes, and a compiled plugin
+  gets a line in the log (the first time), a script an error.
+- **Lifetime.** The names belong to the plugin or script that set them. They go when it unloads or stops, when the
+  server's rules no longer give it `extend`, and when the session leaves the server (disconnected, or another
+  server's rules): one server's names never show on another. Character select on the same server keeps them while
+  their owner runs (a plugin that should name classes there needs the `login` permission). When two plugins or
+  scripts name one class, the latest call wins; when its owner's names go, the one before shows again.
+- **For interfaces.** Text the client gives a Lua UI already carries the names. An interface with its own list of
+  classes asks `hs.ClassName(id [, short])` (`API.character.ClassName`, UI API 1.7) and keys a cache on
+  `hs.ClassNamesRevision()` (docs/ui-api.md "Class names").
 
 - **read the game state** (with `read`) through typed structs rather than `${...}` text, fast enough for the hooks:
   `get_player`, `get_spawn` and `next_spawn` (every spawn in the zone), `get_spell`, `get_item` (an inventory
@@ -1429,11 +1472,13 @@ When it is decided:
   more than the server allows, or fails to start returns to the login screen with the add-on panel open on what is
   missing. Reviewing it fetches its manifest and opens the usual install card; nothing is fetched before that click,
   and installing keeps every usual check (signatures, pinned keys, platform, capabilities, approval of native code).
-  An invalid policy refuses entry the same way, with the reason.
+  An invalid policy refuses entry the same way, with the reason. Every reason is written to the client's log as
+  well (`Add-ons: entry refused by this server's add-on policy: ...`), one line for each requirement not met.
 - **Once the character is in the world**, nothing disconnects: a required add-on that fails (a required plugin
   whose code lets an exception out counts as failed, though it stays loaded), or the next zone's rules that the
   installed add-ons do not meet, is a warning in chat (`[Add-ons] Required add-on owner/repo did not remain
-  running. You can keep playing on this server.`), said once for each failure. Leaving to character select starts the
+  running. You can keep playing on this server.`), said once for each failure. The add-on is named by its
+  repository, as the server's list names it, not by its folder or plugin name. Leaving to character select starts the
   check over for the next entry.
 - **Server add-ons warning and Retry.** While such a failure lasts, a small Server add-ons window (Modern, Gamepad,
   and the client's own when the interface has none) says what failed and that the player can keep playing. When the

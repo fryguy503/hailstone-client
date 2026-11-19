@@ -104,4 +104,27 @@ bool forget_plugin_consent(const fs::path& profile_dir, std::string_view name, c
     return write_plugin_approvals(profile_dir, all);
 }
 
+ConsentWording consent_wording(const ConsentPrompt& prompt, std::string_view server) {
+    std::size_t addons = 0;
+    for (const auto& f : prompt.files)
+        if (f.required_addon) ++addons;
+    const bool one = prompt.files.size() == 1;
+    const std::string who(server);
+    if (addons == 0)
+        return {"Allow this server's plugin?",
+                who + " wants to run " + (one ? "a compiled plugin" : "compiled plugins") + " on your computer:",
+                std::string(kConsentWarning)};
+    constexpr std::string_view kProgram = "A compiled plugin is a program. It runs with full access to your computer: "
+                                          "your files, your accounts and your network, not only the game. ";
+    if (addons == prompt.files.size())
+        return {one ? "Allow your add-on this server requires?" : "Allow your add-ons this server requires?",
+                who + " requires " + (one ? "this compiled plugin" : "these compiled plugins") +
+                    " from your add-ons, to run on your computer:",
+                std::string(kProgram) + "Allow " + (one ? "it" : "them") + " only if you trust " +
+                    (one ? "the add-on's author." : "the add-ons' authors.")};
+    return {"Allow these plugins?",
+            who + " wants to run compiled plugins on your computer, its own and add-ons of yours it requires:",
+            std::string(kProgram) + "Allow them only if you trust this server and the add-ons' authors."};
+}
+
 } // namespace hailstone::plugin

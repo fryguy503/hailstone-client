@@ -1203,6 +1203,13 @@ void GameConnection::loot_all() {
         loot_all_now();
         return;
     }
+    // Hailstone's own too: a "Loot all, are you sure?" already up or waiting its turn is not asked again, so two
+    // quick clicks need one yes (the second yes would only meet LootAll's guard). Whether the original's
+    // ConfirmationDialog (CPopupWndManager_AcquireDialog) shows a second one is not traced.
+    auto loot_all_question = [](const Confirmation& q) { return q.id == kConfirmLootAll; };
+    if ((confirmation_ && loot_all_question(*confirmation_)) ||
+        std::any_of(confirm_queue_.begin(), confirm_queue_.end(), loot_all_question))
+        return;
     Confirmation c;
     c.id = kConfirmLootAll;
     c.text = strings_.format(game::kStrLootAllConfirm, std::vector<std::string>{});

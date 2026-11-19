@@ -20,6 +20,7 @@
 #include <lua.hpp>
 
 #include "core/log.h"
+#include "core/process_serial.h"
 #include "core/sha256.h"
 #include "game/server_ext.h"
 #include "mq/event_pattern.h"
@@ -258,6 +259,8 @@ struct Script {
     int hooks_ref = LUA_NOREF;
     bool active = true;
     std::uint32_t flags = 0; // HAILSTONE_FLAG_* (sdk/hailstone_plugin.h)
+    // Owns the class names it set (hailstone.set_class_name; game/eq_names.h), taken back with its `extend` or its end.
+    std::uint64_t class_names_owner = core::next_process_identity();
     std::optional<game::CharacterVitals> vitals;
     bool registered = false;
     bool main_done = false;
@@ -270,7 +273,8 @@ struct Script {
 
     static Script& of(lua_State* L) { return **static_cast<Script**>(lua_getextraspace(L)); }
 
-    void fail(std::string why) {
+    // `log_text`: what the log gets instead of `why` (the error with its traceback), once.
+    void fail(std::string why, std::string_view log_text = {}) {
         if (social >= 0) { // a Lua social reports and stays: the next press tries again
             host->say(std::format("[Lua] {}: {}", name, why));
             log::warn("lua {}: {}", name, why);
@@ -280,7 +284,7 @@ struct Script {
         status = Status::Failed;
         error = std::move(why);
         host->say(std::format("[Lua] {} ended with an error: {}", name, error));
-        log::warn("lua script {}: {}", name, error);
+        log::warn("lua script {}: {}", name, log_text.empty() ? std::string_view(error) : log_text);
         stop_requested = true;
     }
 

@@ -131,6 +131,9 @@ public:
     // Testing (app/input_script.h's droplink): from now on nothing goes out or comes in, as when the network goes
     // away, so the link dies by the idle timeout as a real link death would.
     virtual void simulate_link_loss() {}
+    // Testing: the session's socket is closed under it, so every send fails (as when its handle went bad); the
+    // session ends at its next pass.
+    virtual void simulate_socket_loss() {}
 };
 
 } // namespace hailstone::net

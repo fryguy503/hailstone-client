@@ -30,17 +30,41 @@ for i, c in ipairs(CLASSES) do
   byName[c[1]:lower()] = e
   byAbbr[c[2]] = e
 end
+-- A server's names for its classes (API.character.ClassName, set by its plugin): entries as the stock ones, with
+-- its name and short name, made again when ClassNamesRevision moves. The lists show those names.
+local HAS_OWN = API.Supports and API.Supports("character", "ClassNamesRevision") == true
+local ownRevision, ownByName, ownByAbbr = nil, {}, {}
+local function ownNames()
+  if not HAS_OWN then return ownByName, ownByAbbr end
+  local r = API.character.ClassNamesRevision()
+  if r ~= ownRevision then
+    ownRevision, ownByName, ownByAbbr = r, {}, {}
+    for i, c in ipairs(CLASSES) do
+      local name, abbr = API.character.ClassName(i), API.character.ClassName(i, true)
+      if name ~= c[1] or abbr ~= c[2] then
+        local e = { name = name, abbr = abbr, role = c[3], bit = i - 1 }
+        ownByName[name:lower()] = e
+        ownByAbbr[abbr:upper()] = e
+      end
+    end
+  end
+  return ownByName, ownByAbbr
+end
 S.CLASSES = CLASSES
 S.ROLE_COLOR = ROLE_COLOR
 S.ROLE_NAME = { tank = "Tank", healer = "Healer", melee = "Melee", caster = "Caster" }
 
--- The class entry for a list's class text ("Shadow Knight", "SHD", or a multiclass "SHD/CLR": its first class).
+-- The class entry for a list's class text ("Shadow Knight", "SHD", or a multiclass "SHD/CLR": its first class); a
+-- server's name for a class first, as the lists show those.
 function S.Class(text)
   if not text or text == "" then return nil end
-  local e = byName[text:lower()] or byAbbr[text:upper()]
+  local ownName, ownAbbr = ownNames()
+  local e = ownName[text:lower()] or ownAbbr[text:upper()] or byName[text:lower()] or byAbbr[text:upper()]
   if e then return e end
   local first = text:match("^([^/]+)/")
-  if first then return byAbbr[first:upper()] or byName[first:lower()] end
+  if first then
+    return ownAbbr[first:upper()] or ownName[first:lower()] or byAbbr[first:upper()] or byName[first:lower()]
+  end
   return nil
 end
 

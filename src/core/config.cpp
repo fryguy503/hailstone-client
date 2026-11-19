@@ -42,7 +42,7 @@ void Config::parse(std::string_view text) {
         std::size_t eq = l.find('=');
         if (eq == std::string_view::npos) continue;
         std::string_view key = trim(l.substr(0, eq));
-        if (!key.empty()) set(key, trim(l.substr(eq + 1)));
+        if (!key.empty()) store(key, trim(l.substr(eq + 1)));
     }
 }
 
@@ -64,7 +64,7 @@ bool Config::save(const std::filesystem::path& path) {
             Config merged;
             merged.parse(*now);
             for (const std::string& key : changed_) {
-                if (auto v = get(key)) merged.set(key, *v);
+                if (auto v = stored(key)) merged.set(key, *v);
                 else merged.erase(key);
             }
             entries_ = std::move(merged.entries_);
@@ -105,7 +105,7 @@ bool Config::attach_character(const std::filesystem::path& path) {
             // A key shared since the file was written (display.upscaler, once saved per character) comes
             // into hailstone.ini when it has none of its own, so the choice made then is not lost.
             for (const auto& [k, v] : layer->entries_)
-                if (is_shared_key(k) && !get(k)) set(k, v);
+                if (is_shared_key(k) && !stored(k)) set(k, v);
         }
     } else {
         // The character's first entry: it starts with the shared settings as they are now.
@@ -139,7 +139,13 @@ Config* Config::layer_for(std::string_view key) const {
 }
 
 std::optional<std::string> Config::get(std::string_view key) const {
-    if (Config* l = layer_for(key)) return l->get(key);
+    for (const auto& [k, v] : run_overrides_)
+        if (k == key) return v;
+    return stored(key);
+}
+
+std::optional<std::string> Config::stored(std::string_view key) const {
+    if (Config* l = layer_for(key)) return l->stored(key);
     auto it = std::find_if(entries_.begin(), entries_.end(), [&](const auto& e) { return e.first == key; });
     if (it == entries_.end()) return std::nullopt;
     return it->second;
@@ -174,8 +180,22 @@ bool Config::get_bool(std::string_view key, bool fallback) const {
     return fallback;
 }
 
+void Config::set_run_override(std::string_view key, std::string_view value) {
+    drop_run_override(key);
+    run_overrides_.emplace_back(std::string(key), std::string(value));
+}
+
+void Config::drop_run_override(std::string_view key) {
+    std::erase_if(run_overrides_, [&](const auto& e) { return e.first == key; });
+}
+
 void Config::set(std::string_view key, std::string_view value) {
-    if (Config* l = layer_for(key)) return l->set(key, value);
+    drop_run_override(key);
+    store(key, value);
+}
+
+void Config::store(std::string_view key, std::string_view value) {
+    if (Config* l = layer_for(key)) return l->store(key, value);
     // Newlines would break the file format.
     std::string v(value);
     std::replace(v.begin(), v.end(), '\n', ' ');
@@ -194,6 +214,7 @@ void Config::set(std::string_view key, std::string_view value) {
 }
 
 void Config::erase(std::string_view key) {
+    drop_run_override(key);
     if (Config* l = layer_for(key)) return l->erase(key);
     if (std::erase_if(entries_, [&](const auto& e) { return e.first == key; }) > 0 &&
         std::find(changed_.begin(), changed_.end(), key) == changed_.end())

@@ -36,6 +36,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -1942,14 +1943,72 @@ int GameTime(lua_State* L) {
     return 2;
 }
 
+namespace {
+
+// hs.MapPolicy's last answer: an unchanged policy is the same table again (its fields are read-only), as the map
+// windows ask for it several times a frame. The table itself is in the registry under kMapPolicyTable.
+struct MapPolicyLast {
+    bool valid = false;
+    game::MapPolicy policy;
+    std::uint64_t context = 0, source = 0;
+};
+const char kMapPolicyTable = 0;
+
+bool field_is(lua_State* L, const char* field, bool expected) {
+    lua_getfield(L, -1, field); // (the table has no metatable: map_policy_intact checked)
+    const bool ok = lua_type(L, -1) == LUA_TBOOLEAN && (lua_toboolean(L, -1) != 0) == expected;
+    lua_pop(L, 1);
+    return ok;
+}
+
+bool field_is(lua_State* L, const char* field, std::string_view expected) {
+    lua_getfield(L, -1, field);
+    std::size_t n = 0;
+    const char* text = lua_type(L, -1) == LUA_TSTRING ? lua_tolstring(L, -1, &n) : nullptr;
+    const bool ok = text && std::string_view(text, n) == expected;
+    lua_pop(L, 1);
+    return ok;
+}
+
+bool field_is(lua_State* L, const char* field, std::uint64_t expected) {
+    std::array<char, 20> encoded{};
+    const auto end = std::to_chars(encoded.data(), encoded.data() + encoded.size(), expected).ptr;
+    return field_is(L, field, std::string_view(encoded.data(), static_cast<std::size_t>(end - encoded.data())));
+}
+
+// Whether the kept table on top still holds exactly what hs.MapPolicy put in it: a caller holds the same table as
+// every other window and plugin, and one that wrote to it (npc_find = true) would change what they all see. Reads
+// only, so nothing is allocated (the numbers are encoded on the stack, and a string is compared, not pushed).
+bool map_policy_intact(lua_State* L, const game::MapPolicy& policy, std::uint64_t context, std::uint64_t source) {
+    if (lua_getmetatable(L, -1)) {
+        lua_pop(L, 1);
+        return false;
+    }
+    int fields = 0;
+    lua_pushnil(L);
+    while (lua_next(L, -2)) {
+        lua_pop(L, 1);
+        ++fields;
+    }
+    return fields == 7 && field_is(L, "custom_spawns", (policy.flags & game::MapPolicyCustomSpawns) != 0) &&
+           field_is(L, "stock_npcs", !(policy.flags & game::MapPolicyHideStockNpcs)) &&
+           field_is(L, "npc_find", !(policy.flags & game::MapPolicyDisableNpcFind)) &&
+           field_is(L, "name", std::string_view(policy.name)) && field_is(L, "revision", policy.revision) &&
+           field_is(L, "context", context) && field_is(L, "source", source);
+}
+
+} // namespace
+
 // policy = hs.MapPolicy() -- {custom_spawns,stock_npcs,npc_find,name,revision,context,source}, named read-only fields.
 // Opaque equality-only strings: revision tracks provider/content, source only provider ownership/lifetime, and
 // context the connection/player. Names are display text. Missing providers retain stock availability/preferences.
+// While all of it stays the same, each call returns the same table (a new one if a caller has changed it).
 int MapPolicy(lua_State* L) {
     const auto& host = *host_of(L);
     struct Value { game::MapPolicy policy; std::uint64_t context = 0, source = 0; };
-    auto& value = plugin::lua_keep<Value>(L);
-    const int holder = lua_gettop(L);
+    plugin::LuaScratch<Value> box(L); // (one box for every call: plugin/lua_keep.h)
+    auto& value = *box;
+    const int holder = box.kept() ? 0 : lua_gettop(L);
     plugin::cxx_guard(L, [&] {
         const auto* connection = host.conn;
         const auto before = connection ? connection->interaction_context() : 0;
@@ -1969,6 +2028,20 @@ int MapPolicy(lua_State* L) {
         }
     });
     const auto& policy = value.policy;
+    auto& last = plugin::lua_state_value<MapPolicyLast>(L);
+    const bool same = last.valid && last.policy.flags == policy.flags && last.policy.name == policy.name &&
+                      last.policy.revision == policy.revision && last.context == value.context &&
+                      last.source == value.source;
+    if (same) {
+        if (lua_rawgetp(L, LUA_REGISTRYINDEX, &kMapPolicyTable) == LUA_TTABLE &&
+            map_policy_intact(L, policy, value.context, value.source)) {
+            if (holder) lua_remove(L, holder);
+            box.release();
+            return 1;
+        }
+        lua_pop(L, 1);
+    }
+    last.valid = false; // (until the new table is made and kept)
     lua_createtable(L, 0, 7);
     lua_pushboolean(L, (policy.flags & game::MapPolicyCustomSpawns) != 0); lua_setfield(L, -2, "custom_spawns");
     lua_pushboolean(L, !(policy.flags & game::MapPolicyHideStockNpcs)); lua_setfield(L, -2, "stock_npcs");
@@ -1982,7 +2055,16 @@ int MapPolicy(lua_State* L) {
     opaque(policy.revision, "revision");
     opaque(value.context, "context");
     opaque(value.source, "source");
-    lua_remove(L, holder);
+    lua_pushvalue(L, -1);
+    lua_rawsetp(L, LUA_REGISTRYINDEX, &kMapPolicyTable);
+    plugin::cxx_guard(L, [&] {
+        last.policy = policy;
+        last.context = value.context;
+        last.source = value.source;
+    });
+    last.valid = true;
+    if (holder) lua_remove(L, holder);
+    box.release();
     return 1;
 }
 

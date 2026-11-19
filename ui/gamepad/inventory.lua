@@ -197,6 +197,18 @@ ui.window("Inventory", function()
       local leftW, rightW = T.px(400), T.px(380)
       local midX = x0 + leftW + T.px(40)
       local sheetY = sheet(x0, y0, x0 + leftW)
+      local shroud = API.windows.Text(INV, "ShroudModeLabel") or ""
+      if shroud ~= "" then
+        T.draw(x0, sheetY + T.px(8), shroud, C.accent)
+        sheetY = sheetY + T.px(33)
+      end
+      if API.windows.ChildShown(INV, "ShroudProgressButton") == true then
+        ui.SetCursorPos(x0 - wx, sheetY + T.px(8) - wy)
+        if T.button("##shroudProgress", "Shroud Progress", leftW, T.px(51), {}, pad) then
+          API.windows.ClickChild(INV, "ShroudProgressButton", "left")
+        end
+        sheetY = sheetY + T.px(58)
+      end
       currencyFocused = currencyList(x0, sheetY + T.px(16), x0 + leftW, y1, held ~= nil)
       local focusedItem, focusedWhere, focusedSlot, focusedBag
       if held and W.pressed("lb") then

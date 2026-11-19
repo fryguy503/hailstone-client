@@ -341,11 +341,10 @@ ui.window("Server Plugins", function()
   end
   T.frame() -- (this file\'s copy of lib/theme.lua: its scale for this screen)
   local h = 470 + 60 * math.min(#q.plugins, 4)
-  if W.begin("Server Plugins", { w = 900, h = h, title = "Allow this server's plugin?", alwaysFocus = true,
+  if W.begin("Server Plugins", { w = 900, h = h, title = q.title, alwaysFocus = true,
         hints = { { "a", "Select" }, { "b", "Not now" } } }) then
     local x0, y0, x1, y1, w = W.area()
-    local y = wrapped(string.format("%s wants to run %s on your computer:", q.server,
-      #q.plugins == 1 and "a compiled plugin" or "compiled plugins"), x0, y0, w, C.text)
+    local y = wrapped(q.intro, x0, y0, w, C.text)
     for i, p in ipairs(q.plugins) do
       if i > 4 then
         y = wrapped(string.format("and %d more", #q.plugins - 4), x0, y, w, C.dim)

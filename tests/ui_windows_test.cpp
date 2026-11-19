@@ -124,6 +124,79 @@ struct Harness {
 
 } // namespace
 
+TEST_CASE("HUD invisibility captions use viewer awareness and the undead display option") {
+    test::ScratchDir game_scratch("ui_invisibility");
+    GameDir game(game_scratch.path());
+    Harness t(game);
+    auto& world = t.conn.world_for_test();
+    world.player_id = 10;
+    world.target_id = 11;
+    world.spawns[10].id = 10;
+    auto& target = world.spawns[11];
+    target.id = 11;
+    target.name = "Visitor";
+    target.invis_rank = 2;
+
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(mq_test::spell_line({{0, "6702"}, {1, "Fixture IVU"}, {86, "28"}})) == 1);
+    t.conn.set_spell_table_for_test(table);
+    auto& spells = net::GameConnectionTestAccess::spells(t.conn);
+    spells.target_buffs_entity = target.id;
+    game::BuffSlot undead;
+    undead.spell = 6702;
+    spells.target_buffs.emplace_back(0, undead);
+
+    bool enabled = false;
+    t.host.get_option = [&](std::string_view key) { return key == "show_invis_undead" && enabled ? 1 : 0; };
+    std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), &lua_close);
+    REQUIRE(lua);
+    luaL_openlibs(lua.get());
+    lua_newtable(lua.get());
+    t.api->register_functions(lua.get());
+    lua_setglobal(lua.get(), "hs");
+    const auto check_captions = [&](std::string_view expected) {
+        lua_settop(lua.get(), 0);
+        REQUIRE(luaL_dostring(lua.get(), R"lua(
+            local character = hs.UI.character
+            local _, raw = character.Gauge(6)
+            local _, caption = character.Gauge(6, true)
+            local label = character.Label(28)
+            return raw, caption, label, character.Label(28, true)
+        )lua") == LUA_OK);
+        for (int i = 1; i <= 4; ++i) REQUIRE(lua_isstring(lua.get(), i));
+        CHECK(std::string_view(lua_tostring(lua.get(), 1)) == "Visitor");
+        CHECK(std::string_view(lua_tostring(lua.get(), 2)) == expected);
+        CHECK(std::string_view(lua_tostring(lua.get(), 3)) == "Visitor");
+        CHECK(std::string_view(lua_tostring(lua.get(), 4)) == expected);
+    };
+    check_captions("Visitor");
+    world.spawns[10].gm = true;
+    check_captions("(Visitor)");
+    enabled = true;
+    check_captions("([Visitor])");
+    target.invis_rank = 0;
+    check_captions("[Visitor]");
+    target.is_corpse = true;
+    check_captions("Visitor");
+
+    // The player's own caption: the marks round the name, before the last name's line.
+    auto& me = world.spawns[10];
+    me.name = "Hero";
+    me.last_name = "Smith";
+    me.invis_rank = 1;
+    lua_settop(lua.get(), 0);
+    REQUIRE(luaL_dostring(lua.get(), R"lua(
+        local character = hs.UI.character
+        local _, plain = character.Gauge(1)
+        local _, marked = character.Gauge(1, true)
+        return plain, marked
+    )lua") == LUA_OK);
+    REQUIRE(lua_isstring(lua.get(), 1));
+    REQUIRE(lua_isstring(lua.get(), 2));
+    CHECK(std::string_view(lua_tostring(lua.get(), 1)) == "Hero\nSmith");
+    CHECK(std::string_view(lua_tostring(lua.get(), 2)) == "(Hero)\nSmith");
+}
+
 TEST_CASE("Group role menus: self, member rows, permissions and confirmed role checks") {
     hailstone::test::ScratchDir game_scratch("ui_windows_group_roles");
     GameDir game(game_scratch.path());

@@ -58,6 +58,7 @@ struct MaterialInfo {
         bool diffuse = false, normal = false, environment = false;
         bool shininess = false, env_strength = false;
     } surface_properties;
+    std::string diffuse2; // e_TextureDiffuse1
 };
 
 // A parsed .mds / .mod character mesh.

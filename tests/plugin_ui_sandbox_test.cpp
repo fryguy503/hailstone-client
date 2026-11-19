@@ -500,7 +500,7 @@ TEST_CASE("Plugin UI: the consent question's windows are the pack's alone") {
                              "  INTO = ui.Begin('Consent##q') ui.Button('inject')\n"
                              "  if ui.BeginChild('c', 10, 10) then ui.Text('inject') end ui.EndChild()\n"
                              "  ui.End()\n"
-                             "  PROMPT = ui.Begin(\"Allow this server's plugin?##hailstone_plugin_consent\") ui.End()\n"
+                             "  PROMPT = ui.Begin(\"Allow these plugins?###hailstone_plugin_consent\") ui.End()\n"
                              "end)\n");
     int foreground = 0;
     auto frame = [&] {
@@ -704,7 +704,9 @@ TEST_CASE("Plugin UI: a runaway window is stopped, the state's memory is capped,
     for (const char* opt : {"'stop'", "'restart'", "'collect'", "'incremental', 10, 10", "'generational'"})
         CHECK(s.run("plugin:A", std::string("collectgarbage(") + opt + ")").find("only 'count' and 'step'") !=
               std::string::npos);
-    CHECK(s.run("", "return collectgarbage('isrunning')") == "false"); // the host's pacing, as it was
+    // The plugins' calls above changed nothing: the generational collector runs on its own (lua_host.cpp
+    // collect_garbage).
+    CHECK(s.run("", "return collectgarbage('isrunning')") == "true");
 }
 
 // The player's clipboard (ui.GetClipboardText / SetClipboardText ask the state's "hailstone.clipboard_allowed", as a

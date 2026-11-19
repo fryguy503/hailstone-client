@@ -1,6 +1,6 @@
 /* A test plugin for the server extension interface (sdk/hailstone_plugin.h, ABI 2; tests/native_extension_test.cpp):
  * it sets class masks, pets, switches and vitals from InitializePlugin and answers a few hooks. /exton and /extoff
- * switch it active and inactive.
+ * switch it active and inactive; /extclass <id> [name [short]] names a class (set_class_name; no name: NULL).
  *
  * Built three times: ExtendTest (ABI 2); with HAILSTONE_TEST_ABI1, ExtendTestV1, a plugin as an ABI 1 client built
  * it (no hook table, the old host table, only the old export names), which must still load; and with
@@ -32,6 +32,16 @@ static void ext_off(void* user, const char* args) {
     (void)user;
     (void)args;
     nmsc->set_active(nmsc->host, 0);
+}
+
+static void ext_class(void* user, const char* args) {
+    unsigned id = 0;
+    char name[64] = "", short_name[16] = "";
+    int n;
+    (void)user;
+    if (!NMSC_HOST_HAS(nmsc, set_class_name)) return;
+    n = sscanf(args ? args : "", "%u %63s %15s", &id, name, short_name);
+    nmsc->set_class_name(nmsc->host, id, n >= 2 ? name : NULL, n >= 3 ? short_name : NULL);
 }
 
 static int is_spellcaster(int* out) {
@@ -264,6 +274,7 @@ NMSC_EXPORT void InitializePlugin(void) {
     AddCommand("/extoff", ext_off, 0);
     AddCommand("/extread", ext_read, 0);
     AddCommand("/extmore", ext_more, 0);
+    AddCommand("/extclass", ext_class, 0);
     AddCommand("/extnext", ext_next, 0);
     nmsc->add_ui_function(nmsc->host, "info", ui_info, 0);
     nmsc->add_option(nmsc->host, "mode", "Mode", 0, 3, get_mode, set_mode, 0);
@@ -275,6 +286,7 @@ NMSC_EXPORT void ShutdownPlugin(void) {
     RemoveCommand("/extoff");
     RemoveCommand("/extread");
     RemoveCommand("/extmore");
+    RemoveCommand("/extclass");
     RemoveCommand("/extnext");
 }
 #endif

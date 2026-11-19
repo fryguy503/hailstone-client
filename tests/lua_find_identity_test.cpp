@@ -156,3 +156,40 @@ TEST_CASE("Find identity: provider exceptions become Lua errors without breaking
     CHECK(ui.run("return hs.UI.find.Open(true)") == "true");
     CHECK(ui.run("return #hs.UI.find.Npcs()") == "1");
 }
+
+TEST_CASE("Map policy: an unchanged policy is the same table, made again when any of it changes") {
+    FindUi ui;
+    REQUIRE(ui.run("first=hs.MapPolicy(); return rawequal(first, hs.MapPolicy()) and first.name") == "Shared provider");
+    // No garbage while it stays the same (the windows ask several times a frame).
+    CHECK(ui.run("collectgarbage('stop') local b=collectgarbage('count') local p=hs.MapPolicy() "
+                 "local a=collectgarbage('count') collectgarbage('restart') return rawequal(p, first) and a==b") == "true");
+    ui.provider->policy.name = "Renamed";
+    CHECK(ui.run("second=hs.MapPolicy(); return (not rawequal(second, first)) and first.name=='Shared provider' and second.name") == "Renamed");
+    ui.provider->policy.flags = game::MapPolicyHideStockNpcs;
+    CHECK(ui.run("local p=hs.MapPolicy(); return (not rawequal(p, second)) and p.stock_npcs") == "false");
+    ui.host.conn = nullptr; // another context
+    CHECK(ui.run("local p=hs.MapPolicy(); return (not rawequal(p, second)) and p.context") == "0");
+}
+
+TEST_CASE("Map policy: a caller that changes the kept table does not change what the next call returns") {
+    FindUi ui;
+    ui.provider->policy.flags = game::MapPolicyDisableNpcFind;
+    REQUIRE(ui.run("first=hs.MapPolicy(); return tostring(first.npc_find)") == "false");
+    // A write to a field: the next call is a new table with the policy's values, and the written one is left alone.
+    CHECK(ui.run("first.npc_find=true; local p=hs.MapPolicy(); "
+                 "return tostring(not rawequal(p, first))..'|'..tostring(p.npc_find)..'|'..tostring(first.npc_find)") ==
+          "true|false|true");
+    // A field added, or one removed: made again too, with every field as the policy has it.
+    CHECK(ui.run("second=hs.MapPolicy(); second.extra=1; local p=hs.MapPolicy(); "
+                 "return tostring(not rawequal(p, second))..'|'..tostring(p.extra)..'|'..p.name") ==
+          "true|nil|Shared provider");
+    CHECK(ui.run("third=hs.MapPolicy(); third.name=nil; local p=hs.MapPolicy(); "
+                 "return tostring(not rawequal(p, third))..'|'..p.name") == "true|Shared provider");
+    // A metatable put on it (whose __index could answer for a removed field): made again.
+    CHECK(ui.run("fourth=hs.MapPolicy(); setmetatable(fourth, {}); return tostring(not rawequal(hs.MapPolicy(), fourth))") ==
+          "true");
+    // Left alone, the new table is kept again, and checking it makes no garbage.
+    CHECK(ui.run("local p=hs.MapPolicy(); collectgarbage('stop') local b=collectgarbage('count') local q=hs.MapPolicy() "
+                 "local a=collectgarbage('count') collectgarbage('restart') return tostring(rawequal(p, q) and a==b)") ==
+          "true");
+}

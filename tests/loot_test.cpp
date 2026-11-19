@@ -423,6 +423,29 @@ TEST_CASE("loot: a delayed Loot All confirmation runs with an individual request
     CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 1);
 }
 
+TEST_CASE("loot: a second Loot All click while its question is pending asks nothing more") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 1);
+    conn.set_client_option_for_session(game::ClientOption::LootNoDrop, 2);
+    conn.destroy_cursor();
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.receive_zone_packet_for_test(loot_item_packet(23, "Cloth Cap"));
+    conn.receive_zone_packet_for_test(money(6));
+
+    conn.loot_all();
+    conn.loot_all(); // a second click before the first question was answered
+    REQUIRE(conn.confirmation());
+    CHECK(conn.confirmation()->id == kConfirmLootAll);
+    conn.answer_confirmation(true);
+    CHECK_FALSE(conn.confirmation()); // one yes was enough: no second question waiting behind it
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig) == std::vector<std::uint16_t>{23});
+}
+
 TEST_CASE("loot: an accepted NO DROP question keeps Loot All open until both outstanding replies arrive") {
     Rig rig;
     auto& conn = rig.conn;

@@ -123,6 +123,9 @@ std::vector<RequiredAddonCandidate> ClientApp::addon_requirement_candidates(cons
 }
 
 void ClientApp::show_addon_requirement(const std::vector<AddonRequirementProblem>& problems, std::string message) {
+    // The reasons in the log too, each of them (the login screen's panel shows the first): missing, a version too
+    // low, changed files, capabilities the server does not allow, an invalid policy.
+    for (const auto& line : addon_refusal_log_lines(problems, message)) log::warn("{}", line);
     addons_listed_ = {};
     const AddonsStatus st = addons_ ? addons_->status() : AddonsStatus{};
     present_addon_requirement(login_view_, problems, st.index ? &*st.index : nullptr, std::move(message));

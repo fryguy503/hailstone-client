@@ -20,6 +20,16 @@ local SHORT = {
   Druid = "DRU", Monk = "MNK", Bard = "BRD", Rogue = "ROG", Shaman = "SHM", Necromancer = "NEC", Wizard = "WIZ",
   Magician = "MAG", Enchanter = "ENC", Beastlord = "BST", Berserker = "BER",
 }
+-- A class's short name: the server's where its plugin named the class (API.character.ClassName), else the table's.
+local HAS_CLASS_NAMES = API.Supports and API.Supports("character", "ClassName") == true
+local function shortName(c)
+  if HAS_CLASS_NAMES then
+    for id = 1, 16 do
+      if API.character.ClassName(id) == c then return API.character.ClassName(id, true) end
+    end
+  end
+  return SHORT[c] or c:sub(1, 3):upper()
+end
 
 -- The class label (one class a line on a multiclass server) as a list, its names joined, their short names joined
 -- and the hover text; kept while the label reads the same.
@@ -36,7 +46,7 @@ local function classes()
       end
     end
     local short = {}
-    for i, c in ipairs(list) do short[i] = SHORT[c] or c:sub(1, 3):upper() end
+    for i, c in ipairs(list) do short[i] = shortName(c) end
     classList, classFull, classShort = list, table.concat(list, " / "), table.concat(short, " / ")
     classTip = table.concat(list, "\n")
   end
@@ -130,7 +140,7 @@ local function body(x, y, w, h, s)
   combatState(cx, cy, r, s)
 
   local bx0, bx1 = cx + r + 10 * s, x + w - pad
-  local hpFrac, hpLabel = API.character.Gauge(1)
+  local hpFrac, hpLabel = API.character.Gauge(1, true)
   local name = (hpLabel or API.character.Name() or ""):match("^[^\n]*")
   local nameColor = C.text
   do

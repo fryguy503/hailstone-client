@@ -17,6 +17,7 @@
 #include <system_error>
 
 #include "app/client_app.h"
+#include "app/display_flags.h"
 #include "app/frame_pace.h"
 #include "app/terrain_cache.h"
 #include "app/update_install.h"
@@ -133,6 +134,8 @@ struct Options {
     std::optional<hailstone::app::DemoScreen> ui_demo; // show the developer UI demo
     float ui_scale = 0.0f;                        // > 0 overrides the display scale
     int window_width = 1280, window_height = 720;  // the client window (--window-size)
+    bool window_size_given = false;
+    std::vector<std::pair<std::string, std::string>> client_display; // the display flags as the client takes them
     std::string user, password, character;        // client auto-login (testing)
     hailstone::app::LoginLaunch login_launch;
     std::string host;                              // --host for the auto-login
@@ -231,7 +234,8 @@ void usage() {
         "  --input-script S   after zoning in, play made-up input: ';'-separated \"<seconds> <step>\" (pad <button>,\n"
         "                     axis <stick> <value>, key <name>, text <text>, click <x> <y>, wheel <x> <y> <n>,\n"
         "                     shot <file>, state, close, droplink; app/input_script.h; a virtual pad is attached; testing)\n"
-        "  --window-size WxH  the window's size in pixels (default 1280x720)\n"
+        "  --window-size WxH  the window's size in pixels (default: the client's window as it last closed, else\n"
+        "                     1280x720; a --window-size run does not save its window)\n"
         "  --auto-accept      accept group invitations (testing)\n"
         "  --max-fps N|auto   cap the frame rate (the original's MaxFPS; movement physics runs per frame); auto: just\n"
         "                     under the display's refresh rate\n"
@@ -265,7 +269,11 @@ void usage() {
         "  --time-type N      viewer zone time type: 1, 2, 5 outdoor, 4 half lit, else dark (default 1 with a\n"
         "                     sky, 0 without)\n"
         "  --lighting MODE    classic (the original's vertex lighting, default), smooth (the classic, per pixel),\n"
-        "                     modern (docs/graphics.md) or none (full-bright)\n"
+        "                     modern (docs/graphics.md) or none (full-bright; the viewer only)\n"
+        "                     The client takes --lighting, --msaa, --tonemap, --exposure, --shadows, --light-shadows,\n"
+        "                     --no-ao, --depth-prepass, --bloom, --render-scale, --sharpness, --upscaler, --frame-gen\n"
+        "                     and --view-distance over its saved settings for that run, unsaved (display.*; a change\n"
+        "                     in the Options window takes over and is saved); their defaults are the viewer's\n"
         "  --msaa N           samples per pixel (1, 2, 4, 8; default 4)\n"
         "  --tonemap NAME     none, agx, aces or soft (default: agx with --lighting modern, soft with smooth,\n"
         "                     else none)\n"
@@ -274,7 +282,7 @@ void usage() {
         "  --light-shadows N  how many lights cast shadows (0 off; default 8, at most 8), modern\n"
         "  --no-ao            no screen-space ambient occlusion (--lighting modern)\n"
         "  --depth-prepass    draw the opaque geometry depth-only first, then colour it (--lighting modern)\n"
-        "  --gpu-timing       with --frames, log each pass's mean GPU time over the timed frames\n"
+        "  --gpu-timing       viewer, with --frames: log each pass's mean GPU time over the timed frames\n"
         "  --bloom N          bloom strength 0..1 (--lighting modern; default 0.5)\n"
         "  --render-scale P   draw the 3D view at P percent of its size (33..100) and upscale it (--upscaler)\n"
         "  --sharpness N      FSR 1's sharpening below a render scale of 100, 0..1 (default 0.5)\n"
@@ -290,7 +298,7 @@ void usage() {
         "                     viewer draws flora with --lighting modern only\n"
         "  --no-smooth-ground viewer: draw the zone's ground as the file's flat triangles (display.smooth_ground off)\n"
         "  --flora-distance U viewer: draw the flora U units round the camera (400 .. 1200; default 400)\n"
-        "  --grass-density P  viewer: the lawn's thickness in percent (25 .. 200; default 100)\n"
+        "  --grass-density P  viewer: the lawn's thickness in percent (25 .. 300; default 100)\n"
         "  --flora-push X Y Z viewer: the flora bends away from a foot standing there, as from a spawn (testing)\n"
         "  --moon P           the moon's phase, 0 new .. 0.5 full .. 1 (--lighting modern; client: instead of the calendar)\n"
         "  --blood-moon B     the blood moon, 0 none .. 1 (--lighting modern; client: instead of the calendar)\n"
@@ -361,6 +369,7 @@ Options parse_args(int argc, char** argv) {
             i = static_cast<int>(launch_at) + 1;
             continue;
         }
+        const int flag_at = i;
         auto arg = [&](const char* name) { return std::strcmp(argv[i], name) == 0; };
         auto need = [&](int n) {
             if (i + n >= argc) throw std::runtime_error(std::string(argv[i]) + " needs " + std::to_string(n) + " value(s)");
@@ -568,6 +577,7 @@ Options parse_args(int argc, char** argv) {
         } else if (arg("--window-size")) {
             need(1);
             std::sscanf(argv[++i], "%dx%d", &o.window_width, &o.window_height);
+            o.window_size_given = true;
         } else if (arg("--ui-scale")) {
             need(1);
             o.ui_scale = std::strtof(argv[++i], nullptr);
@@ -720,6 +730,9 @@ Options parse_args(int argc, char** argv) {
         } else {
             unknown.emplace_back(argv[i]);
         }
+        // The display flags the client takes too, for this run only (app/display_flags.h).
+        if (auto setting = hailstone::app::display_flag_setting(argv[flag_at], i > flag_at ? argv[i] : ""))
+            o.client_display.push_back(std::move(*setting));
     }
     for (const auto& line : hailstone::app::unknown_argument_warnings(o.login_launch, unknown))
         hailstone::log::warn("{}", line);
@@ -855,6 +868,10 @@ int main(int argc, char** argv) {
             c.ui_scale = opts.ui_scale;
             c.window_width = opts.window_width;
             c.window_height = opts.window_height;
+            c.window_size_given = opts.window_size_given;
+            c.display_settings = opts.client_display;
+            if (opts.lighting == render::VertexLighting::None)
+                log::warn("--lighting none (full-bright) is the viewer's alone; the client keeps its lighting setting");
             c.clip_plane = opts.clip_plane;
             c.auto_user = opts.user;
             c.auto_password = opts.password;

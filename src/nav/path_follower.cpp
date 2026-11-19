@@ -109,6 +109,15 @@ SteerOutput PathFollower::step(const glm::vec3& feet, double now) {
         state_ = FollowState::Arrived;
         return out;
     }
+    // Within the arrival distance of the end along the path, with corners still ahead: done there, not at the last
+    // corner (a /nav distance=45 stops 45 short, however the path bends round the goal). Along the path, never
+    // straight across: a goal behind a wall is not reached through it. In height the end may be as far off as the
+    // distance itself, or vertical_reach when that is more.
+    if (next_ + 1 < points_.size() && remaining(feet) <= arrive_ &&
+        (!check_height_ || std::abs(points_.back().z - feet.z) <= std::max(tune_.vertical_reach, arrive_))) {
+        state_ = FollowState::Arrived;
+        return out;
+    }
 
     // Progress counts height too (a fall, a dive, a climb up a column of water are progress), except for the
     // server's path, whose heights are not ours.

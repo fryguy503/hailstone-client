@@ -26,7 +26,7 @@ TEST_CASE("A spawn with an actor is never a placeholder box, even past the actor
     CHECK(spawn_draw(true, true, 476.0f, clip) == SpawnDraw::Model); // past the fog end, inside the clip: drawn
     CHECK(spawn_draw(true, true, 591.0f, clip) == SpawnDraw::Clipped);
     CHECK(spawn_draw(true, true, 5000.0f, 0.0f) == SpawnDraw::Model); // no clip (the viewers)
-    CHECK(spawn_draw(true, false, 30.0f, clip) == SpawnDraw::Empty);  // race 127's IVM
+    CHECK(spawn_draw(true, false, 30.0f, clip) == SpawnDraw::Empty);  // an actor whose model failed to build
     CHECK(spawn_draw(true, false, 900.0f, clip) == SpawnDraw::Empty);
     CHECK(spawn_draw(false, false, 30.0f, clip) == SpawnDraw::Box);   // no actor, not even HUM / HUF
 }

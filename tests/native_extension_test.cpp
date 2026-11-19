@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "game/combat.h"
+#include "game/eq_names.h"
 #include "game/server_ext_chain.h"
 #include "game/spells.h"
 #include "mq/commands.h"
@@ -537,4 +538,42 @@ TEST_CASE("plugin windows: the bridge alone") {
     CHECK_FALSE(b.has_plugin("X"));
     CHECK(b.options().empty());
     CHECK(b.menu().empty());
+}
+
+TEST_CASE("plugin server extension: set_class_name names classes while the plugin may extend the client") {
+    game::clear_class_name_overrides();
+    Host h;
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("ExtendTest"));
+    h.run("/extclass 1 Vanguard VAN");
+    h.run("/extclass 8 Skirmisher");
+    CHECK(game::class_name(1) == "Vanguard");
+    CHECK(game::class_short_name(1) == "VAN");
+    CHECK(game::class_name(8) == "Skirmisher");
+    CHECK(game::class_short_name(8) == "BRD");
+    CHECK(game::class_name(20) == "Vanguard Guildmaster");
+    // NULL restores the stock name; refused input changes nothing.
+    h.run("/extclass 8");
+    CHECK(game::class_name(8) == "Bard");
+    h.run("/extclass 17 Nobody NOB");
+    h.run("/extclass 1 Vanguard VANGD");
+    CHECK(game::class_name(1) == "Vanguard");
+    CHECK(game::class_short_name(1) == "VAN");
+
+    // The server's rules take `extend` away: its names go.
+    h.approve(plugin::kCapAll & ~plugin::kCapExtend);
+    h.plugins->policy_changed({});
+    CHECK(h.plugins->loaded("ExtendTest"));
+    CHECK(game::class_name(1) == "Warrior");
+    h.run("/extclass 1 Vanguard VAN"); // refused without it
+    CHECK(game::class_name(1) == "Warrior");
+
+    // Unloaded: its names go.
+    h.approve(plugin::kCapAll);
+    h.plugins->unload("ExtendTest");
+    REQUIRE(h.plugins->load("ExtendTest"));
+    h.run("/extclass 1 Vanguard VAN");
+    CHECK(game::class_name(1) == "Vanguard");
+    h.plugins->unload("ExtendTest");
+    CHECK(game::class_name(1) == "Warrior");
 }

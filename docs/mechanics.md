@@ -865,8 +865,10 @@ it nor the button (WndNotification @0x6be180) looks at an individual loot reques
 until the reply that exhausts it (Handle_OP_LootItem @0x6bd414). Every OP_LootItem reply advances the list by one,
 an individual loot's reply too, and the list is not checked against what is still on the corpse, so an item asked for
 on its own just before Loot All is asked for again. Hailstone does the same. Its own additions: while a Loot All is
-active the button does not open the "are you sure" question, whose yes would be ignored; and a request that cannot be
-sent (any loot request) cancels the automatic queue so the player can retry.
+active the button does not open the "are you sure" question, whose yes would be ignored; while that question is up or
+waiting its turn a second click does not ask it again, so two quick clicks need one yes (whether the original's
+ConfirmationDialog would show a second one is not traced); and a request that cannot be sent (any loot request)
+cancels the automatic queue so the player can retry.
 
 A NO DROP item requiring confirmation is left out of the queue and opens the first question during the scan
 (@0x6bdf93). Another item requiring confirmation aborts the queue but leaves that first question alive; answering it
@@ -907,6 +909,15 @@ their partner dies (Handle_OP_Death @0x532b50 closes the training window and can
 Player trades use the same 3D distance check as hand-ins, whether the local player or partner moves. Only an open
 trade is checked; a request still waiting for its answer is not. Cancellation clears the offer without crediting
 items or coin locally; the server's item packets and OP_MoneyUpdate return them.
+The client that cancels says nothing itself: CTradeWnd_CancelAndClose @0x780af0 and Send_OP_CancelTrade @0x780550
+print no line. The chat lines come from the server's OP_CancelTrade (Handle_OP_CancelTrade @0x4b7710: 1448
+"<name> has cancelled the trade.", 1450 "You have cancelled the trade." for the receiver's own id). A stock EQEmu
+(`Client::Handle_OP_CancelTrade`) answers a hand-in's cancel with the NPC's id, but for a player trade it only
+forwards the cancel to the partner, with the partner's own id. So whoever's client cancels first (the one that
+walked out of reach, or closed the window) gets no line, and the other reads 1450 when its client takes the
+forwarded cancel: walking away from a trade closes it silently, while being teleported away usually shows the line,
+because the partner's client noticed the distance first. Both are the original's behaviour. Hiding the trade window or the Give
+window cancels the trade it shows (CTradeWnd::AboutToHide); hiding the one that is not shown leaves the trade alone.
 
 A late open reply cannot show a window out of reach: the tribute master's (CTributeMasterWnd::AboutToShow @0x7878b0)
 and the trainer's (Handle_OP_GMTraining @0x4b49c0) apply the same 20-unit check to the answer. A training request or
@@ -1187,6 +1198,12 @@ teleport index request and wait 300, do-teleport-B 2000, zone player to bind 120
   moving forward while sitting) cancels it (12290), any other
   stand 12683; it never looks at an open trade. At the end the position history goes (when not riding), then
   OP_Logout.
+  A zone change ends a camp silently: the next zone's EnterZone runs ResetClientStateForZone(1) @0x5319f0, which
+  clears the camp's time (0xddf8a0) and its kind (0xdd2664), so the client stays in the new zone.
+  The window's close button in game is a /camp desktop (HandleWindowCloseRequest). Deliberate difference (always on,
+  `app/close_camp.h`): when a zone change ends that camp (a `#zone`, a gate, a zone line taken meanwhile), the
+  client camps to the desktop again once the next zone shows, so closing the window still ends it. A camp the
+  player ended (standing, a second /camp) is not made again.
   Enhancement (option `fast_camp`, hailstone.ini `game.fast_camp`, Options > General "Fast Camp", off by default):
   OP_Logout follows OP_Camp at once instead of after the 30 s. A stock EQEmu zone ends a camp cleanly only once its
   own 29 s camp timer has run (a GM's at once); a logout before that is a disconnect, and the character stays in the
@@ -1319,6 +1336,19 @@ and `npc_owner_line`
   takes the title's place (`game::name_sprite_market_words`). An offline trader reads "Offline Trader Name". Only a
   player's (spawn type 0): an NPC the server marks as a trader keeps its plain name, as in the original. Stock EQEmu
   sets neither offline flag, so its traders and buyers show only "Trader " / "Buyer ".
+- An invisible player or live NPC that the viewer can see has its name in parentheses, `(Name)`, as in the original
+  (PlayerClient::SetNameSpriteState @0x58e2d0: "(" round the name alone, inside the title, last name and leadership
+  marks, when the spawn's HideMode +0x338 is above 0; never on a corpse or a race from 0x8cd up;
+  `GameConnection::name_invisibility`). Another spawn's HideMode is the server's (the spawn record, then
+  SpawnAppearance type 3), so regular invisibility and a hider seen by others count. The player's own comes from its
+  effects (EQ_Character::UpdateMyVisibleStatus @0x459510, by CalcInvisLevel @0x442770): above 0 for regular
+  invisibility (SPAs 12 and 314), -2 and -1 for invisibility versus undead and versus animals, which get no
+  parentheses. The Hide skill is not among them, and stock EQEmu sends the hider nothing for it, so a hidden player's
+  own name stays plain (others see "(Name)"). The marks follow the spawn's state every frame. A Hailstone addition, off by default: Options > Display **Bracket Invis vs. Undead**
+  (`display.show_invis_undead`) shows `[Name]` for invisibility versus undead the client knows of (SPAs 28 and 315 in
+  the player's own buffs, or in the target's OP_TargetBuffs list while it is the target), `([Name])` with both. A
+  deliberate difference, which a UI pack asks for: the player, target and target-of-target captions show the same
+  marks (the original's captions are plain names, __GetLabelFromEQ @0x763640 and __GetGaugeValueFromEQ @0x762410).
 - A GM's name is green (`#1da64b`) as in the original (PlayerClient::SetNameSpriteTint @0x58bf00,
   `game::gm_name_colour`): the gm flag, not a live NPC (type 1), and Anon 0, so an anonymous or roleplaying GM shows
   the ordinary colour. A deliberate difference: the original keeps the green on a corpse that carries the gm flag,
@@ -2026,6 +2056,26 @@ sound's HP. The bare packet value goes below 1 while a geared player still stand
 it. The developer stats window compares its computed Max_HP with that sum. The regeneration ticks and the sheet's
 stored HP keep the packet's value (Cur_HP adds the item sum to it).
 
+## Guild banners
+
+The Guild window's Banner page requests the guild's current design, the active banner and its timer, and a
+kit list filtered by category and inventory. Categories come from the player's `Resources/BannerCategories.txt`.
+Both UI packs show the active banner and available kits. The original's two design layers are previewed using
+the textures in the player's game folder, with separate pattern and colour controls. Cancel discards the draft.
+Saving requires a modification item reported by the server (only an item ID of -1 refuses it). The next received
+design replaces the saved preview.
+A status update asks for the kit list and status again, as does a status reply while the design editor is open.
+
+Change, Plant and Remove require separate guild permissions and ownership of The Buried Sea. Plant also checks
+zone placement and proximity to the floor. The server decides where banners can actually be planted, nearby
+member requirements, kit consumption, removal, benefits and portal travel. The countdown is display-only.
+An inactive kit can stay in the list when Show All is selected. Banner state clears with the guild window,
+guild membership or zone context. Stock EQEmu leaves the kit list empty and the banner actions disabled.
+
+The Guild Hall portal uses the server's normal merchant, interaction and zone-transfer paths, including the
+server's destination and entry checks. Planted actors use the client assets' cloth background and emblem
+with their received colours. See [the RoF2 packet notes](protocol/rof2-packets.md#guild-banners).
+
 ## Fellowships
 
 Fellowship state comes from the server. Create, invitations, MOTD, leadership, removal, leaving, disbanding,
@@ -2059,6 +2109,22 @@ bit to the server. Kit descriptions use DBString type 0, as the original selecti
 keep an all-category filter and the server-supplied kit name. The camp countdown is presentation only: expiration
 does not mutate membership or grant permission to place a camp before the server updates it.
 
+
+## Spirit Shrouds and Monster Missions
+
+A shroudkeeper on a supporting server opens the Spirit Shroud picker. Both interfaces show the offered forms,
+unlock progress, levels, abilities and equipment previews. Returning to the shroudkeeper can restore the original
+form. A shared task with an offered Monster Mission catalog adds Monster Select to the Quest Journal. The picker
+shows required and optional roles and counts assignments against each role's capacity. A server acknowledgement
+confirms the assignment. The server sends the form change when the character actually takes on the role.
+
+A form change replaces the server-supplied profile and carried items, including spells, buffs and alternate
+abilities. The character-select model also uses alternate appearance data when the server supplies it. The
+inventory shows shroud progress when received. At an eligible banker, the Shroud Bank can inspect and retrieve
+items the server stored. The server supplies the storage contents and confirms each withdrawal.
+
+See [the RoF2 packet layouts](protocol/rof2-packets.md#spirit-shrouds-and-monster-missions-netshroud_packetsh)
+and [the remaining server-compatibility and gameplay checks](unknowns.md#spirit-shrouds-and-monster-missions).
 
 ## Adventures (LDoN)
 

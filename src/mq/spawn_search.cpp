@@ -93,15 +93,22 @@ constexpr std::array<std::string_view, 14> kLights = {"NONE", "CDL", "TR",  "TGS
 std::string_view light_of(const game::Spawn& s) { return s.light_type < kLights.size() ? kLights[s.light_type] : kLights[0]; }
 
 // MQ's class long names are the client's (GetClassDesc): ours for 1..16. ParseSearchSpawnArgs also takes the
-// short names and, with a deprecation warning there, ClassInfo's old "Shadowknight" and "Mage".
+// short names and, with a deprecation warning there, ClassInfo's old "Shadowknight" and "Mage". A server's names for
+// its classes (game/eq_names.h) are taken too; either way the stock name is kept (class_matches takes both).
 std::optional<std::string> class_word(std::string_view w) {
-    for (std::uint32_t c = 1; c <= 16; ++c) {
-        const std::string name = game::class_name(c);
-        if (iequals(w, name) || iequals(w, game::class_short_name(c))) return name;
-    }
-    if (iequals(w, "Shadowknight")) return game::class_name(5);
-    if (iequals(w, "Mage")) return game::class_name(13);
+    for (std::uint32_t c = 1; c <= 16; ++c)
+        if (iequals(w, game::stock_class_name(c)) || iequals(w, game::stock_class_short_name(c)))
+            return game::stock_class_name(c);
+    for (std::uint32_t c = 1; c <= 16; ++c)
+        if (iequals(w, game::class_name(c)) || iequals(w, game::class_short_name(c))) return game::stock_class_name(c);
+    if (iequals(w, "Shadowknight")) return game::stock_class_name(5);
+    if (iequals(w, "Mage")) return game::stock_class_name(13);
     return std::nullopt;
+}
+
+// A search's class (a long name) names the spawn's class: its stock name, or the name a server gave it.
+bool class_matches(std::string_view wanted, std::uint32_t class_id) {
+    return iequals(wanted, game::stock_class_name(class_id)) || iequals(wanted, game::class_name(class_id));
 }
 
 // MQ's CleanupName without the article: '_' a space, digits gone, '#' gone unless `keep_hash` (the ForWhoList form
@@ -295,7 +302,7 @@ bool matches(const SpawnSearch& q, const game::Spawn& s, const game::Spawn* me, 
     }
     // No alert lists here: alert, noalert and notnearalert ask nothing; nearalert finds no alert spawn near.
     if (q.nearalert) return false;
-    if (!q.class_name.empty() && !iequals(q.class_name, game::class_name(s.class_id))) return false;
+    if (!q.class_name.empty() && !class_matches(q.class_name, s.class_id)) return false;
     if (!q.body_name.empty()) {
         const std::string_view body = s.body_type < std::size(game::szBodyType) ? game::szBodyType[s.body_type] : "";
         if (!iequals(q.body_name, body)) return false;
@@ -338,8 +345,8 @@ SpawnSearch parse_spawn_search(std::string_view text, const game::GuildState* gu
     // A class's long name may hold a space ("Shadow Knight", and "knight" is a keyword): the whole text one is a class.
     if (const std::string whole(trim(text)); !whole.empty()) {
         for (std::uint32_t c = 1; c <= 16; ++c)
-            if (iequals(whole, game::class_name(c))) {
-                s.class_name = game::class_name(c);
+            if (class_matches(whole, c)) {
+                s.class_name = game::stock_class_name(c);
                 return s;
             }
     }
@@ -435,7 +442,7 @@ SpawnSearch parse_spawn_search(std::string_view text, const game::GuildState* gu
             s.body_name = std::string(a(0));
             take(1);
         } else if (iequals(word, "class")) {
-            s.class_name = std::string(a(0)); // compared with the long name only, as MQ's szClass
+            s.class_name = std::string(a(0)); // compared with the long name only, as MQ's szClass (stock or the server's)
             take(1);
         } else if (iequals(word, "race")) {
             s.race_name = std::string(a(0));

@@ -103,6 +103,18 @@ local function bar(n)
       if changed then ui.SetSetting(perRowKey, v) end
     end,
   }
+  -- A page arrow: its hit box x0, y0 .. x1, y1 and its triangle round mx, my (half-width d), pointing up or down.
+  -- Made once for the bar: defined inside body, a new function was made each frame for every bar.
+  local function arrow(id, up, x0, y0, x1, y1, mx, my, d)
+    local clicked = T.Hit("##" .. id, x0, y0, x1, y1)
+    local c = ui.IsItemHovered() and C.accent or C.muted
+    if up then
+      ui.DrawTriangleFilled(mx - d, my + d / 2, mx + d, my + d / 2, mx, my - d / 2, c[1], c[2], c[3], 1)
+    else
+      ui.DrawTriangleFilled(mx - d, my - d / 2, mx + d, my - d / 2, mx, my + d / 2, c[1], c[2], c[3], 1)
+    end
+    if clicked then API.windows.ClickChild(window, id, "left") end
+  end
   local function body(x, y, w, h, s)
     -- the page: up, number, down (with Show Spinner); a vertical bar's runs across the top
     local px0, px1 = x + 7 * s, x + (7 + pager) * s
@@ -113,19 +125,9 @@ local function bar(n)
       if not page or page == "" then page = API.windows.Text(window, "HB_HorizontalCurrentPageLabel") or "" end
       local _, th = T.TextSize("8", T.font.small)
       T.Text(cx, cy - th / 2, page, C.text, T.font.small, "center")
-      local function arrow(id, up, ax)
-        local clicked = T.Hit("##" .. id, ax - 9 * s, py0, ax + 9 * s, py1)
-        local c = ui.IsItemHovered() and C.accent or C.muted
-        local d = 5 * s
-        if up then
-          ui.DrawTriangleFilled(ax - d, cy + d / 2, ax + d, cy + d / 2, ax, cy - d / 2, c[1], c[2], c[3], 1)
-        else
-          ui.DrawTriangleFilled(ax - d, cy - d / 2, ax + d, cy - d / 2, ax, cy + d / 2, c[1], c[2], c[3], 1)
-        end
-        if clicked then API.windows.ClickChild(window, id, "left") end
-      end
-      arrow("HB_PageUpButton", true, cx - 20 * s)
-      arrow("HB_PageDownButton", false, cx + 20 * s)
+      local up, down = cx - 20 * s, cx + 20 * s
+      arrow("HB_PageUpButton", true, up - 9 * s, py0, up + 9 * s, py1, up, cy, 5 * s)
+      arrow("HB_PageDownButton", false, down - 9 * s, py0, down + 9 * s, py1, down, cy, 5 * s)
       ui.DrawLine(x + 8 * s, py1 + 3 * s, x + w - 8 * s, py1 + 3 * s, C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
     elseif spinner then
       local cy = y + h / 2
@@ -133,20 +135,9 @@ local function bar(n)
       if not page or page == "" then page = API.windows.Text(window, "HB_VerticalCurrentPageLabel") or "" end
       local _, th = T.TextSize("8", T.font.small)
       T.Text((px0 + px1) / 2, cy - th / 2, page, C.text, T.font.small, "center")
-      local function arrow(id, up, ay)
-        local clicked = T.Hit("##" .. id, px0, ay - 9 * s, px1, ay + 9 * s)
-        local hov = ui.IsItemHovered()
-        local c = hov and C.accent or C.muted
-        local mx, d = (px0 + px1) / 2, 5 * s
-        if up then
-          ui.DrawTriangleFilled(mx - d, ay + d / 2, mx + d, ay + d / 2, mx, ay - d / 2, c[1], c[2], c[3], 1)
-        else
-          ui.DrawTriangleFilled(mx - d, ay - d / 2, mx + d, ay - d / 2, mx, ay + d / 2, c[1], c[2], c[3], 1)
-        end
-        if clicked then API.windows.ClickChild(window, id, "left") end
-      end
-      arrow("HB_PageUpButton", true, cy - 17 * s)
-      arrow("HB_PageDownButton", false, cy + 17 * s)
+      local mx, up, down = (px0 + px1) / 2, cy - 17 * s, cy + 17 * s
+      arrow("HB_PageUpButton", true, px0, up - 9 * s, px1, up + 9 * s, mx, up, 5 * s)
+      arrow("HB_PageDownButton", false, px0, down - 9 * s, px1, down + 9 * s, mx, down, 5 * s)
       ui.DrawLine(px1 + 3 * s, y + 8 * s, px1 + 3 * s, y + h - 8 * s, C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
     end
 

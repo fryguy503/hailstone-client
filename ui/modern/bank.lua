@@ -88,6 +88,9 @@ local function bank(win, p, count, s)
     { "ChangeButton", "Change", { tooltip = "Exchange banked coin for larger coins" } },
     { "DoneButton", "Done" },
   }, btnH)
+  if API.windows.ChildShown(win, "AltStorageButton") == true then
+    W.Button(win, "AltStorageButton", "Shroud Bank", { height = btnH })
+  end
   local _, bottom = ui.GetCursorScreenPos()
   bottomH[win] = bottom - top
 end

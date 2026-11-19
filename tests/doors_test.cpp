@@ -275,6 +275,69 @@ TEST_CASE("recipe packets: favorites, search, replies, details and auto combine 
     CHECK(back->recipe_id == 9876);
 }
 
+namespace {
+void put_be32(std::vector<std::uint8_t>& d, std::uint32_t v) {
+    d.insert(d.end(), {std::uint8_t(v >> 24), std::uint8_t(v >> 16), std::uint8_t(v >> 8), std::uint8_t(v)});
+}
+void put_component(std::vector<std::uint8_t>& d, std::uint32_t item, std::uint32_t icon, const char* name) {
+    put_be32(d, item);
+    put_be32(d, icon);
+    d.insert(d.end(), name, name + std::strlen(name) + 1);
+}
+} // namespace
+
+TEST_CASE("OP_RecipeDetails: ten entries are read and a trailing trivial is skipped") {
+    // Stock EQEmu before #5100: the recipe, the unused entries, the components, nothing after.
+    std::vector<std::uint8_t> old_layout;
+    put_be32(old_layout, 4242);
+    for (int n = 0; n < 9; ++n) put_be32(old_layout, 0xffffffff);
+    put_component(old_layout, 13866, 1086, "Fishing Bait Ingredients");
+    // Since #5100 (2026-06): the same, then the recipe's trivial as a big-endian u32.
+    auto new_layout = old_layout;
+    put_be32(new_layout, 31);
+
+    for (const auto* d : {&old_layout, &new_layout}) {
+        auto dd = decode_recipe_details(packet(Op::RecipeDetails, *d));
+        REQUIRE(dd);
+        CHECK(dd->recipe_id == 4242);
+        REQUIRE(dd->components.size() == 1);
+        CHECK(dd->components[0].item_id == 13866);
+        CHECK(dd->components[0].icon == 1086);
+        CHECK(dd->components[0].name == "Fishing Bait Ingredients");
+    }
+    // A full recipe: ten components, then the trivial, which is not read as an eleventh.
+    std::vector<std::uint8_t> full;
+    put_be32(full, 7);
+    for (std::uint32_t n = 0; n < 10; ++n) put_component(full, 1000 + n, 500, "Item");
+    put_be32(full, 102);
+    auto df = decode_recipe_details(packet(Op::RecipeDetails, full));
+    REQUIRE(df);
+    REQUIRE(df->components.size() == 10);
+    CHECK(df->components[9].item_id == 1009);
+
+    // The client reads an unused entry wherever it is, not only before the components.
+    std::vector<std::uint8_t> mixed;
+    put_be32(mixed, 8);
+    put_component(mixed, 13087, 700, "Flour");
+    put_be32(mixed, 0xffffffff);
+    put_component(mixed, 13006, 701, "Water Flask");
+    for (int n = 0; n < 7; ++n) put_be32(mixed, 0xffffffff);
+    auto dm = decode_recipe_details(packet(Op::RecipeDetails, mixed));
+    REQUIRE(dm);
+    REQUIRE(dm->components.size() == 2);
+    CHECK(dm->components[1].name == "Water Flask");
+
+    // A reply cut short keeps the entries that came; a name cut short fails the decode.
+    std::vector<std::uint8_t> short_reply;
+    put_be32(short_reply, 9);
+    put_component(short_reply, 13087, 700, "Flour");
+    auto ds = decode_recipe_details(packet(Op::RecipeDetails, short_reply));
+    REQUIRE(ds);
+    CHECK(ds->components.size() == 1);
+    short_reply.pop_back();
+    CHECK_FALSE(decode_recipe_details(packet(Op::RecipeDetails, short_reply)));
+}
+
 TEST_CASE("tradeskill window state: combine containers and recipe answers") {
     CHECK_FALSE(game::is_combine_container(8));
     CHECK(game::is_combine_container(9));

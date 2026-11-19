@@ -14,6 +14,12 @@ std::optional<std::uint32_t> pick_nameplate(const std::vector<NameplateHit>& hit
     return std::nullopt;
 }
 
+glm::vec3 nameplate_head(const glm::vec3& base, std::optional<float> body_top, float eye,
+                         const std::optional<glm::vec3>& seat) {
+    if (seat) return *seat + glm::vec3(0.0f, 0.0f, (body_top ? 0.0f : eye) + kNameplateHeadOffset);
+    return base + glm::vec3(0.0f, 0.0f, body_top.value_or(eye) + kNameplateHeadOffset);
+}
+
 bool nameplate_mouse_eligible(const game::MaskSpawn& spawn, std::uint8_t options, bool self, int camera) {
     const auto mask = game::spawn_pick_mask(spawn, options);
     if ((mask & game::kClickSkip) != 0 || (mask & game::kClickRequired) == 0) return false;

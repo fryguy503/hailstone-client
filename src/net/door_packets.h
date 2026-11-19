@@ -184,7 +184,9 @@ std::optional<RecipeReply> decode_recipe_reply(const AppPacket& p);
 AppPacket encode(const RecipeReply& v); // server direction, for tests
 
 // OP_RecipeDetails: C→Z {u32 recipe id}; Z→C (SendTradeskillDetails) u32 recipe id **big-endian**, (10 − n) × u32
-// 0xffffffff, n × {u32 item id, u32 icon (both big-endian), name}: the components, one entry per item needed.
+// 0xffffffff, n × {u32 item id, u32 icon (both big-endian), name}: the components, one entry per item needed. The
+// client reads ten entries (an unused one anywhere) and nothing after them; EQEmu since #5100 (2026-06) appends a
+// big-endian u32 trivial, which is skipped.
 AppPacket encode_recipe_details_request(std::uint32_t recipe_id);
 struct RecipeComponent {
     std::uint32_t item_id = 0, icon = 0;

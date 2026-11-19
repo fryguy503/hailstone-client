@@ -6,6 +6,7 @@
 // PlayerClient::ApplyBodyTexture, RefreshEquipSlot and SetHead.
 
 #include <cstdint>
+#include <string>
 
 #include "game/world_state.h"
 
@@ -30,6 +31,16 @@ inline constexpr std::uint8_t kNoTexture = 0xff; // Appearance::texture: per-slo
 bool is_pc_model_race(std::uint32_t race);
 // Remote signed HP is unavailable; the server percentage gates living targets.
 bool spawn_invisible(const Spawn& viewer, const Spawn& target, std::int32_t see_invisible_rank, bool group_member);
+
+// The marks round an invisible spawn's name (GameConnection::name_invisibility): normal is the original's "(Name)"
+// (PlayerClient::SetNameSpriteState @0x58e2d0), undead Hailstone's "[Name]"; both make "([Name])".
+struct NameInvisibility {
+    bool normal = false;
+    bool undead = false;
+};
+
+void apply_name_invisibility(std::string& name, NameInvisibility invisibility);
+
 // PlayerClient_ApplyNewArmorFilter @0x595de0 (re/src/game/spawn/armor_filter.cpp): the ActorNewArmorFilter bits
 // that show a spawn's hero's forge armour, by its Type (PlayerClient +0x125: 0 PC, 1 NPC, 2+ corpse). An NPC
 // has 0x10; a player 8, with 1 when it is the local player, 2 when it is the local player or a group member

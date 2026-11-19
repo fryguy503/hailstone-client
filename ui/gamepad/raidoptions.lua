@@ -14,6 +14,13 @@ local WIN = "RaidOptionsWindow"
 -- The class buttons RAIDOPTIONS_ClassColor0..15, in the stock window's order.
 local CLASSES = { "Bard", "Beastlord", "Cleric", "Druid", "Enchanter", "Magician", "Monk", "Necromancer", "Paladin",
   "Ranger", "Rogue", "Shadow Knight", "Shaman", "Warrior", "Wizard", "Berserker" }
+-- their class ids
+local CLASS_IDS = { 8, 15, 2, 6, 14, 13, 7, 11, 3, 4, 9, 5, 10, 1, 12, 16 }
+-- A class's name as the client shows it (a server's own where its plugin named the class), else `fallback`.
+local HAS_CLASS_NAMES = API.Supports and API.Supports("character", "ClassName") == true
+local function className(id, fallback, short)
+  return HAS_CLASS_NAMES and API.character.ClassName(id, short) or fallback
+end
 -- (the game shows the type as its number; the drop-down's choices are the XML's)
 local TYPES = { "Leader Only", "Leader and Group Leaders", "Leader Selected", "Entire Raid" }
 local MEANING = {
@@ -74,7 +81,7 @@ ui.window("Raid Options", function()
         local r, g, b = API.windows.ChildColor(WIN, id)
         T.rect(bx0 + T.px(14), by0 + T.px(18), bx0 + T.px(40), by1 - T.px(18), { r or 1, g or 1, b or 1, 1 }, 1, T.px(6))
         T.font(21)
-        T.textIn(bx0 + T.px(54), by0, bx1 - T.px(10), by1, CLASSES[i + 1], { r or 1, g or 1, b or 1, 1 }, 0)
+        T.textIn(bx0 + T.px(54), by0, bx1 - T.px(10), by1, className(CLASS_IDS[i + 1], CLASSES[i + 1]), { r or 1, g or 1, b or 1, 1 }, 0)
         T.unfont()
         if clicked then API.windows.ClickChild(WIN, id, "left") end
       end

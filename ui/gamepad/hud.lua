@@ -85,7 +85,7 @@ ui.window("HUD Player", function()
       T.outline(x0 - t / 2, y0 - t / 2, x1 + t / 2, y1 + t / 2, C.bad, 0.55 + 0.45 * pulse, T.px(14) + t / 2, t)
     end
     local p = T.px(16)
-    local name = (API.character.Label(1) or ""):gsub("\n.*", "")
+    local name = (API.character.Label(1, true) or ""):gsub("\n.*", "")
     local lvl, cls = num(2), num(3)
     local level = (lvl ~= "" and ("Level " .. lvl) or "") .. (cls ~= "" and ("  " .. cls) or "")
     local timer = API.character.Label(137) or ""
@@ -172,10 +172,10 @@ local distFeet, distText -- the target's distance and its text, made again only 
 
 ui.window("HUD Target", function()
   if not W.shown("TargetWindow") then return end
-  local frac, name, raw = API.character.Gauge(6)
+  local frac, name, raw = API.character.Gauge(6, true)
   if raw == -1 or not name or name == "" then return end
   -- a second row only for the target's buffs or its target (hs.Gauge(27))
-  local tfrac, tname, traw = API.character.Gauge(27)
+  local tfrac, tname, traw = API.character.Gauge(27, true)
   local nBuffs = 0
   for i = 1, #TARGET_BUFFS do
     if API.buffs.Slot("TargetWindow", TARGET_BUFFS[i]) then

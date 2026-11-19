@@ -12,6 +12,7 @@
 
 #include "app/addon_install.h"
 #include "core/log.h"
+#include "game/eq_names.h"
 #include "game/nameplate_canvas.h"
 #include "mq/commands.h"
 #include "mq/lua_mq.h"
@@ -55,6 +56,7 @@ struct Automation::Impl {
     std::set<std::string> autoskill_holds; // the scripts holding autoskill off
     std::uint32_t policy_serial = 0;
     bool had_policy = false;
+    fs::path class_names_dir; // the server folder the class names were given on (game/eq_names.h)
     char run_name[128] = {};
     std::chrono::steady_clock::time_point consent_checked{};
     // The dev window's compiled plugins: NativePlugins::list() reads and hashes every plugin file and reads the
@@ -97,6 +99,12 @@ struct Automation::Impl {
         net::GameConnection* c = conn();
         std::uint32_t serial = c ? c->server_rules_serial() : 0;
         bool has = c && c->server_rules();
+        // The session left the server (disconnected, or another server's rules): the names its plugins and scripts
+        // gave the classes go with it, whatever still runs (game/eq_names.h). Character select keeps them.
+        if (!has || c->server_rules()->dir != class_names_dir) {
+            game::clear_class_name_overrides();
+            class_names_dir = has ? c->server_rules()->dir : fs::path();
+        }
         if (serial == policy_serial && has == had_policy) return;
         policy_serial = serial;
         had_policy = has;
@@ -388,18 +396,20 @@ void Automation::Impl::consent_window() {
                             ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowBgAlpha(0.95f);
     bool open = true;
-    ImGui::Begin(ui::lua::kConsentWindowName, &open,
+    const plugin::ConsentWording words = plugin::consent_wording(*prompt, server);
+    ImGui::Begin((words.title + ui::lua::kConsentWindowId).c_str(), &open,
                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
     ui::lua::guard_current_window();
-    ImGui::Text("%s wants to run %s on your computer:", server.c_str(),
-                prompt->files.size() == 1 ? "a compiled plugin" : "compiled plugins");
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+    ImGui::TextUnformatted(words.intro.c_str());
+    ImGui::PopTextWrapPos();
     for (const auto& f : prompt->files) {
         ImGui::BulletText("%s  (%s, %llu bytes)", f.name.c_str(), f.file.filename().string().c_str(),
                           static_cast<unsigned long long>(f.size));
         ImGui::TextDisabled("    sha256 %s", to_hex(f.sha256).substr(0, 16).c_str());
     }
     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
-    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "%s", std::string(plugin::kConsentWarning).c_str());
+    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "%s", words.warning.c_str());
     ImGui::TextDisabled("Your answer is kept for this server. The add-on list on the login screen can change it.");
     ImGui::PopTextWrapPos();
     const float em = ImGui::GetFontSize();

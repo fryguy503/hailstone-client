@@ -33,13 +33,16 @@
 // Lines apply in order: a later max_slope or scale replaces an earlier one, and the first matching ground line
 // wins, so a zone's own exceptions go before its include.
 // A zone without a file of its own takes flora/default.txt when the server calls it outdoor (time type 1, 2 or 5).
-// Plants grow only on opaque or cut-out surfaces (not the translucent water) and keep off water, lava and zone-line
-// regions and the water's surface, and off ground with the zone's terrain over it (a dungeon's ceiling, a roof, a
-// bridge; not the placed objects, so grass grows under trees).
+// Plants grow only on opaque or cut-out surfaces (not the translucent water) and keep off water and lava regions and
+// the water's surface (a zone line's region grows them), and off ground with the zone's terrain over it (a dungeon's
+// ceiling, a roof, a bridge; outdoors only within kOutdoorTerrainCover, so not under a cliff's overhang) or a placed
+// object's opaque surface low over it (a crate, a tent; not a tree's crown or its leaves), and off what the server
+// places when the caller says so (FloraCover: its doors and objects, a campfire spawn).
 
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -79,7 +82,13 @@ struct ZoneFloraRules {
     float min_scale = 1.0f, max_scale = 1.0f;
     float lawn_min = 1.8f, lawn_max = 3.0f; // the lawn's blade height, units
     std::vector<Ground> ground;
+    // How far over a spot the zone's terrain still covers it (no plants under it): any height, or in an outdoor zone
+    // kOutdoorTerrainCover (load_zone_flora_rules). Not a rules-file directive.
+    float terrain_cover = std::numeric_limits<float>::infinity();
 };
+// In an outdoor zone the terrain covers the ground only this far over it (Hailstone's own choice): a hut's roof or a
+// low bridge's deck, not a cliff's overhang or an arch high overhead.
+inline constexpr float kOutdoorTerrainCover = 20.0f;
 
 // The text of the rules file `name` (an include), or nullopt.
 using ZoneFloraInclude = std::function<std::optional<std::string>(std::string_view name)>;
@@ -91,7 +100,8 @@ ZoneFloraRules parse_zone_flora_rules(std::string_view text, std::vector<std::st
                                       const ZoneFloraInclude& include = {});
 
 // The rules for `zone`: <rules_dir>/<zone>.txt, else (when `outdoor`) <rules_dir>/default.txt, includes resolved in
-// `rules_dir`; nullopt when neither applies. `source` gets the file's name ("ecommons", "default").
+// `rules_dir`; nullopt when neither applies. `source` gets the file's name ("ecommons", "default"). When `outdoor`, the
+// terrain covers only within kOutdoorTerrainCover (ZoneFloraRules::terrain_cover), for the client and tools alike.
 std::optional<ZoneFloraRules> load_zone_flora_rules(const std::filesystem::path& rules_dir, std::string_view zone,
                                                     bool outdoor, std::string* source = nullptr);
 
@@ -136,6 +146,80 @@ using GroundTextures = std::function<std::optional<Image>(std::string_view textu
 // its ground is not walked plant by plant only to be turned down.
 inline constexpr float kMinGreenShare = 0.002f;
 
+// Cover the zone's files do not hold (the server's doors and objects, a campfire spawn): true where no plant may
+// stand at `at` (a plant's foot, or the spot off a lawn square's centre that it asks about, lawn_cover_offset).
+using FloraCover = std::function<bool(const glm::vec3& at)>;
+// A placed object (the zone's or the server's) covers the ground under it with a surface more than
+// kObjectCoverClearance over it (a campfire's logs, a rug: not the ground's own triangle) and at most kObjectCoverReach
+// (a crate's lid, a tent's roof; not a tree's crown). Hailstone's own choices.
+inline constexpr float kObjectCoverReach = 16.0f, kObjectCoverClearance = 0.25f;
+// Whether the triangle a b c lies over `at` (straight up) by more than `clearance` and at most `reach`. Seen edge-on
+// from above it covers nothing.
+bool covers_from_above(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c, const glm::vec3& at, float clearance,
+                       float reach);
+// Whether a placed object is a plant (the modern look's sway, and the grass's cover): see-through leaves or blades (a
+// masked material) and a name, of its own or of one of its materials or textures, that says so.
+bool is_plant(std::string_view actor, const Mesh& mesh);
+
+// Whether a placed object is a fire on the ground's kind (a campfire, its logs and coals): a flame material
+// (flame_material_hue), or a name, of its own or of one of its materials or textures, with "fire", "camp" or "coal".
+bool is_fire_object(std::string_view actor, const Mesh& mesh);
+
+// A small, low fire (is_fire_object, within kSmallObjectRadius of its centre in the plane and kObjectCoverReach from
+// its bottom to its top) covers its whole footprint, a kFootprintSides-sided disc round it kFootprintMargin wider
+// (half a lawn square: a square's blades spread that far from its centre), not only the ground under its surfaces: a
+// campfire's ring of logs has nothing over its middle, and its flame never covers. Any other object covers by its
+// surfaces, so the grass grows up to a rock's foot (what grows inside a solid one is hidden). Hailstone's own choices.
+inline constexpr float kSmallObjectRadius = 12.0f, kFootprintMargin = kLawnCell * 0.5f;
+inline constexpr int kFootprintSides = 16;
+// A mesh's triangles that may cover (not invisible or additive; only the opaque ones when `opaque_only`), through
+// `transform` when given, appended to `out` (3 a triangle). A triangle with an index out of range is left out.
+void cover_triangles(const Mesh& mesh, const glm::mat4* transform, bool opaque_only, std::vector<glm::vec3>& out);
+// A placed object's cover from its triangles in the world (3 a triangle): `drawn` all it draws, for its size;
+// `surfaces` those that cover from above (a zone object's opaque ones; none for a plant), walls left out. Appended to
+// `out`: its footprint disc when `fire` and it is small and low, else its surfaces. Test them with
+// kObjectCoverClearance and kObjectCoverReach.
+void append_object_cover(std::span<const glm::vec3> drawn, std::span<const glm::vec3> surfaces, bool fire,
+                         std::vector<glm::vec3>& out);
+
+// A spawn that stands for an object on the ground (a campfire, race 567): its footprint round its feet covers the
+// grass. Hailstone's own: the spawn's model is not measured, a disc of its size (kCoverDiscMin .. kCoverDiscMax)
+// stands for it.
+struct CoverDisc {
+    glm::vec3 feet{0.0f};
+    float radius = 0.0f;
+    // `at` within `radius` of the feet in the plane and kCoverDiscHeight of them up or down.
+    bool covers(const glm::vec3& at) const;
+    bool operator==(const CoverDisc&) const = default;
+};
+inline constexpr float kCoverDiscMin = 3.0f, kCoverDiscMax = 10.0f, kCoverDiscHeight = 6.0f;
+// A campfire spawn's disc: radius its size clamped to kCoverDiscMin .. kCoverDiscMax (a size of 0 or none takes the
+// least), and kFootprintMargin.
+CoverDisc campfire_cover(const glm::vec3& feet, float size);
+
+// Placed objects' triangles (3 a triangle, in the world) binned over the square [lo, hi] for covered(): what a
+// tile's cover from the server's objects is tested against. Triangles outside the square are not kept; a point
+// outside it is never covered.
+class ObjectCoverTris {
+public:
+    ObjectCoverTris(const std::vector<glm::vec3>& tris, glm::vec2 lo, glm::vec2 hi);
+    // Whether one of them covers `at` (covers_from_above with kObjectCoverClearance and kObjectCoverReach).
+    bool covered(const glm::vec3& at) const;
+    bool empty() const { return tris_.empty(); }
+
+private:
+    static constexpr float kCell = 4.0f;
+    static constexpr std::int32_t kMaxSide = 256;
+    std::vector<glm::vec3> tris_;
+    glm::vec2 lo_{0.0f};
+    std::int32_t nx_ = 0, ny_ = 0;
+    std::vector<std::uint32_t> start_, index_;
+};
+
+// How far past a tile's square such cover may change the tile's plants: the lawn's edge softening looks this far
+// (kLawnEdgeCells squares) and a lawn square asks about a spot up to kLawnCoverJitter off its centre.
+inline constexpr float kFloraCoverMargin = kLawnCell * static_cast<float>(kLawnEdgeCells) + kLawnCoverJitter;
+
 // A zone's flora grown a tile at a time: render::FloraRenderer grows the tiles round the camera as they come into
 // reach and lets them go when they leave it, so a large green zone costs memory by the reach, not by its size. At
 // construction it keeps the ground triangles that may grow plants (by `rules`: the texture's rule, level enough, a
@@ -166,9 +250,10 @@ public:
     const std::vector<glm::vec2>& tiles() const;
     std::size_t triangles() const;
     // Tile `tile`'s plants (an index into tiles()), appended to `out`, at most kMaxTileFlora. `by_texture`
-    // (tools/florascan) counts them by ground texture (lower case). Not thread-safe (the texel lookup caches).
+    // (tools/florascan) counts them by ground texture (lower case). `extra`: more cover, as the zone's own is tested.
+    // Reads the grower only (render::FloraRenderer calls it on a thread of its own).
     void grow(std::size_t tile, std::vector<FloraInstance>& out,
-              std::unordered_map<std::string, std::size_t>* by_texture = nullptr) const;
+              std::unordered_map<std::string, std::size_t>* by_texture = nullptr, const FloraCover& extra = {}) const;
 
     // A ground triangle that may grow plants (or a piece of a large one).
     struct Piece {

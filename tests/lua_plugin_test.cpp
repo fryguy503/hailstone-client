@@ -9,6 +9,7 @@
 #include <imgui_internal.h>
 
 #include "core/ascii_case.h"
+#include "game/eq_names.h"
 #include "game/nameplate_canvas.h"
 #include "game/server_ext_chain.h"
 #include "game/spells.h"
@@ -949,4 +950,58 @@ TEST_CASE("Lua plugin: two scripts that restart each other run one step a frame"
     REQUIRE(h.scripts->run("ping", {}));
     for (int i = 0; i < 4; ++i) h.scripts->pulse(); // before, the first pulse never returned
     CHECK(h.scripts->list().size() <= 2);
+}
+
+TEST_CASE("Lua plugin: hailstone.set_class_name names classes for the script's life, with extend") {
+    game::clear_class_name_overrides();
+    Host h;
+    h.write("names/init.lua", R"lua(
+local hs = require('hailstone')
+hs.set_class_name(1, 'Vanguard', 'VAN')
+hs.set_class_name(6, 'Mystic')
+hs.set_class_name(12, 'Arcanist', 'ARC')
+hs.set_class_name(12, nil)
+)lua");
+    REQUIRE(h.scripts->run("names", {}));
+    h.scripts->pulse();
+    REQUIRE(h.scripts->running("names")); // it stays for the names it gave
+    CHECK(game::class_name(1) == "Vanguard");
+    CHECK(game::class_short_name(1) == "VAN");
+    CHECK(game::class_name(6) == "Mystic");
+    CHECK(game::class_short_name(6) == "DRU");
+    CHECK(game::class_name(12) == "Wizard"); // nil: the stock name again
+
+    // Refused input is an error and changes nothing.
+    h.write("bad/init.lua", "require('hailstone').set_class_name(1, string.rep('x', 33), 'VAN')");
+    REQUIRE(h.scripts->run("bad", {}));
+    h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("bad"));
+    CHECK(h.printed_part("hailstone.set_class_name"));
+    CHECK(game::class_name(1) == "Vanguard");
+
+    // The rules take `extend` away: the names go, the script runs on.
+    h.allow(plugin::kCapAll & ~plugin::kCapExtend);
+    h.scripts->policy_changed();
+    CHECK(h.scripts->running("names"));
+    CHECK(game::class_name(1) == "Warrior");
+    CHECK(game::class_name(6) == "Druid");
+    // Without `extend` the call is refused.
+    h.write("noext/init.lua", "require('hailstone').set_class_name(1, 'Vanguard', 'VAN')");
+    REQUIRE(h.scripts->run("noext", {}));
+    h.scripts->pulse();
+    CHECK_FALSE(h.scripts->running("noext"));
+    CHECK(game::class_name(1) == "Warrior");
+
+    // Stopped: its names go.
+    h.allow(plugin::kCapAll);
+    h.scripts->policy_changed();
+    CHECK(h.scripts->stop("names"));
+    h.scripts->pulse();
+    REQUIRE(h.scripts->run("names", {}));
+    h.scripts->pulse();
+    CHECK(game::class_name(1) == "Vanguard");
+    CHECK(h.scripts->stop("names"));
+    h.scripts->pulse();
+    CHECK(game::class_name(1) == "Warrior");
+    CHECK(game::class_name(6) == "Druid");
 }

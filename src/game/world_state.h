@@ -21,6 +21,7 @@
 #include <glm/glm.hpp>
 
 #include "core/ascii_case.h"
+#include "core/banner_appearance.h"
 #include "core/ini_file.h"
 #include "game/spawn_heights.h"
 
@@ -78,6 +79,7 @@ namespace hailstone::game {
 		// The class (ActorClient +0x14): SwapBodyMaterial's material rules for
 		// monks (kind 7).
 		std::uint8_t class_id = 0;
+		std::optional<core::BannerAppearance> banner;
 
 		bool operator==(const Appearance&) const = default;
 	};

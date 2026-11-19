@@ -4,6 +4,18 @@
 
 namespace hailstone::app::client_internal {
 
+SpawnPickSource ClientApp::spawn_pick_source(std::uint32_t id, const game::Spawn& spawn) const {
+    SpawnPickSource source;
+    source.position = spawn.display_valid ? spawn.display_position : spawn.position;
+    source.size = spawn.size;
+    if (!actor_renderer_) return source;
+    // A body-less skeleton (race 127's IVM): its model, drawn or past the actor clip.
+    const auto model = actor_renderer_->model_for(spawn);
+    source.bodiless = model && assets::bodiless_skeleton(*model);
+    source.bounds = [this, id](glm::vec3& origin, float& radius) { return actor_renderer_->spawn_bounds(id, origin, radius); };
+    return source;
+}
+
 bool ClientApp::plate_input_blocked(bool ignore_right_button) const {
     return !ui_.visible() || !window_.focused() || !conn_ || screen_ != Screen::InGame || !player_ready_ || zone_settling() ||
            conn_->state() != net::ConnectionState::InZone || conn_->interface_locked() || conn_->player_down() ||
@@ -37,13 +49,10 @@ std::optional<float> ClientApp::nameplate_pixel_depth(glm::vec2 at) const {
     const auto hidden = hidden_spawn();
     for (const auto& [id, spawn] : conn_->world().spawns) {
         if (id == hidden || conn_->spawn_invisible(spawn, see_invisible)) continue;
-        glm::vec3 origin{};
-        float radius = 0.0f;
-        const bool have_bounds = actor_renderer_ && actor_renderer_->spawn_bounds(id, origin, radius);
-        if (have_bounds && game::point_segment_distance_squared(ray, origin) > (radius + 2.0f) * (radius + 2.0f)) continue;
-        game::PickActor actor;
-        render::ActorRenderer::SpawnPose pose;
-        if (have_bounds && actor_renderer_->spawn_pose(id, pose)) {
+        SpawnPickSource source = spawn_pick_source(id, spawn);
+        source.posed = [this, id](game::PickActor& actor, const glm::vec3& origin) {
+            render::ActorRenderer::SpawnPose pose;
+            if (!actor_renderer_->spawn_pose(id, pose)) return false;
             actor.position = origin;
             actor.bound_center = pose.center;
             actor.bound_radius = pose.radius;
@@ -52,13 +61,9 @@ std::optional<float> ClientApp::nameplate_pixel_depth(glm::vec2 at) const {
                 for (std::size_t i = 0; i + 2 < triangles->size(); i += 3)
                     sink({(*triangles)[i], (*triangles)[i + 1], (*triangles)[i + 2], {}, 0});
             };
-        } else {
-            // A not-yet-available posed mesh is conservatively bounded, never treated as transparent to clicks.
-            actor.volume = 2;
-            actor.position = have_bounds ? origin : spawn.display_valid ? spawn.display_position : spawn.position;
-            actor.sphere_radius = have_bounds ? radius : std::max(1.5f, (spawn.size > 0.0f ? spawn.size : 6.0f) * 0.9f);
-        }
-        actors.push_back(std::move(actor));
+            return true;
+        };
+        add_nameplate_depth_spawn(actors, source, ray);
     }
     if (world_objects_) {
         std::vector<WorldObjects::PickRef> unused;
@@ -216,20 +221,17 @@ ClientApp::PickTarget ClientApp::pick_at(float x, float y, std::uint32_t require
         game::PickActor a;
         a.mask = game::spawn_pick_mask(ms, option);
         a.invisible = conn_->spawn_invisible(s, see_invisible); // IsInvisible (slot 2 skips it)
-        glm::vec3 origin;
-        float radius = 0.0f;
-        if (actor_renderer_ && actor_renderer_->spawn_bounds(id, origin, radius)) {
-            float reach = radius * 1.5f + 2.0f;
-            if (game::point_segment_distance_squared(seg, origin) > reach * reach) continue;
+        SpawnPickSource source = spawn_pick_source(id, s);
+        source.posed = [this, id](game::PickActor& actor, const glm::vec3& origin) {
             render::ActorRenderer::SpawnPose pose;
-            if (!actor_renderer_->spawn_pose(id, pose)) continue;
-            a.position = origin;
-            a.bound_center = pose.center;
-            a.bound_radius = pose.radius;
-            a.hierarchical = true;
-            a.bones = std::move(pose.bones);
+            if (!actor_renderer_->spawn_pose(id, pose)) return false;
+            actor.position = origin;
+            actor.bound_center = pose.center;
+            actor.bound_radius = pose.radius;
+            actor.hierarchical = true;
+            actor.bones = std::move(pose.bones);
             auto tris = std::make_shared<std::vector<glm::vec3>>(std::move(pose.triangles));
-            a.triangles = [tris](const game::PickTriangleSink& sink) {
+            actor.triangles = [tris](const game::PickTriangleSink& sink) {
                 for (std::size_t i = 0; i + 2 < tris->size(); i += 3) {
                     game::PickTriangle t;
                     t.v0 = (*tris)[i];
@@ -239,16 +241,10 @@ ClientApp::PickTarget ClientApp::pick_at(float x, float y, std::uint32_t require
                     sink(t);
                 }
             };
-        } else {
-            // Not drawn with a model (a box, or the player in first person): a sphere actor (volume type 2).
-            float size = s.size > 0.0f ? s.size : 6.0f;
-            a.volume = 2;
-            a.position = s.display_valid ? s.display_position : s.position;
-            a.sphere_radius = std::max(1.5f, size * 0.5f);
-        }
-        if (id == world.player_id && call.exclude_view) exclude = static_cast<int>(actors.size());
-        actors.push_back(std::move(a));
-        refs.push_back({PickTarget::Kind::Spawn, id, {}});
+            return true;
+        };
+        if (add_world_click_spawn(actors, exclude, std::move(a), source, seg, id == world.player_id && call.exclude_view))
+            refs.push_back({PickTarget::Kind::Spawn, id, {}});
     }
     if (world_objects_) {
         std::vector<WorldObjects::PickRef> wrefs;

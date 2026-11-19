@@ -152,8 +152,12 @@ local function sharedMembers(tasks, s)
     state.memberName = nil
     K.Empty(shared and "Waiting for member details." or "You are not in a shared task.")
   else
+    local hasTemplates = false
+    for _, row in ipairs(rows) do
+      if (row.texts[3] or "") ~= "" then hasTemplates = true; break end
+    end
     W.List(WINDOW, "STASK_MemberList", 0, math.min(210 * s, (28 + #rows * 22) * s), {
-      hide = { [3] = true }, columns = { { "Member", 0 }, { "Role", 85 } },
+      hide = { [3] = not hasTemplates }, columns = { { "Member", 0 }, { "Role", 70 }, { "Template", 130 } },
     })
     local _, _, picked = API.windows.ListInfo(WINDOW, "STASK_MemberList")
     state.memberName = picked and rows[picked + 1] and rows[picked + 1].texts[1] or nil
@@ -362,6 +366,10 @@ local function activeDetail(task, s)
   end
   W.Button(WINDOW, "TASK_PreviewRewardButton", "Preview Reward", { height = lh + 8 * s,
     tooltip = "Ask the server to preview the selected task's rewards" })
+  if API.windows.ChildShown(WINDOW, "TASK_MonsterButton") == true then
+    ui.SameLine(0, 8 * s)
+    W.Button(WINDOW, "TASK_MonsterButton", "Select Monster", { primary = true, height = lh + 8 * s })
+  end
   ui.SameLine(0, 8 * s)
   W.Button(WINDOW, "TASK_AbandonButton", "Abandon...", { danger = true, height = lh + 8 * s,
     tooltip = "The game asks for confirmation before abandoning this task" })

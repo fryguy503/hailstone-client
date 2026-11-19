@@ -27,7 +27,7 @@ ui.window("Server Plugins", function()
   elseif q.serial ~= shownSerial then
     shownSerial, shownAt = q.serial, ui.GetTime()
   end
-  hud.Dialog(WINDOW, "Allow this server's plugin?", {
+  hud.Dialog(WINDOW, q and q.title or "Allow this server's plugin?", {
     shown = q ~= nil,
     keepTitle = true,
     rollup = false, -- (a question to answer: kept whole)
@@ -37,8 +37,7 @@ ui.window("Server Plugins", function()
   }, function(x, y, w, h, s)
     local cx = ui.GetCursorPos()
     ui.PushTextWrapPos(cx + w)
-    ui.TextWrapped(string.format("%s wants to run %s on your computer:", q.server,
-      #q.plugins == 1 and "a compiled plugin" or "compiled plugins"))
+    ui.TextWrapped(q.intro)
     for _, p in ipairs(q.plugins) do
       ui.BulletText(p.name)
       ui.SameLine()

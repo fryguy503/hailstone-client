@@ -13,6 +13,9 @@ local openX, openY = nil, nil -- where the game put the dialog when it last open
 local base = 0                -- the slider's minimum (the box shows slider + minimum)
 local wasShown = false
 local focusBox, boxActive = false, false
+-- Each opening's own id for the box: ImGui keeps a focused box's text as typed, so the box of a dialog opened again for
+-- another request (Sell while Buy's was still up) would go on showing the old amount over the new request's.
+local opening = 0
 
 -- the quick picks (label, tooltip); their slider values are worked out each frame from the minimum and the count
 local PICKS = { { "1##q", "One" }, { "Half##q", "Half of them" }, { "All##q", "All of them" } }
@@ -37,7 +40,9 @@ local function drawWindow(x, y, w, h, s)
     ui.SetKeyboardFocusHere()
     focusBox = false
   end
+  ui.PushID(opening)
   W.Edit(WINDOW, "QTYW_SliderInput", { hint = "Amount", width = -(3 * (bw + 6 * s)) })
+  ui.PopID()
   local active = ui.IsItemActive()
   if ui.IsItemHovered() then ui.SetTooltip(string.format("%d to %d; Enter accepts", base, max)) end
   if boxActive and ui.IsKeyPressed(ui.Key.Enter) then
@@ -78,6 +83,7 @@ ui.window("Quantity", function()
     local _, _, value = API.windows.ChildState(WINDOW, "QTYW_Slider")
     base = (tonumber(W.Text(WINDOW, "QTYW_SliderInput")) or 0) - (value or 0)
     focusBox, boxActive = true, false
+    opening = opening + 1
   end
   wasShown = shown
   hud.Dialog(WINDOW, "Quantity", WINDOW_OPTS, drawWindow)

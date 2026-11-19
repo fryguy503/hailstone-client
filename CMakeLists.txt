@@ -209,12 +209,14 @@ add_library(hailstone_engine STATIC
   src/net/door_packets.cpp
   src/net/game_connection_group.cpp
   src/net/game_connection_fellowship.cpp
+  src/net/game_connection_guild_banner.cpp
   src/net/game_connection_group_search.cpp
   src/net/game_connection_marketplace.cpp
   src/net/game_connection_social.cpp
   src/net/game_connection_options.cpp
   src/net/game_connection_client.cpp
   src/net/game_connection_progress.cpp
+  src/net/game_connection_shroud.cpp
   src/net/game_connection_player.cpp
   src/net/game_connection_game_commands.cpp
   src/net/game_connection_names.cpp
@@ -241,6 +243,7 @@ add_library(hailstone_engine STATIC
   src/net/guild_bank_packets.cpp
   src/net/real_estate_packets.cpp
   src/net/task_packets.cpp
+  src/net/shroud_packets.cpp
   src/net/reward_packets.cpp
   src/net/achievement_packets.cpp
   src/net/game_connection_rewards.cpp
@@ -262,6 +265,7 @@ add_library(hailstone_engine STATIC
   src/game/slash_commands.cpp
   src/net/group_packets.cpp
   src/net/fellowship_packets.cpp
+  src/net/guild_banner_packets.cpp
   src/game/fellowship_categories.cpp
   src/net/pet_packets.cpp
   src/net/item_packets.cpp
@@ -400,6 +404,7 @@ add_library(hailstone_engine STATIC
   src/app/nameplate_canvas_context.cpp
   src/app/nameplate_canvas_painter.cpp
   src/app/nameplate_input.cpp
+  src/app/spawn_pick.cpp
   src/game/nameplate_canvas.cpp
   src/ui/lua/lua_nameplate_canvas.cpp
   src/render/gpu_requirements.cpp
@@ -591,6 +596,8 @@ add_library(hailstone_engine STATIC
   src/app/lua_ui_mail.cpp
   src/app/lua_ui_merc.cpp
   src/app/lua_ui_chat.cpp
+  src/app/chat_tab_bar.cpp
+  src/app/chat_tabs_command.cpp
   src/app/lua_ui_spellbook.cpp
   src/app/lua_ui_abilities.cpp
   src/app/lua_ui_abilitybook.cpp
@@ -1168,9 +1175,12 @@ if(HAILSTONE_BUILD_TESTS)
     tests/target_indicator_test.cpp
     tests/item_options_test.cpp
     tests/option_commands_test.cpp
+    tests/client_flags_test.cpp
+    tests/close_camp_test.cpp
     tests/font_faces_test.cpp
     tests/process_test.cpp
     tests/flora_test.cpp
+    tests/flora_growth_test.cpp
     tests/ground_refine_test.cpp
     tests/zone_flora_test.cpp
     tests/client_info_commands_test.cpp
@@ -1208,6 +1218,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/ui_rules_vectors_test.cpp
     tests/net_login_test.cpp
     tests/net_packets_test.cpp
+    tests/shroud_packets_test.cpp
     tests/pfs_test.cpp
     tests/pfs_mapped_test.cpp
     tests/wld_deferred_test.cpp
@@ -1279,11 +1290,13 @@ if(HAILSTONE_BUILD_TESTS)
     tests/spell_sets_test.cpp
     tests/hot_button_sets_test.cpp
     tests/group_commands_test.cpp
+    tests/shroud_flow_test.cpp
     tests/leadership_bonuses_test.cpp
     tests/leadership_spell_awareness_test.cpp
     tests/raid_invites_test.cpp
     tests/group_search_test.cpp
     tests/chat_ui_test.cpp
+    tests/chat_tabs_command_test.cpp
     tests/inventory_bandolier_ui_test.cpp
     tests/inventory_server_labels_ui_test.cpp
     tests/trade_ui_test.cpp
@@ -1317,6 +1330,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/nameplate_canvas_painter_test.cpp
     tests/nameplate_canvas_context_test.cpp
     tests/nameplate_input_test.cpp
+    tests/spawn_pick_test.cpp
     tests/spells_test.cpp
     tests/spell_hit_modes_test.cpp
     tests/proc_cast_stage_test.cpp
@@ -1345,6 +1359,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/tradeskill_combine_test.cpp
     tests/missiles_test.cpp
     tests/combat_particles_test.cpp
+    tests/class_names_test.cpp
     tests/multiclass_test.cpp
     tests/server_ext_chain_test.cpp
     tests/native_extension_test.cpp
@@ -1382,6 +1397,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/hot_button_state_test.cpp
     tests/group_packets_test.cpp
     tests/fellowship_packets_test.cpp
+    tests/guild_banner_packets_test.cpp
     tests/fellowship_connection_test.cpp
     tests/fellowship_ui_test.cpp
     tests/fellowship_categories_test.cpp

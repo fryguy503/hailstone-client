@@ -115,6 +115,7 @@ struct Material {
     // map's file) the entries its pixels pick per vertex.
     std::vector<DetailLayer> detail_layers;
     std::string detail_palette;
+    std::uint32_t banner_base_tint = 0; // a guild banner's cloth colour; tint_layer is its emblem on UV2
 };
 
 struct Vertex {

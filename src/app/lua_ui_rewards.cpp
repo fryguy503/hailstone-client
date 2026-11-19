@@ -12,6 +12,7 @@
 
 #include <lua.hpp>
 
+#include "app/lua_ui_record.h"
 #include "net/game_connection.h"
 #include "plugin/lua_keep.h"
 
@@ -138,19 +139,23 @@ void push_entry(lua_State* L, const net::RewardEntry& entry, float multiplier, s
     }
     lua_setfield(L, -2, "items");
 }
-void push_lane(lua_State* L, const game::RewardLaneState& state, int cached_at, std::string& made) {
-    lua_createtable(L, 0, 8);
+// Fills the lane record on top (app/lua_ui_record.h: refilled in place; tabs nil while unchanged, else a new list
+// whenever it has entries).
+void fill_lane(lua_State* L, const game::RewardLaneState& state, int cached_at, std::string& made) {
     number_text(L, "revision", state.revision);
     boolean(L, "shown", state.shown);
     boolean(L, "claim_pending", state.claim_pending);
     boolean(L, "claim_uncertain", state.claim_uncertain);
     boolean(L, "inspect_pending", state.inspect_pending);
-    text(L, "message", state.message);
+    record::text(L, "message", state.message);
     std::uint64_t cached = 0;
     const bool unchanged = token(L, cached_at, cached) && cached == state.revision;
     boolean(L, "unchanged", unchanged);
-    if (unchanged) return;
-    lua_createtable(L, static_cast<int>(state.tabs.size()), 0);
+    if (unchanged) {
+        record::clear(L, "tabs");
+        return;
+    }
+    record::list(L, "tabs", state.tabs.size());
     lua_Integer tab_index = 0;
     for (const auto& tab : state.tabs) {
         lua_createtable(L, 0, 7);
@@ -183,6 +188,11 @@ void push_lane(lua_State* L, const game::RewardLaneState& state, int cached_at, 
     }
     lua_setfield(L, -2, "tabs");
 }
+// state = hs.RewardSelection([pendingRevision, previewRevision [, into]])   -- the reward selection windows: shown,
+// and pending and preview, each { revision (opaque), shown, claim_pending, claim_uncertain, inspect_pending, message,
+// unchanged (the revision given is current), tabs (only when it is not) }. `into`, a table the caller keeps from
+// frame to frame, is filled in place instead of a new table, its lane records too (app/lua_ui_record.h: every field
+// written; tabs nil while unchanged, else a new list whenever it has entries).
 int RewardSelection(lua_State* L) {
     auto& h = host(L);
     if (!h.conn || !h.in_game) { lua_pushnil(L); return 1; }
@@ -191,14 +201,18 @@ int RewardSelection(lua_State* L) {
     const auto& preview = rewards.lane(game::RewardLane::Preview);
     // Reserve argument slots before pushing the result; omitted cached tokens
     // must not accidentally refer to the table being constructed.
-    lua_settop(L, 2);
-    std::string& made = plugin::lua_keep<std::string>(L);
-    lua_createtable(L, 0, 3);
+    lua_settop(L, 3);
+    plugin::LuaScratch<std::string> box(L); // (one box for every call: plugin/lua_keep.h)
+    std::string& made = *box;
+    record::push(L, 3, 3);
     boolean(L, "shown", pending.shown || preview.shown);
-    push_lane(L, pending, 1, made);
-    lua_setfield(L, -2, "pending");
-    push_lane(L, preview, 2, made);
-    lua_setfield(L, -2, "preview");
+    record::subrecord(L, "pending", 8);
+    fill_lane(L, pending, 1, made);
+    lua_pop(L, 1);
+    record::subrecord(L, "preview", 8);
+    fill_lane(L, preview, 2, made);
+    lua_pop(L, 1);
+    box.release();
     return 1;
 }
 int RewardSelectionClaim(lua_State* L) {

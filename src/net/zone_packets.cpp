@@ -98,6 +98,13 @@ Motion read_update_position(ByteReader& r) {
     return motion_from_packed(w);
 }
 
+core::BannerAppearance read_banner_appearance(ByteReader& r) {
+    core::BannerAppearance banner;
+    for (auto& pattern : banner.pattern) pattern = r.le<std::int32_t>();
+    for (auto& tint : banner.tint) tint = r.le<std::uint32_t>();
+    return banner;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------- client → zone
@@ -340,6 +347,10 @@ AppPacket encode(const Spawn& v) {
     for (const auto& e : v.physics_effects)
         for (auto x : e) w.le(x);
     for (auto x : v.spawn_status) w.le(x);
+    if (interactive_form(other) && v.interactive && v.interactive->object_type == 4 && v.interactive->banner) {
+        for (auto pattern : v.interactive->banner->pattern) w.le(pattern);
+        for (auto tint : v.interactive->banner->tint) w.le(tint);
+    }
     return make_packet(Op::ZoneEntry, std::move(w));
 }
 
@@ -444,8 +455,23 @@ std::optional<Spawn> decode_spawn(const AppPacket& p) {
         for (auto& e : v.physics_effects)
             for (auto& x : e) x = r.le<std::uint32_t>();
         for (auto& x : v.spawn_status) x = r.le<std::uint32_t>();
-        // Interactive objects of type 4 carry 4 more dwords (banners); EQEmu
-        // never sends them. Anything else left over is ignored.
+        // EQPlayer's spawn tail reader @0x591e90 reads two pattern indices and two tints for type 4.
+        // Keep accepting the base spawn when the optional appearance is absent or incomplete.
+        if (v.interactive && v.interactive->object_type == 4 && r.remaining() >= 16)
+            v.interactive->banner = read_banner_appearance(r);
+        return v;
+    });
+}
+
+std::optional<GuildBannerAppearance> decode_guild_banner_appearance(const AppPacket& p) {
+    // HandleWorldMessage's 0x4683 case @0x4d1aca and PlayerClient's name setter @0x5a0360.
+    return decode_with(p, [](ByteReader& r) {
+        GuildBannerAppearance v;
+        r.skip(8);
+        v.spawn_id = r.le<std::uint32_t>();
+        v.appearance = read_banner_appearance(r);
+        v.name = r.cstring();
+        if (v.name.size() >= 64) throw std::out_of_range("guild banner name exceeds the spawn's name field");
         return v;
     });
 }
@@ -547,7 +573,8 @@ std::optional<PlayerProfile> decode_player_profile(const AppPacket& p) {
 
         v.checksum = u32();
         v.checksum_size = u32();
-        skip_u32(2);
+        v.shroud_type = u32();
+        u32(); // PlayerProfileData +4, copied to PcBase +0x3410.
         v.gender = u8();
         v.race = u32();
         v.class_ = u8();
@@ -878,7 +905,7 @@ AppPacket encode(const NewZone& v) {
     w.le(v.fast_regen_mana);
     w.le(v.fast_regen_endurance);
     w.le<std::uint32_t>(2); // campsite
-    w.le<std::uint32_t>(2); // guild banner
+    w.le(static_cast<std::uint32_t>(v.banner_placement));
     w.f32(v.fog_density);   // +916
     w.zeros(4 + 4 + 4);
     w.le<std::int32_t>(-1); // +932
@@ -941,7 +968,11 @@ std::optional<NewZone> decode_new_zone(const AppPacket& p) {
         v.fast_regen_hp = r.le<std::uint32_t>();
         v.fast_regen_mana = r.le<std::uint32_t>();
         v.fast_regen_endurance = r.le<std::uint32_t>();
-        r.seek(916);
+        r.skip(4); // CanPlaceCampsite
+        const auto placement = r.le<std::uint32_t>();
+        v.banner_placement = placement <= static_cast<std::uint32_t>(BannerPlacement::CanPlaceAndGoto)
+                                 ? static_cast<BannerPlacement>(placement)
+                                 : BannerPlacement::CannotPlace;
         v.fog_density = r.f32();
         r.seek(940);
         v.no_levitate = r.le<std::uint32_t>();

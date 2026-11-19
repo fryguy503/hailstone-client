@@ -236,14 +236,38 @@ void ItemPreviewView::reset_camera() {
     centre_ = glm::vec3(0.0f);
     radius_ = 1.0f;
     if (!model_) return;
-    const glm::vec3 lo = model_->bounds_min * scale_, hi = model_->bounds_max * scale_;
+    glm::vec3 lo, hi;
+    framed_bounds(*model_, mesh_.get(), stand_in_, lo, hi);
+    lo *= scale_;
+    hi *= scale_;
     centre_ = (lo + hi) * 0.5f + glm::vec3(0.0f, 0.0f, z_offset_);
     radius_ = std::max(glm::length(hi - lo) * 0.5f, 0.5f);
 }
 
+const assets::AnimationClip& ItemPreviewView::shown_clip(const assets::CharacterModel& model) {
+    return model.first_clip({"P01", "O01"});
+}
+
+void ItemPreviewView::framed_bounds(const assets::CharacterModel& model, const assets::CharacterMesh* mesh,
+                                    bool stand_in, glm::vec3& lo, glm::vec3& hi) {
+    lo = model.bounds_min;
+    hi = model.bounds_max;
+    // A body-less skeleton has empty bounds of its own: frame the items it holds where its idle (a borrowed one,
+    // for IVM the wood elf's) puts them, not where its T-shaped rest pose would.
+    if (!stand_in && mesh && assets::bodiless_skeleton(model)) {
+        glm::vec3 dressed_lo, dressed_hi;
+        if (assets::dressed_bounds(model, *mesh, dressed_lo, dressed_hi, &shown_clip(model))) {
+            lo = dressed_lo;
+            hi = dressed_hi;
+        }
+    }
+}
+
 void ItemPreviewView::set_subject(std::shared_ptr<const assets::CharacterModel> model,
-                                  std::shared_ptr<const assets::CharacterMesh> mesh, float scale, float z_offset) {
+                                  std::shared_ptr<const assets::CharacterMesh> mesh, float scale, float z_offset,
+                                  bool stand_in) {
     model_ = std::move(model);
+    stand_in_ = stand_in;
     mesh_ = std::move(mesh);
     if (model_ && !mesh_) mesh_ = std::make_shared<assets::CharacterMesh>(model_->default_mesh());
     scale_ = scale;
@@ -293,7 +317,7 @@ bool ItemPreviewView::set_item_subject(std::uint32_t number) {
     model->bounds_max = hi;
     model->bounding_radius = glm::length(hi - lo) * 0.5f;
     if (mesh->tints.size() < mesh->materials.size()) mesh->tints.resize(mesh->materials.size(), 0);
-    set_subject(std::move(model), std::move(mesh), 1.0f, 0.0f);
+    set_subject(std::move(model), std::move(mesh), 1.0f, 0.0f, true);
     return true;
 }
 
@@ -439,7 +463,7 @@ void ItemPreviewView::record(const render::FrameInfo& frame) {
     a.mesh = mesh_.get();
     a.position = glm::vec3(0.0f, 0.0f, z_offset_);
     a.scale = scale_;
-    a.clip = &model_->first_clip({"P01", "O01"}); // standing (the preview actor's idle)
+    a.clip = &shown_clip(*model_); // standing (the preview actor's idle)
     a.time = time_;
     actors_->set_lighting(render::classic_full_bright());
     actors_->draw(frame, proj * view, eye, no_fog, std::span<const render::ActorDraw>(&a, 1));

@@ -16,6 +16,21 @@ namespace hailstone::test::wld_fixtures {
 using namespace hailstone;
 using namespace hailstone::assets;
 
+// WLD fragment types the fixtures build (docs/formats/wld.md).
+inline constexpr std::uint32_t kBitmapName = 0x03;
+inline constexpr std::uint32_t kBitmapInfo = 0x04;
+inline constexpr std::uint32_t kSimpleSprite = 0x05;
+inline constexpr std::uint32_t kSkeletonDef = 0x10;
+inline constexpr std::uint32_t kSkeletonRef = 0x11;
+inline constexpr std::uint32_t kTrackRef = 0x13;
+inline constexpr std::uint32_t kActorDef = 0x14;
+inline constexpr std::uint32_t kMeshRef = 0x2d;
+inline constexpr std::uint32_t kMaterialDef = 0x30;
+inline constexpr std::uint32_t kMaterialPalette = 0x31;
+inline constexpr std::uint32_t kMeshDef = 0x36;
+// The fixtures' opaque material render method.
+inline constexpr std::uint32_t kOpaqueRenderMethod = 0x80000001;
+
 
 // Builds small WLD files: an encoded string table and framed fragments.
 class WldBuilder {

@@ -171,18 +171,22 @@ void ClientApp::show_select_model() {
     }
     pre_game_shown_for_ = source;
     const net::CharacterSelectEntry& e = list[static_cast<std::size_t>(i)];
+    // SetPlayerAppearanceFromPInfo @0x51c050 uses the roster's ShroudRace and ShroudClass for the preview.
+    const auto model_race = e.shroud_race ? e.shroud_race : e.race;
+    const auto model_class = e.shroud_class ? e.shroud_class : e.class_;
     // What the model shows changes with the row and with what the list says of it (a new list after a creation).
-    std::string key = e.name + "/" + std::to_string(e.race) + "/" + std::to_string(e.gender) + "/" +
+    std::string key = e.name + "/" + std::to_string(model_race) + "/" + std::to_string(model_class) + "/" +
+                      std::to_string(e.gender) + "/" +
                       std::to_string(e.face) + "/" + std::to_string(e.level);
     for (const auto& q : e.equip) key += "/" + std::to_string(q.material) + ":" + std::to_string(q.color);
     pre_game_hidden_ = false;
     if (key == pre_game_shown_) return;
     pre_game_shown_ = key;
     m->name = e.name;
-    m->class_id = e.class_;
+    m->class_id = model_class;
     m->level = e.level;
     m->deity = e.deity;
-    m->race = static_cast<std::uint16_t>(e.race);
+    m->race = static_cast<std::uint16_t>(model_race);
     m->gender = e.gender;
     game::Appearance& a = m->appearance;
     a = {};
@@ -198,7 +202,7 @@ void ClientApp::show_select_model() {
     a.drakkin_heritage = e.drakkin_heritage;
     a.drakkin_tattoo = e.drakkin_tattoo;
     a.drakkin_details = e.drakkin_details;
-    a.class_id = e.class_;
+    a.class_id = model_class;
     // RefreshEquipSlot for the nine slots (material, the hero's forge model, the tint), then the held models
     // IT<primary> / IT<secondary> ("0" without one).
     for (std::size_t s = 0; s < 9; ++s) {
@@ -211,9 +215,9 @@ void ClientApp::show_select_model() {
     }
     a.material[7] = e.primary_id_file > 0 ? e.primary_id_file : 0;
     a.material[8] = e.secondary_id_file > 0 ? e.secondary_id_file : 0;
-    game::normalize_appearance(a, e.race);
+    game::normalize_appearance(a, model_race);
     log::info("character select: {} (race {} gender {} face {} hair {} / {} beard {} / {} eyes {} / {} heritage {} "
-              "tattoo {} details {})", e.name, e.race, e.gender, e.face, e.hair_style, e.hair_color, e.beard,
+              "tattoo {} details {})", e.name, model_race, e.gender, e.face, e.hair_style, e.hair_color, e.beard,
               e.beard_color, e.eye_color1, e.eye_color2, e.drakkin_heritage, e.drakkin_tattoo, e.drakkin_details);
     log::debug("character select: {} materials {} {} {} {} {} {} {} held {} {} texture {} head {}", e.name, a.material[0],
                a.material[1], a.material[2], a.material[3], a.material[4], a.material[5], a.material[6], a.material[7],

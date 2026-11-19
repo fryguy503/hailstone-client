@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -36,8 +37,10 @@ const RaceModel* find_race_model(std::uint16_t race, std::uint8_t gender);
 // @0x407800 passes to GetAlternateAnimTag @0x406a60 as its flag: then a
 // human or erudite (HU*, ER*) and the skeleton take the human's clips
 // (HUM / HUF; a human its own), a barbarian only its own, where without it
-// they all take the wood elf's.
-std::string_view animation_source(std::string_view code, bool tunic_point = false);
+// they all take the wood elf's. A code the table does not name under one of
+// GetAlternateAnimTag's wood-elf prefixes takes the wood elf's code with its own
+// last letter (race 127's IVM: ELM).
+std::string animation_source(std::string_view code, bool tunic_point = false);
 
 // The model code whose EQG animations `code` uses when it lacks one
 // (FindAnimationTrackForModel @00406830 retries "<anim>_<CODE>" with the

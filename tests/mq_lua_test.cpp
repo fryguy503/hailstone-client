@@ -9,6 +9,7 @@
 #include <imgui.h>
 
 #include "core/ini_file.h"
+#include "core/log.h"
 #include "core/sha256.h"
 #include "mq/commands.h"
 #include "mq/lua_mq.h"
@@ -357,7 +358,8 @@ TEST_CASE("MQ Lua: required script startup failures prevent readiness") {
     h.pulses(1);
     std::string problem;
     CHECK_FALSE(h.scripts->required_addons_ready(&problem));
-    CHECK(problem.find("Required add-on needed") != std::string::npos);
+    // Named by its repository, as the server's policy names it, not by its folder.
+    CHECK(problem.find("Required add-on owner/needed") != std::string::npos);
 }
 
 TEST_CASE("MQ Lua: Retry starts a required script that failed again, once, and only its recorded bytes") {
@@ -1689,6 +1691,24 @@ error('bye')
     for (int i = 0; i < 20000 && h.scripts->running("full"); ++i) h.pulses(1);
     CHECK_FALSE(h.scripts->running("full"));
     CHECK(printed_part(h, "[Lua] full ended with an error"));
+}
+
+TEST_CASE("MQ Lua: a script's error is logged once, with its traceback") {
+    Host h;
+    h.write("logonce.lua", "error('logonce: the one failure')\n");
+    REQUIRE(h.scripts->run("logonce", {}));
+    for (int i = 0; i < 10 && h.scripts->running("logonce"); ++i) h.pulses(1);
+    CHECK_FALSE(h.scripts->running("logonce"));
+    CHECK(printed_part(h, "[Lua] logonce ended with an error"));
+    char recent[16 * 200 + 1];
+    const std::size_t n = log::copy_recent_lines(recent, sizeof recent);
+    const std::string_view lines(recent, n);
+    std::size_t count = 0;
+    for (std::size_t at = lines.find("logonce: the one failure"); at != std::string_view::npos;
+         at = lines.find("logonce: the one failure", at + 1))
+        ++count;
+    CHECK(count == 1);
+    CHECK(lines.find("stack traceback") != std::string_view::npos);
 }
 
 namespace {

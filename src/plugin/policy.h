@@ -209,6 +209,9 @@ public:
     // Expected entrypoints of the required installed add-ons (from the registry), independent of disk discovery or
     // permission: a missing/shadowed runtime file must still fail readiness instead of disappearing from them.
     std::vector<std::pair<std::string, Sha256Digest>> required_entries(FileKind kind) const;
+    // How a required add-on's file is named to the player: its repository (owner/repo, as the server's `required`
+    // names it), else `name` (a file with no recorded source).
+    std::string required_label(FileKind kind, const Sha256Digest& hash, std::string_view name) const;
     // One of the server's own files (under a hailstone.cfg: it always runs, and the player cannot stop it).
     bool server_file(FileKind kind, const Sha256Digest& hash) const;
     // Why a file with caps 0 may not run, for the player.

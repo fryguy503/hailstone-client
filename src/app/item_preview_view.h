@@ -35,12 +35,18 @@ public:
 
     const assets::CharacterLibrary& library() const { return *library_; }
     // What to show: `model` dressed as `mesh` (null: its own geometry), or nothing. A new subject resets the camera
-    // (0x576120).
+    // (0x576120). `stand_in`: the model is set_item_subject's one-bone stand-in, framed by its own bounds.
     void set_subject(std::shared_ptr<const assets::CharacterModel> model, std::shared_ptr<const assets::CharacterMesh> mesh,
-                     float scale, float z_offset);
+                     float scale, float z_offset, bool stand_in = false);
     // The item alone: its model `number` (IT<n>) on a one-bone stand-in; false when the item has no model.
     bool set_item_subject(std::uint32_t number);
     void clear_subject();
+    // The clip the preview actor plays: standing, its idle.
+    static const assets::AnimationClip& shown_clip(const assets::CharacterModel& model);
+    // The model-space bounds the camera fits (before the subject's scale): the model's own, or for a body-less
+    // skeleton (an IVM illusion; not `stand_in`, set_item_subject's stand-in) the items it holds, posed as shown.
+    static void framed_bounds(const assets::CharacterModel& model, const assets::CharacterMesh* mesh, bool stand_in,
+                              glm::vec3& lo, glm::vec3& hi);
     bool has_subject() const { return model_ != nullptr; }
 
     // The image for this frame, `width` x `height` pixels (an ImTextureID), drawn when the frame is recorded; null
@@ -91,6 +97,7 @@ private:
     std::shared_ptr<const assets::CharacterModel> model_;
     std::shared_ptr<const assets::CharacterMesh> mesh_;
     float scale_ = 1.0f, z_offset_ = 0.0f;
+    bool stand_in_ = false;
     float time_ = 0.0f;
     // The orbit camera: around the model's centre (+ pan), at `distance_` x zoom.
     glm::vec3 centre_{0.0f};

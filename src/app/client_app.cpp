@@ -72,6 +72,13 @@ int ClientApp::run() {
             close_pending_ = false;
             window_close_request();
         }
+        // A close request's camp that a zone change ended: camped again once the next zone shows (a deliberate
+        // difference: the original's EnterZone ends it and stays open, app/close_camp.h).
+        if (!conn_) close_camp_.reset();
+        else if (close_camp_.update(conn_->state(), screen_ == Screen::InGame && player_ready_)) {
+            log::info("window close request: a zone change ended its camp; camping again in this zone");
+            window_close_request();
+        }
         if (quit_) break;
         auto now = Clock::now();
         float dt = std::min(std::chrono::duration<float>(now - last).count(), 0.1f);
@@ -130,6 +137,7 @@ int ClientApp::run() {
                 conn_->reground();
             }
             update_missiles();
+            update_flora_cover();
         }
         update_lap.mark("world objects update");
         // Presentation hiding is local to play. Loading and pregame screens remain usable, and returning to
@@ -1045,7 +1053,7 @@ int ClientApp::run() {
     }
     if (ui_api_) ui_api_->save_layout();
     save_chat_history(true);
-    if (opts_.window_width == 1280 && opts_.window_height == 720) {
+    if (!opts_.window_size_given) {
         // The game window's place for the next start (window_desc); not a --window-size run's.
         platform::WindowGeometry g = window_.geometry();
         config_.set_int("window.x", g.x);

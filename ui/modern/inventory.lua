@@ -414,7 +414,10 @@ local function vitality(x, y, w, s, gauge, name, color)
 end
 
 local OPTS = {
-  size = function() return W, H + (hasVitality() and 40 or 0) end,
+  size = function()
+    local extra = API.windows.ChildShown(WINDOW, "ShroudProgressButton") == true and 32 or 0
+    return W, H + (hasVitality() and 40 or 0) + extra
+  end,
   place = function(sw, sh, w, h, s, x, y) return sw - w - 60 * s, sh / 2 - h / 2 end,
   keepTitle = true,
 }
@@ -426,6 +429,8 @@ local function body(x, y, w, h, s)
   local lvl, cls, deity = label(2), label(3):gsub("%s*\n%s*", " / "), label(4)
   local _, th = T.TextSize("Ag", T.font.large)
   local sub = "Level " .. lvl .. "  \xC2\xB7  " .. cls .. (deity ~= "" and ("  \xC2\xB7  " .. deity) or "")
+  local shroud = API.windows.Text(WINDOW, "ShroudModeLabel") or ""
+  if shroud ~= "" then sub = sub .. "  ·  " .. shroud end
   T.Text(x, y + th + 2 * s, sub, C.muted, T.font.small)
   -- experience at the right of the header
   local xp, aa = API.character.Gauge(4) or 0, API.character.Gauge(5) or 0
@@ -537,6 +542,12 @@ local function body(x, y, w, h, s)
       if b.window then API.windows.Show(b.window, not open)
       elseif b[1] == "IW_DoneButton" then API.windows.Show(WINDOW, false)
       else API.windows.ClickChild(WINDOW, b[1], "left") end
+    end
+  end
+  if API.windows.ChildShown(WINDOW, "ShroudProgressButton") == true then
+    local py = btnY + 64 * s
+    if T.Button("##shroudProgress", x, py, x + bw, py + 26 * s, s, "Shroud Progress") then
+      API.windows.ClickChild(WINDOW, "ShroudProgressButton", "left")
     end
   end
 end

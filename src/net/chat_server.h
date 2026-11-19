@@ -83,9 +83,11 @@ public:
         SessionOptions session = ucs_session_options();
         // Hailstone safety limits, a deliberate difference: the original never retries by itself
         // (CEverQuest::ChatServerGiveTime @0x5382d0 deletes a disconnected proxy and forgets the server until the next
-        // OP_SetChatServer2; reconnect_delay zero does the same). An acknowledged login with no answer must not wait forever, and a failed transport
-        // retries without replaying commands, doubling the delay each time and giving up after a few attempts. A
-        // refusal (an explicit one, or stock UCS closing the link before any login reply) waits for new credentials.
+        // OP_SetChatServer2; reconnect_delay zero does the same), and its chat link has no receive limit (the session
+        // profile's 60 s is Hailstone's, so a link gone silent ends and is retried). An acknowledged login with no
+        // answer must not wait forever, and a failed transport retries without replaying commands, doubling the delay
+        // each time and giving up after a few attempts. A refusal (an explicit one, or stock UCS closing the link
+        // before any login reply) waits for new credentials.
         std::chrono::milliseconds login_timeout{30000};
         std::chrono::milliseconds reconnect_delay{5000}; // the first retry's delay; zero disables automatic retry
         std::chrono::milliseconds max_reconnect_delay{60000};
@@ -113,6 +115,10 @@ public:
 
     // The host's name is being looked up (on a thread of its own: a slow or failing DNS must not stop the frame).
     bool resolving() const { return resolving_ != nullptr; }
+    // Testing: the chat link goes silent both ways (Session::simulate_link_loss), or its socket is closed under it
+    // (Session::simulate_socket_loss).
+    void simulate_link_loss();
+    void simulate_socket_loss();
     const std::string& error() const { return error_; }
 
 private:

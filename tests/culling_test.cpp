@@ -9,6 +9,9 @@
 #include "render/culling.h"
 #include "render/shadows.h"
 
+#include "app/item_preview_view.h"
+#include "app/nameplate_input.h"
+
 using namespace hailstone::render;
 
 namespace {
@@ -166,6 +169,233 @@ TEST_CASE("culling: a spawn is posed when it can show, in the view or in a shado
     CHECK(actor_needs_pose(&f, {-300, 200, 30}, 3, true, eye, 0));        // no reach: every spawn casts
     // Partly in view: posed.
     CHECK(actor_needs_pose(&f, {95, 200, 30}, 10, false, eye, 260));
+}
+
+namespace {
+
+// The view the frustum test below looks through.
+constexpr int kViewWidth = 1280, kViewHeight = 720;
+constexpr float kFarPlane = 2000.0f;
+
+// A body-less skeleton (race 127's IVM, cut to a root and a right hand) holding one item vertex, dressed as
+// CharacterLibrary::dress dresses it (held_reach). The hand's rest pose turns the item's +X reach into +Y and lifts
+// it, a non-trivial bone transform; its idle ("P01") lifts the hand farther than the rest pose holds it.
+struct BodilessFixture {
+    static constexpr std::uint16_t kHandBone = 1;
+    static constexpr float kItemReach = 20.0f;
+    static constexpr float kBodyRadius = 1.0f;
+    static constexpr float kHandTurnDegrees = 90.0f;
+    static constexpr float kHandLift = 3.0f;
+    static constexpr float kSwingLift = 4.0f;
+    hailstone::assets::CharacterModel model;
+    hailstone::assets::CharacterMesh mesh;
+    BodilessFixture() {
+        using namespace hailstone::assets;
+        model.code = "IVM";
+        model.bone_names = {"IVM_TRACK", "IVMR_POINT_TRACK"};
+        model.parents = {-1, 0};
+        model.order = {0, kHandBone};
+        model.bounding_radius = kBodyRadius;
+        AnimationClip rest;
+        rest.tracks.resize(model.parents.size());
+        rest.tracks[0].push_back(BonePose{});
+        BonePose hand;
+        hand.rotation = glm::angleAxis(glm::radians(kHandTurnDegrees), glm::vec3(0, 0, 1));
+        hand.translation = glm::vec3(0, 0, kHandLift);
+        rest.tracks[kHandBone].push_back(hand);
+        AnimationClip swing = rest;
+        BonePose lifted = hand;
+        lifted.translation.z += kSwingLift;
+        swing.tracks[kHandBone] = AnimationTrack{lifted, hand}; // starts lifted, then back to rest
+        swing.frame_count = static_cast<std::uint32_t>(swing.tracks[kHandBone].size());
+        model.clips[""] = rest;
+        model.clips["P01"] = swing;
+        SkinnedVertex v;
+        v.position = glm::vec3(kItemReach, 0.0f, 0.0f); // a weapon reaching well past the authored body radius
+        v.bones[0] = kHandBone;
+        mesh.vertices.push_back(v);
+        mesh.held_reach = dressed_reach(model, mesh);
+    }
+    // The item vertex's distance from the model origin with the hand at `lift`.
+    static float item_distance(float lift) { return std::sqrt(kItemReach * kItemReach + lift * lift); }
+    // The item vertex in `clip`'s first key, posed as the renderer poses it.
+    float posed_distance(std::string_view clip) const {
+        const auto* c = model.clip(clip);
+        std::vector<glm::mat4> world;
+        model.sample(*c, 0.0f, false, world);
+        return glm::length(glm::vec3(world[kHandBone] * glm::vec4(mesh.vertices.front().position, 1.0f)));
+    }
+};
+
+} // namespace
+
+TEST_CASE("culling: a body-less skeleton's held item widens the renderer's sphere, in any pose of its clips") {
+    constexpr float kDistanceAlongView = 200.0f;
+    constexpr float kEdgeMargin = 10.0f;
+    constexpr float kActorScale = 1.5f;
+    BodilessFixture fx;
+    ActorDraw a;
+    a.model = &fx.model;
+    a.mesh = &fx.mesh;
+    a.clip = fx.model.clip("");
+    a.scale = kActorScale;
+    // The renderer's own radius (prepare and spawn_bounds) holds the posed item at rest and in the swing.
+    const float radius = ActorRenderer::draw_radius(a);
+    REQUIRE(fx.posed_distance("") == doctest::Approx(BodilessFixture::item_distance(BodilessFixture::kHandLift)));
+    REQUIRE(fx.posed_distance("P01") ==
+            doctest::Approx(BodilessFixture::item_distance(BodilessFixture::kHandLift + BodilessFixture::kSwingLift)));
+    CHECK(radius >= fx.posed_distance("") * kActorScale);
+    CHECK(radius >= fx.posed_distance("P01") * kActorScale);
+    const float body = fx.model.bounding_radius * kActorScale;
+    // A bare one has only its body's radius.
+    hailstone::assets::CharacterMesh bare;
+    a.mesh = &bare;
+    CHECK(ActorRenderer::draw_radius(a) == doctest::Approx(body));
+
+    FlyCamera cam; // at the origin, yaw 0: looking along +X
+    Frustum f = frustum_from(cam.projection(kViewWidth, kViewHeight, kFarPlane) * cam.view());
+    // Just outside the body sphere at the view's edge, but the item's sphere still reaches in. Z is up in EQ world
+    // space, so the camera's horizontal half-extent (tan_half_x) bounds the Y offset.
+    const float half_x =
+        kDistanceAlongView * hailstone::game::camera_fov(cam.view_fov_units(), kViewWidth, kViewHeight).tan_half_x;
+    const glm::vec3 edge(cam.position.x + kDistanceAlongView, cam.position.y - half_x - kEdgeMargin, cam.position.z);
+    CHECK_FALSE(actor_needs_pose(&f, edge, body, false, {}, 0.0f));
+    CHECK(actor_needs_pose(&f, edge, radius, false, {}, 0.0f));
+}
+
+TEST_CASE("item preview: a body-less skeleton is framed where its idle holds the items, not its rest pose") {
+    BodilessFixture fx;
+    const auto& shown = hailstone::app::ItemPreviewView::shown_clip(fx.model);
+    REQUIRE(&shown == fx.model.clip("P01"));
+    glm::vec3 lo, hi;
+    hailstone::app::ItemPreviewView::framed_bounds(fx.model, &fx.mesh, false, lo, hi);
+    // The one item vertex, where the idle's first frame puts it; the rest pose has it elsewhere.
+    std::vector<glm::mat4> idle, rest;
+    fx.model.sample(shown, 0.0f, false, idle);
+    fx.model.sample(*fx.model.clip(""), 0.0f, false, rest);
+    const glm::vec4 item(fx.mesh.vertices.front().position, 1.0f);
+    const glm::vec3 shown_at(idle[BodilessFixture::kHandBone] * item);
+    const glm::vec3 rest_at(rest[BodilessFixture::kHandBone] * item);
+    REQUIRE(glm::length(shown_at - rest_at) > 0.0f);
+    CHECK(lo.x == doctest::Approx(shown_at.x));
+    CHECK(lo.y == doctest::Approx(shown_at.y));
+    CHECK(lo.z == doctest::Approx(shown_at.z));
+    CHECK(hi.z == doctest::Approx(shown_at.z));
+    // set_item_subject's stand-in keeps the bounds it was given.
+    fx.model.bounds_max = glm::vec3(BodilessFixture::kItemReach);
+    hailstone::app::ItemPreviewView::framed_bounds(fx.model, &fx.mesh, true, lo, hi);
+    CHECK(lo == fx.model.bounds_min);
+    CHECK(hi == fx.model.bounds_max);
+}
+
+TEST_CASE("culling: a rider's radius bounds its mount's seat frame's largest stretch, not its own scale") {
+    constexpr float kRiderScale = 0.5f;
+    constexpr float kParentStretch = 3.0f; // a non-uniformly scaled parent bone: x 3 along X only
+    constexpr float kSeatTurnDegrees = 45.0f;
+    BodilessFixture fx;
+    ActorDraw a;
+    a.model = &fx.model;
+    a.mesh = &fx.mesh;
+    a.clip = fx.model.clip("");
+    a.scale = kRiderScale;
+    const float bound = ActorRenderer::bound_radius(fx.model, &fx.mesh);
+    CHECK(ActorRenderer::draw_radius(a) == doctest::Approx(bound * kRiderScale)); // not seated: its own scale
+    // Seated (ActorRenderer::seat_rider): drawn in the seat bone's frame, a turn under the stretched parent, whose
+    // columns are not perpendicular. The longest column is shorter than the stretch along the parent's X.
+    const glm::mat4 turn = glm::rotate(glm::mat4(1.0f), glm::radians(kSeatTurnDegrees), glm::vec3(0, 0, 1));
+    a.attached = true;
+    a.parent = glm::scale(glm::mat4(1.0f), glm::vec3(kParentStretch, 1.0f, 1.0f)) * turn;
+    const glm::mat3 frame(a.parent);
+    const float longest_column =
+        std::max({glm::length(frame[0]), glm::length(frame[1]), glm::length(frame[2])});
+    const glm::vec3 along_x = glm::vec3(glm::inverse(turn) * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+    const float stretched = glm::length(frame * along_x);
+    REQUIRE(stretched == doctest::Approx(kParentStretch));
+    REQUIRE(longest_column < stretched);
+    CHECK(ActorRenderer::draw_radius(a) >= bound * stretched);
+}
+
+TEST_CASE("point shadows: a spell's light beside a seated rider is not taken as inside it") {
+    constexpr float kBodyRadius = 2.0f;
+    constexpr float kSeatTurnDegrees = 45.0f;
+    constexpr float kLightRadius = 30.0f;
+    constexpr float kMidway = 0.5f;
+    // A rider with a body, seated in a turned seat frame of uniform scale 1: its reach grows by the frame's bound
+    // (draw_radius), its inside radius stays its own.
+    hailstone::assets::CharacterModel m;
+    m.bounding_radius = kBodyRadius;
+    ActorDraw a;
+    a.model = &m;
+    a.attached = true;
+    a.parent = glm::rotate(glm::mat4(1.0f), glm::radians(kSeatTurnDegrees), glm::vec3(0, 0, 1));
+    a.position = glm::vec3(a.parent[3]);
+    const float reach = ActorRenderer::draw_radius(a);
+    const float inside = ActorRenderer::inside_radius(a);
+    REQUIRE(inside == doctest::Approx(kBodyRadius));
+    REQUIRE(reach > inside);
+    // A spell's light between the two: beside the rider, which casts its shadow; the widened radius would have
+    // taken the rider for the light's caster and left it out.
+    const glm::vec3 beside = a.position + glm::vec3(inside + (reach - inside) * kMidway, 0.0f, 0.0f);
+    CHECK(ActorRenderer::casts_point_shadow(beside, kLightRadius, a.position, reach, inside, true));
+    CHECK_FALSE(ActorRenderer::casts_point_shadow(beside, kLightRadius, a.position, reach, reach, true));
+    // Within its body it is still the caster's (or target's) light, and casts only for a light that is not a spell's.
+    const glm::vec3 within = a.position + glm::vec3(inside * kMidway, 0.0f, 0.0f);
+    CHECK_FALSE(ActorRenderer::casts_point_shadow(within, kLightRadius, a.position, reach, inside, true));
+    CHECK(ActorRenderer::casts_point_shadow(within, kLightRadius, a.position, reach, inside, false));
+    // Out of the light's reach it casts nothing.
+    const glm::vec3 far = a.position + glm::vec3(kLightRadius + reach, 0.0f, 0.0f);
+    CHECK_FALSE(ActorRenderer::casts_point_shadow(far, kLightRadius, a.position, reach, inside, false));
+}
+
+TEST_CASE("culling: a dressed item's bounds follow its skin binding and the bone frame of its emitters") {
+    using namespace hailstone::assets;
+    constexpr float kBindingShift = 5.0f;
+    constexpr float kEmitterShift = 2.0f;
+    BodilessFixture fx;
+    // An attached piece's own palette entry, after the model's bones (an EQG item on a WLD hand): the vertex hangs
+    // from the hand through the binding.
+    CharacterMesh::SkinBinding binding;
+    binding.host_bone = BodilessFixture::kHandBone;
+    binding.local = glm::translate(glm::mat4(1.0f), glm::vec3(kBindingShift, 0.0f, 0.0f));
+    fx.mesh.skin_bindings.push_back(binding);
+    fx.mesh.vertices.front().bones[0] = static_cast<std::uint16_t>(fx.model.parents.size());
+    glm::vec3 lo, hi;
+    REQUIRE(dressed_bounds(fx.model, fx.mesh, lo, hi));
+    const float through_binding = std::sqrt((BodilessFixture::kItemReach + kBindingShift) *
+                                                (BodilessFixture::kItemReach + kBindingShift) +
+                                            BodilessFixture::kHandLift * BodilessFixture::kHandLift);
+    CHECK(glm::length(hi) == doctest::Approx(through_binding));
+    CHECK(dressed_reach(fx.model, fx.mesh) >= glm::length(hi));
+
+    // An emitter sits at its bone's own frame: with an inverse bind (EQG) its place is not the skinned one.
+    CharacterMesh aura;
+    MeshEmitter e;
+    e.bone = BodilessFixture::kHandBone;
+    e.local = glm::translate(glm::mat4(1.0f), glm::vec3(kEmitterShift, 0.0f, 0.0f));
+    aura.emitters.push_back(e);
+    fx.model.inverse_bind.assign(fx.model.parents.size(),
+                                 glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -BodilessFixture::kHandLift)));
+    REQUIRE(dressed_bounds(fx.model, aura, lo, hi));
+    // The hand turns +X into +Y and lifts it: the emitter at (0, shift, lift), ignoring the inverse bind.
+    CHECK(lo.y == doctest::Approx(kEmitterShift));
+    CHECK(lo.z == doctest::Approx(BodilessFixture::kHandLift));
+    CHECK(dressed_reach(fx.model, aura) >= glm::length(lo));
+}
+
+TEST_CASE("nameplate: a spawn without a body top is anchored at its eye, seated or not") {
+    constexpr float kBodyTop = 4.0f;
+    constexpr float kEye = 2.5f;
+    constexpr float kSeatHeight = 10.0f;
+    constexpr float kGroundHeight = 30.0f;
+    const glm::vec3 base(0.0f, 0.0f, kGroundHeight); // the spawn's model origin
+    const glm::vec3 seat = base + glm::vec3(0.0f, 0.0f, kSeatHeight);
+    const glm::vec3 up(0.0f, 0.0f, hailstone::app::kNameplateHeadOffset);
+    using hailstone::app::nameplate_head;
+    CHECK(nameplate_head(base, kBodyTop, kEye, std::nullopt) == base + glm::vec3(0, 0, kBodyTop) + up);
+    CHECK(nameplate_head(base, std::nullopt, kEye, std::nullopt) == base + glm::vec3(0, 0, kEye) + up);
+    // A rider's top on its mount already holds its body's top; a meshless rider's is the seat itself.
+    CHECK(nameplate_head(base, kBodyTop, kEye, seat) == seat + up);
+    CHECK(nameplate_head(base, std::nullopt, kEye, seat) == seat + glm::vec3(0, 0, kEye) + up);
 }
 
 TEST_CASE("camera: the FOV offset widens the view without changing the chosen FOV") {

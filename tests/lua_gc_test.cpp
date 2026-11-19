@@ -1,4 +1,5 @@
-// The UI's Lua collector runs in slices at the end of each LuaUi::frame (src/ui/lua/lua_host.cpp), not on its own.
+// The UI's Lua collector runs in Lua's generational mode, on its own, once the scripts have loaded
+// (src/ui/lua/lua_host.cpp collect_garbage).
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -16,7 +17,7 @@
 
 namespace fs = std::filesystem;
 
-TEST_CASE("Lua UI: the collector runs in the frame's slices and keeps the heap bounded") {
+TEST_CASE("Lua UI: the generational collector runs on its own and keeps the heap bounded") {
     hailstone::test::ScratchDir scratch("lua_gc_test");
     const fs::path dir = scratch.path() / "pack";
     fs::create_directories(dir);
@@ -43,18 +44,82 @@ TEST_CASE("Lua UI: the collector runs in the frame's slices and keeps the heap b
             lua.frame();
             ImGui::Render();
         };
-        frame(); // loads the script, then collects its loading's garbage
+        frame(); // loads the script, then collects its loading's garbage and turns the collector generational
         const int live = lua_gc(L, LUA_GCCOUNT);
-        CHECK(lua_gc(L, LUA_GCISRUNNING) == 0); // only the slices collect
+        CHECK(lua_gc(L, LUA_GCISRUNNING) == 1);
+        CHECK(lua_gc(L, LUA_GCGEN, 0, 0) == LUA_GCGEN); // (0, 0: its parameters kept)
         int most = 0;
         for (int i = 0; i < 400; ++i) {
             frame();
             most = std::max(most, lua_gc(L, LUA_GCCOUNT));
         }
-        // A cycle starts at twice the live heap and is finished at once by four times: whatever the slices manage
-        // on this machine, the heap stays under that and a frame's garbage.
-        CHECK(most < live * 4 + 1024);
-        CHECK(lua_gc(L, LUA_GCISRUNNING) == 0);
+        // LuaUi::frame collects in full at three times the live heap (kGcMajorTrigger): the heap stays under that and
+        // a frame's garbage.
+        CHECK(most < live * 3 + 1024);
+        CHECK(lua_gc(L, LUA_GCISRUNNING) == 1);
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("Lua UI: the host runs the major collections, at three times the live heap, timed") {
+    // Tables kept for 40 frames outlive the minor collections, so only a major one frees them: the old generation
+    // grows until LuaUi::frame collects. Lua's own majors (at eleven times) must never come first, and a collector
+    // that has left generational mode is put back by the next frame.
+    hailstone::test::ScratchDir scratch("lua_gc_major_test");
+    const fs::path dir = scratch.path() / "pack";
+    fs::create_directories(dir);
+    std::ofstream(dir / "old.lua") << "local ring, n = {}, 0\n"
+                                      "ui.window('Old', function()\n"
+                                      "  n = n + 1\n"
+                                      "  local t = {}\n"
+                                      "  for i = 1, 2000 do t[i] = { i } end\n"
+                                      "  ring[n % 40] = t\n"
+                                      "end)\n";
+
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    unsigned char* px = nullptr;
+    int w = 0, h = 0;
+    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    {
+        hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
+        lua_State* L = lua.state();
+        namespace sections = hailstone::core::frame_sections;
+        // Whether this frame ran a major collection (its section).
+        auto frame = [&] {
+            sections::take();
+            ImGui::GetIO().DisplaySize = ImVec2(800, 600);
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            lua.frame();
+            ImGui::Render();
+            bool major = false;
+            for (const auto& [name, ms] : sections::take()) major |= std::string_view(name) == "Lua GC major";
+            return major;
+        };
+        frame(); // loads the script and turns the collector generational
+        int majors = 0;
+        for (int i = 0; i < 400; ++i) {
+            const std::size_t live_before = hailstone::ui::lua::gc_live_bytes(L);
+            const bool major = frame();
+            const std::size_t live = hailstone::ui::lua::gc_live_bytes(L);
+            majors += major ? 1 : 0;
+            // GCestimate changes only at a major collection (a minor one keeps it, lgc.c genstep): one changed in a
+            // frame without the host's section was Lua's own, untimed.
+            if (live != live_before) CHECK(major);
+            // At the frame's end the heap is under the trigger, or the host collected.
+            CHECK(lua_gc(L, LUA_GCCOUNT) < 3 * std::max<int>(1, static_cast<int>(live >> 10)) + 1);
+            CHECK_FALSE(hailstone::ui::lua::gc_left_generational(L));
+        }
+        CHECK(majors >= 2);
+        CHECK(majors < 200); // (not every frame)
+
+        // Lua in incremental mode (as after a bad collection of its own): the next frame collects, timed, and puts it
+        // back.
+        lua_gc(L, LUA_GCINC, 0, 0, 0);
+        REQUIRE(hailstone::ui::lua::gc_left_generational(L));
+        CHECK(frame());
+        CHECK_FALSE(hailstone::ui::lua::gc_left_generational(L));
     }
     ImGui::DestroyContext(ctx);
 }
@@ -112,52 +177,9 @@ TEST_CASE("Lua UI: each window's allocations go to its frame section") {
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("Lua UI: the garbage made during a cycle spread over frames does not count as live") {
-    // A sweep in slices over many frames ends with the garbage made meanwhile still in the heap. Taken as live, it
-    // raised the next cycle's start and the heap went past the bound below (in a night's play, with more garbage each
-    // frame, to 9 GB). A fixed number of steps a frame spreads the cycles the same way on every machine.
-    hailstone::test::ScratchDir scratch("lua_gc_spread_test");
-    const fs::path dir = scratch.path() / "pack";
-    fs::create_directories(dir);
-    std::ofstream(dir / "garbage.lua") << "keep = {}\n"
-                                          "for i = 1, 20000 do keep[i] = { i, tostring(i) } end\n"
-                                          "ui.window('Garbage', function()\n"
-                                          "  local t = {}\n"
-                                          "  for i = 1, 3000 do t[i] = { i, 'x' .. i } end\n"
-                                          "end)\n";
-
-    ImGuiContext* ctx = ImGui::CreateContext();
-    ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
-    {
-        hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
-        lua.set_gc_steps_for_test(8);
-        lua_State* L = lua.state();
-        auto frame = [&] {
-            ImGui::GetIO().DisplaySize = ImVec2(800, 600);
-            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
-            ImGui::NewFrame();
-            lua.frame();
-            ImGui::Render();
-        };
-        frame();
-        const int live = lua_gc(L, LUA_GCCOUNT);
-        int most = 0;
-        for (int i = 0; i < 3000; ++i) {
-            frame();
-            most = std::max(most, lua_gc(L, LUA_GCCOUNT));
-        }
-        // As in the test above. Counting the sweeps' garbage as live, the heap reached 16 MB here (over 13).
-        CHECK(most < live * 4 + 1024);
-    }
-    ImGui::DestroyContext(ctx);
-}
-
 TEST_CASE("Lua UI: the live heap is what the cycle found reachable, not the garbage made while it ran") {
     lua_State* L = luaL_newstate();
-    lua_gc(L, LUA_GCINC, 0, 1, 0); // the UI's small steps (ui/lua/lua_host.cpp)
+    lua_gc(L, LUA_GCINC, 0, 1, 0); // small steps, so a cycle spreads over many (gc_live_bytes in any mode)
     lua_gc(L, LUA_GCSTOP);
     // About 2 MB kept.
     REQUIRE(luaL_dostring(L, "keep = {} for i = 1, 20000 do keep[i] = { i, i } end") == LUA_OK);

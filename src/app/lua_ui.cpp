@@ -27,6 +27,8 @@
 #include <lua.hpp>
 
 #include "app/actions_ui.h"
+#include "app/chat_tab_bar.h"
+#include "app/chat_tabs.h"
 #include "app/lua_ui_menu.h"
 #include "app/lua_ui_values.h"
 #include "app/lua_ui_windows.h"
@@ -35,12 +37,14 @@
 #include "app/lua_ui_api.h"
 #include "app/lua_ui_hooks.h"
 #include "app/lua_ui_plugins.h"
+#include "app/lua_ui_record.h"
 #include "app/lua_ui_extensions.h"
 #include "plugin/lua_keep.h"
 #include "plugin/ui_bridge.h"
 #include "core/ini_file.h"
 #include "core/log.h"
 #include "core/saturate.h"
+#include "game/eq_names.h"
 #include "game/hot_button_state.h"
 #include "game/item_sort.h"
 #include "game/merchant.h"
@@ -58,8 +62,6 @@
 
 namespace hailstone::app {
 
-bool chat_window_used(int slot);  // app/lua_ui_chat.cpp: chat window 1..32 is open
-void chat_window_closed(int slot); // its close button: the window goes with its tabs
 // app/lua_ui_chat.cpp: the chat windows' settings, and the user colours from the character's chat.ini in `user_dir`.
 void chat_layout_loaded(ui::UiIni& ini, UiHost& host, const std::filesystem::path& user_dir);
 void chat_host_gone(const UiHost& host, const ui::UiIni& ini);
@@ -313,13 +315,16 @@ struct UiApi::Impl {
         struct Chat : StockWindow {
             int slot;
             explicit Chat(int s) : StockWindow("Chat" + std::to_string(s), true), slot(s) {}
-            bool shown(UiHost& h2) override { return h2.in_game && (slot == 1 ? open_ : chat_window_used(slot)); }
+            bool shown(UiHost& h2) override {
+                const auto group = chat_tabs::group(slot);
+                return h2.in_game && group.slot && (!group.main || open_);
+            }
             void set_shown(UiHost& h2, bool show) override {
-                if (slot == 1) StockWindow::set_shown(h2, show);
-                else if (!show) chat_window_closed(slot);
+                if (chat_tabs::group(slot).main) StockWindow::set_shown(h2, show);
+                else if (!show) chat_tabs::close_group(slot);
             }
         };
-        for (int slot = 1; slot <= 32; ++slot) windows.push_back(std::make_unique<Chat>(slot));
+        for (int slot = 1; slot <= chat_tabs::kMaxSlots; ++slot) windows.push_back(std::make_unique<Chat>(slot));
         // CEQMainWnd: the EQ button (a check box, pressed while its menu is open), the Marketplace button (SCButton:
         // the window's toggle) and the flash sale button (SCFSButton: hidden by the constructor, shown only by a flash
         // sale notice this client does not get).
@@ -559,6 +564,22 @@ int Name(lua_State* L) {
     return 1;
 }
 
+// hs.ClassName(id [, short]) -> a class's name as the client shows it, its short name with `short`: a server's own
+// where its plugin or script named the class (game/eq_names.h), else the stock one ("Warrior", "WAR").
+int ClassName(lua_State* L) {
+    const lua_Integer id = luaL_checkinteger(L, 1);
+    const auto c = static_cast<std::uint32_t>(std::clamp<lua_Integer>(id, 0, 0xffff));
+    const std::string name = lua_toboolean(L, 2) ? game::class_short_name(c) : game::class_name(c);
+    lua_pushlstring(L, name.data(), name.size());
+    return 1;
+}
+
+// hs.ClassNamesRevision() -> a number that changes whenever hs.ClassName's answers may have (a cache's key).
+int ClassNamesRevision(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(game::class_names_revision() & 0x7fffffffffffffffull));
+    return 1;
+}
+
 // hs.SlotName(slot) -> "Primary", ...
 int SlotName(lua_State* L) {
     lua_pushstring(L, net::possessions_slot_name(held_int(luaL_checkinteger(L, 1))));
@@ -600,9 +621,12 @@ int Money(lua_State* L) {
     return 4;
 }
 
-// text [, r, g, b] = hs.Label(eqType)   -- the text a game label with this EQType shows
+// text [, r, g, b] = hs.Label(eqType [, markInvisibility])
+// The text a game label with this EQType shows. markInvisibility (Hailstone): the name plate's "(Name)" / "[Name]"
+// on the player's (1) and target's (28) names, for a spawn the player sees; the original's labels show them plain.
 int Label(lua_State* L) {
-    LabelValue v = ui_label(Impl::of(L).host, held_int(luaL_checkinteger(L, 1)));
+    const bool mark_invisibility = lua_isboolean(L, 2) && lua_toboolean(L, 2);
+    LabelValue v = ui_label(Impl::of(L).host, held_int(luaL_checkinteger(L, 1)), mark_invisibility);
     lua_pushstring(L, v.text.c_str());
     if (!v.argb) return 1;
     Rgb c = argb_to_rgb(*v.argb);
@@ -610,12 +634,15 @@ int Label(lua_State* L) {
     return 4;
 }
 
-// fraction, text, value [, r, g, b] = hs.Gauge(eqType)   -- fraction 0..1, nil when the gauge is empty/unavailable;
+// fraction, text, value [, r, g, b] = hs.Gauge(eqType [, markInvisibility])
+// fraction 0..1, nil when the gauge is empty/unavailable; markInvisibility (Hailstone) as hs.Label's, on the
+// name captions of gauges 1, 6 and 27.
 // value is __GetGaugeValueFromEQ's own (0..1000, -1 nothing drawn at all, -2 full in dark red, -3 empty: a corpse,
 // -110..-10 and -2000..-1000 the special bands); r, g, b the fill tint CGaugeWnd::Draw gives a special value
 // (gauge_fill), nil for a normal one.
 int Gauge(lua_State* L) {
-    GaugeValue g = ui_gauge(Impl::of(L).host, held_int(luaL_checkinteger(L, 1)));
+    const bool mark_invisibility = lua_isboolean(L, 2) && lua_toboolean(L, 2);
+    GaugeValue g = ui_gauge(Impl::of(L).host, held_int(luaL_checkinteger(L, 1)), mark_invisibility);
     GaugeFill f = gauge_fill(g.value);
     if (f.fill < 0) lua_pushnil(L);
     else lua_pushnumber(L, std::min(f.fill, 1000) / 1000.0);
@@ -1120,21 +1147,6 @@ void set_art_fields(lua_State* L, int n) {
     for (int k = 4; k >= 0; --k) lua_setfield(L, -2 - k, kFields[k]);
 }
 
-// The record table an hs.*Info call fills: the argument at `arg` when it is a plain table (a caller's, kept from frame
-// to frame), else a new one; left on the top of the stack. A table with a metatable (a plugin's view of the pack's,
-// or one of its own) is not filled: its __newindex or __index would run Lua code in the middle of the fill, which can
-// raise past the C++ objects the fill reads from, or call back in.
-void push_record(lua_State* L, int arg, int fields) {
-    if (lua_type(L, arg) == LUA_TTABLE) {
-        if (!lua_getmetatable(L, arg)) {
-            lua_pushvalue(L, arg);
-            return;
-        }
-        lua_pop(L, 1);
-    }
-    lua_createtable(L, 0, fields);
-}
-
 void set_number(lua_State* L, const char* field, double v) {
     lua_pushnumber(L, v);
     lua_setfield(L, -2, field);
@@ -1187,14 +1199,16 @@ int GemInfo(lua_State* L) {
     // (as m.child, the arguments first; the child's looks in a box across the pushes: plugin/lua_keep.h)
     StockWindow* w = m.window(luaL_checkstring(L, 1));
     const char* id = w ? luaL_checkstring(L, 2) : nullptr;
-    Child& c = plugin::lua_keep<Child>(L);
+    // One box for every call (plugin::LuaScratch): a window draws a gem a frame each, and a new box a call was most
+    // of the garbage the gems made. Given back before the return.
+    plugin::LuaScratch<Child> box(L);
+    Child& c = *box;
     if (w) w->child(m.host, id, c);
-    push_record(L, 3, 16);
+    record::push(L, 3, 16);
     if (c.shown) lua_pushboolean(L, *c.shown);
     else lua_pushnil(L);
     lua_setfield(L, -2, "shown");
-    lua_pushstring(L, c.tooltip ? c.tooltip->c_str() : "");
-    lua_setfield(L, -2, "tooltip");
+    plugin::set_string_field(L, "tooltip", c.tooltip ? c.tooltip->c_str() : ""); // (no new string while unchanged)
     set_art_fields(L, push_art(m, L, c.spellicon));
     const std::array<float, 4> t = c.gem_tint.value_or(std::array<float, 4>{1, 1, 1, 1});
     set_number(L, "tintR", t[0]);
@@ -1217,6 +1231,7 @@ int GemInfo(lua_State* L) {
     } else {
         set_nil(L, "top");
     }
+    box.release();
     return 1;
 }
 
@@ -1484,15 +1499,17 @@ int HotButtonInfoFn(lua_State* L) {
     const char* child = w ? luaL_checkstring(L, 2) : nullptr;
     const bool span = lua_isnumber(L, 4) && lua_isnumber(L, 5);
     const std::int32_t y0 = span ? number_to_int(lua_tonumber(L, 4)) : 0, y1 = span ? number_to_int(lua_tonumber(L, 5)) : 0;
-    auto& hb = plugin::lua_keep<std::optional<HotButtonInfo>>(L); // across the pushes (plugin/lua_keep.h)
+    // Across the pushes, in one box for every call (plugin::LuaScratch): a bar asks for each button each frame.
+    // Given back before the return.
+    plugin::LuaScratch<std::optional<HotButtonInfo>> box(L);
+    auto& hb = *box;
     if (w) hb = w->hot_button(m.host, child);
     const HotButtonInfo empty;
     const HotButtonInfo& info = hb ? *hb : empty;
-    push_record(L, 3, 24);
-    lua_pushstring(L, info.kind.c_str());
-    lua_setfield(L, -2, "kind");
-    lua_pushstring(L, info.label.c_str());
-    lua_setfield(L, -2, "label");
+    record::push(L, 3, 24);
+    // (the strings only when changed: no new ones each frame for a record the caller keeps)
+    plugin::set_string_field(L, "kind", info.kind.c_str());
+    plugin::set_string_field(L, "label", info.label.c_str());
     if (info.icon) {
         push_cell(L, *info.icon);
         set_art_fields(L, 5);
@@ -1501,7 +1518,7 @@ int HotButtonInfoFn(lua_State* L) {
     }
     // Fills the table in field `name` with `n` numbers (a new table when the field holds none).
     auto set_list = [L](const char* name, const float* v, int n) {
-        lua_getfield(L, -1, name); // (the record has no metatable: push_record; the list is written raw)
+        lua_getfield(L, -1, name); // (the record has no metatable: record::push; the list is written raw)
         if (!lua_istable(L, -1)) {
             lua_pop(L, 1);
             lua_createtable(L, n, 0);
@@ -1526,10 +1543,8 @@ int HotButtonInfoFn(lua_State* L) {
         lua_pushboolean(L, hb->enabled);
         lua_setfield(L, -2, "enabled");
         set_number(L, "faceCooldown", hb->cooldown);
-        lua_pushstring(L, hb->overlay.c_str());
-        lua_setfield(L, -2, "overlay");
-        lua_pushstring(L, hb->tooltip.c_str());
-        lua_setfield(L, -2, "tooltip");
+        plugin::set_string_field(L, "overlay", hb->overlay.c_str());
+        plugin::set_string_field(L, "tooltip", hb->tooltip.c_str());
     } else {
         for (const char* f : {"color", "lua", "running", "enabled", "faceCooldown", "overlay", "tooltip"}) set_nil(L, f);
     }
@@ -1560,6 +1575,7 @@ int HotButtonInfoFn(lua_State* L) {
         set_nil(L, "tint");
         set_nil(L, "iconAlpha");
     }
+    box.release();
     return 1;
 }
 
@@ -3176,6 +3192,7 @@ void UiApi::register_functions(lua_State* L) {
     lua_pop(L,1);
     lua_pushinteger(L,1);lua_setfield(L,-2,"NameplateCanvasVersion");
     register_chat_api(L, impl_->host);
+    register_modern_chat_tabs(L, impl_->host);
     register_gamepad_api(L, impl_->host);
     register_spellbook_api(L, impl_->host);
     register_abilities_api(L, impl_->host);
@@ -3219,6 +3236,7 @@ void UiApi::register_functions(lua_State* L) {
     register_pregame_api(L, impl_->host, impl_->screens);
     static const luaL_Reg fns[] = {
         {"InGame", InGame}, {"UiReady", UiReady}, {"GameState", GameState}, {"Name", Name}, {"SlotName", SlotName},
+        {"ClassName", ClassName}, {"ClassNamesRevision", ClassNamesRevision},
         {"Item", Item}, {"ItemIcon", ItemIcon}, {"Money", Money}, {"Label", Label}, {"Gauge", Gauge},
         {"ClickSlot", ClickSlot}, {"HasSlot", HasSlot}, {"AltCurrencies", AltCurrencies}, {"UiTexture", UiTexture}, {"UiImage", UiImage}, {"UiInterfaceImage", UiInterfaceImage}, {"UiAnimation", UiAnimation},
         {"ReplaceWindow", ReplaceWindow}, {"WindowPlaced", WindowPlaced}, {"ShowWindow", ShowWindow}, {"WindowButton", WindowButton},

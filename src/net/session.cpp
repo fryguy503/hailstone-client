@@ -148,6 +148,11 @@ public:
         deaf_ = true;
     }
 
+    void simulate_socket_loss() override {
+        std::lock_guard lock(mutex_);
+        socket_.close();
+    }
+
     void set_no_hold(bool on) override {
         std::lock_guard lock(mutex_);
         no_hold_ = on;
@@ -250,6 +255,9 @@ private:
             return;
         }
 
+        // A socket closed under the session cannot send or receive again: every datagram would fail until a timer
+        // ends the link, so end it now.
+        if (!socket_.is_open()) return fail("the session's socket was closed");
         // InternalGiveTime @0x8c638e: the link times out once the silence reaches the limit (not only past it).
         if (opt_.idle_timeout.count() > 0 && now - last_recv_ >= opt_.idle_timeout)
             return fail(std::format("connection to {} timed out (nothing received for {} s)", peer_.to_string(),

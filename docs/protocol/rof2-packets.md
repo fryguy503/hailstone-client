@@ -381,7 +381,7 @@ The client decides locally whether a skill may be used and sends one request; th
 | TradeSkillCombine | C→Z | 0x579a | 24 B: container slot (12 B InventorySlot; a world container is type 4, slot -1 = SLOT_TRADESKILL_EXPERIMENT_COMBINE), guild-tribute slot (all -1) |
 | RecipesFavorite / RecipesSearch | C→Z | 0x71b1 / 0x6290 | 2008 B {u32 container type, u32 bag item id (0 world), 500 × u32 recipe ids} / 80 B {type, id, u32 min trivial, u32 max trivial, `char[56]` partial name, u32 0x300, u32}; one RecipeReply each |
 | RecipeReply | Z→C | 0x1db6 | 84 B: type, id, u32 component count, u32 recipe id, u32 trivial, `char[64]` name |
-| RecipeDetails | both | 0x6e02 | C→Z {u32 recipe id}; Z→C big-endian recipe id, (10 − n) × 0xffffffff, n × {BE item id, BE icon, name} |
+| RecipeDetails | both | 0x6e02 | C→Z {u32 recipe id}; Z→C big-endian recipe id, then ten entries, each a BE 0xffffffff (unused) or {BE item id, BE icon, name}; EQEmu puts the unused ones first. The client (CTradeSkillWnd_HandleRecipeDetails 0x77dfd0) reads nothing after the ten: EQEmu since #5100 (2026-06) appends the recipe's trivial as a BE u32, which is skipped (the trivial came in OP_RecipeReply) |
 | RecipeAutoCombine | both | 0x40d7 | 40 B: type, id, container slot (12 B, echoed), 12 B slot, u32 recipe id, u32 reply (0 made, 0xfffffff5 failed; the server says why) |
 
 Door behaviour (all in `game/doors.cpp`): the state machine is 0 closed, 1 open, 2 opening, 3 closing, 4 a sprung trap; a spawned door starts in its default state (an "open" spawn state animates open). Every door moves each frame by elapsed ms × 0.02 ticks (nothing moves on a frame later than 15 ticks): hinged types 0–8 turn their heading 8 per tick through a quarter turn (types 5–7 the other way); trap doors and drawbridges (0x1e, 0x23, 0x24, 0x28, 0x82) turn the door angle; types 10–0x1b slide sideways 8/10/14/22 units at 0.35; lifts and portcullises (0x3b–0x54, 0x78, 0x8c–0x92) rise by their distance (the door param for 0x3b, 0x4b–0x54) at 0.45 per tick and come down at 0.25 or 0.45; spinners (100–102 → 0x9c, 105–107 → 0x9d, 0x73/0x74) accelerate to `TopSpeed`. A door that is not in its default state returns by itself after a repop time (10 s for types 0 and 5, 20 s for most). EQEmu's own close timer resets the server's door state silently, so the client's return is what closes ordinary doors. The click range: the 3D distance from the player to the door must not exceed the player's height + 20 + the door actor's bounding radius, else eqstr 1462 "You can't reach that, get closer." (EQEmu checks 100 units, `Range:MaxDistanceToClickDoors`). Teleport doors (types 57/58 with a destination) are moved by the server: OP_RequestClientZoneChange, which `GameConnection` already answers. The actor is placed at (Y, X, Z), turned by Heading (counterclockwise like spawns) and tilted by DoorAngle about its Y axis, scaled by size %.
@@ -681,6 +681,51 @@ The leaderboard reply has no reliable category identifier on stock EQEmu, so Hai
 holds the latest selection until the preceding reply and ten-second guard allow it. A missing reply is released
 after thirty seconds, a Hailstone recovery choice. See `docs/unknowns.md` for the residual late-reply ambiguity.
 
+### Spirit Shrouds and Monster Missions (`net/shroud_packets.h`)
+
+| Opcode | Direction | RoF2 | Body |
+| --- | --- | --- | --- |
+| ShroudSelectionWindow | Z→C | 0x2ec3 | u32 shroudkeeper spawn ID, u32 status, u32 reserved, BEL-separated progression, branch, and form records. Nonzero status directs the player to the Shroud Bank. |
+| ShroudRequestStats / ShroudSelect | C→Z | 0x2b37 / 0x1cd0 | u32 selection ID |
+| ShroudSelectCancel | C→Z | 0x79da | empty |
+| ShroudRespondStats | Z→C | 0x6c04 | u32 selection ID, u32 has-data flag, caret-separated name, description, class, level, stats, AA ranks and items |
+| ShroudRequestAbility / ShroudRequestItem | C→Z | 0x3acc / 0x4b25 | u32 selection ID, u32 detail ID |
+| ShroudRespondAbility / ShroudRespondItem | Z→C | 0x006e / 0x2507 | u32 selection ID, u32 detail ID, followed by the item instance for the item response. Ability definitions are provided by `OP_SendAATable`. |
+| ShroudProgress / ShroudProgress2 | Z→C | 0x541d / 0x3823 | u32 row count followed by BEL-separated progression records |
+| Shroud | Z→C | 0x6562 | u32 spawn ID, u16 profile offset, ZoneEntry spawn body. For the local player the offset begins a fixed 0x4ff8-byte base profile followed by a CharInventory body for the new form's possessions. |
+| ShroudRemove | Z→C | 0x67e8 | empty. The RoF2 handler (dispatch case at 0x4d2645) shows eqstr 5191, "please wait" for the transformation, in a 45 s dialog (id 0x83); Hailstone shows no dialog. Hailstone takes it to mean the next `Shroud` restores the original form, as the EQEmu draft sends it (docs/unknowns.md). |
+| AltStorage | both | 0x7b71 | u32 action. Open (0) adds u32 entity ID. Withdraw (2) adds a reserved u32 and u64 storage key. Item inspection (5) adds a preview flag and a reserved u32 to the key fields. From the server (CAltStorageWnd_HandleMessage 0x61da10): 1 closes the window, 2 acknowledges a withdrawal (all-ones key: refused), 3 clears the list, 4 removes the row with an i32 key, 6 carries {u32 platinum, gold, silver, copper} handed back from the shroud and prints eqstr 6188 in colour 0xf. |
+| AltStorageList / AltStorageNoItems | Z→C | 0x1115 / 0x0728 | u32 retention seconds, u32 count, {name, u32 icon, u64 key, u32 quantity} per row. NoItems is empty: 0x4136f0 prints eqstr 4558 in colour 0xf. A nonzero `ShroudSelectionWindow` status prints eqstr 4557 in colour 0xd (0x414320). |
+
+| Native Monster Mission opcode | Direction | RoF2 | Body |
+| --- | --- | --- | --- |
+| MonsterMissionCatalog | both | 0x3c54 | Refresh requests carry two zero u32s. Replies carry four u32 fields with task ID at +8, u8 lock existing assignments, u32 count, then {u32 template ID, i32 minimum, i32 maximum, u32 reserved, u8 selectable, name} per role. Nonpositive maximum means unlimited. |
+| MonsterMissionStats | both | 0x3d20 | {u32, u32, u32 template ID, u32} followed by 4096 zero bytes in the request and caret-separated details in the reply. |
+| MonsterMissionAbility | both | 0x34f4 | {u32, u32, u32 template ID, u32 rank ID} |
+| MonsterMissionItem | both | 0x5f08 | The request uses the ability header with an item ID. The reply carries u32 item ID followed by the item instance. |
+| MonsterMissionSelect | C→Z | 0x4eea | {u32, u32, u32 template ID} |
+| MonsterMissionAssignment | Z→C | 0x2e8d | {u32, u32, `char[64]` member name, u32 template ID} |
+| MonsterMissionResult | Z→C | 0x5a67 | {u32, u32, u32 template ID, u32 result}. Zero acknowledges the selection. |
+
+The first u32 after the regular player profile checksum and checksum size carries the profile type. The RoF2
+profile reader at 0x57c650 routes it through 0x7bf270, which stores it at the live profile's
+`+0x340c` (1 Spirit Shroud, 2 Monster Mission). The form snapshot uses the same base-profile destinations,
+as confirmed by REA's trace of 0x4c2ea0. Character selection applies the roster's alternate race and class
+to the model through 0x51c050.
+
+The native Spirit Shroud sends at 0x41375f, 0x413842 and 0x413912 count the application's opcode in their total
+length. The payload sizes above exclude it. CTaskManager's message handler (0x482080) and its Monster Mission handlers at
+0x481e80 and 0x482ae0 establish the native mission catalog. The Quest Journal can reopen an offered catalog while
+that task is active. The client uses the catalog's role names and the roster's assignments to show capacity.
+The server decides all form admission, storage, mission progress and rewards. A successful mission selection
+acknowledges a role assignment. The actual profile and inventory still change only when the server sends them.
+
+The local EQEmu draft supplies the form snapshot and a shared-task catalog through `ShroudSelectionWindow`,
+using the active task ID in place of the shroudkeeper spawn ID.
+Its roster uses each role's class in the template field. Its inbound decoders need to use the native payload
+sizes above for selection, cancellation, stats and details. In that draft, a withdrawal acknowledgement with
+the matching key removes the displayed row. A rejected withdrawal uses the all-ones key.
+
 ### Bazaar and barter (`net/market_packets.h`, `GameConnection` in `net/game_connection_market.cpp`, rules in `game/bazaar.{h,cpp}`)
 
 Tried live with two clients (a trader on a rug stall, type 155, and a shopper): Begin Trader on the stall, the slot selection and price load, the search, Find Trader (the path, the button's 15 s wait), a row's Buy (the quantity dialog), /offlinemode's refusal 771. Earlier in the Bazaar of an EQEmu server (playprobe `--shop-trader`, `--bazaar`, `--bazaar-buy`): the trader list (OP_TraderBulkSend), the search (17 and 23 results from simulated traders), a shop at a simulated trader (17 items, close), a purchase's answers (a search purchase without coin: sub action 7).
@@ -939,6 +984,37 @@ cstr name; u32 spawn id; u8 level; f32 melee radius (size − 0.7); u8 type (0 P
 ### PlayerProfile (ENCODE(OP_PlayerProfile))
 
 u32 checksum (eq_crc32 of bytes [8, size−1)), u32 size−9, 2×u32; u8 gender, u32 race, u8 class, u8 level ×2; u32 5 + 5 binds {u32 zone, f32 x, y, z, heading}; u32 deity, u32 intoxication; u32 10 + 10×u32; u32 22 + 22×{5 u32} equipment; u32 9 + 9×{5 u32}; u32 9 + 9 tints; u32 9 + 9 tints; u8 hair colour, beard colour, u32, eye 1, eye 2, hair style, beard, face; 3×u32 drakkin; 5 B; f32 height, 3 f32, 2 u32; u32 points, mana, current HP; STR, STA, CHA, DEX, INT, AGI, WIS; 7 u32; counted arrays: AAs (12 B each), skills, innate skills, disciplines, timestamps, recast timers, timestamps 2, spell book, memorised gems, gem refresh; u8; counted buffs (80 B each: u8, f32 instrument mod, u32 caster, u8, u32 counters, u32 duration, u8 level, u32 spell, u8 effect type, u32 hits, u32, u32 counters, 44 B); coin ×4, cursor coin ×4, 3 u32, thirst, hunger, AA spent, u32 5 + assigned + 5 tab values (last = unspent), 2 B; counted bandoliers (cstr + 4×{cstr, u32 id, i32 icon}, kept as `PlayerProfile::bandoliers`); counted potion belt ({cstr, u32, i32}, `potion_belt`); 4 i32; 12 u32 (resists etc.); u32 20; 4 u32; endurance; 2 u32; u32 64 + `char[64]` name; u32 32 + `char[32]` last name; birthday, account start, last login, minutes played, entitled, expansions; counted languages (bytes); u16 zone, u16 instance, f32 y, x, z, heading; u8, pvp, u8, gm; u32 guild, u8 rank, u32, u8, u32; u64 exp; u8; bank coin ×4, shared platinum, … `character_id` after 663 unknown bytes; … AA exp; …; u8 show helm; u32 rest timer; counted 1024 B; 2 u32; u8. The decoder reads every array by its own count prefix, so it follows the server's sizes (20 bandoliers × 4 items is the one fixed count).
+
+### Guild banners
+
+These are zone-session application messages. The Guild window (CGuildMgmtWnd) sends them from RequestBannerKitList
+(`0x684ad0`: the kit list request, then always the status request), `0x680a40` (the status request alone),
+SaveBannerSettings (`0x6833a0`), `0x683870` (remove) and Send_PlantGuildBanner (`0x54e340`). HandleWorldMessage
+(`0x4c3250`) passes `0x0001` to HandleBannerKitList (`0x6836c0`), `0x56c9` to `0x685670`, `0x1e50` to `0x6830c0`,
+each only while the window is open, and handles `0x4683` itself (`0x4d1aca`). The requests carry PcBase GuildID and
+UniquePlayerID (+0x20a8): the profile reader stores the u32 EQEmu writes as `char_id`, after the 343-byte block, at
+`0x57ead6`, and the installer copies it to +0x20a8 at `0x579c71`. The window's actions need guild permission 1
+Change (`0x6833a0`), 2 Plant or 3 Remove, and UpdateBannerPage also checks bit `0x1000` of PcBase's virtual +0x5c
+(`0x681b6e`), which the client reads as the profile's expansion mask (The Buried Sea; docs/unknowns.md).
+
+| Message | Direction | Wire | Payload |
+| --- | --- | --- | --- |
+| Open guild window | C→Z | `0x0276` | 8 B. Guild ID, character ID |
+| Request kits | C→Z | `0x0d92` | 141 B. Character ID, u8 owned-only, 32 u32 slots for unique possessed type-58 item IDs, u32 count, u32 category mask. All categories uses `0xffffffff`, otherwise one bit per category ID |
+| Kit list | Z→C | `0x0001` | 16 B header with count at +4 and the background and emblem counts at +8/+12. Rows of 137 B with kit ID, 128 B name, u8 availability and u32 description ID; the first 1023 are kept, as the original's list holds no more, and bytes past the rows are ignored |
+| Request banner status | C→Z | `0x4924` | 80 B. Character ID, guild ID, 72 reserved bytes |
+| Banner status | Z→C | `0x56c9` | 188 B (anything after is ignored). Mode +4, active kit ID +12, description ID +16, signed ms remaining +20, name +24, planted kit ID +168, two u32 pattern IDs and two RGB values in four-byte slots starting +172. Kit ID `0xffffffff` means absent. Mode 1 is ignored. Any other mode is stored and then asks again (`0x684ad0`, both requests), except mode 2 with the design editor closed (`0x685670`) |
+| Modification token | Z→C | `0x1e50` | Item ID +8 and item name +16 (up to 63 characters). ID `0xffffffff` names the requirement when the item is unavailable; Save is refused only for that ID (`0x6833a0`), with "You must have a: <item> to save change to banner settings." |
+| Save design | C→Z | `0x4377` | 24 B. Character ID, background and emblem pattern IDs, two RGB fields each with one padding byte, server-supplied modification token ID |
+| Plant or reapply style | C→Z | `0x765b` | 87 B. Kit ID +0, native actor position Y/X/Z +68/+72/+76, u8 list-row flag +80, u8 reapply flag +81. Saving reapplies an active kit using a zero vector when the native floor-distance check passes |
+| Remove | C→Z | `0x9e18` | 12 B. `0xffffffff`, guild ID, reserved u32 |
+| Update planted actor | Z→C | `0x4683` | Spawn ID +8, two pattern indices +12/+16, two tints +20/+24, NUL-terminated spawn name +28 (at most 63 bytes). Applies to an existing NPC |
+
+The client zeroes reserved bytes in its requests. Kit and status replies apply to the requested guild window
+context. The receive headers' unused fields are left uninterpreted. `OP_NewZone` +912 is the zone's banner
+placement policy (0 disallows placement, 1 permits placement, 2 permits placement and portal travel). Interactive
+type-4 spawns carry the two pattern indices and two tints after the usual status tail (`0x591e90`). The cloth uses
+both native texture layers (`0x40af50`). Stock EQEmu sends none of the banner manager replies.
 
 ### Fellowships
 

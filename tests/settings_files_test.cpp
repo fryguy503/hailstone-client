@@ -199,6 +199,59 @@ TEST_CASE("Settings files: a character's settings over hailstone.ini") {
     CHECK(disk.get_string("display.render_scale") == "60");
 }
 
+TEST_CASE("Settings files: a command-line flag's value holds for the run and is never saved") {
+    test::ScratchDir tmp("run_override");
+    const fs::path shared_file = tmp.path() / "hailstone.ini";
+    const fs::path one = tmp.path() / "servers" / "s" / "characters" / "w" / "One" / "hailstone.ini";
+    Config c;
+    c.set("display.lighting", "modern");
+    c.set("display.msaa", "4");
+    c.set("display.upscaler", "off");
+    REQUIRE(c.save(shared_file));
+
+    // --lighting classic, --msaa 2, --upscaler taa: read over hailstone.ini's.
+    c.set_run_override("display.lighting", "classic");
+    c.set_run_override("display.msaa", "2");
+    c.set_run_override("display.upscaler", "taa");
+    CHECK(c.get_string("display.lighting") == "classic");
+    CHECK(c.get_int("display.msaa", 0) == 2);
+    REQUIRE(c.load(shared_file)); // the file read again keeps them
+    CHECK(c.get_int("display.msaa", 0) == 2);
+
+    // Over a character's settings too, the shared keys and the character's alike.
+    REQUIRE(c.attach_character(one));
+    CHECK(c.get_string("display.lighting") == "classic");
+    CHECK(c.get_string("display.upscaler") == "taa");
+
+    // Never written: not to hailstone.ini, nor to the character's file, nor when another key's change is saved.
+    c.set("display.bloom", "0.3");
+    REQUIRE(c.save(shared_file));
+    Config disk;
+    REQUIRE(disk.load(shared_file));
+    CHECK(disk.get_string("display.lighting") == "modern");
+    CHECK(disk.get_string("display.msaa") == "4");
+    CHECK(disk.get_string("display.upscaler") == "off");
+    REQUIRE(disk.load(one));
+    CHECK(disk.get_string("display.lighting") == "modern");
+    CHECK(disk.get_string("display.bloom") == "0.3");
+
+    // Another program's change to hailstone.ini merged in on save leaves the flag's value out too.
+    Config other;
+    REQUIRE(other.load(shared_file));
+    other.set("update.skip", "1.0");
+    REQUIRE(other.save(shared_file));
+    c.set("display.msaa", "8"); // the player's own change in the Options window: it takes over, and is saved
+    CHECK(c.get_int("display.msaa", 0) == 8);
+    REQUIRE(c.save(shared_file));
+    REQUIRE(disk.load(shared_file));
+    CHECK(disk.get_string("display.msaa") == "8");
+    CHECK(disk.get_string("display.lighting") == "modern");
+    CHECK(disk.get_string("update.skip") == "1.0");
+    CHECK(c.get_string("display.lighting") == "classic"); // the others still hold
+    c.erase("display.lighting");
+    CHECK_FALSE(c.get("display.lighting"));
+}
+
 TEST_CASE("Settings files: the keys a character's settings leave in hailstone.ini") {
     for (const char* key : {"assets.path", "addons.index", "update.skip", "login.profile", "login.last_world.x",
                             "window.x", "display.window_mode", "display.resolution", "display.msaa",

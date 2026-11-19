@@ -20,6 +20,11 @@ local WIN = "LFGuildWnd"
 
 local CLASSES = { "WAR", "CLR", "PAL", "RNG", "SHD", "DRU", "MNK", "BRD", "ROG", "SHM", "NEC", "WIZ", "MAG", "ENC",
   "BST", "BER" }
+-- A class's name as the client shows it (a server's own where its plugin named the class), else `fallback`.
+local HAS_CLASS_NAMES = API.Supports and API.Supports("character", "ClassName") == true
+local function className(id, fallback, short)
+  return HAS_CLASS_NAMES and API.character.ClassName(id, short) or fallback
+end
 local PAGES = { "Find a Guild", "Recruit", "Search Guilds", "Search Players" }
 
 local st = CH.new()
@@ -68,7 +73,7 @@ local function classes(prefix, x0, y, w, wx, wy)
   for i, c in ipairs(CLASSES) do
     fs[#fs + 1] = function(bw, bh)
       local id = prefix .. c .. "Checkbox"
-      CH.toggle(WIN, id, c, bw, bh, { on = "wanted", off = "-", keep = true })
+      CH.toggle(WIN, id, className(i, c, true), bw, bh, { on = "wanted", off = "-", keep = true })
     end
     if i == 8 then
       y = row(x0, y, w, T.px(64), fs, wx, wy)

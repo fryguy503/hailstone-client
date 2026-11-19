@@ -6,12 +6,14 @@
 #include <doctest/doctest.h>
 
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "game/alt_adv.h"
 #include "game/eq_strings.h"
 #include "game/tasks.h"
+#include "game/spells.h"
 #include "game/training.h"
 #include "mock_server/harness.h"
 #include "net/aa_packets.h"
@@ -305,9 +307,62 @@ TEST_CASE("aa: CanTrainAbility, MeetsPrerequisites and CanSeeAbility") {
     CHECK_FALSE(s.can_train(*s.get(400), who));
 }
 
+TEST_CASE("aa: the active form controls which ranks can be listed or trained") {
+    game::AltAdvState state;
+    state.add(rank(100, 10, 1, -1, -1));
+    auto shroud = rank(200, 20, 1, -1, 201);
+    shroud.flags[0] = 1;
+    state.add(shroud);
+    auto next_shroud = rank(201, 20, 2, 200, -1);
+    next_shroud.flags[0] = 1;
+    state.add(next_shroud);
+    state.points = 10;
+    game::AATrainer who;
+    who.class_id = 2;
+    who.level = 60;
+    game::AAFilter filter;
+    filter.trainable_only = true;
+    CHECK(state.visible(1, who.class_id, filter, who) == std::vector{state.get(100)});
+    CHECK_FALSE(state.can_train(*state.get(200), who));
+
+    who.monster_profile = true;
+    CHECK(state.visible(1, who.class_id, filter, who) == std::vector{state.get(200)});
+    // CanTrainAbility @0x4a44c0 does not refuse an ordinary rank in a shroud; only CanSeeAbility hides it.
+    CHECK(state.can_train(*state.get(100), who));
+    state.owned = {{200, 2, 0}};
+    CHECK(state.visible(1, who.class_id, filter, who) == std::vector{state.get(201)});
+}
+
 // "Buy every rank" on a server without the buy-all action (a stock EQEmu): the client sends OP_AAAction 3 for the next
 // rank each time EQEmu's answer to the last purchase (the owned list, then the points) shows it bought, waits through
 // other updates, and stops at the last rank and on a plain train.
+TEST_CASE("aa: a title the dbstr does not have is named by the ability's spell, else its group, never empty") {
+    // A live game folder's dbstr_us.txt numbers many AAs differently from a RoF2 server's ranks (title_sid), and a
+    // server's own export can lack some: the AA window's Ability column showed nothing for those.
+    test::Rig rig(test::MockConfig::standard());
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    std::vector<std::string> fields(237, "0");
+    fields[0] = "8000";
+    fields[1] = "Fixture Discipline";
+    for (std::size_t i = 86; i <= 97; ++i) fields[i] = "254";
+    std::string line;
+    for (const auto& field : fields) line += (line.empty() ? "" : "^") + field;
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(line) == 1);
+    conn.set_spell_table_for_test(table);
+
+    game::AltAbility passive = rank(100, 10, 1, -1, -1);
+    passive.title_sid = 987654; // in no dbstr
+    CHECK(conn.aa_name(passive).empty()); // the raw title, as the plugins and /alternateadv list read it
+    CHECK(conn.aa_display_name(passive) == "Ability 10");
+    game::AltAbility activated = passive;
+    activated.spell = 8000;
+    CHECK(conn.aa_display_name(activated) == "Fixture Discipline");
+    activated.spell = 8001; // a spell the table does not have
+    CHECK(conn.aa_display_name(activated) == "Ability 10");
+}
+
 TEST_CASE("aa: buy all ranks on a stock server buys one rank after another") {
     test::Rig rig(test::MockConfig::standard());
     auto& conn = rig.conn;

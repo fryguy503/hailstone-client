@@ -21,6 +21,11 @@ local WIN = "GroupSearchWnd"
 local CLASSES = { "War", "Clr", "Pal", "Ran", "Shd", "Dru", "Mnk", "Brd", "Rog", "Shm", "Nec", "Wiz", "Mag", "Enc",
   "Bst", "Ber" }
 local LABEL = { Ran = "RNG" }
+-- A class's name as the client shows it (a server's own where its plugin named the class), else `fallback`.
+local HAS_CLASS_NAMES = API.Supports and API.Supports("character", "ClassName") == true
+local function className(id, fallback, short)
+  return HAS_CLASS_NAMES and API.character.ClassName(id, short) or fallback
+end
 
 local st = CH.new()
 local lists = { players = {}, groups = {}, detail = {}, wanted = {} }
@@ -61,7 +66,8 @@ local function infoPage(group, x0, y, x1, y1, wx, wy)
       local fs = {}
       for c = 1, 4 do
         local cl = CLASSES[r * 4 + c]
-        fs[#fs + 1] = function(w, h) CH.toggle(WIN, "GIP_" .. cl .. "Checkbox", LABEL[cl] or cl:upper(), w, h, { on = "wanted", off = "-", keep = true }) end
+        local label = className(r * 4 + c, LABEL[cl] or cl:upper(), true)
+        fs[#fs + 1] = function(w, h) CH.toggle(WIN, "GIP_" .. cl .. "Checkbox", label, w, h, { on = "wanted", off = "-", keep = true }) end
       end
       y = row(x0, y, cw, T.px(58), fs, wx, wy)
     end

@@ -98,7 +98,7 @@ TEST_CASE("UCS transport uses the separately observed chat profile") {
     CHECK(profile.reliable_timeout_ms == 120000);
     CHECK(profile.connect_timeout == 30s);
     CHECK(profile.request_interval == 5s);
-    CHECK(profile.idle_timeout == 0ms);
+    CHECK(profile.idle_timeout == 60s); // Hailstone's own: the original sets none
     CHECK(profile.hold_time == 0ms);
     CHECK(profile.stat_interval == 0ms);
     CHECK(profile.keepalive_interval == 44s);
@@ -370,6 +370,74 @@ TEST_CASE("UCS unacknowledged commands time out despite incoming keepalives") {
     CHECK(rig.chat.failed());
     CHECK(rig.chat.error().find("acknowledge reliable") != std::string::npos);
     CHECK(rig.chat.channels().empty());
+}
+
+TEST_CASE("UCS link that goes silent ends after 60 s and is retried, with nothing reliable in flight") {
+    UcsRig rig;
+    REQUIRE(rig.start());
+    REQUIRE(rig.authenticate());
+    rig.events();
+    // A server that keeps sending its keepalives keeps an idle chat link up.
+    for (int i = 0; i < 3; ++i) {
+        rig.clock.advance(50s);
+        rig.peer.send_keepalive();
+        rig.step();
+        REQUIRE(rig.chat.connected());
+    }
+    // Then nothing more comes (the server dropped the session, or the way back is gone). The client sends only its
+    // unreliable keepalives, so no unacknowledged data ever ages.
+    rig.clock.advance(59999ms);
+    rig.step();
+    CHECK(rig.chat.connected());
+    CHECK(rig.peer.unacked() == 0);
+    rig.clock.advance(1ms);
+    rig.step();
+    REQUIRE(rig.chat.failed());
+    CHECK(rig.chat.error().find("nothing received") != std::string::npos);
+    bool disconnected = false;
+    for (auto& e : rig.events()) disconnected |= e.kind == ChatServerEvent::Kind::Disconnected;
+    CHECK(disconnected);
+    rig.clock.advance(4999ms);
+    rig.step();
+    CHECK(rig.peer.sessions() == 1);
+    rig.clock.advance(1ms);
+    REQUIRE(rig.until([&] { return rig.peer.sessions() == 2 && rig.received.size() == 2; }));
+    CHECK(rig.received.back().opcode == 0x01); // a fresh login
+    REQUIRE(rig.authenticate());
+}
+
+TEST_CASE("UCS link deaf both ways is retried on a new socket") {
+    UcsRig rig;
+    REQUIRE(rig.start());
+    REQUIRE(rig.authenticate());
+    rig.events();
+    rig.chat.simulate_link_loss();
+    rig.peer.send_keepalive(); // never heard
+    rig.clock.advance(60s);
+    rig.step();
+    REQUIRE(rig.chat.failed());
+    rig.clock.advance(5s);
+    REQUIRE(rig.until([&] { return rig.peer.sessions() == 2 && rig.received.size() == 2; }));
+    REQUIRE(rig.authenticate());
+    CHECK(rig.chat.send_command("join back"));
+    REQUIRE(rig.until([&] { return rig.received.size() == 3; }));
+    CHECK(raw_text(rig.received.back()).find("join back") != std::string::npos);
+}
+
+TEST_CASE("UCS socket closed under the link fails at once and is retried") {
+    UcsRig rig;
+    REQUIRE(rig.start());
+    REQUIRE(rig.authenticate());
+    rig.events();
+    rig.chat.simulate_socket_loss();
+    CHECK(rig.chat.send_command("join lost")); // queued on the session, whose sends now fail
+    rig.step();
+    REQUIRE(rig.chat.failed());
+    CHECK(rig.chat.error().find("socket was closed") != std::string::npos);
+    rig.clock.advance(5s);
+    REQUIRE(rig.until([&] { return rig.peer.sessions() == 2 && rig.received.size() == 2; }));
+    REQUIRE(rig.authenticate());
+    CHECK(rig.received.size() == 2); // the command sent on the lost link is not replayed
 }
 
 TEST_CASE("UCS queues are bounded and disconnect discards pending data even during DNS") {

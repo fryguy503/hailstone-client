@@ -307,7 +307,7 @@ private:
     }
     std::optional<std::uint32_t> class_of(std::string_view id) const {
         for (std::uint32_t c = 1; c <= 16; ++c)
-            if (id == "CC_Class_" + game::class_name(c) + "_Button") return c;
+            if (id == "CC_Class_" + game::stock_class_name(c) + "_Button") return c; // the layout's names
         return std::nullopt;
     }
     void race_class_child(std::string_view id, Child& out) const {

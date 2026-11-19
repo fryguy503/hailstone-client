@@ -18,6 +18,7 @@
 
 #include "app/lua_ui.h"
 #include "app/lua_ui_menu.h"
+#include "game/slash_commands.h"
 #include "mock_server/harness.h"
 #include "net/merchant_packets.h"
 #include "net/tribute_packets.h"
@@ -636,6 +637,25 @@ TEST_CASE("/camera goes to the client's camera handler (docs/isometric.md)") {
     CHECK(calls[0] == std::pair<std::string, std::string>{"Hailstone_camera", ""});
     CHECK(calls[1] == std::pair<std::string, std::string>{"Hailstone_camera", "reveal 25"});
     CHECK(calls[2] == std::pair<std::string, std::string>{"Hailstone_camera", "iso"});
+}
+
+TEST_CASE("/chattabs goes to the client's chat tab handler, not through the original's table") {
+    // Hailstone's own command: an exact word after the original's table found nothing (a prefix of it, such as
+    // /chatt, stays "not a valid command", and the table keeps the original's prefix matching).
+    CHECK(game::parse_command_line("/chattabs status", false).kind == game::CommandLine::Kind::Invalid);
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    std::vector<std::pair<std::string, std::string>> calls;
+    rig.conn.set_client_commands([&](std::string_view h, const std::string& args) {
+        calls.emplace_back(std::string(h), args);
+        return true;
+    });
+    rig.conn.send_command("/ChatTabs status");
+    rig.conn.send_command("/chattabs");
+    rig.conn.send_command("/chatt status");
+    REQUIRE(calls.size() == 2);
+    CHECK(calls[0] == std::pair<std::string, std::string>{"Hailstone_chattabs", "status"});
+    CHECK(calls[1] == std::pair<std::string, std::string>{"Hailstone_chattabs", ""});
 }
 
 TEST_CASE("Advanced Inventory: the bank as last seen is listed, marked stale, and out of reach") {

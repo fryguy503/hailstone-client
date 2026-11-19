@@ -161,6 +161,9 @@ TEST_CASE("hs.PluginConsent and hs.AnswerPluginConsent: the question for the pac
     CHECK(run(L, "return hs.PluginConsent().server") == "Alpha");
     CHECK(run(L, "return hs.PluginConsent().serial") == "7");
     CHECK(run(L, "return hs.PluginConsent().warning") == std::string(plugin::kConsentWarning));
+    CHECK(run(L, "return hs.PluginConsent().title") == "Allow this server's plugin?");
+    CHECK(run(L, "return hs.PluginConsent().intro") == "Alpha wants to run a compiled plugin on your computer:");
+    CHECK(run(L, "return tostring(hs.PluginConsent().plugins[1].required)") == "false");
     CHECK(run(L, "return #hs.PluginConsent().plugins") == "1");
     CHECK(run(L, "return hs.PluginConsent().plugins[1].name") == "MQ2Thing");
     CHECK(run(L, "return hs.PluginConsent().plugins[1].file") == "MQ2Thing.so");
@@ -390,4 +393,29 @@ TEST_CASE("plugin consent: each write of the answers changes their generation, a
     CHECK(plugin::consent_in(answers, b) == plugin::Consent::Denied);
     CHECK(plugin::consent_in(answers, sha256(std::string_view("other"))) == plugin::Consent::Unasked);
     CHECK(plugin::consent_in(answers, a) == plugin::plugin_consent(dir.path(), a));
+}
+
+TEST_CASE("Plugin consent: the question is worded for the server's plugins or the player's own required add-ons") {
+    plugin::ConsentPrompt p;
+    p.files.push_back({"MQ2Thing", fs::path("MQ2Thing.so"), 1, sha256(std::string_view("a"))});
+    plugin::ConsentWording server = plugin::consent_wording(p, "Alpha");
+    CHECK(server.title == "Allow this server's plugin?");
+    CHECK(server.intro == "Alpha wants to run a compiled plugin on your computer:");
+    CHECK(server.warning == plugin::kConsentWarning);
+
+    // The player's own add-on that the server's add-on policy requires: not the server's plugin.
+    p.files[0].required_addon = true;
+    plugin::ConsentWording own = plugin::consent_wording(p, "Alpha");
+    CHECK(own.title == "Allow your add-on this server requires?");
+    CHECK(own.intro == "Alpha requires this compiled plugin from your add-ons, to run on your computer:");
+    CHECK(own.warning.find("trust the add-on's author") != std::string::npos);
+    CHECK(own.warning.find("trust this server") == std::string::npos);
+    p.files.push_back({"MQ2Other", fs::path("MQ2Other.so"), 1, sha256(std::string_view("b")), true});
+    CHECK(plugin::consent_wording(p, "Alpha").title == "Allow your add-ons this server requires?");
+
+    // Both together.
+    p.files[1].required_addon = false;
+    plugin::ConsentWording both = plugin::consent_wording(p, "Alpha");
+    CHECK(both.title == "Allow these plugins?");
+    CHECK(both.warning.find("this server and the add-ons' authors") != std::string::npos);
 }

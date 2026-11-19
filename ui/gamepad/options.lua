@@ -222,7 +222,7 @@ local PAGES = {
       { 0, 75, 100, 125, 150, 175, 200, 250 })
     if r then rows[#rows + 1] = r end
     for _, o in ipairs({ { "Player names", "pc_names" }, { "My name", "own_name" }, { "NPC names", "npc_names" },
-        { "Con-coloured NPC names", "con_name_colour" }, { "Highlight target name", "target_plate_highlight" }, { "Target name through walls", "target_plate_through_walls" }, { "Fade overlapping names", "plate_overlap_fade" }, { "Target ring", "show_target_ring" },
+        { "Con-coloured NPC names", "con_name_colour" }, { "Bracket Invis vs. Undead", "show_invis_undead" }, { "Highlight target name", "target_plate_highlight" }, { "Target name through walls", "target_plate_through_walls" }, { "Fade overlapping names", "plate_overlap_fade" }, { "Target ring", "show_target_ring" },
         { "Target ring cues", "target_ring_cues" }, { "Target ring through models", "target_ring_xray" },
         { "Target skips pets", "tab_skip_pets" }, { "Target needs sight", "tab_line_of_sight" }, { "Gem replaces spell", "replace_gem_spell" }, { "Buff timers", "show_buff_timer" }, { "Song timers", "show_song_timer" },
         { "Compare items with what you wear", "item_compare" }, { "Upgrade / downgrade verdict", "item_compare_verdict" },
@@ -299,7 +299,7 @@ local PAGES = {
       optionRow("Depth pre-pass", "depth_prepass", "bool"),
       optionRow("Grass", "grass", "bool"),
       optionRow("Grass distance", "flora_distance", { 400, 1200, 100, " units" }),
-      optionRow("Grass density", "grass_density", { 25, 200, 25, " %" }),
+      optionRow("Grass density", "grass_density", { 25, 300, 25, " %" }),
       optionRow("Tree detail distance", "tree_detail", { 50, 200, 10, " %" }),
       optionRow("Lighting", "lighting", { "Classic (Low)", "Smooth Classic (Medium)", "Modern (High)" }),
       optionRow("Max camera zoom", "max_camera_distance", { 10, 150, 10, " units" }),

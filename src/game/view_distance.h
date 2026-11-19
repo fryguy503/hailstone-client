@@ -84,7 +84,7 @@ float actor_clip_distance(int actor_clip_plane, float far_plane);
 enum class SpawnDraw {
     Model,   // its actor's model, drawn
     Clipped, // past the actor clip: nothing drawn, as in the original
-    Empty,   // an actor with nothing to draw (race 127's IVM)
+    Empty,   // an actor whose model failed to build (e.g. a static actor without a mesh)
     Box,     // no actor loaded at all: the placeholder box
 };
 // `has_actor` / `has_model` as in ActorRenderer::ModelChoice; `distance` from the camera; `actor_clip` <= 0: none.

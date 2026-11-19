@@ -1,6 +1,7 @@
 // Hailstone's flora for zones without any (assets/zone_flora.h): the rules file and the placement over the terrain.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -9,6 +10,8 @@
 #include <tuple>
 #include <string>
 #include <vector>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include "assets/flora.h"
 #include "assets/zone.h"
@@ -149,9 +152,11 @@ TEST_CASE("zone flora: a zone's own rules, else default.txt when it is outdoor")
     REQUIRE(own);
     CHECK(source == "ecommons");
     CHECK(own->ground.size() == 2);
+    CHECK(std::isinf(own->terrain_cover)); // indoor: the terrain covers at any height
     auto shared = load_zone_flora_rules(dir.path(), "gfaydark", true, &source);
     REQUIRE(shared);
     CHECK(source == "default");
+    CHECK(shared->terrain_cover == kOutdoorTerrainCover); // outdoor: grass under an overhang, the tools' too
     CHECK_FALSE(load_zone_flora_rules(dir.path(), "guktop", false)); // indoor: only a file of its own
     // A name that is not a zone's never reads a path of its own: indoor nothing, outdoor the default.
     CHECK(load_zone_flora_rules(dir.path(), "../ecommons", false) == std::nullopt);
@@ -240,6 +245,215 @@ TEST_CASE("zone flora: no plants under a roof or a ceiling") {
     ZoneFlora water;
     place_zone_flora(zone, rules, defs, water);
     CHECK(water.instances.empty());
+}
+
+TEST_CASE("zone flora: no plants under a placed object low over the ground, but under a tree's crown") {
+    std::vector<eqg::FloraDefinition> defs = {definition("grass", 2.0f)};
+    auto rules = parse_zone_flora_rules("ground grass* 10 grass\n");
+    Zone zone;
+    zone.terrain.push_back(square("grass.bmp", 100.0f));
+    // A crate's lid: a 50-unit square placed 5 units over the square's left half (x 0 .. 50).
+    Mesh lid = square("crate.bmp", 50.0f);
+    for (auto& v : lid.vertices) v.position.y *= 2.0f;
+    zone.objects["CRATE"] = lid;
+    Placement crate;
+    crate.actor = "CRATE";
+    crate.transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 5.0f));
+    zone.placements.push_back(crate);
+    ZoneFlora flora;
+    place_zone_flora(zone, rules, defs, flora);
+    CHECK(flora.instances.size() > 400);
+    CHECK(flora.instances.size() < 600);
+    for (const auto& p : flora.instances) CHECK(p.position.x >= 50.0f);
+    // A cut-out surface (leaves) is no cover.
+    zone.objects["CRATE"].materials[0].blend = BlendMode::Masked;
+    ZoneFlora leaves;
+    place_zone_flora(zone, rules, defs, leaves);
+    CHECK(leaves.instances.size() > 900);
+    // A surface only just over the ground (a campfire's logs, half a unit up) covers it.
+    zone.objects["CRATE"].materials[0].blend = BlendMode::Opaque;
+    zone.placements[0].transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.5f));
+    ZoneFlora logs;
+    place_zone_flora(zone, rules, defs, logs);
+    CHECK(logs.instances.size() < 600);
+    for (const auto& p : logs.instances) CHECK(p.position.x >= 50.0f);
+    // Nor is an opaque one high over the ground: a tree's crown.
+    zone.objects["CRATE"].materials[0].blend = BlendMode::Opaque;
+    zone.placements[0].transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 40.0f));
+    ZoneFlora crown;
+    place_zone_flora(zone, rules, defs, crown);
+    CHECK(crown.instances.size() > 900);
+}
+
+TEST_CASE("zone flora: a campfire clears its whole footprint, a rock or a bush of its shape does not") {
+    // A campfire's ring of logs: eight upright quads 5 units round (60, 60), a unit tall, nothing over the middle.
+    Mesh ring;
+    constexpr int kLogs = 8;
+    for (int k = 0; k < kLogs; ++k) {
+        const float a0 = 6.2831853f * static_cast<float>(k) / kLogs, a1 = 6.2831853f * static_cast<float>(k + 1) / kLogs;
+        const glm::vec2 p0 = 5.0f * glm::vec2(std::cos(a0), std::sin(a0)), p1 = 5.0f * glm::vec2(std::cos(a1), std::sin(a1));
+        const auto base = static_cast<std::uint32_t>(ring.vertices.size());
+        for (const glm::vec3 q : {glm::vec3(p0, 0), glm::vec3(p1, 0), glm::vec3(p1, 1), glm::vec3(p0, 1)}) {
+            Vertex v;
+            v.position = q;
+            v.normal = glm::vec3(p0 + p1, 0.0f);
+            ring.vertices.push_back(v);
+        }
+        for (std::uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u}) ring.indices.push_back(base + i);
+    }
+    Material logs;
+    logs.frames = {"logs.bmp"};
+    ring.materials.push_back(logs);
+    ring.parts.push_back({0, static_cast<std::uint32_t>(ring.indices.size()), 0, true});
+
+    std::vector<eqg::FloraDefinition> defs = {definition("grass", 2.0f)};
+    auto rules = parse_zone_flora_rules("ground grass* 10 grass lawn\n");
+    Zone zone;
+    zone.terrain.push_back(square("grass.bmp", 128.0f));
+    zone.objects["CAMPFIRE"] = ring;
+    Placement fire;
+    fire.actor = "CAMPFIRE";
+    fire.transform = glm::translate(glm::mat4(1.0f), glm::vec3(60.0f, 60.0f, 0.0f));
+    zone.placements.push_back(fire);
+    auto near_fire = [](const ZoneFlora& f, float r) {
+        return std::count_if(f.instances.begin(), f.instances.end(), [r](const FloraInstance& p) {
+            return glm::length(glm::vec2(p.position) - glm::vec2(60.0f, 60.0f)) < r;
+        });
+    };
+    ZoneFlora flora;
+    place_zone_flora(zone, rules, defs, flora);
+    CHECK(near_fire(flora, 5.0f + kFootprintMargin) == 0); // the middle too, whatever the lawn's offset
+    CHECK(near_fire(flora, 14.0f) > 0);
+    // A rock of the same shape (no fire in its name or materials) covers only under its surfaces, so the grass grows
+    // up to it and, a ring with nothing over it, inside it.
+    zone.placements[0].actor = "ROCK";
+    zone.objects["ROCK"] = ring;
+    zone.objects["ROCK"].materials[0].frames = {"stone.bmp"};
+    ZoneFlora rock;
+    place_zone_flora(zone, rules, defs, rock);
+    CHECK(near_fire(rock, 4.0f) > 0);
+    CHECK(near_fire(rock, 6.0f) > near_fire(rock, 4.0f));
+    // A bush of the same shape (see-through leaves, named so) keeps the grass under it, its name notwithstanding.
+    zone.placements[0].actor = "CAMPFIRE";
+    zone.objects["CAMPFIRE"].materials[0].frames = {"bush.bmp"};
+    zone.objects["CAMPFIRE"].materials[0].blend = BlendMode::Masked;
+    ZoneFlora bush;
+    place_zone_flora(zone, rules, defs, bush);
+    CHECK(near_fire(bush, 4.0f) > 0);
+}
+
+TEST_CASE("zone flora: which objects are fires") {
+    Mesh m;
+    Material stone;
+    stone.frames = {"stone.bmp"};
+    m.materials.push_back(stone);
+    CHECK_FALSE(is_fire_object("ROCK01", m));
+    CHECK(is_fire_object("CAMPFIRE", m));
+    CHECK(is_fire_object("FIREWOOD_ACTORDEF", m));
+    m.materials[0].frames = {"coals.bmp"};
+    CHECK(is_fire_object("PIT", m));
+}
+
+TEST_CASE("zone flora: cover from outside the zone's files (the server's objects, a campfire)") {
+    std::vector<eqg::FloraDefinition> defs = {definition("grass", 2.0f)};
+    auto rules = parse_zone_flora_rules("ground grass* 10 grass lawn\n");
+    Zone zone;
+    zone.terrain.push_back(square("grass.bmp", 128.0f));
+    ZoneFloraGrower grower(zone, rules, defs, {});
+    // The tile at the origin (its neighbours hold the margin round the square).
+    const auto& tiles = grower.tiles();
+    const auto found = std::find(tiles.begin(), tiles.end(), glm::vec2(0.0f));
+    REQUIRE(found != tiles.end());
+    const auto tile = static_cast<std::size_t>(found - tiles.begin());
+    std::vector<FloraInstance> open;
+    grower.grow(tile, open);
+    REQUIRE(open.size() > 1000);
+    // Everything west of x 40 covered: nothing, lawn or plant, stands there; the rest grows as before.
+    std::vector<FloraInstance> covered;
+    grower.grow(tile, covered, nullptr, [](const glm::vec3& at) { return at.x < 40.0f; });
+    CHECK(covered.size() < open.size());
+    CHECK(covered.size() > open.size() / 2);
+    for (const auto& p : covered) CHECK(p.position.x >= 40.0f - kLawnCoverJitter);
+}
+
+TEST_CASE("zone flora: placed objects' triangles over a tile, as the server's objects cover the grass") {
+    // A 10-unit square lid at z 3 over (20..30, 20..30), and another 30 units up (a crown) over (60..70, 20..30).
+    auto lid = [](float x, float z) {
+        return std::vector<glm::vec3>{{x, 20, z}, {x + 10, 20, z}, {x + 10, 30, z}, {x, 20, z}, {x + 10, 30, z}, {x, 30, z}};
+    };
+    std::vector<glm::vec3> tris = lid(20.0f, 3.0f);
+    const auto crown = lid(60.0f, 30.0f);
+    tris.insert(tris.end(), crown.begin(), crown.end());
+    // And one wholly outside the square, and one seen edge-on (a wall).
+    const auto outside = lid(500.0f, 3.0f);
+    tris.insert(tris.end(), outside.begin(), outside.end());
+    tris.insert(tris.end(), {{40, 40, 0}, {50, 40, 0}, {50, 40, 10}});
+    ObjectCoverTris cover(tris, {0, 0}, {128, 128});
+    CHECK(cover.covered({25, 25, 0}));
+    CHECK(cover.covered({25, 25, 2.5f}));
+    CHECK_FALSE(cover.covered({25, 25, 2.9f})); // 0.1 under it: within kObjectCoverClearance
+    CHECK_FALSE(cover.covered({35, 25, 0}));
+    CHECK_FALSE(cover.covered({65, 25, 0}));  // past kObjectCoverReach
+    CHECK(cover.covered({65, 25, 20}));       // from nearer it covers
+    CHECK_FALSE(cover.covered({505, 25, 0})); // outside the square
+    CHECK_FALSE(cover.covered({45, 40, -1}));
+    CHECK_FALSE(cover.covered({-5, 25, 0}));
+    CHECK(ObjectCoverTris({}, {0, 0}, {128, 128}).empty());
+    CHECK(ObjectCoverTris(outside, {0, 0}, {128, 128}).empty());
+}
+
+TEST_CASE("zone flora: a campfire spawn covers a disc round its feet") {
+    const CoverDisc fire = campfire_cover({10, 10, 5}, 5.0f);
+    CHECK(fire.radius == doctest::Approx(5.0f + kFootprintMargin));
+    CHECK(fire.covers({16, 10, 5}));
+    CHECK(fire.covers({10, 10, 5 - kCoverDiscHeight}));
+    CHECK_FALSE(fire.covers({17, 10, 5}));
+    CHECK_FALSE(fire.covers({10, 10, 5 + kCoverDiscHeight + 1}));
+    CHECK(campfire_cover({}, 0.0f).radius == doctest::Approx(kCoverDiscMin + kFootprintMargin));
+    CHECK(campfire_cover({}, 50.0f).radius == doctest::Approx(kCoverDiscMax + kFootprintMargin));
+    CHECK(campfire_cover({}, std::numeric_limits<float>::quiet_NaN()).radius ==
+          doctest::Approx(kCoverDiscMin + kFootprintMargin));
+}
+
+TEST_CASE("zone flora: no lawn under a floor laid a unit over the grass") {
+    // Plane of Knowledge's brick tiles lie one unit over its grass texture: the blades (1.8 .. 3 units) showed through.
+    std::vector<eqg::FloraDefinition> defs = {definition("grass", 2.0f)};
+    auto rules = parse_zone_flora_rules("ground grass* 10 grass lawn\nground brick* 0\n");
+    Zone zone;
+    zone.terrain.push_back(square("grass.bmp", 100.0f));
+    Mesh floor = square("brick.bmp", 50.0f);
+    for (auto& v : floor.vertices) {
+        v.position.y *= 2.0f;
+        v.position.z = 1.0f;
+    }
+    zone.terrain.push_back(floor);
+    ZoneFlora flora;
+    place_zone_flora(zone, rules, defs, flora);
+    CHECK(flora.instances.size() > 500);
+    for (const auto& p : flora.instances) CHECK(p.position.x >= 50.0f);
+}
+
+TEST_CASE("zone flora: outdoors the terrain covers only within kOutdoorTerrainCover") {
+    std::vector<eqg::FloraDefinition> defs = {definition("grass", 2.0f)};
+    auto rules = parse_zone_flora_rules("ground grass* 10 grass\nground roof* 0\n");
+    rules.terrain_cover = kOutdoorTerrainCover;
+    Zone zone;
+    zone.terrain.push_back(square("grass.bmp", 100.0f));
+    // An overhang over the square's left half (x 0 .. 50), first high (a cliff's), then low (a hut's roof).
+    Mesh roof = square("roof.bmp", 50.0f);
+    for (auto& v : roof.vertices) {
+        v.position.y *= 2.0f;
+        v.position.z = kOutdoorTerrainCover + 20.0f;
+    }
+    zone.terrain.push_back(roof);
+    ZoneFlora high;
+    place_zone_flora(zone, rules, defs, high);
+    CHECK(high.instances.size() > 900);
+    for (auto& v : zone.terrain[1].vertices) v.position.z = 10.0f;
+    ZoneFlora low;
+    place_zone_flora(zone, rules, defs, low);
+    CHECK(low.instances.size() < 600);
+    for (const auto& p : low.instances) CHECK(p.position.x >= 50.0f);
 }
 
 TEST_CASE("zone flora: roofs across the whole zone still cover, and their cell references stay bounded") {
@@ -720,11 +934,12 @@ TEST_CASE("lawn: Grass Density scales each draw's blades, which keep their width
     CHECK(render::lawn_lod_blades(0, 2.0f) == 98);
     CHECK(render::lawn_lod_blades(1, 0.5f) == 8);
     CHECK(render::lawn_lod_blades(2, 0.25f) == 2);
-    CHECK(render::lawn_lod_blades(0, 10.0f) == 98);  // clamped to kMaxGrassDensity
+    CHECK(render::lawn_lod_blades(0, 3.0f) == 147);
+    CHECK(render::lawn_lod_blades(0, 10.0f) == 147); // clamped to kMaxGrassDensity
     CHECK(render::lawn_lod_blades(2, 0.0f) == 2);    // and kMinGrassDensity
     CHECK(render::lawn_lod_blades(0, std::numeric_limits<float>::quiet_NaN()) == 49);
     CHECK(render::lawn_lod_blades(3) == 0);
-    for (float density : {0.25f, 0.5f, 1.0f, 1.5f, 2.0f}) {
+    for (float density : {0.25f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f}) {
         CHECK(render::lawn_blades(0.0f, density) == static_cast<float>(render::lawn_lod_blades(0, density)));
         CHECK(render::lawn_blades(5000.0f, density) == static_cast<float>(render::lawn_lod_blades(2, density)));
         CHECK(render::lawn_blade_width(0.0f, density) == render::kLawnBladeWidth);
@@ -735,7 +950,8 @@ TEST_CASE("lawn: Grass Density scales each draw's blades, which keep their width
     }
     CHECK(render::grass_density_percent(100) == 100);
     CHECK(render::grass_density_percent(0) == 25);
-    CHECK(render::grass_density_percent(1000) == 200);
+    CHECK(render::grass_density_percent(300) == 300);
+    CHECK(render::grass_density_percent(1000) == 300);
 }
 
 TEST_CASE("lawn: levels of detail and the far patches' stride") {

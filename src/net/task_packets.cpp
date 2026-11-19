@@ -357,7 +357,7 @@ std::optional<std::vector<SharedTaskMember>> decode_shared_task_members(const Ap
         for (std::uint32_t i = 0; i < n; ++i) {
             SharedTaskMember m;
             m.name = r.cstring();
-            r.skip(4);
+            m.template_id = r.le<std::uint32_t>();
             m.leader = r.le<std::uint8_t>() != 0;
             v.push_back(std::move(m));
         }
@@ -382,7 +382,7 @@ AppPacket encode(const std::vector<SharedTaskMember>& v) {
     w.le(static_cast<std::uint32_t>(v.size()));
     for (const auto& m : v) {
         detail::write_cstring(w, m.name);
-        w.le<std::uint32_t>(0);
+        w.le(m.template_id);
         w.le<std::uint8_t>(m.leader ? 1 : 0);
     }
     return make_packet(Op::SharedTaskMemberList, std::move(w));

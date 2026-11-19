@@ -501,10 +501,10 @@ TEST_CASE("key map: the original's defaults, names and ini round trip") {
         CHECK_FALSE(km.binding(i, 1).bound());
         CHECK(std::find(listed_commands().begin(), listed_commands().end(), i) == listed_commands().end());
     }
-    // Daybreak's services are left out too: the claim, polls, alerts and social share keys lose their default keys
-    // (Shift+C, Shift+V, Shift+H, Ctrl+Shift+S), and so do real estate's leave key and the customer service key (P);
+    // Daybreak's services are left out too: the claim, polls and social share keys lose their default keys
+    // (Shift+C, Shift+V, Ctrl+Shift+S), and so do real estate's leave key and the customer service key (P);
     // the welcome screen's key has none.
-    for (KeyCommand c : {KeyCommand::CMD_TOGGLE_CLAIM_WIN, KeyCommand::CMD_VOTE_RESULTS, KeyCommand::CMD_HISTORIC_ALERTS,
+    for (KeyCommand c : {KeyCommand::CMD_TOGGLE_CLAIM_WIN, KeyCommand::CMD_VOTE_RESULTS,
                          KeyCommand::CMD_SOCIAL_SHARE, KeyCommand::CMD_MARKETPLACE_GOLD,
                          KeyCommand::CMD_REAL_ESTATE_LEAVE,
                          KeyCommand::CMD_TOGGLE_TICKET_WND, KeyCommand::CMD_WELCOMESCREEN}) {
@@ -512,6 +512,13 @@ TEST_CASE("key map: the original's defaults, names and ini round trip") {
         CHECK(key_command_dropped(i));
         CHECK_FALSE(km.binding(i, 0).bound());
         CHECK(std::find(listed_commands().begin(), listed_commands().end(), i) == listed_commands().end());
+    }
+    // The alerts key stays, with the original's Shift+H: it shows and hides the alert history window.
+    {
+        const int alerts = static_cast<int>(KeyCommand::CMD_HISTORIC_ALERTS);
+        CHECK_FALSE(key_command_dropped(alerts));
+        CHECK(km.binding(alerts, 0).to_int() == 0x40000023);
+        CHECK(std::find(listed_commands().begin(), listed_commands().end(), alerts) != listed_commands().end());
     }
     // The Marketplace window's key stays (no default key in the original): the window speaks the original's opcodes.
     CHECK_FALSE(key_command_dropped(static_cast<int>(KeyCommand::CMD_MARKETPLACE)));

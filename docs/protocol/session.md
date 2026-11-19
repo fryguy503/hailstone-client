@@ -92,7 +92,7 @@ when the authenticated session is lost (`tests/ucs_session_test.cpp`).
 |---|---|---|
 | SessionRequest resend | 1000 ms default; 5000 ms UCS | param 0x21 |
 | Connect timeout | 10 s default; 30 s UCS (`SessionOptions::connect_timeout`) | client choice; includes DNS |
-| Link dead: nothing received for | 180 s world and zone (`SessionOptions::idle_timeout`); 14.8 s login; disabled UCS | param 0x12 (NetMgr +0x50 → UdpConnection +0x15c, checked in `UdpConnection_InternalGiveTime` @0x8c638e: the silence reaching it ends the link, reason 2). Login and chat set none; there the limits are the client's (docs/unknowns.md) |
+| Link dead: nothing received for | 180 s world and zone (`SessionOptions::idle_timeout`); 14.8 s login; 60 s UCS (Hailstone's own) | param 0x12 (NetMgr +0x50 → UdpConnection +0x15c, checked in `UdpConnection_InternalGiveTime` @0x8c638e: the silence reaching it ends the link, reason 2). Login and chat set none; there the limits are the client's (docs/unknowns.md). A stock EQEmu UCS sends a keepalive after 9 s of its own silence, so 60 s without one means the chat link is gone: the client sends nothing reliable on an idle chat link (channel text goes through the zone), so the 30 s unacknowledged-data check alone never sees it |
 | SessionStatRequest interval | 30 s | param 0x1a |
 | Client keepalive (00 06) | after 15 s without sending (`SessionOptions::keepalive_interval`) | param 0xe; 14.8 s login, 44 s chat (14.8 s with `[Defaults] ChatKeepAlive`). EQEmu drops a client it has not heard from for 60 s (`stale_connection_ms`) |
 | Server keepalive | every 9 s of server silence | EQEmu `keepalive_delay_ms` |

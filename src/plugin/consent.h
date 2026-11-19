@@ -57,6 +57,9 @@ struct ConsentFile {
     std::filesystem::path file;
     std::uint64_t size = 0;
     Sha256Digest sha256{};
+    // The player's own add-on (installed in plugins/) that the server's add-on policy requires, not a plugin the
+    // server sent (docs/plugins.md "Opt-in add-on policies").
+    bool required_addon = false;
 };
 // The question as the prompt shows it: the server's name, its folder, and the plugins asked about. `serial` changes
 // whenever the question does.
@@ -71,5 +74,13 @@ struct ConsentPrompt {
 inline constexpr std::string_view kConsentWarning =
     "A compiled plugin is a program. It runs with full access to your computer: your files, your accounts and your "
     "network, not only the game. Allow it only if you trust this server.";
+
+// The question's words for what it asks about (Hailstone's own; the original has no plugins): the server's plugins
+// (kConsentWarning), the player's own add-ons the server requires (they come from the add-on's author, not the
+// server), or both together. The title, the line before the list and the warning.
+struct ConsentWording {
+    std::string title, intro, warning;
+};
+ConsentWording consent_wording(const ConsentPrompt& prompt, std::string_view server);
 
 } // namespace hailstone::plugin

@@ -17,10 +17,12 @@
 #include "app/addon_suggest.h"
 #include "app/ability_bulk.h"
 #include "app/window_icon.h"
+#include "app/window_desc.h"
 #include "app/automation.h"
 #include "app/progress_ui.h"
 #include "app/market_ui.h"
 #include "app/client_app.h"
+#include "app/close_camp.h"
 #include "app/login_token_session.h"
 #include "app/input_script.h"
 #include "app/zone_settle.h"
@@ -53,6 +55,7 @@
 #include "assets/sky.h"
 #include "assets/texture_overrides.h"
 #include "assets/zone.h"
+#include "assets/zone_flora.h"
 #include "core/character_files.h"
 #include "core/config.h"
 #include "core/game_dir.h"
@@ -62,6 +65,7 @@
 #include "core/wipe.h"
 #include "app/nameplate_layer.h"
 #include "app/nameplate_input.h"
+#include "app/spawn_pick.h"
 #include "game/nameplate_overlap.h"
 #include "game/sky_colours.h"
 #include "game/option_commands.h"
@@ -179,19 +183,10 @@ constexpr int kMinCameraZoomSetting = 10;
 constexpr int kMaxCameraZoomSetting = 150;
 
 
-// The game window as it was when the client last closed (hailstone.ini window.*), unless --window-size asked for
-// a size: the UI's places are kept for that screen, so starting it smaller piles the windows up.
+// The game window at start (app/window_desc.h), from hailstone.ini as it is now.
 inline platform::WindowDesc window_desc(const ClientOptions& o) {
-    platform::WindowDesc d{.width = o.window_width, .height = o.window_height};
-    d.pad_input_in_background = !o.input_script.empty();
-    if (o.window_width != 1280 || o.window_height != 720) return d; // --window-size
     Config c;
-    if (!c.load(default_config_path())) return d;
-    d.width = std::max(320, c.get_int("window.width", d.width));
-    d.height = std::max(240, c.get_int("window.height", d.height));
-    if (c.get("window.x") && c.get("window.y")) d.position = {{c.get_int("window.x", 0), c.get_int("window.y", 0)}};
-    d.maximized = c.get_bool("window.maximized", false);
-    return d;
+    return window_desc(o, c.load(default_config_path()) ? &c : nullptr);
 }
 
 // The UI scale: --ui-scale, else hailstone.ini ui.scale (percent; 0 or none: the display's own scale). The fonts
@@ -207,9 +202,10 @@ inline float ui_scale_setting(const ClientOptions& o) {
 // The upscaler provider hailstone.ini's display.upscaler names (render/upscaler_provider.h), loaded before the
 // Vulkan instance is made, which takes its requirements; nullptr for the client's own upscalers. Read at the start
 // only, as display.upscaler always is.
-inline std::unique_ptr<render::UpscalerProvider> start_upscaler_provider() {
+inline std::unique_ptr<render::UpscalerProvider> start_upscaler_provider(const ClientOptions& o) {
     Config c;
-    if (!c.load(default_config_path())) return nullptr;
+    if (!c.load(default_config_path()) && o.display_settings.empty()) return nullptr;
+    for (const auto& [key, value] : o.display_settings) c.set_run_override(key, value); // --upscaler
     return render::load_upscaler_setting(c.get_string("display.upscaler", "off"), platform::upscalers_dir(),
                                          platform::cache_dir() / "upscalers");
 }
@@ -265,7 +261,7 @@ public:
     ClientApp& operator=(const ClientApp&) = delete;
     explicit ClientApp(ClientOptions& options)
         : opts_(options), window_(window_desc(options)),
-          vk_(window_, options.validation, start_upscaler_provider()),
+          vk_(window_, options.validation, start_upscaler_provider(options)),
           ui_(window_, vk_,
               ui::ImGuiLayerDesc{.scale_override = ui_scale_setting(options),
                                  .ini_path = platform::imgui_ini()}) {
@@ -292,6 +288,12 @@ public:
         }
         // A new install's graphics settings for this computer (render/graphics_tier.h), before they are first read.
         detect_graphics_at_first_start();
+        // The display flags (--lighting, --msaa ...) over the saved settings for this run, after a new install's own
+        // settings are written; a change in the Options window takes over from them (Config::set_run_override).
+        for (const auto& [key, value] : opts_.display_settings) {
+            config_.set_run_override(key, value);
+            log::info("{} = {} for this run (a command-line flag)", key, value);
+        }
         // The settings (hailstone.ini's until a character enters, then the character's: apply_settings), before the
         // renderers: their pipelines take the sample count.
         apply_settings();
@@ -1036,6 +1038,8 @@ private:
     bool plate_input_blocked(bool ignore_right_button = false) const;
     bool nameplate_spawn_clickable(const game::Spawn& spawn) const;
     std::optional<float> nameplate_pixel_depth(glm::vec2 at) const;
+    // A spawn as the click tests see it (app/spawn_pick.h), its pose left to the caller.
+    SpawnPickSource spawn_pick_source(std::uint32_t id, const game::Spawn& spawn) const;
     std::optional<std::uint32_t> nameplate_at(glm::vec2 at) const;
     bool activate_nameplate(std::uint32_t id);
     // CEverQuest::LeftClickedOnPlayer.
@@ -1122,6 +1126,7 @@ private:
     ui::ImGuiLayer ui_;
     bool quit_ = false;
     bool close_pending_ = false; // a window close request held through a loading screen
+    CloseCamp close_camp_;       // a window close request's camp, made again when a zone change ended it
 
     Screen screen_ = Screen::Login;
     ui::LoginView login_view_;
@@ -1407,6 +1412,13 @@ private:
     std::vector<assets::ZoneFire> moving_fires_;             // the doors' and objects' this frame (capacity kept)
     std::vector<std::pair<float, glm::vec4>> flora_near_;    // the spawns standing in the grass (capacity kept)
     std::vector<glm::vec4> flora_pushers_;
+    // What covers the grass besides the zone's files (FloraRenderer::set_cover): the doors and objects
+    // (WorldObjects::flora_cover) and the campfire spawns standing now (assets::campfire_cover), kept by
+    // update_flora_cover, which grows again the grass where any came or went.
+    std::vector<assets::CoverDisc> flora_campfires_;
+    std::vector<assets::CoverDisc> flora_campfires_now_; // update_flora_cover's this frame (capacity kept)
+    void update_flora_cover();
+    std::function<bool(const glm::vec3&)> flora_cover(glm::vec2 lo, glm::vec2 hi) const;
     render::SceneLighting frame_lighting_{}; // this frame's lighting, for the flames' haze and depth terms
     std::unique_ptr<SpellParticles> spell_particles_;       // spell stage particles (app/spell_particles.h)
     std::unique_ptr<SpellBolts> spell_bolts_;               // the modern lighting's bolts and comets (app/spell_bolts.h)
@@ -1444,6 +1456,7 @@ private:
     bool own_name_ = true; // Hailstone's switch for the player's own name sprite (display.own_name; game::NameSpriteSwitches)
     bool player_menu_ = true; // Hailstone's right-click menu on players (mouse.player_menu; game::opens_player_menu)
     bool con_name_colour_ = true;     // Hailstone: NPC names in their consider colour (display.con_name_colour)
+    bool show_invis_undead_ = false; // Hailstone: "[Name]" for known invisibility versus undead (display.show_invis_undead)
     bool plate_overlap_fade_ = true; // Hailstone: a covered name fades (display.plate_overlap_fade)
     bool target_plate_through_walls_ = false; // Hailstone: the target's name shown behind walls (display.target_plate_through_walls)
     bool target_plate_highlight_ = true; // Hailstone: the target's name on a dark plate with a marker (display.target_plate_highlight)

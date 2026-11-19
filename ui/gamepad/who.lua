@@ -13,6 +13,11 @@ local C = T.C
 -- The first word of each class's name: /who matches a class by the start of its name (Who_BuildAndSendRequest).
 local CLASSES = { "Any", "Warrior", "Cleric", "Paladin", "Ranger", "Shadow", "Druid", "Monk", "Bard", "Rogue", "Shaman",
   "Necromancer", "Wizard", "Magician", "Enchanter", "Beastlord", "Berserker" }
+-- A class's name as the client shows it (a server's own where its plugin named the class), else `fallback`.
+local HAS_CLASS_NAMES = API.Supports and API.Supports("character", "ClassName") == true
+local function className(id, fallback, short)
+  return HAS_CLASS_NAMES and API.character.ClassName(id, short) or fallback
+end
 local LEVELS = { { "Any" }, { "Near you", near = 5 } }
 for lo = 1, 91, 10 do LEVELS[#LEVELS + 1] = { lo .. "-" .. (lo + 9), lo, lo + 9 } end
 
@@ -139,7 +144,7 @@ ui.window("Who", function()
     end
     if filter("##scope", "Where", f.all and "Everywhere" or "This zone") then f.all = not f.all end
     if filter("##level", "Level", LEVELS[f.level][1]) then f.level = f.level % #LEVELS + 1 end
-    if filter("##class", "Class", CLASSES[f.class]) then f.class = f.class % #CLASSES + 1 end
+    if filter("##class", "Class", f.class > 1 and className(f.class - 1, CLASSES[f.class]) or CLASSES[f.class]) then f.class = f.class % #CLASSES + 1 end
     if filter("##lfg", "Looking for group", f.lfg and "Only" or "Anyone", { disabled = f.all }) then f.lfg = not f.lfg end
     if filter("##name", "Name", f.name ~= "" and f.name or "Anyone") then K.open(kb, "A name (or the start of one)", f.name, 64, true) end
     if T.button("##search", "Search", bw, bh, { primary = true, glyph = "x" }, pad) then run(command()) end

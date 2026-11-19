@@ -4,6 +4,64 @@ What is left before the client is feature complete, in the order to work on it. 
 
 Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 
+## Road to 1.0
+
+The steps are in `docs/plan.md` "Road to 1.0". This section says which items belong to which step; most of them are written out in full in the sections below, so tick them there and here together.
+
+### 0.8, freeze the surfaces
+
+- [ ] Lua 5.4.7 to 5.5.1 (the `lua-5.5` branch): the packs and the add-on repositories fixed, the break in the changelog.
+- [ ] Review `hs.*` across both packs and the `mq` module: rename or remove what is not wanted for good, then write the stable set down (`docs/ui-api.md`, `docs/plugins.md`) with the rules for adding to it after 1.0.
+- [ ] Plugin ABI: make the last breaking change, if any, and declare `HAILSTONE_PLUGIN_ABI` stable; write down how it grows after 1.0 (new functions at the end of the tables, no changed layouts).
+- [ ] Remove the `nmsc` compatibility layer: `sdk/nmsc_*.h` and the `nmsc_*` exports, the `NMSC_*` environment variables (`core/env.h`) and CMake settings, the saved window names renamed at start (`core/old_ui_settings`), and the rule about them in AGENTS.md.
+- [ ] Remove the older builds' fallbacks: the chat filters and colours read from the asset folder's `eqclient.ini` under `chat.ini`, and the unsorted character folders adopted per world (docs/layout.md).
+- [ ] Add-on safety: wrap the plugin functions and tables passed to pack functions; the arming delay on the client's own consent prompt; the pack's consent window guarded from before its first draw; the core install skipping add-ons' folders; `server_file_destination` refusing `.so.N` as `make_addon.py` does (all under "Add-ons" and "Code health").
+- [ ] The layer order: `net` and `assets` stop including `game/` headers ("Code health").
+- [ ] The local-time calls outside `src/platform/` through `platform::local_time` ("UI").
+
+### 0.9, platforms and releases
+
+- [ ] Windows: the updater run (WinHTTP, the renames of the running `hailstone.exe`), add-ons run, the Lua review fixes built with MSVC under Wine, the `path::string()` sweep or the manifest recorded as required ("Updates", "Add-ons", "Code health").
+- [ ] A scripted release (packages, manifest, signature, upload), local or in CI ("Updates").
+- [ ] Downloads that resume; the rollback's `kept-<time>/` folders cleaned up.
+- [ ] Add-ons against the real GitHub; XeSS and FSR 4 in the add-on index.
+- macOS is on hold until someone can test and maintain its releases; it stays a test build and does not block 1.0.
+
+### 0.10, live play on stock EQEmu
+
+- [ ] Write the checklist (a doc of its own, played on the stock PEQ test server, both packs, a physical controller) from the live items of "Combat and spells", "Movement", "Items and commerce", "Social and friends", "Navigation", "Item comparison", "Isometric camera" and "Check live".
+- [ ] Play it and fix what it finds.
+- [ ] Shadow step (SPA 379): the zone collision `land_spell` needs ("Combat and spells").
+- [ ] The collision radius, too wide for doorways ("Movement").
+- [ ] Leaving an adventure clears the window ("Adventures").
+- [ ] UCS reconnection and a wrong chat key ("Items and commerce").
+
+### 0.11, real estate
+
+- [ ] Placement: the ghost's wall and surface fit, free mode's mouse moves, the flatness test.
+- [ ] The item-move pre-checks and button greying, alternate-currency deposits, the NPC-item binding, the item menu's unbuilt entries, the neighborhood polls and vote window.
+- [ ] Played live on a server with housing, and the real estate rows of `docs/unknowns.md` settled.
+
+### 0.12, memory and soak
+
+- [ ] The character archives and the base cost ("Memory").
+- [ ] The texture slots of freed appearances freed; the session-long caches evicting ("Check live", "Code health").
+- [ ] An hour in a busy hub with zoning, and several clients on the shared asset cache.
+- [ ] Golden-image tests for a few zones (docs/plan.md section 5).
+
+### 1.0 RC
+
+- [ ] Bug fixes only; a known-issues page from what is left in `docs/unknowns.md`; the wiki and changelog.
+
+### After 1.0
+
+Not blocking 1.0: `/gems`; `/travel`, waypoints and the mesh editor; levitation paths; tactical queries for bots; frame generation's pacing and 3x/4x; FSR's water mask; zone flora rules; an allocator of the client's own; shared GPU textures on Linux and past 16 clients; the MacroQuest alert lists and `/target next`; the "trace the original" rows that change nothing a player sees. The server-dependent systems stock EQEmu never sends (shrouds and missions, LDoN, fellowships, guild banners, achievements, reward selection, evolving items) keep their live checks open past 1.0.
+
+## Spirit Shrouds and Monster Missions
+
+- [x] Server-supplied form catalogs, stats and detail requests, character and observer form updates, shared-task template rows, shroud progress and Shroud Bank item recovery in both UI packs.
+- [ ] Live acceptance on a RoF2 server with configured shroud forms and missions, including zoning or relogging in a form, mission completion, and withdrawal of stored possessions.
+
 ## Server add-on policy
 
 - [x] Optional required/allow/block lists by GitHub repository (owner/repo; bare names refused) for every kind the add-on manager installs, intact package identities, required autostart that the player cannot stop, consent gates, and active upscaler checks; disabled unless `[addons] enforce = on`.
@@ -62,11 +120,11 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 ### Social and friends
 
 - [x] `/who friends` sends OP_FriendsWho with RoF2's zone/all scope and saved names and displays the server's normal who results; native serialization checked, packet and mock-server coverage includes empty lists, online friends, anonymous/roleplaying friends and omitted offline friends.
-- [ ] Compare `/who friends` and `/who all friends` live with RoF2: online/offline transitions, friends in other zones and anonymous/roleplaying friends.
+- [ ] Compare `/who friends` and `/who all friends` live with RoF2: online/offline transitions, friends in other zones and anonymous/roleplaying friends. Seen live (stock PEQ test server, 2026-11-18): both list an online friend in another zone and nothing once it camps; no logon/logoff notice appeared. Open: anonymous and roleplaying friends, a comparison with RoF2.
 
 ### Combat and spells (do first)
 - [ ] Shadow step (SPA 379) does nothing live: `land_spell` has no zone collision (point_in_world, collide_sphere, collide_line, floor_height and is_valid_teleport are stubbed in src/game/hit_landing.cpp) and the result has no position for the connection to apply. Needs collision in HitLandingContext, a port of IsValidTeleport and a teleport result applied with a position update.
-- [x] Spell Hit Modes: Normal, Abbreviated and Number Only for direct damage, DoTs, heals and HoTs, preserving full spell and melee log lines and incoming-chat hooks. Structured, generic and plain-text combat messages and UI tests; live gameplay remains unverified (docs/mechanics.md "Spell hit modes").
+- [x] Spell Hit Modes: Normal, Abbreviated and Number Only for direct damage, DoTs, heals and HoTs, preserving full spell and melee log lines and incoming-chat hooks. Structured, generic and plain-text combat messages and UI tests; live gameplay remains unverified (docs/mechanics.md "Spell hit modes"). Seen live (stock PEQ test server, 2026-11-18) with direct damage and heals in all three modes; DoTs and HoTs not tried.
 - [x] Personal and guild tribute: received bonus items feed local stats/effects and retire on received deactivation, selection changes, opt-out and context changes; guild benefit controls enforce received permissions, and guild platinum donations wait for matching replies. Packet, mechanics and mock/UI regressions; full live tribute workflow acceptance remains open.
 - [x] Raid leadership controls and leadership hotkey creation in both UI packs, correct trainable ability identities, delegate/mark synchronization and lifecycle cleanup, active leadership bonuses in local stats, and raid invitations from expedition/shared-task rosters (unit, mock-server and UI coverage).
 - [x] Leadership window colours in both packs: native green for a supplied leader rank, gold for personal purchases, and white/grey training availability; native analysis, server-source comparison and rendered-text regressions distinguish these from population and permission checks.
@@ -102,14 +160,14 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] (358bf04, checked live: /discipline now runs the NMS reuse timers; the empty list after login matches the original) A second `/discipline` right after `/stopdisc` is not refused by the client (NMS disc timer map or a missing server timer packet); the reuse list is empty after zone-in until the server sends timers.
 
 ### Movement
-- [x] Server flymodes: the local player takes the spawn record's flymode and `SpawnAppearance` 19 (all six modes) and keeps them until the effect cache is rebuilt, when `UpdateLevitationState`'s rules apply again (docs/mechanics.md "fly mode"; unit tests of the decision and through the connection's packets). Not seen live yet.
+- [x] Server flymodes: the local player takes the spawn record's flymode and `SpawnAppearance` 19 (all six modes) and keeps them until the effect cache is rebuilt, when `UpdateLevitationState`'s rules apply again (docs/mechanics.md "fly mode"; unit tests of the decision and through the connection's packets). Seen live (stock PEQ test server, 2026-11-18): all six modes, and levitation gained and lost under modes 0, 1 and 3.
 - [x] The game rules on a 60 Hz game clock (`game.fixed_step`, docs/mechanics.md "Frame rate"): movement, other spawns, missiles, weather and fog steps, the frame-gated timers; the camera drawn between steps (unit tests at 15 to 1000 simulated frames a second).
 - [ ] Collision radius: the static reading gives the model's bounding radius (6.2 for a human), too wide for doorways; settle it with a run-time read of the actor's vf44 in the real client (rof2re's radius_log, needs a new rof2re.dll in the game folder and a user-run session). The stand-in stays until then.
 - [ ] Other spawns: bodies never block in the original (no per-bone meshes); only bone attachments such as held weapons could, and that test is not ported.
 - [x] NPC collision (Hailstone's own, switchable by the server's hailstone.cfg `[movement] npc_collision`): live NPCs stop the player; players, pets, mercenaries, corpses and mounts do not (game/npc_collision.h; unit tests).
 - [x] The jump's crouch window from the duck clip's length (453db92); the ceiling query and auto-duck match the original apart from the radius.
 - [x] New-style models' duck clip for the crouch window (CRCH_BA_1, 0x406740's row 0x7a - 0x4f); the jump animation from the playing animation (+0x10c0, vf24) rather than 500 ms after a jump (anim-fixes; unit tests).
-- [x] Placed objects that play their own animation (Ssraeshza Temple's turning rings, swaying tree branches in 75 zones): drawn moving (one instanced model per definition, a few matrices a frame) and solid where the animation has them, so the rings let a player into the water shaft and out at the top (animated-objects; unit tests and the game files' route through the shaft; the drawing seen in the viewer). Not tried live with a non-GM player.
+- [x] Placed objects that play their own animation (Ssraeshza Temple's turning rings, swaying tree branches in 75 zones): drawn moving (one instanced model per definition, a few matrices a frame) and solid where the animation has them, so the rings let a player into the water shaft and out at the top (animated-objects; unit tests and the game files' route through the shaft; the drawing seen in the viewer). Tried live with a non-GM player (stock PEQ test server, 2026-11-18): into the water shaft and out at the top (invulnerable to the temple's guards).
 - [ ] Animated zone objects, open: the phase against the original's clock, D3DX's key compression, the other spawns' probes, sight, picking and /nav not meeting the moving parts (docs/unknowns.md).
 - [x] Lifts carry riders (already worked; checked live on the Paineel lift).
 - [x] Teleport doors (a Bazaar IT78 door, the PoK books' type, checked live; NMS sends PoK visitors to the Bazaar).
@@ -123,6 +181,8 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Position history (PositionTracker, OP_FloatListThing), the retried and the 30-minute saves, closing on loading screens (60069a0). Missing samples are listed in unknowns.md.
 - [x] The live folder's revamped bazaar, lavastorm and highpasshold load when the server's safe point (OP_NewZone) stands on their floor (game/revamped_zone.h): PEQ's Bazaar and Lava Storm version 1 (expansion 9 on) and its only High Pass Hold row. Version 0's safe points have no floor there, so those stay refused.
 - [ ] Arena and Nektulos with a live folder: its arena.s3d and nektulos.s3d win over the revamped .eqg, but PEQ's Arena (its only row) and Nektulos version 1 (expansion 10 on) run the revamp: their spawns stand on the live .eqg, not the .s3d (unknowns.md, Movement and collision).
+- [x] IVM's animation (race 127/600, the enchanter pet): it has no named clips, and GetAlternateAnimTag @0x406a60 sends its code, like the rest of its wood-elf prefix group, to the wood elf's (ELM), so it plays ELM's clips and holds its weapons as an elf does, not spread in its T-shaped rest pose (game::animation_source).
+- [ ] IVM's click volume: whether the original's click meets its masked body mesh, a sphere or only its held items (unknowns.md, Characters and models).
 
 ### Items and commerce
 - [x] Evolving-item Final Result inspection: native action-4 request, ordinary read-only item reply, received instance progress updates and a focusable gamepad action; packet, bridge, mock-server and Lua-pack coverage.
@@ -140,10 +200,11 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] World tradeskill station distance closure in recipe, Experiment and hidden modes, out-of-reach open replies and busy replies, and world-only quantity/mold/batch cleanup; carried tradeskill bags stay when only the station closes.
 - [x] The service windows' ranges and timers checked against the original (docs/mechanics.md "Leaving an NPC interaction"); still open: the mercenary liaison's check cadence (docs/unknowns.md) and walking away from each service live.
 - [x] Trades with players: CTradeWnd::OnProcessFrame @0x780b50 cancels them beyond the partner's avatar height + 20 on the same 500 ms check as hand-ins; outstanding items and coin return through the server (unit and mock-server coverage).
-- [ ] Trades with players: live separation with outstanding items and coin; the merchant page-handler-2 exception (docs/mechanics.md "Leaving an NPC interaction").
+- [ ] Trades with players: the merchant page-handler-2 exception (docs/mechanics.md "Leaving an NPC interaction"). Live separation with outstanding items and coin checked (stock PEQ test server, 2026-11-18): walking or teleporting out of reach cancels it, items and coin intact.
 - [x] Partial-stack looting asks the quantity (EQEmu ignores it); Link All; the loot music (entry 5 has no asset).
 - [x] Loot All preserves an active queue on repeated activation (an individual request in flight does not block it), and retains the first NO DROP question when a later confirmation aborts the queue (planner and mock-server regressions; docs/mechanics.md "Loot All").
-- [ ] Loot All: live rapid activation with delayed replies and recovery from several NO DROP items requiring confirmation.
+- [x] Loot All: a second click while its "are you sure" question is up or queued asks nothing more (mock-server regression).
+- [ ] Loot All: live activation with delayed replies (only LAN latency tried). Recovery from several NO DROP items and rapid clicks checked live (stock PEQ test server, 2026-11-18); a double click before the question showed asked twice, fixed since.
 - [ ] Loot All: trace native auto-close timing when an accepted NO DROP question overlaps the last automatic request (docs/unknowns.md).
 - [x] Ctrl + right-click bag swapping; Ctrl+click bag contents' slot order and refusal text (game/bag_move).
 - [x] The tradeskill window: favourites, request waits, combine checks, trivial colours (experiment and auto-combine were already in).
@@ -151,14 +212,15 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Trades: the item request counter in IsOkToTransact; a busy answer cancels the trade.
 - [x] Bazaar purchase: EQEmu's TradeRequestFailed reads as a failure (5cf3f63; mock test only).
 - [x] Seen live (5ba3a3b and before): a stock-loot corpse with a partial stack, Link All (a crash without a loot session fixed) and Loot All, a two-client trade with coin and the busy refusals, Ctrl bag moves and the bag swap, the tradeskill search and favourites (the modern window's selected recipe fixed), the bandolier's Make Hot Button and Auto Swap, the merchant's Qty and Lvl.
-- [x] The item display's icon links its item into the active chat window's input (CItemDisplayWnd::WndNotification, IconButton), both packs, X in the gamepad one (unit tests; not seen live).
+- [x] The item display's icon links its item into the active chat window's input (CItemDisplayWnd::WndNotification, IconButton), both packs, X in the gamepad one (unit tests; seen live (stock PEQ test server, 2026-11-18)).
 - [x] Evolving-item experience transfer: both packs select owned source/destination items, request server compatibility and projected results, show max-transfer level and confirm the approved pair (codec, mock-server, Lua bridge and pack tests; live acceptance pending).
-- [x] Link All in the gamepad loot window (unit tests); the inventory doll drop in the modern pack (checked live). Open: the bandolier button actually swapping weapons.
+- [x] Link All in the gamepad loot window (unit tests); the inventory doll drop in the modern pack (checked live). The bandolier's Activate swapping weapons seen live (stock PEQ test server, 2026-11-18).
 - [x] Bazaar: Find Trader, Hide Traders, the result row's Buy button, the stall check, the price load of a selected slot (f7401f3; Hide Traders by unit tests only).
 - [x] Barter: the feature check, offline mode, Hide Buyers (f7401f3; Hide Buyers and the feature check by unit tests only).
 - [x] Mail: the ignore list (kept and edited only, as in the original); the composition window's From (351d492).
 - [x] UCS authentication gates chat/mail commands and login-time events; bounded queues, denial (an explicit refusal or the stock UCS closing the link before its reply), timeout and the backed-off reconnect lifecycle covered by independent mock peers.
-- [ ] UCS: check reconnection after a lost chat link, and a wrong chat key, against a live stock EQEmu server.
+- [x] UCS: a chat link that goes silent (the server dropped the session, or the way back is gone) ends after 60 s with nothing received and is retried; a socket closed under the link ends it at once (mock peer; seen live before the fix: a deaf chat socket was never noticed).
+- [ ] UCS: check reconnection after a lost chat link, and a wrong chat key, against a live stock EQEmu server (the 60 s silence limit not yet seen live).
 - [x] Mail's From seen live after a mail login: "SOE.EQ.nmsdev.Nmscmistwo" (2026-10-29; the chat server answers logins again).
 - [x] Bazaar: the PC and NPC target keys skip hidden traders and buyers (unit tests). The NMS bazaar's porch stalls (type 153) lie outside the zone geometry, so only the FRUGS302 rugs work as stalls (server data).
 - [x] Bazaar: a right click on a trader or buyer the server sends as an NPC (Project Triune's offline traders) opens its shop or barter window: RightClickedOnPlayer tests the trader / buyer flag after the service classes for any spawn, not only players (mock test; the right click on the Triune bazaar traders not retried live).
@@ -208,16 +270,17 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [ ] Other players' carried lights after an equipment change: stock EQEmu sends nothing for them (docs/unknowns.md); trace how the original updates a remote player's light.
 - [x] Name plates: same-frame per-pixel occlusion against the scene's depth (a hidden name is dropped, no ghost), nearer-over-farther draw order with overlap fading (10 %-20 % coverage to 10 % alpha, tau 0.3 s; the Fade Overlapping Names option), the target always full at its projected head, and a Highlight Target Name option; unit tests and an offline Bazaar viewer check.
 - [x] Name plate text options (Options > Display "Name Plates"): font face, size, bold, shadow / outline / no edge, shrink with distance, guild and owner line size; unit tests for the settings and the distance shrink.
+- [x] Invisibility markers on nameplates and HUD captions, with optional brackets for known invisibility versus undead (mock packets and UI tests).
 - [x] Animation layering: the original's upper/lower bone groups, actions over the legs, per-group cross-fades and SyncToBoneGroup, rider actions on the arms, other spawns' water (d8c9fc2; model viewer and unit tests, live split not seen in a screenshot).
 - [x] Animation: a busy upper body queues (classic, +0x10c4) or drops an action as the original does; the same action never replays over itself (84046fb; unit tests).
 - [x] Animation: classic P08 / O02 after an animation 0x4b0860 does not name (the run, jumps, socials; not after an action, which keeps P01), the follow-up's +0x10c4 = 0x47; the local player's climbing animation on a ladder (anim-fixes; unit tests). Checked live on the NMS dev server (2026-10-31) on another player's Luclin human (HUM from globalhum_chr, an old-style model with P01 and P08) seen from the front by a second client: standing after zoning in and after a walk stop it plays P01 (elbows out, fists at the hips), after a run stop and after `/wave` P08 (arms hanging straight), matching the model viewer's P01 / P08. The local player's own stand was not seen from the front (the camera could not be turned round in a scripted run). The ladder climb could not be tried: this server has no ground object named LADDER*, the only kind the client climbs; its two OBJ_LADDER doors (xorbb door 8, pillarsalra door 7) are switches here (docs/unknowns.md).
 - [ ] Movement collision: replay the reworked sphere sweep (`game/sphere_sweep.cpp`: capsule candidate order, tangent and zero-length edges, parallel edge-region refusal) against the recorded vectors (`HAILSTONE_VECTORS_DIR=... build/hailstone_tests -tc="*movement*"`, tests/movement_vectors_test.cpp) and update docs/mechanics.md's vector counts; it has only been checked with synthetic unit tests.
 - [x] Remote ladder collision state reaches animation; new-style riders use column-5 sequences and sequence identity includes the style column. Regression coverage added; live ladder/rider acceptance remains open.
-- [x] Riding while illusioned (Hailstone's own, switchable: `game.illusion_mounts`, on by default): the rider's model no longer refuses the mount; the mount's seat dag still must exist (docs/mechanics.md "Riding while illusioned"; unit tests). Not tried live.
+- [x] Riding while illusioned (Hailstone's own, switchable: `game.illusion_mounts`, on by default): the rider's model no longer refuses the mount; the mount's seat dag still must exist (docs/mechanics.md "Riding while illusioned"; unit tests). Seen live (stock PEQ test server, 2026-11-18): a gnome and a skeleton ride a summoned horse.
 - [x] Mounted form changes unseat before rebuilding the actor and re-seat against the saved mount identity; departure and id-reuse are covered by mock packet tests.
-- [x] Ladders placed in the zone (objects.wld LADDER* actors, type 6): walking into one climbs it (CollidingType 6 from the sweep's hit), a click from the top mounts it (zone-ladders; unit tests). Not tried live.
-- [x] Passable ladders (Cabilis's LADDERCB101, every polygon passable): clickable from the top as in the original, and climbed by walking or swimming into them by Hailstone's own rule, switched by `hailstone.cfg` `[movement] passable_ladders` (canal-ladder; unit tests, and the real Cabilis East zone with `EQ_GAME_DIR`). Not tried live.
-- [x] Solid ladders (Hailstone's own, switched by `hailstone.cfg` `[movement] solid_ladders`): the movement meets a ladder as one slab, so every race climbs the rung ladders, which small races fell through and every race could stick on (solid-ladders; unit tests, and Upper and Lower Guk with `EQ_GAME_DIR`). Not tried live.
+- [x] Ladders placed in the zone (objects.wld LADDER* actors, type 6): walking into one climbs it (CollidingType 6 from the sweep's hit), a click from the top mounts it (zone-ladders; unit tests). Checked live (stock PEQ test server, 2026-11-18) (Upper Guk, Cabilis East's canal ladder, a gnome illusion).
+- [x] Passable ladders (Cabilis's LADDERCB101, every polygon passable): clickable from the top as in the original, and climbed by walking or swimming into them by Hailstone's own rule, switched by `hailstone.cfg` `[movement] passable_ladders` (canal-ladder; unit tests, and the real Cabilis East zone with `EQ_GAME_DIR`). Checked live (stock PEQ test server, 2026-11-18) (Upper Guk, Cabilis East's canal ladder, a gnome illusion).
+- [x] Solid ladders (Hailstone's own, switched by `hailstone.cfg` `[movement] solid_ladders`): the movement meets a ladder as one slab, so every race climbs the rung ladders, which small races fell through and every race could stick on (solid-ladders; unit tests, and Upper and Lower Guk with `EQ_GAME_DIR`). Checked live (stock PEQ test server, 2026-11-18) (Upper Guk, Cabilis East's canal ladder, a gnome illusion).
 - [x] Complete five-word armor records across spawn/wear/save/preview paths, Hero's Forge category and membership filters, and Drakkin illusion feature updates; unit and mock packet tests.
 - [x] Resolve modern Hero's Forge aliases in an armor-only cache and carry their native surface maps and layer parameters into modern actor lighting; collision, cache-order, material and asset regressions.
 - [ ] Compare modern Hero's Forge fits across races/genders, animations, previews and illusion/equipment transitions against the original client; offline renders do not establish complete live acceptance.
@@ -232,7 +295,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] Fog and haze: eased between places, the sky's colour, a storm band, lightning (e069ae2). The original's area fog has no data in either install.
 - [x] Weather transitions over tens of seconds (e069ae2).
 - [x] Sky: a tilted sun path, ozone, ambient from the sky model, a colour grade (09624d4). Rough: dense forest shade, red dusk haze in lopingplains/commons, everfrost flat, befallen blue.
-- [x] Volumetric clouds over the atmosphere (`display.volumetric_clouds`): marched at half size, a quarter of it a frame, the weather's storm closing them over (volumetric-clouds; unit tests for the maths, viewer screenshots; not yet in a live session). Open: cloud shadows on the ground, god rays through the clouds, measuring the cost on an integrated GPU.
+- [x] Volumetric clouds over the atmosphere (`display.volumetric_clouds`): marched at half size, a quarter of it a frame, the weather's storm closing them over (volumetric-clouds; unit tests for the maths, viewer screenshots; seen in a live session (stock PEQ test server, 2026-11-18)). Open: cloud shadows on the ground, god rays through the clouds, measuring the cost on an integrated GPU.
 - [x] EQG: water reflects the drawn sky and the noswap environment maps, modern lava (crust, LavaH walls), blood/coloured falls, foam only on rising floors, animated texture sidecars, the one unpainted heightmap tile (scorchedwoods) (look-surfaces). Open: heightmap lighting colour, glow maps in the classic look, planar reflections, TAA.
 - [x] Upscaling: a render scale (`display.render_scale`, 50 .. 100 %) with AMD FSR 1 (EASU + RCAS, `display.sharpness`) (render-scale; zone viewer with validation, not seen in game or with /viewport).
 - [x] Hailstone Texture Studio: HD texture packs built from the player's files on their GPU (ncnn Vulkan, the PBRify models), a tool add-on of its own repository (projecthailstone/hailstone-texstudio) built on `src/texpack`; the add-on manager's tool kind (docs/addons.md "Tools") installs and starts it; Options and the login screen's More options pick the pack (from the next start); Options starts the studio (texstudio-addon; unit tests with stand-in models and GitHub in memory, one zone built on an RX 9060 XT and compared with the PyTorch pack). Open: an install from the real GitHub on Windows; measure an integrated GPU (Intel Iris Xe), NVIDIA and Windows' drivers; the 17 live textures the decoder cannot read; a pack's settings changing without a new pack; a pack applied without a restart.
@@ -287,7 +350,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] The manifest and GitHub link parsers, the library header reader; unit and fuzz tests; `tools/make_addon.py`, and `hailstone_sign` for add-on manifests.
 - [x] Install and uninstall from a GitHub link on the login screen, scripts and plugins (content rules, the Lua and library checks, `addons/installed.txt`, a journaled install undone when cut off); the server's own listed and not removable; the Modern pack's card, the Gamepad pack's page and the client's own window.
 - [x] The add-on store: every add-on of the signed add-on index, with its manifest (held to the index's name and key), Install through its install card; the Modern pack's add-ons card beside the characters card (tests/addon_index_test.cpp, tests/lua_ui_pregame_test.cpp, tests/ui_pack_windows_test.cpp, tests/dev_ui_test.cpp). Open: listing the real index live, and lines in the index for the add-ons beyond Project Triune's.
-- [x] Lua Scripts window (`ScriptsWnd`, both packs, the EQ menu's Lua Scripts row, Gamepad More > Lua Scripts): every script in the folders with its state, Run / Stop / Pause, the reason a script may not run, and a per-character Autorun list (`scripts.ini`) started at the login's zone-in, not again at a zone change. Unit tests (the scan, the autorun file, the rules through a zone change) and both packs drawn headless with a script host. Open: tried in a live session in both packs (a script autorun at login and kept running across a zone line).
+- [x] Lua Scripts window (`ScriptsWnd`, both packs, the EQ menu's Lua Scripts row, Gamepad More > Lua Scripts): every script in the folders with its state, Run / Stop / Pause, the reason a script may not run, and a per-character Autorun list (`scripts.ini`) started at the login's zone-in, not again at a zone change. Unit tests (the scan, the autorun file, the rules through a zone change) and both packs drawn headless with a script host. Tried live in both packs (stock PEQ test server, 2026-11-18): an autorun script started once at login and kept running across a zone line; Run, Stop and Pause.
 - [x] The manifest's `caps` as a ceiling on what an installed add-on gets (`plugin::Policy::set_ceilings`).
 - [x] Plugin and add-on windows confined in the UI's Lua state: their own globals, `hs` / `ui` / the libraries read-only, their code (and every `hs` function they took) run under their capabilities, text-only loads, `dofile` kept to the plugin's and the pack's folders (tests/lua_folders_test.cpp, tests/lua_ui_pregame_test.cpp).
 - [x] An update's approval holds only for the capabilities and version the player saw (tests/addon_manager_test.cpp).
@@ -310,6 +373,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] `mq.TLO` values' metatable locked, so a script cannot swap in a `__gc` (tests/mq_lua_test.cpp).
 - [x] MQ's `Math` TLO (its Calculate arithmetic), `If` and `Range`, and the rest of MQ's int, float and string members, with MQ's edge cases (`mq/calc.h`; tests/mq_calc_test.cpp, tests/mq_tlo_test.cpp).
 - [x] Spawn searches follow MacroQuest's words and matching rules: spawn types, pets, 3D radius, named test, group, raid, guild, xtarget, light, player state (`mq/spawn_search.h`; tests/mq_tlo_test.cpp).
+- [x] The alerts key (CMD_HISTORIC_ALERTS, __ExecuteCmd case 168) toggles AlertHistoryWnd in both packs, listed with its Shift+H default (unit tests; seen live in the Modern pack on the stock PEQ test server).
 - [ ] MacroQuest's alert lists (`/alert`, and the spawn search's `alert`, `noalert`, `nearalert`, `notnearalert`): none kept yet, so those words act as with an empty list.
 - [ ] The spawn search's `next` / `prev` (MacroQuest's `/target next`, cycling from the current target through the matching spawns): accepted and ignored.
 - [x] `mq.event` patterns match as MacroQuest's Lua events do (Blech): case-insensitive, every `#...#` up to the first place the next literal is, `#name#`, `|${...}|`, `##` / `||`, arguments by number with gaps, item links shown as their text unless `keepLinks` (`mq/event_pattern.h`; tests/mq_event_pattern_test.cpp).
@@ -333,6 +397,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [ ] Trace and fix the upstream gamepad all-pack smoke test's cursor-extent assertion with ImGui debug checks enabled (docs/unknowns.md "UI").
 
 - [x] Group role controls in both packs: right-click member names or the player's own name (Y on a gamepad Group window row), with server-confirmed role icons beside names in the Group and Player windows; leader-only Main Tank / Main Assist / Puller changes, with mercenaries restricted to tank. Unit and mock-server coverage; live gameplay remains unverified.
+- [x] AA names missing from dbstr_us.txt (a live folder's renumbered titles, gaps in a server's export): the windows show the spell's name, else "Ability <group>" (GameConnection::aa_display_name; plugins and /alternateadv list keep the raw title). Unit test; seen live on the stock PEQ test server.
 - [x] Modern AA window: aligned headers and rows at the dialog's scale, current-frame column bounds, saved column resizing, clipped cells and Reset columns (UI input tests; live acceptance pending).
 - [x] Hover respawn: validate availability; recover same-zone player identity, placement and resources; handle resurrection confirmation, server timeout and disconnect safely. Both UI packs and loopback packet sequences have regressions; live gameplay acceptance remains outstanding.
 - [x] Modern Quest Journal and independent Quest Tracker: compact tracked-first Active and History pages, with shared tasks included in Active; a Shared members popup for the native roster, member roles and permission-gated membership/leader actions; Objectives/Description/Rewards sections, individual hidden objective rows with native group separators, and per-character tracking flags. The tracker reads authoritative active tasks while the journal is closed and uses the shared HUD move/resize/lock/roll-up behavior. Packet-driven and headless UI tests; live quest updates across zoning, shared roster updates and membership actions, and mouse interaction still to check.
@@ -394,7 +459,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [ ] Waypoints and an in-client mesh editor (areas and links in a shareable per-zone file).
 - [x] Swimming: water surfaces in the mesh, the look pitch steered while swimming (breath, diving, climbing out).
 - [x] Zone lines marked exactly into the mesh; a walk stops before stepping into one (seen live at Oasis / North Ro).
-- [ ] Swimming live end to end (a long swim, diving, climbing out); levitation paths.
+- [ ] Levitation paths. Swimming live end to end checked (stock PEQ test server, 2026-11-18): a long swim in Qeynos harbour, diving and climbing out; the jump key under water needs a real keyboard's key repeat to judge.
 
 ## Item comparison (docs/item-compare.md)
 - [x] The item against what the player wears, on a copy of the sheet through the stat rules (caps, recommended level, the shown AC and ATK); the slot choice (pairs, two-handers, the secondary); effects gained and lost; why it cannot be used; the class-weighted verdict; `hs.CompareItem` / `CompareSlotItem` / `CompareBagSlotItem`; both packs' tooltips, panels and item displays; Options (unit, bridge and pack tests).
@@ -416,21 +481,27 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 ## 4. Check live (implemented, not confirmed)
 
 - [x] Shift-click / Ctrl-click quantity flags (checked live).
+- [x] Modern quantity dialog: opened again for another request while its box has the keyboard, the box shows the new amount (headless ImGui test).
 - [x] Equip slot availability (the profile's slot mask) and auto-inventory's use check, ported.
 - [x] Guilds tried live with a GM-made guild (2026-10-29): invites across zones, chat, MOTD, ranks and permissions, notes, alts, leader change, the guild bank; the join, leave and rank lines and the nameplate's show-guild flag fixed. Open: a second member's view of the guild bank; /guildwar and /guildpeace are only logged by EQEmu.
-- [x] The guild window's Tribute page (each member's tribute and trophy states, donations, last donation; the opt-out buttons) and Banner page (as the original shows it without banner messages, which EQEmu never sends). Checked live on the NMS dev server (2026-10-31) with a GM-made guild of two: the leader's OptOut for the member (`guild_tribute_opt_out`) came back as OP_GuildOptInOut to both and updated the member's row (tribute on to off, `guild_members.tribute_enable` 0), and the Tribute Benefit window's button (`guild_tribute_opt`) opted the member in, out and in again (playprobe `--tribute-opt-out`, `--tribute-cycle`). The Banner page was not tried live. Open: the banner requests and editing (docs/unknowns.md).
+- [x] The guild window's Tribute page (each member's tribute and trophy states, donations, last donation; the opt-out buttons). Checked live on the NMS dev server (2026-10-31) with a GM-made guild of two: the leader's OptOut for the member (`guild_tribute_opt_out`) came back as OP_GuildOptInOut to both and updated the member's row (tribute on to off, `guild_members.tribute_enable` 0), and the Tribute Benefit window's button (`guild_tribute_opt`) opted the member in, out and in again (playprobe `--tribute-opt-out`, `--tribute-cycle`).
+- [x] Guild banners in both UI packs: server kit and status replies, filtered refresh, placement, removal and
+  design edits with the modification item. Planted actors use the received patterns and colours.
+- [ ] Guild banners: verify editing, planting, removal, benefits and Guild Hall portal travel on a banner-capable
+  server (docs/unknowns.md).
 - [x] A raid of 18 and the raid MOTD button: checked live on the NMS dev server (2026-10-31): 17 headless characters invited by `/raidinvite`, every client's list reached 18, and the leader's MOTD reached all 17 members ("Raid MOTD: ...") (playprobe `--raid-size`, `--raid-motd`, `--raid-accept`). Open: zoning in, the leader printed "<name> joined the raid." for each of the 17 members (docs/unknowns.md).
 - [x] Gamepad pack: after B closes a Tip window opened over the merchant, the pad dropped to game mode and the merchant window no longer took it: the merchant and the Tip asked for the pad in the same frame and only the last request was kept. Every request is kept now, and the window under a closed one takes the focus back; checked live on the NMS dev server (2026-10-31): after the Tip, RB reached the merchant's Parcels page.
 - [x] Melee sounds (the cues fire with the right waves; not listened to).
 - [x] Augment appearance-slot gating: checked live on the NMS dev server (2026-10-31): with game feature 0x15 on (the client's setting for EQEmu accounts), a Tricorne Hat Ornament (aug type 21) into a Cloth Cap's type-21 socket was not refused (no 5485), went out as OP_AugmentItem and EQEmu stored it (`inventory.augment_six`); the client showed it in socket 6. The refusal with the feature off is unit-tested only (docs/unknowns.md).
+- [ ] A server's class names (`set_class_name`, docs/plugins.md "Class names") in a live session: a plugin that names classes on its server's hello, then every window that names a class (both UI packs), `/who`, camping to character select and back, and logging in to another server with the plugin still loaded (the names must go). Unit, plugin and script tests only. Open: the stock-layout windows' own class labels (the XML's "WAR" check box labels in the group search and looking-for-guild windows) keep the stock names.
 - [ ] OP_Weblink from a quest's `SendWebLink`, `/url` from a script, and the browser window (`/web`), in a live session (unit and window tests only).
 
 - [ ] Idle appearances freed during a zone (render/look_eviction.h, five minutes unworn): watch a busy hub for an hour (the log's "freed N idle appearances", the GPU memory), and a spawn coming back after its look went (dressed again on the worker). The rule is unit-tested; the renderer side was only built.
 - [ ] Free the texture slots of freed appearances too: a freed look keeps its textures (slots are shared between looks), so unique armour and illusion textures still build up over a long stay in a hub. Reference-count each slot by the GpuModels that read it and free one no live model reads, after kFramesInFlight.
 - [ ] A GPU without a sampleable D32_SFLOAT depth attachment (the D32_SFLOAT_S8_UINT / D24_UNORM_S8_UINT fallback, now with `separateDepthStencilLayouts`) under the validation layers; and ObjectRenderer's instance flush on a driver with non-coherent host memory. Neither was run on such hardware.
 
-- [ ] The 60 Hz game clock in a live session: jumps, falls and fall damage, /follow and the camera at 30, 60, 144 and uncapped; turning and strafing feel; a zone's load (a dropped stretch).
-- [ ] The cameras 1..5 (docs/mechanics.md "Cameras") in a live session: each one's place, the sweep against walls and doors, mouse look and the camera keys in each, riding and sitting (the tether's bone 0). Unit tests only so far.
+- [ ] The 60 Hz game clock in a live session: /follow and camera smoothness at each rate, strafing feel. Checked live (stock PEQ test server, 2026-11-18): jumps, falls and fall damage the same at 30, 60, 144 and uncapped, turning, a stalled zone load.
+- [ ] The cameras 1..5 (docs/mechanics.md "Cameras") in a live session: each one's place, the sweep against walls and doors, mouse look and the camera keys in each, riding and sitting (the tether's bone 0). Each one's place, the wall sweep and sitting checked live (stock PEQ test server, 2026-11-18); mouse look, doors and riding still open.
 - [x] Knockout selects overhead and restores the saved camera on recovery; drunkenness at 70 and above selects first person and widens the FOV (regression coverage). Open: live acceptance, missile camera 8 and camera restore after zoning.
 
 ## Code health

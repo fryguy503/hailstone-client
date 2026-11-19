@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "app/addon_install.h"
@@ -58,6 +59,10 @@ std::vector<AddonSuggestion> required_addon_suggestions(
 
 // Opens the local review panel and prefills a required source. Fetching its manifest still needs the player's
 // Review action, just like any other add-on link; presenting a failed login never contacts that repository.
+// The log's lines for an entry the server's add-on policy refused: one for each problem, else `message` alone (an
+// upscaler, a required add-on that did not start).
+std::vector<std::string> addon_refusal_log_lines(const std::vector<AddonRequirementProblem>& problems,
+                                                 std::string_view message);
 void present_addon_requirement(ui::LoginView& view, const std::vector<AddonRequirementProblem>& problems,
                                const AddonIndex* index, std::string message);
 

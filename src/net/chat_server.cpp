@@ -50,7 +50,7 @@ AppPacket text_packet(std::uint16_t op, std::initializer_list<std::string_view> 
 // (the defaults) and connects with UdpManager_EstablishConnection(host, port, 30000). Checked in the
 // disassembly; "Params n" is the n-th dword:
 //   0xe  keepalive 44000 ms, or 14800 ms (0x39d0) with eqclient.ini [Defaults] ChatKeepAlive nonzero;
-//   0x12 no-data timeout: not set, the default 0 (none);
+//   0x12 no-data timeout: not set, the default 0 (none); Hailstone sets 60 s, a deliberate difference (below);
 //   0x13 unacknowledged-reliable timeout: not set, the default 120000 ms;
 //   0x15 multi-buffer hold: set to 0 (the default is 50 ms; the 50 ms this file once cited was that default);
 //   0x1a SessionStatRequest interval: set to 0 (none);
@@ -59,7 +59,12 @@ SessionOptions ucs_session_options(bool short_keepalive) {
     SessionOptions opt;
     opt.connect_timeout = std::chrono::milliseconds(30000);
     opt.request_interval = std::chrono::milliseconds(5000);
-    opt.idle_timeout = std::chrono::milliseconds(0);
+    // Hailstone's own, not the original's (which has none): 60 s with nothing from the chat server ends the link, and
+    // ChatServer retries it. Channel text goes through the zone, the client sends nothing reliable on this link
+    // between commands and its keepalives are unreliable, so the 30 s unacknowledged-data check alone never sees a
+    // link that has stopped delivering; a stock EQEmu UCS sends a keepalive after 9 s of its own silence
+    // (ReliableStreamConnectionManager keepalive_delay_ms), so 60 s is several missed in a row.
+    opt.idle_timeout = std::chrono::milliseconds(60000);
     opt.keepalive_interval = std::chrono::milliseconds(short_keepalive ? 14800 : 44000);
     opt.opcode_bytes = 1;
     opt.hold_time = std::chrono::milliseconds(0);
@@ -402,6 +407,14 @@ std::optional<ChatServerEvent> ChatServer::poll() {
         channels_until_disconnect_polled_ = false;
     }
     return e;
+}
+
+void ChatServer::simulate_link_loss() {
+    if (session_) session_->simulate_link_loss();
+}
+
+void ChatServer::simulate_socket_loss() {
+    if (session_) session_->simulate_socket_loss();
 }
 
 void ChatServer::disconnect() {

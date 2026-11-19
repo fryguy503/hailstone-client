@@ -9,9 +9,12 @@ local OPTIONS = {
   place = function(sw, sh, w, h) return (sw - w) / 2, (sh - h) / 2 end,
 }
 
+-- The state's record, refilled each frame rather than made anew (hs.ItemExpTransfer's `into`).
+local record = {}
+
 ui.window("Evolving Item Transfer", function()
   if not API.session.InGame() then X.reset(); return end
-  local state = API.evolving.State()
+  local state = API.evolving.State(record)
   X.sync(state)
   if not state.shown then return end
   hud.Dialog(WINDOW, "Evolving Item Experience Transfer", OPTIONS, function(_, _, _, _, s)

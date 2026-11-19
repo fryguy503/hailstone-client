@@ -16,7 +16,7 @@ namespace hailstone::render {
 // Slot zero is the old material path. EQG armor and held models opt into these surface properties in the asset loader.
 struct ActorSurface {
     glm::vec4 params{40.0f, 0.2f, 0.0f, 0.0f}; // shininess, gloss, environment strength, coverage UV scale
-    glm::uvec4 slots{}; // native normal, octahedral environment, flags, coverage/second diffuse
+    glm::uvec4 slots{}; // native normal, octahedral environment, flags, coverage/second diffuse/banner cloth tint
     glm::vec4 slide{0.0f}; // authored colour and alpha UV velocities
 };
 static_assert(sizeof(ActorSurface) == 48);
@@ -30,6 +30,7 @@ constexpr std::uint32_t kActorSurfaceGlow = 8;
 constexpr std::uint32_t kActorSurfaceCoverage = 16;
 constexpr std::uint32_t kActorSurfaceWaterFall = 32;
 constexpr std::uint32_t kActorSurfaceLava = 64;
+constexpr std::uint32_t kActorSurfaceBanner = 128;
 
 // A part drawn with the lava surface: Lava, and Lava2 as the zone draws it (zone_renderer.cpp: RegionLava2's own
 // formula is not settled). Both read e_TextureDiffuse1 and e_TextureNormal0 as their second layer and normal.

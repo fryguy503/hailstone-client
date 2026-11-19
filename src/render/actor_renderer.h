@@ -128,8 +128,10 @@ public:
 
     // The actor BuildActorForSpawn makes for a spawn's race and gender. A race without a row uses HUM / HUF
     // (NpcManager_GetModelCode); a row whose actor is not loaded gets HUM / HUF too (`human_fallback`: the
-    // spawn becomes a Human, WorldState::make_actors). `model` is null when the actor exists but has nothing
-    // to draw (`actor`, e.g. race 127's IVM), or when not even HUM / HUF is loaded (draw a box instead).
+    // spawn becomes a Human, WorldState::make_actors). `model` is null when the actor exists but its build failed
+    // (a static actor without a mesh), or when not even HUM / HUF is loaded (draw a box instead). A skeletal actor
+    // with no mesh of its own (race 127's IVM) is a model with empty geometry: its held items still dress onto its
+    // bones, and a bare one draws nothing.
     struct ModelChoice {
         std::shared_ptr<const assets::CharacterModel> model;
         bool actor = false;
@@ -233,11 +235,25 @@ public:
         float radius = 0.0f;
     };
     bool spawn_pose(std::uint32_t id, SpawnPose& out) const;
+    // The radius about the model origin, at the model's scale, used for the frustum, the shadows' reach and the
+    // picking pre-selection: the model's own, or for a body-less skeleton (race 127's IVM) its dressed items' reach
+    // (CharacterMesh::held_reach) when that is farther.
+    static float bound_radius(const assets::CharacterModel& model, const assets::CharacterMesh* mesh);
+    // An actor's bound_radius at the scale it is drawn at (a rider's is its mount's seat bone's), as prepare and
+    // spawn_bounds use it.
+    static float draw_radius(const ActorDraw& a);
+    // The radius a spell's light must lie within for the actor to be its caster or target, left out of the light's
+    // shadow (draw_point_shadow's skip_around): the model's own radius at the actor's own scale, never widened by
+    // held items or a seat frame, so a light beside an actor is not taken as inside it.
+    static float inside_radius(const ActorDraw& a);
+    // Whether an actor about `center` (draw_radius `radius`, inside_radius `inside`) casts into a point light at
+    // `light` of `light_radius`: within its reach, and with `skip_around` not lying within the actor.
+    static bool casts_point_shadow(const glm::vec3& light, float light_radius, const glm::vec3& center, float radius,
+                                   float inside, bool skip_around);
     // The same triangles in the spawn's own frame (about its position, unturned): a rigid model, such as a vehicle's
     // hull and deck, re-placed at another pose without posing it again (game/boats.h).
     bool spawn_local_triangles(std::uint32_t id, std::vector<glm::vec3>& out) const;
-    // Where it was last drawn: the model origin and a generous radius
-    // (the model's bounding radius at its scale), without posing it.
+    // Where it was last drawn: the model origin and a generous radius (draw_radius), without posing it.
     bool spawn_bounds(std::uint32_t id, glm::vec3& origin, float& radius) const;
     // The model a spawn was last drawn with (nullptr when it was not), and a bone's world matrix in that pose
     // (the bone's frame: the matrix a held item or a model point hangs from); false when the spawn was not
@@ -486,6 +502,7 @@ private:
         bool eqg = false;
         glm::vec3 center{0.0f}; // the model origin and its bounding radius at its scale
         float radius = 0.0f;
+        float inside_radius = 0.0f; // inside_radius: whether a spell's light lies within it
         float alpha = 1.0f;
     };
     std::vector<Prepared> prepared_;

@@ -24,6 +24,7 @@
 #include "core/saturate.h"
 #include "core/sha256.h"
 #include "core/windows_names.h"
+#include "game/eq_names.h"
 #include "game/item_links.h"
 #include "game/slash_commands.h"
 #include "game/world_state.h"
@@ -1823,8 +1824,7 @@ void ScriptHost::pulse() {
             luaL_traceback(s.L, s.co, err ? err : "error", 0);
             std::string trace = lua_tostring(s.L, -1);
             lua_pop(s.L, 1);
-            s.fail(trace.substr(0, trace.find('\n')));
-            log::warn("lua script {}: {}", s.name, trace);
+            s.fail(trace.substr(0, trace.find('\n')), trace); // the traceback in the log, once
         }
         m.resume_threads(s);
         --s.busy;
@@ -1938,6 +1938,7 @@ void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
             m.end(s, "stopped: it may not run here");
         } else if (caps != s.caps) {
             s.caps = caps;
+            if (!(caps & plugin::kCapExtend)) game::clear_class_name_overrides(s.class_names_owner);
             invalidate_plugin_lifecycle(s);
             m.say(std::format("[Lua] {} now may: {}", s.name, plugin::caps_text(caps)));
         }
@@ -1951,6 +1952,7 @@ void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
         } else {
             if (s.caps != r.caps) invalidate_plugin_lifecycle(s);
             s.caps = r.caps;
+            if (!(s.caps & plugin::kCapExtend)) game::clear_class_name_overrides(s.class_names_owner);
         }
     }
     m.reap();
@@ -2071,15 +2073,18 @@ bool ScriptHost::Impl::check_required_addons(std::string* problem) const {
                 return fail(s->name + " is still running a module not allowed by this server");
     }
     for (const auto& entry : m.required) {
+        // Named by its repository, as the server's add-on policy names it (docs/plugins.md).
+        const std::string who =
+            "Required add-on " + m.env.policy->required_label(plugin::FileKind::Script, entry.second, entry.first);
         if (m.env.policy->caps(plugin::FileKind::Script, entry.second, entry.first) == 0)
-            return fail("Required add-on " + entry.first + " is not permitted by this server's rules");
+            return fail(who + " is not permitted by this server's rules");
         const Script* s = m.find(entry.first);
         if (s && s->hash != entry.second)
-            return fail("Required add-on " + entry.first + " is shadowed by a different script");
+            return fail(who + " is shadowed by a different script");
         if (!s || s->stop_requested)
-            return fail("Required add-on " + entry.first + " did not remain running");
+            return fail(who + " did not remain running");
         if (s->status != Script::Status::Running)
-            return fail("Required add-on " + entry.first + (s->error.empty() ? " is not running" : ": " + s->error));
+            return fail(who + (s->error.empty() ? " is not running" : ": " + s->error));
         if (!s->started) return false;
     }
     return true;

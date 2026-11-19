@@ -79,11 +79,19 @@ WhoParse parse_who_args(const std::string& args, const WhoContext& ctx, const Eq
             // A class name prefix (1..35), then a race name prefix, unless the
             // word is a zone's short name.
             bool matched = false;
+            // The stock names first, so a word means what it does on a stock server; then a server's names for its
+            // classes (game/eq_names.h), for the same class ids.
             if (!class_set) {
                 for (std::uint32_t c = 1; c < 0x24 && !matched; ++c) {
-                    std::string n = class_name(c);
+                    std::string n = stock_class_name(c);
                     if (n.rfind("Class ", 0) == 0) continue;
                     if (iprefix(n, w)) {
+                        out.class_ = c;
+                        class_set = matched = true;
+                    }
+                }
+                for (std::uint32_t c = 1; c <= 16 && !matched; ++c) {
+                    if (auto n = class_name_override(c); n && iprefix(*n, w)) {
                         out.class_ = c;
                         class_set = matched = true;
                     }
@@ -173,6 +181,9 @@ std::uint32_t kunark_class_eqstr(std::int32_t class_id, std::int32_t level, bool
 }
 
 std::string who_class_text(const EqStrings& strings, std::int32_t class_id, std::int32_t level) {
+    // A class the server renamed (game/eq_names.h): its name, without the stock class's level titles.
+    if (class_id > 0 && class_name_override(static_cast<std::uint32_t>(class_id)))
+        return class_name(static_cast<std::uint32_t>(class_id));
     std::string out = str(strings, kunark_class_eqstr(class_id, level, false));
     if (level > 50) out += " (" + str(strings, kunark_class_eqstr(class_id, level, true)) + ")";
     return out;

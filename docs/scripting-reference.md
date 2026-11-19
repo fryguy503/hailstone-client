@@ -534,6 +534,7 @@ code. A script that registers any of these stays loaded after its main chunk ret
 | `set_flag(name [, on])` | a rule switch: `wide_item_links`, `items_any_class`, `hide_any_class`, `aa_any_level`, `aa_train_all`, `augment_classes`, `research_classes`, `focus_classes`, `backstab_either_hand`, `solo_adventure` (as [`HAILSTONE_FLAG_*`](#constants)) |
 | `set_player_classes(mask)` | the player's classes, bit c-1 for class c (multiclass) |
 | `set_character_classes(name, mask)` | a character's classes at character select; 0 removes them |
+| `set_class_name(class_id, name [, short_name])` | the server's name for a player class (1-16) and its short name ("Vanguard", "VAN"), shown wherever the client names the class; nil or `""` the stock one. Display only. At most 32 bytes and 4, no control characters, else an error. The names go when the script stops, loses `extend`, or the session leaves the server; the latest caller wins ([plugins.md "Class names"](plugins.md#class-names)) |
 | `set_pet_list{{spawn = id, class = c}, ...}` | the player's pets, when the server allows several |
 | `set_vitals{max_hp, cur_hp, max_mana, cur_mana, max_endurance, cur_endurance}` | the server's vitals in place of the client's formulas (any subset); nil clears them |
 
@@ -796,6 +797,9 @@ rectangle (`u0, v0, u1, v1`).
 | PushChatFont | ([index=2]) → — | Chat font 0..10. Pop with PopFont |
 | PopFont | () → — | Pops no more than the window's code pushed |
 | ChatFontSize | ([index=2]) → px | |
+| ChatTabStrip | (slot, x, y, width, height, scale, text, muted, accent, shadow [, rolled]) → bool | The modern chat's tab strip (colours as {r,g,b,a}); true when it took a right click. A pack's own chat window `Chat <slot>` only |
+| ChatTabMenu | (slot) → — | The chat context menu's rows inside an open popup. A pack's own chat window only |
+| ScrollChatTab | (slot, tabSlot, page, pageHeight, follow) → — | Keeps each tab's scroll place in the output child. A pack's own chat window only |
 
 #### Drawing (window draw list, or foreground)
 
@@ -843,6 +847,8 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | GameState | () → int\|nil | 1 char select, 2 char create, 5 in game; nil before | — |
 | Name | () → string\|nil | Character name | — |
 | SlotName | (slot) → string | Possessions slot name ("Primary", …) | — |
+| ClassName | (id [, short]) → string | A class's name as the client shows it, or its short name: the server's where its plugin or script named the class (`set_class_name`), else the stock one | — |
+| ClassNamesRevision | () → int | Changes whenever ClassName's answers may have | — |
 | Money | () → pp, gp, sp, cp | Carried coin | — |
 | Label | (eqType) → text [, r, g, b] | Text a game label with that EQType shows | — |
 | Gauge | (eqType) → fraction\|nil, text, value [, r, g, b] | EQType gauge: fraction 0..1, raw value (0..1000 or special negatives), tint for special values | — |
@@ -1105,7 +1111,7 @@ achievement and reward-selection APIs.
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
-| ChatWindows | () → {{slot, title, main, tells, tab, select, tellsIn, tabs={{title, unread, tell}}}} | Shown chat windows | — |
+| ChatWindows | ([into]) → {{slot, title, windowTitle, main, tells, tab, select, tellsIn, tabs={{slot, title, unread, tell, scrollbar, flash, flashColor, highlighted}}}} | Shown chat windows. `into` is refilled in place (its records are reused at the next call) | — |
 | ChatText | (slot [, version [, names [, stamps [, incremental]]]]) → version [, lines [, reset, count]] | STML lines of the tab that is up. The incremental form gives only the new lines | — |
 | ChatInfo | (slot) → font, active, default, scrollbar, here | Tab font, active, default channel, scrollbar, Always Chat Here | — |
 | ChatSubmit | (slot, text) → — | Send a typed line (goes through the command filter, so the caller's caps apply) | — |
@@ -1118,18 +1124,26 @@ achievement and reward-selection APIs.
 | ChatMenu | (slot) → — | The window's context menu at the mouse | — |
 | ChatSetAlwaysHere | (slot, on) → — | Always Chat Here | commands |
 | ChatNewWindow | ([title]) → slot\|nil | New chat window | commands |
-| ChatCloseWindow | (slot) → — | Close a window and its tabs | commands |
+| ChatCloseWindow | (slot) → — | Close a window and its tabs (not the one holding Main Chat) | commands |
 | ChatNewTab | (slot [, title]) → tab\|nil | New tab in this window | commands |
-| ChatCloseTab | (slot, tab) → — | Close a tab | commands |
+| ChatCloseTab | (slot, tab) → — | Close one tab; its channels go back to Main Chat (Main Chat itself stays) | commands |
+| ChatSplitTab | (slot, tab) → slot\|nil | Give a tab a window of its own | commands |
+| ChatJoinTab | (slot, tab, targetSlot) → bool | Move a tab to another window | commands |
+| ChatReorderTab | (slot, tab, delta) → bool | Move a tab left (negative) or right | commands |
+| ChatCombineTabs | (targetSlot) → count | Move every other window's tabs into this one | commands |
+| ChatSetWindowTitle | (slot, title) → bool | Rename the window (apart from its tabs) | commands |
+| ChatSetTabFlash | (slot, tab, on) → bool | A background tab flashes for new lines | commands |
+| ChatSetTabFlashColor | (slot, tab [, rgb]) → bool | Its colour, 0xRRGGBB; nil for red | commands |
+| ChatSetTabScrollbar | (slot, tab, on) → bool | The tab's output scrollbar | commands |
 | ChatSelectTab | (slot, tab) → — | Bring a tab up | commands |
-| ChatSetTitle | (slot, title) → — | Rename the tab | commands |
+| ChatSetTitle | (slot, title [, tab]) → — | Rename the tab that is up, or the given one | commands |
 | ChatFilters | (slot) → {{id, group, name, on, menu, parent}} | Route rows for the tab; menu and parent are stable group IDs | — |
 | ChatFilterGroups | () → {{id, parent, name}} | Filter menu hierarchy; parent 0 is the root | — |
 | ChatSetFilter | (slot, id\|groupName, on) → — | Route a channel here or back to main | commands |
 | ChatSetFont | (slot, font) → — | Tab font index | commands |
 | ChatDefaultChannels | () → {names} | Channel menu items (0-based order) | — |
 | ChatSetDefault | (slot, index) → — | Default channel for the tab | commands |
-| ChatClear | (slot) → — | Empty the tab | commands |
+| ChatClear | (slot [, tab]) → — | Empty the tab that is up, or the given one | commands |
 | ChatTellWindows | () → bool | Tells open a window per player | — |
 | ChatSetTellWindows | (on) → — | Set that | commands |
 | ChatHitModes | () → {{id, name, mode, modes={names}}} | 1..6 melee, 7 ALL, 8 direct spell damage, 9 DoT damage, 10 healing, 11 HoT healing; ALL mode is -1 when mixed | — |
@@ -1393,6 +1407,7 @@ or -1 and say so in the chat window. Only call these on the client's thread, fro
 | `server_config_dir`, `character_config_dir` | | `servers/<profile>/plugin-config/<name>/` and the character's; 0 before there is one |
 | `imgui_context()` | `ui` | for `ImGui::SetCurrentContext` (build with the client's Dear ImGui version) |
 | `set_active`, `set_flag`, `set_player_classes`, `set_character_classes`, `set_pet_list`, `set_vitals` | `extend` | as in the `hailstone` module |
+| `set_class_name(class_id, name, short_name)` | `extend` | as in the `hailstone` module; NULL or `""` the stock name; refused input changes nothing and logs a line (once). Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, set_class_name)` |
 | `get_player`, `get_spawn(id)`, `next_spawn(after_id)`, `get_spell(id)`, `get_item(slot)`, `get_buff(i)`, `get_xtarget(i)` | `read` | fill the [structs](#structs); `next_spawn` from 0 walks every spawn by id. Indexes are 0-based |
 | `eqstr(id, args, count, out, size)` | `read` | a game string with `%1`.. filled; -1 when there is none |
 | `zone_name(id, out, size)` | `read` | a zone's short name |

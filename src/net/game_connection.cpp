@@ -342,6 +342,7 @@ void GameConnection::update() {
     guild_invite_tick();
     fellowship_invite_tick();
     guild_bank_tick();
+    update_shroud_bank();
     real_estate_tick();
     adventure_frame();
     if (alarm_due_ms_ && now_ms() >= alarm_due_ms_) {
@@ -716,6 +717,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         reset_group_for_zone();
         reset_social_for_zone();
         reset_fellowship(true);
+        reset_guild_banner();
         reset_commerce_for_zone();
         reset_tribute_donations();
         reset_tribute_bonuses();
@@ -840,6 +842,15 @@ std::optional<ServerProfile> GameConnection::saved_server() const {
 void GameConnection::enter_world(const std::string& name, bool return_home) {
     if (state_ != ConnectionState::CharacterSelect) return;
     adventure_ = {};
+    reset_shroud_selection();
+    monster_mission_catalog_.reset();
+    shroud_mode_ = ShroudMode::Normal;
+    typed_shroud_mode_ = false;
+    shroud_restoring_ = false;
+    shroud_progress_available_ = false;
+    shroud_progress_.clear();
+    shroud_bank_available_ = false;
+    close_shroud_bank();
     recruiter_state_ = 0;
     character_ = name;
     {
@@ -989,6 +1000,7 @@ void GameConnection::apply_spawn(const Spawn& s) {
     a.drakkin_details = s.drakkin_details;
     a.npc_tint = s.npc_tint_id;
     a.class_id = s.class_;
+    if (s.interactive) a.banner = s.interactive->banner;
     for (std::size_t i = 0; i < 9; ++i) {
         a.material[i] = s.equipment[i].material;
         a.material_variation[i] = s.equipment[i].unknown1;
@@ -1313,11 +1325,13 @@ void GameConnection::handle_zone(const AppPacket& p) {
     Op op = from_wire(p.opcode);
     handle_ability(op, p); // only looks (net/game_connection_abilities.cpp)
     if (handle_fellowship(p)) return;
+    if (handle_guild_banner(op, p)) return;
     switch (op) {
     case Op::PlayerProfile:
         profile_ = decode_player_profile(p);
         if (profile_) drunkenness_ = static_cast<std::int32_t>(std::min(profile_->intoxication, 200u));
         if (profile_) {
+            sync_shroud_mode();
             fellowship_.vitality.normal = profile_->fellowship_vitality_normal;
             fellowship_.vitality.aa = profile_->fellowship_vitality_aa;
             pstatus_.hp = profile_->cur_hp;
@@ -1410,6 +1424,17 @@ void GameConnection::handle_zone(const AppPacket& p) {
         }
         break;
     }
+    case Op::GuildBannerAppearance:
+        if (auto update = decode_guild_banner_appearance(p)) {
+            if (auto it = world_.spawns.find(update->spawn_id); it != world_.spawns.end() && it->second.is_npc) {
+                it->second.appearance.banner = update->appearance;
+                if (it->second.name != update->name) {
+                    it->second.name = std::move(update->name);
+                    ++world_.spawn_set_serial;
+                }
+            }
+        }
+        break;
     case Op::ControlBoat:
         handle_control_boat(p);
         break;
@@ -1762,6 +1787,29 @@ void GameConnection::handle_zone(const AppPacket& p) {
     case Op::SharedTaskMemberChange:
         handle_progress(op, p);
         break;
+    case Op::ShroudSelectionWindow:
+    case Op::ShroudRespondStats:
+    case Op::ShroudRespondAbility:
+    case Op::ShroudRespondItem:
+    case Op::ShroudProgress:
+    case Op::ShroudProgress2:
+    case Op::Shroud:
+    case Op::ShroudRemove:
+        handle_shroud(op, p);
+        break;
+    case Op::MonsterMissionCatalog:
+    case Op::MonsterMissionStats:
+    case Op::MonsterMissionAbility:
+    case Op::MonsterMissionItem:
+    case Op::MonsterMissionAssignment:
+    case Op::MonsterMissionResult:
+        handle_monster_mission(op, p);
+        break;
+    case Op::AltStorage:
+    case Op::AltStorageList:
+    case Op::AltStorageNoItems:
+        handle_shroud_bank(op, p);
+        break;
     case Op::Trader:
     case Op::BecomeTrader:
     case Op::TraderShop:
@@ -2061,8 +2109,14 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 // the link (EQEmu's Handle_OP_DeleteSpawn does); then back in through world (zoning = 1).
                 chat(ChatEvent::Kind::System, "Zoning...");
                 send_zone(encode_delete_own_spawn(world_.player_id));
+                // A camp under way ends here, silently: the next zone's EnterZone runs ResetClientStateForZone(1)
+                // @0x5319f0, which clears the camp's time (0xddf8a0) and its kind (0xdd2664). Nothing reads them
+                // while zoning (a link death then is not in game).
+                camp_started_ = {};
+                camp_kind_ = 0;
                 state_ = ConnectionState::Zoning;
                 reset_fellowship(true);
+                reset_guild_banner();
                 reset_achievements();
                 reset_rewards();
                 status_ = "Leaving the zone";

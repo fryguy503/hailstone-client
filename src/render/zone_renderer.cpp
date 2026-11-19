@@ -71,32 +71,6 @@ void mark(const char* phase, std::chrono::steady_clock::time_point start) {
 }
 } // namespace
 
-// Whether a placed object is a plant the wind moves (the modern look's sway, zone.vert): it has see-through leaves or
-// blades (a masked material) and its name, or one of its materials' or textures', says what it is.
-bool is_plant(std::string_view actor, const assets::Mesh& mesh) {
-    static constexpr std::string_view kWords[] = {
-        "tree", "pine", "palm", "bush", "shrub", "plant", "fern", "grass", "leaf", "leav", "flower", "vine", "reed",
-        "willow", "oak", "branch", "weed", "cactus", "hedge", "frond", "ivy", "foliage", "sapling", "cattail",
-        "bamboo", "birch", "maple", "cedar", "spruce", "kelp", "seaweed", "bramble", "thorn"};
-    auto lower = [](std::string_view s) {
-        std::string out(s);
-        for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return out;
-    };
-    auto named = [&](std::string_view s) {
-        std::string l = lower(s);
-        for (std::string_view w : kWords)
-            if (l.find(w) != std::string::npos) return true;
-        return false;
-    };
-    bool masked = false, match = named(actor);
-    for (const auto& m : mesh.materials) {
-        masked |= m.blend == assets::BlendMode::Masked;
-        if (!match) match = named(m.name) || std::any_of(m.frames.begin(), m.frames.end(), named);
-    }
-    return masked && match;
-}
-
 float mesh_height(const assets::Mesh& mesh) {
     float lo = std::numeric_limits<float>::max(), hi = -lo;
     for (const auto& v : mesh.vertices) {

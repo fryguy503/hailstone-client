@@ -19,6 +19,7 @@
 #include "game/mechanics/character.h"
 #include "game/mechanics/sheet_builder.h"
 #include "game/mechanics/spell_gems.h"
+#include "game/spa_ids.h"
 
 #include "game/distance.h"
 #include "net/packet_io.h"
@@ -664,6 +665,39 @@ bool GameConnection::spawn_invisible(const game::Spawn& s, std::int32_t rank) co
     if (market_hidden(s)) return true;
     const auto* player = world_.player();
     return player && game::spawn_invisible(*player, s, rank, group_.has_member(s.name));
+}
+
+game::NameInvisibility GameConnection::name_invisibility(const game::Spawn& s, bool include_undead) const {
+    // PlayerClient::SetNameSpriteState @0x58e2d0 puts "(" ")" (0x9cc8cc / 0x9c5a04) round the name of a player
+    // (type 0) or a live NPC (type 1) whose HideMode (+0x338) is above 0; a corpse, and a race from 0x8cd up (its
+    // plain name), never.
+    if (s.id == 0 || s.is_corpse || s.race >= 0x8cd) return {};
+    game::NameInvisibility marks;
+    // Another spawn's +0x338 is the server's (the spawn record, then SpawnAppearance 3). The player's own is set by
+    // EQ_Character::UpdateMyVisibleStatus @0x459510 from its own effects (CalcInvisLevel @0x442770, the character's
+    // virtual +0x20): above 0 for regular invisibility (SPAs 12 and 314), -2 and -1 for invisibility versus undead
+    // and versus animals, which get no parentheses. The Hide skill does not count, and stock EQEmu sends the hider
+    // no SpawnAppearance for it: a hidden player's own name stays plain.
+    marks.normal = s.invis_rank > 0;
+    if (s.id == world_.player_id) {
+        marks.normal = marks.normal || own_effect_with(game::SPA_INVISIBILITY) >= 0 ||
+                       own_effect_with(game::SPA_IMPROVED_INVIS) >= 0;
+    }
+    // Hailstone (display.show_invis_undead, off by default; the original has no such mark): "[Name]" for
+    // invisibility versus undead the client knows of, the player's own effects or the target's OP_TargetBuffs list.
+    // Stock EQEmu's spawn invisibility rank carries regular invisibility only.
+    if (!include_undead) return marks;
+    if (s.id == world_.player_id) {
+        marks.undead = own_effect_with(game::SPA_INVIS_VS_UNDEAD) >= 0 ||
+                       own_effect_with(game::SPA_IMPROVED_INVIS_UNDEAD) >= 0;
+    } else if (s.id == world_.target_id && s.id == spells_.target_buffs_entity && spell_table_) {
+        marks.undead = std::any_of(spells_.target_buffs.begin(), spells_.target_buffs.end(), [&](const auto& record) {
+            const auto* spell = record.second.empty() ? nullptr : spell_table_->get(record.second.spell);
+            return spell && (spell->has_effect(game::SPA_INVIS_VS_UNDEAD) ||
+                             spell->has_effect(game::SPA_IMPROVED_INVIS_UNDEAD));
+        });
+    }
+    return marks;
 }
 
 void GameConnection::make_me_visible(bool appearance) {

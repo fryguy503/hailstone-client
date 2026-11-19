@@ -21,6 +21,38 @@ Use dot calls. Methods are grouped by the service they belong to, such as
 `achievements`, `map`, `scripts`, `plugins`, `pregame` and `gamepad`.
 The complete generated mapping is in [UI API Reference](ui-api-reference.md).
 
+## Chat tabs and windows
+
+`hs.UI.chat.Windows([into])` lists visible chat windows in slot order. `slot` identifies the window,
+`tab` is the selected position in `tabs`, `title` is the selected tab's label, and `windowTitle` is
+the containing window's title. Each tab's `slot` stays with that tab as it moves. Window and tab
+slots may be reused after closing. Use the current one-based position in `tabs` for tab arguments.
+Scripts that query each frame can pass a table as `into` to reuse the list and its records. Copy any
+values that need to survive the next fill.
+
+| Method | Behavior |
+| --- | --- |
+| `SplitTab(windowSlot, tab)` | Opens a separate window with the same tab and returns its window slot, or nil if it cannot split. |
+| `JoinTab(windowSlot, tab, targetWindowSlot)` | Appends and selects the tab in another window. An empty source window closes. |
+| `ReorderTab(windowSlot, tab, delta)` | Moves and selects the tab within its window. A negative offset moves left and a positive offset moves right. |
+| `CombineTabs(targetWindowSlot)` | Appends tabs from other windows and returns the number moved. |
+| `SetWindowTitle(windowSlot, title)` | Renames the containing window independently of its tab labels. |
+| `SetTabFlash(windowSlot, tab, enabled)` | Sets whether background messages highlight the tab. |
+| `SetTabFlashColor(windowSlot, tab[, rgb])` | Sets a `0xRRGGBB` highlight or restores the default red with nil or omission. |
+| `SetTabScrollbar(windowSlot, tab, enabled)` | Sets whether the tab shows an output scrollbar. Read `scrollbar` on the tab record. |
+
+`NewTab`, `SelectTab` and `CloseTab` use the same tab order. `CloseTab` closes one tab, and `CloseWindow`
+closes the window and its tabs. The window containing Main Chat is protected from closing.
+`SetTitle(windowSlot, title[, tab])` and `Clear(windowSlot[, tab])` act on the selected tab when
+the position is omitted. Moving a tab keeps its lines, channel routing and preferences. Temporary
+tell tabs can be moved during the current session.
+
+Tab records expose `unread`, the `flash` preference, the `flashColor` override (nil for red), and
+`highlighted`, which indicates whether to draw the highlight this frame. When enabled, a background
+message flashes the label at half-second intervals for five seconds, then leaves it highlighted
+until selected. `unread` also tracks new messages with flashing disabled. Mutations use the existing
+`commands` permission. Check feature availability with `hs.UI.Supports('chat', 'SplitTab')`.
+
 ## Optional world nameplate presentations
 
 `hs.UI.nameplates` is a generic drawing service, also exposed to ordinary addon scripts as
@@ -354,6 +386,15 @@ world; then it is `{serial, message, can_retry}`, the same table until the failu
 it). `PolicyAction("retry", serial)` tries the failed required add-ons again once and returns whether it did. Both
 are the client's own interfaces' alone: an add-on or hand-placed interface, and plugin or script code, get nil and
 false, and cannot replace the client's "AddonPolicy" window (docs/plugins.md "Opt-in add-on policies").
+
+## Class names
+
+API 1.7 adds `character.ClassName(id[, short])` (flat `hs.ClassName`) and `character.ClassNamesRevision()`
+(`hs.ClassNamesRevision`). `ClassName` is the class's name as the client shows it, or its short name with `short`: a
+server's own where its plugin or script named the class (`set_class_name`, docs/plugins.md), else the stock one.
+Text the client hands an interface (labels, list rows, `className` at character select) already carries those names;
+an interface that maps such text back to a class, or has its own list of class names, asks `ClassName` by id and
+keys any cache on `ClassNamesRevision()`, which changes whenever the names may have.
 
 ## Discovering optional features
 

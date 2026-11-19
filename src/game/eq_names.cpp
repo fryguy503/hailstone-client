@@ -1,8 +1,13 @@
 #include "game/eq_names.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <iterator>
+#include <mutex>
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace hailstone::game {
 
@@ -69,6 +74,46 @@ constexpr std::pair<std::uint32_t, std::string_view> kNpcClasses[] = {
 constexpr std::uint32_t kGmClassFirst = 20; // 20-35: GM trainers for classes 1-16
 constexpr std::uint32_t kGmClassLast = 35;
 
+// The server's names (set_class_name_override): each class's owners in the order they last named it, the latest
+// last. `any` spares a stock server the lock.
+struct ClassNameOverride {
+    std::uint64_t owner = 0;
+    std::string name, short_name;
+};
+struct ClassNameOverrides {
+    std::mutex mutex;
+    std::array<std::vector<ClassNameOverride>, std::size(kClasses)> classes;
+    std::atomic<bool> any{false};
+    std::atomic<std::uint64_t> revision{1};
+
+    void changed() { // under the lock
+        any.store(std::any_of(classes.begin(), classes.end(), [](const auto& v) { return !v.empty(); }),
+                  std::memory_order_release);
+        revision.fetch_add(1, std::memory_order_acq_rel);
+    }
+};
+ClassNameOverrides& overrides() {
+    static ClassNameOverrides o;
+    return o;
+}
+
+// The latest owner's names for player class `class_id` (1-16), either of which may be empty.
+std::optional<std::pair<std::string, std::string>> override_of(std::uint32_t class_id) {
+    ClassNameOverrides& o = overrides();
+    if (!o.any.load(std::memory_order_acquire) || class_id < 1 || class_id > std::size(kClasses)) return std::nullopt;
+    std::lock_guard lock(o.mutex);
+    const auto& owners = o.classes[class_id - 1];
+    if (owners.empty()) return std::nullopt;
+    return std::pair{owners.back().name, owners.back().short_name};
+}
+
+bool printable(std::string_view text) {
+    return std::none_of(text.begin(), text.end(), [](char ch) {
+        const auto b = static_cast<unsigned char>(ch);
+        return b < 0x20 || b == 0x7f;
+    });
+}
+
 } // namespace
 
 std::string race_name(std::uint32_t race_id) {
@@ -82,7 +127,7 @@ bool is_playable_race(std::uint32_t race_id) {
     return (race_id >= 1 && race_id <= 12) || race_id == 128 || race_id == 130 || race_id == 330 || race_id == 522;
 }
 
-std::string class_name(std::uint32_t class_id) {
+std::string stock_class_name(std::uint32_t class_id) {
     if (class_id >= 1 && class_id <= std::size(kClasses)) return std::string(kClasses[class_id - 1].name);
     if (class_id >= kGmClassFirst && class_id <= kGmClassLast)
         return std::string(kClasses[class_id - kGmClassFirst].name) + " Guildmaster";
@@ -91,10 +136,67 @@ std::string class_name(std::uint32_t class_id) {
     return "Class " + std::to_string(class_id);
 }
 
-std::string class_short_name(std::uint32_t class_id) {
+std::string stock_class_short_name(std::uint32_t class_id) {
     if (class_id >= 1 && class_id <= std::size(kClasses)) return std::string(kClasses[class_id - 1].abbrev);
+    return stock_class_name(class_id);
+}
+
+std::string class_name(std::uint32_t class_id) {
+    if (class_id >= kGmClassFirst && class_id <= kGmClassLast)
+        return class_name(class_id - kGmClassFirst + 1) + " Guildmaster";
+    if (auto o = override_of(class_id); o && !o->first.empty()) return std::move(o->first);
+    return stock_class_name(class_id);
+}
+
+std::string class_short_name(std::uint32_t class_id) {
+    if (class_id >= 1 && class_id <= std::size(kClasses)) {
+        if (auto o = override_of(class_id); o && !o->second.empty()) return std::move(o->second);
+        return std::string(kClasses[class_id - 1].abbrev);
+    }
     return class_name(class_id);
 }
+
+bool set_class_name_override(std::uint64_t owner, std::uint32_t class_id, std::string_view name,
+                             std::string_view short_name) {
+    if (owner == 0 || class_id < 1 || class_id > std::size(kClasses) || name.size() > kClassNameMax ||
+        short_name.size() > kClassShortNameMax || !printable(name) || !printable(short_name))
+        return false;
+    ClassNameOverrides& o = overrides();
+    std::lock_guard lock(o.mutex);
+    auto& owners = o.classes[class_id - 1];
+    std::erase_if(owners, [owner](const ClassNameOverride& e) { return e.owner == owner; });
+    if (!name.empty() || !short_name.empty()) owners.push_back({owner, std::string(name), std::string(short_name)});
+    o.changed();
+    return true;
+}
+
+void clear_class_name_overrides(std::uint64_t owner) {
+    ClassNameOverrides& o = overrides();
+    if (!o.any.load(std::memory_order_acquire)) return;
+    std::lock_guard lock(o.mutex);
+    bool erased = false;
+    for (auto& owners : o.classes)
+        erased |= std::erase_if(owners, [owner](const ClassNameOverride& e) { return e.owner == owner; }) > 0;
+    if (erased) o.changed();
+}
+
+void clear_class_name_overrides() {
+    ClassNameOverrides& o = overrides();
+    if (!o.any.load(std::memory_order_acquire)) return;
+    std::lock_guard lock(o.mutex);
+    for (auto& owners : o.classes) owners.clear();
+    o.changed();
+}
+
+std::optional<std::string> class_name_override(std::uint32_t class_id, bool short_name) {
+    auto o = override_of(class_id);
+    if (!o) return std::nullopt;
+    std::string& name = short_name ? o->second : o->first;
+    if (name.empty()) return std::nullopt;
+    return std::move(name);
+}
+
+std::uint64_t class_names_revision() { return overrides().revision.load(std::memory_order_acquire); }
 
 std::string class_list_name(std::span<const std::uint32_t> class_ids, bool abbreviate) {
     std::string out;
@@ -110,7 +212,8 @@ std::string class_mask_name(std::uint32_t mask) {
     std::string out;
     for (std::size_t c = 0; c < 16 && c < std::size(kClasses); ++c) {
         if (!((mask >> c) & 1u)) continue;
-        std::string_view a = kClasses[c].abbrev; // "WAR" -> "War"
+        const std::string short_name = class_short_name(static_cast<std::uint32_t>(c + 1));
+        std::string_view a = short_name; // "WAR" -> "War"
         if (!out.empty()) out += '/';
         out += a.substr(0, 1);
         for (char ch : a.substr(1)) out += static_cast<char>(ch >= 'A' && ch <= 'Z' ? ch - 'A' + 'a' : ch);

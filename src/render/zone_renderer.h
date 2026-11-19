@@ -17,6 +17,7 @@
 #include <glm/glm.hpp>
 
 #include "assets/object_animation.h"
+#include "assets/zone_flora.h"
 #include "render/gpu.h"
 #include "render/horizon.h"
 #include "render/lod_bands.h"
@@ -61,9 +62,8 @@ struct HorizonBuild {
     HorizonLook ground, rock;
 };
 
-// Whether a placed object is a plant the wind moves (the modern look's sway): see-through leaves or blades (a masked
-// material) and a name, of its own or of one of its materials or textures, that says so.
-bool is_plant(std::string_view actor, const assets::Mesh& mesh);
+// Whether a placed object is a plant the wind moves (the modern look's sway): assets::is_plant.
+using assets::is_plant;
 // How tall a mesh stands (its vertices' highest z less their lowest), 0 for none.
 float mesh_height(const assets::Mesh& mesh);
 // A placed plant at least this tall (its mesh's height times its placement's scale) is a tree: the land's trees are

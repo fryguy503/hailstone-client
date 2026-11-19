@@ -304,25 +304,19 @@ AppPacket encode_recipe_details_request(std::uint32_t recipe_id) {
 
 std::optional<RecipeDetails> decode_recipe_details(const AppPacket& p) {
     if (p.data.size() < 4) return std::nullopt;
-    return decode_with(p, [&](ByteReader& r) {
+    return decode_with(p, [](ByteReader& r) {
         RecipeDetails v;
         v.recipe_id = r.be<std::uint32_t>();
-        // The unused entries' 0xffffffff come first; then the components to the end.
-        std::size_t used = 4;
-        int skipped = 0;
-        while (used + 4 <= p.data.size() && skipped < 10) {
-            auto at = [&](std::size_t k) { return std::to_integer<std::uint8_t>(p.data[used + k]); };
-            if (at(0) != 0xff || at(1) != 0xff || at(2) != 0xff || at(3) != 0xff) break;
-            r.le<std::uint32_t>();
-            used += 4;
-            ++skipped;
-        }
-        while (used < p.data.size() && v.components.size() < 10) {
+        // Ten entries, as CTradeSkillWnd_HandleRecipeDetails (0x77dfd0) reads them: a big-endian 0xffffffff for an
+        // unused one, else {item id, icon, name}. Whatever follows them is not read: EQEmu since #5100 appends the
+        // recipe's trivial (big-endian u32) for a later client, and the trivial already came in OP_RecipeReply.
+        for (int n = 0; n < 10 && r.remaining() >= 4; ++n) {
+            const auto item = r.be<std::uint32_t>();
+            if (item == 0xffffffffu) continue;
             RecipeComponent c;
-            c.item_id = r.be<std::uint32_t>();
+            c.item_id = item;
             c.icon = r.be<std::uint32_t>();
             c.name = r.cstring();
-            used += 8 + c.name.size() + 1;
             v.components.push_back(std::move(c));
         }
         return v;

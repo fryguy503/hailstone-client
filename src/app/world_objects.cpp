@@ -20,6 +20,7 @@
 #include "assets/model_points.h"
 #include "assets/pfs.h"
 #include "assets/zone.h"
+#include "assets/zone_flora.h"
 #include "core/game_dir.h"
 #include "core/log.h"
 #include "game/coords.h"
@@ -234,6 +235,14 @@ const WorldObjects::Model* WorldObjects::model_for(const std::string& raw) {
     auto model = std::make_unique<Model>();
     model->gpu = renderer_->add_model(*mesh, read);
     model->shape = game::ObjectShape::from_mesh(*mesh);
+    model->plant = assets::is_plant(base, *mesh);
+    model->fire = !model->plant && assets::is_fire_object(base, *mesh);
+    if (!model->plant) {
+        // The grass's cover as the zone's own objects give it (assets::append_object_cover): its opaque surfaces,
+        // and for a fire everything it draws, for its size.
+        assets::cover_triangles(*mesh, nullptr, true, model->cover_surfaces);
+        if (model->fire) assets::cover_triangles(*mesh, nullptr, false, model->cover_drawn);
+    }
     if (!node_emitters.empty()) {
         model->emitters = std::make_unique<assets::CharacterMesh>();
         model->emitters->emitters = std::move(node_emitters);
@@ -349,7 +358,8 @@ void WorldObjects::update(const net::GameConnection& conn) {
         auto [it, fresh] = doors_.try_emplace(d.id);
         Placed& p = it->second;
         p.seen = serial;
-        if (fresh || !p.model) {
+        const bool changed = fresh || !p.model;
+        if (changed) {
             p.model = game::door_has_actor(d) ? model_for(d.name) : nullptr;
             p.visible = !game::door_is_invisible(d);
             // Invisible switches block too: only the sweep's filter's types 0x32 and 0x33 do not
@@ -364,9 +374,11 @@ void WorldObjects::update(const net::GameConnection& conn) {
         p.pick_mask = d.type == 0x37 ? 0u : 2u;
         glm::mat4 t = game::door_transform(d);
         place(p, t, d.scale());
+        if (changed) note_flora(p);
     }
     std::erase_if(doors_, [&](const auto& kv) {
         const bool gone = kv.second.seen != serial;
+        if (gone) note_flora(kv.second);
         if (gone && kv.second.model && kv.second.solid) floor_changed_ = true;
         if (gone && kv.second.model && kv.second.visible) ++visual_generation_;
         return gone;
@@ -388,9 +400,14 @@ void WorldObjects::update(const net::GameConnection& conn) {
             p.solid = false; // items and containers on the ground do not block (an assumption)
             glm::mat4 t = game::ground_object_transform(o);
             place(p, t, std::isfinite(o.size) && o.size > 0.0f ? o.size : 1.0f);
+            note_flora(p);
         }
     }
-    std::erase_if(objects_, [&](const auto& kv) { return kv.second.seen != serial; });
+    std::erase_if(objects_, [&](const auto& kv) {
+        const bool gone = kv.second.seen != serial;
+        if (gone) note_flora(kv.second);
+        return gone;
+    });
 
     // Placed real estate objects (0x1045 / 0x2a9e, game/placement.h): EQPlacedItem_CreateActor's model by
     // CreateActor's rules with its fallbacks, solid unless +0x98 (and never for NPC items, which are spawns: their
@@ -400,6 +417,9 @@ void WorldObjects::update(const net::GameConnection& conn) {
         auto [it, fresh] = placed_.try_emplace(key);
         Placed& p = it->second;
         p.seen = serial;
+        const glm::mat4 placed_at = game::placed_transform(o);
+        const bool flora_changed = fresh || placed_tags_[key] != o.tag || p.transform != placed_at;
+        if (flora_changed && !fresh) note_flora(p); // where it stood
         if (fresh || placed_tags_[key] != o.tag) {
             placed_tags_[key] = o.tag;
             p.model = o.npc_item ? nullptr : placed_model(o.tag);
@@ -411,10 +431,12 @@ void WorldObjects::update(const net::GameConnection& conn) {
         p.pick_mask = 2;
         // EQPlacedItem_CopyFrom takes a known key's new data without rebuilding the actor; the transform here
         // follows the data (whether the original's actor moves is not traced: docs/unknowns.md).
-        place(p, game::placed_transform(o), std::isfinite(o.scale) && o.scale > 0.0f ? o.scale : 1.0f);
+        place(p, placed_at, std::isfinite(o.scale) && o.scale > 0.0f ? o.scale : 1.0f);
+        if (flora_changed) note_flora(p);
     }
     std::erase_if(placed_, [&](const auto& kv) {
         const bool gone = kv.second.seen != serial;
+        if (gone) note_flora(kv.second);
         if (gone && kv.second.model && kv.second.solid) floor_changed_ = true;
         if (gone && kv.second.model && kv.second.visible) ++visual_generation_;
         return gone;
@@ -462,6 +484,44 @@ void WorldObjects::update(const net::GameConnection& conn) {
         instances_.push_back({ghost_->model->gpu, ghost_->transform, Objects::make_motion_key(4, 0)});
         add_object_emitters(*ghost_);
     }
+}
+
+void WorldObjects::note_flora(const Placed& p) {
+    if (!p.model || !p.visible || !(p.bound > 0.0f)) return;
+    const glm::vec2 c(p.center);
+    flora_changes_.emplace_back(c - p.bound, c + p.bound);
+}
+
+std::function<bool(const glm::vec3&)> WorldObjects::flora_cover(glm::vec2 lo, glm::vec2 hi) const {
+    std::vector<glm::vec3> tris, drawn, surfaces; // 3 a triangle, in the world
+    const auto gather = [&](const auto& objects) {
+        for (const auto& [id, p] : objects) {
+            if (!p.model || !p.visible || p.center.x + p.bound < lo.x || p.center.y + p.bound < lo.y ||
+                p.center.x - p.bound > hi.x || p.center.y - p.bound > hi.y)
+                continue;
+            if (p.model->plant) continue; // the grass grows under a bush
+            if (p.flora_model != p.model || p.flora_at != p.transform) {
+                drawn.clear();
+                surfaces.clear();
+                for (const glm::vec3& v : p.model->cover_drawn) drawn.emplace_back(p.transform * glm::vec4(v, 1.0f));
+                for (const glm::vec3& v : p.model->cover_surfaces)
+                    surfaces.emplace_back(p.transform * glm::vec4(v, 1.0f));
+                // A small, low fire (a campfire) covers its footprint; anything else its opaque surfaces.
+                p.flora_tris.clear();
+                assets::append_object_cover(drawn, surfaces, p.model->fire, p.flora_tris);
+                p.flora_model = p.model;
+                p.flora_at = p.transform;
+            }
+            tris.insert(tris.end(), p.flora_tris.begin(), p.flora_tris.end());
+        }
+    };
+    gather(doors_);
+    gather(objects_);
+    gather(placed_);
+    if (tris.empty()) return {};
+    auto cover = std::make_shared<const assets::ObjectCoverTris>(tris, lo, hi);
+    if (cover->empty()) return {};
+    return [cover](const glm::vec3& at) { return cover->covered(at); };
 }
 
 void WorldObjects::add_object_emitters(Placed& placed) {

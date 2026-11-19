@@ -214,6 +214,11 @@ constexpr std::uint32_t kRaceAbbr[17] = {0xbea, 0xbeb, 0xbec, 0xbed, 0xbee, 0xbe
 // The class abbreviations (0xb2bb98).
 constexpr std::uint32_t kClassAbbr[16] = {3065, 3066, 3067, 3069, 3068, 3070, 3071, 3072,
                                            3073, 3074, 3075, 3076, 3077, 3078, 3079, 5810};
+// A class's abbreviation (by bit): the string table's, or the server's short name for it (game/eq_names.h).
+std::string class_abbr(const ItemDisplayContext& ctx, int bit) {
+    if (auto own = class_name_override(static_cast<std::uint32_t>(bit + 1), true)) return *own;
+    return str(ctx, kClassAbbr[bit]);
+}
 // The slot names by slot (0xa02238; 0x9ebaf8 maps the position to the slot, itself).
 constexpr std::uint32_t kSlotNames[23] = {5776, 559, 560, 561, 559, 562, 563, 564, 565, 566, 566, 567,
                                            568, 569, 570, 571, 571, 572, 573, 574, 575, 9178, 576};
@@ -465,7 +470,7 @@ std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
                 std::string levels;
                 for (int k = 0; k < 16; ++k)
                     if (item.classes & (1u << k))
-                        levels += std::format("{}({}) ", str(ctx, kClassAbbr[k]), s->class_level[static_cast<std::size_t>(k)]);
+                        levels += std::format("{}({}) ", class_abbr(ctx, k), s->class_level[static_cast<std::size_t>(k)]);
                 if (!levels.empty()) {
                     auto line = ctx.level_needed_line ? ctx.level_needed_line(*s) : std::nullopt;
                     c += (line ? *line : str_args(ctx, 0xbbc, {levels})) + "<BR>";
@@ -574,7 +579,7 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
         t.a = str(ctx, 0xbf8);
         for (int k = 0; k < 16; ++k)
             if (item.classes & (1u << k)) {
-                (t.count < 8 ? t.a : t.b) += str(ctx, kClassAbbr[k]) + " ";
+                (t.count < 8 ? t.a : t.b) += class_abbr(ctx, k) + " ";
                 ++t.count;
             }
         if (t.count == 0) t.a += str(ctx, 0x4c0);

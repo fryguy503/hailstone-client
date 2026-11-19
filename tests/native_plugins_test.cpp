@@ -563,6 +563,7 @@ TEST_CASE("native plugins: the server's compiled plugin waits for the player's y
     CHECK(q->files[0].name == "MQ2Example");
     CHECK(q->files[0].file == h.file);
     CHECK(q->files[0].size == size);
+    CHECK_FALSE(q->files[0].required_addon); // the server's own: "Allow this server's plugin?"
     CHECK(q->files[0].sha256 == h.hash());
     CHECK(h.printed_line("[Plugin] MQ2Example waits for your answer: this server's compiled plugins load only once "
                          "you allow them"));
@@ -733,6 +734,7 @@ TEST_CASE("native plugins: required managed plugins autoload with consent and st
     h.policy.set(rules);
     h.plugins->policy_changed({}); // neither autoload nor a server-delivered file
     REQUIRE(h.plugins->consent());
+    CHECK(h.plugins->consent()->files[0].required_addon); // the player's own add-on, which the server requires
     CHECK_FALSE(h.plugins->loaded("MQ2Example"));
     std::string problem;
     CHECK_FALSE(h.plugins->required_addons_ready(&problem));
@@ -910,7 +912,7 @@ TEST_CASE("native plugins: a required plugin that throws in the world is a warni
     h.run("/probethrow"); // the command's callback lets an exception out
     std::string problem;
     CHECK_FALSE(h.plugins->required_addons_ready(&problem)); // seen although nothing else changed
-    CHECK(problem == "Required add-on hostprobe failed with an error in a command");
+    CHECK(problem == "Required add-on owner/probe failed with an error in a command");
     auto r = frame();
     CHECK(r.step == app::AddonAdmission::Step::Play); // never a disconnect or a hold
     CHECK(r.warning == problem);
@@ -952,7 +954,7 @@ TEST_CASE("native plugins: Retry reloads a required plugin that threw, once, and
 
     h.run("/probethrow");
     CHECK_FALSE(frame().warning.empty());
-    CHECK(admission.failure() == "Required add-on hostprobe failed with an error in a command");
+    CHECK(admission.failure() == "Required add-on owner/probe failed with an error in a command");
     CHECK(admission.failure_retriable()); // the running add-ons said so: Retry may help
     CHECK(admission.failure_serial() != quiet);
     const auto failed = admission.failure_serial();
@@ -970,7 +972,7 @@ TEST_CASE("native plugins: Retry reloads a required plugin that threw, once, and
     CHECK(h.plugins->retry_required_addons() == 0); // once: nothing failed now
 
     h.run("/probethrow"); // a new failure after the retry is warned about again
-    CHECK(frame().warning == "Required add-on hostprobe failed with an error in a command");
+    CHECK(frame().warning == "Required add-on owner/probe failed with an error in a command");
     CHECK(admission.admitted());
 }
 

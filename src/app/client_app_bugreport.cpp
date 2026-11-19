@@ -107,7 +107,7 @@ void ClientApp::fill_bug_report(BugReport& r) {
         const auto& w = conn_->world();
         if (const game::Spawn* me = w.player()) {
             facts.emplace_back("Character", std::format("{}, level {} {} {}", conn_->character_name(), me->level,
-                                                         game::race_name(me->race), game::class_name(me->class_id)));
+                                                         game::race_name(me->race), game::stock_class_name(me->class_id)));
             facts.emplace_back("Zone", std::format("{} ({}, id {}, instance {})", w.zone_long_name, w.zone_short_name,
                                                    conn_->zone_id(), conn_->zone_instance()));
             const glm::vec3 at = game::world_to_server(me->position);
@@ -116,7 +116,7 @@ void ClientApp::fill_bug_report(BugReport& r) {
         if (auto it = w.spawns.find(w.target_id); it != w.spawns.end()) {
             const game::Spawn& t = it->second;
             facts.emplace_back("Target", std::format("{} (id {}, level {} {} {})", t.name, t.id, t.level,
-                                                     game::race_name(t.race), game::class_name(t.class_id)));
+                                                     game::race_name(t.race), game::stock_class_name(t.class_id)));
         }
     }
     // The window's own (the place it took) after the client's.

@@ -560,9 +560,17 @@ function hud.Window(screen, title, opts, body)
         -- a frame that lays itself out from the drag (opts.onResize: the hot bars' whole buttons) takes the mouse's
         -- size as it is and shows no grid: its own rounding would put it off the grid lines anyway
         local snaps = not opts.onResize
-        local setSize = function(nw, nh, grid)
-          if opts.onResize then opts.onResize(nw, nh)
-          else ui.SetSetting(k.size, string.format(grid and "%.3f,%.3f" or "%.0f,%.0f", nw, nh)) end
+        -- Made once for the frame and kept in its state (a new function each frame was garbage for every resizable
+        -- window); it reads this frame's options from there.
+        st.sizeOpts = opts
+        local setSize = st.setSize
+        if not setSize then
+          setSize = function(nw, nh, grid)
+            local o = st.sizeOpts
+            if o.onResize then o.onResize(nw, nh)
+            else ui.SetSetting(st.keys.size, string.format(grid and "%.3f,%.3f" or "%.0f,%.0f", nw, nh)) end
+          end
+          st.setSize = setSize
         end
         frameEdge(st, "##resizeright", wx + w - e, wy, wx + w, wy + h - g, true, s, minW, minH, snaps, setSize)
         frameEdge(st, "##resizebottom", wx, wy + h - e, wx + w - g, wy + h, false, s, minW, minH, snaps, setSize)

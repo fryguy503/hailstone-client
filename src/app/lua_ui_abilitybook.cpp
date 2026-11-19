@@ -163,14 +163,9 @@ bool beneficial_skill(std::uint32_t skill) {
     }
 }
 
-// An owned AA's name as listed: its rank's title, else (an activated one) its spell's, else "Ability <group>".
-std::string aa_entry_name(const net::GameConnection& c, const game::AltAbility& a) {
-    std::string name = c.aa_name(a);
-    if (name.empty() && a.activated())
-        if (const game::SpellData* s = c.spell_table().get(static_cast<std::uint32_t>(a.spell))) name = s->name;
-    if (name.empty()) name = std::format("Ability {}", a.group);
-    return name;
-}
+// An owned AA's name as listed: its rank's title, else (an activated one) its spell's, else "Ability <group>"
+// (GameConnection::aa_display_name).
+std::string aa_entry_name(const net::GameConnection& c, const game::AltAbility& a) { return c.aa_display_name(a); }
 
 // The readiness fields the Ability Book shows, ability_state returns and get_ability_data_bulk gives, in whole
 // seconds: one definition so the three cannot drift apart.

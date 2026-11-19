@@ -51,8 +51,9 @@ function M.new(look)
       children[parent][#children[parent] + 1] = entry.value
     end
   end
+  local record = {} -- the state's record, refilled each call rather than made anew (hs.Achievements' `into`)
   function B.readState()
-    local state = API.achievements.List(catalogToken, stateRevision)
+    local state = API.achievements.List(catalogToken, stateRevision, record)
     if not state then B.reset(); return nil end
     if state.message ~= serverMessage then actionMessage = nil; serverMessage = state.message end
     if catalogToken ~= state.catalog_token then

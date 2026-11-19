@@ -145,6 +145,11 @@ void ClientApp::load_zone(const std::string& short_name) {
         }
         flora_renderer_.reset();
         if (!zone_->flora.empty()) flora_renderer_ = std::make_unique<render::FloraRenderer>(vk_, *zone_, shader_dir_);
+        // The grass keeps off the server's doors and objects and the campfires as well as the zone's own objects.
+        flora_campfires_.clear();
+        if (world_objects_) world_objects_->take_flora_changes(); // the last zone's: no tile is grown yet
+        if (flora_renderer_)
+            flora_renderer_->set_cover([this](glm::vec2 lo, glm::vec2 hi) { return flora_cover(lo, hi); });
         mark("flora renderer");
         point_shadows_.reset();
         if (spell_particles_) spell_particles_->clear();
@@ -1204,6 +1209,49 @@ void ClientApp::update_missiles() {
             return bolts && bolts->follows(serial);
         });
     }
+}
+
+
+void ClientApp::update_flora_cover() {
+    if (!flora_renderer_) return;
+    // The doors and objects that came, went or moved: the grass round them grows again.
+    if (world_objects_)
+        for (const auto& [lo, hi] : world_objects_->take_flora_changes()) flora_renderer_->regrow(lo, hi);
+    // The campfire spawns (race 567) standing now, by their feet; they do not move, so a list that differs from the
+    // last frame's means one came or went.
+    std::vector<assets::CoverDisc>& fires = flora_campfires_now_; // capacity kept
+    fires.clear();
+    if (conn_)
+        for (const auto& [id, s] : conn_->world().spawns)
+            if (s.race == game::Race::Campfire)
+                fires.push_back(
+                    assets::campfire_cover(s.position - glm::vec3(0.0f, 0.0f, s.heights.avatar_height), s.size));
+    if (fires == flora_campfires_) return;
+    const auto regrow_missing = [&](const std::vector<assets::CoverDisc>& from,
+                                    const std::vector<assets::CoverDisc>& in) {
+        for (const auto& d : from)
+            if (std::find(in.begin(), in.end(), d) == in.end())
+                flora_renderer_->regrow(glm::vec2(d.feet) - d.radius, glm::vec2(d.feet) + d.radius);
+    };
+    regrow_missing(flora_campfires_, fires); // gone
+    regrow_missing(fires, flora_campfires_); // came
+    std::swap(flora_campfires_, fires);
+}
+
+std::function<bool(const glm::vec3&)> ClientApp::flora_cover(glm::vec2 lo, glm::vec2 hi) const {
+    // Called as a tile grows (FloraRenderer::draw, maybe on a recording thread): the test copies what it needs.
+    std::function<bool(const glm::vec3&)> objects = world_objects_ ? world_objects_->flora_cover(lo, hi) : nullptr;
+    std::vector<assets::CoverDisc> fires;
+    for (const auto& d : flora_campfires_)
+        if (d.feet.x + d.radius >= lo.x && d.feet.y + d.radius >= lo.y && d.feet.x - d.radius <= hi.x &&
+            d.feet.y - d.radius <= hi.y)
+            fires.push_back(d);
+    if (fires.empty()) return objects;
+    return [test = std::move(objects), discs = std::move(fires)](const glm::vec3& at) {
+        for (const auto& d : discs)
+            if (d.covers(at)) return true;
+        return test && test(at);
+    };
 }
 
 } // namespace hailstone::app::client_internal

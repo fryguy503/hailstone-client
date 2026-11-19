@@ -36,8 +36,10 @@
 #include "net/evolving_packets.h"
 #include "net/group_packets.h"
 #include "net/merchant_packets.h"
+#include "net/packet_io.h"
 #include "net/social_packets.h"
 #include "net/spell_packets.h"
+#include "net/task_packets.h"
 #include "game/mechanics/character.h"
 #include "game/mechanics/tables.h"
 #include "ui/dev_screens.h"
@@ -3179,6 +3181,178 @@ TEST_CASE("UI packs: each claims the achievement and reward windows while they a
     }
 }
 
+TEST_CASE("UI packs: server shroud catalogs and storage draw in both packs") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        CAPTURE(pack);
+        test::ScratchDir scratch("ui_pack_shroud_test");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
+                 fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        {
+            test::Rig rig;
+            REQUIRE(rig.to_zone());
+            Session s(dir, pack);
+            s.host.conn = &rig.conn;
+            lua_State* L = s.lua.state();
+            auto run = [&](const char* code) {
+                INFO(code);
+                const int result = luaL_dostring(L, code);
+                INFO((lua_tostring(L, -1) ? lua_tostring(L, -1) : ""));
+                REQUIRE(result == LUA_OK);
+                lua_settop(L, 0);
+            };
+            auto offer = [&](std::uint32_t context) {
+                ByteWriter payload;
+                payload.le(context);
+                payload.zeros(8);
+                net::detail::write_cstring(payload, "PROGRESSION\a" "12\a" "Scouts\a" "Scout forms\a"
+                    "BRANCH\a" "44\a" "Trackers\a" "Track a target\a" "50\a"
+                    "TEMPLATE\a" "Kobold\a" "391\a" "20\a" "1\a"
+                    "TEMPLATE\a" "Gnoll\a" "392\a" "25\a" "0");
+                rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::ShroudSelectionWindow, std::move(payload)));
+            };
+            auto drawn = [&](std::string title, std::string_view screen) {
+                if (std::string_view(pack) == "modern") title += "###modern." + std::string(screen);
+                const auto* window = ImGui::FindWindowByName(title.c_str());
+                return window && window->WasActive;
+            };
+            s.frames(2);
+            CHECK_FALSE(s.api.shown("ProgressionSelectionWnd"));
+            offer(0);
+            s.frames(2);
+            CHECK(s.api.shown("ProgressionSelectionWnd"));
+            CHECK(s.api.replaces("ProgressionSelectionWnd"));
+            CHECK(drawn("Spirit Shroud Selection", "ProgressionSelectionWnd"));
+            run(R"lua(
+                local screen = "ProgressionSelectionWnd"
+                local windows = hs.UI.windows
+                assert(windows.ListInfo(screen, "Forms") == 2)
+                assert(windows.ListRow(screen, "Forms", 0)[2] == "Kobold")
+                assert(windows.ListClick(screen, "Forms", 1, "left"))
+                assert(windows.ChildState(screen, "Accept") == false)
+                windows.Show(screen, false)
+            )lua");
+            CHECK_FALSE(s.api.shown("ProgressionSelectionWnd"));
+
+            game::Task mission;
+            mission.task_id = 926;
+            mission.title = "Scout the ruins";
+            mission.type = game::kTaskTypeShared;
+            rig.conn.receive_zone_packet_for_test(net::encode_task_description(mission));
+            offer(mission.task_id);
+            s.frames(2);
+            CHECK(s.api.shown("TaskTemplateSelectWnd"));
+            CHECK(s.api.replaces("TaskTemplateSelectWnd"));
+            CHECK(drawn("Monster Mission Selection", "TaskTemplateSelectWnd"));
+            run(R"lua(hs.UI.windows.Show("TaskTemplateSelectWnd", false))lua");
+            CHECK_FALSE(s.api.shown("TaskTemplateSelectWnd"));
+
+            ByteWriter roles;
+            roles.zeros(8);
+            roles.le(mission.task_id);
+            roles.zeros(5);
+            roles.le<std::uint32_t>(1);
+            roles.le<std::uint32_t>(913);
+            roles.le<std::int32_t>(1);
+            roles.le<std::int32_t>(1);
+            roles.zeros(4);
+            roles.le<std::uint8_t>(1);
+            net::detail::write_cstring(roles, "Watch Captain");
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::MonsterMissionCatalog, std::move(roles)));
+            s.frames(2);
+            CHECK(drawn("Monster Mission Selection", "TaskTemplateSelectWnd"));
+            run(R"lua(
+                local screen = "TaskTemplateSelectWnd"
+                local windows = hs.UI.windows
+                local role = windows.ListRow(screen, "Forms", 0)
+                assert(role[1] == "Required" and role[2] == "Watch Captain" and role[5] == "0 / 1")
+                assert(windows.ListClick(screen, "Forms", 0, "left"))
+                assert(windows.ChildState(screen, "Accept"))
+                assert(windows.ClickChild(screen, "Accept", "left"))
+                assert(windows.ChildState(screen, "Accept") == false)
+            )lua");
+            ByteWriter refused;
+            refused.zeros(8);
+            refused.le<std::uint32_t>(913);
+            refused.le<std::uint32_t>(1);
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::MonsterMissionResult, std::move(refused)));
+            run(R"lua(assert(hs.UI.windows.ChildState("TaskTemplateSelectWnd", "Accept")))lua");
+            rig.conn.receive_zone_packet_for_test(net::encode(std::vector<net::SharedTaskMember>{{"Helper", true, 0}}));
+            ByteWriter assignment;
+            assignment.zeros(8);
+            assignment.fixed_string("Helper", 64);
+            assignment.le<std::uint32_t>(913);
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::MonsterMissionAssignment, std::move(assignment)));
+            s.frames(2);
+            run(R"lua(
+                local screen = "TaskTemplateSelectWnd"
+                local windows = hs.UI.windows
+                local role = windows.ListRow(screen, "Forms", 0)
+                assert(role[4] == "Full" and role[5] == "1 / 1")
+                assert(windows.ChildState(screen, "Accept") == false)
+                windows.Show(screen, false)
+            )lua");
+
+            ByteWriter progress;
+            progress.le<std::uint32_t>(1);
+            constexpr std::string_view progress_text = "PROGRESSION\a" "12\a" "Scouts\a" "Scout forms\a"
+                "1\a" "2\a" "Gnoll\a" "Gnoll form\a" "50";
+            progress.bytes(std::as_bytes(std::span(progress_text.data(), progress_text.size())));
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::ShroudProgress, std::move(progress)));
+            run(R"lua(
+                local windows = hs.UI.windows
+                assert(windows.ChildShown("InventoryWindow", "ShroudProgressButton") == true)
+                assert(windows.ClickChild("InventoryWindow", "ShroudProgressButton", "left"))
+            )lua");
+            s.frames(2);
+            CHECK(drawn("Spirit Shroud Progress", "ShroudProgressWnd"));
+            run(R"lua(hs.UI.windows.Show("ShroudProgressWnd", false))lua");
+
+            REQUIRE(rig.conn.profile());
+            net::Spawn banker;
+            banker.spawn_id = 133;
+            banker.name = "Shroud Banker";
+            banker.npc = 1;
+            banker.class_ = 40;
+            banker.motion.x = rig.conn.profile()->x;
+            banker.motion.y = rig.conn.profile()->y;
+            banker.motion.z = rig.conn.profile()->z;
+            rig.conn.receive_zone_packet_for_test(net::encode(banker));
+            ByteWriter open;
+            open.le<std::uint32_t>(0);
+            open.le(banker.spawn_id);
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::AltStorage, std::move(open)));
+            ByteWriter items;
+            items.le<std::uint32_t>(3600);
+            items.le<std::uint32_t>(1);
+            net::detail::write_cstring(items, "Tracker's Ledger");
+            items.le<std::uint32_t>(431);
+            items.le<std::uint64_t>(937);
+            items.le<std::uint32_t>(2);
+            rig.conn.receive_zone_packet_for_test(net::make_packet(net::Op::AltStorageList, std::move(items)));
+            s.frames(2);
+            CHECK(s.api.shown("AltStorageWnd"));
+            CHECK(s.api.replaces("AltStorageWnd"));
+            CHECK(drawn("Shroud Bank", "AltStorageWnd"));
+            run(R"lua(
+                local windows = hs.UI.windows
+                local screen = "AltStorageWnd"
+                assert(windows.ListRow(screen, "ItemList", 0)[1] == "Tracker's Ledger")
+                assert(windows.Text(screen, "TimerLabel") == "01:00:00")
+                assert(windows.ChildState(screen, "GetButton") == false)
+            )lua");
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
 TEST_CASE("UI packs: the server plugins' question draws above the loading cover in each pack") {
     // In the world, and on the loading screen, where a required plugin's question holds the zone-in (no game or
     // character UI is ready there).
@@ -4418,6 +4592,67 @@ TEST_CASE("UI packs (modern): the inventory, loot, trade, raid, guild, merchant,
     ImGui::DestroyContext(ctx);
 }
 
+TEST_CASE("UI packs: both guild banner pages draw the catalog and appearance editor") {
+    const auto ui_source = fs::path(__FILE__).parent_path().parent_path() / "ui";
+    for (const std::string pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        hailstone::test::ScratchDir scratch("ui_pack_guild_banners");
+        const auto dir = scratch.path();
+        fs::create_directories(dir / "game");
+        fs::copy(ui_source / pack, dir / pack, fs::copy_options::recursive);
+        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        {
+            Session s(dir, pack);
+            s.frames(2);
+            lua_State* L = s.lua.state();
+            REQUIRE(luaL_dostring(L, R"lua(
+                local g = 'GuildManagementWnd'
+                local shown, text, info, row = hs.ChildShown, hs.WindowText, hs.ListInfo, hs.ListRow
+                fixture = { editing = false, lists = 0, layers = 0 }
+                hs.ChildShown = function(win, child, ...)
+                    if win == g and child == 'SaveBannerSettings' then return fixture.editing end
+                    return shown(win, child, ...)
+                end
+                hs.WindowText = function(win, child, ...)
+                    if win == g then
+                        if child == 'GuildName' then return 'Fixture guild' end
+                        if child == 'BannerDescription' then return 'Fixture description' end
+                        if child == 'BannerBackgroundPattern' or child == 'BannerEmblemPattern' then
+                            fixture.layers = fixture.layers + 1
+                            return '1'
+                        end
+                    end
+                    return text(win, child, ...)
+                end
+                hs.ListInfo = function(win, child, ...)
+                    if win == g and child == 'BannerKitList' then
+                        fixture.lists = fixture.lists + 1
+                        return 1, 2, 0, {'', 'Banner'}, {0, 400}, false
+                    end
+                    return info(win, child, ...)
+                end
+                hs.ListRow = function(win, child, ...)
+                    if win == g and child == 'BannerKitList' then return {'', 'Fixture kit'}, 1, 1, 1 end
+                    return row(win, child, ...)
+                end
+                hs.SetTabPage(g, 'Subwindows', 4)
+                hs.ShowWindow(g, true)
+            )lua") == LUA_OK);
+            s.frames(3);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            REQUIRE(luaL_dostring(L, "assert(fixture.lists > 0); fixture.editing = true") == LUA_OK);
+            s.frames(3);
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            CHECK(luaL_dostring(L, "assert(fixture.layers > 0)") == LUA_OK);
+        }
+        ImGui::DestroyContext(ctx);
+    }
+}
+
 // The raid window's members move between groups for the raid leader: a member dragged onto another group's card
 // in an unlocked raid locks it first (the game moves members only in a locked raid, CRaidWnd::UpdateButtons) and is
 // moved once the lock comes back; in a locked raid at once; a full group is refused. Each is the stock window's row
@@ -5106,10 +5341,10 @@ TEST_CASE("UI packs (modern): the Options window's Textures section picks the te
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
+TEST_CASE("UI packs: Options changes the Find trail style and invisibility brackets") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
-        test::ScratchDir scratch("ui_pack_find_trail_options");
+        test::ScratchDir scratch("ui_pack_display_options");
         const fs::path dir = scratch.path();
         fs::create_directories(dir / "game");
         fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
@@ -5122,45 +5357,56 @@ TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
         {
             Session s(dir, pack);
             int selected = 0;
+            int brackets = 0;
             std::vector<int> changes;
+            std::vector<int> bracket_changes;
             s.host.find_option = [&](std::string_view name) -> std::optional<int> {
-                return name == "find_trail_style" ? std::optional(selected) : std::nullopt;
+                if (name == "find_trail_style") return selected;
+                if (name == "show_invis_undead") return brackets;
+                return std::nullopt;
             };
             s.host.set_option = [&](std::string_view name, int value) {
                 if (name == "find_trail_style") {
                     changes.push_back(value);
                     selected = value;
+                } else if (name == "show_invis_undead") {
+                    bracket_changes.push_back(value);
+                    brackets = value;
                 }
             };
             lua_State* L = s.lua.state();
             // Record real control coordinates without changing their activation or rendering.
             REQUIRE(luaL_dostring(L, R"lua(
-                findTrailWidgets = {}
-                local combo, selectable, text = ui.BeginCombo, ui.Selectable, ui.DrawText
+                widgets = {}
+                local combo, selectable, checkbox, text = ui.BeginCombo, ui.Selectable, ui.Checkbox, ui.DrawText
+                local function record(name)
+                    local x0, y0, x1, y1 = ui.GetItemRect()
+                    widgets[name] = { (x0 + x1) / 2, (y0 + y1) / 2 }
+                end
                 ui.BeginCombo = function(label, ...)
                     local open = combo(label, ...)
-                    if label == "##find_trail_style" then
-                        local x0, y0, x1, y1 = ui.GetItemRect()
-                        findTrailWidgets.combo = { (x0 + x1) / 2, (y0 + y1) / 2 }
-                    end
+                    if label == "##find_trail_style" then record("combo") end
                     return open
                 end
                 ui.Selectable = function(label, ...)
                     local clicked = selectable(label, ...)
                     local name = label:match("^Rainbow trail##") and "rainbow"
                         or label:match("^Gold line %(default%)##") and "navigation"
-                    if name then
-                        local x0, y0, x1, y1 = ui.GetItemRect()
-                        findTrailWidgets[name] = { (x0 + x1) / 2, (y0 + y1) / 2 }
-                    end
+                    if name then record(name) end
                     return clicked
+                end
+                ui.Checkbox = function(label, ...)
+                    local value, changed = checkbox(label, ...)
+                    if label == "##show_invis_undead" then record("Bracket Invis vs. Undead") end
+                    return value, changed
                 end
                 ui.DrawText = function(...)
                     local label = select(7, ...)
-                    if label == "Interface" or label == "Find trail" then
+                    if label == "Interface" or label == "Find trail"
+                        or label == "Bracket Invis vs. Undead" then
                         local x, y = ...
                         local w, h = ui.CalcTextSize(label)
-                        findTrailWidgets[label] = { x + w / 2, y + h / 2 }
+                        widgets[label] = { x + w / 2, y + h / 2 }
                     end
                     return text(...)
                 end
@@ -5168,7 +5414,7 @@ TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
             )lua") == LUA_OK);
             s.frames(3);
             auto point = [&](const char* name) {
-                lua_getglobal(L, "findTrailWidgets");
+                lua_getglobal(L, "widgets");
                 lua_getfield(L, -1, name);
                 REQUIRE_MESSAGE(lua_istable(L, -1), name);
                 lua_rawgeti(L, -1, 1);
@@ -5216,6 +5462,12 @@ TEST_CASE("UI packs: Options changes the Find trail style in both directions") {
             REQUIRE(changes.size() == 2);
             CHECK(changes[0] == 1);
             CHECK(changes[1] == 0);
+            CHECK(bracket_changes.empty());
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(brackets == 1);
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(brackets == 0);
+            CHECK(bracket_changes == std::vector<int>{1, 0});
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
         ImGui::DestroyContext(ctx);

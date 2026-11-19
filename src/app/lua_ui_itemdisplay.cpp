@@ -16,9 +16,11 @@
 #include <lua.hpp>
 
 #include "app/lua_ui.h"
+#include "app/lua_ui_record.h"
 #include "app/lua_ui_windows.h"
 #include "core/log.h"
 #include "game/augments.h"
+#include "game/eq_names.h"
 #include "game/inventory.h"
 #include "game/item_display.h"
 #include "game/item_links.h"
@@ -70,9 +72,14 @@ void transfer_item(lua_State* L, const net::Item& item) {
     lua_setfield(L, -2, "icon");
 }
 
+// state = hs.ItemExpTransfer([into])   -- the evolving item experience transfer: shown, pending, submitted,
+// canTransfer, hasDetails, compatible, source, destination, revision, status, compatibility, maxTransferLevel,
+// previewSource and previewDestination (with details), and items (each { id, name, level, maxLevel, progress, icon }).
+// `into`, a table the caller keeps from frame to frame, is filled in place instead of a new table (app/lua_ui_record.h:
+// every field written; items is a new list whenever it has entries).
 int ItemExpTransfer(lua_State* L) {
     auto& h = transfer_host(L);
-    lua_newtable(L);
+    record::push(L, 1, 16);
     const auto* c = h.in_game ? h.conn : nullptr;
     const auto* state = c ? &c->evolving_transfer() : nullptr;
     transfer_bool(L, "shown", state && state->shown);
@@ -81,25 +88,27 @@ int ItemExpTransfer(lua_State* L) {
     transfer_bool(L, "canTransfer", c && c->can_transfer_evolving());
     transfer_bool(L, "hasDetails", state && state->details.has_value());
     transfer_bool(L, "compatible", state && state->details && state->details->compatibility != 0);
-    transfer_text(L, "source", state && state->source_id ? std::to_string(state->source_id) : "");
-    transfer_text(L, "destination", state && state->destination_id ? std::to_string(state->destination_id) : "");
-    transfer_text(L, "revision", state ? std::to_string(state->revision) : "0");
-    transfer_text(L, "status", state ? state->status : "");
+    record::text(L, "source", state && state->source_id ? std::to_string(state->source_id) : "");
+    record::text(L, "destination", state && state->destination_id ? std::to_string(state->destination_id) : "");
+    record::text(L, "revision", state ? std::to_string(state->revision) : "0");
+    record::text(L, "status", state ? state->status : "");
     lua_pushinteger(L, state && state->details ? state->details->compatibility : 0);
     lua_setfield(L, -2, "compatibility");
     lua_pushinteger(L, state && state->details ? state->details->max_transfer_level : 0);
     lua_setfield(L, -2, "maxTransferLevel");
-    if (state && state->details) {
-        if (state->details->source) {
-            transfer_item(L, *state->details->source);
-            lua_setfield(L, -2, "previewSource");
-        }
-        if (state->details->destination) {
-            transfer_item(L, *state->details->destination);
-            lua_setfield(L, -2, "previewDestination");
-        }
+    if (state && state->details && state->details->source) {
+        transfer_item(L, *state->details->source);
+        lua_setfield(L, -2, "previewSource");
+    } else {
+        record::clear(L, "previewSource");
     }
-    lua_newtable(L);
+    if (state && state->details && state->details->destination) {
+        transfer_item(L, *state->details->destination);
+        lua_setfield(L, -2, "previewDestination");
+    } else {
+        record::clear(L, "previewDestination");
+    }
+    record::list(L, "items", c && state->shown ? c->evolving_transfer_items().size() : 0);
     if (c && state->shown) {
         int index = 0;
         for (const auto& item : c->evolving_transfer_items()) {
@@ -571,6 +580,7 @@ private:
         // The augments are part of the key: a refreshed item (same serial) with a new augment builds again at once.
         std::string sig = std::to_string(it->item_class) + ":" + it->serial;
         for (const auto& child : it->contents) sig += "/" + std::to_string(child.index) + ":" + std::to_string(child.item.id);
+        sig += "/c:" + std::to_string(game::class_names_revision()); // its class lists name a server's classes
         if (it->is_evolving)
             sig += std::format("/e:{}:{}:{}:{}:{}", it->evolving.final_item_id, it->evolving.evolve_level,
                                it->evolving.evolve_max_level, it->evolving.progress, it->evolving.activated);

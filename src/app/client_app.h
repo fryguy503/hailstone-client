@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "app/login_launch.h"
 
@@ -15,7 +17,11 @@ struct ClientOptions {
     bool screenshot_generated = false; // --screenshot-generated: screenshots save frame generation's in-between frame
     float ui_scale = 0.0f;   // > 0 overrides the display scale
     int window_width = 1280, window_height = 720; // --window-size WxH
+    bool window_size_given = false; // --window-size was given (any size, 1280x720 too): the saved window is not used
     int clip_plane = 15;     // eqclient.ini ClipPlane, 0..20
+    // The display flags given (--lighting, --msaa ...: app/display_flags.h), as hailstone.ini settings for this run
+    // only: they go over the saved ones and are never saved (Config::set_run_override).
+    std::vector<std::pair<std::string, std::string>> display_settings;
 
     // Testing aids: log in, take the first server and enter the world with
     // this character without any clicks. Empty = interactive.

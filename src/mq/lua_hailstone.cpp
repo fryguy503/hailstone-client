@@ -1,7 +1,7 @@
 // The hailstone module: a Lua script as a plugin (docs/plugins.md "Lua plugins"). What a compiled plugin does
 // through sdk/hailstone_plugin.h, a script does through this table, held to the same capabilities:
 //   extend:  hailstone.hooks{...} (the core's questions, as HailstoneHooks), set_active, set_flag, set_player_classes,
-//            set_character_classes, set_pet_list, set_vitals
+//            set_character_classes, set_class_name, set_pet_list, set_vitals
 //   packets: hailstone.on_packet(stream, direction, opcode, fn), hailstone.send_packet(stream, opcode, data)
 //   ui:      hailstone.ui_function(name, fn), hailstone.option{...}, hailstone.menu(label, command), and the
 //            script folder's ui/<pack>/ windows
@@ -30,6 +30,7 @@
 
 #include "game/chat_text.h"
 #include "core/process_serial.h"
+#include "game/eq_names.h"
 #include "game/item_links.h"
 #include "game/server_ext_chain.h"
 #include "game/spells.h"
@@ -707,6 +708,25 @@ int l_set_flag(lua_State* L) {
 int l_set_player_classes(lua_State* L) {
     need_cap(L, plugin::kCapExtend, "hailstone.set_player_classes");
     if (auto* c = writable(Script::of(L))) c->set_player_classes(static_cast<std::uint32_t>(luaL_checkinteger(L, 1)));
+    return 0;
+}
+
+// hailstone.set_class_name(class_id, name [, short_name]): the server's name for a player class (1-16) and its short
+// name; nil or "" shows the stock one. Display only (game/eq_names.h). A class id outside 1-16, a name over 32 bytes, a
+// short name over 4 or a control character in either is an error, and nothing changes. The names are the script's.
+int l_set_class_name(lua_State* L) {
+    need_cap(L, plugin::kCapExtend, "hailstone.set_class_name");
+    const lua_Integer id = luaL_checkinteger(L, 1);
+    std::size_t name_size = 0, short_size = 0;
+    const char* name = luaL_optlstring(L, 2, "", &name_size);
+    const char* short_name = luaL_optlstring(L, 3, "", &short_size);
+    if (id < 1 || id > 16 ||
+        !game::set_class_name_override(Script::of(L).class_names_owner, static_cast<std::uint32_t>(id),
+                                       std::string_view(name, name_size), std::string_view(short_name, short_size)))
+        return luaL_error(L, "hailstone.set_class_name: a player class is 1-16, a name at most %d bytes and a short "
+                             "name at most %d, without control characters",
+                          static_cast<int>(game::kClassNameMax), static_cast<int>(game::kClassShortNameMax));
+    Script::of(L).registered = true; // it stays for the names it gave, which go when it ends
     return 0;
 }
 
@@ -1550,6 +1570,7 @@ void register_hailstone(lua_State* L) {
              {"set_active", l_set_active},
              {"set_flag", l_set_flag},
              {"set_player_classes", l_set_player_classes},
+             {"set_class_name", l_set_class_name},
              {"set_character_classes", l_set_character_classes},
              {"set_pet_list", l_set_pet_list},
              {"set_vitals", l_set_vitals},
@@ -1610,6 +1631,7 @@ void register_hailstone(lua_State* L) {
 
 void release_plugin(Script& s) {
     ui::lua::release_nameplate_canvas(s.L);
+    game::clear_class_name_overrides(s.class_names_owner);
     if (s.extension) {
         s.extension->detach();
         if (s.host->env.extensions) s.host->env.extensions->remove(s.chain_id);

@@ -18,12 +18,12 @@ std::string_view trim(std::string_view s) {
 }
 }
 
-std::vector<FellowshipCategory> parse_fellowship_categories(std::span<const std::byte> bytes) {
-    if (bytes.size() > kMaxFellowshipCategoryBytes) return {};
+std::vector<KitCategory> parse_kit_categories(std::span<const std::byte> bytes) {
+    if (bytes.size() > kMaxKitCategoryBytes) return {};
     ByteReader reader(bytes);
     const std::string text = reader.fixed_string(bytes.size());
     if (text.size() != bytes.size()) return {}; // text files do not contain embedded NULs
-    std::vector<FellowshipCategory> result;
+    std::vector<KitCategory> result;
     std::string_view rest(text);
     while (!rest.empty()) {
         const auto end = rest.find('\n');
@@ -45,19 +45,19 @@ std::vector<FellowshipCategory> parse_fellowship_categories(std::span<const std:
     return result;
 }
 
-std::vector<FellowshipCategory> load_fellowship_categories(const GameDir& game) {
-    const auto path = game.find("Resources/campsitecategories.txt");
+std::vector<KitCategory> load_kit_categories(const GameDir& game, std::string_view resource) {
+    const auto path = game.find(resource);
     if (!path) return {};
     std::ifstream file(*path, std::ios::binary);
     if (!file) return {};
     // Read at most one byte beyond the cap, including when the file grows while
     // it is being read. A server overlay cannot trigger an unbounded allocation.
-    std::vector<std::byte> bytes(kMaxFellowshipCategoryBytes + 1);
+    std::vector<std::byte> bytes(kMaxKitCategoryBytes + 1);
     file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     const auto size = static_cast<std::size_t>(file.gcount());
-    if (size > kMaxFellowshipCategoryBytes || file.bad()) return {};
+    if (size > kMaxKitCategoryBytes || file.bad()) return {};
     bytes.resize(size);
-    return parse_fellowship_categories(bytes);
+    return parse_kit_categories(bytes);
 }
 
 } // namespace hailstone::game

@@ -431,6 +431,35 @@ TEST_CASE("nav: the follower walks a path round the wall and arrives") {
     CHECK(glm::length(glm::vec2(feet) - glm::vec2(80, 20)) <= 2.5f);
 }
 
+TEST_CASE("nav: a walk with a long arrival distance stops that far along the path, whatever corners are left") {
+    // /nav spawn <name> distance=45: a path whose last two legs bend round the goal (each 22.4 long). It used to
+    // arrive only on the last leg, past the last corner: 22 from the end, not 45.
+    nav::PathFollower f;
+    f.start({{0, 0, 0}, {60, 0, 0}, {80, 10, 0}, {100, 0, 0}}, 45.0f);
+    glm::vec3 feet(0, 0, 0);
+    double t = 0.0;
+    while (f.state() == nav::FollowState::Moving && t < 30.0) {
+        nav::SteerOutput o = f.step(feet, t);
+        feet = move(feet, o, 15.0f, 0.05f);
+        t += 0.05;
+    }
+    CHECK(f.state() == nav::FollowState::Arrived);
+    CHECK(f.next() == 2); // the last corner still ahead
+    CHECK(f.remaining(feet) <= 45.0f);
+    CHECK(f.remaining(feet) >= 44.0f);
+    // Along the path, not straight across: a goal 20 away behind a wall the path goes round (120 long) is not near.
+    nav::PathFollower w;
+    w.start({{0, 0, 0}, {0, 50, 0}, {20, 50, 0}, {20, 0, 0}}, 30.0f);
+    w.step({0, 0, 0}, 0.0);
+    CHECK(w.state() == nav::FollowState::Moving);
+    // In height the end may be the distance off; further is another floor, not an arrival.
+    nav::PathFollower h;
+    h.start({{0, 0, 0}, {10, 0, 0}, {10, 0, 60}, {20, 0, 60}}, 20.0f);
+    h.step({10, 0, 0}, 0.0);
+    CHECK(h.state() == nav::FollowState::Moving);
+    CHECK(h.next() == 2);
+}
+
 TEST_CASE("nav: a stuck follower jumps and strafes, asks for new paths, then gives up") {
     nav::PathFollower f;
     f.start({{0, 0, 0}, {50, 0, 0}}, 2.0f);

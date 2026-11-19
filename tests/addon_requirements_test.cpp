@@ -566,3 +566,19 @@ TEST_CASE("addon requirements: naming a repository never lifts caps, so a forged
     REQUIRE(problems.size() == 1);
     CHECK(problems[0].message.find("capabilities this server does not allow") != std::string::npos);
 }
+
+TEST_CASE("Add-on requirements: the reasons an entry is refused go to the log, each of them") {
+    const std::vector<AddonRequirementProblem> problems{
+        {"maker/helper", "Required add-on maker/helper is not installed. Open Add-ons to install it."},
+        {"maker/other", "Required add-on maker/other needs version 2.0.0 or newer; installed version is 1.0.0. Open "
+                        "Add-ons to update it."}};
+    const auto lines = addon_refusal_log_lines(problems, problems.front().message);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[0] == "Add-ons: entry refused by this server's add-on policy: " + problems[0].message);
+    CHECK(lines[1] == "Add-ons: entry refused by this server's add-on policy: " + problems[1].message);
+    // No problem list (an upscaler, a required add-on that did not start): the message alone.
+    const auto one = addon_refusal_log_lines({}, "Required add-on maker/helper did not load");
+    REQUIRE(one.size() == 1);
+    CHECK(one[0] == "Add-ons: entry refused by this server's add-on policy: Required add-on maker/helper did not load");
+    CHECK(addon_refusal_log_lines({}, "").empty());
+}

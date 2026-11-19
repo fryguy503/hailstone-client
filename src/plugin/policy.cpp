@@ -613,6 +613,12 @@ std::vector<std::pair<std::string, Sha256Digest>> Policy::required_entries(FileK
     return out;
 }
 
+std::string Policy::required_label(FileKind kind, const Sha256Digest& hash, std::string_view name) const {
+    for (const auto& c : ceilings_)
+        if (c.kind == kind && c.sha256 == hash && !c.addon_source.empty()) return c.addon_source;
+    return std::string(name);
+}
+
 std::uint32_t Policy::caps(FileKind kind, const Sha256Digest& hash, std::string_view name) const {
     if (!rules_) return 0;
     if (!addon_file_allowed(kind, hash, name)) return 0;

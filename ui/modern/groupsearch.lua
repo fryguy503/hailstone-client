@@ -32,6 +32,17 @@ local ROLES = {
 local ABBR = { War = "WAR", Pal = "PAL", Shd = "SHD", Clr = "CLR", Dru = "DRU", Shm = "SHM", Brd = "BRD", Bst = "BST",
   Ber = "BER", Mnk = "MNK", Ran = "RNG", Rog = "ROG", Enc = "ENC", Mag = "MAG", Nec = "NEC", Wiz = "WIZ" }
 
+-- their class ids
+local CLASS_ID = { War = 1, Clr = 2, Pal = 3, Ran = 4, Shd = 5, Dru = 6, Mnk = 7, Brd = 8, Rog = 9, Shm = 10, Nec = 11,
+  Wiz = 12, Mag = 13, Enc = 14, Bst = 15, Ber = 16 }
+-- A server's short name for a class where its plugin named the class (API.character.ClassName), else nil.
+local HAS_CLASS_NAMES = API.Supports and API.Supports("character", "ClassName") == true
+local function ownShort(abbr)
+  if not HAS_CLASS_NAMES then return nil end
+  local short = API.character.ClassName(CLASS_ID[abbr], true)
+  return short ~= ABBR[abbr] and short or nil
+end
+
 local search = { [0] = "", [1] = "" }
 
 local function levels(prefix, caption)
@@ -92,7 +103,7 @@ local function groupInfo(s)
       ui.SetCursorScreenPos(x0 + (r - 1) * colW, y0 + 14 * s + (i - 1) * rowH)
       local label = W.Text(WINDOW, "GIP_" .. abbr .. "Label")
       ui.PushStyleColor(ui.Col.Text, c[1], c[2], c[3], 1)
-      W.Check(WINDOW, "GIP_" .. abbr .. "Checkbox", label ~= "" and label or ABBR[abbr])
+      W.Check(WINDOW, "GIP_" .. abbr .. "Checkbox", ownShort(abbr) or (label ~= "" and label) or ABBR[abbr])
       ui.PopStyleColor(1)
     end
     most = math.max(most, #role[2])

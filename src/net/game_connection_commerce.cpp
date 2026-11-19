@@ -159,9 +159,16 @@ void GameConnection::update_npc_interactions() {
     // Handle_OP_Death also cancels a trade with the partner who dies, which the corpse test stands in for.
     if (trade_ && trade_->open && due(npc_checks_.trade)) {
         auto it = world_.spawns.find(trade_->partner_id);
-        if (it == world_.spawns.end() || it->second.is_corpse ||
-            distance_to(trade_->partner_id) > it->second.heights.avatar_height + kInteractRange)
+        const float reach = it == world_.spawns.end() ? 0.0f : it->second.heights.avatar_height + kInteractRange;
+        const float away = distance_to(trade_->partner_id);
+        if (it == world_.spawns.end() || it->second.is_corpse || away > reach) {
+            // Which close it was, in the log (a Give window seen closing by itself: docs/unknowns.md).
+            log::info("trade with {}: cancelled, {}", trade_->partner_name,
+                      it == world_.spawns.end() ? std::string("the partner is gone")
+                      : it->second.is_corpse    ? std::string("the partner died")
+                                                : std::format("out of reach ({:.1f} > {:.1f})", away, reach));
             trade_cancel();
+        }
     }
 }
 

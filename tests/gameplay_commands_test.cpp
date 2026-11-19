@@ -16,6 +16,7 @@
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
 #include "net/player_packets.h"
+#include "net/zone_packets.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -195,4 +196,24 @@ TEST_CASE("mock server: /doability takes a skill's name") {
     CHECK(messages.front().first == "No ability by that name.");
     rig.run_for(std::chrono::milliseconds(20));
     CHECK(raw_count(rig.server.zone_log, kOpForage) == 2);
+}
+
+TEST_CASE("mock server: a GM-only command follows the player spawn's GM flag, as SpawnAppearance 20 sets it") {
+    Rig rig(MockConfig::standard());
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.until([&] { return conn.world().player() != nullptr; }));
+    rig.chat();
+    // InterpretCmd: a command with a Restriction asks me->IsGm(); for anyone else it is not a command (eqstr 12380).
+    conn.send_command("/goto");
+    CHECK(has_line(rig.chat(), "[12380]"));
+    // #gm on mid-session: EQEmu sends SpawnAppearance 20 = 1 for the player; the profile's flag stays as it was.
+    const auto own = static_cast<std::uint16_t>(conn.world().player_id);
+    conn.receive_zone_packet_for_test(encode(SpawnAppearance{own, 20, 1}));
+    REQUIRE(conn.world().player()->gm);
+    conn.send_command("/goto");
+    CHECK_FALSE(has_line(rig.chat(), "[12380]"));
+    conn.receive_zone_packet_for_test(encode(SpawnAppearance{own, 20, 0}));
+    conn.send_command("/goto");
+    CHECK(has_line(rig.chat(), "[12380]"));
 }

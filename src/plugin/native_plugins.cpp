@@ -29,6 +29,7 @@
 #include "core/sha256.h"
 #include "game/chat_text.h"
 #include "game/combat.h"
+#include "game/eq_names.h"
 #include "game/item_links.h"
 #include "game/merchant.h"
 #include "game/server_ext_chain.h"
@@ -194,6 +195,10 @@ struct NativePlugins::Impl {
     // A file from the server's plugins/ folder (set_server_dir): it loads only with the player's word.
     bool asks(const fs::path& file, const Sha256Digest& hash) const {
         if (env.policy && env.policy->required_file(FileKind::Plugin, hash)) return true;
+        return in_server_dir(file);
+    }
+    // A library the server sent (servers/<profile>/plugins/), not one of the player's.
+    bool in_server_dir(const fs::path& file) const {
         if (server_dir.empty()) return false;
         const fs::path rel = file.lexically_relative(server_dir);
         return !rel.empty() && *rel.begin() != "..";
@@ -291,6 +296,9 @@ struct Loaded {
     bool map_policy_running = false; // get_map_policy cannot recursively invoke its caller's policy hook
     std::uint64_t policy_generation = core::next_process_identity(), map_content_revision = 0;
     std::uint64_t lifecycle_generation = core::next_process_identity();
+    // Owns the class names it set (set_class_name; game/eq_names.h), taken back with its `extend` or its unload.
+    std::uint64_t class_names_owner = core::next_process_identity();
+    bool class_name_refused = false; // said once that set_class_name was refused
 
     // Its TCP connections (tcp_open ...), closed with it.
     struct Tcp {
@@ -968,6 +976,16 @@ void h_set_player_classes(void* h, std::uint32_t mask) {
     Loaded& l = Loaded::of(h);
     if (!may_extend(l, "set_player_classes")) return;
     if (net::GameConnection* c = connection_of(l)) c->set_player_classes(mask);
+}
+
+void h_set_class_name(void* h, std::uint32_t class_id, const char* name, const char* short_name) {
+    Loaded& l = Loaded::of(h);
+    if (!may_extend(l, "set_class_name")) return;
+    const std::string_view n = name ? name : "", s = short_name ? short_name : "";
+    if (!game::set_class_name_override(l.class_names_owner, class_id, n, s) && !std::exchange(l.class_name_refused, true))
+        log::warn("plugin {}: set_class_name({}) refused: a player class is 1-16, a name at most {} bytes and a short "
+                  "name at most {}, without control characters", l.name, class_id, game::kClassNameMax,
+                  game::kClassShortNameMax);
 }
 
 void h_set_character_classes(void* h, const char* name, std::uint32_t mask) {
@@ -2807,6 +2825,7 @@ void discard(NativePlugins::Impl& m, std::unique_ptr<Loaded> l, bool shutdown) {
         l->extension->detach();
         if (m.env.extensions) m.env.extensions->remove(l->chain_id);
     }
+    game::clear_class_name_overrides(l->class_names_owner);
     for (const auto& t : std::vector<std::string>(l->tlos)) h_remove_tlo(l.get(), t.c_str());
     SDL_UnloadObject(l->lib);
 }
@@ -2850,7 +2869,7 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
                 return refuse(name + " is not loaded: this server's compiled plugins load only once you allow them, "
                               "and only you can ask for that");
             if (c == Consent::Unasked || asker == Asker::Player) {
-                const bool fresh = m.ask({name, *file, bytes->size(), hash});
+                const bool fresh = m.ask({name, *file, bytes->size(), hash, !m.in_server_dir(*file)});
                 return refuse(name + " waits for your answer: this server's compiled plugins load only once you allow them",
                               fresh);
             }
@@ -3020,6 +3039,7 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.world_surface_patch = main_only<h_world_surface_patch>;
     p.table.measure_binary = main_only<h_measure_binary>;
     p.table.get_map_policy = main_only<h_get_map_policy>;
+    p.table.set_class_name = main_only<h_set_class_name>;
     Hooks& hooks = *m.env.hooks;
     Loaded* lp = &p;
     // Each callback runs with the plugin's capabilities and counts as the plugin being busy (no unloading under it).
@@ -3198,7 +3218,9 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
         if (!l->can(kCapUi | kCapExtend)) {
             l->world_ready = false; m.world_geometry.retire(l->owner); std::erase(m.world_owners, l->owner);
         }
-        // No longer allowed to extend the client: out of the chain (a plugin that gains it needs a reload).
+        // No longer allowed to extend the client: its class names go, and it is out of the chain (a plugin that
+        // gains it needs a reload).
+        if (!l->can(kCapExtend)) game::clear_class_name_overrides(l->class_names_owner);
         if (l->extension && !l->can(kCapExtend)) {
             l->extension->detach();
             if (m.env.extensions) m.env.extensions->remove(l->chain_id);
@@ -3304,26 +3326,28 @@ bool NativePlugins::check_required_addons(std::string* problem) const {
     for (const auto& entry : m.required) {
         const auto& name = entry.first;
         const auto& hash = entry.second;
+        // Named by its repository, as the server's add-on policy names it (docs/plugins.md).
+        const std::string who = "Required add-on " + m.env.policy->required_label(FileKind::Plugin, hash, name);
         if (m.env.policy->caps(FileKind::Plugin, hash, name) == 0)
-            return fail("Required add-on " + name + " is not permitted by this server's rules");
+            return fail(who + " is not permitted by this server's rules");
         const Loaded* l = m.find(name);
         if (l && l->hash != hash)
-            return fail("Required add-on " + name + " is shadowed by a different plugin");
+            return fail(who + " is shadowed by a different plugin");
         // One that let an exception out stays loaded (its other callbacks may still work) but is not counted as
         // running as the server requires: the player is told, and plays on (ClientApp::addon_world_allowed).
         if (l && l->hash == hash && !l->threw_at.empty())
-            return fail("Required add-on " + name + " failed with an error in " + l->threw_at.front());
+            return fail(who + " failed with an error in " + l->threw_at.front());
         const Consent consent = m.consent_for(hash);
-        if (consent == Consent::Denied) return fail("Required add-on " + name + " was not approved");
+        if (consent == Consent::Denied) return fail(who + " was not approved");
         if (consent == Consent::Unasked) {
             if (std::any_of(m.pending.begin(), m.pending.end(), [&](const ConsentFile& p) { return p.sha256 == hash; }))
                 return false;
-            return fail("Required add-on " + name + " needs your approval");
+            return fail(who + " needs your approval");
         }
         if (l && l->hash == hash && l->caps != 0) continue;
         for (const auto& f : m.failures)
-            if (iequal(f.name, name)) return fail("Required add-on " + name + ": " + f.error);
-        return fail("Required add-on " + name + " did not load");
+            if (iequal(f.name, name)) return fail(who + ": " + f.error);
+        return fail(who + " did not load");
     }
     return true;
 }

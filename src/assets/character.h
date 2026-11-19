@@ -229,6 +229,7 @@ struct SkinnedVertex {
     glm::vec2 uv{0.0f};
     std::array<std::uint16_t, 4> bones{};
     glm::vec4 weights{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec2 uv2{0.0f}; // EQG v3's second texture coordinates
 };
 
 // Geometry of a model in one appearance (armour textures, head and robe
@@ -297,6 +298,9 @@ struct CharacterMesh {
     // Per material: tint 0xAARRGGBB multiplied into the texture (a zero
     // high byte = none).
     std::vector<std::uint32_t> tints;
+    // A body-less skeleton's (bodiless_skeleton) dressed items: how far from the model origin they can reach in any
+    // pose its clips sample (dressed_reach), found once when dressed. 0 for any other model.
+    float held_reach = 0.0f;
     std::size_t retained_bytes(std::unordered_set<const EmitterDefinition*>* shared_clouds = nullptr,
                               std::unordered_set<const ObjectAnimation*>* shared_animations = nullptr) const;
 };
@@ -389,6 +393,21 @@ struct CharacterModel {
                                     std::unordered_set<const ObjectAnimation*>* shared_animations = nullptr) const;
     std::size_t retained_bytes() const; // estimate: object and owned payload sizes, excluding allocator overhead
 };
+
+// A skeleton built without a body: no supported mesh of its own and no cloud (race 127's IVM). It is kept for the
+// items it holds; before those were dressed onto it, it was not built at all.
+bool bodiless_skeleton(const CharacterModel& model);
+// Bounds of a dressed mesh in model space in the model's rest pose: its vertices skinned as the renderer skins them
+// (the inverse bind for EQG, the mesh's skin bindings), its emitters at their bones' frames. A skeleton without a
+// supported body mesh (race 127's IVM) has its held items here; its own bounds are empty. False when the mesh has
+// neither vertices nor emitters.
+// `clip`: the pose to take instead of the rest pose, at its first frame.
+bool dressed_bounds(const CharacterModel& model, const CharacterMesh& mesh, glm::vec3& lo, glm::vec3& hi,
+                    const AnimationClip* clip = nullptr);
+// How far from the model origin a dressed mesh's vertices and emitters can be in any pose the model's clips sample,
+// blended or layered: each bone's origin reaches its parent's plus its longest key translation stretched by the
+// parent's largest scale. A conservative radius for a moving actor, found without posing it.
+float dressed_reach(const CharacterModel& model, const CharacterMesh& mesh);
 
 // An archive with validated WLD resource indices; full WLD payloads materialize on first use.
 struct CharacterArchive {
