@@ -95,6 +95,7 @@ Not blocking 1.0: `/gems`; `/travel`, waypoints and the mesh editor; levitation 
 - [x] Generic owner-scoped method hooks with explicit exposure policies, protected callbacks and regression tests.
 
 - [x] Generic owner-scoped world nameplate canvas, bounded drawing and measurements, whole-caption claims, guarded physical clicks, automatic Lua addon activation and color widgets.
+- [x] Native SDK registration for the shared world-caption canvas, including scoped measurements, drawing and observed concealment fields.
 - [ ] Live acceptance of custom nameplate callbacks, scene depth, dense layouts, click/drag/focus handling, reloads and zoning.
 - [x] Nameplate canvas exposes observed concealment for already visible actors and identifies regular or undead invisibility when spell data supports it.
 

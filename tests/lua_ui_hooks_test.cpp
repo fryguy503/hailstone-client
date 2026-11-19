@@ -344,7 +344,9 @@ TEST_CASE("UI hooks: callback failures preserve original calls and errors withou
       local ok,why=pcall(hs.Gauge,'error') return not ok and why:find('original failed')~=nil
     )")=="true");
     CHECK(ui.calls==2);
-    CHECK(ui.run("local ok,e=pcall(hs.Gauge,'error-nil') return not ok and e==nil")=="true");
+    // (Lua 5.5 gives a nil error object as "<no error object>"; what reaches the caller is what error(nil) gives)
+    CHECK(ui.run("local _,plain=pcall(error,nil) local ok,e=pcall(hs.Gauge,'error-nil') return not ok and e==plain")
+          =="true");
     CHECK(ui.run("local ok,e=pcall(hs.Gauge,'error-false') return not ok and e==false")=="true");
     CHECK(ui.calls==4);
 }

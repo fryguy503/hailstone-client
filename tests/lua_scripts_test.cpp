@@ -1036,7 +1036,8 @@ ui = stub({ window = function(name, fn) windows[name] = fn end, GetTime = functi
 hs = stub({
   InGame = function() return true end,
   Label = function(n) return labels[n] end,
-  Gauge = function(n) local g = gauges[n] if g then return table.unpack(g) end return nil, nil, -1 end,
+  -- (1, 3: a gauge such as { 0, nil, -1 } has a hole, and # of a table with one is any border; Lua 5.5 gives 1)
+  Gauge = function(n) local g = gauges[n] if g then return table.unpack(g, 1, 3) end return nil, nil, -1 end,
   ChildShown = function(_, id) return children[id] == true end,
   ChildState = function() return false end,
   ChildTooltip = function() return "" end,

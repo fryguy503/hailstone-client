@@ -67,11 +67,12 @@ char kMaintenanceHost;
 
 // The collector runs in Lua's generational mode (collect_garbage sets it up once the scripts have loaded): the
 // windows make a few hundred KB of garbage a frame over a live heap of tens of MB, nearly all of it dead by the next
-// frame, which the minor collections take as the allocations run. The major collections, which are atomic (a whole
-// mark and sweep at once, lgc.c fullgen), are the host's: LuaUi::frame runs one between the windows' draws, timed,
-// when the heap reaches kGcMajorTrigger times what was live after the last. Lua's own would come at twice that
-// (genmajormul 100 %) inside whichever window's allocation crossed it, untimed and charged to that window; its
-// genmajormul is set as high as it goes (kGcLuaMajorMul) so that the host's always come first. Before, the
+// frame, which the minor collections take as the allocations run. The major collections are the host's: LuaUi::frame
+// runs one between the windows' draws, a whole mark and sweep at once (lgc.c fullgen), timed, when the heap reaches
+// kGcMajorTrigger times what was live after the last. Lua's own would start once the objects the minor collections
+// made old pass 70 % of the live heap (minormajor, lgc.c checkminormajor) and then run incrementally inside the windows' draws
+// (major mode, KGC_GENMAJOR), untimed and charged to whichever window allocates; minormajor is set far higher
+// (kGcLuaMajorMul) so that the host's always come first. Before, the
 // incremental collector ran in a 1 ms slice a frame, and its catch-up finished a whole cycle in one frame when the
 // slices fell behind (pauses of up to 40 ms).
 // The state's memory and the time a piece of code may run (LuaUi::Impl::alloc, budget_hook), well above what the
@@ -96,10 +97,10 @@ constexpr std::size_t kPluginSections = 512; // plugin windows' timed sections k
 // old generation's bound (minor collections free only what died young). Three times: the old incremental cycle
 // started at twice and finished at once by four.
 constexpr int kGcMajorTrigger = 3;
-// Lua's own majors: when the heap has grown by this percentage of what was live after the last major (lgc.c genstep).
-// setgcparam keeps it divided by 4 in a byte (lgc.h), so 1020 is the most it holds; 1000 puts Lua's own major at 11
-// times the live heap, past kGcMajorTrigger by far, so it comes only should one frame's allocations grow the heap
-// from under three times to over eleven.
+// Lua's own majors (LUA_GCPMINORMAJOR): once the objects minor collections made old reach this percentage of what
+// was live after the last major (lgc.c checkminormajor). 1000 puts it at about 11 times the live heap, past
+// kGcMajorTrigger by far, so it comes only should one frame's allocations grow the heap from under three times to
+// over eleven. (0 would turn Lua's own off, and with it the bound on a heap that grows that fast.)
 constexpr int kGcLuaMajorMul = 1000;
 constexpr int kGcMinorMul = 20; // Lua's default (LUAI_GENMINORMUL): a minor collection each 20 % the heap grows
 // A major collection this long or longer is logged.
@@ -159,13 +160,14 @@ struct LuaUi::Impl {
     int live_kb = 0; // the live heap the last full collection found (0: none yet)
 
     // Once the scripts have loaded, the generational collector; after that, a major collection (timed) when the heap
-    // reaches kGcMajorTrigger times the live heap, or when Lua has taken its majors back after a bad collection of its
-    // own (gc_left_generational), so that none of them run untimed inside a window's draw.
+    // reaches kGcMajorTrigger times the live heap, or when Lua has shifted to major collections of its own
+    // (gc_left_generational), so that none of them run untimed inside a window's draw.
     void collect_garbage() {
         auto live = [&] { return std::max(1, static_cast<int>(gc_live_bytes(L) >> 10)); };
         if (live_kb == 0) { // the scripts as loaded: their loading's garbage goes, and what stays is the old generation
-            lua_gc(L, LUA_GCGEN, kGcMinorMul, kGcLuaMajorMul);
-            gc_full_generational(L);
+            lua_gc(L, LUA_GCPARAM, LUA_GCPMINORMUL, kGcMinorMul);
+            lua_gc(L, LUA_GCPARAM, LUA_GCPMINORMAJOR, kGcLuaMajorMul);
+            gc_full_generational(L); // (from incremental: the switch to generational is the full collection)
             live_kb = live();
             return;
         }
@@ -1106,7 +1108,7 @@ int plugin_collectgarbage(lua_State* L) {
         return 1;
     }
     if (opt == "step") {
-        lua_pushboolean(L, lua_gc(L, LUA_GCSTEP, 0));
+        lua_pushboolean(L, lua_gc(L, LUA_GCSTEP, std::size_t{0})); // (a size_t: lapi.c reads one)
         return 1;
     }
     return luaL_error(L, "collectgarbage('%s'): a plugin may ask only 'count' and 'step'", opt.data());
@@ -1771,7 +1773,7 @@ LuaUi::LuaUi(fs::path scripts, fs::path settings, std::vector<fs::path> approved
     m.bases = std::move(approved_bases);
     m.presentation_data = std::move(presentation_data);
     m.settings_file = std::move(settings);
-    m.L = lua_newstate(&Impl::alloc, &m);
+    m.L = lua_newstate(&Impl::alloc, &m, luaL_makeseed(nullptr));
     lua_State* L = m.L;
     lua_atpanic(L, [](lua_State* S) -> int {
         log::error("ui: Lua error outside any script: {}", lua_tostring(S, -1) ? lua_tostring(S, -1) : "?");

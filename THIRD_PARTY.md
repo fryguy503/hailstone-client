@@ -19,7 +19,7 @@ separate library shipped beside the macOS binary, with its licence.
 | dr_wav, dr_mp3 (github.com/mackron/dr_libs, tag wav-0.14.5) | public domain or MIT No Attribution | WAV and MP3 decoding (`src/audio/pcm.cpp`) |
 | TinySoundFont (github.com/schellingb/TinySoundFont, commit 853a0a1) | MIT | SoundFont synthesis of the XMI music (`src/audio/xmi_player.cpp`) with a General MIDI SoundFont |
 | stb_image (github.com/nothings/stb, commit 2c980bb) | public domain / MIT | JPEG pictures on the pre-game and loading screens (`src/assets/jpeg_read.cpp`) |
-| Lua 5.4.7 (`third_party/lua`; one change, marked "Hailstone" in `lstrlib.c`: a pattern match calls the function a state's registry holds under `hailstone.match_check` every 65536 steps, so a match is held to the time limit of the code that runs it) | MIT | the Lua UI's scripting (`src/ui/lua`) and the MQ-style scripts (`src/mq`) |
+| Lua 5.5.1 (`third_party/lua`; one change, marked "Hailstone" in `lstrlib.c`: a pattern match calls the function a state's registry holds under `hailstone.match_check` every 65536 steps, so a match is held to the time limit of the code that runs it) | MIT | the Lua UI's scripting (`src/ui/lua`) and the MQ-style scripts (`src/mq`) |
 | Recast Navigation (github.com/recastnavigation/recastnavigation, tag v1.6.0) | zlib | navigation meshes and path queries (`src/nav`) |
 | cgltf (github.com/jkuhlmann/cgltf, v1.15) | MIT | binary glTF reading for replacement models (`src/assets/gltf_mesh.cpp`) |
 | bcdec (github.com/iOrange/bcdec, commit 80859ed) | MIT or Unlicense | BC7 block decoding for texture packs on devices without BC formats (`src/assets/texture.cpp`) |

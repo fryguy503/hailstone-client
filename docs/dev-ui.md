@@ -323,14 +323,14 @@ The windows are Lua scripts drawn with ImGui, grouped into user interfaces: ever
 - The Lua UI's garbage collector runs in Lua's generational mode: once the scripts have loaded, `LuaUi::frame`'s
   first collection switches it over and makes the scripts' state the old generation. The Modern UI's windows make a
   few hundred KB of garbage a frame, nearly all of it dead by the next frame, which the minor collections (each 20 %
-  the heap grows) take as the allocations run. Major collections are still atomic (a whole mark and sweep at once),
-  but the host runs them: `LuaUi::frame`, between the windows' draws, collects in full when the heap reaches three
-  times what was live after the last one (`kGcMajorTrigger`), timed as the "Lua GC major" frame section and logged
-  when it takes 8 ms or more. Lua's own majors, which would come inside whichever window's allocation crossed the
-  line, untimed, are pushed to eleven times the live heap (genmajormul 1000 %, the most `setgcparam` holds), and
-  should Lua take its majors over after a "bad collection" of its own (lgc.c `genstep`, `stepgenfull`), the next frame
-  collects and puts it back in generational mode. "What was live" is Lua's `GCestimate`, read in
-  `ui/lua/lua_gc_live.cpp`, the one file that includes Lua's internals. Before, the incremental collector was stopped
+  the heap grows) take as the allocations run. The host runs the major collections: `LuaUi::frame`, between the
+  windows' draws, collects in full (a whole mark and sweep at once) when the heap reaches three times what was live
+  after the last one (`kGcMajorTrigger`), timed as the "Lua GC major" frame section and logged when it takes 8 ms or
+  more. Lua 5.5's own shift to major collections, which would then run inside the windows' draws, untimed, is pushed
+  to about eleven times the live heap (`LUA_GCPMINORMAJOR` 1000 %), and should Lua shift anyway (major mode, lgc.c
+  `checkminormajor`), the next frame collects and puts it back in minor mode. "What was live" is the bytes the last
+  major collection marked (Lua's `GCmajorminor`), read in `ui/lua/lua_gc_live.cpp`, the one file that includes Lua's
+  internals. Before, the incremental collector was stopped
   between 1 ms slices at the end of each frame, and its catch-up finished a cycle in one frame when the slices fell
   behind (pauses of up to 40 ms).
 - Graphics settings (`display.msaa`, `display.tonemap`, `display.exposure`) are in `docs/graphics.md`.

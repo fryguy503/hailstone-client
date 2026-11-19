@@ -42,6 +42,7 @@
 #include "mq/tlo.h"
 #include "net/game_connection.h"
 #include "net/social_packets.h"
+#include "plugin/native_nameplates.h"
 #include "plugin/plugin_tcp.h"
 #include "plugin/ui_bridge.h"
 #include "plugin/web_access.h"
@@ -73,6 +74,19 @@ static_assert(sizeof(HailstoneWorldSurfacePatch) == 64 && sizeof(HailstoneWorldS
               offsetof(HailstoneWorldSurfacePatchResult, region_xy) == 64);
 static_assert(sizeof(HailstoneWorldReceipt) == 48);
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneWorldSubmission) == 56 && offsetof(HailstoneWorldSubmission, vertices) == 40));
+
+#ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
+// This exact binary used two popup slots where the public SDK added nameplates.
+// Its prefix through set_class_name is identical to the canonical ABI 3 table.
+struct LegacyPopupHostApi {
+    alignas(PluginHostApi) std::array<std::byte, offsetof(PluginHostApi, nameplate_register)> prefix;
+    decltype(PluginHostApi::get_large_dialog) get_large_dialog;
+    decltype(PluginHostApi::answer_large_dialog) answer_large_dialog;
+};
+static_assert(offsetof(PluginHostApi, set_class_name) == 848 && offsetof(PluginHostApi, nameplate_register) == 856);
+static_assert(offsetof(LegacyPopupHostApi, get_large_dialog) == 856 &&
+              offsetof(LegacyPopupHostApi, answer_large_dialog) == 864 && sizeof(LegacyPopupHostApi) == 872);
+#endif
 
 #if defined(_WIN32)
 constexpr const char* kExt = ".dll";
@@ -249,8 +263,13 @@ struct Loaded {
     std::uint32_t caps = 0;
     SDL_SharedObject* lib = nullptr;
     PluginHostApi table{};
+#ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
+    std::optional<LegacyPopupHostApi> legacy_popup_table;
+#endif
     Hooks::Owner owner = 0;
     std::vector<std::string> tlos;
+    game::NameplateCanvasOwner nameplate_owner = 0;
+    NativeNameplateFrame* nameplate_frame = nullptr;
 
     void (*initialize)() = nullptr;
     void (*shutdown)() = nullptr;
@@ -954,6 +973,66 @@ net::GameConnection* connection_of(const Loaded& l) {
     return l.host->env.connection ? l.host->env.connection() : nullptr;
 }
 
+constexpr std::uint32_t kNameplateCaps = kCapRead | kCapUi | kCapExtend;
+
+bool nameplates_allowed(const Loaded& l) {
+    return l.active && !l.unload_pending && l.can(kNameplateCaps);
+}
+
+bool remove_nameplates(Loaded& l) {
+    if (!l.nameplate_owner) return false;
+    l.host->env.nameplates->remove(std::exchange(l.nameplate_owner, 0));
+    return true;
+}
+
+int h_nameplate_register(void* h, HailstoneNameplateFn fn, void* userdata) {
+    auto& l = Loaded::of(h);
+    auto* registry = l.host->env.nameplates;
+    if (!registry || !fn || l.nameplate_owner || l.nameplate_frame || !nameplates_allowed(l)) return 0;
+    l.nameplate_owner = registry->add("plugin:" + l.name,
+        [&l, registry, fn, userdata](const game::NameplateCanvasFrame& frame)
+            -> std::optional<std::vector<game::NameplateCanvasModel>> {
+            if (l.busy) return std::nullopt;
+            auto result = guarded(l, "a nameplate canvas", [&]()
+                -> std::optional<std::vector<game::NameplateCanvasModel>> {
+                NativeNameplateFrame lease(*registry, frame);
+                struct LeaseSlot {
+                    NativeNameplateFrame*& slot;
+                    ~LeaseSlot() { slot = nullptr; }
+                } slot{l.nameplate_frame};
+                l.nameplate_frame = &lease;
+                fn(userdata, &lease.view());
+                return lease.take_models();
+            });
+            if (!result) remove_nameplates(l);
+            return result;
+        }, [&l] { return nameplates_allowed(l); });
+    return l.nameplate_owner != 0;
+}
+
+int h_nameplate_unregister(void* h) { return remove_nameplates(Loaded::of(h)); }
+
+NativeNameplateFrame* current_nameplate_frame(void* h) {
+    auto& l = Loaded::of(h);
+    return nameplates_allowed(l) && l.nameplate_owner ? l.nameplate_frame : nullptr;
+}
+
+int h_nameplate_submit(void* h, const HailstoneNameplateModel* model) {
+    auto* frame = current_nameplate_frame(h);
+    return frame ? frame->submit(model) : 0;
+}
+
+int h_nameplate_measure_text(void* h, const char* text, std::uint32_t bytes, float size, std::int32_t font,
+                             HailstoneNameplateTextMetrics* out) {
+    auto* frame = current_nameplate_frame(h);
+    return frame ? frame->measure_text(text, bytes, size, font, out) : 0;
+}
+
+int h_nameplate_spell_icon(void* h, std::uint32_t icon, HailstoneNameplateImage* out) {
+    auto* frame = current_nameplate_frame(h);
+    return frame ? frame->spell_icon(icon, out) : 0;
+}
+
 void h_set_active(void* h, int active) {
     Loaded& l = Loaded::of(h);
     if (may_extend(l, "set_active")) {
@@ -962,7 +1041,11 @@ void h_set_active(void* h, int active) {
             l.lifecycle_generation = core::next_process_identity();
         }
         l.active = active != 0;
-        if (!l.active) { l.world_ready = false; l.host->world_geometry.retire(l.owner); }
+        if (!l.active) {
+            l.world_ready = false;
+            l.host->world_geometry.retire(l.owner);
+            remove_nameplates(l);
+        }
     }
 }
 
@@ -2860,6 +2943,7 @@ namespace {
 // Takes a plugin out of the client: its ShutdownPlugin (when `shutdown`), everything it registered, then its library.
 void discard(NativePlugins::Impl& m, std::unique_ptr<Loaded> l, bool shutdown) {
     l->unload_pending = true; l->active = false;
+    remove_nameplates(*l);
     m.world_geometry.retire(l->owner);
     std::erase(m.world_owners, l->owner);
     if (shutdown && l->shutdown) guarded(*l, "ShutdownPlugin", [&] { l->shutdown(); });
@@ -3085,6 +3169,11 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.measure_binary = main_only<h_measure_binary>;
     p.table.get_map_policy = main_only<h_get_map_policy>;
     p.table.set_class_name = main_only<h_set_class_name>;
+    p.table.nameplate_register = main_only<h_nameplate_register>;
+    p.table.nameplate_unregister = main_only<h_nameplate_unregister>;
+    p.table.nameplate_submit = main_only<h_nameplate_submit>;
+    p.table.nameplate_measure_text = main_only<h_nameplate_measure_text>;
+    p.table.nameplate_spell_icon = main_only<h_nameplate_spell_icon>;
     p.table.get_large_dialog = main_only<h_get_large_dialog>;
     p.table.answer_large_dialog = main_only<h_answer_large_dialog>;
     Hooks& hooks = *m.env.hooks;
@@ -3154,8 +3243,22 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     // Its Lua windows (<folder>/ui/<pack>/), with the UI capability.
     if (p.can(kCapUi) && m.env.ui) m.env.ui->set_folder(name, plugin_folder(*file, name));
 
+    const PluginHostApi* host_table = &p.table;
+#ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
+    static const auto legacy_popup_hash = parse_sha256(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256);
+    if (got == 3 && legacy_popup_hash && hash == *legacy_popup_hash) {
+        auto& legacy = p.legacy_popup_table.emplace();
+        std::memcpy(legacy.prefix.data(), &p.table, legacy.prefix.size());
+        const std::uint32_t size = sizeof(legacy);
+        std::memcpy(legacy.prefix.data() + offsetof(PluginHostApi, size), &size, sizeof(size));
+        legacy.get_large_dialog = p.table.get_large_dialog;
+        legacy.answer_large_dialog = p.table.answer_large_dialog;
+        // Passed across the C ABI, where the plugin reads its own table type.
+        host_table = reinterpret_cast<const PluginHostApi*>(&legacy);
+    }
+#endif
     if (!guarded(p, "hailstone_plugin_set_host", [&] {
-            set_host(&p.table);
+            set_host(host_table);
             return true;
         })) {
         discard(m, std::move(l), false);
@@ -3262,6 +3365,7 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
             l->lifecycle_generation = core::next_process_identity();
         }
         l->caps = caps;
+        if (!l->can(kNameplateCaps)) remove_nameplates(*l);
         if (!l->can(kCapUi | kCapExtend)) {
             l->world_ready = false; m.world_geometry.retire(l->owner); std::erase(m.world_owners, l->owner);
         }

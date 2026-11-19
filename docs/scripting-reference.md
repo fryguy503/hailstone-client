@@ -54,6 +54,10 @@ this page says so.
 - **Timestamps** are milliseconds. A `timestamp` value's plain value is milliseconds too.
 - **`${...}` is expanded once, innermost first.** Text that comes out of a value is never parsed again, so a spawn
   named `${Me.Name}` stays that text. This is a deliberate difference from MQ (docs/plugins.md "MQ commands").
+- **Lua version.** Scripts, plugin windows and the UI packs run on Lua 5.5. Code written for 5.4 or older mostly runs
+  unchanged, but a `for` loop's variable is read-only (`for line in ... do line = line:sub(2) end` no longer
+  loads: copy it into a `local` first). `global` is a keyword for 5.5's global declarations, but it may still be
+  used as a name.
 
 ## Capabilities
 
@@ -470,7 +474,7 @@ whoever ran the command, both together.
 **Not available:** `load`, `loadstring`, `string.dump`, `io`, and every `os` function except `os.clock`, `os.time`,
 `os.date` and `os.difftime`. Tables cannot have a `__gc` finalizer.
 
-**Limits:** each script has its own Lua 5.4 state. It is paused after 3 ms without yielding and stopped if it cannot
+**Limits:** each script has its own Lua 5.5 state. It is paused after 3 ms without yielding and stopped if it cannot
 pause for 5 s; a long string match (a pattern that backtracks) cannot pause, and is stopped at that limit too. Once
 stopped, `pcall`, `xpcall` and `coroutine.resume` pass the stop on rather than catch it. Its
 memory is capped at 256 MB.

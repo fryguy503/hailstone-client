@@ -3,9 +3,9 @@
 ## Unreleased
 
 - Add-ons can inspect raw spell-duration fields and answer current game popups with lifetime checks; camp popups now answer while camping, and an explicit server-extension hint preserves the camp destination when the server disconnects early.
-
 - Nameplate add-ons can mark visible actors with observed concealment and distinguish regular invisibility from invisibility versus undead when the relevant buff data is available.
 - UI addons can load their own packaged raster artwork through `hs.UI.assets.InterfaceImage`, including artwork inherited from approved base interfaces, without a separate local art install.
+- Lua is now 5.5.1 (was 5.4.7), for the interface packs, plugin windows and MQ-style scripts. A script or add-on that assigns to a `for` loop's variable no longer loads and must copy it into a `local` first; most other 5.4 code runs unchanged
 - Guilds: the Banner page in Modern and Gamepad shows available kits, the active banner and its remaining time. On a server with RoF2 guild banners, members with the appropriate permissions can plant, remove or customise the banner. Planted banners display their guild's patterns and colours.
 - Enchanter pets and other invisible-body spawns (race 127's IVM, also race 600) show the weapon they hold again. The body stays invisible, but the primary and secondary items are drawn in its hands, which move as a wood elf's, as in the original; an aura with nothing held still shows nothing
 - Erudite ghosts (race 118, GEM / GEF in Paineel's models) take the wood elf's animations for the clips they lack, as the original gives every model of that prefix group: they had only the 9 clips of their own (walk, run, one swing, two deaths and a few more); now they have 71
@@ -20,6 +20,7 @@
 - Grass: no longer shows through paths and floors laid just over the grass, such as the brick tiles in the Plane of Knowledge
 - Grass: in outdoor zones, grass now grows under cliff overhangs and arches high overhead; roofs and low bridges still keep the ground under them bare
 - Options: Grass Density goes up to 300 % (it stopped at 200 %); 100 % is unchanged
+- Compiled add-ons can replace world nameplates through the shared caption canvas. The SDK exposes the same visible actors, known resource and casting readings, and guarded manual plate clicks as the Lua canvas. Both now also say whether an actor is known to be invisible, invisible to undead or otherwise concealed.
 - Tradeskills: clicking a recipe in a tradeskill container shows its components again on an EQEmu server built since June 2026, so Combine, Combine N and Combine All work there. The server now adds the recipe's trivial after the components, and the client threw the whole reply away, leaving the window "Waiting for the components..." for good
 - Chat channels: a chat server link that stops answering is now noticed after 60 seconds with nothing heard from the server and reconnected (as a dropped link already was), instead of staying dead for the rest of the session with channel text going nowhere. After a reconnect the client joins your auto-join channels again; it does not rejoin channels you joined by hand
 - GM commands: after `#gm on` the GM-only slash commands (`/goto`, `/summon`, `/find` and the rest) work at once, as in the original client; they no longer stay refused as "not a valid command" until the next zone change

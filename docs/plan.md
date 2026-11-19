@@ -62,7 +62,7 @@ Each library is pinned by version and fetched by CMake (`FetchContent`), or foun
 | Shaders | GLSL → SPIR-V with `glslc` (shaderc) at build time | simple |
 | Maths | glm | header-only |
 | zlib | zlib-ng (compat mode) | PFS blocks and the session layer |
-| UI | Dear ImGui, Lua 5.4 (`third_party/lua`) | windows drawn by Lua scripts, hot reload (`docs/dev-ui.md`) |
+| UI | Dear ImGui, Lua 5.5 (`third_party/lua`) | windows drawn by Lua scripts, hot reload (`docs/dev-ui.md`) |
 | Fonts | ImGui's font loader | the UI expects Arial-class fonts; uses a metric-compatible open font (Liberation Sans) or the system font by name |
 | MP3 / WAV | dr_mp3, dr_wav | single header |
 | MIDI synthesis | TinySoundFont + own XMI parser | portable; the player supplies a General MIDI SoundFont, with a small default |

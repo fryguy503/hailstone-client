@@ -74,6 +74,8 @@ What the client does not implement yet, or implements with an approximation it c
   can confirm spell-specific concealment from the player's own buffs or the current target's received OP_TargetBuffs
   list. This also governs when the optional `[Name]` marker can appear. Typed status for other actors requires an
   additional server signal.
+- Native canvas providers use the same caption visibility and physical input checks. Live interoperability with a
+  compiled nameplate add-on and dense-scene performance remain open.
 
 - The shared `hs.UI` contract and migrated Modern/Gamepad presentations require live acceptance of normal mouse,
   keyboard and controller workflows, zoning and interface changes. Declared base packs inherit presentations;

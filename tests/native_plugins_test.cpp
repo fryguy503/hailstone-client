@@ -13,10 +13,13 @@
 #include "core/binary_measurement.h"
 #include "net/item_packets.h"
 #include "net/packet_io.h"
+#include "game/nameplate_canvas.h"
 #include "game/server_ext_chain.h"
 #include "mq/commands.h"
+#include "mq/lua_mq.h"
 #include "mq/parse.h"
 #include "platform/tcp_socket.h"
+#include "plugin/native_nameplates.h"
 #include "plugin/native_plugins.h"
 #include "mq_test_world.h"
 #include "plugin_consent_helper.h"
@@ -41,6 +44,7 @@ struct Host {
     }()};
     fs::path plugin_dir = world.dir / "plugins";
     plugin::Hooks hooks;
+    game::NameplateCanvasRegistry canvas;
     plugin::Policy policy;
     mq::Registry reg;
     mq::Context ctx;
@@ -85,6 +89,7 @@ struct Host {
         ne.web = web;
         ne.connection = [this] { return connection_override ? connection_override : world.conn.get(); };
         ne.extensions = extensions.get();
+        ne.nameplates = &canvas;
         ne.use_ability = [this](mq::AbilityKind kind, std::string_view name) {
             used.emplace_back(static_cast<int>(kind), std::string(name));
             return true;
@@ -132,7 +137,48 @@ struct Host {
     bool printed_line(const std::string& t) const { return std::find(printed.begin(), printed.end(), t) != printed.end(); }
 };
 
+game::NameplateCanvasFrame sample_nameplate_frame() {
+    game::NameplateCanvasFrame frame;
+    frame.viewport = {0, 0, 640, 480};
+    game::NameplateCanvasCandidate target;
+    target.spawn.id = 10;
+    target.spawn.incarnation = 17;
+    target.context.name = "Guard";
+    target.context.target = true;
+    target.context.mana_percent = 0;
+    target.context.invisible_undead = true;
+    target.context.concealed = true;
+    target.x = 200;
+    target.y = 100;
+    target.depth = 40;
+    frame.candidates.push_back(target);
+    game::NameplateCanvasCandidate second = target;
+    second.spawn.id = 11;
+    second.context.target = false;
+    second.depth = 50;
+    frame.candidates.push_back(std::move(second));
+    return frame;
+}
+
+void nameplate_test_metrics(game::NameplateCanvasRegistry& canvas) {
+    canvas.set_measure([](std::string_view text, float size, int) -> std::optional<game::CanvasTextMetrics> {
+        return game::CanvasTextMetrics{static_cast<float>(text.size()) * size, size, 0, 0, 0, 0};
+    });
+    canvas.set_icon([](std::uint32_t icon) -> std::optional<game::CanvasImage> {
+        if (icon != 37) return std::nullopt;
+        return game::CanvasImage{123, 0.1f, 0.2f, 0.3f, 0.4f};
+    });
+}
+
 } // namespace
+
+// Keep the public nameplate functions at the offsets established before popup support.
+static_assert(sizeof(void*) != 8 ||
+              (offsetof(PluginHostApi, nameplate_register) == 856 &&
+               offsetof(PluginHostApi, nameplate_unregister) == 864 &&
+               offsetof(PluginHostApi, nameplate_spell_icon) == 888 &&
+               offsetof(PluginHostApi, get_large_dialog) == 896 &&
+               offsetof(PluginHostApi, answer_large_dialog) == 904));
 
 namespace {
 net::AppPacket native_game_popup(bool buttons = true) {
@@ -243,6 +289,158 @@ TEST_CASE("native plugins: capability loss inside a popup send cannot authorize 
     REQUIRE(rig.until_state(net::ConnectionState::Disconnected));
     CHECK_FALSE(rig.conn.camped_out());
     CHECK(rig.conn.link_death().has_value());
+}
+
+TEST_CASE("native plugins: nameplate frame lease and canvas ownership") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    nameplate_test_metrics(h.canvas);
+    REQUIRE(h.plugins->load("HostProbe"));
+    CHECK(h.canvas.empty());
+    h.run("/probenameplate outside");
+    CHECK(h.printed_line("[Probe] nameplate outside 0 0 0"));
+    h.run("/probenameplate on");
+    REQUIRE(h.printed_line("[Probe] nameplate register 1"));
+    h.printed.clear();
+    h.run("/probenameplate on");
+    CHECK(h.printed_line("[Probe] nameplate register 0"));
+    auto frame = sample_nameplate_frame();
+    const auto native = h.canvas.frame(frame);
+    REQUIRE(native.size() == 1);
+    CHECK(h.printed_line("[Probe] nameplate data 1 measure 1 width 60 icon 1 no_image 0 wrong_frame 0 accepted 1 duplicate 0"));
+    CHECK(h.printed_line("[Probe] nameplate stride 1 narrow -1 zero -1 wider -1"));
+    CHECK(native[0].candidate_index == 0);
+    CHECK(native[0].frame_serial == frame.serial);
+    CHECK(native[0].model.clickable);
+    REQUIRE(native[0].model.commands.size() == 2);
+    CHECK(native[0].model.commands[0].text == "native");
+    CHECK(native[0].model.commands[1].texture == 123);
+    CHECK(h.canvas.owner_valid(native[0].owner));
+
+    for (const auto cap : {plugin::kCapRead, plugin::kCapUi, plugin::kCapExtend}) {
+        h.approve(plugin::kCapAll & ~cap);
+        h.plugins->policy_changed({});
+        CHECK(h.plugins->loaded("HostProbe"));
+        CHECK_FALSE(h.canvas.owner_valid(native[0].owner));
+        CHECK(h.canvas.frame(frame).empty());
+        h.printed.clear();
+        h.run("/probenameplate on");
+        CHECK(h.printed_line("[Probe] nameplate register 0"));
+    }
+    h.approve(plugin::kCapAll);
+    h.plugins->policy_changed({});
+    CHECK(h.canvas.empty());
+    h.run("/probenameplate self-retire");
+    CHECK_FALSE(h.canvas.empty());
+    CHECK(h.canvas.frame(frame).empty());
+    CHECK(h.canvas.empty());
+    h.run("/probenameplate on");
+    const auto next = h.canvas.frame(frame);
+    REQUIRE(next.size() == 1);
+    CHECK(next[0].owner != native[0].owner);
+    // set_active(0) retires the provider; set_active(1) does not bring it back, so the plugin registers again.
+    h.run("/probemapcycle");
+    CHECK_FALSE(h.canvas.owner_valid(next[0].owner));
+    CHECK(h.canvas.empty());
+    CHECK(h.canvas.frame(frame).empty());
+    h.printed.clear();
+    h.run("/probenameplate on");
+    CHECK(h.printed_line("[Probe] nameplate register 1"));
+    const auto again = h.canvas.frame(frame);
+    REQUIRE(again.size() == 1);
+    REQUIRE(h.plugins->unload("HostProbe"));
+    CHECK_FALSE(h.canvas.owner_valid(again[0].owner));
+    CHECK_FALSE(h.canvas.owner_valid(next[0].owner));
+    CHECK(h.canvas.frame(frame).empty());
+}
+
+TEST_CASE("native plugins: nameplate records are read by their stride") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    nameplate_test_metrics(h.canvas);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probenameplate stride");
+    REQUIRE(h.printed_line("[Probe] nameplate register 1"));
+    auto frame = sample_nameplate_frame();
+    const auto native = h.canvas.frame(frame);
+    // The candidates are found by the host's stride; a command stride shorter than the host's record (or none) is
+    // refused, and a longer one (a newer SDK's record, with bytes this host does not know) is read field by field.
+    CHECK(h.printed_line("[Probe] nameplate stride 1 narrow 0 zero 0 wider 1"));
+    REQUIRE(native.size() == 2);
+    CHECK(native[1].candidate_index == 1);
+    REQUIRE(native[1].model.commands.size() == 2);
+    CHECK(native[1].model.commands[0].text == "wide");
+    CHECK(native[1].model.commands[0].color == 0x654321);
+    CHECK(native[1].model.commands[1].text == "wide");
+    CHECK(native[1].model.commands[1].color == 0x0000ff);
+}
+
+TEST_CASE("native plugins: nameplate frame view steps candidates by its stride") {
+    game::NameplateCanvasRegistry registry;
+    auto frame = sample_nameplate_frame();
+    frame.serial = 9;
+    plugin::NativeNameplateFrame lease(registry, frame);
+    const auto& view = lease.view();
+    CHECK(view.size == sizeof(HailstoneNameplateFrame));
+    CHECK(view.candidate_size == sizeof(HailstoneNameplateCandidate));
+    CHECK(view.reserved == 0);
+    REQUIRE(view.candidate_count == 2);
+    for (std::uint32_t i = 0; i < view.candidate_count; ++i) {
+        const auto* by_stride = reinterpret_cast<const HailstoneNameplateCandidate*>(
+            static_cast<const unsigned char*>(view.candidates) + std::size_t{i} * view.candidate_size);
+        CHECK(hailstone_nameplate_candidate(&view, i) == by_stride);
+        CHECK(by_stride->spawn_id == frame.candidates[i].spawn.id);
+    }
+    CHECK(hailstone_nameplate_candidate(&view, 2) == nullptr);
+    CHECK(HAILSTONE_NAMEPLATE_CANDIDATE_HAS(&view, cast_name));
+}
+
+TEST_CASE("native plugins: native and Lua nameplates share candidate claims") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    plugin::Rules rules;
+    rules.configured = true;
+    rules.player_script_caps = rules.player_plugin_caps = plugin::kCapAll;
+    h.policy.set(rules);
+    nameplate_test_metrics(h.canvas);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probenameplate on");
+    const auto scripts_dir = h.world.dir / "scripts";
+    fs::create_directories(scripts_dir);
+    std::ofstream(scripts_dir / "test_canvas.lua") << R"lua(
+local np=require('hailstone').nameplates
+assert(np.Register('test',function(frame)
+  local models={}
+  for i,candidate in ipairs(frame.candidates) do
+    models[i]={token=candidate.token,hide=true}
+  end
+  return models
+end))
+)lua";
+    mq::ScriptEnv env;
+    env.hooks = &h.hooks;
+    env.policy = &h.policy;
+    env.registry = &h.reg;
+    env.context = [&]() -> const mq::Context& { return h.ctx; };
+    env.nameplates = &h.canvas;
+    env.dirs = {scripts_dir};
+    env.config_dir = h.world.dir / "config";
+    mq::ScriptHost scripts(std::move(env));
+    REQUIRE(scripts.run("test_canvas", {}));
+    scripts.pulse();
+
+    auto frame = sample_nameplate_frame();
+    const auto both = h.canvas.frame(frame);
+    REQUIRE(both.size() == 2);
+    CHECK(both[0].candidate_index == 0);
+    CHECK_FALSE(both[0].model.hide);
+    CHECK(both[1].candidate_index == 1);
+    CHECK(both[1].model.hide);
+    CHECK(both[0].owner != both[1].owner);
+    REQUIRE(h.plugins->unload("HostProbe"));
+    const auto lua = h.canvas.frame(frame);
+    REQUIRE(lua.size() == 2);
+    CHECK(lua[0].owner == both[1].owner);
+    CHECK(lua[0].model.hide);
 }
 
 TEST_CASE("native plugins: received item decode commits both outputs only for an accepted prefix") {

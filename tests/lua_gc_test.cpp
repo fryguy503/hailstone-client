@@ -47,7 +47,11 @@ TEST_CASE("Lua UI: the generational collector runs on its own and keeps the heap
         frame(); // loads the script, then collects its loading's garbage and turns the collector generational
         const int live = lua_gc(L, LUA_GCCOUNT);
         CHECK(lua_gc(L, LUA_GCISRUNNING) == 1);
-        CHECK(lua_gc(L, LUA_GCGEN, 0, 0) == LUA_GCGEN); // (0, 0: its parameters kept)
+        CHECK(lua_gc(L, LUA_GCGEN) == LUA_GCGEN);
+        // Lua's own majors put far past the host's (kGcLuaMajorMul; Lua keeps the percentage in a coded byte, so
+        // close to 1000 rather than exactly), and the minor collections at Lua's default.
+        CHECK(lua_gc(L, LUA_GCPARAM, LUA_GCPMINORMAJOR, -1) >= 900);
+        CHECK(lua_gc(L, LUA_GCPARAM, LUA_GCPMINORMUL, -1) == 20);
         int most = 0;
         for (int i = 0; i < 400; ++i) {
             frame();
@@ -104,8 +108,8 @@ TEST_CASE("Lua UI: the host runs the major collections, at three times the live 
             const bool major = frame();
             const std::size_t live = hailstone::ui::lua::gc_live_bytes(L);
             majors += major ? 1 : 0;
-            // GCestimate changes only at a major collection (a minor one keeps it, lgc.c genstep): one changed in a
-            // frame without the host's section was Lua's own, untimed.
+            // GCmajorminor changes only at a major collection (a minor one keeps it, lgc.c youngcollection): one
+            // changed in a frame without the host's section was Lua's own, untimed.
             if (live != live_before) CHECK(major);
             // At the frame's end the heap is under the trigger, or the host collected.
             CHECK(lua_gc(L, LUA_GCCOUNT) < 3 * std::max<int>(1, static_cast<int>(live >> 10)) + 1);
@@ -116,8 +120,22 @@ TEST_CASE("Lua UI: the host runs the major collections, at three times the live 
 
         // Lua in incremental mode (as after a bad collection of its own): the next frame collects, timed, and puts it
         // back.
-        lua_gc(L, LUA_GCINC, 0, 0, 0);
+        lua_gc(L, LUA_GCINC);
         REQUIRE(hailstone::ui::lua::gc_left_generational(L));
+        CHECK(frame());
+        CHECK_FALSE(hailstone::ui::lua::gc_left_generational(L));
+
+        // Lua shifted to major mode of its own (minormajor reached, lgc.c checkminormajor): put low here so the
+        // window's old tables reach it within a frame. The next frame collects, timed, and puts it back in minor mode.
+        const int minormajor = lua_gc(L, LUA_GCPARAM, LUA_GCPMINORMAJOR, 1);
+        for (int i = 0; i < 400 && !hailstone::ui::lua::gc_left_generational(L); ++i) {
+            REQUIRE(luaL_dostring(L, "__hs_gc_keep = __hs_gc_keep or {} "
+                                     "for i = 1, 200 do __hs_gc_keep[#__hs_gc_keep + 1] = { i } end") == LUA_OK);
+            lua_gc(L, LUA_GCSTEP, std::size_t{0}); // (a minor collection, which makes the kept tables old)
+        }
+        REQUIRE(hailstone::ui::lua::gc_left_generational(L));
+        lua_gc(L, LUA_GCPARAM, LUA_GCPMINORMAJOR, minormajor);
+        REQUIRE(luaL_dostring(L, "__hs_gc_keep = nil") == LUA_OK);
         CHECK(frame());
         CHECK_FALSE(hailstone::ui::lua::gc_left_generational(L));
     }
@@ -179,7 +197,9 @@ TEST_CASE("Lua UI: each window's allocations go to its frame section") {
 
 TEST_CASE("Lua UI: the live heap is what the cycle found reachable, not the garbage made while it ran") {
     lua_State* L = luaL_newstate();
-    lua_gc(L, LUA_GCINC, 0, 1, 0); // small steps, so a cycle spreads over many (gc_live_bytes in any mode)
+    // Incremental (a new state's mode), in small steps, so a cycle spreads over many (gc_live_bytes in any mode).
+    REQUIRE(lua_gc(L, LUA_GCINC) == LUA_GCINC);
+    lua_gc(L, LUA_GCPARAM, LUA_GCPSTEPSIZE, 1024);
     lua_gc(L, LUA_GCSTOP);
     // About 2 MB kept.
     REQUIRE(luaL_dostring(L, "keep = {} for i = 1, 20000 do keep[i] = { i, i } end") == LUA_OK);
@@ -189,7 +209,7 @@ TEST_CASE("Lua UI: the live heap is what the cycle found reachable, not the garb
     int cycles = 0;
     for (int i = 0; i < 100000 && cycles == 0; ++i) {
         luaL_dostring(L, "local t = {} for i = 1, 1000 do t[i] = { i } end");
-        if (lua_gc(L, LUA_GCSTEP, 0)) ++cycles;
+        if (lua_gc(L, LUA_GCSTEP, std::size_t{0})) ++cycles;
     }
     REQUIRE(cycles == 1);
     const std::size_t count = static_cast<std::size_t>(lua_gc(L, LUA_GCCOUNT)) * 1024;

@@ -146,6 +146,7 @@ add_library(hailstone_engine STATIC
   src/mq/lua_mq_web.cpp
   src/mq/lua_hailstone.cpp
   src/plugin/native_plugins.cpp
+  src/plugin/native_nameplates.cpp
   src/plugin/world_geometry.cpp
   src/render/world_geometry_renderer.cpp
   src/plugin/plugin_tcp.cpp
@@ -712,7 +713,7 @@ add_custom_target(hailstone_build_info
 add_dependencies(hailstone_engine hailstone_build_info)
 set_source_files_properties(src/core/build_info.cpp PROPERTIES OBJECT_DEPENDS ${PROJECT_BINARY_DIR}/generated/build_info.inc)
 target_include_directories(hailstone_engine PRIVATE ${PROJECT_BINARY_DIR}/generated)
-# Lua 5.4.7 (third_party/lua, MIT), for the Lua UI (src/ui/lua): compiled as C.
+# Lua 5.5.1 (third_party/lua, MIT), for the Lua UI (src/ui/lua): compiled as C.
 file(GLOB HAILSTONE_LUA_SOURCES CONFIGURE_DEPENDS third_party/lua/*.c)
 add_library(hailstone_lua STATIC ${HAILSTONE_LUA_SOURCES})
 target_include_directories(hailstone_lua PUBLIC third_party/lua)
@@ -744,6 +745,17 @@ set(HAILSTONE_PROJECT_PAGE "https://github.com/projecthailstone/hailstone-client
 option(HAILSTONE_ALLOW_IN_EQ_FOLDER "Allow Hailstone's folder to be a subfolder of the EverQuest folder" OFF)
 set_property(SOURCE src/core/asset_folder_choice.cpp APPEND PROPERTY COMPILE_DEFINITIONS
              HAILSTONE_ALLOW_IN_EQ_FOLDER=$<BOOL:${HAILSTONE_ALLOW_IN_EQ_FOLDER}>)
+set(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 "" CACHE STRING
+    "SHA-256 of the Windows x64 preview plugin that expects the legacy popup host table")
+if(NOT HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 STREQUAL "")
+  string(LENGTH "${HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256}" legacy_popup_hash_length)
+  if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT legacy_popup_hash_length EQUAL 64 OR
+     NOT HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 MATCHES "^[0-9a-fA-F]+$")
+    message(FATAL_ERROR "HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 requires a 64-digit digest on 64-bit Windows")
+  endif()
+  set_property(SOURCE src/plugin/native_plugins.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+               HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256="${HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256}")
+endif()
 set(HAILSTONE_UPDATE_KEY_DEFAULT "")
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub)
   file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub HAILSTONE_UPDATE_KEY_DEFAULT REGEX "^[0-9a-fA-F]+$" LIMIT_COUNT 1)

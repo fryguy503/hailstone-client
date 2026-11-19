@@ -10,14 +10,14 @@ namespace hailstone::ui::lua {
 // cycle ran (which only the next cycle can free). Lua's API has no call for it.
 std::size_t gc_live_bytes(lua_State* L);
 
-// Whether the collector has left plain generational mode: after a major collection of Lua's own that freed too little
-// (a "bad collection", lgc.c genstep), it sets lastatomic and does its next majors itself (stepgenfull, possibly in
-// incremental mode), where the host does not time them. Lua's API has no call for it.
+// Whether the collector has left generational minor mode: once the objects that minor collections made old pass a
+// share of the live heap (LUA_GCPMINORMAJOR, lgc.c checkminormajor), Lua shifts to major mode and runs its majors
+// itself, incrementally (KGC_GENMAJOR), where the host does not time them. Lua's API has no call for it.
 bool gc_left_generational(lua_State* L);
 
-// A full collection that leaves the collector in plain generational mode: LUA_GCCOLLECT (fullgen, which clears
-// lastatomic) while it is generational, else LUA_GCGEN, whose switch back (entergen) is itself the full collection,
-// so there are never two.
+// A full collection that leaves the collector in generational minor mode: LUA_GCCOLLECT (fullgen) while it is in
+// minor mode, else LUA_GCGEN, whose switch (entergen) finishes the cycle under way and then is itself the full
+// collection, so no second one is added after it.
 void gc_full_generational(lua_State* L);
 
 } // namespace hailstone::ui::lua

@@ -46,6 +46,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "hailstone_follow.h"
+#include "hailstone_nameplates.h"
 #include "hailstone_world_geometry.h"
 
 #ifdef __cplusplus
@@ -1003,6 +1004,17 @@ typedef struct PluginHostApi {
      * or scripts name one class the latest call wins; a call with both empty takes this plugin's back. Added later
      * in ABI 3: test HAILSTONE_HOST_HAS(host, set_class_name) first. */
     void (*set_class_name)(void* host, uint32_t class_id, const char* name, const char* short_name);
+    /* READ + UI + EXTEND. One provider per plugin. Unregister before registering a new provider.
+     * Unregister retires its current drawings and click regions. Submit/measure/icon work only in its
+     * callback. Submit copies a current-frame model and returns 1 if accepted for shared canvas arbitration.
+     * Leaving a candidate unclaimed lets another provider or the stock caption draw it. Check
+     * HAILSTONE_HOST_HAS before using these fields, added later in ABI 3. */
+    int (*nameplate_register)(void* host, HailstoneNameplateFn callback, void* userdata);
+    int (*nameplate_unregister)(void* host);
+    int (*nameplate_submit)(void* host, const HailstoneNameplateModel* model);
+    int (*nameplate_measure_text)(void* host, const char* text, uint32_t text_bytes, float font_size, int32_t font,
+                                  HailstoneNameplateTextMetrics* out);
+    int (*nameplate_spell_icon)(void* host, uint32_t icon, HailstoneNameplateImage* out);
     /* READ: current received game popup, 1 available, 0 none/expired. Initialize out->size. */
     int (*get_large_dialog)(void* host, HailstoneLargeDialog* out);
     /* ACTIONS: answer this exact current popup once: button 0 OK, 1 Yes, 2 No, 3 close. Returns 1 consumed (and

@@ -93,7 +93,7 @@ int pushes_made(lua_State* L) {
 TEST_CASE("lua_keep: what a raise leaves behind is freed when the state collects it") {
     Limit lim;
     lim.limit = 4u << 20;
-    lua_State* L = lua_newstate(limited, &lim);
+    lua_State* L = lua_newstate(limited, &lim, luaL_makeseed(nullptr));
     REQUIRE(L);
     g_alive = 0;
     for (int i = 0; i < 5; ++i) {
@@ -173,7 +173,7 @@ int raises_holding(lua_State* L) {
 
 TEST_CASE("LuaScratch: a box left held by a raise is taken back in the next generation, with no new allocation") {
     Count count;
-    lua_State* L = lua_newstate(counting, &count);
+    lua_State* L = lua_newstate(counting, &count, luaL_makeseed(nullptr));
     REQUIRE(L);
     Counted::alive = 0;
     Counted* first = nullptr;
@@ -214,7 +214,7 @@ TEST_CASE("LuaScratch: a box left held by a raise is taken back in the next gene
 
 TEST_CASE("set_string_field: an unchanged string makes no new string; a changed one is written") {
     Count count;
-    lua_State* L = lua_newstate(counting, &count);
+    lua_State* L = lua_newstate(counting, &count, luaL_makeseed(nullptr));
     REQUIRE(L);
     const std::string tip(200, 't'); // past Lua's 40-byte short strings, which it finds again without allocating
     lua_createtable(L, 0, 2);

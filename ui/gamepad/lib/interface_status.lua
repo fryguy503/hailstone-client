@@ -11,7 +11,8 @@ return function(status, width)
     end
     -- Controller rows have a fixed height. Split complete messages into readable rows instead of losing their
     -- ends to fitting; the mouse interface uses wrapped text in its value column.
-    for line in (value .. "\n"):gmatch("(.-)\n") do
+    for text in (value .. "\n"):gmatch("(.-)\n") do
+      local line = text -- (a loop's variable cannot be assigned since Lua 5.5)
       repeat
         local cut = #line
         if cut > width then
