@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "assets/character.h"
 #include "core/wrap_math.h"
 #include "game/mechanics/fpu.h"
 
@@ -402,6 +403,10 @@ std::uint32_t jump_crouch_window(std::optional<double> length) {
     if (!length || !(*length > -2147483648.0 && *length < 2147483648.0)) return kJumpWindowMs;
     std::uint32_t w = static_cast<std::uint32_t>(static_cast<std::int32_t>(std::trunc(*length))) + 1u;
     return w > kJumpWindowMs ? kJumpWindowMs : w;
+}
+
+std::uint32_t jump_crouch_window(const assets::AnimationClip* duck_clip) {
+    return jump_crouch_window(duck_clip ? std::optional<double>(assets::clip_length_ms(*duck_clip)) : std::nullopt);
 }
 
 std::string_view jump_duck_clip(bool new_style_hierarchy) { return new_style_hierarchy ? "CRCH_BA_1" : "L08"; }

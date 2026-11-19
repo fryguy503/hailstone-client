@@ -592,6 +592,8 @@ CharacterModel build_model(const MeshFile& mesh, std::string_view code_view,
         if (m.name_bone < 0 && mesh.bones[i].name == "HEAD_NAME") m.name_bone = static_cast<int>(i);
         rest.tracks[i].push_back(mesh.bones[i].bind);
     }
+    // InitAnimationTracks @0x407800's +0x34: the actor has a TUNIC_POINT dag (0x4afc90's new_model flag).
+    m.tunic_point = m.find_bone("TUNIC_POINT_TRACK") >= 0;
     std::vector<glm::mat4> bind;
     {
         std::vector<BonePose> local(n);
@@ -630,9 +632,17 @@ CharacterModel build_model(const MeshFile& mesh, std::string_view code_view,
         // ceiling; stock clips run seconds), so a bad file's key times (0 and
         // 0xFFFFFFFF) cannot ask for a pose per bone per frame for 50 days.
         duration = std::min(duration, (kMaxClipFrames - 1) * step);
+        // The frames sit on the mean key spacing, and the last one at the .ani's last key time: the grid's step is
+        // the mean spacing rounded down, so a grid that stopped at frame_count x step would end a few percent short
+        // of the real period (a 666 ms walk's last grid frame at 660) and never show the end pose.
+        std::vector<std::uint32_t> times;
+        for (std::uint32_t ms = 0; ms < duration; ms += step) times.push_back(ms);
+        times.push_back(duration);
         AnimationClip a;
         a.frame_ms = step;
-        a.frame_count = std::max<std::uint32_t>(1, duration / step + 1);
+        a.frame_count = static_cast<std::uint32_t>(times.size());
+        a.duration_ms = duration;
+        a.frame_times_ms = times;
         std::size_t matched = 0;
         for (const auto& t : file.tracks)
             if (!t.poses.empty() && by_name.contains(upper(t.bone))) ++matched;
@@ -651,8 +661,7 @@ CharacterModel build_model(const MeshFile& mesh, std::string_view code_view,
             auto& keys = a.tracks[it->second];
             keys.clear();
             keys.reserve(a.frame_count);
-            for (std::uint32_t fr = 0; fr < a.frame_count; ++fr) {
-                std::uint32_t ms = fr * step;
+            for (std::uint32_t ms : times) {
                 auto up = std::upper_bound(t.times_ms.begin(), t.times_ms.end(), ms);
                 if (up == t.times_ms.begin()) {
                     keys.push_back(t.poses.front());

@@ -729,14 +729,32 @@ TEST_CASE("update: a server plugin an earlier release shipped goes when it is as
     CHECK(fs::is_directory(dir2.path() / "plugins"));
 }
 
+TEST_CASE("update: a pack file an earlier release shipped and a later one renamed goes, its folder stays") {
+    test::ScratchDir dir("update_retire_ui");
+    const fs::path inst = dir.path();
+    const std::string old_file = "-- the menu button as 0.7.1 shipped it", old_hash = to_hex(sha256(old_file));
+    const std::vector<RetiredFile> retired = {{"ui/modern/eqmain.lua", old_file.size(), old_hash}};
+    put(inst / "ui/modern/eqmain.lua", old_file);
+    const auto removed = retire_old_release_files(inst, retired);
+    CHECK(removed == std::vector<std::string>{"ui/modern/eqmain.lua"});
+    CHECK(!fs::exists(inst / "ui/modern/eqmain.lua"));
+    CHECK(fs::is_directory(inst / "ui/modern")); // emptied, but a pack's folder is not the updater's to remove
+
+    // The player's own edit of it stays.
+    put(inst / "ui/modern/eqmain.lua", "-- edited");
+    CHECK(retire_old_release_files(inst, retired).empty());
+    CHECK(get(inst / "ui/modern/eqmain.lua") == "-- edited");
+}
+
 TEST_CASE("update: the retired files' table") {
-    // A typo in a row would make it match nothing; every row names a server plugin's file.
-    CHECK(retired_release_files().size() == 29);
+    // A typo in a row would make it match nothing; every row names a server plugin's file or a renamed pack file.
+    CHECK(retired_release_files().size() == 30);
     for (const RetiredFile& f : retired_release_files()) {
         CAPTURE(f.path);
         CHECK(parse_sha256(f.sha256));
         CHECK(f.size > 0);
-        CHECK((f.path.starts_with("plugins/nms/") || f.path.starts_with("plugins/projecttriune/")));
+        CHECK((f.path.starts_with("plugins/nms/") || f.path.starts_with("plugins/projecttriune/") ||
+               f.path == "ui/modern/eqmain.lua"));
     }
     test::ScratchDir dir("update_retire_table");
     CHECK(retire_old_release_files(dir.path()).empty());

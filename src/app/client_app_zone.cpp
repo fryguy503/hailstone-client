@@ -1089,18 +1089,17 @@ void ClientApp::update_missiles() {
             std::uint8_t anim =
                 game::missile_launch_animation(p.skill, p.item_type, p.range, s.race, s.class_id, body_wet, new_style);
             if (anim != 0xfe && anim != 0x4f) conn_->play_animation(s.id, anim);
-            std::uint32_t length = 0;
+            const assets::AnimationClip* anim_clip = nullptr;
             if (actor_renderer_) {
                 if (auto model = actor_renderer_->model_for(s)) {
                     // CalcAnimLength: the clip's length (a new-style model's first variant).
                     std::string code = game::action_clip(
                         anim, [&](std::string_view c) { return model->clip(c) != nullptr; },
                         new_style && model->eqg, {s.player_state, 0, -1});
-                    if (const assets::AnimationClip* c = code.empty() ? nullptr : model->clip(code))
-                        length = static_cast<std::uint32_t>(c->frame_count) * static_cast<std::uint32_t>(c->frame_ms);
+                    anim_clip = code.empty() ? nullptr : model->clip(code);
                 }
             }
-            delay = game::missile_launch_delay(length, p.range);
+            delay = game::missile_launch_delay(anim_clip, p.range);
         }
         log::debug("missile {} from {} at {} ({} type {} range {}), launch in {} ms", p.model, p.source_id, p.target_id,
                    p.item_id, p.item_type, p.range, delay);

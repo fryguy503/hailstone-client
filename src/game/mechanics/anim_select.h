@@ -33,6 +33,8 @@ namespace hailstone::game::mechanics {
 // the original pushes; a choice of 0xfe ("no animation", the dword at
 // 0xa1e344) starts nothing.
 inline constexpr std::uint8_t kNoAnimation = 0xfe;
+// The new-style sequence codes (0x4f..0xb6): the first is XXXX, the last SATK.
+inline constexpr std::uint8_t kFirstNewStyleCode = 0x4f, kLastNewStyleCode = 0xb6;
 struct AnimStart {
     bool played = false;    // false: nothing started (the choice was 0xfe, or the path starts nothing)
     std::uint8_t anim = kNoAnimation;
@@ -107,7 +109,7 @@ struct IdleAnimInput {
     float speed_heading = 0.0f;     // +0x8c
     std::uint32_t owner_38c = 0;    // +0x38c (set: a fidget needs a roll above 99)
     std::uint8_t byte_1229 = 0;     // +0x1229 (set: never fidgets)
-    bool attacking = false;         // __Attack
+    bool attacking = false;         // the global auto attack switch (0xe635aa)
     bool local_first_person = false; // the local player with CDisplay::cameraType 0
     std::function<std::int32_t()> random_percent; // RandomPercentRoll (1..100)
 };
@@ -217,7 +219,7 @@ struct OldStyleAnimInput {
     std::uint8_t spawn_type = 0;    // +0x125
     std::uint32_t owner_38c = 0;    // +0x38c
     std::uint8_t byte_1229 = 0;     // +0x1229
-    bool attacking = false;         // __Attack
+    bool attacking = false;         // the global auto attack switch (0xe635aa)
     bool local_player = false, spell_book_active = false;
     // Asked only when they matter.
     std::function<std::int32_t()> random_percent;            // RandomPercentRoll (1..100)
@@ -242,5 +244,10 @@ OldStyleAnimResult select_old_style_anim(const OldStyleAnimInput& in, const Fpu&
 // (and race 2's 5); race 330's 0x14 at 0.75. The x87 result, unrounded.
 double old_model_anim_speed(std::int32_t anim, float speed, std::int32_t race, std::int32_t gender, bool new_model,
                             bool display_129, const Fpu& fpu = Fpu{});
+
+// 0x4b15b0's pre-processing of the packet's speed before 0x4afc90: the mount races (0x8cf970's list, is_mount_race)
+// run at 0.4 and their other animations at 0.5, races 42 and 120's neutral gender (2) non-walk at 0.5, race 330 at
+// 0.65, and a styled model's stand / idle at 0.5 and social (an S clip) at 0.75 when the packet asked 1.0.
+float old_action_speed(std::uint8_t anim, float speed, std::int32_t race, std::int32_t gender, bool new_model);
 
 } // namespace hailstone::game::mechanics

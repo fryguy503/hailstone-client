@@ -282,6 +282,8 @@ SpawnAnimChoice choose_spawn_animation(SpawnAnimState& st, const SpawnAnimInput&
             idle.attacking = in.attacking;
             idle.local_first_person = in.local_player && in.first_person;
             idle.random_percent = roll;
+            // +0x1229 (a nonzero value stops the fidget) and the spell book's slot 0x94 stay at their defaults:
+            // their origin is not confirmed (docs/unknowns.md "Animation fields not traced").
             mech::IdleAnimResult ir = mech::choose_idle_animation(idle);
             if (ir.set_still_since) st.still_since = in.now_ms;
             r = ir.start;
@@ -333,6 +335,16 @@ SpawnAnimChoice choose_spawn_animation(SpawnAnimState& st, const SpawnAnimInput&
     o.local_player = in.local_player;
     o.random_percent = roll;
     o.can_idle = old_can_idle;
+    // 0x4afe60 reads the same fields the new-style update does: +0x38c (a pet's master: the fidget needs a roll
+    // above 99), the update's turning argument and +0x8c (0x58af10 passes the argument to ChooseIdleAnimation too)
+    // and the global auto attack switch (0xe635aa, 0x4b01dd).
+    o.owner_38c = in.owner_id;
+    o.flag = in.turning;
+    o.speed_heading = in.speed_heading;
+    o.attacking = in.attacking;
+    // +0x1229, the spell book's slot 0x94, the mount fields beyond GetMount's motion, +0x1198 and the jump / fall
+    // fields (+0x10, +0x163, +0x180) stay at their defaults: their origin is not confirmed (docs/unknowns.md
+    // "Animation fields not traced").
     mech::OldStyleAnimResult r = mech::select_old_style_anim(o, fpu);
     if (r.set_still_since) st.still_since = r.still_since;
     if (!r.start.played) return keep;
@@ -368,6 +380,10 @@ SpawnAnimChoice choose_spawn_animation(SpawnAnimState& st, const SpawnAnimInput&
     const bool plain = classic_plain_stand_after(st.anim);
     if (!has_anim(anim) || anim == AnimationType::Stand) {
         anim = AnimationType::Stand;
+        // 0x4b1a70: the stand input is 1.0 and looping, whatever the missing animation asked; the reverse flag
+        // is not cleared (0x4b1ab3 touches only the restart flag and the speed).
+        r.start.speed = 1.0f;
+        r.start.play_once = false;
         if (in.follow_up == num(AnimationType::Stand)) {
             if (!plain) anim = AnimationType::StandAfter;
         } else {
@@ -383,19 +399,24 @@ SpawnAnimChoice choose_spawn_animation(SpawnAnimState& st, const SpawnAnimInput&
     if (!has_anim(anim)) {
         anim = AnimationType::Stand;
         if (!has_anim(anim)) return keep;
+        r.start.speed = 1.0f;
+        r.start.play_once = false;
     }
     const std::string clip(mech::old_anim_clip(num(anim)));
-    double rate = mech::old_model_anim_speed(num(anim), r.start.speed, in.race, in.gender, false, false, fpu);
+    // The movement's rate takes the same route as an action's: 0x4b15b0's pre-processing, then 0x4afc90.
+    double rate = classic_action_rate(num(anim), r.start.speed, in.race, in.gender, in.tunic_point,
+                                      in.luclin_elementals);
     // 0x4b15b0 starts the layers with a 100 ms blend (0x9c3988) whatever the animation; the tag table's
     // blend times are the new-style object's.
-    SpawnAnimChoice c = start(clip, num(anim), r.start.reverse, static_cast<float>(rate), !r.start.play_once, 100.0f);
+    SpawnAnimChoice c =
+        start(clip, num(anim), r.start.reverse, static_cast<float>(rate), !r.start.play_once, kClassicBlendMs);
     c.follow_up = num(follow_up);
     return c;
 }
 
 std::string action_clip(std::uint8_t action, const std::function<bool(std::string_view)>& has_clip, bool new_style,
                         const NewStyleTrackInput& track_in, const std::function<int()>& rand,
-                        std::uint8_t* playing) {
+                        std::uint8_t* playing, bool* stand_request, std::uint8_t* normalized) {
     if (playing) *playing = action;
     if (new_style) {
         // The new-style object's slot 0x14: an old-style number through the map at 0xaaf5c8.
@@ -406,14 +427,83 @@ std::string action_clip(std::uint8_t action, const std::function<bool(std::strin
         return t.clip;
     }
     // 0x4b15b0: a new-style code becomes its old-style number (0xaaf428); 0x4f and above play nothing.
-    if (action >= 0x4f && action <= 0xb6) action = mech::new_to_old_anim(action);
-    if (playing) *playing = action;
-    if (action == 0 || action >= 0x4f) return {};
+    if (action >= static_cast<std::uint8_t>(AnimationType::End) && action <= mech::kLastNewStyleCode)
+        action = mech::new_to_old_anim(action);
+    if (normalized) *normalized = action;
+    if (action == 0 || action >= static_cast<std::uint8_t>(AnimationType::End)) {
+        if (playing) *playing = action;
+        return {};
+    }
     std::string code(mech::old_anim_clip(action));
-    if (has_clip(code)) return code;
+    // 0x4b15b0's stand path: a P01 request (0x20) is the stand, not a one-shot action.
+    if (action == static_cast<std::uint8_t>(AnimationType::Stand)) {
+        if (playing) *playing = action;
+        if (stand_request) *stand_request = true;
+        return {};
+    }
+    if (has_clip(code)) {
+        if (playing) *playing = action;
+        return code;
+    }
+    // 0x4b1210's replacement; the stand it falls back to is 0x4b15b0's stand request, which the movement choice
+    // plays (P01, or the follow-up +0x10c4).
     AnimationType r = old_replacement(static_cast<AnimationType>(action));
-    std::string alt = r == AnimationType::Stand ? std::string() : std::string(mech::old_anim_clip(num(r)));
-    return !alt.empty() && has_clip(alt) ? alt : std::string{};
+    if (r == AnimationType::Stand) {
+        if (playing) *playing = num(r);
+        if (stand_request) *stand_request = true;
+        return {};
+    }
+    std::string alt(mech::old_anim_clip(num(r)));
+    if (!alt.empty() && has_clip(alt)) {
+        if (playing) *playing = num(r);
+        return alt;
+    }
+    // The replacement is missing too: 0x4b15b0 asks for the stand.
+    if (playing) *playing = num(AnimationType::Stand);
+    if (stand_request) *stand_request = true;
+    return {};
+}
+
+float classic_action_rate(std::uint8_t anim, float speed, std::uint16_t race, std::uint8_t gender,
+                          bool tunic_point, bool luclin_elementals) {
+    const float pre = mech::old_action_speed(anim, speed, race, gender, tunic_point);
+    return static_cast<float>(mech::old_model_anim_speed(anim, pre, race, gender, tunic_point, luclin_elementals));
+}
+
+bool classic_idle_request(std::uint8_t requested) {
+    // 0x4b1ba0: P01, P03, P08, O01, O02 and 0xc..0xf.
+    return requested == num(AnimationType::Stand) || requested == num(AnimationType::Turn) ||
+           requested == num(AnimationType::StandAfter) || requested == num(AnimationType::Idle) ||
+           requested == num(AnimationType::IdleAfter) || (requested >= 0xc && requested <= 0xf);
+}
+
+ClassicStand classic_stand_request(std::uint8_t normalized, std::uint8_t playing, std::uint8_t stand_state,
+                                   const std::function<bool(std::string_view)>& has_clip,
+                                   const ClassicStandContext& ctx) {
+    // 0x4b1917: a direct stand request from a sitting actor becomes the sit clip before the lookup. Without P07
+    // nothing plays (0x4b1a06); with it the sit clip keeps the packet's speed, not the stand fallback's 1.0.
+    // Race 0x3c and the local player in first person (CDisplay::cameraType 0) play nothing (0x4b194b, 0x4b195b).
+    if (stand_state == kStandStateSitting && normalized == num(AnimationType::Stand)) {
+        if (ctx.race == kRaceNoSitConversion || ctx.local_first_person) return {};
+        if (!has_clip("P07")) return {};
+        return {"P07", num(AnimationType::Sit), true};
+    }
+    // 0x4b1b97: an actor that is not standing (+0x35c not 100) plays nothing for an idle request (the packet's
+    // own number), unless it became the sit clip above.
+    if (stand_state != kStandStateStanding && classic_idle_request(ctx.requested.value_or(normalized))) return {};
+    const bool plain = classic_plain_stand_after(playing);
+    std::uint8_t anim = plain ? num(AnimationType::Stand) : num(AnimationType::StandAfter);
+    std::string_view c = mech::old_anim_clip(anim);
+    if (!c.empty() && has_clip(c)) return {std::string(c), anim};
+    // A model without P08 plays P01's clip and code; without P01 too, nothing.
+    anim = num(AnimationType::Stand);
+    c = mech::old_anim_clip(anim);
+    if (!c.empty() && has_clip(c)) return {std::string(c), anim};
+    return {};
+}
+
+std::uint8_t classic_follow_up_after(std::uint8_t playing) {
+    return classic_plain_stand_after(playing) ? num(AnimationType::Stand) : num(AnimationType::StandAfter);
 }
 
 } // namespace hailstone::game

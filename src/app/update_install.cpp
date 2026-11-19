@@ -588,6 +588,9 @@ const std::vector<RetiredFile>& retired_release_files() {
     {"plugins/projecttriune/ui/modern/triunevault.lua", 831, "1e29e1be0ffd8850cadafa1655d811ef9905a7d3c502e0ec2dda76e2fbfa4f0e"},
     {"plugins/projecttriune/ui/modern/triunewaypoints.lua", 5725, "78b3fadaec4bade4fcedcfc6f9c52eb04d3470ddf0747f3c80867eb03ed2d05e"},
     {"plugins/projecttriune/ui/modern/triunewindows.lua", 287, "a7dde89e4d0395d2c4059ecd0934176790fd119e35d7c3f04c327d1050df8f2b"},
+    // Modern's menu button, 0.5.0-beta to 0.7.1-beta (the same file in each): 0.7.2-beta renamed it game_menu.lua, and a
+    // folder unpacked by hand keeps the old copy at its first update, which would draw a second "EQ Button" window.
+    {"ui/modern/eqmain.lua", 1323, "6733a73cfd270de8f1f0597e4c130bb554781485cbff84e344a4ed0bef3afa28"},
     };
     return files;
 }
@@ -641,16 +644,17 @@ std::vector<std::string> retire_old_release_files(const fs::path& install_dir,
         if (!digest || !fs::is_regular_file(target, ec) || !package_file_matches(target, f.size, *digest)) continue;
         if (!fs::remove(target, ec)) continue;
         removed.emplace_back(f.path);
-        for (fs::path d = target.parent_path(); d != plugins && d != install_dir && d.has_relative_path();
-             d = d.parent_path())
-            dirs.insert(d);
+        // Only a plugin's folders are emptied away; a UI pack's file leaves its folder as it is.
+        if (std::mismatch(plugins.begin(), plugins.end(), target.begin(), target.end()).first == plugins.end())
+            for (fs::path d = target.parent_path(); d != plugins && d != install_dir && d.has_relative_path();
+                 d = d.parent_path())
+                dirs.insert(d);
     }
     // Deepest first (a subfolder sorts after its parent), so a folder emptied by removing its empty subfolder goes too.
     for (auto it = dirs.rbegin(); it != dirs.rend(); ++it)
         if (fs::is_directory(*it, ec) && fs::is_empty(*it, ec)) fs::remove(*it, ec);
     if (!removed.empty())
-        log::info("Update: removed {} file(s) of the server plugins an earlier release shipped; they are add-ons now",
-                  removed.size());
+        log::info("Update: removed {} file(s) an earlier release shipped and this one no longer does", removed.size());
     return removed;
 }
 

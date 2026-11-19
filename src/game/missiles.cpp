@@ -4,6 +4,7 @@
 #include <cmath>
 #include <numbers>
 
+#include "assets/character.h"
 #include "core/byte_io.h"
 #include "core/log.h"
 #include "game/doors.h"
@@ -168,8 +169,17 @@ std::uint8_t missile_launch_animation(std::uint8_t skill, std::uint8_t item_type
 
 std::uint32_t missile_launch_delay(std::uint32_t anim_length_ms, std::uint8_t range) {
     if (range == 0) return 0;
-    float d = std::nearbyint(static_cast<float>(anim_length_ms) * 0.7f);
-    return d == 0.0f ? 1500u : static_cast<std::uint32_t>(d);
+    // 0x58f5f0-0x58f622: fild of the length, fmul by the float 0.7 (0x9cf8b8, 0.699999988) at extended precision,
+    // then truncated (the control word's rounding bits set to chop); a result below 1 ms falls back to 0x5dc
+    // (1500 ms). The product is not rounded to a float first, so 1000 ms gives 699, not 700; a double holds it
+    // exactly (24-bit factor by a length under 2^29).
+    const auto d =
+        static_cast<std::uint32_t>(static_cast<double>(anim_length_ms) * static_cast<double>(kLaunchFraction));
+    return d < 1 ? kDefaultLaunchMs : d;
+}
+
+std::uint32_t missile_launch_delay(const assets::AnimationClip* clip, std::uint8_t range) {
+    return missile_launch_delay(clip ? assets::clip_length_ms(*clip) : 0, range);
 }
 
 float cmath_angle512(float a, float b) {

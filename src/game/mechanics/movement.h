@@ -49,6 +49,10 @@
 #include "game/mechanics/fpu.h"
 #include "game/mechanics/physics.h"
 
+namespace hailstone::assets {
+struct AnimationClip;
+}
+
 namespace hailstone::game::mechanics {
 
 // ---------------------------------------------------------------- constants
@@ -314,6 +318,9 @@ void main_loop_jump(JumpState& state, JumpSpawn& spawn, JumpQueries& q, std::uin
 // 0x406740, the jump's crouch window: the actor definition's duck track (row 0x18 on old-style models, slot 0)
 // gives its length (track vf0, truncated with a chop control word), plus 1, at most 500; 500 without the track.
 std::uint32_t jump_crouch_window(std::optional<double> duck_track_length);
+// The same from the duck clip itself: the clip's own period (the .ani's last key time), not the resampled grid's
+// end; 500 without a clip.
+std::uint32_t jump_crouch_window(const assets::AnimationClip* duck_clip);
 // The clip 0x406740 reads: by the actor's HasNewStyleHierarchicalModel (vtable +0xbc), row 0x7a - 0x4f (CRCH)
 // of a new-style table or row 0x18 (L08) of a classic one, slot 0 (column 0, BA; variant 1), the track
 // FindAnimationTrackForModel @0x406830 binds as "CRCH_BA_1".

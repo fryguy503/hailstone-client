@@ -36,6 +36,9 @@ namespace hailstone::game {
 inline constexpr std::uint8_t kUpperBones = 0; // GetBoneGroup(0): ActorClient +0x174
 inline constexpr std::uint8_t kLowerBones = 1; // GetBoneGroup(1): ActorClient +0x170
 
+// The classic layers' cross-fade (0x9c3988): 100 ms, whatever the animation.
+inline constexpr float kClassicBlendMs = 100.0f;
+
 // 0x408f80, the classic skeleton's callback: past the tag's three-letter
 // model code, "CHCHEST_" is group 1 and FA, HE, FI, FO, BI, NE, HI, CH are
 // group 0; anything else is group 1.

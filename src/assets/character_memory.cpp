@@ -81,7 +81,8 @@ CharacterModel::MemoryBreakdown CharacterModel::memory_breakdown(AnimationTrack:
                                       shared_animations ? *shared_animations : local_animations);
     for (const auto& e : emitters) out.other_bytes += e.point.size();
     for (const auto& [name, clip] : clips) {
-        out.animation_bytes += sizeof(decltype(clips)::value_type) + name.size() + vector_bytes(clip.tracks);
+        out.animation_bytes += sizeof(decltype(clips)::value_type) + name.size() + vector_bytes(clip.tracks) +
+                               vector_bytes(clip.frame_times_ms);
         for (const auto& track : clip.tracks) out.animation_bytes += track.storage_bytes(seen);
     }
     for (const auto& [name, alias] : clip_aliases)

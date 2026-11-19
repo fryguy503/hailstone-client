@@ -22,6 +22,8 @@
 #include "assets/spell_effects.h"
 #include "core/game_dir.h"
 #include "game/appearance.h"
+#include "game/mechanics/movement.h"
+#include "game/missiles.h"
 #include "game/appearance_data.h"
 #include "game/race_models.h"
 #include "game_files.h"
@@ -504,6 +506,7 @@ TEST_CASE("a Luclin model holding something raises its shield arm (variant B)" *
     auto m = lib.model("DAF");
     REQUIRE(m);
     REQUIRE(m->find_bone("TUNIC_POINT_TRACK") >= 0);
+    CHECK(m->tunic_point);
     const auto* held = m->clip("P01", true);
     const auto* empty = m->clip("P01", false);
     REQUIRE(held);
@@ -1366,11 +1369,98 @@ TEST_CASE("EQG clips: key times 0 and 0xFFFFFFFF resample to at most kMaxClipFra
     CHECK(bad->frame_count == eqg_character::kMaxClipFrames);
     CHECK(bad->tracks[0].size() == eqg_character::kMaxClipFrames);
     // A stock-length clip is untouched: 1000 ms at the mean key spacing (clamped to 200 ms) is six frames.
+    constexpr std::uint32_t kLastKeyMs = 1000;
     const AnimationClip* good = m.clip("P01");
     REQUIRE(good);
     CHECK(good->frame_ms == 200);
     CHECK(good->frame_count == 6);
+    CHECK(good->length_ms() == kLastKeyMs); // the last key's 1000 ms, not 6 x 200
+    CHECK(good->duration_seconds() == doctest::Approx(static_cast<float>(kLastKeyMs) / AnimationClip::kMsPerSecond));
     CHECK(near(good->tracks[0].back().translation, {0, 0, 1}));
+}
+
+TEST_CASE("EQG clips: the period is the .ani's last key time, not the resampled grid's end") {
+    eqg_character::MeshFile mesh;
+    eqg_character::Bone bone;
+    bone.name = "TST_TRACK";
+    mesh.bones.push_back(bone);
+    mesh.materials.push_back({"M", "Opaque_MaxCB1.fx", "none"});
+    eqg_character::Piece piece;
+    piece.name = "TST";
+    constexpr std::size_t kTriangleVertices = 3;
+    piece.vertices.resize(kTriangleVertices);
+    piece.triangles.push_back({0, 1, 2});
+    piece.triangle_materials.push_back(0);
+    mesh.pieces.push_back(piece);
+
+    // A walk keyed every 33 ms with its last key at 666 ms: the mean spacing floors to 33, so the resampled grid
+    // ends at 20 x 33 = 660 ms and frame_count x frame_ms would run 693 ms. The original plays the last key's 666.
+    constexpr std::uint32_t kKeyStepMs = 33, kLastKeyMs = 666;
+    constexpr int kKeysBeforeLast = 20;
+    constexpr int kGridFrames = kKeysBeforeLast + 1; // 0, 33, ..., 660
+    constexpr int kClipFrames = kGridFrames + 1;     // and the last key's own frame at 666
+    eqg_character::Track track;
+    track.bone = "tst_track";
+    for (int k = 0; k < kKeysBeforeLast; ++k)
+        track.times_ms.push_back(static_cast<std::uint32_t>(k) * kKeyStepMs);
+    track.times_ms.push_back(kLastKeyMs);
+    track.poses.resize(track.times_ms.size());
+    track.poses.back().translation = {0, 0, 1};
+    auto m = eqg_character::build_model(mesh, "TST", {{"L01", eqg_character::AnimationFile{{track}}}});
+    const AnimationClip* walk = m.clip("L01");
+    REQUIRE(walk);
+    CHECK(walk->frame_ms == kKeyStepMs);
+    CHECK(walk->frame_count == kClipFrames);
+    CHECK(walk->length_ms() == kLastKeyMs);
+    CHECK(walk->duration_seconds() == doctest::Approx(static_cast<float>(kLastKeyMs) / AnimationClip::kMsPerSecond));
+    REQUIRE(walk->frame_times_ms.size() == walk->frame_count);
+    CHECK(walk->frame_times_ms.back() == kLastKeyMs);
+    // A one-shot shows the end pose at the last key's time; just before it the pose is between the last two keys.
+    std::vector<BonePose> pose;
+    m.sample_local(*walk, static_cast<float>(kLastKeyMs) / AnimationClip::kMsPerSecond, false, pose);
+    CHECK(near(pose[0].translation, {0, 0, 1}));
+    m.sample_local(*walk, static_cast<float>(kLastKeyMs - 1) / AnimationClip::kMsPerSecond, false, pose);
+    CHECK(pose[0].translation.z > 0.0f);
+    CHECK(pose[0].translation.z < 1.0f);
+    // A loop wraps at the last key's time, not at the grid's end.
+    m.sample_local(*walk, static_cast<float>(kLastKeyMs) / AnimationClip::kMsPerSecond, true, pose);
+    CHECK(near(pose[0].translation, {0, 0, 0}));
+}
+
+TEST_CASE("the jump's crouch window and a missile's launch delay use the clip's own period") {
+    // The jump's crouch window (0x406740) and a missile's CalcAnimLength read the clip's own period, not the
+    // resampled grid's end. A clip under the 500 ms crouch cap shows the difference.
+    constexpr std::uint32_t kFrameStepMs = 33, kGridFrameCount = 21, kClipDurationMs = 400;
+    constexpr std::uint8_t kRange = 7;
+    AnimationClip clip;
+    clip.frame_ms = kFrameStepMs;
+    clip.frame_count = kGridFrameCount;
+    clip.duration_ms = kClipDurationMs;
+    CHECK(game::mechanics::jump_crouch_window(&clip) == kClipDurationMs + 1);
+    // 400 x 0.699999988 = 279.99999 at the FPU's extended precision, truncated (0x58f5fe-0x58f622).
+    constexpr std::uint32_t kClipDelayMs = 279;
+    CHECK(game::missile_launch_delay(&clip, kRange) == kClipDelayMs);
+    // Without a clip the crouch window is its 500 ms default and the launch delay 1500 ms.
+    CHECK(game::mechanics::jump_crouch_window(nullptr) == game::mechanics::kJumpWindowMs);
+    CHECK(game::missile_launch_delay(nullptr, kRange) == game::kDefaultLaunchMs);
+}
+
+TEST_CASE("EQG models: a TUNIC_POINT dag sets the animation set's +0x34") {
+    eqg_character::MeshFile mesh;
+    eqg_character::Bone bone;
+    bone.name = "TSTTUNIC_POINT_TRACK";
+    mesh.bones.push_back(bone);
+    mesh.materials.push_back({"M", "Opaque_MaxCB1.fx", "none"});
+    eqg_character::Piece piece;
+    piece.name = "TST";
+    constexpr std::size_t kTriangleVertices = 3;
+    piece.vertices.resize(kTriangleVertices);
+    piece.triangles.push_back({0, 1, 2});
+    piece.triangle_materials.push_back(0);
+    mesh.pieces.push_back(piece);
+    CHECK(eqg_character::build_model(mesh, "TST", {}).tunic_point);
+    mesh.bones[0].name = "TST_TRACK";
+    CHECK_FALSE(eqg_character::build_model(mesh, "TST", {}).tunic_point);
 }
 
 TEST_CASE("EQG clips: the model's clips together stop at the pose budget; a clip past it is left out") {

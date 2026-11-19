@@ -58,6 +58,7 @@ struct ActorDraw {
     bool holding = false; // game::holds_item: the clips are the model's holding variants (CharacterModel::clip)
     const assets::AnimationClip* previous_clip = nullptr;
     float previous_time = 0.0f;
+    bool previous_loop = true; // the previous clip's loop flag: a played-out one-shot holds its last frame
     float blend = 1.0f;
     // The upper body's own animation (render/actor_layers.h: an action over the legs): when `upper_clip` is set,
     // the bones `bone_groups` puts in game::kUpperBones are posed from it (blended the same way), the others from
@@ -67,6 +68,7 @@ struct ActorDraw {
     bool upper_loop = true;
     const assets::AnimationClip* upper_previous_clip = nullptr;
     float upper_previous_time = 0.0f;
+    bool upper_previous_loop = true;
     float upper_blend = 1.0f;
     const std::vector<std::uint8_t>* bone_groups = nullptr; // per bone of the model (game/anim_layers.h)
     // A rider hangs from its mount's dag 0xe (PlayerClient_AttachRiderToMount, the actor vtable +0x1b8): its

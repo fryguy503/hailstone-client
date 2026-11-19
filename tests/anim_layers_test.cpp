@@ -9,6 +9,7 @@
 #include "assets/character.h"
 #include "core/worker_pool.h"
 #include "game/anim_layers.h"
+#include "game/animation_types.h"
 #include "game/world_state.h"
 #include "render/actor_layers.h"
 #include "render/actor_renderer.h"
@@ -111,10 +112,23 @@ TEST_CASE("new-style layer modes (0x58ac90)") {
 }
 
 namespace {
+constexpr std::uint32_t kFrameMs = 100; // the clip helper's frame time
+constexpr std::uint32_t kStandFrames = 10, kActionFrames = 8;
+constexpr float kStep = 0.1f;
+constexpr float kHalfStep = kStep * 0.5f;
+constexpr float kHalfBlend = 0.5f; // the blend weight halfway through
+constexpr float kHalfPoseZ = 0.5f; // halfway between the last frame's z = 1 and the stand's z = 0
+constexpr float kActionSeconds = static_cast<float>(kActionFrames * kFrameMs) / assets::AnimationClip::kMsPerSecond;
+constexpr float kRunSpeed = 0.7f;
+constexpr float kPacketRate = 0.5f; // a packet speed of 5 / 10
+constexpr std::uint8_t kStanding = 100, kSitting = 110;
+// New-style sequence codes the layer tests use (the sequence table at 0xaae3d8).
+constexpr std::uint8_t kSlpr = 0x50, kKick = 0x5f;
+constexpr std::uint8_t anim_code(hailstone::AnimationType a) { return static_cast<std::uint8_t>(a); }
 assets::AnimationClip clip(std::uint32_t frames) {
     assets::AnimationClip c;
     c.frame_count = frames;
-    c.frame_ms = 100;
+    c.frame_ms = kFrameMs;
     return c;
 }
 } // namespace
@@ -129,7 +143,7 @@ TEST_CASE("classic: an attack while running plays over the legs") {
     req.speed_run = 0.7f;
     for (int i = 0; i < 3; ++i) l.step(req, 0.1f);
     CHECK(l.group[kLowerBones].clip == &run);
-    REQUIRE(l.start_action(&attack, 5, 1.0f, req));
+    REQUIRE(l.start_action(&attack, anim_code(AnimationType::ThrowOrOneHandSlash), anim_code(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
     CHECK_FALSE(l.action_on_legs);
     l.step(req, 0.1f);
     CHECK(l.group[kUpperBones].clip == &attack);
@@ -138,6 +152,7 @@ TEST_CASE("classic: an attack while running plays over the legs") {
     // Stopping under the attack: the legs keep their clip until it ends (P01 waits).
     req.base = &stand;
     req.base_anim = 0x20;
+    req.stand_request = true;
     req.speed_run = 0.0f;
     l.step(req, 0.1f);
     CHECK(l.group[kLowerBones].clip == &run);
@@ -147,15 +162,236 @@ TEST_CASE("classic: an attack while running plays over the legs") {
     CHECK(l.group[kLowerBones].clip == &stand);
 }
 
+TEST_CASE("classic: the interrupt test uses the requested number, the queue and state the chosen one") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    auto stand = clip(kStandFrames), c05 = clip(kActionFrames), t05 = clip(kActionFrames);
+    ActorLayers l;
+    LayerRequest req;
+    req.base = &stand;
+    req.base_anim = anim(AnimationType::Stand);
+    req.stand_request = true;
+    l.step(req, kStep);
+    // The upper body plays C05, which CastHeals may not interrupt.
+    REQUIRE(l.start_action(&c05, anim(AnimationType::ThrowOrOneHandSlash), anim(AnimationType::ThrowOrOneHandSlash),
+                           1.0f, req));
+    l.step(req, kStep);
+    REQUIRE(l.group[kUpperBones].clip == &c05);
+    // CastNuke always interrupts; its clip is missing and 0x4b1210 makes it CastHeals. The test must use the
+    // requested CastNuke, not the chosen CastHeals, or the action is refused and disappears.
+    CHECK(l.start_action(&t05, anim(AnimationType::CastNuke), anim(AnimationType::CastHeals), 1.0f, req));
+    CHECK(l.action_anim == anim(AnimationType::CastHeals));
+}
+
+TEST_CASE("classic: the stand path's clip reaches the layer, forward and keeping its phase") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    auto has = [](std::string_view c) { return c == "P01" || c == "P08"; };
+    // After a run the stand path picks P08; a model without P08 plays P01's clip and code.
+    const auto p08_stand = hailstone::game::classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kStanding, has);
+    REQUIRE(p08_stand.clip == "P08");
+    CHECK(p08_stand.anim == anim(AnimationType::StandAfter));
+    auto has2 = [](std::string_view c) { return c == "P01"; };
+    const auto p01_stand = hailstone::game::classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kStanding, has2);
+    CHECK(p01_stand.clip == "P01");
+    CHECK(p01_stand.anim == anim(AnimationType::Stand));
+    auto has3 = [](std::string_view) { return false; };
+    CHECK(hailstone::game::classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kStanding, has3).clip.empty());
+
+    auto walk = clip(kStandFrames), p08 = clip(kStandFrames);
+    ActorLayers l;
+    LayerRequest req;
+    req.base = &walk;
+    req.base_anim = anim(AnimationType::Walk);
+    req.reverse = true; // backward walking
+    l.step(req, kStep);
+    REQUIRE(l.group[kLowerBones].clip == &walk);
+    // The real stand path replaces the walk on both groups, forward, with P08's own code.
+    REQUIRE(l.start_stand(&p08, anim(AnimationType::Stand), p08_stand.anim, 1.0f, req));
+    l.step(req, kStep);
+    CHECK(l.group[kLowerBones].clip == &p08);
+    CHECK(l.group[kUpperBones].clip == &p08);
+    CHECK(l.group[kLowerBones].anim == p08_stand.anim);
+    CHECK(l.group[kUpperBones].anim == p08_stand.anim);
+    CHECK_FALSE(l.group[kLowerBones].reverse);
+    // The same clip asked again keeps its phase (0x4b1ab3 clears the restart flag).
+    const float t = l.group[kLowerBones].time;
+    REQUIRE(l.start_stand(&p08, anim(AnimationType::Stand), p08_stand.anim, 1.0f, req));
+    l.step(req, kStep);
+    CHECK(l.group[kLowerBones].time > t);
+    CHECK(l.group[kLowerBones].anim == p08_stand.anim);
+}
+
+TEST_CASE("classic: the stand path uses the posture and the play state before the movement choice") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    auto has = [](std::string_view c) { return c == "P01" || c == "P07" || c == "P08"; };
+    // Sitting: the stand request becomes the sit clip before the lookup, at the packet's speed.
+    auto stand = hailstone::game::classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kSitting, has);
+    CHECK(stand.clip == "P07");
+    CHECK(stand.anim == anim(AnimationType::Sit));
+    CHECK(stand.sit);
+    // A model without P07 plays nothing (0x4b1a06): the actor stays sitting.
+    auto has2 = [](std::string_view c) { return c == "P01" || c == "P08"; };
+    stand = hailstone::game::classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kSitting, has2);
+    CHECK(stand.clip.empty());
+    // Standing: the play state before the movement choice decides P01 or P08 (a run gives P08, a walk P01).
+    stand = hailstone::game::classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kStanding, has);
+    CHECK(stand.clip == "P08");
+    CHECK_FALSE(stand.sit);
+    stand = hailstone::game::classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Walk), kStanding, has);
+    CHECK(stand.clip == "P01");
+}
+
+TEST_CASE("classic: the stand path off its feet (0x4b1917, 0x4b1b97)") {
+    using hailstone::AnimationType;
+    using hailstone::game::ClassicStandContext;
+    using hailstone::game::classic_stand_request;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    constexpr std::uint8_t kDucking = hailstone::game::kStandStateDucking;
+    constexpr std::uint16_t kRace3c = 0x3c, kHuman = 1;
+    auto has = [](std::string_view c) { return c == "P01" || c == "P07" || c == "P08"; };
+    // Race 0x3c and the local player in first person never take the sit clip: nothing plays.
+    CHECK(classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kSitting, has,
+                                ClassicStandContext{std::nullopt, kRace3c, false})
+              .clip.empty());
+    CHECK(classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kSitting, has,
+                                ClassicStandContext{std::nullopt, kHuman, true})
+              .clip.empty());
+    CHECK(classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kSitting, has,
+                                ClassicStandContext{std::nullopt, kHuman, false})
+              .clip == "P07");
+    // Ducking: a P01 request is an idle request, so nothing plays.
+    CHECK(classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kDucking, has).clip.empty());
+    // An action whose clip and replacement are missing is not an idle request: the stand plays, ducking or not.
+    CHECK(classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Walk), kDucking, has,
+                                ClassicStandContext{anim(AnimationType::MainhandSlash), kHuman, false})
+              .clip == "P01");
+    // A sitting actor's missing action is not converted to the sit clip either.
+    CHECK(classic_stand_request(anim(AnimationType::MainhandSlash), anim(AnimationType::Walk), kSitting, has,
+                                ClassicStandContext{anim(AnimationType::MainhandSlash), kHuman, false})
+              .clip == "P01");
+    CHECK(hailstone::game::classic_idle_request(anim(AnimationType::Turn)));
+    CHECK(hailstone::game::classic_idle_request(0xc));
+    CHECK(hailstone::game::classic_idle_request(0xf));
+    CHECK_FALSE(hailstone::game::classic_idle_request(0x10));
+    CHECK_FALSE(hailstone::game::classic_idle_request(anim(AnimationType::Sit)));
+}
+
+TEST_CASE("classic: a sitting actor's P07 plays as the packet action, not the stand queue") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    auto p07 = clip(kStandFrames), social = clip(kActionFrames);
+    ActorLayers l;
+    LayerRequest req;
+    req.base = &p07;
+    req.base_anim = anim(AnimationType::Sit);
+    l.step(req, kStep);
+    // A follow-up is queued (as if an action was refused).
+    l.follow_up = anim(AnimationType::Wave);
+    l.follow_clip = &social;
+    l.follow_rate = 1.0f;
+    // The packet's P07 goes through the action path: one-shot, packet speed, and the queue stays.
+    REQUIRE(l.start_action(&p07, anim(AnimationType::Stand), anim(AnimationType::Sit), kPacketRate, req));
+    CHECK(l.action == &p07);
+    CHECK(l.action_anim == anim(AnimationType::Sit));
+    CHECK(l.follow_up == anim(AnimationType::Wave));
+    l.step(req, kStep);
+    CHECK(l.group[kUpperBones].clip == &p07);
+    CHECK_FALSE(l.group[kUpperBones].loop);
+    CHECK(l.group[kUpperBones].rate == doctest::Approx(kPacketRate));
+}
+
+TEST_CASE("classic: a stand packet after a waiting action leaves P01/P08, not the action") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    auto walk = clip(kStandFrames), p08 = clip(kStandFrames), bash = clip(kActionFrames);
+    ActorLayers l;
+    LayerRequest req;
+    req.base = &walk;
+    req.base_anim = anim(AnimationType::Walk);
+    l.step(req, kStep);
+    // A waiting action (C02) is queued.
+    l.follow_up = anim(AnimationType::Piercing);
+    l.follow_clip = &bash;
+    l.follow_rate = 1.0f;
+    // The movement choice asks for L01, so its follow_up_after would still be C02; the stand packet replaces it
+    // with P08 (the run before the movement choice).
+    req.follow_up_after = anim(AnimationType::Piercing);
+    REQUIRE(l.start_stand(&p08, anim(AnimationType::Stand), anim(AnimationType::StandAfter), 1.0f, req));
+    req.follow_up_after = hailstone::game::classic_follow_up_after(anim(AnimationType::Run));
+    l.step(req, kStep);
+    CHECK(l.group[kUpperBones].clip == &bash); // the waiting action played
+    CHECK(l.follow_up == anim(AnimationType::StandAfter));
+    CHECK(l.follow_clip == nullptr);
+}
+
+TEST_CASE("classic: a stand request with only P08 on the legs keeps their phase") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    auto p08 = clip(kStandFrames), action = clip(kActionFrames);
+    ActorLayers l;
+    LayerRequest req;
+    req.base = &p08;
+    req.base_anim = anim(AnimationType::StandAfter);
+    req.humanoid = true;
+    req.speed_run = kRunSpeed; // a moving humanoid: the action plays on the upper body alone
+    l.step(req, kStep);
+    // The upper body plays an action; the legs stay on P08.
+    REQUIRE(l.start_action(&action, anim(AnimationType::ThrowOrOneHandSlash),
+                           anim(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
+    l.step(req, kStep);
+    REQUIRE(l.group[kLowerBones].clip == &p08);
+    const float t = l.group[kLowerBones].time;
+    // The action's cycle is through (the stand may replace it); the legs are still on P08.
+    l.group[kUpperBones].advance(kActionSeconds);
+    REQUIRE(l.group[kUpperBones].completed());
+    // The real stand path asks for P08 again: the legs keep their phase, the action is dropped.
+    auto has = [](std::string_view c) { return c == "P01" || c == "P08"; };
+    const auto stand = hailstone::game::classic_stand_request(anim(AnimationType::Stand), anim(AnimationType::Run), kStanding, has);
+    REQUIRE(stand.clip == "P08");
+    REQUIRE(l.start_stand(&p08, anim(AnimationType::Stand), stand.anim, 1.0f, req));
+    l.step(req, kStep);
+    CHECK(l.group[kLowerBones].clip == &p08);
+    CHECK(l.group[kLowerBones].time > t);
+    CHECK(l.action == nullptr);
+}
+
+TEST_CASE("classic: a stand request refuses a corpse and an unfinished action it may not interrupt") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    auto stand = clip(kStandFrames), c05 = clip(kActionFrames);
+    ActorLayers l;
+    LayerRequest req;
+    req.base = &stand;
+    req.base_anim = anim(AnimationType::Stand);
+    l.step(req, kStep);
+    REQUIRE(l.start_action(&c05, anim(AnimationType::ThrowOrOneHandSlash), anim(AnimationType::ThrowOrOneHandSlash),
+                           1.0f, req));
+    l.step(req, kStep);
+    // C05 is not interruptible and its cycle is not done: the stand request is refused and the action stays.
+    CHECK_FALSE(l.stand_request(anim(AnimationType::Stand), req));
+    CHECK(l.action == &c05);
+    // A corpse refuses too.
+    req.corpse = true;
+    CHECK_FALSE(l.stand_request(anim(AnimationType::Stand), req));
+    req.corpse = false;
+    // Once the cycle is done, the stand may replace it.
+    l.step(req, kActionSeconds);
+    CHECK(l.stand_request(anim(AnimationType::Stand), req));
+    CHECK(l.action == nullptr);
+}
+
 TEST_CASE("classic: running under a whole-body attack takes the legs (humanoids)") {
     auto run = clip(10), attack = clip(8), stand = clip(10);
     ActorLayers l;
     LayerRequest req;
     req.base = &stand;
     req.base_anim = 0x20;
+    req.stand_request = true;
     req.humanoid = true;
     l.step(req, 0.1f);
-    REQUIRE(l.start_action(&attack, 5, 1.0f, req));
+    REQUIRE(l.start_action(&attack, anim_code(AnimationType::ThrowOrOneHandSlash), anim_code(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
     CHECK(l.action_on_legs);
     l.step(req, 0.1f);
     CHECK(l.group[kLowerBones].clip == &attack);
@@ -170,9 +406,10 @@ TEST_CASE("classic: running under a whole-body attack takes the legs (humanoids)
     req.humanoid = false;
     req.base = &stand;
     req.base_anim = 0x20;
+    req.stand_request = true;
     req.speed_run = 0.0f;
     m.step(req, 0.1f);
-    REQUIRE(m.start_action(&attack, 5, 1.0f, req));
+    REQUIRE(m.start_action(&attack, anim_code(AnimationType::ThrowOrOneHandSlash), anim_code(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
     req.base = &run;
     req.base_anim = 0x12;
     req.speed_run = 0.7f;
@@ -193,7 +430,7 @@ TEST_CASE("classic: a rider acts with the upper body, the legs keep the rider an
     req.base_anim = 0x4a;
     req.mounted = true;
     l.step(req, 0.1f);
-    REQUIRE(l.start_action(&cast, 0x2b, 1.0f, req));
+    REQUIRE(l.start_action(&cast, anim_code(AnimationType::CastHeals), anim_code(AnimationType::CastHeals), 1.0f, req));
     l.step(req, 0.1f);
     CHECK(l.group[kLowerBones].clip == &rider);
     CHECK(l.group[kUpperBones].clip == &cast);
@@ -208,7 +445,7 @@ TEST_CASE("new-style: an attack over a walk; a stand cuts it") {
     req.base_anim = 0x68;
     req.blend_ms = 100.0f;
     l.step(req, 0.1f);
-    REQUIRE(l.start_action(&slash, 0x50, 1.0f, req)); // SLPR: layer kind 1
+    REQUIRE(l.start_action(&slash, kSlpr, kSlpr, 1.0f, req)); // SLPR: layer kind 1
     CHECK_FALSE(l.action_on_legs);
     l.step(req, 0.1f);
     CHECK(l.group[kUpperBones].clip == &slash);
@@ -220,19 +457,19 @@ TEST_CASE("new-style: an attack over a walk; a stand cuts it") {
     CHECK(l.group[kUpperBones].clip == &stand);
     CHECK(l.group[kLowerBones].clip == &stand);
     // A kick (kind 0) is a whole-body sequence.
-    REQUIRE(l.start_action(&kick, 0x5f, 1.0f, req));
+    REQUIRE(l.start_action(&kick, kKick, kKick, 1.0f, req));
     CHECK(l.action_on_legs);
     // A rider plays only kind 1 sequences, and not over the unfinished kick (its mode is 1: queued, never played).
     req.mounted = true;
-    CHECK_FALSE(l.start_action(&kick, 0x5f, 1.0f, req));
-    CHECK_FALSE(l.start_action(&slash, 0x50, 1.0f, req));
+    CHECK_FALSE(l.start_action(&kick, kKick, kKick, 1.0f, req));
+    CHECK_FALSE(l.start_action(&slash, kSlpr, kSlpr, 1.0f, req));
     for (int i = 0; i < 9; ++i) l.step(req, 0.1f);
-    CHECK(l.start_action(&slash, 0x50, 1.0f, req));
+    CHECK(l.start_action(&slash, kSlpr, kSlpr, 1.0f, req));
     CHECK_FALSE(l.action_on_legs);
     // The same sequence asked again keeps playing (mode 3), even once it is through.
     l.step(req, 0.1f);
     const float t = l.group[kUpperBones].time;
-    CHECK_FALSE(l.start_action(&slash, 0x50, 1.0f, req));
+    CHECK_FALSE(l.start_action(&slash, kSlpr, kSlpr, 1.0f, req));
     CHECK(l.group[kUpperBones].time == doctest::Approx(t));
 }
 
@@ -248,13 +485,13 @@ TEST_CASE("New-style layers distinguish the same sequence in another style colum
     l.step(req, 0.1f);
     CHECK(l.group[kLowerBones].column == 5);
     req.action_column = 1;
-    REQUIRE(l.start_action(&one_hand, 0x50, 1.0f, req));
+    REQUIRE(l.start_action(&one_hand, kSlpr, kSlpr, 1.0f, req));
     CHECK(l.group[kUpperBones].column == 1);
     CHECK(l.group[kLowerBones].clip == &stand);
     l.step(req, 0.2f);
-    CHECK_FALSE(l.start_action(&one_hand, 0x50, 1.0f, req)); // same sequence/style keeps its phase
+    CHECK_FALSE(l.start_action(&one_hand, kSlpr, kSlpr, 1.0f, req)); // same sequence/style keeps its phase
     req.action_column = 5;
-    CHECK(l.start_action(&mounted, 0x50, 1.0f, req)); // finished sequence, new style can start
+    CHECK(l.start_action(&mounted, kSlpr, kSlpr, 1.0f, req)); // finished sequence, new style can start
     CHECK(l.group[kUpperBones].clip == &mounted);
     CHECK(l.group[kUpperBones].column == 5);
     CHECK(l.group[kLowerBones].clip == &stand);
@@ -274,11 +511,12 @@ TEST_CASE("classic: an action asked during an unfinished one follows it (+0x10c4
     LayerRequest req;
     req.base = &stand;
     req.base_anim = 0x20;
+    req.stand_request = true;
     req.humanoid = true;
     l.step(req, 0.1f);
-    REQUIRE(l.start_action(&slash, 5, 1.0f, req));
+    REQUIRE(l.start_action(&slash, anim_code(AnimationType::ThrowOrOneHandSlash), anim_code(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
     l.step(req, 0.3f);
-    CHECK_FALSE(l.start_action(&bash, 2, 1.0f, req)); // waits
+    CHECK_FALSE(l.start_action(&bash, anim_code(AnimationType::Piercing), anim_code(AnimationType::Piercing), 1.0f, req)); // waits
     CHECK(l.follow_up == 2);
     CHECK(l.group[kUpperBones].clip == &slash);
     l.step(req, 0.6f);
@@ -288,9 +526,9 @@ TEST_CASE("classic: an action asked during an unfinished one follows it (+0x10c4
     for (int i = 0; i < 7; ++i) l.step(req, 0.1f);
     CHECK(l.group[kUpperBones].clip == &stand);
     // A movement request during the action drops the follow-up.
-    REQUIRE(l.start_action(&slash, 5, 1.0f, req));
+    REQUIRE(l.start_action(&slash, anim_code(AnimationType::ThrowOrOneHandSlash), anim_code(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
     l.step(req, 0.1f);
-    CHECK_FALSE(l.start_action(&bash, 2, 1.0f, req));
+    CHECK_FALSE(l.start_action(&bash, anim_code(AnimationType::Piercing), anim_code(AnimationType::Piercing), 1.0f, req));
     req.base = &run;
     req.base_anim = 0x12;
     req.speed_run = 0.7f;
@@ -300,11 +538,12 @@ TEST_CASE("classic: an action asked during an unfinished one follows it (+0x10c4
     ActorLayers m;
     req.base = &stand;
     req.base_anim = 0x20;
+    req.stand_request = true;
     req.speed_run = 0.0f;
     m.step(req, 0.1f);
-    REQUIRE(m.start_action(&slash, 5, 1.0f, req));
+    REQUIRE(m.start_action(&slash, anim_code(AnimationType::ThrowOrOneHandSlash), anim_code(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
     m.step(req, 0.4f);
-    CHECK_FALSE(m.start_action(&slash, 5, 1.0f, req));
+    CHECK_FALSE(m.start_action(&slash, anim_code(AnimationType::ThrowOrOneHandSlash), anim_code(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
     CHECK(m.group[kUpperBones].time == doctest::Approx(0.4f));
 }
 
@@ -314,11 +553,12 @@ TEST_CASE("classic: the follow-up leaves +0x10c4 as the stand request says; legs
     LayerRequest req;
     req.base = &stand;
     req.base_anim = 0x20;
+    req.stand_request = true;
     req.humanoid = true;
     l.step(req, 0.1f);
-    REQUIRE(l.start_action(&slash, 5, 1.0f, req));
+    REQUIRE(l.start_action(&slash, anim_code(AnimationType::ThrowOrOneHandSlash), anim_code(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
     l.step(req, 0.3f);
-    CHECK_FALSE(l.start_action(&bash, 2, 1.0f, req));
+    CHECK_FALSE(l.start_action(&bash, anim_code(AnimationType::Piercing), anim_code(AnimationType::Piercing), 1.0f, req));
     // The stand request plays the follow-up; +0x10c4 becomes what game::choose_spawn_animation said (0x47 here).
     req.follow_up_after = 0x47;
     CHECK_FALSE(l.step(req, 0.6f));
@@ -332,7 +572,7 @@ TEST_CASE("classic: the follow-up leaves +0x10c4 as the stand request says; legs
     req.follow_up_after = 0x20;
     m.step(req, 0.1f);
     req.speed_run = 0.7f;
-    REQUIRE(m.start_action(&slash, 5, 1.0f, req));
+    REQUIRE(m.start_action(&slash, anim_code(AnimationType::ThrowOrOneHandSlash), anim_code(AnimationType::ThrowOrOneHandSlash), 1.0f, req));
     CHECK_FALSE(m.legs_took_motion);
     req.base = &run;
     req.base_anim = 0x12;
@@ -358,6 +598,119 @@ TEST_CASE("cross-fades are per bone group, linear over the blend time") {
     CHECK(g.completed() == false);
     g.advance(0.9f);
     CHECK(g.completed());
+}
+
+TEST_CASE("a played-out one-shot's blend keeps its last frame") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    auto one_shot = clip(kActionFrames), loop = clip(kStandFrames);
+    render::GroupTrack g;
+    CHECK(g.start(&one_shot, anim(AnimationType::SitStand), 1.0f, false, false, kStep)); // a one-shot
+    CHECK(g.start(&loop, anim(AnimationType::Sit), 1.0f, true, false, kStep));           // blending to a loop
+    CHECK_FALSE(g.previous_loop);
+    render::GroupTrack h;
+    CHECK(h.start(&loop, anim(AnimationType::Sit), 1.0f, true, false, kStep));           // a loop
+    CHECK(h.start(&one_shot, anim(AnimationType::SitStand), 1.0f, false, false, kStep)); // blending to a one-shot
+    CHECK(h.previous_loop);
+}
+
+TEST_CASE("a played-out one-shot's blend holds its last frame in the pose") {
+    // A one-shot whose last frame differs from its first; frame_count comes from the track.
+    assets::AnimationClip one_shot;
+    one_shot.frame_ms = kFrameMs;
+    assets::BonePose first, last;
+    last.translation = {0, 0, 1};
+    one_shot.tracks = {assets::AnimationTrack{first, first, first, last}};
+    one_shot.frame_count = static_cast<std::uint32_t>(one_shot.tracks[0].size());
+    assets::AnimationClip loop;
+    loop.frame_ms = kFrameMs;
+    loop.frame_count = 1;
+    assets::BonePose stand;
+    loop.tracks = {assets::AnimationTrack{stand}};
+    assets::CharacterModel model;
+    std::vector<assets::BonePose> local, previous;
+    std::vector<glm::mat4> world;
+    // The one-shot has played out; the blend is halfway to the stand.
+    const float after = one_shot.duration_seconds() + kStep;
+    render::PoseInput in;
+    in.clip = &loop;
+    in.loop = true;
+    in.previous = &one_shot;
+    in.previous_time = after;
+    in.previous_loop = false;
+    in.blend = kHalfBlend;
+    render::pose_actor(model, in, local, previous, world);
+    CHECK(local[0].translation.z == doctest::Approx(kHalfPoseZ));
+    // With the old hardcoded loop, the one-shot wraps to frame 0 (z = 0) and the blend is 0.
+    in.previous_loop = true;
+    render::pose_actor(model, in, local, previous, world);
+    CHECK(local[0].translation.z == doctest::Approx(0.0f));
+    // The upper body's own blend uses its own previous_loop.
+    std::vector<std::uint8_t> groups = {game::kUpperBones};
+    in.upper_clip = &loop;
+    in.upper_loop = true;
+    in.upper_previous = &one_shot;
+    in.upper_previous_time = after;
+    in.upper_previous_loop = false;
+    in.upper_blend = kHalfBlend;
+    in.bone_groups = &groups;
+    render::pose_actor(model, in, local, previous, world);
+    CHECK(local[0].translation.z == doctest::Approx(kHalfPoseZ));
+}
+
+TEST_CASE("bone_world blends a played-out one-shot's last frame") {
+    // A one-shot whose last frame differs from its first; frame_count comes from the track.
+    assets::AnimationClip one_shot;
+    one_shot.frame_ms = kFrameMs;
+    assets::BonePose first, last;
+    last.translation = {0, 0, 1};
+    one_shot.tracks = {assets::AnimationTrack{first, first, first, last}};
+    one_shot.frame_count = static_cast<std::uint32_t>(one_shot.tracks[0].size());
+    assets::AnimationClip loop;
+    loop.frame_ms = kFrameMs;
+    loop.frame_count = 1;
+    assets::BonePose stand;
+    loop.tracks = {assets::AnimationTrack{stand}};
+    assets::CharacterModel model;
+    model.bone_names = {"TST_TRACK"};
+    model.parents = {-1};
+    model.order = {0};
+    render::ActorDraw a;
+    a.model = &model;
+    a.clip = &loop;
+    a.loop = true;
+    a.previous_clip = &one_shot;
+    a.previous_time = one_shot.duration_seconds() + kStep;
+    a.previous_loop = false;
+    a.blend = kHalfBlend;
+    glm::mat4 world;
+    REQUIRE(render::ActorRenderer::bone_world(a, 0, world));
+    CHECK(world[3][2] == doctest::Approx(kHalfPoseZ));
+    // The old hardcoded loop would wrap the one-shot to frame 0 and blend to 0.
+    a.previous_loop = true;
+    REQUIRE(render::ActorRenderer::bone_world(a, 0, world));
+    CHECK(world[3][2] == doctest::Approx(0.0f));
+}
+
+TEST_CASE("split() sees a previous clip that only one group let loop") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    auto one_shot = clip(kActionFrames), loop = clip(kStandFrames);
+    ActorLayers l;
+    LayerRequest req;
+    req.base = &one_shot;
+    req.base_anim = anim(AnimationType::SitStand);
+    req.loop = false;
+    l.step(req, kStep);
+    req.base = &loop;
+    req.base_anim = anim(AnimationType::Sit);
+    req.loop = true;
+    l.step(req, kHalfStep); // the blend is still running
+    // Both groups blend from the same one-shot, but only the upper body's previous clip loops.
+    REQUIRE(l.group[kUpperBones].previous == l.group[kLowerBones].previous);
+    l.group[kUpperBones].previous_loop = true;
+    l.group[kLowerBones].previous_loop = false;
+    CHECK(l.split());
 }
 
 TEST_CASE("an upper-body clip poses only the upper group's bones") {

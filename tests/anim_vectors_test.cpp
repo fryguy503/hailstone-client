@@ -7,13 +7,17 @@
 #include <doctest/doctest.h>
 
 #include <bit>
+#include <chrono>
 #include <string>
 
 #include "game/anim_layers.h"
 #include "game/mechanics/anim_select.h"
+#include "game/world_state.h"
+#include "manual_clock.h"
 #include "vector_files.h"
 
 using namespace hailstone::game::mechanics;
+namespace Race = hailstone::game::Race;
 using hailstone::test::Json;
 using hailstone::test::f32_bits;
 using hailstone::test::f32_of;
@@ -692,4 +696,289 @@ TEST_CASE("OP_Animation actions: the clip, else 0x4b1210's replacement") {
     CHECK(nclip(11) == "KICK_BA_1"); // RKCK -> KICK
     CHECK(nclip(13) == "FLCH_BA_1"); // MSHT -> FLCH
     CHECK(nclip(0x23).empty());      // P04: no sequence
+}
+
+namespace {
+
+// The new tests' motion and clock: a walk at 0.46 units a tick, and a display clock a second in, then past the
+// 5 s fidget wait.
+constexpr float kWalkSpeed = 0.46f;
+constexpr float kVelocityX = 0.3f, kVelocityY = 0.4f;
+constexpr float kSpeedRun = 0.4f;
+constexpr std::uint32_t kClockMs = 1000, kIdleClockMs = 7100;
+constexpr std::uint32_t kIdleWaitMs = kIdleClockMs - kClockMs;
+constexpr float kDoubled = 2.0f, kUnchanged = 1.0f, kHalfRate = 0.5f;
+
+// The display clock's ms since the test's start, from a ManualClock.
+std::uint32_t clock_ms(const hailstone::test::ManualClock& clock, hailstone::test::ManualClock::time_point start) {
+    return static_cast<std::uint32_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(clock.source()() - start).count());
+}
+
+} // namespace
+
+TEST_CASE("Classic models: 0x4afc90's flags reach the movement rate") {
+    // A Luclin elemental (races 209..212) plays at twice the rate while UseLuclinElementals (+0x129) is on.
+    Model m{{"P01", "O01", "L01", "L02"}};
+    hailstone::game::SpawnAnimState st;
+    hailstone::game::SpawnAnimInput in;
+    in.race = Race::EarthElemental;
+    in.walk_speed = kWalkSpeed;
+    in.now_ms = kClockMs;
+    in.velocity = {kVelocityX, kVelocityY, 0.0f};
+    in.speed_run = kSpeedRun;
+    in.luclin_elementals = false;
+    const float plain = frame(st, in, m).rate;
+    in.luclin_elementals = true;
+    CHECK(frame(st, in, m).rate == doctest::Approx(plain * kDoubled));
+    // Another race is not doubled.
+    in.race = Race::Human;
+    CHECK(frame(st, in, m).rate == doctest::Approx(plain));
+}
+
+TEST_CASE("Classic models: a styled model's stand takes the pre-processing") {
+    Model m{{"P01", "O01", "L01"}};
+    hailstone::game::SpawnAnimState st;
+    hailstone::game::SpawnAnimInput in;
+    in.race = Race::Human;
+    in.now_ms = kClockMs;
+    in.tunic_point = true;
+    auto c = frame(st, in, m);
+    CHECK(c.clip == "P01");
+    CHECK(c.rate == doctest::Approx(kHalfRate));
+}
+
+TEST_CASE("Classic models: a missing walk falls back to the stand at its own rate") {
+    // A styled model with P01 but without L01 / L02: the walk's 1.25 must not reach the stand (0x4b1a70 sets 1.0,
+    // then the pre-processing makes a styled P01 0.5).
+    Model m{{"P01", "O01"}};
+    hailstone::game::SpawnAnimState st;
+    hailstone::game::SpawnAnimInput in;
+    in.race = Race::Human;
+    in.walk_speed = kWalkSpeed;
+    in.now_ms = kClockMs;
+    in.velocity = {kVelocityX, kVelocityY, 0.0f};
+    in.speed_run = kSpeedRun;
+    in.tunic_point = true;
+    auto c = frame(st, in, m);
+    CHECK(c.clip == "P01");
+    CHECK(c.rate == doctest::Approx(kHalfRate));
+    CHECK(c.loop);
+    CHECK_FALSE(c.reverse);
+}
+
+TEST_CASE("Classic models: a missing backward walk keeps the stand backward") {
+    // 0x4b1ab3 clears the restart flag and sets 1.0, but not the reverse flag: a backward walk's stand fallback
+    // plays backward too.
+    Model m{{"P01", "O01"}};
+    hailstone::game::SpawnAnimState st;
+    hailstone::game::SpawnAnimInput in;
+    in.race = Race::Human;
+    in.walk_speed = kWalkSpeed;
+    in.now_ms = kClockMs;
+    in.velocity = {kVelocityX, kVelocityY, 0.0f};
+    in.speed_run = -kSpeedRun; // backward
+    auto c = frame(st, in, m);
+    CHECK(c.clip == "P01");
+    CHECK(c.reverse);
+}
+
+TEST_CASE("Classic models: an action's rate goes through 0x4b15b0's pre-processing and 0x4afc90") {
+    using hailstone::AnimationType;
+    using hailstone::game::classic_action_rate;
+    constexpr float kRate = 1.0f; // the rate itself (the packet's 10 / 10)
+    constexpr std::uint8_t kMale = 0, kFemale = 1, kNeutral = 2;
+    constexpr float kMountRaceRun = 0.4f, kHalf = 0.5f, kRace330L04 = 0.4875f, kSocial = 0.75f;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    // A Luclin elemental's action is doubled while the option is on.
+    CHECK(classic_action_rate(anim(AnimationType::ThrowOrOneHandSlash), kRate, Race::EarthElemental, kMale, false,
+                              true) == doctest::Approx(kDoubled));
+    CHECK(classic_action_rate(anim(AnimationType::ThrowOrOneHandSlash), kRate, Race::EarthElemental, kMale, false,
+                              false) == doctest::Approx(kUnchanged));
+    CHECK(classic_action_rate(anim(AnimationType::ThrowOrOneHandSlash), kRate, Race::Human, kMale, false, true) ==
+          doctest::Approx(kUnchanged));
+    // D05 on a styled model (the animation set's +0x34, a TUNIC_POINT dag): twice the rate.
+    CHECK(classic_action_rate(anim(AnimationType::Death), kRate, Race::Human, kMale, true, true) ==
+          doctest::Approx(kDoubled));
+    CHECK(classic_action_rate(anim(AnimationType::Death), kRate, Race::Human, kMale, false, true) ==
+          doctest::Approx(kUnchanged));
+    // A styled model's gender-1 animations 2 and 4 (race 2's 5 too).
+    CHECK(classic_action_rate(anim(AnimationType::Piercing), kRate, Race::Human, kFemale, true, true) ==
+          doctest::Approx(kDoubled));
+    CHECK(classic_action_rate(anim(AnimationType::TwoHandBluntPiercing), kRate, Race::Human, kFemale, true, true) ==
+          doctest::Approx(kDoubled));
+    CHECK(classic_action_rate(anim(AnimationType::ThrowOrOneHandSlash), kRate, Race::Barbarian, kFemale, true,
+                              true) == doctest::Approx(kDoubled));
+    CHECK(classic_action_rate(anim(AnimationType::Piercing), kRate, Race::Human, kMale, true, true) ==
+          doctest::Approx(kUnchanged));
+    // 0x4b15b0's pre-processing: race 330's L04 at 0.65, then 0x4afc90's 0.75, from the rate 1.0.
+    CHECK(classic_action_rate(anim(AnimationType::JumpStand), kRate, Race::Froglok2, kMale, false, false) ==
+          doctest::Approx(kRace330L04));
+    // A mount race's run at 0.4, its other animations at 0.5.
+    CHECK(classic_action_rate(anim(AnimationType::Run), kRate, Race::ClockworkBoar, kMale, false, false) ==
+          doctest::Approx(kMountRaceRun));
+    CHECK(classic_action_rate(anim(AnimationType::Walk), kRate, Race::ClockworkBoar, kMale, false, false) ==
+          doctest::Approx(kHalf));
+    // Races 42 and 120's neutral gender (2) non-walk at 0.5; gender 1 is not affected.
+    CHECK(classic_action_rate(anim(AnimationType::Stand), kRate, Race::Wolf, kNeutral, false, false) ==
+          doctest::Approx(kHalf));
+    CHECK(classic_action_rate(anim(AnimationType::Stand), kRate, Race::Wolf, kFemale, false, false) ==
+          doctest::Approx(kUnchanged));
+    // A styled model's stand / idle at 0.5, a social (an S clip) at 0.75.
+    CHECK(classic_action_rate(anim(AnimationType::Stand), kRate, Race::Human, kMale, true, false) ==
+          doctest::Approx(kHalf));
+    CHECK(classic_action_rate(anim(AnimationType::Wave), kRate, Race::Human, kMale, true, false) ==
+          doctest::Approx(kSocial));
+}
+
+TEST_CASE("Classic models: a pet's idle needs a roll above 99 (+0x38c)") {
+    // 0x4afe60's fidget thresholds: 75, or 99 for a spawn with an owner (+0x38c).
+    constexpr int kIdleRoll = 75, kPetIdleRoll = 99;
+    constexpr std::uint32_t kPetOwner = 42;
+    Model m{{"P01", "O01", "L01"}};
+    auto roll = [&](std::uint32_t owner, int percent) {
+        hailstone::test::ManualClock clock;
+        clock.hold();
+        const auto start = clock.source()();
+        hailstone::game::SpawnAnimState st;
+        hailstone::game::SpawnAnimInput in;
+        in.race = Race::Human;
+        in.now_ms = clock_ms(clock, start);
+        in.owner_id = owner;
+        frame(st, in, m); // P01, so +0x10c0 is a stand the idle may start from
+        clock.advance(std::chrono::milliseconds(kIdleWaitMs));
+        in.now_ms = clock_ms(clock, start);
+        return frame(st, in, m, false, percent).clip;
+    };
+    CHECK(roll(kPetOwner, kPetIdleRoll) == "P01");
+    CHECK(roll(kPetOwner, kPetIdleRoll + 1) == "O01");
+    CHECK(roll(0, kIdleRoll + 1) == "O01");
+    CHECK(roll(0, kIdleRoll) == "P01");
+}
+
+TEST_CASE("Classic models: turning on the spot plays P03 (0x4afe60's argument)") {
+    Model m{{"P01", "O01", "L01", "P03"}};
+    hailstone::game::SpawnAnimState st;
+    hailstone::game::SpawnAnimInput in;
+    in.race = Race::Human;
+    in.now_ms = kClockMs;
+    CHECK(frame(st, in, m).clip == "P01");
+    in.turning = true;
+    in.speed_heading = 1.0f;
+    auto c = frame(st, in, m);
+    CHECK(c.clip == "P03");
+    CHECK(c.reverse);
+    in.speed_heading = -1.0f;
+    c = frame(st, in, m);
+    CHECK(c.clip == "P03");
+    CHECK_FALSE(c.reverse);
+}
+
+TEST_CASE("Classic models: attacking suppresses the idle (0x4afe60)") {
+    constexpr int kIdleRoll = 75;
+    Model m{{"P01", "O01", "L01"}};
+    auto roll = [&](bool attacking, bool local_player) {
+        hailstone::test::ManualClock clock;
+        clock.hold();
+        const auto start = clock.source()();
+        hailstone::game::SpawnAnimState st;
+        hailstone::game::SpawnAnimInput in;
+        in.race = Race::Human;
+        in.now_ms = clock_ms(clock, start);
+        in.attacking = attacking;
+        in.local_player = local_player;
+        frame(st, in, m); // P01, so +0x10c0 is a stand the idle may start from
+        clock.advance(std::chrono::milliseconds(kIdleWaitMs));
+        in.now_ms = clock_ms(clock, start);
+        return frame(st, in, m, false, kIdleRoll + 1).clip;
+    };
+    CHECK(roll(true, true) == "P01");
+    CHECK(roll(false, true) == "O01");
+    // 0x4b01dd reads the global switch without a local-player check: another actor's fidget stops too.
+    CHECK(roll(true, false) == "P01");
+    CHECK(roll(false, false) == "O01");
+}
+
+TEST_CASE("New-style models: auto attack suppresses the fidget (0x58a352)") {
+    constexpr int kIdleRoll = 75;
+    Model m{{"STND_BA_1", "IDLE_BA_1"}};
+    auto roll = [&](bool attacking) {
+        hailstone::test::ManualClock clock;
+        clock.hold();
+        const auto start = clock.source()();
+        hailstone::game::SpawnAnimState st;
+        hailstone::game::SpawnAnimInput in;
+        in.new_style = true;
+        in.race = Race::Drakkin;
+        in.now_ms = clock_ms(clock, start);
+        in.attacking = attacking;
+        frame(st, in, m); // STND, so +0x10c0 is a stand the idle may start from
+        clock.advance(std::chrono::milliseconds(kIdleWaitMs));
+        in.now_ms = clock_ms(clock, start);
+        return frame(st, in, m, false, kIdleRoll + 1).clip;
+    };
+    CHECK(roll(true) == "STND_BA_1");
+    CHECK(roll(false) == "IDLE_BA_1");
+}
+
+TEST_CASE("OP_Animation actions: a new-style STND normalizes to P01 for the sit conversion") {
+    using hailstone::AnimationType;
+    Model m{{"P01", "P07"}};
+    std::uint8_t playing = 0, normalized = 0;
+    bool stand = false;
+    auto clip = [&](std::uint8_t action) {
+        playing = 0;
+        normalized = 0;
+        stand = false;
+        return hailstone::game::action_clip(action, [&](std::string_view c) { return m.has(c); }, false, {}, {},
+                                            &playing, &stand, &normalized);
+    };
+    // A raw P01 and a new-style STND both normalize to P01 (the sit conversion sees the normalized request).
+    CHECK(clip(static_cast<std::uint8_t>(AnimationType::Stand)).empty());
+    CHECK(normalized == static_cast<std::uint8_t>(AnimationType::Stand));
+    CHECK(stand);
+    CHECK(clip(kAnimStand).empty());
+    CHECK(normalized == static_cast<std::uint8_t>(AnimationType::Stand));
+    CHECK(stand);
+}
+
+TEST_CASE("Classic models: the follow-up after a stand request is P01 or P08, never the action") {
+    using hailstone::AnimationType;
+    const auto anim = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+    // 0x4b1a7e: the animation playing before the movement choice decides P01 or P08.
+    CHECK(hailstone::game::classic_follow_up_after(anim(AnimationType::Stand)) == anim(AnimationType::Stand));
+    CHECK(hailstone::game::classic_follow_up_after(anim(AnimationType::Walk)) == anim(AnimationType::Stand));
+    CHECK(hailstone::game::classic_follow_up_after(anim(AnimationType::Run)) == anim(AnimationType::StandAfter));
+    CHECK(hailstone::game::classic_follow_up_after(anim(AnimationType::Duck)) == anim(AnimationType::StandAfter));
+}
+
+TEST_CASE("OP_Animation actions: a missing clip and replacement is a stand request") {
+    using hailstone::AnimationType;
+    Model bare{{"P01", "L01"}};
+    std::uint8_t playing = 0;
+    bool stand = false;
+    auto clip = [&](std::uint8_t action, const Model& m) {
+        playing = 0;
+        stand = false;
+        return hailstone::game::action_clip(action, [&](std::string_view c) { return m.has(c); }, false, {}, {},
+                                            &playing, &stand);
+    };
+    // 0x4b15b0's stand path: the movement choice plays P01 / the follow-up, and +0x10c0 becomes 0x20.
+    CHECK(clip(static_cast<std::uint8_t>(AnimationType::MainhandSlash), bare).empty());
+    CHECK(stand);
+    CHECK(playing == static_cast<std::uint8_t>(AnimationType::Stand));
+    CHECK(clip(static_cast<std::uint8_t>(AnimationType::Idle), bare).empty()); // O01 -> P01 is the stand
+    CHECK(stand);
+    // A direct P01 request is the stand path, not a one-shot action.
+    CHECK(clip(static_cast<std::uint8_t>(AnimationType::Stand), bare).empty());
+    CHECK(stand);
+    CHECK(playing == static_cast<std::uint8_t>(AnimationType::Stand));
+    // A replacement the model has: no stand request, and the replacement is the animation playing.
+    Model rat{{"P01", "C05"}};
+    CHECK(clip(static_cast<std::uint8_t>(AnimationType::MainhandSlash), rat) == "C05");
+    CHECK_FALSE(stand);
+    CHECK(playing == static_cast<std::uint8_t>(AnimationType::ThrowOrOneHandSlash));
+    CHECK(clip(static_cast<std::uint8_t>(AnimationType::ThrowOrOneHandSlash), rat) == "C05");
+    CHECK_FALSE(stand);
+    CHECK(playing == static_cast<std::uint8_t>(AnimationType::ThrowOrOneHandSlash));
 }

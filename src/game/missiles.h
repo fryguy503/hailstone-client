@@ -69,6 +69,10 @@
 
 #include <glm/glm.hpp>
 
+namespace hailstone::assets {
+struct AnimationClip;
+}
+
 namespace hailstone::game {
 
 struct SpellData;
@@ -114,8 +118,15 @@ std::uint8_t missile_launch_animation(std::uint8_t skill, std::uint8_t item_type
                                       std::uint16_t source_race, std::uint8_t source_class = 0,
                                       std::uint8_t body_wet = 0, bool new_style = false);
 // The launch delay from that animation's length (PlayerClient::CalcAnimLength, ms): with a range byte
-// round(length x 0.7), or 1500 when that is 0; without one 0.
+// trunc(length x 0.7), or 1500 when that is below 1; without one 0.
 std::uint32_t missile_launch_delay(std::uint32_t anim_length_ms, std::uint8_t range);
+// The same from the animation clip itself: 70 % of the clip's own period (the .ani's last key time), truncated;
+// 1500 without a clip or when that is below 1; 0 without a range byte.
+std::uint32_t missile_launch_delay(const assets::AnimationClip* clip, std::uint8_t range);
+// 0x58f540's launch delay: 70 % of the animation's length (0x9cf8b8).
+inline constexpr float kLaunchFraction = 0.7f;
+// 0x5dc: the launch delay when 70 % of the clip's length is below 1 ms.
+inline constexpr std::uint32_t kDefaultLaunchMs = 1500;
 
 // CMath vtable +0x18 (0x100b9490) for the arguments MissileAI gives it (a, b >= 0): the angle of (a, b) from
 // the b axis in 512ths, floored to the DLL's tangent table; 128 when b is 0.

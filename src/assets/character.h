@@ -210,15 +210,28 @@ private:
 };
 
 struct AnimationClip {
+    static constexpr float kMsPerSecond = 1000.0f;
     std::uint32_t frame_ms = 100;  // 0x13 frame time; 100 ms when the tracks give none
     std::uint32_t frame_count = 1; // longest track
+    // The clip's own period in ms, when the file gives one (an EQG clip's last key time). nullopt: frame_count x
+    // frame_ms. An explicit 0 is a real (single-key) period, not "no duration".
+    std::optional<std::uint32_t> duration_ms;
+    // The time of each frame in ms, when the frames are not evenly spaced: an EQG clip's last frame sits at the
+    // .ani's last key time, not on the resampled grid. Empty: frame i is at i x frame_ms.
+    std::vector<std::uint32_t> frame_times_ms;
     // One key list per bone, at least one key each. Bones the clip does not
     // animate hold their rest pose.
     std::vector<AnimationTrack> tracks;
     bool borrowed = false; // taken from the animation donor model
 
-    float duration_seconds() const { return static_cast<float>(frame_count * frame_ms) / 1000.0f; }
+    float duration_seconds() const { return static_cast<float>(length_ms()) / kMsPerSecond; }
+    // The clip's length in ms: its own period when the file gives one, else frame_count x frame_ms.
+    std::uint32_t length_ms() const { return duration_ms.value_or(frame_count * frame_ms); }
 };
+
+// The clip's length in ms as the original's virtual getter returns it (0x406740's crouch window, CalcAnimLength):
+// the .ani's last key time, not the resampled grid's end.
+inline std::uint32_t clip_length_ms(const AnimationClip& clip) { return clip.length_ms(); }
 
 // WLD vertices follow one bone (weights {1, 0, 0, 0}) and are stored in
 // that bone's space; EQG vertices blend up to four bones and are stored in
@@ -331,6 +344,9 @@ struct CharacterModel {
     std::vector<glm::mat4> inverse_bind;
     bool eqg = false;
     bool luclin = false; // from a Luclin player-model archive (global<code>_chr)
+    // The model has a TUNIC_POINT dag: InitAnimationTracks @0x407800's +0x34, which 0x4afc90 reads as its
+    // new_model flag (D05 and a styled model's gender-1 animations 2 / 4 play at twice the rate).
+    bool tunic_point = false;
     // Rest-pose bounds in model space (Z up, the front faces +X).
     glm::vec3 bounds_min{0.0f};
     glm::vec3 bounds_max{0.0f};

@@ -157,11 +157,31 @@ void CharacterModel::sample_local(const AnimationClip& a, float time_seconds, bo
                                   std::vector<BonePose>& out) const {
     out.resize(a.tracks.size());
     float t = std::isfinite(time_seconds) ? std::max(time_seconds, 0.0f) : 0.0f;
-    float phase = t * 1000.0f / static_cast<float>(std::max<std::uint32_t>(a.frame_ms, 1));
-    float count = static_cast<float>(a.frame_count);
-    phase = loop ? std::fmod(phase, count) : std::min(phase, count - 1.0f);
-    auto frame = static_cast<std::size_t>(phase);
-    float frac = phase - static_cast<float>(frame);
+    std::size_t frame = 0;
+    float frac = 0.0f;
+    if (!a.frame_times_ms.empty()) {
+        // The frames' own times (an EQG clip's last frame at the .ani's last key): find the frame the time falls in.
+        const auto& times = a.frame_times_ms;
+        const float end = static_cast<float>(times.back());
+        float ms = t * AnimationClip::kMsPerSecond;
+        ms = loop && end > 0.0f ? std::fmod(ms, end) : std::min(ms, end);
+        auto up = std::upper_bound(times.begin(), times.end(), ms);
+        if (up == times.begin()) {
+            frame = 0;
+        } else if (up == times.end()) {
+            frame = times.size() - 1;
+        } else {
+            frame = static_cast<std::size_t>(up - times.begin()) - 1;
+            const float span = static_cast<float>(times[frame + 1] - times[frame]);
+            frac = span > 0.0f ? (ms - static_cast<float>(times[frame])) / span : 0.0f;
+        }
+    } else {
+        float phase = t * AnimationClip::kMsPerSecond / static_cast<float>(std::max<std::uint32_t>(a.frame_ms, 1));
+        float count = static_cast<float>(a.frame_count);
+        phase = loop ? std::fmod(phase, count) : std::min(phase, count - 1.0f);
+        frame = static_cast<std::size_t>(phase);
+        frac = phase - static_cast<float>(frame);
+    }
     for (std::size_t b = 0; b < a.tracks.size(); ++b) {
         const auto& keys = a.tracks[b];
         if (keys.size() == 1) {
@@ -1352,7 +1372,8 @@ CharacterModel CharacterLibrary::build_actor(const std::string& code, const wld:
     }
     // InitAnimationTracks @0x407800 binds a tunic-point model's variants A..H to holding columns 0..7, so a spawn
     // holding something plays its B tracks (held_aliases).
-    if (m.find_bone("TUNIC_POINT_TRACK") >= 0)
+    m.tunic_point = m.find_bone("TUNIC_POINT_TRACK") >= 0;
+    if (m.tunic_point)
         for (const auto& [c, clip] : m.clips)
             if (c.size() == 4 && c[3] == 'B' && clip.frame_count > 0) m.held_aliases.emplace(c.substr(0, 3), c);
     m.clips.emplace("", std::move(rest));

@@ -39,6 +39,9 @@ namespace {
 // Frames an appearance may wait for a texture another appearance job is reading (prepare_spawns), about half a second.
 constexpr int kMaxDressDefer = 30;
 
+// OP_Animation's speed byte is in tenths (HandleWorldMessage's case 0x7177): the packet's 10 is a rate of 1.
+constexpr float kActionSpeedTenths = 10.0f;
+
 struct GpuVertex {
     glm::vec3 position;
     glm::vec3 normal;
@@ -808,31 +811,23 @@ ActorRenderer::ModelChoice ActorRenderer::choose_model(const game::Spawn& spawn)
 
 void ActorRenderer::pose_bones(const ActorDraw& a, std::vector<assets::BonePose>& local,
                                std::vector<assets::BonePose>& previous, std::vector<glm::mat4>& world) {
-    const auto& m = *a.model;
-    // One bone group's tracks (CBoneGroup): the clip, cross-faded from the previous one by the linear weight.
-    auto sample = [&](const assets::AnimationClip& clip, float time, bool loop, const assets::AnimationClip* from,
-                      float from_time, float blend, std::vector<assets::BonePose>& out) {
-        m.sample_local(clip, time, loop, out);
-        if (from && blend < 1.0f) {
-            m.sample_local(*from, from_time, true, previous);
-            float t = std::clamp(blend, 0.0f, 1.0f);
-            for (std::size_t b = 0; b < out.size() && b < previous.size(); ++b) {
-                out[b].rotation = glm::normalize(glm::slerp(previous[b].rotation, out[b].rotation, t));
-                out[b].translation = glm::mix(previous[b].translation, out[b].translation, t);
-                out[b].scale = glm::mix(previous[b].scale, out[b].scale, t);
-            }
-        }
-    };
-    sample(*a.clip, a.time, a.loop, a.previous_clip, a.previous_time, a.blend, local);
-    if (a.upper_clip && a.bone_groups) {
-        thread_local std::vector<assets::BonePose> upper;
-        sample(*a.upper_clip, a.upper_time, a.upper_loop, a.upper_previous_clip, a.upper_previous_time, a.upper_blend,
-               upper);
-        const auto& groups = *a.bone_groups;
-        for (std::size_t b = 0; b < local.size() && b < upper.size() && b < groups.size(); ++b)
-            if (groups[b] == game::kUpperBones) local[b] = upper[b];
-    }
-    m.compose(local, world);
+    PoseInput in;
+    in.clip = a.clip;
+    in.time = a.time;
+    in.loop = a.loop;
+    in.previous = a.previous_clip;
+    in.previous_time = a.previous_time;
+    in.previous_loop = a.previous_loop;
+    in.blend = a.blend;
+    in.upper_clip = a.upper_clip;
+    in.upper_time = a.upper_time;
+    in.upper_loop = a.upper_loop;
+    in.upper_previous = a.upper_previous_clip;
+    in.upper_previous_time = a.upper_previous_time;
+    in.upper_previous_loop = a.upper_previous_loop;
+    in.upper_blend = a.upper_blend;
+    in.bone_groups = a.bone_groups;
+    pose_actor(*a.model, in, local, previous, world);
 }
 
 glm::mat4 ActorRenderer::instance_matrix(const ActorDraw& a) {
@@ -1707,13 +1702,22 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         in.player_state = s.player_state;
         in.speed_heading = is_player && player_motion_.valid ? player_motion_.speed_heading : s.speed_heading;
         in.turning = in.speed_heading != 0.0f;
-        in.attacking = is_player && player_motion_.attacking;
+        // 0x4b01dd reads the global auto-attack switch (0xe635aa) without a local-player check, and 0x509340
+        // updates every spawn: the fidget is suppressed for all actors while the player's auto attack is on.
+        in.attacking = player_motion_.attacking;
         in.owner_id = s.pet_owner_id;
         in.first_person = is_player && player_motion_.first_person;
         if (!new_style) in.follow_up = layers.follow_up;
         in.colliding_type = is_player && player_motion_.valid ? player_motion_.colliding_type : s.colliding_type;
+        // 0x4afc90's flags: +0x129 (UseLuclinElementals) and the animation set's +0x34, which
+        // InitAnimationTracks @0x407800 sets for a model with a TUNIC_POINT dag.
+        in.luclin_elementals = world.luclin_elementals;
+        in.tunic_point = model->tunic_point;
         const bool done = st.motion_clip && lower.clip == st.motion_clip && !lower.loop &&
                           lower.time >= st.motion_clip->duration_seconds();
+        // The animation playing (+0x10c0) before the movement choice: 0x4b15b0's stand path reads it, not what
+        // the movement choice starts this frame.
+        const std::uint8_t playing_before = st.anim.anim;
         game::SpawnAnimChoice choice = game::choose_spawn_animation(
             st.anim, in, has_clip, done, [this] { return 1 + static_cast<int>(rng_() % 100); }, rand_int);
         if (choice.restart && !s.is_npc) // players only: NPCs would flood the log
@@ -1754,6 +1758,9 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
             req.rate = choice.rate;
             req.loop = choice.loop;
             req.reverse = choice.reverse;
+            // 0x4b15b0's stand path plays the follow-up +0x10c4 when the movement choice asked for a stand.
+            req.stand_request = choice.anim == static_cast<std::uint8_t>(AnimationType::Stand) ||
+                                choice.anim == static_cast<std::uint8_t>(AnimationType::StandAfter);
             req.blend_ms = choice.blend_ms;
             req.restart = choice.restart && lower.clip == motion;
         }
@@ -1769,14 +1776,50 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
             st.action_seq = s.action_seq;
             game::NewStyleTrackInput track_in{s.player_state, st.anim.anim, -1, mount != nullptr};
             std::uint8_t playing = s.action;
-            std::string code = game::action_clip(s.action, has_clip, new_style, track_in, rand_int, &playing);
+            std::uint8_t normalized = s.action;
+            bool stand_request = false;
+            std::string code = game::action_clip(s.action, has_clip, new_style, track_in, rand_int, &playing,
+                                                 &stand_request, &normalized);
             req.action_column = game::new_style_clip_column(code);
             const assets::AnimationClip* c = code.empty() ? nullptr : model->clip(code, holding);
-            const bool started = c && layers.start_action(c, playing, s.action_speed / 10.0f, req);
+            // 0x4b15b0 runs the action's rate through 0x4afc90 too (the packet's speed / 10 is its input), so a
+            // Luclin elemental's action and a styled model's D05 play at twice the rate. New-style models do not
+            // (0x58afa0 has no such call).
+            const float rate =
+                new_style ? s.action_speed / kActionSpeedTenths
+                          : game::classic_action_rate(playing, s.action_speed / kActionSpeedTenths, s.race, s.gender,
+                                                      in.tunic_point, in.luclin_elementals);
+            const bool started = c && layers.start_action(c, s.action, playing, rate, req);
             log::debug("animation: {} ({}) action {} speed {} -> {}{}", s.name, id, s.action, s.action_speed,
                        code.empty() ? "nothing" : code,
                        started ? (layers.action_on_legs ? "" : " (upper body)") : (c ? " (not played)" : ""));
             if (started) st.anim.anim = playing;
+            // 0x4b15b0's stand path (a P01 request, or a clip and 0x4b1210 replacement both missing): P01 / P08
+            // on the base, looping and forward, or the follow-up +0x10c4 as an action. A corpse, a posture change
+            // and an unfinished action the stand may not interrupt keep what plays; the same clip keeps its phase.
+            else if (stand_request && !st.anim.posture) {
+                const game::ClassicStand stand =
+                    game::classic_stand_request(normalized, playing_before, in.stand_state, has_clip,
+                                                {s.action, s.race, in.local_player && in.first_person});
+                if (!stand.clip.empty()) {
+                    const assets::AnimationClip* stand_clip = model->clip(stand.clip, holding);
+                    // The sit clip keeps the packet's speed; the stand fallback is 1.0 (0x4b1a70).
+                    const float speed = stand.sit ? s.action_speed / kActionSpeedTenths : 1.0f;
+                    const float stand_rate = game::classic_action_rate(stand.anim, speed, s.race, s.gender,
+                                                                      in.tunic_point, in.luclin_elementals);
+                    // 0x4b1a6a: the chosen P07 goes past the stand fallback as the packet's action (one-shot,
+                    // packet speed), without consuming the stand queue.
+                    const bool played = stand.sit
+                                            ? layers.start_action(stand_clip, s.action, stand.anim, stand_rate, req)
+                                            : layers.start_stand(stand_clip, s.action, stand.anim, stand_rate, req);
+                    if (played) {
+                        st.anim.anim = stand.anim;
+                        // 0x4b1a7e: after the follow-up plays, +0x10c4 becomes P01 or P08 from the animation
+                        // playing before the movement choice, never the action just played.
+                        if (!stand.sit) req.follow_up_after = game::classic_follow_up_after(playing_before);
+                    }
+                }
+            }
         }
         layers.step(req, dt);
         // Classic models: 0x4b15b0 sets +0x10c0 only for a request it starts, so while the layers keep an
@@ -1796,6 +1839,7 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         a.loop = lower.loop;
         a.previous_clip = lower.blend < 1.0f ? lower.previous : nullptr;
         a.previous_time = lower.shown_previous_time();
+        a.previous_loop = lower.previous_loop;
         a.blend = lower.blend;
         if (layers.split()) {
             const GroupTrack& upper = layers.group[game::kUpperBones];
@@ -1804,6 +1848,7 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
             a.upper_loop = upper.loop;
             a.upper_previous_clip = upper.blend < 1.0f ? upper.previous : nullptr;
             a.upper_previous_time = upper.shown_previous_time();
+            a.upper_previous_loop = upper.previous_loop;
             a.upper_blend = upper.blend;
             a.bone_groups = &bone_groups(*model);
         }

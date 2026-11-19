@@ -4,6 +4,8 @@
 // comments give the addresses.
 #include "game/mechanics/anim_select.h"
 
+#include "game/race_models.h"
+
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -645,6 +647,39 @@ double old_model_anim_speed(std::int32_t anim, float speed, std::int32_t race, s
     case 2: return x87_mul(f, X87(speed), X87(kThreeQuarters));
     default: return static_cast<double>(speed);
     }
+}
+
+float old_action_speed(std::uint8_t anim, float speed, std::int32_t race, std::int32_t gender, bool new_model) {
+    // The exe's constants: 0x9c73e0 0.4, 0x9c4998 0.5, 0x9ca690 0.65, 0x9c59f8 0.75.
+    constexpr float kMountRaceRun = 0.4f;
+    constexpr float kHalf = 0.5f;
+    constexpr float kRace330 = 0.65f;
+    constexpr float kSocial = 0.75f;
+    constexpr std::int32_t kRace330Id = 0x14a;
+    constexpr std::int32_t kRace42 = 0x2a, kRace120 = 0x78;
+    constexpr std::int32_t kGenderNeutral = 2;
+    constexpr std::uint8_t kWalk = 0x11, kRun = 0x12;
+    if (!new_model || race == kRace330Id || anim == kWalk || anim == kRun) {
+        // 0x8cf970's list is is_mount_race's: their run plays at 0.4, their other animations at 0.5.
+        if (game::is_mount_race(race)) return anim == kRun ? speed * kMountRaceRun : kHalf;
+        if ((race == kRace42 || race == kRace120) && gender == kGenderNeutral) {
+            if (anim != kWalk) return kHalf;
+        } else if (race == kRace330Id) {
+            return speed * kRace330;
+        }
+        return speed;
+    }
+    if (speed == 1.0f) {
+        // 0x4b07e0 (the stand / idle) or 0x4b0840 (the idle and O02 / O03): half; a social (an S clip): 0.75.
+        auto is = [](AnimationType a) { return static_cast<std::uint8_t>(a); };
+        if (anim == is(AnimationType::Stand) || anim == is(AnimationType::Sit) ||
+            anim == is(AnimationType::StandAfter) || anim == is(AnimationType::Rider_74) ||
+            anim == is(AnimationType::Idle) || anim == is(AnimationType::IdleAfter) ||
+            anim == is(AnimationType::SitIdle))
+            return kHalf;
+        if (old_anim_clip(anim).starts_with('S')) return kSocial;
+    }
+    return speed;
 }
 
 } // namespace hailstone::game::mechanics

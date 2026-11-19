@@ -99,9 +99,19 @@ TEST_CASE("missile launch animation and delay") {
     CHECK(missile_launch_animation(0, 20, 14, 522, 0, 0, true) == 0x51);
     CHECK(missile_launch_animation(0, 20, 14, 522, 0, 5, true) == 0x5e);
     CHECK(missile_launch_animation(0, 9, 0, 522, 0, 0, true) == 0x87);
-    CHECK(missile_launch_delay(1000, 7) == 700);
-    CHECK(missile_launch_delay(0, 7) == 1500);
-    CHECK(missile_launch_delay(1000, 0) == 0);
+    constexpr std::uint32_t kSecondMs = 1000, kWalkMs = 666, kTruncateMs = 668, kBelowOneMs = 1;
+    constexpr std::uint8_t kRange = 7;
+    constexpr std::uint32_t kDefaultDelayMs = 1500;
+    // 0x58f5fe multiplies by the float 0.7 (0.699999988) at extended precision before truncating: 1000 ms is 699.
+    constexpr std::uint32_t kSecondDelayMs = 699, kWalkDelayMs = 466, kTruncateDelayMs = 467;
+    CHECK(missile_launch_delay(kSecondMs, kRange) == kSecondDelayMs);
+    // An EQG clip's own period (a 666 ms walk): 70 % of it, not of the resampled grid's 693 ms.
+    CHECK(missile_launch_delay(kWalkMs, kRange) == kWalkDelayMs);
+    // 0x58f604-0x58f622 truncates (668 x 0.7 = 467.6 -> 467), and below 1 ms the 1500 ms default.
+    CHECK(missile_launch_delay(kTruncateMs, kRange) == kTruncateDelayMs);
+    CHECK(missile_launch_delay(kBelowOneMs, kRange) == kDefaultDelayMs);
+    CHECK(missile_launch_delay(std::uint32_t{0}, kRange) == kDefaultDelayMs);
+    CHECK(missile_launch_delay(kSecondMs, 0) == 0);
 }
 
 TEST_CASE("missile actor scale") {

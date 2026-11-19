@@ -85,7 +85,9 @@ signature <128 hex digits>
   add-on installs in beside them. A plugin folder whose library is another build than the ones shipped (the add-on's,
   or one built from the plugin's repository) belongs to that plugin now and keeps every file: the add-ons still ship
   some window files unchanged since 0.2.0-alpha (Project Triune's map, `triunewaypoints.lua`), which 0.3.0-alpha
-  removed at every start. It is the same zip a player downloads for a first
+  removed at every start. The same table also holds a pack file a release renamed, which a folder unpacked by hand
+  would keep beside its new name at the first update: Modern's menu button, `ui/modern/eqmain.lua` (0.5.0-beta to
+  0.7.1-beta), is `game_menu.lua` from 0.7.2-beta on. A pack's folder stays, even if that empties it. It is the same zip a player downloads for a first
   install, so the release page holds only that zip for each platform and this manifest. Every update downloads it
   whole (about 170 MB on Linux, 190 MB on Windows).
 - **Other components:** the format and the client also take several packages for a platform: `browser` for

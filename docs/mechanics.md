@@ -1822,7 +1822,10 @@ NPCNoLoS. Contact emits presentation messages, never authoritative damage. Spell
 one velocity step behind, at that point in the world with the source as caster and no target (EQMissile_UpdateAll
 @0x501415), so it outlives the missile. Spell 859 can run a local hit presentation inside a strict 40-unit
 horizontal radius, at the local player's level (@0x501342); it sends no packet, applies no successful-landing flag,
-grants no buff and does not end the source's cast.
+grants no buff and does not end the source's cast. The launch delay (0x58f540's CalcAnimLength) is 70 % of the
+animation's own length (the .ani's last key time, not the resampled grid's end), multiplied by the float 0.7
+(0.699999988) at the FPU's extended precision and truncated (0x58f5fe-0x58f622), so 1000 ms gives 699, or 1500 ms
+when that is below 1; without a range byte it is 0.
 
 Large-source launch placement uses the renderer's actual posed role-0/name anchor. Missing authored or posed data
 keeps the packet origin rather than inventing an attachment. Missile pulse timing uses a source's completed
@@ -1908,13 +1911,34 @@ sequence found is the animation playing, and the cross-fade is (new.blendIn + cu
 EQG models also answer the classic codes, each old-style number's sequence in the base style, variant 1
 (`assets/eqg_character.h` classic_aliases).
 
+A classic model's playback rate is 0x4afc90's: doubled for L03 (0x13, but race 8's males) and L04 (0x14), D05 (0x10)
+on a styled model (the animation set's +0x34, which InitAnimationTracks @0x407800 sets for an actor with a
+TUNIC_POINT dag: the Luclin player models and frogloks), race 216, races 209..212 while UseLuclinElementals
+(+0x129) is on, and a styled model's gender-1 animations 2 and 4 (race 2's 5); race 330's L04 at 0.75. Both
+an OP_Animation action's rate (the packet's speed / 10) and the classic movement's go through 0x4b15b0's
+pre-processing first: the mount races (0x8cf970's list, `is_mount_race`) run at 0.4 and their other animations at
+0.5, races 42 and 120's neutral gender (2) non-walk at 0.5, race 330 at 0.65, and a styled model's stand / idle at
+0.5 and social (an S clip) at 0.75 when the packet asked 1.0; then 0x4afc90, so a Luclin elemental's action and a
+styled model's D05 play at twice the rate (a new-style model's action does not: 0x58afa0 has no such call). 0x4afe60
+also reads +0x38c (a pet's master: the fidget needs a roll above 99), the update's turning argument (P03 on the
+spot) and the global auto attack switch (0xe635aa, read by 0x4b01dd without a local-player check: no fidget for any
+actor while it is on). A P01 request, or an action whose
+clip and 0x4b1210 replacement are both missing, is 0x4b15b0's stand request: P01 / P08 on the base, or the follow-up
++0x10c4; a direct stand request from a sitting actor becomes the sit clip before the lookup (0x4b1917; without P07,
+for race 0x3c or for the local player in first person nothing plays), an actor that is not standing plays nothing
+for an idle request (0x4b1b97: the packet's P01, P03, P08, O01, O02 or 0xc..0xf), and the play state from before the movement choice decides P01 or P08. A corpse's D05 is not
+0x4afc90's: 0x490366 asks the animation object's slot
+0x20 (0x4afd50), which calls 0x4096c0 directly with speed 0, so it bypasses the factor and holds the end pose.
+Hailstone plays D05 once at rate 1 and holds its last frame, which shows the same end pose.
+
 **Bone groups** (`game/anim_layers.*`, `render/actor_layers.*`). Each actor splits its bones into two CBoneGroups when
 its animations are set up (0x4090f0 / 0x409260 by HasNewStyleHierarchicalModel; EnumerateBones @0x10040f80
 puts each bone in the group its tag's callback answers): group 0 the upper body (classic tags whose part after the
 model code starts FA HE FI FO BI NE HI CH, but CHCHEST_; EQG tags CHEST* but CHEST_CHEST01, HEAD*, ARM*, NECK*),
 group 1 the rest (root, pelvis, legs, and the points the callbacks do not name, such as R_POINT). Each group
 cross-fades on its own, linear over the blend time (BlendToAnimation @0x1003fcc0; asked for the animation it plays,
-it does nothing). Which group plays what:
+it does nothing). The old track keeps running through the blend; a one-shot that has played out holds its last frame
+(it is not wrapped), while a looping clip wraps. Which group plays what:
 
 - Classic models (0x4b15b0): the animation asked goes to group 0, the "queued" one to group 1; they are the same
   but for a rider (the rider animation 0x4a / 0x4e queued on the legs, the action on the arms) and a moving (+0x7c not
@@ -1934,7 +1958,9 @@ it does nothing). Which group plays what:
 - A request that finds the upper body busy (`render/actor_layers.cpp` start_action). Classic: an OP_Animation reaches
   0x4b15b0 through the object's slot 3 with restart 1 and key 1, and 0x4b0900 decides whether it may start at
   once (`game::classic_may_interrupt`: the blend and rider animations, D05, 0x21 and 0x2c always; never over itself;
-  else only over an animation of table 0xdcece8). Refused while group 0 has not played its cycle through
+  else only over an animation of table 0xdcece8). 0x4b0900 gets the number the packet asked for, while 0x4afc90,
+  the queue and +0x10c0 use the number 0x4b1210 chose (a missing T06 becomes T05, and a CastNuke still interrupts
+  C05). Refused while group 0 has not played its cycle through
   (HasCompletedCycle, slot 0x1c; slot 0x24 is the group's queued animation +0xc, which nothing sets here), the
   actions 1..0xb and 0x2d..0x2f become the follow-up +0x10c4 (the last one asked wins) and the movement ones
   (0x11..0x19, 0x21, 0x24, 0x4b, 0x4c) reset it to 0x20; the next stand request (P01) once the upper body is free
@@ -1951,7 +1977,10 @@ it does nothing). Which group plays what:
   P01, C01..D05 (1..0x10), L01 (0x11), P03 (0x22), T04..T09 (0x2a..0x2f), L11 (0x4b) or none (0xfe, EQPlayer's
   constructor value), and P08 (0x47) after anything else: the run, a jump or fall, a duck, a posture change, the
   instruments, a social, P08 itself. An idle request (O01) after such an animation is O02 (0x48). A model without
-  P08 / O02 plays P01 / O01. When the stand request plays the follow-up, +0x10c4 becomes 0x20 after a named
+  P08 / O02 plays P01 / O01. The stand request is a base request: a corpse, a posture change and an unfinished
+  action 0x4b0900 does not let it interrupt keep what plays; an action that may yield is dropped; the stand plays
+  forward and the same clip keeps its phase (0x4b1ab3 clears the restart flag). When the stand request plays the
+  follow-up, +0x10c4 becomes 0x20 after a named
   animation, else 0x47, so the next stand is P08 (a follow-up of 0x47 plays P08 and is reset the same way). The
   layers keep an OP_Animation action as +0x10c0 until it ends (0x4b15b0 writes +0x10c0 only for what it
   starts), unless a walk or run took the legs under it; so after a social the stand is P08, after an attack P01.

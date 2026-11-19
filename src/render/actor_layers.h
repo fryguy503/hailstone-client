@@ -27,6 +27,7 @@ struct GroupTrack {
     const assets::AnimationClip* previous = nullptr;
     float previous_time = 0.0f;
     bool previous_reverse = false;
+    bool previous_loop = true; // the previous clip's loop flag: a played-out one-shot holds its last frame
     float blend = 1.0f;       // the new track's weight
     float blend_seconds = 0.1f;
 
@@ -61,9 +62,35 @@ struct LayerRequest {
     float speed_run = 0.0f;  // +0x7c
     std::uint8_t follow_up_after = 0x20; // classic: what +0x10c4 becomes when the stand request plays the follow-up
                                          // (game::SpawnAnimChoice::follow_up)
+    bool stand_request = false; // classic: 0x4b15b0's stand path (P01 / P08 on the base, the follow-up +0x10c4)
     std::int32_t base_column = 0;
     std::int32_t action_column = 0;
 };
+
+// What one actor's pose reads: the lower group's clip and, when `upper_clip` is set, the upper group's own (an
+// action over the legs).
+struct PoseInput {
+    const assets::AnimationClip* clip = nullptr;
+    float time = 0.0f;
+    bool loop = true;
+    const assets::AnimationClip* previous = nullptr;
+    float previous_time = 0.0f;
+    bool previous_loop = true;
+    float blend = 1.0f;
+    const assets::AnimationClip* upper_clip = nullptr;
+    float upper_time = 0.0f;
+    bool upper_loop = true;
+    const assets::AnimationClip* upper_previous = nullptr;
+    float upper_previous_time = 0.0f;
+    bool upper_previous_loop = true;
+    float upper_blend = 1.0f;
+    const std::vector<std::uint8_t>* bone_groups = nullptr; // per bone (game/anim_layers.h)
+};
+// The actor's bone matrices: the lower group's clip, the upper group's own when `upper_clip` is set, each
+// cross-faded from its previous clip by the linear weight. A played-out one-shot holds its last frame; only a
+// looping clip wraps (0x1003fcc0's old track). `previous` is the scratch buffer for the previous pose.
+void pose_actor(const assets::CharacterModel& model, const PoseInput& in, std::vector<assets::BonePose>& local,
+                std::vector<assets::BonePose>& previous, std::vector<glm::mat4>& world);
 
 struct ActorLayers {
     GroupTrack group[2]; // game::kUpperBones, game::kLowerBones
@@ -80,12 +107,25 @@ struct ActorLayers {
     float follow_rate = 1.0f;
 
     // An action starts (0x4b15b0 / 0x58afa0 for an OP_Animation): on the upper body alone or on both
-    // groups (game/anim_layers.h). False when the model's object plays nothing now: a new-style rider's action
-    // that is not of layer kind 1, a group mode (0x58ac90) of 0 or 1 (the new-style object records a mode 1
-    // sequence at +0x10c4 / +0x10cc and never plays it), the same sequence asked again (mode 3: it keeps
-    // playing), or a classic request that may not interrupt the unfinished action (kept as the follow-up).
-    // Asked for the clip a group already plays, BlendToAnimation leaves it as it is (no replay).
-    bool start_action(const assets::AnimationClip* clip, std::uint8_t anim, float rate, const LayerRequest& req);
+    // groups (game/anim_layers.h). `requested` is the number the packet asked for (0x4b0900's first argument);
+    // `chosen` is what 0x4b1210 made of it, which the queue and the final state use. False when the model's object
+    // plays nothing now: a new-style rider's action that is not of layer kind 1, a group mode (0x58ac90) of 0 or 1
+    // (the new-style object records a mode 1 sequence at +0x10c4 / +0x10cc and never plays it), the same sequence
+    // asked again (mode 3: it keeps playing), or a classic request that may not interrupt the unfinished action
+    // (kept as the follow-up). Asked for the clip a group already plays, BlendToAnimation leaves it as it is (no
+    // replay).
+    bool start_action(const assets::AnimationClip* clip, std::uint8_t requested, std::uint8_t chosen, float rate,
+                      const LayerRequest& req);
+    // 0x4b15b0's stand path: may the stand replace what the upper body plays? A corpse and an unfinished action
+    // the stand may not interrupt (0x4b0900, `requested` is the packet's number) refuse; an action that may yield
+    // is dropped. The caller then asks for the stand clip as the base.
+    bool stand_request(std::uint8_t requested, const LayerRequest& req);
+    // 0x4b15b0's stand path: P01 / P08 on both groups, looping and forward, or the follow-up +0x10c4 (step()).
+    // Fills `req`'s base and returns false for a corpse or an unfinished action the stand may not interrupt. The
+    // caller keeps a posture change (a sit-down / stand-up clip) out of it. A group already playing the clip keeps
+    // its phase (0x1003fd0c).
+    bool start_stand(const assets::AnimationClip* clip, std::uint8_t requested, std::uint8_t anim, float rate,
+                     LayerRequest& req);
     // One frame: the base clip where no action holds the group, the action ending when the upper body has played
     // it through, then both groups advance by dt. True when a classic stand request started the follow-up.
     bool step(const LayerRequest& req, float dt);
