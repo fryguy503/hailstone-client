@@ -85,6 +85,12 @@ struct GameConnectionTestAccess {
         ++c.server_rules_serial_;
     }
     static void update_server_rules(GameConnection& c) { c.update_server_rules(); }
+    static void expire_large_dialog(GameConnection& c) {
+        if (c.large_dialog_) c.large_dialog_->close_at_ms = GameConnection::now_ms() - 1;
+    }
+    static void lose_zone_socket(GameConnection& c) {
+        if (c.zone_session_) c.zone_session_->simulate_socket_loss();
+    }
     static void update_bulk_job(GameConnection& c, std::int64_t now) { c.update_bulk_job(now); }
     static auto& npc_checks(GameConnection& c) { return c.npc_checks_; }
     static void with_character(const GameConnection& c, const std::function<void(game::mechanics::Character&)>& fn) {

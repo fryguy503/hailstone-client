@@ -218,6 +218,7 @@ struct LargeDialog {
     bool sound = false;     // the voice controls (mute, replay, volume)
     std::uint32_t popup_id = 0, negative_id = 0, close_id = 0;
     std::int64_t close_at_ms = 0; // the duration's end on now_ms()'s clock; 0 stays open
+    std::uint64_t token = 0, camp_token = 0; // host lifetimes, not server-supplied IDs
 };
 
 enum class ConnectionState : std::uint8_t {
@@ -2656,6 +2657,11 @@ public:
     // (CLargeDialogWnd's handlers: OP_PopupResponse {0, popup}, {0, popup}, {1, negative}, {2, close id}).
     const std::optional<LargeDialog>& large_dialog() const { return large_dialog_; }
     void answer_large_dialog(int button);
+    // A guarded add-on answer. The optional camp hint expects only an actual server disconnect; the ordinary
+    // timer and Logout path remain in force if the server does not complete it. See the public SDK dialog API.
+    bool answer_large_dialog(std::uint64_t token, std::uint64_t camp_token, int button, bool expect_camp_disconnect,
+                             const std::function<bool()>& still_allowed = {});
+    std::uint64_t current_camp_token() const { return state_ == ConnectionState::Camping ? camp_token_ : 0; }
     // The spell book window as /book leaves it (the app shows it).
     // The tracking window (CTrackingWnd, game/tracking.h): its 1000 entries from the last OP_Track reply.
     struct Tracking {
@@ -3331,6 +3337,8 @@ private:
     bool auto_attack_ = false;
     bool attack_until_xtarget_clear_ = false;
     bool fast_camp_ = false;
+    std::uint64_t camp_token_ = 0;
+    bool camp_disconnect_expected_ = false, answering_large_dialog_ = false, camp_request_sending_ = false;
     bool cast_animation_fallback_ = true; // set_cast_animation_fallback
     bool attack_held_for_xtarget_ = false; // kept on at the target's death (attack_until_xtarget_clear)
     bool auto_target_xtarget_ = true;

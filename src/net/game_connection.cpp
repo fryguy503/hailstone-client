@@ -163,6 +163,9 @@ void GameConnection::fail(std::string message) {
     reset_guild_permissions(kTributeNone);
     world_drop_pending_ = false;
     zone_exit_ = ZoneExit::None;
+    camp_token_ = 0;
+    camp_disconnect_expected_ = false;
+    large_dialog_.reset();
     if (zone_session_) zone_session_->disconnect();
     if (world_session_) world_session_->disconnect();
 }
@@ -189,6 +192,7 @@ void GameConnection::chat(ChatEvent::Kind kind, std::string text, std::uint32_t 
 }
 
 void GameConnection::start(const WorldTicket& ticket) {
+    large_dialog_.reset();
     close_evolving_transfer();
     reset_fellowship();
     reset_achievements();
@@ -315,7 +319,15 @@ void GameConnection::update() {
         }
         if (zone_session_ && zone_session_->state() == SessionState::Disconnected) {
             std::string why = zone_session_->error();
+            const bool peer_disconnected = zone_session_->peer_disconnected();
             zone_session_.reset();
+            if (state_ == ConnectionState::Camping && camp_disconnect_expected_ && camp_token_ != 0 &&
+                peer_disconnected && !pstatus_.dead && (pstatus_.stand_state == kStandSitting || mount_id()) &&
+                zone_exit_ == ZoneExit::None) {
+                // A server may complete an explicitly accepted camp before our ordinary 30-second Logout.
+                // No deadline or packet is advanced: only this actual disconnect takes the camp's normal route.
+                zone_exit_ = ZoneExit::CampLogout;
+            }
             if (zone_exit_ != ZoneExit::None) {
                 leave_zone_dropped();
             } else if (state_ != ConnectionState::Zoning && state_ != ConnectionState::Disconnected) {
@@ -2114,6 +2126,9 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 // while zoning (a link death then is not in game).
                 camp_started_ = {};
                 camp_kind_ = 0;
+                camp_token_ = 0;
+                camp_disconnect_expected_ = false;
+                large_dialog_.reset();
                 state_ = ConnectionState::Zoning;
                 reset_fellowship(true);
                 reset_guild_banner();
@@ -2429,6 +2444,9 @@ void GameConnection::leave_zone_dropped() {
     reset_rewards();
     // The zone has dropped the link (or was closed after the wait).
     ZoneExit exit = std::exchange(zone_exit_, ZoneExit::None);
+    camp_token_ = 0;
+    camp_disconnect_expected_ = false;
+    large_dialog_.reset();
     if (exit == ZoneExit::Zoning) {
         connect_world(true);
     } else if (state_ != ConnectionState::Disconnected) {
@@ -2502,6 +2520,9 @@ void GameConnection::disconnect() {
     blood_spurts_.clear();
     world_drop_pending_ = false;
     zone_exit_ = ZoneExit::None;
+    camp_token_ = 0;
+    camp_disconnect_expected_ = false;
+    large_dialog_.reset();
     if (chat_server_) chat_server_->disconnect();
     if (zone_session_) zone_session_->disconnect();
     if (world_session_) world_session_->disconnect();

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -1219,6 +1220,7 @@ int h_get_player(void* h, HailstonePlayer* out) {
     v.xtarget_slots = static_cast<std::uint32_t>(c->xtargets().slots.size());
     const auto& spells = c->spell_state();
     v.casting_spell_id = spells.casting.casting() ? spells.casting.spell : 0;
+    if (c->state() == net::ConnectionState::Camping) v.observation_flags |= HAILSTONE_PLAYER_CAMPING;
     v.scribing_spell_id = spells.scribing ? spells.scribing->spell : 0;
     v.stand_state = ps.stand_state;
     v.pet_id = c->pets().focused;
@@ -1482,6 +1484,49 @@ std::uint32_t h_get_memorized_spell(void* h, std::uint32_t index) {
     const auto id = c->spell_state().gems[index].spell;
     return id == 0xffffffffu ? 0 : id;
 }
+
+int h_get_large_dialog(void* h, HailstoneLargeDialog* out) {
+    const auto* c = readable(Loaded::of(h), "get_large_dialog");
+    if (!c || !c->in_zone() || !out || out->size < sizeof(HailstoneLargeDialog) || !c->large_dialog()) return 0;
+    const auto& d = *c->large_dialog();
+    const auto now = net::GameConnection::now_ms();
+    if (d.token == 0 || (d.close_at_ms != 0 && now >= d.close_at_ms)) return 0;
+    HailstoneLargeDialog v{};
+    v.size = sizeof(v);
+    v.token = d.token;
+    v.popup_id = d.popup_id;
+    v.negative_id = d.negative_id;
+    v.close_id = d.close_id;
+    if (d.buttons) v.flags |= HAILSTONE_LARGE_DIALOG_YES_NO;
+    if (d.camp_token != 0 && d.camp_token == c->current_camp_token()) {
+        v.flags |= HAILSTONE_LARGE_DIALOG_CAMPING;
+        v.camp_token = d.camp_token;
+    }
+    v.remaining_ms = d.close_at_ms == 0 ? std::numeric_limits<std::uint32_t>::max() :
+        static_cast<std::uint32_t>(std::min<std::int64_t>(d.close_at_ms - now, std::numeric_limits<std::uint32_t>::max()));
+    return give(out, v);
+}
+
+int h_answer_large_dialog(void* h, std::uint64_t token, std::uint64_t camp_token, std::int32_t button,
+                          std::uint32_t flags) {
+    Loaded& l = Loaded::of(h);
+    if (flags & ~HAILSTONE_DIALOG_EXPECT_CAMP_DISCONNECT) return 0;
+    const bool camp = (flags & HAILSTONE_DIALOG_EXPECT_CAMP_DISCONNECT) != 0;
+    const auto generation = l.lifecycle_generation;
+    const auto policy_generation = l.policy_generation;
+    auto* c = connection_of(l);
+    const auto allowed = [&] {
+        if (l.unload_pending || l.lifecycle_generation != generation || l.policy_generation != policy_generation ||
+            connection_of(l) != c || !c || !c->in_zone())
+            return false;
+        if (!l.can(kCapActions) || (camp && (!l.active || !l.can(kCapExtend)))) return false;
+        const auto& d = c->large_dialog();
+        return d && d->token == token && (d->close_at_ms == 0 || net::GameConnection::now_ms() < d->close_at_ms);
+    };
+    if (!allowed()) return 0;
+    return c->answer_large_dialog(token, camp_token, button, camp, allowed) ? 1 : 0;
+}
+
 bool world_allowed(const Loaded& l) {
     const auto* c = connection_of(l);
     return l.active && !l.unload_pending && l.can(kCapUi | kCapExtend) && c && c->in_zone();
@@ -3040,6 +3085,8 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.measure_binary = main_only<h_measure_binary>;
     p.table.get_map_policy = main_only<h_get_map_policy>;
     p.table.set_class_name = main_only<h_set_class_name>;
+    p.table.get_large_dialog = main_only<h_get_large_dialog>;
+    p.table.answer_large_dialog = main_only<h_answer_large_dialog>;
     Hooks& hooks = *m.env.hooks;
     Loaded* lp = &p;
     // Each callback runs with the plugin's capabilities and counts as the plugin being busy (no unloading under it).

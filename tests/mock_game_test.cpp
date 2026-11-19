@@ -14,10 +14,12 @@
 #include "core/ini_file.h"
 #include "game/coords.h"
 #include "mock_server/harness.h"
+#include "mq_test_world.h"
 #include "net/chat_server.h"
 #include "net/door_packets.h"
 #include "net/packet_io.h"
 #include "platform/udp_socket.h"
+#include "plugin/hooks.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -34,6 +36,17 @@ bool in_order(const std::vector<AppPacket>& log, std::initializer_list<Op> want)
 }
 
 bool near(float a, float b, float eps = 0.2f) { return std::fabs(a - b) <= eps; }
+
+AppPacket game_popup(bool buttons = true, std::uint32_t duration = 30000) {
+    ByteWriter w;
+    for (std::string_view text : {"Fixture popup", "Fixture question", "Accept", "Decline"}) {
+        w.le(static_cast<std::uint32_t>(text.size() + 1));
+        detail::write_cstring(w, text);
+    }
+    w.le<std::uint8_t>(buttons ? 1 : 0); w.le<std::uint8_t>(0);
+    w.le(duration); w.le<std::uint32_t>(901); w.le<std::uint32_t>(902); w.le<std::uint32_t>(903);
+    return make_packet(Op::OnLevelMessage, std::move(w));
+}
 
 } // namespace
 
@@ -518,6 +531,212 @@ TEST_CASE("mock server: a tradeskill station opens in the tradeskill window, its
 }
 
 // ---------------------------------------------------------------- camp
+
+TEST_CASE("mock server: game popup answers work during camp without advancing logout") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    rig.conn.camp();
+    REQUIRE(rig.until([&] { return rig.server.camp_requests == 1; }));
+    rig.conn.receive_zone_packet_for_test(game_popup());
+    REQUIRE(rig.conn.large_dialog());
+    CHECK(rig.conn.large_dialog()->token != 0);
+    CHECK(rig.conn.large_dialog()->camp_token == rig.conn.current_camp_token());
+    rig.conn.answer_large_dialog(1);
+    CHECK_FALSE(rig.conn.large_dialog());
+    REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::PopupResponse) == 1; }));
+    const auto response = std::find_if(rig.server.zone_log.begin(), rig.server.zone_log.end(),
+        [](const auto& p) { return is_op(p, Op::PopupResponse); });
+    REQUIRE(response != rig.server.zone_log.end());
+    ByteReader bytes(response->data);
+    CHECK(bytes.le<std::uint32_t>() == 0);
+    CHECK(bytes.le<std::uint32_t>() == 901);
+    CHECK(rig.conn.state() == ConnectionState::Camping);
+    CHECK(rig.server.logouts == 0);
+    // An ordinary popup answer does not promise camp completion.
+    rig.server.zone.send_disconnect();
+    REQUIRE(rig.until_state(ConnectionState::Disconnected));
+    CHECK_FALSE(rig.conn.camped_out());
+    CHECK(rig.conn.link_death().has_value());
+}
+
+TEST_CASE("mock server: a guarded server camp answer normalizes only its actual current camp disconnect") {
+    for (bool cancel : {false, true}) {
+        CAPTURE(cancel);
+        Rig rig;
+        REQUIRE(rig.to_zone());
+        rig.conn.send_command("/camp desktop");
+        REQUIRE(rig.until([&] { return rig.server.camp_requests == 1; }));
+        rig.conn.receive_zone_packet_for_test(game_popup());
+        REQUIRE(rig.conn.large_dialog());
+        const auto dialog = *rig.conn.large_dialog();
+        CHECK_FALSE(rig.conn.answer_large_dialog(dialog.token, dialog.camp_token + 1, 1, true));
+        CHECK(rig.conn.answer_large_dialog(dialog.token, dialog.camp_token, 1, true));
+        CHECK_FALSE(rig.conn.answer_large_dialog(dialog.token, dialog.camp_token, 1, true));
+        REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::PopupResponse) == 1; }));
+        CHECK(rig.conn.state() == ConnectionState::Camping);
+        CHECK(rig.server.logouts == 0); // the server may decline it; no timer or packet was advanced
+        if (cancel) {
+            rig.conn.set_sitting(false);
+            CHECK(rig.conn.current_camp_token() == 0);
+        }
+        rig.server.zone.send_disconnect();
+        REQUIRE(rig.until_state(ConnectionState::Disconnected));
+        if (cancel) {
+            CHECK_FALSE(rig.conn.camped_out());
+            CHECK(rig.conn.link_death().has_value());
+        } else {
+            REQUIRE(rig.conn.camped_out());
+            CHECK(*rig.conn.camped_out() == 1); // preserve the ordinary desktop destination
+            CHECK_FALSE(rig.conn.link_death());
+        }
+    }
+}
+
+TEST_CASE("mock server: popup tokens retire on replacement, expiry and camp cancellation") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    rig.conn.camp();
+    rig.conn.receive_zone_packet_for_test(game_popup());
+    REQUIRE(rig.conn.large_dialog());
+    const auto old = *rig.conn.large_dialog();
+    rig.conn.receive_zone_packet_for_test(game_popup()); // even identical server IDs replace the lifetime
+    REQUIRE(rig.conn.large_dialog());
+    CHECK(rig.conn.large_dialog()->token != old.token);
+    CHECK_FALSE(rig.conn.answer_large_dialog(old.token, old.camp_token, 1, true));
+    const auto current = *rig.conn.large_dialog();
+    rig.conn.camp(); // cancel; the old offer must not complete the next camp
+    rig.conn.camp();
+    CHECK(rig.conn.current_camp_token() != current.camp_token);
+    CHECK_FALSE(rig.conn.answer_large_dialog(current.token, current.camp_token, 1, true));
+    CHECK_FALSE(rig.conn.answer_large_dialog(current.token, 0, 0, false)); // Yes/No is not an OK dialog
+    rig.conn.receive_zone_packet_for_test(game_popup(false));
+    REQUIRE(rig.conn.large_dialog());
+    CHECK_FALSE(rig.conn.answer_large_dialog(rig.conn.large_dialog()->token, 0, 1, false));
+    const auto expiring = rig.conn.large_dialog()->token;
+    GameConnectionTestAccess::expire_large_dialog(rig.conn);
+    CHECK_FALSE(rig.conn.answer_large_dialog(expiring, 0, 0, false));
+    // The ordinary UI timeout's close response remains available, with its distinct close ID.
+    CHECK(rig.conn.answer_large_dialog(expiring, 0, 3, false));
+}
+
+TEST_CASE("mock server: popup send reentry or refusal cannot commit a stale camp completion") {
+    plugin::Hooks hooks;
+    auto options = quick_options(); options.hooks = &hooks;
+    Rig rig(MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    rig.conn.camp();
+    rig.conn.receive_zone_packet_for_test(game_popup());
+    REQUIRE(rig.conn.large_dialog());
+    const auto d = *rig.conn.large_dialog();
+    hooks.on_packet(plugin::Hooks::kClient, plugin::Stream::Zone, plugin::Direction::Out,
+        to_wire(Op::PopupResponse), [&](AppPacket&) {
+            CHECK_FALSE(rig.conn.answer_large_dialog(d.token, d.camp_token, 1, true));
+            rig.conn.receive_zone_packet_for_test(game_popup());
+            return plugin::Flow::Continue;
+        });
+    CHECK_FALSE(rig.conn.answer_large_dialog(d.token, d.camp_token, 1, true));
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::PopupResponse) == 0);
+    rig.server.zone.send_disconnect();
+    REQUIRE(rig.until_state(ConnectionState::Disconnected));
+    CHECK_FALSE(rig.conn.camped_out());
+    CHECK(rig.conn.link_death().has_value());
+}
+
+TEST_CASE("mock server: a refused outgoing camp does not create a camp lifetime") {
+    plugin::Hooks hooks;
+    auto options = quick_options(); options.hooks = &hooks;
+    Rig rig(MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    hooks.on_packet(plugin::Hooks::kClient, plugin::Stream::Zone, plugin::Direction::Out,
+        to_wire(Op::Camp), [](AppPacket&) { return plugin::Flow::Drop; });
+    rig.conn.camp();
+    CHECK(rig.conn.state() == ConnectionState::InZone);
+    CHECK(rig.conn.current_camp_token() == 0);
+    CHECK(rig.server.camp_requests == 0);
+    CHECK(rig.server.logouts == 0);
+}
+
+TEST_CASE("mock server: local death retires an accepted camp disconnect hint") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    rig.conn.camp();
+    rig.conn.receive_zone_packet_for_test(game_popup());
+    REQUIRE(rig.conn.large_dialog());
+    const auto dialog = *rig.conn.large_dialog();
+    REQUIRE(rig.conn.answer_large_dialog(dialog.token, dialog.camp_token, 1, true));
+    Death death;
+    death.spawn_id = rig.conn.world().player_id;
+    death.corpse_id = death.spawn_id;
+    rig.conn.receive_zone_packet_for_test(encode(death));
+    CHECK(rig.conn.player_status().dead);
+    CHECK(rig.conn.current_camp_token() == 0);
+    rig.conn.receive_zone_packet_for_test(game_popup());
+    REQUIRE(rig.conn.large_dialog());
+    CHECK_FALSE(rig.conn.answer_large_dialog(rig.conn.large_dialog()->token, dialog.camp_token, 1, true));
+    rig.server.zone.send_disconnect();
+    REQUIRE(rig.until_state(ConnectionState::Disconnected));
+    CHECK_FALSE(rig.conn.camped_out());
+    CHECK(rig.conn.link_death().has_value());
+}
+
+TEST_CASE("mock server: an accepted camp hint never turns timeout or socket loss into completion") {
+    for (bool socket_loss : {false, true}) {
+        CAPTURE(socket_loss);
+        ManualClock clock;
+        auto options = quick_options(); options.session.clock = clock.source();
+        options.session.idle_timeout = std::chrono::seconds(60);
+        Rig rig(MockConfig::standard(), options);
+        REQUIRE(rig.to_zone());
+        rig.conn.camp();
+        rig.conn.receive_zone_packet_for_test(game_popup());
+        REQUIRE(rig.conn.large_dialog());
+        const auto dialog = *rig.conn.large_dialog();
+        REQUIRE(rig.conn.answer_large_dialog(dialog.token, dialog.camp_token, 1, true));
+        REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::PopupResponse) == 1; }));
+        if (socket_loss) GameConnectionTestAccess::lose_zone_socket(rig.conn);
+        else {
+            clock.hold();
+            rig.conn.simulate_link_loss();
+            clock.advance(std::chrono::seconds(61));
+        }
+        REQUIRE(rig.until_state(ConnectionState::Disconnected));
+        CHECK_FALSE(rig.conn.camped_out());
+        CHECK(rig.conn.link_death().has_value());
+        CHECK(rig.server.logouts == 0);
+    }
+}
+
+TEST_CASE("mock server: popup lifetimes retire on real zoning and opaque context survives ordinary camp") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    const auto context = rig.conn.interaction_context();
+    rig.conn.camp();
+    CHECK(rig.conn.interaction_context() == context);
+    rig.conn.set_sitting(false);
+    CHECK(rig.conn.interaction_context() == context);
+    rig.conn.receive_zone_packet_for_test(game_popup());
+    REQUIRE(rig.conn.large_dialog());
+    const auto dialog = *rig.conn.large_dialog();
+    rig.server.request_zone_change(1, 20.0f, 10.0f, 3.0f);
+    REQUIRE(rig.until_state(ConnectionState::Zoning));
+    CHECK_FALSE(rig.conn.large_dialog());
+    REQUIRE(rig.until_state(ConnectionState::InZone));
+    CHECK(rig.conn.interaction_context() != context);
+    CHECK_FALSE(rig.conn.answer_large_dialog(dialog.token, 0, 1, false));
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::PopupResponse) == 0);
+    rig.conn.receive_zone_packet_for_test(game_popup());
+    REQUIRE(rig.conn.large_dialog());
+    CHECK(rig.conn.large_dialog()->token != dialog.token);
+    const auto new_context = rig.conn.interaction_context();
+    const auto player = rig.conn.world().player_id;
+    ++GameConnectionTestAccess::world(rig.conn).spawns.at(player).incarnation;
+    CHECK(rig.conn.interaction_context() != new_context);
+    Rig other;
+    REQUIRE(other.to_zone());
+    CHECK(other.conn.interaction_context() != rig.conn.interaction_context());
+    rig.conn.disconnect();
+    CHECK_FALSE(rig.conn.large_dialog());
+}
 
 TEST_CASE("mock server: camping sits, sends OP_Camp and ends when the zone drops the link") {
     // docs/protocol/rof2-packets.md: C->Z OP_Camp, then after the client's own 30 s timer OP_Logout; the zone drops

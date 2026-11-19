@@ -113,6 +113,9 @@ public:
 
     virtual SessionState state() const = 0;
     virtual std::string error() const = 0;
+    // Only a received, decoded SessionDisconnect with this connection's code. Local closes, timeouts and socket
+    // failures are not peer disconnects. The receipt lasts until the next connect().
+    virtual bool peer_disconnected() const { return false; }
 
     // Queues a packet; reliable packets are sequenced, acked and resent,
     // fragmented when larger than one datagram, and may be combined.

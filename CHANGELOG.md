@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add-ons can inspect raw spell-duration fields and answer current game popups with lifetime checks; camp popups now answer while camping, and an explicit server-extension hint preserves the camp destination when the server disconnects early.
+
 - Nameplate add-ons can mark visible actors with observed concealment and distinguish regular invisibility from invisibility versus undead when the relevant buff data is available.
 - UI addons can load their own packaged raster artwork through `hs.UI.assets.InterfaceImage`, including artwork inherited from approved base interfaces, without a separate local art install.
 - Guilds: the Banner page in Modern and Gamepad shows available kits, the active banner and its remaining time. On a server with RoF2 guild banners, members with the appropriate permissions can plant, remove or customise the banner. Planted banners display their guild's patterns and colours.

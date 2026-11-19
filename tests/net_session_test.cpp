@@ -423,6 +423,7 @@ struct FakeServer {
     platform::Endpoint client;
     soe::SessionParams params;
     bool have_client = false;
+    std::uint32_t connect_code = 0;
     soe::InboundStream inbound;
     std::vector<AppPacket> received;
     std::set<std::uint16_t> acked;
@@ -451,8 +452,11 @@ struct FakeServer {
         while (auto n = sock.recv_from(buf, from)) {
             ByteSpan d(buf.data(), *n);
             if (std::to_integer<int>(d[0]) == 0 && std::to_integer<int>(d[1]) == soe::op::SessionRequest) {
+                REQUIRE(d.size() == 14);
                 client = from;
                 have_client = true;
+                ByteReader request(d.subspan(6, 4));
+                connect_code = request.be<std::uint32_t>();
                 ByteWriter w;
                 w.le<std::uint8_t>(0);
                 w.le<std::uint8_t>(soe::op::SessionResponse);
@@ -498,9 +502,135 @@ struct FakeServer {
     bool is_acked(std::uint16_t seq) const {
         return acked.count(seq) || (last_cumulative_ack != 0xffff && soe::sequence_at_or_before(seq, last_cumulative_ack));
     }
+
+    void connect(Session& session) {
+        session.connect("127.0.0.1", port());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (session.state() == SessionState::Connecting && std::chrono::steady_clock::now() < deadline) {
+            session.update();
+            poll(false);
+            std::this_thread::yield();
+        }
+        REQUIRE(session.state() == SessionState::Connected);
+        REQUIRE(have_client);
+    }
 };
 
 } // namespace
+
+TEST_CASE("session: only an exact current-session peer disconnect has peer provenance") {
+    FakeServer server;
+    SessionOptions options;
+    options.service_interval = std::chrono::milliseconds(0);
+    auto session = Session::create(options);
+    CHECK_FALSE(session->peer_disconnected());
+    server.connect(*session);
+    CHECK_FALSE(session->peer_disconnected());
+    auto packet = soe::make_disconnect(server.connect_code);
+    bool valid = true;
+    SUBCASE("matching six-byte packet") {}
+    SUBCASE("another session's code") {
+        packet = soe::make_disconnect(server.connect_code ^ 0x80000000u);
+        valid = false;
+    }
+    SUBCASE("header alone") {
+        packet.resize(2);
+        valid = false;
+    }
+    SUBCASE("partial code") {
+        packet.resize(5);
+        valid = false;
+    }
+    SUBCASE("extra byte") {
+        packet.push_back(std::byte{});
+        valid = false;
+    }
+    SUBCASE("eight-byte size-helper padding") {
+        packet.resize(8);
+        valid = false;
+    }
+    SUBCASE("out of session is not a validated peer disconnect") {
+        packet = b({0, soe::op::OutOfSession});
+        valid = false;
+    }
+    server.send(packet);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (session->state() != SessionState::Disconnected && std::chrono::steady_clock::now() < deadline) {
+        session->update();
+        std::this_thread::yield();
+    }
+    REQUIRE(session->state() == SessionState::Disconnected); // Existing close behavior is unchanged.
+    CHECK(session->peer_disconnected() == valid);
+}
+
+TEST_CASE("session: corrupt disconnects do not establish peer provenance") {
+    FakeServer server;
+    SessionOptions options;
+    options.service_interval = std::chrono::milliseconds(0);
+    auto session = Session::create(options);
+    server.connect(*session);
+    auto wire = soe::encode_datagram(server.params, soe::make_disconnect(server.connect_code));
+    REQUIRE_FALSE(wire.empty());
+    wire.back() ^= std::byte{1};
+    server.sock.send_to(server.client, wire);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (session->stats().bad == 0 && std::chrono::steady_clock::now() < deadline) {
+        session->update();
+        std::this_thread::yield();
+    }
+    REQUIRE(session->stats().bad == 1);
+    CHECK(session->state() == SessionState::Connected);
+    CHECK_FALSE(session->peer_disconnected());
+}
+
+TEST_CASE("session: local close and connection loss are not peer disconnects") {
+    FakeServer server;
+    test::ManualClock clock;
+    clock.hold();
+    SessionOptions options;
+    options.clock = clock.source();
+    options.service_interval = std::chrono::milliseconds(0);
+    options.idle_timeout = std::chrono::milliseconds(100);
+    options.keepalive_interval = options.stat_interval = std::chrono::milliseconds(0);
+    auto session = Session::create(options);
+    server.connect(*session);
+    SUBCASE("local disconnect") { session->disconnect(); }
+    SUBCASE("receive timeout") { clock.advance(std::chrono::milliseconds(100)); }
+    SUBCASE("closed socket") { session->simulate_socket_loss(); }
+    SUBCASE("lost network even when a peer packet was sent") {
+        session->simulate_link_loss();
+        server.send(soe::make_disconnect(server.connect_code));
+        session->update();
+        CHECK(session->state() == SessionState::Connected);
+        CHECK_FALSE(session->peer_disconnected());
+        clock.advance(std::chrono::milliseconds(100));
+    }
+    session->update();
+    CHECK(session->state() == SessionState::Disconnected);
+    CHECK_FALSE(session->peer_disconnected());
+}
+
+TEST_CASE("session: reconnect clears a previous peer-disconnect receipt") {
+    FakeServer server;
+    SessionOptions options;
+    options.service_interval = std::chrono::milliseconds(0);
+    auto session = Session::create(options);
+    server.connect(*session);
+    server.send(soe::make_disconnect(server.connect_code));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (session->state() != SessionState::Disconnected && std::chrono::steady_clock::now() < deadline) {
+        session->update();
+        std::this_thread::yield();
+    }
+    REQUIRE(session->state() == SessionState::Disconnected);
+    REQUIRE(session->peer_disconnected());
+    server.connect(*session);
+    CHECK_FALSE(session->peer_disconnected());
+    session->disconnect();
+    session->update();
+    CHECK(session->state() == SessionState::Disconnected);
+    CHECK_FALSE(session->peer_disconnected());
+}
 
 TEST_CASE("session loopback: handshake, resend in both directions, fragment reassembly") {
     FakeServer server;
@@ -586,6 +716,7 @@ TEST_CASE("session times out when nobody answers") {
     }
     CHECK(session->state() == SessionState::Disconnected);
     CHECK_FALSE(session->error().empty());
+    CHECK_FALSE(session->peer_disconnected());
 }
 
 TEST_CASE("session loopback: the service thread acks while the owner is busy; small packets are held") {

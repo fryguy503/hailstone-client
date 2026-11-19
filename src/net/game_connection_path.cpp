@@ -22,18 +22,24 @@ constexpr std::int64_t kFindReplyWaitMs = 10000;
 std::uint64_t GameConnection::interaction_context() const {
     const auto* player = world_.player();
     const auto incarnation = player ? player->incarnation : 0;
+    // Camping changes which actions are allowed, not this zone/connection/player lifetime. Callers still check
+    // the actual state independently; a pending server camp offer must remain tied to the same opaque context.
+    const auto context_state = state_ == ConnectionState::Camping ? ConnectionState::InZone : state_;
     if (!interaction_context_ || interaction_player_ != incarnation || interaction_session_ != zone_session_.get() ||
-        interaction_state_ != state_ || interaction_dead_ != pstatus_.dead) {
+        interaction_state_ != context_state || interaction_dead_ != pstatus_.dead) {
         interaction_context_ = core::next_process_identity();
         interaction_player_ = incarnation;
         interaction_session_ = zone_session_.get();
-        interaction_state_ = state_;
+        interaction_state_ = context_state;
         interaction_dead_ = pstatus_.dead;
     }
     return interaction_context_;
 }
 
-void GameConnection::invalidate_interaction_context() { interaction_context_ = 0; }
+void GameConnection::invalidate_interaction_context() {
+    interaction_context_ = 0;
+    large_dialog_.reset();
+}
 
 std::optional<GameConnection::ActorRef> GameConnection::captureActorRef(std::uint32_t id) const {
     if (state_ != ConnectionState::InZone || !world_.player()) return std::nullopt;

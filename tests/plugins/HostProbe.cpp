@@ -47,10 +47,43 @@ static_assert(offsetof(PluginHostApi, get_raid_data_bulk) == offsetof(PluginHost
 static_assert(offsetof(PluginHostApi, get_ability_data_bulk) == offsetof(PluginHostApi, caps) + 88 * sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, select_raid_member) == offsetof(PluginHostApi, caps) + 89 * sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, set_class_name) == offsetof(PluginHostApi, get_map_policy) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, get_large_dialog) == offsetof(PluginHostApi, set_class_name) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, answer_large_dialog) == offsetof(PluginHostApi, get_large_dialog) + sizeof(PluginHostApi::caps));
+static_assert(sizeof(HailstoneLargeDialog) == 40);
 
 namespace {
 
 std::vector<unsigned char> received_item_bytes;
+HailstoneLargeDialog dialog_snapshot{};
+
+void probe_dialog(void*, const char*) {
+    HailstoneLargeDialog d{}; d.size = sizeof(d);
+    HailstonePlayer p{}; p.size = sizeof(p);
+    const int ok = HAILSTONE_HOST_HAS(host, get_large_dialog) ? host->get_large_dialog(host->host, &d) : 0;
+    if (ok) dialog_snapshot = d;
+    const int player = host->get_player(host->host, &p);
+    WriteChatf("[Probe] dialog %d flags %u token %d camp %d ids %u %u %u playercamp %d", ok, d.flags,
+        d.token != 0, d.camp_token != 0, d.popup_id, d.negative_id, d.close_id,
+        player && (p.observation_flags & HAILSTONE_PLAYER_CAMPING) != 0);
+}
+void probe_dialog_answer(void*, const char* args) {
+    int button = 1; unsigned flags = 0;
+    if (args) std::sscanf(args, "%d %u", &button, &flags);
+    const int ok = HAILSTONE_HOST_HAS(host, answer_large_dialog) ? host->answer_large_dialog(host->host,
+        dialog_snapshot.token, dialog_snapshot.camp_token, button, flags) : 0;
+    WriteChatf("[Probe] dialog answer %d", ok);
+}
+void probe_dialog_active(void*, const char* args) { host->set_active(host->host, args && *args == '1'); }
+void probe_dialog_thread(void*, const char*) {
+    int read = 1, answer = 1;
+    std::thread t([&] {
+        HailstoneLargeDialog d{}; d.size = sizeof(d);
+        read = host->get_large_dialog(host->host, &d);
+        answer = host->answer_large_dialog(host->host, dialog_snapshot.token, dialog_snapshot.camp_token, 1, 1);
+    });
+    t.join();
+    WriteChatf("[Probe] dialog thread %d %d", read, answer);
+}
 
 void nothing(void*, const char*) {}
 
@@ -630,6 +663,10 @@ int probe_tlo(void*, const char*, const char* member, const char*, HailstoneValu
 } // namespace
 
 HAILSTONE_API void InitializePlugin(void) {
+    AddCommand("/probedialog", probe_dialog, nullptr);
+    AddCommand("/probedialoganswer", probe_dialog_answer, nullptr);
+    AddCommand("/probedialogactive", probe_dialog_active, nullptr);
+    AddCommand("/probedialogthread", probe_dialog_thread, nullptr);
     AddCommand("/probethread", probe_thread, nullptr);
     AddCommand("/probethrow", probe_throw, nullptr);
     AddCommand("/probestate", probe_state, nullptr);
@@ -665,6 +702,10 @@ HAILSTONE_API void InitializePlugin(void) {
 #endif
 }
 HAILSTONE_API void ShutdownPlugin(void) {
+    RemoveCommand("/probedialog");
+    RemoveCommand("/probedialoganswer");
+    RemoveCommand("/probedialogactive");
+    RemoveCommand("/probedialogthread");
     RemoveCommand("/probethread");
     RemoveCommand("/probethrow");
     RemoveCommand("/probestate");

@@ -128,6 +128,10 @@ public:
         std::lock_guard lock(mutex_);
         return error_;
     }
+    bool peer_disconnected() const override {
+        std::lock_guard lock(mutex_);
+        return peer_disconnected_;
+    }
 
     void send(const AppPacket& packet, bool reliable) override {
         std::lock_guard lock(mutex_);
@@ -320,6 +324,7 @@ private:
         lookup_.reset();
         peer_ = {};
         state_ = SessionState::Disconnected;
+        peer_disconnected_ = false;
         error_.clear();
         failed_sends_ = 0;
         params_ = {};
@@ -714,6 +719,12 @@ private:
             take_stat_response(p);
             return;
         case soe::op::SessionDisconnect:
+            // Retain the existing close behavior for malformed or stale disconnects, but only a complete current
+            // connection receipt may be used by an owner to distinguish a peer close from link loss.
+            if (p.size() == 6) {
+                ByteReader reader(p.subspan(2));
+                peer_disconnected_ = reader.be<std::uint32_t>() == connect_code_;
+            }
             return fail("the server closed the session");
         default:
             log::debug("session: ignoring protocol opcode 0x{:02x} ({} bytes)", opcode, p.size());
@@ -804,6 +815,7 @@ private:
     std::string host_;               // as connect() was given it
     std::shared_ptr<Lookup> lookup_; // while host_'s name is looked up
     SessionState state_ = SessionState::Disconnected;
+    bool peer_disconnected_ = false;
     std::string error_;
     std::mt19937_64 rng_;
     std::uint32_t connect_code_ = 0;

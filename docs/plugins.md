@@ -488,6 +488,26 @@ Faces run only when `faces` is on, and always with `read` alone.
 
 ## Compiled plugins
 
+Compiled add-ons may read `Spell.DurationFormula` and `Spell.DurationCap` through `parse`: plain integers from the
+player's spell record, with the cap in six-second ticks. The existing `Spell.Duration` timestamp remains the cap
+multiplied by 6000 ms; the raw formula is not a claim about a caster's effective duration.
+
+`get_large_dialog` (`read`) observes the current received game popup, including its host-issued token, button mode,
+server IDs, remaining deadline and the current camp token when it was received during that camp. It never exposes
+the native-plugin consent question. `answer_large_dialog` (`actions`) answers that exact current popup once: OK,
+Yes, No or close. A stale/replaced/expired popup, a button absent from its mode, lost permission or a refused send
+returns zero without consuming the question. Both calls are appended ABI 3 services: check `HAILSTONE_HOST_HAS`.
+
+The optional `HAILSTONE_DIALOG_EXPECT_CAMP_DISCONNECT` answer flag also needs an active `extend` owner, Yes and the
+snapshot's current nonzero camp token. It lets a server extension identify an accepted server camp offer. It only
+routes a subsequent validated server disconnect through the ordinary camp destination; timeouts and socket failures
+remain link deaths. It does not assert server acceptance,
+send Logout early, alter the player's Fast Camp setting or advance the normal timer. Cancellation, a new camp,
+zoning and disconnection retire that lifetime. Without a disconnect the normal camp continues. The player's READ
+snapshot reports `HAILSTONE_PLAYER_CAMPING` while the native camp is in progress, including before a popup arrives.
+Popup tokens retire when the connection, zone or player lifetime changes. The opaque map-policy context remains
+stable through ordinary camping and cancellation; the actual state and action eligibility are checked separately.
+
 A plugin is a `.dll`, `.so` or `.dylib` built against `sdk/hailstone_plugin.h`, a plain C interface that works
 with any compiler. On macOS the client loads only `.dylib`: CMake names a `MODULE` library `.so` there, so a
 plugin's own build sets `CMAKE_SHARED_MODULE_SUFFIX` to `.dylib` (or the target's `SUFFIX`); the client's build does

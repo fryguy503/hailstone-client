@@ -924,6 +924,8 @@ void register_spell() {
     m("Duration", [](const Context&, const game::SpellData& s, std::string_view) {
         return V::object(g.timestamp, static_cast<std::int64_t>(s.duration_cap) * 6000);
     });
+    m("DurationFormula", [](const Context&, const game::SpellData& s, std::string_view) { return V::integer(s.duration_formula); });
+    m("DurationCap", [](const Context&, const game::SpellData& s, std::string_view) { return V::integer(s.duration_cap); });
     m("Level", [](const Context& c, const game::SpellData& s, std::string_view) -> V {
         if (!c.conn || !c.conn->profile()) return V::nil();
         int cls = c.conn->profile()->class_;
