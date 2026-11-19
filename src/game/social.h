@@ -22,6 +22,7 @@ namespace hailstone::net { struct WhoResponse; struct WhoRequest; }
 namespace hailstone::game {
 
 class EqStrings;
+struct Spawn;
 
 // ---------------------------------------------------------------- /who
 
@@ -105,6 +106,10 @@ std::string long_date_time(int year, int month, int day, int hour, int minute, i
 std::string format_game_time(const EqStrings& strings, int year, int month, int day, int hour);
 
 // ---------------------------------------------------------------- chat
+
+// Outgoing chat codes (%T, %M, %S, %O, %P, %R), resolved when a message is sent.
+std::string expand_chat_variables(std::string_view text, const EqStrings& strings, const Spawn* target,
+                                  const Spawn* pet);
 
 // msg_new_text @0x4c0080: the eqstr template and the dev chat kind for an
 // OP_ChannelMessage channel. Language is shown as eqstr 1411 " in %1,".

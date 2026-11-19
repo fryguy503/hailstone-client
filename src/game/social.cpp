@@ -8,10 +8,13 @@
 #include <format>
 #include <string_view>
 
+#include "core/ascii_case.h"
 #include "core/msvc_atoi.h"
+#include "game/dbstr_types.h"
 #include "game/eq_names.h"
 #include "game/eq_strings.h"
 #include "game/slash_commands.h"
+#include "game/world_state.h"
 #include "game/zone_names.h"
 #include "net/social_packets.h"
 
@@ -438,12 +441,16 @@ constexpr SocialCommand kSocialCommands[] = {
 #undef HAILSTONE_SOCIAL_COMMAND
 };
 
-// he / him / his for a gender (send_social's prologue: 12209/12297/12301,
-// 12210/12298/12299, 12211/12211/12300).
-std::array<std::uint32_t, 3> pronouns(int gender) {
-    if (gender == 0) return {12209, 12297, 12301};
-    if (gender == 1) return {12210, 12298, 12299};
-    return {12211, 12211, 12300};
+struct Pronoun {
+    std::uint32_t id;
+    const char* fallback;
+};
+
+// The subjective, objective and possessive slots used by send_social and outgoing chat.
+std::array<Pronoun, 3> pronouns(int gender, std::uint32_t neutral_object = 12211) {
+    if (gender == 0) return {{{12209, "he"}, {12297, "him"}, {12301, "his"}}};
+    if (gender == 1) return {{{12210, "she"}, {12298, "her"}, {12299, "her"}}};
+    return {{{12211, "it"}, {neutral_object, "it"}, {12300, "its"}}};
 }
 
 std::string with_period(std::string s) {
@@ -452,6 +459,64 @@ std::string with_period(std::string s) {
 }
 
 } // namespace
+
+std::string expand_chat_variables(std::string_view text, const EqStrings& strings, const Spawn* target,
+                                  const Spawn* pet) {
+    if (text.find('%') == std::string_view::npos) return std::string(text);
+    auto localized = [&](std::uint32_t id, const char* fallback) {
+        return strings.has(id) ? strings.format(id, {}) : std::string(fallback);
+    };
+    const auto forms = pronouns(target ? target->gender : 2, 6766);
+    auto replacement = [&](char code) -> std::optional<std::string> {
+        switch (code) {
+        case 't': return target ? display_name(target->name) : "Target";
+        case 'm': return pet ? display_name(pet->name) : "Pet";
+        case 's': return localized(forms[0].id, forms[0].fallback);
+        case 'o': return localized(forms[1].id, forms[1].fallback);
+        case 'p': return localized(forms[2].id, forms[2].fallback);
+        case 'r': {
+            if (!target) return localized(6769, "Race");
+            if (target->is_corpse) return localized(6767, "Corpse");
+            if (target->is_npc) return localized(6768, "NPC");
+            auto race = strings.db_string(target->race, eRaceName);
+            return race.empty() ? race_name(target->race) : race;
+        }
+        default: return std::nullopt;
+        }
+    };
+
+    std::string out;
+    out.reserve(text.size());
+    std::size_t suffix_start = 0;
+    for (std::size_t i = 0; i < text.size();) {
+        // Preserve item and achievement link envelopes, including their labels.
+        if (text[i] == '\x12') {
+            const auto end = text.find('\x12', i + 1);
+            if (end != std::string_view::npos) {
+                out.append(text.substr(i, end + 1 - i));
+                i = end + 1;
+                continue;
+            }
+        }
+        // A code can start within the first two bytes of the remaining suffix or after a space or apostrophe.
+        if (text[i] == '%' && i + 1 < text.size() &&
+            (i - suffix_start <= 1 || text[i - 1] == ' ' || text[i - 1] == '\'')) {
+            if (text[i + 1] == '%') {
+                out += "%%";
+                i += 2;
+                continue;
+            }
+            if (auto value = replacement(ascii_lower(text[i + 1]))) {
+                out += *value;
+                i += 2;
+                suffix_start = i;
+                continue;
+            }
+        }
+        out += text[i++];
+    }
+    return out;
+}
 
 const SocialEmote* social_for_handler(std::string_view handler) {
     static std::vector<SocialEmote> table = [] {
@@ -493,12 +558,12 @@ SocialText build_social(const EqStrings& strings, const SocialEmote& e, const st
             switch (*c) {
             case 'n': args.push_back(echo ? strings.format(12302, {}) : std::string()); break; // "You" / the server adds the name
             case 't': args.push_back(target_name ? *target_name : std::string()); break;
-            case 's': args.push_back(strings.format(echo ? 12303 : own[0], {})); break;
-            case 'o': args.push_back(strings.format(echo ? 12303 : own[1], {})); break;
-            case 'p': args.push_back(strings.format(echo ? 12304 : own[2], {})); break;
-            case 'S': args.push_back(strings.format(tgt[0], {})); break;
-            case 'O': args.push_back(strings.format(tgt[1], {})); break;
-            case 'P': args.push_back(strings.format(tgt[2], {})); break;
+            case 's': args.push_back(strings.format(echo ? 12303 : own[0].id, {})); break;
+            case 'o': args.push_back(strings.format(echo ? 12303 : own[1].id, {})); break;
+            case 'p': args.push_back(strings.format(echo ? 12304 : own[2].id, {})); break;
+            case 'S': args.push_back(strings.format(tgt[0].id, {})); break;
+            case 'O': args.push_back(strings.format(tgt[1].id, {})); break;
+            case 'P': args.push_back(strings.format(tgt[2].id, {})); break;
             default: break;
             }
         }

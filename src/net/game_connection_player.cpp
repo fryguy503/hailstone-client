@@ -597,7 +597,8 @@ void GameConnection::shield_command(const std::string& args) {
         target = world_.target_id;
     } else {
         // PlayerManagerClient::GetPlayerFromPartialName.
-        std::string want = lower(args);
+        std::string want = lower(expand_chat_text(args));
+        if (want.empty()) return;
         for (const auto& [id, sp] : world_.spawns) {
             if (lower(sp.name).rfind(want, 0) == 0) {
                 target = id;

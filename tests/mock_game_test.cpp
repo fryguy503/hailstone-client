@@ -11,12 +11,17 @@
 #include <iterator>
 #include <thread>
 
+#include "app/actions_ui.h"
+#include "core/config.h"
 #include "core/ini_file.h"
 #include "game/coords.h"
+#include "game/item_links.h"
 #include "mock_server/harness.h"
 #include "net/chat_server.h"
 #include "net/door_packets.h"
+#include "net/group_packets.h"
 #include "net/packet_io.h"
+#include "net/player_packets.h"
 #include "platform/udp_socket.h"
 
 using namespace hailstone;
@@ -303,6 +308,108 @@ TEST_CASE("mock server: chat, spawns, HP, items and position updates in zone") {
     CHECK(near(conn.world().spawns.at(102).position.y, -270.0f));
     CHECK(conn.error().empty());
     CHECK(conn.state() == ConnectionState::InZone);
+}
+
+TEST_CASE("mock server: typed chat and socials expand chat variables") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    std::ofstream(rig.dir.path() / "eqstr_us.txt", std::ios::app) << "12295 say\n"
+                                                               << "12346 YOU TELL THE GROUP: %1\n";
+    conn.reload_game_files();
+    REQUIRE(rig.to_zone());
+
+    Spawn target = make_spawn("Vivren", 103, 0, 6, -281.0f, -148.0f, 3.5f);
+    target.gender = 1;
+    Spawn pet = make_spawn("Fluffy", 104, 1, 36, -280.0f, -148.0f, 3.5f);
+    pet.gender = 2;
+    pet.is_pet = true;
+    pet.pet_owner_id = conn.world().player_id;
+    const Spawn other = make_spawn("Delvan", 105, 0, 2, -282.0f, -148.0f, 3.5f);
+    server.add_spawn(target);
+    server.add_spawn(pet);
+    server.add_spawn(other);
+    GroupUpdateB group;
+    group.group_id = 7;
+    group.leader = "Gennro";
+    group.members.resize(2);
+    group.members[0].name = group.leader;
+    group.members[1].slot = 1;
+    group.members[1].name = target.name;
+    server.zone.send_reliable(encode(group));
+    REQUIRE(rig.until([&] { return conn.group().active && conn.world().spawns.contains(other.spawn_id); }));
+    REQUIRE(conn.pets().focused == pet.spawn_id);
+    rig.chat();
+
+    int messages = MockEqServer::count(server.zone_log, Op::ChannelMessage);
+    const auto check_sent = [&](std::uint32_t channel, const std::string& expected, std::string_view recipient = {}) {
+        REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ChannelMessage) == messages + 1; }));
+        ++messages;
+        const auto packet = std::find_if(server.zone_log.rbegin(), server.zone_log.rend(),
+                                         [](const AppPacket& p) { return is_op(p, Op::ChannelMessage); });
+        REQUIRE(packet != server.zone_log.rend());
+        const auto sent = decode_channel_message(*packet);
+        REQUIRE(sent);
+        CHECK(sent->channel == channel);
+        CHECK(sent->target == recipient);
+        CHECK(sent->message == expected);
+    };
+
+    const std::string link = game::make_item_link(1003, "Pendant %T", false);
+    conn.set_target(target.spawn_id);
+    conn.send_command("/gsay %t | %M | %S | %o | %P | %r " + link);
+    const std::string expected = "Vivren | Fluffy | she | her | her | Dark Elf " + link;
+    check_sent(2, expected);
+    CHECK(has_line(rig.chat(), "YOU TELL THE GROUP: " + expected));
+
+    Config config;
+    app::ActionsUi actions(config, rig.dir.path() / "hailstone.ini");
+    actions.hot_buttons().social(0).lines[0] = "/g CH >>> %T <<< | %s | %O | %p | %R | %m";
+    actions.press_social(0);
+    conn.set_target(other.spawn_id);
+    conn.set_game_steps(std::vector<std::int64_t>{101});
+    actions.update(conn, nullptr, {});
+    conn.set_game_steps(std::nullopt);
+    const std::string social = "CH >>> Delvan <<< | he | him | his | Barbarian | Fluffy";
+    check_sent(2, social);
+    CHECK(has_line(rig.chat(), "YOU TELL THE GROUP: " + social));
+
+    conn.send_command("%T is a %R");
+    check_sent(8, "Delvan is a Barbarian");
+    conn.send_command("/say %T");
+    check_sent(8, "Delvan");
+    conn.send_command("/tell Vivren %S brought %m");
+    check_sent(7, "he brought Fluffy", "Vivren");
+    conn.send_command("/emote waves to %T");
+    check_sent(22, "waves to Delvan.");
+    conn.send_command("/1 %t has a pet named %m");
+    check_sent(20, ";1 Delvan has a pet named Fluffy");
+
+    conn.set_target(pet.spawn_id);
+    conn.send_command("/say %T has race %R");
+    check_sent(8, "Fluffy has race NPC", "Fluffy");
+    conn.send_command("/point say points at %T and waves to %O");
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::Emote) == 1; }));
+    const auto emote = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                    [](const AppPacket& p) { return is_op(p, Op::Emote); });
+    REQUIRE(emote != server.zone_log.end());
+    const auto pointed = decode_emote(*emote);
+    REQUIRE(pointed);
+    CHECK(pointed->text == " points at Fluffy and waves to it.");
+
+    conn.set_target(target.spawn_id);
+    conn.send_command("/assist %t");
+    conn.send_command("/shield %T");
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::Assist) == 1 &&
+                                  MockEqServer::count(server.zone_log, Op::Shielding) == 1; }));
+    const auto assist = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                     [](const AppPacket& p) { return is_op(p, Op::Assist); });
+    REQUIRE(assist != server.zone_log.end());
+    CHECK(decode_assist(*assist) == target.spawn_id);
+    const auto shield = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                     [](const AppPacket& p) { return is_op(p, Op::Shielding); });
+    REQUIRE(shield != server.zone_log.end());
+    CHECK(shield->data == encode_shielding(target.spawn_id).data);
 }
 
 // ---------------------------------------------------------------- OP_ClientUpdate cadence

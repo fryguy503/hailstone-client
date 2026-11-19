@@ -419,6 +419,13 @@ bool GameConnection::run_slash_command(std::size_t index, const std::string& arg
 
 // ---------------------------------------------------------------- chat out
 
+std::string GameConnection::expand_chat_text(std::string_view text) const {
+    const auto target = world_.spawns.find(world_.target_id);
+    const auto pet = world_.spawns.find(pets_.focused);
+    return game::expand_chat_variables(text, strings_, target == world_.spawns.end() ? nullptr : &target->second,
+                                       pet == world_.spawns.end() ? nullptr : &pet->second);
+}
+
 void GameConnection::send_channel(std::uint32_t channel, const std::string& target, const std::string& text) {
     // CEverQuest::SendNewText @0x51dcd0.
     ChannelMessage m;
@@ -463,12 +470,13 @@ void GameConnection::say_to_channel(std::uint32_t channel, const std::string& te
     }
     // The original sends the text, then echoes it in its own colour; the
     // server's copy of our own line is dropped on arrival (msg_new_text).
-    send_channel(channel, {}, text);
+    const std::string said = expand_chat_text(text);
+    send_channel(channel, {}, said);
     // the echo colours: 307 say, 309 group, 310 guild, 311 ooc, 312 auction, 313 shout (raid has none: 327)
     std::uint32_t c = color_of_channel(channel);
     std::uint32_t echo_color = c == 256 ? 307 : c >= 258 && c <= 262 ? c + 51 : c;
     if (std::uint32_t echo = game::own_chat_echo(channel))
-        chat(kind_of_channel(channel), fmt_eq(strings_, echo, {text}), 0, echo_color);
+        chat(kind_of_channel(channel), fmt_eq(strings_, echo, {said}), 0, echo_color);
 }
 
 void GameConnection::say_command(const std::string& text) {
@@ -488,10 +496,11 @@ void GameConnection::say_command(const std::string& text) {
     log::debug("say: target {} {}", t->second.name, seen ? "in sight: said to it" : "out of sight: a plain say");
     if (!seen) return say_to_channel(8, text);
     if (text.empty()) return;
-    send_channel(8, t->second.name, text);
+    const std::string said = expand_chat_text(text);
+    send_channel(8, t->second.name, said);
     std::int32_t graft = 0;
     with_character([&](game::mechanics::Character& ch) { graft = ch.total_effect(0x4b, true, 0, true, true); });
-    if (graft == 0) chat(ChatEvent::Kind::Say, fmt_eq(strings_, 13086, {text}), 0, 0x133);
+    if (graft == 0) chat(ChatEvent::Kind::Say, fmt_eq(strings_, 13086, {said}), 0, 0x133);
 }
 
 void GameConnection::send_tell(const std::string& name, const std::string& text) {
@@ -500,7 +509,7 @@ void GameConnection::send_tell(const std::string& name, const std::string& text)
     if (name.empty() || text.empty()) return;
     if (chat_blocked_) return; // @0x52b4c5
     if (iequals(name, character_)) return system(12323); // Talking to yourself again?
-    send_channel(7, name, text);
+    send_channel(7, name, expand_chat_text(text));
 }
 
 void GameConnection::reply_command(const std::string& args) {
@@ -512,7 +521,7 @@ void GameConnection::reply_command(const std::string& args) {
         // the chat server
         std::string word = fmt_eq(strings_, 13974, {});
         if (!word.empty() && word[0] == '/') word.erase(0, 1);
-        send_chat_server_message(std::format("{}{} {} {}", to[0], word, to.substr(1), args), false);
+        send_chat_server_message(expand_chat_text(std::format("{}{} {} {}", to[0], word, to.substr(1), args)), false);
         return;
     }
     send_tell(to, args);
@@ -529,8 +538,9 @@ void GameConnection::emote_command(const std::string& args) {
         system(13068);
         return;
     }
-    std::string text = args;
     if (chat_blocked_) return; // CEverQuest::Emote @0x51f406
+    std::string text = expand_chat_text(args);
+    if (text.empty()) return;
     if (std::isalnum(static_cast<unsigned char>(text.back()))) text += '.';
     // CEverQuest::Emote @0x51f400: channel 22, echoed as "<name> <text>" (colour 0x13a).
     send_channel(22, {}, text);
@@ -566,7 +576,7 @@ void GameConnection::social_emote(const game::SocialEmote& e, const std::string&
     if (target && glm::distance(target->position, position_) > 100.0f) return system(12321);
     std::string target_name = target ? game::display_name(target->name) : std::string();
     auto text = game::build_social(strings_, e, target ? &target_name : nullptr, me ? me->gender : 0,
-                                   target ? target->gender : 0, std::string(rest));
+                                   target ? target->gender : 0, expand_chat_text(rest));
     if (!text.others.empty()) send_zone(encode_social_emote(text.others));
     // The animation, when standing still (OP_Animation, speed 10).
     if (e.animation >= 0 && pstatus_.stand_state == 100 && !moving_ && world_.player_id) {
@@ -920,10 +930,12 @@ void GameConnection::assist_command(const std::string& args) {
         who = world_.target_id;
     } else {
         // The first player whose name starts with the argument.
+        const std::string name = expand_chat_text(args);
+        if (name.empty()) return;
         for (const auto& [id, s] : world_.spawns) {
             if (s.is_npc || s.is_corpse) continue;
             std::string n = base_name(s.name);
-            if (n.size() >= args.size() && iequals(n.substr(0, args.size()), args)) {
+            if (n.size() >= name.size() && iequals(n.substr(0, name.size()), name)) {
                 who = id;
                 break;
             }
@@ -1922,7 +1934,7 @@ void GameConnection::chat_server_command(const std::string& text) {
     // ChatServer_SendCommandText @0x4dfa50 (';' and '[' lines, /chat, /join): nothing: eqstr 13065; the text with a
     // '[' in front unless it has one, through the zone.
     if (text.empty()) return chat(ChatEvent::Kind::System, fmt_eq(strings_, 13065, {}), 0, 0x111);
-    send_chat_server_message(text[0] == '[' ? text : "[" + text, true);
+    send_chat_server_message(expand_chat_text(text[0] == '[' ? text : "[" + text), true);
 }
 
 void GameConnection::numbered_channel(int n, const std::string& text) {
@@ -1930,7 +1942,7 @@ void GameConnection::numbered_channel(int n, const std::string& text) {
     // filter (the client language 0: ChatText_FilterProfanityAndSlur at skill 100) and ";%d %s" through the zone.
     if (text.empty()) return chat(ChatEvent::Kind::System, std::format("Usage: /{} <msg>", n), 0, 0x111);
     std::string said = game::filter_profanity_and_slur(text, 100, chat_filters_.mode(game::kFilterBadWord), chat_random_);
-    send_chat_server_message(std::format(";{} {}", n, said), true);
+    send_chat_server_message(expand_chat_text(std::format(";{} {}", n, said)), true);
 }
 
 void GameConnection::friends_command(const std::string& args) {

@@ -623,6 +623,12 @@ lookup 1500, follow AI 3000):
   so it stays 0; the attack lock (0xddf70c) is set and cleared by opcodes 0x57da / 0x4d09, which EQEmu never sends.
 - `game/chat_text.*`: the new-text filters, the bad word filter and broken speech, the language garbling (their
   random helpers are a `ChatRandom`, replayed from the vectors' recorded calls).
+- Outgoing chat expands case-insensitive percent codes when the line runs, including chat lines in socials.
+  `%T` uses the target's display name and `%M` the focused pet's name, with `Target` and `Pet` as fallbacks.
+  `%S`, `%O` and `%P` use the target's pronouns, with `it`, `it` and `its` when there is no target.
+  `%R` uses the player target's current race, with `NPC`, `Corpse` and `Race` for an NPC, a corpse and no
+  target, respectively. The outgoing message and local echo use the same expansion. Tell recipients are parsed
+  separately. Item and achievement links and literal percent signs are preserved.
 - Melee lines (`game::damage_report`, `hit_line_shown`; no vectors, unit tests in `tests/combat_test.cpp`):
   ReportSuccessfulHit's chat filters, a filter hiding when its mode is 1 (setting 0). A hit by somebody else on
   somebody else under filter 15 shows exactly when the player's pet hit (and was reported, see below); an NPC

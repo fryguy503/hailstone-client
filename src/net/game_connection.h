@@ -3064,6 +3064,7 @@ private:
     void target_by_name(const std::string& name);
     // Social (net/game_connection_social.cpp).
     bool run_slash_command(std::size_t index, const std::string& args);
+    std::string expand_chat_text(std::string_view text) const;
     void send_channel(std::uint32_t channel, const std::string& target, const std::string& text);
     void say_to_channel(std::uint32_t channel, const std::string& text);
     void say_command(const std::string& text);
