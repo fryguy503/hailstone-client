@@ -75,6 +75,10 @@ struct GameConnectionTestAccess {
     static void handle_zone(GameConnection& c, const AppPacket& p) { c.handle_zone(p); }
     static game::AltAdvState& alt_adv(GameConnection& c) { return c.alt_adv_; }
     static void update_usable_gems(GameConnection& c) { c.update_usable_gems(); }
+    static void start_scheduled_memorization(GameConnection& c) {
+        c.set_mem_.next_time = GameConnection::eq_time() - 1;
+        c.set_mem_frame();
+    }
     static void memorize_tick(GameConnection& c, std::int64_t now) { c.memorize_tick(now); }
     static void raise_hook_events(GameConnection& c) { c.raise_hook_events(); }
     static game::ClientOptions& client_options(GameConnection& c) { return c.client_options_; }

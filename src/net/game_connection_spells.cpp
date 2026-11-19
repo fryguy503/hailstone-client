@@ -401,10 +401,14 @@ void GameConnection::memorize_tick(std::int64_t now) {
         if (!stats) {
             auto& v = stats.emplace(std::array<std::int32_t, 3>{});
             with_character([&](game::mechanics::Character& ch) {
-                v[2] = ch.adjusted_skill(31);
-                ch.process_all_stats(); // CalcDEX / CalcINT read the item totals ProcessAllStats keeps
-                v[0] = ch.calc_dex(true);
-                v[1] = ch.calc_int(true);
+                constexpr std::uint32_t kMeditate = 31;
+                // with_character's effect-only tables have zero skill caps. Use the game's caps for GetAdjustedSkill.
+                const auto& game_tables = tables();
+                game::mechanics::Character memorizer(ch.sheet(), game_tables, ch.spells());
+                v[2] = game_tables.skill_caps.empty() ? ch.sheet().skills[kMeditate] : memorizer.adjusted_skill(kMeditate);
+                memorizer.process_all_stats(); // CalcDEX / CalcINT read the item totals ProcessAllStats keeps
+                v[0] = memorizer.calc_dex(true);
+                v[1] = memorizer.calc_int(true);
             });
         }
         return (*stats)[static_cast<std::size_t>(which)];

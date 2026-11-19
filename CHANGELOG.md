@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Spell memorization now speeds up with your trained Meditate skill, as it does in RoF2
 - Corpses no longer play their death animation again when a zone loads: an NPC corpse, or a feign-death spawn, that is already dead when it is first drawn shows its final pose at once, as on the original client, and standing up from feign death blends from that pose instead of the start of the fall. A spawn that dies in front of you still falls as before
 - Bard songs animate again: a singing song always plays its cast animation, and an instrument song plays its drum, lute or horn animation when the bard holds an instrument and is not sitting. On the newer (EQG) models the model does not suppress it, as in the original
 - Merchants: **Usable only** now also hides discipline tomes you have already learned, or whose higher rank you know. The original client lists them still; untick the box to see them
