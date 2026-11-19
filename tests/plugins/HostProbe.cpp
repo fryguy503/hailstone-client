@@ -30,6 +30,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -556,6 +557,81 @@ void probe_map_thread(void*, const char*) {
     WriteChatf("[Probe] map thread %d", result);
 }
 
+bool unregister_in_nameplate = false;
+
+void probe_nameplate_frame(void* userdata, const HailstoneNameplateFrame* frame) {
+    if (!frame || frame->size < sizeof(*frame) || !frame->candidate_count) return;
+    const auto& actor = frame->candidates[0];
+    const bool snapshot = actor.spawn_id == 10 && actor.incarnation == 17 &&
+        (actor.flags & HAILSTONE_NAMEPLATE_TARGET) && (actor.flags & HAILSTONE_NAMEPLATE_INVISIBLE_UNDEAD) &&
+        (actor.flags & HAILSTONE_NAMEPLATE_MANA_KNOWN) && !(actor.flags & HAILSTONE_NAMEPLATE_ENDURANCE_KNOWN) &&
+        actor.mana_percent == 0 && std::string_view(actor.caption.data, actor.caption.bytes) == "Guard";
+    HailstoneNameplateTextMetrics metrics{};
+    metrics.size = sizeof(metrics);
+    const int measured = host->nameplate_measure_text(host->host, "Guard", 5, 12, 0, &metrics);
+    HailstoneNameplateImage image{};
+    image.size = sizeof(image);
+    HailstoneNameplateCommand commands[2]{};
+    char label[] = "native";
+    commands[0].kind = HAILSTONE_NAMEPLATE_TEXT;
+    commands[0].color = 0x123456;
+    commands[0].alpha = 1;
+    commands[0].font_size = 12;
+    commands[0].text = {label, sizeof(label) - 1};
+    commands[1].kind = HAILSTONE_NAMEPLATE_IMAGE;
+    commands[1].color = 0xffffff;
+    commands[1].alpha = 1;
+    commands[1].x1 = 4;
+    commands[1].y1 = 4;
+    commands[1].texture = 123;
+    HailstoneNameplateModel model{};
+    model.size = sizeof(model);
+    model.flags = HAILSTONE_NAMEPLATE_CLICKABLE;
+    model.frame = frame->frame;
+    model.bounds = {-20, -10, 40, 20};
+    model.commands = commands;
+    model.command_count = 2;
+    const int no_image = host->nameplate_submit(host->host, &model);
+    const int icon = host->nameplate_spell_icon(host->host, 37, &image);
+    commands[1].texture = image.texture;
+    commands[1].u0 = image.u0;
+    commands[1].v0 = image.v0;
+    commands[1].u1 = image.u1;
+    commands[1].v1 = image.v1;
+    ++model.frame;
+    const int stale = host->nameplate_submit(host->host, &model);
+    model.frame = frame->frame;
+    const int accepted = host->nameplate_submit(host->host, &model);
+    const int duplicate = host->nameplate_submit(host->host, &model);
+    label[0] = 'X'; // the host must own its copy at the time of submit
+    WriteChatf("[Probe] nameplate data %d measure %d width %.0f icon %d no_image %d wrong_frame %d accepted %d duplicate %d",
+               snapshot, measured, static_cast<double>(metrics.width), icon, no_image, stale, accepted, duplicate);
+    if (*static_cast<const bool*>(userdata)) host->nameplate_unregister(host->host);
+}
+
+void probe_nameplate(void*, const char* args) {
+    if (!args || !HAILSTONE_HOST_HAS(host, nameplate_spell_icon)) return;
+    if (std::strcmp(args, "off") == 0) {
+        WriteChatf("[Probe] nameplate unregister %d", host->nameplate_unregister(host->host));
+        return;
+    }
+    if (std::strcmp(args, "outside") == 0) {
+        HailstoneNameplateModel model{};
+        model.size = sizeof(model);
+        HailstoneNameplateTextMetrics metrics{};
+        metrics.size = sizeof(metrics);
+        HailstoneNameplateImage image{};
+        image.size = sizeof(image);
+        WriteChatf("[Probe] nameplate outside %d %d %d", host->nameplate_submit(host->host, &model),
+                   host->nameplate_measure_text(host->host, "Guard", 5, 12, 0, &metrics),
+                   host->nameplate_spell_icon(host->host, 37, &image));
+        return;
+    }
+    unregister_in_nameplate = std::strcmp(args, "self-retire") == 0;
+    const int registered = host->nameplate_register(host->host, probe_nameplate_frame, &unregister_in_nameplate);
+    WriteChatf("[Probe] nameplate register %d", registered);
+}
+
 // /probeability <kind> <name>: ability_state then use_ability, both added later in ABI 3.
 void probe_ability(void*, const char* args) {
     if (!HAILSTONE_HOST_HAS(host, ability_state) || !HAILSTONE_HOST_HAS(host, use_ability)) {
@@ -656,6 +732,7 @@ HAILSTONE_API void InitializePlugin(void) {
     AddCommand("/probemapthread", probe_map_thread, nullptr);
     AddCommand("/probemapprefix", probe_map_prefix, nullptr);
     AddCommand("/probemapcycle", probe_map_cycle, nullptr);
+    AddCommand("/probenameplate", probe_nameplate, nullptr);
     AddCommand("/probeability", probe_ability, nullptr);
     AddCommand("/probeabilities", probe_abilities, nullptr);
     AddTopLevelObject("Probe", probe_tlo, nullptr);
@@ -691,6 +768,7 @@ HAILSTONE_API void ShutdownPlugin(void) {
     RemoveCommand("/probemapthread");
     RemoveCommand("/probemapprefix");
     RemoveCommand("/probemapcycle");
+    RemoveCommand("/probenameplate");
     RemoveCommand("/probeability");
     RemoveCommand("/probeabilities");
     RemoveTopLevelObject("Probe");

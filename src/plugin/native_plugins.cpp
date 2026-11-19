@@ -40,6 +40,7 @@
 #include "mq/tlo.h"
 #include "net/game_connection.h"
 #include "net/social_packets.h"
+#include "plugin/native_nameplates.h"
 #include "plugin/plugin_tcp.h"
 #include "plugin/ui_bridge.h"
 #include "plugin/web_access.h"
@@ -249,6 +250,8 @@ struct Loaded {
     PluginHostApi table{};
     Hooks::Owner owner = 0;
     std::vector<std::string> tlos;
+    game::NameplateCanvasOwner nameplate_owner = 0;
+    NativeNameplateFrame* nameplate_frame = nullptr;
 
     void (*initialize)() = nullptr;
     void (*shutdown)() = nullptr;
@@ -949,6 +952,66 @@ net::GameConnection* connection_of(const Loaded& l) {
     return l.host->env.connection ? l.host->env.connection() : nullptr;
 }
 
+constexpr std::uint32_t kNameplateCaps = kCapRead | kCapUi | kCapExtend;
+
+bool nameplates_allowed(const Loaded& l) {
+    return l.active && !l.unload_pending && l.can(kNameplateCaps);
+}
+
+bool remove_nameplates(Loaded& l) {
+    if (!l.nameplate_owner) return false;
+    l.host->env.nameplates->remove(std::exchange(l.nameplate_owner, 0));
+    return true;
+}
+
+int h_nameplate_register(void* h, HailstoneNameplateFn fn, void* userdata) {
+    auto& l = Loaded::of(h);
+    auto* registry = l.host->env.nameplates;
+    if (!registry || !fn || l.nameplate_owner || l.nameplate_frame || !nameplates_allowed(l)) return 0;
+    l.nameplate_owner = registry->add("plugin:" + l.name,
+        [&l, registry, fn, userdata](const game::NameplateCanvasFrame& frame)
+            -> std::optional<std::vector<game::NameplateCanvasModel>> {
+            if (l.busy) return std::nullopt;
+            auto result = guarded(l, "a nameplate canvas", [&]()
+                -> std::optional<std::vector<game::NameplateCanvasModel>> {
+                NativeNameplateFrame lease(*registry, frame);
+                struct LeaseSlot {
+                    NativeNameplateFrame*& slot;
+                    ~LeaseSlot() { slot = nullptr; }
+                } slot{l.nameplate_frame};
+                l.nameplate_frame = &lease;
+                fn(userdata, &lease.view());
+                return lease.take_models();
+            });
+            if (!result) remove_nameplates(l);
+            return result;
+        }, [&l] { return nameplates_allowed(l); });
+    return l.nameplate_owner != 0;
+}
+
+int h_nameplate_unregister(void* h) { return remove_nameplates(Loaded::of(h)); }
+
+NativeNameplateFrame* current_nameplate_frame(void* h) {
+    auto& l = Loaded::of(h);
+    return nameplates_allowed(l) && l.nameplate_owner ? l.nameplate_frame : nullptr;
+}
+
+int h_nameplate_submit(void* h, const HailstoneNameplateModel* model) {
+    auto* frame = current_nameplate_frame(h);
+    return frame ? frame->submit(model) : 0;
+}
+
+int h_nameplate_measure_text(void* h, const char* text, std::uint32_t bytes, float size, std::int32_t font,
+                             HailstoneNameplateTextMetrics* out) {
+    auto* frame = current_nameplate_frame(h);
+    return frame ? frame->measure_text(text, bytes, size, font, out) : 0;
+}
+
+int h_nameplate_spell_icon(void* h, std::uint32_t icon, HailstoneNameplateImage* out) {
+    auto* frame = current_nameplate_frame(h);
+    return frame ? frame->spell_icon(icon, out) : 0;
+}
+
 void h_set_active(void* h, int active) {
     Loaded& l = Loaded::of(h);
     if (may_extend(l, "set_active")) {
@@ -957,7 +1020,11 @@ void h_set_active(void* h, int active) {
             l.lifecycle_generation = core::next_process_identity();
         }
         l.active = active != 0;
-        if (!l.active) { l.world_ready = false; l.host->world_geometry.retire(l.owner); }
+        if (!l.active) {
+            l.world_ready = false;
+            l.host->world_geometry.retire(l.owner);
+            remove_nameplates(l);
+        }
     }
 }
 
@@ -2801,6 +2868,7 @@ namespace {
 // Takes a plugin out of the client: its ShutdownPlugin (when `shutdown`), everything it registered, then its library.
 void discard(NativePlugins::Impl& m, std::unique_ptr<Loaded> l, bool shutdown) {
     l->unload_pending = true; l->active = false;
+    remove_nameplates(*l);
     m.world_geometry.retire(l->owner);
     std::erase(m.world_owners, l->owner);
     if (shutdown && l->shutdown) guarded(*l, "ShutdownPlugin", [&] { l->shutdown(); });
@@ -3024,6 +3092,11 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.world_surface_patch = main_only<h_world_surface_patch>;
     p.table.measure_binary = main_only<h_measure_binary>;
     p.table.get_map_policy = main_only<h_get_map_policy>;
+    p.table.nameplate_register = main_only<h_nameplate_register>;
+    p.table.nameplate_unregister = main_only<h_nameplate_unregister>;
+    p.table.nameplate_submit = main_only<h_nameplate_submit>;
+    p.table.nameplate_measure_text = main_only<h_nameplate_measure_text>;
+    p.table.nameplate_spell_icon = main_only<h_nameplate_spell_icon>;
     Hooks& hooks = *m.env.hooks;
     Loaded* lp = &p;
     // Each callback runs with the plugin's capabilities and counts as the plugin being busy (no unloading under it).
@@ -3199,6 +3272,7 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
             l->lifecycle_generation = core::next_process_identity();
         }
         l->caps = caps;
+        if (!l->can(kNameplateCaps)) remove_nameplates(*l);
         if (!l->can(kCapUi | kCapExtend)) {
             l->world_ready = false; m.world_geometry.retire(l->owner); std::erase(m.world_owners, l->owner);
         }

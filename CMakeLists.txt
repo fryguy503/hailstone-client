@@ -146,6 +146,7 @@ add_library(hailstone_engine STATIC
   src/mq/lua_mq_web.cpp
   src/mq/lua_hailstone.cpp
   src/plugin/native_plugins.cpp
+  src/plugin/native_nameplates.cpp
   src/plugin/world_geometry.cpp
   src/render/world_geometry_renderer.cpp
   src/plugin/plugin_tcp.cpp

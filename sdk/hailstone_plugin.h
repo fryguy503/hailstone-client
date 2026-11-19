@@ -46,6 +46,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "hailstone_follow.h"
+#include "hailstone_nameplates.h"
 #include "hailstone_world_geometry.h"
 
 #ifdef __cplusplus
@@ -980,6 +981,17 @@ typedef struct PluginHostApi {
     int (*measure_binary)(void* host, uint32_t kind, HailstoneBinaryMeasurement* out);
     /* READ. Current aggregate map policy. Initialize out->size; zero flags is stock. */
     int (*get_map_policy)(void* host, HailstoneMapPolicy* out);
+    /* READ + UI + EXTEND. One provider per plugin. Unregister before registering a new provider.
+     * Unregister retires its current drawings and click regions. Submit/measure/icon work only in its
+     * callback. Submit copies a current-frame model and returns 1 if accepted for shared canvas arbitration.
+     * Leaving a candidate unclaimed lets another provider or the stock caption draw it. Check
+     * HAILSTONE_HOST_HAS before using these fields, added later in ABI 3. */
+    int (*nameplate_register)(void* host, HailstoneNameplateFn callback, void* userdata);
+    int (*nameplate_unregister)(void* host);
+    int (*nameplate_submit)(void* host, const HailstoneNameplateModel* model);
+    int (*nameplate_measure_text)(void* host, const char* text, uint32_t text_bytes, float font_size, int32_t font,
+                                  HailstoneNameplateTextMetrics* out);
+    int (*nameplate_spell_icon)(void* host, uint32_t icon, HailstoneNameplateImage* out);
 } PluginHostApi;
 /* What use_ability and ability_state take: the kinds of ability the Ability Book lists. The values are stable. */
 enum HS_AbilityKinds {

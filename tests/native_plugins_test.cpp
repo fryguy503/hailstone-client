@@ -12,8 +12,10 @@
 #include "core/sha256.h"
 #include "core/binary_measurement.h"
 #include "net/item_packets.h"
+#include "game/nameplate_canvas.h"
 #include "game/server_ext_chain.h"
 #include "mq/commands.h"
+#include "mq/lua_mq.h"
 #include "mq/parse.h"
 #include "platform/tcp_socket.h"
 #include "plugin/native_plugins.h"
@@ -39,6 +41,7 @@ struct Host {
     }()};
     fs::path plugin_dir = world.dir / "plugins";
     plugin::Hooks hooks;
+    game::NameplateCanvasRegistry canvas;
     plugin::Policy policy;
     mq::Registry reg;
     mq::Context ctx;
@@ -82,6 +85,7 @@ struct Host {
         ne.web = web;
         ne.connection = [this] { return world.conn.get(); };
         ne.extensions = extensions.get();
+        ne.nameplates = &canvas;
         ne.use_ability = [this](mq::AbilityKind kind, std::string_view name) {
             used.emplace_back(static_cast<int>(kind), std::string(name));
             return true;
@@ -129,7 +133,139 @@ struct Host {
     bool printed_line(const std::string& t) const { return std::find(printed.begin(), printed.end(), t) != printed.end(); }
 };
 
+game::NameplateCanvasFrame sample_nameplate_frame() {
+    game::NameplateCanvasFrame frame;
+    frame.viewport = {0, 0, 640, 480};
+    game::NameplateCanvasCandidate target;
+    target.spawn.id = 10;
+    target.spawn.incarnation = 17;
+    target.context.name = "Guard";
+    target.context.target = true;
+    target.context.mana_percent = 0;
+    target.context.invisible_undead = true;
+    target.context.concealed = true;
+    target.x = 200;
+    target.y = 100;
+    target.depth = 40;
+    frame.candidates.push_back(target);
+    game::NameplateCanvasCandidate second = target;
+    second.spawn.id = 11;
+    second.context.target = false;
+    second.depth = 50;
+    frame.candidates.push_back(std::move(second));
+    return frame;
+}
+
+void nameplate_test_metrics(game::NameplateCanvasRegistry& canvas) {
+    canvas.set_measure([](std::string_view text, float size, int) -> std::optional<game::CanvasTextMetrics> {
+        return game::CanvasTextMetrics{static_cast<float>(text.size()) * size, size, 0, 0, 0, 0};
+    });
+    canvas.set_icon([](std::uint32_t icon) -> std::optional<game::CanvasImage> {
+        if (icon != 37) return std::nullopt;
+        return game::CanvasImage{123, 0.1f, 0.2f, 0.3f, 0.4f};
+    });
+}
+
 } // namespace
+
+TEST_CASE("native plugins: nameplate frame lease and canvas ownership") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    nameplate_test_metrics(h.canvas);
+    REQUIRE(h.plugins->load("HostProbe"));
+    CHECK(h.canvas.empty());
+    h.run("/probenameplate outside");
+    CHECK(h.printed_line("[Probe] nameplate outside 0 0 0"));
+    h.run("/probenameplate on");
+    REQUIRE(h.printed_line("[Probe] nameplate register 1"));
+    h.printed.clear();
+    h.run("/probenameplate on");
+    CHECK(h.printed_line("[Probe] nameplate register 0"));
+    auto frame = sample_nameplate_frame();
+    const auto native = h.canvas.frame(frame);
+    REQUIRE(native.size() == 1);
+    CHECK(h.printed_line("[Probe] nameplate data 1 measure 1 width 60 icon 1 no_image 0 wrong_frame 0 accepted 1 duplicate 0"));
+    CHECK(native[0].candidate_index == 0);
+    CHECK(native[0].frame_serial == frame.serial);
+    CHECK(native[0].model.clickable);
+    REQUIRE(native[0].model.commands.size() == 2);
+    CHECK(native[0].model.commands[0].text == "native");
+    CHECK(native[0].model.commands[1].texture == 123);
+    CHECK(h.canvas.owner_valid(native[0].owner));
+
+    for (const auto cap : {plugin::kCapRead, plugin::kCapUi, plugin::kCapExtend}) {
+        h.approve(plugin::kCapAll & ~cap);
+        h.plugins->policy_changed({});
+        CHECK(h.plugins->loaded("HostProbe"));
+        CHECK_FALSE(h.canvas.owner_valid(native[0].owner));
+        CHECK(h.canvas.frame(frame).empty());
+        h.printed.clear();
+        h.run("/probenameplate on");
+        CHECK(h.printed_line("[Probe] nameplate register 0"));
+    }
+    h.approve(plugin::kCapAll);
+    h.plugins->policy_changed({});
+    CHECK(h.canvas.empty());
+    h.run("/probenameplate self-retire");
+    CHECK_FALSE(h.canvas.empty());
+    CHECK(h.canvas.frame(frame).empty());
+    CHECK(h.canvas.empty());
+    h.run("/probenameplate on");
+    const auto next = h.canvas.frame(frame);
+    REQUIRE(next.size() == 1);
+    CHECK(next[0].owner != native[0].owner);
+    REQUIRE(h.plugins->unload("HostProbe"));
+    CHECK_FALSE(h.canvas.owner_valid(next[0].owner));
+    CHECK(h.canvas.frame(frame).empty());
+}
+
+TEST_CASE("native plugins: native and Lua nameplates share candidate claims") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    plugin::Rules rules;
+    rules.configured = true;
+    rules.player_script_caps = rules.player_plugin_caps = plugin::kCapAll;
+    h.policy.set(rules);
+    nameplate_test_metrics(h.canvas);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.run("/probenameplate on");
+    const auto scripts_dir = h.world.dir / "scripts";
+    fs::create_directories(scripts_dir);
+    std::ofstream(scripts_dir / "test_canvas.lua") << R"lua(
+local np=require('hailstone').nameplates
+assert(np.Register('test',function(frame)
+  local models={}
+  for i,candidate in ipairs(frame.candidates) do
+    models[i]={token=candidate.token,hide=true}
+  end
+  return models
+end))
+)lua";
+    mq::ScriptEnv env;
+    env.hooks = &h.hooks;
+    env.policy = &h.policy;
+    env.registry = &h.reg;
+    env.context = [&]() -> const mq::Context& { return h.ctx; };
+    env.nameplates = &h.canvas;
+    env.dirs = {scripts_dir};
+    env.config_dir = h.world.dir / "config";
+    mq::ScriptHost scripts(std::move(env));
+    REQUIRE(scripts.run("test_canvas", {}));
+    scripts.pulse();
+
+    auto frame = sample_nameplate_frame();
+    const auto both = h.canvas.frame(frame);
+    REQUIRE(both.size() == 2);
+    CHECK(both[0].candidate_index == 0);
+    CHECK_FALSE(both[0].model.hide);
+    CHECK(both[1].candidate_index == 1);
+    CHECK(both[1].model.hide);
+    CHECK(both[0].owner != both[1].owner);
+    REQUIRE(h.plugins->unload("HostProbe"));
+    const auto lua = h.canvas.frame(frame);
+    REQUIRE(lua.size() == 2);
+    CHECK(lua[0].owner == both[1].owner);
+    CHECK(lua[0].model.hide);
+}
 
 TEST_CASE("native plugins: received item decode commits both outputs only for an accepted prefix") {
     Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);

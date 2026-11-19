@@ -32,7 +32,7 @@
 
 namespace hailstone::mq { class Registry; struct Context; }
 namespace hailstone::net { class GameConnection; }
-namespace hailstone::game { class ExtensionChain; }
+namespace hailstone::game { class ExtensionChain; class NameplateCanvasRegistry; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 
 namespace hailstone::plugin {
@@ -53,6 +53,8 @@ struct NativeEnv {
     // ABI 2: where a plugin's Lua windows, their functions, options and menu entries go (plugin/ui_bridge.h); null:
     // none.
     UiBridge* ui = nullptr;
+    // The shared world-caption canvas. It outlives this native host.
+    game::NameplateCanvasRegistry* nameplates = nullptr;
     // ABI 2: the camera's zoom limit (max_camera_distance / set_max_camera_distance; setting it cuts the zoom to it).
     // Empty: 0, and setting does nothing.
     std::function<float()> max_camera_distance;

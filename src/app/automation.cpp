@@ -226,6 +226,7 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     ne.imgui_context = [] { return static_cast<void*>(ImGui::GetCurrentContext()); };
     ne.extensions = m.extensions.get();
     ne.ui = &m.plugin_ui;
+    ne.nameplates = &m.nameplates;
     ne.web = m.env.web;
     ne.connection = [&m] { return m.conn(); };
     ne.max_camera_distance = m.env.max_camera_distance;

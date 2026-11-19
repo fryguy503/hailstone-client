@@ -45,6 +45,9 @@ What the client does not implement yet, or implements with an approximation it c
 - The generic world-nameplate canvas has synthetic parser, painter, ownership and input coverage. Actual GPU depth,
   dense scenes, sustained zoning and physical mouse/controller acceptance remain unverified; addons own visual
   recipes and must validate them against a live session.
+- Native canvas providers use the same caption visibility and physical input checks. Live interoperability with a
+  compiled nameplate add-on and dense-scene performance remain open. Stock spawn appearance combines invisibility
+  and Hide, while exact invisibility types are known from received self or current-target spell effects.
 
 - The shared `hs.UI` contract and migrated Modern/Gamepad presentations require live acceptance of normal mouse,
   keyboard and controller workflows, zoning and interface changes. Declared base packs inherit presentations;

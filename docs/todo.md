@@ -37,6 +37,7 @@ Written 2026-10-28 from `docs/unknowns.md` and `docs/plan.md`.
 - [x] Generic owner-scoped method hooks with explicit exposure policies, protected callbacks and regression tests.
 
 - [x] Generic owner-scoped world nameplate canvas, bounded drawing and measurements, whole-caption claims, guarded physical clicks, automatic Lua addon activation and color widgets.
+- [x] Native SDK registration for the shared world-caption canvas, including scoped measurements, drawing and observed concealment fields.
 - [ ] Live acceptance of custom nameplate callbacks, scene depth, dense layouts, click/drag/focus handling, reloads and zoning.
 
 - [x] Shared versioned UI data/action API, module discovery, preserved guarded closures and a central method/capability catalog; Modern and Gamepad call the same contract.

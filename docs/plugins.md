@@ -1237,6 +1237,25 @@ RGBA16F, then stretches the colour to the output with a linear blit (no accumula
 `build/hailstone/upscalers/example/`; `--upscaler example` in the zone viewer, or `display.upscaler = example`, runs it.
 It is built a few more ways as test fixtures (`tests/upscaler_provider_test.cpp`).
 
+## Native world nameplate canvases
+
+Plugins with `read`, `ui` and `extend` can replace whole world captions through the same nameplate canvas used by Lua.
+Check `HAILSTONE_HOST_HAS(host, nameplate_spell_icon)` before using this append-only ABI 3 service. The C records and
+flags are in `sdk/hailstone_nameplates.h`.
+
+- Register one callback with `nameplate_register(host, fn, userdata)`. Unregister before registering a replacement.
+- Each callback sees the actors eligible for a normal world caption, with the target first and remaining candidates
+  in depth order. Presence flags distinguish an unknown reading from a known zero. Treat the frame, candidates and
+  counted UTF-8 strings as borrowed until the callback returns.
+- `nameplate_measure_text` and `nameplate_spell_icon` are available during the callback. An image can use a texture
+  returned to that provider during the current callback.
+- To claim a caption, call `nameplate_submit` with the current frame serial and zero-based candidate index. The host
+  copies the model and commands immediately. Set `HAILSTONE_NAMEPLATE_HIDE` to claim an empty caption, or omit the
+  model to leave it eligible for the stock caption and other providers. Duplicate and stale claims are refused.
+- The shared canvas checks geometry budgets, depth, and competing claims. A clickable model uses the same guarded
+  manual targeting path as a Lua canvas. Unregistering, unloading, deactivation, or losing a required capability
+  retires the provider and its click areas.
+
 ## Web pages
 
 Scripts and plugins with the `web` permission open tabs of their own in the in-game browser (docs/browser.md):
