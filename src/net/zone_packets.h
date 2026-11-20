@@ -175,6 +175,13 @@ bool is_pc_model_race(std::uint32_t race);
 AppPacket encode(const Spawn& v); // server direction (OP_ZoneEntry), for tests
 std::optional<Spawn> decode_spawn(const AppPacket& p);
 
+// OP_MobRename identifies the existing spawn by its raw name.
+struct MobRename {
+    std::string old_name;
+    std::string new_name;
+};
+std::optional<MobRename> decode_mob_rename(const AppPacket& p);
+
 // OP_GuildBannerAppearance: replaces a planted banner's cloth layers and name.
 struct GuildBannerAppearance {
     std::uint32_t spawn_id = 0;

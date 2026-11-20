@@ -463,6 +463,23 @@ std::optional<Spawn> decode_spawn(const AppPacket& p) {
     });
 }
 
+std::optional<MobRename> decode_mob_rename(const AppPacket& p) {
+    constexpr std::size_t name_size = 64;
+    if (p.data.size() != 200) return std::nullopt;
+    return decode_with(p, [](ByteReader& r) {
+        MobRename v;
+        v.old_name = r.fixed_string(name_size);
+        r.skip(name_size); // EQEmu repeats the old name here.
+        v.new_name = r.fixed_string(name_size);
+        r.skip(4);
+        // The RoF2 handler at 0x4c9a6b requires a nonzero final word to apply the rename.
+        if (r.le<std::uint32_t>() == 0 || v.old_name.empty() || v.old_name.size() == name_size ||
+            v.new_name.empty() || v.new_name.size() == name_size)
+            throw std::out_of_range("invalid mob rename");
+        return v;
+    });
+}
+
 std::optional<GuildBannerAppearance> decode_guild_banner_appearance(const AppPacket& p) {
     // HandleWorldMessage's 0x4683 case @0x4d1aca and PlayerClient's name setter @0x5a0360.
     return decode_with(p, [](ByteReader& r) {

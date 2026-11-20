@@ -191,6 +191,7 @@ Allocation 58: base STR 85, DEX 75, AGI 80, STA 85, INT 75, WIS 75, CHA 75, defa
 |---|---|---|---|
 | ZoneEntry | C→Z | 0x5089 | 76 B: u32 eq_crc32(name), `char[64]` name, u32 spell CRC, u32 spell-assoc CRC (EQEmu reads only the name) |
 | ZoneEntry / NewSpawn | Z→C | 0x5089 / 0x6097 | one spawn per packet (below) |
+| MobRename | Z→C | 0x2c57 | 200 B: `char[64]` old name, `char[64]` repeated old name, `char[64]` new name, u32 reserved, u32 apply flag |
 | PlayerProfile | Z→C | 0x6506 | variable (below) |
 | NewZone | Z→C | 0x1795 | 948 B NewZone_Struct; decoded: names (+0/+64/+192), ztype +470, fog RGB +471/+475/+479 (×4), fog min/max clip +484/+500 (4 floats each), gravity +516, time type +520, rain/snow +521..+536, sky +570, exp mult +584, safe y/x/z +588/+592/+596, max z +604, underworld +608, minclip/maxclip +612/+616, short name 2 +704, zone id/instance +852/+854, underworld teleport +868, suspend buffs +876, lava +880/+884, no bind +889, no attack +890, fall damage +894, fast regen +896.., fog density +916, no levitate +940 |
 | TimeOfDay | Z→C | 0x5070 | 8 B: u8 hour, minute, day, month, u32 year (note 1) |
@@ -215,6 +216,9 @@ Allocation 58: base STR 85, DEX 75, AGI 80, STA 85, INT 75, WIS 75, CHA 75, defa
 1. TimeOfDay: the calendar advances from this reference by one game minute per three real seconds (hours 1..24, 28 days per month, 12 months per year), as `EQWorldData::AdvanceTime` and EQEmu's `common/eqtime.cpp` do (`net::advance_time_of_day`, docs/formats/sky.md). `/time` and MQ `GameTime` read it. Each packet replaces the reference.
 2. DeleteSpawn C→Z is sent on zoning and camp exit. Received for the target: the target clears and auto attack stops. For the trade partner: the trade is cancelled (OP_CancelTrade {partner, me}); EQEmu tells only the player who left. Checked: msgEQRmPlayer @0x4b8380, CTradeWnd_CancelAndClose.
 3. ChannelMessage: the server ignores everything after the message. Sent names are at most 63 characters and the message 2047 (EQEmu's DECODE strcpy's the names into `char[64]`). Checked: SendNewText (0x40, 0x800).
+
+With a nonzero apply flag, MobRename looks up the first old name case-insensitively, including its spawn suffix.
+It replaces the name on the same spawn, preserving the spawn ID and target selection.
 
 ### Combat (`net/zone_packets.h` "combat", `GameConnection::handle_combat`, rules in `game/combat.{h,cpp}`)
 

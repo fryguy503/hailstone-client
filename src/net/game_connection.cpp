@@ -1434,6 +1434,20 @@ void GameConnection::handle_zone(const AppPacket& p) {
         }
         break;
     }
+    case Op::MobRename: {
+        auto rename = decode_mob_rename(p);
+        if (!rename) break;
+        // GetSpawnByName @0x599b40 compares the full name, including a spawn's numeric suffix.
+        for (auto& [id, spawn] : world_.spawns) {
+            if (!iequals(spawn.name, rename->old_name)) continue;
+            if (spawn.name != rename->new_name) {
+                spawn.name = std::move(rename->new_name);
+                ++world_.spawn_set_serial;
+            }
+            break;
+        }
+        break;
+    }
     case Op::GuildBannerAppearance:
         if (auto update = decode_guild_banner_appearance(p)) {
             if (auto it = world_.spawns.find(update->spawn_id); it != world_.spawns.end() && it->second.is_npc) {
