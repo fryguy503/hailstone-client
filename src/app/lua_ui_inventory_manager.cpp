@@ -46,6 +46,8 @@
 
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "game/bank.h"
+#include "game/inventory.h"
 #include "net/game_connection.h"
 #include "plugin/lua_keep.h"
 #include "ui/lua/lua_host.h"
@@ -55,8 +57,6 @@ namespace hailstone::app {
 namespace {
 
 UiHost& host(lua_State* L) { return *static_cast<UiHost*>(lua_touserdata(L, lua_upvalueindex(1))); }
-
-constexpr int kSharedBankSlots = 2; // BW_SharedBankSlot0..1 (game/bank.h)
 
 // The stats of hs.ItemStats, in the window's order (STR before Heroic STR, the resists after the attributes).
 struct StatDef {
@@ -218,7 +218,7 @@ int AllItems(lua_State* L) {
     scan(net::kInvPossessions, net::kSlotCharm, net::kSlotAmmo, "worn", false);
     scan(net::kInvPossessions, net::kSlotGeneral1, net::kSlotGeneral10, "carried", true);
     scan(net::kInvBank, 0, (c.bank() ? c.bank()->slots : 24) - 1, "bank", true);
-    scan(net::kInvSharedBank, 0, kSharedBankSlots - 1, "shared", true);
+    scan(net::kInvSharedBank, 0, game::kSharedBankSlots - 1, "shared", true);
     return 1;
 }
 
@@ -278,6 +278,41 @@ std::optional<net::ItemSlot> carried_place(std::string_view text) {
     }
     if (slot < 0 || slot > 0x7fff || sub > 0x7fff) return std::nullopt;
     return net::ItemSlot{type, static_cast<std::int16_t>(slot), static_cast<std::int16_t>(sub), -1};
+}
+
+bool can_place_cursor(const net::GameConnection& c, const net::ItemSlot& at) {
+    if (c.state() != net::ConnectionState::InZone || c.player_status().dead || c.quantity_request() ||
+        (c.merchant() && c.merchant()->open)) return false;
+
+    const auto& inventory = c.inventory();
+    const net::Item* held = inventory.cursor();
+    if (!held || inventory.at(at)) return false;
+
+    if (at.type == net::kInvPossessions) {
+        if (at.slot < net::kSlotGeneral1 || at.slot > net::kSlotGeneral10 || !c.slot_available(at.slot)) return false;
+    } else if (!c.bank()) {
+        return false;
+    } else if (at.type == net::kInvBank) {
+        if (at.slot >= c.bank()->slots || game::bank_refusal(*held)) return false;
+    } else if (at.slot >= game::kSharedBankSlots || game::shared_bank_refusal(*held, inventory)) {
+        return false;
+    }
+
+    if (at.sub < 0) return true;
+    const net::Item* bag = inventory.at(at.parent());
+    return bag && at.sub < bag->bag_slots && game::bag_fit(*bag, *held) == 1;
+}
+
+// ok = hs.CanPlace(place)   -- whether the cursor item fits an empty carried, bank or shared bank slot now.
+// Uses the same place keys as hs.AllItems (e.g. "i:26:0", "b:3", "s:0:5"). Bank slots require an open bank.
+// This preview changes no items. The game's slot action validates the move again.
+int CanPlace(lua_State* L) {
+    std::size_t size = 0;
+    const char* text = luaL_checklstring(L, 1, &size);
+    const auto at = carried_place(std::string_view(text, size));
+    const auto& h = host(L);
+    lua_pushboolean(L, at && h.conn && h.in_game && can_place_cursor(*h.conn, *at));
+    return 1;
 }
 
 int BulkItems(lua_State* L) {
@@ -405,6 +440,7 @@ void add_inventory_manager_window(std::vector<std::unique_ptr<StockWindow>>& out
 
 void register_inventory_manager_api(lua_State* L, UiHost& h) {
     static const luaL_Reg fns[] = {{"AllItems", AllItems}, {"BankSeen", BankSeen},
+                                   {"CanPlace", CanPlace},
                                    {"ItemsRevision", ItemsRevision},
                                    {"ItemKept", ItemKept},
                                    {"SetItemKept", SetItemKept},

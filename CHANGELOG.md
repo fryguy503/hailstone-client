@@ -2,6 +2,7 @@
 
 ## 0.7.2-beta (2026-11-19)
 
+- Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.
 - Add-ons can inspect raw spell-duration fields and answer current game popups with lifetime checks. Camp popups can be answered while camping, and an explicit server-extension hint preserves the camp destination when the server disconnects early.
 - UI add-ons can load packaged artwork through `hs.UI.assets.InterfaceImage`, including artwork inherited from approved base interfaces.
 - Character entry, including Return Home and automatic logins, waits for a decision on a pending native login-plugin request. Optional plugins load when allowed, and zone transfers proceed normally.

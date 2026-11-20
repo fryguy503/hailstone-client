@@ -965,7 +965,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
-| Item | (slot [, bagSlot]) → item\|nil | Item table for a possessions slot | — |
+| Item | (slot [, bagSlot]) → item\|nil | Item table for a possessions slot. `questItem` is the item's quest flag. Bags also have `bagType` and `bagSize` (largest item size accepted before type restrictions) | — |
 | ItemIcon | (icon) → tex,u0,v0,u1,v1 \| nil | Item icon cell | — |
 | ClickSlot | (slot, bagSlot\|nil, "left"\|"leftheld"\|"right"\|phase [, outside]) → ok | Game slot logic: pick up, drop, swap, split, use | actions |
 | HasSlot | (slot, bagSlot\|nil) → bool | ClickSlot can act there now: in game, a possessions slot 0..33, and with bagSlot a place inside the bag that general slot holds (empty places count) | — |
@@ -1030,6 +1030,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | AllItems | () → {{item, place, where, slot, sub, bag, kept, stale}} | Everything worn, carried, banked and shared. item has extra fields (value, noTrade, temporary, attuned, reqLevel, recLevel, equipSlots, tradeskill, augment, usable, tribute, noDestroy, stats). stale: a banked row from the bank as last seen (hs.BankSeen), not in reach | — |
 | ItemsRevision | () → inv, keep | Change counters | — |
 | BankSeen | () → live, age | live: the bank's rows are the bank as the server has it now; else they are the copy as last seen at a bank, age seconds ago (nil: never seen) | — |
+| CanPlace | (place) → bool | Whether the cursor item fits an empty carried, bank or shared bank slot now. Uses `AllItems` place strings (including empty slots). Banked slots require an open bank | — |
 | ItemKept | (id) → bool | Item is marked Keep | — |
 | SetItemKept | (id, name, on) → — | Mark or unmark every copy as Keep | actions |
 | SetItemsKept | ({{id, name}…}, on) → — | SetItemKept for many items at once, with one write (up to 4096) | actions |

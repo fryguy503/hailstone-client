@@ -74,6 +74,85 @@ std::string file_text(const fs::path& p) {
 
 } // namespace
 
+TEST_CASE("Inventory UI exposes quest and bag metadata and previews an empty storage slot") {
+    MockConfig config = MockConfig::standard();
+    net::Item quest = make_item(2001, "Quest Token", 24);
+    quest.quest_item = 1;
+    quest.no_drop = 0;
+    net::Item material = make_item(2002, "Tradeskill Material", 25);
+    material.tradeskills = 1;
+    material.no_rent = 255;
+    net::Item bag = bag_item(2003, "Tradeskill Satchel", 26);
+    bag.bag_type = 58;
+    bag.bag_size = 2;
+    bag.bag_slots = 32;
+    bag.contents.push_back({0, make_item(2004, "Stored Material", 26)});
+    bag.contents.back().item.tradeskills = 1;
+    config.characters[0].inventory.insert(config.characters[0].inventory.end(), {quest, material, bag});
+    bag.slot = {net::kInvBank, 2, -1, -1};
+    config.characters[0].inventory.push_back(bag);
+
+    Rig rig(std::move(config), quick_options());
+    REQUIRE(rig.to_zone());
+    auto& conn = rig.conn;
+    put_coin_away(conn);
+    ScratchDir scratch("inventory_ui_can_place");
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &conn;
+    app::UiApi api(host);
+    ui::lua::LuaUi lua(scratch.path(), scratch.path() / "settings.txt");
+    lua.add_ui_api([&](lua_State* L) { api.register_functions(L); });
+    auto run = [&](const char* script) {
+        lua_State* L = lua.state();
+        const int status = luaL_dostring(L, script);
+        INFO((status == LUA_OK ? "" : lua_tostring(L, -1)));
+        REQUIRE(status == LUA_OK);
+    };
+
+    run(R"lua(
+assert(hs.UI.Supports("inventory", "CanPlace"))
+assert(hs.Item(24).questItem == true and hs.Item(25).questItem == false)
+assert(hs.Item(25).bagType == nil)
+assert(hs.Item(26).bagType == 58 and hs.Item(26).bagSize == 2 and hs.Item(26).bagSlots == 32)
+local items = {}
+for _, row in ipairs(hs.AllItems()) do
+  items[row.place] = row.item
+end
+assert(items["i:24"].questItem and items["i:25"].tradeskill and items["i:26"].bagType == 58)
+assert(hs.CanPlace("i:27") == false)
+)lua");
+
+    conn.click_slot(at(24), false, false);
+    REQUIRE(id_at(conn, net::kSlotCursor) == quest.id);
+    REQUIRE(conn.activate_bank(rig.server.config.own_spawn_id));
+    run(R"lua(
+local fits = hs.UI.inventory.CanPlace
+assert(fits("i:27") and fits("b:1"))
+assert(not fits("i:26:31") and not fits("b:2:31") and not fits("s:0"))
+assert(hs.BankItem(2).bagType == 58)
+)lua");
+    conn.click_slot(at(24), false, false);
+    conn.click_slot(at(25), false, false);
+    REQUIRE(id_at(conn, net::kSlotCursor) == material.id);
+    const auto revision = conn.inventory().revision();
+    run(R"lua(
+local fits = hs.UI.inventory.CanPlace
+assert(fits("i:26:31") and fits("b:2:31") and fits("s:0"))
+for _, place in ipairs({"i:26:0", "i:26:32", "i:26", "i:13", "i:33", "s:2", "b:24", "i:32768", "i:27\0extra", "i:27:garbage"}) do
+  assert(fits(place) == false, place)
+end
+)lua");
+    CHECK(conn.inventory().revision() == revision);
+    conn.close_bank();
+    run(R"lua(
+assert(hs.CanPlace("i:26:31") and not hs.CanPlace("b:2:31") and not hs.CanPlace("s:0"))
+)lua");
+    conn.click_slot(at(26, 31), false, false);
+    CHECK(conn.inventory().cursor() == nullptr);
+    CHECK(id_at(conn, 26, 31) == material.id);
+}
+
 TEST_CASE("Advanced Inventory: lists what is worn and carried, draws in both views, and marks items") {
     fs::path src = ui_dir() / "modern";
     REQUIRE(fs::exists(src / "inventorymanager.lua"));

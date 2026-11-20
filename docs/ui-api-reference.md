@@ -10,7 +10,7 @@ does not bypass a function's own caller, screen or server-state checks.
 `API.version`, `API.Supports(module[, member])` and `API.Describe([module[, member]])`
 provide contract version and structural discovery. They confer no permissions.
 
-Coverage: **343/343 method implementation links**, **221/343 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
+Coverage: **344/344 method implementation links**, **222/344 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
 
 Unresolved method implementations: none.
 Unresolved constant implementations: none.
@@ -261,6 +261,7 @@ Unresolved constant implementations: none.
 | `API.inventory.BankSeen` | `live, age = hs.BankSeen(): live, the bank's rows are the bank as the server has it now; else they are the copy as`<br>`last seen at a bank, age seconds ago (nil: never seen, so no bank rows)` | `hs.BankSeen` · [source](../src/app/lua_ui_inventory_manager.cpp) | none (outer gate) | closed |
 | `API.inventory.BankSlotClick` | **See binding** | `hs.BankSlotClick` · [source](../src/app/lua_ui_exchange.cpp) | actions | closed |
 | `API.inventory.BulkItems` | **See binding** | `hs.BulkItems` · [source](../src/app/lua_ui_inventory_manager.cpp) | actions | closed |
+| `API.inventory.CanPlace` | `ok = hs.CanPlace(place)   -- whether the cursor item fits an empty carried, bank or shared bank slot now.`<br>`Uses the same place keys as hs.AllItems (e.g. "i:26:0", "b:3", "s:0:5"). Bank slots require an open bank.`<br>`This preview changes no items. The game's slot action validates the move again.` | `hs.CanPlace` · [source](../src/app/lua_ui_inventory_manager.cpp) | none (outer gate) | closed |
 | `API.inventory.ClaimAllParcels` | **See binding** | `hs.ClaimAllParcels` · [source](../src/app/lua_ui.cpp) | actions | closed |
 | `API.inventory.ClickSlot` | **See binding** | `hs.ClickSlot` · [source](../src/app/lua_ui.cpp) | actions | closed |
 | `API.inventory.CursorSlot` | `= 33` | `hs.CursorSlot` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
@@ -270,7 +271,7 @@ Unresolved constant implementations: none.
 | `API.inventory.FirstWornSlot` | `= 0` | `hs.FirstWornSlot` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.inventory.HasSlot` | `ok = hs.HasSlot(slot, bagSlot\|nil)   -- true when ClickSlot can act on that slot now: in game, a possessions`<br>`slot (worn 0..22, general 23..32, the cursor 33), and with bagSlot a place (0-based) inside the bag in that`<br>`general slot. An empty slot or bag place counts: ClickSlot drops the cursor's item there.` | `hs.HasSlot` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.inventory.InventorySpace` | `free, total = hs.InventorySpace()   -- the empty places in the general slots and their bags (a general slot with a`<br>`bag counts as the bag's slots)` | `hs.InventorySpace` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
-| `API.inventory.Item` | `hs.Item(slot [, bagSlot]) -> nil or { name, id, icon, count, charges, stackSize, stackable, bagSlots, weight,`<br>`magic, lore, type, size, ac, hp, mana, cooldown }; cooldown: the slot's recast cool-down fraction (CInvSlotWnd_Draw:`<br>`shaded from the slot's top + cooldown x its height to its bottom in hs.CoolDownColor()), absent while idle` | `hs.Item` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
+| `API.inventory.Item` | `hs.Item(slot [, bagSlot]) -> nil or { name, id, icon, count, charges, stackSize, stackable, bagSlots, weight,`<br>`bagType and bagSize on containers, magic, lore, questItem, type, size, ac, hp, mana, cooldown }; cooldown: the slot's`<br>`recast cool-down fraction (CInvSlotWnd_Draw:`<br>`shaded from the slot's top + cooldown x its height to its bottom in hs.CoolDownColor()), absent while idle` | `hs.Item` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.inventory.ItemJob` | `done, total, mode, where = hs.ItemJob()   -- the job running (mode: "sort", "stack", "tidy", "sell", "destroy",`<br>`"tribute", "withdraw"; where:`<br>`"inventory", "bank" or "bag"); nil when none is` | `hs.ItemJob` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.inventory.ItemKept` | **See binding** | `hs.ItemKept` · [source](../src/app/lua_ui_inventory_manager.cpp) | none (outer gate) | closed |
 | `API.inventory.ItemStats` | **See binding** | `hs.ItemStats` · [source](../src/app/lua_ui_inventory_manager.cpp) | none (outer gate) | closed |

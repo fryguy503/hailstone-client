@@ -396,6 +396,17 @@ Text the client hands an interface (labels, list rows, `className` at character 
 an interface that maps such text back to a class, or has its own list of class names, asks `ClassName` by id and
 keys any cache on `ClassNamesRevision()`, which changes whenever the names may have.
 
+## Inventory placement
+
+UI API 1.8 adds `inventory.CanPlace(place)` (`hs.CanPlace`). It previews whether
+the item on the cursor fits an empty carried, personal bank or shared bank slot
+(`i:26:0`, `b:3`, `s:0:5`). Bank slots require an open bank. The query applies
+the native bag and bank restrictions, and the slot action validates the move
+again at the time of the click. Item records from `inventory.Item`,
+`inventory.AllItems`, and other inventory slot readers include the server's
+`questItem` flag. Bag records also include `bagType` and `bagSize`. Tradeskill
+storage bags use type 58. The fit check uses the material's tradeskill flag.
+
 ## Discovering optional features
 
 ```lua

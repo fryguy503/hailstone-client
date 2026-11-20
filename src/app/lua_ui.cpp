@@ -498,7 +498,7 @@ int push_item(lua_State* L, const net::Item* item) {
         lua_pushnil(L);
         return 1;
     }
-    lua_createtable(L, 0, 16);
+    lua_createtable(L, 0, 22);
     auto set_int = [&](const char* k, lua_Integer v) {
         lua_pushinteger(L, v);
         lua_setfield(L, -2, k);
@@ -513,12 +513,18 @@ int push_item(lua_State* L, const net::Item* item) {
     lua_pushboolean(L, item->stackable());
     lua_setfield(L, -2, "stackable");
     set_int("bagSlots", item->bag_slots);
+    if (item->is_bag()) {
+        set_int("bagType", item->bag_type);
+        set_int("bagSize", item->bag_size);
+    }
     lua_pushnumber(L, item->weight / 10.0);
     lua_setfield(L, -2, "weight");
     lua_pushboolean(L, item->magic != 0);
     lua_setfield(L, -2, "magic");
     lua_pushboolean(L, item->is_lore());
     lua_setfield(L, -2, "lore");
+    lua_pushboolean(L, item->quest_item != 0);
+    lua_setfield(L, -2, "questItem");
     set_int("type", item->item_type);
     set_int("size", item->size);
     set_int("ac", item->ac);
@@ -587,7 +593,8 @@ int SlotName(lua_State* L) {
 }
 
 // hs.Item(slot [, bagSlot]) -> nil or { name, id, icon, count, charges, stackSize, stackable, bagSlots, weight,
-// magic, lore, type, size, ac, hp, mana, cooldown }; cooldown: the slot's recast cool-down fraction (CInvSlotWnd_Draw:
+// bagType and bagSize on containers, magic, lore, questItem, type, size, ac, hp, mana, cooldown }; cooldown: the slot's
+// recast cool-down fraction (CInvSlotWnd_Draw:
 // shaded from the slot's top + cooldown x its height to its bottom in hs.CoolDownColor()), absent while idle
 int Item(lua_State* L) {
     auto& h = Impl::of(L).host;
