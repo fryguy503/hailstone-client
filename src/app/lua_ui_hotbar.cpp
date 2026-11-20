@@ -41,6 +41,8 @@ std::string text(UiHost& host, std::uint32_t id, std::vector<std::string> args =
 
 std::string screen_of(int bar) { return bar == 0 ? "HotButtonWnd" : "HotButtonWnd" + std::to_string(bar + 1); }
 
+std::string layout_lock_key(int bar) { return "hud.lockLayout." + screen_of(bar); }
+
 // CHotButtonWnd::StoreIniInfo: PercentSize, ShowKeyMap and ShowSpinner ("%d") into the character's UI ini.
 void store(int bar) {
     Bar& b = g_bars[static_cast<std::size_t>(bar)];
@@ -192,7 +194,7 @@ public:
             // sub_0068e710: hidden, and the owner's WndNotification(this, 0x28, {type, selected}): 0x550040 sets the
             // button's icon (on the page it shows now) and saves.
             open_ = false;
-            if (owner_ && host.hot_buttons && host.set_hot_button) {
+            if (owner_ && !hot_bar_layout_locked(host, owner_->first) && host.hot_buttons && host.set_hot_button) {
                 game::HotButton b = host.hot_buttons->current(owner_->first, owner_->second);
                 if (!b.empty()) {
                     b.icon_type = sel_.type();
@@ -328,8 +330,12 @@ void unregister_hot_bar_window(int bar, StockWindow* window) {
     g_bars[static_cast<std::size_t>(bar)].ini = nullptr; // the UI ini goes with the windows
 }
 
+bool hot_bar_layout_locked(const UiHost& host, int bar) {
+    return host.layout_setting && host.layout_setting(layout_lock_key(bar)) == "1";
+}
+
 void open_hot_bar_size(UiHost& host, int bar, float x, float y) {
-    if (!valid_bar(bar) || host.quantity) return; // unk_CXWnd_IsActive(pinstCQuantityWnd): one at a time
+    if (!valid_bar(bar) || hot_bar_layout_locked(host, bar) || host.quantity) return;
     game::QuantityOpen q;
     q.min = game::kHotButtonPercentMin;
     q.max = game::kHotButtonPercentMax;
@@ -338,7 +344,8 @@ void open_hot_bar_size(UiHost& host, int bar, float x, float y) {
     q.y = static_cast<std::int32_t>(y);
     q.use_keys = false;
     q.has_title = true; // "Percent"
-    open_quantity(host, q, [bar](std::int32_t v) {
+    open_quantity(host, q, [&host, bar](std::int32_t v) {
+        if (hot_bar_layout_locked(host, bar)) return;
         // WndNotification 0x24: PercentSize = the quantity, StoreIniInfo (the buttons take it in their
         // CHotButtonWnd_UpdateButtonStates: CHotButton::SetButtonSize(PercentSize, 1))
         g_bars[static_cast<std::size_t>(bar)].settings.percent = v;
@@ -349,6 +356,7 @@ void open_hot_bar_size(UiHost& host, int bar, float x, float y) {
 void open_hot_bar_menu(UiHost& host, int bar, float x, float y, bool layout_lock) {
     if (!host.conn || !valid_bar(bar)) return;
     const std::string screen = screen_of(bar);
+    const bool locked = hot_bar_layout_locked(host, bar);
     std::vector<UiHost::MenuRow> rows;
     // 6643 Window: CContextMenuManager's default menu (this client's window menu)
     rows.push_back(row(text(host, game::kStrHbWindow), [&host, screen] { host.window_menu = screen; }));
@@ -365,8 +373,11 @@ void open_hot_bar_menu(UiHost& host, int bar, float x, float y, bool layout_lock
                 // ConfirmationDialog 0x80 (8030) / 0x81 (8031); Yes: HotButtons_LoadFromIniFile
                 ask(host, load ? game::kStrHbAskLoad : game::kStrHbAskDelete, [&host, bar, n, load] {
                     if (!host.actions || !host.conn) return;
-                    if (load) host.actions->load_hot_button_set(*host.conn, bar, n);
-                    else host.actions->delete_hot_button_set(*host.conn, n);
+                    if (load) {
+                        if (!hot_bar_layout_locked(host, bar)) host.actions->load_hot_button_set(*host.conn, bar, n);
+                    } else {
+                        host.actions->delete_hot_button_set(*host.conn, n);
+                    }
                 });
             }));
         }
@@ -374,7 +385,7 @@ void open_hot_bar_menu(UiHost& host, int bar, float x, float y, bool layout_lock
     };
     UiHost::MenuRow load = row(text(host, game::kStrHbLoadSet));
     load.submenu = [set_rows] { return set_rows(true); };
-    rows.push_back(sets > 0 ? std::move(load) : disabled(std::move(load)));
+    rows.push_back(sets > 0 && !locked ? std::move(load) : disabled(std::move(load)));
     rows.push_back(row(text(host, game::kStrHbSaveSet), [&host, bar] {
         // CTextEntryWnd::Activate(this, 0, 8008, 1, 0x18, ""): its OK (0x26, 1) saves the set
         UiHost::TextEntry e;
@@ -389,18 +400,21 @@ void open_hot_bar_menu(UiHost& host, int bar, float x, float y, bool layout_lock
     UiHost::MenuRow del = row(text(host, game::kStrHbDeleteSet));
     del.submenu = [set_rows] { return set_rows(false); };
     rows.push_back(sets > 0 ? std::move(del) : disabled(std::move(del)));
-    rows.push_back(row(text(host, game::kStrHbClearAll), [&host, bar] {
+    UiHost::MenuRow clear = row(text(host, game::kStrHbClearAll), [&host, bar] {
         ask(host, game::kStrHbAskClear, [&host, bar] {
-            if (host.actions && host.conn) host.actions->clear_hot_bar(*host.conn, bar);
+            if (host.actions && host.conn && !hot_bar_layout_locked(host, bar))
+                host.actions->clear_hot_bar(*host.conn, bar);
         });
-    }));
+    });
+    rows.push_back(locked ? disabled(std::move(clear)) : std::move(clear));
     rows.push_back(separator());
     // 0x1964 Button Size: CQuantityWnd at the mouse
-    rows.push_back(row(text(host, game::kStrHbButtonSize), [&host, bar] {
+    UiHost::MenuRow size = row(text(host, game::kStrHbButtonSize), [&host, bar] {
         ImVec2 mp = ImGui::GetMousePos();
         if (!ImGui::IsMousePosValid(&mp)) mp = ImVec2(-1, -1);
         open_hot_bar_size(host, bar, mp.x, mp.y);
-    }));
+    });
+    rows.push_back(locked ? disabled(std::move(size)) : std::move(size));
     const HotBarSettings& s = g_bars[static_cast<std::size_t>(bar)].settings;
     // 0x19c8 Show Key Map / 0x1a2c Show Spinner: checked by the setting, toggle it and StoreIniInfo
     UiHost::MenuRow keys = row(text(host, game::kStrHbShowKeyMap), [bar] {
@@ -410,24 +424,22 @@ void open_hot_bar_menu(UiHost& host, int bar, float x, float y, bool layout_lock
     });
     keys.check = s.key_map;
     rows.push_back(std::move(keys));
-    UiHost::MenuRow spinner = row(text(host, game::kStrHbShowSpinner), [bar] {
+    UiHost::MenuRow spinner = row(text(host, game::kStrHbShowSpinner), [&host, bar] {
+        if (hot_bar_layout_locked(host, bar)) return;
         auto& b = g_bars[static_cast<std::size_t>(bar)].settings;
         b.spinner = !b.spinner;
         store(bar);
     });
     spinner.check = s.spinner;
-    rows.push_back(std::move(spinner));
-    // The frame's layout lock (hud.lock.<screen>, the same lock the modern UI's menu has): a drag no longer moves or
-    // resizes the bar. Hailstone's row, not the original's.
+    rows.push_back(locked ? disabled(std::move(spinner)) : std::move(spinner));
+    // The bar's own lock protects its buttons as well as its frame.
     if (layout_lock && host.set_layout_setting) {
         rows.push_back(separator());
-        const std::string lock_key = "hud.lock." + screen;
-        UiHost::MenuRow lock = row("Lock layout", [&host, lock_key] {
+        UiHost::MenuRow lock = row("Lock layout", [&host, bar] {
             if (!host.set_layout_setting) return;
-            const bool locked = host.layout_setting && host.layout_setting(lock_key) == "1";
-            host.set_layout_setting(lock_key, locked ? "0" : "1");
+            host.set_layout_setting(layout_lock_key(bar), hot_bar_layout_locked(host, bar) ? "0" : "1");
         });
-        lock.check = host.layout_setting && host.layout_setting(lock_key) == "1";
+        lock.check = locked;
         rows.push_back(std::move(lock));
     }
     // 0x1a90 Open New Bar (0x68b6f0): enabled while a bar is hidden; shows the first (its Show stored)

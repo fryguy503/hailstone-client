@@ -47,6 +47,8 @@ local function bar(n)
   local window = n == 1 and "HotButtonWnd" or ("HotButtonWnd" .. n)
   local name = n == 1 and "Hotbuttons" or ("Hotbuttons " .. n)
   local perRowKey = "hud.perRow." .. window
+  local lockKey = "hud.lockLayout." .. window
+  local function layoutLocked() return ui.GetSetting(lockKey) == "1" end
   -- each tile's: the record hs.HotButtonInfo fills, its wrapped label, text colour and icon options, and its right
   -- button: as the game takes it, a quick click on release (a social's stop or editor; an empty tile's menu: assign
   -- a social, a new one opening the social editor), held 500 ms the button's menu
@@ -97,10 +99,13 @@ local function bar(n)
     end,
     resizable = { 40, 40 }, -- (the drag's floor; the shape snaps to whole buttons)
     onResize = resizeTo,
+    locked = layoutLocked,
     menu = function()
+      ui.BeginDisabled(layoutLocked())
       ui.SetNextItemWidth(180)
       local v, changed = ui.SliderInt("Buttons per row", perRow, 1, BUTTONS)
       if changed then ui.SetSetting(perRowKey, v) end
+      ui.EndDisabled()
     end,
   }
   -- A page arrow: its hit box x0, y0 .. x1, y1 and its triangle round mx, my (half-width d), pointing up or down.
