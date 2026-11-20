@@ -944,6 +944,48 @@ TEST_CASE("MQ commands: /target, ${} for typed lines, /noparse, /squelch") {
     CHECK(h.printed.back().rfind("Usage: /target", 0) == 0);
 }
 
+TEST_CASE("MQ commands: /target prefers an exact player name over a mount") {
+    Host h;
+    auto& spawns = net::GameConnectionTestAccess::world(*h.world.conn).spawns;
+    const auto& rider = spawns.at(12);
+    REQUIRE(rider.name == "Groupie");
+
+    // EQEmu names the mount after its owner. At the same distance, the mount's lower ID wins the search.
+    game::Spawn mount;
+    mount.id = 9;
+    mount.name = "Groupie`s_Mount00";
+    mount.is_npc = true;
+    mount.position = rider.position;
+    spawns.emplace(mount.id, mount);
+
+    h.run("/target gRoUpIe");
+    CHECK(h.target == rider.id);
+    h.run("/target mount Groupie");
+    CHECK(h.target == mount.id);
+    h.run("/target pc =Groupie");
+    CHECK(h.target == rider.id);
+    h.run("/target id 9 Groupie");
+    CHECK(h.target == mount.id);
+    h.run("/target clear");
+    h.run("/target Grou");
+    CHECK(h.target == mount.id);
+}
+
+TEST_CASE("MQ commands: /target can select your exact name while mounted") {
+    Host h;
+    auto& world = net::GameConnectionTestAccess::world(*h.world.conn);
+    REQUIRE(world.player());
+    game::Spawn mount;
+    mount.id = 9;
+    mount.name = "Tester`s_Mount00";
+    mount.is_npc = true;
+    mount.position = world.player()->position;
+    world.spawns.emplace(mount.id, mount);
+
+    h.run("/target Tester");
+    CHECK(h.target == world.player_id);
+}
+
 TEST_CASE("MQ commands: /docommand and /squelch parse their line once, a value's ${...} stays text") {
     Host h;
     net::GameConnectionTestAccess::world(*h.world.conn).spawns[11].name = "x${Me.PctHPs}";
