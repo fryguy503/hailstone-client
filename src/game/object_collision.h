@@ -6,6 +6,7 @@
 // door moves; the query is transformed into the object's space instead.
 
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -26,13 +27,18 @@ struct ObjectShape {
     std::vector<CollisionTriangle> records;
     // Drawn opaque/masked triangles, including passable parts, kept separately from movement collision.
     std::vector<CollisionTriangle> visual;
+    // A passable model's triangles, available to portal picking.
+    std::vector<CollisionTriangle> pick_proxy;
     glm::vec3 lo{0.0f}, hi{0.0f}; // bounds of the solid triangles
     float radius = 0.0f;          // largest vertex distance from the model origin
 
     // The solid parts of a mesh, by the rule game/collision.cpp uses for the
     // zone (everything but translucent and additive surfaces).
-    static ObjectShape from_mesh(const assets::Mesh& mesh);
+    static ObjectShape from_mesh(const assets::Mesh& mesh, bool keep_pick_proxy = false);
     bool empty() const { return tris.empty(); }
+    std::span<const CollisionTriangle> pick_triangles(bool allow_proxy) const {
+        return allow_proxy && records.empty() ? pick_proxy : records;
+    }
 };
 
 // CActorData::FindIntersectionSphere for a placed shape: the sweep moved into

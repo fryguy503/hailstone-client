@@ -2037,16 +2037,18 @@ public:
     const std::vector<game::GroundObject>& ground_objects() const { return ground_objects_; }
     // CEverQuest::ClickedSwitch -> EQSwitch::UseSwitch: refuses unusable or
     // moving switches, says "You can't reach that, get closer." out of reach
-    // (actor_radius: the door model's bounding radius, scaled), else sends
+    // (at the hit point, or using the scaled actor radius when there is no hit), else sends
     // OP_ClickDoor with `key` (the item id, -1 for none) and `skill` (the
     // adjusted Pick Lock or Disarm Traps value, game/clicks.h clicked_switch);
     // OP_MoveDoor answers. Returns true when the click was sent.
-    bool click_door(std::uint8_t door_id, float actor_radius, std::int32_t key = -1, std::int32_t skill = 0);
+    bool click_door(std::uint8_t door_id, float actor_radius, std::int32_t key = -1, std::int32_t skill = 0,
+                    std::optional<glm::vec3> hit = std::nullopt);
     // Whether the local player is within reach of the door for a click (UseSwitch's test, as click_door makes it).
-    bool door_in_reach(std::uint8_t door_id, float actor_radius) const;
-    // EQSwitch::UseSwitch(switch, user, key, skill, 0) as PlayerClient::TouchingSwitch calls it: `user` is the
-    // spawn id; 0 (nobody, type 0x23) skips the reach test and sends player id 0.
-    bool use_switch(std::uint8_t door_id, std::uint32_t user, float actor_radius, std::int32_t key, std::int32_t skill = 0);
+    bool door_in_reach(std::uint8_t door_id, float actor_radius, std::optional<glm::vec3> hit = std::nullopt) const;
+    // EQSwitch::UseSwitch also takes touch activations without a pick point. `user` is the spawn id;
+    // 0 (nobody, type 0x23) skips the reach test and sends player id 0.
+    bool use_switch(std::uint8_t door_id, std::uint32_t user, float actor_radius, std::int32_t key, std::int32_t skill = 0,
+                    std::optional<glm::vec3> hit = std::nullopt);
     // TouchingSwitch's close of a type-0x32 switch past its repop time: the state byte (+0x27) = 0, without
     // ChangeState (no sound, nothing sent).
     void set_door_state_now(std::uint8_t door_id, std::uint8_t state);

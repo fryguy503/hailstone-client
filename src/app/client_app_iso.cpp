@@ -310,7 +310,7 @@ bool ClientApp::iso_click(const glm::vec2& at, const PickTarget& hit, bool right
     }
     case PickTarget::Kind::Door:
         in.target = game::IsoClickTarget::Door;
-        in.in_reach = door_reachable(static_cast<std::uint8_t>(hit.id));
+        in.in_reach = door_reachable(static_cast<std::uint8_t>(hit.id), hit.point);
         break;
     case PickTarget::Kind::Object:
         in.target = game::IsoClickTarget::Object;

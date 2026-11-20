@@ -134,7 +134,7 @@ public:
 
     // The doors' and ground objects' actors for the mouse pick
     // (game/picking.h), appended to `actors` with what each one is in `refs`:
-    // static collision meshes (their solid triangles), mask 2 (CDisplay::
+    // static collision meshes or a passable portal's pick mesh, mask 2 (CDisplay::
     // CreateActor; EQSwitch::PostInit clears bit 2 for type 0x37), invisible
     // doors flagged as IsInvisible.
     struct PickRef {
@@ -143,7 +143,7 @@ public:
         bool is_placed = false;          // a placed real estate object (id unused: re, item)
         std::uint32_t re = 0, item = 0;
     };
-    void pick_actors(std::vector<game::PickActor>& actors, std::vector<PickRef>& refs) const;
+    void pick_actors(std::vector<game::PickActor>& actors, std::vector<PickRef>& refs, bool include_portal_proxies) const;
     // The nearest usable door whose centre is within `range` of `at` and
     // within 60 degrees of facing `yaw` (the U key without a mouse target).
     std::optional<std::uint8_t> nearest_door(const glm::vec3& at, float yaw, float range) const;

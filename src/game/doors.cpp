@@ -455,7 +455,10 @@ glm::mat4 door_transform(const Door& d) {
     return glm::scale(m, glm::vec3(d.scale()));
 }
 
-bool door_within_reach(const Door& d, const glm::vec3& player, float height, float radius) {
+bool door_within_reach(const Door& d, const glm::vec3& player, float height, float radius,
+                      std::optional<glm::vec3> hit) {
+    // EQSwitch::UseSwitch @0x511d70 takes the hit point from CEverQuest::ClickedSwitch.
+    if (hit) return glm::distance(player, *hit) <= height + 20.0f;
     return glm::distance(player, d.world_position()) <= height + 20.0f + radius;
 }
 

@@ -1067,8 +1067,8 @@ private:
     // USE key on one, the open tradeskill container, the --auto-door test.
     bool click_world(const PickTarget& hit);
     // CEverQuest::ClickedSwitch's key and skill, then EQSwitch::UseSwitch.
-    bool use_door(std::uint8_t id);
-    bool door_reachable(std::uint8_t id) const; // within reach for use_door's click
+    bool use_door(std::uint8_t id, std::optional<glm::vec3> hit = std::nullopt);
+    bool door_reachable(std::uint8_t id, std::optional<glm::vec3> hit = std::nullopt) const;
     // Ladder_MountClickedLadder on a clicked ladder (a ground object or one of the zone's).
     void climb_ladder(const game::mechanics::LadderSwitch& ladder);
     // `at_cursor` false: what is at the middle of the screen instead of under the mouse (the gamepad's interact).

@@ -616,7 +616,10 @@ Every door moves each frame by elapsed ms × 0.02 ticks (nothing moves on a fram
 
 A door not in its default state returns by itself after a repop time (10 s for types 0 and 5, 20 s for most). EQEmu's close timer resets only the server's state silently, so the client's return is what closes ordinary doors.
 
-The click range: the 3D distance from the player to the door must not exceed the player's height + 20 + the door actor's bounding radius. Else eqstr 1462 "You can't reach that, get closer." (EQEmu checks 100 units, `Range:MaxDistanceToClickDoors`).
+For a mouse pick, the 3D distance from the player to the hit point must be within the player's height + 20.
+Activations without a hit point measure to the door origin and add the scaled actor radius to the reach.
+An out-of-range activation shows eqstr 1462 "You can't reach that, get closer."
+EQEmu separately checks `Range:MaxDistanceToClickDoors` (100 units by default).
 
 Teleport doors (types 57/58 with a destination) are moved by the server with OP_RequestClientZoneChange.
 

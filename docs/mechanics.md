@@ -1215,9 +1215,14 @@ required bit. In a pass:
 
 The client tests the zone mesh (CollisionMesh::for_each_on_segment), each spawn's last drawn pose
 (ActorRenderer::spawn_pose), a spawn drawn as a placeholder box as a sphere, and the doors' and objects' solid
-triangles. Every pick is logged ("pick (left click) ...").
+triangles. For a zone portal with only passable triangles, Hailstone uses those triangles for picking. This lets
+the Plane of Fire orb be clicked while remaining passable. Every pick is logged ("pick (left click) ...").
 
 #### Left clicks and switches
+
+`CEverQuest::ClickedSwitch` (0x51ecb0) passes the picked point to `EQSwitch::UseSwitch` (0x511d70).
+A click reaches up to the player's height plus 20 units in 3D from the player to that point. Activations without a
+pick point measure to the switch origin and add the model's radius to the reach.
 
 Left click on a player: the clicked spawn becomes the target unless its race is below 2253 and it is not targetable;
 then the "who is this" lines ([Defaults] LeftClickTargetHelp, default 1: 6780/6791, then class / gender); then the
