@@ -58,9 +58,27 @@ client_files/
   zone-in. The player's own scripts, plugins and asset files run only as far as the file allows.
 - **Without one** (plain EQEmu, or this script without the file) the client sets no rules: players run what they like.
 
-Everything the file can say is in docs/plugins.md and `hailstone.cfg.example`. Check a folder with `hailstone_check
-client_files/` (built with the client): it shows what the cfg says, warns about what it does not understand, and
-names the files a client will refuse. Players get changes at their next login.
+Set these keys in `client_files/hailstone.cfg` to disable Ability Book autoskill and Lua socials.
+
+```ini
+[abilities]
+autoskill = off
+
+[socials]
+mode = off
+faces = off
+```
+
+`autoskill = off` stops automatic ability use from the Ability Book. Players can still use abilities manually.
+`mode = off` blocks Lua social presses. Ordinary command socials still work, and the Lua Social editor can still
+preview commands in a dry run without sending them. `faces = off` also disables Lua button faces, which can
+otherwise read game state even with `mode = off`.
+
+See the full policy settings in the [plugin and scripting guide](../docs/plugins.md) and the sample in
+[`hailstone.cfg.example`](hailstone.cfg.example).
+
+Run `hailstone_check client_files/` to see the policy, warnings about unknown settings, and any files a client
+will refuse. The checker is built with the client. Players get changes at their next login.
 
 ## Settings
 
