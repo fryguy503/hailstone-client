@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -320,6 +321,84 @@ TEST_CASE("UI packs (gamepad): stock Raid and Map stay inside narrow and short n
             ImGui::SetScrollY(const_cast<ImGuiWindow*>(actions), actions->ScrollMax.y);
             frame(w,h); frame(w,h);
             CHECK(actions->Scroll.y == doctest::Approx(actions->ScrollMax.y));
+        }
+    }
+}
+
+TEST_CASE("UI packs: context submenus cascade inward at either screen edge and accept a choice") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        test::ScratchDir scratch("ui_pack_context_menu_cascade");
+        const auto dir = scratch.path();
+        const auto src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        fs::create_directories(dir / "game");
+        fs::copy(src, dir / pack, fs::copy_options::recursive);
+        std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        Session s(dir, pack);
+        s.lua.set_entry_scripts({"menus.lua"});
+
+        int choices = 0;
+        using Row = app::UiHost::MenuRow;
+        Row spell;
+        spell.text = "Resist Magic";
+        spell.act = [&] { ++choices; };
+        Row subcategory;
+        subcategory.text = "Resist Buff";
+        subcategory.submenu = [&] { return std::vector{spell}; };
+        Row category;
+        category.text = "Utility Beneficial";
+        category.submenu = [&] { return std::vector{subcategory}; };
+
+        const auto panel = [](int menu) {
+            const std::string name = "##gamemenu" + std::to_string(menu);
+            const auto* window = ImGui::FindWindowByName(name.c_str());
+            REQUIRE(window);
+            REQUIRE(window->Active);
+            return window;
+        };
+        const auto move_to = [&](const ImGuiWindow& window) {
+            io.AddMousePosEvent(window.Pos.x + window.Size.x / 2.0f, window.Pos.y + window.Size.y / 2.0f);
+            s.frames(2);
+        };
+        for (const bool at_right : {true, false}) {
+            CAPTURE(at_right);
+            io.AddMousePosEvent(-100, -100);
+            s.frames(1);
+            s.host.open_menu(at_right ? 1580.0f : 8.0f, at_right ? 890.0f : 180.0f, {category});
+            s.frames(2);
+            REQUIRE(s.host.menus.size() == 1);
+            move_to(*panel(1));
+            REQUIRE(s.host.menus.size() == 2);
+            move_to(*panel(2));
+            REQUIRE(s.host.menus.size() == 3);
+            REQUIRE(s.lua.load_status().error_count == 0);
+
+            const ImGuiWindow* parent = nullptr;
+            for (int m = 1; m <= 3; ++m) {
+                const auto* window = panel(m);
+                CHECK(window->Pos.x >= 0.0f);
+                CHECK(window->Pos.x + window->Size.x <= io.DisplaySize.x);
+                CHECK(window->Pos.y >= 0.0f);
+                CHECK(window->Pos.y + window->Size.y <= io.DisplaySize.y);
+                if (parent) {
+                    const float gap = at_right ? parent->Pos.x - (window->Pos.x + window->Size.x)
+                                               : window->Pos.x - (parent->Pos.x + parent->Size.x);
+                    CHECK(std::abs(gap) <= 1.0f); // ImGui rounds dimensions to pixels
+                }
+                parent = window;
+            }
+            move_to(*panel(3));
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            s.frames(1);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            s.frames(2);
+            CHECK(choices == (at_right ? 1 : 2));
+            CHECK(s.host.menus.empty());
         }
     }
 }

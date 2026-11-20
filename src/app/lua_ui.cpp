@@ -2606,42 +2606,69 @@ int CascadeClose(lua_State* L) {
     return 0;
 }
 
-// menus = hs.GameMenus([scale])   -- the open context menus: { x, y, w, h, rows = { { text, r, g, b, check,
-// enabled, separator, submenu } } } (UiHost::menus; sized for EQ font 2 at `scale`, 1 by default, 0.5..3, as
-// menus.lua draws them: a pack that zooms its menus draws the font at that scale)
+// menus = hs.GameMenus([scale [, width [, row_height [, separator_height]]]])   -- { x, y, w, h, rows }
+// Rows have text, r, g, b, check, enabled, separator and submenu. The default sizes use EQ font 2 at `scale`
+// (1 by default, 0.5..3). Fixed dimensions are in pixels. Width includes padding. Row heights exclude spacing.
 int GameMenus(lua_State* L) {
     auto& m = Impl::of(L);
     const float scale = std::clamp(static_cast<float>(luaL_optnumber(L, 1, 1.0)), 0.5f, 3.0f);
-    lua_newtable(L);
     ImFont* font = ui::ui_font(2);
-    float fs = (font ? font->FontSize : ImGui::GetFontSize()) * scale;
+    const float fs = (font ? font->FontSize : ImGui::GetFontSize()) * scale;
+    const float width = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+    const float row_height = static_cast<float>(luaL_optnumber(L, 3, fs));
+    const float separator_height = static_cast<float>(luaL_optnumber(L, 4, 1.0));
     const ImGuiStyle& st = ImGui::GetStyle();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const auto& menus = m.host.menus;
+    float parent_left = 0.0f, parent_right = 0.0f, opener_y = 0.0f;
+    bool opens_left = false;
+    lua_newtable(L);
     int n = 0;
-    for (auto& menu : m.host.menus) {
-        float w = 0, y = st.WindowPadding.y;
-        menu.row_y.clear();
+    for (const auto& menu : menus) {
+        const std::size_t next = static_cast<std::size_t>(n) + 1;
+        const std::size_t child_row = next < menus.size() ? menus[next].parent_row : menu.rows.size();
+        std::size_t row = 0;
+        float text_width = 0.0f, content_bottom = st.WindowPadding.y, child_offset = 0.0f;
         for (const auto& r : menu.rows) {
-            menu.row_y.push_back(y);
+            if (row++ == child_row) child_offset = content_bottom;
             if (r.separator) {
-                y += st.ItemSpacing.y + 1;
+                content_bottom += separator_height + st.ItemSpacing.y;
                 continue;
             }
-            float tw = font ? font->CalcTextSizeA(fs, FLT_MAX, 0.0f, r.text.c_str()).x : ImGui::CalcTextSize(r.text.c_str()).x * scale;
-            w = std::max(w, tw);
-            y += fs + st.ItemSpacing.y;
+            if (width <= 0.0f) {
+                const float tw = font ? font->CalcTextSizeA(fs, FLT_MAX, 0.0f, r.text.c_str()).x
+                                      : ImGui::CalcTextSize(r.text.c_str()).x * scale;
+                text_width = std::max(text_width, tw);
+            }
+            content_bottom += row_height + st.ItemSpacing.y;
         }
-        menu.w = w + fs * 3.0f + st.WindowPadding.x * 2; // the check and the submenu arrow beside the text
-        menu.h = y + st.WindowPadding.y;
-        // kept on the screen (CContextMenuManager::PopupMenu moves a menu that would leave it)
-        ImVec2 ds = ImGui::GetIO().DisplaySize;
-        if (ds.x > 0 && menu.x + menu.w > ds.x) menu.x = std::max(0.0f, ds.x - menu.w);
-        if (ds.y > 0 && menu.y + menu.h > ds.y) menu.y = std::max(0.0f, ds.y - menu.h);
+        // Leave room for the check and the submenu arrow beside the text.
+        const float w = width > 0.0f ? width : std::max(40.0f, text_width + fs * 3.0f + st.WindowPadding.x * 2);
+        const float h = std::max(10.0f, content_bottom + st.WindowPadding.y);
+        float x = menu.x, y = menu.y;
+        if (n > 0) {
+            // Stay on the same side until the next menu needs more room. If neither side fits, use the larger gap.
+            if (ds.x > 0.0f) {
+                const float left = parent_left, right = ds.x - parent_right;
+                const float preferred = opens_left ? left : right;
+                const float opposite = opens_left ? right : left;
+                if (w > preferred && opposite > preferred) opens_left = !opens_left;
+            }
+            x = opens_left ? parent_left - w : parent_right;
+            y = opener_y;
+        }
+        // CContextMenuManager::PopupMenu moves a menu that would leave the screen.
+        if (ds.x > 0.0f) x = std::clamp(x, 0.0f, std::max(0.0f, ds.x - w));
+        if (ds.y > 0.0f) y = std::clamp(y, 0.0f, std::max(0.0f, ds.y - h));
+        parent_left = x;
+        parent_right = x + w;
+        opener_y = y + child_offset;
         lua_createtable(L, 0, 5);
         auto num = [&](const char* k, double v) {
             lua_pushnumber(L, v);
             lua_setfield(L, -2, k);
         };
-        num("x", menu.x), num("y", menu.y), num("w", menu.w), num("h", menu.h);
+        num("x", x), num("y", y), num("w", w), num("h", h);
         lua_createtable(L, static_cast<int>(menu.rows.size()), 0);
         int i = 0;
         for (const auto& r : menu.rows) {
@@ -2673,8 +2700,7 @@ void menu_hover(UiHost& h, std::size_t mi, std::size_t ri) {
     const auto& row = h.menus[mi].rows[ri];
     if (!row.submenu || !row.enabled) return;
     UiHost::GameMenu sub;
-    sub.x = h.menus[mi].x + h.menus[mi].w;
-    sub.y = h.menus[mi].y + (ri < h.menus[mi].row_y.size() ? h.menus[mi].row_y[ri] : 0.0f);
+    sub.parent_row = ri;
     sub.rows = row.submenu();
     h.menus.push_back(std::move(sub));
 }
@@ -3008,12 +3034,7 @@ bool UiHost::context_menus() const {
 bool UiApi::menu_click(int menu, int row) {
     impl_->lists_changed();
     if (menu < 0 || row < 0) return false;
-    auto& h = impl_->host;
-    if (static_cast<std::size_t>(menu) < h.menus.size() && h.menus[static_cast<std::size_t>(menu)].row_y.empty()) {
-        // not drawn yet: the rows' places as GameMenus lays them out are unknown; submenus open at the menu's top
-        h.menus[static_cast<std::size_t>(menu)].row_y.assign(h.menus[static_cast<std::size_t>(menu)].rows.size(), 0.0f);
-    }
-    return menu_choose(h, static_cast<std::size_t>(menu), static_cast<std::size_t>(row));
+    return menu_choose(impl_->host, static_cast<std::size_t>(menu), static_cast<std::size_t>(row));
 }
 
 bool UiApi::activate_tip(int tip) {

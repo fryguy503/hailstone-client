@@ -54,7 +54,7 @@ local function drawMenus(menus, s)
   local flags = ui.WindowFlags.NoDecoration | ui.WindowFlags.NoMove | ui.WindowFlags.NoSavedSettings
   for m, menu in ipairs(menus) do
     ui.SetNextWindowPos(menu.x, menu.y, ui.Cond.Always)
-    ui.SetNextWindowSize(math.max(menu.w, 40), math.max(menu.h, 10), ui.Cond.Always)
+    ui.SetNextWindowSize(menu.w, menu.h, ui.Cond.Always)
     ui.SetNextWindowFocus() -- above every other window, like the game's menus
     if ui.Begin("##gamemenu" .. m, nil, flags) then
       ui.PushFont(2)
@@ -80,6 +80,7 @@ local function drawMenus(menus, s)
           -- closes the submenus of this menu), as the stock list does
           if ui.IsItemHovered() and hovered[m] ~= r then
             hovered[m] = r
+            for k = m + 1, #menus do hovered[k] = nil end
             API.menus.GameMenuHover(m, r - 1)
           end
           if clicked and row.enabled then API.menus.GameMenuClick(m, r - 1) end

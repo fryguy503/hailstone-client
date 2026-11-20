@@ -1002,7 +1002,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | CascadeClick | (menu, item) → — | Click an item (1-based) | actions |
 | CascadeHover | (menu, item) → — | Hover an item | — |
 | CascadeClose | () → — | Close the cascade | — |
-| GameMenus | ([scale]) → {{x,y,w,h, rows={{text,r,g,b,check,enabled,separator,submenu}}}} | Open context menus | — |
+| GameMenus | ([scale [, width [, row_height [, separator_height]]]]) → {{x,y,w,h, rows={{text,r,g,b,check,enabled,separator,submenu}}}} | Open context menus. Optional pixel dimensions override the scaled text width and row sizes for fixed-size packs. | — |
 | GameMenuClick | (menu, row) → — | Menu 1-based, row 0-based | actions |
 | GameMenuHover | (menu, row) → — | Hover a row | — |
 | GameMenuClose | () → — | Close the menus | — |

@@ -10,6 +10,7 @@
 // Labels and gauges with an EQType read app/lua_ui_values.h, the original's __GetLabelFromEQ and
 // __GetGaugeValueFromEQ.
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <future>
@@ -297,9 +298,9 @@ struct UiHost {
         std::function<std::vector<MenuRow>()> submenu;
     };
     struct GameMenu {
-        float x = 0, y = 0, w = 0, h = 0;
+        float x = 0, y = 0; // the root menu's opening point
+        std::size_t parent_row = 0; // the row that opened this submenu
         std::vector<MenuRow> rows;
-        std::vector<float> row_y; // each row's top inside the menu (GameMenus fills it)
     };
     std::vector<GameMenu> menus;
     // 0x761f10, CContextMenuManager::PopupMenu @0x862220's test: context menus open only with the ContextMenus
