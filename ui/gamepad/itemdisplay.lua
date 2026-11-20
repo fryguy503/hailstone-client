@@ -6,6 +6,7 @@ local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
 local W = dofile("lib/window.lua")
 local I = dofile("lib/items.lua")
+local CL = dofile("lib/compare_lines.lua")
 local C = T.C
 
 local IDW = "ItemDisplayWindow"
@@ -55,16 +56,17 @@ local function wrap(key, text, x, y, width, c)
 end
 
 -- The children's ids, made once.
-local INFO_IDS, HEROIC_IDS, STAT_IDS, VALUE_IDS = {}, {}, {}, {}
+local INFO_IDS, HEROIC_IDS, STAT_IDS, VALUE_IDS, KEY_IDS = {}, {}, {}, {}, {}
 for n = 1, 12 do
   INFO_IDS[n] = "IDW_ItemInfo" .. n
   HEROIC_IDS[n] = "IDW_Heroic" .. n
 end
 for r = 1, 26 do
-  STAT_IDS[r], VALUE_IDS[r] = {}, {}
+  STAT_IDS[r], VALUE_IDS[r], KEY_IDS[r] = {}, {}, {}
   for c = 1, 3 do
     STAT_IDS[r][c] = "IDW_Row" .. r .. "Col" .. c .. "Stat"
     VALUE_IDS[r][c] = "IDW_Row" .. r .. "Col" .. c .. "Value"
+    KEY_IDS[r][c] = "IDW_Row" .. r .. "Col" .. c .. "Key" -- Hailstone's: the row's comparison key
   end
 end
 local HINTS = { { "x", "Link in chat" }, { "b", "Close" } }
@@ -119,6 +121,10 @@ ui.window("Item Details", function()
       end
       y = y + T.px(66)
     end
+    -- Hailstone: the item against what you wear (docs/item-compare.md); each stat's change for you beside its value
+    local compare = API.settings.Option("item_compare") ~= 0 and API.compare.SlotItem(IDW, "Hailstone_Item") or nil
+    local deltas = compare and CL.byKey(compare.slots[1]) or nil
+    local shownKeys = {}
     -- the stat grid: three columns of name / value
     local colW = (w - T.px(40)) / 3
     local any = false
@@ -132,8 +138,18 @@ ui.window("Item Details", function()
           if name ~= "" or v ~= "" then
             local cx = x0 + (c - 1) * (colW + T.px(20))
             T.draw(cx, y, name, C.dim)
+            local right = cx + colW
+            local key = deltas and textOf(KEY_IDS[r][c]) or ""
+            local ch = key ~= "" and not shownKeys[key] and deltas[key]
+            if ch then
+              shownKeys[key] = true
+              local d = CL.signed(ch.key, ch.delta)
+              local dw = ui.CalcTextSize(d)
+              T.draw(right - dw, y, d, I.compareColor(CL.kind(ch)))
+              right = right - dw - T.px(10)
+            end
             local vw = ui.CalcTextSize(v)
-            T.draw(cx + colW - vw, y, v, colourOf(value))
+            T.draw(right - vw, y, v, colourOf(value))
             rowAny = true
           end
         end
@@ -155,11 +171,10 @@ ui.window("Item Details", function()
         end
       end
     end
-    -- Hailstone: the item against what you wear (docs/item-compare.md)
-    local compare = API.compare.SlotItem(IDW, "Hailstone_Item")
-    if compare and API.settings.Option("item_compare") ~= 0 then
+    -- the rest of the comparison: the verdict, what it is compared with, the changes the grid has no row for
+    if compare then
       ui.DrawLine(x0, y, x1, y, C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
-      y = I.comparison(compare, x0, y + T.px(6), x1, y1) + T.px(6)
+      y = I.comparison(compare, x0, y + T.px(6), x1, y1, shownKeys) + T.px(6)
     end
     -- the description
     local desc = textOf("ItemDescription"):gsub("<[^>]*>", "")

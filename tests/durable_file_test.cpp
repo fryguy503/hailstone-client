@@ -37,6 +37,33 @@ TEST_CASE("durable_file: a synced write and a synced replace") {
     CHECK(read_text_file(b) == "new");
 }
 
+// The updater's way to replace a file without a moment when its name has none (app/update_install.cpp): previous/
+// gets a second name for the old file, then the new one is renamed over the first.
+TEST_CASE("durable_file: a synced hard link keeps the old file while the new one replaces it") {
+    test::ScratchDir dir("durable_link");
+    const fs::path target = dir.path() / "hailstone", saved = dir.path() / "previous-hailstone",
+                   fresh = dir.path() / "new-hailstone";
+    REQUIRE(platform::write_file_synced(target, "old"));
+    REQUIRE(platform::write_file_synced(fresh, "new"));
+    std::error_code ec;
+#if defined(_WIN32)
+    CHECK_FALSE(platform::link_file_synced(target, saved, ec)); // the caller moves the file instead
+    CHECK(ec);
+    CHECK_FALSE(fs::exists(saved));
+#else
+    REQUIRE(platform::link_file_synced(target, saved, ec));
+    CHECK_FALSE(ec);
+    CHECK(read_text_file(target) == "old"); // still there under its own name
+    CHECK(read_text_file(saved) == "old");
+    CHECK(platform::replace_file_synced(fresh, target, ec));
+    CHECK(read_text_file(target) == "new");
+    CHECK(read_text_file(saved) == "old"); // the old file, kept for a roll-back
+    CHECK_FALSE(platform::link_file_synced(target, saved, ec)); // never over a file already there
+    CHECK(ec);
+    CHECK(read_text_file(saved) == "old");
+#endif
+}
+
 TEST_CASE("atomic_file: the file is replaced whole and no temporary file stays") {
     test::ScratchDir dir("atomic_file");
     const fs::path f = dir.path() / "sub" / "settings.ini";

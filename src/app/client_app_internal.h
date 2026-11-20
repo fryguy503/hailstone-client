@@ -480,6 +480,11 @@ public:
         aenv.autoskill_list = [this] { return autoskill_list(ui_host_); };
         aenv.use_ability = [this](mq::AbilityKind kind, std::string_view name) { return use_ability(ui_host_, kind, name); };
         aenv.ability_bulk = [this] { return ability_bulk_rows(ui_host_); };
+        aenv.spell_description = [this](const game::SpellData& s) {
+            return ui_host_.conn ? spell_description(s, ui_host_.conn->strings(),
+                                                     description_player(*ui_host_.conn, ui_host_.character))
+                                 : std::string();
+        };
         aenv.can_see = [this](std::uint32_t id) -> std::optional<bool> {
             return conn_ ? can_see_spawn(id) : std::nullopt;
         };
@@ -498,6 +503,19 @@ public:
         perf_ui_.set_log_hitches(config_.get_bool("ui.perf_log_hitches", false));
         automation_->hooks().add_command(plugin::Hooks::kClient, "/perf", [this](std::string_view) { perf_ui_.toggle(); });
         automation_->hooks().add_command(plugin::Hooks::kClient, "/screenshot", [this](std::string_view) { take_screenshot(); });
+        // /debug_animinfo: the target's (or your own) model, the clips its bone groups play and the bones left at rest
+        // (render::describe_pose; a debugging aid of Hailstone's).
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/debug_animinfo", [this](std::string_view) {
+            if (!conn_) return;
+            const auto& w = conn_->world();
+            const std::uint32_t id = w.target_id ? w.target_id : w.player_id;
+            auto it = w.spawns.find(id);
+            const std::string who = it != w.spawns.end() ? it->second.name : std::to_string(id);
+            const auto lines = actor_renderer_ ? actor_renderer_->describe_animation(id) : std::vector<std::string>{};
+            if (lines.empty()) return conn_->ui_message("[debug_animinfo] " + who + " is not drawn as a character model");
+            conn_->ui_message("[debug_animinfo] " + who + ":");
+            for (const auto& line : lines) conn_->ui_message("  " + line);
+        });
         // /web [address]: the in-game browser (docs/browser.md; a client extension), on the address in a new tab.
         // The player's own: a script or plugin opens pages with /url, under its 'web' permission.
         automation_->hooks().add_command(plugin::Hooks::kClient, "/web", [this](std::string_view args) {
@@ -1065,7 +1083,8 @@ private:
     void region_teleport(const std::string& text);
     // PlayerZoneClient::DoTeleportB @0x507ca0 for the local player (game/zoning.h): the same zone moves the player
     // here, nothing sent; another zone goes through MoveToZone. `what` names the caller in the log.
-    bool teleport_b(const game::TeleportBArgs& a, const char* what);
+    bool teleport_b(const game::TeleportBArgs& a, const char* what,
+                    std::optional<glm::vec3> zone_line_position = std::nullopt);
     void drive_pick_test(MovementKeys& mk);
     int pick_test_step_ = 0;
     std::vector<std::uint32_t> pick_test_ids_;
@@ -1183,6 +1202,10 @@ private:
     bool addons_dirty_ = false; // installed.txt changed without the manager (a removal): the ceilings again
     std::string addons_profile_;
     Clock::time_point addons_listed_{};
+    // update_addons: the view as built from AddonManager::changes() and the picked server's id, name and address.
+    bool addons_view_built_ = false;
+    std::uint32_t addons_changes_ = 0;
+    std::string addons_view_key_;
     std::vector<ServerAddon> server_addons_;
     std::vector<ManualAddon> manual_addons_;
     plugin::Rules addons_rules_;
@@ -1425,6 +1448,10 @@ private:
     std::unique_ptr<render::TargetRingRenderer> target_ring_renderer_; // the target ring, made on first use
     std::unique_ptr<ActorEmitters> actor_emitters_;         // the models' and held items' own (app/actor_emitters.h)
     std::vector<ActorEmitters::Actor> actor_emitter_list_;  // this frame's actors that have some
+    // Hailstone: an actor out of view emits no particles (ActorEmitters::Actor::in_view; display.particle_offscreen_hold,
+    // read at start-up), judged against the scene's view as drawn last frame (none yet: every actor in view).
+    bool particle_offscreen_hold_ = true;
+    std::optional<glm::mat4> emitter_view_proj_;
     game::Weather weather_;                                 // OP_Weather played out (game/weather.h)
     render::WeatherLook weather_look_;                      // its wet ground, snow and storm light
     render::HazeBlend haze_blend_;                          // the modern haze, eased between places (zone-in resets)
@@ -1532,6 +1559,8 @@ private:
     GuidePath guide_;
     std::string guide_zone_; // the zone it was started in: zoning ends it (spawn ids are the zone's)
     void update_guide();
+    // The server's level-up effects (OP_LevelAppearance): started on the spawns' spell points.
+    void update_level_effects(net::GameConnection& conn);
     game::ZoneLineTrigger zone_line_;
     game::ViewDistance view_;
     // The per-frame fog and scene light (CDisplay_UpdateSkyWeatherAndFog and SetFog), the player's light level

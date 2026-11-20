@@ -14,6 +14,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -76,6 +77,7 @@
 #include "game/achievements.h"
 #include "game/task_window.h"
 #include "game/text_overlay.h"
+#include "game/camera_shake.h"
 #include "game/tracking.h"
 #include "game/trade_rules.h"
 #include "game/training.h"
@@ -104,6 +106,7 @@
 #include "net/movement_packets.h"
 #include "net/quest_npc_packets.h"
 #include "net/player_packets.h"
+#include "net/rename_packets.h"
 #include "net/tribute_packets.h"
 #include "net/marketplace_packets.h"
 #include "net/session.h"
@@ -468,6 +471,8 @@ public:
             it->second.body_wet = body_wet;
     }
     const std::optional<PlayerProfile>& profile() const { return profile_; }
+    // The level-up effects to show (OP_LevelAppearance), once a frame; at most kLevelEffectCuesKept.
+    std::vector<LevelEffectCue> take_level_effect_cues() { return std::exchange(level_effect_cues_, {}); }
     // The character we play (as the server names it).
     const std::string& character_name() const { return character_; }
     // The game state last given to the plugin hooks (plugin::kGameState*; 0 none yet).
@@ -1421,6 +1426,7 @@ public:
     std::uint32_t current_zone_dword() const;
     // The position update DoTeleportB sends before a reason-0 teleport.
     void send_position_now();
+    void send_zone_line_position(glm::vec3 position);
 
     // ---- movement (game/mechanics/movement.h; net/game_connection_movement.cpp) ----
     // OP_Jump, and the endurance the original takes locally (DoMainLoop @0x53ed48).
@@ -1615,6 +1621,7 @@ public:
         if (!profile_ || n < 0 || n >= static_cast<std::int32_t>(profile_->disciplines.size())) return 0;
         return profile_->disciplines[static_cast<std::size_t>(n)];
     }
+    bool knows_discipline(std::uint32_t id) const;
     // PlayerBase::CanSee's zone test (the app's collision): true when nothing blocks the segment (world coordinates).
     void set_line_of_sight(std::function<bool(const glm::vec3&, const glm::vec3&)> los) { line_of_sight_ = std::move(los); }
     // True once the app has given this connection its hooks (line of sight, teleport, app commands): the app installs
@@ -2302,6 +2309,8 @@ public:
                         std::string* why = nullptr);
     // The large centre-screen text (CTextOverlay: OP_TaskActivityComplete's lines); the app draws its frame().
     game::TextOverlay& text_overlay() { return text_overlay_; }
+    // The camera shake of OP_CameraEffect; the app adds its offset() to the camera each frame and the zone-in clears it.
+    game::CameraShake& camera_shake() { return camera_shake_; }
     // The task select window's Accept for one offered task (OP_AcceptNewTask, or
     // OP_SharedTaskAcceptNew for a shared task selection); Decline sends task id 0.
     void accept_task(std::uint32_t task_id);
@@ -2887,7 +2896,7 @@ private:
     void send_checksums();
     void maybe_request_client_spawn();
     void finish_zone_in();
-    void send_position(bool force);
+    void send_position(bool force, glm::vec3 position, bool reliable = false);
     void apply_spawn(const Spawn& s);
     void set_spawn_motion(game::Spawn& s, const Motion& m);
     void connect_world(bool zoning);
@@ -3016,6 +3025,9 @@ private:
     void forget_pet_spawn(std::uint32_t spawn_id);
     void move_item(const ItemSlot& from, const ItemSlot& to, std::uint32_t count);
     void refresh_worn_slot(int slot);
+    // PcClient_RefreshWornSlotVisual's instrument bit (0x5923f0): the local player's PlayerState bit 0x10, set when
+    // the primary or secondary hand holds an instrument (item types 23..26).
+    void refresh_instrument_state();
     void init_spells_from_profile();
     void update_spells();
     void update_spells_at(std::int64_t now); // one step of update_spells, at `now` (now_ms()'s clock)
@@ -3066,6 +3078,8 @@ private:
     void target_by_name(const std::string& name);
     // Social (net/game_connection_social.cpp).
     bool run_slash_command(std::size_t index, const std::string& args);
+    // game::expand_chat_variables with the current target and the pet window's pet.
+    std::string expand_chat_text(std::string_view text, bool sending = true) const;
     void send_channel(std::uint32_t channel, const std::string& target, const std::string& text);
     void say_to_channel(std::uint32_t channel, const std::string& text);
     void say_command(const std::string& text);
@@ -3300,6 +3314,9 @@ private:
     std::vector<Weather> weather_messages_;
     bool client_spawn_requested_ = false;
     bool zone_ready_ = false;
+    // The instrument bit as last published to the zone (OP_PlayerStateAdd / Remove). The local bit may be set before
+    // OP_ClientReady, when the server would ignore the packet; it is published once the zone is ready.
+    bool instrument_published_ = false;
     std::optional<std::string> zone_to_load_;
     // The server's client files (net/server_files.h): asked at the first zone-in; the zone-in waits for them.
     std::unique_ptr<ServerFileSync> server_files_;
@@ -3340,6 +3357,11 @@ private:
     std::uint64_t camp_token_ = 0;
     bool camp_disconnect_expected_ = false, answering_large_dialog_ = false, camp_request_sending_ = false;
     bool cast_animation_fallback_ = true; // set_cast_animation_fallback
+    // The spell whose landing animation the zone was last told of (OP_Animation), and until when (now_ms()) a landing
+    // of it on another target sends none: an area spell or a group song lands on each target with an OP_Action of its
+    // own, and the animation is one.
+    std::uint32_t landing_animation_spell_ = 0;
+    std::int64_t landing_animation_until_ = 0;
     bool attack_held_for_xtarget_ = false; // kept on at the target's death (attack_until_xtarget_clear)
     bool auto_target_xtarget_ = true;
     bool face_on_attack_ = true;
@@ -3402,6 +3424,10 @@ private:
     game::HitModes hit_modes_{};
     game::SpellHitModes spell_hit_modes_{};
     game::SpellState spells_;
+    // Counter SPAs (35/36/116/369, see game/counter_spas.h) whose buff EQEmu faded in the current network update,
+    // before the cure's OP_Action. A 4-bit mask: a fade means the server already cured that type, so the client
+    // skips its local prediction for it. Reset at the end of every update.
+    std::uint8_t faded_counter_spas_ = 0;
 
     // Items.
     enum class CursorOrigin : std::uint8_t { Unknown = 0, Inventory = 1, Server = 2 };
@@ -3727,6 +3753,10 @@ private:
     std::int32_t task_compass_last_slot_ = -1;           // +0x1590
     void update_task_compass();
     game::TextOverlay text_overlay_;
+    // The camera shake's rand() (0..32767), the CRT's global sequence as the compass uses it.
+    // Drawn only from offset(), which the render loop calls on the game thread (the same thread as the compass's
+    // draws), so the shared std::rand state is not raced.
+    game::CameraShake camera_shake_{[] { return std::rand() & game::kCameraShakeRandMax; }};
     bool aa_requested_ = false;
     std::uint32_t aa_buy_all_ = 0; // the rank a client-side "buy all ranks" is waiting on (0: none)
     mutable std::unique_ptr<game::mechanics::GameTables> tables_; // SkillCaps / BaseData, loaded when first needed
@@ -3873,6 +3903,12 @@ private:
     std::function<int(std::string_view, std::string_view, int)> char_ini_get_;
     std::function<void(std::string_view, std::string_view, const std::string&)> char_ini_put_;
     bool handle_name_change(const AppPacket& p);
+    // OP_GMLastName, OP_LevelAppearance (net/game_connection_rename.cpp).
+    bool handle_spawn_rename(const AppPacket& p);
+    void apply_gm_last_name(const GMLastName& r);
+    void apply_level_appearance(const LevelAppearance& r);
+    std::uint32_t find_spawn_by_name(std::string_view name) const; // 0 = none (GetSpawnByName @0x599b40)
+    std::vector<LevelEffectCue> level_effect_cues_;
     bool handle_group_search(const AppPacket& p);
     bool handle_marketplace(const AppPacket& p);
     void marketplace_build();                     // the constructor's tail (0x6e18eb): 0x5bd5, 0x5148, 0x76c3, 0x356f

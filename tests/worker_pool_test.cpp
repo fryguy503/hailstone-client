@@ -121,3 +121,39 @@ TEST_CASE("parallel_for runs inline without a registered pool and inside a worke
     CHECK(nested.load() == 8 * 16);
     hailstone::core::set_workers(nullptr);
 }
+
+TEST_CASE("parallel_for_nested covers every index from a task and from inside another loop") {
+    hailstone::core::set_workers(nullptr);
+    std::vector<int> v(50, 0);
+    hailstone::core::parallel_for_nested(v.size(), 4, [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) v[i] = 1;
+    });
+    CHECK(std::accumulate(v.begin(), v.end(), 0) == 50); // inline without a pool
+
+    for (unsigned workers : {0u, 1u, 3u}) {
+        WorkerPool pool(workers);
+        hailstone::core::set_workers(&pool);
+        // Inside a chunk of another loop (a renderer's draw in a recording lane): every chunk of each inner loop once.
+        std::vector<std::atomic<int>> hits(8 * 64);
+        hailstone::core::parallel_for(8, 1, [&](std::size_t outer_begin, std::size_t outer_end) {
+            for (std::size_t o = outer_begin; o < outer_end; ++o)
+                hailstone::core::parallel_for_nested(64, 2, [&](std::size_t begin, std::size_t end) {
+                    for (std::size_t i = begin; i < end; ++i) hits[o * 64 + i].fetch_add(1);
+                });
+        });
+        for (const auto& h : hits) CHECK(h.load() == 1);
+        // From a background task (the actor effects' step), and from a loop inside that.
+        std::atomic<int> sum{0};
+        auto task = pool.run([&] {
+            hailstone::core::parallel_for_nested(4, 1, [&](std::size_t outer_begin, std::size_t outer_end) {
+                for (std::size_t o = outer_begin; o < outer_end; ++o)
+                    hailstone::core::parallel_for_nested(100, 7, [&](std::size_t begin, std::size_t end) {
+                        sum.fetch_add(static_cast<int>(end - begin));
+                    });
+            });
+        });
+        task.wait();
+        CHECK(sum.load() == 400);
+        hailstone::core::set_workers(nullptr);
+    }
+}

@@ -271,8 +271,9 @@ TEST_CASE("Native chat tabs keep their identity, routing and flash settings acro
     const auto dir = scratch.path();
     const auto layout = dir / "UI.ini";
     fs::create_directories(dir / "game");
-    std::ofstream(layout) << "[ChatManager]\nNumWindows=1\nChatWindow1_LanguageId=0\n"
-                            "ChatWindow1_Name=Social\nChatWindow1_Dock=0\nChannelMap5=1\n";
+    const std::string original_layout = "[ChatManager]\nNumWindows=1\nChatWindow1_LanguageId=0\n"
+                                        "ChatWindow1_Name=Social\nChatWindow1_Dock=0\nChannelMap5=1\n";
+    std::ofstream(layout) << original_layout;
 
     std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> ctx(ImGui::CreateContext(), ImGui::DestroyContext);
     GameDir game(dir / "game");
@@ -285,6 +286,16 @@ TEST_CASE("Native chat tabs keep their identity, routing and flash settings acro
     host.chat = &view;
     app::UiApi api(host);
     api.load_layout({}, layout, {});
+    // The chat manager is a process-wide singleton, and this test moves the main window's tabs away. Put the layout it
+    // started from back when the test ends, also when a REQUIRE stops it early, or a later test in this process finds
+    // no Chat1. A separate file, since load_layout saves the current layout before it loads.
+    const auto restore = dir / "restore.ini";
+    std::ofstream(restore) << original_layout;
+    struct RestoreLayout {
+        app::UiApi& api;
+        fs::path file;
+        ~RestoreLayout() { api.load_layout({}, file, {}); }
+    } restore_layout{api, restore};
     std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
     lua_newtable(lua.get());
     api.register_functions(lua.get());

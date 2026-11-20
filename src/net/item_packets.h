@@ -485,6 +485,12 @@ std::optional<CoinReward> decode_quest_reward(const AppPacket& p);
 std::optional<CoinReward> decode_cash_reward(const AppPacket& p);
 
 inline constexpr std::uint8_t kItemTypeFood = 14, kItemTypeDrink = 15;
+// Item types 23..26: wind, stringed, brass and percussion instruments (ItemDefinition +0x1d4).
+inline constexpr std::uint8_t kItemTypeWindInstrument = 23, kItemTypeStringInstrument = 24,
+                              kItemTypeBrassInstrument = 25, kItemTypePercussionInstrument = 26;
+inline bool is_instrument_item_type(std::uint8_t item_type) {
+    return item_type >= kItemTypeWindInstrument && item_type <= kItemTypePercussionInstrument;
+}
 AppPacket encode_consume(const ItemSlot& slot, bool automatic, bool drink);
 // OP_Consume as Handle_OP_ItemVerifyReply @0x4bf800 sends it (a right click on food or drink): auto_consumed
 // 0xffffffff, type 1 food / 2 drink, and a last dword whose low byte is 1 (its upper bytes are stack left-overs in

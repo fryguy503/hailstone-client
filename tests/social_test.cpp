@@ -16,6 +16,7 @@
 #include "game/slash_commands.h"
 #include "game/guild_notes.h"
 #include "game/social.h"
+#include "game/world_state.h"
 #include "net/chat_server.h"
 #include "net/opcodes.h"
 #include "net/social_packets.h"
@@ -347,6 +348,55 @@ TEST_CASE("played and time texts") {
     CHECK(game::format_game_time(s, 3176, 3, 1, 13) == "Game Time: Sunday, March 1, 3176 - 12 PM");
     CHECK(game::format_game_time(s, 3176, 3, 28, 13) == "Game Time: Saturday, March 28, 3176 - 12 PM");
     CHECK(game::format_game_time(s, 3176, 3, 9, 13) == "Game Time: Monday, March 9, 3176 - 12 PM");
+}
+
+TEST_CASE("outgoing chat variables handle missing targets and pets and preserve literal text") {
+    const game::EqStrings strings;
+    auto expand = [&](std::string_view text, const game::Spawn* target = nullptr, const game::Spawn* pet = nullptr) {
+        return game::expand_chat_variables(text, strings, target, pet);
+    };
+    CHECK(expand("%T %M %S %O %P %R") == "Target Pet it it its Race");
+
+    game::Spawn npc;
+    npc.name = "#a_gnoll012";
+    npc.race = 39;
+    npc.gender = 3;
+    npc.is_npc = true;
+    game::Spawn pet;
+    pet.name = "#a_wolf007";
+    CHECK(expand("%t's pet is %m. %S thanked %O for %p help. %R.", &npc, &pet) ==
+          "a gnoll's pet is a wolf. it thanked it for its help. NPC.");
+    CHECK(expand("'%t' item%t 100% %X %%T %", &npc) == "'a gnoll' item%t 100% %X %%T %");
+    CHECK(expand("%S%S") == "itit");
+
+    game::Spawn corpse;
+    corpse.is_corpse = true;
+    CHECK(expand("%R", &corpse) == "Corpse");
+}
+
+TEST_CASE("outgoing chat variables follow DoPercentConvert's positions and limit") {
+    const game::EqStrings strings;
+    auto expand = [&](std::string_view text, const game::Spawn* target = nullptr, bool sending = true) {
+        return game::expand_chat_variables(text, strings, target, nullptr, sending);
+    };
+    // A code within the first two bytes, or after a space or an apostrophe.
+    CHECK(expand("a%t") == "aTarget");
+    CHECK(expand("ab%t") == "ab%t");
+    CHECK(expand("x %t, x'%t") == "x Target, x'Target");
+    // After a code the next search is measured from two bytes past it, so a code straight after a long expansion
+    // is not one.
+    game::Spawn npc;
+    npc.name = "#a_gnoll012";
+    npc.is_npc = true;
+    CHECK(expand("%T%S", &npc) == "a gnoll%S");
+    CHECK(expand("%T %S", &npc) == "a gnoll he");
+    // A '%' that is no code is "&PCT;" in sent text (sent as '%'), which moves the measure past it; a shown line
+    // leaves it, so the next '%' can be a code there.
+    CHECK(expand("%%t") == "%%t");
+    CHECK(expand("%%t", nullptr, false) == "%Target");
+    CHECK(expand("100%") == "100%");
+    // After eleven expansions every further code position gets '@'; a '%' elsewhere is left.
+    CHECK(expand("%O %O %O %O %O %O %O %O %O %O %O %O %X x%O") == "it it it it it it it it it it it @O @X x%O");
 }
 
 TEST_CASE("chat templates per channel (msg_new_text)") {

@@ -10,9 +10,9 @@ Copyright (C) 2026 gennro and the Hailstone contributors.
 
 ## What is not under the GPL
 
-- **The plugin SDK** (the [sdk/](sdk/) folder: `hailstone_plugin.h`, `hailstone_byte_io.h` and the older
-  `nmsc_*.h` names) is under the MIT licence in [sdk/LICENSE](sdk/LICENSE), so a plugin may include it whatever its
-  own licence.
+- **The plugin SDK** (the [sdk/](sdk/) folder: the `hailstone_*.h` headers, the older `nmsc_*.h` names and the
+  UI pack example in `sdk/ui/`) is under the MIT licence in [sdk/LICENSE](sdk/LICENSE), so a plugin may include it
+  whatever its own licence.
 - **Third-party code** bundled with or fetched by the build keeps its own licence, listed in
   [THIRD_PARTY.md](THIRD_PARTY.md).
 
@@ -25,8 +25,8 @@ Hailstone only through:
 
 - the plugin SDK in [sdk/](sdk/) (a compiled plugin built against `hailstone_plugin.h`, using the host functions,
   callbacks, top-level objects and packets it describes), or
-- the documented Lua interfaces (the `mq` module, the `eq.*` API and the UI pack files described in
-  [docs/plugins.md](docs/plugins.md) and [docs/dev-ui.md](docs/dev-ui.md)).
+- the documented Lua interfaces (the `mq` module, the `hs.*` API, also named `eq.*` as it was up to 0.7, and the UI
+  pack files described in [docs/plugins.md](docs/plugins.md) and [docs/dev-ui.md](docs/dev-ui.md)).
 
 An upscaler provider built against `hailstone_upscaler.h` is such an add-on, and the exception holds for it too
 when it loads a separately licensed runtime of its own (a graphics vendor's upscaler library) and ships that

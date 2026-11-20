@@ -66,7 +66,8 @@ void ClientApp::open_server_link(const std::string& url) {
     // through is not traced: docs/unknowns.md "OP_Weblink"), and no more than app/server_links.h lets through.
     // The tab is the player's (the original's CHtmlWnd is a browser the player uses), so it is not held to a
     // script's rules, but a server's link never opens this computer or the player's own network (a router's page),
-    // and its tab has a cookie folder of its own (WebService::open_server_link).
+    // neither here nor at any later navigation, redirect or request of its page (web::TabRules::ServerLink), and its
+    // tab has a cookie folder of its own (WebService::open_server_link).
     if (!web::url_allowed(url, {})) {
         log::warn("OP_Weblink: not an http(s) page, not opened: {}", url);
         return;

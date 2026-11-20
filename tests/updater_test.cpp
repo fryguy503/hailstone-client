@@ -18,6 +18,7 @@
 #include "core/update_manifest.h"
 #include "core/version.h"
 #include "core/zip_write.h"
+#include "platform/durable_file.h"
 #include "scratch_dir.h"
 
 using namespace hailstone;
@@ -631,6 +632,19 @@ TEST_CASE("update install: a cut-off install and a version that does not start a
         CHECK(get(inst / "hailstone") == "old");
         CHECK(get(inst / "shaders/a.spv") == "old a");
     }
+    SUBCASE("cut off between the hard link into previous/ and the rename over the old file") {
+        // Linux and macOS: previous/ holds a second name for the old file, which is still in place.
+        std::error_code ec;
+        fs::create_directories(inst / "update/previous", ec);
+        if (platform::link_file_synced(inst / "hailstone", inst / "update/previous/hailstone", ec)) {
+            put(inst / "update/journal.txt", "moved hailstone\n");
+            REQUIRE(write_file_atomic(inst / "update/state.txt", "installing 0.2.0 0.1.0\n"));
+            update_at_start(inst, "0.1.0");
+            update_at_start(inst, "0.1.0");
+            CHECK(get(inst / "hailstone") == "old");
+            CHECK_FALSE(fs::exists(inst / "update/previous"));
+        }
+    }
     SUBCASE("a torn or damaged journal moves no folder and nothing of the player's") {
         // The last line was cut off mid-name ("added ui" of "added ui/x.lua"): it names a move that never began.
         // The lines before it name a folder, the player's settings and a path outside the folder: none is acted on.
@@ -758,4 +772,14 @@ TEST_CASE("update: the retired files' table") {
     }
     test::ScratchDir dir("update_retire_table");
     CHECK(retire_old_release_files(dir.path()).empty());
+}
+
+// A box set's other windows run from the folder the first window updates: two updaters would download into the same
+// download/<file>.part, and one quitting first could install while its siblings run (docs/updater.md "Install").
+TEST_CASE("updater: a box set's other windows and test drives have no updater") {
+    CHECK(run_has_updates(0, false, false));
+    CHECK_FALSE(run_has_updates(0, false, true));
+    CHECK_FALSE(run_has_updates(120, false, false));
+    CHECK_FALSE(run_has_updates(0, true, false));
+    CHECK(std::string(kBoxChildArg) == "--box-child");
 }

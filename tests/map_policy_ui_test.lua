@@ -39,7 +39,8 @@ local function rig(pack)
   NpcWalk=function(id,token)return npcAction("NpcWalk",id,token)end,End=function()return act("End")end,
   MapLocation=function(...)return act("MapLocation",...)end}
  hs={UI={map=map,find=find,session={InGame=function()return true end,GameTime=function()return nil end},
-  windows={Shown=function()return s.shown end,Show=function(_,value)s.shown=value;return act("ShowWindow",value)end}}}
+  windows={Shown=function()return s.shown end,Show=function(_,value)s.shown=value;return act("ShowWindow",value)end,
+   ComboInfo=function()return{"Default"},0 end}}}
  hs.UI.Supports=function(module,member)return hs.UI[module]and type(hs.UI[module][member])=="function"or false end
  ui={Mouse={Left=0,Right=1},InputTextFlags={EnterReturnsTrue=1,AutoSelectAll=2}}
  ui.window=function(name,body)s.windows[name]=body end
@@ -51,6 +52,7 @@ local function rig(pack)
  ui.GetWindowPos=function()return 0,0 end
  ui.GetCursorScreenPos=function()return s.x,s.y end
  ui.SetCursorPos=function(x,y)s.x,s.y=x,y end
+ ui.SetCursorScreenPos=ui.SetCursorPos
  ui.GetContentRegionAvail=function()return 240,400 end
  ui.GetMousePos=function()return-100,-100 end
  ui.CalcTextSize=function(value)return #tostring(value)*7,14 end
@@ -62,6 +64,7 @@ local function rig(pack)
  ui.InvisibleButton=function(id)hit(id);return false end
  ui.Button=hit;ui.MenuItem=function(label)s.menuHits[label]=true;return s.menuClick==label end;ui.BeginMenu=function()return false end
  ui.BeginPopup=function(name)return s.popup==name end;ui.OpenPopup=function(name)s.popup=name end
+ ui.BeginCombo=function()draw();return false end
  ui.CloseCurrentPopup=function()s.popup=nil;s.popupClosed=true end
  ui.EndPopup=nop;ui.EndMenu=nop
  ui.BeginChild=function()draw();s.depth=s.depth+1;return true end

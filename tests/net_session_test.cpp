@@ -10,6 +10,8 @@
 #include <string_view>
 #include <thread>
 
+#include <zlib.h>
+
 #include "core/byte_io.h"
 #include "core/log.h"
 #include "manual_clock.h"
@@ -116,6 +118,29 @@ TEST_CASE("compression pass: 0x5a zlib when smaller, 0xa5 otherwise") {
     CHECK_FALSE(soe::decompress_body(b({0x11, 1, 2})));
 }
 
+TEST_CASE("compression pass: the reused deflater gives compress2's level 6 bytes, packet after packet") {
+    // compress_body keeps one deflater per thread; each body must come out exactly as a fresh compress2 would
+    // make it (the server inflates it as zlib data), whatever was compressed before it.
+    for (std::uint32_t seed = 1; seed <= 40; ++seed) {
+        Bytes body = noise(31 + seed * 37, seed);
+        for (std::size_t i = 0; i < body.size(); i += 3) body[i] = std::byte{'a'}; // compressible
+        uLongf len = compressBound(static_cast<uLong>(body.size()));
+        Bytes want(len);
+        REQUIRE(compress2(reinterpret_cast<Bytef*>(want.data()), &len, reinterpret_cast<const Bytef*>(body.data()),
+                          static_cast<uLong>(body.size()), 6) == Z_OK);
+        want.resize(len);
+        Bytes c = soe::compress_body(body);
+        if (len < body.size()) {
+            REQUIRE(at(c, 0) == 0x5a);
+            CHECK(Bytes(c.begin() + 1, c.end()) == want);
+        } else {
+            CHECK(at(c, 0) == 0xa5);
+        }
+        CHECK(soe::decompress_body(c) == body);
+        (void)soe::compress_body(noise(500, seed)); // an incompressible body between them
+    }
+}
+
 TEST_CASE("XOR pass round trip and full encode/decode with both passes") {
     Bytes data = noise(23, 9);
     Bytes x = data;
@@ -174,6 +199,21 @@ TEST_CASE("application opcodes: little-endian with a 0x00 escape when the low by
     CHECK(p->opcode == 0x0022);
     CHECK(p->data.empty());
     CHECK_FALSE(soe::decode_app(b({0x00, 0x05, 1})));
+}
+
+TEST_CASE("application opcodes: decoding from a buffer given up reads the same as from a span") {
+    for (const Bytes& wire : {b({0x00, 0x00, 0x01, 2}), b({0x22, 0x00}), b({0x09, 0x7a, 1, 2, 3}), b({0x00, 0x05, 1}),
+                              b({0x00}), b({}), b({0x00, 0x00})}) {
+        for (int opcode_bytes : {1, 2}) {
+            CAPTURE(opcode_bytes);
+            auto from_span = soe::decode_app(ByteSpan(wire), opcode_bytes);
+            auto from_buffer = soe::decode_app(Bytes(wire), opcode_bytes);
+            REQUIRE(from_span.has_value() == from_buffer.has_value());
+            if (!from_span) continue;
+            CHECK(from_span->opcode == from_buffer->opcode);
+            CHECK(from_span->data == from_buffer->data);
+        }
+    }
 }
 
 TEST_CASE("sequence comparison wraps at 16 bits") {

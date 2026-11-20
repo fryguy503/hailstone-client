@@ -228,6 +228,7 @@ void ClientApp::load_zone(const std::string& short_name) {
         sky_state_.set_sky(z->zone_short_name2.empty() ? z->zone_short_name : z->zone_short_name2);
         player_light_.reset();
         haze_blend_.reset();
+        emitter_view_proj_.reset(); // the last zone's view: every actor counts as in view until a frame is drawn
         camera_region_ = 0;
         // The classic sky (sky.s3d). The time-of-day light follows the
         // original's outdoor zone types 1, 2 and 5 (CDisplay_UpdateSunLighting).

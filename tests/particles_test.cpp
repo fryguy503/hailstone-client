@@ -8,6 +8,7 @@
 #include <limits>
 #include <numbers>
 #include <random>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -17,6 +18,7 @@
 #include "assets/spell_effects.h"
 #include "core/byte_io.h"
 #include "core/game_dir.h"
+#include "core/worker_pool.h"
 #include "game/particles.h"
 #include "game/spawn_heights.h"
 #include "render/particle_renderer.h"
@@ -764,4 +766,180 @@ TEST_CASE("SpellEffect_SpawnStageEmitters: an actor whose model is not known yet
     auto at12 = run(12);
     REQUIRE(at12.size() == 1);
     CHECK(at12[0].position == glm::vec3(1, 2, 3)); // no chest known: the spawn's place
+}
+
+TEST_CASE("the particle update draws the same particles on the worker threads as on one thread") {
+    // The ends and the motion are split over the workers; the attachments and the emission stay on the calling
+    // thread, so a seed draws the same particles however the work is split, from the main thread or from a task.
+    auto build = [] {
+        assets::EmitterDefinition spread = rising_flame(1.5f, 2.0f);
+        spread.shape = 5;
+        spread.shape_size = {1.0f, 0.0f, 0.0f};
+        spread.motion[3] = {0.5f, 1.5f, 0.0f};
+        spread.initial_count = 20;
+        game::ParticleSystem ps({assets::EmitterDefinition{}, rising_flame(2.0f, 1.0f), spread}, 7);
+        for (int i = 0; i < 40; ++i)
+            REQUIRE(ps.add_fixture(1 + static_cast<std::size_t>(i % 2),
+                                   glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(i), 0.0f, 0.0f))));
+        for (std::uint32_t actor = 1; actor <= 12; ++actor) {
+            game::SpellEmitterRequest r;
+            r.emitter = 2;
+            r.key = actor;
+            r.duration_ms = game::kActorEmitterDurationMs;
+            r.actor = actor;
+            r.bone_point = 0;
+            r.point_only = true;
+            r.persistent = true;
+            ps.create(r); // 0: its particles show past 600 s (EmitterCounts::length_ms), not that none was made
+        }
+        REQUIRE(ps.emitters().size() == 52);
+        return ps;
+    };
+    auto run = [](game::ParticleSystem& ps, std::thread::id caller, int& foreign) {
+        game::AttachmentFn attachment = [&](std::uint32_t actor, std::int32_t) {
+            if (std::this_thread::get_id() != caller) ++foreign;
+            game::EmitterAttachment at;
+            at.position = glm::vec3(0.0f, static_cast<float>(actor), 5.0f);
+            at.axes = glm::mat3(1.0f);
+            return std::optional<game::EmitterAttachment>(at);
+        };
+        for (int frame = 0; frame < 60; ++frame) {
+            ps.set_viewer(glm::vec3(0.0f, 0.0f, static_cast<float>(frame)));
+            ps.update(1.0f / 30.0f, attachment);
+        }
+    };
+    auto same = [](const game::ParticleSystem& a, const game::ParticleSystem& b) {
+        REQUIRE(a.emitters().size() == b.emitters().size());
+        std::size_t particles = 0;
+        for (std::size_t i = 0; i < a.emitters().size(); ++i) {
+            const auto& pa = a.emitters()[i].particles;
+            const auto& pb = b.emitters()[i].particles;
+            REQUIRE(pa.size() == pb.size());
+            for (std::size_t j = 0; j < pa.size(); ++j) {
+                CHECK(pa[j].position == pb[j].position);
+                CHECK(pa[j].color == pb[j].color);
+                CHECK(pa[j].size_factor == pb[j].size_factor);
+            }
+            particles += pa.size();
+        }
+        CHECK(particles > 1000u);
+    };
+
+    core::set_workers(nullptr);
+    game::ParticleSystem alone = build();
+    int foreign = 0;
+    run(alone, std::this_thread::get_id(), foreign);
+    CHECK(foreign == 0);
+
+    core::WorkerPool pool(3);
+    core::set_workers(&pool);
+    game::ParticleSystem split = build();
+    run(split, std::this_thread::get_id(), foreign);
+    CHECK(foreign == 0); // the attachments are asked on the calling thread only
+    same(alone, split);
+
+    // From a background task (the actor effects' step): its loops spread over the other workers too.
+    game::ParticleSystem tasked = build();
+    auto task = pool.run([&] { run(tasked, std::this_thread::get_id(), foreign); });
+    task.wait();
+    CHECK(foreign == 0);
+    same(alone, tasked);
+    core::set_workers(nullptr);
+}
+
+TEST_CASE("stop_keys and stop_actors take many emitters in one pass; set_held marks the attached ones") {
+    game::ParticleSystem ps({assets::EmitterDefinition{}, rising_flame(1.0f, 1.0f)});
+    for (std::uint32_t i = 1; i <= 6; ++i) {
+        game::SpellEmitterRequest r;
+        r.emitter = 1;
+        r.key = i;
+        r.duration_ms = 1000;
+        r.actor = i <= 4 ? 10 + (i % 2) : 0; // keys 1, 3 on actor 11; 2, 4 on actor 10; 5, 6 on none
+        REQUIRE(ps.create(r) > 0);
+    }
+    ps.set_held([](std::uint32_t actor) { return actor == 11; });
+    std::size_t held = 0;
+    for (const auto& e : ps.emitters()) held += e.held ? 1u : 0u;
+    CHECK(held == 2);
+    const std::vector<std::uint32_t> keys{2, 5};
+    ps.stop_keys(keys);
+    CHECK(ps.emitters().size() == 4);
+    const std::vector<std::uint32_t> actors{0, 11}; // 0 is no actor: the unattached ones stay
+    ps.stop_actors(actors);
+    REQUIRE(ps.emitters().size() == 2);
+    CHECK(ps.emitters()[0].key == 4);
+    CHECK(ps.emitters()[1].key == 6);
+}
+
+TEST_CASE("A held emitter keeps its actor's scale and alpha, and one held when made keeps its burst for the view") {
+    auto make = [](game::ParticleSystem& ps) {
+        game::SpellEmitterRequest r;
+        r.emitter = 1;
+        r.key = 1;
+        r.duration_ms = 60000;
+        r.actor = 11;
+        REQUIRE(ps.create(r) > 0);
+    };
+    {
+        assets::EmitterDefinition d = rising_flame(5.0f, 0.0f);
+        d.actor_scales_size = 1;
+        game::ParticleSystem ps({assets::EmitterDefinition{}, d});
+        make(ps);
+        int asked = 0;
+        auto attachment = [&](std::uint32_t, std::int32_t) {
+            ++asked;
+            game::EmitterAttachment a;
+            a.alpha = 0.5f;
+            a.actor_scale = 2.0f;
+            return std::optional<game::EmitterAttachment>(a);
+        };
+        ps.update(0.2f, attachment);
+        REQUIRE_FALSE(ps.emitters()[0].particles.empty());
+        const float size = ps.emitters()[0].particles[0].size_factor;
+        CHECK(ps.emitters()[0].particles[0].color.a == doctest::Approx(0.5f));
+        ps.set_held([](std::uint32_t actor) { return actor == 11; });
+        asked = 0;
+        ps.update(0.1f, attachment);
+        CHECK(asked == 0); // its pose is not asked for
+        CHECK(ps.emitters()[0].particles[0].color.a == doctest::Approx(0.5f));
+        CHECK(ps.emitters()[0].particles[0].size_factor == doctest::Approx(size));
+    }
+    {
+        assets::EmitterDefinition d = rising_flame(5.0f, 0.0f);
+        d.initial_count = 5;
+        d.per_tick = 1;
+        game::ParticleSystem ps({assets::EmitterDefinition{}, d});
+        make(ps);
+        ps.set_held([](std::uint32_t) { return true; });
+        for (int i = 0; i < 10; ++i) ps.update(0.1f, {}); // a second out of view: ten ticks
+        CHECK(ps.emitters()[0].particles.empty());
+        CHECK(ps.emitters()[0].emitted < 0);
+        ps.set_held([](std::uint32_t) { return false; });
+        ps.update(0.1f, {});
+        // The burst, and the ticks from now on, not the second's ten at once.
+        CHECK(ps.emitters()[0].particles.size() >= 5u);
+        CHECK(ps.emitters()[0].particles.size() <= 6u);
+    }
+}
+
+TEST_CASE("ParticleSystem::set_still from a span: the same emitter as from a vector, its list replaced in place") {
+    game::ParticleSystem ps({assets::EmitterDefinition{}, assets::EmitterDefinition{}});
+    std::vector<game::Particle> quads(3);
+    for (std::size_t i = 0; i < quads.size(); ++i) quads[i].position = glm::vec3(static_cast<float>(i), 0, 0);
+    ps.set_still(7, 0, std::span<const game::Particle>(quads));
+    REQUIRE(ps.emitters().size() == 1);
+    CHECK(ps.emitters()[0].still);
+    CHECK(ps.emitters()[0].key == 7);
+    REQUIRE(ps.emitters()[0].particles.size() == 3);
+    CHECK(ps.emitters()[0].particles[2].position.x == 2.0f);
+    // Set again (fewer, another definition): the same emitter, with the new list.
+    quads.resize(1);
+    quads[0].position.x = 9.0f;
+    ps.set_still(7, 1, std::span<const game::Particle>(quads));
+    REQUIRE(ps.emitters().size() == 1);
+    CHECK(ps.emitters()[0].definition == 1);
+    REQUIRE(ps.emitters()[0].particles.size() == 1);
+    CHECK(ps.emitters()[0].particles[0].position.x == 9.0f);
+    ps.set_still(8, 5, std::span<const game::Particle>(quads)); // a definition out of range: nothing
+    CHECK(ps.emitters().size() == 1);
 }

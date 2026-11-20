@@ -16,16 +16,12 @@
 #include <span>
 #include <string>
 
+#include "game/counter_spas.h"
+
 namespace hailstone::game {
 
 struct SpellData;
 struct BuffSlot;
-
-// The original's spell effect ids the counters count (0x75ef10's order).
-inline constexpr int kSpaDiseaseCounter = 35;
-inline constexpr int kSpaPoisonCounter = 36;
-inline constexpr int kSpaCurseCounter = 116;
-inline constexpr int kSpaCorruptionCounter = 369;
 
 // 0x75ef10 (CSpellDisplayManager): over the local player's effects holding the spell, for each of
 // the spell's 12 slots that is a counter effect, the slot's base value is added to `base` and the effect's slot

@@ -121,6 +121,7 @@ struct SpellData {
     std::int32_t req_association = 0;         // 211 (+0x1e8 SpellReqAssociationID: CastSpell asks the spell manager)
     bool can_cast_in_combat = true;            // 213
     bool can_cast_out_of_combat = true;        // 214
+    std::int32_t max_targets = 0;              // 218 (EQEmu aoe_max_targets: an AE's target cap, 0 none)
     std::int32_t spell_class = 0;              // 221 (+0x1e0)
     std::int32_t spell_subclass = 0;           // 222 (+0x1e4)
     float distance_mod_start_x = 0;            // 227 (+0x21c)
@@ -191,6 +192,15 @@ public:
 private:
     std::unordered_map<std::uint32_t, SpellData> spells_;
     std::unordered_map<std::uint32_t, std::uint32_t> crcs_;
+    // Built by parse from spells_, so find_by_name and by_group_and_rank do not scan the table (the merchant window
+    // asks per rank per scroll every frame). Ids, not pointers, so a copied table stays valid.
+    struct RankedId {
+        std::int32_t rank;
+        std::uint32_t id;
+    };
+    std::unordered_map<std::string, std::uint32_t> by_name_;               // lower-cased name -> lowest id
+    std::unordered_map<std::uint64_t, std::vector<RankedId>> by_group_;   // (group, subgroup) -> by rank, then id
+    void build_indices();
     std::uint32_t default_crc_ = 0;
     std::uint32_t file_crc_ = 0, assoc_file_crc_ = 0;
 };
@@ -199,7 +209,8 @@ private:
 enum TargetType : std::uint8_t {
     kTargetOptional = 1, kTargetAEClientV1 = 2, kTargetGroupTeleport = 3, kTargetAECaster = 4, kTargetSingle = 5,
     kTargetSelf = 6, kTargetAETarget = 8, kTargetAnimal = 9, kTargetUndead = 10, kTargetSummoned = 11,
-    kTargetTap = 13, kTargetPet = 14, kTargetCorpse = 15, kTargetGroup = 41,
+    kTargetTap = 13, kTargetPet = 14, kTargetCorpse = 15, kTargetAEClientV2 = 40, kTargetGroup = 41,
+    kTargetDirectional = 42,
 };
 
 // EQ_Spell_TargetTypeNeedsTarget @0x432500: the single-target types.
@@ -287,10 +298,10 @@ struct BuffSlot {
     std::uint32_t num_hits = 0;
     float modifier = 1.0f;           // bard instrument modifier (EQ_Affect +4)
     std::uint8_t effect_type = 2;    // EQ_Affect +0: 2 buff, 4 inverted
-    // EQ_Affect +0x28: the per-slot data (the counters left of a counter effect), OP_Buff's slot_data. EQEmu sends
-    // zeros there (rof2.cpp ENCODE(OP_Buff): "TODO: implement slot_data stuff"); the player profile's buffs carry
-    // none this client decodes.
+    // EQ_Affect +0x28: the per-slot data (including counters left). An all-zero array without known
+    // counters does not mean the buff has run out; zone-in lists and the profile do not seed this array.
     std::array<std::int32_t, 12> slot_data{};
+    bool counters_known = false;
     bool empty() const { return spell == kNoSpell || spell == 0; }
 };
 

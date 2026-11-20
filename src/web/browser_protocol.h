@@ -13,9 +13,11 @@
 #include <variant>
 #include <vector>
 
+#include "web/page_rules.h"
+
 namespace hailstone::web {
 
-inline constexpr std::uint32_t kProtocolVersion = 1;
+inline constexpr std::uint32_t kProtocolVersion = 2; // 2: Open carries the tab's rules (TabRules)
 // The largest message either side accepts: a 4K page's full frame is 33 MB. A larger paint (a 4096x4096 tab's is
 // just over 64 MiB) goes as several Frames (split_frame).
 inline constexpr std::size_t kMaxMessage = std::size_t{64} << 20;
@@ -37,8 +39,9 @@ struct Hello {
 struct Open {
     std::uint32_t tab = 0;
     std::uint16_t width = 0, height = 0;
-    // A script's or plugin's tab: the helper refuses navigations off `allow` (core/web_url.h; empty: any host).
-    bool restricted = false;
+    // The rules the helper holds the tab to at every navigation and request (web/page_rules.h): the player's, a
+    // server link's (no private hosts), or a script's or plugin's (on `allow`, core/web_url.h; empty: any host).
+    TabRules rules = TabRules::Player;
     std::vector<std::string> allow;
     std::string profile; // the cookie and cache folder (UTF-8 path)
     std::string url;

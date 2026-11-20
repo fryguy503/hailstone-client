@@ -47,36 +47,32 @@ local lastCount = 0
 
 ui.window("Game Menus", function()
   if not (API.session.UiReady or API.session.InGame)() then return end
-  local menus = API.menus.Game()
+  T.frame()
+  local rowH, separatorH = T.px(52), T.px(6)
+  menuStyle(true)
+  local menus = API.menus.Game(nil, T.px(320), rowH, separatorH)
   if #menus == 0 then
+    menuStyle(false)
     if shownBefore or lastCount ~= 0 or next(hovered) then hovered, shownBefore, lastCount = {}, false, 0 end
     return
   end
-  T.frame()
   T.resetFonts()
   local overAny = false
-  local rowH = T.px(52)
   for m, menu in ipairs(menus) do
-    -- the rows' width: the widest text at this size
-    T.frame()
-    local w = T.px(320)
-    local count = 0
-    for _, row in ipairs(menu.rows) do count = count + (row.separator and 0 or 1) end
-    ui.SetNextWindowPos(math.min(menu.x, T.W - w - T.px(10)), math.min(menu.y, T.H - count * (rowH + T.px(4)) - T.px(30)), ui.Cond.Always)
-    ui.SetNextWindowSize(w, 0, ui.Cond.Always)
+    local w = menu.w
+    ui.SetNextWindowPos(menu.x, menu.y, ui.Cond.Always)
+    ui.SetNextWindowSize(w, math.min(menu.h, T.H), ui.Cond.Always) -- long lists can still scroll
     local newest = m == #menus
     if newest and #menus ~= lastCount then ui.SetNextWindowFocus() end -- the newest menu has the focus (and the pad)
-    menuStyle(true)
     local name = "##gamemenu" .. m
-    if ui.Begin(name, nil, ui.WindowFlags.NoDecoration | ui.WindowFlags.NoMove | ui.WindowFlags.NoSavedSettings
-          | ui.WindowFlags.AlwaysAutoResize) then
+    if ui.Begin(name, nil, ui.WindowFlags.NoDecoration | ui.WindowFlags.NoMove | ui.WindowFlags.NoSavedSettings) then
       if newest and #menus ~= lastCount then pad.focus(name) end
       T.font(20)
       for r, row in ipairs(menu.rows) do
         if row.separator then
           local x0, y0 = ui.GetCursorScreenPos()
           ui.DrawLine(x0, y0 + T.px(3), x0 + w - T.px(20), y0 + T.px(3), C.ink[1], C.ink[2], C.ink[3], 0.1, 1)
-          ui.Dummy(w - T.px(20), T.px(6))
+          ui.Dummy(w - T.px(20), separatorH)
         else
           ui.PushID(r)
           local label = (row.check and "* " or "") .. row.text .. (row.submenu and "   >" or "")
@@ -86,6 +82,7 @@ ui.window("Game Menus", function()
             row.enabled and readable({ row.r or 1, row.g or 1, row.b or 1, 1 }, C.window, C.text) or C.faint, 0)
           if focused and row.submenu and hovered[m] ~= r then
             hovered[m] = r
+            for k = m + 1, #menus do hovered[k] = nil end
             API.menus.GameMenuHover(m, r - 1)
           end
           if clicked and row.enabled then API.menus.GameMenuClick(m, r - 1) end
@@ -97,8 +94,8 @@ ui.window("Game Menus", function()
       if newest and W.pressed("b") then API.menus.GameMenuClose() end
     end
     ui.End()
-    menuStyle(false)
   end
+  menuStyle(false)
   lastCount = #menus
   if shownBefore and not overAny and (ui.IsMouseClicked(ui.Mouse.Left) or ui.IsMouseClicked(ui.Mouse.Right)) then
     API.menus.GameMenuClose()

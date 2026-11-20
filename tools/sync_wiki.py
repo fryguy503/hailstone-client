@@ -85,7 +85,6 @@ PAGES = [
         ("docs/static-analysis.md", "Static-Analysis"),
         ("docs/wiki.md", "Wiki"),
         ("docs/research/external-resources.md", "Research-External-Resources"),
-        ("docs/research/plugin-v2-inventory.md", "Research-Plugin-v2-Inventory"),
         ("docs/research/shared-asset-memory.md", "Research-Shared-Asset-Memory"),
         ("docs/research/shared-gpu-memory.md", "Research-Shared-GPU-Memory"),
     ]),

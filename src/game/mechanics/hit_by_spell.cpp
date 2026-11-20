@@ -6,6 +6,7 @@
 #include "game/mechanics/hit_by_spell.h"
 
 #include "core/wrap_math.h"
+#include "game/counter_spas.h"
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -110,6 +111,57 @@ void slot_add(Affect* a, std::uint32_t index, std::int32_t v) {
     // The original does not range-check; HitBySpell's indexes are 0..11.
     a->slot_data[index % 12] = static_cast<std::int32_t>(static_cast<std::uint32_t>(a->slot_data[index % 12]) +
                                                          static_cast<std::uint32_t>(v));
+}
+
+// A cure spends against the remaining counter data of one buff: EQEmu keeps one pool per buff
+// (zone/spell_effects.cpp), so all the counter effects of that buff count towards the total, with the
+// cure's own type drained first. Like RoF2's HitBySpell, only the first matching buff is touched; any
+// surplus is lost rather than carried to a later buff.
+// A deliberate change to a RoF2 rule: HitBySpell @0x43e8c0 spends only the first counter slot of the first buff
+// GetPCSpellAffect @0x433fd0 finds and removes that buff itself (RemovePCAffectex) once the slot drops below 1.
+// Against EQEmu, whose OP_Buff carries no slot_data, that removed debuffs the server kept. The original rule stays
+// behind HitState::rof2_single_slot_cures (the recorded-vector replay).
+void cure_buff_counters(Character* self, HitQueries& q, std::int32_t spa, std::int32_t val,
+                        std::uint8_t faded_counter_spas) {
+    // EQEmu sends OP_Buff fade=1 for the cured buff before the cure's OP_Action, in the same network update. The
+    // slot it removed is already gone, so the first matching buff left in the client's list is a different one.
+    // Spending this cure against it would drain a debuff the server did not cure. When a buff of this counter type
+    // faded this update, the server has applied the cure: leave the remaining buffs' counters untouched.
+    const int index = counter_spa_index(spa);
+    if (index >= 0 && (faded_counter_spas & (1u << index)) != 0) return;
+    std::int64_t cure = -static_cast<std::int64_t>(val);
+    const auto slots = q.max_effects(self);
+    for (std::uint32_t slot = 0; slot < slots; ++slot) {
+        Affect* buff = q.get_effect(self, slot);
+        if (buff == nullptr || buff->type == 0) continue;
+        const Spell* other = q.spell_by_id(static_cast<std::uint32_t>(buff->spell_id));
+        if (other == nullptr) continue;
+        bool matches = false;
+        for (std::uint32_t i = 0; i < other->attrib.size(); ++i) {
+            if (!is_counter_spa(other->attrib[i])) continue;
+            if (other->attrib[i] == spa && other->base[i] > 0) matches = true;
+        }
+        if (!matches) continue;
+        // Counters from zone-in are unknown: leave removal to the server instead of emptying the icon.
+        if (!buff->counters_known) break;
+        // The server owns buff removal: EQEmu sends OP_Buff fade=1 before the cure's OP_Action, so by the time the
+        // client computes the cure the slot is normally gone already. A local remove here would only fire on a
+        // mispredicted over-cure (the client's counters are lower than the server's) and would then hide a buff
+        // the server kept. Spend the counters locally instead - the server sends slot_data as zeros - and leave
+        // the buff standing for the server's fade to clear. Every slot is capped at zero by the subtraction.
+        for (bool matching : {true, false}) {
+            for (std::uint32_t i = 0; i < other->attrib.size() && cure > 0; ++i) {
+                const auto effect = other->attrib[i];
+                if (!is_counter_spa(effect) || (effect == spa) != matching) continue;
+                const auto count = slot_get(buff, i);
+                if (count <= 0) continue;
+                const auto spent = static_cast<std::int32_t>(cure < count ? cure : count);
+                slot_set(buff, i, count - spent);
+                cure -= spent;
+            }
+        }
+        return;
+    }
 }
 
 // Vec3_Normalize @0x441bb0 on v; returns the length left on the x87 stack (or 0).
@@ -637,17 +689,21 @@ std::uint8_t hit_by_spell(HitState& state, const Hit& hit, const Launch* launch,
                 q.cur_mana();
                 break;
             }
-            case 35:
-            case 36:
-            case 116:
-            case 369: { // remove counters from a matching buff
+            case kSpaDiseaseCounter:
+            case kSpaPoisonCounter:
+            case kSpaCurseCounter:
+            case kSpaCorruptionCounter: { // remove counters from a matching buff
                 if (val >= 0) break;
-                std::int32_t counter = spell->attrib[index];
-                Affect* e = q.pc_spell_affect(counter);
+                if (!state.rof2_single_slot_cures) {
+                    cure_buff_counters(self, q, spa, val, state.faded_counter_spas);
+                    break;
+                }
+                // Original @0x43e8c0, for vector replay.
+                Affect* e = q.pc_spell_affect(spa);
                 if (e == nullptr) break;
                 const Spell* other = q.spell_by_id(static_cast<std::uint32_t>(e->spell_id));
                 if (other == nullptr) break;
-                std::uint8_t k = spell_affects(other, counter);
+                std::uint8_t k = spell_affects(other, spa);
                 if (k == 0) break;
                 --k;
                 q.calc_affect_change(other, e->level, k, caster, 1);
@@ -839,6 +895,7 @@ std::uint8_t hit_by_spell(HitState& state, const Hit& hit, const Launch* launch,
         if (affect != nullptr) {
             std::uint32_t modifier_used = kOne; // esp+0x18
             for (auto& v : affect->slot_data) v = 0; // EQ_Affect::FillSlotData(0)
+            affect->counters_known = true;
             q.set_buff_caster_id(static_cast<std::uint32_t>(slot), caster->spawn_id);
             if (launch->item_flag != 0 && (spell_affects(spell, 0) || spell_affects(spell, 0x64)))
                 affect->flags_24 |= 1u; // SetSlotBit(0)
@@ -982,15 +1039,19 @@ std::uint8_t hit_by_spell(HitState& state, const Hit& hit, const Launch* launch,
                 case 316:
                     q.update_visible_status();
                     break;
-                case 35:
-                case 36:
-                case 116:
-                case 369: { // counters
+                case kSpaDiseaseCounter:
+                case kSpaPoisonCounter:
+                case kSpaCurseCounter:
+                case kSpaCorruptionCounter: { // counters
                     if (val > 0) {
                         slot_set(affect, index, val);
                         break;
                     }
                     if (val == 0) break;
+                    if (!state.rof2_single_slot_cures) {
+                        cure_buff_counters(self, q, spa, val, state.faded_counter_spas);
+                        break;
+                    }
                     if (q.random_low_high(1, 100) > 10) break;
                     Affect* e = q.pc_spell_affect(spell->attrib[index]);
                     if (e == nullptr) break;

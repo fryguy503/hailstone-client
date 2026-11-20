@@ -1,8 +1,10 @@
 #include <doctest/doctest.h>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -85,6 +87,32 @@ TEST_CASE("WldFile bounds each fragment to its declared size") {
     CHECK_THROWS(wld::WldFile::parse(data));
 }
 
+TEST_CASE("WldFile caps its fragment count and a bitmap's name count, whatever bytes back them") {
+    // A header asking for more than kMaxFragments, with eight bytes behind each, is refused before anything is
+    // reserved.
+    {
+        ByteWriter w;
+        w.le(wld::kMagic);
+        w.le(wld::kVersionOld);
+        w.le(wld::kMaxFragments + 1);
+        w.zeros(16); // region count, max object bytes, string size 0, string count
+        w.zeros(std::size_t{wld::kMaxFragments + 1} * 8);
+        CHECK_THROWS_AS(wld::WldFile::parse(w.data()), std::runtime_error);
+    }
+    // A bitmap name fragment with room for 5000 empty names fails alone; the rest of the file still reads.
+    WldBuilder b;
+    ByteWriter many;
+    many.le(std::uint32_t{4999});
+    for (int i = 0; i < 5000; ++i) many.le(std::uint16_t{0});
+    b.add(kBitmapName, 0, many);
+    b.add(kBitmapName, 0, bitmap_name("ok.bmp"));
+    auto w = wld::WldFile::parse(b.build());
+    REQUIRE(w.fragments().size() == 2);
+    REQUIRE(w.errors().size() == 1);
+    CHECK(w.errors()[0].index == 0);
+    CHECK(w.fragments()[1].as<wld::BitmapName>().files == std::vector<std::string>{"ok.bmp"});
+}
+
 TEST_CASE("build_mesh resolves runs positionally across empty slots and groups them per material") {
     for (bool new_format : {false, true}) {
         CAPTURE(new_format);
@@ -119,6 +147,49 @@ TEST_CASE("build_mesh resolves runs positionally across empty slots and groups t
         CHECK(m.parts[1].material == 1);
         CHECK(m.parts[1].index_count == 6);
         CHECK(m.indices == std::vector<std::uint32_t>{1, 2, 3, 0, 1, 2, 0, 2, 3});
+    }
+}
+
+TEST_CASE("WldFile reads a 0x2C mesh as a MeshDef, its centre added, its polygons after the four unused words") {
+    auto w = wld::WldFile::parse(mesh_2c_wld());
+    REQUIRE(w.errors().empty());
+    const auto& frag = w.fragments().back();
+    CHECK(frag.type == kOldMeshDef);
+    const auto& def = frag.as<wld::MeshDef>();
+    CHECK(def.center == glm::vec3(0.0f, 0.0f, 1.0f));
+    CHECK(def.max_distance == 2.0f);
+    REQUIRE(def.positions.size() == 4);
+    CHECK(def.positions[1] == glm::vec3(1.0f, 0.0f, 1.0f));
+    CHECK(def.positions[3] == glm::vec3(-1.0f, 0.0f, 4.0f));
+    REQUIRE(def.polygons.size() == 3);
+    CHECK(def.polygons[1].v == std::array<std::uint16_t, 3>{1, 2, 3});
+    CHECK(def.polygons[1].flags == 0x4b);
+    CHECK((def.polygons[1].flags & wld::kPolygonPassable) == 0);
+    using Pair = std::array<std::uint16_t, 2>;
+    CHECK(def.vertex_pieces == std::vector<Pair>{{3, 1}, {1, 2}});
+    CHECK(def.render_groups == std::vector<Pair>{{2, 2}, {1, 0}});
+
+    // Drawn as a 0x36 is: the runs per slot, the empty middle slot unused, the float UVs as stored.
+    auto m = wld::build_mesh(w, def, frag.name);
+    REQUIRE(m.materials.size() == 2);
+    CHECK(m.materials[0].name == "BLADE_MDF");
+    CHECK(m.materials[1].name == "HILT_MDF");
+    CHECK(m.indices == std::vector<std::uint32_t>{0, 2, 3, 0, 1, 2, 1, 2, 3});
+    CHECK(m.vertices[2].uv == glm::vec2(1.0f, 7.5f));
+    CHECK(m.vertices[0].normal == glm::vec3(0.0f, 0.0f, 1.0f));
+    CHECK(m.vertices[0].color == 0x80332211u);
+
+    // Cut short anywhere up to the vertex groups (the last 8 bytes, not read), it is an error on that fragment, not
+    // a read past it.
+    auto body = mesh_2c(0).take();
+    for (std::size_t size = 0; size < body.size() - 8; size += 7) {
+        WldBuilder b;
+        ByteWriter cut;
+        cut.bytes(std::span<const std::byte>(body.data(), size));
+        b.add(kOldMeshDef, 0, cut);
+        auto short_w = wld::WldFile::parse(b.build());
+        CAPTURE(size);
+        CHECK(short_w.errors().size() == 1);
     }
 }
 

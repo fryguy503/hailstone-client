@@ -277,6 +277,7 @@ std::optional<SpellData> SpellTable::parse_line(std::string_view line) {
         s.bypass_regen_check = b(212);
         s.can_cast_in_combat = b(213);
         s.can_cast_out_of_combat = b(214);
+        s.max_targets = i32(218);
         s.spell_class = i32(221);
         s.spell_subclass = i32(222);
         s.distance_mod_start_x = to_float(f[227]);
@@ -325,7 +326,34 @@ std::size_t SpellTable::parse(std::string_view text) {
         spells_[s->id] = std::move(*s);
         ++count;
     }
+    build_indices();
     return count;
+}
+
+namespace {
+std::string lower_name(std::string_view name) {
+    std::string out(name);
+    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+std::uint64_t group_key(std::int32_t group, std::int32_t subgroup) {
+    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(group)) << 32) | static_cast<std::uint32_t>(subgroup);
+}
+} // namespace
+
+void SpellTable::build_indices() {
+    by_name_.clear();
+    by_group_.clear();
+    for (const auto& [id, s] : spells_) {
+        auto [it, added] = by_name_.try_emplace(lower_name(s.name), id);
+        if (!added && id < it->second) it->second = id;
+        if (s.spell_group > 0) by_group_[group_key(s.spell_group, s.spell_subgroup)].push_back({s.spell_rank, id});
+    }
+    for (auto& [key, ranked] : by_group_)
+        std::sort(ranked.begin(), ranked.end(), [](const RankedId& a, const RankedId& b) {
+            return a.rank != b.rank ? a.rank < b.rank : a.id < b.id;
+        });
 }
 
 bool spells_text_is_live_layout(std::string_view text) {
@@ -381,34 +409,26 @@ const SpellData* SpellTable::get(std::uint32_t id) const {
 }
 
 const SpellData* SpellTable::find_by_name(std::string_view name) const {
-    auto lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
-    const SpellData* best = nullptr;
-    for (const auto& [id, s] : spells_) {
-        if (s.name.size() != name.size() || (best && best->id < id)) continue;
-        bool same = true;
-        for (std::size_t i = 0; i < name.size() && same; ++i)
-            same = lower(static_cast<unsigned char>(s.name[i])) == lower(static_cast<unsigned char>(name[i]));
-        if (same) best = &s;
-    }
-    return best;
+    auto it = by_name_.find(lower_name(name));
+    return it == by_name_.end() ? nullptr : get(it->second);
 }
 
 const SpellData* SpellTable::by_group_and_rank(std::int32_t group, std::int32_t subgroup, std::int32_t rank,
                                                bool below) const {
     if (group <= 0) return nullptr;
-    const SpellData* exact = nullptr;
-    const SpellData* best = nullptr;
-    for (const auto& [id, s] : spells_) {
-        if (s.spell_group != group || s.spell_subgroup != subgroup) continue;
-        if (s.spell_rank == rank) {
-            if (!exact || exact->id < id) exact = &s;
-            continue;
-        }
-        if (((below && s.spell_rank < rank) || rank == -1) &&
-            (!best || best->spell_rank < s.spell_rank || (best->spell_rank == s.spell_rank && best->id < id)))
-            best = &s;
-    }
-    return exact ? exact : best;
+    auto it = by_group_.find(group_key(group, subgroup));
+    if (it == by_group_.end()) return nullptr;
+    const std::vector<RankedId>& ranked = it->second; // by rank, then id
+    const auto first_of = std::lower_bound(ranked.begin(), ranked.end(), rank,
+                                           [](const RankedId& r, std::int32_t v) { return r.rank < v; });
+    const auto past = std::upper_bound(ranked.begin(), ranked.end(), rank,
+                                       [](std::int32_t v, const RankedId& r) { return v < r.rank; });
+    // Of exactly `rank`, the highest id.
+    if (past != first_of) return get(std::prev(past)->id);
+    // Else the highest rank (then id): of all of them at -1 (none is -1 here), or of those below `rank`.
+    if (rank == -1) return get(ranked.back().id);
+    if (below && first_of != ranked.begin()) return get(std::prev(first_of)->id);
+    return nullptr;
 }
 
 bool target_type_needs_target(std::uint8_t t) {

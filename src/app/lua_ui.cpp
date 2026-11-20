@@ -66,6 +66,17 @@ namespace hailstone::app {
 void chat_layout_loaded(ui::UiIni& ini, UiHost& host, const std::filesystem::path& user_dir);
 void chat_host_gone(const UiHost& host, const ui::UiIni& ini);
 
+namespace {
+// map[key] on a map with a transparent comparator, without building a std::string key when it is already there (the
+// per-frame lookups that would otherwise allocate one each time).
+template <class Map, class Key>
+typename Map::mapped_type& map_entry(Map& map, const Key& key) {
+    auto it = map.find(key);
+    if (it == map.end()) it = map.emplace(std::string(key), typename Map::mapped_type{}).first;
+    return it->second;
+}
+} // namespace
+
 struct UiApi::Impl {
     UiHost& host;
     std::shared_ptr<void> callback_lifetime = std::make_shared<int>(0);
@@ -112,14 +123,19 @@ struct UiApi::Impl {
     CascadeMenu cascade; // the EQ button's menu (app/lua_ui_menu.h)
     // Each item slot's CInvSlotWnd cool-down (CButtonWnd +0x21c / +0x220), by where the Lua asked for the item.
     std::map<std::string, game::ButtonCoolDown, std::less<>> slot_cool_downs;
+    std::string cool_down_key; // set_item_cool_down's key, kept so formatting it allocates nothing once it has grown
 
     // CInvSlotWnd_Draw @0x69a080's recast cool-down for the slot `key` holding `item` (game::update_item_cool_down),
     // as the item table's `cooldown`: DrawCooldown's fraction (the shaded part runs from the slot's top + fraction x
     // its height down to its bottom), absent while idle. The table is at the top of the stack.
-    void set_item_cool_down(lua_State* L, std::string key, const net::Item* item) {
+    // The key is formatted only for an item that is there.
+    template <class... Args>
+    void set_item_cool_down(lua_State* L, const net::Item* item, std::format_string<Args...> key, Args&&... args) {
         if (!item || !host.conn) return;
+        cool_down_key.clear();
+        std::format_to(std::back_inserter(cool_down_key), key, std::forward<Args>(args)...);
         HostButtonQueries q(host);
-        game::ButtonCoolDown& cd = slot_cool_downs[key];
+        game::ButtonCoolDown& cd = map_entry(slot_cool_downs, cool_down_key);
         game::update_item_cool_down(cd, item_recast_of(*host.conn, item), q.now(), q.fast_now());
         if (auto f = cd.overlay_fraction(q.now())) {
             lua_pushnumber(L, *f);
@@ -148,7 +164,7 @@ struct UiApi::Impl {
             StockWindow* w = window(screen_name);
             if (!w) continue;
             bool shown = w->shown(host);
-            bool& was = tip_shown[screen_name];
+            bool& was = map_entry(tip_shown, std::string_view(screen_name));
             if (shown && !was) {
                 if (tip == -100) {
                     // CActionsWnd::OnShow @0x614a20 (0x614510 on the tab box's page): the Abilities page 4,
@@ -603,7 +619,7 @@ int Item(lua_State* L) {
     if (!slot_args(L, 1, slot, bag)) return push_item(L, nullptr);
     const net::Item* item = h.conn->inventory().at(net::ItemSlot::possessions(slot, bag));
     push_item(L, item);
-    Impl::of(L).set_item_cool_down(L, std::format("inv:{}:{}", slot, bag), item);
+    Impl::of(L).set_item_cool_down(L, item, "inv:{}:{}", slot, bag);
     return 1;
 }
 
@@ -1689,7 +1705,7 @@ int SlotItem(lua_State* L) {
     StockWindow* w = m.window(name);
     const net::Item* item = w ? w->slot_item(m.host, child) : nullptr;
     push_item(L, item);
-    m.set_item_cool_down(L, std::format("win:{}:{}", name, child), item);
+    m.set_item_cool_down(L, item, "win:{}:{}", name, child);
     return 1;
 }
 
@@ -2098,7 +2114,7 @@ int BagSlotItem(lua_State* L) {
     StockWindow* w = m.window(name);
     const net::Item* item = w ? w->bag_item(m.host, index) : nullptr;
     push_item(L, item);
-    m.set_item_cool_down(L, std::format("bag:{}:{}", name, index), item);
+    m.set_item_cool_down(L, item, "bag:{}:{}", name, index);
     return 1;
 }
 
@@ -2472,7 +2488,7 @@ int SetSlider(lua_State* L) {
 // DrawQuantity writes a stack's count in a dark box at its bottom right.
 int CursorAttachment(lua_State* L) {
     auto& m = Impl::of(L);
-    m.replaced_at["CursorAttachment"] = m.frame;
+    map_entry(m.replaced_at, std::string_view("CursorAttachment")) = m.frame;
     const net::Item* held = m.host.conn && m.host.in_game ? m.host.conn->inventory().cursor() : nullptr;
     auto icon = held && m.host.textures ? m.host.textures->item_icon(held->icon) : std::nullopt;
     const game::HotButton* button = !held && m.host.in_game && m.host.cursor_button ? &*m.host.cursor_button : nullptr;
@@ -2631,42 +2647,69 @@ int CascadeClose(lua_State* L) {
     return 0;
 }
 
-// menus = hs.GameMenus([scale])   -- the open context menus: { x, y, w, h, rows = { { text, r, g, b, check,
-// enabled, separator, submenu } } } (UiHost::menus; sized for EQ font 2 at `scale`, 1 by default, 0.5..3, as
-// menus.lua draws them: a pack that zooms its menus draws the font at that scale)
+// menus = hs.GameMenus([scale [, width [, row_height [, separator_height]]]])   -- { x, y, w, h, rows }
+// Rows have text, r, g, b, check, enabled, separator and submenu. The default sizes use EQ font 2 at `scale`
+// (1 by default, 0.5..3). Fixed dimensions are in pixels. Width includes padding. Row heights exclude spacing.
 int GameMenus(lua_State* L) {
     auto& m = Impl::of(L);
     const float scale = std::clamp(static_cast<float>(luaL_optnumber(L, 1, 1.0)), 0.5f, 3.0f);
-    lua_newtable(L);
     ImFont* font = ui::ui_font(2);
-    float fs = (font ? font->FontSize : ImGui::GetFontSize()) * scale;
+    const float fs = (font ? font->FontSize : ImGui::GetFontSize()) * scale;
+    const float width = static_cast<float>(luaL_optnumber(L, 2, 0.0));
+    const float row_height = static_cast<float>(luaL_optnumber(L, 3, fs));
+    const float separator_height = static_cast<float>(luaL_optnumber(L, 4, 1.0));
     const ImGuiStyle& st = ImGui::GetStyle();
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const auto& menus = m.host.menus;
+    float parent_left = 0.0f, parent_right = 0.0f, opener_y = 0.0f;
+    bool opens_left = false;
+    lua_newtable(L);
     int n = 0;
-    for (auto& menu : m.host.menus) {
-        float w = 0, y = st.WindowPadding.y;
-        menu.row_y.clear();
+    for (const auto& menu : menus) {
+        const std::size_t next = static_cast<std::size_t>(n) + 1;
+        const std::size_t child_row = next < menus.size() ? menus[next].parent_row : menu.rows.size();
+        std::size_t row = 0;
+        float text_width = 0.0f, content_bottom = st.WindowPadding.y, child_offset = 0.0f;
         for (const auto& r : menu.rows) {
-            menu.row_y.push_back(y);
+            if (row++ == child_row) child_offset = content_bottom;
             if (r.separator) {
-                y += st.ItemSpacing.y + 1;
+                content_bottom += separator_height + st.ItemSpacing.y;
                 continue;
             }
-            float tw = font ? font->CalcTextSizeA(fs, FLT_MAX, 0.0f, r.text.c_str()).x : ImGui::CalcTextSize(r.text.c_str()).x * scale;
-            w = std::max(w, tw);
-            y += fs + st.ItemSpacing.y;
+            if (width <= 0.0f) {
+                const float tw = font ? font->CalcTextSizeA(fs, FLT_MAX, 0.0f, r.text.c_str()).x
+                                      : ImGui::CalcTextSize(r.text.c_str()).x * scale;
+                text_width = std::max(text_width, tw);
+            }
+            content_bottom += row_height + st.ItemSpacing.y;
         }
-        menu.w = w + fs * 3.0f + st.WindowPadding.x * 2; // the check and the submenu arrow beside the text
-        menu.h = y + st.WindowPadding.y;
-        // kept on the screen (CContextMenuManager::PopupMenu moves a menu that would leave it)
-        ImVec2 ds = ImGui::GetIO().DisplaySize;
-        if (ds.x > 0 && menu.x + menu.w > ds.x) menu.x = std::max(0.0f, ds.x - menu.w);
-        if (ds.y > 0 && menu.y + menu.h > ds.y) menu.y = std::max(0.0f, ds.y - menu.h);
+        // Leave room for the check and the submenu arrow beside the text.
+        const float w = width > 0.0f ? width : std::max(40.0f, text_width + fs * 3.0f + st.WindowPadding.x * 2);
+        const float h = std::max(10.0f, content_bottom + st.WindowPadding.y);
+        float x = menu.x, y = menu.y;
+        if (n > 0) {
+            // Stay on the same side until the next menu needs more room. If neither side fits, use the larger gap.
+            if (ds.x > 0.0f) {
+                const float left = parent_left, right = ds.x - parent_right;
+                const float preferred = opens_left ? left : right;
+                const float opposite = opens_left ? right : left;
+                if (w > preferred && opposite > preferred) opens_left = !opens_left;
+            }
+            x = opens_left ? parent_left - w : parent_right;
+            y = opener_y;
+        }
+        // CContextMenuManager::PopupMenu moves a menu that would leave the screen.
+        if (ds.x > 0.0f) x = std::clamp(x, 0.0f, std::max(0.0f, ds.x - w));
+        if (ds.y > 0.0f) y = std::clamp(y, 0.0f, std::max(0.0f, ds.y - h));
+        parent_left = x;
+        parent_right = x + w;
+        opener_y = y + child_offset;
         lua_createtable(L, 0, 5);
         auto num = [&](const char* k, double v) {
             lua_pushnumber(L, v);
             lua_setfield(L, -2, k);
         };
-        num("x", menu.x), num("y", menu.y), num("w", menu.w), num("h", menu.h);
+        num("x", x), num("y", y), num("w", w), num("h", h);
         lua_createtable(L, static_cast<int>(menu.rows.size()), 0);
         int i = 0;
         for (const auto& r : menu.rows) {
@@ -2698,8 +2741,7 @@ void menu_hover(UiHost& h, std::size_t mi, std::size_t ri) {
     const auto& row = h.menus[mi].rows[ri];
     if (!row.submenu || !row.enabled) return;
     UiHost::GameMenu sub;
-    sub.x = h.menus[mi].x + h.menus[mi].w;
-    sub.y = h.menus[mi].y + (ri < h.menus[mi].row_y.size() ? h.menus[mi].row_y[ri] : 0.0f);
+    sub.parent_row = ri;
     sub.rows = row.submenu();
     h.menus.push_back(std::move(sub));
 }
@@ -2797,7 +2839,10 @@ int DebugScreens(lua_State* L) {
 
 } // namespace
 
-UiApi::UiApi(UiHost& host) : impl_(std::make_unique<Impl>(host)) {}
+UiApi::UiApi(UiHost& host) : impl_(std::make_unique<Impl>(host)) {
+    // The open bags live in a process-wide table (lua_ui_items.cpp): a new UiApi must not inherit the last one's.
+    reset_containers();
+}
 UiApi::~UiApi() {
     UiHost& h = impl_->host;
     chat_host_gone(h, impl_->layout);
@@ -3033,12 +3078,7 @@ bool UiHost::context_menus() const {
 bool UiApi::menu_click(int menu, int row) {
     impl_->lists_changed();
     if (menu < 0 || row < 0) return false;
-    auto& h = impl_->host;
-    if (static_cast<std::size_t>(menu) < h.menus.size() && h.menus[static_cast<std::size_t>(menu)].row_y.empty()) {
-        // not drawn yet: the rows' places as GameMenus lays them out are unknown; submenus open at the menu's top
-        h.menus[static_cast<std::size_t>(menu)].row_y.assign(h.menus[static_cast<std::size_t>(menu)].rows.size(), 0.0f);
-    }
-    return menu_choose(h, static_cast<std::size_t>(menu), static_cast<std::size_t>(row));
+    return menu_choose(impl_->host, static_cast<std::size_t>(menu), static_cast<std::size_t>(row));
 }
 
 bool UiApi::activate_tip(int tip) {
@@ -3119,6 +3159,7 @@ bool UiApi::open_player_menu(std::uint32_t spawn_id, float x, float y) {
 void UiApi::open_all_bags() { app::open_all_bags(impl_->host); }
 void UiApi::close_all_bags() { app::close_all_bags(impl_->host); }
 void UiApi::toggle_all_bags() { app::toggle_all_bags(impl_->host); }
+void UiApi::reset_bags() { reset_containers(); }
 void UiApi::toggle_all_bank_bags() { app::toggle_all_bank_bags(impl_->host); }
 
 void register_chat_api(lua_State* L, UiHost& host); // app/lua_ui_chat.cpp

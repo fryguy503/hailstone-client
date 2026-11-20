@@ -9,6 +9,8 @@
 // both, an OP_Animation action on both or on the upper body alone.
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "assets/character.h"
 
@@ -41,6 +43,9 @@ struct GroupTrack {
     bool completed() const;
     // CBoneGroup::SyncToBoneGroup @0x1003f660: the same animation as `other` takes its position.
     void sync_to(const GroupTrack& other);
+    // The clip at the end of its playback, as if it had played through: no cross-fade left and nothing to complete.
+    // Reversed, that is the first source frame; at rate 0 it stays incomplete (completed() is false).
+    void finish();
     // The clip time to sample (reversed clips run from their end).
     float shown_time() const;
     float shown_previous_time() const;
@@ -57,6 +62,9 @@ struct LayerRequest {
     float blend_ms = 100.0f; // the cross-fade into it (classic models: 100 ms)
     bool new_style = false;  // the new-style animation object (0x58afa0) rather than the classic one
     bool corpse = false;     // dead: the base clip on the whole body, any action dropped
+    // The corpse clip starts at its last frame: the spawn was already dead when this state first drew it (a fresh
+    // state after a zone change, or one that came into view dead), so the death is not played again.
+    bool corpse_at_end = false;
     bool mounted = false;    // a rider
     bool humanoid = false;   // PlayerBase::HasProperty(1): body type 1
     float speed_run = 0.0f;  // +0x7c
@@ -92,6 +100,13 @@ struct PoseInput {
 void pose_actor(const assets::CharacterModel& model, const PoseInput& in, std::vector<assets::BonePose>& local,
                 std::vector<assets::BonePose>& previous, std::vector<glm::mat4>& world);
 
+// /debug_animinfo's readout of one actor's pose (Hailstone's debugging aid, not the original's), a line each: the
+// model and its clip donor; what each bone group plays, by the clip's code in `model` ("?" for a clip the model does
+// not hold), with its time and cross-fade; and the bones the pose leaves at their rest rotation and translation (the
+// points left out, which most clips do not animate). A bone at rest in a clip that moves the body is where a clip
+// lent nothing for it.
+std::vector<std::string> describe_pose(const assets::CharacterModel& model, const PoseInput& in);
+
 struct ActorLayers {
     GroupTrack group[2]; // game::kUpperBones, game::kLowerBones
     const assets::AnimationClip* action = nullptr; // the OP_Animation action playing on the upper body
@@ -105,6 +120,8 @@ struct ActorLayers {
     std::uint8_t follow_up = 0x20;
     const assets::AnimationClip* follow_clip = nullptr;
     float follow_rate = 1.0f;
+    // The last step was a corpse request and its clip has played through: a changed clip then shows its end too.
+    bool corpse_settled = false;
 
     // An action starts (0x4b15b0 / 0x58afa0 for an OP_Animation): on the upper body alone or on both
     // groups (game/anim_layers.h). `requested` is the number the packet asked for (0x4b0900's first argument);

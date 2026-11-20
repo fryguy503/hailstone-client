@@ -29,15 +29,35 @@ local function value(key, v)
   return tostring(v)
 end
 
-local function signed(key, d)
+-- A change's amount with its sign: "+50", "-2", "+10%", "+0.42".
+function M.signed(key, d)
   local s = key == "weaponRatio" and string.format("%.2f", math.abs(d) / 100) or tostring(math.abs(d))
   if key == "haste" then s = s .. "%" end
   return (d > 0 and "+" or "-") .. s
 end
 
+-- The kind a change is drawn in: "good" or "bad" when it counts for the class, else "muted".
+function M.kind(ch)
+  if ch.weight == 0 then return "muted" end
+  return ch.delta > 0 and "good" or "bad"
+end
+
 -- "+50 HP (1200 to 1250)"
 function M.change(c)
-  return string.format("%s %s (%s to %s)", signed(c.key, c.delta), c.name, value(c.key, c.before), value(c.key, c.after))
+  return string.format("%s %s (%s to %s)", M.signed(c.key, c.delta), c.name, value(c.key, c.before), value(c.key, c.after))
+end
+
+-- "+50 HP"
+function M.short(c)
+  return M.signed(c.key, c.delta) .. " " .. c.name
+end
+
+-- A slot's changes by their key (hs.Compare*'s keys: "hp", "str", "svFire", ...): for a window that shows each
+-- beside the item's own value.
+function M.byKey(slot)
+  local out = {}
+  if slot then for _, ch in ipairs(slot.changes) do out[ch.key] = ch end end
+  return out
 end
 
 -- The changes in the order to show them: those that count for the class first, the biggest weighted change first,
@@ -64,38 +84,72 @@ local function joinNames(names)
   return table.concat(shown, " and ")
 end
 
--- The lines for c.slots[index or 1]. opts: verdict (show the verdict line), full (every change, not M.MAX_CHANGES).
-function M.lines(c, index, opts)
+-- The pieces of c.slots[index or 1]'s comparison, for a pack to lay out as it likes:
+--   cantUse: "Can't use: ..." or nil; slot: the slot's table, nil when the item fits none you can wear
+--   heading: "Compared with your X (Slot)" (or the empty slot); against: "your X (Slot)" (the short form)
+--   verdict: { text, kind } or nil (an item you cannot use has none)
+--   changes: the changes to list, M.ordered, without those whose key is in opts.skip (shown elsewhere), at most
+--     M.MAX_CHANGES unless opts.full; more: how many more there were; none: true when nothing changes at all
+--   extra: the weapon, gains, losses and notes as { text, kind }
+function M.parts(c, index, opts)
   opts = opts or {}
-  local out = {}
-  local function add(text, kind) out[#out + 1] = { text, kind } end
-  if not c.usable then add("Can't use: " .. c.whyNot, "bad") end
+  local p = { changes = {}, more = 0, extra = {} }
+  if not c.usable then p.cantUse = "Can't use: " .. c.whyNot end
   local s = c.slots[index or 1]
+  p.slot = s
   if not s then
-    add("It does not fit a slot you can wear", "muted")
-    return out
+    p.heading = "It does not fit a slot you can wear"
+    for _, n in ipairs(c.notes) do p.extra[#p.extra + 1] = { n, "muted" } end
+    return p
   end
   local names = joinNames(s.current)
-  if names == "" then add("Compared with your empty " .. s.slotName .. " slot", "muted")
-  else add("Compared with your " .. names .. " (" .. s.slotName .. ")", "muted") end
-  if opts.verdict and s.verdict ~= "cantuse" then add(M.verdict(s)) end
-  local changes = M.ordered(s.changes)
-  local shown = opts.full and #changes or math.min(#changes, M.MAX_CHANGES)
-  for i = 1, shown do
-    local ch = changes[i]
-    add(M.change(ch), ch.weight == 0 and "muted" or ch.delta > 0 and "good" or "bad")
+  if names == "" then
+    p.heading = "Compared with your empty " .. s.slotName .. " slot"
+    p.against = "your empty " .. s.slotName .. " slot"
+  else
+    p.heading = "Compared with your " .. names .. " (" .. s.slotName .. ")"
+    p.against = "your " .. names .. " (" .. s.slotName .. ")"
   end
-  if shown < #changes then add(string.format("... and %d more", #changes - shown), "muted") end
-  if #changes == 0 then add("No change to your stats", "muted") end
+  if s.verdict ~= "cantuse" then p.verdict = { M.verdict(s) } end
+  local skip = opts.skip
+  local list = {}
+  for _, ch in ipairs(M.ordered(s.changes)) do
+    if not (skip and skip[ch.key]) then list[#list + 1] = ch end
+  end
+  local shown = opts.full and #list or math.min(#list, M.MAX_CHANGES)
+  for i = 1, shown do p.changes[i] = list[i] end
+  p.more = #list - shown
+  p.none = #s.changes == 0
   local wa, wb = s.weaponAfter, s.weaponBefore
   if wa then
     local text = string.format("Weapon %d dmg / %d delay", wa.damage, wa.delay)
     if wb then text = text .. string.format(" (now %d / %d)", wb.damage, wb.delay) end
-    add(text, "text")
+    p.extra[#p.extra + 1] = { text, "text" }
   end
-  for _, g in ipairs(s.gained) do add("Gains " .. g, "good") end
-  for _, l in ipairs(s.lost) do add("Loses " .. l, "bad") end
-  for _, n in ipairs(c.notes) do add(n, "muted") end
+  for _, g in ipairs(s.gained) do p.extra[#p.extra + 1] = { "Gains " .. g, "good" } end
+  for _, l in ipairs(s.lost) do p.extra[#p.extra + 1] = { "Loses " .. l, "bad" } end
+  for _, n in ipairs(c.notes) do p.extra[#p.extra + 1] = { n, "muted" } end
+  return p
+end
+
+-- The lines for c.slots[index or 1], as { text, kind }. opts: verdict (show the verdict line), full (every change,
+-- not M.MAX_CHANGES), skip (keys not to list), short (a change as "+50 HP", not with its before and after).
+function M.lines(c, index, opts)
+  opts = opts or {}
+  local p = M.parts(c, index, opts)
+  local out = {}
+  local function add(text, kind) out[#out + 1] = { text, kind } end
+  if p.cantUse then add(p.cantUse, "bad") end
+  add(p.heading, "muted")
+  if not p.slot then
+    for _, e in ipairs(p.extra) do add(e[1], e[2]) end
+    return out
+  end
+  if opts.verdict and p.verdict then add(p.verdict[1], p.verdict[2]) end
+  for _, ch in ipairs(p.changes) do add(opts.short and M.short(ch) or M.change(ch), M.kind(ch)) end
+  if p.more > 0 then add(string.format("... and %d more", p.more), "muted") end
+  if p.none then add("No change to your stats", "muted") end
+  for _, e in ipairs(p.extra) do add(e[1], e[2]) end
   return out
 end
 

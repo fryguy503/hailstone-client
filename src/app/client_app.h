@@ -65,6 +65,7 @@ struct ClientOptions {
     // and what update_at_start found (a rolled-back update), for the login screen.
     bool updates = false;
     std::string update_note;
+    bool box_child = false; // started by a box set's first window (app/updater.h kBoxChildArg): no updates here
 };
 
 // The playable client: login, server and character select, then the zone. options.auto_password is wiped once the

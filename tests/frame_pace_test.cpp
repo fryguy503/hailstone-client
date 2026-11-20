@@ -166,3 +166,15 @@ TEST_CASE("Frame pace: the light-screen cap holds through the deadline schedule 
     // Only the lower bound: how late a busy machine wakes is not this test's business.
     CHECK(std::chrono::steady_clock::now() - start >= kFrames * period);
 }
+
+TEST_CASE("Frame pace: a minimised window runs at the background tick whatever the settings") {
+    // The defaults (max_fps 0, background_fps 0) would be unlimited; minimised they are held at 10.
+    CHECK(app::frame_pace(0, 0, false, milliseconds(0), false, true).cap == app::kBackgroundTickHz);
+    CHECK(app::frame_pace(0, 0, true, milliseconds(0), false, true).cap == app::kBackgroundTickHz);
+    CHECK(app::frame_pace(0, 1000, false, milliseconds(0), false, true).cap == app::kBackgroundTickHz);
+    CHECK(app::frame_pace(240, 144, false, milliseconds(0), true, true).cap == app::kBackgroundTickHz);
+    CHECK(app::frame_pace(0, app::kBackgroundNoDraw, false, milliseconds(0), false, true).cap ==
+          app::kBackgroundTickHz);
+    // Not minimised: unchanged.
+    CHECK(app::frame_pace(0, 0, false, milliseconds(0), false, false).cap == 0);
+}

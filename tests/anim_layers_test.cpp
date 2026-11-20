@@ -13,6 +13,7 @@
 #include "game/world_state.h"
 #include "render/actor_layers.h"
 #include "render/actor_renderer.h"
+#include "render/corpse_pose.h"
 
 using namespace hailstone;
 using namespace hailstone::game;
@@ -131,6 +132,8 @@ assets::AnimationClip clip(std::uint32_t frames) {
     c.frame_ms = kFrameMs;
     return c;
 }
+
+constexpr std::uint8_t anim(AnimationType a) { return static_cast<std::uint8_t>(a); }
 } // namespace
 
 TEST_CASE("classic: an attack while running plays over the legs") {
@@ -658,6 +661,49 @@ TEST_CASE("a played-out one-shot's blend holds its last frame in the pose") {
     CHECK(local[0].translation.z == doctest::Approx(kHalfPoseZ));
 }
 
+TEST_CASE("describe_pose names the clips and the bones a clip leaves at rest") {
+    assets::CharacterModel model;
+    model.code = "TST";
+    model.source = "test.s3d:test.wld";
+    model.animation_donor = "ELF";
+    model.bone_names = {"TST_TRACK", "TSTBI_L_TRACK", "TSTBI_R_TRACK", "TSTL_POINT_TRACK"};
+    model.parents = {-1, 0, 0, 1};
+    model.order = {0, 1, 2, 3};
+    const assets::BonePose rest;
+    assets::BonePose raised;
+    raised.rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    assets::AnimationClip rest_clip;
+    rest_clip.frame_count = 1;
+    for (int b = 0; b < 4; ++b) rest_clip.tracks.push_back(assets::AnimationTrack{rest});
+    // The right arm moves; the left arm and the point keep their rest frames.
+    assets::AnimationClip stand;
+    stand.frame_count = 1;
+    stand.frame_ms = kFrameMs;
+    stand.borrowed = true;
+    stand.tracks = {assets::AnimationTrack{rest}, assets::AnimationTrack{rest}, assets::AnimationTrack{raised},
+                    assets::AnimationTrack{rest}};
+    model.clips.emplace("", std::move(rest_clip));
+    model.clips.emplace("P01", std::move(stand));
+
+    render::PoseInput in;
+    in.clip = &model.clips.at("P01");
+    auto lines = render::describe_pose(model, in);
+    REQUIRE(lines.size() == 3);
+    CHECK(lines[0] == "model TST from test.s3d:test.wld, clips lent by ELF");
+    CHECK(lines[1].starts_with("whole body: P01 (lent) at 0.00"));
+    CHECK(lines[2] == "bones at rest: BI_L"); // not the root, not the point
+
+    // A clip the model does not hold, on the upper body alone.
+    assets::AnimationClip foreign = model.clips.at("P01");
+    std::vector<std::uint8_t> groups = {game::kLowerBones, game::kUpperBones, game::kUpperBones, game::kUpperBones};
+    in.upper_clip = &foreign;
+    in.bone_groups = &groups;
+    lines = render::describe_pose(model, in);
+    REQUIRE(lines.size() == 4);
+    CHECK(lines[1].starts_with("lower body: P01 (lent)"));
+    CHECK(lines[2].starts_with("upper body: ? at"));
+}
+
 TEST_CASE("bone_world blends a played-out one-shot's last frame") {
     // A one-shot whose last frame differs from its first; frame_count comes from the track.
     assets::AnimationClip one_shot;
@@ -711,6 +757,210 @@ TEST_CASE("split() sees a previous clip that only one group let loop") {
     l.group[kUpperBones].previous_loop = true;
     l.group[kLowerBones].previous_loop = false;
     CHECK(l.split());
+}
+
+TEST_CASE("GroupTrack::finish puts the clip at the end of its playback without a cross-fade") {
+    auto a = clip(10), b = clip(10);
+    render::GroupTrack g;
+    CHECK(g.start(&a, anim(AnimationType::Stand), 1.0f, true, false, 0.1f));
+    CHECK(g.start(&b, anim(AnimationType::Death), 1.0f, false, false, 0.1f));
+    REQUIRE(g.previous == &a);
+    g.finish();
+    CHECK(g.time == doctest::Approx(b.duration_seconds()));
+    CHECK(g.elapsed == doctest::Approx(b.duration_seconds()));
+    CHECK(g.blend == 1.0f);
+    CHECK(g.previous == nullptr);
+    CHECK(g.completed());
+    // Reversed, the end of playback is the first source frame.
+    g.start(&b, anim(AnimationType::Death), 1.0f, false, true, 0.0f, true);
+    g.finish();
+    CHECK(g.shown_time() == doctest::Approx(0.0f));
+    // A faster clip is through sooner; a stopped one never is.
+    g.start(&b, anim(AnimationType::Death), 2.0f, false, false, 0.0f, true);
+    g.finish();
+    CHECK(g.elapsed == doctest::Approx(b.duration_seconds() / 2.0f));
+    CHECK(g.completed());
+    g.start(&b, anim(AnimationType::Death), 0.0f, false, false, 0.0f, true);
+    g.finish();
+    CHECK_FALSE(g.completed());
+}
+
+TEST_CASE("spawn_dead: a corpse or a spawn lying down") {
+    CHECK(render::spawn_dead(true, game::kStandStanding));
+    CHECK(render::spawn_dead(false, game::kStandDead)); // feign death
+    CHECK_FALSE(render::spawn_dead(false, game::kStandStanding));
+}
+
+TEST_CASE("corpse_starts_at_end: only a spawn already dead when first drawn") {
+    // A fresh state that is dead (zone-in, coming into view, back from hiding): the end pose.
+    CHECK(render::corpse_starts_at_end(true, false, render::spawn_dead(true, game::kStandStanding)));
+    CHECK(render::corpse_starts_at_end(true, false, render::spawn_dead(false, game::kStandDead)));
+    // Drawn alive last frame: the fall plays, also when the model changes in the same frame.
+    CHECK_FALSE(render::corpse_starts_at_end(true, true, render::spawn_dead(true, game::kStandStanding)));
+    CHECK_FALSE(render::corpse_starts_at_end(false, true, render::spawn_dead(false, game::kStandDead)));
+    // A living spawn.
+    CHECK_FALSE(render::corpse_starts_at_end(true, false, render::spawn_dead(false, game::kStandStanding)));
+}
+
+TEST_CASE("a corpse first drawn dead is posed at the death clip's last frame") {
+    // A death clip whose first and last frame differ: the fall ends lying down.
+    assets::CharacterModel m;
+    m.code = "HUM";
+    m.bone_names = {"HUM_TRACK"};
+    m.parents = {-1};
+    m.order = {0};
+    assets::AnimationClip death;
+    death.frame_count = 2;
+    death.frame_ms = 100;
+    death.tracks.resize(1);
+    for (float x : {0.0f, 10.0f}) {
+        assets::BonePose p;
+        p.translation = glm::vec3(x, 0.0f, 0.0f);
+        death.tracks[0].push_back(p);
+    }
+    std::vector<assets::BonePose> first, last;
+    m.sample_local(death, 0.0f, false, first);
+    m.sample_local(death, death.duration_seconds(), false, last);
+    REQUIRE(first[0].translation.x != last[0].translation.x);
+
+    // The request prepare_spawns builds, from the same derivation.
+    auto request = [&](bool fresh, bool was_alive, bool is_corpse, std::uint8_t stand_state) {
+        LayerRequest req;
+        const bool dead = render::spawn_dead(is_corpse, stand_state);
+        render::corpse_request(req, death, render::corpse_starts_at_end(fresh, was_alive, dead));
+        return req;
+    };
+    auto posed_x = [&](const ActorLayers& l) {
+        std::vector<assets::BonePose> posed;
+        m.sample_local(*l.group[kLowerBones].clip, l.group[kLowerBones].shown_time(), l.group[kLowerBones].loop, posed);
+        return posed[0].translation.x;
+    };
+    // Before the clip could have played (0.01 s of its 0.2 s): the end pose already.
+    ActorLayers corpse;
+    corpse.step(request(true, false, true, game::kStandStanding), 0.01f);
+    CHECK(posed_x(corpse) == doctest::Approx(last[0].translation.x));
+    // Feign death (stand state 115) at zone-in: the same.
+    ActorLayers feigned;
+    feigned.step(request(true, false, false, game::kStandDead), 0.01f);
+    CHECK(posed_x(feigned) == doctest::Approx(last[0].translation.x));
+    // Drawn alive last frame, then dead (also with a model change): the fall starts at its first frame.
+    ActorLayers dying;
+    dying.step(request(true, true, true, game::kStandStanding), 0.01f);
+    CHECK(posed_x(dying) < last[0].translation.x);
+}
+
+TEST_CASE("a lying corpse takes a changed death clip at its end, not from the fall") {
+    auto death = clip(10), held = clip(10);
+    ActorLayers l;
+    LayerRequest req;
+    render::corpse_request(req, death, render::corpse_starts_at_end(true, false, true));
+    l.step(req, 0.1f);
+    REQUIRE(l.group[kLowerBones].completed());
+    // A changed appearance gives another death clip (a held variant): it shows its end at once.
+    render::corpse_request(req, held, false);
+    l.step(req, 0.1f);
+    CHECK(l.group[kLowerBones].clip == &held);
+    CHECK(l.group[kLowerBones].time == doctest::Approx(held.duration_seconds()));
+    CHECK(l.group[kLowerBones].completed());
+}
+
+TEST_CASE("a spawn that dies while drawn plays the death clip from its start") {
+    auto stand = clip(10), death = clip(10);
+    ActorLayers l;
+    LayerRequest req;
+    req.base = &stand;
+    req.base_anim = anim(AnimationType::Stand);
+    l.step(req, 0.1f);
+    // Drawn alive last frame, then dead: the derived flag is false, so the fall plays.
+    render::corpse_request(req, death,
+                           render::corpse_starts_at_end(false, true, render::spawn_dead(true, game::kStandStanding)));
+    l.step(req, 0.1f);
+    CHECK(l.group[kLowerBones].clip == &death);
+    CHECK(l.group[kLowerBones].time == doctest::Approx(0.1f));
+    CHECK_FALSE(l.group[kLowerBones].completed());
+}
+
+TEST_CASE("a hidden spawn's return is not a visible living -> dead transition") {
+    CHECK(render::drawn_alive_last_frame(true, false));        // drawn alive
+    CHECK_FALSE(render::drawn_alive_last_frame(true, true));   // hidden: its state was kept, not drawn
+    CHECK_FALSE(render::drawn_alive_last_frame(false, false)); // drawn dead
+    // Back from hiding, dead: the end pose; a visible model change while dying: the fall.
+    CHECK(render::corpse_starts_at_end(true, render::drawn_alive_last_frame(true, true), true));
+    CHECK_FALSE(render::corpse_starts_at_end(true, render::drawn_alive_last_frame(true, false), true));
+}
+
+TEST_CASE("standing up from a corpse cross-fades from its last frame") {
+    auto death = clip(10), stand = clip(10);
+    ActorLayers l;
+    LayerRequest req;
+    render::corpse_request(req, death, render::corpse_starts_at_end(true, false, true));
+    l.step(req, 0.1f);
+    REQUIRE(l.group[kLowerBones].clip == &death);
+    // The spawn stands up: the death clip is left as the one-shot it was.
+    req = LayerRequest{};
+    req.base = &stand;
+    req.base_anim = anim(AnimationType::Stand);
+    l.step(req, 0.01f);
+    CHECK(l.group[kLowerBones].clip == &stand);
+    CHECK(l.group[kLowerBones].previous == &death);
+    CHECK_FALSE(l.group[kLowerBones].previous_loop);
+}
+
+TEST_CASE("a corpse's shared P01 fallback fades out as the one-shot it became") {
+    auto p01 = clip(10), walk = clip(10);
+    ActorLayers l;
+    LayerRequest req;
+    req.base = &p01;
+    req.base_anim = anim(AnimationType::Stand);
+    l.step(req, 0.1f);
+    // A model without D05/D04 plays P01 as its death clip: the same clip, not restarted, but now played once.
+    render::corpse_request(req, p01, render::corpse_starts_at_end(false, true, true));
+    l.step(req, 0.1f);
+    CHECK(l.group[kLowerBones].clip == &p01);
+    CHECK_FALSE(l.group[kLowerBones].loop);
+    // A later clip change fades out of the death clip as the one-shot it was.
+    req = LayerRequest{};
+    req.base = &walk;
+    req.base_anim = anim(AnimationType::Walk);
+    l.step(req, 0.01f);
+    CHECK(l.group[kLowerBones].clip == &walk);
+    CHECK(l.group[kLowerBones].previous == &p01);
+    CHECK_FALSE(l.group[kLowerBones].previous_loop);
+}
+
+TEST_CASE("a cross-fade from a one-shot samples its last frame, not its start") {
+    assets::CharacterModel m;
+    m.code = "HUM";
+    m.bone_names = {"HUM_TRACK"};
+    m.parents = {-1};
+    m.order = {0};
+    auto one_bone = [](std::initializer_list<float> xs) {
+        assets::AnimationClip c;
+        c.frame_count = static_cast<std::uint32_t>(xs.size());
+        c.frame_ms = 100;
+        c.tracks.resize(1);
+        for (float x : xs) {
+            assets::BonePose p;
+            p.translation = glm::vec3(x, 0.0f, 0.0f);
+            c.tracks[0].push_back(p);
+        }
+        return c;
+    };
+    auto death = one_bone({0.0f, 10.0f}); // the fall: upright first, lying last
+    auto stand = one_bone({20.0f});
+    render::ActorDraw a;
+    a.model = &m;
+    a.clip = &stand;
+    a.loop = true;
+    a.previous_clip = &death;
+    a.previous_time = death.duration_seconds(); // the fall played through
+    a.previous_loop = false;
+    a.blend = 0.5f;
+    std::vector<assets::BonePose> local, previous;
+    std::vector<glm::mat4> world;
+    render::ActorRenderer::pose_bones(a, local, previous, world);
+    // Halfway from the lying pose (10) to standing (20), not from the fall's first frame (0).
+    CHECK(local[0].translation.x == doctest::Approx(15.0f));
 }
 
 TEST_CASE("an upper-body clip poses only the upper group's bones") {

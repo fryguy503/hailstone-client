@@ -58,6 +58,7 @@
 #include "net/social_packets.h"
 #include "net/spell_packets.h"
 #include "net/task_packets.h"
+#include "net/rename_packets.h"
 #include "net/shroud_packets.h"
 #include "net/trade_packets.h"
 #include "net/training_packets.h"
@@ -362,6 +363,8 @@ void feed_all(const Bytes& packet, soe::InboundStream& stream, std::vector<Bytes
     (void)soe::split_app_combined(packet);
     (void)soe::decode_app(packet);
     (void)soe::decode_app(packet, 1);
+    (void)soe::decode_app(Bytes(packet));
+    (void)soe::decode_app(Bytes(packet), 1);
     (void)soe::parse_session_response(packet);
     (void)soe::is_encodable(packet);
 }

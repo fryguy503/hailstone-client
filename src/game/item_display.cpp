@@ -106,6 +106,10 @@ struct Grid {
         cell(r, c).heroic = "+" + std::to_string(v);
         ++d.heroic_count;
     }
+    // Hailstone: the comparison key of the cell just written (row - 1).
+    void tag(int c, const char* key) {
+        if (valid(row - 1)) cell(row - 1, c).key = key;
+    }
 };
 
 std::int32_t f_ac(const net::Item& i) { return i.ac; }
@@ -685,18 +689,19 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
     g.row = 1;
     int columns = 1;
     bool any2 = false;
-    auto col2 = [&](std::uint32_t id, std::int32_t (*f)(const net::Item&)) {
+    auto col2 = [&](const char* key, std::uint32_t id, std::int32_t (*f)(const net::Item&)) {
         std::int32_t aug = 0;
         std::int32_t v = modified(stat(item, f, aug), skill);
         if (v != 0) {
             g.put_int(2, str(ctx, id), v, aug);
+            g.tag(2, key);
             any2 = true;
         }
     };
-    col2(0x32ce, f_ac);
-    col2(0x32d2, f_hp);
-    col2(0x32da, f_mana);
-    col2(0x32db, f_end);
+    col2("ac", 0x32ce, f_ac);
+    col2("hp", 0x32d2, f_hp);
+    col2("mana", 0x32da, f_mana);
+    col2("endurance", 0x32db, f_end);
     // CItemDisplayWnd_AppendHasteString: the item's haste, then each augment's.
     {
         std::vector<std::int32_t> hastes;
@@ -707,6 +712,7 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
                     if (std::int32_t h = m::item_haste(c.item, 0, false)) hastes.push_back(h);
         for (std::int32_t h : hastes) {
             g.put(2, str(ctx, 0x32e9), std::to_string(h) + "%", 0, true);
+            g.tag(2, "haste");
             any2 = true;
         }
     }
@@ -773,65 +779,67 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
     int start = std::max({end1, end2, end3}) + 1;
     g.row = start;
     bool any = false;
-    auto stat_row = [&](int col, std::uint32_t id, std::int32_t (*f)(const net::Item&), std::int32_t (*h)(const net::Item&)) {
+    auto stat_row = [&](int col, const char* key, std::uint32_t id, std::int32_t (*f)(const net::Item&), std::int32_t (*h)(const net::Item&)) {
         std::int32_t aug = 0;
         std::int32_t v = modified(stat(item, f, aug), skill);
         std::int32_t hv = h ? modified(stat(item, h), skill) : 0;
         if (v != 0 || hv != 0) {
             g.put_int(col, str(ctx, id), v, aug);
+            g.tag(col, key);
             if (hv > 0) g.heroic(col, hv);
             any = true;
         }
     };
-    stat_row(1, 0x32dc, f_str, f_hstr);
-    stat_row(1, 0x32dd, f_sta, f_hsta);
-    stat_row(1, 0x32de, f_int, f_hint);
-    stat_row(1, 0x32df, f_wis, f_hwis);
-    stat_row(1, 0x32e0, f_agi, f_hagi);
-    stat_row(1, 0x32e1, f_dex, f_hdex);
-    stat_row(1, 0x32e2, f_cha, f_hcha);
+    stat_row(1, "str", 0x32dc, f_str, f_hstr);
+    stat_row(1, "sta", 0x32dd, f_sta, f_hsta);
+    stat_row(1, "int", 0x32de, f_int, f_hint);
+    stat_row(1, "wis", 0x32df, f_wis, f_hwis);
+    stat_row(1, "agi", 0x32e0, f_agi, f_hagi);
+    stat_row(1, "dex", 0x32e1, f_dex, f_hdex);
+    stat_row(1, "cha", 0x32e2, f_cha, f_hcha);
     int end4 = g.row; // +0x2fc
     if (any && columns < 1) columns = 1;
 
     g.row = start;
     any = false;
-    stat_row(2, 0x32e3, f_mr, f_hmr);
-    stat_row(2, 0x32e4, f_fr, f_hfr);
-    stat_row(2, 0x32e5, f_cr, f_hcr);
-    stat_row(2, 0x32e6, f_dr, f_hdr);
-    stat_row(2, 0x32e7, f_pr, f_hpr);
-    stat_row(2, 0x32e8, f_corr, f_hcorr);
+    stat_row(2, "svMagic", 0x32e3, f_mr, f_hmr);
+    stat_row(2, "svFire", 0x32e4, f_fr, f_hfr);
+    stat_row(2, "svCold", 0x32e5, f_cr, f_hcr);
+    stat_row(2, "svDisease", 0x32e6, f_dr, f_hdr);
+    stat_row(2, "svPoison", 0x32e7, f_pr, f_hpr);
+    stat_row(2, "svCorruption", 0x32e8, f_corr, f_hcorr);
     int end5 = g.row; // +0x300
     if (any && columns < 2) columns = 2;
 
     g.row = start;
     any = false;
-    auto col3 = [&](std::uint32_t id, std::int32_t (*f)(const net::Item&), bool mod, const char* fallback = nullptr) {
+    auto col3 = [&](const char* key, std::uint32_t id, std::int32_t (*f)(const net::Item&), bool mod, const char* fallback = nullptr) {
         std::int32_t aug = 0;
         std::int32_t v = stat(item, f, aug);
         if (mod) v = modified(v, skill);
         if (v != 0) {
             g.put_int(3, fallback ? str_or(ctx, id, fallback) : str(ctx, id), v, aug);
+            g.tag(3, key);
             any = true;
         }
     };
-    col3(0x340e, f_attack, false);
-    col3(0x3402, f_regen, false);
-    col3(0x32ea, f_mregen, false);
-    col3(0x32eb, f_eregen, false);
-    col3(0x32ec, f_sshield, false, "Spell Shield:");
-    col3(0x32ed, f_ce, false, "Combat Effects:");
-    col3(0x32ee, f_shielding, false, "Shielding:");
-    col3(0x32ef, f_ds, false, "Damage Shield:");
-    col3(0x32f0, f_dot, true, "DoT Shielding:");
-    col3(0x32f1, f_dsmit, true, "DS Mitigation:");
-    col3(0x32f2, f_avoid, true, "Avoidance:");
-    col3(0x32f3, f_acc, true, "Accuracy:");
-    col3(0x32f4, f_stun, true, "Stun Resist:");
-    col3(0x3403, f_strike, true, "Strikethrough:");
-    col3(0x33fb, f_heal, true);
-    col3(0x33fc, f_sdmg, true);
-    col3(0x23ed, f_clair, true);
+    col3("atk", 0x340e, f_attack, false);
+    col3("hpRegen", 0x3402, f_regen, false);
+    col3("manaRegen", 0x32ea, f_mregen, false);
+    col3("enduranceRegen", 0x32eb, f_eregen, false);
+    col3("spellShield", 0x32ec, f_sshield, false, "Spell Shield:");
+    col3("combatEffects", 0x32ed, f_ce, false, "Combat Effects:");
+    col3("shielding", 0x32ee, f_shielding, false, "Shielding:");
+    col3("damageShield", 0x32ef, f_ds, false, "Damage Shield:");
+    col3("dotShielding", 0x32f0, f_dot, true, "DoT Shielding:");
+    col3("dsMitigation", 0x32f1, f_dsmit, true, "DS Mitigation:");
+    col3("avoidance", 0x32f2, f_avoid, true, "Avoidance:");
+    col3("accuracy", 0x32f3, f_acc, true, "Accuracy:");
+    col3("stunResist", 0x32f4, f_stun, true, "Stun Resist:");
+    col3("strikeThrough", 0x3403, f_strike, true, "Strikethrough:");
+    col3("healAmount", 0x33fb, f_heal, true);
+    col3("spellDamage", 0x33fc, f_sdmg, true);
+    col3("clairvoyance", 0x23ed, f_clair, true);
     if (item.extra_dmg_amt != 0 && item.extra_dmg_skill >= 0) { // the damage bonus for one skill
         g.put_int(3, str(ctx, m::skill_name_eqstr(static_cast<std::uint32_t>(item.extra_dmg_skill))) + ":", item.extra_dmg_amt);
         any = true;

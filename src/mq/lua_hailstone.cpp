@@ -134,21 +134,28 @@ const net::GameConnection* readable(Script& s) {
     return s.host->env.context ? s.host->env.context().conn : nullptr;
 }
 
+// Raw sets (no metamethods run): the host fills tables outside a protected call, and one of them (the name plate's
+// reused spawn table) is the script's to change, metatable and all; a __newindex there could only abort.
+void raw_set_top(lua_State* L, const char* k) {
+    lua_pushstring(L, k);
+    lua_insert(L, -2);
+    lua_rawset(L, -3);
+}
 void set_int(lua_State* L, const char* k, lua_Integer v) {
     lua_pushinteger(L, v);
-    lua_setfield(L, -2, k);
+    raw_set_top(L, k);
 }
 void set_num(lua_State* L, const char* k, lua_Number v) {
     lua_pushnumber(L, v);
-    lua_setfield(L, -2, k);
+    raw_set_top(L, k);
 }
 void set_str(lua_State* L, const char* k, const std::string& v) {
     lua_pushlstring(L, v.data(), v.size());
-    lua_setfield(L, -2, k);
+    raw_set_top(L, k);
 }
 void set_bool(lua_State* L, const char* k, bool v) {
     lua_pushboolean(L, v);
-    lua_setfield(L, -2, k);
+    raw_set_top(L, k);
 }
 
 // An item as a table. With the connection (an item the player carries), also how long its click's recast still has
@@ -227,6 +234,9 @@ void push_spawn_scratch(lua_State* L, const game::Spawn& s) {
         lua_pushvalue(L, -1);
         lua_rawsetp(L, LUA_REGISTRYINDEX, &g_spawn_scratch_key);
     }
+    // A metatable the script gave it last time goes too (from C, __metatable does not stop this).
+    lua_pushnil(L);
+    lua_setmetatable(L, -2);
     fill_spawn(L, s);
 }
 
@@ -819,8 +829,11 @@ int l_on_packet(lua_State* L) {
     luaL_checktype(L, 4, LUA_TFUNCTION);
     Script& s = Script::of(L);
     if (!s.host->env.hooks) return 0;
+    if (s.packet_hooks >= kMaxPacketHooks)
+        return luaL_error(L, "hailstone.on_packet: a script has at most %d packet hooks", static_cast<int>(kMaxPacketHooks));
     lua_pushvalue(L, 4);
     const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    ++s.packet_hooks;
     Script* sp = &s;
     s.host->env.hooks->on_packet(s.owner, stream, d == "in" ? plugin::Direction::In : plugin::Direction::Out, opcode,
                                  [sp, ref](net::AppPacket& p) {
@@ -881,11 +894,11 @@ int l_ui_function(lua_State* L) {
     luaL_checktype(L, 2, LUA_TFUNCTION);
     Script& s = Script::of(L);
     if (!s.host->env.ui) return 0;
-    std::string name = given;
     lua_pushvalue(L, 2);
-    const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    const int ref = luaL_ref(L, LUA_REGISTRYINDEX); // it may raise: no C++ object in this frame (Lua is built as C)
     Script* sp = &s;
-    s.host->env.ui->add_function(s.name, name, [sp, ref](const std::vector<plugin::UiValue>& args) {
+    // The name's std::string and the function are temporaries of this statement, gone before luaL_error below.
+    const bool added = s.host->env.ui->add_function(s.name, given, [sp, ref](const std::vector<plugin::UiValue>& args) {
         if (!usable(*sp) || !(sp->caps & plugin::kCapUi)) return plugin::UiValue{};
         lua_State* l = sp->L;
         // Room for the function and every argument: Lua is built without LUA_USE_APICHECK, so a push past the
@@ -899,8 +912,41 @@ int l_ui_function(lua_State* L) {
         lua_pop(l, 1);
         return r;
     }, plugin::UiBridge::Kind::Script);
+    if (!added) {
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+        return luaL_error(L, "hailstone.ui_function: a script has at most %d UI functions",
+                          static_cast<int>(plugin::UiBridge::kMaxFunctions));
+    }
     s.registered = true;
     return 0;
+}
+
+// The option l_option read, given to the UI; false when the script has UiBridge::kMaxOptions others. A function of
+// its own so that the Option (strings, std::function) is gone before l_option can raise.
+bool add_option(Script& s, const char* name, const char* label, int min, int max, int get, int set) {
+    plugin::UiBridge::Option o;
+    o.plugin = s.name;
+    o.kind = plugin::UiBridge::Kind::Script;
+    o.name = name;
+    o.label = label;
+    o.min = min;
+    o.max = max;
+    Script* sp = &s;
+    o.get = [sp, get]() -> int {
+        if (!usable(*sp)) return 0;
+        lua_rawgeti(sp->L, LUA_REGISTRYINDEX, get);
+        if (!call_script(*sp, 0, 1)) return 0;
+        int v = lua_isboolean(sp->L, -1) ? (lua_toboolean(sp->L, -1) ? 1 : 0) : static_cast<int>(lua_tointeger(sp->L, -1));
+        lua_pop(sp->L, 1);
+        return v;
+    };
+    o.set = [sp, set](int v) {
+        if (!usable(*sp)) return;
+        lua_rawgeti(sp->L, LUA_REGISTRYINDEX, set);
+        lua_pushinteger(sp->L, v);
+        call_script(*sp, 1, 0);
+    };
+    return s.host->env.ui->add_option(std::move(o));
 }
 
 // hailstone.option{name =, label =, min = 0, max = 1, get = function() return v end, set = function(v) end}
@@ -926,42 +972,29 @@ int l_option(lua_State* L) {
     luaL_checktype(L, -1, LUA_TFUNCTION);
     const int set = luaL_ref(L, LUA_REGISTRYINDEX);
     const int get = luaL_ref(L, LUA_REGISTRYINDEX);
-    plugin::UiBridge::Option o;
-    o.plugin = s.name;
-    o.kind = plugin::UiBridge::Kind::Script;
-    o.name = name;
-    o.label = label;
-    o.min = min;
-    o.max = max;
+    const bool added = add_option(s, name, label, min, max, get, set);
     lua_pop(L, 4); // name, label, min, max: the strings are copied
-    Script* sp = &s;
-    o.get = [sp, get]() -> int {
-        if (!usable(*sp)) return 0;
-        lua_rawgeti(sp->L, LUA_REGISTRYINDEX, get);
-        if (!call_script(*sp, 0, 1)) return 0;
-        int v = lua_isboolean(sp->L, -1) ? (lua_toboolean(sp->L, -1) ? 1 : 0) : static_cast<int>(lua_tointeger(sp->L, -1));
-        lua_pop(sp->L, 1);
-        return v;
-    };
-    o.set = [sp, set](int v) {
-        if (!usable(*sp)) return;
-        lua_rawgeti(sp->L, LUA_REGISTRYINDEX, set);
-        lua_pushinteger(sp->L, v);
-        call_script(*sp, 1, 0);
-    };
-    s.host->env.ui->add_option(std::move(o));
+    if (!added) {
+        luaL_unref(L, LUA_REGISTRYINDEX, get);
+        luaL_unref(L, LUA_REGISTRYINDEX, set);
+        return luaL_error(L, "hailstone.option: a script has at most %d options",
+                          static_cast<int>(plugin::UiBridge::kMaxOptions));
+    }
     s.registered = true;
     return 0;
 }
 
-// hailstone.menu(label, command)
+// hailstone.menu(label, command): the same label again changes that entry's command.
 int l_menu(lua_State* L) {
     need_cap(L, plugin::kCapUi, "hailstone.menu");
     no_social(L, "hailstone.menu");
     Script& s = Script::of(L);
     const char* label = luaL_checkstring(L, 1);
     const char* command = luaL_checkstring(L, 2);
-    if (s.host->env.ui) s.host->env.ui->add_menu({s.name, label, command, plugin::UiBridge::Kind::Script});
+    // The entry's strings are temporaries of the condition, gone before luaL_error.
+    if (s.host->env.ui && !s.host->env.ui->add_menu({s.name, label, command, plugin::UiBridge::Kind::Script}))
+        return luaL_error(L, "hailstone.menu: a script has at most %d menu entries",
+                          static_cast<int>(plugin::UiBridge::kMaxMenuEntries));
     s.registered = true;
     return 0;
 }
@@ -1211,19 +1244,26 @@ int l_eqstr(lua_State* L) {
     const int last = std::min(top, 17);
     luaL_checkstack(L, last - 1, "hailstone.eqstr");
     for (int i = 2; i <= last; ++i) luaL_tolstring(L, i, nullptr);
-    std::vector<std::string> args;
-    for (int i = top + 1; i <= lua_gettop(L); ++i) args.emplace_back(lua_tostring(L, i));
-    std::string r = c->strings().format(id, args);
-    lua_pushlstring(L, r.data(), r.size());
+    // The vector goes before the push, and the result is pushed by push_made (moved out of this frame first): a push
+    // that fails longjmps past this frame (Lua is built as C).
+    std::string r;
+    plugin::cxx_guard(L, [&] {
+        std::vector<std::string> args;
+        for (int i = top + 1; i <= lua_gettop(L); ++i) args.emplace_back(lua_tostring(L, i));
+        r = c->strings().format(id, args);
+    });
+    plugin::push_made(L, std::move(r));
     return 1;
 }
 
 // hailstone.zone_name(id): the zone's short name; nil for an unknown id.
 int l_zone_name(lua_State* L) {
     need_cap(L, plugin::kCapRead, "hailstone.zone_name");
-    std::string name = game::zone_short_name(static_cast<std::uint32_t>(luaL_checkinteger(L, 1)));
+    const auto id = static_cast<std::uint32_t>(luaL_checkinteger(L, 1)); // (before the string: it may raise)
+    std::string name;
+    plugin::cxx_guard(L, [&] { name = game::zone_short_name(id); });
     if (name.empty()) lua_pushnil(L);
-    else lua_pushlstring(L, name.data(), name.size());
+    else plugin::push_made(L, std::move(name)); // moved out of this frame before the push, which may raise
     return 1;
 }
 

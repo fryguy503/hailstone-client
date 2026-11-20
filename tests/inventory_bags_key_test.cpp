@@ -165,3 +165,44 @@ TEST_CASE("bank bags key: the bank's and the shared bank's bags open while the b
     lua_close(L);
     ImGui::DestroyContext(ctx);
 }
+
+TEST_CASE("bag keys: a new UI session or a /loadskin starts with no bag open and the keys set to open") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    MockConfig config = MockConfig::standard();
+    config.characters[0].inventory.push_back(item(1003, "Backpack", 23, true));
+    Rig rig(std::move(config));
+    REQUIRE(rig.to_zone());
+
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &rig.conn;
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    const auto first_bag = [&](app::UiApi& api) {
+        lua_newtable(L);
+        api.register_functions(L);
+        lua_setglobal(L, "hs");
+        REQUIRE(luaL_dostring(L, "return (hs.BagInfo('Bag1'))") == LUA_OK);
+        const char* name = lua_tostring(L, -1);
+        std::string out = name ? name : "";
+        lua_settop(L, 0);
+        return out;
+    };
+    {
+        app::UiApi api(host);
+        api.toggle_all_bags(); // opens, and leaves the keys at "close"
+        CHECK(first_bag(api) == "Backpack");
+    }
+    app::UiApi again(host);
+    CHECK(first_bag(again).empty());
+    again.toggle_all_bags(); // the first press opens again
+    CHECK(first_bag(again) == "Backpack");
+    // A /loadskin keeps the UiApi and resets its bags the same way.
+    again.reset_bags();
+    CHECK(first_bag(again).empty());
+    again.toggle_all_bags();
+    CHECK(first_bag(again) == "Backpack");
+
+    lua_close(L);
+    ImGui::DestroyContext(ctx);
+}

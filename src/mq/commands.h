@@ -71,6 +71,7 @@ private:
     plugin::Hooks::Owner owner_ = 0;
     plugin::Hooks::Owner final_owner_ = 0; // final_check's, registered again so it stays the last filter
     bool redispatched_ = false;            // the next line through filter() is the one it sent on itself
+    bool nested_parsed_ = false;           // the next line through filter() is run_nested's: parsed with its outer line
     bool noparse_ = false;
     int squelch_ = 0;
     int nested_ = 0; // run_nested calls in progress

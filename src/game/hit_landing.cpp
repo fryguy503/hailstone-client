@@ -64,6 +64,8 @@ public:
             a.modifier = bits(b.modifier);
             a.duration = b.tics;
             caster_ids_[i] = b.empty() ? 0 : b.caster_id;
+            a.slot_data = b.slot_data; // the counters left; a cure spends them (HitBySpell's counter case)
+            a.counters_known = b.counters_known;
         }
     }
 
@@ -339,6 +341,14 @@ public:
         return -1;
     }
     std::uint32_t caster_id_of(int slot) const { return caster_ids_[static_cast<std::size_t>(slot)]; }
+    // HitBySpell's counter case writes the counters left into the buff's EQ_Affect; the client's buff state keeps
+    // them (a cure must lower the counters the icon shows, and a weaker cure must not look like an empty buff).
+    void keep_slot_data() {
+        for (std::size_t i = 0; i < buffs_.size(); ++i) {
+            if (&buffs_[i] == placed_ && placed_->type != 0) continue; // carried by PlacedBuff instead
+            ctx_.spell_state->buffs[i].slot_data = buffs_[i].slot_data;
+        }
+    }
     std::uint8_t has_buff_flag(const hit::Spell*) override { return 0; }
     void on_new_buff(std::uint32_t) override {}
     std::int32_t refused_mez(std::int32_t, hit::Spawn*, const hit::Spell*) override { return 0; }
@@ -451,10 +461,12 @@ HitLandingResult land_spell(const hit::Hit& h, const HitLandingContext& ctx) {
     hit::HitState state;
     state.self = &q.self();
     state.globals = &g;
+    state.faded_counter_spas = ctx.faded_counter_spas;
     const mechanics::Fpu fpu(mechanics::FpuPrecision::Single24);
     const glm::vec3 before = ctx.velocity;
     const std::uint32_t heading = me->heading;
     out.value = hit::hit_by_spell(state, h, &launch, -1, q, fpu);
+    q.keep_slot_data();
     out.velocity_change = glm::vec3(as_float(me->speed_y), as_float(me->speed_x), as_float(me->speed_z)) - before;
     if (!std::isfinite(out.velocity_change.x) || !std::isfinite(out.velocity_change.y) ||
         !std::isfinite(out.velocity_change.z))
@@ -472,6 +484,8 @@ HitLandingResult land_spell(const hit::Hit& h, const HitLandingContext& ctx) {
             b.modifier = as_float(a->modifier);
             b.effect_type = a->type;
             b.caster_id = q.caster_id_of(slot);
+            b.slot_data = a->slot_data;
+            b.counters_known = a->counters_known;
             out.placed_buffs.push_back(b);
         }
     }

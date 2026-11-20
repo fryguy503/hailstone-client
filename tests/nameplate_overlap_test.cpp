@@ -2,7 +2,11 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
+#include <random>
+#include <vector>
 
 #include "game/nameplate_overlap.h"
 
@@ -148,4 +152,60 @@ TEST_CASE("plate overlap: the lists filled in place match the returned ones, wha
     plate_target_alpha({}, alpha);
     CHECK(order.empty());
     CHECK(alpha.empty());
+}
+
+TEST_CASE("Name plates: a crowd's fade (the grid) is every pair's exactly") {
+    // The pairwise rule as it was written, kept here as the reference.
+    auto reference = [](const std::vector<PlateBox>& boxes) {
+        auto nearer = [](const PlateBox& a, const PlateBox& b) {
+            return a.front != b.front ? a.front : a.depth < b.depth;
+        };
+        std::vector<float> alpha(boxes.size(), 1.0f);
+        for (std::size_t i = 0; i < boxes.size(); ++i) {
+            const auto& b = boxes[i];
+            if (b.front) continue;
+            const float own = std::max(b.x1 - b.x0, 0.0f) * std::max(b.y1 - b.y0, 0.0f);
+            if (own <= 0.0f) continue;
+            float covered = 0.0f;
+            for (std::size_t j = 0; j < boxes.size(); ++j) {
+                if (i == j || !nearer(boxes[j], b)) continue;
+                const auto& o = boxes[j];
+                const float w = std::min(b.x1, o.x1) - std::max(b.x0, o.x0);
+                const float h = std::min(b.y1, o.y1) - std::max(b.y0, o.y0);
+                covered = std::max(covered, std::max(w, 0.0f) * std::max(h, 0.0f) / own);
+            }
+            const float t = std::clamp((covered - kPlateFadeFrom) / (kPlateFadeTo - kPlateFadeFrom),
+                                       0.0f, 1.0f);
+            alpha[i] = 1.0f - (1.0f - kPlateCoveredAlpha) * t * t * (3.0f - 2.0f * t);
+        }
+        return alpha;
+    };
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> pos(0.0f, 1920.0f), size(0.0f, 160.0f), depth(1.0f, 300.0f);
+    for (std::size_t count : {5u, 31u, 32u, 64u, 300u, 900u}) {
+        CAPTURE(count);
+        std::vector<PlateBox> boxes;
+        for (std::size_t k = 0; k < count; ++k) {
+            PlateBox b;
+            b.x0 = pos(rng) * (k % 3 == 0 ? 0.2f : 1.0f); // some crowded together
+            b.y0 = pos(rng) * 0.5f * (k % 3 == 0 ? 0.2f : 1.0f);
+            b.x1 = b.x0 + size(rng);
+            b.y1 = b.y0 + size(rng) * 0.25f;
+            if (k % 17 == 0) b.x1 = b.x0;          // no area
+            if (k % 23 == 0) b.y1 = b.y0 - 4.0f;   // inverted
+            b.depth = k % 11 == 0 && k > 0 ? boxes[k - 1].depth : depth(rng); // some equal depths
+            b.front = k == count / 2;
+            if (k % 29 == 5) b = boxes[k - 1]; // an exact duplicate
+            boxes.push_back(b);
+        }
+        CHECK(plate_target_alpha(boxes) == reference(boxes));
+    }
+    // All in one cell row (no height spread), and a non-finite box among a crowd.
+    std::vector<PlateBox> line;
+    for (int k = 0; k < 100; ++k)
+        line.push_back({static_cast<float>(k) * 7.0f, 10.0f, static_cast<float>(k) * 7.0f + 40.0f, 30.0f,
+                        static_cast<float>(100 - k), false});
+    CHECK(plate_target_alpha(line) == reference(line));
+    line[3].x1 = std::numeric_limits<float>::infinity();
+    CHECK(plate_target_alpha(line) == reference(line));
 }

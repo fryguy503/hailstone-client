@@ -7,10 +7,13 @@
 #include <lua.hpp>
 
 #include "app/lua_ui.h"
+#include "core/byte_io.h"
+#include "game/mechanics/combat_ability.h"
 #include "game/spells.h"
 #include "mq_test_world.h"
 #include "net/item_packets.h"
 #include "net/merchant_packets.h"
+#include "net/packet_io.h"
 
 using namespace hailstone;
 
@@ -52,6 +55,23 @@ net::ItemPacket goods(std::uint32_t slot, const char* name) {
     return ip;
 }
 
+void open_merchant(net::GameConnection& c) {
+    auto& world = c.world_for_test();
+    game::Spawn m = *world.player();
+    m.id = 5001;
+    m.name = "Merchant00";
+    m.class_id = 41;
+    m.is_npc = true;
+    world.spawns[m.id] = m;
+    c.open_merchant(m.id);
+    net::MerchantClick open;
+    open.npc_id = m.id;
+    open.player_id = world.player_id;
+    open.rate = 1.0f;
+    c.receive_zone_packet_for_test(net::encode(open));
+    REQUIRE(c.merchant()->open);
+}
+
 } // namespace
 
 TEST_CASE("merchant: Show only items I can use leaves out what the character cannot use, and is on to start") {
@@ -70,20 +90,7 @@ TEST_CASE("merchant: Show only items I can use leaves out what the character can
     c.set_spell_table_for_test(table);
     net::GameConnectionTestAccess::spells(c).book[0] = 803;
 
-    auto& world = c.world_for_test();
-    game::Spawn m = *world.player();
-    m.id = 5001;
-    m.name = "Merchant00";
-    m.class_id = 41;
-    m.is_npc = true;
-    world.spawns[m.id] = m;
-    c.open_merchant(m.id);
-    net::MerchantClick open;
-    open.npc_id = m.id;
-    open.player_id = world.player_id;
-    open.rate = 1.0f;
-    c.receive_zone_packet_for_test(net::encode(open));
-    REQUIRE(c.merchant()->open);
+    open_merchant(c);
 
     auto potion = goods(1, "Potion");
     auto plate = goods(2, "Warrior Plate");
@@ -158,5 +165,63 @@ TEST_CASE("merchant: Show only items I can use leaves out what the character can
     // The checkbox belongs to the purchase page.
     lua.text("hs.SetTabPage('MerchantWnd', 'MW_MerchantSubwindows', 1)");
     CHECK(lua.text("return tostring(hs.ChildShown('MerchantWnd', 'MW_UsableButton'))") == "false");
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("merchant: Usable only hides learned discipline tomes and lower ranks") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    mq_test::World w("hailstone_merchant_disciplines_test");
+    auto& c = *w.conn;
+    auto profile = *c.profile();
+    profile.class_ = 7; // Monk: class ID differs from the class bit.
+    profile.disciplines.clear();
+    c.set_profile_for_test(profile);
+    open_merchant(c);
+
+    constexpr std::uint32_t rank_one = 901, rank_two = 902, other_subgroup = 903;
+    const auto discipline = [](std::uint32_t id, const char* name, const char* rank, const char* subgroup) {
+        return mq_test::spell_line({{0, std::to_string(id)}, {1, name}, {168, "1"},
+                                    {207, "910"}, {208, rank}, {236, subgroup}}) + "\n";
+    };
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(discipline(rank_one, "Guard", "1", "1") +
+                         discipline(rank_two, "Guard Rk. II", "2", "1") +
+                         discipline(other_subgroup, "Other Guard", "1", "2")) == 3);
+    c.set_spell_table_for_test(table);
+
+    auto tome = [&](std::uint32_t slot, const char* name, std::uint32_t id) {
+        auto item = goods(slot, name);
+        item.item.classes = 1u << (profile.class_ - 1);
+        item.item.item_type = net::kItemTypeScroll;
+        item.item.effects[net::kEffectScroll].effect = static_cast<std::int32_t>(id);
+        c.receive_zone_packet_for_test(net::encode_item_packet(false, item));
+    };
+    tome(1, "Tome: Guard", rank_one);
+    tome(2, "Tome: Guard II", rank_two);
+    tome(3, "Tome: Other Guard", other_subgroup);
+    REQUIRE(c.merchant()->items.size() == 3);
+
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &c;
+    app::UiApi api(host);
+    Lua lua(api);
+    CHECK(lua.text(kNames) == "Tome: Guard,Tome: Guard II,Tome: Other Guard");
+
+    auto learn = [&](std::uint32_t id) {
+        ByteWriter data;
+        data.le(id);
+        for (int n = 1; n < game::mechanics::combat_ability::kCombatAbilities; ++n)
+            data.le<std::uint32_t>(0);
+        c.receive_zone_packet_for_test(net::make_packet(net::Op::DisciplineUpdate, std::move(data)));
+        api.begin_frame();
+    };
+    learn(rank_one);
+    CHECK(lua.text(kNames) == "Tome: Guard II,Tome: Other Guard");
+    learn(rank_two);
+    CHECK(lua.text(kNames) == "Tome: Other Guard");
+
+    lua.text("hs.ClickChild('MerchantWnd', 'MW_UsableButton', 'left')");
+    CHECK(lua.text(kNames) == "Tome: Guard,Tome: Guard II,Tome: Other Guard");
     ImGui::DestroyContext(ctx);
 }

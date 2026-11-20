@@ -58,7 +58,7 @@ struct CanvasCast {
     double elapsed_ms = 0, duration_ms = 0;
 };
 struct CanvasContext {
-    std::string name;
+    std::string name, secondary_caption;
     bool target = false, self = false, in_group = false, in_raid = false;
     bool concealed = false, invisible = false, invisible_undead = false;
     double distance = 0;

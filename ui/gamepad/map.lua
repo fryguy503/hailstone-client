@@ -2,7 +2,7 @@
 -- window, north up (hs.DrawZoneMap: the stock map's lines, labels, group, /find path, compass points and player),
 -- following the player until it is panned. A stick pans, LB / RB zoom out / in, Y centres on the player again,
 -- X shows / hides the labels, RT turns Auto Z (hs.MapAutoZ: what is well above or below the player fades) on or off;
--- with the mouse, dragging pans and the wheel zooms.
+-- the Map Pack dropdown is reached with the D-pad. With the mouse, dragging pans and the wheel zooms.
 local API = hs.UI
 local T = dofile("lib/theme.lua")
 local pad = dofile("lib/pad.lua")
@@ -12,6 +12,7 @@ local E = dofile("lib/extensions.lua")
 local MC = dofile("lib/map_controls.lua")
 
 local MAP = "MapViewWnd"
+local PACK_COMBO = "MVW_MapsDirCombobox"
 local ZOOMS = { 1, 1.5, 2.25, 3.4, 5, 7.5, 11 }
 local M = {
   open = false,
@@ -19,16 +20,40 @@ local M = {
   follow = true, -- centred on the player
   cx = nil, cy = nil, -- the centre when panned, in map units
   labels = ui.GetSetting("map.labels", "1") == "1",
+  packOpen = false,
+  packFocused = false, -- the Map Pack dropdown had the focus last frame (closed)
 }
 
 local function setZoom(step)
   M.zoom = math.max(1, math.min(#ZOOMS, M.zoom + step))
 end
 
+local function mapPack(packs, selected)
+  ui.SetNextItemWidth(T.px(180))
+  -- Y is also an ImGui activation key, but on the map it recentres the view.
+  ui.BeginDisabled(pad.yActivated(true))
+  local open = ui.BeginCombo("Map Pack##map_pack", packs[selected + 1] or packs[1])
+  local focused = not open and ui.IsItemFocused()
+  M.packOpen = open
+  if open then
+    for i, name in ipairs(packs) do
+      local active = i - 1 == selected
+      if ui.Selectable(name .. "###map_pack_" .. i, active) then
+        M.packOpen = false
+        if not active then API.windows.ComboSelect(MAP, PACK_COMBO, i - 1) end
+      end
+      if active then ui.SetItemDefaultFocus() end
+    end
+    ui.EndCombo()
+  end
+  ui.EndDisabled()
+  return open, focused
+end
+
 ui.window("Map", function()
   if not W.shown(MAP) then
     MC.Reset()
-    M.open = false
+    M.open, M.packOpen, M.packFocused = false, false, false
     return
   end
   if not M.open then -- each time it opens: the whole zone, following the player
@@ -36,23 +61,41 @@ ui.window("Map", function()
   end
   local zone = API.map.ZoneName() or ""
   local hasControls = MC.Sync("zone")
+  local packs, selected = API.windows.ComboInfo(MAP, PACK_COMBO)
+  local hasPack = packs and #packs > 0
+  local packWasOpen = M.packOpen
+  M.packOpen = false
   local hints = { { "lb", "Zoom out" }, { "rb", "Zoom in" }, { "y", "Centre" },
     { "x", M.labels and "Hide labels" or "Labels" }, { "rt", API.map.AutoZ() and "Auto Z off" or "Auto Z" },
-    { "a", API.map.FindPathShown() and "End find" or "Find path to centre" }, { "b", "Close" } }
+    { "a", packWasOpen and "Select" or M.packFocused and "Map pack"
+      or API.map.FindPathShown() and "End find" or "Find path to centre" }, { "b", packWasOpen and "Back" or "Close" } }
   if hasControls then table.insert(hints,1,{ "lt", "Map controls" }) end
-  if W.begin("Map", { w = 1500, h = 960, title = zone ~= "" and zone or "Map", close = not MC.Open(),
+  if W.begin("Map", { w = 1500, h = 960, title = zone ~= "" and zone or "Map", close = not (MC.Open() or packWasOpen),
         hints = hints }) then
     local x0, y0, x1, y1 = W.area()
     local context = E.MapContext("zone")
     local controlsWasOpen = MC.Open()
-    if hasControls then
-      if E.Component(MAP,"toolbar.mapcontrols",context,function()return ui.Button("Map controls")end) or W.pressed("lt") then MC.Toggle("zone")end
-      y0 = y0 + T.px(44)
+    local packOpen, packFocused = false, false
+    if hasPack then
+      ui.SetCursorScreenPos(x0, y0)
+      packOpen, packFocused = mapPack(packs, selected)
     end
-    local mapInput = not (controlsWasOpen or MC.Open())
+    M.packFocused = packFocused -- (the next frame's A and B hints)
+    -- Native ImGui navigation handles the combo. A dismiss frame still belongs to the dropdown.
+    local packInput = packWasOpen or packOpen
+    if hasControls then
+      if hasPack then ui.SameLine() end
+      if E.Component(MAP, "toolbar.mapcontrols", context, function() return ui.Button("Map controls") end)
+          or (not packInput and W.pressed("lt")) then
+        MC.Toggle("zone")
+      end
+    end
+    if hasPack or hasControls then y0 = y0 + T.px(44) end
+    local mapInput = not (controlsWasOpen or MC.Open() or packInput)
     local wx, wy = ui.GetWindowPos()
     ui.SetCursorPos(x0 - wx, y0 - wy)
     ui.InvisibleButton("##maparea", x1 - x0, y1 - y0, ui.ButtonFlags.EnableNav)
+    ui.SetItemDefaultFocus()
     local hovered = ui.IsItemHovered()
     T.rect(x0, y0, x1, y1, C.mapBg, 1, T.px(14))
     T.font(16)
@@ -92,7 +135,7 @@ ui.window("Map", function()
     if mapInput and W.pressed("rb") then setZoom(1) end
     if mapInput and W.pressed("y") then M.follow = true end
     -- the find path (the stock map's right click) to the point in the middle, or ending the shown one
-    if mapInput and W.pressed("a") then
+    if mapInput and not packFocused and W.pressed("a") then
       if API.map.FindPathShown() then API.find.End() elseif M.cx then API.find.MapLocation(M.cx, M.cy) end
     end
     if mapInput and W.pressed("rt") then API.map.AutoZ(not API.map.AutoZ()) end

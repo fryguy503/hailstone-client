@@ -204,7 +204,8 @@ TEST_CASE("UI packs: a registered managed owner cannot link its root outside the
     std::ofstream(outside / "ui/escape/ui.ini") << "base=modern\n";
     std::error_code ec;
     fs::create_directory_symlink(outside, managed / "linked", ec);
-    if (ec) { MESSAGE("Directory link creation is unavailable on this host"); return; }
+    // (Wine makes something that is not a link and reports success.)
+    if (ec || !fs::is_symlink(managed / "linked")) { MESSAGE("Directory link creation is unavailable on this host"); return; }
     std::vector<std::string> diagnostics;
     const auto packs = ui::list_ui_packs(builtin, managed, {"linked"}, &diagnostics);
     REQUIRE(packs.size() == 1);
@@ -221,7 +222,8 @@ TEST_CASE("UI packs: directory links cannot approve an outside base or plugin fo
     std::ofstream(outside / "ui.ini") << "name=Outside\n";
     std::error_code ec;
     fs::create_directory_symlink(outside, root / "linked", ec);
-    if (ec) { MESSAGE("Directory link creation is unavailable on this host"); return; }
+    // (Wine makes something that is not a link and reports success.)
+    if (ec || !fs::is_symlink(root / "linked")) { MESSAGE("Directory link creation is unavailable on this host"); return; }
     std::vector<std::string> diagnostics;
     const auto packs = ui::list_ui_packs(root, &diagnostics);
     REQUIRE(packs.size() == 1);

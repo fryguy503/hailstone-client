@@ -35,9 +35,12 @@ void load_hot_bar_settings(int bar, ui::UiIni& ini, std::string_view section);
 void register_hot_bar_window(int bar, StockWindow* window);
 void unregister_hot_bar_window(int bar, StockWindow* window);
 
-// The bar's window menu (CHotButtonWnd's ContextMenuID: the right button on the window) at x, y. `layout_lock`: with
-// the Lock layout row (the modern UI's frames, which the window's own menu opens; hs.HotBarMenu, the gamepad pack's
-// pages, has no frame to lock).
+// The Modern bar's per-character layout lock, independent of the HUD's frame locks. Hailstone's: the original's window
+// lock does not protect a bar's buttons (open_hot_bar_menu).
+bool hot_bar_layout_locked(const UiHost& host, int bar);
+
+// The bar's window menu (CHotButtonWnd's ContextMenuID) at x, y. `layout_lock` adds the Modern Lock layout row;
+// hs.HotBarMenu, used by the gamepad pack, omits it.
 void open_hot_bar_menu(UiHost& host, int bar, float x, float y, bool layout_lock = false);
 // 0x68a170: CQuantityWnd::Open(bar, 175, PercentSize, x, y, 0, 40, "Percent"); its answer (0x24) is the bar's
 // PercentSize, stored (StoreIniInfo). The bar's Button Size and a button's Change Size.

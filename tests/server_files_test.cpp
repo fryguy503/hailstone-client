@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 
@@ -244,7 +245,7 @@ TEST_CASE("server files: the last pieces lost are asked for again after a silenc
     CHECK(read(dir.path / "assets" / "a.bin") == server.files["a.bin"]);
 }
 
-TEST_CASE("server files: a piece that never comes fails the sync after kChunkRetries requests") {
+TEST_CASE("server files: a piece that never comes is asked kChunkRetries times, then the sync waits out kChunkTimeout") {
     TempDir dir("never");
     FakeServer server;
     server.files["a.bin"] = "never sent";
@@ -252,17 +253,41 @@ TEST_CASE("server files: a piece that never comes fails the sync after kChunkRet
     ServerFileSync sync(dir.path, [&](net::AppPacket p) { server.receive(p); });
     auto now = ServerFileSync::Clock::now();
     sync.start(now);
+    std::optional<ServerFileSync::Clock::time_point> downloading_since;
     for (int steps = 0; !sync.finished() && steps < 100; ++steps) {
         while (!server.replies.empty()) {
             auto p = server.replies.front();
             server.replies.pop_front();
             sync.handle(*net::decode_server_files(p), now);
         }
+        if (!downloading_since && sync.state() == ServerFileSync::State::Downloading) downloading_since = now;
         now += ServerFileSync::kChunkRetry;
         sync.update(now);
     }
     CHECK(sync.state() == ServerFileSync::State::Failed);
     CHECK(server.requests == static_cast<std::size_t>(ServerFileSync::kChunkRetries));
+    // The retries (one every kChunkRetry) did not end it early: the silence did, after kChunkTimeout.
+    REQUIRE(downloading_since);
+    CHECK(now - *downloading_since > ServerFileSync::kChunkTimeout);
+    CHECK(now - *downloading_since <= ServerFileSync::kChunkTimeout + ServerFileSync::kChunkRetry);
+    CHECK(sync.error() == "the server stopped sending its files");
+}
+
+TEST_CASE("server files: a piece skipped kChunkRetries times while others come fails the sync") {
+    TempDir dir("skipped_always");
+    FakeServer server;
+    server.files["a.bin"] = "never sent";
+    server.never = "a.bin";
+    server.files["b.bin"] = std::string(8000000, 'b'); // enough pieces asked after each request for a.bin
+    ServerFileSync sync(dir.path, [&](net::AppPacket p) { server.receive(p); });
+    auto now = ServerFileSync::Clock::now();
+    sync.start(now);
+    while (!sync.finished() && !server.replies.empty()) {
+        auto p = server.replies.front();
+        server.replies.pop_front();
+        sync.handle(*net::decode_server_files(p), now); // no time passes: only the skips count
+    }
+    CHECK(sync.state() == ServerFileSync::State::Failed);
     CHECK(sync.error().find("did not come after 5 requests") != std::string::npos);
 }
 

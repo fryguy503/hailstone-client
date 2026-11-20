@@ -2784,8 +2784,9 @@ namespace hailstone::game {
 		// so it is not stepped.
 		std::uint32_t driven_id = 0;
 		std::unordered_map<std::uint32_t, Spawn> spawns;
-		// Grows each time a spawn is added to `spawns` or taken out (not when one changes): a plugin's next_spawn walk
-		// keeps a sorted copy of the ids and makes it again when this moves. Whatever adds or removes one bumps it.
+		// Grows each time a spawn is added to `spawns`, taken out, replaced or renamed (not for other changes): a plugin's
+		// next_spawn walk keeps a sorted copy of the ids, and the Find list and nameplate hits keep views keyed on names,
+		// and each makes its copy again when this moves. Whatever adds, removes or renames one bumps it.
 		std::uint64_t spawn_set_serial = 0;
 		// racedata.txt and moddat.ini for SetHeights (null: the defaults, as without a RaceManager).
 		std::shared_ptr<const HeightTables> height_tables;

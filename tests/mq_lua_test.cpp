@@ -324,6 +324,43 @@ end
     CHECK_FALSE(h.hooks.has_command("/bump")); // the script's bind went with it
 }
 
+TEST_CASE("MQ Lua: a script that loses 'events' gets no more chat lines, queued or new") {
+    Host h(plugin::kCapAll);
+    h.write("ev.lua", R"(
+local mq = require('mq')
+mq.event('slain', '#*#You have slain #1#!#*#', function(line, who) print('killed', who) end)
+while true do
+    mq.doevents()
+    mq.delay(100)
+end
+)");
+    REQUIRE(h.scripts->run("ev", {}));
+    h.pulses(1);
+    plugin::ChatLine first{"You have slain a rat!", 0, 0};
+    h.hooks.chat(first);
+    h.pulses(2, 100);
+    CHECK(h.printed_line("killed a rat"));
+    // Queued while it may, run after it may not: dropped. Raised after: never queued. doevents is no error.
+    plugin::ChatLine queued{"You have slain a bat!", 0, 0};
+    h.hooks.chat(queued);
+    h.allow_unlisted(plugin::kCapAll & ~plugin::kCapEvents);
+    h.scripts->policy_changed();
+    plugin::ChatLine later{"You have slain a snake!", 0, 0};
+    h.hooks.chat(later);
+    h.pulses(3, 100);
+    CHECK(h.scripts->running("ev"));
+    CHECK_FALSE(h.printed_line("killed a bat"));
+    CHECK_FALSE(h.printed_line("killed a snake"));
+    // Given back: only lines from then on.
+    h.allow_unlisted(plugin::kCapAll);
+    h.scripts->policy_changed();
+    plugin::ChatLine again{"You have slain a wolf!", 0, 0};
+    h.hooks.chat(again);
+    h.pulses(2, 100);
+    CHECK(h.printed_line("killed a wolf"));
+    CHECK_FALSE(h.printed_line("killed a snake"));
+}
+
 TEST_CASE("MQ Lua: nothing before the zone-in, anything without a hailstone.cfg, only the server's under one") {
     Host h(0);
     h.write("a.lua", "while true do require('mq').delay(10) end\n");
@@ -962,6 +999,29 @@ TEST_CASE("MQ commands: /target, ${} for typed lines, /noparse, /squelch") {
     CHECK(h.printed.back().rfind("Usage: /target", 0) == 0);
 }
 
+TEST_CASE("MQ commands: /docommand and /squelch parse their line once, a value's ${...} stays text") {
+    Host h;
+    net::GameConnectionTestAccess::world(*h.world.conn).spawns[11].name = "x${Me.PctHPs}";
+    h.run("/docommand /tell Groupie ${Spawn[id 11].CleanName} ${Me.PctHPs}");
+    CHECK(h.sent.back() == "/tell Groupie x${Me.PctHPs} 75");
+    h.run("/squelch /tell Groupie ${Spawn[id 11].CleanName}");
+    CHECK(h.sent.back() == "/tell Groupie x${Me.PctHPs}");
+    h.run("/docommand /squelch /docommand /tell Groupie ${Spawn[id 11].CleanName}");
+    CHECK(h.sent.back() == "/tell Groupie x${Me.PctHPs}");
+    // A script's line too, and a bind's own mq.cmd lines under /docommand are still parsed.
+    h.write("nested_parse.lua", R"(
+local mq = require('mq')
+mq.bind('/hpbind', function() mq.cmd('/tell Groupie bind ${Me.PctHPs}') end)
+mq.cmd('/docommand /tell Groupie ${Spawn[id 11].CleanName}')
+mq.cmd('/docommand /hpbind')
+)");
+    REQUIRE(h.scripts->run("nested_parse", {}));
+    h.pulses(2);
+    CHECK(std::find(h.sent.begin(), h.sent.end(), "/tell Groupie bind 75") != h.sent.end());
+    CHECK(std::find(h.sent.begin(), h.sent.end(), "/tell Groupie x${Me.PctHPs}") != h.sent.end());
+    CHECK(std::find(h.sent.begin(), h.sent.end(), "/tell Groupie x75") == h.sent.end());
+}
+
 // ---------------------------------------------------------------- Lua socials
 
 namespace {
@@ -1468,6 +1528,35 @@ mq.delay(100000)
     // A finalizer at the close would have bound /late as the client's own, holding the freed script.
     CHECK_FALSE(h.hooks.has_command("/late"));
     CHECK_FALSE(h.hooks.has_command("/early"));
+}
+
+TEST_CASE("MQ Lua: ImGui.SetNextWindowSizeConstraints takes MQ's two ImVec2 as well as four numbers") {
+    ImGuiFrame frame;
+    Host h;
+    h.write("sz.lua", R"(
+local mq = require('mq')
+mq.imgui.init('Sizes', function()
+    ImGui.SetNextWindowSizeConstraints(ImVec2(100, 50), ImVec2(400, 300))
+    ImGui.SetNextWindowSize(1000, 10, ImGuiCond.Always)
+    ImGui.Begin('Vec')
+    local w, h = ImGui.GetWindowSize()
+    print('vec ' .. math.floor(w) .. ' ' .. math.floor(h))
+    ImGui.End()
+    ImGui.SetNextWindowSizeConstraints(120, 60, 200, 90)
+    ImGui.SetNextWindowSize(10, 1000, ImGuiCond.Always)
+    ImGui.Begin('Num')
+    w, h = ImGui.GetWindowSize()
+    print('num ' .. math.floor(w) .. ' ' .. math.floor(h))
+    ImGui.End()
+end)
+mq.delay(100000)
+)");
+    REQUIRE(h.scripts->run("sz", {}));
+    h.pulses(1);
+    h.scripts->imgui();
+    CHECK(h.printed_line("vec 400 50"));
+    CHECK(h.printed_line("num 120 90"));
+    CHECK(h.scripts->running("sz"));
 }
 
 TEST_CASE("MQ Lua: a window that destroys itself and fails names itself; the others still draw") {

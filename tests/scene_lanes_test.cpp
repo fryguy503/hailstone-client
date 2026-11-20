@@ -156,3 +156,31 @@ TEST_CASE("Scene lanes: a job queued without a target draws into the first") {
     lanes.each_in(0, [&](std::size_t) { ++calls; });
     CHECK(calls == 1);
 }
+
+TEST_CASE("Scene lanes: a frame after a busier one records only its own jobs") {
+    int a = 0, b = 0, c = 0;
+    render::SceneLanes lanes;
+    lanes.add(&a);
+    lanes.add(&b);
+    lanes.add(&c);
+    lanes.add(&a);
+    lanes.clear();
+    // The next frame has fewer lanes: the kept lists from the last frame record nothing.
+    CHECK(lanes.add(&b) == 0);
+    lanes.add(&b);
+    CHECK(lanes.lanes() == 1);
+    CHECK(lanes.jobs() == 2);
+    std::vector<std::size_t> recorded;
+    lanes.record([&](std::size_t j) { recorded.push_back(j); });
+    CHECK(recorded == std::vector<std::size_t>{0, 1});
+    lanes.clear();
+    lanes.record([&](std::size_t j) { recorded.push_back(j); });
+    CHECK(recorded.size() == 2);
+    // A new lane after that reuses an emptied list.
+    CHECK(lanes.add(&c) == 0);
+    CHECK(lanes.add(&a) == 1);
+    recorded.clear();
+    lanes.record([&](std::size_t j) { recorded.push_back(j); });
+    std::sort(recorded.begin(), recorded.end());
+    CHECK(recorded == std::vector<std::size_t>{0, 1});
+}

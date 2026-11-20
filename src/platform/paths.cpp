@@ -98,7 +98,8 @@ std::optional<std::filesystem::path> g_test_data_dir;
 std::string g_data_dir_reason;
 
 std::string g_data_dir_problem;
-std::string g_given_reason; // use_data_dir's
+std::string g_given_reason;  // use_data_dir's
+std::string g_given_problem; // use_data_dir's
 
 std::filesystem::path chosen_data_dir() {
     static const std::filesystem::path dir = [] {
@@ -106,6 +107,7 @@ std::filesystem::path chosen_data_dir() {
             std::error_code ec;
             auto abs = std::filesystem::absolute(env, ec);
             g_data_dir_reason = "HAILSTONE_DATA_DIR";
+            g_data_dir_problem = given_data_dir_problem(ec ? env : abs);
             return ec ? env : abs;
         }
         DataDirChoice c = choose_data_dir(install_dir(), config_dir_named("hailstone"));
@@ -116,6 +118,19 @@ std::filesystem::path chosen_data_dir() {
     return dir;
 }
 } // namespace
+
+std::string given_data_dir_problem(const std::filesystem::path& dir) {
+    if (!has_any_file(dir, {"eqgame.exe", "spells_us.txt", "eqclient.ini"})) return {};
+    std::string folder;
+    try {
+        const std::u8string u = dir.u8string();
+        folder.assign(u.begin(), u.end());
+    } catch (const std::exception&) {
+        folder = "the folder given";
+    }
+    return "Hailstone's data folder (" + folder + ") is an EverQuest folder, which Hailstone only reads. Name a "
+           "folder of its own (HAILSTONE_DATA_DIR) and start it again.";
+}
 
 DataDirChoice choose_data_dir(const std::filesystem::path& install, const std::filesystem::path& bundle_data) {
     // Inside a macOS app bundle (Hailstone.app/Contents/Resources/): replacing the app, its normal update, would
@@ -155,7 +170,8 @@ std::string data_dir_reason() {
 std::string data_dir_problem() {
     {
         std::lock_guard lock(g_data_dir_mutex);
-        if (g_test_data_dir) return {}; // (the folder another Hailstone runs from, or a test's)
+        // The folder another Hailstone runs from (checked as it was given), or a test's.
+        if (g_test_data_dir) return g_given_problem;
     }
     chosen_data_dir();
     return g_data_dir_problem;
@@ -177,6 +193,7 @@ bool data_dir_is_portable() {
 void set_data_dir_for_tests(std::filesystem::path dir) {
     std::lock_guard lock(g_data_dir_mutex);
     g_given_reason.clear();
+    g_given_problem.clear();
     if (dir.empty()) g_test_data_dir.reset();
     else g_test_data_dir = std::move(dir);
 }
@@ -184,9 +201,11 @@ void set_data_dir_for_tests(std::filesystem::path dir) {
 void use_data_dir(std::filesystem::path dir, std::string reason) {
     std::error_code ec;
     auto abs = std::filesystem::absolute(dir, ec);
+    std::string problem = given_data_dir_problem(ec ? dir : abs);
     std::lock_guard lock(g_data_dir_mutex);
     g_test_data_dir = ec ? std::move(dir) : std::move(abs);
     g_given_reason = std::move(reason);
+    g_given_problem = std::move(problem);
 }
 
 std::filesystem::path shaders_dir() { return install_dir() / "shaders"; }

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "game/world_state.h"
+#include "net/player_packets.h"
 
 namespace hailstone::game {
 
@@ -123,5 +124,7 @@ void set_extra_shields(bool on);
 inline bool holds_item(const Appearance& a) {
     return a.material[kSlotPrimary] != 0 || a.material[kSlotSecondary] != 0;
 }
+
+inline bool holds_instrument(const Spawn& s) { return (s.player_state & net::kPlayerStateInstrument) != 0; }
 
 } // namespace hailstone::game

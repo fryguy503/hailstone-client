@@ -1,13 +1,24 @@
 #pragma once
 
-// A shared library loaded at run time (an upscaler provider, render/upscaler_provider.h): SDL's loader, which takes
-// a UTF-8 path on every platform.
+// A shared library loaded at run time (an upscaler provider, render/upscaler_provider.h; a compiled plugin,
+// plugin/native_plugins.cpp): SDL's loader on Linux and macOS; on Windows LoadLibraryExW, so that what the library
+// needs is looked for beside it and in the system's safe folders, never in the current folder or PATH.
 
 #include <filesystem>
 #include <string>
 #include <string_view>
 
 namespace hailstone::platform {
+
+// The loader itself, for a handle kept by hand: nullptr (with *error) when `path` does not load.
+void* load_library(const std::filesystem::path& path, std::string* error);
+void* library_symbol(void* library, const char* name); // nullptr when it has no such export
+void unload_library(void* library);                   // nullptr: nothing
+
+// Windows: libraries asked for by name only (a driver's, an overlay's, one a plugin loads) are looked for in the
+// program's folder, System32 and AddDllDirectory's folders, not the current folder or PATH. Elsewhere nothing. Once,
+// first thing in main.
+void restrict_dll_search();
 
 class SharedLibrary {
 public:

@@ -75,24 +75,36 @@ public:
         ok_ = platform::append_file_synced(path_, "");
     }
     bool ok() const { return ok_; }
-    // Moves `from` to `to` (making its folder), written to the journal first.
-    bool move(const fs::path& from, const fs::path& to, std::string* error) {
-        // Something already there (a folder holding the player's files, where a file goes now) stops it before the
-        // journal names the move: an undo would take that for the moved file and carry it off.
-        std::error_code in_way;
-        if (fs::exists(to, in_way)) {
-            if (error) *error = "cannot move " + from.string() + " to " + to.string() + ": something is there";
-            return false;
+    // Moves each `from` to its `to` (making their folders), all of them written to the journal first in one synced
+    // write: one flush to the disk for the batch, not one per file before its move. Every `to` must be free before
+    // the batch is written, and nothing else may put a file there until the moves are made: an undo takes a `to`
+    // that exists for a move that was made (a line for one that never was finds nothing there and is skipped). So a
+    // batch never holds a move into a place another move of the same batch empties (moves out, then moves in).
+    bool moves(const std::vector<std::pair<fs::path, fs::path>>& batch, std::string* error) {
+        std::string lines;
+        for (const auto& [from, to] : batch) {
+            std::error_code in_way;
+            if (fs::exists(to, in_way)) {
+                if (error) *error = "cannot move " + from.string() + " to " + to.string() + ": something is there";
+                return false;
+            }
+            lines += "move\t" + journal_path(data_dir_, from) + "\t" + journal_path(data_dir_, to) + "\n";
         }
-        if (!write("move\t" + journal_path(data_dir_, from) + "\t" + journal_path(data_dir_, to) + "\n")) {
+        if (batch.empty()) return true;
+        if (!write(lines)) {
             if (error) *error = "cannot write the add-ons' journal";
             return false;
         }
-        std::error_code ec;
-        fs::create_directories(to.parent_path(), ec);
-        platform::replace_file_synced(from, to, ec);
-        if (ec && error) *error = "cannot move " + from.string() + " to " + to.string() + ": " + ec.message();
-        return !ec;
+        for (const auto& [from, to] : batch) {
+            std::error_code ec;
+            fs::create_directories(to.parent_path(), ec);
+            platform::replace_file_synced(from, to, ec);
+            if (ec) {
+                if (error) *error = "cannot move " + from.string() + " to " + to.string() + ": " + ec.message();
+                return false;
+            }
+        }
+        return true;
     }
     // Saves installed.txt as it is to installed.prev.txt, then writes that to the journal: an install cut off after
     // installed.txt is rewritten puts the old one back with the old files. "none" when there was no installed.txt.
@@ -1071,18 +1083,23 @@ bool apply_addon(const fs::path& data_dir, const InstalledAddon& addon, std::str
     std::string why;
     // Files only: a folder that is the name of a file now (lib/util.lua before, lib now) is left, emptied, and
     // taken out below so the file can go there; one the player put files in stays, and the move into it fails.
+    // The moves go in two batches, each written to the journal in one synced write before its moves (Journal::moves):
+    // the old files out, then the new ones in, whose places the first batch empties.
     std::vector<std::string> moved_out;
+    std::vector<std::pair<fs::path, fs::path>> batch;
     for (const auto& p : out) {
         if (!fs::exists(target / rel(p), ec) || fs::is_directory(target / rel(p), ec)) continue;
-        if (!journal.move(target / rel(p), prev / rel(p), &why)) return undo(why);
+        batch.emplace_back(target / rel(p), prev / rel(p));
         moved_out.push_back(p);
     }
+    if (!journal.moves(batch, &why)) return undo(why);
     // Only the folders in a new file's way: any other empty folder (one a script made for its saves, or the
     // player's) is not this install's to take.
     for (const auto& f : addon.files)
         if (fs::is_directory(target / rel(f.path), ec)) remove_empty_dirs(target / rel(f.path), true);
-    for (const auto& f : addon.files)
-        if (!journal.move(src / rel(f.path), target / rel(f.path), &why)) return undo(why);
+    batch.clear();
+    for (const auto& f : addon.files) batch.emplace_back(src / rel(f.path), target / rel(f.path));
+    if (!journal.moves(batch, &why)) return undo(why);
     InstalledAddon entry = addon;
     // An update keeps the player's auto-update switch as installed.txt has it now (they may have changed it while
     // the update downloaded).
@@ -1135,14 +1152,10 @@ bool remove_addon(const fs::path& data_dir, std::string_view name, std::string* 
     }
     std::string why;
     std::error_code ec;
-    bool ok = true;
-    for (const auto& f : addon.files) {
-        if (!fs::exists(target / rel(f.path), ec)) continue;
-        if (!journal.move(target / rel(f.path), prev / rel(f.path), &why)) {
-            ok = false;
-            break;
-        }
-    }
+    std::vector<std::pair<fs::path, fs::path>> batch;
+    for (const auto& f : addon.files)
+        if (fs::exists(target / rel(f.path), ec)) batch.emplace_back(target / rel(f.path), prev / rel(f.path));
+    bool ok = journal.moves(batch, &why);
     std::erase_if(all, [&](const InstalledAddon& a) { return iequal(a.name, addon.name); });
     if (ok && !journal.registry(&why)) ok = false;
     if (ok && !write_installed_addons(data_dir, all)) {

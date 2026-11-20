@@ -19,10 +19,13 @@ player = off              ; the player's own compiled plugins: on / off
 player = on               ; off: of servers/<profile>/assets/, only the server's files and textures count
 
 [socials]
-mode = press              ; Lua socials: off / press / full
+mode = press              ; off blocks Lua social presses. The other modes are press and full
 caps = read,target,actions
 press_commands = 5        ; press mode: the most commands one press sends (0: no limit)
-faces = on                ; button faces may read the game state
+faces = on                ; off disables Lua button faces in any mode
+
+[abilities]
+autoskill = on            ; off disables the Ability Book's autoskill
 
 [movement]
 npc_collision = on        ; live NPCs block players (players, pets, mercenaries and corpses never do). On by default,

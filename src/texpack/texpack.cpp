@@ -222,6 +222,10 @@ std::optional<Sources> decode_sources(std::span<const std::byte> data, std::stri
     return s;
 }
 
+// The archives are the player's game folder's, which nothing writes (docs/layout.md), so they are mapped rather than
+// each read whole into every scan thread's heap (PfsArchive::Storage; an archive that cannot be mapped is read).
+constexpr auto kArchiveStorage = assets::PfsArchive::Storage::Mapped;
+
 ScanResult scan(const std::vector<fs::path>& archives, const ScanOptions& options) {
     ScanResult result;
     result.archives = archives.size();
@@ -238,7 +242,7 @@ ScanResult scan(const std::vector<fs::path>& archives, const ScanOptions& option
             const fs::path& path = archives[i];
             const std::string label = lower(path.filename().string());
             try {
-                auto archive = assets::PfsArchive::open(path);
+                auto archive = assets::PfsArchive::open(path, kArchiveStorage);
                 for (const auto& name : archive.names()) {
                     // A member without a texture's extension is sniffed by its first bytes before it is inflated
                     // whole: most are meshes, WLDs and sounds.
@@ -322,12 +326,12 @@ std::optional<Sources> read_sources(const TextureInfo& info, ArchiveCache* archi
         if (archive_cache) {
             if (!archive_cache->archive || archive_cache->path != info.source_archive) {
                 archive_cache->archive.reset();
-                archive_cache->archive = assets::PfsArchive::open(info.source_archive);
+                archive_cache->archive = assets::PfsArchive::open(info.source_archive, kArchiveStorage);
                 archive_cache->path = info.source_archive;
             }
             archive = &*archive_cache->archive;
         } else {
-            local = assets::PfsArchive::open(info.source_archive);
+            local = assets::PfsArchive::open(info.source_archive, kArchiveStorage);
             archive = &*local;
         }
         auto data = archive->read(info.source_name);

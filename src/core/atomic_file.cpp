@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "core/log.h"
+#include "core/path_utf8.h"
 #include "platform/durable_file.h"
 
 namespace hailstone {
@@ -25,7 +26,7 @@ bool write_file_atomic(const std::filesystem::path& path, std::string_view text)
     // never an empty one the rename reached the disk before.
     if (!platform::write_file_synced(tmp, text)) {
         fs::remove(tmp, ec);
-        log::warn("could not save {}: the write failed (disk full, or the folder is not writable)", path.string());
+        log::warn("could not save {}: the write failed (disk full, or the folder is not writable)", path_utf8(path));
         return false;
     }
     platform::replace_file_synced(tmp, path, ec);
@@ -38,7 +39,7 @@ bool write_file_atomic(const std::filesystem::path& path, std::string_view text)
     }
 #endif
     if (ec) {
-        log::warn("could not save {}: {}", path.string(), ec.message());
+        log::warn("could not save {}: {}", path_utf8(path), ec.message());
         std::error_code rm_ec;
         fs::remove(tmp, rm_ec);
         return false;

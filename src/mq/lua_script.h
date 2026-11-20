@@ -49,6 +49,11 @@ inline constexpr std::size_t kMaxEvents = 256;                      // events of
 inline constexpr std::size_t kMaxEventPattern = 1024;               // bytes of one pattern
 inline constexpr std::size_t kMaxEventPatterns = std::size_t{32} << 10; // bytes of all of one script's patterns
 inline constexpr std::size_t kMaxEventName = 256;                   // bytes of an event's name
+// What else one script may register (docs/plugins.md): each lives outside the script's Lua memory limit. The same
+// name or command replaces its earlier one without counting twice; past the limit the call is an error.
+inline constexpr std::size_t kMaxPacketHooks = 256; // hailstone.on_packet
+inline constexpr std::size_t kMaxBinds = 256;       // mq.bind
+inline constexpr std::size_t kMaxWindows = 64;      // mq.imgui.init
 // A chat line this long or longer raises no events (LuaEventProcessor::Process: MQ_MAX_STRING, 2048).
 inline constexpr std::size_t kMaxEventLine = 2048;
 // mq.cmd's line, as MQ's own command buffer (MQ_MAX_STRING, 2048, with its terminator): longer is an error.
@@ -216,6 +221,7 @@ struct Script {
     };
     std::vector<Event> events;
     bool chat_hooked = false;
+    std::size_t packet_hooks = 0; // hailstone.on_packet registrations (they stay until the script ends)
     struct Queued {
         std::string name;
         std::vector<std::string> args; // {line, args...}

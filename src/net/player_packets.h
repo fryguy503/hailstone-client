@@ -141,6 +141,9 @@ AppPacket encode_shield_group(const std::vector<std::uint32_t>& members);
 // bytes, EQEmu PlayerState_Struct); the same packets come back for other players (Handle_OP_PlayerStateAdd @0x4b6d90
 // ORs the bit into the spawn's +0x14c, ...Remove @0x4b6dc0 clears it).
 inline constexpr std::uint32_t kPlayerStateSheathed = 0x2; // *0x9d77a0
+// An instrument (item types 23..26) in the primary or secondary hand: the original's 0x5923f0 sets it for the local
+// player and sends OP_PlayerStateAdd / OP_PlayerStateRemove on the transition; the server relays it for others.
+inline constexpr std::uint32_t kPlayerStateInstrument = 0x10; // *0x9d77ac
 struct PlayerState {
     std::uint32_t spawn_id = 0;
     std::uint32_t state = 0;

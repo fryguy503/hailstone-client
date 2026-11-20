@@ -11,6 +11,7 @@
 #include <zlib.h>
 
 #include "core/byte_io.h"
+#include "core/path_utf8.h"
 #include "core/windows_names.h"
 #include "platform/durable_file.h"
 
@@ -58,10 +59,10 @@ bool ZipReader::open(const std::filesystem::path& path) {
     in_memory_ = false;
     error_.clear();
     file_ = std::ifstream(path, std::ios::binary);
-    if (!file_) return fail("cannot open " + path.string());
+    if (!file_) return fail("cannot open " + path_utf8(path));
     file_.seekg(0, std::ios::end);
     const std::streamoff end = file_.tellg();
-    if (end < 0) return fail("cannot read " + path.string());
+    if (end < 0) return fail("cannot read " + path_utf8(path));
     size_ = static_cast<std::uint64_t>(end);
     if (read_directory()) return true;
     entries_.clear(); // none of a refused archive's entries are offered
@@ -260,11 +261,11 @@ bool ZipReader::extract_to_file(const ZipEntry& entry, const std::filesystem::pa
     std::error_code ec;
     if (entry.is_directory()) {
         fs::create_directories(path, ec);
-        return ec ? fail("cannot make " + path.string() + ": " + ec.message()) : true;
+        return ec ? fail("cannot make " + path_utf8(path) + ": " + ec.message()) : true;
     }
     if (path.has_parent_path()) {
         fs::create_directories(path.parent_path(), ec);
-        if (ec) return fail("cannot make " + path.parent_path().string() + ": " + ec.message());
+        if (ec) return fail("cannot make " + path_utf8(path.parent_path()) + ": " + ec.message());
     }
     static std::atomic<unsigned> serial{0};
     fs::path tmp = path;
@@ -272,27 +273,27 @@ bool ZipReader::extract_to_file(const ZipEntry& entry, const std::filesystem::pa
     bool ok;
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        if (!out) return fail("cannot write " + tmp.string());
+        if (!out) return fail("cannot write " + path_utf8(tmp));
         ok = extract(entry, [&](std::span<const std::byte> piece) {
             out.write(reinterpret_cast<const char*>(piece.data()), static_cast<std::streamsize>(piece.size()));
             return static_cast<bool>(out);
         });
         out.close();
-        if (ok && !out) ok = fail("cannot write " + tmp.string());
+        if (ok && !out) ok = fail("cannot write " + path_utf8(tmp));
     }
 #ifndef _WIN32
     // Windows has no execute bit, and its read-only flag is not wanted on an installed file.
     if (ok && (entry.unix_mode & 0777) != 0) {
         fs::permissions(tmp, static_cast<fs::perms>(entry.unix_mode & 0777), fs::perm_options::replace, ec);
-        if (ec) ok = fail("cannot set the permissions of " + tmp.string() + ": " + ec.message());
+        if (ec) ok = fail("cannot set the permissions of " + path_utf8(tmp) + ": " + ec.message());
     }
 #endif
     // On the disk before the rename (platform/durable_file.h): the update's state may say the new files are in
     // place soon after, and a power cut must not leave one of them empty.
-    if (ok && !platform::sync_file(tmp)) ok = fail("cannot write " + tmp.string() + " to the disk");
+    if (ok && !platform::sync_file(tmp)) ok = fail("cannot write " + path_utf8(tmp) + " to the disk");
     if (ok) {
         platform::replace_file_synced(tmp, path, ec);
-        if (ec) ok = fail("cannot replace " + path.string() + ": " + ec.message());
+        if (ec) ok = fail("cannot replace " + path_utf8(path) + ": " + ec.message());
     }
     if (!ok) fs::remove(tmp, ec);
     return ok;

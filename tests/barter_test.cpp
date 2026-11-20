@@ -521,6 +521,29 @@ TEST_CASE("barter: a count with no data behind it makes no empty lines or buyers
     CHECK(one->size() == 1);
 }
 
+TEST_CASE("barter: names with no terminator in a large packet read as empty, in one scan of the tail") {
+    // GetString's rule: a string without its NUL in the packet reads as empty and moves nothing. Each buyer here
+    // reads its three words and then a name that never ends; the tail is looked through once, not once a buyer
+    // (10000 scans of 8 MiB would take minutes).
+    Buf buf;
+    buf.u32(0x19).u32(10000);
+    buf.b.insert(buf.b.end(), std::size_t{8} << 20, std::uint8_t{1});
+    auto list = decode_barter_buyer_list(packet(Op::BuyerItems, buf.b));
+    REQUIRE(list);
+    REQUIRE(list->size() == 10000);
+    CHECK(list->front().zone == 0x01010101u);
+    CHECK(list->front().name.empty());
+    CHECK(list->back().spawn_id == 0x01010101u);
+    CHECK(list->back().name.empty());
+    // A name that does end is still read, and one without its NUL after it is empty.
+    auto two = decode_barter_buyer_list(packet(Op::BuyerItems, Buf().u32(0x19).u32(2).u32(1).u32(2).u32(3).str("Bob").u32(4).u32(5).u32(6).u8('x').b));
+    REQUIRE(two);
+    REQUIRE(two->size() == 2);
+    CHECK(two->at(0).name == "Bob");
+    CHECK(two->at(1).spawn_id == 6);
+    CHECK(two->at(1).name.empty());
+}
+
 TEST_CASE("barter: a buy-lines text length near 2^32 is refused") {
     // The length check is written as n <= size - pos so that it cannot wrap where size_t is 32 bits.
     CHECK(!decode_buy_lines_text(packet(Op::Barter, Buf().u32(kBuyerLinesText).u32(0xFFFFFFFCu).u8('a').b)));

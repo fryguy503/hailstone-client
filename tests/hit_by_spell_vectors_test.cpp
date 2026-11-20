@@ -1308,6 +1308,7 @@ std::string run_world(const Json& r, World& w, std::uint8_t* result) {
     state.self = &w.self;
     state.globals = &w.globals;
     state.frame = &replay.frame;
+    state.rof2_single_slot_cures = true;
     // GetSpawnByID answers the record's caster; the world's knob says which.
     *result = hit_by_spell(state, w.hit, w.launch_used, w.duration, replay, fpu);
     return replay.finish();

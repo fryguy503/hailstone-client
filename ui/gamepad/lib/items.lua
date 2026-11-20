@@ -25,13 +25,14 @@ end
 
 -- Hailstone's item comparison (docs/item-compare.md): hs.Compare*'s table as lines from y down to y1 at most, between
 -- x and x1; the best slot's comparison (a pair's other slot is named at the end). Returns the y below. Nothing when
--- the Options turn it off.
+-- the Options turn it off. skip: the keys of changes already shown beside their stats (the item display's grid).
 local KIND = { good = "good", bad = "bad", mixed = "gold", muted = "dim" }
-function I.comparison(compare, x, y, x1, y1)
+function I.compareColor(kind) return C[KIND[kind] or "text"] or C.text end
+function I.comparison(compare, x, y, x1, y1, skip)
   if not compare or API.settings.Option("item_compare") == 0 then return y end
   T.font(18)
   local _, h = ui.CalcTextSize("Ag")
-  local lines = CL.lines(compare, 1, { verdict = API.settings.Option("item_compare_verdict") ~= 0 })
+  local lines = CL.lines(compare, 1, { verdict = API.settings.Option("item_compare_verdict") ~= 0, skip = skip })
   local other = CL.otherSlotName(compare, 1)
   if other then lines[#lines + 1] = { "Also fits your " .. other, "muted" } end
   y = y + T.px(6)

@@ -24,6 +24,7 @@
 #include "mq_test_world.h"
 #include "plugin_consent_helper.h"
 #include "app/addon_requirements.h"
+#include "app/spell_ui.h"
 #include "app/web_service.h"
 #include "mock_server/harness.h"
 #include "plugin/web_access.h"
@@ -104,6 +105,11 @@ struct Host {
             return st;
         };
         ne.ability_bulk = [this] { return ability_rows; };
+        // The client's own filled-in description, as client_app_internal.h gives it (no character sheet here).
+        ne.spell_description = [this](const game::SpellData& s) {
+            if (!world.conn) return std::string();
+            return app::spell_description(s, world.conn->strings(), app::description_player(*world.conn, nullptr));
+        };
         plugins = std::make_unique<plugin::NativePlugins>(ne);
     }
     ~Host() {
@@ -172,13 +178,14 @@ void nameplate_test_metrics(game::NameplateCanvasRegistry& canvas) {
 
 } // namespace
 
-// Keep the public nameplate functions at the offsets established before popup support.
+// Keep the upstream nameplate and spell functions ahead of the local popup services.
 static_assert(sizeof(void*) != 8 ||
               (offsetof(PluginHostApi, nameplate_register) == 856 &&
                offsetof(PluginHostApi, nameplate_unregister) == 864 &&
                offsetof(PluginHostApi, nameplate_spell_icon) == 888 &&
-               offsetof(PluginHostApi, get_large_dialog) == 896 &&
-               offsetof(PluginHostApi, answer_large_dialog) == 904));
+               offsetof(PluginHostApi, get_spells_data_bulk) == 896 &&
+               offsetof(PluginHostApi, get_large_dialog) == 904 &&
+               offsetof(PluginHostApi, answer_large_dialog) == 912));
 
 namespace {
 net::AppPacket native_game_popup(bool buttons = true) {
@@ -379,20 +386,39 @@ TEST_CASE("native plugins: nameplate frame view steps candidates by its stride")
     game::NameplateCanvasRegistry registry;
     auto frame = sample_nameplate_frame();
     frame.serial = 9;
+    frame.candidates[0].context.secondary_caption = "<Guild of Guards>";
+    auto& npc = frame.candidates.emplace_back();
+    npc.spawn.id = 12;
+    npc.spawn.npc = true;
+    npc.context.secondary_caption = "(Guildmaster)";
     plugin::NativeNameplateFrame lease(registry, frame);
     const auto& view = lease.view();
     CHECK(view.size == sizeof(HailstoneNameplateFrame));
     CHECK(view.candidate_size == sizeof(HailstoneNameplateCandidate));
     CHECK(view.reserved == 0);
-    REQUIRE(view.candidate_count == 2);
+    REQUIRE(view.candidate_count == 3);
     for (std::uint32_t i = 0; i < view.candidate_count; ++i) {
         const auto* by_stride = reinterpret_cast<const HailstoneNameplateCandidate*>(
             static_cast<const unsigned char*>(view.candidates) + std::size_t{i} * view.candidate_size);
         CHECK(hailstone_nameplate_candidate(&view, i) == by_stride);
         CHECK(by_stride->spawn_id == frame.candidates[i].spawn.id);
     }
-    CHECK(hailstone_nameplate_candidate(&view, 2) == nullptr);
+    CHECK(hailstone_nameplate_candidate(&view, 3) == nullptr);
     CHECK(HAILSTONE_NAMEPLATE_CANDIDATE_HAS(&view, cast_name));
+    REQUIRE(HAILSTONE_NAMEPLATE_CANDIDATE_HAS(&view, secondary_caption));
+    const auto guild = hailstone_nameplate_candidate(&view, 0)->secondary_caption;
+    REQUIRE(guild.data);
+    CHECK(std::string_view(guild.data, guild.bytes) == "<Guild of Guards>");
+    const auto hidden = hailstone_nameplate_candidate(&view, 1)->secondary_caption;
+    CHECK(hidden.data == nullptr);
+    CHECK(hidden.bytes == 0);
+    const auto description = hailstone_nameplate_candidate(&view, 2)->secondary_caption;
+    REQUIRE(description.data);
+    CHECK(std::string_view(description.data, description.bytes) == "(Guildmaster)");
+    auto old_view = view;
+    old_view.candidate_size = offsetof(HailstoneNameplateCandidate, secondary_caption);
+    CHECK(HAILSTONE_NAMEPLATE_CANDIDATE_HAS(&old_view, cast_name));
+    CHECK_FALSE(HAILSTONE_NAMEPLATE_CANDIDATE_HAS(&old_view, secondary_caption));
 }
 
 TEST_CASE("native plugins: native and Lua nameplates share candidate claims") {
@@ -1990,6 +2016,123 @@ TEST_CASE("native plugins: get_avail_aa_data_bulk and get_avail_disc_data_bulk, 
     h.run("/probediscs");
     CHECK(h.printed_line("[Probe] discs count 0, total 0, 8 bytes, 0 bytes left"));
     h.world.conn = std::move(conn);
+}
+TEST_CASE("native plugins: get_spells_data_bulk, laid out as docs/plugins.md says") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    net::GameConnection& conn = *h.world.conn;
+    // 3020: a heal (SPA 0, 40), mana 25, single target, magic resist, cleric 5 (no other class), cancelled by sitting,
+    // with a description (dbstr_us.txt type 6, id 3020, in the test world's file) and category 42, subcategory 43
+    // (type 5, Heals and Direct), no second subcategory. 3021: a proc of 3020 and a mana slot, no description. 3022:
+    // 3020 again under another id, not in the player's spell book. The slots they do not use are 254.
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(mq_test::spell_line({{0, "3020"}, {1, "Test Heal"}, {19, "25"}, {20, "40"}, {85, "1"},
+                                              {86, "0"}, {87, "254"}, {88, "254"}, {89, "254"}, {90, "254"}, {91, "254"},
+                                              {92, "254"}, {93, "254"}, {94, "254"}, {95, "254"}, {96, "254"},
+                                              {97, "254"}, {98, "5"}, {105, "5"}, {124, "1"}, {155, "3020"},
+                                              {156, "42"}, {157, "43"}}) +
+                         "\n" +
+                         mq_test::spell_line({{0, "3021"}, {1, "Test Proc"}, {20, "3020"}, {21, "10"}, {86, "85"},
+                                              {87, "15"}, {88, "254"}, {89, "254"}, {90, "254"}, {91, "254"},
+                                              {92, "254"}, {93, "254"}, {94, "254"}, {95, "254"}, {96, "254"},
+                                              {97, "254"}}) +
+                         "\n" +
+                         mq_test::spell_line({{0, "3022"}, {1, "Test Heal"}, {19, "25"}, {20, "40"}, {86, "0"},
+                                              {87, "254"}, {88, "254"}, {89, "254"}, {90, "254"}, {91, "254"},
+                                              {92, "254"}, {93, "254"}, {94, "254"}, {95, "254"}, {96, "254"},
+                                              {97, "254"}, {98, "5"}, {124, "1"}, {155, "3020"}})) == 3);
+    conn.set_spell_table_for_test(table);
+    // 3020 and 3021 are in the player's spell book; 3022 is not (until it is a discipline, then an AA's spell).
+    auto& profile = net::GameConnectionTestAccess::profile(conn);
+    if (!profile) profile.emplace();
+    profile->spell_book = {0xffffffffu, 3020, 3021};
+
+    // One record per id, in the order asked: an unknown id gets the fixed record alone (265 bytes, every count 0). A
+    // known one adds its 12 effect slots (20 bytes each), its 16 class levels (a byte each) and its fourteen strings,
+    // as its counts say (the name, seven empty ones here at 2 bytes each, the description, then the target type's,
+    // resist type's and categories' names) and its effect lines. A spell in the player's book has its description
+    // filled in for the player, as the spell display shows it.
+    h.run("/probespells 16384 3020 9999 3021");
+    CHECK(h.printed_line("[Probe] spell 0: id 3020, found 1, 642 bytes, name Test Heal, mana 25, target 5, flags 1, "
+                         "slots 12, classes 16, strings 14, effects 1")); // 265 + 240 + 16 + 11 + 14 + 30 + 39 + 27
+    // The classes that can use it, class 1 first: only the cleric (class 2).
+    CHECK(h.printed_line("[Probe] spell 0 class 2: level 5"));
+    // The slots, slot 1 first; the 11 unused ones (SPA 254) are not printed.
+    CHECK(h.printed_line("[Probe] spell 0 slot 1: effect 0, base 40, base2 0, max 0, formula 0"));
+    CHECK_FALSE(h.printed_line("[Probe] spell 0 slot 2: effect 254, base 0, base2 0, max 0, formula 0"));
+    CHECK(h.printed_line("[Probe] spell 0 description 3020: Heals you for 40 hit points."));
+    CHECK(h.printed_line("[Probe] spell 0 target Single, resist Magic, category 42 Heals, subcategory 43 Direct, "
+                         "subcategory2 0 Unknown"));
+    CHECK(h.printed_line("[Probe] spell 0 effect: Slot 1: Increase HP by 40"));
+    CHECK(h.printed_line("[Probe] spell 1: id 9999, found 0, 265 bytes, name -, mana 0, target 0, flags 0, slots 0, "
+                         "classes 0, strings 0, effects 0"));
+    CHECK(h.printed_line("[Probe] spell 2: id 3021, found 1, 653 bytes, name Test Proc, mana 0, target 0, flags 0, "
+                         "slots 12, classes 16, strings 14, effects 2")); // 265 + 240 + 16 + 11 + 16 + 47 + 29 + 29
+    CHECK(h.printed_line("[Probe] spell 2 slot 1: effect 85, base 3020, base2 0, max 0, formula 0"));
+    CHECK(h.printed_line("[Probe] spell 2 slot 2: effect 15, base 10, base2 0, max 0, formula 0"));
+    // Target type 0 is MacroQuest's "None", resist type 0 "Unresistable"; a category of 0 is "Unknown".
+    CHECK(h.printed_line("[Probe] spell 2 target None, resist Unresistable, category 0 Unknown, subcategory 0 Unknown, "
+                         "subcategory2 0 Unknown"));
+    CHECK(h.printed_line("[Probe] spell 2 description 0: -")); // no description id: an empty string
+    CHECK(h.printed_line("[Probe] spell 2 effect: Slot 1: Add Proc: Test Heal"));
+    CHECK(h.printed_line("[Probe] spell 2 effect: Slot 2: Increase Mana by 10"));
+    CHECK(h.printed_line("[Probe] spells count 3, 1564 bytes, 0 bytes left"));
+    // A spell not in the book keeps dbstr_us.txt's text, its codes left in.
+    h.printed.clear();
+    h.run("/probespells 16384 3022");
+    CHECK(h.printed_line("[Probe] spell 0 description 3020: Heals you for #1 hit points."));
+    // 4 + 265 + 240 + 16 + 11 + 14 + 30 + 49 + 27
+    CHECK(h.printed_line("[Probe] spells count 1, 656 bytes, 0 bytes left"));
+    // A discipline is the player's own too, though not in the book.
+    profile->disciplines = {3022};
+    h.printed.clear();
+    h.run("/probespells 16384 3022");
+    CHECK(h.printed_line("[Probe] spell 0 description 3020: Heals you for 40 hit points."));
+    // The filled text happens to be as long as the unfilled ("40" for "#1").
+    CHECK(h.printed_line("[Probe] spells count 1, 656 bytes, 0 bytes left"));
+    // So is the spell of an AA the player owns.
+    profile->disciplines.clear();
+    auto& aa = net::GameConnectionTestAccess::alt_adv(conn);
+    game::AltAbility rank;
+    rank.id = 7001;
+    rank.group = 9;
+    rank.rank = 1;
+    rank.spell = 3022;
+    aa.add(rank);
+    aa.owned = {{7001, 1, 0}};
+    h.printed.clear();
+    h.run("/probespells 16384 3022");
+    CHECK(h.printed_line("[Probe] spell 0 description 3020: Heals you for 40 hit points."));
+    // An AA rank the player does not own does not count.
+    aa.owned.clear();
+    h.printed.clear();
+    h.run("/probespells 16384 3022");
+    CHECK(h.printed_line("[Probe] spell 0 description 3020: Heals you for #1 hit points."));
+    CHECK(std::none_of(h.printed.begin(), h.printed.end(),
+                       [](const std::string& line) { return line.find("bytes unread") != std::string::npos; }));
+
+    // Only whole records: the third does not fit in 1200 bytes, and nothing goes past them.
+    h.printed.clear();
+    h.run("/probespells 1200 3020 9999 3021");
+    CHECK(h.printed_line("[Probe] spells count 2, 911 bytes, 0 bytes left"));
+    CHECK(h.printed_line("[Probe] spells past the end 0"));
+    // Below the count's 4 bytes nothing; no ids, the count alone.
+    h.printed.clear();
+    h.run("/probespells 3 3020");
+    CHECK(h.printed_line("[Probe] spells 0 bytes"));
+    CHECK(h.printed_line("[Probe] spells past the end 0"));
+    h.printed.clear();
+    h.run("/probespells 64");
+    CHECK(h.printed_line("[Probe] spells count 0, 4 bytes, 0 bytes left"));
+
+    // Without 'read': nothing, and the chat window says why.
+    Host denied(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    denied.approve(plugin::kCapAll & ~plugin::kCapRead);
+    REQUIRE(denied.plugins->load("HostProbe"));
+    denied.run("/probespells 4096 3020");
+    CHECK(denied.printed_line("[Probe] spells 0 bytes"));
+    CHECK(denied.printed_line("[Plugin] HostProbe: get_spells_data_bulk needs the server's 'read' permission"));
 }
 TEST_CASE("native plugins: get_raid_data_bulk roster, pets, positions and edge cases") {
     Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);

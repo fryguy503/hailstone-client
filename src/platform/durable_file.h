@@ -20,6 +20,12 @@ bool write_file_synced(const std::filesystem::path& path, std::string_view text)
 // with MOVEFILE_WRITE_THROUGH. *ec why it failed.
 bool replace_file_synced(const std::filesystem::path& from, const std::filesystem::path& to, std::error_code& ec);
 
+// A second name `to` for the file `from` (a hard link; `to` must not exist), on the disk before it returns (POSIX: the
+// folder synced). The updater keeps an old file in place this way while previous/ gets it, so the new file can then
+// replace it in one rename. False with *ec where there are no hard links: Windows (where a running program's files
+// cannot be replaced anyway) and file systems without them; the caller then moves the file instead.
+bool link_file_synced(const std::filesystem::path& from, const std::filesystem::path& to, std::error_code& ec);
+
 // Flushes a file already written (and closed) by other means to the disk: an unpacked file before the rename that
 // puts it in place. Opened for reading on POSIX, so a file made read-only can be synced too. False when it cannot be
 // opened or the flush fails.

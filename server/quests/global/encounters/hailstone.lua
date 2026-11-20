@@ -26,7 +26,8 @@
 -- OP_HsFiles 0x1435 (the client's net/server_files_packets.h has the layout). The list is SHA-256 hashed with
 -- sha256sum (GNU find and xargs; on Windows PowerShell's Get-FileHash) when the zone starts (and at #reloadquest),
 -- and again when a client asks and it is older than files_rescan seconds (300; never under 30); the hashes are kept
--- in client_files/.hailstone-cache, so only new or changed files are hashed again. Names starting with '.' are not
+-- in client_files/.hailstone-cache, so only new or changed files are hashed again, by one zone at a time (the others
+-- wait on client_files/.hailstone-lock and reuse what it hashed). Names starting with '.' are not
 -- sent. A client may ask for files_chunks_per_second pieces a second (768, 24 MB/s), and all of the zone's clients
 -- together for files_chunks_per_second_zone (1024, 32 MB/s); more wait their turn (a few dozen per client, on a
 -- timer) and are served in order, a client at a time in turn. A file that changed on disk since it was hashed (its
@@ -227,6 +228,12 @@ local function has_guild_permission(guild_id, rank, permission)
 	return allowed
 end
 
+-- An invitation reaches any Hailstone player online, in any zone, as a prompt they must answer: at most
+-- INVITE_TARGETS_MAX different players an inviter in INVITE_TARGETS_SECONDS, so an officer cannot prompt the whole
+-- server. Counted by the inviter's zone (Hailstone's own limit; the stock handler reaches only its own zone).
+local INVITE_TARGETS_MAX, INVITE_TARGETS_SECONDS = 5, 60
+local invite_targets = limiter(INVITE_TARGETS_SECONDS)
+
 -- The inviter's zone: the stock handler's checks (Client::Handle_OP_GuildInvite), with its words, then the
 -- invitation goes to the invitee's zone.
 local function guild_invite(client, name)
@@ -255,6 +262,20 @@ local function guild_invite(client, name)
 	if read_invite(target_id) then
 		client:Message(CHAT_RED, "That person is already considering a guild invitation.")
 		return
+	end
+	local w = window(invite_targets, client:CharacterID())
+	w.targets = w.targets or {}
+	if not w.targets[target_id] then
+		if (w.distinct or 0) >= INVITE_TARGETS_MAX then
+			client:Message(CHAT_RED, string.format("You have invited %d players in the last minute; wait before inviting more.", INVITE_TARGETS_MAX))
+			if not w.logged then
+				log(string.format("%s invites too many players; more are refused for %d s", client:GetCleanName(), INVITE_TARGETS_SECONDS))
+				w.logged = true
+			end
+			return
+		end
+		w.targets[target_id] = true
+		w.distinct = (w.distinct or 0) + 1
 	end
 	write_invite(target_id, { inviter_id = client:CharacterID(), inviter = client:GetCleanName(), guild_id = guild_id, rank = GUILD_RECRUIT, state = "p" })
 	eq.set_timer(string.format("guildinvite:%d:%d", client:CharacterID(), target_id), DELIVER_MS, encounter)
@@ -556,8 +577,19 @@ local files_timer = false
 local files_empty_logged = false -- build_client_files logged an empty list
 local windows   = package.config:sub(1, 1) == "\\"
 
--- A name for this process's scratch files in client_files/ (zones may hash at the same time).
-local scratch = tostring(os.time()) .. (tostring({}):match("(%x+)$") or "0")
+-- A name for this process's scratch files in client_files/ (zones may hash at the same time): the zone and instance
+-- it runs (no two processes run the same one at once), the time and a table's address. Made at first use, once the
+-- zone is up.
+local scratch_value = nil
+local function scratch()
+	if scratch_value == nil then
+		local zone = eq.get_zone_short_name and tostring(eq.get_zone_short_name() or "") or ""
+		local instance = eq.get_zone_instance_id and tonumber(eq.get_zone_instance_id()) or 0
+		scratch_value = string.format("%s-%d-%d-%s", zone:gsub("[^%w_]", ""), instance or 0, os.time(),
+			tostring({}):match("(%x+)$") or "0")
+	end
+	return scratch_value
+end
 
 -- Both write UTF-8: PowerShell's pipe is in the console's OEM code page otherwise, which turned a name outside ASCII
 -- into bytes neither PS_HASH (reading the list as UTF-8) nor the client could use.
@@ -608,7 +640,7 @@ end
 -- EQEmu's Lua has no os.remove or os.rename (SANITIZE_LUA_LIBS), so the shell removes and renames: the
 -- scripts delete themselves and their lists.
 local function powershell(script, args)
-	local name = ".hailstone-" .. scratch .. ".ps1"
+	local name = ".hailstone-" .. scratch() .. ".ps1"
 	if not write_file(FILES_DIR .. "/" .. name, script .. "Remove-Item -LiteralPath $PSCommandPath\n") then
 		return nil
 	end
@@ -650,7 +682,7 @@ end
 -- path -> lower-case hex SHA-256 for the paths given.
 local function hash_client_files(paths)
 	local hashes = {}
-	local name   = ".hailstone-hash-" .. scratch
+	local name   = ".hailstone-hash-" .. scratch()
 	if #paths == 0 or not write_file(FILES_DIR .. "/" .. name, table.concat(paths, "\n") .. "\n") then
 		return hashes
 	end
@@ -752,6 +784,94 @@ local function stat_client_file(path)
 	return tonumber(size), mtime
 end
 
+-- One zone hashes at a time. Every zone process makes the list when it starts, so a server starting its zones at once
+-- had each hash the same new files side by side. A zone with files to hash first takes client_files/.hailstone-lock
+-- (a folder: making one is atomic on every system), writing the time and its scratch name in it; another finding it
+-- held waits, a second at a time, then reads the cache the first one wrote and hashes only what is still missing. A
+-- lock older than LOCK_STALE seconds (or one with no owner for LOCK_OWNERLESS tries) is a zone's that stopped, and
+-- is removed. After LOCK_WAIT tries a zone hashes anyway, as all did before the lock: two zones taking a stale lock
+-- at the same moment can still both hash, which costs time and nothing else (each writes the cache whole and moves
+-- it into place). A zone that has a list already and was not forced keeps it while another hashes, and looks again
+-- at the next request after files_rescan.
+local LOCK_DIR        = FILES_DIR .. "/.hailstone-lock"
+local LOCK_STALE      = 900 -- seconds
+local LOCK_WAIT       = 300 -- tries, a second apart
+local LOCK_OWNERLESS  = 10  -- tries
+
+local function take_lock()
+	local out
+	if windows then
+		out = run('mkdir "' .. LOCK_DIR:gsub("/", "\\") .. '" 2>NUL && echo taken')
+	else
+		out = run("mkdir " .. sh_quote(LOCK_DIR) .. " 2>/dev/null && echo taken")
+	end
+	if not (out or ""):find("taken", 1, true) then
+		return false
+	end
+	write_file(LOCK_DIR .. "/owner", os.time() .. " " .. scratch() .. "\n")
+	return true
+end
+
+-- The lock's time and owner, nil when it has none (not held, or held a moment before its owner wrote).
+local function lock_owner()
+	local f = io.open(LOCK_DIR .. "/owner", "rb")
+	if not f then
+		return nil
+	end
+	local t, who = (f:read("*a") or ""):match("^(%d+) (%S+)")
+	f:close()
+	return tonumber(t), who
+end
+
+local function remove_lock()
+	if windows then
+		run('rmdir /S /Q "' .. LOCK_DIR:gsub("/", "\\") .. '" 2>NUL')
+	else
+		run("rm -rf " .. sh_quote(LOCK_DIR))
+	end
+end
+
+local function release_lock()
+	local _, who = lock_owner()
+	if who == scratch() then
+		remove_lock()
+	end
+end
+
+local function pause_a_second()
+	if windows then
+		run("ping -n 2 127.0.0.1 >NUL")
+	else
+		run("sleep 1")
+	end
+end
+
+-- True when this zone took the lock. False when it gave up waiting (or `wait` is false and another zone holds it).
+local function acquire_lock(wait)
+	local ownerless, broke = 0, false
+	for _ = 1, LOCK_WAIT do
+		if take_lock() then
+			return true
+		end
+		local t, who = lock_owner()
+		if t == nil and broke then
+			return false -- the lock cannot be made here at all: hash without it
+		end
+		ownerless = t == nil and ownerless + 1 or 0
+		if (t ~= nil and os.time() - t >= LOCK_STALE) or ownerless >= LOCK_OWNERLESS then
+			log("client_files: removing a hashing lock left by " .. (who or "a zone that wrote no owner"))
+			remove_lock()
+			broke, ownerless = true, 0
+		elseif not wait then
+			return false
+		else
+			pause_a_second()
+		end
+	end
+	log("client_files: another zone is still hashing; this one hashes too")
+	return false
+end
+
 -- The list, made again when `force` (the zone's start, #reloadquest) or older than files_rescan seconds. It runs
 -- find and sha256sum and blocks the zone meanwhile, so a client's request can make it at most that often. Its id
 -- changes whenever a file does.
@@ -771,15 +891,30 @@ local function build_client_files(force)
 	else
 		files_empty_logged = false
 	end
-	local cache = read_hash_cache()
-	local need  = {}
-	for _, e in ipairs(list) do
-		local c = cache[e.path]
-		if c and c.size == e.size and c.mtime == e.mtime then
-			e.sha = c.sha
-		else
-			need[#need + 1] = e.path
+	local need, locked
+	local function from_cache()
+		local cache = read_hash_cache()
+		need = {}
+		for _, e in ipairs(list) do
+			local c = cache[e.path]
+			if c and c.size == e.size and c.mtime == e.mtime then
+				e.sha = c.sha
+			elseif not e.sha then
+				need[#need + 1] = e.path
+			end
 		end
+	end
+	from_cache()
+	if #need > 0 then
+		locked = acquire_lock(force or files.built == nil)
+		if not locked and not force and files.built ~= nil then
+			local _, who = lock_owner()
+			if who ~= nil then
+				files.built = os.time() -- another zone is hashing: keep this list until the next look
+				return
+			end
+		end
+		from_cache() -- what another zone hashed meanwhile
 	end
 	if #need > 0 then
 		local hashes = hash_client_files(need)
@@ -801,11 +936,14 @@ local function build_client_files(force)
 		end
 	end
 	if #need > 0 or #kept ~= #list then
-		local tmp = FILES_DIR .. "/.hailstone-cache-" .. scratch
+		local tmp = FILES_DIR .. "/.hailstone-cache-" .. scratch()
 		if write_file(tmp, table.concat(lines, "\n") .. "\n") then
 			move_file(tmp, FILES_DIR .. "/.hailstone-cache")
 		end
 		log(string.format("client_files: %d files, %d hashed", #kept, #need))
+	end
+	if locked then
+		release_lock()
 	end
 	if id == 0 and #kept > 0 then
 		id = 1

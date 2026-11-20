@@ -578,6 +578,7 @@ void GameConnection::handle_group(Op op, const AppPacket& p) {
             if (bi->entity_id) pets_.focused = bi->entity_id;
             update_pet_presence();
             for (const auto& e : bi->entries) {
+                if (e.slot >= kMaxSpawnBuffSlots) continue;
                 auto it = std::find_if(pet_buffs_.begin(), pet_buffs_.end(), [&](const auto& b) { return b.first == e.slot; });
                 if (e.spell_id == 0xffffffffu) {
                     if (it != pet_buffs_.end()) pet_buffs_.erase(it);

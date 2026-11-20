@@ -274,7 +274,7 @@ void GameConnection::handle_mail_event(const ChatServerEvent& e) {
         it->second.body = f[2];
         std::string to;
         for (std::size_t i = 4; i < f.size(); ++i) to += f[i];
-        while (!to.empty() && (to.front() == '\n' || to.front() == ' ')) to.erase(to.begin());
+        to.erase(0, to.find_first_not_of("\n ")); // npos erases all: one pass, not one erase per character
         if (to.rfind("TO:", 0) == 0) to = to.substr(3);
         while (!to.empty() && to.back() == '\n') to.pop_back();
         it->second.to = to;
@@ -288,7 +288,7 @@ void GameConnection::handle_mail_event(const ChatServerEvent& e) {
             mail_.delivery.push_back(strings_.format(4530, std::vector<std::string>{}));
         } else {
             std::string to = f[1];
-            while (!to.empty() && to.front() == ' ') to.erase(to.begin());
+            to.erase(0, to.find_first_not_of(' '));
             system(4531, {to, f[2]});
             mail_.delivery.push_back(strings_.format(4531, std::vector<std::string>{to, f[2]}));
         }

@@ -8,11 +8,9 @@ A portable, open-source client for EQEmu servers, written in C++20 with Vulkan 1
 
 > **Beta.** Expect rough edges and missing features. Bug reports are welcome.
 
-Hailstone is an educational project: a study of how a game client of its era works (its network protocol, file formats, rendering and game rules), carried out by writing one from scratch.
+Hailstone is an independent, educational project: a study of how a game client of its era works (network protocol, file formats, rendering, game rules) by writing one from scratch. It contains no code or assets from proprietary software. You supply your own RoF2-compatible game folder, which Hailstone only reads and never modifies or redistributes.
 
-Hailstone is an independent project. It contains no code or assets from proprietary software. You supply your own RoF2-compatible game data folder, which Hailstone only reads and never modifies or redistributes.
-
-**Please subscribe to EverQuest.** Hailstone plays on files from an EverQuest installation, a RoF2 one or a current live one, and those files are Daybreak Game Company's work. If you use them, we highly encourage you to subscribe to [EverQuest](https://www.everquest.com) and support the game they come from. Hailstone is not affiliated with or endorsed by Daybreak Game Company; EverQuest is its trademark.
+**Please subscribe to EverQuest.** Hailstone plays on files from an EverQuest installation (RoF2 or current live), which are Daybreak Game Company's work. If you use them, we highly encourage you to subscribe to [EverQuest](https://www.everquest.com). Hailstone is not affiliated with or endorsed by Daybreak Game Company; EverQuest is its trademark.
 
 ## What works
 
@@ -24,10 +22,10 @@ Hailstone is an independent project. It contains no code or assets from propriet
 - Zone sound and music
 - Lua UI packs (`modern`, `gamepad`) with full gamepad support
 - MacroQuest-style Lua scripting and compiled plugins ([Plugins and Scripts](https://github.com/projecthailstone/hailstone-client/wiki/Plugins-and-Scripts)), with `/nav` and `/stick` on a navigation mesh ([Navigation](https://github.com/projecthailstone/hailstone-client/wiki/Navigation))
-- Add-ons from GitHub, with a store on the login screen that lists them and an install card that shows what each one asks to do ([Add-ons](https://github.com/projecthailstone/hailstone-client/wiki/Add-ons))
-- Automatic, signed updates, and the version and its release notes on the login screen ([Updater](https://github.com/projecthailstone/hailstone-client/wiki/Updater))
+- Add-ons from GitHub, with a store on the login screen that shows what each one asks to do ([Add-ons](https://github.com/projecthailstone/hailstone-client/wiki/Add-ons))
+- Automatic, signed updates, with release notes on the login screen ([Updater](https://github.com/projecthailstone/hailstone-client/wiki/Updater))
 - An in-game browser for the pages a server sends, on Linux and Windows ([Browser](https://github.com/projecthailstone/hailstone-client/wiki/Browser))
-- Optional server-side support: client file delivery, cross-zone guild invites ([server/README.md](server/README.md))
+- Optional server-side support: client file delivery, cross-zone guild invites, declined group invitations reaching the inviter, quest givers in the Find window and zone connections for the map's zone finder ([server/README.md](server/README.md))
 
 Work in progress and known gaps are tracked in the [plan](https://github.com/projecthailstone/hailstone-client/wiki/Plan), the [to-do list](https://github.com/projecthailstone/hailstone-client/wiki/To-Do) and the [known gaps](https://github.com/projecthailstone/hailstone-client/wiki/Known-Gaps).
 
@@ -35,14 +33,20 @@ Work in progress and known gaps are tracked in the [plan](https://github.com/pro
 
 | | Minimum |
 |---|---|
-| **Operating system** | Linux x64: Ubuntu 24.04 or a distribution of the same age or newer (the release is built against its glibc). Windows x64: Windows 10 version 1903 or later. macOS on Apple Silicon (arm64), 13.3 or later: test builds only (below). Intel Macs and Linux or Windows on arm64: build from source (no release packages). |
-| **Graphics** | A GPU and driver with Vulkan 1.3, dynamic rendering, synchronization2 and descriptor indexing (runtime descriptor arrays, non-uniform sampled image indexing, partially bound and variable-count bindings), and separate depth and stencil layouts (every Vulkan 1.2 driver has them). On macOS, MoltenVK, which comes with Hailstone. |
-| **Game data** | Your own RoF2-compatible game folder: a RoF2 install or a current live one. Hailstone reads it and never writes to it. We highly encourage an EverQuest subscription if you use its files. |
+| **Operating system** | Linux x64: Ubuntu 24.04 or a distribution of the same age or newer (the release is built against its glibc).<br>Windows x64: Windows 10 version 1903 or later.<br>macOS on Apple Silicon (arm64), 13.3 or later: test builds only (below).<br>Intel Macs and Linux or Windows on arm64: build from source (no release packages). |
+| **Graphics** | A GPU and driver with Vulkan 1.3 and the features listed below. On macOS, MoltenVK, which comes with Hailstone. |
+| **Game data** | Your own RoF2-compatible game folder: a RoF2 install or a current live one. Hailstone never writes to it. |
 | **Server** | An EQEmu server that accepts RoF2 clients. |
 | **Network** | UDP to the login and world servers. Automatic updates need HTTPS: on Linux and macOS the system's libcurl (macOS always has it). |
 | **Input** | Keyboard and mouse, or a gamepad. |
 
-To check a GPU, run `vulkaninfo --summary` and look for `apiVersion` 1.3 or higher, or look the GPU up on [vulkan.gpuinfo.org](https://vulkan.gpuinfo.org). If no GPU qualifies, Hailstone says so in a dialog that names each GPU and what it lacks; `hailstone/logs/hailstone.log` has the same. Textures in BC formats are used directly where the GPU supports them and decoded on the CPU otherwise, so GPUs without BC support still run.
+The GPU needs:
+
+- Vulkan 1.3, dynamic rendering and synchronization2;
+- descriptor indexing: runtime descriptor arrays, non-uniform sampled image indexing, partially bound and variable-count bindings;
+- separate depth and stencil layouts (every Vulkan 1.2 driver has them).
+
+To check a GPU, run `vulkaninfo --summary` and look for `apiVersion` 1.3 or higher, or look it up on [vulkan.gpuinfo.org](https://vulkan.gpuinfo.org). If no GPU qualifies, Hailstone names each GPU and what it lacks in a dialog and in `hailstone/logs/hailstone.log`. GPUs without BC texture support still run (textures are decoded on the CPU).
 
 Memory, VRAM and CPU minimums have not been measured yet.
 
@@ -50,7 +54,7 @@ Memory, VRAM and CPU minimums have not been measured yet.
 
 Release packages for Linux x64 and Windows x64 are on the [releases page](https://github.com/projecthailstone/hailstone-client/releases). Unzip one anywhere and run `hailstone` (`hailstone.exe` on Windows). Hailstone updates itself from then on.
 
-macOS on Apple Silicon has test builds only, published as pre-releases on the same page while it is tried on real Macs; each one's notes say how to start it. It is not signed with an Apple Developer ID, so macOS refuses it until you clear the download's quarantine (`xattr -dr com.apple.quarantine <folder>`).
+macOS on Apple Silicon has test builds only, as pre-releases on the same page; each one's notes say how to start it. They are not signed with an Apple Developer ID, so clear the download's quarantine first (`xattr -dr com.apple.quarantine <folder>`).
 
 ## Building from source
 
@@ -72,13 +76,15 @@ Hailstone is portable: settings, per-server files, characters and logs live in t
 - GCC 13+, Clang 17+ or MSVC 2022
 - `glslc` (shaderc) or `glslangValidator`
 - A Vulkan 1.3 driver (MoltenVK on macOS)
-- Linux, when the system has no SDL 3.2 or newer: pkg-config and the development packages SDL needs for Wayland and X11 (the list is in [tools/docker/linux.Dockerfile](tools/docker/linux.Dockerfile)); configuring stops if SDL would be built without Wayland
+- Linux, when the system has no SDL 3.2 or newer: pkg-config and the development packages SDL needs for Wayland and X11 (the list is in [tools/docker/linux.Dockerfile](tools/docker/linux.Dockerfile)). Configuring stops if SDL would be built without Wayland.
 
-Dependencies are fetched automatically unless the system already provides them. On Linux and Windows the in-game browser's helper is built on CEF, which is a few hundred MB to fetch; `-DHAILSTONE_BROWSER=OFF` leaves it out, and pages then open in the system's browser. Run tests with `ctest --test-dir build` and see the client's options with `build/hailstone/hailstone --help`.
+Dependencies are fetched automatically unless the system provides them. The in-game browser (Linux and Windows) is built on CEF, a few hundred MB to fetch; `-DHAILSTONE_BROWSER=OFF` leaves it out, and pages open in the system's browser.
+
+Run tests with `ctest --test-dir build` and see the client's options with `build/hailstone/hailstone --help`.
 
 ## Documentation
 
-The documentation is on the [wiki](https://github.com/projecthailstone/hailstone-client/wiki). It is built from the [docs/](docs/) folder, which is where to change it ([Wiki](https://github.com/projecthailstone/hailstone-client/wiki/Wiki)).
+The documentation is on the [wiki](https://github.com/projecthailstone/hailstone-client/wiki), built from the [docs/](docs/) folder, which is where to change it ([Wiki](https://github.com/projecthailstone/hailstone-client/wiki/Wiki)).
 
 | | |
 |---|---|
@@ -100,7 +106,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for AI coding
 
 ## License
 
-[GPL-2.0-or-later](LICENSE), with the plugin SDK ([sdk/](sdk/)) under MIT and an exception that lets plugins, scripts and add-ons use any licence: see [NOTICE.md](NOTICE.md). Releases up to 0.7.0-beta were MIT. Bundled and fetched third-party code keeps its own licenses, listed in [THIRD_PARTY.md](THIRD_PARTY.md).
+[GPL-2.0-or-later](LICENSE). The plugin SDK ([sdk/](sdk/)) is under MIT, and an exception lets plugins, scripts and add-ons use any licence: see [NOTICE.md](NOTICE.md). Releases up to 0.7.0-beta were MIT. Bundled and fetched third-party code keeps its own licenses, listed in [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ## Credits
 
@@ -112,5 +118,5 @@ Hailstone stands on the work of many people and projects:
 - [EQEmu documentation](https://docs.eqemu.dev) and [zone-utilities](https://github.com/EQEmu/zone-utilities): format and behaviour references
 - [MacroQuest](https://www.macroquest.org): the scripting API that Hailstone's Lua layer is compatible with
 - [eqmac](https://github.com/kevrgithub/eqmac) (kevrgithub): symbol research
-- [Dear ImGui](https://github.com/ocornut/imgui), [SDL3](https://libsdl.org), [Lua](https://www.lua.org), [volk](https://github.com/zeux/volk), [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator), [glm](https://github.com/g-truc/glm), [zlib](https://zlib.net), [doctest](https://github.com/doctest/doctest), [TinySoundFont](https://github.com/schellingb/TinySoundFont), [dr_libs](https://github.com/mackron/dr_libs), [stb](https://github.com/nothings/stb), [bcdec](https://github.com/iOrange/bcdec), [bc7enc_rdo](https://github.com/richgel999/bc7enc_rdo)
+- [Dear ImGui](https://github.com/ocornut/imgui), [SDL3](https://libsdl.org), [Lua](https://www.lua.org), [volk](https://github.com/zeux/volk), [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator), [glm](https://github.com/g-truc/glm), [zlib](https://zlib.net), [doctest](https://github.com/doctest/doctest), [TinySoundFont](https://github.com/schellingb/TinySoundFont), [dr_libs](https://github.com/mackron/dr_libs), [stb](https://github.com/nothings/stb), [bcdec](https://github.com/iOrange/bcdec), [bc7enc_rdo](https://github.com/richgel999/bc7enc_rdo), [Recast Navigation](https://github.com/recastnavigation/recastnavigation), [cgltf](https://github.com/jkuhlmann/cgltf), [Monocypher](https://monocypher.org), [AMD FidelityFX](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), [CEF](https://bitbucket.org/chromiumembedded/cef), [MoltenVK](https://github.com/KhronosGroup/MoltenVK)
 - [PBRify Remix](https://github.com/Kim2091/PBRify_Remix) (Kim2091): models for the optional HD texture tool

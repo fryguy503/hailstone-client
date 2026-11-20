@@ -591,6 +591,10 @@ std::optional<std::uint32_t> pick_spawn(const WorldState& world, const glm::vec3
                                         float max_distance, std::uint32_t skip) {
     std::optional<std::uint32_t> best;
     float best_t = max_distance;
+    // A ray without a direction (a zero or non-finite one: the cursor's ray at a degenerate camera) picks nothing;
+    // normalised it would be NaN, and the tests below would not reject it reliably.
+    const float length = glm::length(dir);
+    if (!std::isfinite(length) || !(length > 0.0f)) return best;
     glm::vec3 d = glm::normalize(dir);
     for (const auto& [id, s] : world.spawns) {
         if (id == skip || !s.targetable) continue;

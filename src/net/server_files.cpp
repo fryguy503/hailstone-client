@@ -633,10 +633,12 @@ void ServerFileSync::update(Clock::time_point now) {
         fail("the server stopped sending its files");
     } else if (state_ == State::Downloading && !asks_.empty() && now - last_piece_ >= kChunkRetry) {
         // Nothing for kChunkRetry: what is outstanding was lost (the last requests, with none after them to show
-        // it). Asked for again in the order first asked.
+        // it). Asked for again in the order first asked. A piece asked kChunkRetries times is not asked again after
+        // a silence, nor failed for it: a silent server is kChunkTimeout's to end, so it waits that out.
         last_piece_ = now;
         std::vector<std::uint64_t> silent;
-        for (const auto& [number, a] : asks_) silent.push_back(number);
+        for (const auto& [number, a] : asks_)
+            if (a.tries < kChunkRetries) silent.push_back(number);
         for (std::uint64_t number : silent) {
             ask_again(number);
             if (state_ != State::Downloading) break;

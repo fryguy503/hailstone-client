@@ -561,6 +561,8 @@ void add_event(lua_State* L, Script& s, const char* name, std::string_view patte
         Script* sp = &s;
         s.host->env.hooks->on_chat(s.owner, [sp](plugin::ChatLine& line) {
             if (sp->status != Script::Status::Running && sp->status != Script::Status::Paused) return plugin::Flow::Continue;
+            // The server may take 'events' away after mq.event (ScriptHost::policy_changed): no more lines then.
+            if (!(sp->caps & plugin::kCapEvents)) return plugin::Flow::Continue;
             if (line.text.size() >= kMaxEventLine) return plugin::Flow::Continue;
             // MQ matches a line with its item links shown as their text, unless the event keeps them (keepLinks).
             std::optional<std::string> stripped;
@@ -633,9 +635,17 @@ void start_thread(Script& s, int fn_ref, const std::vector<std::string>& args, s
 // goes on with the next. A thread so that the limit holds for each resume, if the handler waits. Each such event
 // returns to doevents' Lua loop rather than looping here: a handler whose own line raises its event again would keep
 // this C loop going forever, where no instruction hook could stop it.
+// Without 'events' (taken away after mq.event, or not held by the thread running now) there is nothing to run: nil,
+// not an error, since scripts call mq.doevents in their loop whether they have events or not. A script that lost the
+// permission loses the lines it had queued too.
 int l_next_event(lua_State* L) {
     Script& s = Script::of(L);
     const char* name = lua_isnoneornil(L, 1) ? nullptr : luaL_checkstring(L, 1);
+    if (!(s.caps & plugin::kCapEvents)) s.queued.clear();
+    if (!(s.caps & s.narrowed & plugin::kCapEvents)) {
+        lua_pushnil(L);
+        return 1;
+    }
     while (true) {
         auto it = s.queued.begin();
         while (it != s.queued.end() && name && it->name != name) ++it;
@@ -739,6 +749,10 @@ bool bind_command(Script& s, const char* given, int ref) {
         s.scratch = "mq.bind: " + cmd + " is " + hooks.owner_name(*o) + "'s command";
         return false;
     }
+    if (s.binds.size() >= kMaxBinds && !s.binds.contains(cmd)) {
+        s.scratch = std::format("mq.bind: a script has at most {} binds", kMaxBinds);
+        return false;
+    }
     if (auto it = s.binds.find(cmd); it != s.binds.end()) {
         luaL_unref(s.L, LUA_REGISTRYINDEX, it->second);
         s.binds.erase(it);
@@ -795,15 +809,18 @@ int l_imgui_init(lua_State* L) {
     const char* given = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
     lua_pushvalue(L, 2);
-    int ref = luaL_ref(L, LUA_REGISTRYINDEX); // before the name's string: it may raise (Lua is built as C)
-    std::string name = given;
+    int ref = luaL_ref(L, LUA_REGISTRYINDEX); // it may raise: no C++ object in this frame (Lua is built as C)
     for (auto& w : s.windows)
-        if (w.first == name) {
+        if (w.first == given) {
             luaL_unref(L, LUA_REGISTRYINDEX, w.second);
             w.second = ref;
             return 0;
         }
-    s.windows.emplace_back(name, ref);
+    if (s.windows.size() >= kMaxWindows) {
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+        return luaL_error(L, "mq.imgui.init: a script has at most %d windows", static_cast<int>(kMaxWindows));
+    }
+    s.windows.emplace_back(given, ref);
     return 0;
 }
 
@@ -1330,6 +1347,12 @@ end
 function ImGui.SetNextWindowSize(w, h, cond)
     if type(w) == 'table' then return ui.SetNextWindowSize(w.x or w[1], w.y or w[2], h) end
     return ui.SetNextWindowSize(w, h, cond)
+end
+function ImGui.SetNextWindowSizeConstraints(a, b, c, d)
+    if type(a) == 'table' then
+        return ui.SetNextWindowSizeConstraints(a.x or a[1], a.y or a[2], b.x or b[1], b.y or b[2])
+    end
+    return ui.SetNextWindowSizeConstraints(a, b, c, d)
 end
 function ImGui.SetNextWindowPos(x, y, cond)
     if type(x) == 'table' then return ui.SetNextWindowPos(x.x or x[1], x.y or x[2], y) end

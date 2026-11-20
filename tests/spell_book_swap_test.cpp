@@ -168,10 +168,18 @@ TEST_CASE("hs.SpellBookMemorize: with replace_gem_spell off, an empty gem only (
         lua_newtable(L);
         api.register_functions(L);
         lua_setglobal(L, "hs");
+        host.cursor_spell = 1;
         REQUIRE(luaL_dostring(L, "hs.SpellBookMemorize(1, 0)") == LUA_OK); // gem 0 is taken: nothing
         CHECK_FALSE(conn.spell_state().memorizing.has_value());
+        CHECK(host.cursor_spell == 1);
+        conn.set_sitting(false); // standing: memorize refuses, and the spell stays on the cursor
+        REQUIRE(luaL_dostring(L, "hs.SpellBookMemorize(1, 1)") == LUA_OK);
+        CHECK_FALSE(conn.spell_state().memorizing.has_value());
+        CHECK(host.cursor_spell == 1);
+        conn.set_sitting(true);
         REQUIRE(luaL_dostring(L, "hs.SpellBookMemorize(1, 1)") == LUA_OK); // gem 1 is empty
         REQUIRE(conn.spell_state().memorizing.has_value());
+        CHECK_FALSE(host.cursor_spell.has_value()); // started: off the cursor
         CHECK(conn.spell_state().memorizing->gem == 1);
         CHECK(conn.spell_state().memorizing->spell == 201);
         lua_close(L);

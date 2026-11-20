@@ -257,17 +257,33 @@ void WorldState::smooth(float dt, double now, const FloorFn& floor, const Region
         for (std::size_t i = begin; i < end; ++i) step(smooth_scratch[i].first, *smooth_scratch[i].second);
     });
     // PhysicsObject::vf8 @0x59e170 with each step of a rider: it takes its mount's position and heading, SpeedRun 0
-    // and (unless +0x163) no velocity. The rider is drawn where its mount is.
+    // and (unless +0x163) no velocity. The rider is drawn where its mount is. A rider of a rider takes the place of the
+    // chain's bottom (a spawn that rides nothing, or the local player, which this loop does not move), so it is not a
+    // frame behind when the map's order copies it before its own mount; a cycle or an absurd chain takes the direct
+    // mount, as before.
+    constexpr int kMaxMountChain = 16;
+    auto carrier = [&](const Spawn& rider) -> const Spawn* {
+        auto m = rider.mount_id ? spawns.find(rider.mount_id) : spawns.end();
+        if (m == spawns.end()) return nullptr;
+        auto at = m;
+        for (int depth = 0;; ++depth) {
+            if (at->first == player_id || !at->second.mount_id) return &at->second;
+            auto next = spawns.find(at->second.mount_id);
+            if (next == spawns.end()) return &at->second;
+            if (depth == kMaxMountChain) return &m->second;
+            at = next;
+        }
+    };
     for (auto& [id, s] : spawns) {
-        auto m = s.mount_id ? spawns.find(s.mount_id) : spawns.end();
-        if (m == spawns.end() || id == player_id) continue;
-        s.position = m->second.position;
-        s.heading = m->second.heading;
+        const Spawn* m = carrier(s);
+        if (!m || id == player_id) continue;
+        s.position = m->position;
+        s.heading = m->heading;
         s.speed_run = 0.0f;
         s.velocity = glm::vec3(0.0f);
-        s.display_position = m->second.display_position;
-        s.display_heading = m->second.display_heading;
-        s.display_valid = m->second.display_valid;
+        s.display_position = m->display_position;
+        s.display_heading = m->display_heading;
+        s.display_valid = m->display_valid;
     }
     // Hailstone (Spawn::stalled): after the riders take their mounts' places, so a rider stalls with its mount.
     for (auto& [id, s] : spawns) {

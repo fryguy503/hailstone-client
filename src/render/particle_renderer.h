@@ -153,6 +153,11 @@ private:
     std::unordered_map<std::string, std::uint32_t> slots_; // lower-case name -> slot (kMissingParticleTexture: none)
     std::unordered_map<std::string, glm::vec3> colors_;    // lower-case name -> texture_color
     mutable std::string lower_scratch_;                    // lowered's buffer (main thread only)
+    // prepare's pass over the emitters: each definition's textures are asked for once a pass, not once per emitter
+    // (emitters share definitions by the hundred). def_pass_[d] is the pass that last asked for definition d.
+    std::vector<std::uint32_t> def_pass_;
+    std::uint32_t prepare_pass_ = 0;
+    std::vector<std::string> wanted_; // prepare's names to load this pass (kept for its capacity)
     std::uint32_t version_ = 1;
     std::array<std::uint32_t, VkContext::kFramesInFlight> set_version_{};
     std::array<Buffer, VkContext::kFramesInFlight> vertices_{};
@@ -178,11 +183,11 @@ private:
     };
     struct Batch { std::uint32_t first, count; int pipeline; };
     std::vector<OrderItem> order_;
-    // The classic path's quads per emitter and each one's first vertex (draw gives the places out before the workers
-    // build the quads).
+    // Per emitter, the particles it shows and the first one's place: the classic path's quads and first vertex, the
+    // modern path's items in order_ (draw gives the places out before the workers fill them).
     std::vector<std::uint32_t> emitter_quads_, emitter_firsts_;
     static constexpr std::size_t kQuadGrain = 256;  // modern particles a worker builds at a time
-    static constexpr std::size_t kEmitterGrain = 8; // classic emitters a worker takes at a time
+    static constexpr std::size_t kEmitterGrain = 8; // emitters a worker takes at a time
     std::vector<DefinitionLook> looks_;
     std::vector<std::int8_t> lit_by_definition_;
     std::vector<Batch> batches_;

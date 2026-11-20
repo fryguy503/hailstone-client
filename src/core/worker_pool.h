@@ -6,7 +6,8 @@
 //
 // The frame owns one pool (app::ClientApp) and registers it with set_workers; the renderers call the free
 // parallel_for, which runs the loop on the calling thread when no pool is registered (the tests, the tools, a pool
-// of size 0). A parallel_for called from inside a worker also runs inline, so nesting cannot deadlock.
+// of size 0). A parallel_for called from inside a worker also runs inline; parallel_for_nested spreads such a loop
+// over the workers too.
 //
 // The work must touch only what its caller hands it: disjoint ranges of the caller's arrays, read-only shared state.
 
@@ -100,6 +101,22 @@ template <class Fn> void parallel_for(std::size_t count, std::size_t grain, Fn&&
     if (count == 0) return;
     WorkerPool* pool = workers();
     if (!pool || pool->workers() == 0 || WorkerPool::on_worker() || count <= grain) {
+        fn(std::size_t{0}, count);
+        return;
+    }
+    pool->parallel_for(count, grain, std::forward<Fn>(fn));
+}
+
+// parallel_for that is split over the workers even when called from one: from a background task (the actor effects'
+// step) or from a chunk of another loop (a renderer's draw recorded in a SceneRecorder lane), where parallel_for runs
+// inline. It cannot deadlock: the calling thread takes chunks itself and then waits only for helpers a worker has
+// already started, and a thread that is waiting never starts another job, so no wait can come back round to it. For
+// heavy loops that are often reached from a worker (the particle systems' step and quads); the others keep
+// parallel_for, so nesting there stays inline as before.
+template <class Fn> void parallel_for_nested(std::size_t count, std::size_t grain, Fn&& fn) {
+    if (count == 0) return;
+    WorkerPool* pool = workers();
+    if (!pool || pool->workers() == 0 || count <= grain) {
         fn(std::size_t{0}, count);
         return;
     }

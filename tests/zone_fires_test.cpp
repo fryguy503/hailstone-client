@@ -111,6 +111,73 @@ TEST_CASE("a mesh's flames: touching triangles are one flame") {
     CHECK(f.width == doctest::Approx(0.3f * 2.0f * 0.7f));
 }
 
+TEST_CASE("a mesh's flames: the grouping matches the pairwise merge, a chain of growing boxes and NaN included") {
+    // The pairwise merge mesh_flames used before its sweep: the reference for the result and its order.
+    auto pairwise = [](std::vector<FlameBox> boxes) {
+        auto touch = [](const FlameBox& a, const FlameBox& b) {
+            return glm::all(glm::lessThanEqual(a.min, b.max + 0.25f)) && glm::all(glm::lessThanEqual(b.min, a.max + 0.25f));
+        };
+        for (bool merged = true; merged;) {
+            merged = false;
+            for (std::size_t i = 0; i < boxes.size(); ++i)
+                for (std::size_t j = i + 1; j < boxes.size();)
+                    if (touch(boxes[i], boxes[j])) {
+                        boxes[i].min = glm::min(boxes[i].min, boxes[j].min);
+                        boxes[i].max = glm::max(boxes[i].max, boxes[j].max);
+                        boxes.erase(boxes.begin() + static_cast<std::ptrdiff_t>(j));
+                        merged = true;
+                    } else {
+                        ++j;
+                    }
+        }
+        return boxes;
+    };
+    std::uint32_t seed = 12345;
+    auto rnd = [&seed](float range) {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed >> 8) / 16777216.0f * range;
+    };
+    for (int round = 0; round < 20; ++round) {
+        Mesh mesh;
+        mesh.materials = {named("FIRE1_MDF"), named("BFIRE1_MDF")};
+        std::vector<FlameBox> tris;
+        for (std::uint32_t m = 0; m < 2; ++m) {
+            MeshPart part{static_cast<std::uint32_t>(mesh.indices.size()), 0, m};
+            for (int t = 0; t < 150; ++t) {
+                FlameBox b{glm::vec3(1e30f), glm::vec3(-1e30f), m == 0 ? FlameHue::Fire : FlameHue::Blue};
+                glm::vec3 at(rnd(60.0f), rnd(60.0f), rnd(10.0f));
+                for (int k = 0; k < 3; ++k) {
+                    Vertex v;
+                    v.position = at + glm::vec3(rnd(2.0f), rnd(2.0f), rnd(2.0f));
+                    if (round == 0 && t == 7 && k == 1) v.position.y = std::numeric_limits<float>::quiet_NaN();
+                    b.min = glm::min(b.min, v.position);
+                    b.max = glm::max(b.max, v.position);
+                    mesh.indices.push_back(static_cast<std::uint32_t>(mesh.vertices.size()));
+                    mesh.vertices.push_back(v);
+                }
+                tris.push_back(b);
+                part.index_count += 3;
+            }
+            mesh.parts.push_back(part);
+        }
+        auto want = pairwise(tris);
+        auto got = mesh_flames(mesh);
+        REQUIRE(got.size() == want.size());
+        for (std::size_t i = 0; i < got.size(); ++i) {
+            CHECK(got[i].hue == want[i].hue);
+            // Bitwise equal: NaN compares unequal to itself.
+            CHECK(std::memcmp(&got[i].min, &want[i].min, sizeof(glm::vec3)) == 0);
+            CHECK(std::memcmp(&got[i].max, &want[i].max, sizeof(glm::vec3)) == 0);
+        }
+    }
+
+    // A chain of candles, each touching only its neighbours, listed out of order: one flame.
+    Mesh stairs;
+    stairs.materials = {named("FIRE1_MDF")};
+    for (int i : {4, 0, 3, 1, 2}) add_flame(stairs, {static_cast<float>(i) * 0.5f, 0, static_cast<float>(i)}, 0.4f, 0.9f, 0);
+    CHECK(mesh_flames(stairs).size() == 1);
+}
+
 TEST_CASE("merged fires: one standing in another's flame goes") {
     std::vector<ZoneFire> meshes = {{{0, 0, 0}, 1.0f, 2.0f, FlameHue::Blue}, {{50, 0, 0}, 1.0f, 2.0f}};
     // An emitter on the first torch's flame, and one by itself.

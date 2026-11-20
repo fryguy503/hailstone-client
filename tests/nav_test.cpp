@@ -281,6 +281,29 @@ TEST_CASE("nav: passable triangles are left out") {
     CHECK(geo->triangle_count() == 0);
 }
 
+TEST_CASE("nav: a stray vertex far out does not size the tile grid; geometry wider than the tile cap builds none") {
+    Scene s;
+    s.floor(0, 0, 50, 50, 0);
+    const std::size_t floor_tris = s.verts.size() / 3;
+    // A damaged triangle reaching 1e30 units away (and one past int's range once divided by the tile size).
+    s.tri({0, 0, 0}, {1e30f, 0, 0}, {0, 1e30f, 0});
+    s.tri({0, 0, 0}, {-3e38f, 0, 0}, {0, 50, 0});
+    auto geo = s.geometry();
+    CHECK(geo->triangle_count() == floor_tris);
+    CHECK(geo->tiles_x() == 1);
+    CHECK(geo->tiles_y() == 1);
+
+    // Sane coordinates but a cell so small the grid would need millions of tiles: no geometry, no grid.
+    nav::BuildParams tiny;
+    tiny.cell_size = 0.001f;
+    Scene wide;
+    wide.floor(-90000, -90000, 90000, 90000, 0);
+    auto none = wide.geometry(tiny);
+    CHECK(none->triangle_count() == 0);
+    CHECK(none->tiles_x() == 0);
+    CHECK(none->tile_triangles(0, 0).empty());
+}
+
 TEST_CASE("nav: areas from the regions: water costs more and can be avoided, lava is never crossed") {
     Scene s;
     s.floor(0, 0, 100, 100, 0);

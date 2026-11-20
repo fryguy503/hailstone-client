@@ -1,7 +1,7 @@
 # Third-party code and references
 
-Hailstone itself is GPL-2.0-or-later, its plugin SDK (`sdk/`) MIT (NOTICE.md). Everything listed here keeps its own
-licence; all of it is compatible with GPL version 2 except MoltenVK (Apache-2.0), which is not compiled in: it is a
+Hailstone itself is GPL-2.0-or-later; its plugin SDK (`sdk/`) is MIT (NOTICE.md). Everything listed here keeps its own
+licence. All of it is compatible with GPL version 2 except MoltenVK (Apache-2.0). MoltenVK is not compiled in: it is a
 separate library shipped beside the macOS binary, with its licence.
 
 ## Libraries
@@ -14,22 +14,34 @@ separate library shipped beside the macOS binary, with its licence.
 | MoltenVK (github.com/KhronosGroup/MoltenVK, release v1.4.2, the prebuilt `MoltenVK-macos.tar`) | Apache-2.0 | Vulkan on Metal, macOS only: shipped beside the client as `libMoltenVK.dylib`, with `MoltenVK-LICENSE.txt` |
 | Vulkan Memory Allocator | MIT | GPU memory |
 | glm | MIT (Happy Bunny) | maths |
-| zlib | zlib | PFS inflate; PNG writer in tools |
+| zlib (the system's, else zlib-ng 2.2.4 built zlib-compatible: github.com/zlib-ng/zlib-ng) | zlib | PFS archives, the session layer's compression, PNG and zip reading and writing |
 | doctest | MIT | tests only |
+| Dear ImGui (github.com/ocornut/imgui, v1.91.9, with its SDL3 and Vulkan backends) | MIT | the immediate-mode UI the Lua UI packs and the developer screens draw with |
 | dr_wav, dr_mp3 (github.com/mackron/dr_libs, tag wav-0.14.5) | public domain or MIT No Attribution | WAV and MP3 decoding (`src/audio/pcm.cpp`) |
 | TinySoundFont (github.com/schellingb/TinySoundFont, commit 853a0a1) | MIT | SoundFont synthesis of the XMI music (`src/audio/xmi_player.cpp`) with a General MIDI SoundFont |
 | stb_image (github.com/nothings/stb, commit 2c980bb) | public domain / MIT | JPEG pictures on the pre-game and loading screens (`src/assets/jpeg_read.cpp`) |
-| Lua 5.5.1 (`third_party/lua`; one change, marked "Hailstone" in `lstrlib.c`: a pattern match calls the function a state's registry holds under `hailstone.match_check` every 65536 steps, so a match is held to the time limit of the code that runs it) | MIT | the Lua UI's scripting (`src/ui/lua`) and the MQ-style scripts (`src/mq`) |
+| Lua 5.5.1 (`third_party/lua`; one change, see note) | MIT | the Lua UI's scripting (`src/ui/lua`) and the MQ-style scripts (`src/mq`) |
 | Recast Navigation (github.com/recastnavigation/recastnavigation, tag v1.6.0) | zlib | navigation meshes and path queries (`src/nav`) |
 | cgltf (github.com/jkuhlmann/cgltf, v1.15) | MIT | binary glTF reading for replacement models (`src/assets/gltf_mesh.cpp`) |
 | bcdec (github.com/iOrange/bcdec, commit 80859ed) | MIT or Unlicense | BC7 block decoding for texture packs on devices without BC formats (`src/assets/texture.cpp`) |
 | AMD FidelityFX FSR 1 (`third_party/fsr1`: `ffx_a.h`, `ffx_fsr1.h` from github.com/GPUOpen-Effects/FidelityFX-FSR, commit a21ffb8) | MIT | the render scale's upscale and sharpening (`shaders/fsr_easu.frag`, `fsr_rcas.frag`) |
-| AMD FidelityFX SDK v1.1.4, the FSR 3.1 upscaler's GLSL (`third_party/fidelityfx`: `gpu/` headers and the Vulkan backend's `*_pass.glsl`, github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK, commit c6efa6b; two storage formats changed, see its README) | MIT | the FSR 3.1 upscaler (`display.upscaler = fsr3`); `src/render/fsr3_upscaler.cpp` ports the SDK's `ffx_fsr3upscaler.cpp` host logic (MIT) |
-| CEF, the Chromium Embedded Framework (cef-builds.spotifycdn.com, 156.0.14+g4fa4ab5+chromium-156.0.8078.48, minimal binary builds) | BSD-3-Clause; Chromium's own components under their licences, listed in the shipped `browser/CREDITS.html` | the in-game browser's helper (`tools/hailstone-web`, docs/browser.md), a program of its own: the client never links it. `browser/CEF-LICENSE.txt` and `browser/CREDITS.html` are installed beside it |
+| AMD FidelityFX SDK v1.1.4, the FSR 3.1 upscaler's GLSL (`third_party/fidelityfx`, github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK, commit c6efa6b; see note) | MIT | the FSR 3.1 upscaler (`display.upscaler = fsr3`) |
+| CEF, the Chromium Embedded Framework (cef-builds.spotifycdn.com, 156.0.14+g4fa4ab5+chromium-156.0.8078.48, minimal binary builds) | BSD-3-Clause; Chromium's own components under their licences (see note) | the in-game browser's helper (`tools/hailstone-web`, docs/browser.md) |
 | Monocypher (github.com/LoupVaillant/Monocypher, tag 4.0.2) | BSD-2-Clause or CC0-1.0 | Ed25519 signatures of the update manifest (`src/core/ed25519.cpp`, docs/updater.md) |
-| libcurl (the system's own: `libcurl.so.4`, `/usr/lib/libcurl.4.dylib`) | curl (MIT/X-style) | the updater's HTTPS on Linux and macOS (`src/platform/http_get.cpp`), loaded at run time; not shipped, and only its API's names and constant values (from `curl/curl.h`) are in the source |
+| libcurl (the system's own: `libcurl.so.4`, `/usr/lib/libcurl.4.dylib`) | curl (MIT/X-style) | the updater's HTTPS on Linux and macOS (`src/platform/http_get.cpp`), loaded at run time (see note) |
 | WinHTTP (part of Windows) | system library | the updater's HTTPS on Windows (`src/platform/http_get.cpp`) |
 | bc7enc_rdo (github.com/richgel999/bc7enc_rdo, commit b943862: `bc7enc`, `rgbcx`) | MIT or public domain | BC7/BC5/BC4 encoding in `src/texpack` (`tools/texpack`, and Hailstone Texture Studio, which builds against this repository), not the client |
+
+Notes on the table:
+
+- **Lua**: the one change is marked "Hailstone" in `lstrlib.c`. A pattern match calls the function a state's registry
+  holds under `hailstone.match_check` every 65536 steps, so a match is held to the time limit of the code that runs it.
+- **FidelityFX SDK**: the copied files are the `gpu/` headers and the Vulkan backend's `*_pass.glsl`. Two storage
+  formats were changed; see its README. `src/render/fsr3_upscaler.cpp` ports the SDK's `ffx_fsr3upscaler.cpp` host
+  logic (MIT).
+- **CEF**: Chromium's components are listed in the shipped `browser/CREDITS.html`. The helper is a program of its own:
+  the client never links it. `browser/CEF-LICENSE.txt` and `browser/CREDITS.html` are installed beside it.
+- **libcurl**: not shipped. Only its API's names and constant values (from `curl/curl.h`) are in the source.
 
 `tools/texpack/upscale.py` runs outside the build on the player's machine. It uses PyTorch (BSD-3-Clause) and spandrel (MIT)
 from PyPI, and the PBRify models (github.com/Kim2091/PBRify_Remix, CC0-1.0), which the player downloads. None of
@@ -47,42 +59,70 @@ original game.
 
 ## References
 
-- Fellowship transport (`src/net/fellowship_packets.*`, `game_connection_fellowship.cpp`) uses EQEmu PR #5134 "TOB: Fellowships" (github.com/EQEmu/Server, open and unmerged, GPL-3.0): its `common/fellowship.h`, `zone/fellowship.cpp` and RoF2 profile encoder, as protocol references only. No server code is copied. Stock EQEmu does not send RoF2 fellowship packets. Native request fields and UI behavior were independently checked against the original client; the 64-member array format and the 1080-byte invitation are documented extensions beyond RoF2.
-- **kettle-framegen** (the Hailstone author's own Vulkan frame generation layer, BSD-3-Clause): frame generation's choices of what to show where two frames disagree (a place being covered from the last frame, one uncovered from this one, the other frame off the screen) and the pacing follow it (`docs/graphics.md` "Frame generation"). No code is copied; Hailstone's passes take the engine's motion and depth instead of its motion search.
+- Fellowship transport (`src/net/fellowship_packets.*`, `game_connection_fellowship.cpp`) uses EQEmu PR #5134 "TOB: Fellowships" (github.com/EQEmu/Server, open and unmerged, GPL-3.0). Its `common/fellowship.h`, `zone/fellowship.cpp` and RoF2 profile encoder are protocol references only; no server code is copied.
+  - Stock EQEmu does not send RoF2 fellowship packets.
+  - Native request fields and UI behavior were independently checked against the original client.
+  - The 64-member array format and the 1080-byte invitation are documented extensions beyond RoF2.
+- **kettle-framegen** (the Hailstone author's own Vulkan frame generation layer, BSD-3-Clause). Frame generation follows it for the pacing and for what to show where two frames disagree: a place being covered from the last frame, one uncovered from this one, the other frame off the screen (`docs/graphics.md` "Frame generation"). No code is copied; Hailstone's passes take the engine's motion and depth instead of its motion search.
 - **OpenEQ** (github.com/daeken/OpenEQ, © daeken), declared `MIT OR Apache-2.0` in its `Cargo.toml`. Its research docs are used as a spec for asset formats, rendering, the sky and audio. Any code here written after studying its implementation must say so in a comment and be listed below.
-- **EQEmu** (github.com/EQEmu/Server, GPL-3.0). Its RoF2 packet structs and opcodes are used as a protocol reference, and its session layer (`common/net/reliable_stream_connection.cpp`, `crc32.cpp`) and login server (`loginserver/client.cpp`, `login_types.h`, `world_server.cpp`, `login_opcodes_sod.conf`) as the spec for `src/net/session*.cpp` and `src/net/login.cpp` (`docs/protocol/`). No EQEmu code is copied. EQEmu zone-utilities (GPL-2.0) and the server's `zone/map.cpp` were read only for the WLD placement rotation order and signs (`docs/formats/wld.md`).
-- **EQEmu PEQ database** (github.com/ProjectEQ/peqdatabase): `src/game/shield_models.inc` lists item model numbers (`items.idfile`) of its shield items (`itemtype` 8), counted by `tools/gen_shield_models.py`, and of the ornaments (`itemtype` 54) whose model in the player's game folder is shaped like a shield (measured when the table is made; nothing from the game files is kept). Only the model numbers are kept; no other item data.
+- **EQEmu** (github.com/EQEmu/Server, GPL-3.0). No EQEmu code is copied.
+  - Its RoF2 packet structs and opcodes are used as a protocol reference.
+  - Its session layer (`common/net/reliable_stream_connection.cpp`, `crc32.cpp`) and login server (`loginserver/client.cpp`, `login_types.h`, `world_server.cpp`, `login_opcodes_sod.conf`) are the spec for `src/net/session*.cpp` and `src/net/login.cpp` (`docs/protocol/`).
+  - EQEmu zone-utilities (GPL-2.0) and the server's `zone/map.cpp` were read only for the WLD placement rotation order and signs (`docs/formats/wld.md`).
+- **EQEmu PEQ database** (github.com/ProjectEQ/peqdatabase): `src/game/shield_models.inc`, counted by `tools/gen_shield_models.py`, lists item model numbers (`items.idfile`) of:
+  - its shield items (`itemtype` 8);
+  - the ornaments (`itemtype` 54) whose model in the player's game folder is shaped like a shield (measured when the table is made; nothing from the game files is kept).
+
+  Only the model numbers are kept; no other item data.
 - **Housing and marketplace research headers** (`Housing.h`, `HousingNpc.h`, `Market.h` of NMS-Release-Extras, MacroQuest-derived, GPL-2.0): the real estate opcodes and layouts, used as a spec and checked against the original client (`docs/protocol/rof2-packets.md` "Real estate"). No code is copied.
 - **libeq** (github.com/cjab/libeq, MIT) and **LanternExtractor** (github.com/LanternEQ/LanternExtractor, MIT): WLD fragment layouts and the render-method table, used as a spec (`docs/formats/wld.md`). No code is copied.
 - **LanternExtractor** data: `tools/data/lantern_animationsources.txt` is an unchanged copy of `LanternExtractor/ClientData/animationsources.txt` (MIT, © 2024 LanternEQ), the table of which character models borrow animations; `tools/gen_race_models.py` turns it into `src/game/race_models.inc`.
-- **Placed-object animation**: the playback rules of `src/assets/object_animation.cpp` (key times, the closing key, the shared period, the blend and the shared controller) follow OpenEQ `docs/WLD_OBJECT_ANIMATION.md`, used as a spec, with the interval rules checked again in RoF2's EQGraphicsDX9.dll; no OpenEQ animation code was studied or ported. See `docs/formats/wld.md`.
-- **Volumetric clouds** (`shaders/clouds.comp`, `cloud_noise.comp`): techniques from published papers, used as a spec.
-  These are Schneider's cloud shape and noise (SIGGRAPH 2015, Horizon Zero Dawn), Hillaire's energy-conserving
-  integration (SIGGRAPH 2016, Frostbite), Wrenninge et al.'s multiple-scattering octaves (2013), Jarzynski and Olano's
-  pcg3d hash (JCGT 2020) and Jimenez's interleaved gradient noise (2014). MMqd's godot-nishita-sky-with-volumetric-clouds
+- **Placed-object animation**: the playback rules of `src/assets/object_animation.cpp` (key times, the closing key, the shared period, the blend and the shared controller) follow OpenEQ's `docs/WLD_OBJECT_ANIMATION.md` (in its repository), used as a spec, with the interval rules checked again in RoF2's EQGraphicsDX9.dll; no OpenEQ animation code was studied or ported. See `docs/formats/wld.md`.
+- **Volumetric clouds** (`shaders/clouds.comp`, `cloud_noise.comp`): techniques from published papers, used as a spec:
+  - Schneider's cloud shape and noise (SIGGRAPH 2015, Horizon Zero Dawn);
+  - Hillaire's energy-conserving integration (SIGGRAPH 2016, Frostbite);
+  - Wrenninge et al.'s multiple-scattering octaves (2013);
+  - Jarzynski and Olano's pcg3d hash (JCGT 2020);
+  - Jimenez's interleaved gradient noise (2014).
+
+  MMqd's godot-nishita-sky-with-volumetric-clouds
   (github.com/MMqd/godot-nishita-sky-with-volumetric-clouds, MIT) was read as an example of the same model. No code
   from it is ported, and nothing from its noise textures or its Shadertoy-derived hash is used.
-- **Sky**: the sky draw state (no fog, no culling, no depth write) follows OpenEQ `docs/SKY_DOME_DRAW_STATE.md`, used as a spec only; no OpenEQ sky code is ported. See `docs/formats/sky.md`.
-- **OpenEQ audio notes** (`docs/AUDIO_PLAN.md`, `AUDIO_RUNTIME.md`, `CLASSIC_AMBIENT_LEVELS.md`, `CLASSIC_AMBIENT_COOLDOWNS.md`, `CLASSIC_AMBIENT_CLOCK_LIFECYCLE.md`, `XMI_NATIVE_SELECTION.md`): read as a second source for the EFF/EMT layouts, the classic emitter levels and cooldowns and the Miles XMI sequencer (note slots, loop controllers). The audio code was written independently (`docs/formats/audio.md`); no OpenEQ audio code was studied or ported.
+- **Sky**: the sky draw state (no fog, no culling, no depth write) follows OpenEQ's `docs/SKY_DOME_DRAW_STATE.md` (in its repository), used as a spec only; no OpenEQ sky code is ported. See `docs/formats/sky.md`.
+- **OpenEQ audio notes** (in OpenEQ's repository: `docs/AUDIO_PLAN.md`, `AUDIO_RUNTIME.md`, `CLASSIC_AMBIENT_LEVELS.md`, `CLASSIC_AMBIENT_COOLDOWNS.md`, `CLASSIC_AMBIENT_CLOCK_LIFECYCLE.md`, `XMI_NATIVE_SELECTION.md`): read as a second source for the EFF/EMT layouts, the classic emitter levels and cooldowns and the Miles XMI sequencer (note slots, loop controllers). The audio code was written independently (`docs/formats/audio.md`); no OpenEQ audio code was studied or ported.
 
 
 ### Code derived from OpenEQ
 
+The `crates/...` and `docs/...` paths in this section are files in OpenEQ's repository (github.com/daeken/OpenEQ), not
+this one.
+
 - `src/assets/character.cpp`: the classic character clip assembly (clip codes found by bone-track name, donor clips used only when a model has no track of its own for a clip, rest-pose fallback per bone, 100 ms default frame time), rigid one-bone-per-vertex skinning and the bottom-up character BMP rows were written after studying `crates/openeq-assets/src/character.rs` and `docs/CHARACTER_RENDERING.md`.
 - `src/assets/wld.cpp`, `src/assets/wld_zone.cpp`: the WLD fragment parser and the skeletal rest-pose assembly were written after studying `crates/openeq-assets/src/wld.rs` and `docs/WLD_*.md` (bounded fragment readers, the 0x30 texture-reference position, positional material slots, the unsigned packed track scale, rest-pose composition).
 - `src/assets/regions.cpp`, `src/assets/wld.cpp` (0x21/0x29): the BSP region fragment layouts (0-based 0x29 indices vs 1-based BSP leaves, the tag in the payload or the name) and the walk were written after studying `crates/openeq-assets/src/{bsp_regions.rs,zone_lines.rs,liquid_regions.rs}` and `docs/ZONE_TRAVEL_PROTOCOL.md`.
-- `src/net/login.cpp`, `src/net/session.cpp`: the login packet order and sequence numbers (play request sequence 5, an 80-byte encrypted login reply with the key at offset 12) follow `crates/openeq-net/src/login.rs`; adopting a SessionResponse that arrives from another port follows `stream.rs`. The session layer itself was written from EQEmu's server code.
-- `src/net/world_packets.cpp`, `src/net/zone_packets.cpp`: written from EQEmu's `rof2.cpp`/`rof2_structs.h`; `crates/openeq-net/src/world.rs` and `zone.rs` were studied to cross-check the 464-byte login record, the 274-byte character-select tail and the `OP_ClientUpdate` field offsets.
-- `src/assets/eqg.cpp`, `src/assets/eqg_zone.cpp`, `src/assets/regions.cpp` (`from_boxes`): the EQG parsers (TER/MOD/ZON v1–2, the EQTZP heightmap DAT/ECO/TOG/water readers) and the zone assembly (terrain drawn untransformed, the first-same-name material rule, triangle flag bit 0 as passable and material -1 as invisible but solid, the light position swap, the SHORT2 terrain UV rule, the quad-diagonal flag, terrain-relative object Z, the tile texture bake by ecosystem layer and mask, the region box matrix) were written after studying `crates/openeq-assets/src/{zone.rs,terrain.rs,terrain/bake.rs,terrain/regions.rs,loader.rs,loader/eqg_collision.rs,loader/ter_uv.rs}` and `docs/{EQGZ_NATIVE_REGIONS,EQG_TER_UV_PACKING,EQG_MATERIAL_SURVEY,HEIGHTMAP_FORMAT}.md`. See `docs/formats/eqg.md`.
-- `src/net/item_packets.cpp`: written from EQEmu's `rof2.cpp` `SerializeItem` and `rof2_structs.h`; `crates/openeq-net/src/inventory.rs` was studied to cross-check the item block sizes (77-byte header, 255/74/76-byte bodies, 30-byte spell blocks, 171-byte tail) and the bag-content index rule. The drag-item icon grid in `src/ui/item_windows.cpp` (icon 500 = first cell of dragitem1.dds, vertical grid) agrees with `crates/openeq/src/gameplay_ui.rs` and `crates/openeq-ui/src/document.rs`.
-- `src/assets/character_dress.cpp`, `src/assets/eqg_character.cpp`: character appearance and EQG character models were written after studying `crates/openeq-assets/src/character/{appearance.rs,luclin.rs,modern.rs,equipment.rs}` and `docs/CHARACTER_RENDERING.md`: the classic texture naming (variant digits, the face as the head piece's tens digit, robes 10–16 → `<code>01` body mesh and CLK04–CLK10, helm meshes `<code>HE<nn>`), item models on R_POINT/L_POINT/SHIELD_POINT (shield chosen by texture name), the Luclin layered materials (`<code><part><selector><piece>_MDF`, layer compositing with clothing-only tint) and modular parts (part numbers, anchors and bone remapping), the EQGS/EQGM/EQGA layouts (conjugated quaternions, four bone weights, inverse bind matrices) and the EQG body/head piece choice.).
-- `src/game/combat.cpp` `animation_code()`: the OP_Animation action → clip code table is ported from `crates/openeq-render/src/actors.rs` (`animation_code`). The respawn-window layout in `src/net/zone_packets.cpp` (including EQEmu's zero padding) follows `docs/DEATH_RECOVERY_PLAN.md`, checked against the server's `SendRespawnBinds`; held-P02 sitting in `src/render/actor_renderer.cpp` follows `docs/CHARACTER_RENDERING.md`.
-- `src/net/game_connection_commerce.cpp`, `src/net/merchant_packets.cpp`, `src/net/trade_packets.cpp`: written from EQEmu's `rof2_structs.h`/`client_packet.cpp`; OpenEQ `docs/COMMERCE_PROTOCOL.md`, `docs/TRADE_PROTOCOL.md` and `docs/QUEST_HANDIN_PLAN.md` were read to cross-check the packet sizes, the buy flow without OP_MoneyUpdate, the trade-view slot numbering and the cursor queue. No OpenEQ code was studied or ported.
+- `src/net/login.cpp`, `src/net/session.cpp`: the login packet order and sequence numbers (play request sequence 5, an 80-byte encrypted login reply with the key at offset 12) follow `crates/openeq-net/src/login.rs`. Adopting a SessionResponse that arrives from another port follows `stream.rs`. The session layer itself was written from EQEmu's server code.
+- `src/net/world_packets.cpp`, `src/net/zone_packets.cpp`: written from EQEmu's `rof2.cpp`/`rof2_structs.h`. `crates/openeq-net/src/world.rs` and `zone.rs` were studied to cross-check the 464-byte login record, the 274-byte character-select tail and the `OP_ClientUpdate` field offsets.
+- `src/assets/eqg.cpp`, `src/assets/eqg_zone.cpp`, `src/assets/regions.cpp` (`from_boxes`) were written after studying `crates/openeq-assets/src/{zone.rs,terrain.rs,terrain/bake.rs,terrain/regions.rs,loader.rs,loader/eqg_collision.rs,loader/ter_uv.rs}` and `docs/{EQGZ_NATIVE_REGIONS,EQG_TER_UV_PACKING,EQG_MATERIAL_SURVEY,HEIGHTMAP_FORMAT}.md`. See `docs/formats/eqg.md`. They cover:
+  - the EQG parsers: TER/MOD/ZON v1–2, the EQTZP heightmap DAT/ECO/TOG/water readers;
+  - the zone assembly: terrain drawn untransformed, the first-same-name material rule, triangle flag bit 0 as passable and material -1 as invisible but solid, the light position swap, the SHORT2 terrain UV rule, the quad-diagonal flag, terrain-relative object Z, the tile texture bake by ecosystem layer and mask, the region box matrix.
+- `src/net/item_packets.cpp`: written from EQEmu's `rof2.cpp` `SerializeItem` and `rof2_structs.h`. `crates/openeq-net/src/inventory.rs` was studied to cross-check the item block sizes (77-byte header, 255/74/76-byte bodies, 30-byte spell blocks, 171-byte tail) and the bag-content index rule.
+- The drag-item icon grid in `src/ui/item_windows.cpp` (icon 500 = first cell of dragitem1.dds, vertical grid) agrees with `crates/openeq/src/gameplay_ui.rs` and `crates/openeq-ui/src/document.rs`.
+- `src/assets/character_dress.cpp`, `src/assets/eqg_character.cpp`: character appearance and EQG character models were written after studying `crates/openeq-assets/src/character/{appearance.rs,luclin.rs,modern.rs,equipment.rs}` and `docs/CHARACTER_RENDERING.md`. They cover:
+  - the classic texture naming: variant digits, the face as the head piece's tens digit, robes 10–16 → `<code>01` body mesh and CLK04–CLK10, helm meshes `<code>HE<nn>`;
+  - item models on R_POINT/L_POINT/SHIELD_POINT (shield chosen by texture name);
+  - the Luclin layered materials (`<code><part><selector><piece>_MDF`, layer compositing with clothing-only tint) and modular parts (part numbers, anchors and bone remapping);
+  - the EQGS/EQGM/EQGA layouts: conjugated quaternions, four bone weights, inverse bind matrices;
+  - the EQG body/head piece choice.
+- `src/game/combat.cpp` `animation_code()`: the OP_Animation action → clip code table is ported from `crates/openeq-render/src/actors.rs` (`animation_code`).
+- The respawn-window layout in `src/net/zone_packets.cpp` (including EQEmu's zero padding) follows OpenEQ's `docs/DEATH_RECOVERY_PLAN.md`, checked against the server's `SendRespawnBinds`.
+- Held-P02 sitting in `src/render/actor_renderer.cpp` follows `docs/CHARACTER_RENDERING.md`.
+- `src/net/game_connection_commerce.cpp`, `src/net/merchant_packets.cpp`, `src/net/trade_packets.cpp`: written from EQEmu's `rof2_structs.h`/`client_packet.cpp`. OpenEQ's `docs/COMMERCE_PROTOCOL.md`, `docs/TRADE_PROTOCOL.md` and `docs/QUEST_HANDIN_PLAN.md` were read to cross-check the packet sizes, the buy flow without OP_MoneyUpdate, the trade-view slot numbering and the cursor queue. No OpenEQ code was studied or ported.
 
 ### Code copied from MacroQuest
 
 MacroQuest (github.com/macroquest/macroquest), Copyright (C) 2002-present MacroQuest Authors, GNU General Public
-License version 2.
+License version 2. The `src/eqlib/...`, `src/main/...` and `include/mq/...` paths in this and the next section are
+files in MacroQuest's repository.
 
 - `src/game/spa_ids.h`: the `eEQSPA` spell effect ids (0..526) and the `eEQSPELLCAT` spell categories (1..176) are
   copied from `src/eqlib/include/eqlib/game/Spells.h` (without its deprecated and alias names), and `SPA_NAMES` 0..520
@@ -92,6 +132,14 @@ License version 2.
   and `Spawn::IsNamed`, `GetSpawnType`, `GetTypeDesc` and `GetRaceIDName` follow MacroQuest's eqlib constants and
   `src/main/MQ2Utilities.cpp` almost line for line. `IsNamed` was changed in Hailstone and mixes MacroQuest's older
   and newer tests.
+- `src/game/dbstr_types.h`: the dbstr_us.txt string types (`eDatabaseStringType`) are copied from
+  `src/eqlib/include/eqlib/game/EQClasses.h`.
+- `src/game/spell_effect_text.cpp`: a spell effect slot's text is ported from `src/main/MQ2Spells.cpp`:
+  `ParseSpellEffect`, `CalcValue`, `CalcMinSpellLevel`, `CalcMaxSpellLevel`, `CalcValueRange`, `CalcExtendedRange`,
+  `GetSpellRestrictions`, `GetClassesFromMask`, the `Format*` helpers and the compass words of `szHeadingNormal`
+  (`src/main/MQ2Globals.cpp`), and the target and resist type names of `${Spell.TargetType}` and `${Spell.ResistType}`
+  (`src/main/datatypes/MQ2SpellType.cpp`). Names MacroQuest reads from the live client's memory come from the client's own data
+  instead (game/spell_effect_text.h).
 
 ### MacroQuest used as a specification
 

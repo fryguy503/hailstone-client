@@ -169,6 +169,9 @@ public:
     AddonsStatus status() const;
     // status().serial without copying the rest (the index, the store's manifests): what the world asks each frame.
     std::uint32_t serial() const;
+    // Moves on whenever status() may have changed (each change the manager makes, and some looks that change
+    // nothing): the login screen copies the status and rebuilds its add-on view only when it does.
+    std::uint32_t changes() const { return changes_.load(std::memory_order_acquire); }
     std::vector<InstalledAddon> installed() const;
     // Waits until the worker has nothing to do (tests).
     void wait_idle();
@@ -180,6 +183,16 @@ private:
         // An update taken because auto-update was on (not the player's click): not installed if they turn it off
         // before install_ready().
         bool automatic = false;
+    };
+
+    // The lock taken to change status_ (or anything status() shows): changes() moves on as it is let go.
+    struct Changing {
+        explicit Changing(AddonManager& m) : manager(m), lock(m.mutex_) {}
+        ~Changing() { manager.changes_.fetch_add(1, std::memory_order_acq_rel); }
+        Changing(const Changing&) = delete;
+        Changing& operator=(const Changing&) = delete;
+        AddonManager& manager;
+        std::lock_guard<std::mutex> lock;
     };
 
     void post(std::function<void()> job);
@@ -215,6 +228,7 @@ private:
     bool stop_ = false;
     std::atomic<bool> cancel_{false}; // stop_, readable without the lock (the transfers ask it)
     AddonsStatus status_;
+    std::atomic<std::uint32_t> changes_{0};
     std::vector<Staged> staged_;
     // Lower-case names of the add-ons removed this run: a check that read installed.txt before the removal does not
     // bring them back. A new install of the same name (install_offer) takes its name out.

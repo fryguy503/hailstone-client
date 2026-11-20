@@ -112,6 +112,7 @@ struct Affect {
     std::uint32_t y_18 = 0, x_1c = 0, z_20 = 0; // +0x18..+0x20 (floats; SPA 441)
     std::uint32_t flags_24 = 0; // +0x24: the slot-bit array's first dword
     std::array<std::int32_t, 12> slot_data{}; // +0x28
+    bool counters_known = false; // Hailstone metadata, not part of EQ_Affect
 };
 
 // The CharacterBase part HitBySpell touches.
@@ -377,6 +378,9 @@ struct HitState {
     Character* self = nullptr; // this (its spawn may be null)
     Globals* globals = nullptr;
     HitFrame* frame = nullptr; // optional: the frame to use (else a local one)
+    bool rof2_single_slot_cures = false; // replay the original rather than applying cures to the buff total
+    // Bits of counter SPAs faded by the server earlier in this network update; those cures are already applied.
+    std::uint8_t faded_counter_spas = 0;
 };
 
 // EQ_Character::HitBySpell(hit, launch, duration): 1 when the spell landed,

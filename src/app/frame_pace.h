@@ -59,10 +59,16 @@ inline bool is_light_screen(bool in_game, bool settling) {
 // since_drawn: the time since the last drawn frame.
 // light_screen: a login/loading screen, where an unlimited cap would spin; max_fps 0 counts as kLightScreenCap there.
 // Callers pass false during normal play (so max_fps 0 stays unlimited); a set max_fps is followed exactly either way.
+// minimized: the window is minimised, so no frame can be drawn; the loop runs at kBackgroundTickHz whatever
+// background_fps says (with the defaults it would otherwise spin at once through every frame the GPU has no image for).
 inline FramePace frame_pace(int max_fps, int background_fps, bool focused, std::chrono::microseconds since_drawn,
-    bool light_screen = false) {
+    bool light_screen = false, bool minimized = false) {
     const int cap = light_screen && max_fps == 0 ? kLightScreenCap : max_fps;
     FramePace pace{cap, true};
+    if (minimized) {
+        pace.cap = cap > 0 ? std::min(cap, kBackgroundTickHz) : kBackgroundTickHz;
+        return pace;
+    }
     if (focused || background_fps == 0) return pace;
     const int loop = std::max(background_fps, kBackgroundTickHz);
     pace.cap = cap > 0 ? std::min(cap, loop) : loop;

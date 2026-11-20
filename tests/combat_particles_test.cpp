@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include "core/process_serial.h"
 #include "core/worker_pool.h"
 #include "game/collision.h"
+#include "game/mechanics/anim_select.h"
 #include "game/missiles.h"
 #include "game/path_trail.h"
 #include "game/spells.h"
@@ -1196,4 +1198,124 @@ TEST_CASE("Spell859 missile destruction invokes the local Action presentation wi
     rig.conn.receive_zone_packet_for_test(encode(success));
     CHECK(std::any_of(rig.conn.spell_state().buffs.begin(), rig.conn.spell_state().buffs.end(),
                      [](const auto& buff) { return buff.spell == 859 && buff.tics > 0; }));
+}
+
+TEST_CASE("Actor Particle Density: a change keeps the running emitters' particles; Off stops them and tries none") {
+    auto d = dot();
+    d.duration = -9999.0f;
+    d.per_tick = 20; // 20 and more a tick: the density scales the count, not the rate
+    d.ticks_per_second = 10.0f;
+    d.initial_count = 40;
+    assets::CharacterMesh mesh;
+    assets::MeshEmitter always;
+    always.bone = 0;
+    always.emitter.emitter = 1;
+    mesh.emitters.push_back(always);
+    auto standing = always;
+    standing.emitter.trigger = 1;
+    standing.emitter.animation = 31; // STND
+    mesh.emitters.push_back(standing);
+    app::ActorEmitters particles({assets::EmitterDefinition{}, d});
+    app::ActorEmitters::Actor actor{7, &mesh, true};
+    int poses = 0;
+    auto pose = [&](std::uint32_t, int, glm::mat4& out) {
+        ++poses;
+        out = glm::mat4(1.0f);
+        return true;
+    };
+    for (int i = 0; i < 5; ++i) particles.update(0.05f, std::span(&actor, 1), pose, {});
+    REQUIRE(particles.simulation().emitters().size() == 2);
+    const std::uint32_t key = particles.simulation().emitters()[0].key;
+    const std::size_t before = particles.simulation().emitters()[0].particles.size();
+    REQUIRE(before > 0u);
+
+    // High to Medium: the same emitters, their particles kept (no longer all made again and emptied at once).
+    particles.set_density(0.5f);
+    CHECK(particles.simulation().emitters()[0].key == key);
+    CHECK(particles.simulation().emitters()[0].density == doctest::Approx(0.5f));
+    CHECK(particles.simulation().emitters()[0].particles.size() ==
+          std::min(before, static_cast<std::size_t>(particles.simulation().emitters()[0].counts.capacity)));
+    CHECK(particles.simulation().emitters()[1].density == doctest::Approx(0.5f)); // the standing one too
+    particles.update(0.05f, std::span(&actor, 1), pose, {});
+    CHECK(particles.simulation().emitters()[0].key == key);
+
+    // Off: the EDD emitters go, and none is tried again (no pose asked for them) while it stays off.
+    particles.set_density(0.0f);
+    particles.update(0.05f, std::span(&actor, 1), pose, {});
+    CHECK(particles.simulation().emitters().empty());
+    const int poses_off = poses;
+    for (int i = 0; i < 5; ++i) particles.update(0.05f, std::span(&actor, 1), pose, {});
+    CHECK(poses == poses_off);
+    CHECK(particles.simulation().emitters().empty());
+
+    // On again: made afresh.
+    particles.set_density(0.25f);
+    particles.update(0.05f, std::span(&actor, 1), pose, {});
+    REQUIRE(particles.simulation().emitters().size() == 2);
+    CHECK(particles.simulation().emitters()[0].density == doctest::Approx(0.25f));
+}
+
+TEST_CASE("Actor emitters out of view emit nothing, ask for no pose and start no animation entries") {
+    auto d = dot();
+    d.duration = -9999.0f;
+    d.per_tick = 1;
+    d.ticks_per_second = 20.0f;
+    d.lifetime = 0.2f;
+    assets::CharacterMesh mesh;
+    assets::MeshEmitter always;
+    always.bone = 0;
+    always.emitter.emitter = 1;
+    mesh.emitters.push_back(always);
+    auto step = always; // a footfall: started by its animation each time the animation starts
+    step.emitter.trigger = 1;
+    step.emitter.animation = 0; // the first row of the animation table with a clip (27, NRUN, in the shipped files)
+    for (std::int32_t a = 1; a <= 0xb6 - 0x4f && step.emitter.animation == 0; ++a) {
+        namespace m = game::mechanics;
+        if (a != 31 && a != 32 && !m::old_anim_clip(m::new_to_old_anim(static_cast<std::uint8_t>(0x4f + a))).empty())
+            step.emitter.animation = a;
+    }
+    REQUIRE(step.emitter.animation != 0);
+    mesh.emitters.push_back(step);
+    for (bool async : {false, true}) {
+        CAPTURE(async);
+        app::ActorEmitters particles({assets::EmitterDefinition{}, d}, {}, async);
+        app::ActorEmitters::Actor actor{7, &mesh};
+        int poses = 0;
+        auto pose = [&](std::uint32_t, int, glm::mat4& out) {
+            ++poses;
+            out = glm::mat4(1.0f);
+            return true;
+        };
+        float clip_time = 0.0f;
+        auto playing = [&](std::uint32_t, std::string_view, float& time) {
+            time = clip_time;
+            return true;
+        };
+        auto frame = [&] {
+            particles.update(0.05f, std::span(&actor, 1), pose, {}, playing);
+            particles.simulate_async(0.05f, pose);
+            clip_time = std::fmod(clip_time + 0.05f, 0.3f); // loops every 0.3 s: a new step
+        };
+        for (int i = 0; i < 4; ++i) frame();
+        REQUIRE_FALSE(particles.simulation().emitters().empty());
+        CHECK(particles.simulation().emitters().size() == 2); // the always-on one and a step
+
+        actor.in_view = false;
+        for (int i = 0; i < 10; ++i) frame(); // 0.5 s: what it emitted has ended, the step too
+        const int poses_held = poses;
+        for (int i = 0; i < 10; ++i) frame();
+        CHECK(poses == poses_held); // not placed
+        REQUIRE(particles.simulation().emitters().size() == 1); // no new step started
+        CHECK(particles.simulation().emitters()[0].held);
+        CHECK(particles.simulation().emitters()[0].particles.empty());
+
+        // Back in view: it emits again from the next tick, not a second's worth of ticks at once.
+        actor.in_view = true;
+        frame();
+        frame();
+        CHECK(poses > poses_held);
+        CHECK_FALSE(particles.simulation().emitters()[0].held);
+        CHECK(particles.simulation().emitters()[0].particles.size() <= 3u);
+        CHECK_FALSE(particles.simulation().emitters()[0].particles.empty());
+    }
 }

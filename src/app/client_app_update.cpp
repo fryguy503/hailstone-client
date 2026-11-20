@@ -24,7 +24,7 @@ void ClientApp::start_updater() {
     login_view_.project_page = default_project_page();
     n.check = "off";
     if (!opts_.updates) {
-        n.off_reason = "a test run";
+        n.off_reason = opts_.box_child ? "a box set's window (the first window updates)" : "a test run";
         return;
     }
     n.message = opts_.update_note;

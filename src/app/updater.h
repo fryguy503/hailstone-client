@@ -129,4 +129,15 @@ void finish_update_at_exit(bool restart);
 // Starts the Hailstone folder's client (after an install or a rollback), left running as this one quits.
 void start_installed_client();
 
+// The argument a box set's other windows are started with (ClientApp::start_box_login): such a window runs from the
+// folder the first window updates, so it neither checks for updates nor fetches add-ons. Two updaters would download
+// into the same addons/ and download/ files, and one quitting first could install while the others run.
+inline constexpr const char* kBoxChildArg = "--box-child";
+
+// Whether a run has the updater and the add-on manager's fetching (main.cpp): a player's own run, not a test drive
+// that stops after some frames or takes a screenshot, and not a box set's other window (kBoxChildArg).
+inline bool run_has_updates(int frames, bool screenshot, bool box_child) {
+    return frames == 0 && !screenshot && !box_child;
+}
+
 } // namespace hailstone::app

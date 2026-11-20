@@ -136,6 +136,11 @@ struct BuffIcons {
     std::uint8_t type = 0;
 };
 AppPacket encode(const BuffIcons& v, bool target_window); // server direction, for tests
+
+// The most buff slots a spawn other than the player has in RoF2 (an NPC's or a pet's, EQEmu's RoF2 NPC_BUFFS):
+// the target and pet windows ignore an OP_TargetBuffs / OP_PetBuffWindow entry for a slot past it, so a hostile
+// packet cannot grow their lists past this many entries.
+inline constexpr std::uint32_t kMaxSpawnBuffSlots = 97;
 std::optional<BuffIcons> decode_buff_icons(const AppPacket& p);
 
 // OP_BuffRemoveRequest, client → zone (8 bytes): u32 buff slot, u32 entity.

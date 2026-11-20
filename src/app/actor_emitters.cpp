@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "assets/character.h"
+#include "assets/model_points.h"
 #include "assets/object_animation.h"
 #include "core/game_dir.h"
 #include "core/ini_file.h"
@@ -83,6 +84,15 @@ glm::mat4 ActorEmitters::local_matrix(Live& live, const assets::MeshEmitter& me)
 
 std::optional<game::EmitterAttachment> ActorEmitters::attach(std::uint32_t id, std::int32_t i,
                                                              const BoneWorld& bone_world) {
+    if (i >= kEffectPointBase) {
+        // A level-up effect's emitter: its spell point on the spawn as drawn.
+        glm::mat4 m;
+        if (!point_world_ || !point_world_(id, i - kEffectPointBase, m)) return std::nullopt;
+        game::EmitterAttachment at;
+        at.position = glm::vec3(m[3]);
+        at.axes = glm::mat3(m);
+        return at;
+    }
     auto it = live_.find(id);
     if (it == live_.end() || !it->second.mesh || i < 0 ||
         static_cast<std::size_t>(i) >= it->second.mesh->emitters.size())
@@ -97,6 +107,60 @@ std::optional<game::EmitterAttachment> ActorEmitters::attach(std::uint32_t id, s
     at.alpha = it->second.alpha;
     at.particle_scale = me.cloud ? 1.0f : heights_.pes_factor(me.model_code);
     return at;
+}
+
+bool ActorEmitters::start_effect(const Effect& effect) {
+    finish();
+    if (effect.slot >= assets::kSpellPointNames.size() || !point_world_) return false;
+    glm::mat4 point;
+    if (!point_world_(effect.actor, static_cast<int>(effect.slot), point)) return false;
+    game::SpellEmitterRequest r;
+    r.emitter = static_cast<std::int32_t>(effect.effect);
+    r.key = next_key_++;
+    // vf126 gives an actor's emitter 5,000,000 ms like the always-on ones; this one is not persistent, so it ends
+    // with the definition's own duration.
+    r.duration_ms = game::kActorEmitterDurationMs;
+    r.density = settings_.density;
+    r.opacity = settings_.opacity;
+    r.position = glm::vec3(point[3]);
+    if (effect.flag) {
+        const float scale = glm::length(glm::vec3(point[0]));
+        r.scale = std::isfinite(scale) && scale > 0.0f ? scale : 1.0f;
+        // vf126 casts the point 1000 units straight down (0x1013681c) and raises the hit by 0.05 (0x10132e6c).
+        if (floor_)
+            if (auto z = floor_(r.position); z && r.position.z - *z <= 1000.0f) r.position.z = *z + 0.05f;
+    } else {
+        r.actor = effect.actor;
+        r.bone_point = kEffectPointBase + static_cast<std::int32_t>(effect.slot);
+        r.point_only = true;
+    }
+    r.server_effect = true;
+    // create() adds the emitter even when its particles last 0 ms, so whether one was made is told by the list.
+    const std::size_t before = particles_.emitters().size();
+    particles_.create(r);
+    if (particles_.emitters().size() == before) return false; // an effect not in the file, or density 0
+    while (effects_.size() >= kMaxEffects) {
+        const std::uint32_t oldest = effects_.front().key;
+        particles_.stop_keys(std::span(&oldest, 1));
+        effects_.erase(effects_.begin());
+    }
+    effects_.push_back({r.key, effect.actor});
+    return true;
+}
+
+void ActorEmitters::prune_effects(const std::function<bool(std::uint32_t id)>& alive) {
+    if (effects_.empty()) return;
+    finish();
+    std::vector<std::uint32_t> gone;
+    std::erase_if(effects_, [&](const RunningEffect& e) {
+        const bool running = particles_.has(e.key);
+        if (!running) return true; // ended on its own
+        if (alive && alive(e.actor)) return false;
+        gone.push_back(e.key);
+        return true;
+    });
+    std::sort(gone.begin(), gone.end());
+    particles_.stop_keys(gone);
 }
 
 void ActorEmitters::update(float dt, std::span<const Actor> actors, const BoneWorld& bone_world,
@@ -141,11 +205,23 @@ void ActorEmitters::update(float dt, std::span<const Actor> actors, const BoneWo
         particles_.create(r);
         return r.key;
     };
-    for (const Actor& a : actors) {
+    // An actor whose mesh changed (or whose EDD entries are made again at a new density) and an actor gone lose their
+    // emitters first, all in one pass over each system (stop_actors), before any are made again: a stop by actor
+    // after the new ones were made would take those too.
+    const bool edd_on = settings_.density > 0.0f; // ActorParticleDensity 0 makes no EDD emitter: none is tried
+    stop_keys_.clear();
+    stop_actors_.clear();
+    stop_cloud_actors_.clear();
+    restarts_.clear();
+    lives_.assign(actors.size(), nullptr);
+    for (std::size_t ai = 0; ai < actors.size(); ++ai) {
+        const Actor& a = actors[ai];
         if (!a.mesh || a.mesh->emitters.empty()) continue;
         Live& live = live_[a.id];
+        lives_[ai] = &live;
         live.seen = true;
         live.alpha = a.alpha;
+        live.held = !a.in_view;
         live.mesh = a.mesh; // (the same mesh, or one at the same address: the attachments below read this one)
         const bool changed = live.mesh_serial != a.mesh->serial.value();
         if (changed) {
@@ -155,46 +231,66 @@ void ActorEmitters::update(float dt, std::span<const Actor> actors, const BoneWo
             live.elapsed += dt;
         }
         if (changed || live.restart_edd) {
-            // A new mesh (dressed again, another weapon): its emitters replace the old ones.
-            for (std::uint32_t key : live.keys) particles_.stop(key);
-            if (changed)
-                for (std::uint32_t key : live.cloud_keys) clouds_.stop(key);
-            for (std::uint32_t key : live.standing_keys) particles_.stop(key);
-            for (auto& [i, t] : live.triggered)
-                if (t.key) particles_.stop(t.key);
+            // A new mesh (dressed again, another weapon): its emitters replace the old ones. Every EDD emitter of
+            // the actor is its own (always-on, standing and animation-started); its WLD clouds go only with the mesh.
+            stop_actors_.push_back(a.id);
+            if (changed) stop_cloud_actors_.push_back(a.id);
             live.keys.clear();
             if (changed) live.cloud_keys.clear();
             live.standing_keys.clear();
             live.triggered.clear();
             live.mesh_serial = a.mesh->serial.value();
             live.restart_edd = false;
-            // Tried once per mesh: an entry that makes nothing (an index past the file's end, density 0) is not
-            // tried again each frame; a new mesh (another look or weapon) tries its entries afresh.
-            for (std::size_t i = 0; i < a.mesh->emitters.size(); ++i) {
-                const auto& e = a.mesh->emitters[i].emitter;
-                if (a.mesh->emitters[i].cloud) {
-                    if (changed)
-                        if (auto key = start(a, i)) live.cloud_keys.push_back(*key);
-                    continue;
-                }
-                if (e.trigger != 0 || e.variant >= 1) continue;
-                if (auto key = start(a, i)) live.keys.push_back(*key);
-            }
+            restarts_.push_back({ai, changed});
         }
+    }
+    for (auto it = live_.begin(); it != live_.end();) {
+        if (it->second.seen) {
+            ++it;
+            continue;
+        }
+        stop_actors_.push_back(it->first);
+        stop_cloud_actors_.push_back(it->first);
+        it = live_.erase(it); // (the other entries, and lives_' pointers to them, stay where they are)
+    }
+    std::sort(stop_actors_.begin(), stop_actors_.end());
+    std::sort(stop_cloud_actors_.begin(), stop_cloud_actors_.end());
+    particles_.stop_actors(stop_actors_);
+    clouds_.stop_actors(stop_cloud_actors_);
+    for (const auto& [ai, changed] : restarts_) {
+        const Actor& a = actors[ai];
+        Live& live = *lives_[ai];
+        // Tried once per mesh: an entry that makes nothing (an index past the file's end, density 0) is not
+        // tried again each frame; a new mesh (another look or weapon) tries its entries afresh.
+        for (std::size_t i = 0; i < a.mesh->emitters.size(); ++i) {
+            const auto& e = a.mesh->emitters[i].emitter;
+            if (a.mesh->emitters[i].cloud) {
+                if (changed)
+                    if (auto key = start(a, i)) live.cloud_keys.push_back(*key);
+                continue;
+            }
+            if (!edd_on || e.trigger != 0 || e.variant >= 1) continue;
+            if (auto key = start(a, i)) live.keys.push_back(*key);
+        }
+    }
+    for (std::size_t ai = 0; ai < actors.size(); ++ai) {
+        if (!lives_[ai]) continue;
+        const Actor& a = actors[ai];
+        Live& live = *lives_[ai];
         // The standing entries start when it stands and stop when it moves, casts or acts.
-        if (a.standing && live.standing_keys.empty()) {
+        if (edd_on && a.standing && live.standing_keys.empty()) {
             for (std::size_t i = 0; i < a.mesh->emitters.size(); ++i) {
                 const auto& e = a.mesh->emitters[i].emitter;
                 if (a.mesh->emitters[i].cloud) continue;
                 if (e.trigger != 1 || e.variant >= 1 || (e.animation != kStnd && e.animation != kIdle)) continue;
                 if (auto key = start(a, i)) live.standing_keys.push_back(*key);
             }
-        } else if (!a.standing && !live.standing_keys.empty()) {
-            for (std::uint32_t key : live.standing_keys) particles_.stop(key);
+        } else if ((!edd_on || !a.standing) && !live.standing_keys.empty()) {
+            stop_keys_.insert(stop_keys_.end(), live.standing_keys.begin(), live.standing_keys.end());
             live.standing_keys.clear();
         }
         // The other animation-started entries: each start (or loop) of the animation starts one after its delay.
-        if (playing)
+        if (playing && edd_on)
             for (std::size_t i = 0; i < a.mesh->emitters.size(); ++i) {
                 const auto& e = a.mesh->emitters[i].emitter;
                 if (a.mesh->emitters[i].cloud) continue;
@@ -213,7 +309,11 @@ void ActorEmitters::update(float dt, std::span<const Actor> actors, const BoneWo
                 if (t.pending >= 0.0f) {
                     t.pending -= dt;
                     if (t.pending < 0.0f) {
-                        if (t.key) particles_.stop(t.key);
+                        if (t.key) stop_keys_.push_back(t.key);
+                        t.key = 0;
+                        // Hailstone: an actor out of view starts none (a footfall or a swing nobody sees); one
+                        // that comes back into view starts them again with its next step or swing.
+                        if (live.held) continue;
                         // Emitting for about one play of the animation (a swing, a step), at most the entry's own.
                         std::int32_t ms = e.duration_ms > 0 ? std::min(e.duration_ms, 1500) : 1000;
                         t.key = start(a, i, ms).value_or(0u);
@@ -223,21 +323,21 @@ void ActorEmitters::update(float dt, std::span<const Actor> actors, const BoneWo
                 }
             }
     }
-    for (auto it = live_.begin(); it != live_.end();) {
-        if (it->second.seen) {
-            ++it;
-            continue;
-        }
-        for (std::uint32_t key : it->second.keys) particles_.stop(key);
-        for (std::uint32_t key : it->second.cloud_keys) clouds_.stop(key);
-        for (std::uint32_t key : it->second.standing_keys) particles_.stop(key);
-        for (auto& [i, t] : it->second.triggered)
-            if (t.key) particles_.stop(t.key);
-        it = live_.erase(it);
-    }
+    // The emitters replaced above, in one pass (their replacements have keys of their own).
+    std::sort(stop_keys_.begin(), stop_keys_.end());
+    particles_.stop_keys(stop_keys_);
+    auto held = [this](std::uint32_t id) {
+        auto it = live_.find(id);
+        return it != live_.end() && it->second.held;
+    };
+    particles_.set_held(held);
+    clouds_.set_held(held);
     particles_.set_viewer(viewer);
     clouds_.set_viewer(viewer);
-    auto attachment = [&](std::uint32_t id, std::int32_t i) { return attach(id, i, bone_world); };
+    auto attachment = [&](std::uint32_t id, std::int32_t i) -> std::optional<game::EmitterAttachment> {
+        if (held(id)) return std::nullopt; // out of view: left where it was, its pose not asked for
+        return attach(id, i, bone_world);
+    };
     if (!async_) {
         particles_.update(dt, attachment);
         clouds_.update(dt, attachment);
@@ -261,7 +361,7 @@ void ActorEmitters::simulate_async(float dt, const BoneWorld& bone_world) {
     attachments_.clear();
     auto keep = [&](const game::ParticleSystem& system) {
         for (const auto& e : system.emitters())
-            if (e.actor != 0) {
+            if (e.actor != 0 && !e.held) { // a held one (out of view) stays where it was, its pose not asked for
                 const std::uint64_t key = attachment_key(e.actor, e.point);
                 if (!attachments_.contains(key)) attachments_.emplace(key, attach(e.actor, e.point, bone_world));
             }
@@ -294,8 +394,18 @@ void ActorEmitters::draw(const render::FrameInfo& frame, const glm::mat4& view_p
 void ActorEmitters::set_density(float density) {
     density = std::clamp(density, 0.0f, 1.0f);
     if (density == settings_.density) return;
+    const bool switched = (density > 0.0f) != (settings_.density > 0.0f);
     settings_.density = density;
-    for (auto& [id, live] : live_) live.restart_edd = true; // the EDD entries are made again at the next update
+    if (switched) {
+        // Off, or on again: the EDD entries are made again (or not at all) at the next update.
+        for (auto& [id, live] : live_) live.restart_edd = true;
+        return;
+    }
+    // The always-on and standing emitters keep their particles and emit at the new density from now on (the
+    // effect manager's +0xac setter, ParticleSystem::set_persistent_density); an animation-started one keeps its
+    // own until it ends. They were all made again before, which dropped every particle at once.
+    finish();
+    particles_.set_persistent_density(density);
 }
 
 void ActorEmitters::clear() {
@@ -304,6 +414,7 @@ void ActorEmitters::clear() {
     clouds_ = game::ParticleSystem({assets::EmitterDefinition{}});
     cloud_indexes_.clear();
     cloud_definitions_.clear();
+    effects_.clear();
     live_.clear();
 }
 

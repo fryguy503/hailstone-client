@@ -145,14 +145,25 @@ int l_text(lua_State* L) {
 int l_messages(lua_State* L) {
     check(L, "mq.web.messages");
     const std::uint32_t tab = tab_arg(L, 1);
-    HostWork unlimited(Script::of(L)); // (a message is at most 1 MB, and at most 8 MB wait: web_access.h)
-    Caller c = caller(L);
+    Script& s = Script::of(L);
+    HostWork unlimited(s); // (a message is at most 1 MB, and at most 8 MB wait: web_access.h)
     lua_newtable(L);
-    lua_Integer n = 0;
-    while (auto m = c.web.take_message(c.owner, tab)) {
-        lua_pushlstring(L, m->data(), m->size());
-        lua_rawseti(L, -2, ++n);
+    // Each message is moved into the Script's scratch in a block of its own and pushed from there, so no C++ object
+    // of this frame is alive across a push (one the system's own memory refuses still longjmps).
+    for (lua_Integer n = 1;; ++n) {
+        bool got = false;
+        {
+            Caller c = caller(L);
+            if (auto m = c.web.take_message(c.owner, tab)) {
+                s.scratch = std::move(*m);
+                got = true;
+            }
+        }
+        if (!got) break;
+        lua_pushlstring(L, s.scratch.data(), s.scratch.size());
+        lua_rawseti(L, -2, n);
     }
+    std::string().swap(s.scratch); // up to 1 MB
     return 1;
 }
 

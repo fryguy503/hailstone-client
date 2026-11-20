@@ -481,6 +481,99 @@ require('hailstone').hooks{
     CHECK(b == "true:13:" + corpse.name + ":true");
 }
 
+TEST_CASE("Lua plugin: a __newindex the script puts on the reused spawn table does not stop the refill") {
+    Host h;
+    auto& c = *h.world.conn;
+    // The table is the script's between calls: it nils a field and makes every new key raise. The host refills it
+    // outside a protected call, so a metamethod run there would abort the client.
+    h.write("plate_meta.lua", R"lua(
+require('hailstone').hooks{
+  nameplate = function(spawn, text)
+    local out = spawn.id .. ':' .. tostring(getmetatable(spawn) == nil)
+    spawn.name = nil
+    spawn.level = nil
+    setmetatable(spawn, {__newindex = function() error('no') end, __index = function() error('no') end,
+                         __metatable = 'locked'})
+    return out
+  end,
+}
+)lua");
+    REQUIRE(h.scripts->run("plate_meta", {}));
+    h.scripts->pulse();
+    std::string a = "x", b = "x";
+    h.chain.nameplate_text(c, c.world().spawns.at(10), a);
+    h.chain.nameplate_text(c, c.world().spawns.at(13), b);
+    CHECK(a == "10:true");
+    CHECK(b == "13:true"); // refilled, and the metatable gone
+    CHECK(h.scripts->running("plate_meta"));
+}
+
+TEST_CASE("UiBridge: each owner's functions, options and menu entries are capped; a menu label is one entry") {
+    plugin::UiBridge ui;
+    using B = plugin::UiBridge;
+    for (std::size_t i = 0; i < B::kMaxMenuEntries; ++i)
+        CHECK(ui.add_menu({"p", "Entry " + std::to_string(i), "/cmd" + std::to_string(i)}));
+    CHECK_FALSE(ui.add_menu({"p", "One more", "/more"}));
+    CHECK(ui.add_menu({"p", "Entry 3", "/changed"})); // the same label: its command changes, no new entry
+    CHECK(ui.menu().size() == B::kMaxMenuEntries);
+    CHECK(ui.menu()[3].command == "/changed");
+    CHECK(ui.add_menu({"p", "One more", "/more", B::Kind::Script})); // another owner has its own room
+    for (std::size_t i = 0; i < B::kMaxOptions; ++i) {
+        B::Option o;
+        o.plugin = "p";
+        o.name = "o" + std::to_string(i);
+        CHECK(ui.add_option(std::move(o)));
+    }
+    B::Option extra;
+    extra.plugin = "p";
+    extra.name = "extra";
+    CHECK_FALSE(ui.add_option(extra));
+    extra.name = "o0";
+    CHECK(ui.add_option(extra)); // replaced
+    for (std::size_t i = 0; i < B::kMaxFunctions; ++i)
+        CHECK(ui.add_function("p", "f" + std::to_string(i), [](const auto&) { return plugin::UiValue{}; }));
+    CHECK_FALSE(ui.add_function("p", "extra", [](const auto&) { return plugin::UiValue{}; }));
+    CHECK(ui.add_function("p", "f0", [](const auto&) { return plugin::UiValue::integer(7); }));
+    CHECK(ui.call("p", "f0", {})->i == 7);
+    ui.remove("p");
+    CHECK(ui.add_menu({"p", "Again", "/again"}));
+}
+
+TEST_CASE("Lua plugin: a script's registrations are capped; the same name again replaces without counting") {
+    Host h;
+    h.write("many.lua", R"lua(
+local hs, mq = require('hailstone'), require('mq')
+local function fill(what, n, fn)
+  for i = 1, n do fn(i) end
+  local ok, err = pcall(fn, n + 1)
+  print(what, ok, err and err:match('at most %d+') or '')
+  print(what .. ' again', (pcall(fn, 1)))
+end
+fill('menu', 32, function(i) hs.menu('Entry ' .. i, '/e' .. i) end)
+fill('option', 64, function(i) hs.option{name = 'o' .. i, get = function() return 0 end, set = function() end} end)
+fill('function', 256, function(i) hs.ui_function('f' .. i, function() return i end) end)
+fill('packet', 256, function(i) hs.on_packet('zone', 'in', i, function() end) end)
+fill('bind', 256, function(i) mq.bind('/manybind' .. i, function() end) end)
+fill('window', 64, function(i) mq.imgui.init('w' .. i, function() end) end)
+)lua");
+    REQUIRE(h.scripts->run("many", {}));
+    for (int i = 0; i < 200 && !h.printed_part("window again"); ++i) h.scripts->pulse(); // (paused each 3 ms)
+    CHECK(h.printed_part("menu false at most 32"));
+    CHECK(h.printed_part("menu again true"));
+    CHECK(h.printed_part("option false at most 64"));
+    CHECK(h.printed_part("option again true"));
+    CHECK(h.printed_part("function false at most 256"));
+    CHECK(h.printed_part("function again true"));
+    CHECK(h.printed_part("packet false at most 256"));
+    CHECK(h.printed_part("packet again false")); // packet hooks are never replaced: each one counts
+    CHECK(h.printed_part("bind false at most 256"));
+    CHECK(h.printed_part("bind again true"));
+    CHECK(h.printed_part("window false at most 64"));
+    CHECK(h.printed_part("window again true"));
+    CHECK(h.bridge.menu().size() == 32);
+    CHECK(h.bridge.options().size() == 64);
+}
+
 TEST_CASE("Lua plugin: map policy and visibility share native ownership and source lifetime rules") {
     Host h;
     h.write("map.lua",R"lua(

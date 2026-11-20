@@ -218,6 +218,9 @@ struct BazaarResults {
     std::vector<BazaarResult> results;
 };
 std::optional<BazaarResults> decode_bazaar_results(const AppPacket& p);
+// The u16 after the action, which HandleSearchResults reads before anything else: EQEmu's delivery costs reply
+// is not a valid result list after it, so this reads it alone.
+std::optional<std::uint16_t> decode_bazaar_voucher_cost(const AppPacket& p);
 AppPacket encode(const BazaarResults& v); // server direction, for tests
 
 // OP_TraderDelItem (29 bytes): {u32, u32 trader id, char[17] GUID, u32}; the

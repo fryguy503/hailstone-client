@@ -393,3 +393,13 @@ TEST_CASE("zip_read: fuzz") {
         for (int i = 0; i < 3000; ++i) run(fuzz::mutate(*seed, rng));
     }
 }
+
+// The error names the file in UTF-8 whatever the system's code page (path::string() throws on Windows for a name the
+// code page lacks, without the UTF-8 manifest): core/path_utf8.h.
+TEST_CASE("zip: a file that cannot be opened is named in UTF-8") {
+    const std::filesystem::path missing = std::filesystem::path(u8"no-such-folder-é世") / u8"packü.zip";
+    hailstone::ZipReader zip;
+    CHECK_FALSE(zip.open(missing));
+    CHECK(zip.error().find("pack\xc3\xbc.zip") != std::string::npos);
+    CHECK(zip.error().find("no-such-folder-\xc3\xa9\xe4\xb8\x96") != std::string::npos);
+}

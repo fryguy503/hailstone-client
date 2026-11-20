@@ -485,3 +485,43 @@ TEST_CASE("Item compare: compare_lines.lua puts what counts for the class first 
           "+0.42 Weapon Ratio (0.33 to 0.75)");
     lua_close(L);
 }
+
+// The item displays put each change beside the stat's value: the changes by key, signed alone, and the rest listed
+// without those (skip), in the short form where asked.
+TEST_CASE("Item compare: compare_lines.lua gives the changes by key and lists the rest") {
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    REQUIRE(luaL_dofile(L, pack_lib("modern").string().c_str()) == LUA_OK);
+    lua_setglobal(L, "CL");
+    REQUIRE(luaL_dostring(L, R"(
+        c = { usable = true, whyNot = "", notes = {},
+          slots = { { slot = 2, slotName = "Head", current = { "Old Helm" }, verdict = "mixed", score = 30,
+            changes = {
+              { key = "hp", name = "HP", before = 1000, after = 1050, delta = 50, weight = 1 },
+              { key = "str", name = "STR", before = 80, after = 75, delta = -5, weight = 0.5 },
+              { key = "wis", name = "WIS", before = 80, after = 85, delta = 5, weight = 0 },
+              { key = "haste", name = "Haste", before = 20, after = 30, delta = 10, weight = 5 },
+            },
+            weaponBefore = nil, weaponAfter = nil, gained = {}, lost = { "Worn: Ward" } } } }
+        function joined(opts)
+          local t = {}
+          for _, l in ipairs(CL.lines(c, 1, opts)) do t[#t + 1] = l[2] .. ":" .. l[1] end
+          return table.concat(t, "|")
+        end)") == LUA_OK);
+    CHECK(run(L, "local d = CL.byKey(c.slots[1]) return CL.signed('hp', d.hp.delta) .. ' ' .. CL.signed('str', d.str.delta) "
+                 ".. ' ' .. CL.signed('haste', d.haste.delta) .. ' ' .. CL.kind(d.hp) .. ' ' .. CL.kind(d.str) .. ' ' "
+                 ".. CL.kind(d.wis) .. ' ' .. tostring(d.agi)") == "+50 -5 +10% good bad muted nil");
+    CHECK(run(L, "return CL.short(c.slots[1].changes[2])") == "-5 STR");
+    CHECK(run(L, "return joined({ verdict = true, skip = { hp = true, haste = true }, short = true })") ==
+          "muted:Compared with your Old Helm (Head)|mixed:Mixed: better overall|bad:-5 STR|muted:+5 WIS|"
+          "bad:Loses Worn: Ward");
+    // Everything shown beside its stat: no list, and no "No change" line either (there were changes).
+    CHECK(run(L, "return joined({ skip = { hp = true, str = true, wis = true, haste = true } })") ==
+          "muted:Compared with your Old Helm (Head)|bad:Loses Worn: Ward");
+    CHECK(run(L, "local p = CL.parts(c, 1, {}) return p.against .. '|' .. p.verdict[1] .. '|' .. #p.changes .. '|' "
+                 ".. p.more .. '|' .. tostring(p.none) .. '|' .. tostring(p.cantUse)") ==
+          "your Old Helm (Head)|Mixed: better overall|4|0|false|nil");
+    CHECK(run(L, "CL.MAX_CHANGES = 1 local p = CL.parts(c, 1, { skip = { hp = true } }) return p.changes[1].key .. ' ' .. p.more") ==
+          "haste 2");
+    lua_close(L);
+}

@@ -147,6 +147,23 @@ bool append_file_synced(const std::filesystem::path& path, std::string_view text
 #endif
 }
 
+bool link_file_synced(const std::filesystem::path& from, const std::filesystem::path& to, std::error_code& ec) {
+    ec.clear();
+#if defined(_WIN32)
+    (void)from;
+    (void)to;
+    ec = std::make_error_code(std::errc::operation_not_supported);
+    return false;
+#else
+    if (::link(from.c_str(), to.c_str()) != 0) {
+        ec = std::error_code(errno, std::generic_category());
+        return false;
+    }
+    sync_dir(folder_of(to));
+    return true;
+#endif
+}
+
 bool replace_file_synced(const std::filesystem::path& from, const std::filesystem::path& to, std::error_code& ec) {
     ec.clear();
 #if defined(_WIN32)

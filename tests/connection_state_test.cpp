@@ -1,5 +1,5 @@
 // GameConnection state that must not outlive what it was about: questions across a zone change or a loot session,
-// the trader selection after a zone change, the target after OP_DeleteSpawn, the auras, aggro meter and stun at
+// the trader selection after a zone change, spawn deletion and renaming, the auras, aggro meter and stun at
 // zone-in; and the decoders of OP_XTargetResponse, OP_GuildUpdate and opcode 0x3ed4. Against the mock EQEmu.
 
 #include <doctest/doctest.h>
@@ -65,6 +65,16 @@ AppPacket stun(std::uint32_t ms) {
     ByteWriter w;
     w.le(ms);
     return AppPacket(to_wire(Op::Stun), w.take());
+}
+
+AppPacket mob_rename(std::string_view old_name, std::string_view new_name, std::uint32_t enabled = 1) {
+    ByteWriter w;
+    w.fixed_string(old_name, 64);
+    w.fixed_string(old_name, 64);
+    w.fixed_string(new_name, 64);
+    w.le<std::uint32_t>(0);
+    w.le(enabled);
+    return AppPacket(to_wire(Op::MobRename), w.take());
 }
 
 } // namespace
@@ -186,6 +196,72 @@ TEST_CASE("OP_DeleteSpawn of the target clears it and stops auto attack (msgEQRm
     REQUIRE(rig.until([&] { return conn.world().spawns.count(101) == 0; }));
     CHECK(conn.world().target_id == 0);
     CHECK_FALSE(conn.auto_attack());
+}
+
+TEST_CASE("OP_MobRename updates the spawn with the full old name and preserves its identity") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+
+    constexpr std::uint32_t first = 4000, second = 4001;
+    rig.server.add_spawn(make_spawn("a_shade000", first, 1, 1, 0, 0, 0));
+    rig.server.add_spawn(make_spawn("a_shade001", second, 1, 1, 0, 0, 0));
+    const auto& spawns = conn.world().spawns;
+    REQUIRE(rig.until([&] { return spawns.contains(first) && spawns.contains(second); }));
+    const auto incarnation = spawns.at(second).incarnation;
+    REQUIRE(incarnation != 0);
+    conn.set_target(second);
+
+    conn.receive_zone_packet_for_test(mob_rename("a_shade", "Unknown000"));
+    conn.receive_zone_packet_for_test(mob_rename("a_shade001", "Disabled000", 0));
+    auto short_packet = mob_rename("a_shade001", "Malformed000");
+    short_packet.data.pop_back();
+    conn.receive_zone_packet_for_test(short_packet);
+    auto long_packet = mob_rename("a_shade001", "Malformed000");
+    long_packet.data.push_back(std::byte{0});
+    conn.receive_zone_packet_for_test(long_packet);
+    CHECK(spawns.at(first).name == "a_shade000");
+    CHECK(spawns.at(second).name == "a_shade001");
+
+    rig.server.zone.send_reliable(mob_rename("A_SHADE001", "Trial Guide000"));
+    REQUIRE(rig.until([&] { return spawns.at(second).name == "Trial Guide000"; }));
+    CHECK(spawns.at(first).name == "a_shade000");
+    CHECK(spawns.at(second).incarnation == incarnation);
+    CHECK(conn.target() == second);
+
+    rig.server.zone.send_reliable(mob_rename("Trial Guide000", "Memory Keeper000"));
+    REQUIRE(rig.until([&] { return spawns.at(second).name == "Memory Keeper000"; }));
+    CHECK(spawns.at(second).id == second);
+    CHECK(spawns.at(second).incarnation == incarnation);
+    CHECK(conn.target() == second);
+}
+
+TEST_CASE("OP_MobRename of the player's own spawn renames the character too (0x4d5a10)") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto& spawns = conn.world().spawns;
+    const std::uint32_t own = conn.world().player_id;
+    REQUIRE(spawns.contains(own));
+    REQUIRE(conn.profile());
+    const std::string login = conn.character_name();
+    REQUIRE(spawns.at(own).name.starts_with(login));
+
+    // Another player's rename leaves the character's name alone.
+    constexpr std::uint32_t other = 4100;
+    rig.server.add_spawn(make_spawn("Otherguy000", other, 0, 1, 0, 0, 0));
+    REQUIRE(rig.until([&] { return spawns.contains(other); }));
+    rig.server.zone.send_reliable(mob_rename("Otherguy000", "Someone000"));
+    REQUIRE(rig.until([&] { return spawns.at(other).name == "Someone000"; }));
+    CHECK(conn.character_name() == login);
+    CHECK(conn.profile()->name == login);
+
+    // The own spawn's rename sets the character's and the profile's name, as the original's handler does.
+    rig.server.zone.send_reliable(mob_rename(spawns.at(own).name, "Renamed"));
+    REQUIRE(rig.until([&] { return spawns.at(own).name == "Renamed"; }));
+    CHECK(conn.character_name() == "Renamed");
+    CHECK(conn.profile()->name == "Renamed");
+    CHECK(conn.world().player_id == own);
 }
 
 TEST_CASE("zone-in forgets the last zone's auras, aggro meter and stun") {

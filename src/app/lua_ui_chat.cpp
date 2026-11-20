@@ -1626,18 +1626,26 @@ std::string plain_text_command(const ChatWnd& c, const std::string& text) {
     }
 }
 
+// The one-shot key and focus state below (the chat keys' text, a pending Link All, the page keys, the input's history
+// step) is the pack's chat input's alone: a plugin's code in the UI that took it would swallow the player's key, or
+// send the loot window's links from its own call. It gets nil and changes nothing.
+bool plugin_code() { return !ui::lua::LuaUi::caller_tag().empty(); }
+
 // hs.ChatSubmit(slot, text)   -- a typed line: kept in the history and interpreted (say, /command, ...) with the
-// window's channel and language as the defaults
-void submit_line(UiHost& h, int w, std::string text) {
+// window's channel and language as the defaults. A plugin's line is sent the same way but is not the player's: it
+// joins neither the input's history nor makes its window the active one.
+void submit_line(UiHost& h, int w, std::string text, bool typed = true) {
     ChatState& s = state();
-    s.history.push_back(text);
-    while (s.history.size() > 40) s.history.pop_front();
-    s.history_at = -1;
+    if (typed) {
+        s.history.push_back(text);
+        while (s.history.size() > 40) s.history.pop_front();
+        s.history_at = -1;
+    }
     if (w < 0) {
         if (h.submit_chat) h.submit_chat(text);
         return;
     }
-    set_active(w);
+    if (typed) set_active(w);
     // (':' and '\'' are InterpretCmd's emote and say commands, CMDMODE_EMOTE's and CMDMODE_SAY's: not the channel's)
     bool plain = !text.empty() && text[0] != '/' && text[0] != ';' && text[0] != '[' && text[0] != '#' &&
                  text[0] != ':' && text[0] != '\'';
@@ -1662,14 +1670,13 @@ void submit_line(UiHost& h, int w, std::string text) {
 }
 
 int ChatSubmit(lua_State* L) {
-    submit_line(host(L), up_window(L, 1), luaL_checkstring(L, 2));
+    // Each in its own statement, before any std::string exists: a Lua error raised by either longjmps (or throws) past
+    // a half-built argument list's destructors.
+    const int w = up_window(L, 1);
+    const char* text = luaL_checkstring(L, 2);
+    submit_line(host(L), w, text, !plugin_code());
     return 0;
 }
-
-// The one-shot key and focus state below (the chat keys' text, a pending Link All, the page keys, the input's history
-// step) is the pack's chat input's alone: a plugin's code in the UI that took it would swallow the player's key, or
-// send the loot window's links from its own call. It gets nil and changes nothing.
-bool plugin_code() { return !ui::lua::LuaUi::caller_tag().empty(); }
 
 // text, replace = hs.ChatTakeFocus(slot [, typed])   -- when the keyboard goes to the chat input (the chat keys: Enter, ';',
 // '/', '['; game/chat_input.h; a tell menu's name): what goes into the active window's input (replace: instead of

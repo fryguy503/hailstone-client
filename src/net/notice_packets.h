@@ -51,6 +51,27 @@ std::optional<std::uint32_t> decode_yell_for_help(const AppPacket& p);
 // string. Bytes after the NUL are ignored; none at all ends the address at the packet's end; an empty one is nullopt.
 std::optional<std::string> decode_weblink(const AppPacket& p);
 
+// OP_Marquee (EQEmu's ClientMarqueeMessage_Struct, zone → client, 0x502e): six u32 and the text, NUL-terminated, at
+// byte 24. The original's case @0x4cb7f7 hands them to CTextOverlay::DisplayText (game/text_overlay.h) as the colour,
+// the priority, the alpha, the fade-in, the fade-out and the hold: EQEmu's first three fields are its type, unk04 and
+// priority. Only a debug log is written; nothing goes to chat.
+struct Marquee {
+    std::int32_t colour = 0, priority = 0, alpha = 0;
+    std::uint32_t fade_in_ms = 0, fade_out_ms = 0, hold_ms = 0;
+    std::string text;
+};
+std::optional<Marquee> decode_marquee(const AppPacket& p);
+AppPacket encode(const Marquee& v); // server direction, for tests
+
+// OP_CameraEffect (8 bytes, EQEmu's Camera_Struct, 0x127f): u32 duration (ms), f32 intensity. The case @0x4c6f73
+// sets the camera shake (game/camera_shake.h).
+struct CameraEffect {
+    std::uint32_t duration_ms = 0;
+    float intensity = 0.0f;
+};
+std::optional<CameraEffect> decode_camera_effect(const AppPacket& p);
+AppPacket encode(const CameraEffect& v); // server direction, for tests
+
 // OP_DisciplineUpdate (RoF2 Disciplines_Struct): 300 × u32 spell ids (0 empty).
 std::optional<std::vector<std::uint32_t>> decode_disciplines(const AppPacket& p);
 

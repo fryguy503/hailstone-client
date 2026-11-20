@@ -200,8 +200,12 @@ int SpellBookMemorize(lua_State* L) {
     // spell; Hailstone's replace_gem_spell lets it through (UiHost::gem_takes_book_spell). The book is never
     // written over.
     if (h.gem_takes_book_spell(gem)) {
+        const bool was_memorizing = h.conn->spell_state().memorizing.has_value();
         h.conn->memorize(slot, gem);
-        if (h.cursor_spell && *h.cursor_spell == slot) h.cursor_spell.reset();
+        // Off the cursor only once the memorize has started: one refused (standing, casting, a memorize under way)
+        // leaves the spell held, as the gem's own drop does (lua_ui_hud.cpp gem_click).
+        if (!was_memorizing && h.conn->spell_state().memorizing && h.cursor_spell && *h.cursor_spell == slot)
+            h.cursor_spell.reset();
     }
     return 0;
 }

@@ -698,7 +698,13 @@ private:
                 ack_pending_ = true; // current: ack it; past: re-ack the latest, the peer missed our ack
             }
             for (auto& payload : ready) {
-                process(payload, depth + 1);
+                // An application payload (the usual case, and every reassembled one) is handed on in its own
+                // buffer rather than copied once more by the span decoder.
+                if (!payload.empty() && (u8(payload[0]) != 0 || (payload.size() >= 2 && u8(payload[1]) == soe::op::Padding))) {
+                    if (auto app = soe::decode_app(std::move(payload), opt_.opcode_bytes)) deliver(std::move(*app));
+                } else {
+                    process(payload, depth + 1);
+                }
                 if (state_ == SessionState::Disconnected) return;
             }
             return;

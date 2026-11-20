@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -75,6 +76,15 @@ bool GroupTrack::completed() const {
 
 void GroupTrack::sync_to(const GroupTrack& other) {
     if (clip && clip == other.clip && column == other.column) time = other.time;
+}
+
+void GroupTrack::finish() {
+    if (!clip) return;
+    const float d = clip->duration_seconds();
+    time = d;
+    elapsed = rate > 0.0f ? d / rate : d;
+    previous = nullptr;
+    blend = 1.0f;
 }
 
 namespace {
@@ -255,18 +265,33 @@ bool ActorLayers::step(const LayerRequest& req, float dt) {
         action_on_legs = false;
         legs_took_motion = true;
     }
-    if (legs_free)
-        lo.start(req.base, req.base_anim, req.rate, req.loop, req.reverse,
-                 blend_seconds(req, lo.anim, req.base_anim, req.blend_ms), req.restart, req.base_column);
+    bool started = false;
+    // A corpse that already lies (its clip played through) takes a changed clip at its end too: a new appearance
+    // must not make it fall again.
+    const bool settled = req.corpse && corpse_settled;
+    if (legs_free) {
+        started = lo.start(req.base, req.base_anim, req.rate, req.loop, req.reverse,
+                           blend_seconds(req, lo.anim, req.base_anim, req.blend_ms), req.restart, req.base_column);
+    }
     if (!action) {
         // Back on the base clip, the upper body takes the legs' position when they play the same
         // (the lower group's SyncToBoneGroup call after both are started).
         if (up.start(req.base, req.base_anim, req.rate, req.loop, req.reverse,
-                     blend_seconds(req, up.anim, req.base_anim, req.blend_ms), req.restart, req.base_column))
+                     blend_seconds(req, up.anim, req.base_anim, req.blend_ms), req.restart, req.base_column)) {
             up.sync_to(lo);
+            started = true;
+        }
     }
     up.advance(dt);
     lo.advance(dt);
+    // A spawn already dead when this state first drew it shows the death clip's last frame at once, as the original's
+    // actor build does (BuildActorForSpawn's slot 0x20 call at 0x490366: D05 reversed at speed 0, held at its end):
+    // the fall is not played again. One that dies while drawn starts the clip normally.
+    if (started && req.corpse && (req.corpse_at_end || settled)) {
+        lo.finish();
+        up.finish();
+    }
+    corpse_settled = req.corpse && lo.clip && lo.completed();
     return followed;
 }
 
@@ -299,12 +324,66 @@ void pose_actor(const assets::CharacterModel& model, const PoseInput& in, std::v
     model.compose(local, world);
 }
 
+std::vector<std::string> describe_pose(const assets::CharacterModel& model, const PoseInput& in) {
+    std::vector<std::string> lines;
+    lines.push_back(std::format("model {} from {}{}, clips lent by {}", model.code, model.source,
+                                model.eqg ? " (EQG)" : "",
+                                model.animation_donor.empty() ? "none" : model.animation_donor));
+    // A clip by its pointer: the draw holds pointers into the model's clips, so one the model does not hold is
+    // itself a finding.
+    auto name = [&](const assets::AnimationClip* clip) -> std::string {
+        if (!clip) return "none";
+        for (const auto& [code, c] : model.clips)
+            if (&c == clip) return std::format("{}{}", code.empty() ? "rest" : code, c.borrowed ? " (lent)" : "");
+        return "?";
+    };
+    auto group = [&](const char* label, const assets::AnimationClip* clip, float time, bool loop,
+                     const assets::AnimationClip* from, float from_time, float blend) {
+        std::string line = std::format("{}: {} at {:.2f} of {:.2f} s{}", label, name(clip), time,
+                                       clip ? clip->duration_seconds() : 0.0f, loop ? ", looping" : "");
+        if (from && blend < 1.0f) line += std::format(", {:.0f}% faded in from {} at {:.2f} s", blend * 100.0f,
+                                                      name(from), from_time);
+        lines.push_back(std::move(line));
+    };
+    const bool split = in.upper_clip && in.bone_groups;
+    group(split ? "lower body" : "whole body", in.clip, in.time, in.loop, in.previous, in.previous_time, in.blend);
+    if (split)
+        group("upper body", in.upper_clip, in.upper_time, in.upper_loop, in.upper_previous, in.upper_previous_time,
+              in.upper_blend);
+    if (!in.clip) return lines;
+
+    std::vector<assets::BonePose> local, previous;
+    std::vector<glm::mat4> world;
+    pose_actor(model, in, local, previous, world);
+    const auto rest_clip = model.clips.find("");
+    std::string at_rest;
+    if (rest_clip != model.clips.end()) {
+        const auto& rest = rest_clip->second.tracks;
+        constexpr float kSameRotation = 0.99999f, kSameTranslation = 1e-4f;
+        for (std::size_t b = 1; b < local.size() && b < rest.size() && b < model.bone_names.size(); ++b) {
+            if (rest[b].empty()) continue;
+            std::string bone = model.bone_names[b];
+            if (bone.find("POINT") != std::string::npos) continue;
+            const assets::BonePose r = rest[b].front();
+            if (std::abs(glm::dot(local[b].rotation, r.rotation)) < kSameRotation ||
+                glm::length(local[b].translation - r.translation) > kSameTranslation)
+                continue;
+            if (bone.starts_with(model.code)) bone.erase(0, model.code.size());
+            if (bone.ends_with("_TRACK")) bone.resize(bone.size() - 6);
+            at_rest += (at_rest.empty() ? "" : " ") + bone;
+        }
+    }
+    lines.push_back("bones at rest: " + (at_rest.empty() ? std::string("none") : at_rest));
+    return lines;
+}
+
 bool ActorLayers::split() const {
     const GroupTrack& up = group[game::kUpperBones];
     const GroupTrack& lo = group[game::kLowerBones];
     return up.clip != lo.clip || up.column != lo.column || up.reverse != lo.reverse || up.time != lo.time ||
            up.previous != lo.previous || up.blend != lo.blend ||
-           (up.previous && (up.previous_time != lo.previous_time || up.previous_loop != lo.previous_loop));
+           (up.previous && (up.previous_time != lo.previous_time || up.previous_reverse != lo.previous_reverse ||
+                            up.previous_loop != lo.previous_loop));
 }
 
 } // namespace hailstone::render

@@ -314,6 +314,8 @@ public:
             if (part == "Stat") {
                 out.text = c.stat;
                 if (!c.tooltip.empty()) out.tooltip = c.tooltip;
+            } else if (part == "Key") { // Hailstone: the comparison key (no such child in the stock window)
+                out.text = c.key;
             } else {
                 out.text = c.value;
                 out.color = argb_to_rgb(c.value_argb);

@@ -25,6 +25,7 @@
 #include "game/trade_rules.h"
 #include "net/game_connection.h"
 #include "net/opcodes.h"
+#include "net/player_packets.h"
 #include "net/trade_packets.h"
 
 namespace hailstone::net {
@@ -197,6 +198,7 @@ void GameConnection::handle_item(Op op, const AppPacket& p) {
             inventory_.load(std::move(*items));
             mark_cursor_origin(CursorOrigin::Unknown); // zone-in contents are not new arrivals
             set_bank_live(with_bank);
+            refresh_instrument_state();
         } else {
             log::warn("could not decode OP_CharInventory ({} bytes)", p.data.size());
         }
@@ -421,6 +423,32 @@ void GameConnection::refresh_worn_slot(int slot) {
     if (item) look = game::worn_look(*item, ms);
     game::apply_wear_change(it->second.appearance, static_cast<std::uint8_t>(ms), look.material, look.hero_forge,
                             look.tint);
+    refresh_instrument_state();
+}
+
+void GameConnection::refresh_instrument_state() {
+    // PcClient_RefreshWornSlotVisual's instrument bit (0x5923f0): the local player's PlayerState bit 0x10 is set
+    // when the primary or secondary hand holds an instrument (item types 23..26), and the transition is sent as
+    // OP_PlayerStateAdd / OP_PlayerStateRemove. The server relays it for other players; it does not echo our own
+    // packet back to us. Stock EQEmu registers those handlers only once the client is connected, so a bit set during
+    // the zone-in waits for OP_ClientReady; `instrument_published_` is what the zone has been told.
+    auto it = world_.spawns.find(world_.player_id);
+    if (it == world_.spawns.end()) return;
+    bool holds = false;
+    for (std::int16_t slot : {kSlotPrimary, kSlotSecondary}) {
+        const Item* item = inventory_.at(ItemSlot::possessions(slot));
+        if (item && is_instrument_item_type(item->item_type)) {
+            holds = true;
+            break;
+        }
+    }
+    if (holds) it->second.player_state |= kPlayerStateInstrument;
+    else it->second.player_state &= ~kPlayerStateInstrument;
+    if (!zone_ready_ || holds == instrument_published_) return;
+    // Only a packet queued for this zone session counts as published; a dropped hook or a closed session leaves the
+    // state unpublished, so the next refresh tries again.
+    if (send_zone(encode_player_state(holds, PlayerState{world_.player_id, kPlayerStateInstrument})))
+        instrument_published_ = holds;
 }
 
 void GameConnection::move_item(const ItemSlot& from, const ItemSlot& to, std::uint32_t count) {

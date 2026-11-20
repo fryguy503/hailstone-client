@@ -614,3 +614,23 @@ TEST_CASE("Layout: old window names in hailstone-windows.ini are renamed") {
     CHECK_FALSE(rename_old_window_ids_in(tmp.path / "hailstone-windows.ini"));
     CHECK_FALSE(rename_old_window_ids_in(tmp.path / "missing.ini"));
 }
+
+// A data folder named for the run (HAILSTONE_DATA_DIR, or use_data_dir for a tool another Hailstone started) is held
+// to the same rule: never an EverQuest folder.
+TEST_CASE("Layout: a data folder given for the run is never an EverQuest folder") {
+    TempDir tmp("given");
+    const fs::path own = tmp.path / "own";
+    fs::create_directories(own);
+    CHECK(platform::given_data_dir_problem(own).empty());
+    CHECK(platform::given_data_dir_problem(tmp.path / "not-made-yet").empty());
+    const fs::path eq = tmp.path / "EverQuest";
+    write(eq / "EQClient.ini", "[Defaults]\n");
+    CHECK(platform::given_data_dir_problem(eq).find("EverQuest folder") != std::string::npos);
+
+    platform::use_data_dir(eq, "a test");
+    CHECK(platform::data_dir() == fs::absolute(eq));
+    CHECK(platform::data_dir_problem().find("EverQuest folder") != std::string::npos);
+    platform::use_data_dir(own, "a test");
+    CHECK(platform::data_dir_problem().empty());
+    platform::set_data_dir_for_tests({});
+}

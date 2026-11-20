@@ -8,6 +8,7 @@
 --     one there, or "Mark my spot"; the list at the right centres on one, renames or removes it;
 --   * Auto Z (hs.MapAutoZ): lines and labels well above or below you fade, here and on the minimap; the arrow
 --     beside its button sets how far above (+) and below (-) you they stay whole;
+--   * Map Pack switches which folder supplies the map, using the same choice as Options;
 --   * the cursor's location (as /loc gives it) and its distance from you, under the map;
 --   * your zone's exits (hs.ZoneExits: where each zone line leads), and a route followed (lib/atlas.lua) as a banner
 --     with the next zone and "Walk there";
@@ -24,6 +25,7 @@ local atlas = dofile("lib/atlas.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "MapViewWnd"
+local PACK_COMBO = "MVW_MapsDirCombobox"
 local E = dofile("lib/extensions.lua")
 local MC = dofile("lib/map_controls.lua")
 local componentContext = {}
@@ -129,13 +131,37 @@ local function toolButton(id,x,y,w,s,label,on,tip)
     return drawToolButton(id,x,y,w,s,label,on,tip)
   end)
 end
-local function mapControls(x,y,w,s)
-  local present=MC.Sync(M.view)
-  if present and toolButton("##mapcontrols",x,y+TOOL_H*s,122*s,s,"Map controls",MC.Open(),"Controls supplied by installed addons") then
+local function mapPack(x, y, s)
+  local packs, selected = API.windows.ComboInfo(WINDOW, PACK_COMBO)
+  if not packs or #packs == 0 then return false end
+  ui.SetCursorScreenPos(x, y)
+  ui.PushFont(T.font.small)
+  ui.SetNextItemWidth(170 * s)
+  if ui.BeginCombo("Map Pack##map_pack", packs[selected + 1] or packs[1]) then
+    for i, name in ipairs(packs) do
+      local active = i - 1 == selected
+      if ui.Selectable(name .. "###map_pack_" .. i, active) and not active then
+        API.windows.ComboSelect(WINDOW, PACK_COMBO, i - 1)
+      end
+      if active then ui.SetItemDefaultFocus() end
+    end
+    ui.EndCombo()
+  end
+  ui.PopFont()
+  return true
+end
+
+local function mapControls(x, y, s, showPack)
+  local rowY = y + TOOL_H * s
+  local hasPack = showPack and mapPack(x, rowY, s)
+  local controlsX = hasPack and x + 250 * s or x
+  local present = MC.Sync(M.view)
+  if present and toolButton("##mapcontrols", controlsX, rowY, 122 * s, s, "Map controls", MC.Open(),
+      "Controls supplied by installed addons") then
     MC.Toggle(M.view)
   end
   MC.Draw(M.view)
-  return present and 34 or 0
+  return (hasPack or present) and 34 or 0
 end
 
 local function markersPage(x, y, w, h, s, list, px, py, own)
@@ -408,7 +434,7 @@ local function worldBody(x, y, w, h, s)
   if toolButton("##side", x + w - 30 * s, y, 30 * s, s, side and ">" or "<", false, side and "Hide the zone finder" or "Show the zone finder") then
     ui.SetSetting("map.sidebar", side and "0" or "1")
   end
-  local extra = mapControls(x,y,w,s)
+  local extra = mapControls(x, y, s)
   local mx0, my0 = x, y + (TOOL_H + extra) * s
   local mx1 = x + w - (side and (SIDE_W + 12) * s or 0)
   local my1 = y + h - STATUS_H * s
@@ -481,7 +507,7 @@ local function body(x, y, w, h, s)
   if zoomOut then M.zoom = math.max(ZMIN, M.zoom / 1.5) end
 
   -- the map
-  local extra = mapControls(x,y,w,s)
+  local extra = mapControls(x, y, s, true)
   local mx0, my0 = x, y + (TOOL_H + extra) * s
   local mx1 = x + w - (side and (SIDE_W + 12) * s or 0)
   local my1 = y + h - STATUS_H * s

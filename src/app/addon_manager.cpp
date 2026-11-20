@@ -98,7 +98,7 @@ AddonManager::AddonManager(AddonsEnv env) : env_(std::move(env)) {
         };
     {
         // The list at once (the hashes, which read every file, come from the worker).
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         for (auto& a : read_installed_addons(env_.data_dir)) {
             AddonStatus s;
             s.addon = std::move(a);
@@ -156,7 +156,7 @@ void AddonManager::wait_idle() {
 void AddonManager::say(std::string text, bool error) {
     if (error) log::warn("Add-ons: {}", text);
     else log::info("Add-ons: {}", text);
-    std::lock_guard lock(mutex_);
+    Changing lock(*this);
     status_.message = std::move(text);
     status_.message_error = error;
     ++status_.message_serial;
@@ -169,7 +169,7 @@ AddonStatus* AddonManager::row(std::string_view name) {
 }
 
 void AddonManager::set_row(const AddonStatus& s) {
-    std::lock_guard lock(mutex_);
+    Changing lock(*this);
     set_row_locked(s);
 }
 
@@ -191,7 +191,7 @@ void AddonManager::reload_rows() {
         s.addon = std::move(a);
         rows.push_back(std::move(s));
     }
-    std::lock_guard lock(mutex_);
+    Changing lock(*this);
     for (auto& r : rows)
         if (const AddonStatus* old = row(r.addon.name)) {
             // What this run found out about it stays.
@@ -274,7 +274,7 @@ std::string AddonManager::manifest_problem(const AddonManifest& m, std::uint32_t
 
 void AddonManager::inspect(std::string link, std::optional<AddonExpect> expect) {
     {
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         status_.inspecting = true;
         status_.offer.reset();
         status_.message = "Looking at " + link + "...";
@@ -294,7 +294,7 @@ void AddonManager::inspect(std::string link, std::optional<AddonExpect> expect) 
             got = fetch_manifest(offer.source, &error);
         }
         if (!got) {
-            std::lock_guard lock(mutex_);
+            Changing lock(*this);
             status_.inspecting = false;
         }
         if (!got) return say(error, true);
@@ -325,7 +325,7 @@ void AddonManager::inspect(std::string link, std::optional<AddonExpect> expect) 
         } else if (offer.blocked.empty()) {
             offer.blocked = addon_name_taken(env_.data_dir, installed, m.kind, m.name);
         }
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         status_.inspecting = false;
         status_.offer = std::move(offer);
     });
@@ -342,7 +342,7 @@ void AddonManager::refresh_index(bool now) {
             // Checked again: the file is the player's to change.
             if (auto index = parse_addon_index(*text, *env_.index_key, &why)) {
                 kept_serial = index->serial;
-                std::lock_guard lock(mutex_);
+                Changing lock(*this);
                 status_.index = std::move(*index);
             } else {
                 log::warn("Add-ons: the cached add-on index is not used: {}", why);
@@ -376,21 +376,21 @@ void AddonManager::refresh_index(bool now) {
         write_file_atomic(cache, *text);
         write_file_atomic(stamp, std::to_string(t) + "\n");
         log::info("Add-ons: the add-on index lists {} add-ons", index->addons.size());
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         status_.index = std::move(*index);
     });
 }
 
 void AddonManager::browse(bool again) {
     {
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         if (status_.browsing || (status_.browsed && !again)) return;
         status_.browsing = true;
     }
     post([this] {
         std::optional<AddonIndex> index;
         {
-            std::lock_guard lock(mutex_);
+            Changing lock(*this);
             index = status_.index;
         }
         std::vector<AddonCatalogEntry> catalog;
@@ -421,7 +421,7 @@ void AddonManager::browse(bool again) {
             catalog.push_back(std::move(e));
         }
         log::info("Add-ons: the store lists {} add-ons", catalog.size());
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         status_.catalog = std::move(catalog);
         status_.catalog_error = std::move(error);
         status_.browsing = false;
@@ -430,7 +430,7 @@ void AddonManager::browse(bool again) {
 }
 
 void AddonManager::cancel_offer() {
-    std::lock_guard lock(mutex_);
+    Changing lock(*this);
     status_.offer.reset();
 }
 
@@ -503,7 +503,7 @@ std::optional<AddonManager::Staged> AddonManager::download(const AddonManifest& 
 void AddonManager::install_offer(bool older_ok) {
     std::optional<AddonOffer> offer;
     {
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         // An older version than the one installed only on the player's word that it is the older one they want: the
         // card stays up until they give it or cancel.
         if (status_.offer && status_.offer->older && !older_ok) {
@@ -524,7 +524,7 @@ void AddonManager::install_offer(bool older_ok) {
     AddonStatus s;
     bool busy = false;
     {
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         if (const AddonStatus* r = row(m.name)) {
             // One downloading, or staged for install_ready (which moves it out of addons/new/<name>/ while a new
             // download would unpack there): this one waits until that is done, as check_one does.
@@ -562,7 +562,7 @@ void AddonManager::install_offer(bool older_ok) {
         }
         s.state = AddonState::Ready;
         set_row(s);
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         std::erase_if(staged_, [&](const Staged& st) { return iequal(st.addon.name, a->addon.name); });
         staged_.push_back(std::move(*a));
     });
@@ -618,7 +618,7 @@ int AddonManager::check_one(const InstalledAddon& listed, const std::optional<Ap
     {
         // The row turns Checking under the same lock remove() looks at it with: from here on a removal waits, and an
         // add-on removed since `listed` was read is left alone.
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         if (removed_.contains(lower(listed.name))) return 0;
         if (const AddonStatus* r = row(listed.name)) {
             if (r->state == AddonState::Ready || r->state == AddonState::Downloading) return 1;
@@ -634,7 +634,7 @@ int AddonManager::check_one(const InstalledAddon& listed, const std::optional<Ap
     const auto now_installed = read_installed_addons(env_.data_dir);
     const InstalledAddon* current = find_addon(now_installed, listed.name);
     if (!current) {
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         std::erase_if(status_.addons, [&](const AddonStatus& r) { return iequal(r.addon.name, listed.name); });
         return 0;
     }
@@ -717,7 +717,7 @@ int AddonManager::check_one(const InstalledAddon& listed, const std::optional<Ap
         return 1;
     }
     next->automatic = !force;
-    std::lock_guard lock(mutex_);
+    Changing lock(*this);
     s.state = AddonState::Ready;
     set_row_locked(s);
     std::erase_if(staged_, [&](const Staged& st) { return iequal(st.addon.name, next->addon.name); });
@@ -730,13 +730,13 @@ void AddonManager::set_auto_update(std::string_view name, bool on) {
     for (auto& a : all)
         if (iequal(a.name, name)) a.auto_update = on;
     if (!write_installed_addons(env_.data_dir, all)) return;
-    std::lock_guard lock(mutex_);
+    Changing lock(*this);
     if (AddonStatus* r = row(name)) r->addon.auto_update = on;
 }
 
 bool AddonManager::set_enabled(std::string_view name, bool on) {
     if (!set_addon_enabled(env_.data_dir, name, on)) return false;
-    std::lock_guard lock(mutex_);
+    Changing lock(*this);
     if (AddonStatus* r = row(name)) r->addon.enabled = on;
     ++status_.serial;
     return true;
@@ -744,7 +744,7 @@ bool AddonManager::set_enabled(std::string_view name, bool on) {
 
 bool AddonManager::remove(std::string_view name, std::string* error) {
     {
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         const AddonStatus* r = row(name);
         if (r && (r->state == AddonState::Downloading || r->state == AddonState::Checking)) {
             if (error) *error = r->addon.name + " is being downloaded: wait a moment";
@@ -755,11 +755,11 @@ bool AddonManager::remove(std::string_view name, std::string* error) {
         removed_.insert(lower(name));
     }
     if (!remove_addon(env_.data_dir, name, error)) {
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         removed_.erase(lower(name));
         return false;
     }
-    std::lock_guard lock(mutex_);
+    Changing lock(*this);
     std::erase_if(staged_, [&](const Staged& st) { return iequal(st.addon.name, name); });
     std::erase_if(status_.addons, [&](const AddonStatus& r) { return iequal(r.addon.name, name); });
     ++status_.serial;
@@ -777,13 +777,13 @@ bool AddonManager::has_ready() const {
 std::vector<std::string> AddonManager::install_ready() {
     std::vector<Staged> staged;
     {
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         staged.swap(staged_);
     }
     std::vector<std::string> done;
     for (auto& st : staged) {
         {
-            std::lock_guard lock(mutex_);
+            Changing lock(*this);
             if (removed_.contains(lower(st.addon.name))) continue; // removed after it was staged
         }
         if (st.automatic) {
@@ -792,7 +792,7 @@ std::vector<std::string> AddonManager::install_ready() {
             const InstalledAddon* cur = find_addon(all, st.addon.name);
             if (!cur) continue; // no longer installed
             if (!cur->auto_update) {
-                std::lock_guard lock(mutex_);
+                Changing lock(*this);
                 if (AddonStatus* r = row(st.addon.name)) r->state = AddonState::Available;
                 continue;
             }
@@ -813,7 +813,7 @@ std::vector<std::string> AddonManager::install_ready() {
             }
         }
         const bool ok = error.empty() && apply_addon(env_.data_dir, st.addon, &error);
-        std::lock_guard lock(mutex_);
+        Changing lock(*this);
         AddonStatus s;
         if (const AddonStatus* r = row(st.addon.name)) s = *r;
         if (ok) {

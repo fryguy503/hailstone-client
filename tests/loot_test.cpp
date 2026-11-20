@@ -423,6 +423,38 @@ TEST_CASE("loot: a delayed Loot All confirmation runs with an individual request
     CHECK(MockEqServer::count(rig.server.zone_log, Op::EndLootRequest) == 1);
 }
 
+TEST_CASE("loot: Loot All keeps NO DROP confirmation for other corpses") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    auto& spawn = conn.world_for_test().spawns.at(corpse);
+    SUBCASE("another player's corpse") {
+        spawn.name = "Gennrokin's corpse01";
+        spawn.is_npc = false;
+    }
+    SUBCASE("a locally converted NPC with the player's name") {
+        spawn.name = "Gennro's_corpse";
+    }
+    SUBCASE("a server-published NPC corpse with the player's name") {
+        spawn.name = "Gennro`s_corpse01";
+        spawn.is_npc = false; // EQEmu uses the corpse spawn type for NPC and player corpses
+    }
+
+    conn.set_client_option_for_session(game::ClientOption::LootAllConfirm, 0);
+    conn.set_client_option_for_session(game::ClientOption::LootNoDrop, 0);
+    conn.destroy_cursor();
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.receive_zone_packet_for_test(loot_item_packet(23, "Relic"));
+    conn.receive_zone_packet_for_test(money(6));
+    conn.loot_all();
+    REQUIRE(conn.confirmation());
+    CHECK(conn.confirmation()->id == kConfirmLootNoDrop);
+    flush_loot_requests(rig);
+    CHECK(loot_requests(rig).empty());
+}
+
 TEST_CASE("loot: a second Loot All click while its question is pending asks nothing more") {
     Rig rig;
     auto& conn = rig.conn;

@@ -479,6 +479,34 @@ TEST_CASE("a Luclin model borrows nothing from the classic donor's skeleton" * d
     }
 }
 
+TEST_CASE("a bone named with another model's code still takes the donor's track" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    // South Karana's Halas female (HLF) names her left upper arm HUFBI_L_TRACK. Matched by her own code alone, it
+    // took no ELF track: in every clip her left arm stood out at its rest angle, the hand at shoulder height.
+    auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "southkarana", true);
+    auto m = lib.model("HLF");
+    if (!m) return; // an asset folder without the zone's model
+    const int bi_l = m->find_bone("BI_L_TRACK"), fi_l = m->find_bone("FI_L_TRACK");
+    const int bi_r = m->find_bone("BI_R_TRACK"), fi_r = m->find_bone("FI_R_TRACK");
+    REQUIRE(bi_l >= 0);
+    REQUIRE(fi_l >= 0);
+    REQUIRE(bi_r >= 0);
+    REQUIRE(fi_r >= 0);
+    for (const char* code : {"P01", "O01", "L01"}) {
+        CAPTURE(code);
+        const auto* clip = m->clip(code);
+        REQUIRE(clip);
+        std::vector<glm::mat4> world;
+        m->sample(*clip, 0.3f, true, world);
+        auto drop = [&](int hand, int shoulder) {
+            return world[static_cast<std::size_t>(shoulder)][3].z - world[static_cast<std::size_t>(hand)][3].z;
+        };
+        // The hand hangs well below the shoulder, as the right one does (at rest it is 0.25 below).
+        CHECK(drop(fi_l, bi_l) > 0.8f);
+        CHECK(drop(fi_l, bi_l) == doctest::Approx(drop(fi_r, bi_r)).epsilon(0.5));
+    }
+}
+
 TEST_CASE("a spawn holding something plays the model's variant B, else what it has (0x4b1210)") {
     CharacterModel m;
     for (const char* c : {"", "P01", "P01B", "C01"}) m.clips[c].frame_count = 2;
@@ -893,12 +921,117 @@ TEST_CASE("a skeleton without a mesh loads and dresses its held item, but shows 
               })) == item_vertices);
 }
 
+TEST_CASE("a 0x2C body draws, unless every texel of its masked materials is transparent: then it stays body-less") {
+    using namespace test::wld_fixtures;
+    // A 4x4 8-bit BMP, all palette index 0 but index 1 at `spot` (none for -1); its rows need no padding.
+    auto bmp8 = [](int spot) {
+        ByteWriter w;
+        constexpr std::uint32_t kOffset = 14 + 40 + 2 * 4;
+        w.le<std::uint8_t>('B');
+        w.le<std::uint8_t>('M');
+        w.le<std::uint32_t>(kOffset + 16);
+        w.le<std::uint32_t>(0);
+        w.le<std::uint32_t>(kOffset);
+        w.le<std::uint32_t>(40);
+        w.le<std::int32_t>(4);
+        w.le<std::int32_t>(4);
+        w.le<std::uint16_t>(1);
+        w.le<std::uint16_t>(8);
+        w.le<std::uint32_t>(0);
+        w.le<std::uint32_t>(16);
+        w.zeros(8);
+        w.le<std::uint32_t>(2);
+        w.le<std::uint32_t>(0);
+        w.le<std::uint32_t>(0x00000000); // index 0: the masked colour
+        w.le<std::uint32_t>(0x00ff8040);
+        for (int i = 0; i < 16; ++i) w.le<std::uint8_t>(i == spot ? 1 : 0);
+        return w.take();
+    };
+    constexpr std::uint32_t kMaskedRenderMethod = 0x80000013; // IVM_MDF's
+    WldBuilder b;
+    auto reference = [](std::int32_t to) {
+        ByteWriter w;
+        w.le(to);
+        w.le<std::uint32_t>(0);
+        return w;
+    };
+    // One model per material: the 0x2C fixture mesh skinned to bones 1 and 2 of a three-node skeleton.
+    auto add_model = [&](const std::string& code, const std::string& bitmap_file, std::uint32_t render_method,
+                         ByteWriter (*make_mesh)(std::int32_t) = mesh_2c) {
+        auto bitmap = b.add(kBitmapName, b.str(code + "_BMP"), bitmap_name(bitmap_file));
+        ByteWriter info;
+        info.le<std::uint32_t>(0);
+        info.le<std::uint32_t>(1);
+        info.le(bitmap);
+        auto sprite = b.add(kSimpleSprite, 0, reference(b.add(kBitmapInfo, 0, info)));
+        auto mat = b.add(kMaterialDef, b.str(code + "_MDF"), material(render_method, sprite));
+        auto palette = b.add(kMaterialPalette, b.str(code + "_MP"), refs({mat, mat, mat}));
+        auto body = b.add(kMeshRef, 0, reference(b.add(kOldMeshDef, b.str(code + "_DMSPRITEDEF"), make_mesh(palette))));
+        ByteWriter skeleton;
+        skeleton.le<std::uint32_t>(0);
+        skeleton.le<std::uint32_t>(3);
+        skeleton.le<std::int32_t>(0);
+        for (int node = 0; node < 3; ++node) {
+            skeleton.le(b.str(code + std::to_string(node) + "_DAG"));
+            skeleton.le<std::uint32_t>(0);
+            skeleton.le(b.add(kTrackRef, b.str(code + std::to_string(node) + "_TRACK"), reference(0)));
+            skeleton.le<std::int32_t>(node == 1 ? body : 0); // the body hangs off node 1, as IVM's does
+            skeleton.le<std::uint32_t>(node == 0 ? 2u : 0u);
+            if (node == 0) {
+                skeleton.le<std::uint32_t>(1);
+                skeleton.le<std::uint32_t>(2);
+            }
+        }
+        auto skeleton_ref = b.add(kSkeletonRef, 0, reference(b.add(kSkeletonDef, b.str(code + "_HS_DEF"), skeleton)));
+        ByteWriter actor;
+        for (std::uint32_t v : {0u, 0u, 0u, 1u, 0u}) actor.le(v);
+        actor.le(skeleton_ref);
+        b.add(kActorDef, b.str(code + "_ACTORDEF"), actor);
+    };
+    add_model("IVM", "clear.bmp", kMaskedRenderMethod); // global_chr's case
+    add_model("SPT", "spot.bmp", kMaskedRenderMethod);  // one texel shows
+    add_model("OPQ", "clear.bmp", kOpaqueRenderMethod); // not masked: the colour of index 0 draws
+    add_model("NOP", "spot.bmp", kOpaqueRenderMethod, mesh_2c_no_polygons); // RoF2's IVM: no polygons, empty pieces
+    auto archive = std::make_shared<CharacterArchive>();
+    archive->archive = std::make_shared<PfsArchive>(PfsArchive::from_memory(
+        test::pfs_fixtures::make_pfs({{"fixture.wld", b.build()}, {"clear.bmp", bmp8(-1)}, {"spot.bmp", bmp8(5)}}),
+        "old_mesh_fixture.s3d"));
+    archive->wlds.push_back(wld::WldFile::parse(*archive->archive->read("fixture.wld"), "fixture.wld"));
+    CharacterLibrary library({archive});
+
+    auto hidden = library.model("IVM");
+    REQUIRE(hidden);
+    CHECK(hidden->vertices.empty());
+    CHECK(hidden->indices.empty());
+    CHECK(hidden->materials.empty());
+    CHECK(bodiless_skeleton(*hidden));
+    // A 0x2C body with no polygons is left out, its empty skin pieces never checked.
+    auto empty = library.model("NOP");
+    REQUIRE(empty);
+    CHECK(empty->vertices.empty());
+    CHECK(empty->indices.empty());
+    CHECK(bodiless_skeleton(*empty));
+    for (const char* code : {"SPT", "OPQ"}) {
+        CAPTURE(code);
+        auto shown = library.model(code);
+        REQUIRE(shown);
+        REQUIRE(shown->vertices.size() == 4);
+        CHECK(shown->indices.size() == 9);
+        CHECK_FALSE(bodiless_skeleton(*shown));
+        // The skin pieces put three vertices on bone 1 and one on bone 2, the centre (0, 0, 1) added.
+        CHECK(shown->vertices[0].bones[0] == 1);
+        CHECK(shown->vertices[3].bones[0] == 2);
+        CHECK(shown->vertices[3].position == glm::vec3(-1.0f, 0.0f, 4.0f));
+    }
+}
+
 TEST_CASE("real IVM from the game folder loads with no body mesh and dresses IT10649" *
           doctest::skip(!hailstone::test::game_dir())) {
     auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "");
     auto model = lib.model("IVM");
     REQUIRE(model);
-    // Its 0x2d mesh references name 0x2c fragments (IVM_DMSPRITEDEF), which this client does not support: no body.
+    // Its 0x2d mesh references name 0x2c fragments (IVM_DMSPRITEDEF, IVMHE00_DMSPRITEDEF) that in RoF2's
+    // global_chr have no polygons and skin pieces that count 0: they are left out, and the body is empty. (A live folder's ivm_chr.s3d has a 0x36 IVM with a body; this test is for RoF2's.)
     CHECK(model->vertices.empty());
     CHECK(model->indices.empty());
     // chrdump IVM: the right hand point's chain up to the root.
@@ -1772,6 +1905,37 @@ TEST_CASE("RoF2 evil-tree held items retain packed glow surfaces and valid alway
         CHECK((dir.exists("SpellEffects/" + definition.texture) || dir.exists("ActorEffects/" + definition.texture) ||
                dir.exists("EnvEmitterEffects/" + definition.texture)));
     }
+}
+
+TEST_CASE("The Fiery Avenger (IT62) holds its 0x2C blade where IT2 holds the same blade, with its flames on it" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "");
+    auto avenger = lib.item_mesh(62);
+    auto plain = lib.item_mesh(2);
+    REQUIRE(avenger);
+    REQUIRE(plain);
+    // IT62's blade is gequip's 0x2C 2HNSWORD_DMSPRITEDEF; unread, only its flame cloud was left.
+    REQUIRE(avenger->mesh.vertices.size() == 64);
+    CHECK(avenger->mesh.parts.size() == 4);
+    REQUIRE(avenger->mesh.emitters.size() == 1);
+    // IT2's 0x36 blade under the same 2HNSWORD pose: every vertex of one lies on the other's.
+    float worst = 0.0f;
+    for (const auto& v : avenger->mesh.vertices) {
+        float nearest = std::numeric_limits<float>::max();
+        for (const auto& u : plain->mesh.vertices) nearest = std::min(nearest, glm::distance(v.position, u.position));
+        worst = std::max(worst, nearest);
+    }
+    CHECK(worst < 0.001f);
+    // The flame cloud's point lies along the blade (+X from the grip), not behind it.
+    float lo = std::numeric_limits<float>::max(), hi = -lo;
+    for (const auto& v : avenger->mesh.vertices) {
+        lo = std::min(lo, v.position.x);
+        hi = std::max(hi, v.position.x);
+    }
+    const float flame = avenger->mesh.emitters[0].local[3].x;
+    CHECK(flame > lo);
+    CHECK(flame < hi);
+    CHECK(hi > 3.0f);
 }
 
 TEST_CASE("RoF2 MPL held items retain their authored coverage texture and UV scale" *

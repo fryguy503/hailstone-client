@@ -414,9 +414,18 @@ SpawnAnimChoice choose_spawn_animation(SpawnAnimState& st, const SpawnAnimInput&
     return c;
 }
 
+bool instrument_song_animation(std::uint8_t anim, std::uint8_t class_id, std::uint8_t stand_state,
+                               bool holds_instrument) {
+    if (anim != kAnimDrum && anim != kAnimLute && anim != kAnimHorn) return true;
+    if (stand_state == kStandStateSitting) return false;
+    if (class_id == kClassBard && !holds_instrument) return false;
+    return true;
+}
+
 std::string action_clip(std::uint8_t action, const std::function<bool(std::string_view)>& has_clip, bool new_style,
                         const NewStyleTrackInput& track_in, const std::function<int()>& rand,
-                        std::uint8_t* playing, bool* stand_request, std::uint8_t* normalized) {
+                        std::uint8_t* playing, bool* stand_request, std::uint8_t* normalized,
+                        const ActionGate* gate) {
     if (playing) *playing = action;
     if (new_style) {
         // The new-style object's slot 0x14: an old-style number through the map at 0xaaf5c8.
@@ -431,6 +440,11 @@ std::string action_clip(std::uint8_t action, const std::function<bool(std::strin
         action = mech::new_to_old_anim(action);
     if (normalized) *normalized = action;
     if (action == 0 || action >= static_cast<std::uint8_t>(AnimationType::End)) {
+        if (playing) *playing = action;
+        return {};
+    }
+    // The classic/Luclin instrument-song block, after the new-to-old map and before the clip or stand fallback.
+    if (gate && !instrument_song_animation(action, gate->class_id, gate->stand_state, gate->holds_instrument)) {
         if (playing) *playing = action;
         return {};
     }

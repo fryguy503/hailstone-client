@@ -362,8 +362,10 @@ void ClientApp::region_teleport(const std::string& text) {
         has_description = true;
         float loc[3] = {pos.x, pos.y, pos.z};
         auto t = game::resolve_teleport_index(text, index, static_cast<std::int32_t>(zone), loc, rows);
-        // A few zone pairs move the player itself (34 <-> 10, 3 -> 4).
-        feet_ += glm::vec3(loc[0], loc[1], loc[2]) - pos;
+        // A few zone pairs (34 <-> 10, 3 -> 4) translate the position into the destination's coordinates; it goes
+        // to the server in the OP_ClientUpdate before the zone change. Change to a RoF2 rule: the original writes the
+        // offset into the player's own position (+0x64), so a refused request left the player displaced in the old
+        // zone (1044 units on 10 <-> 34); here the player stays where it crossed.
         pos = glm::vec3(loc[0], loc[1], loc[2]);
         log::info("zone line {}: {} zone {:#x} zone point {} index request {} ({:.1f}, {:.1f}, {:.1f}) heading {:.1f}", text,
                   t.ok ? "to" : "unresolved", t.found, t.zone_point, t.index_request, t.x, t.y, t.z, t.heading);
@@ -379,7 +381,7 @@ void ClientApp::region_teleport(const std::string& text) {
         a.reason = 0;
         a.arg8 = -1;
         a.arg9 = 0;
-        return teleport_b(a, ("zone line " + text).c_str());
+        return teleport_b(a, ("zone line " + text).c_str(), pos);
     };
     h.send_index_request = [&](std::int32_t zp) { conn_->send_teleport_index_request(zp); };
     h.position_sample = [&](int kind, const float* point) {
@@ -622,10 +624,11 @@ void ClientApp::draw_world_container() {
     if (!open) conn_->close_world_container();
 }
 
-bool ClientApp::teleport_b(const game::TeleportBArgs& a, const char* what) {
-    const glm::vec3 pos = local_body_movement_
+bool ClientApp::teleport_b(const game::TeleportBArgs& a, const char* what,
+                           std::optional<glm::vec3> zone_line_position) {
+    const glm::vec3 pos = zone_line_position.value_or(local_body_movement_
         ? local_body_movement_->controller().body.feet + glm::vec3(0, 0, local_body_height_)
-        : feet_ + glm::vec3(0, 0, floor_offset_); // the player's +0x64.. (world x, y, z)
+        : feet_ + glm::vec3(0, 0, floor_offset_)); // the player's +0x64.. (world x, y, z)
     game::TeleportBPlayer p;
     p.x = pos.x;
     p.y = pos.y;
@@ -636,7 +639,10 @@ bool ClientApp::teleport_b(const game::TeleportBArgs& a, const char* what) {
     if (const game::Spawn* me = conn_->world().player()) p.race = me->race;
     bool local = false;
     game::TeleportBHooks b;
-    b.send_client_update = [&] { conn_->send_position_now(); };
+    b.send_client_update = [&] {
+        if (zone_line_position) conn_->send_zone_line_position(*zone_line_position);
+        else conn_->send_position_now();
+    };
     // Sample 2 goes with the OP_ClientUpdate send_client_update makes (GameConnection::send_position records it).
     b.position_sample = [&](int kind) {
         if (kind != game::kPositionUpdate) conn_->record_position_sample(static_cast<std::uint32_t>(kind));

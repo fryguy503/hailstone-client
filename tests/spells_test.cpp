@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <cctype>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -417,6 +418,81 @@ TEST_CASE("SpellTable::by_group_and_rank (SpellManager::GetSpellByGroupAndRank)"
     CHECK(t.by_group_and_rank(5, 9, 3, true)->id == 13);   // the subgroup must match
     CHECK_FALSE(t.by_group_and_rank(0, 2, 1, true));       // group 0 is not hashed
     CHECK_FALSE(t.by_group_and_rank(7, 2, 1, true));
+}
+
+TEST_CASE("SpellTable: the indexed lookups match a scan of the whole table") {
+    // The scans find_by_name and by_group_and_rank made before their indices, kept here as the reference.
+    struct Row {
+        std::uint32_t id;
+        std::string name;
+        int group, rank, subgroup;
+    };
+    std::vector<Row> rows;
+    std::uint32_t seed = 12345;
+    auto next = [&seed](std::uint32_t mod) {
+        seed = seed * 1103515245u + 12345u;
+        return (seed >> 16) % mod;
+    };
+    const char* names[] = {"Clarity", "CLARITY", "clarity", "Spirit of Wolf", "Gate", "", "gate"};
+    std::string text;
+    for (std::uint32_t id = 1; id < 400; ++id) {
+        if (next(4) == 0) continue;
+        Row r{id, names[next(7)], static_cast<int>(next(4)), static_cast<int>(next(6)) - 1,
+              static_cast<int>(next(3))};
+        std::vector<std::string> f(237, "0");
+        f[0] = std::to_string(r.id);
+        f[1] = r.name;
+        for (int k = 0; k < 12; ++k) {
+            f[86 + static_cast<std::size_t>(k)] = "254";
+            f[70 + static_cast<std::size_t>(k)] = "100";
+        }
+        f[207] = std::to_string(r.group);
+        f[208] = std::to_string(r.rank);
+        f[236] = std::to_string(r.subgroup);
+        for (std::size_t i = 0; i < f.size(); ++i) text += (i ? "^" : "") + f[i];
+        text += "\n";
+        rows.push_back(r);
+    }
+    game::SpellTable t;
+    REQUIRE(t.parse(text) == rows.size());
+    auto lower = [](std::string v) {
+        for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return v;
+    };
+    auto scan_name = [&](const std::string& name) -> long {
+        long best = -1;
+        for (const auto& r : rows)
+            if (lower(r.name) == lower(name) && (best < 0 || r.id < static_cast<std::uint32_t>(best))) best = r.id;
+        return best;
+    };
+    auto scan_rank = [&](int group, int subgroup, int rank, bool below) -> long {
+        if (group <= 0) return -1;
+        const Row* exact = nullptr;
+        const Row* best = nullptr;
+        for (const auto& r : rows) {
+            if (r.group != group || r.subgroup != subgroup) continue;
+            if (r.rank == rank) {
+                if (!exact || exact->id < r.id) exact = &r;
+                continue;
+            }
+            if (((below && r.rank < rank) || rank == -1) &&
+                (!best || best->rank < r.rank || (best->rank == r.rank && best->id < r.id)))
+                best = &r;
+        }
+        const Row* got = exact ? exact : best;
+        return got ? static_cast<long>(got->id) : -1;
+    };
+    for (const char* n : {"clarity", "Clarity", "GATE", "", "Spirit of wolf", "Nothing"}) {
+        const game::SpellData* s = t.find_by_name(n);
+        CHECK((s ? static_cast<long>(s->id) : -1) == scan_name(n));
+    }
+    for (int group = -1; group <= 4; ++group)
+        for (int subgroup = 0; subgroup <= 3; ++subgroup)
+            for (int rank = -2; rank <= 6; ++rank)
+                for (bool below : {false, true}) {
+                    const game::SpellData* s = t.by_group_and_rank(group, subgroup, rank, below);
+                    CHECK((s ? static_cast<long>(s->id) : -1) == scan_rank(group, subgroup, rank, below));
+                }
 }
 
 TEST_CASE("Spell hit lines (ReportSuccessfulHit, type 231)") {

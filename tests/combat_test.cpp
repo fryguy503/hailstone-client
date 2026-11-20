@@ -2,6 +2,7 @@
 // client-side combat rules in game/combat.h.
 
 #include <doctest/doctest.h>
+#include <limits>
 
 #include <cstring>
 
@@ -504,6 +505,10 @@ TEST_CASE("targeting: nearest NPC in front, cycling, and ray picking") {
     auto down = game::pick_spawn(w, {20, 0, 50}, {0, 0, -1}, 500.0f, 1);
     REQUIRE(down);
     CHECK(*down == 3);
+    // No direction: nothing picked, even from inside a spawn's body.
+    CHECK_FALSE(game::pick_spawn(w, {20, 0, 1}, {0, 0, 0}, 500.0f, 1).has_value());
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    CHECK_FALSE(game::pick_spawn(w, {20, 0, 1}, {nan, 0, 0}, 500.0f, 1).has_value());
 }
 
 TEST_CASE("OP_SimpleMessage is SimpleMessage_Struct: string id, colour, unknown") {
@@ -566,10 +571,8 @@ TEST_CASE("name_sprite_shows_guild: SetNameSpriteState's guild line (bGuildShowA
     game::Spawn p;
     p.guild_id = 18;
     p.guild_show = true;
-    CHECK(game::name_sprite_shows_guild(p, 3));
-    CHECK(game::name_sprite_shows_guild(p, 4));
-    CHECK_FALSE(game::name_sprite_shows_guild(p, 2));
-    CHECK_FALSE(game::name_sprite_shows_guild(p, 5));
+    for (int level = 0; level <= 6; ++level)
+        CHECK(game::name_sprite_shows_guild(p, level) == (level == 3 || level == 4));
     game::Spawn hidden = p;
     hidden.guild_show = false; // the rank lacks Display Guild Name (SpawnAppearance 52 = 0)
     CHECK_FALSE(game::name_sprite_shows_guild(hidden, 3));

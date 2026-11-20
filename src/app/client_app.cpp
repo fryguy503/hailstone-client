@@ -8,6 +8,7 @@
 #include "core/build_info.h"
 #include "core/frame_sections.h"
 #include "core/wipe.h"
+#include "render/culling.h"
 #include "game/visual_surface_patch.h"
 #include "game/zone_exits.h"
 
@@ -38,6 +39,7 @@ int ClientApp::run() {
         log::info("worker threads: {}", count);
         // The scene's draws recorded on them (render/scene_recorder.h): display.parallel_record, 0 for inline.
         parallel_record_ = config_.get_bool("display.parallel_record", true);
+        particle_offscreen_hold_ = config_.get_bool("display.particle_offscreen_hold", true);
         scene_recorder_ = std::make_unique<render::SceneRecorder>(vk_);
         shadow_recorder_ = std::make_unique<render::SceneRecorder>(vk_, false);
     }
@@ -46,7 +48,8 @@ int ClientApp::run() {
         retired_ui_textures_.reset(); // the last frame, which may have drawn it, is submitted (waits for the GPU)
         perf_ui_.begin_frame();
         // The frame cap (display.max_fps, --max-fps), and display.background_fps while another window has the focus:
-        // below 10 there, the loop runs on at 10 a second and draws only some frames, or none (app/frame_pace.h).
+        // below 10 there, the loop runs on at 10 a second and draws only some frames, or none (app/frame_pace.h). A
+        // minimised window runs at 10 a second whatever the settings say: nothing can be drawn.
         // Auto: just under the refresh rate of the display the window is on now (auto_frame_cap).
         const int max_fps =
             effective_max_fps(opts_.max_fps, opts_.max_fps == kMaxFpsAuto ? window_.refresh_rate() : 0.0f);
@@ -54,7 +57,8 @@ int ClientApp::run() {
         // settle after zone-in, where screen_ is already InGame but the loading overlay is still drawn.
         const bool light_screen = is_light_screen(screen_ == Screen::InGame, zone_settling());
         const FramePace pace = frame_pace(max_fps, background_fps_, window_.focused(),
-            std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - last_drawn), light_screen);
+            std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - last_drawn), light_screen,
+            window_.minimized());
         // To the microsecond on every system (platform/precise_sleep.h), timed from the last deadline (next_frame_deadline).
         if (pace.cap > 0) {
             frame_deadline = next_frame_deadline(frame_deadline, Clock::now(),
@@ -368,10 +372,27 @@ int ClientApp::run() {
             }
             actor_emitter_list_.clear();
             const auto& world = pre_game ? *pre_game_world_ : conn_->world();
+            // Hailstone (not in the original): an actor none of whose particles could show emits none. Its model's
+            // bounds, widened by what its particles drift (kEmitterViewMargin, a guess: no effect's reach is
+            // measured), against last frame's view; in the classic lighting, past the 500 units no particle is drawn
+            // beyond (render::ParticleRenderer). Missiles and objects are always in view.
+            constexpr float kEmitterViewMargin = 30.0f;
+            const bool hold = particle_offscreen_hold_ && emitter_view_proj_.has_value();
+            const render::Frustum emitter_frustum = render::frustum_from(hold ? *emitter_view_proj_ : glm::mat4(1.0f));
+            const bool classic_reach = lighting_mode_ != render::LightingMode::Modern;
+            const glm::vec3 eye = camera_.position, ahead = camera_.forward();
+            auto in_view = [&](std::uint32_t id) {
+                glm::vec3 center;
+                float radius = 0.0f;
+                if (!hold || !actor_renderer_->spawn_bounds(id, center, radius)) return true;
+                radius += kEmitterViewMargin;
+                if (!render::box_in_frustum(emitter_frustum, render::sphere_box(center, radius))) return false;
+                return !classic_reach || glm::dot(center - eye, ahead) - radius <= 500.0f;
+            };
             for (const auto& [id, spawn] : world.spawns)
                 if (const auto* mesh = actor_renderer_->drawn_mesh(id); mesh && !mesh->emitters.empty())
                     actor_emitter_list_.push_back({id, mesh, actor_renderer_->drawn_standing(id),
-                                                   actor_renderer_->drawn_alpha(id)});
+                                                   actor_renderer_->drawn_alpha(id), in_view(id)});
             // The missiles' (a spell bolt's flames: its model's own emitters, app/world_objects.h).
             const WorldObjects* objects = in_world ? world_objects_.get() : nullptr;
             if (objects) {
@@ -384,6 +405,7 @@ int ClientApp::run() {
                 if (id & WorldObjects::kObjectActorBit) return objects && bone == 0 && objects->object_transform(id, w);
                 return actors->drawn_bone(id, bone, w);
             };
+            if (in_world && conn_) update_level_effects(*conn_);
             actor_emitters_->update(dt, actor_emitter_list_, bones, camera_.position,
                                     [actors](std::uint32_t id, std::string_view code, float& time) {
                                         return actors->drawn_playing(id, code, time);
@@ -441,6 +463,12 @@ int ClientApp::run() {
         const bool in_game = screen_ == Screen::InGame && player_ready_;
         if (!in_game && automation_) automation_->world_unavailable();
         const bool scene = in_game || pre_game; // the world drawn: the zone, or character select's clz
+        // OP_CameraEffect's shake (game/camera_shake.h) for the image being drawn: the original adds it to the camera
+        // it renders with (@0x796dd0), never to the game camera. It is taken off again before picking.
+        const glm::vec3 unshaken_camera = camera_.position;
+        if (in_game && conn_)
+            camera_.position = conn_->camera_shake().offset(
+                camera_.position, static_cast<std::uint32_t>(net::GameConnection::now_ms()));
         if (conn_)
             for (const auto& w : conn_->take_weather()) weather_.handle_message(w.kind, w.intensity);
         if (in_game) {
@@ -816,6 +844,7 @@ int ClientApp::run() {
             // the temporal upscaler's jitter (none without it), which follows the plain one (render/temporal.h).
             const glm::mat4 plain_proj = camera_.projection(width, height, lit.far_plane);
             const glm::mat4 plain_vp = plain_proj * camera_.view();
+            emitter_view_proj_ = plain_vp; // next frame's view test for the actors' emitters
             glm::mat4 proj = render::jittered(plain_proj, vk_.projection_jitter());
             glm::mat4 vp = proj * camera_.view();
             // Each draw is a job of the scene recorder, in a lane by what it touches (render/scene_recorder.h): a
@@ -1018,7 +1047,9 @@ int ClientApp::run() {
                     draw_text_overlay();
                     lap.mark("text overlay");
                 }
-                // The camera as CCamera::GetScreenRay reads it, in the 3D view's window (mouse) coordinates.
+                // The camera as CCamera::GetScreenRay reads it, in the 3D view's window (mouse) coordinates. Picking
+                // and its line of sight keep the true camera: the frame's shake is only in the image.
+                camera_.position = unshaken_camera;
                 auto fov = game::camera_fov(camera_.view_fov_units(), static_cast<int>(f->extent.width), static_cast<int>(f->extent.height));
                 pick_camera_.position = camera_.position;
                 pick_camera_.forward = camera_.forward();
@@ -1032,6 +1063,8 @@ int ClientApp::run() {
                 pick_camera_valid_ = view_area_.w > 0.0f && view_area_.h > 0.0f;
             }
         }
+        // Whatever the scene's branches did, the frame ends on the true camera (also when no picking ran above).
+        camera_.position = unshaken_camera;
         lap.mark("scene other");
         ui_.render(*f);
         lap.mark("ImGui render");
@@ -1243,6 +1276,27 @@ void ClientApp::report_world_geometry() {
     if (automation_)
         for (const auto& [index, vertices] : world_recorded_) automation_->world_recorded(index, vertices);
     world_recorded_.clear();
+}
+
+void ClientApp::update_level_effects(net::GameConnection& conn) {
+    // OP_LevelAppearance's effects (net/rename_packets.h): each cue starts the actor file's emitter on the spawn's
+    // spell point (ActorEmitters::start_effect). A cue for a spawn not drawn, a slot its model lacks or an effect
+    // not in the file starts nothing.
+    const auto cues = conn.take_level_effect_cues();
+    if (!actor_emitters_ || !actor_renderer_ || !spell_particles_) return;
+    const render::ActorRenderer* actors = actor_renderer_.get();
+    SpellParticles* points = spell_particles_.get();
+    actor_emitters_->set_point_world([actors, points](std::uint32_t id, int point, glm::mat4& world) {
+        const auto m = points->spell_point_world(*actors, id, point);
+        if (m) world = *m;
+        return m.has_value();
+    });
+    actor_emitters_->set_floor([this](const glm::vec3& p) -> std::optional<float> {
+        return collision_ ? collision_->floor_below(p, 0.0f) : std::nullopt;
+    });
+    for (const auto& cue : cues)
+        actor_emitters_->start_effect({cue.spawn_id, cue.effect_id, cue.slot, cue.flag});
+    actor_emitters_->prune_effects([&conn](std::uint32_t id) { return conn.world().spawns.contains(id); });
 }
 
 void ClientApp::update_guide() {

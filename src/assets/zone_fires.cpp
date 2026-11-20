@@ -82,23 +82,57 @@ std::vector<FlameBox> mesh_flames(const Mesh& mesh) {
             if (valid) boxes.push_back(b);
         }
     }
-    // Boxes that touch are one flame: merge until none do.
+    // Boxes that touch are one flame: merge until none do. Each round joins every touching pair (a sweep along x
+    // finds them) into groups, a group keeping the box and hue of its first member; merged boxes are larger and may
+    // touch others, so the rounds go on until one joins nothing. That is the one finest grouping in which no two
+    // boxes touch, the same the pairwise merge it replaces reached in cubic time, in the same order.
     constexpr float kSlack = 0.25f;
     auto touch = [](const FlameBox& a, const FlameBox& b) {
         return glm::all(glm::lessThanEqual(a.min, b.max + kSlack)) && glm::all(glm::lessThanEqual(b.min, a.max + kSlack));
     };
+    std::vector<std::size_t> parent, order;
+    auto find = [&parent](std::size_t i) {
+        while (parent[i] != i) i = parent[i] = parent[parent[i]];
+        return i;
+    };
     for (bool merged = true; merged;) {
         merged = false;
-        for (std::size_t i = 0; i < boxes.size(); ++i)
-            for (std::size_t j = i + 1; j < boxes.size();)
-                if (touch(boxes[i], boxes[j])) {
-                    boxes[i].min = glm::min(boxes[i].min, boxes[j].min);
-                    boxes[i].max = glm::max(boxes[i].max, boxes[j].max);
-                    boxes.erase(boxes.begin() + static_cast<std::ptrdiff_t>(j));
-                    merged = true;
-                } else {
-                    ++j;
-                }
+        const std::size_t n = boxes.size();
+        parent.resize(n);
+        order.clear();
+        for (std::size_t i = 0; i < n; ++i) {
+            parent[i] = i;
+            // A box with a NaN never touches anything (every comparison is false); it stays out of the sort.
+            const FlameBox& b = boxes[i];
+            if (!glm::any(glm::isnan(b.min)) && !glm::any(glm::isnan(b.max))) order.push_back(i);
+        }
+        std::sort(order.begin(), order.end(),
+                  [&](std::size_t a, std::size_t b) { return boxes[a].min.x < boxes[b].min.x; });
+        for (std::size_t a = 0; a < order.size(); ++a) {
+            const FlameBox& first = boxes[order[a]];
+            for (std::size_t b = a + 1; b < order.size() && boxes[order[b]].min.x <= first.max.x + kSlack; ++b) {
+                if (!touch(first, boxes[order[b]])) continue;
+                std::size_t ra = find(order[a]), rb = find(order[b]);
+                if (ra == rb) continue;
+                parent[std::max(ra, rb)] = std::min(ra, rb); // the earlier box leads
+                merged = true;
+            }
+        }
+        if (!merged) break;
+        std::vector<FlameBox> next;
+        std::vector<std::size_t> slot(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            std::size_t r = find(i);
+            if (r == i) {
+                slot[i] = next.size();
+                next.push_back(boxes[i]);
+            } else {
+                FlameBox& into = next[slot[r]]; // r < i: already placed
+                into.min = glm::min(into.min, boxes[i].min);
+                into.max = glm::max(into.max, boxes[i].max);
+            }
+        }
+        boxes = std::move(next);
     }
     return boxes;
 }

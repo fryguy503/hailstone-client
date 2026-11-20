@@ -251,7 +251,7 @@ bool merchant_usable_hides(const net::Item& item, std::uint32_t class_id, std::u
                             : !item_mask_has_bit(item.classes, static_cast<std::int32_t>(class_id)))
         return true;
     if (!item_mask_has_bit(item.races, item_race_bit_of(static_cast<std::int32_t>(race)))) return true;
-    return item.item_type == 20 && scroll_known();
+    return item.item_type == net::kItemTypeScroll && scroll_known();
 }
 
 } // namespace hailstone::game

@@ -68,6 +68,11 @@ public:
     // The most arguments one call passes (hs.Plugin(...).fn(table.unpack(t)) could pass a million): past it the call
     // is refused (nullopt). Each one is a slot on the callee's Lua stack.
     static constexpr std::size_t kMaxCallArgs = 64;
+    // What one owner may have (docs/plugins.md "Plugin windows"): past it an add is refused (false). A script's
+    // entries live outside its Lua memory limit, and the packs list every option and menu entry each frame.
+    static constexpr std::size_t kMaxFunctions = 256;
+    static constexpr std::size_t kMaxOptions = 64;
+    static constexpr std::size_t kMaxMenuEntries = 32;
     struct Option {
         std::string plugin, name, label;
         int min = 0, max = 1; // max 1: a switch; else a slider
@@ -83,7 +88,8 @@ public:
     };
 
     // `plugin` names the owner (with `kind`); in the lookups below it is a bare name or a tag (owner_tag).
-    void add_function(const std::string& plugin, const std::string& name, Fn fn, Kind kind = Kind::Plugin);
+    // Replaces one of the same owner and name; false (nothing added) when the owner has kMaxFunctions others.
+    bool add_function(const std::string& plugin, const std::string& name, Fn fn, Kind kind = Kind::Plugin);
     void remove_function(std::string_view plugin, std::string_view name, Kind kind = Kind::Plugin);
     // nullopt: no such plugin or function, or more than kMaxCallArgs arguments.
     std::optional<UiValue> call(std::string_view plugin, std::string_view name, const std::vector<UiValue>& args) const;
@@ -91,11 +97,12 @@ public:
     // The tag of the owner a bare name or tag finds (a compiled plugin's before a script's); "" none.
     std::string resolve(std::string_view plugin) const;
 
-    void add_option(Option o); // replaces one of the same owner and name
+    bool add_option(Option o); // replaces one of the same owner and name; false past kMaxOptions
     const std::vector<Option>& options() const { return options_; }
     Option* find_option(std::string_view plugin, std::string_view name);
 
-    void add_menu(MenuEntry e);
+    // Replaces the owner's entry of the same label (its command changes); false past kMaxMenuEntries.
+    bool add_menu(MenuEntry e);
     const std::vector<MenuEntry>& menu() const { return menu_; }
 
     // The owner's folder: its windows are in <folder>/ui/<pack>/. folders() lists them by owner tag (the tag their

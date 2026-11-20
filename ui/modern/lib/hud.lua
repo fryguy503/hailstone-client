@@ -402,6 +402,7 @@ end
 --   opts.fit = true              (with resizable) the layout sizes the frame until the player does (the chat)
 --   opts.panel = false           no panel behind the body (the body draws its own pieces)
 --   opts.menu()                  extra rows for the right-click menu
+--   opts.locked() -> true        also lock frame dragging and resizing (the hot bar's layout lock)
 --   opts.inputs = false          the frame never takes the mouse (moved in layout mode only)
 --   opts.hideWhen() -> true      not drawn this frame unless in layout mode (an empty target frame)
 --   opts.resizable = { minW, minH }   its right and bottom edges and its bottom-right corner change its size
@@ -431,7 +432,7 @@ function hud.Window(screen, title, opts, body)
   local layout = hud.Unlocked()
   if opts.hideWhen and not layout and not opened[key] and opts.hideWhen() then return end
   local k = keysOf(key)
-  local locked = hud.Locked(key)
+  local locked = hud.Locked(key) or (opts.locked and opts.locked()) or false
   local rolled = opts.rollup and hud.Rolled(key) or false
   opts.rolled = rolled -- (the body's own: this frame's, as the frame is drawn)
 

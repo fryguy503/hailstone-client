@@ -34,7 +34,7 @@
 
 namespace hailstone::net { class GameConnection; }
 namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
-namespace hailstone::game { class ExtensionChain; class NameplateCanvasRegistry; }
+namespace hailstone::game { class ExtensionChain; class NameplateCanvasRegistry; struct SpellData; }
 namespace hailstone::plugin { class UiBridge; class WebAccess; }
 namespace hailstone::nav { class NavControl; }
 
@@ -71,6 +71,8 @@ struct AutomationEnv {
     std::function<bool(mq::AbilityKind, std::string_view)> use_ability; // hailstone.use_ability; null: none
     // The Ability Book's usable entries for get_ability_data_bulk; null: none.
     std::function<std::vector<plugin::AbilityBulkRow>()> ability_bulk;
+    // A spell's description filled in for the player, for get_spells_data_bulk; null: dbstr_us.txt's text unfilled.
+    std::function<std::string(const game::SpellData&)> spell_description;
     std::function<std::optional<bool>(std::uint32_t spawn)> can_see;
     std::function<std::optional<bool>(const std::array<float, 3>&, const std::array<float, 3>&)> line_of_sight;
 };

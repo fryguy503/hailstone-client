@@ -25,7 +25,8 @@ Then sign it, if you want players' clients to refuse versions signed by anyone e
   build/hailstone_sign keygen <secret-key-file>          (once; keep the file off GitHub)
   build/hailstone_sign sign <secret-key-file> release/hailstone-addon.txt
 
-Files whose name starts with '.' are left out; a link is stored as the file or folder it points to. The zips are made
+Files whose name starts with '.' are left out; a link is stored as the file or folder it points to, which must lie
+inside the folder; --out may not lie inside a package's folder. The zips are made
 the same way each time (sorted, dated 1980-01-01), so an unchanged package keeps its hash. What a package may hold is checked again by the client.
 """
 import argparse
@@ -36,7 +37,8 @@ import sys
 import zipfile
 
 MANIFEST = "hailstone-addon.txt"
-VERSION = re.compile(r"^v?\d+\.\d+\.\d+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z.-]+)?$")
+# core/version.cpp parse_version: no leading zeros in the three numbers or a numeric pre-release field.
+VERSION = re.compile(r"^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 PLATFORM = re.compile(r"^[a-z0-9_-]{1,32}$")
 CAPS = {"read", "commands", "target", "actions", "move", "chat", "events", "ui", "packets", "extend", "login", "net",
@@ -51,9 +53,42 @@ def tool_program(name, platform):
     return name + (".exe" if platform.startswith("windows-") else "")
 
 
+def is_windows_device_name(part):
+    """core/windows_names.h is_windows_device_name: CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM1-9, LPT1-9 (and COM / LPT
+    with a superscript 1, 2 or 3), in any case, with any extension."""
+    stem = "".join(c.lower() if c < "\x80" else c for c in part.split(".", 1)[0]).rstrip(" ")  # ASCII case only
+    if stem in ("con", "prn", "aux", "nul", "conin$", "conout$"):
+        return True
+    if not stem.startswith(("com", "lpt")):
+        return False
+    digit = stem[3:]
+    return (len(digit) == 1 and "1" <= digit <= "9") or digit in ("\u00b9", "\u00b2", "\u00b3")
+
+
+def is_safe_zip_path(name):
+    """core/zip_read.cpp is_safe_zip_path, which the client applies to every name in a package: relative, '/'
+    separators, no control character, '\\' or ':', no empty, '.' or '..' part, and no part Windows would store under
+    another name or open as a device (a trailing '.' or ' ', aux.lua)."""
+    if not name or name.startswith("/"):
+        return False
+    if any(ord(c) < 0x20 or ord(c) == 0x7F or c in "\\:" for c in name):
+        return False
+    for part in (name[:-1] if name.endswith("/") else name).split("/"):
+        if part in ("", ".", ".."):
+            return False
+        if part.endswith((".", " ")) or is_windows_device_name(part):
+            return False
+    return True
+
+
+def within(path, folder):
+    path, folder = os.path.realpath(path), os.path.realpath(folder)
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
 def files_under(root):
-    """Every file under root, as '/'-separated names relative to it, sorted; dotfiles and dot-folders left out. A link
-    to a folder is walked as the folder it points to; one that leads back into a folder holding it stops the tool."""
+    """Every file under root, as '/'-separated names relative to it, sorted; dotfiles and dot-folders left out. A link is stored as the file or folder it points to when that is
+    inside root; one that leads out of root, to no file, or back into a folder holding it stops the tool."""
     out = []
 
     def walk(folder, holding):
@@ -65,6 +100,8 @@ def files_under(root):
             if name.startswith("."):
                 continue
             full = os.path.join(folder, name)
+            if os.path.islink(full) and not within(full, root):
+                sys.exit(f"{full}: a link out of {root}; copy what it points to in")
             if os.path.isdir(full):
                 walk(full, holding)
                 continue
@@ -81,6 +118,9 @@ def check(name, kind, files, platform):
     machine."""
     lowered = set()
     for f in files:
+        if not is_safe_zip_path(f):
+            sys.exit(f"{f}: a name the client refuses (a '\\', ':' or control character, a part ending in '.' or ' ', "
+                     "or a Windows device name such as aux or nul)")
         if f.lower() in lowered:
             sys.exit(f"{f}: two files differ only in case")
         lowered.add(f.lower())
@@ -250,6 +290,9 @@ def main():
             if not PLATFORM.match(plat) or plat == "any" or not folder:
                 sys.exit(f"--platform {p}: PLATFORM=FOLDER, as linux-x64=build/MQ2Hud")
             builds.append((plat, folder))
+    for _, folder in builds:
+        if within(a.out, folder):
+            sys.exit(f"--out {a.out} is inside {folder}: its zips and manifest would go into the package")
     os.makedirs(a.out, exist_ok=True)
 
     lines = ["hailstone-addon 1", f"name {a.name}", f"kind {a.kind}", f"version {a.version}"]

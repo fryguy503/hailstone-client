@@ -27,7 +27,7 @@ std::vector<Message> samples() {
     o.tab = 7;
     o.width = 640;
     o.height = 480;
-    o.restricted = true;
+    o.rules = TabRules::Sites;
     o.allow = {"example.org", "wiki.example.net"};
     o.profile = "/data/web/server";
     o.url = "https://example.org/";
@@ -156,6 +156,14 @@ TEST_CASE("browser protocol: every message encodes and decodes to the same bytes
     auto o = std::get<Open>(*decode_message(std::span<const std::byte>(open_bytes).subspan(4)));
     CHECK(o.allow == std::vector<std::string>{"example.org", "wiki.example.net"});
     CHECK(o.url == "https://example.org/");
+    CHECK(o.rules == TabRules::Sites);
+    Open link;
+    link.tab = 3;
+    link.rules = TabRules::ServerLink;
+    link.url = "https://example.org/";
+    const auto link_bytes = encode_message(link);
+    CHECK(std::get<Open>(*decode_message(std::span<const std::byte>(link_bytes).subspan(4))).rules ==
+          TabRules::ServerLink);
 }
 
 TEST_CASE("browser protocol: a stream in pieces; broken lengths, types and frames stop it") {
@@ -201,6 +209,12 @@ TEST_CASE("browser protocol: a stream in pieces; broken lengths, types and frame
     auto lb = encode_message(bad_flag);
     lb[9] = std::byte{2};
     CHECK(broken(lb));
+    // An Open's rules byte (after length, type, tab, width and height) past the last rules there are.
+    Open bad_rules;
+    auto ob = encode_message(bad_rules);
+    CHECK(std::to_integer<int>(ob[13]) == 0);
+    ob[13] = std::byte{3};
+    CHECK(broken(ob));
 }
 
 TEST_CASE("fuzz: browser protocol decoding never throws or allocates without bound") {
@@ -248,9 +262,9 @@ TEST_CASE("browser host: what may open; Hello first, then the tab with its rules
     REQUIRE(r.helper.sent.size() == 3);
     CHECK(std::holds_alternative<Hello>(r.helper.sent[0]));
     auto opens = r.helper.sent_of<Open>();
-    CHECK_FALSE(opens[0].restricted);
+    CHECK(opens[0].rules == TabRules::Player);
     CHECK(opens[0].allow.empty());
-    CHECK(opens[1].restricted);
+    CHECK(opens[1].rules == TabRules::Sites);
     CHECK(opens[1].allow == std::vector<std::string>{"example.org"});
 
     CHECK_FALSE(r.host.navigate(theirs, "https://evil.com/"));
@@ -422,9 +436,41 @@ TEST_CASE("web service: each script and plugin has a cookie folder of its own; t
     opens = r.helper.sent_of<Open>();
     REQUIRE(opens.size() == 4);
     CHECK(opens[3].profile == base + "/server-links");
-    CHECK_FALSE(opens[3].restricted);
+    // Not held to a script's sites, but the helper keeps it off this computer and the player's network at every
+    // navigation and request, not only the link's own address.
+    CHECK(opens[3].rules == TabRules::ServerLink);
+    CHECK(opens[3].allow.empty());
     CHECK(opens[3].profile != s1);
     CHECK(WebService::server_link_profile(base + "/") == base + "/server-links");
+    std::string why;
+    CHECK(web.navigate("", plugin::kCapAll, link, "https://elsewhere.org/", &why));
+    CHECK_FALSE(web.navigate("", plugin::kCapAll, link, "http://192.168.1.1/", &why));
+    CHECK(why.find("private network") != std::string::npos);
+    CHECK(web.navigate("", plugin::kCapAll, opens[0].tab, "http://192.168.1.1/", &why)); // the player's own tab
+}
+
+TEST_CASE("browser host: a server link's tab that lands on a private address is closed") {
+    Rig r;
+    TabOptions o;
+    o.server_link = true;
+    CHECK(tab_rules(o) == TabRules::ServerLink);
+    o.owner = "script:x";
+    CHECK(tab_rules(o) == TabRules::Sites); // an owner's rules win
+    o = {};
+    CHECK(tab_rules(o) == TabRules::Player);
+    o.server_link = true;
+    std::string why;
+    CHECK(r.host.open("http://localhost:8080/", o, &why) == 0);
+    auto id = r.host.open("https://example.org/", o);
+    REQUIRE(id != 0);
+    r.helper.reply(Ready{});
+    r.helper.reply(Address{id, "https://anywhere.example.net/"});
+    r.host.poll(0);
+    CHECK_FALSE(r.host.tab(id)->closed);
+    r.helper.reply(Address{id, "http://10.0.0.1/admin"}); // a redirect the helper should have refused
+    r.host.poll(0);
+    REQUIRE(r.host.tab(id));
+    CHECK(r.host.tab(id)->closed);
 }
 
 TEST_CASE("browser host: a script's tab that lands off its sites is closed") {

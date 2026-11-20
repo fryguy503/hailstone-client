@@ -92,7 +92,8 @@ std::string merchant_level_text(std::int32_t level);
 // The purchase list's "Show only items I can use" (MW_UsableButton; UpdateList @0x6f0bb0 with PurchasePageHandler
 // +0x60 clear): a common item (item class 0; bags and books always stay) is left out unless its class mask takes
 // `class_id` and its race mask the race's bit (0x6f7160, the same bits as game::item_race_bit_of), and a spell
-// scroll (item type 20) is left out when `scroll_known` says the character knows its spell or a higher rank of it.
+// scroll (item type 20, which takes in discipline tomes) is left out when `scroll_known` says the character knows its
+// spell or a higher rank of it.
 // The level, deity and lore are not looked at. Hailstone extension: a nonzero `server_classes`
 // (GameConnection::server_class_mask, a multiclass server's classes of the player) takes the place of `class_id`, and
 // the item is kept when its class mask has any of them.

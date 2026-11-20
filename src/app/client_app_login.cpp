@@ -154,7 +154,9 @@ void ClientApp::start_box_login() {
     const std::filesystem::path exe = platform::install_dir() / "hailstone";
 #endif
     for (std::size_t i = 1; i < set.size(); ++i) {
-        std::vector<std::string> args{exe.string(), "--server", saved->id, "--account", set[i].username};
+        // --box-child: only this window updates the folder and its add-ons (app/updater.h kBoxChildArg).
+        std::vector<std::string> args{exe.string(), "--server", saved->id, "--account", set[i].username,
+                                      std::string(kBoxChildArg)};
         if (!set[i].character.empty()) args.insert(args.end(), {"--character", set[i].character});
         if (!opts_.game_dir.empty()) args.insert(args.end(), {"--game-dir", opts_.game_dir});
         if (!opts_.classic_dir.empty()) args.insert(args.end(), {"--classic-dir", opts_.classic_dir});
@@ -514,7 +516,10 @@ void ClientApp::use_ui_pack(std::string_view id, bool force) {
     lua_ui_->set_caller_scope(lua_caller_scope());
     lua_ui_->set_clipboard_check(lua_clipboard_check());
     ui_textures_->set_all_art(pack->game_art);
-    if (ui_api_) ui_api_->reload_game_files(); // (the EQ menu's rows follow the pack's windows: read again)
+    if (ui_api_) {
+        ui_api_->reload_game_files(); // (the EQ menu's rows follow the pack's windows: read again)
+        ui_api_->reset_bags();        // a new interface opens no bag (UiApi::reset_bags)
+    }
     if (options_open) ui_api_->show("OptionsWindow", true);
     log::info("user interface: {}", ui_name_);
 }

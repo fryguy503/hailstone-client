@@ -104,6 +104,9 @@ Bytes make_combined(std::span<const Bytes> parts);
 // opcodes (EQEmu ucs/clientlist.cpp: opcode_size = 1): opcode_bytes 1.
 Bytes encode_app(const AppPacket& packet, int opcode_bytes = 2);
 std::optional<AppPacket> decode_app(ByteSpan wire, int opcode_bytes = 2);
+// The same from a buffer the caller gives up (a reassembled reliable payload): the opcode is cut off in place, so
+// the body is not copied again.
+std::optional<AppPacket> decode_app(Bytes&& wire, int opcode_bytes = 2);
 
 // Reliable packets for one application payload: one OP_Packet when it fits
 // in max_packet_size (after the encoder's overhead), otherwise OP_Fragment

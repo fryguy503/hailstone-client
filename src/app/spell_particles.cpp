@@ -338,9 +338,9 @@ void SpellParticles::draw_trail(std::uint32_t key, std::span<const glm::vec3> li
             d.frames = 1;
             navigation_definition_ = particles_.add_definition(std::move(d));
         }
-        std::vector<game::Particle> quads;
+        std::vector<game::Particle>& quads = trail_quads_;
+        quads.clear();
         const auto ribbon = game::build_navigation_trail(line, st, clock_, trail_floor_);
-        quads.reserve(ribbon.size());
         for (const auto& piece : ribbon) {
             game::Particle q;
             q.position = piece.position;
@@ -352,7 +352,7 @@ void SpellParticles::draw_trail(std::uint32_t key, std::span<const glm::vec3> li
             quads.push_back(q);
         }
         if (quads.empty()) particles_.stop(key);
-        else particles_.set_still(key, *navigation_definition_, std::move(quads));
+        else particles_.set_still(key, *navigation_definition_, std::span<const game::Particle>(quads));
         return;
     }
     if (!path_definition_) {
@@ -365,9 +365,9 @@ void SpellParticles::draw_trail(std::uint32_t key, std::span<const glm::vec3> li
         d.frames = 1;
         path_definition_ = particles_.add_definition(std::move(d));
     }
-    std::vector<game::Particle> quads;
+    std::vector<game::Particle>& quads = trail_quads_;
+    quads.clear();
     const auto trail = game::build_rainbow_strands(line, st, clock_, trail_floor_);
-    quads.reserve(trail.size());
     for (const auto& t : trail) {
         game::Particle q;
         q.position = t.position;
@@ -380,7 +380,7 @@ void SpellParticles::draw_trail(std::uint32_t key, std::span<const glm::vec3> li
         quads.push_back(q);
     }
     if (quads.empty()) particles_.stop(key);
-    else particles_.set_still(key, *path_definition_, std::move(quads));
+    else particles_.set_still(key, *path_definition_, std::span<const game::Particle>(quads));
 }
 
 void SpellParticles::update_path(net::GameConnection& conn) {
@@ -397,7 +397,8 @@ void SpellParticles::update_path(net::GameConnection& conn) {
     // Both styles follow PlayerPath's route and fade at Path.ini's range. This client's look replaces the original
     // textured tube (ThickLineSystem with Path.ini's Texture and ShapeSet).
     {
-        std::vector<glm::vec3> line;
+        std::vector<glm::vec3>& line = trail_line_;
+        line.clear();
         if (path.active()) {
             const auto& pts = path.points(); // the destination first: the trail runs from the player
             line.assign(pts.rbegin(), pts.rend());

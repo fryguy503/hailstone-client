@@ -348,14 +348,14 @@ TEST_CASE("UI data imports: missing roots and escaped files or ID folders never 
     ui.put(outside, "return 'outside'");
     std::error_code ec;
     fs::create_symlink(outside, data / "base/lib/escape.lua", ec);
-    if (ec) { MESSAGE("File link creation is unavailable on this host"); return; }
+    // (Wine makes something that is not a link and reports success.)
+    if (ec || !fs::is_symlink(data / "base/lib/escape.lua")) { MESSAGE("File link creation is unavailable on this host"); return; }
     ui.start(true);
     ui.frame();
     CHECK(ui.run("return hs.UI.interfaces.LoadData('lib/escape.lua')").starts_with("error:"));
     fs::create_directory_symlink(ui.scratch.path() / "outside", data / "leaf", ec);
-    if (ec) { MESSAGE("Directory link creation is unavailable on this host"); return; }
+    if (ec || !fs::is_symlink(data / "leaf")) { MESSAGE("Directory link creation is unavailable on this host"); return; }
     CHECK(ui.run("return hs.UI.interfaces.LoadData('lib/value.lua')").find("escapes its approved root") != std::string::npos);
-    REQUIRE(fs::is_symlink(data / "leaf"));
     REQUIRE(fs::remove(data / "leaf"));
     ui.put(data / "unapproved/lib/value.lua", "UNAPPROVED_LOADED=true return 'unapproved sibling'");
     fs::create_directory_symlink(data / "unapproved", data / "leaf", ec);

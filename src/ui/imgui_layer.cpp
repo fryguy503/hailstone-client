@@ -474,10 +474,15 @@ bool ImGuiLayer::pad_window_open() {
     return !pad_windows_.empty();
 }
 
-bool ImGuiLayer::pad_window_focused() const {
-    if (!visible()) return false;
+bool detail::pad_window_has_focus(const char* name) {
     const ImGuiContext* g = ImGui::GetCurrentContext();
-    return g && g->NavWindow && !pad_windows_.empty() && pad_windows_.back() == g->NavWindow->RootWindow->Name;
+    if (!g || !g->NavWindow) return false;
+    ImGuiWindow* tracked = ImGui::FindWindowByName(name);
+    return tracked && ImGui::IsWindowChildOf(g->NavWindow, tracked, true);
+}
+
+bool ImGuiLayer::pad_window_focused() const {
+    return visible() && !pad_windows_.empty() && detail::pad_window_has_focus(pad_windows_.back().c_str());
 }
 
 std::string ImGuiLayer::pad_focus_window() const {

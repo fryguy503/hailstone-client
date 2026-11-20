@@ -15,14 +15,16 @@ follow the RoF2 client; the ones Hailstone adds are marked as Hailstone's. For t
 - **`#` commands** (`#help`, `#zone` and the rest) are EQEmu's server commands. Hailstone sends them on as said text,
   and the server answers. What a character may use depends on its status on the server, not on the client.
 - **While dead**, only the chat commands (say, tell, group, guild, raid, channels and the like), `/consent`, `/deny`,
-  `/ignore`, `/friends`, `/petition`, `/help`, `/location`, `/marketplace` and the mercenary commands work. Anything else answers
+  `/ignore`, `/friends`, `/petition`, `/help`, `/location`, `/marketplace`, `/achievements` and the mercenary commands
+  work. Anything else answers
   "You may not use that command while dead."
 - **Locked interface.** With the interface locked (`/safelock`), only `/safelock` gets through.
 - **Plugins and scripts** can add commands of their own; they take a line before the game's commands do (see
   [Add-on and script commands](#add-on-and-script-commands)).
 - A command the original has but Hailstone does not run answers "/name is not supported by this client yet." A word
   that is no command at all answers "That is not a valid command. Please use /help."
-- `/help` lists the commands by class; `/help normal`, `/help emote`, `/help guild` and `/help chat` list one class.
+- `/help` alone says how to use it; `/help normal`, `/help emote`, `/help guild` and `/help chat` list one class of
+  commands.
 
 ## Chat and communication
 
@@ -80,6 +82,7 @@ follow the RoF2 client; the ones Hailstone adds are marked as Hailstone's. For t
 | `/findpc <name>` | Look for a player. |
 | `/inspectbuffs` | Use the Inspect Buffs ability. |
 | `/keys` | Your key ring. |
+| `/achievements` | The achievements window (the server sends what it holds). |
 | `/outputfile <guild \| guildbank \| guildhall \| raid \| spellbook \| inventory \| realestate> [file]` | Write a list to a file in the character's folder. |
 | `/help [class]` | The command list. |
 
@@ -95,7 +98,7 @@ follow the RoF2 client; the ones Hailstone adds are marked as Hailstone's. For t
 | `/stopcast` | Stop casting. |
 | `/melody <gems>`, `/stopsong` | Twist songs; stop singing. |
 | `/discipline <name>`, `/stopdisc` | Use a discipline; end the active one. |
-| `/doability <n \| name>` | Use an ability or skill: button 1-10 of the Actions window, as RoF2; or (Hailstone's) the player's skill, discipline or activated AA of that name, in any case, as its Ability Book row uses it. A name more than one kind has is the skill's first, then the discipline's, then the AA's; a discipline's name may leave out its rank. |
+| `/doability <n \| name>` | Use an ability or skill: button 1-10 of the Actions window, as RoF2, or (Hailstone's) a skill, discipline or activated AA by name (below). |
 | `/pet <command>` | Pet commands (attack, back off, follow, guard, sit and the rest). |
 | `/shield`, `/shieldgroup` | Shield your target. |
 | `/targetgroupbuff [on\|off]`, `/tgb` | Group spells land on the target's group. |
@@ -103,9 +106,13 @@ follow the RoF2 client; the ones Hailstone adds are marked as Hailstone's. For t
 | `/aggrometer`, `/aggrolock` | The aggro meter and its lock. |
 | `/marknpc <1..3>`, `/gmarknpc`, `/rmarknpc`, `/clearmarks` | Group and raid NPC marks. |
 | `/indicator [on\|off]` | The target indicator, for this session. |
-| `/blockspell <display\|add\|remove\|clear> <me\|pet> [spell ids]` | Blocked buffs. The lists are kept in the character ini and sent to the server at each zone-in; a spell the server takes as newly blocked comes off the player (or the pet), with the effects of its spell group. |
+| `/blockspell <display\|add\|remove\|clear> <me\|pet> [spell ids]` | Blocked buffs, kept in the character ini and sent at each zone-in; a newly blocked spell comes off the player (or pet) with its spell group's effects. |
 | `/sheathe` | Sheathe or draw your weapons. |
 | `/duel`, `/decline` | Challenge your target to a duel; decline one. |
+
+`/doability <name>` uses the player's skill, discipline or activated AA of that name, in any case, as its Ability
+Book row uses it. A name more than one kind has is the skill's first, then the discipline's, then the AA's. A
+discipline's name may leave out its rank.
 
 ## Movement and position
 
@@ -138,7 +145,7 @@ follow the RoF2 client; the ones Hailstone adds are marked as Hailstone's. For t
 | `/fastdrop [on \| off \| never]` | Drop items without asking. |
 | `/bazaar`, `/trader`, `/barter`, `/buyer` | The bazaar search, trader, barter search and buyer windows. |
 | `/marketplace` | The marketplace window. |
-| `/acompare`, `/aclearcompare` | Compare your target's gear; clear the comparison. |
+| `/acompare`, `/aclearcompare` | Compare achievements with your target (a player within 20 units); clear the comparison. |
 | `/inspect`, `/open` | Inspect and open an adventure chest. |
 | `/reveal` | Ask the server to reveal your target, within 75 units. Stock EQEmu does not answer it. |
 | `/toggleinspect` | Allow or refuse being inspected. |
@@ -184,7 +191,7 @@ follow the RoF2 client; the ones Hailstone adds are marked as Hailstone's. For t
 | `/filter` | Chat filters. |
 | `/hotbutton <name> [colour] <text>` | Make a hot button from a line and put it on the cursor. |
 | `/loadskin <name> [keep]` | Load a UI skin. |
-| `/copylayout` | Copy another character's layout. An ini no character or defaults file names is looked for beside the current layout file by its bare name; a path is not found. |
+| `/copylayout` | Copy another character's layout. Another ini is looked for by bare name beside the current layout file; paths are not accepted. |
 | `/fontface <name>` | The UI font. |
 | `/viewport reset`, `/viewport <x> <y> <w> <h> [scale]` | The 3D view's area on screen. |
 | `/fullscreen [on \| off \| toggle]` | Full screen or windowed. |
@@ -230,11 +237,13 @@ These are not in the original client.
 | `/destroy` | Destroy the item on your cursor (the inventory's Destroy button). |
 | `/destroycursor <id>` | Destroy the item on your cursor without asking, only if its item id is `<id>`; never coin or a bag. For plugins (docs/plugins.md). |
 | `/stowcursor <id>` | Put the item on your cursor into your packs (never a worn slot), only if its item id is `<id>`. For plugins (docs/plugins.md). |
-| `/web [address]` | The in-game browser, on a new tab (docs/browser.md). |
+| `/web [address]` | The in-game browser (docs/browser.md); with an address, it opens on a new tab. |
+| `/camera [iso \| first \| behind \| toggle]` | Switch to the isometric camera or back (docs/isometric.md); `/camera` alone shows the settings, `/camera pitch\|fov\|distance\|reveal <value>` and `/camera wasd camera\|classic` change them. |
 | `/luasocial [1..120 \| new]` | The Lua social editor. |
 | `/lighting [modern \| smooth \| classic]` | Switch the lighting (docs/graphics.md); without a mode, between modern and classic. |
 | `/screenshot` | Take a screenshot. |
 | `/perf` | The performance window. |
+| `/debug_animinfo` | For finding animation faults: your target's (or your own) model and where its clips come from, what its upper and lower body play (time, cross-fade, `(lent)` for a clip borrowed from another model, `?` for one the model does not hold), and the bones the pose leaves at their rest frame (points left out). |
 | `/chattabs [help]` | List Hailstone's chat tab commands. |
 | `/chattabs status` | List chat windows by ID and bracket the selected tab in each window. |
 | `/chattabs next`, `/chattabs prev` | Cycle through tabs in the current chat window. |
@@ -284,7 +293,7 @@ own services or test commands with nothing behind them on an EQEmu server.
 `/share` `/system` `/testbuffme` `/testcopy` `/tweet` `/twitter` `/voicechat` `/webupdate` `/welcomescreen`
 
 Left out on purpose, so they answer as unknown commands: the voice macros (`/vplay`, `/vtell`, `/vgroup`,
-`/vraid`), `/achievements`, `/legendsofnorrath` and `/tcg`.
+`/vraid`), `/mp3` (Hailstone has no music player), `/legendsofnorrath` and `/tcg`.
 
 ## Keys
 
@@ -326,7 +335,7 @@ the number pad moves you and **D** ducks.
 | Use (doors, objects) | U | |
 
 **Tab is Hailstone's change:** the original put Tab on "toggle target" and F8 on the nearest NPC. Tab and F8 skip
-NPCs you cannot see; Options > Interface "Tab Needs Line of Sight" turns that off.
+NPCs you cannot see; Options > Display "Tab Needs Line of Sight" turns that off.
 
 ### Hot buttons, spells and abilities
 
@@ -393,14 +402,14 @@ Each camera (first person, overhead, chase, user 1, user 2, tether) also has a k
 | Bazaar search | Alt+A | | Housing items | Shift+I |
 | Actions: abilities / combat / socials / main | Ctrl+A / Ctrl+C / Ctrl+O / Ctrl+M | | Who | Ctrl+W |
 | Invite or follow | Ctrl+I | | Disband | Ctrl+D |
-| Camp | Ctrl+X | | | |
+| Camp | Ctrl+X | | Adventures (LDoN) | Alt+V |
 
 Housing item placement has its keys on Shift+Z, Shift+Q, Shift+W, Shift+E, Shift+R, Shift+D, Shift+F and Shift+G.
 
 F10 toggles all in-game UI presentations, including addon windows, captions and selection/navigation overlays. Press it again to restore the interface; its window visibility and layout settings are retained. Remap **Toggle UI Display** in Options > Keys > Windows (either binding). Loading and pregame screens remain visible.
 
 Bound by default but doing nothing in Hailstone yet: F11 (network statistics), Alt+W (selector
-window), Alt+K (music player), Alt+V (adventure request window), Shift+Alt+R (release the mouse cursor), and the voice
+window), Alt+K (music player), Shift+Alt+R (release the mouse cursor), and the voice
 keys Num + and Ctrl+Tab (Hailstone has no voice chat).
 
 ### Fixed shortcuts

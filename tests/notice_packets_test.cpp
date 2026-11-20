@@ -196,3 +196,58 @@ TEST_CASE("OP_Weblink: the address up to its NUL; none past the end; empty is no
     CHECK_FALSE(decode_weblink(bytes(Op::Weblink, 4)));
     CHECK_FALSE(decode_weblink(bytes(Op::Weblink, 0)));
 }
+
+TEST_CASE("notices: OP_Marquee's six words and text, and OP_CameraEffect's duration and intensity") {
+    // EQEmu's ClientMarqueeMessage_Struct as a quest sends it: type 15, unk04 10, priority 510, fade in 0, out 3000, duration
+    // 4000, the text NUL-terminated at byte 24.
+    const std::string text = "YOU HAVE FOUND AN ECHO OF MEMORY!";
+    AppPacket m = bytes(Op::Marquee, 24 + text.size() + 1);
+    put32(m, 0, 15);
+    put32(m, 4, 10);
+    put32(m, 8, 510);
+    put32(m, 12, 0);
+    put32(m, 16, 3000);
+    put32(m, 20, 4000);
+    puts(m, 24, text); // the rest is the NUL and zeros
+    auto dm = decode_marquee(m);
+    REQUIRE(dm);
+    CHECK(dm->colour == 15);
+    CHECK(dm->priority == 10);
+    CHECK(dm->alpha == 510);
+    CHECK(dm->fade_in_ms == 0);
+    CHECK(dm->fade_out_ms == 3000);
+    CHECK(dm->hold_ms == 4000);
+    CHECK(dm->text == text);
+    // The same bytes the other way.
+    const AppPacket round = encode(*dm);
+    REQUIRE(round.data.size() == m.data.size());
+    CHECK(get32(round, 0) == 15);
+    CHECK(get32(round, 8) == 510);
+    CHECK(get32(round, 20) == 4000);
+    CHECK(round.data.back() == std::byte{0});
+    // A packet too short for the six words, one too short for the text, and one without the text's NUL.
+    CHECK_FALSE(decode_marquee(bytes(Op::Marquee, 23)));
+    CHECK_FALSE(decode_marquee(bytes(Op::Marquee, 24)));
+    AppPacket unterminated = m;
+    unterminated.data.pop_back();
+    CHECK_FALSE(decode_marquee(unterminated));
+    // An empty text with its NUL is a text too.
+    const auto empty = decode_marquee(bytes(Op::Marquee, 25));
+    REQUIRE(empty);
+    CHECK(empty->text.empty());
+
+    // EQEmu's Camera_Struct: u32 duration, f32 intensity.
+    AppPacket c = bytes(Op::CameraEffect, 8);
+    put32(c, 0, 2000);
+    const float intensity = 3.5f;
+    std::memcpy(c.data.data() + 4, &intensity, 4);
+    auto dc = decode_camera_effect(c);
+    REQUIRE(dc);
+    CHECK(dc->duration_ms == 2000);
+    CHECK(dc->intensity == 3.5f);
+    CHECK_FALSE(decode_camera_effect(bytes(Op::CameraEffect, 7)));
+    const AppPacket ce = encode(*dc);
+    REQUIRE(ce.data.size() == 8);
+    CHECK(get32(ce, 0) == 2000);
+    CHECK(get32(ce, 4) == get32(c, 4));
+}

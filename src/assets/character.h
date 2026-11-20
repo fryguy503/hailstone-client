@@ -751,6 +751,10 @@ private:
     using FragmentLoc = detail::FragmentLoc;
     using Tables = detail::CharacterTables;
     const TrackLoc* track(const std::string& name) const;
+    // Whether a body with these materials can draw anything: false only when each is invisible, or masked with
+    // every frame a game file whose decoded texels are all transparent (palette index 0). A frame that is missing,
+    // will not decode or is not plain RGBA8 counts as one that may show.
+    bool body_can_show(const std::vector<Material>& materials) const;
 
     std::vector<std::shared_ptr<const CharacterArchive>> archives_;
     // The global archives' tables (shared between zones), or null; tables_ holds what the rest of archives_ adds.

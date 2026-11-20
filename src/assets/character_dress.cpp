@@ -514,6 +514,24 @@ std::vector<std::string> CharacterLibrary::luclin_layers(std::string_view materi
     return out;
 }
 
+bool CharacterLibrary::body_can_show(const std::vector<Material>& materials) const {
+    for (const auto& material : materials) {
+        if (material.blend == BlendMode::Invisible) continue;
+        if (material.blend != BlendMode::Masked || material.frames.empty()) return true;
+        for (const auto& frame : material.frames) {
+            // The game's own file, not a texture pack's (a pack keeps the original's cut-out anyway).
+            auto data = read_file(frame);
+            if (!data) return true;
+            auto image = decode_texture(*data, {.palette_index0_transparent = true});
+            if (!image || image->format != PixelFormat::RGBA8 || image->mips.empty()) return true;
+            const auto& texels = image->mips.front();
+            for (std::size_t alpha = 3; alpha < texels.size(); alpha += 4)
+                if (texels[alpha] != std::byte{0}) return true;
+        }
+    }
+    return false;
+}
+
 std::optional<Image> CharacterLibrary::texture(std::string_view name, bool masked, std::string* error) const {
     if (name.starts_with("layers:")) return layered_texture(name, error);
     auto data = read_file(name);

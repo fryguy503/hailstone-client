@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <string>
 
 #include "core/log.h"
 #include "core/process_serial.h"
@@ -18,6 +19,37 @@ namespace hailstone::net {
 
 namespace {
 using Clock = std::chrono::steady_clock;
+
+constexpr std::uint8_t kClassLDoNObject = 62;
+
+// PlayerZoneClient::IDied @0x5a3d60 renames the dead spawn with OP_Death's corpse id. A player becomes
+// "%s's corpse%u", the name EQEmu gives the player corpses it spawns. Anything else goes through MakeCorpseName
+// @0x4dcad0: the name cut to fit 64 bytes with the suffix, a digit among its last three characters ends it there, then
+// "'s_corpse%u" ("_%u" for an LDoN object).
+std::string corpse_name(const game::Spawn& s, std::uint32_t corpse_id) {
+    if (!s.is_npc) return s.name + "'s corpse" + std::to_string(corpse_id);
+    const std::string suffix = (s.class_id == kClassLDoNObject ? "_" : "'s_corpse") + std::to_string(corpse_id);
+    std::string base = s.name;
+    const std::size_t room = 63 - suffix.size(); // 0x40 with the terminator
+    if (base.size() > room) {
+        base.resize(room);
+        // Utf8TerminateWithinBuffer: no sequence is left cut in two.
+        std::size_t lead = base.size();
+        while (lead > 0 && (static_cast<unsigned char>(base[lead - 1]) & 0xC0) == 0x80) --lead;
+        if (lead > 0 && static_cast<unsigned char>(base[lead - 1]) >= 0xC0) {
+            const unsigned char c = static_cast<unsigned char>(base[lead - 1]);
+            const std::size_t want = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2;
+            if (base.size() - (lead - 1) < want) base.resize(lead - 1);
+        }
+    }
+    if (base.size() > 2)
+        for (std::size_t i = base.size() - 3; i < base.size(); ++i)
+            if (std::isdigit(static_cast<unsigned char>(base[i]))) {
+                base.resize(i);
+                break;
+            }
+    return base + suffix;
+}
 } // namespace
 
 void GameConnection::handle_death(const Death& d) {
@@ -160,11 +192,7 @@ void GameConnection::handle_death(const Death& d) {
         set_auto_attack(false);
     }
     // PlayerZoneClient::IDied: the spawn stays as its corpse (same id) until the server deletes it.
-    if (!dead->is_corpse) {
-        std::string base = dead->name;
-        while (!base.empty() && std::isdigit(static_cast<unsigned char>(base.back()))) base.pop_back();
-        dead->name = base + "'s_corpse";
-    }
+    if (!dead->is_corpse) dead->name = corpse_name(*dead, d.corpse_id);
     dead->is_corpse = true;
     dead->hp_percent = 0;
     dead->hp_known = true;
@@ -341,7 +369,17 @@ std::vector<game::ZonePointRow> GameConnection::zone_point_rows() const {
 
 void GameConnection::send_position_now() {
     motion_dirty_ = true;
-    send_position(true);
+    send_position(true, position_);
+}
+
+void GameConnection::send_zone_line_position(glm::vec3 position) {
+    // EQEmu uses this position to choose the zone point and resolve its kept coordinates. DoTeleportB @0x507ca0
+    // sends it on channel 4, the reliable stream, so the request cannot overtake it.
+    if (zone_change_pending_) return;
+    send_position(true, position, true);
+    // The player stays where it crossed (see ClientApp::region_teleport), so once a refused request ends the
+    // ordinary report puts the server back on the real position, even when the player has not moved.
+    motion_dirty_ = true;
 }
 
 void GameConnection::move_to_zone(const game::MoveToZoneCall& m) {

@@ -1002,6 +1002,8 @@ TEST_CASE("small zone packets round-trip") {
     CHECK(ds.data.size() == 5);
     CHECK(byte_at(ds, 4) == 1);
     CHECK(decode_delete_spawn(ds) == 99u);
+    CHECK(decode_delete_spawn_decayed(ds) == true);
+    CHECK_FALSE(decode_delete_spawn_decayed(encode_delete_own_spawn(99))); // the client's 4 bytes: no flag
 
     AppPacket sa = encode(SpawnAppearance{12, 14, 100});
     CHECK(sa.data.size() == 8);

@@ -164,6 +164,27 @@ TEST_CASE("Help window: help.html, a link followed, Back, Contents") {
     CHECK(t.api->child_state("HelpWindow", "BackButton") == false);
 }
 
+TEST_CASE("Help window: Back goes at most 64 pages back") {
+    hailstone::test::ScratchDir game_dir{"help_history_test"};
+    fs::create_directories(game_dir.path() / "help");
+    for (int i = 0; i < 2; ++i)
+        std::ofstream(game_dir.path() / "help" / ("p" + std::to_string(i) + ".html")) << "page " << i;
+    std::ofstream(game_dir.path() / "help" / "help.html") << "contents";
+    GameDir game(game_dir.path());
+    Harness t(game);
+    t.api->toggle("HelpWindow");
+    REQUIRE(t.api->child_text("HelpWindow", "Display") == "contents");
+    for (int i = 0; i < 100; ++i)
+        CHECK(t.api->stml_link("HelpWindow", "Display", -1, i % 2 ? "file:///help/p1.html" : "file:///help/p0.html"));
+    int back = 0;
+    while (t.api->child_state("HelpWindow", "BackButton") == true && back < 200) {
+        CHECK(t.api->click_child("HelpWindow", "BackButton"));
+        ++back;
+    }
+    CHECK(back == 64);
+    CHECK(t.api->child_text("HelpWindow", "Display") == "page 1"); // the 36th page shown, not the contents
+}
+
 TEST_CASE("Context tips: a window's OnShow activates its tip once as it opens") {
     const GameDir* game = test::game_dir();
     if (!game) return;

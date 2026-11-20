@@ -25,7 +25,7 @@ jobs:
     name: no server code in the client
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check src/, sdk/ and ui/
         run: python3 tools/check_core_names.py
 
@@ -34,7 +34,7 @@ jobs:
     name: docs build into the wiki
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check docs/, CONTRIBUTING.md and server/README.md
         run: python3 tools/sync_wiki.py --check
 
@@ -42,7 +42,7 @@ jobs:
     name: shared UI contract artifacts
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check shipped interface migration
         run: python3 tools/migrate_ui_api.py --check
       - name: Check descriptor-generated fixtures and reference
@@ -57,3 +57,6 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p 'test_make_addon_ui.py' -v
           python3 -m unittest discover -s tests -p 'test_make_addon_autoload.py' -v
+          python3 -m unittest discover -s tests -p 'test_release_tools.py' -v
+      - name: Check the update packer keeps the player's files out
+        run: python3 -m unittest discover -s tests -p 'test_make_update.py' -v

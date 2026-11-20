@@ -15,6 +15,7 @@
 #include "game/eq_names.h"
 #include "game/group.h"
 #include "game/inventory.h"
+#include "game/spell_effect_text.h"
 #include "game/spells.h"
 #include "game/world_state.h"
 #include "mq/calc.h"
@@ -192,52 +193,6 @@ std::int64_t buff_ms_left(const Context& c, const game::BuffSlot& b) {
     const bool own = !before(&b, st.buffs.data()) && before(&b, st.buffs.data() + st.buffs.size());
     return static_cast<std::int64_t>(game::buff_ms_left(b, spell_data(c, b.spell), own && st.buff_timers_on_hold,
                                                         st.zone_suspends_buffs, GameConnection::now_ms()));
-}
-
-const char* target_type_name(int t) {
-    switch (t) {
-    case 1: return "Line of Sight";
-    case 2: return "AE PC v1";
-    case 3: return "Group v1";
-    case 4: return "PB AE";
-    case 5: return "Single";
-    case 6: return "Self";
-    case 8: return "Targeted AE";
-    case 9: return "Animal";
-    case 10: return "Undead";
-    case 11: return "Summoned";
-    case 13: return "Life Tap";
-    case 14: return "Pet";
-    case 15: return "Corpse";
-    case 16: return "Plant";
-    case 17: return "Uber Giants";
-    case 18: return "Uber Dragons";
-    case 20: return "Targeted AE Tap";
-    case 24: return "AE Undead";
-    case 25: return "AE Summoned";
-    case 32: return "Hatelist";
-    case 33: return "Hatelist2";
-    case 34: return "Chest";
-    case 36: return "Caster PB PC";
-    case 37: return "Caster PB NPC";
-    case 38: return "Pet2";
-    case 39: return "No Pets";
-    case 40: return "AE PC v2";
-    case 41: return "Group v2";
-    case 42: return "Directional AE";
-    case 43: return "Single in Group";
-    case 44: return "Beam";
-    case 45: return "Free Target";
-    case 46: return "Target of Target";
-    case 47: return "Pet Owner";
-    default: return "Unknown";
-    }
-}
-
-const char* resist_name(int r) {
-    static const char* kNames[] = {"Unresistable", "Magic", "Fire", "Cold", "Poison", "Disease",
-                                   "Chromatic", "Prismatic", "Physical", "Corruption"};
-    return r >= 0 && r < 10 ? kNames[r] : "Unknown";
 }
 
 // ---------------------------------------------------------------- items
@@ -933,12 +888,16 @@ void register_spell() {
         auto lvl = s.class_level[static_cast<std::size_t>(cls - 1)];
         return lvl == 255 ? V::nil() : V::integer(lvl);
     });
-    m("TargetType", [](const Context&, const game::SpellData& s, std::string_view) { return V::string(target_type_name(s.target_type)); });
+    m("TargetType", [](const Context&, const game::SpellData& s, std::string_view) {
+        return V::string(std::string(game::spell_target_type_desc(s.target_type))); // MacroQuest's text
+    });
     m("SpellType", [](const Context&, const game::SpellData& s, std::string_view) {
         return V::string(s.spell_type == 0 ? "Detrimental" : "Beneficial");
     });
     m("Beneficial", [](const Context&, const game::SpellData& s, std::string_view) { return V::boolean(s.spell_type != 0); });
-    m("ResistType", [](const Context&, const game::SpellData& s, std::string_view) { return V::string(resist_name(s.resist)); });
+    m("ResistType", [](const Context&, const game::SpellData& s, std::string_view) {
+        return V::string(std::string(game::spell_resist_type_desc(s.resist))); // MacroQuest's text
+    });
     m("ResistAdj", [](const Context&, const game::SpellData& s, std::string_view) { return V::integer(s.resist_adj); });
     m("Skill", [](const Context&, const game::SpellData& s, std::string_view) { return V::integer(s.skill); });
     m("SpellIcon", [](const Context&, const game::SpellData& s, std::string_view) { return V::integer(s.spell_icon); });

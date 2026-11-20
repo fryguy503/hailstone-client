@@ -47,7 +47,13 @@ struct TabOptions {
     std::string owner;
     std::vector<std::string> allow;
     std::string profile; // the cookie and cache folder
+    // The player's tab a server's link opened (OP_Weblink, WebService::open_server_link): any public site, never
+    // this computer or a private network, at every navigation and request (web::TabRules::ServerLink).
+    bool server_link = false;
 };
+
+// The rules a tab is held to (web/page_rules.h).
+TabRules tab_rules(const TabOptions& o);
 
 struct Image {
     std::uint16_t width = 0, height = 0;

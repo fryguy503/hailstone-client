@@ -176,6 +176,27 @@ TEST_CASE("addon_manager: a link's manifest is the install card, and yes install
     CHECK(again.offer->installed_version == "1.0.0");
 }
 
+// The login screen rebuilds its add-on view only when changes() moves on (or on its 3 s timer): every change the
+// manager makes moves it, and looking (status(), serial(), has_ready()) does not.
+TEST_CASE("addon_manager: changes() moves with what status() shows, not with looking") {
+    Harness h;
+    h.publish("1.0.0", "read,ui,actions");
+    h.start();
+    h.manager->wait_idle();
+    const std::uint32_t idle = h.manager->changes();
+    (void)h.manager->status();
+    (void)h.manager->serial();
+    (void)h.manager->has_ready();
+    CHECK(h.manager->changes() == idle);
+    const AddonsStatus s = h.inspect("https://github.com/owner/autoloot");
+    REQUIRE(s.offer);
+    const std::uint32_t offered = h.manager->changes();
+    CHECK(offered != idle);
+    h.manager->cancel_offer();
+    CHECK(h.manager->changes() != offered);
+    CHECK_FALSE(h.manager->status().offer);
+}
+
 TEST_CASE("addon_manager: signed UI bundles install without scripts and preserve their kind and pinned signer") {
     Harness h;
     Keys author(43), other(44);

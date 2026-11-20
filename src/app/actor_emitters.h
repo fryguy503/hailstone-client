@@ -28,6 +28,7 @@
 #include <span>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -64,6 +65,10 @@ public:
         const assets::CharacterMesh* mesh = nullptr;
         bool standing = false; // in its stand or idle animation (render::ActorRenderer::standing)
         float alpha = 1.0f;
+        // Hailstone (not in the original): false when no particle of its could show (outside the camera's view, or
+        // past the classic lighting's 500 units). Its emitters then emit nothing and are not placed (no pose is
+        // asked for), its animation-started entries start none, and what it emitted already lives on.
+        bool in_view = true;
     };
     // A bone's world matrix on an actor as drawn (false: not drawn).
     using BoneWorld = std::function<bool(std::uint32_t id, int bone, glm::mat4& world)>;
@@ -84,12 +89,40 @@ public:
     void draw(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::mat4& view, float glow = 1.0f,
               const render::SceneLighting* modern = nullptr);
     void clear();
+
+    // A model's spell point on a spawn as drawn: its world matrix (assets::SpellPoints; false: not drawn or no such
+    // point). Set by the app each frame; start_effect and the placing of its emitters read it.
+    using PointWorld = std::function<bool(std::uint32_t id, int point, glm::mat4& world)>;
+    // The floor below a point (the zone's collision), when it is loaded.
+    using FloorFn = std::function<std::optional<float>(const glm::vec3&)>;
+    void set_point_world(PointWorld point_world) { point_world_ = std::move(point_world); }
+    void set_floor(FloorFn floor) { floor_ = std::move(floor); }
+    // An effect the server plays on a spawn by number (OP_LevelAppearance): the actor file's emitter `effect` on one
+    // of the spawn's ten spell points, as CActor vf126 @0x1003a950 makes it. Without `flag` the emitter is attached
+    // to the point and follows it. With it the original places the emitter once, from the point's position cast
+    // down onto the floor and raised by 0.05, with the point's scale and the actor's turn, instead of attaching it;
+    // here the same with the world's axes for the turn (docs/unknowns.md), and the point's own z without a floor. Like every emitter of the actor file it is made at the actor
+    // density and opacity and ends with its definition's own duration. Returns false, starting nothing, for an effect
+    // not in the file, a slot the model has no point for, or a spawn not drawn.
+    struct Effect {
+        std::uint32_t actor = 0;
+        std::uint32_t effect = 0;
+        std::uint32_t slot = 0;
+        bool flag = false;
+    };
+    bool start_effect(const Effect& effect);
+    // Drops the effects of spawns `alive` no longer knows, and the records of those that ended. At most
+    // kMaxEffects run: a newer one stops the oldest.
+    void prune_effects(const std::function<bool(std::uint32_t id)>& alive);
+    static constexpr std::size_t kMaxEffects = 64;
+    std::size_t effect_count() const { return effects_.size(); }
     std::size_t emitters() const {
         finish();
         return particles_.emitters().size() + clouds_.emitters().size();
     }
-    // ActorParticleDensity (the Options window's combo; the effect manager's +0xac): the actors' emitters are made
-    // again with it. eqclient_density() is the ini's, read at the start.
+    // ActorParticleDensity (the Options window's combo; the effect manager's +0xac): the actors' running emitters
+    // emit at it from now on, keeping their particles; at 0 the EDD entries are stopped and none is tried, and from 0
+    // they are made again. eqclient_density() is the ini's, read at the start.
     void set_density(float density);
     float density() const { return settings_.density; }
     float eqclient_density() const { return eqclient_density_; }
@@ -102,6 +135,9 @@ private:
         return std::uint64_t{actor} << 32 | static_cast<std::uint32_t>(point);
     }
     void finish() const; // waits for simulate_async's step
+    // An effect's attached emitter uses point numbers from here up: kEffectPointBase + the spell point (an ordinary
+    // actor emitter's point is its index in the mesh's emitter list).
+    static constexpr std::int32_t kEffectPointBase = 0x1000;
 
     struct Live {
         // The mesh drawn last frame, and which one it is: a mesh freed and another dressed at its address (the
@@ -116,8 +152,9 @@ private:
             std::vector<glm::mat4> motion;
         };
         std::unordered_map<const assets::ObjectAnimation*, CloudPose> cloud_poses;
-        bool restart_edd = false; // ActorParticleDensity changes leave the separate WLD list running
+        bool restart_edd = false; // ActorParticleDensity off or on: the separate WLD list keeps running
         float alpha = 1.0f;
+        bool held = false; // Actor::in_view false this frame
         std::vector<std::uint32_t> standing_keys; // the STND / IDLE entries', while it stands
         // The other animation-started entries, by entry: the time into their animation last frame (negative: not
         // playing), a start waiting for the entry's delay (seconds left, negative none) and the emitter running.
@@ -145,7 +182,19 @@ private:
     std::filesystem::path shader_dir_;
     bool scene_ = true;
     std::unordered_map<std::uint32_t, Live> live_;
+    // update's scratch, kept so its memory is reused frame to frame: the emitters to stop in one pass each (by key,
+    // by actor in each system), the actors whose entries start afresh (their index, whether the mesh changed) and
+    // each actor's Live (nullptr: no emitters).
+    std::vector<std::uint32_t> stop_keys_, stop_actors_, stop_cloud_actors_;
+    std::vector<std::pair<std::size_t, bool>> restarts_;
+    std::vector<Live*> lives_;
     std::uint32_t next_key_ = 1;
+    PointWorld point_world_;
+    FloorFn floor_;
+    struct RunningEffect {
+        std::uint32_t key = 0, actor = 0;
+    };
+    std::vector<RunningEffect> effects_; // oldest first
     bool async_ = false; // the scene's: simulate_async steps the systems
     // simulate_async's table of the attached emitters' places, by attachment_key; the step reads it alone.
     std::unordered_map<std::uint64_t, std::optional<game::EmitterAttachment>> attachments_;

@@ -4,14 +4,18 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <format>
 #include <string_view>
 
+#include "core/ascii_case.h"
 #include "core/msvc_atoi.h"
+#include "game/dbstr_types.h"
 #include "game/eq_names.h"
 #include "game/eq_strings.h"
 #include "game/slash_commands.h"
+#include "game/world_state.h"
 #include "game/zone_names.h"
 #include "net/social_packets.h"
 
@@ -438,12 +442,16 @@ constexpr SocialCommand kSocialCommands[] = {
 #undef HAILSTONE_SOCIAL_COMMAND
 };
 
-// he / him / his for a gender (send_social's prologue: 12209/12297/12301,
-// 12210/12298/12299, 12211/12211/12300).
-std::array<std::uint32_t, 3> pronouns(int gender) {
-    if (gender == 0) return {12209, 12297, 12301};
-    if (gender == 1) return {12210, 12298, 12299};
-    return {12211, 12211, 12300};
+struct Pronoun {
+    std::uint32_t id;
+    const char* fallback;
+};
+
+// The subjective, objective and possessive slots used by send_social and outgoing chat.
+std::array<Pronoun, 3> pronouns(int gender, std::uint32_t neutral_object = 12211) {
+    if (gender == 0) return {{{12209, "he"}, {12297, "him"}, {12301, "his"}}};
+    if (gender == 1) return {{{12210, "she"}, {12298, "her"}, {12299, "her"}}};
+    return {{{12211, "it"}, {neutral_object, "it"}, {12300, "its"}}};
 }
 
 std::string with_period(std::string s) {
@@ -452,6 +460,102 @@ std::string with_period(std::string s) {
 }
 
 } // namespace
+
+// CEverQuest::DoPercentConvert @0x51b600, without its 0x800-byte buffer. It works on the text in place: `current`
+// is where the original's next search for a code is measured from (two bytes past a code it expanded, one past a
+// '%' it turned into "&PCT;"), which is why a code straight after a long expansion is not one.
+std::string expand_chat_variables(std::string_view text, const EqStrings& strings, const Spawn* target,
+                                  const Spawn* pet, bool sending) {
+    if (text.find('%') == std::string_view::npos) return std::string(text);
+    auto localized = [&](std::uint32_t id, const char* fallback) {
+        return strings.has(id) ? strings.format(id, {}) : std::string(fallback);
+    };
+    const auto forms = pronouns(target ? target->gender : 2, 6766);
+    auto replacement = [&](char code) -> std::optional<std::string> {
+        switch (code) {
+        case 't': return target ? display_name(target->name) : "Target"; // the name at +0xe4
+        // The original takes the first spawn in its list whose MasterID is the player, temporary pets included;
+        // this is the pet window's pet (docs/unknowns.md).
+        case 'm': return pet ? display_name(pet->name) : "Pet";
+        case 's': return localized(forms[0].id, forms[0].fallback);
+        case 'o': return localized(forms[1].id, forms[1].fallback);
+        case 'p': return localized(forms[2].id, forms[2].fallback);
+        case 'r': {
+            if (!target) return localized(6769, "Race");
+            // Type 2 is the corpse text, any other non-player type the NPC text. Every corpse is type 2: EQEmu
+            // sends them so (Corpse::FillSpawnStruct) and IDied sets it (@0x5a3e5f).
+            if (target->is_corpse) return localized(6767, "Corpse");
+            if (target->is_npc) return localized(6768, "NPC");
+            auto race = strings.db_string(target->race, eRaceName); // GetRaceDesc @0x515ce0
+            return race.empty() ? race_name(target->race) : race;
+        }
+        default: return std::nullopt;
+        }
+    };
+
+    std::string out;
+    out.reserve(text.size() + 16);
+    std::vector<std::size_t> entities; // where "&PCT;" stands in for a '%'
+    std::size_t current = 0;
+    int expansions = 0;
+    for (std::size_t i = 0; i < text.size();) {
+        // Not in the original: an item or achievement link is copied whole, so a '%' in its label never breaks it.
+        if (text[i] == '\x12') {
+            const auto end = text.find('\x12', i + 1);
+            if (end != std::string_view::npos) {
+                out.append(text.substr(i, end + 1 - i));
+                i = end + 1;
+                continue;
+            }
+        }
+        if (text[i] != '%') {
+            out += text[i++];
+            continue;
+        }
+        // A code is a '%' less than two bytes past `current`, or after a space or an apostrophe.
+        const std::size_t at = out.size();
+        const auto length = static_cast<std::ptrdiff_t>(at) - static_cast<std::ptrdiff_t>(current);
+        if (length < 2 || out[at - 1] == ' ' || out[at - 1] == '\'') {
+            if (expansions > 10) { // after eleven expansions such a '%' becomes '@'
+                out += '@';
+                ++i;
+                continue;
+            }
+            if (i + 1 < text.size()) {
+                if (auto value = replacement(ascii_lower(text[i + 1]))) {
+                    out += *value;
+                    current = at + 2;
+                    ++expansions;
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        // Any other '%': sent text (keepUnknown 1) gets "&PCT;" in its place, which moves `current`; a shown line
+        // (keepUnknown 0, dsp_chat) keeps it.
+        if (sending) {
+            entities.push_back(at);
+            out += "&PCT;";
+            current = at + 1;
+        } else {
+            out += '%';
+        }
+        ++i;
+    }
+    if (entities.empty()) return out;
+    // The original sends "&PCT;", which its chat window shows as '%'. A plain '%' is sent instead, as before this
+    // expansion existed: this client shows received text as it comes (docs/unknowns.md).
+    std::string sent;
+    sent.reserve(out.size());
+    std::size_t from = 0;
+    for (std::size_t at : entities) {
+        sent.append(out, from, at - from);
+        sent += '%';
+        from = at + 5;
+    }
+    sent.append(out, from, std::string::npos);
+    return sent;
+}
 
 const SocialEmote* social_for_handler(std::string_view handler) {
     static std::vector<SocialEmote> table = [] {
@@ -493,12 +597,12 @@ SocialText build_social(const EqStrings& strings, const SocialEmote& e, const st
             switch (*c) {
             case 'n': args.push_back(echo ? strings.format(12302, {}) : std::string()); break; // "You" / the server adds the name
             case 't': args.push_back(target_name ? *target_name : std::string()); break;
-            case 's': args.push_back(strings.format(echo ? 12303 : own[0], {})); break;
-            case 'o': args.push_back(strings.format(echo ? 12303 : own[1], {})); break;
-            case 'p': args.push_back(strings.format(echo ? 12304 : own[2], {})); break;
-            case 'S': args.push_back(strings.format(tgt[0], {})); break;
-            case 'O': args.push_back(strings.format(tgt[1], {})); break;
-            case 'P': args.push_back(strings.format(tgt[2], {})); break;
+            case 's': args.push_back(strings.format(echo ? 12303 : own[0].id, {})); break;
+            case 'o': args.push_back(strings.format(echo ? 12303 : own[1].id, {})); break;
+            case 'p': args.push_back(strings.format(echo ? 12304 : own[2].id, {})); break;
+            case 'S': args.push_back(strings.format(tgt[0].id, {})); break;
+            case 'O': args.push_back(strings.format(tgt[1].id, {})); break;
+            case 'P': args.push_back(strings.format(tgt[2].id, {})); break;
             default: break;
             }
         }

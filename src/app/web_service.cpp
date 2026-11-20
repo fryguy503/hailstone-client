@@ -154,6 +154,7 @@ std::uint32_t WebService::open_server_link(const std::string& url, std::string* 
         return 0;
     }
     web::TabOptions o;
+    o.server_link = true; // no private host at any navigation or request, not only this first address
     if (env_.profile) o.profile = server_link_profile(env_.profile());
     return b->open(url, std::move(o), why);
 }

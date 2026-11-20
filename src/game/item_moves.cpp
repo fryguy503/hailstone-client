@@ -2,6 +2,8 @@
 
 #include <limits>
 
+#include "net/item_packets.h"
+
 namespace hailstone::game {
 
 namespace {
@@ -10,7 +12,10 @@ std::int32_t wrap(std::uint32_t v) { return static_cast<std::int32_t>(v); }
 std::uint32_t u(std::int32_t v) { return static_cast<std::uint32_t>(v); }
 
 bool two_handed(const EquipItem& i) { return i.item_type == 1 || i.item_type == 4 || i.item_type == 35; }
-bool instrument(const EquipItem& i) { return i.item_type >= 23 && i.item_type <= 26; }
+bool instrument(const EquipItem& i) {
+    return i.item_type >= 0 && i.item_type <= std::numeric_limits<std::uint8_t>::max() &&
+           net::is_instrument_item_type(static_cast<std::uint8_t>(i.item_type));
+}
 
 } // namespace
 

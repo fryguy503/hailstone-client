@@ -76,6 +76,48 @@ std::optional<std::string> decode_weblink(const AppPacket& p) {
     return url;
 }
 
+std::optional<Marquee> decode_marquee(const AppPacket& p) {
+    return decode_with(p, [](ByteReader& r) {
+        Marquee v;
+        v.colour = static_cast<std::int32_t>(r.le<std::uint32_t>());
+        v.priority = static_cast<std::int32_t>(r.le<std::uint32_t>());
+        v.alpha = static_cast<std::int32_t>(r.le<std::uint32_t>());
+        v.fade_in_ms = r.le<std::uint32_t>();
+        v.fade_out_ms = r.le<std::uint32_t>();
+        v.hold_ms = r.le<std::uint32_t>();
+        v.text = r.cstring();
+        return v;
+    });
+}
+
+AppPacket encode(const Marquee& v) {
+    ByteWriter w;
+    w.le(static_cast<std::uint32_t>(v.colour));
+    w.le(static_cast<std::uint32_t>(v.priority));
+    w.le(static_cast<std::uint32_t>(v.alpha));
+    w.le(v.fade_in_ms);
+    w.le(v.fade_out_ms);
+    w.le(v.hold_ms);
+    detail::write_cstring(w, v.text);
+    return make_packet(Op::Marquee, std::move(w));
+}
+
+std::optional<CameraEffect> decode_camera_effect(const AppPacket& p) {
+    return decode_with(p, [](ByteReader& r) {
+        CameraEffect v;
+        v.duration_ms = r.le<std::uint32_t>();
+        v.intensity = r.f32();
+        return v;
+    });
+}
+
+AppPacket encode(const CameraEffect& v) {
+    ByteWriter w;
+    w.le(v.duration_ms);
+    w.f32(v.intensity);
+    return make_packet(Op::CameraEffect, std::move(w));
+}
+
 std::optional<std::vector<std::uint32_t>> decode_disciplines(const AppPacket& p) {
     if (p.data.size() < 4) return std::nullopt;
     return decode_with(p, [](ByteReader& r) {

@@ -784,6 +784,35 @@ TEST_CASE("a spawn killed while moving stops where it died (PlayerZoneClient::ID
     CHECK(rat.heading == heading);
 }
 
+TEST_CASE("a spawn that dies is renamed as PlayerZoneClient::IDied names it, with OP_Death's corpse id") {
+    mq_test::World w("hailstone_death_corpse_name_test");
+    auto& c = *w.conn;
+    auto& spawns = A::world(c).spawns;
+    auto die = [&](std::uint32_t id, std::uint32_t corpse_id) {
+        net::Death d;
+        d.spawn_id = id;
+        d.killer_id = 1;
+        d.corpse_id = corpse_id;
+        c.receive_zone_packet_for_test(net::encode(d));
+        REQUIRE(spawns.at(id).is_corpse);
+        return spawns.at(id).name;
+    };
+    // MakeCorpseName: a digit among the last three characters ends the name there
+    CHECK(die(10, 10) == "a_rat's_corpse10");
+    CHECK(die(11, 77) == "Fippy_Darkpaw's_corpse77");
+    // a player: "%s's corpse%u", as EQEmu names a player corpse it spawns
+    CHECK(die(12, 12) == "Groupie's corpse12");
+    // an LDoN object (class 62): "_%u"
+    w.add(20, "a_chest00", true, 1, {0, 0, 0});
+    spawns.at(20).class_id = 62;
+    CHECK(die(20, 20) == "a_chest_20");
+    // a name cut to fit 64 bytes with the suffix
+    w.add(21, std::string(70, 'x'), true, 1, {0, 0, 0});
+    CHECK(die(21, 21) == std::string(63 - 11, 'x') + "'s_corpse21");
+    // a corpse is not renamed again
+    CHECK(die(13, 99) == "a_rat02");
+}
+
 TEST_CASE("aa_readiness_bulk answers like aa_readiness, for the profile and without it") {
     test::EmptyGameDir dir;
     GameDir game(dir.path());

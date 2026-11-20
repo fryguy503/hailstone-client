@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <filesystem>
+#include <memory>
 
 #include <imgui.h>
 #include <lua.hpp>
@@ -81,6 +82,68 @@ TEST_CASE("Hotbuttons: an Actions button dragged to a bar, moved off it and swap
         lua_close(L);
     }
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("Hotbuttons: a layout-locked bar rejects pickup and placement but can still be used") {
+    std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> ctx(ImGui::CreateContext(),
+                                                                      &ImGui::DestroyContext);
+    game::HotButtonStore store;
+    store.current(0, 0).type = game::HotButtonType::WeaponSlot;
+    store.current(1, 0).type = game::HotButtonType::MenuButton;
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.hot_buttons = &store;
+    host.set_hot_button = [&](int bar, int button, const game::HotButton& b) { store.current(bar, button) = b; };
+    bool locked = true;
+    host.layout_setting = [&](std::string_view key) -> std::string {
+        if (key == "hud.lockLayout.HotButtonWnd2") return locked ? "1" : "0";
+        if (key == "hud.lock.HotButtonWnd2" || key == "hud.locked") return "1";
+        return {};
+    };
+    int presses = 0;
+    host.press_hot_button = [&](int bar, int button, bool mouse) {
+        CHECK(bar == 1);
+        CHECK(button == 0);
+        CHECK(mouse);
+        ++presses;
+    };
+    app::UiApi api(host);
+    std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), &lua_close);
+    REQUIRE(lua);
+    luaL_openlibs(lua.get());
+    lua_newtable(lua.get());
+    api.register_functions(lua.get());
+    lua_setglobal(lua.get(), "hs");
+    lua_State* L = lua.get();
+
+    CHECK(run(L, "return hs.UI.cursor.PickUp('HotButtonWnd2', 'HB_Button1')") == "false");
+    CHECK(store.current(1, 0).type == game::HotButtonType::MenuButton);
+    CHECK_FALSE(host.cursor_button);
+    CHECK(api.click_hot_button("HotButtonWnd2", "HB_Button1", "left"));
+    CHECK(presses == 1);
+    CHECK(api.click_child("HotButtonWnd2", "HB_PageDownButton"));
+    CHECK(store.page(1) == 1);
+    CHECK(api.click_child("HotButtonWnd2", "HB_PageUpButton"));
+    CHECK(store.page(1) == 0);
+
+    REQUIRE(run(L, "return hs.UI.cursor.PickUp('HotButtonWnd', 'HB_Button1')") == "true");
+    CHECK(run(L, "return hs.UI.hotbars.Click('HotButtonWnd2', 'HB_Button1', 'left')") == "true");
+    CHECK(run(L, "return hs.UI.hotbars.Click('HotButtonWnd2', 'HB_Button2', 'left')") == "true");
+    CHECK(store.current(1, 0).type == game::HotButtonType::MenuButton);
+    CHECK(store.current(1, 1).empty());
+    REQUIRE(host.cursor_button);
+    CHECK(host.cursor_button->type == game::HotButtonType::WeaponSlot);
+    CHECK(presses == 1);
+    CHECK(api.click_hot_button("HotButtonWnd", "HB_Button1", "left"));
+    CHECK(store.current(0, 0).type == game::HotButtonType::WeaponSlot);
+    CHECK_FALSE(host.cursor_button);
+
+    locked = false; // The frame locks remain on.
+    CHECK(run(L, "return hs.UI.cursor.PickUp('HotButtonWnd2', 'HB_Button1')") == "true");
+    CHECK(api.click_hot_button("HotButtonWnd2", "HB_Button2", "left"));
+    CHECK(store.current(1, 0).empty());
+    CHECK(store.current(1, 1).type == game::HotButtonType::MenuButton);
+    CHECK_FALSE(host.cursor_button);
 }
 
 TEST_CASE("Window places: a moved window is where it was after the layout is saved and read again") {

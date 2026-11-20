@@ -67,6 +67,7 @@ HailstoneNameplateCandidate candidate_view(const game::NameplateCanvasCandidate&
     view.aggro_percent = context.aggro_percent.value_or(0);
     view.spawn_name = borrow(spawn.name);
     view.caption = borrow(context.name);
+    if (!context.secondary_caption.empty()) view.secondary_caption = borrow(context.secondary_caption);
     if (context.casting) {
         view.flags |= HAILSTONE_NAMEPLATE_CASTING;
         view.cast_spell_id = context.casting->spell_id;

@@ -263,7 +263,7 @@ namespace {
 
 // Reads `text`'s lines into `rules` in order; an include reads the named file's in its place.
 void parse_into(ZoneFloraRules& rules, std::string_view text, std::vector<std::string>* errors,
-                const ZoneFloraInclude& include, int depth, std::string_view source) {
+                const ZoneFloraInclude& include, int depth, int& includes, std::string_view source) {
     std::size_t line_no = 0;
     auto fail = [&](std::string_view why) {
         if (errors)
@@ -280,9 +280,11 @@ void parse_into(ZoneFloraRules& rules, std::string_view text, std::vector<std::s
         if (w.empty()) continue;
         if (iequals(w[0], "include") && w.size() == 2) {
             if (depth >= kMaxFloraIncludeDepth) { fail("include: nested too deep"); continue; }
+            if (includes >= kMaxFloraIncludes) { fail("include: too many includes"); continue; }
+            ++includes;
             std::optional<std::string> other = include ? include(w[1]) : std::nullopt;
             if (!other) { fail("include: no rules named " + std::string(w[1])); continue; }
-            parse_into(rules, *other, errors, include, depth + 1, w[1]);
+            parse_into(rules, *other, errors, include, depth + 1, includes, w[1]);
         } else if (iequals(w[0], "donor") && w.size() == 2) {
             std::string donor = lower(w[1]);
             if (std::find(rules.donors.begin(), rules.donors.end(), donor) == rules.donors.end())
@@ -340,7 +342,8 @@ void parse_into(ZoneFloraRules& rules, std::string_view text, std::vector<std::s
 ZoneFloraRules parse_zone_flora_rules(std::string_view text, std::vector<std::string>* errors,
                                       const ZoneFloraInclude& include) {
     ZoneFloraRules rules;
-    parse_into(rules, text, errors, include, 0, {});
+    int includes = 0;
+    parse_into(rules, text, errors, include, 0, includes, {});
     return rules;
 }
 

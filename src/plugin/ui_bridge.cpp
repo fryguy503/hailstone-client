@@ -80,9 +80,21 @@ std::string UiBridge::resolve(std::string_view plugin) const {
     return {};
 }
 
-void UiBridge::add_function(const std::string& plugin, const std::string& name, Fn fn, Kind kind) {
+namespace {
+// How many entries of `list` the owner (kind, name) has.
+template <class List>
+std::size_t owned(const List& list, UiBridge::Kind kind, std::string_view plugin) {
+    return static_cast<std::size_t>(std::count_if(list.begin(), list.end(), [&](const auto& x) {
+        return x.kind == kind && iequal(x.plugin, plugin);
+    }));
+}
+} // namespace
+
+bool UiBridge::add_function(const std::string& plugin, const std::string& name, Fn fn, Kind kind) {
     remove_function(plugin, name, kind);
+    if (owned(functions_, kind, plugin) >= kMaxFunctions) return false;
     functions_.push_back({plugin, name, std::move(fn), kind});
+    return true;
 }
 
 void UiBridge::remove_function(std::string_view plugin, std::string_view name, Kind kind) {
@@ -105,13 +117,15 @@ std::optional<UiValue> UiBridge::call(std::string_view plugin, std::string_view 
 
 bool UiBridge::has_plugin(std::string_view plugin) const { return !resolve(plugin).empty(); }
 
-void UiBridge::add_option(Option o) {
+bool UiBridge::add_option(Option o) {
     for (Option& old : options_)
         if (old.kind == o.kind && iequal(old.plugin, o.plugin) && old.name == o.name) {
             old = std::move(o);
-            return;
+            return true;
         }
+    if (owned(options_, o.kind, o.plugin) >= kMaxOptions) return false;
     options_.push_back(std::move(o));
+    return true;
 }
 
 UiBridge::Option* UiBridge::find_option(std::string_view plugin, std::string_view name) {
@@ -122,7 +136,16 @@ UiBridge::Option* UiBridge::find_option(std::string_view plugin, std::string_vie
     return nullptr;
 }
 
-void UiBridge::add_menu(MenuEntry e) { menu_.push_back(std::move(e)); }
+bool UiBridge::add_menu(MenuEntry e) {
+    for (MenuEntry& old : menu_)
+        if (old.kind == e.kind && iequal(old.plugin, e.plugin) && old.label == e.label) {
+            old.command = std::move(e.command);
+            return true;
+        }
+    if (owned(menu_, e.kind, e.plugin) >= kMaxMenuEntries) return false;
+    menu_.push_back(std::move(e));
+    return true;
+}
 
 void UiBridge::set_folder(const std::string& plugin, std::filesystem::path folder, Kind kind) {
     const std::string tag = owner_tag(kind, plugin);

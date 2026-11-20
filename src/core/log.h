@@ -15,6 +15,10 @@ void set_level(Level level);
 // Whether a line at `level` is written at the level set now.
 bool enabled(Level level);
 void write(Level level, std::string_view message);
+// Whether write() also prints each line to stdout (debug, info) and stderr (warn, error); on by default. The file,
+// and the recent lines a crash report copies, are written either way. hailstone_tests turns it off, so a run's
+// thousands of expected warnings do not bury its report (tests/test_main.cpp).
+void set_console(bool on);
 // Also writes every line to `path` from now on (the client's logs/hailstone.log), as well as to stdout and stderr.
 // The earlier runs' files are kept as <name>.1<ext> to <name>.3<ext> (hailstone.1.log is the last run's). A program
 // that runs while another holds `path` (a second client; <name>.lock beside it is the lock) leaves it alone and

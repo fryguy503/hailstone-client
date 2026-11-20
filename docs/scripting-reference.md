@@ -112,12 +112,15 @@ manifest's `caps` (docs/addons.md).
 | `Bool` | text | bool | false for empty, `false`, `null` or `0`; true otherwise |
 | `String` | text | string | the text |
 | `Select` | `x,a,b,c,...` | int | the 1-based position of `x` among the rest (not case sensitive), 0 when absent |
+| `If` | `cond,whentrue,whenfalse` (or `~` as the separator when there are exactly two) | string | the text of one branch; NULL when the condition does not calculate |
+| `Math` | | `math` | MQ's Math (below); `${Math}` alone is NULL |
+| `Range` | | `range` | `Between[a,b:n]` (a ≤ n ≤ b) and `Inside[a,b:n]` (a < n < b) |
 
 `LineOfSight` is NULL before the zone's collision is loaded, and for a coordinate that is not a finite number below
 1 000 000 in size.
 
 A compiled plugin can add TLOs (`AddTopLevelObject`). It cannot replace one that exists. MQ TLOs that are missing:
-`Raid`, `Mercenary`, `Corpse`, `Merchant`, `Ground`, `Macro`, `Math`, and other MQ plugins' TLOs (`Navigation` and
+`Raid`, `Mercenary`, `Corpse`, `Merchant`, `Ground`, `Macro`, and other MQ plugins' TLOs (`Navigation` and
 `Stick` are built in).
 
 ## Data types
@@ -326,6 +329,7 @@ name.
 | `gametime` | `hh:mm` | `Hour`, `Minute`, `Day`, `Month`, `Year`, `Night`, `Time24` |
 | `navigation` | `Active` | `Active`, `Paused`, `MeshLoaded`, `MeshComplete`, `TilesBuilt`, `TilesTotal`, `Destination`, `Remaining`, `PathExists[dest]`, `PathLength[dest]` (-1 for no path); docs/navigation.md "The Navigation TLO" |
 | `stick` | `ON` or `OFF` | `Active`, `Status` (`ON`, `PAUSED` or `OFF`), `Distance`, `StickTarget` (spawn id, 0 none), `StickTargetName` |
+| `math` | NULL | `Calc[expr]`, `Sqrt`, `Abs`, `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan` (degrees), `Rand[max]` or `Rand[min,max]`, `Not`, `Hex`, `Dec[hex]`, `Clamp[n,min,max]`, `Distance[y,x,z:y,x,z]` (a missing point or coordinate is the player's) |
 
 `Window[name]` asks the UI whether a window of that name is open. The names are the game's own window names, which
 the UI packs use too (`InventoryWindow`, `LootWnd`, `BankWnd`, `GroupWindow`, ...).
@@ -336,9 +340,9 @@ Every number, string and boolean has these members, as in MQ.
 
 | Type | Members |
 |---|---|
-| `int` | `Float`, `Hex` (`0x1f`), `Reverse` (byte order of the low 32 bits) |
-| `float` | `Int` (cut toward zero; NULL for NaN, infinity or beyond 64 bits), `Deci`, `Centi`, `Milli` (1, 2 or 3 decimals, as text), `Precision[n]` (n decimals, 0..12), `Raw` (the 32-bit float's bits) |
-| `string` | `Length`, `Upper`, `Lower`, `Left[n]`, `Right[n]` (a negative n counts from the other end), `Mid[start,n]` (1-based), `Find[text]` (1-based, not case sensitive; NULL when absent), `Equal[text]`, `NotEqual[text]` (not case sensitive), `EqualCS[text]`, `Arg[n,sep]` (the nth word, `sep` a space by default), `Token[n,sep]` (like `Arg`, but empty fields count), `Count[c]` (how many times character c appears) |
+| `int` | `Float`, `Double`, `Hex` (`0x1f`), `Reverse` (byte order of the low 32 bits), `LowPart`, `HighPart` (the 16-bit halves; the 32-bit halves for a value past 32 bits), `Prettify[n]` (thousands grouped, n decimals) |
+| `float` | `Int` (cut toward zero; NULL for NaN, infinity or beyond 64 bits), `Deci`, `Centi`, `Milli` (1, 2 or 3 decimals, as text), `Precision[n]` (n decimals, 0..12), `Raw` (the 32-bit float's bits), `Prettify[n]` (thousands grouped, 2 decimals by default; MQ groups the value's bits instead) |
+| `string` | `Length`, `Upper`, `Lower`, `Left[n]`, `Right[n]` (a negative n counts from the other end), `Mid[start,n]` (1-based), `Find[text]` (1-based, case-insensitive; NULL when absent), `Equal[text]`, `NotEqual[text]` (case-insensitive), `EqualCS[text]`, `NotEqualCS[text]`, `Compare[text]`, `CompareCS[text]` (-1, 0 or 1), `Arg[n,sep]` (the nth word, `sep` a space by default), `Token[n,sep]` (like `Arg`, but empty fields count), `Count[c]` (occurrences of character c), `Replace[search,replacement]` (case sensitive), `StripLinks` |
 | `bool` | none |
 
 ## Spawn searches
@@ -404,11 +408,11 @@ them. These commands come from MacroQuest rather than the game:
 | `/squelch <cmd>` | runs the command without its chat output |
 | `/docommand <cmd>` | runs the command (useful after `${...}` builds it) |
 | `/noparse <cmd>` | runs the command without expanding `${...}` |
-
-`/squelch`, `/docommand` and `/noparse` nest at most 16 deep in one line; past that the rest of the line is dropped.
 | `/lua run <name> [args]` \| `stop [name]` \| `pause [name]` \| `list` | scripts |
 | `/plugin list` \| `/plugin <name> [load\|unload]` | compiled plugins |
 | `/nav`, `/moveto`, `/stick` | navigation (docs/navigation.md "Commands") |
+
+`/squelch`, `/docommand` and `/noparse` nest at most 16 deep in one line; past that the rest of the line is dropped.
 
 `${...}` is expanded in every command line, whether typed or sent by a script, except `/noparse` lines and the lines
 the client's own windows send for a button.
@@ -437,7 +441,7 @@ The global `mq` (also `require('mq')`) in every script, Lua social and Lua plugi
 | `mq.getFilteredSpawns(fn)` | `read` | those for which `fn(spawn)` is true |
 | `mq.imgui.init(name, fn)` | `ui` | `fn` is called every frame to draw with `ImGui` |
 | `mq.imgui.destroy(name)`, `mq.imgui.exists(name)` | | |
-| `mq.pickle(path, table)` | | writes the table as Lua to `path` under `mq.configDir`. Read it back with `dofile` / `loadfile`, as data: no functions (a file whose values are or hold one is refused). A file is at most 8 MiB, and `mq.configDir` at most 1000 files or 64 MiB |
+| `mq.pickle(path, table)` | | writes the table as Lua to `path` under `mq.configDir`, read back with `dofile` / `loadfile`. Data only: a table holding a function is refused. At most 8 MiB a file; `mq.configDir` at most 1000 files or 64 MiB |
 | `mq.web.*` | `web` | the script's own browser tabs (below) |
 | `mq.luaDir` | | the script folder the script was found in |
 | `mq.configDir` | | the folder `mq.pickle` writes to: `scripts/config/`, or `scripts/config/<script>/` for a script without every capability |
@@ -491,11 +495,11 @@ code. A script that registers any of these stays loaded after its main chunk ret
 | `player()` | `{spawn_id, name, level, race, class, visible_class, class_mask, cur_hp, max_hp, cur_mana, max_mana, cur_endurance, max_endurance, target_id, zone_id, game_state, in_group, in_raid, spell_book_open, buff_slots, xtarget_slots, casting_spell_id, scribing_spell_id, stand_state, pet_id, filter_pc_spells, in_zone, aa_points, aa_spent}`; `cur_hp` / `max_hp` include the items' HP |
 | `spawn(id)` | `{id, name, level, class, race, owner, guild, npc, corpse, x, y, z, heading, hp_percent, rider, mercenary, gm, body_type}`, or nil. x, y, z are the zone's coordinates and `heading` is 0..512 |
 | `spawns()` | every spawn in the zone as such tables, in an array sorted by id |
-| `spell(id)` | `{id, name, class_level (16 entries, 255 cannot use), timer_id, cast_time, recovery_time, recast_time (ms), mana, target_type, skill, is_skill, gem_icon, range, ae_range, push_back, duration_formula, duration_cap (ticks), spell_type, resist, resist_adj, spell_icon, category, subcategory, cast_on_you, cast_on_other, wear_off, effects}`. `effects` has 12 1-based `{effect, base, base2, max, formula}` entries. These are the raw record values |
+| `spell(id)` | `{id, name, class_level (16 entries, 255 cannot use), timer_id, cast_time, recovery_time, recast_time (ms), mana, target_type, skill, is_skill, gem_icon, range, ae_range, push_back, duration_formula, duration_cap (ticks), spell_type, resist, resist_adj, spell_icon, category, subcategory, cast_on_you, cast_on_other, wear_off, effects}`. `effects` has 12 1-based `{effect, base, base2, max, formula}` entries; all raw record values |
 | `item(slot [, sub])` or `item{type, slot, sub, aug}` | `{id, name, type, item_class, classes, races, icon, stack, charges, req_level, bag_slots, click_spell, scroll_spell}`. An item with a click effect adds `click_type, click_level, click_cast_time (ms), click_recast (s), click_recast_type, click_max_charges (-1 unlimited), click_ready_in (s, 0 ready)`. `sub` is the place in a bag, from 0 |
 | `buff(i)` | `{spell_id, tics, level, caster_id}` for buff slot i (1-based), or nil when the slot is empty; `tics` is as the server last sent it, negative for a permanent buff |
 | `xtarget(i)` | `{type, status, spawn_id, name}` for extended target slot i (1-based) |
-| `raid()` | the raid roster as columnar tables: `active, locked, loot_type, count, leader, target, spawn_id[], name[], group[], flags[], level[], class[], pct_hp[], pct_mana[], pct_endurance[], pet_spawn_id[], pet_pct_hp[], x[], y[], z[], distance[]` (members 1-based; `leader`/`target` 1-based, 0 none). `-1` is an unknown percentage; `flags` are the `HS_BULK_RAID_*` bits, also `hailstone.RAID_LEADER`, `RAID_GROUP_LEADER`, `RAID_MAIN_ASSIST`, `RAID_MARKER`, `RAID_WAYPOINTER`, `RAID_LOOTER`, `RAID_PRESENT` and `RAID_ME`. One table, no table per member |
+| `raid()` | the raid roster as columnar tables: `active, locked, loot_type, count, leader, target, spawn_id[], name[], group[], flags[], level[], class[], pct_hp[], pct_mana[], pct_endurance[], pet_spawn_id[], pet_pct_hp[], x[], y[], z[], distance[]` (1-based; `leader`/`target` 0 for none; `-1` an unknown percentage). `flags` are the `HS_BULK_RAID_*` bits, also `hailstone.RAID_LEADER`, `RAID_GROUP_LEADER`, `RAID_MAIN_ASSIST`, `RAID_MARKER`, `RAID_WAYPOINTER`, `RAID_LOOTER`, `RAID_PRESENT` and `RAID_ME` |
 | `eqstr(id, ...)` | a game string (eqstr_us.txt) with `%1`, `%2`, ... filled; nil when there is none |
 | `zone_name(id)` | a zone's short name |
 | `server()` | `{name, host, port, world, world_host}`, the server this login is on; nil before the world login |
@@ -538,9 +542,10 @@ code. A script that registers any of these stays loaded after its main chunk ret
 | `set_flag(name [, on])` | a rule switch: `wide_item_links`, `items_any_class`, `hide_any_class`, `aa_any_level`, `aa_train_all`, `augment_classes`, `research_classes`, `focus_classes`, `backstab_either_hand`, `solo_adventure` (as [`HAILSTONE_FLAG_*`](#constants)) |
 | `set_player_classes(mask)` | the player's classes, bit c-1 for class c (multiclass) |
 | `set_character_classes(name, mask)` | a character's classes at character select; 0 removes them |
-| `set_class_name(class_id, name [, short_name])` | the server's name for a player class (1-16) and its short name ("Vanguard", "VAN"), shown wherever the client names the class; nil or `""` the stock one. Display only. At most 32 bytes and 4, no control characters, else an error. The names go when the script stops, loses `extend`, or the session leaves the server; the latest caller wins ([plugins.md "Class names"](plugins.md#class-names)) |
+| `set_class_name(class_id, name [, short_name])` | the server's name for a player class (1-16) and its short name ("Vanguard", "VAN"), shown wherever the client names the class (display only); nil or `""` the stock one. At most 32 and 4 bytes, no control characters, else an error. Dropped when the script stops, loses `extend` or the session leaves the server; the latest caller wins ([plugins.md "Class names"](plugins.md#class-names)) |
 | `set_pet_list{{spawn = id, class = c}, ...}` | the player's pets, when the server allows several |
 | `set_vitals{max_hp, cur_hp, max_mana, cur_mana, max_endurance, cur_endurance}` | the server's vitals in place of the client's formulas (any subset); nil clears them |
+| `map_policy(fn)`, `map_visible(fn)` | shorthands for those two hooks (below); nil removes one. They need `ui` as well as `extend` |
 
 ### Hooks
 
@@ -578,6 +583,8 @@ the script's own Lua state and must finish within 50 ms. An error in a hook ends
 | `reuse_focus_dropped` | (spell_id) → true: no reuse focus |
 | `map_spawn` | (spawn table) → true shows it as the defaults say, a table `{color, layer, label}` changes them, falsy leaves it off |
 | `nameplate` | (spawn table, text) → the text for its nameplate. Lua only. The spawn table is reused for every plate, so copy what you need |
+| `map_policy` | () → `{custom_spawns, stock_npcs, npc_find, revision, name}` (booleans, a whole number of 0 or more, at most 63 bytes): the map's policy (docs/plugins.md, `map_policy`). Needs `ui` too |
+| `map_visible` | (spawn table, `'map'` or `'find'`) → false leaves the spawn off the map or out of Find. Needs `ui` too |
 
 `command_line` is for compiled plugins only.
 
@@ -598,8 +605,9 @@ to take MQ's argument and return order:
 - `ImGui.Begin(name, open, flags)` returns `still_open, visible` when `open` is given, else `visible`.
 - `ImGui.Text`, `TextWrapped`, `TextDisabled` and `BulletText` take `(fmt, ...)` and string.format it.
 - `ImGui.TextColored` takes `(r, g, b, a, fmt, ...)` or `(ImVec4, fmt, ...)`.
-- `ImGui.Button(label, w, h | ImVec2)`, `ImGui.SetNextWindowSize(w, h, cond | ImVec2, cond)` and
-  `ImGui.SetNextWindowPos(x, y, cond | ImVec2, cond)`.
+- `ImGui.Button(label, w, h | ImVec2)`, `ImGui.SetNextWindowSize(w, h, cond | ImVec2, cond)`,
+  `ImGui.SetNextWindowPos(x, y, cond | ImVec2, cond)` and
+  `ImGui.SetNextWindowSizeConstraints(min_w, min_h, max_w, max_h | ImVec2 min, ImVec2 max)`.
 - Globals: `ImVec2(x, y)` and `ImVec4(x, y, z, w)` (plain tables), plus `ImGuiWindowFlags`, `ImGuiCond`, `ImGuiCol`,
   `ImGuiStyleVar`, `ImGuiTableFlags`, `ImGuiTableColumnFlags`, `ImGuiInputTextFlags`, `ImGuiComboFlags`,
   `ImGuiSelectableFlags`, `ImGuiMouseButton` (= ui.Mouse) and `ImGuiHoveredFlags`. There are no aliases for
@@ -634,6 +642,7 @@ rectangle (`u0, v0, u1, v1`).
 | BeginChild | (id [, w, h [, border [, flags]]]) → bool | Call `EndChild` whatever it returns |
 | EndChild | () → — | Ends the child the script's last `BeginChild` began; any other EndChild does nothing |
 | SetNextWindowSize | (w, h [, cond=FirstUseEver]) → — | |
+| SetNextWindowSizeConstraints | (minW, minH, maxW, maxH) → — | Bounds for the next window, including axes sized to their contents |
 | SetNextWindowPos | (x, y [, cond=FirstUseEver]) → — | |
 | SetNextWindowBgAlpha | (a) → — | |
 | SetNextWindowCollapsed | (collapsed [, cond=Always]) → — | |
@@ -688,6 +697,8 @@ rectangle (`u0, v0, u1, v1`).
 | EndCombo | () → — | |
 | SetItemDefaultFocus | () → — | |
 | ProgressBar | (fraction [, w=-1, h [, overlay]]) → — | |
+| ColorButton | (label, r, g, b [, a [, flags [, w, h]]]) → bool | A colour swatch; flags from ui.ColorEditFlags |
+| ColorPicker3 / ColorEdit3 | (label, r, g, b [, flags]) → r, g, b, changed | Two functions. No alpha; components 0..1 |
 | CollapsingHeader | (label [, flags]) → bool | |
 | TreeNode | (label) → bool | |
 | TreePop | () → — | |
@@ -762,10 +773,11 @@ rectangle (`u0, v0, u1, v1`).
 | IsItemHovered | ([flags]) → bool | |
 | IsItemClicked | ([button=0]) → bool | |
 | IsItemActive | () → bool | |
+| IsItemDisabled | () → bool | The last item was drawn disabled |
 | IsItemFocused | () → bool | Gamepad nav cursor is on it |
 | IsItemDeactivatedAfterEdit | () → bool | |
 | GetItemID | () → int | |
-| GetItemRect | () → x0, y0, x1, y1 | |
+| GetItemRect | ([frame]) → x0, y0, x1, y1 | true: the control's own frame, without an outside label |
 | IsMouseClicked / IsMouseDoubleClicked / IsMouseReleased / IsMouseDown / IsMouseDragging | ([button=0]) → bool | Five functions. Button 0..4 |
 | IsMouseHoveringRect | (x0, y0, x1, y1) → bool | |
 | GetMousePos | () → x, y | |
@@ -797,6 +809,7 @@ rectangle (`u0, v0, u1, v1`).
 | PushStyleVar | (idx, x [, y]) → — | idx from ui.StyleVar |
 | PopStyleVar | ([n=1]) → — | Pops no more than the window's code pushed |
 | PushStyleVars | ({idx,x,y\|false, …}) → n | |
+| GetStyleAlpha | () → number | The style's opacity now, a disabled scope's included |
 | PushFont | ([fontIndex=3]) → — | EQ UI font 1..6 |
 | PushChatFont | ([index=2]) → — | Chat font 0..10. Pop with PopFont |
 | PopFont | () → — | Pops no more than the window's code pushed |
@@ -823,20 +836,25 @@ rectangle (`u0, v0, u1, v1`).
 #### Constant tables on `ui` (not functions)
 
 `WindowFlags`, `Cond`, `TableFlags`, `Col`, `StyleVar`, `TableColumnFlags`, `InputTextFlags`, `ComboFlags`,
-`SelectableFlags`, `Mouse` (Left/Right/Middle), `ButtonFlags`, `Key` (Escape, Enter, arrows, Space, A..Z, "0".."9"),
-`TabItemFlags`, `TabBarFlags`, `HoveredFlags`. Each holds a subset of ImGui's enum: see `register_ui_api`.
+`ColorEditFlags`, `SelectableFlags`, `Mouse` (Left/Right/Middle), `ButtonFlags`, `Key` (Escape, Enter, arrows, Space, A..Z, "0".."9"),
+`TabItemFlags`, `TabBarFlags`, `HoveredFlags`. Each holds a subset of ImGui's enum: see `register_ui_api` in `src/ui/lua/lua_imgui.cpp`.
 
 ### `hs`
 
 The tables below include `hs.gamepad.*`. The **Cap** column is what a plugin's code needs to call it; `—` means
 nothing beyond `ui`. A UI pack's own code may call everything. A refused call does nothing and gives `nil`, with one
-line in the log. The list is `src/app/lua_ui_caps.cpp`; a function missing from it is taken to act and needs
-`actions`. `self` means the function checks the caller itself, as each group's note says.
+line in the log. The list is the catalog in `src/app/lua_ui_api.inc` (applied by `src/app/lua_ui_caps.cpp`); a
+function missing from it is taken to act and needs `actions`. `self` means the function checks the caller itself, as each group's note says.
 
 Conventions: `[x]` is optional and `a | b` is one or the other. `name, child` is a stock window's name and a child's
 XML name (`"InventoryWindow", "IW_Money0"`). `slot` is a [possessions slot](#inventory-slots) and `bagSlot` a place
 in the bag at that slot, from 0. `hs.FirstWornSlot` (0), `LastWornSlot` (22), `FirstBagSlot` (23), `LastBagSlot` (32)
 and `CursorSlot` (33) are fields, not functions.
+
+The `hs.UI` services added since are documented in docs/ui-api.md only, with flat names of their own: `UiImage`
+(assets), `ItemExpTransfer*` and `ItemDisplay*Transfer` (evolving), `Extension*` (extensions), `UiHook*` (hooks),
+`Interface*` (interfaces), `MapPolicy` (map) and `Nameplate*` (nameplates). docs/ui-api-reference.md maps every
+flat name to its `hs.UI` one.
 
 The **item table** that `hs.Item`, `SlotItem`, `BagSlotItem`, `BankItem` and others return is `{name, id, icon,
 count, charges, stackSize, stackable, bagSlots, weight, magic, lore, type, size, ac, hp, mana, category, sellable}`,
@@ -919,6 +937,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
 | Tasks | () → tasks | all authoritative active tasks, independent of journal visibility or selection | — |
+| TasksRevision | () → revision, selectedId | what `Tasks` would change by, without building it (cheap); both 0 out of game | — |
 | OpenTask | (taskId) → bool | selects and opens an existing active task in the journal; false for an unknown ID | `commands` |
 
 `Tasks` returns an array in native task/shared/quest and slot order, plus `selectedId` (0 if none), `revision`
@@ -940,7 +959,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | GemTint | (name, child) → r, g, b, a | Spell gem tint by category | — |
 | GemOverlay | (name, child, y0, y1) → top, r, g, b, a \| nil | Gem cool-down rectangle | — |
 | GemInfo | (name, child [, into [, y0, y1]]) → t | All gem looks in one call: {shown, tooltip, tex,u0,v0,u1,v1, tintR..tintA, overlay, coolR..coolA, top}. `into` is filled only when it has no metatable (else a new table) | — |
-| ButtonCoolDown | (name, child, y0, y1) → top, r, g, b, a, remainingMs, reuseMs | A button's cool-down rectangle; first five answers unchanged (nil when idle), with remaining/focus-adjusted reuse milliseconds for combat ability buttons (both 0 while idle or without timing detail). Shared remaining time can exceed this ability's reuse | — |
+| ButtonCoolDown | (name, child, y0, y1) → top, r, g, b, a, remainingMs, reuseMs | A button's cool-down rectangle (nil when idle); combat ability buttons add remaining and focus-adjusted reuse ms (0 when idle or unknown). A shared timer's remaining time can exceed this ability's reuse | — |
 | BuffSlot | (name, child [, overlays]) → spellId, msLeft, name, beneficial, fade [, counter,cr,cg,cb, limit,lr,lg,lb] \| nil | Buff on a buff button. msLeft < 0 = permanent | — |
 | BuffOverlay | (name, child, "timer"\|"counter"\|"limit") → text, r, g, b \| nil | Overlay text on a buff button | — |
 | SpellGemClick | (child [, "left"\|"right"]) → ok | Cast, or forget (right) | actions |
@@ -1002,7 +1021,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | CascadeClick | (menu, item) → — | Click an item (1-based) | actions |
 | CascadeHover | (menu, item) → — | Hover an item | — |
 | CascadeClose | () → — | Close the cascade | — |
-| GameMenus | ([scale]) → {{x,y,w,h, rows={{text,r,g,b,check,enabled,separator,submenu}}}} | Open context menus | — |
+| GameMenus | ([scale [, width [, row_height [, separator_height]]]]) → {{x,y,w,h, rows={{text,r,g,b,check,enabled,separator,submenu}}}} | Open context menus. Optional pixel dimensions override the scaled text width and row sizes for fixed-size packs. | — |
 | GameMenuClick | (menu, row) → — | Menu 1-based, row 0-based | actions |
 | GameMenuHover | (menu, row) → — | Hover a row | — |
 | GameMenuClose | () → — | Close the menus | — |
@@ -1119,7 +1138,7 @@ achievement and reward-selection APIs.
 | ChatWindows | ([into]) → {{slot, title, windowTitle, main, tells, tab, select, tellsIn, tabs={{slot, title, unread, tell, scrollbar, flash, flashColor, highlighted}}}} | Shown chat windows. `into` is refilled in place (its records are reused at the next call) | — |
 | ChatText | (slot [, version [, names [, stamps [, incremental]]]]) → version [, lines [, reset, count]] | STML lines of the tab that is up. The incremental form gives only the new lines | — |
 | ChatInfo | (slot) → font, active, default, scrollbar, here | Tab font, active, default channel, scrollbar, Always Chat Here | — |
-| ChatSubmit | (slot, text) → — | Send a typed line (goes through the command filter, so the caller's caps apply) | — |
+| ChatSubmit | (slot, text) → — | Send a typed line (goes through the command filter, so the caller's caps apply). Plugin code's line stays out of the input history and does not activate the window | — |
 | ChatTakeFocus | (slot [, typed]) → text, replace \| nil | Text for the input when a chat key fires (Link All too). Nil to plugin code | — |
 | ChatHistory | (slot, older) → text\|nil | Step through lines sent before. Nil to plugin code | — |
 | ChatCycleReply | (text, back) → text\|nil | Tab / Shift+Tab reply cycling | — |
@@ -1234,6 +1253,8 @@ The item against what the player wears (docs/item-compare.md). `c` = {usable, wh
 | CompareSlotItem | (window, child) → c\|nil | The item in a window's item slot (as SlotItem) | — |
 | CompareBagSlotItem | (bagWindow, index) → c\|nil | The item in a bag window's slot | — |
 
+An item display's stat rows name the stat each shows: `hs.Text("ItemDisplayWindow", "IDW_Row<r>Col<c>Key")` (Hailstone's child; the stock window has none) is the row's `key` in `changes` (`"ac"`, `"str"`, `"svFire"`, ...), `""` for a row with no such stat (size, weight, damage). The packs draw each change beside its row's value with it.
+
 #### Find window (lua_ui_find.cpp)
 
 | Function | Args → returns | What | Cap |
@@ -1266,7 +1287,7 @@ The item against what the player wears (docs/item-compare.md). `c` = {usable, wh
 | gamepad.setting | (name) → number\|nil | gamepad.* setting | — |
 | gamepad.set_setting | (name, value) → ok | Set and save to hailstone.ini | commands |
 | gamepad.rumble | (low, high, ms) → ok | Rumble | — |
-| gamepad.request_focus | (window) → — | Menu mode, ImGui focus on that window | — |
+| gamepad.request_focus | (window) → — | Menu mode, ImGui focus on that window | commands |
 | gamepad.drop_cursor | () → ok | Drop the cursor item on the ground | actions |
 | gamepad.takes_b | () → — | A window closes itself on B this frame | — |
 
@@ -1431,6 +1452,7 @@ or -1 and say so in the chat window. Only call these on the client's thread, fro
 | `get_avail_aa_data_bulk(out, size)`, `get_avail_disc_data_bulk(out, size)` | `read` | the owned alternate abilities by ability (group) id, or the combat abilities by spell id, each with its name: an 8-byte `HS_Bulk_ListHeader` (i32 `count` of records written, i32 `total` the client holds), then `count` records (i32 id, i32 name size, the name's bytes), as many whole records as fit, so `count < total` means the buffer was too small (layout in docs/plugins.md "Buff, spawn, extended target and raid records"); returns the bytes written, 0 below 8. Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, <field>)` first |
 | `get_xtarget_data_bulk(out, size)` | `read` | every extended target slot: type, spawn id, aggro meter percent and HP percent, 16 bytes a slot, as many whole records as fit (layout in docs/plugins.md "Buff, spawn, extended target and raid records"); returns the bytes written. Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, get_xtarget_data_bulk)` first |
 | `get_raid_data_bulk(out, size)` | `read` | the raid roster: a 40-byte `HS_Bulk_RaidHeader`, then one `HS_Bulk_RaidData` per member, as many whole records as fit; the header says `active` 0 and `count` 0 outside a raid. Step records by the header's `recordSize` for `count` of them; `total` is the roster's member count, so `count < total` means the buffer was too small. Returns the bytes written. Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, get_raid_data_bulk)` first |
+| `get_spells_data_bulk(ids, id_count, out, size)` | `read` | spells by id: an i32 count, then per id, in order, an `HS_Bulk_SpellFixedRecord` (265 bytes; `found` 0 for an id the client has no spell for) followed by `slotCount` `HS_Bulk_SpellSlot` effect slots (12 on RoF2, `slotSize` bytes apart), `classCount` class levels (a byte each, 16 on RoF2), `stringCount` texts (fourteen today; the ninth its description, filled in for the player for their own spells: book, disciplines, owned AAs; the last five the names of its target type, resist type, category, subcategory and second subcategory) and its effect lines in MacroQuest's `ParseSpellEffect` wording, each a u16 length and the bytes; step by `recordSize`, as many whole records as fit (layout in docs/plugins.md). Returns the bytes written. Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, get_spells_data_bulk)` first |
 | `cursor_origin()` | `read` | how the item on the cursor got there: `HAILSTONE_CURSOR_ORIGIN_UNKNOWN` (0, also empty), `_INVENTORY` (1, the player's pickup) or `_SERVER` (2, the server put it on the empty cursor); docs/plugins.md "The cursor item's origin". Added later in ABI 3: test `HAILSTONE_HOST_HAS(host, cursor_origin)` first |
 | `add_ui_function(name, fn, user)`, `remove_ui_function` | `ui` | a function the plugin's windows call as `hs.Plugin("<name>").<name>(...)` |
 | `arg_count`, `arg(i, out)`, `arg_field(i, key, out)` | | a UI function's arguments |
@@ -1439,6 +1461,32 @@ or -1 and say so in the chat window. Only call these on the client's thread, fro
 | `add_menu(label, command)` | `ui` | an entry in the EQ menu's Plugins submenu |
 | `tcp_open(address, port)`, `tcp_state`, `tcp_send`, `tcp_recv`, `tcp_error`, `tcp_close` | `net` | the plugin's own TCP connections (docs/plugins.md "Connections (ABI 2)") |
 | `web_open(url, w, h)`, `web_navigate`, `web_nav`, `web_close`, `web_eval`, `web_post`, `web_text`, `web_message`, `web_state`, `web_view` | `web` | browser tabs (docs/plugins.md "Web pages") |
+| `use_ability(kind, name)`, `ability_state(kind, name, remaining_ms, reuse_ms)`, `get_ability_data_bulk(out, size)` | `actions` (the other two `read`) | use an Ability Book entry (as its row or hot button), its readiness, every entry at once. Added later in ABI 3: test `HAILSTONE_HOST_HAS` first |
+| `select_raid_member(spawn_id, incarnation)`, `raid_action(name, action, group)` | `read` and `target` / `actions` | targets a raid member; asks the server to move one, as the raid leader does. Added later in ABI 3 |
+| `decode_item_packet`, `inspect_item_packet`, `manual_follow`, `get_follow_status`, `get_memorized_spell`, `monotonic_ms`, `measure_binary`, `get_map_policy` | per function | docs/plugins.md "Server add-on services". Added later in ABI 3 |
+| `world_capabilities`, `world_floor_below`, `world_anchor`, `world_submit`, `world_surface_patch` | per function | docs/plugins.md "Transient world geometry". Added later in ABI 3 |
+| `nameplate_register`, `nameplate_unregister`, `nameplate_submit`, `nameplate_measure_text`, `nameplate_spell_icon` | `read`, `ui` and `extend` | a nameplate canvas provider (docs/plugins.md "Native world nameplate canvases"). Added later in ABI 3 |
+
+Bulk reads (layout in docs/plugins.md "Buff, spawn, extended target, ability and raid records"): each returns the bytes
+written. Each was added later in ABI 3: test `HAILSTONE_HOST_HAS(host, <field>)` first (for example
+`HAILSTONE_HOST_HAS(host, get_buff_name_data_bulk)`, `HAILSTONE_HOST_HAS(host, get_xtarget_data_bulk)`,
+`HAILSTONE_HOST_HAS(host, get_raid_data_bulk)`).
+
+1. The records are packed, in the machine's byte order.
+   - Player buffs: `size` must hold every buff and song slot, RoF2's 1798 bytes, or 0 comes back. One record more,
+     1827, brings the discipline slot, the last.
+   - Target buffs: an 8-byte `HS_Bulk_ListHeader` (i32 `count` of records written, then i32 `total` the client
+     holds), then as many records as fit, each followed by its caster's name. The header alone, 0 and 0, comes with
+     no target or before the server sent the target's buffs; 0 bytes below 8.
+   - Spawns: `size` at least 4096, or 0 comes back; 4112 for any record.
+2. The records are as `get_buff_data_bulk` gives them, each 29-byte record followed by the name. `size` must hold every buff and song slot with their names, or 0
+   comes back. The discipline slot comes when its record and name fit too.
+3. An 8-byte `HS_Bulk_ListHeader` (i32 `count` of records written, i32 `total` the client holds), then `count`
+   records (i32 id, i32 name size, the name's bytes), as many whole records as fit. `count < total` means the buffer
+   was too small. 0 bytes below 8.
+4. As many whole records as fit. The header says `active` 0 and `count` 0 outside a raid. Step records by the
+   header's `recordSize` for `count` of them. `total` is the roster's member count, so `count < total` means the
+   buffer was too small.
 
 ### Hook table
 
@@ -1476,6 +1524,10 @@ the original client's functions that a hook stands in for.
 | `const char* command_line(const char* line)` | a typed or scripted line after `${...}` parsing: a replacement line, or NULL to keep it |
 | `int map_spawn(const HailstoneSpawn*, HailstoneMapSpawn* out)` | the game's maps show only the group by themselves: nonzero shows this spawn as `*out` says |
 
+Hooks added later in ABI 3 are described in docs/plugins.md: `map_policy`, `map_visible`, `merchant_right_click`,
+`item_flags`, `item_description_append`, `item_presentation_revision`, `loot_confirmation` and `zone_display_name`
+("Server add-on services"), and `world_frame` and `world_frame_result` ("Transient world geometry").
+
 When several plugins extend the client, it asks them in load order and the first answer wins
 (`src/game/server_ext_chain.h`).
 
@@ -1486,10 +1538,10 @@ so a plugin built against an older SDK keeps working. Names are copied in, cut t
 
 | Struct | Fields |
 |---|---|
-| `HailstonePlayer` | `spawn_id, name[64], level, race, class_id, visible_class, class_mask, cur_hp, max_hp (int64), cur_mana, max_mana, cur_endurance, max_endurance, target_id, zone_id, game_state, in_group, in_raid, spell_book_open, buff_slots, xtarget_slots, casting_spell_id, scribing_spell_id, stand_state, pet_id, filter_pc_spells, in_zone` |
-| `HailstoneSpawn` | `id, name[64], level, class_id, race, owner_id, guild_id, is_npc, is_corpse, x, y, z, heading (0..512), hp_percent, rider_id, is_mercenary, is_gm, in_group, con_color, body_types[4], body_type_count` |
+| `HailstonePlayer` | `spawn_id, name[64], level, race, class_id, visible_class, class_mask, cur_hp, max_hp (int64), cur_mana, max_mana, cur_endurance, max_endurance, target_id, zone_id, game_state, in_group, in_raid, spell_book_open, buff_slots, xtarget_slots, casting_spell_id, scribing_spell_id, stand_state, pet_id, filter_pc_spells, in_zone, zone_instance, observation_flags` |
+| `HailstoneSpawn` | `id, name[64], level, class_id, race, owner_id, guild_id, is_npc, is_corpse, x, y, z, heading (0..512), hp_percent, rider_id, is_mercenary, is_gm, in_group, con_color, body_types[4], body_type_count`; ABI 3 appends `incarnation, observation_flags, mana_percent, endurance_percent, social_flags, anon, last_name[64], guild_name[64], display_name[64]` (check `size`) |
 | `HailstoneSpell` | `id, name[64], class_level[16] (255 cannot use), timer_id, cast_time_ms, recovery_time_ms, recast_time_ms, mana, target_type, skill, is_skill, gem_icon` |
-| `HailstoneItem` | `id, name[64], item_type, item_class, classes, races, icon, stack_count, charges, click_spell, scroll_spell` |
+| `HailstoneItem` | `id, name[64], item_type, item_class, classes, races, icon, stack_count, charges, click_spell, scroll_spell, serial[17], instance_id, augment_ids[6], configuration_complete` |
 | `HailstoneItemSlot` | `type` (0 the player's possessions), `slot`, `sub` (-1 the slot itself), `aug` (-1 none); no `size` |
 | `HailstoneBuff` | `spell_id` (0 empty), `tics` (unsigned: a permanent buff's negative count as its bits, 0xffffffff for -1), `level, caster_id` |
 | `HailstoneXTarget` | `type, status, spawn_id, name[64]` |

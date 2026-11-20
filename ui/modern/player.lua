@@ -2,8 +2,8 @@
 -- (the game's own values: hs.Gauge / hs.Label by EQType), experience and alternate advancement experience (the
 -- inventory's gauges 4 and 5) under them, the spell being cast, and while auto attack is on a pulsing red ring with a
 -- halo, a red wash over the frame and a red level badge (the pet's health is the Pet window's). The cast bar replaces
--- the game's CastingWindow: shown while the game shows it, the spell's name over a bar that fills as the cast
--- completes (the casting gauge counts the time left down from 1).
+-- the game's CastingWindow: the spell's name over a bar that fills as the cast completes (the casting gauge
+-- counts the time left down from 1). The frame menu can keep the empty bar visible between casts.
 local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local roles = dofile("lib/role_icons.lua")
@@ -12,6 +12,7 @@ local C = T.color
 local WINDOW = "PlayerWindow"
 local ROLE_COLORS = { C.mana, C.accent, C.endurance }
 local CAST_H = 24 -- the cast bar's row (design pixels)
+local CAST_BAR_SETTING = "player.alwaysShowCastBar"
 
 -- The classes' short names, for a multiclass server's list when the full names do not fit (a level title the
 -- table does not know shows its first three letters).
@@ -108,7 +109,7 @@ local function combatState(cx, cy, r, s)
 end
 
 -- What this frame's options and body read, set before hud.Window each frame (made once, not every frame).
-local frame = { caster = false, casting = false, manaFrac = nil, attack = nil } -- attack: the pulse, 0..1, or nil
+local frame = { caster = false, casting = false, showCastBar = false, manaFrac = nil, attack = nil }
 local GLOW = { 0, 0, 0, 0 }
 local PANEL_OPTS = { glowWidth = 3 }
 local NO_TRAIL = { noTrail = true }
@@ -116,12 +117,16 @@ local pctXp, pctXpText, pctAa, pctAaText = nil, "", nil, "" -- the XP and AA per
 local HP_BAR = {}
 local NAME_COLOR = { 0, 0, 0, 1 }
 local OPTS = {
-  size = function() return 300, 104 + (frame.caster and 12 or 0) + (frame.casting and CAST_H or 0) end,
+  size = function() return 300, 104 + (frame.caster and 12 or 0) + (frame.showCastBar and CAST_H or 0) end,
   panelOpts = PANEL_OPTS,
+  menu = function()
+    local always = T.Setting(CAST_BAR_SETTING) == "1"
+    if ui.MenuItem("Always show cast bar", always) then ui.SetSetting(CAST_BAR_SETTING, always and "0" or "1") end
+  end,
 }
 
 local function body(x, y, w, h, s)
-  local caster, casting = frame.caster, frame.casting
+  local caster = frame.caster
   local pad = 10 * s
   local attack = frame.attack
   if attack then -- auto attack: a red wash over the frame, under its contents
@@ -234,13 +239,16 @@ local function body(x, y, w, h, s)
       ui.EndTooltip()
     end
   end
-  if casting then
-    local left, _, raw = API.character.Gauge(7)
-    local done = (left and raw ~= -1) and (1 - left) or 0
+  if frame.showCastBar then
     local x0, x1 = x + pad, x + w - pad
     local cy = y + h - pad - (CAST_H - 2) * s
     local _, th = T.TextSize("Ag", T.font.tiny)
-    T.Text(x0, cy, T.Fit(API.character.Label(134) or "", x1 - x0, T.font.tiny), C.text, T.font.tiny)
+    local done
+    if frame.casting then
+      local left, _, raw = API.character.Gauge(7)
+      done = (left and raw ~= -1) and (1 - left) or 0
+      T.Text(x0, cy, T.Fit(API.character.Label(134) or "", x1 - x0, T.font.tiny), C.text, T.font.tiny)
+    end
     T.Bar("player.cast", x0, cy + th + 2 * s, x1, cy + th + 9 * s, s, done, C.cast, NO_TRAIL)
   end
 end
@@ -250,6 +258,7 @@ ui.window("Player", function()
   local manaFrac, _, manaRaw = API.character.Gauge(2)
   frame.caster, frame.manaFrac = manaRaw ~= -1, manaFrac
   frame.casting = API.windows.Shown("CastingWindow")
+  frame.showCastBar = frame.casting or T.Setting(CAST_BAR_SETTING) == "1"
   local attacking = API.windows.ChildShown(WINDOW, "A_AttackIndicatorAnimTop") == true
   local glow, attack = nil, nil
   if attacking then

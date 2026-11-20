@@ -296,6 +296,10 @@ public:
     // bones from upper_clip when it has one), model space.
     static void pose_bones(const ActorDraw& a, std::vector<assets::BonePose>& local,
                            std::vector<assets::BonePose>& previous, std::vector<glm::mat4>& world);
+    static PoseInput pose_input(const ActorDraw& a); // what pose_bones poses
+    // /debug_animinfo: describe_pose of the spawn as last drawn (render/actor_layers.h), empty when it was not drawn.
+    // Main thread only.
+    std::vector<std::string> describe_animation(std::uint32_t id) const;
     // drawn_bone's pose of one spawn: model-space bones and the instance matrix, posed as bone_world poses them
     // when not valid, then read until marked stale. local/previous: pose_bones' scratch.
     struct BonePoseCache {
@@ -383,6 +387,9 @@ private:
         ActorLayers layers; // the two bone groups and the action playing (OP_Animation)
         bool new_style = false; // the new-style animation object drew it last
         bool seen = false;
+        // Drawn alive last frame (not a corpse, not lying down): a visible living -> dead transition plays the fall,
+        // even when the model changes in the same frame.
+        bool drawn_alive = false;
         // Not drawn on purpose (prepare_spawns): kept only so the look it wears is not freed; drawn again, it
         // starts as a new state.
         bool hidden = false;

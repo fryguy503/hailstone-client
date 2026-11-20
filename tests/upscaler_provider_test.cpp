@@ -211,3 +211,23 @@ TEST_CASE("upscaler provider: what keeps one out") {
     CHECK_FALSE(load_upscaler_setting("missing", kFixtures));
     CHECK(load_upscaler_setting("example", kFixtures));
 }
+
+// The loader under SharedLibrary (and the compiled plugins'): on Windows LoadLibraryExW with the library's folder and
+// the safe system folders only, set for the whole process by restrict_dll_search as main does. The example provider
+// (beside its fixtures) and the client's own DLLs still load after that.
+TEST_CASE("shared library: the raw loader, and loading after the DLL search is restricted") {
+    hailstone::platform::restrict_dll_search();
+    std::string error;
+    CHECK(hailstone::platform::load_library(kFixtures / "missing" / "nothing.bin", &error) == nullptr);
+    CHECK_FALSE(error.empty());
+    CHECK(hailstone::platform::library_symbol(nullptr, "x") == nullptr);
+    hailstone::platform::unload_library(nullptr); // nothing
+    const std::string suffix(hailstone::platform::shared_library_suffix());
+    void* lib = hailstone::platform::load_library(kFixtures / "example" / ("example" + suffix), &error);
+    REQUIRE_MESSAGE(lib, error);
+    CHECK(hailstone::platform::library_symbol(lib, HAILSTONE_UPSCALER_ENTRY) != nullptr);
+    CHECK(hailstone::platform::library_symbol(lib, "no_such_export") == nullptr);
+    hailstone::platform::unload_library(lib);
+    auto p = UpscalerProvider::load(kFixtures, "example", error);
+    CHECK_MESSAGE(p, error);
+}

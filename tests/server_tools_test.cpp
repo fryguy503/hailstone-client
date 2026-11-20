@@ -102,4 +102,28 @@ TEST_CASE("check_core_names.py: a name with NMS then any C, and NMS in a Lua lon
     CHECK(out.find("ok.lua") == std::string::npos);
 }
 
+TEST_CASE("check_core_names.py: raw strings are code whatever they hold, and ui ini and Objective-C++ are scanned") {
+    if (!have_python()) return;
+    hailstone::test::ScratchDir dir("core_names_raw");
+    const fs::path root = dir.path() / "repo";
+    fs::create_directories(root / "src");
+    fs::create_directories(root / "ui" / "pack");
+    const fs::path script = repo_root() / "tools" / "check_core_names.py";
+    // A raw string's "//" and quotes are text, and a comment after it still goes.
+    std::ofstream(root / "src" / "ok.cpp") << "auto a = R\"x(\"q\" )\" text)x\"; // NMS\n"
+                                              "/* nms */ int FOOR = 0;\n";
+    std::ofstream(root / "ui" / "pack" / "ui.ini") << "; NMS in a comment\nname=Modern\n";
+    CHECK(run_python(script, quote(root), dir.path() / "out") == 0);
+    std::ofstream(root / "src" / "bad.cpp") << "const char* s = R\"(\n// not a comment\nnms_login\n)\";\n"
+                                               "auto t = u8R\"d(\"//\" NMS)d\";\n";
+    std::ofstream(root / "ui" / "pack" / "bad.ini") << "# fine\nname=NMS pack\n";
+    std::ofstream(root / "src" / "bad.mm") << "auto s = @\"nms\";\n";
+    CHECK(run_python(script, quote(root), dir.path() / "out") == 1);
+    const std::string out = read_all(dir.path() / "out");
+    for (const char* line : {"src/bad.cpp:3:", "src/bad.cpp:5:", "ui/pack/bad.ini:2:", "src/bad.mm:1:"})
+        CHECK_MESSAGE(out.find(line) != std::string::npos, line);
+    CHECK(out.find("ok.cpp") == std::string::npos);
+    CHECK(out.find("ui.ini") == std::string::npos);
+}
+
 #endif

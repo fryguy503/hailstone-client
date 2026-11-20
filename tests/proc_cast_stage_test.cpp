@@ -132,3 +132,32 @@ TEST_CASE("A proc's cast animation: the spell's own, else the heal or nuke cast 
     REQUIRE(rig.until([&] { return sent_animation().has_value(); }));
     CHECK(sent_animation()->action == expected); // the zone sees what plays here
 }
+
+TEST_CASE("One spell's landings on several targets send the local player's OP_Animation once") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& conn = rig.conn;
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(spell_line(kNuke, 24) + spell_line(kSong, 41)) == 2);
+    conn.set_spell_table_for_test(table);
+    const auto me = static_cast<std::uint16_t>(conn.world().player_id);
+    REQUIRE(me != 0);
+    constexpr std::uint16_t kFirst = 900, kSecond = 901, kThird = 902;
+    auto sent = [&] {
+        std::size_t n = 0;
+        for (const auto& p : rig.server.zone_log)
+            if (p.opcode == net::to_wire(net::Op::Animation)) ++n;
+        return n;
+    };
+    rig.server.zone_log.clear();
+    // A group song's pulse: one landing (two OP_Actions) per target.
+    for (std::uint16_t target : {kFirst, kSecond, kThird}) {
+        conn.receive_zone_packet_for_test(landing(kSong, me, target, 0));
+        conn.receive_zone_packet_for_test(landing(kSong, me, target, 4));
+    }
+    // Another spell landing at once sends its own.
+    conn.receive_zone_packet_for_test(landing(kNuke, me, kFirst, 0));
+    REQUIRE(rig.until([&] { return sent() >= 2; }));
+    rig.run_for(std::chrono::milliseconds(50));
+    CHECK(sent() == 2);
+}

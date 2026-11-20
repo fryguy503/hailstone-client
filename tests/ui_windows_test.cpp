@@ -179,11 +179,11 @@ TEST_CASE("HUD invisibility captions use viewer awareness and the undead display
     target.is_corpse = true;
     check_captions("Visitor");
 
-    // The player's own caption: the marks round the name, before the last name's line.
+    // The player's own caption marks Sneak + Hide even without a spawn appearance update.
     auto& me = world.spawns[10];
     me.name = "Hero";
     me.last_name = "Smith";
-    me.invis_rank = 1;
+    t.conn.note_hide_state(true, true);
     lua_settop(lua.get(), 0);
     REQUIRE(luaL_dostring(lua.get(), R"lua(
         local character = hs.UI.character
@@ -798,6 +798,120 @@ constexpr const char* kTextRectHook = R"lua(
 )lua";
 
 } // namespace
+
+TEST_CASE("Modern Player: Always show cast bar keeps the cast row and frame height between casts") {
+    RolePackRig r("modern", {"player.lua"});
+    REQUIRE(r.run(R"lua(
+      local load, menuItem, gauge, label = dofile, ui.MenuItem, hs.Gauge, hs.Label
+      dofile = function(path)
+        local module = load(path)
+        if path == 'lib/hud.lua' then
+          local bar = module.T.Bar
+          module.T.Bar = function(key, x0, y0, x1, y1, scale, fraction, ...)
+            if key == 'player.cast' then castTrackDrawn, castFraction = true, fraction end
+            return bar(key, x0, y0, x1, y1, scale, fraction, ...)
+          end
+        end
+        return module
+      end
+      ui.MenuItem = function(name, checked, ...)
+        local clicked = menuItem(name, checked, ...)
+        if name == 'Always show cast bar' then
+          local x0, y0, x1, y1 = ui.GetItemRect()
+          castMenuX, castMenuY, castMenuChecked = (x0 + x1) / 2, (y0 + y1) / 2, checked
+        end
+        return clicked
+      end
+      hs.Gauge = function(id, ...)
+        if id == 7 then castGaugeRead = true end
+        return gauge(id, ...)
+      end
+      hs.Label = function(id, ...)
+        local value, red, green, blue = label(id, ...)
+        if id == 134 then castLabel = value end
+        return value, red, green, blue
+      end
+      return true
+    )lua") == "true");
+
+    net::PlayerProfile profile;
+    profile.name = "Soloist";
+    profile.class_ = 8;
+    r.t.conn.set_profile_for_test(profile);
+    r.t.api->show("PlayerWindow", true);
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(mq_test::spell_line({{0, "717"}, {1, "Fixture Song"}, {13, "600000"}})) == 1);
+    r.t.conn.set_spell_table_for_test(table);
+    auto& cast = net::GameConnectionTestAccess::spells(r.t.conn).casting;
+
+    const auto draw = [&](const char* expected) {
+        REQUIRE(r.run("castTrackDrawn, castFraction, castGaugeRead, castLabel = nil, nil, nil, nil; return true") == "true");
+        r.frames(2);
+        CHECK(r.run(expected) == "true");
+        const auto* frame = ImGui::FindWindowByName("###modern.PlayerWindow");
+        REQUIRE(frame);
+        REQUIRE(frame->Active);
+        return frame->Size.y;
+    };
+    const auto start_cast = [&] {
+        cast.spell = 717;
+        cast.eta_ms = net::GameConnection::now_ms() + 300000;
+    };
+    constexpr auto hidden = "return not castTrackDrawn and not castGaugeRead and castLabel == nil";
+    constexpr auto empty = "return castTrackDrawn and (castFraction == nil or castFraction == 0) "
+                           "and not castGaugeRead and castLabel == nil";
+    constexpr auto active = "return castTrackDrawn and castFraction > 0 and castFraction < 1 "
+                            "and castGaugeRead and castLabel == 'Fixture Song'";
+
+    const float idle_height = draw(hidden);
+    start_cast();
+    const float cast_height = draw(active);
+    CHECK(cast_height > idle_height);
+    cast = {};
+    CHECK(draw(hidden) == idle_height);
+
+    const auto click_menu = [&](bool checked) {
+        REQUIRE(r.run("castMenuX, castMenuY, castMenuChecked = nil, nil, nil; return true") == "true");
+        auto& io = ImGui::GetIO();
+        const auto* frame = ImGui::FindWindowByName("###modern.PlayerWindow");
+        REQUIRE(frame);
+        io.AddMousePosEvent(frame->Pos.x + 10, frame->Pos.y + 12);
+        r.frames(2);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        r.frames(3);
+        CHECK(r.run(checked ? "return castMenuChecked == true" : "return castMenuChecked == false") == "true");
+        REQUIRE(r.run("return castMenuX ~= nil and castMenuY ~= nil") == "true");
+        lua_State* state = r.lua->state();
+        lua_getglobal(state, "castMenuX");
+        lua_getglobal(state, "castMenuY");
+        io.AddMousePosEvent(static_cast<float>(lua_tonumber(state, -2)), static_cast<float>(lua_tonumber(state, -1)));
+        lua_pop(state, 2);
+        r.frames(2);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        r.frames(2);
+    };
+
+    click_menu(false);
+    CHECK(r.lua->setting("player.alwaysShowCastBar") == "1");
+    r.lua->set_character_settings(r.scratch.path() / "character.txt"); // flush the shared settings before reopening
+    {
+        ui::lua::LuaUi saved({}, r.scratch.path() / "pack.txt");
+        CHECK(saved.setting("player.alwaysShowCastBar") == "1");
+    }
+    CHECK(draw(empty) == cast_height);
+    start_cast();
+    CHECK(draw(active) == cast_height);
+    cast = {};
+    CHECK(draw(empty) == cast_height);
+
+    click_menu(true);
+    CHECK(r.lua->setting("player.alwaysShowCastBar") == "0");
+    CHECK(draw(hidden) == idle_height);
+}
 
 TEST_CASE("Group role UI packs: the modern Player window's name keeps the frame menu when no role menu opens") {
     RolePackRig r("modern", {"player.lua"});
@@ -1785,13 +1899,17 @@ TEST_CASE("Tracking window: its controls run the /track commands, auto update ke
     CHECK(read.on(game::ClientOption::TrackAutoUpdate));
 }
 
-// The hot bar's Lock layout row (Hailstone's): on the window's own menu (the modern UI's frames), with the layout
-// setting it toggles; not on hs.HotBarMenu's (the gamepad pack's pages, which have no frame to lock).
-TEST_CASE("Hot bar: Lock layout on the window's menu only, toggling hud.lock.<window>") {
-    const GameDir* g = test::game_dir();
-    if (!g) return;
-    Harness t(*g);
-    std::map<std::string, std::string, std::less<>> settings;
+TEST_CASE("Hot bar: Lock layout is separate from frame locks") {
+    test::ScratchDir scratch("hotbar_layout_lock");
+    std::ofstream(scratch.path() / "eqstr_us.txt")
+        << "EQST0002\n7661 Activate\n7662 Clear\n7663 Assign Social\n7664 Assign Icon\n"
+           "7665 Assign Label\n7671 Change Size\n7674 Button Size\n8028 Clear current hotbuttons\n";
+    GameDir game(scratch.path());
+    Harness t(game);
+    game::HotButtonStore store;
+    store.current(1, 0).type = game::HotButtonType::MenuButton;
+    t.host.hot_buttons = &store;
+    std::map<std::string, std::string, std::less<>> settings{{"hud.lock.HotButtonWnd2", "1"}, {"hud.locked", "1"}};
     t.host.layout_setting = [&](std::string_view key) {
         auto it = settings.find(key);
         return it == settings.end() ? std::string() : it->second;
@@ -1799,26 +1917,112 @@ TEST_CASE("Hot bar: Lock layout on the window's menu only, toggling hud.lock.<wi
     t.host.set_layout_setting = [&](std::string_view key, std::string_view value) {
         settings[std::string(key)] = std::string(value);
     };
-    auto lock_row = [&]() -> const app::UiHost::MenuRow* {
-        REQUIRE(t.host.menus.size() == 1);
+    auto find_row = [&](std::string_view label) -> const app::UiHost::MenuRow* {
+        if (t.host.menus.empty()) return nullptr;
         for (const auto& r : t.host.menus[0].rows)
-            if (r.text == "Lock layout") return &r;
+            if (r.text == label) return &r;
         return nullptr;
     };
+    auto enabled = [&](std::string_view label) {
+        const auto* r = find_row(label);
+        return r && r->enabled;
+    };
+    auto click_lock = [&] {
+        const auto* r = find_row("Lock layout");
+        REQUIRE(r);
+        CHECK(t.api->menu_click(0, static_cast<int>(r - t.host.menus[0].rows.data())));
+    };
     CHECK(t.api->context_menu("HotButtonWnd2", 10, 10));
-    const app::UiHost::MenuRow* lock = lock_row();
-    REQUIRE(lock);
-    CHECK_FALSE(lock->check);
-    const int at = static_cast<int>(lock - t.host.menus[0].rows.data());
-    CHECK(t.api->menu_click(0, at));
+    REQUIRE(find_row("Lock layout"));
+    CHECK_FALSE(find_row("Lock layout")->check);
+    CHECK(enabled("Button Size"));
+    CHECK(enabled("Clear current hotbuttons"));
+    click_lock();
+    CHECK(settings["hud.lockLayout.HotButtonWnd2"] == "1");
+
+    t.api->click_hot_button("HotButtonWnd2", "HB_Button2", "left");
+    CHECK(t.host.menus.empty());
+    t.api->click_hot_button("HotButtonWnd2", "HB_Button1", "rightheld");
+    CHECK(enabled("Activate"));
+    for (std::string_view label : {"Clear", "Assign Social", "Assign Icon", "Assign Label", "Change Size"})
+        CHECK_FALSE(enabled(label));
+
+    CHECK(t.api->context_menu("HotButtonWnd2", 10, 10));
+    REQUIRE(find_row("Lock layout"));
+    CHECK(find_row("Lock layout")->check);
+    CHECK_FALSE(enabled("Button Size"));
+    CHECK_FALSE(enabled("Clear current hotbuttons"));
+    click_lock();
+    CHECK(settings["hud.lockLayout.HotButtonWnd2"] == "0");
     CHECK(settings["hud.lock.HotButtonWnd2"] == "1");
-    CHECK(t.api->context_menu("HotButtonWnd2", 10, 10));
-    REQUIRE(lock_row());
-    CHECK(lock_row()->check);
-    CHECK(t.api->menu_click(0, at));
-    CHECK(settings["hud.lock.HotButtonWnd2"] == "0");
+    CHECK(settings["hud.locked"] == "1");
+
+    t.api->click_hot_button("HotButtonWnd2", "HB_Button1", "rightheld");
+    for (std::string_view label : {"Clear", "Assign Social", "Assign Icon", "Assign Label", "Change Size"})
+        CHECK(enabled(label));
+
     // hs.HotBarMenu's path (no layout lock): the row is not there
     t.host.menus.clear();
     app::open_hot_bar_menu(t.host, 1, 10, 10);
-    CHECK(lock_row() == nullptr);
+    REQUIRE_FALSE(t.host.menus.empty());
+    CHECK(find_row("Lock layout") == nullptr);
+}
+
+TEST_CASE("Hot bar: the modern UI only drags buttons when its layout is unlocked") {
+    game::HotButtonStore store;
+    store.current(0, 0).type = game::HotButtonType::MenuButton;
+    RolePackRig r("modern", {"hotbuttons.lua"});
+    r.t.host.hot_buttons = &store;
+    r.t.host.set_hot_button = [&](int bar, int button, const game::HotButton& b) { store.current(bar, button) = b; };
+    r.t.host.layout_setting = [&](std::string_view key) { return r.lua->setting(key); };
+    r.t.api->show("HotButtonWnd", true);
+    REQUIRE(r.lua->set_setting("test.pos.HotButtonWnd", "100,100"));
+    REQUIRE(r.lua->set_setting("hud.lockLayout.HotButtonWnd", "1"));
+    REQUIRE(r.run(R"lua(
+        hotbarCenters = {}
+        local invisible = ui.InvisibleButton
+        ui.InvisibleButton = function(id, ...)
+            local clicked = invisible(id, ...)
+            if id == "##HB_Button1" or id == "##HB_Button2" then
+                local x0, y0, x1, y1 = ui.GetItemRect()
+                hotbarCenters[id] = {(x0 + x1) / 2, (y0 + y1) / 2}
+            end
+            return clicked
+        end
+        return true
+    )lua") == "true");
+    r.frames(3);
+    auto center = [&](const char* id) {
+        lua_State* L = r.lua->state();
+        lua_getglobal(L, "hotbarCenters");
+        lua_getfield(L, -1, id);
+        REQUIRE(lua_istable(L, -1));
+        lua_rawgeti(L, -1, 1);
+        lua_rawgeti(L, -2, 2);
+        const ImVec2 p(static_cast<float>(lua_tonumber(L, -2)), static_cast<float>(lua_tonumber(L, -1)));
+        lua_pop(L, 4);
+        return p;
+    };
+    auto drag = [&] {
+        auto& io = ImGui::GetIO();
+        const ImVec2 from = center("##HB_Button1"), to = center("##HB_Button2");
+        io.AddMousePosEvent(from.x, from.y);
+        r.frames(2);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        r.frames(1);
+        io.AddMousePosEvent(to.x, to.y);
+        r.frames(2);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        r.frames(2);
+    };
+    drag();
+    CHECK(store.current(0, 0).type == game::HotButtonType::MenuButton);
+    CHECK(store.current(0, 1).empty());
+    CHECK_FALSE(r.t.host.cursor_button);
+
+    REQUIRE(r.lua->set_setting("hud.lockLayout.HotButtonWnd", "0"));
+    drag();
+    CHECK(store.current(0, 0).empty());
+    CHECK(store.current(0, 1).type == game::HotButtonType::MenuButton);
+    CHECK_FALSE(r.t.host.cursor_button);
 }

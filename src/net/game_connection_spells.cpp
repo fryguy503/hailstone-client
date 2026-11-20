@@ -14,6 +14,7 @@
 #include "core/log.h"
 #include "game/appearance.h"
 #include "game/coords.h"
+#include "game/counter_spas.h"
 #include "net/game_connection.h"
 #include "game/hit_landing.h"
 #include "game/mechanics/character.h"
@@ -41,9 +42,32 @@ std::string spell_name(const game::SpellTable& table, std::uint32_t id) {
 constexpr std::int64_t kCastLandingSlackMs = 3000;
 constexpr std::int64_t kProcLandingMs = 500;
 
-// A bard song's skill (brass, singing, stringed, percussion, wind): its pulses land without a cast of their own.
+// OP_Action's effect flag 4 marks the second of a landing's two actions.
+constexpr std::uint8_t kSecondActionFlag = 4;
+// The speed an OP_Animation carries (the original's 10).
+constexpr std::uint8_t kAnimationSpeed = 10;
+// SpellEffectCue::stage: 0 the cast stage, 2 the impact stage.
+constexpr int kCastStage = 0, kImpactStage = 2;
+// How long one spell's landings on several targets share the local player's OP_Animation.
+constexpr std::int64_t kLandingAnimationMs = 500;
+
+// A bard song's skill: brass, singing, stringed, percussion and wind. Its pulses land without a cast of their own.
+constexpr std::uint8_t kSkillBrass = 12, kSkillSinging = 41, kSkillStringed = 49, kSkillPercussion = 54,
+                         kSkillWind = 70;
 bool is_song_skill(std::uint8_t skill) {
-    return skill == 12 || skill == 41 || skill == 49 || skill == 54 || skill == 70;
+    return skill == kSkillBrass || skill == kSkillSinging || skill == kSkillStringed || skill == kSkillPercussion ||
+           skill == kSkillWind;
+}
+
+// EQEmu fades a fully cured buff before the cure's OP_Action. Note which counter types the fading buff carried, so
+// the cure prediction can leave the still-standing buffs of those types alone: the server already applied the cure.
+void note_counter_spa_fade(std::uint8_t& mask, const game::SpellTable& table, std::uint32_t spell_id) {
+    const game::SpellData* spell = table.get(spell_id);
+    if (!spell) return;
+    for (std::int32_t effect : spell->effect) {
+        const int index = game::counter_spa_index(effect);
+        if (index >= 0) mask |= static_cast<std::uint8_t>(1u << index);
+    }
 }
 
 } // namespace
@@ -69,6 +93,12 @@ std::uint32_t GameConnection::player_class_mask() const {
     std::uint32_t mask = server_class_mask();
     if (mask == 0 && profile_ && profile_->class_ >= 1 && profile_->class_ <= 16) mask = 1u << (profile_->class_ - 1);
     return mask;
+}
+
+bool GameConnection::knows_discipline(std::uint32_t id) const {
+    if (!profile_ || id == 0 || id == game::kNoSpell) return false;
+    const auto& disciplines = profile_->disciplines;
+    return std::find(disciplines.begin(), disciplines.end(), id) != disciplines.end();
 }
 
 void GameConnection::spell_message(std::uint32_t eqstr, std::vector<std::string> args, std::uint32_t color) {
@@ -371,10 +401,15 @@ void GameConnection::memorize_tick(std::int64_t now) {
         if (!stats) {
             auto& v = stats.emplace(std::array<std::int32_t, 3>{});
             with_character([&](game::mechanics::Character& ch) {
-                v[2] = ch.adjusted_skill(31);
-                ch.process_all_stats(); // CalcDEX / CalcINT read the item totals ProcessAllStats keeps
-                v[0] = ch.calc_dex(true);
-                v[1] = ch.calc_int(true);
+                constexpr std::uint32_t kMeditate = 31;
+                // with_character's effect-only tables have zero skill caps. Use the game's caps for GetAdjustedSkill;
+                // without SkillCaps.txt, the trained value (the client's own fallback: the original always has it).
+                const auto& game_tables = tables();
+                game::mechanics::Character memorizer(ch.sheet(), game_tables, ch.spells());
+                v[2] = game_tables.skill_caps.empty() ? ch.sheet().skills[kMeditate] : memorizer.adjusted_skill(kMeditate);
+                memorizer.process_all_stats(); // CalcDEX / CalcINT read the item totals ProcessAllStats keeps
+                v[0] = memorizer.calc_dex(true);
+                v[1] = memorizer.calc_int(true);
             });
         }
         return (*stats)[static_cast<std::size_t>(which)];
@@ -674,13 +709,16 @@ game::NameInvisibility GameConnection::name_invisibility(const game::Spawn& s, b
     if (s.id == 0 || s.is_corpse || s.race >= 0x8cd) return {};
     game::NameInvisibility marks;
     // Another spawn's +0x338 is the server's (the spawn record, then SpawnAppearance 3). The player's own is set by
-    // EQ_Character::UpdateMyVisibleStatus @0x459510 from its own effects (CalcInvisLevel @0x442770, the character's
-    // virtual +0x20): above 0 for regular invisibility (SPAs 12 and 314), -2 and -1 for invisibility versus undead
-    // and versus animals, which get no parentheses. The Hide skill does not count, and stock EQEmu sends the hider
-    // no SpawnAppearance for it: a hidden player's own name stays plain.
+    // EQ_Character::UpdateMyVisibleStatus @0x459510 from the character's virtual +0x20, PcZoneClient's @0x5804e0:
+    // for regular invisibility the larger of the Hide level (PcClient virtual +0x74 @0x57f5f0: 0 unless the
+    // PcBase hide flag +0x990d is set, else 1 plus the SPA 256 total) and CalcInvisLevel @0x442770 (SPAs 12 and
+    // 314), so Hide counts. -2 and -1 for invisibility versus undead and versus animals get no parentheses. The
+    // client sets the hide flag itself when its own Hide check passes (CharacterZoneClient::UseSkill @0x45b2d0);
+    // stock EQEmu sends a successful hide's SpawnAppearance 3 to the others only, and nothing on a failed roll, so
+    // the original's own mark follows the local flag too.
     marks.normal = s.invis_rank > 0;
     if (s.id == world_.player_id) {
-        marks.normal = marks.normal || own_effect_with(game::SPA_INVISIBILITY) >= 0 ||
+        marks.normal = marks.normal || hidden_ || own_effect_with(game::SPA_INVISIBILITY) >= 0 ||
                        own_effect_with(game::SPA_IMPROVED_INVIS) >= 0;
     }
     // Hailstone (display.show_invis_undead, off by default; the original has no such mark): "[Name]" for
@@ -860,40 +898,46 @@ void GameConnection::handle_spell_action(const Action& a, std::int64_t now, bool
     c.target = a.target;
     c.spell = a.spell_id;
     sound_cues_.push_back(c);
-    // Hailstone: a spell landing with no OP_BeginCast before it (EQEmu sends one for a buff's proc but not for an
-    // item, weapon or augment proc, Mob::TryWeaponProc) gets the cast stage at its source as a cast would. The
-    // original plays only the impact here (EQPlayer::TriggerSpellEffect @0x593d10). Only the first of a landing's
-    // two OP_Actions (flag 4 marks the second), not a bard song's pulse, and only for one the server sent: spell
-    // 859's local landing plays only the impact, and never sends an animation.
+    // Hailstone: a spell landing plays the spell's casting animation at its source, at the first of its two
+    // OP_Actions (flag 4 marks the second), and only for one the server sent: spell 859's local landing plays only
+    // the impact, and never sends an animation. The renderer applies the classic/Luclin instrument-song rule where
+    // it chooses the clip, so a received OP_Animation follows it too. The cast stage stays for a spell that is not a
+    // bard song's pulse.
     if (const game::SpellData* sp = spell_table_->get(a.spell_id);
-        from_server && sp && a.source != 0 && (a.effect_flag & 4) == 0 && !is_song_skill(sp->skill)) {
+        from_server && sp && a.source != 0 && (a.effect_flag & kSecondActionFlag) == 0) {
         // Hailstone: a spell without a casting animation plays CastHeals or CastNuke (option
         // cast_animation_fallback, game::spell_cast_animation).
         const std::uint8_t anim = spell_cast_animation(sp->casting_anim, sp->spell_type, cast_animation_fallback_);
         play_animation(a.source, anim);
         // Our own: the zone is told of the animation too, as the server does not pass it on to players with
-        // some chat filters on; a second one does not interrupt a playing animation and is range limited.
-        if (a.source == world_.player_id) {
+        // some chat filters on; a second one does not interrupt a playing animation and is range limited. The
+        // landings of one spell on several targets (an area spell, a group song's pulse) send one.
+        if (a.source == world_.player_id &&
+            (landing_animation_spell_ != a.spell_id || now > landing_animation_until_)) {
+            landing_animation_spell_ = a.spell_id;
+            landing_animation_until_ = now + kLandingAnimationMs;
             Animation animation;
             animation.spawn_id = static_cast<std::uint16_t>(world_.player_id);
             animation.action = anim;
-            animation.speed = 10;
+            animation.speed = kAnimationSpeed;
             send_zone(encode(animation));
         }
-        auto shown = cast_stage_shown_.find(a.source);
-        if (shown == cast_stage_shown_.end() || shown->second.first != a.spell_id || now > shown->second.second) {
-            SpellEffectCue cue{0, a.source, 0, a.spell_id, 0};
-            cue.proc = true;
-            effect_cues_.push_back(cue);
-            // An area proc's other targets, landing with it, share this one.
-            cast_stage_shown_[a.source] = {a.spell_id, now + kProcLandingMs};
+        if (!is_song_skill(sp->skill)) {
+            auto shown = cast_stage_shown_.find(a.source);
+            if (shown == cast_stage_shown_.end() || shown->second.first != a.spell_id || now > shown->second.second) {
+                SpellEffectCue cue{kCastStage, a.source, 0, a.spell_id, 0};
+                cue.proc = true;
+                effect_cues_.push_back(cue);
+                // An area proc's other targets, landing with it, share this one.
+                cast_stage_shown_[a.source] = {a.spell_id, now + kProcLandingMs};
+            }
         }
     }
     // The impact stage: the source as its caster, the struck spawn as its target (app/spell_particles.h).
-    effect_cues_.push_back({2, a.target, a.target, a.spell_id, 0, a.source});
+    effect_cues_.push_back({kImpactStage, a.target, a.target, a.spell_id, 0, a.source});
     // PlayerZoneClient::IWasHit @0x5a07b0: a spell on us with packet flag 4 goes through EQ_Character::HitBySpell
     // (game/hit_landing.h).
-    if (a.target == world_.player_id && (a.effect_flag & 4) != 0 && profile_ && spell_table_)
+    if (a.target == world_.player_id && (a.effect_flag & kSecondActionFlag) != 0 && profile_ && spell_table_)
         land_spell_on_me(a, now);
 }
 
@@ -924,11 +968,13 @@ void GameConnection::handle_spell(Op op, const AppPacket& p) {
     const std::uint32_t me = world_.player_id;
     const auto now = now_ms();
     auto set_buff = [&](game::BuffSlot& b, std::uint32_t spell, std::int32_t tics, std::uint32_t num_hits) {
-        if (b.spell != spell) { // another spell in the slot: its caster level and modifier are not known yet
+        if (b.spell != spell) { // another spell in the slot: its caster details are not known yet
             b.level = 0;
             b.modifier = 1.0f;
             b.effect_type = 2;
             b.slot_data = {};
+            b.counters_known = false;
+            b.caster_name.clear();
         }
         b.spell = spell;
         b.tics = tics;
@@ -1071,14 +1117,28 @@ void GameConnection::handle_spell(Op op, const AppPacket& p) {
             log::debug("OP_Buff: slot {} held {}, now spell {} (fade {})", b->slot,
                        slot.empty() ? std::int64_t{-1} : std::int64_t{slot.spell}, b->buff.spell_id, b->fade);
             if (b->fade == 1 || b->buff.spell_id == 0xffffffffu) {
+                // The server fades the cured buff in the same update as the cure's OP_Action, before it. Remember
+                // the type so land_spell_on_me can skip predicting that cure against the next buff of that type.
+                note_counter_spa_fade(faded_counter_spas_, *spell_table_, slot.spell);
                 slot = {};
             } else {
+                // EQEmu's periodic refresh (fade 2) sends every slot_data as zero (rof2.cpp ENCODE(OP_Buff):
+                // "TODO: implement slot_data stuff"). RoF2 copies the whole record, zeros included. Hailstone
+                // tracks counters locally (a cure lowers them) and keeps them only when fade == 2, same spell
+                // and every slot_data is zero; a real value from the server, a different spell or a remove
+                // still overwrites them.
+                const bool same_spell = slot.spell == b->buff.spell_id;
+                const bool zeroed = std::all_of(std::begin(b->buff.slot_data), std::end(b->buff.slot_data),
+                                                [](std::int32_t v) { return v == 0; });
                 set_buff(slot, b->buff.spell_id, b->buff.duration, b->buff.num_hits);
                 slot.level = b->buff.level;
                 slot.caster_id = b->buff.caster_id;
                 slot.modifier = b->buff.bard_modifier;
                 if (b->buff.effect_type != 0) slot.effect_type = b->buff.effect_type;
-                std::copy(std::begin(b->buff.slot_data), std::end(b->buff.slot_data), slot.slot_data.begin());
+                if (!(b->fade == 2 && same_spell && zeroed)) {
+                    std::copy(std::begin(b->buff.slot_data), std::end(b->buff.slot_data), slot.slot_data.begin());
+                    slot.counters_known = !zeroed;
+                }
             }
         }
         break;
@@ -1086,23 +1146,31 @@ void GameConnection::handle_spell(Op op, const AppPacket& p) {
     case Op::TargetBuffs:
         if (auto bi = decode_buff_icons(p)) {
             if (op == Op::BuffCreate && bi->entity_id == me) {
-                if (bi->all_buffs)
-                    for (auto& b : spells_.buffs) b = {};
+                // EQEmu also sends full lists when buffs change. They carry no slot_data, so keep
+                // the counters for a spell that is still in the same slot.
+                std::array<bool, game::kBuffSlots> listed{};
                 for (const auto& e : bi->entries) {
                     if (e.slot >= static_cast<std::uint32_t>(game::kBuffSlots)) continue;
                     auto& slot = spells_.buffs[e.slot];
                     if (e.spell_id == 0xffffffffu) {
+                        note_counter_spa_fade(faded_counter_spas_, *spell_table_, slot.spell);
                         slot = {};
                         continue;
                     }
+                    listed[e.slot] = true;
+                    if (bi->all_buffs && slot.spell != e.spell_id) slot = {};
                     set_buff(slot, e.spell_id, e.tics, e.num_hits);
                     slot.caster_name = e.caster;
                 }
+                if (bi->all_buffs)
+                    for (std::size_t i = 0; i < listed.size(); ++i)
+                        if (!listed[i]) spells_.buffs[i] = {};
             } else if (bi->entity_id != me || op == Op::TargetBuffs) {
                 // The target window's buffs (OP_TargetBuffs is OP_BuffCreate's layout).
                 if (spells_.target_buffs_entity != bi->entity_id || bi->all_buffs) spells_.target_buffs.clear();
                 spells_.target_buffs_entity = bi->entity_id;
                 for (const auto& e : bi->entries) {
+                    if (e.slot >= kMaxSpawnBuffSlots) continue;
                     auto it = std::find_if(spells_.target_buffs.begin(), spells_.target_buffs.end(),
                                            [&](const auto& t) { return t.first == e.slot; });
                     if (e.spell_id == 0xffffffffu) {
@@ -1208,6 +1276,7 @@ void GameConnection::land_spell_on_me(const Action& a, std::int64_t now) {
     ctx.velocity = velocity_;
     ctx.now_ms = static_cast<std::uint32_t>(now);
     ctx.pvp_rules = pvp_rules_;
+    ctx.faded_counter_spas = faded_counter_spas_;
     if (new_zone_) ctx.zone_type = new_zone_->time_type;
     game::HitLandingResult r = game::land_spell(
         game::hit_record(a.source, a.level, a.instrument_mod, a.hit_heading, a.damage, a.unknown31, a.spell_id,
@@ -1236,6 +1305,8 @@ void GameConnection::land_spell_on_me(const Action& a, std::int64_t now) {
         b.caster_id = pb.caster_id;
         b.modifier = pb.modifier;
         b.effect_type = pb.effect_type;
+        b.slot_data = pb.slot_data;
+        b.counters_known = pb.counters_known;
         log::debug("HitBySpell: spell {} placed in buff slot {}", pb.spell, pb.slot);
     }
     drunkenness_ = r.drunkenness;

@@ -205,8 +205,13 @@ void Commands::run_nested(std::string_view args) {
                                   kMaxNestedCommands));
         return;
     }
+    // The outer line was parsed (or left as written) before its command got it: its rest is not parsed again, or a
+    // value holding "${" would be read after all (docs/plugins.md "MQ commands"). A one-line flag rather than
+    // noparse_, so that a bind's own mq.cmd lines under /docommand are still parsed.
     ++nested_;
+    nested_parsed_ = true;
     env_.run(std::string(args));
+    nested_parsed_ = false; // a run that did not reach the filters
     --nested_;
 }
 
@@ -223,11 +228,12 @@ Commands::~Commands() {
 
 void Commands::filter(std::string& line, plugin::Flow& flow) {
     // The line this filter sent on itself (below): parsed and checked already; final_check has it last.
+    const bool parsed = std::exchange(nested_parsed_, false);
     if (std::exchange(redispatched_, false)) return;
     std::string word = first_word(line);
     // ${...} (a read: scripts and plugins need the read permission) unless /noparse is running the line or a window
     // sends it (LiteralLine).
-    if (!noparse_ && g_literal_lines == 0 && !iequals(word, "/noparse") && line.find("${") != std::string::npos) {
+    if (!parsed && !noparse_ && g_literal_lines == 0 && !iequals(word, "/noparse") && line.find("${") != std::string::npos) {
         if ((plugin::caller_caps() & plugin::kCapRead) == 0) {
             if (env_.echo) env_.echo(std::format("[MQ] {}: ${{...}} needs the server's 'read' permission", plugin::caller_name()));
             flow = plugin::Flow::Drop;

@@ -175,6 +175,13 @@ bool is_pc_model_race(std::uint32_t race);
 AppPacket encode(const Spawn& v); // server direction (OP_ZoneEntry), for tests
 std::optional<Spawn> decode_spawn(const AppPacket& p);
 
+// OP_MobRename identifies the existing spawn by its raw name.
+struct MobRename {
+    std::string old_name;
+    std::string new_name;
+};
+std::optional<MobRename> decode_mob_rename(const AppPacket& p);
+
 // OP_GuildBannerAppearance: replaces a planted banner's cloth layers and name.
 struct GuildBannerAppearance {
     std::uint32_t spawn_id = 0;
@@ -380,6 +387,8 @@ std::optional<Weather> decode_weather(const AppPacket& p);
 AppPacket encode_delete_spawn(std::uint32_t spawn_id);
 AppPacket encode_delete_own_spawn(std::uint32_t spawn_id);
 std::optional<std::uint32_t> decode_delete_spawn(const AppPacket& p);
+// The server's u8 after the id (msgEQRmPlayer's "decayed" flag); nullopt on the client's 4-byte form.
+std::optional<bool> decode_delete_spawn_decayed(const AppPacket& p);
 
 // OP_SpawnAppearance (8 bytes, both directions). Size changes arrive as
 // OP_ChangeSize instead (rof2.cpp ENCODE(OP_SpawnAppearance)).

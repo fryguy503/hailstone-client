@@ -258,7 +258,8 @@ TEST_CASE("shared_file: symlinks cannot redirect mappings locks directories or p
     write_file(original, "untouched");
     std::error_code ec;
     fs::create_symlink(original, link, ec);
-    if (ec) {
+    // Wine makes something that is not a link and reports success: the link checks would test nothing real there.
+    if (ec || !fs::is_symlink(link)) {
         MESSAGE("This environment cannot create a symlink; link-specific checks did not run: " << ec.message());
         return;
     }
@@ -276,6 +277,7 @@ TEST_CASE("shared_file: symlinks cannot redirect mappings locks directories or p
     const fs::path alias = fs::canonical(scratch.path()) / "alias";
     fs::create_directory_symlink(cache, alias, ec);
     REQUIRE_FALSE(ec);
+    REQUIRE(fs::is_symlink(alias));
     CHECK_FALSE(platform::prepare_private_cache_directory(alias));
     CHECK_FALSE(platform::prepare_private_cache_directory(alias / "child"));
     CHECK_FALSE(platform::ReadOnlyMapping::open(alias / "original"));

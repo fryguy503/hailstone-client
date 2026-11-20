@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -64,6 +65,7 @@ struct Session {
     app::UiHost host;
     app::UiApi api;
     ui::lua::LuaUi lua;
+    ImVec2 display_size{1600, 900};
     Session(const fs::path& dir, const std::string& pack, net::ConnectionOptions options = {}, bool in_game = true)
         : game(dir / "game"), conn(game, std::move(options)), api(host), lua(dir / pack, dir / "ui.txt") {
         host.game = &game;
@@ -83,7 +85,7 @@ struct Session {
     void frames(int n, ui::InGameView* fallback = nullptr, const ui::LoadingView* loading = nullptr) {
         for (int i = 0; i < n; ++i) {
             ImGuiIO& io = ImGui::GetIO();
-            io.DisplaySize = ImVec2(1600, 900);
+            io.DisplaySize = display_size;
             io.DeltaTime = 1.0f / 60.0f;
             hailstone::test::sync_ui_api_aliases(lua.state());
             api.begin_frame();
@@ -320,6 +322,84 @@ TEST_CASE("UI packs (gamepad): stock Raid and Map stay inside narrow and short n
             ImGui::SetScrollY(const_cast<ImGuiWindow*>(actions), actions->ScrollMax.y);
             frame(w,h); frame(w,h);
             CHECK(actions->Scroll.y == doctest::Approx(actions->ScrollMax.y));
+        }
+    }
+}
+
+TEST_CASE("UI packs: context submenus cascade inward at either screen edge and accept a choice") {
+    for (const char* pack : {"modern", "gamepad"}) {
+        INFO(pack);
+        test::ScratchDir scratch("ui_pack_context_menu_cascade");
+        const auto dir = scratch.path();
+        const auto src = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
+        fs::create_directories(dir / "game");
+        fs::copy(src, dir / pack, fs::copy_options::recursive);
+        std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        unsigned char* pixels = nullptr;
+        int width = 0, height = 0;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        Session s(dir, pack);
+        s.lua.set_entry_scripts({"menus.lua"});
+
+        int choices = 0;
+        using Row = app::UiHost::MenuRow;
+        Row spell;
+        spell.text = "Resist Magic";
+        spell.act = [&] { ++choices; };
+        Row subcategory;
+        subcategory.text = "Resist Buff";
+        subcategory.submenu = [&] { return std::vector{spell}; };
+        Row category;
+        category.text = "Utility Beneficial";
+        category.submenu = [&] { return std::vector{subcategory}; };
+
+        const auto panel = [](int menu) {
+            const std::string name = "##gamemenu" + std::to_string(menu);
+            const auto* window = ImGui::FindWindowByName(name.c_str());
+            REQUIRE(window);
+            REQUIRE(window->Active);
+            return window;
+        };
+        const auto move_to = [&](const ImGuiWindow& window) {
+            io.AddMousePosEvent(window.Pos.x + window.Size.x / 2.0f, window.Pos.y + window.Size.y / 2.0f);
+            s.frames(2);
+        };
+        for (const bool at_right : {true, false}) {
+            CAPTURE(at_right);
+            io.AddMousePosEvent(-100, -100);
+            s.frames(1);
+            s.host.open_menu(at_right ? 1580.0f : 8.0f, at_right ? 890.0f : 180.0f, {category});
+            s.frames(2);
+            REQUIRE(s.host.menus.size() == 1);
+            move_to(*panel(1));
+            REQUIRE(s.host.menus.size() == 2);
+            move_to(*panel(2));
+            REQUIRE(s.host.menus.size() == 3);
+            REQUIRE(s.lua.load_status().error_count == 0);
+
+            const ImGuiWindow* parent = nullptr;
+            for (int m = 1; m <= 3; ++m) {
+                const auto* window = panel(m);
+                CHECK(window->Pos.x >= 0.0f);
+                CHECK(window->Pos.x + window->Size.x <= io.DisplaySize.x);
+                CHECK(window->Pos.y >= 0.0f);
+                CHECK(window->Pos.y + window->Size.y <= io.DisplaySize.y);
+                if (parent) {
+                    const float gap = at_right ? parent->Pos.x - (window->Pos.x + window->Size.x)
+                                               : window->Pos.x - (parent->Pos.x + parent->Size.x);
+                    CHECK(std::abs(gap) <= 1.0f); // ImGui rounds dimensions to pixels
+                }
+                parent = window;
+            }
+            move_to(*panel(3));
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            s.frames(1);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            s.frames(2);
+            CHECK(choices == (at_right ? 1 : 2));
+            CHECK(s.host.menus.empty());
         }
     }
 }
@@ -1286,6 +1366,158 @@ end
             ImGui::DestroyContext(ctx);
         }
     }
+}
+
+TEST_CASE("UI packs (modern): login Add-ons opens within narrow and short viewports") {
+    const auto src = fs::path(__FILE__).parent_path().parent_path() / "ui" / "modern";
+    test::ScratchDir scratch("ui_pack_login_addon_bounds");
+    const auto dir = scratch.path();
+    fs::create_directories(dir / "game");
+    fs::copy(src, dir / "modern", fs::copy_options::recursive);
+    ImGuiContext* ctx = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    {
+        Session s(dir, "modern", {}, false);
+        s.display_size = ImVec2(1280, 720);
+        ui::LoginView login;
+        login.servers_dir = dir / "servers";
+        login.ui = login.default_ui = "modern";
+        ServerProfile profile;
+        profile.id = "alpha";
+        profile.name = "Alpha";
+        profile.host = "127.0.0.1";
+        profile.username = "first";
+        profile.accounts = {{"first", "Bob", "World One", {{"Bob", "World One", 12, "WAR"}}, false, false}};
+        login.profiles = {profile};
+        ui::select_profile(login, 0);
+        login.status = {"Enter your password to log in.", true};
+        login.addons.available = login.addons.browsed = true;
+        login.addons.suggestions = {
+            {"", "owner/one", "Required to play on this server: owner/one.", true, true},
+            {"", "owner/two", "Required to play on this server: owner/two.", true, true},
+            {"", "owner/three", "Required to play on this server: owner/three.", true, true},
+            {"", "owner/extra", "Alpha suggests another add-on: owner/extra.", true}};
+        s.host.login = &login;
+        lua_State* L = s.lua.state();
+        // Observe the real button bounds. The button only reports a click when it receives mouse input.
+        REQUIRE(luaL_dostring(L, R"lua(
+            ui.SetSetting('test.login', 'boxset')
+            local button, lastFrame = ui.Button, -1
+            ui.Button = function(label, ...)
+                local clicked = button(label, ...)
+                local frame = ui.GetFrameCount()
+                if lastFrame ~= frame then buttonRects, lastFrame = {}, frame end
+                if not buttonRects[label] then buttonRects[label] = { ui.GetItemRect() } end
+                return clicked
+            end
+        )lua") == LUA_OK);
+        auto button_rect = [&](const char* label) {
+            INFO(label);
+            lua_getglobal(L, "buttonRects");
+            REQUIRE(lua_istable(L, -1));
+            lua_getfield(L, -1, label);
+            REQUIRE(lua_istable(L, -1));
+            std::array<float, 4> rect{};
+            for (std::size_t i = 0; i < rect.size(); ++i) {
+                lua_rawgeti(L, -1, static_cast<lua_Integer>(i + 1));
+                rect[i] = static_cast<float>(lua_tonumber(L, -1));
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 2);
+            return ImRect(rect[0], rect[1], rect[2], rect[3]);
+        };
+        auto click = [&](const char* label) {
+            INFO(label);
+            const auto rect = button_rect(label);
+            REQUIRE(ImRect(0, 0, s.display_size.x, s.display_size.y).Contains(rect));
+            const auto center = rect.GetCenter();
+            io.AddMousePosEvent(center.x, center.y);
+            s.frames(1);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            s.frames(1);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            s.frames(6); // Let a newly opened card settle at its measured height.
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        };
+        auto active = [](const char* key) -> ImGuiWindow* {
+            auto* window = ImGui::FindWindowByName(key);
+            return window && window->Active ? window : nullptr;
+        };
+        auto fits = [&](const ImGuiWindow* window) {
+            REQUIRE(window);
+            CHECK(ImRect(0, 0, s.display_size.x, s.display_size.y).Contains(window->Rect()));
+        };
+        constexpr char login_key[] = "###modern.pregame.login";
+        constexpr char box_key[] = "###modern.pregame.login.boxset";
+        constexpr char quick_key[] = "###modern.pregame.login.quick";
+        constexpr char addons_key[] = "###modern.pregame.login.addons";
+
+        s.frames(4);
+        fits(active(login_key));
+        REQUIRE(active(box_key));
+        REQUIRE(active(quick_key));
+        click("Add-ons");
+        REQUIRE(login.addons.open);
+        auto* addons = active(addons_key);
+        fits(addons);
+        CHECK(addons->Rect().GetCenter().x == doctest::Approx(640.0f).epsilon(0.003));
+        CHECK_FALSE(active(login_key));
+        CHECK_FALSE(active(box_key));
+        CHECK_FALSE(active(quick_key));
+        CHECK(button_rect("Close").Max.y <= addons->Pos.y + 112);
+        click("Close");
+        CHECK_FALSE(login.addons.open);
+        CHECK_FALSE(active(addons_key));
+        fits(active(login_key));
+
+        click("Review required add-on");
+        CHECK(s.host.login_action == static_cast<int>(ui::LoginAction::AddonSuggestLook));
+        CHECK(login.addons.choice == "owner/one");
+        // Apply the client's response to AddonSuggestLook without fetching a real add-on.
+        login.addons.open = true;
+        auto& offer = login.addons.offer.emplace();
+        offer.name = "one";
+        offer.kind = "plugin";
+        offer.source = "owner/one";
+        offer.description = "An add-on the player needs to review before joining this server.";
+        offer.caps = {"read the game state", "draw windows"};
+        s.display_size = ImVec2(760, 380);
+        s.frames(4);
+        addons = active(addons_key);
+        fits(addons);
+        CHECK(addons->ScrollbarY);
+        CHECK(button_rect("Close").Max.y <= addons->Pos.y + 112);
+        click("Close");
+        CHECK_FALSE(login.addons.open);
+        auto* login_window = active(login_key);
+        fits(login_window);
+        CHECK(login_window->ScrollbarY);
+
+        login.addons.offer.reset();
+        s.display_size = ImVec2(380, 680);
+        s.frames(4);
+        fits(active(login_key));
+        click("Add-ons");
+        REQUIRE(login.addons.open);
+        fits(active(addons_key));
+        click("Close");
+        CHECK_FALSE(login.addons.open);
+
+        s.display_size = ImVec2(1900, 900);
+        s.frames(4);
+        click("Add-ons");
+        addons = active(addons_key);
+        login_window = active(login_key);
+        fits(addons);
+        fits(login_window);
+        CHECK(login_window->Rect().Max.x < addons->Pos.x);
+        CHECK(addons->Pos.y == login_window->Pos.y);
+    }
+    ImGui::DestroyContext(ctx);
 }
 
 TEST_CASE("UI packs: each draws the login, server select and character select screens in the client's place") {
@@ -4507,17 +4739,48 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
                 return b;
             };
             s.frames(3);
-            const std::string hp = "+50 HP (" + std::to_string(ch.max_hp(true)) + " to " +
-                                   std::to_string(ch.max_hp(true) + 50) + ")";
-            CHECK(seen("Compared with your Old Helm (Head)"));
+            // The HP change for you beside the item's HP in the stat grid, not as a line of its own below it.
+            const std::string heading = pack == std::string("modern") ? "vs your Old Helm (Head)"
+                                                                      : "Compared with your Old Helm (Head)";
+            CHECK(seen(heading));
             CHECK(seen("Upgrade"));
-            CHECK(seen(hp));
+            CHECK(seen("60"));
+            CHECK(seen("+50"));
+            CHECK_FALSE(seen("+50 HP"));
+            CHECK_FALSE(seen("+50 HP (" + std::to_string(ch.max_hp(true)) + " to " + std::to_string(ch.max_hp(true) + 50) + ")"));
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+
+            if (pack == std::string("modern")) {
+                // The tooltip: the verdict under the name, the HP change beside the item's HP, the rest as "+n NAME".
+                REQUIRE(luaL_dostring(L, R"(
+                    test_seen = {}
+                    local items = dofile("lib/items.lua")
+                    local c = { usable = true, whyNot = "", notes = {}, slots = { { slot = 2, slotName = "Head",
+                      current = { "Old Helm" }, verdict = "upgrade", score = 60, gained = {}, lost = {},
+                      changes = { { key = "hp", name = "HP", before = 100, after = 150, delta = 50, weight = 1 },
+                                  { key = "str", name = "STR", before = 80, after = 85, delta = 5, weight = 0.5 } } } } }
+                    local dt, tx, td = ui.DrawText, ui.Text, ui.TextDisabled
+                    ui.Text = function(t, ...) test_seen[tostring(t)] = true return tx(t, ...) end
+                    ui.TextDisabled = function(t, ...) test_seen[tostring(t)] = true return td(t, ...) end
+                    ui.window("Compare tooltip test", function()
+                      items.Tooltip({ name = "Iron Helm", hp = 60, weight = 3 }, "Head", c)
+                    end))") == LUA_OK);
+                s.frames(2);
+                CHECK(seen("Upgrade"));
+                CHECK(seen("HP 60"));
+                CHECK(seen("+50"));
+                CHECK(seen("+5 STR"));
+                CHECK_FALSE(seen("+50 HP"));
+                CHECK(seen("vs your Old Helm (Head)"));
+                CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+                REQUIRE(luaL_dostring(L, "ui.window('Compare tooltip test', function() end)") == LUA_OK);
+            }
 
             option = 0;
             REQUIRE(luaL_dostring(L, "test_seen = {}") == LUA_OK);
             s.frames(2);
-            CHECK_FALSE(seen("Compared with your Old Helm (Head)"));
+            CHECK_FALSE(seen(heading));
+            CHECK_FALSE(seen("+50"));
         }
         ImGui::DestroyContext(ctx);
     }
@@ -5687,6 +5950,112 @@ end
         run("menuPick = nil");
         release();
         closeMenu();
+        CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+    }
+    ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("UI packs (modern): the buff tray can show empty slots and number buff tooltips") {
+    test::ScratchDir scratch("ui_pack_buff_tray_slots");
+    const auto dir = scratch.path();
+    fs::create_directories(dir / "game");
+    fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / "modern", dir / "modern",
+             fs::copy_options::recursive);
+    ImGuiContext* ctx = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    {
+        Session s(dir, "modern");
+        auto* L = s.lua.state();
+        auto run = [&](const char* code) {
+            const int rc = luaL_dostring(L, code);
+            INFO((rc == LUA_OK ? "" : lua_tostring(L, -1)));
+            REQUIRE(rc == LUA_OK);
+            const std::string result = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_settop(L, 0);
+            return result;
+        };
+        run(R"lua(
+hs.ShowWindow('BuffWindow', true)
+ui.SetSetting('test.pos.BuffWindow', '600,160')
+ui.SetSetting('hud.perRow.BuffWindow', 3)
+local names = { Buff2 = 'Spirit of Wolf', Buff4 = 'Holy Armor', Buff5 = 'Clarity' }
+local slot, button, textColored, menuItem = hs.BuffSlot, ui.InvisibleButton, ui.TextColored, ui.MenuItem
+hs.BuffSlot = function(win, id, overlays)
+  if win == 'BuffWindow' and names[id] then return 11, 60000, names[id], true end
+  return slot(win, id, overlays)
+end
+buffRects = {}
+ui.InvisibleButton = function(id, ...)
+  local pressed = button(id, ...)
+  local n = tonumber(id:match('^##Buff(%d+)$'))
+  if n then
+    buffRects[n] = { ui.GetItemRect() }
+    local _, h = ui.GetWindowSize()
+    trayHeight = h
+  end
+  return pressed
+end
+ui.TextColored = function(r, g, b, a, label)
+  if type(label) == 'string' and label:find('^Spirit of Wolf') then tooltip = label end
+  return textColored(r, g, b, a, label)
+end
+ui.MenuItem = function(label, ...)
+  if label == pick then pick = nil; return true end
+  return menuItem(label, ...)
+end
+)lua");
+        auto point_at_buff = [&] {
+            REQUIRE(luaL_dostring(L, "return buffRects[2][1] + 10, buffRects[2][2] + 10") == LUA_OK);
+            io.AddMousePosEvent(static_cast<float>(lua_tonumber(L, -2)), static_cast<float>(lua_tonumber(L, -1)));
+            lua_settop(L, 0);
+        };
+        auto toggle = [&](const char* label) {
+            run((std::string("pick = '") + label + "'").c_str());
+            point_at_buff();
+            io.AddKeyEvent(ImGuiMod_Alt, true);
+            io.AddMouseButtonEvent(1, true);
+            s.frames(1);
+            CHECK(run("return tostring(pick == nil)") == "true");
+            io.AddMouseButtonEvent(1, false);
+            io.AddKeyEvent(ImGuiMod_Alt, false);
+            ImGui::ClosePopupsExceptModals();
+            run("buffRects = {}");
+            s.frames(2);
+        };
+        auto title = [&] {
+            run("tooltip = nil");
+            point_at_buff();
+            s.frames(2);
+            return run("return tooltip");
+        };
+        s.frames(3);
+        REQUIRE(run(R"lua(
+local a, b, c = buffRects[2], buffRects[4], buffRects[5]
+compactX, compactY, compactHeight, pitch = a[1], a[2], trayHeight, a[1] - b[1]
+return tostring(pitch > 0 and b[1] - c[1] == pitch and a[2] == b[2] and a[2] == c[2])
+)lua") == "true");
+        CHECK(title() == "Spirit of Wolf");
+
+        toggle("Show slot numbers in tooltips");
+        CHECK(run("return ui.GetSetting('hud.showSlotNumbers.BuffWindow')") == "1");
+        CHECK(run("return tostring(buffRects[2][1] == compactX and trayHeight == compactHeight)") == "true");
+        CHECK(title() == "Spirit of Wolf - Slot 3");
+        toggle("Show slot numbers in tooltips");
+
+        toggle("Show empty slots");
+        CHECK(run("return ui.GetSetting('hud.showEmptySlots.BuffWindow')") == "1");
+        CHECK(run(R"lua(
+local a, b, c = buffRects[2], buffRects[4], buffRects[5]
+return tostring(a[1] == compactX - 2 * pitch and a[2] == compactY
+  and b[1] == compactX - pitch and b[2] > compactY and c[1] == a[1] and c[2] == b[2]
+  and trayHeight - compactHeight == b[2] - compactY
+  and buffRects[0] == nil and buffRects[1] == nil and buffRects[3] == nil)
+)lua") == "true");
+        CHECK(title() == "Spirit of Wolf");
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
     }
     ImGui::DestroyContext(ctx);

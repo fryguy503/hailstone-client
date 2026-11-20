@@ -788,6 +788,7 @@ void open_hot_button_menu(UiHost& host, int bar, int button, float x, float y) {
     if (!host.hot_buttons || !host.conn) return;
     auto text = [&host](std::uint32_t id) { return host.conn->strings().format(id, {}); };
     const game::HotButton b = host.hot_buttons->current(bar, button);
+    const bool locked = hot_bar_layout_locked(host, bar);
     const bool gem = b.type == game::HotButtonType::SpellGem;
     const std::uint32_t spell = gem ? gem_spell(host, b.slot) : game::kNoSpell;
     const bool has_spell = spell != game::kNoSpell && host.conn->spell_table().get(spell);
@@ -795,7 +796,9 @@ void open_hot_button_menu(UiHost& host, int bar, int button, float x, float y) {
     // The button again when a row is chosen (the menu stays open over frames; the page may have turned).
     auto record = [&host, bar, button]() -> game::HotButton& { return host.hot_buttons->current(bar, button); };
     auto save = [&host, bar, button](const game::HotButton& nb) {
-        if (host.set_hot_button) host.set_hot_button(bar, button, nb); // the changed flag and SaveHotButtonsToIni
+        if (!host.set_hot_button || hot_bar_layout_locked(host, bar)) return false;
+        host.set_hot_button(bar, button, nb); // the changed flag and SaveHotButtonsToIni
+        return true;
     };
     std::vector<UiHost::MenuRow> rows;
     auto add = [&rows](std::string t, std::function<void()> act) {
@@ -828,25 +831,27 @@ void open_hot_button_menu(UiHost& host, int bar, int button, float x, float y) {
                     host.conn->request_item_link(net::kKronoItemId, "Krono", 0, ImGui::GetIO().KeyShift);
             }
         });
-    if (shown.clear) add(text(game::kStrHbClear), [save] { save(game::HotButton{}); }); // 0x550c50
+    if (!locked && shown.clear) add(text(game::kStrHbClear), [save] { save(game::HotButton{}); }); // 0x550c50
     // 0x1b60 Change Size: the bar's CQuantityWnd (0x68a170) at the button's centre (here where the menu opened)
-    if (shown.change_size) add(text(game::kStrHbChangeSize), [&host, bar, x, y] { open_hot_bar_size(host, bar, x, y); });
+    if (!locked && shown.change_size)
+        add(text(game::kStrHbChangeSize), [&host, bar, x, y] { open_hot_bar_size(host, bar, x, y); });
     // 0x1b5a Assign Icon: CIconSelectionWnd on the button's icon (0x68f330), its Accept (0x28) sets it
-    if (shown.assign_icon)
+    if (!locked && shown.assign_icon)
         add(text(game::kStrHbAssignIcon), [&host, bar, button, x, y] { open_icon_selection(host, bar, button, x, y); });
-    if (shown.clear_icon)
+    if (!locked && shown.clear_icon)
         add(text(game::kStrHbClearIcon), [record, save] {
             game::HotButton r = record();
             r.icon_type = r.icon_slot = -1; // 0x550040({-1, -1})
             save(r);
         });
-    if (shown.assign_label)
+    if (!locked && shown.assign_label)
         add(text(game::kStrHbAssignLabel), [&host, bar, button, record, save] {
             UiHost::TextEntry e;
             e.prompt = host.conn ? host.conn->strings().format(game::kStrHbEnterLabel, {}) : std::string();
             e.max_chars = game::kHotButtonLabelEntryMax;
             e.text = host.hot_button_label ? host.hot_button_label(bar, button) : record().label; // 0x54faf0
-            e.done = [&host, record, save](const std::string& t) {
+            e.done = [&host, bar, record, save](const std::string& t) {
+                if (hot_bar_layout_locked(host, bar)) return;
                 game::HotButton r = record();
                 if (game::assign_label(*host.hot_buttons, r, t) && host.actions)
                     host.actions->social_changed(r.slot); // SaveSocialsToIni(0)
@@ -854,7 +859,7 @@ void open_hot_button_menu(UiHost& host, int bar, int button, float x, float y) {
             };
             host.text_entry = std::move(e);
         });
-    {
+    if (!locked) {
         // Assign Social: "Page %1" 1..10, each page's 12 socials by name, "<New Social>" for an unnamed one.
         UiHost::MenuRow social;
         social.text = text(game::kStrHbAssignSocial);
@@ -875,8 +880,7 @@ void open_hot_button_menu(UiHost& host, int bar, int button, float x, float y) {
                         ir.act = [&host, index, record, save] {
                             game::HotButton r = record();
                             const bool unnamed = game::assign_social(*host.hot_buttons, r, index);
-                            save(r);
-                            if (unnamed && host.open_social_editor) host.open_social_editor(index); // 0x758bb0
+                            if (save(r) && unnamed && host.open_social_editor) host.open_social_editor(index); // 0x758bb0
                         };
                         items.push_back(std::move(ir));
                     }
@@ -901,7 +905,7 @@ void open_hot_button_menu(UiHost& host, int bar, int button, float x, float y) {
             if (host.conn && r.type == game::HotButtonType::SpellGem && gem_spell(host, r.slot) != game::kNoSpell)
                 host.conn->forget_gem(r.slot); // CCastSpellWnd::Unmemorize
         });
-    host.open_menu(x, y, std::move(rows));
+    if (!rows.empty()) host.open_menu(x, y, std::move(rows));
 }
 
 
@@ -1003,7 +1007,7 @@ public:
         }
         case A::Drop: {
             // 0x552e00: the cursor's hotbutton goes here; what was here goes on the cursor.
-            if (!host.hot_buttons || !host.set_hot_button) return true;
+            if (hot_bar_layout_locked(host, bar_) || !host.hot_buttons || !host.set_hot_button) return true;
             host.set_hot_button(bar_, n - 1, *host.cursor_button);
             host.cursor_button.reset();
             if (!b.empty()) {
@@ -1026,7 +1030,8 @@ public:
     // Dragging a button off the bar takes it onto the cursor.
     std::optional<game::HotButton> pick_up(UiHost& host, std::string_view id, int) override {
         int n = index_after(id, "HB_Button");
-        if (!host.hot_buttons || !host.set_hot_button || n < 1 || n > game::kHotButtons) return std::nullopt;
+        if (!host.hot_buttons || !host.set_hot_button || n < 1 || n > game::kHotButtons ||
+            hot_bar_layout_locked(host, bar_)) return std::nullopt;
         game::HotButton b = host.hot_buttons->current(bar_, n - 1);
         if (b.empty()) return std::nullopt;
         host.set_hot_button(bar_, n - 1, game::HotButton{});

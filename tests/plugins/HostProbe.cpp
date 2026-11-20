@@ -20,6 +20,8 @@
 //   /probecursor   cursor_origin, when the host table has it
 //   /probeability <kind> <name>  ability_state then use_ability, when the host table has them
 //   /probeabilities [n]  get_ability_data_bulk the same way, through HS_Bulk_ListHeader and HS_Bulk_AbilityRecord
+//   /probespells n id...  get_spells_data_bulk for those ids into n bytes, through HS_Bulk_SpellFixedRecord and the
+//   strings and effect lines after each
 // Built again with HAILSTONE_PROBE_THROW_INIT (HostProbeThrow): InitializePlugin registers a command and a TLO, then
 // throws.
 #include <cstddef>
@@ -49,7 +51,9 @@ static_assert(offsetof(PluginHostApi, get_ability_data_bulk) == offsetof(PluginH
 static_assert(offsetof(PluginHostApi, select_raid_member) == offsetof(PluginHostApi, caps) + 89 * sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, set_class_name) == offsetof(PluginHostApi, get_map_policy) + sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, nameplate_register) == offsetof(PluginHostApi, set_class_name) + sizeof(PluginHostApi::caps));
-static_assert(offsetof(PluginHostApi, get_large_dialog) == offsetof(PluginHostApi, nameplate_spell_icon) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, get_spells_data_bulk) ==
+              offsetof(PluginHostApi, nameplate_spell_icon) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, get_large_dialog) == offsetof(PluginHostApi, get_spells_data_bulk) + sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, answer_large_dialog) == offsetof(PluginHostApi, get_large_dialog) + sizeof(PluginHostApi::caps));
 static_assert(sizeof(HailstoneLargeDialog) == 40);
 
@@ -774,6 +778,129 @@ void probe_abilities(void*, const char* args) {
                header->total, static_cast<int>(r), count, size - at);
 }
 
+static_assert(sizeof(HS_Bulk_SpellFixedRecord) == HS_BULK_SPELL_RECORD_SIZE);
+static_assert(sizeof(HS_Bulk_SpellSlot) == HS_BULK_SPELL_SLOT_SIZE);
+
+// A uint16_t-prefixed string at buf + at, within size; false when it runs past the end.
+bool read_str16(const unsigned char* buf, std::size_t size, std::size_t& at, std::string& out) {
+    std::uint16_t len = 0;
+    if (size - at < sizeof len) return false;
+    std::memcpy(&len, buf + at, sizeof len);
+    at += sizeof len;
+    if (len > size - at) return false;
+    out.assign(reinterpret_cast<const char*>(buf + at), len);
+    at += len;
+    return true;
+}
+
+// The count, then each record one line (id, found, its size, name, mana, target type, flags, slots, classes,
+// strings, effect lines), each used effect slot (SPA not 254, read stepping by slotSize), each class that can use
+// it (its level not 0 or 255), its
+// description (the ninth string), the target type's, resist type's and categories' names (the tenth to fourteenth)
+// and each effect line, stepping by recordSize; then the bytes left over after the last record (0 when every record is framed
+// right). The first number is the buffer size, the rest the spell ids; also how many bytes past the first n the host
+// changed.
+void probe_spells(void*, const char* args) {
+    if (!HAILSTONE_HOST_HAS(host, get_spells_data_bulk)) {
+        WriteChatf("[Probe] spells: not in this client");
+        return;
+    }
+    std::vector<std::int32_t> nums;
+    for (const char* p = args ? args : "";;) {
+        char* end = nullptr;
+        const long v = std::strtol(p, &end, 10);
+        if (end == p) break;
+        nums.push_back(static_cast<std::int32_t>(v));
+        p = end;
+    }
+    unsigned char buf[16384];
+    constexpr unsigned char guard = 0xA5;
+    std::memset(buf, guard, sizeof buf);
+    const std::int32_t n = nums.empty() || nums[0] < 0 ? 0
+        : nums[0] < static_cast<std::int32_t>(sizeof buf) ? nums[0] : static_cast<std::int32_t>(sizeof buf);
+    std::vector<std::int32_t> ids;
+    if (nums.size() > 1) ids.assign(nums.begin() + 1, nums.end());
+    const std::int32_t r = host->get_spells_data_bulk(host->host, ids.data(), static_cast<std::int32_t>(ids.size()),
+                                                      buf, n);
+    if (n < static_cast<std::int32_t>(sizeof buf)) {
+        std::size_t changed = 0;
+        for (std::size_t i = static_cast<std::size_t>(n); i < sizeof buf; ++i) changed += buf[i] != guard;
+        WriteChatf("[Probe] spells past the end %zu", changed);
+    }
+    const std::size_t size = r > 0 ? static_cast<std::size_t>(r) : 0;
+    if (size < HS_BULK_SPELL_HEADER_SIZE) {
+        WriteChatf("[Probe] spells %d bytes", static_cast<int>(r));
+        return;
+    }
+    std::int32_t count = 0;
+    std::memcpy(&count, buf, sizeof count);
+    std::size_t at = HS_BULK_SPELL_HEADER_SIZE;
+    for (std::int32_t i = 0; i < count; ++i) {
+        if (size - at < sizeof(HS_Bulk_SpellFixedRecord)) break;
+        const auto* rec = reinterpret_cast<const HS_Bulk_SpellFixedRecord*>(buf + at);
+        const std::size_t recordSize = rec->recordSize > 0 ? static_cast<std::size_t>(rec->recordSize) : 0;
+        if (recordSize < sizeof(HS_Bulk_SpellFixedRecord) || recordSize > size - at) break;
+        const std::size_t end = at + recordSize;
+        std::size_t p = at + sizeof(HS_Bulk_SpellFixedRecord);
+        std::string name;
+        std::string description;
+        std::string names[5]; // targetTypeDesc, resistTypeDesc, category, subcategory, subcategory2
+        std::vector<std::string> lines;
+        std::vector<HS_Bulk_SpellSlot> slots;
+        std::vector<std::uint8_t> classLevels;
+        if (rec->found) {
+            // slotCount slots, slotSize bytes apart: copy the fields this SDK knows, skip any a later client added.
+            const std::size_t slotSize = rec->slotSize > 0 ? static_cast<std::size_t>(rec->slotSize) : 0;
+            for (std::int32_t k = 0; k < rec->slotCount && slotSize > 0 && end - p >= slotSize; ++k) {
+                HS_Bulk_SpellSlot slot{};
+                std::memcpy(&slot, buf + p, slotSize < sizeof slot ? slotSize : sizeof slot);
+                slots.push_back(slot);
+                p += slotSize;
+            }
+            // classCount levels, one byte each, class 1 first.
+            for (std::int32_t k = 0; k < rec->classCount && p < end; ++k) classLevels.push_back(buf[p++]);
+            std::string text;
+            // stringCount strings: the ones this SDK knows, then any a later client appended, skipped.
+            for (int k = 0; k < rec->stringCount; ++k) {
+                if (!read_str16(buf, end, p, text)) break;
+                if (k == 0) name = text;
+                if (k == 8) description = text;
+                if (k >= 9 && k <= 13) names[k - 9] = text;
+            }
+            for (std::int32_t k = 0; k < rec->effectCount; ++k) {
+                if (!read_str16(buf, end, p, text)) break;
+                lines.push_back(text);
+            }
+        }
+        WriteChatf("[Probe] spell %d: id %d, found %d, %zu bytes, name %s, mana %d, target %d, flags %u, slots %d, "
+                   "classes %d, strings %d, effects %d",
+                   static_cast<int>(i), rec->id, rec->found, recordSize, name.empty() ? "-" : name.c_str(), rec->mana,
+                   static_cast<int>(rec->targetType), rec->flags, rec->slotCount, rec->classCount, rec->stringCount,
+                   rec->effectCount);
+        for (std::size_t k = 0; k < classLevels.size(); ++k)
+            if (classLevels[k] != 0 && classLevels[k] != 255)
+                WriteChatf("[Probe] spell %d class %zu: level %d", static_cast<int>(i), k + 1,
+                           static_cast<int>(classLevels[k]));
+        for (std::size_t k = 0; k < slots.size(); ++k)
+            if (slots[k].effect != 254)
+                WriteChatf("[Probe] spell %d slot %zu: effect %d, base %d, base2 %d, max %d, formula %d",
+                           static_cast<int>(i), k + 1, slots[k].effect, slots[k].base, slots[k].base2, slots[k].max,
+                           slots[k].formula);
+        if (rec->found)
+            WriteChatf("[Probe] spell %d description %d: %s", static_cast<int>(i), rec->descriptionId,
+                       description.empty() ? "-" : description.c_str());
+        if (rec->found)
+            WriteChatf("[Probe] spell %d target %s, resist %s, category %d %s, subcategory %d %s, subcategory2 %d %s",
+                       static_cast<int>(i), names[0].c_str(), names[1].c_str(), rec->category, names[2].c_str(),
+                       rec->subcategory, names[3].c_str(), rec->subcategory2, names[4].c_str());
+        for (const std::string& line : lines) WriteChatf("[Probe] spell %d effect: %s", static_cast<int>(i), line.c_str());
+        if (p != end) WriteChatf("[Probe] spell %d: %zu bytes unread", static_cast<int>(i), end - p);
+        at = end;
+    }
+    WriteChatf("[Probe] spells count %d, %d bytes, %zu bytes left", static_cast<int>(count), static_cast<int>(r),
+               size - at);
+}
+
 int probe_tlo(void*, const char*, const char* member, const char*, HailstoneValue* out) {
     if (member && std::strcmp(member, "Throw") == 0) throw std::runtime_error("the TLO threw");
     out->kind = HAILSTONE_STRING;
@@ -818,6 +945,7 @@ HAILSTONE_API void InitializePlugin(void) {
     AddCommand("/probenameplate", probe_nameplate, nullptr);
     AddCommand("/probeability", probe_ability, nullptr);
     AddCommand("/probeabilities", probe_abilities, nullptr);
+    AddCommand("/probespells", probe_spells, nullptr);
     AddTopLevelObject("Probe", probe_tlo, nullptr);
 #ifdef HAILSTONE_PROBE_THROW_INIT
     throw std::runtime_error("InitializePlugin threw");

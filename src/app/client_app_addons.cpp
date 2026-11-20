@@ -224,7 +224,8 @@ void ClientApp::start_addons() {
     if (automation_) automation_->refresh_managed_addons();
     ui::AddonsView& v = login_view_.addons;
     if (!opts_.updates) {
-        v.why_off = "Add-ons are not fetched on a test run.";
+        v.why_off = opts_.box_child ? "Add-ons are fetched and installed by the box set's first window."
+                                    : "Add-ons are not fetched on a test run.";
         return;
     }
     std::string why;
@@ -324,12 +325,22 @@ void ClientApp::update_addons() {
         addons_listed_ = {};
     }
     if (!at_login) return;
-    const AddonsStatus st = addons_ ? addons_->status() : AddonsStatus{};
 
-    // The lists beside the add-ons read folders: when the picked server changes, and every few seconds.
+    // The lists beside the add-ons read folders: when the picked server changes, and every few seconds. The view is
+    // built again only then, or when the manager's status moved on (AddonManager::changes) or the picked server's
+    // name or address did: not a copy of the whole status, a read of installed.txt and a look for each tool's
+    // program every frame.
     const std::string profile = ui::selected_profile_id(login_view_);
     const auto now = Clock::now();
-    if (profile != addons_profile_ || now - addons_listed_ > std::chrono::seconds(3)) {
+    const bool relist = profile != addons_profile_ || now - addons_listed_ > std::chrono::seconds(3);
+    const std::uint32_t changes = addons_ ? addons_->changes() : 0;
+    std::string view_key = profile + '\n' + login_view_.name + '\n' + login_view_.host;
+    if (!relist && addons_view_built_ && changes == addons_changes_ && view_key == addons_view_key_) return;
+    addons_view_built_ = true;
+    addons_changes_ = changes;
+    addons_view_key_ = std::move(view_key);
+    const AddonsStatus st = addons_ ? addons_->status() : AddonsStatus{};
+    if (relist) {
         addons_profile_ = profile;
         addons_listed_ = now;
         const std::filesystem::path profile_dir =

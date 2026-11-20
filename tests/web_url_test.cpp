@@ -117,3 +117,31 @@ TEST_CASE("fuzz: private_host and the request rules take any text") {
         }
     }
 }
+
+TEST_CASE("web: a tab's rules, at every navigation and request") {
+    const std::vector<std::string> none, sites{"example.org"};
+    // The player's own tab: any http(s) page, private ones too; what it loads is the browser's business.
+    CHECK(tab_may_show("http://192.168.1.1/", TabRules::Player, none));
+    CHECK(tab_may_show("https://example.org/", TabRules::Player, none));
+    CHECK_FALSE(tab_may_show("file:///etc/passwd", TabRules::Player, none));
+    CHECK(tab_may_request("http://127.0.0.1/", TabRules::Player, none));
+    // A server link's: any public site, never this computer or the player's network, for the page and inside it.
+    CHECK(tab_may_show("https://anywhere.example.net/", TabRules::ServerLink, none));
+    CHECK(tab_may_show("about:blank", TabRules::ServerLink, none));
+    CHECK_FALSE(tab_may_show("http://192.168.1.1/", TabRules::ServerLink, none));
+    CHECK_FALSE(tab_may_show("http://localhost:8080/", TabRules::ServerLink, none));
+    CHECK_FALSE(tab_may_show("http://router/", TabRules::ServerLink, none));
+    CHECK_FALSE(tab_may_show("ftp://example.org/", TabRules::ServerLink, none));
+    CHECK(tab_may_request("https://cdn.example.com/a.js", TabRules::ServerLink, none));
+    CHECK(tab_may_request("wss://chat.example.com/", TabRules::ServerLink, none));
+    CHECK(tab_may_request("data:image/png;base64,AA", TabRules::ServerLink, none));
+    CHECK_FALSE(tab_may_request("http://192.168.0.10/api", TabRules::ServerLink, none));
+    CHECK_FALSE(tab_may_request("ws://127.0.0.1:9000/", TabRules::ServerLink, none));
+    CHECK_FALSE(tab_may_request("http://[::1]/", TabRules::ServerLink, none));
+    CHECK_FALSE(tab_may_request("http://2130706433/", TabRules::ServerLink, none));
+    // A script's or plugin's: only its sites, and never a private one either.
+    CHECK(tab_may_show("https://www.example.org/", TabRules::Sites, sites));
+    CHECK_FALSE(tab_may_show("https://example.net/", TabRules::Sites, sites));
+    CHECK_FALSE(tab_may_request("https://example.net/x.js", TabRules::Sites, sites));
+    CHECK(tab_may_request("https://example.net/x.js", TabRules::Sites, none));
+}

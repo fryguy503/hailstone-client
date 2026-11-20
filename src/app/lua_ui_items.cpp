@@ -365,6 +365,8 @@ void close_all_bags(UiHost& host) {
     containers().all_closed = true;
 }
 
+void reset_containers() { containers() = Containers{}; }
+
 void toggle_all_bags(UiHost& host) {
     if (containers().all_closed) open_all_bags(host);
     else close_all_bags(host);
@@ -830,11 +832,15 @@ private:
     void inspect_selected(UiHost& host) {
         if (const net::Item* it = considered(host); it && host.inspect_item) host.inspect_item(*it);
     }
-    // UpdateList's ScrollKnown: the scroll's spell is in the book (SpellBookInfo::IsSpellKnown), or, for a spell of a
-    // group with a rank, one of a higher rank is: from the group's top rank down while above the scroll's.
+    // UpdateList's ScrollKnown: the scroll's spell is known, or, for a spell of a group with a rank, one of a higher
+    // rank is: from the group's top rank down while above the scroll's. The original's SpellBookInfo::IsSpellKnown
+    // (@0x449cd0) reads only the spell book, so a learned discipline tome still shows. Deliberate change from RoF2:
+    // the profile's discipline list counts as well, so a tome already learned is left out too.
     static bool scroll_known(UiHost& host, const net::Item& item) {
         const auto& book = host.conn->spell_state().book;
-        auto known = [&](std::uint32_t id) { return std::find(book.begin(), book.end(), id) != book.end(); };
+        auto known = [&](std::uint32_t id) {
+            return std::find(book.begin(), book.end(), id) != book.end() || host.conn->knows_discipline(id);
+        };
         const std::int32_t id = item.effects[net::kEffectScroll].effect;
         if (id <= 0) return false;
         if (known(static_cast<std::uint32_t>(id))) return true;

@@ -238,9 +238,14 @@ void GameConnection::update() {
             }
             // Zoning keeps state_ == Zoning; the world's OP_EnterWorld reply moves it on.
         }
-        while (auto p = world_session_ ? world_session_->receive() : std::nullopt)
+        // A failure ends the session's queue: a packet behind it must not move the connection on again (an
+        // OP_ZoneServerInfo after a bad character list would start a zone connection).
+        while (state_ != ConnectionState::Disconnected) {
+            auto p = world_session_ ? world_session_->receive() : std::nullopt;
+            if (!p) break;
             if (!options_.hooks || options_.hooks->packet(plugin::Stream::World, plugin::Direction::In, *p) == plugin::Flow::Continue)
                 handle_world(*p);
+        }
         if (world_session_ && world_session_->state() == SessionState::Disconnected) {
             bool expected = state_ == ConnectionState::ZoneConnecting || state_ == ConnectionState::ZoneEntering ||
                             state_ == ConnectionState::InZone || state_ == ConnectionState::Disconnected;
@@ -292,9 +297,12 @@ void GameConnection::update() {
             server_files_->update(ServerFileSync::Clock::now());
             if (server_files_->finished()) finish_server_files();
         }
-        while (auto p = zone_session_ ? zone_session_->receive() : std::nullopt)
+        while (state_ != ConnectionState::Disconnected) { // as the world's: nothing is handled after a failure
+            auto p = zone_session_ ? zone_session_->receive() : std::nullopt;
+            if (!p) break;
             if (!options_.hooks || options_.hooks->packet(plugin::Stream::Zone, plugin::Direction::In, *p) == plugin::Flow::Continue)
                 handle_zone(*p);
+        }
         // CTaskWnd::OnProcessFrame: the task compass mark looked for again once marked (0x76ff70).
         if (task_compass_dirty_ && state_ == ConnectionState::InZone) update_task_compass();
         if (zone_session_ && zone_exit_ != ZoneExit::None && zone_session_->state() != SessionState::Disconnected &&
@@ -394,7 +402,10 @@ void GameConnection::update() {
         auto f = game::tracking_frame(tracking_.open, static_cast<std::uint32_t>(now_ms()), tracking_.next_controls,
                                       tracking_.next_track, tracking_.auto_update);
         if (f.send_track) send_track();
-        send_position(false);
+        // No movement reports while a zone change waits for its answer: the original blocks in
+        // RequestZoneChangeStatusBlocking @0x52cee0 (from MoveToZone @0x541710) and its main loop does not run, so a
+        // retry still finds the crossing position (send_zone_line_position) as the last report.
+        if (!zone_change_pending_) send_position(false, position_);
         update_afk();
         update_spells();
         update_npc_interactions();
@@ -430,6 +441,9 @@ void GameConnection::update() {
         for (auto& entry : world_.spawns) refresh_new_armor_bits(entry.second);
     raise_hook_events();
     marketplace_frame(now_ms());
+    // A fade only suppresses the local cure prediction for the network update it arrived in. All of the update's
+    // packets have been handled above, so a fade can no longer affect a cure in a later update.
+    faded_counter_spas_ = 0;
 }
 
 void GameConnection::refresh_new_armor_bits(game::Spawn& s) const {
@@ -669,6 +683,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         world_.target_id = 0;
         target_of_target_ = 0;
         own_spawn_seen_ = weather_seen_ = client_spawn_requested_ = zone_ready_ = false;
+        instrument_published_ = false;
         // The new local EQPlayer (its constructor @0x596ac0): Send_OP_FloatListThing(1) for it, then the samples
         // are forgotten. MoveToZone sent the last zone's already; here they are only forgotten.
         position_tracker_.flush();
@@ -1195,6 +1210,8 @@ void GameConnection::finish_zone_in() {
     if (entered) send_zone(encode_hailstone_guild({}));
     // And the server's settings for the client; a server without Hailstone's script does not answer.
     if (entered) send_zone(encode_hailstone_settings_request());
+    // The camera effect's reset @0x4939b0 runs on the zone-in: a new zone starts unshaken.
+    camera_shake_.reset();
     // DoMainLoop after ReadyEnterWorld: the task window rebuilt and the task compass mark looked for (0x76ff50).
     ++tasks_.revision;
     task_compass_dirty_ = true;
@@ -1232,6 +1249,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
     // HandleWorldMessage serves both streams.
     if (handle_merc(p)) return;
     if (handle_name_change(p)) return; // net/game_connection_names.cpp
+    if (handle_spawn_rename(p)) return; // net/game_connection_rename.cpp
     if (handle_group_search(p)) return; // the group finder's replies (net/game_connection_group_search.cpp)
     if (handle_marketplace(p)) return;  // the marketplace's packets (net/game_connection_marketplace.cpp)
     if (handle_rewards(p)) return; // the two stock Select Reward managers
@@ -1433,6 +1451,34 @@ void GameConnection::handle_zone(const AppPacket& p) {
             } else {
                 maybe_request_client_spawn();
             }
+            // The spawn record overwrote PlayerState: set the instrument bit again now that the own spawn and the
+            // inventory (which may have arrived first) are both here.
+            refresh_instrument_state();
+        } else if (s->npc == 0 && s->spawn_id == world_.player_id && s->name == character_) {
+            // A later record for the same own spawn overwrites PlayerState too.
+            refresh_instrument_state();
+        }
+        break;
+    }
+    case Op::MobRename: {
+        auto rename = decode_mob_rename(p);
+        if (!rename) break;
+        // GetSpawnByName @0x599b40 compares the full name, including a spawn's numeric suffix. For the player's own
+        // spawn (its id against the local player's, 0x4c9acd..0x4c9ae7) the handler (0x4c9a6b) also sets the
+        // character's name (0x4d5a10: CharacterBase +0x3c of the character at 0xdd261c), so later readers of the
+        // character's name (the profile, leadership, the own-corpse checks, the next zone's entry) take the new one.
+        // It then sends 0x2b8e alone while the server list window is up, to refresh it; Hailstone has no such window.
+        for (auto& [id, spawn] : world_.spawns) {
+            if (!iequals(spawn.name, rename->old_name)) continue;
+            if (id == world_.player_id) {
+                character_ = rename->new_name;
+                if (profile_) profile_->name = rename->new_name;
+            }
+            if (spawn.name != rename->new_name) {
+                spawn.name = std::move(rename->new_name);
+                ++world_.spawn_set_serial;
+            }
+            break;
         }
         break;
     }
@@ -1488,6 +1534,8 @@ void GameConnection::handle_zone(const AppPacket& p) {
         send_zone(make_empty(Op::WorldObjectsSent));
         send_zone(make_empty(Op::ClientReady));
         zone_ready_ = true;
+        // The instrument bit may have been set during the zone-in, before the server accepted PlayerState packets.
+        refresh_instrument_state();
         position_tracker_.enable(); // DoMainLoop's start (@0x53d461)
         finish_zone_in();
         send_server_filter(); // the Options' chat filters, for the zone to apply
@@ -1505,7 +1553,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
     }
     case Op::DeleteSpawn:
         if (auto id = decode_delete_spawn(p)) {
-            duel_spawn_removed(*id, p.data.size() > 4 && p.data[4] != std::byte{0});
+            duel_spawn_removed(*id, decode_delete_spawn_decayed(p).value_or(false));
             // msgEQRmPlayer: the trade partner (pinstTradeTarget) leaving cancels and closes the trade
             // (CTradeWnd_CancelAndClose, which sends OP_CancelTrade). EQEmu tells only the player who left.
             if (trade_ && trade_->partner_id == *id) trade_cancel();
@@ -1909,6 +1957,18 @@ void GameConnection::handle_zone(const AppPacket& p) {
     case Op::Weblink:
         // The case @0x4c5b5d hands the address to WebManager_CreateHtmlWnd (an in-game HTML window); the app opens it.
         if (auto url = decode_weblink(p)) web_links_.push_back(std::move(*url));
+        break;
+    case Op::Marquee:
+        // The case @0x4cb7f7: CTextOverlay::DisplayText(text, colour, priority, alpha, fade-in, fade-out, hold) and a
+        // debug log. Nothing goes to chat.
+        if (auto m = decode_marquee(p))
+            text_overlay_.display(std::move(m->text), m->colour, m->priority, m->alpha, m->fade_in_ms, m->fade_out_ms,
+                                  m->hold_ms, static_cast<std::uint32_t>(now_ms()));
+        break;
+    case Op::CameraEffect:
+        // The case @0x4c6f73: the camera effect's Set(strength, duration) (game/camera_shake.h).
+        if (auto c = decode_camera_effect(p))
+            camera_shake_.set(c->intensity, c->duration_ms, static_cast<std::uint32_t>(now_ms()));
         break;
     case Op::Stun:
         // The case @0x4c7093: StunMe(duration, 0, 0, the lean byte) with a local character. EQEmu's UnStun sends a
@@ -2331,7 +2391,7 @@ void GameConnection::set_player_motion(const glm::vec3& position, float heading,
     }
 }
 
-void GameConnection::send_position(bool force) {
+void GameConnection::send_position(bool force, glm::vec3 position, bool reliable) {
     // A dead player's spawn is a corpse now; nothing to report until the re-zone.
     if (!zone_session_ || world_.player_id == 0 || pstatus_.dead) return;
     reconcile_eye_control();
@@ -2341,9 +2401,9 @@ void GameConnection::send_position(bool force) {
     // DoMainLoop: the sequence is the position tracker's sample count, then sample 2 is recorded.
     ClientPositionUpdate u;
     u.sequence = position_tracker_.sequence();
-    record_position_sample(game::kPositionUpdate);
+    record_position_sample(game::kPositionUpdate, &position);
     u.spawn_id = static_cast<std::uint16_t>(world_.player_id);
-    glm::vec3 world_p = position_, world_v = velocity_;
+    glm::vec3 world_p = position, world_v = velocity_;
     float heading = heading_;
     // Standing on a vehicle: the physics block in the vehicle's frame (Vehicle_ToLocal) and the vehicle's id
     // (PackPlayerPositionUpdateOnVehicle; the server adds the vehicle's position and heading back). The frame is the
@@ -2372,9 +2432,9 @@ void GameConnection::send_position(bool force) {
     // A ridden mount's (the controlled spawn's) goes out under the rider's id (DoMainLoop @0x53e28b).
     float speed_run = std::clamp(speed_run_, -12.8f, 12.7f);
     u.motion.animation = static_cast<std::int32_t>(speed_run * 40.0f);
-    send_zone(encode(u), false);
+    send_zone(encode(u), reliable);
     last_position_send_ = now;
-    last_sent_position_ = position_;
+    last_sent_position_ = position;
     last_sent_heading_ = heading_;
     motion_dirty_ = false;
 }
@@ -2480,8 +2540,7 @@ bool GameConnection::request_zone_change(std::uint16_t zone_id, std::uint16_t in
     if (state_ != ConnectionState::InZone || zone_change_pending_ || !zone_session_) return false;
     // The server picks the zone point nearest to the last reported position,
     // so report where we are first (DoTeleportB sends OP_ClientUpdate first).
-    motion_dirty_ = true;
-    send_position(true);
+    send_zone_line_position(position_);
     ZoneChange z;
     z.char_name = character_;
     z.zone_id = zone_id;

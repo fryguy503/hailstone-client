@@ -14,6 +14,11 @@
 
 namespace hailstone::web {
 
+TabRules tab_rules(const TabOptions& o) {
+    if (!o.owner.empty()) return TabRules::Sites;
+    return o.server_link ? TabRules::ServerLink : TabRules::Player;
+}
+
 namespace {
 
 // What one poll reads at most, so a helper that floods the pipe cannot stall a frame.
@@ -42,16 +47,13 @@ private:
     platform::HelperProcess process_;
 };
 
-bool allowed(const std::string& url, const TabOptions& o) {
-    if (url == "about:blank") return true; // a new tab's empty page
-    static const std::vector<std::string> kAny;
-    return o.owner.empty() ? url_allowed(url, kAny) : script_url_allowed(url, o.allow);
-}
+bool allowed(const std::string& url, const TabOptions& o) { return tab_may_show(url, tab_rules(o), o.allow); }
 
 std::string refusal(const std::string& url) {
     const std::string host = web_host(url);
     if (host.empty()) return std::format("{} is not an http or https address", url);
-    if (private_host(host)) return std::format("{} is on this computer or a private network, which scripts may not open", url);
+    if (private_host(host))
+        return std::format("{} is on this computer or a private network, which scripts and server links may not open", url);
     return std::format("{} is not on a site this server lets scripts open", url);
 }
 
@@ -137,8 +139,8 @@ Open BrowserHost::open_message(const Tab& t) const {
     o.tab = t.id;
     o.width = t.options.width;
     o.height = t.options.height;
-    o.restricted = !t.options.owner.empty();
-    if (o.restricted) o.allow = t.options.allow;
+    o.rules = tab_rules(t.options);
+    if (o.rules == TabRules::Sites) o.allow = t.options.allow;
     o.profile = t.options.profile;
     o.url = t.url;
     return o;
@@ -287,7 +289,8 @@ void BrowserHost::handle(Message m) {
                     t->url = v.url;
                     // The helper refuses these itself; a tab that got there anyway goes.
                     if (!allowed(v.url, t->options)) {
-                        log::warn("web: {}'s tab went to {}, outside its sites: closed", t->options.owner, v.url);
+                        log::warn("web: {}'s tab went to {}, outside its sites: closed",
+                                  t->options.owner.empty() ? std::string("a server link") : t->options.owner, v.url);
                         send(Close{v.tab}, true);
                         close_tab(*t, CloseReason::Refused, refusal(v.url));
                     }

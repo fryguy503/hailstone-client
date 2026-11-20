@@ -16,6 +16,7 @@
 #include <Recast.h>
 
 #include "core/byte_io.h"
+#include "core/log.h"
 #include "game/collision.h"
 #include "game/mechanics/movement.h"
 
@@ -180,6 +181,22 @@ namespace {
 // own number, the zone lines' margin in app/navigator.cpp.
 constexpr float kOutsideTerrainMargin = 200.0f;
 
+// Past this many units from the origin a vertex is a damaged mesh's (as assets/ground_refine.cpp and zone_flora.cpp
+// take it). A triangle out there is left out: the tile grid is sized from the vertices' bounds, so one stray vertex at
+// 1e30 would ask for billions of tiles, and one past int's range would make the cast to a tile index undefined.
+constexpr float kMaxNavCoord = 100000.0f;
+
+// The most tiles a zone's grid may have: about 77000 units square at the default 76.8-unit tile. Classic zones need a
+// few tens of thousands at most. Geometry spanning more (only possible with a tiny cell size) builds no mesh.
+constexpr double kMaxNavTiles = double(1 << 20);
+
+bool sane_triangle(const game::CollisionTriangle& t) {
+    for (const glm::vec3* v : {&t.v0, &t.v1, &t.v2})
+        if (!(std::abs(v->x) <= kMaxNavCoord && std::abs(v->y) <= kMaxNavCoord && std::abs(v->z) <= kMaxNavCoord))
+            return false; // NaN fails too
+    return true;
+}
+
 // A passable triangle that is a water surface: flat (either side up), water just under its middle and none just
 // over it. 1.5 units each way: a surface is drawn on the region's top, and a dock's planks stand higher than that.
 bool is_water_surface(const game::CollisionTriangle& t, float min_up, const InputGeometry::WaterTest& water) {
@@ -213,7 +230,7 @@ std::shared_ptr<const InputGeometry> InputGeometry::from_collision(const game::C
         return glm::any(glm::lessThan(hi, keep->first)) || glm::any(glm::greaterThan(lo, keep->second));
     };
     for (const game::CollisionTriangle& t : mesh.triangles()) {
-        if (outside(t)) continue;
+        if (!sane_triangle(t) || outside(t)) continue;
         if (t.flags & game::kTriangleLadderSlab) continue; // the movement's stand-in; the mesh keeps the rungs
         // Passable triangles never stop the sweep and are not walked on, but a water surface is swum on: it is
         // ground for the mesh (Water once the areas are marked), so a path can cross water whose bottom is too
@@ -262,6 +279,18 @@ void InputGeometry::finish() {
         bmin_ = glm::min(bmin_, v);
         bmax_ = glm::max(bmax_, v);
     }
+    const float ts = params_.tile_size();
+    const double span_x = std::ceil(double(bmax_.x - bmin_.x) / double(ts));
+    const double span_z = std::ceil(double(bmax_.z - bmin_.z) / double(ts));
+    if (!(ts > 0.0f) || !(std::max(1.0, span_x) * std::max(1.0, span_z) <= kMaxNavTiles)) {
+        log::warn("nav: geometry spans {} x {} tiles, more than {}; no mesh is built", span_x, span_z, kMaxNavTiles);
+        verts_.clear();
+        areas_.clear();
+        surface_.clear();
+        bmin_ = glm::vec3(0.0f);
+        bmax_ = glm::vec3(-1.0f);
+        return;
+    }
     for (float f : verts_) fnv(hash_, f);
     for (std::uint8_t a : areas_) fnv(hash_, static_cast<std::uint32_t>(a));
     for (const AreaBox& b : boxes_) {
@@ -269,9 +298,8 @@ void InputGeometry::finish() {
         fnv(hash_, static_cast<std::uint32_t>(b.area));
     }
 
-    const float ts = params_.tile_size();
-    tiles_x_ = std::max(1, static_cast<int>(std::ceil((bmax_.x - bmin_.x) / ts)));
-    tiles_y_ = std::max(1, static_cast<int>(std::ceil((bmax_.z - bmin_.z) / ts)));
+    tiles_x_ = std::max(1, static_cast<int>(span_x));
+    tiles_y_ = std::max(1, static_cast<int>(span_z));
     tiles_.assign(static_cast<std::size_t>(tiles_x_) * static_cast<std::size_t>(tiles_y_), {});
     const float border = static_cast<float>(border_cells(params_)) * params_.cell_size;
     for (std::size_t i = 0; i < n; ++i) {

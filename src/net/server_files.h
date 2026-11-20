@@ -93,7 +93,8 @@ public:
     static constexpr std::chrono::seconds kChunkTimeout{30};
     // A piece that does not come is asked for again: at once when one asked after it comes (the server answers in
     // order, so it skipped this one: an older Hailstone script dropped requests over its limit), or when nothing has
-    // come for kChunkRetry. At most kChunkRetries times, then the sync fails.
+    // come for kChunkRetry. At most kChunkRetries times: a piece skipped once more then fails the sync, while a
+    // silence past the last request waits for kChunkTimeout.
     static constexpr std::chrono::seconds kChunkRetry{3};
     static constexpr int kChunkRetries = 5;
     // Pieces asked ahead. Measured on one machine (2026-10-26): 16 gave 8 MB/s, 32 16 MB/s, 64 23 MB/s, but 64 (2 MB

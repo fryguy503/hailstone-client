@@ -43,7 +43,11 @@ bool data_dir_is_portable();
 void set_data_dir_for_tests(std::filesystem::path dir);
 // The data folder of the Hailstone that started this program (a tool add-on in <data>/tools/<name>/, docs/addons.md,
 // is told it with --data-dir): replaces the choice for the rest of the run; data_dir_reason() says `reason`.
+// An EverQuest folder given that way is refused as choose_data_dir refuses one: data_dir_problem() then says so.
 void use_data_dir(std::filesystem::path dir, std::string reason);
+// Why a data folder named for this run (HAILSTONE_DATA_DIR, use_data_dir) cannot be used ("" it can): it is an
+// EverQuest folder (eqgame.exe, spells_us.txt or eqclient.ini in it), which Hailstone never writes.
+std::string given_data_dir_problem(const std::filesystem::path& dir);
 // True when a file can be created in `dir` (which must exist); a probe file is written and removed.
 bool is_writable_dir(const std::filesystem::path& dir);
 

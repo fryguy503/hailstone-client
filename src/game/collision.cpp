@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
-#include <unordered_set>
 
 #include "assets/zone.h"
 #include "game/animated_objects.h"
@@ -353,11 +352,11 @@ bool CollisionMesh::visual_surfaces(const glm::vec2& low,const glm::vec2& high,
        low.x>high.x||low.y>high.y)return false;
     const auto x0=cell_of(low.x),x1=cell_of(high.x),y0=cell_of(low.y),y1=cell_of(high.y);
     if((std::int64_t{x1}-x0+1)*(std::int64_t{y1}-y0+1)>static_cast<std::int64_t>(work))return false;
-    std::unordered_set<std::uint32_t> seen;
+    SeenTriangles seen(triangles_.size()); // (a plugin's surface patches ask this many times a frame: no set each call)
     const auto sample=[&](std::uint32_t index){
         if(work==0)return false;
         --work;
-        if(!seen.insert(index).second)return true;
+        if(!seen.first(index))return true;
         const auto& tri=triangles_[index];
         if(!visual_surface(tri))return true;
         const auto lo=glm::min(glm::min(glm::vec2(tri.v0),glm::vec2(tri.v1)),glm::vec2(tri.v2));
@@ -426,13 +425,14 @@ bool CollisionMesh::line_of_sight(const glm::vec3& a, const glm::vec3& b) const 
         float hit = glm::dot(e2, qv) * inv;
         return hit > 0.001f && hit < 0.999f;
     };
+    SeenTriangles seen(triangles_.size());
     for (auto x = x0; x <= x1; ++x) {
         for (auto y = y0; y <= y1; ++y) {
             if (!passes_over(x, y)) continue;
             auto it = cells_.find(cell_key(x, y));
             if (it == cells_.end()) continue;
             for (std::uint32_t t : it->second)
-                if (blocks(triangles_[t])) return false;
+                if (seen.first(t) && blocks(triangles_[t])) return false; // a triangle over several cells once
         }
     }
     for (std::uint32_t t : big_)

@@ -148,12 +148,12 @@ uint32_t event_flags(std::uint32_t mods) {
 
 class Helper;
 
-// The requests of a script's or plugin's profile (its own request context, docs/browser.md "Profiles") that come from
-// no tab: a service worker's. Held to the same rules as its tabs' (web::script_request_allowed). Called on CEF's IO
-// thread.
+// The requests of a script's or plugin's profile, or the server links' (its own request context, docs/browser.md
+// "Profiles"), that come from no tab: a service worker's. Held to the same rules as its tabs' (web::tab_may_request).
+// Called on CEF's IO thread.
 class RestrictedContext final : public CefRequestContextHandler, public CefResourceRequestHandler {
 public:
-    explicit RestrictedContext(std::vector<std::string> allow) : allow_(std::move(allow)) {}
+    RestrictedContext(web::TabRules rules, std::vector<std::string> allow) : rules_(rules), allow_(std::move(allow)) {}
     void set_allow(std::vector<std::string> allow) {
         std::lock_guard<std::mutex> lock(mutex_);
         allow_ = std::move(allow);
@@ -175,8 +175,9 @@ public:
 private:
     bool allowed(const std::string& url) {
         std::lock_guard<std::mutex> lock(mutex_);
-        return web::script_request_allowed(url, allow_);
+        return web::tab_may_request(url, rules_, allow_);
     }
+    const web::TabRules rules_;
     std::mutex mutex_;
     std::vector<std::string> allow_;
     IMPLEMENT_REFCOUNTING(RestrictedContext);
@@ -192,8 +193,7 @@ class TabClient final : public CefClient,
                         public CefResourceRequestHandler {
 public:
     TabClient(Helper& helper, const web::Open& o)
-        : helper_(helper), tab_(o.tab), width_(o.width), height_(o.height), restricted_(o.restricted),
-          allow_(o.allow) {}
+        : helper_(helper), tab_(o.tab), width_(o.width), height_(o.height), rules_(o.rules), allow_(o.allow) {}
 
     CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
@@ -213,17 +213,18 @@ public:
         if (browser_) f(*browser_);
         else waiting_.push_back(std::move(f));
     }
-    // A main-frame address this tab may show: http(s) (about:blank and CEF's own error pages too); a script's or
-    // plugin's tab only on its sites, and never this computer or a private network (web/page_rules.h).
+    // A main-frame address this tab may show: http(s) (about:blank and CEF's own error pages too); a server link's
+    // tab never this computer or a private network, a script's or plugin's only its sites and never those either
+    // (web/page_rules.h).
     bool may_show(const std::string& url) const {
-        if (url == "about:blank" || url.rfind("chrome-error://", 0) == 0) return true;
-        static const std::vector<std::string> kAny;
-        return restricted_ ? web::script_url_allowed(url, allow_) : web::url_allowed(url, kAny);
+        if (url.rfind("chrome-error://", 0) == 0) return true;
+        return web::tab_may_show(url, rules_, allow_);
     }
-    // A script's or plugin's tab: what a frame inside the page, or any request the page makes, may reach.
+    // What a frame inside the page, or any request the page makes, may reach.
     bool may_request(const std::string& url) const {
-        return !restricted_ || url.rfind("chrome-error://", 0) == 0 || web::script_request_allowed(url, allow_);
+        return url.rfind("chrome-error://", 0) == 0 || web::tab_may_request(url, rules_, allow_);
     }
+    bool held() const { return rules_ != web::TabRules::Player; }
 
     // CefRenderHandler
     void GetViewRect(CefRefPtr<CefBrowser>, CefRect& rect) override {
@@ -298,7 +299,7 @@ public:
     }
 
     // CefRequestHandler: every navigation (links, redirects, scripts) meets the tab's rules: the main frame's always,
-    // a frame's inside a script's or plugin's page too.
+    // a frame's inside a server link's, script's or plugin's page too.
     bool OnBeforeBrowse(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request, bool,
                         bool) override {
         const std::string url = request->GetURL().ToString();
@@ -306,13 +307,13 @@ public:
         send_console(tab_, 2, "refused " + url + ": not a page this tab may show");
         return true;
     }
-    // A script's or plugin's page: each request it makes (images, scripts, styles, fetch, frames) meets the rules
-    // too, here on CEF's IO thread (allow_ and restricted_ do not change after the tab is made). The player's tabs
-    // get CEF's default handling.
+    // A server link's, script's or plugin's page: each request it makes (images, scripts, styles, fetch, a form's
+    // post, frames) meets the rules too, here on CEF's IO thread (allow_ and rules_ do not change after the tab is
+    // made). The player's own tabs get CEF's default handling.
     CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
                                                                    CefRefPtr<CefRequest>, bool, bool,
                                                                    const CefString&, bool&) override {
-        return restricted_ ? this : nullptr;
+        return held() ? this : nullptr;
     }
     ReturnValue OnBeforeResourceLoad(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest> request,
                                      CefRefPtr<CefCallback>) override {
@@ -361,7 +362,7 @@ private:
     Helper& helper_;
     std::uint32_t tab_;
     std::uint16_t width_, height_;
-    bool restricted_;
+    web::TabRules rules_;
     std::vector<std::string> allow_;
     CefRefPtr<CefBrowser> browser_;
     std::vector<std::function<void(CefBrowser&)>> waiting_;
@@ -478,19 +479,20 @@ private:
     }
 
     // A profile's request context: its own cookies and cache, in a folder under --data (CEF requires that). The
-    // client gives each script and plugin a profile of its own (app/web_service.h); a context made for a restricted
-    // tab holds the requests that come from no tab (service workers) to that tab's rules.
+    // client gives each script and plugin a profile of its own, and the server links one (app/web_service.h); a
+    // context made for such a tab holds the requests that come from no tab (service workers) to that tab's rules.
     CefRefPtr<CefRequestContext> context(const web::Open& o) {
         const std::string& profile = o.profile;
         if (profile.empty() || profile.rfind(data_, 0) != 0) return CefRequestContext::GetGlobalContext();
         auto it = contexts_.find(profile);
         if (it != contexts_.end()) {
-            if (it->second.rules && o.restricted) it->second.rules->set_allow(o.allow);
+            if (it->second.rules && o.rules == web::TabRules::Sites) it->second.rules->set_allow(o.allow);
             return it->second.context;
         }
         CefRequestContextSettings s;
         CefString(&s.cache_path) = profile;
-        CefRefPtr<RestrictedContext> rules = o.restricted ? new RestrictedContext(o.allow) : nullptr;
+        CefRefPtr<RestrictedContext> rules =
+            o.rules != web::TabRules::Player ? new RestrictedContext(o.rules, o.allow) : nullptr;
         CefRefPtr<CefRequestContext> c = CefRequestContext::CreateContext(s, rules.get());
         contexts_.emplace(profile, Context{c, rules});
         return c;

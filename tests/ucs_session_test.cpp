@@ -541,6 +541,12 @@ TEST_CASE("UCS mail integration authenticates, switches boxes, reads and deletes
     REQUIRE(rig.until([&] { return rig.conn.mail().headers.at(42).body.has_value(); }));
     CHECK(*rig.conn.mail().headers.at(42).body == "Contents");
     CHECK(rig.conn.mail().headers.at(42).to == "SOE.EQ.test.Hero");
+    // A long run of blanks before TO: is cut in one go (it used to be erased a character at a time).
+    std::string padded;
+    for (int i = 0; i < 100000; ++i) padded += " \n";
+    rig.server.ucs.send_reliable(strings(0x0f, {"1", "42", "Again", "1", "", padded + "TO:SOE.EQ.test.Other\n"}));
+    REQUIRE(rig.until([&] { return rig.conn.mail().headers.at(42).body == "Again"; }));
+    CHECK(rig.conn.mail().headers.at(42).to == "SOE.EQ.test.Other");
     rig.server.ucs.send_reliable(strings(0x0e, {"oops", "0", "0", "7", "1", "2", "Bad", "Wrong box"}));
     rig.server.ucs.send_reliable(strings(0x0e, {"1", "0", "0", "7oops", "1", "2", "Bad", "Wrong id"}));
     rig.server.ucs.send_reliable(strings(0x02, {"general"})); // marker after the rejected inputs

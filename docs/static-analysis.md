@@ -1,6 +1,6 @@
 # Static analysis
 
-`.clang-tidy` at the root configures clang-tidy; it is run by hand at present (docs/ci.md: the CI job that ran it on Linux was dropped to save Actions minutes). Findings of the enabled checks are errors (`WarningsAsErrors: '*'`). cppcheck was run once by hand; it is not in CI.
+`.clang-tidy` at the root configures clang-tidy. It is run by hand at present: the CI job that ran it on Linux was dropped to save Actions minutes (docs/ci.md). Findings of the enabled checks are errors (`WarningsAsErrors: '*'`). cppcheck was run once by hand; it is not in CI.
 
 ## Running it
 
@@ -40,7 +40,7 @@ This code base is numeric and emulation-heavy, with float and x87 behaviour that
 
 - `net/game_connection_death.cpp`: `if (!dead) return;` before the corpse update. `report_death` handles known spawns only, so this never fires in practice; it replaces an unchecked dereference with a return.
 - `net/game_connection_doors.cpp`: the drop confirmation text no longer dereferences a possibly empty cursor.
-- `net/game_connection_commerce.cpp`, `ui/commerce_windows.cpp`: the `int16_t` loop counter is compared with an `int16_t` bound (`slots()` is 4 or 8), so no narrower-than-bound loop variable.
+- `net/game_connection_commerce.cpp`, `src/ui/commerce_windows.cpp`: the `int16_t` loop counter is compared with an `int16_t` bound (`slots()` is 4 or 8), so no narrower-than-bound loop variable.
 - `net/game_connection.cpp`: no `std::move` into a const reference (it never moved); `ConnectionOptions` moved into the member.
 - `net/game_connection_social.cpp`, `app/client_app.cpp`: arguments moved or taken by const reference instead of copied.
 

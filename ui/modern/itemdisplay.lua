@@ -5,7 +5,8 @@
 -- beside their values, the game's tooltips on the names), and the description with its effects. Everything is the
 -- game's text (CItemDisplayWnd's children: the info lines, IDW_Row<r>Col<c>Stat / Value, IDW_Heroic<n>, the
 -- description STML); the Modified switch is the window's own button. The augment sockets are the window's socket
--- rows (UpdateAugmentSlots) with its buttons.
+-- rows (UpdateAugmentSlots) with its buttons. Hailstone's item comparison (docs/item-compare.md) puts each stat's
+-- change for you beside the item's value, and the verdict and what it is compared with above the grid.
 local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local W = dofile("lib/widgets.lua")
@@ -23,7 +24,10 @@ for n = 1, INFO_LINES do INFO_IDS[n] = "IDW_ItemInfo" .. n end
 for n = 1, 13 do HEROIC_IDS[n] = "IDW_Heroic" .. n end
 for c = 1, 3 do
   CELL_IDS[c] = {}
-  for r = 1, ROWS do CELL_IDS[c][r] = { "IDW_Row" .. r .. "Col" .. c .. "Stat", "IDW_Row" .. r .. "Col" .. c .. "Value" } end
+  for r = 1, ROWS do
+    local p = "IDW_Row" .. r .. "Col" .. c
+    CELL_IDS[c][r] = { p .. "Stat", p .. "Value", p .. "Key" }
+  end
 end
 local SOCKET_IDS = {}
 for n = 1, 6 do
@@ -78,8 +82,9 @@ local function captioned(lines)
   return rows
 end
 
--- The stat grid by its columns: { { stat, value, color, tooltip, heroic } or false (a blank row between two
--- blocks) ... } per column, blanks only between cells.
+-- The stat grid by its columns: { { stat, value, color, tooltip, heroic, key } or false (a blank row between two
+-- blocks) ... } per column, blanks only between cells. key: the comparison's key for the row (the window's
+-- IDW_Row<r>Col<c>Key, Hailstone's), on the first row of that stat only (haste can take several), else nil.
 local function statColumns(win)
   -- the heroic labels sit beside their values (hs.ChildRect: x by column, y by row, 16 pixels a row)
   local heroic = {}
@@ -94,18 +99,20 @@ local function statColumns(win)
       heroic[row * 4 + col] = { trim(W.Text(win, id)), childColor(win, id, C.gold) }
     end
   end
-  local cols = {}
+  local cols, seen = {}, {}
   for c = 1, 3 do
     local list, gap = {}, false
     for r = 1, ROWS do
       local ids = CELL_IDS[c][r]
-      local sid, vid = ids[1], ids[2]
+      local sid, vid, kid = ids[1], ids[2], ids[3]
       local stat = API.windows.ChildShown(win, sid) ~= false and trim(W.Text(win, sid)) or ""
       if stat ~= "" then
         if gap and #list > 0 then list[#list + 1] = false end
         gap = false
+        local key = W.Text(win, kid)
+        if key == "" or seen[key] then key = nil else seen[key] = true end
         list[#list + 1] = { stat:gsub(":$", ""), trim(W.Text(win, vid)), childColor(win, vid, C.text),
-          API.windows.ChildTooltip(win, sid) or "", heroic[r * 4 + c] }
+          API.windows.ChildTooltip(win, sid) or "", heroic[r * 4 + c], key }
       else
         gap = true
       end
@@ -150,8 +157,14 @@ local function flags(text, s, width)
   return x0
 end
 
--- One "name  value +heroic" line of a stat column, `w` wide.
-local function statLine(cell, w, s)
+-- The colours of a comparison's kinds (compare_lines.lua), read as drawn: the palette may change.
+local CMP_KIND = { good = "good", bad = "bad", mixed = "gold", muted = "muted", text = "text" }
+local function kindColor(kind) return C[CMP_KIND[kind] or "text"] or C.text end
+
+-- One "name  value +heroic  change" line of a stat column, `w` wide. deltas: the comparison's changes by key
+-- (compare_lines.lua byKey), or nil; the change for the row's stat goes at the right, its before and after in the
+-- row's tooltip.
+local function statLine(cell, w, s, deltas)
   local x, y = ui.GetCursorScreenPos()
   local _, th = T.TextSize("Ag", T.font.small)
   ui.Dummy(w, th + 3 * s)
@@ -159,15 +172,24 @@ local function statLine(cell, w, s)
   if hov then ui.DrawRectFilled(x - 3 * s, y, x + w + 3 * s, y + th + 3 * s, C.ink[1], C.ink[2], C.ink[3], 0.05, 4 * s) end
   T.Text(x, y + 1 * s, cell[1], C.muted, T.font.small)
   local right = x + w
+  local ch = deltas and cell[6] and deltas[cell[6]]
+  if ch then
+    local dw = T.Text(right, y + 1 * s, CL.signed(ch.key, ch.delta), kindColor(CL.kind(ch)), T.font.small, "right")
+    right = right - dw - 6 * s
+  end
   if cell[5] and cell[5][1] ~= "" then
     local hw = T.Text(right, y + 1 * s, cell[5][1], cell[5][2], T.font.small, "right")
     right = right - hw - 4 * s
   end
   T.Text(right, y + 1 * s, cell[2], cell[3], T.font.small, "right")
-  if hov and cell[4] ~= "" then ui.SetTooltip(cell[4]) end
+  if hov then
+    local tip = cell[4]
+    if ch then tip = (tip ~= "" and (tip .. "\n") or "") .. "Yours: " .. CL.change(ch) end
+    if tip ~= "" then ui.SetTooltip(tip) end
+  end
 end
 
-local function statGrid(cols, s, width)
+local function statGrid(cols, s, width, deltas)
   if #cols == 0 then return end
   local gap = 18 * s
   local fit = math.max(1, math.min(#cols, math.floor((width + gap) / (150 * s + gap))))
@@ -197,7 +219,7 @@ local function statGrid(cols, s, width)
     local gx = x0 + (g - 1) * (cw + gap)
     ui.SetCursorScreenPos(gx, y0)
     for i, cell in ipairs(list) do
-      if cell then statLine(cell, cw, s)
+      if cell then statLine(cell, cw, s, deltas)
       elseif i < #list then ui.Dummy(cw, th * 0.5) end
       ui.SetCursorScreenPos(gx, select(2, ui.GetCursorScreenPos()))
     end
@@ -315,45 +337,113 @@ end
 
 -- ---------------------------------------------------------------- comparison
 -- Hailstone: the item against what you wear (hs.CompareSlotItem over the window's Hailstone_Item;
--- docs/item-compare.md), every change, with a button per slot when it fits two (ears, wrists, rings).
+-- docs/item-compare.md). Each stat's change goes beside its value in the grid; above the grid the verdict, what it
+-- is compared with (a button per slot when it fits two: ears, wrists, rings); below it the changes the grid has no
+-- row for (a stat only what you wear now has), the weapon, the effects gained and lost, and the notes.
 -- The comparison is asked for again only when the item's name line or icon changes, or every COMPARE_REREAD
--- seconds (what you wear changes); its lines are made again only with it, the slot shown or the verdict option.
+-- seconds (what you wear changes); its pieces are made again only with it, the slot shown or the grid's keys.
 local compareIndex = {} -- [win] = the slot shown
-local compareCache = {} -- [win] = { at, name, tex, u0, v0, c, lines, index, verdict }
+local compareCache = {} -- [win] = { at, name, tex, u0, v0, c, parts, deltas, index, cols }
 local COMPARE_REREAD = 0.5
-local CMP_KIND = { good = "good", bad = "bad", mixed = "gold" }
-local function comparison(win, item)
-  if API.settings.Option("item_compare") == 0 then return end
+
+-- The comparison's cache for the window, its pieces made for the grid `cols`; nil when there is none to show.
+local function comparisonFor(win, item)
+  if API.settings.Option("item_compare") == 0 then return nil end
   local now = ui.GetTime()
   local k = compareCache[win]
   if not k then k = { at = -math.huge }; compareCache[win] = k end
   if k.name ~= item.name or k.tex ~= item.tex or k.u0 ~= item.u0 or k.v0 ~= item.v0
       or now - k.at >= COMPARE_REREAD or now < k.at then
-    k.c, k.lines = API.compare.SlotItem(win, "Hailstone_Item"), nil
+    k.c, k.parts = API.compare.SlotItem(win, "Hailstone_Item"), nil
     k.at, k.name, k.tex, k.u0, k.v0 = now, item.name, item.tex, item.u0, item.v0
   end
   local c = k.c
-  if not c then return end
-  W.Heading("Compared with what you wear")
+  if not c then return nil end
   local index = compareIndex[win] or 1
   if index > #c.slots then index = 1 end
+  if not k.parts or k.index ~= index or k.cols ~= item.cols then
+    local skip = {}
+    for _, col in ipairs(item.cols) do
+      for _, cell in ipairs(col) do if cell and cell[6] then skip[cell[6]] = true end end
+    end
+    k.parts = CL.parts(c, index, { full = true, skip = skip })
+    k.deltas = CL.byKey(k.parts.slot)
+    k.index, k.cols = index, item.cols
+  end
+  return k
+end
+
+local function verdictChip(text, color, s)
+  local tw, th = T.TextSize(text, T.font.small)
+  local x, y = ui.GetCursorScreenPos()
+  local pw, ph = 7 * s, 1 * s
+  ui.DrawRectFilled(x, y, x + tw + 2 * pw, y + th + 2 * ph, color[1], color[2], color[3], 0.18, 9 * s)
+  T.Text(x + pw, y + ph, text, color, T.font.small)
+  ui.Dummy(tw + 2 * pw, th + 2 * ph)
+end
+
+-- Above the grid: the verdict as a chip, then "vs your X (Slot)", then the slots to choose between.
+local function comparisonHeader(win, k, s)
+  local p, c = k.parts, k.c
+  local verdict = API.settings.Option("item_compare_verdict") ~= 0
+  local any = false
+  if p.cantUse then
+    verdictChip(p.cantUse, kindColor("bad"), s)
+    any = true
+  elseif verdict and p.verdict then
+    verdictChip(p.verdict[1], kindColor(p.verdict[2]), s)
+    any = true
+  end
+  ui.PushFont(T.font.small)
+  if any then
+    ui.SameLine(0, 8 * s)
+    local cx, cy = ui.GetCursorScreenPos()
+    ui.SetCursorScreenPos(cx, cy + 1 * s) -- the chip's padding: the text on its line
+  end
+  ui.PushTextWrapPos(0)
+  ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, p.against and ("vs " .. p.against) or p.heading)
+  ui.PopTextWrapPos()
   if #c.slots > 1 then
     for n, slot in ipairs(c.slots) do
       if n > 1 then ui.SameLine() end
       local label = slot.slotName .. "##cmp" .. n
-      if ui.Selectable(label, n == index, 0, (ui.CalcTextSize(slot.slotName)), 0) then compareIndex[win] = n end
+      if ui.Selectable(label, n == k.index, 0, (ui.CalcTextSize(slot.slotName)), 0) then compareIndex[win] = n end
     end
   end
-  local verdict = API.settings.Option("item_compare_verdict") ~= 0
-  if not k.lines or k.index ~= index or k.verdict ~= verdict then
-    k.lines, k.index, k.verdict = CL.lines(c, index, { verdict = verdict, full = true }), index, verdict
-  end
+  ui.PopFont()
+  ui.Dummy(0, 2 * s)
+end
+
+-- Below the grid: the changes it has no row for (as "+5 STR", side by side as they fit), then the other lines.
+local function comparisonRest(k, s, width)
+  local p = k.parts
+  if not p.slot then return end
   ui.PushFont(T.font.small)
+  if #p.changes > 0 then
+    ui.Dummy(0, 2 * s)
+    local x0 = ui.GetCursorScreenPos()
+    local used, gap = 0, 12 * s
+    for i, ch in ipairs(p.changes) do
+      local text = CL.short(ch)
+      local tw = T.TextSize(text, T.font.small)
+      if i > 1 and used + gap + tw <= width then ui.SameLine(0, gap)
+      else
+        if i > 1 then ui.SetCursorScreenPos(x0, select(2, ui.GetCursorScreenPos())) end
+        used = 0
+      end
+      local col = kindColor(CL.kind(ch))
+      ui.TextColored(col[1], col[2], col[3], 1, text)
+      if ui.IsItemHovered() then ui.SetTooltip("Yours: " .. CL.change(ch)) end
+      used = used + (used > 0 and gap or 0) + tw
+    end
+  end
+  if p.none and #p.extra == 0 then
+    ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, "No change to your stats")
+  end
   ui.PushTextWrapPos(0)
-  for _, line in ipairs(k.lines) do
-    local text, kind = line[1], line[2]
-    local col = CMP_KIND[kind] and C[CMP_KIND[kind]] or (kind == "muted" and C.muted or C.text)
-    ui.TextColored(col[1], col[2], col[3], 1, text)
+  for _, e in ipairs(p.extra) do
+    local col = kindColor(e[2])
+    ui.TextColored(col[1], col[2], col[3], 1, e[1])
   end
   ui.PopTextWrapPos()
   ui.PopFont()
@@ -420,10 +510,11 @@ local function body(win, w, h, s)
     end
   end
   local cols = item.cols
-  if #cols > 0 then
-    W.Heading("Stats")
-    statGrid(cols, s, cw)
-  end
+  local cmp = comparisonFor(win, item)
+  if #cols > 0 or cmp then W.Heading("Stats") end
+  if cmp then comparisonHeader(win, cmp, s) end
+  if #cols > 0 then statGrid(cols, s, cw, cmp and cmp.deltas) end
+  if cmp then comparisonRest(cmp, s, cw) end
   if mod ~= "" and API.windows.ChildShown(win, "IDW_ModButton") ~= false then
     -- the window's Modified button: its label says which values the grid shows
     ui.Dummy(0, 2 * s)
@@ -438,7 +529,6 @@ local function body(win, w, h, s)
     end
   end
   sockets(win, s, cw)
-  comparison(win, item)
   if trim(descRaw) ~= "" then
     W.Heading("Description")
     ui.PushFont(T.font.small)

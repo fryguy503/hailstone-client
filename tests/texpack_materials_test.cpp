@@ -205,6 +205,11 @@ TEST_CASE("photo materials: the rules files") {
     CHECK(error.starts_with("z.txt:3: "));
     CHECK_FALSE(parse_material_rules(kMaterials, {{"z", "edge = grass rock grass"}}, &error));
     CHECK_FALSE(parse_material_rules("[a]\nasset = ../up\n", {}, &error));
+    for (const char* bad : {"c:grass", "c:", "a\\b", "a/b", "a b", "gr\x01" "ass", "gr\xc3\xa9" "ass", "a.b"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(parse_material_rules(std::string("[a]\nasset = ") + bad + "\n", {}, &error));
+    }
+    CHECK(parse_material_rules("[a]\nasset = Dark-Rock_02\n", {}, &error));
     CHECK_FALSE(parse_material_rules("[a]\nasset = x\nmetres = -1\n", {}, &error));
     CHECK_FALSE(parse_material_rules("[a]\nasset = x\ncolour = 1 2\n", {}, &error));
 

@@ -135,6 +135,9 @@ NewStyleTrack new_style_track(std::uint8_t code, const NewStyleTrackInput& in,
                               const std::function<int()>& rand);
 // A resolved EQG track or clip's style column; 0 for a classic/unknown name.
 std::int32_t new_style_clip_column(std::string_view clip);
+// The base style's column (BA): what a classic alias resolves to (assets/eqg_character.h classic_aliases), and the
+// column of a sequence without a weapon style.
+inline constexpr std::int32_t kBaseStyleColumn = 0;
 
 // The clip an OP_Animation action (or any animation the client starts: an
 // old-style number below 0x4f, else a new-style code) plays, or empty for
@@ -150,10 +153,30 @@ std::int32_t new_style_clip_column(std::string_view clip);
 // slot 0x14), found as new_style_track does.
 // `playing` gets what becomes the animation playing (+0x10c0): the old-style
 // number (after 0x4b1210's replacement), or the sequence found.
+// The instrument songs' animations (0x27/0x28/0x29): drum, lute and horn. The singing songs use the ordinary cast
+// animations (0x2a/0x2b/0x2c), which always play.
+inline constexpr std::uint8_t kAnimDrum = 0x27, kAnimLute = 0x28, kAnimHorn = 0x29;
+// The bard class (PlayerBase +0xeb8).
+inline constexpr std::uint8_t kClassBard = 8;
+
+// The classic/Luclin model block for an instrument song: a sitting spawn plays none of the three, and a bard plays
+// none without an instrument in hand. The new-style (EQG) path has no such block, so `action_clip` applies this only
+// after it has normalized a classic action.
+bool instrument_song_animation(std::uint8_t anim, std::uint8_t class_id, std::uint8_t stand_state,
+                               bool holds_instrument);
+
+// What the classic instrument-song block reads from the spawn.
+struct ActionGate {
+    std::uint8_t class_id = 0;
+    std::uint8_t stand_state = 0;
+    bool holds_instrument = false;
+};
+
 std::string action_clip(std::uint8_t action, const std::function<bool(std::string_view)>& has_clip,
                         bool new_style = false, const NewStyleTrackInput& track_in = {},
                         const std::function<int()>& rand = {}, std::uint8_t* playing = nullptr,
-                        bool* stand_request = nullptr, std::uint8_t* normalized = nullptr);
+                        bool* stand_request = nullptr, std::uint8_t* normalized = nullptr,
+                        const ActionGate* gate = nullptr);
 
 // 0x4b15b0's playback rate for an OP_Animation action on a classic model: the packet's speed / 10 through
 // 0x4afc90, so a Luclin elemental's action and a styled model's D05 play at twice the rate. New-style models

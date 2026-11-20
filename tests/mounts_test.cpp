@@ -285,3 +285,40 @@ TEST_CASE("ChangeHeight reaches the mount chain: the spawn's mount takes the sam
     w.change_height(rider, 5.0f, 0.0f, 1.0f);
     CHECK(horse.heights.height == 5.0f);
 }
+
+TEST_CASE("A rider of a rider is carried to the chain's bottom in one frame, whatever the map's order") {
+    // Every order of three ids: the top rider, the rider it rides and the mount at the bottom.
+    const std::uint32_t ids[][3] = {{1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1},
+                                    {40, 7, 1000}, {1000, 40, 7}, {7, 1000, 40}};
+    for (const auto& order : ids) {
+        CAPTURE(order[0]);
+        CAPTURE(order[1]);
+        WorldState w;
+        w.player_id = 999999;
+        Spawn& top = add(w, order[0], "Top", 1, false);
+        Spawn& middle = add(w, order[1], "Middle", 1, false);
+        Spawn& bottom = add(w, order[2], "Bottom", 216, true);
+        top.mount_id = order[1];
+        middle.mount_id = order[2];
+        top.position = {-50, 0, 0};
+        middle.position = {-100, 0, 0};
+        bottom.position = {300, 40, 0};
+        bottom.heading = 128.0f;
+        w.smooth(0.016f, 1.0);
+        CHECK(middle.position == bottom.position);
+        CHECK(top.position == bottom.position);
+        CHECK(top.display_position == bottom.display_position);
+        CHECK(top.heading == bottom.heading);
+    }
+    // Two spawns that name each other: no endless walk; each takes the other's place as before.
+    WorldState w;
+    w.player_id = 999999;
+    Spawn& a = add(w, 1, "A", 1, false);
+    Spawn& b = add(w, 2, "B", 1, false);
+    a.mount_id = 2;
+    b.mount_id = 1;
+    a.position = {1, 0, 0};
+    b.position = {2, 0, 0};
+    w.smooth(0.016f, 1.0);
+    CHECK(a.position == b.position);
+}

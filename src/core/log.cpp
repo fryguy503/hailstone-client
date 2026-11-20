@@ -15,6 +15,7 @@ namespace hailstone::log {
 
 namespace {
 std::atomic<Level> g_level{Level::Info};
+std::atomic<bool> g_console{true};
 std::mutex g_mutex;
 std::FILE* g_file = nullptr; // guarded by g_mutex
 std::filesystem::path g_path; // the file g_file writes
@@ -98,6 +99,7 @@ const char* tag(Level level) {
 } // namespace
 
 void set_level(Level level) { g_level = level; }
+void set_console(bool on) { g_console = on; }
 bool enabled(Level level) { return level >= g_level.load(); }
 
 bool open_file(const std::filesystem::path& path) {
@@ -198,8 +200,9 @@ void write(Level level, std::string_view message) {
     message = escape_controls(message, escaped);
     std::lock_guard lock(g_mutex);
     remember_line(tag(level), message);
-    std::fprintf(level >= Level::Warn ? stderr : stdout, "[%s] %.*s\n", tag(level),
-                 static_cast<int>(message.size()), message.data());
+    if (g_console.load())
+        std::fprintf(level >= Level::Warn ? stderr : stdout, "[%s] %.*s\n", tag(level),
+                     static_cast<int>(message.size()), message.data());
     if (g_file && !g_file_full) {
         // Flushed at once, so the file holds everything up to a crash.
         const int n = std::fprintf(g_file, "[%s] %.*s\n", tag(level), static_cast<int>(message.size()), message.data());

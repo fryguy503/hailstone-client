@@ -11,13 +11,20 @@
 #include <iterator>
 #include <thread>
 
+#include "app/actions_ui.h"
+#include "core/config.h"
 #include "core/ini_file.h"
 #include "game/coords.h"
+#include "game/item_links.h"
+#include "game/position_tracker.h"
+#include "game/zoning.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
 #include "net/chat_server.h"
 #include "net/door_packets.h"
+#include "net/group_packets.h"
 #include "net/packet_io.h"
+#include "net/player_packets.h"
 #include "platform/udp_socket.h"
 #include "plugin/hooks.h"
 
@@ -318,6 +325,108 @@ TEST_CASE("mock server: chat, spawns, HP, items and position updates in zone") {
     CHECK(conn.state() == ConnectionState::InZone);
 }
 
+TEST_CASE("mock server: typed chat and socials expand chat variables") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    std::ofstream(rig.dir.path() / "eqstr_us.txt", std::ios::app) << "12295 say\n"
+                                                               << "12346 YOU TELL THE GROUP: %1\n";
+    conn.reload_game_files();
+    REQUIRE(rig.to_zone());
+
+    Spawn target = make_spawn("Vivren", 103, 0, 6, -281.0f, -148.0f, 3.5f);
+    target.gender = 1;
+    Spawn pet = make_spawn("Fluffy", 104, 1, 36, -280.0f, -148.0f, 3.5f);
+    pet.gender = 2;
+    pet.is_pet = true;
+    pet.pet_owner_id = conn.world().player_id;
+    const Spawn other = make_spawn("Delvan", 105, 0, 2, -282.0f, -148.0f, 3.5f);
+    server.add_spawn(target);
+    server.add_spawn(pet);
+    server.add_spawn(other);
+    GroupUpdateB group;
+    group.group_id = 7;
+    group.leader = "Gennro";
+    group.members.resize(2);
+    group.members[0].name = group.leader;
+    group.members[1].slot = 1;
+    group.members[1].name = target.name;
+    server.zone.send_reliable(encode(group));
+    REQUIRE(rig.until([&] { return conn.group().active && conn.world().spawns.contains(other.spawn_id); }));
+    REQUIRE(conn.pets().focused == pet.spawn_id);
+    rig.chat();
+
+    int messages = MockEqServer::count(server.zone_log, Op::ChannelMessage);
+    const auto check_sent = [&](std::uint32_t channel, const std::string& expected, std::string_view recipient = {}) {
+        REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ChannelMessage) == messages + 1; }));
+        ++messages;
+        const auto packet = std::find_if(server.zone_log.rbegin(), server.zone_log.rend(),
+                                         [](const AppPacket& p) { return is_op(p, Op::ChannelMessage); });
+        REQUIRE(packet != server.zone_log.rend());
+        const auto sent = decode_channel_message(*packet);
+        REQUIRE(sent);
+        CHECK(sent->channel == channel);
+        CHECK(sent->target == recipient);
+        CHECK(sent->message == expected);
+    };
+
+    const std::string link = game::make_item_link(1003, "Pendant %T", false);
+    conn.set_target(target.spawn_id);
+    conn.send_command("/gsay %t | %M | %S | %o | %P | %r " + link);
+    const std::string expected = "Vivren | Fluffy | she | her | her | Dark Elf " + link;
+    check_sent(2, expected);
+    CHECK(has_line(rig.chat(), "YOU TELL THE GROUP: " + expected));
+
+    Config config;
+    app::ActionsUi actions(config, rig.dir.path() / "hailstone.ini");
+    actions.hot_buttons().social(0).lines[0] = "/g CH >>> %T <<< | %s | %O | %p | %R | %m";
+    actions.press_social(0);
+    conn.set_target(other.spawn_id);
+    conn.set_game_steps(std::vector<std::int64_t>{101});
+    actions.update(conn, nullptr, {});
+    conn.set_game_steps(std::nullopt);
+    const std::string social = "CH >>> Delvan <<< | he | him | his | Barbarian | Fluffy";
+    check_sent(2, social);
+    CHECK(has_line(rig.chat(), "YOU TELL THE GROUP: " + social));
+
+    conn.send_command("%T is a %R");
+    check_sent(8, "Delvan is a Barbarian");
+    conn.send_command("/say %T");
+    check_sent(8, "Delvan");
+    conn.send_command("/tell Vivren %S brought %m");
+    check_sent(7, "he brought Fluffy", "Vivren");
+    conn.send_command("/emote waves to %T");
+    check_sent(22, "waves to Delvan.");
+    conn.send_command("/1 %t has a pet named %m");
+    check_sent(20, ";1 Delvan has a pet named Fluffy");
+
+    conn.set_target(pet.spawn_id);
+    conn.send_command("/say %T has race %R");
+    check_sent(8, "Fluffy has race NPC", "Fluffy");
+    conn.send_command("/point say points at %T and waves to %O");
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::Emote) == 1; }));
+    const auto emote = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                    [](const AppPacket& p) { return is_op(p, Op::Emote); });
+    REQUIRE(emote != server.zone_log.end());
+    const auto pointed = decode_emote(*emote);
+    REQUIRE(pointed);
+    CHECK(pointed->text == " points at Fluffy and waves to it.");
+
+    conn.set_target(target.spawn_id);
+    conn.send_command("/assist %t");
+    conn.send_command("/shield %T");
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::Assist) == 1 &&
+                                  MockEqServer::count(server.zone_log, Op::Shielding) == 1; }));
+    const auto assist = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                     [](const AppPacket& p) { return is_op(p, Op::Assist); });
+    REQUIRE(assist != server.zone_log.end());
+    CHECK(decode_assist(*assist) == target.spawn_id);
+    const auto shield = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                     [](const AppPacket& p) { return is_op(p, Op::Shielding); });
+    REQUIRE(shield != server.zone_log.end());
+    CHECK(shield->data == encode_shielding(target.spawn_id).data);
+}
+
 // ---------------------------------------------------------------- OP_ClientUpdate cadence
 
 TEST_CASE("mock server: OP_ClientUpdate is sent at most every 280 ms, with the current position, only when it changed") {
@@ -480,6 +589,128 @@ TEST_CASE("mock server: zone lines and server-requested zoning go through world 
     CHECK(asked->zone_id == 2);
     CHECK(asked->zone_reason == 0x0b); // the request's type is passed back
     CHECK(conn.error().empty());
+}
+
+TEST_CASE("mock server: East Freeport reports the mapped source X before zoning to North Ro") {
+    MockConfig config = MockConfig::standard();
+    config.characters.front().zone_id = 10;
+    MockZone& east_freeport = config.zones[10];
+    east_freeport.id = 10;
+    east_freeport.short_name = "freporte";
+    east_freeport.long_name = "East Freeport";
+    east_freeport.zone_points = {{11, 4173.0f, 999999.0f, -27.0f, 256.0f, 34}};
+    Rig rig(std::move(config));
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.until([&] { return conn.zone_points().size() == 1; }));
+    REQUIRE(conn.current_zone_dword() == 10);
+    const glm::vec3 walk_position(-1200.0f, -670.0f, -50.0f);
+    conn.set_player_motion(walk_position, 0.0f, glm::vec3(0.0f), true);
+
+    auto rows = conn.zone_point_rows();
+    float location[] = {walk_position.x, walk_position.y, walk_position.z};
+    auto target = game::resolve_teleport_index("DRNTP00255000011", -1,
+                                               static_cast<std::int32_t>(conn.current_zone_dword()), location, rows);
+    REQUIRE(target.ok);
+    REQUIRE(target.destination == 34);
+    game::TeleportBPlayer player;
+    player.zone = 10;
+    player.x = location[0];
+    player.y = location[1];
+    player.z = location[2];
+    game::TeleportBHooks hooks;
+    hooks.position_sample = [](int) {};
+    hooks.send_client_update = [&] { conn.send_zone_line_position({player.x, player.y, player.z}); };
+    hooks.save_physics = [] {};
+    hooks.move_to_zone = [&](const game::MoveToZoneCall& move) { conn.move_to_zone(move); };
+    hooks.rewind_reset = [] {};
+
+    server.zone_change_answers = {-1, -2};
+    conn.record_position_sample(game::kPositionZoneLine, &walk_position);
+    REQUIRE(game::do_teleport_b(player, {target.destination, target.x, target.y, target.z, target.heading}, 5, hooks));
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ZoneChange) == 1; }));
+    // Preserve the mapped X through the retry even when a subsequent frame updates movement.
+    conn.set_player_motion(walk_position + glm::vec3(0.0f, 2.0f, 0.0f), 0.0f, glm::vec3(0.0f), true);
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ZoneChange) == 2; }));
+    CHECK(in_order(server.zone_log, {Op::FloatListThing, Op::ClientUpdate, Op::ZoneChange}));
+    const auto request = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                      [](const AppPacket& p) { return is_op(p, Op::ZoneChange); });
+    REQUIRE(request != server.zone_log.end());
+    const auto retry = std::find_if(std::next(request), server.zone_log.end(),
+                                    [](const AppPacket& p) { return is_op(p, Op::ZoneChange); });
+    REQUIRE(retry != server.zone_log.end());
+    CHECK(std::none_of(std::next(request), retry, [](const AppPacket& p) { return is_op(p, Op::ClientUpdate); }));
+    const auto source = std::find_if(std::make_reverse_iterator(request), server.zone_log.rend(),
+                                     [](const AppPacket& p) { return is_op(p, Op::ClientUpdate); });
+    REQUIRE(source != server.zone_log.rend());
+    const auto update = decode_client_position_update(*source);
+    REQUIRE(update);
+    // EQEmu keeps this last reported server X when the zone point's target X is 999999.
+    CHECK(update->motion.x == 374.0f);
+    CHECK(update->motion.y == -1200.0f);
+    CHECK(update->motion.z == -50.0f);
+    const auto change = decode_zone_change(*request);
+    REQUIRE(change);
+    CHECK(change->zone_id == 34);
+    CHECK(change->x == 374.0f);
+    CHECK(change->y == 4173.0f);
+    CHECK(change->z == -27.0f);
+    REQUIRE(rig.until([&] { return !conn.zone_change_pending() && server.client_updates.size() == 2; }));
+    CHECK(server.client_updates.back().motion.x == -668.0f);
+}
+
+TEST_CASE("mock server: a refused zone line reports the real position again; no reports while any change waits") {
+    MockConfig config = MockConfig::standard();
+    config.characters.front().zone_id = 10;
+    MockZone& east_freeport = config.zones[10];
+    east_freeport.id = 10;
+    east_freeport.short_name = "freporte";
+    east_freeport.long_name = "East Freeport";
+    east_freeport.zone_points = {{11, 4173.0f, 999999.0f, -27.0f, 256.0f, 34}};
+    Rig rig(std::move(config));
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.until([&] { return conn.zone_points().size() == 1; }));
+    const glm::vec3 walk_position(-1200.0f, -670.0f, -50.0f);
+    conn.set_player_motion(walk_position, 0.0f, glm::vec3(0.0f), true);
+
+    // The translated crossing (server x -670 + 1044) goes out, the request is refused, and the player has not
+    // moved: the next ordinary report still puts the server back on the real position.
+    server.zone_change_answers = {-2};
+    const std::size_t before = server.client_updates.size();
+    conn.send_zone_line_position(walk_position + glm::vec3(0.0f, 1044.0f, 0.0f));
+    game::MoveToZoneCall move;
+    move.zone = 34;
+    move.x = walk_position.x;
+    move.y = walk_position.y + 1044.0f;
+    move.z = walk_position.z;
+    conn.move_to_zone(move);
+    REQUIRE(rig.until([&] { return !conn.zone_change_pending() && server.client_updates.size() >= before + 2; }));
+    CHECK(server.client_updates[before].motion.x == 374.0f);
+    CHECK(server.client_updates.back().motion.x == -670.0f);
+    CHECK(server.client_updates.back().motion.y == -1200.0f);
+
+    // A server-requested change (type 0x0b) waits the same way: nothing between the request and its retry,
+    // although the player moves (RequestZoneChangeStatusBlocking @0x52cee0 keeps the main loop from running).
+    server.zone_change_answers = {-1, -2};
+    const int changes = MockEqServer::count(server.zone_log, Op::ZoneChange);
+    server.request_zone_change(2, -285.0f, -148.0f, 3.5f);
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ZoneChange) == changes + 1; }));
+    conn.set_player_motion(walk_position + glm::vec3(5.0f, 0.0f, 0.0f), 0.0f, glm::vec3(0.0f), true);
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ZoneChange) == changes + 2; }));
+    auto first = server.zone_log.end();
+    int seen = 0;
+    for (auto it = server.zone_log.begin(); it != server.zone_log.end(); ++it)
+        if (is_op(*it, Op::ZoneChange) && ++seen == changes + 1) first = it;
+    REQUIRE(first != server.zone_log.end());
+    const auto retry = std::find_if(std::next(first), server.zone_log.end(),
+                                    [](const AppPacket& p) { return is_op(p, Op::ZoneChange); });
+    REQUIRE(retry != server.zone_log.end());
+    CHECK(std::none_of(std::next(first), retry, [](const AppPacket& p) { return is_op(p, Op::ClientUpdate); }));
+    REQUIRE(rig.until([&] { return !conn.zone_change_pending(); }));
+    CHECK(conn.state() == ConnectionState::InZone);
 }
 
 // ---------------------------------------------------------------- world containers
@@ -1064,6 +1295,43 @@ TEST_CASE("mock server: a wrong session key gets the world connection dropped") 
     CHECK(rig.conn.characters().empty());
     REQUIRE(rig.conn.link_death()); // HandleWorldDisconnect(…, 1): the front end
     CHECK(!rig.conn.link_death()->in_game);
+}
+
+TEST_CASE("mock server: a failure on the world link ends its queue; a packet behind it is not handled") {
+    Rig rig;
+    REQUIRE(rig.to_character_select());
+    // A short OP_ZoneServerInfo fails the connection; a good one in the same datagram behind it must not start a
+    // zone connection afterwards.
+    AppPacket good = encode(ZoneServerInfo{"127.0.0.1", rig.server.zone.port()});
+    AppPacket bad = good;
+    bad.data.resize(4);
+    rig.server.world.send_reliable_combined({bad, good});
+    REQUIRE(rig.until_state(ConnectionState::Disconnected));
+    CHECK(rig.conn.error() == "could not read the zone server address");
+    rig.run_for(100ms);
+    CHECK(rig.conn.state() == ConnectionState::Disconnected);
+    CHECK(MockEqServer::count(rig.server.world_log, Op::WorldComplete) == 0);
+    CHECK(rig.server.zone.sessions() == 0);
+}
+
+TEST_CASE("mock server: the target and pet windows keep no buff slot past RoF2's 97") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    BuffIcons icons;
+    icons.entity_id = 4321;
+    icons.all_buffs = 1;
+    for (std::uint32_t slot : {3u, 96u, 97u, 5000u, 0xfffffffeu}) icons.entries.push_back({slot, 12, 10, 0, "Gennro"});
+    rig.server.zone.send_reliable(encode(icons, true)); // OP_TargetBuffs
+    AppPacket pet = encode(icons, false);
+    pet.opcode = to_wire(Op::PetBuffWindow);
+    rig.server.zone.send_reliable(pet);
+    REQUIRE(rig.until([&] { return !rig.conn.pet_buffs().empty(); })); // in order: the target's came first
+    const auto& target = rig.conn.spell_state().target_buffs;
+    REQUIRE(target.size() == 2);
+    CHECK(target[0].first == 3);
+    CHECK(target[1].first == 96);
+    REQUIRE(rig.conn.pet_buffs().size() == 2);
+    CHECK(rig.conn.pet_buffs()[1].first == 96);
 }
 
 TEST_CASE("mock server: losing the zone connection ends the session, and start() connects again") {

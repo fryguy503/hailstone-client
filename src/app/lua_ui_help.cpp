@@ -93,6 +93,8 @@ public:
         auto target = stml_href_path(page_, data);
         if (!target) return true;
         history_.push_back(page_);
+        // Kept to the last kMaxHistory pages: a long session of links would otherwise grow it without end.
+        if (history_.size() > kMaxHistory) history_.erase(history_.begin());
         load(host, *target);
         back_enabled_ = !history_.empty();
         return true;
@@ -106,6 +108,7 @@ private:
         text_ = load_stml_page(host.game, path, nullptr);
     }
 
+    static constexpr std::size_t kMaxHistory = 64; // Hailstone's; how far back CStmlWnd's history goes is not known
     std::string page_, text_;
     std::vector<std::string> history_;
     std::optional<bool> back_enabled_; // none: the XML's state, until the first link or Back

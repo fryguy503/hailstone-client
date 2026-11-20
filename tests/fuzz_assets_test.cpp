@@ -433,7 +433,8 @@ void check_parts(const Mesh& m) {
 
 TEST_CASE("fuzz: WLD files and the meshes built from them") {
     fuzz::QuietLog quiet;
-    std::vector<Bytes> seeds = {test::wld_fixtures::mesh_wld(false), test::wld_fixtures::mesh_wld(true), wld_all_types(1), wld_all_types(2)};
+    std::vector<Bytes> seeds = {test::wld_fixtures::mesh_wld(false), test::wld_fixtures::mesh_wld(true),
+                                test::wld_fixtures::mesh_2c_wld(), wld_all_types(1), wld_all_types(2)};
     sweep("WldFile", seeds, 28, 700, [](std::span<const std::byte> d) {
         wld::WldFile::ReadScope reads;
         auto w = wld::WldFile::deferred([d] { return std::vector<std::byte>(d.begin(), d.end()); }, "fuzz");

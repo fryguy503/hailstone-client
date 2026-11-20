@@ -32,8 +32,9 @@ std::vector<std::string> split(std::string_view s, char sep) {
 }
 
 std::string trim(std::string s) {
-    while (!s.empty() && s.front() == ' ') s.erase(s.begin());
-    while (!s.empty() && s.back() == ' ') s.pop_back();
+    // One erase each way: erasing a character at a time from the front is quadratic on a long run of spaces.
+    s.erase(0, s.find_first_not_of(' '));
+    s.erase(s.find_last_not_of(' ') + 1);
     return s;
 }
 

@@ -23,26 +23,45 @@ std::string script_path() {
 constexpr const char* kHarness = R"lua(
 package.config = "/\n;\n?\n!\n-\n" -- the script's Linux commands, whatever runs the test
 T = { now = 1000, finds = 0, stats = 0, gets = 0, opens = {}, open_now = 0, open_max = 0, messages = {}, data = {}, files = {},
-      mtimes = {}, handlers = {}, powershell = {}, timers = {}, clients = {}, logs = {} }
+      mtimes = {}, handlers = {}, powershell = {}, timers = {}, clients = {}, logs = {}, dirs = {}, hashes = 0,
+      sleeps = 0, mkdirs = 0 }
 os.time = function() return T.now end
 
+-- A packet's bytes: what the Write* calls put there, 0 elsewhere. A fixed-length string (a file piece) is kept whole
+-- and read a byte at a time only when asked, and the methods are shared: building every piece byte by byte, and 15
+-- closures per packet, made the rate-limit cases take 5 to 18 s.
+local Bytes = {}
+Bytes.__index = function(b, i)
+  local segs = rawget(b, "_segs")
+  for k = #segs, 1, -1 do
+    local seg = segs[k]
+    if i >= seg.o and i < seg.o + seg.n then return seg.s:byte(i - seg.o + 1) or 0 end
+  end
+  return 0
+end
+local P = {}
+P.__index = P
+local function put(p, off, v, n) v = math.floor(v) % (256 ^ n); for i = 0, n - 1 do p.b[off + i] = math.floor(v / 256 ^ i) % 256 end end
+local function get(p, off, n) local v = 0; for i = n - 1, 0, -1 do v = v * 256 + p.b[off + i] end; return v end
+function P:WriteInt32(o, v) put(self, o, v, 4) end
+function P:WriteInt16(o, v) put(self, o, v, 2) end
+function P:WriteInt8(o, v) put(self, o, v, 1) end
+function P:WriteString(o, s) for i = 1, #s do self.b[o + i - 1] = s:byte(i) end; self.b[o + #s] = 0 end
+function P:WriteFixedLengthString(o, s, n)
+  -- Bytes written before, inside the string's span, give way to it.
+  for k in pairs(self.b) do if type(k) == "number" and k >= o and k < o + n then rawset(self.b, k, nil) end end
+  local segs = rawget(self.b, "_segs")
+  segs[#segs + 1] = { o = o, n = n, s = s }
+end
+function P:ReadInt32(o) return get(self, o, 4) end
+function P:ReadInt16(o) return get(self, o, 2) end
+function P:ReadInt8(o) return get(self, o, 1) end
+function P:ReadString(o) local t = {}; while self.b[o] ~= 0 do t[#t + 1] = string.char(self.b[o]); o = o + 1 end; return table.concat(t) end
+function P:GetSize() return self.size end
+function P:GetProtocolOpcode() return self.op end
+
 local function bytes_packet(op, size)
-  local p = { op = op, size = size, b = {} }
-  for i = 0, size - 1 do p.b[i] = 0 end
-  local function put(off, v, n) v = math.floor(v) % (256 ^ n); for i = 0, n - 1 do p.b[off + i] = math.floor(v / 256 ^ i) % 256 end end
-  local function get(off, n) local v = 0; for i = n - 1, 0, -1 do v = v * 256 + (p.b[off + i] or 0) end; return v end
-  function p:WriteInt32(o, v) put(o, v, 4) end
-  function p:WriteInt16(o, v) put(o, v, 2) end
-  function p:WriteInt8(o, v) put(o, v, 1) end
-  function p:WriteString(o, s) for i = 1, #s do p.b[o + i - 1] = s:byte(i) end; p.b[o + #s] = 0 end
-  function p:WriteFixedLengthString(o, s, n) for i = 1, n do p.b[o + i - 1] = s:byte(i) or 0 end end
-  function p:ReadInt32(o) return get(o, 4) end
-  function p:ReadInt16(o) return get(o, 2) end
-  function p:ReadInt8(o) return get(o, 1) end
-  function p:ReadString(o) local t = {}; while (p.b[o] or 0) ~= 0 do t[#t + 1] = string.char(p.b[o]); o = o + 1 end; return table.concat(t) end
-  function p:GetSize() return p.size end
-  function p:GetProtocolOpcode() return p.op end
-  return p
+  return setmetatable({ op = op, size = size, b = setmetatable({ _segs = {} }, Bytes) }, P)
 end
 Packet = function(op, size) return bytes_packet(op, size) end
 
@@ -72,7 +91,9 @@ io.open = function(path, mode)
     local parts = {}
     return { write = function(_, s) parts[#parts + 1] = s end, close = function() T.files[path] = table.concat(parts) end }
   end
-  if T.files[path] == nil or path:match("/%.hailstone") then return nil end
+  -- The zone's own scratch files are not read back, except the hashing lock's owner and, when a test asks, the cache.
+  local own = path:match("/%.hailstone%-lock/owner$") or (T.read_cache and path:match("/%.hailstone%-cache$"))
+  if T.files[path] == nil or (path:match("/%.hailstone") and not own) then return nil end
   T.opens[path] = (T.opens[path] or 0) + 1
   T.open_now = T.open_now + 1
   T.open_max = math.max(T.open_max, T.open_now)
@@ -83,9 +104,15 @@ io.open = function(path, mode)
       if whence == "end" then pos = #(T.files[path] or "") else pos = off end
       return pos
     end,
-    read = function(_, n) local s = (T.files[path] or ""):sub(pos + 1, pos + n); pos = pos + #s; return s end,
+    read = function(_, n)
+      if type(n) ~= "number" then n = #(T.files[path] or "") end -- "*a"
+      local s = (T.files[path] or ""):sub(pos + 1, pos + n); pos = pos + #s; return s
+    end,
     close = function() T.open_now = T.open_now - 1 end,
-    lines = function() return function() return nil end end,
+    lines = function()
+      local text = T.files[path] or ""
+      return text:gmatch("([^\n]*)\n")
+    end,
   }
 end
 io.popen = function(cmd)
@@ -124,7 +151,25 @@ io.popen = function(cmd)
       end
     end
     out = table.concat(names, "\r\n") .. "\r\n"
+  elseif cmd:match("^mkdir ") then
+    -- The hashing lock: made once, refused while it is there (T.no_mkdir: never made, as on a read-only folder).
+    -- Windows' cmd quotes and separates as Windows does: the same folder.
+    local dir = cmd:match("^mkdir '([^']+)'") or cmd:match('^mkdir "([^"]+)"'):gsub("\\\\", "/")
+    T.mkdirs = T.mkdirs + 1
+    if not T.dirs[dir] and not T.no_mkdir then T.dirs[dir] = true; out = "taken\n" end
+  elseif cmd:match("^rm %-rf ") or cmd:match("^rmdir ") then
+    local dir = cmd:match("^rm %-rf '([^']+)'") or cmd:match('"([^"]+)"'):gsub("\\\\", "/")
+    T.dirs[dir] = nil
+    for path in pairs(T.files) do if path:sub(1, #dir + 1) == dir .. "/" then T.files[path] = nil end end
+  elseif cmd:match("^mv %-f ") then
+    local from, to = cmd:match("^mv %-f '([^']+)' '([^']+)'")
+    T.files[to], T.files[from] = T.files[from], nil
+  elseif cmd == "sleep 1" or cmd:match("^ping ") then
+    T.now = T.now + 1
+    T.sleeps = T.sleeps + 1
+    if T.on_sleep then T.on_sleep(T.sleeps) end
   elseif cmd:match("sha256sum") then
+    T.hashes = T.hashes + 1
     local names = {}
     for rel in (T.files["client_files/" .. cmd:match("%-a (%S+)")] or ""):gmatch("[^\n]+") do
       -- As GNU's: a name with a backslash is escaped, and its line starts with one.
@@ -258,6 +303,97 @@ T.now = T.now + 1000
 page = list_request(c, 0)
 assert(T.finds == 3, "client_files 0: nothing listed")
 assert(page:ReadInt32(12) == 0, "and an empty list sent")
+)lua");
+}
+
+TEST_CASE("Server script: one zone hashes at a time; another waits for it and reuses its cache") {
+    check_run(R"lua(
+T.read_cache = true
+eq.get_zone_short_name = function() return "qeynos" end
+eq.get_zone_instance_id = function() return 7 end
+add_files(3, 100)
+-- Alone: the zone takes the lock, hashes, writes the cache and lets the lock go.
+load_script()
+assert(T.hashes == 1 and T.mkdirs == 1, "hashed under the lock: " .. T.hashes .. " " .. T.mkdirs)
+assert(next(T.dirs) == nil and T.files["client_files/.hailstone-lock/owner"] == nil, "and let it go")
+assert(T.files["client_files/.hailstone-cache"], "the cache is written")
+for path in pairs(T.files) do
+  assert(not path:find("hailstone%-hash") or path:find("qeynos%-7%-"), "scratch names carry the zone: " .. path)
+end
+
+-- Another zone holds the lock while two new files come: this one waits, then hashes only what it did not.
+T.files["client_files/new1.bin"] = "one"
+T.files["client_files/new2.bin"] = "two"
+T.dirs["client_files/.hailstone-lock"] = true
+T.files["client_files/.hailstone-lock/owner"] = T.now .. " freportw-0-1-abc\n"
+local cache = T.files["client_files/.hailstone-cache"]
+T.on_sleep = function(n)
+  if n == 3 then -- the other zone is done: new1 in the cache it wrote, and the lock gone
+    T.files["client_files/.hailstone-cache"] = cache .. "new1.bin\t3\t1700000000.0\t" .. string.rep("ef", 32) .. "\n"
+    T.dirs["client_files/.hailstone-lock"] = nil
+    T.files["client_files/.hailstone-lock/owner"] = nil
+  end
+end
+T.hashes = 0
+event_encounter_load({ encounter = {} })
+assert(T.sleeps == 3, "waited for the other zone: " .. T.sleeps)
+assert(T.hashes == 1, "hashed once, after it: " .. T.hashes)
+local page = list_request(client(1, "Alpha"), 0)
+assert(page:ReadInt32(12) == 5, "all five listed: " .. page:ReadInt32(12))
+assert(T.files["client_files/.hailstone-cache"]:find(string.rep("ef", 32), 1, true), "the other zone's hash kept")
+assert(next(T.dirs) == nil, "the lock let go")
+
+-- When the other zone hashed everything, this one hashes nothing.
+T.files["client_files/new3.bin"] = "three"
+T.dirs["client_files/.hailstone-lock"] = true
+T.files["client_files/.hailstone-lock/owner"] = T.now .. " freportw-0-1-abc\n"
+cache = T.files["client_files/.hailstone-cache"]
+T.on_sleep = function()
+  T.files["client_files/.hailstone-cache"] = cache .. "new3.bin\t5\t1700000000.0\t" .. string.rep("01", 32) .. "\n"
+  T.dirs["client_files/.hailstone-lock"] = nil
+  T.files["client_files/.hailstone-lock/owner"] = nil
+end
+T.hashes, T.sleeps = 0, 0
+event_encounter_load({ encounter = {} })
+assert(T.sleeps == 1 and T.hashes == 0, "reused the cache: " .. T.sleeps .. " " .. T.hashes)
+)lua");
+}
+
+TEST_CASE("Server script: a stale or ownerless hashing lock is removed; a held one never stalls a client's request") {
+    check_run(R"lua(
+add_files(2, 100)
+-- A lock a zone left 1000 s ago is removed, and this zone hashes.
+T.dirs["client_files/.hailstone-lock"] = true
+T.files["client_files/.hailstone-lock/owner"] = (T.now - 1000) .. " gone-0-1-abc\n"
+load_script()
+assert(T.sleeps == 0 and T.hashes == 1, "no wait for a stale lock: " .. T.sleeps .. " " .. T.hashes)
+local removed = false
+for _, l in ipairs(T.logs) do if l:find("removing a hashing lock left by gone-0-1-abc", 1, true) then removed = true end end
+assert(removed, "and it says so")
+assert(next(T.dirs) == nil, "its own lock let go")
+
+-- A folder where the lock cannot be made: after a few tries the zone hashes without it, not for minutes.
+T.no_mkdir = true
+T.files["client_files/c.bin"] = "c"
+T.hashes, T.sleeps = 0, 0
+event_encounter_load({ encounter = {} })
+assert(T.hashes == 1 and T.sleeps == 9, "hashed after 10 tries: " .. T.hashes .. " " .. T.sleeps)
+T.no_mkdir = false
+
+-- With a list already, a client's request while another zone hashes keeps it and waits for nothing.
+local c = client(1, "Alpha")
+assert(list_request(c, 0):ReadInt32(12) == 3)
+T.files["client_files/d.bin"] = "d"
+T.dirs["client_files/.hailstone-lock"] = true
+T.files["client_files/.hailstone-lock/owner"] = T.now .. " other-0-1-abc\n"
+T.hashes, T.sleeps = 0, 0
+T.now = T.now + 300
+assert(list_request(c, 0):ReadInt32(12) == 3, "the old list")
+assert(T.hashes == 0 and T.sleeps == 0, "nothing hashed, nothing waited for")
+T.dirs["client_files/.hailstone-lock"] = nil
+T.files["client_files/.hailstone-lock/owner"] = nil
+T.now = T.now + 300
+assert(list_request(c, 0):ReadInt32(12) == 4, "the new file at the next look")
 )lua");
 }
 
@@ -533,6 +669,52 @@ assert(#T.messages == 6, "still the same 10 s")
 T.now = T.now + 1
 cancel_invite(a, "Gamma")
 assert(#T.messages == 7, "the next 10 s")
+)lua");
+}
+
+TEST_CASE("Server script: an inviter reaches at most 5 different players a minute across zones") {
+    check_run(R"lua(
+Database = function()
+  return {
+    prepare = function()
+      return { execute = function() end, close = function() end,
+               fetch_hash = function() return { permission = "255" } end }
+    end,
+    close = function() end,
+  }
+end
+local ids = {}
+eq.get_char_id_by_name = function(name) ids[name] = ids[name] or 100 + #name; return ids[name] end
+eq.get_char_name_by_id = function(id) for n, v in pairs(ids) do if v == id then return n end end return "" end
+eq.get_guild_id_by_char_id = function() return 0 end
+local signals = {}
+eq.cross_zone_signal_client_by_char_id = function(id) signals[#signals + 1] = id end
+load_script()
+local officer = client(1, "Officer")
+local said = {}
+function officer:IsInAGuild() return true end
+function officer:GuildID() return 3 end
+function officer:GuildRank() return 1 end
+function officer:Message(_, text) said[#said + 1] = text end
+local function invite(name)
+  local p = Packet(0x1430, 80)
+  p:WriteInt32(0, 0x47534d4e); p:WriteInt16(4, 1); p:WriteInt16(6, 1); p:WriteString(8, name)
+  T.handlers[Event.unhandled_opcode]({ self = officer, packet = p })
+end
+local names = { "Aa", "Bbb", "Cccc", "Ddddd", "Eeeeee", "Fffffff" }
+for _, n in ipairs(names) do invite(n) end
+assert(#signals == 5, "five invitations sent: " .. #signals)
+assert(said[#said]:find("You have invited 5 players", 1, true), tostring(said[#said]))
+-- Asking one of the five again is not a new player (its own bucket answers that it is pending).
+T.data["hailstone:guildinvite:" .. ids.Aa] = nil
+invite("Aa")
+assert(#signals == 6, "the same player again is allowed")
+T.now = T.now + 60
+invite("Fffffff")
+assert(#signals == 7, "the next minute")
+local logged = 0
+for _, l in ipairs(T.logs) do if l:find("invites too many players", 1, true) then logged = logged + 1 end end
+assert(logged == 1, "logged once: " .. logged)
 )lua");
 }
 

@@ -68,6 +68,9 @@ struct ItemDisplayCell {
     std::uint32_t value_argb = 0xffffffff;
     std::string tooltip;              // the stat label's tooltip (Power)
     std::string heroic;               // "+n" beside the value (IDW_Heroic<n>, in kHeroicArgb)
+    // Hailstone: the stat's item comparison key (game/item_compare.h compare_stat_key: "ac", "str", "svFire", ...),
+    // "" for a row the comparison has no stat for. The window's own IDW_Row<r>Col<c>Key child gives it to the UI.
+    const char* key = "";
 };
 
 struct ItemDisplayLine {

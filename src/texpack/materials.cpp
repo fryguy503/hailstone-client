@@ -102,7 +102,11 @@ std::optional<MaterialRules> parse_material_rules(std::string_view materials_txt
         MaterialClass c;
         c.name = lower(section);
         c.asset = trim(ini.get_string(section, "asset"));
-        if (c.asset.empty() || c.asset.find_first_of("/\\. ") != std::string::npos) {
+        // The id names a folder and files under the pack's work folder: letters, digits, '_' and '-' only, so no
+        // separator, dot or drive (a Windows "c:x" is drive-relative) can lead outside it.
+        if (c.asset.empty() || !std::all_of(c.asset.begin(), c.asset.end(), [](char ch) {
+                return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '-';
+            })) {
             fail(error, "materials.txt [" + section + "]: asset must be a Poly Haven id");
             return std::nullopt;
         }

@@ -1,472 +1,1011 @@
 # Changelog
 
-## 0.7.2-beta (2026-11-19)
+## Unreleased
 
 - Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.
+- Your own name is in parentheses while you are hidden, as in the original client (it was plain). Sneak alone adds none
+- The sample `hailstone.cfg` now includes the Ability Book's autoskill switch, and the server guide shows how to disable autoskill and Lua socials
+- Loot All takes NO DROP items from your own corpse without confirmation after a same-zone resurrection
+  - A spawn that dies in sight is renamed as the original client names it (`Name's corpse<id>` for a player, `name's_corpse<id>` for an NPC), so /corpse and the loot window know your corpse
+- Choose **Map Pack** directly in the map window in Modern and Gamepad. The selection is saved per character.
+- NPCs renamed by a quest after spawning now show their updated names on nameplates and in the target window.
+- Modern Player frame: right-click and select **Always show cast bar** to keep the frame the same height between casts and songs.
+- Halas citizen women (the South Karana and Halas model) no longer hold their left arm straight out: it now hangs and swings like the right one in every animation
+- `/debug_animinfo` prints your target's (or your own) model, the animations its upper and lower body are playing and which bones are left in their rest pose, to help report characters that animate wrongly
+- Bag windows close when the interface is reloaded with /loadskin
+  - A reload starts a new interface session: no bag is open and the next bag key press opens them again
+- Bag windows close when the interface is reloaded with /loadskin, as in the original
+  - The next bag key press opens them again
+- A server's marquee text shows in the large centre-screen text, and its camera effect shakes the drawn camera for as long as it asks
+  - They arrive as the zone packets OP_Marquee and OP_CameraEffect; a marquee never adds a chat line
+  - The shake moves only the camera, never the player, and a zone change ends it
+- Modern hotbars: **Lock layout** keeps hotbuttons in their slots and blocks edits while leaving activation and page changes available.
+  - A bar locked with the old row keeps its frame lock (**Lock this frame**); turn Lock layout on again to protect its buttons
+- Native nameplate add-ons can draw the same guild tags, NPC descriptions and pet owner names as stock nameplates.
+- The server can now change a spawn's last name while you watch
+  - It shows wherever name plates and the target window show last names, following your name-plate settings, and your own is updated too
+- The level-up effect shows: when the server sends it, rings and sparkles play on your character (and on others who level up near you), at the actor particle density
+- Item comparison, in both interfaces: an item's tooltip and details window show what wearing it instead of what you wear would change
+  - Tooltips cover the inventory, bags, bank, loot, trade and a merchant's goods; the details window covers a linked item too
+  - In the details window each stat's change sits beside the item's value (+12 in green beside AC 20, say), with the verdict and what it is compared with above the stats
+  - A tooltip shows the verdict under the name and the changes beside its AC, HP and mana
+  - It shows your HP, mana, endurance, AC, ATK, haste, stats, resists and regeneration as the game works them out, stat caps included, plus the weapon's damage and delay, effects gained and lost, and why you cannot use it
+  - A verdict (Upgrade, Downgrade, Mixed) weighs the changes by what matters for your class
+  - For rings, earrings and bracers Shift shows the other slot
+  - Options > Display > Compare Items and Upgrade Verdict turn them off. Nothing about the game's rules changes
+- The Fiery Avenger shows its blade
+  - Held by a player or an NPC it showed only its flames: its blade is in an older model format the client did not read
+  - The same fix draws the hull of the ghost ship in Erud's Crossing, which was invisible
+- Corpses no longer replay their death animation when a zone loads
+  - An NPC corpse, or a feign-death spawn, that is already dead when first drawn shows its final pose at once, as on the original client
+  - Standing up from feign death blends from that pose instead of the start of the fall
+  - A spawn that dies in front of you still falls as before
+- Bard songs animate again
+  - A song always plays its cast animation
+  - An instrument song plays its drum, lute or horn animation when the bard holds an instrument and is not sitting. On the newer (EQG) models the model does not suppress it, as in the original
+- Merchants: **Usable only** also hides discipline tomes you have already learned, or whose higher rank you know. The original client still lists them; untick the box to see them
+- Graphics: crowds of particles cost less processor time (Actor and Spell Particle Density at High, crowded zones)
+  - Their movement and drawing are prepared on all worker threads instead of one
+  - They look and move exactly as before
+- Graphics: characters' and items' own particle effects (glowing weapons, auras, run dust) cost less while off screen
+  - An actor out of view, or past 500 units in the classic lighting, emits no new particles, so its effects fill in over a moment as you turn towards it
+  - `display.particle_offscreen_hold = 0` in hailstone.ini keeps them emitting everywhere
+  - Changing Actor Particle Density no longer empties every effect at once (they thin out or fill in), and at Off the effects cost nothing
+- Cures no longer remove debuffs locally: a partial or too-weak cure leaves the icon until the server's buff fade clears it, instead of the debuff vanishing early
+- Buff icons show a debuff's curse, disease, poison or corruption counters as soon as it lands
+  - The remaining count stays after a partial cure, a server refresh without counter data, or a full buff list that leaves the spell in the same slot
+- Plugins: `get_spells_data_bulk` reads many spells by id in one call
+  - Each comes with its spells_us.txt fields, its description, and the names of its target type, resist type and categories
+  - Its effect slots come as text in MacroQuest's `ParseSpellEffect` wording ("Slot 1: Increase HP by 11 (L1) to 20 (L10)")
+  - For developers: docs/plugins.md "get_spells_data_bulk"
+- Scripts: `${Spell.TargetType}` gives MacroQuest's text for every target type
+  - `LifeTap` (was `Life Tap`), and `None`, `Special Muramites`, `Target_AE_No_Players_Pets` and `Single Friendly (or Target's Target` where it said `Unknown`
+- Server files: when the server goes quiet during the download, the client keeps asking for the missing pieces until 30 s pass with nothing from it, instead of giving up after about 15 s
+- Connection: a failed world or zone connection stays failed; a packet the server had already sent behind the failure no longer starts a zone connection
+- Network: broken or hostile packets can no longer stall the client
+  - Barter lists whose names never end, and mail with long runs of blanks
+  - Target or pet buff windows with slot numbers past RoF2's 97 (those slots are ignored)
+- Scripts: a script that gives its name-plate table a metatable can no longer crash the game
+- Scripts: `/docommand` and `/squelch` no longer parse their line a second time, so a name holding `${...}` stays text there too
+- Scripts: a script whose `events` permission the server takes away stops getting chat lines at once, including the ones it had queued
+- Scripts and plugins: limits on what each may register (an error past them)
+  - Each: 256 UI functions, 64 options and 32 menu entries
+  - A script: 256 packet hooks, 256 binds and 64 windows
+  - A menu entry added again with the same label replaces the old one instead of showing twice
+- A minimised game window no longer runs a processor core at full speed: while minimised the client runs at 10 frames a second, whatever the frame rate settings say
+- Spell book: a spell dropped on a gem while standing or casting stays on the cursor instead of vanishing without being memorized
+- Add-ons: a line a plugin sends with `hs.ChatSubmit` no longer lands in the chat input's history (Up arrow) or makes its chat window the active one
+- In-game browser: a page a server opens with a link can no longer reach your own computer or home network (a router's page, a NAS) later on
+  - Not through a redirect, a link, a form or a request the page makes either, not only at the link's own address
+  - Your own tabs are unchanged
+- Box sets: only the window you logged in from checks for and downloads Hailstone and add-on updates
+  - The other windows no longer download the same update at once (which could break the download) or install one while the rest of the set still runs
+- Add-ons install faster: the install journal is flushed to the disk once per batch of files instead of once per file, and stays as safe against a power cut
+- Login screen: the Add-ons list is no longer rebuilt every frame; it follows the add-on manager's changes and refreshes every 3 seconds as before
+- `HAILSTONE_DATA_DIR` naming an EverQuest folder is refused at start, as an install inside one already is: Hailstone never writes into the game folder
+- Windows: DLLs are no longer looked for in the current folder or PATH, for Hailstone itself, its plugins and its upscaler providers; a plugin's or provider's own DLLs are found beside it
+- Updates on Linux and macOS: the old program stays in place until the new one replaces it in one step, so a power cut during an install never leaves the folder without it (Windows still has a short moment; see docs/updater.md)
+- Server script (`server/`): a server starting many zones at once no longer has every zone hash the same new `client_files/` side by side
+  - One zone hashes and the others wait for it and reuse its hashes (`client_files/.hailstone-lock`; a lock a stopped zone left is removed after 15 minutes)
+  - The zones' scratch file names now carry the zone, so two can never collide
+- Server script (`server/`): a guild officer can invite at most five different players a minute across zones, since each invitation pops up a question for a player anywhere on the server
+- A damaged zone or model archive, or navigation geometry with a vertex far out, can no longer make the client ask for gigabytes of memory while loading
+- Add-on authors: `tools/make_addon.py` refuses what the client would refuse at install
+  - A version with leading zeros, names such as `aux.lua` or ending in a dot, and an `--out` folder inside the package's folder
+  - It no longer packs a link that leads out of the folder; `tools/make_update.py` does the same and leaves dotfiles out
+- Spell memorization now speeds up with your trained Meditate skill, as it does in RoF2
+- Context submenus now open to the left when they run out of room on the right. Nested menus such as the spell picker keep cascading in that direction while there is room.
+- Chat and socials expand `%T`, `%M`, `%S`, `%O`, `%P` and `%R` in either case, using the target and pet at the time the line runs
+- Chat codes: `%T`, `%M`, `%S`, `%O`, `%P` and `%R`, in either case, become the target's name, your pet's name, the target's pronouns and its race in what you say, tell, emote and send to chat channels, in socials, and in the names given to `/assist` and `/shield`, as on the original client. Each line uses the target and pet it has when it runs
+- Modern login: Add-ons opens on its own when the cards cannot fit side by side, and the login and Add-ons cards scroll in short windows
+- Modern Buffs and Songs: **Show empty slots** keeps gaps in the tray, and **Show slot numbers in tooltips** adds the slot number after the spell name. Both are off by default and available with Alt-right-click on an icon
+- Zone lines between East Freeport and North Ro, and from Surefall Glade to Qeynos Hills, report the crossing position the server expects, shifted into the next zone's coordinates as the original client does, so a server whose zone point keeps the player's own coordinate places them correctly
+- When the server renames your own character, the client takes the new name everywhere: your corpse, group and raid leadership, and the next zone you enter, as the original does
+
+## 0.7.2-beta (2026-11-19)
+
 - Add-ons can inspect raw spell-duration fields and answer current game popups with lifetime checks. Camp popups can be answered while camping, and an explicit server-extension hint preserves the camp destination when the server disconnects early.
 - UI add-ons can load packaged artwork through `hs.UI.assets.InterfaceImage`, including artwork inherited from approved base interfaces.
 - Character entry, including Return Home and automatic logins, waits for a decision on a pending native login-plugin request. Optional plugins load when allowed, and zone transfers proceed normally.
-- **Lua 5.5:** Lua is now 5.5.1 (was 5.4.7), for the interface packs, plugin windows and MQ-style scripts. **A script or add-on that assigns to a `for` loop's variable no longer loads** and must copy it into a `local` first; most other 5.4 code runs unchanged
-- Lighting has a third level between Classic and Modern: Smooth Classic, the classic light worked out per pixel instead of at the corners of each triangle, so trees' leaves show their sunlit and shaded sides and brightly lit walls no longer dim between their corners, and torch and brazier flames keep colour in their cores instead of clipping to flat white. Options > Graphics > Lighting (gamepad: Display) now lists Classic (Low), Smooth Classic (Medium) and Modern (High); `/lighting smooth` picks it. Classic stays the original's exact look
-- Modern lighting: volumetric clouds over the open skies, with real depth, drifting with the wind, lit by the sun (glowing at their edges, warm at sunrise and sunset, silver under the moon) and closing over into a dark overcast as a storm comes in, lit up by its lightning. They replace the painted cloud layer; Options > Graphics > Volumetric Clouds turns them off, and the Low graphics setting leaves them off
-- Modern lighting: past an outdoor zone's edge a bank of mist lies on the ground, so at a zone line the world fades into fog instead of ending, while the far mountains rise out of it and the sky stays clear. It drifts slowly and lets the land show through in places. Options > Graphics > Zone Edge Fog turns it off
-- Modern lighting: the zones past the zone lines are no longer drawn, live or as distant copies, and no longer shape the land: at the lines they showed boundary walls, filler and seams in zone after zone. Past a zone's edge there is its own distant land, hills and mountains. The Neighbour Zones option and `/neighbourzones` are gone; the old `cache/horizon`, `cache/atlas` and `cache/proxies` folders are no longer used and can be deleted
-- Modern lighting: the distant land past a zone's edge is now generated terrain worn by water, so its hills read as ranges and valleys rather than blobs, and the woods gather in the valleys. It rises gently: it stays near the edge's height for a few hundred units, its hills grow over the next few thousand and the mountains stand far off, no longer climbing steeply right at the zone line. Coasts follow the land, with headlands, bays and the odd island, instead of running in steps along a grid; the rock shows as weathered stone, without repeating stripes, and sand lines the shore. Its ground and rock come from the zone's own natural ground by its edge, no longer from a harbour floor, the sea bed, roofs or a maze's walls (Freeport East's land was teal, North Qeynos's peaks pink). The first visit to a zone takes about 0.2 s longer to load while the terrain is made; later visits read it back
-- Modern lighting: the distant land past a zone's edge has trees: the zone's own trees stand in groves and here and there across the far hills. They go with Options > Graphics > Horizon Hills
-- Modern lighting: the grass goes on for about 300 units past the edge of an outdoor zone onto the distant land, so it no longer stops in a line where the zone's ground ends
-- Modern lighting: Plane of Sky and Plane of Air show the sky under them again, its clouds going on below the islands, instead of grey or black, and their far islands fade into the sky's haze, not black. No distant land or edge fog is drawn round them
-- Modern lighting: shadows from the sun and from torches and other lights cost less GPU time and look the same. A light's shadow is now only read where the light reaches, and the soft shadow edge takes four texture reads instead of nine
+- **Lua 5.5:** Lua is now 5.5.1 (was 5.4.7), for the interface packs, plugin windows and MQ-style scripts
+  - **A script or add-on that assigns to a `for` loop's variable no longer loads.** Copy the variable into a `local` first
+  - Most other 5.4 code runs unchanged
+- New lighting level between Classic and Modern: Smooth Classic
+  - The classic light is worked out per pixel instead of at each triangle's corners. Trees' leaves show their sunlit and shaded sides, brightly lit walls no longer dim between their corners, and torch and brazier flames keep colour in their cores instead of clipping to flat white
+  - Options > Graphics > Lighting (gamepad: Display) lists Classic (Low), Smooth Classic (Medium) and Modern (High); `/lighting smooth` picks it
+  - Classic stays the original's exact look
+- Modern lighting: volumetric clouds over open skies
+  - They have real depth, drift with the wind and are lit by the sun: glowing at their edges, warm at sunrise and sunset, silver under the moon
+  - A coming storm closes them into a dark overcast, lit up by its lightning
+  - They replace the painted cloud layer. Options > Graphics > Volumetric Clouds turns them off; the Low graphics setting leaves them off
+- Modern lighting: a bank of mist past an outdoor zone's edge, so at a zone line the world fades into fog instead of ending
+  - The far mountains rise out of it and the sky stays clear. It drifts slowly and lets the land show through in places
+  - Options > Graphics > Zone Edge Fog turns it off
+- Modern lighting: the zones past the zone lines are no longer drawn, live or as distant copies, and no longer shape the land
+  - They showed boundary walls, filler and seams at the lines. Past a zone's edge there is now its own distant land, hills and mountains
+  - The Neighbour Zones option and `/neighbourzones` are gone
+  - The old `cache/horizon`, `cache/atlas` and `cache/proxies` folders are no longer used and can be deleted
+- Modern lighting: the distant land past a zone's edge is generated terrain worn by water
+  - Its hills read as ranges and valleys rather than blobs, and the woods gather in the valleys
+  - It rises gently: near the edge's height for a few hundred units, hills growing over the next few thousand, mountains far off, no longer climbing steeply at the zone line
+  - Coasts follow the land, with headlands, bays and the odd island, instead of running in steps along a grid. Rock shows as weathered stone without repeating stripes, and sand lines the shore
+  - Its ground and rock come from the zone's own natural ground by its edge, no longer from a harbour floor, the sea bed, roofs or a maze's walls (Freeport East's land was teal, North Qeynos's peaks pink)
+  - The first visit to a zone takes about 0.2 s longer to load while the terrain is made; later visits read it back
+- Modern lighting: the distant land has trees: the zone's own trees stand in groves and here and there across the far hills. They go with Options > Graphics > Horizon Hills
+- Modern lighting: grass goes on about 300 units past an outdoor zone's edge onto the distant land, instead of stopping in a line
+- Modern lighting: Plane of Sky and Plane of Air show the sky under them again
+  - Its clouds go on below the islands instead of grey or black, and the far islands fade into the sky's haze, not black
+  - No distant land or edge fog is drawn round them
+- Modern lighting: shadows from the sun, torches and other lights cost less GPU time and look the same. A light's shadow is read only where the light reaches, and the soft edge takes four texture reads instead of nine
 - Modern lighting: the sky and the haze behind it are drawn only where the zone leaves the background open, which saves GPU time outdoors
-- Options > Graphics > **Depth Pre-pass** (gamepad: Display), for the modern lighting: the zone is drawn once without lighting first, so only what is in front gets lit. It takes effect at once, so you can compare the frame rate with it on and off (it was a `hailstone.ini` setting read only when a zone loaded). It stays off by default
-- Graphics: the first start fits the graphics settings to the computer. A laptop or tablet with integrated graphics, a graphics card with under 3 GiB of memory, or a processor with fewer than 4 threads starts at Low (which also uses the classic lighting, without radial flora), and a card with 3 to 6 GiB starts at Medium; other computers keep today's settings. Existing installs keep their settings. Options > Graphics > Detect (gamepad: Display) applies the settings for this computer at any time
-- Graphics: the upscaler is off by default on every computer, so the 3D world is drawn at full size. A player who never chose an upscaler, and was on AMD FSR 1, is now at Off; Options > Graphics > Upscaler turns FSR 1, Temporal or FSR 3.1 back on
-- Graphics: upscalers can now come as add-ons (the first are Intel XeSS and AMD FSR 4, for Windows): install one from Add-ons on the login screen and pick it under Options > Graphics > Upscaler; it starts with the next game start and works as AMD FSR 3.1 does, Frame Generation included. If the graphics card cannot run it, the game uses AMD FSR 3.1 instead (or the Temporal upscaler where FSR 3.1 cannot run). For developers: `sdk/hailstone_upscaler.h` and docs/plugins.md "Upscaler providers"
-- AMD FSR 3.1: about 30 % faster on integrated graphics (on an Intel Iris Xe, 5.6 ms a frame down to 3.9 ms at 1280x720), by reprojecting the history with FSR's Lanczos table, as AMD's own runtime does on its graphics cards
-- Graphics: the frame now shares its work with the processor's other cores: characters are posed, the other characters' movement is worked out, particles are built, the characters' and held items' effects are moved and the 3D scene's and the shadows' drawing commands are recorded on worker threads, and a character's skeleton is posed once a frame however many effects, spells and name plates ask for it. Zoning is quicker too: a zone's collision, ladders and lighting are built side by side while its graphics load. `display.worker_threads` sets how many (0 for none), and `display.parallel_record` 0 keeps the scene's and shadows' recording on the main thread
-- Frame cap: `display.max_fps` (and `--max-fps`) is now held to the frame on every system; on Windows a cap of 144 ran at about 128, because each frame's wait woke up to a millisecond late and the next frame was timed from that late start. Options > Display > Frame Rate Limit has a new Auto choice (`display.max_fps = -1`, `--max-fps auto`), a little under the display's refresh rate (138 at 144 Hz, 116 at 120 Hz). With FreeSync or G-Sync it keeps every frame inside the display's range, so play is as smooth as with vsync without vsync's delay
-- Frame rate: the login, server select, character select/creation and loading screens (including the last stretch of a zone-in) no longer run as fast as they can when `display.max_fps` is unlimited; they are capped at 240 fps; any other `display.max_fps` value is still followed exactly
-- Grass: running through grassy zones no longer stutters each time new ground comes into view; the grass there now grows on a background thread instead of during the frame
-- Grass: Hailstone's grass on the classic zones no longer grows through crates, tents, wagons, rocks, campfires and other objects on the ground, whether the zone's own or placed by the server (doors, dropped items and tradeskill containers, housing items, campfire spawns), nor shows through paths and floors laid just over the grass, such as the brick tiles in the Plane of Knowledge. It still grows under trees
-- Grass: in outdoor zones, grass now grows under cliff overhangs and arches high overhead; roofs and low bridges still keep the ground under them bare. It also grows where a zone line's region lies over the ground: some classic zone lines are boxes the size of a field, and the whole field north of North Qeynos, by the gate to Qeynos Hills, had none
+- Options > Graphics > **Depth Pre-pass** (gamepad: Display), for the modern lighting
+  - The zone is drawn once without lighting first, so only what is in front gets lit
+  - It takes effect at once, so you can compare the frame rate on and off (it was a `hailstone.ini` setting read only when a zone loaded). Off by default
+- Graphics: the first start fits the graphics settings to the computer
+  - Low (which also uses the classic lighting, without radial flora): a laptop or tablet with integrated graphics, a graphics card with under 3 GiB of memory, or a processor with fewer than 4 threads
+  - Medium: a card with 3 to 6 GiB
+  - Other computers keep today's settings, and existing installs keep theirs
+  - Options > Graphics > Detect (gamepad: Display) applies the settings for this computer at any time
+- Graphics: the upscaler is off by default on every computer, so the 3D world is drawn at full size
+  - A player who never chose an upscaler, and was on AMD FSR 1, is now at Off
+  - Options > Graphics > Upscaler turns FSR 1, Temporal or FSR 3.1 back on
+- Graphics: upscalers can come as add-ons; the first are Intel XeSS and AMD FSR 4, for Windows
+  - Install one from Add-ons on the login screen and pick it under Options > Graphics > Upscaler. It starts with the next game start and works as AMD FSR 3.1 does, Frame Generation included
+  - If the graphics card cannot run it, the game uses AMD FSR 3.1 instead (or the Temporal upscaler where FSR 3.1 cannot run)
+  - For developers: `sdk/hailstone_upscaler.h` and docs/plugins.md "Upscaler providers"
+- AMD FSR 3.1: about 30 % faster on integrated graphics (on an Intel Iris Xe, 5.6 ms a frame down to 3.9 ms at 1280x720)
+- Graphics: the frame shares its work with the processor's other cores
+  - Worker threads pose characters, work out other characters' movement, build particles, move characters' and held items' effects, and record the 3D scene's and shadows' drawing commands
+  - A character's skeleton is posed once a frame however many effects, spells and name plates ask for it
+  - Zoning is quicker: a zone's collision, ladders and lighting are built side by side while its graphics load
+  - `display.worker_threads` sets how many (0 for none); `display.parallel_record` 0 keeps the scene's and shadows' recording on the main thread
+- Frame cap: `display.max_fps` (and `--max-fps`) now holds on every system
+  - On Windows a cap of 144 ran at about 128
+  - Options > Display > Frame Rate Limit has a new Auto choice (`display.max_fps = -1`, `--max-fps auto`), a little under the display's refresh rate (138 at 144 Hz, 116 at 120 Hz)
+  - With FreeSync or G-Sync, Auto keeps every frame inside the display's range: as smooth as vsync without vsync's delay
+- Frame rate: with `display.max_fps` unlimited, the login, server select, character select/creation and loading screens (including the last stretch of a zone-in) are capped at 240 fps instead of running flat out. Any other `display.max_fps` value is still followed exactly
+- Grass: running through grassy zones no longer stutters as new ground comes into view; the grass grows on a background thread instead of during the frame
+- Grass: Hailstone's grass on the classic zones no longer grows through objects on the ground
+  - This covers crates, tents, wagons, rocks and campfires, the zone's own or placed by the server (doors, dropped items and tradeskill containers, housing items, campfire spawns)
+  - It no longer shows through paths and floors laid just over the grass, such as the brick tiles in the Plane of Knowledge
+  - It still grows under trees
+- Grass: in outdoor zones, grass grows under cliff overhangs and arches high overhead; roofs and low bridges still keep the ground bare
+  - It also grows where a zone line's region lies over the ground. The whole field north of North Qeynos, by the gate to Qeynos Hills, had none
 - Options > Graphics > Grass Density (and the gamepad pack's Grass density) goes up to 300 % (it stopped at 200 %); 100 % is unchanged
-- Held items: weapons and shields show their particle clouds, with their animated frames and moving parts, and the newer (EQG) equipment keeps its normal, glow and reflection maps, such as the cleric epic shield's pearl sheen. Scrolling water and lava materials on held items move as they do in the zones, and older epic weapons get the same glow and reflections. Character select and item previews show the same effects, and in the modern lighting glowing particles light their surroundings
-- Zones: the zones' own particle clouds now step through their animated bitmaps; the lava of EQG zones shows its second layer; doors, ground objects and real estate placements play their particle effects (before, only missiles did); and effects the server places on invisible particle switches now show, bringing back missing waterfall cascades
-- Spell effects: a particle whose texture is missing from the game folder is no longer drawn as a white square. Spear of Decay and other spells using effect 226 left a large white square on the caster. An emitter with no texture name is not drawn either
-- Enchanter pets and other invisible-body spawns (race 127's IVM, also race 600) show the weapon they hold. The body stays invisible, but the primary and secondary items are drawn in its hands, which move as a wood elf's, as in the original, and the spawn is no longer culled or framed in the item preview as if only its empty body existed; an aura with nothing held still shows nothing
-- Erudite ghosts (race 118, Paineel's GEM and GEF models) take the wood elf's animations for the clips they lack, as the original does: they had only 9 clips of their own (walk, run, one swing, two deaths and a few more); now they have 71
-- Luclin player models: combat swings, casting, socials (wave, cheer) and every other animation of more than 15 frames play at the original's speed; before, they ran at about half speed. The classic models are unchanged
-- Animations: the newer (EQG) models' clips play at their own length (a Drakkin walk 666 ms instead of 693) and show their end pose, so walks, runs and attacks are no longer a few percent slow and a one-shot no longer stops short of its last frame
-- Animations: Luclin elementals (races 209 to 212, with `UseLuclinElementals` on in `eqclient.ini`, the default) no longer play everything at half speed, and an action the server plays on a classic model runs at the same per-race speed as its movement, as in the original
-- Animations: a character no longer jumps up for a moment when it sits down. Classic models play their turn when turning on the spot; pets fidget as rarely as in the original, and while your auto attack is on no one fidgets; an action a classic model has no animation for falls back to its standing (or, sitting, its sitting) pose instead of playing nothing, and a ducking character is no longer stood up by an idle
-- NPCs, pets and other players that have stopped no longer walk in place with their footsteps sounding: a spawn that has not moved for a second plays its standing and idle animations
-- Name plates: an invisible player or NPC you can see shows as `(Name)`, as in the original, and so does your own name while you are invisible; the player, target and target-of-target captions in both interfaces show it too. Options > Display > Name Plates > **Bracket Invis vs. Undead** (gamepad: Interface; off by default) shows `[Name]` for invisibility versus undead on yourself or on a target whose buffs the server sends
-- Name plates: mercenaries' names are amber, the original's colour; they were drawn light blue from the original's colour bytes read in the wrong order
-- Name plates: GM names show green as the original client does, your own GM character's too, and stay green when targeted; an anonymous or roleplaying GM's name, and a GM's corpse, keep the ordinary colour
-- Guilds: the Banner page in both interfaces shows available kits, the active banner and its remaining time. On a server with RoF2 guild banners, members with the appropriate permissions can plant, remove or customise the banner. Planted banners display their guild's patterns and colours
-- Spirit Shrouds and Monster Missions have form selection and previews in both interfaces when the server supplies them. The Quest Journal shows shared-task roles, and the inventory gives access to shroud progress and the Shroud Bank when available
-- Blocked buffs and blocked pet buffs are kept across sessions, in the character ini as the RoF2 client keeps them, and sent to the server at each zone-in. A spell the server takes as newly blocked comes off the player or the pet at once ("Now blocking ..."), with the effects of the same spell group
-- Buffs: in a zone where the server suspends buffs (EQEmu's `suspendbuffs`, such as the Plane of Knowledge), a suspendable buff's time no longer counts down in the buff, pet and target windows, MacroQuest TLOs and the plugins' target buff read, and the client no longer drops a short buff when its local count runs out while the server still has it. The flag comes from OP_NewZone, which the client read but never used
-- Casting now counts spell-range focus from equipment, buffs and AAs when checking whether a target is in reach
-- `/doability` takes the name of any of your abilities as well as the Actions window's button (`/doability Bash`, `/doability fury`, in any case): a skill, a discipline or an activated AA, used as its Ability Book row is; a name that is more than one kind's is the skill's first, then the discipline's, then the AA's. A number still means button 1-10
-- Tradeskills: clicking a recipe in a tradeskill container shows its components again on an EQEmu server built since June 2026, so Combine, Combine N and Combine All work there. The server now adds the recipe's trivial after the components, and the client threw the whole reply away, leaving the window "Waiting for the components..." for good
-- Merchants: **Usable only** now checks all of your classes on multiclass servers, so unlearned scrolls for those classes are no longer hidden by the profile's class
-- Achievements: objective counts and live state updates now arrive as the original client reads them. A progress record whose type is a requirement kind (3 or 4, as some servers send) was refused, so the window kept saying "Objective counts have not arrived yet"; and a state update whose leading number was not newer than the last was dropped, which the original never checks. A progress record for an unknown achievement or a descriptive-only objective is now skipped instead of throwing away the whole packet
-- AA window: an ability whose name the strings file does not have (with a live game folder and no server strings, about 690 of a stock PEQ server's AA titles) is listed by its spell's name, else as "Ability <number>", instead of a blank line. Sorted by name, those blank rows came first, so the whole Ability column looked empty. The training question and the stock window use the same names
-- GM commands: after `#gm on` the GM-only slash commands (`/goto`, `/summon`, `/find` and the rest) work at once, as in the original client; they no longer stay refused as "not a valid command" until the next zone change
-- Loot All: two quick clicks on Loot All, before "Loot all, are you sure?" came up, asked the question twice and needed two answers; a second click while the question is up or waiting now asks nothing more
-- Giving to an NPC: hiding the player trade window (a saved layout, a script) no longer cancels a hand-in that is open in the Give window
-- Find and Tracking against a stock server: a request the server never answers (a /find of a Bazaar trader) no longer switches /find, the Find window's paths or Tracking off until you zone; a /find and a walk's path asked together each get their own answer again
+- Held items show their particle clouds and their materials' effects
+  - Weapons and shields show their particle clouds, with animated frames and moving parts
+  - The newer (EQG) equipment keeps its normal, glow and reflection maps, such as the cleric epic shield's pearl sheen; older epic weapons get the same glow and reflections
+  - Scrolling water and lava materials move as they do in the zones
+  - Character select and item previews show the same effects, and in the modern lighting glowing particles light their surroundings
+- Zones: more of the zones' particle effects show
+  - The zones' own particle clouds step through their animated bitmaps, and the lava of EQG zones shows its second layer
+  - Doors, ground objects and real estate placements play their particle effects (before, only missiles did)
+  - Effects the server places on invisible particle switches show, bringing back missing waterfall cascades
+- Spell effects: a particle whose texture is missing from the game folder is no longer drawn as a white square
+  - Spear of Decay and other spells using effect 226 left a large white square on the caster
+  - An emitter with no texture name is not drawn either
+- Enchanter pets and other invisible-body spawns (race 127's IVM, also race 600) show the weapon they hold
+  - The body stays invisible, but the primary and secondary items are drawn in its hands, which move as a wood elf's, as in the original
+  - The spawn is no longer culled or framed in the item preview as if only its empty body existed
+  - An aura with nothing held still shows nothing
+- Erudite ghosts (race 118, Paineel's GEM and GEF models) take the wood elf's animations for clips they lack, as the original does: they had 9 clips of their own (walk, run, one swing, two deaths and a few more); now they have 71
+- Luclin player models play combat swings, casting, socials (wave, cheer) and every other animation of more than 15 frames at the original's speed; before, they ran at about half speed. The classic models are unchanged
+- Animations: the newer (EQG) models' clips play at their own length (a Drakkin walk 666 ms instead of 693) and show their end pose. Walks, runs and attacks are no longer a few percent slow, and a one-shot no longer stops short of its last frame
+- Animations: Luclin elementals (races 209 to 212, with `UseLuclinElementals` on in `eqclient.ini`, the default) no longer play everything at half speed. An action the server plays on a classic model runs at the same per-race speed as its movement, as in the original
+- Animations: several fixes to sitting, turning and idles
+  - A character no longer jumps up for a moment when it sits down
+  - Classic models play their turn when turning on the spot
+  - Pets fidget as rarely as in the original, and while your auto attack is on no one fidgets
+  - An action a classic model has no animation for falls back to its standing (or sitting) pose instead of playing nothing
+  - A ducking character is no longer stood up by an idle
+- NPCs, pets and other players that have stopped no longer walk in place with footsteps sounding; after a second still they play their standing and idle animations
+- Name plates: an invisible player or NPC you can see shows as `(Name)`, as in the original
+  - So does your own name while you are invisible, and the player, target and target-of-target captions in both interfaces
+  - Options > Display > Name Plates > **Bracket Invis vs. Undead** (gamepad: Interface; off by default) shows `[Name]` for invisibility versus undead on yourself or on a target whose buffs the server sends
+- Name plates: mercenaries' names are amber, the original's colour. (they were light blue)
+- Name plates: GM names show green as on the original client, your own GM character's too, and stay green when targeted. An anonymous or roleplaying GM's name, and a GM's corpse, keep the ordinary colour
+- Guilds: the Banner page in both interfaces shows available kits, the active banner and its remaining time
+  - On a server with RoF2 guild banners, members with the right permissions can plant, remove or customise the banner
+  - Planted banners display their guild's patterns and colours
+- Spirit Shrouds and Monster Missions have form selection and previews in both interfaces when the server supplies them
+  - The Quest Journal shows shared-task roles, and the inventory gives access to shroud progress and the Shroud Bank when available
+- Blocked buffs and blocked pet buffs are kept across sessions, in the character ini as the RoF2 client keeps them, and sent to the server at each zone-in
+  - A spell the server takes as newly blocked comes off the player or the pet at once ("Now blocking ..."), with the effects of the same spell group
+- Buffs: in a zone where the server suspends buffs (EQEmu's `suspendbuffs`, such as the Plane of Knowledge), a suspendable buff's time no longer counts down
+  - This holds in the buff, pet and target windows, MacroQuest TLOs and the plugins' target buff read
+  - The client no longer drops a short buff when its local count runs out while the server still has it
+  - The flag comes from OP_NewZone
+- Casting counts spell-range focus from equipment, buffs and AAs when checking whether a target is in reach
+- `/doability` takes the name of any of your abilities as well as the Actions window's button (`/doability Bash`, `/doability fury`, in any case)
+  - A skill, a discipline or an activated AA, used as its Ability Book row is
+  - A name shared by several kinds means the skill first, then the discipline, then the AA
+  - A number still means button 1-10
+- Tradeskills: clicking a recipe in a tradeskill container shows its components again on an EQEmu server built since June 2026, so Combine, Combine N and Combine All work there
+  - The window stayed at "Waiting for the components..." for good
+- Merchants: **Usable only** checks all of your classes on multiclass servers, so unlearned scrolls for those classes are no longer hidden by the profile's class
+- Achievements: objective counts and live state updates arrive as the original client reads them
+  - A progress record whose type is a requirement kind (3 or 4, as some servers send) was refused, so the window kept saying "Objective counts have not arrived yet"
+  - A state update whose leading number was not newer than the last was dropped, which the original never checks
+  - A progress record for an unknown achievement or a descriptive-only objective is skipped instead of throwing away the whole packet
+- AA window: an ability missing from the strings file is listed by its spell's name, else as "Ability <number>", instead of a blank line
+  - With a live game folder and no server strings, that was about 690 of a stock PEQ server's AA titles
+  - The training question and the stock window use the same names
+- GM commands: after `#gm on` the GM-only slash commands (`/goto`, `/summon`, `/find` and the rest) work at once, as in the original client, instead of being refused as "not a valid command" until the next zone change
+- Loot All: two quick clicks before "Loot all, are you sure?" came up asked the question twice. A second click while the question is up or waiting now asks nothing more
+- Giving to an NPC: hiding the player trade window (a saved layout, a script) no longer cancels a hand-in open in the Give window
+- Find and Tracking against a stock server
+  - A request the server never answers (a /find of a Bazaar trader) no longer switches /find, the Find window's paths or Tracking off until you zone
+  - A /find and a walk's path asked together each get their own answer again
 - `/stick` and walks to a spawn stop when that spawn is replaced by another under the same id, when you die and when you zone
-- `/nav ... distance=<n>` stops that far from the goal along the path again; when the path bent round the goal near its end, the walk went on to the last corner, right up to the NPC
-- Combat chat: `combat.report_range` in the character's `hailstone.ini` sets how far away others' melee hits and misses (your pet's included), killing blows and death messages are shown. Unset, the original's 75 units for hits and 50 for deaths stay. The server still decides which damage it sends: stock EQEmu sends others' melee damage only within 50 units unless its `Range:DamageMessages` rule is raised. Hiding others' hits or misses no longer lets your pet's out-of-range lines through
-- Chat: spell hit modes now also shorten complete non-melee damage and healing reports sent as generic or plain-text server messages, including reports with a spell name in parentheses and stock EQEmu's "You have been healed for N points of damage.". A line spoken by someone ("Somebody says, Bob hit Fred for ...") stays whole. Full sentences remain in logs and incoming-chat hooks
-- The Modern chat context menu can detach and rejoin tabs, reorder or switch tabs, and combine chat windows. Each tab keeps its filters and history when it moves and has its own unread flash toggle, highlight colour and scrollbar setting. Window titles, tab names and grouping are saved per character, and a chat layout saved before loads as it was. The shared UI API and `/chattabs` can manage the same tabs
+- `/nav ... distance=<n>` stops that far from the goal along the path again. When the path bent round the goal near its end, the walk went on to the last corner, right up to the NPC
+- Combat chat: `combat.report_range` in the character's `hailstone.ini` sets how far away others' combat lines are shown
+  - It covers others' melee hits and misses (your pet's included), killing blows and death messages. Unset, the original's 75 units for hits and 50 for deaths stay
+  - The server still decides which damage it sends: stock EQEmu sends others' melee damage only within 50 units unless its `Range:DamageMessages` rule is raised
+  - Hiding others' hits or misses no longer lets your pet's out-of-range lines through
+- Chat: spell hit modes also shorten complete non-melee damage and healing reports sent as generic or plain-text server messages
+  - This includes reports with a spell name in parentheses and stock EQEmu's "You have been healed for N points of damage."
+  - A line spoken by someone ("Somebody says, Bob hit Fred for ...") stays whole
+  - Full sentences remain in logs and incoming-chat hooks
+- Modern chat: the context menu can detach and rejoin tabs, reorder or switch them, and combine chat windows
+  - Each tab keeps its filters and history when it moves, and has its own unread flash toggle, highlight colour and scrollbar setting
+  - Window titles, tab names and grouping are saved per character; a chat layout saved before loads as it was
+  - The shared UI API and `/chattabs` can manage the same tabs
 - Chat: on a new character the game's "Other Chat" is a tab of the main chat window instead of a window of its own, and a chat window or tab you close stays closed after a restart
-- Chat channels: a chat server link that stops answering is now noticed after 60 seconds with nothing heard from the server and reconnected (as a dropped link already was), instead of staying dead for the rest of the session with channel text going nowhere. After a reconnect the client joins your auto-join channels again; it does not rejoin channels you joined by hand
-- Extended Target window (Modern interface): it starts six rows tall, and with more slots the rest scroll; drag its edge or corner to resize it. Its right-click menu has Auto expand, which grows the window to show every slot down to the last one with a target, and shrinks it back as they clear
+- Chat channels: a chat server link that stops answering is reconnected after 60 seconds of silence, as a dropped link already was
+  - After a reconnect the client rejoins your auto-join channels, not channels you joined by hand
+- Extended Target window (Modern interface): it starts six rows tall, and further slots scroll
+  - Drag its edge or corner to resize it
+  - Its right-click menu has Auto expand, which grows the window down to the last slot with a target and shrinks it back as they clear
 - Auras window: no longer opens by itself on a character that has never opened it; the EQ menu's Auras opens it
-- Keys: the alerts key (Shift+H by default, as in the original) shows and hides the Alert History window again, in both interfaces, and is back in the key list. It did nothing before. A stock server sends no alerts, so the window stays empty there
-- Modern interface: the quantity dialog opened again for a new request while it was still up (Sell with the Buy quantity left open) kept the old amount in its number box, such as "100" beside a slider at "5 of 5"; the box now shows the new request's amount
+- Keys: the alerts key (Shift+H by default, as in the original) shows and hides the Alert History window again, in both interfaces, and is back in the key list. A stock server sends no alerts, so the window stays empty there
+- Modern interface: the quantity dialog, reopened for a new request while still up, shows the new amount.
 - Gamepad interface: windows fit narrow and short screens, keeping their title bars and close buttons on screen
-- Options: the explanation that shows when you hover a setting is now a block of text with a fixed width that wraps, instead of one long line that ran off the screen; the notes under a setting wrap too
-- F10 (Toggle UI Display, which can be moved under Options > Controls > Key Bindings) hides the interface in the world and brings it back without changing any window's setting; a server's compiled-plugin question still shows while it waits for your answer
-- Interfaces: Modern and Gamepad are now built on one shared UI API (`hs.UI`). An interface of your own can build on either (`base=modern` in its `ui.ini`) and change only the windows it wants, and interfaces can be installed as add-ons from the login screen's Add-ons. An add-on interface draws the game and acts in it as the built-in ones do, but the login and server screens, your password, your add-ons and the server's compiled-plugin question stay with the built-in interface under it
-- Options > Display > Interface (gamepad: Interface): picking another interface in game switches at once, without logging in again, and the page shows the interface in use, what it builds on and any errors in it
+- Options: the hover explanation of a setting wraps at a fixed width instead of running off the screen in one line; the notes under a setting wrap too
+- F10 (Toggle UI Display, rebindable under Options > Controls > Key Bindings) hides the interface in the world and brings it back without changing any window's setting. A server's compiled-plugin question still shows while it waits for your answer
+- Interfaces: Modern and Gamepad are built on one shared UI API (`hs.UI`)
+  - An interface of your own can build on either (`base=modern` in its `ui.ini`) and change only the windows it wants
+  - Interfaces can be installed as add-ons from the login screen's Add-ons
+  - An add-on interface draws the game and acts in it as the built-in ones do. The login and server screens, your password, your add-ons and the server's compiled-plugin question stay with the built-in interface under it
+- Options > Display > Interface (gamepad: Interface): picking another interface in game switches at once, without logging in again. The page shows the interface in use, what it builds on and any errors in it
 - Add-ons: a script add-on can ask to start by itself (`autoload` in its manifest), and every installed add-on has an Enabled switch in Add-ons
 - Map and Raid window: add-ons can offer actions there; the maps show a Map controls button when one does
-- Servers with a client add-on of their own can now own the map's NPC marks, switch off NPC Find and Tracking there, rename the zone shown on the HUD and the map (a script's `${Zone.Name}` stays the zone's own name), change follow and mount movement, sell an item at a merchant with a right click, add item notes and loot questions, draw in the world and replace name plates. Against any other server nothing changes
-- Plugins and scripts: a server's plugin or Lua script can give the player classes its own names (`set_class_name` in the SDK, `hailstone.set_class_name` in the `hailstone` module, with the `extend` permission), for example class 1 shown as "Vanguard", "VAN". The client shows them wherever it names the class (inventory, group, raid and guild windows, `/who`, character select, item displays, `${Me.Class}`), and spawn searches and `/who` take both names. Display only: what goes to the server is unchanged. The names go when the plugin or script stops or the session leaves the server. Lua interfaces can read them with `hs.ClassName` (UI API 1.7)
-- Server add-on policies: a server can require, allow or block add-ons (scripts, plugins, interfaces, tools, upscalers) by their GitHub repository (`owner/repo`) in its `hailstone.cfg`, once it says `[addons] enforce = on`. A bare add-on name is refused, and the log says why. Under `default = deny` an add-on the server suggests is also allowed without naming it again in `allow` (it stays optional, and a block still wins), and an interface put in `ui/` by hand is refused as any unlisted add-on is, the built-in one being used instead
-- Server add-on policies: required add-ons start by themselves on that server and cannot be stopped there. They keep the usual install review and native-code approval; the permission question shows above the loading screen, and for one of your own compiled add-ons that the server requires it reads "Allow your add-on this server requires?" and asks you to trust the add-on's author (a plugin the server sent still asks "Allow this server's plugin?")
-- Server add-on policies: a required add-on that is missing, changed or refused at the zone-in keeps the character out, with the add-on panel open on it, and why (an add-on missing, too old, changed, or needing capabilities the server does not allow) is in the client's log too, one line for each. An upscaler a server blocks keeps the character out of that server until another is picked and the client restarted. The check uses the rules the zone-in brings, so a server that fixes its policy never locks players out
-- Server add-on policies: once in the world, a required add-on that fails (a plugin error, a script that stopped) is never a disconnect: a warning in chat names it by its repository (`owner/repo`), and a small Server add-ons window says so and offers Retry, which starts it again. You can close the window; it comes back only for a new failure, and you can keep playing on the server either way
-- Server add-on policies: a server can ask for a minimum version of a required add-on (`required = owner/repo:1.0.0`); that version or any newer one is accepted, and an older one is shown on the login screen with a link to update it. Clients before this release refuse a server that uses this form, so server owners should wait until their players have updated
-- Scripts: on Linux, `/lua run` and a server's required scripts find a script whatever the case of its name, as on Windows and macOS (`/lua run autoloot` starts `scripts/AutoLoot`); before, a script add-on whose folder had capitals could not be started there
+- Servers with a client add-on of their own can change more of the client. Against any other server nothing changes
+  - Own the map's NPC marks, and switch off NPC Find and Tracking
+  - Rename the zone shown on the HUD and the map (a script's `${Zone.Name}` stays the zone's own name)
+  - Change follow and mount movement, sell an item at a merchant with a right click, add item notes and loot questions
+  - Draw in the world and replace name plates
+- Plugins and scripts: a server's plugin or Lua script can give the player classes its own names
+  - `set_class_name` in the SDK, `hailstone.set_class_name` in the `hailstone` module, with the `extend` permission; for example class 1 shown as "Vanguard", "VAN"
+  - The client shows them wherever it names the class (inventory, group, raid and guild windows, `/who`, character select, item displays, `${Me.Class}`), and spawn searches and `/who` take both names
+  - Display only: what goes to the server is unchanged. The names go when the plugin or script stops or the session leaves the server
+  - Lua interfaces can read them with `hs.ClassName` (UI API 1.7)
+- Server add-on policies: a server can require, allow or block add-ons by their GitHub repository
+  - It covers scripts, plugins, interfaces, tools and upscalers, named as `owner/repo` in the server's `hailstone.cfg`, once it says `[addons] enforce = on`
+  - A bare add-on name is refused, and the log says why
+  - Under `default = deny`, an add-on the server suggests is also allowed without naming it again in `allow` (it stays optional, and a block still wins)
+  - An interface put in `ui/` by hand is refused as any unlisted add-on is, and the built-in one is used instead
+- Server add-on policies: required add-ons start by themselves on that server and cannot be stopped there
+  - They keep the usual install review and native-code approval; the permission question shows above the loading screen
+  - For one of your own compiled add-ons that the server requires, it reads "Allow your add-on this server requires?" and asks you to trust the add-on's author (a plugin the server sent still asks "Allow this server's plugin?")
+- Server add-on policies: a required add-on that is missing, changed or refused at the zone-in keeps the character out
+  - The add-on panel opens on it, and the reason (missing, too old, changed, or needing capabilities the server does not allow) is in the client's log too, one line for each
+  - An upscaler a server blocks keeps the character out of that server until another is picked and the client restarted
+  - The check uses the rules the zone-in brings, so a server that fixes its policy never locks players out
+- Server add-on policies: a required add-on that fails once in the world (a plugin error, a script that stopped) is never a disconnect
+  - A warning in chat names it by its repository (`owner/repo`), and a small Server add-ons window offers Retry, which starts it again
+  - You can close the window; it comes back only for a new failure, and you can keep playing either way
+- Server add-on policies: a server can ask for a minimum version of a required add-on (`required = owner/repo:1.0.0`)
+  - That version or any newer one is accepted; an older one is shown on the login screen with a link to update it
+  - Clients before this release refuse a server that uses this form, so server owners should wait until their players have updated
+- Scripts: on Linux, `/lua run` and a server's required scripts find a script whatever the case of its name, as on Windows and macOS (`/lua run autoloot` starts `scripts/AutoLoot`)
 - Scripts: an item's `TimerReady` gives the seconds left on its click reuse, as MacroQuest's does (NULL for an item without a click effect)
-- Scripts and compiled plugins can read the raid roster in one call: `hailstone.raid()` for a script, `get_raid_data_bulk` for a plugin. Members, groups, leader/target, roles, looters, HP/mana/endurance percentages and pets come as fixed records, without a TLO expression per member; the plugin read's header gives the records written and the roster's total, as the other list reads do
-- A Lua script that ends with an error writes it to the client's log once, with its traceback; the error's first line was written twice
-- For UI and add-on authors: the UI's Lua table is now named `hs`; `eq` stays another name for the same table for good, so existing add-ons and your own files keep working
+- Scripts and compiled plugins can read the raid roster in one call: `hailstone.raid()` for a script, `get_raid_data_bulk` for a plugin
+  - Members, groups, leader/target, roles, looters, HP/mana/endurance percentages and pets come as fixed records, without a TLO expression per member
+  - The plugin read's header gives the records written and the roster's total, as the other list reads do
+- A Lua script that ends with an error writes it to the client's log once, with its traceback
+- For UI and add-on authors: the UI's Lua table is now named `hs`. `eq` stays another name for the same table for good, so existing add-ons and your own files keep working
 - For UI and add-on authors: colour swatches and pickers for interfaces and add-on settings, and every ImGui window flag
-- For add-on authors: Lua add-ons can read the scroll, focus, proc, worn and click spell IDs of an inspected item (`hs.DisplayItemData`: `scrollSpell`, `focusSpell`, `procSpell`, `wornSpell`, `clickSpell`)
-- For plugin authors: compiled add-ons can replace world name plates through the shared caption canvas. The SDK exposes the same visible actors, known resource and casting readings, and guarded manual plate clicks as the Lua canvas. Both now also say whether an actor is known to be invisible, invisible to undead or otherwise concealed
-- For plugin authors: new host functions and hooks for server add-ons (docs/plugins.md "Server add-on services"): `raid_action` and `select_raid_member`, item decoding and the item inspector, manual follow and its status, the memorised spells, world geometry, `measure_binary` (the client's executable or the plugin's own file) and the map policy, all added later in ABI 3. A plugin built with this SDK still loads in 0.7.0 and 0.7.1
-- For plugin authors: `use_ability` uses one of the player's skills, disciplines or activated AAs by name as the Ability Book's row does, and `ability_state` says whether it is ready (its remaining and reuse time); `get_ability_data_bulk` gives the Ability Book's usable entries in one call: an `HS_Bulk_ListHeader` and an `HS_Bulk_AbilityRecord` per skill, discipline and owned activated AA, each with its kind, stable id, name, ready flag, remaining and reuse time, so a rotation checks its whole list in one pass. All three are added later in ABI 3, so test `HAILSTONE_HOST_HAS` first (docs/plugins.md)
-- For plugin authors: a new host function, `get_buff_name_data_bulk`, reads the player's buffs as `get_buff_data_bulk` does but with each caster's name in place of the caster's spawn id: a 29-byte `HS_Bulk_BuffNameFixedRecord` followed by the name for each slot (docs/plugins.md "Buff and spawn records"). `get_buff_data_bulk` is unchanged
-- For plugin authors: a new host function, `get_target_buff_data_bulk`, reads the current target's buffs in one call: an `HS_Bulk_ListHeader` (the records in this buffer and the target's buffs the client holds), then spell id, tics, spell type, buff slot and the caster's name for each, as a 20-byte `HS_Bulk_TargetBuffFixedRecord` followed by the name, as many as fit, so a count below the total means the buffer was too small (docs/plugins.md "Buff and spawn records")
-- For plugin authors: `get_buff_data_bulk`, `get_pet_buff_data_bulk` and `get_target_buff_data_bulk` give each buff's ticks left (the server's count less the 6 s ticks since it came), not the count as the server last sent it, and a permanent buff as the negative count the server sent (EQEmu: -1, -4 for an aura's, -1000 for one a script made permanent); `hailstone.buff(i).tics` in Lua is that negative count too, where it was a large unsigned number
-- For plugin authors: two new host functions, `get_avail_aa_data_bulk` and `get_avail_disc_data_bulk`, list the character's owned alternate abilities (by ability id) and combat abilities (by spell id) in one call, each with its name, as an `HS_Bulk_ListHeader` (the records in this buffer and how many the client holds, so a smaller count means the buffer was too small) followed by that many records of a 32-bit id, a 32-bit name size and the name (`HAILSTONE_ID_NAME_RECORD`; docs/plugins.md "Buff and spawn records"). Before the character's profile, or with no game connection, the list is empty
-- Closing the game window while a zone change was coming (a `#zone`, a gate) no longer leaves the client running: the zone change ended the camp the close started, and nothing camped again. The client now camps to the desktop again once the next zone shows
-- The client now takes `--lighting` and the other display flags (`--msaa`, `--tonemap`, `--exposure`, `--shadows`, `--light-shadows`, `--no-ao`, `--depth-prepass`, `--bloom`, `--render-scale`, `--sharpness`, `--upscaler`, `--frame-gen`, `--view-distance`) for that run, over the saved settings and without saving them; they used to reach only the zone and model viewers. `--lighting none` stays the viewer's
-- `--window-size 1280x720` now opens a 1280 x 720 window. That size was taken as no size given, so the window came back at its saved size instead
-- A short stutter about once a second, on the login screen as well as in game, is gone: the interface's check for edited script files now costs a fraction of a millisecond instead of up to 10 ms
-- The interface makes much less garbage for its script collector: the spell gem bar and hot button bars no longer make any every frame, and the Modern interface's settings cache, resizable windows, chat and its hidden achievement, reward and evolving item transfer windows reuse what they built the frame before. The collector frees the windows' short-lived garbage in small steps as they run; its full collections, which could pause the game for up to 40 ms when they fell behind, now come less often, between the windows' draws, and show as "Lua GC major" in the Performance window's Frame sections table
-- Performance window (Ctrl+Shift+P, `/perf`): the "Frame sections" table updates twice a second instead of every frame and draws only the rows in view, so keeping it open costs far less frame time and its numbers can be read
-- Performance window: a new "GPU passes" table shows how long the GPU spends on each part of the frame (shadows, the zone, characters, ambient occlusion, bloom, the UI and so on). While the scene is recorded on the worker threads (`display.parallel_record`, the default) the scene shows as a whole (two rows in the modern lighting: its opaque part and the rest); `display.parallel_record = 0` splits them again
+- For add-on authors: Lua add-ons can read an inspected item's scroll, focus, proc, worn and click spell IDs (`hs.DisplayItemData`: `scrollSpell`, `focusSpell`, `procSpell`, `wornSpell`, `clickSpell`)
+- For plugin authors: compiled add-ons can replace world name plates through the shared caption canvas
+  - The SDK exposes the same visible actors, known resource and casting readings, and guarded manual plate clicks as the Lua canvas
+  - Both now also say whether an actor is known to be invisible, invisible to undead or otherwise concealed
+- For plugin authors: new host functions and hooks for server add-ons (docs/plugins.md "Server add-on services")
+  - `raid_action` and `select_raid_member`, item decoding and the item inspector, manual follow and its status, the memorised spells, world geometry, `measure_binary` (the client's executable or the plugin's own file) and the map policy
+  - All are added later in ABI 3: a plugin built with this SDK still loads in 0.7.0 and 0.7.1
+- For plugin authors: abilities by name
+  - `use_ability` uses a skill, discipline or activated AA by name as the Ability Book's row does; `ability_state` says whether it is ready (its remaining and reuse time)
+  - `get_ability_data_bulk` gives the Ability Book's usable entries in one call: an `HS_Bulk_ListHeader` and an `HS_Bulk_AbilityRecord` per skill, discipline and owned activated AA, each with its kind, stable id, name, ready flag, remaining and reuse time, so a rotation checks its whole list in one pass
+  - All three are added later in ABI 3, so test `HAILSTONE_HOST_HAS` first (docs/plugins.md)
+- For plugin authors: `get_buff_name_data_bulk` reads the player's buffs as `get_buff_data_bulk` does, with each caster's name in place of the caster's spawn id
+  - Each slot is a 29-byte `HS_Bulk_BuffNameFixedRecord` followed by the name (docs/plugins.md "Buff and spawn records")
+  - `get_buff_data_bulk` is unchanged
+- For plugin authors: `get_target_buff_data_bulk` reads the current target's buffs in one call
+  - An `HS_Bulk_ListHeader` (the records in this buffer and the target's buffs the client holds), then for each buff a 20-byte `HS_Bulk_TargetBuffFixedRecord` (spell id, tics, spell type, buff slot) followed by the caster's name, as many as fit
+  - A count below the total means the buffer was too small (docs/plugins.md "Buff and spawn records")
+- For plugin authors: `get_buff_data_bulk`, `get_pet_buff_data_bulk` and `get_target_buff_data_bulk` give each buff's ticks left
+  - That is the server's count less the 6 s ticks since it came, not the count as last sent
+  - A permanent buff shows as the negative count the server sent (EQEmu: -1, -4 for an aura's, -1000 for one a script made permanent)
+  - `hailstone.buff(i).tics` in Lua is that negative count too, where it was a large unsigned number
+- For plugin authors: `get_avail_aa_data_bulk` and `get_avail_disc_data_bulk` list the character's owned alternate abilities (by ability id) and combat abilities (by spell id) in one call, each with its name
+  - An `HS_Bulk_ListHeader` (the records in this buffer and how many the client holds; a smaller count means the buffer was too small), then records of a 32-bit id, a 32-bit name size and the name (`HAILSTONE_ID_NAME_RECORD`; docs/plugins.md "Buff and spawn records")
+  - Before the character's profile, or with no game connection, the list is empty
+- Closing the game window while a zone change was coming (a `#zone`, a gate) no longer leaves the client running. The client now camps to the desktop once the next zone shows
+- Display flags now work in the client for that run, over the saved settings and without saving them: `--lighting`, `--msaa`, `--tonemap`, `--exposure`, `--shadows`, `--light-shadows`, `--no-ao`, `--depth-prepass`, `--bloom`, `--render-scale`, `--sharpness`, `--upscaler`, `--frame-gen`, `--view-distance`
+  - They used to reach only the zone and model viewers. `--lighting none` stays the viewer's
+- `--window-size 1280x720` opens a 1280 x 720 window instead of the saved size
+- A short stutter about once a second, on the login screen and in game, is gone (the interface's check for edited script files took up to 10 ms)
+- The interface makes much less garbage for its script collector, so fewer pauses
+  - The spell gem bar and hot button bars make none every frame
+  - The Modern interface's settings cache, resizable windows, chat and its hidden achievement, reward and evolving item transfer windows reuse what they built the frame before
+  - The collector frees the windows' short-lived garbage in small steps. Its full collections, which could pause the game for up to 40 ms when they fell behind, come less often, between the windows' draws, and show as "Lua GC major" in the Performance window's Frame sections table
+- Performance window (Ctrl+Shift+P, `/perf`): the "Frame sections" table updates twice a second instead of every frame and draws only the rows in view, so keeping it open costs far less
+- Performance window: a new "GPU passes" table shows the GPU time of each part of the frame (shadows, the zone, characters, ambient occlusion, bloom, the UI and so on)
+  - While the scene is recorded on the worker threads (`display.parallel_record`, the default) it shows as a whole (two rows in the modern lighting: its opaque part and the rest); `display.parallel_record = 0` splits them again
 - Performance: keeping moving NPCs on the ground no longer searches the zone's collision a second time when a physics step has just landed the spawn on its floor
 
 ## 0.7.1-beta (2026-11-15)
 
 - Login screen: More options (both interfaces) has a Texture pack choice, the same as Options > Graphics > Textures, so an HD pack built with Texture Studio can be picked before logging in. As in Options, the new pack is used from the next start
-- Options: the Upscaler list has an Off choice that turns upscaling and Frame Generation off completely: the 3D world is drawn at full size, whatever the render scale and Frame Generation settings say, and those settings are hidden until an upscaler is chosen again
-- Zones: placed objects that animate in the original now do here too: Ssraeshza Temple's rings turn, and the branches of the trees in Emerald Jungle, Trakanon's Teeth, the Wakening Land and some 70 other zones sway. They are solid where they are, so in Ssraeshza Temple the turning rings again let a player into the water shaft and out at the top once their gaps come round; before, the rings stood still with their gaps facing away and nobody could get in
-- Modern lighting: every zone's haze is now as thick as the zone's own fog (its distances and density), as in the original. Foggy zones such as Nektulos Forest, Innothule Swamp and Misty Thicket are murky again instead of clear and bright; the longer modern view only lets distant scenery fade into the fog instead of being cut off, and clear-sky zones such as Qeynos Hills are as hazy as the original
-- Leadership window: both interfaces show the original green for ranks supplied by the current leader, gold for personal purchases, and white or grey for unpurchased abilities. These colours describe ranks and training availability; group size and leadership permissions still determine whether an ability can be used.
-- Linux: the release now runs natively on Wayland; before, its SDL was built with X11 only and ran through XWayland. SDL chooses Wayland when the compositor offers the `fifo-v1` protocol (recent KDE, GNOME and wlroots); `SDL_VIDEO_DRIVER=wayland` or `x11` overrides it
+- Options: the Upscaler list has an Off choice that turns upscaling and Frame Generation off completely
+  - The 3D world is drawn at full size, whatever the render scale and Frame Generation settings say
+  - Those settings are hidden until an upscaler is chosen again
+- Zones: placed objects that animate in the original now do here too
+  - Ssraeshza Temple's rings turn, and the tree branches sway in Emerald Jungle, Trakanon's Teeth, the Wakening Land and some 70 other zones
+  - They are solid where they are: in Ssraeshza Temple the turning rings again let a player into the water shaft and out at the top once their gaps come round. Before, the rings stood still with their gaps facing away and nobody could get in
+- Modern lighting: every zone's haze is as thick as the zone's own fog (its distances and density), as in the original
+  - Foggy zones such as Nektulos Forest, Innothule Swamp and Misty Thicket are murky again instead of clear and bright, and clear-sky zones such as Qeynos Hills are as hazy as the original
+  - The longer modern view only lets distant scenery fade into the fog instead of being cut off
+- Leadership window: both interfaces show the original colours: green for ranks supplied by the current leader, gold for personal purchases, white or grey for unpurchased abilities
+  - The colours describe ranks and training availability. Group size and leadership permissions still decide whether an ability can be used
+- Linux: the release runs natively on Wayland instead of through XWayland (its SDL was built with X11 only)
+  - SDL chooses Wayland when the compositor offers the `fifo-v1` protocol (recent KDE, GNOME and wlroots); `SDL_VIDEO_DRIVER=wayland` or `x11` overrides it
 - Item display: the Magic and Summoned tags show their names instead of a number ([3094]) with a live game folder, whose string table lacks them
-- Windows build under Wine or Proton: the shared asset cache now works there; it used to turn itself off and load everything privately, as if it were disabled
-- Security: a script can no longer crash the client by nesting `/docommand`, `/noparse` or `/squelch` without end; they nest at most 16 deep, and an `mq.cmd` line is at most 2047 bytes
-- Security: a script or plugin window that catches its own time-limit stop with `pcall`, `xpcall` or a coroutine is stopped all the same, and a long string match (a pattern that backtracks) is now stopped at the time limit instead of freezing the client
+- Windows build under Wine or Proton: the shared asset cache works there; it used to turn itself off and load everything privately
+- Security: a script can no longer crash the client by nesting `/docommand`, `/noparse` or `/squelch` without end. They nest at most 16 deep, and an `mq.cmd` line is at most 2047 bytes
+- Security: script and plugin windows can no longer escape their time limit
+  - A window that catches its own time-limit stop with `pcall`, `xpcall` or a coroutine is stopped all the same
+  - A long string match (a pattern that backtracks) is stopped at the time limit instead of freezing the client
 - Security: Lua socials can no longer use `hailstone.ui_function`, `option` and `menu`; a social that used them could crash the client once edited. No script may be named like a Lua social (`social '...'`)
 - Scripts: an event handler whose own line raises its event again no longer freezes the client; `${String[...].Replace[...]}` results are cut to 2047 bytes
-- Security: plugin windows get the UI pack's tables and the values its functions return only as read-only views, keep at most 1024 settings and 128 windows, and leave the pack a quarter of the UI's memory; the `ui.GetIO()` table is read-only
+- Security: limits on plugin windows
+  - They get the UI pack's tables, and the values its functions return, only as read-only views; the `ui.GetIO()` table is read-only
+  - They keep at most 1024 settings and 128 windows, and leave the pack a quarter of the UI's memory
 - Security: plugin consent: Allow and Don't allow wait a second after a question appears (both packs), and an answer applies only to the question it was given for
-- Security: plugin windows can no longer take the chat keys, the loot window's Link All or the social editor's request, see other plugins' menus or other scripts' folders, nor replace the confirmation, trade, give, quantity, bazaar confirmation, group invite, respawn, large dialog or task select windows. Editing the autoskill list needs `actions` as well as `commands`
-- Lua UI: a window that fails after being registered from another script's code is now reported in UI errors with a retry, instead of staying off silently; a script's unbalanced ImGui pops and drag-and-drop ends no longer affect other windows
-- `eq.*`: numbers past a slot's, row's or choice's range are refused instead of wrapping onto another slot or row; combo choices sent to the server (real estate member groups, guild finder time zone and class) are held to the list
-- Map window: fixed a possible crash when another zone's map was opened while a label was under the mouse; changing zone no longer leaves a marker of the old zone selected or being renamed
-- Merchant: sending money by parcel now asks first, showing the amount and the recipient
+- Security: plugin windows lose access to sensitive parts of the interface
+  - They can no longer take the chat keys, the loot window's Link All or the social editor's request, or see other plugins' menus or other scripts' folders
+  - They can no longer replace the confirmation, trade, give, quantity, bazaar confirmation, group invite, respawn, large dialog or task select windows
+  - Editing the autoskill list needs `actions` as well as `commands`
+- Lua UI: a window that fails after being registered from another script's code is reported in UI errors with a retry, instead of staying off silently. A script's unbalanced ImGui pops and drag-and-drop ends no longer affect other windows
+- `eq.*`: numbers past a slot's, row's or choice's range are refused instead of wrapping onto another slot or row. Combo choices sent to the server (real estate member groups, guild finder time zone and class) are held to the list
+- Map window: fixed a possible crash when another zone's map was opened with a label under the mouse. Changing zone no longer leaves a marker of the old zone selected or being renamed
+- Merchant: sending money by parcel asks first, showing the amount and the recipient
 - Spell book: dropping a spell where the spell bar overlaps the book's gems memorizes it once, into the gem under the mouse
 - Quantity: the dialog shows the right minimum when the game asks again while it is still open
 - Lua Scripts window: the search finds scripts whose names have capitals
 - Chat: a line typed but not sent no longer carries over to the next character after a trip to character select
 - Compass: the heading tooltip shows 0° instead of 360° just west of north
 - STML text (both packs): a "<" that opens no tag (such as "<3") keeps the text after it
-- Gamepad: confirmation dialogs start with the focus on No (Cancel in the bazaar purchase), so the press that opened one can no longer answer Yes; dialogs' own A presses wait out the settling time; with Fast Item Destroy on, LB in the inventory asks before destroying the held item
-- Gamepad: Delete and text length limits no longer cut an accented character in half; a deferred click no longer fires in a window other than the one it was made in
-- Performance: the group window's member lookups, two item displays' comparisons, the Lua social editor, the map and minimap's Find marks, the tradeskill, tracking, title, trainer and skill lists, the achievement browser, the spell book, raid, merchant, Advanced Inventory and key-binding lists, script events and the gamepad merchant, bazaar trader and chat do less work each frame
+- Gamepad: confirmation dialogs are safer
+  - They start with the focus on No (Cancel in the bazaar purchase), so the press that opened one can no longer answer Yes
+  - Dialogs' own A presses wait out the settling time
+  - With Fast Item Destroy on, LB in the inventory asks before destroying the held item
+- Gamepad: Delete and text length limits no longer cut an accented character in half; a deferred click no longer fires in a window other than its own
+- Performance: many windows and lists do less work each frame: the group window's member lookups, two item displays' comparisons, the Lua social editor, the map and minimap's Find marks, the tradeskill, tracking, title, trainer and skill lists, the achievement browser, the spell book, raid, merchant, Advanced Inventory and key-binding lists, script events, and the gamepad merchant, bazaar trader and chat
 - Security: a plugin's bulk spawn read can no longer write past the plugin's buffer when a spawn has a very long name or suffix
 - Security: plugin windows and scripts can no longer draw into, or close, the plugin consent question; a script window left open no longer swallows the windows drawn after it
 - Security: a player's item link can no longer add colours or fake text to other players' chat
-- Plugins and scripts now need the `actions` permission for /pet, /loot, /autoinventory, /alt, /split, /consent and /guilddelete, and for `/nav door … click`; `eq.gamepad.request_focus` needs `commands`. Before, `commands` alone allowed them
-- Scripts: `loadfile` and `dofile` give back only data, so text a script writes can no longer be run as code; `mq.pickle` refuses a file over 8 MiB and a write that would leave the script's config folder with more than 1000 files or 64 MiB
+- Plugins and scripts need the `actions` permission for /pet, /loot, /autoinventory, /alt, /split, /consent and /guilddelete, and for `/nav door … click`; `eq.gamepad.request_focus` needs `commands`. Before, `commands` alone allowed them
+- Scripts: `loadfile` and `dofile` give back only data, so text a script writes can no longer be run as code
+  - `mq.pickle` refuses a file over 8 MiB, and a write that would leave the script's config folder with more than 1000 files or 64 MiB
 - Scripts: `${String[...].Arg[n]}` with a huge n no longer freezes the game, and failed Lua calls in `require` and many `eq.*` functions no longer leak memory
-- Updates and add-on installs survive a power cut: each step is on the disk before the next, and a file a rollback cannot account for is kept in `kept-<time>/`, never deleted. An update no longer writes into `tools/` or a plugin folder an add-on installed, refuses to replace a folder with a file or to unpack more than 4 GiB, and stops a download as soon as it passes the size the release gives
+- Updates and add-on installs survive a power cut
+  - Each step is on the disk before the next, and a file a rollback cannot account for is kept in `kept-<time>/`, never deleted
+  - An update no longer writes into `tools/` or a plugin folder an add-on installed
+  - It refuses to replace a folder with a file or to unpack more than 4 GiB, and stops a download as soon as it passes the size the release gives
 - Add-on versions with invalid build metadata (after `+`) are refused
 - Logs: a second client's old `hailstone.<pid>.log` files are cleaned up, and one run's log stops at 100 MiB
 - The browser helper and other programs the client starts no longer inherit its network connections
-- Damaged or hostile texture-pack models (`.glb`), ecosystem files, zone geometry, MIDI music, DDS and TGA textures and Texture Studio rules can no longer stall a zone load, use gigabytes of memory, or write outside the pack
+- Damaged or hostile files can no longer stall a zone load, use gigabytes of memory, or write outside the pack. This covers texture-pack models (`.glb`), ecosystem files, zone geometry, MIDI music, DDS and TGA textures and Texture Studio rules
 - Screenshots are refused with a message on a display that offers only HDR or 10-bit formats, instead of writing past their buffer
 - /viewport: dragging an edge no longer stalls every frame; the view follows once the size settles
 - Zoning or respawning while at a boat's helm no longer leaves a boat in the new zone jumping between updates
-- A running social stops when you switch characters; the Actions window's Socials tab now honours /pause, /timer and Lua socials
+- A running social stops when you switch characters; the Actions window's Socials tab honours /pause, /timer and Lua socials
 - Permanent buffs no longer drift in the character's stats, and buffs no longer count down there while buff timers are on hold
 - A skill reuse reduction (SPA 227) larger than a combat skill's reuse no longer locks the skill (fixes a RoF2 bug)
-- `/camera pitch|fov|distance|reveal` refuse `nan` and `inf`, and a broken number in `hailstone.ini` loads as its default; `/mousespeed` holds the speed to 0..10; `/copylayout` looks up an unknown ini only by its bare name beside the current layout
+- Bad numbers are refused
+  - `/camera pitch|fov|distance|reveal` refuse `nan` and `inf`, and a broken number in `hailstone.ini` loads as its default
+  - `/mousespeed` holds the speed to 0..10
+  - `/copylayout` looks up an unknown ini only by its bare name beside the current layout
 - Gamepad: rumble is capped at 5 seconds and NaN settings are refused
 - Conversation journal: NPC names or lines with line breaks no longer corrupt the saved journal
 - Sortable lists that mix numbers and words no longer stop with a sort error
 - Web Browser: a tab that fails to open says why instead of retrying every frame, and a failed open keeps the current tab (both interfaces)
 - Barter: a buyer-lines reply that claims more lines than it holds no longer blanks your first buy line
-- Server script: `enabled = 0` now also stops client file downloads and the zone-start file scan
-- Player trades now cancel when the partners separate by more than the trade partner's avatar height plus 20 units, checked twice a second as NPC hand-ins are. The server returns offered items and coin through the normal cancellation path
-- Evolving items: Final Result now requests the server's final form for inspection, with a controller-accessible action in the gamepad UI. Received evolution progress updates refresh the displayed instance; advancement waits for the server's replacement item.
-- Tracking stops when the tracked spawn dies, and dead spawns disappear from the tracking list immediately
-- Faster frames in game: the client no longer rebuilds the spell book's list (up to 720 spells, each with its full description) on every frame when nothing shows it. It is built only while the built-in spell book is open, and not at all when the interface's own spell book replaces it, as the modern and gamepad interfaces' do. The same goes for the spell gems' descriptions and the buff texts of windows the interface replaces
-- Performance window (Ctrl+Shift+P): a new "Frame sections" table shows where the time inside each phase goes, averaged over the last 60 frames with the slowest frame beside it: each Lua UI window, the Lua garbage collector, the name plates and the rest, and for the Lua UI how many KB each window allocates a frame (the garbage the Lua collector has to clean up). Before, these were only written to the log for a hitch
-- Fixed missing terrain and buildings with MSAA on Radeon RX 9070 XT; zone shaders now combine cut-out coverage and LOD fade masks without hardware alpha-to-coverage
+- Server script: `enabled = 0` also stops client file downloads and the zone-start file scan
+- Player trades cancel when the partners separate by more than the trade partner's avatar height plus 20 units, checked twice a second as NPC hand-ins are. The server returns offered items and coin through the normal cancellation path
+- Evolving items: Final Result requests the server's final form for inspection, with a controller-accessible action in the gamepad UI
+  - Evolution progress updates refresh the displayed instance; advancement waits for the server's replacement item
+- Tracking stops when the tracked spawn dies, and dead spawns leave the tracking list at once
+- Faster frames in game: the spell book's list (up to 720 spells, each with its full description) is no longer rebuilt every frame when nothing shows it
+  - It is built only while the built-in spell book is open, and not at all when the interface's own spell book replaces it, as the modern and gamepad interfaces' do
+  - The same goes for the spell gems' descriptions and the buff texts of windows the interface replaces
+- Performance window (Ctrl+Shift+P): a new "Frame sections" table shows where the time inside each phase goes
+  - Averaged over the last 60 frames, with the slowest frame beside it: each Lua UI window, the Lua garbage collector, the name plates and the rest
+  - For the Lua UI, how many KB each window allocates a frame (the garbage the Lua collector has to clean up)
+- Fixed missing terrain and buildings with MSAA on Radeon RX 9070 XT
 - Fixed flickering square patches over grass with Modern lighting, ambient occlusion and MSAA on Radeon RX 9070 XT; ambient occlusion and grass depth remain enabled
-- `/who friends` now asks the server which friends are online and shows their who information, respecting anonymity, instead of printing the saved names. `/who all friends` uses the same lookup
+- `/who friends` asks the server which friends are online and shows their who information, respecting anonymity, instead of printing the saved names. `/who all friends` uses the same lookup
 - Evolving items: both interfaces offer experience transfer from an owned item's display, with source and destination selection, the server's compatibility and result preview, max-transfer level and confirmation
-- Loot All ignores repeated activation while its queue runs or its last reply is awaited; an item being looted on its own no longer matters. With several NO DROP items requiring confirmation, the first question now stays open when the later item stops the queue
-- Task offers: Preview Reward opens the selected offer's rewards in both interfaces when the server enables it. The description also shows the native starting-zone hint.
-- Gamepad quest journal: Preview Reward no longer causes a script error for active tasks.
-- Combat chat: temporary pets with a server-supplied temporary flag and owner now use your pet's line filters and colour alongside your permanent pet. Their arrival no longer replaces the pet shown in the pet window.
+- Loot All ignores repeated activation while its queue runs or its last reply is awaited; an item being looted on its own no longer matters. With several NO DROP items needing confirmation, the first question stays open when a later item stops the queue
+- Task offers: Preview Reward opens the selected offer's rewards in both interfaces when the server enables it. The description also shows the native starting-zone hint
+- Gamepad quest journal: Preview Reward no longer causes a script error for active tasks
+- Combat chat: temporary pets with a server-supplied temporary flag and owner use your pet's line filters and colour alongside your permanent pet. Their arrival no longer replaces the pet shown in the pet window
 - EQG crystals and other static CBGG1/CBSG1 surfaces use their packed glow and gloss channels, keeping dark regions' normals facing outward. Luminous parts and additive zone rays can bloom in modern lighting
-- EQG zones retain their terrain's authored baked lighting and sky-light mask. Older zones such as the Forgotten Halls previously skipped that lighting data, letting outdoor light reach indoor walls and floors
-- Performance window (Ctrl+Shift+P): with Frame Generation on, it shows the rendered and the displayed frame rate, how many frames got an in-between frame and why any were skipped, the vsync pacing and what frame generation costs the GPU
-- Options > Graphics > **Grass Density** (and the gamepad pack's Grass density) sets how thick Hailstone's grass on the classic zones grows, from 25 % to 200 %: lower is sparser and faster, higher is thicker.
-- Options > Graphics > **Frame Generation** (with the Temporal or AMD FSR 3.1 upscaler; also on the gamepad pack's Display page; `display.frame_gen` in `hailstone.ini`): shows a frame made between each two the game draws, from the game's own motion and depth, for smoother movement on a high refresh rate screen. The interface is laid over both and never warps. While it is on, vertical sync stays on, the game draws at half the refresh rate and reacts a little later. It applies at once while one of those upscalers is running; after switching to Temporal or AMD FSR 3.1 it starts with the game's next start, as the upscaler does
-- For plugin authors: a new host function, `cursor_origin`, says whether the item on the cursor came from the server (summoned, a tradeskill result, a quest reward, but also a ground item picked up or an item looted onto the cursor), from the player's own inventory, or is not known; and two new commands, `/destroycursor <id>` and `/stowcursor <id>`, destroy the cursor item or put it in your packs only while it is still the item the plugin read. A plugin or script now needs the `actions` permission for these and for `/destroy`, which before needed only `commands` (docs/plugins.md "The cursor item's origin")
-- Story window: the links in a story's page open the page they point to, such as a server's epic quest, spell and progression guides. Before, clicking them did nothing
+- EQG zones keep their terrain's authored baked lighting and sky-light mask. Older zones such as the Forgotten Halls skipped it, letting outdoor light reach indoor walls and floors
+- Performance window (Ctrl+Shift+P): with Frame Generation on, it shows the rendered and displayed frame rate, how many frames got an in-between frame and why any were skipped, the vsync pacing and what frame generation costs the GPU
+- Options > Graphics > **Grass Density** (and the gamepad pack's Grass density) sets how thick Hailstone's grass on the classic zones grows, from 25 % to 200 %: lower is sparser and faster, higher is thicker
+- Options > Graphics > **Frame Generation**: a frame made between each two the game draws, for smoother movement on a high refresh rate screen
+  - Needs the Temporal or AMD FSR 3.1 upscaler; also on the gamepad pack's Display page; `display.frame_gen` in `hailstone.ini`
+  - The in-between frame comes from the game's own motion and depth. The interface is laid over both and never warps
+  - While it is on, vertical sync stays on, the game draws at half the refresh rate and reacts a little later
+  - It applies at once while one of those upscalers is running; after switching to Temporal or AMD FSR 3.1 it starts with the next game start, as the upscaler does
+- For plugin authors: knowing where the cursor item came from (docs/plugins.md "The cursor item's origin")
+  - The new host function `cursor_origin` says whether it came from the server (summoned, a tradeskill result, a quest reward, but also a ground item picked up or an item looted onto the cursor), from the player's own inventory, or is not known
+  - New commands `/destroycursor <id>` and `/stowcursor <id>` destroy the cursor item or put it in your packs only while it is still the item the plugin read
+  - A plugin or script needs the `actions` permission for these and for `/destroy`, which before needed only `commands`
+- Story window: the links in a story's page open the page they point to, such as a server's epic quest, spell and progression guides
 - Characters' see-through parts, such as a glass or ice shield, a translucent weapon or a glow, are no longer hidden by the grass behind them
-- Options > Graphics > **Upscale Quality** (and the gamepad pack's Display page): the usual presets, Native AA, Quality, Balanced, Performance and Ultra Performance, which draw the 3D world at 100, 67, 59, 50 and 33 % of the screen and upscale it. Native AA with Temporal or AMD FSR 3.1 is anti-aliasing alone at full resolution. Render Scale now goes down to 33 %, and any other value shows as Custom
-- Gamepad interface: the Display page shows all of its settings again; the last ones on the list (Max camera zoom, Ground floating NPCs, Texture pack) could be left off
-- Options > Graphics > Upscaler > **AMD FSR 3.1** (and the gamepad pack's Display page; `display.upscaler = fsr3` in `hailstone.ini`): AMD's temporal upscaler, alongside FSR 1 and Hailstone's own Temporal. Like Temporal it smooths edges over several frames at every Render Scale and replaces MSAA; Upscale Sharpening sets its sharpening. It takes effect at the next start, and on a graphics card that cannot run it the Temporal upscaler is used instead
-- Chat: Hit Modes now includes direct spell damage, damage over time, healing and healing over time, with Normal, Abbreviated and Number Only display. Spell and melee hit modes always keep the full line in logs and incoming-chat hooks. In the modern UI, Hit Modes is now its own entry in the chat window's menu instead of under Filters; the gamepad UI offers the modes under Options > Interface. In a crit, Number Only shows the crit's amount and the hit's as two numbers. For scripts, `eq.ChatHitModes()` now also lists ALL and the four spell categories (11 entries), and ALL's mode is -1 when the categories differ
-- Launchers can sign in with a one-use login ticket: `patchme /ticket:T`, `--ticket T`, or `--ticket-env VAR` (the variable is then removed from the client's environment, so programs it starts do not inherit it). The login server is `--server`, `--host`/`--port`, or the `eqhost.txt` of the `--game-dir` / `EQ_GAME_DIR` folder or of the EverQuest folder Hailstone is installed in; never the asset folder remembered from an earlier run, which may be another server's. `--world NAME|ID` chooses a world (also with `--user` or `--account`), and `--character NAME` or RoF2's `/name:NAME` enters a character; RoF2's `/server:` is accepted and ignored, as the login server names the world. A replacement token from a successful reply enables Sign in with session for that same endpoint. Tickets are never saved to disk or replaced by a password after a failure, and the updater does not restart a ticket launch at start; after a failed ticket the login screen is back to normal, with the server's own remembered account. The login server must support token authentication
-- `--port` must now be a whole number from 1 to 65535, and `--host` and `--server` cannot be empty: the client stops with a message instead of using port 0 or no server
-- Anti-aliasing goes up to 4x MSAA. The 8x choice is gone from both interfaces' Options; a saved 8x (or higher) is drawn at 4x, and the Ultra preset now uses 4x
-- Options > Graphics > Upscaler > **Temporal (TAA)** (and the gamepad pack's Display page; `display.upscaler = taa` in `hailstone.ini`): a temporal upscaler of Hailstone's own. It smooths edges, shimmering fences and foliage over several frames at every render scale, and below a Render Scale of 100 upscales with the detail gathered over those frames instead of FSR 1. It replaces MSAA while on and takes effect at the next start. It follows characters, doors and swaying plants as they move, and particles, rain and water leave little trail. The upscaler is one setting for every character, like Anti-aliasing; FSR 1 stays the default
-- Barbarians, Trolls and Ogres have Slam in their combat skills, and Bash without a shield slams. Slam now follows your current form: an illusion into a large race gives it, an illusion into a small race takes it away until the illusion ends
-- Leadership window: Purchase is offered whenever you have a point to spend, and the server decides whether the rank is affordable. Before, the window used the original client's prices and blocked ranks a stock server sells for less (Mark NPC rank 1 costs 1 point there, not 3)
-- Modern lighting: rain puddles now form only on flat ground, never on hillsides or slopes. They look more like water: ragged edges, shallow at the rim where the ground shows through and deeper in the middle, a damp ring round them, dark from above and mirroring the sky at a low angle, with a glint of the sun or moon once the sky clears
-- Modern interface: a right click on a buff in the target window or the pet window opens that buff's menu, as your own buffs' does: Spell Info, and for the pet's buffs Add to Blocked Pet Spells. Before, the target's buffs opened the frame's menu and the pet's did nothing
-- Modern Options: a search field above the tabs filters the settings of the open tab as you type, by their names, descriptions and section titles, and forgives missing letters, small typing mistakes and initials ("fov" finds Field of View). Clear it and every setting is back
-- Your own character now keeps the ornaments on what you wear when you equip, swap or unequip gear: a weapon ornament's model and an armour ornament's Hero's Forge model. Before, your own model went back to the plain item's look on every gear change until you zoned, though other players still saw the ornament
-- Adventures (LDoN): Alt+V opens the current adventure without a recruiter. Both interfaces show request and offer controls, entry/completion timers, progress, complete theme statistics with win percentages, profile point balances, and the native leaderboard categories, risk choices and tied standings. Leaving an active adventure asks first; refreshes follow the native ten-second cooldown.
-- Hover respawn: same-zone bind and resurrection restore the living player's identity, position and movement while keeping the corpse and server resource updates. The original Respawn window and countdown stay visible beside resurrection offers; Yes enables resurrection without changing the selected row, and Respawn commits the chosen destination; a yes to a resurrection into another zone is answered at once. Resurrection text is red while unavailable and green while available in both interfaces. Unavailable choices and stale resurrection prompts cannot trigger another respawn. The resurrection question comes to the front once as it appears, so chat and other windows keep working while it waits.
-- Modern lighting: the grass in the classic zones is now an even lawn that Hailstone builds itself, instead of clumps of flat pictures borrowed from the revamped Commonlands. Thick blades, slender at the root, cover the open ground in a continuous carpet in the ground's own colour, lying over in broad combed swathes and thinning out smoothly with distance (no visible change of detail as you run), sway in the wind (harder in a storm), bend away from whoever walks through them and thin out raggedly at the edges of paths and roads; the bare ground under a platform or bridge wanders in and out instead of tracing its outline. The grass needs nothing from the game folder; the forests' ferns, the swamps' cattails and the other climate plants are still taken from the game's own files, scattered sparsely over the lawn. Flora Distance still sets how far it reaches
-- Click to move without the isometric camera: Options > Display > Isometric Camera > **Click to Move in Every Camera** (and the gamepad pack's Camera page) lets you click the ground to walk there, and click a door, an item, a merchant or a corpse out of reach to walk to it and use it, in first person and the camera behind you too. It is off unless you turn it on; the isometric camera always moves this way
-- The classic zones' ground is drawn smooth: hills and rock faces are shaded in smooth gradients instead of flat facets, and their triangles are curved and cut finer, while walls, cliff edges and buildings stay sharp. Where you can walk, what you collide with and where mobs stand are unchanged (the drawn ground stays within a foot of the original). `display.smooth_ground = 0` in `hailstone.ini` turns it off
-- Pressing Tab no longer puts the cursor in the chat input (or the first text field of whichever window was last clicked). Tab still moves to the next field while you are typing in one
-- Modern lighting: the zones past the zone lines no longer clash with the one you are in. Their ground is no longer drawn over your zone's edge with seams, steps and flickering where the two never lined up; instead the land past your zone's edge takes the shape of the neighbour's ground, rising or falling to it smoothly, and your zone's grass gives way to the neighbour's in patches across it. The neighbour's walls, buildings, trees and hills stand on that land. Each neighbour's ground is measured once and kept in Hailstone's cache, and from your next visit the land past every zone line takes its shape, even towards a neighbour too far away to draw. Further from the line the neighbour's own ground is drawn, its roads and textures included. `display.neighbour_tint=true` in `hailstone.ini` tints what comes from the neighbour zones
-- Raid window: member actions, including Main Assist, Mark NPC delegation and looter changes, are in a right-click menu in both UI packs. Select a member and use Member actions, or press Y on a focused gamepad row, to open the same menu.
-- Gamepad UI: mouse clicks on context-menu entries now complete and activate their actions.
-- Raid leadership: both UI packs expose Main Assist, Mark NPC and Find PC, the Leadership window can create hotkeys, and trainable assist/marker abilities use the correct ranks. Delegate and mark state is reconciled across removals, zoning and raid teardown, and active leadership HP, mana, regeneration and offense bonuses reach local stats.
-- Raid window: Invite Expedition and Invite Task invite missing members of those rosters into the raid, using ordinary raid invitations.
-- Spell Awareness identifies another caster's spell in chat when the active group or raid ability and level checks allow it.
-- Modern UI: with Snap to grid on, resizing a frame or dialog puts the dragged edge on the grid, or flush with the screen's edge when that is nearer, and shows the grid while resizing (the hot bars, which change shape in whole buttons, are not snapped)
-- Movement: the server's fly modes (`#set flymode`, a quest's flymode) now move your own character, all six of them, including free flight with flymode 1. As in the original client, a mode other than flying lasts until your buffs next change, when your levitation decides again; in a no-levitation zone flying also ends then
-- Hero's Forge: modern layered armor resolves usable armor mappings before unrelated item models, fixing ornaments that could display furniture or older armor geometry. Modern lighting also uses the armor's own normal maps, reflections and material highlights. Compatible older armor can still render when modern layer files are incomplete, and a piece whose modern base model is missing shows as it did before
+- Options > Graphics > **Upscale Quality** (and the gamepad pack's Display page): the usual upscaling presets
+  - Native AA, Quality, Balanced, Performance and Ultra Performance draw the 3D world at 100, 67, 59, 50 and 33 % of the screen and upscale it
+  - Native AA with Temporal or AMD FSR 3.1 is anti-aliasing alone at full resolution
+  - Render Scale goes down to 33 %, and any other value shows as Custom
+- Gamepad interface: the Display page shows all of its settings again; the last ones (Max camera zoom, Ground floating NPCs, Texture pack) could be left off
+- Options > Graphics > Upscaler > **AMD FSR 3.1**: AMD's temporal upscaler, alongside FSR 1 and Hailstone's own Temporal
+  - Also on the gamepad pack's Display page; `display.upscaler = fsr3` in `hailstone.ini`
+  - Like Temporal it smooths edges over several frames at every Render Scale and replaces MSAA; Upscale Sharpening sets its sharpening
+  - It takes effect at the next start. On a graphics card that cannot run it, the Temporal upscaler is used instead
+- Chat: Hit Modes covers spells: direct spell damage, damage over time, healing and healing over time, with Normal, Abbreviated and Number Only display
+  - Spell and melee hit modes always keep the full line in logs and incoming-chat hooks
+  - In the modern UI, Hit Modes is its own entry in the chat window's menu instead of under Filters; the gamepad UI offers the modes under Options > Interface
+  - In a crit, Number Only shows the crit's amount and the hit's as two numbers
+  - For scripts, `eq.ChatHitModes()` also lists ALL and the four spell categories (11 entries); ALL's mode is -1 when the categories differ
+- Launchers can sign in with a one-use login ticket: `patchme /ticket:T`, `--ticket T`, or `--ticket-env VAR`
+  - With `--ticket-env`, the variable is removed from the client's environment, so programs it starts do not inherit it
+  - The login server is `--server`, `--host`/`--port`, or the `eqhost.txt` of the `--game-dir` / `EQ_GAME_DIR` folder or of the EverQuest folder Hailstone is installed in. Never the asset folder remembered from an earlier run, which may be another server's
+  - `--world NAME|ID` chooses a world (also with `--user` or `--account`), and `--character NAME` or RoF2's `/name:NAME` enters a character. RoF2's `/server:` is accepted and ignored, as the login server names the world
+  - A replacement token from a successful reply enables Sign in with session for that same endpoint
+  - Tickets are never saved to disk or replaced by a password after a failure, and the updater does not restart a ticket launch at start. After a failed ticket the login screen is back to normal, with the server's own remembered account
+  - The login server must support token authentication
+- `--port` must be a whole number from 1 to 65535, and `--host` and `--server` cannot be empty: the client stops with a message instead of using port 0 or no server
+- Anti-aliasing goes up to 4x MSAA. The 8x choice is gone from both interfaces' Options; a saved 8x (or higher) is drawn at 4x, and the Ultra preset uses 4x
+- Options > Graphics > Upscaler > **Temporal (TAA)**: a temporal upscaler of Hailstone's own
+  - Also on the gamepad pack's Display page; `display.upscaler = taa` in `hailstone.ini`
+  - It smooths edges, shimmering fences and foliage over several frames at every render scale. Below a Render Scale of 100 it upscales with the detail gathered over those frames instead of FSR 1
+  - It follows characters, doors and swaying plants as they move, and particles, rain and water leave little trail
+  - It replaces MSAA while on and takes effect at the next start. The upscaler is one setting for every character, like Anti-aliasing; FSR 1 stays the default
+- Barbarians, Trolls and Ogres have Slam in their combat skills, and Bash without a shield slams
+  - Slam follows your current form: an illusion into a large race gives it, an illusion into a small race takes it away until the illusion ends
+- Leadership window: Purchase is offered whenever you have a point to spend, and the server decides whether the rank is affordable
+  - Before, the window used the original client's prices and blocked ranks a stock server sells for less (Mark NPC rank 1 costs 1 point there, not 3)
+- Modern lighting: rain puddles form only on flat ground, never on hillsides or slopes, and look more like water
+  - Ragged edges, shallow at the rim where the ground shows through and deeper in the middle, with a damp ring round them
+  - Dark from above and mirroring the sky at a low angle, with a glint of the sun or moon once the sky clears
+- Modern interface: a right click on a buff in the target or pet window opens that buff's menu, as your own buffs' does: Spell Info, and for the pet's buffs Add to Blocked Pet Spells. Before, the target's buffs opened the frame's menu and the pet's did nothing
+- Modern Options: a search field above the tabs filters the open tab's settings as you type
+  - It matches names, descriptions and section titles, and forgives missing letters, small typing mistakes and initials ("fov" finds Field of View)
+  - Clear it and every setting is back
+- Your own character keeps its ornaments when you equip, swap or unequip gear: a weapon ornament's model and an armour ornament's Hero's Forge model. Before, your own model went back to the plain item's look until you zoned, though other players still saw the ornament
+- Adventures (LDoN): Alt+V opens the current adventure without a recruiter
+  - Both interfaces show request and offer controls, entry/completion timers, progress, theme statistics with win percentages, profile point balances, and the native leaderboard categories, risk choices and tied standings
+  - Leaving an active adventure asks first; refreshes follow the native ten-second cooldown
+- Hover respawn works as in the original
+  - Same-zone bind and resurrection restore the living player's identity, position and movement, keeping the corpse and server resource updates
+  - The original Respawn window and countdown stay visible beside resurrection offers. Yes enables resurrection without changing the selected row, and Respawn commits the chosen destination; a yes to a resurrection into another zone is answered at once
+  - Resurrection text is red while unavailable and green while available, in both interfaces. Unavailable choices and stale resurrection prompts cannot trigger another respawn
+  - The resurrection question comes to the front once as it appears, so chat and other windows keep working while it waits
+- Modern lighting: the grass in the classic zones is an even lawn Hailstone builds itself, instead of clumps of flat pictures borrowed from the revamped Commonlands
+  - Thick blades, slender at the root, cover open ground in a continuous carpet in the ground's own colour, lying over in broad combed swathes
+  - It thins out smoothly with distance (no visible change of detail as you run), and raggedly at the edges of paths and roads
+  - It sways in the wind (harder in a storm) and bends away from whoever walks through it
+  - The bare ground under a platform or bridge wanders in and out instead of tracing its outline
+  - The grass needs nothing from the game folder. The forests' ferns, the swamps' cattails and the other climate plants still come from the game's own files, scattered sparsely over the lawn
+  - Flora Distance still sets how far it reaches
+- Click to move without the isometric camera: Options > Display > Isometric Camera > **Click to Move in Every Camera** (and the gamepad pack's Camera page)
+  - Click the ground to walk there, or click a door, an item, a merchant or a corpse out of reach to walk to it and use it, in first person and the camera behind you too
+  - Off unless you turn it on; the isometric camera always moves this way
+- The classic zones' ground is drawn smooth
+  - Hills and rock faces are shaded in smooth gradients instead of flat facets, and their triangles are curved and cut finer. Walls, cliff edges and buildings stay sharp
+  - Where you can walk, what you collide with and where mobs stand are unchanged (the drawn ground stays within a foot of the original)
+  - `display.smooth_ground = 0` in `hailstone.ini` turns it off
+- Pressing Tab no longer puts the cursor in the chat input (or the first text field of the last clicked window). Tab still moves to the next field while you are typing in one
+- Modern lighting: the zones past the zone lines no longer clash with the one you are in
+  - Their ground is no longer drawn over your zone's edge with seams, steps and flickering. The land past your edge takes the shape of the neighbour's ground, rising or falling to it smoothly, and your zone's grass gives way to the neighbour's in patches
+  - The neighbour's walls, buildings, trees and hills stand on that land. Further from the line the neighbour's own ground is drawn, roads and textures included
+  - Each neighbour's ground is measured once and kept in Hailstone's cache. From your next visit the land past every zone line takes its shape, even towards a neighbour too far away to draw
+  - `display.neighbour_tint=true` in `hailstone.ini` tints what comes from the neighbour zones
+- Raid window: member actions, including Main Assist, Mark NPC delegation and looter changes, are in a right-click menu in both UI packs. Select a member and use Member actions, or press Y on a focused gamepad row, to open the same menu
+- Gamepad UI: mouse clicks on context-menu entries complete and activate their actions
+- Raid leadership
+  - Both UI packs expose Main Assist, Mark NPC and Find PC, and the Leadership window can create hotkeys
+  - Trainable assist/marker abilities use the correct ranks
+  - Delegate and mark state is reconciled across removals, zoning and raid teardown
+  - Active leadership HP, mana, regeneration and offense bonuses reach local stats
+- Raid window: Invite Expedition and Invite Task invite missing members of those rosters into the raid, using ordinary raid invitations
+- Spell Awareness identifies another caster's spell in chat when the active group or raid ability and level checks allow it
+- Modern UI: with Snap to grid on, resizing a frame or dialog puts the dragged edge on the grid, or flush with the screen's edge when that is nearer, and shows the grid while resizing. The hot bars, which change shape in whole buttons, are not snapped
+- Movement: the server's fly modes (`#set flymode`, a quest's flymode) move your own character, all six of them, including free flight with flymode 1
+  - As in the original client, a mode other than flying lasts until your buffs next change, when your levitation decides again
+  - In a no-levitation zone flying also ends then
+- Hero's Forge: modern layered armor shows the right model
+  - Usable armor mappings are resolved before unrelated item models, fixing ornaments that could display furniture or older armor geometry
+  - Modern lighting uses the armor's own normal maps, reflections and material highlights
+  - Compatible older armor still renders when modern layer files are incomplete, and a piece whose modern base model is missing shows as before
 - Alternate currencies (the inventory's Alt. Currency page in both interfaces, and real estate costs) show their names from the game folder, such as "Doubloons", instead of "Currency 10"
-- Modern interface: the AA window's column heads are never cut short (COST and RANK showed as "C…" and "RA…"), and a resizable window bigger than the screen at a large UI scale is drawn at the screen's size, its saved size kept
-- Options > Graphics > Tree Detail Distance (50 to 200 %) sets how far a texture pack's generated trees keep their full and middle detail before turning to simpler ones. Lower is faster. Their shadows now use the simpler trees too, so they cost about what the game's own trees' shadows did
-- A texture pack's generated trees take far less graphics memory: each kind of tree is stored once and drawn wherever it stands, instead of a copy for every tree (Qeynos Hills: about 3 MB of geometry instead of 266 MB)
-- Hailstone Texture Studio: generated trees' leaf cards are cut to the shape of their leaves, so the graphics card spends less time on their transparent corners. Grow the trees again to get it
-- Modern lighting: outdoor zones no longer end in a blank haze. Land carries on past their edges in each zone's own grass and rock, rising into hills and mountains that fade into the distance, and past a shore the sea goes on to the horizon. It gives way to a neighbour zone where one is drawn. Scenery only. Options > Graphics > Horizon Hills turns it off
-- Fixed a crash on entering the world when a character's own settings chose a different texture pack from the one Hailstone started with (most likely with a large pack): the pack is now switched safely while the character's models load
-- Item details: with a live game folder, the stats its string table lacks (Spell Shield, Combat Effects, Shielding, Damage Shield, DoT Shielding, DS Mitigation, Avoidance, Accuracy, Stun Resist, Strikethrough) and "Potion Belt Enabled" show their names instead of a bracketed number such as [13036]
-- Item comparison, in both interfaces: an item's tooltip (inventory, bags, bank, loot, trade, a merchant's goods) and its details window (a linked item too) show what wearing it instead of what you wear would change: your HP, mana, endurance, AC, ATK, haste, stats, resists and regeneration as the game works them out, stat caps included, the weapon's damage and delay, the effects gained and lost, and why you cannot use it when you cannot. A verdict (Upgrade, Downgrade, Mixed) weighs the changes by what matters for your class. For rings, earrings and bracers Shift shows the other slot. Options > Display > Compare Items and Upgrade Verdict turn them off. Nothing about the game's rules changes
-- AA window: column headers and rows stay aligned at every window scale, including when the window or scroll bar changes size. Drag a header's right edge to resize its column (the ability column takes whatever room the others leave, so widening the window widens it), drag the header to reorder it, or use **Reset columns** to restore the default widths, order and name sort. Column text stays inside its own cell
-- Extended target window (modern interface): empty slots now have a row too, so a right click on one gives it a type, Current Target included. Before, an empty slot showed no row unless the HUD was unlocked, and Current Target from a right click elsewhere in the window did nothing. Drag the window's right or bottom edge to make it smaller; the rows then scroll
-- For plugin authors: a new host function, `get_xtarget_data_bulk`, reads every extended target slot in one call: its type, spawn id, aggro meter percent and HP percent, 16 bytes a slot (docs/plugins.md "Buff and spawn records"); the SDK names the slot types (`HS_BULK_XTARGET_*`) and lays the record out as `HS_Bulk_XTargetData`
-- Combat Abilities: the active discipline's duration bar now drains and shows time remaining to the second. Clicking its icon ends the discipline in both interfaces; with a gamepad, LB does
-- Combat Abilities: cooling disciplines have a faded red progress overlay and a seconds countdown in both interfaces. Abilities sharing a reuse timer stay marked together, including shorter-reuse abilities such as Evasive after Defensive; discipline hot buttons also retain their cooldown shading for the full shared wait
-- Personal and guild tribute bonuses now feed local character stats and effects, and retire when the server deactivates them or opts you out. Guild benefit editing and activation respect the received guild permissions in both interfaces. Guild platinum donations need carried platinum and grey the Donate button until their matching reply, preventing overlapping donations from corrupting the displayed coin balance
-- Money picked up onto the cursor (from the inventory, the bank or a trade) now follows the mouse as a coin of its kind with the amount beside it, in both interfaces, as an item on the cursor does. Before, nothing showed that coin was held
-- Merchant, Parcels page (modern interface): clicking a parcel now picks it, and Retrieve takes that parcel. Before, the pick was dropped at once, so Retrieve stayed greyed out. With no parcel picked, Retrieve takes the first one in the list
+- Modern interface: the AA window's column heads are never cut short (COST and RANK showed as "C…" and "RA…"). A resizable window bigger than the screen at a large UI scale is drawn at the screen's size, its saved size kept
+- Options > Graphics > Tree Detail Distance (50 to 200 %) sets how far a texture pack's generated trees keep their full and middle detail before turning simpler. Lower is faster. Their shadows use the simpler trees too, so they cost about what the game's own trees' shadows did
+- A texture pack's generated trees take far less graphics memory: each kind of tree is stored once and drawn wherever it stands (Qeynos Hills: about 3 MB of geometry instead of 266 MB)
+- Hailstone Texture Studio: generated trees' leaf cards are cut to the shape of their leaves, so the graphics card spends less time on transparent corners. Grow the trees again to get it
+- Modern lighting: outdoor zones no longer end in a blank haze
+  - Land carries on past their edges in each zone's own grass and rock, rising into hills and mountains that fade into the distance, and past a shore the sea goes on to the horizon
+  - It gives way to a neighbour zone where one is drawn. Scenery only
+  - Options > Graphics > Horizon Hills turns it off
+- Fixed a crash on entering the world when a character's own settings chose a different texture pack from the one Hailstone started with (most likely with a large pack). The pack is now switched safely while the character's models load
+- Item details: with a live game folder, stats its string table lacks show their names instead of a bracketed number such as [13036]: Spell Shield, Combat Effects, Shielding, Damage Shield, DoT Shielding, DS Mitigation, Avoidance, Accuracy, Stun Resist, Strikethrough and "Potion Belt Enabled"
+- AA window: column headers and rows stay aligned at every window scale, including when the window or scroll bar changes size
+  - Drag a header's right edge to resize its column (the ability column takes the room the others leave, so widening the window widens it), or drag the header to reorder it
+  - **Reset columns** restores the default widths, order and name sort
+  - Column text stays inside its own cell
+- Extended target window (modern interface): empty slots have a row too, so a right click on one gives it a type, Current Target included
+  - Before, an empty slot showed no row unless the HUD was unlocked, and Current Target from a right click elsewhere in the window did nothing
+  - Drag the window's right or bottom edge to make it smaller; the rows then scroll
+- For plugin authors: `get_xtarget_data_bulk` reads every extended target slot in one call: type, spawn id, aggro meter percent and HP percent, 16 bytes a slot (docs/plugins.md "Buff and spawn records"). The SDK names the slot types (`HS_BULK_XTARGET_*`) and lays the record out as `HS_Bulk_XTargetData`
+- Combat Abilities: the active discipline's duration bar drains and shows time remaining to the second. Clicking its icon ends the discipline in both interfaces; with a gamepad, LB does
+- Combat Abilities: cooling disciplines have a faded red progress overlay and a seconds countdown in both interfaces
+  - Abilities sharing a reuse timer stay marked together, including shorter-reuse abilities such as Evasive after Defensive
+  - Discipline hot buttons keep their cooldown shading for the full shared wait
+- Tribute: personal and guild tribute bonuses feed local character stats and effects, and retire when the server deactivates them or opts you out
+  - Guild benefit editing and activation respect the received guild permissions in both interfaces
+  - Guild platinum donations need carried platinum, and the Donate button stays grey until the matching reply, so overlapping donations cannot corrupt the displayed coin balance
+- Money picked up onto the cursor (from the inventory, the bank or a trade) follows the mouse as a coin of its kind with the amount beside it, in both interfaces, as an item does
+- Merchant, Parcels page (modern interface): clicking a parcel picks it, and Retrieve takes that parcel. With no parcel picked, Retrieve takes the first in the list. Before, the pick was dropped at once, so Retrieve stayed greyed out
 - Modern UI: a merchant's goods keep the row you clicked marked, and the Friends window's Who and Remove need a selected name
-- Fellowships: native roster, invitations, leadership, MOTD, XP sharing, vitality, chat and campsite controls in both UI packs. Expanded server rosters can contain up to 64 members; the server decides admission and gameplay limits. Native twelve-member rosters remain supported. Ctrl+Shift+F and the EQ menu's entry open it.
+- Fellowships: native roster, invitations, leadership, MOTD, XP sharing, vitality, chat and campsite controls in both UI packs
+  - Expanded server rosters can hold up to 64 members; the server decides admission and gameplay limits. Native twelve-member rosters remain supported
+  - Ctrl+Shift+F and the EQ menu's entry open it
 - Modern lighting: an optional depth pre-pass draws the current zone's opaque geometry once, for a lower frame time in towns (`display.depth_prepass` in `hailstone.ini`; off by default, and read when a zone loads)
-- Options > Display > Find Trail selects a gold line on the ground (the default) or fourteen thin, winding rainbow threads hovering a few feet above the terrain. Both follow hills and valleys and leave gaps at missing ground. The choice applies immediately and is saved per character; gamepad users can find it under Options > Interface
-- An isometric camera, Hailstone's own: `/camera iso` looks down on your character from above and to one side; hold the right mouse button to turn it and use the wheel to zoom. `/camera pitch`, `/camera fov` and `/camera distance` change it, and `/camera first` or `/camera behind` go back. The fog, view distance and shadows are measured from your character in it. In it, W, A, S and D move up, left, down and right on the screen and the turn keys turn the camera (`/camera wasd classic` keeps the usual keys); the gamepad's left stick moves the way it points. Click the ground to walk there (hold the button to keep walking toward the cursor); click a door, a ground item or a ladder, or right click a merchant, banker or corpse, to walk to it and use it. Clicking a mob only targets it: auto attack is still turned on with its key. A gold ring marks where a click is taking you. Walls, trees and hills between the camera and your character are cut away in a circle round you while they hide you (`/camera reveal` sets its size, 0 turns it off); under a roof or a ceiling everything above your head round you is lifted away, so rooms and caves show from above; your outline shows where something still hides you; a pale ring marks what the mouse is over; and clicks reach characters, doors and the ground through the cut. Options > Display > Isometric Camera (and the gamepad pack's Camera page) has all of it; a gamepad button can switch the camera (`camera_iso`). Speed, collision and every game rule are unchanged
-- Achievements, in both interfaces, on a server that sends them (EQEmu with its achievements support): `/achievements` and the achievement key open a browser with categories (the badges from your game folder), search, status filters, objectives and counters, points and completion dates. Achievements can be linked in chat and compared with a nearby player, and Refresh asks the server for its current catalog and progress. Completion and rewards stay the server's decision
-- Reward selection, in both interfaces: browse pending rewards, preview the selected task's choices as numbered cards, click an item to inspect it, and confirm a choice explicitly. Restore fetches the server's pending list; an unanswered claim is never sent again by itself
-- With a live game folder, the Bazaar, Lava Storm and High Pass Hold load from that folder's revamped zone files when the server runs the revamped zone (stock PEQ's Bazaar and Lava Storm from expansion 9 on, and its High Pass Hold). Before, these zones loaded as an empty world unless the server sent the zone file. Hailstone tells which version the server runs from the safe point the server sends at zone-in. Arena and Nektulos still load the older zone files that a live folder also has
-- A zone takes less memory while it loads: the world's fully opaque textures (power-of-two sizes) get their mip chain built by the graphics card instead of on the CPU, filtered in linear light as before, and the zone's own uploads are staged to the card in pieces rather than all at once. On a large zone (dragonscale) the peak falls by up to about 115 MB; a small classic zone holds about the same
-- The game's archives (`.s3d`, `.eqg`, `.pfs`) in the asset folder are mapped read-only instead of copied into memory, so their bytes live in the system's file cache. A server's own files (its assets folder) are still read into memory, as the server files update replaces them while the client runs. A game file that another program truncates while Hailstone runs can now crash the client (docs/hardening.md)
-- Character models load their source data on first use and keep only the most recently used of it, up to 128 MiB, so building one model after another does not decode the same file again; animation aliases and duplicate tracks share their key data, and constant tracks store one key, with the same timing
-- Memory diagnostics: character archive storage and parsed WLD estimates, startup and zone resident memory (and private commit on Windows), GPU allocation bytes and the model caches' animation, geometry and other payloads, mostly at debug level, with one summary per zone-in
-- Texture packs can now replace a zone's objects with models (binary glTF files in the pack's `models/` folder). Only the look changes: you collide with, click on and walk round the original objects as before
-- Hailstone Texture Studio (1.1.0-beta): **Photo ground materials** rebuilds a zone's grass, rock, dirt and paths from free photo textures (Poly Haven, CC0), and **Generated trees** grows new trees in place of the old flat-card ones, each on the old trunk and in the old leaves' shape and colours: pines, broadleaf trees, willows, dead trees and palms, for the classic outdoor zones and more. They sway in the wind, each branch moving as one piece, fade smoothly to simpler versions further away and keep their colour in rain and snow
+- Options > Display > Find Trail selects a gold line on the ground (the default) or fourteen thin, winding rainbow threads hovering a few feet above the terrain
+  - Both follow hills and valleys and leave gaps at missing ground
+  - The choice applies at once and is saved per character; gamepad users find it under Options > Interface
+- An isometric camera, Hailstone's own: `/camera iso` looks down on your character from above and to one side
+  - Camera: hold the right mouse button to turn it and use the wheel to zoom. `/camera pitch`, `/camera fov` and `/camera distance` change it; `/camera first` or `/camera behind` go back. The fog, view distance and shadows are measured from your character
+  - Keys: W, A, S and D move up, left, down and right on the screen and the turn keys turn the camera (`/camera wasd classic` keeps the usual keys). The gamepad's left stick moves the way it points
+  - Clicks: click the ground to walk there (hold the button to keep walking toward the cursor). Click a door, a ground item or a ladder, or right click a merchant, banker or corpse, to walk to it and use it. Clicking a mob only targets it: auto attack is still turned on with its key. A gold ring marks where a click is taking you
+  - Seeing yourself: walls, trees and hills between the camera and your character are cut away in a circle round you while they hide you (`/camera reveal` sets its size, 0 turns it off). Under a roof or ceiling everything above your head is lifted away, so rooms and caves show from above
+  - Your outline shows where something still hides you, a pale ring marks what the mouse is over, and clicks reach characters, doors and the ground through the cut
+  - Options > Display > Isometric Camera (and the gamepad pack's Camera page) has all of it; a gamepad button can switch the camera (`camera_iso`)
+  - Speed, collision and every game rule are unchanged
+- Achievements, in both interfaces, on a server that sends them (EQEmu with its achievements support)
+  - `/achievements` and the achievement key open a browser with categories (the badges from your game folder), search, status filters, objectives and counters, points and completion dates
+  - Achievements can be linked in chat and compared with a nearby player; Refresh asks the server for its current catalog and progress
+  - Completion and rewards stay the server's decision
+- Reward selection, in both interfaces: browse pending rewards, preview the selected task's choices as numbered cards, click an item to inspect it, and confirm a choice explicitly
+  - Restore fetches the server's pending list; an unanswered claim is never sent again by itself
+- With a live game folder, the Bazaar, Lava Storm and High Pass Hold load from its revamped zone files when the server runs the revamped zone
+  - That is stock PEQ's Bazaar and Lava Storm from expansion 9 on, and its High Pass Hold. Before, these zones loaded as an empty world unless the server sent the zone file
+  - Hailstone tells which version the server runs from the safe point it sends at zone-in
+  - Arena and Nektulos still load the older zone files that a live folder also has
+- A zone takes less memory while it loads: on a large zone (dragonscale) the peak falls by up to about 115 MB; a small classic zone holds about the same
+  - The world's fully opaque textures (power-of-two sizes) get their mip chain built by the graphics card instead of the CPU, filtered in linear light as before
+  - The zone's own uploads are staged to the card in pieces rather than all at once
+- The game's archives (`.s3d`, `.eqg`, `.pfs`) in the asset folder are mapped read-only instead of copied into memory, so their bytes live in the system's file cache
+  - A server's own files (its assets folder) are still read into memory, as the server files update replaces them while the client runs
+  - A game file that another program truncates while Hailstone runs can now crash the client (docs/hardening.md)
+- Character models load their source data on first use and keep only the most recently used, up to 128 MiB, so building one model after another does not decode the same file again. Animation aliases and duplicate tracks share their key data, and constant tracks store one key, with the same timing
+- Memory diagnostics, mostly at debug level, with one summary per zone-in: character archive storage and parsed WLD estimates, startup and zone resident memory (and private commit on Windows), GPU allocation bytes and the model caches' animation, geometry and other payloads
+- Texture packs can replace a zone's objects with models (binary glTF files in the pack's `models/` folder). Only the look changes: you collide with, click on and walk round the original objects as before
+- Hailstone Texture Studio (1.1.0-beta): photo ground and generated trees
+  - **Photo ground materials** rebuilds a zone's grass, rock, dirt and paths from free photo textures (Poly Haven, CC0)
+  - **Generated trees** grows new trees in place of the old flat-card ones, each on the old trunk and in the old leaves' shape and colours: pines, broadleaf trees, willows, dead trees and palms, for the classic outdoor zones and more
+  - The trees sway in the wind, each branch moving as one piece, fade smoothly to simpler versions further away and keep their colour in rain and snow
 - Bandolier: swapping sets works with the general slots full when a bag has room. The weapon you swap out goes into the first bag with a free slot that takes it, where the server puts it; before, the swap was refused unless a general slot was free
-- Several clients on one computer can share memory for a server's own archives and for classic character models' animations: set `assets.shared_memory=auto` in hailstone.ini (off by default; docs/layout.md "Shared archive memory"). The cache takes at most `assets.shared_memory_cache_mb` of disk (1024 MiB by default) and removes its least recently used files to stay within it
+- Several clients on one computer can share memory for a server's own archives and classic character models' animations
+  - Set `assets.shared_memory=auto` in hailstone.ini (off by default; docs/layout.md "Shared archive memory")
+  - The cache takes at most `assets.shared_memory_cache_mb` of disk (1024 MiB by default) and removes its least recently used files to stay within it
 - Classic zones and models keep their parsed data in less memory
 - With more than one graphics card, `HAILSTONE_GPU_NAME` picks one by its exact name. A name that matches no usable card, or more than one, stops Hailstone at start with a message rather than picking another
-- NPC service windows (merchants, bank, tribute masters, trainers, the adventure recruiter, mercenary liaisons, hand-ins) and world tradeskill stations close when you go more than 20 units away or the NPC or station disappears, checked twice a second as the original does. A tribute master stays open while an item request is pending, and the adventure recruiter only closes while its words or an offer are up (walking away from an offer declines it). Quantity, purchase and world-combine questions close with their interaction, and closing the bank closes every open bag, carried ones too, as in the original
-- Group roles: the group leader can set or clear Main Tank, Main Assist and Puller by right-clicking a member's name or their own name in the Player window, in both UI packs, or with Y on a row of the gamepad Group window. Small role icons beside names in the Group and Player windows show the roles confirmed by the server, and scripts' group-role lookups use the same state
-- Modern Quest Journal: compact Active and History pages, tracked quests first, with separate Objectives, Description and Rewards sections. Active includes shared tasks; **Shared members** opens their roster and management controls. Hidden objectives stay as individual `???` rows in their original positions. **Track** adds a quest to an independent, movable and resizable Quest Tracker that keeps updating while the journal is closed; its lock, roll-up, visibility and tracked quests are kept per character
-- Modern hot bars: drag a bar's right or bottom edge, or its bottom-right corner, to change its shape ("Buttons per row"); the bar's regular right-click menu has **Lock layout** so it cannot be moved or resized by accident
-- Chat: a chat window can be folded away into its tab strip, with the button at the strip's right end (as the combat ability window folds into its title bar). The tabs stay, so the chat is one click away and keeps the lines that came in while it was folded
-- Advanced Inventory and `/finditem`: your bank and shared bank are listed and searchable everywhere, not only near a banker. Most EQEmu servers send the bank only when you are near a banker, so away from one Hailstone shows the bank as you last saw it, dimmed and marked "Bank as last seen ... ago", until a banker sends it again. Those items cannot be moved or used until you open the bank. The copy is kept per character, so it is there from your first zone-in
-- AA window: after you buy a rank the window stays on that ability, so **Train** buys the next rank without clicking the ability again. **Buy every rank I can** now works on every server: on a stock EQEmu server the client buys the ranks one after another until you run out of points or reach the last rank
+- NPC service windows close when you walk away, checked twice a second as the original does
+  - This covers merchants, bank, tribute masters, trainers, the adventure recruiter, mercenary liaisons, hand-ins and world tradeskill stations. They close past 20 units or when the NPC or station disappears
+  - A tribute master stays open while an item request is pending. The adventure recruiter closes only while its words or an offer are up (walking away from an offer declines it)
+  - Quantity, purchase and world-combine questions close with their interaction, and closing the bank closes every open bag, carried ones too, as in the original
+- Group roles: the group leader can set or clear Main Tank, Main Assist and Puller
+  - Right-click a member's name or your own in the Player window, in both UI packs, or press Y on a row of the gamepad Group window
+  - Small role icons beside names in the Group and Player windows show the roles the server confirmed, and scripts' group-role lookups use the same state
+- Modern Quest Journal: compact Active and History pages, tracked quests first, with separate Objectives, Description and Rewards sections
+  - Active includes shared tasks; **Shared members** opens their roster and management controls
+  - Hidden objectives stay as individual `???` rows in their original positions
+  - **Track** adds a quest to an independent, movable and resizable Quest Tracker that keeps updating while the journal is closed. Its lock, roll-up, visibility and tracked quests are kept per character
+- Modern hot bars: drag a bar's right or bottom edge, or its bottom-right corner, to change its shape ("Buttons per row"). The bar's right-click menu has **Lock layout** so it cannot be moved or resized by accident
+- Chat: a chat window can fold away into its tab strip, with the button at the strip's right end (as the combat ability window folds into its title bar). The tabs stay, so the chat is one click away and keeps the lines that came in meanwhile
+- Advanced Inventory and `/finditem`: your bank and shared bank are listed and searchable everywhere, not only near a banker
+  - Most EQEmu servers send the bank only near a banker, so elsewhere Hailstone shows it as you last saw it, dimmed and marked "Bank as last seen ... ago", until a banker sends it again
+  - Those items cannot be moved or used until you open the bank
+  - The copy is kept per character, so it is there from your first zone-in
+- AA window: after you buy a rank the window stays on that ability, so **Train** buys the next rank without clicking it again
+  - **Buy every rank I can** works on every server: on a stock EQEmu server the client buys the ranks one after another until you run out of points or reach the last rank
 - Name plates: a player in trader mode shows "Trader" before the name and a buyer "Buyer", in place of a title, and a player in offline mode "Offline" before that ("Offline Trader Name"), as the original client does
-- Chat: a server that sends the newer chat message types (colours 355 to 408) can now have them filtered to their own windows, from a new Extended (server) submenu of the chat window's Filters menu, and coloured from 54 new rows at the end of Options > Colors. Nothing changes on a stock EQEmu server, which sends none of them
+- Chat: the newer chat message types (colours 355 to 408) can be filtered and coloured
+  - A new Extended (server) submenu of the chat window's Filters menu sends them to their own windows, and 54 new rows at the end of Options > Colors colour them
+  - Nothing changes on a stock EQEmu server, which sends none of them
 - On a fresh install, the login screen starts on the server your game folder's `eqhost.txt` names (its `[LoginServer]` `Host`), as a saved server you can rename or delete. This happens once: a server you delete does not come back
 - On Windows, the asset folder picker uses the Explorer-style folder dialog with its address bar, Quick access and search, instead of the old folder tree
 - For server admins with their own patcher: a Hailstone built with the CMake option `HAILSTONE_ALLOW_IN_EQ_FOLDER` may be installed in a folder named `hailstone` directly in the EverQuest folder, and starts on that EverQuest folder (docs/layout.md). Off by default; every other place inside the EverQuest folder is still refused
-- For script authors: the `Math` (`${Math.Calc[...]}`, `Rand`, `Distance`, ...), `If` and `Range` TLOs now work, with MacroQuest's arithmetic, and strings, numbers and floats have the rest of MQ's members (`Replace`, `Compare`, `NotEqualCS`, `StripLinks`, `Prettify`, `LowPart`, ...). `Arg`, `Token`, `Mid`, `Left`/`Right[0]` and the index-less members now give what MacroQuest gives, and `Int.Hex` is upper case (`0xFF`, `0xFFFFFFFF` for -1) as in MQ
-- Scripts: spawn searches (`Spawn[...]`, `SpawnCount[...]`, `NearestSpawn[...]`, `/target`, `/nav spawn`) now follow MacroQuest's rules and know all its words, among them `pcpet`, `npcpet`, `mount`, `xtarhater`, `raid`, `nogroup`, `guild`, `merchant`, `banker`, `tank`, `healer`, `body`, `light`, `nopcnear` and `playerstate`, a bare level or class name, and spawn kinds such as `aura`, `banner`, `chest` and `untargetable`. `radius` is now measured in 3D as in MacroQuest, `npc` no longer includes mounts, mercenaries, auras or untargetable spawns, and `named` uses MacroQuest's full test
-- Scripts: `mq.event` patterns now match chat lines the way MacroQuest's do. Text is matched ignoring case, each `#1#` or `#*#` takes text up to the first place the next part of the pattern appears, `#name#` matches without being passed on, `|${...}|` matches what the script's `${...}` reads when the line comes, `##` and `||` stand for `#` and `|`, missing argument numbers are passed as empty strings, and item links are matched as their text unless the event is made with `{keepLinks = true}`. Lines of 2048 characters or more raise no events, as in MQ
+- For script authors: more MacroQuest TLOs and members
+  - The `Math` (`${Math.Calc[...]}`, `Rand`, `Distance`, ...), `If` and `Range` TLOs work, with MacroQuest's arithmetic
+  - Strings, numbers and floats have the rest of MQ's members (`Replace`, `Compare`, `NotEqualCS`, `StripLinks`, `Prettify`, `LowPart`, ...)
+  - `Arg`, `Token`, `Mid`, `Left`/`Right[0]` and the index-less members give what MacroQuest gives, and `Int.Hex` is upper case (`0xFF`, `0xFFFFFFFF` for -1) as in MQ
+- Scripts: spawn searches (`Spawn[...]`, `SpawnCount[...]`, `NearestSpawn[...]`, `/target`, `/nav spawn`) follow MacroQuest's rules and know all its words
+  - Among them `pcpet`, `npcpet`, `mount`, `xtarhater`, `raid`, `nogroup`, `guild`, `merchant`, `banker`, `tank`, `healer`, `body`, `light`, `nopcnear` and `playerstate`, a bare level or class name, and spawn kinds such as `aura`, `banner`, `chest` and `untargetable`
+  - `radius` is measured in 3D as in MacroQuest, `npc` no longer includes mounts, mercenaries, auras or untargetable spawns, and `named` uses MacroQuest's full test
+- Scripts: `mq.event` patterns match chat lines the way MacroQuest's do
+  - Text is matched ignoring case
+  - Each `#1#` or `#*#` takes text up to the first place the next part of the pattern appears; `#name#` matches without being passed on
+  - `|${...}|` matches what the script's `${...}` reads when the line comes; `##` and `||` stand for `#` and `|`
+  - Missing argument numbers are passed as empty strings
+  - Item links are matched as their text unless the event is made with `{keepLinks = true}`
+  - Lines of 2048 characters or more raise no events, as in MQ
 - Wiki: a new Commands and Shortcuts page lists every slash command, the default keys, and the mouse and window shortcuts, and says which of the original client's commands and keys Hailstone does not support yet
-- For plugin authors: three new host functions, `get_buff_data_bulk`, `get_pet_buff_data_bulk` and `get_spawns_data_bulk`, read all of the player's buffs, the pet's, or every spawn in the zone in one call, as packed records (29 bytes per buff, 12 per pet buff, and a header plus a 92-byte record and seven strings per spawn, laid out as the SDK's `HS_Bulk_*` structs with `HS_BULK_SPAWN_HEADER_SIZE` and `HS_BULK_SPAWN_RECORD_SIZE`; docs/plugins.md "Buff and spawn records"). Each buff record is marked as a buff, song or discipline (`HAILSTONE_BUFF_SLOT_*`), and a 1827-byte buffer also gets the discipline slot
-- Hailstone is now licensed under the GNU GPL, version 2 or later, like MacroQuest (it was MIT up to 0.7.0-beta). The plugin SDK stays MIT, and plugins, scripts, UI packs and other add-ons may still use any licence (NOTICE.md). Releases now include LICENSE.txt, NOTICE.md and THIRD_PARTY.md
-- `/time` and scripts' `GameTime` now advance with the zone's clock instead of staying at the time received when zoning in, including the date when a game day, month or year ends
-- A new **Find** window lists the merchants, bankers, guildmasters and other useful NPCs in your zone, nearest first, with a search and a filter for each kind. Click one to target it and see it on the map, then **Show path** for a glowing gold trail to it that goes around walls and buildings and follows you if you take another way, or **Walk there** to have your character walk to it (any movement key stops the walk). The find key, the EQ menu's Find and the Actions window's Find open it: in the modern UI it is a page of the map, which can also mark those NPCs on the map and the minimap (the **NPCs** button; the filters and search apply to the marks too); in the gamepad UI it is under More. It replaces the old Find window, which stayed empty on EQEmu servers. On a server with the updated Hailstone script it also lists the quest givers
-- For server admins: the server script now tells Hailstone's Find window which of a zone's NPCs have quests (by their quest files). It works this out once per zone process, when a player first opens Find there, and keeps it; set the `quest_npcs` setting to 0 to turn it off. Update `server/quests/global/encounters/hailstone.lua` to get it
+- For plugin authors: `get_buff_data_bulk`, `get_pet_buff_data_bulk` and `get_spawns_data_bulk` read all of the player's buffs, the pet's, or every spawn in the zone in one call, as packed records
+  - 29 bytes per buff, 12 per pet buff, and a header plus a 92-byte record and seven strings per spawn
+  - Laid out as the SDK's `HS_Bulk_*` structs with `HS_BULK_SPAWN_HEADER_SIZE` and `HS_BULK_SPAWN_RECORD_SIZE` (docs/plugins.md "Buff and spawn records")
+  - Each buff record is marked as a buff, song or discipline (`HAILSTONE_BUFF_SLOT_*`), and a 1827-byte buffer also gets the discipline slot
+- Hailstone is now licensed under the GNU GPL, version 2 or later, like MacroQuest (it was MIT up to 0.7.0-beta)
+  - The plugin SDK stays MIT, and plugins, scripts, UI packs and other add-ons may still use any licence (NOTICE.md)
+  - Releases include LICENSE.txt, NOTICE.md and THIRD_PARTY.md
+- `/time` and scripts' `GameTime` advance with the zone's clock instead of staying at the time received when zoning in, including the date when a game day, month or year ends
+- A new **Find** window lists the merchants, bankers, guildmasters and other useful NPCs in your zone, nearest first, with a search and a filter for each kind
+  - Click one to target it and see it on the map. **Show path** draws a glowing gold trail to it that goes around walls and buildings and follows you if you take another way; **Walk there** walks your character to it (any movement key stops the walk)
+  - The find key, the EQ menu's Find and the Actions window's Find open it
+  - In the modern UI it is a page of the map, which can also mark those NPCs on the map and minimap (the **NPCs** button; the filters and search apply to the marks too). In the gamepad UI it is under More
+  - It replaces the old Find window, which stayed empty on EQEmu servers
+  - On a server with the updated Hailstone script it also lists the quest givers
+- For server admins: the server script tells Hailstone's Find window which of a zone's NPCs have quests (by their quest files)
+  - It works this out once per zone process, when a player first opens Find there, and keeps it
+  - Set the `quest_npcs` setting to 0 to turn it off. Update `server/quests/global/encounters/hailstone.lua` to get it
 - The `/find` path's trail is smoother: it hugs the ground evenly instead of clumping at corners and floating over hills, light pulses along it toward where you are going, and a column of light marks the end
-- Map: a **World** view with the atlas and a zone finder. Browse the continents and regions from your game folder's atlas (zoom with the wheel, drag to pan), search any zone by name, see its map, and get the way there from your zone. **Go here** follows the route: your map shows the next zone and marks the zone's exits, and **Walk there** walks you through the right zone line. Routes come from the server when it runs the updated Hailstone server script, and otherwise fill in from the zones you visit. Only the zones of the server's current expansion are listed and routed through
-- For server admins: the Hailstone server script can send the server's zone connections for the map's zone finder (new opcodes 0x1438/0x1439, setting `zone_links`). It follows your `Expansion:CurrentExpansion` and content flags (players see only those zones) and is built once per zone process
+- Map: a **World** view with the atlas and a zone finder
+  - Browse the continents and regions from your game folder's atlas (zoom with the wheel, drag to pan), search any zone by name, see its map, and get the way there from your zone
+  - **Go here** follows the route: your map shows the next zone and marks the zone's exits, and **Walk there** walks you through the right zone line
+  - Routes come from the server when it runs the updated Hailstone server script, and otherwise fill in from the zones you visit
+  - Only the zones of the server's current expansion are listed and routed through
+- For server admins: the Hailstone server script can send the server's zone connections for the map's zone finder (new opcodes 0x1438/0x1439, setting `zone_links`)
+  - It follows your `Expansion:CurrentExpansion` and content flags (players see only those zones) and is built once per zone process
 - Keep marks protect barter sales, bazaar offers, buyer compensation and tribute, including late startup replies
-- Advanced Inventory supports grid selections, bank withdrawals (into your bags, never equipped) and destruction, guild tribute batches and one-write bulk Keep marks. Selections retain item serials and quantities; queued bags that gain contents are left intact
-- Delayed tribute answers reconcile the donated instance and preserve replacement cursor items; another item donation waits for an earlier answer, until the tribute master is opened again or for at most 30 seconds
-- Periodic effects use live running and drunkenness state; knockout, bleeding and recovery update movement and camera state. Eye summons control a separate body and view, restored on fade, despawn, death or zoning. Heavy drunkenness switches to first person and widens the view on top of your own field of view, which comes back exactly as you sober up
+- Advanced Inventory supports grid selections, bank withdrawals (into your bags, never equipped) and destruction, guild tribute batches and one-write bulk Keep marks
+  - Selections keep item serials and quantities; queued bags that gain contents are left intact
+- Delayed tribute answers reconcile the donated instance and preserve replacement cursor items. Another item donation waits for an earlier answer, until the tribute master is opened again or for at most 30 seconds
+- Body states follow the original more closely
+  - Periodic effects use live running and drunkenness state; knockout, bleeding and recovery update movement and camera state
+  - Eye summons control a separate body and view, restored on fade, despawn, death or zoning
+  - Heavy drunkenness switches to first person and widens the view on top of your own field of view, which comes back exactly as you sober up
 - Feigning death while casting interrupts the cast on the server, as on the original client
-- Invisible characters are hidden the same way everywhere: drawing, name plates, mouse picking and the target keys follow see invisible, your group and GM rules, and spawns the original client always hides (property 100) are hidden too. Unused appearance textures are freed and textures that did not fit are loaded again later, EQG armor on Luclin bodies keeps all four bone influences, and in the modern lighting other characters carry their lights (your own still follows what you hold)
-- Chat channels, friends, ignores and mail wait until the chat server accepts your login, and are cleared when the chat connection drops. A refused login (such as a wrong chat key) is no longer retried; other lost connections are retried a few times, with longer pauses each time, without resending commands typed before the drop
-- Server select: locked worlds show **Locked**, and every world can be played, as in the original: the server decides who may enter a locked or down world (GMs may), and says so when you may not
-- Other players and NPCs near you now play the climbing animation on ladders (Cabilis's canal ladders too, unless the server turns passable ladders off), and riders on new-style models sit their mounts with the mounted animations. Some rare cases of walls and edges in movement collision follow the original more closely
-- Equipment keeps every armour material field through appearance updates, previews and saves, so armour variations and their overlay textures show as the server sends them. `ActorNewArmorFilter` in eqclient.ini works as in the original: players, NPCs, yourself, group and raid members each have their own bit, and corpses never show hero's forge armour. Drakkin illusion features update, a form change while mounted puts you back on the mount once the new model is made, and `UseLuclinElementals=FALSE` no longer loads `global5_chr` unless `GlobalLoad.txt` names it
-- For server admins: Hailstone's own packets moved to opcodes 0x1430-0x1435 (guild invitation 0x1430/0x1431, settings 0x1432/0x1433, server files 0x1434/0x1435), because Project Triune's server uses 0x1422. Update `server/quests/global/encounters/hailstone.lua` on the server: the new script still answers Hailstone 0.7.0 and older on their old opcodes (0x1422-0x1427), but this version gets no server files, settings or cross-zone guild invitations from a server with the old script
-- Nothing updates unless you ask. A new Hailstone release is shown on the login screen but downloads only when you press **Download** (set `update.download=1` in hailstone.ini to have it download by itself, as before). An update an older version downloaded on its own is no longer installed when you quit; **Restart now** installs it
-- Add-ons: auto-update is off unless you switch it on in an add-on's row. Add-ons installed before this version had it switched on without asking, so it now starts off for them too; **Check for updates** still shows newer versions, and **Update** takes them
-- A player who feigns death, sits or is stunned while running stops where they are, as on the original client. Other players kept running for a few seconds in the direction they were going, and your own character slid on while stunned
-- Stuns follow the original client: a stun that lands while you are already stunned no longer restarts it, a stun under 1 second lasts 1 second, stun immunity is respected, a stun that ends while you are mesmerized lasts until the mez ends, "You are stunned!" and "You are unstunned." are printed, and sounds take on the dazed echo while you are stunned
-- Merchants: the merchant window can show only the goods you can use, as on the original client. Items your class or race cannot use, and spell scrolls you already have (or have a higher rank of), are hidden. It is on when you start. Untick **Usable only** beside the search box to see everything; in the gamepad UI, press X on the Buy page
+- Invisible characters are hidden the same way everywhere
+  - Drawing, name plates, mouse picking and the target keys follow see invisible, your group and GM rules, and spawns the original client always hides (property 100) are hidden too
+  - Unused appearance textures are freed and textures that did not fit are loaded again later
+  - EQG armor on Luclin bodies keeps all four bone influences
+  - In the modern lighting other characters carry their lights (your own still follows what you hold)
+- Chat channels, friends, ignores and mail wait until the chat server accepts your login, and are cleared when the chat connection drops
+  - A refused login (such as a wrong chat key) is no longer retried
+  - Other lost connections are retried a few times, with longer pauses each time, without resending commands typed before the drop
+- Server select: locked worlds show **Locked**, and every world can be played, as in the original. The server decides who may enter a locked or down world (GMs may), and says so when you may not
+- Other characters on ladders and mounts
+  - Other players and NPCs near you play the climbing animation on ladders (Cabilis's canal ladders too, unless the server turns passable ladders off)
+  - Riders on new-style models sit their mounts with the mounted animations
+  - Some rare cases of walls and edges in movement collision follow the original more closely
+- Equipment keeps every armour material field through appearance updates, previews and saves, so armour variations and their overlay textures show as the server sends them
+  - `ActorNewArmorFilter` in eqclient.ini works as in the original: players, NPCs, yourself, group and raid members each have their own bit, and corpses never show hero's forge armour
+  - Drakkin illusion features update, and a form change while mounted puts you back on the mount once the new model is made
+  - `UseLuclinElementals=FALSE` no longer loads `global5_chr` unless `GlobalLoad.txt` names it
+- For server admins: Hailstone's own packets moved to opcodes 0x1430-0x1435, because Project Triune's server uses 0x1422
+  - Guild invitation 0x1430/0x1431, settings 0x1432/0x1433, server files 0x1434/0x1435
+  - Update `server/quests/global/encounters/hailstone.lua` on the server. The new script still answers Hailstone 0.7.0 and older on their old opcodes (0x1422-0x1427), but this version gets no server files, settings or cross-zone guild invitations from a server with the old script
+- Nothing updates unless you ask
+  - A new Hailstone release is shown on the login screen but downloads only when you press **Download** (set `update.download=1` in hailstone.ini to have it download by itself, as before)
+  - An update an older version downloaded on its own is no longer installed when you quit; **Restart now** installs it
+- Add-ons: auto-update is off unless you switch it on in an add-on's row
+  - Add-ons installed before this version had it on without asking, so it now starts off for them too
+  - **Check for updates** still shows newer versions, and **Update** takes them
+- A player who feigns death, sits or is stunned while running stops where they are, as on the original client. Other players kept running for a few seconds, and your own character slid on while stunned
+- Stuns follow the original client
+  - A stun that lands while you are already stunned no longer restarts it, and a stun under 1 second lasts 1 second
+  - Stun immunity is respected, and a stun that ends while you are mesmerized lasts until the mez ends
+  - "You are stunned!" and "You are unstunned." are printed, and sounds take on the dazed echo while you are stunned
+- Merchants: the merchant window can show only the goods you can use, as on the original client
+  - Items your class or race cannot use, and spell scrolls you already have (or have a higher rank of), are hidden. It is on when you start
+  - Untick **Usable only** beside the search box to see everything; in the gamepad UI, press X on the Buy page
 - Add-ons: **Remove** in a script's or plugin's row works again in the mouse UI. Its question ("Remove ...?") never opened, so nothing was removed
 - `/time` names the game's weekday, as on the original client (every game month starts on a Sunday), instead of the real calendar's for that date
 - Chat: a message with line breaks in it (such as a server's message of the day) is shown on separate lines, instead of its words being thrown across the window
-- Spell effects: a spell's landing effect now plays on its caster where the effect is meant to start there (such as a glow at the caster's hands), as on the original client, instead of on the spell's target. Supported character models bleed when your edged or piercing weapon hits them, drawn with the blood sprite from your own game folder
-- Spell missiles: on a server that sends a missile's spell id (stock EQEmu does not), the missile now shows its spell's flight, area and impact effects instead of vanishing
-- A weapon or item proc whose spell has no cast animation of its own now plays the heal or the nuke cast animation on the one who procced it, by whether the spell is beneficial, and other players see yours too. Options > General **Proc Cast Animations** turns this off
+- Spell effects: a spell's landing effect plays on its caster where the effect is meant to start there (such as a glow at the caster's hands), as on the original client, instead of on the target
+  - Supported character models bleed when your edged or piercing weapon hits them, drawn with the blood sprite from your own game folder
+- Spell missiles: on a server that sends a missile's spell id (stock EQEmu does not), the missile shows its spell's flight, area and impact effects instead of vanishing
+- A weapon or item proc whose spell has no cast animation of its own plays the heal or the nuke cast animation on the one who procced it, by whether the spell is beneficial, and other players see yours too. Options > General **Proc Cast Animations** turns this off
 - For add-on authors: the wiki has a new **Scripting Reference** page listing every TLO and its members, the spawn search words, the `mq`, `hailstone`, `ImGui`, `ui` and `eq` functions, and the plugin SDK's callbacks, host functions, hooks and structs
-- For add-on authors: a plugin's window needs the `move` permission for the zone finder's Walk there (`eq.ZoneExitWalk`), as for the Find window's, and none to read an item job's progress (`eq.ItemJob`). `eq.HasSlot` now checks the slot it is given, `ui.Image` takes a colour tint as documented, and `eq.DisplayItemData` also gives `stackCount` and `itemType`
+- For add-on authors: permission and API fixes
+  - A plugin's window needs the `move` permission for the zone finder's Walk there (`eq.ZoneExitWalk`), as for the Find window's, and none to read an item job's progress (`eq.ItemJob`)
+  - `eq.HasSlot` checks the slot it is given, `ui.Image` takes a colour tint as documented, and `eq.DisplayItemData` also gives `stackCount` and `itemType`
 - Inventory (modern UI): the Mitigation and Avoidance rows show only on a server that gives them (the NMS server). Elsewhere they drew "Unknown Label6668" and "Unknown Label6667" over the AC and ATK numbers
 
 ## 0.7.0-beta (2026-11-09)
 
-- Spell effects move and look as on the original client: flames pulled in to a spell's centre now vanish there instead of piling into a bright column (Burst of Flame), offsets put each effect where it belongs, effects turn with the spawn they are on, the wind drifts smoke steadily, rays are drawn as streaks along their direction and rune circles lie flat on the ground. At a lower Spell Particle Density effects keep at least 16 particles a burst, as on the original, rather than thinning out. In the classic lighting, particles more than 500 units away are no longer drawn, as on the original
-- Nimbus effects show: a spell or item with a nimbus (the orbs, flames or petals that surround the caster while its buff lasts, such as Nimbus of Discordant Souls) now draws it on the caster until the buff fades. Other effects the server plays on a spawn by number show as well
-- Options > Display "Target Ring" has a **Max Size** slider: it limits how big the ring gets, so a giant's or a dragon's no longer fills the screen. Smaller rings keep their size. All the way right is Off, the default, which leaves every ring as before
-- Options > Display: **Background Frame Rate** can now be 0, 1 or 5 as well. At 0 nothing is drawn while another window has the focus; the game, chat and scripts keep running, and the window is drawn again as soon as it has the focus
-- A mace, dagger, staff, rod or book in the off hand is held in the hand again: some weapons shared a model with a shield and were strapped to the forearm. The Haunting and Grim Nightmares Shield Ornaments are worn on the forearm like other shield ornaments
-- Bazaar trader: a ware's price can now go up to 4,294,967 platinum (4,294,967p 2g 9s 5c, the most the server can store), instead of the original client's 1,000,000 platinum
-- Options > Audio has an **NPC Hit Sounds** slider: the sounds of NPCs being hit, blocking and dodging can be turned down (or off) without lowering the other sound effects. The default leaves them as before
+- Spell effects move and look as on the original client
+  - Flames pulled in to a spell's centre vanish there instead of piling into a bright column (Burst of Flame)
+  - Offsets put each effect where it belongs, effects turn with the spawn they are on, the wind drifts smoke steadily, rays are drawn as streaks along their direction and rune circles lie flat on the ground
+  - At a lower Spell Particle Density effects keep at least 16 particles a burst, as on the original, rather than thinning out
+  - In the classic lighting, particles more than 500 units away are not drawn, as on the original
+- Nimbus effects show: a spell or item with a nimbus (the orbs, flames or petals round the caster while its buff lasts, such as Nimbus of Discordant Souls) draws it on the caster until the buff fades. Other effects the server plays on a spawn by number show as well
+- Options > Display "Target Ring" has a **Max Size** slider, so a giant's or a dragon's ring no longer fills the screen. Smaller rings keep their size. All the way right is Off, the default, which leaves every ring as before
+- Options > Display: **Background Frame Rate** can also be 0, 1 or 5. At 0 nothing is drawn while another window has the focus; the game, chat and scripts keep running, and the window is drawn again as soon as it has the focus
+- A mace, dagger, staff, rod or book in the off hand is held in the hand again; some weapons shared a model with a shield and were strapped to the forearm. The Haunting and Grim Nightmares Shield Ornaments are worn on the forearm like other shield ornaments
+- Bazaar trader: a ware's price can go up to 4,294,967 platinum (4,294,967p 2g 9s 5c, the most the server can store), instead of the original client's 1,000,000 platinum
+- Options > Audio has an **NPC Hit Sounds** slider: the sounds of NPCs being hit, blocking and dodging can be turned down (or off) without lowering other sound effects. The default leaves them as before
 - `/camp` can be stopped again by standing with the sit/stand key or by moving forward, as on the original client. Before, only the Stand button or a second `/camp` stopped it
 - Name plates sit above the head instead of over it: a name's bottom edge is at the head, so larger names and the guild line under it grow upward
 - A player riding a mount has their name above their head, not down where they sit
-- Options > Display has a **Name Plates** section for the names over players and NPCs: their font, size, bold, a shadow, outline or no edge, smaller names farther away, and the size of the guild and owner lines under them. The defaults look as before
+- Options > Display has a **Name Plates** section for the names over players and NPCs: font, size, bold, a shadow, outline or no edge, smaller names farther away, and the size of the guild and owner lines. The defaults look as before
 - Modern spell bar: spell information opened by holding the right mouse button stays open if released over the display
 - Lua add-ons can change the text of a name plate in the world through a new `nameplate` hook, for example to add a level
 - Lua add-ons can read more of a spell's own data (range, duration, resist, icon, messages and the twelve effect slots), and Lua windows can read which spell or item each information window shows
-- Add-ons: when `addons/installed.txt` is lost or damaged, the add-ons it listed no longer run with every permission as though you had put them in by hand. It now has a copy, `installed.bak.txt`, that it is put back from at the next start; an add-on that neither file has whole gets no permissions, and nothing is installed, updated or removed until the file is put right (the log says so)
-- Add-ons: a link to an older version than the one installed now says so on its card, and installs only with **Install the older version**
-- Options' Texture Studio... starts the studio only when it is the real one (from projecthailstone/hailstone-texstudio, signed with its key); another add-on named `texstudio` can still be started from its row in Add-ons
-- Settings, saved lists and the add-ons' and updater's own files are now written to the disk before they replace the old ones, so a power cut right after a save leaves the old file or the new one, never an empty one
+- Add-ons: a lost or damaged `addons/installed.txt` no longer runs the add-ons it listed with every permission, as though you had put them in by hand
+  - It now has a copy, `installed.bak.txt`, that it is put back from at the next start
+  - An add-on that neither file has whole gets no permissions, and nothing is installed, updated or removed until the file is put right (the log says so)
+- Add-ons: a link to an older version than the one installed says so on its card, and installs only with **Install the older version**
+- Options' Texture Studio... starts the studio only when it is the real one (from projecthailstone/hailstone-texstudio, signed with its key). Another add-on named `texstudio` can still be started from its row in Add-ons
+- Settings, saved lists and the add-ons' and updater's own files are written to the disk before they replace the old ones, so a power cut right after a save leaves the old file or the new one, never an empty one
 - An update cut off by a crash is undone more carefully: a damaged or half-written line of its journal no longer moves a whole folder (such as `ui/`, with your UI settings in `ui/settings/`) or any of your own files out of the way
 - PvP servers (rule set 6, and rule set 4 between deity teams): characters below level 6 can no longer cast detrimental spells on each other in a newbie zone, as on the original client. The client used to allow it everywhere and leave the refusal to the server
-- A zone floor or ceiling made of one very large triangle (thousands of units across) is now found by the floor and ceiling tests and by line of sight, not only by the movement sweep
+- A zone floor or ceiling made of one very large triangle (thousands of units across) is found by the floor and ceiling tests and by line of sight, not only by the movement sweep
 - `/find`: a damaged Path.ini (a step length of zero or less, or a value that is not a number) or a path reply from the server with broken points no longer freezes or crashes the client; such a setting takes its default
 - Rain, snow and mouse picks cost less: their collision tests no longer allocate and clear memory the size of the whole zone for each raindrop and each pick
-- Busy zones and the pre-game screens cost less each frame: the group and pet windows, the name plates, the grass, the flames, the far spawns' footsteps and the server and character selects no longer rebuild their lists every frame, and starting to draw a neighbour zone no longer stalls a frame sampling the ground by its zone line
-- Hot button, social and loadout changes are saved to the character's file a few seconds after they are made, and at once on zoning, camping and quitting, instead of in every frame something changes (a plugin setting buttons rewrote the file each frame)
-- Windows crash dumps attached to bug reports no longer hold your password: the dump keeps only what a call stack needs, and the client forgets the password once the login server has taken it (a saved password still fills in again from the system keyring when you are back at the login screen)
-- `/outputfile` refuses a file name that is one of the character's own settings files (`hailstone.ini`, `scripts.ini`, `hotbuttons.ini`, `UI.ini` and the others, in any case): `/outputfile inventory scripts.ini` used to overwrite the character's autorun list
-- Text from the server with line breaks or other control characters in it (a refused web link, for one) can no longer pass itself off as lines of `hailstone.log` or a crash report: a line break goes on over an indented line, and other control characters are written `\r` or `\xHH`
-- Fewer stutters while characters, items, spell icons and the UI's art load in: their textures and meshes go up to the graphics card without the frame stopping to wait for each upload, and a neighbour zone seen past a zone line is let go without a pause when you walk away from it
-- A UI or script that shows a great many of the game's UI pictures no longer crashes Hailstone once a fixed number of them is loaded; the least recently used ones are let go and loaded again when needed
-- The game starts a little sooner: the music at the login screen no longer waits for every sound archive to be opened first, and starts as soon as they are
+- Busy zones and the pre-game screens cost less each frame
+  - The group and pet windows, the name plates, the grass, the flames, the far spawns' footsteps and the server and character selects no longer rebuild their lists every frame
+  - Starting to draw a neighbour zone no longer stalls a frame sampling the ground by its zone line
+- Hot button, social and loadout changes are saved to the character's file a few seconds after they are made, and at once on zoning, camping and quitting, instead of every frame something changes (a plugin setting buttons rewrote the file each frame)
+- Windows crash dumps attached to bug reports no longer hold your password
+  - The dump keeps only what a call stack needs, and the client forgets the password once the login server has taken it
+  - A saved password still fills in again from the system keyring when you are back at the login screen
+- `/outputfile` refuses a file name that is one of the character's own settings files (`hailstone.ini`, `scripts.ini`, `hotbuttons.ini`, `UI.ini` and the others, in any case). `/outputfile inventory scripts.ini` used to overwrite the character's autorun list
+- Text from the server with line breaks or other control characters (a refused web link, for one) can no longer pass itself off as lines of `hailstone.log` or a crash report. A line break goes on over an indented line, and other control characters are written `\r` or `\xHH`
+- Fewer stutters while characters, items, spell icons and the UI's art load in
+  - Their textures and meshes go up to the graphics card without the frame stopping to wait for each upload
+  - A neighbour zone seen past a zone line is let go without a pause when you walk away from it
+- A UI or script that shows a great many of the game's UI pictures no longer crashes Hailstone once a fixed number is loaded; the least recently used ones are let go and loaded again when needed
+- The game starts a little sooner: the login screen's music starts as soon as the sound archives are open instead of waiting for every one
 - Scripts: a Lua script with the same name as a compiled plugin (an add-on called `nms` beside the NMS plugin, say) no longer shares the plugin's server and character settings folders, where a plugin may keep its server's key. Its `hailstone.server_dir` and `character_dir` are `plugin-config/script%3A<name>/` instead; other scripts keep theirs
-- Scripts and plugins: a line another add-on prints (`print`, `/echo`, `WriteChatf`) can no longer make a script with more permissions act for it. It still raises the script's `mq.event`, but the handler gets no more than the add-on that printed it may do, and compiled plugins' `OnIncomingChat` and `OnFilterChat` no longer get such lines at all. A bind another script ran keeps that script's limits after an `mq.delay` too
+- Scripts and plugins: a line another add-on prints (`print`, `/echo`, `WriteChatf`) can no longer make a script with more permissions act for it
+  - It still raises the script's `mq.event`, but the handler gets no more than the add-on that printed it may do
+  - Compiled plugins' `OnIncomingChat` and `OnFilterChat` no longer get such lines at all
+  - A bind another script ran keeps that script's limits after an `mq.delay` too
 - Scripts: `/lua stop` and `/lua pause` from a script or plugin reach only scripts that may do no more than it, so an add-on cannot stop yours, and `mq.bind` no longer takes over a command another script or plugin has
 - Scripts: `mq.event` takes at most 256 events a script, patterns of up to 1024 bytes (32 KB in all) and names of up to 256 bytes; past that it is an error
 - Scripts: a script with a space or another unusual character in its name no longer shares its settings folder (`mq.configDir`) with another script ("a b" and "a_b" both used `config/a_b/`). Its old folder is moved to the new name when no other script used it
 - Plugins: a plugin's own TCP connections close when it loses the 'net' permission
-- Damaged zone, model and texture files (a texture pack's PNGs among them) can no longer make a zone load use gigabytes of memory, hang or crash: long names in a file's string table, huge or broken triangles in the zone flora, oversized heightmaps, bitmaps and Luclin texture layers, and lights with broken numbers are now cut short or left out. Decoding a large PNG takes a third of the memory it did, or less, and Texture Studio's scan of the game's archives no longer unpacks every mesh and sound to look for textures
-- A server's files are now bounded on your disk: one file over 2 GB is not downloaded, and a server whose files to download add up to more than 16 GB is refused before anything is written, keeping the files you have. `assets.server_files_max_file_mb` and `assets.server_files_max_total_mb` in `hailstone.ini` change the limits
-- A world login whose session key is too long to send whole now fails with a message saying so, instead of being sent cut short and refused by the world
+- Damaged zone, model and texture files (a texture pack's PNGs among them) can no longer make a zone load use gigabytes of memory, hang or crash
+  - Long names in a file's string table, huge or broken triangles in the zone flora, oversized heightmaps, bitmaps and Luclin texture layers, and lights with broken numbers are cut short or left out
+  - Decoding a large PNG takes a third of the memory it did, or less
+  - Texture Studio's scan of the game's archives no longer unpacks every mesh and sound to look for textures
+- A server's files are bounded on your disk
+  - One file over 2 GB is not downloaded, and a server whose files add up to more than 16 GB is refused before anything is written, keeping the files you have
+  - `assets.server_files_max_file_mb` and `assets.server_files_max_total_mb` in `hailstone.ini` change the limits
+- A world login whose session key is too long to send whole fails with a message saying so, instead of being sent cut short and refused by the world
 - Servers on an IPv6 link-local address (such as `fe80::1%eth0`) can be reached
-- Plugin connections to a name with several addresses try the next one when the first is refused or does not answer, and give up on an address after 10 s instead of waiting up to two minutes
+- Plugin connections to a name with several addresses try the next one when the first is refused or does not answer, and give up on an address after 10 s instead of up to two minutes
 - When the network drops, the log gets one line about failed sends and one when sending works again, instead of a warning for every packet
-- Server script: file piece requests are limited per character (twice what the download limits let through, at least 2112 a second), and a flood of them or of malformed settings requests no longer costs the zone work or a log line each. Files whose names contain a backslash are hashed and sent
-- The pillars of fire in the Plane of Tranquility now burn as four solid columns. With the modern lighting each was a stack of small separate flames; with the classic lighting each emitter only puffed a few particles every few seconds. Many newer zones' torches, braziers, smoke and mist (an EQG zone's environment emitters) were held to a few particles the same way and now burn fully, and slowly rising fires may burn taller with the modern lighting
-- Modern UI: the map's Follow button stays on when you zoom with the mouse wheel; the map zooms around you instead of the cursor while following. Only dragging the map or a double click stops following
-- Luclin erudites move with the human's animations, as in the original, not the wood elf's: an erudite no longer bares its teeth with parted lips or frowns, and its beard sits on its chin instead of hanging in front of its mouth
-- Modern UI: bag windows can be resized. Drag an edge or the bottom-right corner and the slots rearrange to fill the width, as many to a row as fit, and the window grows taller to hold every row. Reset size in its right-click menu brings back rows of five
-- Gnomes, halflings and dwarves can climb ladders such as the ones in Guk, Unrest and Ak'Anon. Ladders were unreliable for every race: a small character slipped between the rungs and fell off, and any character could stick partway up. A ladder now climbs like a solid surface. A server can turn this off in `hailstone.cfg` with `[movement] solid_ladders = off`
+- Server script: file piece requests are limited per character (twice what the download limits let through, at least 2112 a second)
+  - A flood of them, or of malformed settings requests, no longer costs the zone work or a log line each
+  - Files whose names contain a backslash are hashed and sent
+- The pillars of fire in the Plane of Tranquility burn as four solid columns
+  - With the modern lighting each was a stack of small separate flames; with the classic lighting each emitter only puffed a few particles every few seconds
+  - Many newer zones' torches, braziers, smoke and mist (an EQG zone's environment emitters) were held back the same way and now burn fully
+  - Slowly rising fires may burn taller with the modern lighting
+- Modern UI: the map's Follow button stays on when you zoom with the mouse wheel, and the map zooms around you instead of the cursor while following. Only dragging the map or a double click stops following
+- Luclin erudites move with the human's animations, as in the original, not the wood elf's: an erudite no longer bares its teeth or frowns, and its beard sits on its chin instead of hanging in front of its mouth
+- Modern UI: bag windows can be resized
+  - Drag an edge or the bottom-right corner and the slots rearrange to fill the width, as many to a row as fit; the window grows taller to hold every row
+  - Reset size in its right-click menu brings back rows of five
+- Ladders climb like a solid surface, so gnomes, halflings and dwarves can climb ones such as those in Guk, Unrest and Ak'Anon
+  - Ladders were unreliable for every race: a small character slipped between the rungs and fell off, and any character could stick partway up
+  - A server can turn this off in `hailstone.cfg` with `[movement] solid_ladders = off`
 - Advanced Inventory: click a column's heading to sort by it, and again to reverse it (the Sort menu is now only in the grid view, which has no headings). The Kind sort is gone; the Kind filter remains
-- Advanced Inventory: a Stat menu at the bottom of the left pane (with its own filter) shows only the items with that stat (AC, HP, the attributes and heroics, the resists, haste, regen, damage, ratio, tribute value and more), adds its column and sorts by it. Clear filters beside the search turns every filter off at once
+- Advanced Inventory: a Stat menu at the bottom of the left pane (with its own filter) shows only the items with that stat, adds its column and sorts by it
+  - Stats include AC, HP, the attributes and heroics, the resists, haste, regen, damage, ratio, tribute value and more
+  - Clear filters beside the search turns every filter off at once
 - Advanced Inventory: select rows with a click, Ctrl+click, Shift+click or Ctrl+A, then Sell (at a merchant), Tribute (at a tribute master) or Destroy them together, after one confirmation. Only what you carry is taken, never an item marked Keep
 - `/finditem` (or `/advi`) opens or closes the Advanced Inventory; `/finditem <text>` opens it searching for that
-- A face seen up close no longer shows dark lines across it with the modern lighting: an erudite's forehead had a sharp V-shaped crease, and faces had dark lines over the cheeks and under the eyes. The ambient occlusion picked out the folds of the low-poly head that its smooth shading hides; it now fades out on anything closer than about twice a character's height to the camera
-- NPC names that start with "#" on the server (named NPCs such as "#Lord Bob") now show without the "#", in their name above the head, the target window, chat and elsewhere, as on the original client
-- Scripts: the `targetable` spawn search word now leaves out spawns the game will not target (body type 11, which servers give portal and trigger NPCs), as in MacroQuest. It used to look only at the spawn's Targetable flag
-- Bards (and multiclass characters with Bard) can cast again after a song: once a song was playing, every spell gem stayed grey and each click said "You haven't recovered yet..." until `/stopsong`. Now, as on the original client, clicking a gem while a song plays stops the song, and the next click casts
-- "Ground Floating NPCs" no longer sinks NPCs that stand on a door object into it, such as the translocators on the base of Plane of Knowledge's portal stones: doors and platforms now count as the floor an NPC is put down on
-- Collision with walls is now computed by Hailstone's own code for the sphere sweep. It agrees with the original client within a tiny margin; in rare cases where the player only just grazes an edge or a corner, a step may now stop or pass where it did not before
-- Characters with the Luclin models now stand, walk and fight with their arms ready when they hold a weapon or a shield, as on the original client: a shield used to hang low at the hip in the empty-handed pose
-- Add-ons can now be tools, programs of their own that work beside Hailstone: install one from Add-ons on the login screen like a script or plugin, and press Start on its row. The first is Hailstone Texture Studio, which builds HD textures from your own game files on your graphics card (twice or four times the size, with normal and roughness maps for the modern lighting, using the PBRify upscaler)
-- Options (Graphics, Textures; the gamepad UI's Display) picks the texture pack Hailstone uses, or Off for the game's own textures, from the next start; Texture Studio... starts the studio once it is installed
-- The target ring now lies flat on the ground in grass: it used to twist into a coil, traced over the grass blades instead of the ground under them
-- Whether a secondary goes on the forearm is decided by its item model, as on the original client, not by a texture named "shield": Hailstone used to strap any such secondary onto the forearm
-- Held items from the newer model files and hero's forge helms and bracers now show their textures the right way up: they were drawn upside down, so the Haunting Nightmares Shield Ornament showed the inside of its pumpkin, the cleric epic shield a black edge and the 10th anniversary shield its lettering upside down
+- A face seen up close no longer shows dark lines across it with the modern lighting
+  - An erudite's forehead had a sharp V-shaped crease, and faces had dark lines over the cheeks and under the eyes
+  - The ambient occlusion picked out the folds of the low-poly head; it now fades out on anything closer than about twice a character's height to the camera
+- NPC names that start with "#" on the server (named NPCs such as "#Lord Bob") show without the "#" above the head, in the target window, chat and elsewhere, as on the original client
+- Scripts: the `targetable` spawn search word leaves out spawns the game will not target (body type 11, which servers give portal and trigger NPCs), as in MacroQuest. It used to look only at the spawn's Targetable flag
+- Bards (and multiclass characters with Bard) can cast again after a song
+  - Once a song was playing, every spell gem stayed grey and each click said "You haven't recovered yet..." until `/stopsong`
+  - Now, as on the original client, clicking a gem while a song plays stops the song, and the next click casts
+- "Ground Floating NPCs" no longer sinks NPCs that stand on a door object into it, such as the translocators on the base of Plane of Knowledge's portal stones: doors and platforms count as the floor an NPC is put down on
+- Collision with walls is computed by Hailstone's own code for the sphere sweep. It agrees with the original client within a tiny margin; in rare cases where the player only just grazes an edge or a corner, a step may now stop or pass where it did not before
+- Characters with the Luclin models stand, walk and fight with their arms ready when they hold a weapon or a shield, as on the original client; a shield used to hang low at the hip in the empty-handed pose
+- Add-ons can be tools, programs of their own that work beside Hailstone
+  - Install one from Add-ons on the login screen like a script or plugin, and press Start on its row
+  - The first is Hailstone Texture Studio, which builds HD textures from your own game files on your graphics card: twice or four times the size, with normal and roughness maps for the modern lighting, using the PBRify upscaler
+- Options (Graphics, Textures; the gamepad UI's Display) picks the texture pack Hailstone uses, or Off for the game's own textures, from the next start. Texture Studio... starts the studio once it is installed
+- The target ring lies flat on the ground in grass; it used to twist into a coil over the grass blades
+- Whether a secondary goes on the forearm is decided by its item model, as on the original client, not by a texture named "shield"; Hailstone used to strap any such secondary onto the forearm
+- Held items from the newer model files and hero's forge helms and bracers show their textures the right way up
+  - They were drawn upside down: the Haunting Nightmares Shield Ornament showed the inside of its pumpkin, the cleric epic shield a black edge and the 10th anniversary shield its lettering upside down
 - Shield ornaments are worn on the forearm like the shields they dress, not gripped in the hand like a weapon. Weapon ornaments stay in the hand. `display.extra_shields=0` in `hailstone.ini` holds every ornament in the hand as the original does
-- Shields newer than the original client are worn on the forearm, not gripped in the hand like a weapon. The original client knows only the shields of its own time, so it holds about a third of an EQEmu server's shields in the hand. `display.extra_shields=0` in `hailstone.ini` brings back the original's way
-- Item, weapon and augment procs now show the spell's casting effect on whoever procs it, then its impact, like a normal cast of the same spell. They used to show only the impact on the target (buff procs already looked like casts)
-- Modern UI: dragging a window's bottom-right corner now resizes it instead of scaling it, in the windows that can change size (the chat, the map, the AA window, the merchant and the rest). A window's scale, text and all, is set from Scale in its right-click menu (or Ctrl+mouse wheel over a window with a title bar). Windows that are sized to what they show (the player, target, hot bars, inventory and the like) no longer have a corner grip
-- Modern UI: Escape now closes the inventory, the AA window, the ability and spell books, every bag, the map (not the minimap), item and spell info windows, inspect, skills, the quest journal, guild, friends, the bank, Lua Scripts, help, books and notes, tribute, leadership, titles, tracking, mail, the group finder and the bazaar and barter searches without ticking anything. The merchant, loot, trade, give and tradeskill windows still need it ticked. Untick "Close with Esc" in a window's right-click menu to keep it open on Escape
-- Humans, high elves, erudites, dark elves, half elves, barbarians, gnomes, halflings, trolls, ogres, iksar and skeletons with the Luclin models no longer snap into a T-pose when they throw, round kick or use a monk strike (flying kick, dragon punch, eagle strike), and some zone creatures (Coldain, Kerran and others) no longer T-pose in some of their animations. Those animations were taken from another model's skeleton that mostly does not match. Such a model now plays the replacement the original client uses for an animation a model lacks
-- A character feigning death can no longer walk, turn, strafe or jump: it used to slide along the ground still lying down. Stand up with `/sit` or `/stand` (the forward key does not stand you up, as on the original client)
-- Modern UI: windows with a title bar (inventory, bags, merchant, spell book, AA, guild, map and the rest) have a roll-up button beside their X. A click, or a double click on the title bar, rolls the window up to its title bar and back; it stays rolled up until you unroll it, even after closing and opening it again. Hot bars, spell gems and the other HUD frames, and yes/no or quantity prompts, have none
-- Field of Bone now has a working navigation mesh: `/nav`, `/stick` and the overlay found nothing there, because the trees the zone hides far under the world pulled the whole mesh down with them. A zone's mesh already saved by an earlier version is built again by itself
-- The navigation mesh of a zone you have not been to yet now starts building as soon as you zone in, instead of waiting for the first `/nav` or the overlay (a `/stick` close to its target never asked for it). `nav.prebuild=0` in `hailstone.ini` brings back the old way
-- An NPC or player killed while moving now drops where it died: its corpse used to slide on for a moment in the direction it had been moving
-- A login the server refuses now shows the server's reason (such as a wrong password) instead of "malformed login packet 0x0018". The public EQEmu login server (login.eqemulator.net) sends a shorter refusal than the client expected
-- A character with more than 300 different AAs now sees all of them. Some servers allow more than 300, but the client used to keep only the first 300, so the rest were missing from the AA window and their bonuses from the character sheet
-- Dropping a spell from the spell book onto a gem that already holds a spell now memorizes the new spell in its place: you no longer have to forget the old one first. Clicking a spell picked up from the book onto a full gem does the same, and so do the modern spell book's double-click and Memorize button once you click a full gem to pick it. With every gem full, the book now says so instead of doing nothing. Options > Interface "Drop Replaces a Memorized Spell" (gamepad UI: "Gem replaces spell") turns it off, back to the original's way
-- Modern UI: hovering the spell book's Memorize ("In gem N") button no longer shows a red "MESSAGE FROM DEAR IMGUI: 2 visible items with conflicting ID" box. The button and the Memorized filter shared an ID
-- Your stats no longer drop to zero while you camp: during the countdown the inventory and character windows showed 0 for every stat until the camp ended or was cancelled
-- Ducking now crouches you at once, standing still: the crouch used to show only once you started moving. Standing up from a duck plays the crouch backward. Other players and NPCs that duck show it the same way
-- Plugin SDK: the names now say Hailstone. Include `hailstone_plugin.h` and `hailstone_byte_io.h`; the types are `Hailstone*` (`HailstoneSpawn`, `HailstoneHooks`, ...) and the host table `PluginHostApi`, the macros `HAILSTONE_*` (`HAILSTONE_PLUGIN`, `HAILSTONE_CAP_READ`, ...), the plugin's global `host` (`host->write_chat(host->host, ...)`), the namespace `hailstone` and the exports `hailstone_plugin_*`. The old `nmsc` names still build and built plugins load as before, and a plugin built with the new names still loads in 0.6 (docs/plugins.md "The names up to 0.6")
+- Shields newer than the original client are worn on the forearm, not gripped in the hand
+  - The original client knows only the shields of its own time, so it holds about a third of an EQEmu server's shields in the hand
+  - `display.extra_shields=0` in `hailstone.ini` brings back the original's way
+- Item, weapon and augment procs show the spell's casting effect on whoever procs it, then its impact, like a normal cast. They used to show only the impact on the target (buff procs already looked like casts)
+- Modern UI: dragging a window's bottom-right corner resizes it instead of scaling it, in windows that can change size (the chat, the map, the AA window, the merchant and the rest)
+  - A window's scale, text and all, is set from Scale in its right-click menu (or Ctrl+mouse wheel over a window with a title bar)
+  - Windows sized to what they show (the player, target, hot bars, inventory and the like) no longer have a corner grip
+- Modern UI: Escape closes most windows without ticking anything
+  - The inventory, the AA window, the ability and spell books, every bag, the map (not the minimap), item and spell info windows, inspect, skills, the quest journal, guild, friends, the bank, Lua Scripts, help, books and notes, tribute, leadership, titles, tracking, mail, the group finder and the bazaar and barter searches
+  - The merchant, loot, trade, give and tradeskill windows still need it ticked
+  - Untick "Close with Esc" in a window's right-click menu to keep it open on Escape
+- Luclin models no longer snap into a T-pose when they throw, round kick or use a monk strike (flying kick, dragon punch, eagle strike)
+  - This covers humans, high elves, erudites, dark elves, half elves, barbarians, gnomes, halflings, trolls, ogres, iksar and skeletons. Some zone creatures (Coldain, Kerran and others) no longer T-pose in some of their animations
+  - Those animations were taken from another model's skeleton that mostly does not match. Such a model now plays the replacement the original client uses for an animation a model lacks
+- A character feigning death can no longer walk, turn, strafe or jump; it used to slide along the ground lying down. Stand up with `/sit` or `/stand` (the forward key does not stand you up, as on the original client)
+- Modern UI: windows with a title bar (inventory, bags, merchant, spell book, AA, guild, map and the rest) have a roll-up button beside their X
+  - A click, or a double click on the title bar, rolls the window up to its title bar and back. It stays rolled up until you unroll it, even after closing and opening it again
+  - Hot bars, spell gems and the other HUD frames, and yes/no or quantity prompts, have none
+- Field of Bone has a working navigation mesh: `/nav`, `/stick` and the overlay found nothing there, because the trees the zone hides far under the world pulled the whole mesh down. A zone's mesh saved by an earlier version is built again by itself
+- The navigation mesh of a zone you have not been to yet starts building as soon as you zone in, instead of waiting for the first `/nav` or the overlay (a `/stick` close to its target never asked for it). `nav.prebuild=0` in `hailstone.ini` brings back the old way
+- An NPC or player killed while moving drops where it died; its corpse used to slide on for a moment
+- A login the server refuses shows the server's reason (such as a wrong password) instead of "malformed login packet 0x0018". The public EQEmu login server (login.eqemulator.net) sends a shorter refusal than the client expected
+- A character with more than 300 different AAs sees all of them. Some servers allow more than 300, but the client kept only the first 300, so the rest were missing from the AA window and their bonuses from the character sheet
+- Dropping a spell from the spell book onto a full gem memorizes the new spell in its place; you no longer have to forget the old one first
+  - Clicking a spell picked up from the book onto a full gem does the same, and so do the modern spell book's double-click and Memorize button once you click a full gem to pick it
+  - With every gem full, the book says so instead of doing nothing
+  - Options > Interface "Drop Replaces a Memorized Spell" (gamepad UI: "Gem replaces spell") turns it off, back to the original's way
+- Modern UI: hovering the spell book's Memorize ("In gem N") button no longer shows a red "MESSAGE FROM DEAR IMGUI: 2 visible items with conflicting ID" box
+- Your stats no longer drop to zero while you camp; during the countdown the inventory and character windows showed 0 for every stat
+- Ducking crouches you at once, standing still; the crouch used to show only once you started moving. Standing up from a duck plays the crouch backward. Other players and NPCs that duck show it the same way
+- Plugin SDK: the names now say Hailstone
+  - Include `hailstone_plugin.h` and `hailstone_byte_io.h`
+  - The types are `Hailstone*` (`HailstoneSpawn`, `HailstoneHooks`, ...) and the host table `PluginHostApi`; the macros `HAILSTONE_*` (`HAILSTONE_PLUGIN`, `HAILSTONE_CAP_READ`, ...); the plugin's global `host` (`host->write_chat(host->host, ...)`); the namespace `hailstone`; the exports `hailstone_plugin_*`
+  - The old `nmsc` names still build and built plugins load as before, and a plugin built with the new names still loads in 0.6 (docs/plugins.md "The names up to 0.6")
 - For people building Hailstone: the CMake options, targets and environment variables are now `HAILSTONE_*` and `hailstone_*` (`-DHAILSTONE_SANITIZE=ON`, `build/hailstone_tests`, `HAILSTONE_VECTORS_DIR`). An `NMSC_*` CMake setting or environment variable is still read when the new one is not set
-- Modern UI spell bar: the menu for loading a spell into an empty gem (right click) now opens at that gem, not at the place of an earlier click
-- Modern UI: a link in a text, such as [South Ro] in a chat line or an NPC's reply, is underlined as a whole when the mouse is on it, not only the word under the mouse, and a link that wraps onto the next row is underlined on both rows
-- Bandolier: with full bags, swapping to a set that has to put a weapon back no longer makes that weapon vanish from your inventory until you log in again. As in the original client, the swap is refused with "You do not have enough room to use this bandolier." and nothing moves
-- Names behind walls, poles, doors and characters are now cut off exactly, pixel by pixel and in the same frame. Before, a name vanished as a whole when the point above the head was out of sight, and otherwise drew over whatever stood in front. "Target Name Through Walls" in Options > Display keeps your target's name in sight behind walls (`display.target_plate_through_walls=1` in `hailstone.ini`; off by default)
-- Names that overlap on the screen: the nearer name is drawn over the farther and the farther one fades to a tenth of its alpha between 10 % and 20 % coverage, smoothly. Selecting a faded name immediately restores the target at full alpha at its natural head position. "Fade Overlapping Names" in Options > Display turns the fade off (`display.plate_overlap_fade=0` in `hailstone.ini`)
+- Modern UI spell bar: the menu for loading a spell into an empty gem (right click) opens at that gem, not at an earlier click's place
+- Modern UI: a link in a text, such as [South Ro] in a chat line or an NPC's reply, is underlined as a whole when the mouse is on it, not only the word under the mouse; a link that wraps onto the next row is underlined on both rows
+- Bandolier: with full bags, swapping to a set that has to put a weapon back no longer makes that weapon vanish until you log in again. As in the original client, the swap is refused with "You do not have enough room to use this bandolier." and nothing moves
+- Names behind walls, poles, doors and characters are cut off exactly, pixel by pixel and in the same frame
+  - Before, a name vanished as a whole when the point above the head was out of sight, and otherwise drew over whatever stood in front
+  - "Target Name Through Walls" in Options > Display keeps your target's name in sight behind walls (`display.target_plate_through_walls=1` in `hailstone.ini`; off by default)
+- Names that overlap on the screen: the nearer name is drawn over the farther
+  - The farther one fades smoothly to a tenth of its alpha between 10 % and 20 % coverage
+  - Selecting a faded name restores the target at full alpha at its natural head position at once
+  - "Fade Overlapping Names" in Options > Display turns the fade off (`display.plate_overlap_fade=0` in `hailstone.ini`)
 - "Highlight Target Name" in Options > Display: turn off the dark plate, edge and marker around your target's name (`display.target_plate_highlight=0` in `hailstone.ini`)
 
 ## 0.6.0-beta (2026-11-07)
 
-- Lost Dungeons of Norrath merchants (and the other adventure and alternate currency merchants) now let you inspect their goods: right-click one to see its details, as with any other item (Y in the gamepad UI). Shift or Ctrl+right-click shows it in the item preview
-- Rain and snow fall again. In zones with a ceiling over the sky, such as East Commonlands, every drop and flake used to land the moment it appeared, so none were ever seen. Snowflakes in the modern lighting now show as specks in the distance instead of fading to nothing
+- Lost Dungeons of Norrath merchants (and other adventure and alternate currency merchants) let you inspect their goods: right-click one to see its details, as with any other item (Y in the gamepad UI). Shift or Ctrl+right-click shows it in the item preview
+- Rain and snow fall again
+  - In zones with a ceiling over the sky, such as East Commonlands, every drop and flake landed the moment it appeared, so none were ever seen
+  - Snowflakes in the modern lighting show as specks in the distance instead of fading to nothing
 - For server plugins: a new switch, `solo_adventure`, lets an adventure recruiter's Request go out when you are in no group or raid, for servers that take solo adventures (Project Triune's add-on turns it on). Without it the client still says "You must be in a group or raid to request an adventure." and sends nothing, since a stock server ignores a solo request
-- Nektulos Forest and the Arena no longer show stray flames and smoke floating in mid-air: they were the torches and campfires of the live client's revamped zone of the same name, placed in the old one
-- Clicking an item that casts instantly no longer casts it twice: the client sent its own cast after the server's, which an EQEmu server carried out a second time (and restarted the cast of an item with a cast time)
-- Options > Graphics "Flora Distance" draws the grass up to three times further (400 to 1,200 units; the gamepad UI's Display page has Grass and Grass distance). Past the usual distance the grass thins out, so it costs less than it would at full density
-- The classic outdoor zones have grass: with Show Grass on, grass grows on the meadows, forests, swamps and jungles of every outdoor zone of the original world, Kunark, Velious, Luclin and the Planes, with the shapes and pictures of your game folder's revamped Commonlands and the colour of the ground it stands on. Roads, sand, snow, rock, water, roofs and dungeon floors stay bare, and East Commonlands has a few desert plants on its sand. Hailstone's own: the original zones have none
-- The grass now lies in the shade of trees, buildings and hills (modern lighting), bends aside around you and the characters walking through it, and costs less to draw. Flora Distance now draws further in thick grassland too: before, the Karanas' grass ran out of room long before the slider's distance
-- Grass of each climate: ferns and small pines in the forests, ferns and cattails in the swamps, jungle ferns and bushes in Kunark's jungles, flowers and wheat on the plains, shrubs and flowers on Kunark's open ground, Luclin's own plants, and tall flowering grass in the Plane of Growth. They come from the revamped zones in your game folder; a zone whose source files are missing keeps the plain grass
-- Tab (and F8, and the other NPC target keys) now targets only NPCs you can see: NPCs behind walls, floors or hills are skipped. Options > Interface "Tab Needs Line of Sight" turns this off
-- Modern UI: the Alternate Advancement list starts sorted by name, A to Z. Click a column's heading to sort by it (again to reverse it; Era sorts by expansion, in release order), and drag a heading to move its column; both are remembered. The window's text is also one size larger
+- Nektulos Forest and the Arena no longer show stray flames and smoke in mid-air: they were the torches and campfires of the live client's revamped zone of the same name, placed in the old one
+- Clicking an item that casts instantly no longer casts it twice. The client sent its own cast after the server's, which an EQEmu server carried out a second time (and restarted the cast of an item with a cast time)
+- Options > Graphics "Flora Distance" draws grass up to three times further (400 to 1,200 units; the gamepad UI's Display page has Grass and Grass distance). Past the usual distance the grass thins out, so it costs less than at full density
+- The classic outdoor zones have grass, Hailstone's own (the original zones have none)
+  - With Show Grass on, it grows on the meadows, forests, swamps and jungles of every outdoor zone of the original world, Kunark, Velious, Luclin and the Planes
+  - It uses the shapes and pictures of your game folder's revamped Commonlands and the colour of the ground it stands on
+  - Roads, sand, snow, rock, water, roofs and dungeon floors stay bare, and East Commonlands has a few desert plants on its sand
+- Grass lies in the shade of trees, buildings and hills (modern lighting), bends aside around you and the characters walking through it, and costs less to draw. Flora Distance draws further in thick grassland too: the Karanas' grass ran out of room long before the slider's distance
+- Grass of each climate, from the revamped zones in your game folder (a zone whose source files are missing keeps the plain grass)
+  - Ferns and small pines in the forests, ferns and cattails in the swamps, jungle ferns and bushes in Kunark's jungles
+  - Flowers and wheat on the plains, shrubs and flowers on Kunark's open ground, Luclin's own plants, and tall flowering grass in the Plane of Growth
+- Tab (and F8, and the other NPC target keys) targets only NPCs you can see: NPCs behind walls, floors or hills are skipped. Options > Interface "Tab Needs Line of Sight" turns this off
+- Modern UI: the Alternate Advancement list starts sorted by name, A to Z
+  - Click a column's heading to sort by it (again to reverse it; Era sorts by expansion, in release order), and drag a heading to move its column; both are remembered
+  - The window's text is one size larger
 - Classic lighting: characters and NPCs take the light of the place they stand in, by day and by night. After dark they were drawn nearly black against the lit walls of zones such as the Bazaar
-- Client settings are now kept for each character: graphics, frame rate caps, sound, mouse, keys, gamepad and the game options you change while playing a character apply to that character only, so you can turn the graphics down on the characters you run in a second or third client. A character starts with the shared settings the first time it enters the world, and keeps its own from then on. Settings changed on the login screen are the shared ones. The asset folder, add-ons, updates, the window's size, place and mode, anti-aliasing (MSAA), the UI and its scale stay shared
-- The target ring is now drawn on the ground: it follows slopes and steps, and characters, walls and the target's own legs hide it instead of it showing through them. It has a new look: a soft glowing band with turning dashes and a notch showing which way the target faces. It sweeps in when you change target and pulses while you auto attack (Options > Display "Target Ring" turns that off, lets the hidden part show faintly, and sets the ring's colour for each con, its opacity and its glow)
-- The Edit Social window is easier to build macros in: it previews the button, says whether you have unsaved changes, marks what each line is (a game command, chat, a server # command, or a command the game does not know), gives each line a wait box (its /pause, in seconds) and buttons to move it up or down or empty it, has a cooldown box (the /timer), shows when each line runs on a timeline, and offers examples, Revert, Cancel and Ctrl+Enter to accept. Accept with no name, which empties the social, now says so first
+- Client settings are kept for each character, so you can turn the graphics down on the characters you run in a second or third client
+  - Per character: graphics, frame rate caps, sound, mouse, keys, gamepad and the game options you change while playing
+  - A character starts with the shared settings the first time it enters the world, and keeps its own from then on. Settings changed on the login screen are the shared ones
+  - Shared: the asset folder, add-ons, updates, the window's size, place and mode, anti-aliasing (MSAA), the UI and its scale
+- The target ring is drawn on the ground
+  - It follows slopes and steps, and characters, walls and the target's own legs hide it instead of it showing through them
+  - New look: a soft glowing band with turning dashes and a notch showing which way the target faces. It sweeps in when you change target and pulses while you auto attack
+  - Options > Display "Target Ring" turns the pulse off, lets the hidden part show faintly, and sets the ring's colour for each con, its opacity and its glow
+- The Edit Social window is easier to build macros in
+  - It previews the button and says whether you have unsaved changes
+  - It marks what each line is (a game command, chat, a server # command, or a command the game does not know)
+  - Each line has a wait box (its /pause, in seconds) and buttons to move it up or down or empty it; a cooldown box sets the /timer, and a timeline shows when each line runs
+  - It offers examples, Revert, Cancel and Ctrl+Enter to accept. Accept with no name, which empties the social, says so first
 - Edit Social has a Commands / Lua switch at the top: Lua opens the social in the Lua social editor with its lines as Lua, and Commands there turns a simple Lua social back into command lines
 - Edit Social: Tab completes slash commands as you type them (press it again for the next match; the matches show under the box)
 - Edit Social: Test saves the social and runs it, with Stop while it runs; Put on bar (or dragging the button preview) picks it up to drop on a hot bar
 - Edit Social: Copy and Paste share a plain social as one line of text, as Lua socials already could. Pasting a Lua social opens it in the Lua social editor. Older clients cannot read a plain social's share text
 - The gamepad UI's Edit Social says what each line does, picks a wait after each line and the cooldown, and has Test, Hot bar, Copy / Paste and Edit as Lua
-- Clicking the icon in an item's details window links the item in chat: the link goes into the input of the chat window you last used, or of the one set to Always Chat Here, which then takes the keyboard. In the gamepad UI, X does it. As in the original, an item with a benefit flag (or an augment with one) is not linked
+- Clicking the icon in an item's details window links the item in chat
+  - The link goes into the input of the chat window you last used, or of the one set to Always Chat Here, which then takes the keyboard. In the gamepad UI, X does it
+  - As in the original, an item with a benefit flag (or an augment with one) is not linked
 - Right-click menus in the modern UI are a little larger, and their size can be changed: Options > Interface "Menu Size", or Ctrl+mouse wheel over a menu
 - Summoning a mount while under an illusion no longer fails with "You must have both the Horse Models and your current Luclin Character Model enabled to summon a mount." (the original client refuses many illusions). Options > General "Ride While Illusioned" turns this off
-- A robe on a Luclin model now covers the arms with its sleeves, in the robe's colour; the upper arms and forearms showed bare skin (or the arms' own armour)
-- The map's Auto Z now has separate ranges above and below you: two sliders, under the arrow beside the map's Auto Z button and in the minimap's menu (Alt+right-click), set how far above (+) and below (-) you lines and labels stay whole before they fade
+- A robe on a Luclin model covers the arms with its sleeves, in the robe's colour; the arms showed bare skin (or their own armour)
+- The map's Auto Z has separate ranges above and below you: two sliders, under the arrow beside the map's Auto Z button and in the minimap's menu (Alt+right-click), set how far above (+) and below (-) you lines and labels stay whole before they fade
 - Chat windows have Always Chat Here on their right-click menu: Enter and '/' start a line in that window whichever window you clicked last. The main window has it by default; untick it there to type in the window you clicked last, as before
 - Right-clicking another player opens a menu over them: Send Tell, Invite to Group, Invite to Raid, Trade and Inspect. The original client inspects them instead; Options > Interface "Player Right-Click Menu" turns the menu off
-- You can now /camp while riding a mount, without getting off and sitting first (the original client refused). Getting off during the 30 seconds cancels the camp
-- New Advanced Inventory window (EQ menu > Advanced Inventory, beside Inventory, or the button at the bottom of the inventory window; Modern UI): everything you wear, carry and have in the bank and shared bank in one list or grid, with search, filters (place, kind, marks, usable by you, magic, lore, no trade, temporary, stackable, sellable), sorting and each item's value and weight. Its icons work like a bag's slots: pick up, drop, swap, right-click to use, hold to inspect, drag to a hot bar (bank items while the bank is open)
-- Items can be marked Keep or Sell in the Advanced Inventory (one at a time, or everything shown at once). A kept item cannot be destroyed, dropped, traded, given to an NPC, sold or sent by parcel until you take the mark off; the merchant's "Sell marked" (formerly "Sell junk") sells what is marked Sell. Keep marks are saved per character
+- You can /camp while riding a mount, without getting off and sitting first (the original client refused). Getting off during the 30 seconds cancels the camp
+- New Advanced Inventory window (Modern UI): everything you wear, carry and have in the bank and shared bank in one list or grid
+  - Open it from EQ menu > Advanced Inventory, beside Inventory, or the button at the bottom of the inventory window
+  - Search, filters (place, kind, marks, usable by you, magic, lore, no trade, temporary, stackable, sellable), sorting, and each item's value and weight
+  - Its icons work like a bag's slots: pick up, drop, swap, right-click to use, hold to inspect, drag to a hot bar (bank items while the bank is open)
+- Items can be marked Keep or Sell in the Advanced Inventory (one at a time, or everything shown at once)
+  - A kept item cannot be destroyed, dropped, traded, given to an NPC, sold or sent by parcel until you take the mark off
+  - The merchant's "Sell marked" (formerly "Sell junk") sells what is marked Sell
+  - Keep marks are saved per character
 - The inventory window's search field, Stack / Sort buttons and ... menu moved to the Advanced Inventory; the inventory window has an Advanced Inventory button instead
-- Feign death from a spell or AA (Imitate Death, Death Peace and the like) now lies your character down, stops your cast and auto attack, and shows you lying down to other players, as the Feign Death skill already did
-- Your own name now shows over your character in the third-person views, as the original client shows it, with your title and guild tag below it at the `/shownames` levels that show them for other players (3 and 4 for the guild). Options > Display "Show My Name" turns it off
+- Feign death from a spell or AA (Imitate Death, Death Peace and the like) lies your character down, stops your cast and auto attack, and shows you lying down to other players, as the Feign Death skill already did
+- Your own name shows over your character in the third-person views, as the original client shows it
+  - Your title and guild tag show below it at the `/shownames` levels that show them for other players (3 and 4 for the guild)
+  - Options > Display "Show My Name" turns it off
 - The Options window's Particles section can set your own spells', other players' and NPCs' spell particles to Off, Low, Medium or High
 - Modern UI: every window that can be closed has "Close with Esc" in its right-click menu. Ticked, Escape closes it (the window opened or clicked last first, one per press); it is off for every window until you tick it
-- Modern UI: the AA window lists every ability in one list instead of four tabs. The search and the filters (now with a tab filter: General, Archetype, Class, Special) work across all of them, the list has columns for the tab, the era (the expansion an ability came with) and active or passive, and the window is more compact
+- Modern UI: the AA window lists every ability in one list instead of four tabs
+  - The search and the filters (now with a tab filter: General, Archetype, Class, Special) work across all of them
+  - The list has columns for the tab, the era (the expansion an ability came with) and active or passive, and the window is more compact
 - The middle mouse button and up to five side buttons (shown as MOUS MID and MOUS AUX1..AUX5) can be bound to any command in Options > Keys, with or without Shift, Ctrl or Alt, as in the original client
 - Options > Display no longer has a Video Modes button: the Resolution list above it sets the same thing (the window still opens from the EQ menu)
 - A game archive whose name table lists one file thousands of times no longer makes a zone load parse that file thousands of times
-- A game archive member made of valid compressed data that would grow to gigabytes is refused, as the junk-data kind already was
+- A game archive member of valid compressed data that would grow to gigabytes is refused, as the junk-data kind already was
 - A zone that lists its terrain thousands of times no longer loads it thousands of times
 - A model with thousands of material names no longer stalls the zone load
 - A weather.ini cloud that asks for billions of patches gets at most 256
 - A JPEG in the UI art that claims an enormous size is refused instead of taking gigabytes of memory
-- An EQG model with hundreds of long animations no longer takes gigabytes of memory when it is first shown
-- Numbers past 32 bits in a zone's detail-texture scales and in GlobalLoad.txt's load order now read the same on Windows, Linux and macOS
-- Numbers past 32 bits in sound files (sound ids, emitter delays) now read the same on Windows, Linux and macOS
+- An EQG model with hundreds of long animations no longer takes gigabytes of memory when first shown
+- Numbers past 32 bits in a zone's detail-texture scales and in GlobalLoad.txt's load order read the same on Windows, Linux and macOS
+- Numbers past 32 bits in sound files (sound ids, emitter delays) read the same on Windows, Linux and macOS
 - After five minutes or more in first person, switching to a third-person camera no longer shows your character undressed for a moment
 - A damaged shader file in the client's folder is reported as such instead of being read past its buffer
-- The first cast of a new spell effect no longer hitches the frame while its particle textures are read and decoded; they are loaded in the background and the particles show once they are ready
+- The first cast of a new spell effect no longer hitches the frame: its particle textures load in the background and the particles show once they are ready
 - A zone sound file with a "nan" or "inf" volume, or a damaged float WAV, no longer silences or garbles all sound for the rest of the session
 - A sound archive named like `snd99999999999.pfs` (in the game folder or a server's assets) no longer stops the client at start or login
 - A music file that cannot be read is no longer read again (and logged) every frame while you stand in its area
 - Long sessions use less memory for sound: decoded sounds from zones you left a while ago are freed (the always-loaded ones stay)
-- The per-zone sound rooms (the reverb a zone uses indoors and out) are now read from your own `eqgame.exe` when the client starts, instead of from a copy inside Hailstone. With no `eqgame.exe` in the game folder, or a different build of it, every zone uses the default rooms (and the log says so once)
-- For server owners: Hailstone's server script sends one player at most 768 file pieces a second (24 MB/s; it was 1024), and all of a zone's players together at most 1024 (the new `files_chunks_per_second_zone`), shared in turn between the players downloading at once. A modified client, or several characters, asking for pieces and never acknowledging them can make the zone hold at most about 1 GB of unsent data at the defaults (it was unbounded with alts); lower `files_chunks_per_second_zone` on a small host
-- For server owners: `server/install.py` keeps `eqemu_config.json`'s permissions and owner; it rewrote the file with the default ones, which could make the database password readable by every user of the machine
+- The per-zone sound rooms (the reverb a zone uses indoors and out) are read from your own `eqgame.exe` when the client starts, instead of from a copy inside Hailstone. With no `eqgame.exe` in the game folder, or a different build of it, every zone uses the default rooms (and the log says so once)
+- For server owners: Hailstone's server script limits file downloads per zone
+  - One player gets at most 768 file pieces a second (24 MB/s; it was 1024), and all of a zone's players together at most 1024 (the new `files_chunks_per_second_zone`), shared in turn between the players downloading at once
+  - A modified client, or several characters, asking for pieces and never acknowledging them can make the zone hold at most about 1 GB of unsent data at the defaults (it was unbounded with alts). Lower `files_chunks_per_second_zone` on a small host
+- For server owners: `server/install.py` keeps `eqemu_config.json`'s permissions and owner. It rewrote the file with the default ones, which could make the database password readable by every user of the machine
 - For server owners: on a Windows server, a file in `client_files/` whose name has characters outside ASCII is left out with a line in the zone's log naming it, instead of "could not hash" and a mangled name
-- For server owners: a `client_files` folder that is a link to a folder elsewhere is served on Linux; the server script listed nothing there, so players were sent no files and no `hailstone.cfg`, and no server rules applied
-- Magician pets and other elementals use the newer Luclin elemental models (earth, fire, water and air), as the original client does by default; they were drawn with the old classic elemental. `UseLuclinElementals=FALSE` in eqclient.ini's `[Defaults]` brings the old one back, as in the original
+- For server owners: a `client_files` folder that is a link to a folder elsewhere is served on Linux. The server script listed nothing there, so players were sent no files and no `hailstone.cfg`, and no server rules applied
+- Magician pets and other elementals use the newer Luclin elemental models (earth, fire, water and air), as the original client does by default, instead of the old classic elemental. `UseLuclinElementals=FALSE` in eqclient.ini's `[Defaults]` brings the old one back, as in the original
 - Windows: hailstone.exe has the Hailstone icon in Explorer, on the taskbar and in Alt+Tab, sharp at every size and display scale
 - Windows: the release client no longer opens a console window beside the game (the log is still in `logs/hailstone.log`)
 - A world or character name sent by a server can no longer add lines of its own to the saved server's `server.ini` (for example a `[Server] host=` that would send the next login elsewhere): line breaks and `=` in such names are saved as `_`
 - A broken or hostile server can no longer freeze or crash the client with a mercenary list that claims billions of entries, a barter search or buyer list that claims thousands of empty rows, or an inventory that claims thousands of items in a few bytes
 - After zoning, the first `/find` is no longer swallowed when the navigator had asked the old zone for a path that never came
-- A server teleport far outside the zone, or a script's `${LineOfSight[...]}` with a huge or not-a-number coordinate, no longer freezes the game for seconds at each line-of-sight test (a spell cast, /say to a target, /follow); `LineOfSight` is NULL for such a point
+- A server teleport far outside the zone, or a script's `${LineOfSight[...]}` with a huge or not-a-number coordinate, no longer freezes the game for seconds at each line-of-sight test (a spell cast, /say to a target, /follow). `LineOfSight` is NULL for such a point
 - A modded or broken spell file whose shadow step (SPA 379) has a distance of 33 million or more no longer freezes the game when the spell lands (the original client hangs there)
 - Numbers past 32 bits typed into slash commands and hot buttons (`/memspellset`, `/pause`, `/doability`, `/xtarget`) or read from the client's own text files mean the same on Linux and Windows
 - Slightly less work every frame and movement step in zone: the developer spawn list is built only while its window is open, a boat's collision is placed again only when it moved, and rain and snow no longer shift their whole particle pool for every drop
-- A Lua script's `/keypress` of a hot button, target or ability key now works while you are typing in the chat (only movement keys did)
+- A Lua script's `/keypress` of a hot button, target or ability key works while you are typing in the chat (only movement keys did)
 - A Lua script's window whose function never returns is stopped after 5 seconds, as the rest of a script is, instead of freezing the game
-- Lua socials: Dry run in the editor no longer really does what the code says beyond its commands (an item click, a bind, a saved file): those now stop the dry run with "does nothing in a dry run"
+- Lua socials: Dry run in the editor no longer really does what the code says beyond its commands (an item click, a bind, a saved file); those stop the dry run with "does nothing in a dry run"
 - For script authors: a table's `__gc` finalizer is refused (`setmetatable` gives an error)
 - Lua scripts: a launcher window whose buttons start or stop other scripts (`mq.cmd('/lua run ...')`, `/lua stop ...`) no longer crashes the game
-- Lua scripts: a bind that runs its own command again stops the script with an error after 16 levels, instead of crashing the game; a script that fills its 256 MB, an error in a `hailstone.hooks` table's `__index`, or a Lua social that gives `button` a metatable stops the script (or reports the error) instead of closing the game
-- Lua scripts: a launcher that stops and runs a script again in one go (`/lua stop x`, then `/lua run x`) no longer leaves the restarted script without the `hailstone` UI functions, options and menu entries it registered; a script started by another first runs on the next frame, and two scripts that restart each other no longer freeze the game
+- Lua scripts no longer close the game on runaway or broken code
+  - A bind that runs its own command again stops the script with an error after 16 levels, instead of crashing the game
+  - A script that fills its 256 MB, an error in a `hailstone.hooks` table's `__index`, or a Lua social that gives `button` a metatable stops the script (or reports the error)
+- Lua scripts: restarting scripts from a launcher works
+  - A launcher that stops and runs a script again in one go (`/lua stop x`, then `/lua run x`) no longer leaves the restarted script without the `hailstone` UI functions, options and menu entries it registered
+  - A script started by another first runs on the next frame, and two scripts that restart each other no longer freeze the game
 - For script authors: a command of more than 1000 words for a bind is refused with a line in the chat instead of ending the script
 - For script authors: `hailstone.hooks{after_combat_ability = function(id, used) ... end}` is called with both values; it used to end the script with "attempt to call a number value"
-- For script authors: a `coroutine.wrap` generator or a coroutine of the script's own is no longer interrupted by the frame's 3 ms pause (it used to return early with no values); long work inside one is now limited only by the 5 s stop
+- For script authors: a `coroutine.wrap` generator or a coroutine of the script's own is no longer interrupted by the frame's 3 ms pause (it returned early with no values); long work inside one is limited only by the 5 s stop
 - For script and UI pack authors: `ui.Begin` and `ui.BeginChild` ignore ImGui's internal window flags (Popup, Tooltip, Modal, ChildMenu, ChildWindow), and a stray `ui.EndMenu`, `ui.EndPopup`, `ui.EndCombo` or `ui.EndTooltip` outside its menu, popup, combo or tooltip does nothing, where they could crash the game
 - For script authors: an id, door number or coordinate that no spawn or door can have (`/nav door id 300`, `${Spawn[id -5]}`, NaN, 1e300) finds nothing instead of a wrapped number (door 300 was door 44), and `${Heading[nan]}` is NULL
 - The Lua social editor stays smooth with a long script: its colours are placed in one pass over the text instead of once per word
@@ -476,11 +1015,14 @@
 - For script authors: `getmetatable` on an `mq.TLO` value gives `"mq.TLO"`, not the shared table, so its finalizer cannot be replaced
 - `mq.event` patterns with several `#n#` no longer stall the game on long chat lines
 - For add-on authors: `eq.LuaSocialDryRun` needs the `commands` and `actions` capabilities in a plugin's window, as `eq.SetLuaSocial` does
-- After /camp or a return to character select, the next character sometimes lost the zone's line of sight for spells (targets behind walls could be cast on), a #goto or summon inside the zone reloaded the zone instead of moving you, and /doability, /bodytint, /facepick and /stopsocial did nothing, until the next login
+- After /camp or a return to character select, the next character no longer loses parts of the game until the next login
+  - Spells lost the zone's line of sight (targets behind walls could be cast on)
+  - A #goto or summon inside the zone reloaded the zone instead of moving you
+  - /doability, /bodytint, /facepick and /stopsocial did nothing
 - Windows: the conversation journal loads and saves again when the Hailstone data folder's path has characters outside the system's code page (a user name in another script)
-- With /log on, a busy fight no longer costs the game a file open and close for every chat line: the log stays open while logging (each line is still written at once, for log parsers) and /log off closes it
-- Zoning in no longer freezes the game while the chat server's name is looked up: a slow or failing DNS used to stop the frame for seconds
-- Connecting to a login, world or zone server given by name, and a plugin's `tcp_open` of a name, no longer freeze the game while the name is looked up; a name that does not answer within the connect timeout ends the connect with "cannot resolve"
+- With /log on, a busy fight no longer costs a file open and close for every chat line. The log stays open while logging (each line is still written at once, for log parsers) and /log off closes it
+- Zoning in no longer freezes the game while the chat server's name is looked up; a slow or failing DNS used to stop the frame for seconds
+- Connecting to a login, world or zone server given by name, and a plugin's `tcp_open` of a name, no longer freeze the game during the lookup. A name that does not answer within the connect timeout ends the connect with "cannot resolve"
 - Quitting soon after zoning in no longer leaves the client running, with no window, for up to tens of seconds when the chat server's name lookup is stuck
 - A server-file download no longer fails with "the server's files keep changing" when the server owner changes a file in `client_files/` during it: the files are listed again once and the download finishes
 - A hostile server can no longer make the map editor overwrite or read `.txt` files outside Hailstone's maps folders (the game folder's included) by sending a zone name that is a path; such a name is not used
@@ -490,250 +1032,408 @@
 - A broken or hostile server can no longer freeze the client with an expedition member list of millions of names
 - A broken or hostile server can no longer freeze the client with real estate records whose parents form a loop or whose child lists name themselves or repeat
 - Buying a stack whose total cost is more than 2^31 copper (about 2.1 million platinum) at a merchant or trader is refused with the can't-afford message instead of being sent
-- A `/find` and the navigator's own path request made at the same moment mostly no longer swap their replies (the navigator walked the `/find`'s path and the navigator's was drawn); a fast empty reply can still overtake a slow full path on stock EQEmu
+- A `/find` and the navigator's own path request made at the same moment mostly no longer swap their replies (the navigator walked the `/find`'s path and the navigator's was drawn). A fast empty reply can still overtake a slow full path on stock EQEmu
 - A first zone-in on a server whose files are already there but not recorded (copied in by hand, or `server_files.txt` deleted) no longer freezes the loading screen while every file is checked: it shows **Checking the server's files** and goes on drawing
 - A server-file download that had to ask for a piece again no longer freezes the loading screen while that file is checked
 - Less work every frame in zone: the character built for the stats, the hot buttons and the spell gems no longer copies every item in your bags each time, and doors, ground items and placed furniture are no longer re-indexed every frame
-- Broken or hostile game files (in your game folder or a server's assets folder) can no longer make the client claim gigabytes of memory, hang on zone load or crash: an archive member that claims a huge size, an animation whose key times run for days, an endless chain of hero's forge layers, an absurdly scaled or misplaced flame, and a light colour out of range
+- Broken or hostile game files (in your game folder or a server's assets folder) can no longer make the client claim gigabytes of memory, hang on zone load or crash. Covered: an archive member that claims a huge size, an animation whose key times run for days, an endless chain of hero's forge layers, an absurdly scaled or misplaced flame, and a light colour out of range
 - Classic zones whose object archive repeats the zone's textures load a little faster: each shared texture is compared once, not once per object
 - Uncommon GPUs and drivers: doors and ground objects are drawn where they are on a driver whose memory needs flushing, and a GPU without a plain 32-bit depth format uses its depth-and-stencil one correctly
 - A long stay in a busy zone (the Bazaar, the Plane of Knowledge) no longer keeps every armour look ever seen in memory: a look nobody has worn for five minutes is freed, and dressed again if it comes back
 - Music no longer makes the game hitch: the zone's and the global music (combat, death) are read ahead when you enter a zone, and the game no longer waits for the music to decode
-- Bug reports no longer carry what was said in chat: the words of every chat line (tells, guild, group and channel chat) are taken out of the logs and the crash report in the zip, and the report window says what the file holds and what was taken out
+- Bug reports no longer carry what was said in chat
+  - The words of every chat line (tells, guild, group and channel chat) are taken out of the logs and the crash report in the zip
+  - The report window says what the file holds and what was taken out
 - Saving a bug report no longer freezes the game for a moment with large logs: the report is written in the background
 - An update cut off at the wrong moment no longer loses the file it was about to replace, and an update no longer writes over an add-on installed into a plugin's folder after the update downloaded
-- An add-on install or removal cut off at the wrong moment now puts the add-on list back with the files, so the add-on shows its real version and can be updated again
+- An add-on install or removal cut off at the wrong moment puts the add-on list back with the files, so the add-on shows its real version and can be updated again
 - For add-on authors and release builders: `tools/make_addon.py` and `tools/make_update.py` take in a linked folder's files instead of leaving them out, and stop at a link that loops
-- For server owners: `hailstone.lua` reads its `hailstone:<name>` data buckets at most every 10 seconds instead of at every packet, looks at a client file's time once until the list is next made instead of at every first-piece request, and limits each character's file-list, guild and settings requests
-- In-game browser: a mouse button or key let go while a script's large message was still on its way to the browser is no longer lost (the page used to keep the button or key held)
-- A server's web link no longer opens a page on your own computer or home network (a router's admin page, for example), keeps its cookies apart from the pages you open yourself, and a link never takes over a tab you have browsed on from
+- For server owners: `hailstone.lua` costs the zone less
+  - It reads its `hailstone:<name>` data buckets at most every 10 seconds instead of at every packet
+  - It looks at a client file's time once until the list is next made, instead of at every first-piece request
+  - It limits each character's file-list, guild and settings requests
+- In-game browser: a mouse button or key let go while a script's large message was still on its way to the browser is no longer lost (the page kept the button or key held)
+- A server's web link is kept apart from your own browsing
+  - It no longer opens a page on your own computer or home network (a router's admin page, for example)
+  - It keeps its cookies apart from the pages you open yourself, and never takes over a tab you have browsed on from
 - In-game browser: a page shown at the largest size (4096x4096, or a browser window stretched past it on an 8K display) no longer makes the client restart the browser until it gives up on it for the session
-- In-game browser: a script's or plugin's page is closed (it is told why) when the server's `[web] allow` changes or the script loses the `web` permission, for example when the server's `hailstone.cfg` arrives at the first zone-in; it used to keep the sites it was opened with for the rest of the session
-- For plugin authors: `web_message(host, tab, NULL, 0)` gives the next page message's length and leaves it queued, so a plugin can make room for a long one; given a buffer the message is still taken, cut or not
-- A server (or a quest looping on `SendWebLink`) can no longer open hundreds of browser pages or system-browser tabs: the same link again within 10 seconds is not opened again, at most 5 open a minute, and once 4 such pages are open the newest is reused
-- A compiled plugin that keeps running with fewer permissions (the server's `hailstone.cfg` arriving at the zone-in, a lowered add-on ceiling) no longer goes on seeing packets, chat lines, spawn events or typed command lines it lost the permission for
-- The developer Plugins & Lua window no longer reads and hashes every plugin file on every frame while it is open (once a second now)
+- In-game browser: a script's or plugin's page is closed (it is told why) when the server's `[web] allow` changes or the script loses the `web` permission, for example when the server's `hailstone.cfg` arrives at the first zone-in. It used to keep the sites it was opened with for the rest of the session
+- For plugin authors: `web_message(host, tab, NULL, 0)` gives the next page message's length and leaves it queued, so a plugin can make room for a long one. Given a buffer, the message is still taken, cut or not
+- A server (or a quest looping on `SendWebLink`) can no longer open hundreds of browser pages or system-browser tabs
+  - The same link again within 10 seconds is not opened again, and at most 5 open a minute
+  - Once 4 such pages are open the newest is reused
+- A compiled plugin that keeps running with fewer permissions (the server's `hailstone.cfg` arriving at the zone-in, a lowered add-on ceiling) no longer sees packets, chat lines, spawn events or typed command lines it lost the permission for
+- The developer Plugins & Lua window reads and hashes the plugin files once a second while open, not every frame
 - Add-ons: installing an add-on again while it is still downloading or waiting to be installed is refused with a message, instead of unpacking into the folder the waiting install is moving files out of
 - Add-ons: an add-on installed from one repository is no longer replaced by another of the same name from another repository or signing key when both were installed at about the same time
-- Add-ons: an update in which a folder became a file of the same name installs, instead of failing and being rolled back at every login screen; an update that would put a file where you keep your own files in a folder stops and leaves them alone
+- Add-ons: updates that change folders
+  - An update in which a folder became a file of the same name installs, instead of failing and being rolled back at every login screen
+  - An update that would put a file where you keep your own files in a folder stops and leaves them alone
 - Updates: when the record of the installed update cannot be saved first (disk full, a file in the way), the update stops before moving anything, instead of deleting that record if it later had to be rolled back
 - Windows: quitting while an update check or an add-on download waits on a network that has stopped answering no longer keeps hailstone.exe running for up to a minute after its window closes
-- Bug reports: a Linux crash report whose last log line was chat keeps its stack trace in the report (taking the chat out used to take the stack with it)
-- Bug reports: a report still being written when the window is opened again keeps its own screenshot (it could get none, a broken one or the next one), and a report sent while an earlier one is written says where you were and what you targeted when you sent it, not when its turn came
-- NPC names are drawn in their consider colour (red, yellow, blue, ...), as your target's name already was. Turn it off with "Con-Coloured NPC Names" in Options > Display (`display.con_name_colour=0` in `hailstone.ini`).
-- Your HP in the player window, inventory, HP bar and group/target windows now includes the HP from your gear, as `#mystats` and the original client show it. EQEmu leaves item HP out of your own HP updates, so a character with a lot of item HP showed far too little
-- Scripts and plugins now see the same HP as the windows: `Me.CurrentHPs`, `Me.MaxHPs` and `Me.PctHPs`, a Lua script's `player()` and a compiled plugin's player include the HP from your gear, so heal and rest scripts such as Auto Combat no longer think a geared character is far lower than it is. The ability book's HP percent and the developer group and stats windows do too, and the stats window no longer warns that its max HP differs from the server's on every character wearing HP gear. Targeting yourself shows the same percent
+- Bug reports: a Linux crash report whose last log line was chat keeps its stack trace (taking the chat out used to take the stack with it)
+- Bug reports: reports written one after another keep their own details
+  - A report still being written when the window opens again keeps its own screenshot (it could get none, a broken one or the next one)
+  - A report sent while an earlier one is written says where you were and what you targeted when you sent it, not when its turn came
+- NPC names are drawn in their consider colour (red, yellow, blue, ...), as your target's name already was. Turn it off with "Con-Coloured NPC Names" in Options > Display (`display.con_name_colour=0` in `hailstone.ini`)
+- Your HP in the player window, inventory, HP bar and group/target windows includes the HP from your gear, as `#mystats` and the original client show it. EQEmu leaves item HP out of your own HP updates, so a character with a lot of item HP showed far too little
+- Scripts and plugins see the same HP as the windows
+  - `Me.CurrentHPs`, `Me.MaxHPs` and `Me.PctHPs`, a Lua script's `player()` and a compiled plugin's player include the HP from your gear, so heal and rest scripts such as Auto Combat no longer think a geared character is far lower than it is
+  - The ability book's HP percent and the developer group and stats windows do too, and the stats window no longer warns that its max HP differs from the server's on every character wearing HP gear
+  - Targeting yourself shows the same percent
 - A character whose HP fell below the HP its gear gives is no longer treated as knocked out on stock EQEmu servers: mouse look and right-click menus work, Kick, Bash and the other skills no longer silently fail, and the client still saves your character
 - Options has Face Target On Attack, under Combat (on by default). Turn it off and the attack key and attack buttons start auto attack without turning you to face your target. `/attack` never turned you
-- Looking closely at a character no longer shades its face in dark polygon-shaped patches (modern lighting): the ambient occlusion gave very near samples too much weight at close range, so low-poly faces darkened in big triangles; near samples now fade with distance and count only by their angle above the surface. The shading in corners and under characters stays about as deep as before
-- In the camera behind you, your character now moves and turns with the camera. It was drawn a little behind it, catching up a moment later, which showed most when strafing
-- The camera behind you no longer shakes in small rooms and halls: against a wall or ceiling it now stops smoothly where the scenery is, as the original's cameras do, instead of jumping between a few set distances as you walked. Doors and other objects stop it too
+- Looking closely at a character no longer shades its face in dark polygon-shaped patches (modern lighting)
+  - The ambient occlusion gave very near samples too much weight, so low-poly faces darkened in big triangles. Near samples now fade with distance
+  - The shading in corners and under characters stays about as deep as before
+- In the camera behind you, your character moves and turns with the camera. It was drawn a little behind, catching up a moment later, which showed most when strafing
+- The camera behind you no longer shakes in small rooms and halls. Against a wall or ceiling it stops smoothly where the scenery is, as the original's cameras do, instead of jumping between a few set distances. Doors and other objects stop it too
 
 ## 0.5.0-beta (2026-11-05)
 
-- The login screen's top left corner shows your Hailstone version and whether it is up to date (or the new version's download and Restart now), with What's new, which shows this version's release notes, and a GitHub button that opens Hailstone's page
-- Add-ons has a store: Find add-ons lists every add-on in Hailstone's add-on list with what it does and which server it is for, and Install opens its install card (what it asks to do; nothing is installed until you say yes). Pasting a GitHub link still works
-- Modern UI: the Add-ons card opens beside the characters card instead of in its place, so Play stays in reach while it is open
-- For add-on authors: to be listed in the store, ask for a line in the add-on index (projecthailstone/hailstone-addon-index); `addons.suggest = 0` in hailstone.ini now turns off only the suggestions, not the index
-- A script that checks an AA by name (`Me.AltAbilityReady`, `hailstone.use_ability`) no longer makes the game hitch for a character with many AAs: each check worked out the reuse of every owned AA before the one asked for. Auto Combat's rotation did this every tick, so the hitches grew as the character bought AAs
+- The login screen's top left corner shows your Hailstone version and whether it is up to date (or the new version's download and Restart now), with What's new (this version's release notes) and a GitHub button that opens Hailstone's page
+- Add-ons has a store
+  - Find add-ons lists every add-on in Hailstone's add-on list with what it does and which server it is for
+  - Install opens its install card (what it asks to do; nothing is installed until you say yes)
+  - Pasting a GitHub link still works
+- Modern UI: the Add-ons card opens beside the characters card instead of in its place, so Play stays in reach
+- For add-on authors: to be listed in the store, ask for a line in the add-on index (projecthailstone/hailstone-addon-index). `addons.suggest = 0` in hailstone.ini turns off only the suggestions, not the index
+- A script that checks an AA by name (`Me.AltAbilityReady`, `hailstone.use_ability`) no longer makes the game hitch for a character with many AAs. Each check worked out the reuse of every owned AA first; Auto Combat's rotation did this every tick, so the hitches grew as the character bought AAs
 - `/raidwindow` (and short forms such as `/raidwin`) opens and closes the raid window, as the raid key does; it opened an old built-in window instead
-- Modern UI: the raid leader can move players between groups in the raid window again: drag a player onto another group (or onto Not in a group), or select one and use Move here. The game only allows moves while the raid is locked, so a move in an unlocked raid locks it first, and a strip above the groups says so, with Lock and Unlock. A full group refuses the drop. The groups show their empty slots, head count and average level; leaders, the raid's main assists and markers have tags, and a player's note shows when you point at them
+- Modern UI: the raid leader can move players between groups in the raid window again
+  - Drag a player onto another group (or onto Not in a group), or select one and use Move here. A full group refuses the drop
+  - The game only allows moves while the raid is locked, so a move in an unlocked raid locks it first; a strip above the groups says so, with Lock and Unlock
+  - The groups show their empty slots, head count and average level. Leaders, the raid's main assists and markers have tags, and a player's note shows when you point at them
 - Gamepad UI: in an unlocked raid, the leader's Move to a group locks the raid first instead of being greyed out
 - A UI script or plugin can no longer add lines to the UI settings file: `ui.SetSetting` refuses (and returns false for) a key with `=` or a line break, or a value with a line break. A plugin could use one to set the pack's own keys, which click windows' buttons at the next start
 - A UI script that calls `ui.TableNextRow` or the table header row outside a table (for example when `ui.BeginTable` returned false) no longer crashes the client; a table column or freeze set up after the first row is ignored
-- `ui.Image`, `ui.ImageButton` and `ui.DrawImage` draw only textures the client handed out and has not freed: any other value (an `mq.TLO` value, for example) is drawn as nothing instead of reaching the graphics driver
-- For script and plugin authors: the in-game browser refuses an `eval`, `text` or `post` too long to send (and an address over 2 MB) instead of sending it, which made the browser helper quit and, repeated, turned the in-game browser off for the session; a `post` is at most 1 MB, as the page's own messages are. While 32 MB wait for the browser helper, further calls return false instead of queueing (several large evals in one frame no longer end the helper and close the player's tabs), and a helper that stops reading its input is restarted after 10 seconds. A script or plugin holds at most 16 tabs at once, and a closed tab's image is freed at once
+- `ui.Image`, `ui.ImageButton` and `ui.DrawImage` draw only textures the client handed out and has not freed. Any other value (an `mq.TLO` value, for example) is drawn as nothing instead of reaching the graphics driver
+- For script and plugin authors: limits on in-game browser calls
+  - The browser refuses an `eval`, `text` or `post` too long to send (and an address over 2 MB) instead of sending it, which made the browser helper quit and, repeated, turned the in-game browser off for the session. A `post` is at most 1 MB, as the page's own messages are
+  - While 32 MB wait for the browser helper, further calls return false instead of queueing (several large evals in one frame no longer end the helper and close the player's tabs)
+  - A helper that stops reading its input is restarted after 10 seconds
+  - A script or plugin holds at most 16 tabs at once, and a closed tab's image is freed at once
 - A broken font file in the system or user font folder no longer makes the font option allocate up to 4 GB
 
 ## 0.4.0-alpha (2026-11-05)
 
-- The look up / look down keys (Page Up / Page Down and the keypad's 9 / 3 by default) and Center View now work; looking moves at the same speed at any frame rate
-- The original's other cameras are here: overhead, chase, two user cameras and tether. Toggle Camera (F9 by default) cycles first person, overhead, chase, user 1, user 2 and tether as the original did, and each has its own key. In the user and tether cameras mouse look turns the camera around you (up and down moves the user cameras nearer or farther); the camera keys (zoom, camera left / right / forward / back / pitch) move them; Center View points them back at you. The mouse wheel still zooms between first person and the camera behind you, and the gamepad's camera button still switches between those two
+- The look up / look down keys (Page Up / Page Down and the keypad's 9 / 3 by default) and Center View work; looking moves at the same speed at any frame rate
+- The original's other cameras are here: overhead, chase, two user cameras and tether
+  - Toggle Camera (F9 by default) cycles first person, overhead, chase, user 1, user 2 and tether as the original did, and each has its own key
+  - In the user and tether cameras mouse look turns the camera around you (up and down moves the user cameras nearer or farther). The camera keys (zoom, camera left / right / forward / back / pitch) move them; Center View points them back at you
+  - The mouse wheel still zooms between first person and the camera behind you, and the gamepad's camera button still switches between those two
 - Engage / Disengage Mouselook turns mouse look on and off
-- The hot bar keys and page keys for hot bars 2 to 10 now work (only bar 1's did)
-- More keys from the Options window's key list now work, as in the original: Tell (T: "/tell " in the chat input), Command mode say / emote (' and Shift+;), Target last person to send me a tell (Ctrl+T: "/rtarget <name>"), History up / down (Shift+Up / Shift+Down: the lines you sent before), Chat page up / down (Shift+Page Up / Down), and in the chat input Tab / Shift+Tab on a `/tell` or `/rtarget` line steps through the players who told you; Who (Ctrl+W), Invite / follow (Ctrl+I), Disband (Ctrl+D), Clip in / out (Shift+- / Shift+=: the view distance), Toggle last two targets, Toggle Context Menus, Stop Action (stops casting, the song and the social), Bank bags toggle and Zone path window toggle
+- The hot bar keys and page keys for hot bars 2 to 10 work (only bar 1's did)
+- More keys from the Options window's key list work, as in the original
+  - Chat: Tell (T: "/tell " in the chat input), Command mode say / emote (' and Shift+;), Target last person to send me a tell (Ctrl+T: "/rtarget <name>"), History up / down (Shift+Up / Shift+Down: the lines you sent before), Chat page up / down (Shift+Page Up / Down)
+  - In the chat input, Tab / Shift+Tab on a `/tell` or `/rtarget` line steps through the players who told you
+  - Others: Who (Ctrl+W), Invite / follow (Ctrl+I), Disband (Ctrl+D), Clip in / out (Shift+- / Shift+=: the view distance), Toggle last two targets, Toggle Context Menus, Stop Action (stops casting, the song and the social), Bank bags toggle and Zone path window toggle
 - A chat line starting with `:` or `'` is an emote or a say whatever the window's default channel, as in the original (it went to the channel before)
 - The Customer Service window (P) and Welcome screen keys are no longer listed: they open Daybreak's web pages, which an EQEmu server has no part of
-- For script authors: `hailstone.alt_abilities()` lists the AA window's abilities (ranks, the next rank's cost and level, whether it can be bought now, its prerequisites), `hailstone.train_aa(group)` buys the next rank as `/alternateadv buy` does, and `hailstone.player()` has `aa_points` and `aa_spent`. The Modern UI's AA window is a library (`lib/aa.lua`) that a script's window can extend with a part on each row, in the details and under the header, as the extended target window can
-- `/nav` and `/stick` walk through a door that is open or swinging instead of trying to get its leaf out of the way, and only click shut doors: they no longer get stuck against open doors (the Plane of Hate). A difference from the original's collision, for automatic movement only; `/nav option passdoors off` turns it off
-- The character select has a Return Home button, as the original did: it sends the selected character to its home city as it enters the world (after a yes / no question). It is only enabled for a character the server allows it for (EQEmu's `World:EnableReturnHomeButton` and `World:MinOfflineTimeToReturnHome`)
-- Auto attack is easier to notice: the modern UI's player frame pulses with a thick red ring, a red wash and a red level badge, and the gamepad UI's player panel pulses red, while it is on
-- Your target's name over its head now sits on a dark plate edged in its consider colour, with a marker bobbing above it, instead of between `> <`
+- For script authors: AA functions
+  - `hailstone.alt_abilities()` lists the AA window's abilities (ranks, the next rank's cost and level, whether it can be bought now, its prerequisites)
+  - `hailstone.train_aa(group)` buys the next rank as `/alternateadv buy` does, and `hailstone.player()` has `aa_points` and `aa_spent`
+  - The Modern UI's AA window is a library (`lib/aa.lua`) that a script's window can extend with a part on each row, in the details and under the header, as the extended target window can
+- `/nav` and `/stick` walk through a door that is open or swinging instead of trying to get its leaf out of the way, and only click shut doors, so they no longer get stuck against open doors (the Plane of Hate). A difference from the original's collision, for automatic movement only; `/nav option passdoors off` turns it off
+- The character select has a Return Home button, as the original did
+  - It sends the selected character to its home city as it enters the world (after a yes / no question)
+  - It is enabled only for a character the server allows it for (EQEmu's `World:EnableReturnHomeButton` and `World:MinOfflineTimeToReturnHome`)
+- Auto attack is easier to notice while it is on: the modern UI's player frame pulses with a thick red ring, a red wash and a red level badge, and the gamepad UI's player panel pulses red
+- Your target's name over its head sits on a dark plate edged in its consider colour, with a marker bobbing above it, instead of between `> <`
 - For script authors: `hailstone.item` also gives an item's click effect (cast time, recast, seconds until it is ready, level, charges), its required level and its bag size
-- The game now plays the same at any frame rate, as the original did at 60 frames a second: falls (and fall damage), jumps, turning, /follow and /nav, other players' and NPCs' movement between updates, missiles, weather and fog fades, the light level, rain and snow density, scribing, memorizing, `/pause` and buff ticks no longer change with your fps. At high frame rates falls used to do no damage, jumps fell short, fades were instant and light rain vanished; below 60 the reverse. The camera stays smooth on fast monitors. `game.fixed_step = 0` in hailstone.ini restores the old once-a-frame behaviour
-- Walking slowly (sneaking, snared, heavily encumbered) at a high frame rate no longer stops your position reaching the server: each frame moved too little to count, so other players and the server saw you stand still until you turned or stopped, then jump
+- The game plays the same at any frame rate, as the original did at 60 frames a second
+  - Falls (and fall damage), jumps, turning, /follow and /nav, other players' and NPCs' movement between updates, missiles, weather and fog fades, the light level, rain and snow density, scribing, memorizing, `/pause` and buff ticks no longer change with your fps
+  - At high frame rates falls did no damage, jumps fell short, fades were instant and light rain vanished; below 60 the reverse
+  - The camera stays smooth on fast monitors
+  - `game.fixed_step = 0` in hailstone.ini restores the old once-a-frame behaviour
+- Walking slowly (sneaking, snared, heavily encumbered) at a high frame rate no longer stops your position reaching the server. Each frame moved too little to count, so others saw you stand still until you turned or stopped, then jump
 - A quick right click at a low frame rate (down and up within one frame) is no longer lost: looting, talking to an NPC or opening a merchant by right click work at any frame rate
-- The window layout (UI.ini) is written at most every 2 seconds, as intended, instead of every 120 frames: an uncapped frame rate rewrote it several times a second while you dragged a window
+- The window layout (UI.ini) is written at most every 2 seconds, as intended, instead of every 120 frames; an uncapped frame rate rewrote it several times a second while you dragged a window
 - `/nav` and `/follow`'s help no longer jump and strafe after a hitch (a zone or a new model loading) as if stuck
-- Logging in to a server that has a Hailstone add-on of its own (Project Triune's, for one) now suggests it: the server select says so, and the login screen offers Look at it (the add-on's install card: nothing is installed until you say yes), Not now and Don't ask again. The servers are listed in a signed add-on index on GitHub; `addons.suggest = 0` in hailstone.ini turns this off
-- For server owners: `[addons] suggest = owner/repo` in hailstone.cfg suggests your add-on to players who do not have it (from their next login screen, since the file comes at the zone-in); for a first visit, ask for a line in the add-on index (projecthailstone/hailstone-addon-index)
-- `/nav` no longer gives up against an open door it tried to shut a few seconds after opening it (The Plane of Hate's side doors): the server had already shut it on its side, so the click opened it there; the walk now sees that answer and clicks once more
+- Logging in to a server that has a Hailstone add-on of its own (Project Triune's, for one) suggests it
+  - The server select says so, and the login screen offers Look at it (the add-on's install card: nothing is installed until you say yes), Not now and Don't ask again
+  - The servers are listed in a signed add-on index on GitHub; `addons.suggest = 0` in hailstone.ini turns this off
+- For server owners: `[addons] suggest = owner/repo` in hailstone.cfg suggests your add-on to players who do not have it (from their next login screen, since the file comes at the zone-in). For a first visit, ask for a line in the add-on index (projecthailstone/hailstone-addon-index)
+- `/nav` no longer gives up against an open door it tried to shut a few seconds after opening it (The Plane of Hate's side doors). The server had already shut it, so the click opened it there; the walk now sees that answer and clicks once more
 - Fixed armour dye showing through an illusion of a race that wears no armour pieces: a skeleton illusion in dyed armour had red or gold bones. As in the original, those illusions show no armour colours
-- The frame rate no longer drops to around 10 fps with compiled plugins loaded (NMS, Project Triune): the interface asked for a plugin's permissions many times a frame and read and hashed every plugin file each time; it now asks the loaded plugin
-- Modern UI: item marks (junk, locked slots, bag filters) are kept per server and character, so Sell junk no longer sells what a same-named character marked on another server; marks made before are kept until you change them
+- The frame rate no longer drops to around 10 fps with compiled plugins loaded (NMS, Project Triune): the interface asked for a plugin's permissions many times a frame, rereading and hashing every plugin file each time
+- Modern UI: item marks (junk, locked slots, bag filters) are kept per server and character, so Sell junk no longer sells what a same-named character marked on another server. Marks made before are kept until you change them
 - For plugin authors: `web_state` fills a shorter `NmscWebState` the way the other structs are filled, so a plugin built with an older SDK keeps working when the struct grows
-- A compiled plugin whose code fails with a C++ exception (at its start, in a command, a TLO, a window or a server hook) no longer takes the client down where the client can catch it: the call goes unanswered and the chat window says so; a plugin that fails at its start is unloaded with everything it had registered
+- A compiled plugin that fails with a C++ exception (at its start, in a command, a TLO, a window or a server hook) no longer takes the client down where the client can catch it
+  - The call goes unanswered and the chat window says so
+  - A plugin that fails at its start is unloaded with everything it had registered
 - For plugin authors: the host functions are for the client's thread only, from inside a callback (now in the SDK header and docs). A call from a thread the plugin started does nothing and returns 0 / NULL, with a line in the log, instead of racing the client
-- A Lua script that may not do everything (an add-on, or your scripts on a server that limits them) keeps its `mq.pickle` settings in a folder of its own, `scripts/config/<script>/`, and can no longer overwrite or read the settings of the server's scripts. `mq.configDir` points there, so scripts that use it need no change
-- `/lua run` and `require` no longer take an absolute path or a link leading out of the script folders, and the settings folder `scripts/config/` stays data however its name is written (`Config`, `config.`): a script could otherwise start a settings file it wrote as a script
+- A Lua script that may not do everything (an add-on, or your scripts on a server that limits them) keeps its `mq.pickle` settings in a folder of its own, `scripts/config/<script>/`, and can no longer overwrite or read the server's scripts' settings. `mq.configDir` points there, so scripts that use it need no change
+- `/lua run` and `require` no longer take an absolute path or a link leading out of the script folders, and the settings folder `scripts/config/` stays data however its name is written (`Config`, `config.`). A script could otherwise start a settings file it wrote as a script
 - A plugin window or script passing a table that holds itself (or a huge one) to a plugin no longer freezes the client while it is copied: such a value is refused as a whole
-- A server's script can no longer put the question about its compiled plugins up again after you said Don't allow (or closed it) by running `/plugin <name> load`: only `/plugin <name> load` typed by you asks again
-- A Lua script can read or set the clipboard only when it may do everything (the server's own scripts, and yours when the server allows them every permission); an add-on with a ceiling can no longer read what you copied or plant text for you to paste
+- A server's script can no longer put the question about its compiled plugins up again after you said Don't allow (or closed it) by running `/plugin <name> load`. Only `/plugin <name> load` typed by you asks again
+- A Lua script can read or set the clipboard only when it may do everything (the server's own scripts, and yours when the server allows them every permission). An add-on with a ceiling can no longer read what you copied or plant text for you to paste
 - Scripts and plugins need the 'commands' permission to add a command (`mq.bind`, `AddCommand`), and can no longer take over the client's own commands: the game's (with their abbreviations, such as `/g` and `/r`), `/lua`, `/plugin` and MQ's. A script could otherwise read what you type to `/tell` or `/say`
-- A Lua script's `require` no longer runs another add-on's module with the script's permissions: a module's own file must be allowed at least what the requiring script may do, so an add-on with few permissions cannot ship a module named like a common library (`mq.Icons`) and have a full script run it. Your own libraries still serve your scripts and add-ons
+- A Lua script's `require` no longer runs another add-on's module with the script's permissions
+  - A module's own file must be allowed at least what the requiring script may do, so an add-on with few permissions cannot ship a module named like a common library (`mq.Icons`) and have a full script run it
+  - Your own libraries still serve your scripts and add-ons
 - A web page can no longer make the client hold gigabytes of memory with console lines or messages to its script: a console line is cut at 4 KB, a message is at most 1 MB, and a script's waiting messages at most 8 MB
-- Web pages that scripts and plugins open, and their `/url`, can no longer reach your computer or home network (localhost, your router, 192.168.x.x and the like), and the frames, images, scripts and requests inside such a page are held to the server's allowed sites as the page itself is
+- Web pages that scripts and plugins open, and their `/url`, can no longer reach your computer or home network (localhost, your router, 192.168.x.x and the like). The frames, images, scripts and requests inside such a page are held to the server's allowed sites as the page itself is
 - The web pages a script or plugin opens get a cookie store of their own: they no longer see the sites you signed in to in the in-game browser, or another add-on's
 - A script that may not run a command can no longer run it through a compiled plugin's command alias: the line is checked again after the plugin rewrites it
-- The guild window's Go to URL opens only web (http and https) addresses, and its buttons (Go to URL, Join Channel, Update MOTD and the rest), like the friends and raid windows' buttons, send the guild's text as it is instead of filling in `${...}` with your character's details
+- The guild window's Go to URL opens only web (http and https) addresses. Its buttons (Go to URL, Join Channel, Update MOTD and the rest), like the friends and raid windows' buttons, send the guild's text as it is instead of filling in `${...}` with your character's details
 - MacroQuest `${...}`: a value is no longer parsed again, so a spawn, guild, title or item whose name holds `${...}` can no longer make your command line, or a script's, read your character and send it on. `${...}` nested in the line itself works as before
-- For server owners: a `/tell` to a very long name, which made a stock EQEmu zone crash, is now cut to 63 characters (and the text to 2047) as the original client does; other names the client sends (the bandolier's, the name-change answer's, the barter lines') also always fit EQEmu's fields
+- For server owners: a `/tell` to a very long name, which made a stock EQEmu zone crash, is cut to 63 characters (and the text to 2047) as the original client does. Other names the client sends (the bandolier's, the name-change answer's, the barter lines') also always fit EQEmu's fields
 - `/guildstatus` works on EQEmu servers: the request is the original's size, which EQEmu no longer drops
 - A trade closes (and is cancelled) when the other player leaves the zone, as in the original client, instead of staying open
-- Downloading a server's files no longer fails when the server skipped a piece: the client asks for it again. And for server owners: Hailstone's server script now makes requests over `files_chunks_per_second` wait their turn instead of dropping them, and no longer sends a file changed in `client_files/` since its hashing with its old hash (which made the download fail)
-- A broken packet stream from the server (a first fragment without its length) now ends the connection with an error instead of silently losing the packets that followed, which left the game out of step with the server
+- Downloading a server's files no longer fails when the server skipped a piece: the client asks for it again
+  - For server owners: Hailstone's server script makes requests over `files_chunks_per_second` wait their turn instead of dropping them
+  - It no longer sends a file changed in `client_files/` since its hashing with its old hash (which made the download fail)
+- A broken packet stream from the server (a first fragment without its length) ends the connection with an error instead of silently losing the packets that followed, which left the game out of step with the server
 - A spawn still alive shows at least 1% health, as in the original client, instead of 0%
-- New appearances (gear changes, crowds) decode their textures on the background thread in more cases: one that needs a texture another appearance is still reading waits up to half a second for it instead of decoding it during the frame, and a texture whose appearance was dropped is read by the next one that needs it
+- New appearances (gear changes, crowds) decode their textures on the background thread in more cases. One that needs a texture another appearance is still reading waits up to half a second for it instead of decoding it during the frame, and a texture whose appearance was dropped is read by the next one that needs it
 - Zoning quickly through several zones while neighbour zones load no longer leaves several loads running in the background: a cut-off load stops between its files, and a new one waits while an old one finishes
-- Linux and macOS: a stack overflow on one of the client's background threads (navigation, add-ons, updates, neighbour zones, appearances) now leaves a crash report like one on the main thread
+- Linux and macOS: a stack overflow on one of the client's background threads (navigation, add-ons, updates, neighbour zones, appearances) leaves a crash report like one on the main thread
 - After a window resize on a desktop whose graphics surface reports the new size a little late, the picture is set up again at the new size instead of staying at the old one
 - Box-shaped particle emitters spread their particles over the box's faces as the original's graphics do (the top face more often, one side less), the same in the Linux and Windows builds
 - The music volume setting is applied once: music below full volume was quieter than set (at half volume it played at a quarter)
 - The spell window adds the adjusted cast time "(x sec)" whenever the quick cast or a casting focus applies, as the original does, also when they cancel out
 - Scribing a spell no longer finishes sooner at high frame rates: as in the original, the countdown moves on at most once every 2 ms
-- Linux and macOS: downloads running at the same time (updates, add-ons, server files, the map) can no longer crash the client when a name lookup times out: libcurl is told not to use signals
+- Linux and macOS: downloads running at the same time (updates, add-ons, server files, the map) can no longer crash the client when a name lookup times out
 - For server plugins: a new switch, `backstab_either_hand`, lets Backstab go out with a piercing weapon in the secondary hand when the primary holds none, for servers whose backstab uses either hand (Project Triune's add-on turns it on). Without it Backstab still needs a piercer in the primary, as the original client does
-- A server's compiled plugins no longer load by themselves: the first time one would load (and again when its file changes), Hailstone asks whether you allow it, naming the server and the plugin and warning that a compiled plugin runs with full access to your computer. Your answer is kept for that server; the add-on list on the login screen shows it and can take back a yes ("Don't allow it any more") or ask again after a no. The server's Lua scripts are not affected
-- Health, mana and endurance now regenerate between the server's updates as in the original client: every 6 seconds the client runs its own tick (the buffs' healing, damage, mana and endurance, the regen of sitting, food and items), and every second takes the active discipline's endurance upkeep. A buff whose time has run out is removed at the next tick even before the server's fade arrives, and damage over time breaks mesmerize. The server's own values still overwrite the client's whenever they come
-- Add-on and plugin windows can no longer act with your authority: their Lua code keeps to globals of its own, cannot change the `eq`, `ui` or library functions the interface's own windows call, and runs (also when the interface calls something it left behind) with the add-on's own permissions, so an add-on allowed only to read and draw cannot read the login screen's password, send chat or commands, start scripts or open web pages for you. Precompiled Lua is no longer loaded by the interface, and its `dofile` stays inside the interface's and the plugin's folders
-- A script add-on named after a compiled plugin (a server's plugin among them) no longer gets that plugin's permissions in its windows, nor replaces or removes the plugin's windows, functions, options or menu entries; the add-on manager no longer installs a script and a plugin of one name
+- A server's compiled plugins no longer load by themselves
+  - The first time one would load (and again when its file changes), Hailstone asks whether you allow it, naming the server and the plugin and warning that a compiled plugin runs with full access to your computer
+  - Your answer is kept for that server. The add-on list on the login screen shows it and can take back a yes ("Don't allow it any more") or ask again after a no
+  - The server's Lua scripts are not affected
+- Health, mana and endurance regenerate between the server's updates as in the original client
+  - Every 6 seconds the client runs its own tick (the buffs' healing, damage, mana and endurance, the regen of sitting, food and items), and every second takes the active discipline's endurance upkeep
+  - A buff whose time has run out is removed at the next tick even before the server's fade arrives, and damage over time breaks mesmerize
+  - The server's own values still overwrite the client's whenever they come
+- Add-on and plugin windows can no longer act with your authority
+  - Their Lua code keeps to globals of its own and cannot change the `eq`, `ui` or library functions the interface's own windows call
+  - It runs (also when the interface calls something it left behind) with the add-on's own permissions, so an add-on allowed only to read and draw cannot read the login screen's password, send chat or commands, start scripts or open web pages for you
+  - Precompiled Lua is no longer loaded by the interface, and its `dofile` stays inside the interface's and the plugin's folders
+- A script add-on named after a compiled plugin (a server's plugin among them) no longer gets that plugin's permissions in its windows, nor replaces or removes the plugin's windows, functions, options or menu entries. The add-on manager no longer installs a script and a plugin of one name
 - The Options window's Plugins tab can no longer crash the client when a plugin adds or changes options while its values are read
 - A plugin's entry in the EQ menu (or the gamepad UI's More page) runs its command with the plugin's own permissions rather than yours, so an add-on that may only read cannot slip a command such as /cast into the menu for you to click
-- An add-on's windows can no longer call another plugin's functions or change its options or run its menu entries, which ran with the other plugin's permissions; the interface's own windows still reach all of them
-- "Don't allow it any more" and "Ask me again" on a server's compiled plugin now act on the plugin's file as the server has it as well as its name: a server that renamed an allowed plugin kept it allowed while the list said it was revoked
-- An add-on's windows need the add-on's own permissions to act through the interface: clicking a game window's buttons, moving items, casting, memorising, using hot buttons or abilities, sending parcels and the like need 'actions', opening windows and changing options or chat windows need 'commands'. Reading and drawing need nothing more. The interface's own windows are not affected
-- The question about a server's compiled plugins stays on top of every window while it is asked, and add-on windows and scripts can no longer draw over it, find where it is, or put it away to show one of their own
+- An add-on's windows can no longer call another plugin's functions, change its options or run its menu entries, which ran with the other plugin's permissions. The interface's own windows still reach all of them
+- "Don't allow it any more" and "Ask me again" on a server's compiled plugin act on the plugin's file as the server has it as well as its name: a server that renamed an allowed plugin kept it allowed while the list said it was revoked
+- An add-on's windows need the add-on's own permissions to act through the interface
+  - 'actions': clicking a game window's buttons, moving items, casting, memorising, using hot buttons or abilities, sending parcels and the like
+  - 'commands': opening windows and changing options or chat windows
+  - Reading and drawing need nothing more. The interface's own windows are not affected
+- The question about a server's compiled plugins stays on top of every window while it is asked. Add-on windows and scripts can no longer draw over it, find where it is, or put it away to show one of their own
 - A function an add-on's window leaves in the interface's shared state runs with the add-on's permissions when the interface calls it, and does nothing once the add-on is gone; other add-ons cannot call it. Add-on windows still share the interface's focus and palette
-- An add-on's windows keep their settings apart from the interface's: they can no longer change the interface's settings or its test switches (which could click buttons in its windows) or turn off its windows. They still read the interface's settings, such as the palette
-- A window of the interface or of an add-on that loops forever no longer hangs the client: it is stopped after a second (five for the interface's own windows) and turned off, with the error in the UI errors window; one that keeps taking memory is stopped at 1 GiB
+- An add-on's windows keep their settings apart from the interface's. They can no longer change the interface's settings or its test switches (which could click buttons in its windows) or turn off its windows; they still read its settings, such as the palette
+- A window of the interface or of an add-on that loops forever no longer hangs the client
+  - It is stopped after a second (five for the interface's own windows) and turned off, with the error in the UI errors window
+  - One that keeps taking memory is stopped at 1 GiB
 - An add-on's windows can read or set the clipboard only when the add-on has every permission, as for scripts
 - Approving an add-on's update approves what you were shown: if the add-on's repository asks for more (or offers another version) by the time you click, nothing is installed and you are asked to review it again
 - A Lua script started by another script or a plugin gets no more permissions than the one that started it, and the settings files scripts write under `scripts/config/` can no longer be run as scripts
-- For server owners: Hailstone's server script looks at `client_files/` again at most every 5 minutes when a player asks (the new `files_rescan` setting; `#reloadquest` picks changes up at once), holds each player to 1024 file pieces a second (`files_chunks_per_second`), keeps up to eight files open so players fetching different files no longer make the zone reopen them at every piece, and passes on at most 5 group declines a player in 10 s
+- For server owners: Hailstone's server script costs the zone less
+  - It looks at `client_files/` again at most every 5 minutes when a player asks (the new `files_rescan` setting; `#reloadquest` picks changes up at once)
+  - It holds each player to 1024 file pieces a second (`files_chunks_per_second`)
+  - It keeps up to eight files open, so players fetching different files no longer make the zone reopen them at every piece
+  - It passes on at most 5 group declines a player in 10 s
 - A new server on the login screen starts with an empty address instead of a development address left in by mistake; type your server's address
 - Zoning or quitting while a neighbour zone (the distant zone past a zone line, modern lighting) is still loading no longer waits for the whole load to finish
 - On a system whose window surface reports a size other than the window's (some scaled or tiling desktops), the graphics are no longer set up again every frame
-- A graphics driver whose window images cannot be copied no longer gets an invalid copy for a screenshot: the screenshot is refused with a chat line and a log line instead
+- A graphics driver whose window images cannot be copied no longer gets an invalid copy for a screenshot: the screenshot is refused with a chat line and a log line
 - A music file whose loops take no time (nested counted loops around nothing) no longer freezes the sound for minutes: the track stops with a line in the log
-- Windows: a crash's minidump no longer holds the memory its stacks point at, which could include the password, the session key or a server plugin's key; it keeps the threads' stacks, registers and modules, enough for a crash's call stack, and bug reports attach it as before
+- Windows: a crash's minidump no longer holds the memory its stacks point at, which could include the password, the session key or a server plugin's key. It keeps the threads' stacks, registers and modules, enough for a crash's call stack, and bug reports attach it as before
 - Windows: a UI font face (`/fontface`) or data folder whose path has characters outside the system code page no longer stops the client at every start; a font file that cannot be used falls back to the built-in font
 - An item's power percentage, and the health percentage of a spawn with more than 21 million hit points, no longer come out wrong (the multiplication by 100 overflowed)
 - A rider whose mount despawned no longer jumps onto an unrelated spawn that the server later gives the same id
-- A spawn whose drawn place or heading became not-a-number (after a bad position) is put back where it is at its next good update instead of staying lost, and a bad position update no longer moves it
-- Windows: more game rules that wrap a 32-bit product and then divide it (max HP's percentage, air supply, defense, fall damage, a buff's damage share, a worn charm's level, a skill's spell reduction, a sell price's rounding, the network's congestion step) now give the original's results for extreme values in the Windows build too, as the Linux build already did
+- A spawn whose drawn place or heading became not-a-number (after a bad position) is put back at its next good update instead of staying lost, and a bad position update no longer moves it
+- Windows: more game rules give the original's results for extreme values in the Windows build too, as the Linux build already did
+  - These rules wrap a 32-bit product and then divide it: max HP's percentage, air supply, defense, fall damage, a buff's damage share, a worn charm's level, a skill's spell reduction, a sell price's rounding, the network's congestion step
 - Textures larger than 8192 × 8192 are refused, as replacement PNGs already were: a forged 16384² DDS would decode to a gigabyte of memory. The game's largest texture is 1108²
-- Updates, add-ons and server files refuse names Windows would store elsewhere or open as a device on every platform: a part ending in a dot or space, and device names such as NUL, com1.txt, CONIN$ or COM¹, in any case and with any extension
-- Heightmap zones with damaged ecosystem files (.eco) no longer hang or run out of memory at zone-in: flora tries and density are bounded (well above what the game's own files use) and numbers too large for their field are clamped. Flora placement in the game's zones is unchanged
+- Updates, add-ons and server files refuse names Windows would store elsewhere or open as a device, on every platform: a part ending in a dot or space, and device names such as NUL, com1.txt, CONIN$ or COM¹, in any case and with any extension
+- Heightmap zones with damaged ecosystem files (.eco) no longer hang or run out of memory at zone-in. Flora tries and density are bounded (well above what the game's own files use) and numbers too large for their field are clamped; flora placement in the game's zones is unchanged
 - A damaged .s3d or .eqg archive can no longer make the client set aside gigabytes of memory: a file's declared size is checked against its compressed blocks before anything is allocated
-- The connection is sturdier against a broken or hostile server: packets that arrive early, and packets waiting for the game to read them while it loads a zone, can no longer use memory without limit (past 64 MiB waiting the connection ends with "too much received data waiting to be read"); garbage from the server's address no longer keeps a dead connection from timing out; and a datagram too large to read is dropped on Linux and macOS as on Windows, instead of being read cut short
-- The interface costs less each frame, mostly in the Modern UI's HUD. Closed windows no longer work out where the game's own window would sit every frame or build their settings first. The Modern UI's colours and its default HUD layout are kept until the palette, the screen size, the scale or a frame changes instead of being made again every frame. Settings are read once a frame, not once per window
-- Lists no longer build all their rows again for every row read. A merchant, raid, mail, tracking or friends window open with many rows grew dearer with the square of its length The raid window also stopped reading the roster twice a frame
-- The hot bars, spell gems and buff windows (both UIs) ask for each button, gem and buff once a frame instead of three to six times. A buff's counter and limit overlays are worked out only where they are drawn, and the target, pet and extended target frames read nothing while they are hidden
-- A new chat line no longer makes every chat window fetch and parse its whole history again: each window now has a version of its own and takes only the lines that came since it last looked, and a line's word wrap is kept until the window's width or font changes. The gamepad UI's chat ticker no longer parses its whole history again for each new line
-- The spell book and ability book sort and filter only when something changes and draw only the rows in view, and item displays read their item once rather than again every frame. The login, server and character select screens no longer build their whole view again every frame
+- The connection is sturdier against a broken or hostile server
+  - Packets that arrive early, and packets waiting while the game loads a zone, can no longer use memory without limit (past 64 MiB waiting the connection ends with "too much received data waiting to be read")
+  - Garbage from the server's address no longer keeps a dead connection from timing out
+  - A datagram too large to read is dropped on Linux and macOS as on Windows, instead of being read cut short
+- The interface costs less each frame, mostly in the Modern UI's HUD
+  - Closed windows no longer work out where the game's own window would sit or build their settings every frame
+  - The Modern UI's colours and default HUD layout are kept until the palette, the screen size, the scale or a frame changes
+  - Settings are read once a frame, not once per window
+- Lists no longer build all their rows again for every row read. A merchant, raid, mail, tracking or friends window with many rows grew dearer with the square of its length. The raid window also stopped reading the roster twice a frame
+- The hot bars, spell gems and buff windows (both UIs) ask for each button, gem and buff once a frame instead of three to six times
+  - A buff's counter and limit overlays are worked out only where they are drawn
+  - The target, pet and extended target frames read nothing while hidden
+- A new chat line no longer makes every chat window fetch and parse its whole history again
+  - Each window takes only the lines that came since it last looked, and a line's word wrap is kept until the window's width or font changes
+  - The gamepad UI's chat ticker no longer parses its whole history again for each new line
+- The spell book and ability book sort and filter only when something changes and draw only the rows in view, and item displays read their item once rather than every frame. The login, server and character select screens no longer rebuild their whole view every frame
 - Linking the same item twice in one Modern UI chat message sent a broken link; both links now go out
 - Tradeskill and training lists sorted by name no longer flicker between rows with the same name
 - A shortened label (a name too long for its box) no longer cuts a multi-byte character in half
-- For add-on authors: `eq.WindowShown`, `eq.HotButtonInfo`, `eq.GemInfo`, `eq.BuffSlot(window, child, true)` (with the counter and limit overlays), `eq.ChatText`'s incremental form, the revision argument of `eq.LoginScreen` / `eq.ServerSelect` / `eq.CharacterSelect`, and `ui.PushStyleColors` / `ui.PushStyleVars` (docs/dev-ui.md). The calls they replace work as before
-- Some doors (types 40 and 45) no longer open on their own at a high frame rate: the client's click that puts such a door back at rest went once a frame until the server answered, and the server swings the door at each one; it now goes once
+- For add-on authors: new calls `eq.WindowShown`, `eq.HotButtonInfo`, `eq.GemInfo`, `eq.BuffSlot(window, child, true)` (with the counter and limit overlays), `eq.ChatText`'s incremental form, the revision argument of `eq.LoginScreen` / `eq.ServerSelect` / `eq.CharacterSelect`, and `ui.PushStyleColors` / `ui.PushStyleVars` (docs/dev-ui.md). The calls they replace work as before
+- Some doors (types 40 and 45) no longer open on their own at a high frame rate. The client's click that puts such a door back at rest went once a frame until the server answered, and the server swings the door at each one; it now goes once
 - Shorter hitches when lamps and torches come into range (modern lighting, light shadows): their shadows are drawn one light a frame instead of two, so a group of new lights' shadows fade in over a few more frames
 - The rain's cover map and the water map (modern lighting) are no longer drawn again each frame while you stand still or only turn, unless swaying plants are in them
-- Shadows cost less to set up each frame: the zone's solid surfaces go into the shadow maps a patch of ground at a time instead of once for every material in it (a tenth of the draw calls or fewer in the Plane of Knowledge and Neriak); the shadows look the same
+- Shadows cost less to set up each frame: the zone's solid surfaces go into the shadow maps a patch of ground at a time instead of once per material (a tenth of the draw calls or fewer in the Plane of Knowledge and Neriak). They look the same
 - Rain and snow cost less each frame: each drop's colour, texture and list are no longer worked out from scratch
 - The Modern UI makes less garbage each frame: the chat windows ask for their list once a frame instead of once per window (32 of them), and `ui.GetIO()` gives one table a frame
-- Windows: a few game rules came out wrong in the Windows build for extreme values (a wrapped 32-bit product divided, as a focus's cast-time share or a social's stop), and a bard's spell memorising asked for INT before DEX; they now match the original as the Linux build did
-- Names far across the ground are passed over before anything else, and the line of sight the names, casting, the camera and `/nav` use searches only the ground the line crosses (the same answers, found sooner)
+- Windows: a few game rules came out wrong in the Windows build for extreme values (a wrapped 32-bit product divided, as a focus's cast-time share or a social's stop), and a bard's spell memorising asked for INT before DEX. They now match the original as the Linux build did
+- Names far across the ground are passed over before anything else, and the line of sight that names, casting, the camera and `/nav` use searches only the ground the line crosses (the same answers, found sooner)
 - Busy zones cost less each frame: spawns behind the camera and out of every shadow's reach are no longer posed, and spawns out of view are no longer drawn
-- Fewer long frames as a busy zone fills (The Bazaar): characters are dressed while a few milliseconds of each frame last, counting their textures, instead of four a frame however long they took (frames of 50 to over 1000 ms); behind the loading screen the same, with a tenth of a second a frame
+- Fewer long frames as a busy zone fills (The Bazaar)
+  - Characters are dressed while a few milliseconds of each frame last, counting their textures, instead of four a frame however long they took (frames of 50 to over 1000 ms)
+  - Behind the loading screen the same, with a tenth of a second a frame
 - The characters dressed in a frame go to the graphics card together, with one wait for it, instead of one wait for each of their meshes
-- Fewer hitches as characters come into view: their outfits are put together and their textures read and prepared on a background thread, so a crowd arriving no longer slows the frames down (10 to 30 ms each) until everyone is dressed; the main thread only hands the finished ones to the graphics card
+- Fewer hitches as characters come into view: their outfits are put together and their textures read and prepared on a background thread, so a crowd arriving no longer slows frames (10 to 30 ms each) until everyone is dressed
 - Zoning is quicker: the global character archives are indexed once and shared by every zone, instead of again at each zone-in (0.65 to 1 s each time with the live game files, now 20 to 100 ms)
-- Zoning (The Bazaar to The Bazaar, or between cities) no longer builds, dresses and uploads again the characters the last zone already had: models, appearances and their textures from the global archives are kept, and only what the new zone's own files may change is read again
-- The minimap no longer goes through every map line and every spawn in the zone each frame, only those that can show in its circle (a server plugin's map marks are asked for only there)
+- Zoning (The Bazaar to The Bazaar, or between cities) no longer rebuilds the characters the last zone already had: models, appearances and their textures from the global archives are kept, and only what the new zone's own files may change is read again
+- The minimap goes through only the map lines and spawns that can show in its circle, not every one in the zone each frame (a server plugin's map marks are asked for only there)
 - Particles behind or beside the camera are no longer lit, sorted and built each frame
 - Shadows cost less in busy zones: a spawn, door or object is drawn only into the sun's shadow maps it can reach, not into all four
 - A spawn, door or object seen for the first time no longer makes the frame wait for the graphics card to finish all its work, a hitch each time one came into view in a busy zone
-- Chat windows with timestamps on no longer rebuild their whole history every frame: the window asked for its text again each frame because the stamped version it held never matched
-- Chat lines no longer disappear from a quiet chat window: every window and tab shared one 3,000-line buffer, so a busy one (combat, spells) pushed the oldest tells and guild lines out of the others after a while. Each window and tab now keeps its own last 1,000 lines, and the chat history kept between sessions keeps them the same way
-- When Hailstone cannot start (no Vulkan driver, a graphics card without what it needs, no window, missing files) it now says why in a dialog, with what usually fixes it and where the log is, instead of closing without a word. When no graphics card qualifies, the dialog names each card and what it lacks
-- `/nav` (and Auto Combat's Hunter) no longer walks into a door's swing: it clicks a door ahead of you as you come up to it, and in The Plane of Hate the side door's leaf then swung into you while the walk carried on into the doorway, and you were stuck on the door. The walk now waits just outside the door's swing (stepping back out of it if it is already inside) until the door has finished moving, then goes through
-- `/nav` (and Auto Combat's Hunter) no longer stands stuck against a door it shut itself: in The Plane of Hate an open side door's leaf lies across the corridor, so `/nav` shut it to get by, and when the way on went through that same door it had no click left to open it again for two minutes. It now opens it again from in front of it, once, and walks through. What `/nav` remembers about doors is also forgotten when you zone
-- For add-on authors: the Modern UI's extended target window can carry an add-on's own part on each row (buttons, an outline, a faded row, a label after the name), from a window of the add-on's that takes the stock one's place through `lib/xtarget.lua` (docs/plugins.md). The window looks and works as before
-- Clicking a window while you run no longer stops you: a click or drag on a button, slider, title bar or window background let go of the movement keys you were holding, so you stopped even with the key still down. Only typing in an edit box or a modal dialog takes the keys now
-- The menu an empty spell gem's right click opens colours each spell by what it targets, as the original does, in the same colours as the spell gems (self yellow, single target red, group purple, area of effect blue, orange or green, and so on), instead of showing every spell yellow. A colour too dark or too light to read on the interface's menu is lightened or darkened toward the text colour
+- Chat windows with timestamps on no longer rebuild their whole history every frame
+- Chat lines no longer disappear from a quiet chat window
+  - Every window and tab shared one 3,000-line buffer, so a busy one (combat, spells) pushed the oldest tells and guild lines out of the others
+  - Each window and tab now keeps its own last 1,000 lines, and the chat history kept between sessions keeps them the same way
+- When Hailstone cannot start (no Vulkan driver, a graphics card without what it needs, no window, missing files) it says why in a dialog, with what usually fixes it and where the log is, instead of closing without a word. When no graphics card qualifies, the dialog names each card and what it lacks
+- `/nav` (and Auto Combat's Hunter) no longer walks into a door's swing
+  - In The Plane of Hate the side door's leaf swung into you while the walk carried on into the doorway, and you were stuck
+  - The walk now waits just outside the door's swing (stepping back out of it if already inside) until the door has finished moving, then goes through
+- `/nav` (and Auto Combat's Hunter) no longer stands stuck against a door it shut itself
+  - In The Plane of Hate an open side door's leaf lies across the corridor, so `/nav` shut it to get by; when the way on went through that door it had no click left to open it for two minutes
+  - It now opens it again from in front of it, once, and walks through
+  - What `/nav` remembers about doors is forgotten when you zone
+- For add-on authors: the Modern UI's extended target window can carry an add-on's own part on each row (buttons, an outline, a faded row, a label after the name), from an add-on window that takes the stock one's place through `lib/xtarget.lua` (docs/plugins.md). The window looks and works as before
+- Clicking a window while you run no longer stops you. A click or drag on a button, slider, title bar or window background let go of the held movement keys; now only typing in an edit box or a modal dialog takes the keys
+- The menu an empty spell gem's right click opens colours each spell by what it targets, as the original does, instead of showing every spell yellow
+  - The colours match the spell gems: self yellow, single target red, group purple, area of effect blue, orange or green, and so on
+  - A colour too dark or too light to read on the menu is lightened or darkened toward the text colour
 - Modern UI options, Controls tab: a key bound to more than one command shows in red in each of those rows (all categories are checked, not only the one shown), since one press runs every command bound to it
-- Project Triune's looter: "Never set as active looter", "Always set as active looter", "Set as active looter on login" and "Print my loot to chat" stay ticked when you click them, and only one of the characters you run on a PC is the active looter again. On a server without Hailstone's quest script the client lost the server's folder at the zone-in, so plugins could not keep their files for that server (the looter's shared settings, and its rules file)
-- Fixed the client slowing down over a long session (22 fps and many gigabytes of memory after a night of Auto Combat): the interface's Lua garbage, the part made while a collection was under way, was counted as in use, so each collection waited longer than the last and the memory grew until the computer was swapping
-- Chat windows with timestamps on cost less each frame in a fight (the local time is worked out once a minute, not for every line each time a line comes)
-- Fixed a crash when entering a zone after a link death in game (back to character select, then into the world again): the client could read the previous connection's spell list after it was gone
-- The NMS and Project Triune add-ons keep all their windows: 0.3.0-alpha removed the ones still unchanged since 0.2.0-alpha at every start (Project Triune's waypoint map no longer opened when you clicked the Magic Map). If one of them is missing a window, update or reinstall the add-on once this version is in
-- `/nav` shuts a door it opened when the open door then swings across the corridor it is walking along (The Plane of Hate's side doors), instead of trying to walk round it over and over; it still never swings one door open and shut again and again
-- The AA experience bar shows your AA experience again: every kill emptied it (most visible at 100% to AAs), and it only came back when you changed the AA percentage. The unspent AA count also updates as you earn points instead of waiting for the next zone
+- Project Triune's looter settings stick
+  - "Never set as active looter", "Always set as active looter", "Set as active looter on login" and "Print my loot to chat" stay ticked when you click them, and only one of the characters you run on a PC is the active looter again
+  - On a server without Hailstone's quest script the client lost the server's folder at the zone-in, so plugins could not keep their files for that server (the looter's shared settings, and its rules file)
+- Fixed the client slowing down over a long session (22 fps and many gigabytes of memory after a night of Auto Combat). Each Lua garbage collection waited longer than the last, and the memory grew until the computer was swapping
+- Chat windows with timestamps on cost less each frame in a fight (the local time is worked out once a minute, not for every line)
+- Fixed a crash when entering a zone after a link death in game (back to character select, then into the world again)
+- The NMS and Project Triune add-ons keep all their windows. 0.3.0-alpha removed the ones still unchanged since 0.2.0-alpha at every start (Project Triune's waypoint map no longer opened from the Magic Map). If one of them is missing a window, update or reinstall the add-on once this version is in
+- `/nav` shuts a door it opened when the open door then swings across the corridor it is walking along (The Plane of Hate's side doors), instead of trying to walk round it over and over. It still never swings one door open and shut again and again
+- The AA experience bar shows your AA experience again: every kill emptied it (most visible at 100% to AAs) until you changed the AA percentage. The unspent AA count also updates as you earn points instead of at the next zone
 - Modern UI player window: the number of unspent (banked) AA points shows beside "AA" above the AA experience bar
-- Modern UI trade window: you can see who has accepted. An offer whose owner has clicked Trade gets a green frame and an "Accepted" tag, the frame flashes when the other player accepts, a line above the buttons says where the trade stands ("Partner has accepted. Click Trade to complete it."), and your Trade button reads Accepted once you have clicked it. Any change to an offer still clears both accepts, and the window shows that too
-- A single item that stacks (one arrow, one potion of a stackable kind) shows a 1 in its slot's lower right corner, as a stack does, so you can tell it stacks; the item on the cursor shows it too
-- You walk through swarm pets (wizard, magician and necromancer swarms, Wake the Dead, animated weapons) as you do through other pets, instead of bumping into them: the server sends them without a pet owner, so they counted as ordinary NPCs
-- Bug and crash reports no longer hold your account names or your home folder: every text in the zip (logs, settings, crash report, report.txt and the summary) has your login account names written as `<account>` and your home folder as `~` (on Linux its name, your system account name, is taken out of other paths too, such as `/run/media/<user>/`). A Windows crash dump goes in unchanged
-- A right click on a bazaar trader in offline trader mode (which Project Triune shows as an NPC) opens its shop, as it does for a player in trader mode; it used to do nothing. A buyer run as an NPC opens its barter window the same way
+- Modern UI trade window: you can see who has accepted
+  - An offer whose owner has clicked Trade gets a green frame and an "Accepted" tag, and the frame flashes when the other player accepts
+  - A line above the buttons says where the trade stands ("Partner has accepted. Click Trade to complete it."), and your Trade button reads Accepted once clicked
+  - Any change to an offer still clears both accepts, and the window shows that too
+- A single item that stacks (one arrow, one potion of a stackable kind) shows a 1 in its slot's lower right corner, as a stack does; the item on the cursor shows it too
+- You walk through swarm pets (wizard, magician and necromancer swarms, Wake the Dead, animated weapons) as through other pets. The server sends them without a pet owner, so they counted as ordinary NPCs
+- Bug and crash reports no longer hold your account names or your home folder
+  - Every text in the zip (logs, settings, crash report, report.txt and the summary) has your login account names written as `<account>` and your home folder as `~`
+  - On Linux the home folder's name, your system account name, is taken out of other paths too, such as `/run/media/<user>/`
+  - A Windows crash dump goes in unchanged
+- A right click on a bazaar trader in offline trader mode (which Project Triune shows as an NPC) opens its shop, as for a player in trader mode. A buyer run as an NPC opens its barter window the same way
 - Ability Book: only abilities you can use are listed; the Passives filter, which added your passive AAs, is gone
-- An add-on removed on the login screen while Hailstone was looking for updates is no longer downloaded and installed again, and switching an add-on's auto-update off while a check or its download is under way now holds: the newer version is offered, not installed, and the switch stays off
+- Add-on updates respect your choices
+  - An add-on removed on the login screen while Hailstone was looking for updates is no longer downloaded and installed again
+  - Switching an add-on's auto-update off while a check or its download is under way holds: the newer version is offered, not installed, and the switch stays off
 - Pressing Skip on the update notice as it appears no longer lets that release's automatic download go ahead
 - Modern UI chat: an item link no longer goes to the wrong place when the item's name was also typed as plain text before it, or is part of a longer word ("Ring" in "Bring")
 - Modern UI spell gems: a right click slid off the gem before letting go no longer forgets its spell (hot buttons already worked this way), and a spell dragged from the spell book no longer memorizes into a gem after the book closed mid-drag
-- The spell set editor (both UIs) no longer survives camping or switching characters: its Save could write one character's edits into the next character's set of the same number
-- Gamepad UI spell book: LB now turns the pages back and RB forward, and the bar under the gems shows a scroll's scribing (it showed an empty Memorizing bar)
-- Gamepad UI: the raid's Move to group picker and the guild's rank picker close with their window and act on the member they were opened for, not on whichever row is selected by then, and the loot window no longer opens the next corpse with the focus on Done. Modern UI raid: a member dragged onto a group is the member moved even if the lists changed during the drag, and a drag ends when the window closes or the Notes tab opens
+- The spell set editor (both UIs) no longer survives camping or switching characters; its Save could write one character's edits into the next character's set of the same number
+- Gamepad UI spell book: LB turns the pages back and RB forward, and the bar under the gems shows a scroll's scribing (it showed an empty Memorizing bar)
+- Pickers and drags act on the member they were opened for
+  - Gamepad UI: the raid's Move to group picker and the guild's rank picker close with their window and act on the member they were opened for, not whichever row is selected by then. The loot window no longer opens the next corpse with the focus on Done
+  - Modern UI raid: a member dragged onto a group is the member moved even if the lists changed during the drag, and a drag ends when the window closes or the Notes tab opens
 
 ## 0.3.0-alpha (2026-11-02)
 
 - `/nav` walks round an open door that stands in the way instead of stopping against it, and no longer clicks a door it opened shut again (in The Plane of Hate a walk could open and close the same door every 15 seconds without getting through)
-- Plugins can open the bank window themselves (`open_bank` in the plugin SDK), at any spawn or at the player; Project Triune's Dimensional Vault uses it for its Bank button, which now opens your bank as the original patch does
-- `/nav` and `/stick` keep you further from walls: a path's corners swing a little wide where there is room instead of scraping round them, and `/stick` (Auto Combat's way of staying on a mob) no longer runs straight at a mob past a wall's corner it would catch on, but walks round. `/nav option clearance <0..6>` sets how wide (2.5 by default; 0 hugs the walls as before)
-- `/nav` (and scripts that walk with it, such as Auto Combat's Hunter) opens a closed door on the way as soon as you are within reach of it, while still walking, so the door is open by the time you get there instead of you stopping in front of it first
-- Lua Scripts window: run, stop and pause your MacroQuest Lua scripts without typing `/lua run`. Open it from the EQ menu's **Lua Scripts** row (Gamepad UI: More > Lua Scripts). It lists every script in your script folders with whether it is running, and greys out (with the reason) the ones the server does not allow. Tick **Autorun** to start a script each time that character logs in (Gamepad UI: Y); each character keeps its own list. Scripts keep running when you zone
-- The NMS and Project Triune plugins are no longer in Hailstone's download. Each is an add-on of its own: on the login screen, click **Add-ons** and paste the plugin's link (NMS: `https://github.com/projecthailstone/hailstone-nms`; Project Triune: `https://github.com/projecthailstone/hailstone-projecttriune-addon`). Hailstone removes the old copies itself the first time the login screen comes up after updating, whether the update was automatic or you unpacked the new zip over your folder (files you changed are left alone); your settings in `plugins/nms/` and `plugins/projecttriune/` stay and are used again once the add-on is installed. A server can also ship its plugin to its players, as before
+- Plugins can open the bank window themselves (`open_bank` in the plugin SDK), at any spawn or at the player. Project Triune's Dimensional Vault uses it for its Bank button, which now opens your bank as the original patch does
+- `/nav` and `/stick` keep you further from walls
+  - A path's corners swing a little wide where there is room instead of scraping round them
+  - `/stick` (Auto Combat's way of staying on a mob) no longer runs straight at a mob past a wall's corner it would catch on, but walks round
+  - `/nav option clearance <0..6>` sets how wide (2.5 by default; 0 hugs the walls as before)
+- `/nav` (and scripts that walk with it, such as Auto Combat's Hunter) opens a closed door on the way as soon as you are within reach, while still walking, so it is open by the time you get there
+- Lua Scripts window: run, stop and pause your MacroQuest Lua scripts without typing `/lua run`
+  - Open it from the EQ menu's **Lua Scripts** row (Gamepad UI: More > Lua Scripts)
+  - It lists every script in your script folders with whether it is running, and greys out (with the reason) the ones the server does not allow
+  - Tick **Autorun** to start a script each time that character logs in (Gamepad UI: Y); each character keeps its own list
+  - Scripts keep running when you zone
+- The NMS and Project Triune plugins are no longer in Hailstone's download; each is an add-on of its own
+  - On the login screen, click **Add-ons** and paste the plugin's link (NMS: `https://github.com/projecthailstone/hailstone-nms`; Project Triune: `https://github.com/projecthailstone/hailstone-projecttriune-addon`)
+  - Hailstone removes the old copies itself the first time the login screen comes up after updating, whether the update was automatic or you unpacked the new zip over your folder (files you changed are left alone)
+  - Your settings in `plugins/nms/` and `plugins/projecttriune/` stay and are used again once the add-on is installed
+  - A server can also ship its plugin to its players, as before
 - Add-ons: a plugin's folder that holds only the settings a plugin left behind no longer blocks installing that plugin
-- Modern UI login screen: the box set (logging in several accounts at once) has a window of its own beside the login card, opened with **Box set** on the card, instead of sitting folded under More options at the bottom
-- Add-ons: install Lua scripts and plugins from GitHub without opening the Hailstone folder. Click **Add-ons** on the login screen (Gamepad UI: More > Add-ons), paste the link to the add-on's repository and press Look: a card shows what it is and what it asks to do (read the game state, cast spells, speak for you ...) before anything is installed. Installed add-ons update themselves at start unless a new version asks to do more (you approve it first), you changed its files, or it is signed with another key (refused). An add-on gets only the permissions it asked for, even on servers that allow everything. Each add-on can be updated, switched to manual updates or removed (your own files in its folder stay). The list also shows the scripts and plugins you put in by hand and the picked server's own, which cannot be removed or turned off. For authors: `tools/make_addon.py` and `hailstone_sign` (docs/addons.md). `addons.check=0` in `hailstone.ini` turns the check at start off, `addons.allow_unsigned=0` refuses unsigned add-ons
-- Scripts: `/stick` keeps your character on its target (at melee range by default, or `/stick <distance>`, `/stick behind`), walking round walls over the navigation mesh and facing the target while in reach; `/stick off` or your own movement keys end it. Scripts can read whether a skill, discipline or AA is ready (`Me.AbilityReady`, `Me.CombatAbilityReady`, `Me.AltAbilityReady` and their timers), the target's buffs and states when the server sends them (`Target.Buff`, `Target.Mezzed`, `Target.Slowed` ...), line of sight (`Target.LineOfSight`), and a server's own settings for scripts in `hailstone.cfg`. A script can hold the Ability Book's autoskill off while it runs (the autoskill button shows "On (held)"), and use a skill, combat ability or AA by name the way its hot button does
-- The ladders in Cabilis East and West can be climbed: walk or swim into one and look up to climb, so you can get out of the East canals onto the street. In the original client these ladders cannot be climbed from below; server owners can restore that with `[movement] passable_ladders = off` in `hailstone.cfg` (on by default, also without the file). Clicking one of them from the street now puts you on it to climb down
-- Character creation has its own screen in the Modern and Gamepad interfaces, in place of the plain dialog. Modern UI: two panels beside your character, with the race and class as tiles, a Random name button, the deity and start city, the stats with + and - (a right click on + spends all it can take) and the game's description of what you pick or point at. Gamepad UI: every choice is stepped with the D-pad, the name is typed on the on-screen keys (X for a random name), the stats are a page of their own, Y opens Appearance and Start creates
-- Character creation: the deity and the starting city are two lists that show their names ("Mithaniel Marr", "North Qeynos") instead of numbers, and you can now spend your stat points: each stat starts at its base, + and - move the class's points between them, and Create is enabled once every point is spent
+- Modern UI login screen: the box set (logging in several accounts at once) has a window of its own beside the login card, opened with **Box set** on the card, instead of sitting folded under More options
+- Add-ons: install Lua scripts and plugins from GitHub without opening the Hailstone folder
+  - Click **Add-ons** on the login screen (Gamepad UI: More > Add-ons), paste the link to the add-on's repository and press Look. A card shows what it is and what it asks to do (read the game state, cast spells, speak for you ...) before anything is installed
+  - Installed add-ons update themselves at start unless a new version asks to do more (you approve it first), you changed its files, or it is signed with another key (refused)
+  - An add-on gets only the permissions it asked for, even on servers that allow everything
+  - Each add-on can be updated, switched to manual updates or removed (your own files in its folder stay)
+  - The list also shows the scripts and plugins you put in by hand and the picked server's own, which cannot be removed or turned off
+  - For authors: `tools/make_addon.py` and `hailstone_sign` (docs/addons.md)
+  - `addons.check=0` in `hailstone.ini` turns the check at start off; `addons.allow_unsigned=0` refuses unsigned add-ons
+- Scripts: `/stick` and new combat reads
+  - `/stick` keeps your character on its target (at melee range by default, or `/stick <distance>`, `/stick behind`), walking round walls over the navigation mesh and facing the target while in reach. `/stick off` or your own movement keys end it
+  - Scripts can read whether a skill, discipline or AA is ready (`Me.AbilityReady`, `Me.CombatAbilityReady`, `Me.AltAbilityReady` and their timers), the target's buffs and states when the server sends them (`Target.Buff`, `Target.Mezzed`, `Target.Slowed` ...), line of sight (`Target.LineOfSight`), and a server's own settings for scripts in `hailstone.cfg`
+  - A script can hold the Ability Book's autoskill off while it runs (the autoskill button shows "On (held)"), and use a skill, combat ability or AA by name the way its hot button does
+- The ladders in Cabilis East and West can be climbed: walk or swim into one and look up to climb, so you can get out of the East canals onto the street
+  - In the original client these ladders cannot be climbed from below. Server owners can restore that with `[movement] passable_ladders = off` in `hailstone.cfg` (on by default, also without the file)
+  - Clicking one of them from the street puts you on it to climb down
+- Character creation has its own screen in the Modern and Gamepad interfaces, in place of the plain dialog
+  - Modern UI: two panels beside your character, with the race and class as tiles, a Random name button, the deity and start city, the stats with + and - (a right click on + spends all it can take) and the game's description of what you pick or point at
+  - Gamepad UI: every choice is stepped with the D-pad, the name is typed on the on-screen keys (X for a random name), the stats are a page of their own, Y opens Appearance and Start creates
+- Character creation: the deity and the starting city are two lists that show their names ("Mithaniel Marr", "North Qeynos") instead of numbers, and you can spend your stat points. Each stat starts at its base, + and - move the class's points between them, and Create is enabled once every point is spent
 - Character select and creation: the character is lit by a soft light from the front instead of standing dark in the trees' shade (modern lighting)
-- The server select lists the worlds alphabetically, with your favourites at the top. Click the star beside a world to make it a favourite or to unmark it (Gamepad UI: Y on the focused world). Favourites are kept for each login server
-- Character select: the Rotate option is gone (Modern UI checkbox, Gamepad UI button); the character always faces the camera, also for players who had it turned on. The gamepad screen's Create, Delete and Back buttons sit on one row
+- The server select lists the worlds alphabetically, with your favourites at the top. Click the star beside a world to mark or unmark it (Gamepad UI: Y on the focused world). Favourites are kept for each login server
+- Character select: the Rotate option is gone (Modern UI checkbox, Gamepad UI button); the character always faces the camera, also for players who had it on. The gamepad screen's Create, Delete and Back buttons sit on one row
 - Jumping no longer leaves you hanging at the top of the jump at high frame rates (above about 125 frames a second); you come down as soon as the jump ends
 - Ladders in classic zones (Qeynos, Guk, Unrest, Blackburrow, Ak'Anon, Cabilis and others) can be climbed: walk into one and look up to climb, look down to go down. Clicking a ladder from the top puts you on it to climb down
-- NPCs that the server leaves floating in the air (a common problem on EQEmu servers with poor zone maps) are drawn standing on the ground below them, up to 50 units down, however small the gap. This includes NPCs the server marks as able to swim when they are out of the water (East Commonlands' spiderlings). Flying and levitating NPCs, and NPCs in water, stay where the server puts them. Only where the NPC is drawn changes; range and other game checks still use the server's position. Turn it off with "Ground Floating NPCs" in Options > Display (`display.ground_npcs=0` in `hailstone.ini`)
+- NPCs that the server leaves floating in the air (common on EQEmu servers with poor zone maps) are drawn standing on the ground below them, up to 50 units down, however small the gap
+  - This includes NPCs the server marks as able to swim when they are out of the water (East Commonlands' spiderlings)
+  - Flying and levitating NPCs, and NPCs in water, stay where the server puts them
+  - Only where the NPC is drawn changes; range and other game checks still use the server's position
+  - Turn it off with "Ground Floating NPCs" in Options > Display (`display.ground_npcs=0` in `hailstone.ini`)
 
 ## 0.2.0-alpha (2026-11-01)
 
 - The login screen shows which version of Hailstone is running ("Hailstone 0.2.0-alpha (39b3e9da)"), small at the foot of the login card, in both interfaces
 - One download for each platform, with the NMS and Project Triune plugins inside (each switches on only on its own server); the separate plugin downloads are gone
 - The Legends of Norrath plugin (`/lon`) is removed
-- NPCs are solid: you can no longer walk through a live NPC, and you slide along it instead. Other players, pets, mercenaries, corpses and mounts stay passable, as before. Server owners can turn this off with `[movement] npc_collision = off` in `hailstone.cfg` (on by default, also without the file)
-- Map: an "Auto Z" option fades the parts of the map well above or below you, so the floor you are on stands out in stacked zones and dungeons. Modern UI: the Auto Z button on the map's toolbar; Gamepad UI: RT on the map. It applies to the minimap too and is kept per character
-- Hailstone keeps itself up to date: at start it looks for a new release, downloads it in the background and installs it when you quit (or at once with **Restart now** on the login screen). Your settings, servers, characters' files, maps and scripts are never touched, and a version that fails to start is put back by itself. **Skip** passes over a release; `update.check=0` in `hailstone.ini` turns the check off, `update.download=0` asks before downloading. Each release is signed, and the client installs nothing whose signature does not match
+- NPCs are solid: you can no longer walk through a live NPC, and you slide along it instead
+  - Other players, pets, mercenaries, corpses and mounts stay passable, as before
+  - Server owners can turn this off with `[movement] npc_collision = off` in `hailstone.cfg` (on by default, also without the file)
+- Map: an "Auto Z" option fades the parts of the map well above or below you, so your floor stands out in stacked zones and dungeons
+  - Modern UI: the Auto Z button on the map's toolbar; Gamepad UI: RT on the map
+  - It applies to the minimap too and is kept per character
+- Hailstone keeps itself up to date
+  - At start it looks for a new release, downloads it in the background and installs it when you quit (or at once with **Restart now** on the login screen)
+  - Your settings, servers, characters' files, maps and scripts are never touched, and a version that fails to start is put back by itself
+  - **Skip** passes over a release; `update.check=0` in `hailstone.ini` turns the check off, `update.download=0` asks before downloading
+  - Each release is signed, and the client installs nothing whose signature does not match
 - Being summoned (or a `#goto`) inside an instanced zone moves you there instead of reloading the zone
-- Classic zones: materials are cut out, blended or hidden as the original draws them. The trees in Surefall Glade (and the curtains in Ak'Anon) that drew as solid green boards now show only their leaves; the Plane of Justice's water is see-through
-- Modern UI: windows can snap to a grid while you lay them out. Turn on "Snap to grid" in any window's right-click menu (or Options > Display > Windows) and pick the grid size; a dragged window lines up its edges on the grid or against the screen's edge, and a faint grid shows while you drag. Hold Shift to place a window freely. Each character keeps its own setting
-- Items onto hot bars: hold the left button on an item in your inventory or a bag (or drag it off the slot, Modern UI) and let go over a hot bar button. The button follows the item wherever you move it, shows its icon and uses it (right-click effect: clickies, food, potions). With Shift or Ctrl held it is a button for the slot instead. Gamepad UI: LB on an item opens the slot picker. Picking up an item now happens when you let go of the left button, as in the original
+- Classic zones: materials are cut out, blended or hidden as the original draws them. The trees in Surefall Glade (and the curtains in Ak'Anon) that drew as solid green boards show only their leaves; the Plane of Justice's water is see-through
+- Modern UI: windows can snap to a grid while you lay them out
+  - Turn on "Snap to grid" in any window's right-click menu (or Options > Display > Windows) and pick the grid size
+  - A dragged window lines up its edges on the grid or against the screen's edge, and a faint grid shows while you drag. Hold Shift to place a window freely
+  - Each character keeps its own setting
+- Items onto hot bars: hold the left button on an item in your inventory or a bag (or drag it off the slot, Modern UI) and let go over a hot bar button
+  - The button follows the item wherever you move it, shows its icon and uses it (right-click effect: clickies, food, potions)
+  - With Shift or Ctrl held it is a button for the slot instead
+  - Gamepad UI: LB on an item opens the slot picker
+  - Picking up an item happens when you let go of the left button, as in the original
 - Shift+B (the Keys window's toggle inventory bags) opens every bag in your inventory and closes them again; the open and close all bags keys, unbound by default, work too
-- Climbing steps a little taller than your character (the Bazaar arena's tiers) no longer leaves you stuck half-sunk in the step and unable to move; you step up onto it
+- Climbing steps a little taller than your character (the Bazaar arena's tiers) no longer leaves you stuck half-sunk in the step; you step up onto it
 - Ability Book: autoskill stays on or off as you left it when you log out and back in (per character), instead of always starting off
-- `/nav` and `/follow` take drops, dive and swim to get where they are going: the mesh now joins a ledge to the ground below it (when the fall would not hurt, or into water), a pool's floor to its surface, and steps a little over 3 high, so in zones like Old Sebilis a walk from the zone-in reaches Trakanon's lair instead of stopping at the nearest spot. `/nav ui` shows the drops (orange) and swims (light blue). A swimming walk keeps to the path's height, so it no longer swims into the top of a low underwater opening and sticks there; it swims level at the surface instead of pushing up against it, climbs back out of water it dropped into, and never strafes off a walkway while getting unstuck (Lower Guk's flooded rooms). Zones that are all under water work too: a walk starts while floating high over the floor, swims down shafts of any depth, and rises by the open water beside a ledge instead of into the ceiling under it (Kedge Keep to Phinigel). A walk stuck at a closed door finds it by the door itself, so it also opens doors whose middle is far from the doorway, such as Kedge Keep's gates, clicks each piece of a gate and doors that block while showing as open (Kedge Keep's secret door), tries the door as soon as it stalls, waits for it to open, and says which door stayed shut if it gives up. Cached navigation meshes are now built again by themselves whenever an update changes how meshes are made Zone meshes are built once again after the update
-- `/nav` and `/follow` find the right floor where parts of a zone are stacked: a walk to a spawn on a balcony or an upper level takes the way up instead of stopping on the floor underneath, does not count itself there while standing below it, and when there is no way up it says so ("Stopped 12 below …: the mesh has no way up there")
-- `/nav` and `/follow` swim: paths cross water (even where the bottom cannot be walked), and while swimming the character keeps its head up, dives or rises to the path, heads for air when its breath runs low and climbs out at the shore. A walk also never wanders into a zone line on its way any more: it stops short and says so (`/nav option zonelines on` lets it through)
+- `/nav` and `/follow` take drops, dive and swim to get where they are going
+  - The mesh joins a ledge to the ground below it (when the fall would not hurt, or into water), a pool's floor to its surface, and steps a little over 3 high. In zones like Old Sebilis a walk from the zone-in reaches Trakanon's lair instead of stopping at the nearest spot
+  - `/nav ui` shows the drops (orange) and swims (light blue)
+  - A swimming walk keeps to the path's height, so it no longer sticks in the top of a low underwater opening. It swims level at the surface instead of pushing up against it, climbs back out of water it dropped into, and never strafes off a walkway while getting unstuck (Lower Guk's flooded rooms)
+  - Zones that are all under water work too: a walk starts while floating high over the floor, swims down shafts of any depth, and rises by the open water beside a ledge instead of into the ceiling under it (Kedge Keep to Phinigel)
+  - A walk stuck at a closed door finds it by the door itself, so it also opens doors whose middle is far from the doorway, such as Kedge Keep's gates. It clicks each piece of a gate and doors that block while showing as open (Kedge Keep's secret door), tries the door as soon as it stalls, waits for it to open, and says which door stayed shut if it gives up
+  - Cached navigation meshes are built again by themselves whenever an update changes how meshes are made. Zone meshes are built once again after the update
+- `/nav` and `/follow` find the right floor where parts of a zone are stacked
+  - A walk to a spawn on a balcony or an upper level takes the way up instead of stopping on the floor underneath, and does not count itself there while standing below it
+  - When there is no way up it says so ("Stopped 12 below …: the mesh has no way up there")
+- `/nav` and `/follow` swim
+  - Paths cross water (even where the bottom cannot be walked)
+  - While swimming the character keeps its head up, dives or rises to the path, heads for air when its breath runs low and climbs out at the shore
+  - A walk never wanders into a zone line on its way: it stops short and says so (`/nav option zonelines on` lets it through)
 
 ## 0.1.0-alpha (2026-11-01)
 
@@ -741,39 +1441,58 @@ First public alpha.
 
 - The music player for your own MP3 files (`/mp3` and its window) is gone; the game's own zone music is unchanged
 - Modern UI: a group invitation shows one popup, not two (the plain prompt behind the modern one is gone; the Gamepad UI keeps it)
-- Navigation for scripts and plugins: `/nav` (MacroQuest MQ2Nav's commands: to a spawn, a location or a door), `/moveto`, and the `Navigation` TLO. The mesh is built from the zone itself (no mesh files to download), kept in `cache/navmesh/`, avoids lava and pays for water, and the walk moves only by the movement keys, so it moves as a player does. `/nav ui` shows the mesh and the path
-- `/follow` keeps up round corners, walls and doorways: when the one you follow is out of sight or the straight way is blocked, it takes the navigation mesh's path, gets itself unstuck, and lets them get 400 away (not 200) before it gives up. `nav.follow=0` in `hailstone.ini` or `/nav option follow off` brings back the original `/follow`
+- Navigation for scripts and plugins: `/nav` (MacroQuest MQ2Nav's commands: to a spawn, a location or a door), `/moveto`, and the `Navigation` TLO
+  - The mesh is built from the zone itself (no mesh files to download), kept in `cache/navmesh/`, avoids lava and pays for water
+  - The walk moves only by the movement keys, so it moves as a player does
+  - `/nav ui` shows the mesh and the path
+- `/follow` keeps up round corners, walls and doorways
+  - When the one you follow is out of sight or the straight way is blocked, it takes the navigation mesh's path and gets itself unstuck
+  - It lets them get 400 away (not 200) before it gives up
+  - `nav.follow=0` in `hailstone.ini` or `/nav option follow off` brings back the original `/follow`
 - The server select no longer shows how many players are on each world, in any interface. The server script's `hide_population` setting is gone with it
-- All settings stay in the Hailstone folder: it no longer falls back to `~/.config/hailstone` (or `%APPDATA%\hailstone`), and a new folder no longer copies in the settings of older builds found there. A Hailstone folder that is read-only, or inside an EverQuest folder, now stops at start with a message asking to move it
+- All settings stay in the Hailstone folder
+  - It no longer falls back to `~/.config/hailstone` (or `%APPDATA%\hailstone`), and a new folder no longer copies in the settings of older builds found there
+  - A Hailstone folder that is read-only, or inside an EverQuest folder, stops at start with a message asking to move it
 - The Project Triune plugin is no longer part of the client's builds; it is kept and built separately
 - Map packs: Options (Display > Interface in Modern, Interface in Gamepad) picks which folder under `maps/` the map, minimap and zone map read first; each character keeps its own pick
 - The login, server select and loading screens show a Hailstone picture by default; a server's own pictures, or yours in `ui/loadingbackgrounds/`, still come first
 - The window has the Hailstone icon in its title bar and the taskbar (`icons/hailstone.png` beside the binary; without it the system's icon stays)
 - Login, server list, character create/delete, world and zone entry
-- The login, server select and character select screens follow the interface you play with (Modern or Gamepad), switching as you pick a server; the login screen is redone: your characters to continue as, the server and account up front, and the server's settings, box set and game files folded away
+- The login, server select and character select screens follow the interface you play with (Modern or Gamepad), switching as you pick a server
+  - The login screen is redone: your characters to continue as, the server and account up front, and the server's settings, box set and game files folded away
 - The login screen's Interface picker is on the main card in both interfaces (Modern: beside Music; Gamepad: under the server), no longer inside the server's settings, and a saved server keeps the pick at once
 - Logging in to a server with its own files (or picking another game folder on the login screen) no longer crashes when a picture shows behind the login screen
-- Pressing Enter at character select now remembers that character as the last played, as the Enter World button does
-- Spell sets in the spell book (modern and gamepad UIs): make a set empty or from your gems, then fill and edit its twelve gems by dragging spells from the book (the gamepad: pick a spell, then a gem), rename it or move spells around, all without memorizing anything until you load the set; in the modern UI a spell dropped on a set goes straight into it. The gamepad spell book has sets for the first time (Y)
+- Pressing Enter at character select remembers that character as the last played, as the Enter World button does
+- Spell sets in the spell book (modern and gamepad UIs)
+  - Make a set empty or from your gems, then fill and edit its twelve gems by dragging spells from the book (the gamepad: pick a spell, then a gem), rename it or move spells around, all without memorizing anything until you load the set
+  - In the modern UI a spell dropped on a set goes straight into it
+  - The gamepad spell book has sets for the first time (Y)
 - Modern UI: the inventory has a Bandolier page, between Stats and Alt. Currency: your weapon sets with the same Activate, Save, Delete, Auto swap and Hot Button as the Bandolier window
-- Marketplace window (modern and gamepad UIs; `/marketplace`, the EQ menu and the EQ button's coin): the original client's in-game store for a server that runs one (catalog, categories, search, sort, item of the week, previews, purchases with the server's funds). Stock EQEmu has no store, so there it stays empty
+- Marketplace window (modern and gamepad UIs; `/marketplace`, the EQ menu and the EQ button's coin): the original client's in-game store for a server that runs one
+  - Catalog, categories, search, sort, item of the week, previews, purchases with the server's funds
+  - Stock EQEmu has no store, so there it stays empty
 - Zone and character rendering, spawns and nameplates
-- Server files: a path ending in a dot or a space, or named after a Windows device (`CON`, `NUL`, `COM1`, `LPT1` ... with any extension), is refused on every platform; on Windows `evil.exe.` could otherwise have been written as `evil.exe`. A piece of a file that comes twice or unasked is ignored instead of being counted again
+- Server files: unsafe names and duplicate pieces
+  - A path ending in a dot or a space, or named after a Windows device (`CON`, `NUL`, `COM1`, `LPT1` ... with any extension), is refused on every platform; on Windows `evil.exe.` could otherwise have been written as `evil.exe`
+  - A piece of a file that comes twice or unasked is ignored instead of being counted again
 - Connecting to a server that asks for a session CRC size other than 0, 2 or 4 bytes stops with a clear error instead of dropping every packet; a fragmented packet claiming more than 8 MiB is dropped rather than gathered
 - Login error messages shown when `eqlsstr_us.txt` is missing are in Hailstone's own wording
 - Barter: a buy line (from the server or the barter ini) lists at most 64 compensation items, and none past the end of its text
 - A missile packet with a NaN or infinite position, speed or angle is ignored instead of flying a broken projectile
 - NMS and Project Triune plugins: a spell scroll none of the player's classes can use shows the classes and levels that can ("Level Needed: CANNOT USE - CLR(1) PAL(9)"), not "CANNOT USE" alone
 - Spell Display: the cast time line counts your spell-haste foci (items, buffs and AAs), as the cast itself does ("Cast: 4.0 (3.0 sec)"); it showed only the hybrids' quick cast
-- Web addresses a script, plugin or server opens: a `\` in the address now ends the host as browsers read it, so `https://evil.example\@good.org/` no longer passes a server's `[web] allow = good.org`; a host with characters a host name cannot hold is refused
-- Asset files a server places in its asset folder can no longer hang the client or make it run out of memory: a looping bone hierarchy in an EQG part, a PNG whose header claims far more pixels than its data, oversized vertex counts and colour tables, and out-of-range numbers in zone-line tags and weather files are refused or clamped
-- Intel integrated graphics on Windows (Iris Xe and others): the client no longer stops at start with "vkCreateGraphicsPipelines (particles) failed"; the texture arrays now fit the driver's descriptor limits
-- No crash after zoning in when the server has just sent new client files (the item display windows read the item list from before the reload)
+- Web addresses a script, plugin or server opens: a `\` in the address ends the host as browsers read it, so `https://evil.example\@good.org/` no longer passes a server's `[web] allow = good.org`. A host with characters a host name cannot hold is refused
+- Asset files a server places in its asset folder can no longer hang the client or make it run out of memory. Refused or clamped: a looping bone hierarchy in an EQG part, a PNG whose header claims far more pixels than its data, oversized vertex counts and colour tables, and out-of-range numbers in zone-line tags and weather files
+- Intel integrated graphics on Windows (Iris Xe and others): the client no longer stops at start with "vkCreateGraphicsPipelines (particles) failed"
+- No crash after zoning in when the server has just sent new client files
 - Anti-aliasing changes in the Options window (and its quality presets) apply at the next start, as the window says; changing it in play could lose the GPU ("vkWaitForFences failed") on some drivers
 - EQ menu: the same layout whichever EverQuest folder you use (a live client's menu file no longer rearranges it); a server can send its own `uifiles/default/CascadeMenu.txt` to lay it out
-- Questions (confirmation dialogs) no longer get lost or linger: the mercenary's dismiss question waits behind a rez, translocate or augment question instead of replacing it (which could leave items and spells refused as "pending"); a zone change drops the last zone's waiting questions; a NO DROP loot question ends with its loot session, and Loot All again closes the window afterwards
+- Questions (confirmation dialogs) no longer get lost or linger
+  - The mercenary's dismiss question waits behind a rez, translocate or augment question instead of replacing it (which could leave items and spells refused as "pending")
+  - A zone change drops the last zone's waiting questions
+  - A NO DROP loot question ends with its loot session, and Loot All again closes the window afterwards
 - A target that despawns is cleared and auto attack stops, as in the original client; auras, the aggro meter and a stun no longer carry over into the next zone
-- Bazaar: a trader price update after zoning no longer reads a forgotten slot (a possible crash)
+- Bazaar: a trader price update after zoning no longer risks a crash
 - Music: a MIDI (XMI) song whose loop takes no time no longer freezes the client; it ends instead
 - Sound: a very short sound played at a high rate no longer reads past its end
 - Font names with broken UTF-16 (an unpaired surrogate) show U+FFFD instead of a wrong character
@@ -795,78 +1514,106 @@ First public alpha.
 - Bags may hold up to 1000 items (was 200, EQEmu's limit) for servers with larger bags
 - EQ menu icons for Marketplace, Real Estate (Manage, Plot Search, Real Estate Items) and Plugins, which had a dot
 - Bug and crash reports saved as zips in bug-reports/ for the Discord bug forum
-- Copy Layout: a character's first time in the world opens the Copy Layout window when another of your characters on the server has a layout, with the character you played last picked and every box checked; Options, General "Offer Layouts to New Characters" (or the box in the window) turns it off. The window can now also copy the chat filters and colours and the game options (not Anonymous or Roleplaying), lists the characters played last first, and names their world when the server has several
-- Merchant Parcels page (modern and gamepad UIs): a click on a coin of your inventory (the gamepad: your purse on the send page) picks that money to send, as the game's coin buttons do there; the quantity dialog asks how much and the coin stays in your purse until you press Send money
+- Copy Layout: a character's first time in the world offers another character's layout
+  - The Copy Layout window opens when another of your characters on the server has a layout, with the character you played last picked and every box checked
+  - Options, General "Offer Layouts to New Characters" (or the box in the window) turns it off
+  - The window can also copy the chat filters and colours and the game options (not Anonymous or Roleplaying), lists the characters played last first, and names their world when the server has several
+- Merchant Parcels page (modern and gamepad UIs): a click on a coin of your inventory (the gamepad: your purse on the send page) picks that money to send, as the game's coin buttons do there. The quantity dialog asks how much, and the coin stays in your purse until you press Send money
 - Inventory (modern and gamepad UIs): alternate currencies can be claimed as items onto the cursor and reclaimed into the count
 - Graphics options: a Render Scale (50 to 100 %) draws the 3D world smaller and upscales it with AMD FSR 1 for more speed on slower GPUs, with an Upscale Sharpening slider; the interface stays at full resolution
-- Real estate (player housing and guild halls) on servers that have it, such as Project Triune: plots, houses, crates, neighborhoods, escrow and upkeep, access lists, placed furniture drawn in the world and placed with the original's placement mode and keys, the plot, manage, items, neighborhood and plot search windows, `/realestate` and `/leaverealestate`. Stock EQEmu servers have no housing, so nothing changes there
+- Real estate (player housing and guild halls) on servers that have it, such as Project Triune
+  - Plots, houses, crates, neighborhoods, escrow and upkeep, and access lists
+  - Placed furniture is drawn in the world and placed with the original's placement mode and keys
+  - The plot, manage, items, neighborhood and plot search windows, `/realestate` and `/leaverealestate`
+  - Stock EQEmu servers have no housing, so nothing changes there
 - Guild bank: works in the player guild halls too (an instanced hall only for the guild that owns it)
 - Graphics options: a Max Camera Zoom slider (10 to 150 units, default 60) for how far the camera zooms out
-- Plugins (ABI 2, `sdk/nmsc_plugin.h`): a compiled plugin with the new `extend` permission can change the client's rules where a server's own client differs (spell levels, skills, class masks shown as "War/Clr", several pets, rule switches, server vitals), without changes to Hailstone; ABI 1 plugins still load
+- Plugins (ABI 2, `sdk/nmsc_plugin.h`): a compiled plugin with the new `extend` permission can change the client's rules where a server's own client differs (spell levels, skills, class masks shown as "War/Clr", several pets, rule switches, server vitals), without changes to Hailstone. ABI 1 plugins still load
 - Plugins and scripts with the new `login` permission start at the world login and run at character select, under the rules the server's last login left; the others still start at the zone-in
 - Plugin windows: a plugin can ship Lua windows for each UI pack (`plugins/<name>/ui/<pack>/`), give them data through `eq.Plugin(name)`, and add options and menu entries; a server may ship them with its plugins
 - Lua plugins: a script can do what a compiled plugin does (the core's hooks, rule switches, class masks, pets, server vitals, its own packets, windows, options and menu entries) through the new `hailstone` module; hailstone.ini `scripts.autoload` starts the player's
-- Plugins and Lua plugins can also close the spell book, end the global spell recovery, pick which of several pets the pet window shows, open an item's display, change the camera's zoom limit, write chat lines in the game's colours, and keep files per server and per character; the SDK now includes the client's packet reader and writer (`sdk/nmsc_byte_io.h`)
-- Legends of Norrath (`plugins/lon`, docs/plugins/lon.md): on a server that runs the card game's service, `/lon` logs in to it and shows the account, the message of the day, news, leaderboard, collection and online decks; playing the card game is not there yet
+- Plugins and Lua plugins can do more
+  - Close the spell book, end the global spell recovery, pick which of several pets the pet window shows, open an item's display, change the camera's zoom limit, write chat lines in the game's colours, and keep files per server and per character
+  - The SDK includes the client's packet reader and writer (`sdk/nmsc_byte_io.h`)
+- Legends of Norrath (`plugins/lon`, docs/plugins/lon.md): on a server that runs the card game's service, `/lon` logs in to it and shows the account, the message of the day, news, leaderboard, collection and online decks. Playing the card game is not there yet
 - Plugins with the new `net` permission can open their own TCP connections (`tcp_open` and the rest in `sdk/nmsc_plugin.h`), for a service a server runs beside the game
-- NMS: the NMS server's client changes are now a plugin (`plugins/nms`, docs/plugins/nms.md), not part of the client. A player installs it in `plugins/` (CI builds it as `hailstone-nms-<platform>`, or `cmake --install build --component nms`), or the NMS server ships it; on any other server it stays off. The login window's Module setting is gone. `nms.auth_key`, `nms.hardware_id` and `nms.xtarget_hide_pets` moved from `hailstone.ini` to `plugins/nms/nms.ini` (a saved server's `[NMS]` keys are still read). The NMS windows are the plugin's, in the Modern and Gamepad packs, and scripts that called `eq.Nms*` now use `eq.Plugin("nms")`
+- NMS: the NMS server's client changes are now a plugin (`plugins/nms`, docs/plugins/nms.md), not part of the client
+  - A player installs it in `plugins/` (CI builds it as `hailstone-nms-<platform>`, or `cmake --install build --component nms`), or the NMS server ships it. On any other server it stays off
+  - The login window's Module setting is gone
+  - `nms.auth_key`, `nms.hardware_id` and `nms.xtarget_hide_pets` moved from `hailstone.ini` to `plugins/nms/nms.ini` (a saved server's `[NMS]` keys are still read)
+  - The NMS windows are the plugin's, in the Modern and Gamepad packs, and scripts that called `eq.Nms*` now use `eq.Plugin("nms")`
 - Plugins and Lua plugins can tell which server they are on (`server_info`, `hailstone.server()`: the saved server's name and host, the world's name), so a plugin for one server can stand down on another that sends the same packets
-- Plugin windows can cover a UI pack's window of the same name (the pack's returns when the plugin unloads) and draw it with `ui.base_window()`; the Modern and Gamepad Pet windows are libraries (`lib/pet.lua`) a plugin's Pet window can add to
-- Boats: a boat you sail at the helm stops at docks, the shore and other boats instead of passing through them; walking on a moving boat no longer takes you over its side (jump to go overboard); a boat's own animation moves its collision; where two boats overlap you stay on the one you stand on
-- Project Triune: a plugin of its own (`plugins/projecttriune`, now in its own private repository), first as a copy of the NMS plugin; it turns on only on a server named Triune, where the NMS plugin now stands down (`skip_servers` in nms.ini)
-- Web links: a link the server sends (a quest's `SendWebLink`) opens in your web browser, as the original opens its own web window; scripts and plugins open pages with `/url` only with the new `web` permission, and a server can limit them to its own sites (`hailstone.cfg` `[web] allow`)
-- An in-game web browser (Modern and Gamepad UIs): `/web [address]` opens it, and a server's web links open in it as the original's web window did; tabs, back / forward / reload, the address, a button for your own browser. It runs on Chromium (CEF) in a helper of its own in the new `browser/` folder (about 390 MB on Linux) and writes only to `web/` in Hailstone's folder. Not on macOS yet: there pages open in your own browser
-- `/survey` opens in the in-game browser, and the Modern UI's EQ menu has a Web Browser row; on Linux the browser's pages run in Chromium's sandbox where the system allows it (`hailstone.ini` `browser.sandbox`), and their cookies are kept when the game closes
+- Plugin windows can cover a UI pack's window of the same name (the pack's returns when the plugin unloads) and draw it with `ui.base_window()`. The Modern and Gamepad Pet windows are libraries (`lib/pet.lua`) a plugin's Pet window can add to
+- Boats
+  - A boat you sail at the helm stops at docks, the shore and other boats instead of passing through them
+  - Walking on a moving boat no longer takes you over its side (jump to go overboard)
+  - A boat's own animation moves its collision, and where two boats overlap you stay on the one you stand on
+- Project Triune: a plugin of its own (`plugins/projecttriune`, now in its own private repository), first as a copy of the NMS plugin. It turns on only on a server named Triune, where the NMS plugin now stands down (`skip_servers` in nms.ini)
+- Web links: a link the server sends (a quest's `SendWebLink`) opens in your web browser, as the original opens its own web window. Scripts and plugins open pages with `/url` only with the new `web` permission, and a server can limit them to its own sites (`hailstone.cfg` `[web] allow`)
+- An in-game web browser (Modern and Gamepad UIs)
+  - `/web [address]` opens it, and a server's web links open in it as the original's web window did
+  - Tabs, back / forward / reload, the address, and a button for your own browser
+  - It runs on Chromium (CEF) in a helper of its own in the new `browser/` folder (about 390 MB on Linux) and writes only to `web/` in Hailstone's folder
+  - Not on macOS yet: there pages open in your own browser
+- `/survey` opens in the in-game browser, and the Modern UI's EQ menu has a Web Browser row. On Linux the browser's pages run in Chromium's sandbox where the system allows it (`hailstone.ini` `browser.sandbox`), and their cookies are kept when the game closes
 - Scripts and plugins with the `web` permission can open web pages of their own in the in-game browser, draw them in their windows and talk to them (`mq.web`, `eq.Web*` in a plugin's window, plugin ABI 3's `web_*`; docs/plugins.md "Web pages"), on the sites the server allows
-- Project Triune: its loot (LootNScoot) in the plugin: rules by item and keyword with limits, auto-pass, ignore lists, the active looter among a player's characters, and the loot window with Pending, Rules, Send and Settings in the Modern and Gamepad UIs (`/nmsloot`); a player's own NMSLoot folder can be copied in
-- NMS plugin: the Multiclass Autoplay Console and its Autoplay Cooldowns window are gone (both UIs, and the EQ menu's Autoplay Console row); the client's own Ability Book does autoskill. `/autoskill` alone now opens the Ability Book; `/autoskill <args>` still goes to the server
-- Project Triune: the plugin's Multiclass Autoplay Console and its Autoplay Cooldowns window are gone (both UIs, and the EQ menu's Autoplay Console row); the client's own Ability Book does autoskill. `/autoskill` alone now opens the Ability Book; `/autoskill <args>` still goes to the server
+- Project Triune: its loot (LootNScoot) in the plugin
+  - Rules by item and keyword with limits, auto-pass, ignore lists, and the active looter among a player's characters
+  - The loot window with Pending, Rules, Send and Settings in the Modern and Gamepad UIs (`/nmsloot`)
+  - A player's own NMSLoot folder can be copied in
+- NMS plugin: the Multiclass Autoplay Console and its Autoplay Cooldowns window are gone (both UIs, and the EQ menu's Autoplay Console row); the client's own Ability Book does autoskill. `/autoskill` alone opens the Ability Book; `/autoskill <args>` still goes to the server
+- Project Triune: the plugin's Multiclass Autoplay Console and its Autoplay Cooldowns window are gone (both UIs, and the EQ menu's Autoplay Console row); the client's own Ability Book does autoskill. `/autoskill` alone opens the Ability Book; `/autoskill <args>` still goes to the server
 - Project Triune: the loot window follows the patch's 2026-10-30 build: Tribute All (when the server offers it), "Set as active looter on login" for any number of characters, "Hide looted corpses", and the build's new loot settings are kept when the rules file is saved
 - NMS and Project Triune: the plugins no longer take `/fov` and `/camera`; the client's own field of view and zoom options do that
 - Project Triune: the server's own windows (text, buttons, fields, tables, grids, drawn canvases), in both UI packs, with clicks, keys and typed text sent back
-- Project Triune: the map, the minimap and the zone map show other players and nearby NPCs in their con colours, as Triune's patch does; how far the NPCs show grows with the Tracking skill and Triune's tracking alternate ability
+- Project Triune: the map, the minimap and the zone map show other players and nearby NPCs in their con colours, as Triune's patch does. How far the NPCs show grows with the Tracking skill and Triune's tracking alternate ability
 - Plugins can put spawns on the game's maps (`map_spawn`), and read a skill's value and an owned alternate ability (`skill`, `aa_value`)
 - Project Triune: 15 more window labels from the server's values (heroic stats and saves, shielding, heal amount, spell damage), and `/target <name>` finds a "(<name>)" spawn
 - Project Triune: monster forms: a form keeps its own hot bars (the character's come back when it ends), and disciplines and melee skills are refused while in one
 - Plugins: they may read and change the hot buttons, and refuse a skill before it is used
-- Project Triune: class checks over all of a multiclass character's classes, as Triune's patch does: augments for worn items, the Wizard / Magician / Necromancer / Enchanter research containers, and focus effects (class-limited foci and AAs; Bards and melee classes keep their spell and AA focus)
+- Project Triune: class checks cover all of a multiclass character's classes, as Triune's patch does: augments for worn items, the Wizard / Magician / Necromancer / Enchanter research containers, and focus effects (class-limited foci and AAs; Bards and melee classes keep their spell and AA focus)
 - Project Triune: its discipline timers: three more disciplines on the server's timers, no reuse focus on those cool-downs, and the combat abilities window's effect label only for the character's own disciplines
-- NMS: the Pet window (Modern and Gamepad) commands all your pets, one class's or your swarm pets through the server's `#petcmd`: attack, follow, guard, taunt, hold, focus, assist and the rest, with On / Off for its switches; the stock pet buttons stay, rolled up
+- NMS: the Pet window (Modern and Gamepad) commands all your pets, one class's or your swarm pets through the server's `#petcmd`: attack, follow, guard, taunt, hold, focus, assist and the rest, with On / Off for its switches. The stock pet buttons stay, rolled up
 - Plugin windows can use their UI pack's own libraries (a `dofile` the plugin's folder lacks finds the pack's), and a plugin's table keyed by whole numbers reaches Lua with integer keys; a plugin's "Level Needed" line of nil keeps the stock line
 - EQ menu: every row has an icon (Ability Book, Help, Mail, Mercenaries, Bazaar and Barter Search, Tribute, PvP Stats and the rest that had a dot), and the gamepad UI's All Windows list shows the same icons
 - Smoother frames: the Lua UI no longer stutters about once a second (its garbage collection runs in a small slice each frame instead of all at once)
 - Performance window (Ctrl+Shift+P): the slowest frame's phases beside the average, and "Log hitches" writes each slow frame to the log with what took the time
-- Modern UI: a default layout for every screen size and UI scale, so a new character's frames no longer overlap (the chat, hot bar, spell gems, unit frames, casting bar, buffs and minimap each have their own place); frames already moved keep their places, Reset every position brings back the new defaults
+- Modern UI: a default layout for every screen size and UI scale, so a new character's frames no longer overlap
+  - The chat, hot bar, spell gems, unit frames, casting bar, buffs and minimap each have their own place
+  - Frames already moved keep their places; Reset every position brings back the new defaults
 - Rain can be seen falling in the Modern lighting: longer, slightly wider streaks and more of them (the Classic lighting keeps the original's)
 - Options > General: "Attack Until XTarget Is Clear" keeps auto attack on after your target dies while your extended target list still holds a spawn (off by default)
 - Plugin windows (NMS, Project Triune) no longer disappear during the 30 seconds of a camp, including the camp started by closing the game window
 - Modern UI: the cast bar is part of the Player window instead of a frame of its own
 - Clicking a tradeskill station (forge, oven, loom) opens only the tradeskill window; the plain container window no longer pops up with it or after closing it. Experiment opens the station in a Modern UI container window
 - Modern UI: the Player window no longer shows the pet's health bar (the Pet window does)
-- Modern UI: a window's Opacity setting (right-click menu) now fades its whole contents, not only its frame
+- Modern UI: a window's Opacity setting (right-click menu) fades its whole contents, not only its frame
 - Modern UI: every window's right-click menu has Close (frames, dialogs, the Options window and Project Triune's server windows)
 - The guild window no longer slows the game down with a large guild open
 - Modern UI: the Options window's Window Transparency applies to every window, and a window with Fades ticked (its right-click menu) fades to the Fade-to Transparency after the Fade Delay when the mouse leaves it
 - Modern UI: chat timestamps: "Timestamps" in the chat window's right-click menu shows each line's time, [hh:mm:ss]; the saved chat history keeps the times too
 - Modern UI: a tell window flashes once when a tell comes in
 - Modern UI: right-clicking a buff or song opens a menu: Spell Info, Add to Blocked Buffs, Remove
-- Modern UI: a resizable window's Scale (right-click menu) now zooms the whole window, the Alternate Advancement window among them, and Ctrl+mouse wheel zooms any window
+- Modern UI: a resizable window's Scale (right-click menu) zooms the whole window, the Alternate Advancement window among them, and Ctrl+mouse wheel zooms any window
 - Modern UI: an invitation to a group pops up with who sent it, Accept and Decline
 - Options > General "Fast Camp" (off by default): camping logs out at once instead of after 30 seconds. On a stock EQEmu server the character then stays in the zone link dead for about 90 seconds
 - Classic character models stand in their second stand pose (P08) and fidget with O02 after running, jumping or a social, as the original does; the player climbs ladders with the climbing animation
 - Female frogloks sit, stand and move with the froglok animations instead of holding a T-pose; a few other classic models that borrow animations (among them SDF, SPL, WEL and FEL) get theirs too
 - Modern lighting: snow, wet ground and a storm's sky no longer follow you into the next zone (snow from the Dreadlands slid over the Bazaar's floor)
 - Modern UI: an Auto-Inventory button in the inventory window and the bank puts the item on your cursor into your inventory
-- Tradeskill window (modern and gamepad UIs): each component shows how many you carry, green when you have enough and red when not, with how many combines you can make; Combine, Combine N and Combine All repeat the combine, put each result away and stop when the components run out or the inventory is full. Works on a stock EQEmu server
-- A silent world or zone connection now counts as link-dead after 180 seconds without a packet, as the original client's does, instead of 15 seconds: a short network stall no longer drops you to character select
-- Guild window (all UIs): the Tribute page shows each member's guild tribute state, donations and last donation, with Tribute Opt Out for yourself (or others, with the guild permission); the Banner page is there but stays empty on a stock EQEmu server, which has no guild banners
+- Tradeskill window (modern and gamepad UIs): component counts and repeated combines
+  - Each component shows how many you carry, green when you have enough and red when not, with how many combines you can make
+  - Combine, Combine N and Combine All repeat the combine, put each result away and stop when the components run out or the inventory is full
+  - Works on a stock EQEmu server
+- A silent world or zone connection counts as link-dead after 180 seconds without a packet, as the original client's does, instead of 15 seconds: a short network stall no longer drops you to character select
+- Guild window (all UIs): the Tribute page shows each member's guild tribute state, donations and last donation, with Tribute Opt Out for yourself (or others, with the guild permission). The Banner page is there but stays empty on a stock EQEmu server, which has no guild banners
 - The first start creates the whole Hailstone folder layout (plugins/, scripts/, textures/default/, maps/, servers/, logs/, screenshots/, bug-reports/ and the rest), so it is clear where to put plugins, scripts, texture packs and maps
 - Gamepad UI: a window that opens together with another (a Tip over the merchant) no longer loses the pad: when the Tip closes, the window under it takes the pad again
 - Modern UI: the EQ menu no longer lists the Aggro Meter (the meter is part of the target window)
 - Modern UI: the Alternate Advancement window's corner grip scales the whole window, text included, as the inventory's does
 - Modern UI: the inventory's Alt. Currency page: Claim and Reclaim no longer overlap the search field below them
 - Character select: the window is a little taller and no longer shows a scroll bar beside the 3D scene
-- Modern UI: every window's bottom-right corner now scales it, text included; windows that can change size do so from their right and bottom edges (the chat too)
+- Modern UI: every window's bottom-right corner scales it, text included; windows that can change size do so from their right and bottom edges (the chat too)
 - EQ menu: in alphabetical order, submenus first, with Help, Report a Bug and Camp & Quit at the bottom; Mercenaries is now under Players
-- Modern UI: window positions, sizes, scales, opacity and locks are now kept per character (`ui-<pack>.txt` in the character's folder); every character starts from the layout you had, and Copy Layout copies it too. The palette and other preferences stay shared
+- Modern UI: window positions, sizes, scales, opacity and locks are kept per character (`ui-<pack>.txt` in the character's folder). Every character starts from the layout you had, and Copy Layout copies it too. The palette and other preferences stay shared
 - The UI settings folder moved from `ui-settings/` to `ui/settings/` in the Hailstone folder; existing files move there at the next start

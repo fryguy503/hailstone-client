@@ -6,7 +6,9 @@
 
 #include "game/alt_adv.h"
 #include "game/mechanics/character.h"
+#include "manual_clock.h"
 #include "mq_test_world.h"
+#include "net/spell_packets.h"
 
 using namespace hailstone;
 
@@ -92,7 +94,7 @@ TEST_CASE("memorize_tick: a bard's step takes DEX, INT and meditate from one cha
     });
     REQUIRE(dex > 0);
     REQUIRE(intel > 0);
-    // Meditate reads 0 here (no skill-cap tables): it takes its floor of 10, so a mix-up with DEX or INT shows.
+    // This bard has no trained Meditate, so it takes the floor of 10.
     REQUIRE(meditate < 10);
     const int step = std::max(meditate, 10) / 10 + (dex + intel) / 30 + 1 + 2;
 
@@ -106,4 +108,67 @@ TEST_CASE("memorize_tick: a bard's step takes DEX, INT and meditate from one cha
     // The same millisecond: not due, nothing taken.
     A::memorize_tick(c, 100000);
     CHECK(sp.memorizing->ticks_left == 1000 - step);
+}
+
+TEST_CASE("spell gem menu: a level 60 cleric memorizes at the trained Meditate speed") {
+    using namespace std::chrono_literals;
+    mq_test::World w("hailstone_memorize_meditate_test");
+    auto& c = *w.conn;
+    auto& prof = *A::profile(c);
+    prof.level = A::status(c).level = 60;
+    prof.skills.resize(100);
+    prof.skills[31] = 252;
+    bool have_caps = true;
+    int step = 28;
+    SUBCASE("with the game skill caps") {}
+    SUBCASE("with no skill-cap file") { have_caps = false; }
+    SUBCASE("with no trained Meditate") {
+        prof.skills[31] = 0;
+        step = 4;
+    }
+    if (have_caps) {
+        std::filesystem::create_directories(w.dir / "Resources");
+        std::ofstream(w.dir / "Resources/SkillCaps.txt") << "2^31^4^20^0\n2^31^100^252^0\n";
+        w.game->rescan();
+    }
+
+    constexpr std::uint32_t spell_id = 1447;
+    constexpr int gem = 2;
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(mq_test::spell_line({{0, "1447"}, {1, "Aegolism"}, {105, "60"}})) == 1);
+    c.set_spell_table_for_test(table);
+    A::spells(c).book[0] = spell_id;
+
+    c.memorize_from_cursor(spell_id, gem);
+    REQUIRE(c.spell_book_open());
+    CHECK(c.sitting());
+    CHECK_FALSE(c.spell_state().memorizing);
+    A::start_scheduled_memorization(c);
+    REQUIRE(c.spell_state().memorizing);
+    CHECK(c.spell_state().memorizing->ticks_left == game::kMemorizeTicks);
+
+    test::ManualClock clock;
+    clock.hold();
+    auto now = clock.source();
+    const auto started = now();
+    auto tick = [&](std::chrono::milliseconds advance) {
+        clock.advance(advance);
+        A::memorize_tick(c, 1000 + std::chrono::duration_cast<std::chrono::milliseconds>(now() - started).count());
+    };
+    tick(0ms);
+    for (int left = game::kMemorizeTicks - step; left > 0; left -= step) {
+        REQUIRE(c.spell_state().memorizing);
+        CHECK(c.spell_state().memorizing->ticks_left == left);
+        tick(500ms);
+        REQUIRE(c.spell_state().memorizing);
+        CHECK(c.spell_state().memorizing->ticks_left == left);
+        tick(1ms);
+    }
+    CHECK_FALSE(c.spell_state().memorizing);
+    CHECK(c.spell_state().memorize_sent_gem == gem);
+    CHECK(c.spell_state().gems[gem].spell == game::kNoSpell);
+
+    c.receive_zone_packet_for_test(net::encode(net::MemorizeSpell{gem, spell_id, net::kMemMemorize, 0}));
+    CHECK(c.spell_state().gems[gem].spell == spell_id);
+    CHECK_FALSE(c.spell_book_open());
 }

@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <unordered_set>
 #include <stdexcept>
@@ -907,13 +908,17 @@ void load_heightmap(Zone& zone, const Source& src, std::span<const std::byte> zo
     // Objects: individual placements plus .tog groups.
     std::vector<eqg::HeightmapObject> placements = map.objects;
     std::size_t missing_groups = 0;
+    // A zone places the same group many times; each .tog is read and parsed once (nullopt: missing).
+    std::map<std::string, std::optional<std::vector<eqg::HeightmapObject>>> togs;
     for (const auto& g : map.groups) {
-        auto data = src.read(g.model + ".tog");
-        if (!data) {
+        auto [it, fresh] = togs.try_emplace(g.model);
+        if (fresh)
+            if (auto data = src.read(g.model + ".tog")) it->second = eqg::parse_tog(*data);
+        if (!it->second) {
             ++missing_groups;
             continue;
         }
-        for (auto o : eqg::parse_tog(*data)) {
+        for (auto o : *it->second) {
             o.transform = g.transform * o.transform;
             placements.push_back(std::move(o));
         }

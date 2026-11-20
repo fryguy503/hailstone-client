@@ -32,6 +32,16 @@ TEST_CASE("Private file: written owner-only, never over a file already there") {
     CHECK_FALSE(write_private_file(key, "other\n"));
     CHECK(read_all(key) == "secret\n");
     CHECK_FALSE(write_private_file(dir.path() / "no-such-folder" / "k", "x"));
+    // A folder at the name is not written into or over, and is left.
+    fs::create_directory(dir.path() / "taken");
+    CHECK_FALSE(write_private_file(dir.path() / "taken", "x"));
+    CHECK(fs::is_directory(dir.path() / "taken"));
+#if !defined(_WIN32)
+    // Nor a link someone planted at the name, even one to nothing yet: the secret never lands where it points.
+    fs::create_symlink(dir.path() / "elsewhere", dir.path() / "planted.key");
+    CHECK_FALSE(write_private_file(dir.path() / "planted.key", "secret\n"));
+    CHECK_FALSE(fs::exists(dir.path() / "elsewhere"));
+#endif
 }
 
 TEST_CASE("Private folder: made owner-only, never over a folder or link already there") {

@@ -467,6 +467,8 @@ TEST_CASE("bazaar inspect, trader list, search results and item removal") {
     CHECK(r->results[0].name == "Fine Steel Sword");
     CHECK(r->results[0].stat == 7);
     CHECK(bytes_of(encode(*r)) == res.b);
+    CHECK(decode_bazaar_voucher_cost(packet(Op::BazaarSearch, res.b)) == 151);
+    CHECK_FALSE(decode_bazaar_voucher_cost(packet(Op::BazaarSearch, Buf().u32(0).u8(1).b)));
     // The server's "done" (BazaarReturnDone_Struct) carries a count of -1: no results.
     Buf done;
     done.u32(12).u32(42).u32(0xffffffffu).u32(0xffffffffu).u32(0xffffffffu);
@@ -784,6 +786,14 @@ TEST_CASE("mail packets from the chat server decode into their fields") {
     REQUIRE(boxes);
     CHECK(boxes->kind == ChatServerEvent::Kind::MailboxList);
     CHECK(boxes->fields == std::vector<std::string>{"SOE.EQ.nms.Nmscmnine", "SOE.EQ.nms.Alt"});
+    // Blanks around a name are trimmed, a long run of them in one go.
+    Buf padded;
+    padded.u8(1).u32(1).u32(0);
+    padded.b.insert(padded.b.end(), 1000000, std::uint8_t{' '});
+    padded.str("SOE.EQ.nms.Pad   ").u8(0);
+    auto pad = decode_chat_server_packet(packet(ucs::kMailLogin, padded.b));
+    REQUIRE(pad);
+    CHECK(pad->fields == std::vector<std::string>{"SOE.EQ.nms.Pad"});
     // UCSDatabase::SendHeaders: the count, then one header per mail.
     auto count = decode_chat_server_packet(encode_ucs_strings(ucs::kMailHeaderCount, {"0", "25015275", "1", "3"}));
     REQUIRE(count);

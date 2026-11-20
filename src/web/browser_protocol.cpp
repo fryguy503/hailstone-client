@@ -45,7 +45,7 @@ void write(ByteWriter& w, const Open& m) {
     w.le(m.tab);
     w.le(m.width);
     w.le(m.height);
-    flag(w, m.restricted);
+    put(w, m.rules);
     w.le(static_cast<std::uint32_t>(m.allow.size()));
     for (const auto& a : m.allow) str(w, a);
     str(w, m.profile);
@@ -114,7 +114,7 @@ template <> Open read<Open>(ByteReader& r) {
     m.tab = r.le<std::uint32_t>();
     m.width = r.le<std::uint16_t>();
     m.height = r.le<std::uint16_t>();
-    m.restricted = flag(r);
+    m.rules = pick(r, TabRules::Sites);
     auto n = r.le<std::uint32_t>();
     if (n > r.remaining() / 4) throw std::out_of_range("allow count");
     for (std::uint32_t i = 0; i < n; ++i) m.allow.push_back(str(r));

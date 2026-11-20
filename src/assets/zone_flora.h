@@ -93,6 +93,9 @@ inline constexpr float kOutdoorTerrainCover = 20.0f;
 // The text of the rules file `name` (an include), or nullopt.
 using ZoneFloraInclude = std::function<std::optional<std::string>(std::string_view name)>;
 inline constexpr int kMaxFloraIncludeDepth = 4;
+// Includes read in one parse, nested ones counted: a file naming another many times, at every depth, would otherwise
+// read it lines^depth times. Hailstone's own bound; its own rules use one or two.
+inline constexpr int kMaxFloraIncludes = 64;
 
 // Reads a rules file. A line that does not parse is skipped and described in `errors` (with its line number) when
 // given; an include is read through `include` (without it, or when it finds nothing, the line is an error).

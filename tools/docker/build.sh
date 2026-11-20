@@ -77,11 +77,12 @@ windows() {
         # Left out here because they fail only under Wine; this script does not run them, so run them on Windows by
         # hand (docs/ci.md "Builds in containers"): the browser tests (Chromium does not run under Wine), "cancelled
         # ends a transfer stalled..." (Wine's WinHTTP never ends the call), allow_url (Wine's WinHTTP reports another
-        # address to the check) and "File time" (MSVC's time zones need Windows' icu.dll).
+        # address to the check), and "File time" and the story window's links (MSVC's clock_cast from file times needs
+        # Windows' icu.dll).
         dc run --rm --no-deps -e EQ_GAME_DIR= \
             -e WINEDLLOVERRIDES="msvcp140,msvcp140_1,msvcp140_2,msvcp140_atomic_wait,msvcp140_codecvt_ids,vcruntime140,vcruntime140_1,concrt140=n,b" \
             windows-x64 wine build-windows-x64/hailstone_tests.exe '-sfe=*browser_host_test*' \
-            '-tce=*stalled?waiting?for?the?answer*,*allow_url?refuses?an?empty*,File?time:*'
+            '-tce=*stalled?waiting?for?the?answer*,*allow_url?refuses?an?empty*,File?time:*,Story?window:?a?page?s?href*'
     fi
     install_tree windows-x64 windows-x64
     # The default Windows install also writes zlib's bin/, include/ and lib/ (docs/updater.md "Making a release").

@@ -460,6 +460,54 @@ TEST_CASE("addon_install: an install cut off is undone at the next start") {
     CHECK_FALSE(fs::exists(dir.path().parent_path() / "outside"));
 }
 
+// The journal names a batch of moves in one synced write before any of them is made (the old files out, then the new
+// ones in): a cut anywhere in a batch leaves lines for moves never made, which find nothing where they point and are
+// skipped, while the moves made are put back.
+TEST_CASE("addon_install: an install cut off inside a batch of moves is undone") {
+    test::ScratchDir dir("addon_journal_batch");
+    const fs::path folder = addon_folder(dir.path(), AddonKind::Script, "autoloot");
+    install_script(dir.path(), "autoloot", "1.0.0", {{"init.lua", "-- v1\n"}, {"lib.lua", "-- lib v1\n"}});
+    const fs::path addons = addons_dir(dir.path());
+    const std::string registry = read_file(addons / "installed.txt");
+    const std::string outs = "move\tscripts/autoloot/init.lua\taddons/previous/autoloot/init.lua\n"
+                             "move\tscripts/autoloot/lib.lua\taddons/previous/autoloot/lib.lua\n";
+    const std::string ins = "move\taddons/new/autoloot/init.lua\tscripts/autoloot/init.lua\n"
+                            "move\taddons/new/autoloot/lib.lua\tscripts/autoloot/lib.lua\n";
+
+    // Cut inside the first batch: one old file moved out, the other not yet.
+    fs::create_directories(addons / "previous" / "autoloot");
+    fs::rename(folder / "init.lua", addons / "previous" / "autoloot" / "init.lua");
+    put_file(addons / "new" / "autoloot" / "init.lua", "-- v2\n");
+    put_file(addons / "new" / "autoloot" / "lib.lua", "-- lib v2\n");
+    put_file(addons / "journal.txt", outs);
+    addons_at_start(dir.path());
+    CHECK(read_file(folder / "init.lua") == "-- v1\n");
+    CHECK(read_file(folder / "lib.lua") == "-- lib v1\n");
+    CHECK(read_file(addons / "installed.txt") == registry);
+
+    // Cut after the second batch's lines were written, before (and then part way through) its moves.
+    for (int made = 0; made <= 1; ++made) {
+        fs::create_directories(addons / "previous" / "autoloot");
+        fs::rename(folder / "init.lua", addons / "previous" / "autoloot" / "init.lua");
+        fs::rename(folder / "lib.lua", addons / "previous" / "autoloot" / "lib.lua");
+        put_file(addons / "new" / "autoloot" / "init.lua", "-- v2\n");
+        put_file(addons / "new" / "autoloot" / "lib.lua", "-- lib v2\n");
+        if (made) fs::rename(addons / "new" / "autoloot" / "init.lua", folder / "init.lua");
+        put_file(addons / "journal.txt", outs + ins);
+        addons_at_start(dir.path());
+        CHECK(read_file(folder / "init.lua") == "-- v1\n");
+        CHECK(read_file(folder / "lib.lua") == "-- lib v1\n");
+        CHECK(read_file(addons / "installed.txt") == registry);
+        CHECK_FALSE(fs::exists(addons / "journal.txt"));
+        CHECK_FALSE(fs::exists(addons / "previous"));
+    }
+
+    // And a whole install still goes through, its journal gone.
+    install_script(dir.path(), "autoloot", "2.0.0", {{"init.lua", "-- v2\n"}, {"lib.lua", "-- lib v2\n"}});
+    CHECK(read_file(folder / "lib.lua") == "-- lib v2\n");
+    CHECK_FALSE(fs::exists(addons / "journal.txt"));
+}
+
 // The journal is written ahead of each move (on the disk before it); should it still come back without a line, a
 // file left in previous/ after the undo may be the only copy of a replaced one: it is kept aside, not deleted.
 TEST_CASE("addon_install: files in previous/ an unfinished journal does not name are kept aside") {

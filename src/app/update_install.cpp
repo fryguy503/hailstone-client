@@ -470,7 +470,16 @@ InstallResult install_staged_update(const fs::path& install_dir, const std::stri
             std::string why;
             if (fs::exists(target, ec)) {
                 if (!note("moved", name)) return fail("cannot write the update journal");
-                if (!move_file(target, dir / "previous" / rel(name), &why)) return fail(why);
+                // POSIX: previous/ gets a hard link and the old file stays in place until the new one replaces it in
+                // one rename, so a power cut never leaves the name (the program itself) without a file; the roll-back
+                // treats the link as the moved file. Windows (a running program's files are renamed away, never
+                // replaced) and file systems without hard links: moved out first, then the new one in
+                // (docs/updater.md "Limits").
+                const fs::path saved = dir / "previous" / rel(name);
+                fs::create_directories(saved.parent_path(), ec);
+                std::error_code linked;
+                if (!platform::link_file_synced(target, saved, linked) && !move_file(target, saved, &why))
+                    return fail(why);
             } else if (!note("added", name)) {
                 return fail("cannot write the update journal");
             }

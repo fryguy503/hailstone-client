@@ -9,8 +9,9 @@ usage: tools/make_update.py --version 0.2.0-alpha --platform linux-x64 --dist di
 
 The whole folder, the browser and the plugins included, becomes one zip, hailstone-<version>-<platform>.zip: the
 download a player unpacks into a folder of their own, and the manifest's one package (`core`) the updater installs.
-Its names have no top folder, as the updater wants them. A symbolic link is stored as the file or folder it points
-to (a link to a folder holding it stops the tool). The zip is made the same way each time (sorted, dated
+Its names have no top folder, as the updater wants them. Files and folders whose name starts with '.' are left out.
+A symbolic link is stored as the file or folder it points to, which must lie inside --dist (a link out of it, or to a
+folder holding it, stops the tool). --out may not lie inside --dist. The zip is made the same way each time (sorted, dated
 1980-01-01, the files' Unix permissions).
 Existing package lines of other platforms in --out/hailstone-update.txt are kept; this platform's are replaced.
 """
@@ -22,24 +23,58 @@ import sys
 import zipfile
 
 MANIFEST = "hailstone-update.txt"
-VERSION = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$")
+# core/version.cpp parse_version: no leading zeros in the three numbers or a numeric pre-release field.
+VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$")
 WORD = re.compile(r"^[a-z0-9_-]{1,64}$")
 # What an update may never write (app/update_install.cpp is_player_path); kept out of packages here too.
 PLAYER_FOLDERS = {"update", "servers", "logs", "cache", "screenshots", "bug-reports", "maps", "scripts", "textures",
-                  "web", "addons", "tools"}
+                  "web", "addons", "tools", "ui-data", "ui-addons"}
 PLAYER_FILES = {"hailstone.ini", "hailstone-windows.ini", "notes.txt"}
 
 
 def is_player_path(name):
     p = name.lower()
+    if p in ("ui-data", "ui-addons"):
+        return True
     first = p.split("/", 1)[0]
     return ("/" in p and first in PLAYER_FOLDERS) or p in PLAYER_FILES or \
         p.startswith("ui/settings/") or p.startswith("ui/loadingbackgrounds/")
 
 
-def files_under(root, top=""):
-    """Every file under root/top, as '/'-separated names relative to root, sorted. A link to a folder is walked as
-    the folder it points to; one that leads back into a folder holding it stops the tool."""
+def is_windows_device_name(part):
+    """core/windows_names.h is_windows_device_name (tools/make_addon.py has the same)."""
+    stem = "".join(c.lower() if c < "\x80" else c for c in part.split(".", 1)[0]).rstrip(" ")  # ASCII case only
+    if stem in ("con", "prn", "aux", "nul", "conin$", "conout$"):
+        return True
+    if not stem.startswith(("com", "lpt")):
+        return False
+    digit = stem[3:]
+    return (len(digit) == 1 and "1" <= digit <= "9") or digit in ("\u00b9", "\u00b2", "\u00b3")
+
+
+def is_safe_zip_path(name):
+    """core/zip_read.cpp is_safe_zip_path, which the updater applies to every name in the download."""
+    if not name or name.startswith("/"):
+        return False
+    if any(ord(c) < 0x20 or ord(c) == 0x7F or c in "\\:" for c in name):
+        return False
+    for part in (name[:-1] if name.endswith("/") else name).split("/"):
+        if part in ("", ".", ".."):
+            return False
+        if part.endswith((".", " ")) or is_windows_device_name(part):
+            return False
+    return True
+
+
+def within(path, folder):
+    path, folder = os.path.realpath(path), os.path.realpath(folder)
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def files_under(root):
+    """Every file under root, as '/'-separated names relative to it, sorted; dotfiles and dot-folders left out. A link
+    is stored as the file or folder it points to when that is inside root; one that leads out of root, to no file, or
+    back into a folder holding it stops the tool."""
     out = []
 
     def walk(folder, holding):
@@ -48,7 +83,11 @@ def files_under(root, top=""):
             sys.exit(f"{folder}: a link to a folder that holds it")
         holding = holding | {real}
         for name in sorted(os.listdir(folder)):
+            if name.startswith("."):
+                continue
             full = os.path.join(folder, name)
+            if os.path.islink(full) and not within(full, root):
+                sys.exit(f"{full}: a link out of {root}; copy what it points to in")
             if os.path.isdir(full):
                 walk(full, holding)
                 continue
@@ -56,7 +95,7 @@ def files_under(root, top=""):
                 sys.exit(f"{full}: a link to no file")
             out.append(os.path.relpath(full, root).replace(os.sep, "/"))
 
-    walk(os.path.join(root, top) if top else root, frozenset())
+    walk(root, frozenset())
     return sorted(out)
 
 
@@ -64,6 +103,9 @@ def make_zip(path, root, names):
     lowered = set()
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for name in names:
+            if not is_safe_zip_path(name):
+                sys.exit(f"{name}: a name the updater refuses (a '\\', ':' or control character, a part ending in "
+                         "'.' or ' ', or a Windows device name such as aux or nul)")
             if is_player_path(name):
                 sys.exit(f"{name}: one of the player's paths, which an update may not write")
             if name.lower() in lowered:
@@ -113,6 +155,8 @@ def main():
         sys.exit(f"{a.platform}: not a platform name")
     if a.notes:
         check_notes(a.notes)
+    if within(a.out, a.dist):
+        sys.exit(f"--out {a.out} is inside --dist {a.dist}: its zips and manifest would go into the download")
     os.makedirs(a.out, exist_ok=True)
 
     everything = files_under(a.dist)

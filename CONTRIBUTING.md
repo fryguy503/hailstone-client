@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping test and improve Hailstone. This guide is for everyone who sends a change: people, and AI coding tools used by people or running on their own. Agents should also read [AGENTS.md](AGENTS.md), which adds the details a tool needs.
+Thanks for helping test and improve Hailstone. This guide is for everyone who sends a change, people and AI coding tools alike. Agents should also read [AGENTS.md](AGENTS.md).
 
 ## Reporting bugs
 
@@ -15,50 +15,61 @@ Security problems go through [SECURITY.md](SECURITY.md), not a public issue.
 
 ## Before you start
 
-- Read [docs/plan.md](docs/plan.md) (goals and architecture), [docs/code-overview.md](docs/code-overview.md) (where everything is), [docs/todo.md](docs/todo.md) (what is open) and [docs/unknowns.md](docs/unknowns.md) (what is guessed). Pick work from the to-do list, or open an issue first for anything large, so effort is not duplicated.
+- Read:
+  - [docs/plan.md](docs/plan.md): goals and architecture;
+  - [docs/code-overview.md](docs/code-overview.md): where everything is;
+  - [docs/todo.md](docs/todo.md): what is open;
+  - [docs/unknowns.md](docs/unknowns.md): what is guessed.
+- Pick work from the to-do list, or open an issue first for anything large.
 - The rules that shape every change:
-  - **RoF2 is the baseline, not the ceiling; modern graphics.** Game rules start from the original RoF2 client. The client may go past RoF2's hard limits where a server offers more, as long as it still works the RoF2 way with a server that does not; mark such an extension in the code and docs. Rendering does not have to look like the original.
+  - **RoF2 is the baseline, not the ceiling; modern graphics.** Game rules start from the original RoF2 client. The client may go past RoF2's hard limits where a server offers more, if it still works the RoF2 way with a server that does not; mark such an extension in the code and docs. Rendering need not look like the original.
   - **No guessing.** Behaviour you cannot confirm is recorded in `docs/unknowns.md` rather than invented.
   - **Stock EQEmu first.** The client must work against an unmodified EQEmu RoF2 server. Features for a particular server switch on only when that server announces them; support for one server's own protocol is a plugin (docs/plugins.md).
 
 ## Building and testing
 
-See the Quick start in the [README](README.md). Before sending a change:
+See "Building from source" in the [README](README.md). Before sending a change:
 
 ```sh
 cmake --build build
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -j 8 --output-on-failure
 build/hailstone/hailstone --validation
 ```
 
 - Run the whole test suite, not only the tests you added.
-- Tests that need your game folder or recorded vectors (`EQ_GAME_DIR`, `HAILSTONE_VECTORS_DIR`) are skipped when those are unset. Run them with the variables set when you change something they cover. A few tests of the newer model files (hero's forge layers, the live spell file) also need a current live install in `EQ_LIVE_DIR`.
-- CI on GitHub runs checks only; it does not build ([docs/ci.md](docs/ci.md)). Builds and tests are run locally: Linux natively, and Windows with MSVC, which also runs on Linux under Wine ([docs/ci.md](docs/ci.md) "MSVC under Wine"). A change that only builds with your compiler is not done.
+- Tests that need your game folder or recorded vectors (`EQ_GAME_DIR`, `HAILSTONE_VECTORS_DIR`) are skipped when those are unset; set them when you change something they cover. A few tests of newer model files also need a current live install in `EQ_LIVE_DIR`.
+- CI on GitHub runs checks only, no builds ([docs/ci.md](docs/ci.md)). Build and test locally on Linux and with MSVC on Windows, which also runs under Wine ([docs/ci.md](docs/ci.md) "MSVC under Wine"). A change that only builds with your compiler is not done.
 - A Windows build can also be cross-compiled on Linux with clang-cl ([docs/ci.md](docs/ci.md) "Windows builds from Linux").
 - For code that parses bytes, also run the sanitizer build ([docs/hardening.md](docs/hardening.md)).
 
 ## Code guidelines
 
 - C++20. Match the style of the surrounding code: naming, comment density and error handling. Comments say why, not what.
-- Read and write files and packets only through `core/byte_io.h`. Never cast a struct onto a buffer. (The plugin area, `src/plugin/`, is the exception: data it hands an in-process plugin, such as the bulk reads `get_*_data_bulk`, may be a `#pragma pack` struct copied into the plugin's buffer with `memcpy`, as docs/plugins.md describes.)
+- Read and write files and packets only through `core/byte_io.h`. Never cast a struct onto a buffer.
+  - Except in the plugin area, `src/plugin/`: data it hands an in-process plugin (the bulk reads `get_*_data_bulk`) may be a `#pragma pack` struct, as [AGENTS.md](AGENTS.md) and docs/plugins.md describe.
 - OS calls go only in `src/platform/`. Layers depend downward only (`app` -> `game` / `ui` / `render` / `audio` -> `assets` / `net` / `web` -> `core` / `platform`).
 - Make no assumptions about the size of `long` or `wchar_t`, path separators or byte order.
 - Add or update tests for new behavior, and register new source and test files in `CMakeLists.txt`.
 - Do not hand-edit generated files (`Generated by tools/gen_*.py` in the header); change the generator and regenerate.
 - Keep the change focused. No unrelated reformatting, renames or speculative features.
-- Update the docs in the same change: the page that describes the behaviour, `docs/todo.md` and `docs/unknowns.md` when you settle or add a gap, and `CHANGELOG.md` for anything a player or server owner would notice.
+- Update the docs in the same change:
+  - the page that describes the behaviour;
+  - `docs/todo.md` and `docs/unknowns.md` when you settle or add a gap;
+  - `CHANGELOG.md` for anything a player or server owner would notice.
 
 ## Plugins and scripts
 
-New plugins and Lua scripts are add-ons and are not part of this repository. Put each one in a GitHub repository of its own:
+New plugins and Lua scripts are add-ons, each in a GitHub repository of its own:
 
 - with a `hailstone-addon.txt` manifest;
 - built against `sdk/` alone, for a plugin;
 - released with `tools/make_addon.py`.
 
-Players install it by pasting its link into **Add-ons** on the login screen. [docs/addons.md](docs/addons.md) "For authors" shows how, and [docs/plugins.md](docs/plugins.md) describes the API.
+Players install it by pasting its link into **Add-ons** on the login screen ([docs/addons.md](docs/addons.md) "For authors"; API in [docs/plugins.md](docs/plugins.md)).
 
-If an add-on needs something the client does not offer yet (a host function, TLO, event or `hs.*` call), send that as a change to this repository, with tests and docs. Only `plugins/example/` (the SDK example) lives here; the server plugins (NMS, Project Triune) are add-ons in repositories of their own too.
+If an add-on needs something the client does not offer yet (a host function, TLO, event or `hs.*` call), send that as a change to this repository, with tests and docs.
+
+Only `plugins/example/` (the SDK example) lives here; the server plugins (NMS, Project Triune) have repositories of their own.
 
 ## Clean-room rule
 
@@ -68,13 +79,13 @@ Hailstone must contain no code or assets from proprietary software. Do not submi
 - art, sounds, models, textures, UI layouts or data tables taken from proprietary software
 - a whole string table or game data file, or text copied from one in bulk
 
-Single pieces of text a player sees on screen or a packet capture shows (a message, a prompt, a label) may be used word for word where the code needs them. Text the client already reads from the player's game folder is still read from there.
+Single pieces of text a player sees on screen or a packet capture shows (a message, a prompt, a label) may be used word for word where the code needs them. Text the client reads from the game folder is still read from there.
 
 Protocol and format knowledge from open-source projects and public documentation is fine. Credit what you used in [THIRD_PARTY.md](THIRD_PARTY.md), and respect the license of any code you reference.
 
 ## Working with AI tools
 
-AI-assisted changes are welcome under the same rules as any other change, and the person submitting them is responsible for them.
+AI-assisted changes are welcome under the same rules; the person submitting them is responsible for them.
 
 - Read the diff yourself. Do not send code you cannot explain.
 - Do not let a tool invent behaviour. If it cannot say where a rule comes from, the rule belongs in `docs/unknowns.md`, not in the code as fact.
@@ -87,4 +98,4 @@ AI-assisted changes are welcome under the same rules as any other change, and th
 - Keep pull requests focused. Describe what changed and why, and note how you tested.
 - Do not commit build output, logs, captures containing account data, passwords, auth keys or anything from your game folder.
 
-By contributing you agree that your work is released under the GNU General Public License, version 2 or (at your option) any later version ([LICENSE](LICENSE)), with the plugin and add-on exception in [NOTICE.md](NOTICE.md); changes to [sdk/](sdk/) are released under its MIT licence ([sdk/LICENSE](sdk/LICENSE)).
+By contributing you agree that your work is released under the GNU General Public License, version 2 or (at your option) any later version ([LICENSE](LICENSE)), with the plugin and add-on exception in [NOTICE.md](NOTICE.md). Changes to [sdk/](sdk/) are released under its MIT licence ([sdk/LICENSE](sdk/LICENSE)).

@@ -1486,10 +1486,7 @@ void GameConnection::handle_market(Op op, const AppPacket& p) {
     case Op::BazaarSearch:
         // HandleSearchResults reads the u16 before anything else; EQEmu's delivery costs reply is not a valid
         // result list after it (its float lands in the count), so take it from the raw packet.
-        if (p.data.size() >= 6) {
-            bazaar_.voucher_cost =
-                static_cast<std::uint16_t>(std::to_integer<unsigned>(p.data[4]) | std::to_integer<unsigned>(p.data[5]) << 8);
-        }
+        if (auto cost = decode_bazaar_voucher_cost(p)) bazaar_.voucher_cost = *cost;
         if (auto r = decode_bazaar_results(p)) {
             if (r->results.empty()) {
                 bazaar_.searching = false; // the server's "done" (and the delivery costs)

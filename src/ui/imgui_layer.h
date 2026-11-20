@@ -17,6 +17,9 @@ namespace hailstone::render { class VkContext; struct FrameInfo; }
 namespace hailstone::ui {
 
 namespace detail {
+// A child window or popup can hold navigation focus for the tracked gamepad window.
+bool pad_window_has_focus(const char* name);
+
 // The context-only part of presentation visibility is also usable without SDL or a Vulkan device.
 class ImGuiVisibility {
 public:

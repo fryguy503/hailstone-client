@@ -10,6 +10,7 @@
 // Labels and gauges with an EQType read app/lua_ui_values.h, the original's __GetLabelFromEQ and
 // __GetGaugeValueFromEQ.
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <future>
@@ -297,9 +298,9 @@ struct UiHost {
         std::function<std::vector<MenuRow>()> submenu;
     };
     struct GameMenu {
-        float x = 0, y = 0, w = 0, h = 0;
+        float x = 0, y = 0; // the root menu's opening point
+        std::size_t parent_row = 0; // the row that opened this submenu
         std::vector<MenuRow> rows;
-        std::vector<float> row_y; // each row's top inside the menu (GameMenus fills it)
     };
     std::vector<GameMenu> menus;
     // 0x761f10, CContextMenuManager::PopupMenu @0x862220's test: context menus open only with the ContextMenus
@@ -442,6 +443,10 @@ public:
     void open_all_bags();
     void close_all_bags();
     void toggle_all_bags();
+    // A new interface (a /loadskin): no bag open and both bag keys set to open, as on a new UiApi. The original's
+    // CDisplay::ReloadUI @0x49d6b0 runs CleanGameUI @0x4936e0, which deletes CContainerMgr and CInvSlotMgr, and
+    // InitGameUI @0x4973f0 builds them again (the CInvSlotMgr constructor @0x697d00 sets both keys).
+    void reset_bags();
     // The CMD_TOGGLE_BANK_BAGS key: the bank's and the shared bank's bags open (the bank window showing) or close.
     void toggle_all_bank_bags();
     // The MAIN / ABILITIES / COMBAT / SOCIALS keys: the Actions window on that page, closed when already showing it.

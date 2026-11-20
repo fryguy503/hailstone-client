@@ -28,13 +28,13 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       # Dependencies are fetched by cmake/Dependencies.cmake (FetchContent, pinned); keep their sources between runs.
       - name: Cache fetched dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/_deps/*-src
           key: deps-macos-arm64-${{ hashFiles('cmake/Dependencies.cmake') }}
@@ -80,7 +80,7 @@ jobs:
       - name: Pack
         run: tar -C dist -cf hailstone-macos-arm64.tar hailstone
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hailstone-macos-arm64
           path: hailstone-macos-arm64.tar

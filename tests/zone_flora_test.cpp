@@ -138,6 +138,21 @@ TEST_CASE("zone flora: include reads another rules file in place") {
     errors.clear();
     parse_zone_flora_rules("include default\n", &errors);
     CHECK(errors.size() == 1);
+
+    // A file naming another 20 times at every depth is read kMaxFloraIncludes times in all, not 20^4.
+    int reads = 0;
+    auto fan = [&reads](std::string_view) -> std::optional<std::string> {
+        ++reads;
+        std::string text;
+        for (int i = 0; i < 20; ++i) text += "include fan\n";
+        return text;
+    };
+    errors.clear();
+    parse_zone_flora_rules("include fan\n", &errors, fan);
+    CHECK(reads == kMaxFloraIncludes);
+    CHECK(std::count_if(errors.begin(), errors.end(), [](const std::string& e) {
+              return e.find("too many includes") != std::string::npos;
+          }) > 0);
 }
 
 TEST_CASE("zone flora: a zone's own rules, else default.txt when it is outdoor") {

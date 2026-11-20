@@ -218,4 +218,25 @@ bool script_request_allowed(std::string_view url, const std::vector<std::string>
     return script_url_allowed(url, allow);
 }
 
+bool tab_may_show(std::string_view url, TabRules rules, const std::vector<std::string>& allow) {
+    if (url == "about:blank") return true;
+    static const std::vector<std::string> kAny;
+    switch (rules) {
+    case TabRules::Player: return url_allowed(url, kAny);
+    case TabRules::ServerLink: return script_url_allowed(url, kAny);
+    case TabRules::Sites: return script_url_allowed(url, allow);
+    }
+    return false;
+}
+
+bool tab_may_request(std::string_view url, TabRules rules, const std::vector<std::string>& allow) {
+    static const std::vector<std::string> kAny;
+    switch (rules) {
+    case TabRules::Player: return true;
+    case TabRules::ServerLink: return script_request_allowed(url, kAny);
+    case TabRules::Sites: return script_request_allowed(url, allow);
+    }
+    return false;
+}
+
 } // namespace hailstone::web

@@ -71,7 +71,9 @@ bool GameConnection::looting_own_corpse() const {
     // CLootWnd's own-corpse test: stricmp(the player's name, the corpse's +0xe4 owner).
     if (!loot_) return false;
     auto it = world_.spawns.find(loot_->corpse_id);
-    return it != world_.spawns.end() && iequals(corpse_owner(it->second.name), character_);
+    // A corpse spawned by the server and one renamed by OP_Death (handle_death) both read "Name's corpse<id>".
+    return it != world_.spawns.end() && it->second.is_corpse && !it->second.is_npc &&
+           iequals(corpse_owner(it->second.name), character_);
 }
 
 float GameConnection::distance_to(std::uint32_t spawn_id) const {
@@ -598,7 +600,8 @@ void GameConnection::shield_command(const std::string& args) {
         target = world_.target_id;
     } else {
         // PlayerManagerClient::GetPlayerFromPartialName.
-        std::string want = lower(args);
+        std::string want = lower(expand_chat_text(args));
+        if (want.empty()) return;
         for (const auto& [id, sp] : world_.spawns) {
             if (lower(sp.name).rfind(want, 0) == 0) {
                 target = id;
