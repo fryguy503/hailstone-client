@@ -15,10 +15,12 @@ a separate choice.
 
 ## What the player sees
 
-**Add-ons** on the login screen opens a card in the Modern pack (beside the characters card, so Play stays in reach;
-it stays open until Close), a page under More in the Gamepad pack, and a window in the client's own ImGui screen. All
-three draw `ui::LoginView::addons` (`view.addons` in Lua, app/lua_ui_pregame.cpp), as the update notice is drawn. The
-Modern card has two tabs: **Find add-ons** (the store, below), where it opens, and **My add-ons** (the list).
+**Add-ons** on the login screen opens a card in the Modern pack, a page under More in the Gamepad pack, and a
+window in the client's own ImGui screen. The Modern card opens beside the login and character cards when they fit
+side by side. In a narrower window it opens on its own, with **Close** near the top to return to login. The Modern
+login and Add-ons cards scroll when their contents exceed the available height. All three interfaces draw
+`ui::LoginView::addons` (`view.addons` in Lua, app/lua_ui_pregame.cpp). The Modern card opens to **Find add-ons**
+(the store, below) and also has a **My add-ons** tab.
 
 **Find add-ons** lists every add-on of the add-on index (see Finding add-ons), so a player can find one without a
 link. A pasted link (below the store in the Modern pack) still works for any add-on.

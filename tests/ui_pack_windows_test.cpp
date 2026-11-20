@@ -64,6 +64,7 @@ struct Session {
     app::UiHost host;
     app::UiApi api;
     ui::lua::LuaUi lua;
+    ImVec2 display_size{1600, 900};
     Session(const fs::path& dir, const std::string& pack, net::ConnectionOptions options = {}, bool in_game = true)
         : game(dir / "game"), conn(game, std::move(options)), api(host), lua(dir / pack, dir / "ui.txt") {
         host.game = &game;
@@ -83,7 +84,7 @@ struct Session {
     void frames(int n, ui::InGameView* fallback = nullptr, const ui::LoadingView* loading = nullptr) {
         for (int i = 0; i < n; ++i) {
             ImGuiIO& io = ImGui::GetIO();
-            io.DisplaySize = ImVec2(1600, 900);
+            io.DisplaySize = display_size;
             io.DeltaTime = 1.0f / 60.0f;
             hailstone::test::sync_ui_api_aliases(lua.state());
             api.begin_frame();
@@ -1286,6 +1287,158 @@ end
             ImGui::DestroyContext(ctx);
         }
     }
+}
+
+TEST_CASE("UI packs (modern): login Add-ons opens within narrow and short viewports") {
+    const auto src = fs::path(__FILE__).parent_path().parent_path() / "ui" / "modern";
+    test::ScratchDir scratch("ui_pack_login_addon_bounds");
+    const auto dir = scratch.path();
+    fs::create_directories(dir / "game");
+    fs::copy(src, dir / "modern", fs::copy_options::recursive);
+    ImGuiContext* ctx = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    {
+        Session s(dir, "modern", {}, false);
+        s.display_size = ImVec2(1280, 720);
+        ui::LoginView login;
+        login.servers_dir = dir / "servers";
+        login.ui = login.default_ui = "modern";
+        ServerProfile profile;
+        profile.id = "alpha";
+        profile.name = "Alpha";
+        profile.host = "127.0.0.1";
+        profile.username = "first";
+        profile.accounts = {{"first", "Bob", "World One", {{"Bob", "World One", 12, "WAR"}}, false, false}};
+        login.profiles = {profile};
+        ui::select_profile(login, 0);
+        login.status = {"Enter your password to log in.", true};
+        login.addons.available = login.addons.browsed = true;
+        login.addons.suggestions = {
+            {"", "owner/one", "Required to play on this server: owner/one.", true, true},
+            {"", "owner/two", "Required to play on this server: owner/two.", true, true},
+            {"", "owner/three", "Required to play on this server: owner/three.", true, true},
+            {"", "owner/extra", "Alpha suggests another add-on: owner/extra.", true}};
+        s.host.login = &login;
+        lua_State* L = s.lua.state();
+        // Observe the real button bounds. The button only reports a click when it receives mouse input.
+        REQUIRE(luaL_dostring(L, R"lua(
+            ui.SetSetting('test.login', 'boxset')
+            local button, lastFrame = ui.Button, -1
+            ui.Button = function(label, ...)
+                local clicked = button(label, ...)
+                local frame = ui.GetFrameCount()
+                if lastFrame ~= frame then buttonRects, lastFrame = {}, frame end
+                if not buttonRects[label] then buttonRects[label] = { ui.GetItemRect() } end
+                return clicked
+            end
+        )lua") == LUA_OK);
+        auto button_rect = [&](const char* label) {
+            INFO(label);
+            lua_getglobal(L, "buttonRects");
+            REQUIRE(lua_istable(L, -1));
+            lua_getfield(L, -1, label);
+            REQUIRE(lua_istable(L, -1));
+            std::array<float, 4> rect{};
+            for (std::size_t i = 0; i < rect.size(); ++i) {
+                lua_rawgeti(L, -1, static_cast<lua_Integer>(i + 1));
+                rect[i] = static_cast<float>(lua_tonumber(L, -1));
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 2);
+            return ImRect(rect[0], rect[1], rect[2], rect[3]);
+        };
+        auto click = [&](const char* label) {
+            INFO(label);
+            const auto rect = button_rect(label);
+            REQUIRE(ImRect(0, 0, s.display_size.x, s.display_size.y).Contains(rect));
+            const auto center = rect.GetCenter();
+            io.AddMousePosEvent(center.x, center.y);
+            s.frames(1);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            s.frames(1);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            s.frames(6); // Let a newly opened card settle at its measured height.
+            CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+        };
+        auto active = [](const char* key) -> ImGuiWindow* {
+            auto* window = ImGui::FindWindowByName(key);
+            return window && window->Active ? window : nullptr;
+        };
+        auto fits = [&](const ImGuiWindow* window) {
+            REQUIRE(window);
+            CHECK(ImRect(0, 0, s.display_size.x, s.display_size.y).Contains(window->Rect()));
+        };
+        constexpr char login_key[] = "###modern.pregame.login";
+        constexpr char box_key[] = "###modern.pregame.login.boxset";
+        constexpr char quick_key[] = "###modern.pregame.login.quick";
+        constexpr char addons_key[] = "###modern.pregame.login.addons";
+
+        s.frames(4);
+        fits(active(login_key));
+        REQUIRE(active(box_key));
+        REQUIRE(active(quick_key));
+        click("Add-ons");
+        REQUIRE(login.addons.open);
+        auto* addons = active(addons_key);
+        fits(addons);
+        CHECK(addons->Rect().GetCenter().x == doctest::Approx(640.0f).epsilon(0.003));
+        CHECK_FALSE(active(login_key));
+        CHECK_FALSE(active(box_key));
+        CHECK_FALSE(active(quick_key));
+        CHECK(button_rect("Close").Max.y <= addons->Pos.y + 112);
+        click("Close");
+        CHECK_FALSE(login.addons.open);
+        CHECK_FALSE(active(addons_key));
+        fits(active(login_key));
+
+        click("Review required add-on");
+        CHECK(s.host.login_action == static_cast<int>(ui::LoginAction::AddonSuggestLook));
+        CHECK(login.addons.choice == "owner/one");
+        // Apply the client's response to AddonSuggestLook without fetching a real add-on.
+        login.addons.open = true;
+        auto& offer = login.addons.offer.emplace();
+        offer.name = "one";
+        offer.kind = "plugin";
+        offer.source = "owner/one";
+        offer.description = "An add-on the player needs to review before joining this server.";
+        offer.caps = {"read the game state", "draw windows"};
+        s.display_size = ImVec2(760, 380);
+        s.frames(4);
+        addons = active(addons_key);
+        fits(addons);
+        CHECK(addons->ScrollbarY);
+        CHECK(button_rect("Close").Max.y <= addons->Pos.y + 112);
+        click("Close");
+        CHECK_FALSE(login.addons.open);
+        auto* login_window = active(login_key);
+        fits(login_window);
+        CHECK(login_window->ScrollbarY);
+
+        login.addons.offer.reset();
+        s.display_size = ImVec2(380, 680);
+        s.frames(4);
+        fits(active(login_key));
+        click("Add-ons");
+        REQUIRE(login.addons.open);
+        fits(active(addons_key));
+        click("Close");
+        CHECK_FALSE(login.addons.open);
+
+        s.display_size = ImVec2(1900, 900);
+        s.frames(4);
+        click("Add-ons");
+        addons = active(addons_key);
+        login_window = active(login_key);
+        fits(addons);
+        fits(login_window);
+        CHECK(login_window->Rect().Max.x < addons->Pos.x);
+        CHECK(addons->Pos.y == login_window->Pos.y);
+    }
+    ImGui::DestroyContext(ctx);
 }
 
 TEST_CASE("UI packs: each draws the login, server select and character select screens in the client's place") {

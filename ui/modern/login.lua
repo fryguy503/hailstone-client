@@ -1,11 +1,11 @@
 -- Login: the client's login screen in this UI's look (hs.LoginScreen, app/lua_ui_pregame.cpp; a Hailstone screen, not
 -- the original's). Built around what a player does most: pick a saved server, type or pick an account, Log in. The
--- server's details (name, address, port, its files) fold away under Edit once it is saved; the interface is picked in
--- the card's footer, always in sight; the game files and the texture pack sit under More options; the characters seen
+-- server's details (name, address, port, its files) fold away under Edit once it is saved; the interface is picked
+-- below the login controls; the game files and the texture pack sit under More options; the characters seen
 -- on the server's accounts are a card of their own beside the login card (below it on a narrow screen), each played
 -- with one click.
--- Add-ons (docs/addons.md) open as a card of their own beside the characters card, with the store (every add-on of
--- the add-on index) first; the box set opens as a card of its own on the login card's other side. The build, the
+-- Add-ons (docs/addons.md) open beside the characters card when the row fits, or on their own, with the store
+-- first; the box set opens as a card of its own on the login card's other side. The build, the
 -- updater's word on it, What's new and Hailstone's page sit in a small card in the screen's top left corner.
 -- Everything the client's own screen (ui/dev_screens.cpp login_screen) offers is here.
 local API = hs.UI
@@ -689,9 +689,13 @@ local function mineTab(a, s, lh, busy)
   end
 end
 
-local function addonsCard(view, s, bh)
+local function addonsCard(view, s, bh, standalone)
   local a = view.addons
   P.Title("Add-ons", "Extra windows and features for Hailstone", s)
+  if standalone then
+    P.AlignRight(P.ButtonsWidth(CLOSE, s))
+    if ui.Button("Close") then API.pregame.LoginSet("addonsOpen", false) end
+  end
   P.Status(a.status, a.inspecting, s)
   if a.offer then
     offerCard(a.offer, s, bh)
@@ -720,10 +724,12 @@ local function addonsCard(view, s, bh)
   if a.available and a.browsed then
     if ui.Button("Refresh the list") then API.pregame.LoginDo("addonBrowse", true) end
     P.Tip("Fetch the list of add-ons again")
-    ui.SameLine()
+    if not standalone then ui.SameLine() end
   end
-  P.AlignRight(P.ButtonsWidth(CLOSE, s))
-  if ui.Button("Close") then API.pregame.LoginSet("addonsOpen", false) end
+  if not standalone then
+    P.AlignRight(P.ButtonsWidth(CLOSE, s))
+    if ui.Button("Close") then API.pregame.LoginSet("addonsOpen", false) end
+  end
 
   if removeAsk then
     removeAsk = false
@@ -738,10 +744,11 @@ end
 -- ---------------------------------------------------------------- the interface
 -- The UI pack the server is played with, on the card itself (not under Edit): the screen changes to it at once,
 -- and a saved server keeps it at once (hs.LoginSet "ui").
-local function interfacePicker(view, s)
+local function interfacePicker(view, width)
   P.Muted("Interface") -- (level with Music's text: ImGui aligns a text on the line to its frames' baseline)
   ui.SameLine()
-  ui.SetNextItemWidth(130 * s)
+  local available = ui.GetContentRegionAvail()
+  ui.SetNextItemWidth(math.max(1, math.min(width, available)))
   if ui.BeginCombo("##ui", packName(view, view.ui)) then
     for _, p in ipairs(view.uiPacks) do
       ui.PushID(p.id)
@@ -926,7 +933,6 @@ local function loginCard(view, s, bh)
   ui.Dummy(0, 2 * s)
   ui.Separator()
   P.Status(view.status, view.busy, s)
-  suggestionNotice(view, s)
   ui.BeginDisabled(view.busy)
   local v, changed = ui.Checkbox("Music", view.music)
   if changed then API.pregame.LoginSet("music", v) end
@@ -934,14 +940,20 @@ local function loginCard(view, s, bh)
   P.Tip("The music of the login, server select and character select screens (not the game's).")
   if not view.transient then
     ui.SameLine(0, 16 * s)
-    interfacePicker(view, s)
+    local pickerW = 130 * s
+    if ui.GetContentRegionAvail() < ui.CalcTextSize("Interface") + 8 * s + pickerW then ui.NewLine() end
+    interfacePicker(view, pickerW)
   end
   ui.SameLine()
-  P.AlignRight(P.ButtonsWidth(ADDONS_QUIT, s))
+  local actionsW = P.ButtonsWidth(ADDONS_QUIT, s)
+  if ui.GetContentRegionAvail() < actionsW then ui.NewLine() end
+  P.AlignRight(actionsW)
   if ui.Button("Add-ons") then API.pregame.LoginSet("addonsOpen", not view.addons.open) end
   P.Tip("Find and install extra windows and features, and keep them up to date")
   ui.SameLine()
   if ui.Button("Quit") then API.pregame.LoginDo("quit") end
+  -- Server notices can fill the card. Keep the Add-ons button above that list.
+  suggestionNotice(view, s)
 
   -- the confirmations (outside the disabled block: they open from it)
   if P.Confirm("##deleteserver", string.format("Delete \"%s\"?", subtitle), DELETE_NOTE, "Delete", s) then
@@ -960,6 +972,15 @@ local cards = {}
 local function addCard(c, w, h)
   c.w, c.h = w, h
   cards[#cards + 1] = c
+end
+
+local function drawCard(c, view, s, bh, maxHeight, standalone)
+  local ok, err = true
+  if P.Begin(c.key, c.x, c.y, c.w, s, maxHeight) then
+    ok, err = pcall(c.draw, view, s, bh, standalone)
+  end
+  P.End()
+  if not ok then error(err, 0) end
 end
 
 ui.window("Login", function()
@@ -989,9 +1010,8 @@ ui.window("Login", function()
   local _, ah = P.Size("login.addons", addonsW, 420 * s)
   local _, bxh = P.Size("login.boxset", boxW, 260 * s)
   local _, abh = P.Size("login.about", aboutW, 90 * s)
-  -- the cards in a row (box set, login, characters, add-ons), the row centred and their tops level; on a screen too
-  -- narrow for that, one above the other, each the login card's width. The add-ons card is beside the characters,
-  -- not in their place, so Play stays in reach while it is open.
+  -- Centre the cards as a row when they fit. On narrow screens, Add-ons opens on its own so its contents
+  -- stay in reach even when the other cards would fill the viewport.
   for i = #cards, 1, -1 do cards[i] = nil end
   if box then addCard(BOX_CARD, boxW, bxh) end
   addCard(LOGIN_CARD, cardW, ch)
@@ -1000,6 +1020,13 @@ ui.window("Login", function()
   local rowW, rowH, colH = gap * (#cards - 1), 0, gap * (#cards - 1)
   for _, c in ipairs(cards) do
     rowW, rowH, colH = rowW + c.w, math.max(rowH, c.h), colH + c.h
+  end
+  if addonsOpen and io.width < rowW + 2 * margin then
+    local c = ADDONS_CARD
+    c.w = math.max(1, math.min(addonsW, io.width - 2 * margin))
+    c.x, c.y = (io.width - c.w) / 2, math.max(margin, (io.height - c.h) / 2)
+    drawCard(c, view, s, bh, math.max(1, io.height - margin - c.y), true)
+    return
   end
   -- the corner card's room: cards that would reach under it move right of it, else below it, when they fit there
   local aboutRight, belowAbout = margin + aboutW + gap, margin + abh + gap
@@ -1020,24 +1047,19 @@ ui.window("Login", function()
   else
     -- the login card first, then the others
     if box then table.insert(cards, 2, table.remove(cards, 1)) end
-    local x, y = place((io.width - cardW) / 2, cardW, colH)
+    local width = math.max(1, math.min(cardW, io.width - 2 * margin))
+    local x, y = place((io.width - width) / 2, width, colH)
     for _, c in ipairs(cards) do
-      c.w = cardW
+      c.w = width
       c.x, c.y = x, y
       y = y + c.h + gap
     end
   end
   ABOUT_CARD.x, ABOUT_CARD.y, ABOUT_CARD.w = margin, margin, aboutW
   cards[#cards + 1] = ABOUT_CARD
-  local failure
   for _, c in ipairs(cards) do
-    if not failure then
-      if P.Begin(c.key, c.x, c.y, c.w, s) then
-        local ok, err = pcall(c.draw, view, s, bh)
-        if not ok then failure = err end
-      end
-      P.End()
-    end
+    local maxHeight
+    if c == LOGIN_CARD or c == ADDONS_CARD then maxHeight = math.max(1, io.height - margin - c.y) end
+    drawCard(c, view, s, bh, maxHeight)
   end
-  if failure then error(failure, 0) end
 end)

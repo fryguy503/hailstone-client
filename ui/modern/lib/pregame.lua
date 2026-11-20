@@ -30,8 +30,8 @@ local pushed = 0 -- what P.Begin pushed inside the window, for P.End
 local function rgba(c) return c[1], c[2], c[3], c[4] or 1 end
 
 -- A card: a window with no title bar at x, y (screen pixels, kept there every frame), `width` wide, its height its
--- contents'. Returns whether it is drawn; call P.End() whatever it returned.
-function P.Begin(key, x, y, width, s)
+-- contents', with scrolling when it reaches an optional height limit. Call P.End() whatever Begin returned.
+function P.Begin(key, x, y, width, s, maxHeight)
   style.Push()
   ui.PushStyleColor(ui.Col.WindowBg, rgba(C.window))
   ui.PushStyleVar(ui.StyleVar.WindowPadding, 18 * s, 16 * s)
@@ -39,8 +39,13 @@ function P.Begin(key, x, y, width, s)
   ui.SetNextWindowPos(math.floor(x), math.floor(y), ui.Cond.Always)
   ui.SetNextWindowSize(width, 0, ui.Cond.Always)
   -- (a size of 0 fits that axis to the contents each frame: the width stays the card's, the height follows)
-  local flags = ui.WindowFlags.NoDecoration | ui.WindowFlags.NoSavedSettings | ui.WindowFlags.NoMove
-      | ui.WindowFlags.NoCollapse
+  local flags = ui.WindowFlags.NoTitleBar | ui.WindowFlags.NoResize | ui.WindowFlags.NoCollapse
+      | ui.WindowFlags.NoSavedSettings | ui.WindowFlags.NoMove
+  if maxHeight then
+    ui.SetNextWindowSizeConstraints(width, 0, width, maxHeight)
+  else
+    flags = flags | ui.WindowFlags.NoScrollbar
+  end
   local visible = ui.Begin("###modern.pregame." .. key, nil, flags)
   ui.PopStyleVar(2)
   local ww, wh = ui.GetWindowSize()

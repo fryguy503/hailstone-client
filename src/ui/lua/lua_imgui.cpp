@@ -214,6 +214,10 @@ int BeginChild(lua_State *L) {
 }
 int EndChild(lua_State *L) { end_begun(L, true); return 0; }
 int SetNextWindowSize(lua_State *L) { ImGui::SetNextWindowSize(ImVec2(F(L, 1), F(L, 2)), I(L, 3, ImGuiCond_FirstUseEver)); return 0; }
+int SetNextWindowSizeConstraints(lua_State *L) {
+	ImGui::SetNextWindowSizeConstraints(ImVec2(F(L, 1), F(L, 2)), ImVec2(F(L, 3), F(L, 4)));
+	return 0;
+}
 int SetNextWindowPos(lua_State *L) { ImGui::SetNextWindowPos(ImVec2(F(L, 1), F(L, 2)), I(L, 3, ImGuiCond_FirstUseEver)); return 0; }
 // ui.SetNextWindowCollapsed(collapsed [, cond])   rolled up to its title bar (cond: ui.Cond, default Always)
 int SetNextWindowCollapsed(lua_State *L) {
@@ -1350,7 +1354,8 @@ bool ContextOnly(std::string_view name) {
 		"IsMouseDoubleClicked", "IsMouseClicked", "IsMouseReleased", "IsMouseDown", "IsMouseDragging",
 		"IsKeyDown", "IsKeyPressed", "GetItemID", "GetItemRect", "IsItemActive", "IsItemDisabled",
 		"IsItemFocused", "IsItemDeactivatedAfterEdit", "IsWindowAppearing", "FindWindowRect", "SetWindowFocus",
-		"SetNextWindowSize", "SetNextWindowPos", "SetNextWindowBgAlpha", "SetNextWindowCollapsed", "SetNextWindowFocus",
+		"SetNextWindowSize", "SetNextWindowSizeConstraints", "SetNextWindowPos", "SetNextWindowBgAlpha",
+		"SetNextWindowCollapsed", "SetNextWindowFocus",
 		"SetNextItemWidth", "SetNextItemAllowOverlap", "CaptureKeyboard", "SetNavCursorVisible",
 		"SetClipboardText", "GetClipboardText"})
 		if (name == allowed) return true;
@@ -1361,6 +1366,7 @@ void register_ui_api(lua_State *L) {
 	static const luaL_Reg fns[] = {
 		{"Begin", Begin}, {"End", End}, {"BeginChild", BeginChild}, {"EndChild", EndChild},
 		{"SetNextWindowSize", SetNextWindowSize}, {"SetNextWindowPos", SetNextWindowPos},
+		{"SetNextWindowSizeConstraints", SetNextWindowSizeConstraints},
 		{"SetNextWindowBgAlpha", SetNextWindowBgAlpha}, {"SetNextWindowCollapsed", SetNextWindowCollapsed}, {"IsWindowCollapsed", IsWindowCollapsed}, {"SetWindowFontScale", SetWindowFontScale},
 		{"Text", Text}, {"TextColored", TextColored}, {"TextDisabled", TextDisabled}, {"TextWrapped", TextWrapped},
 		{"SeparatorText", SeparatorText}, {"LabelText", LabelText}, {"BulletText", BulletText},

@@ -634,6 +634,7 @@ rectangle (`u0, v0, u1, v1`).
 | BeginChild | (id [, w, h [, border [, flags]]]) → bool | Call `EndChild` whatever it returns |
 | EndChild | () → — | Ends the child the script's last `BeginChild` began; any other EndChild does nothing |
 | SetNextWindowSize | (w, h [, cond=FirstUseEver]) → — | |
+| SetNextWindowSizeConstraints | (minW, minH, maxW, maxH) → — | Bounds for the next window, including axes sized to their contents |
 | SetNextWindowPos | (x, y [, cond=FirstUseEver]) → — | |
 | SetNextWindowBgAlpha | (a) → — | |
 | SetNextWindowCollapsed | (collapsed [, cond=Always]) → — | |
