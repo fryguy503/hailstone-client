@@ -5692,6 +5692,112 @@ end
     ImGui::DestroyContext(ctx);
 }
 
+TEST_CASE("UI packs (modern): the buff tray can show empty slots and number buff tooltips") {
+    test::ScratchDir scratch("ui_pack_buff_tray_slots");
+    const auto dir = scratch.path();
+    fs::create_directories(dir / "game");
+    fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / "modern", dir / "modern",
+             fs::copy_options::recursive);
+    ImGuiContext* ctx = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    {
+        Session s(dir, "modern");
+        auto* L = s.lua.state();
+        auto run = [&](const char* code) {
+            const int rc = luaL_dostring(L, code);
+            INFO((rc == LUA_OK ? "" : lua_tostring(L, -1)));
+            REQUIRE(rc == LUA_OK);
+            const std::string result = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+            lua_settop(L, 0);
+            return result;
+        };
+        run(R"lua(
+hs.ShowWindow('BuffWindow', true)
+ui.SetSetting('test.pos.BuffWindow', '600,160')
+ui.SetSetting('hud.perRow.BuffWindow', 3)
+local names = { Buff2 = 'Spirit of Wolf', Buff4 = 'Holy Armor', Buff5 = 'Clarity' }
+local slot, button, textColored, menuItem = hs.BuffSlot, ui.InvisibleButton, ui.TextColored, ui.MenuItem
+hs.BuffSlot = function(win, id, overlays)
+  if win == 'BuffWindow' and names[id] then return 11, 60000, names[id], true end
+  return slot(win, id, overlays)
+end
+buffRects = {}
+ui.InvisibleButton = function(id, ...)
+  local pressed = button(id, ...)
+  local n = tonumber(id:match('^##Buff(%d+)$'))
+  if n then
+    buffRects[n] = { ui.GetItemRect() }
+    local _, h = ui.GetWindowSize()
+    trayHeight = h
+  end
+  return pressed
+end
+ui.TextColored = function(r, g, b, a, label)
+  if type(label) == 'string' and label:find('^Spirit of Wolf') then tooltip = label end
+  return textColored(r, g, b, a, label)
+end
+ui.MenuItem = function(label, ...)
+  if label == pick then pick = nil; return true end
+  return menuItem(label, ...)
+end
+)lua");
+        auto point_at_buff = [&] {
+            REQUIRE(luaL_dostring(L, "return buffRects[2][1] + 10, buffRects[2][2] + 10") == LUA_OK);
+            io.AddMousePosEvent(static_cast<float>(lua_tonumber(L, -2)), static_cast<float>(lua_tonumber(L, -1)));
+            lua_settop(L, 0);
+        };
+        auto toggle = [&](const char* label) {
+            run((std::string("pick = '") + label + "'").c_str());
+            point_at_buff();
+            io.AddKeyEvent(ImGuiMod_Alt, true);
+            io.AddMouseButtonEvent(1, true);
+            s.frames(1);
+            CHECK(run("return tostring(pick == nil)") == "true");
+            io.AddMouseButtonEvent(1, false);
+            io.AddKeyEvent(ImGuiMod_Alt, false);
+            ImGui::ClosePopupsExceptModals();
+            run("buffRects = {}");
+            s.frames(2);
+        };
+        auto title = [&] {
+            run("tooltip = nil");
+            point_at_buff();
+            s.frames(2);
+            return run("return tooltip");
+        };
+        s.frames(3);
+        REQUIRE(run(R"lua(
+local a, b, c = buffRects[2], buffRects[4], buffRects[5]
+compactX, compactY, compactHeight, pitch = a[1], a[2], trayHeight, a[1] - b[1]
+return tostring(pitch > 0 and b[1] - c[1] == pitch and a[2] == b[2] and a[2] == c[2])
+)lua") == "true");
+        CHECK(title() == "Spirit of Wolf");
+
+        toggle("Show slot numbers in tooltips");
+        CHECK(run("return ui.GetSetting('hud.showSlotNumbers.BuffWindow')") == "1");
+        CHECK(run("return tostring(buffRects[2][1] == compactX and trayHeight == compactHeight)") == "true");
+        CHECK(title() == "Spirit of Wolf - Slot 3");
+        toggle("Show slot numbers in tooltips");
+
+        toggle("Show empty slots");
+        CHECK(run("return ui.GetSetting('hud.showEmptySlots.BuffWindow')") == "1");
+        CHECK(run(R"lua(
+local a, b, c = buffRects[2], buffRects[4], buffRects[5]
+return tostring(a[1] == compactX - 2 * pitch and a[2] == compactY
+  and b[1] == compactX - pitch and b[2] > compactY and c[1] == a[1] and c[2] == b[2]
+  and trayHeight - compactHeight == b[2] - compactY
+  and buffRects[0] == nil and buffRects[1] == nil and buffRects[3] == nil)
+)lua") == "true");
+        CHECK(title() == "Spirit of Wolf");
+        CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+    }
+    ImGui::DestroyContext(ctx);
+}
+
 TEST_CASE("UI packs (modern): the Options search draws every tab, and only the sections that match") {
     test::ScratchDir scratch("ui_pack_options_search");
     const fs::path dir = scratch.path();
