@@ -1851,7 +1851,8 @@ A grid of vertices covers the zone's squares and 2500 units past them, 64 units 
 zone, so that part is at most 256 squares across), then wider by 12 % a step out to 10000 units. Vertices are tucked
 down so the land meets the zone's edge without a gap and stays under its ground:
 
-- in a covered square, 40 units under its lowest terrain;
+- below the lowest terrain of every covered square a mesh quad overlaps, with 40 units of clearance, so the mesh
+  stays under the zone where the ground drops sharply;
 - in the empty square beside one, 5 units under the lowest terrain beside it (a wall's foot), or 40 under the zone's
   water where only water is beside it.
 
