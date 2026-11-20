@@ -795,6 +795,7 @@ public:
     // Sends new benefits (OP_TributeUpdate); the server checks the tiers.
     void tribute_change(const TributeSettings& settings);
     void tribute_toggle(bool on);
+    std::optional<std::uint64_t> tribute_cursor_value(bool guild) const;
     bool tribute_donate_cursor();
     bool tribute_donate_platinum(std::uint32_t platinum);
 

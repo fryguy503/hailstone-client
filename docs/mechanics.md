@@ -78,6 +78,13 @@ like other items. Their stack count does not multiply them.
 
 Full tribute workflows are not tested live.
 
+## Tribute donation values
+
+The item description shows the item's positive personal and guild tribute values per copy. The Donate area in
+Modern and Gamepad previews the total favor for the item on the cursor using the open master's tribute type.
+Stacks use the full quantity that Donate sends. Charges and augments add no favor. The preview returns to the
+last donation receipt when the cursor is empty. That receipt uses the server's reply.
+
 ## Exactness
 
 - Integer math wraps (explicit unsigned adds and multiplies).

@@ -859,6 +859,10 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
 
     // UpdateStrings: the effects, then the item's own text (the lore text this client has).
     d.description = effects_text(item, ctx);
+    // Hailstone shows the server's per-item donation values, separately from trophy benefits.
+    const char* per_item = item.stackable() ? " each" : "";
+    if (item.favor != 0) d.description += std::format("Personal Tribute: {} favor{}<BR>", item.favor, per_item);
+    if (item.guild_favor != 0) d.description += std::format("Guild Tribute: {} favor{}<BR>", item.guild_favor, per_item);
     if (ctx.item_description_append) if (auto text = ctx.item_description_append(item); text && !text->empty()) {
         if (!d.description.empty() && !d.description.ends_with("<BR>")) d.description += "<BR>";
         d.description += description_plaintext(*text);

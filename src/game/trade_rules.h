@@ -15,6 +15,11 @@
 
 namespace hailstone::game {
 
+struct Spawn;
+
+// CEverQuest::DropItemOrMoneyOnPlayer refuses direct hand-ins to these NPC services (eqstr 8505).
+bool refuses_direct_items(const Spawn& spawn);
+
 struct TradeFlags {
     std::uint8_t his_ready = 0, my_ready = 0;
 };

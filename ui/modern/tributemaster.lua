@@ -53,7 +53,9 @@ local function lists(s, h, editing, btnH)
 end
 
 local function donations(s, btnH)
-  K.Heading("Donate", "Last donation worth " .. W.Text(WINDOW, "TMW_ValueLabel") .. " favor")
+  local value = W.Text(WINDOW, "TMW_DonationPreviewLabel")
+  K.Heading("Donate", value ~= "" and "Donation value: " .. value .. " favor"
+    or "Last donation worth " .. W.Text(WINDOW, "TMW_ValueLabel") .. " favor")
   local size = 40 * s
   local x, y = ui.GetCursorScreenPos()
   -- the item to give: what you hold on the cursor (the original's TMW_SelectedItem shows it)

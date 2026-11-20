@@ -7,6 +7,7 @@
 #include "core/env.h"
 #include "core/log.h"
 #include "game/merchant.h"
+#include "game/trade_rules.h"
 #include "game/world_state.h"
 #include "net/game_connection.h"
 
@@ -33,7 +34,7 @@ void CommerceUi::draw(net::GameConnection& conn, ui::ItemIconCache* icons) {
     const auto& world = conn.world();
     if (world.target_id && world.target_id != world.player_id) {
         auto it = world.spawns.find(world.target_id);
-        if (it != world.spawns.end() && !it->second.is_corpse) {
+        if (it != world.spawns.end() && !it->second.is_corpse && !game::refuses_direct_items(it->second)) {
             in.target_id = world.target_id;
             in.target_name = game::display_name(it->second.name);
         }

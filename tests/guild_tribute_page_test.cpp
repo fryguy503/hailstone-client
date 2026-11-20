@@ -565,3 +565,66 @@ TEST_CASE("the tribute master's Donate button is greyed while a guild platinum d
     CHECK(conn.coins().platinum == 2);
     CHECK(enabled() == "true");
 }
+
+TEST_CASE("tribute masters preview the held item's favor separately from the donation receipt") {
+    for (bool guild : {false, true}) {
+        CAPTURE(guild);
+        std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> context(ImGui::CreateContext(), ImGui::DestroyContext);
+        auto config = MockConfig::standard();
+        for (auto& item : config.characters.front().inventory) {
+            if (item.stackable()) {
+                item.favor = 12;
+                item.guild_favor = 30;
+            }
+        }
+        auto charged = make_item(1003, "Charged charm", 24);
+        charged.charges = 7;
+        charged.favor = 11;
+        config.characters.front().inventory.push_back(charged);
+        Rig rig(config);
+        REQUIRE(rig.to_zone());
+        auto& conn = rig.conn;
+        if (guild) {
+            const auto me = static_cast<std::uint16_t>(rig.server.config.own_spawn_id);
+            conn.receive_zone_packet_for_test(net::encode(net::SpawnAppearance{me, 22, 3}));
+        }
+        auto master = *conn.world().player();
+        master.id = 77;
+        master.is_npc = true;
+        master.class_id = guild ? 64 : 63;
+        conn.world_for_test().spawns[master.id] = master;
+        auto open = net::encode(net::StartTribute{conn.world().player_id, master.id, 1});
+        if (guild) open.opcode = net::to_wire(net::Op::OpenGuildTributeMaster);
+        conn.receive_zone_packet_for_test(open);
+        REQUIRE((guild ? conn.guild_tribute().master_id : conn.tribute().master_id) == master.id);
+
+        app::UiHost host;
+        host.in_game = host.ui_ready = true;
+        host.conn = &conn;
+        app::UiApi api(host);
+        std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
+        lua_newtable(lua.get());
+        api.register_functions(lua.get());
+        lua_setglobal(lua.get(), "hs");
+        api.begin_frame();
+        auto preview = [&] { return run(lua.get(), "return (hs.WindowText('TributeMasterWnd', 'TMW_DonationPreviewLabel'))"); };
+        auto receipt = [&] { return run(lua.get(), "return (hs.WindowText('TributeMasterWnd', 'TMW_ValueLabel'))"); };
+        CHECK(preview().empty());
+        conn.click_slot(net::ItemSlot::possessions(23), true, false);
+        REQUIRE(conn.inventory().cursor());
+        CHECK(preview() == (guild ? "150" : "60"));
+        CHECK(receipt() == "0");
+
+        CHECK(run(lua.get(), "return hs.ClickChild('TributeMasterWnd', 'TMW_DonateButton', 'left')") == "true");
+        const auto cursor = net::ItemSlot::possessions(net::kSlotCursor);
+        conn.receive_zone_packet_for_test(guild ? net::encode(net::GuildTributeDonation{cursor, 5, 149})
+                                               : net::encode(net::TributeItem{cursor, 5, master.id, 59}));
+        CHECK(preview().empty());
+        CHECK(receipt() == (guild ? "149" : "59"));
+
+        conn.click_slot(net::ItemSlot::possessions(24), true, false);
+        REQUIRE(conn.inventory().cursor());
+        CHECK(preview() == (guild ? "0" : "11"));
+        CHECK(receipt() == (guild ? "149" : "59"));
+    }
+}

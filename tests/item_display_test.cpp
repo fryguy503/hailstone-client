@@ -4,7 +4,9 @@
 #include "game/eq_strings.h"
 #include "game/item_compare.h"
 #include "game/item_display.h"
+#include "ui/item_windows.h"
 
+#include <algorithm>
 #include <set>
 #include <string>
 
@@ -67,6 +69,32 @@ TEST_CASE("build_item_display: info lines, then the grid in its columns and bloc
     CHECK(d.measured[3] == "Class: WAR PAL ");
     CHECK(d.measured[5] == "Race: HUM BAR ");
     CHECK(d.measured[7].empty()); // no deity
+}
+
+TEST_CASE("Item descriptions show personal and guild tribute favor per item") {
+    net::Item item;
+    const game::ItemDisplayContext ctx;
+    const auto description = [&] { return game::build_item_display(item, ctx).description; };
+    const auto native_has = [&](std::string_view line) {
+        const auto lines = ui::item_info_lines(item);
+        return std::find(lines.begin(), lines.end(), line) != lines.end();
+    };
+
+    CHECK(description().empty());
+    CHECK_FALSE(native_has("Personal Tribute: 0 favor"));
+    CHECK_FALSE(native_has("Guild Tribute: 0 favor"));
+
+    item.favor = 1476;
+    CHECK(description() == "Personal Tribute: 1476 favor<BR>");
+    CHECK(native_has("Personal Tribute: 1476 favor"));
+    CHECK_FALSE(native_has("Guild Tribute: 0 favor"));
+
+    item.guild_favor = 300;
+    item.max_stack = 20;
+    item.stack_count = 5;
+    CHECK(description() == "Personal Tribute: 1476 favor each<BR>Guild Tribute: 300 favor each<BR>");
+    CHECK(native_has("Personal Tribute: 1476 favor each"));
+    CHECK(native_has("Guild Tribute: 300 favor each"));
 }
 
 TEST_CASE("item_display_text_width: the longer of name and flags, then the other lines") {

@@ -177,8 +177,8 @@ ui.window("Item Details", function()
       y = I.comparison(compare, x0, y + T.px(6), x1, y1, shownKeys) + T.px(6)
     end
     -- the description
-    local desc = textOf("ItemDescription"):gsub("<[^>]*>", "")
-    if desc ~= "" then
+    local desc = textOf("ItemDescription"):gsub("<[Bb][Rr]>", "\n"):gsub("<[^>]*>", "")
+    if desc:find("%S") then
       ui.DrawLine(x0, y, x1, y, C.ink[1], C.ink[2], C.ink[3], 0.08, 1)
       y = wrap("ItemDescription", desc, x0, y + T.px(12), w, C.text)
     end

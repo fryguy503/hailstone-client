@@ -2,6 +2,8 @@
 
 #include <cstdlib>
 
+#include "game/world_state.h"
+
 namespace hailstone::game {
 
 namespace {
@@ -10,6 +12,20 @@ std::int32_t cursor_amount(const std::array<std::int32_t, 4>& cursor, std::uint3
     return index <= 3 ? cursor[index] : 0;
 }
 } // namespace
+
+bool refuses_direct_items(const Spawn& spawn) {
+    if (!spawn.is_npc) return false;
+    switch (spawn.class_id) {
+    case Class_Banker:
+    case Class_GuildBanker:
+    case Class_TributeMaster:
+    case Class_GuildTributeMaster:
+    case Class_TributeMaster2:
+        return true;
+    default:
+        return false;
+    }
+}
 
 void trade_set_his_ready(TradeFlags& f, std::uint8_t ready) {
     f.his_ready = ready;

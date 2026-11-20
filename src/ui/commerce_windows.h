@@ -43,7 +43,7 @@ struct CommerceWindowsInput {
     net::Coins coins;
     const net::MerchantSession* merchant = nullptr;
     const net::TradeSession* trade = nullptr;
-    // The give helper: shown while an item is held and someone else is targeted.
+    // The give helper's target, set only when the spawn accepts direct hand-ins or trades.
     std::uint32_t target_id = 0;
     std::string target_name;
     // Bank (open when bank != null).
