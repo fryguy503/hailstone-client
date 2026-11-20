@@ -248,6 +248,23 @@ TEST_CASE("Item compare: effects gained and lost") {
     CHECK(s.lost == std::vector<std::string>{"Worn: Run Speed"});
 }
 
+TEST_CASE("Item compare: a named proc counts when the server withholds its spell ID") {
+    Fixture f;
+    net::Item worn = gear("Worn Sword", 1u << 13);
+    worn.effects[net::kEffectProc].effect = 100;
+    worn.effects[net::kEffectProc].name = "Quake";
+    f.sheet.possessions[13] = worn;
+
+    net::Item loot = gear("Looted Sword", 1u << 13);
+    loot.effects[net::kEffectProc].effect = -1;
+    loot.effects[net::kEffectProc].name = "Winter's Waltz";
+    loot.effects[net::kEffectFocus].effect = -1;
+    auto r = f.compare(loot);
+    REQUIRE(r);
+    CHECK(r->slots.at(0).gained == std::vector<std::string>{"Proc: Winter's Waltz"});
+    CHECK(r->slots.at(0).lost == std::vector<std::string>{"Proc: Quake"});
+}
+
 TEST_CASE("Item compare: a server extension's vitals do not hide the HP change") {
     Fixture f;
     f.sheet.vitals.max_hp = 99999;

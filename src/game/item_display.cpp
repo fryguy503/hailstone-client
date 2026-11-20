@@ -238,14 +238,18 @@ std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& c
     std::string out;
     // A charm whose stat scale is below 1 shows no effects.
     bool show = !(item.charm_file_id != 0 && static_cast<std::int32_t>(item.scaled_value) < 1);
-    const SpellData* spell = nullptr;
-    auto name_of = [&](const net::ItemEffect& e, const SpellData* s) { return e.name.empty() && s ? s->name : e.name; };
+    auto lookup = [&](const net::ItemEffect& e) { return e.present() && ctx.spell ? ctx.spell(e.effect) : nullptr; };
+    auto name_of = [](const net::ItemEffect& e, const SpellData* s) {
+        if (!e.name.empty()) return description_plaintext(e.name);
+        if (s && !s->name.empty()) return description_plaintext(s->name);
+        return std::format("spell {}", e.effect);
+    };
     auto remember = [&](const net::ItemEffect& e, const SpellData* s) {
         if (s && s->description_id != 0) described.push_back(&e);
     };
     if (item.item_type != 20 && show) {
         const auto& e = item.effects[net::kEffectClick];
-        if (e.present() && ctx.spell && (spell = ctx.spell(e.effect))) {
+        if (e.displayable()) {
             std::string how;
             switch (e.type) {
             case 1: case 3: case 5:
@@ -264,6 +268,7 @@ std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& c
                 break;
             default: how = str(ctx, 0xbdb); break;
             }
+            const SpellData* spell = lookup(e);
             out += str_args(ctx, 0xbdc, {name_of(e, spell), how}) + "<BR>";
             remember(e, spell);
             if (e.recast_delay() > 0) {
@@ -277,8 +282,8 @@ std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& c
         }
         auto line = [&](int kind, std::uint32_t fmt, bool suffix) {
             const auto& x = item.effects[static_cast<std::size_t>(kind)];
-            const SpellData* s = x.present() && ctx.spell ? ctx.spell(x.effect) : nullptr;
-            if (!s) return;
+            if (!x.displayable()) return;
+            const SpellData* s = lookup(x);
             if (suffix) out += str_args(ctx, 0xbdc, {name_of(x, s), str(ctx, fmt)}) + "<BR>";
             else out += str_args(ctx, fmt, {name_of(x, s)}) + "<BR>";
             remember(x, s);
@@ -495,7 +500,8 @@ std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
                 const SpellData* s = ctx.spell ? ctx.spell(e->effect) : nullptr;
                 if (!s) continue;
                 d += "<BR>";
-                d += "<C " + color_tag(kSpellName) + ">" + (e->name.empty() ? s->name : e->name) + "</C><BR>";
+                d += "<C " + color_tag(kSpellName) + ">" + description_plaintext(e->name.empty() ? s->name : e->name) +
+                     "</C><BR>";
                 if (e->level > 0) d += str_args(ctx, 0x1aa4, {std::to_string(e->level)}) + "<BR>";
                 d += str_args(ctx, 0x213b, {spell_description(*s, ctx)}) + "<BR>";
             }

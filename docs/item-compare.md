@@ -55,6 +55,10 @@ Where:
   (`item_compare_verdict`, `items.compare_verdict`), both on by default; under Display (modern) or Interface
   (gamepad).
 
+The item description and comparison can show an effect's name from the item data even when the server withholds
+its spell ID or the local spell table lacks its definition. The detailed spell description still needs a local
+spell definition.
+
 ## How the numbers are found
 
 The player's `mechanics::CharacterSheet` is copied with the item swapped in and run through the player's own

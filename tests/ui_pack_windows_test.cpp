@@ -4688,6 +4688,7 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
         hailstone::test::ScratchDir dir_scratch("ui_pack_item_compare_test");
         fs::path dir = dir_scratch.path();
         fs::create_directories(dir / "game");
+        std::ofstream(dir / "game" / "eqstr_us.txt") << "3029 (Combat)\n3036 Effect: %1 %2\n";
         fs::copy(src, dir / pack, fs::copy_options::recursive);
         ImGuiContext* ctx = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
@@ -4721,6 +4722,8 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
             helm.id = 1001;
             helm.name = "Iron Helm";
             helm.hp = 60;
+            helm.effects[net::kEffectProc].effect = -1;
+            helm.effects[net::kEffectProc].name = "Frost & Fire";
             std::vector<net::Item> displays{helm};
             std::vector<std::uint64_t> ids{1};
             s.host.item_displays = &displays;
@@ -4728,9 +4731,10 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
             lua_State* L = s.lua.state();
             REQUIRE(luaL_dostring(L, R"(
                 test_seen = {}
-                local dt, tc = ui.DrawText, ui.TextColored
+                local dt, tc, tw = ui.DrawText, ui.TextColored, ui.TextWrapped
                 ui.DrawText = function(...) local a = { ... } test_seen[tostring(a[#a])] = true return dt(...) end
-                ui.TextColored = function(...) local a = { ... } test_seen[tostring(a[5])] = true return tc(...) end)") ==
+                ui.TextColored = function(...) local a = { ... } test_seen[tostring(a[5])] = true return tc(...) end
+                ui.TextWrapped = function(t, ...) test_seen[tostring(t)] = true return tw(t, ...) end)") ==
                     LUA_OK);
             auto seen = [&](const std::string& text) {
                 REQUIRE(luaL_dostring(L, ("return test_seen['" + text + "'] == true").c_str()) == LUA_OK);
@@ -4746,6 +4750,8 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
             CHECK(seen("Upgrade"));
             CHECK(seen("60"));
             CHECK(seen("+50"));
+            CHECK(seen("Gains Proc: Frost & Fire"));
+            CHECK(seen("Effect: Frost & Fire (Combat)"));
             CHECK_FALSE(seen("+50 HP"));
             CHECK_FALSE(seen("+50 HP (" + std::to_string(ch.max_hp(true)) + " to " + std::to_string(ch.max_hp(true) + 50) + ")"));
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
@@ -4781,6 +4787,8 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
             s.frames(2);
             CHECK_FALSE(seen(heading));
             CHECK_FALSE(seen("+50"));
+            CHECK_FALSE(seen("Gains Proc: Frost & Fire"));
+            CHECK(seen("Effect: Frost & Fire (Combat)"));
         }
         ImGui::DestroyContext(ctx);
     }

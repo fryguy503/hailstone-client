@@ -101,6 +101,8 @@ struct ItemEffect {
     std::int32_t recast_type() const { return static_cast<std::int32_t>(extra[3]); }
     std::uint32_t proc_rate() const { return extra[4]; }
     bool present() const { return effect > 0; }
+    // A server can mask an out-of-range spell ID with -1 while still sending the item's effect name.
+    bool displayable() const { return present() || (effect == -1 && !name.empty()); }
 };
 enum ItemEffectKind : std::uint8_t { kEffectClick, kEffectProc, kEffectWorn, kEffectFocus, kEffectScroll, kEffectBard, kEffectCount };
 

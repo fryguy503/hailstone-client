@@ -267,7 +267,7 @@ std::vector<std::string> item_info_lines(const Item& it, const game::ItemFlagsFo
                                              "Scroll Effect", "Bard Effect"};
     for (std::size_t k = 0; k < net::kEffectCount; ++k) {
         const auto& e = it.effects[k];
-        if (!e.present()) continue;
+        if (!e.displayable()) continue;
         std::string name = e.name.empty() ? std::format("spell {}", e.effect) : e.name;
         out.push_back(std::format("{}:  {}", kKinds[k], name));
     }

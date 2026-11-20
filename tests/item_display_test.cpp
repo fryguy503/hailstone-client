@@ -97,6 +97,37 @@ TEST_CASE("Item descriptions show personal and guild tribute favor per item") {
     CHECK(native_has("Guild Tribute: 300 favor each"));
 }
 
+TEST_CASE("Item descriptions show loot effects when the spell table cannot resolve them") {
+    game::EqStrings s;
+    s.set(0xbdc, "Effect: %1 %2");
+    s.set(0xbd5, "(Combat)");
+    s.set(0x159a, "Focus Effect: %1");
+    game::ItemDisplayContext ctx;
+    ctx.strings = &s;
+    ctx.show_spell_descriptions = true;
+    ctx.spell = [](std::int32_t id) -> const game::SpellData* {
+        CHECK(id == 50002);
+        return nullptr;
+    };
+
+    net::ItemPacket packet;
+    packet.type = net::kItemPacketLoot;
+    packet.item.slot = net::ItemSlot::corpse(23);
+    auto& effects = packet.item.effects;
+    effects[net::kEffectProc].effect = -1; // The server masked the spell ID but retained the name.
+    effects[net::kEffectProc].name = "Winter's Waltz & <Chill>";
+    effects[net::kEffectFocus].effect = 50002;
+    effects[net::kEffectBard].effect = -1;
+    effects[net::kEffectWorn].name = "Unused Name"; // ID 0 has no effect.
+    const auto loot = net::decode_item_packet(net::encode_item_packet(false, packet));
+    REQUIRE(loot);
+
+    CHECK(game::build_item_display(loot->item, ctx).description ==
+          "Effect: Winter&apos;s Waltz &amp; &lt;Chill&gt; (Combat)<BR>Focus Effect: spell 50002<BR><BR>");
+    const auto lines = ui::item_info_lines(loot->item);
+    CHECK(std::find(lines.begin(), lines.end(), "Combat Effect:  Winter's Waltz & <Chill>") != lines.end());
+}
+
 TEST_CASE("item_display_text_width: the longer of name and flags, then the other lines") {
     game::ItemDisplay d;
     d.measured[0] = "abc";
