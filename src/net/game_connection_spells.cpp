@@ -706,11 +706,12 @@ game::NameInvisibility GameConnection::name_invisibility(const game::Spawn& s, b
     // Another spawn's +0x338 is the server's (the spawn record, then SpawnAppearance 3). The player's own is set by
     // EQ_Character::UpdateMyVisibleStatus @0x459510 from its own effects (CalcInvisLevel @0x442770, the character's
     // virtual +0x20): above 0 for regular invisibility (SPAs 12 and 314), -2 and -1 for invisibility versus undead
-    // and versus animals, which get no parentheses. The Hide skill does not count, and stock EQEmu sends the hider
-    // no SpawnAppearance for it: a hidden player's own name stays plain.
+    // and versus animals, which get no parentheses.
     marks.normal = s.invis_rank > 0;
     if (s.id == world_.player_id) {
-        marks.normal = marks.normal || own_effect_with(game::SPA_INVISIBILITY) >= 0 ||
+        // Hailstone also marks active local Hide, including Shroud of Stealth. Stock EQEmu sends Hide's
+        // SpawnAppearance to other players only.
+        marks.normal = marks.normal || hidden_ || own_effect_with(game::SPA_INVISIBILITY) >= 0 ||
                        own_effect_with(game::SPA_IMPROVED_INVIS) >= 0;
     }
     // Hailstone (display.show_invis_undead, off by default; the original has no such mark): "[Name]" for

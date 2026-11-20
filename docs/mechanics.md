@@ -1361,10 +1361,12 @@ and `npc_owner_line`
   SpawnAppearance type 3), so regular invisibility and a hider seen by others count. The player's own comes from its
   effects (EQ_Character::UpdateMyVisibleStatus @0x459510, by CalcInvisLevel @0x442770): above 0 for regular
   invisibility (SPAs 12 and 314), -2 and -1 for invisibility versus undead and versus animals, which get no
-  parentheses. The Hide skill is not among them, and stock EQEmu sends the hider nothing for it, so a hidden player's
-  own name stays plain (others see "(Name)"). The marks follow the spawn's state every frame. A Hailstone addition, off by default: Options > Display **Bracket Invis vs. Undead**
-  (`display.show_invis_undead`) shows `[Name]` for invisibility versus undead the client knows of (SPAs 28 and 315 in
-  the player's own buffs, or in the target's OP_TargetBuffs list while it is the target), `([Name])` with both. A
+  parentheses. Hailstone also shows parentheses on the player's own name while Hide is active, including a rogue
+  using Shroud of Stealth. Stock EQEmu sends Hide's appearance update to other players, so the player's own mark
+  follows the local Hide state. Sneak by itself adds no mark. The marks update every frame.
+  Options > Display **Bracket Invis vs. Undead** (`display.show_invis_undead`, off by default) shows `[Name]` for
+  invisibility versus undead the client knows of (SPAs 28 and 315 in the player's own buffs, or in the target's
+  OP_TargetBuffs list while it is the target). When both marks apply, the name appears as `([Name])`. A
   deliberate difference, which a UI pack asks for: the player, target and target-of-target captions show the same
   marks (the original's captions are plain names, __GetLabelFromEQ @0x763640 and __GetGaugeValueFromEQ @0x762410).
 - A GM's name is green (`#1da64b`) as in the original (PlayerClient::SetNameSpriteTint @0x58bf00,

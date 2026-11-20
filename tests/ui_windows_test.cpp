@@ -179,11 +179,11 @@ TEST_CASE("HUD invisibility captions use viewer awareness and the undead display
     target.is_corpse = true;
     check_captions("Visitor");
 
-    // The player's own caption: the marks round the name, before the last name's line.
+    // The player's own caption marks Sneak + Hide even without a spawn appearance update.
     auto& me = world.spawns[10];
     me.name = "Hero";
     me.last_name = "Smith";
-    me.invis_rank = 1;
+    t.conn.note_hide_state(true, true);
     lua_settop(lua.get(), 0);
     REQUIRE(luaL_dostring(lua.get(), R"lua(
         local character = hs.UI.character

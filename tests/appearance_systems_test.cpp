@@ -169,7 +169,7 @@ TEST_CASE("Name marks wrap a visible name for each kind of invisibility") {
     CHECK(marked("", {true, true}).empty());
 }
 
-TEST_CASE("Name marks use the spawn rank, own buffs and current target buffs") {
+TEST_CASE("Name marks use the spawn rank, local Hide and invisibility buffs") {
     Rig rig;
     REQUIRE(rig.to_zone());
     const auto own = rig.conn.world().player_id;
@@ -208,9 +208,15 @@ TEST_CASE("Name marks use the spawn rank, own buffs and current target buffs") {
     };
     CHECK_FALSE(local_marks(true).normal);
     CHECK_FALSE(local_marks(true).undead);
-    // Hide is not among UpdateMyVisibleStatus's effects, and stock EQEmu tells the hider nothing: the own name
-    // stays plain.
+    // Stock EQEmu sends Hide's spawn appearance to other players. The local mark follows the ability state.
+    CHECK(rig.conn.world().player()->invis_rank == 0);
     rig.conn.note_hide_state(true, false);
+    CHECK(local_marks(true).normal);
+    rig.conn.note_hide_state(true, true);
+    CHECK(local_marks(true).normal);
+    CHECK_FALSE(local_marks(true).undead);
+    CHECK_FALSE(visitor_marks(true).normal);
+    rig.conn.note_hide_state(false, true);
     CHECK_FALSE(local_marks(true).normal);
     rig.conn.note_hide_state(false, false);
 
