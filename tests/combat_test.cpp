@@ -571,10 +571,8 @@ TEST_CASE("name_sprite_shows_guild: SetNameSpriteState's guild line (bGuildShowA
     game::Spawn p;
     p.guild_id = 18;
     p.guild_show = true;
-    CHECK(game::name_sprite_shows_guild(p, 3));
-    CHECK(game::name_sprite_shows_guild(p, 4));
-    CHECK_FALSE(game::name_sprite_shows_guild(p, 2));
-    CHECK_FALSE(game::name_sprite_shows_guild(p, 5));
+    for (int level = 0; level <= 6; ++level)
+        CHECK(game::name_sprite_shows_guild(p, level) == (level == 3 || level == 4));
     game::Spawn hidden = p;
     hidden.guild_show = false; // the rank lacks Display Guild Name (SpawnAppearance 52 = 0)
     CHECK_FALSE(game::name_sprite_shows_guild(hidden, 3));

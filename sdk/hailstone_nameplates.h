@@ -57,6 +57,7 @@ typedef struct HailstoneNameplateCandidate {
     double hp_percent, mana_percent, endurance_percent, aggro_percent; /* test the matching KNOWN flag */
     double cast_elapsed_ms, cast_duration_ms; /* present when CASTING is set */
     HailstoneNameplateString spawn_name, caption, cast_name;
+    HailstoneNameplateString secondary_caption; /* optional ABI 3 tail: stock guild or NPC description line, if visible */
 } HailstoneNameplateCandidate;
 
 typedef struct HailstoneNameplateFrame {

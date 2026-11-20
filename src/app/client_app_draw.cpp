@@ -248,6 +248,8 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
             candidate.depth = entry.plate.depth; candidate.native_scale = entry.plate.scale;
             fill_nameplate_canvas_candidate(candidate, *conn_, spawn->second, entry.plate.name,
                                             glm::distance(entry.head, camera_.position));
+            // The stock guild tag and NPC description/owner are mutually exclusive second lines.
+            if (!entry.plate.lines.empty()) candidate.context.secondary_caption = entry.plate.lines.front();
             canvas_frame.candidates.push_back(std::move(candidate));
             frame_entries.push_back(index);
         }

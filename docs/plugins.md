@@ -1812,6 +1812,10 @@ Plugins with `read`, `ui` and `extend` can replace whole world captions through 
   - A model's `command_size` is the stride of its `commands`, normally `sizeof(HailstoneNameplateCommand)`. The host
     refuses one smaller than its own record and reads only known fields from a larger one.
   - `reserved` fields are 0.
+- **Caption text.** `caption` is the stock first line, with the player name parts selected by `/shownames` (`/show`).
+  - Check `HAILSTONE_NAMEPLATE_CANDIDATE_HAS(frame, secondary_caption)` before reading the stock second line.
+  - `secondary_caption` carries a player's `<Guild>` tag or an NPC's parenthesized description or owner name. It is
+    empty when the stock caption omits it. The display mode, guild rank, anonymity and pet-owner settings apply.
 - **During the callback** `nameplate_measure_text` and `nameplate_spell_icon` are available; an image can use a
   texture returned to that provider during the current callback.
 - **Claiming a caption.** `nameplate_submit` with the current frame serial and zero-based candidate index; the host

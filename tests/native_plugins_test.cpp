@@ -263,20 +263,39 @@ TEST_CASE("native plugins: nameplate frame view steps candidates by its stride")
     game::NameplateCanvasRegistry registry;
     auto frame = sample_nameplate_frame();
     frame.serial = 9;
+    frame.candidates[0].context.secondary_caption = "<Guild of Guards>";
+    auto& npc = frame.candidates.emplace_back();
+    npc.spawn.id = 12;
+    npc.spawn.npc = true;
+    npc.context.secondary_caption = "(Guildmaster)";
     plugin::NativeNameplateFrame lease(registry, frame);
     const auto& view = lease.view();
     CHECK(view.size == sizeof(HailstoneNameplateFrame));
     CHECK(view.candidate_size == sizeof(HailstoneNameplateCandidate));
     CHECK(view.reserved == 0);
-    REQUIRE(view.candidate_count == 2);
+    REQUIRE(view.candidate_count == 3);
     for (std::uint32_t i = 0; i < view.candidate_count; ++i) {
         const auto* by_stride = reinterpret_cast<const HailstoneNameplateCandidate*>(
             static_cast<const unsigned char*>(view.candidates) + std::size_t{i} * view.candidate_size);
         CHECK(hailstone_nameplate_candidate(&view, i) == by_stride);
         CHECK(by_stride->spawn_id == frame.candidates[i].spawn.id);
     }
-    CHECK(hailstone_nameplate_candidate(&view, 2) == nullptr);
+    CHECK(hailstone_nameplate_candidate(&view, 3) == nullptr);
     CHECK(HAILSTONE_NAMEPLATE_CANDIDATE_HAS(&view, cast_name));
+    REQUIRE(HAILSTONE_NAMEPLATE_CANDIDATE_HAS(&view, secondary_caption));
+    const auto guild = hailstone_nameplate_candidate(&view, 0)->secondary_caption;
+    REQUIRE(guild.data);
+    CHECK(std::string_view(guild.data, guild.bytes) == "<Guild of Guards>");
+    const auto hidden = hailstone_nameplate_candidate(&view, 1)->secondary_caption;
+    CHECK(hidden.data == nullptr);
+    CHECK(hidden.bytes == 0);
+    const auto description = hailstone_nameplate_candidate(&view, 2)->secondary_caption;
+    REQUIRE(description.data);
+    CHECK(std::string_view(description.data, description.bytes) == "(Guildmaster)");
+    auto old_view = view;
+    old_view.candidate_size = offsetof(HailstoneNameplateCandidate, secondary_caption);
+    CHECK(HAILSTONE_NAMEPLATE_CANDIDATE_HAS(&old_view, cast_name));
+    CHECK_FALSE(HAILSTONE_NAMEPLATE_CANDIDATE_HAS(&old_view, secondary_caption));
 }
 
 TEST_CASE("native plugins: native and Lua nameplates share candidate claims") {
