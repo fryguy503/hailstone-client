@@ -919,6 +919,9 @@ Hailstone's own additions:
 - While that question is up or queued, a second click does not ask again (whether the original would is not traced).
 - A loot request that cannot be sent cancels the queue, so the player can retry.
 
+The player's own corpse skips the Loot All, NO DROP and stack quantity questions. The ownership check recognizes
+both `Name's_corpse` after a death in the current zone and `Name's corpse<ID>` when the server spawns the corpse.
+
 A NO DROP item needing confirmation is left out of the queue and opens the first question during the scan
 (@0x6bdf93). Another such item aborts the queue but leaves that question alive for its slot. A loot question pending
 before the scan stays unchanged.

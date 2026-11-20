@@ -8,6 +8,7 @@
 #include "core/byte_io.h"
 #include "game/coords.h"
 #include "mock_server/harness.h"
+#include "net/item_packets.h"
 #include "net/notice_packets.h"
 #include "net/packet_io.h"
 #include "net/spell_packets.h"
@@ -381,6 +382,69 @@ TEST_CASE("Hover respawn: same-zone publication replaces player identity and pla
     h.publish(62);
     REQUIRE(h.rig.until([&] { return c.world().player_id == 62; }));
     CHECK(c.world().spawns.at(60).is_corpse);
+}
+
+TEST_CASE("Hover respawn: Loot All takes NO DROP items from the player's corpse without prompting") {
+    HoverRig h;
+    REQUIRE(h.start());
+    auto& c = h.rig.conn;
+    const auto corpse = c.world().player_id;
+    REQUIRE(c.world().spawns.at(corpse).is_corpse);
+    const auto position = game::world_to_server(c.world().spawns.at(corpse).position);
+
+    c.receive_zone_packet_for_test(rez_offer());
+    REQUIRE(c.confirmation());
+    c.answer_confirmation(true);
+    h.clock.advance(10ms);
+    c.choose_respawn(1);
+    REQUIRE(c.respawn_chosen());
+    c.receive_zone_packet_for_test(bind_packet());
+    h.rig.server.zone.send_reliable(encode(make_spawn("Gennro", 60, 0, 1, position.x, position.y, position.z)));
+    REQUIRE(h.rig.until([&] { return c.world().player_id == 60 && !c.player_status().dead; }));
+
+    int confirm_loot_all = 0;
+    SUBCASE("only NO DROP confirmation is enabled") {}
+    SUBCASE("Loot All confirmation is also enabled") { confirm_loot_all = 1; }
+    c.set_client_option_for_session(game::ClientOption::LootAllConfirm, confirm_loot_all);
+    c.set_client_option_for_session(game::ClientOption::LootNoDrop, 0);
+    c.destroy_cursor(); // the mock character starts with cursor coin
+    c.loot(corpse);
+    c.receive_zone_packet_for_test(encode(MoneyOnCorpse{.response = 1}));
+    REQUIRE(c.loot_session());
+    REQUIRE(c.loot_session()->open);
+    constexpr std::int16_t slots[] = {23, 24};
+    for (auto slot : slots) {
+        ItemPacket item;
+        item.type = kItemPacketLoot;
+        item.item.id = 1000 + slot;
+        item.item.name = "NO DROP Relic";
+        item.item.slot = ItemSlot::corpse(slot);
+        item.item.no_drop = 0;
+        item.item.stack_count = 1;
+        c.receive_zone_packet_for_test(encode_item_packet(false, item));
+    }
+    c.receive_zone_packet_for_test(encode(MoneyOnCorpse{.response = 6}));
+    c.loot_all();
+    REQUIRE_FALSE(c.confirmation());
+
+    const auto& log = h.rig.server.zone_log;
+    int requests = 0;
+    for (auto slot : slots) {
+        ++requests;
+        REQUIRE(h.rig.until([&] { return MockEqServer::count(log, Op::LootItem) == requests; }));
+        const auto packet = std::find_if(log.rbegin(), log.rend(), [](const AppPacket& p) {
+            return is_op(p, Op::LootItem);
+        });
+        REQUIRE(packet != log.rend());
+        const auto request = decode_loot_item(*packet);
+        REQUIRE(request);
+        CHECK(request->lootee == corpse);
+        CHECK(request->slot == slot);
+        CHECK(request->auto_loot == 1);
+        c.receive_zone_packet_for_test(encode(*request));
+        CHECK_FALSE(c.confirmation());
+    }
+    REQUIRE(h.rig.until([&] { return MockEqServer::count(log, Op::EndLootRequest) == 1; }));
 }
 
 TEST_CASE("Hover respawn: a same-zone respawn lets go of the boat being driven") {
