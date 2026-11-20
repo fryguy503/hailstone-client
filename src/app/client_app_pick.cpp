@@ -125,7 +125,10 @@ bool ClientApp::click_world(const PickTarget& hit) {
     // under the cursor is picked up (within 20), anything else goes to ClickedSwitch (doors).
     if (const net::Item* held = conn_->inventory().cursor()) {
         bool key = held->item_type == 12 || held->item_type == 33 || held->item_type == 39;
-        return key && hit.kind == PickTarget::Kind::Door && use_door(static_cast<std::uint8_t>(hit.id), hit.point);
+        if (!key || hit.kind != PickTarget::Kind::Door) return false;
+        // A rejected switch use still consumes the key click, as in LMouseUp.
+        use_door(static_cast<std::uint8_t>(hit.id), hit.point);
+        return true;
     }
     if (hit.kind == PickTarget::Kind::Door) return use_door(static_cast<std::uint8_t>(hit.id), hit.point);
     // CDisplay::GetClickedActor with climb: a ladder (actor type 6) is climbed (Ladder_MountClickedLadder).
