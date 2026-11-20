@@ -799,6 +799,120 @@ constexpr const char* kTextRectHook = R"lua(
 
 } // namespace
 
+TEST_CASE("Modern Player: Always show cast bar keeps the cast row and frame height between casts") {
+    RolePackRig r("modern", {"player.lua"});
+    REQUIRE(r.run(R"lua(
+      local load, menuItem, gauge, label = dofile, ui.MenuItem, hs.Gauge, hs.Label
+      dofile = function(path)
+        local module = load(path)
+        if path == 'lib/hud.lua' then
+          local bar = module.T.Bar
+          module.T.Bar = function(key, x0, y0, x1, y1, scale, fraction, ...)
+            if key == 'player.cast' then castTrackDrawn, castFraction = true, fraction end
+            return bar(key, x0, y0, x1, y1, scale, fraction, ...)
+          end
+        end
+        return module
+      end
+      ui.MenuItem = function(name, checked, ...)
+        local clicked = menuItem(name, checked, ...)
+        if name == 'Always show cast bar' then
+          local x0, y0, x1, y1 = ui.GetItemRect()
+          castMenuX, castMenuY, castMenuChecked = (x0 + x1) / 2, (y0 + y1) / 2, checked
+        end
+        return clicked
+      end
+      hs.Gauge = function(id, ...)
+        if id == 7 then castGaugeRead = true end
+        return gauge(id, ...)
+      end
+      hs.Label = function(id, ...)
+        local value, red, green, blue = label(id, ...)
+        if id == 134 then castLabel = value end
+        return value, red, green, blue
+      end
+      return true
+    )lua") == "true");
+
+    net::PlayerProfile profile;
+    profile.name = "Soloist";
+    profile.class_ = 8;
+    r.t.conn.set_profile_for_test(profile);
+    r.t.api->show("PlayerWindow", true);
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(mq_test::spell_line({{0, "717"}, {1, "Fixture Song"}, {13, "600000"}})) == 1);
+    r.t.conn.set_spell_table_for_test(table);
+    auto& cast = net::GameConnectionTestAccess::spells(r.t.conn).casting;
+
+    const auto draw = [&](const char* expected) {
+        REQUIRE(r.run("castTrackDrawn, castFraction, castGaugeRead, castLabel = nil, nil, nil, nil; return true") == "true");
+        r.frames(2);
+        CHECK(r.run(expected) == "true");
+        const auto* frame = ImGui::FindWindowByName("###modern.PlayerWindow");
+        REQUIRE(frame);
+        REQUIRE(frame->Active);
+        return frame->Size.y;
+    };
+    const auto start_cast = [&] {
+        cast.spell = 717;
+        cast.eta_ms = net::GameConnection::now_ms() + 300000;
+    };
+    constexpr auto hidden = "return not castTrackDrawn and not castGaugeRead and castLabel == nil";
+    constexpr auto empty = "return castTrackDrawn and (castFraction == nil or castFraction == 0) "
+                           "and not castGaugeRead and castLabel == nil";
+    constexpr auto active = "return castTrackDrawn and castFraction > 0 and castFraction < 1 "
+                            "and castGaugeRead and castLabel == 'Fixture Song'";
+
+    const float idle_height = draw(hidden);
+    start_cast();
+    const float cast_height = draw(active);
+    CHECK(cast_height > idle_height);
+    cast = {};
+    CHECK(draw(hidden) == idle_height);
+
+    const auto click_menu = [&](bool checked) {
+        REQUIRE(r.run("castMenuX, castMenuY, castMenuChecked = nil, nil, nil; return true") == "true");
+        auto& io = ImGui::GetIO();
+        const auto* frame = ImGui::FindWindowByName("###modern.PlayerWindow");
+        REQUIRE(frame);
+        io.AddMousePosEvent(frame->Pos.x + 10, frame->Pos.y + 12);
+        r.frames(2);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        r.frames(3);
+        CHECK(r.run(checked ? "return castMenuChecked == true" : "return castMenuChecked == false") == "true");
+        REQUIRE(r.run("return castMenuX ~= nil and castMenuY ~= nil") == "true");
+        lua_State* state = r.lua->state();
+        lua_getglobal(state, "castMenuX");
+        lua_getglobal(state, "castMenuY");
+        io.AddMousePosEvent(static_cast<float>(lua_tonumber(state, -2)), static_cast<float>(lua_tonumber(state, -1)));
+        lua_pop(state, 2);
+        r.frames(2);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        r.frames(2);
+    };
+
+    click_menu(false);
+    CHECK(r.lua->setting("player.alwaysShowCastBar") == "1");
+    r.lua->set_character_settings(r.scratch.path() / "character.txt"); // flush the shared settings before reopening
+    {
+        ui::lua::LuaUi saved({}, r.scratch.path() / "pack.txt");
+        CHECK(saved.setting("player.alwaysShowCastBar") == "1");
+    }
+    CHECK(draw(empty) == cast_height);
+    start_cast();
+    CHECK(draw(active) == cast_height);
+    cast = {};
+    CHECK(draw(empty) == cast_height);
+
+    click_menu(true);
+    CHECK(r.lua->setting("player.alwaysShowCastBar") == "0");
+    CHECK(draw(hidden) == idle_height);
+}
+
 TEST_CASE("Group role UI packs: the modern Player window's name keeps the frame menu when no role menu opens") {
     RolePackRig r("modern", {"player.lua"});
     REQUIRE(r.run(kTextRectHook) == "true");

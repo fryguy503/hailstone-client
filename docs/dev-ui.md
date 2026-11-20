@@ -264,6 +264,7 @@ Each entry names the window and what is particular to it; the `hs.*` calls behin
 #### HUD windows
 
 - **PlayerWindow**: level badge, health / mana / endurance, experience and AA experience, and the spell being cast (the game's CastingWindow). While auto attack is on: a pulsing red ring (`T.Panel`'s `glowWidth`), a red wash and a red level badge.
+  The Modern frame's right-click menu has **Always show cast bar** (off by default). It keeps the empty cast bar visible between casts so the frame stays the same height. The choice is saved in the Modern pack settings (`player.alwaysShowCastBar`).
 
 - **TargetWindow**: con colour, health, target's target, the aggro meter (AggroMeterWnd's gauge 149 and labels 302..307; `aggro.lua` keeps the game's window hidden, and the EQ menu has no Aggro Meter row), and buffs with Spell Info on a right click.
 
