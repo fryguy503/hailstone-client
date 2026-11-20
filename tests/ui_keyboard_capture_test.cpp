@@ -144,6 +144,32 @@ TEST_CASE("UI keys: Ctrl is Ctrl in the windows on every system (no macOS Cmd sw
     ImGui::EndFrame();
 }
 
+TEST_CASE("UI gamepad: opening a combo keeps focus within the tracked window") {
+    Ui ui;
+    CHECK_FALSE(ui::detail::pad_window_has_focus("Window"));
+    ui.frame(kAway, false, [] {
+        ImGui::SetWindowFocus();
+        CHECK(ui::detail::pad_window_has_focus("Window"));
+
+        // Open the native combo so its real popup window takes navigation focus.
+        ImGui::OpenPopupEx(ImHashStr("##ComboPopup", 0, ImGui::GetID("Map Pack")), ImGuiPopupFlags_None);
+        const bool open = ImGui::BeginCombo("Map Pack", "Default");
+        CHECK(open);
+        if (open) {
+            CHECK(GImGui->NavWindow == ImGui::GetCurrentWindow());
+            CHECK(GImGui->NavWindow->RootWindow != ImGui::FindWindowByName("Window"));
+            CHECK(ui::detail::pad_window_has_focus("Window"));
+            ImGui::Selectable("Default", true);
+            ImGui::EndCombo();
+        }
+
+        ImGui::Begin("Other window", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        ImGui::SetWindowFocus();
+        CHECK_FALSE(ui::detail::pad_window_has_focus("Window"));
+        CHECK(ui::detail::pad_window_has_focus("Other window"));
+        ImGui::End();
+    });
+}
 
 TEST_CASE("UI keys: Tab with nothing typed in stays the game's; in an edit box it moves to the next field") {
     Ui ui;

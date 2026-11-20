@@ -402,11 +402,14 @@ RoF2 reads one maps folder file by file; this is a deliberate difference.
 
 #### Map packs
 
-A maps directory (a map pack: the map window's combo, `[Main] MapSkin`) is a subfolder of `maps/` in any of the four.
+A map pack is a subfolder of `maps/` in any of the four locations above.
 
-The chosen one is looked for in all four first, then the plain folders; the combo lists the subfolders of all four.
-Options picks it too (Display > Interface > Map Pack in the modern pack, Interface > Map pack in the gamepad pack),
-kept per character in `UI.ini`, and rereads the list each time, so a pack dropped in shows up without a restart.
+Choose **Map Pack** in the map window (on the Zone tab in Modern). In Gamepad, use the D-pad to focus the dropdown
+and A to open it. Options also offers the setting under Display > Interface in Modern and Interface in Gamepad.
+Both controls use the same per-character `[Main] MapSkin` setting in `UI.ini`.
+
+The map looks in the chosen subfolder in all four locations first, then in the plain folders. **Default** uses
+the plain folders. The list refreshes when the map window opens, so a new pack is available without a restart.
 
 #### Zone names
 

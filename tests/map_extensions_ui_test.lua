@@ -14,18 +14,20 @@ local function rig(pack)
   writes={},buttons={},popupButtons={},texts={},pad={},shown=true,inGame=true,allowed=true,present=true,apiAvailable=true,
   withActions=true,withSections=true,sectionsEnabled=true,generation=1,owner="plugin:map-fixture",zone="alpha",shownZone="alpha",own=true,
   policy={custom_spawns=true,stock_npcs=false,npc_find=false,name="Map provider",revision="provider:1",context="context:1",source="source:1"},
-  autoZ=true,pathShown=false,geometry={},focus=nil,popup=nil,popupDepth=0,io={fps=60,mouseDX=0,mouseDY=0,wheel=0,alt=false}}
+  autoZ=true,pathShown=false,geometry={},focus=nil,popup=nil,popupDepth=0,io={fps=60,mouseDX=0,mouseDY=0,wheel=0,alt=false},
+  mapPacks={"Default"},mapPack=0,combos={}}
  local function draw()check(s.depth>0,"Draw outside a presenter or popup")end
  local function mapAction(name,...)s.mapActions[#s.mapActions+1]={name,...};return true end
  local function isDisabled()for _,value in ipairs(s.disabled)do if value then return true end end;return false end
  local function identity(id)return table.concat(s.ids,"/").."|"..id end
- local function item(id,label)
+ local function item(id,label,navInput)
   draw();local key=identity(id);s.last=key;s.lastRaw=id
   local entry={id=key,raw=id,label=label or id}
   s.buttons[#s.buttons+1]=entry
   if s.popupDepth>0 then s.popupButtons[#s.popupButtons+1]=entry end
   if s.requestFocus then s.focusQueued=key;s.requestFocus=false end
-  return not isDisabled() and (s.click==id or s.click==label or s.click==key or (s.pad.a and s.focus==key))
+  return not isDisabled() and (s.click==id or s.click==label or s.click==key
+   or ((s.pad.a or (navInput and s.pad.y)) and s.focus==key))
  end
  local map={
   Policy=function()local snapshot={};for key,value in pairs(s.policy)do snapshot[key]=value end;return snapshot end,
@@ -40,8 +42,16 @@ local function rig(pack)
    return 1,0,0,5,8
   end,
  }
+ local function checkPackCombo(screen,id)
+  equal(screen,"MapViewWnd");equal(id,"MVW_MapsDirCombobox")
+ end
  local windows={Shown=function(screen)check(screen=="MapViewWnd","Only map visibility is queried");return s.shown end,
-  Show=function(screen,value)if screen=="MapViewWnd"then s.shown=value end;return mapAction("ShowWindow",screen,value)end}
+  Show=function(screen,value)if screen=="MapViewWnd"then s.shown=value end;return mapAction("ShowWindow",screen,value)end,
+  ComboInfo=function(screen,id)checkPackCombo(screen,id);return s.mapPacks,s.mapPack end,
+  ComboSelect=function(screen,id,index)
+   checkPackCombo(screen,id);check(s.mapPacks[index+1],"Map pack index is zero-based")
+   s.mapPack=index;return mapAction("ComboSelect",index)
+  end}
  local find={Open=function(value)if value~=nil then s.findOpen=value;mapAction("FindOpen",value)end;return s.findOpen or false end,
   MapLocation=function(x,y)return mapAction("MapLocation",x,y)end,
   End=function()s.pathShown=false;return mapAction("End")end}
@@ -140,6 +150,26 @@ local function rig(pack)
  end
  ui.EndPopup=function()s.depth=s.depth-1;s.popupDepth=s.popupDepth-1;check(s.popupDepth>=0)end
  ui.CloseCurrentPopup=function()s.popup=nil end
+ ui.BeginCombo=function(id,preview)
+  s.combos[id]=preview
+  if item(id,id:match("^(.-)##")or id,true)then
+   ui.OpenPopup(id);s.comboPopup=id
+  end
+  return ui.BeginPopup(id)
+ end
+ ui.EndCombo=ui.EndPopup
+ ui.Selectable=function(label,selected)
+  local clicked=item(label,label:match("^(.-)##")or label,true)
+  s.buttons[#s.buttons].selected=selected
+  if clicked then
+   s.focusQueued=identity(s.comboPopup);s.comboPopup=nil
+   ui.CloseCurrentPopup()
+  end
+  return clicked
+ end
+ ui.SetItemDefaultFocus=function()
+  if s.comboPopup and s.popupAppearing then s.focusQueued=s.last end
+ end
  ui.BeginChild=function()draw();s.depth=s.depth+1;return true end
  ui.EndChild=function()s.depth=s.depth-1 end
  ui.BeginMenu=function()return false end;ui.EndMenu=nop
@@ -160,7 +190,7 @@ local function rig(pack)
   rect=draw,outline=draw,draw=draw,unfont=nop,font=pack=="modern"and{small=1,tiny=1,normal=1}or nop}
  local pad={connected=function()return true end,axis=function(key)return s.axes and s.axes[key]or 0 end,
   menuPressed=function(key)return s.pad[key]or false end,navVisible=function()return true end,
-  focused=function()return ui.IsItemFocused()end,yActivated=function(clicked)return clicked and s.pad.y end}
+  focused=function()return ui.IsItemFocused()end,yActivated=function(clicked)return clicked and s.pad.y==true end}
  local window={shown=function()return s.shown end,
   begin=function(_,opts)s.beginOpts=opts;s.depth=s.depth+1;return true end,
   area=function()return 0,0,1100,650 end,focused=function()return true end,
@@ -184,6 +214,11 @@ local function rig(pack)
  originalDofile(CLIENT_ROOT.."/ui/"..pack.."/map.lua")
  function s.draw(input,click)
   s.frame=s.frame+1;s.time=s.time+.016;s.pad=input or{};s.click=click;s.buttons={};s.popupButtons={};s.texts={};s.x,s.y=0,0
+  s.combos={}
+  if s.comboPopup and s.pad.b then
+   -- Native gamepad cancel closes the combo before the map presenter draws.
+   s.focus=identity(s.comboPopup);s.comboPopup=nil;s.popup=nil
+  end
   if s.popup and(s.pad.down or s.pad.up)and s.previousPopupButtons then
    local at=1
    for i,row in ipairs(s.previousPopupButtons)do if row.id==s.focus then at=i;break end end
@@ -305,6 +340,52 @@ for _,pack in ipairs({"modern","gamepad"})do
   s.draw();equal(#s.mapActions,before,"A retired canvas popup cannot issue a stale coordinate Find")
   check(s.popup~="##mapmenu","Canvas replacement retires its old stock popup")
  end
+ s.restore()
+end
+
+-- The map window uses the same per-character choice as the Options window.
+local MAP_PACK="Map Pack##map_pack"
+do
+ local s=rig("modern")
+ s.mapPacks={"Default","Brewall","Good's"};s.mapPack=1
+ s.draw();equal(s.combos[MAP_PACK],"Brewall","Preview reflects the existing choice")
+ equal(#s.mapActions,0,"Drawing does not change the pack")
+ s.draw({},MAP_PACK)
+ equal(#s.popupButtons,3,"The dropdown lists every installed choice")
+ check(s.button("Brewall").selected,"The current pack is selected in the dropdown")
+ s.draw({},"Good's");equal(#s.mapActions,1)
+ equal(s.mapActions[1][1],"ComboSelect");equal(s.mapActions[1][2],2)
+ s.draw();equal(s.combos[MAP_PACK],"Good's","Preview updates after selection")
+ s.mapPack=0;s.draw();equal(s.combos[MAP_PACK],"Default","Preview follows changes made elsewhere")
+ s.draw({},"##vworld");s.draw()
+ equal(s.combos[MAP_PACK],nil,"The World atlas has no map pack selector")
+ s.restore()
+end
+do
+ local s=rig("gamepad")
+ s.mapPacks={"Default","Brewall","Good's"};s.mapPack=1
+ s.draw();equal(s.combos[MAP_PACK],"Brewall")
+ s.draw({rb=true});s.draw();s.draw()
+ local centred=s.geometry[#s.geometry]
+ s.axes={lx=1};s.draw();s.axes=nil;s.draw()
+ check(s.geometry[#s.geometry].cx~=centred.cx,"The stick panned the map")
+ s.focus=s.button("Map Pack").id
+ s.draw({y=true});equal(#s.popupButtons,0,"Y does not open the focused map pack dropdown")
+ s.draw();s.draw();equal(s.geometry[#s.geometry].cx,centred.cx,"Y still centres the map")
+ s.draw({a=true});equal(#s.popupButtons,3,"A opens the focused map pack dropdown")
+ equal(#s.mapActions,0,"Opening the dropdown with A does not find a path")
+ s.draw({b=true,rb=true,rt=true});check(s.shown,"B closes the dropdown without closing the map")
+ s.draw();equal(s.geometry[#s.geometry].zoom,centred.zoom,"The dismiss-frame RB does not zoom")
+ equal(#s.mapActions,0,"The dismiss-frame RT does not toggle Auto Z")
+ s.draw({a=true});s.draw();s.focusLabel("Good's")
+ s.draw({y=true});equal(#s.mapActions,0,"Y does not select a map pack")
+ check(s.popup,"Y leaves the dropdown open")
+ s.draw({a=true})
+ equal(#s.mapActions,1,"Selecting a pack with A does not find a path")
+ equal(s.mapActions[1][1],"ComboSelect");equal(s.mapActions[1][2],2)
+ s.draw();equal(s.combos[MAP_PACK],"Good's")
+ s.focus=s.button("##maparea").id
+ s.draw({a=true});equal(s.mapActions[2][1],"MapLocation","A still finds a path from the map canvas")
  s.restore()
 end
 
