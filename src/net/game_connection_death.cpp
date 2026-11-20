@@ -338,7 +338,13 @@ std::vector<game::ZonePointRow> GameConnection::zone_point_rows() const {
 
 void GameConnection::send_position_now() {
     motion_dirty_ = true;
-    send_position(true);
+    send_position(true, position_);
+}
+
+void GameConnection::send_zone_line_position(glm::vec3 position) {
+    // EQEmu uses this position to choose the zone point and resolve its kept coordinates. Send it on the
+    // reliable stream with the request so the request cannot overtake it.
+    if (!zone_change_pending_) send_position(true, position, true);
 }
 
 void GameConnection::move_to_zone(const game::MoveToZoneCall& m) {

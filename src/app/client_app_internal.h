@@ -1069,7 +1069,8 @@ private:
     void region_teleport(const std::string& text);
     // PlayerZoneClient::DoTeleportB @0x507ca0 for the local player (game/zoning.h): the same zone moves the player
     // here, nothing sent; another zone goes through MoveToZone. `what` names the caller in the log.
-    bool teleport_b(const game::TeleportBArgs& a, const char* what);
+    bool teleport_b(const game::TeleportBArgs& a, const char* what,
+                    std::optional<glm::vec3> zone_line_position = std::nullopt);
     void drive_pick_test(MovementKeys& mk);
     int pick_test_step_ = 0;
     std::vector<std::uint32_t> pick_test_ids_;

@@ -13,6 +13,8 @@
 
 #include "core/ini_file.h"
 #include "game/coords.h"
+#include "game/position_tracker.h"
+#include "game/zoning.h"
 #include "mock_server/harness.h"
 #include "net/chat_server.h"
 #include "net/door_packets.h"
@@ -467,6 +469,75 @@ TEST_CASE("mock server: zone lines and server-requested zoning go through world 
     CHECK(asked->zone_id == 2);
     CHECK(asked->zone_reason == 0x0b); // the request's type is passed back
     CHECK(conn.error().empty());
+}
+
+TEST_CASE("mock server: East Freeport reports the mapped source X before zoning to North Ro") {
+    MockConfig config = MockConfig::standard();
+    config.characters.front().zone_id = 10;
+    MockZone& east_freeport = config.zones[10];
+    east_freeport.id = 10;
+    east_freeport.short_name = "freporte";
+    east_freeport.long_name = "East Freeport";
+    east_freeport.zone_points = {{11, 4173.0f, 999999.0f, -27.0f, 256.0f, 34}};
+    Rig rig(std::move(config));
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.until([&] { return conn.zone_points().size() == 1; }));
+    REQUIRE(conn.current_zone_dword() == 10);
+    const glm::vec3 walk_position(-1200.0f, -670.0f, -50.0f);
+    conn.set_player_motion(walk_position, 0.0f, glm::vec3(0.0f), true);
+
+    auto rows = conn.zone_point_rows();
+    float location[] = {walk_position.x, walk_position.y, walk_position.z};
+    auto target = game::resolve_teleport_index("DRNTP00255000011", -1,
+                                               static_cast<std::int32_t>(conn.current_zone_dword()), location, rows);
+    REQUIRE(target.ok);
+    REQUIRE(target.destination == 34);
+    game::TeleportBPlayer player;
+    player.zone = 10;
+    player.x = location[0];
+    player.y = location[1];
+    player.z = location[2];
+    game::TeleportBHooks hooks;
+    hooks.position_sample = [](int) {};
+    hooks.send_client_update = [&] { conn.send_zone_line_position({player.x, player.y, player.z}); };
+    hooks.save_physics = [] {};
+    hooks.move_to_zone = [&](const game::MoveToZoneCall& move) { conn.move_to_zone(move); };
+    hooks.rewind_reset = [] {};
+
+    server.zone_change_answers = {-1, -2};
+    conn.record_position_sample(game::kPositionZoneLine, &walk_position);
+    REQUIRE(game::do_teleport_b(player, {target.destination, target.x, target.y, target.z, target.heading}, 5, hooks));
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ZoneChange) == 1; }));
+    // Preserve the mapped X through the retry even when a subsequent frame updates movement.
+    conn.set_player_motion(walk_position + glm::vec3(0.0f, 2.0f, 0.0f), 0.0f, glm::vec3(0.0f), true);
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ZoneChange) == 2; }));
+    CHECK(in_order(server.zone_log, {Op::FloatListThing, Op::ClientUpdate, Op::ZoneChange}));
+    const auto request = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                      [](const AppPacket& p) { return is_op(p, Op::ZoneChange); });
+    REQUIRE(request != server.zone_log.end());
+    const auto retry = std::find_if(std::next(request), server.zone_log.end(),
+                                    [](const AppPacket& p) { return is_op(p, Op::ZoneChange); });
+    REQUIRE(retry != server.zone_log.end());
+    CHECK(std::none_of(std::next(request), retry, [](const AppPacket& p) { return is_op(p, Op::ClientUpdate); }));
+    const auto source = std::find_if(std::make_reverse_iterator(request), server.zone_log.rend(),
+                                     [](const AppPacket& p) { return is_op(p, Op::ClientUpdate); });
+    REQUIRE(source != server.zone_log.rend());
+    const auto update = decode_client_position_update(*source);
+    REQUIRE(update);
+    // EQEmu keeps this last reported server X when the zone point's target X is 999999.
+    CHECK(update->motion.x == 374.0f);
+    CHECK(update->motion.y == -1200.0f);
+    CHECK(update->motion.z == -50.0f);
+    const auto change = decode_zone_change(*request);
+    REQUIRE(change);
+    CHECK(change->zone_id == 34);
+    CHECK(change->x == 374.0f);
+    CHECK(change->y == 4173.0f);
+    CHECK(change->z == -27.0f);
+    REQUIRE(rig.until([&] { return !conn.zone_change_pending() && server.client_updates.size() == 2; }));
+    CHECK(server.client_updates.back().motion.x == -668.0f);
 }
 
 // ---------------------------------------------------------------- world containers

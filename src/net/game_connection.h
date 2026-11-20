@@ -1420,6 +1420,7 @@ public:
     std::uint32_t current_zone_dword() const;
     // The position update DoTeleportB sends before a reason-0 teleport.
     void send_position_now();
+    void send_zone_line_position(glm::vec3 position);
 
     // ---- movement (game/mechanics/movement.h; net/game_connection_movement.cpp) ----
     // OP_Jump, and the endurance the original takes locally (DoMainLoop @0x53ed48).
@@ -2882,7 +2883,7 @@ private:
     void send_checksums();
     void maybe_request_client_spawn();
     void finish_zone_in();
-    void send_position(bool force);
+    void send_position(bool force, glm::vec3 position, bool reliable = false);
     void apply_spawn(const Spawn& s);
     void set_spawn_motion(game::Spawn& s, const Motion& m);
     void connect_world(bool zoning);

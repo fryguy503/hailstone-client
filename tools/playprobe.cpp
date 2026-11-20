@@ -462,11 +462,12 @@ int main(int argc, char** argv) {
                         // DoTeleportB for another zone: keep coordinates at or above 999999, then MoveToZone.
                         game::MoveToZoneCall m;
                         m.zone = r.found;
-                        m.x = r.x < 999999.0f ? r.x : reported.x;
-                        m.y = r.y < 999999.0f ? r.y : reported.y;
-                        m.z = r.z < 999999.0f ? r.z : reported.z;
+                        m.x = r.x < 999999.0f ? r.x : loc[0];
+                        m.y = r.y < 999999.0f ? r.y : loc[1];
+                        m.z = r.z < 999999.0f ? r.z : loc[2];
                         m.heading = static_cast<std::int32_t>(r.heading < 513.0f ? r.heading : heading);
-                        conn.send_position_now();
+                        conn.record_position_sample(game::kPositionZoneLine, &reported);
+                        conn.send_zone_line_position({loc[0], loc[1], loc[2]});
                         conn.move_to_zone(m);
                         zl_requested = true;
                     }

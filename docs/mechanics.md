@@ -1164,8 +1164,10 @@ teleport index request and wait 300, do-teleport-B 2000, zone player to bind 120
 - Zone lines: the region change hands the teleport the region's text; an ATP region's is "DRNTP00255%05d0..." of
   atoi(name + 4), which reads back as zone point 10 x N. The teleport index resolve reads the zone (5 digits), then
   each 6-character field only when the text is long enough (x and the zone point number from the same field), and
-  for zone 255 the first zone point row with that number (none: zeroed position, failure). Four zone pairs nudge
-  the player (34 -> 10: y - 1044; 10 -> 34: y + 1044; 3 -> 4: z + 2; 2 -> 4: x + 10).
+  for zone 255 the first zone point row with that number (none: zeroed position, failure). Four zone pairs adjust
+  the destination (34 -> 10: world y - 1044; 10 -> 34: world y + 1044; 3 -> 4: z + 2; 2 -> 4: world x + 10).
+  The first three also apply the offset to the position reported before zoning, which supplies any coordinate
+  EQEmu keeps across the line. The movement body stays at the crossing until normal movement or placement.
 - Heightmap zones' ATP boxes: the DAT area's zOffset is the box centre's z as stored (CEQTerrainSystem::vf3 ->
   CTerrainSystem vf42 @0x100eb380 adds only the tile origin to x and y; no terrain height). In toxxulia,
   mistythicket and oldbloodfield (files from expansions after RoF2) every ATP box lies 200 to 600 below the ground

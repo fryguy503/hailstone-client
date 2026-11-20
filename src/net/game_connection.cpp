@@ -382,7 +382,8 @@ void GameConnection::update() {
         auto f = game::tracking_frame(tracking_.open, static_cast<std::uint32_t>(now_ms()), tracking_.next_controls,
                                       tracking_.next_track, tracking_.auto_update);
         if (f.send_track) send_track();
-        send_position(false);
+        // An unsolicited transfer may be retried. Keep the zone-line position as the last report until it resolves.
+        if (!zone_change_pending_ || zone_change_request_.zone_reason != 0) send_position(false, position_);
         update_afk();
         update_spells();
         update_npc_interactions();
@@ -2328,7 +2329,7 @@ void GameConnection::set_player_motion(const glm::vec3& position, float heading,
     }
 }
 
-void GameConnection::send_position(bool force) {
+void GameConnection::send_position(bool force, glm::vec3 position, bool reliable) {
     // A dead player's spawn is a corpse now; nothing to report until the re-zone.
     if (!zone_session_ || world_.player_id == 0 || pstatus_.dead) return;
     reconcile_eye_control();
@@ -2338,9 +2339,9 @@ void GameConnection::send_position(bool force) {
     // DoMainLoop: the sequence is the position tracker's sample count, then sample 2 is recorded.
     ClientPositionUpdate u;
     u.sequence = position_tracker_.sequence();
-    record_position_sample(game::kPositionUpdate);
+    record_position_sample(game::kPositionUpdate, &position);
     u.spawn_id = static_cast<std::uint16_t>(world_.player_id);
-    glm::vec3 world_p = position_, world_v = velocity_;
+    glm::vec3 world_p = position, world_v = velocity_;
     float heading = heading_;
     // Standing on a vehicle: the physics block in the vehicle's frame (Vehicle_ToLocal) and the vehicle's id
     // (PackPlayerPositionUpdateOnVehicle; the server adds the vehicle's position and heading back). The frame is the
@@ -2369,9 +2370,9 @@ void GameConnection::send_position(bool force) {
     // A ridden mount's (the controlled spawn's) goes out under the rider's id (DoMainLoop @0x53e28b).
     float speed_run = std::clamp(speed_run_, -12.8f, 12.7f);
     u.motion.animation = static_cast<std::int32_t>(speed_run * 40.0f);
-    send_zone(encode(u), false);
+    send_zone(encode(u), reliable);
     last_position_send_ = now;
-    last_sent_position_ = position_;
+    last_sent_position_ = position;
     last_sent_heading_ = heading_;
     motion_dirty_ = false;
 }
@@ -2474,8 +2475,7 @@ bool GameConnection::request_zone_change(std::uint16_t zone_id, std::uint16_t in
     if (state_ != ConnectionState::InZone || zone_change_pending_ || !zone_session_) return false;
     // The server picks the zone point nearest to the last reported position,
     // so report where we are first (DoTeleportB sends OP_ClientUpdate first).
-    motion_dirty_ = true;
-    send_position(true);
+    send_zone_line_position(position_);
     ZoneChange z;
     z.char_name = character_;
     z.zone_id = zone_id;
