@@ -62,10 +62,14 @@ namespace hailstone::game {
 		a.texture = kNoTexture;
 	}
 
-	Appearance drawn_appearance(const Appearance& a, std::uint32_t race) {
+	Appearance drawn_appearance(const Appearance& a, std::uint32_t race, std::uint32_t bow) {
 		Appearance out = a;
 		if (!is_pc_model_race(race))
 			for (int s = kSlotHead; s <= kSlotFeet; ++s) out.tint[static_cast<std::size_t>(s)] = 0;
+		if (bow != 0) {
+			apply_wear_change(out, kSlotPrimary, 0, 0, 0);
+			apply_wear_change(out, kSlotSecondary, bow, 0, 0);
+		}
 		return out;
 	}
 

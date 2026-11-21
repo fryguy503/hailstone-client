@@ -6,6 +6,7 @@
 
 #include "game/missiles.h"
 #include "game/spells.h"
+#include "net/item_packets.h"
 
 using namespace hailstone;
 using namespace hailstone::game;
@@ -86,6 +87,30 @@ TEST_CASE("missile packet: a NaN or infinite position, speed or angle is refused
     float v = nan;
     std::memcpy(&b[12], &v, 4); // velocity x
     CHECK_FALSE(decode_missile_packet(b));
+}
+
+TEST_CASE("a local arrow launch takes the held bow from the Range slot") {
+    auto p = decode_missile_packet(eqemu_arrow(0.0f, 0.0f, 0.0f, 4.0f, 0.0f, 125.0f, 50.0f, 7, 9, 7, 27, "IT10"));
+    REQUIRE(p);
+    net::Item bow;
+    bow.item_type = 5;
+    bow.id_file = "IT100";
+    CHECK(missile_bow_model(*p, 7, &bow) == 100);
+    bow.ornament_main = "IT101";
+    bow.ornament_off = "IT102";
+    CHECK(missile_bow_model(*p, 7, &bow) == 102);
+    CHECK(missile_bow_model(*p, 7, nullptr) == 0);
+    CHECK(missile_bow_model(*p, 9, &bow) == 0); // remote shooter
+
+    p->item_type = 28;
+    CHECK(missile_bow_model(*p, 7, &bow) == 0);
+    bow.item_type = 6;
+    CHECK(missile_bow_model(*p, 7, &bow) == 102);
+    p->item_type = 19; // thrown weapon
+    CHECK(missile_bow_model(*p, 7, &bow) == 0);
+    p->item_type = 28;
+    p->range = 0;
+    CHECK(missile_bow_model(*p, 7, &bow) == 0);
 }
 
 TEST_CASE("missile launch animation and delay") {

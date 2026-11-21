@@ -223,6 +223,7 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
   - Accept expedition/shared-task roster invitations with real players and a controller.
 - [x] Extended chat channels 57..107 and user colours 355..408 for servers that send a later client's chat colours (a Hailstone extension; stock routing and colours unchanged; docs/mechanics.md "Extended chat routing").
 - [x] Missiles: a despawned source or target handled as DeleteMyMissiles; flying through walls with a target is the original's behaviour (60b1934). Not tested live (no archer).
+- [ ] Compare the local bow's visibility after a shot with RoF2. Hailstone displays it during the firing animation.
 - [x] **Valid spell missiles.**
   - Spell lifetime, launch and ending stages, stationary area contact, source physics clock, spell 859 local presentation. Not checked live.
   - Invalid or absent spell ids still end immediately.

@@ -10,6 +10,7 @@
 #include "core/worker_pool.h"
 #include "game/anim_layers.h"
 #include "game/animation_types.h"
+#include "game/appearance.h"
 #include "game/world_state.h"
 #include "render/actor_layers.h"
 #include "render/actor_renderer.h"
@@ -135,6 +136,60 @@ assets::AnimationClip clip(std::uint32_t frames) {
 
 constexpr std::uint8_t anim(AnimationType a) { return static_cast<std::uint8_t>(a); }
 } // namespace
+
+TEST_CASE("archery: the drawn look holds the bow only during the shot") {
+    auto stand = clip(kStandFrames), shot = clip(kActionFrames), other = clip(kActionFrames);
+    ActorLayers layers;
+    LayerRequest req;
+    req.base = &stand;
+    req.base_anim = anim(AnimationType::Stand);
+    req.stand_request = true;
+    layers.step(req, kStep);
+    constexpr std::uint8_t kShootBow = anim(AnimationType::ShootBow);
+    constexpr std::uint32_t kBowModel = 100, kPrimaryModel = 101, kSecondaryModel = 102;
+    Appearance worn;
+    worn.material[kSlotPrimary] = kPrimaryModel;
+    worn.material[kSlotSecondary] = kSecondaryModel;
+    auto drawn = [&] { return drawn_appearance(worn, 1, layers.playing_bow_model()); };
+
+    CHECK(drawn() == worn);
+    REQUIRE(layers.start_action(&shot, kShootBow, kShootBow, 1.0f, req, kBowModel));
+    layers.step(req, kStep);
+    CHECK(drawn().material[kSlotPrimary] == 0);
+    CHECK(drawn().material[kSlotSecondary] == kBowModel);
+
+    SUBCASE("the shot completes") {
+        for (std::uint32_t i = 0; i <= kActionFrames; ++i) layers.step(req, kStep);
+    }
+    SUBCASE("a different action interrupts the shot") {
+        constexpr std::uint8_t kCast = anim(AnimationType::CastNuke);
+        REQUIRE(layers.start_action(&other, kCast, kCast, 1.0f, req));
+        layers.step(req, kStep);
+    }
+    SUBCASE("the character dies") {
+        render::corpse_request(req, other, false);
+        layers.step(req, kStep);
+    }
+    CHECK(drawn() == worn);
+}
+
+TEST_CASE("archery: a queued shot takes the bow only when it plays") {
+    auto stand = clip(kStandFrames), slash = clip(kActionFrames), shot = clip(kActionFrames);
+    ActorLayers layers;
+    LayerRequest req;
+    req.base = &stand;
+    req.base_anim = anim(AnimationType::Stand);
+    req.stand_request = true;
+    layers.step(req, kStep);
+    constexpr std::uint8_t kSlash = anim(AnimationType::ThrowOrOneHandSlash);
+    constexpr std::uint8_t kShootBow = anim(AnimationType::ShootBow);
+    constexpr std::uint32_t kBowModel = 100;
+    REQUIRE(layers.start_action(&slash, kSlash, kSlash, 1.0f, req));
+    CHECK_FALSE(layers.start_action(&shot, kShootBow, kShootBow, 1.0f, req, kBowModel));
+    CHECK(layers.playing_bow_model() == 0);
+    for (std::uint32_t i = 0; i <= kActionFrames; ++i) layers.step(req, kStep);
+    CHECK(layers.playing_bow_model() == kBowModel);
+}
 
 TEST_CASE("classic: an attack while running plays over the legs") {
     auto run = clip(10), attack = clip(8), stand = clip(10);

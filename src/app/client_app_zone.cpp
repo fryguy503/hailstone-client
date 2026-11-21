@@ -1162,7 +1162,14 @@ void ClientApp::update_missiles() {
             const std::uint8_t body_wet = s.id == world.player_id ? motion_body_wet_ : s.body_wet;
             std::uint8_t anim =
                 game::missile_launch_animation(p.skill, p.item_type, p.range, s.race, s.class_id, body_wet, new_style);
-            if (anim != 0xfe && anim != 0x4f) conn_->play_animation(s.id, anim);
+            if (anim != 0xfe && anim != 0x4f) {
+                conn_->play_animation(s.id, anim);
+                if (actor_renderer_ && s.id == world.player_id) {
+                    const auto* range = conn_->inventory().at(net::ItemSlot::possessions(net::kSlotRange));
+                    if (const auto bow = game::missile_bow_model(p, world.player_id, range))
+                        actor_renderer_->note_player_bow_shot(s.action_seq, bow);
+                }
+            }
             const assets::AnimationClip* anim_clip = nullptr;
             if (actor_renderer_) {
                 if (auto model = actor_renderer_->model_for(s)) {

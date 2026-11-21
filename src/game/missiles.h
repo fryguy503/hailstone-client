@@ -73,6 +73,10 @@ namespace hailstone::assets {
 struct AnimationClip;
 }
 
+namespace hailstone::net {
+struct Item;
+}
+
 namespace hailstone::game {
 
 struct SpellData;
@@ -107,6 +111,9 @@ std::optional<MissilePacket> decode_missile_packet(std::span<const std::byte> da
 
 inline constexpr std::uint8_t kMissileItemSpell = 9;
 inline constexpr std::uint8_t kMissileItemThrown = 7; // MissileAI leaves its tilt rate alone
+
+// The projectile describes the ammo. Only the local inventory can supply the bow that shot it.
+std::uint32_t missile_bow_model(const MissilePacket& packet, std::uint32_t player_id, const net::Item* range_item);
 
 // The animation the source plays at the launch (Send_OP_Animation_0058f540 with
 // no spell -> PlayerZoneClient_PlayAttackAnimation @0x5a19d0 with slot 7:

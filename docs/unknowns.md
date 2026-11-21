@@ -919,6 +919,10 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
 
 ## Characters and models
 
+- **Held bow.** RoF2's local ranged attack puts the bow in the visible secondary slot. Hailstone displays it for
+  the firing animation on manual attacks and auto fire. A live RoF2 comparison would settle how long the bow
+  remains visible after a shot.
+
 - **Held-item effects.** Keep WLD cloud nodes, bitmap sequences and EQG surface maps.
   - The WLD creator's manager density configuration (`+0xa8`, separate from EDD actor density) is untraced; the native
     default 1 and descriptor opacity are verified and used.
