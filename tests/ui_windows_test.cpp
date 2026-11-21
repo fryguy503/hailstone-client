@@ -913,6 +913,151 @@ TEST_CASE("Modern Player: Always show cast bar keeps the cast row and frame heig
     CHECK(draw(hidden) == idle_height);
 }
 
+TEST_CASE("Modern Player: mana and endurance readouts are independently configurable") {
+    RolePackRig r("modern", {"player.lua"});
+    REQUIRE(r.run(R"lua(
+      local load, beginMenu, endMenu, menuItem, tooltip = dofile, ui.BeginMenu, ui.EndMenu, ui.MenuItem, ui.SetTooltip
+      readouts, menuRows, readoutChoices = {}, {}, {}
+      local resourceMenu = false
+      local function row(checked)
+        local x0, y0, x1, y1 = ui.GetItemRect()
+        return {(x0 + x1) / 2, (y0 + y1) / 2, checked = checked}
+      end
+      dofile = function(path)
+        local module = load(path)
+        if path == 'lib/hud.lua' then
+          local bar = module.T.Bar
+          module.T.Bar = function(key, x0, y0, x1, y1, scale, fraction, color, opts)
+            if key == 'player.mana' or key == 'player.end' then
+              readouts[key] = {(x0 + x1) / 2, (y0 + y1) / 2,
+                value = opts and opts.text, percent = opts and opts.right}
+            end
+            return bar(key, x0, y0, x1, y1, scale, fraction, color, opts)
+          end
+        end
+        return module
+      end
+      ui.BeginMenu = function(label, ...)
+        local opened = beginMenu(label, ...)
+        if label == 'Mana readout' or label == 'Endurance readout' then
+          menuRows[label] = row()
+          resourceMenu = opened
+        end
+        return opened
+      end
+      ui.EndMenu = function()
+        resourceMenu = false
+        endMenu()
+      end
+      ui.MenuItem = function(label, checked, ...)
+        local clicked = menuItem(label, checked, ...)
+        if resourceMenu then readoutChoices[label] = row(checked) end
+        return clicked
+      end
+      ui.SetTooltip = function(text)
+        resourceTooltip = text
+        tooltip(text)
+      end
+      return true
+    )lua") == "true");
+    REQUIRE(r.lua->set_setting("test.pos.PlayerWindow", "100,100"));
+    r.t.api->show("PlayerWindow", true);
+    net::PlayerProfile profile;
+    profile.name = "Soloist";
+    profile.class_ = 2;
+    r.t.conn.set_profile_for_test(profile);
+    auto& world = r.t.conn.world_for_test();
+    world.player_id = 10;
+    auto& player = world.spawns[10];
+    player.id = 10;
+    player.class_id = profile.class_;
+    auto& status = r.t.conn.player_status_mut();
+    status.mana = 1250;
+    status.max_mana = 2000;
+    status.endurance = 1500;
+    status.max_endurance = 2000;
+
+    auto& io = ImGui::GetIO();
+    const auto move_to = [&](const std::string& row) {
+        REQUIRE(r.run("return " + row + " ~= nil") == "true");
+        auto* state = r.lua->state();
+        const std::string code = "local row = " + row + "; return row[1], row[2]";
+        REQUIRE(luaL_dostring(state, code.c_str()) == LUA_OK);
+        io.AddMousePosEvent(static_cast<float>(lua_tonumber(state, -2)), static_cast<float>(lua_tonumber(state, -1)));
+        lua_pop(state, 2);
+        r.frames(3);
+    };
+    const auto draw = [&](const char* expected) {
+        REQUIRE(r.run("readouts = {}; return true") == "true");
+        r.frames(2);
+        CHECK(r.run(expected) == "true");
+        const auto* frame = ImGui::FindWindowByName("###modern.PlayerWindow");
+        REQUIRE(frame);
+        return frame->Size.y;
+    };
+    const auto choose = [&](const char* menu, const char* selected, const char* choice) {
+        REQUIRE(r.run("menuRows, readoutChoices = {}, {}; return true") == "true");
+        const auto* frame = ImGui::FindWindowByName("###modern.PlayerWindow");
+        REQUIRE(frame);
+        io.AddMousePosEvent(frame->Pos.x + 10, frame->Pos.y + 12);
+        r.frames(2);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        r.frames(3);
+        move_to(std::format("menuRows['{}']", menu));
+        CHECK(r.run(std::format("return readoutChoices['{}'].checked == true", selected)) == "true");
+        move_to(std::format("readoutChoices['{}']", choice));
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        r.frames(2);
+    };
+
+    const float default_height = draw(
+        "local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+        "return not mana.value and not mana.percent and not endurance.value and not endurance.percent");
+    move_to("readouts['player.mana']");
+    CHECK(r.run("return resourceTooltip == 'Mana 1,250 / 2,000'") == "true");
+    move_to("readouts['player.end']");
+    CHECK(r.run("return resourceTooltip == 'Endurance 1,500 / 2,000'") == "true");
+
+    choose("Mana readout", "None", "Percentage");
+    const float mana_height = draw(
+        "local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+        "return not mana.value and mana.percent == '62%' and not endurance.value and not endurance.percent");
+    CHECK(mana_height > default_height);
+    choose("Endurance readout", "None", "Value");
+    const float both_height = draw(
+        "local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+        "return not mana.value and mana.percent == '62%' and endurance.value == '1,500 / 2,000' and not endurance.percent");
+    CHECK(both_height > mana_height);
+
+    choose("Mana readout", "Percentage", "Both");
+    status.mana = 0;
+    CHECK(draw("local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+               "return mana.value == '0 / 2,000' and mana.percent == '0%' and endurance.value == '1,500 / 2,000'") ==
+          both_height);
+    r.lua->set_character_settings(r.scratch.path() / "character.txt"); // flush the shared settings before reopening
+    {
+        ui::lua::LuaUi saved({}, r.scratch.path() / "pack.txt");
+        CHECK(saved.setting("player.manaReadout") == "both");
+        CHECK(saved.setting("player.enduranceReadout") == "value");
+    }
+
+    profile.class_ = player.class_id = 1;
+    r.t.conn.set_profile_for_test(profile);
+    status.max_mana = 0;
+    draw("return not readouts['player.mana'] and readouts['player.end'].value == '1,500 / 2,000'");
+    profile.class_ = player.class_id = 2;
+    r.t.conn.set_profile_for_test(profile);
+    status.max_mana = 2000;
+    r.frames(2);
+    choose("Mana readout", "Both", "None");
+    CHECK(draw("local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+               "return not mana.value and not mana.percent and endurance.value == '1,500 / 2,000'") < both_height);
+}
+
 TEST_CASE("Group role UI packs: the modern Player window's name keeps the frame menu when no role menu opens") {
     RolePackRig r("modern", {"player.lua"});
     REQUIRE(r.run(kTextRectHook) == "true");
