@@ -398,6 +398,35 @@ TEST_CASE("dressing classic, Luclin and EQG models from the game files" * doctes
     }
 }
 
+TEST_CASE("archery: the bow uses the hand grip even when its model is listed as a shield" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "", true);
+    auto elf = lib.model("ELM");
+    REQUIRE(elf);
+    REQUIRE(elf->luclin);
+    auto plain = lib.dress(*elf, game::Appearance{});
+    REQUIRE(plain);
+    const auto check_attachment = [&](const game::Appearance& look, std::string_view point) {
+        CAPTURE(point);
+        const int bone = elf->find_bone(point);
+        REQUIRE(bone >= 0);
+        const auto mesh = lib.dress(*elf, look);
+        REQUIRE(mesh);
+        REQUIRE(mesh->vertices.size() > plain->vertices.size());
+        for (std::size_t i = plain->vertices.size(); i < mesh->vertices.size(); ++i)
+            CHECK(mesh->vertices[i].bones[0] == bone);
+    };
+
+    // Dress a shield first so the subsequent shot also exercises the cache distinction for the same model number.
+    constexpr std::uint32_t kShieldModel = 200;
+    game::Appearance worn;
+    worn.material[game::kSlotSecondary] = kShieldModel;
+    check_attachment(worn, "SHIELD_POINT_TRACK");
+    check_attachment(game::drawn_appearance(worn, 4, kShieldModel), "L_POINT_TRACK");
+    check_attachment(game::drawn_appearance(worn, 4, 10641), "L_POINT_TRACK"); // Elven Bow of Mysticism model
+    check_attachment(worn, "SHIELD_POINT_TRACK");
+}
+
 TEST_CASE("armour tints a classic body slot only where the model has that variant's texture" *
           doctest::skip(!hailstone::test::game_dir())) {
     // SKE's chest variants differ between game folders (one has 00..04, a server's own files may have only 00 and

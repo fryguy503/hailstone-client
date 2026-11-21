@@ -7,6 +7,8 @@
 #include "assets/character.h"
 #include "core/byte_io.h"
 #include "core/log.h"
+#include "game/appearance.h"
+#include "game/augments.h"
 #include "game/doors.h"
 #include "game/follow.h"
 #include "game/mechanics/anim_select.h"
@@ -149,6 +151,15 @@ std::optional<MissilePacket> decode_missile_packet(std::span<const std::byte> da
         !std::isfinite(p.heading_rate) || !std::isfinite(p.pitch))
         return std::nullopt;
     return p;
+}
+
+std::uint32_t missile_bow_model(const MissilePacket& packet, std::uint32_t player_id, const net::Item* range_item) {
+    if (player_id == 0 || packet.source_id != player_id || packet.range == 0 || !range_item) return 0;
+    // The two bow and ammo type pairs in PlayerZoneClient::HandleAmmo.
+    if ((range_item->item_type == 5 && packet.item_type == 27) ||
+        (range_item->item_type == 6 && packet.item_type == 28))
+        return worn_look(*range_item, kSlotSecondary).material;
+    return 0;
 }
 
 std::uint8_t missile_launch_animation(std::uint8_t skill, std::uint8_t item_type, std::uint8_t range,

@@ -80,6 +80,7 @@ namespace hailstone::game {
 		// monks (kind 7).
 		std::uint8_t class_id = 0;
 		std::optional<core::BannerAppearance> banner;
+		bool secondary_in_hand = false; // a bow action uses the left hand even if the model is listed as a shield
 
 		bool operator==(const Appearance&) const = default;
 	};

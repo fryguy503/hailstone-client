@@ -132,7 +132,9 @@ struct ActorLayers {
     // (kept as the follow-up). Asked for the clip a group already plays, BlendToAnimation leaves it as it is (no
     // replay).
     bool start_action(const assets::AnimationClip* clip, std::uint8_t requested, std::uint8_t chosen, float rate,
-                      const LayerRequest& req);
+                      const LayerRequest& req, std::uint32_t bow_model = 0);
+    // A local shot carries its model while its one-shot is playing, including a shot played from the queue.
+    std::uint32_t playing_bow_model() const { return action ? action_bow_model_ : 0; }
     // 0x4b15b0's stand path: may the stand replace what the upper body plays? A corpse and an unfinished action
     // the stand may not interrupt (0x4b0900, `requested` is the packet's number) refuse; an action that may yield
     // is dropped. The caller then asks for the stand clip as the base.
@@ -148,6 +150,10 @@ struct ActorLayers {
     bool step(const LayerRequest& req, float dt);
     // Whether the upper body plays something other than the lower body.
     bool split() const;
+
+private:
+    std::uint32_t action_bow_model_ = 0;
+    std::uint32_t follow_bow_model_ = 0;
 };
 
 } // namespace hailstone::render

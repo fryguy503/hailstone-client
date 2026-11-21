@@ -1538,6 +1538,7 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
     using Ms = std::chrono::duration<double, std::milli>;
     std::vector<ActorDraw> draws;
     std::vector<std::uint32_t> ids;
+    const PlayerBowShot shot = std::exchange(player_bow_shot_, PlayerBowShot{});
     dt = std::clamp(dt, 0.0f, 0.25f);
     clock_ += dt;
     now_ms_ = static_cast<std::uint32_t>(clock_ * 1000.0) + 1;
@@ -1598,89 +1599,18 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         st.seen = true;
         const bool dead = spawn_dead(s.is_corpse, s.stand_state);
         st.drawn_alive = !dead;
-        // Appearance: rebuilt when it changes (WearChange, Illusion), on the worker; until it is ready (and applied
-        // within the frame's budget) the previous one stays. One applied before for the same model and look is
-        // taken at once.
-        // Races without per-slot armour show no armour colours (game::drawn_appearance).
-        game::Appearance look = game::drawn_appearance(s.appearance, s.race);
-        // Only what the active ActorNewArmorFilter makes of the spawn's kind and group/raid membership counts, so
-        // a group join does not rebuild a look the filter draws the same.
-        const game::AppearanceData* data = library_->appearance_data();
-        game::resolve_new_armor_filter(look, data ? data->new_armor_filter : 0u);
-        if (!st.dressed || !(st.appearance == look)) {
-            st.appearance = look;
-            st.dressed = true;
-            ready_.erase(id);
-            if (const auto* known = applied_look(*model, look)) {
-                if (dresser_) dresser_->cancel(id); // a request for an earlier look
-                st.mesh = *known;
-                if (st.mesh) gpu_model(*st.mesh, upload);
-            } else {
-                request_dress(id, model, look);
-            }
-        }
-        auto r = ready_.find(id);
-        // A texture of it that another job claimed is not decoded here: the appearance waits for that job's
-        // result to put the texture up (it is applied in spawn order, so possibly later this frame or the next), at
-        // most kMaxDressDefer frames.
-        if (r != ready_.end() && budget.may_start() && r->second.deferred < kMaxDressDefer && r->second.plan &&
-            waits_for_claimed(*r->second.plan)) {
-            ++r->second.deferred;
-            r = ready_.end();
-        }
-        if (r != ready_.end() && budget.may_start()) {
-            Dressing d = std::move(r->second);
-            ready_.erase(r);
-            // The jobs are superseded on every new request, so a result is always for the current one; checked anyway.
-            if (d.model == model && d.appearance == st.appearance) {
-                ++stats_.dressed;
-                auto d0 = std::chrono::steady_clock::now();
-                st.mesh = d.mesh;
-                const auto& ap = s.appearance;
-                log::debug("appearance {} ({}): tex {} helm {} face {} hair {}/{} beard {}/{} materials {} {} {} {} {} {} {} items {} {}",
-                           s.name, model->code, ap.texture, ap.helm, ap.face, ap.hair_style, ap.hair_color, ap.beard,
-                           ap.beard_color, ap.material[0], ap.material[1], ap.material[2], ap.material[3],
-                           ap.material[4], ap.material[5], ap.material[6], ap.material[7], ap.material[8]);
-                if (st.mesh) {
-                    mesh_refs_.try_emplace(st.mesh.get(), st.mesh);
-                    // Its buffers and new textures (decoded on the worker) count against the budget.
-                    if (d.plan) install(*st.mesh, *d.plan, upload);
-                    else gpu_model(*st.mesh, upload);
-                }
-                if (!applied_look(*model, d.appearance)) {
-                    auto& looks = looks_[model.get()];
-                    looks.model = model;
-                    looks.looks.emplace_back(d.appearance, d.mesh);
-                }
-                const double ms = Ms(std::chrono::steady_clock::now() - d0).count();
-                budget.done(ms);
-                stats_.dress_ms += ms;
-            }
-        }
-        if (ready_.contains(id) || (dresser_ && dresser_->pending(id))) ++stats_.undressed;
-        // A spawn still waiting for its appearance is drawn in its model's default one: put up when it is new
-        // whatever the budget (it is drawn this frame), and charged to it.
-        if (!st.mesh) {
-            model_refs_.try_emplace(model.get(), model);
-            const auto& fallback = default_mesh(*model);
-            if (!models_.contains(&fallback)) {
-                auto d0 = std::chrono::steady_clock::now();
-                gpu_model(fallback, upload);
-                const double ms = Ms(std::chrono::steady_clock::now() - d0).count();
-                budget.charge(ms);
-                stats_.dress_ms += ms;
-            }
-        }
         const auto* rm = game::find_race_model(s.race, s.gender);
         const bool new_style = model->eqg && rm && (rm->flags & game::kNewStyleModel);
         // A tunic-point model plays its holding variants while the spawn holds anything (CharacterModel::clip).
-        const bool holding = game::holds_item(s.appearance);
+        ActorLayers& layers = st.layers;
+        const bool is_player = id == world.player_id;
+        const auto bow = is_player && shot.action_seq == s.action_seq ? shot.model : 0u;
+        const bool holding = game::holds_item(s.appearance) || bow != 0 || layers.playing_bow_model() != 0;
         auto has_clip = [&](std::string_view c) { return model->clip(c, holding) != nullptr; };
         auto rand_int = [this] { return static_cast<int>(rng_() & 0x7fff); }; // the C rand()'s range
         const game::Spawn* mount = nullptr;
         if (auto m = s.mount_id ? world.spawns.find(s.mount_id) : world.spawns.end(); m != world.spawns.end())
             mount = &m->second;
-        const bool is_player = id == world.player_id;
         // Hailstone (game::Spawn::stalled): a spawn that has stayed in one place for a second stands, whatever its
         // last update's speeds still say.
         const float speed_run = is_player && player_motion_.valid ? player_motion_.speed_run
@@ -1690,7 +1620,6 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         const bool humanoid = s.properties.empty()
                                   ? s.body_type == 1
                                   : std::find(s.properties.begin(), s.properties.end(), 1u) != s.properties.end();
-        ActorLayers& layers = st.layers;
         GroupTrack& lower = layers.group[game::kLowerBones];
 
         // The movement / posture clip as the original chooses it (game/spawn_animation.h).
@@ -1807,7 +1736,7 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
                 new_style ? s.action_speed / kActionSpeedTenths
                           : game::classic_action_rate(playing, s.action_speed / kActionSpeedTenths, s.race, s.gender,
                                                       in.tunic_point, in.luclin_elementals);
-            const bool started = c && layers.start_action(c, s.action, playing, rate, req);
+            const bool started = c && layers.start_action(c, s.action, playing, rate, req, bow);
             log::debug("animation: {} ({}) action {} speed {} -> {}{}", s.name, id, s.action, s.action_speed,
                        code.empty() ? "nothing" : code,
                        started ? (layers.action_on_legs ? "" : " (upper body)") : (c ? " (not played)" : ""));
@@ -1845,6 +1774,78 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         // (game::classic_plain_stand_after); a walk or run the legs took under it is.
         if (!new_style && layers.action && !layers.legs_took_motion) st.anim.anim = layers.action_anim;
 
+        // Appearance changes from wear, illusions and bow shots are rebuilt on the worker. The previous look
+        // stays until the new one is ready and the frame has time to apply it. An already cached look is taken at once.
+        // Races without per-slot armour show no armour colours (game::drawn_appearance).
+        game::Appearance look = game::drawn_appearance(s.appearance, s.race, layers.playing_bow_model());
+        // Only what the active ActorNewArmorFilter makes of the spawn's kind and group/raid membership counts, so
+        // a group join does not rebuild a look the filter draws the same.
+        const game::AppearanceData* data = library_->appearance_data();
+        game::resolve_new_armor_filter(look, data ? data->new_armor_filter : 0u);
+        if (!st.dressed || !(st.appearance == look)) {
+            st.appearance = look;
+            st.dressed = true;
+            ready_.erase(id);
+            if (const auto* known = applied_look(*model, look)) {
+                if (dresser_) dresser_->cancel(id); // a request for an earlier look
+                st.mesh = *known;
+                if (st.mesh) gpu_model(*st.mesh, upload);
+            } else {
+                request_dress(id, model, look);
+            }
+        }
+        auto r = ready_.find(id);
+        // A texture of it that another job claimed is not decoded here: the appearance waits for that job's
+        // result to put the texture up (it is applied in spawn order, so possibly later this frame or the next), at
+        // most kMaxDressDefer frames.
+        if (r != ready_.end() && budget.may_start() && r->second.deferred < kMaxDressDefer && r->second.plan &&
+            waits_for_claimed(*r->second.plan)) {
+            ++r->second.deferred;
+            r = ready_.end();
+        }
+        if (r != ready_.end() && budget.may_start()) {
+            Dressing d = std::move(r->second);
+            ready_.erase(r);
+            // The jobs are superseded on every new request, so a result is always for the current one; checked anyway.
+            if (d.model == model && d.appearance == st.appearance) {
+                ++stats_.dressed;
+                auto d0 = std::chrono::steady_clock::now();
+                st.mesh = d.mesh;
+                const auto& ap = s.appearance;
+                log::debug("appearance {} ({}): tex {} helm {} face {} hair {}/{} beard {}/{} materials {} {} {} {} {} {} {} items {} {}",
+                           s.name, model->code, ap.texture, ap.helm, ap.face, ap.hair_style, ap.hair_color, ap.beard,
+                           ap.beard_color, ap.material[0], ap.material[1], ap.material[2], ap.material[3],
+                           ap.material[4], ap.material[5], ap.material[6], ap.material[7], ap.material[8]);
+                if (st.mesh) {
+                    mesh_refs_.try_emplace(st.mesh.get(), st.mesh);
+                    // Its buffers and new textures (decoded on the worker) count against the budget.
+                    if (d.plan) install(*st.mesh, *d.plan, upload);
+                    else gpu_model(*st.mesh, upload);
+                }
+                if (!applied_look(*model, d.appearance)) {
+                    auto& looks = looks_[model.get()];
+                    looks.model = model;
+                    looks.looks.emplace_back(d.appearance, d.mesh);
+                }
+                const double ms = Ms(std::chrono::steady_clock::now() - d0).count();
+                budget.done(ms);
+                stats_.dress_ms += ms;
+            }
+        }
+        if (ready_.contains(id) || (dresser_ && dresser_->pending(id))) ++stats_.undressed;
+        // A spawn still waiting for its appearance is drawn in its model's default one: put up when it is new
+        // whatever the budget (it is drawn this frame), and charged to it.
+        if (!st.mesh) {
+            model_refs_.try_emplace(model.get(), model);
+            const auto& fallback = default_mesh(*model);
+            if (!models_.contains(&fallback)) {
+                auto d0 = std::chrono::steady_clock::now();
+                gpu_model(fallback, upload);
+                const double ms = Ms(std::chrono::steady_clock::now() - d0).count();
+                budget.charge(ms);
+                stats_.dress_ms += ms;
+            }
+        }
         ActorDraw a;
         a.model = model.get();
         a.mesh = st.mesh.get();

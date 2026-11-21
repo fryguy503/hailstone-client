@@ -64,7 +64,8 @@ void normalize_appearance(Appearance& a, std::uint32_t race);
 // stay undyed although the server re-sends every slot's tint after
 // OP_Illusion. Where the original drops them is not found
 // (docs/unknowns.md); SwapBodyMaterial itself has no race rule.
-Appearance drawn_appearance(const Appearance& a, std::uint32_t race);
+// During a local bow action, the bow takes the left hand and the right is free for the arrow.
+Appearance drawn_appearance(const Appearance& a, std::uint32_t race, std::uint32_t bow = 0);
 
 // OP_WearChange. Returns false when the client ignores it: a body
 // slot of a spawn with a fixed body texture, or a slot >= 9.

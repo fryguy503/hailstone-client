@@ -221,6 +221,8 @@ public:
         std::int32_t colliding_type = 0; // CollidingType +0x24 (6: on a ladder)
     };
     void set_player_motion(const PlayerMotion& m) { player_motion_ = m; }
+    // Pair the local bow model with the one-shot started by its missile.
+    void note_player_bow_shot(std::uint32_t action_seq, std::uint32_t model) { player_bow_shot_ = {action_seq, model}; }
     // The animation object's vf24 on a spawn drawn with a model (game::mechanics::is_jump_animation on its +0x10c0
     // as last chosen); nothing for a spawn not drawn yet.
     std::optional<bool> jump_animation_playing(std::uint32_t id) const;
@@ -552,6 +554,10 @@ private:
     mutable std::vector<assets::BonePose> bone_local_, bone_previous_; // pose_bones' scratch for drawn_bone
     std::unordered_map<std::uint32_t, std::pair<glm::vec3, float>> last_spawn_poses_; // their spawns' place, heading
     PlayerMotion player_motion_;
+    struct PlayerBowShot {
+        std::uint32_t action_seq = 0;
+        std::uint32_t model = 0;
+    } player_bow_shot_;
     std::uint32_t now_ms_ = 0; // the display clock
     std::uint64_t texture_time_ms_ = 0;
     double clock_ = 0.0;
