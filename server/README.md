@@ -67,6 +67,21 @@ client_files/
   zone-in. The player's own scripts, plugins and asset files run only as far as the file allows.
 - **Without one** (plain EQEmu, or this script without the file) the client sets no rules: players run what they like.
 
+### Deny Hailstone access
+
+Set the following in `client_files/hailstone.cfg` and keep the Lua script's client file service enabled.
+
+```ini
+[client]
+deny = on
+```
+
+When Hailstone receives this setting during the first zone-in, it disconnects before completing entry and shows
+“This server does not allow Hailstone. Please contact the server owner.” The default is `deny = off`.
+This check relies on successful policy delivery and an up-to-date, unmodified Hailstone client.
+
+### Automation controls
+
 Set these keys in `client_files/hailstone.cfg` to disable Ability Book autoskill and Lua socials.
 
 ```ini

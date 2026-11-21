@@ -285,10 +285,12 @@ void GameConnection::update() {
             status_ = "Entering the zone";
             // The first zone-in of the login brings the server's client files first (net/server_files.h): the zone
             // knows the client once it has OP_ZoneEntry, and keeps it connecting while the files come.
-            if (!options_.server_files_dir.empty() && !server_files_) {
+            const bool access_only = options_.server_files_dir.empty();
+            const auto& files_dir = access_only ? options_.server_access_dir : options_.server_files_dir;
+            if (!files_dir.empty() && !server_files_) {
                 server_files_ = std::make_unique<ServerFileSync>(
-                    options_.server_files_dir, [this](AppPacket p) { send_zone(std::move(p)); },
-                    options_.server_files_limits);
+                    files_dir, [this](AppPacket p) { send_zone(std::move(p)); }, options_.server_files_limits,
+                    access_only ? ServerFileSync::Scope::ConfigOnly : ServerFileSync::Scope::All);
                 zone_session_->set_no_hold(true); // the pieces asked and acknowledged without the 150 ms hold
                 server_files_->start(ServerFileSync::Clock::now());
             }
@@ -1041,30 +1043,41 @@ void GameConnection::finish_server_files() {
     if (server_files_->state() == ServerFileSync::State::Failed)
         chat(ChatEvent::Kind::System, "Could not download the server's files: " + server_files_->error());
     server_files_changed_ = server_files_->changed();
-    update_server_rules();
+    if (!update_server_rules()) {
+        fail("This server does not allow Hailstone. Please contact the server owner.");
+        return;
+    }
     if (zone_session_) zone_session_->set_no_hold(false);
     status_ = "Entering the zone";
     maybe_request_client_spawn();
 }
 
-// The server's rules from its files (plugin/policy.h): its hailstone.cfg, or none from a server that sent no list (no
-// Hailstone script, or a login without a server folder). Either way the rules name the server's folder: plugins keep
-// their per-server files under it (server_config_dir) on a server without Hailstone's script too.
-void GameConnection::update_server_rules() {
+// A transient login reads only the access setting. A saved profile uses the full policy and keeps its folder for
+// plugin settings (server_config_dir), including on a server without the Hailstone script.
+bool GameConnection::update_server_rules() {
     plugin::Rules rules;
     rules.dir = options_.server_files_dir;
-    if (server_files_ && server_files_->state() != ServerFileSync::State::NoAnswer) {
+    bool allow_client = true;
+    const bool synced = server_files_ && server_files_->state() == ServerFileSync::State::Done;
+    const bool use_cached = server_files_ && server_files_->state() == ServerFileSync::State::Failed &&
+                            !options_.server_files_dir.empty();
+    if (synced || use_cached) {
         std::vector<plugin::ListedFile> files;
         for (const auto& f : server_files_->installed()) files.push_back({f.path, f.sha256});
         std::vector<std::string> warnings;
-        rules = plugin::server_rules(options_.server_files_dir, files, &warnings);
+        const auto& files_dir = rules.dir.empty() ? options_.server_access_dir : options_.server_files_dir;
+        auto received = plugin::server_rules(files_dir, files, &warnings);
         for (const auto& w : warnings) log::warn("{}: {}", plugin::kServerCfgName, w);
+        // A failed sync can leave an earlier login's rules on disk. Only this login's policy decides access.
+        if (synced) allow_client = !received.deny_client;
+        if (!options_.server_files_dir.empty()) rules = std::move(received);
     }
     log::info("server rules: {}", rules.configured ? std::format("{} ({} scripts and plugins of its own)", plugin::kServerCfgName,
                                                                  rules.server_files.size())
                                                    : std::string("none (no hailstone.cfg): plugins and scripts run freely"));
     server_rules_ = std::move(rules);
     ++server_rules_serial_;
+    return allow_client;
 }
 
 void GameConnection::maybe_request_client_spawn() {

@@ -158,8 +158,8 @@ bool asset_counts(const std::set<std::string>& only, std::string_view normalized
     return only.contains(std::string(normalized)) || !ext_in(normalized, kTextures).empty();
 }
 
-ServerFileSync::ServerFileSync(fs::path profile_dir, Send send, Limits limits)
-    : dir_(std::move(profile_dir)), send_(std::move(send)), limits_(limits) {}
+ServerFileSync::ServerFileSync(fs::path profile_dir, Send send, Limits limits, Scope scope)
+    : dir_(std::move(profile_dir)), send_(std::move(send)), limits_(limits), scope_(scope) {}
 
 ServerFileSync::~ServerFileSync() = default;
 
@@ -387,6 +387,7 @@ void ServerFileSync::plan(Clock::time_point now) {
     dest_.assign(list_.size(), std::string());
     for (std::uint32_t i = 0; i < list_.size(); ++i) {
         const ServerFileEntry& e = list_[i];
+        if (scope_ == Scope::ConfigOnly && lower(e.path) != plugin::kServerCfgName) continue;
         bool other_platform = false;
         auto dest = server_file_destination(e.path, &other_platform);
         if (!dest) {
@@ -414,7 +415,10 @@ void ServerFileSync::plan(Clock::time_point now) {
         c.key = key;
         if (auto p = present.find(key); p != present.end() && fs::file_size(p->second, ec) == e.size && !ec) {
             auto r = record_.find(key);
-            if (r != record_.end() && r->second.sha256 == e.sha256 && r->second.size == e.size) continue;
+            // The access decision needs the current cfg, even if the cached file was edited without changing its size.
+            if (key != plugin::kServerCfgName && r != record_.end() && r->second.sha256 == e.sha256 &&
+                r->second.size == e.size)
+                continue;
             c.present = p->second;
         }
         fs::path staged = staging_dir() / *dest;

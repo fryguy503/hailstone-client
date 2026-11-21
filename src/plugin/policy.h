@@ -150,6 +150,7 @@ struct Rules {
     // zone-in's rules replace these.
     bool provisional = false;
     std::filesystem::path dir; // servers/<profile>/ (empty: a login without one)
+    bool deny_client = false; // [client] deny: stop Hailstone before it completes the first zone-in
     // The player's own scripts and plugins: what they may do (0: they do not run).
     std::uint32_t player_script_caps = 0, player_plugin_caps = 0;
     bool player_assets = true; // false: of servers/<profile>/assets, only the server's files and textures count
@@ -178,9 +179,8 @@ struct Rules {
     std::map<std::string, std::map<std::string, std::string>> script_sections;
 };
 
-// hailstone.cfg's text (an ini file: [scripts], [plugins], [assets], [socials], [abilities], [movement], [web], [addons]) as rules; what it does
-// not say keeps the defaults above. Unknown keys and values are named in `warnings` and ignored; another section is
-// kept for scripts (Rules::script_sections), and named in `warnings` too, in case it is a misspelt one.
+// Read hailstone.cfg as rules, using the defaults above for omitted settings. Unknown keys and values are named
+// in `warnings` and ignored. Unknown sections are warned about and kept for scripts (Rules::script_sections).
 Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings = nullptr);
 // The rules for a server whose folder is `dir`, from the files it listed at the zone-in ("hailstone.cfg",
 // "scripts/...", "plugins/..."; paths in the server's folder). Without hailstone.cfg among them: no rules. A

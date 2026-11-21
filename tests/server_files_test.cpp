@@ -11,8 +11,10 @@
 #include <string>
 
 #include "core/sha256.h"
+#include "mock_server/harness.h"
 #include "net/server_files.h"
 #include "net/server_files_packets.h"
+#include "scratch_dir.h"
 
 namespace fs = std::filesystem;
 using namespace hailstone;
@@ -125,7 +127,112 @@ ServerFileSync::State run(const fs::path& profile, FakeServer& server, bool* cha
     if (error) *error = sync.error();
     return sync.state();
 }
+
+void serve_files(test::Rig& rig, FakeServer& files) {
+    rig.on_step = [&rig, &files, next = std::size_t{0}]() mutable {
+        const auto& log = rig.server.zone_log;
+        while (next < log.size()) {
+            const auto& request = log[next++];
+            if (request.opcode == net::kOpHsFilesRequest) files.receive(request);
+        }
+        while (!files.replies.empty()) {
+            rig.server.zone.send_reliable(files.replies.front());
+            files.replies.pop_front();
+        }
+    };
+}
 } // namespace
+
+TEST_CASE("server files: the current server can refuse Hailstone before zone entry") {
+    test::ScratchDir profile("server_client_opt_out");
+    auto options = test::quick_options();
+    options.server_files_dir = profile.path();
+
+    FakeServer files;
+    files.files["hailstone.cfg"] = "[client]\ndeny = on\n";
+    {
+        test::Rig rig(test::MockConfig::standard(), options);
+        serve_files(rig, files);
+        REQUIRE(rig.to_character_select());
+        rig.conn.enter_world("Gennro");
+        REQUIRE(rig.until_state(net::ConnectionState::Disconnected));
+        CHECK(rig.conn.error() == "This server does not allow Hailstone. Please contact the server owner.");
+        CHECK_FALSE(rig.conn.link_death());
+        CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::ZoneEntry) == 1);
+        CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::ReqClientSpawn) == 0);
+        CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::ClientReady) == 0);
+    }
+    const auto cfg = profile.path() / "hailstone.cfg";
+    REQUIRE(read(cfg) == files.files.at("hailstone.cfg"));
+
+    FakeServer updated_files;
+    updated_files.files["hailstone.cfg"] = "[client]\ndeny = off\n";
+    SUBCASE("the operator enables Hailstone again") {
+        test::Rig rig(test::MockConfig::standard(), options);
+        serve_files(rig, updated_files);
+        REQUIRE(rig.to_zone());
+        CHECK(rig.conn.error().empty());
+        CHECK(read(cfg) == updated_files.files.at("hailstone.cfg"));
+    }
+    SUBCASE("a server without a cfg allows Hailstone") {
+        FakeServer no_policy;
+        test::Rig rig(test::MockConfig::standard(), options);
+        serve_files(rig, no_policy);
+        REQUIRE(rig.to_zone());
+        CHECK(rig.conn.error().empty());
+        CHECK_FALSE(fs::exists(cfg));
+    }
+    SUBCASE("a failed transfer leaves a cached refusal") {
+        updated_files.damage = true;
+        test::Rig rig(test::MockConfig::standard(), options);
+        serve_files(rig, updated_files);
+        REQUIRE(rig.to_zone());
+        CHECK(rig.conn.error().empty());
+        CHECK(updated_files.pieces == 1);
+        CHECK(read(cfg) == files.files.at("hailstone.cfg"));
+    }
+    SUBCASE("an edited cache with the same size cannot override the server's refusal") {
+        write(cfg, "[client]\ndeny = no\n");
+        const auto downloaded = files.pieces;
+        test::Rig rig(test::MockConfig::standard(), options);
+        serve_files(rig, files);
+        REQUIRE(rig.to_character_select());
+        rig.conn.enter_world("Gennro");
+        REQUIRE(rig.until_state(net::ConnectionState::Disconnected));
+        CHECK(rig.conn.error() == "This server does not allow Hailstone. Please contact the server owner.");
+        CHECK(files.pieces == downloaded + 1);
+        CHECK(read(cfg) == files.files.at("hailstone.cfg"));
+    }
+}
+
+TEST_CASE("server files: access-only sync checks hailstone.cfg without downloading assets") {
+    bool allowed = true;
+    SUBCASE("allowed") {}
+    SUBCASE("denied") { allowed = false; }
+
+    test::ScratchDir cache("server_access_only");
+    auto options = test::quick_options();
+    options.server_access_dir = cache.path();
+    FakeServer files;
+    files.files["hailstone.cfg"] = allowed ? "[client]\ndeny = off\n" : "[client]\ndeny = on\n";
+    files.files["graphics.txt"] = "unrelated server asset";
+
+    test::Rig rig(test::MockConfig::standard(), options);
+    serve_files(rig, files);
+    REQUIRE(rig.to_character_select());
+    rig.conn.enter_world("Gennro");
+    REQUIRE(rig.until_state(allowed ? net::ConnectionState::InZone : net::ConnectionState::Disconnected));
+    CHECK(files.pieces == 1);
+    CHECK_FALSE(fs::exists(cache.path() / "assets"));
+    if (allowed) {
+        CHECK(rig.conn.error().empty());
+        const auto& rules = rig.conn.server_rules();
+        REQUIRE(rules);
+        CHECK_FALSE(rules->configured);
+    } else {
+        CHECK(rig.conn.error() == "This server does not allow Hailstone. Please contact the server owner.");
+    }
+}
 
 TEST_CASE("server files: packets round trip") {
     net::ServerFilesPage page{3, 5, 1, {{4, sha256("abcd"), "Resources/SkillCaps.txt"}}};

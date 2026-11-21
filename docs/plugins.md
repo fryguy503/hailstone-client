@@ -1938,7 +1938,14 @@ An ini file at the top of the server's `client_files/` (`plugin::parse_server_cf
 default; `;` and `#` start comments. A section not listed below is kept for scripts to read (`hailstone.server_rule`),
 for example `[autocombat] hunter = off`.
 
+`[client] deny = on` makes Hailstone stop before completing its first zone-in and show a notice directing the
+player to the server owner. The client checks the policy received through the server's file service on that login.
+This check relies on successful policy delivery and an up-to-date, unmodified client.
+
 ```ini
+[client]
+deny = off                ; on blocks Hailstone from entering the server (default off)
+
 [scripts]
 player = off              ; the player's own scripts: on / off (default off)
 player_caps = read,ui     ; what they may do when on (default all)

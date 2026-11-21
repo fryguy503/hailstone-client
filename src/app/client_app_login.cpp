@@ -872,7 +872,7 @@ void ClientApp::start_game(const net::WorldTicket& ticket) {
     copts.bank_snapshot_file = true; // the bank as last seen, in the character's bank.dat
     // A saved server's client files come at the first zone-in, into its assets/ (net/server_files.h).
     if (!server_profile_.id.empty()) {
-        copts.server_files_dir = profile_assets_dir(server_profile_.id, login_view_.servers_dir).parent_path();
+        copts.server_files_dir = profile_dir(server_profile_.id, login_view_.servers_dir);
         // Bounds on what the server may make this write (net/server_files.h), in MB; 0 or less keeps the default.
         auto mb = [&](std::string_view key, std::uint64_t fallback) {
             const int v = config_.get_int(key, 0);
@@ -881,6 +881,8 @@ void ClientApp::start_game(const net::WorldTicket& ticket) {
         copts.server_files_limits.max_file = mb("assets.server_files_max_file_mb", copts.server_files_limits.max_file);
         copts.server_files_limits.max_total =
             mb("assets.server_files_max_total_mb", copts.server_files_limits.max_total);
+    } else {
+        copts.server_access_dir = profile_dir(files_profile_, login_view_.servers_dir) / ".admission";
     }
     if (stats_ui_) stats_ui_->forget(); // its player reads the last connection's spell table
     conn_ = std::make_unique<net::GameConnection>(game_, copts);

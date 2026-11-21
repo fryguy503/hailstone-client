@@ -26,11 +26,24 @@ TEST_CASE("hailstone.cfg: shipped templates leave player code disabled and ident
         const auto rules = plugin::parse_server_cfg(text, &warnings);
         CHECK(warnings.empty());
         CHECK(rules.addons.error.empty());
+        CHECK_FALSE(rules.deny_client);
         CHECK(rules.player_script_caps == 0);
         CHECK(rules.player_plugin_caps == 0);
         CHECK(rules.addons.required.empty());
         CHECK(rules.addons.allow.empty());
     }
+}
+
+TEST_CASE("hailstone.cfg: [client] deny is off by default and can deny Hailstone access") {
+    CHECK_FALSE(plugin::Rules{}.deny_client);
+    CHECK_FALSE(plugin::parse_server_cfg("").deny_client);
+    CHECK_FALSE(plugin::parse_server_cfg("[client]\ndeny = off\n").deny_client);
+    std::vector<std::string> warnings;
+    CHECK(plugin::parse_server_cfg("[Client]\nDeny = ON ; no Hailstone\n", &warnings).deny_client);
+    CHECK(warnings.empty());
+    CHECK_FALSE(plugin::parse_server_cfg("[client]\ndeny = maybe\n", &warnings).deny_client);
+    REQUIRE(warnings.size() == 1);
+    CHECK(warnings.front() == "[client] deny: \"maybe\" is not on or off");
 }
 
 TEST_CASE("hailstone.cfg: every setting, defaults for the rest, warnings for what it does not know") {

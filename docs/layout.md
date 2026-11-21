@@ -453,6 +453,8 @@ At a login's first zone-in the client asks the zone for the list (path, size, SH
 (`OP_ReqClientSpawn`), downloads what `servers/<profile>/` lacks (`net/server_files.h`). The loading screen shows
 **Downloading server files** with progress and speed.
 
+Transient logins check `hailstone.cfg` for `[client] deny` in a separate cache at `servers/<profile>/.admission/`.
+
 1. The files come into `.download/` in pieces (32 KB, 32 asked ahead), each checked against its hash.
 2. Only when all have come are they moved into place, and files the server no longer lists are deleted.
 3. When something in `assets/` changed, the client rereads its files before the zone loads (`GameDir::rescan`).

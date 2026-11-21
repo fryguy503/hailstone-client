@@ -106,9 +106,10 @@ public:
     static constexpr std::uint64_t kHashBytesPerUpdate = std::uint64_t{16} << 20;
 
     using Limits = ServerFileLimits;
+    enum class Scope { All, ConfigOnly };
 
-    // profile_dir: servers/<id>/.
-    ServerFileSync(std::filesystem::path profile_dir, Send send, Limits limits = {});
+    // ConfigOnly uses a separate folder so a transient login leaves the full download's files and record alone.
+    ServerFileSync(std::filesystem::path profile_dir, Send send, Limits limits = {}, Scope scope = Scope::All);
     ~ServerFileSync();
 
     void start(Clock::time_point now);
@@ -176,6 +177,7 @@ private:
     std::filesystem::path dir_;
     Send send_;
     Limits limits_;
+    Scope scope_;
     State state_ = State::Idle;
     bool changed_ = false;
     std::string error_;

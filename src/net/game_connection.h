@@ -346,8 +346,10 @@ struct ConnectionOptions {
     // The servers/ folder of those profiles; empty: platform::servers_dir() (tests name a scratch folder).
     std::filesystem::path servers_dir;
     // The saved server's folder (servers/<id>/): at the first zone-in the zone-in waits while the server's client
-    // files are brought into its assets/ (net/server_files.h). Empty: no download (a test login, tests).
+    // files are brought into it (net/server_files.h).
     std::filesystem::path server_files_dir;
+    // Transient logins cache only hailstone.cfg here, to check server access without enabling the full download.
+    std::filesystem::path server_access_dir;
     // How much those files may come to (hailstone.ini's assets.server_files_max_*_mb).
     ServerFileSync::Limits server_files_limits;
     // Hailstone: the bank as last seen is read from and saved to the character's bank.dat (game/bank_snapshot.h).
@@ -3285,7 +3287,8 @@ private:
     const GameDir& game_;
     ConnectionOptions options_;
     std::optional<plugin::Rules> server_rules_;
-    void update_server_rules();
+    // Returns false when this login received a policy that denies Hailstone access.
+    bool update_server_rules();
     bool guild_world_invites_ = false; // OP_HailstoneGuildReply's hello this zone-in (server/'s script)
     std::uint32_t server_rules_serial_ = 0;
     int hook_game_state_ = 0;              // the game state last raised (plugin::kGameState*; 0 none yet)
