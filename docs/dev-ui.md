@@ -785,6 +785,7 @@ LoadskinWnd (/loadskin) and LayoutCopyWindow (/copylayout).
 
 - LayoutCopyWindow copies another character's UI.ini or defaults.ini, for a screen size its keys keep, over this character's windowed places; characters played last come first.
 - Hailstone adds LC_CopyChatCheckBox / LC_CopyOptionsCheckBox (chat.ini, options.ini) and a first-entry offer: activate(0) at the zone-in of a character with no UI.ini, when hailstone.ini ui.offer_layout_copy (option offer_layout_copy, on by default) is on and another character has a layout. LC_FirstVisitText and LC_OfferCheckBox show only then.
+- **Key Bindings** (`LC_CopyKeysCheckBox`) replaces the character's primary and alternate keyboard mappings with those from the selected character's `hailstone.ini`. The mappings include the source's default movement scheme and any keys it cleared. The copy takes effect immediately. The first-entry offer preselects this option when the source has saved client settings.
 
 #### `lua_ui_names.cpp`
 

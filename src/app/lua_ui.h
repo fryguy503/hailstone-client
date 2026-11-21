@@ -344,12 +344,12 @@ struct UiHost {
         std::string label, mode;
         std::filesystem::path character_dir; // the character's folder (core/character_files.h); empty: defaults.ini
         std::string world;                   // its world's folder, when this server has characters on several
+        bool has_key_bindings = false;       // another character with a saved hailstone.ini
     };
-    // What is copied with the window places: the original's three boxes, and Hailstone's two for the files this
-    // client keeps outside the UI ini (chat.ini's filters and colours, options.ini's game options).
+    // What is copied with the window places, including Hailstone's chat, game options and keyboard bindings.
     struct LayoutCopyParts {
         bool hot_buttons = false, loadouts = false, socials = false;
-        bool chat = false, options = false;
+        bool chat = false, options = false, key_bindings = false;
     };
     std::function<std::vector<LayoutSource>()> layout_sources;
     // Hailstone: the copy also brings the UI's window layout (the character's ui-<pack>.txt keys, LuaUi::

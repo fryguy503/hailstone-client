@@ -191,7 +191,7 @@ discipline's name may leave out its rank.
 | `/filter` | Chat filters. |
 | `/hotbutton <name> [colour] <text>` | Make a hot button from a line and put it on the cursor. |
 | `/loadskin <name> [keep]` | Load a UI skin. |
-| `/copylayout` | Copy another character's layout. Another ini is looked for by bare name beside the current layout file; paths are not accepted. |
+| `/copylayout` | Open Copy Layout to copy another character's layout and optionally their keyboard bindings. For a direct copy with arguments, use a bare file name beside the current layout file. |
 | `/fontface <name>` | The UI font. |
 | `/viewport reset`, `/viewport <x> <y> <w> <h> [scale]` | The 3D view's area on screen. |
 | `/fullscreen [on \| off \| toggle]` | Full screen or windowed. |

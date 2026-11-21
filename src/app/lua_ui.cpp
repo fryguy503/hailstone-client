@@ -41,6 +41,7 @@
 #include "app/lua_ui_extensions.h"
 #include "plugin/lua_keep.h"
 #include "plugin/ui_bridge.h"
+#include "core/character_files.h"
 #include "core/ini_file.h"
 #include "core/log.h"
 #include "core/saturate.h"
@@ -200,6 +201,8 @@ struct UiApi::Impl {
             if (!ini.load(file)) return;
             std::error_code ec;
             bool current = !layout_file.empty() && std::filesystem::equivalent(file, layout_file, ec);
+            bool has_key_bindings = !current && !dir.empty() &&
+                                    std::filesystem::is_regular_file(CharacterFiles{dir}.settings(), ec);
             for (const std::string& section : ini.sections())
                 for (const std::string& key : ini.keys(section)) {
                     if (key.size() < 4 || !game::same_no_case(std::string_view(key).substr(0, 4), "XPos")) continue;
@@ -207,7 +210,7 @@ struct UiApi::Impl {
                     if (current && game::same_no_case(mode, "Windowed")) continue;
                     bool listed = false;
                     for (const auto& o : out) listed = listed || (o.file == file && o.mode == mode);
-                    if (!listed) out.push_back({file, label, mode, dir, world});
+                    if (!listed) out.push_back({file, label, mode, dir, world, has_key_bindings});
                 }
         };
         if (!layout_file.empty() && layout_file.filename() == "UI.ini") {
@@ -297,6 +300,8 @@ struct UiApi::Impl {
         // The user colours are read again with the layout (chat_layout_loaded), the filters and options at once.
         if (host.conn && !from.character_dir.empty() && (parts.chat || parts.options))
             host.conn->copy_character_settings(from.character_dir, parts.chat, parts.options);
+        if (host.actions && parts.key_bindings && !from.character_dir.empty())
+            host.actions->copy_key_bindings(CharacterFiles{from.character_dir}.settings());
         if (host.copy_ui_layout) host.copy_ui_layout(from.character_dir);
         reload_layout = true;
         return std::nullopt;

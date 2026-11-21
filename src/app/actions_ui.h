@@ -73,6 +73,8 @@ public:
     game::KeyMap& keymap() { return keymap_; }
     // The key bindings read again (a character's settings took over, Config::attach_character).
     void reload_keymap();
+    // Copy Layout's Key Bindings box: apply another character's saved keyboard bindings and movement defaults.
+    void copy_key_bindings(const std::filesystem::path& from_file);
     // The options window's Keys page (COptionsWnd::KeyboardPageWndNotification / sub_0070abc0): the next key pressed
     // goes to the command's bank (0 Keypress, 1 Alternate); with escape_clears, Escape unbinds it (the original
     // attaches an empty combo for Escape). The binding is saved; a reserved key changes nothing.
@@ -263,6 +265,7 @@ private:
     Config& config_;
     std::filesystem::path config_path_;
     game::KeyMap keymap_;
+    std::vector<game::KeyMap::Event> pending_key_releases_;
     game::HotButtonStore store_;
     game::HotButtonSets sets_;
     IniFile char_ini_;
