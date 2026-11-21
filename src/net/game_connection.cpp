@@ -2745,15 +2745,12 @@ void GameConnection::consider() {
         chat(ChatEvent::Kind::System, strings_.format(12240, {})); // Consider who?
         return;
     }
-    if (it->second.is_corpse) {
-        chat(ChatEvent::Kind::System, strings_.format(12241, {})); // It is futile to consider the dead...
-        return;
-    }
     Consider c;
     c.player_id = world_.player_id;
     c.target_id = world_.target_id;
-    send_zone(encode(c));
-    context_tip(0x1d); // Cmd_consider: the consider tip
+    const auto op = it->second.is_corpse ? Op::ConsiderCorpse : Op::Consider;
+    send_zone(encode(c, op));
+    if (op == Op::Consider) context_tip(0x1d); // Cmd_consider: the consider tip
 }
 
 void GameConnection::report_hit(const game::HitLine& line, std::uint32_t source, bool report) {

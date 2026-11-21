@@ -37,6 +37,9 @@ public:
                 ("hailstone_mock_game_" + std::to_string(stamp) + "_" + std::to_string(counter++));
         std::filesystem::create_directories(path_);
         std::ofstream(path_ / "eqstr_us.txt") << "EQST0002\n"
+                                              << "491 CORPSE REZ %1h %2m %3s\n"
+                                              << "493 CORPSE DECAY %1d %2h %3m %4s\n"
+                                              << "495 CORPSE DECAY %1m %2s\n"
                                               << "1410 SAY %1%2: %3\n"
                                               << "1414 GROUP %1%2: %3\n"
                                               << "1420 SHOUT %1%2: %3\n"

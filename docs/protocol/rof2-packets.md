@@ -230,6 +230,7 @@ own-corpse and leadership checks and the next zone's entry use it.
 | TargetCommand | both | 0x58e2 | 4 B: u32 target. The server echoes it when it accepts a target (and sends it for pets); refused targets get "You cannot see your target" |
 | AutoAttack / AutoAttack2 | C→Z | 0x109d / 0x3526 | 4 B each: u32 1 on / 0 off; both sent when the attack flag changes. EQEmu reads byte 0 of AutoAttack and ignores AutoAttack2 |
 | Consider | both | 0x742b | 20 B: u32 player, u32 target, u32 faction, u32 level, u8 pvp, 3 B. See note 1 |
+| ConsiderCorpse | C→Z | 0x5204 | Same 20 B layout as Consider, with the player and corpse IDs and the remaining fields zero |
 | Damage | Z→C | 0x6f15 | 30 B packed: u16 target, u16 source, u8 type, u32 spell, i32 damage, f32 force, f32 hit heading, f32 hit pitch, u8 secondary, u32 special (1 wild rampage, 2 rampage). See note 2 |
 | Death | Z→C | 0x6517 | 32 B, **not translated**: the server's Death_Struct. See note 3 |
 | HPUpdate | Z→C | 0x2828 | 10 B (above). Own HP (cur, max) at zone-in and on change, without the items' HP. See note 4 |
@@ -251,6 +252,10 @@ own-corpse and leadership checks and the next zone's entry use it.
 4. HPUpdate: EQEmu `SendHPUpdate` sends `GetHP() - itembonuses.HP`. The client adds the items' HP back for everything that shows or reports it (`GameConnection::own_hp`, docs/mechanics.md).
 5. ExpUpdate tip flag: the original shows the experience tip when it is 2. It is not AA experience, which only OP_AAExpUpdate carries. EQEmu sends 0.
 6. Animation: action n is the n-th clip of C01..C11, D01..D05, L01..L09, O01, S01..S05, P01..P07, T01..T09, S06..S28, P08, O02, O03.
+
+Considering an NPC or player corpse sends `OP_ConsiderCorpse`. EQEmu's `Client::Handle_OP_ConsiderCorpse`
+sends the remaining decay time and, for player corpses, the resurrection time or status. The client displays
+these replies through the usual formatted, simple or plain chat message handlers.
 
 #### Combat: observed sequences
 

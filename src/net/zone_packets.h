@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "core/banner_appearance.h"
+#include "net/opcodes.h"
 #include "net/packet.h"
 
 namespace hailstone::net {
@@ -540,7 +541,7 @@ std::optional<bool> decode_auto_attack(const AppPacket& p);
 // value. EQEmu then shoots from the range slot on its own timer (Client::Process, RangedAttack / ThrowingAttack).
 AppPacket encode_auto_fire(bool on);
 
-// OP_Consider (20 bytes, both directions, rof2_structs.h Consider_Struct).
+// OP_Consider and the client-only OP_ConsiderCorpse share the 20-byte RoF2 Consider_Struct.
 // Client → zone: player id, target id, the rest 0. Zone → client: faction
 // standing 1..9 (already remapped by the server for the eqstr order 12212..),
 // level = the server's con colour (2 green, 4 dark blue, 6 gray, 10 white,
@@ -553,7 +554,7 @@ struct Consider {
     std::uint8_t pvp_con = 0;
 };
 inline constexpr std::size_t kConsiderSize = 20;
-AppPacket encode(const Consider& v);
+AppPacket encode(const Consider& v, Op op = Op::Consider);
 std::optional<Consider> decode_consider(const AppPacket& p);
 
 // OP_Damage (30 bytes, rof2_structs.h CombatDamage_Struct). damage > 0 is a

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Considering an NPC or player corpse shows its remaining decay time in chat. Player corpses also show their resurrection time or status.
 - Item descriptions and comparisons show named weapon procs and other item effects even when the spell ID or its local definition is unavailable.
 - NPCs keep their current tint when a live update sends zero or an out-of-range palette index.
 - Fixed Horizon Hills scenery protruding through the ground near cliffs in Trakanon's Teeth and at the Stonebrunt waterfall.
