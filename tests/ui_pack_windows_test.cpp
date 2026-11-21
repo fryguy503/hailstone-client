@@ -5615,7 +5615,7 @@ TEST_CASE("UI packs (modern): the Options window's Textures section picks the te
 
 TEST_CASE("UI packs: Options changes the Find trail style, invisibility brackets and Tab targeting") {
     for (const char* pack : {"modern", "gamepad"}) {
-        INFO(pack);
+        INFO(std::string(pack));
         test::ScratchDir scratch("ui_pack_display_options");
         const fs::path dir = scratch.path();
         fs::create_directories(dir / "game");
@@ -5687,7 +5687,7 @@ TEST_CASE("UI packs: Options changes the Find trail style, invisibility brackets
             auto point = [&](const char* name) {
                 lua_getglobal(L, "widgets");
                 lua_getfield(L, -1, name);
-                REQUIRE_MESSAGE(lua_istable(L, -1), name);
+                REQUIRE_MESSAGE(lua_istable(L, -1), std::string(name));
                 lua_rawgeti(L, -1, 1);
                 const float x = static_cast<float>(lua_tonumber(L, -1));
                 lua_pop(L, 1);
@@ -5742,6 +5742,11 @@ TEST_CASE("UI packs: Options changes the Find trail style, invisibility brackets
             click(point("Target through walls and doors"));
             CHECK(settings.at("tab_target_through_walls") == 1);
             CHECK(settings.at("tab_target_offscreen") == 0);
+            if (std::string_view(pack) == "gamepad") {
+                // The off-screen option is just below the visible rows at this window size.
+                ImGui::GetIO().AddMouseWheelEvent(0, -1);
+                s.frames(3);
+            }
             click(point("Target off-screen"));
             CHECK(settings.at("tab_target_through_walls") == 1);
             CHECK(settings.at("tab_target_offscreen") == 1);
