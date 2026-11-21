@@ -2004,15 +2004,19 @@ until /afk. Without input nothing is sent.
 
 #### The NPC target keys
 
-TARGETNPC 32 and CYCLENPCTARGETS 33 take every NPC with bTargetCyclable set, with no owner check, so pets and
-mercenaries too. The two options below filter the NPC cycle and the pad's backward cycle; PC and corpse cycles are
-not filtered.
+The original's TARGETNPC 32 and CYCLENPCTARGETS 33 accept pets and mercenaries with bTargetCyclable set. Hailstone's
+options below apply to the nearest NPC key and the forward and backward NPC cycles. Eligible targets are still
+ordered by distance within the 500-unit range.
 
 - Enhancement (option `tab_skip_pets`, hailstone.ini `target.skip_pets`, Options > Display "Tab Skips Pets", on by
   default): leaves out a spawn whose MasterID is a player, and mercenaries. An NPC's own pet stays.
-- Enhancement (option `tab_line_of_sight`, hailstone.ini `target.line_of_sight`, Options > Display "Tab Needs Line of
-  Sight", on by default): only NPCs with a clear segment from the player's eyes to 1 over the spawn (Spawn.LineOfSight's
-  test). Without the zone's collision every NPC counts as seen.
+- By default the NPC must be in the current camera view and clear of occluding geometry, including closed doors.
+  The client tests points on the spawn's body and at eye height against the rendered view and scene collision.
+  **Tab Target Through Walls and Doors** (`tab_target_through_walls`) allows occluded NPCs. It is off when
+  `target.line_of_sight` is true, the default. Profiles that disabled **Tab Needs Line of Sight** keep that preference.
+  The script option `tab_line_of_sight` also retains its original polarity.
+- **Tab Target Off-Screen** (`tab_target_offscreen`, `target.offscreen` in hailstone.ini) allows candidates outside the
+  camera view, including behind the camera. It is off by default. The two visibility options apply independently.
 
 #### Target death and auto targeting
 

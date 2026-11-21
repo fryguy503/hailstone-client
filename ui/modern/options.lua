@@ -473,8 +473,10 @@ local function displayTab()
     check("show_target_ring", "Show 3D Target Ring", "A colored ring appears around your current target's feet.")
     check("tab_skip_pets", "Tab Skips Pets",
       "Hailstone: the NPC target keys (Tab, F8) skip players' pets and mercenaries.")
-    check("tab_line_of_sight", "Tab Needs Line of Sight",
-      "Hailstone: the NPC target keys (Tab, F8) skip NPCs you cannot see, behind walls or the ground.")
+    check("tab_target_through_walls", "Tab Target Through Walls and Doors",
+      "Lets the NPC target keys (Tab, F8) select NPCs behind walls and closed doors.")
+    check("tab_target_offscreen", "Tab Target Off-Screen",
+      "Lets the NPC target keys (Tab, F8) select nearby NPCs outside the camera view, including behind you.")
     check("replace_gem_spell", "Drop Replaces a Memorized Spell",
       "Hailstone: a spell dragged from the spell book onto a gem that holds another spell memorizes in its place. Off, forget the old spell first, as in the original.")
     check("hotbutton_extras", "More Hot Button States",

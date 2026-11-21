@@ -1235,8 +1235,9 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
 
 - **The NPC target keys** (game/targeting.h).
   - Unknown: whether the scene graph query that offers the cycle's spawns (EQGraphicsDX9.dll, vtable +0x98) tests line of sight.
-  - Now: every NPC within 500 units is offered. The Hailstone option `tab_line_of_sight` (on by default) adds a sight test of its own.
-  - Settle: reading that query, or pressing Tab in the original client with an NPC behind a wall.
+  - Now: Hailstone's nearest NPC and NPC cycle bindings default to candidates within 500 units that are in the
+    camera view and clear of occluding geometry. Both visibility checks have independent opt-outs.
+  - Settle: read that query or use the nearest NPC key in the original client with an NPC behind a wall.
 
 - **Labels and gauges** (`app/lua_ui_values.cpp`).
   - ATK leaves out the profile's `+0x3468` bonus.

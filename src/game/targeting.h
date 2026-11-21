@@ -1,9 +1,10 @@
 #pragma once
 
-// The original's target keys: TOGGLETARGET (Tab), TARGETPC / TARGETNPC /
+// The original's target keys: TOGGLETARGET, TARGETPC / TARGETNPC /
 // TARGETCORPSE and their CYCLE commands (__ExecuteCmd @0x4d7230 cases 26..30
 // and 38), with CTargetManager's cycle lists
 // (TargetManager_GetNextCycleTarget @0x5c6710 and its helpers).
+// Hailstone binds Tab to TARGETNPC by default.
 //
 // Follows the original's cycle functions and
 // TargetManager_CycleCandidateCallback; the command
@@ -57,9 +58,8 @@ struct TargetManager {
     // PlayerZoneClient::IsInvisible for another spawn (0x5c58c0's test for the PC and NPC cycles): the traders
     // Hide Traders hides and the buyers Hide Buyers hides (GameConnection::market_hidden). Unset: none.
     std::function<bool(const Spawn&)> invisible;
-    // Hailstone (option tab_line_of_sight, on by default; docs/mechanics.md): the NPC cycle takes only the NPCs this
-    // says the player can see (the zone's collision between the eyes and the spawn). Unset: every NPC, as the
-    // original's cycle as modelled here.
+    // Hailstone (docs/mechanics.md): the NPC cycle takes only the NPCs allowed by the view and occlusion options.
+    // Unset: no visibility filter.
     std::function<bool(const Spawn&)> in_sight;
 };
 
@@ -91,6 +91,11 @@ bool is_banner_race(std::uint32_t race);
 // A player's pet or a mercenary (the Hailstone NPC cycle's skip_pets): the spawn's MasterID is the local player or
 // another player (an NPC's pet stays in the cycle), or its spawn record says mercenary.
 bool is_player_pet(const WorldState& world, const Spawn& s);
+
+// Hailstone's NPC target visibility test. At least one point on the spawn must pass both active tests.
+// A null projection allows off-screen targets. An empty line test allows targeting through walls and doors.
+bool npc_in_target_view(const Spawn& spawn, const glm::mat4* view_projection,
+                        const std::function<bool(const glm::vec3&)>& clear_line);
 
 // The spawns the client offers for a cycle mode (see the header comment); `skip_pets` leaves players' pets and
 // mercenaries out of mode 1, `invisible` (modes 0 and 1) the spawns IsInvisible hides, `in_sight` (mode 1) the

@@ -1804,6 +1804,7 @@ private:
     std::mt19937 pre_game_rng_{std::random_device{}()};
     game::PickCamera pick_camera_;   // last frame's, for mouse picking (CCamera as GetScreenRay reads it)
     bool pick_camera_valid_ = false;
+    std::optional<glm::mat4> target_view_projection_; // the same camera with the rendered scene's projection
 };
 
 } // namespace client_internal

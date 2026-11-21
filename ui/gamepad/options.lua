@@ -238,7 +238,8 @@ local PAGES = {
     for _, o in ipairs({ { "Player names", "pc_names" }, { "My name", "own_name" }, { "NPC names", "npc_names" },
         { "Con-coloured NPC names", "con_name_colour" }, { "Bracket Invis vs. Undead", "show_invis_undead" }, { "Highlight target name", "target_plate_highlight" }, { "Target name through walls", "target_plate_through_walls" }, { "Fade overlapping names", "plate_overlap_fade" }, { "Target ring", "show_target_ring" },
         { "Target ring cues", "target_ring_cues" }, { "Target ring through models", "target_ring_xray" },
-        { "Target skips pets", "tab_skip_pets" }, { "Target needs sight", "tab_line_of_sight" }, { "Gem replaces spell", "replace_gem_spell" }, { "Buff timers", "show_buff_timer" }, { "Song timers", "show_song_timer" },
+        { "Target skips pets", "tab_skip_pets" }, { "Target through walls and doors", "tab_target_through_walls" },
+        { "Target off-screen", "tab_target_offscreen" }, { "Gem replaces spell", "replace_gem_spell" }, { "Buff timers", "show_buff_timer" }, { "Song timers", "show_song_timer" },
         { "Compare items with what you wear", "item_compare" }, { "Upgrade / downgrade verdict", "item_compare_verdict" },
         { "Context menus", "context_menus" }, { "Player right-click menu", "player_menu" }, { "More hot button states", "hotbutton_extras" },
         { "Offer layouts to new characters", "offer_layout_copy" } }) do

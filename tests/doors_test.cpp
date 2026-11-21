@@ -16,12 +16,15 @@
 #include "game_files.h"
 #include "game/collision.h"
 #include "game/doors.h"
+#include "game/targeting.h"
 #include "game/tradeskill.h"
 #include "game/mechanics/floor_height.h"
 #include "game/swept_sphere.h"
 #include "game/object_collision.h"
+#include "game/world_state.h"
 #include "net/door_packets.h"
 #include "net/opcodes.h"
+#include "render/camera.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -810,6 +813,29 @@ TEST_CASE("a closed door blocks the doorway; swung open it does not") {
     CHECK_FALSE(game::blocks(shape, open, glm::inverse(open), 1.0f, a, b));
     // Open, it lies along -X from the hinge instead.
     CHECK(game::blocks(shape, open, glm::inverse(open), 1.0f, {95.0f, 195.0f, 5.0f}, {95.0f, 205.0f, 5.0f}));
+}
+
+TEST_CASE("NPC targeting through a doorway follows the door's current geometry") {
+    const auto shape = game::ObjectShape::from_mesh(box_mesh({-0.5f, 0.0f, 0.0f}, {0.5f, 10.0f, 12.0f}));
+    game::Door door;
+    door.y = 100.0f;
+    door.x = 200.0f;
+    render::FlyCamera camera;
+    camera.position = {95.0f, 205.0f, 5.0f};
+    const auto view_projection = camera.projection(1920, 1080, 100.0f) * camera.view();
+    game::Spawn npc;
+    npc.position = {105.0f, 205.0f, 5.0f};
+    npc.heights.avatar_height = 3.0f;
+    npc.heights.view_height = 6.0f;
+    const auto clear_door = [&](const glm::vec3& to) {
+        const auto transform = game::door_transform(door);
+        return !game::blocks(shape, transform, glm::inverse(transform), door.scale(), camera.position, to);
+    };
+    CHECK_FALSE(game::npc_in_target_view(npc, &view_projection, clear_door));
+    CHECK_FALSE(game::npc_in_target_view(npc, nullptr, clear_door));
+    CHECK(game::npc_in_target_view(npc, &view_projection, {}));
+    door.heading = 128.0f;
+    CHECK(game::npc_in_target_view(npc, &view_projection, clear_door));
 }
 
 TEST_CASE("UseSwitch measures a mouse click to the hit point in 3D") {

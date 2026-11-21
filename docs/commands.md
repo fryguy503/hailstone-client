@@ -334,8 +334,10 @@ the number pad moves you and **D** ducks.
 | Auto attack | Q | |
 | Use (doors, objects) | U | |
 
-**Tab is Hailstone's change:** the original put Tab on "toggle target" and F8 on the nearest NPC. Tab and F8 skip
-NPCs you cannot see; Options > Display "Tab Needs Line of Sight" turns that off.
+Hailstone also binds Tab to the nearest NPC. The original used Tab to toggle targets. The nearest NPC and NPC cycle
+bindings default to targets visible on screen. In Modern, Options > Display has **Tab Target Through Walls and Doors**
+and **Tab Target Off-Screen**. In Gamepad, Options > Interface has **Target through walls and doors** and
+**Target off-screen**. Each option can be enabled independently.
 
 ### Hot buttons, spells and abilities
 

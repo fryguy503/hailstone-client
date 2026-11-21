@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -5612,7 +5613,7 @@ TEST_CASE("UI packs (modern): the Options window's Textures section picks the te
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("UI packs: Options changes the Find trail style and invisibility brackets") {
+TEST_CASE("UI packs: Options changes the Find trail style, invisibility brackets and Tab targeting") {
     for (const char* pack : {"modern", "gamepad"}) {
         INFO(pack);
         test::ScratchDir scratch("ui_pack_display_options");
@@ -5627,22 +5628,18 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
         ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
         {
             Session s(dir, pack);
-            int selected = 0;
-            int brackets = 0;
-            std::vector<int> changes;
-            std::vector<int> bracket_changes;
+            std::map<std::string_view, int> settings{
+                {"find_trail_style", 0}, {"show_invis_undead", 0},
+                {"tab_target_through_walls", 0}, {"tab_target_offscreen", 0}};
+            std::map<std::string_view, std::vector<int>> changes;
             s.host.find_option = [&](std::string_view name) -> std::optional<int> {
-                if (name == "find_trail_style") return selected;
-                if (name == "show_invis_undead") return brackets;
+                if (auto it = settings.find(name); it != settings.end()) return it->second;
                 return std::nullopt;
             };
             s.host.set_option = [&](std::string_view name, int value) {
-                if (name == "find_trail_style") {
-                    changes.push_back(value);
-                    selected = value;
-                } else if (name == "show_invis_undead") {
-                    bracket_changes.push_back(value);
-                    brackets = value;
+                if (auto it = settings.find(name); it != settings.end()) {
+                    changes[it->first].push_back(value);
+                    it->second = value;
                 }
             };
             lua_State* L = s.lua.state();
@@ -5668,13 +5665,16 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
                 end
                 ui.Checkbox = function(label, ...)
                     local value, changed = checkbox(label, ...)
-                    if label == "##show_invis_undead" then record("Bracket Invis vs. Undead") end
+                    if label == "##show_invis_undead" then record("Bracket Invis vs. Undead")
+                    elseif label == "##tab_target_through_walls" then record("Target through walls and doors")
+                    elseif label == "##tab_target_offscreen" then record("Target off-screen") end
                     return value, changed
                 end
                 ui.DrawText = function(...)
                     local label = select(7, ...)
                     if label == "Interface" or label == "Find trail"
-                        or label == "Bracket Invis vs. Undead" then
+                        or label == "Bracket Invis vs. Undead"
+                        or label == "Target through walls and doors" or label == "Target off-screen" then
                         local x, y = ...
                         local w, h = ui.CalcTextSize(label)
                         widgets[label] = { x + w / 2, y + h / 2 }
@@ -5719,26 +5719,39 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
                 CHECK(changes.empty());
                 click(point("combo"));
                 click(point("rainbow"));
-                REQUIRE(selected == 1);
+                REQUIRE(settings.at("find_trail_style") == 1);
                 click(point("combo"));
                 click(point("navigation"));
             } else {
                 click(point("Interface"));
                 CHECK(changes.empty());
                 click(point("Find trail"));
-                REQUIRE(selected == 1);
+                REQUIRE(settings.at("find_trail_style") == 1);
                 click(point("Find trail"));
             }
-            CHECK(selected == 0);
-            REQUIRE(changes.size() == 2);
-            CHECK(changes[0] == 1);
-            CHECK(changes[1] == 0);
-            CHECK(bracket_changes.empty());
+            CHECK(settings.at("find_trail_style") == 0);
+            CHECK(changes["find_trail_style"] == std::vector<int>{1, 0});
+            CHECK_FALSE(changes.contains("show_invis_undead"));
             click(point("Bracket Invis vs. Undead"));
-            CHECK(brackets == 1);
+            CHECK(settings.at("show_invis_undead") == 1);
             click(point("Bracket Invis vs. Undead"));
-            CHECK(brackets == 0);
-            CHECK(bracket_changes == std::vector<int>{1, 0});
+            CHECK(settings.at("show_invis_undead") == 0);
+            CHECK(changes["show_invis_undead"] == std::vector<int>{1, 0});
+            CHECK_FALSE(changes.contains("tab_target_through_walls"));
+            CHECK_FALSE(changes.contains("tab_target_offscreen"));
+            click(point("Target through walls and doors"));
+            CHECK(settings.at("tab_target_through_walls") == 1);
+            CHECK(settings.at("tab_target_offscreen") == 0);
+            click(point("Target off-screen"));
+            CHECK(settings.at("tab_target_through_walls") == 1);
+            CHECK(settings.at("tab_target_offscreen") == 1);
+            click(point("Target through walls and doors"));
+            CHECK(settings.at("tab_target_through_walls") == 0);
+            CHECK(settings.at("tab_target_offscreen") == 1);
+            click(point("Target off-screen"));
+            CHECK(settings.at("tab_target_offscreen") == 0);
+            CHECK(changes["tab_target_through_walls"] == std::vector<int>{1, 0});
+            CHECK(changes["tab_target_offscreen"] == std::vector<int>{1, 0});
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
         ImGui::DestroyContext(ctx);
