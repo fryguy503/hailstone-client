@@ -197,6 +197,58 @@ TEST_CASE("HUD invisibility captions use viewer awareness and the undead display
     CHECK(std::string_view(lua_tostring(lua.get(), 2)) == "(Hero)\nSmith");
 }
 
+TEST_CASE("Group window targets a member or their nearest player corpse") {
+    test::ScratchDir game_scratch("ui_windows_group_target");
+    GameDir game(game_scratch.path());
+    Harness t(game);
+    net::GameConnectionTestAccess::state(t.conn) = net::ConnectionState::InZone;
+    auto& group = net::GameConnectionTestAccess::group(t.conn);
+    group.active = true;
+    group.slots[0].name = "Leader";
+    group.slots[2].name = "Member";
+    group.slots[3].name = "Mercenary";
+    group.slots[3].merc = true;
+
+    auto& world = t.conn.world_for_test();
+    world.player_id = 10;
+    auto spawn = [&](std::uint32_t id, const char* name, float x) -> game::Spawn& {
+        auto& s = world.spawns[id];
+        s.id = id;
+        s.name = name;
+        s.position = {x, 0, 0};
+        return s;
+    };
+    spawn(10, "Leader", 0);
+    spawn(11, "Member", 15);
+    auto& mount = spawn(12, "Member01", 15);
+    mount.is_npc = true;
+    mount.rider_id = 11;
+    spawn(13, "mEmBeR's corpse13", 25).is_corpse = true;
+    spawn(14, "Member's corpse14", 40).is_corpse = true;
+    spawn(15, "Member`s_corpse15", 5).is_corpse = true;
+    spawn(16, "Membership's corpse16", 10).is_corpse = true;
+    spawn(17, "Mercenary01", 15).is_npc = true;
+
+    REQUIRE(t.api->click_child("GroupWindow", "HPLabel1", "left"));
+    CHECK(world.target_id == 11);
+
+    world.spawns.erase(11);
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "left"));
+    CHECK(world.target_id == 13);
+    CHECK(t.conn.group_member_targeted() == 2);
+
+    world.spawns.erase(13);
+    t.conn.target_group_member(1); // F2 shares the group-row action.
+    CHECK(world.target_id == 14);
+
+    world.spawns.erase(14);
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "left"));
+    CHECK(world.target_id == 0);
+
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge2", "left"));
+    CHECK(world.target_id == 17);
+}
+
 TEST_CASE("Group role menus: self, member rows, permissions and confirmed role checks") {
     hailstone::test::ScratchDir game_scratch("ui_windows_group_roles");
     GameDir game(game_scratch.path());

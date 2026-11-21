@@ -618,6 +618,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [ ] Trace and fix the upstream gamepad all-pack smoke test's cursor-extent assertion with ImGui debug checks enabled (docs/unknowns.md "UI").
 
 - [x] **Group role controls in both packs.** Right-click member names or the player's own name (Y on a gamepad Group window row); server-confirmed role icons in the Group and Player windows; leader-only Main Tank / Main Assist / Puller changes, mercenaries restricted to tank. Not checked live.
+- [ ] Check RoF2 group targeting after a member dies, including when several of their corpses are in the zone (docs/unknowns.md "UI").
 - [x] **AA names missing from dbstr_us.txt** (a live folder's renumbered titles, gaps in a server's export). The windows show the spell's name, else "Ability <group>" (GameConnection::aa_display_name); plugins and /alternateadv keep the raw title. Seen live.
 - [x] Modern AA window: aligned headers and rows at the dialog's scale, current-frame column bounds, saved column resizing, clipped cells and Reset columns (live acceptance pending).
 - [x] **Hover respawn:** availability validated; same-zone player identity, placement and resources recovered; resurrection confirmation, server timeout and disconnect handled. Live acceptance open.

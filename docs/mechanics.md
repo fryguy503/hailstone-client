@@ -1690,6 +1690,13 @@ behaviour (`LockedActiveWindow=-1`, kept). The original has no locked window unt
   1447. CastSpell asks the same check.
 - Group invites: 148 bytes out. In: declines 1 / 4 / 5 or the pending invitation with the u32 at +0x94.
 
+## Group targeting
+
+Clicking a member's name in the Modern or Gamepad Group window or pressing F2–F6 targets their living spawn. If the
+client has no living spawn for that member, Hailstone falls back to the nearest player corpse with that member's
+name in the current zone. Mounts and NPC corpses are skipped. A member who has already returned to the zone is
+targeted even if their corpse is still there.
+
 ## Group roles
 
 The group leader assigns Main Tank (1), Main Assist (2) and Puller (3) in either UI pack by right-clicking a member's

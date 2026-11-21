@@ -1238,6 +1238,10 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
   - Now: every NPC within 500 units is offered. The Hailstone option `tab_line_of_sight` (on by default) adds a sight test of its own.
   - Settle: reading that query, or pressing Tab in the original client with an NPC behind a wall.
 
+- **Group targeting after a death.**
+  - Now: Hailstone targets the nearest matching player corpse when the member's living spawn is absent.
+  - Settle: check whether RoF2 targets a corpse from the Group window and which it chooses when several are present.
+
 - **Labels and gauges** (`app/lua_ui_values.cpp`).
   - ATK leaves out the profile's `+0x3468` bonus.
   - Not tracked: the leadership experience gauges (23, 24), the loyalty velocity (146), the skill damage labels

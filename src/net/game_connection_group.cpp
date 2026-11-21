@@ -6,8 +6,10 @@
 #include <charconv>
 #include <cctype>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 #include "core/byte_io.h"
 #include "core/log.h"
@@ -690,18 +692,43 @@ void GameConnection::target_group_member(std::int32_t n, bool target_of_target) 
     // Spawn handles are spawn ids (0 none -> -1).
     game::GroupTargetWorld w;
     auto spawn_of = [&](const std::string& name) -> int {
-        for (const auto& [id, s] : world_.spawns)
-            if (!s.is_corpse && (iequals(s.name, name) || iequals(base_name(s.name), name))) return static_cast<int>(id);
+        for (const auto& [id, s] : world_.spawns) {
+            if (s.is_corpse || (!iequals(s.name, name) && !iequals(base_name(s.name), name))) continue;
+            if (game::Spawn::GetSpawnType(&s) != game::eSpawnType::MOUNT) return static_cast<int>(id);
+        }
         return -1;
     };
-    for (std::size_t k = 0; k < static_cast<std::size_t>(game::kGroupSlots); ++k)
-        if (!group_.slots[k].name.empty()) w.members[k] = spawn_of(group_.slots[k].name);
+    std::optional<std::size_t> slot;
+    int row = 0;
+    for (std::size_t k = 0; k < group_.slots.size(); ++k) {
+        const auto& member = group_.slots[k];
+        if (member.name.empty()) continue;
+        if (row++ == n) slot = k;
+        w.members[k] = spawn_of(member.name);
+    }
     w.selected = group_member_targeted_;
     w.target = world_.target_id ? static_cast<int>(world_.target_id) : -1;
     w.player = world_.player_id ? static_cast<int>(world_.player_id) : -1;
     w.target_id_of = [](int) { return -1; }; // other spawns' targets are not known to the client
     w.spawn_by_id = [&](std::int32_t id) { return world_.spawns.count(static_cast<std::uint32_t>(id)) ? id : -1; };
     game::target_self_or_pet(w, group_.active, n, target_of_target, w.player);
+    if (w.target < 0 && group_.active && n > 0 && slot && !target_of_target && !group_.slots[*slot].merc) {
+        // Hailstone fallback for a member without a live spawn. The space in the PC corpse suffix distinguishes it
+        // from NPC corpses sent with the same wire spawn kind.
+        const std::string member_name = group_.slots[*slot].name;
+        const std::string corpse_name = member_name + "'s corpse";
+        std::pair nearest{std::numeric_limits<float>::infinity(), std::uint32_t{0}};
+        for (const auto& [id, s] : world_.spawns)
+            if (s.is_corpse && !s.is_npc && iequals(base_name(s.name), corpse_name))
+                nearest = std::min(nearest, std::pair{distance_to(id), id});
+        if (nearest.second) {
+            set_target(nearest.second);
+            // Keep the row selected if the outgoing target packet's hooks have left the target in place.
+            if (world_.target_id == nearest.second && group_.active)
+                group_member_targeted_ = group_.slot_of(member_name);
+            return;
+        }
+    }
     std::uint32_t target = w.target < 0 ? 0 : static_cast<std::uint32_t>(w.target);
     group_member_targeted_ = w.selected;
     set_target(target); // a new target: the target window then stores its slot index
