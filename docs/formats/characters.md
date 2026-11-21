@@ -621,8 +621,10 @@ default 24: players 8 and NPCs 0x10; 1 self, 2 group, 4 raid; `Appearance::new_a
 #### NPC tints
 
 For new-style races (flag 0x08): `npct.ini` Value<index> (entry index − 1) on the whole actor (not its held items).
-Index 0 or past the table does nothing. The index comes from the spawn packet's NpcTintIndex and
-`OP_SpawnAppearance` 39; 43 sets show_helm.
+The spawn packet's `NpcTintIndex` selects the initial color, with 0 for no tint.
+`OP_SpawnAppearance` type 39 changes it while the NPC is present. An update with index 0 or an index past
+the palette keeps the current tint.
+Type 43 sets `show_helm`.
 
 `npct.ini` and `itmt.ini` hold `[Data] Number` entries, `Value1..ValueN` (default 0xffffff), alpha forced to 0xff
 (ColorTable_LoadFromIni @0x574b60). Deliberate difference: the client reads at most 65536 entries (the original any

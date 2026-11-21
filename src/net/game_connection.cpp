@@ -22,11 +22,13 @@
 #include "core/log.h"
 #include "core/process_serial.h"
 #include "game/appearance.h"
+#include "game/appearance_data.h"
 #include "game/eye_control.h"
 #include "game/boats.h"
 #include "game/race_models.h"
 #include "game/combat.h"
 #include "game/sound_rules.h"
+#include "game/spawn_heights.h"
 #include "game/coords.h"
 #include "game/zone_names.h"
 #include "game/mechanics/tables.h"
@@ -132,6 +134,7 @@ void GameConnection::reload_game_files() {
         auto bytes = game_.read(file);
         return bytes ? std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size()) : std::string();
     };
+    npc_tint_count_ = game::ColorTable::parse(text("Resources/npct.ini")).values.size();
     std::string racedata = text("racedata.txt");
     if (racedata.empty()) log::warn("racedata.txt not found; spawn heights use the defaults");
     world_.height_tables =
@@ -3060,9 +3063,10 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
                         afk_keepalive_.zone_afk_since_ms = s->afk ? now_ms() : -1;
                     }
                     break;
-                // NPC tint (ActorClient_ApplyNpcTint, new-style races only;
-                // the renderer checks the race) and show helm.
-                case 39: s->appearance.npc_tint = a->parameter; break;
+                case 39:
+                    if (a->parameter != 0 && a->parameter <= npc_tint_count_ && game::is_new_style_model_race(s->race))
+                        s->appearance.npc_tint = a->parameter;
+                    break;
                 case 43: s->appearance.show_helm = a->parameter != 0; break;
                 default: break;
                 }

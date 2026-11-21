@@ -3332,6 +3332,7 @@ private:
     ZoneChange zone_change_request_; // the pending request, for "not ready" retries
     std::chrono::steady_clock::time_point zone_change_started_{}, zone_change_sent_{}, zone_change_retry_at_{};
     game::EqStrings strings_;
+    std::size_t npc_tint_count_ = 0;
 
     // Movement sending.
     glm::vec3 position_{0.0f};
