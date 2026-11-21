@@ -552,9 +552,11 @@ Held items (slots 7, 8): the material is the item's model number `IT<n>` (IDFile
 grip space; skeletal ones are baked in their rest pose.
 
 - Classic and Luclin models carry them on `<code>R_POINT_TRACK` / `<code>L_POINT_TRACK`.
-- A secondary goes on `SHIELD_POINT` when its model number is a shield to `CDisplay::IsShield` @0x489d70
-  (`game::is_shield_model`: IT200..228, 10530..10544, 10664..10671, 11001..11020, 11496..11497 and 25 single numbers
-  such as 14000). The original asks `Resources\ActorTagInfo.txt` first when it loaded, and RoF2 ships none.
+- A secondary goes on `SHIELD_POINT` when its model number is a shield to `CDisplay::IsShield` @0x489d70.
+  The original uses `Resources\ActorTagInfo.txt` when it loads: the first caret-delimited field is the IT model
+  number and a second field of 1 marks a shield. Missing entries in a loaded table are treated as non-shields.
+  Hailstone uses the original's built-in fallback list (IT200..228, 10530..10544, 10664..10671, 11001..11020,
+  11496..11497 and 25 single numbers such as 14000), with the optional additions described below.
 - Texture names do not count.
 - Matching is exact (`find_bone`, so `HAIR_POINT` is not `R_POINT`).
 - EQG models use `ARMR_WEAP`, `ARML_WEAP`, `ARML_SHLD` and the bone's bind matrix.
@@ -562,17 +564,16 @@ grip space; skeletal ones are baked in their rest pose.
 
 #### Extra shield models
 
-Hailstone adds, as a deliberate difference (`display.extra_shields`, on by default), 336 later shield models that RoF2
-does not list and so holds in the hand like a weapon: `src/game/shield_models.inc`.
+Hailstone adds, as a deliberate difference (`display.extra_shields`, on by default), shield models beyond the original's
+built-in list: `src/game/shield_models.inc`.
 
 - `tools/gen_shield_models.py` made most of them from an EQEmu items table and the game folders: models mostly used
   by shield items (type 8), and shield ornaments' models whose EQG mesh is flat and covers most of its box seen from
   the broad side (as shields do and weapon ornaments do not), plus shields the measure misses (`SEEN_SHIELDS`).
-- The rest were added by hand from an items-table query, less the weapon models some shields share (IT0, IT7, IT63,
-  IT10201, IT10650). Running the generator again would drop them.
+- The generator retains additions from a separate items-table query in `ADDITIONAL_SHIELDS`. Models with ordinary
+  grips, including the Ranger epics (IT149), the Beastlord claw (IT10015) and the lantern (IT48), stay in the hand.
 
-So the Haunting Nightmares ornament (IT101064, IT101068) is worn on the forearm like other shield ornaments, where RoF2
-holds it in the hand.
+The Haunting and Grim Nightmares ornaments (IT101064, IT101068) use the forearm shield point.
 
 #### Tints
 

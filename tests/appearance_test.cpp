@@ -133,8 +133,7 @@ TEST_CASE("display.extra_shields puts later shields on the shield point (Hailsto
     CHECK(is_shield_model(13908));
     CHECK(is_shield_model(100081));
     CHECK(is_shield_model(100109));
-    // The Haunting and Grim Nightmares Shield Ornaments, which RoF2 holds in the hand (not on its list), are worn on
-    // the forearm like the other shield ornaments.
+    // The Haunting and Grim Nightmares Shield Ornaments use the shield point.
     CHECK(is_shield_model(101064));
     CHECK(is_shield_model(101068));
     // Left out: the IT63 placeholder, weapons' models a few shields borrow (IT7, a mace; IT10201, a staff, rod or book;
@@ -147,6 +146,15 @@ TEST_CASE("display.extra_shields puts later shields on the shield point (Hailsto
     CHECK_FALSE(is_shield_model(100069));
     CHECK_FALSE(is_shield_model(100105));
     CHECK_FALSE(is_shield_model(0));
+    // Weapons and other held items that the supplemental shield query used to send to the forearm.
+    CHECK_FALSE(is_shield_model(149));   // Earthcaller / Swiftwind
+    CHECK_FALSE(is_shield_model(10015)); // Claw of the Savage Spirit
+    CHECK_FALSE(is_shield_model(48));    // lantern
+    CHECK_FALSE(is_shield_model(56));    // stein
+    CHECK_FALSE(is_shield_model(118));   // dagger
+    CHECK_FALSE(is_shield_model(10645)); // tome
+    CHECK_FALSE(is_shield_model(12735)); // katar ornament
+    CHECK(is_shield_model(101060));     // shield from the supplemental query
     // Switched off: RoF2's list alone.
     hailstone::game::set_extra_shields(false);
     CHECK_FALSE(is_shield_model(13908));
@@ -396,6 +404,36 @@ TEST_CASE("dressing classic, Luclin and EQG models from the game files" * doctes
         REQUIRE(dd);
         CHECK(std::find(dd->tints.begin(), dd->tints.end(), 0xffc80000u) != dd->tints.end());
     }
+}
+
+TEST_CASE("Luclin wood elves grip Ranger epics and handheld items, and wear shields on the forearm" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    auto lib = CharacterLibrary::load(*hailstone::test::game_dir(), "", true);
+    auto elf = lib.model("ELM");
+    REQUIRE(elf);
+    REQUIRE(elf->luclin);
+    auto plain = lib.dress(*elf, game::Appearance{});
+    REQUIRE(plain);
+
+    const auto check_attachment = [&](int slot, std::uint32_t item, std::string_view point) {
+        CAPTURE(slot);
+        CAPTURE(item);
+        CAPTURE(point);
+        const int bone = elf->find_bone(point);
+        REQUIRE(bone >= 0);
+        game::Appearance appearance;
+        appearance.material[static_cast<std::size_t>(slot)] = item;
+        const auto equipped = lib.dress(*elf, appearance);
+        REQUIRE(equipped);
+        REQUIRE(equipped->vertices.size() > plain->vertices.size());
+        for (std::size_t i = plain->vertices.size(); i < equipped->vertices.size(); ++i)
+            CHECK(equipped->vertices[i].bones[0] == bone);
+    };
+    check_attachment(game::kSlotPrimary, 149, "R_POINT_TRACK");
+    check_attachment(game::kSlotSecondary, 149, "L_POINT_TRACK");
+    check_attachment(game::kSlotSecondary, 48, "L_POINT_TRACK");
+    check_attachment(game::kSlotSecondary, 200, "SHIELD_POINT_TRACK");
+    check_attachment(game::kSlotSecondary, 11224, "SHIELD_POINT_TRACK");
 }
 
 TEST_CASE("armour tints a classic body slot only where the model has that variant's texture" *
