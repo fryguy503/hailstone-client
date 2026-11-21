@@ -992,6 +992,8 @@ EQEmu's deposit acknowledgement has its failed flag where RoF2 reads the slot to
 2. RaidUpdate actions:
    - 0 add (148 B: + u8 class @140, level, group leader, 5 B; parameter = group 0..11 or 0xffffffff); 1 remove; 5 disband (5062); 8 create; 10 the zone-in reset (136 B); 17/18 lock/unlock; 20 invitation (5065, 5067).
    - 14 the raid leader's leadership ranks and 30 leader (392 B: the 64 dwords from +136 are Leadership_SetRaidAbilityRanks' block, raid ability n at dword n; 30 also 5069 / 5070).
+     EQEmu sends the new leader's name at both +72 and +4 in action 30. The client prefers +72 and falls back to +4 when it is empty.
+     If both names are empty, the client applies the ranks and keeps the previous leader without announcing a change.
    - 32 loot type (+136); 33 / 34 looter added / removed (+72); 35 MOTD (1164 B; 6349).
    - 36 a member's note (204 B: the member at +72, the note at +140; EQEmu sends the notes after the roster).
 3. RaidDelegateAbility:

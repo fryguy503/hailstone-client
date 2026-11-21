@@ -2446,15 +2446,19 @@ void GameConnection::handle_social(Op op, const AppPacket& p) {
                 // ranks.
                 set_raid_ability_ranks(u->leadership);
                 break;
-            case kRaidSetLeader:
+            case kRaidSetLeader: {
                 // CRaid_HandleSetLeader @0x47e850: CRaid::ChangeLeadership, the raid leader's ranks, then "You are now
                 // the leader of the raid." (5069) or "%1 is now the leader of your raid." (5070), colour 0x111, every
                 // time (EQEmu sends it at every zone-in).
-                raid_.leader = g.leader_name;
                 set_raid_ability_ranks(u->leadership);
-                if (iequals(g.leader_name, me)) system(5069, {}, 0x111);
-                else system(5070, {g.leader_name}, 0x111);
+                // EQEmu puts the new leader in both name fields. A nameless update only supplies ranks.
+                const auto& leader = g.leader_name.empty() ? g.player_name : g.leader_name;
+                if (leader.empty()) break;
+                raid_.leader = leader;
+                if (iequals(leader, me)) system(5069, {}, 0x111);
+                else system(5070, {leader}, 0x111);
                 break;
+            }
             case kRaidSetLootType:
                 // CRaid::HandleSetLootType @0x47d270: the type (the parameter); types 1, 2 and 4 clear the looters.
                 raid_.loot_type = g.parameter;

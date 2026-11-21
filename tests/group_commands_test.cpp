@@ -3,6 +3,8 @@
 
 #include <doctest/doctest.h>
 
+#include <fstream>
+
 #include "core/ini_file.h"
 #include "game/combat.h"
 #include "game/group_role_sets.h"
@@ -601,6 +603,45 @@ TEST_CASE("mock server: raid leadership (ranks, raid marks, delegation, the lead
     conn.raid_delegate_ability(4, conn.raid().target);
     REQUIRE(rig.until([&] { return sent(server, Op::RaidDelegateAbility).size() == 2; }));
     CHECK(decode_delegate_ability(sent(server, Op::RaidDelegateAbility)[1])->ability == 4);
+}
+
+TEST_CASE("mock server: raid leader announcements use the name supplied by the server") {
+    Rig rig(MockConfig::standard(), quick_options());
+    auto& conn = rig.conn;
+    {
+        std::ofstream strings(rig.dir.path() / "eqstr_us.txt", std::ios::app);
+        REQUIRE(strings);
+        strings << "5069 You are now the leader of the raid.\n"
+                   "5070 %1 is now the leader of your raid.\n";
+    }
+    conn.reload_game_files();
+    REQUIRE(rig.to_zone());
+    rig.chat();
+
+    RaidUpdate lead;
+    lead.general.action = kRaidSetLeader;
+    lead.general.player_name = "Member1";
+    lead.general.leader_name = "Member2";
+    conn.receive_zone_packet_for_test(encode_raid_update(lead));
+    CHECK(conn.raid().leader == "Member2");
+    CHECK(has_line(rig.chat(), "Member2 is now the leader of your raid."));
+
+    lead.general.leader_name.clear();
+    conn.receive_zone_packet_for_test(encode_raid_update(lead));
+    CHECK(conn.raid().leader == "Member1");
+    CHECK(has_line(rig.chat(), "Member1 is now the leader of your raid."));
+
+    lead.general.player_name.clear();
+    lead.leadership[16] = 2;
+    conn.receive_zone_packet_for_test(encode_raid_update(lead));
+    CHECK(conn.raid().leader == "Member1");
+    CHECK(conn.leadership().active_ranks[16] == 2);
+    CHECK(rig.chat().empty());
+
+    lead.general.player_name = "gEnNrO";
+    conn.receive_zone_packet_for_test(encode_raid_update(lead));
+    CHECK(conn.raid().leader == "gEnNrO");
+    CHECK(has_line(rig.chat(), "You are now the leader of the raid."));
 }
 
 TEST_CASE("mock server: raid delegates use EQEmu identities and one-based assist slots") {
