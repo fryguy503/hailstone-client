@@ -87,7 +87,7 @@ std::optional<std::uint32_t> ClientApp::nameplate_at(glm::vec2 at) const {
     return pick_nameplate(plate_hits_, at, [&](const NameplateHit& hit) {
         const auto spawn = conn_->world().spawns.find(hit.id);
         if (spawn == conn_->world().spawns.end() || !nameplate_spawn_clickable(spawn->second) || !game::is_targetable(spawn->second) || !spawn->second.show_name ||
-            spawn->second.body_type == 11 || conn_->spawn_invisible(spawn->second, see_invisible)) return false;
+            conn_->spawn_invisible(spawn->second, see_invisible)) return false;
         if (!automation_ || !automation_->nameplates().owner_valid(hit.owner) || hit.incarnation != spawn->second.incarnation) return false;
         if (hit.through_walls) return true;
         if (!scene_read) { scene_depth = nameplate_pixel_depth(at); scene_read = true; }
@@ -102,7 +102,7 @@ bool ClientApp::activate_nameplate(std::uint32_t id) {
         plate_hit_serial_ != conn_->world().spawn_set_serial) return false;
     const auto spawn = conn_->world().spawns.find(id);
     if (spawn == conn_->world().spawns.end() || !nameplate_spawn_clickable(spawn->second) || !game::is_targetable(spawn->second) || !spawn->second.show_name ||
-        spawn->second.body_type == 11 || conn_->spawn_invisible(spawn->second, viewer_see_invisible_rank())) return false;
+        conn_->spawn_invisible(spawn->second, viewer_see_invisible_rank())) return false;
     const auto hit = std::find_if(plate_hits_.begin(), plate_hits_.end(), [id](const NameplateHit& h) { return h.id == id; });
     if (hit == plate_hits_.end()) return false;
     const NameplateHit observation = *hit;

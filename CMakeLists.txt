@@ -467,6 +467,7 @@ add_library(hailstone_engine STATIC
   src/game/zone_names.cpp
   src/game/race_models.cpp
   src/game/spawn_heights.cpp
+  src/game/character_property_sets.cpp
   src/game/appearance.cpp
   src/game/actor_look.cpp
   src/game/appearance_data.cpp

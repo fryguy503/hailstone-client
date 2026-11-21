@@ -400,6 +400,12 @@ struct SpawnAppearance {
 AppPacket encode(const SpawnAppearance& v);
 std::optional<SpawnAppearance> decode_spawn_appearance(const AppPacket& p);
 
+struct SetBodyType {
+    std::uint32_t spawn_id = 0;
+    std::uint32_t set_id = 0;
+};
+std::optional<SetBodyType> decode_set_body_type(const AppPacket& p);
+
 // OP_ChangeSize (16 bytes).
 struct ChangeSize {
     std::uint32_t spawn_id = 0;

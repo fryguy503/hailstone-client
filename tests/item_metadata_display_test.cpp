@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
@@ -88,6 +89,40 @@ struct PresentationLua {
     }
 };
 } // namespace
+
+TEST_CASE("Item presentation: bane damage uses the localized label of the property set") {
+    test::ScratchDir scratch("item_bane_property_set");
+    std::filesystem::create_directory(scratch.path() / "Resources");
+    {
+        std::ofstream file(scratch.path() / "Resources/CharacterPropertySets.txt");
+        file << "700^3\n700^26\n701^101\n";
+    }
+    const GameDir files(scratch.path());
+    net::GameConnection connection(files);
+    auto s = strings();
+    s.set(0xbcf, "Bane: %1 +%2");
+    s.set(2439, "Draconian");
+    s.set(2449, "Reanimated");
+    s.set(2455, "Unknown creature");
+
+    game::ItemDisplayContext context;
+    context.strings = &s;
+    context.character_property_sets = &connection.character_property_sets();
+    net::Item item;
+    item.bane_dmg_body = 700;
+    item.bane_dmg_amt = 5;
+    CHECK(game::build_item_display(item, context).description.find("Bane: Draconian +5") != std::string::npos);
+
+    item.bane_dmg_body = 701;
+    CHECK(game::build_item_display(item, context).description.find("Bane: Unknown creature +5") != std::string::npos);
+
+    item.bane_dmg_body = 702;
+    CHECK(game::build_item_display(item, context).description.find("Bane: body type 702 +5") != std::string::npos);
+
+    item.bane_dmg_body = 700;
+    context.character_property_sets = nullptr;
+    CHECK(game::build_item_display(item, context).description.find("Bane: body type 700 +5") != std::string::npos);
+}
 
 TEST_CASE("Item presentation: extension flags change only the dedicated status line") {
     auto s = strings();

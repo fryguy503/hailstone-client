@@ -3,14 +3,19 @@
 
 #include <doctest/doctest.h>
 
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "game/spells.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
 #include "net/item_packets.h"
+#include "net/packet_io.h"
 #include "net/spell_packets.h"
 
 using namespace hailstone;
@@ -103,4 +108,84 @@ TEST_CASE("CastSpell over the live adapter: SPA 129 range focus from a worn item
     REQUIRE(packet);
     CHECK(packet->spell_id == 6810);
     CHECK(packet->target_id == kTarget);
+}
+
+TEST_CASE("CastSpell checks direct spawn properties and expands explicit body type sets") {
+    constexpr std::uint32_t kSet = 9100;
+    constexpr std::int32_t kSpell = 6810;
+    const std::vector<std::uint32_t> undead_properties{1, 3};
+    MockConfig cfg = MockConfig::standard();
+    cfg.characters[0].class_ = 2;
+    auto& spawns = cfg.zones.at(cfg.characters[0].zone_id).spawns;
+    const std::uint32_t set_target = spawns[0].spawn_id;
+    const std::uint32_t direct_target = spawns[1].spawn_id;
+    spawns[0].properties = {kSet};
+    spawns[1].properties = undead_properties;
+
+    Rig rig(std::move(cfg));
+    auto& conn = rig.conn;
+    const auto resources = rig.dir.path() / "Resources";
+    std::filesystem::create_directories(resources);
+    {
+        std::ofstream file(resources / "characterpropertysets.txt");
+        file << "9100^1\n9100^3\n9100^1\n9100^8junk\n3^25\n";
+        REQUIRE(file.good());
+    }
+    rig.game.rescan();
+    conn.reload_game_files();
+    REQUIRE(rig.to_zone());
+
+    auto spells = std::make_shared<game::SpellTable>();
+    REQUIRE(spells->parse(spell_line({{0, std::to_string(kSpell)}, {1, "Undead Bolt"}, {9, "100"}, {13, "1000"},
+                                      {20, "-10"}, {83, "0"}, {86, "0"}, {98, "10"}, {105, "1"}, {213, "1"},
+                                      {214, "1"}})) == 1);
+    conn.set_spell_table_for_test(spells);
+
+    auto& world = A::world(conn);
+    REQUIRE(world.spawns.contains(set_target));
+    REQUIRE(world.spawns.contains(direct_target));
+    CHECK(world.spawns.at(set_target).body_type == kSet);
+    CHECK(world.spawns.at(set_target).properties == std::vector<std::uint32_t>{kSet});
+    CHECK(world.spawns.at(direct_target).body_type == 1);
+    CHECK(world.spawns.at(direct_target).properties == undead_properties);
+
+    const auto cast_at = [&](std::uint32_t target_id) {
+        auto& state = A::spells(conn);
+        state.casting = {};
+        state.pending = 0;
+        state.gems[0].spell = kSpell;
+        state.gems[0].ready = 0;
+        state.recovery_ready = 0;
+        const auto here = A::position(conn);
+        world.spawns.at(world.player_id).position = here;
+        world.spawns.at(target_id).position = here + glm::vec3(5.0f, 0.0f, 0.0f);
+        world.target_id = target_id;
+        conn.cast_gem(0);
+    };
+    const auto sent_to = [&](std::uint32_t target_id) {
+        return rig.until([&] {
+            for (const auto& p : rig.server.zone_log) {
+                if (!is_op(p, Op::CastSpell)) continue;
+                if (auto cast = decode_cast_spell(p); cast && cast->spell_id == kSpell && cast->target_id == target_id)
+                    return true;
+            }
+            return false;
+        });
+    };
+
+    cast_at(set_target);
+    CHECK_FALSE(A::spells(conn).casting.casting());
+
+    cast_at(direct_target);
+    REQUIRE(sent_to(direct_target));
+
+    ByteWriter update;
+    update.le(set_target);
+    update.le(kSet);
+    rig.server.zone.send_reliable(make_packet(Op::SetBodyType, std::move(update)));
+    REQUIRE(rig.until([&] { return world.spawns.at(set_target).properties == undead_properties; }));
+    CHECK(world.spawns.at(set_target).body_type == kSet);
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::CastSpell) == 1);
+    cast_at(set_target);
+    REQUIRE(sent_to(set_target));
 }

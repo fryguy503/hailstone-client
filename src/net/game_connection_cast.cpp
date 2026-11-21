@@ -118,7 +118,6 @@ public:
             positions_[&s] = g.position;
             race_[&s] = g.race;
             names_[&s] = g.name;
-            body_[&s] = g.body_type;
         }
         return &s;
     }
@@ -302,9 +301,8 @@ public:
         return n != names_.end() && c_.group_.has_member(base_name(n->second));
     }
     bool has_property(cast::Spawn& s, std::int32_t property, std::int32_t, std::int32_t) override {
-        // PlayerBase::HasProperty for the body-type properties: the spawn's body type.
-        auto b = body_.find(&s);
-        return b != body_.end() && static_cast<std::int32_t>(b->second) == property;
+        auto it = c_.world_.spawns.find(s.spawn_id);
+        return it != c_.world_.spawns.end() && it->second.has_property(static_cast<std::uint32_t>(property));
     }
     std::int32_t item_base_type() override { return item_ ? item_->item_class : 0; }
     std::int32_t item_spell_id(std::int32_t) override { return item_ ? click().effect : 0; }
@@ -366,7 +364,6 @@ private:
     std::map<const cast::Spawn*, glm::vec3> positions_;
     std::map<const cast::Spawn*, std::uint16_t> race_;
     std::map<const cast::Spawn*, std::string> names_;
-    std::map<const cast::Spawn*, std::uint32_t> body_;
     std::map<const cast::Spell*, const game::SpellData*> data_;
     std::array<cast::Affect, game::kBuffSlots> affects_{};
     cast::Item some_item_{};

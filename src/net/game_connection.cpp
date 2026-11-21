@@ -136,6 +136,7 @@ void GameConnection::reload_game_files() {
     if (racedata.empty()) log::warn("racedata.txt not found; spawn heights use the defaults");
     world_.height_tables =
         std::make_shared<const game::HeightTables>(game::parse_height_tables(racedata, text("Resources/moddat.ini")));
+    character_property_sets_ = game::CharacterPropertySets::parse(text("Resources/CharacterPropertySets.txt"));
     // CDisplay's UseLuclinElementals (game/world_state.h luclin_elementals), read once as the display starts.
     IniFile ini;
     if (auto path = game_.find("eqclient.ini")) ini.load(*path);
@@ -1570,6 +1571,17 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 auto_target_due_ = true;
             }
             std::erase(xtarget_attackers_, *id);
+        }
+        break;
+    case Op::SetBodyType:
+        if (auto update = decode_set_body_type(p)) {
+            auto it = world_.spawns.find(update->spawn_id);
+            if (it == world_.spawns.end()) break;
+            auto& spawn = it->second;
+            spawn.body_type = update->set_id;
+            const auto members = character_property_sets_.find(update->set_id);
+            if (members.empty()) spawn.properties = {update->set_id};
+            else spawn.properties.assign(members.begin(), members.end());
         }
         break;
     case Op::SetFace:

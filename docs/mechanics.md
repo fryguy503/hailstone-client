@@ -1979,9 +1979,19 @@ PlayerZoneClient::IsInvisible @0x5a1850).
 - Group members are exempt. A GM target stays hidden from a non-GM viewer whose rank reaches it.
 - The player's own model is hidden only for a GM with hide mode 3001.
 - Corpses and zero-HP targets are never hidden; remote HP comes from the server's percentage.
-- Any other spawn with property 100 (PlayerBase::HasProperty(0x64): body type 100 or in the property list) is always
-  hidden.
+- Any other spawn with property 100 is always hidden.
 - Visibility is independent of material opacity.
+
+#### Actor property sets
+
+`Resources/CharacterPropertySets.txt` lists one `set ID^property ID` pair per row. Repeated set IDs add members to the
+same set. The client reads the table from the game folder with the other game-file tables.
+
+A spawn record already carries its individual property IDs. An explicit `SetBodyType` update
+(`0x2115`, two 32-bit values for the spawn ID and set ID) replaces the actor's property list with the set's members.
+An unknown set ID is kept as a single property, including when the file is absent. Member IDs are used as-is.
+Spell eligibility, visibility and targeting use property membership. The item window also uses the table to look up
+the localized body-type label for bane damage.
 
 #### AFK
 

@@ -215,7 +215,7 @@ void fill_spawn(lua_State* L, const game::Spawn& s) {
     set_int(L, "rider", s.rider_id);
     set_bool(L, "mercenary", s.mercenary);
     set_bool(L, "gm", s.gm);
-    set_int(L, "body_type", s.properties.empty() ? 0 : s.properties[0]);
+    set_int(L, "body_type", s.body_type);
 }
 
 void push_spawn(lua_State* L, const game::Spawn& s) {

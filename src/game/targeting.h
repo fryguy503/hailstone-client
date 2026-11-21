@@ -83,8 +83,7 @@ struct CycleCandidate {
 std::uint32_t get_next_cycle_target(TargetManager& tm, std::int32_t mode, bool restart,
                                     const std::vector<CycleCandidate>& offered);
 
-// PlayerBase::IsTargetable @0x8d0090: the spawn's Targetable flag and its body
-// types not 11 (and not 100 with 101 or 103; the client keeps one body type).
+// PlayerBase::IsTargetable @0x8d0090: no-target actors and utility traps are excluded from ordinary targeting.
 bool is_targetable(const Spawn& s);
 bool is_banner_race(std::uint32_t race);
 

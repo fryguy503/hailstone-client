@@ -16,6 +16,11 @@
 
 namespace hailstone::game {
 
+bool Spawn::has_property(std::uint32_t property) const {
+    if (properties.empty()) return body_type == property;
+    return std::find(properties.begin(), properties.end(), property) != properties.end();
+}
+
 std::string display_name(const std::string& name) {
     // CEverQuest::trimName (game/social.h trim_name) drops '#' too: the server's "#Name" spawns show as "Name".
     std::string out = name.substr(std::min(name.find_first_not_of('#'), name.size()));
@@ -159,7 +164,7 @@ void WorldState::smooth(float dt, double now, const FloorFn& floor, const Region
                 // predictor leaves vertical integration to server updates, but a vertical move still probes.
                 if (collision && !s.mount_id && !s.is_corpse &&
                     (b.position != before || b.velocity.z != 0.0f)) {
-                    const bool no_collide = std::find(s.properties.begin(), s.properties.end(), 0x64u) != s.properties.end();
+                    const bool no_collide = s.has_property(0x64);
                     // Hailstone: past remote_probe_range (not drawn) the sweep is not run and the moving spawn has
                     // no contact, as DoCollisionMovement's reset leaves it when nothing is hit.
                     const bool near = !probe_from || remote_probe_range <= 0.0f ||

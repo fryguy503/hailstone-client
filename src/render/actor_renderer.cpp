@@ -1687,9 +1687,7 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
                                 : s.stalled                       ? 0.0f
                                                                   : s.speed_run;
         // PlayerBase::HasProperty(1): the humanoid body type.
-        const bool humanoid = s.properties.empty()
-                                  ? s.body_type == 1
-                                  : std::find(s.properties.begin(), s.properties.end(), 1u) != s.properties.end();
+        const bool humanoid = s.has_property(1);
         ActorLayers& layers = st.layers;
         GroupTrack& lower = layers.group[game::kLowerBones];
 

@@ -6,6 +6,7 @@
 #include <format>
 
 #include "game/augments.h"
+#include "game/character_property_sets.h"
 #include "game/eq_names.h"
 #include "game/eq_strings.h"
 #include "game/item_links.h"
@@ -294,13 +295,35 @@ std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& c
     return out;
 }
 
+std::string bane_body_name(const ItemDisplayContext& ctx, std::uint32_t set_id) {
+    if (ctx.character_property_sets && ctx.strings) {
+        const auto members = ctx.character_property_sets->find(set_id);
+        if (!members.empty()) {
+            // A set can match several labels. The item window uses the first matching property in this order.
+            constexpr std::pair<std::uint32_t, std::uint32_t> labels[] = {
+                {21, 2437}, {5, 2438}, {26, 2439}, {24, 2440}, {6, 2441}, {4, 2442}, {1, 2443}, {22, 2444},
+                {2, 2445}, {7, 2446}, {23, 2447}, {25, 2448}, {3, 2449}, {13, 2450}, {14, 2451}, {15, 2452},
+                {12, 2453}, {28, 2454}, {19, 5754}, {20, 5786}, {34, 5841}, {18, 664},
+            };
+            std::uint32_t label = 2455;
+            for (const auto& [property, string_id] : labels) {
+                if (std::ranges::find(members, property) == members.end()) continue;
+                label = string_id;
+                break;
+            }
+            if (ctx.strings->has(label)) return str(ctx, label);
+        }
+    }
+    return std::format("body type {}", set_id);
+}
+
 // ItemDisplay_BuildBaneDamageText @0x69d420 (the item, then its augments).
 std::string bane_text(const net::Item& item, const ItemDisplayContext& ctx, bool recurse) {
     std::string out;
     std::uint32_t race = item.bane_dmg_race, body = item.bane_dmg_body;
     std::int32_t amount = race ? static_cast<std::int32_t>(item.bane_dmg_race_amt) : item.bane_dmg_amt;
     if ((race || body) && amount > 0) {
-        std::string r = race ? race_name(race) : std::string(), b = body ? std::format("body type {}", body) : std::string();
+        std::string r = race ? race_name(race) : std::string(), b = body ? bane_body_name(ctx, body) : std::string();
         std::string a = std::to_string(amount);
         if (!race) out = str_args(ctx, 0xbcf, {b, a});
         else if (!body) out = str_args(ctx, 0xbce, {r, a});

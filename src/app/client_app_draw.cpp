@@ -126,7 +126,7 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         // PlayerClient::SetNameSpriteState draws nothing without bDisplayNameSprite (the spawn's showname bit); body
         // type 11 has no name either (EQEmu's BodyType::NoTarget, "no name, can't target": the server's teleport
         // triggers, #TPTrigger*, are sent with showname set).
-        if (!s.show_name || s.body_type == 11) continue;
+        if (!s.show_name || s.has_property(11)) continue;
         glm::vec3 base = s.display_valid ? s.display_position : s.position;
         // The head is straight above the spawn, so one farther across the ground than the names' range is out of it
         // whatever its height: passed over before its model is looked up (most of a busy zone, every frame).

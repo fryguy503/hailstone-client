@@ -35,6 +35,7 @@
 #include "core/ini_file.h"
 #include "core/server_profile.h"
 #include "core/shared_file_cache.h"
+#include "game/character_property_sets.h"
 #include "nav/nav_mesh.h"
 #include "platform/gpu_ipc.h"
 #include "render/gpu_cache_protocol.h"
@@ -717,6 +718,8 @@ TEST_CASE("fuzz: XMI, sound and effect tables, ini and tag text") {
     }
 
     auto as_text = [](std::span<const std::byte> d) { return std::string(reinterpret_cast<const char*>(d.data()), d.size()); };
+    sweep("character property sets", {text_bytes("9000^1\r\n9000^3\r\n0x2329^0x64\n")}, 0, 300,
+          [&](std::span<const std::byte> d) { (void)game::CharacterPropertySets::parse(as_text(d)); });
     sweep("sound text", {text_bytes("EMIT\nfoo bar\nbaz.wav\nLOOP\nloop1\n"), text_bytes("1^Alpha^\n2^Unknown^\n3^Gamma\n999999999999^x")}, 0, 300,
           [&](std::span<const std::byte> d) {
               (void)parse_sound_bank(as_text(d));

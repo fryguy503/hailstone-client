@@ -20,6 +20,7 @@
 
 namespace hailstone::game {
 
+class CharacterPropertySets;
 class EqStrings;
 struct SpellData;
 namespace mechanics { class Character; }
@@ -29,6 +30,7 @@ using ItemDescriptionAppender = std::function<std::optional<std::string>(const n
 
 struct ItemDisplayContext {
     const EqStrings* strings = nullptr;
+    const CharacterPropertySets* character_property_sets = nullptr;
     // The player: CanUseItem, the "modified" stats (vtable +0x34), the damage bonus. Null outside the game.
     const mechanics::Character* character = nullptr;
     std::int32_t player_level = 1;

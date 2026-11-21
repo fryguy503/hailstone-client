@@ -597,6 +597,7 @@ private:
                                     shown.slot.slot != -1 && shown.slot.sub == -1);
         game::ItemDisplayContext ctx;
         ctx.strings = &c.strings();
+        ctx.character_property_sets = &c.character_property_sets();
         ctx.character = host.character;
         ctx.player_level = c.player_status().level;
         ctx.player_class = c.profile() ? static_cast<std::uint8_t>(c.profile()->class_) : 0;

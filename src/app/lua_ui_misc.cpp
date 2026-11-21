@@ -291,7 +291,7 @@ private:
         q.has_pet = true;
         q.race = p.race;
         q.summoned = p.summoned;
-        q.property_1f = std::find(p.properties.begin(), p.properties.end(), 0x1fu) != p.properties.end();
+        q.property_1f = p.has_property(0x1f);
         if (const auto* ch = host.character)
             q.effect = [ch](std::int32_t spa, std::int32_t sub) { return ch->total_effect(spa, true, sub, true, true); };
         return q;

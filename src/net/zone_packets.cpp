@@ -1129,6 +1129,14 @@ std::optional<SpawnAppearance> decode_spawn_appearance(const AppPacket& p) {
     });
 }
 
+std::optional<SetBodyType> decode_set_body_type(const AppPacket& p) {
+    if (p.data.size() != 8) return std::nullopt;
+    return decode_with(p, [](ByteReader& r) {
+        const auto spawn_id = r.le<std::uint32_t>();
+        return SetBodyType{spawn_id, r.le<std::uint32_t>()};
+    });
+}
+
 std::optional<ChangeSize> decode_change_size(const AppPacket& p) {
     if (p.data.size() < 8) return std::nullopt;
     return decode_with(p, [](ByteReader& r) {

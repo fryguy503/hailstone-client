@@ -3,12 +3,28 @@
 #include "core/byte_io.h"
 #include "game/appearance.h"
 #include "game/light_list.h"
+#include "game/targeting.h"
 #include "mock_server/harness.h"
 #include "net/opcodes.h"
 #include "net/group_packets.h"
 #include "net/spell_packets.h"
 using namespace hailstone;
 using namespace hailstone::test;
+
+TEST_CASE("Targeting uses actor property membership") {
+    game::Spawn actor;
+    actor.body_type = 11;
+    CHECK_FALSE(game::is_targetable(actor));
+    actor.body_type = 1;
+    actor.properties = {1, 11};
+    CHECK_FALSE(game::is_targetable(actor));
+    actor.properties = {101};
+    CHECK(game::is_targetable(actor));
+    actor.properties = {101, 100};
+    CHECK_FALSE(game::is_targetable(actor));
+    actor.properties = {100, 103};
+    CHECK_FALSE(game::is_targetable(actor));
+}
 
 TEST_CASE("Guild banner appearance follows spawn, in-place updates and replacement") {
     Rig rig;

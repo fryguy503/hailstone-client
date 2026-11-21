@@ -72,7 +72,10 @@ const Spawn* find(const WorldState& w, std::uint32_t id) {
 
 bool is_banner_race(std::uint32_t race) { return race == 586 || (race >= 553 && race <= 557); }
 
-bool is_targetable(const Spawn& s) { return s.targetable && s.body_type != 11; }
+bool is_targetable(const Spawn& s) {
+    return s.targetable && !s.has_property(11) &&
+           !(s.has_property(100) && (s.has_property(101) || s.has_property(103)));
+}
 
 namespace {
 

@@ -43,6 +43,7 @@
 #include "game/bazaar.h"
 #include "game/chat_text.h"
 #include "game/client_options.h"
+#include "game/character_property_sets.h"
 #include "game/combat.h"
 #include "game/doors.h"
 #include "game/eq_names.h"
@@ -1454,6 +1455,7 @@ public:
     }
     // eqstr_us.txt / dbstr_us.txt (spell descriptions are dbstr type 6).
     const game::EqStrings& strings() const { return strings_; }
+    const game::CharacterPropertySets& character_property_sets() const { return character_property_sets_; }
     // The player's classes as a bit mask: server_class_mask(), else the profile's class.
     std::uint32_t player_class_mask() const;
     // player_class_mask() where the server extension tests those class checks over the player's classes
@@ -3332,6 +3334,7 @@ private:
     ZoneChange zone_change_request_; // the pending request, for "not ready" retries
     std::chrono::steady_clock::time_point zone_change_started_{}, zone_change_sent_{}, zone_change_retry_at_{};
     game::EqStrings strings_;
+    game::CharacterPropertySets character_property_sets_;
 
     // Movement sending.
     glm::vec3 position_{0.0f};
