@@ -45,6 +45,8 @@ void GameConnection::spell_book_closed_by_game(bool stand) {
         chat(ChatEvent::Kind::System, strings_.format(12045, {}));
         spells_.memorizing.reset();
     }
+    if (spells_.scribing && !spells_.scribing->sent) spells_.scribing.reset();
+    set_mem_ = {}; // A queued gem must not start when the book next opens.
     // OnShow (hidden): stand up when the book sat the player down.
     game::SpellBookState s;
     s.stand_state = pstatus_.stand_state;

@@ -722,6 +722,7 @@ public:
     // set_stand_state(110 / 100).
     void set_sitting(bool sitting);
     bool sitting() const { return pstatus_.stand_state == 110; }
+    bool sitting_or_mounted() const { return sitting() || mount_id() != 0; }
     // ---- the spell book (CSpellBookWnd's open/close rules, game/spell_book.h) ----
     // The UI calls open_spell_book() when the book is about to show (false:
     // the original refuses and the window must stay closed) and

@@ -1054,7 +1054,7 @@ local function gemStrip(x, y, w, s, st)
     line, col = "Right-click another spell to swap places with " .. bySlot[st.swapSlot].name, C.accent
   elseif st.cursorSpell and bySlot[st.cursorSpell] then
     line, col = "Click a gem to memorize " .. bySlot[st.cursorSpell].name, C.accent
-  elseif not st.sitting then
+  elseif not st.sittingOrMounted then
     line = "Sit down to memorize or scribe spells."
   elseif not (editor and tab == "sets") and not gemFor(st) then
     -- every usable gem holds a spell: a double-click has nowhere to go
@@ -1130,7 +1130,7 @@ local function body(x, y, w, h, s)
   if st.holdingScroll then
     local slot = firstEmptyBookSlot()
     if slot and T.Button("##scribe", x + w - 150 * s, y + h - GEMS_H * s + 4 * s, x + w, y + h - GEMS_H * s + 30 * s, s,
-        "Scribe the scroll", { primary = true, enabled = st.sitting }) then
+        "Scribe the scroll", { primary = true, enabled = st.sittingOrMounted }) then
       API.spells.BookClick(slot)
     end
   end

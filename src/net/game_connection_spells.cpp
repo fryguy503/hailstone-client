@@ -199,9 +199,11 @@ void GameConnection::update_spells_at(std::int64_t now) {
             sc->sent = true;
         }
     }
-    // The book only works sitting: standing up ends a memorization in progress.
-    if (spells_.memorizing && !sitting()) spells_.memorizing.reset();
-    if (spells_.scribing && !spells_.scribing->sent && !sitting()) spells_.scribing.reset();
+    // A rider keeps a standing posture, but can still memorize and scribe.
+    if ((spells_.memorizing || spells_.scribing) && !sitting_or_mounted()) {
+        spells_.memorizing.reset();
+        if (spells_.scribing && !spells_.scribing->sent) spells_.scribing.reset();
+    }
     for (auto it = spells_.others.begin(); it != spells_.others.end();) {
         if (now - it->second.started_ms > static_cast<std::int64_t>(it->second.cast_time) + 1000) it = spells_.others.erase(it);
         else ++it;
@@ -778,7 +780,7 @@ void GameConnection::memorize(int book_slot, int gem) {
         gem >= usable_gems())
         return;
     // The book's click handler (@0x75e790) only works sitting (or mounted).
-    if (!sitting() || spells_.casting.casting() || !can_start_memming(book_slot)) return;
+    if (!sitting_or_mounted() || spells_.casting.casting() || !can_start_memming(book_slot)) return;
     const std::uint32_t id = spells_.book[static_cast<std::size_t>(book_slot)];
     const game::SpellData* spell = spell_table_->get(id);
     if (!spell) return;
@@ -819,7 +821,7 @@ std::uint32_t GameConnection::cursor_scroll_spell() const {
 }
 
 void GameConnection::scribe_cursor(int book_slot) {
-    if (state_ != ConnectionState::InZone || !sitting() || spells_.scribing || spells_.pending > 0) return;
+    if (state_ != ConnectionState::InZone || !sitting_or_mounted() || spells_.scribing || spells_.pending > 0) return;
     const Item* item = inventory_.cursor();
     std::uint32_t id = cursor_scroll_spell();
     const game::SpellData* spell = id ? spell_table_->get(id) : nullptr;

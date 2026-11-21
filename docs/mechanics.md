@@ -835,6 +835,10 @@ Vectors in `tests/spell_gems_vectors_test.cpp`, replayed call for call.
 
 #### Memorising
 
+A stopped rider can use the spell book to memorize individual spells and spell sets, or scribe a scroll, from the
+saddle. RoF2's book click checks for sitting or a mount (CSpellBookWnd @0x75e790). Movement and dismounting close
+the book and interrupt active or queued memorization and unsent scribing.
+
 `get_spell_mem_ticks_left` runs once per draw of the book's memorise gauge:
 
 - A tick when now - last > max(100, (levelNeeded - level + 5) x 100).

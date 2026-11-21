@@ -1106,7 +1106,7 @@ achievement and reward-selection APIs.
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
 | SpellBook | () → {{slot, id, name, icon, level, mana, endurance, castTime, recastTime, recoveryTime, range, aeRange, duration, beneficial, targetType, skill, skillName, category, categoryName, subcategory, subcategoryName, resist, gem}} | Every scribed spell | — |
-| SpellBookState | () → {open, sitting, gems, usableGems, memorizing={gem,spell}, settingSet, scribing, cursorSpell, holdingItem, swapSlot} | Book state | — |
+| SpellBookState | () → {open, sitting, sittingOrMounted, gems, usableGems, memorizing={gem,spell}, settingSet, scribing, cursorSpell, holdingScroll, swapSlot} | Book state. `sittingOrMounted` reports whether the posture permits memorizing or scribing. | — |
 | SpellIcon | (icon) → tex,u0,v0,u1,v1 \| nil | Spell icon cell | — |
 | SpellBookClick | (slot) → ok | Stock book click: scribe, or spell to cursor | actions |
 | SpellBookSwap | (slot) → — | Quick right click: pick up or swap book slots | actions |

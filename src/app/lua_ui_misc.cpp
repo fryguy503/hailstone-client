@@ -731,7 +731,7 @@ public:
             // CSpellBookWnd @0x75e790, sitting (or mounted): a scroll on the cursor is scribed into the slot
             // (StartSpellScribe); else the spell goes on the cursor (AttachToCursor type 1, the book slot) when
             // CanStartMemming allows, for a click on a gem to memorize it there.
-            if (!c.sitting()) return true;
+            if (!c.sitting_or_mounted()) return true;
             if (c.cursor_scroll_spell() != 0) {
                 c.scribe_cursor(slot);
             } else if (c.can_start_memming(slot)) {
