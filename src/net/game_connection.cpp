@@ -1341,7 +1341,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
         return;
     }
     Op op = from_wire(p.opcode);
-    handle_ability(op, p); // only looks (net/game_connection_abilities.cpp)
+    handle_ability(op, p);
     if (handle_fellowship(p)) return;
     if (handle_guild_banner(op, p)) return;
     switch (op) {
@@ -3001,7 +3001,7 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
             // Social appearance types (EQEmu AppearanceType; Handle_OP_SpawnAppearance).
             if (auto* s = spawn(id)) {
                 switch (a->type) {
-                case 3: s->invis_rank = static_cast<std::int32_t>(a->parameter); break;
+                case kAppearanceInvisibility: s->invis_rank = static_cast<std::int32_t>(a->parameter); break;
                 case 5: s->light_type = static_cast<std::uint8_t>(a->parameter); break;
                 case 18: s->linkdead = a->parameter != 0; break;
                 case 19: // PlayerPhysics_SetFlyMode
@@ -3069,7 +3069,8 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
             }
             // Case 38 (FreezeBeneficialBuffs, @0x4b53c1): the spawn's character's buff timers on hold (value != 0).
             if (id == me && a->type == 38) spells_.buff_timers_on_hold = a->parameter != 0;
-            if (id == me && a->type == 3) invis_state_ = static_cast<std::int32_t>(a->parameter); // the spawn's +0x338
+            if (id == me && a->type == kAppearanceInvisibility)
+                invis_state_ = static_cast<std::int32_t>(a->parameter); // the spawn's +0x338
         }
         break;
     case Op::TargetCommand:

@@ -689,7 +689,9 @@ std::optional<RespawnWindow> decode_respawn_window(const AppPacket& p);
 AppPacket encode_respawn_selection(std::uint32_t option_id);
 
 // SpawnAppearance types used so far (common/eq_constants.h AppearanceType).
+inline constexpr std::uint16_t kAppearanceInvisibility = 3;
 inline constexpr std::uint16_t kAppearanceAnimation = 14; // parameter: kStand*
+inline constexpr std::uint16_t kAppearanceSneak = 15;
 inline constexpr std::uint16_t kAppearancePet = 25;       // parameter: the owner's spawn id (0 = none)
 inline constexpr std::uint32_t kStandStanding = 100, kStandFreeze = 102, kStandLooting = 105, kStandSitting = 110,
                                kStandCrouching = 111, kStandLying = 115;

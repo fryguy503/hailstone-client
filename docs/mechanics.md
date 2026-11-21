@@ -1570,7 +1570,9 @@ An invisible player or live NPC the viewer can see has its name in parentheses, 
 and leadership marks (`GameConnection::name_invisibility`), when HideMode +0x338 is above 0, never on a corpse or a
 race from 0x8cd up. Checked: PlayerClient::SetNameSpriteState @0x58e2d0.
 
-- Another spawn's HideMode is the server's (spawn record, then SpawnAppearance type 3).
+- Another spawn's HideMode is the server's (spawn record, then SpawnAppearance type 3). When an attack ends Hide,
+  the attacking client replies to the server's OP_CancelSneakHide with its cleared appearance so the server can
+  pass the change to observers.
 - The player's own comes from Hide and its effects: above 0 while hidden (the local hide flag, Shroud of Stealth
   included) or for regular invisibility (SPAs 12, 314); -2 / -1 for versus undead / animals, no parentheses. Sneak
   alone adds no mark. Checked: EQ_Character::UpdateMyVisibleStatus @0x459510 by PcZoneClient's virtual @0x5804e0,

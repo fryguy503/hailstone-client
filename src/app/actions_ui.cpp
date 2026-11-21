@@ -748,8 +748,8 @@ void ActionsUi::update(net::GameConnection& conn, const mech::Character* ch, con
         if (op == net::Op::SpawnAppearance) {
             auto a = net::decode_spawn_appearance(*p);
             if (!a || a->spawn_id != conn.world().player_id) continue;
-            if (a->type == 15) state_.sneaking = a->parameter != 0; // Handle_OP_SpawnAppearance: sneak
-            if (a->type == 3 && a->parameter == 0) state_.hidden = false;
+            if (a->type == net::kAppearanceSneak) state_.sneaking = a->parameter != 0;
+            if (a->type == net::kAppearanceInvisibility && a->parameter == 0) state_.hidden = false;
         } else if (auto bind = op == net::Op::Bind_Wound ? net::decode_bind_wound(*p) : std::nullopt) {
             // EQEmu's Client::BindWound answers (net/notice_packets.h). The original's Handle_OP_Bind_Wound is not
             // decoded: once the bind ends the character stands up from the bind-wound kneel, and the lines are this
@@ -763,11 +763,10 @@ void ActionsUi::update(net::GameConnection& conn, const mech::Character* ch, con
                 if (conn.player_status().stand_state == 105) conn.set_stand_state(100);
             }
         } else if (op == net::Op::CancelSneakHide) {
-            // The server ended sneak and hide; newer clients answer with a 4-byte OP_Hide (Send_OP_Hide).
+            // GameConnection already sent the cancel reply. Clear the skill state as well.
             if (state_.activity == static_cast<std::int32_t>(mech::skill::kHide)) state_.activity = -1;
             state_.hidden = false;
             state_.sneaking = false;
-            conn.send_zone_packet(net::encode_hide_cancel());
         }
     }
     run_socials(conn);

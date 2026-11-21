@@ -1,7 +1,9 @@
 #include <doctest/doctest.h>
 
 #include "app/nameplate_canvas_context.h"
+#include "mock_server/harness.h"
 #include "mq_test_world.h"
+#include "net/packet_io.h"
 #include "net/zone_packets.h"
 
 using namespace hailstone;
@@ -125,6 +127,90 @@ TEST_CASE("nameplate canvas context: typed concealment requires current observed
     target.is_corpse = true;
     target.invis_rank = 1;
     CHECK_FALSE(context(10).concealed);
+}
+
+TEST_CASE("nameplate canvas context: a rogue's cancel reply clears Hide for a group observer") {
+    auto config = test::MockConfig::standard();
+    config.own_spawn_id = 12;
+    test::Rig rogue(std::move(config));
+    REQUIRE(rogue.to_zone());
+    const std::uint16_t rogue_id = 12;
+    mq_test::World group_member("canvas_context_hide_cancel");
+    auto& observer = *group_member.conn;
+    game::NameplateCanvasCandidate candidate;
+    const auto concealed = [&] {
+        const auto& spawn = observer.world().spawns.at(rogue_id);
+        app::fill_nameplate_canvas_candidate(candidate, observer, spawn, spawn.name, 10);
+        CHECK(candidate.context.in_group);
+        CHECK(observer.name_invisibility(spawn, false).normal == candidate.context.concealed);
+        return candidate.context.concealed;
+    };
+
+    // Successful Hide is announced to observers only. Test with and without a matching local roll.
+    for (bool local_hide : {false, true}) {
+        CAPTURE(local_hide);
+        observer.receive_zone_packet_for_test(net::encode(net::SpawnAppearance{rogue_id, net::kAppearanceInvisibility, 1}));
+        REQUIRE(concealed());
+        rogue.conn.note_hide_state(local_hide, true);
+
+        rogue.server.zone_log.clear();
+        rogue.server.zone.send_reliable(net::make_empty(net::Op::CancelSneakHide));
+        using net::Op;
+        REQUIRE(rogue.until([&] {
+            return test::MockEqServer::count(rogue.server.zone_log, Op::SpawnAppearance) >= 2;
+        }));
+        CHECK_FALSE(rogue.conn.invisible());
+        CHECK_FALSE(rogue.conn.sneaking());
+        std::vector<net::AppPacket> reply;
+        for (const auto& packet : rogue.server.zone_log) {
+            const Op op = net::from_wire(packet.opcode);
+            if (op == Op::Hide || op == Op::SpawnAppearance) reply.push_back(packet);
+        }
+        REQUIRE(test::MockEqServer::ops(reply) == std::vector<Op>{Op::Hide, Op::SpawnAppearance, Op::SpawnAppearance});
+        CHECK(reply[0].data == std::vector<std::byte>(4));
+        const auto visibility = net::decode_spawn_appearance(reply[1]);
+        const auto sneak = net::decode_spawn_appearance(reply[2]);
+        REQUIRE(visibility);
+        REQUIRE(sneak);
+        CHECK(visibility->spawn_id == rogue_id);
+        CHECK(visibility->type == net::kAppearanceInvisibility);
+        CHECK(visibility->parameter == 0);
+        CHECK(sneak->spawn_id == rogue_id);
+        CHECK(sneak->type == net::kAppearanceSneak);
+        CHECK(sneak->parameter == 0);
+
+        // EQEmu forwards the appearance change to other clients using the same packet.
+        observer.receive_zone_packet_for_test(reply[1]);
+        CHECK_FALSE(concealed());
+    }
+}
+
+TEST_CASE("nameplate canvas context: cancelling Hide preserves an active invisibility spell") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& connection = rig.conn;
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(mq_test::spell_line({{0, "1000"}, {1, "Test invisibility"}, {86, "12"}})) == 1);
+    connection.set_spell_table_for_test(table);
+    auto& buff = net::GameConnectionTestAccess::spells(connection).buffs[0];
+    buff.spell = 1000;
+    buff.tics = 10;
+    buff.received_ms = net::GameConnection::now_ms();
+    connection.note_hide_state(true, true);
+    rig.server.zone_log.clear();
+    rig.server.zone.send_reliable(net::make_empty(net::Op::CancelSneakHide));
+    REQUIRE(rig.until([&] {
+        return test::MockEqServer::count(rig.server.zone_log, net::Op::SpawnAppearance) > 0;
+    }));
+    CHECK(connection.invisible());
+    CHECK_FALSE(connection.sneaking());
+    CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::Hide) == 1);
+    for (const auto& packet : rig.server.zone_log) {
+        if (net::from_wire(packet.opcode) != net::Op::SpawnAppearance) continue;
+        const auto appearance = net::decode_spawn_appearance(packet);
+        REQUIRE(appearance);
+        CHECK(appearance->type == net::kAppearanceSneak);
+    }
 }
 
 TEST_CASE("nameplate canvas context: full identity replacement and removal retire prior observations") {

@@ -2,6 +2,7 @@
 #include "net/game_connection.h"
 
 #include "game/merchant.h"
+#include "game/spa_ids.h"
 #include "net/ability_packets.h"
 #include "net/notice_packets.h"
 
@@ -21,8 +22,29 @@ void GameConnection::handle_ability(Op op, const AppPacket& p) {
     case Op::PickPocket:
         server_coin(op, p);
         break;
+    case Op::CancelSneakHide: {
+        hidden_ = false;
+        sneaking_ = false;
+        const auto me = static_cast<std::uint16_t>(world_.player_id);
+        // A cancellation can arrive while a regular invisibility spell still applies.
+        const bool spell_invisible = own_effect_with(game::SPA_INVISIBILITY) >= 0 ||
+                                     own_effect_with(game::SPA_IMPROVED_INVIS) >= 0;
+        if (!spell_invisible) {
+            if (invis_state_ > 0) invis_state_ = 0;
+            if (auto player = world_.spawns.find(world_.player_id);
+                player != world_.spawns.end() && player->second.invis_rank > 0)
+                player->second.invis_rank = 0;
+        }
+        send_zone(encode_hide_cancel());
+        if (me != 0) {
+            // EQEmu relays the visibility update to observers. The server's Hide roll can
+            // succeed independently of our local Hide flag.
+            if (!spell_invisible) send_zone(encode(SpawnAppearance{me, kAppearanceInvisibility, 0}));
+            send_zone(encode(SpawnAppearance{me, kAppearanceSneak, 0}));
+        }
+        break;
+    }
     case Op::SpawnAppearance:
-    case Op::CancelSneakHide:
     case Op::Taunt:
     case Op::FeignDeath:
     case Op::Bind_Wound:

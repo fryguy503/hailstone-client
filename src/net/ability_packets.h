@@ -31,7 +31,7 @@ AppPacket encode_taunt(std::uint32_t target);
 AppPacket encode_remove_trap(std::uint32_t target);
 // OP_Animation (4 bytes, RoF2 Animation_Struct {u16 spawnid, u8 action, u8 speed}).
 AppPacket encode_animation(std::uint16_t spawn_id, std::uint8_t action, std::uint8_t speed);
-// OP_Hide with 4 zero bytes: Send_OP_Hide @0x52b9e0, the answer to the server's OP_CancelSneakHide.
+// OP_Hide with 4 zero bytes: Send_OP_Hide @0x52b9e0, the acknowledgement for the server's OP_CancelSneakHide.
 AppPacket encode_hide_cancel();
 
 // OP_SkillUpdate (RoF2 SkillUpdate_Struct, 12 bytes: skill id, value, 4 unknown bytes): Handle_OP_SkillUpdate
