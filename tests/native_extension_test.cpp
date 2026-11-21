@@ -513,6 +513,49 @@ TEST_CASE("plugin windows: its ui/<pack>/ folder, hs.Plugin calls, options and m
     ImGui::DestroyContext(ctx);
 }
 
+TEST_CASE("compiled plugins: UI contributions use the SDK owner's lifetime and permissions") {
+    Host h;
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("ExtendTest"));
+    const auto& contributions = h.bridge.contributions();
+
+    h.run("/extcontribution short");
+    CHECK(contributions.empty());
+    h.run("/extcontribution First reason");
+    REQUIRE(contributions.size() == 1);
+    CHECK(contributions.front().owner() == "plugin:ExtendTest");
+    CHECK(contributions.front().text == "First reason");
+    CHECK(contributions.front().disabled);
+    h.run("/extcontribution Revised reason");
+    REQUIRE(contributions.size() == 1);
+    CHECK(contributions.front().text == "Revised reason");
+    h.run("/extcontribution clear");
+    CHECK(contributions.empty());
+    CHECK(h.printed_part("contribution removed 1"));
+
+    h.run("/extcontribution Active reason");
+    REQUIRE(contributions.size() == 1);
+    h.run("/extoff");
+    CHECK(contributions.empty());
+    h.run("/extcontribution Inactive reason");
+    CHECK(contributions.empty());
+    h.run("/exton");
+    h.run("/extcontribution Allowed reason");
+    REQUIRE(contributions.size() == 1);
+    h.approve(plugin::kCapAll & ~plugin::kCapExtend);
+    h.plugins->policy_changed({});
+    CHECK(contributions.empty());
+    h.run("/extcontribution Denied reason");
+    CHECK(contributions.empty());
+    h.approve(plugin::kCapAll);
+    h.plugins->policy_changed({});
+    CHECK(contributions.empty());
+    h.run("/extcontribution Ready again");
+    REQUIRE(contributions.size() == 1);
+    REQUIRE(h.plugins->unload("ExtendTest"));
+    CHECK(contributions.empty());
+}
+
 TEST_CASE("plugin windows: the bridge alone") {
     plugin::UiBridge b;
     CHECK_FALSE(b.has_plugin("x"));

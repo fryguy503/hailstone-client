@@ -300,7 +300,7 @@ void UpscalerProvider::host_log(void* host, int level, const char* line) {
     if (host && line) static_cast<const UpscalerProvider*>(host)->log(level, line);
 }
 
-template <class F> bool UpscalerProvider::guarded(const char* what, F&& call) {
+template <class F> bool UpscalerProvider::guarded(const char* what, F&& call) const {
     if (!table_) return false;
     try {
         if (call()) return true;
@@ -367,6 +367,21 @@ bool UpscalerProvider::resize(VkExtent2D render, VkExtent2D view) {
 
 bool UpscalerProvider::evaluate(const HailstoneUpscalerFrame& frame) {
     return created_ && guarded("evaluate", [&] { return table_->evaluate(&host_, &frame) != 0; });
+}
+
+std::span<const HailstoneUiContribution* const> UpscalerProvider::ui_contributions() const {
+    if (!created_ || !table_ ||
+        table_->size < offsetof(HailstoneUpscaler, ui_contributions) + sizeof(table_->ui_contributions) ||
+        !table_->ui_contributions)
+        return {};
+    const HailstoneUiContribution* const* entries = nullptr;
+    std::uint32_t count = 0;
+    if (!guarded("ui_contributions", [&] {
+            count = table_->ui_contributions(host_.host, &entries);
+            return count == 0 || entries != nullptr;
+        }) || count == 0)
+        return {};
+    return {entries, std::min(count, HAILSTONE_UPSCALER_MAX_UI_CONTRIBUTIONS)};
 }
 
 void UpscalerProvider::destroy() {

@@ -449,6 +449,26 @@ A policy applies to its declared intent domain: a map ownership claim does not f
 or nameplates. Keep authorization out of display caches, never persist transient tokens as preferences, never use a
 display name as identity, and keep saved preferences so ordinary behaviour returns when a provider goes.
 
+## UI contributions
+
+API 1.8 adds `hs.UI.contributions`. Packs can use `hs.UI.Supports("contributions", "List")` to detect the service.
+`List(window)` returns plain records
+for the window's current contributions. Each record has `owner`, `plugin`, `id`, `target`, `text`, `disabled` and
+`action_label`. They are ordered by owner and then ID. An add-on's own Lua window can read its own contributions.
+The pack draws these records at the anchors it supports. An empty `target` is the window's notice area.
+
+Use stable target IDs for sections and controls. Show all applicable notices with their source. A control is
+unavailable when any record for it sets `disabled`. Make the control non-interactive in this case and keep its
+reasons and any actions usable. The setting value is still owned by the existing settings service.
+
+On an explicit action click, call `Activate(window, owner, id)`. The host resolves the current registration and
+checks its owner's current permissions before dispatch. It returns false if the action is unavailable.
+
+Stock Modern and Gamepad Options use `OptionsWindow` with a window notice area, `section:display`,
+`section:graphics`, `section:nameplates` and `setting:<id>` for supported option rows. Future presenters can use
+the same API with their own window and target IDs. See [plugin windows](plugins.md#adding-to-a-packs-window) for
+registration APIs.
+
 ## Owned method hooks
 
 API 1.3 adds `hs.UI.hooks.Register(method, phase, callback[, options])`, `Remove(handle)` and `List([method])` within

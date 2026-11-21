@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 
+#include "hailstone_ui_contribution.h"
+
 namespace hailstone::plugin {
 
 namespace {
@@ -10,6 +12,26 @@ bool iequal(std::string_view a, std::string_view b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
                return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
            });
+}
+
+bool identifier(std::string_view value, std::size_t limit) {
+    return !value.empty() && value.size() <= limit && std::ranges::all_of(value, [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+               c == '_' || c == '.' || c == ':' || c == '-';
+    });
+}
+
+bool display_text(std::string_view value, std::size_t limit) {
+    return value.size() <= limit && value.find_first_not_of(' ') != std::string_view::npos &&
+           std::ranges::all_of(value, [](unsigned char c) { return c >= 32 && c != 127; });
+}
+
+std::optional<std::string_view> sdk_string(const char* data, std::size_t limit) {
+    if (!data) return std::string_view{};
+    std::size_t length = 0;
+    while (length <= limit && data[length] != '\0') ++length;
+    if (length > limit) return std::nullopt;
+    return std::string_view{data, length};
 }
 } // namespace
 
@@ -49,12 +71,16 @@ const UiValue* UiValue::field(std::string_view key) const {
 }
 
 std::string UiBridge::owner_tag(Kind kind, std::string_view name) {
-    return std::string(kind == Kind::Plugin ? "plugin:" : "script:") + std::string(name);
+    std::string_view prefix = "plugin:";
+    if (kind == Kind::Script) prefix = "script:";
+    if (kind == Kind::Upscaler) prefix = "upscaler:";
+    return std::string(prefix) + std::string(name);
 }
 
 std::optional<std::pair<UiBridge::Kind, std::string>> UiBridge::parse_tag(std::string_view tag) {
     if (tag.starts_with("plugin:")) return std::pair{Kind::Plugin, std::string(tag.substr(7))};
     if (tag.starts_with("script:")) return std::pair{Kind::Script, std::string(tag.substr(7))};
+    if (tag.starts_with("upscaler:")) return std::pair{Kind::Upscaler, std::string(tag.substr(9))};
     return std::nullopt;
 }
 
@@ -147,6 +173,86 @@ bool UiBridge::add_menu(MenuEntry e) {
     return true;
 }
 
+bool UiBridge::set_contribution(Contribution entry) {
+    if (entry.plugin.empty() || !identifier(entry.id, kMaxContributionIdBytes) ||
+        !identifier(entry.window, kMaxContributionWindowBytes) ||
+        (!entry.target.empty() && !identifier(entry.target, kMaxContributionTargetBytes))) return false;
+    if (!entry.text.empty() && !display_text(entry.text, kMaxContributionTextBytes)) return false;
+    if (entry.disabled) {
+        if (entry.target.empty()) return false;
+        if (entry.text.empty()) entry.text = "This control is disabled.";
+    }
+    if (!entry.action_label.empty() || !entry.command.empty()) {
+        if (entry.kind == Kind::Upscaler || !display_text(entry.action_label, kMaxContributionActionLabelBytes) ||
+            !display_text(entry.command, kMaxContributionCommandBytes) ||
+            !entry.command.starts_with('/') || entry.command.size() < 2 || entry.command[1] == ' ') return false;
+    } else if (entry.text.empty()) {
+        return false;
+    }
+
+    for (auto& old : contributions_)
+        if (old.kind == entry.kind && iequal(old.plugin, entry.plugin) && old.id == entry.id) {
+            old = std::move(entry);
+            return true;
+        }
+    if (contributions_.size() >= kMaxTotalContributions ||
+        owned(contributions_, entry.kind, entry.plugin) >= kMaxContributions) return false;
+    contributions_.push_back(std::move(entry));
+    return true;
+}
+
+bool UiBridge::set_contribution_from_sdk(std::string_view plugin, const HailstoneUiContribution* entry, Kind kind) {
+    constexpr auto prefix_size = offsetof(HailstoneUiContribution, command) + sizeof(HailstoneUiContribution::command);
+    if (!entry || entry->size < prefix_size ||
+        (entry->flags & ~HAILSTONE_UI_CONTRIBUTION_DISABLED)) return false;
+    Contribution contribution;
+    contribution.plugin = plugin;
+    contribution.kind = kind;
+    contribution.disabled = (entry->flags & HAILSTONE_UI_CONTRIBUTION_DISABLED) != 0;
+    struct Field { const char* source; std::size_t limit; std::string& destination; };
+    const Field fields[] = {
+        {entry->id, kMaxContributionIdBytes, contribution.id},
+        {entry->window, kMaxContributionWindowBytes, contribution.window},
+        {entry->target, kMaxContributionTargetBytes, contribution.target},
+        {entry->text, kMaxContributionTextBytes, contribution.text},
+        {entry->action_label, kMaxContributionActionLabelBytes, contribution.action_label},
+        {entry->command, kMaxContributionCommandBytes, contribution.command},
+    };
+    for (const auto& field : fields) {
+        auto value = sdk_string(field.source, field.limit);
+        if (!value) return false;
+        field.destination = *value;
+    }
+    return set_contribution(std::move(contribution));
+}
+
+bool UiBridge::remove_contribution(std::string_view plugin, std::string_view id, Kind kind) {
+    return std::erase_if(contributions_, [&](const Contribution& entry) {
+        return entry.kind == kind && iequal(entry.plugin, plugin) && entry.id == id;
+    }) != 0;
+}
+
+bool UiBridge::remove_contribution_from_sdk(std::string_view plugin, const char* id, Kind kind) {
+    const auto key = sdk_string(id, kMaxContributionIdBytes);
+    return key && !key->empty() && remove_contribution(plugin, *key, kind);
+}
+
+void UiBridge::remove_contributions(std::string_view plugin, Kind kind) {
+    std::erase_if(contributions_, [&](const Contribution& entry) {
+        return entry.kind == kind && iequal(entry.plugin, plugin);
+    });
+}
+
+const UiBridge::Contribution* UiBridge::find_contribution(std::string_view window, std::string_view owner,
+                                                         std::string_view id) const {
+    auto tag = parse_tag(owner);
+    if (!tag) return nullptr;
+    const auto match = std::ranges::find_if(contributions_, [&](const Contribution& entry) {
+        return entry.window == window && entry.id == id && entry.kind == tag->first && iequal(entry.plugin, tag->second);
+    });
+    return match == contributions_.end() ? nullptr : &*match;
+}
+
 void UiBridge::set_folder(const std::string& plugin, std::filesystem::path folder, Kind kind) {
     const std::string tag = owner_tag(kind, plugin);
     for (auto& [p, f] : folders_)
@@ -163,6 +269,7 @@ void UiBridge::remove(std::string_view plugin, Kind kind) {
     std::erase_if(functions_, mine);
     std::erase_if(options_, mine);
     std::erase_if(menu_, mine);
+    remove_contributions(plugin, kind);
     std::erase_if(folders_, [&](const auto& f) { return iequal(f.first, tag); });
 }
 

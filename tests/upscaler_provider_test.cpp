@@ -21,6 +21,13 @@ void touch(const std::filesystem::path& p) {
     std::filesystem::create_directories(p.parent_path());
     std::ofstream(p) << "x";
 }
+
+VKAPI_ATTR void VKAPI_CALL unused_device_function() {}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL test_device_proc_addr(VkDevice, const char*) {
+    // The example checks that these functions resolve but calls neither during create or destroy.
+    return &unused_device_function;
+}
 } // namespace
 
 TEST_CASE("upscaler provider features: added beside the client's, missing ones named") {
@@ -186,6 +193,26 @@ TEST_CASE("upscaler provider: the example loads, and its table is read") {
     HailstoneUpscalerFrame f{};
     CHECK_FALSE(p->evaluate(f));
     p->destroy();
+}
+
+TEST_CASE("upscaler provider: UI contributions exist only while the provider is created") {
+    std::string error;
+    auto provider = UpscalerProvider::load(kFixtures, "example", error);
+    REQUIRE_MESSAGE(provider, error);
+    CHECK(provider->ui_contributions().empty());
+
+    HailstoneUpscalerDevice device{};
+    device.size = sizeof(device);
+    device.get_device_proc_addr = reinterpret_cast<void*>(&test_device_proc_addr);
+    REQUIRE(provider->create(device));
+    const auto entries = provider->ui_contributions();
+    REQUIRE(entries.size() == 1);
+    REQUIRE(entries[0] != nullptr);
+    CHECK(std::string_view(entries[0]->window) == "OptionsWindow");
+    CHECK(std::string_view(entries[0]->target) == "section:graphics");
+
+    provider->destroy();
+    CHECK(provider->ui_contributions().empty());
 }
 
 TEST_CASE("upscaler provider: what keeps one out") {

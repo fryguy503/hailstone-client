@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Options can show notices from active add-ons and explain why a setting is unavailable. Notices from several add-ons can appear together in Modern and Gamepad.
 - Item descriptions and comparisons show named weapon procs and other item effects even when the spell ID or its local definition is unavailable.
 - Fixed Horizon Hills scenery protruding through the ground near cliffs in Trakanon's Teeth and at the Stonebrunt waterfall.
 - A GM's /kill now drops you to -10000 HP, as in the original client, until the server next updates your HP (it only played the sound and printed the line)

@@ -30,6 +30,7 @@
 #include "game/world_state.h"
 #include "mq/parse.h"
 #include "plugin/lua_keep.h"
+#include "plugin/ui_bridge.h"
 #include "net/game_connection.h"
 #include "ui/lua/lua_host.h"
 
@@ -1961,6 +1962,9 @@ void ScriptHost::policy_changed(const std::vector<std::string>& autoload) {
             m.end(s, "stopped: it may not run here");
         } else if (caps != s.caps) {
             s.caps = caps;
+            constexpr std::uint32_t needed = plugin::kCapUi | plugin::kCapExtend;
+            if ((caps & needed) != needed && m.env.ui)
+                m.env.ui->remove_contributions(s.name, plugin::UiBridge::Kind::Script);
             if (!(caps & plugin::kCapExtend)) game::clear_class_name_overrides(s.class_names_owner);
             invalidate_plugin_lifecycle(s);
             m.say(std::format("[Lua] {} now may: {}", s.name, plugin::caps_text(caps)));

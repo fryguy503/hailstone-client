@@ -10,7 +10,7 @@ does not bypass a function's own caller, screen or server-state checks.
 `API.version`, `API.Supports(module[, member])` and `API.Describe([module[, member]])`
 provide contract version and structural discovery. They confer no permissions.
 
-Coverage: **342/342 method implementation links**, **220/342 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
+Coverage: **344/344 method implementation links**, **222/344 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
 
 Unresolved method implementations: none.
 Unresolved constant implementations: none.
@@ -137,6 +137,13 @@ Unresolved constant implementations: none.
 | --- | --- | --- | --- | --- |
 | `API.compass.Markers` | `{ x, ... } = hs.CompassMarkers()   -- this client's marks on the compass (not decoded): the window x of each point`<br>`GameConnection::compass_points gives, the strips' half a pixel per degree from the centre (x 49 faces the heading;`<br>`a point to the left has a larger heading), only those within the window's 98 pixels.` | `hs.CompassMarkers` · [source](../src/app/lua_ui_misc.cpp) | none (outer gate) | closed |
 | `API.compass.Strips` | `left1, left2, w, degrees = hs.CompassStrips()   -- where CCompassWnd::OnProcessFrame puts the two strips for the`<br>`heading: x = trunc(heading * 0.3515625 - 145) + 47, wrapped below 1 by 180; the second 180 to the right. The heading`<br>`is the one the compass shows: the true heading plus its error below Sense Heading 200 (game/compass.h), so degrees`<br>`(the 4th answer) carries the error too.` | `hs.CompassStrips` · [source](../src/app/lua_ui_misc.cpp) | none (outer gate) | closed |
+
+## contributions
+
+| Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
+| --- | --- | --- | --- | --- |
+| `API.contributions.Activate` | `hs.UI.contributions.Activate(window,owner,id): resolve the current entry and run its command as the addon.` | `hs.UiContributionActivate` · [source](../src/app/lua_ui_plugins.cpp) | none (outer gate) | closed |
+| `API.contributions.List` | `hs.UI.contributions.List(window): declarative, owner-scoped data; evaluating a row never runs its command.` | `hs.UiContributionList` · [source](../src/app/lua_ui_plugins.cpp) | none (outer gate) | closed |
 
 ## cursor
 

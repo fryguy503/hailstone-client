@@ -183,6 +183,8 @@ struct UiHost {
     const mq::Registry* registry = nullptr;
     // What the plugins give the UI (plugin/ui_bridge.h; app/lua_ui_plugins.h): null without plugins.
     plugin::UiBridge* plugin_ui = nullptr;
+    // Copy the currently active render provider's UI data into the pack's contribution snapshot.
+    std::function<void(plugin::UiBridge&)> collect_upscaler_ui_contributions;
     // The server's compiled plugins waiting for the player's word (Automation::plugin_consent; hs.PluginConsent), and
     // the answer (true allow, false refuse, nullopt put away). Empty: none.
     std::function<std::optional<plugin::ConsentPrompt>()> plugin_consent;

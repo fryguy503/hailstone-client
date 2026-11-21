@@ -27,6 +27,7 @@
 #include "plugin/ui_bridge.h"
 #include "scratch_dir.h"
 #include "ui/lua/lua_host.h"
+#include "hailstone_ui_contribution.h"
 
 using namespace hailstone;
 namespace fs = std::filesystem;
@@ -207,6 +208,132 @@ TEST_CASE("Plugin UI: a plugin's menu list and clicks are its own entries") {
     CHECK(s.run("", "return #hs.PluginMenu()") == "2");
     CHECK(s.run("", "hs.PluginMenuClick(1) return 1") == "1");
     CHECK(sent == std::vector<std::string>{"/a", "/b"});
+}
+
+TEST_CASE("Plugin UI: contributions coexist across owners and activate in their current scope") {
+    using Kind = plugin::UiBridge::Kind;
+    constexpr auto required = plugin::kCapUi | plugin::kCapExtend;
+    SandboxUi s;
+    s.caps["script:Same"] = required | plugin::kCapRead;
+    s.caps["plugin:Same"] = required | plugin::kCapRead | plugin::kCapCommands;
+    s.caps["plugin:Revoked"] = plugin::kCapUi;
+    s.host.plugin_caps = [&](std::string_view owner) {
+        const auto found = s.caps.find(std::string(owner));
+        return found != s.caps.end() ? found->second : 0u;
+    };
+    REQUIRE(s.bridge.set_contribution({"Same", "overlap", "OptionsWindow", "plate_edge",
+                                       "Script notice", "", "", true, Kind::Script}));
+    REQUIRE(s.bridge.set_contribution({"Same", "overlap", "OptionsWindow", "plate_edge",
+                                       "Plugin notice", "Open settings", "/plugin-settings", true}));
+    REQUIRE(s.bridge.set_contribution({"Same", "other", "InventoryWindow", "", "Inventory notice", "", ""}));
+    REQUIRE(s.bridge.set_contribution({"Revoked", "overlap", "OptionsWindow", "plate_edge",
+                                       "Revoked notice", "Open settings", "/revoked", true}));
+    s.add_folder("script:Same");
+    s.frame();
+    CHECK(s.run("", R"(
+        local e = hs.UI.contributions.List('OptionsWindow')
+        return #e .. ' ' .. e[1].owner .. ' ' .. e[2].owner .. ' ' .. e[1].target ..
+          ' ' .. tostring(e[1].disabled and e[2].disabled) .. ' ' .. tostring(e[1].command)
+    )") == "2 plugin:Same script:Same plate_edge true nil");
+    CHECK(s.run("", "return #hs.UI.contributions.List('InventoryWindow')") == "1");
+    CHECK(s.run("script:Same", R"(
+        local e = hs.UI.contributions.List('OptionsWindow')
+        return #e .. ' ' .. e[1].owner
+    )") == "1 script:Same");
+
+    int invoked = 0;
+    s.host.submit_chat = [&](const std::string& command) {
+        ++invoked;
+        CHECK(command == "/plugin-settings");
+        CHECK(plugin::caller_name() == "plugin:Same");
+        CHECK(plugin::caller_caps() == (required | plugin::kCapRead | plugin::kCapCommands));
+        CHECK(s.bridge.remove_contribution("Same", "overlap")); // a command can withdraw its own notice
+    };
+    CHECK(s.run("script:Same", "return hs.UI.contributions.Activate('OptionsWindow','plugin:Same','overlap')") ==
+          "false");
+    CHECK(s.run("", "return hs.UI.contributions.Activate('InventoryWindow','plugin:Same','overlap')") == "false");
+    CHECK(s.run("", "return hs.UI.contributions.Activate('OptionsWindow','plugin:Revoked','overlap')") == "false");
+    CHECK(invoked == 0);
+    CHECK(s.run("", "return hs.UI.contributions.Activate('OptionsWindow','plugin:Same','overlap')") == "true");
+    CHECK(invoked == 1);
+    CHECK(s.run("", "return hs.UI.contributions.Activate('OptionsWindow','plugin:Same','overlap')") == "false");
+    CHECK(s.run("", "return #hs.UI.contributions.List('OptionsWindow')") == "1");
+    s.caps["script:Same"] = plugin::kCapUi;
+    CHECK(s.run("", "return #hs.UI.contributions.List('OptionsWindow')") == "0");
+}
+
+TEST_CASE("Plugin UI: contribution bounds and invalid updates preserve current records") {
+    using Bridge = plugin::UiBridge;
+    Bridge bridge;
+    HailstoneUiContribution native{sizeof(HailstoneUiContribution), HAILSTONE_UI_CONTRIBUTION_DISABLED,
+                                    "settings", "OptionsWindow", "plate_edge", "Managed by the addon",
+                                    "Settings", "/settings"};
+    REQUIRE(bridge.set_contribution_from_sdk("Owner", &native));
+    native.target = "";
+    CHECK_FALSE(bridge.set_contribution_from_sdk("Owner", &native));
+    native.target = "plate_edge";
+    native.text = "New reason";
+    native.command = "not a command";
+    CHECK_FALSE(bridge.set_contribution_from_sdk("Owner", &native));
+    native.command = "/settings";
+    native.flags |= 2u;
+    CHECK_FALSE(bridge.set_contribution_from_sdk("Owner", &native));
+    native.flags = HAILSTONE_UI_CONTRIBUTION_DISABLED;
+    native.size = 4;
+    CHECK_FALSE(bridge.set_contribution_from_sdk("Owner", &native));
+    native.size = sizeof(native);
+    const std::string too_long(Bridge::kMaxContributionTextBytes + 1, 'x');
+    native.text = too_long.c_str();
+    CHECK_FALSE(bridge.set_contribution_from_sdk("Owner", &native));
+    const auto* entry = bridge.find_contribution("OptionsWindow", "plugin:Owner", "settings");
+    REQUIRE(entry);
+    CHECK(entry->text == "Managed by the addon");
+    native.text = "New reason";
+    REQUIRE(bridge.set_contribution_from_sdk("Owner", &native));
+    REQUIRE(bridge.contributions().size() == 1);
+    CHECK(bridge.contributions().front().text == "New reason");
+    native.text = nullptr;
+    native.action_label = nullptr;
+    native.command = nullptr;
+    REQUIRE(bridge.set_contribution_from_sdk("Owner", &native));
+    CHECK(bridge.contributions().front().disabled);
+    CHECK(bridge.contributions().front().text == "This control is disabled.");
+
+    const std::string too_long_id(Bridge::kMaxContributionIdBytes + 1, 'x');
+    CHECK_FALSE(bridge.remove_contribution_from_sdk("Owner", too_long_id.c_str()));
+    CHECK_FALSE(bridge.remove_contribution_from_sdk("Other", "settings"));
+    CHECK(bridge.remove_contribution_from_sdk("Owner", "settings"));
+    CHECK(bridge.contributions().empty());
+    for (std::size_t i = 0; i < Bridge::kMaxContributions; ++i)
+        REQUIRE(bridge.set_contribution({"Owner", std::to_string(i), "OptionsWindow", "", "Notice", "", ""}));
+    CHECK_FALSE(bridge.set_contribution({"Owner", "extra", "OptionsWindow", "", "Notice", "", ""}));
+    CHECK(bridge.set_contribution({"Owner", "0", "OptionsWindow", "", "Updated notice", "", ""}));
+    CHECK(bridge.contributions().size() == Bridge::kMaxContributions);
+    bridge.remove("Owner");
+    CHECK(bridge.contributions().empty());
+}
+
+TEST_CASE("Plugin UI: upscaler contributions are snapshots and cannot include commands") {
+    using Bridge = plugin::UiBridge;
+    SandboxUi s;
+    bool active = true;
+    s.host.collect_upscaler_ui_contributions = [&](Bridge& snapshot) {
+        if (!active) return;
+        CHECK_FALSE(snapshot.set_contribution({"Provider", "bad", "OptionsWindow", "", "Invalid action", "Open",
+                                               "/open", false, Bridge::Kind::Upscaler}));
+        REQUIRE(snapshot.set_contribution({"Provider", "setting", "OptionsWindow", "msaa",
+                                            "The upscaler owns MSAA", "", "", true, Bridge::Kind::Upscaler}));
+    };
+    s.add_folder("plugin:Provider");
+    s.frame();
+    CHECK(s.run("", R"(
+        local e = hs.UI.contributions.List('OptionsWindow')
+        return #e .. ' ' .. e[1].owner .. ' ' .. e[1].target
+    )") == "1 upscaler:Provider msaa");
+    CHECK(s.run("plugin:Provider", "return #hs.UI.contributions.List('OptionsWindow')") == "0");
+    CHECK(s.run("", "return hs.UI.contributions.Activate('OptionsWindow','upscaler:Provider','setting')") == "false");
+    active = false;
+    CHECK(s.run("", "return #hs.UI.contributions.List('OptionsWindow')") == "0");
 }
 
 // The player's one-shot keys and requests are the pack's windows' to take: a plugin's code that asks gets nil and

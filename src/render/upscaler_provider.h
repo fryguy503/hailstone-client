@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -106,6 +107,8 @@ public:
     // checks this folder rather than mistaking the newly installed provider for the one Vulkan is using.
     const std::filesystem::path& loaded_folder() const { return loaded_folder_; }
     bool sharpens() const { return (flags_ & HAILSTONE_UPSCALER_SHARPENS) != 0; }
+    // Borrowed until the next call into the provider.
+    std::span<const HailstoneUiContribution* const> ui_contributions() const;
 
     // Each false means the provider is out (logged); the caller drops it.
     bool instance_requirements(std::vector<std::string>& extensions, std::uint32_t& min_api_version);
@@ -122,7 +125,7 @@ private:
     void log(int level, std::string_view line) const;
     static void host_log(void* host, int level, const char* line);
     // Runs one of the table's calls, catching what a C++ provider lets out: false then, logged.
-    template <class F> bool guarded(const char* what, F&& call);
+    template <class F> bool guarded(const char* what, F&& call) const;
 
     platform::SharedLibrary library_;
     const HailstoneUpscaler* table_ = nullptr;

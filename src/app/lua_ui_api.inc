@@ -107,6 +107,10 @@ UI_METHOD("CompareSlotItem", "compare", "SlotItem", 0)
 UI_METHOD("CompassMarkers", "compass", "Markers", 0)
 UI_METHOD("CompassStrips", "compass", "Strips", 0)
 
+// contributions
+UI_METHOD("UiContributionActivate", "contributions", "Activate", 0)
+UI_METHOD("UiContributionList", "contributions", "List", 0)
+
 // cursor
 UI_METHOD("CursorAttachment", "cursor", "Attachment", 0)
 UI_METHOD("ClearCursorButton", "cursor", "ClearButton", kCapActions)

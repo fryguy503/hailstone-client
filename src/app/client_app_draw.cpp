@@ -15,6 +15,7 @@
 #include <cstdlib>
 
 #include "mq/lua_mq.h"
+#include "plugin/ui_bridge.h"
 
 namespace hailstone::app::client_internal {
 
@@ -400,6 +401,11 @@ void ClientApp::update_ui_host() {
             if (conn_) conn_->preview_item_id(item_id);
         };
         h.plugin_caps = [this](std::string_view name) { return automation_ ? automation_->plugin_caps(name) : 0u; };
+        h.collect_upscaler_ui_contributions = [this](plugin::UiBridge& snapshot) {
+            if (const auto* provider = vk_.active_upscaler_provider())
+                for (const auto* entry : provider->ui_contributions())
+                    snapshot.set_contribution_from_sdk(provider->name(), entry, plugin::UiBridge::Kind::Upscaler);
+        };
         h.plugin_consent = [this]() -> std::optional<plugin::ConsentPrompt> {
             return automation_ ? automation_->plugin_consent() : std::nullopt;
         };

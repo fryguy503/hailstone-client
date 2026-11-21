@@ -2,13 +2,13 @@
 
 // What plugins give the Lua UI (docs/plugins.md "Plugin windows"): functions their Lua windows call
 // (hs.Plugin(name)), options the Options window lists (hs.PluginOptions), entries for the packs' menus
-// (hs.PluginMenu), and each plugin's folder, whose ui/<pack>/ holds its windows for each UI pack (the app hands
+// (hs.PluginMenu), stock-window contributions, and each plugin's folder, whose ui/<pack>/ holds its windows (the app hands
 // them to ui::lua::LuaUi::set_folders). Compiled plugins add theirs through the host table (plugin/native_plugins.h),
 // Lua plugins (scripts) through hailstone.ui_function and the rest (mq/lua_hailstone.cpp); everything of a plugin
 // goes when it unloads. Values cross as UiValue trees, so nothing here depends on Lua. Single threaded.
 //
-// Each entry belongs to an owner: a compiled plugin or a script, and its name. The owner's tag ("plugin:<name>",
-// "script:<name>"; owner_tag) is what its windows run as (LuaUi::caller_tag) and what its capabilities are looked up
+// Each entry belongs to an owner by kind and name. The owner's tag ("plugin:<name>", "script:<name>"; owner_tag)
+// is what its windows run as (LuaUi::caller_tag) and what its capabilities are looked up
 // by (app::Automation::plugin_caps), so a script can never take a compiled plugin's place, folder or functions by
 // naming itself after it: a registration replaces or removes only its own kind's entries. Names compare without
 // case. A lookup by a bare name ("nms", what the packs' hs.Plugin passes) finds a compiled plugin's before a
@@ -23,6 +23,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+struct HailstoneUiContribution;
 
 namespace hailstone::plugin {
 
@@ -58,8 +60,8 @@ struct UiField {
 
 class UiBridge {
 public:
-    enum class Kind : std::uint8_t { Plugin, Script };
-    // "plugin:<name>" / "script:<name>".
+    enum class Kind : std::uint8_t { Plugin, Script, Upscaler };
+    // "plugin:<name>" / "script:<name>" / "upscaler:<name>" (the latter owns contributions only).
     static std::string owner_tag(Kind kind, std::string_view name);
     // A tag's kind and name; nullopt for a bare name.
     static std::optional<std::pair<Kind, std::string>> parse_tag(std::string_view tag);
@@ -73,6 +75,14 @@ public:
     static constexpr std::size_t kMaxFunctions = 256;
     static constexpr std::size_t kMaxOptions = 64;
     static constexpr std::size_t kMaxMenuEntries = 32;
+    static constexpr std::size_t kMaxContributions = 32;
+    static constexpr std::size_t kMaxTotalContributions = 256;
+    static constexpr std::size_t kMaxContributionIdBytes = 128;
+    static constexpr std::size_t kMaxContributionWindowBytes = 128;
+    static constexpr std::size_t kMaxContributionTargetBytes = 128;
+    static constexpr std::size_t kMaxContributionTextBytes = 1024;
+    static constexpr std::size_t kMaxContributionActionLabelBytes = 128;
+    static constexpr std::size_t kMaxContributionCommandBytes = 512;
     struct Option {
         std::string plugin, name, label;
         int min = 0, max = 1; // max 1: a switch; else a slider
@@ -83,6 +93,12 @@ public:
     };
     struct MenuEntry {
         std::string plugin, label, command; // the command line run when it is chosen
+        Kind kind = Kind::Plugin;
+        std::string owner() const { return owner_tag(kind, plugin); }
+    };
+    struct Contribution {
+        std::string plugin, id, window, target, text, action_label, command;
+        bool disabled = false;
         Kind kind = Kind::Plugin;
         std::string owner() const { return owner_tag(kind, plugin); }
     };
@@ -105,6 +121,16 @@ public:
     bool add_menu(MenuEntry e);
     const std::vector<MenuEntry>& menu() const { return menu_; }
 
+    // Replaces an entry by owner and id. An invalid update leaves its previous entry intact.
+    bool set_contribution(Contribution entry);
+    bool set_contribution_from_sdk(std::string_view plugin, const HailstoneUiContribution* entry,
+                                   Kind kind = Kind::Plugin);
+    bool remove_contribution(std::string_view plugin, std::string_view id, Kind kind = Kind::Plugin);
+    bool remove_contribution_from_sdk(std::string_view plugin, const char* id, Kind kind = Kind::Plugin);
+    void remove_contributions(std::string_view plugin, Kind kind = Kind::Plugin);
+    const std::vector<Contribution>& contributions() const { return contributions_; }
+    const Contribution* find_contribution(std::string_view window, std::string_view owner, std::string_view id) const;
+
     // The owner's folder: its windows are in <folder>/ui/<pack>/. folders() lists them by owner tag (the tag their
     // windows run as).
     void set_folder(const std::string& plugin, std::filesystem::path folder, Kind kind = Kind::Plugin);
@@ -123,6 +149,7 @@ private:
     std::vector<Function> functions_;
     std::vector<Option> options_;
     std::vector<MenuEntry> menu_;
+    std::vector<Contribution> contributions_;
     std::vector<std::pair<std::string, std::filesystem::path>> folders_;
 };
 

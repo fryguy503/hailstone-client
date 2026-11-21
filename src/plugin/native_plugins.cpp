@@ -1031,6 +1031,7 @@ void h_set_active(void* h, int active) {
             l.world_ready = false;
             l.host->world_geometry.retire(l.owner);
             remove_nameplates(l);
+            if (l.host->env.ui) l.host->env.ui->remove_contributions(l.name);
         }
     }
 }
@@ -1234,6 +1235,21 @@ int h_add_menu(void* h, const char* label, const char* command) {
     Loaded& l = Loaded::of(h);
     if (!label || !*label || !command || !*command || !l.host->env.ui || !may_ui(l, "add_menu")) return 0;
     return l.host->env.ui->add_menu({l.name, label, command}) ? 1 : 0;
+}
+
+int h_set_ui_contribution(void* h, const HailstoneUiContribution* entry) {
+    auto& l = Loaded::of(h);
+    constexpr std::uint32_t needed = kCapUi | kCapExtend;
+    if (!l.can(needed)) {
+        l.denied("set_ui_contribution", needed);
+        return 0;
+    }
+    return l.active && !l.unload_pending && l.host->env.ui && l.host->env.ui->set_contribution_from_sdk(l.name, entry);
+}
+
+int h_remove_ui_contribution(void* h, const char* id) {
+    auto& l = Loaded::of(h);
+    return l.host->env.ui && l.can(kCapUi | kCapExtend) && l.host->env.ui->remove_contribution_from_sdk(l.name, id);
 }
 
 // The plugin's folder: plugins/<name>/ when its binary is there, else plugins/<name>/ beside the binary.
@@ -3362,6 +3378,8 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.nameplate_measure_text = main_only<h_nameplate_measure_text>;
     p.table.nameplate_spell_icon = main_only<h_nameplate_spell_icon>;
     p.table.get_spells_data_bulk = main_only<h_get_spells_data_bulk>;
+    p.table.set_ui_contribution = main_only<h_set_ui_contribution>;
+    p.table.remove_ui_contribution = main_only<h_remove_ui_contribution>;
     Hooks& hooks = *m.env.hooks;
     Loaded* lp = &p;
     // Each callback runs with the plugin's capabilities and counts as the plugin being busy (no unloading under it).
@@ -3502,6 +3520,7 @@ bool NativePlugins::unload_file(std::string_view name) {
     if (it == m.loaded.end()) return false;
     if ((*it)->busy) { // the plugin asked from its own code: not under its feet
         (*it)->unload_pending = true;
+        if (m.env.ui) m.env.ui->remove_contributions((*it)->name);
         return true;
     }
     std::unique_ptr<Loaded> l = std::move(*it);
@@ -3551,6 +3570,7 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
         }
         // No longer allowed windows: its Lua windows, functions, options and menu entries go.
         if (!l->can(kCapUi) && m.env.ui) m.env.ui->remove(l->name);
+        else if (!l->can(kCapExtend) && m.env.ui) m.env.ui->remove_contributions(l->name);
         // No longer allowed its own connections: they close (tcp_state -1 from now on).
         if (!l->can(kCapNet)) l->tcp.clear();
     }

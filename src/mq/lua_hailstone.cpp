@@ -5,6 +5,7 @@
 //   packets: hailstone.on_packet(stream, direction, opcode, fn), hailstone.send_packet(stream, opcode, data)
 //   ui:      hailstone.ui_function(name, fn), hailstone.option{...}, hailstone.menu(label, command), and the
 //            script folder's ui/<pack>/ windows
+//   ui, extend: hailstone.ui_contribution{...}, hailstone.remove_ui_contribution(id)
 //   read:    hailstone.player(), spawn(id), spawns(), spell(id), item(slot), buff(i), xtarget(i), eqstr(id, ...),
 //            zone_name(id), autoskill_list(), alt_abilities()
 //   actions: hailstone.right_click_item(slot [, class]), close_spell_book(), clear_spell_recovery(),
@@ -23,6 +24,7 @@
 #include <ctime>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <imgui.h>
@@ -688,6 +690,8 @@ int l_set_active(lua_State* L) {
     Script& s = Script::of(L);
     if (s.active != (lua_toboolean(L, 1) != 0)) invalidate_plugin_lifecycle(s);
     s.active = lua_toboolean(L, 1) != 0;
+    if (!s.active && s.social < 0 && s.host->env.ui)
+        s.host->env.ui->remove_contributions(s.name, plugin::UiBridge::Kind::Script);
     ensure_extension(s);
     return 0;
 }
@@ -997,6 +1001,64 @@ int l_menu(lua_State* L) {
                           static_cast<int>(plugin::UiBridge::kMaxMenuEntries));
     s.registered = true;
     return 0;
+}
+
+// Leave raw field values on the stack to root their strings until the bridge copies them.
+std::optional<std::string_view> contribution_field(lua_State* L, const char* key, std::size_t max_bytes) {
+    lua_pushstring(L, key);
+    const int type = lua_rawget(L, 1);
+    if (type == LUA_TNIL) return std::string_view{};
+    if (type != LUA_TSTRING) return std::nullopt;
+    std::size_t bytes = 0;
+    const char* value = lua_tolstring(L, -1, &bytes);
+    if (bytes > max_bytes) return std::nullopt;
+    return std::string_view{value, bytes};
+}
+
+int l_ui_contribution(lua_State* L) {
+    need_caps(L, plugin::kCapUi | plugin::kCapExtend, "hailstone.ui_contribution");
+    no_social(L, "hailstone.ui_contribution");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    using Bridge = plugin::UiBridge;
+    const auto id = contribution_field(L, "id", Bridge::kMaxContributionIdBytes);
+    const auto window = contribution_field(L, "window", Bridge::kMaxContributionWindowBytes);
+    const auto target = contribution_field(L, "target", Bridge::kMaxContributionTargetBytes);
+    const auto text = contribution_field(L, "text", Bridge::kMaxContributionTextBytes);
+    const auto action_label = contribution_field(L, "action_label", Bridge::kMaxContributionActionLabelBytes);
+    const auto command = contribution_field(L, "command", Bridge::kMaxContributionCommandBytes);
+    lua_pushliteral(L, "disabled");
+    const int flag_type = lua_rawget(L, 1);
+    const bool disabled = lua_toboolean(L, -1) != 0;
+    Script& s = Script::of(L);
+    bool added = false;
+    if (s.active && !s.stop_requested && s.host->env.ui && id && window && target && text && action_label && command &&
+        (flag_type == LUA_TNIL || flag_type == LUA_TBOOLEAN)) {
+        plugin::cxx_guard(L, [&] {
+            added = s.host->env.ui->set_contribution({s.name, std::string(*id), std::string(*window),
+                std::string(*target), std::string(*text), std::string(*action_label), std::string(*command),
+                disabled, Bridge::Kind::Script});
+        });
+    }
+    if (added) s.registered = true;
+    lua_pushboolean(L, added);
+    return 1;
+}
+
+int l_remove_ui_contribution(lua_State* L) {
+    need_caps(L, plugin::kCapUi | plugin::kCapExtend, "hailstone.remove_ui_contribution");
+    no_social(L, "hailstone.remove_ui_contribution");
+    luaL_checktype(L, 1, LUA_TSTRING);
+    std::size_t bytes = 0;
+    const char* id = lua_tolstring(L, 1, &bytes);
+    Script& s = Script::of(L);
+    bool removed = false;
+    if (bytes <= plugin::UiBridge::kMaxContributionIdBytes && s.host->env.ui) {
+        plugin::cxx_guard(L, [&] {
+            removed = s.host->env.ui->remove_contribution(s.name, {id, bytes}, plugin::UiBridge::Kind::Script);
+        });
+    }
+    lua_pushboolean(L, removed);
+    return 1;
 }
 
 // ---------------------------------------------------------------- read
@@ -1619,6 +1681,8 @@ void register_hailstone(lua_State* L) {
              {"ui_function", l_ui_function},
              {"option", l_option},
              {"menu", l_menu},
+             {"ui_contribution", l_ui_contribution},
+             {"remove_ui_contribution", l_remove_ui_contribution},
              {"player", l_player},
              {"spawn", l_spawn},
              {"spawns", l_spawns},

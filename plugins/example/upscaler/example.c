@@ -147,6 +147,17 @@ static void destroy(void* host) {
     g_blit = NULL;
 }
 
+static uint32_t ui_contributions(void* host, const HailstoneUiContribution* const** entries) {
+    (void)host;
+    static const HailstoneUiContribution notice = {
+        sizeof(HailstoneUiContribution), 0, "linear-blit", "OptionsWindow", "section:graphics",
+        "The example upscaler uses a linear blit.", NULL, NULL,
+    };
+    static const HailstoneUiContribution* const notices[] = {&notice};
+    *entries = notices;
+    return 1;
+}
+
 static const HailstoneUpscaler g_table = {
     EXAMPLE_ABI,
     sizeof(HailstoneUpscaler),
@@ -159,6 +170,7 @@ static const HailstoneUpscaler g_table = {
     resize,
     evaluate,
     destroy,
+    ui_contributions,
 };
 
 HAILSTONE_UPSCALER_API const HailstoneUpscaler* hailstone_upscaler(const HailstoneUpscalerHost* host) {

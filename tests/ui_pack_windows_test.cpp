@@ -51,6 +51,7 @@
 #include "app/web_service.h"
 #include "mq/lua_mq.h"
 #include "plugin/policy.h"
+#include "plugin/ui_bridge.h"
 #include "web/browser_host.h"
 
 using namespace hailstone;
@@ -5612,21 +5613,35 @@ TEST_CASE("UI packs (modern): the Options window's Textures section picks the te
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("UI packs: Options changes the Find trail style and invisibility brackets") {
+TEST_CASE("UI packs: Options changes the Find trail style and respects addon contributions to name plates") {
     for (const char* pack : {"modern", "gamepad"}) {
-        INFO(pack);
+        INFO(std::string(pack));
         test::ScratchDir scratch("ui_pack_display_options");
         const fs::path dir = scratch.path();
         fs::create_directories(dir / "game");
         fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
                  fs::copy_options::recursive);
-        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGuiContext* prior_context = ImGui::GetCurrentContext();
+        auto destroy_context = [prior_context](ImGuiContext* context) {
+            ImGui::DestroyContext(context);
+            ImGui::SetCurrentContext(prior_context);
+        };
+        std::unique_ptr<ImGuiContext, decltype(destroy_context)> ctx(ImGui::CreateContext(), destroy_context);
+        ImGui::SetCurrentContext(ctx.get());
         ImGui::GetIO().IniFilename = nullptr;
         unsigned char* pixels = nullptr;
         int width = 0, height = 0;
         ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
         {
+            plugin::UiBridge bridge;
             Session s(dir, pack);
+            s.host.plugin_ui = &bridge;
+            s.host.plugin_caps = [](std::string_view owner) {
+                return owner == "plugin:captions" || owner == "plugin:visibility"
+                    ? plugin::kCapUi | plugin::kCapExtend : 0u;
+            };
+            std::vector<std::pair<std::string, std::string>> actions;
+            s.host.submit_chat = [&](const std::string& line) { actions.emplace_back(plugin::caller_name(), line); };
             int selected = 0;
             int brackets = 0;
             std::vector<int> changes;
@@ -5649,10 +5664,29 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
             // Record real control coordinates without changing their activation or rendering.
             REQUIRE(luaL_dostring(L, R"lua(
                 widgets = {}
+                -- Keep the fixture's settings and the two notices in the Gamepad list's visible rows.
+                local supports = hs.UI.Supports
+                hs.UI.Supports = function(module, member)
+                    return (module ~= "interfaces" or member ~= "Status") and supports(module, member)
+                end
                 local combo, selectable, checkbox, text = ui.BeginCombo, ui.Selectable, ui.Checkbox, ui.DrawText
+                local button, wrapped = ui.Button, ui.TextWrapped
+                local buttons = { ["Open caption settings"] = "action", ["Open visibility settings"] = "visibility action" }
+                local notices = { ["captions: Captions are active."] = "section notice",
+                    ["captions: Captions own the brackets."] = "captions reason",
+                    ["visibility: Visibility owns the brackets."] = "visibility reason" }
                 local function record(name)
                     local x0, y0, x1, y1 = ui.GetItemRect()
                     widgets[name] = { (x0 + x1) / 2, (y0 + y1) / 2 }
+                end
+                ui.Button = function(label, ...)
+                    local clicked = button(label, ...)
+                    if buttons[label] then record(buttons[label]) end
+                    return clicked
+                end
+                ui.TextWrapped = function(label, ...)
+                    wrapped(label, ...)
+                    if notices[label] then record(notices[label]) end
                 end
                 ui.BeginCombo = function(label, ...)
                     local open = combo(label, ...)
@@ -5673,11 +5707,11 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
                 end
                 ui.DrawText = function(...)
                     local label = select(7, ...)
-                    if label == "Interface" or label == "Find trail"
-                        or label == "Bracket Invis vs. Undead" then
+                    local key = notices[label] or buttons[label]
+                    if key or label == "Interface" or label == "Find trail" or label == "Bracket Invis vs. Undead" then
                         local x, y = ...
                         local w, h = ui.CalcTextSize(label)
-                        widgets[label] = { x + w / 2, y + h / 2 }
+                        widgets[key or label] = { x + w / 2, y + h / 2 }
                     end
                     return text(...)
                 end
@@ -5687,7 +5721,7 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
             auto point = [&](const char* name) {
                 lua_getglobal(L, "widgets");
                 lua_getfield(L, -1, name);
-                REQUIRE_MESSAGE(lua_istable(L, -1), name);
+                REQUIRE_MESSAGE(lua_istable(L, -1), std::string(name));
                 lua_rawgeti(L, -1, 1);
                 const float x = static_cast<float>(lua_tonumber(L, -1));
                 lua_pop(L, 1);
@@ -5739,9 +5773,52 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
             click(point("Bracket Invis vs. Undead"));
             CHECK(brackets == 0);
             CHECK(bracket_changes == std::vector<int>{1, 0});
+
+            REQUIRE(bridge.set_contribution({"captions", "status", "OptionsWindow", "section:nameplates",
+                                             "Captions are active.", {}, {}}));
+            REQUIRE(bridge.set_contribution({"captions", "brackets", "OptionsWindow", "setting:show_invis_undead",
+                                             "Captions own the brackets.", "Open caption settings", "/captions", true}));
+            REQUIRE(bridge.set_contribution({"visibility", "brackets", "OptionsWindow", "setting:show_invis_undead",
+                                             "Visibility owns the brackets.", "Open visibility settings", "/visibility", true}));
+            s.frames(3);
+            CHECK(point("section notice").y < point("Bracket Invis vs. Undead").y);
+            CHECK(point("captions reason").y < point("visibility reason").y);
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(bracket_changes == std::vector<int>{1, 0});
+            click(point("action"));
+            CHECK(actions == std::vector<std::pair<std::string, std::string>>{{"plugin:captions", "/captions"}});
+
+            if (std::string_view(pack) == "modern") {
+                click(point("combo"));
+                click(point("rainbow"));
+            } else {
+                click(point("Find trail"));
+            }
+            CHECK(selected == 1);
+
+            // Releasing a click after its notice disappears must not run the action that moved into its row.
+            const auto removed_action = point("action");
+            auto& io = ImGui::GetIO();
+            io.AddMousePosEvent(removed_action.x, removed_action.y);
+            s.frames(1);
+            io.AddMouseButtonEvent(0, true);
+            s.frames(1);
+            REQUIRE(bridge.remove_contribution("captions", "brackets"));
+            s.frames(3);
+            io.AddMouseButtonEvent(0, false);
+            s.frames(3);
+            REQUIRE(actions.size() == 1);
+            click(point("visibility action"));
+            REQUIRE(actions.size() == 2);
+            CHECK(actions.back() == std::pair<std::string, std::string>{"plugin:visibility", "/visibility"});
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(bracket_changes == std::vector<int>{1, 0});
+            REQUIRE(bridge.remove_contribution("visibility", "brackets"));
+            s.frames(3);
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(bracket_changes == std::vector<int>{1, 0, 1});
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
-        ImGui::DestroyContext(ctx);
     }
 }
 

@@ -270,6 +270,9 @@ public:
     // The upscaler provider that made it through the device's creation (SceneOptions::upscaler External runs it), or
     // null.
     const UpscalerProvider* upscaler_provider() const { return provider_.get(); }
+    const UpscalerProvider* active_upscaler_provider() const {
+        return scene_options_.upscaler == Upscaler::External && !provider_failed_ ? provider_.get() : nullptr;
+    }
     // The temporal upscaler runs (SceneOptions::upscaler Taa, Fsr3 or External, its targets made).
     bool temporal() const { return lit_.image != VK_NULL_HANDLE; }
     // Frame generation runs (SceneOptions::frame_gen under a temporal upscaler, its images made).

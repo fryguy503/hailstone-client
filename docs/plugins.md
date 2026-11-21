@@ -1501,6 +1501,42 @@ end)
 
 #### Adding to a pack's window
 
+**Notices and unavailable settings.** Add-ons with `ui` and `extend` may contribute a notice or disable an
+individual control at a location supported by the interface. The interface renders the text and attributes it to
+the add-on. A setting stays disabled for as long as any active contribution disables it; each add-on can update
+or remove only its own contribution. Saved values are retained. These are UI controls, so programmatic setting
+changes and the game's own settings logic still use their usual rules.
+
+```lua
+local hs = require('hailstone')
+if hs.ui_contribution then
+    hs.ui_contribution{
+        id = 'nameplate-settings',
+        window = 'OptionsWindow',
+        target = 'section:nameplates',
+        text = 'Use the add-on settings to customize these nameplates.',
+        action_label = 'Open settings',
+        command = '/myaddon settings',
+    }
+end
+-- When the feature becomes inactive:
+if hs.remove_ui_contribution then hs.remove_ui_contribution('nameplate-settings') end
+```
+
+- `id` identifies a contribution within its owner. Calling `ui_contribution` again with the same ID replaces it.
+  Unloading, deactivating or losing `ui` or `extend` removes the owner's contributions.
+- Omit `target` for a window notice. Stock Options also presents `section:display`, `section:graphics`,
+  `section:nameplates`, and `setting:<id>` for supported controls. The IDs are the setting keys the Options scripts
+  pass to `hs.UI.settings.Option`, such as `setting:render_scale` and `setting:target_plate_highlight`.
+- Set `disabled = true` for a supported individual control. Supply `text` for a custom explanation or omit it to use
+  the stock one. An optional action supplies
+  both `action_label` and a slash `command`. The player's activation dispatches the command with the add-on's
+  current capabilities, as with its Plugins menu entries.
+- Native plugins use `set_ui_contribution` and `remove_ui_contribution`, appended to ABI 3. Check
+  `HAILSTONE_HOST_HAS(host, set_ui_contribution)` and use the sized `HailstoneUiContribution` record from
+  `sdk/hailstone_ui_contribution.h`. The host copies the strings during registration. See
+  [the pack API](ui-api.md#ui-contributions) for the presenter contract.
+
 Some pack windows live in a library that takes the plugin's part, so a plugin adds to them without copying.
 
 **Pet.** Both packs (`ui/<pack>/lib/pet.lua`; each file's head lists its options).
@@ -1761,8 +1797,9 @@ feature structs; a core feature goes in through its core field. An extension fea
 (`VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT`, which XeSS needs) goes in as the provider's own struct added to
 the chain, valid until `create`; the provider checks its support itself.
 
-A 0 or NULL from any call, or an exception, drops the provider; the client falls back to FSR 3.1 (or its own temporal
-upscaler where the GPU cannot run FSR 3.1) and logs why. A failed `evaluate` drops it from the next frame.
+A 0 or NULL from a required call, or an exception there, drops the provider; the client falls back to FSR 3.1
+(or its own temporal upscaler where the GPU cannot run FSR 3.1) and logs why. A failed `evaluate` drops it from
+the next frame.
 
 **A frame** (`HailstoneUpscalerFrame`). Images cross as integers (`VkImage` and `VkImageView` as `uint64_t`; formats,
 layouts and usage as `uint32_t`), each with size, usage, aspect and current layout:
@@ -1785,6 +1822,12 @@ layouts and usage as `uint32_t`), each with size, usage, aspect and current layo
 
 **Compatibility.** Every table carries its size and only grows at its end (`HAILSTONE_UPSCALER_ABI` is 1). The client
 refuses a provider built for a newer ABI.
+
+**Options notices.** An active provider may supply the optional `ui_contributions` table member. It returns the
+count of pointers to `HailstoneUiContribution` records for the current snapshot. An empty snapshot clears the
+provider's notices. The records are copied immediately and disappear on fallback. Use the same window and target
+IDs as game add-ons. The renderer provider fills `action_label` and
+`command` with `NULL`. The example below supplies a Graphics notice.
 
 **The example.** `plugins/example/upscaler/example.c` is a whole provider in plain C: it checks the GPU can blit
 RGBA16F, then linearly blits the colour to the output (no accumulation). The build puts it in

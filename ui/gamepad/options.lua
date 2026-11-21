@@ -14,8 +14,68 @@ local C = T.C
 
 local OW = "OptionsWindow"
 
+local function contributedRows(rows, targets)
+  local groups, result = {}, {}
+  local activate = API.Supports("contributions", "Activate") and API.contributions.Activate or nil
+  if API.Supports("contributions", "List") then
+    for _, item in ipairs(API.contributions.List(OW)) do
+      local group = groups[item.target] or {}
+      groups[item.target] = group
+      group[#group + 1] = item
+      group.disabled = group.disabled or item.disabled
+    end
+  end
+
+  local function addNotices(group)
+    if not group then return end
+    for _, item in ipairs(group) do
+      local text = item.text ~= "" and (item.plugin .. ": " .. item.text) or item.plugin
+      local action = activate and item.action_label ~= "" and item.action_label or nil
+      result[#result + 1] = { note = text, action = action, contribution = item,
+        key = "notice:" .. #item.owner .. ":" .. item.owner .. item.id }
+    end
+  end
+
+  addNotices(groups[""])
+  for _, target in ipairs(targets or {}) do addNotices(groups[target]) end
+  for _, r in ipairs(rows) do
+    if r.section then
+      addNotices(groups[r.section])
+    else
+      local group = r.option and groups["setting:" .. r.option]
+      if group and group.disabled then
+        r.disabled, r[3] = true, nil
+      end
+      result[#result + 1] = r
+      addNotices(group)
+    end
+  end
+  return result
+end
+
+local function drawNoticeRow(row, x0, y0, x1, y1, focused)
+  local left, right = x0 + T.px(18), x1 - T.px(18)
+  local endText = right
+  local displayAction
+  if row.action then
+    displayAction = T.fit(row.action, (right - left) * 0.32)
+    local width = ui.CalcTextSize(displayAction)
+    T.textIn(right - width, y0, right, y1, displayAction, C.accent, 1)
+    endText = right - width - T.px(18)
+  end
+  local text = T.fit(row.note, endText - left)
+  T.textIn(left, y0, endText, y1, text, C.text, 0)
+  if (text ~= row.note or displayAction ~= row.action) and (focused or ui.IsItemHovered()) and ui.BeginTooltip() then
+    ui.PushTextWrapPos(T.px(500))
+    ui.TextWrapped(row.note)
+    if row.action then ui.TextWrapped(row.action) end
+    ui.PopTextWrapPos()
+    ui.EndTooltip()
+  end
+end
+
 -- ---------------------------------------------------------------- rows
--- A row: { label, value text, change(dir) } where dir is +1 / -1; nil change: read only. `note`: dim text.
+-- A row: { label, value text, change(dir), option = stock key } where dir is +1 / -1; nil change: read only.
 local function gamepadRow(label, name, lo, hi, step, fmt)
   local v = pad.setting(name)
   if v == nil then return nil end
@@ -33,17 +93,20 @@ local function optionRow(label, name, choices, values)
   local v = API.settings.Option(name)
   if v == nil then return nil end
   if choices == "bool" then
-    return { label, v ~= 0 and "On" or "Off", function() API.settings.SetOption(name, v ~= 0 and 0 or 1) end }
+    return { label, v ~= 0 and "On" or "Off", function() API.settings.SetOption(name, v ~= 0 and 0 or 1) end,
+      option = name }
   elseif type(choices) == "table" and type(choices[1]) ~= "number" then -- names (a range starts with a number)
     local idx = 1
     for i = 1, #choices do if (values and values[i] or (i - 1)) == v then idx = i end end
     return { label, choices[idx] or tostring(v), function(dir)
       local n = (idx - 1 + dir) % #choices + 1
       API.settings.SetOption(name, values and values[n] or (n - 1))
-    end }
+    end, option = name }
   else -- a number range { lo, hi, step, suffix }
     local r = choices
-    return { label, tostring(v) .. (r[4] or ""), function(dir) API.settings.SetOption(name, math.max(r[1], math.min(r[2], v + dir * r[3]))) end }
+    return { label, tostring(v) .. (r[4] or ""), function(dir)
+      API.settings.SetOption(name, math.max(r[1], math.min(r[2], v + dir * r[3])))
+    end, option = name }
   end
 end
 
@@ -58,7 +121,7 @@ local function lightTweaksRow()
     local n
     if v < presets then n = (v + dir) % presets else n = dir > 0 and 0 or presets - 1 end
     API.settings.SetOption("light_tweaks", n)
-  end }
+  end, option = "light_tweaks" }
 end
 
 -- The Upscaler row's choices: the client's four, then the upscaler add-ons installed (render/temporal.h
@@ -78,7 +141,7 @@ local function upscaleQualityRow()
   return { "Upscale quality", names[v + 1] or "Custom", function(dir)
     local n = v >= 5 and (dir > 0 and 0 or 4) or (v + dir) % 5
     API.settings.SetOption("upscale_quality", n)
-  end }
+  end, option = "upscale_quality" }
 end
 
 -- The graphics this computer suits (render/graphics_tier.h: 0 Low, 1 Medium, 2 High); A applies them again, as the
@@ -87,7 +150,8 @@ local function detectGraphicsRow()
   local tier = API.settings.Option("gpu_tier")
   if tier == nil then return nil end
   local name = ({ [0] = "Low", [1] = "Medium", [2] = "High" })[tier] or "High"
-  return { "Graphics for this computer", "Use " .. name, function() API.settings.SetOption("detect_graphics", 1) end }
+  return { "Graphics for this computer", "Use " .. name, function() API.settings.SetOption("detect_graphics", 1) end,
+    option = "detect_graphics" }
 end
 
 -- What a binding can be (docs/gamepad.md section 4), with friendly names.
@@ -235,6 +299,7 @@ local PAGES = {
     local r = optionRow("UI scale", "ui_scale", { "Automatic", "75 %", "100 %", "125 %", "150 %", "175 %", "200 %", "250 %" },
       { 0, 75, 100, 125, 150, 175, 200, 250 })
     if r then rows[#rows + 1] = r end
+    rows[#rows + 1] = { section = "section:nameplates" }
     for _, o in ipairs({ { "Player names", "pc_names" }, { "My name", "own_name" }, { "NPC names", "npc_names" },
         { "Con-coloured NPC names", "con_name_colour" }, { "Bracket Invis vs. Undead", "show_invis_undead" }, { "Highlight target name", "target_plate_highlight" }, { "Target name through walls", "target_plate_through_walls" }, { "Fade overlapping names", "plate_overlap_fade" }, { "Target ring", "show_target_ring" },
         { "Target ring cues", "target_ring_cues" }, { "Target ring through models", "target_ring_xray" },
@@ -333,7 +398,7 @@ local PAGES = {
     -- table.pack counts the nil rows (options this client lacks) too, so none past them is dropped.
     for i = 1, list.n do if list[i] then rows[#rows + 1] = list[i] end end
     return rows
-  end },
+  end, { "section:display", "section:graphics" } },
   { "Camera", function()
     -- Hailstone's isometric camera (docs/isometric.md): the iso_* options.
     local rows = {}
@@ -453,7 +518,7 @@ ui.window("Options", function()
       if W.pressed("rb") then showPage(page % #PAGES + 1) end
       local top = pageTabs(x0, y0, x1)
       ui.SetCursorPos(x0 - wx, top - wy)
-      local rows = PAGES[page][2]()
+      local rows = contributedRows(PAGES[page][2](), PAGES[page][3])
       if savedSection ~= PAGES[page][1] then
         savedSection = PAGES[page][1]
         ui.SetSetting("options.section", savedSection)
@@ -463,7 +528,8 @@ ui.window("Options", function()
       aim(lists[page], #rows, visible)
       local focusedRow = W.list("page" .. page, lists[page], #rows, visible, 56, cw, function(i, rx0, ry0, rx1, ry1, focused)
         local r = rows[i]
-        T.textIn(rx0 + T.px(18), ry0, rx0 + cw * 0.5, ry1, r[1], C.text, 0)
+        if r.note then drawNoticeRow(r, rx0, ry0, rx1, ry1, focused) return end
+        T.textIn(rx0 + T.px(18), ry0, rx0 + cw * 0.5, ry1, r[1], r.disabled and C.dim or C.text, 0)
         local vx1 = rx1 - T.px(18)
         if r[3] then -- arrows either side of the value
           T.triangle("right", vx1 - T.px(6), (ry0 + ry1) / 2, T.px(7), focused and C.accent or C.dim, 1)
@@ -478,8 +544,12 @@ ui.window("Options", function()
         if ui.IsItemClicked(ui.Mouse.Right) and r[3] then r[3](-1) end
       end, function(i)
         local r = rows[i]
-        if r.pick then picking = r.pick lists.pick = { offset = 0, want = true }
+        if r.action then API.contributions.Activate(OW, r.contribution.owner, r.contribution.id)
+        elseif r.pick then picking = r.pick lists.pick = { offset = 0, want = true }
         elseif r[3] then r[3](1) end
+      end, function(i)
+        local r = rows[i]
+        return r.key or (r.option and "setting:" .. r.option)
       end)
       if focusedRow then lists[page].last = focusedRow end
     end
