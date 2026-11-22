@@ -2019,6 +2019,91 @@ TEST_CASE("Bazaar search: the row's own Buy button, Find Trader and Hide Traders
     CHECK(t.conn.market_hides_any()); // Hide Buyers alone
 }
 
+TEST_CASE("Bazaar Find Trader guides to a verified local trader while the add-on opts in") {
+    struct GuidePolicy final : game::ServerExtension {
+        bool enabled = false;
+        game::MapPolicy map_policy(const net::GameConnection&) const override {
+            return {enabled ? static_cast<std::uint32_t>(game::MapPolicyActorGuides) : 0u, "Fixture"};
+        }
+    };
+    auto extension = std::make_shared<game::ExtensionChain>();
+    auto policy = std::make_shared<GuidePolicy>();
+    extension->add(policy);
+    net::ConnectionOptions opts;
+    opts.plugins = extension;
+    test::ScratchDir game_scratch("ui_windows_bazaar_guide");
+    GameDir game(game_scratch.path());
+    Harness t(game, opts);
+    using Access = net::GameConnectionTestAccess;
+    Access::state(t.conn) = net::ConnectionState::InZone;
+    net::NewZone zone;
+    zone.zone_id = game::kBazaarZoneId;
+    Access::new_zone(t.conn) = zone;
+    auto& world = t.conn.world_for_test();
+    world.player_id = 1;
+    world.spawns[1].id = 1;
+    world.spawns[1].incarnation = 10;
+
+    net::BazaarTrader trader;
+    trader.zone_id = game::kBazaarZoneId;
+    trader.trader_id = 50;
+    trader.entity_id = 41;
+    trader.name = "Nearby";
+    t.conn.receive_zone_packet_for_test(net::encode_bazaar_add_trader(trader));
+    net::BazaarResults results;
+    net::BazaarResult result;
+    result.trader_id = trader.trader_id;
+    result.serial = "0000000000004321";
+    result.quantity = 1;
+    result.name = "Fine Steel Sword";
+    results.results.push_back(result);
+    t.conn.receive_zone_packet_for_test(net::encode(results));
+
+    constexpr auto W = "BazaarSearchWnd";
+    constexpr auto button = "BZR_FindTraderButton";
+    t.api->show(W, true);
+    REQUIRE(t.api->click_list(W, "BZR_ItemList", 0, 0));
+    CHECK(t.api->child_state(W, button)); // Stock eligibility only knows the trader list.
+    policy->enabled = true;
+    CHECK_FALSE(t.api->child_state(W, button)); // The local actor has not arrived yet.
+
+    auto& actor = world.spawns[trader.entity_id];
+    actor.id = trader.entity_id;
+    actor.incarnation = 20;
+    actor.name = "Wrong Trader";
+    actor.trader = true;
+    actor.is_npc = true; // Offline traders can be sent as NPCs.
+    CHECK_FALSE(t.api->child_state(W, button));
+    actor.name = "Nearby00";
+    CHECK(t.api->child_state(W, button));
+    trader.zone_instance = 23;
+    t.conn.receive_zone_packet_for_test(net::encode_bazaar_add_trader(trader));
+    CHECK_FALSE(t.api->child_state(W, button));
+    trader.zone_instance = 0;
+    t.conn.receive_zone_packet_for_test(net::encode_bazaar_add_trader(trader));
+
+    int guides = 0;
+    std::function<bool()> valid;
+    t.host.guide_to_actor = [&](std::uint32_t id, std::function<bool()> eligible) {
+        CHECK(id == trader.entity_id);
+        ++guides;
+        valid = std::move(eligible);
+        return valid();
+    };
+    t.conn.bazaar_set_hide_traders(true, false);
+    CHECK(t.conn.market_hidden(actor));
+    CHECK(t.api->click_child(W, button));
+    REQUIRE(guides == 1);
+    CHECK_FALSE(t.conn.market_hidden(actor));
+    CHECK_FALSE(t.api->child_state(W, button)); // Find Trader's existing cooldown.
+    CHECK(valid());
+    actor.trader = false;
+    CHECK_FALSE(valid());
+    actor.trader = true;
+    ++actor.incarnation;
+    CHECK_FALSE(valid());
+}
+
 TEST_CASE("Loot window: Link All, Loot All and Done without a loot session do nothing") {
     // Found live: a click on Link All in the frame after the server ended the session read a null session.
     const GameDir* game = test::game_dir();

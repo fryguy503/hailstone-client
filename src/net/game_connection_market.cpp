@@ -518,31 +518,57 @@ bool GameConnection::bazaar_row_buy_allowed() {
 bool GameConnection::bazaar_find_trader_enabled(int result) const {
     // CBazaarSearchWnd_UpdateButtons @0x632a40 disables the button and sets +0x256 to "the selected row's trader is
     // in this zone"; OnProcessFrame @0x6336f0 enables it to +0x256 while no find path is shown and 15 s have passed.
+    const bool local_guide = game::is_bazaar_zone(zone_id()) && server_ext().map_policy(*this).actor_guides_enabled();
     if (result < 0 || result >= static_cast<int>(bazaar_.results.size())) return false;
     auto t = bazaar_.traders.find(bazaar_.results[static_cast<std::size_t>(result)].trader_id);
     if (t == bazaar_.traders.end() || t->second.zone_id != zone_id()) return false;
+    if (local_guide && !bazaar_local_trader(t->first)) return false;
     if (path_.active()) return false;
     return !bazaar_.find_sent || eq_time() - bazaar_.last_find_ms >= kFindWaitMs;
 }
 
-void GameConnection::bazaar_find_trader(std::size_t result, bool throttled) {
+std::optional<GameConnection::ActorRef> GameConnection::bazaar_local_trader(std::uint32_t trader_id) const {
+    const auto t = bazaar_.traders.find(trader_id);
+    if (t == bazaar_.traders.end() || t->second.zone_id != zone_id() ||
+        t->second.zone_instance != zone_instance() || !t->second.entity_id || t->second.name.empty())
+        return std::nullopt;
+    const auto spawn = world_.spawns.find(t->second.entity_id);
+    if (spawn == world_.spawns.end() || !spawn->second.trader || spawn->second.is_corpse ||
+        spawn->second.hp_percent == 0 || spawn->first == world_.player_id)
+        return std::nullopt;
+    // A stale trader list must not send the shopper to someone else who now has the same spawn ID. Offline
+    // traders can be NPCs and carry a spawn-name suffix.
+    if (!iequals(spawn->second.name, t->second.name) &&
+        !game::display_name_iequals(spawn->second.name, t->second.name))
+        return std::nullopt;
+    return captureActorRef(spawn->first);
+}
+
+std::optional<GameConnection::ActorRef> GameConnection::bazaar_find_trader(std::size_t result, bool throttled) {
     // BZR_FindTraderButton (and a right click on a row's Trader column, the path then at most every 15 s): the row's
     // trader (AddItemtoList's sellerID and zoneID: the trader list's spawn id and zone) when it has a spawn id and is
     // in this zone: opcode 0x0e44 {spawn id}, PlayerPath_FindSpawnByID(spawn, 1, 0), the time and the found trader.
-    if (result >= bazaar_.results.size()) return;
+    const bool local_guide = game::is_bazaar_zone(zone_id()) && server_ext().map_policy(*this).actor_guides_enabled();
+    if (result >= bazaar_.results.size()) return std::nullopt;
     auto t = bazaar_.traders.find(bazaar_.results[result].trader_id);
-    if (t == bazaar_.traders.end()) return;
-    std::uint32_t spawn = t->second.entity_id;
-    if (spawn == 0 || t->second.zone_id != zone_id()) return;
+    if (t == bazaar_.traders.end()) return std::nullopt;
+    const auto spawn = t->second.entity_id;
+    if (spawn == 0 || t->second.zone_id != zone_id()) return std::nullopt;
+    const auto actor = local_guide ? bazaar_local_trader(t->first) : std::nullopt;
+    const bool waiting = bazaar_.find_sent && eq_time() - bazaar_.last_find_ms < kFindWaitMs;
+    if (local_guide && (!actor || (!throttled && (path_.active() || waiting)))) return std::nullopt;
     send_zone(encode_find_market_spawn(spawn));
     if (throttled) {
         bazaar_.found_trader = spawn;
-        if (bazaar_.find_sent && eq_time() - bazaar_.last_find_ms < kFindWaitMs) return;
+        if (waiting) return std::nullopt;
     }
-    if (auto it = world_.spawns.find(spawn); it != world_.spawns.end()) send_find_path(it->second, true);
+    if (!local_guide) {
+        if (auto it = world_.spawns.find(spawn); it != world_.spawns.end()) send_find_path(it->second, true);
+    }
     bazaar_.last_find_ms = eq_time();
     bazaar_.find_sent = true;
     bazaar_.found_trader = spawn;
+    return actor;
 }
 
 void GameConnection::bazaar_set_hide_traders(bool hide, bool clicked) {

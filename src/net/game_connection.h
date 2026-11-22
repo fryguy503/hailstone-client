@@ -2774,12 +2774,13 @@ public:
     // A result row's own Buy button (CBazaarSearchWnd::WndNotification, a click on the row's button): the RoF
     // expansion (eqstr 7728), no item pending; true when the row may be bought (the window then asks how many).
     bool bazaar_row_buy_allowed();
-    // Find Trader (and a right click on a row's Trader column, `throttled`): the row's trader in this zone gets
-    // opcode 0x0e44 {spawn id} and the find path (PlayerPath_FindSpawnByID(spawn, 1, 0)); the button waits 15 s.
-    void bazaar_find_trader(std::size_t result, bool throttled = false);
+    // Find Trader (and a right click on the Trader column, `throttled`): sends the market notice and usually asks
+    // the server for the path. In an opted-in Bazaar it returns the verified trader for a local visual guide.
+    std::optional<ActorRef> bazaar_find_trader(std::size_t result, bool throttled = false);
     // BZR_FindTraderButton's state (UpdateButtons and OnProcessFrame): a row whose trader is in this zone, no find
     // path shown and 15 s since the last find.
     bool bazaar_find_trader_enabled(int result) const;
+    std::optional<ActorRef> bazaar_local_trader(std::uint32_t trader_id) const;
     // Hide Traders (UI ini BazaarSearchWnd HideTraders): the flag; a click also forgets the found trader.
     void bazaar_set_hide_traders(bool hide, bool clicked);
     // PlayerZoneClient::IsInvisible @0x5a1850's market part: with Hide Traders a trader other than the one Find

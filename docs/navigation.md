@@ -406,6 +406,10 @@ type `/find` without a name. It works for selected players, NPCs and corpses. Th
 change, a despawn, death or zoning. It uses the local navigation mesh when it can reach the actor. The dashed
 direction line points toward the actor while the mesh is unavailable or has no route.
 
+**Bazaar Search.** In The Bazaar, a server add-on can enable **Find Trader** as a visual guide in both packs. Select
+an item from an active trader in your Bazaar instance. The trail follows that trader and ends if they leave trader
+mode or their spawn disappears.
+
 ### The guide path
 
 `app/guide_path.h`: a trail from the player to the NPC over the client's own mesh (`Navigator::plan_between`, the

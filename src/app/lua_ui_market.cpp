@@ -349,7 +349,7 @@ public:
         if (right) {
             // Message 3 on the list: the Trader column finds the trader (the path at most every 15 s); else with
             // Shift or Ctrl the item preview (sub_00633660), without them the inspect (Send_OP_TraderShop_00633520).
-            if (column == 7) c.bazaar_find_trader(static_cast<std::size_t>(row), true);
+            if (column == 7) find_trader(host, static_cast<std::size_t>(row), true);
             else if (flags) c.preview_item_id(c.bazaar_search_state().results[static_cast<std::size_t>(row)].item_id);
             else c.bazaar_inspect(static_cast<std::size_t>(row), io.KeyShift);
             return true;
@@ -384,8 +384,7 @@ public:
             if (selected_ >= 0 && selected_ < static_cast<int>(s.results.size()))
                 c.preview_item_id(s.results[static_cast<std::size_t>(selected_)].item_id);
         } else if (id == "BZR_FindTraderButton") {
-            if (selected_ >= 0 && selected_ < static_cast<int>(s.results.size()))
-                c.bazaar_find_trader(static_cast<std::size_t>(selected_));
+            if (selected_ >= 0) find_trader(host, static_cast<std::size_t>(selected_));
         } else if (id == "BZR_HideTradersButton") {
             hide_ = !hide_;
             c.bazaar_set_hide_traders(hide_, true);
@@ -412,6 +411,18 @@ public:
     }
 
 private:
+    void find_trader(UiHost& host, std::size_t result, bool throttled = false) {
+        auto* conn = host.conn;
+        const auto& results = conn->bazaar_search_state().results;
+        if (result >= results.size()) return;
+        const auto trader_id = results[result].trader_id;
+        if (auto actor = conn->bazaar_find_trader(result, throttled); actor && host.guide_to_actor) {
+            auto still_trading = [&host, conn, trader_id, actor = *actor] {
+                return host.conn == conn && conn->bazaar_local_trader(trader_id) == actor;
+            };
+            host.guide_to_actor(actor->id, std::move(still_trading));
+        }
+    }
     std::string* edit(std::string_view id) {
         if (id == "BZR_ItemNameInput") return &name_;
         if (id == "BZR_MaxPriceInput") return &max_price_;

@@ -257,8 +257,13 @@ ui.window("Bazaar Search", function()
         T.unfont()
       end
       ui.SetCursorPos(rx0 - wx, y1 - bh - wy)
-      M.buttons(SW, { { "BZR_BuyButton", "Buy", { primary = true, afterA = true } }, { "BZR_RequestItemButton", "Inspect" },
-        { "BZR_RequestPreviewButton", "Preview" }, { "BZR_WelcomeButton", "Welcome" } }, rx0, x1, bh)
+      local actions = { { "BZR_BuyButton", "Buy", { primary = true, afterA = true } }, { "BZR_RequestItemButton", "Inspect" },
+        { "BZR_RequestPreviewButton", "Preview" }, { "BZR_WelcomeButton", "Welcome" } }
+      local _, zone = API.map.ZoneName()
+      if zone == "bazaar" and (API.map.Policy() or {}).actor_guides == true then
+        table.insert(actions, 2, { "BZR_FindTraderButton", "Find Trader" })
+      end
+      M.buttons(SW, actions, rx0, x1, bh)
     end
   end
   if M.back(F, W.finish()) then API.windows.Show(SW, false) end
