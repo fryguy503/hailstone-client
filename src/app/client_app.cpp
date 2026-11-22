@@ -19,6 +19,7 @@ namespace client_internal {
 int ClientApp::run() {
     if (quit_) return 0; // the asset-folder picker was quit: nothing else was set up
     login_view_.version = build_version();
+    login_view_.display_version = display_version();
     start_updater();
     start_addons();
     auto last = Clock::now();

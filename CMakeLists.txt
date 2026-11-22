@@ -6,6 +6,7 @@ project(hailstone VERSION 0.7.2 LANGUAGES C CXX)
 # The release's pre-release label (SemVer: "0.1.0-alpha"); empty for a final release. With the version it is what the
 # updater compares against a release's manifest (core/version.h, docs/updater.md), so change both with each release.
 set(HAILSTONE_VERSION_LABEL "beta")
+set(HAILSTONE_DISPLAY_VERSION "" CACHE STRING "Optional display version using this release's numeric prefix")
 if(HAILSTONE_VERSION_LABEL STREQUAL "")
   set(HAILSTONE_RELEASE_VERSION ${PROJECT_VERSION})
 else()
@@ -719,8 +720,10 @@ target_include_directories(hailstone_engine PRIVATE sdk)
 # The build's version line (core/build_info.h), remade at each build from git.
 add_custom_target(hailstone_build_info
   COMMAND ${CMAKE_COMMAND} -DSRC=${PROJECT_SOURCE_DIR} -DVERSION=${HAILSTONE_RELEASE_VERSION}
+          "-DDISPLAY_VERSION=${HAILSTONE_DISPLAY_VERSION}"
           -DOUT=${PROJECT_BINARY_DIR}/generated/build_info.inc -P ${PROJECT_SOURCE_DIR}/cmake/BuildInfo.cmake
   BYPRODUCTS ${PROJECT_BINARY_DIR}/generated/build_info.inc
+  VERBATIM
   COMMENT "Build version")
 add_dependencies(hailstone_engine hailstone_build_info)
 set_source_files_properties(src/core/build_info.cpp PROPERTIES OBJECT_DEPENDS ${PROJECT_BINARY_DIR}/generated/build_info.inc)

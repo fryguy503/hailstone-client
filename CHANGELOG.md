@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Custom builds can set a display version shown at login and in the in-game Help window.
 - Enhanced follow tracks the leader's swimming depth over submerged terrain.
 - Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.
 - **Linux arm64 release package** (`hailstone-<version>-linux-arm64.zip`) for arm64 handhelds, boards and laptops with a Vulkan 1.3 driver, such as Mesa's Turnip on Snapdragon; it updates itself like the x64 one. So far it has only been tested on a Qualcomm Snapdragon 8 Elite (an AYN Odin 3 Max)

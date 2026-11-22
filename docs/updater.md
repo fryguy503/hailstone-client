@@ -21,6 +21,9 @@ Code: `src/app/updater.*` (check, download), `src/app/update_install.*` (install
   Under it, **What's new** (this version's part of the shipped `CHANGELOG.md`, `core/changelog.h`; greyed when
   missing) and **GitHub** (CMake `HAILSTONE_PROJECT_PAGE`, in the system browser). The Gamepad pack puts both under
   More, About Hailstone.
+
+  The `HAILSTONE_DISPLAY_VERSION` build setting controls the label shown at login and in the in-game Help window.
+  The updater and add-on compatibility checks still compare `release_version()`.
 - **A newer release.** "Hailstone 0.2.0-alpha is out (this is 0.1.0-alpha)." with **Download**, **Release notes**
   and **Skip** (the Gamepad pack: under Log in). The notice shows the download's progress. With `update.download` on
   it starts by itself.

@@ -652,6 +652,12 @@ TEST_CASE("hs.LoginScreen about and hs.LoginDo openProject: the corner's build, 
     v.update.check = "newer";
     v.update.version = "0.5.0";
     CHECK(ui("return hs.LoginScreen().about.text") == "Version 0.5.0 is out");
+    v.display_version = "0.4.0-bastion-preview-01";
+    v.version = "0.4.0-bastion-preview-01 (abc1234)";
+    v.update.state = "available";
+    CHECK(ui("local login = hs.LoginScreen() "
+             "return login.about.version .. '|' .. login.about.build .. '|' .. login.update.current") ==
+          "0.4.0-bastion-preview-01|0.4.0-bastion-preview-01 (abc1234)|0.4.0-alpha");
     v.update.state = "downloading";
     CHECK(ui("return hs.LoginScreen().about.text") == "Downloading 0.5.0...");
     v.update.state = "ready";

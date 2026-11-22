@@ -73,6 +73,11 @@ ui.window("Help", function()
     M.buttons(HW, { { "BackButton", "Back", { glyph = "lb" } }, { "Contents", "Contents", { glyph = "x" } },
       { "TipsButton", "Reset Tips" }, { "CustomerServiceButton", "Customer Service" } }, x0, x1, bh)
     local top = y0 + bh + T.px(16)
+    local version = M.text(HW, "HailstoneVersion")
+    if version ~= "" then
+      local _, height = T.text(x0, top, "Hailstone " .. version, C.faint)
+      top = top + height + T.px(12)
+    end
     local midX = x0 + (x1 - x0) * 0.62
     -- the page (focusable: D-pad up / down scroll it)
     P.draw("##helppage", page, raw, x0, top, midX - T.px(20), y1, { empty = "This page is empty." })
