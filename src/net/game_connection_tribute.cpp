@@ -181,6 +181,16 @@ void GameConnection::tribute_toggle(bool on) {
     if (state_ == ConnectionState::InZone) send_zone(encode_tribute_toggle(on));
 }
 
+std::optional<std::uint64_t> GameConnection::tribute_cursor_value(bool guild) const {
+    const Item* held = inventory_.cursor();
+    if (!held) return std::nullopt;
+    // CTributeMasterWnd_SetDonationItem @0x7862e0 shows 0 (eqstr 3462) for a bag that holds anything.
+    if (held->is_bag() && !held->contents.empty()) return 0;
+    // EQEmu awards the base item's favor for each copy in the donation, without counting augments or charges.
+    const auto favor = guild ? held->guild_favor : held->favor;
+    return static_cast<std::uint64_t>(favor) * donation_count(*held);
+}
+
 bool GameConnection::tribute_donate_cursor() {
     const Item* held = inventory_.cursor();
     if (state_ != ConnectionState::InZone || !tribute_.master_id || !held) return false;
@@ -188,7 +198,7 @@ bool GameConnection::tribute_donate_cursor() {
     if (!begin_tribute_donation(false, *held, tribute_.master_id)) return false;
     TributeItem t;
     t.slot = ItemSlot::possessions(kSlotCursor);
-    t.quantity = held->stackable() ? held->stack_count : 1;
+    t.quantity = donation_count(*held);
     t.master_id = tribute_.master_id;
     send_zone(encode(t)); // EQEmu takes the item and answers with the favour
     return true;
@@ -264,7 +274,7 @@ bool GameConnection::guild_tribute_donate_cursor() {
     if (state_ != ConnectionState::InZone || !guild_tribute_.master_id || !held) return false;
     if (refuse_kept(held, "donate")) return false;
     if (!begin_tribute_donation(true, *held, guild_tribute_.master_id)) return false;
-    send_zone(encode_guild_donate_item(ItemSlot::possessions(kSlotCursor), held->stackable() ? held->stack_count : 1,
+    send_zone(encode_guild_donate_item(ItemSlot::possessions(kSlotCursor), donation_count(*held),
                                        guild_tribute_.master_id, guild_.guild_id));
     return true;
 }

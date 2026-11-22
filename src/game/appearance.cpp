@@ -1,9 +1,9 @@
 #include "game/appearance.h"
 
 #include <algorithm>
-#include <atomic>
 #include <iterator>
-#include <unordered_set>
+
+#include "game/appearance_data.h"
 
 namespace hailstone::game {
     // PlayerZoneClient::IsInvisible @0x5a1850 (rof2decomp spawn_visibility.cpp). The spawn itself is invisible only
@@ -12,8 +12,7 @@ namespace hailstone::game {
     bool spawn_invisible(const Spawn& viewer, const Spawn& target, std::int32_t see_invisible_rank, bool group_member) {
         if (viewer.id == target.id) return viewer.gm && target.invis_rank == 3001;
         if (target.is_corpse || target.hp_percent == 0) return false;
-        if (target.body_type == 100 || std::find(target.properties.begin(), target.properties.end(), 100u) != target.properties.end())
-            return true;
+        if (target.has_property(100)) return true;
         if (target.invis_rank <= 0) return false;
         if (see_invisible_rank >= target.invis_rank) return target.gm && !viewer.gm;
         // PcClient's awareness override (0x5801d0 / 0x4493c0) checks the
@@ -165,28 +164,9 @@ namespace hailstone::game {
 		return { v > 0xf1 ? hero_forge : v, 0 };
 	}
 
-	namespace {
-		std::atomic<bool> g_extra_shields{ true };
-		const std::unordered_set<std::uint32_t> kExtraShields = {
-		#include "game/shield_models.inc"
-		};
-	} // namespace
-
-	void set_extra_shields(bool on) { g_extra_shields = on; }
-
-	bool is_shield_model(std::uint32_t m) {
-		if (is_stock_shield_model(m))
-		{
-			return true;
-		}
-		if (g_extra_shields)
-		{
-			if (kExtraShields.contains(m))
-			{
-				return true;
-			}
-		}
-		return false;
+	bool is_shield_model(std::uint32_t m, const ActorTagTable* tags) {
+		if (tags && tags->loaded()) return tags->is_shield(m);
+		return is_stock_shield_model(m);
 	}
 
 	bool is_stock_shield_model(std::uint32_t m) {

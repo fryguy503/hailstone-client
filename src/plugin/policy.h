@@ -74,6 +74,22 @@ private:
     std::uint32_t prev_caps_ = 0;
     std::string prev_name_;
 };
+// While it lives, the code runs as the client itself: every capability, no add-on's name ("" is the player's).
+// For a client pass that runs an add-on's retained callback while another add-on's code is what called in (the map
+// overlays: one add-on draws the map, a callback of a second is drawn into it). CallerScope cannot lift a scope (it
+// intersects with the previous one), so the pass raises it here and the callback's own CallerScope then narrows it.
+class HostCallerScope {
+public:
+    HostCallerScope();
+    ~HostCallerScope();
+    HostCallerScope(const HostCallerScope&) = delete;
+    HostCallerScope& operator=(const HostCallerScope&) = delete;
+
+private:
+    bool active_ = false;
+    std::uint32_t prev_caps_ = 0;
+    std::string prev_name_;
+};
 // Whether this is the client's thread: the one that started the program (taken before main runs).
 bool on_main_thread();
 

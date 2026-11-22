@@ -291,7 +291,7 @@ private:
         q.has_pet = true;
         q.race = p.race;
         q.summoned = p.summoned;
-        q.property_1f = std::find(p.properties.begin(), p.properties.end(), 0x1fu) != p.properties.end();
+        q.property_1f = p.has_property(0x1f);
         if (const auto* ch = host.character)
             q.effect = [ch](std::int32_t spa, std::int32_t sub) { return ch->total_effect(spa, true, sub, true, true); };
         return q;
@@ -731,7 +731,7 @@ public:
             // CSpellBookWnd @0x75e790, sitting (or mounted): a scroll on the cursor is scribed into the slot
             // (StartSpellScribe); else the spell goes on the cursor (AttachToCursor type 1, the book slot) when
             // CanStartMemming allows, for a click on a gem to memorize it there.
-            if (!c.sitting()) return true;
+            if (!c.sitting_or_mounted()) return true;
             if (c.cursor_scroll_spell() != 0) {
                 c.scribe_cursor(slot);
             } else if (c.can_start_memming(slot)) {

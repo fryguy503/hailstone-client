@@ -3,7 +3,8 @@
 // The appearance data files the original client reads at start-up:
 // the colour tables (Resources/npct.ini,
 // itmt.ini), the hero's forge tables (Resources/NewArmorTagData.txt,
-// NewArmorAdjData.txt) and Resources/PlayerCustomization.txt.
+// NewArmorAdjData.txt), Resources/PlayerCustomization.txt and
+// Resources/ActorTagInfo.txt.
 
 #include <array>
 #include <cstdint>
@@ -12,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
 
 #include "game/actor_look.h"
@@ -84,6 +86,26 @@ private:
     std::map<std::tuple<std::int32_t, std::int32_t, std::int32_t>, CustomizationEntry> entries_;
 };
 
+// Resources\ActorTagInfo.txt, which the original reads at start-up for CDisplay::IsShield: one record a line,
+// '^' separated, field 1 the item model number (IT<n>) and field 2 its kind, 1 for a shield. The other fields
+// (docs/formats/characters.md "ActorTagInfo.txt") are not used. Once the file has loaded, a model it does not list
+// is not a shield.
+class ActorTagTable {
+public:
+    void parse(std::string_view text);
+    // Whether the file gave any record. Without one the original's fixed list applies (game::is_shield_model).
+    // Hailstone, a deliberate difference: the original counts the file as loaded once it opens (@0x7f4130), so an
+    // empty or garbled file would hold every model in the hand; here such a file falls back to the fixed list.
+    bool loaded() const { return records_ != 0; }
+    bool is_shield(std::uint32_t item_model) const { return shields_.contains(item_model); }
+    std::size_t record_count() const { return records_; }
+    std::size_t shield_count() const { return shields_.size(); }
+
+private:
+    std::size_t records_ = 0;
+    std::unordered_set<std::uint32_t> shields_;
+};
+
 // The tables together (CharacterLibrary keeps one, loaded from the game's
 // Resources directory).
 struct AppearanceData {
@@ -91,6 +113,7 @@ struct AppearanceData {
     ColorTable item_tints; // itmt.ini (absent in NMS: empty)
     NewArmorTables new_armor;
     PlayerCustomization customization;
+    ActorTagTable actor_tags; // ActorTagInfo.txt (absent: not loaded)
     // [Defaults] ActorNewArmorFilter (default 24): bit 0x10 NPCs, 8 players.
     std::uint32_t new_armor_filter = 24;
 };

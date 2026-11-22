@@ -128,6 +128,12 @@ inline constexpr std::int32_t kSkillDisarmTraps = 17;
 inline constexpr std::int32_t kSkillPickLock = 35;
 inline constexpr std::int32_t kItemTypeLockpick = 12;
 
+// CEverQuest::LMouseUp @0x5384d0 with an item on the cursor inside the 3D view: item types 12, 0x21 and 0x27
+// (lockpicks and keys) go to ClickedSwitch, whatever is under the cursor, and are never dropped.
+constexpr bool cursor_item_is_switch_key(std::int32_t item_type) {
+    return item_type == kItemTypeLockpick || item_type == 0x21 || item_type == 0x27;
+}
+
 // CEverQuest::ClickedSwitch @0x51ecb0 after the switch is found: the key and
 // skill EQSwitch::UseSwitch gets, and the calls in order.
 struct SwitchClickInput {

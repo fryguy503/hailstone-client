@@ -283,6 +283,12 @@ SkyWeatherResult update_sky_weather_and_fog(const Fpu& fpu, const SkyWeatherInpu
     if (infravision || ultravision) {
         const auto& f = infravision ? in.infravision_floor : in.ultravision_floor;
         for (std::size_t i = 0; i < 3; ++i) floor[i] = o.mul(fild(f[i]), per255);
+        // Hailstone's vision strength: the floor eased toward the plain one (at full strength left as computed).
+        const double strength = std::clamp(infravision ? in.infravision_strength : in.ultravision_strength, 0.0, 1.0);
+        if (strength != 1.0) {
+            const double plain = ld(kAmbientFloor);
+            for (std::size_t i = 0; i < 3; ++i) floor[i] = o.add(plain, o.mul(o.sub(floor[i], plain), strength));
+        }
     } else {
         floor[0] = floor[1] = floor[2] = ld(kAmbientFloor);
     }

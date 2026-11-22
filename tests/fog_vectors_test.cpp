@@ -287,3 +287,34 @@ TEST_CASE("Fog: infravision's and ultravision's raise of the ambient over the pl
     auto ultra = update_sky_weather_and_fog(mechanics::Fpu{}, in);
     CHECK(ultra.vision_lift[2] == doctest::Approx(120.0 / 255.0 - 0.1).epsilon(1e-4));
 }
+
+TEST_CASE("Fog: infravision's and ultravision's strength eases their floor toward the plain one") {
+    SkyWeatherInput in;
+    in.zone_type = 3; // indoors: 0.1 grey
+    in.hour = 1;
+    in.hour_ambient = game_hour_ambient();
+    auto none = update_sky_weather_and_fog(mechanics::Fpu{}, in);
+    in.infravision_innate = 0;
+    auto full = update_sky_weather_and_fog(mechanics::Fpu{}, in);
+    // Full strength is the original's, bit for bit.
+    in.infravision_strength = 1.0;
+    CHECK(update_sky_weather_and_fog(mechanics::Fpu{}, in).ambient == full.ambient);
+    // Half: half way from the plain 0.08 floor to infravision's.
+    in.infravision_strength = 0.5;
+    auto half = update_sky_weather_and_fog(mechanics::Fpu{}, in);
+    CHECK(half.vision_lift[0] == doctest::Approx(0.08 + 0.5 * (65.0 / 255.0 - 0.08) - 0.1).epsilon(1e-4));
+    CHECK(half.vision_lift[0] < full.vision_lift[0]);
+    // None: as without infravision.
+    in.infravision_strength = 0.0;
+    auto off = update_sky_weather_and_fog(mechanics::Fpu{}, in);
+    CHECK(off.vision_lift == std::array<float, 3>{0, 0, 0});
+    CHECK(off.ambient == none.ambient);
+    CHECK(off.special_ambient == none.special_ambient);
+    // Each has its own: ultravision ignores infravision's.
+    in.infravision_innate = 0xff;
+    in.ultravision_effect = 1;
+    auto ultra = update_sky_weather_and_fog(mechanics::Fpu{}, in);
+    CHECK(ultra.vision_lift[2] == doctest::Approx(120.0 / 255.0 - 0.1).epsilon(1e-4));
+    in.ultravision_strength = 0.0;
+    CHECK(update_sky_weather_and_fog(mechanics::Fpu{}, in).vision_lift == std::array<float, 3>{0, 0, 0});
+}

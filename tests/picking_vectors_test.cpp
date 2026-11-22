@@ -372,3 +372,13 @@ TEST_CASE("pick: ties go to the first actor; spheres rank by their centre; bones
     CHECK(h.actor == 0);
     CHECK(h.passes == 1);
 }
+
+TEST_CASE("LMouseUp keeps lockpicks and keys on the cursor for ClickedSwitch") {
+    using hailstone::game::cursor_item_is_switch_key;
+    CHECK(cursor_item_is_switch_key(12));
+    CHECK(cursor_item_is_switch_key(0x21));
+    CHECK(cursor_item_is_switch_key(0x27));
+    CHECK_FALSE(cursor_item_is_switch_key(0));
+    CHECK_FALSE(cursor_item_is_switch_key(11));
+    CHECK_FALSE(cursor_item_is_switch_key(14));
+}

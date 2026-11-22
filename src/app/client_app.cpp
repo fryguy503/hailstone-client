@@ -324,6 +324,7 @@ int ClientApp::run() {
                 audio_->set_hour(static_cast<int>(sky_hour));
                 sound_events_->update(*conn_, motion_, now_ms);
                 motion_.jumped = motion_.land_sound = false;
+                motion_.water_sounds.clear();
                 motion_.fall_damage.reset();
             }
             update_music();
@@ -430,9 +431,11 @@ int ClientApp::run() {
         render::ModernView modern_view{view_, 0.0f};
         // The modern haze, eased between places and weathers (render/atmosphere.h): its reach, length and colour.
         render::HazeTarget haze;
+        float haze_scale = 1.0f; // display.ambient_light's share of the haze's colour (render::haze_ambient_scale)
         if (modern) {
             const bool extend = !fog_frame || fog_frame->sky;
             const render::Daylight sun = render::daylight(sky_hour, true, moon_phase_, blood_moon_);
+            haze_scale = render::haze_ambient_scale(sun.to_sun.z, outdoor, static_cast<float>(ambient_light_) / 100.0f);
             haze = haze_blend_.update(render::haze_target(view_, view_distance_, extend, outdoor,
                                                           sky_renderer_ != nullptr && extend, sun.to_sun,
                                                           weather_look_.storm, weather_look_.snowing,
@@ -477,7 +480,8 @@ int ClientApp::run() {
             // LightningStrike plays the thunder with the flash, WavePlay(id, 0); ApplyWeatherState shows the start.
             auto weather_step = [&](double at) {
                 weather_.update(at, outdoor, random, zone_id);
-                if (std::int32_t sound = weather_.thunder(); sound && audio_) audio_->play_wave_2d(sound);
+                if (std::int32_t sound = weather_.thunder(); sound && audio_)
+                    audio_->play_group_2d(sound, audio::SoundGroup::Thunder); // Hailstone: the Thunder volume
                 if (std::uint32_t message = weather_.message(); message && conn_) conn_->show_eqstr(message);
             };
             // Once per step of the game clock (core/step_clock.h): the fog band's fade is a fixed step an update.
@@ -512,6 +516,11 @@ int ClientApp::run() {
                     light.vision_lift = fog_frame->vision_lift;
                 }
                 game::SceneLight scene_light = game::compute_scene_light(light);
+                // Less fill light (display.ambient_light; Hailstone's own, the modern lighting only): the special
+                // ambient (the zone's global ambient and the vision floor's grey), here so the zone, which takes it
+                // from set_scene_light, and the characters (scene_lighting) lose it alike.
+                if (modern && ambient_light_ < 100)
+                    scene_light.special_ambient *= static_cast<float>(ambient_light_) / 100.0f;
                 if (zone_renderer_) {
                     zone_renderer_->set_scene_light(scene_light);
                     zone_renderer_->set_classic_smooth(lighting_mode_ == render::LightingMode::SmoothClassic);
@@ -577,7 +586,8 @@ int ClientApp::run() {
                         render::set_underwater(lighting, camera_.position, water_color);
                     else
                         render::set_haze_linear(lighting, camera_.position, haze.length,
-                                                render::lightning_haze(haze.color, weather_look_.flash, weather_look_.storm));
+                                                render::lightning_haze(haze.color * haze_scale, weather_look_.flash,
+                                                                       weather_look_.storm));
                     render::set_screen(lighting, camera_.ao_view(width, height, lit.far_plane).near_plane, lit.far_plane,
                                        f->extent.width, f->extent.height, t);
                     render::set_weather(lighting, weather_look_);
@@ -1061,6 +1071,8 @@ int ClientApp::run() {
                 pick_camera_.fov_ratio = fov.v != 0.0f ? fov.h / fov.v : 1.0f;
                 pick_camera_.yon = view_.far_plane;
                 pick_camera_valid_ = view_area_.w > 0.0f && view_area_.h > 0.0f;
+                if (pick_camera_valid_) target_view_projection_ = plain_proj * camera_.view();
+                else target_view_projection_.reset();
             }
         }
         // Whatever the scene's branches did, the frame ends on the true camera (also when no picking ran above).

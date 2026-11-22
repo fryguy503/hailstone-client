@@ -55,6 +55,12 @@ Where:
   (`item_compare_verdict`, `items.compare_verdict`), both on by default; under Display (modern) or Interface
   (gamepad).
 
+The item description and comparison show an effect's name from the item data even when the local spell table lacks
+its definition (as the original does), and when the server masks its spell ID with -1 but still sends the name. The
+second is an extension past RoF2: the original skips any effect whose ID is below 1. Stock EQEmu sends -1 only for
+"no effect", without a name, so nothing changes against it. The detailed spell description still needs a local spell
+definition.
+
 ## How the numbers are found
 
 The player's `mechanics::CharacterSheet` is copied with the item swapped in and run through the player's own

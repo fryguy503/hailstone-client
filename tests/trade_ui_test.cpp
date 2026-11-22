@@ -12,8 +12,10 @@
 
 #include "lua_ui_api_mock.h"
 
+#include "app/commerce_ui.h"
 #include "app/lua_ui.h"
 #include "mock_server/harness.h"
+#include "mq_test_world.h"
 #include "net/trade_packets.h"
 #include "ui/lua/lua_host.h"
 #include "scratch_dir.h"
@@ -44,6 +46,49 @@ std::string drawn(lua_State* L) {
 }
 
 } // namespace
+
+TEST_CASE("Give shortcut hides for NPCs that refuse direct hand-ins") {
+    mq_test::World fixture("give_shortcut_ui");
+    auto& conn = *fixture.conn;
+    auto& world = conn.world_for_test();
+    const auto slot = net::ItemSlot::possessions(net::kSlotCursor);
+    net::Item held;
+    held.id = 1001;
+    held.name = "Quest Item";
+    net::GameConnectionTestAccess::inventory(conn).put(slot, held);
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(1280, 800);
+    io.DeltaTime = 1.0f / 60.0f;
+    unsigned char* px = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+
+    app::CommerceUi commerce;
+    auto give_shown = [&] {
+        ImGui::NewFrame();
+        commerce.draw(conn, nullptr);
+        ImGui::Render();
+        const auto* prompt = ImGui::FindWindowByName("##hailstone_give");
+        return prompt && prompt->Active;
+    };
+    auto& npc = world.spawns.at(10);
+    npc.position = world.player()->position;
+    world.target_id = npc.id;
+    CHECK(give_shown());
+    for (auto cls : {game::Class_TributeMaster, game::Class_GuildTributeMaster, game::Class_TributeMaster2,
+                     game::Class_Banker, game::Class_GuildBanker}) {
+        CAPTURE(cls);
+        npc.class_id = static_cast<std::uint8_t>(cls);
+        CHECK_FALSE(give_shown());
+        conn.give_to(npc.id);
+        CHECK_FALSE(conn.trade());
+    }
+    world.target_id = 12; // a player trade still has a shortcut
+    CHECK(give_shown());
+    ImGui::DestroyContext(ctx);
+}
 
 TEST_CASE("Trade window (modern): the partner's accept and ours show in the window") {
     fs::path src = ui_dir() / "modern";

@@ -15,7 +15,6 @@ local MAP = "MapViewWnd"
 local PACK_COMBO = "MVW_MapsDirCombobox"
 local ZOOMS = { 1, 1.5, 2.25, 3.4, 5, 7.5, 11 }
 local M = {
-  open = false,
   zoom = 1,
   follow = true, -- centred on the player
   cx = nil, cy = nil, -- the centre when panned, in map units
@@ -53,13 +52,14 @@ end
 ui.window("Map", function()
   if not W.shown(MAP) then
     MC.Reset()
-    M.open, M.packOpen, M.packFocused = false, false, false
+    M.packOpen, M.packFocused = false, false
     return
   end
-  if not M.open then -- each time it opens: the whole zone, following the player
-    M.open, M.zoom, M.follow = true, 1, true
+  local zone, short, entry = API.map.ZoneName(true)
+  if M.zoneEntry ~= entry or M.playerZone ~= short then
+    M.zoneEntry, M.playerZone = entry, short
+    M.zoom, M.follow, M.cx, M.cy = 1, true, nil, nil
   end
-  local zone = API.map.ZoneName() or ""
   local hasControls = MC.Sync("zone")
   local packs, selected = API.windows.ComboInfo(MAP, PACK_COMBO)
   local hasPack = packs and #packs > 0
@@ -70,7 +70,7 @@ ui.window("Map", function()
     { "a", packWasOpen and "Select" or M.packFocused and "Map pack"
       or API.map.FindPathShown() and "End find" or "Find path to centre" }, { "b", packWasOpen and "Back" or "Close" } }
   if hasControls then table.insert(hints,1,{ "lt", "Map controls" }) end
-  if W.begin("Map", { w = 1500, h = 960, title = zone ~= "" and zone or "Map", close = not (MC.Open() or packWasOpen),
+  if W.begin("Map", { w = 1500, h = 960, title = zone and zone ~= "" and zone or "Map", close = not (MC.Open() or packWasOpen),
         hints = hints }) then
     local x0, y0, x1, y1 = W.area()
     local context = E.MapContext("zone")

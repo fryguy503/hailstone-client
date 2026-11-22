@@ -574,6 +574,104 @@ fill('window', 64, function(i) mq.imgui.init('w' .. i, function() end) end)
     CHECK(h.bridge.options().size() == 64);
 }
 
+TEST_CASE("Lua plugin: UI contributions can be replaced or removed by their script and retire with it") {
+    Host h;
+    h.write("contributor.lua", R"lua(
+local hs = require('hailstone')
+local mq = require('mq')
+local entry = {id='sample', window='OptionsWindow', target='setting:vsync', text='First reason', disabled=true}
+assert(hs.ui_contribution(entry))
+entry.text = 'Revised reason'
+assert(hs.ui_contribution(entry))
+assert(not hs.ui_contribution{ id='sample', window='OptionsWindow', disabled=true })
+assert(not hs.ui_contribution{ id='sample', window='OptionsWindow', target='setting:vsync', text='Bad', disabled=1 })
+assert(not hs.ui_contribution{ id='sample', window='OptionsWindow', text=string.rep('x',1025) })
+mq.bind('/contribution_add', function() assert(hs.ui_contribution(entry)) end)
+mq.bind('/contribution_remove', function()
+    assert(hs.remove_ui_contribution('sample'))
+    assert(not hs.remove_ui_contribution('sample'))
+end)
+mq.bind('/contribution_deactivate', function()
+    hs.set_active(false)
+    assert(not hs.ui_contribution(entry))
+    hs.set_active(true)
+end)
+)lua");
+    REQUIRE(h.scripts->run("contributor", {}));
+    h.scripts->pulse();
+    const auto& contributions = h.bridge.contributions();
+    REQUIRE(contributions.size() == 1);
+    CHECK(contributions.front().owner() == "script:contributor");
+    CHECK(contributions.front().text == "Revised reason");
+    CHECK(contributions.front().disabled);
+    const auto command = [&](const char* line) {
+        h.run(line);
+        h.scripts->pulse();
+        CHECK(h.scripts->running("contributor"));
+    };
+    command("/contribution_remove");
+    CHECK(contributions.empty());
+    command("/contribution_add");
+    REQUIRE(contributions.size() == 1);
+    command("/contribution_deactivate");
+    CHECK(contributions.empty());
+    command("/contribution_add");
+    REQUIRE(contributions.size() == 1);
+    h.allow(plugin::kCapAll & ~plugin::kCapExtend);
+    h.scripts->policy_changed();
+    CHECK(contributions.empty());
+    h.allow(plugin::kCapAll);
+    h.scripts->policy_changed();
+    CHECK(contributions.empty());
+    command("/contribution_add");
+    REQUIRE(contributions.size() == 1);
+    REQUIRE(h.scripts->stop("contributor"));
+    CHECK(contributions.empty());
+}
+
+TEST_CASE("Lua plugin: the rows that are a way out take notices but are never disabled") {
+    Host h;
+    h.write("contributor.lua", R"lua(
+local hs = require('hailstone')
+for _, setting in ipairs({'upscaler', 'ui_name', 'texture_pack'}) do
+    local target = 'setting:' .. setting
+    assert(not hs.ui_contribution{ id=setting, window='OptionsWindow', target=target, text='Locked', disabled=true })
+    assert(not hs.ui_contribution{ id=setting, window='OptionsWindow', target=target, disabled=true })
+    assert(hs.ui_contribution{ id=setting, window='OptionsWindow', target=target, text='Managed here' })
+    -- a later update that would disable it is refused too, and the notice stays as it was
+    assert(not hs.ui_contribution{ id=setting, window='OptionsWindow', target=target, text='Now locked', disabled=true })
+end
+print('escape rows checked')
+)lua");
+    REQUIRE(h.scripts->run("contributor", {}));
+    h.scripts->pulse();
+    CHECK(h.printed_part("escape rows checked"));
+    const auto& contributions = h.bridge.contributions();
+    REQUIRE(contributions.size() == 3);
+    for (const auto& entry : contributions) {
+        CHECK_FALSE(entry.disabled);
+        CHECK(entry.text == "Managed here");
+    }
+}
+
+TEST_CASE("Lua plugin: UI contribution registration needs UI and extend capabilities") {
+    for (const auto missing : {plugin::kCapUi, plugin::kCapExtend}) {
+        CAPTURE(missing);
+        Host h;
+        h.allow(plugin::kCapAll & ~missing);
+        h.write("contributor.lua", R"lua(
+local hs = require('hailstone')
+local ok, message = pcall(hs.ui_contribution, {id='sample', window='OptionsWindow', text='Message'})
+assert(not ok and message:find('permission', 1, true))
+print('contribution permission checked')
+)lua");
+        REQUIRE(h.scripts->run("contributor", {}));
+        h.scripts->pulse();
+        CHECK(h.printed_part("contribution permission checked"));
+        CHECK(h.bridge.contributions().empty());
+    }
+}
+
 TEST_CASE("Lua plugin: map policy and visibility share native ownership and source lifetime rules") {
     Host h;
     h.write("map.lua",R"lua(

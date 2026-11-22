@@ -5,11 +5,12 @@
 //                                   castTime, recastTime, recoveryTime, range, aeRange, duration, beneficial,
 //                                   targetType, skill, skillName, category, categoryName, subcategory,
 //                                   subcategoryName, resist, gem (0-based, when memorized) }
-//   state = hs.SpellBookState()  -- { open, sitting, gems = { id or -1 x12 }, usableGems, memorizing = { gem, spell }
-//                                   or nil, settingSet, scribing, cursorSpell (book slot or nil), holdingItem,
+//   state = hs.SpellBookState()  -- { open, sitting, sittingOrMounted, gems = { id or -1 x12 }, usableGems,
+//                                   memorizing = { gem, spell } or nil, settingSet, scribing,
+//                                   cursorSpell (book slot or nil), holdingScroll,
 //                                   swapSlot (the book slot picked up to move, or nil) }
 //   texture, u0, v0, u1, v1 = hs.SpellIcon(icon)    -- a spell icon (A_SpellIcons), nil when its sheet is missing
-//   ok = hs.SpellBookClick(slot)  -- the book's click on that book slot: sitting, a
+//   ok = hs.SpellBookClick(slot)  -- the book's click on that book slot: sitting or mounted, a
 //                                   scroll on the cursor is scribed there, else the spell goes on the cursor for a gem
 //   hs.SpellBookSwap(slot)       -- the stock book's quick right click on that book slot (Send_OP_SwapSpell): the first
 //                                   picks it up (state.swapSlot), the same slot again puts it back, another slot asks
@@ -129,6 +130,7 @@ int SpellBookState(lua_State* L) {
     const auto& st = c.spell_state();
     set_bool(L, "open", c.spell_book_open());
     set_bool(L, "sitting", c.sitting());
+    set_bool(L, "sittingOrMounted", c.sitting_or_mounted());
     lua_createtable(L, game::kSpellGems, 0);
     for (int g = 0; g < game::kSpellGems; ++g) {
         lua_pushinteger(L, as_id(st.gems[static_cast<std::size_t>(g)].spell));
@@ -169,7 +171,7 @@ int SpellBookClick(lua_State* L) {
     auto& h = host(L);
     int slot = held_int(luaL_checkinteger(L, 1));
     bool ok = false;
-    if (h.conn && slot >= 0 && slot < game::kSpellBookSize && h.conn->sitting()) {
+    if (h.conn && slot >= 0 && slot < game::kSpellBookSize && h.conn->sitting_or_mounted()) {
         auto& c = *h.conn;
         // CSpellBookWnd @0x75e790, sitting (or mounted): a scroll on the cursor is scribed into the slot
         // (StartSpellScribe); else the spell goes on the cursor (AttachToCursor type 1) when CanStartMemming allows.

@@ -57,6 +57,11 @@ struct GameConnectionTestAccess {
         c.move_item(from, to, count);
     }
     static std::optional<MerchantSession>& merchant(GameConnection& c) { return c.merchant_; }
+    static std::optional<BankSession>& bank(GameConnection& c) { return c.bank_; }
+    static bool item_command(GameConnection& c, const std::string& command, const std::string& args) {
+        return c.item_command(command, args);
+    }
+    static void drop_on_doll(GameConnection& c) { c.drop_on_doll(); }
     static void apply_spawn(GameConnection& c, const Spawn& s) { c.apply_spawn(s); }
     // How often the evolving transfer's item list was built, and its pair compared with the snapshots.
     static std::pair<std::uint64_t, std::uint64_t> evolving_cache_work(const GameConnection& c) {

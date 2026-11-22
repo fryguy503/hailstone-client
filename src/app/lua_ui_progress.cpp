@@ -1434,6 +1434,9 @@ public:
         std::int32_t donation = g ? gt.last_donation : host.conn->tribute().last_donation;
         if (id == "TMW_Description") out.text = stml_escape(tribute_description(descriptions(host), described_));
         else if (id == "TMW_ValueLabel") out.text = std::to_string(donation);
+        else if (id == "TMW_DonationPreviewLabel") {
+            if (auto value = host.conn->tribute_cursor_value(g)) out.text = std::to_string(*value);
+        }
         else if (id == "TMW_CoinButton") out.text = std::to_string(platinum_);
         else if (id == "TMW_StatusText") out.text = now.active ? "Active" : "Inactive";
         else if (id == "TMW_StatusButton") {

@@ -92,7 +92,11 @@ void main() {
         vec3 light = hemisphere(up, lighting.sky.rgb, lighting.ground.rgb) * sky_share + placed +
                      to_linear(lighting.special_ambient.rgb) + lighting.vision.rgb;
         int count = int(lighting.params.y + 0.5);
-        for (int i = 0; i < count; ++i) light += point_light_modern(lighting.lights[i], p, up, 0.5);
+        vec3 carried_sum = vec3(0.0), carried_top = vec3(0.0);
+        for (int i = 0; i < count; ++i)
+            add_scene_light(light, carried_sum, carried_top, lighting.carried, i,
+                            point_light_modern(lighting.lights[i], p, up, 0.5));
+        light += carried_light_total(carried_sum, carried_top, lighting.carried);
         v_light = light;
     } else {
         v_light = frame.classic.rgb;

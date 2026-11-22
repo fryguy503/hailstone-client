@@ -136,8 +136,15 @@ function A.Show(short)
   return true
 end
 
--- Each time the World view opens: your zone's page, when nothing was chosen yet.
+function A.ResetView()
+  openPage("Default.xml")
+  A.sel, A.opened = nil, false
+end
+
+-- The first time the World view opens in this zone, start at your zone's page.
 function A.Opened()
+  if A.opened then return end
+  A.opened = true
   local _, here = API.map.ZoneName()
   if not A.sel and here and A.Show(here) then A.sel = nil end
 end

@@ -27,7 +27,7 @@ local function rig(pack)
  end
  local map={Policy=function()s.policyReads=s.policyReads+1;return s.policy end,
   ZoneName=function()return"Fixture",s.zone end,ZoneShown=function()return"Fixture",s.zone,true end,
-  ShowZone=function(...)return act("ShowZone",...)end,FindPathShown=function()return false end,
+  ShowZone=function(...)return act("ShowZone",...)end,FindPathShown=function()return s.pathShown==true end,
   AutoZ=function(...)if select("#",...)>0 then return act("AutoZ",...)end;return true end,
   DrawZone=function()draw();s.geometry=s.geometry+1;return 1,0,0,0,0 end,
   DrawMinimap=function()draw();s.geometry=s.geometry+1;return 0,1,0,0,1 end}
@@ -91,8 +91,13 @@ local function rig(pack)
  local function panel(drawBody)s.depth=s.depth+1;drawBody(0,0,1100,650,1);s.depth=s.depth-1 end
  hud.Dialog=function(_,_,_,body)panel(body)end
  hud.Window=function(_,_,_,body)panel(body)end
- local atlas={Opened=nop,Show=nop,DrawExits=nop,DrawRouteBanner=nop,DrawCrumbs=nop,DrawFinder=nop,DrawView=nop,zoom=1}
- local window={shown=function()return false end,begin=function()s.depth=s.depth+1;return true end,
+ local atlas={Opened=nop,ResetView=nop,Show=nop,DrawExits=nop,DrawRouteBanner=nop,DrawCrumbs=nop,DrawFinder=nop,DrawView=nop,zoom=1}
+ local window={shown=function()return false end,begin=function(_,options)
+  s.depth=s.depth+1
+  if options.subtitle then text(options.subtitle)end
+  for _,hint in ipairs(options.hints or{})do text(hint[2])end
+  return true
+ end,
   area=function()return 0,0,1100,650 end,finish=function()s.depth=s.depth-1;return false end,
   pressed=function(key)return s.pressed==key end,
   list=function(_,state,count,_,_,_,render,activate)
@@ -339,6 +344,51 @@ for _,key in ipairs({"activate","pressed"})do
  check(s.findOpen,"Rejected Gamepad activation closed Find")
  equal(#s.actions,1,"Rejected Gamepad targeting dispatched a second action")
  s.preferences();s.restore()
+end
+
+do
+ local s=rig("modern");s.load("map.lua");s.load("minimap.lua");s.frame("Map")
+ check(s.hits["##findwalk"]and s.texts["Old NPC"],"Stock Find did not show its original rows and Walk action")
+ s.policy={custom_spawns=true,stock_npcs=false,npc_find=true,npc_find_server_only=true,name="Server map"}
+ s.rows={{id=904,token="server:npc",name="Server-listed NPC",category="merchant",x=5,y=6,distance=8,subtitle="",label="Merchant"}}
+ s.time=s.time+.01;s.frame("Map")
+ check(s.hits["##tabfind"]and s.texts["Server-listed NPC"]and not s.texts["Old NPC"],"Server policy did not show fresh native Find rows")
+ check(s.hits["##findpath"]and not s.hits["##findwalk"]and not s.hits["##npcs"],"Server Find exposed stock marks or Walk controls")
+ s.itemId="##fn1";s.itemButton=ui.Mouse.Left;s.frame("Map")
+ equal(s.accepted[1][1],"NpcTarget","Server Find lost row selection")
+ equal(s.triangles,0,"Server Find drew stock NPC marks on selection")
+ s.itemId=nil;s.itemButton=nil;s.click="##findpath";s.frame("Map")
+ equal(s.accepted[2][1],"NpcPath","Server Find lost the selected path action")
+ equal(s.accepted[2][3],"server:npc","Server Find path omitted the row's identity")
+ s.click=nil;FIND_STATE.menu=s.rows[1];s.popup="##findmenu";s.menuClick="Walk there";s.frame("Map")
+ check(s.menuHits["Show the path"]and not s.menuHits["Walk there"],"Server Find popup exposed Walk or hid the path action")
+ equal(#s.actions,2,"Unavailable Walk menu sent an action")
+ s.menuClick="Show the path";s.frame("Map")
+ equal(s.accepted[3][1],"NpcPath","Server Find lost the menu path action")
+ s.popup=nil;s.menuClick=nil;s.pathShown=true;s.click="##findend";s.frame("Map")
+ equal(s.actions[4][1],"End","Server Find lost the End path action")
+ s.click=nil;s.frame("Minimap")
+ equal(s.triangles,0,"Server Find drew stock NPC marks on the minimap")
+ s.preferences();equal(#s.writes,0,"Server Find policy changed saved UI preferences");s.restore()
+end
+
+do
+ local s=rig("gamepad");s.findOpen=true;s.seedOffset=99
+ s.policy={custom_spawns=true,stock_npcs=false,npc_find=true,name="Server map"}
+ s.load("navigation.lua");s.frame("Find")
+ check(s.texts["Walk there"],"Gamepad stock Find lost its Walk hint")
+ s.policy.npc_find_server_only=true
+ s.rows={{id=905,token="server:pad",name="Server-listed Gamepad NPC",category="merchant",distance=8,subtitle="",label="Merchant"}}
+ s.pressed="x";s.frame("Find")
+ equal(s.listOffset,0,"Server-only policy retained stale Gamepad navigation")
+ check(s.texts["Server-listed Gamepad NPC"]and s.texts["Show the path"]and not s.texts["Walk there"],"Gamepad server Find showed incorrect rows or controls")
+ equal(#s.actions,0,"Gamepad Walk input dispatched an action under server Find")
+ s.pressed=nil;s.activate=true;s.frame("Find")
+ equal(s.accepted[1][1],"NpcTarget","Gamepad server Find lost targeting")
+ equal(s.accepted[2][1],"NpcPath","Gamepad server Find lost the path action")
+ equal(s.accepted[2][3],"server:pad","Gamepad server Find path omitted the row's identity")
+ check(not s.findOpen,"Successful Gamepad server Find path did not close Find")
+ s.preferences();equal(#s.writes,0,"Gamepad server Find policy changed saved UI preferences");s.restore()
 end
 
 -- NPC Find ownership does not disable a manually selected coordinate path or personal pins.

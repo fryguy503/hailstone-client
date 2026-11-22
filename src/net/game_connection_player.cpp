@@ -17,6 +17,7 @@
 #include "game/distance.h"
 #include "game/eq_names.h"
 #include "game/slash_commands.h"
+#include "game/sound_rules.h"
 #include "game/world_state.h"
 #include "net/game_connection.h"
 #include "net/opcodes.h"
@@ -32,6 +33,8 @@ namespace {
 // CDisplay::PlayerDistance(.., 1.0f) limit for inspecting (Send_OP_InspectRequest, Handle_OP_InspectAnswer).
 constexpr float kInspectRange = 20.0f;
 constexpr std::uint8_t kClassLDoNObject = 62; // '>' (Send_OP_LDoNInspect)
+// The HP OP_GMKill's case leaves the named local player at (push 0xffffd8f0 @0x4c8ab0 and @0x4c8ad0).
+constexpr std::int64_t kGmKillHp = -10000;
 
 std::string lower(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -1117,6 +1120,37 @@ void GameConnection::handle_player(Op op, const AppPacket& p) {
     case Op::Surname:
         if (auto s = decode_surname(p); s && s->unknown64 == 1 && profile_) profile_->last_name = s->last_name;
         break;
+    case Op::GMKill: {
+        // OP_GMKill (wire 0x51d3): the original's zone message handler at 0x4c3250 jumps on the opcode through the
+        // byte table at 0x4d4998 and the pointer table at 0x4d4980. 0x51d3 lies in 0x5182..0x51f8; index 0x51
+        // holds 2, and entry 2 is 0x4c8a23, the GM-kill case. That case compares the payload, a player's name,
+        // with the local player's name without case; on a match it prints eqstr 1391 in colour index 10 and
+        // plays the struck-down wave 0x8f through EqSoundManager::WavePlay(..., 0).
+        // EQEmu sends GMKill_Struct (132 B: `char[64]` name, `char[64]` GM name, u32); the name is read up to its NUL
+        // within the first 64 bytes.
+        ByteReader r(p.data);
+        const std::string name = r.fixed_string(std::min<std::size_t>(p.data.size(), 64));
+        if (name.empty() || !iequals(name, character_)) break;
+        show_chat(strings_.format(1391, std::vector<std::string>{name}), 10);
+        SoundCue cue;
+        cue.kind = SoundCue::Kind::Wave;
+        cue.spell = game::kSoundStruckDown;
+        sound_cues_.push_back(cue);
+        // Then the case's own kill, with nothing sent to the server (0x4c8ab0..0x4c8aec): 0x45ffa0 sets the local
+        // PC's profile HP (PcProfile +0x3394, our pstatus_.hp) to -10000, 0x4423b0 sets the local player spawn's
+        // HPCurrent (+0x2e4) to -10000, and the spawn's RespawnTimer (+0x2bc, the time of death PlayerZoneClient::IDied
+        // stamps) is cleared. No OP_Death, no knock-out and no respawn window: the player lies at -10000 HP until the
+        // server's next OP_HPUpdate (stock EQEmu forwards the packet and does not kill the player, docs/protocol).
+        // The cleared RespawnTimer matters only to a player already dead and hovering: the original's respawn
+        // window then stops its auto-select and IsOkToTransact passes. Hailstone keeps that hover state whole
+        // (docs/todo.md).
+        pstatus_.hp = kGmKillHp;
+        if (auto it = world_.spawns.find(world_.player_id); it != world_.spawns.end()) {
+            it->second.hp_percent = 0; // HPCurrent -10000: below 1, so 0 as every spawn's percentage below 1
+            it->second.hp_known = true;
+        }
+        break;
+    }
     case Op::OnLevelMessage:
         // Handle_OP_OnLevelMessage @0x755350: CLargeDialogWnd::Open with the title, the text, the buttons and the
         // duration (the text's eqstr templates and language garbling are not applied, docs/unknowns.md).

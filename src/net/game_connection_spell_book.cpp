@@ -40,11 +40,16 @@ bool GameConnection::open_spell_book() {
 void GameConnection::spell_book_closed_by_game(bool stand) {
     if (!spell_book_open_) return;
     spell_book_open_ = false;
-    // unk_CSpellBookWnd_HideWorker: a memorization in progress is aborted (12045).
+    // unk_CSpellBookWnd_HideWorker: a memorization in progress is aborted (12045), else a scribe whose request is
+    // not yet sent (ScribeBookSlot +0x240, cleared when GetSpellScribeTicksLeft sends it) is aborted (12044).
     if (spells_.memorizing) {
         chat(ChatEvent::Kind::System, strings_.format(12045, {}));
         spells_.memorizing.reset();
+    } else if (spells_.scribing && !spells_.scribing->sent) {
+        chat(ChatEvent::Kind::System, strings_.format(12044, {}));
+        spells_.scribing.reset();
     }
+    set_mem_ = {}; // A queued gem must not start when the book next opens.
     // OnShow (hidden): stand up when the book sat the player down.
     game::SpellBookState s;
     s.stand_state = pstatus_.stand_state;

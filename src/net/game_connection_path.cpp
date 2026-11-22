@@ -138,31 +138,35 @@ std::optional<std::vector<glm::vec3>> GameConnection::take_quiet_path(const game
 }
 
 bool GameConnection::npc_find_enabled() const {
-    return !(server_ext().map_policy(*this).flags & game::MapPolicyDisableNpcFind);
+    return server_ext().map_policy(*this).npc_find_enabled();
 }
 
-bool GameConnection::npc_find_visible(std::uint32_t id) const {
+bool GameConnection::npc_find_visible(std::uint32_t id, bool server_only) const {
+    if (server_only && (id > 0xffff || !findable_npcs_.contains(id))) return false;
     const auto found = world_.spawns.find(id);
     if (found == world_.spawns.end() || !found->second.is_npc || found->second.is_corpse) return false;
     const auto incarnation = found->second.incarnation;
     if (!server_ext().map_visible(*this, found->second, 1)) return false;
     const auto checked = world_.spawns.find(id); // (a provider's callback may replace the actor)
-    return checked != world_.spawns.end() && checked->second.incarnation == incarnation;
+    return checked != world_.spawns.end() && checked->second.incarnation == incarnation &&
+           checked->second.is_npc && !checked->second.is_corpse && (!server_only || findable_npcs_.contains(id));
 }
 
 bool GameConnection::npc_find_allowed(std::uint32_t id) const {
     const auto found = world_.spawns.find(id);
     if (found == world_.spawns.end() || !found->second.is_npc || found->second.is_corpse) return false;
     const auto incarnation = found->second.incarnation;
-    if (!npc_find_enabled()) return false;
+    const auto before = server_ext().map_policy(*this);
+    if (!before.npc_find_enabled()) return false;
     const auto current = world_.spawns.find(id);
     if (current == world_.spawns.end() || current->second.incarnation != incarnation ||
-        !current->second.is_npc || current->second.is_corpse ||
-        !server_ext().map_visible(*this, current->second, 1)) return false;
-    if (!npc_find_enabled()) return false;
+        !npc_find_visible(id, before.npc_find_server_only())) return false;
+    const auto after = server_ext().map_policy(*this);
+    if (!after.npc_find_enabled()) return false;
     const auto checked = world_.spawns.find(id);
     return checked != world_.spawns.end() && checked->second.incarnation == incarnation &&
-           checked->second.is_npc && !checked->second.is_corpse;
+           checked->second.is_npc && !checked->second.is_corpse &&
+           (!after.npc_find_server_only() || (id <= 0xffff && findable_npcs_.contains(id)));
 }
 
 const std::vector<glm::vec3>& GameConnection::find_path() const {

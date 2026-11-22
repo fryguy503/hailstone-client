@@ -202,6 +202,7 @@ Allocation 58: base STR 85, DEX 75, AGI 80, STA 85, INT 75, WIS 75, CHA 75, defa
 | DeleteSpawn | both | 0x7280 | Z→C 5 B: u32 id, u8 1; C→Z 4 B: u32 own spawn id (note 2) |
 | SpawnAppearance | both | 0x0971 | 8 B: u16 id (0 = me), u16 type, u32 parameter |
 | ChangeSize | Z→C | 0x4707 | 16 B: u32 id, f32 size, u32 0, f32 1.0 (sent instead of SpawnAppearance type Size) |
+| SetBodyType | Z→C | 0x2115 | 8 B: u32 spawn id, u32 property set id (`Resources/CharacterPropertySets.txt`); other sizes are ignored (0x4c5747). Not in EQEmu's table; stock EQEmu does not send it (docs/mechanics.md, Actor property sets) |
 | HPUpdate | Z→C | 0x2828 | 10 B: i16 id, u32 current, i32 max |
 | MobHealth | Z→C | 0x37b1 | 3 B: u16 id, u8 percent |
 | ChannelMessage | both | 0x2b2d | cstr sender, cstr target, u32 0, u32 language, u32 channel, 5 B, u32 skill, cstr message, 15 zero bytes (note 3) |
@@ -230,6 +231,7 @@ own-corpse and leadership checks and the next zone's entry use it.
 | TargetCommand | both | 0x58e2 | 4 B: u32 target. The server echoes it when it accepts a target (and sends it for pets); refused targets get "You cannot see your target" |
 | AutoAttack / AutoAttack2 | C→Z | 0x109d / 0x3526 | 4 B each: u32 1 on / 0 off; both sent when the attack flag changes. EQEmu reads byte 0 of AutoAttack and ignores AutoAttack2 |
 | Consider | both | 0x742b | 20 B: u32 player, u32 target, u32 faction, u32 level, u8 pvp, 3 B. See note 1 |
+| ConsiderCorpse | C→Z | 0x5204 | Same 20 B layout as Consider, with the player and corpse IDs and the remaining fields zero |
 | Damage | Z→C | 0x6f15 | 30 B packed: u16 target, u16 source, u8 type, u32 spell, i32 damage, f32 force, f32 hit heading, f32 hit pitch, u8 secondary, u32 special (1 wild rampage, 2 rampage). See note 2 |
 | Death | Z→C | 0x6517 | 32 B, **not translated**: the server's Death_Struct. See note 3 |
 | HPUpdate | Z→C | 0x2828 | 10 B (above). Own HP (cur, max) at zone-in and on change, without the items' HP. See note 4 |
@@ -251,6 +253,19 @@ own-corpse and leadership checks and the next zone's entry use it.
 4. HPUpdate: EQEmu `SendHPUpdate` sends `GetHP() - itembonuses.HP`. The client adds the items' HP back for everything that shows or reports it (`GameConnection::own_hp`, docs/mechanics.md).
 5. ExpUpdate tip flag: the original shows the experience tip when it is 2. It is not AA experience, which only OP_AAExpUpdate carries. EQEmu sends 0.
 6. Animation: action n is the n-th clip of C01..C11, D01..D05, L01..L09, O01, S01..S05, P01..P07, T01..T09, S06..S28, P08, O02, O03.
+
+Considering an NPC or player corpse sends `OP_ConsiderCorpse`, as the original does (Cmd_consider @0x4df830,
+for spawn type 2 and up, without the consider tip). EQEmu's `Client::Handle_OP_ConsiderCorpse` sends the
+remaining decay time and, for player corpses, the resurrection time or status. The client displays these
+replies through the usual formatted, simple or plain chat message handlers.
+
+`/consider` sends nothing in two cases, as Cmd_consider does. With no target it prints eqstr 13063 ("Consider
+whom?"). A living target whose race carries the race table's vehicle flag (PlayerClient vftable slot +0x50,
+PlayerClient_IsVehicleRace @0x59e530: the ships and boats) gets 13064 ("You can't consider that."); a vehicle's
+corpse still sends `OP_ConsiderCorpse`. Both lines use the default chat colour (dsp_chat 0x111). The reply
+handler (CEverQuest::Consider @0x5239a0) keeps its own lines: 12240 ("Consider who?") when the target is not in
+the spawn list and 12241 for a corpse, which stock EQEmu never sends since corpses go through
+`OP_ConsiderCorpse`.
 
 #### Combat: observed sequences
 
@@ -357,7 +372,7 @@ Only OP_ShopPlayerBuy/Sell (field copies) and OP_CancelTrade have a RoF2 transla
 | ShopPlayerBuy | C→Z | 0x0ddd | 32 B Merchant_Sell_Struct: u32 merchant, u32 me, u32 item slot (the item's instance id) + u32 high dword (0), u32 quantity, 12 bytes unset (0). Refused locally with an item on the cursor (8548) or too little money (12060/12061) |
 | ShopPlayerBuy | Z→C | 0x0ddd | same, quantity bought, u32 total price at +24. See note 2 |
 | ShopPlayerSell | C→Z | 0x791b | 20 B Merchant_Purchase_Struct: u32 merchant, TypelessInventorySlot {i16 slot, i16 bag sub-slot, i16 augment, i16}, u32 quantity, u32 price (unset by the client; 0). Refused locally: not droppable 12062, a non-empty bag 12064, augmented 5360, a sale pending 12063 |
-| ShopPlayerSell | Z→C | 0x791b | same with the copper paid; slot -1 = refused (1364). The sold count leaves the stack (no item packet), 1361 "You receive%1 from %2 for the %3(s).", then OP_MoneyUpdate with the new coin |
+| ShopPlayerSell | Z→C | 0x791b | same with the copper paid; slot -1 = refused (1364, colour 0x113). The sold count leaves the stack (no item packet); the copper is credited, wave 0x8a (the cash register) plays and 1361 "You receive%1 from %2 for the %3(s)." prints in the Merchants colour 0x114 (FinishSellingItem @0x6f4200), then OP_MoneyUpdate with the new coin |
 | ShopEnd | C→Z | 0x30a8 | 8 B: u32 merchant, u32 me; answered by an empty OP_ShopEndConfirm (0x3196) |
 | ShopDelItem | Z→C | 0x724f | 12 B: u32 merchant, u32 player, u32 merchant slot (sold out) |
 | TradeRequest | both | 0x77b5 | 8 B: u32 the other side, u32 the sender. See note 3 |
@@ -371,7 +386,7 @@ Only OP_ShopPlayerBuy/Sell (field copies) and OP_CancelTrade have a RoF2 transla
 | ItemLinkClick (say link) | C→Z | 0x4cef | the ordinary OP_ItemLinkClick; the server says the phrase. See note 6 |
 
 1. ShopRequest stock: item packets type 0x64 (header slot type 9, slot = instance id = merchant slot, price = per-unit copper, merchant_slot = stock, -1 unlimited).
-2. ShopPlayerBuy reply: the item arrives first as an item packet type 0x67. There is **no** OP_MoneyUpdate: the client takes the price itself (smallest coins first; the split may differ from the server's, the total agrees) and prints 1437 "You give%1 to %2.".
+2. ShopPlayerBuy reply: the item arrives first as an item packet type 0x67. There is **no** OP_MoneyUpdate: the client takes the price itself (smallest coins first; the split may differ from the server's, the total agrees) and prints 1437 "You give%1 to %2." in the Merchants colour 0x114. Wave 0x8a (the cash register) plays only when the purse could pay; otherwise the coin is zeroed silently (FinishBuyingItem @0x6ef220, also a trader purchase, TraderShop 10 method 0).
 3. TradeRequest C→Z is sent on a left click on a spawn while holding an item (within AvatarHeight + 20, 12294). Banker-type classes 40/63/64/66/74 refuse (8505). Z→C (a player asks): the client opens its trade window at once and answers the Ack.
 4. TradeRequestAck: for an NPC the server answers itself ({me, NPC}); the cursor item then goes into the trade (OP_MoveItem cursor → {3, slot}, count 0; a stack merges first) and the 4-slot give window opens. Players get the 8-slot trade window.
 5. CancelTrade: the client prints 1448/1450 and sends its own cancel back while a partner is set. Refunds come as item packets and OP_MoneyUpdate, then OP_FinishWindow/2 (empty).
@@ -568,13 +583,19 @@ The client decides locally whether a skill may be used and sends one request; th
 | RemoveTrap | C→Z | 0x71da | 4 B: u32 target |
 | Animation | both | 0x7177 | 4 B: u16 spawn id, u8 action, u8 speed (RoF2 order); fishing sends action 5, speed 5 when standing |
 | Hide, Sneak, Forage, Mend, SenseHeading, Fishing, InstillDoubt (intimidation), SenseTraps, DisarmTraps, LDoNPickLock, TrackUnknown | C→Z | 0x67fe, 0x5d55, 0x5306, 0x0ecf, 0x260a, 0x1e2a, 0x640e, 0x02af, 0x78bf, 0x9be3, 0x4577 | empty |
-| Hide (cancel) | C→Z | 0x67fe | 4 zero bytes: the answer to the server's OP_CancelSneakHide |
-| CancelSneakHide | Z→C | 0x0927 | empty: hide and sneak are over |
+| Hide (cancel) | C→Z | 0x67fe | 4 zero bytes: acknowledgement for the server's OP_CancelSneakHide |
+| CancelSneakHide | Z→C | 0x0927 | empty: clear Hide and Sneak, then send Hide (cancel), own SpawnAppearance type 3 with parameter 0 unless regular invisibility remains (a known spell, or a level the server set for the player), and type 15 with parameter 0 (note 2) |
 | SpawnAppearance (sneak / hide) | both | 0x0971 | type 15 (sneak) parameter 0/1 from the server sets the player's sneak flag; the client sends {me, 15, 0} to stop sneaking and {me, 3, 0} to unhide before a disarm |
 | SkillUpdate | Z→C | 0x004c | 12 B: u32 skill, u32 value, 4 unknown bytes; the value goes into the profile's skills |
 | Track | both | 0x17e5 | C→Z empty (the tracking window asks for the list); Z→C the list (note 1) |
 
 1. Track Z→C: the list is decoded, sorted and filtered for the tracking window (`net/game_connection_tracking.cpp`). A first u32 of 0xff8b344f (`decode_track_reply_header`) is the tracking timer, not a list.
+2. CancelSneakHide: the original (HandleWorldMessage @0x4c7623, @0x5319e0) answers only for the flags it holds:
+   Send_OP_Hide @0x52b9e0 while hidden (OP_Hide {0}, type 3 when the visibility level changed, eqstr 12337), then
+   @0x52bae0 while sneaking (eqstr 12338, type 15). Hailstone sends all three whatever its flags (a fixed RoF2
+   gap): EQEmu's `Client::CancelSneakHide` sends the packet only while it holds the player hidden, its Hide roll
+   is independent of the client's, and it clears its hidden flag and relays the reveal to nearby clients only on
+   the client's type 3 with 0. The lines are printed only for a flag that was set.
 
 ### Doors and ground objects (`net/door_packets.h`, `GameConnection` in `net/game_connection_doors.cpp`, rules in `game/doors.{h,cpp}`, drawing and collision in `app/world_objects.{h,cpp}`)
 
@@ -616,7 +637,10 @@ Every door moves each frame by elapsed ms × 0.02 ticks (nothing moves on a fram
 
 A door not in its default state returns by itself after a repop time (10 s for types 0 and 5, 20 s for most). EQEmu's close timer resets only the server's state silently, so the client's return is what closes ordinary doors.
 
-The click range: the 3D distance from the player to the door must not exceed the player's height + 20 + the door actor's bounding radius. Else eqstr 1462 "You can't reach that, get closer." (EQEmu checks 100 units, `Range:MaxDistanceToClickDoors`).
+For a mouse pick, the 3D distance from the player to the hit point must be within the player's height + 20.
+Activations without a hit point measure to the door origin and add the scaled actor radius to the reach.
+An out-of-range activation shows eqstr 1462 "You can't reach that, get closer."
+EQEmu separately checks `Range:MaxDistanceToClickDoors` (100 units by default).
 
 Teleport doors (types 57/58 with a destination) are moved by the server with OP_RequestClientZoneChange.
 
@@ -989,6 +1013,8 @@ EQEmu's deposit acknowledgement has its failed flag where RoF2 reads the slot to
 2. RaidUpdate actions:
    - 0 add (148 B: + u8 class @140, level, group leader, 5 B; parameter = group 0..11 or 0xffffffff); 1 remove; 5 disband (5062); 8 create; 10 the zone-in reset (136 B); 17/18 lock/unlock; 20 invitation (5065, 5067).
    - 14 the raid leader's leadership ranks and 30 leader (392 B: the 64 dwords from +136 are Leadership_SetRaidAbilityRanks' block, raid ability n at dword n; 30 also 5069 / 5070).
+     EQEmu sends the new leader's name at both +72 and +4 in action 30. The client prefers +72 and falls back to +4 when it is empty.
+     If both names are empty, the client applies the ranks and keeps the previous leader without announcing a change. This is a deliberate change from RoF2, whose CRaid_HandleSetLeader (0x47e850) reads +72 alone and clears the leader, printing 5070 with a blank name.
    - 32 loot type (+136); 33 / 34 looter added / removed (+72); 35 MOTD (1164 B; 6349).
    - 36 a member's note (204 B: the member at +72, the note at +140; EQEmu sends the notes after the roster).
 3. RaidDelegateAbility:
@@ -1071,6 +1097,7 @@ Tried live against EQEmu with two clients (playprobe `--duel`, `--duel-wait`, `-
 | SharedTaskInvite / SharedTaskInviteResponse | Z→C / C→Z | 0x3444 / 0x7582 | 136 B {i32, i32 invite id, `char[64]` task, `char[64]` inviter} / 12 B {0, invite id, i8 accepted, 3} |
 | Stun / ItemRecastDelay / Bind_Wound | Z→C | 0x36a4 / 0x15a9 / 0x0386 | u32 duration ms (+2 B) / 12 B {delay s, recast type, bool} / 8 B {u16 target, u16, u16 type: 3 start, 1 done, 4 target dead, 5 gone, 7 no bandage} |
 | Sound (QuestReward_Struct) / CashReward | Z→C | 0x1a30 / 0x5f7a | 68 B {giver, our id, exp, faction, mod, copper +20, silver, gold, platinum} / 16 B {copper, silver, gold, platinum}: coin added without a coin update |
+| GMKill | Z→C | 0x51d3 | 132 B {`char[64]` the named player, `char[64]` the GM, u32} (EQEmu forwards the GM's own /kill packet to every client in the zone, the GM's included, and does not kill the player itself): the name is compared with our name without case, and on a match the struck-down line (eqstr 1391, colour 10), wave 0x8f and the client's own kill: the profile HP (`0x45ffa0`, PcProfile +0x3394) and the own spawn's HPCurrent (`0x4423b0`, +0x2e4) set to -10000 and the RespawnTimer (+0x2bc) cleared, with nothing sent back, no OP_Death and no respawn window, so the player lies at -10000 until the server's next OP_HPUpdate (in the original the zone message handler at `0x4c3250` takes 0x51d3 to the case at `0x4c8a23` through the byte and pointer tables at `0x4d4998` / `0x4d4980`) |
 | GuildMemberAdd / Delete / Level / PublicNote / SetGuildRank (= RankAltBanker) / Details | Z→C | 0x2925 / 0x3141 / 0x1bd3 / 0x01f9 / 0x0b9c / 0x69b9 | u32 guild first; see GameConnection::handle_world_social |
 | Charm / DisciplineUpdate / Untargetable / YellForHelp / GetGuildMOTDReply | Z→C | 0x5d92 / 0x759e / 0x053c / 0x4e56 / 0x4f1f | 12 B {owner, pet, 1 on / 0 off} / 300 × u32 / 8 B {spawn, targetable} / u32 yeller / the GuildMOTD struct |
 | Weblink | Z→C | 0x6f4b | the address, NUL-terminated (EQEmu `Weblink_Struct`); the case @0x4c5b5d opens it in an HTML window (docs/browser.md) |

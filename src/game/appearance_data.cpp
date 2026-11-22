@@ -1,6 +1,7 @@
 #include "game/appearance_data.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdlib>
 
@@ -176,6 +177,29 @@ void PlayerCustomization::parse(std::string_view text) {
         e.facial_attachments = static_cast<std::int32_t>(to_int(f[11]));
         entries_[{static_cast<std::int32_t>(to_int(f[0])), static_cast<std::int32_t>(to_int(f[1])),
                   static_cast<std::int32_t>(to_int(f[12]))}] = std::move(e);
+    }
+}
+
+void ActorTagTable::parse(std::string_view text) {
+    for (std::string_view line : lines(text)) {
+        auto f = split(line, '^');
+        if (f.size() < 2) continue;
+        std::uint32_t model = 0;
+        std::int32_t kind = 0;
+        auto [end1, ec1] = std::from_chars(f[0].data(), f[0].data() + f[0].size(), model);
+        auto [end2, ec2] = std::from_chars(f[1].data(), f[1].data() + f[1].size(), kind);
+        // A line whose first two fields are not whole numbers is skipped, the safe choice: how the original's integer
+        // reader (@0x7f4130) takes such a field is not traced.
+        if (ec1 != std::errc{} || end1 != f[0].data() + f[0].size() || ec2 != std::errc{} ||
+            end2 != f[1].data() + f[1].size())
+            continue;
+        ++records_;
+        // A model listed twice takes its last line, as in the original: its loader (@0x7f4130) does not look for an
+        // earlier record while loading and puts each new one at its hash bucket's head (@0x7f43a7), found first.
+        if (kind == 1)
+            shields_.insert(model);
+        else
+            shields_.erase(model);
     }
 }
 

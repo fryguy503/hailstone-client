@@ -43,6 +43,15 @@ std::vector<LightSource> select_lights(std::span<const assets::PointLight> zone_
     return out;
 }
 
+std::optional<LightSource> scaled_carried_light(const LightSource& light, float strength, float reach) {
+    strength = std::clamp(strength, 0.0f, kMaxCarriedLight);
+    if (!(strength > 0.0f)) return std::nullopt;
+    LightSource out = light;
+    out.color *= strength;
+    out.radius *= std::clamp(reach, kMinCarriedReach, kMaxCarriedReach);
+    return out;
+}
+
 std::uint8_t carried_light_value(const Inventory& inventory) {
     std::uint8_t best = 0;
     for (std::int16_t s = 0; s <= net::kSlotGeneral10; ++s)

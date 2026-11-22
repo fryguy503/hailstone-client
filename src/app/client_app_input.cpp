@@ -8,6 +8,8 @@
 #include "core/env.h"
 #include "core/float_chars.h"
 
+#include <utility>
+
 namespace hailstone::app::client_internal {
 
 // CanIFitHere and the room above for crouch to stand (unk_SetStandState): nothing between the feet and the
@@ -129,8 +131,9 @@ void ClientApp::key_command(const game::KeyMap::Event& e) {
     case C::CYCLECORPSETARGETS:
     case C::TOGGLETARGET:
     case C::TOGGLETWOTARGETS:
-        // __ExecuteCmd's target keys (game/targeting.h): Tab swaps between yourself and the remembered target;
-        // the others cycle the spawns within 500 units, nearest first. A frozen player's keys are refused.
+        // __ExecuteCmd's target keys (game/targeting.h): TOGGLETARGET swaps between yourself and the remembered
+        // target; the others cycle the spawns within 500 units, nearest first (Hailstone binds Tab to TARGETNPC).
+        // A frozen player's keys are refused.
         prepare_target_cycle();
         if (conn_->player_status().stand_state != net::kStandFreeze)
             if (auto id = game::target_key_command(target_manager_, cmd, world, eye_position()))
@@ -233,7 +236,7 @@ void ClientApp::key_command(const game::KeyMap::Event& e) {
         break;
     case C::CLOSE_INV_BAGS:
         if (ui_api_ && ui_api_->replaces("Bag1")) ui_api_->close_all_bags();
-        else if (item_ui_) item_ui_->close_all_bags();
+        else if (item_ui_) item_ui_->close_all_bags(*conn_);
         break;
     case C::TOGGLE_INV_BAGS:
         if (ui_api_ && ui_api_->replaces("Bag1")) ui_api_->toggle_all_bags();
@@ -585,16 +588,41 @@ std::optional<bool> ClientApp::can_see_spawn(std::uint32_t id) const {
 }
 
 // The target keys' filters, set before each press. Hailstone: the NPC cycle skips players' pets and mercenaries
-// unless the option tab_skip_pets is off, and takes only the NPCs in sight (can_see_spawn: the eyes to a point 1 over
-// the spawn) unless tab_line_of_sight is off; without the zone's collision every NPC counts as in sight.
+// unless tab_skip_pets is off. Like the original's scene query (CSceneGraph vtable +0x98 @0x100690f0, which drops a
+// spawn when eqgame's callback 0x5c5860 finds the world in the way), the NPC cycle takes only the NPCs in sight
+// unless tab_target_through_walls is on; here the zone, placed objects and doors as they stand all block.
+// Deliberate change from the original: the sight line starts at the camera that drew the scene (third-person and
+// isometric too), not the eye point the original uses, so Tab offers what is visible on screen; it can pick an NPC
+// the character cannot see, and the server may then refuse spells. Hailstone also takes only the NPCs on screen
+// unless tab_target_offscreen is on.
 void ClientApp::prepare_target_cycle() {
     target_manager_.skip_pets = option_value("tab_skip_pets").value_or(1) != 0;
     const auto see_invisible = viewer_see_invisible_rank();
     target_manager_.invisible = [this, see_invisible](const game::Spawn& s) { return conn_->spawn_invisible(s, see_invisible); };
-    if (option_value("tab_line_of_sight").value_or(1) != 0)
-        target_manager_.in_sight = [this](const game::Spawn& s) { return can_see_spawn(s.id).value_or(true); };
-    else
+    const bool offscreen = option_value("tab_target_offscreen").value_or(0) != 0;
+    const bool through_walls = option_value("tab_target_through_walls").value_or(0) != 0;
+    if (offscreen && through_walls) {
         target_manager_.in_sight = nullptr;
+        return;
+    }
+    const glm::vec3 from = target_view_projection_ ? pick_camera_.position : eye_position();
+    const float actor_clip = game::actor_clip_distance(actor_clip_plane_, view_.far_plane);
+    std::function<bool(const glm::vec3&)> clear_line;
+    if (!through_walls) {
+        clear_line = [this, from](const glm::vec3& to) {
+            return (!collision_ || collision_->line_of_sight(from, to)) &&
+                   (!world_objects_ || world_objects_->line_of_sight(from, to)) &&
+                   (!animated_objects_ || !animated_objects_->blocks(from, to));
+        };
+    }
+    target_manager_.in_sight = [this, from, actor_clip, offscreen, clear_line = std::move(clear_line)](const game::Spawn& s) {
+        if (!offscreen) {
+            if (!target_view_projection_) return false;
+            const glm::vec3 center = s.display_valid ? s.display_position : s.position;
+            if (actor_clip > 0.0f && glm::distance(from, center) > actor_clip) return false;
+        }
+        return game::npc_in_target_view(s, offscreen ? nullptr : &*target_view_projection_, clear_line);
+    };
 }
 
 // --abilities-test: 6 s after zoning in walk up to the target (--auto-target picks one), then press hot buttons

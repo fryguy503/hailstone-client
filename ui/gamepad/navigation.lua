@@ -16,12 +16,15 @@ local C = T.C
 local findList = { offset = 0 }
 local findKind = 0 -- 0 all, else the index into hs.FindCategories()
 local CATS = API.find.Categories and API.find.Categories() or {}
-local findPolicy, findPolicyName, findPolicyCustom, findPolicyStock = nil, nil, nil, nil
+local findPolicy, findServerOnly, findPolicyName, findPolicyCustom, findPolicyStock
 local findRevision, findContext, findZone = nil, nil, nil
-local function npcFindAllowed()
+local pathHints = { { "a", "Show the path" }, { "b", "Close" } }
+local walkHints = { { "a", "Show the path" }, { "x", "Walk there" }, { "b", "Close" } }
+local function npcFindPolicy()
   local query = API.map.Policy
   local policy = type(query) == "function" and query() or nil
   local allowed = type(policy) ~= "table" or policy.npc_find ~= false
+  local serverOnly = type(policy) == "table" and policy.npc_find_server_only == true
   local name = type(policy) == "table" and policy.name or ""
   local custom = type(policy) == "table" and policy.custom_spawns == true
   local stock = type(policy) ~= "table" or policy.stock_npcs ~= false
@@ -29,20 +32,24 @@ local function npcFindAllowed()
   local context = type(policy) == "table" and policy.context or nil
   local zone = select(2, API.map.ZoneName())
   if findPolicy ~= allowed or findPolicyName ~= name or findPolicyCustom ~= custom or findPolicyStock ~= stock
+      or findServerOnly ~= serverOnly
       or findRevision ~= revision or findContext ~= context or findZone ~= zone or not allowed then
     findList = { offset = 0 }
     findPolicy, findPolicyName, findPolicyCustom, findPolicyStock = allowed, name, custom, stock
+    findServerOnly = serverOnly
     findRevision, findContext, findZone = revision, context, zone
   end
-  return allowed
+  return allowed, serverOnly
 end
 
 ui.window("Find", function()
   if not API.session.InGame() or not API.find.Open() then return end -- (before the policy: shut, it costs nothing)
-  if not npcFindAllowed() then return end
+  local allowed, serverOnly = npcFindPolicy()
+  if not allowed then return end
   T.frame()
-  if W.begin("Find", { w = 1200, h = 860, title = "Find", subtitle = "Merchants, bankers, trainers and more in this zone",
-        hints = { { "a", "Show the path" }, { "x", "Walk there" }, { "b", "Close" } } }) then
+  if W.begin("Find", { w = 1200, h = 860, title = "Find",
+        subtitle = serverOnly and "NPCs the server marks as findable" or "Merchants, bankers, trainers and more in this zone",
+        hints = serverOnly and pathHints or walkHints }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
     local bh = T.px(76)
@@ -80,7 +87,7 @@ ui.window("Find", function()
         end
       end)
       -- X: walk there (the navigator; any movement stops it), the window closing
-      if focused and W.pressed("x") then
+      if not serverOnly and focused and W.pressed("x") then
         local row = rows[focused]
         if API.find.NpcTarget(row.id, row.token) ~= false and API.find.NpcWalk(row.id, row.token) then API.find.Open(false) end
       end

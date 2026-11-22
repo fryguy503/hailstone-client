@@ -477,6 +477,8 @@ void close_all_bags(UiHost& host);
 void toggle_all_bags(UiHost& host);
 // A new UI session starts with no bag open and both keys set to open (the CInvSlotMgr constructor sets them).
 void reset_containers();
+// Once a frame: closes the containers the bank window's hide or a bag leaving its slot closes, each with its sound.
+void prune_bag_windows(net::GameConnection& conn);
 // The CMD_TOGGLE_BANK_BAGS key: the windows of the bags in the bank and the shared bank (open only while the bank
 // window shows).
 void toggle_all_bank_bags(UiHost& host);

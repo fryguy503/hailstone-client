@@ -242,3 +242,58 @@ TEST_CASE("Mounted form changes: unseat before rebuild and re-seat against the n
         CHECK(rider.form_mount_id == 0);
     }
 }
+
+TEST_CASE("Held models: a bow shot shows the range item in the left hand and sends OP_WearChange") {
+    auto config = MockConfig::standard();
+    auto bow = make_item(1001, "Bow", net::kSlotRange);
+    bow.item_type = 5;
+    bow.id_file = "IT10641";
+    bow.ornament_off = "IT99"; // only a secondary-slot item reads its own ornament string
+    auto sword = make_item(1002, "Sword", net::kSlotPrimary);
+    sword.id_file = "IT2";
+    auto shield = make_item(1003, "Shield", net::kSlotSecondary);
+    shield.id_file = "IT200";
+    config.characters.front().inventory = {bow, sword, shield};
+    Rig rig(config);
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, net::Op::ClientReady) != 0; }));
+    auto& conn = rig.conn;
+    const auto me = static_cast<std::uint16_t>(conn.world().player_id);
+    const auto& a = conn.world().player()->appearance;
+    auto wear_changes = [&] {
+        std::vector<net::WearChange> out;
+        for (const auto& p : rig.server.zone_log)
+            if (net::from_wire(p.opcode) == net::Op::WearChange)
+                if (auto w = net::decode_wear_change(p)) out.push_back(*w);
+        return out;
+    };
+    rig.server.zone_log.clear();
+
+    // DoRangedAttack's pair: 7 "0", 8 the range item's main model.
+    conn.set_held_model(game::kSlotPrimary, -1);
+    conn.set_held_model(game::kSlotSecondary, net::kSlotRange);
+    CHECK(a.material[game::kSlotPrimary] == 0);
+    CHECK(a.material[game::kSlotSecondary] == 10641);
+    REQUIRE(rig.until([&] { return wear_changes().size() == 2; }));
+    auto sent = wear_changes();
+    CHECK(sent[0].spawn_id == me);
+    CHECK(sent[0].slot == game::kSlotPrimary);
+    CHECK(sent[0].armor.material == 0);
+    CHECK(sent[1].spawn_id == me);
+    CHECK(sent[1].slot == game::kSlotSecondary);
+    CHECK(sent[1].armor.material == 10641);
+    CHECK(sent[1].armor.hero_forge_model == 0);
+    CHECK(sent[1].tint == 0);
+
+    // The next melee swing's preamble puts the worn weapons back.
+    rig.server.zone_log.clear();
+    conn.set_held_model(game::kSlotPrimary, net::kSlotPrimary);
+    conn.set_held_model(game::kSlotSecondary, net::kSlotSecondary);
+    CHECK(a.material[game::kSlotPrimary] == 2);
+    CHECK(a.material[game::kSlotSecondary] == 200);
+    REQUIRE(rig.until([&] { return wear_changes().size() == 2; }));
+    sent = wear_changes();
+    CHECK(sent[0].armor.material == 2);
+    CHECK(sent[1].armor.material == 200);
+    CHECK(sent[1].slot == game::kSlotSecondary);
+}

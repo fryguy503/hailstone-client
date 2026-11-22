@@ -15,6 +15,7 @@
 #include <cstdlib>
 
 #include "mq/lua_mq.h"
+#include "plugin/ui_bridge.h"
 
 namespace hailstone::app::client_internal {
 
@@ -126,7 +127,7 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         // PlayerClient::SetNameSpriteState draws nothing without bDisplayNameSprite (the spawn's showname bit); body
         // type 11 has no name either (EQEmu's BodyType::NoTarget, "no name, can't target": the server's teleport
         // triggers, #TPTrigger*, are sent with showname set).
-        if (!s.show_name || s.body_type == 11) continue;
+        if (!s.show_name || s.has_property(11)) continue;
         glm::vec3 base = s.display_valid ? s.display_position : s.position;
         // The head is straight above the spawn, so one farther across the ground than the names' range is out of it
         // whatever its height: passed over before its model is looked up (most of a busy zone, every frame).
@@ -400,6 +401,11 @@ void ClientApp::update_ui_host() {
             if (conn_) conn_->preview_item_id(item_id);
         };
         h.plugin_caps = [this](std::string_view name) { return automation_ ? automation_->plugin_caps(name) : 0u; };
+        h.collect_upscaler_ui_contributions = [this](plugin::UiBridge& snapshot) {
+            if (const auto* provider = vk_.active_upscaler_provider())
+                for (const auto* entry : provider->ui_contributions())
+                    snapshot.set_contribution_from_sdk(provider->name(), entry, plugin::UiBridge::Kind::Upscaler);
+        };
         h.plugin_consent = [this]() -> std::optional<plugin::ConsentPrompt> {
             return automation_ ? automation_->plugin_consent() : std::nullopt;
         };
@@ -607,6 +613,7 @@ void ClientApp::update_ui_host() {
         h.find_option = [this](std::string_view o) { return option_value(o); };
         h.set_option = [this](std::string_view o, int v) { set_option_value(o, v); };
         h.option_choices = [this](std::string_view o) { return option_choices(o); };
+        h.play_sound_test = [this](std::string_view o) { return play_sound_test(o); };
         h.run_command = [this](int command) {
             if (conn_) key_command({command, true});
         };

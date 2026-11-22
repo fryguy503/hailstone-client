@@ -20,12 +20,40 @@ ItemUi::~ItemUi() = default;
 
 void ItemUi::inspect(const net::Item& item) { ui::show_item_info(state_, item); }
 
-void ItemUi::open_all_bags(const net::GameConnection& conn) {
+void ItemUi::open_bag(net::GameConnection& conn, std::int16_t general_slot) {
+    if (!state_.open_bags.insert(general_slot).second) return;
+    if (const net::Item* bag = conn.inventory().at(net::ItemSlot::possessions(general_slot));
+        bag && bag->is_bag())
+        open_bag_types_[general_slot] = bag->bag_type;
+}
+
+void ItemUi::open_all_bags(net::GameConnection& conn) {
     for (std::int16_t g = net::kSlotGeneral1; g <= net::kSlotGeneral10; ++g) {
         const net::Item* bag = conn.inventory().at(net::ItemSlot::possessions(g));
-        if (bag && bag->is_bag() && bag->placeable_flags() == 0) state_.open_bags.insert(g);
+        if (bag && bag->is_bag() && bag->placeable_flags() == 0 && state_.open_bags.insert(g).second) {
+            open_bag_types_[g] = bag->bag_type;
+            conn.container_sound(bag->bag_type, true);
+        }
     }
     bags_closed_ = false;
+}
+
+void ItemUi::close_all_bags(net::GameConnection& conn) {
+    // CInvSlotMgr_CloseAllBags closes each open bag through CContainerMgr::CloseContainer, which sounds it.
+    for (std::int16_t g : state_.open_bags) {
+        auto it = open_bag_types_.find(g);
+        if (it == open_bag_types_.end()) continue;
+        conn.container_sound(it->second, false);
+        open_bag_types_.erase(it);
+    }
+    state_.open_bags.clear();
+    bags_closed_ = true;
+}
+
+void ItemUi::close_bags_when_bank_hides(net::GameConnection& conn) {
+    const std::uint64_t serial = conn.bank() ? conn.bank()->serial : 0;
+    if (bank_serial_ != 0 && serial != bank_serial_) close_all_bags(conn);
+    bank_serial_ = serial;
 }
 
 void ItemUi::link_clicked(net::GameConnection& conn, const game::ItemLink& link) { conn.request_item(link); }
@@ -47,7 +75,27 @@ void ItemUi::draw(net::GameConnection& conn) {
         in.loot_money = loot->money;
     }
 
+    // Before the windows redraw: a bank hide closes every bag, so its close wave is not also owed to the open-set
+    // diff below.
+    close_bags_when_bank_hides(conn);
+    const std::set<std::int16_t> was_open = state_.open_bags;
     ui::ItemWindowsActions act = ui::item_windows(state_, in, icons_.get());
+    // A bag opened or closed in the windows (right click, its close button, or one that is no longer there):
+    // CContainerMgr's sound, chosen by the type of the bag that was open. The item may already have left or been
+    // replaced, so a close uses the type recorded when it opened, never whatever sits in the slot now.
+    for (std::int16_t g : state_.open_bags)
+        if (!was_open.contains(g))
+            if (const net::Item* bag = conn.inventory().at(net::ItemSlot::possessions(g))) {
+                open_bag_types_[g] = bag->bag_type;
+                conn.container_sound(bag->bag_type, true);
+            }
+    for (std::int16_t g : was_open) {
+        if (state_.open_bags.contains(g)) continue;
+        auto it = open_bag_types_.find(g);
+        if (it == open_bag_types_.end()) continue;
+        conn.container_sound(it->second, false);
+        open_bag_types_.erase(it);
+    }
     if (act.click) conn.click_slot(*act.click, ImGui::GetIO().KeyShift, ImGui::GetIO().KeyCtrl);
     if (act.destroy) conn.destroy_held();
     if (act.auto_inventory) conn.auto_inventory();

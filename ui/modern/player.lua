@@ -13,6 +13,22 @@ local WINDOW = "PlayerWindow"
 local ROLE_COLORS = { C.mana, C.accent, C.endurance }
 local CAST_H = 24 -- the cast bar's row (design pixels)
 local CAST_BAR_SETTING = "player.alwaysShowCastBar"
+local MANA_READOUT = "player.manaReadout"
+local ENDURANCE_READOUT = "player.enduranceReadout"
+local MANA_H, ENDURANCE_H, READOUT_H = 9, 6, 16
+local READOUT_CHOICES = {
+  { "none", "None" }, { "percent", "Percentage" }, { "value", "Value" }, { "both", "Both" },
+}
+local READOUT_HEIGHT = { percent = READOUT_H, value = READOUT_H, both = READOUT_H }
+
+local function readoutMenu(label, key, mode)
+  if ui.BeginMenu(label) then
+    for _, choice in ipairs(READOUT_CHOICES) do
+      if ui.MenuItem(choice[2], mode == choice[1]) then ui.SetSetting(key, choice[1]) end
+    end
+    ui.EndMenu()
+  end
+end
 
 -- The classes' short names, for a multiclass server's list when the full names do not fit (a level title the
 -- table does not know shows its first three letters).
@@ -73,6 +89,33 @@ local function percent(n)
   return t
 end
 
+local function readoutMode(key)
+  local mode = T.Setting(key)
+  return READOUT_HEIGHT[mode] and mode or "none"
+end
+
+-- "current / max" for a pair of labels, made again only when they change (drawn every frame, as hpText is)
+local VALUE_CACHE = {} -- by the current label's id: { current, max, text }
+local function resourceValue(currentId, maxId)
+  local current, max = API.character.Label(currentId), API.character.Label(maxId)
+  local c = VALUE_CACHE[currentId]
+  if not c then
+    c = {}
+    VALUE_CACHE[currentId] = c
+  end
+  if c[1] ~= current or c[2] ~= max then
+    c[1], c[2] = current, max
+    c[3] = (current and max and current ~= "" and max ~= "") and (T.Thousands(current) .. " / " .. T.Thousands(max))
+      or nil
+  end
+  return c[3]
+end
+
+local function resourceReadout(opts, mode, fraction, currentId, maxId)
+  opts.text = (mode == "value" or mode == "both") and resourceValue(currentId, maxId) or nil
+  opts.right = (mode == "percent" or mode == "both") and fraction and percent(math.floor(fraction * 100 + 0.5)) or nil
+end
+
 -- The combat state (the game's PW_CombatStateAnim: in combat, the combat timer, debuffed, resting, standing) as a pip
 -- on the level badge with the game's tooltip, and while the combat timer runs (gauge 29: up to the last 30 s of
 -- OP_RestState's downtime) a ring around the badge that empties with it and the time left (label 137) under it.
@@ -115,13 +158,19 @@ local PANEL_OPTS = { glowWidth = 3 }
 local NO_TRAIL = { noTrail = true }
 local pctXp, pctXpText, pctAa, pctAaText = nil, "", nil, "" -- the XP and AA percentages as last drawn
 local HP_BAR = {}
+local MANA_BAR, ENDURANCE_BAR = {}, {}
 local NAME_COLOR = { 0, 0, 0, 1 }
 local OPTS = {
-  size = function() return 300, 104 + (frame.caster and 12 or 0) + (frame.showCastBar and CAST_H or 0) end,
+  size = function()
+    local manaRow = frame.caster and frame.manaHeight + 3 or 0
+    return 300, 104 - ENDURANCE_H + frame.enduranceHeight + manaRow + (frame.showCastBar and CAST_H or 0)
+  end,
   panelOpts = PANEL_OPTS,
   menu = function()
     local always = T.Setting(CAST_BAR_SETTING) == "1"
     if ui.MenuItem("Always show cast bar", always) then ui.SetSetting(CAST_BAR_SETTING, always and "0" or "1") end
+    readoutMenu("Mana readout", MANA_READOUT, frame.manaReadout)
+    readoutMenu("Endurance readout", ENDURANCE_READOUT, frame.enduranceReadout)
   end,
 }
 
@@ -193,21 +242,27 @@ local function body(x, y, w, h, s)
   by = by + 19 * s
   if caster then
     local mf = frame.manaFrac -- (hs.Gauge(2), read once this frame)
-    local mana, maxMana = API.character.Label(124), API.character.Label(125)
-    T.Bar("player.mana", bx0, by, bx1, by + 9 * s, s, mf, C.mana)
-    T.Hit("##mana", bx0, by, bx1, by + 9 * s)
-    if ui.IsItemHovered() and mana then ui.SetTooltip("Mana " .. T.Thousands(mana) .. " / " .. T.Thousands(maxMana)) end
-    by = by + 12 * s
+    local bottom = by + frame.manaHeight * s
+    resourceReadout(MANA_BAR, frame.manaReadout, mf, 124, 125)
+    T.Bar("player.mana", bx0, by, bx1, bottom, s, mf, C.mana, MANA_BAR)
+    T.Hit("##mana", bx0, by, bx1, bottom)
+    if ui.IsItemHovered() then
+      local value = MANA_BAR.text or resourceValue(124, 125)
+      if value then ui.SetTooltip("Mana " .. value) end
+    end
+    by = bottom + 3 * s
   end
   local ef = API.character.Gauge(3)
-  T.Bar("player.end", bx0, by, bx1, by + 6 * s, s, ef, C.endurance)
-  T.Hit("##end", bx0, by - 1 * s, bx1, by + 7 * s)
+  local bottom = by + frame.enduranceHeight * s
+  resourceReadout(ENDURANCE_BAR, frame.enduranceReadout, ef, 126, 127)
+  T.Bar("player.end", bx0, by, bx1, bottom, s, ef, C.endurance, ENDURANCE_BAR)
+  T.Hit("##end", bx0, by - 1 * s, bx1, bottom + s)
   if ui.IsItemHovered() then
-    local e, maxE = API.character.Label(126), API.character.Label(127)
-    if e then ui.SetTooltip("Endurance " .. T.Thousands(e) .. " / " .. T.Thousands(maxE)) end
+    local value = ENDURANCE_BAR.text or resourceValue(126, 127)
+    if value then ui.SetTooltip("Endurance " .. value) end
   end
   -- experience and AA experience, across the frame (their percentages made again only when the gauges move)
-  by = by + 12 * s
+  by = bottom + 6 * s
   do
     local xp, aa = API.character.Gauge(4) or 0, API.character.Gauge(5) or 0
     local x0, x1 = x + pad, x + w - pad
@@ -257,6 +312,9 @@ ui.window("Player", function()
   if not API.session.InGame() then return end
   local manaFrac, _, manaRaw = API.character.Gauge(2)
   frame.caster, frame.manaFrac = manaRaw ~= -1, manaFrac
+  frame.manaReadout, frame.enduranceReadout = readoutMode(MANA_READOUT), readoutMode(ENDURANCE_READOUT)
+  frame.manaHeight = READOUT_HEIGHT[frame.manaReadout] or MANA_H
+  frame.enduranceHeight = READOUT_HEIGHT[frame.enduranceReadout] or ENDURANCE_H
   frame.casting = API.windows.Shown("CastingWindow")
   frame.showCastBar = frame.casting or T.Setting(CAST_BAR_SETTING) == "1"
   local attacking = API.windows.ChildShown(WINDOW, "A_AttackIndicatorAnimTop") == true

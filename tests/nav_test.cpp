@@ -5,6 +5,7 @@
 #include <chrono>
 #include <map>
 #include <cmath>
+#include <string>
 #include <fstream>
 #include <iterator>
 #include <thread>
@@ -285,9 +286,12 @@ TEST_CASE("nav: a stray vertex far out does not size the tile grid; geometry wid
     Scene s;
     s.floor(0, 0, 50, 50, 0);
     const std::size_t floor_tris = s.verts.size() / 3;
-    // A damaged triangle reaching 1e30 units away (and one past int's range once divided by the tile size).
-    s.tri({0, 0, 0}, {1e30f, 0, 0}, {0, 1e30f, 0});
-    s.tri({0, 0, 0}, {-3e38f, 0, 0}, {0, 50, 0});
+    // A damaged triangle reaching 1e30 units away (and one past int's range once divided by the tile size). Read at
+    // run time: MSVC folds the constants through tri's cross product, whose 1e60 overflows (C4756).
+    const float distant = std::stof("1e30");
+    const float past_int = std::stof("-3e38");
+    s.tri({0, 0, 0}, {distant, 0, 0}, {0, distant, 0});
+    s.tri({0, 0, 0}, {past_int, 0, 0}, {0, 50, 0});
     auto geo = s.geometry();
     CHECK(geo->triangle_count() == floor_tris);
     CHECK(geo->tiles_x() == 1);

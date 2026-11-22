@@ -900,6 +900,7 @@ std::shared_ptr<const game::AppearanceData> load_appearance_data(const GameDir& 
     data->new_armor.parse_tags(text("Resources/NewArmorTagData.txt"));
     data->new_armor.parse_adjustments(text("Resources/NewArmorAdjData.txt"));
     data->customization.parse(text("Resources/PlayerCustomization.txt"));
+    data->actor_tags.parse(text("Resources/ActorTagInfo.txt"));
     // [Defaults] ActorNewArmorFilter (0xe63518), default 24.
     bool defaults = false;
     auto ini = game.read("eqclient.ini");
@@ -913,9 +914,11 @@ std::shared_ptr<const game::AppearanceData> load_appearance_data(const GameDir& 
         if (defaults && eq != std::string::npos && lower(trim(line.substr(0, eq))) == "actornewarmorfilter")
             data->new_armor_filter = static_cast<std::uint32_t>(std::strtoul(trim(line.substr(eq + 1)).c_str(), nullptr, 10));
     }
-    log::info("appearance data: {} NPC tints, {} item tints, {} hero's forge tags, {} adjustments, {} customization entries",
+    log::info("appearance data: {} NPC tints, {} item tints, {} hero's forge tags, {} adjustments, {} customization entries, "
+              "{} actor tags ({} shields)",
               data->npc_tints.values.size(), data->item_tints.values.size(), data->new_armor.tag_count(),
-              data->new_armor.adjustment_count(), data->customization.size());
+              data->new_armor.adjustment_count(), data->customization.size(), data->actor_tags.record_count(),
+              data->actor_tags.shield_count());
     return data;
 }
 

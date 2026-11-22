@@ -39,7 +39,8 @@ the workflow's history). Before a merge to `main`:
 
 Releases are built the same way (docs/updater.md "Making a release"):
 
-- Linux in the `hailstone-linux-build` container (Ubuntu 24.04, so the client runs on 24.04 and newer).
+- Linux in the `hailstone-linux-build` container (Ubuntu 24.04, so the client runs on 24.04 and newer); arm64 in the
+  same image built for arm64, under QEMU (`tools/docker/build.sh linux-arm64`).
 - Windows with MSVC under Wine.
 
 Run the sanitizer build (`-DHAILSTONE_SANITIZE=ON`, docs/hardening.md) and clang-tidy (below) by hand too, and keep
@@ -113,7 +114,9 @@ Notes:
 
 - A change merged without the builds above is not built anywhere.
 - Linux arm64 is built only by hand, under QEMU on an x64 machine (`tools/docker/build.sh linux-arm64`, "Builds in
-  containers" below). Windows arm64 is not built. macOS arm64 is built only when its workflow is started.
+  containers" below), and only for a release. Its release has been run on one device only: a Qualcomm Snapdragon 8
+  Elite (AYN Odin 3 Max, Kettle Linux, Mesa Turnip). Windows arm64 is not built. macOS arm64 is built only when its
+  workflow is started.
 - No macOS build has been run on a Mac with a display; on the runner the window, MoltenVK and the rendering are
   compiled and linked only.
 - Nothing runs against a real game install or a server unless run by hand.
@@ -182,7 +185,7 @@ commands above, with the same Dockerfiles, Release, and `msvc_build.sh`.
 ```sh
 tools/docker/build.sh linux-x64      # build-linux-x64/, then dist/linux-x64/hailstone
 tools/docker/build.sh windows-x64    # build-windows-x64/, then dist/windows-x64/hailstone
-tools/docker/build.sh linux-arm64    # native on an arm64 machine, under QEMU elsewhere (slow); not a release platform
+tools/docker/build.sh linux-arm64    # native on an arm64 machine, under QEMU elsewhere (slow, the tests most of all)
 tools/docker/build.sh all            # the three; --no-test after the platform skips the tests
 ```
 

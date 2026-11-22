@@ -24,6 +24,7 @@
 #include <glm/glm.hpp>
 
 #include "core/ini_file.h"
+#include "game/character_import.h"
 #include "game/compass.h"
 #include "game/hot_button_press.h"
 #include "game/hot_button_sets.h"
@@ -73,6 +74,8 @@ public:
     game::KeyMap& keymap() { return keymap_; }
     // The key bindings read again (a character's settings took over, Config::attach_character).
     void reload_keymap();
+    // Copy Layout's Key Bindings box: apply another character's saved keyboard bindings and movement defaults.
+    void copy_key_bindings(const std::filesystem::path& from_file);
     // The options window's Keys page (COptionsWnd::KeyboardPageWndNotification / sub_0070abc0): the next key pressed
     // goes to the command's bank (0 Keypress, 1 Alternate); with escape_clears, Escape unbinds it (the original
     // attaches an empty combo for Escape). The binding is saved; a reserved key changes nothing.
@@ -150,6 +153,17 @@ public:
     }
     // The character whose file is loaded (its hotbuttons.ini; empty before the first zone-in).
     const std::filesystem::path& char_ini_path() const { return char_ini_path_; }
+    struct ImportPreview {
+        game::CharacterImportPlan plan;
+        std::filesystem::path target;
+        std::string before;
+        std::string after;
+    };
+    ImportPreview preview_import(std::string_view source, game::CharacterImportOptions options) const;
+    bool apply_import(const ImportPreview& preview, std::string_view source, game::CharacterImportOptions options,
+                      std::string& error);
+    bool has_import_backup() const;
+    bool restore_import(std::string& error);
     void write_char_ini(std::string_view section, std::string_view key, const std::string& value);
     // __CopyLayout's 0x55b930: every key of `sections` in `from` (another character's file) written into this
     // character's (CharacterIni_WriteString), then, with `reload`, the hot buttons and socials read again
@@ -248,6 +262,9 @@ public:
     }
 
 private:
+    ImportPreview stage_import(std::string_view source, game::CharacterImportOptions options,
+                               game::HotButtonStore& staged, IniFile& ini) const;
+    std::optional<std::string> import_revision(std::string& error) const;
     game::mechanics::SkillContext context(net::GameConnection& conn, const game::mechanics::Character& ch,
                                           const AbilityView& view) const;
     void message(net::GameConnection& conn, const game::mechanics::SkillMessage& m);
@@ -263,6 +280,7 @@ private:
     Config& config_;
     std::filesystem::path config_path_;
     game::KeyMap keymap_;
+    std::vector<game::KeyMap::Event> pending_key_releases_;
     game::HotButtonStore store_;
     game::HotButtonSets sets_;
     IniFile char_ini_;

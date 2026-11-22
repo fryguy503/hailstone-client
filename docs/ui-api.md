@@ -249,6 +249,72 @@ Callbacks run as their registered source, under the intersection of captured and
 - Dispatch nesting is limited to eight.
 - A saved function or proxy identity is not a lifecycle token: keep handles and use `IsRegistered`.
 
+## Map overlays
+
+API 1.8 adds `hs.UI.map.RegisterOverlay(draw [, options])`, a drawing layer the client owns for the zone map
+(`hs.DrawZoneMap`) and the minimap (`hs.DrawMinimap`). An add-on draws there whatever copy of `map.lua` or
+`minimap.lua` draws the view, another add-on's included.
+
+```lua
+local handle, reason = hs.UI.map.RegisterOverlay(function(view)
+  if view.kind ~= 'minimap' then return end
+  ui.DrawCircle(view.cx, view.cy, view.radius, 1, 1, 0, 0.6) -- a ring on the minimap's edge
+end, {priority = 0})
+```
+
+`view` is one plain table, read-only by convention:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `'zone'` for the map window's zone map, `'minimap'` for the minimap |
+| `x0`, `y0`, `x1`, `y1` | The area drawn, in screen pixels (the minimap's bounding square) |
+| `cx`, `cy` | The view's screen centre |
+| `radius` | The minimap's disc radius in pixels; `0` for the zone map |
+| `scale` | Screen pixels per map unit |
+| `turn` | The view's rotation in heading units (0 is north up; the minimap's rotate option) |
+| `center_x`, `center_y` | The map position of the centre, in map units |
+| `player_x`, `player_y` | The player's map position; absent on another zone's map |
+| `zone` | The loaded map's short zone name (`hs.ZoneName`'s second return) |
+| `current_zone` | Whether the loaded map is the player's own zone |
+
+`options.priority` is an integer from -10,000 to 10,000 (default 0). Callbacks run by ascending priority, ties in
+registration order. At most 16 registrations per owner and 64 per UI VM.
+
+The zone map's callbacks draw on the map window's own draw list, inside the rectangle's clip (`x0`..`y1`), also when
+the code that drew the view left `ui.Foreground(true)` on: a shape that runs past the clip is cut off. An overlay that
+turns `ui.Foreground(true)` on itself draws above every window, as any code does. The minimap has no clip of its own:
+stay within `cx ± radius` and `cy ± radius` yourself. Map units are the same pair `hs.DrawZoneMap` and the Find rows
+take (the `/loc` x and y, negated).
+
+`RegisterOverlay` returns an opaque handle, or nil and a reason. `UnregisterOverlay(handle)` removes only the owner's
+registration and returns a boolean; it is ungated, so an add-on whose capabilities were reduced can still take its
+own overlay off.
+
+- The capability floor is `read` plus `ui`, needed at registration and still live when a callback runs. A callback
+  that needs more (say a `commands` call) gets it only if its owner holds it: the registry confers no authority.
+- A callback runs as its registered source even when another add-on's window or map code drew the view.
+- A callback runs on the frame's time budget. Running into the time the drawing code kept for itself is not its
+  failure: it is skipped, and stays registered. A callback that runs too long on its own is a failure like any other.
+- A handle belongs to the owner that registered it: only that owner can remove its overlay, and the pack's code and an
+  add-on never remove each other's.
+- Registrations retire on source reload, source failure, owner removal, VM/host destruction and a native owner's
+  authority growing past the captured ceiling. A failed callback follows the source-file error policy: that file's
+  callbacks retire, other files keep drawing. An owner that merely loses a capability is skipped while it lacks it and
+  draws again when it is back; it is not retired.
+- Drawing a map does not start a second pass: an overlay's own `hs.DrawZoneMap` or `hs.DrawMinimap` draws the view
+  without overlays.
+
+**Where the overlays sit.** The client draws the view first, then the callbacks, then the pack continues. In the
+Modern zone map that means the lines, labels, group, Find path and player, then the overlays, then the NPC marks,
+exits and markers; Modern's minimap likewise. Gamepad calls the same two methods and adds its own
+ring and buttons around the minimap afterwards. Both packs draw through `hs.DrawZoneMap` and `hs.DrawMinimap`, so
+overlays appear in both.
+
+**When they do not run.** Only a drawn view dispatches. Nothing runs while the map or minimap is hidden, outside a
+drawing frame, or when an add-on replaces the map through `hs.UI.extensions` (`MapViewWnd` `map.canvas`): the
+replacement draws its own view and `hs.DrawZoneMap` never runs, so overlays belong to that replacement. The
+stock-style `hs.DrawMap` (`map.Draw`), which neither shipped pack calls, draws no overlays either.
+
 ## Color controls for interface and addon settings
 
 The `ui` library has `ColorButton(label,r,g,b[,a,flags,width,height]) -> pressed` and `ColorPicker3` / `ColorEdit3`
@@ -293,7 +359,7 @@ The caller supplies layout and UVs; the API reads no layout metadata, writes not
 Explicit image requests ignore `game_art`; `assets.Texture` keeps its default-art behaviour. Handles use the bounded
 texture cache: reacquire each draw, since an evicted handle stops drawing safely.
 
-API 1.7 adds `API.assets.InterfaceImage(relativeUiPath)` for raster artwork
+This fork exposes `API.assets.InterfaceImage(relativeUiPath)` for raster artwork
 shipped with an interface. It returns the same texture, width and height, or a
 single nil. In the managed UI VM it searches the selected interface folder and
 its approved bases in order; a plugin window first searches its own active
@@ -389,14 +455,21 @@ character select) already carries these. An interface mapping text back to a cla
 
 ## Inventory placement
 
-UI API 1.8 adds `inventory.CanPlace(place)` (`hs.CanPlace`). It previews whether
-the item on the cursor fits an empty carried, personal bank or shared bank slot
-(`i:26:0`, `b:3`, `s:0:5`). Bank slots require an open bank. The query applies
-the native bag and bank restrictions, and the slot action validates the move
-again at the time of the click. Item records from `inventory.Item`,
-`inventory.AllItems`, and other inventory slot readers include the server's
-`questItem` flag. Bag records also include `bagType` and `bagSize`. Tradeskill
-storage bags use type 58. The fit check uses the material's tradeskill flag.
+This fork exposes `inventory.CanPlace(place)` (`hs.CanPlace`). Check `hs.UI.Supports("inventory", "CanPlace")`
+before using it on other builds. It previews whether the item on the cursor fits an empty carried, personal bank
+or shared bank slot (`i:26:0`, `b:3`, `s:0:5`). Bank slots require an open bank. The query applies the native bag
+and bank restrictions, and the slot action validates the move again at the time of the click.
+
+Item records from `inventory.Item`, `inventory.AllItems` and other inventory slot readers include the server's
+`questItem` flag in this fork. Bag records also include `bagType` and `bagSize`. Check for the fields before using
+them on other builds. Tradeskill storage bags use type 58. The fit check uses the material's tradeskill flag.
+
+## Zone entries
+
+API 1.10 adds an optional argument to `map.ZoneName` (flat `hs.ZoneName`): `ZoneName(true)` returns a third value, a
+number that changes on every entry into the world, the same zone again included, and is nil outside the world.
+Without the argument it returns the name and short name as before. Compare it for equality only. The packs' map
+windows keep their zoom and centre while closed and reset them when it changes; an older host returns no third value.
 
 ## Discovering optional features
 
@@ -431,8 +504,8 @@ server's. Flat `hs` bindings use the same guarded closures as the namespaced met
 
 ## Service policy and observed identities
 
-API 1.4 adds read-only `hs.UI.map.Policy()`: `custom_spawns`, `stock_npcs`, `npc_find`, `name`, `revision`,
-`context`.
+The read-only `hs.UI.map.Policy()` result includes `custom_spawns`, `stock_npcs`, `npc_find`, `name`, `revision`,
+and `context`. The optional `npc_find_server_only` field is true when Find uses the server's NPC list and path.
 
 - `revision` and `context` are opaque decimal strings: compare for equality only; never parse, persist or treat as
   authorization.
@@ -447,6 +520,7 @@ The flags:
   Find independently.
 - Stock presenters re-read policy and row eligibility before showing Find NPC rows, markers and controls, and keep
   saved preferences.
+- When `npc_find_server_only` is true, use Show Path and hide Walk. Treat an absent field as false for older hosts.
 - PC group/raid Find, coordinates, static labels, user pins, Tracking, nameplates and raw spawn reads keep their own
   rules.
 - Tracking invalidates source-owned work on provider lifecycle changes, not map-only content changes.
@@ -485,6 +559,28 @@ host feature still needs its own implementation and contract.
 A policy applies to its declared intent domain: a map ownership claim does not forbid targeting, spawn data, tracking
 or nameplates. Keep authorization out of display caches, never persist transient tokens as preferences, never use a
 display name as identity, and keep saved preferences so ordinary behaviour returns when a provider goes.
+
+## UI contributions
+
+API 1.9 adds `hs.UI.contributions`. Packs can use `hs.UI.Supports("contributions", "List")` to detect the service.
+`List(window)` returns plain records
+for the window's current contributions. Each record has `owner`, `plugin`, `id`, `target`, `text`, `disabled` and
+`action_label`. They are ordered by owner and then ID. An add-on's own Lua window can read its own contributions.
+The pack draws these records at the anchors it supports. An empty `target` is the window's notice area.
+
+Use stable target IDs for sections and controls. Show all applicable notices with their source. A control is
+unavailable when any record for it sets `disabled`. Make the control non-interactive in this case and keep its
+reasons and any actions usable. The setting value is still owned by the existing settings service. The client never
+lists a disabling record for `setting:upscaler`, `setting:ui_name` or `setting:texture_pack` (the way out of an add-on
+or a broken pack; docs/plugins.md "Adding to a pack's window"), so a pack need not guard them itself.
+
+On an explicit action click, call `Activate(window, owner, id)`. The host resolves the current registration and
+checks its owner's current permissions before dispatch. It returns false if the action is unavailable.
+
+Stock Modern and Gamepad Options use `OptionsWindow` with a window notice area, `section:display`,
+`section:graphics`, `section:nameplates` and `setting:<id>` for supported option rows. Future presenters can use
+the same API with their own window and target IDs. See [plugin windows](plugins.md#adding-to-a-packs-window) for
+registration APIs.
 
 ## Owned method hooks
 

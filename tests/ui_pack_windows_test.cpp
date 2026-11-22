@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -51,6 +52,7 @@
 #include "app/web_service.h"
 #include "mq/lua_mq.h"
 #include "plugin/policy.h"
+#include "plugin/ui_bridge.h"
 #include "web/browser_host.h"
 
 using namespace hailstone;
@@ -4688,6 +4690,7 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
         hailstone::test::ScratchDir dir_scratch("ui_pack_item_compare_test");
         fs::path dir = dir_scratch.path();
         fs::create_directories(dir / "game");
+        std::ofstream(dir / "game" / "eqstr_us.txt") << "3029 (Combat)\n3036 Effect: %1 %2\n";
         fs::copy(src, dir / pack, fs::copy_options::recursive);
         ImGuiContext* ctx = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
@@ -4721,6 +4724,8 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
             helm.id = 1001;
             helm.name = "Iron Helm";
             helm.hp = 60;
+            helm.effects[net::kEffectProc].effect = -1;
+            helm.effects[net::kEffectProc].name = "Frost & Fire";
             std::vector<net::Item> displays{helm};
             std::vector<std::uint64_t> ids{1};
             s.host.item_displays = &displays;
@@ -4728,9 +4733,10 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
             lua_State* L = s.lua.state();
             REQUIRE(luaL_dostring(L, R"(
                 test_seen = {}
-                local dt, tc = ui.DrawText, ui.TextColored
+                local dt, tc, tw = ui.DrawText, ui.TextColored, ui.TextWrapped
                 ui.DrawText = function(...) local a = { ... } test_seen[tostring(a[#a])] = true return dt(...) end
-                ui.TextColored = function(...) local a = { ... } test_seen[tostring(a[5])] = true return tc(...) end)") ==
+                ui.TextColored = function(...) local a = { ... } test_seen[tostring(a[5])] = true return tc(...) end
+                ui.TextWrapped = function(t, ...) test_seen[tostring(t)] = true return tw(t, ...) end)") ==
                     LUA_OK);
             auto seen = [&](const std::string& text) {
                 REQUIRE(luaL_dostring(L, ("return test_seen['" + text + "'] == true").c_str()) == LUA_OK);
@@ -4746,6 +4752,8 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
             CHECK(seen("Upgrade"));
             CHECK(seen("60"));
             CHECK(seen("+50"));
+            CHECK(seen("Gains Proc: Frost & Fire"));
+            CHECK(seen("Effect: Frost & Fire (Combat)"));
             CHECK_FALSE(seen("+50 HP"));
             CHECK_FALSE(seen("+50 HP (" + std::to_string(ch.max_hp(true)) + " to " + std::to_string(ch.max_hp(true) + 50) + ")"));
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
@@ -4781,6 +4789,8 @@ TEST_CASE("UI packs: the item display compares the item with what you wear") {
             s.frames(2);
             CHECK_FALSE(seen(heading));
             CHECK_FALSE(seen("+50"));
+            CHECK_FALSE(seen("Gains Proc: Frost & Fire"));
+            CHECK(seen("Effect: Frost & Fire (Combat)"));
         }
         ImGui::DestroyContext(ctx);
     }
@@ -5604,47 +5614,76 @@ TEST_CASE("UI packs (modern): the Options window's Textures section picks the te
     ImGui::DestroyContext(ctx);
 }
 
-TEST_CASE("UI packs: Options changes the Find trail style and invisibility brackets") {
+TEST_CASE("UI packs: Options changes the Find trail style, Tab targeting and respects addon contributions to name plates") {
     for (const char* pack : {"modern", "gamepad"}) {
-        INFO(pack);
+        INFO(std::string(pack));
         test::ScratchDir scratch("ui_pack_display_options");
         const fs::path dir = scratch.path();
         fs::create_directories(dir / "game");
         fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack,
                  fs::copy_options::recursive);
-        ImGuiContext* ctx = ImGui::CreateContext();
+        ImGuiContext* prior_context = ImGui::GetCurrentContext();
+        auto destroy_context = [prior_context](ImGuiContext* context) {
+            ImGui::DestroyContext(context);
+            ImGui::SetCurrentContext(prior_context);
+        };
+        std::unique_ptr<ImGuiContext, decltype(destroy_context)> ctx(ImGui::CreateContext(), destroy_context);
+        ImGui::SetCurrentContext(ctx.get());
         ImGui::GetIO().IniFilename = nullptr;
         unsigned char* pixels = nullptr;
         int width = 0, height = 0;
         ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
         {
+            plugin::UiBridge bridge;
             Session s(dir, pack);
-            int selected = 0;
-            int brackets = 0;
-            std::vector<int> changes;
-            std::vector<int> bracket_changes;
+            s.host.plugin_ui = &bridge;
+            s.host.plugin_caps = [](std::string_view owner) {
+                return owner == "plugin:captions" || owner == "plugin:visibility"
+                    ? plugin::kCapUi | plugin::kCapExtend : 0u;
+            };
+            std::vector<std::pair<std::string, std::string>> actions;
+            s.host.submit_chat = [&](const std::string& line) { actions.emplace_back(plugin::caller_name(), line); };
+            std::map<std::string_view, int> settings{
+                {"find_trail_style", 0}, {"show_invis_undead", 0},
+                {"tab_target_through_walls", 0}, {"tab_target_offscreen", 0}};
+            std::map<std::string_view, std::vector<int>> changes;
             s.host.find_option = [&](std::string_view name) -> std::optional<int> {
-                if (name == "find_trail_style") return selected;
-                if (name == "show_invis_undead") return brackets;
+                if (auto it = settings.find(name); it != settings.end()) return it->second;
                 return std::nullopt;
             };
             s.host.set_option = [&](std::string_view name, int value) {
-                if (name == "find_trail_style") {
-                    changes.push_back(value);
-                    selected = value;
-                } else if (name == "show_invis_undead") {
-                    bracket_changes.push_back(value);
-                    brackets = value;
+                if (auto it = settings.find(name); it != settings.end()) {
+                    changes[it->first].push_back(value);
+                    it->second = value;
                 }
             };
             lua_State* L = s.lua.state();
             // Record real control coordinates without changing their activation or rendering.
             REQUIRE(luaL_dostring(L, R"lua(
                 widgets = {}
+                -- Keep the fixture's settings and the two notices in the Gamepad list's visible rows.
+                local supports = hs.UI.Supports
+                hs.UI.Supports = function(module, member)
+                    return (module ~= "interfaces" or member ~= "Status") and supports(module, member)
+                end
                 local combo, selectable, checkbox, text = ui.BeginCombo, ui.Selectable, ui.Checkbox, ui.DrawText
+                local button, wrapped = ui.Button, ui.TextWrapped
+                local buttons = { ["Open caption settings"] = "action", ["Open visibility settings"] = "visibility action" }
+                local notices = { ["captions: Captions are active."] = "section notice",
+                    ["captions: Captions own the brackets."] = "captions reason",
+                    ["visibility: Visibility owns the brackets."] = "visibility reason" }
                 local function record(name)
                     local x0, y0, x1, y1 = ui.GetItemRect()
                     widgets[name] = { (x0 + x1) / 2, (y0 + y1) / 2 }
+                end
+                ui.Button = function(label, ...)
+                    local clicked = button(label, ...)
+                    if buttons[label] then record(buttons[label]) end
+                    return clicked
+                end
+                ui.TextWrapped = function(label, ...)
+                    wrapped(label, ...)
+                    if notices[label] then record(notices[label]) end
                 end
                 ui.BeginCombo = function(label, ...)
                     local open = combo(label, ...)
@@ -5660,16 +5699,19 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
                 end
                 ui.Checkbox = function(label, ...)
                     local value, changed = checkbox(label, ...)
-                    if label == "##show_invis_undead" then record("Bracket Invis vs. Undead") end
+                    if label == "##show_invis_undead" then record("Bracket Invis vs. Undead")
+                    elseif label == "##tab_target_through_walls" then record("Target through walls and doors")
+                    elseif label == "##tab_target_offscreen" then record("Target off-screen") end
                     return value, changed
                 end
                 ui.DrawText = function(...)
                     local label = select(7, ...)
-                    if label == "Interface" or label == "Find trail"
-                        or label == "Bracket Invis vs. Undead" then
+                    local key = notices[label] or buttons[label]
+                    if key or label == "Interface" or label == "Find trail" or label == "Bracket Invis vs. Undead"
+                        or label == "Target through walls and doors" or label == "Target off-screen" then
                         local x, y = ...
                         local w, h = ui.CalcTextSize(label)
-                        widgets[label] = { x + w / 2, y + h / 2 }
+                        widgets[key or label] = { x + w / 2, y + h / 2 }
                     end
                     return text(...)
                 end
@@ -5679,7 +5721,7 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
             auto point = [&](const char* name) {
                 lua_getglobal(L, "widgets");
                 lua_getfield(L, -1, name);
-                REQUIRE_MESSAGE(lua_istable(L, -1), name);
+                REQUIRE_MESSAGE(lua_istable(L, -1), std::string(name));
                 lua_rawgeti(L, -1, 1);
                 const float x = static_cast<float>(lua_tonumber(L, -1));
                 lua_pop(L, 1);
@@ -5711,29 +5753,91 @@ TEST_CASE("UI packs: Options changes the Find trail style and invisibility brack
                 CHECK(changes.empty());
                 click(point("combo"));
                 click(point("rainbow"));
-                REQUIRE(selected == 1);
+                REQUIRE(settings.at("find_trail_style") == 1);
                 click(point("combo"));
                 click(point("navigation"));
             } else {
                 click(point("Interface"));
                 CHECK(changes.empty());
                 click(point("Find trail"));
-                REQUIRE(selected == 1);
+                REQUIRE(settings.at("find_trail_style") == 1);
                 click(point("Find trail"));
             }
-            CHECK(selected == 0);
-            REQUIRE(changes.size() == 2);
-            CHECK(changes[0] == 1);
-            CHECK(changes[1] == 0);
-            CHECK(bracket_changes.empty());
+            CHECK(settings.at("find_trail_style") == 0);
+            CHECK(changes["find_trail_style"] == std::vector<int>{1, 0});
+            CHECK_FALSE(changes.contains("show_invis_undead"));
             click(point("Bracket Invis vs. Undead"));
-            CHECK(brackets == 1);
+            CHECK(settings.at("show_invis_undead") == 1);
             click(point("Bracket Invis vs. Undead"));
-            CHECK(brackets == 0);
-            CHECK(bracket_changes == std::vector<int>{1, 0});
+            CHECK(settings.at("show_invis_undead") == 0);
+            CHECK(changes["show_invis_undead"] == std::vector<int>{1, 0});
+
+            REQUIRE(bridge.set_contribution({"captions", "status", "OptionsWindow", "section:nameplates",
+                                             "Captions are active.", {}, {}}));
+            REQUIRE(bridge.set_contribution({"captions", "brackets", "OptionsWindow", "setting:show_invis_undead",
+                                             "Captions own the brackets.", "Open caption settings", "/captions", true}));
+            REQUIRE(bridge.set_contribution({"visibility", "brackets", "OptionsWindow", "setting:show_invis_undead",
+                                             "Visibility owns the brackets.", "Open visibility settings", "/visibility", true}));
+            s.frames(3);
+            CHECK(point("section notice").y < point("Bracket Invis vs. Undead").y);
+            CHECK(point("captions reason").y < point("visibility reason").y);
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(changes["show_invis_undead"] == std::vector<int>{1, 0});
+            click(point("action"));
+            CHECK(actions == std::vector<std::pair<std::string, std::string>>{{"plugin:captions", "/captions"}});
+
+            if (std::string_view(pack) == "modern") {
+                click(point("combo"));
+                click(point("rainbow"));
+            } else {
+                click(point("Find trail"));
+            }
+            CHECK(settings.at("find_trail_style") == 1);
+
+            // Releasing a click after its notice disappears must not run the action that moved into its row.
+            const auto removed_action = point("action");
+            auto& io = ImGui::GetIO();
+            io.AddMousePosEvent(removed_action.x, removed_action.y);
+            s.frames(1);
+            io.AddMouseButtonEvent(0, true);
+            s.frames(1);
+            REQUIRE(bridge.remove_contribution("captions", "brackets"));
+            s.frames(3);
+            io.AddMouseButtonEvent(0, false);
+            s.frames(3);
+            REQUIRE(actions.size() == 1);
+            click(point("visibility action"));
+            REQUIRE(actions.size() == 2);
+            CHECK(actions.back() == std::pair<std::string, std::string>{"plugin:visibility", "/visibility"});
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(changes["show_invis_undead"] == std::vector<int>{1, 0});
+            REQUIRE(bridge.remove_contribution("visibility", "brackets"));
+            s.frames(3);
+            click(point("Bracket Invis vs. Undead"));
+            CHECK(changes["show_invis_undead"] == std::vector<int>{1, 0, 1});
+
+            CHECK_FALSE(changes.contains("tab_target_through_walls"));
+            CHECK_FALSE(changes.contains("tab_target_offscreen"));
+            click(point("Target through walls and doors"));
+            CHECK(settings.at("tab_target_through_walls") == 1);
+            CHECK(settings.at("tab_target_offscreen") == 0);
+            if (std::string_view(pack) == "gamepad") {
+                // The off-screen option is just below the visible rows at this window size.
+                ImGui::GetIO().AddMouseWheelEvent(0, -1);
+                s.frames(3);
+            }
+            click(point("Target off-screen"));
+            CHECK(settings.at("tab_target_through_walls") == 1);
+            CHECK(settings.at("tab_target_offscreen") == 1);
+            click(point("Target through walls and doors"));
+            CHECK(settings.at("tab_target_through_walls") == 0);
+            CHECK(settings.at("tab_target_offscreen") == 1);
+            click(point("Target off-screen"));
+            CHECK(settings.at("tab_target_offscreen") == 0);
+            CHECK(changes["tab_target_through_walls"] == std::vector<int>{1, 0});
+            CHECK(changes["tab_target_offscreen"] == std::vector<int>{1, 0});
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
         }
-        ImGui::DestroyContext(ctx);
     }
 }
 

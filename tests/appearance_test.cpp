@@ -119,40 +119,90 @@ TEST_CASE("a secondary is a shield by its model number, not its textures (CDispl
     CHECK_FALSE(is_shield_model(0));
 }
 
-TEST_CASE("display.extra_shields puts later shields on the shield point (Hailstone)") {
+TEST_CASE("ActorTagInfo.txt: field 2 of 1 marks a shield, and a loaded table is the whole answer") {
+    using hailstone::game::ActorTagTable;
     using hailstone::game::is_shield_model;
-    // A shield's model RoF2 does not list, used only by shields and their ornaments.
-    CHECK_FALSE(hailstone::game::is_stock_shield_model(11224));
-    CHECK(is_shield_model(11224));
-    CHECK(is_shield_model(11490));
-    // RoF2's own still count.
-    CHECK(is_shield_model(200));
-    CHECK(is_shield_model(14000));
-    // Models only ornaments use, shaped like a shield: a round one, and one whose grip makes it too thick for the
-    // measure (tools/gen_shield_models.py SEEN_SHIELDS).
-    CHECK(is_shield_model(13908));
-    CHECK(is_shield_model(100081));
-    CHECK(is_shield_model(100109));
-    // The Haunting and Grim Nightmares Shield Ornaments, which RoF2 holds in the hand (not on its list), are worn on
-    // the forearm like the other shield ornaments.
-    CHECK(is_shield_model(101064));
-    CHECK(is_shield_model(101068));
-    // Left out: the IT63 placeholder, weapons' models a few shields borrow (IT7, a mace; IT10201, a staff, rod or book;
-    // IT10650, a dagger), and weapon ornaments' models (an axe, a sword, a mace).
-    CHECK_FALSE(is_shield_model(63));
-    CHECK_FALSE(is_shield_model(7));
-    CHECK_FALSE(is_shield_model(10201));
-    CHECK_FALSE(is_shield_model(10650));
-    CHECK_FALSE(is_shield_model(13925));
-    CHECK_FALSE(is_shield_model(100069));
-    CHECK_FALSE(is_shield_model(100105));
-    CHECK_FALSE(is_shield_model(0));
-    // Switched off: RoF2's list alone.
-    hailstone::game::set_extra_shields(false);
-    CHECK_FALSE(is_shield_model(13908));
-    CHECK_FALSE(is_shield_model(11224));
-    CHECK(is_shield_model(200));
-    hailstone::game::set_extra_shields(true);
+    ActorTagTable tags;
+    // The form of the folder at hand, a later live client's (10 fields, CRLF, no trailing caret), and of others (a
+    // trailing caret, 9 fields).
+    tags.parse("1^0^1^0^0^0^0^0^0^0\r\n"
+               "6^2^36^0^0^0^0^0^0^0\r\n"
+               "200^1^-1^0^0^0^0^0^0^0\r\n"
+               "23643^1^-1^-1^0^0^2.6^0^0^0\r\n"
+               "101064^1^-1^0^0^0^0^0^0^\n"
+               "101068^1^-1^0^0^0^0^0^\n"
+               "120^45^-1^0^0^0^0^0^0^\n");
+    CHECK(tags.loaded());
+    CHECK(tags.record_count() == 7);
+    CHECK(tags.shield_count() == 4);
+    CHECK(is_shield_model(200, &tags));
+    CHECK(is_shield_model(23643, &tags));     // on no fixed list
+    CHECK(is_shield_model(101064, &tags));    // the Haunting Nightmares ornament, held in the hand by the fixed list
+    CHECK(is_shield_model(101068, &tags));
+    CHECK_FALSE(is_shield_model(6, &tags));   // kind 2 is not a shield
+    CHECK_FALSE(is_shield_model(120, &tags)); // nor a later file's 37..64
+    CHECK_FALSE(is_shield_model(1, &tags));
+    // Not in the file: not a shield, even where the fixed list has it.
+    CHECK(hailstone::game::is_stock_shield_model(11004));
+    CHECK_FALSE(is_shield_model(11004, &tags));
+    CHECK_FALSE(is_shield_model(14000, &tags));
+}
+
+TEST_CASE("ActorTagInfo.txt: bad lines are skipped, a model listed twice takes its last line") {
+    using hailstone::game::ActorTagTable;
+    ActorTagTable tags;
+    tags.parse("\n"
+               "x^1^0\n"            // not a number
+               "-5^1^0\n"           // negative
+               "4294967296^1^0\n"   // past 32 bits
+               "7\n"                // one field
+               "8 ^1^0\n"           // trailing text in field 1
+               "9^1x^0\n"           // trailing text in field 2
+               "300^1^0\n"
+               "300^0^0\n"
+               "301^0^0\n"
+               "301^1^0\n");
+    CHECK(tags.record_count() == 4);
+    CHECK_FALSE(tags.is_shield(300));
+    CHECK(tags.is_shield(301));
+    CHECK_FALSE(tags.is_shield(7));
+    CHECK_FALSE(tags.is_shield(8));
+    CHECK_FALSE(tags.is_shield(9));
+}
+
+TEST_CASE("without ActorTagInfo.txt the fixed list decides") {
+    using hailstone::game::is_shield_model;
+    hailstone::game::ActorTagTable empty;
+    empty.parse("");
+    CHECK_FALSE(empty.loaded());
+    // A file without one valid line falls back too (Hailstone, a deliberate difference: the original counts any file
+    // that opens as loaded).
+    hailstone::game::ActorTagTable junk;
+    junk.parse("not a table\r\n#^1\r\n");
+    CHECK_FALSE(junk.loaded());
+    const hailstone::game::ActorTagTable* const tables[] = {nullptr, &empty, &junk};
+    for (const hailstone::game::ActorTagTable* tags : tables) {
+        CHECK(is_shield_model(200, tags));
+        CHECK(is_shield_model(11004, tags));
+        CHECK(is_shield_model(14000, tags));
+        CHECK_FALSE(is_shield_model(23643, tags));
+        CHECK_FALSE(is_shield_model(101064, tags));
+    }
+}
+
+TEST_CASE("the game folder's ActorTagInfo.txt loads with the appearance data" * doctest::skip(!hailstone::test::game_dir())) {
+    const auto& game = *hailstone::test::game_dir();
+    auto data = hailstone::assets::load_appearance_data(game);
+    REQUIRE(data);
+    if (!game.find("Resources/ActorTagInfo.txt")) {
+        CHECK_FALSE(data->actor_tags.loaded());
+        return;
+    }
+    CHECK(data->actor_tags.loaded());
+    // IT200..228, the classic shields, are listed as shields in every file seen.
+    CHECK(hailstone::game::is_shield_model(200, &data->actor_tags));
+    CHECK(hailstone::game::is_shield_model(228, &data->actor_tags));
+    CHECK_FALSE(hailstone::game::is_shield_model(1, &data->actor_tags));
 }
 
 TEST_CASE("OP_WearChange round trip") {

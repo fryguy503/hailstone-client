@@ -9,10 +9,12 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <set>
 #include <mutex>
 #include <thread>
 
 #include "audio/audio_system.h"
+#include "audio/individual_sounds.h"
 #include "audio/mixer.h"
 #include "audio/pcm.h"
 #include "audio/sound_control.h"
@@ -472,6 +474,45 @@ TEST_CASE("Audio settings: SoundMixAhead (SoundManager::SetMixAhead's 4..96 frag
     Config out;
     store_audio_settings(s, out);
     CHECK(out.get_int("audio.mix_ahead", 0) == 20);
+}
+
+TEST_CASE("Audio settings: the individual sound volumes (audio.own_footsteps ... audio.equip)") {
+    constexpr int kPetSteps = 35, kTooLoud = 400, kBelowZero = -3;
+    // One entry for each group but None and Count, with a name of its own, and every volume starts at full.
+    std::set<std::string_view> names;
+    std::set<SoundGroup> groups;
+    for (const IndividualSound& sound : individual_sounds()) {
+        CHECK(names.insert(sound.name).second);
+        CHECK(groups.insert(sound.group).second);
+        CHECK(sound.group != SoundGroup::None);
+        CHECK(sound.group != SoundGroup::Count);
+        CHECK_FALSE(sound.tip.empty());
+        CHECK(find_individual_sound(sound.name) == &sound);
+        CHECK(find_individual_sound(sound.group) == &sound);
+    }
+    constexpr std::size_t kGroupsWithoutNone = kSoundGroupCount - 1;
+    CHECK(names.size() == kGroupsWithoutNone);
+    CHECK(find_individual_sound("npc_hits") == nullptr);
+    Config c;
+    AudioSettings s = load_audio_settings(c);
+    for (const IndividualSound& sound : individual_sounds()) CHECK(s.individual[sound.group] == kFullVolumePercent);
+
+    c.set_int("audio.pet_footsteps", kPetSteps);
+    c.set_int("audio.thunder", kTooLoud);  // clamped to 0..100
+    c.set_int("audio.money", kBelowZero);
+    s = load_audio_settings(c);
+    CHECK(s.individual[SoundGroup::PetFootsteps] == kPetSteps);
+    CHECK(s.individual[SoundGroup::Thunder] == kFullVolumePercent);
+    CHECK(s.individual[SoundGroup::Money] == kSilentPercent);
+    CHECK(s.individual[SoundGroup::OwnFootsteps] == kFullVolumePercent);
+    CHECK(s.individual[SoundGroup::None] == kFullVolumePercent);
+
+    Config out;
+    store_audio_settings(s, out);
+    CHECK(out.get_int("audio.pet_footsteps", -1) == kPetSteps);
+    CHECK(out.get_int("audio.money", -1) == kSilentPercent);
+    CHECK(out.get_int("audio.own_footsteps", -1) == kFullVolumePercent);
+    CHECK(out.get_int("audio.equip", -1) == kFullVolumePercent);
 }
 
 TEST_CASE("Audio settings: audio.npc_hits and the volume factor of a volume option") {

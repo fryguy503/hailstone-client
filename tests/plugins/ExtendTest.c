@@ -34,6 +34,28 @@ static void ext_off(void* user, const char* args) {
     nmsc->set_active(nmsc->host, 0);
 }
 
+static void ext_contribution(void* user, const char* args) {
+    HailstoneUiContribution entry = {sizeof entry, HAILSTONE_UI_CONTRIBUTION_DISABLED, "sample",
+        "OptionsWindow", "setting:vsync", args, "Open settings", "/exton"};
+    (void)user;
+    if (!HAILSTONE_HOST_HAS(nmsc, set_ui_contribution) || !HAILSTONE_HOST_HAS(nmsc, remove_ui_contribution)) return;
+    if (strcmp(args, "clear") == 0) {
+        WriteChatf("contribution removed %d", nmsc->remove_ui_contribution(nmsc->host, entry.id));
+        return;
+    }
+    if (strcmp(args, "short") == 0) entry.size = sizeof entry.size;
+    /* "escape <setting>": the same entry on one of the rows that may never be disabled; "notice <setting>": a notice
+     * there without the flag. */
+    if (strncmp(args, "escape ", 7) == 0 || strncmp(args, "notice ", 7) == 0) {
+        static char target[64];
+        snprintf(target, sizeof target, "setting:%s", args + 7);
+        entry.target = target;
+        entry.text = "Managed by ExtendTest";
+        if (args[0] == 'n') entry.flags = 0;
+    }
+    WriteChatf("contribution written %d", nmsc->set_ui_contribution(nmsc->host, &entry));
+}
+
 static void ext_class(void* user, const char* args) {
     unsigned id = 0;
     char name[64] = "", short_name[16] = "";
@@ -272,6 +294,7 @@ NMSC_EXPORT void InitializePlugin(void) {
     nmsc->set_vitals(nmsc->host, &v);
     AddCommand("/exton", ext_on, 0);
     AddCommand("/extoff", ext_off, 0);
+    AddCommand("/extcontribution", ext_contribution, 0);
     AddCommand("/extread", ext_read, 0);
     AddCommand("/extmore", ext_more, 0);
     AddCommand("/extclass", ext_class, 0);
@@ -284,6 +307,7 @@ NMSC_EXPORT void InitializePlugin(void) {
 NMSC_EXPORT void ShutdownPlugin(void) {
     RemoveCommand("/exton");
     RemoveCommand("/extoff");
+    RemoveCommand("/extcontribution");
     RemoveCommand("/extread");
     RemoveCommand("/extmore");
     RemoveCommand("/extclass");

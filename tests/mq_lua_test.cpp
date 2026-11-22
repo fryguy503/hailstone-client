@@ -999,6 +999,104 @@ TEST_CASE("MQ commands: /target, ${} for typed lines, /noparse, /squelch") {
     CHECK(h.printed.back().rfind("Usage: /target", 0) == 0);
 }
 
+TEST_CASE("MQ commands: /target prefers an exact player name over a mount") {
+    Host h;
+    auto& spawns = net::GameConnectionTestAccess::world(*h.world.conn).spawns;
+    const auto& rider = spawns.at(12);
+    REQUIRE(rider.name == "Groupie");
+
+    // EQEmu names the mount after its owner. At the same distance, the mount's lower ID wins the search.
+    game::Spawn mount;
+    mount.id = 9;
+    mount.name = "Groupie`s_Mount00";
+    mount.is_npc = true;
+    mount.position = rider.position;
+    spawns.emplace(mount.id, mount);
+
+    h.run("/target gRoUpIe");
+    CHECK(h.target == rider.id);
+    h.run("/target mount Groupie");
+    CHECK(h.target == mount.id);
+    h.run("/target pc =Groupie");
+    CHECK(h.target == rider.id);
+    h.run("/target id 9 Groupie");
+    CHECK(h.target == mount.id);
+    h.run("/target clear");
+    // A part of the name: the rider is a player and the mount is not 50 units nearer (RoF2's /target).
+    h.run("/target Grou");
+    CHECK(h.target == rider.id);
+}
+
+TEST_CASE("MQ commands: an untyped /target picks a player unless another match is 50 units nearer") {
+    Host h;
+    auto& world = net::GameConnectionTestAccess::world(*h.world.conn);
+    auto add = [&world](std::uint32_t id, const char* name, bool npc, float server_y) {
+        game::Spawn s;
+        s.id = id;
+        s.name = name;
+        s.is_npc = npc;
+        s.position = game::server_to_world({0, server_y, 0});
+        world.spawns[id] = s;
+    };
+    add(20, "Kelvan", false, 80);
+    add(21, "Kelp_trainer00", true, 40);
+
+    h.run("/target kel");
+    CHECK(h.target == 20); // the trainer is only 40 units nearer
+    world.spawns[21].position = game::server_to_world({0, 30, 0});
+    h.run("/target kel");
+    CHECK(h.target == 21); // exactly 50 nearer: the nearer match
+    world.spawns[21].position = game::server_to_world({0, 31, 0});
+    h.run("/target kel");
+    CHECK(h.target == 20);
+
+    // Typed searches keep MQ's nearest match.
+    h.run("/target npc kel");
+    CHECK(h.target == 21);
+    h.run("/target pc kel");
+    CHECK(h.target == 20);
+
+    // A whole name wins wherever it is, whatever its type (RoF2's GetSpawnByName), and so does its display form.
+    add(22, "Kelp_trainer01", true, 500);
+    h.run("/target KELP_TRAINER01");
+    CHECK(h.target == 22);
+    h.run("/target kelvan");
+    CHECK(h.target == 20);
+    world.spawns.erase(22);
+    h.run("/target clear");
+    h.run("/target kelp trainer");
+    CHECK(h.target == 21);
+
+    // A corpse is not a player: with no player matching, the nearest match.
+    world.spawns.erase(20);
+    add(23, "Kelvan's corpse0", false, 60); // 29 farther than the trainer: a player would win
+    world.spawns[23].is_corpse = true;
+    h.run("/target kel");
+    CHECK(h.target == 21);
+
+    // You are skipped while something else matches, unless the name is your whole name.
+    add(24, "Testy", false, 300);
+    h.run("/target test");
+    CHECK(h.target == 24);
+    h.run("/target tester");
+    CHECK(h.target == world.player_id);
+}
+
+TEST_CASE("MQ commands: /target can select your exact name while mounted") {
+    Host h;
+    auto& world = net::GameConnectionTestAccess::world(*h.world.conn);
+    REQUIRE(world.player());
+    game::Spawn mount;
+    mount.id = 9;
+    mount.name = "Tester`s_Mount00";
+    mount.is_npc = true;
+    mount.position = world.player()->position;
+    world.spawns.emplace(mount.id, mount);
+
+    h.run("/target Tester");
+    CHECK(h.target == world.player_id);
+}
+
 TEST_CASE("MQ commands: /docommand and /squelch parse their line once, a value's ${...} stays text") {
     Host h;
     net::GameConnectionTestAccess::world(*h.world.conn).spawns[11].name = "x${Me.PctHPs}";

@@ -6,6 +6,7 @@
 #include <format>
 
 #include "game/augments.h"
+#include "game/character_property_sets.h"
 #include "game/eq_names.h"
 #include "game/eq_strings.h"
 #include "game/item_links.h"
@@ -233,19 +234,27 @@ std::string size_name(const ItemDisplayContext& ctx, std::uint32_t s) { return s
 
 // ItemDisplay_BuildSpellEffectText @0x6a1c70: one line per item spell (click, combat, worn, focus, the bard focus),
 // then the augments' (`recurse`). The spells with a description go to `described` for the description blocks.
+// The original needs no spell record to show a line: the click effect needs IsValidSpellID @0x4ad150 (1..45000), the
+// others an ID above 0, and the name is the item's override or the spell's. Here any ID above 0 shows (an extension
+// for servers past 45000 spells), as does a masked -1 that carries a name (ItemEffect::displayable). Without a name or
+// a local record the line reads "spell N"; the original reads its spell table regardless.
 std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& ctx, bool recurse,
                               std::vector<const net::ItemEffect*>& described) {
     std::string out;
     // A charm whose stat scale is below 1 shows no effects.
     bool show = !(item.charm_file_id != 0 && static_cast<std::int32_t>(item.scaled_value) < 1);
-    const SpellData* spell = nullptr;
-    auto name_of = [&](const net::ItemEffect& e, const SpellData* s) { return e.name.empty() && s ? s->name : e.name; };
+    auto lookup = [&](const net::ItemEffect& e) { return e.present() && ctx.spell ? ctx.spell(e.effect) : nullptr; };
+    auto name_of = [](const net::ItemEffect& e, const SpellData* s) {
+        if (!e.name.empty()) return description_plaintext(e.name);
+        if (s && !s->name.empty()) return description_plaintext(s->name);
+        return std::format("spell {}", e.effect);
+    };
     auto remember = [&](const net::ItemEffect& e, const SpellData* s) {
         if (s && s->description_id != 0) described.push_back(&e);
     };
     if (item.item_type != 20 && show) {
         const auto& e = item.effects[net::kEffectClick];
-        if (e.present() && ctx.spell && (spell = ctx.spell(e.effect))) {
+        if (e.displayable()) {
             std::string how;
             switch (e.type) {
             case 1: case 3: case 5:
@@ -264,6 +273,7 @@ std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& c
                 break;
             default: how = str(ctx, 0xbdb); break;
             }
+            const SpellData* spell = lookup(e);
             out += str_args(ctx, 0xbdc, {name_of(e, spell), how}) + "<BR>";
             remember(e, spell);
             if (e.recast_delay() > 0) {
@@ -277,8 +287,8 @@ std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& c
         }
         auto line = [&](int kind, std::uint32_t fmt, bool suffix) {
             const auto& x = item.effects[static_cast<std::size_t>(kind)];
-            const SpellData* s = x.present() && ctx.spell ? ctx.spell(x.effect) : nullptr;
-            if (!s) return;
+            if (!x.displayable()) return;
+            const SpellData* s = lookup(x);
             if (suffix) out += str_args(ctx, 0xbdc, {name_of(x, s), str(ctx, fmt)}) + "<BR>";
             else out += str_args(ctx, fmt, {name_of(x, s)}) + "<BR>";
             remember(x, s);
@@ -294,13 +304,35 @@ std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& c
     return out;
 }
 
+// The bane body is a property set ID: 0x5159b0 looks the set up and names it with CEverQuest::GetBodyTypeDesc
+// @0x515660 (the first member property found, in this order); an unknown set is eqstr 2455.
+// Hailstone: without the table or the string the line names the raw ID instead.
+std::string bane_body_name(const ItemDisplayContext& ctx, std::uint32_t set_id) {
+    if (ctx.character_property_sets && !ctx.character_property_sets->empty() && ctx.strings) {
+        const auto members = ctx.character_property_sets->find(set_id);
+        constexpr std::pair<std::uint32_t, std::uint32_t> labels[] = {
+            {21, 2437}, {5, 2438}, {26, 2439}, {24, 2440}, {6, 2441}, {4, 2442}, {1, 2443}, {22, 2444},
+            {2, 2445}, {7, 2446}, {23, 2447}, {25, 2448}, {3, 2449}, {13, 2450}, {14, 2451}, {15, 2452},
+            {12, 2453}, {28, 2454}, {19, 5754}, {20, 5786}, {34, 5841}, {18, 664},
+        };
+        std::uint32_t label = 2455;
+        for (const auto& [property, string_id] : labels) {
+            if (std::ranges::find(members, property) == members.end()) continue;
+            label = string_id;
+            break;
+        }
+        if (ctx.strings->has(label)) return str(ctx, label);
+    }
+    return std::format("body type {}", set_id);
+}
+
 // ItemDisplay_BuildBaneDamageText @0x69d420 (the item, then its augments).
 std::string bane_text(const net::Item& item, const ItemDisplayContext& ctx, bool recurse) {
     std::string out;
     std::uint32_t race = item.bane_dmg_race, body = item.bane_dmg_body;
     std::int32_t amount = race ? static_cast<std::int32_t>(item.bane_dmg_race_amt) : item.bane_dmg_amt;
     if ((race || body) && amount > 0) {
-        std::string r = race ? race_name(race) : std::string(), b = body ? std::format("body type {}", body) : std::string();
+        std::string r = race ? race_name(race) : std::string(), b = body ? bane_body_name(ctx, body) : std::string();
         std::string a = std::to_string(amount);
         if (!race) out = str_args(ctx, 0xbcf, {b, a});
         else if (!body) out = str_args(ctx, 0xbce, {r, a});
@@ -495,7 +527,8 @@ std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
                 const SpellData* s = ctx.spell ? ctx.spell(e->effect) : nullptr;
                 if (!s) continue;
                 d += "<BR>";
-                d += "<C " + color_tag(kSpellName) + ">" + (e->name.empty() ? s->name : e->name) + "</C><BR>";
+                d += "<C " + color_tag(kSpellName) + ">" + description_plaintext(e->name.empty() ? s->name : e->name) +
+                     "</C><BR>";
                 if (e->level > 0) d += str_args(ctx, 0x1aa4, {std::to_string(e->level)}) + "<BR>";
                 d += str_args(ctx, 0x213b, {spell_description(*s, ctx)}) + "<BR>";
             }
@@ -859,6 +892,10 @@ ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& 
 
     // UpdateStrings: the effects, then the item's own text (the lore text this client has).
     d.description = effects_text(item, ctx);
+    // Hailstone shows the server's per-item donation values, separately from trophy benefits.
+    const char* per_item = item.stackable() ? " each" : "";
+    if (item.favor != 0) d.description += std::format("Personal Tribute: {} favor{}<BR>", item.favor, per_item);
+    if (item.guild_favor != 0) d.description += std::format("Guild Tribute: {} favor{}<BR>", item.guild_favor, per_item);
     if (ctx.item_description_append) if (auto text = ctx.item_description_append(item); text && !text->empty()) {
         if (!d.description.empty() && !d.description.ends_with("<BR>")) d.description += "<BR>";
         d.description += description_plaintext(*text);

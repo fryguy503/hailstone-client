@@ -3,7 +3,7 @@
 // (also those with defaulted parameters after the packet, run with the defaults).
 // The checked-out server plugins' decoders over a byte span (plugins/<name>/*_packets.h, listed in each plugin's
 // tests/fuzz_decoders_<name>.inc): HAILSTONE_FUZZ_PLUGIN_DECODER(namespace, name).
-// The game-side decoders of server data (hailstone::game, over a byte span or text; tests/fuzz_game_decoders.h):
+// The game-side parsers (hailstone::game, over a byte span or text; tests/fuzz_game_decoders.h):
 // HAILSTONE_FUZZ_GAME_DECODER(name). fuzz_net_test.cpp checks every 'decode_*(std::span<const ...>)' in src/game/*.h is here.
 HAILSTONE_FUZZ_DECODER(decode_aa_action)
 HAILSTONE_FUZZ_DECODER(decode_evolving_item_update)
@@ -291,6 +291,7 @@ HAILSTONE_FUZZ_DECODER(decode_skill_update)
 HAILSTONE_FUZZ_DECODER(decode_spawn)
 HAILSTONE_FUZZ_DECODER(decode_mob_rename)
 HAILSTONE_FUZZ_DECODER(decode_spawn_appearance)
+HAILSTONE_FUZZ_DECODER(decode_set_body_type)
 HAILSTONE_FUZZ_DECODER(decode_guild_banner_appearance)
 HAILSTONE_FUZZ_DECODER(decode_spawn_doors)
 HAILSTONE_FUZZ_DECODER(decode_spawn_position_update)
@@ -362,3 +363,4 @@ HAILSTONE_FUZZ_GAME_DECODER(decode_zone_to_bind)
 HAILSTONE_FUZZ_GAME_DECODER(parse_buy_line_ini)
 HAILSTONE_FUZZ_GAME_DECODER(parse_buy_lines_text)
 HAILSTONE_FUZZ_GAME_DECODER(fuzz_spell_text_hit_report)
+HAILSTONE_FUZZ_GAME_DECODER(fuzz_character_import)

@@ -1,6 +1,7 @@
 // ClientApp: Item input (loot, inventory), auto-scribe and the item windows.
 
 #include "app/client_app_internal.h"
+#include "app/lua_ui_windows.h"
 #include "game/interact.h"
 
 namespace hailstone::app::client_internal {
@@ -166,6 +167,10 @@ void ClientApp::auto_scribe(Clock::time_point now) {
 
 void ClientApp::draw_items() {
     if (!item_ui_ || !conn_) return;
+    // A bank window hiding closes every bag window (CBankWnd::OnShow @0x627760 -> CContainerMgr::CloseAllContainers
+    // @0x65d4e0), carried bags too, each with its close wave. Checked every frame so a hide still closes them when
+    // no key or click follows.
+    prune_bag_windows(*conn_);
     if (opts_.show_items && player_ready_) {
         // Testing aid (--show-items).
         if (items_since_ == Clock::time_point{}) items_since_ = Clock::now();
@@ -176,7 +181,7 @@ void ClientApp::draw_items() {
                 if (ui_api_) ui_api_->show("InventoryWindow", true);
                 for (std::int16_t s = net::kSlotGeneral1; s <= net::kSlotGeneral10; ++s)
                     if (const auto* it = inv.at(net::ItemSlot::possessions(s)); it && it->is_bag()) {
-                        item_ui_->open_bag(s);
+                        item_ui_->open_bag(*conn_, s);
                         if (ui_api_) ui_api_->right_click_item(net::ItemSlot::possessions(s));
                     }
             }

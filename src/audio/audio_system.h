@@ -15,6 +15,7 @@
 #include <glm/glm.hpp>
 
 #include "assets/xmi.h"
+#include "audio/individual_sounds.h"
 #include "audio/listener.h"
 #include "audio/mixer.h"
 #include "audio/music_manager.h"
@@ -43,6 +44,10 @@ struct AudioSettings {
     int effects = 80;           // audio.effects (event sounds and zone emitters)
     int npc_hits = 100;         // audio.npc_hits, 0..100: Hailstone, not in the original: the sounds of an NPC being
                                 // hit, blocking or dodging, scaled on top of audio.effects (app/sound_events.cpp)
+    // Hailstone, not in the original: audio.own_footsteps, pet_footsteps, other_footsteps, open_bag, open_bank, money,
+    // thunder, equip and creature_ambient (audio/individual_sounds.h), each 0..100 on top of audio.effects
+    // (app/sound_events.cpp).
+    GroupVolumes individual;
     bool mute = false;          // audio.mute
     bool environment = true;    // audio.environment: the zone's ambient emitters (EmitterSetUserDisabled)
     std::string soundfont;      // audio.soundfont: SF2 for the XMI music; empty = <game>/synthusr.sf2
@@ -116,6 +121,9 @@ public:
     // WavePlay(id, control): a wave of the sound table (the zone bank over soundassets.txt).
     void play_wave(std::int32_t id, const SoundControl& control);
     void play_wave_2d(std::int32_t id) { play_wave(id, SoundControl{}); }
+    // A 2D wave at the volume of an individual sound (audio.<name>); SoundGroup::None plays it as it is. Also the
+    // Test button of the Individual Sounds window, with the wave app::test_wave names.
+    void play_group_2d(std::int32_t id, SoundGroup group);
     // A named sound of soundassets.txt ("YouveGotMail"), 2D: 0x4ab700's id, then WavePlay(id, 0). Nothing
     // when the name is not there.
     void play_named_2d(const std::string& name);
@@ -126,7 +134,9 @@ public:
 
     // A spawn's looping sound (EqMobileEmitter, SetCurrentLoopSound): `wave`
     // 0 = none. Call each frame with its position; drop_loops_except() removes the rest.
-    void set_spawn_loop(std::uint32_t spawn_id, std::int32_t wave, const glm::vec3& position, float height);
+    // `volume_percent`: an individual sound's volume (a footstep loop), 100 as it is.
+    void set_spawn_loop(std::uint32_t spawn_id, std::int32_t wave, const glm::vec3& position, float height,
+                        int volume_percent = kFullVolumePercent);
     void drop_spawn_loops_except(const std::vector<std::uint32_t>& alive);
 
     // Without a device update() advances the mixer by the elapsed time; tools that render
@@ -207,6 +217,7 @@ private:
         std::uint32_t voice = 0;
         glm::vec3 position{0.0f};
         float min = 3.0f, max = 72.0f;
+        int volume_percent = kFullVolumePercent;
     };
     std::unordered_map<std::uint32_t, Loop> loops_;
     std::size_t played_ = 0;

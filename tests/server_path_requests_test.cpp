@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <stdexcept>
 
+#include "core/byte_io.h"
 #include "game/server_ext.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
@@ -64,6 +66,60 @@ TEST_CASE("server path leases: a guarded Find fallback cannot become a replaceme
     CHECK(kept->front().x == doctest::Approx(222));
     const auto fresh = rig.conn.request_quiet_path(101, {21, 3}); REQUIRE(fresh); // ordinary navigation remains available
     rig.conn.receive_zone_packet_for_test(route(333)); CHECK(rig.conn.take_quiet_path(fresh).has_value());
+}
+
+TEST_CASE("Server-only NPC Find sends an advertised spawn's request and retires its route on removal") {
+    auto policy = std::make_shared<FindPolicy>();
+    policy->flags = game::MapPolicyServerNpcFindOnly;
+    auto options = test::quick_options();
+    options.plugins = policy;
+    test::Rig rig(test::MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+
+    CHECK_FALSE(conn.find_spawn(101));
+    CHECK(net::GameConnectionTestAccess::find_request_count(conn) == 0);
+    const auto advertise = [&](bool remove) {
+        net::FindableNpc npc;
+        npc.spawn_id = 101;
+        npc.remove = remove;
+        server.zone.send_reliable(net::encode_findable_npc(npc));
+        return rig.until([&] { return conn.findable_npcs().contains(101) != remove; });
+    };
+    REQUIRE(advertise(false));
+    REQUIRE(conn.find_spawn(101));
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(server.zone_log, net::Op::FindPersonRequest) == 1; }));
+    const auto request = std::find_if(server.zone_log.begin(), server.zone_log.end(), [](const auto& p) {
+        return p.opcode == net::to_wire(net::Op::FindPersonRequest);
+    });
+    REQUIRE(request != server.zone_log.end());
+    ByteReader reader(request->data);
+    CHECK(reader.le<std::uint32_t>() == static_cast<std::uint32_t>(game::FindKind::Spawn));
+    CHECK(reader.le<std::uint32_t>() == 101);
+
+    server.zone.send_reliable(route(100));
+    REQUIRE(rig.until([&] { return conn.find_replies() == 1; }));
+    CHECK_FALSE(conn.find_path().empty());
+    REQUIRE(advertise(true));
+    CHECK(conn.find_path().empty());
+    CHECK_FALSE(conn.find_spawn(101));
+
+    REQUIRE(advertise(false));
+    REQUIRE(conn.find_spawn(101));
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(server.zone_log, net::Op::FindPersonRequest) == 2; }));
+    REQUIRE(advertise(true));
+    server.zone.send_reliable(route(200));
+    REQUIRE(rig.until([&] { return net::GameConnectionTestAccess::find_request_count(conn) == 0; }));
+    CHECK(conn.find_replies() == 1);
+    CHECK(conn.find_path().empty());
+
+    REQUIRE(advertise(false));
+    server.remove_spawn(101);
+    REQUIRE(rig.until([&] { return !conn.world().spawns.contains(101); }));
+    server.add_spawn(server.config.zones.at(server.current_zone()).spawns.front());
+    REQUIRE(rig.until([&] { return conn.world().spawns.contains(101); }));
+    CHECK_FALSE(conn.find_spawn(101));
 }
 
 TEST_CASE("server path leases: stops, orphans and an unanswered request; later requests still get their replies") {

@@ -81,13 +81,16 @@ void main() {
         vec3 light = hemisphere(sn, lighting.sky.rgb, lighting.ground.rgb) * (water_sky * sky_share) + placed +
                      lighting.light.rgb * ndl * water_sun + to_linear(lighting.special_ambient.rgb) + lighting.vision.rgb;
         int count = int(lighting.params.y + 0.5);
+        vec3 carried_sum = vec3(0.0), carried_top = vec3(0.0);
         for (int i = 0; i < count; ++i) {
             vec3 c = point_light_modern(lighting.lights[i], v_world, sn, 0.0);
             // Out of reach or facing away: nothing to shadow (the product is 0 either way).
             if (c != vec3(0.0))
-                light += c * scene_light_shadow(point_map, lighting.point_shadow_light, lighting.point_shadow_slot,
-                                                lighting.point_shadow_params, lighting.lights[i], v_world, n);
+                add_scene_light(light, carried_sum, carried_top, lighting.carried, i,
+                                c * scene_light_shadow(point_map, lighting.point_shadow_light, lighting.point_shadow_slot,
+                                                       lighting.point_shadow_params, lighting.lights[i], v_world, n));
         }
+        light += carried_light_total(carried_sum, carried_top, lighting.carried);
         vec3 surface = to_linear(tex.rgb) * max(light, vec3(lighting.params.w));
         if (pc.maps != 0u)
             surface += pack_specular(sn, normalize(lighting.camera.xyz - v_world), lighting.to_light.xyz,

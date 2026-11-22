@@ -178,6 +178,17 @@ std::int32_t held_type(std::uint32_t it) {
     return 1;
 }
 
+bool is_movement_animation(std::int32_t action) {
+    // OP_Animation numbers: walk, run, the two jumps, crouch walk, climb, swim, tread water.
+    constexpr std::int32_t kWalk = 0x11, kRun = 0x12, kJump = 0x13, kJumpAcross = 0x14, kCrouchWalk = 0x16,
+                           kClimb = 0x17, kSwim = 0x19, kTread = 0x25;
+    switch (action) {
+    case kWalk: case kRun: case kJump: case kJumpAcross: case kCrouchWalk: case kClimb: case kSwim: case kTread:
+        return true;
+    default: return false;
+    }
+}
+
 AnimationSounds animation_sounds(const SpawnSounds& s, const AnimationSoundInput& in, AnimationSoundState& st,
                                  std::uint32_t now_ms, const RandomLowHigh& random) {
     AnimationSounds out;
@@ -223,6 +234,7 @@ AnimationSounds animation_sounds(const SpawnSounds& s, const AnimationSoundInput
         if (id == 0) return;
         if (id == first) { pick(); return; }
         out.loop = id;
+        out.loop_is_step = true;
     };
     // Animations 5, 8 and 10 (case 10 has no whip case and always picks a swing bare-handed).
     auto weapon = [&](bool five_way_when_empty_hand) {
@@ -248,10 +260,9 @@ AnimationSounds animation_sounds(const SpawnSounds& s, const AnimationSoundInput
         break;
     case Go::Main: {
         static constexpr std::int32_t kRun[4] = {0x5f, 0x5e, 0x99, 0x9a};
-        static constexpr std::int32_t kWalk[4] = {0x5d, 0x5c, 0x97, 0x98};
         switch (a) {
         case 0x12: steps(kRun, SoundKind::Run, 0x5f); break;
-        case 0x11: steps(kWalk, SoundKind::Walk, 0x5d); break;
+        case 0x11: steps(kWalkSteps, SoundKind::Walk, kWalkSteps[0]); break;
         case 0x1a: out.loop = random(1, 100) < 0x32 ? s[SoundKind::Idle1] : s[SoundKind::Idle2]; break;
         case 0x13:
         case 0x14: sound = s[SoundKind::Jump]; check = true; break;
@@ -301,6 +312,16 @@ AnimationSounds animation_sounds(const SpawnSounds& s, const AnimationSoundInput
     if (sound != 0) out.play.push_back(sound);
     out.only_if_not_playing = in.local;
     return out;
+}
+
+std::int32_t container_sound(std::uint32_t bag_type, bool open) {
+    // The open and the close table are the same bytes; their index is the bag
+    // type less 6 and a type outside the 17 entries takes the shared sound.
+    static constexpr std::array<std::uint8_t, kOwnBagTypeCount> kOwn = {0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0};
+    const bool shared = bag_type < kFirstOwnBagType ||
+                        bag_type - kFirstOwnBagType >= kOwn.size() || kOwn[bag_type - kFirstOwnBagType] != 0;
+    if (shared) return kSoundContainer;
+    return open ? kSoundBagOpen : kSoundBagClose;
 }
 
 std::vector<std::int32_t> landing_sounds(bool land_sound, std::optional<std::int32_t> fall_damage) {

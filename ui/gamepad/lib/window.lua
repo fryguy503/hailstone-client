@@ -223,8 +223,9 @@ function W.pressed(b) return ui.IsWindowFocused(3) and pad.menuPressed(b) end
 -- 1..count, drawRow(i, x0, y0, x1, y1, focused) draws one and returns nothing; onClick(i) on A / a click.
 -- state = { offset = 0 } kept by the caller. D-pad down on the last shown row (or up on the first) scrolls it, as
 -- does the mouse wheel over it. Returns the focused row (or nil).
+-- An optional rowKey(i) gives rows that may appear or move while a click is held an ID independent of their slot.
 local listRowIds = {} -- by list id: its rows' ImGui ids ("<id>:<v>"), made once
-function W.list(id, state, count, visible, rowH, width, drawRow, onClick)
+function W.list(id, state, count, visible, rowH, width, drawRow, onClick, rowKey)
   local rowIds = listRowIds[id]
   if not rowIds then
     rowIds = {}
@@ -246,7 +247,9 @@ function W.list(id, state, count, visible, rowH, width, drawRow, onClick)
       rowId = id .. ":" .. v
       rowIds[v] = rowId
     end
-    ui.PushID(rowId)
+    local key = rowKey and rowKey(i)
+    ui.PushID(key and id or rowId)
+    if key then ui.PushID(key) end
     if state.focusNext == v then
       ui.SetKeyboardFocusHere()
       pad.showCursor()
@@ -275,6 +278,7 @@ function W.list(id, state, count, visible, rowH, width, drawRow, onClick)
       end
     end
     if clicked and onClick then onClick(i) end
+    if key then ui.PopID() end
     ui.PopID()
   end
   -- the scroll bar on the right

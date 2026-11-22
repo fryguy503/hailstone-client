@@ -32,7 +32,7 @@ Code: `src/app/updater.*` (check, download), `src/app/update_install.*` (install
     now.
 - **Skip** writes `update.skip=<version>`: that release is not offered again, a newer one is. Skip before an
   automatic download has begun stops it starting.
-- A release with no package for the player's system (say, no Linux arm64 build) is shown with its Release notes only.
+- A release with no package for the player's system (say, no Windows arm64 build) is shown with its Release notes only.
 - For packs: the notice is `view.update` (`ui::LoginView::update`, text from `ui::update_notice_text`) with
   `hs.LoginDo("updateDownload" | "updateRestart" | "updateSkip" | "updateNotes")`; the corner is `view.about`
   (`version`, `build`, `status`, `text`, `notes`, `page`) and `hs.LoginDo("openProject")`.
@@ -213,13 +213,16 @@ updater and the add-on manager otherwise run as usual.
    `-DHAILSTONE_BROWSER=ON`, on a clean checkout of the release commit (docs/ci.md):
    - Linux x64 in the `hailstone-linux-build:24.04` container (`tools/docker/linux.Dockerfile`), so it runs on
      Ubuntu 24.04 and newer;
+   - Linux arm64 in the same container built for arm64, under QEMU on an x64 machine (`tools/docker/build.sh
+     linux-arm64`, docs/ci.md "Builds in containers"). Its tests are best run natively on an arm64 machine
+     (`--no-test`, then copy the build folder there), as they run slowly under QEMU;
    - Windows x64 with MSVC under Wine (`tools/docker/msvc_build.sh`, docs/ci.md "MSVC under Wine");
    - macOS arm64 is on hold (docs/plan.md, 0.9) and not part of a release for now. When a test build is wanted, the
      macOS workflow makes it on the release commit (`gh workflow run macos.yml -f ref=<commit>`, docs/ci.md "macOS
      arm64"): it builds, tests, installs and signs ad hoc, and its artifact is step 2's folder.
 
-   For the first two, `CMAKE_ARGS=-DHAILSTONE_BROWSER=ON tools/docker/build.sh linux-x64` (and `windows-x64`;
-   docs/ci.md "Builds in containers") does this step and step 2, leaving `dist/<platform>/hailstone`. Under Wine it
+   For the first three, `CMAKE_ARGS=-DHAILSTONE_BROWSER=ON tools/docker/build.sh linux-x64` (and `linux-arm64`,
+   `windows-x64`; docs/ci.md "Builds in containers") does this step and step 2, leaving `dist/<platform>/hailstone`. Under Wine it
    leaves out the tests that only fail there (docs/ci.md "Builds in containers"): run those on Windows by hand.
 
    Run each platform's `hailstone_tests` (Windows under Wine) before going on; the macOS workflow runs its own.

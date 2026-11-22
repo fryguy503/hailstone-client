@@ -209,7 +209,9 @@ ui.window("Tribute Master", function()
       local rx0 = listX1 + T.px(24)
       local held = API.inventory.Item(API.inventory.CursorSlot or 33)
       I.summary(held or focusedItem, held and "Holding" or focusedWhere, rx0, top, x1, top + T.px(330))
-      facts({ { "Tribute value", API.windows.Text(MW, "TMW_ValueLabel"), C.endurance },
+      local value = API.windows.Text(MW, "TMW_DonationPreviewLabel")
+      facts({ { value ~= "" and "Donation value" or "Last donation",
+          value ~= "" and value or API.windows.Text(MW, "TMW_ValueLabel"), C.endurance },
         { "Platinum", (API.windows.Text(MW, "TMW_CoinButton")) } }, rx0, x1, top + T.px(350))
       ui.SetCursorPos(rx0 - wx, y1 - 2 * T.px(64) - T.px(10) - wy)
       buttons(MW, { { held and "Donate the held item" or "Donate", "TMW_DonateButton", true } }, rx0, x1, T.px(64))

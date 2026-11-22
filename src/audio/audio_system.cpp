@@ -38,6 +38,10 @@ AudioSettings load_audio_settings(const Config& c) {
     s.music = std::clamp(c.get_int("audio.music", s.music), 0, 100);
     s.effects = std::clamp(c.get_int("audio.effects", s.effects), 0, 100);
     s.npc_hits = std::clamp(c.get_int("audio.npc_hits", s.npc_hits), 0, 100);
+    for (const IndividualSound& sound : individual_sounds()) {
+        int& percent = s.individual[sound.group];
+        percent = std::clamp(c.get_int("audio." + std::string(sound.name), percent), kSilentPercent, kFullVolumePercent);
+    }
     s.mute = c.get_bool("audio.mute", s.mute);
     s.environment = c.get_bool("audio.environment", s.environment);
     s.soundfont = c.get_string("audio.soundfont", s.soundfont);
@@ -57,6 +61,8 @@ void store_audio_settings(const AudioSettings& s, Config& c) {
     c.set_int("audio.music", s.music);
     c.set_int("audio.effects", s.effects);
     c.set_int("audio.npc_hits", s.npc_hits);
+    for (const IndividualSound& sound : individual_sounds())
+        c.set_int("audio." + std::string(sound.name), s.individual[sound.group]);
     c.set_bool("audio.mute", s.mute);
     c.set_bool("audio.environment", s.environment);
     c.set("audio.soundfont", s.soundfont);
@@ -422,7 +428,7 @@ void AudioSystem::update(std::uint32_t now_ms) {
     // Spawn loops (EqMobileEmitter: GiveTime with loop count 0 and no delay).
     for (auto& [id, l] : loops_) {
         glm::vec3 d = listener_ - l.position;
-        bool in_range = l.wave != 0 && glm::dot(d, d) < l.max * l.max;
+        bool in_range = l.wave != 0 && l.volume_percent > kSilentPercent && glm::dot(d, d) < l.max * l.max;
         if (!in_range) {
             if (l.voice) {
                 release(l.voice, 0);
@@ -442,6 +448,7 @@ void AudioSystem::update(std::uint32_t now_ms) {
         c.position = l.position;
         c.min_distance = l.min;
         c.max_distance = l.max;
+        if (l.volume_percent < kFullVolumePercent) c.volume *= option_volume_factor(l.volume_percent, true);
         l.voice = play_wave(*name, c);
     }
 
@@ -468,6 +475,14 @@ void AudioSystem::play_wave(std::int32_t id, const SoundControl& control) {
     std::uint32_t v = play_wave(*name, c);
     if (v) wave_voices_.emplace_back(id, v);
     log::debug("audio: wave {} {}{}", id, *name, v ? "" : " (not started)");
+}
+
+void AudioSystem::play_group_2d(std::int32_t id, SoundGroup group) {
+    SoundControl c;
+    const int percent = settings_.individual[group];
+    if (percent <= kSilentPercent) return;
+    if (percent < kFullVolumePercent) c.volume *= option_volume_factor(percent, c.positional());
+    play_wave(id, c);
 }
 
 void AudioSystem::play_named_2d(const std::string& name) {
@@ -499,13 +514,16 @@ const game::SpawnSounds& AudioSystem::spawn_sounds(std::int32_t race, std::uint8
     return it->second;
 }
 
-void AudioSystem::set_spawn_loop(std::uint32_t spawn_id, std::int32_t wave, const glm::vec3& position, float height) {
+void AudioSystem::set_spawn_loop(std::uint32_t spawn_id, std::int32_t wave, const glm::vec3& position, float height,
+                                 int volume_percent) {
     Loop& l = loops_[spawn_id];
-    if (l.wave != wave && l.voice) {
+    // A loop already sounding restarts at its new volume.
+    if ((l.wave != wave || l.volume_percent != volume_percent) && l.voice) {
         release(l.voice, 0);
         l.voice = 0;
     }
     l.wave = wave;
+    l.volume_percent = volume_percent;
     l.position = position;
     // EqMobileEmitter::SetNpcHeight @0x4a9b10: min max(h/2, 2), max and range min x 24.
     l.min = std::max(height * 0.5f, 2.0f);

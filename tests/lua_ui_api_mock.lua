@@ -80,6 +80,8 @@ local descriptors = {
   {"CompareSlotItem", "compare", "SlotItem", "function", 0, false},
   {"CompassMarkers", "compass", "Markers", "function", 0, false},
   {"CompassStrips", "compass", "Strips", "function", 0, false},
+  {"UiContributionActivate", "contributions", "Activate", "function", 0, false},
+  {"UiContributionList", "contributions", "List", "function", 0, false},
   {"CursorAttachment", "cursor", "Attachment", "function", 0, false},
   {"ClearCursorButton", "cursor", "ClearButton", "function", 8, false},
   {"CursorCoin", "cursor", "Coin", "function", 0, false},
@@ -208,8 +210,10 @@ local descriptors = {
   {"MapMouseUp", "map", "MouseUp", "function", 0, false},
   {"MapPanReset", "map", "PanReset", "function", 0, false},
   {"MapPolicy", "map", "Policy", "function", 0, false},
+  {"MapOverlayRegister", "map", "RegisterOverlay", "function", 129, false},
   {"MapRightClick", "map", "RightClick", "function", 2, false},
   {"ShowZoneMap", "map", "ShowZone", "function", 0, false},
+  {"MapOverlayUnregister", "map", "UnregisterOverlay", "function", 0, false},
   {"ZoneExitWalk", "map", "ZoneExitWalk", "function", 16, false},
   {"ZoneExits", "map", "ZoneExits", "function", 0, false},
   {"ZoneLinks", "map", "ZoneLinks", "function", 0, false},
@@ -270,6 +274,7 @@ local descriptors = {
   {"VoiceChat", "session", "VoiceChat", "function", 0, false},
   {"Option", "settings", "Option", "function", 0, false},
   {"OptionChoices", "settings", "OptionChoices", "function", 0, false},
+  {"PlaySoundTest", "settings", "PlaySoundTest", "function", 0, false},
   {"SetOption", "settings", "SetOption", "function", 2, false},
   {"SetUiIni", "settings", "SetUiIni", "function", 2, false},
   {"UiIni", "settings", "UiIni", "function", 0, false},
@@ -362,7 +367,7 @@ return function(root)
     end
     return value
   end
-  local API, modules = {version={major=1,minor=8}}, {}
+  local API, modules = {version={major=1,minor=10}}, {}
   for _, row in ipairs(descriptors) do
     local module = modules[row[2]]
     if not module then module={};modules[row[2]]=module end
@@ -403,7 +408,7 @@ return function(root)
       if member~=nil then local row=modules[module][member];return row and describeMember(row) or nil end
       return describeModule(module)
     end
-    local names,result={}, {version={major=1,minor=8},modules={}}
+    local names,result={}, {version={major=1,minor=10},modules={}}
     for name in pairs(modules) do names[#names+1]=name end
     table.sort(names)
     for _, name in ipairs(names) do result.modules[#result.modules+1]=describeModule(name) end

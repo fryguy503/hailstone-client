@@ -1397,7 +1397,8 @@ int main(int argc, char** argv) {
                             *fx_particles, [&](const std::string& texture) { return fx_renderer->texture_color(texture); }, 8);
                     if (bolts)
                         for (const auto& l : app::projectile_lights(*bolts, t, 6)) glows.push_back(l);
-                    auto lights = game::select_lights(zone->lights, glows, camera.position, 600.0f, render::kMaxSceneLights);
+                    auto lights = game::select_lights(zone->lights, glows, camera.position, render::kLampLightDistance,
+                                                      render::kMaxSceneLights);
                     render::Daylight sky = render::daylight(sky_hour, tt == 1 || tt == 2 || tt == 5, moon_phase, blood_moon);
                     render::apply_storm(sky, weather_look.storm);
                     auto lighting = render::make_scene_lighting(scene_light, lights, glows.size(), render::LightingMode::Modern, sky);

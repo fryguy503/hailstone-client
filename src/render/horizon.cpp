@@ -772,6 +772,36 @@ HorizonMesh horizon_mesh(const HorizonField& g) {
             mesh.positions[v] = glm::vec3(p, points[v].h);
         }
 
+    // A mesh quad can straddle a sharp change in the zone's elevation. Tucking just the corners lets its triangles
+    // rise through the lower ground between them. Keep all four corners below every covered cell the quad spans.
+    auto first_cell = [&](float p, float origin, int count) {
+        return std::clamp(static_cast<int>(std::floor((p - origin) / g.cell)), 0, count);
+    };
+    auto past_cell = [&](float p, float origin, int count) {
+        return std::clamp(static_cast<int>(std::ceil((p - origin) / g.cell)), 0, count);
+    };
+    for (std::size_t r = 0; r + 1 < rows; ++r) {
+        const int y0 = first_cell(ys[r], g.lo.y, g.ny);
+        const int y1 = past_cell(ys[r + 1], g.lo.y, g.ny);
+        if (y0 == y1) continue;
+        for (std::size_t c = 0; c + 1 < cols; ++c) {
+            const int x0 = first_cell(xs[c], g.lo.x, g.nx);
+            const int x1 = past_cell(xs[c + 1], g.lo.x, g.nx);
+            float underside = std::numeric_limits<float>::infinity();
+            for (int y = y0; y < y1; ++y)
+                for (int x = x0; x < x1; ++x) {
+                    const std::size_t cell = g.at(x, y);
+                    if (g.covered(cell)) underside = std::min(underside, g.under[cell]);
+                }
+            const std::size_t a = r * cols + c;
+            for (std::size_t v : {a, a + 1, a + cols, a + cols + 1}) {
+                if (mesh.positions[v].z <= underside) continue;
+                mesh.positions[v].z = underside;
+                points[v].tucked = true;
+            }
+        }
+    }
+
     // The normals from the neighbouring vertices; the light left by woods and valleys.
     mesh.normals.resize(mesh.positions.size(), glm::vec3(0.0f, 0.0f, 1.0f));
     mesh.shade.resize(mesh.positions.size(), 1.0f);

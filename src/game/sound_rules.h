@@ -109,8 +109,12 @@ struct AnimationSoundState {
 struct AnimationSounds {
     std::vector<std::int32_t> play;            // played at the spawn (PlaySound), in order
     std::optional<std::int32_t> loop;          // SetCurrentLoopSound(id) (0 = Loop3d)
+    bool loop_is_step = false;                 // `loop` is the spawn's own walk or run sound (a footstep), not its ambient loop
     bool only_if_not_playing = false;          // local player: skipped while the same wave plays
 };
+// Whether an animation's sound is a footstep in the sense of the "Individual Sounds" volumes: walking, running,
+// jumping, crouch walking, climbing, swimming and treading water (the animations with a step, jump or stroke).
+bool is_movement_animation(std::int32_t action);
 // `random(low, high)` is RandomNumberLowHigh.
 using RandomLowHigh = std::function<std::int32_t(std::int32_t, std::int32_t)>;
 AnimationSounds animation_sounds(const SpawnSounds& s, const AnimationSoundInput& in, AnimationSoundState& st,
@@ -157,12 +161,37 @@ SpellEffectStage spell_effect_stage(const SpellEffectStageInput& in);
 inline constexpr std::size_t kOldSpellEffectSize = 0xae8;
 std::array<std::int32_t, 3> old_spell_effect_sounds(std::span<const std::byte> record);
 
+// ---- containers -----------------------------------------------------------
+
+// CContainerMgr::OpenContainer @0x65cae0 / CloseContainer @0x65d2f0 (its wave at 0x65d180): the
+// sound of a bag of `bag_type` opening or closing. Two one-byte tables (open
+// 0x65cda8, close 0x65d2d4), 17 entries at bag_type - 6: 0 is the bag's own
+// sound (0x86 opening, 0x85 closing), anything else the shared container
+// sound (0x91). A type outside 6..22 takes the shared sound too.
+inline constexpr std::int32_t kSoundBagOpen = 0x86;
+inline constexpr std::int32_t kSoundBagClose = 0x85;
+inline constexpr std::int32_t kSoundContainer = 0x91;
+// The first bag type with its own wave and how many types the tables cover (6..22).
+inline constexpr std::uint32_t kFirstOwnBagType = 6;
+inline constexpr std::size_t kOwnBagTypeCount = 17;
+std::int32_t container_sound(std::uint32_t bag_type, bool open);
+
+// The four step sounds a walking spawn picks from (StepWlkR, StepWlkL, StepWlk2, StepWlk3).
+inline constexpr std::int32_t kWalkSteps[4] = {0x5d, 0x5c, 0x97, 0x98};
+
 // ---- other events ----------------------------------------------------------
 
 inline constexpr std::int32_t kSoundLevelUp = 0x8b;     // LevelUp.WAV, 2D
 inline constexpr std::int32_t kSoundJumpLand = 0x72;    // jumpland.WAV
 inline constexpr std::int32_t kSoundFallHurt = 0x73;    // fall_hit.WAV
+inline constexpr std::int32_t kSoundCoin = 0x8a;        // the cash register: every sale, purchase, loot and coin move
 inline constexpr std::int32_t kSoundTeleport = 0x89;    // Teleport.WAV
+inline constexpr std::int32_t kSoundItemMoved = 0x92;   // wearclth.WAV, 2D: an item moved by a click (0x697148)
+inline constexpr std::int32_t kSoundEndQuest = 0x8d;    // EndQuest.WAV, 2D (0x4207a7 won, 0x4c7ff6 coin)
+inline constexpr std::int32_t kSoundAdventureFailed = 0x8c; // LevDn.WAV, 2D (0x4207e7)
+inline constexpr std::int32_t kSoundStruckDown = 0x8f;  // thunder1.wav, 2D (0x4c8aab)
+inline constexpr std::int32_t kSoundWaterOut = 0x63;    // WaterOut.WAV: leaving a liquid region (0x59ec30)
+inline constexpr std::int32_t kSoundWaterIn = 0x64;     // WaterIn.WAV: entering one at a vertical speed of at least 1
 
 // The landing sounds: LandingAndFallCheck's jumpland (`land_sound`: out of
 // water at 2 x SpeedZ <= -2.5, game/mechanics/physics.cpp), then IHaveFallen's

@@ -302,6 +302,7 @@ add_library(hailstone_engine STATIC
   src/core/asset_folder_choice.cpp
   src/core/server_profile.cpp
   src/core/character_files.cpp
+  src/core/character_import_source.cpp
   src/core/atomic_file.cpp
   src/core/config.cpp
   src/core/ini_file.cpp
@@ -316,6 +317,7 @@ add_library(hailstone_engine STATIC
   src/platform/private_file.cpp
   src/platform/durable_file.cpp
   src/platform/shared_file.cpp
+  src/platform/read_only_directory.cpp
   src/platform/shared_library.cpp
   src/platform/gpu_ipc.cpp
   src/platform/gpu_external_memory.cpp
@@ -349,6 +351,8 @@ add_library(hailstone_engine STATIC
   src/app/stats_ui.cpp
   src/app/actions_ui.cpp
   src/app/actions_ui_sets.cpp
+  src/app/actions_ui_import.cpp
+  src/app/character_import_ui.cpp
   src/app/group_ui.cpp
   src/app/social_ui.cpp
   src/ui/social_windows.cpp
@@ -467,6 +471,7 @@ add_library(hailstone_engine STATIC
   src/game/zone_names.cpp
   src/game/race_models.cpp
   src/game/spawn_heights.cpp
+  src/game/character_property_sets.cpp
   src/game/appearance.cpp
   src/game/actor_look.cpp
   src/game/appearance_data.cpp
@@ -492,6 +497,7 @@ add_library(hailstone_engine STATIC
   src/game/item_links.cpp
   src/game/keymap.cpp
   src/game/hotbuttons.cpp
+  src/game/character_import.cpp
   src/game/lua_social.cpp
   src/game/doors.cpp
   src/game/animated_objects.cpp
@@ -596,6 +602,7 @@ add_library(hailstone_engine STATIC
   src/app/lua_ui_group_search.cpp
   src/app/lua_ui_marketplace.cpp
   src/app/lua_ui_map.cpp
+  src/app/lua_ui_map_overlay.cpp
   src/app/lua_ui_player.cpp
   src/app/lua_ui_market.cpp
   src/app/lua_ui_mail.cpp
@@ -671,6 +678,7 @@ add_library(hailstone_engine STATIC
   src/audio/listener.cpp
   src/audio/environment_presets.cpp
   src/audio/audio_system.cpp
+  src/audio/individual_sounds.cpp
   src/app/sound_events.cpp
   src/app/actor_emitters.cpp
   src/app/spell_particles.cpp
@@ -910,6 +918,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/plugins/projecttriune/CMakeLists.txt)
 endif()
 
 add_executable(hailstone src/app/main.cpp src/app/client_app.cpp src/app/client_app_ui.cpp src/app/client_app_draw.cpp src/app/target_ring.cpp src/app/client_app_input.cpp src/app/client_app_testdrive.cpp src/app/client_app_pick.cpp src/app/client_app_iso.cpp src/app/client_app_items.cpp src/app/client_app_player.cpp src/app/client_app_zone.cpp src/app/client_app_pregame.cpp src/app/client_app_options.cpp src/app/client_app_commands.cpp src/app/client_app_info.cpp src/app/client_app_web.cpp src/app/client_app_login.cpp src/app/client_app_gamepad.cpp src/app/client_app_bugreport.cpp src/app/client_app_update.cpp src/app/client_app_addons.cpp src/app/client_app_addon_upscaler.cpp src/app/input_script.cpp src/app/model_viewer.cpp ${HAILSTONE_WIN_MANIFEST} ${HAILSTONE_WIN_CLIENT_RESOURCES})
+target_sources(hailstone PRIVATE src/app/client_app_import.cpp)
 target_compile_options(hailstone PRIVATE ${HAILSTONE_WARNINGS})
 # Windows: a Release (or MinSizeRel) client is a GUI program, so no console window opens beside it; main() stays the
 # entry point. Other builds keep the console for the log. Errors that stop a start are shown in a dialog either way
@@ -1188,6 +1197,10 @@ if(HAILSTONE_BUILD_TESTS)
     tests/layout_extras_test.cpp
     tests/settings_files_test.cpp
     tests/character_files_test.cpp
+    tests/character_import_source_test.cpp
+    tests/character_import_test.cpp
+    tests/character_import_ui_test.cpp
+    tests/actions_ui_import_test.cpp
     tests/client_options_test.cpp
     tests/buff_overlays_test.cpp
     tests/target_indicator_test.cpp
@@ -1371,6 +1384,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/lua_ui_hooks_test.cpp
     tests/lua_ui_extension_drawing_test.cpp
     tests/lua_ui_extensions_test.cpp
+    tests/lua_ui_map_overlay_test.cpp
     tests/lua_ui_inheritance_test.cpp
     tests/ui_api_starter_test.cpp
     tests/lua_ui_modern_windows_test.cpp
@@ -1484,6 +1498,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/xmi_test.cpp
     tests/zone_emitters_test.cpp
     tests/sound_rules_test.cpp
+    tests/rof2_sound_gaps_test.cpp
     tests/mixer_test.cpp
     tests/rows2_vectors_test.cpp
     tests/rows3_vectors_test.cpp

@@ -234,7 +234,7 @@ const WorldObjects::Model* WorldObjects::model_for(const std::string& raw) {
     }
     auto model = std::make_unique<Model>();
     model->gpu = renderer_->add_model(*mesh, read);
-    model->shape = game::ObjectShape::from_mesh(*mesh);
+    model->shape = game::ObjectShape::from_mesh(*mesh, true);
     model->plant = assets::is_plant(base, *mesh);
     model->fire = !model->plant && assets::is_fire_object(base, *mesh);
     if (!model->plant) {
@@ -708,9 +708,17 @@ void WorldObjects::touch_overlap(game::SphereSweep& sweep, std::vector<DoorHit>&
             hits.push_back({id, p.type, sweep.t});
 }
 
-void WorldObjects::pick_actors(std::vector<game::PickActor>& actors, std::vector<PickRef>& refs) const {
-    auto add = [&](const Placed& p, bool is_door, std::uint32_t id) {
-        if (!p.model || p.model->shape.records.empty()) return;
+void WorldObjects::pick_actors(std::vector<game::PickActor>& actors, std::vector<PickRef>& refs,
+                               bool include_passable) const {
+    auto add = [&](const Placed& p, PickSource source, std::uint32_t id) {
+        if (!p.model) return;
+        // The DLL's actor pick tests a model's passable triangles too, whatever the actor is (passes 1 and 2,
+        // docs/mechanics.md "The four passes"); here only for a door or ground object with no solid triangle
+        // (docs/unknowns.md).
+        const bool is_door = source == PickSource::Door;
+        const bool allow_proxy = include_passable && picks_passable(source);
+        const auto triangles = p.model->shape.pick_triangles(allow_proxy);
+        if (triangles.empty()) return;
         game::PickActor a;
         a.mask = p.pick_mask;
         a.invisible = !p.visible;
@@ -719,8 +727,8 @@ void WorldObjects::pick_actors(std::vector<game::PickActor>& actors, std::vector
         a.bound_radius = p.bound;
         a.static_mesh = true;
         const Placed* placed = &p;
-        a.triangles = [placed](const game::PickTriangleSink& sink) {
-            for (const auto& r : placed->model->shape.records) {
+        a.triangles = [placed, triangles](const game::PickTriangleSink& sink) {
+            for (const auto& r : triangles) {
                 game::PickTriangle t;
                 t.v0 = glm::vec3(placed->transform * glm::vec4(r.v0, 1.0f));
                 t.v1 = glm::vec3(placed->transform * glm::vec4(r.v1, 1.0f));
@@ -733,11 +741,11 @@ void WorldObjects::pick_actors(std::vector<game::PickActor>& actors, std::vector
         actors.push_back(std::move(a));
         refs.push_back({is_door, id});
     };
-    for (const auto& [id, p] : doors_) add(p, true, id);
-    for (const auto& [id, p] : objects_) add(p, false, id);
+    for (const auto& [id, p] : doors_) add(p, PickSource::Door, id);
+    for (const auto& [id, p] : objects_) add(p, PickSource::GroundObject, id);
     for (const auto& [key, p] : placed_) {
         std::size_t before = refs.size();
-        add(p, false, 0);
+        add(p, PickSource::Placed, 0);
         if (refs.size() > before) {
             refs.back().is_placed = true;
             refs.back().re = static_cast<std::uint32_t>(key >> 32);

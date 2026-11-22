@@ -90,7 +90,9 @@ TEST_CASE("UI Options: real presenters show unavailable interface details and ke
             const auto loaded = lua.load_status();
             CHECK(loaded.error_count == 0);
             CHECK(loaded.loaded_script_count == 1);
-            CHECK(loaded.window_count == 1);
+            // modern: the Options window and the Individual Sounds window; gamepad: its Sounds page is part of its Options
+            constexpr int kModernWindows = 2, kGamepadWindows = 1;
+            CHECK(loaded.window_count == (std::string(pack) == "modern" ? kModernWindows : kGamepadWindows));
             CHECK(api.shown("OptionsWindow"));
             CHECK(api.replaces("OptionsWindow"));
             CHECK(reads > 0);

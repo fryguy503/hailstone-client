@@ -101,6 +101,10 @@ struct ItemEffect {
     std::int32_t recast_type() const { return static_cast<std::int32_t>(extra[3]); }
     std::uint32_t proc_rate() const { return extra[4]; }
     bool present() const { return effect > 0; }
+    // Extension past RoF2: a server can mask a spell ID past the client's table with -1 and still send the effect's
+    // name. ItemDisplay_BuildSpellEffectText @0x6a1c70 skips any ID below 1, so the original shows nothing; stock
+    // EQEmu sends -1 only for "no effect", always without a name, so this changes nothing against it.
+    bool displayable() const { return present() || (effect == -1 && !name.empty()); }
 };
 enum ItemEffectKind : std::uint8_t { kEffectClick, kEffectProc, kEffectWorn, kEffectFocus, kEffectScroll, kEffectBard, kEffectCount };
 

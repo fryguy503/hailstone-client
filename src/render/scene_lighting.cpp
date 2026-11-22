@@ -79,13 +79,21 @@ float moon_lit(float phase) {
     return 0.5f * (1.0f - std::cos(2.0f * std::numbers::pi_v<float> * phase));
 }
 
-Daylight daylight(float hour, bool outdoor, float moon_phase, float blood_moon) {
+float haze_ambient_scale(float sun_z, bool outdoor, float ambient) {
+    ambient = std::clamp(ambient, 0.0f, 1.0f);
+    return outdoor ? glm::mix(ambient, 1.0f, smoothstep(-0.1f, 0.25f, sun_z)) : ambient;
+}
+
+Daylight daylight(float hour, bool outdoor, float moon_phase, float blood_moon, float ambient, float baked_lamps) {
+    ambient = std::clamp(ambient, 0.0f, 1.0f);
+    baked_lamps = std::clamp(baked_lamps, 0.0f, kMaxBakedLamps);
     Daylight out;
     if (!outdoor) {
-        out.sky = glm::vec3(0.06f);
-        out.ground = glm::vec3(0.04f);
-        out.baked = kIndoorBaked;
-        out.baked_lamps = kIndoorBakedLamps;
+        out.sky = glm::vec3(0.06f * ambient);
+        out.ground = glm::vec3(0.04f * ambient);
+        out.baked = kIndoorBaked * ambient;
+        out.baked_lamps = kIndoorBakedLamps * baked_lamps;
+        out.lamp_light = baked_lamps;
         return out;
     }
     glm::vec3 to_sun = sun_direction(hour);
@@ -118,15 +126,18 @@ Daylight daylight(float hour, bool outdoor, float moon_phase, float blood_moon) 
     float moon_strength = moon_up * (0.125f + 0.875f * out.moon_lit * out.moon_lit);
     glm::vec3 moon = glm::mix(kFullMoon, kBloodMoon, blood_moon) * moon_strength;
     // Without the moon, the starlight more (the eye's adaptation: a moonless night stays readable, if barely); with
-    // it, the sky it lights.
+    // it, the sky it lights. `ambient` scales the starlight: at 0 a moonless night is dark.
     glm::vec3 moon_sky = glm::mix(glm::vec3(0.03f, 0.04f, 0.07f), glm::vec3(0.06f, 0.012f, 0.01f), blood_moon);
-    out.sky = atmosphere + (sky_night * (1.6f - 0.6f * moon_strength) + moon_sky * moon_strength) * night;
+    const glm::vec3 starlight = sky_night * (1.6f - 0.6f * moon_strength) * ambient;
+    out.sky = atmosphere + (starlight + moon_sky * moon_strength) * night;
 
     // The baked colour (its ambient and the sun the builders put in it; its lamps' part) fades with the day, from the
-    // sun 15 degrees up to 6 below the horizon, to what is left of it by night: a little more under the moon.
+    // sun 15 degrees up to 6 below the horizon, to what is left of it by night: a little more under the moon. The
+    // darkness controls scale what is left by night.
     float baked_day = smoothstep(-0.1f, 0.25f, s);
-    out.baked = glm::mix(kNightBaked + kMoonBaked * moon_strength, 1.0f, baked_day);
-    out.baked_lamps = glm::mix(kNightBakedLamps, 1.0f, baked_day);
+    out.baked = glm::mix((kNightBaked + kMoonBaked * moon_strength) * ambient, 1.0f, baked_day);
+    out.baked_lamps = glm::mix(kNightBakedLamps * baked_lamps, 1.0f, baked_day);
+    out.lamp_light = baked_lamps;
     if (s >= 0.0f) {
         out.to_light = to_sun;
         out.light = sun;
@@ -165,21 +176,25 @@ SceneLighting classic_full_bright() {
 }
 
 SceneLighting make_scene_lighting(const game::SceneLight& scene, std::span<const game::LightSource> lights,
-                                  std::size_t dynamic, LightingMode mode, const Daylight& daylight) {
+                                  std::size_t dynamic, LightingMode mode, const Daylight& daylight, std::size_t carried,
+                                  float carried_stacking) {
     SceneLighting out;
     out.ambient = glm::vec4(scene.ambient, 0.0f);
     out.special_ambient = glm::vec4(scene.special_ambient, 0.0f);
     out.directional = glm::vec4(scene.directional, 0.0f);
     out.direction = glm::vec4(scene.direction, 0.0f);
     out.bounce = glm::vec4(scene.bounce, 0.0f);
-    out.vision = glm::vec4(scene.vision_lift, 0.0f);
+    out.vision = glm::vec4(scene.vision_lift, daylight.lamp_light);
     bool modern = mode == LightingMode::Modern;
     std::size_t n = modern ? std::min(lights.size(), kMaxSceneLights) : 0;
     for (std::size_t i = 0; i < n; ++i) {
         out.lights[i].position_radius = glm::vec4(lights[i].position, lights[i].radius);
-        out.lights[i].color = glm::vec4(lights[i].color, 0.0f);
+        // The zone's lamps (after the dynamic lights) as strong as display.baked_lamp_light makes them.
+        out.lights[i].color = glm::vec4(lights[i].color * (i < dynamic ? 1.0f : daylight.lamp_light), 0.0f);
     }
     out.params = glm::vec4(modern ? 1.0f : 0.0f, static_cast<float>(n), static_cast<float>(std::min(dynamic, n)), 0.0f);
+    out.carried = glm::vec4(static_cast<float>(std::min({carried, dynamic, n})), std::clamp(carried_stacking, 0.0f, 1.0f),
+                            0.0f, 0.0f);
     out.to_light = glm::vec4(daylight.to_light, 0.0f);
     out.light = glm::vec4(daylight.light, 0.0f);
     out.sky = glm::vec4(daylight.sky, daylight.baked);

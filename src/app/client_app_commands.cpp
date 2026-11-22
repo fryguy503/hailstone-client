@@ -189,6 +189,11 @@ bool ClientApp::client_command(std::string_view h, const std::string& args) {
     const std::string off = eqstr(12946), on = eqstr(12947);
 
     // ---- windows
+    if (h == "Hailstone_import") {
+        if (args.empty()) open_character_import();
+        else c.show_chat("Usage: /import", 15);
+        return true;
+    }
     if (h == "Hailstone_abilitybook") {
         // The Ability Book (game/ability_book.h): no argument shows or hides it; "auto" toggles autoskill, "auto on"
         // / "auto off" set it.

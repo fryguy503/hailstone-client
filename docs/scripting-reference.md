@@ -880,6 +880,7 @@ plus `cooldown` (0..1 of the recast left) on the slot readers while a recast run
 | Option | (name) → int\|nil | Client option value (ui/<pack>/options.lua) | — |
 | SetOption | (name, int) → — | Change, apply and save a client option | commands |
 | OptionChoices | (name) → {string} | Choices the client lists for an option (e.g. "resolution") | — |
+| PlaySoundTest | (name) → bool | Plays one of the Individual Sounds options (`own_footsteps`, `pet_footsteps`, `other_footsteps`, `open_bag`, `open_bank`, `money`, `thunder`, `equip`, `creature_ambient`) once at its volume; false for another name | — |
 | UiIni | (section, key) → string\|nil | Character UI ini value (over defaults.ini) | — |
 | SetUiIni | (section, key, value) → — | Write and save a UI ini value | commands |
 | CoolDownColor | () → r, g, b, a | Colour of cool-down rectangles (user colour 0x15f, alpha 0x40) | — |
@@ -1107,7 +1108,7 @@ achievement and reward-selection APIs.
 | Function | Args → returns | What | Cap |
 |---|---|---|---|
 | SpellBook | () → {{slot, id, name, icon, level, mana, endurance, castTime, recastTime, recoveryTime, range, aeRange, duration, beneficial, targetType, skill, skillName, category, categoryName, subcategory, subcategoryName, resist, gem}} | Every scribed spell | — |
-| SpellBookState | () → {open, sitting, gems, usableGems, memorizing={gem,spell}, settingSet, scribing, cursorSpell, holdingItem, swapSlot} | Book state | — |
+| SpellBookState | () → {open, sitting, sittingOrMounted, gems, usableGems, memorizing={gem,spell}, settingSet, scribing, cursorSpell, holdingScroll, swapSlot} | Book state. `sittingOrMounted` reports whether the posture permits memorizing or scribing. | — |
 | SpellIcon | (icon) → tex,u0,v0,u1,v1 \| nil | Spell icon cell | — |
 | SpellBookClick | (slot) → ok | Stock book click: scribe, or spell to cursor | actions |
 | SpellBookSwap | (slot) → — | Quick right click: pick up or swap book slots | actions |
@@ -1230,7 +1231,7 @@ achievement and reward-selection APIs.
 | FindMapLocation | (x, y) → — | Find path to a map point | commands |
 | FindPathShown | () → bool | A find path is shown | — |
 | EndFind | () → — | End the find path | commands |
-| ZoneName | () → long, short | Current zone | — |
+| ZoneName | ([with_entry]) → long, short [, entry] | Current zone. Pass `true` for the zone entry counter, which is nil outside the world. | — |
 | GameTime | () → hour, minute \| nothing | Game clock | — |
 | MapAutoZ | ([on [, above [, below]]]) → on, above, below | Auto Z setting (get or set) | commands |
 | AtlasIndex | () → {pages={{file,title,parent}}, zones={{zone,name,page,x0,y0,x1,y1,id,expansion,allowed}}} | Atlas index | — |

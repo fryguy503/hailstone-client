@@ -193,6 +193,21 @@ TEST_CASE("horizon: past a wall the land starts at its top") {
     CHECK(west / static_cast<float>(nw) < 100.0f); // the open side: the ground's
 }
 
+TEST_CASE("horizon: a mesh quad stays below the low side of a cliff") {
+    std::vector<HorizonTriangle> tris;
+    add_square(tris, 0.0f, -1024.0f, 1000.0f, 1024.0f, 0.0f);
+    add_square(tris, 1000.0f, -1024.0f, 2048.0f, 1024.0f, 400.0f);
+    const auto land = render::horizon_land(tris, 0.0f);
+    const auto field = render::horizon_field(tris, land);
+    REQUIRE(field.valid());
+    const glm::vec2 low_side(992.0f, 16.0f);
+    REQUIRE(field.covers(low_side));
+    const auto mesh = render::horizon_mesh(field);
+    const auto height = render::horizon_surface(field, mesh, low_side);
+    REQUIRE(height.has_value());
+    CHECK(*height <= -render::kHorizonTuck);
+}
+
 TEST_CASE("horizon: where the zone's edge is water, the sea, its floor under the surface") {
     std::vector<HorizonTriangle> tris;
     add_grid(tris, 0.0f, 0.0f, 2000.0f, 2000.0f, 100.0f, [](float, float) { return 20.0f; });

@@ -65,18 +65,21 @@ std::optional<NpcCategory> npc_category(const Spawn& s, bool findable, std::uint
 }
 
 std::vector<UsefulNpc> useful_npcs(const WorldState& world, const std::unordered_set<std::uint32_t>& findable,
-                                   const glm::vec3& from, const QuestNpcMap& quests) {
+                                   const glm::vec3& from, const QuestNpcMap& quests, bool findable_only) {
     std::vector<UsefulNpc> out;
     std::string key;
     for (const auto& [id, s] : world.spawns) {
         if (id == world.player_id) continue;
+        const bool advertised = findable.contains(id);
+        if (findable_only && !advertised) continue;
         std::uint8_t q = 0;
         if (!quests.empty() && s.is_npc) {
             key = display_name(s.name);
             for (char& ch : key) ch = ascii_lower(ch);
             if (auto it = quests.find(key); it != quests.end()) q = it->second;
         }
-        auto cat = npc_category(s, findable.contains(id), q);
+        auto cat = npc_category(s, advertised, q);
+        if (!cat && findable_only && s.is_npc && !s.is_corpse) cat = NpcCategory::PointOfInterest;
         if (!cat) continue;
         UsefulNpc n;
         n.spawn_id = id;

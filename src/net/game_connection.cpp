@@ -22,11 +22,13 @@
 #include "core/log.h"
 #include "core/process_serial.h"
 #include "game/appearance.h"
+#include "game/appearance_data.h"
 #include "game/eye_control.h"
 #include "game/boats.h"
 #include "game/race_models.h"
 #include "game/combat.h"
 #include "game/sound_rules.h"
+#include "game/spawn_heights.h"
 #include "game/coords.h"
 #include "game/zone_names.h"
 #include "game/mechanics/tables.h"
@@ -132,10 +134,12 @@ void GameConnection::reload_game_files() {
         auto bytes = game_.read(file);
         return bytes ? std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size()) : std::string();
     };
+    npc_tint_count_ = game::ColorTable::parse(text("Resources/npct.ini")).values.size();
     std::string racedata = text("racedata.txt");
     if (racedata.empty()) log::warn("racedata.txt not found; spawn heights use the defaults");
     world_.height_tables =
         std::make_shared<const game::HeightTables>(game::parse_height_tables(racedata, text("Resources/moddat.ini")));
+    character_property_sets_ = game::CharacterPropertySets::parse(text("Resources/CharacterPropertySets.txt"));
     // CDisplay's UseLuclinElementals (game/world_state.h luclin_elementals), read once as the display starts.
     IniFile ini;
     if (auto path = game_.find("eqclient.ini")) ini.load(*path);
@@ -672,6 +676,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         world_.spawns.clear();
         ++world_.spawn_set_serial;
         findable_npcs_.clear(); // the old zone's ids
+        ++findable_npcs_revision_;
         quest_npcs_.clear();    // and quest NPCs: the next zone's are asked for when wanted
         quest_npcs_asked_ = false;
         world_.player_id = 0;
@@ -1219,7 +1224,9 @@ void GameConnection::finish_zone_in() {
 
 void GameConnection::request_quest_npcs() {
     // Only of a server whose zone answered the settings request (it runs the script): others never see the opcode.
-    if (!npc_find_enabled() || quest_npcs_asked_ || !zone_ready_ || !hailstone_script_) return;
+    const auto policy = server_ext().map_policy(*this);
+    if (!policy.npc_find_enabled() || policy.npc_find_server_only() || quest_npcs_asked_ ||
+        !zone_ready_ || !hailstone_script_) return;
     quest_npcs_asked_ = true;
     send_zone(encode_quest_npcs_request());
 }
@@ -1353,7 +1360,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
         return;
     }
     Op op = from_wire(p.opcode);
-    handle_ability(op, p); // only looks (net/game_connection_abilities.cpp)
+    handle_ability(op, p);
     if (handle_fellowship(p)) return;
     if (handle_guild_banner(op, p)) return;
     switch (op) {
@@ -1553,6 +1560,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
     }
     case Op::DeleteSpawn:
         if (auto id = decode_delete_spawn(p)) {
+            if (findable_npcs_.erase(*id)) ++findable_npcs_revision_;
             duel_spawn_removed(*id, decode_delete_spawn_decayed(p).value_or(false));
             // msgEQRmPlayer: the trade partner (pinstTradeTarget) leaving cancels and closes the trade
             // (CTradeWnd_CancelAndClose, which sends OP_CancelTrade). EQEmu tells only the player who left.
@@ -1582,6 +1590,22 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 auto_target_due_ = true;
             }
             std::erase(xtarget_attackers_, *id);
+        }
+        break;
+    case Op::SetBodyType:
+        if (auto update = decode_set_body_type(p)) {
+            auto it = world_.spawns.find(update->spawn_id);
+            if (it == world_.spawns.end()) break;
+            auto& spawn = it->second;
+            // HandleWorldMessage @0x4c5747 (8 bytes: spawn ID, set ID) -> 0x59fb20 -> 0x8cfd90: the spawn's property
+            // list is cleared, then filled with the set's members; an unknown set leaves it empty.
+            // Hailstone: without the file (not a RoF2 install) the set ID is kept as the single property instead.
+            const auto members = character_property_sets_.find(update->set_id);
+            if (!members.empty()) spawn.properties.assign(members.begin(), members.end());
+            else if (character_property_sets_.empty()) spawn.properties = {update->set_id};
+            else spawn.properties.clear();
+            // As for a spawn record, body_type is the list's first entry (0 for an empty list).
+            spawn.body_type = spawn.properties.empty() ? 0 : spawn.properties.front();
         }
         break;
     case Op::SetFace:
@@ -2025,6 +2049,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
     case Op::SendFindableNPCs:
         // Handle_OP_SendFindableNPCs: an addition (or a change) of the spawn, or its removal.
         if (auto n = decode_findable_npc(p)) {
+            ++findable_npcs_revision_;
             if (n->remove) findable_npcs_.erase(n->spawn_id);
             else findable_npcs_[n->spawn_id] = std::move(*n);
         }
@@ -2092,6 +2117,7 @@ void GameConnection::handle_zone(const AppPacket& p) {
     case Op::SendTitleList:
     case Op::SetTitleReply:
     case Op::NewTitlesAvailable:
+    case Op::GMKill:
         handle_player(op, p);
         break;
     case Op::SpecialMesg:
@@ -2758,19 +2784,27 @@ void GameConnection::attack_command(const std::string& args) {
 void GameConnection::consider() {
     if (state_ != ConnectionState::InZone) return;
     auto it = world_.spawns.find(world_.target_id);
+    // Cmd_consider @0x4df830 prints its lines with dsp_chat_2 (colour 0x111, the default). With no target it is
+    // 13063 "Consider whom?"; 12240 "Consider who?" is the reply handler's (CEverQuest::Consider @0x5239a0).
     if (it == world_.spawns.end()) {
-        chat(ChatEvent::Kind::System, strings_.format(12240, {})); // Consider who?
+        chat(ChatEvent::Kind::System, strings_.format(13063, {}));
         return;
     }
-    if (it->second.is_corpse) {
-        chat(ChatEvent::Kind::System, strings_.format(12241, {})); // It is futile to consider the dead...
+    // A living target (spawn type below 2) whose PlayerClient vftable slot +0x50 (PlayerClient_IsVehicleRace
+    // @0x59e530: the race table's vehicle flag, ships and boats) is set gets 13064 "You can't consider that." and
+    // no packet.
+    if (!it->second.is_corpse && game::is_vehicle_race(it->second.race, it->second.gender)) {
+        chat(ChatEvent::Kind::System, strings_.format(13064, {}));
         return;
     }
     Consider c;
     c.player_id = world_.player_id;
     c.target_id = world_.target_id;
-    send_zone(encode(c));
-    context_tip(0x1d); // Cmd_consider: the consider tip
+    // Cmd_consider @0x4df830: spawn type 2 and up (a corpse) sends OP_ConsiderCorpse with the same 20 bytes and no
+    // consider tip; the server answers in chat (decay, and a player corpse's resurrection time).
+    const auto op = it->second.is_corpse ? Op::ConsiderCorpse : Op::Consider;
+    send_zone(encode(c, op));
+    if (op == Op::Consider) context_tip(0x1d); // Cmd_consider: the consider tip
 }
 
 void GameConnection::report_hit(const game::HitLine& line, std::uint32_t source, bool report) {
@@ -2926,6 +2960,8 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
         break;
     case Op::Consider:
         if (auto c = decode_consider(p)) {
+            // CEverQuest::Consider @0x5239a0, as the original: 12240 for an unknown spawn and 12241 for type 2 and
+            // up. /consider sends OP_ConsiderCorpse for a corpse, so stock EQEmu never answers one here.
             const game::Spawn* t = spawn(c->target_id);
             if (!t) {
                 chat(ChatEvent::Kind::System, strings_.format(12240, {}));
@@ -3021,7 +3057,7 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
             // Social appearance types (EQEmu AppearanceType; Handle_OP_SpawnAppearance).
             if (auto* s = spawn(id)) {
                 switch (a->type) {
-                case 3: s->invis_rank = static_cast<std::int32_t>(a->parameter); break;
+                case kAppearanceInvisibility: s->invis_rank = static_cast<std::int32_t>(a->parameter); break;
                 case 5: s->light_type = static_cast<std::uint8_t>(a->parameter); break;
                 case 18: s->linkdead = a->parameter != 0; break;
                 case 19: // PlayerPhysics_SetFlyMode
@@ -3080,16 +3116,23 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
                         afk_keepalive_.zone_afk_since_ms = s->afk ? now_ms() : -1;
                     }
                     break;
-                // NPC tint (ActorClient_ApplyNpcTint, new-style races only;
-                // the renderer checks the race) and show helm.
-                case 39: s->appearance.npc_tint = a->parameter; break;
+                // NPC tint. Handle_OP_SpawnAppearance @0x4b4b60 stores NpcTintIndex for
+                // new-style races and calls ActorClient_ApplyNpcTint @0x40cea0, which leaves
+                // the actor as it is for 0 or an index past npct.ini. The index stored here
+                // is what the dress is rebuilt from, so an index the original would not
+                // apply is not stored: the tint on screen stays the same as in the original.
+                case 39:
+                    if (a->parameter != 0 && a->parameter <= npc_tint_count_ && game::is_new_style_model_race(s->race))
+                        s->appearance.npc_tint = a->parameter;
+                    break;
                 case 43: s->appearance.show_helm = a->parameter != 0; break;
                 default: break;
                 }
             }
             // Case 38 (FreezeBeneficialBuffs, @0x4b53c1): the spawn's character's buff timers on hold (value != 0).
             if (id == me && a->type == 38) spells_.buff_timers_on_hold = a->parameter != 0;
-            if (id == me && a->type == 3) invis_state_ = static_cast<std::int32_t>(a->parameter); // the spawn's +0x338
+            if (id == me && a->type == kAppearanceInvisibility)
+                invis_state_ = static_cast<std::int32_t>(a->parameter); // the spawn's +0x338
         }
         break;
     case Op::TargetCommand:

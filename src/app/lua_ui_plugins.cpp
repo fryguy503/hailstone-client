@@ -51,6 +51,11 @@ std::string target_owner(const UiHost& h, std::string_view name) {
 // "Plugin windows").
 bool may_reach(std::string_view owner) { return caller().empty() || iequals(caller(), owner); }
 
+void run_owned_command(UiHost& h, std::string_view owner, const std::string& command, std::uint32_t caps) {
+    plugin::CallerScope scope(caps, owner);
+    h.submit_chat(command);
+}
+
 // A call's arguments and result, in a userdata on the stack that the state owns (its __gc destroys them): Lua is
 // built as C, and a push that fails (the UI state's memory limit) longjmps past this frame, whose own vectors and
 // values would never be destroyed. Made before any of them, so that it is the only place they live.
@@ -238,6 +243,95 @@ int SetPluginOption(lua_State* L) {
         set(static_cast<int>(clamped));
     }
     return 0;
+}
+
+constexpr std::uint32_t kContributionCaps = plugin::kCapUi | plugin::kCapExtend;
+
+bool may_reach_contribution(std::string_view owner) {
+    const auto scoped = plugin::caller_name();
+    const bool pack = caller().empty() && scoped.empty();
+    return pack || (may_reach(owner) && (scoped.empty() || iequals(scoped, owner)) &&
+                    (plugin::caller_caps() & kContributionCaps) == kContributionCaps);
+}
+
+std::string_view checked_string(lua_State* L, int index) {
+    std::size_t length = 0;
+    const char* data = luaL_checklstring(L, index, &length);
+    return {data, length};
+}
+
+// hs.UI.contributions.List(window): declarative, owner-scoped data; evaluating a row never runs its command.
+int UiContributionList(lua_State* L) {
+    const auto window = checked_string(L, 1);
+    UiHost& h = host_of(L);
+    struct Row {
+        std::string owner;
+        plugin::UiBridge::Contribution entry;
+    };
+    auto& rows = plugin::lua_keep<std::vector<Row>>(L);
+    plugin::cxx_guard(L, [&] {
+        auto collect = [&](const plugin::UiBridge& bridge) {
+            for (const auto& entry : bridge.contributions()) {
+                if (entry.window != window) continue;
+                auto owner = entry.owner();
+                if (!may_reach_contribution(owner)) continue;
+                if (entry.kind != plugin::UiBridge::Kind::Upscaler &&
+                    (!h.plugin_caps || (h.plugin_caps(owner) & kContributionCaps) != kContributionCaps)) continue;
+                rows.push_back({std::move(owner), entry});
+            }
+        };
+        if (h.plugin_ui) collect(*h.plugin_ui);
+        if (caller().empty() && plugin::caller_name().empty() && h.collect_upscaler_ui_contributions) {
+            plugin::UiBridge upscaler;
+            h.collect_upscaler_ui_contributions(upscaler);
+            collect(upscaler);
+        }
+        std::ranges::sort(rows, [](const Row& a, const Row& b) {
+            if (a.owner != b.owner) return a.owner < b.owner;
+            return a.entry.id < b.entry.id;
+        });
+    });
+    lua_createtable(L, static_cast<int>(rows.size()), 0);
+    lua_Integer index = 0;
+    for (const auto& row : rows) {
+        const auto& e = row.entry;
+        lua_createtable(L, 0, 7);
+        const std::pair<const char*, const std::string*> fields[] = {
+            {"owner", &row.owner}, {"plugin", &e.plugin}, {"id", &e.id},
+            {"target", &e.target}, {"text", &e.text}, {"action_label", &e.action_label},
+        };
+        for (const auto& [field, value] : fields) {
+            lua_pushlstring(L, value->data(), value->size());
+            lua_setfield(L, -2, field);
+        }
+        lua_pushboolean(L, e.disabled);
+        lua_setfield(L, -2, "disabled");
+        lua_rawseti(L, -2, ++index);
+    }
+    return 1;
+}
+
+// hs.UI.contributions.Activate(window,owner,id): resolve the current entry and run its command as the addon.
+int UiContributionActivate(lua_State* L) {
+    const auto window = checked_string(L, 1);
+    const auto owner = checked_string(L, 2);
+    const auto id = checked_string(L, 3);
+    UiHost& h = host_of(L);
+    bool activated = false;
+    if (h.plugin_ui && h.plugin_caps && h.submit_chat && may_reach_contribution(owner)) {
+        plugin::cxx_guard(L, [&] {
+            const auto* e = h.plugin_ui->find_contribution(window, owner, id);
+            if (!e || e->command.empty()) return;
+            const auto actual_owner = e->owner();
+            const auto caps = h.plugin_caps(actual_owner);
+            if ((caps & kContributionCaps) != kContributionCaps) return;
+            const auto command = e->command; // the command may remove its own contribution
+            run_owned_command(h, actual_owner, command, caps);
+            activated = true;
+        });
+    }
+    lua_pushboolean(L, activated);
+    return 1;
 }
 
 // The menu entries the caller may reach (a plugin's code: its own; the pack: all), as their places in the bridge's menu.
@@ -437,8 +531,7 @@ bool run_plugin_menu(UiHost& h, std::size_t i) {
     if (!h.plugin_ui || i >= h.plugin_ui->menu().size() || !h.submit_chat) return false;
     const plugin::UiBridge::MenuEntry& e = h.plugin_ui->menu()[i];
     const std::string command = e.command, owner = e.owner();
-    plugin::CallerScope scope(h.plugin_caps ? h.plugin_caps(owner) : 0u, owner);
-    h.submit_chat(command);
+    run_owned_command(h, owner, command, h.plugin_caps ? h.plugin_caps(owner) : 0u);
     return true;
 }
 
@@ -447,6 +540,8 @@ void register_plugins_api(lua_State* L, UiHost& host) {
              {"Plugin", Plugin},
              {"PluginOptions", PluginOptions},
              {"SetPluginOption", SetPluginOption},
+             {"UiContributionList", UiContributionList},
+             {"UiContributionActivate", UiContributionActivate},
              {"PluginMenu", PluginMenu},
              {"PluginMenuClick", PluginMenuClick},
              {"PluginConsent", PluginConsent},

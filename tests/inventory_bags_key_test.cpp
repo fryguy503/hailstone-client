@@ -3,11 +3,13 @@
 #include <doctest/doctest.h>
 
 #include <string>
+#include <vector>
 
 #include <imgui.h>
 #include <lua.hpp>
 
 #include "app/lua_ui.h"
+#include "app/lua_ui_windows.h"
 #include "mock_server/harness.h"
 #include "net/item_packets.h"
 
@@ -26,6 +28,13 @@ net::Item item(std::uint32_t id, const char* name, std::int16_t slot, bool bag, 
         it.bag_slots = 8;
     }
     return it;
+}
+
+std::vector<std::int32_t> wave_cues(net::GameConnection& c) {
+    std::vector<std::int32_t> out;
+    for (const net::SoundCue& cue : c.take_sound_cues())
+        if (cue.kind == net::SoundCue::Kind::Wave) out.push_back(static_cast<std::int32_t>(cue.spell));
+    return out;
 }
 
 } // namespace
@@ -150,7 +159,12 @@ TEST_CASE("bank bags key: the bank's and the shared bank's bags open while the b
     api.toggle_all_bags();
     api.toggle_all_bank_bags();
     CHECK(open() == "Pouch|Bank Sack|Shared Box|");
+    // The bank's hide closes every open container, carried bags too, each with its close wave: the three bags are
+    // type 0, so the shared container sound. Checked before the next UI frame, as the hide is.
+    conn.take_sound_cues();
     conn.close_bank();
+    app::prune_bag_windows(conn);
+    CHECK(wave_cues(conn) == std::vector<std::int32_t>{0x91, 0x91, 0x91});
     REQUIRE(conn.activate_bank(60));
     CHECK(open() == "|||");
     api.toggle_all_bank_bags();

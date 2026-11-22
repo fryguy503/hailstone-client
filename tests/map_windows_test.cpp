@@ -67,6 +67,34 @@ struct MapLua {
 
 } // namespace
 
+TEST_CASE("Map windows: a fresh entry to the same zone restores its map") {
+    ImGuiContext* ctx = ImGui::CreateContext();
+    test::ScratchDir scratch("map_zone_entry_test");
+    {
+        MapLua lua({}, scratch.path() / "UI.ini");
+        lua.host.zone_entry = 1;
+        lua.api.begin_frame();
+        CHECK(lua("return select('#', hs.ZoneName())") == "2");
+        CHECK(lua("return select(3, hs.ZoneName(true))") == "1");
+
+        lua("hs.ShowZoneMap('qeynos2')");
+        const auto shown_zone = "local _, short = hs.MapZoneShown(); return short";
+        CHECK(lua(shown_zone) == "qeynos2");
+        lua.api.begin_frame();
+        CHECK(lua(shown_zone) == "qeynos2");
+
+        lua.host.in_game = false;
+        lua.api.begin_frame();
+        CHECK(lua("return select(3, hs.ZoneName(true))") == "nil");
+        lua.host.in_game = true;
+        ++lua.host.zone_entry;
+        lua.api.begin_frame();
+        CHECK(lua("return select(3, hs.ZoneName(true))") == "2");
+        CHECK(lua(shown_zone) == "qeynos");
+    }
+    ImGui::DestroyContext(ctx);
+}
+
 TEST_CASE("Map windows: the toolbar walks a line, adds a label and saves the four layers") {
     const GameDir* game = test::game_dir();
     if (!game) return;

@@ -267,7 +267,7 @@ std::vector<std::string> item_info_lines(const Item& it, const game::ItemFlagsFo
                                              "Scroll Effect", "Bard Effect"};
     for (std::size_t k = 0; k < net::kEffectCount; ++k) {
         const auto& e = it.effects[k];
-        if (!e.present()) continue;
+        if (!e.displayable()) continue;
         std::string name = e.name.empty() ? std::format("spell {}", e.effect) : e.name;
         out.push_back(std::format("{}:  {}", kKinds[k], name));
     }
@@ -280,6 +280,9 @@ std::vector<std::string> item_info_lines(const Item& it, const game::ItemFlagsFo
         std::uint32_t v = it.value;
         out.push_back("Value: " + game::coin_text(v / 1000, v / 100 % 10, v / 10 % 10, v % 10));
     }
+    const char* per_item = it.stackable() ? " each" : "";
+    if (it.favor != 0) out.push_back(std::format("Personal Tribute: {} favor{}", it.favor, per_item));
+    if (it.guild_favor != 0) out.push_back(std::format("Guild Tribute: {} favor{}", it.guild_favor, per_item));
     if (!it.lore.empty() && it.lore != it.name && it.lore[0] != '*') out.push_back("Lore: " + it.lore);
     out.push_back(std::format("Item ID: {}", it.id));
     if (description_append)

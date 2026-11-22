@@ -51,6 +51,9 @@
 #include <SDL3/SDL_filesystem.h>
 #include <imgui.h>
 
+#include "app/character_import_ui.h"
+#include "core/character_import_source.h"
+
 #include "assets/character.h"
 #include "assets/sky.h"
 #include "assets/texture_overrides.h"
@@ -98,6 +101,7 @@
 #include "game/mechanics/character.h"
 #include "game/scaled_ambient.h"
 #include "game/light_list.h"
+#include "app/light_tweaks.h"
 #include "render/scene_lighting.h"
 #include "game/scene_fog.h"
 #include "game/scene_light.h"
@@ -747,6 +751,13 @@ private:
     // The original's slash commands that act on the client (app/client_app_commands.cpp), by handler name; true =
     // handled. GameConnection::run_slash_command hands them over.
     bool client_command(std::string_view handler, const std::string& args);
+    void open_character_import();
+    void draw_character_import();
+    void close_character_import();
+    bool character_import_target_active() const;
+    CharacterImportUi::Preview preview_character_import(const CharacterImportUi::Choice& choice);
+    CharacterImportUi::Result apply_character_import();
+    CharacterImportUi::Result restore_character_import();
     void xtarget_command(const std::string& args); // /xtarget (client_app_commands.cpp)
     // /channel, /url, /www and /outputfile (app/client_app_info.cpp).
     bool client_info_command(std::string_view handler, const std::string& args);
@@ -888,8 +899,13 @@ private:
     // mouse and sound settings; nullopt for a name the client does not have.
     std::optional<int> option_value(std::string_view name) const;
     void set_option_value(std::string_view name, int value);
+    // Hailstone: the Test button of the Individual Sounds window (audio/individual_sounds.h).
+    bool play_sound_test(std::string_view option);
     // A combo box's choices the client fills ("resolution": the display's modes); empty for others.
     std::vector<std::string> option_choices(std::string_view name) const;
+    // The Light Tweaks sliders as they are, and a preset's applied and saved (app/light_tweaks.h).
+    LightTweaks light_tweaks() const;
+    void apply_light_tweaks(const LightTweaks& values);
     // The window mode, resolution, vertical sync, frame caps, field of view (hailstone.ini display.*); at start
     // and as the Options window changes them.
     std::optional<int> video_option(std::string_view name) const;
@@ -1068,8 +1084,8 @@ private:
     // USE key on one, the open tradeskill container, the --auto-door test.
     bool click_world(const PickTarget& hit);
     // CEverQuest::ClickedSwitch's key and skill, then EQSwitch::UseSwitch.
-    bool use_door(std::uint8_t id);
-    bool door_reachable(std::uint8_t id) const; // within reach for use_door's click
+    bool use_door(std::uint8_t id, std::optional<glm::vec3> hit = std::nullopt);
+    bool door_reachable(std::uint8_t id, std::optional<glm::vec3> hit = std::nullopt) const;
     // Ladder_MountClickedLadder on a clicked ladder (a ground object or one of the zone's).
     void climb_ladder(const game::mechanics::LadderSwitch& ladder);
     // `at_cursor` false: what is at the middle of the screen instead of under the mouse (the gamepad's interact).
@@ -1313,6 +1329,17 @@ private:
     ProgressUi progress_ui_;            // AA, training and task debug windows (app/progress_ui.h)
     MarketUi market_ui_;                // duel, inspect, bazaar and mail debug windows (app/market_ui.h)
     std::unique_ptr<ActionsUi> actions_ui_; // key map, hot bar, Actions window, skills (app/actions_ui.h)
+    struct PendingCharacterImport {
+        ActionsUi::ImportPreview preview;
+        game::CharacterImportOptions options;
+        std::size_t source;
+        std::string bytes;
+    };
+    CharacterImportUi character_import_ui_;
+    std::vector<CharacterImportSource> character_import_sources_;
+    std::optional<PendingCharacterImport> pending_character_import_;
+    std::filesystem::path character_import_root_;
+    std::filesystem::path character_import_target_;
     std::vector<game::KeyMap::Event> key_events_; // this frame's key commands
     // The gamepad (app/gamepad.h): its mode, settings and bindings; this frame's key commands from it; the left
     // stick's movement as last sent; the group member its target_group gave last (0 yourself); the camera distance
@@ -1393,6 +1420,25 @@ private:
     bool horizon_hills_ = true;
     // The modern sky's volumetric clouds (render/cloud_renderer.h); display.volumetric_clouds.
     bool volumetric_clouds_ = true;
+    // The modern lighting's darkness controls, percent (100 as before, 0 none): the fill light in the dark
+    // (render::daylight's ambient, the special ambient, the characters' floor and the haze; display.ambient_light) and
+    // the baked colour's lamps' part (render::daylight's baked_lamps; display.baked_lamp_light, up to 300).
+    int ambient_light_ = 100;
+    int baked_lamp_light_ = 100;
+    // How far from the camera the zone's lamps light characters and objects, units (display.lamp_light_distance;
+    // render::kLampLightDistance).
+    int lamp_light_distance_ = static_cast<int>(render::kLampLightDistance);
+    // How strong and how far-reaching carried lights are, percent (display.carried_light, 0..300;
+    // display.carried_light_reach, 25..200; game::scaled_carried_light).
+    int carried_light_ = 100;
+    int carried_light_reach_ = 100;
+    // How much carried lights add to the brightest one where they overlap, percent (display.carried_light_stacking;
+    // SceneLighting::carried): 100 all of it, 0 the brightest alone (the default).
+    int carried_light_stacking_ = 0;
+    // How strong infravision and ultravision are, percent (display.infravision_strength / ultravision_strength,
+    // game::SkyWeatherInput's): 100 the original's, 0 none.
+    int infravision_strength_ = 100;
+    int ultravision_strength_ = 100;
     // The fog bank past an outdoor zone's edge (render/zone_fog.h); display.zone_fog. The land's build its field was
     // last made from (the zone renderer's; a new one, or none, uploads it again).
     bool edge_fog_ = true;
@@ -1782,6 +1828,7 @@ private:
     std::mt19937 pre_game_rng_{std::random_device{}()};
     game::PickCamera pick_camera_;   // last frame's, for mouse picking (CCamera as GetScreenRay reads it)
     bool pick_camera_valid_ = false;
+    std::optional<glm::mat4> target_view_projection_; // the same camera with the rendered scene's projection
 };
 
 } // namespace client_internal

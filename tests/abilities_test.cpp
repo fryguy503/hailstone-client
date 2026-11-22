@@ -185,6 +185,81 @@ TEST_CASE("UseSkill: kick goes through DoAttack with a hasted combat timer") {
     CHECK(use_skill(c, st, skill::kKick).sends.size() == 1);
 }
 
+TEST_CASE("DoAttack: a bow shot holds the bow until the next melee swing") {
+    // PlayerZoneClient::DoAttack @0x5a5000's range preamble clears both hands and holds the range item in 8; after
+    // the shot DoRangedAttack @0x5a4920 sets 7 to "0" and 8 to the range item again; the next melee swing's
+    // preamble puts back the primary (7) and the secondary (8).
+    constexpr int kRange = 11, kPrimary = 13, kSecondary = 14, kAmmo = 22;
+    constexpr std::uint8_t kHeld7 = 7, kHeld8 = 8;
+    Fixture f;
+    auto item = [](std::uint8_t type, std::uint32_t damage, std::uint8_t delay, std::uint8_t range) {
+        net::Item i;
+        i.item_type = type;
+        i.damage = damage;
+        i.delay = delay;
+        i.range = range;
+        i.classes = 0xffff;
+        i.races = 0xffff;
+        i.stack_count = 1;
+        return i;
+    };
+    f.sheet.possessions[kRange] = item(5, 5, 30, 100);
+    auto arrows = item(0x1b, 3, 0, 20);
+    arrows.stack_count = 20;
+    f.sheet.possessions[kAmmo] = arrows;
+    f.sheet.possessions[kPrimary] = item(0, 8, 25, 0);
+    f.sheet.possessions[kSecondary] = item(8, 0, 0, 0);
+    SkillState st;
+    SkillContext c = f.context(1000000);
+    c.target = Fixture::rat(60.0f); // past ranged attacks' 30 units, within the bow's reach
+    c.gm = true;                    // whatever CanIHit says
+
+    using H = SkillResult::HeldModel;
+    auto held = [](const SkillResult& r) {
+        std::vector<std::pair<int, int>> out;
+        for (const H& h : r.held_models) out.emplace_back(h.slot, h.item_slot);
+        return out;
+    };
+    SkillResult shot;
+    CHECK(do_attack(c, st, kRange, 0, shot));
+    REQUIRE(shot.sends.size() == 1);
+    CHECK(shot.sends[0].kind == SkillSend::Kind::RangedAttack);
+    CHECK(held(shot) == std::vector<std::pair<int, int>>{
+                            {kHeld7, -1}, {kHeld8, -1}, {kHeld8, kRange}, {kHeld7, -1}, {kHeld8, kRange}});
+    // The preamble's three come before the shot's OP_CombatAbility, DoRangedAttack's two after it.
+    CHECK(shot.held_models[2].after_sends == 0);
+    CHECK(shot.held_models[3].after_sends == 1);
+
+    // A second shot: the preamble's models only follow another kind of attack.
+    c.now += 10000;
+    SkillResult again;
+    CHECK(do_attack(c, st, kRange, 0, again));
+    CHECK(held(again) == std::vector<std::pair<int, int>>{{kHeld7, -1}, {kHeld8, kRange}});
+
+    // The next melee swing puts the primary and secondary back, once.
+    c.target = Fixture::rat(4.0f);
+    c.now += 10000;
+    SkillResult swing;
+    do_attack(c, st, kPrimary, 0, swing);
+    CHECK(held(swing) == std::vector<std::pair<int, int>>{{kHeld7, kPrimary}, {kHeld8, kSecondary}});
+    c.now += 10000;
+    SkillResult next;
+    do_attack(c, st, kPrimary, 0, next);
+    CHECK(next.held_models.empty());
+
+    // An empty hand is "0".
+    f.sheet.possessions[kSecondary].reset();
+    c.target = Fixture::rat(60.0f);
+    c.now += 10000;
+    SkillResult shot2;
+    do_attack(c, st, kRange, 0, shot2);
+    c.target = Fixture::rat(4.0f);
+    c.now += 10000;
+    SkillResult swing2;
+    do_attack(c, st, kPrimary, 0, swing2);
+    CHECK(held(swing2) == std::vector<std::pair<int, int>>{{kHeld7, kPrimary}, {kHeld8, -1}});
+}
+
 TEST_CASE("UseSkill: SPA 227 past a combat skill's reuse leaves no timer instead of wrapping it") {
     // A deliberate change from RoF2: the original's DoAttack keeps the negative reuse as an unsigned timer.
     Fixture f;

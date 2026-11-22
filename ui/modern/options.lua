@@ -35,6 +35,62 @@ local U = 1         -- the UI scale, this frame
 local fuzzy = dofile("lib/fuzzy.lua")
 local search = "" -- the search field's text; a row that does not match it is left out
 local lastRowShown = true -- the last row() drew its row, so a note() under it goes too
+local contributions = {}
+
+local function collectContributions()
+  local groups = {}
+  if API.Supports("contributions", "List") then
+    for _, item in ipairs(API.contributions.List(WINDOW)) do
+      local group = groups[item.target] or {}
+      groups[item.target] = group
+      group[#group + 1] = item
+      group.disabled = group.disabled or item.disabled
+    end
+  end
+  return groups
+end
+
+local function canChange(name)
+  local group = contributions["setting:" .. name]
+  return not group or not group.disabled
+end
+
+local function setOption(name, value)
+  if canChange(name) then API.settings.SetOption(name, value) end
+end
+
+local function noticeText(item)
+  return item.text ~= "" and (item.plugin .. ": " .. item.text) or item.plugin
+end
+
+local function drawNotice(item)
+  ui.TextWrapped(noticeText(item))
+  if item.action_label and item.action_label ~= "" and API.Supports("contributions", "Activate") then
+    ui.PushID(item.owner)
+    ui.PushID(item.id)
+    if ui.Button(item.action_label) then API.contributions.Activate(WINDOW, item.owner, item.id) end
+    ui.PopID()
+    ui.PopID()
+  end
+end
+
+local function noticeMatches(item, title)
+  return fuzzy.match(search, noticeText(item), (item.action_label or "") .. " " .. title)
+end
+
+local function hasMatchingNotice(group, title)
+  for _, item in ipairs(group) do
+    if noticeMatches(item, title) then return true end
+  end
+  return false
+end
+
+local function drawSectionNotices(group, title)
+  for _, item in ipairs(group) do
+    if noticeMatches(item, title) then drawNotice(item) end
+  end
+end
+
 -- The section being drawn: its title counts in every row's search ("target ring" finds the Target Ring section's
 -- rows; a plugin's section is its name). While a search is typed its heading and table wait for the first row that
 -- matches (open: nil outside a section, "pending", "open", or "failed" when BeginTable said no).
@@ -58,22 +114,26 @@ local function tip(text)
   if text and ui.IsItemHovered(ui.HoveredFlags.DelayShort) then showTip(text) end
 end
 
-local function beginSection(title)
+local function beginSection(title, group)
   heading(title)
+  if group then drawSectionNotices(group, title) end
   if not ui.BeginTable("##" .. title, 2, ui.TableFlags.SizingFixedFit) then return false end
   ui.TableSetupColumn("label", ui.TableColumnFlags.WidthFixed, LABEL_W * U)
   ui.TableSetupColumn("value", ui.TableColumnFlags.WidthStretch, 0)
   return true
 end
 
-local function row(label, tooltip, draw)
-  lastRowShown = matches(label, tooltip)
+local function row(label, tooltip, draw, name)
+  local group = name and contributions["setting:" .. name]
+  lastRowShown = matches(label, tooltip) or (group and hasMatchingNotice(group, cur.title or label))
   if not lastRowShown then return end
   if cur.open == "pending" then cur.open = beginSection(cur.title) and "open" or "failed" end
   if cur.open == "failed" then
     lastRowShown = false
     return
   end
+  local disabled = group and group.disabled
+  if disabled then ui.BeginDisabled() end
   ui.TableNextRow()
   ui.TableNextColumn()
   ui.Text(label)
@@ -82,6 +142,15 @@ local function row(label, tooltip, draw)
   ui.SetNextItemWidth(-1)
   draw()
   tip(tooltip)
+  if disabled then ui.EndDisabled() end
+  if group then
+    for _, item in ipairs(group) do
+      ui.TableNextRow()
+      ui.TableNextColumn()
+      ui.TableNextColumn()
+      drawNotice(item)
+    end
+  end
 end
 
 -- A note under the row above, in the value column; it goes with its row.
@@ -97,11 +166,12 @@ end
 
 -- A heading and a table of rows. While a search is typed, a section none of whose rows match is left out whole; the
 -- section bodies draw outside row() and note() only when the search is empty.
-local function section(title, body)
+local function section(title, body, target)
   cur.title = title
-  if search == "" then
+  local group = target and contributions[target]
+  if search == "" or (group and hasMatchingNotice(group, title)) then
     cur.open = nil
-    if beginSection(title) then
+    if beginSection(title, group) then
       body()
       ui.EndTable()
     end
@@ -133,12 +203,12 @@ local function combo(name, label, choices, tooltip, values)
     if ui.BeginCombo("##" .. name, preview) then
       for i, c in ipairs(choices) do
         if ui.Selectable(c .. "##" .. i, i - 1 == current) then
-          API.settings.SetOption(name, values and values[i] or (i - 1))
+          setOption(name, values and values[i] or (i - 1))
         end
       end
       ui.EndCombo()
     end
-  end)
+  end, name)
 end
 
 local function check(name, label, tooltip)
@@ -149,8 +219,8 @@ local function check(name, label, tooltip)
   end
   row(label, tooltip, function()
     local on, changed = ui.Checkbox("##" .. name, v ~= 0)
-    if changed then API.settings.SetOption(name, on and 1 or 0) end
-  end)
+    if changed then setOption(name, on and 1 or 0) end
+  end, name)
 end
 
 -- A check box shown inverted: checked while the option is 0 (SyncGeneralPage's TradeskillWnd CtrlBypass box).
@@ -162,8 +232,8 @@ local function invcheck(name, label, tooltip)
   end
   row(label, tooltip, function()
     local on, changed = ui.Checkbox("##" .. name, v == 0)
-    if changed then API.settings.SetOption(name, on and 0 or 1) end
-  end)
+    if changed then setOption(name, on and 0 or 1) end
+  end, name)
 end
 
 -- A slider over the option's own values (min..max); text(v) is what it shows.
@@ -175,8 +245,8 @@ local function slider(name, label, min, max, text, tooltip)
   end
   row(label, tooltip, function()
     local nv, changed = ui.SliderInt("##" .. name, v, min, max, text and text(v) or nil)
-    if changed then API.settings.SetOption(name, nv) end
-  end)
+    if changed then setOption(name, nv) end
+  end, name)
 end
 
 -- The graphics sliders of 21 ticks (0..20) over each setting's range (app/client_app_zone.cpp kSliders).
@@ -196,8 +266,8 @@ local function bit(name, mask, label, tooltip)
   end
   row(label, tooltip, function()
     local on, changed = ui.Checkbox("##" .. name .. mask, v & mask ~= 0)
-    if changed then API.settings.SetOption(name, on and (v | mask) or (v & ~mask)) end
-  end)
+    if changed then setOption(name, on and (v | mask) or (v & ~mask)) end
+  end, name)
 end
 
 local function generalTab()
@@ -328,12 +398,12 @@ local function displayTab()
         ui.BeginDisabled(mode == 1)
         if ui.BeginCombo("##resolution", choices[res + 1] or "Custom", ui.ComboFlags.HeightLarge) then
           for i, c in ipairs(choices) do
-            if ui.Selectable(c .. "##r" .. i, i - 1 == res) then API.settings.SetOption("resolution", i - 1) end
+            if ui.Selectable(c .. "##r" .. i, i - 1 == res) then setOption("resolution", i - 1) end
           end
           ui.EndCombo()
         end
         ui.EndDisabled()
-      end)
+      end, "resolution")
     end
     combo("vsync", "Vertical Sync", { "Off", "On", "Adaptive" },
       "On: no tearing, the frame rate follows the monitor. Off: lowest latency, may tear. "
@@ -353,10 +423,10 @@ local function displayTab()
         local w = ui.GetContentRegionAvail()
         ui.SetNextItemWidth(w - 70 * U)
         local nv, changed = ui.SliderInt("##fov", fov, 45, 120, fov .. "°")
-        if changed then API.settings.SetOption("fov", nv) end
+        if changed then setOption("fov", nv) end
         ui.SameLine()
-        if ui.Button("Default##fov", 62 * U, 0) then API.settings.SetOption("fov", -1) end
-      end)
+        if ui.Button("Default##fov", 62 * U, 0) then setOption("fov", -1) end
+      end, "fov")
     end
   end)
   -- Hailstone's isometric camera (docs/isometric.md): the iso_* options, also /camera.
@@ -398,7 +468,7 @@ local function displayTab()
           for i, n in ipairs(names) do
             local available = not packs[i] or packs[i].available ~= false
             ui.BeginDisabled(not available)
-            if ui.Selectable(n .. "##ui" .. i, i - 1 == uiName) then API.settings.SetOption("ui_name", i - 1) end
+            if ui.Selectable(n .. "##ui" .. i, i - 1 == uiName) then setOption("ui_name", i - 1) end
             ui.EndDisabled()
             if ui.IsItemHovered(ui.HoveredFlags.DelayShort | ui.HoveredFlags.AllowWhenDisabled) then
               showTip(infoOf(i) .. (available and "" or ("\nUnavailable: " .. (packs[i].reason or ""))))
@@ -406,7 +476,7 @@ local function displayTab()
           end
           ui.EndCombo()
         end
-      end)
+      end, "ui_name")
     end
     if API.Supports("interfaces", "Status") then
       for _, entry in ipairs(interfaceStatus(API.interfaces.Status())) do
@@ -473,8 +543,10 @@ local function displayTab()
     check("show_target_ring", "Show 3D Target Ring", "A colored ring appears around your current target's feet.")
     check("tab_skip_pets", "Tab Skips Pets",
       "Hailstone: the NPC target keys (Tab, F8) skip players' pets and mercenaries.")
-    check("tab_line_of_sight", "Tab Needs Line of Sight",
-      "Hailstone: the NPC target keys (Tab, F8) skip NPCs you cannot see, behind walls or the ground.")
+    check("tab_target_through_walls", "Tab Target Through Walls and Doors",
+      "Hailstone: the NPC target keys (Tab, F8) also select NPCs behind walls and closed doors. Off, they skip them, as in the original.")
+    check("tab_target_offscreen", "Tab Target Off-Screen",
+      "Hailstone: the NPC target keys (Tab, F8) also select nearby NPCs outside the camera view, including behind you, as the original does.")
     check("replace_gem_spell", "Drop Replaces a Memorized Spell",
       "Hailstone: a spell dragged from the spell book onto a gem that holds another spell memorizes in its place. Off, forget the old spell first, as in the original.")
     check("hotbutton_extras", "More Hot Button States",
@@ -501,7 +573,7 @@ local function displayTab()
       "Hailstone: how big a name is at the farthest names are shown, against one close by. 100 % keeps every name the same size.")
     slider("plate_tag_scale", "Guild and Owner Lines", 50, 100, pct,
       "Hailstone: the size of the lines under a name (a player's guild, an NPC's role or a pet's owner), against the name's.")
-  end)
+  end, "section:nameplates")
   -- Hailstone's target ring settings (app/target_ring.cpp; docs/graphics.md "The target ring"): its colour for each
   -- con (the colour picker, hs.ClickChild TargetRingColor<n>), how opaque and how bright it is, and its cues.
   section("Target Ring", function()
@@ -519,24 +591,31 @@ local function displayTab()
           .. "own size, as on the original client.", function()
         local v = maxSize == 0 and 41 or maxSize
         local nv, changed = ui.SliderInt("##target_ring_max_size", v, 4, 41, v > 40 and "Off" or tostring(v))
-        if changed and nv ~= v then API.settings.SetOption("target_ring_max_size", nv > 40 and 0 or nv) end
-      end)
+        if changed and nv ~= v then setOption("target_ring_max_size", nv > 40 and 0 or nv) end
+      end, "target_ring_max_size")
     end
+    local canResetColours = true
     for i, con in ipairs(RING_CONS) do
-      local rgb = API.settings.Option("target_ring_color_" .. (i - 1))
+      local name = "target_ring_color_" .. (i - 1)
+      local rgb = API.settings.Option(name)
       if rgb then
+        canResetColours = canResetColours and canChange(name)
         row(con[1], "Hailstone: the ring's colour for a target that cons " .. con[2] .. ". Click to change it.", function()
           local r, g, b = (rgb >> 16 & 0xff) / 255, (rgb >> 8 & 0xff) / 255, (rgb & 0xff) / 255
           ui.PushStyleColor(ui.Col.Button, r, g, b, 1)
           ui.PushStyleColor(ui.Col.ButtonHovered, r, g, b, 0.85)
           ui.PushStyleColor(ui.Col.ButtonActive, r, g, b, 0.7)
-          if ui.Button("##ringcolor" .. i, 60 * U, 0) then API.windows.ClickChild(WINDOW, "TargetRingColor" .. (i - 1)) end
+          if ui.Button("##ringcolor" .. i, 60 * U, 0) and canChange(name) then
+            API.windows.ClickChild(WINDOW, "TargetRingColor" .. (i - 1))
+          end
           ui.PopStyleColor(3)
-        end)
+        end, name)
       end
     end
     row("", nil, function()
-      if ui.Button("Default Colors") then API.windows.ClickChild(WINDOW, "TargetRingColorDefault") end
+      if not canResetColours then ui.BeginDisabled() end
+      if ui.Button("Default Colors") and canResetColours then API.windows.ClickChild(WINDOW, "TargetRingColorDefault") end
+      if not canResetColours then ui.EndDisabled() end
     end)
   end)
   -- The original's window fade sliders (COptionsWnd::WndNotification, CXWndManager::SetGlobal*): they set every
@@ -621,7 +700,7 @@ local function displayTab()
       ui.TableNextColumn()
       ui.TableNextColumn()
       if ui.Button("Reset Picture", 0, 0) then
-        for _, o in ipairs({ "brightness", "contrast", "gamma" }) do API.settings.SetOption(o, 10) end
+        for _, o in ipairs({ "brightness", "contrast", "gamma" }) do setOption(o, 10) end
       end
     end
   end)
@@ -686,7 +765,7 @@ local function graphicsTab()
       if ui.BeginCombo("##preset", p and PRESETS[p].name or "Custom") then
         for i, preset in ipairs(PRESETS) do
           if ui.Selectable(preset.name, i == p) then
-            for _, k in ipairs(PRESET_KEYS) do API.settings.SetOption(k, preset[k]) end
+            for _, k in ipairs(PRESET_KEYS) do setOption(k, preset[k]) end
           end
         end
         ui.EndCombo()
@@ -698,8 +777,8 @@ local function graphicsTab()
       local tierName = ({ [0] = "Low", [1] = "Medium", [2] = "High" })[tier] or "High"
       row("Detect", "Sets the graphics this computer's graphics card and processor suit, as the first start did: "
           .. tierName .. " here (Low also uses the classic lighting, without upscaling or radial flora). Anti-aliasing and the upscaler change the next time the game starts.", function()
-        if ui.Button("Use " .. tierName .. " for This Computer", 0, 0) then API.settings.SetOption("detect_graphics", 1) end
-      end)
+        if ui.Button("Use " .. tierName .. " for This Computer", 0, 0) then setOption("detect_graphics", 1) end
+      end, "detect_graphics")
     end
     combo("shadows", "Shadows", { "Off", "Low", "Medium", "High" },
       "Sun and moon shadows (modern lighting). Higher is sharper and slower.")
@@ -788,6 +867,28 @@ local function graphicsTab()
       "The overall scene brightness before the tone map, in stops.")
     check("color_grade", "Colour Grade",
       "A subtle grade by the time of day, the weather and the zone's mood (modern lighting).")
+    -- Hailstone's light presets: each sets the sliders below together; Custom once one is moved off them.
+    local tweaks = API.settings.OptionChoices("light_tweaks")
+    if tweaks ~= nil and #tweaks > 0 then
+      combo("light_tweaks", "Light Tweaks", tweaks,
+        "Sets the light sliders below together (modern lighting). Default puts them back to normal; the others are tuned looks. Moving a slider makes it Custom.")
+    end
+    slider("ambient_light", "Ambient Light", 0, 100, pct,
+      "The soft fill light that keeps nights and dungeons readable, and the glow of the haze in the dark (modern lighting). 100% is normal; at 0% only the sun, the moon, torches, lamps and spells light the world, so a moonless night or an unlit corridor is dark.")
+    slider("baked_lamp_light", "Baked Lamp Light", 0, 300, pct,
+      "How strong a zone's lamps are (modern lighting): the glow they leave on the walls at night and indoors, and the light they cast on characters walking past. 100% is normal; lower makes lamp-lit rooms darker; higher lets the lamps light them up to three times as much.")
+    slider("lamp_light_distance", "Lamp Light Distance", 100, 1500, function(v) return string.format("%d units", v) end,
+      "How far from the camera a zone's lamps light characters and objects (modern lighting). The walls are lit everywhere; past this, people walking under a lamp are not. Further is slower in zones with many lamps.")
+    slider("carried_light", "Carried Light", 0, 300, pct,
+      "How bright torches, lanterns and other carried lights are, yours and everyone else's (modern lighting). 100% is normal; 0% turns them off.")
+    slider("carried_light_reach", "Carried Light Reach", 25, 200, pct,
+      "How far carried lights reach, yours and everyone else's (modern lighting). 100% is normal: a torch about 65 units, the brightest lights about 135.")
+    slider("carried_light_stacking", "Carried Light Stacking", 0, 100, pct,
+      "Where several carried lights overlap, how much the others add to the brightest (modern lighting). At 0%, the default, a crowd of torches lights no more than the brightest one; at 100% they all add up.")
+    slider("infravision_strength", "Infravision Strength", 0, 100, pct,
+      "How much infravision brightens the dark. 100% is the original game's; 0% is as without it.")
+    slider("ultravision_strength", "Ultravision Strength", 0, 100, pct,
+      "How much ultravision brightens the dark. 100% is the original game's; 0% is as without it.")
   end)
   section("Camera", function()
     slider("max_camera_distance", "Max Camera Zoom", 10, 150, function(v) return string.format("%d units", v) end,
@@ -804,11 +905,11 @@ local function graphicsTab()
           local choices = API.settings.OptionChoices("texture_pack")
           if ui.BeginCombo("##texture_pack", choices[pack + 1] or "A folder of its own") then
             for i, name in ipairs(choices) do
-              if ui.Selectable(name, i == pack + 1) then API.settings.SetOption("texture_pack", i - 1) end
+              if ui.Selectable(name, i == pack + 1) then setOption("texture_pack", i - 1) end
             end
             ui.EndCombo()
           end
-        end)
+        end, "texture_pack")
       if pack ~= packAtStart then note("Restart the game to change the texture pack.") end
       if search == "" then
         ui.TableNextRow()
@@ -825,22 +926,130 @@ local function graphicsTab()
   end
   if search == "" and ui.Button("Restore Default Graphics", 0, 0) then
     -- (anti-aliasing and the lighting mode stay as they are)
-    API.settings.SetOption("view_distance", 6)
-    API.settings.SetOption("exposure", 10)
-    API.settings.SetOption("ao", 1)
-    API.settings.SetOption("distance_blur", 1)
-    if API.settings.Option("color_grade") ~= nil then API.settings.SetOption("color_grade", 1) end
-    API.settings.SetOption("shadows", 2)
-    API.settings.SetOption("tonemap", 0)
-    API.settings.SetOption("clip_plane", 15)
-    if API.settings.Option("bloom") ~= nil then API.settings.SetOption("bloom", 10) end
-    if API.settings.Option("render_scale") ~= nil then API.settings.SetOption("render_scale", 100) end
-    if API.settings.Option("sharpness") ~= nil then API.settings.SetOption("sharpness", 10) end
-    API.settings.SetOption("max_camera_distance", 60)
-    if API.settings.Option("flora_distance") ~= nil then API.settings.SetOption("flora_distance", 400) end
-    if API.settings.Option("grass_density") ~= nil then API.settings.SetOption("grass_density", 100) end
+    setOption("view_distance", 6)
+    setOption("exposure", 10)
+    setOption("ao", 1)
+    setOption("distance_blur", 1)
+    if API.settings.Option("color_grade") ~= nil then setOption("color_grade", 1) end
+    setOption("shadows", 2)
+    setOption("tonemap", 0)
+    setOption("clip_plane", 15)
+    if API.settings.Option("bloom") ~= nil then setOption("bloom", 10) end
+    if API.settings.Option("render_scale") ~= nil then setOption("render_scale", 100) end
+    if API.settings.Option("sharpness") ~= nil then setOption("sharpness", 10) end
+    setOption("max_camera_distance", 60)
+    if API.settings.Option("flora_distance") ~= nil then setOption("flora_distance", 400) end
+    if API.settings.Option("grass_density") ~= nil then setOption("grass_density", 100) end
   end
 end
+
+-- ---------------------------------------------------------------- Individual Sounds
+-- A window of its own, opened from the Audio tab (Hailstone's own options, audio/individual_sounds.h): a volume for
+-- each of a few sounds that tire players, on top of Sound Effects. Per row a box to type the percentage in, the
+-- slider (steps of 5) in step with it, both 0..100 (lib/sound_volumes.lua), and a Test button that plays the sound
+-- at that volume (hs.PlaySoundTest).
+local V = dofile("lib/sound_volumes.lua")
+local SOUND_BOX_CHARS = 3 -- "100"
+local SOUND_BOX_W, SOUND_TEST_W, SOUND_NAME_W = 52, 56, 150 -- unscaled pixels
+local SOUND_WINDOW_W, SOUND_WINDOW_H = 520, 360
+local FILL_WIDTH = -1 -- ImGui: to the right edge
+local AUTO_SIZE = 0   -- ImGui: the size the content gives (a stretch column takes what is left)
+local SOUND_COLUMNS = 4 -- name, box, slider, Test
+local SOUND_TEST_TIP = "Plays this sound once at the volume set here."
+local soundsOpen = false
+local soundText = {} -- name -> what is being typed in its box (only while the box is active)
+
+local function closeSounds()
+  soundsOpen = false
+  soundText = {}
+end
+
+-- The number box of one row. A number typed is applied at once, brought into 0..100 (lib/sound_volumes.lua parse),
+-- and the new value is returned so the slider beside it shows the same one this frame (999 -> 100). ImGui keeps
+-- what was typed in the box while it is active, so the text stays as typed (the binding has no way to replace the
+-- edit buffer without taking Tab or the arrow keys from the box); the box shows the clamped value once it is left.
+-- Text that is not a number yet (empty) changes nothing.
+local function soundBox(name, v)
+  local shown = soundText[name] or tostring(v)
+  ui.SetNextItemWidth(SOUND_BOX_W * U)
+  local text = ui.InputText("##box" .. name, shown, SOUND_BOX_CHARS,
+    ui.InputTextFlags.CharsDecimal | ui.InputTextFlags.AutoSelectAll)
+  if text ~= shown then
+    soundText[name] = text
+    local n = V.parse(text)
+    if n then
+      API.settings.SetOption(name, n)
+      v = n
+    end
+  end
+  if not ui.IsItemActive() then soundText[name] = nil end
+  return v
+end
+
+local function soundRow(entry)
+  local name, label, tooltip = entry[1], entry[2], entry[3]
+  local v = API.settings.Option(name)
+  if v == nil then return end
+  ui.TableNextRow()
+  ui.TableNextColumn()
+  ui.Text(label)
+  tip(tooltip)
+  ui.TableNextColumn()
+  v = soundBox(name, v)
+  ui.TableNextColumn()
+  ui.SetNextItemWidth(FILL_WIDTH)
+  local nv, changed = ui.SliderInt("##slider" .. name, v, V.MIN, V.MAX, pct(v))
+  if changed then
+    soundText[name] = nil
+    API.settings.SetOption(name, V.snap(nv))
+  end
+  tip(tooltip)
+  ui.TableNextColumn()
+  if ui.Button("Test##" .. name, SOUND_TEST_W * U, AUTO_SIZE) then API.settings.PlaySoundTest(name) end
+  tip(SOUND_TEST_TIP)
+end
+
+local function soundsBody()
+  ui.PushTextWrapPos(0)
+  ui.TextDisabled("Each volume is on top of Sound Effects. 100 % leaves a sound as it is, 0 % silences it.")
+  ui.PopTextWrapPos()
+  ui.Spacing()
+  if ui.BeginTable("##individualsounds", SOUND_COLUMNS, ui.TableFlags.SizingFixedFit) then
+    ui.TableSetupColumn("name", ui.TableColumnFlags.WidthFixed, SOUND_NAME_W * U)
+    ui.TableSetupColumn("box", ui.TableColumnFlags.WidthFixed, SOUND_BOX_W * U)
+    ui.TableSetupColumn("slider", ui.TableColumnFlags.WidthStretch, AUTO_SIZE)
+    ui.TableSetupColumn("test", ui.TableColumnFlags.WidthFixed, SOUND_TEST_W * U)
+    for _, entry in ipairs(V.SOUNDS) do soundRow(entry) end
+    ui.EndTable()
+  end
+  ui.Spacing()
+  if ui.Button("Reset all to 100 %", AUTO_SIZE, AUTO_SIZE) then
+    soundText = {}
+    V.reset(API.settings.Option, API.settings.SetOption)
+  end
+  tip("Sets every volume in this window back to 100 %.")
+end
+
+ui.window("Individual Sounds", function()
+  if not soundsOpen or not API.session.InGame() then return end
+  U = ui.GetIO().uiScale or 1
+  ui.SetNextWindowSize(SOUND_WINDOW_W * U, SOUND_WINDOW_H * U, ui.Cond.FirstUseEver)
+  style.Push()
+  local w, b = C.window, C.frameBorder
+  ui.PushStyleColor(ui.Col.WindowBg, w[1], w[2], w[3], w[4])
+  local visible, open = ui.Begin("Individual Sounds##hailstone", true, ui.WindowFlags.NoCollapse)
+  ui.PushStyleColor(ui.Col.Border, b[1], b[2], b[3], b[4])
+  ui.PushStyleVar(ui.StyleVar.FrameBorderSize, 1)
+  local ok, err = true, nil
+  if visible then ok, err = pcall(soundsBody) end
+  ui.PopStyleVar()
+  ui.PopStyleColor()
+  ui.End()
+  ui.PopStyleColor()
+  style.Pop()
+  if not ok then error(err, 0) end
+  if not open then closeSounds() end
+end)
 
 -- ---------------------------------------------------------------- Audio
 local function audioTab()
@@ -851,6 +1060,10 @@ local function audioTab()
     slider("effects", "Sound Effects", 0, 100, pct, "Spells, combat and the world's sounds.")
     slider("npc_hits", "NPC Hit Sounds", 0, 100, pct,
       "NPCs being hit, blocking and dodging, on top of Sound Effects (a Hailstone option).")
+    if API.settings.Option("own_footsteps") ~= nil then
+      row("Individual Sounds", "A volume for each of a few tiresome sounds: footsteps, bags, money, thunder and equipping (Hailstone options).",
+        function() if ui.Button("Individual Sounds...", FILL_WIDTH, AUTO_SIZE) then soundsOpen = true end end)
+    end
   end)
   section("Sound", function()
     check("environment", "Environment Sounds", "The zone's ambient sounds: wind, water, birds and the like.")
@@ -1073,7 +1286,8 @@ end
 
 -- ---------------------------------------------------------------- window
 local TABS = {
-  { "General", generalTab }, { "Display", displayTab }, { "Graphics", graphicsTab }, { "Audio", audioTab },
+  { "General", generalTab }, { "Display", displayTab, "section:display" },
+  { "Graphics", graphicsTab, "section:graphics" }, { "Audio", audioTab },
   { "Controls", controlsTab }, { "Chat", chatTab }, { "Colors", colorsTab },
 }
 local restoreSection = ui.GetSetting("options.section")
@@ -1103,7 +1317,14 @@ local function pages(visible)
       if ui.BeginTabItem(t[1], select) then
         local sectionName = t[1] == "Display" and "Interface" or t[1]
         if savedSection ~= sectionName then ui.SetSetting("options.section", sectionName) savedSection = sectionName end
-        if ui.BeginChild("##" .. t[1], 0, 0, false) then t[2]() end
+        if ui.BeginChild("##" .. t[1], 0, 0, false) then
+          contributions = collectContributions()
+          local windowNotices = contributions[""]
+          if windowNotices then drawSectionNotices(windowNotices, t[1]) end
+          local pageNotices = contributions[t[3]]
+          if pageNotices then drawSectionNotices(pageNotices, t[1]) end
+          t[2]()
+        end
         ui.EndChild()
         ui.EndTabItem()
       end

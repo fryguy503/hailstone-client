@@ -197,6 +197,58 @@ TEST_CASE("HUD invisibility captions use viewer awareness and the undead display
     CHECK(std::string_view(lua_tostring(lua.get(), 2)) == "(Hero)\nSmith");
 }
 
+TEST_CASE("Group window targets a member or their nearest player corpse") {
+    test::ScratchDir game_scratch("ui_windows_group_target");
+    GameDir game(game_scratch.path());
+    Harness t(game);
+    net::GameConnectionTestAccess::state(t.conn) = net::ConnectionState::InZone;
+    auto& group = net::GameConnectionTestAccess::group(t.conn);
+    group.active = true;
+    group.slots[0].name = "Leader";
+    group.slots[2].name = "Member";
+    group.slots[3].name = "Mercenary";
+    group.slots[3].merc = true;
+
+    auto& world = t.conn.world_for_test();
+    world.player_id = 10;
+    auto spawn = [&](std::uint32_t id, const char* name, float x) -> game::Spawn& {
+        auto& s = world.spawns[id];
+        s.id = id;
+        s.name = name;
+        s.position = {x, 0, 0};
+        return s;
+    };
+    spawn(10, "Leader", 0);
+    spawn(11, "Member", 15);
+    auto& mount = spawn(12, "Member01", 15);
+    mount.is_npc = true;
+    mount.rider_id = 11;
+    spawn(13, "mEmBeR's corpse13", 25).is_corpse = true;
+    spawn(14, "Member's corpse14", 40).is_corpse = true;
+    spawn(15, "Member`s_corpse15", 5).is_corpse = true;
+    spawn(16, "Membership's corpse16", 10).is_corpse = true;
+    spawn(17, "Mercenary01", 15).is_npc = true;
+
+    REQUIRE(t.api->click_child("GroupWindow", "HPLabel1", "left"));
+    CHECK(world.target_id == 11);
+
+    world.spawns.erase(11);
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "left"));
+    CHECK(world.target_id == 13);
+    CHECK(t.conn.group_member_targeted() == 2);
+
+    world.spawns.erase(13);
+    t.conn.target_group_member(1); // F2 shares the group-row action.
+    CHECK(world.target_id == 14);
+
+    world.spawns.erase(14);
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge1", "left"));
+    CHECK(world.target_id == 0);
+
+    REQUIRE(t.api->click_child("GroupWindow", "Gauge2", "left"));
+    CHECK(world.target_id == 17);
+}
+
 TEST_CASE("Group role menus: self, member rows, permissions and confirmed role checks") {
     hailstone::test::ScratchDir game_scratch("ui_windows_group_roles");
     GameDir game(game_scratch.path());
@@ -911,6 +963,151 @@ TEST_CASE("Modern Player: Always show cast bar keeps the cast row and frame heig
     click_menu(true);
     CHECK(r.lua->setting("player.alwaysShowCastBar") == "0");
     CHECK(draw(hidden) == idle_height);
+}
+
+TEST_CASE("Modern Player: mana and endurance readouts are independently configurable") {
+    RolePackRig r("modern", {"player.lua"});
+    REQUIRE(r.run(R"lua(
+      local load, beginMenu, endMenu, menuItem, tooltip = dofile, ui.BeginMenu, ui.EndMenu, ui.MenuItem, ui.SetTooltip
+      readouts, menuRows, readoutChoices = {}, {}, {}
+      local resourceMenu = false
+      local function row(checked)
+        local x0, y0, x1, y1 = ui.GetItemRect()
+        return {(x0 + x1) / 2, (y0 + y1) / 2, checked = checked}
+      end
+      dofile = function(path)
+        local module = load(path)
+        if path == 'lib/hud.lua' then
+          local bar = module.T.Bar
+          module.T.Bar = function(key, x0, y0, x1, y1, scale, fraction, color, opts)
+            if key == 'player.mana' or key == 'player.end' then
+              readouts[key] = {(x0 + x1) / 2, (y0 + y1) / 2,
+                value = opts and opts.text, percent = opts and opts.right}
+            end
+            return bar(key, x0, y0, x1, y1, scale, fraction, color, opts)
+          end
+        end
+        return module
+      end
+      ui.BeginMenu = function(label, ...)
+        local opened = beginMenu(label, ...)
+        if label == 'Mana readout' or label == 'Endurance readout' then
+          menuRows[label] = row()
+          resourceMenu = opened
+        end
+        return opened
+      end
+      ui.EndMenu = function()
+        resourceMenu = false
+        endMenu()
+      end
+      ui.MenuItem = function(label, checked, ...)
+        local clicked = menuItem(label, checked, ...)
+        if resourceMenu then readoutChoices[label] = row(checked) end
+        return clicked
+      end
+      ui.SetTooltip = function(text)
+        resourceTooltip = text
+        tooltip(text)
+      end
+      return true
+    )lua") == "true");
+    REQUIRE(r.lua->set_setting("test.pos.PlayerWindow", "100,100"));
+    r.t.api->show("PlayerWindow", true);
+    net::PlayerProfile profile;
+    profile.name = "Soloist";
+    profile.class_ = 2;
+    r.t.conn.set_profile_for_test(profile);
+    auto& world = r.t.conn.world_for_test();
+    world.player_id = 10;
+    auto& player = world.spawns[10];
+    player.id = 10;
+    player.class_id = profile.class_;
+    auto& status = r.t.conn.player_status_mut();
+    status.mana = 1250;
+    status.max_mana = 2000;
+    status.endurance = 1500;
+    status.max_endurance = 2000;
+
+    auto& io = ImGui::GetIO();
+    const auto move_to = [&](const std::string& row) {
+        REQUIRE(r.run("return " + row + " ~= nil") == "true");
+        auto* state = r.lua->state();
+        const std::string code = "local row = " + row + "; return row[1], row[2]";
+        REQUIRE(luaL_dostring(state, code.c_str()) == LUA_OK);
+        io.AddMousePosEvent(static_cast<float>(lua_tonumber(state, -2)), static_cast<float>(lua_tonumber(state, -1)));
+        lua_pop(state, 2);
+        r.frames(3);
+    };
+    const auto draw = [&](const char* expected) {
+        REQUIRE(r.run("readouts = {}; return true") == "true");
+        r.frames(2);
+        CHECK(r.run(expected) == "true");
+        const auto* frame = ImGui::FindWindowByName("###modern.PlayerWindow");
+        REQUIRE(frame);
+        return frame->Size.y;
+    };
+    const auto choose = [&](const char* menu, const char* selected, const char* choice) {
+        REQUIRE(r.run("menuRows, readoutChoices = {}, {}; return true") == "true");
+        const auto* frame = ImGui::FindWindowByName("###modern.PlayerWindow");
+        REQUIRE(frame);
+        io.AddMousePosEvent(frame->Pos.x + 10, frame->Pos.y + 12);
+        r.frames(2);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        r.frames(3);
+        move_to(std::format("menuRows['{}']", menu));
+        CHECK(r.run(std::format("return readoutChoices['{}'].checked == true", selected)) == "true");
+        move_to(std::format("readoutChoices['{}']", choice));
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        r.frames(1);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        r.frames(2);
+    };
+
+    const float default_height = draw(
+        "local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+        "return not mana.value and not mana.percent and not endurance.value and not endurance.percent");
+    move_to("readouts['player.mana']");
+    CHECK(r.run("return resourceTooltip == 'Mana 1,250 / 2,000'") == "true");
+    move_to("readouts['player.end']");
+    CHECK(r.run("return resourceTooltip == 'Endurance 1,500 / 2,000'") == "true");
+
+    choose("Mana readout", "None", "Percentage");
+    const float mana_height = draw(
+        "local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+        "return not mana.value and mana.percent == '62%' and not endurance.value and not endurance.percent");
+    CHECK(mana_height > default_height);
+    choose("Endurance readout", "None", "Value");
+    const float both_height = draw(
+        "local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+        "return not mana.value and mana.percent == '62%' and endurance.value == '1,500 / 2,000' and not endurance.percent");
+    CHECK(both_height > mana_height);
+
+    choose("Mana readout", "Percentage", "Both");
+    status.mana = 0;
+    CHECK(draw("local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+               "return mana.value == '0 / 2,000' and mana.percent == '0%' and endurance.value == '1,500 / 2,000'") ==
+          both_height);
+    r.lua->set_character_settings(r.scratch.path() / "character.txt"); // flush the shared settings before reopening
+    {
+        ui::lua::LuaUi saved({}, r.scratch.path() / "pack.txt");
+        CHECK(saved.setting("player.manaReadout") == "both");
+        CHECK(saved.setting("player.enduranceReadout") == "value");
+    }
+
+    profile.class_ = player.class_id = 1;
+    r.t.conn.set_profile_for_test(profile);
+    status.max_mana = 0;
+    draw("return not readouts['player.mana'] and readouts['player.end'].value == '1,500 / 2,000'");
+    profile.class_ = player.class_id = 2;
+    r.t.conn.set_profile_for_test(profile);
+    status.max_mana = 2000;
+    r.frames(2);
+    choose("Mana readout", "Both", "None");
+    CHECK(draw("local mana, endurance = readouts['player.mana'], readouts['player.end']; "
+               "return not mana.value and not mana.percent and endurance.value == '1,500 / 2,000'") < both_height);
 }
 
 TEST_CASE("Group role UI packs: the modern Player window's name keeps the frame menu when no role menu opens") {
@@ -2025,4 +2222,142 @@ TEST_CASE("Hot bar: the modern UI only drags buttons when its layout is unlocked
     CHECK(store.current(0, 0).empty());
     CHECK(store.current(0, 1).type == game::HotButtonType::MenuButton);
     CHECK_FALSE(r.t.host.cursor_button);
+}
+
+TEST_CASE("hs.PlaySoundTest: asks the host to play an Individual Sounds option and reports whether it knew it") {
+    constexpr int kKnownResult = -2, kUnknownResult = -1; // stack indices of the two returned booleans
+    hailstone::test::ScratchDir root_scratch("ui_windows_play_sound_test");
+    fs::create_directories(root_scratch.path());
+    GameDir game(root_scratch.path());
+    Harness t(game);
+    std::vector<std::string> played;
+    t.host.play_sound_test = [&](std::string_view option) {
+        played.emplace_back(option);
+        return option == "thunder";
+    };
+    std::unique_ptr<lua_State, decltype(&lua_close)> L(luaL_newstate(), &lua_close);
+    REQUIRE(L);
+    luaL_openlibs(L.get());
+    lua_newtable(L.get());
+    t.api->register_functions(L.get());
+    lua_setglobal(L.get(), "hs");
+    t.api->begin_frame();
+    REQUIRE(luaL_dostring(L.get(), "return hs.PlaySoundTest('thunder'), hs.PlaySoundTest('nothing')") == LUA_OK);
+    CHECK(lua_toboolean(L.get(), kKnownResult) == 1);
+    CHECK(lua_toboolean(L.get(), kUnknownResult) == 0);
+    CHECK(played == std::vector<std::string>{"thunder", "nothing"});
+    // The call is also a member of the settings group of hs.UI.
+    lua_settop(L.get(), 0);
+    REQUIRE(luaL_dostring(L.get(), "return type(hs.UI.settings.PlaySoundTest)") == LUA_OK);
+    CHECK(std::string(lua_tostring(L.get(), -1)) == "function");
+}
+
+TEST_CASE("Individual Sounds: both packs' volume rules clamp, snap, step, parse typed text and reset") {
+    // The values the rules are asked about, and what they must answer (0..100, steps of 5).
+    constexpr int kTooHigh = 999, kBelowZero = -20, kOffStep = 37, kOnStep = 35, kNextStepUp = 40, kTopStep = 100;
+    constexpr int kFullVolume = 100, kSoundCount = 9; // the rows: three footsteps, bag, bank bag, money, thunder, equip, creatures
+    for (const char* pack : {"modern", "gamepad"}) {
+        CAPTURE(pack);
+        const auto file = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack / "lib" / "sound_volumes.lua";
+        std::unique_ptr<lua_State, decltype(&lua_close)> L(luaL_newstate(), &lua_close);
+        REQUIRE(L);
+        luaL_openlibs(L.get());
+        REQUIRE(luaL_dofile(L.get(), file.string().c_str()) == LUA_OK);
+        lua_setglobal(L.get(), "V");
+        // Each expression is run alone and returns one number (or nil).
+        auto number = [&](const std::string& expression) -> std::optional<lua_Integer> {
+            REQUIRE(luaL_dostring(L.get(), ("return " + expression).c_str()) == LUA_OK);
+            std::optional<lua_Integer> value;
+            if (lua_isinteger(L.get(), -1)) value = lua_tointeger(L.get(), -1);
+            lua_settop(L.get(), 0);
+            return value;
+        };
+        CHECK(number("V.clamp(" + std::to_string(kTooHigh) + ")") == kFullVolume);
+        CHECK(number("V.clamp(" + std::to_string(kBelowZero) + ")") == 0);
+        CHECK(number("V.snap(" + std::to_string(kOffStep) + ")") == kOnStep);
+        CHECK(number("V.step(" + std::to_string(kOnStep) + ", 1)") == kNextStepUp);
+        CHECK(number("V.step(" + std::to_string(kTopStep) + ", 1)") == kTopStep);
+        CHECK(number("V.step(0, -1)") == 0);
+        CHECK(number("V.parse('" + std::to_string(kTooHigh) + "')") == kFullVolume); // typed 999: the box shows 100
+        CHECK(number("V.parse('" + std::to_string(kOnStep) + "')") == kOnStep);
+        CHECK(number("V.parse('')") == std::nullopt);                          // nothing typed yet: no change
+        CHECK(number("#V.SOUNDS") == kSoundCount);
+
+        // Reset: every volume the client has goes to 100, one it lacks is left alone.
+        REQUIRE(luaL_dostring(L.get(), R"lua(
+            local set = {}
+            local function option(name) if name ~= "thunder" then return 0 end end
+            V.reset(option, function(name, value) set[name] = value end)
+            local count = 0
+            for _ in pairs(set) do count = count + 1 end
+            return count, set.money, set.thunder
+        )lua") == LUA_OK);
+        CHECK(lua_tointeger(L.get(), -3) == kSoundCount - 1);
+        CHECK(lua_tointeger(L.get(), -2) == kFullVolume);
+        CHECK(lua_isnil(L.get(), -1));
+    }
+}
+
+TEST_CASE("Gamepad Sounds page: every click of a row's button does exactly one action") {
+    // The geometry of a row as drawn (x positions): the Test chip, the - arrow, the + arrow; and where clicks land.
+    constexpr lua_Integer kChipFrom = 100, kChipTo = 180, kLeftArrow = 400, kRightArrow = 520, kArrowReach = 14;
+    constexpr lua_Integer kRowRight = 600, kRowBottom = 56, kInsideY = 28, kOutsideY = 500; // the row's rectangle, and mouse heights
+    constexpr lua_Integer kOnChip = 140, kOnLeftArrow = 405, kOnRightArrow = 515, kOnBody = 300;
+    const auto file = fs::path(__FILE__).parent_path().parent_path() / "ui" / "gamepad" / "lib" / "sound_volumes.lua";
+    std::unique_ptr<lua_State, decltype(&lua_close)> L(luaL_newstate(), &lua_close);
+    REQUIRE(L);
+    luaL_openlibs(L.get());
+    REQUIRE(luaL_dofile(L.get(), file.string().c_str()) == LUA_OK);
+    lua_setglobal(L.get(), "V");
+    const std::pair<const char*, lua_Integer> globals[] = {{"CHIP_FROM", kChipFrom}, {"CHIP_TO", kChipTo},
+        {"LEFT", kLeftArrow}, {"RIGHT", kRightArrow}, {"REACH", kArrowReach}, {"ON_CHIP", kOnChip},
+        {"ON_LEFT", kOnLeftArrow}, {"ON_RIGHT", kOnRightArrow}, {"ON_BODY", kOnBody},
+        {"ROW_RIGHT", kRowRight}, {"ROW_BOTTOM", kRowBottom}, {"INSIDE_Y", kInsideY}, {"OUTSIDE_Y", kOutsideY}};
+    for (const auto& [name, value] : globals) {
+        lua_pushinteger(L.get(), value);
+        lua_setglobal(L.get(), name);
+    }
+    // This runs the page's decision path (overRow -> clickTarget -> activation -> perform), not W.list's own click
+    // sequence: that the list calls the callback once per press and release is not automated (try it in the game:
+    // click a Test chip, an arrow and a row's body; press A on a row with the mouse elsewhere).
+    REQUIRE(luaL_dostring(L.get(), R"lua(
+        local counts = { test = 0, press = 0, up = 0, down = 0 }
+        local function total() return counts.test + counts.press + counts.up + counts.down end
+        local volume = { "Thunder", "100 %", function(dir) if dir > 0 then counts.up = counts.up + 1 else counts.down = counts.down + 1 end end,
+                         test = "thunder" }
+        local reset = { "Reset", "", nil, press = function() counts.press = counts.press + 1 end }
+        local plain = { "Plain", "On", volume[3] }
+        local geo = { chipX0 = CHIP_FROM, chipX1 = CHIP_TO, leftX = LEFT, rightX = RIGHT }
+        local function click(row, source, x, rowGeo, y)
+          local before = total()
+          rowGeo.rowX0, rowGeo.rowX1, rowGeo.rowY0, rowGeo.rowY1 = 0, ROW_RIGHT, 0, ROW_BOTTOM
+          -- a mouse release beside the row is no click on it: it is the pad's A, whatever the mouse did
+          if source == "mouse" and not V.overRow(rowGeo, x, y or INSIDE_Y) then source = "pad" end
+          local target = source == "mouse" and V.clickTarget(rowGeo, x, REACH) or nil
+          V.perform(row, V.activation(row, source, target), function() counts.test = counts.test + 1 end)
+          return total() - before
+        end
+        local out = {}
+        -- the volume row: chip tests, arrows step down / up, body and A: nothing / test
+        out[#out + 1] = click(volume, "mouse", ON_CHIP, geo) * 100 + counts.test
+        out[#out + 1] = click(volume, "mouse", ON_LEFT, geo) * 100 + counts.down
+        out[#out + 1] = click(volume, "mouse", ON_RIGHT, geo) * 100 + counts.up
+        out[#out + 1] = click(volume, "mouse", ON_BODY, geo)
+        out[#out + 1] = click(volume, "pad", ON_BODY, geo) * 100 + counts.test
+        -- the reset row presses once however it was clicked; a plain row steps up on its body
+        out[#out + 1] = click(reset, "mouse", ON_BODY, {}) * 100 + counts.press
+        out[#out + 1] = click(reset, "pad", ON_BODY, {}) * 100 + counts.press
+        out[#out + 1] = click(plain, "mouse", ON_BODY, { leftX = LEFT, rightX = RIGHT }) * 100 + counts.up
+        -- A on a volume row while a stray mouse release happens beside it: still just a test
+        out[#out + 1] = click(volume, "mouse", ON_CHIP, geo, OUTSIDE_Y) * 100 + counts.test
+        return table.unpack(out)
+    )lua") == LUA_OK);
+    // each value: actions done by that click x 100 + the counter that must have moved
+    constexpr lua_Integer kOne = 100;
+    const lua_Integer expected[] = {kOne + 1, kOne + 1, kOne + 1, 0, kOne + 2, kOne + 1, kOne + 2, kOne + 2, kOne + 3};
+    constexpr int kExpectedCount = 9;
+    for (int n = 0; n < kExpectedCount; ++n) {
+        CAPTURE(n);
+        CHECK(lua_tointeger(L.get(), n - kExpectedCount) == expected[n]);
+    }
 }

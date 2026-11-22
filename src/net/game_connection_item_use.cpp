@@ -123,7 +123,7 @@ GameConnection::SlotRightClick GameConnection::right_click_item_original(const I
         if (slot.type != kInvWorld && slot.top_level()) {
             const Item* held = inventory_.cursor();
             if (keys.ctrl && held && held->item_class == 1) {
-                move_into_bag(slot, true);
+                if (move_into_bag(slot, true)) item_moved_sound(); // the item-moved wave (@0x697250)
                 return SlotRightClick::None;
             }
             return SlotRightClick::ToggleContainer;

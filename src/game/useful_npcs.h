@@ -60,7 +60,7 @@ using QuestNpcMap = std::unordered_map<std::string, std::uint8_t>;
 
 // Every listed NPC of the zone, nearest first (ties by name). `findable`: the ids on the server's findable list.
 std::vector<UsefulNpc> useful_npcs(const WorldState& world, const std::unordered_set<std::uint32_t>& findable,
-                                   const glm::vec3& from, const QuestNpcMap& quests = {});
+                                   const glm::vec3& from, const QuestNpcMap& quests = {}, bool findable_only = false);
 
 // Whether a search box's text matches the name or subtitle (ASCII case-insensitive; empty matches all).
 bool useful_npc_matches(const UsefulNpc& n, std::string_view query);

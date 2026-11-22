@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <numbers>
 #include <utility>
 
 #include "game/mechanics/controls.h"
@@ -152,8 +153,10 @@ TEST_CASE("AUTORUN toggles forward autorun; refused commands change nothing") {
     CHECK(s.jump_key == 1);
 }
 
+#include "game/collision.h"
 #include "game/targeting.h"
 #include "game/world_state.h"
+#include "render/camera.h"
 
 namespace {
 
@@ -332,4 +335,61 @@ TEST_CASE("Hailstone: the NPC cycle takes only the NPCs in sight when in_sight i
     tm.in_sight = [](const Spawn&) { return false; };
     w.target_id = 0;
     CHECK_FALSE(target_key_command(tm, 32, w, eye));
+}
+
+TEST_CASE("Hailstone: NPC target keys filter camera view and walls independently") {
+    using namespace hailstone::game;
+    auto world = world_with({{10, 20.0f, true, false}, {11, -6.0f, true, false}, {12, 10.0f, true, false},
+                             {13, 6.0f, true, false}, {14, 120.0f, true, false}, {15, 501.0f, true, false}});
+    world.spawns[12].position.y = 4.0f;
+    world.spawns[13].position.y = 10.0f;
+    // The middle of this wall is on the ray to 12, while the ray to 10 passes beside it.
+    const auto wall = CollisionMesh::from_triangles({
+        CollisionTriangle::make({5, 1, -3}, {5, 3, -3}, {5, 3, 3}, 0),
+        CollisionTriangle::make({5, 1, -3}, {5, 3, 3}, {5, 1, 3}, 0),
+    });
+    hailstone::render::FlyCamera camera;
+    auto view_projection = camera.projection(1920, 1080, 100.0f) * camera.view();
+    const std::function<bool(const glm::vec3&)> clear_wall = [&](const glm::vec3& point) {
+        return wall.line_of_sight(camera.position, point);
+    };
+    TargetManager targets;
+    const auto cycle = [&](bool offscreen, bool through_walls) {
+        targets.in_sight = [&, offscreen, through_walls](const Spawn& spawn) {
+            return npc_in_target_view(spawn, offscreen ? nullptr : &view_projection,
+                                      through_walls ? std::function<bool(const glm::vec3&)>{} : clear_wall);
+        };
+        std::vector<std::uint32_t> ids;
+        for (const auto& candidate : cycle_candidates(world, 1, camera.position, 500.0f, false, {}, targets.in_sight))
+            ids.push_back(candidate.id);
+        return ids;
+    };
+    CHECK(cycle(false, false) == std::vector<std::uint32_t>{10});
+    CHECK(target_key_command(targets, 32, world, camera.position) == 10u);
+    CHECK(cycle(false, true) == std::vector<std::uint32_t>{10, 12});
+    CHECK(target_key_command(targets, 33, world, camera.position) == 12u);
+    CHECK(cycle(true, false) == std::vector<std::uint32_t>{10, 11, 13, 14});
+    CHECK(target_previous_npc(targets, world, camera.position) == 11u);
+    CHECK(cycle(true, true) == std::vector<std::uint32_t>{10, 11, 12, 13, 14});
+    camera.yaw = std::numbers::pi_v<float>;
+    view_projection = camera.projection(1920, 1080, 100.0f) * camera.view();
+    CHECK(cycle(false, false) == std::vector<std::uint32_t>{11});
+}
+
+TEST_CASE("Hailstone: a partly visible NPC needs a clear point inside the camera view") {
+    using namespace hailstone::game;
+    const hailstone::render::FlyCamera camera;
+    const auto view_projection = camera.projection(1920, 1080, 100.0f) * camera.view();
+    Spawn spawn;
+    spawn.position = {-10.0f, 0.0f, 0.0f};
+    spawn.display_valid = true;
+    spawn.display_position = {10.0f, 0.0f, 0.0f};
+    spawn.heights.avatar_height = 3.0f;
+    spawn.heights.view_height = 6.0f;
+    const auto over_wall = [](const glm::vec3& point) { return point.z > 2.0f; };
+    CHECK(npc_in_target_view(spawn, &view_projection, over_wall));
+
+    spawn.display_position.x = 5.0f; // its visible center is blocked and its clear eye is above the screen
+    CHECK_FALSE(npc_in_target_view(spawn, &view_projection, over_wall));
+    CHECK(npc_in_target_view(spawn, nullptr, over_wall));
 }

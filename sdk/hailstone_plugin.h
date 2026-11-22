@@ -47,6 +47,7 @@
 #include <stdint.h>
 #include "hailstone_follow.h"
 #include "hailstone_nameplates.h"
+#include "hailstone_ui_contribution.h"
 #include "hailstone_world_geometry.h"
 
 #ifdef __cplusplus
@@ -679,6 +680,7 @@ typedef struct HailstoneMapSpawn {
 #define HAILSTONE_MAP_POLICY_CUSTOM_SPAWNS 1u
 #define HAILSTONE_MAP_POLICY_HIDE_STOCK_NPCS 2u
 #define HAILSTONE_MAP_POLICY_DISABLE_NPC_FIND 4u
+#define HAILSTONE_NPC_FIND_SERVER_ONLY 1u
 typedef struct HailstoneMapPolicy {
     uint32_t size;
     uint32_t flags;
@@ -688,6 +690,9 @@ typedef struct HailstoneMapPolicy {
      * context is host-issued connection/zone/player lifetime, ignored in provider answers. */
     uint64_t revision;
     uint64_t context;
+    /* Zero is stock. HAILSTONE_NPC_FIND_SERVER_ONLY limits NPC Find to the server's advertised list and path.
+     * DISABLE_NPC_FIND takes precedence. Only write this field when the caller supplies the 96-byte record. */
+    uint64_t npc_find_mode;
 } HailstoneMapPolicy;
 
 typedef struct HailstoneSpell {
@@ -1157,6 +1162,11 @@ typedef struct PluginHostApi {
      * HAILSTONE_HOST_HAS(host, get_spells_data_bulk) first. */
     int32_t (*get_spells_data_bulk)(void* host, const int32_t* ids, int32_t id_count, unsigned char* out,
                                     int32_t out_size);
+    /* Add or replace this plugin's contribution by ID, or remove it. Both need UI and EXTEND. Return 1 on
+     * success, 0 on refusal (remove also returns 0 for an absent ID). Contributions go on deactivation,
+     * permission loss or unload. Check HAILSTONE_HOST_HAS before use on older ABI 3 hosts. */
+    int (*set_ui_contribution)(void* host, const HailstoneUiContribution* entry);
+    int (*remove_ui_contribution)(void* host, const char* id);
     /* READ: current received game popup, 1 available, 0 none/expired. Initialize out->size. */
     int (*get_large_dialog)(void* host, HailstoneLargeDialog* out);
     /* ACTIONS: answer this exact current popup once: button 0 OK, 1 Yes, 2 No, 3 close. Returns 1 consumed (and

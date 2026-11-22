@@ -108,6 +108,11 @@ struct SkyWeatherInput {
     std::uint32_t light_level = 0xbf800000u; // 0xac2de4 (float bits; -1: not set yet)
     std::array<std::int32_t, 3> infravision_floor{65, 50, 50};  // 0xddf808 (/255)
     std::array<std::int32_t, 3> ultravision_floor{80, 80, 120}; // 0xddf814
+    // Not the original's: how strong infravision's and ultravision's floor is (display.infravision_strength /
+    // ultravision_strength, 0..1), eased from the plain 0.08 floor (0, as without it) to the floor above (1, the
+    // original's, computed exactly as it does).
+    double infravision_strength = 1.0;
+    double ultravision_strength = 1.0;
     std::array<std::uint8_t, 3> zone_fog_colour{};  // NewZone fog_red/green/blue[0]
     std::array<std::int32_t, 3> fog_colour{};       // CEverQuest +0x38e60/64/68 before
     std::uint32_t fog_start = 0, fog_end = 0, fog_density = 0; // CDisplay +0x134/+0x138/+0x13c (float bits)

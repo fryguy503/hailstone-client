@@ -22,7 +22,7 @@ bool GameConnection::memorize_set(const std::array<std::int32_t, game::kLoadoutG
         spell_message(3345, {}, 0xf);
         return false;
     }
-    // The book is shown (its AboutToShow seats the player), remembering whether it was; it must end up shown.
+    // The book must be shown. AboutToShow seats a player on foot and leaves a rider mounted.
     set_mem_.keep_open = spell_book_open_;
     if (!spell_book_open_ && !open_spell_book()) return false;
     std::array<std::uint8_t, 12> flags{};

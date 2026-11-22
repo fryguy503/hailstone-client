@@ -6,6 +6,7 @@
 #include <format>
 
 #include "core/log.h"
+#include "game/sound_rules.h"
 #include "net/game_connection.h"
 #include "net/packet_io.h"
 
@@ -252,6 +253,12 @@ void GameConnection::handle_adventure(Op op, const AppPacket& p) {
             // EQEmu sends no chat line with it; this client's lines.
             ui_message(v->won ? std::format("You have completed the adventure and earned {} points.", v->points)
                               : std::string("You have failed the adventure."));
+            // The finish's wave (0x4207a7 won, 0x4207e7 failed): 0x8d for a won adventure, 0x8c for a failed
+            // one, EqSoundManager::WavePlay(..., 0).
+            SoundCue cue;
+            cue.kind = SoundCue::Kind::Wave;
+            cue.spell = v->won ? game::kSoundEndQuest : game::kSoundAdventureFailed;
+            sound_cues_.push_back(cue);
         }
         break;
     case Op::AdventurePointsUpdate:

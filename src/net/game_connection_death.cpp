@@ -55,6 +55,7 @@ std::string corpse_name(const game::Spawn& s, std::uint32_t corpse_id) {
 void GameConnection::handle_death(const Death& d) {
     // Handle_OP_Death @0x532b50 (game/death_report.h).
     const std::uint32_t me = world_.player_id;
+    if (findable_npcs_.erase(d.spawn_id)) ++findable_npcs_revision_;
     auto find = [&](std::uint32_t id) -> game::Spawn* {
         auto it = world_.spawns.find(id);
         return it == world_.spawns.end() ? nullptr : &it->second;

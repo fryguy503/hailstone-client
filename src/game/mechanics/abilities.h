@@ -223,6 +223,15 @@ struct SkillResult {
         bool fist = false;          // the fist pseudo-item
     };
     std::vector<Swing> swings;
+    // PlayerClient::SetHeldModel(7 / 8, model, 0, 1) from DoAttack's range and melee preambles and DoRangedAttack, in
+    // their order: the held slot, the possessions slot whose item's model it shows (-1: "0", an empty hand) and how
+    // many of `sends` went out before it. The caller shows it and sends OP_WearChange (net::GameConnection).
+    struct HeldModel {
+        std::uint8_t slot = 0;
+        std::int32_t item_slot = -1;
+        std::size_t after_sends = 0;
+    };
+    std::vector<HeldModel> held_models;
 };
 
 // __get_bearing @0x4ef250: the heading (0..511.5) from (x1, y1) toward (x2, y2), in the original's argument order

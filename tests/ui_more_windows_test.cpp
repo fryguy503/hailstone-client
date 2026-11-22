@@ -13,12 +13,16 @@
 
 #include <imgui.h>
 
+#include "app/actions_ui.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "core/config.h"
+#include "core/game_dir.h"
 #include "core/ini_file.h"
 #include "game_files.h"
 #include "net/game_connection.h"
 #include "net/opcodes.h"
+#include "platform/window.h"
 #include "ui/dev_screens.h"
 #include "scratch_dir.h"
 
@@ -316,6 +320,113 @@ TEST_CASE("Layout copy: the characters played last first, their world named when
     offer = 1;
     for (const char* who : {"World/Old", "World/New", "Other World/Alt"}) fs::remove(chars / who / "UI.ini");
     CHECK_FALSE(t.api->activate_window("LayoutCopyWindow", 0));
+}
+
+TEST_CASE("Layout copy: key bindings are optional, apply immediately, and save to the current character") {
+    GameDir game;
+    Config config;
+    std::optional<app::ActionsUi> actions;
+    Harness t(game);
+    const fs::path chars = t.dir / "characters" / "World";
+    const fs::path shared = t.dir / "hailstone.ini";
+    const fs::path own = chars / "Me" / "hailstone.ini";
+    const fs::path from = chars / "Other" / "hailstone.ini";
+    const fs::path defaults = t.dir / "defaults.ini";
+    config.set_int("KEYMAPPING_JUMP_1", 48);
+    REQUIRE(config.save(shared));
+    REQUIRE(config.attach_character(own));
+    config.set("KEYMAP_INVENTORY", "b");
+    config.set_int("mouse.sensitivity", 6);
+    REQUIRE(config.save(shared));
+    Config source;
+    source.set_bool("UseWASDDefault", false);
+    source.set("KEYMAP_STRAFE_LEFT", "a");
+    source.set("KEYMAP_STRAFE_LEFT_2", "SHIFT+a");
+    source.set_int("KEYMAPPING_STRAFE_RIGHT_1", 0x20);
+    source.set_int("KEYMAPPING_LEFT_1", 0);
+    source.set_int("mouse.sensitivity", 14);
+    REQUIRE(source.save(from));
+    fs::create_directories(chars / "Older");
+    std::ofstream(own.parent_path() / "UI.ini") << "[InventoryWindow]\nXPosWindowed=10\n";
+    std::ofstream(from.parent_path() / "UI.ini") << "[InventoryWindow]\nXPosWindowed=30\n";
+    const auto older_layout = chars / "Older" / "UI.ini";
+    std::ofstream(older_layout) << "[InventoryWindow]\nXPosWindowed=15\n";
+    fs::last_write_time(older_layout, fs::file_time_type::clock::now() - std::chrono::hours(1));
+    std::ofstream(defaults) << "[InventoryWindow]\nXPos1024x768=4\n";
+    actions.emplace(config, shared);
+    t.host.actions = &*actions;
+    t.api->load_layout(defaults, own.parent_path() / "UI.ini", {});
+
+    constexpr auto window = "LayoutCopyWindow";
+    constexpr auto box = "LC_CopyKeysCheckBox";
+    constexpr auto rows = "LC_LayoutsList";
+    const int left = static_cast<int>(game::KeyCommand::LEFT);
+    const int forward = static_cast<int>(game::KeyCommand::FORWARD);
+    const int jump = static_cast<int>(game::KeyCommand::JUMP);
+    const int inventory = static_cast<int>(game::KeyCommand::INVENTORY);
+    const int strafe_left = static_cast<int>(game::KeyCommand::STRAFE_LEFT);
+    const int strafe_right = static_cast<int>(game::KeyCommand::STRAFE_RIGHT);
+    auto confirm = [&](bool yes) {
+        REQUIRE(t.api->click_child(window, "LC_CopyButton"));
+        REQUIRE(t.host.confirm);
+        auto done = std::move(t.host.confirm->done);
+        t.host.confirm.reset();
+        done(yes);
+    };
+
+    REQUIRE(t.api->activate_window(window, 0));
+    CHECK(t.api->child_state(window, box) == true);
+    CHECK(t.api->child_checked(window, box) == true);
+    t.api->show(window, false);
+    t.api->show(window, true);
+    CHECK(t.api->list_texts(window, rows) == std::vector<std::string>{"Other", "Older", "Defaults.ini"});
+    REQUIRE(t.api->click_list(window, rows, 2, 0));
+    CHECK(t.api->child_state(window, box) == false);
+    REQUIRE(t.api->click_list(window, rows, 1, 0));
+    CHECK(t.api->child_state(window, box) == false);
+    REQUIRE(t.api->click_list(window, rows, 0, 0));
+    CHECK(t.api->child_state(window, box) == true);
+    CHECK(t.api->child_checked(window, box) == false);
+    confirm(true);
+    CHECK(actions->keymap().binding(left, 0) == game::KeyCombo{0x1e});
+    CHECK_FALSE(actions->keymap().binding(strafe_left, 0).bound());
+
+    REQUIRE(t.api->click_child(window, box));
+    confirm(false);
+    CHECK(actions->keymap().binding(left, 0) == game::KeyCombo{0x1e});
+    CHECK_FALSE(actions->keymap().binding(strafe_left, 0).bound());
+
+    platform::InputState input;
+    input.key_events = {{0x1e, true, false}};
+    actions->process_keys(input, true);
+    REQUIRE(actions->keymap().held(game::KeyCommand::LEFT));
+    confirm(true);
+    input.key_events.clear();
+    auto releases = actions->process_keys(input, true);
+    CHECK(std::any_of(releases.begin(), releases.end(), [&](const auto& event) { return event.command == left && !event.down; }));
+    CHECK_FALSE(actions->keymap().binding(left, 0).bound());
+    CHECK(actions->keymap().binding(forward, 0) == game::KeyCombo{0x48});
+    CHECK(actions->keymap().binding(jump, 0) == game::KeyCombo{0x39});
+    CHECK(actions->keymap().binding(inventory, 0) == game::KeyCombo{0x17});
+    CHECK(actions->keymap().binding(strafe_left, 0) == game::KeyCombo{0x1e});
+    CHECK(actions->keymap().binding(strafe_left, 1).to_int() == 0x4000001e);
+    CHECK(actions->keymap().binding(strafe_right, 0) == game::KeyCombo{0x20});
+
+    input.key_events = {{0x1e, true, false}};
+    auto presses = actions->process_keys(input, true);
+    CHECK(std::any_of(presses.begin(), presses.end(), [&](const auto& event) { return event.command == strafe_left && event.down; }));
+    CHECK_FALSE(actions->keymap().held(game::KeyCommand::LEFT));
+    Config disk;
+    REQUIRE(disk.load(own));
+    CHECK(disk.get_bool("UseWASDDefault", true) == false);
+    CHECK(disk.get_int("mouse.sensitivity", 0) == 6);
+    REQUIRE(disk.load(shared));
+    CHECK(disk.get_int("KEYMAPPING_JUMP_1", 0) == 48);
+    REQUIRE(config.attach_character(own));
+    actions->reload_keymap();
+    CHECK(actions->keymap().binding(strafe_left, 0) == game::KeyCombo{0x1e});
+    CHECK(actions->keymap().binding(strafe_left, 1).to_int() == 0x4000001e);
+    CHECK_FALSE(actions->keymap().binding(left, 0).bound());
 }
 
 TEST_CASE("Load skin window: the user interfaces, the running one selected; Load runs /loadskin") {

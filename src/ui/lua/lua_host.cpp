@@ -156,6 +156,12 @@ struct LuaUi::Impl {
     std::size_t memory_limit = kMemoryLimit;
     int limited = 0; // >0: Lua code of ours runs (Budget), so an allocation past the limit fails
     Clock::time_point deadline = Clock::time_point::max(); // the running code's end (Budget; budget_hook)
+    // What stopped the running code when the budget did (budget_hook): its own budget, or the end of the code it
+    // runs inside (frame_end, set around a drawn callback). Read by CallbackOwner::invoke_drawn to tell a callback
+    // that was skipped from one that failed.
+    enum Cut { kCutNone = 0, kCutOwn, kCutFrame };
+    Cut cut = kCutNone;
+    Clock::time_point frame_end = Clock::time_point::max();
     Clock::duration pack_budget = kPackBudget, plugin_budget = kPluginBudget;
     int live_kb = 0; // the live heap the last full collection found (0: none yet)
 
@@ -211,9 +217,14 @@ struct LuaUi::Impl {
 
     // Every kHookCount instructions: past the deadline the code is stopped with an error, raised again at every
     // instruction after that (a pcall in the code cannot catch its way on) until the Budget that set it ends.
+    // Which cutoff fired is kept in `cut` for a caller that must tell its own budget from the frame's end.
     static void budget_hook(lua_State* L, lua_Debug*) {
         Impl& m = of(L);
         if (Clock::now() > m.deadline) {
+            // The deadline in force is the earliest of the budgets in play, so only an exact match with the frame's
+            // end marks that end as the one that ran out. A callback's own budget is always later than the frame's
+            // end when the frame's end wins, and earlier when its own does.
+            m.cut = m.deadline == m.frame_end ? kCutFrame : kCutOwn;
             if (lua_gethookcount(L) != 1) lua_sethook(L, &budget_hook, LUA_MASKCOUNT, 1);
             luaL_error(L, "ran too long (%d ms): stopped",
                        static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -245,6 +256,20 @@ struct LuaUi::Impl {
         }
         Budget(const Budget&) = delete;
         Budget& operator=(const Budget&) = delete;
+    };
+    // A drawn callback's call: until this ends, the frame's end is the point where the enclosing code's budget ran
+    // out, so budget_hook can record whether that end or the callback's own budget stopped it. Read `cut` before
+    // this is destroyed. Both fields are put back: formatting the timeout's error can run the collector, and a
+    // finalizer that calls a retained callback must not leave the enclosing call's marker cleared.
+    struct FrameEnd {
+        Impl& m;
+        Clock::time_point before;
+        Cut before_cut;
+        FrameEnd(Impl& im, Clock::time_point end)
+            : m(im), before(im.frame_end), before_cut(im.cut) { m.frame_end = end; m.cut = kCutNone; }
+        ~FrameEnd() { m.frame_end = before; m.cut = before_cut; }
+        FrameEnd(const FrameEnd&) = delete;
+        FrameEnd& operator=(const FrameEnd&) = delete;
     };
     Clock::duration budget_for(const std::string& tag) const { return tag.empty() ? pack_budget : plugin_budget; }
 
@@ -1947,6 +1972,9 @@ void LuaUi::set_limits_for_test(std::size_t memory, std::chrono::milliseconds pa
 std::string_view LuaUi::drawing_window() { return g_drawing; }
 std::string_view LuaUi::caller_tag() { return g_caller_tag; }
 
+LuaUi::HostScope::HostScope() : before_(std::move(g_caller_tag)) { g_caller_tag.clear(); }
+LuaUi::HostScope::~HostScope() { g_caller_tag = std::move(before_); }
+
 std::optional<LuaUi::CallbackOwner> LuaUi::callback_owner(lua_State* L) {
     if(g_callback_source)return *g_callback_source;
     const bool pack_state=lua_getfield(L,LUA_REGISTRYINDEX,kPackStateKey)==LUA_TBOOLEAN;
@@ -1964,8 +1992,12 @@ std::optional<LuaUi::CallbackOwner> LuaUi::callback_owner(lua_State* L) {
     owner.tag=tag;
     owner.key="ui:"+std::to_string(reinterpret_cast<std::uintptr_t>(m.L))+":"+tag+":"+generation;
     owner.valid=[vm,source,tag,host=&m]{return !vm.expired()&&!source.expired()&&(tag.empty()||host->folder_dir(tag));};
-    owner.invoke=[vm,source,tag,file,host=&m](lua_State* state,int args,int results){
-        if(vm.expired()||source.expired()||state!=host->L||(!tag.empty()&&!host->folder_dir(tag)))return false;
+    // The one protected path both entry points take. `drawn` adds the frame's-end rule: a callback drawn inside
+    // another add-on's code (a map overlay) may not run past the time that code kept for itself, and a stop at that
+    // end is a skip, not the callback's failure, so a drawing layer keeps it registered.
+    const auto call=[vm,source,tag,file,host=&m](lua_State* state,int args,int results,bool drawn)->CallbackOwner::Call{
+        using Call=CallbackOwner::Call;
+        if(vm.expired()||source.expired()||state!=host->L||(!tag.empty()&&!host->folder_dir(tag)))return Call::kFailed;
         struct SourceState {
             Impl& host;
             std::string file, tag;
@@ -1980,20 +2012,34 @@ std::optional<LuaUi::CallbackOwner> LuaUi::callback_owner(lua_State* L) {
             explicit DrawingState(bool on) : active(on), begun(on?windows_begun(true):0) {}
             ~DrawingState() { if(active){recover_script_windows();end_script_windows(begun);} }
         } drawing_state(imgui);
+        const Clock::time_point enclosing=host->deadline;
+        if(drawn&&Clock::now()>=enclosing){lua_pop(state,args+1);return Call::kSkipped;} // (function and arguments)
+        // From here budget_hook records which cutoff stopped the code, and frame_end is the deadline in force before
+        // this callback's own budget: a stop at or below it belongs to the code the callback runs inside.
+        Impl::FrameEnd frame(*host,enclosing);
         int status=LUA_OK;
         {
             Impl::Budget budget(*host,std::min(host->budget_for(tag),std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(50))));
             Impl::Acting acting(*host,tag);
             status=lua_pcall(state,args,results,0);
         }
-        if(status==LUA_OK)return true;
-        const char* why=lua_tostring(state,-1);
-        bool reported=false;
-        for(auto& script:host->scripts)if(script.file==file){host->report(script,why);reported=true;break;}
-        if(!reported)log::warn("ui retained callback error: {}",why?why:"error");
+        if(status==LUA_OK)return Call::kRan;
+        // The budget hook records the cutoff itself: the raised text can carry a source location, and the clock at
+        // this point cannot tell a callback stopped at the frame's end from one that used up a budget of its own.
+        if(drawn&&host->cut==Impl::kCutFrame){lua_pop(state,1);return Call::kSkipped;}
+        // Only a string is read in place: converting a number or a table allocates, and a raise from here would skip
+        // the scopes above (a draw's clip included) while the error object still roots the text below.
+        const char* why=lua_type(state,-1)==LUA_TSTRING?lua_tostring(state,-1):"(error)";
+        try {
+            bool reported=false;
+            for(auto& script:host->scripts)if(script.file==file){host->report(script,why);reported=true;break;}
+            if(!reported)log::warn("ui retained callback error: {}",why);
+        } catch(...) {}
         lua_pop(state,1);
-        return false;
+        return Call::kFailed;
     };
+    owner.invoke=[call](lua_State* state,int args,int results){return call(state,args,results,false)==CallbackOwner::Call::kRan;};
+    owner.invoke_drawn=[call](lua_State* state,int args,int results){return call(state,args,results,true);};
     return owner;
 }
 

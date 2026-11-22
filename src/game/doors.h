@@ -164,10 +164,9 @@ std::vector<std::uint8_t> process_door(Door& door, float ticks, std::uint32_t no
 // assets/wld_zone.cpp placement_transform), scale by ScaleFactor %.
 glm::mat4 door_transform(const Door& door);
 
-// UseSwitch's reach test: the player is too far when the 3D distance from
-// its position (the spawn's, server z) to the door's exceeds its height + 20
-// + the actor's bounding radius.
-bool door_within_reach(const Door& door, const glm::vec3& player_world, float player_height, float actor_radius);
+// UseSwitch measures to the mouse hit, or to the switch origin with the actor radius added to reach.
+bool door_within_reach(const Door& door, const glm::vec3& player_world, float player_height, float actor_radius,
+                      std::optional<glm::vec3> hit = std::nullopt);
 
 // A ground object (OP_GroundSpawn).
 struct GroundObject {

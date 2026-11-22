@@ -29,18 +29,21 @@ function FL.policy()
   local policy = type(query) == "function" and query() or nil
   local stock = type(policy) ~= "table" or policy.stock_npcs ~= false
   local find = type(policy) ~= "table" or policy.npc_find ~= false
+  local serverOnly = type(policy) == "table" and policy.npc_find_server_only == true
   local custom = type(policy) == "table" and policy.custom_spawns == true
   local name = type(policy) == "table" and policy.name or ""
   local revision = type(policy) == "table" and policy.revision or nil
   local context = type(policy) == "table" and policy.context or nil
   if FIND_STATE.policyStock ~= stock or FIND_STATE.policyFind ~= find or FIND_STATE.policyCustom ~= custom
+      or FIND_STATE.policyServerOnly ~= serverOnly
       or FIND_STATE.policyName ~= name or FIND_STATE.policyRevision ~= revision or FIND_STATE.policyContext ~= context then
     clearState()
     FIND_STATE.policyStock, FIND_STATE.policyFind, FIND_STATE.policyCustom, FIND_STATE.policyName = stock, find, custom, name
+    FIND_STATE.policyServerOnly = serverOnly
     FIND_STATE.policyRevision, FIND_STATE.policyContext = revision, context
   end
   if not find then clearState() end
-  return stock, find
+  return stock, find, serverOnly
 end
 -- FL.policy once a frame (ui.GetTime is the frame's) for the rows and the marks, which both maps ask several times.
 local policyTime, policyStock, policyFind

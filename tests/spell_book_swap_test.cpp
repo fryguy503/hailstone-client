@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -15,6 +16,7 @@
 
 #include "app/lua_ui.h"
 #include "mock_server/harness.h"
+#include "mq_test_world.h"
 #include "net/spell_packets.h"
 
 using namespace hailstone;
@@ -56,6 +58,29 @@ std::shared_ptr<game::SpellTable> two_spells() {
     auto table = std::make_shared<game::SpellTable>();
     REQUIRE(table->parse(line("200", "Minor Healing", "0") + "\n" + line("201", "Courage", "1")) == 2);
     return table;
+}
+
+constexpr std::uint32_t kTestMount = 9000;
+
+void mount_cleric(GameConnection& conn) {
+    conn.set_spell_table_for_test(two_spells());
+    REQUIRE(conn.profile());
+    PlayerProfile pp = *conn.profile();
+    pp.class_ = 2;
+    conn.set_profile_for_test(pp);
+    // The mock profile starts with Minor Healing both scribed and memorized.
+    auto& spells = GameConnectionTestAccess::spells(conn);
+    spells.book[0] = game::kNoSpell;
+    spells.gems[0] = {};
+    auto& world = conn.world_for_test();
+    REQUIRE(world.player());
+    auto& mount = world.spawns[kTestMount];
+    mount.id = kTestMount;
+    mount.race = 216;
+    mount.is_npc = true;
+    mount.rider_id = world.player_id;
+    world.spawns.at(world.player_id).mount_id = mount.id;
+    REQUIRE_FALSE(conn.sitting());
 }
 
 } // namespace
@@ -276,4 +301,128 @@ TEST_CASE("hs.SpellBookMemorize: with replace_gem_spell on, a spell memorizes ov
         lua_close(L);
     }
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("spell book: a stopped rider can memorize spells and sets, and scribe scrolls") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    mount_cleric(conn);
+
+    using Access = GameConnectionTestAccess;
+    const auto round_trip = [&](std::uint32_t slot, std::uint32_t spell, std::uint32_t action) {
+        const auto count_requests = [&] { return MockEqServer::count(rig.server.zone_log, Op::MemorizeSpell); };
+        const int before = count_requests();
+        std::vector<std::int64_t> steps;
+        const auto start = GameConnection::now_ms();
+        for (int i = 1; i <= 32; ++i) steps.push_back(start + i * 1000);
+        conn.set_game_steps(steps);
+        REQUIRE(rig.until([&] { return count_requests() > before; }));
+        conn.set_game_steps(std::nullopt);
+        REQUIRE(count_requests() == before + 1);
+        const auto& log = rig.server.zone_log;
+        auto sent = std::find_if(log.rbegin(), log.rend(), [](const AppPacket& packet) {
+            return from_wire(packet.opcode) == Op::MemorizeSpell;
+        });
+        REQUIRE(sent != log.rend());
+        auto request = decode_memorize_spell(*sent);
+        REQUIRE(request);
+        CHECK(request->slot == slot);
+        CHECK(request->spell_id == spell);
+        CHECK(request->scribing == action);
+        conn.receive_zone_packet_for_test(encode(MemorizeSpell{slot, spell, action, 0}));
+    };
+    std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)> ctx(ImGui::CreateContext(), ImGui::DestroyContext);
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &conn;
+    app::UiApi api(host);
+    std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
+    auto* L = lua.get();
+    luaL_openlibs(L);
+    lua_newtable(L);
+    api.register_functions(L);
+    lua_setglobal(L, "hs");
+    const auto run_lua = [L](const char* code) {
+        const int result = luaL_dostring(L, code);
+        INFO((result == LUA_OK ? "" : lua_tostring(L, -1)));
+        REQUIRE(result == LUA_OK);
+    };
+
+    SUBCASE("an individual spell picked up from the book reaches its gem") {
+        conn.receive_zone_packet_for_test(encode(MemorizeSpell{0, 200, kMemScribe, 0}));
+        REQUIRE(conn.open_spell_book());
+        run_lua("local st = hs.SpellBookState(); assert(not st.sitting and st.sittingOrMounted)");
+        run_lua("assert(hs.SpellBookClick(0)); hs.SpellBookMemorize(0, 0)");
+        REQUIRE(conn.spell_state().memorizing);
+        CHECK_FALSE(host.cursor_spell);
+        round_trip(0, 200, kMemMemorize);
+        CHECK(conn.spell_state().gems[0].spell == 200);
+    }
+    SUBCASE("a saved set memorizes each gem and closes the book it opened") {
+        conn.receive_zone_packet_for_test(encode(MemorizeSpell{0, 200, kMemScribe, 0}));
+        conn.receive_zone_packet_for_test(encode(MemorizeSpell{1, 201, kMemScribe, 0}));
+        game::SpellLoadout loadout;
+        loadout.spells[0] = 200;
+        loadout.spells[1] = 201;
+        REQUIRE(conn.spell_loadouts().save_set("Mounted", loadout.spells) == game::SpellLoadouts::SaveResult::Saved);
+        run_lua("assert(hs.MemorizeSpellSet(1))");
+        REQUIRE(conn.spell_book_open());
+        Access::start_scheduled_memorization(conn);
+        round_trip(0, 200, kMemMemorize);
+        Access::start_scheduled_memorization(conn);
+        round_trip(1, 201, kMemMemorize);
+        CHECK(MockEqServer::count(rig.server.zone_log, Op::LoadSpellSet) == 1);
+        CHECK(conn.spell_state().gems[0].spell == 200);
+        CHECK(conn.spell_state().gems[1].spell == 201);
+        CHECK_FALSE(conn.spell_book_open());
+        CHECK_FALSE(conn.memorizing_set());
+    }
+    SUBCASE("a scroll can be scribed from the saddle") {
+        Item scroll;
+        scroll.item_type = kItemTypeScroll;
+        scroll.effects[kEffectScroll].effect = 200;
+        REQUIRE(Access::inventory(conn).put(ItemSlot::possessions(kSlotCursor), scroll));
+        REQUIRE(conn.open_spell_book());
+        run_lua("assert(hs.SpellBookClick(0))");
+        REQUIRE(conn.spell_state().scribing);
+        SUBCASE("the scroll reaches the book after the server replies") {
+            round_trip(0, 200, kMemScribe);
+            CHECK(conn.spell_state().book[0] == 200);
+        }
+        SUBCASE("moving closes the book and cancels the pending scribe") {
+            drain_chat(conn);
+            conn.set_player_motion(conn.world().player()->position, 0.0f, {1.0f, 0.0f, 0.0f}, true);
+            CHECK_FALSE(conn.spell_book_open());
+            CHECK_FALSE(conn.spell_state().scribing);
+            // HideWorker: "Aborting scribing of spell."
+            const auto lines = drain_chat(conn);
+            REQUIRE(lines.size() == 1);
+            CHECK(lines[0].rfind("[12044]", 0) == 0);
+            CHECK(MockEqServer::count(rig.server.zone_log, Op::MemorizeSpell) == 0);
+        }
+    }
+    CHECK_FALSE(conn.sitting());
+    CHECK(conn.mount_id() == kTestMount);
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::SpawnAppearance) == 0);
+}
+
+TEST_CASE("spell book: dismounting cancels a queued spell set") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    mount_cleric(conn);
+    conn.receive_zone_packet_for_test(encode(MemorizeSpell{0, 200, kMemScribe, 0}));
+
+    game::SpellLoadout loadout;
+    loadout.spells[0] = 200;
+    REQUIRE(conn.memorize_set(loadout.spells));
+    REQUIRE(conn.memorizing_set());
+    conn.dismount_command();
+    CHECK(conn.mount_id() == 0);
+    CHECK_FALSE(conn.spell_book_open());
+    CHECK_FALSE(conn.memorizing_set());
+    REQUIRE(conn.open_spell_book());
+    GameConnectionTestAccess::start_scheduled_memorization(conn);
+    CHECK_FALSE(conn.spell_state().memorizing);
 }

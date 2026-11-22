@@ -28,6 +28,8 @@ struct SceneFogInput {
     bool ultravision_innate = false; // +0x3264
     std::int32_t infravision_effect = 0; // TotalEffect(65): SPA 65 infravision
     std::int32_t ultravision_effect = 0; // TotalEffect(66): SPA 66 ultravision
+    float infravision_strength = 1.0f;   // SkyWeatherInput::infravision_strength (Hailstone's own; 1 the original)
+    float ultravision_strength = 1.0f;
     // The player actor's light level (ScaledAmbient); nullopt without an
     // actor (the original then uses 1).
     std::optional<float> actor_light;

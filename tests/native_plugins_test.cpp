@@ -178,14 +178,16 @@ void nameplate_test_metrics(game::NameplateCanvasRegistry& canvas) {
 
 } // namespace
 
-// Keep the upstream nameplate and spell functions ahead of the local popup services.
+// Keep the upstream nameplate, spell and UI contribution functions ahead of the local popup services.
 static_assert(sizeof(void*) != 8 ||
               (offsetof(PluginHostApi, nameplate_register) == 856 &&
                offsetof(PluginHostApi, nameplate_unregister) == 864 &&
                offsetof(PluginHostApi, nameplate_spell_icon) == 888 &&
                offsetof(PluginHostApi, get_spells_data_bulk) == 896 &&
-               offsetof(PluginHostApi, get_large_dialog) == 904 &&
-               offsetof(PluginHostApi, answer_large_dialog) == 912));
+               offsetof(PluginHostApi, set_ui_contribution) == 904 &&
+               offsetof(PluginHostApi, remove_ui_contribution) == 912 &&
+               offsetof(PluginHostApi, get_large_dialog) == 920 &&
+               offsetof(PluginHostApi, answer_large_dialog) == 928));
 
 namespace {
 net::AppPacket native_game_popup(bool buttons = true) {
@@ -654,12 +656,21 @@ TEST_CASE("native plugins: map policy accepts old aligned prefixes and changes a
         h.run("/probemapset 7 "+std::to_string(format)+" 42");
         const auto policy=current();CHECK(policy.flags==7);CHECK(policy.name=="Probe map");CHECK(policy.revision!=0);
         CHECK(lifecycle()==initial_lifecycle); // map-only content and optional record format do not retire Tracking
-        for(const int size:{72,80,88}) {
+        for(const int size:{72,80,88,96}) {
             h.run("/probemapprefix "+std::to_string(size));
             CHECK(h.printed_line("[Probe] map prefix "+std::to_string(size)+" result 1 flags 7 canary 1 revision "+
-                (size>=80?"1":"0")+" context "+(size>=88?"1":"0")));
+                (size>=80?"1":"0")+" context "+(size>=88?"1":"0")+" server find 0"));
         }
     }
+    h.run("/probemapset 3 9 42");
+    CHECK(current().npc_find_server_only());
+    h.run("/probemapprefix 96");
+    CHECK(h.printed_line("[Probe] map prefix 96 result 1 flags 3 canary 1 revision 1 context 1 server find 1"));
+    h.run("/probemapprefix 88");
+    CHECK(h.printed_line("[Probe] map prefix 88 result 1 flags 7 canary 1 revision 1 context 1 server find 0"));
+    h.run("/probemapset 7 9 42");
+    CHECK_FALSE(current().npc_find_enabled());
+    CHECK_FALSE(current().npc_find_server_only());
     auto before=current().revision;CHECK(current().revision==before);
     h.run("/probemapset 7 0 43");CHECK(current().revision!=before);CHECK(lifecycle()==initial_lifecycle);
     before=current().revision;h.run("/probemapcycle");CHECK(current().revision!=before);CHECK(lifecycle()!=initial_lifecycle);

@@ -134,8 +134,8 @@ public:
 
     // The doors' and ground objects' actors for the mouse pick
     // (game/picking.h), appended to `actors` with what each one is in `refs`:
-    // static collision meshes (their solid triangles), mask 2 (CDisplay::
-    // CreateActor; EQSwitch::PostInit clears bit 2 for type 0x37), invisible
+    // static collision meshes, or a door's or ground object's passable triangles when it has no solid one
+    // (picks_passable), mask 2 (CDisplay::CreateActor; EQSwitch::PostInit clears bit 2 for type 0x37), invisible
     // doors flagged as IsInvisible.
     struct PickRef {
         bool is_door = true;
@@ -143,7 +143,12 @@ public:
         bool is_placed = false;          // a placed real estate object (id unused: re, item)
         std::uint32_t re = 0, item = 0;
     };
-    void pick_actors(std::vector<game::PickActor>& actors, std::vector<PickRef>& refs) const;
+    // Which actors may be picked by their passable triangles when their model has none solid: the doors and the
+    // ground objects (dropped items, ground spawns), not the placed real estate objects (docs/unknowns.md
+    // "Passable triangles in the mouse pick").
+    enum class PickSource { Door, GroundObject, Placed };
+    static constexpr bool picks_passable(PickSource s) { return s != PickSource::Placed; }
+    void pick_actors(std::vector<game::PickActor>& actors, std::vector<PickRef>& refs, bool include_passable) const;
     // The nearest usable door whose centre is within `range` of `at` and
     // within 60 degrees of facing `yaw` (the U key without a mouse target).
     std::optional<std::uint8_t> nearest_door(const glm::vec3& at, float yaw, float range) const;

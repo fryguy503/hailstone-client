@@ -67,7 +67,7 @@ std::optional<float> ClientApp::nameplate_pixel_depth(glm::vec2 at) const {
     }
     if (world_objects_) {
         std::vector<WorldObjects::PickRef> unused;
-        world_objects_->pick_actors(actors, unused);
+        world_objects_->pick_actors(actors, unused, false);
     }
     game::PickScene scene;
     scene.world = pick_world();
@@ -87,7 +87,7 @@ std::optional<std::uint32_t> ClientApp::nameplate_at(glm::vec2 at) const {
     return pick_nameplate(plate_hits_, at, [&](const NameplateHit& hit) {
         const auto spawn = conn_->world().spawns.find(hit.id);
         if (spawn == conn_->world().spawns.end() || !nameplate_spawn_clickable(spawn->second) || !game::is_targetable(spawn->second) || !spawn->second.show_name ||
-            spawn->second.body_type == 11 || conn_->spawn_invisible(spawn->second, see_invisible)) return false;
+            conn_->spawn_invisible(spawn->second, see_invisible)) return false;
         if (!automation_ || !automation_->nameplates().owner_valid(hit.owner) || hit.incarnation != spawn->second.incarnation) return false;
         if (hit.through_walls) return true;
         if (!scene_read) { scene_depth = nameplate_pixel_depth(at); scene_read = true; }
@@ -102,7 +102,7 @@ bool ClientApp::activate_nameplate(std::uint32_t id) {
         plate_hit_serial_ != conn_->world().spawn_set_serial) return false;
     const auto spawn = conn_->world().spawns.find(id);
     if (spawn == conn_->world().spawns.end() || !nameplate_spawn_clickable(spawn->second) || !game::is_targetable(spawn->second) || !spawn->second.show_name ||
-        spawn->second.body_type == 11 || conn_->spawn_invisible(spawn->second, viewer_see_invisible_rank())) return false;
+        conn_->spawn_invisible(spawn->second, viewer_see_invisible_rank())) return false;
     const auto hit = std::find_if(plate_hits_.begin(), plate_hits_.end(), [id](const NameplateHit& h) { return h.id == id; });
     if (hit == plate_hits_.end()) return false;
     const NameplateHit observation = *hit;
@@ -121,13 +121,15 @@ bool ClientApp::activate_nameplate(std::uint32_t id) {
 bool ClientApp::click_world(const PickTarget& hit) {
     if (!world_objects_ || !conn_) return false;
     // CEverQuest::LMouseUp without a spawn: an item on the cursor is a key for ClickedSwitch when it is a key
-    // or a lockpick (item types 12, 33 and 39), else it goes to the ground; with an empty cursor, a ground item
-    // under the cursor is picked up (within 20), anything else goes to ClickedSwitch (doors).
+    // or a lockpick (game/clicks.h cursor_item_is_switch_key), else it goes to the ground; with an empty cursor, a
+    // ground item under the cursor is picked up (within 20), anything else goes to ClickedSwitch (doors).
     if (const net::Item* held = conn_->inventory().cursor()) {
-        bool key = held->item_type == 12 || held->item_type == 33 || held->item_type == 39;
-        return key && hit.kind == PickTarget::Kind::Door && use_door(static_cast<std::uint8_t>(hit.id));
+        if (!game::cursor_item_is_switch_key(held->item_type)) return false;
+        // The click is the key's whether or not a switch is under it, or uses it: it is never dropped.
+        if (hit.kind == PickTarget::Kind::Door) use_door(static_cast<std::uint8_t>(hit.id), hit.point);
+        return true;
     }
-    if (hit.kind == PickTarget::Kind::Door) return use_door(static_cast<std::uint8_t>(hit.id));
+    if (hit.kind == PickTarget::Kind::Door) return use_door(static_cast<std::uint8_t>(hit.id), hit.point);
     // CDisplay::GetClickedActor with climb: a ladder (actor type 6) is climbed (Ladder_MountClickedLadder).
     if (hit.kind == PickTarget::Kind::Ladder) {
         if (hit.id >= zone_ladders_.size()) return false;
@@ -154,7 +156,7 @@ void ClientApp::climb_ladder(const game::mechanics::LadderSwitch& ladder) {
     if (too_far) game_view_.chat.add(ui::ChatChannel::System, conn_->strings().format(game::mechanics::kStrLadderTooFar, {}));
 }
 
-bool ClientApp::use_door(std::uint8_t id) {
+bool ClientApp::use_door(std::uint8_t id, std::optional<glm::vec3> hit) {
     if (!conn_ || !world_objects_) return false;
     const game::Door* d = conn_->door(id);
     if (!d) return false;
@@ -170,11 +172,11 @@ bool ClientApp::use_door(std::uint8_t id) {
     auto use = game::clicked_switch(in, [&](std::int32_t skill) {
         return ch ? ch->adjusted_skill(static_cast<std::uint32_t>(skill)) : conn_->skill_value(static_cast<std::uint32_t>(skill));
     });
-    return conn_->click_door(id, world_objects_->door_radius(id), use.key, use.skill);
+    return conn_->click_door(id, world_objects_->door_radius(id), use.key, use.skill, hit);
 }
 
-bool ClientApp::door_reachable(std::uint8_t id) const {
-    return conn_ && world_objects_ && conn_->door_in_reach(id, world_objects_->door_radius(id));
+bool ClientApp::door_reachable(std::uint8_t id, std::optional<glm::vec3> hit) const {
+    return conn_ && world_objects_ && conn_->door_in_reach(id, world_objects_->door_radius(id), hit);
 }
 
 ClientApp::PickTarget ClientApp::pick_at(float x, float y, std::uint32_t required, std::uint32_t skip, const char* why) {
@@ -248,7 +250,7 @@ ClientApp::PickTarget ClientApp::pick_at(float x, float y, std::uint32_t require
     }
     if (world_objects_) {
         std::vector<WorldObjects::PickRef> wrefs;
-        world_objects_->pick_actors(actors, wrefs);
+        world_objects_->pick_actors(actors, wrefs, true);
         for (const auto& r : wrefs) {
             if (r.is_placed) refs.push_back({PickTarget::Kind::Placed, 0, {}, r.re, r.item});
             else refs.push_back({r.is_door ? PickTarget::Kind::Door : PickTarget::Kind::Object, r.id, {}});

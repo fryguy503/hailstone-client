@@ -13,6 +13,7 @@
 #include <glm/trigonometric.hpp>
 #include <glm/geometric.hpp>
 
+#include "app/light_tweaks.h"
 #include "assets/model.h"
 #include "game/fog.h"
 #include "game/inventory.h"
@@ -356,6 +357,88 @@ TEST_CASE("select_lights: dynamic lights first, then the zone's nearest, within 
     CHECK(game::select_lights({}, {}, {0, 0, 0}, 100.0f, 8).empty());
 }
 
+TEST_CASE("select_lights: a lit city's lamps all reach the characters within the lamp light distance") {
+    // 100 lamps 5 units apart along a street, each reaching 60: the old cap of 32 took only the first 31 after the
+    // carried light; the scene's list now takes them all.
+    std::vector<assets::PointLight> street;
+    for (int i = 0; i < 100; ++i) street.push_back({{static_cast<float>(i) * 5.0f, 0, 20}, {1, 0.8f, 0.5f}, 60.0f});
+    std::vector<game::LightSource> carried{{{0, 0, 4}, {1, 0.65f, 0.35f}, 65.0f}};
+    auto all = game::select_lights(street, carried, {0, 0, 0}, render::kLampLightDistance, render::kMaxSceneLights);
+    CHECK(all.size() == 101);
+    CHECK(all[0].radius == 65.0f); // the carried light first
+    // A shorter distance leaves the far lamps out: spheres more than 300 away (lamps past about 360).
+    auto near = game::select_lights(street, carried, {0, 0, 0}, 300.0f, render::kMaxSceneLights);
+    CHECK(near.size() < all.size());
+    for (std::size_t i = 1; i < near.size(); ++i) CHECK(near[i].position.x <= 361.0f);
+    CHECK(render::kMinLampLightDistance <= render::kLampLightDistance);
+    CHECK(render::kLampLightDistance <= render::kMaxLampLightDistance);
+}
+
+TEST_CASE("light tweaks: the presets, Default first, and Custom for sliders matching none") {
+    using app::kLightTweakPresets;
+    using app::LightTweaks;
+    REQUIRE(kLightTweakPresets.size() >= 2);
+    // Default is every slider's default: the carried lights the brightest alone, the rest as before.
+    CHECK(kLightTweakPresets[0].name == "Default");
+    const LightTweaks d = kLightTweakPresets[0].values;
+    CHECK(d == LightTweaks{});
+    CHECK(d.ambient_light == 100);
+    CHECK(d.baked_lamp_light == 100);
+    CHECK(d.lamp_light_distance == static_cast<int>(render::kLampLightDistance));
+    CHECK(d.carried_light == 100);
+    CHECK(d.carried_light_reach == 100);
+    CHECK(d.carried_light_stacking == 0);
+    CHECK(d.infravision_strength == 100);
+    CHECK(d.ultravision_strength == 100);
+    // Option 1.
+    CHECK(kLightTweakPresets[1].name == "Option 1");
+    const LightTweaks o = kLightTweakPresets[1].values;
+    CHECK(o == LightTweaks{40, 300, 700, 140, 80, 0, 10, 10});
+    // Which the sliders match; one moved off them is Custom (past the presets).
+    CHECK(app::light_tweak_preset(d) == 0);
+    CHECK(app::light_tweak_preset(o) == 1);
+    LightTweaks moved = o;
+    moved.ambient_light = 41;
+    CHECK(app::light_tweak_preset(moved) == kLightTweakPresets.size());
+    // Every preset's values lie in their sliders' ranges.
+    for (const auto& p : kLightTweakPresets) {
+        const LightTweaks& v = p.values;
+        CHECK((v.ambient_light >= 0 && v.ambient_light <= 100));
+        CHECK((v.baked_lamp_light >= 0 && v.baked_lamp_light <= static_cast<int>(render::kMaxBakedLamps * 100.0f)));
+        CHECK((v.lamp_light_distance >= static_cast<int>(render::kMinLampLightDistance) &&
+               v.lamp_light_distance <= static_cast<int>(render::kMaxLampLightDistance)));
+        CHECK((v.carried_light >= 0 && v.carried_light <= static_cast<int>(game::kMaxCarriedLight * 100.0f)));
+        CHECK((v.carried_light_reach >= static_cast<int>(game::kMinCarriedReach * 100.0f) &&
+               v.carried_light_reach <= static_cast<int>(game::kMaxCarriedReach * 100.0f)));
+        CHECK((v.carried_light_stacking >= 0 && v.carried_light_stacking <= 100));
+        CHECK((v.infravision_strength >= 0 && v.infravision_strength <= 100));
+        CHECK((v.ultravision_strength >= 0 && v.ultravision_strength <= 100));
+    }
+}
+
+TEST_CASE("carried light: the Carried Light and Carried Light Reach controls") {
+    const game::LightSource torch = *game::carried_light(2, {1, 2, 3});
+    // 1 and 1: as it was.
+    auto same = game::scaled_carried_light(torch, 1.0f, 1.0f);
+    REQUIRE(same);
+    CHECK(same->color == torch.color);
+    CHECK(same->radius == torch.radius);
+    CHECK(same->position == torch.position);
+    // Brighter and shorter.
+    auto bright = game::scaled_carried_light(torch, 2.0f, 0.5f);
+    REQUIRE(bright);
+    CHECK(bright->color.x == doctest::Approx(torch.color.x * 2.0f));
+    CHECK(bright->radius == doctest::Approx(torch.radius * 0.5f));
+    // Held to the limits.
+    auto most = game::scaled_carried_light(torch, 10.0f, 10.0f);
+    REQUIRE(most);
+    CHECK(most->color.x == doctest::Approx(torch.color.x * game::kMaxCarriedLight));
+    CHECK(most->radius == doctest::Approx(torch.radius * game::kMaxCarriedReach));
+    CHECK(game::scaled_carried_light(torch, 1.0f, 0.0f)->radius == doctest::Approx(torch.radius * game::kMinCarriedReach));
+    // 0 strength: no light at all.
+    CHECK_FALSE(game::scaled_carried_light(torch, 0.0f, 1.0f));
+}
+
 TEST_CASE("carried light: the brightest worn or general-slot item, and its look") {
     game::Inventory inv;
     CHECK(game::carried_light_value(inv) == 0);
@@ -473,16 +556,16 @@ TEST_CASE("particle lights: the glowing emitters, merged when close, by their ti
 TEST_CASE("make_scene_lighting: the shader block; classic carries no lights") {
     static_assert(sizeof(render::GpuPointLight) == 32);
     static_assert(sizeof(render::SceneLighting) ==
-                  30 * 16 + 4 * 64 + (2 * render::kMaxPointShadows + 1) * 16 + render::kMaxSceneLights * 32);
+                  31 * 16 + 4 * 64 + (2 * render::kMaxPointShadows + 1) * 16 + render::kMaxSceneLights * 32);
     game::SceneLight scene;
     scene.ambient = {0.1f, 0.2f, 0.3f};
     scene.directional = {0.5f, 0.5f, 0.5f};
     scene.vision_lift = {0.15f, 0.1f, 0.0f};
-    std::vector<game::LightSource> lights(40, game::LightSource{{1, 2, 3}, {0.5f, 0.25f, 1}, 30});
+    std::vector<game::LightSource> lights(render::kMaxSceneLights + 8, game::LightSource{{1, 2, 3}, {0.5f, 0.25f, 1}, 30});
     auto classic = render::make_scene_lighting(scene, lights, 1, render::LightingMode::Classic);
     CHECK(classic.params == glm::vec4(0, 0, 0, 0));
     CHECK(classic.ambient == glm::vec4(0.1f, 0.2f, 0.3f, 0));
-    CHECK(classic.vision == glm::vec4(0.15f, 0.1f, 0.0f, 0));
+    CHECK(classic.vision == glm::vec4(0.15f, 0.1f, 0.0f, 1)); // w: the zone lamps' pools, whole by default
     CHECK(classic.lights[0].position_radius == glm::vec4(0));
     // The smooth classic lighting is the classic one's light (only the zone shader and the tone curve differ).
     auto smooth = render::make_scene_lighting(scene, lights, 1, render::LightingMode::SmoothClassic);
@@ -505,6 +588,25 @@ TEST_CASE("make_scene_lighting: the shader block; classic carries no lights") {
     auto few = render::make_scene_lighting(scene, std::span(lights).first(2), 5, render::LightingMode::Modern);
     CHECK(few.params.y == 2.0f);
     CHECK(few.params.z == 2.0f); // no more dynamic lights than lights
+    // The zone's lamps as strong as display.baked_lamp_light makes them; the dynamic lights (here the first) as they
+    // are; the zone shader's pools by vision.w.
+    sky.lamp_light = 2.5f;
+    auto bright = render::make_scene_lighting(scene, lights, 1, render::LightingMode::Modern, sky);
+    CHECK(bright.lights[0].color == glm::vec4(0.5f, 0.25f, 1, 0));
+    CHECK(bright.lights[1].color == glm::vec4(1.25f, 0.625f, 2.5f, 0));
+    CHECK(bright.vision.w == 2.5f);
+    // The carried lights: none by default, and they add as every light does.
+    CHECK(modern.carried == glm::vec4(0, 1, 0, 0));
+    // The first `carried` of the dynamic lights, never more than the dynamic ones or the lights; the stacking 0..1.
+    auto crowd = render::make_scene_lighting(scene, lights, 6, render::LightingMode::Modern, sky, 4, 0.25f);
+    CHECK(crowd.carried == glm::vec4(4, 0.25f, 0, 0));
+    CHECK(render::make_scene_lighting(scene, lights, 2, render::LightingMode::Modern, sky, 4, 0.25f).carried.x == 2.0f);
+    CHECK(render::make_scene_lighting(scene, std::span(lights).first(1), 6, render::LightingMode::Modern, sky, 4)
+              .carried.x == 1.0f);
+    CHECK(render::make_scene_lighting(scene, lights, 6, render::LightingMode::Modern, sky, 4, 5.0f).carried.y == 1.0f);
+    CHECK(render::make_scene_lighting(scene, lights, 6, render::LightingMode::Modern, sky, 4, -1.0f).carried.y == 0.0f);
+    // The classic lighting carries no lights, so none of them are carried.
+    CHECK(render::make_scene_lighting(scene, lights, 6, render::LightingMode::Classic, sky, 4).carried.x == 0.0f);
 }
 
 TEST_CASE("lighting modes by name: enhanced is the old name of modern") {
@@ -647,6 +749,60 @@ TEST_CASE("daylight: the zone's baked colour by day, by night and indoors") {
     render::apply_storm(storm, 1.0f);
     CHECK(storm.baked < noon.baked);
     CHECK(storm.baked > 0.5f);
+}
+
+TEST_CASE("daylight: the ambient and baked lamp light controls darken the night and indoors, not the day") {
+    // Indoors at 0: no ambient and none of the baked colour's rest; the lamps' part stays at full lamp light.
+    auto inside = render::daylight(12.0f, false, 0.5f, 0.0f, 0.0f);
+    CHECK(inside.sky == glm::vec3(0.0f));
+    CHECK(inside.ground == glm::vec3(0.0f));
+    CHECK(inside.baked == 0.0f);
+    CHECK(inside.baked_lamps == doctest::Approx(render::kIndoorBakedLamps));
+    // Half way: half of each.
+    auto half = render::daylight(12.0f, false, 0.5f, 0.0f, 0.5f, 0.5f);
+    CHECK(half.baked == doctest::Approx(render::kIndoorBaked * 0.5f));
+    CHECK(half.baked_lamps == doctest::Approx(render::kIndoorBakedLamps * 0.5f));
+    CHECK(half.sky.x == doctest::Approx(0.03f));
+    CHECK(render::daylight(12.0f, false, 0.5f, 0.0f, 1.0f, 0.0f).baked_lamps == 0.0f);
+    // The lamps as real lights follow the same setting at any hour, indoors and out.
+    CHECK(render::daylight(12.0f, false).lamp_light == 1.0f);
+    CHECK(render::daylight(12.0f, false, 0.5f, 0.0f, 1.0f, 0.4f).lamp_light == doctest::Approx(0.4f));
+    CHECK(render::daylight(12.0f, true, 0.5f, 0.0f, 1.0f, 2.0f).lamp_light == doctest::Approx(2.0f));
+    CHECK(render::daylight(24.0f, true, 0.5f, 0.0f, 1.0f, 9.0f).lamp_light == doctest::Approx(render::kMaxBakedLamps));
+    // Above 1 the lamps light more than baked, up to kMaxBakedLamps.
+    CHECK(render::daylight(12.0f, false, 0.5f, 0.0f, 1.0f, 3.0f).baked_lamps ==
+          doctest::Approx(render::kIndoorBakedLamps * 3.0f));
+    CHECK(render::daylight(12.0f, false, 0.5f, 0.0f, 1.0f, 5.0f).baked_lamps ==
+          doctest::Approx(render::kIndoorBakedLamps * render::kMaxBakedLamps));
+    CHECK(render::daylight(24.0f, true, 0.1f, 0.0f, 1.0f, 2.0f).baked_lamps ==
+          doctest::Approx(render::kNightBakedLamps * 2.0f));
+    // By day nothing changes.
+    auto noon = render::daylight(12.0f, true);
+    auto noon_dark = render::daylight(12.0f, true, 0.5f, 0.0f, 0.0f, 0.0f);
+    CHECK(noon_dark.sky.x == doctest::Approx(noon.sky.x));
+    CHECK(noon_dark.sky.z == doctest::Approx(noon.sky.z));
+    CHECK(noon_dark.light.x == doctest::Approx(noon.light.x));
+    CHECK(noon_dark.baked == doctest::Approx(1.0f));
+    CHECK(noon_dark.baked_lamps == doctest::Approx(1.0f));
+    // A moonless night: no starlight floor, and the rest and the lamps' part gone.
+    auto down = render::daylight(24.0f, true, 0.1f);
+    auto down_dark = render::daylight(24.0f, true, 0.1f, 0.0f, 0.0f, 0.0f);
+    CHECK(down_dark.sky.z < down.sky.z);
+    CHECK(down_dark.baked == doctest::Approx(0.0f));
+    CHECK(down_dark.baked_lamps == doctest::Approx(0.0f));
+    CHECK(render::daylight(24.0f, true, 0.1f, 0.0f, 0.0f).baked_lamps == doctest::Approx(down.baked_lamps));
+    // Under the full moon its light and the sky it lights stay.
+    auto full = render::daylight(24.0f, true, 0.5f);
+    auto full_dark = render::daylight(24.0f, true, 0.5f, 0.0f, 0.0f);
+    CHECK(full_dark.light.z == doctest::Approx(full.light.z));
+    CHECK(full_dark.sky.z > 0.0f);
+    CHECK(full_dark.sky.z < full.sky.z);
+    CHECK(full_dark.baked == doctest::Approx(0.0f));
+    // The haze: as the ambient indoors and by night, whole by day.
+    CHECK(render::haze_ambient_scale(0.8f, false, 0.25f) == doctest::Approx(0.25f));
+    CHECK(render::haze_ambient_scale(-0.5f, true, 0.25f) == doctest::Approx(0.25f));
+    CHECK(render::haze_ambient_scale(0.8f, true, 0.0f) == doctest::Approx(1.0f));
+    CHECK(render::haze_ambient_scale(-0.5f, true, 1.0f) == doctest::Approx(1.0f));
 }
 
 TEST_CASE("under water: a blue-green medium lit from above, thick at every height, absorbing") {

@@ -398,6 +398,9 @@ How it works:
   kinds and search (`ui/modern/lib/find.lua`). The selected and hovered ones are marked always.
 - Positions are where the client has the spawn, so a walking NPC far off may be shown a little behind.
 
+A server add-on can limit Find to the zone server's advertised list. In that mode, Show Path requests the server's
+route and the Find window offers no automatic walk. Map and minimap marker permissions follow the separate map policy.
+
 ### The guide path
 
 `app/guide_path.h`: a trail from the player to the NPC over the client's own mesh (`Navigator::plan_between`, the
@@ -453,7 +456,10 @@ server, which EQEmu does not send (`docs/unknowns.md`). The World view draws the
   with a breadcrumb back to the world.
   - A region click opens its page; a zone click selects it.
   - A double click shows its map in the Zone view, with a bar back to your own (without the player, find path or
-    height fade); closing the window goes back to your zone.
+    height fade). While the window is closed the minimap shows your own zone again; reopening it shows the
+    browsed map, until zoning or logging out.
+  - The page, zoom and centre stay when the window or the World view closes; zoning or logging out goes back to
+    your zone's page and clears the selected zone.
   - Your zone pulses, the selected zone is outlined, and the zones of the route followed are numbered and joined.
 - **The zone finder.** Every zone the atlas links that the server has (below), by the zone table's long name or the
   atlas' tooltip and its short name (prefix and word matches first); with nothing typed, the zones of the page shown.

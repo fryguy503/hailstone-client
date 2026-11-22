@@ -12,8 +12,10 @@
 //         + 0.25 (CheckRegionChange, FeetEnvironmentChange)
 
 #include <cstdint>
+#include <optional>
 
 #include "game/mechanics/fpu.h"
+#include "game/sound_rules.h"
 
 namespace hailstone::game::mechanics {
 
@@ -83,5 +85,32 @@ struct RegionChange {
 // PlayerClient::CheckRegionChange @0x508e10.
 RegionChange check_region_change(RegionSpawn& spawn, const RegionPoint& position, const RegionZone& zone,
                                  RegionQueries& q, const Fpu& fpu = Fpu{});
+
+// ---- the liquid region under the feet -------------------------------------
+
+// PlayerClient::SetFeetWetness @0x59ec30: the sound of the type of the region
+// under the feet changing. The type is the region flags' lowest byte, kept in
+// the spawn's +0xa1; the sound plays only on a change.
+//   - to type 7, or from a nonzero type to 0: 0x63 (out of the water);
+//   - to types 5, 6, 8, 9 or 10: 0x64 (into the water) when the vertical speed
+//     is at least 1 or at most -1 (a NaN is neither), else nothing;
+//   - to any other type: nothing.
+// The type values are assets::RegionType's (assets/regions.h).
+inline constexpr std::uint8_t kRegionWaterType = 5;         // "WT", EQG "AWT"
+inline constexpr std::uint8_t kRegionSlimeType = 6;         // "SL"
+inline constexpr std::uint8_t kRegionLavaType = 7;          // "LA", EQG "ALV"
+inline constexpr std::uint8_t kRegionFreezingWaterType = 8; // "VW", EQG "AVW"
+inline constexpr std::uint8_t kRegionWater2Type = 9;        // "W2"
+inline constexpr std::uint8_t kRegionWater3Type = 10;       // "W3"
+inline constexpr float kWaterVerticalSpeed = 1.0f;          // 0x59ec6b: >= 1 or <= -1
+class FeetWetness {
+public:
+    std::optional<std::int32_t> change(std::uint32_t flags, float speed_z);
+    void reset() { type_ = 0; }
+    std::uint8_t type() const { return type_; } // +0xa1
+
+private:
+    std::uint8_t type_ = 0;
+};
 
 } // namespace hailstone::game::mechanics

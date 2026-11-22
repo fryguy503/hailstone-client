@@ -119,6 +119,7 @@ public:
         std::optional<std::int32_t> fall_damage; // IHaveFallen ran: the damage (0: none or the first fall)
         float landing_speed = 0.0f;        // SpeedZ at the landing
         bool land_sound = false;           // LandingAndFallCheck's landing sound (0x72)
+        std::vector<std::int32_t> water_sounds; // the feet's region type changed (0x59ec30), in order
         bool wet = false;                  // the body is in a liquid region
         bool flying = false;               // levitating or flying (the physics object's +0xc)
         bool running = true;               // run mode (__RunWalkState), for the walk / run animation
@@ -140,7 +141,7 @@ public:
         float speed_run = 0.0f;            // SpeedRun +0x7c
         float speed_heading = 0.0f;        // SpeedHeading +0x8c (turning)
         std::uint8_t body_wet = 0;         // BodyWet +0xa2
-        std::uint8_t feet_wet = 0;         // the region type at the feet (FeetWet +0xa1's writer is not traced)
+        std::uint8_t feet_wet = 0;         // the region type at the feet (its own sample; FeetWetness is +0xa1)
         std::uint8_t head_wet = 0;         // HeadWet: the region type at the eyes (5 = under water)
         std::int32_t colliding_type = 0;   // CollidingType +0x24 (6: on a ladder)
         // With set_trace: DoCollisionMovement's decisions this frame (sweeps, the world test, CanIFitHere with
@@ -262,6 +263,7 @@ private:
     game::mechanics::MovementController ctl_;
     bool instant_mount_acceleration_ = false;
     game::mechanics::RegionSpawn feet_regions_; // CheckRegionChange's fields (+0x9c held flags, +0x2e1)
+    game::mechanics::FeetWetness feet_wetness_; // the feet's region type (+0xa1) and its sound
     std::int32_t encumbered_shown_ = 0;
     std::uint32_t last_second_ = 0;
     std::uint32_t last_step_ = 0; // the last Step's time (PhysicsObject +0x30)

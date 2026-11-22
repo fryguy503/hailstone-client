@@ -33,7 +33,7 @@ Work in progress and known gaps are tracked in the [plan](https://github.com/pro
 
 | | Minimum |
 |---|---|
-| **Operating system** | Linux x64: Ubuntu 24.04 or a distribution of the same age or newer (the release is built against its glibc).<br>Windows x64: Windows 10 version 1903 or later.<br>macOS on Apple Silicon (arm64), 13.3 or later: test builds only (below).<br>Intel Macs and Linux or Windows on arm64: build from source (no release packages). |
+| **Operating system** | Linux x64 and arm64: Ubuntu 24.04 or a distribution of the same age or newer (the release is built against its glibc). Linux arm64 has only been tested on a Qualcomm Snapdragon 8 Elite (an AYN Odin 3 Max, Mesa's Turnip driver).<br>Windows x64: Windows 10 version 1903 or later.<br>macOS on Apple Silicon (arm64), 13.3 or later: test builds only (below).<br>Intel Macs and Windows on arm64: build from source (no release packages). |
 | **Graphics** | A GPU and driver with Vulkan 1.3 and the features listed below. On macOS, MoltenVK, which comes with Hailstone. |
 | **Game data** | Your own RoF2-compatible game folder: a RoF2 install or a current live one. Hailstone never writes to it. |
 | **Server** | An EQEmu server that accepts RoF2 clients. |
@@ -52,7 +52,7 @@ Memory, VRAM and CPU minimums have not been measured yet.
 
 ## Download
 
-Release packages for Linux x64 and Windows x64 are on the [releases page](https://github.com/projecthailstone/hailstone-client/releases). Unzip one anywhere and run `hailstone` (`hailstone.exe` on Windows). Hailstone updates itself from then on.
+Release packages for Linux x64, Linux arm64 and Windows x64 are on the [releases page](https://github.com/projecthailstone/hailstone-client/releases). Unzip one anywhere and run `hailstone` (`hailstone.exe` on Windows). Hailstone updates itself from then on. The Linux arm64 package has only been tested on a Qualcomm Snapdragon 8 Elite (an AYN Odin 3 Max); reports from other arm64 devices are welcome.
 
 macOS on Apple Silicon has test builds only, as pre-releases on the same page; each one's notes say how to start it. They are not signed with an Apple Developer ID, so clear the download's quarantine first (`xattr -dr com.apple.quarantine <folder>`).
 

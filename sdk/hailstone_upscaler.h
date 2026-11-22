@@ -4,8 +4,8 @@
  *
  * A provider is a .dll / .so / .dylib in upscalers/<name>/ of the Hailstone folder, named after its folder
  * (<name>.dll, <name>.so, <name>.dylib), with whatever runtime it needs beside it. It is not a game plugin: it loads
- * once, at the start, when display.upscaler names it, before the client makes its Vulkan instance; no server sends
- * one or decides about one; it has no host table and no capabilities. It runs where the client's own temporal
+ * once, at the start, when display.upscaler names it, before the client makes its Vulkan instance. Its rendering
+ * host table is independent of the game plugin capabilities. It runs where the client's own temporal
  * resolve would, on the same inputs: the scene drawn jittered at the render size, its depth, its motion and its
  * reactive mask, and writes the picture at the view's size. The client tonemaps, grades and draws the UI after it,
  * and its frame generation follows the same motion.
@@ -41,6 +41,7 @@
 #define HAILSTONE_UPSCALER_H
 
 #include <stdint.h>
+#include "hailstone_ui_contribution.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -153,8 +154,9 @@ typedef struct HailstoneUpscalerFrame {
 
 #define HAILSTONE_UPSCALER_SHARPENS 0x1u /* it sharpens its output by HailstoneUpscalerFrame::sharpness itself: the
                                           * client's own sharpening (RCAS) does not run after it */
+#define HAILSTONE_UPSCALER_MAX_UI_CONTRIBUTIONS 32u
 
-/* The provider's table, returned by hailstone_upscaler and kept until destroy. Every function is required. */
+/* The provider's table, returned by hailstone_upscaler and kept until destroy. Functions through destroy are required. */
 typedef struct HailstoneUpscaler {
     uint32_t abi;   /* HAILSTONE_UPSCALER_ABI the provider was built for */
     uint32_t size;  /* sizeof(HailstoneUpscaler) */
@@ -191,6 +193,12 @@ typedef struct HailstoneUpscaler {
     int (*evaluate)(void* host, const HailstoneUpscalerFrame* frame);
     /* Frees everything; the device is idle. Called once create succeeded, before the device is destroyed. */
     void (*destroy)(void* host);
+
+    /* Optional ABI 1 tail. While the provider is active, the UI can ask for a snapshot of notices and disabled
+     * controls. Assign *entries and return its count, or return 0. The array, records and strings must remain
+     * valid until the next call into the provider. The client copies up to HAILSTONE_UPSCALER_MAX_UI_CONTRIBUTIONS
+     * entries. action_label and command must be NULL. This is on the same thread as the other calls. */
+    uint32_t (*ui_contributions)(void* host, const HailstoneUiContribution* const** entries);
 } HailstoneUpscaler;
 
 /* The one export: `HAILSTONE_UPSCALER_API const HailstoneUpscaler* hailstone_upscaler(const HailstoneUpscalerHost*

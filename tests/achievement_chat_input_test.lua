@@ -96,6 +96,7 @@ for _,pack in ipairs({"modern","gamepad"})do
   dofile=function(path)
     if path=="lib/chatlinks.lua"then return helpers[pack]end
     if path=="lib/stml.lua"then return S end
+    if path=="lib/textselect.lua"then return assert(loadfile(CLIENT_ROOT.."/ui/modern/lib/textselect.lua"))()end
     if path=="lib/theme.lua"then return T end
     if path=="lib/pad.lua"then return pad end
     if path=="lib/window.lua"then return W end

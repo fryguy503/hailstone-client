@@ -1688,6 +1688,67 @@ evenly at any hour. The modern light splits it per pixel:
 The half MPL term falls with the lamps' part, so no lamp counts three times (baked, MPL, pool). A storm takes up to
 a quarter more off the rest.
 
+#### Modern lighting: ambient and baked lamp light
+
+Two sliders (Options; Hailstone's own, percent, 100 by default and as above) darken the night and the dungeons
+(`render::daylight`'s `ambient` and `baked_lamps`, `render::haze_ambient_scale`, `ClientApp::scene_lighting`):
+
+- **Ambient Light** (`display.ambient_light`): the fill light that keeps the dark readable.
+  - Indoors: the hemisphere ambient and the baked colour's rest (0.5).
+  - Outdoors by night: the starlight floor and the baked colour's rest (0.3, 0.45 under the full moon).
+  - Everywhere: the special ambient (the zone's global ambient, the vision floor's grey) and the floor under
+    characters and objects.
+  - The haze's colour, indoors and by night: the haze is lit air, and left whole it turns the dark distance grey.
+- **Baked Lamp Light** (`display.baked_lamp_light`, 0 to 300 %): how strong the zone's lamps are.
+  - The baked colour's lamps' part indoors (0.7) and by night (0.35), and the half MPL term with it.
+  - The same lamps as real lights, at any hour (`Daylight::lamp_light`): their light on characters and objects (the
+    zone lights in the scene's light list, after the dynamic ones) and their pools on the zone (`vision.w`), so a
+    character under a lamp matches the wall beside it. Carried lights and spells are left as they are.
+  - Above 100 % the lamps light their rooms more than the builders baked (`render::kMaxBakedLamps`).
+  - The special ambient is scaled before `ZoneRenderer::set_scene_light`, which the zone shader takes it from.
+- **Carried Light** and **Carried Light Reach** (`display.carried_light`, 0 to 300 %; `display.carried_light_reach`,
+  25 to 200 %; `game::scaled_carried_light`): the colour and the radius of every carried light, the player's and other
+  carriers' alike (a torch reaches 65 units, the brightest light values 125 and 135). At 0 % strength none is made;
+  the player's light's shadow cube follows its scaled radius.
+- **Carried Light Stacking** (`display.carried_light_stacking`, 0 to 100 %, 0): lights add where they overlap, so a
+  crowd of torch carriers lit a spot as brightly as all their torches together; by default only the brightest counts. The carried lights go first in the
+  scene's list (chosen apart from the other lights) and `SceneLighting::carried` says how many; each pixel takes the
+  brightest of them plus this share of what the others add (`add_scene_light`, `carried_light_total` in
+  `shaders/lighting.glsl`; characters, objects, plants and the zone). Lamps and spells still add. Particles, lit on
+  the CPU (`ParticleLight`), add them all.
+- **Lamp Light Distance** (`display.lamp_light_distance`, 100 to 1500 units, 600): which of the zone's lamps light the
+  characters, objects and plants: those whose sphere comes within it of the camera, nearest first, after the dynamic
+  lights, up to `render::kMaxSceneLights` (128; it was 32, which a lit city or dungeon filled about 130 units round
+  the player, so people further off walked under lamps unlit). The zone's surfaces take every lamp from their light
+  grid at any distance.
+
+At 0 both, only the sun, the moon and the sky it lights, the lamps' pools, carried lights, spells and the lightning
+light the scene (infravision and ultravision have strengths of their own, below); a moonless night without a light
+is black. The day is the same at any setting. Classic and smooth classic lighting ignore both.
+
+#### Light tweaks
+
+The Lighting page's **Light Tweaks** dropdown (above Ambient Light; `app/light_tweaks.h`) sets the light sliders
+together: Ambient Light, Baked Lamp Light, Lamp Light Distance, Carried Light, Carried Light Reach, Carried Light
+Stacking, Infravision Strength and Ultravision Strength. It saves nothing of its own: it shows the first preset the
+sliders match (display option `light_tweaks`), or Custom once one is moved off them.
+
+| Preset | Ambient | Baked lamps | Lamp distance | Carried | Reach | Stacking | Infravision | Ultravision |
+|---|---|---|---|---|---|---|---|---|
+| Default | 100 % | 100 % | 600 | 100 % | 100 % | 0 % | 100 % | 100 % |
+| Option 1 | 40 % | 300 % | 700 | 140 % | 80 % | 0 % | 10 % | 10 % |
+
+A new preset is a row of `kLightTweakPresets`; the dropdown's names come from it (`option_choices("light_tweaks")`).
+
+#### Infravision and ultravision strength
+
+The original raises the ambient (and the special ambient's floor) to infravision's (65, 50, 50)/255 or ultravision's
+(80, 80, 120)/255 in place of the plain 0.08 grey (`game::update_sky_weather_and_fog`). `display.infravision_strength`
+and `display.ultravision_strength` (Options, Infravision Strength and Ultravision Strength; Hailstone's own, percent)
+ease that floor from the plain one (0 %, as without the vision) to the original's (100 %, the default, computed
+exactly as before). Every lighting mode takes it: classic through the ambient and special ambient, modern through
+the raise (`SceneLighting::vision`) and the special ambient.
+
 #### Modern lighting: the ambient probe
 
 `render/ambient_probe.h` averages the zone's vertex colours round the player (24-unit cells, two cells each way,
@@ -1851,7 +1912,8 @@ A grid of vertices covers the zone's squares and 2500 units past them, 64 units 
 zone, so that part is at most 256 squares across), then wider by 12 % a step out to 10000 units. Vertices are tucked
 down so the land meets the zone's edge without a gap and stays under its ground:
 
-- in a covered square, 40 units under its lowest terrain;
+- below the lowest terrain of every covered square a mesh quad overlaps, with 40 units of clearance, so the mesh
+  stays under the zone where the ground drops sharply;
 - in the empty square beside one, 5 units under the lowest terrain beside it (a wall's foot), or 40 under the zone's
   water where only water is beside it.
 
@@ -2527,6 +2589,14 @@ labels.
 | `display.horizon_hills` | 0, 1 | 1 | land round an outdoor zone past its edges (Horizon hills); modern only; viewer `--no-horizon` |
 | `display.zone_fog` | 0, 1 | 1 | fog bank on the ground past an outdoor zone's edge (Zone edge fog, Zone Edge Fog); modern only; viewer `--no-zone-fog` |
 | `display.volumetric_clouds` | 0, 1 | 1 | clouds marched through the air over plain skies, replacing the painted cloud layer and patches (Volumetric Clouds); modern only; viewer `--no-clouds` |
+| `display.infravision_strength` | 0 .. 100 | 100 | how far infravision raises the dark, percent of the original's (Infravision Strength); 0 as without it; every lighting mode |
+| `display.ultravision_strength` | 0 .. 100 | 100 | the same for ultravision (Ultravision Strength) |
+| `display.ambient_light` | 0 .. 100 | 100 | the fill light in the dark, percent (Ambient Light): the indoor and starlight ambient, the baked colour's rest indoors and by night, the special ambient, the characters' floor and the haze's colour in the dark (Modern lighting: ambient and baked lamp light); modern only |
+| `display.carried_light` | 0 .. 300 | 100 | how bright carried lights are, the player's and every carrier's, percent (Carried Light); 0 none; modern only |
+| `display.carried_light_reach` | 25 .. 200 | 100 | how far carried lights reach, percent of their radius (Carried Light Reach); modern only |
+| `display.carried_light_stacking` | 0 .. 100 | 0 | where carried lights overlap, how much the others add to the brightest, percent (Carried Light Stacking); 0 the brightest alone, 100 they all add; modern only |
+| `display.lamp_light_distance` | 100 .. 1500 | 600 | how far from the camera (to the light's sphere) the zone's lamps are taken for characters, objects and plants, units (Lamp Light Distance); at most `render::kMaxSceneLights` (128) lights with the dynamic ones; the zone's own surfaces take every lamp; modern only |
+| `display.baked_lamp_light` | 0 .. 300 | 100 | how strong the zone's lamps are, percent (Baked Lamp Light): the baked colour's lamps' part indoors and by night, and their real light on characters and in their pools; modern only |
 | `display.worker_threads` | -1, 0 .. 16 | -1 | frame's worker threads (Worker threads); -1 one fewer than hardware threads, at most 6; 0 none; start-up |
 | `display.particle_offscreen_hold` | 0, 1 | 1 | an actor out of view (or past 500 units in classic lighting) emits no particles of its own (Particles; a deliberate difference); 0 emits everywhere, as the original; start-up |
 | `display.parallel_record` | 0, 1 | 1 | scene and shadow layer draws recorded on worker threads into secondary command buffers (Worker threads); 0 on the main thread; start-up |
@@ -2553,7 +2623,6 @@ labels.
 | `display.flora_distance` | units, 400 .. 1200 | 400 | how far flora is drawn (Radial flora) |
 | `display.grass_density` | percent, 25 .. 300 | 100 | how thick Hailstone's lawn grows (`render::lawn_lod_blades`) |
 | `display.zone_flora` | on, off | on | Hailstone's flora for zones with a rules file (Zone flora); zone load |
-| `display.extra_shields` | on, off | on | a deliberate difference: shields RoF2 does not list (`game::is_shield_model`, docs/formats/characters.md "Held items") go on the shield point, not in the hand; start-up |
 | `display.texture_folder` | pack name, absolute folder, off | `textures/default` | replacement textures (Texture overrides; note 5) |
 | `display.fov` | fov units | none | field of view in 512ths of a circle (none: the classic 90, 63.3 degrees across below an aspect of 2); Options shows degrees, 45 .. 120 |
 | `display.gpu_tier` | low, medium, high | (detected) | tier the first start found (Detected settings); while present, detection does not run; kept in `hailstone.ini` with a character's settings |

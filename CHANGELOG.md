@@ -4,6 +4,52 @@
 
 - Enhanced follow tracks the leader's swimming depth over submerged terrain.
 - Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.
+- **Linux arm64 release package** (`hailstone-<version>-linux-arm64.zip`) for arm64 handhelds, boards and laptops with a Vulkan 1.3 driver, such as Mesa's Turnip on Snapdragon; it updates itself like the x64 one. So far it has only been tested on a Qualcomm Snapdragon 8 Elite (an AYN Odin 3 Max)
+- Modern Player Info: right-click the frame to show mana and endurance percentages, current / maximum values, or both. Each readout defaults to off.
+- `/consider` with no target says "Consider whom?", and considering a ship or boat says "You can't consider that." without asking the server, as in the original client.
+- Considering an NPC or player corpse shows its remaining decay time in chat. Player corpses also show their resurrection time or status.
+- Server add-ons can offer Find for the zone server's advertised NPCs and draw the paths returned by the server.
+- Added `/import` to preview eligible socials and hotbar buttons from game data, fill empty slots, and restore the previous character settings from a backup.
+- The map remembers its zoom and position when reopened in Modern and Gamepad. Zoning or logging out resets the view.
+- Fixed stale Hide indicators on other players' nameplates after the server cancels Hide during combat.
+- When the server ends your Hide or Sneak, the chat says so, as in the original client.
+- Memorize individual spells and saved spell sets, or scribe scrolls, while mounted and stopped.
+- Closing the spell book aborts a scribe in progress with "Aborting scribing of spell.", as in the original, instead of pausing it or dropping it silently.
+- Copy Layout can also bring over another character's keyboard bindings, including movement remaps and alternate keys.
+- Your bow appears in your left hand during the archery animation, then your equipped melee weapons or shield return.
+- Archery holds your bow in your left hand, as the original client does: from the first shot until your next melee swing, which brings back your weapons or shield. Other players in the zone see it too.
+- Options can show notices from active add-ons and explain why a setting is unavailable. Notices from several add-ons can appear together in Modern and Gamepad. No add-on can disable the Upscaler, UI pack or Texture pack choice, so the way out of an add-on or a broken pack stays open.
+- Clicking a dead member's name in the Group window targets their corpse when it is in the zone.
+- Tab and the other NPC target keys now pick only nearby NPCs on screen by default, and closed doors and placed objects hide NPCs as walls do. Separate options allow targeting through walls and doors or off-screen.
+- Item descriptions and comparisons show named weapon procs and other item effects even when the spell ID or its local definition is unavailable.
+- NPCs keep their current tint when a live update sends zero or an out-of-range palette index.
+- Bane damage in item descriptions names the creature type with the game's own labels instead of "body type N". A server's body-type change (SetBodyType, read against `Resources/CharacterPropertySets.txt`) updates spell checks and targeting.
+- Raid chat uses the new leader's name when the server supplies it in either name field and skips blank announcements.
+- Which off-hand items are worn as shields now comes from your game folder's `Resources\ActorTagInfo.txt`, as in the original client, so the shields a server's client files add are worn on the forearm. Without that file the original's built-in list is used
+  - `display.extra_shields` and Hailstone's own extra shield list are gone; a few weapons that shared a shield's model are held in the hand again
+- **Individual Sounds** (Options, Audio, modern interface; a Sounds page in the gamepad interface): a volume from 0 to 100 % for each of nine tiresome sounds, on top of Sound Effects, with a Test button and a reset to 100 %
+  - Own footsteps (steps, jumps, landings), pet footsteps, other footsteps, opening a bag, opening a bank bag, money, thunder, equipping items and creature ambient sounds (spectres and the like)
+- Add-ons can draw on the zone map and the minimap through `hs.UI.map.RegisterOverlay`, whichever add-on's `map.lua` or `minimap.lua` draws the view (docs/ui-api.md "Map overlays")
+- Fixed Horizon Hills scenery protruding through the ground near cliffs in Trakanon's Teeth and at the Stonebrunt waterfall.
+- A GM's /kill now drops you to -10000 HP, as in the original client, until the server next updates your HP (it only played the sound and printed the line)
+- Door clicks use the distance to the spot you clicked, fixing long-range zoning through the Guild Lobby entrance. The Plane of Fire orb in Plane of Tranquility can also be clicked.
+- Dropped items and ground spawns whose model has no solid surface can be clicked, as see-through doors such as the Plane of Fire orb already can
+- A key or lockpick on the cursor is no longer offered for dropping when a click in the world misses a door or the door refuses it, as in the original
+- Buying from or selling to a merchant, and buying from a trader, plays the cash register and prints the line in the Merchants chat colour, as in the original
+- **Ambient Light** and **Baked Lamp Light** sliders (Options, Lighting; modern lighting) for darker nights and dungeons
+  - Ambient Light at 0%: only the sun, the moon, torches, lamps and spells light the world, and the distance no longer glows grey in the dark
+  - Baked Lamp Light sets how strong a zone's lamps are, from 0% to 300%: the walls they light and the light they cast on characters walking past
+- **Carried Light** and **Carried Light Reach** sliders (Options, Lighting; modern lighting): how bright torches, lanterns and lightstones are and how far they reach, yours and everyone else's
+  - **Carried Light Stacking** sets how much overlapping carried lights add up: at 0%, the default, a crowd of torches lights no more than the brightest one
+- **Light Tweaks** (Options, Lighting): presets that set all the light sliders at once. **Default** puts them back to normal; **Option 1** is a darker look with brighter lamps
+- Lamps in busy cities and dungeons now light characters across the whole room, not only those near you; **Lamp Light Distance** (Options, Lighting) sets how far
+  - Daytime is unchanged
+- **Infravision Strength** and **Ultravision Strength** sliders (Options, Lighting): 100% is the original game's, 0% is as without it
+- Modern chat: select text in a chat window with the mouse and copy it with Ctrl+C or the right-click menu's **Copy**
+  - Drag to select, double-click for a word, triple-click for a line, Shift+click to extend; links still open with a click
+- Modern chat: a word wider than the chat window (a long name or a run with no space) wraps onto the next rows instead of being cut off at the edge
+- Item descriptions show personal and guild tribute values. Both Tribute Master layouts preview the favor for the held item or stack before you donate.
+- The direct Give prompt no longer appears for service NPCs that refuse item handoffs, including tribute masters.
 - Your own name is in parentheses while you are hidden, as in the original client (it was plain). Sneak alone adds none
 - The sample `hailstone.cfg` now includes the Ability Book's autoskill switch, and the server guide shows how to disable autoskill and Lua socials
 - Loot All takes NO DROP items from your own corpse without confirmation after a same-zone resurrection
@@ -22,6 +68,7 @@
   - The shake moves only the camera, never the player, and a zone change ends it
 - Modern hotbars: **Lock layout** keeps hotbuttons in their slots and blocks edits while leaving activation and page changes available.
   - A bar locked with the old row keeps its frame lock (**Lock this frame**); turn Lock layout on again to protect its buttons
+- `/target <name>` picks as the original client does instead of taking the nearest match: a spawn's whole name wins (a player over the mount named after them), and otherwise a matching player is picked over anything less than 50 units nearer. Typed searches such as `/target npc orc` still take the nearest
 - Native nameplate add-ons can draw the same guild tags, NPC descriptions and pet owner names as stock nameplates.
 - The server can now change a spawn's last name while you watch
   - It shows wherever name plates and the target window show last names, following your name-plate settings, and your own is updated too
@@ -102,6 +149,10 @@
 - Modern Buffs and Songs: **Show empty slots** keeps gaps in the tray, and **Show slot numbers in tooltips** adds the slot number after the spell name. Both are off by default and available with Alt-right-click on an icon
 - Zone lines between East Freeport and North Ro, and from Surefall Glade to Qeynos Hills, report the crossing position the server expects, shifted into the next zone's coordinates as the original client does, so a server whose zone point keeps the player's own coordinate places them correctly
 - When the server renames your own character, the client takes the new name everywhere: your corpse, group and raid leadership, and the next zone you enter, as the original does
+- Six sounds the original client plays now play here too: moving an item with a click, opening and closing bags and containers, an adventure's win and loss, a quest reward, being struck down by the gods, and entering or leaving water
+  - The item sound plays for every pick-up and put-down, as the original's does, and for an auto-equip
+  - A bag sounds like its chest type where the original uses one, and like a cloth item otherwise; opening all bags plays once per bag, and a bag picked up while open closes with its sound
+  - Water plays for the local player only, from the same wetness and vertical-speed test as the original
 
 ## 0.7.2-beta (2026-11-19)
 

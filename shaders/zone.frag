@@ -184,20 +184,23 @@ vec3 modern_light(vec3 n, vec3 sn, bool foliage) {
     float water_sun, water_sky;
     underwater_light(water_map, scene.cover, scene.cover_params, v_world, scene.to_light, scene.time.x, water_sun,
                      water_sky);
-    vec3 light = pools + baked_to_linear(baked + scene.special_ambient.rgb + points * scene.ground.w) +
+    // The pools as strong as the lamps shine (render::Daylight::lamp_light, display.baked_lamp_light).
+    vec3 light = pools * scene.vision.w + baked_to_linear(baked + scene.special_ambient.rgb + points * scene.ground.w) +
                  a * (hemisphere(sn, scene.sky.rgb, scene.ground.rgb) * water_sky + scene.light.rgb * ndl * water_sun +
                       scene.vision.rgb);
     // The dynamic lights, stopped where something stands in their way (the carried light and the brightest spells
     // have shadow cubes of their own; render/point_shadows.h set_dynamic).
     int count = int(scene.params.z + 0.5);
+    vec3 carried_sum = vec3(0.0), carried_top = vec3(0.0);
     for (int i = 0; i < count; ++i) {
         vec3 c = point_light_modern(scene.lights[i], v_world, sn, foliage ? 0.5 : 0.0);
         // Out of reach or facing away: nothing to shadow (the product is 0 either way).
         if (c != vec3(0.0))
-            light += c * scene_light_shadow(point_map, scene.point_shadow_light, scene.point_shadow_slot,
-                                            scene.point_shadow_params, scene.lights[i], v_rest, n);
+            add_scene_light(light, carried_sum, carried_top, scene.carried, i,
+                            c * scene_light_shadow(point_map, scene.point_shadow_light, scene.point_shadow_slot,
+                                                   scene.point_shadow_params, scene.lights[i], v_rest, n));
     }
-    return light;
+    return light + carried_light_total(carried_sum, carried_top, scene.carried);
 }
 
 // ---- The modern lighting's water and lava ----

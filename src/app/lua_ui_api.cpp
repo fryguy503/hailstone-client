@@ -14,7 +14,9 @@ namespace {
 using plugin::kCapActions;
 using plugin::kCapCommands;
 using plugin::kCapMove;
+using plugin::kCapRead;
 using plugin::kCapTarget;
+using plugin::kCapUi;
 
 constexpr std::string_view kHookable[] = {
 #define UI_METHOD(binding, module, member, caps)
@@ -169,7 +171,7 @@ void push_version(lua_State* L) {
     lua_createtable(L, 0, 2);
     lua_pushinteger(L, 1);
     lua_setfield(L, -2, "major");
-    lua_pushinteger(L, 8);
+    lua_pushinteger(L, 10);
     lua_setfield(L, -2, "minor");
 }
 

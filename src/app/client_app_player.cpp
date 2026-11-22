@@ -695,6 +695,7 @@ void ClientApp::update_player(float dt) {
     // pass and the position report, as the original ran them once per frame at 60 frames a second.
     const MovementKeys frame_keys = mk;
     motion_.jumped = motion_.land_sound = false; // this frame's events, gathered over its steps
+    motion_.water_sounds.clear();
     motion_.fall_damage.reset();
     auto run_step = [&](const core::StepClock::Step& st) {
         // Query extensions before retaining any pointers into the received actor set.
@@ -1091,6 +1092,7 @@ void ClientApp::update_player(float dt) {
         motion_.flying = frame.flying;
         motion_.jumped = motion_.jumped || frame.jumped;
         motion_.land_sound = motion_.land_sound || frame.land_sound;
+        motion_.water_sounds.insert(motion_.water_sounds.end(), frame.water_sounds.begin(), frame.water_sounds.end());
         if (frame.fall_damage && !motion_.fall_damage) motion_.fall_damage = frame.fall_damage;
         yaw_ = frame.yaw;
 

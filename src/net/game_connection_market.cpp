@@ -28,6 +28,11 @@ namespace hailstone::net {
 
 namespace {
 
+// EqSoundManager::WavePlay(0x8a): BuyItem.wav, the cash register of a completed sale (Barter_ReportItemSold
+// @0x421230, Barter_ReportItemBought @0x421ae0; FinishBuyingItem @0x6ef220 for a merchant or a trader's purchase).
+constexpr std::uint32_t kCashRegisterSound = 0x8a;
+// The colour the original gives a merchant's line: 0x114 (276, the Merchants chat filter).
+constexpr std::uint32_t kMerchantsColour = 0x114;
 constexpr float kInteractRange = 20.0f; // PlayerClient_IsWithinInteractRange(.., 1, 20.0f)
 
 std::string eq(const game::EqStrings& s, std::uint32_t id, std::vector<std::string> args = {}) {
@@ -384,10 +389,17 @@ void GameConnection::handle_trader_purchase(const TraderBuy& in) {
     if (b.method == 0) {
         if (merchant_ && merchant_->pending > 0) --merchant_->pending;
         if (b.sub_action == 0) {
-            // CMerchantWnd::FinishBuyingItem: the price leaves the purse (1437).
+            // CMerchantWnd::FinishBuyingItem: the price leaves the purse, the wave, then the line (1437).
             std::int64_t total = static_cast<std::int64_t>(b.price) * b.quantity;
-            if (!game::take_money(coins_, total)) coins_ = {};
-            system(1437, {game::money_words(total), merchant_ ? merchant_->name : b.seller_name}, 276); // Merchants
+            const bool paid = game::take_money(coins_, total);
+            if (!paid) coins_ = {}; // a failed TakeMoney zeroes the coin and stays silent, as the original's does
+            if (paid) {
+                SoundCue c;
+                c.kind = SoundCue::Kind::Wave;
+                c.spell = kCashRegisterSound;
+                sound_cues_.push_back(c);
+            }
+            system(1437, {game::money_words(total), merchant_ ? merchant_->name : b.seller_name}, kMerchantsColour);
         }
     } else {
         --search_pending_;
@@ -397,7 +409,7 @@ void GameConnection::handle_trader_purchase(const TraderBuy& in) {
             std::string money = game::money_words(total);
             if (std::uint16_t vouchers = static_cast<std::uint16_t>(b.unknown276); vouchers != 0)
                 money += std::format(" and {} vouchers", vouchers);
-            system(787, {money, b.seller_name}, 276); // You send%1 to %2.
+            system(787, {money, b.seller_name}, kMerchantsColour); // You send%1 to %2.
         }
     }
     if (b.sub_action == 2) return;
@@ -563,7 +575,6 @@ bool GameConnection::feature_refused(std::int32_t feature) {
 
 namespace {
 
-constexpr std::uint32_t kBarterSound = 0x8a;   // EqSoundManager::WavePlay(0x8a): the reports' cash register
 constexpr std::uint32_t kExpansionBarter = 0x100; // 0xde09c8: the expansion bit 0x420e50 needs
 constexpr std::uint32_t kExpansionRoF = 0x40000;  // the character's flag CBarterSearchWnd's Sell needs (eqstr 7728)
 
@@ -1354,7 +1365,7 @@ void GameConnection::handle_buyer_items(const AppPacket& p) {
             game::server_add_copper(coins_, static_cast<std::uint64_t>(sale.line.cost) * static_cast<std::uint64_t>(count));
             SoundCue c;
             c.kind = SoundCue::Kind::Wave;
-            c.spell = kBarterSound;
+            c.spell = kCashRegisterSound;
             sound_cues_.push_back(c);
             chat(ChatEvent::Kind::System, game::barter_report("You've sold ", " to ", sale.line, sale.buyer_name, count), 0, 0x114);
         } else if (sale.result != kBarterNoResult) {
@@ -1402,7 +1413,7 @@ void GameConnection::handle_buyer_items(const AppPacket& p) {
         if (!game::take_money(coins_, price)) coins_ = {};
         SoundCue c;
         c.kind = SoundCue::Kind::Wave;
-        c.spell = kBarterSound;
+        c.spell = kCashRegisterSound;
         sound_cues_.push_back(c);
         barter_status(0, game::barter_report("You've bought ", " from ", sale.line, sale.seller_name, count));
         if (w.open) w.inventory = game::barter_window_inventory(inventory_);

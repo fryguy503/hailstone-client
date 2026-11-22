@@ -178,6 +178,20 @@ CallerScope::~CallerScope() {
     g_caller_name = std::move(prev_name_);
 }
 
+HostCallerScope::HostCallerScope() : active_(on_main_thread()) {
+    if (!active_) return;
+    prev_caps_ = g_caller_caps;
+    prev_name_ = std::move(g_caller_name);
+    g_caller_caps = kCapAll;
+    g_caller_name.clear();
+}
+
+HostCallerScope::~HostCallerScope() {
+    if (!active_) return;
+    g_caller_caps = prev_caps_;
+    g_caller_name = std::move(prev_name_);
+}
+
 namespace {
 
 std::string lower(std::string_view s) {

@@ -401,6 +401,7 @@ void ClientApp::draw_ui(float fps) {
             }
         }
         if (actions.chat_submit) conn_->send_command(*actions.chat_submit);
+        draw_character_import();
         if (actions.target_spawn) conn_->set_target(*actions.target_spawn);
         if (actions.clear_target) conn_->set_target(0);
         if (actions.consider) conn_->consider();

@@ -265,7 +265,7 @@ local function selectNpc(r)
 end
 
 local function findPage(x, y, w, h, s, rows, own)
-  local _, allowed = FL.policy()
+  local _, allowed, serverOnly = FL.policy()
   if not allowed then return end
   if not own then
     T.Text(x, y + 4 * s, "Find lists your own zone's", C.faint, T.font.small)
@@ -301,7 +301,9 @@ local function findPage(x, y, w, h, s, rows, own)
   if #rows == 0 then
     local any = F.search:match("%S")
     T.Text(x, ly + 4 * s, any and "Nothing matches." or "Nothing to find here.", C.faint, T.font.small)
-    if not any then T.Text(x, ly + 20 * s, "No merchants, bankers or trainers.", C.faint, T.font.small) end
+    if not any and not serverOnly then
+      T.Text(x, ly + 20 * s, "No merchants, bankers or trainers.", C.faint, T.font.small)
+    end
   end
   for i, r in ipairs(rows) do
     local rx, ry = ui.GetCursorScreenPos()
@@ -346,7 +348,7 @@ local function findPage(x, y, w, h, s, rows, own)
       ui.Separator()
       if ui.MenuItem("Target") then API.find.NpcTarget(r.id, r.token) end
       if ui.MenuItem("Show the path") then API.find.NpcPath(r.id, r.token) end
-      if ui.MenuItem("Walk there") then walkTo(r) end
+      if not serverOnly and ui.MenuItem("Walk there") then walkTo(r) end
       if ui.MenuItem("Centre the map here") then M.follow, M.cx, M.cy = false, r.x, r.y end
     else ui.CloseCurrentPopup() end
     ui.EndPopup()
@@ -355,7 +357,7 @@ local function findPage(x, y, w, h, s, rows, own)
   -- the selected NPC: its path, a walk there, and ending the path
   local fy = y + h - footer + 6 * s
   local pathShown = API.map.FindPathShown()
-  local n = pathShown and 3 or 2
+  local n = (serverOnly and 1 or 2) + (pathShown and 1 or 0)
   local bw = (w - (n - 1) * 6 * s) / n
   local selected = FL.current(F.sel, F.selToken)
   local on = selected ~= nil
@@ -363,11 +365,13 @@ local function findPage(x, y, w, h, s, rows, own)
     F.why = nil
     if selected then API.find.NpcPath(selected.id, selected.token) end
   end
-  if T.Button("##findwalk", x + bw + 6 * s, fy, x + 2 * bw + 6 * s, fy + 26 * s, s, "Walk there", { enabled = on }) then
-    walkTo(selected)
+  if not serverOnly then
+    if T.Button("##findwalk", x + bw + 6 * s, fy, x + 2 * bw + 6 * s, fy + 26 * s, s, "Walk there", { enabled = on }) then
+      walkTo(selected)
+    end
+    if ui.IsItemHovered() then ui.SetTooltip("Walks you there (any movement key stops it)") end
   end
-  if ui.IsItemHovered() then ui.SetTooltip("Walks you there (any movement key stops it)") end
-  if pathShown and T.Button("##findend", x + 2 * (bw + 6 * s), fy, x + w, fy + 26 * s, s, "End") then
+  if pathShown and T.Button("##findend", x + (n - 1) * (bw + 6 * s), fy, x + w, fy + 26 * s, s, "End") then
     F.why = nil
     API.find.End()
   end
@@ -392,6 +396,7 @@ function viewZone(short)
   API.map.ShowZone(short)
   local _, here = API.map.ZoneName()
   M.view, M.zoom, M.cx, M.cy = "zone", 1, nil, nil
+  M.closedZone = nil
   ui.SetSetting("map.view", "zone")
   M.follow = short == nil or (here or ""):lower() == short:lower()
 end
@@ -456,7 +461,7 @@ local function body(x, y, w, h, s)
   local _, shownZone, own = API.map.ZoneShown()
   local list = own and drawnMarkers() or NONE
   local side = ui.GetSetting("map.sidebar") ~= "0"
-  local stockNpcs, npcFind = FL.policy()
+  local stockNpcs, npcFind, serverOnly = FL.policy()
   local findTab = npcFind and ui.GetSetting("map.sideTab") ~= "markers"
   local showNpcs = FL.marks()
   -- Find's NPCs are your own zone's: listed and marked only on its map
@@ -640,7 +645,8 @@ local function body(x, y, w, h, s)
     local sx0, sw = mx1 + 12 * s, SIDE_W * s
     local tw = (sw - 4 * s) / 2
     if npcFind then
-      if toolButton("##tabfind", sx0, my0, tw, s, "Find", findTab, "Merchants, bankers, trainers and more") and not findTab then
+      local findTip = serverOnly and "NPCs the server marks as findable" or "Merchants, bankers, trainers and more"
+      if toolButton("##tabfind", sx0, my0, tw, s, "Find", findTab, findTip) and not findTab then
         ui.SetSetting("map.sideTab", "find")
         API.find.Open(true); M.findWas = true
       end
@@ -683,6 +689,14 @@ end
 ui.window("Map", function()
   local _, npcFind = FL.policy()
   if not API.session.InGame() then return end
+  local _, here, entry = API.map.ZoneName(true)
+  if M.zoneEntry ~= entry or M.playerZone ~= here then
+    M.zoneEntry, M.playerZone = entry, here
+    M.zoom, M.follow, M.cx, M.cy = 1, true, nil, nil
+    M.closedZone = nil
+    atlas.ResetView()
+    if M.open and M.view == "world" then atlas.Opened() end
+  end
   local shown = API.windows.Shown(WINDOW)
   -- Find (hs.FindOpen) is this window's Find page: the find key opening it shows the map on that page, closing it
   -- closes the map, and the map closing closes it.
@@ -695,10 +709,13 @@ ui.window("Map", function()
       ui.SetSetting("map.sidebar", "1")
       ui.SetSetting("map.sideTab", "find")
       -- Find is your own zone's: the Zone view on your own map
-      M.view = "zone"
-      ui.SetSetting("map.view", "zone")
       local _, _, own = API.map.ZoneShown()
-      if not own then API.map.ShowZone(nil) end
+      if not own or M.closedZone then
+        viewZone(nil)
+      else
+        M.view = "zone"
+        ui.SetSetting("map.view", "zone")
+      end
       if not shown then API.windows.Show(WINDOW, true) end
     elseif shown and ui.GetSetting("map.sideTab") ~= "markers" then
       API.windows.Show(WINDOW, false)
@@ -708,9 +725,12 @@ ui.window("Map", function()
   if not shown then
     MC.Reset()
     if M.open then
-      -- closed while showing another zone's map: your own again (the minimap draws the same map)
-      local _, _, own = API.map.ZoneShown()
-      if not own then API.map.ShowZone(nil) end
+      -- The minimap draws the same map, so put your zone back until the window opens again.
+      local _, short, own = API.map.ZoneShown()
+      if not own then
+        M.closedZone = short
+        API.map.ShowZone(nil)
+      end
       if npcFind and findOpen then
         API.find.Open(false)
         M.findWas = false
@@ -719,8 +739,12 @@ ui.window("Map", function()
     M.open = false
     return
   end
-  if not M.open then -- each time it opens: the whole zone, following you, in the view it was left in
-    M.open, M.zoom, M.follow = true, 1, true
+  if not M.open then
+    M.open = true
+    if M.closedZone then
+      API.map.ShowZone(M.closedZone)
+      M.closedZone = nil
+    end
     M.view = ui.GetSetting("map.view") == "world" and "world" or "zone"
     if M.view == "world" then atlas.Opened() end
   end

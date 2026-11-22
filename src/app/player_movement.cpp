@@ -501,6 +501,7 @@ void PlayerMovement::reset(const glm::vec3& feet, float yaw) {
     drunkenness_motion_updates_ = 0;
     air_ = -1;
     feet_regions_ = {};
+    feet_wetness_.reset();
     player_ceiling_.reset();
     standing_on_ = carried_by_ = 0;
     touching_switch_ = -1;
@@ -671,8 +672,11 @@ PlayerMovement::Frame PlayerMovement::update(const MovementKeys& keys, float yaw
             const assets::ZoneRegions& zone_regions;
             Frame& out;
             const net::GameConnection& conn;
-            Probe(const assets::ZoneRegions& r, Frame& o, const net::GameConnection& c)
-                : zone_regions(r), out(o), conn(c) {}
+            mech::FeetWetness& wetness;
+            float speed_z;
+            Probe(const assets::ZoneRegions& r, Frame& o, const net::GameConnection& c, mech::FeetWetness& w,
+                  float vz)
+                : zone_regions(r), out(o), conn(c), wetness(w), speed_z(vz) {}
             bool inside(const mech::RegionPoint&) override { return true; }
             std::uint32_t regions(const mech::RegionPoint& p) override {
                 return zone_regions.lookup(glm::vec3(p.x, p.y, p.z)).flags;
@@ -681,8 +685,11 @@ PlayerMovement::Frame PlayerMovement::update(const MovementKeys& keys, float yaw
             bool do_teleport(const mech::RegionPoint&) override { return false; }
             bool is_player_spawn() override { return true; }
             void print(std::uint32_t id) override { out.messages.push_back(conn.strings().format(id, {})); }
-            void feet_environment_change(std::uint32_t) override {}
-        } probe(*regions, out, conn);
+            // PlayerClient::SetFeetWetness @0x59ec30, at the end of CheckRegionChange.
+            void feet_environment_change(std::uint32_t flags) override {
+                if (auto sound = wetness.change(flags, speed_z)) out.water_sounds.push_back(*sound);
+            }
+        } probe(*regions, out, conn, feet_wetness_, body.velocity.z);
         mech::RegionZone rz{mech::kGroundFriction, mech::kGroundAcceleration, zone};
         mech::check_region_change(feet_regions_, {body_point.x, body_point.y, body_point.z}, rz, probe);
         body.area_friction = feet_regions_.area_friction;

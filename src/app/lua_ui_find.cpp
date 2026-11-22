@@ -48,7 +48,7 @@ struct FindCache {
     const net::GameConnection* conn = nullptr;
     std::uint64_t spawn_serial = 0;
     std::uint64_t context = 0, policy_revision = 0;
-    std::size_t findable = 0;
+    std::uint64_t findable_revision = 0;
     std::size_t quests = 0;
     std::string zone;
 };
@@ -70,6 +70,7 @@ struct FindSnapshot {
     const net::GameConnection* conn = nullptr;
     std::uint64_t context = 0, revision = 0;
     bool allowed = false;
+    bool server_only = false;
     bool operator==(const FindSnapshot&) const = default;
 };
 
@@ -80,7 +81,8 @@ FindSnapshot snapshot(const UiHost& host) {
     out.context = out.conn->interaction_context();
     const auto policy = out.conn->server_ext().map_policy(*out.conn);
     out.revision = policy.revision;
-    out.allowed = !(policy.flags & game::MapPolicyDisableNpcFind);
+    out.allowed = policy.npc_find_enabled();
+    out.server_only = policy.npc_find_server_only();
     if (host.conn != out.conn || out.conn->interaction_context() != out.context) return {};
     return out;
 }
@@ -107,25 +109,31 @@ void opaque(lua_State* L, std::uint64_t value, const char* field) {
     lua_setfield(L, -2, field);
 }
 
-std::optional<net::GameConnection::ActorRef> observed_actor(lua_State* L, UiHost& host) {
+struct FindObservation {
+    net::GameConnection::ActorRef actor;
+    bool server_only;
+};
+
+std::optional<FindObservation> observed_actor(lua_State* L, UiHost& host) {
     const auto id = luaL_checkinteger(L, 1);
     std::size_t expected_size = 0;
     const char* expected = lua_isnoneornil(L, 2) ? nullptr : luaL_checklstring(L, 2, &expected_size);
     if (id <= 0 || id > 0xffffffff || expected_size > 112) return std::nullopt;
-    std::optional<net::GameConnection::ActorRef> actor;
+    std::optional<FindObservation> observation;
     plugin::cxx_guard(L, [&] {
         const auto before = snapshot(host);
         if (!before.allowed || !before.conn) return;
-        actor = before.conn->captureActorRef(static_cast<std::uint32_t>(id));
-        if (!actor || !npc(host, id) || snapshot(host) != before || host.conn != before.conn || !before.conn->matches(*actor)) {
-            actor.reset(); return;
-        }
+        const auto actor = before.conn->captureActorRef(static_cast<std::uint32_t>(id));
+        if (!actor || !npc(host, id) || snapshot(host) != before || host.conn != before.conn ||
+            !before.conn->matches(*actor) || (before.server_only && !before.conn->findable_npcs().contains(actor->id)))
+            return;
         if (expected) {
             const auto current = token(*actor, before.revision);
-            if (std::string_view{expected, expected_size} != std::string_view{current.data.data(), current.size}) actor.reset();
+            if (std::string_view{expected, expected_size} != std::string_view{current.data.data(), current.size}) return;
         }
+        observation = FindObservation{*actor, before.server_only};
     });
-    return actor;
+    return observation;
 }
 
 const std::vector<game::UsefulNpc>& rows(UiHost& h, FindCache& c, const FindSnapshot& view) {
@@ -137,11 +145,14 @@ const std::vector<game::UsefulNpc>& rows(UiHost& h, FindCache& c, const FindSnap
     const auto& w = h.conn->world();
     const auto& findable = h.conn->findable_npcs();
     // The server script's quest NPCs: asked once a zone, the first time the list is wanted (not at the zone-in).
-    h.conn->request_quest_npcs();
-    const auto& quests = h.conn->quest_npcs();
+    static const game::QuestNpcMap no_quests;
+    if (!view.server_only) h.conn->request_quest_npcs();
+    const auto& quests = view.server_only ? no_quests : h.conn->quest_npcs();
+    const auto findable_revision = h.conn->findable_npcs_revision();
     const auto now = std::chrono::steady_clock::now();
     // Made again when spawns come or go, the findable list changes, or 200 ms passed (distances, positions).
-    if (c.conn == h.conn && c.spawn_serial == w.spawn_set_serial && c.findable == findable.size() && c.quests == quests.size() &&
+    if (c.conn == h.conn && c.spawn_serial == w.spawn_set_serial && c.findable_revision == findable_revision &&
+        c.quests == quests.size() &&
         c.zone == h.zone_short_name && c.context == view.context && c.policy_revision == view.revision &&
         now - c.made < std::chrono::milliseconds(200))
         return c.rows;
@@ -150,12 +161,12 @@ const std::vector<game::UsefulNpc>& rows(UiHost& h, FindCache& c, const FindSnap
     for (const auto& [id, n] : findable) ids.insert(id);
     glm::vec3 from{h.feet[0], h.feet[1], h.feet[2]};
     if (const game::Spawn* me = w.player()) from = me->display_valid ? me->display_position : me->position;
-    c.rows = game::useful_npcs(w, ids, from, quests);
+    c.rows = game::useful_npcs(w, ids, from, quests, view.server_only);
     c.quests = quests.size();
     c.made = now;
     c.conn = h.conn;
     c.spawn_serial = w.spawn_set_serial;
-    c.findable = findable.size();
+    c.findable_revision = findable_revision;
     c.zone = h.zone_short_name;
     c.context = view.context;
     c.policy_revision = view.revision;
@@ -178,7 +189,8 @@ int FindNpcs(lua_State* L) {
         std::optional<net::GameConnection::ActorRef> actor;
         plugin::cxx_guard(L, [&] {
             // The policy was read once for every row (snapshot); each row asks only its own visibility.
-            if (game::useful_npc_matches(n, search) && host.conn == view.conn && view.conn->npc_find_visible(n.spawn_id))
+            if (game::useful_npc_matches(n, search) && host.conn == view.conn &&
+                view.conn->npc_find_visible(n.spawn_id, view.server_only))
                 actor = view.conn->captureActorRef(n.spawn_id);
         });
         if (!actor || actor->context != view.context) continue;
@@ -234,21 +246,22 @@ int FindCategories(lua_State* L) {
 
 int FindNpcTarget(lua_State* L) {
     UiHost& h = host_up(L);
-    const auto actor = observed_actor(L, h);
-    plugin::cxx_guard(L, [&] { if (actor) h.conn->set_target(actor->id); });
-    lua_pushboolean(L, actor.has_value());
+    const auto observation = observed_actor(L, h);
+    plugin::cxx_guard(L, [&] { if (observation) h.conn->set_target(observation->actor.id); });
+    lua_pushboolean(L, observation.has_value());
     return 1;
 }
 
 int FindNpcPath(lua_State* L) {
     UiHost& h = host_up(L);
-    const auto actor = observed_actor(L, h);
+    const auto observation = observed_actor(L, h);
     bool accepted = false;
-    // The guide path over the client's mesh (app/guide_path.h); without it (tests), the server's find path.
+    // Server-only Find always asks the server for the path to its advertised NPC.
     plugin::cxx_guard(L, [&] {
-        if (actor) {
-            accepted = h.guide_to && h.guide_to(actor->id);
-            if (!accepted && h.conn && h.conn->matches(*actor)) accepted = h.conn->find_spawn(actor->id);
+        if (observation) {
+            const auto& actor = observation->actor;
+            accepted = !observation->server_only && h.guide_to && h.guide_to(actor.id);
+            if (!accepted && h.conn && h.conn->matches(actor)) accepted = h.conn->find_spawn(actor.id);
         }
     });
     lua_pushboolean(L, accepted);
@@ -261,10 +274,10 @@ int FindNpcWalk(lua_State* L) {
     // A Lua allocation can run finalizers. Prepare storage before checking the retained observation.
     lua_settop(L, 2);
     auto& why = plugin::lua_keep<std::string>(L);
-    const auto actor = observed_actor(L, h);
+    const auto observation = observed_actor(L, h);
     plugin::cxx_guard(L, [&] {
-        why = !actor ? (observed ? "NPC changed or is no longer available" : "no such NPC") :
-            !h.walk_to ? "walking is not available" : h.walk_to(actor->id);
+        why = !observation ? (observed ? "NPC changed or is no longer available" : "no such NPC") :
+            (observation->server_only || !h.walk_to) ? "walking is not available" : h.walk_to(observation->actor.id);
     });
     lua_pushboolean(L, why.empty());
     lua_pushlstring(L, why.data(), why.size());

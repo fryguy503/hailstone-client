@@ -15,6 +15,13 @@ REG_TABLE = re.compile(r'\bluaL_Reg\s+\w+\s*\[\s*\]\s*=\s*\{'
                        r'|\bstd::initializer_list\s*<\s*std::pair\s*<\s*const\s+char\s*\*\s*,\s*lua_CFunction\s*>\s*>\s*\{')
 RAW_STRING = re.compile(r'R"([^ ()\\\t\r\n]{0,16})\(')
 
+# Hand-written notes a module's generated table cannot carry.
+NOTES = {
+    "map": "An add-on also draws overlays with `hs.UI.map.RegisterOverlay` (docs/ui-api.md \"Map overlays\"): they run at\n"
+           "the end of each drawn `hs.DrawZoneMap` and `hs.DrawMinimap`, whichever add-on's `map.lua` or `minimap.lua`\n"
+           "called it, by priority and registration order.\n",
+}
+
 
 def masked_cpp(text):
     """Keep source offsets/braces, ignoring comments and string contents for bounded source scans."""
@@ -217,6 +224,8 @@ def render(root=ROOT, report=None):
             policy = "plain-capabilities" if binding_name in hooks else "closed"
             lines.append(f"| {code(call)} | {signature} | {location} | {caps} | {policy} |\n")
         lines.append("\n")
+        if module in NOTES:
+            lines += [NOTES[module], "\n"]
     return "".join(lines).rstrip() + "\n"
 
 

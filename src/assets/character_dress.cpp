@@ -698,8 +698,9 @@ void CharacterLibrary::attach_items(const CharacterModel& model, const game::App
         if (!held) continue;
         const CharacterMesh* item = &held->mesh;
         // PlayerClient::SetHeldModel puts a secondary on the shield point when CDisplay::IsShield knows its model
-        // number, whatever its textures are called.
-        const bool shield = slot == game::kSlotSecondary && game::is_shield_model(number);
+        // number (ActorTagInfo.txt, else the fixed list), whatever its textures are called.
+        const bool shield = slot == game::kSlotSecondary &&
+                            game::is_shield_model(number, appearance_ ? &appearance_->actor_tags : nullptr);
         int bone = -1;
         if (model.eqg) {
             const char* names[] = {shield ? "ARML_SHLD" : (slot == game::kSlotSecondary ? "ARML_WEAP" : "ARMR_WEAP"),

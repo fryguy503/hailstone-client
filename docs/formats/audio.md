@@ -206,6 +206,41 @@ ship `sounds\rainloop.wav` and `wind_lp1.wav` as 80-byte files without samples, 
 **Doors.** By switch type and the new state (`game/sound_rules.cpp` `door_sounds`); e.g. type 0 plays `DoorWd_O`
 (0x87) on opening and `DoorWd_C` (0x88) on closing. A door that closes by itself (repop) is silent.
 
+**Moving an item.** `wearclth.WAV` (0x92), a 2D wave, after every click that moves an item: a pick-up or a put-down
+in any inventory, bank, trade or world-container slot, a merge onto a stack, a Ctrl-click into a bag and a Ctrl-right
+click that trades two bags' contents (CInvSlot::HandleLButtonUp after MoveItem, 0x697148; HandleRButtonUp, 0x697250).
+A stack split through the quantity dialog (CInvSlot::SliderComplete) and a click the client refuses are silent. It
+also plays when the attune question is answered yes (0x52d540), when auto-inventory puts the item into an empty worn
+slot (0x4fe388), and when /autoinventory or a drop on the character doll leaves the cursor empty (0x4fe987,
+0x692ec0), so an auto-equip from the doll can play it twice at once, as the original does.
+
+**Bags and containers.** Opening plays `Chest_Op.WAV` (0x86) and closing `Chest_Cl.WAV` (0x85) for bag types 6, 7, 10,
+15, 18, 19, 20 and 22; every other type, and a type outside 6..22, takes `itemclth.WAV` (0x91) for both (0x65cae0,
+0x65d180, 2D; `game::container_sound`). Opening all bags plays once per bag that opens. Hiding the bank window closes
+every container still open, carried bags too, each with its close wave (0x627760 → 0x65d4e0 → 0x65d180;
+`app::prune_bag_windows` and `ItemUi::close_bags_when_bank_hides` check once a frame). A bag that leaves its slot
+(picked up, or removed by the server) closes with its close wave too: CloseContainer (0x65d2f0) always ends in it. A
+close always uses the type the bag had when it opened, even when the slot has lost or replaced it.
+
+**Adventures.** OP_AdventureFinish plays `EndQuest.WAV` (0x8d) when the adventure was won and `LevDn.WAV` (0x8c) when
+it failed, 2D (0x4207a7, 0x4207e7).
+
+**A quest reward.** `EndQuest.WAV` (0x8d), 2D, at the end of an OP_Sound (EQEmu's `QuestReward`, sent when a quest
+script rewards you) that names you, after its four coin amounts, whether or not it carries coin (0x4c7ff6).
+OP_CashReward credits its coin but does not play it (0x4c636d → 0x4bcef0). The original also prints a line per coin
+there; Hailstone credits the coins without them (docs/unknowns.md).
+
+**Struck down by the gods.** OP_GMKill that names you, compared without case, prints the line in colour 10 and plays
+`thunder1.wav` (0x8f), 2D (0x4c8aab). Another name is silent.
+
+**Water.** Entering and leaving the water, for the local player only, as a 3D wave on the player (0x59ec30). The
+region flags' lowest byte is the new type, and only a change plays:
+
+- to type 7, or from a nonzero type to 0: `WaterOut.WAV` (0x63);
+- to types 5, 6, 8, 9 or 10: `WaterIn.WAV` (0x64) when the vertical speed is at least 1 or at most −1 (exactly ±1
+  counts), else nothing;
+- to any other type: nothing.
+
 **Melee hits.** On the defender, for players and NPCs only. Hits between others more than 75 units away are not
 reported.
 
@@ -309,6 +344,7 @@ The synthesiser is TinySoundFont with `synthusr.sf2`, so it will not sound ident
 | `audio.enabled` | open a device |
 | `audio.master`, `audio.music`, `audio.effects` | 0..100 |
 | `audio.npc_hits` | 0..100, default 100 (note 1) |
+| `audio.own_footsteps`, `audio.pet_footsteps`, `audio.other_footsteps`, `audio.open_bag`, `audio.open_bank`, `audio.money`, `audio.thunder`, `audio.equip`, `audio.creature_ambient` | 0..100, default 100 (note 4) |
 | `audio.mute` | |
 | `audio.environment` | the zone's user-disableable emitters |
 | `audio.soundfont` | an SF2 path; default the game's `synthusr.sf2` |
@@ -324,6 +360,33 @@ The synthesiser is TinySoundFont with `synthusr.sf2`, so it will not sound ident
 2. In RoF2 ReverseSound (0xde0d48) is only stored and saved, so it has no effect; acting on it is Hailstone's.
    Checked: Cmd_reversesound.
 3. The output's buffer, `audio::mix_ahead_ms` = clamp(n, 4, 96) x 8 ms. Changing it opens the device again.
+4. The Individual Sounds volumes are Hailstone's, not in the original. Each scales one kind of sound linearly on top of
+   `audio.effects` (`audio::option_volume_factor`; 0 plays nothing). `app::SoundEvents` and the connection's sound cues
+   pick the volume (`audio::SoundGroup`, `audio/individual_sounds.h` lists the names; the connection's cues carry only a
+   context, `net::SoundCue::Context`, and `app::wave_cue_group` and `app::footstep_group` classify). The Options window's Individual
+   Sounds window edits them (`hs.Option` / `hs.SetOption`) and its Test button plays the sound once (`hs.PlaySoundTest`).
+   The gamepad pack has a Sounds page instead: left and right step a volume by 5, A plays the sound, a last row resets.
+   - `own_footsteps`: the sounds of the local player's walk, run, jump, crouch walk, climb, swim and tread-water
+     animations (`game::is_movement_animation`), and the jump-landing and fall-hurt sounds. The splash of entering or
+     leaving water is not included.
+   - `pet_footsteps`: the same animations of an NPC spawn with an owner (`pet_owner_id` set); `other_footsteps`: of
+     every other spawn. A creature whose walk sound is a loop of its own (`AnimationSounds::loop_is_step`) has that loop
+     at the same volume; its ambient loop is not touched.
+   - `open_bag`: the open wave (0x86 or 0x91) of a bag in a carried slot; `open_bank`: of a bag in a bank or shared
+     bank slot. No sound for the bank window itself opening is known (a quick search of the
+     decompiled client found none, docs/unknowns.md), so the bank volume is that of its bags. Closing a bag is not covered.
+   - `money`: wave 0x8a (the cash register: merchant, trader, barter, loot, split and coin moves). The quest reward's
+     coin sound (0x8d) is not.
+   - `thunder`: the storm's thunder (0x8f, 0x90). The "struck down" thunder of a GM kill is not.
+   - `creature_ambient`: every loop and idle sound of a spawn that is not its footsteps (a spectre's `SpecLoop.wav`,
+     racedata.txt race 85). Which creatures players find tiresome is not narrowed down: this covers every non-step loop.
+   - The Test button of a footstep plays the walk steps in turn. Thunder and rain can be silent in an install whose
+     `thunder1.wav` and `thunder2.wav` are 80-byte files without samples.
+   - `equip`: the item-moved wave (0x92) after a move that took an item out of or into a worn slot, the callers of an
+     auto-equip (`/autoinventory`, a drop on the paper doll) included. The same wave for moves between packs, bank and
+     trade slots stays at full volume.
+   - A pet is an NPC with an owner; another player is never one. A walk loop follows the spawn's footstep group as it
+     is each frame.
 
 Running without sound:
 

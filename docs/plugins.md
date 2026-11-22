@@ -1533,6 +1533,47 @@ end)
 
 #### Adding to a pack's window
 
+**Notices and unavailable settings.** Add-ons with `ui` and `extend` may contribute a notice or disable an
+individual control at a location supported by the interface. The interface renders the text and attributes it to
+the add-on. A setting stays disabled for as long as any active contribution disables it; each add-on can update
+or remove only its own contribution. Saved values are retained. These are UI controls, so programmatic setting
+changes and the game's own settings logic still use their usual rules.
+
+```lua
+local hs = require('hailstone')
+if hs.ui_contribution then
+    hs.ui_contribution{
+        id = 'nameplate-settings',
+        window = 'OptionsWindow',
+        target = 'section:nameplates',
+        text = 'Use the add-on settings to customize these nameplates.',
+        action_label = 'Open settings',
+        command = '/myaddon settings',
+    }
+end
+-- When the feature becomes inactive:
+if hs.remove_ui_contribution then hs.remove_ui_contribution('nameplate-settings') end
+```
+
+- `id` identifies a contribution within its owner. Calling `ui_contribution` again with the same ID replaces it.
+  Unloading, deactivating or losing `ui` or `extend` removes the owner's contributions.
+- Omit `target` for a window notice. Stock Options also presents `section:display`, `section:graphics`,
+  `section:nameplates`, and `setting:<id>` for supported controls. The IDs are the setting keys the Options scripts
+  pass to `hs.UI.settings.Option`, such as `setting:render_scale` and `setting:target_plate_highlight`.
+- Set `disabled = true` for a supported individual control. Supply `text` for a custom explanation or omit it to use
+  the stock one. Three rows are the player's way out of an add-on or a broken pack and are never disabled:
+  `setting:upscaler` (an upscaler add-on), `setting:ui_name` (a UI pack, or one that stopped working) and
+  `setting:texture_pack` (a texture pack, such as one a tool add-on built). A disabling entry for one of them is
+  refused whole (`ui_contribution` returns false, `set_ui_contribution` 0, and an upscaler's record is left out of
+  its snapshot), in any window and from any owner; a notice without `disabled` is still allowed there. An optional action supplies
+  both `action_label` and a slash `command`. The player's activation dispatches the command with the add-on's
+  current capabilities, as with its Plugins menu entries.
+- Native plugins use `set_ui_contribution` and `remove_ui_contribution`, appended to ABI 3. Check
+  `HAILSTONE_HOST_HAS(host, set_ui_contribution)` and use the sized `HailstoneUiContribution` record from
+  `sdk/hailstone_ui_contribution.h` (56 bytes in a 64-bit build; the client needs `size` to cover `command`). The
+  host copies the strings during registration. See
+  [the pack API](ui-api.md#ui-contributions) for the presenter contract.
+
 Some pack windows live in a library that takes the plugin's part, so a plugin adds to them without copying.
 
 **Pet.** Both packs (`ui/<pack>/lib/pet.lua`; each file's head lists its options).
@@ -1642,6 +1683,8 @@ add-on gets at most what its manifest declared (docs/addons.md). Whatever its ca
 
 - **has globals of its own.** It reads the pack's globals (shared state tables such as `modern_colors` or `GPSTATE`),
   but a global it sets is its own, as is every global a pack library it `dofile`s sets.
+- **draws on the zone map and the minimap through `hs.UI.map.RegisterOverlay`**, which reaches the map the client
+  draws whoever's `map.lua` or `minimap.lua` called it (docs/ui-api.md "Map overlays").
 - **sees `hs`, `ui` and the standard libraries read-only.**
 - **reaches only its own owner's** exported functions, options and menu entries (the pack's windows reach every
   plugin's).
@@ -1793,8 +1836,9 @@ feature structs; a core feature goes in through its core field. An extension fea
 (`VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT`, which XeSS needs) goes in as the provider's own struct added to
 the chain, valid until `create`; the provider checks its support itself.
 
-A 0 or NULL from any call, or an exception, drops the provider; the client falls back to FSR 3.1 (or its own temporal
-upscaler where the GPU cannot run FSR 3.1) and logs why. A failed `evaluate` drops it from the next frame.
+A 0 or NULL from a required call, or an exception there, drops the provider; the client falls back to FSR 3.1
+(or its own temporal upscaler where the GPU cannot run FSR 3.1) and logs why. A failed `evaluate` drops it from
+the next frame.
 
 **A frame** (`HailstoneUpscalerFrame`). Images cross as integers (`VkImage` and `VkImageView` as `uint64_t`; formats,
 layouts and usage as `uint32_t`), each with size, usage, aspect and current layout:
@@ -1817,6 +1861,13 @@ layouts and usage as `uint32_t`), each with size, usage, aspect and current layo
 
 **Compatibility.** Every table carries its size and only grows at its end (`HAILSTONE_UPSCALER_ABI` is 1). The client
 refuses a provider built for a newer ABI.
+
+**Options notices.** An active provider may supply the optional `ui_contributions` table member. It returns the
+count of pointers to `HailstoneUiContribution` records for the current snapshot. An empty snapshot clears the
+provider's notices. The records are copied immediately and disappear on fallback. Use the same window and target
+IDs as game add-ons; the provider cannot disable the Upscaler row (or the other two above). The renderer provider
+fills `action_label` and
+`command` with `NULL`. The example below supplies a Graphics notice.
 
 **The example.** `plugins/example/upscaler/example.c` is a whole provider in plain C: it checks the GPU can blit
 RGBA16F, then linearly blits the colour to the output (no accumulation). The build puts it in
@@ -2173,7 +2224,7 @@ excepted), which the caller sets and the client respects.
 | `HailstoneFollowStatus` | 24 |
 | `HailstoneBinaryMeasurement` | 56 |
 | `HailstoneMerchantSellContext` | 32 |
-| `HailstoneMapPolicy` | 88 |
+| `HailstoneMapPolicy` | 96 |
 | `HailstoneWorldFrame` | 136 |
 | `HailstoneWorldAnchor` | 32 |
 | `HailstoneWorldVertex` | 28 |
@@ -2217,6 +2268,9 @@ The flags:
   Every provider's `map_visible` denial still wins.
 - `HIDE_STOCK_NPCS` removes the packs' Find/service NPC overlays and competing stock controls.
 - `DISABLE_NPC_FIND` blocks discovery requests, result rows, targets, guides, server paths and Find-owned walks.
+- The optional `npc_find_mode` value `HAILSTONE_NPC_FIND_SERVER_ONLY` admits living NPCs advertised in the zone's
+  `OP_SendFindableNPCs` list. Show Path requests the route from the server. Client discovery, guides and Find-owned
+  walks are unavailable in this mode. All Find visibility hooks still apply and `DISABLE_NPC_FIND` takes precedence.
 - Restrictive flags combine across providers; removing them restores stock defaults, saved UI preferences untouched.
 - Unaffected: PC group/raid Find, coordinates, ordinary navigation, static map labels, user pins, raw spawn getters.
 - Guides and Find walks pin connection/player/NPC identity and recheck eligibility before observing or moving.
@@ -2232,7 +2286,10 @@ Reading it back:
 Record prefixes:
 
 - The original 72-byte prefix is still accepted, including four-byte-aligned old reader records.
-- The 80-byte prefix adds `revision`; the 88-byte record adds `context`. Missing optional fields are zero.
+- The 80-byte prefix adds `revision`; the 88-byte prefix adds `context`. The 96-byte record adds `npc_find_mode`.
+  Missing optional fields are zero.
+- An add-on requiring server-only Find can return `DISABLE_NPC_FIND` when an older host supplies a shorter output
+  buffer. Likewise, an older reader sees `DISABLE_NPC_FIND` when the effective policy is server-only.
 - Zero-initialize the record before setting `size`; the host preserves that size.
 - Success or a returned size of 88 does not prove tail support on an older host; a nonzero `context` does (support for
   context-bound observations).

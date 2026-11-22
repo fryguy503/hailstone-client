@@ -302,9 +302,12 @@ public:
     melee::ItemRef weapon_ref_item(std::int32_t slot, bool fist, bool) override {
         return fist ? melee::kFistItem : item(slot);
     }
-    // The held models (PlayerClient::SetHeldModel 7 / 8) are drawn from the wear state, not from here.
+    // ItemBase_GetIDFile's model stands for the sheet slot holding the item; the caller looks the model up.
     std::int32_t id_file(melee::ItemRef item) override { return item; }
-    void set_held_model(std::int32_t, std::int32_t) override {}
+    void set_held_model(std::int32_t slot, std::int32_t model) override {
+        out_.held_models.push_back({static_cast<std::uint8_t>(slot), model == melee::kNoModel ? -1 : model,
+                                    out_.sends.size()});
+    }
     bool auto_fire() override { return ctx_.autofire; }
     void set_auto_range_attack(bool on) override {
         if (!on) out_.stop_auto_fire = true;

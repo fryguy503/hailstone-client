@@ -49,6 +49,8 @@ SceneFogFrame SceneFog::step(const SceneFogInput& in) {
     w.ultravision_innate = in.ultravision_innate ? 0 : 0xff;
     w.infravision_effect = in.infravision_effect;
     w.ultravision_effect = in.ultravision_effect;
+    w.infravision_strength = static_cast<double>(in.infravision_strength);
+    w.ultravision_strength = static_cast<double>(in.ultravision_strength);
     // The client has no CSky: the hour tables give the outdoor ambient.
     if (in.actor_light) w.actor_light = static_cast<double>(*in.actor_light);
     w.light_level = light_level_;

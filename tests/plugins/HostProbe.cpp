@@ -53,7 +53,12 @@ static_assert(offsetof(PluginHostApi, set_class_name) == offsetof(PluginHostApi,
 static_assert(offsetof(PluginHostApi, nameplate_register) == offsetof(PluginHostApi, set_class_name) + sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, get_spells_data_bulk) ==
               offsetof(PluginHostApi, nameplate_spell_icon) + sizeof(PluginHostApi::caps));
-static_assert(offsetof(PluginHostApi, get_large_dialog) == offsetof(PluginHostApi, get_spells_data_bulk) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, set_ui_contribution) ==
+              offsetof(PluginHostApi, get_spells_data_bulk) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, remove_ui_contribution) ==
+              offsetof(PluginHostApi, set_ui_contribution) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, get_large_dialog) ==
+              offsetof(PluginHostApi, remove_ui_contribution) + sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, answer_large_dialog) == offsetof(PluginHostApi, get_large_dialog) + sizeof(PluginHostApi::caps));
 static_assert(sizeof(HailstoneLargeDialog) == 40);
 
@@ -552,6 +557,7 @@ int map_policy(HailstoneMapPolicy* out) {
         WriteChatf("[Probe] nested map %d", host->get_map_policy(host->host, &nested));
     }
     if (map_format == 6) host->set_active(host->host, 0);
+    if (map_format == 9 && out->size >= sizeof(*out)) out->npc_find_mode = HAILSTONE_NPC_FIND_SERVER_ONLY;
     return 1;
 }
 void probe_map_set(void*, const char* args) {
@@ -563,7 +569,7 @@ void probe_map_set(void*, const char* args) {
 }
 void probe_map_prefix(void*, const char* args) {
     const auto size=static_cast<std::uint32_t>(std::strtoul(args,nullptr,10));
-    if(size!=72 && size!=80 && size!=88)return;
+    if(size!=72 && size!=80 && size!=88 && size!=96)return;
     alignas(8) std::array<unsigned char,104> storage;
     storage.fill(0x5a);
     auto* bytes=storage.data()+4; // a real old record may be aligned to four, not eight
@@ -573,11 +579,12 @@ void probe_map_prefix(void*, const char* args) {
     bool canary=true;
     for(std::size_t i=0;i<4;++i)canary=canary&&storage[i]==0x5a;
     for(std::size_t i=4+size;i<storage.size();++i)canary=canary&&storage[i]==0x5a;
-    std::uint64_t revision=0,context=0;
+    std::uint64_t revision=0,context=0,find_mode=0;
     if(size>=80)std::memcpy(&revision,bytes+72,sizeof(revision));
     if(size>=88)std::memcpy(&context,bytes+80,sizeof(context));
-    WriteChatf("[Probe] map prefix %u result %d flags %u canary %d revision %d context %d",size,result,old.flags,
-        canary?1:0,revision?1:0,context&&context!=UINT64_MAX?1:0);
+    if(size>=96)std::memcpy(&find_mode,bytes+88,sizeof(find_mode));
+    WriteChatf("[Probe] map prefix %u result %d flags %u canary %d revision %d context %d server find %d",size,result,old.flags,
+        canary?1:0,revision?1:0,context&&context!=UINT64_MAX?1:0,find_mode==HAILSTONE_NPC_FIND_SERVER_ONLY);
 }
 void probe_map_cycle(void*,const char*) { host->set_active(host->host,0);host->set_active(host->host,1); }
 void probe_map(void*, const char* args) {

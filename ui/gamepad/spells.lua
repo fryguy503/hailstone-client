@@ -3,7 +3,7 @@
 --                               fade as the stock gems draw them; a click casts (the pad casts from the cross
 --                               hotbar or the CAST keys)
 --   Spell book (SpellBookWnd)   the book's two pages and the gems side by side. A on a spell takes it (the book's
---                               own click: you must be sitting, as in the game), then A on a gem memorizes it there;
+--                               own click: sitting or mounted), then A on a gem memorizes it there;
 --                               X on a gem forgets its spell; LB / RB turn the pages. B closes the book.
 --   Spell sets (Y in the book)  the character's sets as cards: A loads one onto the gems, X edits it; New set and
 --                               From gems make one. The editor puts spells from the whole book into the set's

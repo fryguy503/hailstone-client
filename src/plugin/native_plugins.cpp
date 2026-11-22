@@ -64,7 +64,8 @@ static_assert(HAILSTONE_CAP_READ == kCapRead && HAILSTONE_CAP_COMMANDS == kCapCo
               HAILSTONE_CAP_EVENTS == kCapEvents && HAILSTONE_CAP_UI == kCapUi && HAILSTONE_CAP_PACKETS == kCapPackets &&
               HAILSTONE_CAP_EXTEND == kCapExtend && HAILSTONE_CAP_LOGIN == kCapLogin && HAILSTONE_CAP_NET == kCapNet &&
               HAILSTONE_CAP_WEB == kCapWeb);
-static_assert(offsetof(HailstoneMapPolicy, revision)==72 && offsetof(HailstoneMapPolicy, context)==80 && sizeof(HailstoneMapPolicy)==88);
+static_assert(offsetof(HailstoneMapPolicy, revision)==72 && offsetof(HailstoneMapPolicy, context)==80 &&
+              offsetof(HailstoneMapPolicy, npc_find_mode)==88 && sizeof(HailstoneMapPolicy)==96);
 // The add-on service records' sizes as released (docs/plugins.md "Server add-on services"): a field moved or added
 // anywhere but the end breaks a plugin built against an earlier header. The submission holds a pointer and a size_t.
 static_assert(sizeof(HailstoneFollowProfile) == 56 && sizeof(HailstoneMountProfile) == 8);
@@ -77,6 +78,7 @@ static_assert(sizeof(HailstoneWorldSurfacePatch) == 64 && sizeof(HailstoneWorldS
               offsetof(HailstoneWorldSurfacePatchResult, region_xy) == 64);
 static_assert(sizeof(HailstoneWorldReceipt) == 48);
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneWorldSubmission) == 56 && offsetof(HailstoneWorldSubmission, vertices) == 40));
+static_assert(sizeof(void*) != 8 || (sizeof(HailstoneUiContribution) == 56 && offsetof(HailstoneUiContribution, command) == 48));
 
 #ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
 // This exact binary used two popup slots where the public SDK added nameplates.
@@ -447,7 +449,9 @@ public:
             l_->map_content_revision = content;
             l_->policy_generation = core::next_process_identity();
         }
-        return {raw.flags, std::string(std::begin(raw.name), end), l_->policy_generation};
+        const auto flags = raw.size >= sizeof(raw) && raw.npc_find_mode == HAILSTONE_NPC_FIND_SERVER_ONLY
+            ? raw.flags | game::MapPolicyServerNpcFindOnly : raw.flags;
+        return {flags, std::string(std::begin(raw.name), end), l_->policy_generation};
     }
     bool merchant_right_click(net::GameConnection& c, std::uint32_t merchant, const net::ItemSlot& slot,
                               std::uint32_t item, std::uint32_t quantity) override {
@@ -1048,6 +1052,7 @@ void h_set_active(void* h, int active) {
             l.world_ready = false;
             l.host->world_geometry.retire(l.owner);
             remove_nameplates(l);
+            if (l.host->env.ui) l.host->env.ui->remove_contributions(l.name);
         }
     }
 }
@@ -1251,6 +1256,21 @@ int h_add_menu(void* h, const char* label, const char* command) {
     Loaded& l = Loaded::of(h);
     if (!label || !*label || !command || !*command || !l.host->env.ui || !may_ui(l, "add_menu")) return 0;
     return l.host->env.ui->add_menu({l.name, label, command}) ? 1 : 0;
+}
+
+int h_set_ui_contribution(void* h, const HailstoneUiContribution* entry) {
+    auto& l = Loaded::of(h);
+    constexpr std::uint32_t needed = kCapUi | kCapExtend;
+    if (!l.can(needed)) {
+        l.denied("set_ui_contribution", needed);
+        return 0;
+    }
+    return l.active && !l.unload_pending && l.host->env.ui && l.host->env.ui->set_contribution_from_sdk(l.name, entry);
+}
+
+int h_remove_ui_contribution(void* h, const char* id) {
+    auto& l = Loaded::of(h);
+    return l.host->env.ui && l.can(kCapUi | kCapExtend) && l.host->env.ui->remove_contribution_from_sdk(l.name, id);
 }
 
 // The plugin's folder: plugins/<name>/ when its binary is there, else plugins/<name>/ beside the binary.
@@ -1674,7 +1694,11 @@ int h_get_map_policy(void* h, HailstoneMapPolicy* out) {
     const auto policy = connection ? connection->server_ext().map_policy(*connection) : game::MapPolicy{};
     HailstoneMapPolicy value{};
     value.size = sizeof(value);
-    value.flags = policy.flags;
+    value.flags = policy.flags & ~game::MapPolicyServerNpcFindOnly;
+    if (policy.npc_find_server_only()) {
+        if (size >= sizeof(value)) value.npc_find_mode = HAILSTONE_NPC_FIND_SERVER_ONLY;
+        else value.flags |= HAILSTONE_MAP_POLICY_DISABLE_NPC_FIND;
+    }
     value.revision = policy.revision;
     value.context = connection ? connection->interaction_context() : 0;
     const auto length = std::min(policy.name.size(), sizeof(value.name) - 1);
@@ -3423,6 +3447,8 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.nameplate_measure_text = main_only<h_nameplate_measure_text>;
     p.table.nameplate_spell_icon = main_only<h_nameplate_spell_icon>;
     p.table.get_spells_data_bulk = main_only<h_get_spells_data_bulk>;
+    p.table.set_ui_contribution = main_only<h_set_ui_contribution>;
+    p.table.remove_ui_contribution = main_only<h_remove_ui_contribution>;
     p.table.get_large_dialog = main_only<h_get_large_dialog>;
     p.table.answer_large_dialog = main_only<h_answer_large_dialog>;
     Hooks& hooks = *m.env.hooks;
@@ -3579,6 +3605,7 @@ bool NativePlugins::unload_file(std::string_view name) {
     if (it == m.loaded.end()) return false;
     if ((*it)->busy) { // the plugin asked from its own code: not under its feet
         (*it)->unload_pending = true;
+        if (m.env.ui) m.env.ui->remove_contributions((*it)->name);
         return true;
     }
     std::unique_ptr<Loaded> l = std::move(*it);
@@ -3628,6 +3655,7 @@ void NativePlugins::policy_changed(const std::vector<std::string>& autoload) {
         }
         // No longer allowed windows: its Lua windows, functions, options and menu entries go.
         if (!l->can(kCapUi) && m.env.ui) m.env.ui->remove(l->name);
+        else if (!l->can(kCapExtend) && m.env.ui) m.env.ui->remove_contributions(l->name);
         // No longer allowed its own connections: they close (tcp_state -1 from now on).
         if (!l->can(kCapNet)) l->tcp.clear();
     }

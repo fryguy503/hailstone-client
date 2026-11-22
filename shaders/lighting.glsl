@@ -39,16 +39,17 @@ struct PointLightGpu {
     vec4 cover;  /* the cover map (render/cover_map.h): x, y its corner, z: 1 / its size, w: its top */                \
     vec4 cover_params; /* x: 1 / its depth, y: 1 the cover map on, z: 1 the water map on */                            \
     vec4 weather; /* render/weather_renderer.h set_weather: x wet, y snow, z rain falling, w puddles */               \
-    vec4 vision;  /* the infravision / ultravision raise of the ambient, added as linear light (modern) */            \
+    vec4 vision;  /* rgb the infravision / ultravision raise, linear (modern); w the zone lamps' pools (lamp_light) */\
     vec4 probe;   /* render/ambient_probe.h: the baked light where the player stands, w 1 + the sky's share (0 none) */ \
     vec4 reveal_origin; /* game/iso_occlusion.h IsoReveal: xyz the camera, w strength (0 off) */                      \
     vec4 reveal_axis;   /* xyz the way to the player, w their distance */                                             \
     vec4 reveal_shape;  /* x radius at the player, y the height it starts at, z depth margin, w soft share */        \
     vec4 reveal_roof;   /* x the height it cuts above, y its flat radius, z its soft edge, w strength (0 off) */      \
+    vec4 carried;       /* x: how many of the first lights are carried, y: their stacking (add_scene_light) */       \
     vec4 point_shadow_light[8]; /* render/point_shadows.h: xyz the light, w its radius */                              \
     vec4 point_shadow_slot[8];  /* x: its cube's first layer, y: strength */                                           \
     vec4 point_shadow_params;   /* x: count, y: 1 / face size, z: the face scale, w: the near distance */              \
-    PointLightGpu lights[32];
+    PointLightGpu lights[128]; /* render::kMaxSceneLights */
 
 // The isometric camera's cut through what stands between it and the player (game/iso_occlusion.h, Hailstone's own):
 // how much of world point `p` is cut away, 0..1: the cone round the line to the player, or the roof over them.
@@ -182,6 +183,23 @@ float light_pool(float d2, float r) {
     float window = 1.0 - min(d2 / (r * r), 1.0);
     float core = clamp(r * 0.2, 8.0, 16.0);
     return window * core * core / (core * core + d2);
+}
+
+// Light `i`'s share `c` at a pixel, into the sum: a carried light (the first carried.x, render::SceneLighting::carried)
+// into its own sum and brightest, which carried_light_total combines; every other light straight into `light`.
+void add_scene_light(inout vec3 light, inout vec3 carried_sum, inout vec3 carried_top, vec4 carried, int i, vec3 c) {
+    if (float(i) + 0.5 < carried.x) {
+        carried_sum += c;
+        carried_top = max(carried_top, c);
+    } else {
+        light += c;
+    }
+}
+
+// The carried lights at a pixel: the brightest, and carried.y of what the others add (1 all of it, as every light;
+// 0 the brightest alone, so a crowd of torches lights no more than one).
+vec3 carried_light_total(vec3 carried_sum, vec3 carried_top, vec4 carried) {
+    return carried_top + (carried_sum - carried_top) * carried.y;
 }
 
 // The modern mode's point light: the light's colour in linear, x 2.5 so a torch reads against daylight, falling off

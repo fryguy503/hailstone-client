@@ -72,7 +72,10 @@ const Spawn* find(const WorldState& w, std::uint32_t id) {
 
 bool is_banner_race(std::uint32_t race) { return race == 586 || (race >= 553 && race <= 557); }
 
-bool is_targetable(const Spawn& s) { return s.targetable && s.body_type != 11; }
+bool is_targetable(const Spawn& s) {
+    return s.targetable && !s.has_property(11) &&
+           !(s.has_property(100) && (s.has_property(101) || s.has_property(103)));
+}
 
 namespace {
 
@@ -126,6 +129,25 @@ bool is_player_pet(const WorldState& world, const Spawn& s) {
     return owner && !owner->is_npc;
 }
 
+bool npc_in_target_view(const Spawn& spawn, const glm::mat4* view_projection,
+                        const std::function<bool(const glm::vec3&)>& clear_line) {
+    const glm::vec3 center = spawn.display_valid ? spawn.display_position : spawn.position;
+    // Sample the body and eye so a low wall or the edge of the viewport can hide part of the spawn.
+    const float eye = spawn.heights.view_height - spawn.heights.avatar_height;
+    const float lower_body = -0.5f * spawn.heights.avatar_height;
+    for (const float height : {0.0f, eye, lower_body}) {
+        const glm::vec3 point = center + glm::vec3(0.0f, 0.0f, height);
+        if (view_projection) {
+            const glm::vec4 clip = *view_projection * glm::vec4(point, 1.0f);
+            // Vulkan clip space. The depth check works with the renderer's reverse-Z projection too.
+            if (!(clip.w > 0.0f && glm::abs(clip.x) <= clip.w && glm::abs(clip.y) <= clip.w &&
+                  clip.z >= 0.0f && clip.z <= clip.w)) continue;
+        }
+        if (!clear_line || clear_line(point)) return true;
+    }
+    return false;
+}
+
 std::vector<CycleCandidate> cycle_candidates(const WorldState& world, std::int32_t mode, const glm::vec3& eye,
                                              float range, bool skip_pets,
                                              const std::function<bool(const Spawn&)>& invisible,
@@ -145,7 +167,7 @@ std::vector<CycleCandidate> cycle_candidates(const WorldState& world, std::int32
         glm::vec3 p = s.display_valid ? s.display_position : s.position;
         float d = glm::distance(p, eye);
         if (!(d <= range)) continue;
-        if (mode == 1 && in_sight && !in_sight(s)) continue; // Hailstone: tab_line_of_sight, after the cheap tests
+        if (mode == 1 && in_sight && !in_sight(s)) continue; // Hailstone: view and occlusion, after the range test
         CycleCandidate c;
         c.id = id;
         c.distance = d;

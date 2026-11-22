@@ -55,6 +55,14 @@ std::uint8_t carrier_light_value(const Spawn& spawn, std::uint32_t player_id, co
 // the same modern palette and chest offset as the local player's light.
 std::optional<LightSource> spawn_carried_light(const Spawn& spawn);
 
+// Hailstone's Carried Light controls (display.carried_light, display.carried_light_reach; 1 as above): a carried
+// light's colour x `strength` (0..kMaxCarriedLight) and its radius x `reach` (kMinCarriedReach..kMaxCarriedReach), for
+// the player's light and every other carrier's alike; nullopt at strength 0 (no light at all, not a black one).
+inline constexpr float kMaxCarriedLight = 3.0f;
+inline constexpr float kMinCarriedReach = 0.25f;
+inline constexpr float kMaxCarriedReach = 2.0f;
+std::optional<LightSource> scaled_carried_light(const LightSource& light, float strength, float reach);
+
 // Character select and creation (modern lighting): a soft key light on the model from the camera's side, above and to
 // its left, so the character reads in clz's tree shade. `feet` is the model's position, `height` its height and
 // `camera` the camera's position; the light reaches past the model whatever the race's camera distance. Not the

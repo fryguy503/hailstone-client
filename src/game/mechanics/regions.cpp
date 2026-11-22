@@ -65,4 +65,29 @@ RegionChange check_region_change(RegionSpawn& s, const RegionPoint& position, co
     return out;
 }
 
+std::optional<std::int32_t> FeetWetness::change(std::uint32_t flags, float speed_z) {
+    const std::uint8_t next = static_cast<std::uint8_t>(flags & 0xff);
+    if (next == type_) return std::nullopt;
+    const std::uint8_t previous = type_;
+    type_ = next;
+    switch (next) {
+    case kRegionWaterType:
+    case kRegionSlimeType:
+    case kRegionFreezingWaterType:
+    case kRegionWater2Type:
+    case kRegionWater3Type:
+        // The original's two ordered compares against 1 and -1 (0x59ec6b).
+        if (speed_z >= kWaterVerticalSpeed || speed_z <= -kWaterVerticalSpeed) return kSoundWaterIn;
+        break;
+    case kRegionLavaType:
+        return kSoundWaterOut;
+    default:
+        break;
+    }
+    // The original's check before the switch (0x59ec4c): only after it has
+    // found no sound of its own does a step out of any type into 0 play.
+    if (previous != 0 && next == 0) return kSoundWaterOut;
+    return std::nullopt;
+}
+
 } // namespace hailstone::game::mechanics

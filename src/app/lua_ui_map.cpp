@@ -43,6 +43,7 @@
 #include <imgui.h>
 #include <lua.hpp>
 
+#include "app/lua_ui_map_overlay.h"
 #include "app/lua_ui_windows.h"
 #include "core/ascii_case.h"
 #include "core/atomic_file.h"
@@ -225,6 +226,7 @@ struct MapState {
     bool toolbar_open = false;
     bool label_window_open = false;
     std::string player_zone; // the zone the map was loaded for when the player came in (CDisplay::StartWorldDisplay)
+    std::uint32_t player_zone_entry = 0;
 
     // ---- the atlas page (AtlasWnd in MVW_AtlasRenderArea)
     int tab = 0;                          // MVW_Subwindows: 0 the map page, 1 the atlas page
@@ -693,8 +695,10 @@ public:
         s.update_routes(h);
         // The player's zone on zone-in (and when the box comes); an emptied map (Current Zone, the maps directory)
         // loads the player's zone again. Another zone's map, chosen in the atlas, stays until then.
-        if (zone != s.player_zone || s.zone.empty() || (zone == s.zone && h.zone_box_valid && !s.box_valid)) {
+        if (zone != s.player_zone || h.zone_entry != s.player_zone_entry || s.zone.empty() ||
+            (zone == s.zone && h.zone_box_valid && !s.box_valid)) {
             s.player_zone = zone;
+            s.player_zone_entry = h.zone_entry;
             s.load_zone(h, zone);
         }
         if (!s.atlas_pending.empty()) s.load_atlas(h, std::exchange(s.atlas_pending, std::string()));
@@ -1757,6 +1761,20 @@ int DrawMinimap(lua_State* L) {
     zv.reach = range; // the circle's radius r is `range` map units, however the map turns
     zv.reach_from = glm::vec2(me->x, me->y);
     draw_zone_view(s, h, zv);
+    MapOverlayView overlay;
+    overlay.minimap = true;
+    overlay.x0 = cx - r; overlay.y0 = cy - r; overlay.x1 = cx + r; overlay.y1 = cy + r;
+    overlay.cx = cx; overlay.cy = cy; overlay.radius = r;
+    overlay.scale = k;
+    overlay.turn = hd;
+    overlay.center_x = me->x; overlay.center_y = me->y;
+    // The minimap is centred on the player, but another zone's map (chosen in the atlas) draws no player marker;
+    // the overlay is told the same, so it does not put one back.
+    overlay.have_player = s.view.current_zone;
+    if (overlay.have_player) { overlay.player_x = me->x; overlay.player_y = me->y; }
+    overlay.zone = s.zone;
+    overlay.current_zone = s.view.current_zone;
+    dispatch_map_overlays(L, overlay);
     lua_pushnumber(L, me->x);
     lua_pushnumber(L, me->y);
     lua_pushnumber(L, k);
@@ -1808,6 +1826,18 @@ int DrawZoneMap(lua_State* L) {
     zv.P = [&](float x, float y) { return glm::vec2((x - cx) * k, (y - cy) * k); };
     ImGui::GetWindowDrawList()->PushClipRect(ImVec2(x0, y0), ImVec2(x1, y1), true);
     draw_zone_view(s, h, zv);
+    MapOverlayView overlay;
+    overlay.minimap = false;
+    overlay.x0 = x0; overlay.y0 = y0; overlay.x1 = x1; overlay.y1 = y1;
+    overlay.cx = (x0 + x1) / 2; overlay.cy = (y0 + y1) / 2; overlay.radius = 0.0f;
+    overlay.scale = k;
+    overlay.turn = 0.0f;
+    overlay.center_x = cx; overlay.center_y = cy;
+    overlay.have_player = s.view.current_zone;
+    if (overlay.have_player) { overlay.player_x = me->x; overlay.player_y = me->y; }
+    overlay.zone = s.zone;
+    overlay.current_zone = s.view.current_zone;
+    dispatch_map_overlays(L, overlay);
     ImGui::GetWindowDrawList()->PopClipRect();
     return out;
 }
@@ -1923,12 +1953,17 @@ int EndFind(lua_State* L) {
     return 0;
 }
 
-// name, short_name = hs.ZoneName()   -- the zone the player is in ("" outside the world)
+// name, short_name [, entry] = hs.ZoneName([with_entry])   -- the zone the player is in ("" outside the world).
+// With a true argument, the third result changes on each zone entry and is nil outside the world.
 int ZoneName(lua_State* L) {
     UiHost& h = *host_of(L);
+    const bool with_entry = lua_isboolean(L, 1) && lua_toboolean(L, 1);
     lua_pushstring(L, h.in_game ? h.zone_long_name.c_str() : "");
     lua_pushstring(L, h.in_game ? h.zone_short_name.c_str() : "");
-    return 2;
+    if (!with_entry) return 2;
+    if (h.in_game) lua_pushinteger(L, h.zone_entry);
+    else lua_pushnil(L);
+    return 3;
 }
 
 // hour, minute = hs.GameTime()   -- the game clock, 0..23 and 0..59 (EQ hour h is h - 1 o'clock); nil before the
@@ -1990,16 +2025,17 @@ bool map_policy_intact(lua_State* L, const game::MapPolicy& policy, std::uint64_
         lua_pop(L, 1);
         ++fields;
     }
-    return fields == 7 && field_is(L, "custom_spawns", (policy.flags & game::MapPolicyCustomSpawns) != 0) &&
+    return fields == 8 && field_is(L, "custom_spawns", (policy.flags & game::MapPolicyCustomSpawns) != 0) &&
            field_is(L, "stock_npcs", !(policy.flags & game::MapPolicyHideStockNpcs)) &&
-           field_is(L, "npc_find", !(policy.flags & game::MapPolicyDisableNpcFind)) &&
+           field_is(L, "npc_find", policy.npc_find_enabled()) &&
+           field_is(L, "npc_find_server_only", policy.npc_find_server_only()) &&
            field_is(L, "name", std::string_view(policy.name)) && field_is(L, "revision", policy.revision) &&
            field_is(L, "context", context) && field_is(L, "source", source);
 }
 
 } // namespace
 
-// policy = hs.MapPolicy() -- {custom_spawns,stock_npcs,npc_find,name,revision,context,source}, named read-only fields.
+// policy = hs.MapPolicy() -- {custom_spawns,stock_npcs,npc_find,npc_find_server_only,name,revision,context,source}.
 // Opaque equality-only strings: revision tracks provider/content, source only provider ownership/lifetime, and
 // context the connection/player. Names are display text. Missing providers retain stock availability/preferences.
 // While all of it stays the same, each call returns the same table (a new one if a caller has changed it).
@@ -2042,10 +2078,11 @@ int MapPolicy(lua_State* L) {
         lua_pop(L, 1);
     }
     last.valid = false; // (until the new table is made and kept)
-    lua_createtable(L, 0, 7);
+    lua_createtable(L, 0, 8);
     lua_pushboolean(L, (policy.flags & game::MapPolicyCustomSpawns) != 0); lua_setfield(L, -2, "custom_spawns");
     lua_pushboolean(L, !(policy.flags & game::MapPolicyHideStockNpcs)); lua_setfield(L, -2, "stock_npcs");
-    lua_pushboolean(L, !(policy.flags & game::MapPolicyDisableNpcFind)); lua_setfield(L, -2, "npc_find");
+    lua_pushboolean(L, policy.npc_find_enabled()); lua_setfield(L, -2, "npc_find");
+    lua_pushboolean(L, policy.npc_find_server_only()); lua_setfield(L, -2, "npc_find_server_only");
     lua_pushlstring(L, policy.name.data(), policy.name.size()); lua_setfield(L, -2, "name");
     auto opaque = [L](std::uint64_t number, const char* name) {
         std::array<char, 20> encoded{};

@@ -13,6 +13,7 @@ local function rig(pack)
   settings={["map.sidebar"]="0",["map.sideTab"]="markers",["map.view"]="zone",["map.labels"]="1",["map.showMarkers"]="1"},
   writes={},buttons={},popupButtons={},texts={},pad={},shown=true,inGame=true,allowed=true,present=true,apiAvailable=true,
   withActions=true,withSections=true,sectionsEnabled=true,generation=1,owner="plugin:map-fixture",zone="alpha",shownZone="alpha",own=true,
+  zoneEntry=1,playerX=5,playerY=8,
   policy={custom_spawns=true,stock_npcs=false,npc_find=false,name="Map provider",revision="provider:1",context="context:1",source="source:1"},
   autoZ=true,pathShown=false,geometry={},focus=nil,popup=nil,popupDepth=0,io={fps=60,mouseDX=0,mouseDY=0,wheel=0,alt=false},
   mapPacks={"Default"},mapPack=0,combos={}}
@@ -31,15 +32,20 @@ local function rig(pack)
  end
  local map={
   Policy=function()local snapshot={};for key,value in pairs(s.policy)do snapshot[key]=value end;return snapshot end,
-  ZoneName=function()return"Current zone",s.zone end,
+  ZoneName=function(withEntry)
+   if not s.inGame then return "","" end
+   if withEntry then return "Current zone",s.zone,s.zoneEntry end
+   return "Current zone",s.zone
+  end,
   ZoneShown=function()return"Shown zone",s.shownZone,s.own end,
   ShowZone=function(short)s.shownZone=short or s.zone;s.own=short==nil or short==s.zone;return mapAction("ShowZone",short)end,
   AutoZ=function(value)if value~=nil then s.autoZ=value;mapAction("AutoZ",value)end;return s.autoZ end,
   FindPathShown=function()return s.pathShown end,
   DrawZone=function(x0,y0,x1,y1,zoom,cx,cy,labels)
-   draw();s.geometry[#s.geometry+1]={zoom=zoom,cx=cx,cy=cy,labels=labels,x0=x0,y0=y0,x1=x1,y1=y1}
+   draw();s.geometry[#s.geometry+1]={zone=s.shownZone,zoom=zoom,cx=cx,cy=cy,labels=labels,x0=x0,y0=y0,x1=x1,y1=y1}
    if s.noMap then return nil end
-   return 1,0,0,5,8
+   if s.own then return 1,0,0,s.playerX,s.playerY end
+   return 1,0,0
   end,
  }
  local function checkPackCombo(screen,id)
@@ -191,13 +197,17 @@ local function rig(pack)
  local pad={connected=function()return true end,axis=function(key)return s.axes and s.axes[key]or 0 end,
   menuPressed=function(key)return s.pad[key]or false end,navVisible=function()return true end,
   focused=function()return ui.IsItemFocused()end,yActivated=function(clicked)return clicked and s.pad.y==true end}
- local window={shown=function()return s.shown end,
+ local window={shown=function()return s.inGame and s.shown end,
   begin=function(_,opts)s.beginOpts=opts;s.depth=s.depth+1;return true end,
   area=function()return 0,0,1100,650 end,focused=function()return true end,
   pressed=function(key)return s.pad[key]or false end,
   finish=function()s.depth=s.depth-1;return s.beginOpts.close~=false and s.pad.b or false end}
  local hud={T=theme,AutoZControls=nop,Dialog=function(_,_,_,body)s.depth=s.depth+1;body(0,0,1100,650,1);s.depth=s.depth-1 end}
- local atlas={zoom=1,Opened=nop,Show=nop,DrawCrumbs=nop,DrawFinder=nop,DrawView=draw,DrawRouteBanner=nop,DrawExits=nop}
+ local atlas={zoom=1,Opened=nop,ResetView=nop,Show=nop,DrawCrumbs=nop,DrawFinder=nop,DrawRouteBanner=nop,DrawExits=nop,
+  DrawView=function(_,_,_,_,_,viewZone)
+   draw()
+   if s.atlasZone then viewZone(s.atlasZone);s.atlasZone=nil end
+  end}
  local FL={state={},CATS={},SHORT={},rows=function()return{}end,marks=function()return false end,
   policy=function()return s.policy.stock_npcs~=false,s.policy.npc_find~=false end,
   current=function()return nil end,selected=function()return nil end}
@@ -340,6 +350,95 @@ for _,pack in ipairs({"modern","gamepad"})do
   s.draw();equal(#s.mapActions,before,"A retired canvas popup cannot issue a stale coordinate Find")
   check(s.popup~="##mapmenu","Canvas replacement retires its old stock popup")
  end
+ s.restore()
+end
+
+local function lastMap(s)return s.geometry[#s.geometry]end
+
+local function panAndZoom(s)
+ s.hover="##maparea";s.io.wheel=1;s.draw();s.io.wheel=0;s.draw()
+ local before=lastMap(s)
+ s.active="##maparea";s.drag=true;s.io.mouseDX=27;s.io.mouseDY=-11;s.draw()
+ s.drag=false;s.active=nil;s.io.mouseDX=0;s.io.mouseDY=0;s.draw()
+ local view=lastMap(s)
+ check(view.zoom>1,"The map is zoomed in")
+ check(view.cx~=before.cx and view.cy~=before.cy,"The map was panned on both axes")
+ return view
+end
+
+local function sameCamera(view,expected,why)
+ equal(view.zoom,expected.zoom,why.." zoom")
+ equal(view.cx,expected.cx,why.." horizontal center")
+ equal(view.cy,expected.cy,why.." vertical center")
+end
+
+-- Camera state survives closing either presenter, but belongs to one zone entry.
+for _,pack in ipairs({"modern","gamepad"})do
+ local s=rig(pack);s.draw()
+ local default=lastMap(s)
+ local panned=panAndZoom(s)
+ s.shown=false;s.draw();s.playerX=15;s.playerY=18
+ s.shown=true;s.draw();sameCamera(lastMap(s),panned,pack.." reopen preserves")
+ s.draw();sameCamera(lastMap(s),panned,pack.." reopen stays panned after the player moves")
+
+ s.shown=false;s.draw()
+ s.zone="beta";s.shownZone=s.zone;s.zoneEntry=s.zoneEntry+1
+ s.draw();s.shown=true;s.draw()
+ sameCamera(lastMap(s),default,pack.." zone change while closed resets")
+ panAndZoom(s)
+ s.zoneEntry=s.zoneEntry+1;s.draw()
+ sameCamera(lastMap(s),default,pack.." new entry with the same zone short name resets")
+
+ panAndZoom(s)
+ s.inGame=false;s.draw()
+ s.inGame=true;s.zoneEntry=s.zoneEntry+1;s.draw()
+ sameCamera(lastMap(s),default,pack.." logout and re-entry into the same zone resets")
+
+ s.hover="##maparea";s.io.wheel=1;s.draw();s.io.wheel=0;s.draw();s.draw()
+ local following=lastMap(s)
+ equal(following.cx,s.playerX);equal(following.cy,s.playerY)
+ s.shown=false;s.draw();s.playerX=25;s.playerY=28
+ s.shown=true;s.draw();s.draw()
+ equal(lastMap(s).zoom,following.zoom,pack.." reopen preserves following zoom")
+ equal(lastMap(s).cx,s.playerX,pack.." reopen still follows the player horizontally")
+ equal(lastMap(s).cy,s.playerY,pack.." reopen still follows the player vertically")
+ s.restore()
+end
+
+-- Modern restores a browsed map and its camera, and displays the player's map in the minimap while closed.
+do
+ local s=rig("modern");s.draw()
+ local default=lastMap(s)
+ s.draw({},"##vworld");s.atlasZone="remote";s.draw();s.draw()
+ equal(lastMap(s).zone,"remote")
+ local panned=panAndZoom(s)
+ s.shown=false;s.draw();equal(s.shownZone,"alpha","Closing restores the native map for the minimap")
+ s.shown=true;s.draw();equal(lastMap(s).zone,"remote","Reopening shows the map that was closed")
+ sameCamera(lastMap(s),panned,"Reopening a browsed map preserves")
+ s.shown=false;s.draw()
+ s.zone="beta";s.shownZone=s.zone;s.zoneEntry=s.zoneEntry+1
+ s.shown=true;s.draw();equal(lastMap(s).zone,"beta","Zoning clears a previously browsed map")
+ sameCamera(lastMap(s),default,"Zoning after browsing resets")
+ s.restore()
+end
+
+-- The real atlas keeps its camera on repeated opens and starts at the new zone after a reset.
+do
+ local s=rig("modern")
+ s.api.map.ZoneLinks=function()return "server",0,0,0 end
+ s.api.map.AtlasIndex=function()return{
+  pages={{file="Alpha.xml",title="Alpha region"},{file="Beta.xml",title="Beta region"}},
+  zones={{zone="alpha",id=1,name="Alpha",page="Alpha.xml",x0=0,y0=0,x1=20,y1=40},
+   {zone="beta",id=2,name="Beta",page="Beta.xml",x0=40,y0=60,x1=60,y1=100}},
+ }end
+ local atlas=originalDofile(CLIENT_ROOT.."/ui/modern/lib/atlas.lua")
+ atlas.Opened();equal(atlas.page,"Alpha.xml")
+ local panned={zoom=3,cx=45,cy=65}
+ atlas.zoom,atlas.cx,atlas.cy=panned.zoom,panned.cx,panned.cy
+ atlas.Opened();sameCamera(atlas,panned,"Reopening World preserves")
+ s.zone="beta";atlas.ResetView();atlas.Opened()
+ equal(atlas.page,"Beta.xml")
+ sameCamera(atlas,{zoom=1.6,cx=50,cy=80},"Opening World after zoning resets")
  s.restore()
 end
 

@@ -191,8 +191,8 @@ std::vector<std::string> effects_of(const net::Item& item, const mech::SpellLook
     auto add = [&](const net::Item& i) {
         for (auto [kind, label] : kKinds) {
             const net::ItemEffect& e = i.effects[kind];
-            if (!e.present()) continue;
-            const SpellData* s = spells ? spells(e.effect) : nullptr;
+            if (!e.displayable()) continue;
+            const SpellData* s = e.present() && spells ? spells(e.effect) : nullptr;
             std::string name = s && !s->name.empty() ? s->name : !e.name.empty() ? e.name : std::format("spell {}", e.effect);
             out.push_back(std::format("{}: {}", label, name));
         }

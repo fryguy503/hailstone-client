@@ -230,6 +230,30 @@ TEST_CASE("a guild tribute reply preserves contents added to the donated bag") {
     CHECK(c.inventory().cursor()->content(0)->id == 5002);
 }
 
+TEST_CASE("the tribute preview of a bag is its own favour when empty and 0 while it holds anything") {
+    auto config = tribute_config();
+    auto bag = make_item(5001, "Donation bag", 26);
+    bag.item_class = 1;
+    bag.bag_slots = 4;
+    bag.favor = 9;
+    bag.guild_favor = 4;
+    config.characters.front().inventory.push_back(bag);
+    ScratchDir files("tribute_preview_bag");
+    Rig rig(std::move(config), tribute_options(files));
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    c.click_slot(net::ItemSlot::possessions(26), true, false);
+    REQUIRE(c.inventory().cursor());
+    CHECK(c.tribute_cursor_value(false) == 9u);
+    CHECK(c.tribute_cursor_value(true) == 4u);
+    auto filled = *c.inventory().cursor();
+    filled.contents.push_back({0, make_item(5002, "Bag content", 26)});
+    deliver_item(c, filled);
+    REQUIRE(c.inventory().cursor()->content(0));
+    CHECK(c.tribute_cursor_value(false) == 0u);
+    CHECK(c.tribute_cursor_value(true) == 0u);
+}
+
 TEST_CASE("an item without a usable serial cannot start an uncorrelatable donation") {
     ScratchDir files("tribute_reply_missing_serial");
     Rig rig(tribute_config(), tribute_options(files));

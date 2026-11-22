@@ -4,7 +4,9 @@
 #include "game/eq_strings.h"
 #include "game/item_compare.h"
 #include "game/item_display.h"
+#include "ui/item_windows.h"
 
+#include <algorithm>
 #include <set>
 #include <string>
 
@@ -67,6 +69,82 @@ TEST_CASE("build_item_display: info lines, then the grid in its columns and bloc
     CHECK(d.measured[3] == "Class: WAR PAL ");
     CHECK(d.measured[5] == "Race: HUM BAR ");
     CHECK(d.measured[7].empty()); // no deity
+}
+
+TEST_CASE("Item descriptions show personal and guild tribute favor per item") {
+    net::Item item;
+    const game::ItemDisplayContext ctx;
+    const auto description = [&] { return game::build_item_display(item, ctx).description; };
+    const auto native_has = [&](std::string_view line) {
+        const auto lines = ui::item_info_lines(item);
+        return std::find(lines.begin(), lines.end(), line) != lines.end();
+    };
+
+    CHECK(description().empty());
+    CHECK_FALSE(native_has("Personal Tribute: 0 favor"));
+    CHECK_FALSE(native_has("Guild Tribute: 0 favor"));
+
+    item.favor = 1476;
+    CHECK(description() == "Personal Tribute: 1476 favor<BR>");
+    CHECK(native_has("Personal Tribute: 1476 favor"));
+    CHECK_FALSE(native_has("Guild Tribute: 0 favor"));
+
+    item.guild_favor = 300;
+    item.max_stack = 20;
+    item.stack_count = 5;
+    CHECK(description() == "Personal Tribute: 1476 favor each<BR>Guild Tribute: 300 favor each<BR>");
+    CHECK(native_has("Personal Tribute: 1476 favor each"));
+    CHECK(native_has("Guild Tribute: 300 favor each"));
+}
+
+TEST_CASE("Item descriptions show loot effects when the spell table cannot resolve them") {
+    game::EqStrings s;
+    s.set(0xbdc, "Effect: %1 %2");
+    s.set(0xbd5, "(Combat)");
+    s.set(0x159a, "Focus Effect: %1");
+    game::ItemDisplayContext ctx;
+    ctx.strings = &s;
+    ctx.show_spell_descriptions = true;
+    ctx.spell = [](std::int32_t id) -> const game::SpellData* {
+        CHECK(id == 50002);
+        return nullptr;
+    };
+
+    net::ItemPacket packet;
+    packet.type = net::kItemPacketLoot;
+    packet.item.slot = net::ItemSlot::corpse(23);
+    auto& effects = packet.item.effects;
+    effects[net::kEffectProc].effect = -1; // The server masked the spell ID but retained the name.
+    effects[net::kEffectProc].name = "Winter's Waltz & <Chill>";
+    effects[net::kEffectFocus].effect = 50002;
+    effects[net::kEffectBard].effect = -1;
+    effects[net::kEffectWorn].name = "Unused Name"; // ID 0 has no effect.
+    const auto loot = net::decode_item_packet(net::encode_item_packet(false, packet));
+    REQUIRE(loot);
+
+    CHECK(game::build_item_display(loot->item, ctx).description ==
+          "Effect: Winter&apos;s Waltz &amp; &lt;Chill&gt; (Combat)<BR>Focus Effect: spell 50002<BR><BR>");
+    const auto lines = ui::item_info_lines(loot->item);
+    CHECK(std::find(lines.begin(), lines.end(), "Combat Effect:  Winter's Waltz & <Chill>") != lines.end());
+}
+
+TEST_CASE("Item descriptions show a click effect without a local spell record, and a masked one by name") {
+    game::EqStrings s;
+    s.set(0xbdc, "Effect: %1 %2");
+    s.set(0xbd7, "(Any Slot)");
+    game::ItemDisplayContext ctx;
+    ctx.strings = &s;
+    ctx.spell = [](std::int32_t) -> const game::SpellData* { return nullptr; };
+    net::Item it;
+    auto& click = it.effects[net::kEffectClick];
+    click.type = 1;
+    click.effect = 1234; // as at 0x6a1c70, a valid ID shows its line without a spell record
+    click.name = "Gate";
+    CHECK(game::build_item_display(it, ctx).description == "Effect: Gate (Any Slot)<BR><BR>");
+    click.effect = -1; // masked, named: the extension
+    CHECK(game::build_item_display(it, ctx).description == "Effect: Gate (Any Slot)<BR><BR>");
+    click.name.clear(); // stock EQEmu's "no effect"
+    CHECK(game::build_item_display(it, ctx).description.find("Effect:") == std::string::npos);
 }
 
 TEST_CASE("item_display_text_width: the longer of name and flags, then the other lines") {

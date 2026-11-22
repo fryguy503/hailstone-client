@@ -3,6 +3,8 @@
 // sends so that stock EQEmu's decoders get the sizes and string lengths they assume.
 
 #include <doctest/doctest.h>
+#include <initializer_list>
+#include <string_view>
 
 #include "mock_server/harness.h"
 #include "net/group_packets.h"
@@ -36,17 +38,126 @@ std::uint32_t u32_at(const AppPacket& p, std::size_t at) {
     return v;
 }
 
-AppPacket formatted(std::uint32_t id, const std::string& arg) {
+AppPacket formatted(std::uint32_t id, std::uint32_t color, std::initializer_list<std::string_view> args) {
     ByteWriter w;
     w.le(std::uint32_t{0});
     w.le(id);
-    w.le(std::uint32_t{15});
-    w.fixed_string(arg, arg.size() + 1);
+    w.le(color);
+    for (auto arg : args) w.fixed_string(arg, arg.size() + 1);
     w.le(std::uint8_t{0});
     return AppPacket(to_wire(Op::FormattedMessage), w.take());
 }
 
 } // namespace
+
+TEST_CASE("mock server: considering corpses requests and displays the server's decay and resurrection timers") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    constexpr std::uint32_t kNpcCorpse = 51;
+    constexpr std::uint32_t kPlayerCorpse = 52;
+    constexpr std::uint16_t kCorpseConsider = 0x5204;
+    constexpr std::uint16_t kLivingConsider = 0x742b;
+    // EQEmu sends spawn type 2 for either kind of corpse.
+    rig.server.add_spawn(make_spawn("a_rat's corpse", kNpcCorpse, 2, 1, 10.0f, 10.0f, 3.0f, 0.0f));
+    rig.server.add_spawn(make_spawn("Rival's corpse", kPlayerCorpse, 2, 1, 12.0f, 12.0f, 3.0f, 0.0f));
+    REQUIRE(rig.until([&] {
+        const auto& spawns = rig.conn.world().spawns;
+        return spawns.contains(kNpcCorpse) && spawns.contains(kPlayerCorpse);
+    }));
+    auto check_request = [&](std::uint16_t opcode, std::size_t previous_count, std::uint32_t target) {
+        REQUIRE(rig.until([&] { return sent(rig, opcode).size() > previous_count; }));
+        auto requests = sent(rig, opcode);
+        REQUIRE(requests.size() == previous_count + 1);
+        const auto& request = *requests.back();
+        REQUIRE(request.data.size() == 20);
+        CHECK(u32_at(request, 0) == rig.conn.world().player_id);
+        CHECK(u32_at(request, 4) == target);
+        CHECK(u32_at(request, 8) == 0);
+        CHECK(u32_at(request, 12) == 0);
+        CHECK(u32_at(request, 16) == 0);
+    };
+
+    rig.conn.set_target(kNpcCorpse);
+    rig.conn.consider();
+    check_request(kCorpseConsider, 0, kNpcCorpse);
+    rig.server.zone.send_reliable(formatted(495, 10, {"7", "29"})); // NPCQuestSay
+
+    rig.conn.set_target(kPlayerCorpse);
+    rig.conn.consider();
+    check_request(kCorpseConsider, 1, kPlayerCorpse);
+    rig.server.zone.send_reliable(formatted(491, 0, {"2", "46", "9"})); // White
+    rig.server.zone.send_reliable(formatted(493, 0, {"6", "19", "42", "8"}));
+
+    std::vector<ChatEvent> lines;
+    REQUIRE(rig.until([&] {
+        for (auto& line : rig.chat()) lines.push_back(std::move(line));
+        return has_line(lines, "CORPSE DECAY 6d 19h 42m 8s");
+    }));
+    CHECK_FALSE(has_line(lines, "[12241]")); // No local refusal for either corpse.
+    CHECK(has_line(lines, "CORPSE DECAY 7m 29s"));
+    CHECK(has_line(lines, "CORPSE REZ 2h 46m 9s"));
+    for (const auto& line : lines) {
+        if (line.text == "CORPSE DECAY 7m 29s") CHECK(line.color == 10);
+    }
+
+    CHECK(sent(rig, kLivingConsider).empty());
+    REQUIRE(add_rival(rig));
+    rig.conn.set_target(kRival);
+    rig.conn.consider();
+    check_request(kLivingConsider, 0, kRival);
+    CHECK(sent(rig, kCorpseConsider).size() == 2);
+}
+
+TEST_CASE("mock server: /consider refuses without a target and for a ship or boat, as Cmd_consider does") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    constexpr std::uint32_t kBoat = 61;
+    constexpr std::uint32_t kShipCorpse = 62;
+    constexpr std::uint16_t kCorpseConsider = 0x5204;
+    constexpr std::uint16_t kLivingConsider = 0x742b;
+    // Race 141 (BOAT) and 72 (SHIP) carry the race table's vehicle flag (PlayerClient_IsVehicleRace @0x59e530).
+    rig.server.add_spawn(make_spawn("a_boat", kBoat, 1, 141, 10.0f, 10.0f, 3.0f, 0.0f));
+    rig.server.add_spawn(make_spawn("a_ship's corpse", kShipCorpse, 2, 72, 12.0f, 12.0f, 3.0f, 0.0f));
+    REQUIRE(add_rival(rig));
+    REQUIRE(rig.until([&] {
+        const auto& spawns = rig.conn.world().spawns;
+        return spawns.contains(kBoat) && spawns.contains(kShipCorpse);
+    }));
+
+    std::vector<ChatEvent> lines;
+    auto wait_line = [&](const std::string& text) {
+        return rig.until([&] {
+            for (auto& line : rig.chat()) lines.push_back(std::move(line));
+            return has_line(lines, text);
+        });
+    };
+
+    // No target: 13063 "Consider whom?", not the reply handler's 12240.
+    REQUIRE(rig.conn.world().target_id == 0);
+    rig.conn.consider();
+    REQUIRE(wait_line("[13063]"));
+    CHECK_FALSE(has_line(lines, "[12240]"));
+
+    // A living vehicle: 13064 "You can't consider that." and nothing sent.
+    rig.conn.set_target(kBoat);
+    rig.conn.consider();
+    REQUIRE(wait_line("[13064]"));
+
+    // The check is on the living branch only: a vehicle's corpse still sends OP_ConsiderCorpse.
+    rig.conn.set_target(kShipCorpse);
+    rig.conn.consider();
+    REQUIRE(rig.until([&] { return !sent(rig, kCorpseConsider).empty(); }));
+    CHECK(u32_at(*sent(rig, kCorpseConsider).back(), 4) == kShipCorpse);
+
+    // An ordinary living target still sends OP_Consider; it is the only one sent.
+    rig.conn.set_target(kRival);
+    rig.conn.consider();
+    REQUIRE(rig.until([&] { return !sent(rig, kLivingConsider).empty(); }));
+    auto living = sent(rig, kLivingConsider);
+    REQUIRE(living.size() == 1);
+    CHECK(u32_at(*living.front(), 4) == kRival);
+    CHECK(sent(rig, kCorpseConsider).size() == 1);
+}
 
 TEST_CASE("mock server: /decline sends the original's 0x52f7 and EQEmu's 12-byte OP_DuelDecline") {
     Rig rig;
@@ -96,10 +207,10 @@ TEST_CASE("mock server: EQEmu's 1383 line from the challenged player ends our ch
     rig.conn.duel();
     REQUIRE(rig.conn.duel_state().challenged == kRival);
     // Someone else's name does not.
-    rig.server.zone.send_reliable(formatted(1383, "Nobody"));
+    rig.server.zone.send_reliable(formatted(1383, 15, {"Nobody"}));
     REQUIRE(rig.until([&] { return has_line(rig.chat(), "[1383] Nobody"); }));
     CHECK(rig.conn.duel_state().challenged == kRival);
-    rig.server.zone.send_reliable(formatted(1383, "Rival"));
+    rig.server.zone.send_reliable(formatted(1383, 15, {"Rival"}));
     REQUIRE(rig.until([&] { return rig.conn.duel_state().challenged == 0; }));
     CHECK_FALSE(rig.conn.duel_state().pending());
 }

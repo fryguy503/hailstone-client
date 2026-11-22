@@ -223,7 +223,7 @@ Some keys stay in `hailstone.ini` whoever plays (`Config::is_shared_key`):
 - the computer's graphics tier: `display.gpu_tier`;
 - what is taken only at start: `display.msaa`, `display.upscaler`, `ui.name`, `ui.scale`, `ui.cpp_windows`,
   `ui.dev_windows`, `ui.perf_*`, `game.fixed_step`, `audio.enabled`, `audio.soundfont`, `audio.mix_ahead`,
-  `nav.threads`, `nav.prebuild`, `display.extra_shields`.
+  `nav.threads`, `nav.prebuild`.
 
 A shared key still in a character's file moves into `hailstone.ini` when the character enters, if that has none. The
 UI packs' script settings (`ui/settings/<pack>.txt`) are shared too; the window layout is per character
@@ -576,6 +576,20 @@ The blocked buff lists in `hotbuttons.ini` are `[BlockedSpells]` `BlockedSpellID
 The asset folder's `defaults.ini`, `eqclient.ini` and `UI_<name>_<server>.ini` are read as defaults under these files
 and never written; so are its `userdata/AddressBook.txt` and `userdata/IgnoreList.txt`, the books a character starts
 from when it has none.
+
+#### Character settings import
+
+Use `/import` while playing the character that should receive the settings. Select a source character and world from
+the configured game data folder, then choose socials or hotbar buttons. The dialog lists detected layout, trader,
+barter, and saved hotbar files for reference.
+
+The preview shows additions, matching slots, and skips with reasons. It displays social commands for review and
+skips unsupported commands, occupied slots (including scripted socials), and unresolved action references. Applying
+fills only the reviewed empty slots. Imported socials run when activated in play. The source files are read-only.
+
+Hailstone saves the previous `hotbuttons.ini` under `import-backups/` in the active character's directory before
+updating the settings. **Restore backup** in the import window is available while the current settings match a
+saved import revision. Edits after an import prevent that backup from overwriting them.
 
 ## Builds and installs
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "assets/model.h"
 
@@ -52,13 +53,15 @@ bool visual_surface_material(const assets::Material& material) {
     }
 }
 
-ObjectShape ObjectShape::from_mesh(const assets::Mesh& mesh) {
+ObjectShape ObjectShape::from_mesh(const assets::Mesh& mesh, bool keep_pick_proxy) {
     ObjectShape s;
     for (const auto& v : mesh.vertices) s.radius = std::max(s.radius, glm::length(v.position));
     bool any = false;
+    std::vector<CollisionTriangle> pick_proxy;
     for (const auto& part : mesh.parts) {
         const bool visible = part.material < mesh.materials.size() && visual_surface_material(mesh.materials[part.material]);
-        if (!part.solid && !visible) continue;
+        const bool proxy = keep_pick_proxy && !part.solid && s.records.empty();
+        if (!part.solid && !visible && !proxy) continue;
         bool see_through = part.material < mesh.materials.size() && !solid(mesh.materials[part.material].blend);
         for (std::uint32_t i = 0; i + 2 < part.index_count; i += 3) {
             // A part reaching past the index list (a damaged file) ends there.
@@ -71,7 +74,12 @@ ObjectShape ObjectShape::from_mesh(const assets::Mesh& mesh) {
             if (visible)
                 s.visual.push_back(CollisionTriangle::make(mesh.vertices[idx[0]].position, mesh.vertices[b].position,
                                                            mesh.vertices[c].position, 0));
-            if (!part.solid) continue;
+            if (!part.solid) {
+                if (proxy)
+                    pick_proxy.push_back(CollisionTriangle::make(mesh.vertices[idx[0]].position, mesh.vertices[b].position,
+                                                                 mesh.vertices[c].position, kTrianglePassable));
+                continue;
+            }
             s.records.push_back(CollisionTriangle::make(mesh.vertices[idx[0]].position, mesh.vertices[b].position,
                                                         mesh.vertices[c].position,
                                                         see_through ? kTriangleTransparent : 0));
@@ -85,6 +93,7 @@ ObjectShape ObjectShape::from_mesh(const assets::Mesh& mesh) {
             }
         }
     }
+    if (s.records.empty()) s.pick_proxy = std::move(pick_proxy);
     return s;
 }
 

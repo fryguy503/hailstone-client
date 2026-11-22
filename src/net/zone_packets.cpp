@@ -1129,6 +1129,14 @@ std::optional<SpawnAppearance> decode_spawn_appearance(const AppPacket& p) {
     });
 }
 
+std::optional<SetBodyType> decode_set_body_type(const AppPacket& p) {
+    if (p.data.size() != 8) return std::nullopt;
+    return decode_with(p, [](ByteReader& r) {
+        const auto spawn_id = r.le<std::uint32_t>();
+        return SetBodyType{spawn_id, r.le<std::uint32_t>()};
+    });
+}
+
 std::optional<ChangeSize> decode_change_size(const AppPacket& p) {
     if (p.data.size() < 8) return std::nullopt;
     return decode_with(p, [](ByteReader& r) {
@@ -1369,7 +1377,7 @@ AppPacket encode_auto_fire(bool on) {
     return make_packet(Op::AutoFire, std::move(w));
 }
 
-AppPacket encode(const Consider& v) {
+AppPacket encode(const Consider& v, Op op) {
     ByteWriter w;
     w.le(v.player_id);
     w.le(v.target_id);
@@ -1377,7 +1385,7 @@ AppPacket encode(const Consider& v) {
     w.le(v.level);
     w.le(v.pvp_con);
     w.zeros(3);
-    return make_packet(Op::Consider, std::move(w));
+    return make_packet(op, std::move(w));
 }
 
 std::optional<Consider> decode_consider(const AppPacket& p) {

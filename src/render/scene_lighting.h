@@ -60,6 +60,10 @@ struct Daylight {
     // the sky and the lamps' pools carry the scene; indoors, where it is the only light, more of both.
     float baked = 1.0f;
     float baked_lamps = 1.0f;
+    // How strong the zone's lamps (its lights.wld or EQG lights) shine as real lights, on characters and objects and in
+    // their pools on the zone (display.baked_lamp_light, 0..kMaxBakedLamps; Hailstone's own), at any hour, so they
+    // match the walls the slider brightens or darkens. The lights the player and spells make are left as they are.
+    float lamp_light = 1.0f;
 };
 
 // `outdoor`: OP_NewZone time types 1, 2 and 5. Indoors there is no sun, a dim neutral ambient and the baked colour at
@@ -75,7 +79,20 @@ inline constexpr glm::vec3 kBloodMoon{0.36f, 0.08f, 0.05f};
 inline constexpr float kNightBakedLamps = 0.35f;
 inline constexpr float kIndoorBaked = 0.5f;
 inline constexpr float kIndoorBakedLamps = 0.7f;
-Daylight daylight(float hour, bool outdoor, float moon_phase = 0.5f, float blood_moon = 0.0f);
+// Hailstone's own darkness controls (Options > Ambient Light, Baked Lamp Light; 1 as above, 0 none), for a darker
+// night and dungeon. `ambient` (display.ambient_light) scales the fill light that keeps the dark readable: indoors the
+// ambient and the baked colour's rest; outdoors the starlight floor and the baked colour's rest by night (kNightBaked
+// and kMoonBaked). `baked_lamps` (display.baked_lamp_light, 0..kMaxBakedLamps) scales the baked colour's lamps' part
+// indoors and by night (kIndoorBakedLamps, kNightBakedLamps), leaving the pools round the lamps; above 1 the lamps
+// light their rooms more than the builders baked. The day, the sun, the moon and the sky it lights stay as they are.
+inline constexpr float kMaxBakedLamps = 3.0f;
+Daylight daylight(float hour, bool outdoor, float moon_phase = 0.5f, float blood_moon = 0.0f, float ambient = 1.0f,
+                  float baked_lamps = 1.0f);
+
+// How much of the modern haze's colour stays with `ambient` (display.ambient_light, 0..1): the haze is lit air, and
+// with less fill light in the dark it would leave the distance glowing grey. Indoors `ambient`; outdoors from
+// `ambient` by night to 1 by day (the sun `sun_z` 6 degrees below the horizon .. 15 above, as the baked colour fades).
+float haze_ambient_scale(float sun_z, bool outdoor, float ambient);
 
 // The sky's tilt (this client's own; the original's sun path is not traced): the sun, moon and stars turn about a pole
 // standing 90 - kSkyNoonElevation degrees over the northern horizon (+X), so the sun rises due east (-Y) at 6:00,
@@ -94,7 +111,15 @@ float moon_lit(float phase);
 // white by day, warm at sunrise and sunset and dark by night.
 glm::vec3 cloud_light(const Daylight& daylight);
 
-inline constexpr std::size_t kMaxSceneLights = 32;
+// The lights characters, objects and plants take per pixel (the zone takes its own from its light grid, uncapped):
+// the dynamic ones and the zone's nearest to the camera. 128, so a city's or dungeon's lamps light the characters in
+// all of a room and not only the nearest 32 lamps' (about 130 units round the player in a lit city). shaders/lighting.glsl
+// SCENE_LIGHTING_FIELDS's lights[] is the same size.
+inline constexpr std::size_t kMaxSceneLights = 128;
+// How far from the camera the zone's lamps are taken (game::select_lights' range; display.lamp_light_distance).
+inline constexpr float kLampLightDistance = 600.0f;
+inline constexpr float kMinLampLightDistance = 100.0f;
+inline constexpr float kMaxLampLightDistance = 1500.0f;
 
 struct GpuPointLight {
     glm::vec4 position_radius{0.0f}; // xyz world position, w radius
@@ -139,7 +164,8 @@ struct SceneLighting {
     glm::vec4 weather{0.0f}; // render/weather_renderer.h set_weather: x wet, y snow, z rain falling, w puddles (0..1)
     // The modern mode's infravision / ultravision (game::SceneLight::vision_lift): what the original's vision floor adds
     // to the ambient, which the modern lighting replaces with its sky. Added as linear light (x the vertex alpha on the
-    // zone), so it shows against the modern night as the raise shows against the classic one.
+    // zone), so it shows against the modern night as the raise shows against the classic one. w: the zone lamps' pools
+    // on the zone (Daylight::lamp_light; make_scene_lighting sets it, 1 as before).
     glm::vec4 vision{0.0f};
     // The zone's baked light where the player stands (render/ambient_probe.h ProbeBlend), for the characters and the
     // doors in the modern lighting: rgb the vertex colour (display values), w 1 + the sky's share; w 0 none.
@@ -150,6 +176,10 @@ struct SceneLighting {
     glm::vec4 reveal_axis{0.0f};
     glm::vec4 reveal_shape{0.0f};
     glm::vec4 reveal_roof{0.0f};
+    // The carried lights (Hailstone's Carried Light Stacking; shaders/lighting.glsl add_scene_light): x how many of the
+    // first lights are carried, y how much of the rest each pixel adds to the brightest one (display.
+    // carried_light_stacking, 0..1; 1 they add as every light does).
+    glm::vec4 carried{0.0f, 1.0f, 0.0f, 0.0f};
     // The zone lights' shadows (render/point_shadows.h PointShadows::apply), modern only.
     std::array<glm::vec4, kMaxPointShadows> point_shadow_light{}; // xyz the light, w its radius
     // x: its cube's first layer, y: its strength, z: a zone light's shadow key (point_shadow_keys), 0 a moving light
@@ -216,8 +246,11 @@ void set_shadows(SceneLighting& lighting, const ShadowCascades& cascades, std::u
                  const glm::vec3& camera, const glm::vec3& forward);
 
 // `lights`: dynamic lights first (the first `dynamic` of them), then the zone's; more than kMaxSceneLights are cut.
+// The zone's are scaled by `daylight.lamp_light`, which also goes to vision.w for the zone shader's pools. The first
+// `carried` of the dynamic ones are carried lights, combined with `carried_stacking` of the rest (SceneLighting::carried).
 SceneLighting make_scene_lighting(const game::SceneLight& scene, std::span<const game::LightSource> lights,
-                                  std::size_t dynamic, LightingMode mode, const Daylight& daylight = {});
+                                  std::size_t dynamic, LightingMode mode, const Daylight& daylight = {},
+                                  std::size_t carried = 0, float carried_stacking = 1.0f);
 
 // The classic lighting of a character (shaders/actor.frag), this client's own: how the original lights its skinned
 // models (SkinMeshOld's `lit`) is not traced (docs/unknowns.md). It is the region shaders' vertex light

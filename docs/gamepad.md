@@ -245,6 +245,7 @@ the map.
 group, the /find path and the player. It follows the player until panned (stick or drag). LB / RB zoom, Y recentres,
 X toggles labels, RT toggles Auto Z (`hs.MapAutoZ`). Use the D-pad to focus **Map Pack**, A to open it or select a
 pack, and B to dismiss the dropdown.
+Reopening the map keeps its zoom and centre until zoning or logging out.
 
 Both draw the map window's map (same files, layers, height filter and Auto Z) with dark line colours lightened.
 Neither shows other players or NPCs, as the game's map does not.

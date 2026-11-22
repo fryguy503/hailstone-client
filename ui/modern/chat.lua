@@ -8,12 +8,15 @@
 -- name in a line is a link: a click opens a tell to them (their tell window with Use Tell Windows, else
 -- "/tell <name> " in the input). Right-click: the chat menu (windows, tabs, Always Chat Here, filters, default channel,
 -- font, tell windows, timestamps, clear).
+-- The output's text can be selected with the mouse (a drag; a double click takes a word, a triple click the line,
+-- Shift+click extends) and copied with Ctrl+C or the menu's Copy: a Hailstone addition (lib/textselect.lua).
 -- A button at the strip's right end folds the window into the strip (the output and the input go, the tabs stay), as
 -- the combat ability window folds into its title bar; the frame's menu has the same (Roll up).
 -- Unlocked (any frame's menu), a chat window is moved by dragging and resized from its corner.
 local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local stml = dofile("lib/stml.lua")
+local textselect = dofile("lib/textselect.lua")
 local T = hud.T
 local C = T.color
 stml.LINK = C.chatLink -- (this copy of stml: chat links in the colour made for the chat's page)
@@ -50,6 +53,8 @@ local function state(slot)
         return line
       end,
     }
+    -- the output's selection (lib/textselect.lua; stml.DrawLines fills in the place under the mouse)
+    c.sel = { rows = 0, clicks = {}, color = { 0, 0, 0, 0 } }
     c.panelOpts = { alpha = 0.7 }
     c.closeWindow = function() API.chat.CloseWindow(slot) end
     c.winOpts = { size = SIZE, resizable = RESIZABLE, fit = slot == 1, panelOpts = c.panelOpts, closable = false,
@@ -66,10 +71,18 @@ local function update(slot, c)
   if version == c.version or not lines then return end
   c.version = version
   if reset then stml.UpdateLines(c, lines, C.chatText) else stml.AppendLines(c, lines, count, C.chatText) end
+  -- (a selection goes with lines numbered afresh, or once every line of it has gone)
+  local _, e = textselect.Range(c.sel)
+  if reset or (e and e.line <= (c.dropped or 0)) then c.sel.anchor, c.sel.caret, c.sel.dragging = nil, nil, false end
   c.lastLine = ui.GetTime()
 end
 
-local function chatContext(slot)
+local function copySelection(c)
+  local s, e = textselect.Range(c.sel)
+  if s then ui.SetClipboardText(textselect.Extract(c, s, e)) end
+end
+
+local function chatContext(slot, c)
   if ui.IsWindowHovered(ui.HoveredFlags.ChildWindows) and ui.IsMouseClicked(ui.Mouse.Right)
       and not ui.GetIO().alt and not T.RightClickTaken() then
     if API.menus.Contexts() then ui.OpenPopup("chatmenu") end
@@ -77,6 +90,11 @@ local function chatContext(slot)
   end
   if ui.BeginPopup("chatmenu") then
     ui.ChatTabMenu(slot)
+    -- (after the original's rows and Hailstone's, docs/dev-ui.md "Modern chat tabs")
+    if textselect.Range(c.sel) then
+      ui.Separator()
+      if ui.MenuItem("Copy", false, true, "Ctrl+C") then copySelection(c) end
+    end
     ui.EndPopup()
   end
 end
@@ -103,6 +121,46 @@ local function collapseButton(slot, x, y, s, rolled)
   if clicked then hud.SetRolled("Chat" .. slot, not rolled) end
 end
 
+-- The place under the mouse as stml.DrawLines found it: the row above it, else (the mouse above every line drawn)
+-- the first line's start.
+local function mousePlace(sel)
+  if sel.hitLine then return { line = sel.hitLine, off = sel.hitOff } end
+  if sel.firstLine then return { line = sel.firstLine, off = 0 } end
+  return nil
+end
+
+-- Selecting the output's text, after its lines are drawn (in the output's child): a press starts a selection (not
+-- on a link, which it follows, nor with Alt, which moves the frame), a drag moves its end and scrolls the output
+-- when the mouse is above or below it, a release with nothing selected clears it. A double click takes the word, a
+-- triple click the line; Shift+click moves the end of the selection there is.
+local function selectWithMouse(c, hovered, top, bottom, s)
+  local sel, io = c.sel, ui.GetIO()
+  if hovered and ui.IsMouseClicked(ui.Mouse.Left) and not io.alt and not sel.overLink then
+    local at = mousePlace(sel)
+    if not at then return end
+    local clicks = textselect.Clicks(sel.clicks, ui.GetTime(), sel.mx, sel.my, 0.35, 4 * s)
+    if clicks == 1 then
+      if io.shift and sel.anchor then sel.caret = at else sel.anchor, sel.caret = at, at end
+      sel.dragging = true
+    else
+      local l = c.lines[at.line - (c.dropped or 0)]
+      local text = l and textselect.LineText(l) or ""
+      local a, b = 0, #text
+      if clicks == 2 then a, b = textselect.Word(text, at.off) end
+      sel.anchor, sel.caret, sel.dragging = { line = at.line, off = a }, { line = at.line, off = b }, false
+    end
+  elseif sel.dragging then
+    if ui.IsMouseDown(ui.Mouse.Left) then
+      sel.caret = mousePlace(sel) or sel.caret
+      local d = (sel.my < top and sel.my - top) or (sel.my > bottom and sel.my - bottom) or 0
+      if d ~= 0 then ui.SetScrollY(math.max(0, math.min(ui.GetScrollMaxY(), ui.GetScrollY() + d * 0.25))) end
+    else
+      sel.dragging = false
+      if not textselect.Range(sel) then sel.anchor, sel.caret = nil, nil end
+    end
+  end
+end
+
 local function body(slot, c, w, x, y, width, height, s)
   local font, active, channel = API.chat.Info(slot)
   font = math.max(0, math.min(10, font or 3)) -- the chat font list (/chatfontsize 0..10)
@@ -114,7 +172,7 @@ local function body(slot, c, w, x, y, width, height, s)
   if ui.ChatTabStrip(slot, x + 3 * s, y, width - right - 3 * s, HEADER * s, s,
       C.text, C.muted, C.accent, C.textShadow, rolled) then T.TakeRightClick() end
   collapseButton(slot, x + width - right, y, s, rolled)
-  if rolled then chatContext(slot); return false end
+  if rolled then chatContext(slot, c); return false end
   ui.DrawLine(x + pad, y + HEADER * s, x + width - pad, y + HEADER * s, C.ink[1], C.ink[2], C.ink[3], 0.06, 1)
 
   -- the output
@@ -135,11 +193,31 @@ local function body(slot, c, w, x, y, width, height, s)
   local pw, ph = ui.CalcTextSize("Wg il")
   local probe = pw * 4096 + ph
   if c.keyW ~= lw or c.keyFont ~= probe then c.keyW, c.keyFont, c.key = lw, probe, lw .. ":" .. probe end
-  stml.DrawLines(c, lw, viewH, c.key, c.onLink)
+  local sel = c.sel
+  sel.mx, sel.my = ui.GetMousePos()
+  sel.s, sel.e = textselect.Range(sel)
+  local hc = C.accent
+  sel.color[1], sel.color[2], sel.color[3], sel.color[4] = hc[1], hc[2], hc[3], 0.35
+  sel.rows, sel.candRow, sel.hitLine, sel.firstLine, sel.overLink = 0, nil, nil, nil, false
+  local _, top = ui.GetWindowPos()
+  local left = ui.GetCursorScreenPos()
+  -- (the lines, not the scroll bar beside them)
+  local outHovered = ui.IsWindowHovered() and sel.mx <= left + lw
+  local _, rowH = ui.CalcTextSize("Ag")
+  sel.active, sel.lineH = outHovered or sel.dragging or sel.s ~= nil, rowH
+  stml.DrawLines(c, lw, viewH, c.key, c.onLink, sel)
   local page = API.chat.Page(slot) -- the PAGEUP / PAGEDOWN keys: a page less 8 up or down
   ui.ScrollChatTab(slot, c.tab, page, viewH - 8 * s, c.follow)
   c.follow = false
+  -- (after ScrollChatTab, which keeps an output scrolled to its end there: a drag scrolls it from there)
+  selectWithMouse(c, outHovered, top, top + viewH, s)
   ui.EndChild()
+  -- Ctrl+C copies the selection while the window has the focus and its input does not (which copies its own text);
+  -- with a selection and Ctrl down the keys are the UI's, so a Ctrl+C key bind does not fire too
+  if sel.s and ui.GetIO().ctrl and not ui.GetIO().typing and ui.IsWindowFocused(3) then
+    ui.CaptureKeyboard()
+    if ui.IsKeyPressed(ui.Key.C) then copySelection(c) end
+  end
   ui.PopStyleColor()
 
   -- the input: the channel plain text goes to, then the field
@@ -212,7 +290,7 @@ local function body(slot, c, w, x, y, width, height, s)
   if ui.IsWindowHovered(ui.HoveredFlags.ChildWindows) and ui.IsMouseClicked(ui.Mouse.Left) and not active then
     API.chat.Activate(slot)
   end
-  chatContext(slot)
+  chatContext(slot, c)
   return editing
 end
 

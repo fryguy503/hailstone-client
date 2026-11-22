@@ -337,8 +337,10 @@ void ClientApp::update_zone_settle() {
 }
 
 void ClientApp::unload_zone() {
+    close_character_import();
     retire_world_geometry();
     zone_settle_.cancel();
+    target_view_projection_.reset();
     if (pre_game_loaded_) {
         // Character select's scene goes with its zone: the model player and its camera's field of view.
         pre_game_loaded_ = false;
@@ -458,6 +460,8 @@ game::SceneFogFrame ClientApp::scene_fog_frame(float sky_hour, double t) {
         in.infravision_effect = ch->total_effect(65);
         in.ultravision_effect = ch->total_effect(66);
     }
+    in.infravision_strength = static_cast<float>(infravision_strength_) / 100.0f;
+    in.ultravision_strength = static_cast<float>(ultravision_strength_) / 100.0f;
     in.actor_light = player_light_.update(static_cast<std::uint32_t>(t * 1000.0), feet_ + glm::vec3(0, 0, floor_offset_),
                                           collision_ ? &*collision_ : nullptr);
     in.clip_plane = opts_.clip_plane;
@@ -650,6 +654,7 @@ void ClientApp::enter_zone() {
         actions_ui_->setup_test_buttons(skills);
         actions_ui_->open_all();
     }
+    ++ui_host_.zone_entry;
     player_ready_ = true;
 }
 
@@ -662,11 +667,15 @@ constexpr std::size_t kActorLights = 4; // each of the EDD and WLD actor effects
 
 render::SceneLighting ClientApp::scene_lighting(const game::SceneLight& scene, float hour,
                                                 render::DynamicShadowLights* moving) const {
-    std::vector<game::LightSource> dynamic;
+    std::vector<game::LightSource> carried; // the carried lights, kept apart for Carried Light Stacking
+    std::vector<game::LightSource> dynamic; // the other dynamic lights
     std::vector<game::LightSource> lights;
+    std::size_t carried_count = 0;
     render::Daylight sky;
     if (lighting_mode_ == render::LightingMode::Modern) {
-        sky = render::daylight(hour, time_type_ == 1 || time_type_ == 2 || time_type_ == 5, moon_phase_, blood_moon_);
+        sky = render::daylight(hour, time_type_ == 1 || time_type_ == 2 || time_type_ == 5, moon_phase_, blood_moon_,
+                               static_cast<float>(ambient_light_) / 100.0f,
+                               static_cast<float>(baked_lamp_light_) / 100.0f);
         // The weather: the storm's grey light, the lightning lighting everything from the sky.
         render::apply_storm(sky, weather_look_.storm);
         sky.sky += glm::vec3(weather_look_.flash * 1.5f);
@@ -684,8 +693,11 @@ render::SceneLighting ClientApp::scene_lighting(const game::SceneLight& scene, f
                                             feet_ + glm::vec3(0.0f, 0.0f, floor_offset_ + 4.0f));
                 else
                     l = game::spawn_carried_light(spawn);
+                // As strong and as far as Options > Carried Light and Carried Light Reach make it.
+                if (l) l = game::scaled_carried_light(*l, static_cast<float>(carried_light_) / 100.0f,
+                                                      static_cast<float>(carried_light_reach_) / 100.0f);
                 if (!l) continue;
-                dynamic.push_back(*l);
+                carried.push_back(*l);
                 if (moving && id == player_id) {
                     moving->carried = *l;
                     moving->carrier = id;
@@ -728,10 +740,24 @@ render::SceneLighting ClientApp::scene_lighting(const game::SceneLight& scene, f
         }
         std::span<const assets::PointLight> zone_lights;
         if (zone_) zone_lights = zone_->lights;
-        lights = game::select_lights(zone_lights, dynamic, camera_.position, 600.0f, render::kMaxSceneLights);
+        // The carried lights first (nearest the camera first), so the shaders can tell them apart and combine them
+        // (SceneLighting::carried); then the other dynamic lights and the zone's in what room is left.
+        const auto range = static_cast<float>(lamp_light_distance_);
+        lights = game::select_lights({}, carried, camera_.position, range, render::kMaxSceneLights);
+        carried_count = lights.size();
+        const auto rest = game::select_lights(zone_lights, dynamic, camera_.position, range,
+                                              render::kMaxSceneLights - carried_count);
+        lights.insert(lights.end(), rest.begin(), rest.end());
     }
-    render::SceneLighting out = render::make_scene_lighting(scene, lights, dynamic.size(), lighting_mode_, sky);
+    render::SceneLighting out = render::make_scene_lighting(scene, lights, carried_count + dynamic.size(), lighting_mode_,
+                                                            sky, carried_count,
+                                                            static_cast<float>(carried_light_stacking_) / 100.0f);
     out.params.w = 0.04f; // the light characters and objects never fall below (readable in the dark), linear
+    // Less of the fill light (display.ambient_light; Hailstone's own, the modern lighting only): the floor goes with the
+    // special ambient (scaled where the frame computes the scene light), so at 0 what no light reaches is dark.
+    // Infravision and ultravision have their own strengths (SceneLighting::vision).
+    if (ambient_light_ < 100 && lighting_mode_ == render::LightingMode::Modern)
+        out.params.w *= static_cast<float>(ambient_light_) / 100.0f;
     return out;
 }
 
@@ -873,6 +899,20 @@ std::optional<int> ClientApp::display_option(std::string_view name) const {
     if (name == "color_grade") return config_.get_bool("display.color_grade", true) ? 1 : 0;
     if (name == "horizon_hills") return horizon_hills_ ? 1 : 0;
     if (name == "volumetric_clouds") return volumetric_clouds_ ? 1 : 0;
+    // Hailstone: the modern lighting's darkness controls, percent (render::daylight's ambient and baked_lamps).
+    if (name == "ambient_light") return ambient_light_;
+    if (name == "baked_lamp_light") return baked_lamp_light_;
+    // How far from the camera the zone's lamps light characters and objects, units (game::select_lights' range).
+    if (name == "lamp_light_distance") return lamp_light_distance_;
+    // How strong and how far-reaching carried lights are, percent (game::scaled_carried_light).
+    if (name == "carried_light") return carried_light_;
+    if (name == "carried_light_reach") return carried_light_reach_;
+    if (name == "carried_light_stacking") return carried_light_stacking_;
+    // Hailstone: the Light Tweaks preset the sliders match (option_choices "light_tweaks"), its size Custom.
+    if (name == "light_tweaks") return static_cast<int>(light_tweak_preset(light_tweaks()));
+    // Hailstone: how strong infravision and ultravision are, percent (game::SkyWeatherInput's strengths).
+    if (name == "infravision_strength") return infravision_strength_;
+    if (name == "ultravision_strength") return ultravision_strength_;
     if (name == "zone_fog") return edge_fog_ ? 1 : 0;
     if (name == "tree_detail") return tree_detail_;
     // Hailstone: NPCs the server leaves in the air are drawn on the floor (game::WorldState::ground_npcs), on by default.
@@ -961,6 +1001,42 @@ bool ClientApp::set_display_option(std::string_view name, int value) {
         // The modern sky's clouds marched through the air, or its painted layer and patches (render/sky_renderer.h).
         volumetric_clouds_ = value != 0;
         config_.set_bool("display.volumetric_clouds", volumetric_clouds_);
+        config_.save(config_path_);
+        return true;
+    }
+    if (name == "lamp_light_distance") {
+        lamp_light_distance_ = std::clamp(value, static_cast<int>(render::kMinLampLightDistance),
+                                          static_cast<int>(render::kMaxLampLightDistance));
+        config_.set_int("display.lamp_light_distance", lamp_light_distance_);
+        config_.save(config_path_);
+        return true;
+    }
+    if (name == "light_tweaks") {
+        // A preset sets every slider it covers; Custom (or anything past the presets) leaves them.
+        if (value >= 0 && static_cast<std::size_t>(value) < kLightTweakPresets.size())
+            apply_light_tweaks(kLightTweakPresets[static_cast<std::size_t>(value)].values);
+        return true;
+    }
+    if (name == "carried_light" || name == "carried_light_reach") {
+        const bool reach = name == "carried_light_reach";
+        int& v = reach ? carried_light_reach_ : carried_light_;
+        v = reach ? std::clamp(value, static_cast<int>(game::kMinCarriedReach * 100.0f),
+                               static_cast<int>(game::kMaxCarriedReach * 100.0f))
+                  : std::clamp(value, 0, static_cast<int>(game::kMaxCarriedLight * 100.0f));
+        config_.set_int("display." + std::string(name), v);
+        config_.save(config_path_);
+        return true;
+    }
+    if (name == "infravision_strength" || name == "ultravision_strength" || name == "ambient_light" ||
+        name == "baked_lamp_light" || name == "carried_light_stacking") {
+        int& strength = name == "infravision_strength" ? infravision_strength_
+                      : name == "ultravision_strength" ? ultravision_strength_
+                      : name == "ambient_light"        ? ambient_light_
+                      : name == "carried_light_stacking" ? carried_light_stacking_
+                                                       : baked_lamp_light_;
+        strength = std::clamp(value, 0, &strength == &baked_lamp_light_ ? static_cast<int>(render::kMaxBakedLamps * 100.0f)
+                                                                         : 100);
+        config_.set_int("display." + std::string(name), strength);
         config_.save(config_path_);
         return true;
     }

@@ -10,6 +10,7 @@
 #include "core/process_serial.h"
 #include "game/server_ext_chain.h"
 #include "mq_test_world.h"
+#include "net/movement_packets.h"
 
 using namespace hailstone;
 namespace {
@@ -125,6 +126,52 @@ TEST_CASE("Find identity: live eligibility is checked independently of cached cl
     ui.host.guide_to = [&](std::uint32_t) { ui.provider->visible = false; return false; };
     CHECK(ui.run("return hs.UI.find.NpcPath(fresh.id,fresh.token)") == "false");
     CHECK(ui.world->conn->find_path().empty());
+}
+
+TEST_CASE("Find policy: server-only rows and actions follow the server's findable list") {
+    FindUi ui;
+    auto& conn = *ui.world->conn;
+    net::GameConnectionTestAccess::enable_quest_discovery(conn);
+    ui.provider->policy.flags = game::MapPolicyServerNpcFindOnly | game::MapPolicyHideStockNpcs;
+
+    CHECK(ui.run("local p=hs.UI.map.Policy(); return p.npc_find and p.npc_find_server_only and not p.stock_npcs") == "true");
+    CHECK(ui.run("return hs.UI.find.Open(true)") == "true");
+    CHECK(ui.run("return #hs.UI.find.Npcs()") == "0");
+    CHECK_FALSE(net::GameConnectionTestAccess::quest_discovery_requested(conn));
+    CHECK(ui.run("return hs.UI.find.NpcTarget(10)") == "false");
+    CHECK(ui.run("return hs.UI.find.NpcPath(10)") == "false");
+
+    net::FindableNpc npc;
+    npc.spawn_id = 11;
+    conn.receive_zone_packet_for_test(net::encode_findable_npc(npc));
+    REQUIRE(ui.run("local rows=hs.UI.find.Npcs(); row=rows[1]; return #rows==1 and row.id==11") == "true");
+    CHECK(ui.run("return hs.UI.find.NpcTarget(row.id,row.token)") == "true");
+    CHECK(conn.target() == 11);
+    CHECK(ui.run("return hs.UI.find.NpcPath(row.id,row.token)") == "true");
+    CHECK(ui.run("return hs.UI.find.NpcWalk(row.id,row.token)") == "false");
+    CHECK(ui.paths == 0);
+    CHECK(ui.walks == 0);
+
+    ui.provider->visible = false;
+    CHECK(ui.run("return #hs.UI.find.Npcs()") == "0");
+    CHECK(ui.run("return hs.UI.find.NpcTarget(row.id,row.token)") == "false");
+    ui.provider->visible = true;
+
+    npc.remove = true;
+    conn.receive_zone_packet_for_test(net::encode_findable_npc(npc));
+    npc.spawn_id = 10;
+    npc.remove = false;
+    conn.receive_zone_packet_for_test(net::encode_findable_npc(npc));
+    // The list stays the same size and both spawns stay present, but the old row loses eligibility.
+    CHECK(ui.run("local rows=hs.UI.find.Npcs(); return #rows==1 and rows[1].id==10") == "true");
+    CHECK(ui.run("return hs.UI.find.NpcTarget(row.id,row.token)") == "false");
+    CHECK(ui.run("return hs.UI.find.NpcPath(row.id,row.token)") == "false");
+
+    ui.provider->policy.flags |= game::MapPolicyDisableNpcFind;
+    CHECK(ui.run("return hs.UI.map.Policy().npc_find") == "false");
+    CHECK(ui.run("return hs.UI.find.Open(true)") == "false");
+    CHECK(ui.run("return #hs.UI.find.Npcs()") == "0");
+    CHECK(ui.run("return hs.UI.find.NpcPath(10)") == "false");
 }
 
 TEST_CASE("Find identity: the final policy callback cannot replace the observed actor before activation") {

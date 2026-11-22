@@ -151,10 +151,31 @@ public:
     // folder's code runs: its scripts loading, its windows drawing, and any function it took from `hs` or `ui`,
     // whoever calls it. A pack window a plugin's draws (ui.base_window) runs as the plugin.
     static std::string_view caller_tag();
+    // While it lives, the code runs as the client itself (caller_tag() ""), whatever folder called in: for a client
+    // pass that runs add-ons' retained callbacks from its own drawing (the map overlays, app/lua_ui_map_overlay.cpp),
+    // where one add-on draws the map and a second's callback is drawn into it. The capabilities are the app's to
+    // lift (plugin::HostCallerScope), as the callback's own come from its owner (CallbackOwner::invoke).
+    class HostScope {
+    public:
+        HostScope();
+        ~HostScope();
+        HostScope(const HostScope&) = delete;
+        HostScope& operator=(const HostScope&) = delete;
+
+    private:
+        std::string before_;
+    };
     struct CallbackOwner {
+        // What a protected callback call came to. kSkipped: nothing ran, because the code the callback is drawn
+        // inside had already used up the frame's time; that is not the callback's own failure (invoke_drawn).
+        enum class Call { kRan, kFailed, kSkipped };
         std::string key, tag;
         std::function<bool()> valid;
         std::function<bool(lua_State*,int,int)> invoke;
+        // As invoke, for a callback that is drawn inside another add-on's code (a map overlay): a call that cannot
+        // start, or is stopped, only because that code has used up the frame's time is kSkipped. Nothing is
+        // reported as an error and a drawing layer can keep the callback registered.
+        std::function<Call(lua_State*,int,int)> invoke_drawn;
     };
     // Captures the current file generation and normal caller scope for a retained callback. A reload,
     // removed folder or closed VM invalidates it, even when another window retained the Lua closure.

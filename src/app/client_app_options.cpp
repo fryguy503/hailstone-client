@@ -3,6 +3,7 @@
 
 #include "app/client_app_internal.h"
 #include "app/frame_pace.h"
+#include "audio/individual_sounds.h"
 #include "core/ascii_case.h"
 #include "game/appearance.h"
 
@@ -341,8 +342,32 @@ void ClientApp::apply_plate_font() {
     ui_.set_plate_font(files.regular, files.bold, static_cast<float>(plate_style_.size), plate_style_.bold);
 }
 
+static_assert(LightTweaks{}.lamp_light_distance == static_cast<int>(render::kLampLightDistance));
+
+LightTweaks ClientApp::light_tweaks() const {
+    return {ambient_light_,       baked_lamp_light_,       lamp_light_distance_,  carried_light_,
+            carried_light_reach_, carried_light_stacking_, infravision_strength_, ultravision_strength_};
+}
+
+void ClientApp::apply_light_tweaks(const LightTweaks& v) {
+    // Through set_display_option, so each is held to its slider's range and saved as the slider saves it.
+    set_display_option("ambient_light", v.ambient_light);
+    set_display_option("baked_lamp_light", v.baked_lamp_light);
+    set_display_option("lamp_light_distance", v.lamp_light_distance);
+    set_display_option("carried_light", v.carried_light);
+    set_display_option("carried_light_reach", v.carried_light_reach);
+    set_display_option("carried_light_stacking", v.carried_light_stacking);
+    set_display_option("infravision_strength", v.infravision_strength);
+    set_display_option("ultravision_strength", v.ultravision_strength);
+}
+
 std::vector<std::string> ClientApp::option_choices(std::string_view name) const {
     std::vector<std::string> out;
+    // Light Tweaks (app/light_tweaks.h): each preset, then Custom (the sliders matching none).
+    if (name == "light_tweaks") {
+        for (const auto& p : kLightTweakPresets) out.emplace_back(p.name);
+        out.emplace_back("Custom");
+    }
     // The texture packs (display.texture_folder): "Off", then each folder of textures/.
     if (name == "texture_pack") {
         out.push_back("Off");
@@ -441,8 +466,12 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     if (o == "offer_layout_copy") return config_.get_bool("ui.offer_layout_copy", true) ? 1 : 0;
     // Hailstone: Tab's NPC cycle leaves out players' pets and mercenaries (game/targeting.h), on by default.
     if (o == "tab_skip_pets") return config_.get_bool("target.skip_pets", true) ? 1 : 0;
-    // Hailstone: Tab's NPC cycle takes only the NPCs in the player's line of sight (game/targeting.h), on by default.
-    if (o == "tab_line_of_sight") return config_.get_bool("target.line_of_sight", true) ? 1 : 0;
+    // Keep the original line-of-sight key and script option so existing preferences still apply.
+    if (o == "tab_line_of_sight" || o == "tab_target_through_walls") {
+        const bool require_line_of_sight = config_.get_bool("target.line_of_sight", true);
+        return o == "tab_line_of_sight" ? require_line_of_sight : !require_line_of_sight;
+    }
+    if (o == "tab_target_offscreen") return config_.get_bool("target.offscreen", false) ? 1 : 0;
     // Hailstone: a book spell dropped on a gem that holds another spell memorizes over it (app/lua_ui_spellbook.cpp
     // gem_takes_book_spell), on by default; off, the gem refuses it as the original's does.
     if (o == "replace_gem_spell") return config_.get_bool("spells.replace_gem", true) ? 1 : 0;
@@ -481,6 +510,8 @@ std::optional<int> ClientApp::option_value(std::string_view o) const {
     if (o == "music") return s.music;
     if (o == "effects") return s.effects;
     if (o == "npc_hits") return s.npc_hits;
+    // Hailstone: the Individual Sounds volumes (audio/individual_sounds.h).
+    if (const audio::IndividualSound* sound = audio::find_individual_sound(o)) return s.individual[sound->group];
     if (o == "realism") return s.realism;
     if (o == "environment") return s.environment ? 1 : 0;
     if (o == "combat_music") return s.combat_music ? 1 : 0;
@@ -526,8 +557,14 @@ void ClientApp::set_option_value(std::string_view o, int v) {
         config_.save(config_path_);
         return;
     }
-    if (o == "tab_line_of_sight") {
-        config_.set_bool("target.line_of_sight", v != 0);
+    if (o == "tab_line_of_sight" || o == "tab_target_through_walls") {
+        const bool require_line_of_sight = o == "tab_line_of_sight" ? v != 0 : v == 0;
+        config_.set_bool("target.line_of_sight", require_line_of_sight);
+        config_.save(config_path_);
+        return;
+    }
+    if (o == "tab_target_offscreen") {
+        config_.set_bool("target.offscreen", v != 0);
         config_.save(config_path_);
         return;
     }
@@ -703,6 +740,7 @@ void ClientApp::set_option_value(std::string_view o, int v) {
     else if (o == "music") s.music = percent;
     else if (o == "effects") s.effects = percent;
     else if (o == "npc_hits") s.npc_hits = percent;
+    else if (const audio::IndividualSound* sound = audio::find_individual_sound(o)) s.individual[sound->group] = percent;
     else if (o == "realism") s.realism = percent;
     else if (o == "environment") s.environment = v != 0;
     else if (o == "combat_music") s.combat_music = v != 0;
@@ -748,9 +786,6 @@ void ClientApp::apply_settings() {
     npc_names_ = config_.get_bool("display.npc_names", true);
     con_name_colour_ = config_.get_bool("display.con_name_colour", true);
     show_invis_undead_ = config_.get_bool("display.show_invis_undead", false);
-    // display.extra_shields (Hailstone, a deliberate difference): later shields on the shield point, not in the hand.
-    // Read at start only: dressed models are cached.
-    if (!settings_applied_) game::set_extra_shields(config_.get_bool("display.extra_shields", true));
     target_plate_highlight_ = config_.get_bool("display.target_plate_highlight", true);
     plate_overlap_fade_ = config_.get_bool("display.plate_overlap_fade", true);
     target_plate_through_walls_ = config_.get_bool("display.target_plate_through_walls", false);
@@ -766,6 +801,22 @@ void ClientApp::apply_settings() {
     grass_density_ = render::grass_density_percent(config_.get_int("display.grass_density", 100));
     horizon_hills_ = config_.get_bool("display.horizon_hills", true);
     volumetric_clouds_ = config_.get_bool("display.volumetric_clouds", true);
+    ambient_light_ = std::clamp(config_.get_int("display.ambient_light", 100), 0, 100);
+    baked_lamp_light_ = std::clamp(config_.get_int("display.baked_lamp_light", 100), 0,
+                                   static_cast<int>(render::kMaxBakedLamps * 100.0f));
+    carried_light_ = std::clamp(config_.get_int("display.carried_light", 100), 0,
+                                static_cast<int>(game::kMaxCarriedLight * 100.0f));
+    carried_light_reach_ = std::clamp(config_.get_int("display.carried_light_reach", 100),
+                                      static_cast<int>(game::kMinCarriedReach * 100.0f),
+                                      static_cast<int>(game::kMaxCarriedReach * 100.0f));
+    carried_light_stacking_ = std::clamp(config_.get_int("display.carried_light_stacking",
+                                                         LightTweaks{}.carried_light_stacking), 0, 100);
+    lamp_light_distance_ = std::clamp(config_.get_int("display.lamp_light_distance",
+                                                      static_cast<int>(render::kLampLightDistance)),
+                                      static_cast<int>(render::kMinLampLightDistance),
+                                      static_cast<int>(render::kMaxLampLightDistance));
+    infravision_strength_ = std::clamp(config_.get_int("display.infravision_strength", 100), 0, 100);
+    ultravision_strength_ = std::clamp(config_.get_int("display.ultravision_strength", 100), 0, 100);
     edge_fog_ = config_.get_bool("display.zone_fog", true);
     tree_detail_ = std::clamp(config_.get_int("display.tree_detail", 100), 50, 200);
     ring_cues_ = config_.get_bool("display.target_ring_cues", true);
@@ -822,6 +873,14 @@ void ClientApp::use_character_settings(const std::filesystem::path& character_di
     if (!file.empty()) log::info("settings: the character's, {}", file.string());
     else log::info("settings: hailstone.ini's");
     apply_settings();
+}
+
+bool ClientApp::play_sound_test(std::string_view option) {
+    const audio::IndividualSound* sound = audio::find_individual_sound(option);
+    if (!sound) return false;
+    static std::uint32_t pick = 0; // a footstep test goes through the walk sounds in turn
+    if (audio_) audio_->play_group_2d(test_wave(sound->group, pick++), sound->group);
+    return true;
 }
 
 } // namespace client_internal

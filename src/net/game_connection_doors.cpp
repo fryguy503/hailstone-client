@@ -190,26 +190,27 @@ void GameConnection::update_doors() {
     }
 }
 
-bool GameConnection::click_door(std::uint8_t door_id, float actor_radius, std::int32_t key, std::int32_t skill) {
-    return use_switch(door_id, world_.player_id, actor_radius, key, skill);
+bool GameConnection::click_door(std::uint8_t door_id, float actor_radius, std::int32_t key, std::int32_t skill,
+                                std::optional<glm::vec3> hit) {
+    return use_switch(door_id, world_.player_id, actor_radius, key, skill, hit);
 }
 
-bool GameConnection::door_in_reach(std::uint8_t door_id, float actor_radius) const {
+bool GameConnection::door_in_reach(std::uint8_t door_id, float actor_radius, std::optional<glm::vec3> hit) const {
     const game::Door* d = door(door_id);
     if (!d) return false;
     const game::Spawn* me = world_.player();
     float height = me && me->size > 0.0f ? me->size : 6.0f;
-    return game::door_within_reach(*d, position_, height, actor_radius);
+    return game::door_within_reach(*d, position_, height, actor_radius, hit);
 }
 
 bool GameConnection::use_switch(std::uint8_t door_id, std::uint32_t user, float actor_radius, std::int32_t key,
-                                std::int32_t skill) {
+                                std::int32_t skill, std::optional<glm::vec3> hit) {
     if (state_ != ConnectionState::InZone) return false;
     const game::Door* d = door(door_id);
     if (!d || !game::door_can_be_used(*d)) return false;
     // A user that is a PC (the local player here) must be within reach; nobody (0) needs not.
     if (user != 0) {
-        if (!door_in_reach(door_id, actor_radius)) {
+        if (!door_in_reach(door_id, actor_radius, hit)) {
             chat(ChatEvent::Kind::System, strings_.format(kCantReach, {}));
             return false;
         }

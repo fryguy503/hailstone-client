@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include "imgui_internal.h" // stack sizes, to refuse pops and ends that ImGui would only assert on
 #include "ui/imgui_layer.h"
+#include "ui/lua/lua_draw_scope.h"
 #include "ui/lua/lua_host.h"
 #include "ui/texture_ids.h"
 #include "core/lua_keep.h"
@@ -1229,6 +1230,9 @@ void SetInts(lua_State *L, const char *table, std::initializer_list<std::pair<co
 }
 
 } // namespace
+
+WindowDrawScope::WindowDrawScope() : before_(g_foregroundFrame) { g_foregroundFrame = -1; }
+WindowDrawScope::~WindowDrawScope() { g_foregroundFrame = before_; }
 
 std::size_t windows_begun(bool preserve_parent) {
 	Floor floor;

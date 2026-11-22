@@ -279,34 +279,57 @@ private:
 // The open containers, in the order they opened ("Bag1" is the first). A container closes when its bag leaves
 // its slot.
 struct Containers {
-    std::vector<net::ItemSlot> open;
+    // An open container and the bag type it had when it opened: the close wave uses that type, never whatever
+    // stands in the slot at closing time (CContainerMgr::CloseContainer @0x65d2f0, whose wave plays at 0x65d180).
+    struct OpenBag {
+        net::ItemSlot slot;
+        std::uint32_t type = 0;
+    };
+    std::vector<OpenBag> open;
     // CInvSlotMgr +0x2010: set by CloseAllBags, cleared by OpenAllBags; TOGGLE_INV_BAGS (0x6989e0) opens while
     // it is set, else closes. The constructor (@0x697d00) sets it, so the first press opens.
     bool all_closed = true;
     // +0x2011, the same for the bank's bags (0x698d60, CMD_TOGGLE_BANK_BAGS), also set by the constructor.
     bool bank_all_closed = true;
     std::uint64_t bank_serial = 0;
-    void toggle(const net::ItemSlot& s) {
-        for (auto it = open.begin(); it != open.end(); ++it)
-            if (it->same(s)) {
-                open.erase(it);
-                return;
-            }
-        open.push_back(s);
+    OpenBag* find(const net::ItemSlot& s) {
+        for (OpenBag& o : open)
+            if (o.slot.same(s)) return &o;
+        return nullptr;
     }
-    void prune(const net::GameConnection& c) {
+    void add(const net::ItemSlot& s, std::uint32_t type) { open.push_back({s, type}); }
+    // Closes `s` if it is open, with the type it opened with.
+    std::optional<std::uint32_t> close(const net::ItemSlot& s) {
+        for (auto it = open.begin(); it != open.end(); ++it)
+            if (it->slot.same(s)) {
+                const std::uint32_t type = it->type;
+                open.erase(it);
+                return type;
+            }
+        return std::nullopt;
+    }
+    void prune(net::GameConnection& c) {
         // The bank window hiding (CBankWnd::OnShow @0x627760) runs CContainerMgr::CloseAllContainers @0x65d4e0:
-        // every container closes, carried bags too, and 0x697e40 sets both all-closed flags.
+        // every still-present container closes, carried bags too, each through 0x65d180 (where CloseContainer's
+        // close wave plays as well), and 0x697e40 sets both all-closed flags.
         const auto serial = c.bank() ? c.bank()->serial : 0;
         if (bank_serial != 0 && serial != bank_serial) {
+            for (const OpenBag& o : open) c.container_sound(o.type, false);
             open.clear();
             all_closed = bank_all_closed = true;
         }
         bank_serial = serial;
-        std::erase_if(open, [&](const net::ItemSlot& s) {
-            if ((s.type == net::kInvBank || s.type == net::kInvSharedBank) && !c.bank()) return true;
-            const net::Item* bag = c.inventory().at(s);
-            return !bag || !bag->is_bag();
+        // A container whose bag left its slot closes as well, with the close wave of the bag it opened with: the
+        // original closes it through CloseContainer, which always plays (a picked-up bag, CInvSlot::HandleLButtonUp
+        // @0x695670; the server's removal, Handle_OP_MoveItem_Apply @0x4c1ba0).
+        std::erase_if(open, [&](const OpenBag& o) {
+            bool gone = (o.slot.type == net::kInvBank || o.slot.type == net::kInvSharedBank) && !c.bank();
+            if (!gone) {
+                const net::Item* bag = c.inventory().at(o.slot);
+                gone = !bag || !bag->is_bag();
+            }
+            if (gone) c.container_sound(o.type, false);
+            return gone;
         });
     }
 };
@@ -316,6 +339,12 @@ Containers& containers() {
     return c;
 }
 
+// Hailstone: a bag in a personal or shared bank slot opens with the bank-bag volume (audio.open_bank). Conservative
+// fallback: only those two slot types count. A slot of any other type, or one this classifier does not know, opens
+// with the ordinary bag volume (audio.open_bag), so a bag never goes quiet on a volume it was not meant for. The
+// bank window opening itself has no known sound to put on a volume (docs/todo.md, docs/unknowns.md).
+bool in_bank_slot(const net::ItemSlot& s) { return s.type == net::kInvBank || s.type == net::kInvSharedBank; }
+
 // Opens or closes a bag's window (CInvSlot::HandleRButtonUp: an open container closes, else
 // CContainerMgr::OpenContainer @0x65cae0). A tradeskill bag opens in the tradeskill window instead of its own when
 // GameConnection::container_opens_tradeskill says so (the TradeskillCtrlClick option, CtrlBypass: by default a right
@@ -324,21 +353,29 @@ Containers& containers() {
 void toggle_container(UiHost& host, const net::ItemSlot& s) {
     auto& cs = containers();
     if (host.conn) cs.prune(*host.conn);
-    bool open = std::any_of(cs.open.begin(), cs.open.end(), [&](const net::ItemSlot& o) { return o.same(s); });
-    if (!open && host.conn && host.conn->container_opens_tradeskill(s, ctrl())) {
+    // CContainerMgr::OpenContainer / CloseContainer's own sound, the bag's type deciding it. A close uses the type
+    // the bag opened with, so a slot that has lost or replaced it still sounds as that bag.
+    if (cs.find(s)) {
+        const std::optional<std::uint32_t> type = cs.close(s);
+        if (host.conn && type) host.conn->container_sound(*type, false);
+        if (!host.conn) return;
+        const auto& t = host.conn->tradeskill();
+        if (t.open && !t.world && t.container_slot.same(s)) host.conn->close_tradeskill();
+        return;
+    }
+    const net::Item* bag = host.conn ? host.conn->inventory().at(s) : nullptr;
+    if (bag && host.conn && host.conn->container_opens_tradeskill(s, ctrl())) {
+        // The right click's sound comes from CContainerMgr::OpenContainer @0x65cae0 before the window choice, so a
+        // bag that opens in the tradeskill window sounds too.
+        host.conn->container_sound(bag->bag_type, true, in_bank_slot(s));
         host.conn->open_tradeskill_bag(s);
         return;
     }
-    cs.toggle(s);
-    if (!host.conn || !open) return;
-    const auto& t = host.conn->tradeskill();
-    if (t.open && !t.world && t.container_slot.same(s)) host.conn->close_tradeskill();
+    cs.add(s, bag ? bag->bag_type : 0);
+    if (bag && host.conn) host.conn->container_sound(bag->bag_type, true, in_bank_slot(s));
 }
 
-bool container_open(const net::ItemSlot& s) {
-    const auto& cs = containers();
-    return std::any_of(cs.open.begin(), cs.open.end(), [&](const net::ItemSlot& o) { return o.same(s); });
-}
+bool container_open(const net::ItemSlot& s) { return containers().find(s) != nullptr; }
 
 } // namespace
 
@@ -350,7 +387,10 @@ void open_all_bags(UiHost& host) {
         for (std::int16_t g = net::kSlotGeneral1; g <= net::kSlotGeneral10; ++g) {
             net::ItemSlot s = net::ItemSlot::possessions(g);
             const net::Item* bag = host.conn->inventory().at(s);
-            if (bag && bag->is_bag() && bag->placeable_flags() == 0 && !container_open(s)) cs.open.push_back(s);
+            if (bag && bag->is_bag() && bag->placeable_flags() == 0 && !container_open(s)) {
+                cs.add(s, bag->bag_type);
+                host.conn->container_sound(bag->bag_type, true);
+            }
         }
     }
     cs.all_closed = false;
@@ -366,6 +406,10 @@ void close_all_bags(UiHost& host) {
 }
 
 void reset_containers() { containers() = Containers{}; }
+
+// Once a frame: a container closes when the bank window hides or its bag leaves its slot (Containers::prune), so
+// that the close wave plays even when no key or click asks for it.
+void prune_bag_windows(net::GameConnection& conn) { containers().prune(conn); }
 
 void toggle_all_bags(UiHost& host) {
     if (containers().all_closed) open_all_bags(host);
@@ -385,7 +429,10 @@ void toggle_all_bank_bags(UiHost& host) {
             for (std::int16_t i = 0; i < slots; ++i) {
                 net::ItemSlot s{type, i, -1, -1, 0, 0};
                 const net::Item* bag = host.conn->inventory().at(s);
-                if (bag && bag->is_bag() && bag->placeable_flags() == 0 && !container_open(s)) cs.open.push_back(s);
+                if (bag && bag->is_bag() && bag->placeable_flags() == 0 && !container_open(s)) {
+                    cs.add(s, bag->bag_type);
+                    host.conn->container_sound(bag->bag_type, true, true);
+                }
             }
         };
         open(net::kInvBank, host.conn->bank()->slots);
@@ -394,8 +441,9 @@ void toggle_all_bank_bags(UiHost& host) {
         return;
     }
     std::vector<net::ItemSlot> bank;
-    for (const net::ItemSlot& s : cs.open)
-        if ((s.type == net::kInvBank || s.type == net::kInvSharedBank) && s.top_level()) bank.push_back(s);
+    for (const Containers::OpenBag& o : cs.open)
+        if ((o.slot.type == net::kInvBank || o.slot.type == net::kInvSharedBank) && o.slot.top_level())
+            bank.push_back(o.slot);
     for (const net::ItemSlot& s : bank) toggle_container(host, s);
     cs.bank_all_closed = true;
 }
@@ -410,7 +458,8 @@ public:
         if (!host.conn) return nullptr;
         auto& cs = containers();
         cs.prune(*host.conn);
-        return n_ - 1 < static_cast<int>(cs.open.size()) ? &cs.open[static_cast<std::size_t>(n_ - 1)] : nullptr;
+        return n_ - 1 < static_cast<int>(cs.open.size()) ? &cs.open[static_cast<std::size_t>(n_ - 1)].slot
+                                                         : nullptr;
     }
     const net::ItemSlot* bag_slot(UiHost& host) override { return slot(host); }
     const net::Item* bag(UiHost& host) {
@@ -1070,8 +1119,7 @@ private:
 } // namespace
 
 void open_container(UiHost& host, const net::ItemSlot& s) {
-    auto& cs = containers();
-    if (std::none_of(cs.open.begin(), cs.open.end(), [&](const net::ItemSlot& o) { return o.same(s); })) toggle_container(host, s);
+    if (!containers().find(s)) toggle_container(host, s);
 }
 
 // A quick right click on an item (CInvSlot::HandleRButtonUp, GameConnection::right_click_item): a bag opens or
@@ -1260,8 +1308,10 @@ public:
             if (world) c.show_world_container_window();
             else c.close_tradeskill();
             auto& cs = containers();
-            if (!world && std::none_of(cs.open.begin(), cs.open.end(), [&](const net::ItemSlot& o) { return o.same(bag); }))
-                cs.toggle(bag);
+            if (!world && cs.find(bag) == nullptr) {
+                const net::Item* bag_item = c.inventory().at(bag);
+                cs.add(bag, bag_item ? bag_item->bag_type : 0);
+            }
         } else if (id == "CloseButton") c.close_tradeskill();
         else return false;
         return true;
