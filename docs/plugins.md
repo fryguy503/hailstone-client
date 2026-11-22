@@ -2224,7 +2224,7 @@ excepted), which the caller sets and the client respects.
 | `HailstoneFollowStatus` | 24 |
 | `HailstoneBinaryMeasurement` | 56 |
 | `HailstoneMerchantSellContext` | 32 |
-| `HailstoneMapPolicy` | 96 |
+| `HailstoneMapPolicy` | 104 |
 | `HailstoneWorldFrame` | 136 |
 | `HailstoneWorldAnchor` | 32 |
 | `HailstoneWorldVertex` | 28 |
@@ -2252,7 +2252,8 @@ excepted), which the caller sets and the client respects.
 - `HAILSTONE_MAP_FIND` gates Find results and their target/path/walk actions, including the map and minimap's service
   NPC overlays.
 - A denial beats another extension's marker.
-- An active guide rechecks before observing its destination's position and retires its trail on denial.
+- An active guide started from an NPC Find row rechecks before observing its destination's position and retires its
+  trail on denial.
 - With no policy, stock behaviour remains.
 - It controls UI presentation, not spawn data for scripts or native code; the player and group map stay available.
 
@@ -2269,8 +2270,11 @@ The flags:
 - `HIDE_STOCK_NPCS` removes the packs' Find/service NPC overlays and competing stock controls.
 - `DISABLE_NPC_FIND` blocks discovery requests, result rows, targets, guides, server paths and Find-owned walks.
 - The optional `npc_find_mode` value `HAILSTONE_NPC_FIND_SERVER_ONLY` admits living NPCs advertised in the zone's
-  `OP_SendFindableNPCs` list. Show Path requests the route from the server. Client discovery, guides and Find-owned
-  walks are unavailable in this mode. All Find visibility hooks still apply and `DISABLE_NPC_FIND` takes precedence.
+  `OP_SendFindableNPCs` list. Show Path requests the route from the server. Client discovery and Find-owned walks
+  are unavailable in this mode. All Find visibility hooks still apply to those rows.
+- The optional `actor_guides` value `HAILSTONE_MAP_ACTOR_GUIDES` enables visual guides for the player's current
+  target and local Bazaar traders. These guides use actor identity and action eligibility. Map and Find discovery
+  permissions still govern markers and rows. `DISABLE_NPC_FIND` takes precedence over both optional values.
 - Restrictive flags combine across providers; removing them restores stock defaults, saved UI preferences untouched.
 - Unaffected: PC group/raid Find, coordinates, ordinary navigation, static map labels, user pins, raw spawn getters.
 - Guides and Find walks pin connection/player/NPC identity and recheck eligibility before observing or moving.
@@ -2286,7 +2290,8 @@ Reading it back:
 Record prefixes:
 
 - The original 72-byte prefix is still accepted, including four-byte-aligned old reader records.
-- The 80-byte prefix adds `revision`; the 88-byte prefix adds `context`. The 96-byte record adds `npc_find_mode`.
+- The 80-byte prefix adds `revision`, the 88-byte prefix adds `context`, and the 96-byte prefix adds `npc_find_mode`.
+- The 104-byte record adds `actor_guides`. Older hosts keep their existing Find behavior.
   Missing optional fields are zero.
 - An add-on requiring server-only Find can return `DISABLE_NPC_FIND` when an older host supplies a shorter output
   buffer. Likewise, an older reader sees `DISABLE_NPC_FIND` when the effective policy is server-only.

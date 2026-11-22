@@ -119,7 +119,8 @@ MapPolicy ExtensionChain::map_policy(const net::GameConnection& c) const {
         // Every provider participates, including a visibility or Tracking restrictor with no map-owner flags.
         stamps.push_back({member->id, policy.flags, policy.revision, lifecycle, policy.name});
         out.flags |= policy.flags &
-            (MapPolicyCustomSpawns | MapPolicyHideStockNpcs | MapPolicyDisableNpcFind | MapPolicyServerNpcFindOnly);
+            (MapPolicyCustomSpawns | MapPolicyHideStockNpcs | MapPolicyDisableNpcFind |
+             MapPolicyServerNpcFindOnly | MapPolicyActorGuides);
         if (!custom_owner && (policy.flags & MapPolicyCustomSpawns)) {
             out.name = std::move(policy.name);
             custom_owner = true;

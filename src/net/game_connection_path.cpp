@@ -347,8 +347,8 @@ void GameConnection::find_real_estate_plot(std::uint32_t plot) {
     send_find(path_.find_plot(static_cast<std::int32_t>(plot), true, eq_time()));
 }
 
-void GameConnection::stop_find_path() {
-    play_wave(game::kPathSoundAbort);
+void GameConnection::stop_find_path(bool play_sound) {
+    if (play_sound) play_wave(game::kPathSoundAbort);
     retire_npc_find();
 }
 

@@ -681,6 +681,7 @@ typedef struct HailstoneMapSpawn {
 #define HAILSTONE_MAP_POLICY_HIDE_STOCK_NPCS 2u
 #define HAILSTONE_MAP_POLICY_DISABLE_NPC_FIND 4u
 #define HAILSTONE_NPC_FIND_SERVER_ONLY 1u
+#define HAILSTONE_MAP_ACTOR_GUIDES 1u
 typedef struct HailstoneMapPolicy {
     uint32_t size;
     uint32_t flags;
@@ -693,6 +694,9 @@ typedef struct HailstoneMapPolicy {
     /* Zero is stock. HAILSTONE_NPC_FIND_SERVER_ONLY limits NPC Find to the server's advertised list and path.
      * DISABLE_NPC_FIND takes precedence. Only write this field when the caller supplies the 96-byte record. */
     uint64_t npc_find_mode;
+    /* HAILSTONE_MAP_ACTOR_GUIDES allows visual paths to the current target and local Bazaar traders.
+     * It grants no discovery or movement. Only write when the caller supplies the 104-byte record. */
+    uint64_t actor_guides;
 } HailstoneMapPolicy;
 
 typedef struct HailstoneSpell {

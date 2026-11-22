@@ -43,7 +43,7 @@ function FL.policy()
     FIND_STATE.policyRevision, FIND_STATE.policyContext = revision, context
   end
   if not find then clearState() end
-  return stock, find, serverOnly
+  return stock, find, serverOnly, type(policy) == "table" and policy.actor_guides == true
 end
 -- FL.policy once a frame (ui.GetTime is the frame's) for the rows and the marks, which both maps ask several times.
 local policyTime, policyStock, policyFind

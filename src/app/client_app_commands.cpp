@@ -184,6 +184,21 @@ void ClientApp::xtarget_command(const std::string& args) {
 bool ClientApp::client_command(std::string_view h, const std::string& args) {
     if (!conn_) return false;
     net::GameConnection& c = *conn_;
+    if (h == "Cmd_find" && args.find_first_not_of(" \t") == std::string::npos) {
+        const bool enabled = c.server_ext().map_policy(c).actor_guides_enabled();
+        if (conn_.get() != &c) return true;
+        if (enabled) {
+            if (!current_target_guide([this] { return conn_.get(); }, [this](auto id, auto eligible) {
+                return start_actor_guide(id, std::move(eligible));
+            }) && conn_.get() == &c) {
+                guide_.stop();
+                c.stop_find_path();
+            }
+            return true;
+        }
+    } else if (h == "Cmd_find" && guide_.active() && guide_.mode() == GuidePath::Mode::Actor) {
+        guide_.stop();
+    }
     auto eqstr = [&](std::uint32_t id) { return c.strings().format(id, {}); };
     auto save = [&] { config_.save(config_path_); };
     const std::string off = eqstr(12946), on = eqstr(12947);

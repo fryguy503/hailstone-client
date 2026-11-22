@@ -103,6 +103,7 @@ local descriptors = {
   {"ExtensionRegisterSection", "extensions", "RegisterSection", "function", 0, false},
   {"ExtensionRemove", "extensions", "Remove", "function", 0, false},
   {"FindCategories", "find", "Categories", "function", 0, false},
+  {"FindCurrentTargetPath", "find", "CurrentTargetPath", "function", 2, false},
   {"EndFind", "find", "End", "function", 2, false},
   {"FindMapLocation", "find", "MapLocation", "function", 2, false},
   {"FindNpcPath", "find", "NpcPath", "function", 2, false},

@@ -1264,6 +1264,7 @@ An item display's stat rows name the stat each shows: `hs.Text("ItemDisplayWindo
 | FindCategories | () → {{key, label}} | Categories in order | — |
 | FindNpcTarget | (id) → ok | Target the NPC | target |
 | FindNpcPath | (id) → ok | Guide path to it | commands |
+| FindCurrentTargetPath | ([show]) → ok | Show a visual guide to the current target when the provider enables it. Pass false to check availability. | commands |
 | FindNpcWalk | (id) → ok, why | Walk there (/nav) | move |
 | FindOpen | ([open]) → bool | Find window state (get or set) | commands |
 

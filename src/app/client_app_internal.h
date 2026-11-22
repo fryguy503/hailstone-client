@@ -1604,6 +1604,7 @@ private:
     // The Find window's guide path (app/guide_path.h) over nav_'s mesh, drawn by spell_particles_ and the maps.
     GuidePath guide_;
     std::string guide_zone_; // the zone it was started in: zoning ends it (spawn ids are the zone's)
+    bool start_actor_guide(std::uint32_t id, std::function<bool()> action);
     void update_guide();
     // The server's level-up effects (OP_LevelAppearance): started on the spawns' spell points.
     void update_level_effects(net::GameConnection& conn);

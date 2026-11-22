@@ -216,6 +216,7 @@ struct UiHost {
     // The Find window's guide path (app/guide_path.h): starts it to an NPC (false: no such NPC), ends it, and while
     // it is shown its line (the player first) for the maps. Unset (tests): hs.FindNpcPath asks the server's find path.
     std::function<bool(std::uint32_t spawn)> guide_to;
+    std::function<bool(std::uint32_t spawn, std::function<bool()> eligible)> guide_to_actor;
     std::function<void()> end_guide;
     // The Find window's Walk there: the navigator walks the player to the NPC (/nav id), the guide path showing;
     // "" when the walk started, else why not.

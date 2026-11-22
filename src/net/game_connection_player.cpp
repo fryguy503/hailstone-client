@@ -1276,7 +1276,6 @@ bool GameConnection::player_command(std::string_view h, const std::string& args)
     }
     if (h == "Cmd_autosplit") { autosplit_command(args); return true; }
     if (h == "Cmd_potionbelt") { potion_belt_open_ = !potion_belt_open_; return true; }
-    if (h == "Cmd_find") { find_target(args); return true; } // a find path (a client extension)
     if (h == "Cmd_alarm") { alarm_open_ = !alarm_open_; return true; }
     // Cmd_bugreport @0x4e7310 and Cmd_claim @0x4e5cd0 show their window (vtable +0x90, Activate); they never hide it.
     if (h == "Cmd_bugreport") { bug_report_open_ = true; return true; }

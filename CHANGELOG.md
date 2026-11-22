@@ -10,6 +10,7 @@
 - `/consider` with no target says "Consider whom?", and considering a ship or boat says "You can't consider that." without asking the server, as in the original client.
 - Considering an NPC or player corpse shows its remaining decay time in chat. Player corpses also show their resurrection time or status.
 - Server add-ons can offer Find for the zone server's advertised NPCs and draw the paths returned by the server.
+- Server add-ons can enable a visual guide to your selected NPC, player or corpse through Find or `/find`.
 - Added `/import` to preview eligible socials and hotbar buttons from game data, fill empty slots, and restore the previous character settings from a backup.
 - The map remembers its zoom and position when reopened in Modern and Gamepad. Zoning or logging out resets the view.
 - Fixed stale Hide indicators on other players' nameplates after the server cancels Hide during combat.

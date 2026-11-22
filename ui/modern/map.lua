@@ -265,7 +265,7 @@ local function selectNpc(r)
 end
 
 local function findPage(x, y, w, h, s, rows, own)
-  local _, allowed, serverOnly = FL.policy()
+  local _, allowed, serverOnly, actorGuides = FL.policy()
   if not allowed then return end
   if not own then
     T.Text(x, y + 4 * s, "Find lists your own zone's", C.faint, T.font.small)
@@ -292,6 +292,14 @@ local function findPage(x, y, w, h, s, rows, own)
     ui.DrawCircleFilled(bx + 9 * s, by + 13 * s, 3.5 * s, col[1], col[2], col[3], hidden[key] and 0.35 or 1)
   end
   local ly = cy + ((#CATS + 1) // 2) * 30 * s + 4 * s
+  if actorGuides and API.find.CurrentTargetPath then
+    local ready = API.find.CurrentTargetPath(false)
+    if T.Button("##findtargetpath", x, ly, x + w, ly + 26 * s, s, "Show path to target", { enabled = ready }) then
+      if API.find.CurrentTargetPath() then F.why = nil end
+    end
+    if ui.IsItemHovered() and not ready then ui.SetTooltip("Select a target first") end
+    ly = ly + 30 * s
+  end
   local footer = 34 * s
   ui.SetCursorPos(x - wx, ly - wy)
   ui.BeginChild("##findlist", w, math.max(y + h - ly - footer, 1), false)

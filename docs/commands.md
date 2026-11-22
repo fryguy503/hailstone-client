@@ -279,6 +279,7 @@ These need a GM account and are not commands at all for other players, as in the
 GM does goes through the server's `#` commands instead.
 
 - `/find <name>` (Hailstone: a path to the named spawn or the target. For everyone, the Find window does this: Ctrl+F.)
+  Where the server's add-on enables actor guides, `/find` without a name shows a visual guide to your current target.
 - Not run by Hailstone: `/shownpcnames`, `/private`, `/goto`, `/becomenpc`, `/searchcorpse`, `/emoteworld`,
   `/emotezone`, `/summon`, `/summoncorpse`, `/broadcast`, `/lastname`, `/zone`, `/kick`, `/kill`, `/delcorpse`,
   `/hideme`, `/servers`, `/height`, `/selfkill`, `/toggletell`, `/inquire`, `/praise`, `/warn`, `/approval`,

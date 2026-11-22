@@ -2025,17 +2025,18 @@ bool map_policy_intact(lua_State* L, const game::MapPolicy& policy, std::uint64_
         lua_pop(L, 1);
         ++fields;
     }
-    return fields == 8 && field_is(L, "custom_spawns", (policy.flags & game::MapPolicyCustomSpawns) != 0) &&
+    return fields == 9 && field_is(L, "custom_spawns", (policy.flags & game::MapPolicyCustomSpawns) != 0) &&
            field_is(L, "stock_npcs", !(policy.flags & game::MapPolicyHideStockNpcs)) &&
            field_is(L, "npc_find", policy.npc_find_enabled()) &&
            field_is(L, "npc_find_server_only", policy.npc_find_server_only()) &&
+           field_is(L, "actor_guides", policy.actor_guides_enabled()) &&
            field_is(L, "name", std::string_view(policy.name)) && field_is(L, "revision", policy.revision) &&
            field_is(L, "context", context) && field_is(L, "source", source);
 }
 
 } // namespace
 
-// policy = hs.MapPolicy() -- {custom_spawns,stock_npcs,npc_find,npc_find_server_only,name,revision,context,source}.
+// policy = hs.MapPolicy() -- {custom_spawns,stock_npcs,npc_find,npc_find_server_only,actor_guides,name,revision,context,source}.
 // Opaque equality-only strings: revision tracks provider/content, source only provider ownership/lifetime, and
 // context the connection/player. Names are display text. Missing providers retain stock availability/preferences.
 // While all of it stays the same, each call returns the same table (a new one if a caller has changed it).
@@ -2078,11 +2079,12 @@ int MapPolicy(lua_State* L) {
         lua_pop(L, 1);
     }
     last.valid = false; // (until the new table is made and kept)
-    lua_createtable(L, 0, 8);
+    lua_createtable(L, 0, 9);
     lua_pushboolean(L, (policy.flags & game::MapPolicyCustomSpawns) != 0); lua_setfield(L, -2, "custom_spawns");
     lua_pushboolean(L, !(policy.flags & game::MapPolicyHideStockNpcs)); lua_setfield(L, -2, "stock_npcs");
     lua_pushboolean(L, policy.npc_find_enabled()); lua_setfield(L, -2, "npc_find");
     lua_pushboolean(L, policy.npc_find_server_only()); lua_setfield(L, -2, "npc_find_server_only");
+    lua_pushboolean(L, policy.actor_guides_enabled()); lua_setfield(L, -2, "actor_guides");
     lua_pushlstring(L, policy.name.data(), policy.name.size()); lua_setfield(L, -2, "name");
     auto opaque = [L](std::uint64_t number, const char* name) {
         std::array<char, 20> encoded{};

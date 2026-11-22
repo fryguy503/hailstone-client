@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "app/guide_path.h"
 #include "app/lua_ui.h"
 #include "core/process_serial.h"
 #include "game/server_ext_chain.h"
@@ -191,6 +192,62 @@ TEST_CASE("Find identity: the final policy callback cannot replace the observed 
     CHECK(ui.world->conn->target() == 12);
     ui.provider->on_query = {};
     CHECK(ui.run("fresh=hs.UI.find.Npcs()[1]; return hs.UI.find.NpcTarget(fresh.id,fresh.token)") == "true");
+}
+
+TEST_CASE("Find current target: opting in guides to a selected actor without adding discovery or Walk") {
+    FindUi ui;
+    auto& conn = *ui.world->conn;
+    auto& world = net::GameConnectionTestAccess::world(conn);
+    ui.provider->visible = false;
+    ui.provider->policy.flags = game::MapPolicyServerNpcFindOnly | game::MapPolicyHideStockNpcs;
+    std::function<bool()> active;
+    std::uint32_t guided = 0;
+    ui.host.guide_to_actor = [&](std::uint32_t id, std::function<bool()> action) {
+        active = app::actor_guide_eligibility([&] { return ui.host.conn; }, conn, id, std::move(action));
+        if (!active || !active()) return false;
+        guided = id;
+        return true;
+    };
+    conn.set_target(10);
+    CHECK(ui.run("return hs.UI.find.CurrentTargetPath()") == "false");
+    ui.provider->policy.flags |= game::MapPolicyActorGuides;
+    CHECK(ui.run("return hs.UI.map.Policy().actor_guides") == "true");
+    CHECK(ui.run("return hs.UI.find.CurrentTargetPath(false)") == "true");
+    CHECK(guided == 0);
+    CHECK(ui.run("return hs.UI.find.CurrentTargetPath()") == "true");
+    CHECK(guided == 10);
+    CHECK(ui.run("return #hs.UI.find.Npcs()") == "0");
+    CHECK(ui.run("return hs.UI.find.NpcPath(10)") == "false");
+    CHECK(ui.run("return hs.UI.find.NpcWalk(10)") == "false");
+    CHECK(ui.run("return pcall(hs.UI.find.CurrentTargetPath, 11)") == "false");
+    CHECK(ui.paths == 0);
+    CHECK(ui.walks == 0);
+
+    conn.set_target(12); // a live player
+    CHECK_FALSE(active());
+    CHECK(ui.run("return hs.UI.find.CurrentTargetPath()") == "true");
+    CHECK(guided == 12);
+    world.spawns.at(11).is_corpse = true;
+    conn.set_target(11);
+    CHECK(ui.run("return hs.UI.find.CurrentTargetPath()") == "true");
+    CHECK(guided == 11);
+    ++world.spawns.at(11).incarnation;
+    CHECK_FALSE(active());
+    CHECK(ui.run("return hs.UI.find.CurrentTargetPath()") == "true");
+    net::GameConnectionTestAccess::status(conn).dead = true;
+    CHECK_FALSE(active());
+    net::GameConnectionTestAccess::status(conn).dead = false;
+
+    ++ui.provider->policy.revision;
+    CHECK_FALSE(active());
+    REQUIRE(ui.run("return hs.UI.find.CurrentTargetPath()") == "true");
+    ui.host.conn = nullptr;
+    CHECK_FALSE(active());
+    ui.host.conn = &conn;
+    ui.provider->policy.flags |= game::MapPolicyDisableNpcFind;
+    CHECK(ui.run("return hs.UI.map.Policy().actor_guides") == "false");
+    CHECK(ui.run("return hs.UI.find.CurrentTargetPath()") == "false");
+    CHECK_FALSE(active());
 }
 
 TEST_CASE("Find identity: provider exceptions become Lua errors without breaking later queries") {

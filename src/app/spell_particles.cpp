@@ -325,11 +325,11 @@ constexpr std::uint32_t kPathFinishKey = 0xfff00001u;
 constexpr std::uint32_t kGuideLineKey = 0xfff00002u;
 } // namespace
 
-void SpellParticles::draw_trail(std::uint32_t key, std::span<const glm::vec3> line, float far) {
+void SpellParticles::draw_trail(std::uint32_t key, std::span<const glm::vec3> line, float far, bool direction_only) {
     game::TrailStyle st;
     st.far_end = far;
     st.far_start = far * 0.7f;
-    if (find_trail_style_ == game::FindTrailStyle::Navigation) {
+    if (!direction_only && find_trail_style_ == game::FindTrailStyle::Navigation) {
         if (!navigation_definition_) {
             assets::EmitterDefinition d;
             d.name = "FindNavigationLine";
@@ -367,6 +367,28 @@ void SpellParticles::draw_trail(std::uint32_t key, std::span<const glm::vec3> li
     }
     std::vector<game::Particle>& quads = trail_quads_;
     quads.clear();
+    if (direction_only) {
+        const glm::vec3 delta = line.size() == 2 ? line.back() - line.front() : glm::vec3(0.0f);
+        const float distance = glm::length(delta);
+        if (distance > 0.0f && std::isfinite(distance)) {
+            // Dashes point to the actor even where the ground trail cannot be drawn.
+            const glm::vec3 tangent = delta / distance;
+            const float end = std::min(distance, far);
+            for (float at = 0.0f; at < end; at += 4.0f) {
+                game::Particle dash;
+                dash.height = std::min(2.0f, end - at);
+                dash.position = line.front() + (at + dash.height * 0.5f) * tangent + glm::vec3(0, 0, 1.0f);
+                dash.axes[1] = tangent;
+                dash.width = 0.28f;
+                dash.color = glm::vec4(1.0f, 0.65f, 0.20f, 0.85f * glm::clamp((far - at) / (far * 0.3f), 0.0f, 1.0f));
+                dash.lifetime = 1.0f;
+                quads.push_back(dash);
+            }
+        }
+        if (quads.empty()) particles_.stop(key);
+        else particles_.set_still(key, *path_definition_, std::span<const game::Particle>(quads));
+        return;
+    }
     const auto trail = game::build_rainbow_strands(line, st, clock_, trail_floor_);
     for (const auto& t : trail) {
         game::Particle q;
@@ -410,7 +432,7 @@ void SpellParticles::update_path(net::GameConnection& conn) {
         draw_trail(kPathLineKey, line, std::max(ps.fade_end, 40.0f));
     }
     // The Find window's guide path (app/guide_path.h): the same selected style.
-    draw_trail(kGuideLineKey, guide_line_, 170.0f);
+    draw_trail(kGuideLineKey, guide_line_, 170.0f, guide_direction_only_);
     // The selected trail replaces Path.ini's travelling clouds: those follow elevated, sine-displaced points and
     // would obscure the strands or float above the ground. PlayerPath's timing, sounds and route stay unchanged.
     // PlayerPath_OnDestinationReached: the FinishEmitterN at the destination for their LifeSpan.

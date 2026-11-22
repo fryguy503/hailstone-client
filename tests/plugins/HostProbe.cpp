@@ -534,6 +534,8 @@ struct OldMapPolicy72 { std::uint32_t size, flags; char name[64]; };
 struct OldMapPolicy80 { OldMapPolicy72 prefix; std::uint64_t revision; };
 static_assert(sizeof(OldMapPolicy72)==72 && alignof(OldMapPolicy72)==4);
 static_assert(sizeof(OldMapPolicy80)==80 && offsetof(HailstoneMapPolicy,revision)==72 && offsetof(HailstoneMapPolicy,context)==80);
+static_assert(offsetof(HailstoneMapPolicy,npc_find_mode)==88 && offsetof(HailstoneMapPolicy,actor_guides)==96 &&
+              sizeof(HailstoneMapPolicy)==104);
 int old_map_policy(void* destination, bool with_revision) {
     OldMapPolicy80 old{};
     old.prefix.size=with_revision?80:72;old.prefix.flags=map_flags;
@@ -557,7 +559,10 @@ int map_policy(HailstoneMapPolicy* out) {
         WriteChatf("[Probe] nested map %d", host->get_map_policy(host->host, &nested));
     }
     if (map_format == 6) host->set_active(host->host, 0);
-    if (map_format == 9 && out->size >= sizeof(*out)) out->npc_find_mode = HAILSTONE_NPC_FIND_SERVER_ONLY;
+    if ((map_format == 9 || map_format == 10) && out->size >= offsetof(HailstoneMapPolicy, actor_guides))
+        out->npc_find_mode = HAILSTONE_NPC_FIND_SERVER_ONLY;
+    if (map_format == 9) out->size = offsetof(HailstoneMapPolicy, actor_guides);
+    if (map_format == 10 && out->size >= sizeof(*out)) out->actor_guides = HAILSTONE_MAP_ACTOR_GUIDES;
     return 1;
 }
 void probe_map_set(void*, const char* args) {
@@ -569,8 +574,8 @@ void probe_map_set(void*, const char* args) {
 }
 void probe_map_prefix(void*, const char* args) {
     const auto size=static_cast<std::uint32_t>(std::strtoul(args,nullptr,10));
-    if(size!=72 && size!=80 && size!=88 && size!=96)return;
-    alignas(8) std::array<unsigned char,104> storage;
+    if(size!=72 && size!=80 && size!=88 && size!=96 && size!=104)return;
+    alignas(8) std::array<unsigned char,112> storage;
     storage.fill(0x5a);
     auto* bytes=storage.data()+4; // a real old record may be aligned to four, not eight
     std::memcpy(bytes,&size,sizeof(size));
@@ -579,12 +584,14 @@ void probe_map_prefix(void*, const char* args) {
     bool canary=true;
     for(std::size_t i=0;i<4;++i)canary=canary&&storage[i]==0x5a;
     for(std::size_t i=4+size;i<storage.size();++i)canary=canary&&storage[i]==0x5a;
-    std::uint64_t revision=0,context=0,find_mode=0;
+    std::uint64_t revision=0,context=0,find_mode=0,actor_guides=0;
     if(size>=80)std::memcpy(&revision,bytes+72,sizeof(revision));
     if(size>=88)std::memcpy(&context,bytes+80,sizeof(context));
     if(size>=96)std::memcpy(&find_mode,bytes+88,sizeof(find_mode));
-    WriteChatf("[Probe] map prefix %u result %d flags %u canary %d revision %d context %d server find %d",size,result,old.flags,
-        canary?1:0,revision?1:0,context&&context!=UINT64_MAX?1:0,find_mode==HAILSTONE_NPC_FIND_SERVER_ONLY);
+    if(size>=104)std::memcpy(&actor_guides,bytes+96,sizeof(actor_guides));
+    WriteChatf("[Probe] map prefix %u result %d flags %u canary %d revision %d context %d server find %d actor guides %d",
+        size,result,old.flags,canary?1:0,revision?1:0,context&&context!=UINT64_MAX?1:0,
+        find_mode==HAILSTONE_NPC_FIND_SERVER_ONLY,actor_guides==HAILSTONE_MAP_ACTOR_GUIDES);
 }
 void probe_map_cycle(void*,const char*) { host->set_active(host->host,0);host->set_active(host->host,1); }
 void probe_map(void*, const char* args) {

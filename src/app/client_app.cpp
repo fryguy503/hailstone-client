@@ -349,7 +349,7 @@ int ClientApp::run() {
             if (spell_bolts_ && lighting_mode_ == render::LightingMode::Modern)
                 spell_bolts_->take_cues(*conn_, cues, bolt_now);
             update_guide();
-            spell_particles_->set_guide_line(guide_.line());
+            spell_particles_->set_guide_line(guide_.line(), guide_.direction_only());
             spell_particles_->set_paths_visible(ui_.visible());
             spell_particles_->set_find_trail_style(game::normalize_find_trail_style(
                 config_.get_int("display.find_trail_style", 0)));
@@ -1312,16 +1312,44 @@ void ClientApp::update_level_effects(net::GameConnection& conn) {
     actor_emitters_->prune_effects([&conn](std::uint32_t id) { return conn.world().spawns.contains(id); });
 }
 
+bool ClientApp::start_actor_guide(std::uint32_t id, std::function<bool()> action) {
+    if (!conn_) return false;
+    const auto revision = guide_.revision();
+    auto eligible = actor_guide_eligibility([this] { return conn_.get(); }, *conn_, id, std::move(action));
+    if (!eligible || !eligible() || guide_.revision() != revision) return false;
+    const auto& actor = conn_->world().spawns.at(id);
+    conn_->stop_find_path(false);
+    guide_.start(id, game::display_name(actor.name), std::move(eligible), GuidePath::Mode::Actor);
+    guide_zone_ = conn_->world().zone_short_name;
+    return true;
+}
+
 void ClientApp::update_guide() {
-    // The Find window's guide path (app/guide_path.h): the NPC's place, found again over the mesh as the player goes.
+    // The Find guide is replanned over the local mesh as the player and destination move.
     if (!guide_.active() || !conn_) return;
     if (conn_->world().zone_short_name != guide_zone_) {
         guide_.stop();
         return;
     }
     const auto revision = guide_.revision();
-    const auto goal = guide_.eligible() ? guide_spawn_position(*conn_, guide_.spawn()) : std::nullopt;
+    const auto* connection = conn_.get();
+    const bool actor = guide_.mode() == GuidePath::Mode::Actor;
+    const auto eligible = guide_.eligible();
     if (revision != guide_.revision()) return; // an eligibility hook replaced the guide
+    std::optional<glm::vec3> goal;
+    if (eligible && conn_.get() == connection) {
+        if (actor) {
+            const auto& spawns = conn_->world().spawns;
+            auto target = spawns.find(guide_.spawn());
+            if (target != spawns.end())
+                goal = target->second.display_valid ? target->second.display_position : target->second.position;
+        } else goal = guide_spawn_position(*conn_, guide_.spawn());
+    }
+    if (revision != guide_.revision()) return; // an eligibility hook replaced the guide
+    if (conn_.get() != connection) {
+        guide_.stop();
+        return;
+    }
     const double now = std::chrono::duration<double>(Clock::now() - start_time_).count();
     const std::string name = guide_.name();
     auto u = guide_.update(feet_, goal, now, [this](const glm::vec3& from, const glm::vec3& to) {
@@ -1329,7 +1357,7 @@ void ClientApp::update_guide() {
     });
     // Hailstone's own lines (the original has no guide path).
     if (u.arrived) conn_->ui_message("You have reached " + name + ".");
-    else if (u.gone) conn_->ui_message(name + " is no longer here.");
+    else if (u.gone && !actor) conn_->ui_message(name + " is no longer here.");
     else if (u.no_way) conn_->ui_message("There is no way to " + name + " from here.");
     else if (u.waiting_mesh) conn_->ui_message("The path to " + name + " will show once this zone's map is ready.");
 }

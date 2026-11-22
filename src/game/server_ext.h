@@ -47,6 +47,7 @@ enum MapPolicyFlags : std::uint32_t {
     MapPolicyHideStockNpcs = 2,
     MapPolicyDisableNpcFind = 4,
     MapPolicyServerNpcFindOnly = 8,
+    MapPolicyActorGuides = 16,
 };
 struct MapPolicy {
     std::uint32_t flags = 0;
@@ -54,6 +55,7 @@ struct MapPolicy {
     std::uint64_t revision = 0; // provider content revision; the chain publishes an effective lifetime revision
     bool npc_find_enabled() const { return !(flags & MapPolicyDisableNpcFind); }
     bool npc_find_server_only() const { return npc_find_enabled() && (flags & MapPolicyServerNpcFindOnly); }
+    bool actor_guides_enabled() const { return npc_find_enabled() && (flags & MapPolicyActorGuides); }
 };
 
 // The skill rules an extension changes (CharacterZoneClient::HasSkill / CSkillMgr::IsAvailable and the tracking

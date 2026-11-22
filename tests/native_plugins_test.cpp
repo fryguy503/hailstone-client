@@ -656,21 +656,30 @@ TEST_CASE("native plugins: map policy accepts old aligned prefixes and changes a
         h.run("/probemapset 7 "+std::to_string(format)+" 42");
         const auto policy=current();CHECK(policy.flags==7);CHECK(policy.name=="Probe map");CHECK(policy.revision!=0);
         CHECK(lifecycle()==initial_lifecycle); // map-only content and optional record format do not retire Tracking
-        for(const int size:{72,80,88,96}) {
+        for(const int size:{72,80,88,96,104}) {
             h.run("/probemapprefix "+std::to_string(size));
             CHECK(h.printed_line("[Probe] map prefix "+std::to_string(size)+" result 1 flags 7 canary 1 revision "+
-                (size>=80?"1":"0")+" context "+(size>=88?"1":"0")+" server find 0"));
+                (size>=80?"1":"0")+" context "+(size>=88?"1":"0")+" server find 0 actor guides 0"));
         }
     }
     h.run("/probemapset 3 9 42");
     CHECK(current().npc_find_server_only());
+    CHECK_FALSE(current().actor_guides_enabled());
     h.run("/probemapprefix 96");
-    CHECK(h.printed_line("[Probe] map prefix 96 result 1 flags 3 canary 1 revision 1 context 1 server find 1"));
+    CHECK(h.printed_line("[Probe] map prefix 96 result 1 flags 3 canary 1 revision 1 context 1 server find 1 actor guides 0"));
     h.run("/probemapprefix 88");
-    CHECK(h.printed_line("[Probe] map prefix 88 result 1 flags 7 canary 1 revision 1 context 1 server find 0"));
-    h.run("/probemapset 7 9 42");
+    CHECK(h.printed_line("[Probe] map prefix 88 result 1 flags 7 canary 1 revision 1 context 1 server find 0 actor guides 0"));
+    h.run("/probemapset 2 10 42");
+    CHECK(current().npc_find_server_only());
+    CHECK(current().actor_guides_enabled());
+    h.run("/probemapprefix 96");
+    CHECK(h.printed_line("[Probe] map prefix 96 result 1 flags 2 canary 1 revision 1 context 1 server find 1 actor guides 0"));
+    h.run("/probemapprefix 104");
+    CHECK(h.printed_line("[Probe] map prefix 104 result 1 flags 2 canary 1 revision 1 context 1 server find 1 actor guides 1"));
+    h.run("/probemapset 7 10 42");
     CHECK_FALSE(current().npc_find_enabled());
     CHECK_FALSE(current().npc_find_server_only());
+    CHECK_FALSE(current().actor_guides_enabled());
     auto before=current().revision;CHECK(current().revision==before);
     h.run("/probemapset 7 0 43");CHECK(current().revision!=before);CHECK(lifecycle()==initial_lifecycle);
     before=current().revision;h.run("/probemapcycle");CHECK(current().revision!=before);CHECK(lifecycle()!=initial_lifecycle);

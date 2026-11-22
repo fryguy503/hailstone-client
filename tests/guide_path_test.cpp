@@ -627,3 +627,30 @@ TEST_CASE("Guide path: ends when the NPC is gone or the mesh has no way there") 
     CHECK(g.partial());
     CHECK(g.line().size() == 2);
 }
+
+TEST_CASE("Guide path: an explicit actor gets a live direction line until a route is available") {
+    app::GuidePath guide;
+    const glm::vec3 origin(0, 0, 0), nearby(9, 0, 0), other_floor(10, 0, 25);
+    std::optional<std::vector<glm::vec3>> route;
+    const app::GuidePath::PathFn plan = [&](const glm::vec3&, const glm::vec3&) { return route; };
+    guide.start(7, "Target", {}, app::GuidePath::Mode::Actor);
+    CHECK_FALSE(guide.update(origin, nearby, 0.0, plan).arrived);
+    CHECK(guide.direction_only());
+    REQUIRE(guide.line().size() == 2);
+    CHECK(guide.line().back() == nearby);
+
+    guide.update(origin, other_floor, 0.5, plan);
+    CHECK(guide.line().back() == other_floor);
+    route = std::vector<glm::vec3>{origin, glm::vec3(10, 0, 0)}; // reaches its XY on the wrong floor
+    guide.update(origin, other_floor, 1.0, plan);
+    CHECK(guide.direction_only());
+    CHECK(guide.line().back() == other_floor);
+
+    route = std::vector<glm::vec3>{origin, glm::vec3(0, 12, 5), other_floor};
+    guide.update(origin, other_floor, 2.0, plan);
+    CHECK_FALSE(guide.direction_only());
+    REQUIRE(guide.line().size() == 3);
+    CHECK(guide.line().back() == other_floor);
+    CHECK(guide.update(origin, std::nullopt, 2.2, plan).gone);
+    CHECK(guide.line().empty());
+}

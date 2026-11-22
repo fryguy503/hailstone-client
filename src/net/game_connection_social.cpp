@@ -416,6 +416,7 @@ bool GameConnection::run_slash_command(std::size_t index, const std::string& arg
     if (market_command(h, args)) return true;
     // The commands the app implements (app/client_app_commands.cpp).
     if (client_commands_ && client_commands_(h, args)) return true;
+    if (h == "Cmd_find") { find_target(args); return true; } // stock server path when the app did not supply a guide
     return false;
 }
 

@@ -207,6 +207,41 @@ TEST_CASE("server addon maps: restricted NPC Find requests retire without cancel
     CHECK_FALSE(c.find_spawn(13)); // corpse remains ineligible even if it belongs to a PC
 }
 
+TEST_CASE("Find current target: a no-argument slash command reaches the app's local guide before stock Find") {
+    auto policy = std::make_shared<MapExtension>();
+    policy->policy.flags = game::MapPolicyServerNpcFindOnly | game::MapPolicyActorGuides;
+    policy->find_visible = true;
+    auto options = test::quick_options();
+    options.plugins = policy;
+    test::Rig rig(test::MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    auto& connection = rig.conn;
+    path_actors(connection);
+    connection.set_target(10);
+    int guides = 0;
+    connection.set_client_commands([&](std::string_view handler, const std::string& args) {
+        if (handler != "Cmd_find" || !args.empty()) return false;
+        return app::current_target_guide([&] { return &connection; }, [&](std::uint32_t id, std::function<bool()> current) {
+            CHECK(id == 10);
+            CHECK(current());
+            ++guides;
+            return true;
+        });
+    });
+    connection.say("/find");
+    CHECK(guides == 1);
+    CHECK(net::GameConnectionTestAccess::find_request_count(connection) == 0);
+    connection.say("/find a_rat01");
+    CHECK(guides == 1);
+    CHECK(net::GameConnectionTestAccess::find_request_count(connection) == 0); // unadvertised
+    net::FindableNpc advertised;
+    advertised.spawn_id = 10;
+    connection.receive_zone_packet_for_test(net::encode_findable_npc(advertised));
+    connection.say("/find a_rat01");
+    CHECK(guides == 1);
+    CHECK(net::GameConnectionTestAccess::find_request_count(connection) == 1);
+}
+
 TEST_CASE("server addon maps: NPC-origin paths and guide identities cannot rebind after despawn or id reuse") {
     auto policy = std::make_shared<MapExtension>(); policy->find_visible = true;
     auto options = test::quick_options(); options.plugins = policy;

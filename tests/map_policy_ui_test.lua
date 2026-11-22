@@ -36,6 +36,11 @@ local function rig(pack)
   Open=function(value)if value~=nil then s.findOpen=value;return act("FindOpen",value)end;return s.findOpen end,
   NpcTarget=function(id,token)return npcAction("NpcTarget",id,token)end,
   NpcPath=function(id,token)return npcAction("NpcPath",id,token)end,
+   CurrentTargetPath=function(show)
+     if not s.targetReady then return false end
+     if show==false then return true end
+     return act("CurrentTargetPath")
+   end,
   NpcWalk=function(id,token)return npcAction("NpcWalk",id,token)end,End=function()return act("End")end,
   MapLocation=function(...)return act("MapLocation",...)end}
  hs={UI={map=map,find=find,session={InGame=function()return true end,GameTime=function()return nil end},
@@ -79,12 +84,12 @@ local function rig(pack)
  local theme={color=color,C=color,font={small=1,tiny=1,normal=1},NO_OPTS={},S=1}
  theme.Text=function(_,_,value)text(value)end;theme.TextSize=ui.CalcTextSize
  theme.Fit=function(value)return value end;theme.Hit=hit
- theme.Button=function(id,... )return hit(id)end
+ theme.Button=function(id,x0,y0,x1,y1,scale,label,opts)return hit(id)and(not opts or opts.enabled~=false)end
  theme.TakeRightClick=nop;theme.rgba=function(c,a)return c[1],c[2],c[3],a end
  theme.frame=nop;theme.px=function(n)return n end;theme.draw=function(_,_,value)text(value)end
  theme.font=function()end;theme.unfont=nop
  theme.textIn=function(_,_,_,_,value)text(value)end
- theme.button=function(id,label)text(label);return hit(id)end
+ theme.button=function(id,label,w,h,opts,pad,off)text(label);return hit(id)and not off end
  -- Modern's font table and Gamepad's font method are separate pack APIs.
  if pack=="modern"then theme.font={small=1,tiny=1,normal=1}end
  local hud={T=theme,Scale=function()return 1 end,DragItem=function()return false end,AutoZControls=nop}
@@ -400,5 +405,23 @@ do
  check(s.texts["My pin"]~=nil,"NPC policy hid a personal map pin")
  equal(s.npcReads,0,"Coordinate path queried forbidden NPC data")
  s.preferences();s.restore()
+end
+
+for _,pack in ipairs({"modern","gamepad"})do
+  local s=rig(pack);s.findOpen=true
+  local modern=pack=="modern"
+  local window=modern and "Map" or "Find"
+  s.policy={stock_npcs=false,npc_find=true,npc_find_server_only=true}
+  s.load(modern and "map.lua" or "navigation.lua")
+  s.frame(window)
+  check(not s.hits["##findtargetpath"],pack.." showed the actor guide without provider opt-in")
+  s.policy.actor_guides=true
+  s.click="##findtargetpath";s.frame(window)
+  check(s.hits["##findtargetpath"],pack.." did not show the current-target button")
+  equal(#s.actions,0,pack.." requested a guide with no current target")
+  s.targetReady=true;s.frame(window)
+  equal(s.actions[1][1],"CurrentTargetPath",pack.." did not request the current-target guide")
+  equal(s.actions[1][2],nil,pack.." passed an NPC row or actor ID to the current-target guide")
+  s.preferences();s.restore()
 end
 print("Map policy presentation: "..checks.." checks passed")

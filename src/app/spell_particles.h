@@ -93,7 +93,10 @@ public:
     // The light the glowing effects give off (game::particle_lights), the `max` brightest.
     std::vector<game::LightSource> lights(std::size_t max) const;
     // The Find window's guide path (app/guide_path.h) to draw, the player first; empty: none.
-    void set_guide_line(std::vector<glm::vec3> line) { guide_line_ = std::move(line); }
+    void set_guide_line(std::vector<glm::vec3> line, bool direction_only = false) {
+        guide_line_ = std::move(line);
+        guide_direction_only_ = direction_only;
+    }
     // Transient UI visibility: hide only route trails and completion effects, retaining both route inputs.
     void set_paths_visible(bool visible) { paths_visible_ = visible; }
     void set_find_trail_style(game::FindTrailStyle style) { find_trail_style_ = style; }
@@ -131,10 +134,11 @@ private:
     BloodPoint blood_point_;
     MissilePose missile_pose_;
     std::vector<glm::vec3> guide_line_;          // set_guide_line
+    bool guide_direction_only_ = false;
     std::vector<glm::vec3> trail_line_;          // update_path's route, kept for its capacity
     std::vector<game::Particle> trail_quads_;    // draw_trail's quads, kept for its capacity
     // A trail (game/path_trail.h) as the still particles of `key`, or none.
-    void draw_trail(std::uint32_t key, std::span<const glm::vec3> line, float far);
+    void draw_trail(std::uint32_t key, std::span<const glm::vec3> line, float far, bool direction_only = false);
     // A delayed cue and when it plays.
     struct Held {
         double at;

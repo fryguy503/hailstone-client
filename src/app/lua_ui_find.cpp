@@ -30,6 +30,7 @@
 
 #include <lua.hpp>
 
+#include "app/guide_path.h"
 #include "app/lua_ui.h"
 #include "game/map_data.h"
 #include "game/useful_npcs.h"
@@ -261,7 +262,10 @@ int FindNpcPath(lua_State* L) {
         if (observation) {
             const auto& actor = observation->actor;
             accepted = !observation->server_only && h.guide_to && h.guide_to(actor.id);
-            if (!accepted && h.conn && h.conn->matches(actor)) accepted = h.conn->find_spawn(actor.id);
+            if (!accepted && h.conn && h.conn->matches(actor)) {
+                accepted = h.conn->find_spawn(actor.id);
+                if (accepted && observation->server_only && h.end_guide) h.end_guide();
+            }
         }
     });
     lua_pushboolean(L, accepted);
@@ -284,6 +288,22 @@ int FindNpcWalk(lua_State* L) {
     return 2;
 }
 
+// ok = hs.FindCurrentTargetPath([show]) -- start an opted-in visual guide to the current target.
+// Pass false to query availability without starting it.
+int FindCurrentTargetPath(lua_State* L) {
+    UiHost& h = host_up(L);
+    if (!lua_isnoneornil(L, 1)) luaL_checktype(L, 1, LUA_TBOOLEAN);
+    const bool show = lua_isnoneornil(L, 1) || lua_toboolean(L, 1);
+    bool accepted = false;
+    plugin::cxx_guard(L, [&] {
+        if (!h.in_game || !h.guide_to_actor) return;
+        const auto current = [&h] { return h.conn; };
+        accepted = show ? current_target_guide(current, h.guide_to_actor) : current_target_guide(current);
+    });
+    lua_pushboolean(L, accepted);
+    return 1;
+}
+
 int FindOpen(lua_State* L) {
     UiHost& h = host_up(L);
     plugin::cxx_guard(L, [&] {
@@ -304,7 +324,8 @@ int gc_cache(lua_State* L) {
 void register_find_api(lua_State* L, UiHost& host) {
     static const luaL_Reg fns[] = {{"FindNpcs", FindNpcs},           {"FindCategories", FindCategories},
                                    {"FindNpcTarget", FindNpcTarget}, {"FindNpcPath", FindNpcPath},
-                                   {"FindNpcWalk", FindNpcWalk},     {"FindOpen", FindOpen}};
+                                   {"FindNpcWalk", FindNpcWalk},     {"FindOpen", FindOpen},
+                                   {"FindCurrentTargetPath", FindCurrentTargetPath}};
     // The one cache, the second upvalue of each function (freed with the last of them).
     new (lua_newuserdatauv(L, sizeof(FindCache), 0)) FindCache();
     lua_createtable(L, 0, 1);

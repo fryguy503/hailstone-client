@@ -877,7 +877,7 @@ public:
     // PlayerPath_FindRealEstatePlot (the plot search window's Go with mode 0): the path to a plot.
     void find_real_estate_plot(std::uint32_t plot);
     // PlayerPath_Stop (the find key / End Find while a path is shown): the path ends with its abort sound.
-    void stop_find_path();
+    void stop_find_path(bool play_sound = true);
     // The navigation's server path (app/navigator.h, a Hailstone addition): the same OP_FindPersonRequest as a find
     // to a spawn, but its reply goes to take_quiet_path() alone: no path drawn, no sound, no chat line, and a shown
     // find path is left as it is.

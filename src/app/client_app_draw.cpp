@@ -484,6 +484,9 @@ void ClientApp::update_ui_host() {
             guide_zone_ = conn_->world().zone_short_name;
             return true;
         };
+        h.guide_to_actor = [this](std::uint32_t id, std::function<bool()> eligible) {
+            return start_actor_guide(id, std::move(eligible));
+        };
         h.end_guide = [this] { guide_.stop(); };
         h.walk_to = [this](std::uint32_t id) -> std::string {
             if (!nav_ || !ui_host_.guide_to || !ui_host_.guide_to(id)) return "no such NPC";

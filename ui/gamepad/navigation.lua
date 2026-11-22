@@ -39,12 +39,12 @@ local function npcFindPolicy()
     findServerOnly = serverOnly
     findRevision, findContext, findZone = revision, context, zone
   end
-  return allowed, serverOnly
+  return allowed, serverOnly, type(policy) == "table" and policy.actor_guides == true
 end
 
 ui.window("Find", function()
   if not API.session.InGame() or not API.find.Open() then return end -- (before the policy: shut, it costs nothing)
-  local allowed, serverOnly = npcFindPolicy()
+  local allowed, serverOnly, actorGuides = npcFindPolicy()
   if not allowed then return end
   T.frame()
   if W.begin("Find", { w = 1200, h = 860, title = "Find",
@@ -64,6 +64,14 @@ ui.window("Find", function()
       if not kind or r.category == kind[1] then rows[#rows + 1] = r end
     end
     local top = y0 + bh + T.px(18)
+    if actorGuides and API.find.CurrentTargetPath then
+      ui.SetCursorPos(x0 - wx, top - wy)
+      if T.button("##findtargetpath", "Show path to target", x1 - x0, bh, T.NO_OPTS, pad,
+          not API.find.CurrentTargetPath(false)) and API.find.CurrentTargetPath() then
+        API.find.Open(false)
+      end
+      top = top + bh + T.px(18)
+    end
     ui.SetCursorPos(x0 - wx, top - wy)
     if #rows == 0 then
       T.font(24)

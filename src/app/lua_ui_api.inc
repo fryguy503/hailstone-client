@@ -142,6 +142,7 @@ UI_METHOD("ExtensionRemove", "extensions", "Remove", 0)
 
 // find
 UI_METHOD("FindCategories", "find", "Categories", 0)
+UI_METHOD("FindCurrentTargetPath", "find", "CurrentTargetPath", kCapCommands)
 UI_METHOD("EndFind", "find", "End", kCapCommands)
 UI_METHOD("FindMapLocation", "find", "MapLocation", kCapCommands)
 UI_METHOD("FindNpcPath", "find", "NpcPath", kCapCommands)

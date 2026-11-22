@@ -401,6 +401,11 @@ How it works:
 A server add-on can limit Find to the zone server's advertised list. In that mode, Show Path requests the server's
 route and the Find window offers no automatic walk. Map and minimap marker permissions follow the separate map policy.
 
+Providers can separately opt in to visual actor guides. Select an actor and use **Show path to target** in Find or
+type `/find` without a name. It works for selected players, NPCs and corpses. The guide ends on arrival, a target
+change, a despawn, death or zoning. It uses the local navigation mesh when it can reach the actor. The dashed
+direction line points toward the actor while the mesh is unavailable or has no route.
+
 ### The guide path
 
 `app/guide_path.h`: a trail from the player to the NPC over the client's own mesh (`Navigator::plan_between`, the
