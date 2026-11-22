@@ -54,8 +54,6 @@ game::DoorSpawn door_spawn(const DoorRecord& r) {
     return s;
 }
 
-std::uint32_t switch_time() { return static_cast<std::uint32_t>(GameConnection::now_ms()); }
-
 } // namespace
 
 const game::Door* GameConnection::door(std::uint8_t id) const {
@@ -70,7 +68,7 @@ void GameConnection::handle_door(Op op, const AppPacket& p) {
         // HandleWorldMessage case 0x7291: a new switch per record (added to
         // the ones already there; OP_RemoveAllDoors clears them).
         if (auto list = decode_spawn_doors(p)) {
-            auto now = switch_time();
+            const auto now = static_cast<std::uint32_t>(session_now_ms());
             for (const auto& r : *list) {
                 log::debug("door {} {}: ({:.1f}, {:.1f}, {:.1f}) heading {:.0f} size {} type {} state {} visible {}",
                            r.door_id, r.name, r.x, r.y, r.z, r.heading, r.size, r.open_type, r.state_at_spawn,
@@ -91,7 +89,7 @@ void GameConnection::handle_door(Op op, const AppPacket& p) {
             ++door_moves_seen_;
             for (auto& d : doors_)
                 if (d.id == m->door_id) {
-                    game::change_state(d, m->action, switch_time());
+                    game::change_state(d, m->action, static_cast<std::uint32_t>(session_now_ms()));
                     log::debug("door {} ({}) -> state {}", d.id, d.name, m->action);
                     break;
                 }
@@ -175,7 +173,8 @@ void GameConnection::update_doors() {
             if (!object_in_reach(ground_objects_, world_container_->drop_id, at)) close_world_container();
         }
     }
-    auto use = game::process_doors(doors_, switch_clock_, switch_time(), zone_id(), door_riders_, door_particles_);
+    const auto now = static_cast<std::uint32_t>(session_now_ms());
+    auto use = game::process_doors(doors_, switch_clock_, now, zone_id(), door_riders_, door_particles_);
     // RepopSwitch "uses" types 0x28 and 0x2d again: UseSwitch(0, 0, 0xff, 0),
     // which online is an OP_ClickDoor without a player.
     for (std::uint8_t id : use) {

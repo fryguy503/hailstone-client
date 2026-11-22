@@ -123,6 +123,7 @@ const WorldObjects::Model* WorldObjects::model_for(const std::string& raw) {
     std::string name = upper(raw);
     if (auto it = models_.find(name); it != models_.end()) return it->second.get();
     const assets::Mesh* mesh = nullptr;
+    std::span<const glm::vec3> collision_hull;
     std::optional<assets::Mesh> owned;
     render::ObjectRenderer::FileReader read;
     std::vector<assets::ModelPoint> points;
@@ -135,6 +136,8 @@ const WorldObjects::Model* WorldObjects::model_for(const std::string& raw) {
         for (const std::string& key : {base + "_ACTORDEF", base, base + ".MOD"}) {
             if (auto it = zone_->objects.find(key); it != zone_->objects.end()) {
                 mesh = &it->second;
+                if (auto hull = zone_->object_collision_hulls.find(key); hull != zone_->object_collision_hulls.end())
+                    collision_hull = hull->second;
                 break;
             }
         }
@@ -235,6 +238,20 @@ const WorldObjects::Model* WorldObjects::model_for(const std::string& raw) {
     auto model = std::make_unique<Model>();
     model->gpu = renderer_->add_model(*mesh, read);
     model->shape = game::ObjectShape::from_mesh(*mesh, true);
+    if (!collision_hull.empty() && model->shape.records.empty() && !model->shape.pick_proxy.empty()) {
+        auto hull = game::ObjectShape::from_hull(collision_hull);
+        if (!hull.empty()) model->door_hull = std::make_unique<const game::ObjectShape>(std::move(hull));
+    }
+    if (!model->shape.empty()) {
+        model->door_center = (model->shape.lo + model->shape.hi) * 0.5f;
+    } else if (const auto pick = model->shape.pick_triangles(true); !pick.empty()) {
+        glm::vec3 lo = pick.front().v0, hi = lo;
+        for (const auto& triangle : pick) {
+            lo = glm::min(glm::min(lo, triangle.v0), glm::min(triangle.v1, triangle.v2));
+            hi = glm::max(glm::max(hi, triangle.v0), glm::max(triangle.v1, triangle.v2));
+        }
+        model->door_center = (lo + hi) * 0.5f;
+    }
     model->plant = assets::is_plant(base, *mesh);
     model->fire = !model->plant && assets::is_fire_object(base, *mesh);
     if (!model->plant) {
@@ -356,30 +373,45 @@ void WorldObjects::update(const net::GameConnection& conn) {
     // Doors.
     for (const auto& d : conn.doors()) {
         auto [it, fresh] = doors_.try_emplace(d.id);
-        Placed& p = it->second;
+        PlacedDoor& p = it->second;
         p.seen = serial;
-        const bool changed = fresh || !p.model;
-        if (changed) {
-            p.model = game::door_has_actor(d) ? model_for(d.name) : nullptr;
-            p.visible = !game::door_is_invisible(d);
-            // Invisible switches block too: only the sweep's filter's types 0x32 and 0x33 do not
-            // (game::door_blocks_movement).
-            p.solid = game::door_blocks_movement(d);
-            if (p.model && p.solid) floor_changed_ = true;
-            if (p.model && p.visible) ++visual_generation_;
+        // SpawnDoor can replace a record without removing its ID from the list first.
+        const bool type_changed = fresh || p.type != d.type;
+        const bool has_actor = game::door_has_actor(d);
+        const bool replace_model = fresh || p.name != d.name || p.has_actor != has_actor;
+        const bool visible = !game::door_is_invisible(d);
+        const bool floor_switch = game::is_floor_switch(d, conn.zone_id());
+        const bool update_visual = replace_model || p.visible != visible;
+        const bool update_floor = replace_model || type_changed || p.floor_switch != floor_switch;
+        const bool had_visual = p.model && p.visible;
+        const bool had_floor = p.model && (p.solid || p.floor_switch);
+        if (update_visual && !fresh) note_flora(p);
+        if (replace_model) {
+            p.name = d.name;
+            p.has_actor = has_actor;
+            const Model* model = has_actor ? model_for(d.name) : nullptr;
+            if (p.model != model) p.emitter_actor = 0;
+            p.model = model;
         }
-        p.floor_switch = game::is_floor_switch(d, conn.zone_id());
+        p.visible = visible;
+        // Invisible switches can block. The movement filter depends on the switch type.
+        if (type_changed) p.solid = game::door_blocks_movement(d);
+        p.floor_switch = floor_switch;
         p.type = d.type;
         // EQSwitch::PostInit: type 0x37 loses mask bit 2 while the byte at 0xddf654 is 0 (taken as 0).
         p.pick_mask = d.type == 0x37 ? 0u : 2u;
         glm::mat4 t = game::door_transform(d);
         place(p, t, d.scale());
-        if (changed) note_flora(p);
+        if (update_floor && (had_floor || (p.model && (p.solid || p.floor_switch)))) floor_changed_ = true;
+        if (update_visual) {
+            if (had_visual || (p.model && p.visible)) ++visual_generation_;
+            note_flora(p);
+        }
     }
     std::erase_if(doors_, [&](const auto& kv) {
         const bool gone = kv.second.seen != serial;
         if (gone) note_flora(kv.second);
-        if (gone && kv.second.model && kv.second.solid) floor_changed_ = true;
+        if (gone && kv.second.model && (kv.second.solid || kv.second.floor_switch)) floor_changed_ = true;
         if (gone && kv.second.model && kv.second.visible) ++visual_generation_;
         return gone;
     });
@@ -618,7 +650,7 @@ void WorldObjects::set_lighting(const render::SceneLighting& lighting) { rendere
 
 bool WorldObjects::line_of_sight(const glm::vec3& a, const glm::vec3& b) const {
     for (const auto& [id, p] : doors_)
-        if (p.model && p.solid && p.visible && game::blocks(p.model->shape, p.transform, p.inverse, p.scale, a, b))
+        if (p.model && p.solid && p.visible && game::blocks(p.collision_shape(), p.transform, p.inverse, p.scale, a, b))
             return false; // the line-segment filter (0x100080a0) skips invisible actors
     for (const auto& [id, p] : placed_)
         if (p.model && p.solid && game::blocks(p.model->shape, p.transform, p.inverse, p.scale, a, b)) return false;
@@ -629,8 +661,9 @@ std::optional<float> WorldObjects::floor_below(const glm::vec3& at, float step_u
     std::optional<float> best;
     for (const auto& [id, p] : doors_) {
         if (!p.model || !p.solid) continue;
-        if (glm::length(glm::vec2(p.center) - glm::vec2(at)) > p.bound + 0.5f) continue;
-        if (auto z = game::floor_under(p.model->shape, p.inverse, at, step_up); z && (!best || *z > *best)) best = z;
+        const auto& shape = p.collision_shape();
+        if (glm::length(glm::vec2(p.center) - glm::vec2(at)) > shape.radius * p.scale + 0.5f) continue;
+        if (auto z = game::floor_under(shape, p.inverse, at, step_up); z && (!best || *z > *best)) best = z;
     }
     for (const auto& [id, p] : placed_) {
         if (!p.model || !p.solid) continue;
@@ -683,7 +716,7 @@ bool WorldObjects::sweep_sphere(game::SphereSweep& sweep, std::vector<DoorHit>* 
     bool hit = false;
     for (const auto& [id, p] : doors_) {
         if (pass && std::find(pass->begin(), pass->end(), id) != pass->end()) continue;
-        if (p.model && p.solid && game::sweep_sphere(p.model->shape, p.transform, p.inverse, p.scale, sweep)) {
+        if (p.model && p.solid && game::sweep_sphere(p.collision_shape(), p.transform, p.inverse, p.scale, sweep)) {
             hit = true;
             if (hits) hits->push_back({id, p.type, sweep.t});
         }
@@ -697,14 +730,14 @@ bool WorldObjects::sweep_sphere(game::SphereSweep& sweep, std::vector<DoorHit>* 
 void WorldObjects::sweep_floor_switches(game::SphereSweep& sweep, std::vector<DoorHit>* hits) const {
     for (const auto& [id, p] : doors_)
         if (p.model && p.floor_switch &&
-            game::sweep_sphere(p.model->shape, p.transform, p.inverse, p.scale, sweep) && hits)
+            game::sweep_sphere(p.collision_shape(), p.transform, p.inverse, p.scale, sweep) && hits)
             hits->push_back({id, p.type, sweep.t});
 }
 
 void WorldObjects::touch_overlap(game::SphereSweep& sweep, std::vector<DoorHit>& hits) const {
     for (const auto& [id, p] : doors_)
         if (p.model && game::switch_acts_on_touch(p.type) &&
-            game::sweep_sphere(p.model->shape, p.transform, p.inverse, p.scale, sweep))
+            game::sweep_sphere(p.collision_shape(), p.transform, p.inverse, p.scale, sweep))
             hits.push_back({id, p.type, sweep.t});
 }
 
@@ -760,7 +793,7 @@ std::optional<std::uint8_t> WorldObjects::nearest_door(const glm::vec3& at, floa
     glm::vec2 facing(std::cos(yaw), std::sin(yaw));
     for (const auto& [id, p] : doors_) {
         if (!p.model || !p.visible) continue;
-        glm::vec3 c = p.transform * glm::vec4((p.model->shape.lo + p.model->shape.hi) * 0.5f, 1.0f);
+        glm::vec3 c = p.transform * glm::vec4(p.model->door_center.value_or(glm::vec3(0.0f)), 1.0f);
         glm::vec2 to = glm::vec2(c) - glm::vec2(at);
         float d = glm::length(to);
         if (d > best_d) continue;
@@ -773,9 +806,8 @@ std::optional<std::uint8_t> WorldObjects::nearest_door(const glm::vec3& at, floa
 
 std::optional<glm::vec3> WorldObjects::door_center(std::uint8_t id) const {
     auto it = doors_.find(id);
-    if (it == doors_.end() || !it->second.model || it->second.model->shape.empty()) return std::nullopt;
-    const auto& s = it->second.model->shape;
-    return glm::vec3(it->second.transform * glm::vec4((s.lo + s.hi) * 0.5f, 1.0f));
+    if (it == doors_.end() || !it->second.model || !it->second.model->door_center) return std::nullopt;
+    return glm::vec3(it->second.transform * glm::vec4(*it->second.model->door_center, 1.0f));
 }
 
 float WorldObjects::door_radius(std::uint8_t id) const {

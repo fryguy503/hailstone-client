@@ -66,6 +66,8 @@ Layouts below are after the name reference. `[flag]` marks a field that is prese
 | 0x13 | Track | ref to 0x12, u32 flags, [0x1] u32 frame ms |
 | 0x14 | ActorDef | u32 flags, string ref callback, u32 action count, u32 sprite count, ref bounds, [0x1] u32, [0x2] 28-byte location; actions are each {u32 lod count, lod count × (u32, f32)}; then sprite count × ref (0x2d mesh refs or 0x11 skeleton refs) (note 4) |
 | 0x15 | Actor | ref actor (in objects.wld a string ref to `NAME_ACTORDEF`), u32 flags, ref sphere, [0x1] u32 action, [0x2] location {f32 x, y, z, f32 rotate Z, rotate Y, rotate X, u32}, [0x4] f32 bounding radius, [0x8] f32 scale, [0x10] string ref sound, [0x100] ref to 0x33, then u32 user-data size and user data (note 5) |
+| 0x17 | PolyhedronDef | u32 flags, u32 vertex count, u32 face count, f32 radius, f32 scale (enabled by flag 1), vertex count × f32 xyz, then face count × {u32 index count, that many u32 vertex indices} |
+| 0x18 | Polyhedron | ref to 0x17, u32 flags, [0x1] f32 (purpose unconfirmed) |
 | 0x1b | LightDef | u32 flags, u32 frames, [0x1] u32 current frame, [0x2] u32 sleep, [0x4] frames × f32 level, [0x10] frames × f32 rgb. Shipped flags: 0x4, 0x14, 0x1e. |
 | 0x1c | Light | ref to 0x1b, u32 flags |
 | 0x28 | PointLight | ref to 0x1c, u32 flags, f32 x, y, z, f32 radius |
@@ -93,11 +95,11 @@ Notes:
 
 Region fragments 0x21, 0x22 and 0x29 are described under "Regions" below.
 
-Types seen but not decoded (none is needed for static drawing): 0x08/0x09 camera, 0x16 sphere, 0x17/0x18 polyhedron, 0x2a ambient light, 0x2f/0x37 mesh animation, 0x35 first fragment.
+Types seen but not decoded (none is needed for static drawing): 0x08/0x09 camera, 0x16 sphere, 0x2a ambient light, 0x2f/0x37 mesh animation, 0x35 first fragment.
 
 ### 0x36 mesh
 
-u32 flags, ref 0x31 material palette, ref animation, 2 × ref (unused), f32 centre ×3, 12 bytes unknown, f32 max distance, f32 min ×3, f32 max ×3, then u16 counts in this order: vertices, uvs, normals, colours, polygons, vertex pieces, polygon render groups, vertex material groups, mesh ops, then u16 scale shift. The arrays follow:
+u32 flags, ref 0x31 material palette, ref animation, unused ref, ref to 0x18 polyhedron, f32 centre ×3, 12 bytes unknown, f32 max distance, f32 min ×3, f32 max ×3, then u16 counts in this order: vertices, uvs, normals, colours, polygons, vertex pieces, polygon render groups, vertex material groups, mesh ops, then u16 scale shift. The arrays follow:
 
 - **Positions:** s16 ×3. Position = centre + value / 2^shift. The centre is added for objects as well as terrain, exactly once.
 - **UVs:** old format uses s16 u, v / 256 (1.0 = one texture width), new format f32 u, v. They have a top-left

@@ -645,6 +645,9 @@ EQEmu separately checks `Range:MaxDistanceToClickDoors` (100 units by default).
 Teleport doors (types 57/58 with a destination) are moved by the server with OP_RequestClientZoneChange.
 
 The actor is placed at (Y, X, Z), turned by Heading (counterclockwise like spawns), tilted by DoorAngle about its Y axis, and scaled by size %.
+For classic door actors whose visible triangles are passable, an authored WLD mesh polyhedron provides collision
+in the same moving transform. Mouse clicks still hit the displayed mesh. Door-type movement filters still apply.
+A replacement spawn record refreshes the scene actor for that door ID, including its model and movement filter.
 
 ### Alternate advancement, training, tradeskills and tasks (`net/aa_packets.h`, `net/training_packets.h`, `net/task_packets.h`, `GameConnection` in `net/game_connection_progress.cpp`, rules in `game/alt_adv.h`, `game/training.h`, `game/tasks.h`)
 

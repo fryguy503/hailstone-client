@@ -700,6 +700,105 @@ TEST_CASE("mock server: a refused zone line reports the real position again; no 
     CHECK(conn.state() == ConnectionState::InZone);
 }
 
+// ---------------------------------------------------------------- doors and portals
+
+TEST_CASE("mock server: a portcullis moves only on the zone's door packets") {
+    ManualClock clock;
+    auto options = quick_options();
+    options.session.clock = clock.source();
+    Rig rig(MockConfig::standard(), options);
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    clock.hold();
+    const auto at = conn.world().player()->position;
+    DoorRecord gate;
+    gate.door_id = 4;
+    gate.name = "TESTGATE";
+    gate.open_type = 0x4c;
+    gate.door_param = 0;
+    gate.x = at.y;
+    gate.y = at.x;
+    gate.z = at.z;
+    server.zone.send_reliable(encode_spawn_doors({gate}));
+    REQUIRE(rig.until([&] { return conn.door(gate.door_id) != nullptr; }));
+    const auto& door = *conn.door(gate.door_id);
+
+    REQUIRE(conn.click_door(gate.door_id, 0.0f));
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ClickDoor) == 1; }));
+    const auto sent = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                   [](const AppPacket& p) { return is_op(p, Op::ClickDoor); });
+    const auto click = decode_click_door(*sent);
+    REQUIRE(click);
+    CHECK(click->door_id == gate.door_id);
+    CHECK(click->player_id == conn.world().player_id);
+    clock.advance(500ms);
+    rig.step();
+    CHECK(door.state == game::kSwitchClosed);
+    CHECK(door.z == gate.z);
+
+    server.zone.send_reliable(encode(MoveDoor{gate.door_id, game::kSwitchOpening}));
+    REQUIRE(rig.until([&] { return conn.door_moves_seen() == 1; }));
+    CHECK(door.state == game::kSwitchOpening);
+    clock.advance(500ms);
+    rig.step();
+    CHECK(door.z == doctest::Approx(gate.z + 4.5f));
+    for (int i = 0; i < 4; ++i) {
+        clock.advance(500ms);
+        rig.step();
+    }
+    CHECK(door.state == game::kSwitchOpen);
+    CHECK(door.z == gate.z + 22.0f);
+
+    server.zone.send_reliable(encode(MoveDoor{gate.door_id, game::kSwitchClosing}));
+    REQUIRE(rig.until([&] { return conn.door_moves_seen() == 2; }));
+    CHECK(door.state == game::kSwitchClosing);
+    for (int i = 0; i < 9; ++i) {
+        clock.advance(500ms);
+        rig.step();
+    }
+    CHECK(door.state == game::kSwitchClosed);
+    CHECK(door.z == gate.z);
+}
+
+TEST_CASE("mock server: stationary portals still await the zone's travel request") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    const auto at = conn.world().player()->position;
+    DoorRecord portal;
+    portal.name = "TESTPORTAL";
+    portal.x = at.y;
+    portal.y = at.x;
+    portal.z = at.z;
+
+    constexpr std::uint8_t kPortalTypes[] = {0x39, 0x3a};
+    int clicks = 0;
+    for (std::uint8_t type : kPortalTypes) {
+        portal.door_id = type;
+        portal.open_type = type;
+        server.zone.send_reliable(encode_spawn_doors({portal}));
+        REQUIRE(rig.until([&] { return conn.door(portal.door_id) != nullptr; }));
+        REQUIRE(conn.click_door(portal.door_id, 0.0f));
+        ++clicks;
+        REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ClickDoor) == clicks; }));
+        const auto moves = conn.door_moves_seen();
+        server.zone.send_reliable(encode(MoveDoor{portal.door_id, game::kSwitchOpening}));
+        REQUIRE(rig.until([&] { return conn.door_moves_seen() > moves; }));
+        CHECK(conn.door(portal.door_id)->state == game::kSwitchClosed);
+        REQUIRE(conn.click_door(portal.door_id, 0.0f));
+        ++clicks;
+        REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ClickDoor) == clicks; }));
+    }
+    CHECK_FALSE(conn.zone_change_pending());
+    CHECK(MockEqServer::count(server.zone_log, Op::ZoneChange) == 0);
+    server.request_zone_change(1, at.y, at.x, at.z);
+    REQUIRE(rig.until([&] { return server.zone_entries == 2 && conn.state() == ConnectionState::InZone; }));
+    CHECK(conn.zone_id() == 1);
+    CHECK(conn.doors().empty());
+}
+
 // ---------------------------------------------------------------- world containers
 
 TEST_CASE("mock server: a tradeskill station opens in the tradeskill window, its own window only by Experiment") {

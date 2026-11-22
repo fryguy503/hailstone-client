@@ -94,12 +94,24 @@ struct Polygon {
     std::array<std::uint16_t, 3> v{};
 };
 
+// 0x17 POLYHEDRONDEF: a collision volume, centered on the mesh that uses it.
+struct PolyhedronDef {
+    std::vector<glm::vec3> positions;
+    std::vector<std::array<std::uint32_t, 3>> triangles;
+};
+
+// 0x18 POLYHEDRON: reference to the collision volume definition.
+struct PolyhedronRef {
+    Ref definition = 0;
+};
+
 // 0x36 DMSPRITEDEF2: a mesh. Positions here are final (centre added). Also the older 0x2C DMSPRITEDEF, read into
 // the same shape (Fragment::type tells them apart), its centre added too.
 struct MeshDef {
     std::uint32_t flags = 0;
     Ref material_list = 0;
     Ref animation = 0;
+    Ref polyhedron = 0;
     glm::vec3 center{0.0f};
     float max_distance = 0.0f;
     glm::vec3 bounds_min{0.0f};
@@ -436,7 +448,7 @@ using Payload = std::variant<std::monostate, BitmapName, BitmapInfo, BitmapInfoR
                              MaterialList, FragmentBox<MeshDef>, ActorDef, MeshRef, ActorInstance, VertexColors,
                              VertexColorsRef, LightDef, LightRef, PointLight, TrackDef, TrackRef,
                              Skeleton, SkeletonRef, BspTree, BspRegion, RegionTag, GlobalAmbient,
-                             ParticleSprite, FragmentBox<ParticleCloud>>;
+                             ParticleSprite, FragmentBox<ParticleCloud>, PolyhedronDef, PolyhedronRef>;
 
 struct Fragment {
     std::uint32_t type = 0;

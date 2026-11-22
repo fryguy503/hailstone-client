@@ -384,6 +384,10 @@ The experimental texture broker (docs/graphics.md "Shared GPU textures", docs/re
     pass; passable parts of models with solid ones, and every placed real estate object's, are not picked.
   - Settle: tracing which path an S3D or EQG actor model takes (vf4c / vf54 in 0x10046780), or clicking through a
     passable part in the original.
+- **Classic door collision hulls.** A mesh's referenced WLD polyhedron aligns with the visible gate after adding
+  the mesh centre (checked with Nagafen's gate). Hailstone uses that shape for movement and sight when the door's
+  entire render mesh is passable. Native precedence for models with both an authored hull and solid render faces
+  needs a controlled comparison. Hailstone uses the existing solid faces in that case.
 - **Touching switches.**
   - The hit callback runs for each door hit in the doors' order, not the DLL's quad tree order.
   - A switch moving into a player who stands still does nothing until the player moves (as the original's

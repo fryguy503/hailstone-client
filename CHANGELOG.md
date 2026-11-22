@@ -31,6 +31,8 @@
 - Fixed Horizon Hills scenery protruding through the ground near cliffs in Trakanon's Teeth and at the Stonebrunt waterfall.
 - A GM's /kill now drops you to -10000 HP, as in the original client, until the server next updates your HP (it only played the sound and printed the line)
 - Door clicks use the distance to the spot you clicked, fixing long-range zoning through the Guild Lobby entrance. The Plane of Fire orb in Plane of Tranquility can also be clicked.
+- Nagafen's dragon-room gate and other doors with passable render meshes and a separate WLD collision hull now block movement using that hull. It moves with the door as it opens and closes.
+- Replacing a door with the same ID refreshes its model and collision, including when the server reloads a zone's doors in one update.
 - Dropped items and ground spawns whose model has no solid surface can be clicked, as see-through doors such as the Plane of Fire orb already can
 - A key or lockpick on the cursor is no longer offered for dropping when a click in the world misses a door or the door refuses it, as in the original
 - Buying from or selling to a merchant, and buying from a trader, plays the cash register and prints the line in the Merchants chat colour, as in the original
