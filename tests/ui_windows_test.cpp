@@ -2063,9 +2063,9 @@ TEST_CASE("Bazaar Find Trader guides to a verified local trader while the add-on
     constexpr auto button = "BZR_FindTraderButton";
     t.api->show(W, true);
     REQUIRE(t.api->click_list(W, "BZR_ItemList", 0, 0));
-    CHECK(t.api->child_state(W, button)); // Stock eligibility only knows the trader list.
+    CHECK(t.api->child_state(W, button) == true); // Stock eligibility only knows the trader list.
     policy->enabled = true;
-    CHECK_FALSE(t.api->child_state(W, button)); // The local actor has not arrived yet.
+    CHECK(t.api->child_state(W, button) == false); // The local actor has not arrived yet.
 
     auto& actor = world.spawns[trader.entity_id];
     actor.id = trader.entity_id;
@@ -2073,12 +2073,12 @@ TEST_CASE("Bazaar Find Trader guides to a verified local trader while the add-on
     actor.name = "Wrong Trader";
     actor.trader = true;
     actor.is_npc = true; // Offline traders can be sent as NPCs.
-    CHECK_FALSE(t.api->child_state(W, button));
+    CHECK(t.api->child_state(W, button) == false);
     actor.name = "Nearby00";
-    CHECK(t.api->child_state(W, button));
+    CHECK(t.api->child_state(W, button) == true);
     trader.zone_instance = 23;
     t.conn.receive_zone_packet_for_test(net::encode_bazaar_add_trader(trader));
-    CHECK_FALSE(t.api->child_state(W, button));
+    CHECK(t.api->child_state(W, button) == false);
     trader.zone_instance = 0;
     t.conn.receive_zone_packet_for_test(net::encode_bazaar_add_trader(trader));
 
@@ -2095,7 +2095,7 @@ TEST_CASE("Bazaar Find Trader guides to a verified local trader while the add-on
     CHECK(t.api->click_child(W, button));
     REQUIRE(guides == 1);
     CHECK_FALSE(t.conn.market_hidden(actor));
-    CHECK_FALSE(t.api->child_state(W, button)); // Find Trader's existing cooldown.
+    CHECK(t.api->child_state(W, button) == false); // Find Trader's existing cooldown.
     CHECK(valid());
     actor.trader = false;
     CHECK_FALSE(valid());
