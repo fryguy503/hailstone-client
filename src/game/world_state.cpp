@@ -176,11 +176,14 @@ void WorldState::smooth(float dt, double now, const FloorFn& floor, const Region
                     const bool moved = b.position != before;
                     landed_floor = std::numeric_limits<float>::quiet_NaN(); // only the last step's landing counts
                     if (auto f = floor(b.position)) {
-                        float z = *f + s.heights.avatar_height;
-                        if (moved) {
-                            b.position.z = z;
-                            landed_floor = *f;
-                        } else if (s.fly_mode == 0 ? std::fabs(z - b.position.z) <= kRestSettleReach : z > b.position.z) {
+                        const float z = *f + s.heights.avatar_height;
+                        const bool settle = moved || (s.fly_mode == 0 ? std::fabs(z - b.position.z) <= kRestSettleReach
+                                                                     : z > b.position.z);
+                        // Test the swimmer's position before the floor correction. Follow uses this same Z to aim
+                        // its swim pitch, so a floor below the swimmer must not replace the depth from the server.
+                        const bool lower_swimmer = settle && z < b.position.z && !s.is_npc && !s.is_corpse &&
+                                                   region && region(b.position) >= 5;
+                        if (settle && !lower_swimmer) {
                             b.position.z = z;
                             landed_floor = *f;
                         }

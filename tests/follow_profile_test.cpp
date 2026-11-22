@@ -3,8 +3,10 @@
 #include <array>
 #include <limits>
 
+#include "game/coords.h"
 #include "game/follow.h"
 #include "game/mechanics/movement.h"
+#include "game/world_state.h"
 
 using namespace hailstone::game;
 namespace {
@@ -71,6 +73,55 @@ TEST_CASE("follow profile: actor identity is required for both ends and never fo
     CHECK_FALSE(identity.matches(1, 100, 2, 201));
     CHECK_FALSE(identity.matches(1, 0, 2, 200));
     identity.target = 1; CHECK_FALSE(identity.matches(1, 100, 1, 200));
+}
+
+TEST_CASE("follow profile: remote swimmers keep their depth over a submerged floor") {
+    WorldState world;
+    world.player_id = 1;
+    auto& target = world.spawns[2];
+    target.id = 2;
+    target.position = {40.0f, 0.0f, 20.0f};
+    target.velocity = {1.0f, 0.0f, 0.0f};
+    target.speed_run = 1.0f;
+    target.heights.avatar_height = 5.0f;
+    const WorldState::FloorFn floor = [](const glm::vec3&) { return 0.0f; };
+    const WorldState::RegionFn region = [](const glm::vec3& p) -> std::uint8_t {
+        return p.x < 60.0f && p.z < 21.0f ? 5 : 0;
+    };
+    constexpr float dt = 1.0f / 60;
+    auto follow = [&] {
+        const glm::vec3 to = world_to_server(target.position);
+        auto in = ahead(to.y);
+        in.target_x = to.x;
+        in.z = 20.0f;
+        in.target_z = to.z;
+        return profiled_follow_step(in, direct_profile(), true, 0.0f, dt);
+    };
+
+    world.smooth(dt, 1.0, floor, region);
+    CHECK(target.position.x > 40.0f);
+    CHECK(target.position.z == 20.0f);
+    CHECK(target.body_wet == 5);
+    const auto level = follow();
+    REQUIRE(level.move);
+    CHECK(level.pitch == 0.0f);
+
+    target.position.z = 8.0f; // The next position update puts the leader deeper, then it stops.
+    target.speed_run = 0.0f;
+    target.velocity = glm::vec3(0.0f);
+    world.smooth(dt, 1.0 + dt, floor, region);
+    CHECK(target.position.z == 8.0f);
+    CHECK(follow().pitch < 0.0f);
+
+    target.position.z = 4.0f;
+    world.smooth(dt, 1.0 + 2 * dt, floor, region);
+    CHECK(target.position.z == 5.0f); // Feet below the floor are still raised out of it.
+
+    target.position = {70.0f, 0.0f, 25.0f};
+    target.speed_run = 1.0f;
+    world.smooth(dt, 1.0 + 3 * dt, floor, region);
+    CHECK(target.position.z == 5.0f); // A moving player on dry land still finds the floor.
+    CHECK(target.body_wet == 0);
 }
 
 TEST_CASE("follow profile: absent extension leaves original distance walk run and leash rules") {

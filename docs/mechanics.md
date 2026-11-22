@@ -2427,7 +2427,8 @@ Which group plays what:
     or NPC bodies.
   - Full remote collision correction and the physical-radius gap remain open.
 - Other spawns' FeetWet / BodyWet (+0xa1 / +0xa2) are probed with each step (`WorldState::smooth`), so they swim and
-  tread water.
+  tread water. A swimming player's depth comes from its position updates. A floor below the swimmer does not lower
+  that position between updates, so follow's pitch tracks the swimmer's depth.
 
 ## Character appearance
 
