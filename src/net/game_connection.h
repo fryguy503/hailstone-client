@@ -2955,6 +2955,7 @@ private:
     void reset_achievements();
     void update_achievements();
     std::pair<std::uint32_t, std::uint64_t> achievement_target() const;
+    bool achievement_link_ready() const;
     bool reward_request_ready(std::string* why = nullptr) const;
     void reset_rewards();
     std::int64_t reward_now_ms() const;

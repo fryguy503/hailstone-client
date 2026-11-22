@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Item, say, and achievement links in chat work during the camp countdown.
 - **Linux arm64 release package** (`hailstone-<version>-linux-arm64.zip`) for arm64 handhelds, boards and laptops with a Vulkan 1.3 driver, such as Mesa's Turnip on Snapdragon; it updates itself like the x64 one. So far it has only been tested on a Qualcomm Snapdragon 8 Elite (an AYN Odin 3 Max)
 - Modern Player Info: right-click the frame to show mana and endurance percentages, current / maximum values, or both. Each readout defaults to off.
 - `/consider` with no target says "Consider whom?", and considering a ship or boat says "You can't consider that." without asking the server, as in the original client.

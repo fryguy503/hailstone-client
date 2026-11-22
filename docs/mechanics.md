@@ -1411,6 +1411,8 @@ Tests: `tests/hover_respawn_test.cpp`, `tests/player_placement_test.cpp`; protoc
 
 - A second /camp or a position change (Stand, the sit key, moving forward while sitting) cancels it (12290). Any
   other stand prints 12683.
+- Item, say, and achievement links in chat can be clicked during the countdown without interrupting it. New
+  inspection requests stop when the client sends OP_Logout.
 - At the end the position history goes (when not riding), then OP_Logout.
 - A zone change ends a camp silently. Checked: EnterZone -> ResetClientStateForZone(1) @0x5319f0 clears 0xddf8a0 and
   0xdd2664.

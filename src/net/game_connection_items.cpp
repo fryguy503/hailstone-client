@@ -1402,7 +1402,8 @@ bool GameConnection::request_evolving_final_result(const Item& item, bool shift)
 }
 
 void GameConnection::request_item(const game::ItemLink& link) {
-    if (state_ != ConnectionState::InZone) return;
+    // The chat window is still usable during the countdown, until OP_Logout starts the zone exit.
+    if (!in_zone() || zone_exit_ != ZoneExit::None) return;
     send_zone(encode(link.click_request()));
 }
 

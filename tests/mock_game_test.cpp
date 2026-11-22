@@ -816,6 +816,53 @@ TEST_CASE("mock server: camping sits, sends OP_Camp and ends when the zone drops
     CHECK(conn.link_death()->camp_kind == 0);
 }
 
+TEST_CASE("mock server: chat item and say links work during the camp countdown") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    conn.camp();
+    REQUIRE(conn.state() == ConnectionState::Camping);
+
+    const auto item = make_item(1003, "Silk Mask", 2);
+    game::ItemLink item_link;
+    item_link.item_id = item.id;
+    game::ItemLink say_link;
+    say_link.item_id = 0xF423F; // EQEmu's say link item (see commerce_test.cpp).
+    conn.request_item(item_link);
+    conn.request_item(say_link);
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ItemLinkClick) == 2; }));
+    CHECK(in_order(server.zone_log, {Op::Camp, Op::ItemLinkClick, Op::ItemLinkClick}));
+    std::vector<std::uint32_t> requested_items;
+    for (const auto& packet : server.zone_log) {
+        if (!is_op(packet, Op::ItemLinkClick)) continue;
+        const auto request = decode_item_link_click(packet);
+        REQUIRE(request);
+        requested_items.push_back(request->item_id);
+    }
+    CHECK(requested_items == std::vector<std::uint32_t>{item.id, say_link.item_id});
+
+    server.zone.send_reliable(encode_item_packet(true, {kItemPacketViewLink, item}));
+    std::optional<Item> shown;
+    REQUIRE(rig.until([&] { shown = conn.take_item_display(); return shown.has_value(); }));
+    CHECK(shown->id == item.id);
+    CHECK(conn.state() == ConnectionState::Camping);
+    CHECK(server.logouts == 0);
+
+    server.drop_on_logout = false;
+    conn.set_fast_camp(true);
+    REQUIRE(rig.until([&] { return server.logouts == 1; }));
+    REQUIRE(conn.state() == ConnectionState::Camping);
+    conn.request_item(item_link);
+    conn.send_zone_packet(AppPacket(0x7f01));
+    REQUIRE(rig.until([&] {
+        return std::any_of(server.zone_log.begin(), server.zone_log.end(), [](const AppPacket& packet) {
+            return packet.opcode == 0x7f01;
+        });
+    }));
+    CHECK(MockEqServer::count(server.zone_log, Op::ItemLinkClick) == 2);
+}
+
 TEST_CASE("mock server: a zone change ends a camp, and the next zone starts without one") {
     // EnterZone's ResetClientStateForZone(1) @0x5319f0 clears the camp's time and kind: no OP_Logout, no camp's end,
     // and a link death in the next zone is not the camp's desktop.
