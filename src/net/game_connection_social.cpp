@@ -165,6 +165,9 @@ void GameConnection::send_command(const std::string& typed) {
         if (word == "/camera" && client_commands_ && client_commands_("Hailstone_camera", std::string(rest))) return;
         if (word == "/chattabs" && client_commands_ && client_commands_("Hailstone_chattabs", std::string(rest)))
             return;
+        // The selected-actor guide can be offered to everyone. The named GM command still uses its stock admission.
+        if (word == "/find" && rest.find_first_not_of(" \t") == std::string_view::npos && !pstatus_.dead &&
+            client_commands_ && client_commands_("Cmd_find", {})) return;
         if (word == "/import" && client_commands_ && client_commands_("Hailstone_import", std::string(rest)))
             return;
         if ((word == "/finditem" || word == "/advi") && client_commands_ &&

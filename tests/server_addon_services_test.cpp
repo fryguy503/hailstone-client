@@ -218,6 +218,7 @@ TEST_CASE("Find current target: a no-argument slash command reaches the app's lo
     auto& connection = rig.conn;
     path_actors(connection);
     connection.set_target(10);
+    REQUIRE_FALSE(connection.player_is_gm());
     int guides = 0;
     connection.set_client_commands([&](std::string_view handler, const std::string& args) {
         if (handler != "Cmd_find" || !args.empty()) return false;
@@ -228,15 +229,17 @@ TEST_CASE("Find current target: a no-argument slash command reaches the app's lo
             return true;
         });
     });
-    connection.say("/find");
+    connection.say("/FIND \t");
     CHECK(guides == 1);
     CHECK(net::GameConnectionTestAccess::find_request_count(connection) == 0);
-    connection.say("/find a_rat01");
-    CHECK(guides == 1);
-    CHECK(net::GameConnectionTestAccess::find_request_count(connection) == 0); // unadvertised
     net::FindableNpc advertised;
     advertised.spawn_id = 10;
     connection.receive_zone_packet_for_test(net::encode_findable_npc(advertised));
+    connection.say("/find a_rat01");
+    CHECK(guides == 1);
+    CHECK(net::GameConnectionTestAccess::find_request_count(connection) == 0); // named Find is a GM command
+    auto& world = net::GameConnectionTestAccess::world(connection);
+    world.spawns.at(world.player_id).gm = true;
     connection.say("/find a_rat01");
     CHECK(guides == 1);
     CHECK(net::GameConnectionTestAccess::find_request_count(connection) == 1);
