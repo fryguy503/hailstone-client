@@ -253,6 +253,13 @@ TEST_CASE("TLO: Target.Buff and the rest from OP_TargetBuffs, the states by spel
     CHECK(p("${Target.Slowed.ID}") == "5");
     CHECK(p("${Target.Rooted}") == "NULL");
     CHECK(p("${Target.Snared}") == "NULL");
+    CHECK(p("${Target.Diseased}") == "NULL");
+    sp.target_buffs.push_back({7, buff(3004, 99, 10)}); // Test Plague: a DoT with 4 disease counters
+    CHECK(p("${Target.Diseased}") == "Test Plague");
+    CHECK(p("${Target.Poisoned}") == "NULL");
+    CHECK(p("${Target.Cursed}") == "NULL");
+    CHECK(p("${Target.Corrupted}") == "NULL");
+    sp.target_buffs.pop_back();
 
     // Another spawn's buffs are not known; a buff value from before reads as nothing once they are another's.
     CHECK(p("${Spawn[id 11].BuffsPopulated}") == "FALSE");
@@ -265,6 +272,7 @@ TEST_CASE("TLO: Target.Buff and the rest from OP_TargetBuffs, the states by spel
     CHECK(p("${Me.BuffsPopulated}") == "TRUE");
     CHECK(p("${Me.BuffCount}") == "2"); // Holy Armor and the song
     CHECK(p("${Me.Mezzed}") == "NULL");
+    CHECK(p("${Me.Poisoned}") == "NULL");
     CHECK(p("${Me.MyBuff[Holy Armor]}") == "NULL"); // no caster recorded
 }
 

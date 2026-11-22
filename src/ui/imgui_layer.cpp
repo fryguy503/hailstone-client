@@ -103,6 +103,40 @@ std::filesystem::path find_bold_font(const std::filesystem::path& regular) {
 
 } // namespace
 
+ImFontConfig detail::ui_font_config(float pixel_density) {
+    static constexpr ImWchar ranges[] = {
+        0x0020, 0x00ff, // ImGui's default Latin range
+        0x2000, 0x206f, // General Punctuation, including UTF-8 curly quotes in server messages
+        0,
+    };
+    ImFontConfig cfg;
+    cfg.RasterizerDensity = pixel_density;
+    cfg.GlyphRanges = ranges;
+    return cfg;
+}
+
+bool detail::build_ui_font_atlas(ImFontAtlas& atlas) {
+    if (!atlas.Build()) return false;
+
+    // The built-in font and some custom faces lack curly quotes. Let those faces draw straight quotes while
+    // keeping the original characters in the chat line, clipboard and log.
+    static constexpr std::pair<ImWchar, ImWchar> quote_fallbacks[] = {
+        {0x2018, '\''}, {0x2019, '\''}, {0x201c, '"'}, {0x201d, '"'},
+    };
+    for (ImFont* font : atlas.Fonts) {
+        const int old_size = font->IndexAdvanceX.Size;
+        for (const auto& [curly, straight] : quote_fallbacks) {
+            if (!font->FindGlyphNoFallback(curly) && font->FindGlyphNoFallback(straight))
+                font->AddRemapChar(curly, straight, true);
+        }
+        // Remapping can grow the lookup table. Give any intervening missing glyphs the usual fallback width.
+        for (int i = old_size; i < font->IndexAdvanceX.Size; ++i) {
+            if (font->IndexAdvanceX[i] < 0.0f) font->IndexAdvanceX[i] = font->FallbackAdvanceX;
+        }
+    }
+    return true;
+}
+
 namespace {
 void clear_ui_interaction() {
     ImGuiContext* g = ImGui::GetCurrentContext();
@@ -259,8 +293,7 @@ void ImGuiLayer::build_fonts() {
     g_plate_font_size = std::round(plate_size_ * scale_);
     g_plate_faux_bold = false;
     // Rasterise at the framebuffer density so text stays sharp on HiDPI screens.
-    ImFontConfig cfg;
-    cfg.RasterizerDensity = window_.pixel_density();
+    const ImFontConfig cfg = detail::ui_font_config(window_.pixel_density());
     float size = std::round(font_size_ * scale_);
     // The face set (set_font_face) when its file is there, else the Arial-class font found.
     std::filesystem::path font, bold;
@@ -284,6 +317,7 @@ void ImGuiLayer::build_fonts() {
         ImFontConfig def = cfg;
         def.SizePixels = std::round(13.0f * scale_);
         io.Fonts->AddFontDefault(&def);
+        detail::build_ui_font_atlas(*io.Fonts);
         log::debug("UI font: built-in, scale {:.2f}", scale_);
     };
     ImFont* loaded = nullptr;
@@ -296,17 +330,13 @@ void ImGuiLayer::build_fonts() {
 
     {
         for (std::size_t i = 1; i < kUiFontSizes.size(); ++i) {
-            ImFontConfig ui_cfg;
-            ui_cfg.RasterizerDensity = window_.pixel_density();
             g_ui_fonts[i] = io.Fonts->AddFontFromFileTTF(utf8(font).c_str(), std::round(kUiFontSizes[i] * scale_),
-                                                         &ui_cfg);
+                                                         &cfg);
         }
         for (std::size_t i = 0; i < kChatFonts; ++i) {
-            ImFontConfig chat_cfg;
-            chat_cfg.RasterizerDensity = window_.pixel_density();
             const std::filesystem::path& file = kChatFontBold[i] ? bold : font;
             g_chat_fonts[i] = io.Fonts->AddFontFromFileTTF(utf8(file).c_str(),
-                                                           std::round(kChatFontSizes[i] * scale_), &chat_cfg);
+                                                           std::round(kChatFontSizes[i] * scale_), &cfg);
         }
         // The name plates': their own face when its file is there, else the UI's; its bold file when bold is asked
         // for, else the regular one struck twice (plate_font_faux_bold).
@@ -317,12 +347,10 @@ void ImGuiLayer::build_fonts() {
         if (!plate_bold.empty() && !std::filesystem::is_regular_file(plate_bold, ec)) plate_bold.clear();
         const std::filesystem::path& file = plate_bold_ && !plate_bold.empty() ? plate_bold : regular;
         g_plate_faux_bold = plate_bold_ && plate_bold.empty();
-        ImFontConfig plate_cfg;
-        plate_cfg.RasterizerDensity = window_.pixel_density();
-        g_plate_font = io.Fonts->AddFontFromFileTTF(utf8(file).c_str(), g_plate_font_size, &plate_cfg);
+        g_plate_font = io.Fonts->AddFontFromFileTTF(utf8(file).c_str(), g_plate_font_size, &cfg);
     }
     // A file that reads but is not a font the rasteriser can parse fails here, not when the texture is made.
-    if (!io.Fonts->Build()) {
+    if (!detail::build_ui_font_atlas(*io.Fonts)) {
         log::warn("UI font {} could not be built; using the built-in font", utf8(font));
         use_default();
     }

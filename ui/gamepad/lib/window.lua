@@ -183,7 +183,10 @@ end
 -- Ends the window; true when it was asked to close (its close button, or B while it has the focus).
 function W.finish()
   local c = current
-  if c and c.visible then T.unfont() end
+  if c and c.visible then
+    ui.Dummy(0, 0)
+    T.unfont()
+  end
   ui.End()
   ui.PopStyleColor(11)
   ui.PopStyleVar(6)

@@ -3,6 +3,7 @@
 #include <array>
 #include <cctype>
 #include <cstdlib>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -482,9 +483,17 @@ TEST_CASE("SpellTable: the indexed lookups match a scan of the whole table") {
         const Row* got = exact ? exact : best;
         return got ? static_cast<long>(got->id) : -1;
     };
+    auto scan_all = [&](const std::string& name) {
+        std::vector<std::uint32_t> ids;
+        for (const auto& r : rows)
+            if (lower(r.name) == lower(name)) ids.push_back(r.id);
+        return ids; // rows are in id order
+    };
     for (const char* n : {"clarity", "Clarity", "GATE", "", "Spirit of wolf", "Nothing"}) {
         const game::SpellData* s = t.find_by_name(n);
         CHECK((s ? static_cast<long>(s->id) : -1) == scan_name(n));
+        const std::span<const std::uint32_t> all = t.find_all_by_name(n);
+        CHECK(std::vector<std::uint32_t>(all.begin(), all.end()) == scan_all(n));
     }
     for (int group = -1; group <= 4; ++group)
         for (int subgroup = 0; subgroup <= 3; ++subgroup)
@@ -949,6 +958,10 @@ TEST_CASE("blocked buffs: the 128-byte RoF2 struct both ways, and spells found b
     CHECK(t.find_by_name("spirit of wolf")->id == 278); // the lowest id of the same name
     CHECK(t.find_by_name("CLARITY")->id == 1693);
     CHECK(!t.find_by_name("Clarit"));
+    const std::span<const std::uint32_t> wolves = t.find_all_by_name("SPIRIT OF WOLF");
+    CHECK(std::vector<std::uint32_t>(wolves.begin(), wolves.end()) == std::vector<std::uint32_t>{278, 3185});
+    CHECK(t.find_all_by_name("Clarity").size() == 1);
+    CHECK(t.find_all_by_name("Clarit").empty());
 }
 
 TEST_CASE("auras: add, remove and clear (OP_UpdateAura)") {

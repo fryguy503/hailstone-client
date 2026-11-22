@@ -1,5 +1,5 @@
 -- Group frames: replace the game's GroupWindow. A solid panel with a title strip (drag it, or any empty spot, to
--- move the frame), a card per member (name, health, mana and endurance, their pet), a click targets the member, and
+-- move the frame), a card per member (name, health, mana and endurance, their pet), clickable member and pet bars, and
 -- the invite, disband, accept and decline buttons under the cards (the game's own buttons: they are enabled when
 -- the game enables them).
 local API = hs.UI
@@ -15,7 +15,7 @@ local SLOTS = {}
 for i = 1, 5 do
   SLOTS[i] = {
     gauge = "Gauge" .. i, hit = "##Gauge" .. i, hp = "group.hp" .. i, mana = "group.mana" .. i,
-    endurance = "group.end" .. i, pet = "group.pet" .. i,
+    endurance = "group.end" .. i, pet = "group.pet" .. i, petGauge = "PetGauge" .. i,
     m = { i = i }, tint = { 0, 0, 0, 1 }, color = { 0, 0, 0, 1 },
   }
 end
@@ -130,15 +130,18 @@ local function body(x0, y, w0, h, s)
     if m.endurance then
       T.Bar(slot.endurance, x + pad + half + 4 * s, by, x + w - pad, by + 4 * s, s, m.endurance, C.endurance)
     end
+    local child = slot.gauge
     if m.pet then
       by = by + 7 * s
-      T.Bar(slot.pet, x + pad + 10 * s, by, x + w - pad, by + 5 * s, s, m.pet, C.pet)
+      local px0, px1, py1 = x + pad + 10 * s, x + w - pad, by + 5 * s
+      T.Bar(slot.pet, px0, by, px1, py1, s, m.pet, C.pet)
+      if clicked and ui.IsMouseHoveringRect(px0, by, px1, py1) then child = slot.petGauge end
     end
     if hovered and not roleHovered then
       ui.SetTooltip(m.name .. (m.roles ~= 0 and ("\n" .. roles.Labels[m.roles]) or "")
         .. (m.pet and ("\nPet: " .. m.petName) or "") .. "\nRight-click for group roles")
     end
-    if clicked then API.windows.ClickChild(WINDOW, slot.gauge, "left") end
+    if clicked then API.windows.ClickChild(WINDOW, child, "left") end
     cy = cy + ch + 4 * s
   end
   -- the buttons

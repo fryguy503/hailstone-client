@@ -59,6 +59,7 @@ int main(int argc, char** argv) {
         std::printf("%s:\n", cfg.string().c_str());
         for (const auto& w : warnings) std::printf("  warning: %s\n", w.c_str());
         problems += static_cast<int>(warnings.size());
+        std::printf("  Hailstone access: %s\n", r.deny_client ? "denied" : "allowed");
         std::printf("  the player's own scripts: %s\n", caps_or_no(r.player_script_caps).c_str());
         std::printf("  the player's own plugins: %s\n", caps_or_no(r.player_plugin_caps).c_str());
         std::printf("  the player's own models and zones in the server's assets folder: %s\n",

@@ -6,8 +6,12 @@
 #include <string>
 #include <vector>
 
+#include <imgui.h>
+
+#include "core/path_utf8.h"
 #include "scratch_dir.h"
 #include "ui/font_faces.h"
+#include "ui/imgui_layer.h"
 
 using namespace hailstone::ui;
 
@@ -67,6 +71,56 @@ std::vector<unsigned char> font_file(const std::string& family, const std::strin
 }
 
 } // namespace
+
+TEST_CASE("UI fonts: built-in chat glyphs draw curly quotes with straight quote shapes") {
+    const ImFontConfig cfg = detail::ui_font_config(1.0f);
+    ImFontGlyphRangesBuilder ranges;
+    ranges.AddRanges(cfg.GlyphRanges);
+    CHECK(ranges.GetBit(0x00e9)); // Latin-1 remains available
+    CHECK(ranges.GetBit(0x2019)); // the selected face is asked for a real curly apostrophe
+
+    ImFontAtlas atlas;
+    ImFont* font = atlas.AddFontDefault(&cfg);
+    REQUIRE(font);
+    REQUIRE(detail::build_ui_font_atlas(atlas));
+    const ImFontGlyph* apostrophe = font->FindGlyphNoFallback('\'');
+    const ImFontGlyph* quote = font->FindGlyphNoFallback('"');
+    REQUIRE(apostrophe);
+    REQUIRE(quote);
+    CHECK(font->FindGlyphNoFallback(0x2018) == apostrophe);
+    CHECK(font->FindGlyphNoFallback(0x2019) == apostrophe);
+    CHECK(font->FindGlyphNoFallback(0x201c) == quote);
+    CHECK(font->FindGlyphNoFallback(0x201d) == quote);
+    CHECK(font->GetCharAdvance(0x2019) == apostrophe->AdvanceX);
+    CHECK(font->GetCharAdvance(0x1000) == font->FallbackAdvanceX);
+}
+
+TEST_CASE("UI fonts: installed regular and bold faces retain their typographic chat glyphs") {
+    const auto faces = scan_font_faces(system_font_dirs());
+    FontFiles files;
+    for (const char* family : {"Arial", "Liberation Sans", "DejaVu Sans", "Noto Sans"}) {
+        files = find_font_family(faces, family);
+        if (!files.regular.empty() && !files.bold.empty()) break;
+    }
+    if (files.regular.empty() || files.bold.empty()) return; // headless hosts can run with only the built-in font
+
+    const ImFontConfig cfg = detail::ui_font_config(1.0f);
+    ImFontAtlas atlas;
+    ImFont* regular = atlas.AddFontFromFileTTF(hailstone::path_utf8(files.regular).c_str(), 14.0f, &cfg);
+    ImFont* bold = atlas.AddFontFromFileTTF(hailstone::path_utf8(files.bold).c_str(), 20.0f, &cfg);
+    REQUIRE(regular);
+    REQUIRE(bold);
+    REQUIRE(detail::build_ui_font_atlas(atlas));
+    constexpr ImWchar codepoints[] = {0x00e9, 0x2014, 0x2019, 0x201d, 0x2026};
+    for (ImFont* font : {regular, bold}) {
+        for (ImWchar codepoint : codepoints) {
+            const ImFontGlyph* glyph = font->FindGlyphNoFallback(codepoint);
+            REQUIRE(glyph);
+            CHECK(glyph->Codepoint == codepoint);
+            CHECK(glyph->Visible);
+        }
+    }
+}
 
 TEST_CASE("font faces: the name table's family and style") {
     auto face = parse_font_face(font_file("Test Sans", "Bold Italic"));

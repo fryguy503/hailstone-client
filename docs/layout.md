@@ -462,6 +462,11 @@ A broken-off download keeps the complete files for the next try and leaves the f
 A server without the script does not answer. After 5 s (30 s for a server that sent files before, whose zone may be
 hashing new ones) the zone-in goes on with what is there.
 
+A login without a saved server (a `--user` test login, or a launcher's login) downloads nothing but the server's
+`hailstone.cfg`, at most 1 MB, into `servers/<profile>/.admission/`, only to read `[client] deny` (docs/plugins.md). It
+waits for the list as above, so on a server without the script its first zone-in also takes the 5 s. `hailstone.cfg`
+is hashed again at every login, so a copy edited by hand is replaced by the server's.
+
 #### What it trusts
 
 Paths must be relative. Refused:
@@ -567,7 +572,7 @@ files are in `servers/<profile>/characters/<world>/<name>/` (`core/character_fil
 | `IgnoreList.txt` | the mail ignore list (the address book's Ignore button), the same format |
 | `GuildNotes.txt` | the guild window's personal notes ("%08X %s %s" lines) |
 | `chat.ini` | chat filters and user colours |
-| `options.ini` | the game options (Options window, /lootnodrop, /trackplayers, /log ...) |
+| `options.ini` | the game options (Options window, /hidecorpses, /lootnodrop, /trackplayers, /log ...) |
 | `<name>.txt` | the chat log (/log; `eqlog` unless named). Kept open while logging, each line written through at once; `/log off` closes it |
 
 The blocked buff lists in `hotbuttons.ini` are `[BlockedSpells]` `BlockedSpellID0..29` and `[BlockedPetSpells]`

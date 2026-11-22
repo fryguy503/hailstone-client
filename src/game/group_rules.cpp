@@ -111,7 +111,7 @@ void handle_group_world_message(bool& grouped, const GroupWorldPacket& p, GroupW
     }
 }
 
-void group_target_member(GroupTargetWorld& w, std::int32_t n, bool tot) {
+void group_target_member(GroupTargetWorld& w, std::int32_t n, bool target_pet) {
     w.selected = -1;
     int spawn = -1;
     if (n <= -1) {
@@ -126,8 +126,8 @@ void group_target_member(GroupTargetWorld& w, std::int32_t n, bool tot) {
             break;
         }
     }
-    if (tot && spawn != -1) {
-        std::int32_t id = w.target_id_of(spawn);
+    if (target_pet && spawn != -1) {
+        std::int32_t id = w.pet_id_of(spawn);
         if (id != -1) {
             int t = w.spawn_by_id(id);
             if (t != -1) {
@@ -140,15 +140,15 @@ void group_target_member(GroupTargetWorld& w, std::int32_t n, bool tot) {
     w.target = spawn;
 }
 
-void target_self_or_pet(GroupTargetWorld& w, bool grouped, std::int32_t n, bool tot, int own) {
-    if (grouped) return group_target_member(w, n, tot);
+void target_self_or_pet(GroupTargetWorld& w, bool grouped, std::int32_t n, bool target_pet, int own) {
+    if (grouped) return group_target_member(w, n, target_pet);
     if (n != 0) {
         w.selected = -1;
         w.target = -1;
         return;
     }
-    if (tot) {
-        std::int32_t id = own != -1 ? w.target_id_of(own) : -1;
+    if (target_pet) {
+        std::int32_t id = own != -1 ? w.pet_id_of(own) : -1;
         if (own != -1 && id != -1) {
             int t = w.spawn_by_id(id);
             if (t != -1) {

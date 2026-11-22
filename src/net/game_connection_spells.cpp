@@ -699,6 +699,8 @@ std::int32_t GameConnection::see_invisible_rank() const {
 }
 
 bool GameConnection::spawn_invisible(const game::Spawn& s, std::int32_t rank) const {
+    // Continuous corpse hiding is a local display choice, independent of what the zone sends.
+    if (s.is_corpse && hide_corpse_mode() == game::HideCorpseMode::Always) return true;
     if (market_hidden(s)) return true;
     const auto* player = world_.player();
     return player && game::spawn_invisible(*player, s, rank, group_.has_member(s.name));

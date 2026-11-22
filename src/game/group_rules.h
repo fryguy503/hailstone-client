@@ -105,19 +105,19 @@ struct GroupTargetWorld {
     int selected = -1;   // PlayerClient +0x1214
     int target = -1;     // pinstTarget
     int player = -1;     // the local player's spawn
-    // A spawn's own target (+0x2b4, a spawn id; -1 none) and GetSpawnByID.
-    std::function<std::int32_t(int spawn)> target_id_of;
+    // A spawn's PetID (+0x2b4; -1 none) and GetSpawnByID.
+    std::function<std::int32_t(int owner)> pet_id_of;
     std::function<int(std::int32_t id)> spawn_by_id;
 };
 
 // 0x54da00 (CGroup: target member n): the (n+1)-th occupied slot's spawn,
-// selecting n (the ordinal among occupied slots); with `target_of_target`
-// that spawn's own target instead (selection cleared).
-void group_target_member(GroupTargetWorld& w, std::int32_t n, bool target_of_target);
+// selecting n (the ordinal among occupied slots); with `target_pet`, that
+// spawn's pet if present (selection cleared).
+void group_target_member(GroupTargetWorld& w, std::int32_t n, bool target_pet);
 // LocalPlayer_TargetSelfOrPet @0x58d230: in a group CGroup_TargetMember;
-// without one n 0 targets ourselves (selecting 0) or, with target_of_target,
-// our target's target (`own` is the character's +0x2dd0 spawn).
-void target_self_or_pet(GroupTargetWorld& w, bool grouped, std::int32_t n, bool target_of_target, int own);
+// without one n 0 targets ourselves (selecting 0) or, with `target_pet`, our
+// pet (`own` is the character's +0x2dd0 spawn).
+void target_self_or_pet(GroupTargetWorld& w, bool grouped, std::int32_t n, bool target_pet, int own);
 
 // ---- an incoming invitation (Handle_OP_GroupInvite2.jsonl)
 

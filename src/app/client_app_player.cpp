@@ -137,8 +137,7 @@ void ClientApp::update_mouse_look() {
         last_mouse_look_ = Clock::now();
         return;
     }
-    const std::uint32_t stand = conn_->player_status().stand_state;
-    const bool can_move = (stand == net::kStandStanding || stand == net::kStandCrouching) && !conn_->stunned();
+    const bool can_move = can_turn_controlled_actor(*conn_);
     if (camera_type_ == game::kCameraFirstPerson && !can_move) return;
     const float k = mouse_look_scale();
     if (camera_type_ != game::kCameraFirstPerson && !camera6) {

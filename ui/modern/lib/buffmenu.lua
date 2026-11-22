@@ -6,14 +6,14 @@
 -- the menu to another spell.
 local API = hs.UI
 local M = {}
-local picked = {} -- window -> the buff its menu is for: { id, spell, name, block, remove }
+local picked = {} -- window -> the buff its menu is for
 
 -- M.Open(window, b [, opts])   opts: block = "buff" or "pet" (which blocked list the menu offers), remove = true
--- (the player's own buff: the game's right click removes it)
+-- (the player's own buff: the game's right click removes it), windowOptions = true (open the tray's frame menu)
 function M.Open(window, b, opts)
   picked[window] = {
     id = b.id, spell = b.spell, name = b.name,
-    block = opts and opts.block, remove = opts and opts.remove,
+    block = opts and opts.block, remove = opts and opts.remove, windowOptions = opts and opts.windowOptions,
   }
   ui.OpenPopup("##buffmenu")
 end
@@ -26,10 +26,11 @@ function M.Hint(opts)
   return "Right-click for info"
 end
 
--- M.Draw(window)   the menu, while open (inside the window's frame)
+-- M.Draw(window)   the menu, while open (inside the window's frame); returns true to open the frame menu
 function M.Draw(window)
   if not ui.BeginPopup("##buffmenu") then return end
   local b = picked[window]
+  local openOptions
   if b then
     ui.TextDisabled(b.name)
     ui.Separator()
@@ -48,8 +49,13 @@ function M.Draw(window)
     if b.remove and ui.MenuItem("Remove") and API.buffs.Slot(window, b.id) == b.spell then -- (still in that slot)
       API.windows.Button(window, b.id, 3)
     end
+    if b.windowOptions then
+      ui.Separator()
+      openOptions = ui.MenuItem("Window options")
+    end
   end
   ui.EndPopup()
+  return openOptions
 end
 
 return M

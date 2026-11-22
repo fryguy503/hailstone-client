@@ -346,10 +346,10 @@ void SpellTable::build_indices() {
     by_name_.clear();
     by_group_.clear();
     for (const auto& [id, s] : spells_) {
-        auto [it, added] = by_name_.try_emplace(lower_name(s.name), id);
-        if (!added && id < it->second) it->second = id;
+        by_name_[lower_name(s.name)].push_back(id);
         if (s.spell_group > 0) by_group_[group_key(s.spell_group, s.spell_subgroup)].push_back({s.spell_rank, id});
     }
+    for (auto& [name, ids] : by_name_) std::sort(ids.begin(), ids.end()); // spells_ is unordered
     for (auto& [key, ranked] : by_group_)
         std::sort(ranked.begin(), ranked.end(), [](const RankedId& a, const RankedId& b) {
             return a.rank != b.rank ? a.rank < b.rank : a.id < b.id;
@@ -409,8 +409,14 @@ const SpellData* SpellTable::get(std::uint32_t id) const {
 }
 
 const SpellData* SpellTable::find_by_name(std::string_view name) const {
+    const std::span<const std::uint32_t> ids = find_all_by_name(name);
+    return ids.empty() ? nullptr : get(ids.front());
+}
+
+std::span<const std::uint32_t> SpellTable::find_all_by_name(std::string_view name) const {
     auto it = by_name_.find(lower_name(name));
-    return it == by_name_.end() ? nullptr : get(it->second);
+    if (it == by_name_.end()) return {};
+    return it->second;
 }
 
 const SpellData* SpellTable::by_group_and_rank(std::int32_t group, std::int32_t subgroup, std::int32_t rank,

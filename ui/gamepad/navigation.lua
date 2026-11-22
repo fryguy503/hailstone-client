@@ -77,6 +77,7 @@ ui.window("Find", function()
       T.font(24)
       T.draw(x0, top + T.px(10), "Nothing to find here.", C.dim)
       T.unfont()
+      ui.Dummy(1, 1)
     else
       local rowH = 70
       local visible = math.max(1, math.floor((y1 - top + T.px(10)) / T.px(rowH + 10)))

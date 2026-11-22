@@ -426,6 +426,10 @@ public:
             int n = index_after(id, prefix);
             if (n < 1 || n > 5) continue;
             const auto* m = other_member(c, n - 1);
+            if (prefix == "PetGauge") {
+                out.shown = m && c.group_member_pet(*m);
+                return;
+            }
             const game::Spawn* s = m ? spawn_named(c.world(), m->name) : nullptr;
             bool here = s != nullptr;
             if (prefix == "Gauge") {
@@ -435,13 +439,6 @@ public:
                 else if (m && m->merc && g.has_member(m->owner_name)) out.color = argb_to_rgb(0xffe1b511);
             } else if (prefix == "HPLabel" || prefix == "HPPercLabel" || prefix == "GW_AggroPctPlayer") {
                 out.shown = here;
-            } else if (prefix == "PetGauge") {
-                bool pet = false;
-                if (s && !s->is_corpse)
-                    pet = std::any_of(c.world().spawns.begin(), c.world().spawns.end(), [&](const auto& e) {
-                        return e.second.pet_owner_id == s->id && e.second.is_npc;
-                    });
-                out.shown = here && pet;
             } else if (prefix.starts_with("Mana")) {
                 out.shown = here && (s->id == c.world().player_id ? c.is_spellcaster() : is_spellcaster(s->class_id));
             } else if (prefix.starts_with("STA")) {
@@ -478,10 +475,15 @@ public:
         else if (id == "InviteButton") c.group_invite();
         else if (id == "DeclineButton" || id == "DisbandButton") c.group_disband();
         else if (id == "LFGButton") c.group_search_toggle_from_group_window(); // the group finder
-        else if (int n = row_of(id); n >= 1 && n <= 5) {
-            // A click on a member's row: LocalPlayer_TargetSelfOrPet(row) (0x58d230 with 0x67ae00's row),
-            // as F2..F6 do; it also selects the row /disband reads (group_member_targeted()).
-            c.target_group_member(n);
+        else if (int pet_row = index_after(id, "PetGauge"); pet_row >= 1 && pet_row <= 5) {
+            if (c.state() != net::ConnectionState::InZone) return false;
+            const auto* member = other_member(c, pet_row - 1);
+            const auto* pet = member ? c.group_member_pet(*member) : nullptr;
+            if (!pet) return false;
+            c.set_target(pet->id);
+        } else if (int n = row_of(id); n >= 1 && n <= 5) {
+            // A click on the member selects the row /disband reads (group_member_targeted()).
+            c.target_group_member(n, net::GameConnection::GroupTargetMode::MemberOnly);
         } else return false;
         return true;
     }

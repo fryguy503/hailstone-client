@@ -61,6 +61,15 @@ PAGES = [
         ("docs/unknowns.md", "Known-Gaps"),
         ("CONTRIBUTING.md", "Contributing"),
     ]),
+    ("Agent handbook", [
+        ("docs/agents/README.md", "Agent-Briefing"),
+        ("docs/agents/workflow.md", "Agent-Workflow"),
+        ("docs/agents/codebase.md", "Agent-Codebase-Map"),
+        ("docs/agents/contracts.md", "Agent-Compatibility-Contracts"),
+        ("docs/agents/validation.md", "Agent-Validation"),
+        ("docs/agents/recipes.md", "Agent-Recipes"),
+        ("docs/agents/glossary.md", "Agent-Glossary"),
+    ]),
     ("Game rules and rendering", [
         ("docs/mechanics.md", "Mechanics"),
         ("docs/graphics.md", "Graphics"),
@@ -92,6 +101,7 @@ PAGES = [
 
 # Directory links (docs/protocol/) go to the section's first page.
 DIR_PAGES = {
+    "docs/agents": "Agent-Briefing",
     "docs/protocol": "Protocol-Session",
     "docs/formats": "Format-WLD",
     "docs/research": "Research-External-Resources",

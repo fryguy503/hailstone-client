@@ -11,6 +11,7 @@
 #include <glm/geometric.hpp>
 
 #include "game/combat.h"
+#include "game/counter_spas.h"
 #include "game/coords.h"
 #include "game/eq_names.h"
 #include "game/group.h"
@@ -506,6 +507,19 @@ void register_spawn() {
     });
     spawn_member("Slowed", [](const Context& c, const game::Spawn& s, std::string_view) { // attack speed under 100%
         return buff_with_effect(c, s, 11, [](std::int32_t base) { return base < 100; });
+    });
+    // What a cure takes off: a buff carrying counters of that kind (a positive base; a cure's own effect is negative).
+    spawn_member("Poisoned", [](const Context& c, const game::Spawn& s, std::string_view) {
+        return buff_with_effect(c, s, game::kSpaPoisonCounter, [](std::int32_t base) { return base > 0; });
+    });
+    spawn_member("Diseased", [](const Context& c, const game::Spawn& s, std::string_view) {
+        return buff_with_effect(c, s, game::kSpaDiseaseCounter, [](std::int32_t base) { return base > 0; });
+    });
+    spawn_member("Cursed", [](const Context& c, const game::Spawn& s, std::string_view) {
+        return buff_with_effect(c, s, game::kSpaCurseCounter, [](std::int32_t base) { return base > 0; });
+    });
+    spawn_member("Corrupted", [](const Context& c, const game::Spawn& s, std::string_view) {
+        return buff_with_effect(c, s, game::kSpaCorruptionCounter, [](std::int32_t base) { return base > 0; });
     });
     spawn_member("LineOfSight", [](const Context& c, const game::Spawn& s, std::string_view) -> V {
         if (is_me(c, s)) return V::boolean(true);

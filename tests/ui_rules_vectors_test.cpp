@@ -293,12 +293,13 @@ std::string check_target(const Json& rec, bool self_or_pet, bool holder = true) 
     w.selected = in["selected_member"].i32();
     w.target = in["target"].i32();
     w.player = 100;
-    w.target_id_of = [&](int spawn) { return in["spawn_targets"][static_cast<std::size_t>(spawn)].i32(); };
+    // The recorder's target fields describe the owner's PetID at +0x2b4.
+    w.pet_id_of = [&](int spawn) { return in["spawn_targets"][static_cast<std::size_t>(spawn)].i32(); };
     w.spawn_by_id = [](std::int32_t id) { return id >= 100 && id < 106 ? id - 100 : -1; };
     std::int32_t n = in["n"].i32();
-    bool tot = in["target_of_target"].truthy();
-    if (self_or_pet) target_self_or_pet(w, holder && in["grouped"].truthy(), n, tot, in["own_spawn"].i32());
-    else group_target_member(w, n, tot);
+    bool target_pet = in["target_of_target"].truthy();
+    if (self_or_pet) target_self_or_pet(w, holder && in["grouped"].truthy(), n, target_pet, in["own_spawn"].i32());
+    else group_target_member(w, n, target_pet);
     const Json& out = rec["out"];
     if (w.selected != out["selected_member"].i32() || w.target != out["target"].i32())
         return std::format("selected {} target {}; want {} {}", w.selected, w.target, out["selected_member"].i32(),

@@ -85,13 +85,11 @@ int CursorCoin(lua_State* L) {
         lua_pushnil(L);
         return 1;
     }
-    const auto& cc = h.conn->cursor_coins(); // by wire type, 0 copper .. 3 platinum
-    for (int t = 3; t >= 0; --t)
-        if (cc[static_cast<std::size_t>(t)]) {
-            lua_pushinteger(L, 3 - t);
-            lua_pushinteger(L, cc[static_cast<std::size_t>(t)]);
-            return 2;
-        }
+    if (auto held = h.conn->held_coin()) {
+        lua_pushinteger(L, 3 - held->first);
+        lua_pushinteger(L, held->second);
+        return 2;
+    }
     lua_pushnil(L);
     return 1;
 }

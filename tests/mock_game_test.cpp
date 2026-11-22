@@ -25,6 +25,7 @@
 #include "net/group_packets.h"
 #include "net/packet_io.h"
 #include "net/player_packets.h"
+#include "net/tribute_packets.h"
 #include "platform/udp_socket.h"
 #include "plugin/hooks.h"
 
@@ -429,49 +430,92 @@ TEST_CASE("mock server: typed chat and socials expand chat variables") {
 
 // ---------------------------------------------------------------- OP_ClientUpdate cadence
 
-TEST_CASE("mock server: OP_ClientUpdate is sent at most every 280 ms, with the current position, only when it changed") {
-    // docs/protocol/rof2-packets.md: "OP_ClientUpdate (46 B) when moving"; the rate is the client's kPositionInterval
-    // (280 ms, net/game_connection.cpp). The client has no clock seam (game_connection.cpp reads
-    // steady_clock directly), so this test runs for real time, with bounds that hold however slow the machine is.
-    Rig rig;
+TEST_CASE("mock server: movement reports the current position at most every 280 ms") {
+    ManualClock clock;
+    ConnectionOptions options = quick_options();
+    options.session.clock = clock.source();
+    Rig rig(MockConfig::standard(), options);
     REQUIRE(rig.to_zone());
+    clock.hold();
+    rig.step();
     auto& updates = rig.server.client_updates;
-    // A player who has not moved sends nothing.
-    CHECK(updates.empty());
-
-    auto start = std::chrono::steady_clock::now();
-    int i = 0;
+    const auto initial_count = updates.size();
     rig.conn.set_speed_run(0.7f); // the controls' SpeedRun: the animation field carries it x 40
-    while (std::chrono::steady_clock::now() - start < 450ms) {
-        // The player keeps running east: the position changes every pass.
-        rig.conn.set_player_motion(glm::vec3(-90.0f + 0.5f * static_cast<float>(i++), -270.0f, 4.0f), 100.0f,
-                                   glm::vec3(0.5f, 0.0f, 0.0f), true);
+    const glm::vec3 velocity(0.5f, 0.0f, 0.0f);
+    rig.conn.set_player_motion({-90.0f, -270.0f, 4.0f}, 100.0f, velocity, true);
+    clock.advance(280ms);
+    REQUIRE(rig.until([&] { return updates.size() == initial_count + 1; }));
+    const auto first = updates.back();
+    CHECK(first.motion.y == -90.0f);
+
+    rig.conn.set_player_motion({-80.0f, -270.0f, 4.0f}, 100.0f, velocity, true);
+    clock.advance(279ms);
+    rig.step();
+    CHECK(updates.size() == initial_count + 1);
+    rig.conn.set_player_motion({-70.0f, -270.0f, 4.0f}, 100.0f, velocity, true);
+    clock.advance(1ms);
+    REQUIRE(rig.until([&] { return updates.size() == initial_count + 2; }));
+    const auto& second = updates.back();
+    CHECK(second.spawn_id == 7);
+    CHECK(static_cast<std::uint16_t>(second.sequence - first.sequence) == 1);
+    CHECK(second.motion.x == -270.0f);
+    CHECK(second.motion.y == -70.0f);
+    CHECK(second.motion.z == 4.0f);
+    CHECK(second.motion.animation == 28);
+}
+
+TEST_CASE("mock server: stationary position reports let the zone set AFK") {
+    ManualClock clock;
+    ConnectionOptions options = quick_options();
+    options.session.clock = clock.source();
+    Rig rig(MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    clock.hold();
+    rig.step();
+    auto& updates = rig.server.client_updates;
+    const auto initial_count = updates.size();
+    const auto player_id = static_cast<std::uint16_t>(rig.conn.world().player_id);
+    TributeSettings tribute;
+    tribute.active = true;
+    rig.server.zone.send_reliable(encode(tribute));
+    REQUIRE(rig.until([&] { return rig.conn.tribute().settings.active; }));
+    // A player can stand still from the moment they enter the zone.
+    clock.advance(1300ms);
+    REQUIRE(rig.until([&] { return updates.size() == initial_count + 1; }));
+
+    for (std::size_t expected : {initial_count + 2, initial_count + 3}) {
+        const auto previous = updates.back();
+        clock.advance(1299ms);
         rig.step();
-        std::this_thread::sleep_for(2ms);
-    }
-    float last_x = -90.0f + 0.5f * static_cast<float>(i - 1);
-    // The final position is always delivered: sent once the interval allows.
-    REQUIRE(rig.until([&] { return !updates.empty() && updates.back().motion.y == last_x; }));
-    auto elapsed = std::chrono::steady_clock::now() - start;
-
-    // Sends are at least 280 ms apart, so n updates need (n - 1) * 280 ms.
-    auto n = static_cast<long long>(updates.size());
-    CHECK(n >= 2);
-    CHECK((n - 1) * 280 <= std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
-    for (std::size_t k = 0; k < updates.size(); ++k) {
-        CHECK(updates[k].spawn_id == 7);
-        CHECK(updates[k].motion.animation == 28); // SpeedRun 0.7 x 40, truncated (PackPlayerPositionUpdate)
-        CHECK(updates[k].motion.x == -270.0f);   // world y is the server's x (game/coords.h)
-        CHECK(updates[k].motion.z == 4.0f);
-        if (k > 0) {
-            CHECK(static_cast<std::uint16_t>(updates[k].sequence - updates[k - 1].sequence) == 1);
-            CHECK(updates[k].motion.y > updates[k - 1].motion.y); // each carries the position at its own send
-        }
+        CHECK(updates.size() == expected - 1);
+        clock.advance(1ms);
+        REQUIRE(rig.until([&] { return updates.size() == expected; }));
+        const auto& update = updates.back();
+        CHECK(update.spawn_id == player_id);
+        CHECK(static_cast<std::uint16_t>(update.sequence - previous.sequence) == 1);
+        CHECK(update.motion.x == previous.motion.x);
+        CHECK(update.motion.y == previous.motion.y);
+        CHECK(update.motion.z == previous.motion.z);
+        CHECK(update.motion.heading == previous.motion.heading);
+        CHECK(update.motion.delta_x == 0.0f);
+        CHECK(update.motion.delta_y == 0.0f);
+        CHECK(update.motion.delta_z == 0.0f);
     }
 
-    // Nothing changed since: no more updates (the next one could not come sooner than 280 ms after the last).
-    rig.run_for(320ms);
-    CHECK(static_cast<long long>(updates.size()) == n);
+    constexpr std::uint16_t afk_appearance = 24;
+    CHECK_FALSE(rig.conn.world().spawns.at(player_id).afk);
+    CHECK(rig.conn.tribute().settings.active);
+    CHECK(std::none_of(rig.server.zone_log.begin(), rig.server.zone_log.end(), [](const AppPacket& packet) {
+        if (!is_op(packet, Op::SpawnAppearance)) return false;
+        const auto appearance = decode_spawn_appearance(packet);
+        return appearance && appearance->type == afk_appearance;
+    }));
+    tribute.active = false;
+    rig.server.zone.send_reliable(encode(tribute));
+    rig.server.zone.send_reliable(encode(SpawnAppearance{player_id, afk_appearance, 1}));
+    REQUIRE(rig.until([&] {
+        return rig.conn.world().spawns.at(player_id).afk && !rig.conn.tribute().settings.active;
+    }));
 }
 
 TEST_CASE("mock server: a slow walk at a high frame rate still sends OP_ClientUpdate") {
@@ -711,6 +755,105 @@ TEST_CASE("mock server: a refused zone line reports the real position again; no 
     CHECK(std::none_of(std::next(first), retry, [](const AppPacket& p) { return is_op(p, Op::ClientUpdate); }));
     REQUIRE(rig.until([&] { return !conn.zone_change_pending(); }));
     CHECK(conn.state() == ConnectionState::InZone);
+}
+
+// ---------------------------------------------------------------- doors and portals
+
+TEST_CASE("mock server: a portcullis moves only on the zone's door packets") {
+    ManualClock clock;
+    auto options = quick_options();
+    options.session.clock = clock.source();
+    Rig rig(MockConfig::standard(), options);
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    clock.hold();
+    const auto at = conn.world().player()->position;
+    DoorRecord gate;
+    gate.door_id = 4;
+    gate.name = "TESTGATE";
+    gate.open_type = 0x4c;
+    gate.door_param = 0;
+    gate.x = at.y;
+    gate.y = at.x;
+    gate.z = at.z;
+    server.zone.send_reliable(encode_spawn_doors({gate}));
+    REQUIRE(rig.until([&] { return conn.door(gate.door_id) != nullptr; }));
+    const auto& door = *conn.door(gate.door_id);
+
+    REQUIRE(conn.click_door(gate.door_id, 0.0f));
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ClickDoor) == 1; }));
+    const auto sent = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                   [](const AppPacket& p) { return is_op(p, Op::ClickDoor); });
+    const auto click = decode_click_door(*sent);
+    REQUIRE(click);
+    CHECK(click->door_id == gate.door_id);
+    CHECK(click->player_id == conn.world().player_id);
+    clock.advance(500ms);
+    rig.step();
+    CHECK(door.state == game::kSwitchClosed);
+    CHECK(door.z == gate.z);
+
+    server.zone.send_reliable(encode(MoveDoor{gate.door_id, game::kSwitchOpening}));
+    REQUIRE(rig.until([&] { return conn.door_moves_seen() == 1; }));
+    CHECK(door.state == game::kSwitchOpening);
+    clock.advance(500ms);
+    rig.step();
+    CHECK(door.z == doctest::Approx(gate.z + 4.5f));
+    for (int i = 0; i < 4; ++i) {
+        clock.advance(500ms);
+        rig.step();
+    }
+    CHECK(door.state == game::kSwitchOpen);
+    CHECK(door.z == gate.z + 22.0f);
+
+    server.zone.send_reliable(encode(MoveDoor{gate.door_id, game::kSwitchClosing}));
+    REQUIRE(rig.until([&] { return conn.door_moves_seen() == 2; }));
+    CHECK(door.state == game::kSwitchClosing);
+    for (int i = 0; i < 9; ++i) {
+        clock.advance(500ms);
+        rig.step();
+    }
+    CHECK(door.state == game::kSwitchClosed);
+    CHECK(door.z == gate.z);
+}
+
+TEST_CASE("mock server: stationary portals still await the zone's travel request") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    const auto at = conn.world().player()->position;
+    DoorRecord portal;
+    portal.name = "TESTPORTAL";
+    portal.x = at.y;
+    portal.y = at.x;
+    portal.z = at.z;
+
+    constexpr std::uint8_t kPortalTypes[] = {0x39, 0x3a};
+    int clicks = 0;
+    for (std::uint8_t type : kPortalTypes) {
+        portal.door_id = type;
+        portal.open_type = type;
+        server.zone.send_reliable(encode_spawn_doors({portal}));
+        REQUIRE(rig.until([&] { return conn.door(portal.door_id) != nullptr; }));
+        REQUIRE(conn.click_door(portal.door_id, 0.0f));
+        ++clicks;
+        REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ClickDoor) == clicks; }));
+        const auto moves = conn.door_moves_seen();
+        server.zone.send_reliable(encode(MoveDoor{portal.door_id, game::kSwitchOpening}));
+        REQUIRE(rig.until([&] { return conn.door_moves_seen() > moves; }));
+        CHECK(conn.door(portal.door_id)->state == game::kSwitchClosed);
+        REQUIRE(conn.click_door(portal.door_id, 0.0f));
+        ++clicks;
+        REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ClickDoor) == clicks; }));
+    }
+    CHECK_FALSE(conn.zone_change_pending());
+    CHECK(MockEqServer::count(server.zone_log, Op::ZoneChange) == 0);
+    server.request_zone_change(1, at.y, at.x, at.z);
+    REQUIRE(rig.until([&] { return server.zone_entries == 2 && conn.state() == ConnectionState::InZone; }));
+    CHECK(conn.zone_id() == 1);
+    CHECK(conn.doors().empty());
 }
 
 // ---------------------------------------------------------------- world containers
@@ -1033,6 +1176,53 @@ TEST_CASE("mock server: camping sits, sends OP_Camp and ends when the zone drops
     REQUIRE(conn.link_death());
     CHECK(conn.link_death()->in_game);
     CHECK(conn.link_death()->camp_kind == 0);
+}
+
+TEST_CASE("mock server: chat item and say links work during the camp countdown") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    conn.camp();
+    REQUIRE(conn.state() == ConnectionState::Camping);
+
+    const auto item = make_item(1003, "Silk Mask", 2);
+    game::ItemLink item_link;
+    item_link.item_id = item.id;
+    game::ItemLink say_link;
+    say_link.item_id = 0xF423F; // EQEmu's say link item (see commerce_test.cpp).
+    conn.request_item(item_link);
+    conn.request_item(say_link);
+    REQUIRE(rig.until([&] { return MockEqServer::count(server.zone_log, Op::ItemLinkClick) == 2; }));
+    CHECK(in_order(server.zone_log, {Op::Camp, Op::ItemLinkClick, Op::ItemLinkClick}));
+    std::vector<std::uint32_t> requested_items;
+    for (const auto& packet : server.zone_log) {
+        if (!is_op(packet, Op::ItemLinkClick)) continue;
+        const auto request = decode_item_link_click(packet);
+        REQUIRE(request);
+        requested_items.push_back(request->item_id);
+    }
+    CHECK(requested_items == std::vector<std::uint32_t>{item.id, say_link.item_id});
+
+    server.zone.send_reliable(encode_item_packet(true, {kItemPacketViewLink, item}));
+    std::optional<Item> shown;
+    REQUIRE(rig.until([&] { shown = conn.take_item_display(); return shown.has_value(); }));
+    CHECK(shown->id == item.id);
+    CHECK(conn.state() == ConnectionState::Camping);
+    CHECK(server.logouts == 0);
+
+    server.drop_on_logout = false;
+    conn.set_fast_camp(true);
+    REQUIRE(rig.until([&] { return server.logouts == 1; }));
+    REQUIRE(conn.state() == ConnectionState::Camping);
+    conn.request_item(item_link);
+    conn.send_zone_packet(AppPacket(0x7f01));
+    REQUIRE(rig.until([&] {
+        return std::any_of(server.zone_log.begin(), server.zone_log.end(), [](const AppPacket& packet) {
+            return packet.opcode == 0x7f01;
+        });
+    }));
+    CHECK(MockEqServer::count(server.zone_log, Op::ItemLinkClick) == 2);
 }
 
 TEST_CASE("mock server: a zone change ends a camp, and the next zone starts without one") {

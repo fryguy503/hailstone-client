@@ -35,7 +35,10 @@ struct SpawnSearch {
         Any, Pc, Npc, Mount, Pet, PcPet, NpcPet, Corpse, NpcCorpse, PcCorpse, Trigger, Untargetable, Trap, Chest,
         Timer, Aura, Object, Banner, Campfire, Mercenary, Flyer
     };
+    // MQ's next / prev: not a filter, the way /target walks the matches from the current target. The last word wins.
+    enum class Direction : std::uint8_t { Nearest, Next, Prev };
     Kind kind = Kind::Any;
+    Direction direction = Direction::Nearest;
     std::optional<std::uint32_t> id;
     std::uint32_t not_id = 0;           // MQ's NotID: one id, the last notid's; 0 none
     int min_level = 0, max_level = 200; // MQ's MinLevel / MaxLevel (MAX_NPC_LEVEL); 0 is no limit
@@ -93,5 +96,15 @@ std::vector<const game::Spawn*> search_spawns(const SpawnSearch& search, const g
 // The usual call: the text searched in the connection's world, group, raid, guild and extended targets.
 std::vector<const game::Spawn*> find_spawns(std::string_view text, const net::GameConnection& conn,
                                             std::function<std::optional<bool>(std::uint32_t)> can_see = {});
+
+// The spawn /target takes among a search's matches (`found`, nearest the player first). With no target, or one the
+// zone no longer has, every direction takes the nearest. next and prev walk from the current target's place in the
+// list; a target that is no match starts from its own distance, next taking the first match farther away and prev
+// the last one nearer. At either end of the list there is none: MQ does not wrap around, and neither do we.
+// Hailstone also leaves the local player out while another spawn matches, in every direction (Hailstone's rule,
+// rather than MQ's), and measures the search from the player in 3D distance order, where MQ measures it from the old
+// target and walks its spawn list sorted by flat (XY) distance from the player (docs/plugins.md).
+const game::Spawn* pick_target(const SpawnSearch& search, const std::vector<const game::Spawn*>& found,
+                               const game::WorldState& world);
 
 } // namespace hailstone::mq

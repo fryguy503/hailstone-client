@@ -34,6 +34,9 @@ namespace hailstone::game { struct Spawn; }
 
 namespace hailstone::app {
 
+// Whether mouse look and the gamepad can turn the body currently under control.
+bool can_turn_controlled_actor(const net::GameConnection& conn);
+
 struct MovementKeys {
     bool forward = false, back = false;
     bool turn_left = false, turn_right = false;

@@ -36,6 +36,8 @@ struct ObjectShape {
     // The solid parts of a mesh, by the rule game/collision.cpp uses for the
     // zone (everything but translucent and additive surfaces).
     static ObjectShape from_mesh(const assets::Mesh& mesh, bool keep_pick_proxy = false);
+    // An authored collision volume, as clockwise model-space triangle triples.
+    static ObjectShape from_hull(std::span<const glm::vec3> triangles);
     bool empty() const { return tris.empty(); }
     std::span<const CollisionTriangle> pick_triangles(bool allow_proxy) const {
         return allow_proxy && records.empty() ? pick_proxy : records;

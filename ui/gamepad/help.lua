@@ -89,6 +89,7 @@ ui.window("Help", function()
     ui.SetCursorPos(midX - wx, ly - wy)
     if #list == 0 then
       T.draw(midX, ly + T.px(6), "None.", C.faint)
+      ui.Dummy(1, 1)
     else
       local visible = math.max(1, math.floor((y1 - ly + T.px(10)) / T.px(56)))
       links.shown = visible

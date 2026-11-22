@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <tuple>
 #include <utility>
+#include <variant>
 
 #include "platform/shared_library.h"
 
@@ -81,17 +82,34 @@ static_assert(sizeof(HailstoneWorldReceipt) == 48);
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneWorldSubmission) == 56 && offsetof(HailstoneWorldSubmission, vertices) == 40));
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneUiContribution) == 56 && offsetof(HailstoneUiContribution, command) == 48));
 
-#ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
-// This exact binary used two popup slots where the public SDK added nameplates.
-// Its prefix through set_class_name is identical to the canonical ABI 3 table.
+#if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256)
+// Published preview binaries added popup services after two different canonical ABI 3 prefixes.
+// Give only a matched binary its frozen view, with its own table size and no colliding canonical slots.
+template <std::size_t PrefixSize>
 struct LegacyPopupHostApi {
-    alignas(PluginHostApi) std::array<std::byte, offsetof(PluginHostApi, nameplate_register)> prefix;
+    alignas(PluginHostApi) std::array<std::byte, PrefixSize> prefix;
     decltype(PluginHostApi::get_large_dialog) get_large_dialog;
     decltype(PluginHostApi::answer_large_dialog) answer_large_dialog;
+
+    const PluginHostApi* populate(const PluginHostApi& table) {
+        std::memcpy(prefix.data(), &table, prefix.size());
+        const std::uint32_t size = sizeof(*this);
+        std::memcpy(prefix.data() + offsetof(PluginHostApi, size), &size, sizeof(size));
+        get_large_dialog = table.get_large_dialog;
+        answer_large_dialog = table.answer_large_dialog;
+        // Passed across the C ABI, where the plugin reads its own table type.
+        return reinterpret_cast<const PluginHostApi*>(this);
+    }
 };
+using LegacyPopupBeforeNameplates = LegacyPopupHostApi<offsetof(PluginHostApi, nameplate_register)>;
+using LegacyPopupAfterUi = LegacyPopupHostApi<offsetof(PluginHostApi, get_spells_by_name_data_bulk)>;
 static_assert(offsetof(PluginHostApi, set_class_name) == 848 && offsetof(PluginHostApi, nameplate_register) == 856);
-static_assert(offsetof(LegacyPopupHostApi, get_large_dialog) == 856 &&
-              offsetof(LegacyPopupHostApi, answer_large_dialog) == 864 && sizeof(LegacyPopupHostApi) == 872);
+static_assert(offsetof(LegacyPopupBeforeNameplates, get_large_dialog) == 856 &&
+              offsetof(LegacyPopupBeforeNameplates, answer_large_dialog) == 864 &&
+              sizeof(LegacyPopupBeforeNameplates) == 872);
+static_assert(offsetof(PluginHostApi, remove_ui_contribution) == 912);
+static_assert(offsetof(LegacyPopupAfterUi, get_large_dialog) == 920 &&
+              offsetof(LegacyPopupAfterUi, answer_large_dialog) == 928 && sizeof(LegacyPopupAfterUi) == 936);
 #endif
 
 #if defined(_WIN32)
@@ -269,8 +287,8 @@ struct Loaded {
     std::uint32_t caps = 0;
     void* lib = nullptr; // platform::load_library's
     PluginHostApi table{};
-#ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
-    std::optional<LegacyPopupHostApi> legacy_popup_table;
+#if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256)
+    std::variant<std::monostate, LegacyPopupBeforeNameplates, LegacyPopupAfterUi> legacy_popup_table;
 #endif
     Hooks::Owner owner = 0;
     std::vector<std::string> tlos;
@@ -317,6 +335,11 @@ struct Loaded {
     // The packet OnPacket is looking at (resize_packet's target).
     net::AppPacket* current_packet = nullptr;
     int busy = 0;              // inside one of its callbacks
+    // Its own bulk buffer (acquire_bulk_buffer): HS_BULK_BUFFER_SIZE bytes, made at its first acquire, never zeroed,
+    // freed with it. bulk_held_at is the callback depth (busy) it was acquired at, 0 while not held: a release in a
+    // deeper (nested) callback leaves it held, and it goes back when the callback it was acquired in returns (Busy).
+    std::unique_ptr<unsigned char[]> bulk_buffer;
+    int bulk_held_at = 0;
     bool unload_pending = false; // unload asked for while busy: done at the next pulse
     bool host_threw_warned = false; // (host_threw)
     bool map_policy_running = false; // get_map_policy cannot recursively invoke its caller's policy hook
@@ -350,7 +373,10 @@ struct Loaded {
 // Inside a plugin's code: its capabilities, and it stays loaded until this ends.
 struct Busy {
     explicit Busy(Loaded& l) : l_(l), scope_(l.caps, l.name) { ++l_.busy; }
-    ~Busy() { --l_.busy; }
+    ~Busy() {
+        // The callback its bulk buffer was acquired in has returned: the pointer is no longer the plugin's to use.
+        if (--l_.busy < l_.bulk_held_at) l_.bulk_held_at = 0;
+    }
     Busy(const Busy&) = delete;
     Busy& operator=(const Busy&) = delete;
 
@@ -2496,6 +2522,57 @@ int32_t h_get_spells_data_bulk(void* h, const int32_t* ids, int32_t id_count, un
     return static_cast<int32_t>(bufferSize);
 }
 
+/// <summary>
+/// Every spell named `name` in one call (case-insensitive, SpellTable::find_all_by_name, lowest id first), laid out
+/// as h_get_spells_data_bulk lays out spells by id: those ids are handed to it. A name the table lacks, or a null one,
+/// gives the count alone (0).
+/// </summary>
+/// <param name="h">host</param>
+/// <param name="name">the spell's name</param>
+/// <param name="data">buffer to put data in</param>
+/// <param name="datamax">as h_get_spells_data_bulk's, about 1500 bytes per spell of that name</param>
+/// <returns>bytes written; 0 below 4 bytes</returns>
+int32_t h_get_spells_by_name_data_bulk(void* h, const char* name, unsigned char* data, int32_t datamax)
+{
+    // Asked under this call's name, so a plugin without 'read' is told which call it made (readable says so once).
+    const net::GameConnection* c = readable(Loaded::of(h), "get_spells_by_name_data_bulk");
+    std::vector<int32_t> ids;
+    if (c && name)
+        for (std::uint32_t id : c->spell_table().find_all_by_name(name)) ids.push_back(static_cast<int32_t>(id));
+    return h_get_spells_data_bulk(h, ids.data(), static_cast<int32_t>(ids.size()), data, datamax);
+}
+
+static_assert(HS_BULK_BUFFER_SIZE == 2 * 1024 * 1024);
+
+/// <summary>
+/// The plugin's own bulk buffer, HS_BULK_BUFFER_SIZE bytes for the *_data_bulk reads, so it need not allocate its
+/// own: made at its first acquire and kept until it unloads, never zeroed. Each plugin has its own, so no plugin waits
+/// on another. Null outside the plugin's own callbacks, where nothing would end its hold. Held from the first acquire
+/// until release_bulk_buffer at the same callback depth or the end of that callback; asked again meanwhile (from a
+/// nested callback too) it gives the same buffer.
+/// </summary>
+/// <param name="h">host</param>
+/// <param name="size">set to the buffer's size, 0 when there is none (may be null)</param>
+/// <returns>the buffer, or null</returns>
+unsigned char* h_acquire_bulk_buffer(void* h, int32_t* size)
+{
+    Loaded& l = Loaded::of(h);
+    if (size) *size = 0;
+    if (!l.busy) return nullptr;
+    if (!l.bulk_buffer) l.bulk_buffer.reset(new unsigned char[HS_BULK_BUFFER_SIZE]); // left as it comes: not zeroed
+    if (!l.bulk_held_at) l.bulk_held_at = l.busy;
+    if (size) *size = HS_BULK_BUFFER_SIZE;
+    return l.bulk_buffer.get();
+}
+
+// Ends the hold acquire_bulk_buffer began; nothing when not held, or from a callback nested inside the one that
+// acquired it (that one is still using it).
+void h_release_bulk_buffer(void* h)
+{
+    Loaded& l = Loaded::of(h);
+    if (l.bulk_held_at && l.busy <= l.bulk_held_at) l.bulk_held_at = 0;
+}
+
 int32_t h_get_raid_data_bulk(void* h, unsigned char* data, int32_t datamax) {
     const net::GameConnection* c = readable(Loaded::of(h), "get_raid_data_bulk");
     if (!c || !data || datamax < static_cast<int32_t>(sizeof(HS_BulkRaidHeader))) return 0;
@@ -3008,6 +3085,13 @@ template <typename R, typename... A, R (*F)(void*, A...), auto Off> struct MainO
 };
 template <auto F, auto Off> constexpr auto main_only_or = &MainOnlyOr<F, Off>::call;
 
+// acquire_bulk_buffer as the table holds it: *size 0 first, so it says 0 for a call main_only refuses (another thread)
+// too.
+unsigned char* acquire_bulk_buffer_entry(void* h, int32_t* size) {
+    if (size) *size = 0;
+    return main_only<h_acquire_bulk_buffer>(h, size);
+}
+
 template <typename F> F symbol(void* lib, const char* name) {
     return reinterpret_cast<F>(platform::library_symbol(lib, name));
 }
@@ -3213,6 +3297,17 @@ bool NativePlugins::has_plugin(std::string_view name) const {
 std::uint32_t NativePlugins::loaded_caps(std::string_view name) const {
     const Loaded* l = impl_->find(name);
     return l && l->name == name ? l->caps : 0;
+}
+
+std::optional<NativePlugins::BulkBufferState> NativePlugins::bulk_buffer_for_test(std::string_view name) const {
+    const Loaded* l = impl_->find(name);
+    if (!l) return std::nullopt;
+    return BulkBufferState{l->bulk_buffer.get(), l->bulk_held_at != 0};
+}
+
+std::size_t NativePlugins::bulk_buffers_for_test() const {
+    return static_cast<std::size_t>(std::count_if(impl_->loaded.begin(), impl_->loaded.end(),
+                                                  [](const auto& l) { return l->bulk_buffer != nullptr; }));
 }
 
 namespace {
@@ -3454,6 +3549,9 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.get_spells_data_bulk = main_only<h_get_spells_data_bulk>;
     p.table.set_ui_contribution = main_only<h_set_ui_contribution>;
     p.table.remove_ui_contribution = main_only<h_remove_ui_contribution>;
+    p.table.get_spells_by_name_data_bulk = main_only<h_get_spells_by_name_data_bulk>;
+    p.table.acquire_bulk_buffer = acquire_bulk_buffer_entry;
+    p.table.release_bulk_buffer = main_only<h_release_bulk_buffer>;
     p.table.get_large_dialog = main_only<h_get_large_dialog>;
     p.table.answer_large_dialog = main_only<h_answer_large_dialog>;
     Hooks& hooks = *m.env.hooks;
@@ -3527,14 +3625,13 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
 #ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
     static const auto legacy_popup_hash = parse_sha256(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256);
     if (got == 3 && legacy_popup_hash && hash == *legacy_popup_hash) {
-        auto& legacy = p.legacy_popup_table.emplace();
-        std::memcpy(legacy.prefix.data(), &p.table, legacy.prefix.size());
-        const std::uint32_t size = sizeof(legacy);
-        std::memcpy(legacy.prefix.data() + offsetof(PluginHostApi, size), &size, sizeof(size));
-        legacy.get_large_dialog = p.table.get_large_dialog;
-        legacy.answer_large_dialog = p.table.answer_large_dialog;
-        // Passed across the C ABI, where the plugin reads its own table type.
-        host_table = reinterpret_cast<const PluginHostApi*>(&legacy);
+        host_table = p.legacy_popup_table.emplace<LegacyPopupBeforeNameplates>().populate(p.table);
+    }
+#endif
+#ifdef HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256
+    static const auto legacy_popup_ui_hash = parse_sha256(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256);
+    if (got == 3 && legacy_popup_ui_hash && hash == *legacy_popup_ui_hash) {
+        host_table = p.legacy_popup_table.emplace<LegacyPopupAfterUi>().populate(p.table);
     }
 #endif
     if (!guarded(p, "hailstone_plugin_set_host", [&] {

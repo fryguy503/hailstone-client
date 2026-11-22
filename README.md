@@ -102,7 +102,7 @@ The documentation is on the [wiki](https://github.com/projecthailstone/hailstone
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), and [AGENTS.md](AGENTS.md) for AI coding tools. Security issues: [SECURITY.md](SECURITY.md). Changes: [CHANGELOG.md](CHANGELOG.md).
+See the [contributing guide](CONTRIBUTING.md), [repository instructions](AGENTS.md), and [agent handbook](docs/agents/README.md). Report security issues using [SECURITY.md](SECURITY.md). See [CHANGELOG.md](CHANGELOG.md) for changes.
 
 ## License
 

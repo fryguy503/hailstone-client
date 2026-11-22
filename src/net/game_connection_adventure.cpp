@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <format>
+#include <string_view>
 
 #include "core/log.h"
 #include "game/sound_rules.h"
@@ -18,6 +19,12 @@ constexpr std::uint8_t kClassAdventureRecruiter = 60;
 // EQEmu checks none. AdventureMgr_Process @0x41fa80 keeps the window within PlayerClient_IsWithinInteractRange(npc,
 // 0, 20.0); the right click's own check is not traced.
 constexpr float kRecruiterRange = 20.0f;
+constexpr std::int64_t kAdventureReplyTimeoutMs = 8000; // EQEmu's pending action timers
+
+bool adventure_notice_is(std::string_view text, std::string_view notice) {
+    if (text.ends_with('.')) text.remove_suffix(1);
+    return text == notice;
+}
 
 } // namespace
 
@@ -39,6 +46,10 @@ bool GameConnection::open_adventure_recruiter(std::uint32_t npc) {
         return false;
     glm::vec3 at = motion_known_ ? position_ : me->position;
     if (!(glm::distance(at, it->second.position) <= kRecruiterRange)) return false;
+    if (adventure_.recruiter == npc && !adventure_.offer.empty()) {
+        adventure_.window_open = true;
+        return true;
+    }
     if (adventure_.recruiter != npc) adventure_answer(false);
     adventure_.recruiter = npc;
     adventure_.window_open = true;
@@ -67,9 +78,13 @@ void GameConnection::set_adventure_window_open(bool open) {
 
 void GameConnection::close_adventure_recruiter() { set_adventure_window_open(false); }
 
+bool GameConnection::adventure_request_options_ready() const {
+    return !adventure_.data.assigned && adventure_.offer.empty() && adventure_recruiter_available();
+}
+
 bool GameConnection::adventure_request_ready() const {
-    return adventure_recruiter_available() && !adventure_.data.assigned && adventure_.offer.empty() &&
-           session_now_ms() >= adventure_.request_next_ms;
+    return adventure_request_options_ready() &&
+           session_now_ms() >= std::max({adventure_.request_next_ms, adventure_offer_until_ms_, adventure_accept_until_ms_});
 }
 
 void GameConnection::adventure_request(std::uint32_t risk, std::uint32_t type) {
@@ -80,7 +95,10 @@ void GameConnection::adventure_request(std::uint32_t risk, std::uint32_t type) {
         adventure_.npc_text = "You must be in a group or raid to request an adventure."; // this client's line
         return;
     }
-    adventure_.request_next_ms = session_now_ms() + 5000; // EQEmu's pTimerStartAdventureTimer
+    const auto now = session_now_ms();
+    adventure_.request_next_ms = now + 5000; // EQEmu's pTimerStartAdventureTimer
+    adventure_offer_until_ms_ = now + kAdventureReplyTimeoutMs;
+    adventure_requested_recruiter_ = adventure_.recruiter;
     adventure_.npc_text.clear();
     // Send_OP_AdventureRequest @0x4209f0: AdventureMgr_SetState(0), the recruiter kept for the answer.
     recruiter_state_ = 0;
@@ -92,15 +110,43 @@ void GameConnection::adventure_answer(bool accept) {
     if (accept && (adventure_.data.assigned || !adventure_recruiter_available())) return;
     adventure_.offer.clear();
     recruiter_state_ = 0; // Send_OP_LDoNButton (0x41fed0 / 0x41ff80 / 0x41fe10): AdventureMgr_SetState(0)
+    if (accept) adventure_accept_until_ms_ = session_now_ms() + kAdventureReplyTimeoutMs;
     send_zone(encode_ldon_button(accept));
 }
 
+bool GameConnection::adventure_leave_pending() const {
+    return adventure_.data.assigned && state_ == ConnectionState::InZone &&
+           session_now_ms() < adventure_leave_until_ms_;
+}
+
+bool GameConnection::adventure_leave_ready() const {
+    return adventure_.data.assigned && state_ == ConnectionState::InZone && !adventure_leave_pending();
+}
+
 void GameConnection::adventure_leave() {
-    // Stock EQEmu answers a granted leave with nothing for the client (zone/worldserver.cpp
-    // ServerOP_AdventureLeaveReply clears only the zone's copy), so the window shows the adventure until the next
-    // OP_AdventureData, usually on zoning. What RoF2 shows then is not traced; its dispatcher resets the state on an
-    // opcode 0x0dcb that no stock server sends (docs/unknowns.md).
-    if (state_ == ConnectionState::InZone && adventure_.data.assigned) send_zone(make_empty(Op::LeaveAdventure));
+    if (!adventure_leave_ready()) return;
+    adventure_leave_until_ms_ = session_now_ms() + kAdventureReplyTimeoutMs;
+    send_zone(make_empty(Op::LeaveAdventure));
+}
+
+void GameConnection::handle_adventure_leave_denial(const SpecialMessage& m) {
+    constexpr std::uint32_t kRedChat = 13;
+    if (adventure_leave_pending() && m.speak_mode == 0 && m.sayer.empty() && m.type == kRedChat &&
+        adventure_notice_is(m.message, "You cannot leave this adventure at this time")) {
+        adventure_leave_until_ms_ = 0;
+    }
+}
+
+void GameConnection::clear_adventure_assignment() {
+    auto& a = adventure_;
+    if (a.data.assigned) {
+        ++adventure_assignment_revision_;
+        if (a.window_open && adventure_recruiter_available()) set_recruiter_state(1);
+    }
+    a.data = {};
+    a.count = {};
+    a.data_at = 0;
+    adventure_leave_until_ms_ = 0;
 }
 
 void GameConnection::set_adventure_stats_open(bool open) {
@@ -176,13 +222,14 @@ void GameConnection::adventure_frame() {
 
 void GameConnection::reset_adventure_for_zone() {
     auto& a = adventure_;
+    clear_adventure_assignment();
+    ++adventure_assignment_revision_;
+    adventure_requested_recruiter_ = 0;
+    adventure_offer_until_ms_ = adventure_accept_until_ms_ = 0;
     recruiter_state_ = 0;
     a.recruiter = 0;
     a.npc_text.clear();
     a.offer.clear();
-    a.data = {};
-    a.count = {};
-    a.data_at = 0;
     a.request_next_ms = a.stats_next_ms = a.leaderboard_next_ms = a.leaderboard_deadline_ms = 0;
     a.leaderboard_inflight.reset();
     a.leaderboard_failed = false;
@@ -196,19 +243,36 @@ void GameConnection::handle_adventure(Op op, const AppPacket& p) {
     switch (op) {
     case Op::AdventureInfo:
         if (auto v = decode_adventure_text(p)) {
+            // EQEmu uses this notice for both a successful leave and an expired assignment (zone/client.cpp
+            // Client::ClearCurrentAdventure, zone/worldserver.cpp ServerOP_AdventureDataClear). RoF2 matches no
+            // text: AdventureMgr_HandleAdventureInfo @0x420130 enters state 1, the request state, on every
+            // AdventureInfo, which also ends the assignment's states 3 / 4. This client keeps the assignment for
+            // other notices and clears it only on this one.
+            if (adventure_notice_is(*v, "You are not currently assigned to an adventure")) {
+                clear_adventure_assignment();
+                if (a.window_open && adventure_recruiter_available()) a.npc_text = std::move(*v);
+                else ui_message(*v);
+                break;
+            }
             a.npc_text = std::move(*v);
             if (!a.recruiter) ui_message(a.npc_text); // a notice with no window open
             else {
                 // AdventureMgr_HandleAdventureInfo @0x420130: state 1, its range-check clock started, and the window
                 // shown, also when it was closed while the request or introduction was on its way.
                 a.window_open = true;
-                set_recruiter_state(1);
+                if (!a.data.assigned && a.offer.empty()) set_recruiter_state(1);
             }
         }
         break;
     case Op::AdventureDetails:
         if (auto v = decode_adventure_text(p)) {
-            if (a.recruiter && !a.data.assigned) {
+            // The reply does not identify its recruiter. A player who opens another recruiter while waiting
+            // should never see the first recruiter's offer under the second one.
+            const bool same_recruiter = adventure_requested_recruiter_ == 0 ||
+                                        adventure_requested_recruiter_ == a.recruiter;
+            adventure_requested_recruiter_ = 0;
+            adventure_offer_until_ms_ = 0;
+            if (a.recruiter && same_recruiter && !a.data.assigned && !v->empty()) {
                 // AdventureMgr_HandleAdventureDetails @0x4201b0: state 2, its range-check clock started, and the
                 // window shown, also when it was closed while the request was answered (closing it keeps the
                 // recruiter in state 0); the player accepts or declines, and closing it again declines.
@@ -216,35 +280,48 @@ void GameConnection::handle_adventure(Op op, const AppPacket& p) {
                 a.window_open = true;
                 set_recruiter_state(2);
             } else {
-                // No recruiter (the player zoned, or the recruiter's words were dismissed) or already on an
-                // adventure. RoF2 shows this offer too, and its range check (AdventureMgr_Process @0x41fa80) then
-                // hides the window with no recruiter in reach, declining it; this client declines at once.
+                // No recruiter (the player zoned, or the recruiter's words were dismissed), another recruiter
+                // opened since the request, or already on an adventure. RoF2 shows this offer too, and its range
+                // check (AdventureMgr_Process @0x41fa80) then hides the window with no recruiter in reach,
+                // declining it; this client declines at once.
                 send_zone(encode_ldon_button(false));
-                recruiter_state_ = 0;
+                a.offer.clear();
+                if (!a.data.assigned && a.window_open && adventure_recruiter_available()) set_recruiter_state(1);
+                else recruiter_state_ = 0;
             }
         }
         break;
     case Op::AdventureData:
         if (auto v = decode_adventure_data(p)) {
-            if (!v->assigned || v->text != a.data.text) a.count = {};
+            // AdventureMgr_HandleAdventureData @0x420320 enters state 3 (entry timer) or 4 (completion timer)
+            // and leaves the state alone when both timers are zero, as in EQEmu's finished-only snapshot.
+            if (!v->assigned) {
+                clear_adventure_assignment();
+                break;
+            }
+            if (!a.data.assigned || v->text != a.data.text) {
+                ++adventure_assignment_revision_;
+                a.count = {};
+                adventure_leave_until_ms_ = 0;
+            }
             a.data = std::move(*v);
             a.data_at = session_now_ms();
             a.offer.clear();
-            if (a.data.assigned) recruiter_state_ = 0; // AdventureMgr_HandleAdventureData @0x420320: states 3 / 4.
+            adventure_requested_recruiter_ = 0;
+            adventure_offer_until_ms_ = adventure_accept_until_ms_ = 0;
+            recruiter_state_ = 0;
         }
         break;
     case Op::AdventureUpdate:
         // AdventureMgr_HandleAdventureUpdate @0x4204e0 stores the count whatever the state and shows it only in
-        // state 4 (the completion timer); the window's progress label keeps that rule.
-        if (auto v = decode_adventure_count(p)) a.count = *v;
+        // state 4 (the completion timer). This client drops a count with no assignment: EQEmu can send the final
+        // count after the finish, and it must not show under the next adventure. What is shown is the same.
+        if (auto v = decode_adventure_count(p); v && a.data.assigned) a.count = *v;
         break;
     case Op::AdventureFinish:
         if (auto v = decode_adventure_finish(p)) {
             // RoF2's OP_AdventureFinish branch @0x4206eb resets the assignment and hides the request window.
-            // Stock EQEmu does not follow it with an empty OP_AdventureData.
-            a.data = {};
-            a.count = {};
-            a.data_at = 0;
+            clear_adventure_assignment();
             a.offer.clear();
             a.npc_text.clear();
             a.recruiter = 0;

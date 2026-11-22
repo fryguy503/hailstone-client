@@ -72,6 +72,8 @@ const std::array<ClientOptionInfo, kClientOptionCount> kClientOptions = {{
     {O::InvWinLabels, "inv_win_labels", "Defaults", "InvWinLabels", 1, 0, 1, false, ClientOptionInfo::Text::TrueFalse},
     {O::TargetGroupBuff, "target_group_buff", "Defaults", "TargetGroupBuff", kTargetGroupBuffUnset, kTargetGroupBuffUnset,
      0x7fffffff},
+    {O::HideCorpses, "hide_corpses", "Hailstone", "HideCorpses", static_cast<int>(HideCorpseMode::None),
+     static_cast<int>(HideCorpseMode::None), static_cast<int>(HideCorpseMode::Always)},
 }};
 
 const ClientOptionInfo& client_option_info(ClientOption id) { return kClientOptions[static_cast<std::size_t>(id)]; }
@@ -88,6 +90,7 @@ ClientOptions::ClientOptions() {
 
 int ClientOptions::set(ClientOption id, int value) {
     const ClientOptionInfo& o = client_option_info(id);
+    if (id == O::HideCorpses && (value < o.min || value > o.max)) value = o.def;
     return values_[static_cast<std::size_t>(id)] = std::clamp(value, o.min, o.max);
 }
 

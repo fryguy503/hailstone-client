@@ -5,6 +5,7 @@
 #include <chrono>
 #include <fstream>
 #include <thread>
+#include <utility>
 
 #include <imgui.h>
 
@@ -34,6 +35,7 @@ struct Host {
     mq::Registry reg;
     mq::Context ctx;
     std::vector<std::string> printed, sent;
+    std::vector<std::pair<std::string, int>> keys; // /keypress: the command and its mode (0 tap, 1 hold, 2 release)
     std::uint32_t target = 0;
     std::int64_t clock = 0;
     std::unique_ptr<mq::Commands> commands;
@@ -53,6 +55,10 @@ struct Host {
         ce.echo = [this](const std::string& t) { printed.push_back(t); };
         ce.run = [this](const std::string& l) { run(l); };
         ce.set_target = [this](std::uint32_t id) { target = id; };
+        ce.keypress = [this](std::string_view command, int mode) {
+            keys.emplace_back(command, mode);
+            return true;
+        };
         commands = std::make_unique<mq::Commands>(ce);
         mq::ScriptEnv se;
         se.hooks = &hooks;
@@ -994,9 +1000,68 @@ TEST_CASE("MQ commands: /target, ${} for typed lines, /noparse, /squelch") {
     CHECK(h.printed.size() == before);
     h.run("/target nobody_here");
     CHECK(h.printed.back() == "There are no spawns matching: (nobody_here)");
+    // With nothing, or with myself, it targets you, whatever else the line holds (a tab ends the word too).
+    h.run("/target id 12");
+    CHECK(h.target == 12);
     h.run("/target");
-    CHECK(h.target == 12); // unchanged
-    CHECK(h.printed.back().rfind("Usage: /target", 0) == 0);
+    CHECK(h.target == 1);
+    h.run("/target id 12");
+    CHECK(h.target == 12);
+    h.run("/target myself");
+    CHECK(h.target == 1);
+    h.run("/target id 12");
+    CHECK(h.target == 12);
+    h.run("/target myself npc");
+    CHECK(h.target == 1);
+    h.run("/target id 12");
+    CHECK(h.target == 12);
+    h.run("/target myself\tnpc");
+    CHECK(h.target == 1);
+    // MQ takes myself from anywhere in the line, not only first.
+    h.run("/target id 12");
+    CHECK(h.target == 12);
+    h.run("/target npc MySelf");
+    CHECK(h.target == 1);
+    // A tab before myself, or a tab alone, is whitespace too.
+    h.run("/target id 12");
+    CHECK(h.target == 12);
+    h.run("/target \tmyself\t");
+    CHECK(h.target == 1);
+    h.run("/target id 12");
+    CHECK(h.target == 12);
+    h.run("/target \t");
+    CHECK(h.target == 1);
+    // next and prev walk the matches from the current target, nearest first; the end of the list says so.
+    auto& world = net::GameConnectionTestAccess::world(*h.world.conn);
+    world.target_id = 10;
+    h.run("/target npc next");
+    CHECK(h.target == 11);
+    world.target_id = 11;
+    h.run("/target npc next");
+    CHECK(h.target == 11); // unchanged: Fippy is the last match
+    CHECK(h.printed.back() == "There are no spawns matching: (npc next)");
+    world.target_id = 10;
+    h.run("/target npc prev");
+    CHECK(h.target == 11); // unchanged: the rat is the first match
+    CHECK(h.printed.back() == "There are no spawns matching: (npc prev)");
+    // Cycling picks among the search's matches; RoF2's plain-name choice (which would take Groupie itself) is not
+    // what next asks for: with Groupie the only match, next lies past the end of the list.
+    world.target_id = 12;
+    h.run("/target next Groupie");
+    CHECK(h.target == 11); // unchanged
+    CHECK(h.printed.back() == "There are no spawns matching: (next Groupie)");
+}
+
+TEST_CASE("MQ commands: /keypress reads hold only after a space") {
+    Host h;
+    h.run("/keypress forward hold");
+    REQUIRE(h.keys.size() == 1);
+    CHECK(h.keys.back().first == "forward");
+    CHECK(h.keys.back().second == 1);
+    // A tab is no whitespace here: "hold\t" names no mode, so the key is tapped. Only /target takes a tab as one.
+    h.run("/keypress forward hold\t");
+    REQUIRE(h.keys.size() == 2);
+    CHECK(h.keys.back().second == 0);
 }
 
 TEST_CASE("MQ commands: /target prefers an exact player name over a mount") {

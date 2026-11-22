@@ -977,6 +977,54 @@ TEST_CASE("qeynos DOOR1 (door 59 on the NMS server) blocks its doorway closed an
     CHECK(game::blocks(shape, closed, glm::inverse(closed), 1.0f, a, b));
 }
 
+TEST_CASE("soldungb PORTC1 uses its authored collision hull as the gate rises and lowers") {
+    const GameDir* game = test::game_dir();
+    if (!game) return;
+    const auto zone = assets::load_zone(*game, "soldungb");
+    const auto mesh = zone.objects.find("PORTC1_ACTORDEF");
+    REQUIRE(mesh != zone.objects.end());
+    const auto rendered = game::ObjectShape::from_mesh(mesh->second, true);
+    CHECK(rendered.records.empty()); // all of the visible grate's faces are marked passable
+    CHECK_FALSE(rendered.pick_triangles(true).empty());
+
+    const auto hull = zone.object_collision_hulls.find("PORTC1_ACTORDEF");
+    REQUIRE(hull != zone.object_collision_hulls.end());
+    const auto collision = game::ObjectShape::from_hull(hull->second);
+    REQUIRE_FALSE(collision.empty());
+    CHECK(collision.lo.z == doctest::Approx(1.65f).epsilon(0.01));
+    CHECK(collision.hi.z == doctest::Approx(25.87f).epsilon(0.01));
+
+    game::DoorSpawn spawn;
+    spawn.name = "PORTC1";
+    spawn.y = -1172.66f;
+    spawn.x = -823.927f;
+    spawn.z = 74.971f;
+    spawn.type = 0x4c;
+    spawn.param = 0;
+    auto door = game::make_door(spawn, 0);
+    const glm::vec3 outside(-1169.0f, -824.0f, 80.0f), inside(-1184.0f, -824.0f, 80.0f);
+    const auto blocks = [&](const glm::vec3& from, const glm::vec3& to) {
+        const auto transform = game::door_transform(door);
+        auto sweep = game::SphereSweep::make(from, to, 1.0f);
+        return game::sweep_sphere(collision, transform, glm::inverse(transform), door.scale(), sweep);
+    };
+    CHECK(blocks(outside, inside));
+    CHECK(blocks(inside, outside));
+
+    game::change_state(door, game::kSwitchOpening, 0);
+    for (std::uint32_t ms = 50; ms <= 2500; ms += 50) game::process_door(door, 1.0f, ms);
+    CHECK(door.state == game::kSwitchOpen);
+    CHECK(door.z == doctest::Approx(spawn.z + 22.0f));
+    CHECK_FALSE(blocks(outside, inside));
+    CHECK_FALSE(blocks(inside, outside));
+
+    game::change_state(door, game::kSwitchClosing, 2500);
+    for (std::uint32_t ms = 2550; ms <= 7000; ms += 50) game::process_door(door, 1.0f, ms);
+    CHECK(door.state == game::kSwitchClosed);
+    CHECK(door.z == doctest::Approx(spawn.z));
+    CHECK(blocks(outside, inside));
+}
+
 namespace {
 // The floor test (GetPlayerFloorHeight) over a single placed door shape.
 struct LiftFloor final : game::mechanics::FloorQueries {

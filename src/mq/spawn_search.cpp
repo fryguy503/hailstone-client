@@ -397,7 +397,15 @@ SpawnSearch parse_spawn_search(std::string_view text, const game::GuildState* gu
                 break;
             }
         if (is_flag) continue;
-        if (iequals(word, "next") || iequals(word, "prev")) continue; // MQ's /target cycling: not here yet
+        // MQ's /target cycling: a direction for /target, not a filter (the search stays as it is).
+        if (iequals(word, "next")) {
+            s.direction = SpawnSearch::Direction::Next;
+            continue;
+        }
+        if (iequals(word, "prev")) {
+            s.direction = SpawnSearch::Direction::Prev;
+            continue;
+        }
         if (iequals(word, "name")) {
             std::string_view n = a(0);
             if (!n.empty() && n[0] == '=') {
@@ -576,6 +584,50 @@ std::vector<const game::Spawn*> find_spawns(std::string_view text, const net::Ga
     SearchSources src = sources_of(conn);
     src.can_see = std::move(can_see);
     return search_spawns(parse_spawn_search(text, src.guild), conn.world(), src);
+}
+
+const game::Spawn* pick_target(const SpawnSearch& search, const std::vector<const game::Spawn*>& found,
+                               const game::WorldState& world) {
+    if (found.empty()) return nullptr;
+    // Hailstone's rule, for every direction: the local player is left out while another spawn matches.
+    auto take = [&](const game::Spawn* s) { return s->id != world.player_id || found.size() == 1; };
+    const game::Spawn* me = world.player();
+    const auto target = world.target_id ? world.spawns.find(world.target_id) : world.spawns.end();
+    // No target, one the zone no longer has, or a plain search: the nearest match, you left out while another matches.
+    if (search.direction == SpawnSearch::Direction::Nearest || target == world.spawns.end() || !me) {
+        for (const game::Spawn* s : found)
+            if (take(s)) return s;
+        return nullptr;
+    }
+    std::size_t at = found.size();
+    for (std::size_t i = 0; i < found.size(); ++i)
+        if (found[i]->id == world.target_id) at = i;
+    if (at < found.size()) {
+        // Away from the target's place in the list, stepping over the player. Either end has none: no wrapping.
+        if (search.direction == SpawnSearch::Direction::Next) {
+            for (std::size_t i = at + 1; i < found.size(); ++i)
+                if (take(found[i])) return found[i];
+        } else {
+            for (std::size_t i = at; i-- > 0;)
+                if (take(found[i])) return found[i];
+        }
+        return nullptr;
+    }
+    // The target is no match: its distance is where the list would hold it. The matches are nearest first.
+    const float from = distance3d(*me, target->second);
+    const game::Spawn* pick = nullptr;
+    for (const game::Spawn* s : found) {
+        if (!take(s)) continue;
+        const float d = distance3d(*me, *s);
+        if (search.direction == SpawnSearch::Direction::Next) {
+            if (d > from) return s;
+        } else if (d < from) {
+            pick = s; // the last match nearer than the target
+        } else {
+            break; // (nearest first: nothing after this is nearer)
+        }
+    }
+    return pick;
 }
 
 } // namespace hailstone::mq

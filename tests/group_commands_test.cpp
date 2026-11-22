@@ -248,6 +248,111 @@ TEST_CASE("mock server: /dz, /task commands, the task window's shared task page 
     REQUIRE(rig.until([&] { return conn.group_role_sets().find("Raiders") == -1; }));
 }
 
+TEST_CASE("mock server: the group slot key alternates between a member and their current pet") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    group_up(server, "Gennro", {"Member"});
+
+    const auto member = make_spawn("Member", 501, 0, 1, 0, 0, 0);
+    const auto pet = make_spawn("Charmed", 502, 1, 1, 0, 0, 0);
+    auto swarm = make_spawn("Temporary", 503, 1, 1, 0, 0, 0);
+    auto merc = make_spawn("Mercenary", 504, 1, 1, 0, 0, 0);
+    auto dying_pet = make_spawn("FormerPet", 505, 1, 1, 0, 0, 0);
+    swarm.pet_owner_id = merc.pet_owner_id = dying_pet.pet_owner_id = member.spawn_id;
+    swarm.temp_pet = 1;
+    merc.is_mercenary = 1;
+    const auto& spawns = conn.world().spawns;
+    for (const auto& spawn : {member, pet, swarm, merc, dying_pet}) server.add_spawn(spawn);
+    REQUIRE(rig.until([&] { return conn.group().count() == 2 && spawns.contains(dying_pet.spawn_id); }));
+    server.zone.send_reliable(encode(Death{.spawn_id = dying_pet.spawn_id, .corpse_id = dying_pet.spawn_id}));
+    REQUIRE(rig.until([&] { return spawns.at(dying_pet.spawn_id).is_corpse; }));
+    REQUIRE(spawns.at(swarm.spawn_id).temp_pet);
+    REQUIRE(spawns.at(merc.spawn_id).mercenary);
+    REQUIRE(spawns.at(dying_pet.spawn_id).is_npc);
+    REQUIRE(spawns.at(dying_pet.spawn_id).targetable);
+    for (auto id : {swarm.spawn_id, merc.spawn_id, dying_pet.spawn_id})
+        REQUIRE(spawns.at(id).pet_owner_id == member.spawn_id);
+
+    const auto before = sent(server, Op::TargetMouse).size();
+    // These are the same group slot action and target packets used when F2 is bound to PARTY1.
+    const auto press_group_key = [&](std::uint32_t target) {
+        conn.target_group_member(1);
+        CHECK(conn.world().target_id == target);
+    };
+    press_group_key(member.spawn_id);
+    press_group_key(member.spawn_id); // a swarm pet, mercenary and corpse are all ineligible
+
+    const auto charm = [&](bool on) {
+        ByteWriter payload;
+        payload.le(member.spawn_id);
+        payload.le(pet.spawn_id);
+        payload.le<std::uint32_t>(on ? 1u : 0u);
+        server.zone.send_reliable(make_packet(Op::Charm, std::move(payload)));
+        REQUIRE(rig.until([&] {
+            return conn.world().spawns.at(pet.spawn_id).pet_owner_id == (on ? member.spawn_id : 0u);
+        }));
+    };
+    charm(true);
+
+    conn.set_target(0);
+    press_group_key(member.spawn_id);
+    press_group_key(pet.spawn_id);
+    press_group_key(member.spawn_id);
+
+    conn.set_target(0);
+    conn.set_target(member.spawn_id); // another source selected the owner before pressing the group key
+    press_group_key(pet.spawn_id);
+    charm(false);
+    press_group_key(member.spawn_id);
+    press_group_key(member.spawn_id);
+
+    const std::vector<std::uint32_t> expected{member.spawn_id, 0, member.spawn_id, pet.spawn_id, member.spawn_id,
+                                              0, member.spawn_id, pet.spawn_id, member.spawn_id};
+    const auto marks_before = sent(server, Op::RandomReq).size();
+    conn.send_zone_packet(encode_random_request(1, 1)); // reliable barrier after the last target change
+    REQUIRE(rig.until([&] { return sent(server, Op::RandomReq).size() == marks_before + 1; }));
+    const auto targets = sent(server, Op::TargetMouse);
+    REQUIRE(targets.size() == before + expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) CHECK(decode_target(targets[before + i]) == expected[i]);
+}
+
+TEST_CASE("mock server: the self target key alternates between the player and their pet solo and in a group") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    const auto player = conn.world().player_id;
+    REQUIRE(player != 0);
+    REQUIRE_FALSE(conn.group().active);
+
+    auto pet = make_spawn("Companion", 502, 1, 1, 0, 0, 0);
+    pet.is_pet = true;
+    pet.pet_owner_id = player;
+    server.add_spawn(pet);
+    REQUIRE(rig.until([&] { return conn.world().spawns.contains(pet.spawn_id); }));
+
+    const auto cycle_self_key = [&] {
+        conn.set_target(0);
+        conn.target_group_member(0); // F1 / TARGETME
+        CHECK(conn.world().target_id == player);
+        conn.target_group_member(0);
+        CHECK(conn.world().target_id == pet.spawn_id);
+        conn.target_group_member(0);
+        CHECK(conn.world().target_id == player);
+    };
+    cycle_self_key();
+    group_up(server, "Gennro", {"Member"});
+    REQUIRE(rig.until([&] { return conn.group().active; }));
+    cycle_self_key();
+
+    server.remove_spawn(pet.spawn_id);
+    REQUIRE(rig.until([&] { return !conn.world().spawns.contains(pet.spawn_id); }));
+    conn.target_group_member(0);
+    CHECK(conn.world().target_id == player);
+}
+
 TEST_CASE("mock server: group role requests validate the current leader and roster without predicting state") {
     Rig rig;
     auto& conn = rig.conn;

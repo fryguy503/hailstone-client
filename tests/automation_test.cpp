@@ -312,6 +312,36 @@ print('[max] train ' .. tostring(hs.train_aa(10)) .. ' ' .. tostring(hs.train_aa
 }
 
 #ifdef HAILSTONE_EXAMPLE_PLUGIN
+// The client's members go in reverse order, so the connection can be gone before Automation is: a Windows crash
+// (0.7.2) had the "[Plugin] ... unloaded" line from ~Automation go through a freed GameConnection after run() threw.
+TEST_CASE("Automation: destroyed with a plugin loaded, it no longer asks for the connection") {
+    mq_test::World world{"hailstone_automation_teardown_test"};
+    net::GameConnectionTestAccess::set_server_rules(*world.conn, plugin::Rules{});
+    bool owner_gone = false;
+    int late_asks = 0;
+    app::AutomationEnv env;
+    env.data_dir = world.dir / "data";
+    env.install_dir = world.dir / "install";
+    env.connection = [&]() -> net::GameConnection* {
+        if (owner_gone) {
+            ++late_asks;
+            return nullptr;
+        }
+        return world.conn.get();
+    };
+    const fs::path built = HAILSTONE_EXAMPLE_PLUGIN;
+    const fs::path plugin_dir = world.dir / "data" / "plugins" / "MQ2Example";
+    fs::create_directories(plugin_dir);
+    fs::copy_file(built, plugin_dir / built.filename(), fs::copy_options::overwrite_existing);
+    auto automation = std::make_unique<app::Automation>(std::move(env));
+    automation->frame();
+    REQUIRE(automation->plugin_caps("plugin:MQ2Example") == plugin::kCapAll);
+
+    owner_gone = true; // as when ClientApp's conn_ is destroyed before automation_
+    automation.reset();
+    CHECK(late_asks == 0);
+}
+
 // A script add-on that names itself after a compiled plugin (a "read,ui" script called "nms" beside the NMS server's
 // plugin) gets neither the plugin's capabilities in its windows nor its folder, functions, options or menu: each is
 // the owner's by kind and name (plugin::UiBridge::owner_tag).

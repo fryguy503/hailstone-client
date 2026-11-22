@@ -456,6 +456,23 @@ struct UiApi::Impl {
         return it->second;
     }
 
+    void store_visibility() {
+        // A new connection at character select has no in-game window state to save for the last character.
+        if (!host.in_game || !layout.loaded()) return;
+        for (auto& w : windows) {
+            const std::string& name = w->screen();
+            if (name.rfind("Bag", 0) == 0) continue; // shown by its own rules
+            const ui::WindowIniInfo& info = ini_info(name);
+            if (!(info.flags & 0x100)) continue;
+            bool shown = w->shown(host);
+            auto [it, inserted] = last_shown.try_emplace(name, shown);
+            if (!inserted && it->second != shown) {
+                layout.store_shown(info, shown);
+                it->second = shown;
+            }
+        }
+    }
+
     // A window's list as hs.ListInfo, hs.ListRow and hs.WindowList read it: StockWindow::list once a frame per
     // window and list, since most windows build the list again on each call (reading n rows was n builds). What a
     // call returns points into the window, so it stays valid; a list asked for later that comes back in the same
@@ -2923,16 +2940,7 @@ void UiApi::begin_frame() {
     for (auto& [name, place] : m.last_place)
         m.layout.store(m.ini_info(name), place.first, static_cast<int>(ds.x), static_cast<int>(ds.y), place.second);
     m.last_place.clear();
-    for (auto& w : m.windows) {
-        const std::string& name = w->screen();
-        if (name.rfind("Bag", 0) == 0) continue; // shown by its own rules
-        const ui::WindowIniInfo& info = m.ini_info(name);
-        if (!(info.flags & 0x100)) continue;
-        bool shown = w->shown(m.host);
-        auto it = m.last_shown.find(name);
-        if (it != m.last_shown.end() && it->second != shown) m.layout.store_shown(info, shown);
-        m.last_shown[name] = shown;
-    }
+    m.store_visibility();
     m.layout.save_if_due(std::chrono::steady_clock::now());
 }
 
@@ -2949,15 +2957,19 @@ void UiApi::load_layout(const std::filesystem::path& defaults, const std::filesy
         const std::string& name = w->screen();
         if (name.rfind("Bag", 0) == 0) continue;
         const ui::WindowIniInfo& info = m.ini_info(name);
-        if (auto s = m.layout.shown(info)) w->set_shown(m.host, *s);
-        else if (info.flags & 0x100) w->set_shown(m.host, (info.flags & 0x200) != 0); // bInitVisibility
+        if (!(info.flags & 0x100)) continue;
+        w->set_shown(m.host, m.layout.shown(info).value_or((info.flags & 0x200) != 0)); // bInitVisibility
+        m.last_shown.emplace(name, w->shown(m.host));
     }
     for (auto& w : m.windows) w->ini_loaded(m.host, m.layout, file.parent_path());
     chat_layout_loaded(m.layout, m.host, file.parent_path());
     log::info("ui: window places from {} (defaults {})", file.string(), defaults.string());
 }
 
-void UiApi::save_layout() { impl_->layout.save(); }
+void UiApi::save_layout() {
+    impl_->store_visibility();
+    impl_->layout.save();
+}
 
 const std::filesystem::path& UiApi::layout_file() const { return impl_->layout_file; }
 

@@ -761,16 +761,21 @@ option(HAILSTONE_ALLOW_IN_EQ_FOLDER "Allow Hailstone's folder to be a subfolder 
 set_property(SOURCE src/core/asset_folder_choice.cpp APPEND PROPERTY COMPILE_DEFINITIONS
              HAILSTONE_ALLOW_IN_EQ_FOLDER=$<BOOL:${HAILSTONE_ALLOW_IN_EQ_FOLDER}>)
 set(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 "" CACHE STRING
-    "SHA-256 of the Windows x64 preview plugin that expects the legacy popup host table")
-if(NOT HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 STREQUAL "")
-  string(LENGTH "${HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256}" legacy_popup_hash_length)
+    "SHA-256 of the Windows x64 preview plugin with popup slots before nameplate services")
+set(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256 "" CACHE STRING
+    "SHA-256 of the Windows x64 preview plugin with popup slots after UI contribution services")
+foreach(legacy_popup_option IN ITEMS HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256)
+  if("${${legacy_popup_option}}" STREQUAL "")
+    continue()
+  endif()
+  string(LENGTH "${${legacy_popup_option}}" legacy_popup_hash_length)
   if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT legacy_popup_hash_length EQUAL 64 OR
-     NOT HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 MATCHES "^[0-9a-fA-F]+$")
-    message(FATAL_ERROR "HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 requires a 64-digit digest on 64-bit Windows")
+     NOT "${${legacy_popup_option}}" MATCHES "^[0-9a-fA-F]+$")
+    message(FATAL_ERROR "${legacy_popup_option} requires a 64-digit digest on 64-bit Windows")
   endif()
   set_property(SOURCE src/plugin/native_plugins.cpp APPEND PROPERTY COMPILE_DEFINITIONS
-               HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256="${HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256}")
-endif()
+               ${legacy_popup_option}="${${legacy_popup_option}}")
+endforeach()
 set(HAILSTONE_UPDATE_KEY_DEFAULT "")
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub)
   file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub HAILSTONE_UPDATE_KEY_DEFAULT REGEX "^[0-9a-fA-F]+$" LIMIT_COUNT 1)

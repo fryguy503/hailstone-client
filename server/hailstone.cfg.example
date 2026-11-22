@@ -6,6 +6,10 @@
 ;
 ; Capabilities: read, commands, target, actions, move, chat, events, ui, packets, or all.
 
+[client]
+deny = off                ; on returns Hailstone players to login when they try to enter the world.
+                          ; This check trusts that the Hailstone client is up to date and unmodified.
+
 [scripts]
 player = off              ; the player's own Lua scripts: on / off
 ;player_caps = read,ui    ; what they may do when on (default all)

@@ -52,6 +52,12 @@ constexpr std::uint16_t kOpAttackUnlock = 0x4d09;
 // The original client sends its position at most every 280 ms while it can
 // move (CEverQuest::DoMainLoop @0x53e0c1).
 constexpr auto kPositionInterval = std::chrono::milliseconds(280);
+// Enhancement (not in RoF2): the original sends OP_ClientUpdate only while the position is dirty (DoMainLoop
+// @0x53e0c1), so a player who stands still sends nothing. EQEmu's auto idle / AFK (Client::CheckAutoIdleAFK) runs
+// only on an OP_ClientUpdate at an unchanged position, so Hailstone repeats it at the original's own resend interval
+// for a controlled spawn whose position has not changed (1300 ms, @0x53e410). The zone does not relay an unchanged
+// update to other players.
+constexpr auto kStationaryPositionInterval = std::chrono::milliseconds(1300);
 // RequestZoneChangeStatus @0x5203c0 waits up to 180 s for the answer to one OP_ZoneChange (@0x52050e).
 // RequestZoneChangeStatusBlocking @0x52cee0 sends it again 500 ms after a "not ready" answer (-1) while
 // MoveToZone's limit, 7 s from the first request (@0x541806), lasts.
@@ -289,10 +295,12 @@ void GameConnection::update() {
             status_ = "Entering the zone";
             // The first zone-in of the login brings the server's client files first (net/server_files.h): the zone
             // knows the client once it has OP_ZoneEntry, and keeps it connecting while the files come.
-            if (!options_.server_files_dir.empty() && !server_files_) {
+            const bool access_only = options_.server_files_dir.empty();
+            const auto& files_dir = access_only ? options_.server_access_dir : options_.server_files_dir;
+            if (!files_dir.empty() && !server_files_) {
                 server_files_ = std::make_unique<ServerFileSync>(
-                    options_.server_files_dir, [this](AppPacket p) { send_zone(std::move(p)); },
-                    options_.server_files_limits);
+                    files_dir, [this](AppPacket p) { send_zone(std::move(p)); }, options_.server_files_limits,
+                    access_only ? ServerFileSync::Scope::ConfigOnly : ServerFileSync::Scope::All);
                 zone_session_->set_no_hold(true); // the pieces asked and acknowledged without the 150 ms hold
                 server_files_->start(ServerFileSync::Clock::now());
             }
@@ -874,6 +882,9 @@ std::optional<ServerProfile> GameConnection::saved_server() const {
 void GameConnection::enter_world(const std::string& name, bool return_home) {
     if (state_ != ConnectionState::CharacterSelect) return;
     adventure_ = {};
+    ++adventure_assignment_revision_;
+    adventure_requested_recruiter_ = 0;
+    adventure_offer_until_ms_ = adventure_accept_until_ms_ = adventure_leave_until_ms_ = 0;
     reset_shroud_selection();
     monster_mission_catalog_.reset();
     shroud_mode_ = ShroudMode::Normal;
@@ -1053,30 +1064,41 @@ void GameConnection::finish_server_files() {
     if (server_files_->state() == ServerFileSync::State::Failed)
         chat(ChatEvent::Kind::System, "Could not download the server's files: " + server_files_->error());
     server_files_changed_ = server_files_->changed();
-    update_server_rules();
+    if (!update_server_rules()) {
+        fail("This server does not allow Hailstone. Please contact the server owner.");
+        return;
+    }
     if (zone_session_) zone_session_->set_no_hold(false);
     status_ = "Entering the zone";
     maybe_request_client_spawn();
 }
 
-// The server's rules from its files (plugin/policy.h): its hailstone.cfg, or none from a server that sent no list (no
-// Hailstone script, or a login without a server folder). Either way the rules name the server's folder: plugins keep
-// their per-server files under it (server_config_dir) on a server without Hailstone's script too.
-void GameConnection::update_server_rules() {
+// A transient login reads only the access setting. A saved profile uses the full policy and keeps its folder for
+// plugin settings (server_config_dir), including on a server without the Hailstone script.
+bool GameConnection::update_server_rules() {
     plugin::Rules rules;
     rules.dir = options_.server_files_dir;
-    if (server_files_ && server_files_->state() != ServerFileSync::State::NoAnswer) {
+    bool allow_client = true;
+    const bool synced = server_files_ && server_files_->state() == ServerFileSync::State::Done;
+    const bool use_cached = server_files_ && server_files_->state() == ServerFileSync::State::Failed &&
+                            !options_.server_files_dir.empty();
+    if (synced || use_cached) {
         std::vector<plugin::ListedFile> files;
         for (const auto& f : server_files_->installed()) files.push_back({f.path, f.sha256});
         std::vector<std::string> warnings;
-        rules = plugin::server_rules(options_.server_files_dir, files, &warnings);
+        const auto& files_dir = rules.dir.empty() ? options_.server_access_dir : options_.server_files_dir;
+        auto received = plugin::server_rules(files_dir, files, &warnings);
         for (const auto& w : warnings) log::warn("{}: {}", plugin::kServerCfgName, w);
+        // A failed sync can leave an earlier login's rules on disk. Only this login's policy decides access.
+        if (synced) allow_client = !received.deny_client;
+        if (!options_.server_files_dir.empty()) rules = std::move(received);
     }
     log::info("server rules: {}", rules.configured ? std::format("{} ({} scripts and plugins of its own)", plugin::kServerCfgName,
                                                                  rules.server_files.size())
                                                    : std::string("none (no hailstone.cfg): plugins and scripts run freely"));
     server_rules_ = std::move(rules);
     ++server_rules_serial_;
+    return allow_client;
 }
 
 void GameConnection::maybe_request_client_spawn() {
@@ -1193,6 +1215,7 @@ void GameConnection::aggro_lock_toggle() {
 void GameConnection::finish_zone_in() {
     bool entered = state_ != ConnectionState::InZone;
     state_ = ConnectionState::InZone;
+    if (entered) last_position_send_ = options_.session.clock ? options_.session.clock() : Clock::now();
     status_.clear();
     report_state_ = 1; // Cmd_report's 0xddf640, set at each zone-in (the 0x345d step)
     // ProcessGame's zone-in after a death (CEverQuest +0x39580, set by 0x531730): the death tip, once.
@@ -1203,9 +1226,11 @@ void GameConnection::finish_zone_in() {
     // ProcessLocalPCIni sends the lists from the character ini after each zone-in (restore_blocked_buffs, which the
     // app calls once it has given the ini); without one, the lists this session has.
     if (!char_ini_get_) resend_blocked_buffs();
-    // CEverQuest's zone-in (before "Initialization complete."): with /hidecorpses looted on, OP_HideCorpse action 3
-    // again (the second word is a stack value in the original).
-    if (hide_looted_corpses_) send_zone(encode_hide_corpse(kHideCorpseLooted));
+    // The original repeats the looted action at zone-in. Hailstone also reapplies saved server hide modes here
+    // since the next zone starts with no corpse filter.
+    const auto corpse_mode = hide_corpse_mode();
+    if (entered && corpse_mode != game::HideCorpseMode::None && corpse_mode != game::HideCorpseMode::Always)
+        send_hide_corpse_setting();
     // Which plugins and scripts may run here, once the server's files are checked (back from character select they
     // were at the login's first zone-in).
     if (entered && (!server_rules_ || server_rules_->provisional) && (!server_files_ || server_files_->finished()))
@@ -1368,6 +1393,12 @@ void GameConnection::handle_zone(const AppPacket& p) {
         profile_ = decode_player_profile(p);
         if (profile_) drunkenness_ = static_cast<std::int32_t>(std::min(profile_->intoxication, 200u));
         if (profile_) {
+            // PcClient_ApplyPlayerProfileData @0x57a04a: a non-zero rest timer starts the downtime countdown from
+            // now; zero leaves the downtime and the combat flag (+0x31bc) as they were.
+            if (profile_->rest_timer != 0) {
+                rest_downtime_ = profile_->rest_timer;
+                rest_since_ms_ = now_ms();
+            }
             sync_shroud_mode();
             fellowship_.vitality.normal = profile_->fellowship_vitality_normal;
             fellowship_.vitality.aa = profile_->fellowship_vitality_aa;
@@ -2422,8 +2453,9 @@ void GameConnection::send_position(bool force, glm::vec3 position, bool reliable
     if (!zone_session_ || world_.player_id == 0 || pstatus_.dead) return;
     reconcile_eye_control();
     send_eye_position(force);
-    auto now = Clock::now();
-    if (!force && (!motion_dirty_ || now - last_position_send_ < kPositionInterval)) return;
+    const auto now = options_.session.clock ? options_.session.clock() : Clock::now();
+    const auto interval = motion_dirty_ ? kPositionInterval : kStationaryPositionInterval;
+    if (!force && now - last_position_send_ < interval) return;
     // DoMainLoop: the sequence is the position tracker's sample count, then sample 2 is recorded.
     ClientPositionUpdate u;
     u.sequence = position_tracker_.sequence();

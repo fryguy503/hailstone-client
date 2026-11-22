@@ -441,6 +441,20 @@ void use_own_textures(Zone& zone, const PfsArchive& own, Mesh& mesh, std::unorde
         }
 }
 
+void append_collision_hull(const wld::WldFile& w, const wld::MeshDef& mesh, std::vector<glm::vec3>& triangles) {
+    const auto* ref = w.get<wld::PolyhedronRef>(mesh.polyhedron);
+    const auto* hull = ref ? w.get<wld::PolyhedronDef>(ref->definition) : nullptr;
+    if (!hull) return;
+    // As with packed render positions, these coordinates are relative to the mesh's center.
+    const auto valid = [&](const glm::vec3& p) {
+        const glm::vec3 centered = p + mesh.center;
+        return std::isfinite(glm::dot(centered, centered));
+    };
+    if (!std::ranges::all_of(hull->positions, valid)) return;
+    for (const auto& triangle : hull->triangles)
+        for (const auto i : triangle) triangles.push_back(hull->positions[i] + mesh.center);
+}
+
 // Adds every static (mesh-sprite) actor definition of a WLD to the zone and
 // returns the fragment indices of the meshes they use. Skeletal actors' 0x34
 // particle nodes go to `particles`, also for an actor without a mesh. `own` is
@@ -455,7 +469,9 @@ std::unordered_set<const wld::Fragment*> add_actor_defs(Zone& zone, const wld::W
         if (!def || f.name.empty()) continue;
         std::optional<Mesh> mesh;
         const std::string key = upper(f.name);
-        const bool first = !zone.objects.contains(key) && !particles.by_actor.contains(key);
+        const bool new_mesh = !zone.objects.contains(key);
+        const bool first = new_mesh && !particles.by_actor.contains(key);
+        std::vector<glm::vec3> collision_hull;
         // The skeleton's own animation (assets/object_animation.h), with the node each vertex of `mesh` follows.
         std::optional<ObjectAnimation> animation;
         std::vector<std::uint16_t> vertex_node;
@@ -468,6 +484,7 @@ std::unordered_set<const wld::Fragment*> add_actor_defs(Zone& zone, const wld::W
                 if (const auto* md = mesh_frag ? mesh_frag->get<wld::MeshDef>() : nullptr) {
                     used.insert(mesh_frag);
                     built = wld::build_mesh(w, *md, mesh_frag->name);
+                    if (new_mesh && md->polyhedron) append_collision_hull(w, *md, collision_hull);
                 }
             } else if (const auto* sref = sprite ? sprite->get<wld::SkeletonRef>() : nullptr) {
                 if (const auto* sk = w.get<wld::Skeleton>(sref->skeleton)) {
@@ -503,7 +520,8 @@ std::unordered_set<const wld::Fragment*> add_actor_defs(Zone& zone, const wld::W
             if (animation->vertex_node.size() == mesh->vertices.size() && animation->any_moving_vertex())
                 zone.object_animations.try_emplace(key, std::move(*animation));
         }
-        zone.objects.try_emplace(upper(f.name), std::move(*mesh));
+        zone.objects.try_emplace(key, std::move(*mesh));
+        if (!collision_hull.empty()) zone.object_collision_hulls.try_emplace(key, std::move(collision_hull));
     }
     if (failed) log::debug("{}: {} skeletal actors could not be posed", w.label(), failed);
     return used;

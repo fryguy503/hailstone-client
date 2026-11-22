@@ -135,7 +135,7 @@ AppPacket build_player_profile(const ProfileSpec& spec) {
     u8(0); u8(0); u8(0); u8(0);
     u32(65);
     u8(1);                                 // showhelm
-    u32(30);                               // rest timer
+    u32(spec.rest_timer);
     u32(1024); w.zeros(1024);
     zeros32(2);
     u8(0);

@@ -11,9 +11,11 @@
 // every bank item and coin move.
 
 #include <algorithm>
+#include <bit>
 #include <ctime>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <glm/geometric.hpp>
 
 #include "core/atomic_file.h"
@@ -31,6 +33,13 @@ constexpr std::uint8_t kClassBanker = 40;
 constexpr float kInteractRange = 20.0f;
 
 ItemSlot cursor_slot() { return ItemSlot::possessions(kSlotCursor); }
+
+std::uint32_t exact_coin_packet_amount(std::uint32_t amount) {
+    // The server may use float arithmetic even when the denomination stays the same.
+    // Round the first packet down to an exact amount, leaving the low bits for a second packet.
+    const int shift = std::max(0, static_cast<int>(std::bit_width(amount)) - std::numeric_limits<float>::digits);
+    return (amount >> shift) << shift;
+}
 
 } // namespace
 
@@ -148,6 +157,13 @@ void GameConnection::update_bank() {
 
 // ---------------------------------------------------------------- coin
 
+std::optional<std::pair<int, std::uint32_t>> GameConnection::held_coin() const {
+    for (int type = kCoinPlatinum; type >= kCoinCopper; --type) {
+        if (auto amount = cursor_coins_[static_cast<std::size_t>(type)]) return std::pair{type, amount};
+    }
+    return std::nullopt;
+}
+
 std::uint32_t* GameConnection::coin_pile(int location, int type) {
     if (type < 0 || type > 3) return nullptr;
     switch (location) {
@@ -164,7 +180,10 @@ bool GameConnection::move_coin(int from, int to, int from_type, int to_type, std
     // CEverQuest::MoveMoney @0x51ad70 (game::move_money; types here are the wire's, 0 copper
     // .. 3 platinum, the original's coins 3 - type). The packet carries the amount asked, not the converted one
     // (the server converts again, as EQEmu's OPMoveCoin does).
-    if (state_ != ConnectionState::InZone || from_type < 0 || from_type > 3 || to_type < 0 || to_type > 3) return false;
+    if (state_ != ConnectionState::InZone || from_type < 0 || from_type > 3 || to_type < 0 || to_type > 3 ||
+        amount > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) return false;
+    if (to == kCoinTrade && (from != kCoinCursor || from_type != to_type || !trade_ || !trade_->open)) return false;
+    if (from == kCoinTrade) return false;
     // EQEmu keeps only platinum in the shared bank; its other coins have no counter here.
     if ((from == kCoinSharedBank && from_type != 3) || (to == kCoinSharedBank && to_type != 3)) return false;
     game::MoneyState st;
@@ -174,22 +193,31 @@ bool GameConnection::move_coin(int from, int to, int from_type, int to_type, std
             st.coins[static_cast<std::size_t>(location)][static_cast<std::size_t>(coin)] = pile ? static_cast<std::int32_t>(*pile) : 0;
         }
     }
-    st.present[kCoinTrade] = trade_.has_value();
+    st.present[kCoinTrade] = trade_ && trade_->open;
     game::MoneyEnv env;
     env.has_local_pc = profile_.has_value();
     env.bank_window_active = bank_.has_value();
     // CCursorAttachment::RemoveAttachment(3): the cursor must hold no item and no money, and the quantity window
     // must be closed.
-    env.cursor_attachment_free = !inventory_.cursor() && !quantity_ &&
-                                 std::all_of(cursor_coins_.begin(), cursor_coins_.end(), [](std::uint32_t c) { return c == 0; });
+    env.cursor_attachment_free = !inventory_.cursor() && !quantity_ && !held_coin();
     game::MoneyMoveResult r = game::move_money(st, env, from, to, static_cast<std::uint32_t>(3 - from_type),
                                                static_cast<std::uint32_t>(3 - to_type), static_cast<std::int32_t>(amount), 0);
     if (r.value == 0) return false;
-    for (int location = 0; location < 5; ++location) {
-        for (int coin = 0; coin < 4; ++coin) {
-            if (std::uint32_t* pile = coin_pile(location, 3 - coin))
-                *pile = static_cast<std::uint32_t>(st.coins[static_cast<std::size_t>(location)][static_cast<std::size_t>(coin)]);
-        }
+    const auto source = static_cast<std::uint32_t>(st.coins[static_cast<std::size_t>(from)][static_cast<std::size_t>(3 - from_type)]);
+    const auto destination = static_cast<std::uint32_t>(st.coins[static_cast<std::size_t>(to)][static_cast<std::size_t>(3 - to_type)]);
+    const auto partner = to == kCoinTrade ? trade_->partner_id : 0;
+    const auto still_current = [this, partner] {
+        return state_ == ConnectionState::InZone && (!partner || (trade_ && trade_->open && trade_->partner_id == partner));
+    };
+    for (auto remaining = amount; remaining > 0;) {
+        const auto count = from_type == to_type ? exact_coin_packet_amount(remaining) : remaining;
+        auto packet = encode(MoveCoin{from, to, r.wire_from_coin, r.wire_to_coin, static_cast<std::int32_t>(count)});
+        if (!send_zone(packet, true, still_current)) return false;
+        remaining -= count;
+        // Apply each queued move so the cursor still reflects a pickup if a later packet cannot be sent.
+        *coin_pile(from, from_type) = source + remaining;
+        *coin_pile(to, to_type) = destination - remaining;
+        if (to == kCoinTrade) trade_->my_ready = trade_->their_ready = false;
     }
     if (r.played_sound) {
         SoundCue cue;
@@ -197,7 +225,6 @@ bool GameConnection::move_coin(int from, int to, int from_type, int to_type, std
         cue.spell = 0x8a;
         sound_cues_.push_back(cue);
     }
-    if (r.send) send_zone(encode(MoveCoin{from, to, r.wire_from_coin, r.wire_to_coin, static_cast<std::int32_t>(amount)}));
     return true;
 }
 

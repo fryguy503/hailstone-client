@@ -392,9 +392,11 @@ ui.window("Raid", function()
           W.sideAfter(side, k, #actions, listState)
           ry = ry + abh + T.px(10)
         end
-        ui.SetCursorScreenPos(ax,ry)
-        if #extensionRows==0 then E.Before(RW,"member_actions",extensionContext);E.Message() end
-        E.After(RW,"member_actions",extensionContext)
+        if extensionUsed then
+          ui.SetCursorScreenPos(ax,ry)
+          if #extensionRows==0 then E.Before(RW,"member_actions",extensionContext);E.Message() end
+          E.After(RW,"member_actions",extensionContext)
+        end
         ui.EndChild()
       end
     end

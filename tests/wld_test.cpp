@@ -87,6 +87,44 @@ TEST_CASE("WldFile bounds each fragment to its declared size") {
     CHECK_THROWS(wld::WldFile::parse(data));
 }
 
+TEST_CASE("WldFile reads a polyhedron reference and triangulates its scaled faces") {
+    WldBuilder b;
+    auto face = [](std::uint32_t last) {
+        ByteWriter w;
+        w.le(std::uint32_t{1}); // use the stored scale
+        w.le(std::uint32_t{4}); // vertices
+        w.le(std::uint32_t{1}); // faces
+        w.f32(3.0f); // bounding radius
+        w.f32(2.0f);
+        for (const auto& v : {glm::vec3{0, 0, 1}, glm::vec3{0, 1, 1}, glm::vec3{1, 1, 1}, glm::vec3{1, 0, 1}}) {
+            w.f32(v.x);
+            w.f32(v.y);
+            w.f32(v.z);
+        }
+        w.le(std::uint32_t{4}); // a quad
+        for (std::uint32_t index : {0u, 1u, 2u, last}) w.le(index);
+        return w;
+    };
+    const auto invalid = b.add(0x17, b.str("BAD_POLYHDEF"), face(4));
+    const auto valid = b.add(0x17, b.str("GATE_POLYHDEF"), face(3));
+    ByteWriter reference;
+    reference.le(valid);
+    reference.le(std::uint32_t{0});
+    const auto ref = b.add(0x18, 0, reference);
+
+    const auto w = wld::WldFile::parse(b.build());
+    REQUIRE(w.errors().size() == 1);
+    CHECK_FALSE(w.get<wld::PolyhedronDef>(invalid));
+    const auto* poly_ref = w.get<wld::PolyhedronRef>(ref);
+    REQUIRE(poly_ref);
+    const auto* hull = w.get<wld::PolyhedronDef>(poly_ref->definition);
+    REQUIRE(hull);
+    REQUIRE(hull->positions.size() == 4);
+    CHECK(hull->positions[2] == glm::vec3(2, 2, 2));
+    using Triangle = std::array<std::uint32_t, 3>;
+    CHECK(hull->triangles == std::vector<Triangle>{{0, 1, 2}, {0, 2, 3}});
+}
+
 TEST_CASE("WldFile caps its fragment count and a bitmap's name count, whatever bytes back them") {
     // A header asking for more than kMaxFragments, with eight bytes behind each, is refused before anything is
     // reserved.

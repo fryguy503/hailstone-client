@@ -41,6 +41,7 @@ struct CommerceWindowsState {
 struct CommerceWindowsInput {
     const game::Inventory* inventory = nullptr;
     net::Coins coins;
+    bool holding_coin = false;
     const net::MerchantSession* merchant = nullptr;
     const net::TradeSession* trade = nullptr;
     // The give helper's target, set only when the spawn accepts direct hand-ins or trades.
@@ -57,6 +58,7 @@ struct CommerceWindowsActions {
     std::optional<std::pair<net::ItemSlot, std::uint32_t>> sell; // inventory slot, quantity
     bool close_merchant = false;
     bool trade_drop = false;                                     // drop the cursor item into the trade
+    bool trade_drop_coin = false;
     std::optional<std::pair<int, std::uint32_t>> trade_coin;     // coin type, amount
     bool trade_accept = false;
     bool trade_cancel = false;

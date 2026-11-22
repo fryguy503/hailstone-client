@@ -243,27 +243,56 @@ void GameConnection::reveal_target() {
 }
 
 void GameConnection::hidecorpses_command(const std::string& args) {
-    // cmd_hidecorpses @0x4e78c0: no argument prints 13202..13204. Otherwise the hide-looted flag (CDisplay +0x14) is
-    // cleared and the whole argument, case ignored, picks the action: ALL (13205) 1 "13206", ALLBUTGROUP (13207) 2
-    // "13208", LOOTED (13302) 3 "13303" and the flag set, NPC (6358) 5 "6359", anything else 0 "13209"; the
-    // answer in colour 0xf, then OP_HideCorpse {action, 0} (the second word is a stack value the original leaves).
+    // cmd_hidecorpses @0x4e78c0 matches the whole argument without case and prints the answer before sending
+    // OP_HideCorpse. Hailstone keeps the mode for this character and adds a local "always" mode.
+    using Mode = game::HideCorpseMode;
     if (args.empty()) {
         system(13202);
         system(13203);
         system(13204);
+        chat(ChatEvent::Kind::System, "/hidecorpses always also hides your own corpse.");
+        constexpr const char* modes[] = {"none", "all", "allbutgroup", "looted", "npc", "always"};
+        chat(ChatEvent::Kind::System,
+             std::string("Current /hidecorpses mode is ") + modes[static_cast<int>(hide_corpse_mode())] + ".");
         return;
     }
-    hide_looted_corpses_ = false;
-    auto is = [&](std::uint32_t id) { return iequals(args, strings_.format(id, std::vector<std::string>{})); };
-    std::uint32_t action;
-    std::uint32_t answer;
-    if (is(13205)) action = kHideCorpseAll, answer = 13206;
-    else if (is(13207)) action = kHideCorpseAllButGroup, answer = 13208;
-    else if (is(13302)) action = kHideCorpseLooted, answer = 13303;
-    else if (is(6358)) action = kHideCorpseNpc, answer = 6359;
-    else action = kHideCorpseNone, answer = 13209;
-    system(answer, {}, kColorBlockspell);
-    if (action == kHideCorpseLooted) hide_looted_corpses_ = true;
+    auto is = [&](std::string_view word, std::uint32_t id) {
+        return iequals(args, word) || iequals(args, strings_.format(id, {}));
+    };
+    Mode mode = Mode::None;
+    std::uint32_t answer = 13209;
+    if (is("all", 13205)) mode = Mode::All, answer = 13206;
+    else if (is("allbutgroup", 13207)) mode = Mode::AllButGroup, answer = 13208;
+    else if (is("looted", 13302)) mode = Mode::Looted, answer = 13303;
+    else if (is("npc", 6358)) mode = Mode::Npc, answer = 6359;
+    else if (iequals(args, "always")) mode = Mode::Always;
+    if (mode == Mode::Always)
+        chat(ChatEvent::Kind::System, "All corpses are now hidden, including your own.", 0, kColorBlockspell);
+    else
+        system(answer, {}, kColorBlockspell);
+
+    const auto option = game::ClientOption::HideCorpses;
+    if (mode == hide_corpse_mode()) send_hide_corpse_setting();
+    else change_client_option(option, static_cast<int>(mode));
+}
+
+void GameConnection::send_hide_corpse_setting(game::HideCorpseMode previous) {
+    if (state_ != ConnectionState::InZone) return;
+    using Mode = game::HideCorpseMode;
+    const Mode mode = hide_corpse_mode();
+    const bool hid_players = previous == Mode::All || previous == Mode::AllButGroup;
+    // EQEmu ignores Looted and only despawns NPCs for Npc. Clear a broader server filter before either mode.
+    if ((mode == Mode::Npc && hid_players) || (mode == Mode::Looted && (hid_players || previous == Mode::Npc)))
+        send_zone(encode_hide_corpse(kHideCorpseNone));
+    std::uint32_t action = kHideCorpseNone;
+    switch (mode) {
+    case Mode::All: action = kHideCorpseAll; break;
+    case Mode::AllButGroup: action = kHideCorpseAllButGroup; break;
+    case Mode::Looted: action = kHideCorpseLooted; break;
+    case Mode::Npc: action = kHideCorpseNpc; break;
+    case Mode::None:
+    case Mode::Always: break; // "always" hides locally, after clearing the server filter.
+    }
     send_zone(encode_hide_corpse(action));
 }
 
@@ -272,7 +301,7 @@ void GameConnection::hide_looted_corpse() {
     // loot slots) OP_HideCorpse {4, the corpse}; then a corpse that is not the player's own is hidden here
     // (bHideCorpse, PrepForDestroyPlayer). The original's own-corpse test compares two names it reads through
     // 0x59e520 (not decoded): taken here as the corpse's name holding the player's.
-    if (!hide_looted_corpses_ || !loot_) return;
+    if (hide_corpse_mode() != game::HideCorpseMode::Looted || !loot_) return;
     std::uint32_t corpse = loot_->corpse_id;
     if (!loot_->items.empty()) send_zone(encode_hide_corpse(kHideCorpseThis, corpse));
     auto it = world_.spawns.find(corpse);

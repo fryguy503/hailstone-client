@@ -26,6 +26,7 @@ void CommerceUi::draw(net::GameConnection& conn, ui::ItemIconCache* icons) {
     ui::CommerceWindowsInput in;
     in.inventory = &conn.inventory();
     in.coins = conn.coins();
+    in.holding_coin = conn.held_coin().has_value();
     if (const auto& m = conn.merchant()) in.merchant = &*m;
     if (const auto& t = conn.trade()) in.trade = &*t;
     if (const auto& b = conn.bank()) in.bank = &*b;
@@ -44,6 +45,7 @@ void CommerceUi::draw(net::GameConnection& conn, ui::ItemIconCache* icons) {
     if (act.sell) conn.merchant_sell(act.sell->first, act.sell->second);
     if (act.close_merchant) conn.close_merchant();
     if (act.trade_drop) conn.trade_drop_cursor();
+    if (act.trade_drop_coin) conn.trade_drop_cursor_coin();
     if (act.trade_coin) conn.trade_coin(act.trade_coin->first, act.trade_coin->second);
     if (act.trade_accept) conn.trade_accept();
     if (act.trade_cancel) conn.trade_cancel();

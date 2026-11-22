@@ -263,7 +263,12 @@ Automation::Automation(AutomationEnv env) : impl_(std::make_unique<Impl>()) {
     m.plugins = std::make_unique<plugin::NativePlugins>(ne);
 }
 
-Automation::~Automation() { shutdown(); }
+// The owner may have destroyed the connection already (its members go in reverse order): what the plugins and
+// scripts say as they stop goes to the log, not through a dangling GameConnection.
+Automation::~Automation() {
+    impl_->env.connection = nullptr;
+    shutdown();
+}
 
 void Automation::set_addon_ceilings(std::vector<plugin::Ceiling> ceilings) {
     Impl& m = *impl_;

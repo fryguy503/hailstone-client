@@ -332,9 +332,16 @@ local function menu(window, title, opts)
   end
   ui.Separator()
   ui.TextDisabled("Drag an empty spot, or Alt+drag, to move")
-  if opts.resizable then ui.TextDisabled("Drag an edge or the bottom-right corner to resize") end
+  if opts.resizable then
+    if opts.resizeEdge == "left" then ui.TextDisabled("Drag the left edge to resize")
+    elseif opts.resizeEdge == "bottom" then ui.TextDisabled("Drag the bottom edge to resize")
+    else ui.TextDisabled("Drag an edge or the bottom-right corner to resize") end
+  end
   ui.TextDisabled("Alt+right-click always opens this menu")
 end
+
+-- Open from the frame, after ending any popup that offered its window options.
+function hud.OpenFrameMenu() ui.OpenPopup("##hudmenu") end
 
 -- Auto Z's switch and its two ranges (hs.MapAutoZ), for a menu or popup: how far above (+) and below (-) the
 -- player's feet the map's lines and labels stay whole before they fade. Shared by the map and the minimap.
@@ -393,6 +400,42 @@ local function frameEdge(st, id, x0, y0, x1, y1, right, s, minW, minH, snaps, se
   end
 end
 
+-- A tray reflows from one edge. Its grip owns only the frame's padding, including when the panel is hidden.
+local function singleResizeEdge(st, edge, e, s, opts)
+  local x, y, w, h = st.wx, st.wy, st.w, st.h
+  local left = edge == "left"
+  if left then T.Hit("##resizeleft", x, y, x + e, y + h, false)
+  else T.Hit("##resizebottom", x, y + h - e, x + w, y + h, false) end
+  local active, over = ui.IsItemActive(), ui.IsItemHovered()
+  if active or over or ui.IsWindowHovered(ui.HoveredFlags.ChildWindows) then
+    local c, a = T.color.accent, (active or over) and 1 or 0.55
+    local span = math.min(14 * s, (left and h or w) / 3)
+    if left then
+      local gx, gy = x + 2 * s, y + h / 2
+      ui.DrawLine(gx, gy - span, gx, gy + span, c[1], c[2], c[3], a, 2 * s)
+    else
+      local gx, gy = x + w / 2, y + h - 2 * s
+      ui.DrawLine(gx - span, gy, gx + span, gy, c[1], c[2], c[3], a, 2 * s)
+    end
+  end
+  if over and not active then ui.SetTooltip("Drag to resize") end
+  if not active then return end
+  local mx, my = ui.GetMousePos()
+  if not st.resize then
+    st.resize = { x = mx, y = my, w = w, h = h, right = left and st.savedPosition and st.x + w or nil }
+  end
+  if not ui.IsMouseDragging(ui.Mouse.Left) then return end
+  local drag = st.resize
+  local nw, nh = w / s, h / s
+  if left then
+    nw = math.min((drag.right or st.W) / s, math.max(opts.resizable[1], (drag.w + drag.x - mx) / s))
+    st.resizeRight = drag.right
+  else
+    nh = math.min((st.H - st.y) / s, math.max(opts.resizable[2], (drag.h + my - drag.y) / s))
+  end
+  opts.onResize(nw, nh)
+end
+
 -- hud.Window(screen, title, opts, body)
 --   screen: the game window this replaces (hs.ReplaceWindow), or nil for a frame of this UI's own (opts.shown()).
 --   opts.size(s) -> w, h        the frame's size in design pixels (may change with its contents); called only while
@@ -402,6 +445,7 @@ end
 --   opts.fit = true              (with resizable) the layout sizes the frame until the player does (the chat)
 --   opts.panel = false           no panel behind the body (the body draws its own pieces)
 --   opts.menu()                  extra rows for the right-click menu
+--   opts.frameMenu = true        use the frame menu on an unhandled right click, including without Alt
 --   opts.locked() -> true        also lock frame dragging and resizing (the hot bar's layout lock)
 --   opts.inputs = false          the frame never takes the mouse (moved in layout mode only)
 --   opts.hideWhen() -> true      not drawn this frame unless in layout mode (an empty target frame)
@@ -412,6 +456,7 @@ end
 --   opts.onResize(nw, nh)        with resizable: the drag changes the frame's own layout instead of hud.size (the hot
 --                                bars' buttons per row); opts.size must then give the frame its size from that layout.
 --                                Such a drag is not snapped to the grid (the frame rounds the size its own way)
+--   opts.resizeEdge = "left" or "bottom"   with resizable and onResize: one grip in the frame's padding
 --   opts.onClose()               a frame that can be put away (not a HUD piece): an X in its top right corner calls it
 --   opts.rollup = true           the frame rolls up into its title bar (hud.rolled.<window>): rolled up, only the
 --                                title bar is drawn and the frame is as tall as it (opts.titleHeight, design pixels);
@@ -474,6 +519,17 @@ function hud.Window(screen, title, opts, body)
     local sx, sy = settingPair(saved, POS)
     x, y = tonumber(sx), tonumber(sy)
   end
+  local st = frameStates[key]
+  local savedPosition = x ~= nil
+  if st and st.resizeRight then
+    if savedPosition then
+      -- The tray may round its width. Anchor the right edge using the width actually laid out this frame.
+      local anchored = math.max(0, st.resizeRight - w)
+      if anchored ~= x then ui.SetSetting(k.pos, string.format("%.0f,%.0f", anchored, y)) end
+      x = anchored
+    end
+    st.resizeRight = nil
+  end
   if not x then x, y = defaults.Place(hud.Layout(), key, w, h, (io.uiScale or 1) * hudScale) end
   if not x and opts.place then x, y = opts.place(W, H, w, h, s) end
   if not x then x, y = W / 2 - w / 2, H / 2 - h / 2 end
@@ -513,17 +569,21 @@ function hud.Window(screen, title, opts, body)
     ui.PushStyleVar(ui.StyleVar.Alpha, alpha)
     if not ui.IsMouseDown(ui.Mouse.Left) then drags[key] = nil end
     -- this frame, for moveBy and hud.DragItem
-    local st = frameStates[key]
     if not st then
       st = { key = key, keys = k }
       frameStates[key] = st
     end
     st.x, st.y, st.w, st.h, st.W, st.H, st.wx, st.wy = x, y, w, h, W, H, wx, wy
+    st.savedPosition = savedPosition
     st.moving, st.locked = false, locked and not layout
     if not ui.IsMouseDown(ui.Mouse.Left) then st.resize = nil end
+    local resizeEdge = opts.resizable and opts.onResize and not rolled and not io.alt and opts.resizeEdge or nil
+    local edgeSize = resizeEdge and math.max(2, math.floor(5 * s)) or 0
     -- the frame's own drag handle, under its pieces: the empty spots move it
     if not locked or layout then
-      T.Hit("##move", wx, wy, wx + w, wy + h)
+      local left = resizeEdge == "left" and edgeSize or 0
+      local bottom = resizeEdge == "bottom" and edgeSize or 0
+      T.Hit("##move", wx + left, wy, wx + w, wy + h - bottom)
       if ui.IsItemActive() and ui.IsMouseDragging(ui.Mouse.Left) then moveBy(st, io.mouseDX, io.mouseDY) end
     end
     current = st
@@ -551,7 +611,9 @@ function hud.Window(screen, title, opts, body)
         local g = snap.Grid()
         if g then snap.DrawGrid(g, c) end
       end
-      if opts.resizable and not rolled then
+      if resizeEdge then
+        singleResizeEdge(st, resizeEdge, edgeSize, s, opts)
+      elseif opts.resizable and not opts.resizeEdge and not rolled then
         -- the right and bottom edges and the corner grip (shown while the frame is hovered) change its size in design
         -- pixels; the scale is the right-click menu's, or opts.onResize changes the frame's own layout
         local g = math.max(12, 14 * s)
@@ -607,9 +669,9 @@ function hud.Window(screen, title, opts, body)
     -- else this UI's frame menu
     if ((io.alt and not T.AltRightClickTaken()) or not T.RightClickTaken()) and ui.IsMouseClicked(ui.Mouse.Right)
         and ui.IsWindowHovered(ui.HoveredFlags.ChildWindows) then
-      if io.alt or layout or not (screen and API.menus.WindowContext(screen)) then ui.OpenPopup("##hudmenu") end
+      if opts.frameMenu or io.alt or layout or not (screen and API.menus.WindowContext(screen)) then hud.OpenFrameMenu() end
     end
-    if screen and API.menus.TakeWindow(screen) then ui.OpenPopup("##hudmenu") end
+    if screen and API.menus.TakeWindow(screen) then hud.OpenFrameMenu() end
     if ui.BeginPopup("##hudmenu") then
       menu(key, title, opts)
       ui.EndPopup()

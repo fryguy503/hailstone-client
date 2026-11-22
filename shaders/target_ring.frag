@@ -7,8 +7,9 @@
 //
 // Where it lies: each pixel's scene point is rebuilt from the depth copy. A level-ish surface within the height range
 // of the feet takes the ring as a decal, so it follows the ground and anything standing in front hides it (a leg is
-// not level, a wall is not, a character's head is out of range). Elsewhere the ring is a level one at the feet, shown
-// where it is in front of the scene; behind it, only the x-ray share.
+// not level, a wall is not, a character's head is out of range). A level surface with open air just below it (a
+// belly, a back, the top of a paw raised off the ground) is not ground (overhangs). Elsewhere the ring is a level one
+// at the feet, shown where it is in front of the scene; behind it, only the x-ray share.
 
 layout(set = 0, binding = 2) uniform sampler2D scene_depth;
 
@@ -68,6 +69,23 @@ vec2 ring_at(vec2 d) {
     return vec2(core + notch * 0.5 + swept, all);
 }
 
+// Whether a point `drop` below the scene point `p` is in sight: then `p` lies on something with air under it (the
+// target's belly or back, another character), not on the ground, where that point is inside the ground and the
+// ground in front of it hides it. Off the screen it cannot tell, and says no.
+bool overhangs(vec3 p, float drop) {
+    vec3 q = p - vec3(0.0, 0.0, drop);
+    vec4 clip = pc.view_proj * vec4(q, 1.0);
+    if (clip.w <= 1e-4) return false;
+    vec2 ndc = clip.xy / clip.w;
+    vec2 uv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5); // the scene's viewport is flipped
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
+    float sd = textureLod(scene_depth, uv, 0.0).r;
+    float scene_d = sd > 0.0 ? pc.screen.y / (sd + pc.screen.x) : 1e9;
+    float q_d = dot(q - pc.camera_time.xyz, pc.forward.xyz);
+    // The ground in front of a point below it is at least about `drop` nearer along the ray.
+    return q_d < scene_d - 0.4 * drop;
+}
+
 void main() {
     vec3 cam = pc.camera_time.xyz;
     vec3 ray = v_world - cam;
@@ -87,7 +105,10 @@ void main() {
     float range = v_shape.w;
     vec3 at;
     float shown = 1.0;
-    if (has_scene && abs(p.z - v_feet.z) < range && level > 0.5) {
+    // How far below to look for air: under a wolf's belly, not through the ground; a paw's top that close to the
+    // ground still takes the ring.
+    float drop = clamp(0.12 * v_feet.w, 0.3, 1.0);
+    if (has_scene && abs(p.z - v_feet.z) < range && level > 0.5 && !overhangs(p, drop)) {
         at = p; // on the ground
     } else {
         if (abs(ray.z) < 1e-5) discard;

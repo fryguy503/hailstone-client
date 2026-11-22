@@ -6,7 +6,8 @@
 //  - a line a plugin or script runs is checked against its capabilities (plugin/policy.h caller_caps) and refused
 //    with a chat line when the server did not grant them, and checked again as it finally is, after every other line
 //    filter (a plugin's command rewrite) has had it;
-//  - /echo, /target (id, clear, mycorpse, or a spawn search), /face, /keypress, /squelch, /docommand, /noparse;
+//  - /echo, /target (id, clear, mycorpse, myself, or a spawn search; next and prev cycle), /face, /keypress,
+//    /squelch, /docommand, /noparse;
 //  - /nav and /moveto on the client's navigation (mq/nav_commands.h).
 // The rest of MQ's commands come from the script host (/lua) and the plugin manager (/plugin).
 

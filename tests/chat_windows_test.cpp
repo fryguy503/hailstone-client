@@ -191,7 +191,19 @@ TEST_CASE("Chat windows: lines go to the window of their colour's channel (Chann
             CHECK(lua.run("local s = hs.ChatWindows()[3].slot; local _, l = hs.ChatText(s, nil, false, true) "
                           "return (l[1]:gsub('<[^>]*>', '')):sub(1, 10)") ==
                   std::format("[{:02d}:{:02d}:{:02d}]", tm->tm_hour, tm->tm_min, tm->tm_sec));
+            CHECK(lua.run("local s = hs.ChatWindows()[3].slot; local _, l = hs.ChatText(s, nil, false, '24h-minutes') "
+                          "return (l[1]:gsub('<[^>]*>', '')):sub(1, 7)") ==
+                  std::format("[{:02d}:{:02d}]", tm->tm_hour, tm->tm_min));
+            const int hour12 = (tm->tm_hour + 11) % 12 + 1;
+            CHECK(lua.run("local s = hs.ChatWindows()[3].slot; local _, l = hs.ChatText(s, nil, false, '12h-seconds') "
+                          "return (l[1]:gsub('<[^>]*>', '')):sub(1, 13)") ==
+                  std::format("[{:02d}:{:02d}:{:02d} {}]", hour12, tm->tm_min, tm->tm_sec,
+                              tm->tm_hour < 12 ? "AM" : "PM"));
         }
+        for (auto& l : view.lines)
+            if (l.peer == "Bob") l.time = 0; // older chat history can lack a recorded time
+        CHECK(lua.run("local s = hs.ChatWindows()[3].slot; local _, l = hs.ChatText(s, nil, false, '12h-seconds') "
+                      "return (l[1]:gsub('<[^>]*>', ''))") == "Bob tells you, 'hi'");
         CHECK(lua.run("return hs.ChatWindows()[3].title") == "Bob");
         lua.run("local s = hs.ChatWindows()[3].slot; hs.ChatSubmit(s, 'back')");
         CHECK(submitted.back() == "/tell Bob back");
@@ -595,6 +607,20 @@ end
               "true");
         CHECK(lua.run("local v, l, reset = hs.ChatText(2, held[1].version, false, false, true) return tostring(reset)") ==
               "true");
+        CHECK(lua.run(R"(
+local seconds = hs.ChatText(1, nil, false, true)
+assert(seconds == hs.ChatText(1, nil, false, "24h-seconds"))
+local v, lines, reset, count = hs.ChatText(1, seconds, false, "24h-minutes", true)
+assert(v ~= seconds and reset and #lines == 1 and count == 1)
+_G.stampedVersion = v
+return true
+)") == "true");
+        view.add(ui::ChatChannel::Say, "with timestamps");
+        CHECK(lua.run(R"(
+local v, lines, reset, count = hs.ChatText(1, stampedVersion, false, "24h-minutes", true)
+assert(v ~= stampedVersion and not reset and #lines == 1 and count == 2)
+return (lines[1]:gsub("<[^>]*>", "")):match("^%[%d%d:%d%d%] with timestamps$") ~= nil
+)") == "true");
 
         // The buffer emptied (a camp): with no line since, everything again (none); with lines since, those, and
         // the lines gone are dropped by the count.

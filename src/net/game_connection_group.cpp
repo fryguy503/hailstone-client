@@ -9,6 +9,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "core/byte_io.h"
@@ -35,16 +36,41 @@ namespace hailstone::net {
 
 namespace {
 
-bool iequals(const std::string& a, const std::string& b) {
+bool iequals(std::string_view a, std::string_view b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
                return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
            });
 }
 
 // A spawn name without the trailing digits EQEmu appends ("Nmsbot001" → "Nmsbot").
+std::string_view base_name_view(std::string_view name) {
+    while (!name.empty() && std::isdigit(static_cast<unsigned char>(name.back()))) name.remove_suffix(1);
+    return name;
+}
+
 std::string base_name(std::string n) {
-    while (!n.empty() && std::isdigit(static_cast<unsigned char>(n.back()))) n.pop_back();
+    n.resize(base_name_view(n).size());
     return n;
+}
+
+const game::Spawn* group_member_spawn(const game::WorldState& world, const std::string& name) {
+    for (const auto& [id, s] : world.spawns) {
+        if (s.is_corpse || (!iequals(s.name, name) && !iequals(base_name_view(s.name), name) &&
+                            !game::display_name_iequals(s.name, name))) continue;
+        if (game::Spawn::GetSpawnType(&s) != game::eSpawnType::MOUNT) return &s;
+    }
+    return nullptr;
+}
+
+const game::Spawn* group_pet_of(const game::WorldState& world, std::uint32_t owner) {
+    if (owner == 0) return nullptr;
+    for (const auto& [id, s] : world.spawns) {
+        // Mercenaries can also carry MasterID. Use the live, targetable pet linked by that ID. RoF2 reads the owner's
+        // PetID (+0x2b4) instead; which spawns it can name is not traced (docs/unknowns.md "Group pet targeting").
+        if (s.pet_owner_id == owner && id != owner && s.targetable && !s.is_corpse && !s.temp_pet && !s.mercenary &&
+            game::Spawn::GetSpawnType(&s) == game::eSpawnType::PET) return &s;
+    }
+    return nullptr;
 }
 
 // CGroupBase's member list and HandleWorldMessage_Group (game/group_rules.h,
@@ -687,32 +713,37 @@ void GameConnection::group_disband() {
     send_zone(encode_group_generic(Op::GroupDisband, GroupGeneric{me, me}));
 }
 
-void GameConnection::target_group_member(std::int32_t n, bool target_of_target) {
+const game::Spawn* GameConnection::group_member_pet(const game::GroupMember& member) const {
+    const auto* owner = group_member_spawn(world_, member.name);
+    return owner ? group_pet_of(world_, owner->id) : nullptr;
+}
+
+void GameConnection::target_group_member(std::int32_t n, GroupTargetMode mode) {
     if (state_ != ConnectionState::InZone) return;
     // Spawn handles are spawn ids (0 none -> -1).
     game::GroupTargetWorld w;
-    auto spawn_of = [&](const std::string& name) -> int {
-        for (const auto& [id, s] : world_.spawns) {
-            if (s.is_corpse || (!iequals(s.name, name) && !iequals(base_name(s.name), name))) continue;
-            if (game::Spawn::GetSpawnType(&s) != game::eSpawnType::MOUNT) return static_cast<int>(id);
-        }
-        return -1;
-    };
     std::optional<std::size_t> slot;
     int row = 0;
     for (std::size_t k = 0; k < group_.slots.size(); ++k) {
         const auto& member = group_.slots[k];
         if (member.name.empty()) continue;
         if (row++ == n) slot = k;
-        w.members[k] = spawn_of(member.name);
+        const auto* spawn = group_member_spawn(world_, member.name);
+        w.members[k] = spawn ? static_cast<int>(spawn->id) : -1;
     }
     w.selected = group_member_targeted_;
     w.target = world_.target_id ? static_cast<int>(world_.target_id) : -1;
     w.player = world_.player_id ? static_cast<int>(world_.player_id) : -1;
-    w.target_id_of = [](int) { return -1; }; // other spawns' targets are not known to the client
+    w.pet_id_of = [&](int owner) {
+        const auto* pet = group_pet_of(world_, static_cast<std::uint32_t>(owner));
+        return pet ? static_cast<int>(pet->id) : -1;
+    };
     w.spawn_by_id = [&](std::int32_t id) { return world_.spawns.count(static_cast<std::uint32_t>(id)) ? id : -1; };
-    game::target_self_or_pet(w, group_.active, n, target_of_target, w.player);
-    if (w.target < 0 && group_.active && n > 0 && slot && !target_of_target && !group_.slots[*slot].merc) {
+    // ExecuteCmd's self and party cases pick the pet when the current target is its owner.
+    const int member = n == 0 ? w.player : slot ? *w.members[*slot] : -1;
+    const bool target_pet = mode == GroupTargetMode::CyclePet && member != -1 && w.target == member;
+    game::target_self_or_pet(w, group_.active && n != 0, n, target_pet, w.player);
+    if (w.target < 0 && group_.active && n > 0 && slot && !group_.slots[*slot].merc) {
         // Hailstone fallback for a member without a live spawn. The space in the PC corpse suffix distinguishes it
         // from NPC corpses sent with the same wire spawn kind.
         const std::string member_name = group_.slots[*slot].name;
@@ -730,7 +761,7 @@ void GameConnection::target_group_member(std::int32_t n, bool target_of_target) 
         }
     }
     std::uint32_t target = w.target < 0 ? 0 : static_cast<std::uint32_t>(w.target);
-    group_member_targeted_ = w.selected;
+    group_member_targeted_ = w.selected >= 0 && slot ? static_cast<int>(*slot) : w.selected;
     set_target(target); // a new target: the target window then stores its slot index
 }
 

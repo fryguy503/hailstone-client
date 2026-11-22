@@ -1,5 +1,9 @@
 #include <doctest/doctest.h>
 
+#include <array>
+#include <cstddef>
+#include <vector>
+
 #include "app/lua_ui.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
@@ -37,6 +41,10 @@ void open_trade(net::GameConnection& c, bool incoming = false) {
 void check_now(net::GameConnection& c) {
     net::GameConnectionTestAccess::npc_checks(c).trade = 0;
     c.update();
+}
+
+void put_mock_cursor_coins_away(net::GameConnection& c) {
+    for (std::size_t type = 0; type < c.cursor_coins().size(); ++type) c.drop_on_doll();
 }
 } // namespace
 
@@ -116,11 +124,223 @@ TEST_CASE("player trade distance: a request waiting for its answer is not checke
     CHECK_FALSE(c.trade()->open);
 }
 
+TEST_CASE("player trade: cursor coin opens a coin-only offer after acknowledgement") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    put_mock_cursor_coins_away(c);
+    const auto baseline_moves = static_cast<int>(c.cursor_coins().size());
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) == baseline_moves; }));
+    const auto start = rig.server.zone_log.size();
+    const net::Coins original = c.coins();
+    const auto player = c.world().player_id;
+    add_partner(c);
+
+    REQUIRE(c.move_coin(net::kCoinInventory, net::kCoinCursor, net::kCoinGold, net::kCoinGold, 2));
+    c.give_to(kPartner);
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::TradeRequest) == 1; }));
+    REQUIRE(c.trade());
+    CHECK(c.trade()->requested);
+    CHECK_FALSE(c.trade()->open);
+    CHECK(c.cursor_coins()[net::kCoinGold] == 2);
+    CHECK(c.trade()->my_coins[net::kCoinGold] == 0);
+    CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) == baseline_moves + 1);
+
+    rig.server.zone.send_reliable(net::encode_trade_request_ack({player, kPartner}));
+    REQUIRE(rig.until([&] { return c.trade() && c.trade()->open; }));
+    CHECK_FALSE(c.trade()->requested);
+    CHECK(c.cursor_coins()[net::kCoinGold] == 0);
+    CHECK(c.trade()->my_coins[net::kCoinGold] == 2);
+    CHECK(c.coins().gold == original.gold - 2);
+
+    rig.server.zone.send_reliable(net::encode(net::TradeCoins{player, net::kCoinSilver, 0, 0, 1}));
+    rig.server.zone.send_reliable(net::encode(net::TradeAccept{player, 1}));
+    REQUIRE(rig.until([&] { return c.trade() && c.trade()->their_ready; }));
+    CHECK(c.trade()->their_coins[net::kCoinSilver] == 1);
+    c.trade_accept();
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::TradeAcceptClick) == 1; }));
+
+    std::vector<const net::AppPacket*> sent;
+    for (auto i = start; i < rig.server.zone_log.size(); ++i) {
+        const auto& p = rig.server.zone_log[i];
+        if (net::is_op(p, net::Op::MoveCoin) || net::is_op(p, net::Op::TradeRequest) || net::is_op(p, net::Op::TradeAcceptClick))
+            sent.push_back(&p);
+    }
+    const std::array expected{
+        net::encode(net::MoveCoin{net::kCoinInventory, net::kCoinCursor, net::kCoinGold, net::kCoinGold, 2}),
+        net::encode_trade_request({kPartner, player}),
+        net::encode(net::MoveCoin{net::kCoinCursor, net::kCoinTrade, net::kCoinGold, net::kCoinGold, 2}),
+        net::encode(net::TradeAccept{kPartner, 1}),
+    };
+    REQUIRE(sent.size() == expected.size());
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        CAPTURE(i);
+        CHECK(sent[i]->opcode == expected[i].opcode);
+        CHECK(sent[i]->data == expected[i].data);
+    }
+    CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::MoveItem) == 0);
+
+    CHECK(c.coins().silver == original.silver);
+    net::Coins settled = original;
+    settled.gold -= 2;
+    settled.silver += 1;
+    rig.server.zone.send_reliable(net::encode_money_update(settled));
+    rig.server.zone.send_reliable(net::AppPacket{net::to_wire(net::Op::FinishTrade)});
+    REQUIRE(rig.until([&] { return !c.trade(); }));
+    CHECK(c.coins().gold == settled.gold);
+    CHECK(c.coins().silver == settled.silver);
+}
+
+TEST_CASE("player trade: the trade money button offers cursor coin directly and clears acceptance") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    put_mock_cursor_coins_away(c);
+    const auto baseline_moves = static_cast<int>(c.cursor_coins().size());
+    open_trade(c);
+    const net::Coins original = c.coins();
+    REQUIRE(c.move_coin(net::kCoinInventory, net::kCoinCursor, net::kCoinGold, net::kCoinGold, 1));
+    c.give_to(kPartner);
+    REQUIRE(c.trade()->my_coins[net::kCoinGold] == 1);
+    c.trade_accept();
+    rig.server.zone.send_reliable(net::encode(net::TradeAccept{c.world().player_id, 1}));
+    REQUIRE(rig.until([&] { return c.trade() && c.trade()->their_ready; }));
+    REQUIRE(c.trade()->my_ready);
+
+    REQUIRE(c.move_coin(net::kCoinInventory, net::kCoinCursor, net::kCoinGold, net::kCoinGold, 2));
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &c;
+    app::UiApi api(host);
+    REQUIRE(api.click_child("TradeWnd", "TRDW_MyMoney1"));
+    REQUIRE(c.trade());
+    CHECK_FALSE(c.trade()->my_ready);
+    CHECK_FALSE(c.trade()->their_ready);
+    CHECK(c.cursor_coins()[net::kCoinGold] == 0);
+    CHECK(c.trade()->my_coins[net::kCoinGold] == 3);
+    CHECK(c.coins().gold == original.gold - 3);
+
+    // A later reliable packet bounds the coin moves produced by the click.
+    c.trade_cancel();
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::CancelTrade) == 1; }));
+    CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) == baseline_moves + 4);
+    CHECK_FALSE(c.trade());
+    CHECK(c.coins().gold == original.gold - 3);
+    rig.server.zone.send_reliable(net::encode_money_update(original));
+    REQUIRE(rig.until([&] { return c.coins().gold == original.gold; }));
+    CHECK(c.cursor_coins()[net::kCoinGold] == 0);
+}
+
+TEST_CASE("player trade: a large coin offer transfers the exact amount") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    add_partner(c);
+    put_mock_cursor_coins_away(c);
+    const auto baseline_moves = static_cast<int>(c.cursor_coins().size());
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) == baseline_moves; }));
+    const auto start = rig.server.zone_log.size();
+
+    constexpr std::uint32_t amount = 16'777'217;
+    net::Coins original = c.coins();
+    original.gold = amount + 5;
+    rig.server.zone.send_reliable(net::encode_money_update(original));
+    REQUIRE(rig.until([&] { return c.coins().gold == original.gold; }));
+
+    REQUIRE(c.move_coin(net::kCoinInventory, net::kCoinCursor, net::kCoinGold, net::kCoinGold, amount));
+    c.give_to(kPartner);
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::TradeRequest) == 1; }));
+    CHECK(c.cursor_coins()[net::kCoinGold] == amount);
+    CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) == baseline_moves + 2);
+    rig.server.zone.send_reliable(net::encode_trade_request_ack({c.world().player_id, kPartner}));
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) == baseline_moves + 4; }));
+    REQUIRE(c.trade());
+    CHECK(c.trade()->my_coins[net::kCoinGold] == amount);
+    CHECK(c.cursor_coins()[net::kCoinGold] == 0);
+    CHECK(c.coins().gold == 5);
+
+    std::uint32_t pickup = 0, offered = 0;
+    for (auto i = start; i < rig.server.zone_log.size(); ++i) {
+        const auto& packet = rig.server.zone_log[i];
+        if (!net::is_op(packet, net::Op::MoveCoin)) continue;
+        auto move = net::decode_move_coin(packet);
+        REQUIRE(move);
+        CHECK(static_cast<std::int32_t>(static_cast<float>(move->amount)) == move->amount);
+        CHECK(move->type_from == net::kCoinGold);
+        CHECK(move->type_to == net::kCoinGold);
+        if (move->from == net::kCoinInventory && move->to == net::kCoinCursor)
+            pickup += static_cast<std::uint32_t>(move->amount);
+        if (move->from == net::kCoinCursor && move->to == net::kCoinTrade)
+            offered += static_cast<std::uint32_t>(move->amount);
+    }
+    CHECK(pickup == amount);
+    CHECK(offered == amount);
+}
+
+TEST_CASE("player trade: a refused request leaves the coin on the cursor") {
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    add_partner(c);
+    put_mock_cursor_coins_away(c);
+    REQUIRE(c.move_coin(net::kCoinInventory, net::kCoinCursor, net::kCoinGold, net::kCoinGold, 2));
+
+    const auto me = c.world().player_id;
+    c.give_to(kPartner);
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::TradeRequest) == 1; }));
+    rig.server.zone.send_reliable(net::encode(net::TradeBusy{me, kPartner, 'b'}));
+    REQUIRE(rig.until([&] { return !c.trade(); }));
+    CHECK(c.cursor_coins()[net::kCoinGold] == 2);
+    for (const auto& packet : rig.server.zone_log) {
+        if (net::is_op(packet, net::Op::MoveCoin)) {
+            auto move = net::decode_move_coin(packet);
+            REQUIRE(move);
+            CHECK(move->to != net::kCoinTrade);
+        }
+    }
+}
+
+TEST_CASE("player trade: an answer from out of reach offers the coin, then the reach check cancels") {
+    // Handle_OP_TradeRequestAck @0x4c2070 checks only the spawn and IsOkToTransact; CTradeWnd::Activate drops the
+    // cursor money, and CTradeWnd::OnProcessFrame's 500 ms reach check cancels so the server returns it.
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    add_partner(c);
+    put_mock_cursor_coins_away(c);
+    const auto baseline_moves = static_cast<int>(c.cursor_coins().size());
+    REQUIRE(c.move_coin(net::kCoinInventory, net::kCoinCursor, net::kCoinGold, net::kCoinGold, 2));
+
+    const auto me = c.world().player_id;
+    c.give_to(kPartner);
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::TradeRequest) == 1; }));
+    c.world_for_test().spawns[kPartner].position = c.world().player()->position + glm::vec3{0, 0, 27};
+    rig.server.zone.send_reliable(net::encode_trade_request_ack({me, kPartner}));
+    // The reach check may run in the same update that opens the trade, so look at what was sent.
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::CancelTrade) == 1; }));
+    CHECK_FALSE(c.trade());
+    CHECK(c.cursor_coins()[net::kCoinGold] == 0);
+    CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) == baseline_moves + 2);
+    bool offered = false;
+    for (const auto& packet : rig.server.zone_log) {
+        if (net::is_op(packet, net::Op::CancelTrade)) {
+            CHECK(offered);
+            break;
+        }
+        if (!net::is_op(packet, net::Op::MoveCoin)) continue;
+        auto move = net::decode_move_coin(packet);
+        REQUIRE(move);
+        if (move->from == net::kCoinCursor && move->to == net::kCoinTrade && move->amount == 2) offered = true;
+    }
+    CHECK(offered);
+}
+
 TEST_CASE("player trade distance: separation cancels once and items and coin return through the server") {
     test::Rig rig;
     REQUIRE(rig.to_zone());
     auto& c = rig.conn;
-    c.destroy_cursor(); // the mock character starts with cursor coin
+    put_mock_cursor_coins_away(c);
+    const auto baseline_moves = static_cast<int>(c.cursor_coins().size());
     open_trade(c);
     const net::Coins original = c.coins();
     REQUIRE(original.gold >= 2);
@@ -143,7 +363,7 @@ TEST_CASE("player trade distance: separation cancels once and items and coin ret
     REQUIRE(c.trade()->my_ready);
     REQUIRE(rig.until([&] {
         return test::MockEqServer::count(rig.server.zone_log, net::Op::MoveItem) >= 1 &&
-               test::MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) >= 2 &&
+               test::MockEqServer::count(rig.server.zone_log, net::Op::MoveCoin) == baseline_moves + 2 &&
                test::MockEqServer::count(rig.server.zone_log, net::Op::TradeAcceptClick) == 1;
     }));
 
@@ -210,4 +430,33 @@ TEST_CASE("trade windows: hiding the window not showing the trade leaves it open
     CHECK(c.trade()); // the hand-in stays
     api.show("GiveWnd", false);
     CHECK_FALSE(c.trade()); // its own window hidden: cancelled (OP_CancelTrade, the server returns the items)
+}
+
+TEST_CASE("player trade: another player's request is refused as busy while our own waits for its answer") {
+    // A deliberate difference from IsOkToTransact (see Op::TradeRequest in game_connection_commerce.cpp).
+    test::Rig rig;
+    REQUIRE(rig.to_zone());
+    auto& c = rig.conn;
+    add_partner(c);
+    constexpr std::uint32_t kOther = 4101;
+    game::Spawn other = c.world().spawns.at(kPartner);
+    other.id = kOther;
+    other.name = "Other";
+    c.world_for_test().spawns[kOther] = other;
+    c.set_auto_attack(false);
+    c.give_to(kPartner);
+    REQUIRE(c.trade());
+    REQUIRE(c.trade()->requested);
+
+    c.receive_zone_packet_for_test(net::encode_trade_request({c.world().player_id, kOther}));
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::TradeBusy) == 1; }));
+    REQUIRE(c.trade());
+    CHECK(c.trade()->requested);
+    CHECK(c.trade()->partner_id == kPartner);
+    CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::TradeRequestAck) == 0);
+
+    c.receive_zone_packet_for_test(net::encode_trade_request_ack({c.world().player_id, kPartner}));
+    REQUIRE(c.trade());
+    CHECK(c.trade()->open);
+    CHECK(c.trade()->partner_id == kPartner);
 }

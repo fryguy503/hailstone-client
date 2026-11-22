@@ -33,9 +33,9 @@ AppPacket encode_adventure_request(std::uint32_t risk, std::uint32_t npc, std::u
 // OP_LDoNButton (C→Z, 1 byte): accept (1) or decline (0) the adventure offered.
 AppPacket encode_ldon_button(bool accept);
 
-// OP_AdventureData (Z→C, 2084 bytes): u32 (0 when the character has no adventure: EQEmu then sends the struct
-// zeroed), char[2048] text, u32 seconds to enter (0 once inside), u32 seconds left, u32 risk, f32 x, y, z (the zone
-// in, when it is this zone), u32 show the compass, u32.
+// OP_AdventureData (Z→C, 2084 bytes): u32 reserved, char[2048] text, u32 seconds to enter, u32 seconds left,
+// u32 risk, f32 x, y, z (the entrance, when it is in this zone), u32 show the compass, u32 reserved.
+// Finished-only snapshots retain the reserved words and have no briefing or timer.
 struct AdventureData {
     bool assigned = false;
     std::string text;

@@ -353,7 +353,7 @@ TEST_CASE("mock server: the trade partner leaving cancels and closes the trade (
     conn.give_to(pc.id);
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::TradeRequest) == 1; }));
     rig.server.zone.send_reliable(encode_trade_request_ack({w.player_id, pc.id}));
-    REQUIRE(rig.until([&] { return conn.trade().has_value(); }));
+    REQUIRE(rig.until([&] { return conn.trade() && conn.trade()->open; }));
     // Someone else leaving changes nothing.
     rig.server.add_spawn(make_spawn("Other", 51, 0, 1, 12.0f, 12.0f, 3.0f, 0.0f));
     REQUIRE(rig.until([&] { return conn.world().spawns.count(51) == 1; }));
@@ -388,7 +388,7 @@ TEST_CASE("mock server: the partner's coin in a trade is held at the maximum rat
     conn.give_to(pc.id);
     REQUIRE(rig.until([&] { return MockEqServer::count(rig.server.zone_log, Op::TradeRequest) == 1; }));
     rig.server.zone.send_reliable(encode_trade_request_ack({w.player_id, pc.id}));
-    REQUIRE(rig.until([&] { return conn.trade().has_value(); }));
+    REQUIRE(rig.until([&] { return conn.trade() && conn.trade()->open; }));
     TradeCoins coins;
     coins.trader = w.player_id;
     coins.type = 3;

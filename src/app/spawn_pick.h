@@ -28,7 +28,7 @@ struct SpawnPickSource {
 // out (a posed model the segment misses by far, or one not posed). A spawn with a drawn model is its posed
 // triangles; any other (a placeholder box, the player in first person, one past the actor clip) is the sphere
 // (volume type 2), and so is a body-less skeleton, as it was before it had a model, whatever it holds.
-// `excluded_view` (the player under PickCallInput's exclude_view) sets `exclude` to the actor's index.
+// `excluded_view` sets `exclude` to the view actor's index.
 bool add_world_click_spawn(std::vector<game::PickActor>& actors, int& exclude, game::PickActor actor,
                            const SpawnPickSource& source, const game::PickSegment& seg, bool excluded_view);
 

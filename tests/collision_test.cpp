@@ -10,6 +10,7 @@
 #include "assets/character.h"
 #include "assets/zone.h"
 #include "game/collision.h"
+#include "game/object_collision.h"
 #include "game/world_state.h"
 #include "game_files.h"
 
@@ -100,6 +101,28 @@ TEST_CASE("line_of_sight is blocked by solid geometry") {
     auto mesh = CollisionMesh::build(flat_zone());
     CHECK(mesh.line_of_sight({10, 10, 5}, {90, 90, 5}));    // above the floor, beside the ledge
     CHECK_FALSE(mesh.line_of_sight({50, 50, 20}, {50, 50, -5})); // through the ledge and the floor
+}
+
+TEST_CASE("an authored object hull moves with the actor and has no visual surface") {
+    using namespace hailstone::game;
+    const glm::vec3 triangles[] = {{0, -2, -2}, {0, -2, 2}, {0, 2, 2},
+                                  {0, -2, -2}, {0, 2, 2}, {0, 2, -2}};
+    const auto shape = ObjectShape::from_hull(triangles);
+    REQUIRE(shape.records.size() == 2);
+    CHECK(shape.visual.empty());
+    const glm::vec3 from{4, 0, 0}, to{-4, 0, 0};
+    const glm::mat4 closed(1.0f);
+    auto sweep = SphereSweep::make(from, to, 0.5f);
+    CHECK(sweep_sphere(shape, closed, closed, 1.0f, sweep));
+    CHECK(sweep.t < 0.5f);
+    CHECK(blocks(shape, closed, closed, 1.0f, from, to));
+
+    auto lifted = closed;
+    lifted[3].z = 8.0f;
+    const auto inverse = glm::inverse(lifted);
+    sweep = SphereSweep::make(from, to, 0.5f);
+    CHECK_FALSE(sweep_sphere(shape, lifted, inverse, 1.0f, sweep));
+    CHECK_FALSE(blocks(shape, lifted, inverse, 1.0f, from, to));
 }
 
 TEST_CASE("line_of_sight and the probes: huge or non-finite coordinates return at once") {

@@ -87,6 +87,7 @@ Protocol and format knowledge from open-source projects and public documentation
 
 AI-assisted changes are welcome under the same rules; the person submitting them is responsible for them.
 
+- Start with the [agent handbook](docs/agents/README.md). It links source entry points to the checks and evidence a reviewer can use, regardless of which tool produced the change.
 - Read the diff yourself. Do not send code you cannot explain.
 - Do not let a tool invent behaviour. If it cannot say where a rule comes from, the rule belongs in `docs/unknowns.md`, not in the code as fact.
 - Check that the tool did not paste in proprietary code or data, or add a dependency, secret or generated file you did not expect.

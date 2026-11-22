@@ -556,6 +556,9 @@ target-type-needs-target, language garbling, profanity filter, partial name look
   type 6) and SPA 324 (no mana check).
 - OP_RestState's combat flag and downtime answer can-cast-in-combat / out-of-combat (9190..9194) and
   `IsRestingForFastRegen` (6460/6461), which also feeds the sheet's `fast_regen_resting`.
+  On login and zoning, a non-zero rest timer in OP_PlayerProfile (the seconds EQEmu saved at camp or zone-out)
+  starts the countdown from now (PcClient_ApplyPlayerProfileData @0x57a04a); zero, and the combat flag, are left
+  as they were. OP_RestState packets update both during play.
 - Casting runs MakeMeVisible(0xb0, 1) unless the spell is a sneak attack or CastNotStanding; a sitting caster stands
   (ChangePosition 100).
 - Line of sight uses the app's collision (eqstr 108).
@@ -782,6 +785,17 @@ player. Auto-inventory equips only what passes it.
 
 `clicked_money_button`: cursor coin goes into the inventory as the button's coin; else a known amount comes onto the
 cursor, or the quantity dialog opens with all of that coin.
+
+To start a coin-only trade, pick up coin and click the other player. The coin stays on the cursor while the
+request is pending. Once the server acknowledges the trade, the held coin moves directly into the offer.
+Clicking a money button in an open trade also offers the held coin. Adding coin clears both players' acceptance,
+and the server sends the final balances on completion or cancellation. An answer from a partner out of reach still
+opens the trade and offers the coin; the 500 ms reach check then cancels it (Handle_OP_TradeRequestAck @0x4c2070
+checks only the spawn and IsOkToTransact). A deliberate difference: while its own request waits for an answer, the
+client refuses another player's request as busy, since on EQEmu the late answer would start a second trade with us.
+A deliberate difference from the original, which sends one OP_MoveCoin per move: a same-denomination move of more
+than 2^24 coins goes as two packets, the first rounded down to 24 significant bits. EQEmu's OPMoveCoin scales the
+amount through a float even when the coin type stays the same, so one packet could move a slightly different amount.
 
 On the merchant's Parcels page (0x698290, `GameConnection::parcel_coin_button`) the button is first outlined (+0x259,
 0x6909a0) and the merchant's item and row are cleared (0x6f2120); any later SelectSlot clears the outline. The
@@ -1242,8 +1256,10 @@ object never gets them. Every pick is logged ("pick (left click) ...").
 #### Left clicks and switches
 
 `CEverQuest::ClickedSwitch` (0x51ecb0) passes the picked point to `EQSwitch::UseSwitch` (0x511d70).
-A click reaches up to the player's height plus 20 units in 3D from the player to that point. Activations without a
-pick point measure to the switch origin and add the model's radius to the reach.
+A click reaches up to the player's height plus 20 units in 3D from the player to that point. With Eye of Zomm active,
+`UseSwitch` uses the controlled Eye's position and height and sends its spawn ID in `OP_ClickDoor`. EQEmu can apply
+its own reach checks for scripted clicks. Activations without a pick point measure to the switch origin and add the
+model's radius to the reach. First-person picking excludes the active view actor, including the Eye.
 
 A left click in the world with a lockpick or key (item types 12, 0x21, 0x27) on the cursor goes to ClickedSwitch
 (`CEverQuest::LMouseUp` @0x5384d0), whatever is under it and whether or not the switch accepts it; the item stays on
@@ -1411,6 +1427,8 @@ Tests: `tests/hover_respawn_test.cpp`, `tests/player_placement_test.cpp`; protoc
 
 - A second /camp or a position change (Stand, the sit key, moving forward while sitting) cancels it (12290). Any
   other stand prints 12683.
+- Item, say, and achievement links in chat can be clicked during the countdown without interrupting it. New
+  inspection requests stop when the client sends OP_Logout.
 - At the end the position history goes (when not riding), then OP_Logout.
 - A zone change ends a camp silently. Checked: EnterZone -> ResetClientStateForZone(1) @0x5319f0 clears 0xddf8a0 and
   0xdd2664.
@@ -1704,10 +1722,16 @@ behaviour (`LockedActiveWindow=-1`, kept). The original has no locked window unt
 
 ## Group targeting
 
-Clicking a member's name in the Modern or Gamepad Group window or pressing F2–F6 targets their living spawn. If the
-client has no living spawn for that member, Hailstone falls back to the nearest player corpse with that member's
-name in the current zone. Mounts and NPC corpses are skipped. A member who has already returned to the zone is
-targeted even if their corpse is still there.
+F1 targets yourself and F2–F6 target the corresponding group member. When that player is already targeted, the
+same key targets their pet, if one is available. The next press returns to the owner. This follows RoF2's
+ExecuteCmd self and party cases (0x4d8000 and 0x4d80c0). Hailstone resolves the pet from its current owner ID,
+which also tracks charm changes. Temporary pets, mercenaries, mounts and corpses are skipped (RoF2 reads the
+owner's PetID instead; docs/unknowns.md "Group pet targeting").
+
+Clicking a member's name in the Modern or Gamepad Group window selects the member. Click the green pet bar in
+Modern to select the pet directly. If the client has no living spawn for the member, the member click and group
+key fall back to the nearest player corpse with that member's name in the current zone. A member who has already
+returned to the zone is targeted even if their corpse is still there.
 
 ## Group roles
 
@@ -1990,16 +2014,31 @@ With it, a replaced hot button also drops the old one's cool-down.
 
 #### Viewer visibility
 
-Actor drawing, nameplates, picking and target cycling share viewer visibility (`game::spawn_invisible`,
-PlayerZoneClient::IsInvisible @0x5a1850).
+Actor drawing, nameplates, picking and target cycling share viewer visibility (`GameConnection::spawn_invisible` and
+`game::spawn_invisible`, which follows PlayerZoneClient::IsInvisible @0x5a1850).
 
 - Invisibility ranks and SpawnAppearance type 3 are compared with the viewer's SPA 13 total, built from the sheet only
   while some spawn is hidden at a rank.
 - Group members are exempt. A GM target stays hidden from a non-GM viewer whose rank reaches it.
 - The player's own model is hidden only for a GM with hide mode 3001.
-- Corpses and zero-HP targets are never hidden; remote HP comes from the server's percentage.
+- Invisibility effects leave corpses and zero-HP targets visible. Remote HP comes from the server's percentage.
+- The local `/hidecorpses always` option hides every corpse, including the player's own and corpses that arrive after
+  the option is selected.
 - Any other spawn with property 100 (PlayerBase::HasProperty(0x64)) is always hidden.
 - Visibility is independent of material opacity.
+
+#### /hidecorpses
+
+cmd_hidecorpses @0x4e78c0 matches the whole argument, prints its answer in colour 0xf and sends OP_HideCorpse
+{action, 0}: all 1, allbutgroup 2, looted 3, npc 5, anything else 0. The original keeps the mode for the session only
+and repeats only the looted action at zone-in. Hailstone extensions, beyond RoF2:
+
+- The mode is saved per character (`options.ini` `[Hailstone] HideCorpses`) and every server mode is sent again at
+  each zone-in, since EQEmu forgets it when the player zones.
+- `always` is local: it clears the server's filter (action 0) and hides every corpse, the player's own too.
+- Changing to npc or looted after a broader mode sends action 0 first. EQEmu ignores looted and, for npc, does not
+  send back the player corpses the broader mode hid (EntityList::HideCorpses).
+- With no argument, two lines follow the original's usage lines: what `always` does and the current mode.
 
 #### Actor property sets
 
@@ -2019,22 +2058,31 @@ set is eqstr 2455. Without the file or the string, it names the raw ID.
 
 #### AFK
 
-The client has no idle timer.
+The zone owns the idle and AFK timers.
 
 - The AFK flag changes only with /afk (13199 / 13200, `;afk on|off silent` to the chat server, OP_SpawnAppearance {me,
   0x18, flag}) and OP_SpawnAppearance type 0x18 for our own spawn, so the zone's auto AFK sets it and /afk toggles it.
 - While set, a tell gets the away reply (1418 and the /afk message, or 1419).
 
 "You are now AFK." / "You are no longer AFK." come from EQEmu's zone (`Client::CheckAutoIdleAFK`,
-Character:EnableAutoAFK, SecondsBeforeAFK{Combat,NonCombat}Zone 1800 / 600 s, SecondsBeforeIdle* 1700 / 640 s). An
+Character:EnableAutoAFK, off by default; SecondsBeforeAFK{Combat,NonCombat}Zone 1800 / 600 s and
+SecondsBeforeIdle{Combat,NonCombat}Zone 600 / 60 s are the rule defaults in ruletypes.h, which a server's database may
+change). An
 OP_ClientUpdate at the last position more than the AFK time after `ResetAFKTimer` sets AFK. Only OP_CastSpell,
 OP_ChannelMessage, OP_MoveItem, auto attack and OP_SpawnAppearance AFK reset that timer, not walking, so a player who
 only runs and clicks goes AFK at his next stop (seen live).
 
+Enhancement (always on): while the position is unchanged, Hailstone sends OP_ClientUpdate every 1.3 s, so the zone
+can check its idle and AFK timers on a player who stands still. The original sends it only while the position is
+dirty (DoMainLoop @0x53e0c1); 1.3 s is its resend interval for an unchanged controlled spawn (@0x53e410). Stock EQEmu
+does not relay an update that changed nothing (Handle_OP_ClientUpdate's `positionUpdated`), and with
+Character:EnableAutoAFK off (its default) the update does nothing. The zone applies any server-side AFK effects, such
+as disabling personal tribute when the player has opted in.
+
 Enhancement (`game::AfkKeepalive`, always on): while the user gives input (`InputState::user_activity`: keys, mouse,
 pad, touch, held or moved), the client sends OP_SpawnAppearance {me, 24, 0} at once, then at most once a minute. The
-zone takes it as the AFK toggle off (ResetAFKTimer); input after a zone-set AFK clears it with 13200. An /afk stays
-until /afk. Without input nothing is sent.
+zone takes it as the AFK toggle off (ResetAFKTimer). Input after a zone-set AFK clears it with 13200. An /afk stays
+until /afk. Without input there is no AFK keepalive.
 
 #### The NPC target keys
 
@@ -2170,6 +2218,10 @@ Tests: `tests/passage_of_time_test.cpp`, `tests/ability_commands_test.cpp`.
 SPA 67 acquires an Eye summon named from the first 24 bytes of the player's name. Its view and control are separate
 from the body, which keeps gravity, air and environment damage; the Eye sends its own spawn ID's movement. Fade,
 despawn, death and zoning restore control. Once held, control stays while that spawn lives.
+
+Mouse look and the gamepad's right stick use the Eye's posture for turning, so you can steer a standing or
+crouching Eye while your character sits. Stun still blocks turning. This follows `CEverQuest::ProcessControls`
+(0x52bbd0), which tests the posture of `pinstControlledPlayer` and the owner's CharacterBase status (+0xfc).
 
 Deliberate safety differences:
 
@@ -2712,15 +2764,30 @@ Closing the window runs RoF2's `Send_OP_LDoNButton_0041fe10`:
 Closing the status window keeps the mission; leaving uses a separate confirmed control. The server picks the mission
 and decides eligibility, acceptance and departure.
 
+- Kind and Risk stay editable at a nearby recruiter during the request cooldown. The risk of an assigned adventure
+  is shown separately from the selection for the next request.
+- Request and Accept wait up to eight seconds for an offer or assignment before another request can be sent.
+  An offer that arrives after switching recruiters is declined.
+
 #### Adventure status
 
 - AdventureData selects the entry timer when nonzero, otherwise the completion timer.
 - Displays round remaining seconds up to whole minutes and clamp at zero (`0x618a00`, `0x618ae0`).
-- Progress counts are kept whenever they come and shown only during completion (`0x4204e0`).
+- Progress counts are kept while assigned and shown during the completion timer. RoF2 keeps a count in any state
+  (`0x4204e0`); this client drops one with no assignment, so a late count after completion cannot carry over to the
+  next adventure. What is shown is the same.
+- AdventureData with both timers zero leaves RoF2's state alone (`0x420320` enters state 3 or 4 from the timers);
+  this client treats it as no assignment, which is how EQEmu's finished-only snapshot looks.
 - The risk selector shows AdventureData's risk: nonzero is high. Stock EQEmu sends 0 normal / 1 high, not the
   request's 1 / 2, which RoF2's `0x618790` assumes.
 - The compass uses the server's zone-local XYZ/flag.
-- AdventureFinish clears assignment, timers, compass and progress and closes the window (`0x4206eb`).
+- AdventureFinish clears the assignment, timers, compass and progress and closes the window (`0x4206eb`). A
+  finished instance can remain accessible through its entrance. The server controls when occupants return, and a
+  player can use its exit after completing the objectives.
+- Leave waits for the server. A leave acknowledgement or an empty assignment snapshot clears the mission. RoF2
+  matches no text: every AdventureInfo puts it in the request state (`0x420130`); this client keeps the assignment
+  for other notices. EQEmu can deny leaving while the player is still inside the active instance. A denial or eight
+  seconds without a reply re-enables Leave and keeps the assignment visible.
 - Zone changes clear the old recruiter and zone-local data; selecting another character clears cached state.
 
 #### Adventure stats
@@ -2729,8 +2796,7 @@ Themes 1..5 then Totals: win rank, successes, failures, win percentage, percenta
 Profile data supplies initial points. Point updates replace balances and request fresh stats, open window or not, as
 RoF2 does (`0x4208f5`), within the ten-second guard.
 
-After a granted leave stock EQEmu sends nothing, so the window shows the adventure until the next AdventureData
-(docs/unknowns.md). Rank zero shows a placeholder. Totals use wide arithmetic; row percentages round to binary32 before
+Rank zero shows a placeholder. Totals use wide arithmetic and row percentages round to binary32 before
 one-decimal formatting.
 
 #### Adventure leaderboard

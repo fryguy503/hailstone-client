@@ -150,7 +150,7 @@ void GameConnection::update_npc_interactions() {
     if (adventure_.recruiter && (recruiter_state_ == 1 || recruiter_state_ == 2) &&
         now > npc_checks_.recruiter + 500) {
         npc_checks_.recruiter = now;
-        if (out_of_reach(adventure_.recruiter)) close_adventure_recruiter();
+        if (!adventure_recruiter_available()) close_adventure_recruiter();
     }
     // The mercenary liaison window's observer (0x6eb560, vftable 0x9f1ef8 slot 1): a liaison id set and the
     // liaison missing or beyond reach hides it. What calls the observer, and how often, is not traced
@@ -401,7 +401,10 @@ void GameConnection::give_to(std::uint32_t spawn_id) {
     if (it == world_.spawns.end() || !me || it->second.is_corpse) return;
     const game::Spawn& sp = it->second;
     if (trade_ && trade_->open) {
-        if (spawn_id == trade_->partner_id && inventory_.cursor()) trade_drop_cursor();
+        if (spawn_id == trade_->partner_id) {
+            if (inventory_.cursor()) trade_drop_cursor();
+            else trade_drop_cursor_coin();
+        }
         return;
     }
     if (spawn_id == world_.player_id || trade_) return;
@@ -411,7 +414,7 @@ void GameConnection::give_to(std::uint32_t spawn_id) {
     }
     // Within the partner's AvatarHeight + 20 (eqstr 12294).
     glm::vec3 at = motion_known_ ? position_ : me->position;
-    if (glm::distance(at, sp.position) > sp.heights.avatar_height + 20.0f) {
+    if (glm::distance(at, sp.position) > sp.heights.avatar_height + kInteractRange) {
         chat(ChatEvent::Kind::System, strings_.format(12294, std::vector<std::string>{game::display_name(sp.name)}));
         return;
     }
@@ -465,18 +468,17 @@ void GameConnection::trade_drop_cursor() {
     chat(ChatEvent::Kind::System, strings_.format(12319, std::vector<std::string>{})); // All your trade slots are full!
 }
 
+void GameConnection::trade_drop_cursor_coin() {
+    if (auto held = held_coin())
+        move_coin(kCoinCursor, kCoinTrade, held->first, held->first, held->second);
+}
+
 void GameConnection::trade_coin(int type, std::uint32_t amount) {
-    // The original picks the coin up (MoveMoney inventory → cursor) and drops
-    // it on the trade (CTradeWnd_DropCursorMoneyIntoTrade: MoveMoney cursor → trade).
     if (!trade_ || !trade_->open || type < 0 || type > 3 || amount == 0) return;
-    std::uint32_t* have = type == 0 ? &coins_.copper : type == 1 ? &coins_.silver : type == 2 ? &coins_.gold : &coins_.platinum;
-    if (amount > *have || amount > 0x7fffffffu) return;
-    auto n = static_cast<std::int32_t>(amount);
-    send_zone(encode(MoveCoin{kCoinInventory, kCoinCursor, type, type, n}));
-    send_zone(encode(MoveCoin{kCoinCursor, kCoinTrade, type, type, n}));
-    *have -= amount;
-    trade_->my_coins[static_cast<std::size_t>(type)] += amount;
-    trade_->my_ready = trade_->their_ready = false;
+    const auto offered = trade_->my_coins[static_cast<std::size_t>(type)];
+    // Check room in the offer before picking up coin for the two-step move.
+    if (static_cast<std::uint64_t>(offered) + amount > static_cast<std::uint32_t>(game::kCoinCap)) return;
+    if (move_coin(kCoinInventory, kCoinCursor, type, type, amount)) trade_drop_cursor_coin();
 }
 
 void GameConnection::trade_accept() {
@@ -667,7 +669,7 @@ void GameConnection::handle_commerce(Op op, const AppPacket& p) {
         // Handle_OP_TradeRequest @0x4c23c0 (game/trade_rules.h): the Trade setting, the group-only check,
         // IsOkToTransact and auto attack; a refusal answers OP_TradeBusy {requester, us, reason} and says 1447.
         // Accepted, CTradeWnd::Activate(partner, 0) opens the window and acknowledges.
-        if (auto r = decode_trade_request(p)) {
+        if (auto r = decode_trade_request(p); r && r->to_id == world_.player_id) {
             std::string name = spawn_name(r->from_id);
             game::TradeRequestInput in;
             in.requester_id = r->from_id;
@@ -677,7 +679,10 @@ void GameConnection::handle_commerce(Op op, const AppPacket& p) {
             in.pc = profile_.has_value();
             in.group = group_.active;
             in.requester_in_group = group_.has_member(game::display_name(name)) || group_.has_member(name);
-            in.ok_to_transact = ok_to_transact();
+            // A deliberate difference: our own request still waiting for its answer refuses as busy. The original's
+            // IsOkToTransact does not count it, but on EQEmu the late answer starts that partner's trade with us
+            // (Handle_OP_TradeRequestAck) while our window is with this requester, so their offers would land here.
+            in.ok_to_transact = !trade_ && ok_to_transact();
             in.attacking = auto_attack_;
             game::TradeRequestResult res = game::handle_trade_request(in);
             if (res.refusal) {
@@ -696,13 +701,15 @@ void GameConnection::handle_commerce(Op op, const AppPacket& p) {
         break;
     case Op::TradeRequestAck:
         // Handle_OP_TradeRequestAck @0x4c2070: with IsOkToTransact, CTradeWnd::Activate(partner, 1): the trade (or the
-        // give window for an NPC) opens with the cursor item in it. Otherwise (PendingRequestLog_SendReport(0x3f)) a
+        // give window for an NPC) opens with the item or coin on the cursor. Otherwise (PendingRequestLog_SendReport(0x3f)) a
         // player partner is told "<me> tells you, 'I'm busy right now.'" (1446 as a tell, language skill 100), 1447
         // "<partner> is interested in making a trade." is said (0x111), and OP_CancelTrade {partner, me} goes.
-        if (auto r = decode_trade_request(p)) {
+        if (auto r = decode_trade_request(p); r && r->to_id == world_.player_id) {
+            if (!trade_ || !trade_->requested || trade_->partner_id != r->from_id) break;
             auto it = world_.spawns.find(r->from_id);
+            // Only a missing spawn ends the handler; reach and death are CTradeWnd::OnProcessFrame's 500 ms check
+            // once the window is open (update_npc_interactions), so the offer goes in first and the server returns it.
             if (it == world_.spawns.end()) break;
-            if (!trade_ || trade_->partner_id != r->from_id) break;
             if (!ok_to_transact()) {
                 log::info("trade: the answer from {} came while busy", it->second.name);
                 std::string partner = it->second.name;
@@ -724,11 +731,12 @@ void GameConnection::handle_commerce(Op op, const AppPacket& p) {
             trade_->requested = false;
             trade_->open = true;
             if (inventory_.cursor()) trade_drop_cursor();
+            else trade_drop_cursor_coin();
         }
         break;
     case Op::TradeAcceptClick:
         // CTradeWnd::SetHisReadyTrade (game/trade_rules.h): the partner un-readying clears ours too.
-        if (auto a = decode_trade_accept(p); a && trade_) {
+        if (auto a = decode_trade_accept(p); a && trade_ && trade_->open) {
             game::TradeFlags f{trade_->their_ready, trade_->my_ready};
             game::trade_set_his_ready(f, a->ready != 0 ? 1 : 0);
             trade_->their_ready = f.his_ready != 0;
@@ -737,7 +745,7 @@ void GameConnection::handle_commerce(Op op, const AppPacket& p) {
         break;
     case Op::TradeCoins:
         // Handle_OP_TradeCoins @0x4b76d0: the partner added coin (a delta).
-        if (auto c = decode_trade_coins(p); c && trade_ && c->type < 4) {
+        if (auto c = decode_trade_coins(p); c && trade_ && trade_->open && c->type < 4) {
             // Held at the maximum rather than wrapping: a flood of deltas cannot turn into a small offer.
             trade_->their_coins[c->type] = saturating_add(trade_->their_coins[c->type], c->amount);
             trade_->my_ready = trade_->their_ready = false;
@@ -745,10 +753,10 @@ void GameConnection::handle_commerce(Op op, const AppPacket& p) {
         break;
     case Op::TradeBusy:
         // Handle_OP_TradeBusy @0x4b7800: 'b' 1444, 'c' 1445, else 1446.
-        if (auto b = decode_trade_busy(p)) {
+        if (auto b = decode_trade_busy(p); b && b->to_id == world_.player_id) {
             std::string name = spawn_name(b->from_id);
             if (!name.empty()) say_str(b->type == 'b' ? 1444 : b->type == 'c' ? 1445 : 1446, {name});
-            if (trade_ && trade_->partner_id == b->from_id && !trade_->open) trade_.reset();
+            if (trade_ && trade_->partner_id == b->from_id && trade_->requested) trade_.reset();
         }
         break;
     case Op::CancelTrade:

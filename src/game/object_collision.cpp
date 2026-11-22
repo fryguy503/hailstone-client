@@ -97,6 +97,22 @@ ObjectShape ObjectShape::from_mesh(const assets::Mesh& mesh, bool keep_pick_prox
     return s;
 }
 
+ObjectShape ObjectShape::from_hull(std::span<const glm::vec3> triangles) {
+    ObjectShape shape;
+    if (triangles.empty() || triangles.size() % 3 != 0) return shape;
+    shape.tris.assign(triangles.begin(), triangles.end());
+    shape.records.reserve(triangles.size() / 3);
+    shape.lo = shape.hi = triangles.front();
+    for (const glm::vec3& vertex : triangles) {
+        shape.lo = glm::min(shape.lo, vertex);
+        shape.hi = glm::max(shape.hi, vertex);
+        shape.radius = std::max(shape.radius, glm::length(vertex));
+    }
+    for (std::size_t i = 0; i < triangles.size(); i += 3)
+        shape.records.push_back(CollisionTriangle::make(triangles[i], triangles[i + 1], triangles[i + 2], 0));
+    return shape;
+}
+
 bool sweep_sphere(const ObjectShape& shape, const glm::mat4& transform, const glm::mat4& inverse, float scale,
                   SphereSweep& sweep) {
     if (shape.records.empty() || !(scale > 0.0f)) return false;

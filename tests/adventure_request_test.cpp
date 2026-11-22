@@ -24,6 +24,21 @@ net::AppPacket adventure_text(net::Op op, std::string_view text) {
     return net::make_packet(op, std::move(w));
 }
 
+net::AppPacket adventure_leave_denial() {
+    ByteWriter w;
+    w.zeros(3); // raw system message, no journal or language
+    w.le<std::uint32_t>(13); // red
+    w.zeros(17); // no target, an empty speaker name, and three coordinates
+    net::detail::write_cstring(w, "You cannot leave this adventure at this time.");
+    return net::make_packet(net::Op::SpecialMesg, std::move(w));
+}
+
+net::AppPacket retained_adventure_data() {
+    net::AdventureData retained;
+    retained.assigned = true; // keep the reserved words in the server's finished-only snapshot
+    return net::encode(retained);
+}
+
 struct Solo final : game::ServerExtension {
     bool on = false;
     bool solo_adventure(const net::GameConnection&) const override { return on; }
@@ -171,6 +186,10 @@ TEST_CASE("adventure: mock server receives requests and one-byte accept and decl
 
     rig.server.zone.send_reliable(adventure_text(net::Op::AdventureDetails, "An offer to close."));
     REQUIRE(rig.until([&] { return !rig.conn.adventure().offer.empty(); }));
+    REQUIRE(rig.conn.open_adventure_recruiter(77));
+    rig.conn.receive_zone_packet_for_test(adventure_text(net::Op::AdventureInfo, "Recruiter introduction."));
+    rig.conn.receive_zone_packet_for_test(retained_adventure_data());
+    CHECK(rig.conn.adventure().offer == "An offer to close.");
     rig.conn.set_adventure_window_open(false);
     REQUIRE(rig.until([&] { return requests(rig, net::Op::LDoNButton).size() == 3; }));
     CHECK(requests(rig, net::Op::LDoNButton).back().data == std::vector<std::byte>{std::byte{0}});
@@ -191,6 +210,71 @@ TEST_CASE("adventure: mock server receives requests and one-byte accept and decl
     rig.server.zone.send_reliable(net::encode(net::AdventureData{}));
     REQUIRE(rig.until([&] { return !rig.conn.adventure().data.assigned; }));
     CHECK(rig.conn.adventure().count.total == 0);
+}
+
+TEST_CASE("adventure: leave waits for the server and successful leave re-enables the recruiter") {
+    using namespace std::chrono_literals;
+    test::ScratchDir files("adventure_leave");
+    test::ManualClock clock;
+    auto options = test::quick_options();
+    options.session.clock = clock.source();
+    options.servers_dir = files.path() / "servers";
+    test::Rig rig(test::MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    mock_recruiter(rig);
+    clock.hold();
+
+    auto& c = rig.conn;
+    net::AdventureData active;
+    active.assigned = true;
+    active.text = "A mission to abandon.";
+    active.time_left = 600;
+    active.compass = true;
+    rig.server.zone.send_reliable(net::encode(active));
+    REQUIRE(rig.until([&] { return c.adventure_leave_ready(); }));
+    const auto revision = c.adventure_assignment_revision();
+    c.adventure_leave();
+    c.adventure_leave();
+    REQUIRE(rig.until([&] { return requests(rig, net::Op::LeaveAdventure).size() == 1; }));
+    CHECK(c.adventure_leave_pending());
+
+    c.receive_zone_packet_for_test(net::encode(active));
+    CHECK(c.adventure_assignment_revision() == revision);
+    CHECK(c.adventure_leave_pending());
+    c.receive_zone_packet_for_test(adventure_text(net::Op::AdventureInfo, "Your group is too small."));
+    CHECK(c.adventure_leave_pending());
+    CHECK(c.adventure().data.assigned);
+
+    rig.server.zone.send_reliable(adventure_leave_denial());
+    REQUIRE(rig.until([&] { return c.adventure_leave_ready(); }));
+    CHECK(c.adventure().data.assigned);
+    CHECK(c.adventure_assignment_revision() == revision);
+    c.adventure_leave();
+    REQUIRE(rig.until([&] { return requests(rig, net::Op::LeaveAdventure).size() == 2; }));
+    clock.advance(7999ms);
+    CHECK(c.adventure_leave_pending());
+    clock.advance(1ms);
+    CHECK(c.adventure_leave_ready());
+    c.adventure_leave();
+    REQUIRE(rig.until([&] { return requests(rig, net::Op::LeaveAdventure).size() == 3; }));
+
+    // The server's leave notice ends the assignment without an AdventureData packet or a zone change.
+    rig.server.zone.send_reliable(
+        adventure_text(net::Op::AdventureInfo, "You are not currently assigned to an adventure"));
+    REQUIRE(rig.until([&] { return c.adventure_request_ready(); }));
+    CHECK_FALSE(c.adventure().data.assigned);
+    CHECK_FALSE(c.adventure().data.compass);
+    CHECK_FALSE(c.adventure_leave_pending());
+    CHECK_FALSE(c.adventure_leave_ready());
+    CHECK(c.adventure_assignment_revision() != revision);
+    CHECK(c.adventure().window_open);
+    CHECK(c.adventure().recruiter == 77);
+
+    // The same notice can arrive on expiry with no leave pending, including from servers that keep the period.
+    c.receive_zone_packet_for_test(net::encode(active));
+    c.receive_zone_packet_for_test(
+        adventure_text(net::Op::AdventureInfo, "You are not currently assigned to an adventure."));
+    CHECK(c.adventure_request_ready());
 }
 
 TEST_CASE("adventure: an answer to a request whose window was closed shows the window again") {
@@ -227,8 +311,12 @@ TEST_CASE("adventure: an answer to a request whose window was closed shows the w
     REQUIRE(rig.until([&] { return requests(rig, net::Op::LDoNButton).size() == 1; }));
     CHECK(requests(rig, net::Op::LDoNButton).back().data == std::vector<std::byte>{std::byte{1}});
 
-    // A refusal (OP_AdventureInfo) to a request whose window was closed shows it too.
+    // A missing create reply must not lead to overlapping requests or lock the recruiter permanently.
     clock.advance(5s);
+    CHECK(rig.conn.adventure_request_options_ready());
+    CHECK_FALSE(rig.conn.adventure_request_ready());
+    clock.advance(3s);
+    // A refusal (OP_AdventureInfo) to a request whose window was closed shows it too.
     rig.conn.adventure_request(2, 1);
     REQUIRE(rig.until([&] { return requests(rig, net::Op::AdventureRequest).size() == 2; }));
     rig.conn.set_adventure_window_open(false);
@@ -237,7 +325,7 @@ TEST_CASE("adventure: an answer to a request whose window was closed shows the w
     CHECK(rig.conn.adventure().npc_text == "Your group is too small.");
 
     // Closed again with a later offer up, the offer is declined and the recruiter forgotten.
-    clock.advance(5s);
+    clock.advance(8s);
     rig.conn.adventure_request(1, 0);
     REQUIRE(rig.until([&] { return requests(rig, net::Op::AdventureRequest).size() == 3; }));
     rig.conn.set_adventure_window_open(false);
@@ -249,6 +337,35 @@ TEST_CASE("adventure: an answer to a request whose window was closed shows the w
     CHECK(requests(rig, net::Op::LDoNButton).back().data == std::vector<std::byte>{std::byte{0}});
     CHECK(rig.conn.adventure().recruiter == 0);
     CHECK(rig.conn.adventure().offer.empty());
+}
+
+TEST_CASE("adventure: a late offer is declined after switching recruiters") {
+    using namespace std::chrono_literals;
+    test::ManualClock clock;
+    net::ConnectionOptions options;
+    options.session.clock = clock.source();
+    mq_test::World w("adventure_switch_recruiter", options);
+    clock.hold();
+    auto& c = *w.conn;
+    auto add_recruiter = [&](std::uint32_t id) {
+        w.add(id, "Adventure_Recruiter", true, 65, game::server_to_world({0, 10, 0}));
+        net::GameConnectionTestAccess::world(c).spawns[id].class_id = 60;
+    };
+    add_recruiter(20);
+    add_recruiter(21);
+    REQUIRE(c.open_adventure_recruiter(20));
+    c.adventure_request(1, 0);
+    REQUIRE(c.open_adventure_recruiter(21));
+    clock.advance(5s);
+    CHECK(c.adventure_request_options_ready());
+    CHECK_FALSE(c.adventure_request_ready());
+    c.receive_zone_packet_for_test(adventure_text(net::Op::AdventureDetails, "The first recruiter's offer."));
+    CHECK(c.adventure().offer.empty());
+    CHECK(c.adventure().recruiter == 21);
+    REQUIRE(c.adventure_request_ready());
+    c.adventure_request(2, 1);
+    c.receive_zone_packet_for_test(adventure_text(net::Op::AdventureDetails, "The second recruiter's offer."));
+    CHECK(c.adventure().offer == "The second recruiter's offer.");
 }
 
 TEST_CASE("adventure: stats and leaderboard use native cooldowns and retain the latest queued category") {
@@ -409,4 +526,44 @@ TEST_CASE("adventure: win and failure finish packets clear the mission without a
         REQUIRE(c.adventure().stats);
         CHECK(c.adventure().stats->success[0] == 10);
     }
+}
+
+TEST_CASE("adventure: a retained finished instance cannot block a new request") {
+    mq_test::World w("adventure_retained_finish");
+    auto& c = *w.conn;
+    solo_at_recruiter(w);
+    net::AdventureData current;
+    current.assigned = true;
+    current.text = "Clear the halls.";
+    current.time_left = 600;
+    current.compass = true;
+    c.receive_zone_packet_for_test(net::encode(current));
+    REQUIRE(c.adventure().data.assigned);
+    CHECK_FALSE(c.adventure_request_options_ready());
+
+    // The server retains door access and sends a timerless snapshot around the finish, and again on zone-in.
+    const auto retained = retained_adventure_data();
+    c.receive_zone_packet_for_test(retained);
+    CHECK(c.adventure_request_ready());
+    CHECK_FALSE(c.adventure().data.compass);
+    ByteWriter finish;
+    finish.le<std::uint32_t>(1);
+    finish.le<std::uint32_t>(50);
+    c.receive_zone_packet_for_test(net::make_packet(net::Op::AdventureFinish, std::move(finish)));
+    c.reset_adventure_for_zone();
+    c.receive_zone_packet_for_test(retained);
+
+    ByteWriter count;
+    count.le<std::uint32_t>(5);
+    count.le<std::uint32_t>(5);
+    c.receive_zone_packet_for_test(net::make_packet(net::Op::AdventureUpdate, std::move(count)));
+    CHECK(c.adventure().count.total == 0);
+    CHECK_FALSE(c.adventure().data.assigned);
+    REQUIRE(c.open_adventure_recruiter(20));
+    CHECK(c.adventure_request_ready());
+
+    c.receive_zone_packet_for_test(net::encode(current));
+    CHECK(c.adventure().data.assigned);
+    CHECK_FALSE(c.adventure_request_ready());
+    CHECK(c.adventure().count.total == 0);
 }

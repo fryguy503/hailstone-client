@@ -67,7 +67,7 @@ end
 local function update(slot, c)
   -- (players' names as links: a click opens a tell; with Timestamps each line's time first; only the lines that
   -- came since the last look, unless the window's lines changed otherwise)
-  local version, lines, reset, count = API.chat.Text(slot, c.version, true, ui.GetSetting("chat.timestamps") == "1", true)
+  local version, lines, reset, count = API.chat.Text(slot, c.version, true, ui.GetSetting("chat.timestamps"), true)
   if version == c.version or not lines then return end
   c.version = version
   if reset then stml.UpdateLines(c, lines, C.chatText) else stml.AppendLines(c, lines, count, C.chatText) end

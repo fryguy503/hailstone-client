@@ -43,7 +43,7 @@ std::optional<AdventureData> decode_adventure_data(const AppPacket& p) {
     if (p.data.size() < kDataSize) return std::nullopt;
     return decode_with(p, [](ByteReader& r) {
         AdventureData v;
-        std::uint32_t tag = r.le<std::uint32_t>();
+        r.skip(4);
         v.text = r.fixed_string(kDataText);
         v.time_to_enter = r.le<std::uint32_t>();
         v.time_left = r.le<std::uint32_t>();
@@ -52,7 +52,9 @@ std::optional<AdventureData> decode_adventure_data(const AppPacket& p) {
         v.y = r.f32();
         v.z = r.f32();
         v.compass = r.le<std::uint32_t>() != 0;
-        v.assigned = tag != 0 || !v.text.empty();
+        // A finished instance retains its header but carries no briefing or timer. An active server timer can
+        // round down to zero in its last second while the briefing is still present.
+        v.assigned = v.time_to_enter != 0 || v.time_left != 0 || !v.text.empty();
         return v;
     });
 }

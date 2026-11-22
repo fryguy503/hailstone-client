@@ -247,6 +247,59 @@ TEST_CASE("spawn search: parsed words") {
         INFO(word);
         CHECK(mq::parse_spawn_search(word).kind == kind);
     }
+    // MQ's /target cycling: next and prev keep the direction (the last word wins) and are no part of the name.
+    CHECK(mq::parse_spawn_search("npc next").direction == mq::SpawnSearch::Direction::Next);
+    auto pv = mq::parse_spawn_search("next npc prev");
+    CHECK(pv.direction == mq::SpawnSearch::Direction::Prev);
+    CHECK(pv.kind == mq::SpawnSearch::Kind::Npc);
+    CHECK(pv.name.empty());
+}
+
+TEST_CASE("spawn search: /target takes the nearest, next or prev match") {
+    Fixture f;
+    auto& w = net::GameConnectionTestAccess::world(*f.world.conn);
+    auto id = [&](const char* text) {
+        const mq::SpawnSearch q = mq::parse_spawn_search(text);
+        const game::Spawn* s = mq::pick_target(q, mq::search_spawns(q, w, nullptr), w);
+        return s ? s->id : 0u;
+    };
+    // Distances: the player at 0, Groupie at 20, the rat at 50, Fippy at 100, the corpse at 200.
+    w.target_id = 0;
+    CHECK(id("npc") == 10u);
+    // next / prev walk the nearest-first matches from the current target; no wrap at either end.
+    w.target_id = 10;
+    CHECK(id("npc next") == 11u);
+    CHECK(id("npc prev") == 0u);
+    w.target_id = 11;
+    CHECK(id("npc prev") == 10u);
+    CHECK(id("npc next") == 0u);
+    // A target that is no match starts from its own distance: next the first match farther away, prev the last nearer.
+    w.target_id = 12;
+    CHECK(id("npc next") == 10u);
+    CHECK(id("npc prev") == 0u);
+    w.target_id = 13;
+    CHECK(id("npc prev") == 11u);
+    CHECK(id("npc next") == 0u);
+    // With no target, next and prev take the nearest match, as /target does.
+    w.target_id = 0;
+    CHECK(id("npc next") == 10u);
+    CHECK(id("npc prev") == 10u);
+    // Your own spawn matches "pc"; the nearest leaves it out while Groupie matches too.
+    CHECK(id("pc") == 12u);
+    // The same rule holds for next and prev: you are stepped over while Groupie matches, and the current target still
+    // says where the walk starts.
+    w.target_id = 12;
+    CHECK(id("pc next") == 0u); // Groupie is the last match
+    CHECK(id("pc prev") == 0u); // the only earlier match is you, and you are left out
+    w.target_id = 1;
+    CHECK(id("pc next") == 12u); // past you, to Groupie
+    CHECK(id("pc prev") == 0u); // nothing before you
+    w.target_id = 0;
+    CHECK(id("pc next") == 12u);
+    CHECK(id("pc prev") == 12u);
+    // You alone still match, and are taken when there is no target.
+    CHECK(id("id 1") == 1u);
+    CHECK(id("npc nobody_here") == 0u);
 }
 
 TEST_CASE("spawn search: MQ's matching rules") {

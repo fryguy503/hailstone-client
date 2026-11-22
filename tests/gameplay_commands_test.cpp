@@ -8,6 +8,7 @@
 
 #include "app/actions_ui.h"
 #include "app/lua_ui.h"
+#include "core/byte_io.h"
 #include "core/config.h"
 #include "core/ini_file.h"
 #include "game/client_options.h"
@@ -17,6 +18,7 @@
 #include "mq_test_world.h"
 #include "net/player_packets.h"
 #include "net/zone_packets.h"
+#include "scratch_dir.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -43,10 +45,93 @@ int raw_count(const std::vector<AppPacket>& log, std::uint16_t opcode) {
     return n;
 }
 
+std::vector<std::uint32_t> hide_corpse_actions(const Rig& rig) {
+    std::vector<std::uint32_t> actions;
+    for (const auto& p : rig.server.zone_log) {
+        if (from_wire(p.opcode) != Op::HideCorpse) continue;
+        REQUIRE(p.data.size() == 8);
+        ByteReader r(p.data);
+        actions.push_back(r.le<std::uint32_t>());
+        CHECK(r.le<std::uint32_t>() == 0);
+    }
+    return actions;
+}
+
 // UseSkill's Forage packet (0x5306): no target, no facing, so a command test can check the skill it used.
 constexpr std::uint16_t kOpForage = 0x5306;
 
 } // namespace
+
+TEST_CASE("mock server: /hidecorpse saves each mode and reapplies it after restart and zoning") {
+    using Mode = game::HideCorpseMode;
+    struct Choice {
+        const char* command;
+        Mode mode;
+        std::uint32_t action;
+    };
+    const Choice choices[] = {
+        {"/hidecorpse all", Mode::All, kHideCorpseAll},
+        {"/hidecorpses ALLBUTGROUP", Mode::AllButGroup, kHideCorpseAllButGroup},
+        {"/hidecorpse looted", Mode::Looted, kHideCorpseLooted},
+        {"/hidecorpse npc", Mode::Npc, kHideCorpseNpc},
+        {"/hidecorpse always", Mode::Always, kHideCorpseNone},
+        {"/hidecorpse none", Mode::None, kHideCorpseNone},
+    };
+    for (const auto& choice : choices) {
+        CAPTURE(choice.command);
+        ScratchDir dir("hide_corpse");
+        ConnectionOptions options = quick_options();
+        options.servers_dir = dir.path();
+        MockConfig config = MockConfig::standard();
+        config.characters.push_back(MockCharacter{.name = "Other", .inventory = {}});
+        {
+            Rig first(config, options);
+            REQUIRE(first.to_zone());
+            CHECK(first.conn.hide_corpse_mode() == Mode::None);
+            first.conn.send_command("/hidecorpse all");
+            REQUIRE(first.until([&] { return MockEqServer::count(first.server.zone_log, Op::HideCorpse) == 1; }));
+            first.conn.send_command(choice.command);
+            first.conn.send_command("/hidecorpses"); // Usage reports and preserves the setting.
+            const auto expected = choice.mode == Mode::Looted || choice.mode == Mode::Npc
+                                      ? std::vector<std::uint32_t>{kHideCorpseAll, kHideCorpseNone, choice.action}
+                                      : std::vector<std::uint32_t>{kHideCorpseAll, choice.action};
+            REQUIRE(first.until([&] {
+                return MockEqServer::count(first.server.zone_log, Op::HideCorpse) == static_cast<int>(expected.size());
+            }));
+            CHECK(hide_corpse_actions(first) == expected);
+            CHECK(first.conn.hide_corpse_mode() == choice.mode);
+            if (choice.mode == Mode::Npc)
+                CHECK(has_line(first.chat(), "Current /hidecorpses mode is npc."));
+        }
+        {
+            Rig other(config, options);
+            REQUIRE(other.to_zone("Other"));
+            CHECK(other.conn.hide_corpse_mode() == Mode::None);
+        }
+        Rig restored(config, options);
+        REQUIRE(restored.to_zone());
+        CHECK(restored.conn.hide_corpse_mode() == choice.mode);
+
+        const bool replay = choice.mode != Mode::None && choice.mode != Mode::Always;
+        // The reliable TGB query proves the earlier zone-in packets reached the mock.
+        restored.conn.send_command("/tgb");
+        REQUIRE(restored.until([&] { return MockEqServer::count(restored.server.zone_log, Op::TGB) == 1; }));
+        const auto expected = replay ? std::vector<std::uint32_t>{choice.action} : std::vector<std::uint32_t>{};
+        CHECK(hide_corpse_actions(restored) == expected);
+
+        const int entries = restored.server.zone_entries;
+        restored.server.request_zone_change(1, 20.0f, 10.0f, 3.0f);
+        REQUIRE(restored.until([&] {
+            return restored.server.zone_entries == entries + 1 && restored.conn.state() == ConnectionState::InZone;
+        }));
+        restored.conn.send_command("/tgb");
+        REQUIRE(restored.until([&] { return MockEqServer::count(restored.server.zone_log, Op::TGB) == 2; }));
+        CHECK(restored.conn.hide_corpse_mode() == choice.mode);
+        const auto zoned = replay ? std::vector<std::uint32_t>{choice.action, choice.action}
+                                  : std::vector<std::uint32_t>{};
+        CHECK(hide_corpse_actions(restored) == zoned);
+    }
+}
 
 TEST_CASE("/spellscribe's packet: our name over the target's, 4 at +0x80") {
     AppPacket p = encode_spell_scribe("Gennro", "a_large_rat00");

@@ -50,7 +50,9 @@ ui.window("Adventure", function()
   end
   arWasShown = true
   T.frame()
-  if not M.shown(AR, "AdvRqst_LeaveButton") then arState.confirm = nil end
+  local assignment = M.text(AR, "AdvRqst_LeaveToken")
+  if arState.confirm and arState.confirm.assignment ~= assignment then arState.confirm = nil end
+  if arPick.open and not M.state(AR, arPick.open.id) then arPick = {} end
   local npc = M.text(AR, "AdvRqst_NPCLabel")
   local offer = M.shown(AR, "AdvRqst_AcceptButton") and (M.state(AR, "AdvRqst_AcceptButton"))
   local hints = arPick.open and { { "a", "Choose" }, { "b", "Back" } } or { { "a", "Select" }, { "b", "Close" } }
@@ -58,6 +60,7 @@ ui.window("Adventure", function()
         hints = hints }) then
     local x0, y0, x1, y1 = W.area()
     local wx, wy = ui.GetWindowPos()
+    if arState.confirm and ui.IsWindowFocused(3) and ui.IsKeyPressed(ui.Key.Escape) then arState.confirm = nil end
     if M.picker(arPick, x0, y0, x1, y1) then
       -- (the kind or the risk is being chosen)
     elseif not W.confirm(arState) then
@@ -78,8 +81,16 @@ ui.window("Adventure", function()
           ty = ty + T.px(28)
         end
       end
-      P.draw("##advtext", arText, M.text(AR, "AdvRqst_NPCText"), x0, ty, midX - T.px(24), y1,
-        { empty = "Speak with an adventure recruiter to request an adventure." })
+      local lx1 = midX - T.px(24)
+      local status = M.text(AR, "AdvRqst_StatusLabel")
+      if status ~= "" then
+        T.font(19)
+        T.draw(x0, ty, T.fit(status, lx1 - x0), C.dim)
+        local _, lh = ui.CalcTextSize("Ag")
+        T.unfont()
+        ty = ty + lh + T.px(10)
+      end
+      P.draw("##advtext", arText, M.text(AR, "AdvRqst_NPCText"), x0, ty, lx1, y1)
       -- the right column: the request form, the answer to an offer, leaving, the record
       local rx0 = midX
       local bh = T.px(66)
@@ -95,8 +106,10 @@ ui.window("Adventure", function()
         { "AdvRqst_DeclineButton", "Decline" } }, rx0, x1, bh)
       if M.shown(AR, "AdvRqst_LeaveButton") then
         T.heading("Current adventure")
-        if T.button("##advleave", "Leave Adventure", cw, bh, { sub = "Give up the current adventure" , align = 0 }, pad) then
-          arState.confirm = { "Give up the current adventure?", function() API.windows.ClickChild(AR, "AdvRqst_LeaveButton", "left") end }
+        if T.button("##advleave", "Leave Adventure", cw, bh, { disabled = assignment == "", align = 0 }, pad) then
+          arState.confirm = { "Give up the current adventure?",
+            function() API.windows.ClickChild(AR, "AdvRqst_LeaveButton", "left") end,
+            assignment = assignment }
         end
       end
       T.heading("Your record")

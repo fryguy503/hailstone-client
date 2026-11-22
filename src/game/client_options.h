@@ -82,8 +82,12 @@ enum class ClientOption : std::uint8_t {
     TargetGroupBuff,         // Defaults TargetGroupBuff (/targetgroupbuff writes "0" / "1"; DoMainLoop @0x53d936 reads it
                              // with GetEQClientInt, default "*NULL*", and sends its atoi unless it starts with '*'):
                              // kTargetGroupBuffUnset when missing
+    HideCorpses,             // Hailstone HideCorpses (/hidecorpses, kept per character)
     Count
 };
+
+// Stable values in options.ini and the Lua UI settings API. The wire actions differ.
+enum class HideCorpseMode : int { None = 0, All = 1, AllButGroup = 2, Looted = 3, Npc = 4, Always = 5 };
 
 inline constexpr int kTargetGroupBuffUnset = -0x7fffffff - 1;
 
@@ -144,7 +148,7 @@ public:
 
     int get(ClientOption id) const { return values_[static_cast<std::size_t>(id)]; }
     bool on(ClientOption id) const { return get(id) != 0; }
-    // Clamped to the option's range; returns the value kept.
+    // Clamped to the option's range, or the default for an invalid corpse mode. Returns the value kept.
     int set(ClientOption id, int value);
 
     // The values of `ini` (the asset folder's eqclient.ini with the character's options.ini over it); missing keys

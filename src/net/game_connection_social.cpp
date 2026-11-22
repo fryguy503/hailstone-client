@@ -608,6 +608,7 @@ void GameConnection::social_emote(const game::SocialEmote& e, const std::string&
 // named speaker goes to the conversation journal when its journal mode is 2, or 1 and it is aimed at the player
 // (CJournalTextWnd's 0x6b3c00, while the journal window exists: take_journal_lines()).
 void GameConnection::handle_special_message(const SpecialMessage& m) {
+    handle_adventure_leave_denial(m);
     log::debug("special message: speak mode {} journal mode {} language {} type {} target {} from '{}'", m.speak_mode,
                m.journal_mode, m.language, m.type, m.target_spawn_id, m.sayer);
     std::uint32_t language = m.language > 0x1f ? 0 : m.language;
@@ -1208,6 +1209,9 @@ void GameConnection::apply_client_option(game::ClientOption id, int old_value) {
         break;
     case game::ClientOption::LootNoDrop: // the combo runs /lootnodrop with its word: "New Setting: ..."
         say_lootnodrop_setting(v);
+        break;
+    case O::HideCorpses:
+        send_hide_corpse_setting(static_cast<game::HideCorpseMode>(old_value));
         break;
     case O::Anonymous:
     case O::Roleplaying:

@@ -170,6 +170,9 @@ public:
     const SpellData* get(std::uint32_t id) const;
     // The spell named `name` (case-insensitive; the lowest id when several share it), or null.
     const SpellData* find_by_name(std::string_view name) const;
+    // The ids of every spell named `name` (case-insensitive), lowest first; empty when none. The view stays valid
+    // until the table is parsed again.
+    std::span<const std::uint32_t> find_all_by_name(std::string_view name) const;
     // SpellManager::GetSpellByGroupAndRank @0x5c1ae0 over the
     // spells of SpellGroup `group` (> 0; the load hashes them by it): among those of SpellSubGroup `subgroup`, the
     // one of exactly `rank`; else, when `rank` is -1 or `below` for lower ranks, the highest rank seen. Null when
@@ -198,7 +201,7 @@ private:
         std::int32_t rank;
         std::uint32_t id;
     };
-    std::unordered_map<std::string, std::uint32_t> by_name_;               // lower-cased name -> lowest id
+    std::unordered_map<std::string, std::vector<std::uint32_t>> by_name_; // lower-cased name -> ids, lowest first
     std::unordered_map<std::uint64_t, std::vector<RankedId>> by_group_;   // (group, subgroup) -> by rank, then id
     void build_indices();
     std::uint32_t default_crc_ = 0;

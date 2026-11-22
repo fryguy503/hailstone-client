@@ -102,8 +102,12 @@ bool GameConnection::compare_achievements() {
 void GameConnection::clear_achievement_comparison() {
     achievements_.retire_compare(); achievement_compare_target_.reset();
 }
+bool GameConnection::achievement_link_ready() const {
+    return in_zone() && !zone_change_pending_ && zone_exit_ == ZoneExit::None && zone_session_ &&
+        zone_session_->state() == SessionState::Connected;
+}
 bool GameConnection::inspect_achievement_link(std::string_view metadata) {
-    if (!reward_request_ready() || !achievements_.catalog()) return false;
+    if (!achievement_link_ready() || !achievements_.catalog()) return false;
     auto link = parse_achievement_link(metadata, *achievements_.catalog());
     if (!link) return false;
     const auto peer = std::find_if(world_.spawns.begin(), world_.spawns.end(), [&](const auto& entry) {
@@ -129,7 +133,7 @@ bool GameConnection::inspect_achievement_link(std::string_view metadata) {
     achievement_link_request_token_ = request->token;
     const auto current = [&] {
         const auto at = world_.spawns.find(owner_id);
-        return reward_request_ready() && achievements_.link_current(*request) && at != world_.spawns.end() &&
+        return achievement_link_ready() && achievements_.link_current(*request) && at != world_.spawns.end() &&
             at->second.incarnation == owner_incarnation && game::same_no_case(at->second.name, request->link.player_name);
     };
     if (send_zone(encode_achievement_link_request(request->link), true, current)) {
@@ -194,7 +198,9 @@ void GameConnection::update_achievements() {
 bool GameConnection::handle_achievements(const AppPacket& p) {
     const auto* catalog = achievements_.catalog() ? &*achievements_.catalog() : nullptr;
     bool recognized = true, valid = false;
-    const bool active = state_ == ConnectionState::ZoneEntering || (state_ == ConnectionState::InZone && !zone_change_pending_);
+    const bool active = state_ == ConnectionState::ZoneEntering ||
+        (state_ == ConnectionState::InZone && !zone_change_pending_) ||
+        (state_ == ConnectionState::Camping && p.opcode == kOpAchievementInspect && achievement_link_ready());
     if (p.opcode == to_wire(Op::GuildUpdate)) {
         if (active) if (auto decoded = decode_achievement_guild(p, catalog)) {
             const auto* definition = catalog->find(decoded->achievement_id);

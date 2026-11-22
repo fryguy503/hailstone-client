@@ -1,6 +1,7 @@
 #include "assets/wld.h"
 
 #include <algorithm>
+#include <cmath>
 #include <list>
 #include <mutex>
 #include <stdexcept>
@@ -85,7 +86,8 @@ MeshDef read_mesh(ByteReader& r, bool new_format) {
     m.flags = r.le<std::uint32_t>();
     m.material_list = r.le<std::int32_t>();
     m.animation = r.le<std::int32_t>();
-    r.skip(8); // two more references, unused for static meshes
+    r.skip(4); // unneeded reference
+    m.polyhedron = r.le<Ref>();
     m.center = read_vec3(r);
     r.skip(12); // unknown, usually zero
     m.max_distance = r.f32();
@@ -157,6 +159,53 @@ MeshDef read_mesh(ByteReader& r, bool new_format) {
     }
     // Vertex material groups and mesh ops follow; not needed for drawing.
     return m;
+}
+
+PolyhedronDef read_polyhedron_def(ByteReader& r) {
+    PolyhedronDef hull;
+    const auto flags = r.le<std::uint32_t>();
+    const auto vertex_count = r.le<std::uint32_t>();
+    const auto face_count = r.le<std::uint32_t>();
+    r.skip(4); // bounding radius
+    const float stored_scale = r.f32();
+    const float scale = (flags & 1) ? stored_scale : 1.0f;
+    // These are small convex collision volumes. Bound the fan expansion before building triangles.
+    constexpr std::size_t kMaxVertices = 1u << 12;
+    constexpr std::size_t kMaxTriangles = 1u << 13;
+    if (vertex_count > kMaxVertices || face_count > kMaxTriangles || !std::isfinite(scale) || scale <= 0.0f)
+        throw std::out_of_range("invalid polyhedron");
+    checked_count(r, vertex_count, 12);
+    hull.positions.reserve(vertex_count);
+    for (std::size_t i = 0; i < vertex_count; ++i) {
+        const glm::vec3 p = read_vec3(r) * scale;
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+            throw std::out_of_range("non-finite polyhedron vertex");
+        hull.positions.push_back(p);
+    }
+    checked_count(r, face_count, 16); // a polygon has at least three indices
+    auto index = [&] {
+        const auto i = r.le<std::uint32_t>();
+        if (i >= vertex_count) throw std::out_of_range("polyhedron vertex index");
+        return i;
+    };
+    for (std::size_t i = 0; i < face_count; ++i) {
+        const std::size_t count = checked_count(r, r.le<std::uint32_t>(), 4);
+        if (count < 3 || count - 2 > kMaxTriangles - hull.triangles.size())
+            throw std::out_of_range("invalid polyhedron face");
+        const auto first = index();
+        auto previous = index();
+        for (std::size_t j = 2; j < count; ++j) {
+            const auto next = index();
+            const glm::vec3 normal = glm::cross(hull.positions[previous] - hull.positions[first],
+                                                hull.positions[next] - hull.positions[first]);
+            const float area_squared = glm::dot(normal, normal);
+            if (!std::isfinite(area_squared) || area_squared <= 0.0f)
+                throw std::out_of_range("invalid polyhedron triangle");
+            hull.triangles.push_back({first, previous, next});
+            previous = next;
+        }
+    }
+    return hull;
 }
 
 // 0x2C DMSPRITEDEF, the older mesh (libeq DmSpriteDef): u32 counts and plain floats where 0x36 packs integers. Read
@@ -575,6 +624,14 @@ WldFile WldFile::parse_impl(std::span<const std::byte> data, std::string label, 
             }
             case 0x14: f.data = read_actor_def(fr, w); break;
             case 0x15: f.data = read_actor_instance(fr); break;
+            case 0x17: f.data = read_polyhedron_def(fr); break;
+            case 0x18: {
+                PolyhedronRef p;
+                p.definition = fr.le<Ref>();
+                if (fr.le<std::uint32_t>() & 1) fr.skip(4); // optional parameter
+                f.data = p;
+                break;
+            }
             case 0x1b: f.data = read_light_def(fr); break;
             case 0x1c: {
                 LightRef l;

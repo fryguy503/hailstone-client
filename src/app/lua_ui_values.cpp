@@ -348,12 +348,8 @@ LabelValue stock_label(const UiHost& host, int type) {
     }
     case 40: case 41: case 42: case 43: case 44: {           // case 0x1f: group members' pets' HP percent
         const auto* m = nth_other_member(c, type - 40);
-        const auto* s = m ? spawn_by_name(world, m->name) : nullptr;
-        if (s) {
-            for (const auto& [id, p] : world.spawns)
-                if (p.pet_owner_id == s->id && p.is_npc) return int_value(std::max(0, spawn_hp_percent(host, c, p)), 0, false, 100);
-        }
-        return int_value(0);
+        const auto* p = m ? c.group_member_pet(*m) : nullptr;
+        return int_value(p ? std::max(0, spawn_hp_percent(host, c, *p)) : 0, 0, false, 100);
     }
     case 60: case 61: case 62: case 63: case 64: case 65: case 66: case 67: case 133: case 138: case 149: case 150: {
         // case 0x20: memorized spell names, gems 1..8 then 9 (133), 10 (138), 11 (149), 12 (150)
@@ -714,10 +710,8 @@ GaugeValue stock_gauge(const UiHost& host, int type, bool mark_invisibility) {
     }
     case 17: case 18: case 19: case 20: case 21: { // group members' pets
         const auto* m = nth_other_member(c, type - 17);
-        const auto* s = m ? spawn_by_name(world, m->name) : nullptr;
-        if (!s) return {-1, {}};
-        for (const auto& [id, p] : world.spawns)
-            if (p.pet_owner_id == s->id && p.is_npc) return {spawn_hp_percent(host, c, p) * 10, trim_name(p.name)};
+        const auto* p = m ? c.group_member_pet(*m) : nullptr;
+        if (p) return {spawn_hp_percent(host, c, *p) * 10, trim_name(p->name)};
         return {-1, {}};
     }
     case 31: case 32: case 33: case 34: case 35:   // group members' mana

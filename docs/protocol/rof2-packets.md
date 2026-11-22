@@ -387,8 +387,8 @@ Only OP_ShopPlayerBuy/Sell (field copies) and OP_CancelTrade have a RoF2 transla
 
 1. ShopRequest stock: item packets type 0x64 (header slot type 9, slot = instance id = merchant slot, price = per-unit copper, merchant_slot = stock, -1 unlimited).
 2. ShopPlayerBuy reply: the item arrives first as an item packet type 0x67. There is **no** OP_MoneyUpdate: the client takes the price itself (smallest coins first; the split may differ from the server's, the total agrees) and prints 1437 "You give%1 to %2." in the Merchants colour 0x114. Wave 0x8a (the cash register) plays only when the purse could pay; otherwise the coin is zeroed silently (FinishBuyingItem @0x6ef220, also a trader purchase, TraderShop 10 method 0).
-3. TradeRequest C→Z is sent on a left click on a spawn while holding an item (within AvatarHeight + 20, 12294). Banker-type classes 40/63/64/66/74 refuse (8505). Z→C (a player asks): the client opens its trade window at once and answers the Ack.
-4. TradeRequestAck: for an NPC the server answers itself ({me, NPC}); the cursor item then goes into the trade (OP_MoveItem cursor → {3, slot}, count 0; a stack merges first) and the 4-slot give window opens. Players get the 8-slot trade window.
+3. TradeRequest C→Z is sent on a left click on a spawn while holding an item or coin (within AvatarHeight + 20, 12294). Banker-type classes 40/63/64/66/74 refuse (8505). Z→C (a player asks): the client opens its trade window and replies with the Ack if it can trade.
+4. TradeRequestAck: for an NPC the server answers itself ({me, NPC}). After the Ack for a pending request, the client opens the window and moves the held item (OP_MoveItem cursor → {3, slot}, count 0; a stack merges first) or coin (OP_MoveCoin cursor → trade) into the offer. NPCs get four slots and players get eight.
 5. CancelTrade: the client prints 1448/1450 and sends its own cancel back while a partner is set. Refunds come as item packets and OP_MoneyUpdate, then OP_FinishWindow/2 (empty).
 6. Say links: EQEmu say links are item links to item 0xF423F with the phrase id in augment 1 (augment 2 for silent links).
 
@@ -645,6 +645,9 @@ EQEmu separately checks `Range:MaxDistanceToClickDoors` (100 units by default).
 Teleport doors (types 57/58 with a destination) are moved by the server with OP_RequestClientZoneChange.
 
 The actor is placed at (Y, X, Z), turned by Heading (counterclockwise like spawns), tilted by DoorAngle about its Y axis, and scaled by size %.
+For classic door actors whose visible triangles are passable, an authored WLD mesh polyhedron provides collision
+in the same moving transform. Mouse clicks still hit the displayed mesh. Door-type movement filters still apply.
+A replacement spawn record refreshes the scene actor for that door ID, including its model and movement filter.
 
 ### Alternate advancement, training, tradeskills and tasks (`net/aa_packets.h`, `net/training_packets.h`, `net/task_packets.h`, `GameConnection` in `net/game_connection_progress.cpp`, rules in `game/alt_adv.h`, `game/training.h`, `game/tasks.h`)
 
@@ -1117,7 +1120,7 @@ Tried live against EQEmu with two clients (playprobe `--duel`, `--duel-wait`, `-
 | SharedTaskMemberList / MemberChange | Z→C | 0x1e7d / 0x0119 | {u32, u32, count, × {name, u32 mission, u8 leader}} / {u32, u32, u8 added, name} |
 | AdventureInfoRequest / AdventureInfo / AdventureDetails | C→Z / Z→C / Z→C | 0x3cb0 / 0x4c54 / 0x5648 | u32 the recruiter (class 60) / its text or the server's refusal / the adventure offered (NUL-terminated strings) |
 | AdventureRequest / LDoNButton | C→Z | 0x2c6c / 0x5327 | 12 B {risk 1 normal / 2 high, recruiter, objective 0 any .. 4 rescue} / 1 B accept the offer |
-| AdventureData / AdventureUpdate / AdventureFinish | Z→C | 0x7171 / 0x1b01 / 0x400f | 2084 B {u32 (0 with no adventure: all zero), `char[2048]` text, seconds to enter, seconds left, risk (EQEmu: 0 normal / 1 high; RoF2 reads it as the request's 1 / 2, `0x618790`), f32 x, y, z, show compass, u32} / 8 B {current, total} / 8 B {won, points} |
+| AdventureData / AdventureUpdate / AdventureFinish | Z→C | 0x7171 / 0x1b01 / 0x400f | 2084 B {u32 reserved, `char[2048]` text, seconds to enter, seconds left, risk (EQEmu: 0 normal / 1 high), f32 x, y, z, show compass, u32 reserved} / 8 B {current, total} / 8 B {won, points} |
 | AdventurePointsUpdate | Z→C | 0x65c3 | 140 B {available; each theme's points at +56, +76, +96, +116, +136} |
 | AdventureStatsRequest / Reply | C→Z / Z→C | 0x5a62 / 0x2370 | 1 B zero (native sender reserves one byte; EQEmu ignores it) / 96 B: successes, failures, rank, percentage rank × {total, five themes} |
 | AdventureLeaderboardRequest / Reply | C→Z / Z→C | 0x7093 / 0x7f79 | 12 B {order 0 wins / 1 percentage, theme 0..5, risk 0 all / 1 normal / 2 high (EQEmu ignores risk)} / 7220 B {order, reserved, our successes, failures, rank, 100 × {`char[64]`, successes, failures}}; EQEmu zeroes both leading words |
@@ -1159,6 +1162,10 @@ Duel state (`game::DuelState`) is the player we challenged or accepted, the chal
 
 #### Adventures: requests and leaderboard
 
+- EQEmu can send AdventureData with the usual reserved words and blank briefing and timers to retain door access
+  for a completed instance. A subsequent AdventureUpdate can still carry the final count.
+- EQEmu confirms leave and reports expiry with AdventureInfo text `You are not currently assigned to an adventure`
+  (with or without a final period). A denied leave uses a red system chat message and retains the assignment.
 - Stats and leaderboard requests are each gated for ten seconds (EQEmu: eight and four).
 - The leaderboard category index interleaves order within theme: `order = category % 2`, `theme = category / 2`. Risk is the second selector's raw index.
 - The player profile's counted LDoN block has six u32 entries: reserved, the five theme balances, then the available total (`rof2.cpp ENCODE(OP_PlayerProfile)`). Point updates replace these.
@@ -1610,7 +1617,7 @@ Every array is read by its own count prefix (20 bandoliers × 4 items is the one
 13. Birthday, account start, last login, minutes played, entitled, expansions; counted languages (bytes).
 14. u16 zone, u16 instance, f32 y, x, z, heading; u8, pvp, u8, gm; u32 guild, u8 rank, u32, u8, u32; u64 exp; u8.
 15. Bank coin ×4, shared platinum, … `character_id` after 663 unknown bytes; … AA exp; ….
-16. u8 show helm; u32 rest timer; counted 1024 B; 2 u32; u8.
+16. u8 show helm; u32 remaining rest cooldown in seconds; counted 1024 B; 2 u32; u8.
 
 ### Guild banners
 

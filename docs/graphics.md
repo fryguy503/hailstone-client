@@ -981,7 +981,10 @@ It is a decal on the scene's depth copy, drawn after `VkContext::begin_transluce
 grass is drawn, so the ring lies on the ground, drawn over the blades.
 
 A surface less than 60 degrees from level within 1 + 0.6 radii above or below the feet takes the ring, so it follows
-slopes and steps, and anything in front of it hides it.
+slopes and steps, and anything in front of it hides it. A surface with open air under it does not: the shader looks
+at a point 0.12 radii (0.3 to 1 unit) below it, and where that point is in sight rather than hidden inside the
+ground, the surface is a belly, a back or another character standing on the ring, and the ring passes under it as
+the level ring below.
 
 Elsewhere the ring is level at the feet, shown where it lies in front of the scene (a target swimming or in the air,
 the part reaching over a ledge). Behind the scene it shows only with **Target Ring Through Models**

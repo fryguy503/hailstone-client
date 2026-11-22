@@ -196,6 +196,37 @@ TEST_CASE("achievement connection: clicked snapshots are independent of target a
     CHECK_FALSE(rig.conn.inspect_achievement_link(fixture::metadata()));
 }
 
+TEST_CASE("achievement connection: chat links show snapshots and receive updates during the camp countdown") {
+    Rig rig;
+    REQUIRE(rig.to_zone());
+    received(rig);
+    peer(rig);
+    rig.conn.camp();
+    REQUIRE(rig.conn.state() == ConnectionState::Camping);
+
+    REQUIRE(rig.conn.inspect_achievement_link(fixture::metadata("Elsewhere")));
+    REQUIRE(rig.conn.achievements().detail_shown());
+    REQUIRE(rig.conn.achievements().detail_state());
+    CHECK(rig.conn.achievements().detail_state()->counts[1][0] == 4);
+    barrier(rig);
+    CHECK(requests(rig, kOpAchievementLinkRequest) == 0);
+
+    REQUIRE(rig.conn.inspect_achievement_link(fixture::metadata()));
+    REQUIRE(rig.until([&] { return requests(rig, kOpAchievementLinkRequest) == 1; }));
+    REQUIRE(rig.conn.achievements().link_pending());
+    rig.server.zone.send_reliable(fixture::inspect("Peer", 900, 9));
+    REQUIRE(rig.until([&] { return !rig.conn.achievements().link_pending(); }));
+    REQUIRE(rig.conn.achievements().detail_state());
+    CHECK(rig.conn.achievements().detail_state()->counts[1][0] == 9);
+    CHECK(rig.conn.state() == ConnectionState::Camping);
+
+    rig.server.drop_on_logout = false;
+    rig.conn.set_fast_camp(true);
+    REQUIRE(rig.until([&] { return rig.server.logouts == 1; }));
+    REQUIRE(rig.conn.state() == ConnectionState::Camping);
+    CHECK_FALSE(rig.conn.inspect_achievement_link(fixture::metadata()));
+}
+
 TEST_CASE("achievement connection: old-schema replies drain across catalog count and component changes without adoption") {
     for (const bool change_components : {false, true}) {
         CAPTURE(change_components);

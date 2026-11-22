@@ -347,8 +347,10 @@ struct ConnectionOptions {
     // The servers/ folder of those profiles; empty: platform::servers_dir() (tests name a scratch folder).
     std::filesystem::path servers_dir;
     // The saved server's folder (servers/<id>/): at the first zone-in the zone-in waits while the server's client
-    // files are brought into its assets/ (net/server_files.h). Empty: no download (a test login, tests).
+    // files are brought into it (net/server_files.h).
     std::filesystem::path server_files_dir;
+    // Transient logins cache only hailstone.cfg here, to check server access without enabling the full download.
+    std::filesystem::path server_access_dir;
     // How much those files may come to (hailstone.ini's assets.server_files_max_*_mb).
     ServerFileSync::Limits server_files_limits;
     // Hailstone: the bank as last seen is read from and saved to the character's bank.dat (game/bank_snapshot.h).
@@ -603,12 +605,12 @@ public:
     // Sets the target and tells the server (OP_TargetMouse, as the original
     // does on every target change); 0 clears it.
     void set_target(std::uint32_t spawn_id);
-    // LocalPlayer_TargetSelfOrPet (F1 = 0, F2..F6 = 1..5, the group window's
-    // rows): targets group member n, the n-th occupied slot, and selects it
-    // (game/group_rules.h). The selection /disband reads is
-    // group_member_targeted(): that ordinal, or, once the target changes, the
-    // new target's slot index (CTargetWnd::OnProcessFrame), -1 none.
-    void target_group_member(std::int32_t n, bool target_of_target = false);
+    enum class GroupTargetMode { CyclePet, MemberOnly };
+    // F1 = self, F2..F6 = the group's other rows. The keys select the pet when the owner is already
+    // targeted. A click on the member's row selects the member. The selection /disband reads is
+    // the corresponding roster slot (CTargetWnd::OnProcessFrame), -1 none.
+    void target_group_member(std::int32_t n, GroupTargetMode mode = GroupTargetMode::CyclePet);
+    const game::Spawn* group_member_pet(const game::GroupMember& member) const;
     std::int32_t group_member_targeted() const { return group_member_targeted_; }
     // The target's target (OP_TargetHoTT; PlayerZoneClient::TargetOfTarget), 0 none.
     std::uint32_t target_of_target() const { return target_of_target_; }
@@ -1207,11 +1209,15 @@ public:
     // an offer; a request still awaiting its answer keeps the recruiter, and the answer shows the window again.
     void close_adventure_recruiter();
     bool adventure_recruiter_available() const;
+    bool adventure_request_options_ready() const;
     bool adventure_request_ready() const;
     void adventure_request(std::uint32_t risk, std::uint32_t type);
     void adventure_answer(bool accept);
     // OP_LeaveAdventure (no body): leave the current adventure (EQEmu's world server may refuse, with its own line).
+    bool adventure_leave_pending() const;
+    bool adventure_leave_ready() const;
     void adventure_leave();
+    std::uint64_t adventure_assignment_revision() const { return adventure_assignment_revision_; }
     void set_adventure_stats_open(bool open);
     void set_adventure_leaderboard_open(bool open);
     void adventure_stats_request();
@@ -1650,7 +1656,8 @@ public:
     using TeleportHandler = std::function<void(const game::TeleportBArgs&)>;
     void set_teleport_handler(TeleportHandler h) { teleport_handler_ = std::move(h); }
     // OP_RestState (PcClient_HandleRestState @0x578530): the combat flag (+0x31bc, vtable +0x80) and the
-    // downtime still to run (+0x31c0 / +0x31c4, vtable +0x84 @0x577dd0, seconds).
+    // downtime still to run (+0x31c0 / +0x31c4, vtable +0x84 @0x577dd0, seconds). OP_PlayerProfile's
+    // non-zero rest timer starts the downtime too (@0x57a04a).
     bool in_combat() const { return in_combat_; }
     std::uint32_t rest_downtime_left() const;
     // PcZoneClient_IsRestingForFastRegen @0x580370.
@@ -1944,6 +1951,7 @@ public:
     void give_to(std::uint32_t spawn_id);
     // CTradeWnd::DropItemIntoTrade: the cursor item into the first free trade slot.
     void trade_drop_cursor();
+    void trade_drop_cursor_coin();
     // Puts coin of one type (0 copper .. 3 platinum) into the trade (through the cursor, as the original).
     void trade_coin(int type, std::uint32_t amount);
     // The Trade / Give button (OP_TradeAcceptClick) and Cancel.
@@ -1974,6 +1982,7 @@ public:
     const game::BankCoins& bank_coins() const { return bank_coins_; }
     // Coin on the cursor by wire type (0 copper .. 3 platinum).
     const std::array<std::uint32_t, 4>& cursor_coins() const { return cursor_coins_; }
+    std::optional<std::pair<int, std::uint32_t>> held_coin() const;
     // CEverQuest::MoveMoney: moves coin between locations (kCoinCursor,
     // kCoinInventory, kCoinBank, kCoinSharedBank) with the original's
     // conversion, updates the local piles and sends OP_MoveCoin. Returns
@@ -2063,7 +2072,7 @@ public:
     // OP_MoveDoor answers. Returns true when the click was sent.
     bool click_door(std::uint8_t door_id, float actor_radius, std::int32_t key = -1, std::int32_t skill = 0,
                     std::optional<glm::vec3> hit = std::nullopt);
-    // Whether the local player is within reach of the door for a click (UseSwitch's test, as click_door makes it).
+    // Whether the local player or controlled Eye is within reach of the door for a click.
     bool door_in_reach(std::uint8_t door_id, float actor_radius, std::optional<glm::vec3> hit = std::nullopt) const;
     // EQSwitch::UseSwitch also takes touch activations without a pick point. `user` is the spawn id;
     // 0 (nobody, type 0x23) skips the reach test and sends player id 0.
@@ -2549,6 +2558,9 @@ public:
     // The Options window's game options (game/client_options.h): the character's options.ini over eqclient.ini's.
     const game::ClientOptions& client_options() const { return client_options_; }
     bool client_option(game::ClientOption id) const { return client_options_.on(id); }
+    game::HideCorpseMode hide_corpse_mode() const {
+        return static_cast<game::HideCorpseMode>(client_options_.get(game::ClientOption::HideCorpses));
+    }
     // Sets an option as the Options window does: kept in options.ini, then acted on (apply_client_option: the
     // original's COptionsWnd page handlers, e.g. the anonymous flag's spawn appearance and the chat line).
     void change_client_option(game::ClientOption id, int value);
@@ -2962,6 +2974,7 @@ private:
     void reset_achievements();
     void update_achievements();
     std::pair<std::uint32_t, std::uint64_t> achievement_target() const;
+    bool achievement_link_ready() const;
     bool reward_request_ready(std::string* why = nullptr) const;
     void reset_rewards();
     std::int64_t reward_now_ms() const;
@@ -2986,6 +2999,8 @@ private:
     // its chat line, sounds and the target's animation.
     void report_successful_hit(const CombatDamage& d, bool reported);
     void update_doors();
+    bool switch_in_reach(const game::Door& door, const game::Spawn* eye, float actor_radius,
+                         std::optional<glm::vec3> hit) const;
     // Sends an OP_ZoneChange and waits for its answer (RequestZoneChangeStatus).
     void start_zone_change(const ZoneChange& request);
     const game::DoorRiders* door_riders_ = nullptr;
@@ -3233,10 +3248,10 @@ private:
     void shield_group_command();
     void blockspell_command(const std::string& args);
     void hidecorpses_command(const std::string& args);
+    void send_hide_corpse_setting(game::HideCorpseMode previous = game::HideCorpseMode::None);
     void decaycorpse_command();
     // The loot window closing (CLootWnd::AboutToHide @0x6bcd40) with /hidecorpses looted on.
     void hide_looted_corpse();
-    bool hide_looted_corpses_ = false; // CDisplay +0x14 (bHideLootedCorpses)
     // /targetgroupbuff and /tgb (Cmd_targetgroupbuff @0x4ea820), /spellscribe (Cmd_spellscribe @0x4f7b90),
     // /offlinemode (Cmd_offlinemode @0x4e6660).
     void target_group_buff_command(const std::string& args);
@@ -3292,7 +3307,8 @@ private:
     const GameDir& game_;
     ConnectionOptions options_;
     std::optional<plugin::Rules> server_rules_;
-    void update_server_rules();
+    // Returns false when this login received a policy that denies Hailstone access.
+    bool update_server_rules();
     bool guild_world_invites_ = false; // OP_HailstoneGuildReply's hello this zone-in (server/'s script)
     std::uint32_t server_rules_serial_ = 0;
     int hook_game_state_ = 0;              // the game state last raised (plugin::kGameState*; 0 none yet)
@@ -3877,6 +3893,11 @@ private:
     void handle_tribute(Op op, const AppPacket& p);
     Expedition expedition_;
     Adventure adventure_;
+    std::uint64_t adventure_assignment_revision_ = 0;
+    std::uint32_t adventure_requested_recruiter_ = 0;
+    std::int64_t adventure_offer_until_ms_ = 0;
+    std::int64_t adventure_accept_until_ms_ = 0;
+    std::int64_t adventure_leave_until_ms_ = 0;
     RaidOptions raid_options_;
     bool target_of_target_open_ = false;
     game::PlayerPath path_;
@@ -3979,6 +4000,8 @@ private:
     void reset_real_estate_for_zone();
     void server_coin(Op op, const AppPacket& p); // begging and pick-pocket coin (net/game_connection_abilities.cpp)
     void handle_adventure(Op op, const AppPacket& p);
+    void clear_adventure_assignment();
+    void handle_adventure_leave_denial(const SpecialMessage& m);
     void handle_dz(Op op, const AppPacket& p);
     void answer_dz_invite(bool accept);
     bool potion_belt_open_ = false;

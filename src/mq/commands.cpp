@@ -23,6 +23,28 @@ std::string_view trim(std::string_view s) {
     return s;
 }
 
+// /target's own spaces: a tab ends its words too, as in a spawn search. Other commands keep a tab as part of a word
+// (/keypress "hold\t" is no hold, but a tap).
+std::string_view trim_target(std::string_view s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.remove_suffix(1);
+    return s;
+}
+
+// Whether one of the words of `s` (split at a space or a tab) is `word`, case-insensitively.
+bool has_word(std::string_view s, std::string_view word) {
+    while (!s.empty()) {
+        const std::size_t start = s.find_first_not_of(" \t");
+        if (start == std::string_view::npos) return false;
+        s.remove_prefix(start);
+        const std::size_t end = s.find_first_of(" \t");
+        if (iequals(s.substr(0, end), word)) return true;
+        if (end == std::string_view::npos) return false;
+        s.remove_prefix(end);
+    }
+    return false;
+}
+
 std::string first_word(std::string_view line) {
     line = trim(line);
     return std::string(line.substr(0, line.find(' ')));
@@ -116,10 +138,13 @@ Commands::Commands(CommandEnv env) : env_(std::move(env)) {
         [this](std::string_view args) {
             const Context& ctx = env_.context();
             if (!ctx.conn || !env_.set_target) return;
-            args = trim(args);
+            args = trim_target(args);
             const game::WorldState& world = ctx.conn->world();
-            if (args.empty()) {
-                say("Usage: /target [id <spawn id> | clear | mycorpse | <spawn search>]");
+            // MQ: /target with nothing, or with "myself" among its words, targets the player (MQCommands.cpp
+            // Target: myself anywhere wins over the rest of the search). Words split at a space or a tab, as in a
+            // spawn search.
+            if (args.empty() || has_word(args, "myself")) {
+                env_.set_target(world.player_id);
                 return;
             }
             if (iequals(args, "clear")) {
@@ -141,18 +166,16 @@ Commands::Commands(CommandEnv env) : env_(std::move(env)) {
             sources.can_see = ctx.can_see;
             const SpawnSearch search = parse_spawn_search(args, sources.guild);
             const auto found = search_spawns(search, world, sources);
-            if (search.kind == SpawnSearch::Kind::Any && !search.id && !search.name.empty()) {
+            // RoF2's choice is a plain /target's; next / prev ask for cycling, which it cannot answer.
+            if (search.direction == SpawnSearch::Direction::Nearest && search.kind == SpawnSearch::Kind::Any &&
+                !search.id && !search.name.empty()) {
                 if (const game::Spawn* s = rof2_target_choice(found, search.name, world)) {
                     env_.set_target(s->id);
                     return;
                 }
-            } else {
-                for (const game::Spawn* s : found) {
-                    // MQ skips the local player when there is another match.
-                    if (s->id == world.player_id && found.size() > 1) continue;
-                    env_.set_target(s->id);
-                    return;
-                }
+            } else if (const game::Spawn* s = pick_target(search, found, world)) {
+                env_.set_target(s->id);
+                return;
             }
             say(std::format("There are no spawns matching: ({})", args));
         },

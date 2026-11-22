@@ -51,6 +51,7 @@ ui.window("Lua Scripts", function()
       T.font(20)
       T.draw(x0, y0 + T.px(10), "No scripts found. Install one with the add-on manager on the login screen.", C.faint)
       T.unfont()
+      ui.Dummy(0, 0)
     else
       local row = W.list(WIN, listState, #list, visible, rowH, cw, function(i, rx0, ry0, rx1, ry1)
         local r = list[i]

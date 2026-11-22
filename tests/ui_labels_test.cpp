@@ -3,6 +3,7 @@
 // windows' fade (game/buff_overlays.h).
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <vector>
@@ -16,6 +17,7 @@
 #include "game/mechanics/character.h"
 #include "game_files.h"
 #include "mock_server/harness.h"
+#include "mock_server/profile_builder.h"
 #include "mq_test_world.h"
 #include "net/aggro_packets.h"
 #include "net/game_connection.h"
@@ -94,6 +96,56 @@ TEST_CASE("Combat timer: label 137 and gauge 29 from OP_RestState") {
     t.conn.receive_zone_packet_for_test(rest_state(true, 0)); // in combat: no downtime
     CHECK(app::ui_label(t.host, 137).text.empty());
     CHECK(app::ui_gauge(t.host, 29).value == -1);
+}
+
+TEST_CASE("Combat timer resumes from the player profile on login") {
+    test::EmptyGameDir dir;
+    GameDir game(dir.path());
+    Host t(game);
+    std::vector<std::unique_ptr<app::StockWindow>> windows;
+    app::add_hud_windows(windows);
+    const auto player = std::ranges::find(windows, "PlayerWindow", &app::StockWindow::screen);
+    REQUIRE(player != windows.end());
+    const auto combat_indicator = [&] {
+        app::Child child;
+        (*player)->child(t.host, "PW_CombatStateAnim", child);
+        return child.decal.anim;
+    };
+
+    test::ProfileSpec profile;
+    profile.rest_timer = 75;
+    t.conn.receive_zone_packet_for_test(test::build_player_profile(profile));
+    CHECK_FALSE(t.conn.in_combat());
+    CHECK_FALSE(t.conn.resting_for_fast_regen());
+    const auto text = app::ui_label(t.host, 137).text;
+    CHECK((text == "01:15" || text == "01:14"));
+    CHECK(app::ui_gauge(t.host, 29).value == 1000);
+    CHECK(combat_indicator() == "A_PWCSTimer");
+
+    t.conn.receive_zone_packet_for_test(rest_state(false, 15));
+    const auto gauge = app::ui_gauge(t.host, 29).value;
+    CHECK((gauge == 500 || gauge == 466));
+    t.conn.receive_zone_packet_for_test(rest_state(true, 0));
+    CHECK(t.conn.in_combat());
+    CHECK(app::ui_label(t.host, 137).text.empty());
+    CHECK(app::ui_gauge(t.host, 29).value == -1);
+    CHECK(combat_indicator() == "A_PWCSInCombat");
+
+    // @0x57a04a writes only the downtime and its start: the combat flag stays as OP_RestState left it.
+    t.conn.receive_zone_packet_for_test(test::build_player_profile(profile));
+    CHECK(t.conn.in_combat());
+    CHECK(combat_indicator() == "A_PWCSInCombat");
+    t.conn.receive_zone_packet_for_test(rest_state(false, 0));
+    CHECK(t.conn.resting_for_fast_regen());
+    CHECK(combat_indicator() == "A_PWCSStanding");
+
+    // A zero rest timer leaves a running countdown alone.
+    t.conn.receive_zone_packet_for_test(rest_state(false, 75));
+    profile.rest_timer = 0;
+    t.conn.receive_zone_packet_for_test(test::build_player_profile(profile));
+    CHECK_FALSE(t.conn.resting_for_fast_regen());
+    CHECK(app::ui_gauge(t.host, 29).value == 1000);
+    CHECK(combat_indicator() == "A_PWCSTimer");
 }
 
 TEST_CASE("Discipline timer: gauge 26 counts down between ticks with whole seconds") {

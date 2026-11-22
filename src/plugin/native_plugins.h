@@ -128,6 +128,14 @@ public:
     // A loaded plugin's capabilities, by its exact name; 0 when none of that name is loaded. Cheap (no folder scan or
     // hashing, unlike list()): the Lua UI asks it at every switch to a plugin's code, many times a frame.
     std::uint32_t loaded_caps(std::string_view name) const;
+    // For tests: a loaded plugin's bulk buffer (acquire_bulk_buffer; null before its first acquire) and whether it holds
+    // it now; nullopt when none of that name is loaded. And how many loaded plugins have one.
+    struct BulkBufferState {
+        const unsigned char* data = nullptr;
+        bool held = false;
+    };
+    std::optional<BulkBufferState> bulk_buffer_for_test(std::string_view name) const;
+    std::size_t bulk_buffers_for_test() const;
 
     // After the server's rules changed: unloads what they no longer allow; loads the server's own plugins and the
     // allowed ones `autoload` names ("*" all) that are not loaded yet.

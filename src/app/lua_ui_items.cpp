@@ -53,20 +53,12 @@ std::uint32_t coin_of(const net::Coins& c, int type) {
     }
 }
 
-// The coin held on the cursor, if any: its type and amount.
-std::optional<std::pair<int, std::uint32_t>> cursor_coin(const net::GameConnection& c) {
-    const auto& cc = c.cursor_coins();
-    for (int t = 3; t >= 0; --t)
-        if (cc[static_cast<std::size_t>(t)]) return std::pair{t, cc[static_cast<std::size_t>(t)]};
-    return std::nullopt;
-}
-
 // A money button where coin lives at `location` (net::kCoin*): with coin on the cursor it drops there, else that
 // pile's coin of the button's type comes to the cursor (the original asks how many in its quantity window; here
 // the whole pile comes, Ctrl takes one).
 void money_click(net::GameConnection& c, int location, int type, std::uint32_t pile, bool shared = false) {
-    if (auto held = cursor_coin(c)) {
-        c.move_coin(net::kCoinCursor, location, held->first, shared ? 3 : held->first, static_cast<std::uint32_t>(held->second));
+    if (auto held = c.held_coin()) {
+        c.move_coin(net::kCoinCursor, location, held->first, shared ? 3 : held->first, held->second);
         return;
     }
     if (pile == 0) return;
@@ -1093,12 +1085,7 @@ public:
         }
         if (button != "left") return false;
         if (int m = index_after(id, p_ + "MyMoney"); m >= 0 && m < 4) {
-            // CTradeWnd_DropCursorMoneyIntoTrade: the coin on the cursor goes into the trade (back to the inventory
-            // first: trade_coin moves it inventory -> cursor -> trade as the original does).
-            if (auto held = cursor_coin(c)) {
-                c.move_coin(net::kCoinCursor, net::kCoinInventory, held->first, held->first, held->second);
-                c.trade_coin(held->first, held->second);
-            }
+            c.trade_drop_cursor_coin();
             return true;
         }
         if (id == p_ + "Trade_Button" || id == p_ + "Give_Button") c.trade_accept();

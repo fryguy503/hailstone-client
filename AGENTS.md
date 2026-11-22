@@ -2,6 +2,10 @@
 
 This file is for coding agents (Claude Code, Codex, Copilot and similar) working in this repository. People should read [CONTRIBUTING.md](CONTRIBUTING.md); everything there applies to you too. This file adds what an agent needs that a human learns by osmosis.
 
+Start with the [agent briefing](docs/agents/README.md) for task routing, then open the handbook pages that match the change.
+Use the [shared workflow](docs/agents/workflow.md) when starting, resuming or handing off work across tools.
+This file remains the shared source for repository instructions.
+
 ## What this project is
 
 Hailstone is a portable client for EQEmu servers, written from scratch in C++20 with Vulkan. It speaks the RoF2 protocol, reads the player's own game folder and ships no game assets.

@@ -81,12 +81,6 @@ int group_argument(lua_State* L, int arg) {
     return value >= 1 && value <= tabs::kMaxSlots ? static_cast<int>(value) : 0;
 }
 
-} // namespace
-
-bool unread_dot(const chat_tabs::Tab& tab, bool selected) { return !selected && tab.unread && !tab.highlight; }
-
-namespace {
-
 struct ChatTabStyle {
     ImVec4 text, muted, accent, shadow;
 };
@@ -174,12 +168,6 @@ bool draw_tab_strip(UiHost& host, const tabs::Group& group, ImVec2 pos, float wi
         if (index == selected && count > 1 && text_end > text_pos.x)
             draw->AddLine({text_pos.x, pos.y + height - 3 * scale}, {text_end, pos.y + height - 3 * scale},
                           ImGui::GetColorU32(style.accent), 2 * scale);
-        // A tab that flashes shows its unread lines in its colour; one with flashing off keeps the dot after its
-        // label that the Lua strip drew for a tab with unseen lines.
-        if (unread_dot(item.tab, index == selected)) {
-            const float dot_x = std::min(text_pos.x + item.size.x + 4 * scale, text_end);
-            draw->AddCircleFilled({dot_x, text_pos.y + 2 * scale}, 2.5f * scale, ImGui::GetColorU32(style.accent));
-        }
         if (hovered) {
             const auto tip = item.size.x + 2 * padding > end - x || item.text != label(item.tab) ? label(item.tab)
                 : index == selected && item.text != group.title ? group.title : std::string_view{};
@@ -197,7 +185,6 @@ bool draw_tab_strip(UiHost& host, const tabs::Group& group, ImVec2 pos, float wi
                 color = rgb(items[index].tab.highlight_color.value_or(tabs::kDefaultHighlightColor));
                 break;
             }
-            if (unread_dot(items[index].tab, index == selected)) color = style.accent; // (a hidden tab's dot)
         }
         const float left = pos.x + available;
         ImGui::SetCursorScreenPos({left, pos.y + 2 * scale});

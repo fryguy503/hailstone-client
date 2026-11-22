@@ -2895,6 +2895,8 @@ namespace hailstone::game {
 		// still would keep what it was measured against then.
 		void reground();
 
+		std::uint32_t view_spawn_id() const { return view_id ? view_id : player_id; }
+
 		const Spawn* player() const {
 			auto it = spawns.find(player_id);
 			return it == spawns.end() ? nullptr : &it->second;

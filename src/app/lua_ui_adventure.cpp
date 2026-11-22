@@ -238,63 +238,74 @@ public:
 
     void child(UiHost& host, std::string_view id, Child& out) override {
         if (!host.conn) return;
-        const auto& a = host.conn->adventure();
-        bool in = a.data.assigned;
-        std::int64_t gone = host.conn->adventure_elapsed_seconds();
+        const auto& conn = *host.conn;
+        const auto& a = conn.adventure();
+        const bool assigned = a.data.assigned;
+        const auto elapsed = conn.adventure_elapsed_seconds();
         if (id == "AdvRqst_NPCText") {
-            const std::string& t = !a.offer.empty() ? a.offer : in && !a.data.text.empty() ? a.data.text : a.npc_text;
+            const std::string& t = !a.offer.empty() ? a.offer : assigned && !a.data.text.empty() ? a.data.text : a.npc_text;
             out.text = stml_escape(t.empty() ? "You are not currently assigned to an adventure." : t);
+        } else if (id == "AdvRqst_NPCLabel") {
+            const auto& spawns = conn.world().spawns;
+            const auto npc = spawns.find(a.recruiter);
+            out.text = npc != spawns.end() ? game::display_name(npc->second.name) : std::string();
+        } else if (id == "AdvRqst_StatusLabel") {
+            if (conn.adventure_leave_pending()) out.text = "Leave requested. Waiting for the server.";
+            else if (!assigned && a.offer.empty() && !conn.adventure_recruiter_available())
+                out.text = "Interact with a nearby adventure recruiter to request an adventure.";
+            else if (!assigned && a.offer.empty() && !conn.adventure_request_ready())
+                out.text = "Please wait before requesting another adventure.";
+            else out.text = "";
         } else if (id == "AdvRqst_RequestButton") {
-            out.enabled = host.conn->adventure_request_ready();
+            out.enabled = conn.adventure_request_ready();
         } else if (id == "AdvRqst_AcceptButton") {
-            out.enabled = !a.offer.empty() && host.conn->adventure_recruiter_available();
+            out.enabled = !assigned && !a.offer.empty() && conn.adventure_recruiter_available();
         } else if (id == "AdvRqst_DeclineButton") {
             out.enabled = !a.offer.empty();
         } else if (id == "AdvRqst_LeaveButton") {
-            out.shown = in;
-            out.enabled = in;
+            out.shown = assigned;
+            out.enabled = conn.adventure_leave_ready();
+        } else if (id == "AdvRqst_LeaveToken") {
+            if (conn.adventure_leave_ready())
+                out.text = std::format("{}:{}", conn.interaction_context(), conn.adventure_assignment_revision());
         } else if (id == "AdvRqst_EnterTimeLeftLabel") {
-            out.text = in && a.data.time_to_enter ? adventure_time_left(static_cast<std::int64_t>(a.data.time_to_enter) - gone) : std::string();
+            out.text = assigned && a.data.time_to_enter ? adventure_time_left(static_cast<std::int64_t>(a.data.time_to_enter) - elapsed) : std::string();
         } else if (id == "AdvRqst_CompleteTimeLeftLabel") {
-            out.text = in && !a.data.time_to_enter ? adventure_time_left(static_cast<std::int64_t>(a.data.time_left) - gone) : std::string();
+            out.text = assigned && !a.data.time_to_enter ? adventure_time_left(static_cast<std::int64_t>(a.data.time_left) - elapsed) : std::string();
         } else if (id == "AdvRqst_ProgressTextLabel") {
-            out.text = in && !a.data.time_to_enter && a.count.total ? std::format("{} / {}", a.count.current, a.count.total) : std::string();
+            out.text = assigned && !a.data.time_to_enter && a.count.total ? std::format("{} / {}", a.count.current, a.count.total) : std::string();
         } else if (id == "AdvRqst_TypeCombobox" || id == "AdvRqst_RiskCombobox") {
-            out.enabled = host.conn->adventure_request_ready();
+            out.enabled = conn.adventure_request_options_ready();
         }
     }
 
     const ComboData* combo(UiHost& host, std::string_view id) override {
-        if (id == "AdvRqst_TypeCombobox") {
-            type_.choices = {"Any Type", "Assassinate", "Kill", "Collect", "Rescue"}; // EQEmu's AdventureObjective
-            if (type_.selected < 0) type_.selected = 0;
-            return &type_;
-        }
+        if (id == "AdvRqst_TypeCombobox") return &type_;
         if (id == "AdvRqst_RiskCombobox") {
-            risk_.choices = {"Normal", "High"};
-            if (risk_.selected < 0) risk_.selected = 0;
-            // Stock EQEmu fills OP_AdventureData's risk with is_hard ? 1 : 0 (world/adventure_manager.cpp), unlike
-            // the request's 1 / 2. RoF2 shows that field as choice risk - 1 (0x618790, as for its own request),
-            // which would show EQEmu's high risk as normal; this client follows the stock server.
-            if (host.conn && host.conn->adventure().data.assigned)
-                risk_.selected = host.conn->adventure().data.risk != 0 ? 1 : 0;
-            return &risk_;
+            if (!host.conn || !host.conn->adventure().data.assigned) return &risk_;
+            // Showing the assigned risk must not overwrite the choice for the next request.
+            active_risk_.selected = host.conn->adventure().data.risk != 0 ? 1 : 0;
+            return &active_risk_;
         }
         return nullptr;
     }
-    bool combo_select(UiHost&, std::string_view id, int index) override {
-        if (id == "AdvRqst_TypeCombobox" && index >= 0 && index < 5) type_.selected = index;
-        else if (id == "AdvRqst_RiskCombobox" && index >= 0 && index < 2) risk_.selected = index;
-        else return false;
+    bool combo_select(UiHost& host, std::string_view id, int index) override {
+        if (!host.conn || !host.conn->adventure_request_options_ready()) return false;
+        auto* data = id == "AdvRqst_TypeCombobox" ? &type_ : id == "AdvRqst_RiskCombobox" ? &risk_ : nullptr;
+        if (!data || index < 0 || static_cast<std::size_t>(index) >= data->choices.size()) return false;
+        data->selected = index;
         return true;
     }
 
     bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
         if (!host.conn || button != "left") return false;
+        Child state;
+        child(host, id, state);
+        if (!state.enabled.value_or(true) || !state.shown.value_or(true)) return false;
         auto& c = *host.conn;
         if (id == "AdvRqst_RequestButton")
-            c.adventure_request(static_cast<std::uint32_t>(std::max(risk_.selected, 0) + 1),
-                                static_cast<std::uint32_t>(std::max(type_.selected, 0)));
+            c.adventure_request(static_cast<std::uint32_t>(risk_.selected + 1),
+                                static_cast<std::uint32_t>(type_.selected));
         else if (id == "AdvRqst_AcceptButton") c.adventure_answer(true);
         else if (id == "AdvRqst_DeclineButton") c.adventure_answer(false);
         else if (id == "AdvRqst_LeaveButton") c.adventure_leave();
@@ -304,7 +315,9 @@ public:
     }
 
 private:
-    ComboData type_, risk_;
+    ComboData type_{{"Any Type", "Assassinate", "Kill", "Collect", "Rescue"}, 0};
+    ComboData risk_{{"Normal", "High"}, 0};
+    ComboData active_risk_ = risk_;
 };
 
 // AdventureStatsWnd: successes, failures and both ranks for each theme (OP_AdventureStatsReply), the points earned

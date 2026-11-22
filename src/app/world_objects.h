@@ -158,7 +158,7 @@ public:
     // reads it (app/world_objects_ladder.cpp).
     std::optional<game::mechanics::LadderSwitch> ladder(const net::GameConnection& conn, std::uint32_t drop_id) const;
 
-    // The centre of a door's solid bounds in the world, as it is now.
+    // The centre of a door's model bounds in the world, as it is now.
     std::optional<glm::vec3> door_center(std::uint8_t id) const;
     // The door actor's bounding radius at its scale (UseSwitch's reach test).
     float door_radius(std::uint8_t id) const;
@@ -183,6 +183,8 @@ private:
     struct Model {
         int gpu = -1;              // ObjectRenderer handle
         game::ObjectShape shape;   // solid triangles in model space
+        std::unique_ptr<const game::ObjectShape> door_hull; // separate authored collision volume, for solid doors
+        std::optional<glm::vec3> door_center;
         bool plant = false;        // assets::is_plant: the grass grows under it (flora_cover)
         bool fire = false;         // assets::is_fire_object: a campfire covers its footprint (flora_cover)
         // Its grass cover in model space (assets::cover_triangles, 3 a triangle): the opaque surfaces, and for a fire
@@ -213,6 +215,14 @@ private:
         mutable glm::mat4 flora_at{0.0f};
         mutable const Model* flora_model = nullptr; // the model flora_tris was made from; null before any
     };
+    struct PlacedDoor : Placed {
+        std::string name;
+        bool has_actor = false;
+
+        const game::ObjectShape& collision_shape() const {
+            return solid && model->door_hull ? *model->door_hull : model->shape;
+        }
+    };
 
     const Model* model_for(const std::string& name);
     void add_object_emitters(Placed& placed);
@@ -238,7 +248,7 @@ private:
     const assets::Zone* zone_ = nullptr;
     std::shared_ptr<const assets::CharacterLibrary> items_;
     std::unordered_map<std::string, std::unique_ptr<Model>> models_; // upper-case name -> model (null: none)
-    std::unordered_map<std::uint8_t, Placed> doors_;
+    std::unordered_map<std::uint8_t, PlacedDoor> doors_;
     std::unordered_map<std::uint32_t, Placed> objects_;
     // Placed real estate objects (EQPlacedItemManager), keyed by re << 32 | item, and the placement ghost.
     std::unordered_map<std::uint64_t, Placed> placed_;

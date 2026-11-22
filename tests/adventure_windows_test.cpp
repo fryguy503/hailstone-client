@@ -101,12 +101,17 @@ TEST_CASE("adventure windows: Alt+V and the menu toggle the adventure away from 
     ui.api.toggle(app::toggle_command_window(command));
     CHECK(ui.api.shown("AdventureRequestWnd"));
     CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "You are not currently assigned to an adventure.");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_StatusLabel')") ==
+          "Interact with a nearby adventure recruiter to request an adventure.");
     CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "false");
     CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_AcceptButton'))") == "false");
     CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_DeclineButton'))") == "false");
     CHECK(ui("return hs.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "false");
     CHECK(ui("return #(hs.ComboInfo('AdventureRequestWnd', 'AdvRqst_TypeCombobox'))") == "5");
     CHECK(ui("return #(hs.ComboInfo('AdventureRequestWnd', 'AdvRqst_RiskCombobox'))") == "2");
+    CHECK(ui("return hs.ComboSelect('AdventureRequestWnd', 'AdvRqst_TypeCombobox', 2)") == "false");
+    CHECK(ui("return hs.ClickChild('AdventureRequestWnd', 'AdvRqst_RequestButton', 'left')") == "false");
+    CHECK(ui("return hs.ClickChild('AdventureRequestWnd', 'AdvRqst_LeaveButton', 'left')") == "false");
     CHECK(ui("return hs.ClickChild('AdventureRequestWnd', 'AdvRqst_ViewStatsButton', 'left')") == "true");
     CHECK(ui.api.shown("AdventureStatsWnd"));
     ui.api.toggle("AdventureRequestWnd");
@@ -118,7 +123,9 @@ TEST_CASE("adventure windows: recruiter offers and active adventures expose sepa
     AdventureUi ui;
     ui.recruiter();
     CHECK(ui.api.shown("AdventureRequestWnd"));
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_NPCLabel')") == "Adventure Recruiter");
     CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "true");
+    CHECK(ui("return hs.ComboSelect('AdventureRequestWnd', 'AdvRqst_RiskCombobox', 1)") == "true");
     ui.receive(text_packet(Op::AdventureInfo, "Recruiter introduction."));
     CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_NPCText')") == "Recruiter introduction.");
     ui.receive(text_packet(Op::AdventureDetails, "Offered <adventure> & briefing."));
@@ -150,13 +157,16 @@ TEST_CASE("adventure windows: recruiter offers and active adventures expose sepa
     CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_DeclineButton'))") == "false");
     CHECK(ui("return hs.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "true");
     CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_LeaveButton'))") == "true");
-    ui("hs.ClickChild('AdventureRequestWnd', 'AdvRqst_DeclineButton', 'left')");
+    CHECK(ui("return hs.ClickChild('AdventureRequestWnd', 'AdvRqst_DeclineButton', 'left')") == "false");
     CHECK(ui.world.conn->adventure().data.assigned);
+    const auto assignment = ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_LeaveToken')");
+    REQUIRE_FALSE(assignment.empty());
 
     active.time_to_enter = 0;
     active.time_left = 90;
     active.risk = 0;
     ui.receive(encode(active));
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_LeaveToken')") == assignment);
     CHECK(ui("return select(2, hs.ComboInfo('AdventureRequestWnd', 'AdvRqst_RiskCombobox'))") == "0");
     ui.clock.advance(1s);
     CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_EnterTimeLeftLabel')") == "");
@@ -168,6 +178,45 @@ TEST_CASE("adventure windows: recruiter offers and active adventures expose sepa
     CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_CompleteTimeLeftLabel')") == "0 minutes");
     ui.receive(encode(AdventureData{}));
     CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_ProgressTextLabel')") == "");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_LeaveToken')") == "");
+    CHECK(ui("return hs.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "false");
+    CHECK(ui("return select(2, hs.ComboInfo('AdventureRequestWnd', 'AdvRqst_RiskCombobox'))") == "1");
+    ui.receive(encode(active));
+    const auto next_assignment = ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_LeaveToken')");
+    CHECK_FALSE(next_assignment.empty());
+    CHECK(next_assignment != assignment);
+}
+
+TEST_CASE("adventure windows: the request cooldown leaves kind and risk editable") {
+    AdventureUi ui;
+    ui.recruiter();
+    REQUIRE(ui("return hs.ClickChild('AdventureRequestWnd', 'AdvRqst_RequestButton', 'left')") == "true");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "false");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_StatusLabel')") ==
+          "Please wait before requesting another adventure.");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_TypeCombobox'))") == "true");
+    CHECK(ui("return hs.ComboSelect('AdventureRequestWnd', 'AdvRqst_TypeCombobox', 2)") == "true");
+    CHECK(ui("return hs.ComboSelect('AdventureRequestWnd', 'AdvRqst_RiskCombobox', 1)") == "true");
+    ui.clock.advance(8s);
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_RequestButton'))") == "true");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_StatusLabel')") == "");
+}
+
+TEST_CASE("adventure windows: a pending leave remains visible with confirmation disabled") {
+    AdventureUi ui;
+    AdventureData active;
+    active.assigned = true;
+    active.text = "Current briefing.";
+    active.time_left = 900;
+    ui.receive(encode(active));
+    REQUIRE(ui("return hs.ClickChild('AdventureRequestWnd', 'AdvRqst_LeaveButton', 'left')") == "true");
+    CHECK(ui("return hs.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "true");
+    CHECK(ui("return (hs.ChildState('AdventureRequestWnd', 'AdvRqst_LeaveButton'))") == "false");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_LeaveToken')") == "");
+    CHECK(ui("return hs.WindowText('AdventureRequestWnd', 'AdvRqst_StatusLabel')") ==
+          "Leave requested. Waiting for the server.");
+    CHECK(ui("return hs.ClickChild('AdventureRequestWnd', 'AdvRqst_LeaveButton', 'left')") == "false");
+    ui.receive(encode(AdventureData{}));
     CHECK(ui("return hs.ChildShown('AdventureRequestWnd', 'AdvRqst_LeaveButton')") == "false");
 }
 

@@ -16,6 +16,7 @@
 #include <initializer_list>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -277,15 +278,34 @@ std::string escape_linking(std::string_view text, std::string& name) {
     return escape(text);
 }
 
-// One line as STML: its colour, item links as <a WndNotify="27,data"> (the tag between the two \x12, encoded by
-// game::stml_link_data); with `names`, its player's name as a name link.
-// Hailstone: "[hh:mm:ss] " in grey before a line (local time), nothing for a line of unknown time.
+enum class TimestampFormat { Off, Hours12Seconds, Hours24Minutes, Hours24Seconds };
+
+constexpr std::string_view kTimestampSetting = "chat.timestamps";
+constexpr struct {
+    TimestampFormat format;
+    std::string_view value;
+    const char* example;
+} kTimestampOptions[] = {
+    {TimestampFormat::Off, "off", "Off"},
+    {TimestampFormat::Hours12Seconds, "12h-seconds", "[09:07:43 PM]"},
+    {TimestampFormat::Hours24Minutes, "24h-minutes", "[21:07]"},
+    {TimestampFormat::Hours24Seconds, "24h-seconds", "[21:07:43]"},
+};
+
+TimestampFormat timestamp_format(std::string_view value) {
+    if (value == "1") return TimestampFormat::Hours24Seconds; // profiles saved by the old toggle
+    for (const auto& option : kTimestampOptions)
+        if (value == option.value) return option.format;
+    return TimestampFormat::Off;
+}
+
+// Hailstone: the local arrival time in grey before a line, nothing for a line of unknown time.
 // hs.ChatText formats every line of a window again each time a line comes, and each local time read the time zone
 // again (glibc stats /etc/localtime every call): the stamps were most of a chat window's frame in a fight. Time zones
 // differ from UTC, and change, by whole minutes, so a minute's hour and minute are worked out once (the last 64 kept;
 // a time zone changed while the client runs shows in the minutes after).
-std::string timestamp_stml(std::int64_t time) {
-    if (time <= 0) return {};
+std::string timestamp_stml(std::int64_t time, TimestampFormat format) {
+    if (format == TimestampFormat::Off || time <= 0) return {};
     struct Minute {
         std::int64_t minute = -1;
         int hour = 0, min = 0;
@@ -298,12 +318,21 @@ std::string timestamp_stml(std::int64_t time) {
         if (!tm) return {};
         m = {minute, tm->tm_hour, tm->tm_min};
     }
+    if (format == TimestampFormat::Hours12Seconds) {
+        const int hour = m.hour % 12 == 0 ? 12 : m.hour % 12;
+        return std::format("<c \"#8a8a8a\">[{:02d}:{:02d}:{:02d} {}] </c>",
+                           hour, m.min, time % 60, m.hour < 12 ? "AM" : "PM");
+    }
+    if (format == TimestampFormat::Hours24Minutes)
+        return std::format("<c \"#8a8a8a\">[{:02d}:{:02d}] </c>", m.hour, m.min);
     return std::format("<c \"#8a8a8a\">[{:02d}:{:02d}:{:02d}] </c>", m.hour, m.min, time % 60);
 }
 
-std::string line_stml(const ui::ChatLine& l, bool names, bool stamps = false) {
+// One line as STML: its colour, item links as <a WndNotify="27,data"> (the tag between the two \x12, encoded by
+// game::stml_link_data), and with `names`, a link on its player's name.
+std::string line_stml(const ui::ChatLine& l, bool names, TimestampFormat stamps) {
     std::uint32_t rgb = l.rgb ? l.rgb : l.color ? chat_index_rgb(static_cast<int>(l.color)) : channel_rgb(l.channel);
-    std::string out = (stamps ? timestamp_stml(l.time) : std::string()) + std::format("<c \"#{:06x}\">", rgb & 0xffffff);
+    std::string out = timestamp_stml(l.time, stamps) + std::format("<c \"#{:06x}\">", rgb & 0xffffff);
     std::string name = names ? link_name(l) : std::string();
     std::string_view text = l.text;
     std::size_t at = 0;
@@ -1477,10 +1506,19 @@ std::vector<Row> chat_menu(int w) {
     });
     rows.push_back(action("Use Tell Windows", [] { set_tell_windows(!tell_windows_on()); }, true, tell_windows_on()));
     const bool can_set_timestamps = h && h->layout_setting && h->set_layout_setting;
-    rows.push_back(action("Timestamps", [] {
-        if (UiHost* hh = chat_host(); hh && hh->layout_setting && hh->set_layout_setting)
-            hh->set_layout_setting("chat.timestamps", hh->layout_setting("chat.timestamps") == "1" ? "0" : "1");
-    }, can_set_timestamps, can_set_timestamps && h->layout_setting("chat.timestamps") == "1"));
+    sub("Timestamps", [](int) {
+        std::vector<Row> out;
+        UiHost* hh = chat_host();
+        if (!hh || !hh->layout_setting || !hh->set_layout_setting) return out;
+        const auto selected = timestamp_format(hh->layout_setting(kTimestampSetting));
+        for (const auto& option : kTimestampOptions) {
+            out.push_back(action(option.example, [value = option.value] {
+                if (UiHost* current = chat_host(); current && current->set_layout_setting)
+                    current->set_layout_setting(kTimestampSetting, value);
+            }, true, option.format == selected));
+        }
+        return out;
+    }, can_set_timestamps);
     return rows;
 }
 
@@ -1555,8 +1593,9 @@ int ChatWindows(lua_State* L) {
 
 // version, lines = hs.ChatText(slot [, version [, names [, stamps]]])   -- the lines of the window's tab that is up, as
 // STML, oldest first; only the version when the script already has it. names (Hailstone): players' names as name
-// links; stamps (Hailstone): each line's local time first, "[hh:mm:ss] " (another version than without). The version
-// changes only when this window's lines do (a line in another window leaves it as it is).
+// links. stamps (Hailstone): local arrival time as "12h-seconds", "24h-minutes" or "24h-seconds".
+// true and "1" also select "24h-seconds". false, nil and other strings including "off" hide timestamps.
+// Each format has its own version. A new line in another window leaves this window's version as it is.
 // version, lines, reset, count = hs.ChatText(slot, version, names, stamps, true)   -- Hailstone: the lines added since
 // `version` (one this call gave for the same slot, names and stamps) when the script can keep what it has: reset
 // false, add `lines` at the end and drop lines from the front until `count` are left. Else reset true and `lines`
@@ -1572,14 +1611,20 @@ int ChatText(lua_State* L) {
     scan_windows(*h.chat, w);
     const ChatWnd& c = wnd(w);
     bool names = lua_toboolean(L, 3) != 0;
-    bool stamps = lua_toboolean(L, 4) != 0;
+    auto stamps = TimestampFormat::Off;
+    if (lua_type(L, 4) == LUA_TSTRING) {
+        std::size_t length = 0;
+        const char* value = lua_tolstring(L, 4, &length);
+        stamps = timestamp_format(std::string_view(value, length));
+    } else if (lua_toboolean(L, 4)) {
+        stamps = TimestampFormat::Hours24Seconds;
+    }
     bool since = lua_toboolean(L, 5) != 0;
-    // bits 0..39 the last line's seq, 40..60 the generation (unique to the window), 61 names, 62 stamps. The
-    // stamped text is another version of the window's; marked before the comparison, or a stamped window never
-    // matches the version it holds and gets its whole history again every frame.
-    constexpr std::uint64_t kSeqMask = (std::uint64_t{1} << 40) - 1, kGenMask = (std::uint64_t{1} << 21) - 1;
+    // bits 0..39 the last line's seq, 40..59 the window's generation, 60 names, 61..62 timestamp format.
+    // Keeping the format in the version invalidates the cached lines when the player changes it.
+    constexpr std::uint64_t kSeqMask = (std::uint64_t{1} << 40) - 1, kGenMask = (std::uint64_t{1} << 20) - 1;
     auto version = static_cast<lua_Integer>((c.last & kSeqMask) | ((c.gen & kGenMask) << 40) |
-                                            (std::uint64_t{names} << 61) | (std::uint64_t{stamps} << 62));
+                                            (std::uint64_t{names} << 60) | (static_cast<std::uint64_t>(stamps) << 61));
     int given = 0;
     lua_Integer held = lua_tointegerx(L, 2, &given);
     bool have = given && held == version; // before the result goes on the stack

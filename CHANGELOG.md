@@ -5,6 +5,24 @@
 - Custom builds can set a display version shown at login and in the in-game Help window.
 - Enhanced follow tracks the leader's swimming depth over submerged terrain.
 - Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.
+- Scripts can ask whether you or your target is poisoned, diseased, cursed or corrupted: `Me.Poisoned`, `Target.Diseased`, `.Cursed` and `.Corrupted` give the buff responsible, as in MacroQuest
+- Windows: when the graphics device fails mid-game, the client no longer crashes while closing with a plugin loaded, so the device error itself reaches the log and an error box
+- The target ring no longer tints the target's own body: a wolf's belly and legs stayed in the ring's colour where they stood over it. Ground and steps still take it
+- The out-of-combat regeneration indicator and countdown resume after camping and logging back in.
+- The Potion Belt remembers whether you left it open or closed when you camp and log back in.
+- Fixed automatic AFK while standing still, including automatic tribute shutoff on servers that offer it.
+- Chat displays curly apostrophes and quotes from UTF-8 messages. Fonts without curly quotes draw straight ones.
+- Modern chat has a **Timestamps** submenu with examples for 12-hour time with seconds, 24-hour time with or without seconds, and Off.
+- Modern chat: Turning off **Highlight New Messages** for a tab now suppresses its unread dot and overflow indicator.
+- Server owners can set `[client] deny = on` in `hailstone.cfg` to deny Hailstone access and show a notice at login. Launcher and `--user` test logins now ask for that file too, so on a server without Hailstone's script their first zone-in waits 5 s, as a saved server's already did.
+- Completed LDoN adventures release the request controls even while the instance remains accessible. The Adventure window updates after the server confirms a leave, and Kind and Risk stay editable during the request cooldown.
+- `/target next` and `/target prev` cycle through a spawn search's matches, and `/target` with no argument or `myself` targets you, as in MacroQuest.
+- Mouse look and the gamepad can turn a summoned Eye while your character is sitting.
+- Door clicks while controlling Eye of Zomm use the Eye's reach, and the Eye no longer intercepts first-person clicks.
+- Press F1–F6 again while the corresponding player is targeted to select their pet. Click the green pet bar in the Modern Group window to select that pet directly.
+- `/hidecorpses` remembers your choice per character across restarts and zone changes. Use `always` to hide every corpse, including your own, or `none` to show corpses again.
+- Item, say, and achievement links in chat work during the camp countdown.
+- Fixed starting a trade with only coin on the cursor. Adding held coin to a trade now moves it directly into the offer.
 - **Linux arm64 release package** (`hailstone-<version>-linux-arm64.zip`) for arm64 handhelds, boards and laptops with a Vulkan 1.3 driver, such as Mesa's Turnip on Snapdragon; it updates itself like the x64 one. So far it has only been tested on a Qualcomm Snapdragon 8 Elite (an AYN Odin 3 Max)
 - Modern Player Info: right-click the frame to show mana and endurance percentages, current / maximum values, or both. Each readout defaults to off.
 - `/consider` with no target says "Consider whom?", and considering a ship or boat says "You can't consider that." without asking the server, as in the original client.
@@ -19,6 +37,7 @@
 - Memorize individual spells and saved spell sets, or scribe scrolls, while mounted and stopped.
 - Closing the spell book aborts a scribe in progress with "Aborting scribing of spell.", as in the original, instead of pausing it or dropping it silently.
 - Copy Layout can also bring over another character's keyboard bindings, including movement remaps and alternate keys.
+- Modern Buffs and Songs can each use a horizontal or vertical layout with optional spell names, slot badges, timers, a background, a title bar, and drag resizing. Open **Window options** from an effect's right-click menu. The default stays the compact, transparent icon tray with timers.
 - Your bow appears in your left hand during the archery animation, then your equipped melee weapons or shield return.
 - Archery holds your bow in your left hand, as the original client does: from the first shot until your next melee swing, which brings back your weapons or shield. Other players in the zone see it too.
 - Options can show notices from active add-ons and explain why a setting is unavailable. Notices from several add-ons can appear together in Modern and Gamepad. No add-on can disable the Upscaler, UI pack or Texture pack choice, so the way out of an add-on or a broken pack stays open.
@@ -36,6 +55,8 @@
 - Fixed Horizon Hills scenery protruding through the ground near cliffs in Trakanon's Teeth and at the Stonebrunt waterfall.
 - A GM's /kill now drops you to -10000 HP, as in the original client, until the server next updates your HP (it only played the sound and printed the line)
 - Door clicks use the distance to the spot you clicked, fixing long-range zoning through the Guild Lobby entrance. The Plane of Fire orb in Plane of Tranquility can also be clicked.
+- Nagafen's dragon-room gate and other doors with passable render meshes and a separate WLD collision hull now block movement using that hull. It moves with the door as it opens and closes.
+- Replacing a door with the same ID refreshes its model and collision, including when the server reloads a zone's doors in one update.
 - Dropped items and ground spawns whose model has no solid surface can be clicked, as see-through doors such as the Plane of Fire orb already can
 - A key or lockpick on the cursor is no longer offered for dropping when a click in the world misses a door or the door refuses it, as in the original
 - Buying from or selling to a merchant, and buying from a trader, plays the cash register and prints the line in the Merchants chat colour, as in the original
@@ -109,6 +130,11 @@
   - Each comes with its spells_us.txt fields, its description, and the names of its target type, resist type and categories
   - Its effect slots come as text in MacroQuest's `ParseSpellEffect` wording ("Slot 1: Increase HP by 11 (L1) to 20 (L10)")
   - For developers: docs/plugins.md "get_spells_data_bulk"
+- Plugins: `get_spells_by_name_data_bulk` reads every spell of a name in one call (all three Third Spire of Necromancy, say), laid out as `get_spells_data_bulk`'s
+  - For developers: docs/plugins.md "get_spells_by_name_data_bulk"
+- Plugins: `acquire_bulk_buffer` lends each plugin its own 2 MiB buffer for the `*_data_bulk` reads, so it need not allocate one for each read
+  - The plugin's until it releases it or the callback it took it in returns; freed when the plugin unloads; never zeroed
+  - For developers: docs/plugins.md "The bulk buffer"
 - Scripts: `${Spell.TargetType}` gives MacroQuest's text for every target type
   - `LifeTap` (was `Life Tap`), and `None`, `Special Muramites`, `Target_AE_No_Players_Pets` and `Single Friendly (or Target's Target` where it said `Unknown`
 - Server files: when the server goes quiet during the download, the client keeps asking for the missing pieces until 30 s pass with nothing from it, instead of giving up after about 15 s

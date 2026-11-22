@@ -804,6 +804,7 @@ TEST_CASE("OP_PlayerProfile decodes from a buffer built like ENCODE(OP_PlayerPro
     spec.item_recast_timers[99] = 1700000099;
     spec.adventure_points = {101, 202, 303, 404, 505};
     spec.adventure_points_available = 1515;
+    spec.rest_timer = 30;
     AppPacket p = test::build_player_profile(spec);
     auto pp = decode_player_profile(p);
     REQUIRE(pp);

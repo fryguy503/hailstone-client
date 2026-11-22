@@ -20,7 +20,7 @@ bool ClientApp::plate_input_blocked(bool ignore_right_button) const {
     return !ui_.visible() || !window_.focused() || !conn_ || screen_ != Screen::InGame || !player_ready_ || zone_settling() ||
            conn_->state() != net::ConnectionState::InZone || conn_->interface_locked() || conn_->player_down() ||
            conn_->player_status().stand_state == net::kStandFreeze || conn_->placement().active() ||
-           conn_->inventory().cursor() || ui_host_.cursor_button || ui_host_.cursor_spell ||
+           conn_->inventory().cursor() || conn_->held_coin() || ui_host_.cursor_button || ui_host_.cursor_spell ||
            ui_.wants_mouse() || mouse_look_.active || (!ignore_right_button && window_.input().right_button) ||
            ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 }
@@ -187,13 +187,16 @@ ClientApp::PickTarget ClientApp::pick_at(float x, float y, std::uint32_t require
     x -= view_area_.x;
     y -= view_area_.y;
     const auto& world = conn_->world();
-    // 0x48b5c0: the view actor (the player's) is excluded in first person or with /clickthrough bit 0;
+    // 0x48b5c0: the view actor is excluded in first person or with /clickthrough bit 0;
     // mounts are not modelled.
+    const auto view_id = world.view_spawn_id();
     game::PickCallInput call_in;
     call_in.world_state = player_ready_ ? 1 : 0;
     call_in.camera_type = camera_type_;
     call_in.click_through = conn_->click_through_mask();
     call_in.have_local_player = world.player() != nullptr;
+    call_in.view_actor_is_local = view_id == world.player_id;
+    call_in.view_actor_nonnull = world.spawns.contains(view_id);
     call_in.x = static_cast<std::int32_t>(x);
     call_in.y = static_cast<std::int32_t>(y);
     game::PickCall call = game::pick_call(call_in);
@@ -245,7 +248,7 @@ ClientApp::PickTarget ClientApp::pick_at(float x, float y, std::uint32_t require
             };
             return true;
         };
-        if (add_world_click_spawn(actors, exclude, std::move(a), source, seg, id == world.player_id && call.exclude_view))
+        if (add_world_click_spawn(actors, exclude, std::move(a), source, seg, id == view_id && call.exclude_view))
             refs.push_back({PickTarget::Kind::Spawn, id, {}});
     }
     if (world_objects_) {
@@ -543,7 +546,7 @@ void ClientApp::left_click_spawn(std::uint32_t id) {
     // PcClient_IsGuildmasterForMyClass: the spawn's class minus 19 is the player's.
     const game::Spawn* me = world.player();
     in.spawn.guildmaster_for_my_class = me && static_cast<int>(s.class_id) - 19 == static_cast<int>(me->class_id);
-    in.cursor_holds_something = conn_->inventory().cursor() != nullptr;
+    in.cursor_holds_something = conn_->inventory().cursor() || conn_->held_coin();
     game::LeftClickResult r = game::left_clicked_on_player(in, game::guildmaster_string_id(s.class_id));
     if (!r.handled) return;
     if (r.save_old_target) target_manager_.previous = old; // CTargetManager +0x168

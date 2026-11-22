@@ -137,6 +137,32 @@ TEST_CASE("Visibility: corpse and zero-HP gates, group awareness and GM ranks") 
     CHECK(game::spawn_invisible(viewer, viewer, 3001, true));
 }
 
+TEST_CASE("Always hide corpses filters existing and new corpses without removing them") {
+    ScratchDir dir("always_hide_corpses");
+    auto options = quick_options();
+    options.servers_dir = dir.path();
+    Rig rig(MockConfig::standard(), std::move(options));
+    REQUIRE(rig.to_zone());
+    auto& conn = rig.conn;
+    const auto hidden = [&](std::uint32_t id) { return conn.spawn_invisible(conn.world().spawns.at(id), 3001); };
+    const auto own_corpse = make_spawn(conn.world().player()->name + "'s corpse", 301, 2, 1, 0, 0, 3);
+    conn.receive_zone_packet_for_test(net::encode(own_corpse));
+    REQUIRE(conn.world().spawns.at(301).is_corpse);
+    CHECK_FALSE(hidden(301));
+
+    conn.change_client_option(game::ClientOption::HideCorpses, static_cast<int>(game::HideCorpseMode::Always));
+    CHECK(hidden(301));
+    CHECK_FALSE(hidden(conn.world().player_id));
+    const auto npc_corpse = make_spawn("Rat's_corpse", 302, 3, 1, 0, 0, 3);
+    conn.receive_zone_packet_for_test(net::encode(npc_corpse));
+    REQUIRE(conn.world().spawns.at(302).is_corpse);
+    CHECK(hidden(302));
+
+    conn.change_client_option(game::ClientOption::HideCorpses, static_cast<int>(game::HideCorpseMode::None));
+    CHECK_FALSE(hidden(301));
+    CHECK_FALSE(hidden(302));
+}
+
 TEST_CASE("Visibility integration: spawn, appearance, see-invisible buff, group and reused spawn id") {
     Rig rig;
     REQUIRE(rig.to_zone());

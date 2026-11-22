@@ -11,6 +11,7 @@ local K = dofile("lib/quests_kit.lua")
 local T = hud.T
 local C = T.color
 local WINDOW = "AdventureRequestWnd"
+local leaveToken
 
 -- "3 / 10" -> 3, 10
 local function progress(text)
@@ -52,16 +53,20 @@ local function drawWindow(x, y, w, h, s)
   local _, lh = ui.CalcTextSize("Ag")
   local btnH = lh + 10 * s
   local offer = W.State(WINDOW, "AdvRqst_AcceptButton") -- an adventure on offer (Accept is live)
-  local canLeave = W.Shown(WINDOW, "AdvRqst_LeaveButton")
+  local showLeave = W.Shown(WINDOW, "AdvRqst_LeaveButton")
+  local assignment = W.Text(WINDOW, "AdvRqst_LeaveToken")
   -- Keep the request form visible even when opened away from a recruiter; the model disables unavailable actions.
   local footH = btnH * 4 + lh + 36 * s
   ui.BeginChild("##advtext", 0, -footH, false)
   local onAdventure = status(s, lh)
   if onAdventure then K.Heading("Briefing") end
   if offer then K.Heading("Adventure offered") end
+  if W.Text(WINDOW, "AdvRqst_StatusLabel") ~= "" then
+    W.Label(WINDOW, "AdvRqst_StatusLabel", C.muted, true)
+  end
   local text = W.Text(WINDOW, "AdvRqst_NPCText")
   if K.HasText(text) then K.Stml(WINDOW, "AdvRqst_NPCText", text)
-  else K.Empty("No adventure is assigned.", "Speak with an adventure recruiter to request one.") end
+  else K.Empty("No adventure is assigned.") end
   ui.EndChild()
   ui.Separator()
   local half = (ui.GetContentRegionAvail() - 8 * s) / 2
@@ -79,13 +84,22 @@ local function drawWindow(x, y, w, h, s)
     { "AdvRqst_AcceptButton", "Accept", { primary = true, tooltip = "Take the adventure offered" } },
     { "AdvRqst_DeclineButton", "Decline", { tooltip = "Turn the offer down" } },
   }, btnH)
-  if canLeave then
+  if showLeave then
     ui.PushStyleColor(ui.Col.Button, C.danger[1], C.danger[2], C.danger[3], 0.18)
     ui.PushStyleColor(ui.Col.ButtonHovered, C.danger[1], C.danger[2], C.danger[3], 0.35)
     ui.PushStyleColor(ui.Col.ButtonActive, C.danger[1], C.danger[2], C.danger[3], 0.50)
-    if ui.Button("Leave Adventure##advleave", half, btnH) then ui.OpenPopup("##advleaveask") end
+    ui.BeginDisabled(assignment == "")
+    if ui.Button("Leave Adventure##advleave", half, btnH) then
+      leaveToken = assignment
+      ui.OpenPopup("##advleaveask")
+    end
+    ui.EndDisabled()
     ui.PopStyleColor(3)
-    if ui.BeginPopup("##advleaveask") then
+  end
+  if ui.BeginPopup("##advleaveask") then
+    if not leaveToken or assignment ~= leaveToken or ui.IsKeyPressed(ui.Key.Escape) then
+      ui.CloseCurrentPopup()
+    else
       ui.Text("Give up the current adventure?")
       ui.Dummy(0, 4 * s)
       if W.Button(WINDOW, "AdvRqst_LeaveButton", "Leave", { danger = true, width = 100 * s }) then
@@ -93,15 +107,20 @@ local function drawWindow(x, y, w, h, s)
       end
       ui.SameLine()
       if ui.Button("Stay", 100 * s, 0) then ui.CloseCurrentPopup() end
-      ui.EndPopup()
     end
-    ui.SameLine(0, 8 * s)
+    ui.EndPopup()
+  else
+    leaveToken = nil
   end
+  if showLeave then ui.SameLine(0, 8 * s) end
   W.Button(WINDOW, "AdvRqst_ViewStatsButton", "View Stats",
-    { width = canLeave and half or -1, height = btnH, tooltip = "Your adventure record and points" })
+    { width = showLeave and half or -1, height = btnH, tooltip = "Your adventure record and points" })
 end
 
 ui.window("Adventure", function()
-  if not API.session.InGame() then return end
+  if not API.session.InGame() or not API.windows.Shown(WINDOW) then
+    leaveToken = nil
+    return
+  end
   hud.Dialog(WINDOW, "Adventure", WINDOW_OPTS, drawWindow)
 end)

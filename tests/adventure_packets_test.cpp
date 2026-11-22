@@ -96,6 +96,27 @@ TEST_CASE("adventure: the current adventure is 2084 bytes; a zeroed one is none"
     REQUIRE(n);
     CHECK_FALSE(n->assigned);
 
+    AdventureData finished;
+    finished.assigned = true; // use the same reserved words as a live assignment
+    const auto retained = encode(finished);
+    CHECK(u32(retained, 0) == u32(p, 0));
+    CHECK(u32(retained, 2080) == u32(p, 2080));
+    n = decode_adventure_data(retained);
+    REQUIRE(n);
+    CHECK_FALSE(n->assigned);
+
+    AdventureData waiting;
+    waiting.time_to_enter = 30; // an entry timer is enough even without a briefing or header
+    n = decode_adventure_data(encode(waiting));
+    REQUIRE(n);
+    CHECK(n->assigned);
+
+    AdventureData expiring;
+    expiring.text = "Finish the rescue."; // the server's timer can round to zero before expiry
+    n = decode_adventure_data(encode(expiring));
+    REQUIRE(n);
+    CHECK(n->assigned);
+
     for (std::size_t size : {0u, 4u, 2052u, 2080u, 2083u}) {
         p.data.resize(size);
         CHECK_FALSE(decode_adventure_data(p));

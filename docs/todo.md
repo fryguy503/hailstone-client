@@ -55,7 +55,7 @@ The steps are in `docs/plan.md` "Road to 1.0". This section maps items to steps;
 - [ ] Play it and fix what it finds.
 - [ ] Shadow step (SPA 379): the zone collision `land_spell` needs ("Combat and spells").
 - [ ] The collision radius, too wide for doorways ("Movement").
-- [ ] Leaving an adventure clears the window ("Adventures").
+- [ ] Verify leave and follow-up requests in live play ("Adventures").
 - [ ] UCS reconnection and a wrong chat key ("Items and commerce").
 
 ### 0.11, real estate
@@ -179,9 +179,8 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
   - Request, accept/decline, zone in, objective updates, finish, leave and cross-zone refresh.
   - Confirm stats, leaderboard standings and physical controller operation.
   - Remaining protocol ambiguity is in unknowns.md.
-- [ ] **Leaving an adventure.**
-  - Stock EQEmu sends nothing after a granted leave, so the window stays on the adventure until zoning.
-  - Settle what RoF2 shows (unknowns.md) and clear the window to match.
+- [x] **Clear completed and abandoned assignments.**
+  - Mock coverage includes finished-instance snapshots, leave acknowledgements, denial, and retry after a missing reply.
 
 ### Fellowships
 
@@ -293,6 +292,10 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
 - [x] Lifts carry riders (checked live on the Paineel lift).
 - [x] Teleport doors (a Bazaar IT78 door, the PoK books' type, checked live).
 - [x] Touch-activated switches: PlayerClient::TouchingSwitch ported, traps checked live (f500930).
+- [ ] **Switch clicks while riding.** `EQSwitch::UseSwitch` (0x511d70) puts `pinstControlledPlayer` in place of the
+  local player whenever they differ: the mount while riding as well as an Eye. It measures the reach from that
+  spawn with its Height and sends its spawn ID in OP_ClickDoor. Hailstone does this for an Eye only and still
+  measures from the rider on a mount.
 - [x] **Boats, as our own design** (docs/mechanics.md "Boats"): hull floors and walls, smoothed boat motion, other riders, zone-in onto a deck, climbing aboard, sailing a small boat at the helm. Checked live in Butcherblock and OOT.
 - [x] **Boats with a live asset folder: not the client's job.** The classic boat models (LAUNCH etc.) are only in RoF2's per-zone `_chr` archives, which live dropped; a server that wants them supplies them in its `client_files/` (user's decision, 2026-10-29).
 - [x] **Boats: decks, animation, helm and rails** (tests/boats_test.cpp).
@@ -600,7 +603,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 - [x] **Spawn searches follow MacroQuest's words and matching rules** (`mq/spawn_search.h`): spawn types, pets, 3D radius, named test, group, raid, guild, xtarget, light, player state.
 - [x] **The alerts key** (CMD_HISTORIC_ALERTS, __ExecuteCmd case 168) toggles AlertHistoryWnd in both packs; listed with its Shift+H default. Seen live in the Modern pack.
 - [ ] **MacroQuest's alert lists:** `/alert`, and the spawn search's `alert`, `noalert`, `nearalert`, `notnearalert`. None kept yet, so those words act as with an empty list.
-- [ ] **The spawn search's `next` / `prev`: accepted and ignored.** MacroQuest's `/target next` cycles from the current target through the matching spawns.
+- [x] **The spawn search's `next` / `prev`** walk `/target`'s matches from the current target, nearest first; MQ measures from the old target and sorts by flat distance (docs/plugins.md).
 - [x] **`mq.event` patterns match as MacroQuest's Lua events do (Blech)** (`mq/event_pattern.h`).
   - Case-insensitive; every `#...#` up to the first place the next literal is.
   - `#name#`, `|${...}|`, `##` / `||`; arguments by number with gaps.
@@ -628,7 +631,7 @@ Fog, weather, sky, EQG surfaces, lighting and spell particles are a look-and-fee
 
 ## 3. UI
 
-- [ ] Trace and fix the upstream gamepad all-pack smoke test's cursor-extent assertion with ImGui debug checks enabled (docs/unknowns.md "UI").
+- [x] Trace and fix the upstream gamepad all-pack smoke test's cursor-extent assertion with ImGui debug checks enabled (docs/unknowns.md "UI").
 
 - [x] **Group role controls in both packs.** Right-click member names or the player's own name (Y on a gamepad Group window row); server-confirmed role icons in the Group and Player windows; leader-only Main Tank / Main Assist / Puller changes, mercenaries restricted to tank. Not checked live.
 - [ ] Check RoF2 group targeting after a member dies, including when several of their corpses are in the zone (docs/unknowns.md "UI").

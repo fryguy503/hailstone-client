@@ -202,7 +202,7 @@ void ClientApp::pad_interact() {
     if (auto it = world.spawns.find(world.target_id); it != world.spawns.end() && it->first != world.player_id) {
         glm::vec3 to = it->second.display_valid ? it->second.display_position : it->second.position;
         if (glm::distance(to, feet_ + glm::vec3(0, 0, floor_offset_)) <= kPadInteractRange) {
-            const bool holding = conn_->inventory().cursor() != nullptr;
+            const bool holding = conn_->inventory().cursor() || conn_->held_coin();
             const bool player = !it->second.is_npc && !it->second.is_corpse;
             if (holding && player) {
                 left_click_spawn(it->first);
@@ -236,8 +236,6 @@ void ClientApp::pad_camera(const platform::GamepadState& pad, float dt) {
     // The interface locked (/safelock): no mouse look (__ProcessMouseEvents) and no controls (ProcessControls).
     if ((rx == 0.0f && ry == 0.0f) || conn_->player_down() || conn_->interface_locked()) return;
     const bool camera6 = camera_type_ == game::kCameraWheelFollow;
-    const std::uint32_t stand = conn_->player_status().stand_state;
-    const bool can_move = (stand == net::kStandStanding || stand == net::kStandCrouching) && !conn_->stunned();
     if (iso()) {
         // The isometric camera: sideways turns the camera about the player, up and down zoom.
         const game::GamepadSettings& s = gamepad_->settings();
@@ -245,6 +243,9 @@ void ClientApp::pad_camera(const platform::GamepadState& pad, float dt) {
         game::iso_zoom(iso_camera_, -(s.invert_y ? -ry : ry) * 4.0f * dt, iso_settings_);
         return;
     }
+    // update_player switches yaw and pitch to the new body later in this frame.
+    if (driven_eye_ != conn_->eye_id()) return;
+    const bool can_move = can_turn_controlled_actor(*conn_);
     if (!camera6 && !can_move) return;
     const game::GamepadSettings& s = gamepad_->settings();
     const float k = s.camera_speed * dt;
