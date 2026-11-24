@@ -291,7 +291,10 @@ Each entry names the window and what is particular to it; the `hs.*` calls behin
   - Turn on **Allow window resizing** to drag the left edge and change the width. A horizontal tray wraps to fit. For vertical icons without names, drag the bottom edge to change how many icons fit in each column. The grip shows on hover. Turning resizing off keeps the size. **Reset size** restores automatic sizing. **Icons per row** also returns horizontal trays to fitting their contents.
   - The `hud.*` settings are saved per tray and character (`lib/bufftray.lua`).
 
-- **CastSpellWnd**: gem tiles in a row or column, refresh shading, the spell book.
+- **CastSpellWnd** (Modern Spell Gems): gem tiles with refresh shading and a spell book button after the last gem. The default is a single row with the window background and the original icon size. The **Vertical** setting fills down first.
+  - Alt-right-click the bar for **Show spell names**, **Show window background**, **Show resize bar**, and **Icon size**. Spell names appear beside their gems. Hover a gem for its full name.
+  - With **Show resize bar** on, drag the right edge, bottom edge, or bottom-right corner to wrap the tiles into rows and columns. Hiding the grip keeps the chosen wrap. **Reset size** clears the wrap and restores the default icon size and frame scale.
+  - The options are saved per character with the Modern layout. Gem clicks and drags keep their usual actions in every layout.
 
 - **HotButtonWnd**..10, **CastingWindow**, **EQMainWnd**; **CompassWindow** (a heading band).
 

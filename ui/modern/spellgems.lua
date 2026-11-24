@@ -1,5 +1,6 @@
--- Spell bar: replaces the game's CastSpellWnd. The memorized spells as a row (or column) of icon tiles with their
--- category colour, the refresh shading over a gem that is not ready, and the spell book button at the end.
+-- Spell bar: replaces the game's CastSpellWnd. The memorized spells as icon tiles with their category colour,
+-- the refresh shading over a gem that is not ready, and the spell book button at the end. A row or column by
+-- default, with optional names and wrapping from the frame's menu.
 -- The gems act as the game's: click casts (or memorizes the spell on the cursor), a quick right click forgets the
 -- spell, holding the right button shows its display; releasing over it keeps it open. Dragging makes a hot button.
 local API = hs.UI
@@ -9,6 +10,12 @@ local C = T.color
 local WINDOW = "CastSpellWnd"
 local GEMS = 12
 local VERTICAL = "hud.vertical." .. WINDOW
+local NAMES = "hud.gemNames." .. WINDOW
+local HIDE_BACKGROUND = "hud.gemHideBackground." .. WINDOW
+local RESIZE = "hud.gemResize." .. WINDOW
+local WRAP = "hud.gemWrap." .. WINDOW
+local ICON_SIZE = "hud.icon." .. WINDOW
+local DEFAULT_SIZE, GAP, PAD, NAME_SPACE = 40, 5, 8, 120
 
 -- Find this spell's visible display, not an old ImGui rectangle left behind by a closed window.
 local function overSpellDisplay(spell)
@@ -54,8 +61,8 @@ for i = 0, GEMS - 1 do
   }
 end
 local gems, count = {}, 0 -- the gems the game shows this frame, and how many (opts.size reads them first)
-local size, gap = 40, 5
-local vert = false
+local size, cellWidth, padding, tileScale, minWrap, maxWrap, perLine, columns, rows
+local vert, names
 
 local function collect()
   count = 0
@@ -67,26 +74,112 @@ local function collect()
   end
 end
 
-local opts = {
-  size = function()
-    collect()
-    vert = ui.GetSetting(VERTICAL) == "1"
-    local long = (count + 1) * (size + gap) - gap + 16 -- and the book
-    if vert then return size + 16, long end
-    return long, size + 16
-  end,
-  menu = function()
-    if ui.MenuItem("Vertical", vert) then ui.SetSetting(VERTICAL, vert and "0" or "1") end
-  end,
-}
+local opts, minimum = {}, {}
+
+local function span(tiles, cell)
+  return tiles * (cell + GAP) - GAP
+end
+
+local function fit(length, cell)
+  return math.floor(((length - padding) / tileScale + GAP) / (cell + GAP) + 1e-6)
+end
+
+-- A small viewport at a large HUD scale might not fit any grid. Scale the tiles just enough to keep the last gem
+-- and the book reachable, without changing the character's saved icon size or reducing the grip area.
+local function scaleToFit(w, h, tiles)
+  local best = 0
+  for cols = 1, tiles do
+    local nrows = math.ceil(tiles / cols)
+    best = math.max(best, math.min((w - padding) / span(cols, cellWidth), (h - padding) / span(nrows, size)))
+  end
+  return best > 0 and best or 0.1
+end
+
+function opts.size(s)
+  collect()
+  vert = ui.GetSetting(VERTICAL) == "1"
+  names = ui.GetSetting(NAMES) == "1"
+  opts.panel = ui.GetSetting(HIDE_BACKGROUND) ~= "1" -- the original panel stays on by default
+  local resize = ui.GetSetting(RESIZE) == "1"
+  size = math.max(22, math.min(64, math.tointeger(tonumber(ui.GetSetting(ICON_SIZE))) or DEFAULT_SIZE))
+  cellWidth = size + (names and NAME_SPACE or 0)
+  -- The right and bottom edge padding must also fit the corner grip at small window scales.
+  padding = PAD + (resize and math.max(14, math.ceil(12 / s)) or PAD)
+  local tiles = count + 1 -- including the spell book
+  local saved = math.tointeger(tonumber(ui.GetSetting(WRAP)))
+  tileScale = 1
+  minWrap, maxWrap = 1, tiles
+  if names or resize or saved or size ~= DEFAULT_SIZE then
+    local io = ui.GetIO()
+    local w, h = io.width / s, io.height / s
+    local cw, ch = math.max(0, fit(w, cellWidth)), math.max(0, fit(h, size))
+    if cw * ch < tiles then
+      tileScale = scaleToFit(w, h, tiles)
+      cw, ch = math.max(1, fit(w, cellWidth)), math.max(1, fit(h, size))
+    end
+    local along, across = cw, ch
+    if vert then along, across = ch, cw end
+    maxWrap = math.min(tiles, along)
+    minWrap = math.min(maxWrap, math.ceil(tiles / across))
+  end
+  local automatic = names and not vert and 4 or tiles
+  perLine = math.max(minWrap, math.min(maxWrap, saved or automatic))
+  columns, rows = perLine, math.ceil(tiles / perLine)
+  if vert then columns, rows = rows, columns end
+  minimum[1], minimum[2] = cellWidth * tileScale + padding, size * tileScale + padding
+  opts.resizable = resize and minimum or nil
+  return span(columns, cellWidth) * tileScale + padding, span(rows, size) * tileScale + padding
+end
+
+function opts.onResize(w, h, dx, dy)
+  -- Choose the axis from the drag's origin, so a wrap changing the other axis cannot switch it mid-drag.
+  local horizontal = math.abs(dx) >= math.abs(dy)
+  local length, cell, current = w, cellWidth, columns
+  if not horizontal then length, cell, current = h, size, rows end
+  local nextCount = math.max(1, fit(length + (cell + GAP) * tileScale / 2, cell))
+  if nextCount == current then return end
+  if horizontal == vert then nextCount = math.ceil((count + 1) / nextCount) end
+  nextCount = math.max(minWrap, math.min(maxWrap, nextCount))
+  if nextCount ~= perLine then ui.SetSetting(WRAP, nextCount) end
+end
+
+function opts.onResetSize()
+  ui.SetSetting(WRAP, "")
+  ui.SetSetting(ICON_SIZE, "")
+end
+
+function opts.menu()
+  if ui.MenuItem("Vertical", vert) then ui.SetSetting(VERTICAL, not vert) end
+  ui.SetNextItemWidth(180)
+  local v, changed = ui.SliderInt("Icon size", size, 22, 64)
+  if changed then ui.SetSetting(ICON_SIZE, v) end
+  ui.Separator()
+  if ui.MenuItem("Show spell names", names) then ui.SetSetting(NAMES, not names) end
+  if ui.MenuItem("Show window background", opts.panel) then ui.SetSetting(HIDE_BACKGROUND, opts.panel) end
+  local resize = opts.resizable ~= nil
+  if ui.MenuItem("Show resize bar", resize) then ui.SetSetting(RESIZE, not resize) end
+end
 
 local function body(x, y, w, h, s)
+  local inset = PAD * s
+  local fontScale
+  if tileScale ~= 1 then
+    fontScale = s / (ui.GetIO().uiScale or 1)
+    s = s * tileScale
+    ui.SetWindowFontScale(fontScale * tileScale)
+  end
   local function at(k) -- the k-th tile's corner (0-based)
-    local d = 8 * s + k * (size + gap) * s
-    if vert then return x + 8 * s, y + d end
-    return x + d, y + 8 * s
+    local col, row = k % perLine, k // perLine
+    if vert then col, row = row, col end
+    return x + inset + col * (cellWidth + GAP) * s, y + inset + row * (size + GAP) * s
   end
   local sz = size * s
+  local labelWidth = (NAME_SPACE - 12) * s
+  local lineHeight
+  if names then
+    local _, lh = T.TextSize("Ag", T.font.small)
+    lineHeight = lh
+  end
   for k = 1, count do
     local g = gems[k]
     local info = g.info
@@ -113,22 +206,28 @@ local function body(x, y, w, h, s)
     else
       T.Text(gx + sz / 2, gy + sz / 2 - 7 * s, tostring(g.n), C.faint, T.font.small, "center")
     end
-    local clicked = T.Hit(g.hit, gx, gy, gx + sz, gy + sz)
+    local tip = info.tooltip
+    if names and tip and tip ~= "" then
+      if g.nameSource ~= tip or g.nameWidth ~= labelWidth then
+        g.nameSource, g.nameWidth = tip, labelWidth
+        g.label = T.Fit(tip, labelWidth, T.font.small)
+      end
+      T.Text(gx + sz + 6 * s, gy + (sz - lineHeight) / 2, g.label, C.text, T.font.small)
+    end
+    local right = gx + cellWidth * s
+    local clicked = T.Hit(g.hit, gx, gy, right, gy + sz)
     local key, hovered = ui.GetItemID(), ui.IsItemHovered()
     -- a spell dragged from the spell book (spellbook.lua) memorizes into this gem
     -- (this frame's only: a book closed mid-drag, or the character gone, leaves a stale one)
     local dragged = modern_spell_drag_frame == ui.GetFrameCount() and modern_spell_drag or nil
     -- (only while this bar is the window under the mouse: the book's own gems under it take the drop instead)
-    if dragged and ui.IsMouseHoveringRect(gx, gy, gx + sz, gy + sz)
+    if dragged and ui.IsMouseHoveringRect(gx, gy, right, gy + sz)
         and ui.IsWindowHovered(ui.HoveredFlags.ChildWindows | ui.HoveredFlags.AllowWhenBlockedByActiveItem) then
       ui.DrawRect(gx - 2 * s, gy - 2 * s, gx + sz + 2 * s, gy + sz + 2 * s, C.accent[1], C.accent[2], C.accent[3], 1, 7 * s, 2 * s)
       if ui.IsMouseReleased(ui.Mouse.Left) and not dragged.gem then API.spells.BookMemorize(dragged.slot, g.n - 1) end
     end
-    T.HoverFx(gx, gy, gx + sz, gy + sz, s, 6)
-    if hovered then
-      local tip = info.tooltip
-      if tip and tip ~= "" then ui.SetTooltip(tip) end
-    end
+    T.HoverFx(gx, gy, right, gy + sz, s, 6)
+    if hovered and tip and tip ~= "" then ui.SetTooltip(tip) end
     if T.DragFrom(WINDOW, g.id) then clicked = false end
     if clicked then API.spells.GemClick(g.id, "left") end
     if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
@@ -175,6 +274,7 @@ local function body(x, y, w, h, s)
   if clicked then
     if not API.windows.ClickChild(WINDOW, book, "left") then API.windows.ClickChild(WINDOW, vert and "CSPW_SpellBookH" or "CSPW_SpellBookV", "left") end
   end
+  if fontScale then ui.SetWindowFontScale(fontScale) end
 end
 
 ui.window("Spell Gems", function()

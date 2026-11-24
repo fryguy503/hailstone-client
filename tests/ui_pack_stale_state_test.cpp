@@ -387,6 +387,211 @@ TEST_CASE("UI packs (modern): a spell dragged from a book that closed memorizes 
     CHECK(r.no_errors());
 }
 
+TEST_CASE("UI packs (modern): Spell Gems layout options preserve existing frames and wrap the icon tiles") {
+    PackRig r("modern");
+    r.run(kGems);
+    lua_pushlightuserdata(r.L, &r);
+    lua_setglobal(r.L, "testSpellIcon");
+    lua_pushcfunction(r.L, [](lua_State* L) {
+        const auto* w = ImGui::GetCurrentWindowRead();
+        lua_pushboolean(L, w && w->ID == ImHashStr("###modern.CastSpellWnd"));
+        return 1;
+    });
+    lua_setglobal(r.L, "testSpellGemsWindow");
+    r.run(R"lua(
+ui.SetSetting("hud.pos.CastSpellWnd", "700,200")
+local button = ui.InvisibleButton
+ui.InvisibleButton = function(id, ...)
+  local previous = rects[id]
+  local pressed = button(id, ...)
+  if not testSpellGemsWindow() then rects[id] = previous end
+  return pressed
+end
+local gemInfo = hs.GemInfo
+hs.GemInfo = function(win, id, info)
+  info = gemInfo(win, id, info)
+  if id == "CSPW_Spell0" then info.tex, info.tooltip = testSpellIcon, "Spirit of Wolf" end
+  return info
+end
+local clickChild = hs.ClickChild
+hs.ClickChild = function(win, id, phase)
+  if win == "CastSpellWnd" then
+    calls[#calls + 1] = "book " .. id .. " " .. phase
+    return true
+  end
+  return clickChild(win, id, phase)
+end
+menuRows = {}
+local menuItem = ui.MenuItem
+ui.MenuItem = function(label, selected, enabled, ...)
+  menuRows[label] = selected and true or false
+  if pick == label and enabled ~= false then
+    pick = nil
+    ui.CloseCurrentPopup()
+    return true
+  end
+  return menuItem(label, selected, enabled, ...)
+end
+local slider = ui.SliderInt
+ui.SliderInt = function(label, ...)
+  if label == "Icon size" and label == pick then
+    pick = nil
+    ui.CloseCurrentPopup()
+    return 28, true
+  end
+  return slider(label, ...)
+end
+local drawRect = ui.DrawRectFilled
+ui.DrawRectFilled = function(x0, y0, x1, y1, ...)
+  if testSpellGemsWindow() then
+    local x, y = ui.GetWindowPos()
+    local w, h = ui.GetWindowSize()
+    if x0 == x and y0 == y and x1 == x + w and y1 == y + h then gemPanel = true end
+  end
+  return drawRect(x0, y0, x1, y1, ...)
+end
+)lua");
+    auto refresh = [&] {
+        r.run("seen, rects, gemPanel = {}, {}, false");
+        r.s->frames(3);
+    };
+    auto choose = [&](const char* label) {
+        r.run((std::string("pick = '") + label + "'").c_str());
+        r.mouse_to(r.centre("##CSPW_Spell0"));
+        ImGui::GetIO().AddKeyEvent(ImGuiMod_Alt, true);
+        r.button(ImGuiMouseButton_Right, true, 1);
+        CHECK(r.truth("pick == nil"));
+        ImGui::GetIO().AddKeyEvent(ImGuiMod_Alt, false);
+        r.button(ImGuiMouseButton_Right, false);
+        ImGui::ClosePopupsExceptModals();
+        refresh();
+    };
+    auto click = [&](ImVec2 p) {
+        r.mouse_to(p);
+        r.button(ImGuiMouseButton_Left, true);
+        r.button(ImGuiMouseButton_Left, false);
+    };
+    refresh();
+    const auto* window = ImGui::FindWindowByName("###modern.CastSpellWnd");
+    REQUIRE(window);
+    const ImVec2 original = window->Size;
+    CHECK(original.x == 596);
+    CHECK(original.y == 56);
+    CHECK(r.truth("gemPanel and rects['##resize'] == nil"));
+    CHECK_FALSE(r.saw("Spirit of Wolf"));
+    auto first = r.centre("##CSPW_Spell0");
+    auto book = r.centre("##book");
+    CHECK(book.x == first.x + 12 * 45);
+    CHECK(book.y == first.y);
+
+    // An old saved Vertical still uses a single column of unchanged size.
+    r.run("ui.SetSetting('hud.vertical.CastSpellWnd', '1')");
+    refresh();
+    CHECK(window->Size.x == original.y);
+    CHECK(window->Size.y == original.x);
+    first = r.centre("##CSPW_Spell0");
+    book = r.centre("##book");
+    CHECK(book.x == first.x);
+    CHECK(book.y == first.y + 12 * 45);
+    choose("Vertical");
+    CHECK(r.truth("menuRows['Show spell names'] == false and menuRows['Show window background'] == true"
+                  " and menuRows['Show resize bar'] == false"));
+
+    choose("Show window background");
+    CHECK_FALSE(r.truth("gemPanel"));
+    CHECK(window->Size.x == original.x);
+    CHECK(window->Size.y == original.y);
+    choose("Show window background");
+    CHECK(r.truth("gemPanel"));
+
+    choose("Show spell names");
+    CHECK(r.saw("Spirit of Wolf"));
+    CHECK(r.truth("rects['##CSPW_Spell0'][3] > 40"));
+    r.run("calls = {}");
+    click(r.centre("##CSPW_Spell0"));
+    CHECK(r.called("gem CSPW_Spell0 left"));
+    choose("Show spell names");
+    CHECK_FALSE(r.saw("Spirit of Wolf"));
+
+    choose("Show resize bar");
+    REQUIRE(r.truth("rects['##resize'] ~= nil"));
+    const ImVec2 grip = r.centre("##resize");
+    r.mouse_to(grip);
+    r.button(ImGuiMouseButton_Left, true);
+    r.mouse_to(ImVec2(grip.x - 10 * 45, grip.y));
+    // The newly taller grid should settle even with the corner held at the same mouse position.
+    for (int i = 0; i < 3; ++i) {
+        CHECK(r.truth("ui.GetSetting('hud.gemWrap.CastSpellWnd') == '3'"));
+        r.s->frames(1);
+    }
+    r.button(ImGuiMouseButton_Left, false);
+    first = r.centre("##CSPW_Spell0");
+    const auto lastInFirstRow = r.centre("##CSPW_Spell2");
+    const auto firstInSecondRow = r.centre("##CSPW_Spell3");
+    book = r.centre("##book");
+    CHECK(lastInFirstRow.x == first.x + 2 * 45);
+    CHECK(lastInFirstRow.y == first.y);
+    CHECK(firstInSecondRow.x == first.x);
+    CHECK(firstInSecondRow.y == first.y + 45);
+    CHECK(book.x == first.x);
+    CHECK(book.y == first.y + 4 * 45);
+    r.run("calls = {}");
+    click(firstInSecondRow);
+    click(book);
+    CHECK(r.called("gem CSPW_Spell3 left"));
+    CHECK(r.called("book CSPW_SpellBookH left"));
+
+    choose("Vertical");
+    first = r.centre("##CSPW_Spell0");
+    const auto lastInFirstColumn = r.centre("##CSPW_Spell2");
+    const auto firstInSecondColumn = r.centre("##CSPW_Spell3");
+    CHECK(lastInFirstColumn.x == first.x);
+    CHECK(lastInFirstColumn.y == first.y + 2 * 45);
+    CHECK(firstInSecondColumn.x == first.x + 45);
+    CHECK(firstInSecondColumn.y == first.y);
+    const ImVec2 bottomGrip = r.centre("##resizebottom");
+    r.mouse_to(bottomGrip);
+    r.button(ImGuiMouseButton_Left, true);
+    r.mouse_to(ImVec2(bottomGrip.x, bottomGrip.y + 45));
+    r.button(ImGuiMouseButton_Left, false);
+    CHECK(r.truth("ui.GetSetting('hud.gemWrap.CastSpellWnd') == '4'"));
+    CHECK(r.centre("##CSPW_Spell3").x == r.centre("##CSPW_Spell0").x);
+    CHECK(r.centre("##CSPW_Spell4").x == r.centre("##CSPW_Spell0").x + 45);
+
+    choose("Vertical");
+    const ImVec2 wrapped = window->Size;
+    choose("Show resize bar");
+    CHECK_FALSE(r.truth("rects['##resize'] ~= nil"));
+    choose("Show spell names");
+    CHECK(r.saw("Spirit of Wolf"));
+    choose("Show spell names");
+    CHECK(window->Size.x <= wrapped.x);
+    CHECK(r.centre("##CSPW_Spell4").y == r.centre("##CSPW_Spell0").y + 45);
+    choose("Icon size");
+    CHECK(r.truth("rects['##CSPW_Spell0'][3] == 28"));
+    choose("Reset size");
+    CHECK(window->Size.x == original.x);
+    CHECK(window->Size.y == original.y);
+
+    // At large configured scales the viewport must still contain every tile and the grip.
+    r.run(R"lua(
+ui.SetSetting("hud.scale", "2.5")
+ui.SetSetting("hud.scale.CastSpellWnd", "1.6")
+ui.SetSetting("hud.icon.CastSpellWnd", "64")
+ui.SetSetting("hud.gemResize.CastSpellWnd", "1")
+ui.SetSetting("hud.gemNames.CastSpellWnd", "1")
+)lua");
+    refresh();
+    CHECK(r.truth(R"lua((function()
+  local function fits(r)
+    return r and r[1] >= 0 and r[2] >= 0 and r[1] + r[3] <= 1600 and r[2] + r[4] <= 900
+  end
+  for i = 0, 11 do if not fits(rects["##CSPW_Spell" .. i]) then return false end end
+  return fits(rects["##book"]) and fits(rects["##resize"])
+end)())lua"));
+    CHECK(r.no_errors());
+}
+
 // The spell sets the stand-in game has: one in use (Heals), nine free.
 constexpr const char* kSets = R"lua(
 hs.SpellSets = function()

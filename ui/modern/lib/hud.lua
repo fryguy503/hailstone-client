@@ -309,6 +309,7 @@ local function menu(window, title, opts)
   if ui.MenuItem("Reset size") then
     ui.SetSetting("hud.size." .. window, "")
     ui.SetSetting("hud.scale." .. window, "")
+    if opts.onResetSize then opts.onResetSize() end
   end
   if opts.rollup then
     if hud.Rolled(window) then
@@ -392,11 +393,12 @@ local function frameEdge(st, id, x0, y0, x1, y1, right, s, minW, minH, snaps, se
     local mx, my = ui.GetMousePos()
     local grid = snaps and snap.Grid() or nil
     if grid then snap.DrawGrid(grid, T.color.accent) end
-    local nw = right and snap.Extent(wx, st.resize.w / s, mx - st.resize.x, minW, s, st.W, grid)
+    local dx, dy = right and mx - st.resize.x or 0, not right and my - st.resize.y or 0
+    local nw = right and snap.Extent(wx, st.resize.w / s, dx, minW, s, st.W, grid)
       or math.max(minW, st.w / s)
     local nh = right and math.max(minH, st.h / s)
-      or snap.Extent(wy, st.resize.h / s, my - st.resize.y, minH, s, st.H, grid)
-    setSize(nw, nh, grid)
+      or snap.Extent(wy, st.resize.h / s, dy, minH, s, st.H, grid)
+    setSize(nw, nh, grid, dx, dy)
   end
 end
 
@@ -456,7 +458,9 @@ end
 --   opts.onResize(nw, nh)        with resizable: the drag changes the frame's own layout instead of hud.size (the hot
 --                                bars' buttons per row); opts.size must then give the frame its size from that layout.
 --                                Such a drag is not snapped to the grid (the frame rounds the size its own way)
+--                                The default grips also pass dx, dy (mouse displacement from drag start).
 --   opts.resizeEdge = "left" or "bottom"   with resizable and onResize: one grip in the frame's padding
+--   opts.onResetSize()           clears extra size settings when Reset size is selected
 --   opts.onClose()               a frame that can be put away (not a HUD piece): an X in its top right corner calls it
 --   opts.rollup = true           the frame rolls up into its title bar (hud.rolled.<window>): rolled up, only the
 --                                title bar is drawn and the frame is as tall as it (opts.titleHeight, design pixels);
@@ -628,9 +632,9 @@ function hud.Window(screen, title, opts, body)
         st.sizeOpts = opts
         local setSize = st.setSize
         if not setSize then
-          setSize = function(nw, nh, grid)
+          setSize = function(nw, nh, grid, dx, dy)
             local o = st.sizeOpts
-            if o.onResize then o.onResize(nw, nh)
+            if o.onResize then o.onResize(nw, nh, dx, dy)
             else ui.SetSetting(st.keys.size, string.format(grid and "%.3f,%.3f" or "%.0f,%.0f", nw, nh)) end
           end
           st.setSize = setSize
@@ -656,9 +660,10 @@ function hud.Window(screen, title, opts, body)
           local mx, my = ui.GetMousePos()
           local grid = snaps and snap.Grid() or nil
           if grid then snap.DrawGrid(grid, T.color.accent) end
-          local nw = snap.Extent(wx, st.resize.w / s, mx - st.resize.x, minW, s, W, grid)
-          local nh = snap.Extent(wy, st.resize.h / s, my - st.resize.y, minH, s, H, grid)
-          setSize(nw, nh, grid)
+          local dx, dy = mx - st.resize.x, my - st.resize.y
+          local nw = snap.Extent(wx, st.resize.w / s, dx, minW, s, W, grid)
+          local nh = snap.Extent(wy, st.resize.h / s, dy, minH, s, H, grid)
+          setSize(nw, nh, grid, dx, dy)
         end
       end
     end

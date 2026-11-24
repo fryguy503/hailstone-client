@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Modern Server Management lets authorized GMs review and edit Hailstone policy, command permissions and add-on rules in game. Command rules can require a minimum GM account status, and the add-on command list updates as commands register. The encounter checks GM status and keeps a backup of each previous configuration. Servers can customize the notice shown when a command is blocked. If a save needs a fresh snapshot, **Reload policy** keeps the draft and shows settings that changed on the server.
+- Modern Spell Gems has optional spell names, a background toggle, and resize grips that wrap the tiles into rows and columns. Icon size is adjustable, and existing layouts keep their defaults
 - Custom builds can set a display version shown at login and in the in-game Help window.
 - Preserve support for published native preview add-ons with raw spell durations and guarded popup actions.
 
