@@ -587,6 +587,15 @@ std::optional<bool> ClientApp::can_see_spawn(std::uint32_t id) const {
     return collision_->line_of_sight(eye_position(), to);
 }
 
+bool ClientApp::world_line_of_sight(const glm::vec3& from, const glm::vec3& to) const {
+    return world_geometry_line_of_sight(
+        collision_ ? &*collision_ : nullptr, animated_objects_ ? &*animated_objects_ : nullptr,
+        [this](const glm::vec3& a, const glm::vec3& b) {
+            return !world_objects_ || world_objects_->line_of_sight(a, b);
+        },
+        from, to);
+}
+
 // The target keys' filters, set before each press. Hailstone: the NPC cycle skips players' pets and mercenaries
 // unless tab_skip_pets is off. Like the original's scene query (CSceneGraph vtable +0x98 @0x100690f0, which drops a
 // spawn when eqgame's callback 0x5c5860 finds the world in the way), the NPC cycle takes only the NPCs in sight
@@ -610,9 +619,7 @@ void ClientApp::prepare_target_cycle() {
     std::function<bool(const glm::vec3&)> clear_line;
     if (!through_walls) {
         clear_line = [this, from](const glm::vec3& to) {
-            return (!collision_ || collision_->line_of_sight(from, to)) &&
-                   (!world_objects_ || world_objects_->line_of_sight(from, to)) &&
-                   (!animated_objects_ || !animated_objects_->blocks(from, to));
+            return world_line_of_sight(from, to);
         };
     }
     target_manager_.in_sight = [this, from, actor_clip, offscreen, clear_line = std::move(clear_line)](const game::Spawn& s) {

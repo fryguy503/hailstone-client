@@ -69,8 +69,12 @@ static_assert(offsetof(PluginHostApi, acquire_bulk_buffer) ==
               offsetof(PluginHostApi, get_spells_by_name_data_bulk) + sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, release_bulk_buffer) ==
               offsetof(PluginHostApi, acquire_bulk_buffer) + sizeof(PluginHostApi::caps));
-static_assert(offsetof(PluginHostApi, get_large_dialog) ==
+static_assert(offsetof(PluginHostApi, spell_id_limit) ==
               offsetof(PluginHostApi, release_bulk_buffer) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, spell_data_ready) ==
+              offsetof(PluginHostApi, spell_id_limit) + sizeof(PluginHostApi::caps));
+static_assert(offsetof(PluginHostApi, get_large_dialog) ==
+              offsetof(PluginHostApi, spell_data_ready) + sizeof(PluginHostApi::caps));
 static_assert(offsetof(PluginHostApi, answer_large_dialog) == offsetof(PluginHostApi, get_large_dialog) + sizeof(PluginHostApi::caps));
 static_assert(sizeof(HailstoneLargeDialog) == 40);
 

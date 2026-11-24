@@ -785,8 +785,10 @@ cl /LD /I path\to\hailstone\sdk MyPlugin.c                                    # 
 MacroQuest's plugin sources do not build as they are: they read the game executable's memory layouts
 (`pLocalPlayer`, `PSPAWNINFO`, ...). Port them to TLO reads (`ParseMacroData`) and the callbacks above.
 
-A plugin that draws with Dear ImGui must be built with the client's Dear ImGui version and call
-`ImGui::SetCurrentContext(host->imgui_context(host->host))`.
+A plugin that draws with Dear ImGui must be built with the client's Dear ImGui version (1.93.0 since ABI 4) and call
+`ImGui::SetCurrentContext(host->imgui_context(host->host))`. Dear ImGui 1.92 changed the context's layout (fonts, textures,
+the draw callbacks), so the client does not call `OnUpdateImGui` of a plugin built for an older ABI (it logs that when the
+plugin loads), and `imgui_context` and `web_view` give such a plugin nothing. Rebuild it against this SDK.
 
 ### Server extensions (ABI 2)
 
@@ -943,21 +945,37 @@ Several plugins may extend the client at once: they are asked in load order and 
 
 **Compatibility.** The host table and the hook table carry their size and only grow at their end.
 
-- A plugin built for an older ABI loads in a newer client, not the reverse. This SDK reports ABI 3 (which added the
-  web pages, `web_*`, "Web pages" below).
-- Calls added since keep ABI 3: test `HAILSTONE_HOST_HAS(host, open_bank)` before such a call, since an older client
+- A plugin built for an older ABI loads in a newer client, not the reverse. This SDK reports ABI 4 (which moved the
+  client to Dear ImGui 1.93.0: no `OnUpdateImGui`, `imgui_context` or `web_view` for a plugin of ABI 3 or before). ABI 3
+  added the web pages, `web_*`, "Web pages" below.
+- Appended calls such as `open_bank` retain their existing ABI. Test `HAILSTONE_HOST_HAS(host, open_bank)`, since an older client
   has a shorter table. `use_ability`, `ability_state`, `get_ability_data_bulk` and the other calls under "added later
   in ABI 3" in `sdk/hailstone_plugin.h` are such calls.
 - The structs a plugin passes to be filled (`HailstonePlayer`, `HailstoneSpawn`, ..., `HailstoneWebState`) carry
   their size too. `HailstoneWebState`'s `size` is a `size_t` (as ABI 3 shipped it), the others' a `uint32_t`.
 
-The current SDK places `get_spells_data_bulk` after the native nameplate functions and before `get_large_dialog`
-and `answer_large_dialog`. Windows x64 builds can set `HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256` to the exact SHA-256
-of a binary built against the earlier popup-only tail. The host gives the earlier table only to a binary matching
-that digest.
+The current SDK appends `get_large_dialog` and `answer_large_dialog` after the ABI 4 spell ID services. Windows x64
+builds can provide frozen ABI 3 popup tables to exact binaries by setting their SHA-256 digests. Use
+`HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256` for the layout before nameplate services,
+`HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256` for the layout after UI contributions, and
+`HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256` for the layout after bulk buffer services. Separate multiple digests
+for the same layout with semicolons.
 
 A C++ allocation or provider exception at an SDK entry point returns the ordinary zero/void failure result. Side
 effects completed before it are not retried or undone.
+
+#### Extended spell IDs
+
+The optional `HailstoneHooks::spell_id_limit()` asks for an inclusive wire ceiling above 45,000 for the server
+the add-on is active on. It needs the `extend` capability, and zero abstains. The host selects a compatible
+limit before it sends ZoneEntry. This requires a native spell file with extended records that fit the request.
+The request has no effect on the local spell table's range.
+
+The host calls `spell_id_limit(host)` and `spell_data_ready(host)` need `read`. An add-on should check both with
+`HAILSTONE_HOST_HAS` before it sends any server-specific advertisement. A stock zone entry or an incompatible
+file at zone entry yields 45,000 and false. Reloading assets rechecks readiness, while the selected limit stays
+with the current stream. Hailstone preserves the stock ZoneEntry format and file checksums. An add-on owns its
+server's optional wire negotiation through the existing outgoing packet hook.
 
 #### The cursor item's origin
 

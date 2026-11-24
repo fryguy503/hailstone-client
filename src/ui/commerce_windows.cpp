@@ -59,7 +59,7 @@ bool slot(const char* id, const Item* item, ItemIconCache* icons, float size, bo
         if (hovered) ImGui::SetTooltip("%s", item->name.c_str());
     }
     ImU32 border = highlight ? IM_COL32(120, 230, 120, 255) : hovered ? IM_COL32(220, 200, 120, 255) : IM_COL32(90, 90, 100, 255);
-    dl->AddRect(p, ImVec2(p.x + size, p.y + size), border, 3.0f, 0, highlight ? 2.0f : 1.0f);
+    dl->AddRect(p, ImVec2(p.x + size, p.y + size), border, 3.0f, highlight ? 2.0f : 1.0f, 0);
     ImGui::PopID();
     return clicked;
 }

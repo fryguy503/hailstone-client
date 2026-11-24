@@ -963,7 +963,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | GemOverlay | (name, child, y0, y1) → top, r, g, b, a \| nil | Gem cool-down rectangle | — |
 | GemInfo | (name, child [, into [, y0, y1]]) → t | All gem looks in one call: {shown, tooltip, tex,u0,v0,u1,v1, tintR..tintA, overlay, coolR..coolA, top}. `into` is filled only when it has no metatable (else a new table) | — |
 | ButtonCoolDown | (name, child, y0, y1) → top, r, g, b, a, remainingMs, reuseMs | A button's cool-down rectangle (nil when idle); combat ability buttons add remaining and focus-adjusted reuse ms (0 when idle or unknown). A shared timer's remaining time can exceed this ability's reuse | — |
-| BuffSlot | (name, child [, overlays]) → spellId, msLeft, name, beneficial, fade [, counter,cr,cg,cb, limit,lr,lg,lb] \| nil | Buff on a buff button. msLeft < 0 = permanent | — |
+| BuffSlot | (name, child [, overlays [, removalDetails]]) → spellId, msLeft, name, beneficial, fade [, counter,cr,cg,cb, limit,lr,lg,lb] [, petId, slot] \| nil | Buff on a buff button. msLeft < 0 = permanent. `removalDetails` appends the entity ID and server slot of a removable pet buff, or two nils. | — |
 | BuffOverlay | (name, child, "timer"\|"counter"\|"limit") → text, r, g, b \| nil | Overlay text on a buff button | — |
 | SpellGemClick | (child [, "left"\|"right"]) → ok | Cast, or forget (right) | actions |
 
@@ -975,7 +975,7 @@ send a request. `OpenTask` changes the journal selection and visibility, not tas
 | HotButtonFace | (name, child) → {color={r,g,b}, lua, running, enabled, cooldown, overlay, tooltip} \| nil | A social's face extras | — |
 | HotButtonChecked | (name, child) → bool | Drawn pressed (a pet command that is on) | — |
 | HotButtonState | (name, child [, y0, y1]) → {checked, left, cooldown, top, color, tint} \| nil | Check and cool-down state | — |
-| HotButtonInfo | (name, child [, into [, y0, y1]]) → t | HotButton + Face + State in one table (kind, label, tex…, social, color, lua, running, enabled, faceCooldown, overlay, tooltip, state, checked, left, cooldown, top, tint, iconAlpha). `into` as GemInfo's | — |
+| HotButtonInfo | (name, child [, into [, y0, y1]]) → t | HotButton + Face + State in one table (kind, label, tex…, social, color, lua, running, enabled, faceCooldown, overlay, tooltip, state, checked, left, cooldown, top, tint, iconAlpha). `stackCount` is the carried total for a stackable item link, the current stack for an inventory-slot shortcut, or nil. `into` as GemInfo's | — |
 | ClickHotButton | (name, child [, "left"\|"right"\|"rightheld" [, x, y]]) → ok | Use the button, or open its menu (at x, y) | actions |
 | PickUp | (window, child [, row]) → ok | Drag from a child: its hotbutton goes on the cursor | actions |
 | PressButtonFrom | (window, child [, row]) → ok | Run the hotbutton a drag would make (a pad's "use"). Not for hot bars | actions |

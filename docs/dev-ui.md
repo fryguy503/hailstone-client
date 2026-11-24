@@ -8,7 +8,7 @@ Lua interfaces (Modern and Gamepad) use the versioned, modular `hs.UI` contract 
 `AlwaysVerticalScrollbar` and `AlwaysHorizontalScrollbar`, with Dear ImGui's values in ordinary and child windows.
 Internal and obsolete flags are not exported; use the window, popup or child functions for those scopes.
 
-The client uses [Dear ImGui](https://github.com/ocornut/imgui) (v1.91.9, fetched by `cmake/Dependencies.cmake`) for a minimal developer UI: log in, pick a server and a character, see basic in-game information. The Lua windows below replace it for play.
+The client uses [Dear ImGui](https://github.com/ocornut/imgui) (v1.93.0, fetched by `cmake/Dependencies.cmake`) for a minimal developer UI: log in, pick a server and a character, see basic in-game information. The Lua windows below replace it for play.
 
 ## Pieces
 
@@ -46,7 +46,7 @@ The screens are `login`, `servers`, `chars`, `nochars`, `loading`, `game` and `i
 
 While the UI has keyboard or mouse focus, the camera ignores that input; holding the right mouse button still turns it.
 
-The UI has the keyboard only while an edit box is typed in, a modal dialog is open, or a window asks (`ui.CaptureKeyboard`). A click or drag on a button, slider, title bar or window background does not take it (`ui::keyboard_for_ui`), so held movement keys stay held, as in the original.
+Text editing, modal dialogs, active keyboard or gamepad controls, and explicit requests (`ui.CaptureKeyboard`) can take the keyboard. A click or drag on a button, slider, title bar or window background leaves the keyboard with the game through mouse release (`ui::keyboard_for_ui`), so held movement keys stay held, as in the original.
 
 ## Using it from an app loop
 
@@ -323,7 +323,7 @@ Each entry names the window and what is particular to it; the `hs.*` calls behin
 
 - **ExtendedTargetWnd** (`lib/xtarget.lua`, which takes a plugin's part on each row, docs/plugins.md): filled / available slots, a row for every server slot (empty ones faint) with its role unless an auto hater, six rows tall until resized. Right-click adds Hailstone's Auto expand (`hud.expand.ExtendedTargetWnd`), which grows the frame down to the last filled slot.
 
-- **PetInfoWindow**: buff right click offers Spell Info and Add to Blocked Pet Spells.
+- **PetInfoWindow**: right-click a buff for Spell Info or Add to Blocked Pet Spells. Removable beneficial buffs also offer **Remove**. The icon clears when the server updates the pet's buffs.
 
 - **SpellBookWnd** (`spellbook.lua`, over `hs.SpellBook`): search, sort, filters, categories, list or grid, spell display text.
   - Spell sets: load, edit, delete, New set or From gems. The twelve-slot editor takes drags, double-clicks or the spell's menu and saves without memorizing; a spell dropped on a set's card joins that set.
@@ -609,6 +609,7 @@ Labels and gauges by EQType (`hs.Label`, `hs.Gauge`): the combat timer (label 13
 - A second argument `true` to `hs.Label` (1, 28) or `hs.Gauge` (1, 6, 27) adds the name plate's invisibility marks to the name: Hailstone's, the original's captions are plain.
 - `hs.Gauge` and `hs.ChildGauge` return a special value's fill tint as CGaugeWnd::Draw gives it (`gauge_fill`: -2 full in dark red, -110..-10 purple, -2000..-1000 pink); the group frames use it for a member out of zone.
 - `hs.BuffSlot`'s fifth answer is the fade under 19 s (`game::buff_fade`, CBuffWindow::OnProcessFrame).
+- Pass true as `hs.BuffSlot`'s fourth argument to append the pet entity ID and server slot for a removable pet buff. Other buffs append two nils. `hs.WindowButton("PetInfoWindow", child, 3)` requests removal for the current buff at that child.
 - The modern player frame shows the combat state (PW_CombatStateAnim by `hs.ChildArt`) as a pip on the level badge and the combat timer as a ring.
 
 #### `lua_ui_hud.cpp`
@@ -619,6 +620,7 @@ PlayerWindow, TargetWindow, GroupWindow, BuffWindow, ShortDurationBuffWindow, Ca
 - An empty gem's right click pops the spell select menu (CCastSpellWnd::MakeSpellSelectMenu), each spell in its target type's colour (`game::spell_target_color`); `menus.lua` lifts a colour too close to the panel's brightness. On a gem's button it is the gem's own right click (`UiApi::click_gem`, HandleSpellRightClick).
 - A right click on an AA button (a social of 120 + group) opens the AA window on that ability (`AAWindow`'s `activate`, CAAWnd::ShowAbility).
 - Bars: key map text top-right. Modern bars go vertical when "Buttons per row" makes them taller than wide; dragging an edge or corner changes it. Gamepad bars go vertical when their page number is clicked (`hotbar.vertical.<window>`).
+- Stackable items show their quantity at the bottom of the hotkey, including the Gamepad crossbar. Item links total the carried stacks of that item, including those in bags. Inventory-slot shortcuts show the current stack in that slot. The cursor and bank are excluded.
 - **Lock layout** in a Modern bar's menu saves `hud.lockLayout.<window>` per character. It prevents accidental frame moves and resizes, drag and drop in both directions, slot edits, loading or clearing hotbuttons, and changes to button size and bar shape. Buttons still activate and pages still switch. **Lock this frame** and **Lock all frames** govern frame dragging and resizing independently. The row is Hailstone's: RoF2's window lock only stops a move or resize, and its hotbuttons can still be dragged in and out and cleared, as they are here with Lock layout off.
 - The bar menu, settings and icon selection are in `lua_ui_hotbar.cpp` (scripts `ui/modern/iconselection.lua`, `ui/gamepad/iconselection.lua`).
 - `hs.HotButtonChecked` is true for a pet command button ("Pet <command>") while that toggle is on (`game/pet_buttons.h`). `hs.HotButtonState` follows CHotButtonWnd_UpdateButtonStates (`game/hot_button_state.h`, `app/lua_ui_button_state.cpp`).

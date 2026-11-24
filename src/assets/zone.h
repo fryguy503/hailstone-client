@@ -36,6 +36,8 @@ struct Zone {
     std::unordered_map<std::string, Mesh> objects;   // actor name (upper case, as in the WLD) -> mesh
     // Authored collision volumes for switches, by actor name, in actor-local clockwise triangles.
     std::unordered_map<std::string, std::vector<glm::vec3>> object_collision_hulls;
+    // WLD skeleton volumes replace the placed actor's render geometry for collision.
+    std::unordered_map<std::string, std::vector<glm::vec3>> placement_collision_hulls;
     std::vector<Placement> placements;               // where the objects stand
     // The objects that play their own animation (assets/object_animation.h), by the same names as `objects`: their
     // meshes there are in the first key's pose, and the vertices the animation moves are listed here.
@@ -65,6 +67,9 @@ struct Zone {
     ZoneRegions regions;
     // An EQG heightmap zone's radial flora (assets/flora.h; /showgrass): none elsewhere.
     ZoneFlora flora;
+    // Loaded from <name>.eqg (load_eqg_zone), not from the classic <name>.s3d. For a revamped zone name with both
+    // files this is what load_zone chose, which is_eqg_zone alone does not tell.
+    bool from_eqg = false;
 
     // The archives the zone came from, searched in order for texture files.
     std::vector<std::shared_ptr<const PfsArchive>> archives;
@@ -98,16 +103,19 @@ Zone load_eqg_zone(const GameDir& game, std::string_view name, const ZoneLoadCan
 bool is_eqg_zone(const GameDir& game, std::string_view name);
 // arena, bazaar, highpasshold, lavastorm, nektulos: zones the live client revamped under the RoF2 name. With a live
 // asset folder and no .s3d of theirs, load_zone refuses the live .eqg unless the server's own files have it or the
-// RevampedZoneTest passes.
+// RevampedZoneTest passes. With both files (arena, nektulos), load_zone keeps the .eqg when the test passes and loads
+// the .s3d otherwise.
 bool is_revamped_zone_name(std::string_view name);
 
-// Asked with a live folder's revamped .eqg zone, loaded, when load_zone would otherwise refuse it: true when it is
-// the zone the server runs (game/revamped_zone.h tests the server's safe point against its floor), and load_zone
-// returns it. Empty: refused, as with no word from the server (a neighbour zone loaded ahead, the viewers).
+// Asked with a live folder's revamped .eqg zone, loaded: true when it is the zone the server runs
+// (game/revamped_zone.h tests the server's safe point against its floor), and load_zone returns it. False: refused
+// when there is no .s3d, the .s3d loaded instead when there is one. Empty: as false, without loading the .eqg (no
+// word from the server: a neighbour zone loaded ahead, the viewers). Whatever the test keeps (safe_point_test's
+// collision mesh) is the .eqg's: the caller keeps it only when the returned zone is from_eqg.
 using RevampedZoneTest = std::function<bool(const Zone&)>;
 
 // The zone as the original picks it: EQG when <name>.eqg exists, else classic (with is_eqg_zone's and
-// is_revamped_zone_name's changes).
+// is_revamped_zone_name's changes, and the RevampedZoneTest's choice between a revamped zone's two files).
 Zone load_zone(const GameDir& game, std::string_view name, const ZoneLoadCancel& cancel = {},
                const RevampedZoneTest& revamped_test = {});
 

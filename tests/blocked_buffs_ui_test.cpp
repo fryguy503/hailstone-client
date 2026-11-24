@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -66,6 +67,135 @@ TEST_CASE("Blocked buffs: a buff's spell id in the window's edit box, then Add, 
         CHECK(b->spells[0] == 11);
     }
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("Pet window: Remove sends the focused pet's beneficial buff slot and waits for the server fade") {
+    Rig rig;
+    auto& conn = rig.conn;
+    auto& server = rig.server;
+    {
+        std::ofstream spells(rig.dir.path() / "spells_us.txt");
+        spells << mq_test::spell_line({{0, "11"}, {1, "Holy Armor"}, {83, "1"}}) << '\n';
+        spells << mq_test::spell_line({{0, "12"}, {1, "Test Slow"}, {83, "0"}}) << '\n';
+        spells << mq_test::spell_line({{0, "13"}, {1, "Protected Ward"}, {83, "1"}, {232, "1"}}) << '\n';
+    }
+    rig.game.rescan();
+    conn.reload_game_files();
+    REQUIRE(rig.to_zone());
+    const auto* beneficial = conn.spell_table().get(11);
+    const auto* detrimental = conn.spell_table().get(12);
+    const auto* protected_buff = conn.spell_table().get(13);
+    REQUIRE(beneficial);
+    REQUIRE(detrimental);
+    REQUIRE(protected_buff);
+    REQUIRE(beneficial->beneficial());
+    REQUIRE_FALSE(beneficial->no_remove);
+    REQUIRE_FALSE(detrimental->beneficial());
+    REQUIRE(protected_buff->beneficial());
+    REQUIRE(protected_buff->no_remove);
+    REQUIRE_FALSE(conn.spell_table().get(98765));
+
+    auto other = make_spawn("Second Pet", 105, 1, 36, -281.0f, -148.0f, 3.5f);
+    other.is_pet = true;
+    other.pet_owner_id = conn.world().player_id;
+    server.add_spawn(other);
+    auto pet = make_spawn("First Pet", 104, 1, 36, -280.0f, -148.0f, 3.5f);
+    pet.is_pet = true;
+    pet.pet_owner_id = conn.world().player_id;
+    server.add_spawn(pet);
+    REQUIRE(rig.until([&] { return conn.pets().focused == pet.spawn_id; }));
+
+    net::BuffIcons icons;
+    icons.entity_id = pet.spawn_id;
+    icons.all_buffs = 1;
+    icons.entries = {{7, 12, 10, 0, "Caster"}, {19, 11, 10, 0, "Caster"},
+                     {26, 98765, 10, 0, "Caster"}, {28, 13, 10, 0, "Caster"}};
+    auto send_icons = [&](const net::BuffIcons& updates) {
+        auto packet = net::encode(updates, false);
+        packet.opcode = net::to_wire(net::Op::PetBuffWindow);
+        server.zone.send_reliable(packet);
+    };
+    send_icons(icons);
+    REQUIRE(rig.until([&] { return conn.pet_buffs().size() == 4; }));
+
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &conn;
+    app::UiApi api(host);
+    std::unique_ptr<lua_State, decltype(&lua_close)> lua(luaL_newstate(), lua_close);
+    lua_newtable(lua.get());
+    api.register_functions(lua.get());
+    lua_setglobal(lua.get(), "hs");
+
+    REQUIRE(luaL_dostring(lua.get(), R"lua(
+local buffs = hs.UI.buffs
+local _, _, _, _, _, pet, slot = buffs.Slot('PetInfoWindow', 'PetBuff1', false, true)
+local _, _, _, _, _, protectedPet = buffs.Slot('PetInfoWindow', 'PetBuff3', false, true)
+return pet == 104 and slot == 19 and protectedPet == nil
+)lua") == LUA_OK);
+    CHECK(lua_toboolean(lua.get(), -1));
+    lua_pop(lua.get(), 1);
+
+    auto remove = [&](int index) {
+        const auto code = "return hs.UI.windows.Button('PetInfoWindow', 'PetBuff" + std::to_string(index) + "', 3)";
+        REQUIRE(luaL_dostring(lua.get(), code.c_str()) == LUA_OK);
+        lua_pop(lua.get(), 1);
+    };
+    const auto removals = [&] { return MockEqServer::count(server.zone_log, net::Op::BuffRemoveRequest); };
+    auto barrier = [&] {
+        constexpr std::uint16_t kMarker = 0x7f01;
+        auto markers = [&] {
+            return std::count_if(server.zone_log.begin(), server.zone_log.end(),
+                                 [](const net::AppPacket& packet) { return packet.opcode == kMarker; });
+        };
+        const auto before = markers();
+        conn.send_zone_packet(net::AppPacket(kMarker));
+        REQUIRE(rig.until([&] { return markers() > before; }));
+    };
+
+    remove(0); // detrimental
+    remove(2); // unknown spell
+    remove(3); // beneficial, but its spell record disallows removal
+    remove(4); // empty
+    barrier();
+    CHECK(removals() == 0);
+
+    remove(1);
+    REQUIRE(rig.until([&] { return removals() == 1; }));
+    auto request = std::find_if(server.zone_log.begin(), server.zone_log.end(),
+                                [](const net::AppPacket& packet) { return net::is_op(packet, net::Op::BuffRemoveRequest); });
+    REQUIRE(request != server.zone_log.end());
+    CHECK(request->data == net::encode_buff_remove_request(19, pet.spawn_id).data);
+    REQUIRE(conn.pet_buffs().size() == 4);
+    CHECK(conn.pet_buffs()[1].second.spell == 11);
+
+    net::BuffIcons fade;
+    fade.entity_id = pet.spawn_id;
+    fade.entries = {{19, game::kNoSpell, 0, 0, ""}};
+    send_icons(fade);
+    REQUIRE(rig.until([&] { return conn.pet_buffs().size() == 3; }));
+    CHECK(conn.pet_buffs()[0].second.spell == 12);
+    CHECK(conn.pet_buffs()[1].second.spell == 98765);
+
+    // Entries without a pet entity must not become removable buffs on the still-focused pet.
+    auto no_pet = icons;
+    no_pet.entity_id = 0;
+    send_icons(no_pet);
+    REQUIRE(rig.until([&] { return conn.pet_buffs().size() != 3; }));
+    CHECK(conn.pet_buffs().empty());
+    remove(1);
+    barrier();
+    CHECK(removals() == 1);
+
+    send_icons(icons);
+    REQUIRE(rig.until([&] { return conn.pet_buffs().size() == 4; }));
+    // Switching the window's pet before another buff list arrives must not reuse the first pet's slot.
+    REQUIRE(conn.world().spawns.contains(other.spawn_id));
+    conn.set_window_pet(other.spawn_id);
+    REQUIRE(conn.pets().focused == other.spawn_id);
+    remove(1);
+    barrier();
+    CHECK(removals() == 1);
 }
 
 TEST_CASE("Blocked buffs: kept in the character ini, sent at the zone-in; a new block takes the spell group off") {

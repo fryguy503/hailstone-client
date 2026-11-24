@@ -45,7 +45,7 @@ ui.window("Message", function()
       local ry = pad.axis("ry") or 0
       if math.abs(ry) > 0.3 then scroll = scroll + ry * 0.4 end
     end
-    if ui.IsMouseHoveringRect(x0, y0, x1, textY1) then scroll = scroll - (ui.GetIO().wheel or 0) * 3 end
+    if T.mouseOver(x0, y0, x1, textY1) then scroll = scroll - (ui.GetIO().wheel or 0) * 3 end
     scroll = math.max(0, math.min(maxScroll, scroll))
     ui.PushClipRect(x0 + T.px(8), y0 + T.px(8), x1 - T.px(8), textY1 - T.px(8), true)
     local first = math.floor(scroll) + 1

@@ -145,12 +145,11 @@ TEST_CASE("Item presentation: extension flags change only the dedicated status l
     item.attuneable = 1;
     item.effects[net::kEffectClick].effect = 200;
     item.effects[net::kEffectClick].name = "Attunable Spell";
-    game::SpellData effect;
-    effect.id = 200;
-    effect.name = "Attunable Spell";
+    game::SpellTable spells;
+    REQUIRE(spells.parse("200^Attunable Spell" + std::string(235, '^')) == 1);
     game::ItemDisplayContext context;
     context.strings = &s;
-    context.spell = [&](std::int32_t id) { return id == 200 ? &effect : nullptr; };
+    context.spells = &spells;
     const auto stock = game::build_item_display(item, context);
     const auto native_stock = ui::item_info_lines(item);
     REQUIRE(stock.info.size() >= 2);

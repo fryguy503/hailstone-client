@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cfloat>
 #include <functional>
 #include <cmath>
 #include <random>
@@ -937,11 +938,19 @@ void ActionsUi::draw_hotbar(net::GameConnection& conn, const mech::Character* ch
     int page = store_.page(bar);
     std::uint32_t now = static_cast<std::uint32_t>(net::GameConnection::now_ms());
     float size = em * 3.6f;
+    const auto& inv = conn.inventory();
     for (int i = 0; i < game::kHotButtons; ++i) {
         if (i % 6) ImGui::SameLine();
         ImGui::PushID(i);
         HotButton& b = store_.current(bar, i);
         std::string label = b.empty() ? "" : button_label(conn, b);
+        std::uint64_t stack_count = 0;
+        if (const auto at = game::hot_button_item_slot(inv, b)) {
+            if (const auto* item = inv.at(*at)) {
+                stack_count = game::hot_button_stack_count(inv, b.type, *item);
+                if (stack_count > 0 && label.empty()) label = item->name;
+            }
+        }
         // The key bound to HOT1_<n> in the corner, as the original prints it.
         std::string key = game::key_text(keymap_.binding(static_cast<int>(game::KeyCommand::HOT1_1) + i, 0));
         if (key == "-------") key.clear();
@@ -961,15 +970,25 @@ void ActionsUi::draw_hotbar(net::GameConnection& conn, const mech::Character* ch
             float f = std::min(1.0f, static_cast<float>(left) / static_cast<float>(total));
             dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size * f), IM_COL32(0, 0, 0, 150));
         }
-        // The label wrapped to the button, then the key and the time left.
+        // Leave the last line for the quantity on stackable item buttons.
+        const float count_font = em * 0.7f;
+        const float label_height = stack_count > 0 ? size - count_font - 3.0f : size;
         if (!label.empty()) {
-            ImGui::PushClipRect(p, ImVec2(p.x + size, p.y + size), true);
+            ImGui::PushClipRect(p, ImVec2(p.x + size, p.y + label_height), true);
             ImVec2 ts = ImGui::CalcTextSize(label.c_str(), nullptr, false, size - 4.0f);
-            dl->AddText(ImGui::GetFont(), em * 0.85f, ImVec2(p.x + 3.0f, p.y + (size - ts.y * 0.85f) * 0.5f),
+            dl->AddText(ImGui::GetFont(), em * 0.85f, ImVec2(p.x + 3.0f, p.y + (label_height - ts.y * 0.85f) * 0.5f),
                         IM_COL32(235, 235, 235, 255), label.c_str(), nullptr, size - 6.0f);
             ImGui::PopClipRect();
         }
         if (!key.empty()) dl->AddText(ImGui::GetFont(), em * 0.75f, ImVec2(p.x + 3.0f, p.y + 2.0f), IM_COL32(255, 220, 120, 255), key.c_str());
+        if (stack_count > 0) {
+            const std::string count = std::to_string(stack_count);
+            ImFont* font = ImGui::GetFont();
+            const float width = font->CalcTextSizeA(count_font, FLT_MAX, 0.0f, count.c_str()).x;
+            const float scale = std::min(1.0f, (size - 6.0f) / width);
+            dl->AddText(font, count_font * scale, ImVec2(p.x + size - width * scale - 3.0f, p.y + label_height + 1.0f),
+                        IM_COL32(255, 255, 255, 255), count.c_str());
+        }
         if (left > 0) {
             std::string t = seconds_text(left);
             dl->AddText(ImVec2(p.x + size - ImGui::CalcTextSize(t.c_str()).x - 3.0f, p.y + size - em - 2.0f),

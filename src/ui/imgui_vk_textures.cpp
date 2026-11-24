@@ -27,7 +27,7 @@ State& state() {
 }
 
 VkDescriptorPool make_pool(VkDevice device) {
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kSetsPerPool};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSetsPerPool};
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     pi.maxSets = kSetsPerPool;
@@ -57,10 +57,11 @@ void init_imgui_textures(VkDevice device) {
     State& s = state();
     if (s.device) return;
     // As the backend's own (imgui_impl_vulkan.cpp, ImGui_ImplVulkan_CreateDeviceObjects): sets of identically
-    // defined layouts bind with its pipeline layout.
+    // defined layouts bind with its pipeline layout. Since ImGui 1.92.8 that is a sampled image alone; the sampler is
+    // the backend's, in a set of its own.
     VkDescriptorSetLayoutBinding binding{};
     binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     binding.descriptorCount = 1;
     binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -83,7 +84,7 @@ void shutdown_imgui_textures() {
     s = State{};
 }
 
-VkDescriptorSet add_imgui_texture(VkSampler sampler, VkImageView view, VkImageLayout layout) {
+VkDescriptorSet add_imgui_texture(VkImageView view, VkImageLayout layout) {
     State& s = state();
     if (!s.device) {
         log::error("ui textures: a texture asked for before the UI is up");
@@ -104,12 +105,12 @@ VkDescriptorSet add_imgui_texture(VkSampler sampler, VkImageView view, VkImageLa
         log::error("ui textures: no descriptor set left ({} in {} pools)", s.owner.size(), s.pools.size());
         return VK_NULL_HANDLE;
     }
-    VkDescriptorImageInfo image{sampler, view, layout};
+    VkDescriptorImageInfo image{VK_NULL_HANDLE, view, layout};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w.dstSet = set;
     w.dstBinding = 0;
     w.descriptorCount = 1;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     w.pImageInfo = &image;
     vkUpdateDescriptorSets(s.device, 1, &w, 0, nullptr);
     s.owner.emplace(set, from);

@@ -80,8 +80,8 @@ ui.window("Friends", function()
   if W.begin("Friends", { w = 1400, h = 860, title = "Friends and Ignore",
         subtitle = p.title .. " (" .. #list .. ")",
         hints = kb.open and K.HINTS or { { "lb", "Friends" }, { "rb", "Ignore" }, { "a", "Select" }, { "b", "Close" } } }) then
-    if not kb.open and not state.confirm and (W.pressed("lb") or W.pressed("rb")) then
-      page = page == 1 and 2 or 1
+    local function switchTo(to)
+      page = to
       API.windows.SetTabPage(FW, "Subwindows", page - 1)
       p = PAGES[page]
       list, selected = names(p)
@@ -89,6 +89,7 @@ ui.window("Friends", function()
       -- (the pad's focus to the new page: its first name, else Add a name)
       if #list > 0 then lists[page].focusNext = 1 else side.want, side.at = 2, ui.GetTime() end
     end
+    if not kb.open and not state.confirm and (W.pressed("lb") or W.pressed("rb")) then switchTo(page == 1 and 2 or 1) end
     local x0, y0, x1, y1, cw, ch = W.area()
     local wx, wy = ui.GetWindowPos()
     if state.confirm then
@@ -102,6 +103,11 @@ ui.window("Friends", function()
         T.font(20)
         T.textIn(tx, y0, tx + tw, y0 + T.px(44), pg.title, i == page and C.onAccent or C.text, 0.5)
         T.unfont()
+        -- (a click on a tab is LB / RB's switch; not while the keyboard is up, as LB / RB are not)
+        if i ~= page and not kb.open and T.mouseOver(tx, y0, tx + tw, y0 + T.px(44))
+            and ui.IsMouseClicked(ui.Mouse.Left) then
+          switchTo(i)
+        end
       end
       local listW = cw * 0.42
       local ly = y0 + T.px(60)

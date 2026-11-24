@@ -52,7 +52,7 @@ ActorEmitters::ActorEmitters(render::VkContext& vk, const GameDir& game, const s
     if (auto moddat = game.read("Resources/moddat.ini"))
         heights_ = game::parse_height_tables({}, std::string_view(reinterpret_cast<const char*>(moddat->data()), moddat->size()));
     // The scene's renderer is made now, so the first emitter in the world costs no hitch; an item preview's only when
-    // its item has an emitter (update): each renderer maps its own vertex ring (about 17 MB), and most items have none.
+    // its item has an emitter: each renderer maps its own vertex ring (about 17 MB), and most items have none.
     if (!particles_.empty() && scene) renderer_ = std::make_unique<render::ParticleRenderer>(vk, game, shader_dir, scene);
 }
 
@@ -116,7 +116,8 @@ bool ActorEmitters::start_effect(const Effect& effect) {
     if (!point_world_(effect.actor, static_cast<int>(effect.slot), point)) return false;
     game::SpellEmitterRequest r;
     r.emitter = static_cast<std::int32_t>(effect.effect);
-    r.key = next_key_++;
+    const auto key = next_key_++;
+    r.key = key;
     // vf126 gives an actor's emitter 5,000,000 ms like the always-on ones; this one is not persistent, so it ends
     // with the definition's own duration.
     r.duration_ms = game::kActorEmitterDurationMs;
@@ -144,7 +145,7 @@ bool ActorEmitters::start_effect(const Effect& effect) {
         particles_.stop_keys(std::span(&oldest, 1));
         effects_.erase(effects_.begin());
     }
-    effects_.push_back({r.key, effect.actor});
+    effects_.push_back({key, effect.actor});
     return true;
 }
 
@@ -174,7 +175,8 @@ void ActorEmitters::update(float dt, std::span<const Actor> actors, const BoneWo
         if (!bone_world(a.id, me.bone, bone)) return std::nullopt;
         game::SpellEmitterRequest r;
         r.emitter = static_cast<std::int32_t>(me.emitter.emitter);
-        r.key = next_key_++;
+        const auto key = next_key_++;
+        r.key = key;
         // CActor::vf126 @0x1003a950 creates an actor's emitter for 5,000,000 ms (past 4,000 s the DLL keeps it
         // going), at the actor density and opacity, scale 1; the entry's own +0x58 is not passed. It sets the
         // particle capacity and what a lifetime below 0 lasts; the emitter itself lasts as long as the actor.
@@ -200,10 +202,10 @@ void ActorEmitters::update(float dt, std::span<const Actor> actors, const BoneWo
             r.density = 1.0f;
             r.opacity = me.cloud->scale2;
             clouds_.create(r);
-            return r.key;
+            return key;
         }
         particles_.create(r);
-        return r.key;
+        return key;
     };
     // An actor whose mesh changed (or whose EDD entries are made again at a new density) and an actor gone lose their
     // emitters first, all in one pass over each system (stop_actors), before any are made again: a stop by actor
@@ -342,15 +344,25 @@ void ActorEmitters::update(float dt, std::span<const Actor> actors, const BoneWo
         particles_.update(dt, attachment);
         clouds_.update(dt, attachment);
     }
-    if (!particles_.emitters().empty() && !renderer_ && vk_ && game_)
+    if (renderer_) renderer_->request_textures(particles_);
+    if (cloud_renderer_) cloud_renderer_->request_textures(clouds_);
+    if (!async_) prepare();
+}
+
+void ActorEmitters::prepare() {
+    finish();
+    if (renderer_) renderer_->upload_textures();
+    else if (!particles_.emitters().empty() && vk_ && game_) {
         renderer_ = std::make_unique<render::ParticleRenderer>(*vk_, *game_, shader_dir_, scene_);
-    if (renderer_) renderer_->prepare(particles_);
-    if (!clouds_.emitters().empty() && !cloud_renderer_ && vk_ && game_) {
+        renderer_->request_textures(particles_);
+    }
+    if (cloud_renderer_) cloud_renderer_->upload_textures();
+    else if (!clouds_.emitters().empty() && vk_ && game_) {
         cloud_renderer_ = std::make_unique<render::ParticleRenderer>(*vk_, *game_, shader_dir_, scene_);
         cloud_renderer_->set_rows_bottom_up(true);
         cloud_renderer_->set_texture_reader(texture_reader_, texture_reader_any_thread_);
+        cloud_renderer_->request_textures(clouds_);
     }
-    if (cloud_renderer_) cloud_renderer_->prepare(clouds_);
 }
 
 void ActorEmitters::simulate_async(float dt, const BoneWorld& bone_world) {

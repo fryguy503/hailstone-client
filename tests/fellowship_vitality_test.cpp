@@ -112,9 +112,7 @@ TEST_CASE("fellowship vitality: both inventory packs draw the received pools and
         const auto scripts = std::filesystem::path(__FILE__).parent_path().parent_path() / "ui" / pack;
         std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
         ImGui::GetIO().IniFilename = nullptr;
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         app::UiHost host;
         host.game = &rig.game;
         host.conn = &rig.conn;

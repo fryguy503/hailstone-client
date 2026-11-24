@@ -255,6 +255,10 @@ local function eased(key, target)
   trail[key] = t
   return v, t
 end
+-- A bar that now shows something else (the target's health after a switch) starts where it stands, with no trail.
+function T.BarReset(key)
+  shown[key], trail[key], trailHold[key] = nil, nil, nil
+end
 
 -- T.Bar(key, x0, y0, x1, y1, s, fraction, color, opts)   fraction nil: an empty track
 -- opts: text (left, inside), right (right, inside), center, font, noTrail, radius, alpha

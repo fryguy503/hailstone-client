@@ -389,7 +389,7 @@ std::uint8_t hit_by_spell(HitState& state, const Hit& hit, const Launch* launch,
                           HitQueries& q, const Fpu& fpu = Fpu{});
 
 // The exe helpers, exposed for the client and the tests.
-bool is_valid_spell_id(std::uint32_t id);                      // IsValidSpellID @0x4ad150: 1..45000
+bool is_valid_spell_id(std::uint32_t id);                      // IsValidSpellID @0x4ad150, full spell ID range
 std::uint8_t spell_affects(const Spell* spell, std::int32_t spa); // EQ_Spell::SpellAffects: index + 1, or 0
 bool effect_index_used(const Spell& spell, std::uint32_t index); // EQ_Spell::IsEffectIndexUsed @0x433f80
 

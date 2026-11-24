@@ -293,7 +293,7 @@ function W.list(id, state, count, visible, rowH, width, drawRow, onClick, rowKey
     local ty = y0 + (listH - th) * (state.offset / maxOff)
     T.rect(sx, ty, sx + T.px(6), ty + th, T.C.dim, 0.8, T.px(3))
   end
-  if ui.IsMouseHoveringRect(x0, y0, x0 + width, y0 + listH) then
+  if T.mouseOver(x0, y0, x0 + width, y0 + listH) then
     local wheel = ui.GetIO().wheel or 0
     if wheel ~= 0 then state.offset = math.max(0, math.min(maxOff, state.offset - math.floor(wheel * 3 + 0.5))) end
   end

@@ -4,9 +4,13 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
+
 #include "core/byte_io.h"
 #include "game/bazaar.h"
 #include "game/client_options.h"
+#include "game/keymap.h"
+#include "game/targeting.h"
 #include "mock_server/harness.h"
 #include "net/aggro_packets.h"
 #include "net/group_packets.h"
@@ -179,6 +183,42 @@ TEST_CASE("trader: a zone change forgets the selected slot with the slots") {
     conn.trader_remove();
     conn.trader_set_price();
     CHECK(conn.trader_state().slots.empty());
+}
+
+TEST_CASE("Tab can retarget a higher-level NPC during auto attack") {
+    MockConfig config = MockConfig::standard();
+    auto& character = config.characters.front();
+    character.level = 5;
+    auto& npcs = config.zones.at(character.zone_id).spawns;
+    npcs[0].level = 12; // nearest NPC, selected by Tab
+    npcs[0].targetable_with_hotkey = true;
+    npcs[1].level = 7;
+    Rig rig(config);
+    REQUIRE(rig.to_zone());
+    auto& conn = rig.conn;
+    REQUIRE(conn.player_status().level == 5);
+    const auto* player = conn.world().player();
+    REQUIRE(player);
+
+    conn.set_target(npcs[1].spawn_id);
+    conn.set_auto_attack(true);
+    game::TargetManager target_manager;
+    const auto target = game::target_key_command(target_manager, static_cast<int>(game::KeyCommand::TARGETNPC),
+                                                 conn.world(), player->position);
+    REQUIRE(target == npcs[0].spawn_id);
+    conn.set_target(*target);
+    CHECK(conn.target() == *target);
+    CHECK(conn.auto_attack());
+
+    // The later consider packet lets the mock receive any combat packets queued by the target change.
+    conn.consider();
+    const auto& packets = rig.server.zone_log;
+    REQUIRE(rig.until([&] { return MockEqServer::count(packets, Op::Consider) == 1; }));
+    CHECK(std::any_of(packets.begin(), packets.end(), [&](const AppPacket& packet) {
+        return packet.opcode == to_wire(Op::TargetMouse) && decode_target(packet) == target;
+    }));
+    CHECK(MockEqServer::count(packets, Op::AutoAttack) == 1);
+    CHECK(MockEqServer::count(packets, Op::AutoAttack2) == 1);
 }
 
 TEST_CASE("OP_DeleteSpawn of the target clears it and stops auto attack (msgEQRmPlayer)") {

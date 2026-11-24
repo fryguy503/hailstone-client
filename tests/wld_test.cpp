@@ -111,11 +111,19 @@ TEST_CASE("WldFile reads a polyhedron reference and triangulates its scaled face
     reference.le(valid);
     reference.le(std::uint32_t{0});
     const auto ref = b.add(0x18, 0, reference);
+    ByteWriter skeleton;
+    skeleton.le(std::uint32_t{0}); // flags
+    skeleton.le(std::uint32_t{0}); // no nodes needed to test the reference
+    skeleton.le(ref);
+    const auto skeleton_ref = b.add(kSkeletonDef, b.str("GATE_HS_DEF"), skeleton);
 
     const auto w = wld::WldFile::parse(b.build());
     REQUIRE(w.errors().size() == 1);
     CHECK_FALSE(w.get<wld::PolyhedronDef>(invalid));
-    const auto* poly_ref = w.get<wld::PolyhedronRef>(ref);
+    const auto* sk = w.get<wld::Skeleton>(skeleton_ref);
+    REQUIRE(sk);
+    CHECK(sk->collision_volume == ref);
+    const auto* poly_ref = w.get<wld::PolyhedronRef>(sk->collision_volume);
     REQUIRE(poly_ref);
     const auto* hull = w.get<wld::PolyhedronDef>(poly_ref->definition);
     REQUIRE(hull);

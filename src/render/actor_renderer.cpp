@@ -1176,7 +1176,8 @@ void ActorRenderer::prepare(const FrameInfo& frame, std::span<const ActorDraw> a
     prepare(frame, actors, upload);
 }
 
-void ActorRenderer::prepare(const FrameInfo& frame, std::span<const ActorDraw> actors, UploadBatch& upload) {
+void ActorRenderer::prepare(const FrameInfo& frame, std::span<const ActorDraw> actors, UploadBatch& upload,
+                            bool defer_lighting) {
     auto t0 = std::chrono::steady_clock::now();
     stats_.instances = 0;
     stats_.draws = 0;
@@ -1268,9 +1269,6 @@ void ActorRenderer::prepare(const FrameInfo& frame, std::span<const ActorDraw> a
     // One table per unique visible mesh, shared by its instances. Slot zero keeps every pre-existing material path
     // unchanged. The table is in the existing lighting SSBO; no new sampled-image or buffer descriptors are needed.
     lighting_data_.resize(sizeof(SceneLighting) + sizeof(ActorSurface));
-    SceneLighting material_lighting = lighting_;
-    material_lighting.time.w = static_cast<float>(texture_time_ms_ % 100000ull) * 0.001f;
-    std::memcpy(lighting_data_.data(), &material_lighting, sizeof(material_lighting));
     const ActorSurface plain;
     std::memcpy(lighting_data_.data() + sizeof(SceneLighting), &plain, sizeof(plain));
     std::unordered_map<const GpuModel*, std::uint32_t> surface_offsets;
@@ -1297,11 +1295,19 @@ void ActorRenderer::prepare(const FrameInfo& frame, std::span<const ActorDraw> a
         }
         prepared.surface_offset = entry->second;
     }
-    lighting_buffers_->write(frame.frame_slot, lighting_data_.data(), lighting_data_.size());
+    if (!defer_lighting) upload_lighting(frame);
     stats_.cpu_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     if (stats_.cpu_ms > 8.0)
         log::debug("actor draw took {:.1f} ms ({} meshes, {} textures uploaded so far)", stats_.cpu_ms, models_.size(),
                    textures_.size());
+}
+
+void ActorRenderer::upload_lighting(const FrameInfo& frame) {
+    if (lighting_data_.empty()) return;
+    SceneLighting material_lighting = lighting_;
+    material_lighting.time.w = static_cast<float>(texture_time_ms_ % 100000ull) * 0.001f;
+    std::memcpy(lighting_data_.data(), &material_lighting, sizeof(material_lighting));
+    lighting_buffers_->write(frame.frame_slot, lighting_data_.data(), lighting_data_.size());
 }
 
 void ActorRenderer::draw_shadow(const FrameInfo& frame, std::uint32_t cascade) {
@@ -1517,7 +1523,8 @@ const std::unordered_set<std::uint32_t>& ActorRenderer::draw_prepared(const Fram
 }
 
 void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& camera_pos,
-                                   const game::WorldState& world, std::uint32_t hide_id, float dt) {
+                                   const game::WorldState& world, std::uint32_t hide_id, float dt,
+                                   bool defer_lighting) {
     drawn_.clear();
     last_draws_.clear();
     current_render_transforms_.clear();
@@ -1896,7 +1903,7 @@ void ActorRenderer::prepare_spawns(const FrameInfo& frame, const glm::vec3& came
         return true;
     });
     evict_idle_looks();
-    prepare(frame, draws, upload);
+    prepare(frame, draws, upload, defer_lighting);
     if (stats_.dressed)
         log::debug("dressed {} spawns in {:.2f} ms, uploaded in {:.2f} ms ({} meshes on the GPU, {} waiting)",
                    stats_.dressed, stats_.dress_ms, stats_.upload_ms, models_.size(), stats_.undressed);

@@ -85,6 +85,12 @@ template <typename F> bool ExtensionChain::each(const net::GameConnection& c, F&
 
 // ---------------------------------------------------------------- the connection
 
+std::uint32_t ExtensionChain::spell_id_limit(const net::GameConnection& c) const {
+    std::uint32_t requested = 0;
+    each(c, [&](const ServerExtension& e) { return (requested = e.spell_id_limit(c)) != 0; });
+    return requested;
+}
+
 std::optional<FollowProfile> ExtensionChain::follow_profile(const net::GameConnection& c) const {
     std::optional<FollowProfile> out;
     each(c, [&](const ServerExtension& e) {

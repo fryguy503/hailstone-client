@@ -29,16 +29,27 @@ local search = ""
 local function online(texts) return (texts[7] or "") ~= "" end
 
 -- The members listed and how many are on: the rows' texts only (S.Rows would make two more tables a row, every frame).
+-- The counts are read again every COUNT_REREAD seconds, at once when the row count changes (the header shows them on
+-- every page, and a ListRow a member a frame is hundreds of calls into the game for a big guild).
+local COUNT_REREAD = 0.25
+local countsReadAt, countsReadRows = -math.huge, -1
+local countTotal, countOn = 0, 0
 local function rosterCounts()
-  local rows = API.windows.ListInfo(WINDOW, "MemberList")
+  local rows = API.windows.ListInfo(WINDOW, "MemberList") or 0
+  local now = ui.GetTime()
+  if rows == countsReadRows and now - countsReadAt < COUNT_REREAD and now >= countsReadAt then
+    return countTotal, countOn
+  end
+  countsReadAt, countsReadRows = now, rows
   local total, on = 0, 0
-  for r = 0, (rows or 0) - 1 do
+  for r = 0, rows - 1 do
     local texts = API.windows.ListRow(WINDOW, "MemberList", r)
     if texts then
       total = total + 1
       if online(texts) then on = on + 1 end
     end
   end
+  countTotal, countOn = total, on
   return total, on
 end
 

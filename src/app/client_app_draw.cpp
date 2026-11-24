@@ -34,7 +34,7 @@ void ClientApp::draw_text_overlay() {
     float width = static_cast<float>(static_cast<int>(display.x * 0.5f));
     ImFont* font = ui::ui_font(6);
     if (!font) font = ImGui::GetFont();
-    float size = font->FontSize;
+    float size = font->LegacySize;
     std::uint32_t c = frame->argb;
     ImU32 colour = IM_COL32((c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff, (c >> 24) & 0xff);
     // Wrapped into lines, each centred in the rectangle.
@@ -43,7 +43,7 @@ void ClientApp::draw_text_overlay() {
     const char* end = p + text.size();
     float y = top;
     while (p < end) {
-        const char* line_end = font->CalcWordWrapPositionA(size / font->FontSize, p, end, width);
+        const char* line_end = font->CalcWordWrapPosition(size, p, end, width);
         if (line_end == p) ++line_end;
         ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, p, line_end);
         dl->AddText(font, size, ImVec2(left + (width - ts.x) * 0.5f, y), colour, p, line_end);
@@ -223,7 +223,7 @@ void ClientApp::draw_nameplates(const render::FrameInfo& frame, const glm::mat4&
         canvas_frame.dt_ms = static_cast<double>(ImGui::GetIO().DeltaTime) * 1000.0;
         canvas_frame.font_size = ui::plate_font_size();
         if (canvas_frame.font_size <= 0.0f)
-            canvas_frame.font_size = canvas_style.font ? canvas_style.font->FontSize : ImGui::GetFontSize();
+            canvas_frame.font_size = canvas_style.font ? canvas_style.font->LegacySize : ImGui::GetFontSize();
         canvas_frame.viewport = {view_area_.x, view_area_.y, view_area_.w, view_area_.h};
         std::vector<std::size_t> candidates;
         candidates.reserve(plate_count_);

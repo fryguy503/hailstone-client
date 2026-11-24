@@ -43,7 +43,7 @@ local function tabs(x0, y0, page, names, onClick)
     local on = page == i - 1
     T.rect(x, y0, x + w, y0 + th + T.px(16), on and C.accent or C.raised, on and 0.9 or 1, T.px(10))
     T.textIn(x, y0, x + w, y0 + th + T.px(16), l, on and C.onAccent or C.text, 0.5)
-    if ui.IsMouseHoveringRect(x, y0, x + w, y0 + th + T.px(16)) and ui.IsMouseClicked(ui.Mouse.Left) then onClick(i - 1) end
+    if T.mouseOver(x, y0, x + w, y0 + th + T.px(16)) and ui.IsMouseClicked(ui.Mouse.Left) then onClick(i - 1) end
     x = x + w + T.px(10)
   end
   T.unfont()
@@ -115,21 +115,29 @@ for i = 1, 4 do COMBAT_IDS[i] = "ACP_" .. ORD[i] .. "AbilityButton" end
 for i = 1, 12 do SOCIAL_IDS[i] = "ASP_SocialButton" .. i end
 local ATTACK_IDS = { "ACP_MeleeAttackButton", "ACP_RangeAttackButton" }
 
--- How many disciplines are known (the Disciplines button's text), read every 0.25 s: hs.Disciplines builds them all.
-local discCount, discCountAt = 0, nil
-local function disciplineCount()
+-- The disciplines (hs.Disciplines builds them all): the Actions window's count (its Disciplines button's text) and
+-- the Combat Abilities list. Read every frame while one cools down (its timer and bar move, and a cooldown ended or
+-- reset shows at once), else every 0.25 s; at once after a use.
+local discRead, discsAt, discCooling = {}, nil, false
+local function disciplines()
   local now = ui.GetTime()
-  if not discCountAt or now - discCountAt >= 0.25 or now < discCountAt then
-    discCount, discCountAt = #API.abilities.Disciplines(), now
+  if discCooling or not discsAt or now - discsAt >= 0.25 or now < discsAt then
+    discRead, discsAt, discCooling = API.abilities.Disciplines(), now, false
+    for _, d in ipairs(discRead) do
+      if d.remaining > 0 then discCooling = true break end
+    end
   end
-  return discCount
+  return discRead
 end
+local function disciplineCount() return #disciplines() end
+local actionsHidden = true -- (read afresh when the Actions window opens)
 
 ui.window("Actions", function()
   if not W.shown(AW) then
-    discCountAt = nil
+    actionsHidden = true
     return
   end
+  if actionsHidden then discsAt, actionsHidden = nil, false end
   local page = API.windows.TabPage(AW, "ACTW_ActionsSubwindows") or 0
   if W.begin("Actions", { w = 1200, h = 800, title = "Actions", subtitle = PAGES[page + 1],
         hints = { { "a", "Use" }, { "y", "Choose skill" }, { "x", "Assign to slot" }, { "lb", "Page" }, { "rb", "Page" }, { "b", "Close" } } }) then
@@ -224,7 +232,7 @@ end
 
 ui.window("Combat Abilities", function()
   if not W.shown(CW) then return end
-  local discs = API.abilities.Disciplines()
+  local discs = disciplines()
   local focusedDisc
   -- The active discipline's icon stays out of the pad's navigation: as the window's first item it would take the
   -- first focus, and A on opening the window would end the discipline. LB ends it instead (a click still does).
@@ -301,7 +309,10 @@ ui.window("Combat Abilities", function()
     end, function(i)
       if not discSettled then return end
       local d = discs[i]
-      if d then API.cursor.PressButtonFrom(CW, "Discipline", d.index + 1) end
+      if d then
+        API.cursor.PressButtonFrom(CW, "Discipline", d.index + 1)
+        discsAt = nil -- (its cooldown read again next frame)
+      end
     end)
     if #discs == 0 then T.draw(x0, y0, "You have no combat abilities.", C.dim) end
     -- the focused discipline: its icon, name and the spell display's text

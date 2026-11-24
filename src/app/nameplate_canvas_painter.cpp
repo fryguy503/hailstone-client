@@ -24,7 +24,7 @@ void rounded_rect(ImDrawList& draw, ImVec2 lo, ImVec2 hi, ImU32 color, float rad
     radius = std::min(radius, std::min((hi.x - lo.x) * 0.5f, (hi.y - lo.y) * 0.5f));
     if (radius <= 0.0f) {
         if (filled) draw.AddRectFilled(lo, hi, color);
-        else draw.AddRect(lo, hi, color, 0, 0, thickness);
+        else draw.AddRect(lo, hi, color, 0, thickness, 0);
         return;
     }
     // A public command has fixed tessellation, independent of global UI curve settings.
@@ -35,7 +35,7 @@ void rounded_rect(ImDrawList& draw, ImVec2 lo, ImVec2 hi, ImU32 color, float rad
     draw.PathArcTo(ImVec2(hi.x - radius, hi.y - radius), radius, 0, pi * 0.5f, 16);
     draw.PathArcTo(ImVec2(lo.x + radius, hi.y - radius), radius, pi * 0.5f, pi, 16);
     if (filled) draw.PathFillConvex(color);
-    else draw.PathStroke(color, ImDrawFlags_Closed, thickness);
+    else draw.PathStroke(color, thickness, ImDrawFlags_Closed);
 }
 } // namespace
 
@@ -44,14 +44,15 @@ std::optional<game::CanvasTextMetrics> measure_nameplate_canvas_text(
     if (!ImGui::GetCurrentContext() || !std::isfinite(size) || size < 4.0f || size > 256.0f ||
         index < 0 || index > 6 || text.size() > game::kCanvasMaxTextBytes) return std::nullopt;
     ImFont* font = canvas_font(index, style);
-    if (!font || font->FontSize <= 0.0f) return std::nullopt;
+    if (!font || font->LegacySize <= 0.0f) return std::nullopt;
     const ImVec2 advance = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.data(), text.data() + text.size());
     game::CanvasTextMetrics result;
     result.width = advance.x;
     result.height = advance.y;
     float pen_x = 0, pen_y = 0;
     bool ink = false;
-    const float scale = size / font->FontSize;
+    // Glyph boxes are baked per size since ImGui 1.92 (what AddText at `size` draws), not scaled from one size.
+    ImFontBaked* baked = font->GetFontBaked(size);
     const char* current = text.data();
     const char* end = current + text.size();
     while (current < end) {
@@ -61,11 +62,11 @@ std::optional<game::CanvasTextMetrics> measure_nameplate_canvas_text(
         current += consumed;
         if (codepoint == '\n') { pen_x = 0; pen_y += size; continue; }
         if (codepoint == '\r') continue;
-        const ImFontGlyph* glyph = font->FindGlyph(static_cast<ImWchar>(codepoint));
+        const ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(codepoint));
         if (!glyph) continue;
         if (glyph->Visible) {
-            const float x0 = pen_x + glyph->X0 * scale, x1 = pen_x + glyph->X1 * scale;
-            const float y0 = pen_y + glyph->Y0 * scale, y1 = pen_y + glyph->Y1 * scale;
+            const float x0 = pen_x + glyph->X0, x1 = pen_x + glyph->X1;
+            const float y0 = pen_y + glyph->Y0, y1 = pen_y + glyph->Y1;
             if (!ink) {
                 result.ink_x0 = x0; result.ink_x1 = x1;
                 result.ink_y0 = y0; result.ink_y1 = y1;
@@ -75,7 +76,7 @@ std::optional<game::CanvasTextMetrics> measure_nameplate_canvas_text(
                 result.ink_y0 = std::min(result.ink_y0, y0); result.ink_y1 = std::max(result.ink_y1, y1);
             }
         }
-        pen_x += glyph->AdvanceX * scale;
+        pen_x += glyph->AdvanceX;
     }
     return result;
 }
@@ -132,17 +133,17 @@ bool paint_nameplate_canvas(ImDrawList& draw, const game::NameplateCanvasModel& 
             break;
         }
         case Kind::Line:
-            draw.AddLine(point(command.x0, command.y0), point(command.x1, command.y1), color, command.thickness);
+            draw.AddLine(point(command.x0, command.y0), point(command.x1, command.y1), color, command.thickness, ImDrawFlags_StrokeLegacy);
             break;
         case Kind::Circle:
-            draw.AddCircle(point(command.x, command.y), command.radius, color, command.segments, command.thickness);
+            draw.AddCircle(point(command.x, command.y), command.radius, color, command.segments, command.thickness, ImDrawFlags_StrokeLegacy);
             break;
         case Kind::CircleFilled:
             draw.AddCircleFilled(point(command.x, command.y), command.radius, color, command.segments);
             break;
         case Kind::Triangle:
             draw.AddTriangle(point(command.x0, command.y0), point(command.x1, command.y1), point(command.x2, command.y2),
-                             color, command.thickness);
+                             color, command.thickness, ImDrawFlags_StrokeLegacy);
             break;
         case Kind::TriangleFilled:
             draw.AddTriangleFilled(point(command.x0, command.y0), point(command.x1, command.y1), point(command.x2, command.y2), color);

@@ -232,7 +232,7 @@ void process_missile(Missile& m, std::uint32_t now, const MissileWorld& world) {
     }
     int stage = 0;
     if (m.packet.item_type == kMissileItemSpell) {
-        const SpellData* spell = m.packet.spell >= 1 && m.packet.spell <= kMaxSpellId && world.spell
+        const SpellData* spell = is_spell_id(m.packet.spell) && world.spell
                                      ? world.spell(m.packet.spell) : nullptr;
         if (!spell) {
             m.done = true;

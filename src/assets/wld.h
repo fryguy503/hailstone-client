@@ -94,7 +94,7 @@ struct Polygon {
     std::array<std::uint16_t, 3> v{};
 };
 
-// 0x17 POLYHEDRONDEF: a collision volume, centered on the mesh that uses it.
+// 0x17 POLYHEDRONDEF: a collision volume in its owner's local coordinates.
 struct PolyhedronDef {
     std::vector<glm::vec3> positions;
     std::vector<std::array<std::uint32_t, 3>> triangles;
@@ -327,6 +327,7 @@ struct SkeletonNode {
 // (SkeletonNode::sprite) or list per-vertex node runs (MeshDef::vertex_pieces).
 struct Skeleton {
     std::uint32_t flags = 0;
+    Ref collision_volume = 0; // 0x18 polyhedron reference, when present
     float bounding_radius = 0.0f; // when flags & 2 (the actor's bounding radius, CActorDefinition +0x38)
     std::vector<SkeletonNode> nodes;
     std::vector<Ref> meshes; // 0x2d references, when flags & 0x200

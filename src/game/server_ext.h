@@ -99,6 +99,8 @@ public:
     virtual bool merchant_right_click(net::GameConnection&, std::uint32_t, const net::ItemSlot&,
                                       std::uint32_t, std::uint32_t) { return false; }
     virtual const char* name() const { return "stock"; }
+    // Requests an inclusive spell ID limit for zone entry; 0 abstains. The host validates the loaded file.
+    virtual std::uint32_t spell_id_limit(const net::GameConnection&) const { return 0; }
 
     // ---- the connection (net/game_connection*.cpp) ----
     // Each frame in the zone: true runs the zone-in's last step again.

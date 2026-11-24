@@ -697,9 +697,7 @@ TEST_CASE("web service: the mouse leaving the game's window leaves the page at i
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int fw = 0, fh = 0;
-    io.Fonts->GetTexDataAsRGBA32(&px, &fw, &fh);
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     auto frame = [&](float x, float y) {
         io.DisplaySize = ImVec2(800, 600);
         io.DeltaTime = 1.0f / 60.0f;

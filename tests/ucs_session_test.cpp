@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -511,6 +512,39 @@ TEST_CASE("UCS late replies from an abandoned endpoint cannot authenticate its r
     auto events = rig.events();
     REQUIRE(events.size() == 1);
     CHECK(events.front().fields == std::vector<std::string>{"SOE.EQ.test.Hero"});
+}
+
+TEST_CASE("UCS chat displays literal percents and escapes them in replies") {
+    auto config = MockConfig::standard();
+    config.send_chat_server = true;
+    Rig rig(std::move(config));
+    std::ofstream(rig.dir.path() / "eqstr_us.txt", std::ios::app) << "6721 UCS TELL %1: %2\n"
+                                                               << "6723 UCS CHANNEL %1 %2: %3\n"
+                                                               << "13974 /tell\n";
+    rig.conn.reload_game_files();
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.until([&] { return !rig.server.ucs_log.empty(); }));
+    rig.server.ucs.send_reliable(mailbox_reply("SOE.EQ.mock.Gennro", 1));
+    rig.server.ucs.send_reliable(strings(0x02, {"general"}));
+    REQUIRE(rig.until([&] {
+        return rig.conn.chat_server_connected() && rig.conn.chat_channels() == std::vector<std::string>{"general"};
+    }));
+    rig.conn.set_target(101); // a_rat001
+    rig.chat();
+
+    rig.server.ucs.send_reliable(strings(0x03, {"general", "SOE.EQ.mock.Friend", "Use &PCT;T here", "SPAM:0:"}));
+    rig.server.ucs.send_reliable(strings(0x03, {"$SOE.EQ.mock.Gennro", "SOE.EQ.mock.Friend", "At 80&PCT;", "SPAM:0:"}));
+    REQUIRE(rig.until([&] { return rig.conn.social().last_tell_from == "[Friend"; }));
+    const auto lines = rig.chat();
+    CHECK(has_line(lines, "UCS CHANNEL Friend general:1: Use %T here"));
+    CHECK(has_line(lines, "UCS TELL Friend: At 80%"));
+
+    const auto sent = rig.server.ucs_log.size();
+    rig.conn.send_command("/reply %T reached 75%");
+    REQUIRE(rig.until([&] { return rig.server.ucs_log.size() > sent; }));
+    const auto& reply = rig.server.ucs_log[sent];
+    CHECK(reply.opcode == 0x02);
+    CHECK(reply.data == strings(0x02, {";tell Friend a rat reached 75&PCT;", ""}).data);
 }
 
 TEST_CASE("UCS mail integration authenticates, switches boxes, reads and deletes mail, and retires on loss") {

@@ -266,7 +266,7 @@ TEST_CASE("Lua plugin: canvas callbacks restore ImGui windows styles and pending
         Context(){
             auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={640,480};io.DeltaTime=1.0f/60.0f;
             io.ConfigErrorRecoveryEnableAssert=false;io.ConfigErrorRecoveryEnableDebugLog=false;io.ConfigErrorRecoveryEnableTooltip=false;
-            unsigned char* pixels=nullptr;int w=0,h=0;io.Fonts->GetTexDataAsRGBA32(&pixels,&w,&h);
+            io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         }
         ~Context(){if(current->WithinFrameScope)ImGui::EndFrame();ImGui::DestroyContext(current);ImGui::SetCurrentContext(previous);}
     } imgui;

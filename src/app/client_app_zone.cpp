@@ -50,6 +50,8 @@ void ClientApp::load_zone(const std::string& short_name) {
                 revamped_test = game::safe_point_test(game::server_to_world({z->safe_x, z->safe_y, z->safe_z}),
                                                       tested_collision);
         zone_ = assets::load_zone(game_, short_name, {}, revamped_test);
+        // A revamped zone with both files whose test failed loads its .s3d: the mesh the test built is the .eqg's.
+        if (!zone_->from_eqg) tested_collision.reset();
         mark("zone data");
         // The classic ground smoothed for drawing (assets/ground_refine.h, display.smooth_ground); before the flora,
         // which stands on it.
@@ -349,6 +351,7 @@ void ClientApp::unload_zone() {
     }
     pre_game_world_.reset();
     missiles_.clear(); // CEverQuest_ClearZoneWorldState -> EQMissile_UpdateAll
+    missile_particle_cues_.clear();
     if (audio_) audio_->set_zone("");
     if (zone_renderer_ || world_geometry_renderer_) vk_.wait_idle();
     world_geometry_renderer_.reset();
@@ -665,23 +668,16 @@ constexpr std::size_t kBoltLights = 6;
 constexpr std::size_t kActorLights = 4; // each of the EDD and WLD actor effects
 } // namespace
 
-render::SceneLighting ClientApp::scene_lighting(const game::SceneLight& scene, float hour,
+render::SceneLighting ClientApp::scene_lighting(const game::SceneLight& scene, const render::Daylight& sky,
                                                 render::DynamicShadowLights* moving) const {
     std::vector<game::LightSource> carried; // the carried lights, kept apart for Carried Light Stacking
     std::vector<game::LightSource> dynamic; // the other dynamic lights
     std::vector<game::LightSource> lights;
     std::size_t carried_count = 0;
-    render::Daylight sky;
     if (lighting_mode_ == render::LightingMode::Modern) {
-        sky = render::daylight(hour, time_type_ == 1 || time_type_ == 2 || time_type_ == 5, moon_phase_, blood_moon_,
-                               static_cast<float>(ambient_light_) / 100.0f,
-                               static_cast<float>(baked_lamp_light_) / 100.0f);
-        // The weather: the storm's grey light, the lightning lighting everything from the sky.
-        render::apply_storm(sky, weather_look_.storm);
-        sky.sky += glm::vec3(weather_look_.flash * 1.5f);
         // The carried lights, the player's at about chest height. The player's light comes from its own inventory,
         // every other carrier's from its spawn record and SpawnAppearance 5 (game::carrier_light_value says why).
-        // A spawn the viewer cannot see (market_hidden_, last frame's IsInvisible set) carries none. Without dynamic
+        // A spawn the viewer cannot see (this frame's market_hidden_ set) carries none. Without dynamic
         // lights (/dynamiclights off at the zone-in) none of these lights is made.
         if (dynamic_lights_ && conn_ && screen_ == Screen::InGame && player_ready_) {
             const std::uint32_t player_id = conn_->world().player_id;
@@ -1149,6 +1145,7 @@ void ClientApp::lighting_command(std::string_view args) {
 }
 
 void ClientApp::update_missiles() {
+    missile_particle_cues_.clear();
     if (!conn_) return;
     const std::uint32_t now = net::GameConnection::eq_time();
     const auto& world = conn_->world();
@@ -1197,10 +1194,10 @@ void ClientApp::update_missiles() {
         return actor_renderer_ && actor_renderer_->drawn_name_position(id, point) ? std::optional(point) : std::nullopt;
     };
     mw.effect = [this](const game::Missile& m, int stage) {
-        if (spell_particles_ && spell_effects_) spell_particles_->missile_effect(*conn_, m, stage, actor_renderer_.get());
+        if (spell_particles_ && spell_effects_) missile_particle_cues_.emplace_back(MissileParticleEffect{m, stage});
     };
     mw.ended = [this](const game::Missile& m) {
-        if (spell_particles_) spell_particles_->end_missile(m.serial);
+        if (spell_particles_) missile_particle_cues_.emplace_back(m.serial);
     };
     mw.spell_hit = [this](const game::Missile& m) { conn_->spell_missile_hit(m); };
     if (spell_particles_)
@@ -1285,6 +1282,18 @@ void ClientApp::update_missiles() {
             return bolts && bolts->follows(serial);
         });
     }
+}
+
+void ClientApp::apply_missile_particle_cues() {
+    if (spell_particles_ && conn_) {
+        for (const auto& cue : missile_particle_cues_) {
+            if (const auto* effect = std::get_if<MissileParticleEffect>(&cue))
+                spell_particles_->missile_effect(*conn_, effect->missile, effect->stage, actor_renderer_.get());
+            else
+                spell_particles_->end_missile(std::get<std::uint32_t>(cue));
+        }
+    }
+    missile_particle_cues_.clear();
 }
 
 

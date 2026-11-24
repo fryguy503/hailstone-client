@@ -18,6 +18,13 @@
 
 namespace hailstone::app {
 
+template<class ObjectSight>
+bool world_geometry_line_of_sight(const game::CollisionMesh* mesh, const game::AnimatedObjects* animated,
+                                  ObjectSight&& object_sight, const glm::vec3& from, const glm::vec3& to) {
+    return (!mesh || mesh->line_of_sight(from, to)) && object_sight(from, to) &&
+           (!animated || !animated->blocks(from, to));
+}
+
 // A visual surface query includes static props and the same current moving geometry as the scene.
 // The caller's ceiling selects the layer; a query never reaches upward through another floor.
 template<class ObjectFloor>

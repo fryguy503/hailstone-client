@@ -90,8 +90,9 @@ private:
     render::VkContext& vk_;
     VkDevice device_;
     VmaAllocator allocator_;
-    VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE; // set 1: the depth and the parameters
-    VkDescriptorSetLayout font_layout_ = VK_NULL_HANDLE; // set 0, as ImGui's: its font texture
+    VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE; // set 2: the depth and the parameters
+    VkDescriptorSetLayout font_layout_ = VK_NULL_HANDLE; // set 0, as ImGui's: its font texture (an image)
+    VkDescriptorSetLayout sampler_layout_ = VK_NULL_HANDLE; // set 1, as ImGui's: the sampler it binds
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

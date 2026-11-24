@@ -370,7 +370,7 @@ Skeleton read_skeleton(ByteReader& r, const WldFile& wld) {
     Skeleton s;
     s.flags = r.le<std::uint32_t>();
     std::size_t count = checked_count(r, r.le<std::uint32_t>(), 20);
-    r.skip(4); // collision volume reference
+    s.collision_volume = r.le<Ref>();
     if (s.flags & 0x1) r.skip(12); // centre offset
     if (s.flags & 0x2) s.bounding_radius = r.f32();
     s.nodes.reserve(count);

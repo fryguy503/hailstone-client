@@ -79,9 +79,7 @@ TEST_CASE("Parcels page (modern): a click on a row picks the parcel, Retrieve ta
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int tw = 0, th = 0;
-    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         net::ConnectionOptions options = quick_options();
         options.servers_dir = dir / "servers";

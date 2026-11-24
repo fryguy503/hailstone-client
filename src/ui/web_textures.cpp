@@ -60,7 +60,7 @@ WebTextures::Entry WebTextures::make(std::uint16_t width, std::uint16_t height) 
     ai.usage = VMA_MEMORY_USAGE_AUTO;
     render::vk_check(vmaCreateImage(vk_.allocator(), &info, &ai, &e.image, &e.allocation, nullptr), "create web image");
     e.view = render::create_image_view(vk_.device(), e.image, VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, 1);
-    e.set = ui::add_imgui_texture(sampler_, e.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    e.set = ui::add_imgui_texture(e.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     return e;
 }
 
@@ -119,7 +119,7 @@ void WebTextures::record(const render::FrameInfo& frame, web::BrowserHost& host)
                 e = make(img.width, img.height);
             }
             // add_imgui_texture found no descriptor set (out of memory for a pool): tried again until one is made.
-            if (e.image && !e.set) e.set = ui::add_imgui_texture(sampler_, e.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            if (e.image && !e.set) e.set = ui::add_imgui_texture(e.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             if (!e.ready) dirty = {{0, 0, img.width, img.height}}; // a new texture takes all of it
             if (dirty.empty()) continue;
             Job job{&e, &img, {}};

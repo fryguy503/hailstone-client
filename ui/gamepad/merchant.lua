@@ -6,7 +6,8 @@
 --            Y sends one: To and Note on the keyboard, then A on an item of your bags sends it (the stock Send
 --            button: a stack asks how many), or money: A on a coin of your purse (the inventory's coin buttons: the
 --            quantity dialog asks how much) picks it, and Send money sends what is picked, else asks the platinum
---            on the keyboard (hs.SendParcelMoney)
+--            on the keyboard (hs.SendParcelMoney). Each send is asked first (Yes / No, Hailstone), and an item's
+--            "sent" shows only once it has left the bags
 -- Y inspects the focused item. On Buy, X switches "Usable only" (the stock MW_UsableButton, on to start). The price
 -- and the merchant's rules are the stock window's.
 local API = hs.UI
@@ -24,6 +25,10 @@ local buyList = { offset = 0 }
 local pendingBuy, pendingSell = nil, nil -- a row / slot selected this frame, its button pressed next frame
 local parcelList = { offset = 0 }
 local sendMode, pendingSend, parcelNote = false, nil, nil
+local sendQ = {} -- the question before a parcel goes (W.confirm)
+-- An item's send in flight: { slot, bag, name, count, to, frame, dialog, seen, answeredAt } from the stock Send's
+-- click until the item leaves the bags ("sent"), or the send is dropped (a quantity dialog cancelled, a refusal).
+local awaitSend = nil
 -- the money picked with the purse's coins (hs.Parcels' money, by its serial), platinum first
 local sendCoins, moneySerial = { 0, 0, 0, 0 }, nil
 local kb, kbFor = K.new(), nil -- the keyboard, and what it types ("to", "note", "money")
@@ -41,6 +46,49 @@ local function coins(texts)
   return #out > 0 and table.concat(out, " ") or "free"
 end
 
+-- A parcel's date ("Nov 22"), made once per time rather than a frame. The time is the server's: one out of os.date's
+-- range (or a platform's that refuses it) shows no date rather than raising every frame.
+local sentDates = {}
+local function sentDate(t)
+  local d = sentDates[t]
+  if d == nil then
+    d = false
+    if type(t) == "number" and t > 0 and t < 4102444800 then -- (before 2100: a 32-bit time_t's range and more)
+      local ok, r = pcall(os.date, "%b %d", math.floor(t))
+      if ok and type(r) == "string" then d = r end
+    end
+    sentDates[t] = d
+  end
+  return d or nil
+end
+
+-- Follows an item's send (awaitSend) with the frame's parcel state: "sent" once the item has left its slot (or
+-- the stack is smaller), "not sent" when the stock Send's click sent nothing (its quantity dialog cancelled, the
+-- item refused) or the merchant answered and the item stayed. (The server's own words come in the chat.)
+local function watchSend(sending)
+  local a = awaitSend
+  if not a or pendingSend then return end
+  local now = API.inventory.Item(a.slot, a.bag)
+  if not now or now.name ~= a.name or (now.count or 0) < a.count then
+    parcelNote, awaitSend = a.name .. " sent to " .. a.to, nil
+    return
+  end
+  if sending then
+    a.seen = true
+  elseif a.seen then
+    -- answered: the server's delete may come just after its answer, so the item has a moment to go
+    a.answeredAt = a.answeredAt or ui.GetTime()
+    if ui.GetTime() - a.answeredAt > 2 then
+      parcelNote, awaitSend = a.name .. " was not sent (the chat says why).", nil
+    end
+  elseif API.windows.Shown("QuantityWnd") then
+    a.dialog = true
+  elseif a.dialog or ui.GetFrameCount() > a.frame + 1 then
+    -- the quantity dialog put away without a send, or the click sent nothing (the item refused)
+    parcelNote, awaitSend = a.name .. " was not sent.", nil
+  end
+end
+
 local TABS2, TABS3 = { "Buy", "Sell" }, { "Buy", "Sell", "Parcels" }
 local bagSlots = {} -- the bag slots' items, read once a frame (I.readBagSlots)
 
@@ -53,7 +101,7 @@ local function tabs(x0, y0, parcelsHere)
     local w = tw + T.px(40)
     T.rect(x, y0, x + w, y0 + th + T.px(16), page == i and C.accent or C.raised, page == i and 0.9 or 1, T.px(10))
     T.textIn(x, y0, x + w, y0 + th + T.px(16), l, page == i and C.onAccent or C.text, 0.5)
-    if ui.IsMouseHoveringRect(x, y0, x + w, y0 + th + T.px(16)) and ui.IsMouseClicked(ui.Mouse.Left) then page = i end
+    if T.mouseOver(x, y0, x + w, y0 + th + T.px(16)) and ui.IsMouseClicked(ui.Mouse.Left) then page = i end
     x = x + w + T.px(10)
   end
   local _, th = ui.CalcTextSize("Ag")
@@ -62,15 +110,23 @@ local function tabs(x0, y0, parcelsHere)
 end
 
 ui.window("Merchant", function()
-  if not W.shown(MW) then return end
+  if not W.shown(MW) then
+    sendQ.confirm, awaitSend = nil, nil
+    return
+  end
   T.frame()
   X.frame() -- runs a purse coin's click once A is up (its quantity dialog)
   -- the stock button the previous frame asked for, once the selection is the game's
   if pendingBuy then API.windows.ClickChild(MW, "MW_Buy_Button", "left") pendingBuy = nil end
   if pendingSell then API.windows.ClickChild(MW, "MW_Sell_Button", "left") pendingSell = nil end
-  if pendingSend then API.windows.ClickChild(MW, "MW_Send_Button", "left") pendingSend = nil end
+  if pendingSend then
+    API.windows.ClickChild(MW, "MW_Send_Button", "left")
+    pendingSend = nil
+    if awaitSend then awaitSend.frame = ui.GetFrameCount() end
+  end
   -- (read once a frame, after the clicks above: each read builds the parcel list)
   local parcelRows, parcelClaiming, _, parcelSending, _, parcelMoney = API.inventory.Parcels()
+  watchSend(parcelSending)
   local parcelsHere = parcelRows ~= nil
   if page == 3 and not parcelsHere then page = 1 end
   local title = API.windows.Title(MW) or ""
@@ -80,6 +136,8 @@ ui.window("Merchant", function()
   if page == 1 then table.insert(hints, 3, { "x", usableOnly and "Show everything" or "Usable only" }) end
   if kb.open then
     hints = K.HINTS
+  elseif sendQ.confirm then
+    hints = { { "a", "Select" }, { "b", "No" } }
   elseif page == 3 and sendMode then
     hints = { { "a", "Send" }, { "y", "Back to the parcels" }, { "b", "Back" } }
   elseif page == 3 then
@@ -88,8 +146,9 @@ ui.window("Merchant", function()
   if W.begin("Merchant", { w = 1500, h = 900, title = title ~= "" and title or "Merchant",
         subtitle = string.format("You have %dpp %dgp %dsp %dcp", pp or 0, gp or 0, sp or 0, cp or 0),
         hints = hints }) then
-    if not kb.open and W.pressed("lb") then page = math.max(1, page - 1) end
-    if not kb.open and W.pressed("rb") then page = math.min(parcelsHere and 3 or 2, page + 1) end
+    if not kb.open and not sendQ.confirm and W.pressed("lb") then page = math.max(1, page - 1) end
+    if not kb.open and not sendQ.confirm and W.pressed("rb") then page = math.min(parcelsHere and 3 or 2, page + 1) end
+    if page ~= 3 then sendQ.confirm = nil end
     if page ~= lastPage then
       if page == 1 then buyList.focusNext = 1 else sellRefocus = 1 end
       buyList.lastFocus = nil
@@ -148,8 +207,10 @@ ui.window("Merchant", function()
           local n = tonumber(t:match("%d+") or "")
           local to = API.windows.Text(MW, "MW_Send_To_Edit") or ""
           if n and n > 0 then
-            parcelNote = API.inventory.SendParcelMoney(to, API.windows.Text(MW, "MW_Note_Edit") or "", n, 0, 0, 0)
-              or (n .. "pp sent to " .. to)
+            sendQ.confirm = { "Send " .. n .. "pp to " .. to .. "?", function()
+              parcelNote = API.inventory.SendParcelMoney(to, API.windows.Text(MW, "MW_Note_Edit") or "", n, 0, 0, 0)
+                or (n .. "pp sent to " .. to)
+            end }
           end
         end
       end
@@ -174,12 +235,15 @@ ui.window("Merchant", function()
           T.textIn(rx1 - T.px(300), ry0, rx1 - T.px(14), ry1, T.fit(from, T.px(286)), C.dim, 1)
           if focused then
             focusedItem = it
-            focusedWhere = from .. (p.sent > 0 and (", " .. os.date("%b %d", p.sent)) or "") .. (p.note ~= "" and (": " .. p.note) or "")
+            local date = sentDate(p.sent)
+            focusedWhere = from .. (date and (", " .. date) or "") .. (p.note ~= "" and (": " .. p.note) or "")
           end
         end, function(i) API.inventory.RetrieveParcel(list[i].slot) end)
       end
       if not kb.open and W.pressed("x") and #list > 0 and claiming == 0 then API.inventory.ClaimAllParcels() end
       if not kb.open and W.pressed("y") then sendMode, sellRefocus, parcelNote = true, 1, nil end
+    elseif page == 3 and sendQ.confirm then
+      ui.Dummy(1, 1) -- (the question is drawn over the window at the end)
     elseif page == 3 then
       -- sending: To, Note and money, then your bags (A on an item sends it)
       local sending, money = parcelSending, parcelMoney
@@ -209,9 +273,12 @@ ui.window("Merchant", function()
       if T.button("##pmoney", "Send money", bw, bh,
           { sub = #picked > 0 and table.concat(picked, " ") or "Platinum", align = 0, disabled = to == "" or sending }, pad) then
         if #picked > 0 then
-          local why = API.inventory.SendParcelMoney(to, note, sendCoins[1], sendCoins[2], sendCoins[3], sendCoins[4])
-          parcelNote = why or (table.concat(picked, " ") .. " sent to " .. to)
-          if not why then sendCoins = { 0, 0, 0, 0 } end
+          local amount, c = table.concat(picked, " "), { sendCoins[1], sendCoins[2], sendCoins[3], sendCoins[4] }
+          sendQ.confirm = { "Send " .. amount .. " to " .. to .. "?", function()
+            local why = API.inventory.SendParcelMoney(to, note, c[1], c[2], c[3], c[4])
+            parcelNote = why or (amount .. " sent to " .. to)
+            if not why then sendCoins = { 0, 0, 0, 0 } end
+          end }
         else
           kbFor = "money"
           K.open(kb, "Platinum to send to " .. to, "", 9)
@@ -233,10 +300,20 @@ ui.window("Merchant", function()
         if clicked and item then
           if to == "" then
             parcelNote = "Pick who it is for first (To)."
-          elseif not sending then
-            API.inventory.ClickSlot(slot, bag, "left") -- selects it for the merchant
-            pendingSend = true
-            parcelNote = item.name .. " sent to " .. to
+          elseif not sending and not awaitSend then
+            local name, count = item.name, item.count or 1
+            sendQ.confirm = { "Send " .. name .. " to " .. to .. "?", function()
+              -- (the bags may have changed while it was asked: only the same item goes)
+              local now = API.inventory.Item(slot, bag)
+              if not now or now.name ~= name then
+                parcelNote = name .. " has moved: pick it again."
+                return
+              end
+              API.inventory.ClickSlot(slot, bag, "left") -- selects it for the merchant
+              pendingSend = true
+              awaitSend = { slot = slot, bag = bag, name = name, count = now.count or count, to = to, frame = math.huge }
+              parcelNote = "Sending " .. name .. " to " .. to .. "..."
+            end }
           end
         end
       end
@@ -343,6 +420,7 @@ ui.window("Merchant", function()
         or (sending and "Sending..." or parcelNote or (sendMode and "A on an item sends it" or "Y sends a parcel"))
       T.textIn(listX1 + T.px(42), sy + T.px(48), x1 - T.px(18), y1 - T.px(12), T.fit(status, x1 - listX1 - T.px(60)), C.text, 0)
       T.unfont()
+      W.confirm(sendQ) -- (over everything: drawn last)
     else
       T.draw(listX1 + T.px(42), sy + T.px(16), "SELECTED", C.dim)
       T.unfont()
@@ -353,7 +431,7 @@ ui.window("Merchant", function()
       T.unfont()
     end
   end
-  local close = W.back(W.finish(), nil, kb)
+  local close = W.back(W.finish(), sendQ, kb)
   if close and page == 3 and sendMode then
     sendMode, close = false, false
     parcelList.focusNext = 1

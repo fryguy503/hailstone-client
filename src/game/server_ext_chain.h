@@ -48,6 +48,7 @@ public:
     bool empty() const;
 
     const char* name() const override { return "chain"; }
+    std::uint32_t spell_id_limit(const net::GameConnection& c) const override;
 
     std::optional<FollowProfile> follow_profile(const net::GameConnection& c) const override;
     std::optional<MountProfile> mount_profile(const net::GameConnection& c) const override;

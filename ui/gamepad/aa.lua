@@ -31,7 +31,7 @@ local function tabs(x0, y0, page)
     local on = page == i - 1
     T.rect(x, y0, x + w, y0 + th + T.px(16), on and C.accent or C.raised, on and 0.9 or 1, T.px(10))
     T.textIn(x, y0, x + w, y0 + th + T.px(16), l, on and C.onAccent or C.text, 0.5)
-    if ui.IsMouseHoveringRect(x, y0, x + w, y0 + th + T.px(16)) and ui.IsMouseClicked(ui.Mouse.Left) then
+    if T.mouseOver(x, y0, x + w, y0 + th + T.px(16)) and ui.IsMouseClicked(ui.Mouse.Left) then
       API.windows.SetTabPage(AW, "Subwindows", i - 1)
     end
     x = x + w + T.px(10)

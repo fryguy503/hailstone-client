@@ -434,6 +434,7 @@ std::optional<MobHealth> decode_mob_health(const AppPacket& p);
 
 // OP_ChannelMessage (both directions): sender, target, u32 0, language,
 // channel, 5 unknown bytes, language skill, message, then 15 zero bytes.
+inline constexpr std::size_t kChannelMessageMaxText = 0x7ff;
 struct ChannelMessage {
     std::string sender;
     std::string target; // tell recipient

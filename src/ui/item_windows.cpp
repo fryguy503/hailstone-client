@@ -80,7 +80,7 @@ const ItemIconCache::Sheet* ItemIconCache::sheet(int number) {
             render::UploadBatch batch(vk_);
             s->texture = batch.texture(rgba);
             batch.submit();
-            s->set = ui::add_imgui_texture(static_cast<VkSampler>(sampler_), s->texture.view,
+            s->set = ui::add_imgui_texture(s->texture.view,
                                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             if (!s->set) {
                 log::warn("item icons: no descriptor left for {}", name);
@@ -184,7 +184,8 @@ std::string weight_text(std::int32_t tenths) { return std::format("{}.{}", tenth
 } // namespace
 
 std::vector<std::string> item_info_lines(const Item& it, const game::ItemFlagsFormatter& format_flags,
-                                         const game::ItemDescriptionAppender& description_append) {
+                                         const game::ItemDescriptionAppender& description_append,
+                                         const game::ItemDisplayContext& effect_context) {
     std::vector<std::string> out;
     // Flags (CItemDisplayWnd_CreateItemFlagsString).
     std::string flags;
@@ -270,6 +271,8 @@ std::vector<std::string> item_info_lines(const Item& it, const game::ItemFlagsFo
         if (!e.displayable()) continue;
         std::string name = e.name.empty() ? std::format("spell {}", e.effect) : e.name;
         out.push_back(std::format("{}:  {}", kKinds[k], name));
+        for (auto& line : game::item_effect_detail_lines(e, static_cast<net::ItemEffectKind>(k), effect_context))
+            out.push_back(std::move(line));
     }
     if (it.effects[net::kEffectClick].present()) {
         if (it.charges == 0xffffffff) out.push_back("Charges: Unlimited");
@@ -524,7 +527,8 @@ ItemWindowsActions item_windows(ItemWindowsState& state, const ItemWindowsInput&
             ImGui::SameLine();
             ImGui::BeginGroup();
             ImGui::TextColored(kGold, "%s", it.name.c_str());
-            for (const auto& line : item_info_lines(it, in.item_flags, in.item_description_append)) ImGui::TextUnformatted(line.c_str());
+            for (const auto& line : item_info_lines(it, in.item_flags, in.item_description_append, in.item_effect_context))
+                ImGui::TextUnformatted(line.c_str());
             ImGui::EndGroup();
         }
         ImGui::End();

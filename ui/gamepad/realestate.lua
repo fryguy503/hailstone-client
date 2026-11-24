@@ -124,6 +124,13 @@ end)
 local IW = "RealEstateItemsWnd"
 local IF = M.form()
 local items = {}
+-- (one button a row, each row's list made once)
+local ITEM_BUTTONS = {}
+for i, b in ipairs({ { "InventoryButton", "To Inventory" }, { "ClosetButton", "To Closet" }, { "ShedButton", "To Shed" },
+  { "CrateButton", "To Crate" }, { "InspectButton", "Inspect" }, { "StowButton", "Store All" },
+  { "PackButton", "Pack Crate" }, { "UnpackButton", "Unpack Crate" } }) do
+  ITEM_BUTTONS[i] = { { b[1], b[2], always = true } }
+end
 ui.window("Real Estate Items", function()
   if not M.visible(IW) then return end
   M.frame()
@@ -138,16 +145,13 @@ ui.window("Real Estate Items", function()
       rowH = 60, empty = "No items here.", draw = function(r, ax0, ay0, ax1, ay1)
         M.row(r, ax0, ay0, ax1, ay1, r.texts[2] or "", (r.texts[3] or "") .. " · " .. (r.texts[4] or ""))
       end })
-    local btns = { { "InventoryButton", "To Inventory" }, { "ClosetButton", "To Closet" }, { "ShedButton", "To Shed" },
-      { "CrateButton", "To Crate" }, { "InspectButton", "Inspect" }, { "StowButton", "Store All" },
-      { "PackButton", "Pack Crate" }, { "UnpackButton", "Unpack Crate" } }
-    for i, b in ipairs(btns) do
+    for i, row in ipairs(ITEM_BUTTONS) do
       if i == 1 then
         ui.SetCursorPos(rx0 - wx, y0 - wy)
       else
         ui.SetCursorPos(rx0 - wx, select(2, ui.GetCursorScreenPos()) + T.px(6) - wy)
       end
-      M.buttons(IW, { { b[1], b[2], always = true } }, rx0, x1, bh)
+      M.buttons(IW, row, rx0, x1, bh)
     end
   end
   if W.finish() then API.windows.Show(IW, false) end

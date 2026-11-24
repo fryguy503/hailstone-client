@@ -465,6 +465,8 @@ for _, pack in ipairs({ "modern", "gamepad" }) do
   check(closedMain and closedOwn and not state.shown and not detail.shown,"Main close did not retire its own detail window")
   state.shown=false;detail=detailFor(0);frame("Achievement")
   check(dialogShown("AchievementWnd") and saw("Replacement catalog"),"An externally opened own detail could not float with the browser hidden")
+  detail.points=-123456;frame("Achievement")
+  check(saw("-123,456 points"),"A negative number was grouped with its sign")
   closeWindow="AchievementWnd";frame("Achievement");action=actions[#actions]
   check(action[1]=="window" and action[2]=="AchievementWnd" and action[3]==false,"Independent detail close targeted the wrong window")
   inGame=false;local previousCalls=getterCalls;before=#actions;frame();frame("Achievement")

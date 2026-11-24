@@ -29,18 +29,33 @@ local bannerWasEditing = false
 local function toggle(id) local _, c = API.windows.ChildState(GW, id) return c == true end
 
 -- The members as the stock list has them (MemberList: name, level, class, rank, alt, last on, zone, public note),
--- with their row (0-based) and whether they are online (the zone is shown only for those).
-local function members()
+-- with their row (0-based) and whether they are online (the zone is shown only for those); the ones the toggles let
+-- through (view), by row (byRow), and how many are online. Read again every 0.25 s (each row is a ListRow and a
+-- table: a big guild is hundreds a frame), and at once when the row count or a toggle changes or the window opens.
+-- The selected row is read every frame.
+local ROSTER_REFRESH = 0.25
+local roster = { at = nil }
+local function members(showOffline, hideAlts)
   local rows, _, selected = API.windows.ListInfo(GW, "MemberList")
-  local out = {}
-  for i = 0, (rows or 0) - 1 do
-    local r = API.windows.ListRow(GW, "MemberList", i)
-    if r then
-      out[#out + 1] = { row = i, name = r[1] or "", level = r[2] or "", class = r[3] or "", rank = r[4] or "",
-        alt = (r[5] or "") ~= "", lastOn = r[6] or "", zone = r[7] or "", note = r[8] or "", online = (r[7] or "") ~= "" }
+  rows = rows or 0
+  local c, now = roster, ui.GetTime()
+  if not c.at or now - c.at >= ROSTER_REFRESH or now < c.at or rows ~= c.rows or showOffline ~= c.showOffline
+      or hideAlts ~= c.hideAlts then
+    local all, view, byRow, online = {}, {}, {}, 0
+    for i = 0, rows - 1 do
+      local r = API.windows.ListRow(GW, "MemberList", i)
+      if r then
+        local m = { row = i, name = r[1] or "", level = r[2] or "", class = r[3] or "", rank = r[4] or "",
+          alt = (r[5] or "") ~= "", lastOn = r[6] or "", zone = r[7] or "", note = r[8] or "", online = (r[7] or "") ~= "" }
+        all[#all + 1], byRow[i] = m, m
+        if m.online then online = online + 1 end
+        if (showOffline or m.online) and not (hideAlts and m.alt) then view[#view + 1] = m end
+      end
     end
+    c.at, c.rows, c.showOffline, c.hideAlts = now, rows, showOffline, hideAlts
+    c.all, c.view, c.byRow, c.online = all, view, byRow, online
   end
-  return out, selected
+  return c.all, c.view, selected and c.byRow[selected] or nil, c.online
 end
 
 local function targetName()
@@ -69,6 +84,19 @@ local function rankRow(rank)
     local r = API.windows.ListRow(GW, "GT_Rank_List", i)
     if r and r[2] == rank then return i end
   end
+end
+
+-- The picked member's rank box and their rank's row, read every 0.25 s while the same member is picked (each is a
+-- scan of a list); an action on them finds them again first.
+local rankCache = { at = nil }
+local function memberRanks(who, rank)
+  local c, now = rankCache, ui.GetTime()
+  if not c.at or now - c.at >= ROSTER_REFRESH or now < c.at or who ~= c.who or rank ~= c.rank then
+    c.at, c.who, c.rank = now, who, rank
+    c.child, c.choices = rankBox(who)
+    c.row = rankRow(rank)
+  end
+  return c.child, c.choices, c.row
 end
 
 local ranking = nil -- the member whose new rank is being picked: { name, child, choices, chosen }
@@ -189,6 +217,7 @@ ui.window("Guild", function()
     ranking, rankFocused = nil, nil -- (the picker is for the member picked while it was open)
     bannerControls.pick, bannerWasEditing = nil, false
     wasShown = false
+    roster.at, rankCache.at = nil, nil -- (read afresh when it opens again)
     return
   end
   T.frame()
@@ -202,14 +231,7 @@ ui.window("Guild", function()
   local name = API.windows.Text(GW, "GuildName")
   local inGuild = name ~= nil and name ~= ""
   local showOffline, hideAlts = toggle("ShowOfflineButton"), toggle("HideAltButton")
-  local all, selectedRow = members()
-  local view, selected = {}, nil
-  local online = 0
-  for _, m in ipairs(all) do
-    if m.online then online = online + 1 end
-    if (showOffline or m.online) and not (hideAlts and m.alt) then view[#view + 1] = m end
-    if m.row == selectedRow then selected = m end
-  end
+  local all, view, selected, online = members(showOffline, hideAlts)
   local hints = { { "b", "Close" } }
   if inGuild then
     local bannerBack = API.windows.ChildShown(GW, "SaveBannerSettings") == true and "Cancel" or "Close"
@@ -312,7 +334,7 @@ ui.window("Guild", function()
         ui.Dummy(1, 1)
       else
         listState.selected = nil
-        for i, m in ipairs(view) do if m.row == selectedRow then listState.selected = i end end
+        for i, m in ipairs(view) do if m == selected then listState.selected = i end end
         local visible = math.max(1, math.floor((y1 - ly + T.px(10)) / (T.px(56) + T.px(10))))
         listState.shown = visible
         local focusedRow = W.list("members", listState, #view, visible, 56, listW, function(i, rx0, ry0, rx1, ry1)
@@ -360,10 +382,9 @@ ui.window("Guild", function()
         T.unfont()
         ry = ry + T.px(34)
         local who = selected and selected.name or ""
-        local boxChild, boxChoices, boxChosen
-        if selected then boxChild, boxChoices, boxChosen = rankBox(who) end
+        local boxChild, boxChoices, renameRow
+        if selected then boxChild, boxChoices, renameRow = memberRanks(who, selected.rank) end
         local personal = selected and (API.windows.ListRow(GW, "NoteList", selected.row) or {})[3] or ""
-        local renameRow = selected and rankRow(selected.rank)
         -- the Tribute page's row of the member: name, tribute state, trophy state, donations, last donation
         local trib = selected and API.windows.ListRow(GW, "TributeList", selected.row) or {}
         local tribSub = selected and ("Tribute " .. (trib[2] or "") .. ", donated " .. (trib[4] or "0") ..
@@ -385,7 +406,11 @@ ui.window("Guild", function()
             state.confirm = { "Remove " .. who .. " from the guild?", function() API.windows.ClickChild(GW, "RemoveButton", "left") end }
           end },
           { "##rank", "Set rank", "Pick from the ranks you may give", boxChild ~= nil and enabled(boxChild) and #boxChoices > 1,
-            function() ranking = { name = who, child = boxChild, choices = boxChoices, chosen = boxChosen, at = ui.GetTime() } end },
+            function()
+              -- (read afresh: the shown box may be up to 0.25 s old, and the picker marks the current rank)
+              local child, choices, chosen = rankBox(who)
+              if child then ranking = { name = who, child = child, choices = choices, chosen = chosen, at = ui.GetTime() } end
+            end },
           { "##personal", "Personal note", personal ~= "" and personal or "Only you see it", selected ~= nil, function()
             K.open(kb, "Your note on " .. who, personal, 255)
             kb.purpose = "personal"
@@ -397,7 +422,8 @@ ui.window("Guild", function()
           end },
           { "##renamerank", "Rename rank", selected and selected.rank or "", renameRow ~= nil, function()
             -- the rank list's double click: the stock text entry asks for the name (where the game allows it)
-            API.windows.ListClick(GW, "GT_Rank_List", renameRow, "double")
+            local row = rankRow(selected.rank) -- (afresh, as Set rank's box)
+            if row then API.windows.ListClick(GW, "GT_Rank_List", row, "double") end
             if pad.navVisible() then pad.set_mode("cursor") end
           end },
         }

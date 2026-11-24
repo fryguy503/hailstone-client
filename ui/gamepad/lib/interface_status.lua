@@ -9,6 +9,7 @@ return function(status, width)
       rows[#rows + 1] = { label, value }
       return
     end
+    width = math.max(1, math.floor(width))
     -- Controller rows have a fixed height. Split complete messages into readable rows instead of losing their
     -- ends to fitting; the mouse interface uses wrapped text in its value column.
     for text in (value .. "\n"):gmatch("(.-)\n") do
@@ -20,6 +21,12 @@ return function(status, width)
           if cut < width / 2 then cut = width end
           while cut > 0 and line:byte(cut + 1) and line:byte(cut + 1) >= 128 and line:byte(cut + 1) < 192 do
             cut = cut - 1
+          end
+          -- A character wider than the row (or a run of stray continuation bytes) would back off to nothing and
+          -- loop forever: take it whole instead, overlong.
+          if cut <= 0 then
+            cut = width
+            while line:byte(cut + 1) and line:byte(cut + 1) >= 128 and line:byte(cut + 1) < 192 do cut = cut + 1 end
           end
         end
         rows[#rows + 1] = { label, line:sub(1, cut) }

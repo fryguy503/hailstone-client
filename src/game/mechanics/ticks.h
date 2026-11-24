@@ -89,8 +89,7 @@ public:
     virtual bool find_summon(bool eye) = 0;             // "%s`s_Mount" / "Eye_of_%s" by partial name
     virtual void ride_mount() = 0;                      // the spawn's virtual +0xcc on the mount found
     virtual void view_eye() = 0;                        // CDisplay::SetViewActorByName
-    // EQ_Spell::GetSpellLevelNeeded on the spell of a valid id (IsValidSpellID: 1..45000, so the lookup
-    // finds it; the pointer is passed on unchecked as the original does).
+    // EQ_Spell::GetSpellLevelNeeded on the spell returned by the lookup.
     virtual std::int32_t spell_level_needed(const AffectSpell* spell, int class_id) = 0;
     virtual void chat(std::uint32_t string_id) = 0;     // dsp_chat, colour 0x121
     virtual std::int32_t rand() = 0;

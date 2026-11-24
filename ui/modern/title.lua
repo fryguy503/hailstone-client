@@ -39,7 +39,7 @@ local function drawWindow(x, y, w, h, s)
   if ui.BeginTabBar("##titletabs") then
     for i, k in ipairs(KINDS) do
       local rows = API.windows.ListInfo(WINDOW, k.list) or 0
-      if ui.BeginTabItem(string.format("%s (%d)##%d", k.label, rows, i)) then kind = i; ui.EndTabItem() end
+      if ui.BeginTabItem(string.format("%s (%d)###tab%d", k.label, rows, i)) then kind = i; ui.EndTabItem() end
     end
     ui.EndTabBar()
   end

@@ -48,9 +48,7 @@ struct SandboxUi {
     SandboxUi() {
         ctx = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
-        unsigned char* px = nullptr;
-        int w = 0, h = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         fs::create_directories(scratch.path() / "pack");
         host.plugin_ui = &bridge;
         api = std::make_unique<app::UiApi>(host);

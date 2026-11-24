@@ -4,8 +4,7 @@
 // (SpellEffectTimers_Add @0x564330, _Update @0x563f40, _Remove @0x564000, _PlayStage @0x563df0). An entry plays
 // its effect's cast stage when added, the projectile stage when its elapsed time passes stage1_ms and the impact
 // stage when it passes stage1_ms + stage1_length_ms, after which it is dropped. The effect is a spellsnew.eff index,
-// and the emitters' key is spawn id << 16 | effect, as SpellEffect_SpawnStageEmitters makes it from its first
-// argument. Nothing here draws: the caller plays the stages it is handed.
+// and the emitters' key uses the spawn and effect IDs. The caller plays the stages it is handed.
 
 #include <cstdint>
 #include <vector>
@@ -25,7 +24,7 @@ public:
     void add(std::uint32_t caster, std::uint32_t target, std::uint32_t effect, std::uint32_t stage1_ms,
              std::uint32_t stage1_length_ms, std::uint32_t stage2_length_ms, bool full, std::uint64_t now_ms);
     // SpellEffectTimers_Remove: drops every entry with these three. True when one was dropped: the caller then stops
-    // the emitters keyed caster << 16 | effect and, unless target is 0xffffffff, target << 16 | effect. (The
+    // the caster/effect group and, unless target is 0xffffffff, the target/effect group. (The
     // original's walk follows a dropped entry's new link into the free list and would spin on a second match there;
     // here every match is dropped.)
     bool remove(std::uint32_t caster, std::uint32_t target, std::uint32_t effect);

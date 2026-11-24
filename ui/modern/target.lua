@@ -53,11 +53,19 @@ local ICON, GAP, PER_ROW = 22, 3, 12
 local name, frame = "", -1
 local tot, totText, totRaw, hasTot, aggro, aggroOn, top, rows
 
+-- The health bar's trail belongs to the target it was lost on: another target starts its bar where it stands, not
+-- draining from the last one's. (Told apart by name: the hs API gives the target's name, not its spawn id, so a
+-- switch between two of one name keeps the trail.)
+local lastName = ""
 local function read()
   local f = ui.GetFrameCount()
   if f == frame then return end
   frame = f
   name = API.character.Label(28) or ""
+  if name ~= lastName then
+    lastName = name
+    T.BarReset("target.hp")
+  end
   if name ~= "" then targetBuffs() else nBuffs = 0 end
   tot, totText, totRaw = API.character.Gauge(27, true)
   hasTot = totRaw ~= nil and totRaw ~= -1 and totText and totText ~= ""

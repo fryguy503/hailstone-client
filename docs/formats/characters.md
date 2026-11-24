@@ -578,8 +578,13 @@ lines; server-patched folders have longer ones. Whether a RoF2 install ships the
 (docs/unknowns.md); without it the fixed list above applies, as in the original.
 
 - ASCII text, CRLF line ends, no header or comments. One record a line, fields separated by `^`.
-- The field count differs between folders: the folder at hand has 10 with no trailing `^`, others 10 with a trailing
-  `^` or 9. Only the first two fields are read.
+- Two layouts are at hand:
+  - 10 values, no trailing `^`: the folder at hand's, and the one the original's loader reads (below). Only the first
+    two fields are read.
+  - 9 values and a trailing `^` (a current live install's, 268,509 lines): RoF2's field 2 is gone. Its field 2 holds
+    the other layout's field 3 (mostly -1; IT200..228 have 10) and its field 6 the floats of field 7. Nothing in it
+    marks a shield, so Hailstone skips such a line: a file of them counts as not loaded and the fixed list applies
+    (a deliberate difference: the original would read its field 2 as the kind, and IT200 as not a shield).
 - Records are in ascending model order, with gaps. A model listed twice takes its last line, as in the original: its
   loader (@0x7f4130) does not look for an earlier record while the file loads and puts each new one at the head of its
   hash bucket (@0x7f43a7), where the lookup (@0x7f4030) finds it first.
@@ -591,13 +596,13 @@ is not known, and they are not read here.
 | Field | Meaning | Values seen (the folder at hand; later files) |
 |---|---|---|
 | 1 | item model number, `IT<n>` | 1 .. 86799 |
-| 2 | kind: 1 is a shield | 0, 1, 2; later files also 37 .. 64 |
+| 2 | kind: 1 is a shield | 0, 1, 2 |
 | 3 | unknown (integer) | -1 mostly; 0, 1, 2, 3, 7, 10, 28, 36, 51, 77 |
 | 4 | unknown (non-zero: fields 5 to 7 kept) | 0; -1 or 1 on a few models |
-| 5, 6, 8, 9, 10 | unknown (floats) | 0 (a later file has small fractions in 6) |
+| 5, 6, 8, 9, 10 | unknown (floats) | 0 |
 | 7 | unknown (float) | 0; 1.84 .. 3.1 on a few models |
 
-Only kind 1 counts as a shield; what 2 and 37 .. 64 mean is not known (docs/unknowns.md). The file at hand lists 278
+Only kind 1 counts as a shield; what 2 means is not known (docs/unknowns.md). The file at hand lists 278
 shields, among them most of the fixed list's, but not IT11004..11012 or 11014..11016, which it holds in the hand.
 
 - A line whose first two fields are not whole numbers is skipped, the safe choice: how the original's integer reader

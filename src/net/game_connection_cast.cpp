@@ -39,7 +39,8 @@ std::uint32_t bits(float f) { return std::bit_cast<std::uint32_t>(f); }
 
 class CastQueries final : public cast::Queries {
 public:
-    CastQueries(GameConnection& c, cast::State& st, std::uint8_t) : c_(c), st_(st) {
+    CastQueries(GameConnection& c, cast::State& st, std::uint32_t spell_id)
+        : c_(c), st_(st), rank_max_id_(std::max(c.spell_id_limit(), spell_id)) {
         if (c.profile_) {
             game::mechanics::LiveState live;
             live.leadership = c.leadership_bonuses();
@@ -163,7 +164,7 @@ public:
         return &s;
     }
 
-    bool is_valid_spell_id(std::int32_t id) override { return id > 0 && id <= static_cast<std::int32_t>(game::kMaxSpellId); }
+    bool is_valid_spell_id(std::int32_t id) override { return game::is_spell_id(static_cast<std::uint32_t>(id)); }
     const cast::Spell* spell_by_id(std::int32_t id) override { return spell(id); }
     // The rank swap: PcClient's CharacterBase vtable +0x90 (@0x580300) is the player spawn's GM flag (its vtable
     // +0xdc); +0 is PcClient::GetGameFeature_ @0x5784e0, the membership's limit (feature 3, the spell tier; -1 none,
@@ -172,7 +173,8 @@ public:
     std::int32_t character_rank(std::int32_t feature) override { return c_.game_feature(feature); }
     const cast::Spell* spell_by_group_and_rank(std::int32_t group, std::int32_t subgroup, std::int32_t rank,
                                                std::int32_t below) override {
-        const game::SpellData* d = c_.spell_table_->by_group_and_rank(group, subgroup, rank, below != 0);
+        // Only substitute a rank the server can represent. The original spell may already be an extended ID.
+        const game::SpellData* d = c_.spell_table_->by_group_and_rank(group, subgroup, rank, below != 0, rank_max_id_);
         return d ? spell(static_cast<std::int32_t>(d->id)) : nullptr;
     }
     // CEverQuest::IsOkToTransact (game/trade_rules.h) over the connection's windows.
@@ -355,6 +357,7 @@ private:
 
     GameConnection& c_;
     cast::State& st_;
+    std::uint32_t rank_max_id_;
     std::map<const cast::Spell*, std::uint8_t> raw_bard_level_; // the record's own Bard byte (server_ext().song_blocked)
     static inline const game::mechanics::GameTables no_tables_{}; // the checks read no tables
     std::optional<game::mechanics::CharacterSheet> sheet_;
@@ -402,7 +405,8 @@ void GameConnection::cast_gem(int gem) {
 // The callees of doCombatAbility and Cmd_discipline over the connection.
 class CombatAbilityQueries final : public game::mechanics::combat_ability::Queries {
 public:
-    explicit CombatAbilityQueries(GameConnection& c) : c_(c) {}
+    explicit CombatAbilityQueries(GameConnection& c, std::uint32_t spell_id = 0)
+        : c_(c), rank_max_id_(std::max(c.spell_id_limit(), spell_id)) {}
 
     const game::mechanics::combat_ability::Spell* spell_by_id(std::int32_t id) override {
         const game::SpellData* d = id > 0 ? c_.spell_table_->get(static_cast<std::uint32_t>(id)) : nullptr;
@@ -429,7 +433,7 @@ public:
     const game::mechanics::combat_ability::Spell* spell_by_group_and_rank(std::int32_t group, std::int32_t subgroup,
                                                                           std::int32_t rank,
                                                                           std::int32_t below) override {
-        const game::SpellData* d = c_.spell_table_->by_group_and_rank(group, subgroup, rank, below != 0);
+        const game::SpellData* d = c_.spell_table_->by_group_and_rank(group, subgroup, rank, below != 0, rank_max_id_);
         return d ? spell_by_id(static_cast<std::int32_t>(d->id)) : nullptr;
     }
     std::int32_t combat_ability(std::int32_t index) override {
@@ -474,6 +478,7 @@ public:
 
 private:
     GameConnection& c_;
+    std::uint32_t rank_max_id_;
     std::map<std::int32_t, game::mechanics::combat_ability::Spell> spells_;
     std::map<const game::mechanics::combat_ability::Spell*, const game::SpellData*> data_;
 };
@@ -484,7 +489,7 @@ bool GameConnection::do_combat_ability(std::uint32_t spell, bool rank) {
     // The server extension's detour runs around the original (NMS: the reuse timers from 20 up).
     if (d)
         if (auto answer = server_ext().before_combat_ability(*this, *d)) return *answer;
-    CombatAbilityQueries q(*this);
+    CombatAbilityQueries q(*this, spell);
     const bool used = game::mechanics::combat_ability::do_combat_ability(static_cast<std::int32_t>(spell), rank, q);
     if (d) server_ext().after_combat_ability(*this, *d, used);
     return used;
@@ -515,7 +520,7 @@ void GameConnection::cast_spell_slot(int gem, std::uint32_t id, const ItemSlot* 
     cast::State st;
     // The class CastSpell reads (the profile's +0x3374): the extension's while it spoofs it (NMS: the cast spoof).
     const std::uint8_t class_id = visible_class();
-    CastQueries q(*this, st, class_id);
+    CastQueries q(*this, st, id);
     st.caster = q.me();
     st.local_player = st.caster;
     st.target = q.spawn(world_.target_id);

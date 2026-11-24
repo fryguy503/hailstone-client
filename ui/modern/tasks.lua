@@ -303,15 +303,24 @@ local function historyObjectives(s)
   objectiveTable(objectives, s)
 end
 
-local SECTIONS = { { "Objectives", "objectives" }, { "Description", "description" }, { "Rewards", "rewards" } }
+local SECTIONS = { { "Objectives", "objectives", "section.objectives" },
+  { "Description", "description", "section.description" }, { "Rewards", "rewards", "section.rewards" } }
+-- a task's setting name for its section, made once a task rather than a frame
+local sectionKeys, nSectionKeys = {}, 0
 local function sectionTabs(key, s)
-  local section = ui.GetSetting("tasks.section." .. key) or "objectives"
+  local setting = sectionKeys[key]
+  if not setting then
+    if nSectionKeys >= 256 then sectionKeys, nSectionKeys = {}, 0 end
+    setting = "tasks.section." .. tostring(key)
+    sectionKeys[key], nSectionKeys = setting, nSectionKeys + 1
+  end
+  local section = ui.GetSetting(setting) or "objectives"
   if section ~= "description" and section ~= "rewards" then section = "objectives" end
   for i, tab in ipairs(SECTIONS) do
     if i > 1 then ui.SameLine(0, 5 * s) end
-    if button(tab[1], "section." .. tab[2], section == tab[2], s) then
+    if button(tab[1], tab[3], section == tab[2], s) then
       section = tab[2]
-      ui.SetSetting("tasks.section." .. key, section)
+      ui.SetSetting(setting, section)
     end
   end
   ui.Dummy(0, 2 * s)
@@ -344,7 +353,7 @@ local function activeDetail(task, s)
   ui.DrawRectFilled(bx, by, bx + bw, by + 3 * s, C.inset[1], C.inset[2], C.inset[3], 1, 2 * s)
   if total > 0 and done > 0 then ui.DrawRectFilled(bx, by, bx + bw * done / total, by + 3 * s, C.accent[1], C.accent[2], C.accent[3], 1, 2 * s) end
   ui.Dummy(0, 6 * s)
-  local section = sectionTabs(tostring(task.id), s)
+  local section = sectionTabs(task.id, s)
   local _, lh = ui.CalcTextSize("Ag")
   local tasks = Q.tasks()
   local hasTimer = (tasks.requestTimerLeft or 0) > 0

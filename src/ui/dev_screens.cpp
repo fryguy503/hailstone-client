@@ -60,7 +60,7 @@ void spinner(float radius) {
     float t = static_cast<float>(ImGui::GetTime()) * 6.0f;
     constexpr float kPi = std::numbers::pi_v<float>;
     dl->PathArcTo(c, radius * 0.8f, t, t + kPi * 1.5f, 24);
-    dl->PathStroke(ImGui::GetColorU32(ImGuiCol_ButtonActive), 0, radius * 0.3f);
+    dl->PathStroke(ImGui::GetColorU32(ImGuiCol_ButtonActive), radius * 0.3f, 0);
 }
 
 void status_line(const StatusLine& status, bool busy) {
@@ -1990,7 +1990,7 @@ void draw_loading_presentation(ImDrawList* dl, const LoadingView& view) {
     bg.w = 1.0f;
     dl->AddRectFilled(p0, p1, ImGui::ColorConvertFloat4ToU32(bg), style.WindowRounding);
     if (style.WindowBorderSize > 0.0f)
-        dl->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border), style.WindowRounding, 0, style.WindowBorderSize);
+        dl->AddRect(p0, p1, ImGui::GetColorU32(ImGuiCol_Border), style.WindowRounding, style.WindowBorderSize, 0);
     ImVec2 at(p0.x + style.WindowPadding.x, p0.y + style.WindowPadding.y);
     dl->AddText(at, ImGui::GetColorU32(ImGuiCol_Text), view.title.c_str());
     at.y += line;
@@ -2018,7 +2018,7 @@ void draw_loading_presentation(ImDrawList* dl, const LoadingView& view) {
         float t = static_cast<float>(ImGui::GetTime()) * 6.0f;
         constexpr float kPi = std::numbers::pi_v<float>;
         dl->PathArcTo(sc, r * 0.8f, t, t + kPi * 1.5f, 24);
-        dl->PathStroke(ImGui::GetColorU32(ImGuiCol_ButtonActive), 0, r * 0.3f);
+        dl->PathStroke(ImGui::GetColorU32(ImGuiCol_ButtonActive), r * 0.3f, 0);
     }
 }
 } // namespace
@@ -2123,7 +2123,7 @@ void chat_line_with_links(const std::string& text, ChatView& view) {
         ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.0f, 1.0f), "%s", seg.text.c_str());
         if (ImGui::IsItemHovered()) {
             ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-            ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, b.y), b, IM_COL32(115, 190, 255, 255));
+            ImGui::GetWindowDrawList()->AddLineH(a.x, b.x, b.y, IM_COL32(115, 190, 255, 255));
             ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         }
         if (ImGui::IsItemClicked()) view.clicked_link = seg.link;

@@ -55,6 +55,12 @@ local tickerRows = {}
 local typed = nil
 local input, inputLinks, inputError = "", {}, nil
 local slotIdx = 1
+-- The longest input: the text box's (its 2048-byte buffer, less the NUL). The on-screen keys stop there, as typing
+-- in the box does, rather than growing a line the box would cut.
+local INPUT_MAX = 2047
+local function append(s)
+  if #input + #s <= INPUT_MAX then input = input .. s end
+end
 
 -- The chat windows, read once a frame (the ticker, the log and a send each want them).
 local windowsFrame, windowsList = nil, nil
@@ -308,7 +314,7 @@ ui.window("Chat Log", function()
         ui.SetKeyboardFocusHere()
         GPSTATE.chatFocusInput = false
       end
-      local text, entered = ui.InputText("##chatinput", input, 2048, ui.InputTextFlags.EnterReturnsTrue, { moveToEnd = true })
+      local text, entered = ui.InputText("##chatinput", input, INPUT_MAX + 1, ui.InputTextFlags.EnterReturnsTrue, { moveToEnd = true })
       if text ~= input then inputError = nil end
       input = text
       if input == "" then inputLinks = {} end
@@ -329,7 +335,7 @@ ui.window("Chat Log", function()
           local label = K.label(key, shift)
           if r == 2 and k == 1 then focusHere() end -- (q)
           if T.button(KEY_IDS[r][k], label, kw, T.px(60), NO_OPTS, pad) then
-            input = input .. label
+            append(label)
             shift = false
           end
         end
@@ -338,7 +344,7 @@ ui.window("Chat Log", function()
       local third = (rw - 3 * T.px(8)) / 4
       if T.button("##shift", "Shift", third, T.px(60), { primary = shift }, pad) then shift = not shift end
       ui.SameLine(0, T.px(8))
-      if T.button("##space", "Space", third, T.px(60), {}, pad) then input = input .. " " end
+      if T.button("##space", "Space", third, T.px(60), {}, pad) then append(" ") end
       ui.SameLine(0, T.px(8))
       if T.button("##back", "Delete", third, T.px(60), {}, pad) then input = T.dropChar(input) end
       ui.SameLine(0, T.px(8))

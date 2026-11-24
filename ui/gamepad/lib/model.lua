@@ -224,7 +224,7 @@ function M.list(win, id, state, x0, y0, x1, y1, opts)
     for _, c in ipairs(cols) do
       local l = (opts.labels and opts.labels[c[1]]) or labels[c[1]] or ""
       T.textIn(c[2], y0, c[3] - T.px(8), y0 + th, T.fit(l:upper(), c[3] - c[2] - T.px(8)), C.dim, 0)
-      if l ~= "" and ui.IsMouseHoveringRect(c[2], y0, c[3], y0 + th) and ui.IsMouseClicked(ui.Mouse.Left) then
+      if l ~= "" and T.mouseOver(c[2], y0, c[3], y0 + th) and ui.IsMouseClicked(ui.Mouse.Left) then
         API.windows.ListHeaderClick(win, id, c[1] - 1)
       end
     end
@@ -270,7 +270,7 @@ function M.list(win, id, state, x0, y0, x1, y1, opts)
       if opts.multi and pad.menuPressed("x") then API.windows.ListClick(win, id, i - 1, "left", nil, 2) end
       if opts.activate and pad.menuPressed("y") then opts.activate(i) end
     end
-    if opts.activate and ui.IsMouseHoveringRect(rx0, ry0, rx1, ry1) and ui.IsMouseDoubleClicked(ui.Mouse.Left) then
+    if opts.activate and T.mouseOver(rx0, ry0, rx1, ry1) and ui.IsMouseDoubleClicked(ui.Mouse.Left) then
       opts.activate(i)
     end
   end, function(i) API.windows.ListClick(win, id, i - 1, "left") end)

@@ -101,7 +101,7 @@ ui.window("Icon Selection", function()
         end
         if T.settledPress(pad, "a") then API.windows.ClickChild(ISW, "ISW_Accept_Button", "left") end
       end
-      if ui.IsMouseHoveringRect(x0, gy, x1, gy1) then
+      if T.mouseOver(x0, gy, x1, gy1) then
         local wheel = ui.GetIO().wheel or 0
         if wheel ~= 0 then top = top - math.floor(wheel * 2 + 0.5) end
       end

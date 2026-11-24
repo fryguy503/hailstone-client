@@ -155,7 +155,7 @@ public:
     std::uint32_t negate_mask(std::int32_t spa) const;
     // GetMaxEffects @0x432630.
     int max_effects() const;
-    bool valid_spell(std::int32_t id) const; // IsValidSpellID @0x4ad150: 1..45000
+    bool valid_spell(std::int32_t id) const; // IsValidSpellID @0x4ad150, with the host's full spell ID range
 
     // ---- stats (stats.cpp) ----
     // CharacterZoneClient::ProcessAllStats @0x4547e0.

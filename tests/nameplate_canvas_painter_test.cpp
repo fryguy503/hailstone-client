@@ -13,8 +13,7 @@ struct CanvasGui {
         io.IniFilename = nullptr;
         io.DisplaySize = {1600, 1200};
         io.DeltaTime = 1.0f / 60.0f;
-        unsigned char* data = nullptr; int width = 0, height = 0;
-        io.Fonts->GetTexDataAsRGBA32(&data, &width, &height);
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         ImGui::NewFrame();
     }
     ~CanvasGui() { ImGui::EndFrame(); ImGui::DestroyContext(context); }

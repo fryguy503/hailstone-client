@@ -17,7 +17,8 @@ local C = T.color
 local function rgba(c) return c[1], c[2], c[3], c[4] or 1 end
 
 -- What the description box shows: the last thing picked, or what the pointer is over this frame.
-local about = { kind = "race", id = 0 }
+local ABOUT_START = { kind = "race", id = 0 } -- (the race picked: aboutBox reads view.race)
+local about = ABOUT_START
 local hover
 
 local function point(kind, id)
@@ -218,7 +219,11 @@ end
 
 ui.window("Character Creation", function()
   local view = API.pregame.CharacterCreate()
-  if not view then return end
+  if not view then
+    -- the screen is closed: the next character made starts with its race's description again
+    about, hover = ABOUT_START, nil
+    return
+  end
   hover = nil
   local s = P.Scale()
   local io = ui.GetIO()

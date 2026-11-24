@@ -29,9 +29,7 @@ public:
         ctx_ = ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
         io.IniFilename = nullptr;
-        unsigned char* px = nullptr;
-        int w = 0, h = 0;
-        io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     }
     ~Ui() { ImGui::DestroyContext(ctx_); }
     Ui(const Ui&) = delete;

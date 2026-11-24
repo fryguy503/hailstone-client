@@ -114,7 +114,7 @@ public:
     // live in <zone>_obj.s3d).
     // With `any_thread` (a reader safe on any thread, such as assets::CharacterLibrary::read_file) it runs in the
     // loader job, so a read waiting on its source (the library's lock, held by the background dresser) never holds
-    // up a frame; otherwise it runs in prepare, on the calling thread.
+    // up a frame. Otherwise it runs when textures are requested, on the calling thread.
     using TextureReader = std::function<std::optional<std::vector<std::byte>>(const std::string&)>;
     void set_texture_reader(TextureReader reader, bool any_thread = false) {
         reader_ = std::move(reader);
@@ -127,6 +127,10 @@ public:
     // Asks for the textures the live emitters need, and puts up those the loader thread has finished (a frame or
     // more later: until then their particles are not drawn); call outside a frame.
     void prepare(const game::ParticleSystem& particles);
+    // Queue reads and decoding for the current emitters. This does no Vulkan work.
+    void request_textures(const game::ParticleSystem& particles);
+    // Put up completed textures. Call outside a frame.
+    void upload_textures();
     // `glow` scales the additive particles' light (the modern lighting's HDR: above 1 they bloom). The emitters
     // whose entry in `hidden` (by emitter index, when given) is non-zero are left out. With `modern` (the frame's
     // modern SceneLighting, its haze and screen set) they are drawn the modern way, after begin_translucent.
@@ -153,11 +157,11 @@ private:
     std::unordered_map<std::string, std::uint32_t> slots_; // lower-case name -> slot (kMissingParticleTexture: none)
     std::unordered_map<std::string, glm::vec3> colors_;    // lower-case name -> texture_color
     mutable std::string lower_scratch_;                    // lowered's buffer (main thread only)
-    // prepare's pass over the emitters: each definition's textures are asked for once a pass, not once per emitter
+    // request_textures' pass over the emitters: each definition's textures are asked for once a pass, not once per emitter
     // (emitters share definitions by the hundred). def_pass_[d] is the pass that last asked for definition d.
     std::vector<std::uint32_t> def_pass_;
-    std::uint32_t prepare_pass_ = 0;
-    std::vector<std::string> wanted_; // prepare's names to load this pass (kept for its capacity)
+    std::uint32_t request_pass_ = 0;
+    std::vector<std::string> wanted_; // names to load this pass (kept for its capacity)
     std::uint32_t version_ = 1;
     std::array<std::uint32_t, VkContext::kFramesInFlight> set_version_{};
     std::array<Buffer, VkContext::kFramesInFlight> vertices_{};

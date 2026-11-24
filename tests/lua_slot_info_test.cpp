@@ -14,8 +14,10 @@
 
 #include "lua_ui_api_mock.h"
 
+#include "app/gamepad.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "core/config.h"
 #include "core/game_dir.h"
 #include "core/sha256.h"
 #include "game/hotbuttons.h"
@@ -238,9 +240,7 @@ TEST_CASE("Lua slot reads: both packs' hot bars, spell gems and buff trays draw 
         fs::copy(fs::path(__FILE__).parent_path().parent_path() / "ui" / pack, dir / pack, fs::copy_options::recursive);
         ImGuiContext* ctx = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
-        unsigned char* px = nullptr;
-        int w = 0, h = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         {
             GameDir game(dir / "game");
             net::GameConnection conn(game, {});
@@ -248,10 +248,13 @@ TEST_CASE("Lua slot reads: both packs' hot bars, spell gems and buff trays draw 
             conn.world_for_test().player_id = 7;
             ui::ChatView view;
             game::HotButtonStore store;
+            Config config;
+            app::Gamepad gamepad(config, dir / "gamepad.ini");
             app::UiHost host;
             host.game = &game;
             host.conn = &conn;
             host.chat = &view;
+            host.gamepad = &gamepad;
             host.hot_buttons = &store;
             host.in_game = host.ui_ready = true;
             app::UiApi api(host);
@@ -291,20 +294,42 @@ TEST_CASE("Lua slot reads: both packs' hot bars, spell gems and buff trays draw 
             conn.receive_zone_packet_for_test(net::encode(bp));
             store.social(0).name = "A long social name";
             store.social(0).color = 5;
+            net::Item arrows;
+            arrows.id = 8005;
+            arrows.name = "Arrow";
+            arrows.slot = net::ItemSlot::possessions(25);
+            arrows.max_stack = 200;
+            arrows.stack_count = 37;
+            net::Item spare = arrows;
+            spare.slot = net::ItemSlot::possessions(26);
+            spare.stack_count = 137;
+            conn.receive_zone_packet_for_test(net::encode_char_inventory({arrows, spare}));
             for (int bar : {0, 1}) {
                 store.current(bar, 0) = {game::HotButtonType::Social, 0};
                 store.current(bar, 0).label = store.social(0).name;
                 store.current(bar, 2) = {game::HotButtonType::SpellGem, 1};
                 store.current(bar, 4) = {game::HotButtonType::MenuButton, 4, -1, -1, "0000000000000000", 0, "Sit"};
             }
+            store.current(0, 3) = {game::HotButtonType::InventorySlot, 25, -1, -1, "0000000000000000", 0, "Arrow"};
+            // Only the first eight slots are mapped to the crossbar by default.
+            store.current(1, 8) = {game::HotButtonType::InventorySlot, 26, -1, -1, "0000000000000000", 0, "Arrow"};
             lua_State* L = lua.state();
             for (const char* screen : {"HotButtonWnd", "HotButtonWnd2", "CastSpellWnd", "BuffWindow",
                                        "ShortDurationBuffWindow", "TargetWindow", "PetInfoWindow"}) {
                 std::string show = std::string("hs.ShowWindow('") + screen + "', true)";
                 REQUIRE(luaL_dostring(L, show.c_str()) == LUA_OK);
             }
+            REQUIRE(luaL_dostring(L, R"lua(
+hotbarText = {}
+local draw = ui.DrawText
+ui.DrawText = function(x, y, r, g, b, a, text, ...)
+  if text == '37' or text == '137' then hotbarText[text] = true end
+  return draw(x, y, r, g, b, a, text, ...)
+end
+)lua") == LUA_OK);
             frames(3);
             CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
+            CHECK(run(L, "return hotbarText['37'] and hotbarText['137']") == "true");
             // the social renamed, the gem forgotten: the records kept from frame to frame are read again
             store.social(0).name = "Hi";
             conn.receive_zone_packet_for_test(net::encode(net::MemorizeSpell{1, 201, net::kMemForget, 0}));

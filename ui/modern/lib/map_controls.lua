@@ -5,6 +5,7 @@ local M={}
 local opened,focus=false,false
 local life,owners,context=nil,nil,nil
 local POPUP="##mapcontrols"
+local synced={} -- the frame and view of the last Sync: Draw does not repeat the window's own Sync of this frame
 local function value(v)return type(v)..":"..#tostring(v)..":"..tostring(v)end
 local function lifecycle(c)
   return table.concat({value(c.policy.context),value(c.policy.source),value(c.zone),value(c.shown_zone),
@@ -12,6 +13,7 @@ local function lifecycle(c)
 end
 function M.Reset()
   opened,focus,life,owners=false,false,nil,nil
+  synced.frame=nil
   E.Reset()
 end
 function M.Open()return opened end
@@ -32,6 +34,7 @@ function M.Sync(view)
   table.sort(ids)
   local now,registered=lifecycle(context),table.concat(ids,"|")
   if opened and (not present or life~=now or owners~=registered)then M.Reset()end
+  synced.frame,synced.view=ui.GetFrameCount(),view
   return present
 end
 function M.Toggle(view)
@@ -49,7 +52,7 @@ function M.Toggle(view)
   return true
 end
 function M.Draw(view,back)
-  M.Sync(view)
+  if synced.frame~=ui.GetFrameCount() or synced.view~=view then M.Sync(view)end
   if ui.BeginPopup(POPUP)then
     if not opened then ui.CloseCurrentPopup()
     elseif back then

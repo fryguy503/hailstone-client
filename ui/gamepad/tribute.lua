@@ -35,7 +35,7 @@ local function tabs(labels, page, x0, y0, set)
     local w = tw + T.px(40)
     T.rect(x, y0, x + w, y0 + h, page == i and C.accent or C.raised, page == i and 0.9 or 1, T.px(10))
     T.textIn(x, y0, x + w, y0 + h, l, page == i and C.onAccent or C.text, 0.5)
-    if ui.IsMouseHoveringRect(x, y0, x + w, y0 + h) and ui.IsMouseClicked(ui.Mouse.Left) then set(i) end
+    if T.mouseOver(x, y0, x + w, y0 + h) and ui.IsMouseClicked(ui.Mouse.Left) then set(i) end
     x = x + w + T.px(10)
   end
   T.unfont()
@@ -121,7 +121,11 @@ local avail, active = { offset = 0 }, { offset = 0 }
 local desc = { scroll = 0 }
 
 ui.window("Tribute Master", function()
-  if not W.shown(MW) then return end
+  if not W.shown(MW) then
+    -- (reopened: the focused row is selected afresh, its description asked for)
+    avail.lastFocus, active.lastFocus = nil, nil
+    return
+  end
   local title = API.windows.Title(MW) or ""
   local lock = API.windows.Text(MW, "TMW_LockButton") or ""
   local hints = page == 1 and { { "back", lock ~= "" and lock or "Modify Benefits" }, { "x", "Upgrade" }, { "y", "Downgrade" },
@@ -228,7 +232,10 @@ local mine, guildList = { offset = 0 }, { offset = 0 }
 local bdesc, gdesc = { scroll = 0 }, { scroll = 0 }
 
 ui.window("Tribute", function()
-  if not W.shown(BW) then return end
+  if not W.shown(BW) then
+    mine.lastFocus, guildList.lastFocus = nil, nil
+    return
+  end
   if W.begin("Tribute", { w = 1400, h = 860, title = "Tribute",
         hints = { { "lb", "Personal" }, { "rb", "Guild" }, { "b", "Close" } } }) then
     if pressed("Tribute", "lb") then bpage = 1 end

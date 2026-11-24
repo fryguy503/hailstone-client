@@ -54,7 +54,7 @@
 extern "C" {
 #endif
 
-#define HAILSTONE_PLUGIN_ABI 3
+#define HAILSTONE_PLUGIN_ABI 4
 
 #if defined(_WIN32)
 #define HAILSTONE_EXPORT __declspec(dllexport)
@@ -872,6 +872,9 @@ typedef struct HailstoneHooks {
     const char* (*zone_display_name)(uint32_t zone_id, uint32_t instance_id);
     /* UI + EXTEND. Nonzero supplies a validated map policy; zero abstains. */
     int (*map_policy)(HailstoneMapPolicy* out);
+    /* EXTEND. Requests an inclusive spell ID limit above the stock RoF2 range; 0 abstains. The host validates
+     * the spell file before selecting a limit for the next zone stream. Added later in ABI 4. */
+    uint32_t (*spell_id_limit)(void);
 } HailstoneHooks;
 
 
@@ -913,7 +916,9 @@ typedef struct PluginHostApi {
     /* The directory for the plugin's own files (created on demand): writes `out` and returns the length. */
     int (*config_dir)(void* host, char* out, size_t out_size);
     /* The client's Dear ImGui context (ImGui::SetCurrentContext; the plugin must be built with the same Dear ImGui
-     * version), or NULL without HAILSTONE_CAP_UI. */
+     * version), or NULL without HAILSTONE_CAP_UI. Since ABI 4 that is Dear ImGui 1.93.0 (the font and texture rework
+     * of 1.92 changed the context's layout): the client neither calls OnUpdateImGui of a plugin built for an older ABI
+     * nor gives it the context, so rebuild such a plugin against this SDK and that Dear ImGui. */
     void* (*imgui_context)(void* host);
 
     /* ---- ABI 2: server extensions (HAILSTONE_CAP_EXTEND) ---- */
@@ -1188,6 +1193,12 @@ typedef struct PluginHostApi {
      * reads still need theirs). Added later in ABI 3: test HAILSTONE_HOST_HAS(host, acquire_bulk_buffer) first. */
     unsigned char* (*acquire_bulk_buffer)(void* host, int32_t* size);
     void (*release_bulk_buffer)(void* host);
+    /* READ. The limit selected for ZoneEntry and whether the currently loaded file supports that extension.
+     * Without a compatible request at ZoneEntry, the limit is 45000 and readiness is 0. With no connection or
+     * permission both calls return 0. Before advertising on the wire, check both results. Added later in ABI 4:
+     * check HAILSTONE_HOST_HAS for both fields. */
+    uint32_t (*spell_id_limit)(void* host);
+    int (*spell_data_ready)(void* host);
     /* READ: current received game popup, 1 available, 0 none/expired. Initialize out->size. */
     int (*get_large_dialog)(void* host, HailstoneLargeDialog* out);
     /* ACTIONS: answer this exact current popup once: button 0 OK, 1 Yes, 2 No, 3 close. Returns 1 consumed (and

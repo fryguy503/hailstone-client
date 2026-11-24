@@ -1391,17 +1391,20 @@ void push_overlay(lua_State* L, const std::optional<game::BuffOverlayText>& o) {
     lua_pushnumber(L, static_cast<double>(c & 0xff) / 255.0);
 }
 
-// spellId, msLeft, name, beneficial, fade [, counter, cr, cg, cb, limit, lr, lg, lb] = hs.BuffSlot(name, child
-// [, overlays])   -- the buff a buff window's button shows, nil if none; msLeft is negative for a permanent buff; fade
+// spellId, msLeft, name, beneficial, fade [, counter, cr, cg, cb, limit, lr, lg, lb] [, petId, slot] =
+// hs.BuffSlot(name, child [, overlays [, removalDetails]])   -- the buff the button shows, nil if none
+// msLeft is negative for a permanent buff; fade is
 // the buff / song window's alpha factor for it (under 19 s left it fades out once a second,
 // CBuffWindow::OnProcessFrame; 1 otherwise). With overlays true also the button's counter and limit overlays as
 // hs.BuffOverlay(name, child, "counter") and (..., "limit") give them (each text, r, g, b; nils for none), in the one
-// call; without it they are not worked out.
+// call; without it they are not worked out. A true fourth argument appends the entity and server slot of a
+// removable pet buff (two nils otherwise).
 int BuffSlot(lua_State* L) {
     auto& m = Impl::of(L);
     StockWindow* w = m.window(luaL_checkstring(L, 1));
     const char* child = w ? luaL_checkstring(L, 2) : nullptr;
     const bool overlays = lua_toboolean(L, 3) != 0;
+    const bool removal_details = lua_toboolean(L, 4) != 0;
     auto b = w ? w->buff(m.host, child, overlays ? kBuffCounterOverlay | kBuffLimitOverlay : 0u) : std::nullopt;
     if (!b) {
         lua_pushnil(L);
@@ -1412,10 +1415,19 @@ int BuffSlot(lua_State* L) {
     lua_pushstring(L, b->name.c_str());
     lua_pushboolean(L, b->beneficial);
     lua_pushnumber(L, b->fade);
-    if (!overlays) return 5;
-    push_overlay(L, b->counter);
-    push_overlay(L, b->limit);
-    return 13;
+    if (overlays) {
+        push_overlay(L, b->counter);
+        push_overlay(L, b->limit);
+    }
+    if (!removal_details) return overlays ? 13 : 5;
+    if (b->pet) {
+        lua_pushinteger(L, b->pet);
+        lua_pushinteger(L, b->pet_slot);
+    } else {
+        lua_pushnil(L);
+        lua_pushnil(L);
+    }
+    return overlays ? 15 : 7;
 }
 
 // text, r, g, b = hs.BuffOverlay(name, child, which)   -- what a buff window draws over the button, nil if
@@ -1539,7 +1551,8 @@ int HotButtonState(lua_State* L) {
 // info = hs.HotButtonInfo(name, child [, into [, y0, y1]])   -- what hs.HotButton, hs.HotButtonFace and
 // hs.HotButtonState give, in one call (each of those works the button out again): the table `into` (kept by the caller
 // from frame to frame) filled, or a new one. Fields: kind, label (hs.HotButton's), tex, u0, v0, u1, v1 (its icon, nil
-// when none); social (true where hs.HotButtonFace gives a face) and with it color = {r, g, b}, lua, running, enabled,
+// when none); stackCount (total carried for a stackable item link, current stack for an inventory slot, nil
+// otherwise); social (true where hs.HotButtonFace gives a face) and with it color = {r, g, b}, lua, running, enabled,
 // faceCooldown (the face's cooldown), overlay, tooltip (nil otherwise); state (true where hs.HotButtonState gives
 // one: not empty) and with it checked, left, cooldown, top (with y0 / y1), and the spell gem's tint = {r, g, b,
 // iconAlpha} with iconAlpha (nil otherwise). The cool-down's colour is hs.CoolDownColor()'s. The color and tint
@@ -1557,10 +1570,16 @@ int HotButtonInfoFn(lua_State* L) {
     if (w) hb = w->hot_button(m.host, child);
     const HotButtonInfo empty;
     const HotButtonInfo& info = hb ? *hb : empty;
-    record::push(L, 3, 24);
+    record::push(L, 3, 25);
     // (the strings only when changed: no new ones each frame for a record the caller keeps)
     plugin::set_string_field(L, "kind", info.kind.c_str());
     plugin::set_string_field(L, "label", info.label.c_str());
+    if (info.stack_count > 0) {
+        lua_pushinteger(L, static_cast<lua_Integer>(info.stack_count));
+        lua_setfield(L, -2, "stackCount");
+    } else {
+        set_nil(L, "stackCount");
+    }
     if (info.icon) {
         push_cell(L, *info.icon);
         set_art_fields(L, 5);
@@ -2691,7 +2710,7 @@ int GameMenus(lua_State* L) {
     auto& m = Impl::of(L);
     const float scale = std::clamp(static_cast<float>(luaL_optnumber(L, 1, 1.0)), 0.5f, 3.0f);
     ImFont* font = ui::ui_font(2);
-    const float fs = (font ? font->FontSize : ImGui::GetFontSize()) * scale;
+    const float fs = (font ? font->LegacySize : ImGui::GetFontSize()) * scale;
     const float width = static_cast<float>(luaL_optnumber(L, 2, 0.0));
     const float row_height = static_cast<float>(luaL_optnumber(L, 3, fs));
     const float separator_height = static_cast<float>(luaL_optnumber(L, 4, 1.0));

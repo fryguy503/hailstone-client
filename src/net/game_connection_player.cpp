@@ -626,15 +626,10 @@ void GameConnection::autosplit_command(const std::string& args) {
     std::string a = lower(args);
     std::string off = lower(strings_.format(12946, std::vector<std::string>{}));
     std::string on = lower(strings_.format(12947, std::vector<std::string>{}));
-    if (a.compare(0, 3, off, 0, 3) == 0 && !a.empty()) autosplit_ = false;
-    else if (a.compare(0, 2, on, 0, 2) == 0 && !a.empty()) autosplit_ = true;
-    else autosplit_ = !autosplit_;
-    system(autosplit_ ? 13197 : 13198);
-    SpawnAppearance s;
-    s.spawn_id = static_cast<std::uint16_t>(world_.player_id);
-    s.type = 28;
-    s.parameter = autosplit_ ? 1 : 0;
-    send_zone(encode(s));
+    bool checked = !autosplit_;
+    if (a.compare(0, 3, off, 0, 3) == 0 && !a.empty()) checked = false;
+    else if (a.compare(0, 2, on, 0, 2) == 0 && !a.empty()) checked = true;
+    set_autosplit(checked, checked ? 13197 : 13198);
 }
 
 // ---------------------------------------------------------------- bandolier

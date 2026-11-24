@@ -737,7 +737,7 @@ TEST_CASE("fuzz: XMI, sound and effect tables, ini and tag text") {
               (void)ini.get_int("HotButtons", "Page1Button1", 2);
               (void)ini.to_string();
           });
-    sweep("ActorTagInfo.txt", {text_bytes("1^0^1^0^0^0^0^0^0^0\r\n200^1^-1^0^0^0^0^0^0^0\r\n"), text_bytes("4294967296^1^\n-5^1\n7\n300^1^0^\n300^0\n")}, 0, 300,
+    sweep("ActorTagInfo.txt", {text_bytes("1^0^1^0^0^0^0^0^0^0\r\n200^1^-1^0^0^0^0^0^0^0\r\n"), text_bytes("4294967296^1^\n-5^1\n7\n300^1^0^\n300^0\n"), text_bytes("200^10^0^0^0^0^0^0^0^\r\n1^1^0^0^0^0^0^0^0\r\n")}, 0, 300,
           [&](std::span<const std::byte> d) {
               game::ActorTagTable tags;
               tags.parse(as_text(d));

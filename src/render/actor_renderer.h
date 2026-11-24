@@ -167,8 +167,9 @@ public:
                                                          float dt);
     // draw_spawns in two halves, so the shadow cascades can be drawn between them: prepare_spawns animates and
     // poses (before VkContext::begin_scene), draw_prepared records the scene pass and returns the ids drawn.
+    // Set defer_lighting when the lights depend on these poses, then call upload_lighting before drawing.
     void prepare_spawns(const FrameInfo& frame, const glm::vec3& camera_pos, const game::WorldState& world,
-                        std::uint32_t hide_id, float dt);
+                        std::uint32_t hide_id, float dt, bool defer_lighting = false);
     // `phase` splits it round the grass (ActorPhase); Translucent returns the ids the Opaque call found.
     const std::unordered_set<std::uint32_t>& draw_prepared(const FrameInfo& frame, const glm::mat4& view_proj,
                                                            const glm::vec3& camera_pos, const game::ViewDistance& view,
@@ -337,6 +338,8 @@ public:
     const ActorRenderStats& stats() const { return stats_; }
     // The scene light and point lights (render/scene_lighting.h), classic or modern; classic_full_bright until set.
     void set_lighting(const SceneLighting& l) { lighting_ = l; }
+    // Uploads the lighting with the material table built by prepare_spawns for this frame.
+    void upload_lighting(const FrameInfo& frame);
     // Shared scene clock for animated material textures, including held items and preview models.
     void set_time(double seconds) { texture_time_ms_ = static_cast<std::uint64_t>(std::max(0.0, seconds) * 1000.0); }
     const assets::CharacterLibrary& library() const { return *library_; }
@@ -490,7 +493,8 @@ private:
     // frame's commands use them.
     const GpuModel* gpu_model(const assets::CharacterMesh& mesh, UploadBatch& upload);
     // prepare with the frame's uploads so far in `upload` (submitted here, once, before the descriptors are written).
-    void prepare(const FrameInfo& frame, std::span<const ActorDraw> actors, UploadBatch& upload);
+    void prepare(const FrameInfo& frame, std::span<const ActorDraw> actors, UploadBatch& upload,
+                 bool defer_lighting = false);
     const assets::CharacterMesh& default_mesh(const assets::CharacterModel& model);
     // A texture pack's normal or roughness map for the texture `name` (assets/texture_overrides.h), 0 = none.
     std::uint32_t map_slot(const std::string& name, assets::TextureMap map, UploadBatch& upload);

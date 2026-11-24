@@ -91,4 +91,22 @@ std::optional<net::ItemSlot> hot_button_item_slot(const Inventory& inv, const Ho
     return by_id;
 }
 
+std::uint64_t hot_button_stack_count(const Inventory& inv, HotButtonType type, const net::Item& item) {
+    if (!item.stackable()) return 0;
+    if (type == HotButtonType::InventorySlot) return item.stack_count;
+    if (type != HotButtonType::ItemLink) return 0;
+
+    std::uint64_t count = 0;
+    auto add = [&](const net::Item& stack) {
+        if (stack.id == item.id && stack.stackable()) count += stack.stack_count;
+    };
+    // Count the possessions a link can find, including stacks in bags.
+    for (const auto& [key, top] : inv.items()) {
+        if (key.first != net::kInvPossessions || key.second < 0 || key.second >= net::kSlotCursor) continue;
+        add(top);
+        for (const auto& child : top.contents) add(child.item);
+    }
+    return count;
+}
+
 } // namespace hailstone::game

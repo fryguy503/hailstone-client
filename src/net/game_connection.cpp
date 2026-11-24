@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <random>
+#include <utility>
 
 #include "core/ascii_case.h"
 #include "core/game_dir.h"
@@ -135,6 +136,8 @@ void GameConnection::reload_game_files() {
     auto table = std::make_shared<game::SpellTable>();
     if (!table->load(game_)) log::warn("spells_us.txt not found; spell names and rules are unavailable");
     spell_table_ = std::move(table);
+    if (spell_id_limit_ > game::kRof2StockMaxSpellId && !spell_data_ready())
+        log::warn("Reloaded spells_us.txt does not support the current zone's spell ID limit {}", spell_id_limit_);
     // SetHeights' data: racedata.txt's default heights and moddat.ini's ROffsets (game/spawn_heights.h).
     auto text = [&](std::string_view file) {
         auto bytes = game_.read(file);
@@ -154,6 +157,21 @@ void GameConnection::reload_game_files() {
 
 GameConnection::~GameConnection() { disconnect(); }
 
+void GameConnection::select_zone_spell_limit() {
+    spell_id_limit_ = game::kRof2StockMaxSpellId;
+    const auto requested = server_ext().spell_id_limit(*this);
+    if (!requested) return;
+    if (requested <= game::kRof2StockMaxSpellId || !std::in_range<std::int32_t>(requested)) {
+        log::warn("Unsupported server extension spell ID limit {}", requested);
+        return;
+    }
+    if (!spell_table_->compatible_with_wire_limit(requested)) {
+        log::warn("spells_us.txt cannot support the requested server extension spell ID limit {}", requested);
+        return;
+    }
+    spell_id_limit_ = requested;
+}
+
 void GameConnection::fail(std::string message) {
     close_evolving_transfer();
     reset_fellowship();
@@ -163,6 +181,7 @@ void GameConnection::fail(std::string message) {
     capture_bank();
     error_ = std::move(message);
     state_ = ConnectionState::Disconnected;
+    spell_id_limit_ = game::kRof2StockMaxSpellId;
     respawn_.reset();
     clear_hover_rez();
     respawn_spawn_pending_ = false;
@@ -210,6 +229,7 @@ void GameConnection::start(const WorldTicket& ticket) {
     reset_tribute_donations();
     reset_tribute_bonuses();
     reset_guild_permissions(kTributeNone);
+    spell_id_limit_ = game::kRof2StockMaxSpellId;
     ticket_ = ticket;
     camped_out_.reset();
     link_death_.reset();
@@ -284,6 +304,8 @@ void GameConnection::update() {
     if (zone_session_) {
         zone_session_->update();
         if (zone_session_->state() == SessionState::Connected && state_ == ConnectionState::ZoneConnecting) {
+            // World identity is known now. Publish readiness before the outgoing packet hook runs.
+            select_zone_spell_limit();
             ZoneEntryRequest entry;
             entry.name = character_;
             // GetZoneInfoFromNetwork @0x539480: the spell files' checksums (ClientSpellManager +0x2bf40/+0x2bf44).
@@ -689,6 +711,7 @@ void GameConnection::handle_world(const AppPacket& p) {
         quest_npcs_asked_ = false;
         world_.player_id = 0;
         world_.controlled_id = 0;
+        if (world_.eye_id) speed_run_ = 0.0f;
         world_.eye_id = world_.view_id = 0;
         eye_motion_dirty_ = false;
         last_eye_position_send_ = {};
@@ -959,7 +982,10 @@ void GameConnection::smooth(float dt, const game::WorldState::FloorFn& floor,
 void GameConnection::smooth_vehicles(float dt) { world_.smooth_vehicles(dt, steady_seconds()); }
 
 void GameConnection::apply_spawn(const Spawn& s) {
-    if (world_.spawns.contains(s.spawn_id)) forget_leadership_spawn(s.spawn_id);
+    if (world_.spawns.contains(s.spawn_id)) {
+        forget_leadership_spawn(s.spawn_id);
+        forget_auto_target_attacker(s.spawn_id);
+    }
     group_.mana_percent.erase(s.spawn_id);
     group_.endurance_percent.erase(s.spawn_id);
     spells_.others.erase(s.spawn_id);
@@ -1618,9 +1644,9 @@ void GameConnection::handle_zone(const AppPacket& p) {
                 if (attack_until_xtarget_clear_ && auto_attack_ && xtarget_holds_spawn(*id)) attack_held_for_xtarget_ = true;
                 else set_auto_attack(false);
                 world_.target_id = 0;
-                auto_target_due_ = true;
+                auto_target_xtarget_due_ = true;
             }
-            std::erase(xtarget_attackers_, *id);
+            forget_auto_target_attacker(*id);
         }
         break;
     case Op::SetBodyType:
@@ -2488,7 +2514,9 @@ void GameConnection::send_position(bool force, glm::vec3 position, bool reliable
     // PackPlayerPositionUpdate @0x4dd360: the animation field is SpeedRun (+0x7c, clamped to -12.8..12.7) x 40,
     // truncated (__ftol2_sse); other clients unpack it x 0.025 as the spawn's SpeedRun (its walk / run animation).
     // A ridden mount's (the controlled spawn's) goes out under the rider's id (DoMainLoop @0x53e28b).
-    float speed_run = std::clamp(speed_run_, -12.8f, 12.7f);
+    // While the Eye has the controls, SpeedRun belongs to its frame. The passive player has no run speed.
+    // Sending the Eye's speed under the player's ID makes observers extrapolate movement for the caster.
+    const float speed_run = std::clamp(world_.eye_id ? 0.0f : speed_run_, -12.8f, 12.7f);
     u.motion.animation = static_cast<std::int32_t>(speed_run * 40.0f);
     send_zone(encode(u), reliable);
     last_position_send_ = now;
@@ -2518,6 +2546,8 @@ void GameConnection::release_eye_control(bool remove_effect) {
             spells_.buffs[static_cast<std::size_t>(slot)] = {};
         }
     if (!game::release_eye_control(world_)) return;
+    // A position report can run before the next movement frame supplies the restored body's SpeedRun.
+    speed_run_ = 0.0f;
     eye_motion_dirty_ = false;
     last_eye_position_send_ = {};
     ByteWriter ack;
@@ -2560,6 +2590,7 @@ void GameConnection::send_eye_position(bool force) {
 void GameConnection::leave_zone_dropped() {
     reset_achievements();
     reset_rewards();
+    spell_id_limit_ = game::kRof2StockMaxSpellId;
     // The zone has dropped the link (or was closed after the wait).
     ZoneExit exit = std::exchange(zone_exit_, ZoneExit::None);
     camp_token_ = 0;
@@ -2651,6 +2682,7 @@ void GameConnection::disconnect() {
     zone_session_.reset();
     world_session_.reset();
     discard_questions(); // nothing is left to answer them to
+    spell_id_limit_ = game::kRof2StockMaxSpellId;
     if (state_ != ConnectionState::Disconnected) state_ = ConnectionState::Disconnected;
 }
 
@@ -2672,15 +2704,6 @@ void GameConnection::set_target(std::uint32_t spawn_id) {
     }
     if (state_ != ConnectionState::InZone) return;
     send_zone(encode_target(false, spawn_id));
-    // Newbie guard (DoPassageOfTime @0x45dcb1): below level 11, switching to a
-    // target more than 2 levels higher turns attacking and auto fire off.
-    if ((auto_attack_ || auto_fire_) && spawn_id) {
-        auto it = world_.spawns.find(spawn_id);
-        if (it != world_.spawns.end() && pstatus_.level < 11 && static_cast<int>(it->second.level) - pstatus_.level > 2) {
-            set_auto_attack(false);
-            set_auto_fire(false);
-        }
-    }
 }
 
 void GameConnection::target_by_name(const std::string& name) {
@@ -3023,17 +3046,7 @@ void GameConnection::handle_combat(Op op, const AppPacket& p) {
                 update_player_consciousness(true);
             }
             report_successful_hit(*d, hit_reported(d->target, d->source));
-            // Hailstone (auto_target_xtarget): an NPC attacking the player, a pick due when there is no target.
-            if (d->target == me && d->source != me && d->source != 0)
-                if (auto* s = spawn(d->source); s && s->is_npc) {
-                    if (std::find(xtarget_attackers_.begin(), xtarget_attackers_.end(), d->source) ==
-                        xtarget_attackers_.end())
-                        xtarget_attackers_.push_back(d->source);
-                    if (world_.target_id == 0) {
-                        auto_target_due_ = true;
-                        auto_target_prefer_ = d->source;
-                    }
-                }
+            record_auto_target_attack(*d);
         }
         break;
     case Op::Death:

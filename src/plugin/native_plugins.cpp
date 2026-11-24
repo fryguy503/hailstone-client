@@ -13,6 +13,7 @@
 #include <optional>
 #include <span>
 #include <sstream>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <unordered_set>
@@ -82,8 +83,9 @@ static_assert(sizeof(HailstoneWorldReceipt) == 48);
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneWorldSubmission) == 56 && offsetof(HailstoneWorldSubmission, vertices) == 40));
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneUiContribution) == 56 && offsetof(HailstoneUiContribution, command) == 48));
 
-#if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256)
-// Published preview binaries added popup services after two different canonical ABI 3 prefixes.
+#if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256) || \
+    defined(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256)
+// Published preview binaries added popup services after different canonical ABI 3 prefixes.
 // Give only a matched binary its frozen view, with its own table size and no colliding canonical slots.
 template <std::size_t PrefixSize>
 struct LegacyPopupHostApi {
@@ -93,7 +95,9 @@ struct LegacyPopupHostApi {
 
     const PluginHostApi* populate(const PluginHostApi& table) {
         std::memcpy(prefix.data(), &table, prefix.size());
+        constexpr std::uint32_t abi = 3;
         const std::uint32_t size = sizeof(*this);
+        std::memcpy(prefix.data() + offsetof(PluginHostApi, abi), &abi, sizeof(abi));
         std::memcpy(prefix.data() + offsetof(PluginHostApi, size), &size, sizeof(size));
         get_large_dialog = table.get_large_dialog;
         answer_large_dialog = table.answer_large_dialog;
@@ -103,6 +107,7 @@ struct LegacyPopupHostApi {
 };
 using LegacyPopupBeforeNameplates = LegacyPopupHostApi<offsetof(PluginHostApi, nameplate_register)>;
 using LegacyPopupAfterUi = LegacyPopupHostApi<offsetof(PluginHostApi, get_spells_by_name_data_bulk)>;
+using LegacyPopupAfterBulk = LegacyPopupHostApi<offsetof(PluginHostApi, spell_id_limit)>;
 static_assert(offsetof(PluginHostApi, set_class_name) == 848 && offsetof(PluginHostApi, nameplate_register) == 856);
 static_assert(offsetof(LegacyPopupBeforeNameplates, get_large_dialog) == 856 &&
               offsetof(LegacyPopupBeforeNameplates, answer_large_dialog) == 864 &&
@@ -110,6 +115,19 @@ static_assert(offsetof(LegacyPopupBeforeNameplates, get_large_dialog) == 856 &&
 static_assert(offsetof(PluginHostApi, remove_ui_contribution) == 912);
 static_assert(offsetof(LegacyPopupAfterUi, get_large_dialog) == 920 &&
               offsetof(LegacyPopupAfterUi, answer_large_dialog) == 928 && sizeof(LegacyPopupAfterUi) == 936);
+static_assert(offsetof(PluginHostApi, release_bulk_buffer) == 936);
+static_assert(offsetof(LegacyPopupAfterBulk, get_large_dialog) == 944 &&
+              offsetof(LegacyPopupAfterBulk, answer_large_dialog) == 952 && sizeof(LegacyPopupAfterBulk) == 960);
+
+bool contains_legacy_digest(std::string_view digests, const Sha256Digest& hash) {
+    while (!digests.empty()) {
+        const auto separator = digests.find(',');
+        if (parse_sha256(digests.substr(0, separator)) == hash) return true;
+        if (separator == std::string_view::npos) break;
+        digests.remove_prefix(separator + 1);
+    }
+    return false;
+}
 #endif
 
 #if defined(_WIN32)
@@ -287,8 +305,9 @@ struct Loaded {
     std::uint32_t caps = 0;
     void* lib = nullptr; // platform::load_library's
     PluginHostApi table{};
-#if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256)
-    std::variant<std::monostate, LegacyPopupBeforeNameplates, LegacyPopupAfterUi> legacy_popup_table;
+#if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256) || \
+    defined(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256)
+    std::variant<std::monostate, LegacyPopupBeforeNameplates, LegacyPopupAfterUi, LegacyPopupAfterBulk> legacy_popup_table;
 #endif
     Hooks::Owner owner = 0;
     std::vector<std::string> tlos;
@@ -307,6 +326,7 @@ struct Loaded {
     int (*incoming_chat)(const char*, std::uint32_t) = nullptr;
     int (*filter_chat)(const char*, std::uint32_t) = nullptr;
     void (*update_imgui)() = nullptr;
+    std::uint32_t built_abi = 0; // the ABI the plugin reported
     int (*packet)(int, int, HailstonePacket*) = nullptr;
     const HailstoneHooks* (*hooks_fn)() = nullptr;
 
@@ -359,6 +379,8 @@ struct Loaded {
 
     static Loaded& of(void* h) { return *static_cast<Loaded*>(h); }
     bool can(std::uint32_t cap) const { return (caps & cap) == cap; }
+    // Dear ImGui's 1.92 changed the context a plugin shares with the client: ABI 4 is the first built for it.
+    bool imgui_compatible() const { return built_abi >= 4; }
     void denied(const char* what, std::uint32_t cap) const {
         host->say(std::format("[Plugin] {}: {} needs the server's '{}' permission", name, what, caps_text(cap)));
     }
@@ -433,6 +455,11 @@ public:
     const char* name() const override { return l_ ? l_->name.c_str() : "unloaded plugin"; }
     std::uint64_t lifecycle_revision(const net::GameConnection&) const override {
         return l_ ? l_->lifecycle_generation : 0;
+    }
+    std::uint32_t spell_id_limit(const net::GameConnection&) const override {
+        if (!active() || l_->unload_pending || !l_->can(kCapExtend) || !h().spell_id_limit) return 0;
+        const auto requested = run(h().spell_id_limit);
+        return active() && !l_->unload_pending && l_->can(kCapExtend) ? requested : 0;
     }
 
     std::optional<game::FollowProfile> follow_profile(const net::GameConnection&) const override {
@@ -873,7 +900,7 @@ int h_config_dir(void* h, char* out, std::size_t out_size) {
 
 void* h_imgui_context(void* h) {
     Loaded& l = Loaded::of(h);
-    if (!l.can(kCapUi) || !l.host->env.imgui_context) return nullptr;
+    if (!l.can(kCapUi) || !l.imgui_compatible() || !l.host->env.imgui_context) return nullptr;
     return l.host->env.imgui_context();
 }
 
@@ -1318,6 +1345,16 @@ const net::GameConnection* readable(Loaded& l, const char* what) {
         return nullptr;
     }
     return connection_of(l);
+}
+
+std::uint32_t h_spell_id_limit(void* h) {
+    const auto* c = readable(Loaded::of(h), "spell_id_limit");
+    return c ? c->spell_id_limit() : 0;
+}
+
+int h_spell_data_ready(void* h) {
+    const auto* c = readable(Loaded::of(h), "spell_data_ready");
+    return c && c->spell_data_ready() ? 1 : 0;
 }
 
 int h_get_player(void* h, HailstonePlayer* out) {
@@ -3021,7 +3058,8 @@ int h_web_state(void* h, std::uint32_t tab, HailstoneWebState* out) {
 int h_web_view(void* h, std::uint32_t tab, float width, float height) {
     Loaded& l = Loaded::of(h);
     WebAccess* w = web_of(l, "web_view");
-    if (!w || !l.can(kCapUi) || !l.host->env.imgui_context || !l.host->env.imgui_context()) return 0;
+    if (!w || !l.can(kCapUi) || !l.imgui_compatible() || !l.host->env.imgui_context || !l.host->env.imgui_context())
+        return 0;
     return w->view(web_owner(l), l.caps, tab, width, height) ? 1 : 0;
 }
 
@@ -3416,6 +3454,7 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
         platform::unload_library(p.lib);
         return refuse(std::format("{} was built for plugin ABI {}, this client has {}", name, got, HAILSTONE_PLUGIN_ABI));
     }
+    p.built_abi = got;
     p.initialize = symbol<void (*)()>(p.lib, "InitializePlugin");
     p.shutdown = symbol<void (*)()>(p.lib, "ShutdownPlugin");
     p.pulse = symbol<void (*)()>(p.lib, "OnPulse");
@@ -3428,6 +3467,9 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.incoming_chat = symbol<int (*)(const char*, std::uint32_t)>(p.lib, "OnIncomingChat");
     p.filter_chat = symbol<int (*)(const char*, std::uint32_t)>(p.lib, "OnFilterChat");
     p.update_imgui = symbol<void (*)()>(p.lib, "OnUpdateImGui");
+    if (p.update_imgui && !p.imgui_compatible())
+        log::warn("plugin {}: built for plugin ABI {}, before Dear ImGui 1.92 (ABI 4); its OnUpdateImGui is not called",
+                  name, got);
     p.packet = symbol<int (*)(int, int, HailstonePacket*)>(p.lib, "OnPacket");
     p.hooks_fn = sdk_symbol<const HailstoneHooks* (*)()>(p.lib, "hooks");
 
@@ -3552,6 +3594,8 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.get_spells_by_name_data_bulk = main_only<h_get_spells_by_name_data_bulk>;
     p.table.acquire_bulk_buffer = acquire_bulk_buffer_entry;
     p.table.release_bulk_buffer = main_only<h_release_bulk_buffer>;
+    p.table.spell_id_limit = main_only<h_spell_id_limit>;
+    p.table.spell_data_ready = main_only<h_spell_data_ready>;
     p.table.get_large_dialog = main_only<h_get_large_dialog>;
     p.table.answer_large_dialog = main_only<h_answer_large_dialog>;
     Hooks& hooks = *m.env.hooks;
@@ -3623,15 +3667,18 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
 
     const PluginHostApi* host_table = &p.table;
 #ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
-    static const auto legacy_popup_hash = parse_sha256(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256);
-    if (got == 3 && legacy_popup_hash && hash == *legacy_popup_hash) {
+    if (got == 3 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256, hash)) {
         host_table = p.legacy_popup_table.emplace<LegacyPopupBeforeNameplates>().populate(p.table);
     }
 #endif
 #ifdef HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256
-    static const auto legacy_popup_ui_hash = parse_sha256(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256);
-    if (got == 3 && legacy_popup_ui_hash && hash == *legacy_popup_ui_hash) {
+    if (got == 3 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256, hash)) {
         host_table = p.legacy_popup_table.emplace<LegacyPopupAfterUi>().populate(p.table);
+    }
+#endif
+#ifdef HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256
+    if (got == 3 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256, hash)) {
+        host_table = p.legacy_popup_table.emplace<LegacyPopupAfterBulk>().populate(p.table);
     }
 #endif
     if (!guarded(p, "hailstone_plugin_set_host", [&] {
@@ -3940,7 +3987,7 @@ void NativePlugins::recheck_consent() {
 void NativePlugins::imgui() {
     for (std::size_t i = 0; i < impl_->loaded.size(); ++i) {
         Loaded& l = *impl_->loaded[i];
-        if (!l.update_imgui || !l.can(kCapUi)) continue;
+        if (!l.update_imgui || !l.can(kCapUi) || !l.imgui_compatible()) continue;
         guarded(l, "OnUpdateImGui", [&] { l.update_imgui(); });
     }
 }

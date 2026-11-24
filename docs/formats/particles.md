@@ -138,8 +138,7 @@ On `<code>HEHEAD_TRACK` (the Luclin models) the mouth is at (0.08, 0.6, 0) turne
 the scale, then the rotation from the table sine and cosine of (heading, -pitch, roll), then the offset, in the bone's
 space.
 
-- An emitter with a point is moved to the point's world position each frame (from the bone poses the actor renderer
-  last drew).
+- An emitter with a point moves to the point's world position from the bone pose prepared for the current frame.
 - One on an actor without a point stays where it was made (the original moves it only when actor vtable +0x2f8
   answers true, which a character's actor never does).
 - A spell emitter takes its axes from its actor's world matrix every frame (axial its +Z, transverse 1 its +X,
@@ -177,6 +176,10 @@ point (CActor::vf126 @0x1003a950):
 With the floor flag it is made on the floor below the point (+ 0.05), along the actor's matrix, without the point.
 Held items do the same on their own points: an item's points hang from `ATTACH_TO_ORIGIN`, the holding bone's frame.
 A record pointing past the end of the EDD (some shipped files do, e.g. IT12753's 1059) makes nothing.
+
+The holding bone's current pose places the item's emitters. Particles authored to follow the attachment move with
+that pose, such as the glow on a warrior epic blade. Trail particles continue from the world position where they
+were emitted.
 
 The client (`app/actor_emitters.h`) keeps a persistent emitter per record for each drawn actor, from the EQG body and
 its held items (`assets::MeshEmitter`, `CharacterLibrary::item_mesh`). Differences and gaps:

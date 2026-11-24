@@ -57,7 +57,7 @@ ui.window("Titles", function()
       local tw = ui.CalcTextSize(label) + T.px(40)
       T.rect(tx, ty, tx + tw, ty + T.px(48), kind == i and C.accent or C.raised, kind == i and 0.9 or 1, T.px(10))
       T.textIn(tx, ty, tx + tw, ty + T.px(48), label, kind == i and C.onAccent or C.text, 0.5)
-      if ui.IsMouseHoveringRect(tx, ty, tx + tw, ty + T.px(48)) and ui.IsMouseClicked(ui.Mouse.Left) then kind = i end
+      if T.mouseOver(tx, ty, tx + tw, ty + T.px(48)) and ui.IsMouseClicked(ui.Mouse.Left) then kind = i end
       tx = tx + tw + T.px(10)
     end
     T.unfont()

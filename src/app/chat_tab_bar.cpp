@@ -97,7 +97,8 @@ bool draw_tab_strip(UiHost& host, const tabs::Group& group, ImVec2 pos, float wi
     if (group.tabs.empty()) return false;
 
     ImGui::PushID("chat-tabs");
-    ImGui::PushFont(ui::ui_font(3));
+    ImFont* const tab_font = ui::ui_font(3);
+    ImGui::PushFont(tab_font, tab_font ? tab_font->LegacySize : 0.0f); // size 0 keeps the current one
     const auto frame_title = group.tabs.size() == 1 ? group.title : std::string_view{};
     std::array<StripItem, tabs::kMaxSlots> items{};
     const auto count = group.tabs.size();
@@ -167,7 +168,7 @@ bool draw_tab_strip(UiHost& host, const tabs::Group& group, ImVec2 pos, float wi
         draw->AddText(nullptr, 0, text_pos, ImGui::GetColorU32(color), begin, finish, 0, &clip);
         if (index == selected && count > 1 && text_end > text_pos.x)
             draw->AddLine({text_pos.x, pos.y + height - 3 * scale}, {text_end, pos.y + height - 3 * scale},
-                          ImGui::GetColorU32(style.accent), 2 * scale);
+                          ImGui::GetColorU32(style.accent), 2 * scale, ImDrawFlags_StrokeLegacy);
         if (hovered) {
             const auto tip = item.size.x + 2 * padding > end - x || item.text != label(item.tab) ? label(item.tab)
                 : index == selected && item.text != group.title ? group.title : std::string_view{};

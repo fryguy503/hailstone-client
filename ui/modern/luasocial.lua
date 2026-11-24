@@ -374,7 +374,18 @@ local function drawWindow(x, y, w, h, s)
   end
 end
 
+-- The editor and its draft belong to the character it was opened for: camping, or another character's name, closes
+-- it, so Save cannot write into the next character's social of that number (as spellbook.lua's forCharacter).
+local editorWho = nil
+local function forCharacter()
+  local who = API.session.InGame() and (API.character.Label(1) or "") or nil
+  if who == editorWho then return end
+  editorWho = who
+  open, ed, result, message = false, nil, nil, ""
+end
+
 ui.window("Lua Social", function()
+  forCharacter()
   local req = API.luasocials.EditRequest()
   if req then load(req) end
   if not open or not ed or not API.session.InGame() then return end

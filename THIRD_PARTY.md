@@ -16,7 +16,7 @@ separate library shipped beside the macOS binary, with its licence.
 | glm | MIT (Happy Bunny) | maths |
 | zlib (the system's, else zlib-ng 2.2.4 built zlib-compatible: github.com/zlib-ng/zlib-ng) | zlib | PFS archives, the session layer's compression, PNG and zip reading and writing |
 | doctest | MIT | tests only |
-| Dear ImGui (github.com/ocornut/imgui, v1.91.9, with its SDL3 and Vulkan backends) | MIT | the immediate-mode UI the Lua UI packs and the developer screens draw with |
+| Dear ImGui (github.com/ocornut/imgui, v1.93.0, with its SDL3 and Vulkan backends) | MIT | the immediate-mode UI the Lua UI packs and the developer screens draw with |
 | dr_wav, dr_mp3 (github.com/mackron/dr_libs, tag wav-0.14.5) | public domain or MIT No Attribution | WAV and MP3 decoding (`src/audio/pcm.cpp`) |
 | TinySoundFont (github.com/schellingb/TinySoundFont, commit 853a0a1) | MIT | SoundFont synthesis of the XMI music (`src/audio/xmi_player.cpp`) with a General MIDI SoundFont |
 | stb_image (github.com/nothings/stb, commit 2c980bb) | public domain / MIT | JPEG pictures on the pre-game and loading screens (`src/assets/jpeg_read.cpp`) |

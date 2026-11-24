@@ -162,6 +162,20 @@ CollisionMesh CollisionMesh::build_scene(const assets::Zone& zone, bool visual) 
                 add_mesh(replacement->second, p.transform, false, false);
                 continue; // the renderer draws this static replacement instead of the original animated mesh
             }
+        } else if (const auto hull = zone.placement_collision_hulls.find(p.actor);
+                   hull != zone.placement_collision_hulls.end()) {
+            // A hierarchical actor tests its authored volume in place of its sprite meshes (0x1004a9b0).
+            const auto& vertices = hull->second;
+            for (std::size_t i = 0; i + 2 < vertices.size(); i += 3) {
+                const glm::vec3 a(p.transform * glm::vec4(vertices[i], 1.0f));
+                const glm::vec3 b(p.transform * glm::vec4(vertices[i + 1], 1.0f));
+                const glm::vec3 c(p.transform * glm::vec4(vertices[i + 2], 1.0f));
+                if (!finite(a) || !finite(b) || !finite(c)) continue;
+                m.triangles_.push_back(CollisionTriangle::make(a, b, c, kTriangleObject | kTriangleInvisible |
+                                                                     kTriangleNoVisualSurface));
+                m.light_.push_back(std::numeric_limits<float>::quiet_NaN());
+            }
+            continue;
         }
         const bool ladder = is_ladder_actor(p.actor);
         const auto anim = zone.object_animations.find(p.actor);

@@ -102,6 +102,23 @@ local function sameAt(a, win, id, r)
   return true
 end
 
+-- The rows without a hole: a row that reads as nothing (gone from the list since its count was read) is left out
+-- of what M.rows returns, since a nil in the middle would end every ipairs over it there and break a sort. c.rows
+-- stays by position (the checks and the few rows a frame above go by it); c.list is c.rows itself while it has no
+-- hole, else a packed copy made again whenever c.rows changes.
+local function pack(c)
+  if c.holes == 0 then
+    c.list = c.rows
+    return
+  end
+  local list = {}
+  for r = 1, c.n do
+    local row = c.rows[r]
+    if row then list[#list + 1] = row end
+  end
+  c.list = list
+end
+
 -- The rows ({ texts, color, tex, uv, index (0-based) }) and the selected row (0-based, -1 none).
 function M.rows(win, id)
   local key = win .. "." .. id
@@ -115,17 +132,29 @@ function M.rows(win, id)
     whole = not sameAt(c.rows[1], win, id, 0) or not sameAt(c.rows[n], win, id, n - 1)
   end
   if whole then
-    c = { n = n, rows = {}, next = 0 }
-    for r = 0, n - 1 do c.rows[r + 1] = readRow(win, id, r) end
+    c = { n = n, rows = {}, next = 0, holes = 0 }
+    for r = 0, n - 1 do
+      local row = readRow(win, id, r)
+      c.rows[r + 1] = row
+      if not row then c.holes = c.holes + 1 end
+    end
+    pack(c)
     cache[key] = c
   elseif n > 0 then
+    local repack = false
     for _ = 1, per do
       local r = c.next
-      c.rows[r + 1] = readRow(win, id, r)
+      local old, row = c.rows[r + 1], readRow(win, id, r)
+      c.rows[r + 1] = row
+      if not old then c.holes = c.holes - 1 end
+      if not row then c.holes = c.holes + 1 end
+      -- (a packed copy holds the old row tables: it is made again; without a hole c.list is c.rows itself)
+      if c.holes > 0 or not old then repack = true end
       c.next = (r + 1) % n
     end
+    if repack then pack(c) end
   end
-  return c.rows, selected or -1
+  return c.list, selected or -1
 end
 function M.refresh(win, id) local c = cache[win .. "." .. id]; if c then c.dirty = true end end
 
@@ -174,7 +203,13 @@ function M.list(win, id, state, x0, y0, x1, y1, opts)
     T.draw(x0 + T.px(14), y0 + T.px(16), opts.empty, C.faint)
     T.unfont()
   end
-  return focusedRow, rows[selected + 1], #order
+  -- (by position while the rows have no hole, else looked up: M.rows leaves a hole out)
+  local selectedRow = rows[selected + 1]
+  if selected >= 0 and not (selectedRow and selectedRow.index == selected) then
+    selectedRow = nil
+    for _, r in ipairs(rows) do if r.index == selected then selectedRow = r break end end
+  end
+  return focusedRow, selectedRow, #order
 end
 
 -- A row: the row's icon (when it has one), `name` in the row's colour, `right` (text, or a function(x1, y0, y1)
@@ -338,7 +373,7 @@ function M.tabs(labels, page, x0, y0, set)
     local w = ui.CalcTextSize(l) + T.px(40)
     T.rect(x, y0, x + w, y0 + h, page == i and C.accent or C.raised, page == i and 0.9 or 1, T.px(10))
     T.textIn(x, y0, x + w, y0 + h, l, page == i and C.onAccent or C.text, 0.5)
-    if ui.IsMouseHoveringRect(x, y0, x + w, y0 + h) and ui.IsMouseClicked(ui.Mouse.Left) then set(i) end
+    if T.mouseOver(x, y0, x + w, y0 + h) and ui.IsMouseClicked(ui.Mouse.Left) then set(i) end
     x = x + w + T.px(10)
   end
   T.unfont()
@@ -497,7 +532,7 @@ function M.modal(F, x0, y0, x1, y1)
       done = true
     end
   end
-  if ui.IsMouseHoveringRect(x0, ly, x1, y1) and n > fits then
+  if T.mouseOver(x0, ly, x1, y1) and n > fits then
     local wheel = ui.GetIO().wheel or 0
     if wheel ~= 0 then p.first = math.max(0, math.min(n - fits, first - math.floor(wheel * 3 + 0.5))) end
   end

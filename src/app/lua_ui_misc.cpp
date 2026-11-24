@@ -202,7 +202,7 @@ public:
         if (!host.conn || n < 0) return std::nullopt;
         const auto& buffs = host.conn->pet_buffs();
         if (n >= static_cast<int>(buffs.size())) return std::nullopt;
-        const auto& b = buffs[static_cast<std::size_t>(n)].second;
+        const auto& [slot, b] = buffs[static_cast<std::size_t>(n)];
         const auto* s = host.conn->spell_table().get(b.spell);
         if (!s) return std::nullopt;
         // The pet's suspendable buffs wait in a zone that suspends buffs, as the server's do.
@@ -210,11 +210,21 @@ public:
                                            net::GameConnection::now_ms());
         BuffInfo info{b.spell, game::buff_is_permanent(b.tics, s) ? -1 : static_cast<std::int64_t>(ms), s->name,
                       s->beneficial()};
+        if (info.beneficial && !s->no_remove && pet(host)) {
+            info.pet = host.conn->pets().focused;
+            info.pet_slot = slot;
+        }
         return info;
     }
 
     bool click(UiHost& host, std::string_view id, std::string_view button, bool) override {
         if (!host.conn) return false;
+        if (button == "remove") {
+            const int n = index_after(id, "PetBuff");
+            const auto& buffs = host.conn->pet_buffs();
+            return n >= 0 && n < static_cast<int>(buffs.size()) &&
+                   host.conn->remove_pet_buff(buffs[static_cast<std::size_t>(n)].first);
+        }
         if (int b = pet_button_index(id); b >= 0) {
             if (button == "rightdown" || button == "right") {
                 command_menu(host, b);

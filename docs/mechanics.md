@@ -369,12 +369,13 @@ and felwithea.
 
 #### Animated zone objects
 
-A placed object whose skeleton plays its own animation (Ssraeshza Temple's turning rings, swaying branches) is solid
-where the animation has it (`game/animated_objects.h`; docs/formats/wld.md, "Placed-object animation").
+A placed WLD actor with an authored skeleton collision volume uses that volume for movement and scene geometry
+queries. It follows the placement's translation, rotation and scale. Its sprites still draw in their current
+pose. This lets swaying branches pass over players while the tree trunk stays solid.
 
-In the original, `CS3DFile::CreateZoneActorFromActorInst` (0x1001cad0) gives a zone object volume type 1 only with
-placement flag 0x80 (none shipped), and a WLD skeleton's line-segment test takes its per-part mesh path (0x100c66e0).
-The sphere test is taken to work the same way (not traced, docs/unknowns.md).
+The original hierarchical model's sphere sweep (0x1004a9b0) and line-segment test (0x1004aad0) choose the explicit
+collision volume when present. Without one, they test the parts. In Hailstone, animated objects without a volume
+include Ssraeshza Temple's turning rings (`game/animated_objects.h`; docs/formats/wld.md, "Placed-object animation").
 
 Here:
 
@@ -561,7 +562,10 @@ target-type-needs-target, language garbling, profanity filter, partial name look
   as they were. OP_RestState packets update both during play.
 - Casting runs MakeMeVisible(0xb0, 1) unless the spell is a sneak attack or CastNotStanding; a sitting caster stands
   (ChangePosition 100).
-- Line of sight uses the app's collision (eqstr 108).
+- For a spell that requires a visible target, the sight line starts at the caster and tests terrain, solid objects,
+  doors and animated geometry in their current poses. A blocked cast displays eqstr 108 before starting or sending a
+  cast request. Targeted detrimental spells and dispels require sight. Ordinary beneficial casts and optional-target
+  projectiles can start through obstructions. A ground-targeted cast checks sight to the chosen point.
 - The target-type switch measures 2D distance against Range + focus (at most 5 x Range), MinRange (4602), targeted
   AE's 39.99 height and the spawn's body type.
 
@@ -616,19 +620,21 @@ Chat codes (`game::expand_chat_variables`, CEverQuest::DoPercentConvert @0x51b60
   a target.
 - A code is a `%` less than two bytes past where the last conversion left off, or after a space or an apostrophe. That
   point is two bytes past the start of the last expansion, so a code straight after a long expansion is not one
-  (`%T%S` with a target "a gnoll" sends "a gnoll%S"). After eleven expansions every further code position gets `@`.
+  (`%T%S` with a target "a gnoll" shows "a gnoll%S"). After eleven expansions, further recognized codes start with
+  `@` and literal percent signs still display as `%`.
 - They are converted when the line runs, in text the client sends: SendNewText's channels (say, a targeted say,
   group, guild, raid, fellowship, shout, auction, OOC, tell, emote), the chat-server lines (`;` and `[` lines,
   `/1`..`/10` after the bad word filter, a chat-server `/reply`), the whole line a social emote sends, after its period
   (send_social @0x528cf2), and the names of `/assist` and `/shield`. Social hot buttons run their lines as typed, each
   when it runs.
 - The local echoes show the converted text: the channel echoes show the sent text; the emote echo and a social's own
-  line are converted as shown lines (dsp_chat, where a `%` that is no code is left as it is). Received chat is never
-  converted (msg_new_text shows it with dsp_chat's conversion off, @0x4c0e02).
+  line are converted as shown lines (dsp_chat, where a literal `%` is left as it is).
+- Outgoing chat encodes remaining percent signs as `&PCT;` before the packet is sent, protecting them through server
+  relays. Incoming zone chat, emotes and chat-server messages decode the escape once before display. Target and pet
+  variables use the sender's state. Link labels travel with the same transport encoding and keep their text. Emote
+  bodies fit the relay's 512-byte limit, keeping escape sequences whole.
 
-Differences: the original sends `&PCT;` for a `%` that is no code and its chat window shows it as `%`; Hailstone sends
-the `%` itself (docs/unknowns.md), and copies an item or achievement link whole, so a `%` in its label is never a code.
-`%M` is the pet window's pet, where the original takes the first spawn in its list whose owner is the player.
+`%M` uses the pet window's pet. Item and achievement links are kept whole during variable expansion.
 
 Melee lines (`game::damage_report`, `hit_line_shown`; tests `tests/combat_test.cpp`) follow ReportSuccessfulHit's
 chat filters; a filter hides when its mode is 1 (setting 0):
@@ -774,6 +780,11 @@ player. Auto-inventory equips only what passes it.
 
 #### Coin
 
+Autosplit is set on the server by Options or `/autosplit` using `OP_SpawnAppearance` type 28. Since EQEmu's RoF2
+profile sends zero in the Autosplit field, Hailstone remembers the last choice made here in the character's
+`options.ini` (`[Hailstone] Autosplit`). Modern and Gamepad read that value on login. Logging in sends no Autosplit
+update. On a profile with no saved choice, use `/autosplit on` or `/autosplit off` once to set the desired state.
+
 `move_money` (32-bit wrapping):
 
 - Conversion (int)10^|dcoin| only with the bank window up.
@@ -837,6 +848,13 @@ It stops, said in chat ("Combining stopped after N combines: why."), when:
 ## Spell gems and buff stacking
 
 Vectors in `tests/spell_gems_vectors_test.cpp`, replayed call for call.
+
+Hailstone stores spells by ID, including IDs above RoF2's original 45,000 ceiling. The usable range is the positive
+signed 32-bit range of item-effect and casting-state fields, with the existing poison-proc and unknown-spell
+sentinels (65534 and 65535) reserved. Loading a spell keeps its per-record cast checksum. The checksums sent on
+zone entry still describe the complete files. Outgoing rank substitutions respect the connection's wire limit or
+the ID the server already supplied for that cast. A server may opt into a wider wire range through its add-on
+([Extended spell IDs](plugins.md#extended-spell-ids)).
 
 #### Gem and recovery times
 
@@ -990,6 +1008,9 @@ before the scan stays unchanged.
 
 Closing after Loot All waits for every outstanding loot reply. The original's close timing for that overlap is
 untraced (docs/unknowns.md).
+
+Done, Loot All and movement share one pending close per loot session. Like CLootWnd::AboutToHide @0x6bcd40,
+Hailstone waits for OP_LootComplete after sending OP_EndLootRequest. A close that cannot be sent can be retried.
 
 ## Leaving an NPC interaction
 
@@ -2112,6 +2133,17 @@ Eligible targets are still ordered by distance within the 500-unit range.
   compares squared x/y distances), where the client uses 3D distance, and gives the PC and corpse cycles the same
   sight test.
 
+#### Switching targets during combat
+
+Changing targets with Tab or other target controls keeps auto attack and auto fire active by default.
+
+**Red-Con Attack Guard** in Modern Options > General > Combat (**Red-con attack guard** in Gamepad Options > Game)
+restores the RoF2 target-change guard. With the guard enabled, changing targets during melee auto attack offers the
+red-con tip and turns off auto attack and auto fire if the player is level 10 or below and the new target is at least
+three levels higher. Group members and the last target that triggered the red-con tip are exempt. The setting is off
+by default and is stored in the character's `hailstone.ini` as `combat.red_con_attack_guard`. The Lua option is
+`red_con_attack_guard`.
+
 #### Target death and auto targeting
 
 The target's death clears the target and turns auto attack and auto fire off.
@@ -2121,12 +2153,15 @@ General "Attack Until XTarget Is Clear", off by default): auto attack stays on w
 living spawn (server-hidden slots left out). Taking a new target ends the hold. Auto fire still goes off.
 
 The original never picks a target itself. Enhancement (option `auto_target_xtarget`, hailstone.ini
-`combat.auto_target_xtarget`, Options > General "Auto Target XTarget Attackers", on by default):
+`combat.auto_target_xtarget`, "Auto Target Attackers" under Options > General in Modern or Options > Game in
+Gamepad, on by default):
 
-- With no target, an NPC that attacks the player (an OP_Damage, a miss included) and is on the extended target list
-  becomes the target; also when the target dies and such an attacker remains (latest attacker first, else slot order).
+- With no target, an NPC that attacks the player becomes the target, even with no extended target slots. This
+  uses `OP_Damage` and includes missed swings and known detrimental spells that land for zero damage.
+- When the target dies or despawns, an attacker in a visible extended target slot can take its place (the last
+  attacker seen while untargeted first, otherwise in slot order).
 - Players' pets, corpses and untargetable spawns are skipped.
-- Clearing the target by hand holds until the next hit. Nothing is picked while dead.
+- Clearing the target by hand holds until the next attack. Nothing is picked while dead.
 
 #### Facing and role sets
 
@@ -2216,8 +2251,9 @@ Tests: `tests/passage_of_time_test.cpp`, `tests/ability_commands_test.cpp`.
 #### Eye control
 
 SPA 67 acquires an Eye summon named from the first 24 bytes of the player's name. Its view and control are separate
-from the body, which keeps gravity, air and environment damage; the Eye sends its own spawn ID's movement. Fade,
-despawn, death and zoning restore control. Once held, control stays while that spawn lives.
+from the body, which keeps gravity, air and environment damage. The Eye sends movement under its own spawn ID.
+The passive body reports zero run speed so observers and autofollow see the caster at the body's position.
+Fade, despawn, death and zoning restore control. Once held, control stays while that spawn lives.
 
 Mouse look and the gamepad's right stick use the Eye's posture for turning, so you can steer a standing or
 crouching Eye while your character sits. Stun still blocks turning. This follows `CEverQuest::ProcessControls`
@@ -2302,7 +2338,7 @@ instrument song per "Bone groups" below. The local player's OP_Animation is sent
 
 - An item missile with a target does not sweep the zone; spell missiles sweep and also check the target segment.
 - Source despawn ends its missiles; target despawn removes homing.
-- Item type 9 needs a loaded spell id in 1..45000.
+- Item type 9 needs a loaded spell with a valid ID.
 - Duration uses normalized AE duration (capped at 14 s except first-slot SPA 76), otherwise 30 s for travel type 3
   or 50 ms.
 - Area target types 8, 21, 22, 23, 28 and 45 stay at the target or destination and play stage 2; other spell

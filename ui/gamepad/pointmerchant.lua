@@ -17,8 +17,9 @@ local C = T.C
 local function cost(r) return tonumber(((r.texts[2] or ""):gsub(",", ""))) or 0 end
 
 local function thousands(n)
-  local s = tostring(math.floor(n))
-  return s:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+  local sign, digits = tostring(math.floor(n)):match("^(-?)(%d+)$")
+  if not digits then return tostring(n) end -- (only the digits are grouped: a sign kept in would read "-,123")
+  return sign .. digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
 end
 
 -- One merchant window: cfg = { window, name (ImGui), prefix, currency() -> name, theme (a third column) }.

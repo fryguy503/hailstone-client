@@ -77,7 +77,7 @@ std::string spellbook_file(std::span<const std::uint32_t> book,
     std::string out;
     for (std::size_t i = 0; i < book.size() && i < 720; ++i) {
         std::uint32_t id = book[i];
-        if (id == 0 || id > kMaxSpellId) continue; // IsValidSpellID
+        if (!is_spell_id(id)) continue;
         const SpellData* s = spell(id);
         if (s) out += std::format("{}\t{}\n", static_cast<unsigned>(level(*s)), s->name);
     }

@@ -336,34 +336,8 @@ int ClientApp::run() {
             switch_particles_->reconcile(conn_->doors());
             switch_particles_->update(dt, camera_.position);
         }
-        if (spell_particles_ && in_world && conn_) {
-            auto cues = conn_->take_spell_effect_cues();
-            auto effect_packets = conn_->take_effect_packets();
-            if (!spell_effects_) { // /showspelleffects off: none start (the removals still stop what is shown)
-                cues.clear();
-                std::erase_if(effect_packets, [](const net::EffectPacketCue& e) {
-                    return e.kind == net::EffectPacketCue::Kind::Add || e.kind == net::EffectPacketCue::Kind::AddNimbus;
-                });
-            }
-            const double bolt_now = bolt_clock();
-            if (spell_bolts_ && lighting_mode_ == render::LightingMode::Modern)
-                spell_bolts_->take_cues(*conn_, cues, bolt_now);
-            update_guide();
-            spell_particles_->set_guide_line(guide_.line(), guide_.direction_only());
-            spell_particles_->set_paths_visible(ui_.visible());
-            spell_particles_->set_find_trail_style(game::normalize_find_trail_style(
-                config_.get_int("display.find_trail_style", 0)));
-            spell_particles_->update(*conn_, cues, effect_packets, actor_renderer_.get(), dt);
-            spell_particles_->prepare();
-            if (spell_bolts_)
-                spell_bolts_->update(*conn_, bolt_now, [this](std::uint32_t serial) -> std::optional<glm::vec3> {
-                    for (const auto& m : missiles_.missiles())
-                        if (m.serial == serial && !m.done) return m.has_actor ? m.actor_position : m.position;
-                    return std::nullopt;
-                });
-        }
+        if (spell_particles_ && in_world && conn_) spell_particles_->prepare();
         if (actor_emitters_ && actor_renderer_ && ((in_world && conn_) || pre_game)) {
-            // The drawn spawns' own emitters, on the pose drawn last frame.
             // The reader is set when the zone's library changes, not every frame; it reads in the texture loader's job.
             if (emitter_reader_library_ != actor_library_) {
                 emitter_reader_library_ = actor_library_;
@@ -372,48 +346,7 @@ int ClientApp::run() {
                     return library ? library->read_file(name) : std::nullopt;
                 }, true);
             }
-            actor_emitter_list_.clear();
-            const auto& world = pre_game ? *pre_game_world_ : conn_->world();
-            // Hailstone (not in the original): an actor none of whose particles could show emits none. Its model's
-            // bounds, widened by what its particles drift (kEmitterViewMargin, a guess: no effect's reach is
-            // measured), against last frame's view; in the classic lighting, past the 500 units no particle is drawn
-            // beyond (render::ParticleRenderer). Missiles and objects are always in view.
-            constexpr float kEmitterViewMargin = 30.0f;
-            const bool hold = particle_offscreen_hold_ && emitter_view_proj_.has_value();
-            const render::Frustum emitter_frustum = render::frustum_from(hold ? *emitter_view_proj_ : glm::mat4(1.0f));
-            const bool classic_reach = lighting_mode_ != render::LightingMode::Modern;
-            const glm::vec3 eye = camera_.position, ahead = camera_.forward();
-            auto in_view = [&](std::uint32_t id) {
-                glm::vec3 center;
-                float radius = 0.0f;
-                if (!hold || !actor_renderer_->spawn_bounds(id, center, radius)) return true;
-                radius += kEmitterViewMargin;
-                if (!render::box_in_frustum(emitter_frustum, render::sphere_box(center, radius))) return false;
-                return !classic_reach || glm::dot(center - eye, ahead) - radius <= 500.0f;
-            };
-            for (const auto& [id, spawn] : world.spawns)
-                if (const auto* mesh = actor_renderer_->drawn_mesh(id); mesh && !mesh->emitters.empty())
-                    actor_emitter_list_.push_back({id, mesh, actor_renderer_->drawn_standing(id),
-                                                   actor_renderer_->drawn_alpha(id), in_view(id)});
-            // The missiles' (a spell bolt's flames: its model's own emitters, app/world_objects.h).
-            const WorldObjects* objects = in_world ? world_objects_.get() : nullptr;
-            if (objects) {
-                for (const auto& m : objects->missile_actors()) actor_emitter_list_.push_back({m.id, m.emitters});
-                for (const auto& o : objects->object_actors()) actor_emitter_list_.push_back({o.id, o.emitters});
-            }
-            const render::ActorRenderer* actors = actor_renderer_.get();
-            ActorEmitters::BoneWorld bones = [actors, objects](std::uint32_t id, int bone, glm::mat4& w) {
-                if (id & WorldObjects::kMissileActorBit) return objects && bone == 0 && objects->missile_transform(id, w);
-                if (id & WorldObjects::kObjectActorBit) return objects && bone == 0 && objects->object_transform(id, w);
-                return actors->drawn_bone(id, bone, w);
-            };
-            if (in_world && conn_) update_level_effects(*conn_);
-            actor_emitters_->update(dt, actor_emitter_list_, bones, camera_.position,
-                                    [actors](std::uint32_t id, std::string_view code, float& time) {
-                                        return actors->drawn_playing(id, code, time);
-                                    });
-            // The step itself, on the poses as drawn this frame, once the frame is recorded (below).
-            emitter_step_ = [this, dt, bones = std::move(bones)] { actor_emitters_->simulate_async(dt, bones); };
+            actor_emitters_->prepare();
         }
         float brightness = (in_world || pre_game) && outdoor_light_ ? render::outdoor_brightness(sky_hour) : 1.0f;
         std::optional<game::SceneFogFrame> fog_frame;
@@ -460,7 +393,8 @@ int ClientApp::run() {
         if (!f) {
             if (automation_) automation_->world_unavailable();
             ui_.end_frame_without_render();
-            if (emitter_step_) std::exchange(emitter_step_, nullptr)();
+            // Age effects and consume cues even without a new render pose.
+            update_scene_particles(dt, in_world, pre_game, camera_.position);
             continue;
         }
         lap = core::frame_sections::Lap();
@@ -494,6 +428,8 @@ int ClientApp::run() {
             update_precipitation(dt, sky_hour);
         }
         const int width = static_cast<int>(f->extent.width), height = static_cast<int>(f->extent.height);
+        const glm::mat4 plain_proj = camera_.projection(width, height, lit.far_plane);
+        const glm::mat4 plain_vp = plain_proj * camera_.view();
         // The modern lighting's water with the camera in it (render::set_underwater), lit by the open sky's daylight.
         const bool under_water = in_game && modern && assets::is_water_type(camera_region_);
         if (under_water) haze_blend_.reset(); // out of the water the haze is there at once
@@ -533,9 +469,38 @@ int ClientApp::run() {
                     zone_renderer_->set_animation_time(animation_time);
                     if(animated_objects_)animated_objects_->set_visual_time(animation_time);
                 }
-                // modern or classic (/lighting, display.lighting): the same scene light for every renderer.
+                render::Daylight sky;
+                if (modern) {
+                    sky = render::daylight(sky_hour, outdoor, moon_phase_, blood_moon_,
+                                           static_cast<float>(ambient_light_) / 100.0f,
+                                           static_cast<float>(baked_lamp_light_) / 100.0f);
+                    render::apply_storm(sky, weather_look_.storm);
+                    sky.sky += glm::vec3(weather_look_.flash * 1.5f);
+                }
+                const bool shadows = modern && vk_.shadows_enabled() && zone_renderer_ && sky.light != glm::vec3(0.0f);
+                const bool light_shadows = modern && zone_ && zone_renderer_ && vk_.point_shadow_slots() > 0;
+                // Pose once before the particles read their attachments. Their updated positions also light the
+                // scene and provide the point-shadow origins this frame.
+                if (actor_renderer_) {
+                    // The actor clip uses the original Yon even with the modern lighting's longer view.
+                    actor_renderer_->set_actor_clip(game::actor_clip_distance(actor_clip_plane_, view_.far_plane));
+                    update_market_hidden(in_game);
+                    actor_renderer_->set_hidden_spawns(&market_hidden_);
+                    actor_renderer_->set_shadow_reach(camera_.position, game::shadow_clip_distance(shadow_clip_plane_));
+                    actor_renderer_->set_pose_view(plain_vp, shadows || light_shadows);
+                    actor_renderer_->prepare_spawns(*f, camera_.position, pre_game ? *pre_game_world_ : conn_->world(),
+                                                    pre_game ? pre_game_hidden_id() : hidden_spawn(), dt,
+                                                    /*defer_lighting=*/true);
+                    lap.mark("actors prepare_spawns");
+                }
+                emitter_view_proj_ = plain_vp;
+                // The emitters see the game camera: the shake is only in the image.
+                update_scene_particles(dt, in_game, pre_game, unshaken_camera);
+                lap.mark("attached particles step");
+
+                // Modern or classic (/lighting, display.lighting): the same scene light for every renderer.
                 render::DynamicShadowLights moving_lights;
-                render::SceneLighting lighting = scene_lighting(scene_light, sky_hour, &moving_lights);
+                render::SceneLighting lighting = scene_lighting(scene_light, sky, &moving_lights);
                 // The isometric camera's cut through what stands in front of the player (game/iso_occlusion.h).
                 {
                     const game::IsoReveal r = iso_reveal();
@@ -544,8 +509,6 @@ int ClientApp::run() {
                     lighting.reveal_shape = r.shape;
                     lighting.reveal_roof = r.roof;
                 }
-                bool shadows = lighting_mode_ == render::LightingMode::Modern && vk_.shadows_enabled() &&
-                               zone_renderer_ && glm::vec3(lighting.light) != glm::vec3(0.0f);
                 if (shadows) {
                     // The isometric camera's cascades start a little short of the player, not at the lens.
                     render::ShadowCamera shadow_view = camera_.shadow_camera(width, height);
@@ -613,7 +576,6 @@ int ClientApp::run() {
                 }
                 // The lights' shadows: which lights have a cube (the zone's, the carried light, the spells'), before the
                 // renderers take the lighting.
-                const bool light_shadows = modern && zone_ && zone_renderer_ && vk_.point_shadow_slots() > 0;
                 std::vector<std::uint32_t> point_builds;
                 // The doors and ground objects as they stand this frame (WorldObjects::update ran), so they can
                 // cast shadows: a door swinging in a light's reach keeps its slot live (render/point_shadow_pass.h).
@@ -674,25 +636,11 @@ int ClientApp::run() {
                 if (actor_renderer_) {
                     actor_renderer_->set_lighting(lighting);
                     actor_renderer_->set_time(t);
+                    actor_renderer_->upload_lighting(*f);
                 }
                 if (world_objects_) {
                     world_objects_->set_lighting(lighting);
                     world_objects_->set_time(t); // the zone renderer's clock: flames on doors flicker in step
-                }
-                // The spawns are animated and posed now, so they can cast shadows; drawn in the scene below.
-                if (actor_renderer_) {
-                    // The original's Yon, not the modern view's longer one: which spawns appear stays the same.
-                    actor_renderer_->set_actor_clip(game::actor_clip_distance(actor_clip_plane_, view_.far_plane));
-                    update_market_hidden(in_game);
-                    actor_renderer_->set_hidden_spawns(&market_hidden_);
-                    actor_renderer_->set_shadow_reach(camera_.position, game::shadow_clip_distance(shadow_clip_plane_));
-                    // Only the spawns that can show are posed: in the view the scene is drawn with below, or within the
-                    // shadow reach while a shadow (the sun's, a light's) can take them.
-                    actor_renderer_->set_pose_view(camera_.projection(width, height, lit.far_plane) * camera_.view(),
-                                                   shadows || light_shadows);
-                    actor_renderer_->prepare_spawns(*f, camera_.position, pre_game ? *pre_game_world_ : conn_->world(),
-                                                    pre_game ? pre_game_hidden_id() : hidden_spawn(), dt);
-                    lap.mark("actors prepare_spawns");
                 }
                 // Each map only when what it shows has changed: its view, the zone, the doors and objects in it, the
                 // plants swaying in it (render/cover_map.h). Its layer keeps its depths meanwhile.
@@ -853,9 +801,6 @@ int ClientApp::run() {
         if (scene) {
             // The view as picking, the name plates and the map overlay take it; the scene is drawn through it moved by
             // the temporal upscaler's jitter (none without it), which follows the plain one (render/temporal.h).
-            const glm::mat4 plain_proj = camera_.projection(width, height, lit.far_plane);
-            const glm::mat4 plain_vp = plain_proj * camera_.view();
-            emitter_view_proj_ = plain_vp; // next frame's view test for the actors' emitters
             glm::mat4 proj = render::jittered(plain_proj, vk_.projection_jitter());
             glm::mat4 vp = proj * camera_.view();
             // Each draw is a job of the scene recorder, in a lane by what it touches (render/scene_recorder.h): a
@@ -1081,9 +1026,6 @@ int ClientApp::run() {
         lap.mark("scene other");
         ui_.render(*f);
         lap.mark("ImGui render");
-        // The actor effects' next step, on a worker while this frame is submitted and the next one begins.
-        if (emitter_step_) std::exchange(emitter_step_, nullptr)();
-        lap.mark("actor effects step start");
         perf_ui_.mark(FramePhase::Record);
         try {
             const auto outcome = vk_.end_frame(*f);
@@ -1289,6 +1231,77 @@ void ClientApp::report_world_geometry() {
     if (automation_)
         for (const auto& [index, vertices] : world_recorded_) automation_->world_recorded(index, vertices);
     world_recorded_.clear();
+}
+
+void ClientApp::update_scene_particles(float dt, bool in_game, bool pre_game, const glm::vec3& eye) {
+    if (actor_emitters_ && actor_renderer_ && ((in_game && conn_) || pre_game)) {
+        actor_emitter_list_.clear();
+        const auto& world = pre_game ? *pre_game_world_ : conn_->world();
+        const auto* actors = actor_renderer_.get();
+        // Widen model bounds to keep particles in view beyond the actor. Missiles and objects always emit.
+        constexpr float kEmitterViewMargin = 30.0f;
+        const bool hold = particle_offscreen_hold_ && emitter_view_proj_.has_value();
+        const render::Frustum frustum = render::frustum_from(hold ? *emitter_view_proj_ : glm::mat4(1.0f));
+        const bool classic_reach = lighting_mode_ != render::LightingMode::Modern;
+        const glm::vec3 ahead = camera_.forward();
+        auto in_view = [&](std::uint32_t id) {
+            glm::vec3 center;
+            float radius = 0.0f;
+            if (!hold || !actors->spawn_bounds(id, center, radius)) return true;
+            radius += kEmitterViewMargin;
+            if (!render::box_in_frustum(frustum, render::sphere_box(center, radius))) return false;
+            return !classic_reach || glm::dot(center - eye, ahead) - radius <= 500.0f;
+        };
+        for (const auto& [id, spawn] : world.spawns)
+            if (const auto* mesh = actors->drawn_mesh(id); mesh && !mesh->emitters.empty())
+                actor_emitter_list_.push_back({id, mesh, actors->drawn_standing(id), actors->drawn_alpha(id),
+                                               in_view(id)});
+
+        const WorldObjects* objects = in_game ? world_objects_.get() : nullptr;
+        if (objects) {
+            for (const auto& m : objects->missile_actors()) actor_emitter_list_.push_back({m.id, m.emitters});
+            for (const auto& o : objects->object_actors()) actor_emitter_list_.push_back({o.id, o.emitters});
+        }
+        ActorEmitters::BoneWorld bones = [actors, objects](std::uint32_t id, int bone, glm::mat4& w) {
+            if (id & WorldObjects::kMissileActorBit) return objects && bone == 0 && objects->missile_transform(id, w);
+            if (id & WorldObjects::kObjectActorBit) return objects && bone == 0 && objects->object_transform(id, w);
+            return actors->drawn_bone(id, bone, w);
+        };
+        if (in_game && conn_) update_level_effects(*conn_);
+        actor_emitters_->update(dt, actor_emitter_list_, bones, eye,
+                                [actors](std::uint32_t id, std::string_view code, float& time) {
+                                    return actors->drawn_playing(id, code, time);
+                                });
+        actor_emitters_->simulate_async(dt, bones);
+    }
+
+    if (spell_particles_ && in_game && conn_) {
+        apply_missile_particle_cues();
+        auto cues = conn_->take_spell_effect_cues();
+        auto effect_packets = conn_->take_effect_packets();
+        if (!spell_effects_) { // /showspelleffects off: let removals still stop what is shown.
+            cues.clear();
+            std::erase_if(effect_packets, [](const net::EffectPacketCue& e) {
+                return e.kind == net::EffectPacketCue::Kind::Add || e.kind == net::EffectPacketCue::Kind::AddNimbus;
+            });
+        }
+        const double bolt_now = bolt_clock();
+        if (spell_bolts_ && lighting_mode_ == render::LightingMode::Modern)
+            spell_bolts_->take_cues(*conn_, cues, bolt_now);
+        update_guide();
+        spell_particles_->set_guide_line(guide_.line(), guide_.direction_only());
+        spell_particles_->set_paths_visible(ui_.visible());
+        spell_particles_->set_find_trail_style(game::normalize_find_trail_style(
+            config_.get_int("display.find_trail_style", 0)));
+        spell_particles_->update(*conn_, cues, effect_packets, actor_renderer_.get(), dt);
+        spell_particles_->request_textures();
+        if (spell_bolts_)
+            spell_bolts_->update(*conn_, bolt_now, [this](std::uint32_t serial) -> std::optional<glm::vec3> {
+                for (const auto& m : missiles_.missiles())
+                    if (m.serial == serial && !m.done) return m.has_actor ? m.actor_position : m.position;
+                return std::nullopt;
+            });
+    }
 }
 
 void ClientApp::update_level_effects(net::GameConnection& conn) {

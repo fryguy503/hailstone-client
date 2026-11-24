@@ -3,6 +3,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -11,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "game/collision.h"
 #include "game/spells.h"
 #include "mock_server/harness.h"
 #include "mq_test_world.h"
@@ -39,13 +41,89 @@ std::string spell_line(std::initializer_list<std::pair<int, std::string>> set) {
 
 } // namespace
 
+TEST_CASE("Spell casts require sight only for spells that check the selected target") {
+    const char* target_type = "5";
+    const char* spell_type = "0";
+    const char* effect = "0";
+    bool requires_sight = true;
+    SUBCASE("direct damage") {}
+    SUBCASE("targeted area effect") { target_type = "8"; }
+    SUBCASE("dispel") { spell_type = "1"; effect = "27"; }
+    SUBCASE("heal") { spell_type = "1"; requires_sight = false; }
+    SUBCASE("optional-target projectile") { target_type = "1"; requires_sight = false; }
+    SUBCASE("self with a target selected") { target_type = "6"; spell_type = "1"; requires_sight = false; }
+    SUBCASE("point-blank area with a target selected") { target_type = "4"; requires_sight = false; }
+
+    constexpr std::int32_t kSpell = 6810;
+    constexpr std::uint32_t kTarget = 101;
+    MockConfig cfg = MockConfig::standard();
+    cfg.characters[0].class_ = 2;
+    Rig rig(cfg);
+    std::ofstream(rig.dir.path() / "eqstr_us.txt", std::ios::app) << "108 You cannot see your target.\n";
+    rig.game.rescan();
+    auto& conn = rig.conn;
+    conn.reload_game_files();
+    REQUIRE(rig.to_zone());
+
+    auto table = std::make_shared<game::SpellTable>();
+    REQUIRE(table->parse(spell_line({{0, std::to_string(kSpell)}, {1, "Sight Test"}, {9, "100"}, {13, "1000"},
+                                     {20, "-10"}, {83, spell_type}, {86, effect}, {98, target_type}, {105, "1"},
+                                     {122, "3"}, {213, "1"}, {214, "1"}})) == 1);
+    conn.set_spell_table_for_test(table);
+
+    auto& world = A::world(conn);
+    const auto here = A::position(conn);
+    world.spawns.at(kTarget).position = here + glm::vec3(6.0f, 0.0f, 0.0f);
+    world.target_id = kTarget;
+    auto& spells = A::spells(conn);
+    spells.gems[0].spell = kSpell;
+    spells.gems[0].ready = 0;
+    spells.recovery_ready = 0;
+
+    const auto wall = game::CollisionMesh::from_triangles({
+        game::CollisionTriangle::make(here + glm::vec3(3.0f, -3.0f, -3.0f), here + glm::vec3(3.0f, 3.0f, -3.0f),
+                                      here + glm::vec3(3.0f, 0.0f, 4.0f), 0),
+    });
+    bool obstructed = true;
+    int sight_checks = 0;
+    conn.set_line_of_sight([&](const glm::vec3& from, const glm::vec3& to) {
+        ++sight_checks;
+        return !obstructed || wall.line_of_sight(from, to);
+    });
+    const auto casts = [&] { return MockEqServer::count(rig.server.zone_log, Op::CastSpell); };
+
+    rig.chat();
+    conn.cast_gem(0);
+    const auto messages = rig.chat();
+    const auto refused = std::any_of(messages.begin(), messages.end(), [](const ChatEvent& e) {
+        return e.text == "You cannot see your target.";
+    });
+    CHECK(refused == requires_sight);
+    CHECK(sight_checks == (requires_sight ? 1 : 0));
+    if (requires_sight) {
+        CHECK_FALSE(spells.casting.casting());
+        CHECK(spells.gems[0].ready == 0);
+        CHECK(spells.recovery_ready == 0);
+        rig.run_for(std::chrono::milliseconds(50));
+        CHECK(casts() == 0);
+        obstructed = false;
+        conn.cast_gem(0);
+    }
+    CHECK(spells.casting.spell == kSpell);
+    REQUIRE(rig.until([&] { return casts() == 1; }));
+}
+
 TEST_CASE("CastSpell over the live adapter: SPA 129 range focus from a worn item lets a cast past Range go out") {
     // A detrimental single-target nuke with Range 100 (cleric level 1), and a 5% range focus (SPA 129) on an
     // earring: GetFocusRangeModifier gives 100 x 5 x 0.01 = 5, so the reach is 105 (under the 5 x Range cap).
+    std::uint32_t spell_id = 6810;
+    SUBCASE("stock spell IDs") {}
+    SUBCASE("spell IDs above 16 bits") { spell_id = 106810; }
+    const auto focus_id = static_cast<std::int32_t>(spell_id + 1);
     auto table = std::make_shared<game::SpellTable>();
-    REQUIRE(table->parse(spell_line({{0, "6810"}, {1, "Range Bolt"}, {9, "100"}, {13, "1000"}, {20, "-10"},
+    REQUIRE(table->parse(spell_line({{0, std::to_string(spell_id)}, {1, "Range Bolt"}, {9, "100"}, {13, "1000"}, {20, "-10"},
                                      {83, "0"}, {86, "0"}, {98, "5"}, {105, "1"}, {213, "1"}, {214, "1"}}) +
-                         "\n" + spell_line({{0, "6811"}, {1, "Range Focus"}, {20, "5"}, {83, "1"}, {86, "129"}})) ==
+                         "\n" + spell_line({{0, std::to_string(focus_id)}, {1, "Range Focus"}, {20, "5"}, {83, "1"}, {86, "129"}})) ==
             2);
     MockConfig cfg = MockConfig::standard();
     cfg.characters[0].class_ = 2; // a cleric: pure melee classes get no focus
@@ -67,7 +145,7 @@ TEST_CASE("CastSpell over the live adapter: SPA 129 range focus from a worn item
         auto& sp = A::spells(conn);
         sp.casting = {};
         sp.pending = 0;
-        sp.gems[0].spell = 6810;
+        sp.gems[0].spell = spell_id;
         sp.gems[0].ready = 0;
         sp.recovery_ready = 0;
         const glm::vec3 here = A::position(conn);
@@ -87,7 +165,7 @@ TEST_CASE("CastSpell over the live adapter: SPA 129 range focus from a worn item
 
     // The earring in ear slot 1: the reach is 105.
     Item ear = make_item(2001, "Range Earring", 1);
-    ear.effects[kEffectFocus].effect = 6811;
+    ear.effects[kEffectFocus].effect = focus_id;
     REQUIRE(A::inventory(conn).put(ItemSlot::possessions(1), ear));
 
     // 106 is still past 105 (the bonus is the focus's 5, not the cap's 400).
@@ -98,7 +176,7 @@ TEST_CASE("CastSpell over the live adapter: SPA 129 range focus from a worn item
 
     // 101 is now in reach: the cast starts and OP_CastSpell goes out for the spell on the target.
     cast_at(101.0f);
-    CHECK(A::spells(conn).casting.spell == 6810);
+    CHECK(A::spells(conn).casting.spell == spell_id);
     REQUIRE(rig.until([&] { return casts() == 1; }));
     const AppPacket* sent = nullptr;
     for (const auto& p : rig.server.zone_log)
@@ -106,7 +184,8 @@ TEST_CASE("CastSpell over the live adapter: SPA 129 range focus from a worn item
     REQUIRE(sent);
     auto packet = decode_cast_spell(*sent);
     REQUIRE(packet);
-    CHECK(packet->spell_id == 6810);
+    CHECK(packet->spell_id == spell_id);
+    CHECK(packet->spell_crc == table->spell_crc(spell_id));
     CHECK(packet->target_id == kTarget);
 }
 

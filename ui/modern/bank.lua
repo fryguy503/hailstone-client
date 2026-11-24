@@ -15,33 +15,43 @@ local T = hud.T
 local C = T.color
 
 local bottomH = {} -- window -> the height the part under the slots took last frame
+local usedSlots = {} -- window -> how many bank slots held an item last frame (the header's count)
 
--- Over the tile just placed: dimmed when the search does not match it, ringed when it is or holds a match (`found`:
--- hs.FindItems' counts by bank slot).
-local function dim(win, id, size, found)
+-- Over the tile just placed (`item`, the slot's): dimmed when the search does not match it, ringed when it is or holds
+-- a match (`found`: hs.FindItems' counts by bank slot, `i`).
+local function dim(size, item, found, i)
   local x0, y0 = ui.GetItemRect()
-  tools.Mark(x0, y0, size, 1, API.inventory.SlotItem(win, id), "bank", found and (found[tonumber(id:match("%d+$"))] or 0) > 0)
+  tools.Mark(x0, y0, size, 1, item, "bank", found and (found[i] or 0) > 0)
 end
 
+-- The slots as tiles; returns how many hold an item (each slot's item is read once a frame, after its tile, which
+-- may have just been clicked).
 local function slots(win, prefix, first, last, size, gap, found)
   local avail = ui.GetContentRegionAvail()
   local perRow = math.max(1, math.floor((avail + gap) / (size + gap)))
-  local n = 0
+  local n, used = 0, 0
   for i = first, last do
     local id = prefix .. i
     if n % perRow ~= 0 then ui.SameLine(0, gap) end
     W.Slot(win, id, size)
-    dim(win, id, size, found)
+    local item = API.inventory.SlotItem(win, id)
+    if item then used = used + 1 end
+    dim(size, item, found, i)
     n = n + 1
   end
+  return used
 end
 
 local function bank(win, p, count, s)
   local _, lh = ui.CalcTextSize("Ag")
   local btnH = lh + 10 * s
-  -- header: the banker, the slots used, the search
-  local used = 0
-  for i = 0, count - 1 do if API.inventory.SlotItem(win, p .. "BankSlot" .. i) then used = used + 1 end end
+  -- header: the banker, the slots used (as the slots counted them last frame; the first frame counts them here), the
+  -- search
+  local used = usedSlots[win]
+  if not used then
+    used = 0
+    for i = 0, count - 1 do if API.inventory.SlotItem(win, p .. "BankSlot" .. i) then used = used + 1 end end
+  end
   local banker = W.Text(win, p .. "BankerName")
   ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, banker ~= "" and banker or "Bank")
   ui.SameLine()
@@ -61,7 +71,7 @@ local function bank(win, p, count, s)
   -- the slots fill what is left above the shared bank, the coin and the buttons
   ui.BeginChild("##bankslots", 0, -(bottomH[win] or 200 * s), false)
   local gap = 6 * s
-  slots(win, p .. "BankSlot", 0, count - 1, 44 * s, gap, found)
+  usedSlots[win] = slots(win, p .. "BankSlot", 0, count - 1, 44 * s, gap, found)
   ui.EndChild()
   local _, top = ui.GetCursorScreenPos()
 

@@ -126,10 +126,23 @@ local function drawToolButton(id, x, y, w, s, label, on, tip)
   return clicked
 end
 
+-- A toolbar button as an extension component: its component id made once a button, and one draw function reading
+-- the arguments set just before (E.Component calls it at once), rather than a string and a closure a button a frame.
+local componentIds = {}
+local pendingArgs = {}
+local function drawPending()
+  local p = pendingArgs
+  return drawToolButton(p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8])
+end
 local function toolButton(id,x,y,w,s,label,on,tip)
-  return E.Component(WINDOW,"toolbar."..id:gsub("^##",""),componentContext,function()
-    return drawToolButton(id,x,y,w,s,label,on,tip)
-  end)
+  local cid = componentIds[id]
+  if not cid then
+    cid = "toolbar." .. (id:gsub("^##", ""))
+    componentIds[id] = cid
+  end
+  local p = pendingArgs
+  p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8] = id, x, y, w, s, label, on, tip
+  return E.Component(WINDOW,cid,componentContext,drawPending)
 end
 local function mapPack(x, y, s)
   local packs, selected = API.windows.ComboInfo(WINDOW, PACK_COMBO)
@@ -246,6 +259,8 @@ local F = FL.state
 local NONE = {} -- an empty list, never changed (no table a frame for "no markers" or "no NPCs")
 local questText = nil -- the quest colour as a text colour, made once
 local CATS = FL.CATS
+local FC_IDS = {} -- the kinds' button ids, made once
+for _, c in ipairs(CATS) do FC_IDS[c[1]] = "##fc" .. c[1] end
 local findRows = FL.rows
 
 -- Walk there (hs.FindNpcWalk): the navigator walks you to it; why not, in the Find page, when it cannot.
@@ -285,7 +300,7 @@ local function findPage(x, y, w, h, s, rows, own)
   for i, c in ipairs(CATS) do
     local key = c[1]
     local bx, by = x + ((i - 1) % 2) * (cw + 4 * s), cy + ((i - 1) // 2) * 30 * s
-    if toolButton("##fc" .. key, bx, by, cw, s, FL.SHORT[key] or c[2], not hidden[key], c[2]) then
+    if toolButton(FC_IDS[key], bx, by, cw, s, FL.SHORT[key] or c[2], not hidden[key], c[2]) then
       FL.setHidden(key, not hidden[key])
     end
     local col = FL.COLORS[key]

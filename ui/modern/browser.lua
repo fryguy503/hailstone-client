@@ -13,7 +13,12 @@ local openFailed = nil -- why the first tab did not open (not tried again each f
 
 local function label(st)
   local t = st.title ~= "" and st.title or st.url
-  if #t > 22 then t = t:sub(1, 21) .. "…" end
+  if #t > 22 then
+    -- cut between characters: the page's title is anyone's text, and a split UTF-8 sequence would draw as junk
+    local n = 21
+    while n > 1 and (t:byte(n + 1) or 0) & 0xC0 == 0x80 do n = n - 1 end
+    t = t:sub(1, n) .. "…"
+  end
   return t
 end
 

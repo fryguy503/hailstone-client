@@ -104,8 +104,8 @@ MapFont map_font(int index) {
     MapFont f;
     f.font = ui::ui_font(n);
     if (f.font) {
-        f.scale = f.font->FontSize / kFontPixels[static_cast<std::size_t>(n)];
-        f.height = f.font->FontSize / f.scale;
+        f.scale = f.font->LegacySize / kFontPixels[static_cast<std::size_t>(n)];
+        f.height = f.font->LegacySize / f.scale;
     } else {
         f.height = kFontPixels[static_cast<std::size_t>(n)];
     }
@@ -114,7 +114,7 @@ MapFont map_font(int index) {
 
 float text_width(const MapFont& f, std::string_view text) {
     if (!f.font || !ImGui::GetCurrentContext()) return static_cast<float>(text.size()) * f.height * 0.5f;
-    return f.font->CalcTextSizeA(f.font->FontSize, FLT_MAX, 0.0f, text.data(), text.data() + text.size()).x / f.scale;
+    return f.font->CalcTextSizeA(f.font->LegacySize, FLT_MAX, 0.0f, text.data(), text.data() + text.size()).x / f.scale;
 }
 
 // GetTextExtent / GetHeight of FontsArray[size - 1].
@@ -1461,7 +1461,7 @@ int DrawMap(lua_State* L) {
             ty = p.y - lh - 2;
         }
         MapFont f = map_font(l.size - 1);
-        float fs = f.font ? f.font->FontSize / f.scale * k : ImGui::GetFontSize();
+        float fs = f.font ? f.font->LegacySize / f.scale * k : ImGui::GetFontSize();
         ImVec2 at = S(tx, ty);
         dl->AddText(f.font, fs, ImVec2(std::trunc(at.x), std::trunc(at.y)), col, l.text.c_str(), nullptr, 300.0f * k);
     }
@@ -1477,7 +1477,7 @@ int DrawMap(lua_State* L) {
         line(gx, gy - 2, gx, gy + 3, col);
         if (!(v.labels_active || lit) || mk.mark.label.empty()) continue;
         MapFont f = map_font(1);
-        float fs = f.font ? f.font->FontSize / f.scale * k : ImGui::GetFontSize();
+        float fs = f.font ? f.font->LegacySize / f.scale * k : ImGui::GetFontSize();
         ImVec2 tp = S(gx + 4, gy - std::trunc(f.height / 2));
         dl->AddText(f.font, fs, ImVec2(std::trunc(tp.x), std::trunc(tp.y)), col, mk.mark.label.c_str(), nullptr,
                     300.0f * k);
@@ -1497,7 +1497,7 @@ int DrawMap(lua_State* L) {
                 MapFont f = map_font(1);
                 std::string name = game::display_name(sp.spawn.name);
                 float extent = text_width(f, sp.spawn.name);
-                float fs = f.font ? f.font->FontSize / f.scale * k : ImGui::GetFontSize();
+                float fs = f.font ? f.font->LegacySize / f.scale * k : ImGui::GetFontSize();
                 dl->AddText(f.font, fs, S(gx - std::trunc(extent / 2), gy - f.height - 2), col, name.c_str(), nullptr, 500.0f * k);
             }
         }
@@ -1533,14 +1533,14 @@ int DrawMap(lua_State* L) {
         }
     }
 
-    if (lasso) dl->AddRect(S(lx0, ly0), S(lx1, ly1), IM_COL32(255, 255, 255, 255), 0.0f, 0, std::max(1.0f, k));
+    if (lasso) dl->AddRect(S(lx0, ly0), S(lx1, ly1), IM_COL32(255, 255, 255, 255), 0.0f, std::max(1.0f, k), 0);
 
     // "Range = n" in black at the bottom right.
     std::string range = s.str(h, kEqStrRange, {std::to_string(v.range)});
     if (!range.empty()) {
         MapFont f = map_font(1);
         float extent = std::trunc(text_width(f, range));
-        float fs = f.font ? f.font->FontSize / f.scale * k : ImGui::GetFontSize();
+        float fs = f.font ? f.font->LegacySize / f.scale * k : ImGui::GetFontSize();
         dl->AddText(f.font, fs, S(std::trunc(cw) - extent, std::trunc(ch) - std::round(f.height)), IM_COL32(0, 0, 0, 255),
                     range.c_str());
     }
@@ -1724,7 +1724,7 @@ void draw_zone_view(MapState& s, UiHost& h, const ZoneView& zv) {
         dl->AddTriangleFilled(tip, left, back, IM_COL32(255, 255, 255, 255));
         dl->AddTriangleFilled(tip, back, right, IM_COL32(255, 255, 255, 255));
         dl->AddPolyline(std::array<ImVec2, 4>{tip, left, back, right}.data(), 4, IM_COL32(0, 0, 0, 220),
-                        ImDrawFlags_Closed, w);
+                        w, ImDrawFlags_Closed);
     }
 }
 
@@ -1895,7 +1895,7 @@ int DrawAtlas(lua_State* L) {
         float tw = text_width(f, l.text), th = f.height;
         ImVec2 a = P(static_cast<float>(l.x), static_cast<float>(l.y));
         dl->AddRectFilled(a, ImVec2(a.x + tw * k, a.y + th * k), IM_COL32(0, 0, 0, 0x64));
-        float fs = f.font ? f.font->FontSize / f.scale * k : ImGui::GetFontSize();
+        float fs = f.font ? f.font->LegacySize / f.scale * k : ImGui::GetFontSize();
         dl->AddText(f.font, fs, a, IM_COL32(255, 255, 255, 255), l.text.c_str());
     }
     ImGui::Dummy(ImVec2(std::max(pw, 1.0f), std::max(ph, 1.0f)));

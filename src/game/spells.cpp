@@ -189,7 +189,11 @@ std::optional<SpellData> SpellTable::parse_line(std::string_view line) {
     auto u8 = [&](std::size_t c) { return static_cast<std::uint8_t>(to_int(f[c])); };
     auto b = [&](std::size_t c) { return to_int(f[c]) != 0; };
     SpellData s;
-    s.id = u32(0);
+    const char* id_end = f[0].data() + f[0].size();
+    // The leading digits, as EQ_Spell_InitFromLine's atoi reads them (trailing characters are ignored).
+    const auto id = std::from_chars(f[0].data(), id_end, s.id);
+    // ID 0 is a placeholder record in stock files, with its own checksum.
+    if (id.ec != std::errc{} || (s.id != 0 && !is_spell_id(s.id))) return std::nullopt;
     s.name = std::string(f[1]);
     s.player_1 = std::string(f[2]);
     s.teleport_zone = std::string(f[3]);
@@ -305,6 +309,13 @@ std::optional<SpellData> SpellTable::parse_line(std::string_view line) {
 SpellTable::SpellTable() : default_crc_(spell_record_crc(unknown_spell_record())) {}
 
 std::size_t SpellTable::parse(std::string_view text) {
+    return parse_rows(text, false);
+}
+
+std::size_t SpellTable::parse_rows(std::string_view text, bool validate_wire_file) {
+    wire_file_max_id_.reset();
+    bool compatible = validate_wire_file && text.find('\0') == std::string_view::npos;
+    std::uint32_t max_id = 0;
     std::size_t count = 0, pos = 0;
     while (pos < text.size()) {
         std::size_t end = text.find('\n', pos);
@@ -312,20 +323,27 @@ std::size_t SpellTable::parse(std::string_view text) {
         std::string_view line = text.substr(pos, end - pos);
         pos = end + 1;
         if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-        if (!line.empty() && std::isdigit(static_cast<unsigned char>(line[0]))) {
-            // LoadTextSpells: SpellsCrc32[id] = EQ_Spell_CalcCRC of the parsed record (ids up to 45000).
-            SpellRecord record = spell_record_from_line(line);
-            std::uint32_t id = static_cast<std::uint32_t>(to_int(line.substr(0, line.find('^'))));
-            if (id > kMaxSpellId) break;
-            crcs_[id] = spell_record_crc(record);
-        }
+        if (line.empty() || line.front() == '#' || line.front() == ';') continue;
         auto s = parse_line(line);
-        if (!s) continue;
-        // LoadTextSpells stops at the first id above 45000 (@0x5c1db1).
-        if (s->id > kMaxSpellId) break;
-        spells_[s->id] = std::move(*s);
+        if (!s) {
+            compatible = false;
+            continue;
+        }
+        const std::uint32_t id = s->id;
+        crcs_[id] = spell_record_crc(spell_record_from_line(line));
+        const bool inserted = spells_.insert_or_assign(id, std::move(*s)).second;
+        if (compatible) {
+            // A wire-compatible file has plain decimal IDs only.
+            const std::string_view id_field = line.substr(0, line.find('^'));
+            compatible = inserted && !id_field.empty() &&
+                         std::all_of(id_field.begin(), id_field.end(),
+                                     [](char c) { return c >= '0' && c <= '9'; }) &&
+                         std::count(line.begin(), line.end(), '^') >= static_cast<std::ptrdiff_t>(kColumns - 1);
+            max_id = std::max(max_id, id);
+        }
         ++count;
     }
+    if (compatible && max_id > kRof2StockMaxSpellId) wire_file_max_id_ = max_id;
     build_indices();
     return count;
 }
@@ -370,10 +388,14 @@ bool spells_text_is_live_layout(std::string_view text) {
 
 bool SpellTable::load(const GameDir& game) {
     auto data = game.read("spells_us.txt");
-    if (!data) return false;
+    if (!data) {
+        wire_file_max_id_.reset();
+        return false;
+    }
     std::string_view text(reinterpret_cast<const char*>(data->data()), data->size());
     std::string converted;
-    if (spells_text_is_live_layout(text)) {
+    const bool live_layout = spells_text_is_live_layout(text);
+    if (live_layout) {
         // The live client's layout, read as RoF2's: the server's own spells_us.txt (in its assets folder) is the
         // one that matches it; this is the fallback.
         auto strings = game.read("spells_us_str.txt");
@@ -393,12 +415,11 @@ bool SpellTable::load(const GameDir& game) {
     file_crc_ = mem_checker1(bytes(*data));
     auto assoc = game.read("Resources/SpellRequirementAssociations.txt");
     assoc_file_crc_ = assoc ? mem_checker1(bytes(*assoc)) : 0;
-    parse(text);
+    parse_rows(text, !live_layout);
     return true;
 }
 
 std::uint32_t SpellTable::spell_crc(std::uint32_t id) const {
-    if (id > kMaxSpellId) return default_crc_;
     auto it = crcs_.find(id);
     return it == crcs_.end() ? default_crc_ : it->second;
 }
@@ -420,7 +441,7 @@ std::span<const std::uint32_t> SpellTable::find_all_by_name(std::string_view nam
 }
 
 const SpellData* SpellTable::by_group_and_rank(std::int32_t group, std::int32_t subgroup, std::int32_t rank,
-                                               bool below) const {
+                                               bool below, std::uint32_t maximum_id) const {
     if (group <= 0) return nullptr;
     auto it = by_group_.find(group_key(group, subgroup));
     if (it == by_group_.end()) return nullptr;
@@ -429,11 +450,15 @@ const SpellData* SpellTable::by_group_and_rank(std::int32_t group, std::int32_t 
                                            [](const RankedId& r, std::int32_t v) { return r.rank < v; });
     const auto past = std::upper_bound(ranked.begin(), ranked.end(), rank,
                                        [](std::int32_t v, const RankedId& r) { return v < r.rank; });
-    // Of exactly `rank`, the highest id.
-    if (past != first_of) return get(std::prev(past)->id);
-    // Else the highest rank (then id): of all of them at -1 (none is -1 here), or of those below `rank`.
-    if (rank == -1) return get(ranked.back().id);
-    if (below && first_of != ranked.begin()) return get(std::prev(first_of)->id);
+    const auto highest = [&](auto first, auto end) -> const SpellData* {
+        while (end != first)
+            if ((--end)->id <= maximum_id) return get(end->id);
+        return nullptr;
+    };
+    // Prefer the highest usable ID of exactly that rank, then the highest permitted lower rank.
+    if (const auto* exact = highest(first_of, past)) return exact;
+    if (rank == -1) return highest(ranked.begin(), ranked.end());
+    if (below) return highest(ranked.begin(), first_of);
     return nullptr;
 }
 

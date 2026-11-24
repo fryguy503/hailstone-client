@@ -161,7 +161,11 @@ ui.window("Looking for Guild", function()
   if not wasShown then focusFirst = true end
   wasShown = true
   local tp = tonumber(ui.GetSetting("test.lfguild.page") or "") -- testing: 1..4
-  if tp and not GPSTATE.test_lfguild_page then GPSTATE.test_lfguild_page, page = true, tp end
+  if tp and not GPSTATE.test_lfguild_page then
+    -- (a page past the four, or not a whole number, is ignored: there is no page to draw for it)
+    GPSTATE.test_lfguild_page = true
+    if DRAW[tp] then page = tp end
+  end
   if W.begin("Looking for Guild", { w = 1720, h = 1000, title = "Looking for Guild", subtitle = PAGES[page],
         hints = CH.hints(st, { { "lb", "Previous" }, { "rb", "Next" }, { "a", "Select" }, { "b", "Close" } }) }) then
     local x0, y0, x1, y1, cw = W.area()

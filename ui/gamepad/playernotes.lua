@@ -18,6 +18,7 @@ local kb = G.KF.new()
 local st = CH.new()
 local editing, refocus = false, nil
 local view = { scroll = nil }
+local scrollAt -- ui.GetTime() at the notes' last frame: the stick scrolls by the time since (held to 0.05 s)
 local wasShown = false
 
 -- The text's lines word-wrapped to `width` (cached by text and width).
@@ -53,13 +54,16 @@ local function notes(text, x0, y0, x1, y1)
   local fit = math.max(1, math.floor((y1 - y0 - 2 * p) / lh))
   local maxScroll = math.max(0, #lines - fit)
   if view.scroll == nil then view.scroll = maxScroll end
+  local now = ui.GetTime()
+  local dt = (scrollAt and now > scrollAt) and math.min(now - scrollAt, 0.05) or 0
+  scrollAt = now
   if W.focused() and pad.mode() == "menu" then
     local ry = pad.axis("ry") or 0
-    if math.abs(ry) > 0.2 then view.scroll = view.scroll + ry * 30 / math.max(20, ui.GetIO().fps or 60) end
+    if math.abs(ry) > 0.2 then view.scroll = view.scroll + ry * 30 * dt end
     if W.pressed("rb") then view.scroll = view.scroll + fit - 1 end
     if W.pressed("lb") then view.scroll = view.scroll - fit + 1 end
   end
-  if ui.IsMouseHoveringRect(x0, y0, x1, y1) then
+  if T.mouseOver(x0, y0, x1, y1) then
     local wheel = ui.GetIO().wheel or 0
     if wheel ~= 0 then view.scroll = view.scroll - wheel * 3 end
   end

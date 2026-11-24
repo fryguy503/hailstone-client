@@ -42,9 +42,7 @@ struct ImportDialog {
         auto& io = ImGui::GetIO();
         io.IniFilename = nullptr;
         io.DisplaySize = ImVec2(800.0f, 600.0f);
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         dialog.open("Current character", {{"Source character", {{"character_world.ini", "Character settings"}}, true}});
         frame();
         frame();

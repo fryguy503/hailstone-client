@@ -375,7 +375,8 @@ void PerfUi::draw(const PerfInputs& in) {
     if (ImGui::CollapsingHeader("Frame sections (avg of the last 60 frames, and the slowest)") &&
         sections_.frames() > 0) {
         static ImGuiTextFilter filter;
-        const bool filter_changed = filter.Draw("Filter##sections", -1.0f);
+        ImGui::SetNextItemWidth(-1.0f);
+        const bool filter_changed = filter.Draw("Filter##sections");
         // Worked out twice a second (kSectionsRefresh), and at once for a new filter.
         const auto now = Clock::now();
         if (filter_changed || refresh_due(sections_at_, now, kSectionsRefresh)) {

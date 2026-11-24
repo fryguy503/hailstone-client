@@ -39,7 +39,9 @@ local EXAMPLES = {
 
 local function near(a, b) return math.abs(a - b) < 0.01 end
 local function lineH() return select(2, ui.CalcTextSize("Ag")) end
-local function lineId(i) return "SEW_Line" .. (i - 1) .. "Input" end
+local LINE_IDS, ROW_IDS = {}, {} -- the line boxes' ids and the rows' push ids, made once
+for i = 1, 5 do LINE_IDS[i], ROW_IDS[i] = "SEW_Line" .. (i - 1) .. "Input", "sewl" .. i end
+local function lineId(i) return LINE_IDS[i] or ("SEW_Line" .. (i - 1) .. "Input") end
 
 -- What a line is, for its badge: colour, tooltip.
 local function describe(p)
@@ -106,6 +108,7 @@ local function roleButton(label, role, w, h, enabled)
 end
 
 -- The social as a hot button shows it: its name in its colour.
+local PREVIEW_COLOR = { 1, 1, 1, 1 } -- (filled each frame: T.Text keeps nothing)
 local function preview(name, r, g, b, bw, bh, s)
   local x, y = ui.GetCursorScreenPos()
   ui.DrawRectGradient(x, y, x + bw, y + bh, C.panelTop[1], C.panelTop[2], C.panelTop[3], 1,
@@ -113,7 +116,11 @@ local function preview(name, r, g, b, bw, bh, s)
   ui.DrawRect(x, y, x + bw, y + bh, C.borderHi[1], C.borderHi[2], C.borderHi[3], C.borderHi[4] or 1, 6 * s, 1)
   local label = name ~= "" and T.Fit(name, bw - 8 * s, T.font.small) or "(no name)"
   local tw, th = T.TextSize(label, T.font.small)
-  local col = name ~= "" and { r or C.text[1], g or C.text[2], b or C.text[3], 1 } or C.faint
+  local col = C.faint
+  if name ~= "" then
+    col = PREVIEW_COLOR
+    col[1], col[2], col[3] = r or C.text[1], g or C.text[2], b or C.text[3]
+  end
   T.Text(x + (bw - tw) / 2, y + (bh - th) / 2, label, col, T.font.small)
   ui.InvisibleButton("##sewpreview", bw, bh)
 end
@@ -234,7 +241,7 @@ end
 local function commandRow(i, lines, s, fh)
   local p = SL.Parts(lines[i])
   local col, tip = describe(p)
-  ui.PushID("sewl" .. i)
+  ui.PushID(ROW_IDS[i] or ("sewl" .. i))
   -- the badge: the line's number in what it is
   local x, y = ui.GetCursorScreenPos()
   local bw = 24 * s
@@ -412,10 +419,32 @@ local OPTS = {
   resizable = { 460, 480 },
 }
 
+-- What the body draws the same every frame, made once: the mode switch's labels and tips, the swatches' ids and
+-- tips and their options (filled for each swatch: K.Swatch keeps nothing), the social colours (hs.SocialColors: a
+-- fixed palette, read once as luasocial.lua does).
+local MODES = { "Commands", "Lua" }
+local MODE_TIPS = {
+  "Five lines, run in turn when the button is pressed.",
+  "Edit this social as Lua: the lines are saved, then open in the Lua social editor as mq.cmd calls. Lua can " ..
+      "branch on Shift / Ctrl / Alt, read the game and draw the button's face.",
+}
+local SWATCH_IDS, SWATCH_TIPS = {}, {}
+local function swatchStrings(i)
+  local id = SWATCH_IDS[i]
+  if not id then
+    id = "##sewc" .. i
+    SWATCH_IDS[i], SWATCH_TIPS[i] = id, "Colour " .. (i - 1)
+  end
+  return id, SWATCH_TIPS[i]
+end
+local SWATCH_OPTS = { width = 0, selected = false, tooltip = nil }
+local socialColors
+
 local function body(x, y, w, h, s)
   local n = API.socials.EditorSocial()
   local saved = n and API.luasocials.Get(n) or nil
-  local colors = API.socials.Colors() or {}
+  socialColors = socialColors or API.socials.Colors()
+  local colors = socialColors or {}
   local nr, ng, nb = API.windows.ChildColor(WINDOW, "SEW_NameInput")
   local name = W.Text(WINDOW, "SEW_NameInput")
   local lines = {}
@@ -467,11 +496,7 @@ local function body(x, y, w, h, s)
   ui.EndGroup()
   local segW, segH = 156 * s, 26 * s
   ui.SetCursorScreenPos(x + w - segW, hy + (ph - segH) / 2)
-  local mode = K.Segmented("##sewmode", { "Commands", "Lua" }, 1, segW, segH, s, {
-    "Five lines, run in turn when the button is pressed.",
-    "Edit this social as Lua: the lines are saved, then open in the Lua social editor as mq.cmd calls. Lua can " ..
-        "branch on Shift / Ctrl / Alt, read the game and draw the button's face.",
-  })
+  local mode = K.Segmented("##sewmode", MODES, 1, segW, segH, s, MODE_TIPS)
   if mode == 2 and n then
     -- saved first (named "Lua" when it has lines but no name), so the Lua editor converts what is on screen
     local keep = name
@@ -504,8 +529,9 @@ local function body(x, y, w, h, s)
   local sw = math.min(28 * s, (aw - gap * (perRow - 1)) / perRow)
   for i, c in ipairs(colors) do
     if (i - 1) % perRow ~= 0 then ui.SameLine(0, gap) end
-    if K.Swatch("##sewc" .. i, c[1], c[2], c[3], sw * 0.75, s, { width = sw, selected = color == i - 1,
-          tooltip = "Colour " .. (i - 1) }) then
+    local id, tip = swatchStrings(i)
+    SWATCH_OPTS.width, SWATCH_OPTS.selected, SWATCH_OPTS.tooltip = sw, color == i - 1, tip
+    if K.Swatch(id, c[1], c[2], c[3], sw * 0.75, s, SWATCH_OPTS) then
       API.windows.ClickChild(WINDOW, "SEW_TC" .. (i - 1) .. "Button", "left")
     end
   end

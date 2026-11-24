@@ -4,9 +4,14 @@
 #include "game/eq_strings.h"
 #include "game/item_compare.h"
 #include "game/item_display.h"
+#include "game/mechanics/character.h"
+#include "game/mechanics/tables.h"
+#include "game/spell_display.h"
+#include "game/spells.h"
 #include "ui/item_windows.h"
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <string>
 
@@ -105,10 +110,6 @@ TEST_CASE("Item descriptions show loot effects when the spell table cannot resol
     game::ItemDisplayContext ctx;
     ctx.strings = &s;
     ctx.show_spell_descriptions = true;
-    ctx.spell = [](std::int32_t id) -> const game::SpellData* {
-        CHECK(id == 50002);
-        return nullptr;
-    };
 
     net::ItemPacket packet;
     packet.type = net::kItemPacketLoot;
@@ -134,7 +135,6 @@ TEST_CASE("Item descriptions show a click effect without a local spell record, a
     s.set(0xbd7, "(Any Slot)");
     game::ItemDisplayContext ctx;
     ctx.strings = &s;
-    ctx.spell = [](std::int32_t) -> const game::SpellData* { return nullptr; };
     net::Item it;
     auto& click = it.effects[net::kEffectClick];
     click.type = 1;
@@ -145,6 +145,113 @@ TEST_CASE("Item descriptions show a click effect without a local spell record, a
     CHECK(game::build_item_display(it, ctx).description == "Effect: Gate (Any Slot)<BR><BR>");
     click.name.clear(); // stock EQEmu's "no effect"
     CHECK(game::build_item_display(it, ctx).description.find("Effect:") == std::string::npos);
+}
+
+TEST_CASE("Item descriptions show effect details from a spell record when dbstr has no description") {
+    game::EqStrings strings;
+    strings.set(0xbdc, "Effect: %1 %2");
+    strings.set(0x213b, "Spell Effect: %1");
+    strings.set(0xc1e, "Duration: %1");
+    strings.set(0x2412, "Recast Time: %1");
+    strings.set(0x2417, "Recast Type: %1");
+    strings.set(0x1aa4, "Level: %1");
+    const auto spell_line = [](std::string_view id, std::string_view description_id) {
+        std::array<std::string_view, 237> fields{};
+        fields[0] = id;
+        fields[1] = "Temper the Flesh";
+        fields[16] = "7";  // one tick per level, capped at ten
+        fields[17] = "10";
+        fields[20] = "20";
+        fields[21] = "20";
+        fields[70] = "100";
+        fields[71] = "100";
+        std::fill(fields.begin() + 86, fields.begin() + 98, "254");
+        fields[86] = "46"; // Fire Resist
+        fields[87] = "47"; // Cold Resist
+        fields[98] = "6";  // self
+        fields[155] = description_id;
+        std::string line;
+        for (const auto field : fields) {
+            line += field;
+            line += '^';
+        }
+        line.back() = '\n';
+        return line;
+    };
+    game::SpellTable spells;
+    REQUIRE(spells.parse(spell_line("50820", "0")) == 1);
+    game::SpellTable stock_spells;
+    REQUIRE(stock_spells.parse(spell_line("1234", "0")) == 1);
+    game::mechanics::CharacterSheet sheet;
+    game::mechanics::GameTables tables;
+    game::mechanics::Character character(sheet, tables, {});
+    game::ItemDisplayContext ctx;
+    ctx.strings = &strings;
+    ctx.spells = &spells;
+    ctx.character = &character;
+    ctx.player_level = 55;
+    net::ItemPacket packet;
+    packet.type = net::kItemPacketLoot;
+    auto& item = packet.item;
+    item.id = 148221;
+    item.name = "Bracers of Tempered Winter";
+    item.slot = net::ItemSlot::corpse(23);
+    auto& click = item.effects[net::kEffectClick];
+    click.effect = -1;
+    click.name = "Temper the Flesh";
+    click.type = 4;
+    click.level = click.level2 = 55;
+    click.extra[1] = 2000;
+    click.extra[2] = 600;
+    click.extra[3] = 111;
+    const auto display = [&] {
+        const auto loot = net::decode_item_packet(net::encode_item_packet(false, packet));
+        REQUIRE(loot);
+        return game::build_item_display(loot->item, ctx).description;
+    };
+    const auto check_details = [&] {
+        const auto text = display();
+        CHECK(text.find("Effect: Temper the Flesh (Must Equip.  Casting Time: 2.0)") != std::string::npos);
+        CHECK(text.find("Recast Time: 10m 0s, Recast Type: 111") != std::string::npos);
+        CHECK(text.find("Increase Fire Resist by 20") != std::string::npos);
+        CHECK(text.find("Increase Cold Resist by 20") != std::string::npos);
+        CHECK(text.find("Duration: 1m") != std::string::npos);
+    };
+
+    ctx.spells = &stock_spells;
+    CHECK(display().find("Increase Fire Resist") == std::string::npos); // a stock spell cannot explain a masked ID
+    ctx.spells = &spells;
+    check_details();
+    const auto loot = net::decode_item_packet(net::encode_item_packet(false, packet));
+    REQUIRE(loot);
+    const auto native = ui::item_info_lines(loot->item, {}, {}, ctx);
+    CHECK(std::ranges::find(native, "Spell Effect:  Temper the Flesh") != native.end());
+    CHECK(std::ranges::find(native, "Slot 1: Increase Fire Resist by 20") != native.end());
+    CHECK(std::ranges::find(native, "Slot 2: Increase Cold Resist by 20") != native.end());
+    CHECK(std::ranges::find(native, "Duration: 1m") != native.end());
+    REQUIRE(spells.parse(spell_line("50821", "0")) == 1);
+    CHECK(display().find("Increase Fire Resist") == std::string::npos); // duplicate name
+    click.effect = 50820;
+    check_details(); // the numeric ID takes priority over names
+
+    REQUIRE(spells.parse(spell_line("50820", "1234")) == 1);
+    ctx.db_string = [](std::uint32_t, std::uint32_t) { return std::string(); };
+    check_details(); // a spell can reference a missing dbstr entry
+    ctx.db_string = [](std::uint32_t id, std::uint32_t type) {
+        return id == 1234 && type == 6 ? std::string("An authored spell description.") : std::string();
+    };
+    CHECK(display().find("Spell Effect: An authored spell description.") != std::string::npos);
+    CHECK(display().find("Increase Fire Resist") == std::string::npos);
+    { // the fallback window prefers the authored text too
+        const auto authored = net::decode_item_packet(net::encode_item_packet(false, packet));
+        REQUIRE(authored);
+        const auto lines = ui::item_info_lines(authored->item, {}, {}, ctx);
+        CHECK(std::ranges::find(lines, "An authored spell description.") != lines.end());
+        CHECK(std::ranges::find(lines, "Slot 1: Increase Fire Resist by 20") == lines.end());
+    }
+    ctx.show_spell_descriptions = false;
+    CHECK(display().find("Effect: Temper the Flesh") != std::string::npos);
+    CHECK(display().find("Spell Effect:") == std::string::npos);
 }
 
 TEST_CASE("item_display_text_width: the longer of name and flags, then the other lines") {
@@ -215,9 +322,6 @@ TEST_CASE("weapon_damage_bonus: 0x7e8a10") {
     // 2H at 60: 11 + ((60-30)/5+1 = 7, +1 over 50, + 40 * (10 + 4 over 54/56/58/59) / 40 = 14) + delay 40: 1
     CHECK(game::weapon_damage_bonus(60, 1, two) == 11 + 7 + 1 + 14 + 1);
 }
-
-#include "game/spell_display.h"
-#include "game/spells.h"
 
 TEST_CASE("build_spell_display: CSpellDisplayWnd::SetSpell's lines") {
     game::EqStrings s;

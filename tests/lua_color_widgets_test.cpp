@@ -28,9 +28,7 @@ struct ColorWidgets {
         io.IniFilename = nullptr;
         io.DisplaySize = ImVec2(1000, 1000);
         io.DeltaTime = 1.0f / 60.0f;
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         luaL_openlibs(lua.get());
         hailstone::ui::lua::register_ui_api(lua.get());
         hailstone::ui::lua::set_consent_guard(false);
@@ -62,7 +60,7 @@ struct ColorWidgets {
         ImGui::Render();
         const auto* data = ImGui::GetDrawData();
         REQUIRE(data);
-        for (int i = 0; i < data->CmdListsCount; ++i) {
+        for (int i = 0; i < data->CmdLists.Size; ++i) {
             for (const auto& vertex : data->CmdLists[i]->VtxBuffer) {
                 CHECK(std::isfinite(vertex.pos.x));
                 CHECK(std::isfinite(vertex.pos.y));
@@ -265,7 +263,7 @@ R,G,B,CHANGED=ui.ColorPicker3('still usable',0.2,0.4,0.6,ui.ColorEditFlags.NoInp
 
 TEST_CASE("Lua colour widgets: conflicting and unknown flag bits stay within supported RGB modes") {
     ColorWidgets widgets;
-    const ImGuiColorEditFlags previous = GImGui->ColorEditOptions;
+    const ImGuiColorEditFlags previous = GImGui->IO.ConfigColorEditFlags;
     widgets.frame(R"lua(
 local f=ui.ColorEditFlags
 local choices=f.PickerHueBar|f.PickerHueWheel|f.Uint8|f.Float|f.DisplayRGB|f.DisplayHSV|f.DisplayHex
@@ -285,5 +283,5 @@ X0,Y0,X1,Y1=ui.GetItemRect()
     CHECK_FALSE(widgets.boolean("PRESSED"));
     CHECK(widgets.number("X1") - widgets.number("X0") == doctest::Approx(4096));
     CHECK(widgets.number("Y1") > widgets.number("Y0"));
-    CHECK(GImGui->ColorEditOptions == previous);
+    CHECK(GImGui->IO.ConfigColorEditFlags == previous);
 }

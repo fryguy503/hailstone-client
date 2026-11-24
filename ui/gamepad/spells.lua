@@ -27,11 +27,18 @@ end
 local tintEdge = { 1, 1, 1, 1 } -- a gem's tint, as its edge's colour
 
 -- One gem at x0, y0 (size): its holder, icon, cool-down (hs.GemInfo: the gem's art, tint, cool-down and tooltip).
--- Returns the spell name ("" when empty).
-local function drawGem(g, x0, y0, size, alpha)
+-- Returns the spell name ("" when empty). filled: gemInfo[g] was filled this frame (the HUD column's count asked it
+-- before the gems had a place), so only the cool-down's top is asked, and only while it cools down.
+local function drawGem(g, x0, y0, size, alpha, filled)
   local x1, y1 = x0 + size, y0 + size
   local r = T.px(10)
-  local info = API.spells.GemInfo(GEMS, GEM_IDS[g], gemInfo[g], y0, y1)
+  local info
+  if filled then
+    info = gemInfo[g]
+    info.top = info.overlay and API.spells.GemOverlay(GEMS, GEM_IDS[g], y0, y1) or nil
+  else
+    info = API.spells.GemInfo(GEMS, GEM_IDS[g], gemInfo[g], y0, y1)
+  end
   local tex = info.tex
   local has = type(tex) == "userdata"
   T.rect(x0, y0, x1, y1, has and C.raised or C.sunken, alpha, r)
@@ -94,7 +101,7 @@ ui.window("HUD Spell Gems", function()
       local clicked = ui.InvisibleButton("##gem", size, size)
       local hovered = ui.IsItemHovered()
       ui.PopID()
-      local name = drawGem(g, x0, y0, size)
+      local name = drawGem(g, x0, y0, size, nil, true)
       if hovered then
         T.outline(x0, y0, x0 + size, y0 + size, C.accent, 1, T.px(10), T.px(2))
         if name ~= "" then ui.SetTooltip(name) end
@@ -262,6 +269,9 @@ local function drawSets(x0, y0, x1, y1, wx, wy)
   local gap = T.px(14)
   local cardW = (x1 - x0 - gap) / 2
   local cardH = math.min(T.px(132), (y1 - cy0 - 4 * gap) / 5)
+  T.font(22)
+  local _, th = ui.CalcTextSize("Ag") -- (once for the cards, in their font)
+  T.unfont()
   for k, n in ipairs(used) do
     local set = sets[n]
     local col2, row = (k - 1) % 2, (k - 1) // 2
@@ -277,7 +287,6 @@ local function drawSets(x0, y0, x1, y1, wx, wy)
     local r = T.px(12)
     T.rect(cx0, ry0, cx0 + cardW, ry0 + cardH, C.raised, focused and 1 or 0.8, r)
     T.font(22)
-    local _, th = ui.CalcTextSize("Ag")
     T.draw(cx0 + T.px(16), ry0 + T.px(12), T.fit(set.name, cardW - T.px(32)), C.text)
     T.unfont()
     local isz = math.min(T.px(48), (cardW - T.px(32) - 11 * T.px(6)) / 12)

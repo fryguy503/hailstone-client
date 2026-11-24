@@ -271,9 +271,7 @@ TEST_CASE("Map windows: an earlier version's AutoZRange sets both Auto Z ranges"
 TEST_CASE("Map windows: a press after another zone's map is loaded marks nothing") {
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     hailstone::test::ScratchDir dir_scratch("map_windows_hover_test");
     const fs::path dir = dir_scratch.path();
     fs::create_directories(dir / "maps");

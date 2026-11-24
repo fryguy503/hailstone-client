@@ -23,6 +23,16 @@ local M = {
   packFocused = false, -- the Map Pack dropdown had the focus last frame (closed)
 }
 
+-- The frame's time step for the stick's pan: ImGui's time since the map's last frame (the frame rate is an average
+-- over many frames, so a hitch would pan too far or too little); held to 0.1 s after a gap.
+local panAt
+local function panStep()
+  local now = ui.GetTime()
+  local dt = (panAt and now > panAt) and math.min(now - panAt, 0.1) or 0
+  panAt = now
+  return dt
+end
+
 local function setZoom(step)
   M.zoom = math.max(1, math.min(#ZOOMS, M.zoom + step))
 end
@@ -116,13 +126,14 @@ ui.window("Map", function()
       -- panning: the mouse dragging, or a stick (map units per second at full deflection)
       local io = ui.GetIO()
       local dx, dy = 0, 0
+      local dt = panStep()
       if mapInput and ui.IsItemActive() and ui.IsMouseDragging(ui.Mouse.Left) then
         dx, dy = -(io.mouseDX or 0) / k, -(io.mouseDY or 0) / k
       end
       if mapInput and W.focused() and pad.connected() then
         local sx = (pad.axis("lx") or 0) + (pad.axis("rx") or 0)
         local sy = (pad.axis("ly") or 0) + (pad.axis("ry") or 0)
-        local speed = (x1 - x0) * 0.8 / k * (1 / math.max(io.fps or 60, 10))
+        local speed = (x1 - x0) * 0.8 / k * dt
         dx, dy = dx + sx * speed, dy + sy * speed
       end
       if dx ~= 0 or dy ~= 0 then

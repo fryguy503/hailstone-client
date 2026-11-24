@@ -125,9 +125,7 @@ struct PackRig {
         fs::copy(src, dir / pack, fs::copy_options::recursive);
         ctx = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
-        unsigned char* px = nullptr;
-        int w = 0, h = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         s = std::make_unique<Session>(dir, pack);
         s->frames(2);
         L = s->lua.state();
@@ -200,9 +198,7 @@ TEST_CASE("UI packs: blocked bases cannot start or retain a Lua presentation and
 
         PolicyUi() {
             ImGui::GetIO().IniFilename = nullptr;
-            unsigned char* pixels = nullptr;
-            int width = 0, height = 0;
-            ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+            ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
             auto put = [](const fs::path& file, const char* text) {
                 fs::create_directories(file.parent_path());
                 std::ofstream(file) << text;
@@ -438,6 +434,41 @@ TEST_CASE("UI packs: the spell set editor is the character's: another character,
         CHECK_FALSE(r.called("save"));
         CHECK(r.no_errors());
     }
+}
+
+TEST_CASE("UI packs (modern): the Lua social editor is the character's: another character, or a camp, closes it") {
+    PackRig r("modern");
+    // social 6 asked for once, its code editor's calls listed, and nothing saved behind the test's back
+    r.run(R"lua(
+fake.req = 5
+hs.LuaSocialEditRequest = function() local n = fake.req fake.req = nil return n end
+hs.LuaSocial = function(n) return { name = "Old", color = 0, press = "mq.cmd('/sit')", face = "", lua = true } end
+hs.SetLuaSocial = function(n) calls[#calls + 1] = "set " .. n end
+local CodeEditor = ui.CodeEditor
+ui.CodeEditor = function(...) calls[#calls + 1] = "code" return CodeEditor(...) end
+)lua");
+    r.s->frames(3);
+    r.run("calls = {}");
+    r.s->frames(1);
+    CHECK(r.called("code"));
+    r.run("fake.name = 'Bravo'");
+    r.s->frames(2);
+    r.run("calls = {}");
+    r.s->frames(1);
+    CHECK_FALSE(r.called("code"));
+    // opened again, then camped and back as the same name: gone too
+    r.run("fake.req = 5");
+    r.s->frames(3);
+    r.run("calls = {}");
+    r.s->frames(1);
+    CHECK(r.called("code"));
+    r.run("fake.inGame = false");
+    r.s->frames(2);
+    r.run("fake.inGame = true calls = {}");
+    r.s->frames(2);
+    CHECK_FALSE(r.called("code"));
+    CHECK_FALSE(r.called("set "));
+    CHECK(r.no_errors());
 }
 
 TEST_CASE("UI packs (gamepad): the spell book's bar is the scribe gauge while a scroll is scribed") {

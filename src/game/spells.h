@@ -3,11 +3,13 @@
 // Spell data and the spell rules the client decides itself.
 //
 // Spell records come from the game's spells_us.txt: one line per spell, 237
-// '^'-separated columns, loaded as the original's Spellmanager::LoadTextSpells
-// @0x5c1c30 / EQ_Spell_InitFromLine @0x4ae710 do (lines that do not
-// start with a digit are skipped; an id above 45000 stops the load). Column
-// numbers follow the original's field map, which matches EQEmu's spells_new
-// columns.
+// '^'-separated columns, using the original's SpellManager::LoadTextSpells
+// @0x5c1c30 / EQ_Spell_InitFromLine @0x4ae710 field map, which matches EQEmu's
+// spells_new columns. Hailstone extension: the original stops the load at the
+// first ID above 45000 and IsValidSpellID takes 1..45000; here IDs up to the
+// signed spell ID fields' range load and are valid (is_spell_id). Rank
+// substitution stays within the connection's limit (45000 unless a server
+// add-on raises it), and the zone entry keeps RoF2's checksums.
 //
 // The rules (cast checks, cast time, memorize speed, chat lines) follow the
 // original's casting functions and CEverQuest::ReportSuccessfulHit @0x52ee40
@@ -16,6 +18,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -32,7 +35,15 @@ namespace hailstone { class GameDir; }
 namespace hailstone::game {
 
 inline constexpr std::uint32_t kNoSpell = 0xffffffff;
-inline constexpr std::uint32_t kMaxSpellId = 45000;  // IsValidSpellID: 1..45000
+inline constexpr std::uint32_t kRof2StockMaxSpellId = 45000;
+
+// Valid for signed spell fields such as item effects and casting state. 0xfffe (poison proc)
+// and 0xffff (unknown spell) retain their combat meanings, independent of the server's spell range.
+constexpr bool is_spell_id(std::uint32_t id) {
+    return id > 0 && id <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) &&
+           id != 0xfffeu && id != 0xffffu;
+}
+
 inline constexpr int kSpellGems = 12;                 // gems 0..11 (CastingSlot Gem1..Gem12)
 inline constexpr int kItemGem = 12;                   // CastingSlot::Item
 inline constexpr int kBaseSpellGems = 8;              // CanUseMemorizedSpellSlot: gems 0..7 always
@@ -162,6 +173,11 @@ public:
     // Reads spells_us.txt from the game directory (the server's assets first); false when it is missing. The live
     // client's layout (spells_text_is_live_layout) is read through spells_text_from_live.
     bool load(const GameDir& game);
+    // Whether load() read a complete native RoF2 spell file with at least one record past the stock range and
+    // all IDs within a server's optional extended wire range. The table also retains records above that range.
+    bool compatible_with_wire_limit(std::uint32_t maximum) const {
+        return wire_file_max_id_ && *wire_file_max_id_ <= maximum;
+    }
     // Parses the file's text. Returns the number of records loaded.
     std::size_t parse(std::string_view text);
     // One line (without the line end); nullopt when it is not a spell record.
@@ -177,14 +193,14 @@ public:
     // spells of SpellGroup `group` (> 0; the load hashes them by it): among those of SpellSubGroup `subgroup`, the
     // one of exactly `rank`; else, when `rank` is -1 or `below` for lower ranks, the highest rank seen. Null when
     // none. Of equal ranks the original takes the first in its hash chain; here the highest id.
-    const SpellData* by_group_and_rank(std::int32_t group, std::int32_t subgroup, std::int32_t rank, bool below) const;
+    const SpellData* by_group_and_rank(std::int32_t group, std::int32_t subgroup, std::int32_t rank, bool below,
+                                      std::uint32_t maximum_id = std::numeric_limits<std::uint32_t>::max()) const;
     std::size_t size() const { return spells_.size(); }
     bool empty() const { return spells_.empty(); }
 
     // SpellManager_GetSpellCRC @0x432560: EQ_Spell_CalcCRC of the spell's
-    // record as the file gave it (game/spell_record.h), for ids 0..45000
-    // (unsigned) the Unknown Spell's CRC when the file has no such line, and
-    // above 45000 the Unknown Spell's too. OP_CastSpell carries it.
+    // record as the file gave it (game/spell_record.h) or the Unknown Spell's
+    // CRC when the table has no such record. OP_CastSpell carries it.
     std::uint32_t spell_crc(std::uint32_t id) const;
     // ClientSpellManager::LoadSpells' ComputeFileChecksum @0x808d90 of the
     // two files (__MemChecker1: CRC-32 of the whole file; 0 when it cannot be
@@ -193,6 +209,8 @@ public:
     std::uint32_t assoc_file_crc() const { return assoc_file_crc_; }
 
 private:
+    std::size_t parse_rows(std::string_view text, bool validate_wire_file);
+    std::optional<std::uint32_t> wire_file_max_id_;
     std::unordered_map<std::uint32_t, SpellData> spells_;
     std::unordered_map<std::uint32_t, std::uint32_t> crcs_;
     // Built by parse from spells_, so find_by_name and by_group_and_rank do not scan the table (the merchant window

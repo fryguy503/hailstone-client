@@ -4,6 +4,7 @@
 #include <bit>
 #include <cstdio>
 #include <format>
+#include <limits>
 
 #include "game/augments.h"
 #include "game/character_property_sets.h"
@@ -14,6 +15,8 @@
 #include "game/mechanics/item_stats.h"
 #include "game/mechanics/tables.h"
 #include "game/spell_description.h"
+#include "game/spell_display.h"
+#include "game/spell_effect_text.h"
 #include "game/spells.h"
 
 // Each section names the original's code it follows (CItemDisplayWnd_BuildItemInfo and the helpers it calls,
@@ -232,25 +235,38 @@ constexpr std::uint32_t kSizeNames[5] = {3128, 3129, 3130, 3131, 3132};
 
 std::string size_name(const ItemDisplayContext& ctx, std::uint32_t s) { return str(ctx, kSizeNames[s < 4 ? s : 4]); }
 
+const SpellData* effect_spell(const net::ItemEffect& effect, const SpellTable* spells) {
+    if (!spells) return nullptr;
+    if (effect.present()) return spells->get(static_cast<std::uint32_t>(effect.effect));
+    if (effect.effect != -1 || effect.name.empty()) return nullptr;
+    // Servers may mask an extended ID while sending its name. Only use an unambiguous extended spell name.
+    const auto ids = spells->find_all_by_name(effect.name);
+    if (ids.size() != 1 || ids.front() <= kRof2StockMaxSpellId) return nullptr;
+    const auto* spell = spells->get(ids.front());
+    return spell && spell->name == effect.name ? spell : nullptr;
+}
+
+struct DisplayedItemSpell {
+    const net::ItemEffect& effect;
+    const SpellData& spell;
+    net::ItemEffectKind kind;
+};
+
 // ItemDisplay_BuildSpellEffectText @0x6a1c70: one line per item spell (click, combat, worn, focus, the bard focus),
-// then the augments' (`recurse`). The spells with a description go to `described` for the description blocks.
+// then the augments' (`recurse`). Resolved spells go to `described` for the description blocks.
 // The original needs no spell record to show a line: the click effect needs IsValidSpellID @0x4ad150 (1..45000), the
 // others an ID above 0, and the name is the item's override or the spell's. Here any ID above 0 shows (an extension
 // for servers past 45000 spells), as does a masked -1 that carries a name (ItemEffect::displayable). Without a name or
 // a local record the line reads "spell N"; the original reads its spell table regardless.
 std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& ctx, bool recurse,
-                              std::vector<const net::ItemEffect*>& described) {
+                              std::vector<DisplayedItemSpell>& described) {
     std::string out;
     // A charm whose stat scale is below 1 shows no effects.
     bool show = !(item.charm_file_id != 0 && static_cast<std::int32_t>(item.scaled_value) < 1);
-    auto lookup = [&](const net::ItemEffect& e) { return e.present() && ctx.spell ? ctx.spell(e.effect) : nullptr; };
     auto name_of = [](const net::ItemEffect& e, const SpellData* s) {
         if (!e.name.empty()) return description_plaintext(e.name);
         if (s && !s->name.empty()) return description_plaintext(s->name);
         return std::format("spell {}", e.effect);
-    };
-    auto remember = [&](const net::ItemEffect& e, const SpellData* s) {
-        if (s && s->description_id != 0) described.push_back(&e);
     };
     if (item.item_type != 20 && show) {
         const auto& e = item.effects[net::kEffectClick];
@@ -273,9 +289,9 @@ std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& c
                 break;
             default: how = str(ctx, 0xbdb); break;
             }
-            const SpellData* spell = lookup(e);
+            const SpellData* spell = effect_spell(e, ctx.spells);
             out += str_args(ctx, 0xbdc, {name_of(e, spell), how}) + "<BR>";
-            remember(e, spell);
+            if (spell && ctx.show_spell_descriptions) described.push_back({e, *spell, net::kEffectClick});
             if (e.recast_delay() > 0) {
                 // 0x4f1a70: the recast delay as time text; "Recast Type: n" when it has one.
                 std::uint32_t s = e.recast_delay();
@@ -285,13 +301,13 @@ std::string spell_effect_text(const net::Item& item, const ItemDisplayContext& c
                 out += line + "<BR>";
             }
         }
-        auto line = [&](int kind, std::uint32_t fmt, bool suffix) {
+        auto line = [&](net::ItemEffectKind kind, std::uint32_t fmt, bool suffix) {
             const auto& x = item.effects[static_cast<std::size_t>(kind)];
             if (!x.displayable()) return;
-            const SpellData* s = lookup(x);
+            const SpellData* s = effect_spell(x, ctx.spells);
             if (suffix) out += str_args(ctx, 0xbdc, {name_of(x, s), str(ctx, fmt)}) + "<BR>";
             else out += str_args(ctx, fmt, {name_of(x, s)}) + "<BR>";
-            remember(x, s);
+            if (s && ctx.show_spell_descriptions) described.push_back({x, *s, kind});
         };
         line(net::kEffectProc, 0xbd5, true);   // Effect: name (Combat)
         line(net::kEffectWorn, 0xbd8, true);   // Effect: name (Worn)
@@ -378,11 +394,37 @@ AugmentStrings aug_strings(const ItemDisplayContext& ctx) {
     return a;
 }
 
-// The spell's description (GetSpellDescriptionText), as the effects string's "Spell Effect:" blocks use it.
-std::string spell_description(const SpellData& s, const ItemDisplayContext& ctx) {
-    if (!ctx.db_string || s.description_id == 0) return {};
-    std::string text = ctx.db_string(static_cast<std::uint32_t>(s.description_id), 6);
-    return spell_description_text(s, text, ctx.character, ctx.player_level, ctx.player_class);
+std::vector<std::string> generated_spell_details(const SpellData& spell, const ItemDisplayContext& ctx,
+                                                 net::ItemEffectKind kind) {
+    SpellEffectTextContext effect_ctx;
+    effect_ctx.spells = ctx.spells;
+    auto lines = spell_effect_lines(spell, effect_ctx);
+    if (ctx.character && (kind == net::kEffectClick || kind == net::kEffectProc || kind == net::kEffectScroll)) {
+        const auto ticks = ctx.character->spell_duration(spell, static_cast<std::uint8_t>(ctx.player_level));
+        if (ticks > 0 && ticks <= std::numeric_limits<std::int32_t>::max() / 6) {
+            const auto duration = format_duration_hms(ticks * 6);
+            lines.push_back(ctx.strings && ctx.strings->has(0xc1e) ? str_args(ctx, 0xc1e, {duration})
+                                                                 : "Duration: " + duration);
+        } else if (ticks == -1) {
+            lines.push_back(str_or(ctx, 0xc1f, "Duration: Permanent"));
+        }
+    }
+    return lines;
+}
+
+// Prefer GetSpellDescriptionText's authored text. Custom spells can supply effect records without a dbstr entry.
+// Hailstone extension: without authored text the original shows no block; here the effect slots and duration are
+// generated instead (docs/item-compare.md), for stock spells without a description too.
+std::string spell_details(const SpellData& spell, const ItemDisplayContext& ctx, net::ItemEffectKind kind,
+                          std::uint32_t format_id) {
+    if (ctx.db_string && spell.description_id > 0) {
+        const auto text = ctx.db_string(static_cast<std::uint32_t>(spell.description_id), 6);
+        const auto formatted = spell_description_text(spell, text, ctx.character, ctx.player_level, ctx.player_class);
+        if (!formatted.empty()) return str_args(ctx, format_id, {formatted}) + "<BR>";
+    }
+    std::string out;
+    for (const auto& line : generated_spell_details(spell, ctx, kind)) out += description_plaintext(line) + "<BR>";
+    return out;
 }
 
 // CItemDisplayWnd_CreateEvolvingString @0x69e010: 6146 "Evolving: Level %1/%2 %3%% %4" with the level (ItemClient
@@ -478,7 +520,7 @@ std::string collectible_trophy_text(const net::Item& item, const ItemDisplayCont
 // CItemDisplayWnd_CreateEffectsString @0x6a6810 (what this client keeps of an item).
 std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
     std::string a, b, c, d; // the original's four text buffers
-    std::vector<const net::ItemEffect*> described;
+    std::vector<DisplayedItemSpell> described;
     if (item.item_class == 0) {
         if (item.is_lore() && item.lore_group > 0 && ctx.db_string) {
             std::string group = ctx.db_string(static_cast<std::uint32_t>(item.lore_group), 7);
@@ -490,7 +532,7 @@ std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
             const auto& click = item.effects[net::kEffectClick];
             if (click.type == 3 || item.item_type == 21) {
                 d += str_args(ctx, 0xbb9, {std::to_string(static_cast<std::int32_t>(item.charges))}) + "<BR>";
-            } else if (click.present() && ctx.spell && ctx.spell(click.effect) && click.max_charges() > 0) {
+            } else if (click.present() && click.max_charges() > 0 && effect_spell(click, ctx.spells)) {
                 d += (static_cast<std::int32_t>(item.charges) < 1 ? str(ctx, 0xbba)
                                                                     : str_args(ctx, 0xbbb, {std::to_string(item.charges)})) +
                      "<BR>";
@@ -501,7 +543,7 @@ std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
         }
         if (item.item_type == 20) { // a scroll: the levels each usable class gets the spell at
             const auto& sc = item.effects[net::kEffectScroll];
-            const SpellData* s = sc.present() && ctx.spell ? ctx.spell(sc.effect) : nullptr;
+            const SpellData* s = sc.present() ? effect_spell(sc, ctx.spells) : nullptr;
             if (s) {
                 std::string levels;
                 for (int k = 0; k < 16; ++k)
@@ -511,8 +553,8 @@ std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
                     auto line = ctx.level_needed_line ? ctx.level_needed_line(*s) : std::nullopt;
                     c += (line ? *line : str_args(ctx, 0xbbc, {levels})) + "<BR>";
                 }
-                if (ctx.show_spell_descriptions && s->description_id != 0)
-                    c += str_args(ctx, s->is_skill ? 0x16b4 : 0x213b, {spell_description(*s, ctx)}) + "<BR>";
+                if (ctx.show_spell_descriptions)
+                    c += spell_details(*s, ctx, net::kEffectScroll, s->is_skill ? 0x16b4 : 0x213b);
             }
         }
         if (item.item_type == 40) d += compass_text(ctx);
@@ -522,16 +564,14 @@ std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
         if (item.tradeskills) d += str(ctx, 0x236b) + "<BR>";
         d += augment_effects_restriction(item, aug_strings(ctx)); // ItemType 54 with an AugRestrictions text
         d += meal_size_text(item, ctx);
-        if (ctx.show_spell_descriptions)
-            for (const net::ItemEffect* e : described) {
-                const SpellData* s = ctx.spell ? ctx.spell(e->effect) : nullptr;
-                if (!s) continue;
-                d += "<BR>";
-                d += "<C " + color_tag(kSpellName) + ">" + description_plaintext(e->name.empty() ? s->name : e->name) +
-                     "</C><BR>";
-                if (e->level > 0) d += str_args(ctx, 0x1aa4, {std::to_string(e->level)}) + "<BR>";
-                d += str_args(ctx, 0x213b, {spell_description(*s, ctx)}) + "<BR>";
-            }
+        for (const auto& [effect, spell, kind] : described) {
+            const auto details = spell_details(spell, ctx, kind, 0x213b);
+            if (details.empty()) continue;
+            d += "<BR><C " + color_tag(kSpellName) + ">" +
+                 description_plaintext(effect.name.empty() ? spell.name : effect.name) + "</C><BR>";
+            if (effect.level > 0) d += str_args(ctx, 0x1aa4, {std::to_string(effect.level)}) + "<BR>";
+            d += details;
+        }
     } else if (item.item_class == 1) {
         a += " " + str(ctx, 0xbe1) + "<BR>"; // Container: CLOSED. (the open state is the window's)
         if (item.is_lore() && item.lore_group > 0 && ctx.db_string) {
@@ -549,6 +589,19 @@ std::string effects_text(const net::Item& item, const ItemDisplayContext& ctx) {
 }
 
 } // namespace
+
+std::vector<std::string> item_effect_detail_lines(const net::ItemEffect& effect, net::ItemEffectKind kind,
+                                                  const ItemDisplayContext& ctx) {
+    if (!ctx.show_spell_descriptions) return {};
+    const SpellData* spell = effect_spell(effect, ctx.spells);
+    if (!spell) return {};
+    if (ctx.db_string && spell->description_id > 0) {
+        const auto text = ctx.db_string(static_cast<std::uint32_t>(spell->description_id), 6);
+        const auto formatted = spell_description_text(*spell, text, ctx.character, ctx.player_level, ctx.player_class);
+        if (!formatted.empty()) return {description_plaintext(formatted)};
+    }
+    return generated_spell_details(*spell, ctx, kind);
+}
 
 std::int32_t weapon_damage_bonus(std::int32_t level, std::uint8_t player_class, const net::Item& item) {
     if (level < 28) return 0;

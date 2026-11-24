@@ -117,9 +117,7 @@ TEST_CASE("player menu: the rows and what each sends") {
             lua_setglobal(L, "hs");
             ImGuiIO& io = ImGui::GetIO();
             io.IniFilename = nullptr; // no imgui.ini in the working folder
-            unsigned char* px = nullptr;
-            int fw = 0, fh = 0;
-            io.Fonts->GetTexDataAsRGBA32(&px, &fw, &fh); // the default font, built
+            io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
             io.DisplaySize = ImVec2(1280, 800);
             io.DeltaTime = 1.0f / 60.0f;
             ImGui::NewFrame();

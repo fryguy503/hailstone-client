@@ -122,6 +122,7 @@ TEST_CASE("plugin server extension: setters, switches and hooks through the chai
 
     // Switches, vitals and hooks answer through the chain.
     CHECK(h.chain.wide_item_links(c));
+    CHECK(h.chain.spell_id_limit(c) == 90000u);
     CHECK_FALSE(h.chain.aa_any_level(c));
     CHECK(h.chain.hide_check_class(c, 4) == 9);
     CHECK(h.chain.character_vitals(c).max_hp == 1234);
@@ -193,6 +194,7 @@ TEST_CASE("plugin server extension: setters, switches and hooks through the chai
     h.run("/extread");
     CHECK(h.printed_part("[read] player Tester 50 class 2 target 10 group 1 hp 1000/1234"));
     CHECK(h.printed_part("[read] spawns 5"));
+    CHECK(h.printed_part("[read] spell limit 45000 ready 0"));
     CHECK(h.printed_part("[read] spawn a_rat01 npc 1"));
     CHECK(h.printed_part("[read] spell Holy Armor cleric 3"));
     CHECK(h.printed_part("[read] item Healing Potion x2"));
@@ -280,6 +282,7 @@ TEST_CASE("plugin server extension: setters, switches and hooks through the chai
     // Inactive: the stock answers; active again: its own.
     h.run("/extoff");
     CHECK_FALSE(h.chain.wide_item_links(c));
+    CHECK(h.chain.spell_id_limit(c) == 0);
     CHECK_FALSE(h.chain.is_spellcaster(c));
     CHECK_FALSE(h.chain.who_lines(c, who));
     h.run("/exton");
@@ -325,7 +328,7 @@ TEST_CASE("plugin server extension: needs HAILSTONE_CAP_EXTEND; an ABI 1 plugin 
 
 // The SDK's exports were nmsc_plugin_* up to 0.6 and are hailstone_plugin_* since: the client takes either.
 // ExtendTestV1 has only the old abi / set_host names and ExtendTest its hooks under the old name (above); ExtendTestNew
-// exports its hooks under the new one, and HAILSTONE_PLUGIN gives it both names of the other two.
+// exports a shorter hook table under the new one, and HAILSTONE_PLUGIN gives it both names of the other two.
 TEST_CASE("plugin server extension: the hook table under its export name after 0.6") {
     Host h;
     net::GameConnection& c = *h.world.conn;
@@ -333,6 +336,7 @@ TEST_CASE("plugin server extension: the hook table under its export name after 0
     REQUIRE(h.plugins->load("ExtendTestNew"));
     CHECK(c.server_class_mask() == 0x3);
     CHECK(h.chain.is_spellcaster(c) == true);
+    CHECK(h.chain.spell_id_limit(c) == 0);
     CHECK(h.chain.guild_member_classes(c, 1003) == 3);
     h.plugins->unload("ExtendTestNew");
     CHECK(h.chain.empty());
@@ -465,9 +469,7 @@ TEST_CASE("plugin windows: its ui/<pack>/ folder, hs.Plugin calls, options and m
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, ht = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &ht);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         const fs::path pack = h.world.dir / "pack";
         fs::create_directories(pack);

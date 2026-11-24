@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 # The oldest macOS a build runs on (set before project()). 13.3 is the first whose libc++ formats floating-point
 # numbers (std::format of a float, std::to_chars), which the client uses; the bundled MoltenVK needs 12.0.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "The oldest macOS the build runs on")
-project(hailstone VERSION 0.7.2 LANGUAGES C CXX)
+project(hailstone VERSION 0.7.3 LANGUAGES C CXX)
 # The release's pre-release label (SemVer: "0.1.0-alpha"); empty for a final release. With the version it is what the
 # updater compares against a release's manifest (core/version.h, docs/updater.md), so change both with each release.
 set(HAILSTONE_VERSION_LABEL "beta")
@@ -764,17 +764,23 @@ set(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 "" CACHE STRING
     "SHA-256 of the Windows x64 preview plugin with popup slots before nameplate services")
 set(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256 "" CACHE STRING
     "SHA-256 of the Windows x64 preview plugin with popup slots after UI contribution services")
-foreach(legacy_popup_option IN ITEMS HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256)
+set(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256 "" CACHE STRING
+    "SHA-256 digests of Windows x64 preview plugins with popup slots after bulk buffer services")
+foreach(legacy_popup_option IN ITEMS HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256
+                                  HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256)
   if("${${legacy_popup_option}}" STREQUAL "")
     continue()
   endif()
-  string(LENGTH "${${legacy_popup_option}}" legacy_popup_hash_length)
-  if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT legacy_popup_hash_length EQUAL 64 OR
-     NOT "${${legacy_popup_option}}" MATCHES "^[0-9a-fA-F]+$")
-    message(FATAL_ERROR "${legacy_popup_option} requires a 64-digit digest on 64-bit Windows")
-  endif()
+  foreach(legacy_popup_hash IN LISTS ${legacy_popup_option})
+    string(LENGTH "${legacy_popup_hash}" legacy_popup_hash_length)
+    if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT legacy_popup_hash_length EQUAL 64 OR
+       NOT "${legacy_popup_hash}" MATCHES "^[0-9a-fA-F]+$")
+      message(FATAL_ERROR "${legacy_popup_option} requires 64-digit digests on 64-bit Windows")
+    endif()
+  endforeach()
+  string(REPLACE ";" "," legacy_popup_digests "${${legacy_popup_option}}")
   set_property(SOURCE src/plugin/native_plugins.cpp APPEND PROPERTY COMPILE_DEFINITIONS
-               ${legacy_popup_option}="${${legacy_popup_option}}")
+               ${legacy_popup_option}="${legacy_popup_digests}")
 endforeach()
 set(HAILSTONE_UPDATE_KEY_DEFAULT "")
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub)

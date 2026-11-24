@@ -371,9 +371,11 @@ int run_model_viewer(const ModelViewerOptions& opts) {
             if (draws[i].mesh && !draws[i].mesh->emitters.empty())
                 emitter_actors.push_back({static_cast<std::uint32_t>(i + 1), draws[i].mesh,
                                           render::ActorRenderer::standing(draws[i]), draws[i].alpha});
-        actor_emitters.update(dt, emitter_actors, [&](std::uint32_t id, int bone, glm::mat4& w) {
+        auto emitter_bone = [&](std::uint32_t id, int bone, glm::mat4& w) {
             return id >= 1 && id <= draws.size() && render::ActorRenderer::bone_world(draws[id - 1], bone, w);
-        }, camera.position, [&](std::uint32_t id, std::string_view code, float& time) {
+        };
+        actor_emitters.update(dt, emitter_actors, emitter_bone, camera.position,
+                              [&](std::uint32_t id, std::string_view code, float& time) {
             return id >= 1 && id <= draws.size() && render::ActorRenderer::playing(draws[id - 1], code, time);
         });
         if (particle_renderer) {

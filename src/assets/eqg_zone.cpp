@@ -1087,6 +1087,7 @@ Zone load_eqg_zone(const GameDir& game, std::string_view name_view, const ZoneLo
     if (!path) throw std::runtime_error("zone archive " + name + ".eqg not found");
     Zone zone;
     zone.name = name;
+    zone.from_eqg = true;
     Source src{std::make_shared<const PfsArchive>(PfsArchive::open(
                    *path, PfsArchive::storage_for(game, *path), game.shared_file_cache())), &game};
     zone.archives.push_back(src.archive);
@@ -1163,7 +1164,28 @@ Zone load_zone(const GameDir& game, std::string_view name, const ZoneLoadCancel&
                                   lname + ".s3d)");
     };
     if (unconfirmed_revamp && !revamped_test) throw refuse("");
-    Zone zone = is_eqg_zone(game, name) ? load_eqg_zone(game, name, cancel) : load_classic_zone(game, name, cancel);
+    // A revamped zone with both files in a live folder (arena, nektulos): the .s3d is the old zone, the .eqg the
+    // revamp, and the server may run either (PEQ's Nektulos version 0 or 1). The same test picks; when it fails, or
+    // without word from the server, the .s3d loads as before. Files the server's assets bring decide alone.
+    const bool both_files = is_revamped_zone_name(lname) && !is_eqg_zone(game, lname) &&
+                            game.exists(lname + ".eqg") && is_live_asset_folder(game) &&
+                            !game.from_overlay(lname + ".s3d");
+    std::optional<Zone> chosen;
+    if (both_files && game.from_overlay(lname + ".eqg")) {
+        chosen = load_eqg_zone(game, name, cancel);
+    } else if (both_files && revamped_test) {
+        Zone revamp = load_eqg_zone(game, name, cancel);
+        if (cancel && cancel()) throw ZoneLoadCancelled();
+        if (revamped_test(revamp)) {
+            log::info("{}: loading the live client's revamped {}.eqg, the zone the server runs", lname, lname);
+            chosen = std::move(revamp);
+        } else {
+            log::info("{}: the server's safe point is not on the revamped {}.eqg: loading {}.s3d", lname, lname, lname);
+        }
+    }
+    Zone zone = chosen                   ? std::move(*chosen)
+                : is_eqg_zone(game, name) ? load_eqg_zone(game, name, cancel)
+                                          : load_classic_zone(game, name, cancel);
     if (cancel && cancel()) throw ZoneLoadCancelled();
     if (unconfirmed_revamp) {
         if (!revamped_test(zone)) throw refuse(" that does not match the server's safe point");

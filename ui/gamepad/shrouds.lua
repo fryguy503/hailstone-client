@@ -130,7 +130,7 @@ ui.window("Spirit Shroud Progress", function()
         local v = API.windows.ListRow(PROGRESS, "Progress", i - 1)
         if not v then return end
         local p = T.px(12)
-        T.draw(rx0 + p, ry0 + T.px(8), T.fit(v[1] .. "  ·  " .. v[2], rx1 - rx0 - 2 * p))
+        T.draw(rx0 + p, ry0 + T.px(8), T.fit((v[1] or "") .. "  ·  " .. (v[2] or ""), rx1 - rx0 - 2 * p))
         T.font(18)
         T.draw(rx0 + p, ry0 + T.px(37), T.fit(v[3] or "", rx1 - rx0 - 2 * p), C.dim)
         T.unfont()

@@ -64,6 +64,8 @@ function stml.Parse(line, color)
   return segments
 end
 
+local MAX_CARRY = 32 -- open <c> tags carried from one line to the next (stml.Lines)
+
 -- A whole STML text -> lines of segments. A colour opened on one line carries on to the next, as CStmlWnd draws it.
 function stml.Lines(raw, color)
   raw = raw:gsub("\r", ""):gsub("<[Bb][Rr]%s*/?>", "\n"):gsub("</?[Pp]>", "\n")
@@ -77,7 +79,9 @@ function stml.Lines(raw, color)
     for slash, tag in full:gmatch("<(/?)([Cc][%s>][^>]*)") do
       if slash == "" then open[#open + 1] = "<" .. tag .. ">" elseif #open > 0 then open[#open] = nil end
     end
-    carry = table.concat(open)
+    -- Only the innermost MAX_CARRY are carried: a text that never closes its tags would otherwise carry them all to
+    -- every later line, reparsed each time. Text that nests no deeper than that is drawn the same.
+    carry = table.concat(open, "", math.max(1, #open - MAX_CARRY + 1))
   end
   while #out > 0 and #out[#out] == 0 do out[#out] = nil end
   return out

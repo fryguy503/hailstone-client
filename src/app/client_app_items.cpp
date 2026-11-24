@@ -214,7 +214,7 @@ void ClientApp::draw_items() {
             opts_.show_items = 0;
         }
     }
-    item_ui_->draw(*conn_);
+    item_ui_->draw(*conn_, stats_ui_ ? stats_ui_->character() : nullptr);
     if (game_view_.chat.clicked_link) {
         item_ui_->link_clicked(*conn_, *game_view_.chat.clicked_link);
         game_view_.chat.clicked_link.reset();

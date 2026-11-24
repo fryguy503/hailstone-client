@@ -43,7 +43,7 @@ std::vector<SpellEmitterRequest> spawn_stage_emitters(const assets::SpellEffect&
         const StageActor* at = nullptr;
         SpellEmitterRequest r;
         r.emitter = slot.emitter;
-        r.key = ((caster ? caster->id : 0u) << 16) | (spell_id & 0xffffu);
+        r.key = EmitterKey::spell(caster ? caster->id : 0u, spell_id);
         r.duration_ms = duration_ms;
         r.density = full ? 1.0f : settings.density;
         r.opacity = full ? 1.0f : settings.opacity;
@@ -268,7 +268,7 @@ void ParticleSystem::set_persistent_density(float density) {
         }
 }
 
-void ParticleSystem::stop(std::uint32_t key) {
+void ParticleSystem::stop(EmitterKey key) {
     std::erase_if(emitters_, [&](const Emitter& e) { return e.key == key; });
 }
 
@@ -282,7 +282,10 @@ void ParticleSystem::stop_actor(std::uint32_t actor) {
 
 void ParticleSystem::stop_keys(std::span<const std::uint32_t> keys) {
     if (keys.empty()) return;
-    std::erase_if(emitters_, [&](const Emitter& e) { return std::binary_search(keys.begin(), keys.end(), e.key); });
+    std::erase_if(emitters_, [&](const Emitter& e) {
+        auto key = e.key.local();
+        return key && std::binary_search(keys.begin(), keys.end(), *key);
+    });
 }
 
 void ParticleSystem::stop_actors(std::span<const std::uint32_t> actors) {
@@ -296,12 +299,12 @@ void ParticleSystem::set_held(const std::function<bool(std::uint32_t actor)>& he
     for (auto& e : emitters_) e.held = e.actor != 0 && held && held(e.actor);
 }
 
-void ParticleSystem::move(std::uint32_t key, const glm::vec3& origin) {
+void ParticleSystem::move(EmitterKey key, const glm::vec3& origin) {
     for (auto& e : emitters_)
         if (e.key == key) e.origin = origin;
 }
 
-bool ParticleSystem::has(std::uint32_t key) const {
+bool ParticleSystem::has(EmitterKey key) const {
     return std::any_of(emitters_.begin(), emitters_.end(), [&](const Emitter& e) { return e.key == key; });
 }
 

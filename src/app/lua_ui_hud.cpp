@@ -1081,8 +1081,13 @@ HotButtonInfo hot_button_info(UiHost& host, const game::HotButton& b, std::strin
         }
     } else if ((b.type == game::HotButtonType::InventorySlot || b.type == game::HotButtonType::ItemLink) && host.conn) {
         info.kind = "item";
-        if (const auto at = game::hot_button_item_slot(host.conn->inventory(), b))
-            if (const auto* it = host.conn->inventory().at(*at); it && host.textures) info.icon = host.textures->item_icon(it->icon);
+        const auto& inv = host.conn->inventory();
+        if (const auto at = game::hot_button_item_slot(inv, b)) {
+            if (const auto* it = inv.at(*at)) {
+                if (host.textures) info.icon = host.textures->item_icon(it->icon);
+                info.stack_count = game::hot_button_stack_count(inv, b.type, *it);
+            }
+        }
     }
     return info;
 }

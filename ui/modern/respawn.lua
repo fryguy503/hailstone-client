@@ -12,17 +12,17 @@ local C = T.color
 local WINDOW = "RespawnWnd"
 
 -- A small rounded tag after a row's name.
-local function badge(text, col)
-  ui.SameLine(0, 6)
+local function badge(text, col, s)
+  ui.SameLine(0, 6 * s)
   local x, y = ui.GetCursorScreenPos()
   ui.PushFont(T.font.tiny)
   local tw, th = ui.CalcTextSize(text)
   ui.PopFont()
   local _, lh = ui.CalcTextSize("Ag")
-  local by = y + (lh - th) / 2 - 1
-  ui.DrawRectFilled(x, by, x + tw + 8, by + th + 2, col[1], col[2], col[3], 0.22, 4)
-  T.Text(x + 4, by + 1, text, col, T.font.tiny)
-  ui.Dummy(tw + 8, lh)
+  local by = y + (lh - th) / 2 - 1 * s
+  ui.DrawRectFilled(x, by, x + tw + 8 * s, by + th + 2 * s, col[1], col[2], col[3], 0.22, 4 * s)
+  T.Text(x + 4 * s, by + 1 * s, text, col, T.font.tiny)
+  ui.Dummy(tw + 8 * s, lh)
 end
 
 local WINDOW_OPTS = {
@@ -44,7 +44,7 @@ local function drawWindow(x, y, w, h, s)
       local unavailable = texts.disabled == true -- (texts[1] is the original's marker: "*" default, "r" flagged)
       local col = (texts.colors and texts.colors[2]) or (unavailable and C.muted or C.text)
       ui.TextColored(col[1], col[2], col[3], 1, texts[2] or "")
-      if unavailable then badge("unavailable", C.muted) elseif texts[1] == "*" then badge("default", C.accent) end
+      if unavailable then badge("unavailable", C.muted, s) elseif texts[1] == "*" then badge("default", C.accent, s) end
       ui.TableNextColumn()
       local zoneColor = (texts.colors and texts.colors[3]) or C.muted
       ui.TextColored(zoneColor[1], zoneColor[2], zoneColor[3], 1, texts[3] or "")

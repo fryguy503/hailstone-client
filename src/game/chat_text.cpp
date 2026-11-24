@@ -7,6 +7,11 @@ namespace hailstone::game {
 
 namespace {
 
+constexpr std::string_view kPercentEntity = "&PCT;";
+constexpr std::string_view kAmpersandEntity = "&AMP;";
+constexpr std::string_view kQuotedPercentEntity = "&AMP;PCT;";
+constexpr std::string_view kQuotedAmpersandEntity = "&AMP;AMP;";
+
 // The C locale's ctype for one byte (the original passes the byte zero-extended).
 bool c_alpha(unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
 bool c_upper(unsigned char c) { return c >= 'A' && c <= 'Z'; }
@@ -84,6 +89,61 @@ void broken_speech(std::string& w, std::int32_t roll, std::uint8_t skill) {
 }
 
 } // namespace
+
+std::string encode_chat_percents(std::string_view text, std::size_t max_bytes) {
+    std::string out;
+    out.reserve(std::min(text.size(), max_bytes));
+    auto link_start = std::string::npos;
+    for (std::size_t i = 0; i < text.size();) {
+        const auto suffix = text.substr(i);
+        std::size_t consumed = 1;
+        auto bytes = suffix.substr(0, consumed);
+        if (text[i] == '%') {
+            bytes = kPercentEntity;
+        } else if (suffix.starts_with(kPercentEntity)) {
+            bytes = kQuotedPercentEntity;
+            consumed = kPercentEntity.size();
+        } else if (suffix.starts_with(kAmpersandEntity)) {
+            bytes = kQuotedAmpersandEntity;
+            consumed = kAmpersandEntity.size();
+        } else {
+            // Keep a UTF-8 character together as the escaped text reaches its byte limit.
+            while (consumed < suffix.size() && (static_cast<unsigned char>(suffix[consumed]) & 0xc0) == 0x80)
+                ++consumed;
+            bytes = suffix.substr(0, consumed);
+        }
+        if (bytes.size() > max_bytes - out.size()) {
+            if (link_start != std::string::npos) out.resize(link_start);
+            return out;
+        }
+        if (text[i] == '\x12') link_start = link_start == std::string::npos ? out.size() : std::string::npos;
+        out += bytes;
+        i += consumed;
+    }
+    return out;
+}
+
+std::string decode_chat_percents(std::string_view text) {
+    if (text.find('&') == std::string_view::npos) return std::string(text);
+    std::string out;
+    out.reserve(text.size());
+    for (std::size_t i = 0; i < text.size();) {
+        const auto suffix = text.substr(i);
+        if (suffix.starts_with(kPercentEntity)) {
+            out += '%';
+            i += kPercentEntity.size();
+        } else if (suffix.starts_with(kQuotedPercentEntity)) {
+            out += kPercentEntity;
+            i += kQuotedPercentEntity.size();
+        } else if (suffix.starts_with(kQuotedAmpersandEntity)) {
+            out += kAmpersandEntity;
+            i += kQuotedAmpersandEntity.size();
+        } else {
+            out += text[i++];
+        }
+    }
+    return out;
+}
 
 std::int32_t SeededChatRandom::random() {
     // xorshift64*: a 30-bit value as the game's Random gives.

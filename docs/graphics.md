@@ -154,13 +154,15 @@ it).
   the calling thread; classic counts per emitter on the workers, gives out places in order, then builds quads on the
   workers. A particle that turns out to show nothing is written as six vertices at one point.
 
-#### Worker threads: actor effects' step
+#### Scene particle timing
 
-`app::ActorEmitters::simulate_async`: once the frame is recorded, each attached emitter's place is read from the poses
-as drawn; both particle systems then step on a worker while the frame is submitted (`game::ParticleSystem::update`),
-spreading particle work over the other workers. Attachments and emission stay on the stepping thread in emitter order,
-so a seed draws the same particles however the work is split. The next frame draws the result, the particles' time one
-frame behind. Item previews' emitters step inline.
+The scene prepares character poses and world object and missile transforms before it steps the actor and spell
+particles. In both lighting modes, this gives attached particles the current frame's transforms before lighting and
+shadow planning and before drawing. A loop without a drawable frame still steps the particles once, using the latest
+available transforms. Particle textures are prepared outside the Vulkan frame.
+
+`game::ParticleSystem::update` distributes particle work across the workers. Attachments and emission are processed
+in emitter order, so a seed draws the same particles however the work is split.
 
 #### Worker threads: scene recording
 

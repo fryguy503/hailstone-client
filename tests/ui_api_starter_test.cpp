@@ -30,9 +30,7 @@ struct StarterContext {
     StarterContext() {
         ui::set_ui_scale(1);
         ImGui::GetIO().IniFilename = nullptr;
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     }
     ~StarterContext() {
         ImGui::DestroyContext(context);

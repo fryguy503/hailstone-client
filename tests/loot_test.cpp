@@ -11,6 +11,7 @@
 #include "net/packet_io.h"
 #include "net/trade_packets.h"
 #include "plugin/hooks.h"
+#include "scratch_dir.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -31,12 +32,12 @@ bool has_line(const std::vector<std::string>& lines, const std::string& text) {
 }
 
 // A corpse `offset` units east of the player.
-std::uint32_t add_corpse(GameConnection& conn, float offset) {
+std::uint32_t add_corpse(GameConnection& conn, float offset, std::uint32_t id = 4000) {
     auto& w = conn.world_for_test();
     const game::Spawn* me = w.player();
     REQUIRE(me);
     game::Spawn s;
-    s.id = 4000;
+    s.id = id;
     s.name = "a_rat's_corpse01";
     s.is_npc = true;
     s.is_corpse = true;
@@ -80,6 +81,17 @@ std::vector<std::uint16_t> loot_requests(const Rig& rig) {
             slots.push_back(request->slot);
         }
     return slots;
+}
+
+std::vector<std::uint32_t> end_loot_requests(const Rig& rig) {
+    std::vector<std::uint32_t> corpses;
+    for (const auto& packet : rig.server.zone_log) {
+        if (!is_op(packet, Op::EndLootRequest)) continue;
+        REQUIRE(packet.data.size() == sizeof(std::uint32_t));
+        ByteReader reader(packet.data);
+        corpses.push_back(reader.le<std::uint32_t>());
+    }
+    return corpses;
 }
 
 // A reliable marker after the clicks proves every preceding request reached the mock. LootItem has no automatic
@@ -127,7 +139,10 @@ TEST_CASE("loot: /loot without a target, a corpse too far, and the request") {
 }
 
 TEST_CASE("loot: Handle_OP_MoneyOnCorpse's answers") {
-    Rig rig(MockConfig::standard());
+    ScratchDir servers("loot-coin");
+    ConnectionOptions options = quick_options();
+    options.servers_dir = servers.path();
+    Rig rig(MockConfig::standard(), options);
     auto& conn = rig.conn;
     REQUIRE(rig.to_zone());
     std::uint32_t corpse = add_corpse(conn, 5.0f);
@@ -195,6 +210,74 @@ TEST_CASE("loot: Handle_OP_MoneyOnCorpse's answers") {
         conn.receive_zone_packet_for_test(money(1, 0, 0, 5, 0));
         CHECK(has_line(drain_chat(conn), "[12071] 5 silver"));
     }
+}
+
+TEST_CASE("loot: each corpse sends one close while awaiting LootComplete") {
+    Rig rig;
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    const auto next = add_corpse(conn, 6.0f, 4001);
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+
+    conn.end_loot();
+    conn.end_loot();
+    conn.end_loot();
+    conn.loot(next);
+    flush_loot_requests(rig);
+    CHECK(end_loot_requests(rig) == std::vector<std::uint32_t>{corpse});
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::LootRequest) == 1);
+    REQUIRE(conn.loot_session());
+    CHECK(conn.loot_session()->corpse_id == corpse);
+    CHECK(conn.player_status().stand_state == kStandLooting);
+
+    conn.receive_zone_packet_for_test(AppPacket{to_wire(Op::LootComplete), {}});
+    CHECK_FALSE(conn.loot_session());
+    CHECK(conn.player_status().stand_state == kStandStanding);
+
+    conn.loot(next);
+    conn.receive_zone_packet_for_test(money(1));
+    conn.end_loot();
+    conn.end_loot();
+    flush_loot_requests(rig);
+    CHECK(MockEqServer::count(rig.server.zone_log, Op::LootRequest) == 2);
+    const std::vector<std::uint32_t> expected{corpse, next};
+    CHECK(end_loot_requests(rig) == expected);
+}
+
+TEST_CASE("loot: a dropped close remains retryable and guards against reentry from a packet hook") {
+    plugin::Hooks hooks;
+    auto options = quick_options();
+    options.hooks = &hooks;
+    Rig rig(MockConfig::standard(), options);
+    auto& conn = rig.conn;
+    REQUIRE(rig.to_zone());
+    const auto corpse = add_corpse(conn, 5.0f);
+    conn.loot(corpse);
+    conn.receive_zone_packet_for_test(money(1));
+
+    int attempts = 0;
+    const auto owner = hooks.new_owner("loot close drop test");
+    hooks.on_packet(owner, plugin::Stream::Zone, plugin::Direction::Out, to_wire(Op::EndLootRequest),
+        [&](AppPacket&) {
+            if (++attempts != 1) return plugin::Flow::Continue;
+            conn.end_loot();
+            return plugin::Flow::Drop;
+        });
+
+    conn.end_loot();
+    flush_loot_requests(rig);
+    CHECK(attempts == 1);
+    CHECK(end_loot_requests(rig).empty());
+    REQUIRE(conn.loot_session());
+    CHECK(conn.loot_session()->open);
+
+    conn.end_loot();
+    conn.end_loot();
+    flush_loot_requests(rig);
+    CHECK(attempts == 2);
+    CHECK(end_loot_requests(rig) == std::vector<std::uint32_t>{corpse});
 }
 
 TEST_CASE("loot: Loot All waits for every item, then closes the window after the last answer") {

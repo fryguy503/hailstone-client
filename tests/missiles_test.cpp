@@ -235,7 +235,7 @@ TEST_CASE("valid spell missiles launch the actual area actor and retire without 
     tw.spawns.push_back({7, {1, 2, 3}, 3.75f, 6.0f, 1, false});
     tw.spawns.push_back({9, {100, 200, 30}, 3.75f, 6.0f, 1, false});
     SpellData spell;
-    spell.id = 600;
+    spell.id = 100600;
     spell.target_type = 8;
     spell.ae_duration = 500;
     auto world = tw.world();
@@ -252,7 +252,7 @@ TEST_CASE("valid spell missiles launch the actual area actor and retire without 
     packet.velocity = {1, 2, 3};
     packet.speed = 4;
     packet.item_type = 9;
-    packet.spell = 600;
+    packet.spell = spell.id;
     MissileList missiles;
     missiles.add(make_missile(packet, 1000, 1500));
     missiles.update(1000, world); // spell missiles do not wait for a physical ranged animation

@@ -97,6 +97,38 @@ std::vector<Begun> &begun() {
 }
 // The ImGui stacks' sizes as each script's draw function began (windows_begun), innermost last: its PopStyleColor,
 // PopStyleVar and PopFont pop only what it pushed, never what the C++ code that drew around it pushed.
+// ui.SetNextWindowCollapsed, as the pack's roll-up relies on it. Before ImGui 1.92 SetWindowCollapsed set the state at
+// once, so a click on the title bar's collapse button (applied later in Begin) toggled what the pack had just set.
+// Since 1.92 it queues the change, and that same click cancels it. ui.Begin applies it the old way to a window
+// that exists; a new window still takes ImGui's own SetNextWindowCollapsed.
+struct PendingCollapse {
+	bool set = false, collapsed = false;
+	ImGuiCond cond = 0;
+	int frame = -1;
+} g_pendingCollapse;
+
+void apply_pending_collapse(const char *name) {
+	const PendingCollapse p = g_pendingCollapse;
+	g_pendingCollapse.set = false;
+	if (!p.set || p.frame != ImGui::GetFrameCount()) return;
+	ImGuiWindow *w = ImGui::FindWindowByName(name);
+	if (!w) {
+		ImGui::SetNextWindowCollapsed(p.collapsed, p.cond);
+		return;
+	}
+	if (p.cond && (w->SetWindowCollapsedAllowFlags & p.cond) == 0) return;
+	w->SetWindowCollapsedAllowFlags &= ~(ImGuiCond_Once | ImGuiCond_FirstUseEver | ImGuiCond_Appearing);
+	w->Collapsed = p.collapsed;
+}
+
+// ImGui 1.92 dropped SetWindowFontScale with the obsolete API. The UI packs still scale a window's text through
+// ui.SetWindowFontScale, so keep its behaviour: the window's own multiplier, applied to the current font size.
+void SetWindowFontScaleCompat(float scale) {
+	IM_ASSERT(scale > 0.0f);
+	ImGui::GetCurrentWindow()->FontWindowScale = scale;
+	ImGui::UpdateCurrentFontSize(0.0f);
+}
+
 struct Floor {
 	ImGuiErrorRecoveryState stacks;
 	ImGuiWindow* window = nullptr;
@@ -165,6 +197,7 @@ int Begin(lua_State *L) {
 	ImGuiStyle &style = ImGui::GetStyle();
 	const ImGuiDir menuButton = style.WindowMenuButtonPosition;
 	if (lua_toboolean(L, 4)) style.WindowMenuButtonPosition = ImGuiDir_Right;
+	apply_pending_collapse(name);
 	bool visible = ImGui::Begin(name, hasOpen ? &open : nullptr, flags);
 	style.WindowMenuButtonPosition = menuButton;
 	begun().push_back({ImGui::GetCurrentWindow(), false, ImGui::GetWindowDrawList()->_ClipRectStack.Size});
@@ -224,13 +257,13 @@ int SetNextWindowPos(lua_State *L) { ImGui::SetNextWindowPos(ImVec2(F(L, 1), F(L
 int SetNextWindowCollapsed(lua_State *L) {
 	int cond = I(L, 2, ImGuiCond_Always);
 	if (cond <= 0 || (cond & (cond - 1)) != 0 || cond > ImGuiCond_Appearing) cond = ImGuiCond_Always; // (ImGui asserts on more than one)
-	ImGui::SetNextWindowCollapsed(B(L, 1), cond);
+	g_pendingCollapse = {true, B(L, 1), cond, ImGui::GetFrameCount()};
 	return 0;
 }
 // ui.IsWindowCollapsed() -> the current window is rolled up to its title bar
 int IsWindowCollapsed(lua_State *L) { return Ret(L, ImGui::IsWindowCollapsed()); }
 int SetNextWindowBgAlpha(lua_State *L) { ImGui::SetNextWindowBgAlpha(F(L, 1)); return 0; }
-int SetWindowFontScale(lua_State *L) { ImGui::SetWindowFontScale(F(L, 1, 1)); return 0; }
+int SetWindowFontScale(lua_State *L) { SetWindowFontScaleCompat(F(L, 1, 1)); return 0; }
 
 // --- text ---
 int Text(lua_State *L) { ImGui::TextUnformatted(S(L, 1)); return 0; }
@@ -575,7 +608,7 @@ int Image(lua_State *L) {
 		ImGui::Dummy(ImVec2(F(L, 2), F(L, 3)));
 		return 0;
 	}
-	// The tint (white by default) through ImageWithBg: Dear ImGui 1.91.9's Image takes none.
+	// The tint (white by default) through ImageWithBg: Dear ImGui's Image takes none.
 	ImGui::ImageWithBg(tex, ImVec2(F(L, 2), F(L, 3)), ImVec2(F(L, 4, 0), F(L, 5, 0)), ImVec2(F(L, 6, 1), F(L, 7, 1)),
 		ImVec4(0, 0, 0, 0), Color(L, 8));
 	return 0;
@@ -1135,7 +1168,8 @@ int Foreground(lua_State *L) {
 }
 int DrawRect(lua_State *L) {
 	DrawTarget()->AddRect(ImVec2(F(L, 1), F(L, 2)), ImVec2(F(L, 3), F(L, 4)),
-		ImGui::GetColorU32(Color(L, 5)), F(L, 9), 0, F(L, 10, 1));
+		ImGui::GetColorU32(Color(L, 5)), F(L, 9), F(L, 10, 1),
+		ImDrawFlags_StrokeLegacy); // centred on the edge as before 1.93; packs inset or outset by half the stroke for it
 	return 0;
 }
 int DrawRectFilled(lua_State *L) {
@@ -1151,7 +1185,8 @@ int DrawRectGradient(lua_State *L) {
 }
 // ui.DrawLine(x0, y0, x1, y1, r, g, b, a [, thickness])
 int DrawLine(lua_State *L) {
-	DrawTarget()->AddLine(ImVec2(F(L, 1), F(L, 2)), ImVec2(F(L, 3), F(L, 4)), ImGui::GetColorU32(Color(L, 5)), F(L, 9, 1));
+	DrawTarget()->AddLine(ImVec2(F(L, 1), F(L, 2)), ImVec2(F(L, 3), F(L, 4)), ImGui::GetColorU32(Color(L, 5)), F(L, 9, 1),
+											 ImDrawFlags_StrokeLegacy); // scripts keep the pre-1.93 pixel placement
 	return 0;
 }
 // ui.DrawCircleFilled(x, y, radius, r, g, b, a) / ui.DrawCircle(x, y, radius, r, g, b, a [, thickness])
@@ -1160,7 +1195,7 @@ int DrawCircleFilled(lua_State *L) {
 	return 0;
 }
 int DrawCircle(lua_State *L) {
-	DrawTarget()->AddCircle(ImVec2(F(L, 1), F(L, 2)), F(L, 3), ImGui::GetColorU32(Color(L, 4)), 0, F(L, 8, 1));
+	DrawTarget()->AddCircle(ImVec2(F(L, 1), F(L, 2)), F(L, 3), ImGui::GetColorU32(Color(L, 4)), 0, F(L, 8, 1), ImDrawFlags_StrokeLegacy);
 	return 0;
 }
 // ui.DrawTriangleFilled(x1, y1, x2, y2, x3, y3, r, g, b, a)
@@ -1200,12 +1235,14 @@ int GetCursorScreenPos(lua_State *L) {
 }
 // ui.PushFont(fontIndex) / ui.PopFont()   -- EQ UI font 1..6; an unknown number keeps the current font
 int PushFont(lua_State *L) {
-	ImGui::PushFont(ui_font(static_cast<int>(I(L, 1, 3))));
+	ImFont *font = ui_font(static_cast<int>(I(L, 1, 3)));
+	ImGui::PushFont(font, font ? font->LegacySize : 0.0f); // size 0 keeps the current one
 	return 0;
 }
 // ui.PushChatFont(index)   -- a chat window's font 0..10 (/chatfontsize; the original's font list); pop with PopFont
 int PushChatFont(lua_State *L) {
-	ImGui::PushFont(chat_font(static_cast<int>(I(L, 1, 2))));
+	ImFont *font = chat_font(static_cast<int>(I(L, 1, 2)));
+	ImGui::PushFont(font, font ? font->LegacySize : 0.0f);
 	return 0;
 }
 // px = ui.ChatFontSize(index)   -- that font's cell height in pixels at UI scale 1 (0 outside 0..10)
@@ -1282,7 +1319,7 @@ void end_script_windows(std::size_t depth) {
 		g_foregroundFrame = floor.foregroundFrame;
 		if (floor.preserveParent && floor.window == GImGui->CurrentWindow) {
 			const bool written = floor.window->WriteAccessed;
-			ImGui::SetWindowFontScale(floor.fontScale);
+			SetWindowFontScaleCompat(floor.fontScale);
 			floor.window->WriteAccessed = written;
 		}
 		if (floor.preserveParent) {

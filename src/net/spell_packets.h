@@ -277,7 +277,7 @@ std::optional<SpellEffectPacket> decode_spell_effect(const AppPacket& p);
 
 // OP_AddNimbusEffect / OP_RemoveNimbusEffect, zone → client (8 bytes, RemoveNimbusEffect_Struct for both): u32 spawn
 // id, i32 spellsnew.eff index. Handle_OP_AddNimbusEffect @0x4bce70 plays the effect's impact stage on the spawn;
-// Handle_OP_RemoveNimbusEffect @0x4b7a10 stops spawn << 16 | effect.
+// Handle_OP_RemoveNimbusEffect @0x4b7a10 stops the spawn/effect group.
 struct NimbusEffect {
     std::uint32_t spawn_id = 0;
     std::int32_t effect = 0;

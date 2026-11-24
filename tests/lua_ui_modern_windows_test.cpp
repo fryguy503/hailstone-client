@@ -41,9 +41,7 @@ struct ModernPack {
                                       lua_State*)>& body) {
         ImGuiContext* ctx = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
-        unsigned char* px = nullptr;
-        int w = 0, h = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         {
             hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
             lua_State* L = lua.state();

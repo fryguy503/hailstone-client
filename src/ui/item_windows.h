@@ -79,6 +79,7 @@ struct ItemWindowsInput {
     net::Coins loot_money;
     game::ItemFlagsFormatter item_flags;
     game::ItemDescriptionAppender item_description_append;
+    game::ItemDisplayContext item_effect_context;
 };
 
 struct ItemWindowsActions {
@@ -101,6 +102,7 @@ ItemWindowsActions item_windows(ItemWindowsState& state, const ItemWindowsInput&
 // The stat lines of the item information window (CItemDisplayWnd_BuildItemInfo
 // order, simplified), for tests and the window.
 std::vector<std::string> item_info_lines(const net::Item& item, const game::ItemFlagsFormatter& flags = {},
-                                         const game::ItemDescriptionAppender& description = {});
+                                         const game::ItemDescriptionAppender& description = {},
+                                         const game::ItemDisplayContext& effect_context = {});
 
 } // namespace hailstone::ui

@@ -52,17 +52,17 @@ end
 local COIN = { { "p", C.platinum }, { "g", C.gold }, { "s", C.silver }, { "c", C.copper } }
 
 -- A price as coins, right-aligned at x1 (copper the rightmost); returns its width.
-local function coinsAt(x1, y, texts)
+local function coinsAt(x1, y, texts, s)
   local x, drawn = x1, false
   for i = 4, 1, -1 do
     local n = tonumber(texts[3 + i]) or 0
     if n > 0 then
       drawn = true
       local coin, digits = COIN[i], tostring(n)
-      T.Text(x, y + 2, coin[1], coin[2], T.font.tiny, "right")
-      x = x - T.TextSize(coin[1], T.font.tiny) - 1
+      T.Text(x, y + 2 * s, coin[1], coin[2], T.font.tiny, "right")
+      x = x - T.TextSize(coin[1], T.font.tiny) - 1 * s
       T.Text(x, y, digits, C.text, T.font.small, "right")
-      x = x - T.TextSize(digits, T.font.small) - 6
+      x = x - T.TextSize(digits, T.font.small) - 6 * s
     end
   end
   if not drawn then
@@ -89,7 +89,7 @@ local function drawRow(_, texts, x0, y0, x1, y1, s, st)
     T.Bar("train." .. (texts[1] or ""), bx0, y0 + 20 * s, bx1, y0 + 25 * s, s, cap > 0 and v / cap or 0,
       maxed and C.faint or C.accent, NO_TRAIL)
   end
-  coinsAt(x1 - pad, (y0 + y1 - th) / 2, texts)
+  coinsAt(x1 - pad, (y0 + y1 - th) / 2, texts, s)
 end
 
 -- a tie keeps the list's order: table.sort is not stable and the rows are sorted again every frame, so two rows of

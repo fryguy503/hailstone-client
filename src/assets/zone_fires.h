@@ -79,8 +79,8 @@ struct EnvironmentEmitter {
 std::vector<EnvironmentEmitter> parse_environment_emitters(std::string_view text);
 // Adds the zone's environment emitters (when it has the file) to Zone::particle_definitions and particle_fixtures:
 // the EDD's records after those already there, one fixture per emitter whose index the EDD has, pointing up.
-// Returns how many were added. A revamped zone (is_revamped_zone_name) loaded as S3D takes none: the file is the
-// live .eqg's.
+// Returns how many were added. A revamped zone (is_revamped_zone_name) loaded as S3D (not Zone::from_eqg) takes none:
+// the file is the live .eqg's.
 std::size_t add_environment_emitters(const GameDir& game, Zone& zone);
 
 } // namespace hailstone::assets

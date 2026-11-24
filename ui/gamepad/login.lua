@@ -297,7 +297,7 @@ local function drawTiles(v, x0, y, x1)
   local cy = y + th / 2
   if s.offset > 0 then T.triangle("left", x0 - px(14), cy, px(8), C.dim, 1) end
   if s.offset + shown < n then T.triangle("right", x0 + shown * (tw + gap) - gap + px(14), cy, px(8), C.dim, 1) end
-  if ui.IsMouseHoveringRect(x0, y, x1, y + th) then
+  if T.mouseOver(x0, y, x1, y + th) then
     local wheel = ui.GetIO().wheel or 0
     if wheel ~= 0 then s.offset = math.max(0, math.min(n - shown, s.offset - (wheel > 0 and 1 or -1))) end
   end

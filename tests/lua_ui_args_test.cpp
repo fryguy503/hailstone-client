@@ -134,9 +134,7 @@ TEST_CASE("hs API: a right click on a spell gem notes the gem's hit box, not an 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().DisplaySize = ImVec2(1600, 900);
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int fw = 0, fh = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &fw, &fh);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         test::ScratchDir dir("lua_ui_args_gem_rect");
         app::UiHost host;

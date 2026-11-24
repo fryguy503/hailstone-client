@@ -64,8 +64,10 @@ public:
     // emitters; `actors` (may be null) gives the spawns' poses for their spell points.
     void update(net::GameConnection& conn, std::span<const net::SpellEffectCue> cues,
                 std::span<const net::EffectPacketCue> effect_packets, const render::ActorRenderer* actors, float dt);
-    // Before the frame: loads textures the emitters need.
+    // Before the frame: uploads the textures request_textures asked for that have finished loading.
     void prepare();
+    // Queue reads and decoding after the scene step. Uploads happen in prepare, outside the frame.
+    void request_textures();
     // `modern`: render::ParticleRenderer::draw's.
     void draw(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::mat4& view, float glow = 1.0f,
               const render::SceneLighting* modern = nullptr);

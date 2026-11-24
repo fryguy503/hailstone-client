@@ -119,7 +119,7 @@ ui.window("Book", function()
       T.unfont()
     end
     -- LB / RB (and the wheel over the pages) turn them
-    local wheel = ui.IsMouseHoveringRect(x0, y0, x1, py1) and (ui.GetIO().wheel or 0) or 0
+    local wheel = T.mouseOver(x0, y0, x1, py1) and (ui.GetIO().wheel or 0) or 0
     local function turn(id) if G.enabled(BOOK, id) then API.windows.ClickChild(BOOK, id, "left") end end
     if W.pressed("lb") or wheel > 0 then turn("LeftButton") end
     if W.pressed("rb") or wheel < 0 then turn("RightButton") end

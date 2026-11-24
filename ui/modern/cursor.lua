@@ -22,6 +22,16 @@ local function wrap(text, width, font)
   if line ~= "" then lines[#lines + 1] = line end
   return lines
 end
+-- The label's lines, kept while the label, the room and the font (its "Ag" measured, lw by lh) stay the same: a
+-- dragged button's label is drawn every frame.
+local wrapped = {}
+local function wrapKept(text, width, font, lw, lh)
+  if wrapped.text ~= text or wrapped.width ~= width or wrapped.font ~= font or wrapped.lw ~= lw or wrapped.lh ~= lh then
+    wrapped.text, wrapped.width, wrapped.font, wrapped.lw, wrapped.lh = text, width, font, lw, lh
+    wrapped.lines = wrap(text, width, font)
+  end
+  return wrapped.lines
+end
 
 ui.window("Cursor Item", function()
   if not API.session.InGame() then return end
@@ -38,8 +48,8 @@ ui.window("Cursor Item", function()
     T.Icon(x0, y0, sz, s, tex, u0, v0, u1, v1, a.button and C.accent or { C.ink[1], C.ink[2], C.ink[3], 0.25 }, { radius = 6 })
     if a.button and not tex and a.text and a.text ~= "" then
       ui.DrawRectFilled(x0 + 1, y0 + 1, x0 + sz - 1, y0 + sz - 1, C.accent[1], C.accent[2], C.accent[3], 0.12, 6)
-      local lines = wrap(a.text, sz - 4, T.font.tiny)
-      local _, lh = T.TextSize("Ag", T.font.tiny)
+      local lw, lh = T.TextSize("Ag", T.font.tiny)
+      local lines = wrapKept(a.text, sz - 4, T.font.tiny, lw, lh)
       local n = math.min(#lines, 3)
       local ty = y0 + (sz - n * lh) / 2
       for k = 1, n do T.Text(x0 + sz / 2, ty + (k - 1) * lh, lines[k], C.text, T.font.tiny, "center") end

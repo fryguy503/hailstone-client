@@ -8,6 +8,7 @@ function M.new(look)
   local category, search, statusFilter = nil, "", "All"
   local expanded, categorySets, categoryStats, byId, children = {}, {}, {}, {}, {}
   local actionMessage, serverMessage
+  local cleared = true -- nothing is kept: reset() made a fresh start that readState need not make again
   local matchCache = {} -- matching()'s last rows and what they were worked out from
   local colors = look.colors
   local function colored(text, color)
@@ -21,13 +22,17 @@ function M.new(look)
   end
   local function number(value)
     local text = tostring(value or 0)
-    local out = text:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
-    return out
+    -- (only the digits are grouped: a sign kept in would read "-,100")
+    local sign, digits, rest = text:match("^([-+]?)(%d+)(.*)$")
+    if not digits then return text end
+    return sign .. digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "") .. rest
   end
   local function summary(stats)
     return number(stats.completed) .. " / " .. number(stats.total) .. " completed"
   end
   function B.reset()
+    if cleared then return end
+    cleared = true
     catalogCache, stateCache, catalogToken, stateRevision = nil, nil, nil, nil
     category, search, statusFilter, actionMessage = nil, "", "All", nil
     serverMessage, matchCache = nil, {}
@@ -55,6 +60,7 @@ function M.new(look)
   function B.readState()
     local state = API.achievements.List(catalogToken, stateRevision, record)
     if not state then B.reset(); return nil end
+    cleared = false
     if state.message ~= serverMessage then actionMessage = nil; serverMessage = state.message end
     if catalogToken ~= state.catalog_token then
       category, expanded, actionMessage = nil, {}, nil
@@ -347,6 +353,34 @@ function M.new(look)
     if search ~= "" or statusFilter ~= "All" then muted("The list reflects your search and status filter.") end
     ui.EndChild()
   end
+  -- One row of the achievement list. Returns the screen y of its first cell and the height its select used (with
+  -- the item spacing after it), which the list's clipping measures from.
+  local function listRow(state, entry, scale)
+    local definition, own = entry.definition, entry.state
+    ui.TableNextRow(); ui.TableNextColumn()
+    local _, y = ui.GetCursorScreenPos()
+    local selected = state.detail_source ~= "link" and state.selected_index == definition.index
+    if look.select(definition.name .. "###achievement:" .. state.catalog_token .. ":" .. definition.index,
+        selected, nil, 30 * scale, true) then
+      result(API.achievements.Open(state.catalog_token, definition.index))
+    end
+    local _, after = ui.GetCursorScreenPos()
+    if ui.IsItemHovered() then ui.SetTooltip(definition.name .. "\n" .. (definition.description or "")) end
+    ui.TableNextColumn(); colored(statusName(own.status), statusColor(own.status))
+    ui.TableNextColumn(); ui.Text(number(definition.points))
+    return y, after - y
+  end
+  -- A table row standing for `count` rows not drawn, `step` apart, each one's select `used` tall with the item
+  -- spacing after it. A zero Dummy measures that spacing first, so the cell's content is exactly as tall as the
+  -- rows' would be and the row as tall as they.
+  local function spacerRow(count, step, used)
+    ui.TableNextRow(); ui.TableNextColumn()
+    local _, y0 = ui.GetCursorScreenPos()
+    ui.Dummy(0, 0)
+    local _, y1 = ui.GetCursorScreenPos()
+    local spacing = y1 - y0
+    ui.Dummy(1, math.max(0, (count - 1) * step + used - 2 * spacing))
+  end
   local function list(state, rows, scale, height)
     ui.BeginChild("##achievementlist", 0, height, true)
     local flags = ui.TableFlags.RowBg | ui.TableFlags.SizingStretchProp
@@ -355,17 +389,31 @@ function M.new(look)
       ui.TableSetupColumn("Status", ui.TableColumnFlags.WidthFixed, (look.statusWidth or 95) * scale)
       ui.TableSetupColumn("Points", ui.TableColumnFlags.WidthFixed, (look.pointsWidth or 48) * scale)
       ui.TableHeadersRow()
-      for _, entry in ipairs(rows) do
-        local definition, own = entry.definition, entry.state
-        ui.TableNextRow(); ui.TableNextColumn()
-        local selected = state.detail_source ~= "link" and state.selected_index == definition.index
-        if look.select(definition.name .. "###achievement:" .. state.catalog_token .. ":" .. definition.index,
-            selected, nil, 30 * scale, true) then
-          result(API.achievements.Open(state.catalog_token, definition.index))
+      -- Only the rows near the view are drawn (a catalog can hold thousands): rows 1 and 2 measure the step, and a
+      -- spacer row stands for each run of rows out of view, as tall as they would be.
+      local n = #rows
+      if n <= 3 then
+        for i = 1, n do listRow(state, rows[i], scale) end
+      else
+        local y1, used = listRow(state, rows[1], scale)
+        local y2 = listRow(state, rows[2], scale)
+        local step = y2 - y1
+        local first, last = 3, n
+        if step > 0 then
+          local _, top = ui.GetWindowPos()
+          local _, viewHeight = ui.GetWindowSize()
+          first = math.min(n, math.max(3, math.floor((top - y1) / step)))
+          last = math.max(first - 1, math.min(n, math.ceil((top + viewHeight - y1) / step) + 1))
+          -- the rows' background alternates per table row: an even run is two spacers, so row k keeps k's shade
+          local skipped = first - 3
+          if skipped > 0 and skipped % 2 == 0 then
+            spacerRow(1, step, used); spacerRow(skipped - 1, step, used)
+          elseif skipped > 0 then
+            spacerRow(skipped, step, used)
+          end
         end
-        if ui.IsItemHovered() then ui.SetTooltip(definition.name .. "\n" .. (definition.description or "")) end
-        ui.TableNextColumn(); colored(statusName(own.status), statusColor(own.status))
-        ui.TableNextColumn(); ui.Text(number(definition.points))
+        for i = first, last do listRow(state, rows[i], scale) end
+        if last < n then spacerRow(n - last, step, used) end
       end
       ui.EndTable()
     end

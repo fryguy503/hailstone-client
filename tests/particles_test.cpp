@@ -222,7 +222,7 @@ TEST_CASE("SpellEffect_SpawnStageEmitters: slots, levels, locations and settings
     auto out = game::spawn_stage_emitters(fx, 0, 1234, &caster, &target, {0, 0, 0}, 3000, s);
     REQUIRE(out.size() == 2);
     CHECK(out[0].emitter == 10);
-    CHECK(out[0].key == ((7u << 16) | 1234u));
+    CHECK(out[0].key == game::EmitterKey::spell(7, 1234));
     CHECK(out[0].duration_ms == 3000);
     CHECK(out[0].density == 0.5f);
     CHECK(out[0].position == glm::vec3(1, 2, 3));
@@ -234,6 +234,11 @@ TEST_CASE("SpellEffect_SpawnStageEmitters: slots, levels, locations and settings
     // The flag forces density and opacity to 1.0.
     auto full = game::spawn_stage_emitters(fx, 0, 1234, &caster, &target, {0, 0, 0}, 0, s, true);
     CHECK(full[0].density == 1.0f);
+    const auto high = game::spawn_stage_emitters(fx, 0, 66770, &caster, &target, {0, 0, 0}, 3000, s);
+    REQUIRE(high.size() == 2);
+    CHECK(high[0].key == game::EmitterKey::spell(7, 66770));
+    CHECK(high[0].key != out[0].key);
+    CHECK(game::EmitterKey::spell(0, 66770) != game::EmitterKey(66770));
 }
 
 TEST_CASE("Spell particle sources: self, other players and NPCs") {

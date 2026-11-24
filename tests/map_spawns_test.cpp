@@ -121,9 +121,7 @@ struct MarkerRig {
         context = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::GetIO().AddMousePosEvent(-1000, -1000);
-        unsigned char* px = nullptr;
-        int w = 0, h = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         host.in_game = host.ui_ready = host.feet_valid = true;
         host.game = world.game.get(); host.conn = world.conn.get(); host.zone_short_name = "qeynos2";
         host.maps_dir = scratch.path() / "maps";
@@ -163,9 +161,7 @@ TEST_CASE("Map spawns: a plugin's marks on the minimap, the zone map and the map
     test::ScratchDir scratch("map_spawns_test");
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         app::UiHost host;
         host.in_game = host.ui_ready = true;
@@ -214,9 +210,7 @@ TEST_CASE("Map lines: the minimap draws the lines that cross its circle, however
     }
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         app::UiHost host;
         host.in_game = host.ui_ready = true;

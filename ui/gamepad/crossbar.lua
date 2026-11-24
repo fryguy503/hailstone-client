@@ -57,6 +57,7 @@ local function slot(set, n, cx, cy, size, alpha, held)
   local face = info.social
   local x0, y0 = cx - size / 2, cy - size / 2
   local x1, y1 = x0 + size, y0 + size
+  local textBottom = info.stackCount and (y1 - T.px(16)) or y1
   local r = T.px(10)
   -- the slot is an item of the bar's window (mouse clicks)
   local wx, wy = ui.GetWindowPos()
@@ -81,7 +82,7 @@ local function slot(set, n, cx, cy, size, alpha, held)
       tc = rec.tc
       tc[1], tc[2], tc[3] = info.color[1], info.color[2], info.color[3]
     end
-    T.textIn(x0 + 3, y0, x1 - 3, y1, fitted(rec.fit, label, size - 6), tc, 0.5, alpha)
+    T.textIn(x0 + 3, y0, x1 - 3, textBottom, fitted(rec.fit, label, size - 6), tc, 0.5, alpha)
     if face and info.overlay ~= "" then T.textIn(x0 + 3, y1 - size * 0.4, x1 - 4, y1, info.overlay, C.text, 1, alpha) end
     T.unfont()
   end
@@ -94,7 +95,7 @@ local function slot(set, n, cx, cy, size, alpha, held)
     if info.left >= 1000 then
       local secs = (info.left + 999) // 1000
       T.font(size >= T.px(64) and 18 or 14)
-      T.textIn(x0, y0, x1, y1, secs >= 60 and string.format("%dm", (secs + 59) // 60) or tostring(secs), C.text, 0.5, alpha)
+      T.textIn(x0, y0, x1, textBottom, secs >= 60 and string.format("%dm", (secs + 59) // 60) or tostring(secs), C.text, 0.5, alpha)
       T.unfont()
     end
   end
@@ -106,6 +107,9 @@ local function slot(set, n, cx, cy, size, alpha, held)
   if hovered then T.outline(x0, y0, x1, y1, C.accent, 0.8, r, T.px(2)) end
   -- the pad button that fires it, at the slot's outer corner
   local gs = math.max(T.px(18), size * 0.34)
+  if info.stackCount then
+    T.hotbarCount(x0 + T.px(3), textBottom, x1 - gs * 0.75 - T.px(2), y1 - T.px(1), info.stackCount, 0, alpha)
+  end
   T.font(size >= T.px(64) and 15 or 12)
   T.glyph(pad, SLOT_BUTTONS[n], x1 - gs * 0.25, y1 - gs * 0.25, gs, alpha)
   T.unfont()

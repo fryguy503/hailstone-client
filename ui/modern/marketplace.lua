@@ -71,7 +71,9 @@ local function tile(list, r, selected, s)
   local isz = 40 * s
   if r.tex then T.Icon(x + (tw - isz) / 2, y + 8 * s, isz, s, r.tex, r.uv[1], r.uv[2], r.uv[3], r.uv[4], nil, { radius = 4 }) end
   if t[6] == "1" then ui.DrawText(x + 6 * s, y + 6 * s, C.accent[1], C.accent[2], C.accent[3], 1, "New") end
-  if (t[7] or "") ~= "" then ui.DrawText(x + 6 * s, y + 6 * s, C.muted[1], C.muted[2], C.muted[3], 1, "Studio") end
+  if (t[7] or "") ~= "" then -- (in the other top corner: an item can be both new and a studio's)
+    ui.DrawText(x + tw - 6 * s - ui.CalcTextSize("Studio"), y + 6 * s, C.muted[1], C.muted[2], C.muted[3], 1, "Studio")
+  end
   local ty = y + 8 * s + isz + 4 * s
   ui.DrawText(x + 6 * s, ty, C.text[1], C.text[2], C.text[3], 1, T.Fit(t[1] or "", tw - 12 * s, nil))
   local _, lh = ui.CalcTextSize("Ag")

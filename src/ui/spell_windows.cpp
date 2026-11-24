@@ -74,7 +74,7 @@ const SpellIconCache::Sheet* SpellIconCache::sheet(int number) {
             render::UploadBatch batch(vk_);
             s->texture = batch.texture(rgba);
             batch.submit();
-            s->set = ui::add_imgui_texture(static_cast<VkSampler>(sampler_), s->texture.view,
+            s->set = ui::add_imgui_texture(s->texture.view,
                                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             if (!s->set) {
                 log::warn("spell icons: no descriptor left for {}", name);
@@ -170,7 +170,7 @@ void spell_bar_window(const SpellBarView& view, SpellActions& actions, SpellIcon
             dl->AddRectFilled(ImVec2(p.x, p.y + size * (1.0f - g.refresh)), ImVec2(p.x + size, p.y + size),
                               IM_COL32(0, 0, 0, 150));
         }
-        if (g.casting) dl->AddRect(p, ImVec2(p.x + size, p.y + size), IM_COL32(255, 220, 80, 255), 3.0f, 0, 2.0f);
+        if (g.casting) dl->AddRect(p, ImVec2(p.x + size, p.y + size), IM_COL32(255, 220, 80, 255), 3.0f, 2.0f, 0);
         if (g.memorize >= 0.0f) {
             dl->AddRectFilled(ImVec2(p.x, p.y + size - 4.0f), ImVec2(p.x + size * g.memorize, p.y + size),
                               IM_COL32(120, 200, 255, 255));

@@ -47,6 +47,7 @@
 #include <thread>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 
 #include <SDL3/SDL_filesystem.h>
 #include <imgui.h>
@@ -794,9 +795,16 @@ private:
     // The missiles in flight (game/missiles.h): the server's new ones launched (their source's attack animation,
     // its length the delay), stepped, and handed to the world objects to draw. Once a frame in game.
     void update_missiles();
+    void apply_missile_particle_cues();
     // The spell bolts' clock (app/spell_bolts.h), in seconds.
     static double bolt_clock() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
     game::MissileList missiles_;
+    struct MissileParticleEffect {
+        game::Missile missile;
+        int stage;
+    };
+    // An effect's placement at dispatch, or the serial whose effects end. Replay in event order after posing.
+    std::vector<std::variant<MissileParticleEffect, std::uint32_t>> missile_particle_cues_;
     void enter_zone();
     void update_player(float dt);
     // The world's mouse presses and releases (__ProcessMouseEvents): the mouse look (game/mouse_look.h), the left
@@ -880,16 +888,17 @@ private:
     void player_customization_key();
     AbilityView ability_view() const;
     std::optional<bool> can_see_spawn(std::uint32_t id) const;
+    bool world_line_of_sight(const glm::vec3& from, const glm::vec3& to) const;
     void prepare_target_cycle();
     std::optional<float> melee_range_to(std::uint32_t id) const;
     void abilities_test(MovementKeys& mk);
     void melee_test(MovementKeys& mk);
     void face_target();
-    // The frame's lighting for every renderer: the scene light, and in the modern mode the daylight at the sky clock's
-    // `hour`, the player's carried light and the zone's lights near the camera.
+    // The frame's lighting for every renderer: the scene light, and in the modern mode the daylight `sky`, the
+    // player's carried light and the zone's lights near the camera.
     // `moving`, when given: the carried light and the spells' as the light list has them, for their shadows
     // (render::PointShadows::set_dynamic).
-    render::SceneLighting scene_lighting(const game::SceneLight& scene, float hour,
+    render::SceneLighting scene_lighting(const game::SceneLight& scene, const render::Daylight& sky,
                                          render::DynamicShadowLights* moving = nullptr) const;
     void lighting_command(std::string_view args);
     void lua_social_command(std::string_view args); // /luasocial (app/client_app_draw.cpp)
@@ -1129,9 +1138,6 @@ private:
     // The frame's worker threads (core/worker_pool.h; display.worker_threads), made in run(). Declared before every
     // renderer and actor_emitters_, so it outlives the work they hand it.
     std::unique_ptr<core::WorkerPool> workers_;
-    // This frame's actor-effect step, set in the Prepare phase and started once the frame is recorded
-    // (ActorEmitters::simulate_async), or at once for a frame not drawn.
-    std::function<void()> emitter_step_;
     render::VkContext vk_;
     // Declared after vk_, so it is destroyed before the Vulkan device it holds objects of: draw_nameplates makes it at its
     // first use.
@@ -1612,6 +1618,8 @@ private:
     std::string guide_zone_; // the zone it was started in: zoning ends it (spawn ids are the zone's)
     bool start_actor_guide(std::uint32_t id, std::function<bool()> action);
     void update_guide();
+    // `eye`: the camera without OP_CameraEffect's shake, for the emitters' reach and density.
+    void update_scene_particles(float dt, bool in_game, bool pre_game, const glm::vec3& eye);
     // The server's level-up effects (OP_LevelAppearance): started on the spawns' spell points.
     void update_level_effects(net::GameConnection& conn);
     game::ZoneLineTrigger zone_line_;

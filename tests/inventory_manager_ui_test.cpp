@@ -162,9 +162,7 @@ TEST_CASE("Advanced Inventory: lists what is worn and carried, draws in both vie
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         net::ConnectionOptions options = quick_options();
         options.servers_dir = dir / "servers";
@@ -324,9 +322,7 @@ TEST_CASE("Advanced Inventory selection and confirmation retain item instance an
     fs::copy(ui_dir() / "modern", dir / "modern", fs::copy_options::recursive);
     std::unique_ptr<ImGuiContext, void (*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* pixels = nullptr;
-    int width = 0, height = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     auto config = MockConfig::standard();
     for (auto& item : config.characters[0].inventory)
         if (item.slot.same(net::ItemSlot::possessions(23))) item.serial = "0000000000001002";
@@ -745,9 +741,7 @@ TEST_CASE("Advanced Inventory: the bank as last seen is listed, marked stale, an
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         MockConfig config = MockConfig::standard();
         net::Item bag = bag_item(17005, "Large Sack", 0);

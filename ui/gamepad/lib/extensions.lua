@@ -12,6 +12,19 @@ local function value(v)
   local text=v==nil and "" or tostring(v)
   return type(v)..":"..#text..":"..text
 end
+-- value() of a string or an integer, kept: the raid context reads seven of them a row each frame, and the same names
+-- and numbers come back frame after frame. Other values (a float's text tells 1 from 1.0) are made each time. The
+-- table is dropped when it grows large (names come and go over a session).
+local valueMemo,valueMemoSize={},0
+local function memoValue(v)
+  if type(v)~="string" and math.type(v)~="integer" then return value(v) end
+  local hit=valueMemo[v]
+  if hit then return hit end
+  if valueMemoSize>=4096 then valueMemo,valueMemoSize={},0 end
+  hit=value(v)
+  valueMemo[v],valueMemoSize=hit,valueMemoSize+1
+  return hit
+end
 local function signature(context)
   if context.window=="MapViewWnd" then return context.revision or "" end
   local selected=context.selection or {}
@@ -48,11 +61,11 @@ local function raidContext()
   for _,list in ipairs({"RAID_PlayerList","RAID_NotInGroupPlayerList"}) do
     local rows,_,selected=API.windows.ListInfo("RaidWindow",list)
     rows=rows or 0
-    revision[#revision+1]=value(list);revision[#revision+1]=value(rows)
+    revision[#revision+1]=memoValue(list);revision[#revision+1]=memoValue(rows)
     for row=0,rows-1 do
       local data=API.windows.ListRow("RaidWindow",list,row)
-      revision[#revision+1]=value(row)
-      for column=1,6 do revision[#revision+1]=value(data and data[column]) end
+      revision[#revision+1]=memoValue(row)
+      for column=1,6 do revision[#revision+1]=memoValue(data and data[column]) end
       if row==selected and data and type(data[2])=="string" and data[2]~="" then
         context.selection={name=data[2],group=tonumber(data[1]),level=data[3],class=data[4],list=list,row=row}
       end

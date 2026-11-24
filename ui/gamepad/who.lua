@@ -32,6 +32,13 @@ local function myLevel()
   return tonumber(API.character.Label(2) or "") -- EQType 2: the player's level
 end
 
+-- A name as one word of a command: control characters (a newline would end the line and start another) dropped, and
+-- only its first word kept (a space would put more words on /invite or /friends). A name is one word; the text comes
+-- from the server's /who reply or the keyboard.
+local function commandWord(s)
+  return ((s or ""):gsub("%c", ""):match("^%s*(%S+)")) or ""
+end
+
 -- The /who line for the filters.
 local function command()
   local words = { "/who" }
@@ -44,7 +51,8 @@ local function command()
   elseif l[2] then
     words[#words + 1] = l[2] .. " " .. l[3]
   end
-  if f.name ~= "" then words[#words + 1] = f.name end
+  local name = commandWord(f.name)
+  if name ~= "" then words[#words + 1] = name end
   return table.concat(words, " ")
 end
 
@@ -189,7 +197,7 @@ ui.window("Who", function()
       T.unfont()
       local ry = ly
       local abh = T.px(76)
-      local who = p and p.name or ""
+      local who = p and commandWord(p.name) or ""
       local actions = {
         { "##tell", "Send a tell", "Opens the chat with /tell", function() W.chat("/tell " .. who .. " ") end },
         { "##invite", "Invite to group", "/invite", function() say("/invite " .. who) end },
@@ -199,7 +207,7 @@ ui.window("Who", function()
       for k, a in ipairs(actions) do
         ui.SetCursorPos(rx0 - wx, ry - wy)
         W.sideBefore(side, k)
-        if T.button(a[1], a[2], rw, abh, { sub = a[3], disabled = p == nil, align = 0 }, pad) then a[4]() end
+        if T.button(a[1], a[2], rw, abh, { sub = a[3], disabled = who == "", align = 0 }, pad) then a[4]() end
         W.sideAfter(side, k, #actions, listState)
         ry = ry + abh + T.px(10)
       end

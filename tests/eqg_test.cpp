@@ -883,6 +883,62 @@ TEST_CASE("A live folder's revamped .eqg loads when the server's safe point stan
     CHECK_FALSE(asked);
 }
 
+TEST_CASE("A revamped zone with both files: the server's safe point picks the .eqg or the .s3d") {
+    hailstone::test::ScratchDir dir("eqg_revamped_both");
+    write_floor_zone(dir.path(), "nektulos");
+    std::ofstream(dir.path() / "nektulos.s3d") << "x"; // not a real archive: loading it throws, which marks the path
+    std::ofstream(dir.path() / "spells_us_str.txt") << "x"; // a live folder
+    GameDir game(dir.path());
+    CHECK_FALSE(is_eqg_zone(game, "nektulos")); // by name alone the .s3d still wins
+    const Zone plain = load_eqg_zone(game, "nektulos");
+    CHECK(plain.from_eqg);
+    const glm::vec3 mid = (plain.bounds_min + plain.bounds_max) * 0.5f;
+    const float floor_z = plain.bounds_max.z;
+    auto loads_s3d = [](auto&& load) {
+        try {
+            load();
+        } catch (const std::exception& e) {
+            return std::string(e.what()).find("revamped zone") == std::string::npos; // not the refusal
+        }
+        return false;
+    };
+
+    // The safe point stands on the revamp's floor (PEQ's Nektulos version 1): the .eqg.
+    {
+        std::optional<game::CollisionMesh> built;
+        auto zone = load_zone(game, "Nektulos", {}, game::safe_point_test({mid.x, mid.y, floor_z + 3.0f}, built));
+        CHECK(zone.from_eqg);
+        CHECK(zone.terrain.size() == 1);
+    }
+    // It does not (Nektulos version 0, 15.9 units over the revamp's floor): the .s3d, not a refusal.
+    {
+        std::optional<game::CollisionMesh> built;
+        CHECK(loads_s3d([&] {
+            load_zone(game, "nektulos", {}, game::safe_point_test({mid.x, mid.y, floor_z + 15.9f}, built));
+        }));
+    }
+    // No word from the server: the .s3d, without loading the .eqg to ask.
+    CHECK(loads_s3d([&] { load_zone(game, "nektulos"); }));
+    // The server's assets bring the .s3d: it loads, and the test is not asked.
+    bool asked = false;
+    {
+        hailstone::test::ScratchDir overlay("eqg_revamped_both_s3d");
+        std::ofstream(overlay.path() / "nektulos.s3d") << "x";
+        GameDir served(dir.path(), overlay.path());
+        CHECK(loads_s3d([&] { load_zone(served, "nektulos", {}, [&](const Zone&) { return asked = true; }); }));
+        CHECK_FALSE(asked);
+    }
+    // They bring the .eqg: it loads without asking.
+    {
+        hailstone::test::ScratchDir overlay("eqg_revamped_both_eqg");
+        write_floor_zone(overlay.path(), "nektulos");
+        GameDir served(dir.path(), overlay.path());
+        auto zone = load_zone(served, "nektulos", {}, [&](const Zone&) { return asked = true; });
+        CHECK(zone.from_eqg);
+        CHECK_FALSE(asked);
+    }
+}
+
 TEST_CASE("The live bazaar.eqg: PEQ's version 1 safe point stands on it, version 0's does not" *
           doctest::skip(!hailstone::test::game_dir())) {
     const auto& game = *hailstone::test::game_dir();

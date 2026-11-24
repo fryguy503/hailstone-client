@@ -14,6 +14,7 @@
 #include "mock_server/harness.h"
 #include "net/social_packets.h"
 #include "net/zone_packets.h"
+#include "scratch_dir.h"
 
 using namespace hailstone;
 using namespace hailstone::net;
@@ -151,6 +152,56 @@ TEST_CASE("mock server: the Options' social boxes send the original's spawn appe
     CHECK(conn.character_setting("show_helm") == 0);
     CHECK_FALSE(conn.world().player()->appearance.show_helm);
     CHECK_FALSE(conn.set_character_setting("guild_invites", 0)); // an ini option: not one of these
+}
+
+TEST_CASE("mock server: Autosplit remembers the character's choice after relog") {
+    ScratchDir servers("autosplit");
+    ConnectionOptions options = quick_options();
+    options.profile_id = "test-server";
+    options.servers_dir = servers.path();
+    MockConfig config = MockConfig::standard();
+    config.characters.push_back(MockCharacter{.name = "Other", .inventory = {}});
+
+    {
+        Rig first(config, options);
+        REQUIRE(first.to_zone());
+        CHECK(first.conn.character_setting("loot_autosplit") == 0);
+        // A reliable packet confirms the mock received any earlier login traffic.
+        first.conn.send_command("/tgb");
+        REQUIRE(first.until([&] { return MockEqServer::count(first.server.zone_log, Op::TGB) == 1; }));
+        CHECK_FALSE(sent(first.server, 28, 0));
+        CHECK_FALSE(sent(first.server, 28, 1));
+        REQUIRE(first.conn.set_character_setting("loot_autosplit", 1));
+        REQUIRE(first.until([&] { return sent(first.server, 28, 1); }));
+    }
+    {
+        Rig other(config, options);
+        REQUIRE(other.to_zone("Other"));
+        CHECK(other.conn.character_setting("loot_autosplit") == 0);
+        const auto source = servers.path() / "test-server" / "characters" / "Mock EQEmu" / "Gennro";
+        REQUIRE(std::filesystem::is_regular_file(source / "options.ini"));
+        other.conn.copy_character_settings(source, false, true);
+    }
+    {
+        Rig other(config, options);
+        REQUIRE(other.to_zone("Other"));
+        CHECK(other.conn.character_setting("loot_autosplit") == 0);
+    }
+    {
+        Rig restored(config, options);
+        REQUIRE(restored.to_zone());
+        CHECK(restored.conn.character_setting("loot_autosplit") == 1);
+        restored.conn.send_command("/tgb");
+        REQUIRE(restored.until([&] { return MockEqServer::count(restored.server.zone_log, Op::TGB) == 1; }));
+        CHECK_FALSE(sent(restored.server, 28, 0));
+        CHECK_FALSE(sent(restored.server, 28, 1));
+        restored.conn.send_command("/autosplit"); // Toggle from the remembered on state.
+        REQUIRE(restored.until([&] { return sent(restored.server, 28, 0); }));
+        CHECK(restored.conn.character_setting("loot_autosplit") == 0);
+    }
+    Rig disabled(config, options);
+    REQUIRE(disabled.to_zone());
+    CHECK(disabled.conn.character_setting("loot_autosplit") == 0);
 }
 
 TEST_CASE("mock server: GuildInvites off declines another guild's invitation; RaidInviteConfirm asks first") {

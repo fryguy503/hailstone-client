@@ -45,8 +45,10 @@ local function setting(key, default)
   if type(default) == "number" then return tonumber(v) or default end
   return v
 end
+local settingsChanged = false -- a setting was set since readSettings: the frame reads them again
 local function setSetting(key, v)
   ui.SetSetting("abilitybook." .. key, type(v) == "boolean" and (v and "1" or "0") or tostring(v))
+  settingsChanged = true
 end
 
 local function lower(s) return (s or ""):lower() end
@@ -118,9 +120,11 @@ local function cost(e)
   return #parts > 0 and table.concat(parts, ", ") or "-"
 end
 
--- The book's settings, read once a frame after the toolbar (which changes them).
+-- The book's settings, read once a frame before the toolbar (which draws them), and again after it only when it
+-- changed one.
 local cfg = {}
 local function readSettings()
+  settingsChanged = false
   cfg.kind = setting("kind", "all")
   cfg.ready = setting("ready", false)
   cfg.favorites = setting("favorites", false)
@@ -294,21 +298,21 @@ local function toolbar(x, y, w, s)
   T.Text(cx, y + 7 * s, "Sort", C.muted, T.font.small)
   ui.SetCursorPos(cx + 34 * s - wx, y - wy + 2 * s)
   ui.SetNextItemWidth(118 * s)
-  local mode = setting("sort", "Name")
+  local mode = cfg.sort
   if ui.BeginCombo("##sort", mode) then
     for _, m in ipairs(sorts()) do
       if ui.Selectable(m, m == mode) then setSetting("sort", m) end
     end
     ui.EndCombo()
   end
-  local desc = setting("desc", false)
+  local desc = cfg.desc
   if T.Button("##desc", cx + 156 * s, y + 2 * s, cx + 184 * s, y + 28 * s, s, desc and "v" or "^",
       desc and DESC_TIP or ASC_TIP) then
     setSetting("desc", not desc)
   end
   -- kind
   local fx = cx + 196 * s
-  local kind = setting("kind", "all")
+  local kind = cfg.kind
   for _, k in ipairs(KIND_CHIPS) do
     local clicked, cw = chip(k[3], fx, y + 3 * s, k[2], kind == k[1], s)
     if clicked then setSetting("kind", k[1]) end
@@ -316,14 +320,14 @@ local function toolbar(x, y, w, s)
   end
   fx = fx + 8 * s
   for _, f in ipairs(FILTER_CHIPS) do
-    local on = setting(f[1], false)
+    local on = cfg[f[1]]
     local clicked, cw = chip(f[4], fx, y + 3 * s, f[2], on, s, f[3])
     if clicked then setSetting(f[1], not on) end
     fx = fx + cw + 4 * s
   end
   -- class (only with more than one), after the chips; the window widens to fit it
   if multiclass() then
-    local cls = setting("class", 0)
+    local cls = cfg.class
     local name = "All classes"
     if cls == -1 then name = "Shared" end
     for _, c in ipairs(st.classes) do if c.id == cls then name = c.name end end
@@ -675,8 +679,9 @@ local function body(x, y, w, h, s)
   local tsel = ui.GetSetting("test.abilitybook.select")
   if tsel and not sel then sel = tsel end
   if sel and not byKey[sel] then sel = nil end
-  toolbar(x, y, w, s)
   readSettings()
+  toolbar(x, y, w, s)
+  if settingsChanged then readSettings() end
   local by = y + TOOL_H * s
   local bodyH = h - TOOL_H * s - AUTO_H * s - 8 * s
   local lw = w - (DETAIL_W + 14) * s

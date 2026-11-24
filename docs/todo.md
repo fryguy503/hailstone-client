@@ -243,6 +243,7 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
 - [ ] **Spell particles: two open questions** (unknowns.md).
   - Whether an actor's world matrix rows carry its scale (normalised here).
   - What makes a floor-flag actor emitter again as the actor moves (kept on the actor here).
+- [x] Read spell IDs beyond RoF2's ceiling and show generated item spell descriptions when authored text is absent. The stock and extended zone-entry paths have mock-server coverage.
 - [x] Linked spell timers and discipline timers from the player profile.
 - [x] Combat Abilities: active discipline duration gauge 26 and seconds display in both UIs, icon cancellation (live acceptance open).
 - [x] **Combat Abilities: red reuse overlays and seconds in both UIs.** Shared timer groups stay marked even when the wait exceeds an ability's own recast, discipline hot buttons included. Live acceptance open.
@@ -284,7 +285,8 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
 - [x] **New-style models' duck clip and the jump animation.** Duck clip: CRCH_BA_1, 0x406740's row 0x7a - 0x4f. The jump animation comes from the playing animation (+0x10c0, vf24), not 500 ms after a jump.
 - [x] **Placed objects that play their own animation** (Ssraeshza Temple's turning rings, swaying tree branches in 75 zones).
   - One instanced model per definition, a few matrices a frame.
-  - Solid where the animation has them, so the rings let a player into the water shaft and out at the top. Seen live 2026-11-18.
+  - Without an authored volume, solid where the animation has them, so the rings let a player into the water shaft and out at the top. Seen live 2026-11-18.
+  - Authored skeleton volumes keep the trunks solid and the branches passable in Warsliks Woods and other classic zones.
 - [ ] **Animated zone objects, open** (docs/unknowns.md).
   - The phase against the original's clock.
   - D3DX's key compression.
@@ -313,13 +315,14 @@ Server-dependent systems stock EQEmu never sends keep their live checks open pas
 - [x] **The live folder's revamped bazaar, lavastorm and highpasshold load** when the server's safe point (OP_NewZone) stands on their floor (game/revamped_zone.h).
   - Covers PEQ's Bazaar and Lava Storm version 1 (expansion 9 on) and its only High Pass Hold row.
   - Version 0's safe points have no floor there, so those stay refused.
-- [ ] **Arena and Nektulos with a live folder** (unknowns.md, Movement and collision). Its arena.s3d and nektulos.s3d win over the revamped .eqg, but PEQ's Arena (its only row) and Nektulos version 1 (expansion 10 on) run the revamp: their spawns stand on the live .eqg.
+- [x] **Arena and Nektulos with a live folder** (unknowns.md, Movement and collision). Its arena.s3d and nektulos.s3d won over the revamped .eqg, but PEQ's Arena (its only row) and Nektulos version 1 (expansion 10 on) run the revamp. The server's safe point now picks between the two files, as it does for the revamps with no .s3d.
 - [x] **IVM's animation** (race 127/600, the enchanter pet; game::animation_source). It has no named clips; GetAlternateAnimTag @0x406a60 maps its wood-elf prefix group to ELM, so it plays ELM's clips and holds its weapons as an elf does.
 - [ ] IVM's click volume: whether the original's click meets its masked body mesh, a sphere or only its held items (unknowns.md, Characters and models).
 - [x] WLD 0x2C meshes (docs/formats/wld.md "0x2C mesh"): read into a MeshDef, centre added, so the Fiery Avenger (IT62) shows its blade, not only its flames, and Erud's Crossing's ghost ship its hull; a 0x2C body that can draw nothing (IVM's) is dropped.
 - [ ] The 0x2C loader in EQGraphicsDX9.dll: the fields read past and the polygon flags word (unknowns.md, World rendering).
 
 ### Items and commerce
+- [ ] **Autosplit across installations.** Read an authoritative server value when the server can distinguish it from the stock RoF2 placeholder (docs/unknowns.md).
 - [ ] **A bag sub-slot past the bag's own BagSlots.** Settle what the original does with an item placed there (docs/unknowns.md "Items, inventory and commerce"); `game::Inventory` keeps it for now.
 - [x] Evolving-item Final Result inspection: native action-4 request, ordinary read-only item reply, received progress updates and a focusable gamepad action.
 - [ ] **Evolving-item live acceptance.**

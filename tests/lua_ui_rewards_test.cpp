@@ -37,9 +37,7 @@ struct RewardGui {
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::GetIO().DisplaySize = {1280, 900};
         ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     }
     ~RewardGui() { ImGui::DestroyContext(context); }
 };

@@ -282,10 +282,12 @@ local function generalTab()
   section("Combat", function()
     check("attack_until_xtarget_clear", "Attack Until XTarget Is Clear",
       "Hailstone: when your target dies, auto attack stays on while your extended target list still holds a spawn, and goes off once it is clear.")
-    check("auto_target_xtarget", "Auto Target XTarget Attackers",
-      "Hailstone: when you have no target, an NPC on your extended target list that attacks you becomes your target, as does one still attacking you when your target dies.")
+    check("auto_target_xtarget", "Auto Target Attackers",
+      "Hailstone: when you have no target, an NPC that attacks you becomes your target. If your target dies or despawns, the client can pick another attacker from your extended target list.")
     check("face_on_attack", "Face Target On Attack",
       "Hailstone: on, the attack key and the attack buttons turn you to face your target when they turn auto attack on, as the original client does. Off: you keep facing where you were. /attack never turns you.")
+    check("red_con_attack_guard", "Red-Con Attack Guard",
+      "At level 10 or below, switching to a target more than two levels above you during auto attack can stop combat, as in the original client.")
   end)
   section("Social", function()
     check("guild_invites", "Receive Guild Invites", "Off: guild invitations are declined for you.")
@@ -339,7 +341,7 @@ local function generalTab()
     -- menus.lua's menus.scale (this pack's look: the size its context menus draw at; Ctrl+wheel over a menu too)
     row("Menu Size", "The size of right-click menus and their text. Ctrl+mouse wheel over a menu changes it too.", function()
       local v = math.floor((tonumber(ui.GetSetting("menus.scale")) or 1.25) * 100 + 0.5)
-      local nv, changed = ui.SliderInt("##menus.scale", v, 75, 200, v .. " %%")
+      local nv, changed = ui.SliderInt("##menus.scale", v, 75, 200, v .. " %")
       if changed then ui.SetSetting("menus.scale", string.format("%.2f", nv / 100)) end
     end)
     check("pet_window_popup", "Pet Window Auto-Popup", "The pet window opens when you get a pet.")

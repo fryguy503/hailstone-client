@@ -1,18 +1,24 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <iterator>
 #include <limits>
 #include <optional>
 #include <random>
+#include <string>
 #include <vector>
 
+#include "app/zone_move_world.h"
 #include "assets/character.h"
 #include "assets/zone.h"
+#include "game/animated_objects.h"
 #include "game/collision.h"
+#include "game/coords.h"
 #include "game/object_collision.h"
 #include "game/world_state.h"
 #include "game_files.h"
+#include "net/game_connection.h"
 
 using hailstone::game::CollisionMesh;
 
@@ -95,6 +101,150 @@ TEST_CASE("qeynos2 has floors under its streets" * doctest::skip(!hailstone::tes
     auto mesh = CollisionMesh::build(zone);
     CHECK(mesh.triangle_count() > 10000);
     CHECK(mesh.floor_below({400, -300, 100}, 4).has_value());
+}
+
+TEST_CASE("Warsliks Woods: pine branches near Field of Bone are passable" * doctest::skip(!hailstone::test::game_dir())) {
+    using namespace hailstone::game;
+    const auto zone = hailstone::assets::load_classic_zone(*hailstone::test::game_dir(), "warslikswood");
+    const auto mesh = CollisionMesh::build(zone);
+    const auto animated = AnimatedObjects::build(zone);
+    const auto blocked = [&](const glm::vec3& from, const glm::vec3& to) {
+        auto sweep = SphereSweep::make(from, to, 1.78f); // a human player's sweep radius
+        mesh.sweep_sphere(sweep);
+        animated.sweep_sphere(sweep);
+        return sweep.collided;
+    };
+
+    // Zone-file coordinates. At its first key the branch crossed this path in both directions.
+    const glm::vec3 path_start(3156.941f, -1917.668f, 14.881f);
+    const glm::vec3 path_end(3160.366f, -1922.595f, 14.881f);
+    CHECK_FALSE(blocked(path_start, path_end));
+    CHECK_FALSE(blocked(path_end, path_start));
+    CHECK(mesh.line_of_sight(path_start, path_end));
+
+    const glm::vec3 trunk_start(3166.0f, -1950.0f, 5.0f);
+    const glm::vec3 trunk_end(3181.0f, -1950.0f, 5.0f);
+    CHECK(blocked(trunk_start, trunk_end));
+    CHECK(blocked(trunk_end, trunk_start));
+    CHECK_FALSE(mesh.line_of_sight(trunk_start, trunk_end));
+}
+
+TEST_CASE("Veksar: a player can walk over the ramp and the open doorway threshold" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    using namespace hailstone;
+    const auto& game_dir = *test::game_dir();
+    const auto zone = assets::load_classic_zone(game_dir, "veksar");
+    const auto mesh = CollisionMesh::build(zone);
+    const app::ZoneMoveWorld world(&mesh, nullptr, &zone.regions);
+    net::GameConnection conn(game_dir);
+    conn.player_status_mut().stand_state = net::kStandStanding;
+    conn.player_status_mut().endurance = 1000;
+    conn.player_status_mut().max_endurance = 1000;
+
+    auto walk_across = [&](const glm::vec3& start, float heading, float landing_height,
+                           const game::mechanics::SweepRadiusSpawn& avatar) {
+        const auto yaw = game::heading_to_yaw(heading);
+        const glm::vec2 forward(std::cos(yaw), std::sin(yaw));
+        app::PlayerMovement movement;
+        movement.set_race(avatar.race);
+        movement.set_collision_radius(game::mechanics::sweep_radius(avatar));
+        movement.reset(start, yaw);
+        constexpr std::uint32_t kStepMs = 17;
+        for (std::uint32_t i = 0; i < 60; ++i) {
+            app::MovementKeys keys;
+            keys.forward = i >= 6; // let the body find the floor before moving
+            keys.mouse_look = true;
+            const auto frame = movement.update(keys, yaw, 0.0f, kStepMs, 1000 + i * kStepMs, conn, &zone.regions,
+                                               avatar.avatar_height, &world, nullptr, kStepMs);
+            if (glm::dot(glm::vec2(frame.feet - start), forward) > 4.0f) {
+                CAPTURE(frame.feet.z);
+                CHECK(std::abs(frame.feet.z - landing_height) < 0.05f);
+                return true;
+            }
+        }
+        return false;
+    };
+    const game::mechanics::SweepRadiusSpawn dwarf{2.5f, 8}, large{5.0f, 2};
+    auto check = [&](const glm::vec3& reported_position, float heading, float landing_height) {
+        const glm::vec3 feet = game::server_to_world(reported_position) - glm::vec3(0, 0, dwarf.avatar_height);
+        for (const auto& avatar : {dwarf, large}) {
+            CAPTURE(avatar.race);
+            CHECK(walk_across(feet, heading, landing_height, avatar));
+        }
+    };
+
+    SUBCASE("up the plank ramp and onto the stone landing") {
+        check({290.6f, -304.6f, 42.2f}, 132.0f, 42.0f);
+    }
+    SUBCASE("through the open doorway and over its stone lip") {
+        check({428.0f, -15.7f, 8.5f}, 511.0f, 7.0f);
+    }
+}
+
+TEST_CASE("Classic slime curtains keep their draw geometry and collision follows their zone" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    using namespace hailstone;
+    const auto& game_dir = *test::game_dir();
+    const auto zone = assets::load_classic_zone(game_dir, "veksar");
+    for (const auto* name : {"VEKSLIME400_ACTORDEF", "VEKSLIME401_ACTORDEF",
+                            "VEKSLIME402_ACTORDEF", "VEKSLIME403_ACTORDEF"}) {
+        CAPTURE(name);
+        const auto object = zone.objects.find(name);
+        REQUIRE(object != zone.objects.end());
+        REQUIRE_FALSE(object->second.parts.empty());
+        CHECK_FALSE(object->second.indices.empty());
+        for (const auto& part : object->second.parts) {
+            CHECK_FALSE(part.solid);
+            REQUIRE(part.material < object->second.materials.size());
+            CHECK(object->second.materials[part.material].blend == assets::BlendMode::Masked);
+        }
+    }
+    const auto plank = zone.objects.find("VEKPLANK400_ACTORDEF");
+    REQUIRE(plank != zone.objects.end());
+    REQUIRE_FALSE(plank->second.parts.empty());
+    CHECK(std::ranges::all_of(plank->second.parts, &assets::MeshPart::solid));
+
+    const auto mesh = CollisionMesh::build(zone);
+    auto check_passage = [&](const glm::vec3& from, const glm::vec3& to) {
+        auto sweep = game::SphereSweep::make(from, to, 1.1875f);
+        mesh.sweep_sphere(sweep);
+        CHECK_FALSE(sweep.collided);
+    };
+    // The two other slime actors cross open paths at the same height on each side.
+    check_passage({-274.212f, 7.639f, -25.6f}, {-276.336f, 2.028f, -25.6f});
+    check_passage({-282.761f, 16.511f, -25.6f}, {-276.895f, 15.250f, -25.6f});
+
+    if (game_dir.find("riwwi.s3d")) {
+        const auto riwwi = assets::load_classic_zone(game_dir, "riwwi");
+        const auto reuse = riwwi.objects.find("MIRSLIME700_ACTORDEF");
+        REQUIRE(reuse != riwwi.objects.end());
+        REQUIRE_FALSE(reuse->second.parts.empty());
+        CHECK(std::ranges::all_of(reuse->second.parts, &assets::MeshPart::solid));
+    }
+}
+
+TEST_CASE("Classic dungeons: reused slime effects leave open passages clear" *
+          doctest::skip(!hailstone::test::game_dir())) {
+    using namespace hailstone;
+    const auto& game_dir = *test::game_dir();
+    auto check_passage = [&](const std::string& short_name, const char* actor, const glm::vec3& from,
+                             const glm::vec3& to) {
+        if (!game_dir.find(short_name + ".s3d")) return;
+        CAPTURE(short_name);
+        const auto zone = assets::load_classic_zone(game_dir, short_name);
+        const auto effect = zone.objects.find(actor);
+        REQUIRE(effect != zone.objects.end());
+        REQUIRE_FALSE(effect->second.parts.empty());
+        CHECK_FALSE(effect->second.indices.empty());
+        CHECK(std::ranges::none_of(effect->second.parts, &assets::MeshPart::solid));
+
+        const auto mesh = CollisionMesh::build(zone);
+        auto sweep = game::SphereSweep::make(from, to, 1.1875f);
+        mesh.sweep_sphere(sweep);
+        CHECK_FALSE(sweep.collided);
+    };
+    check_passage("mmcg", "MIRSLIME700_ACTORDEF", {-37.79f, 196.0f, 4.4f}, {-37.79f, 200.0f, 4.4f});
+    check_passage("guka", "VEKSLIME403_ACTORDEF", {503.886f, 494.539f, 11.4f}, {509.645f, 492.854f, 11.4f});
 }
 
 TEST_CASE("line_of_sight is blocked by solid geometry") {

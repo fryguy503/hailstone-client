@@ -8,8 +8,8 @@
 // always-on entry (trigger 0, variant below 1) whose model point exists, when
 // the actor is made; it stays with the actor. Here the dressed mesh carries the
 // entries (assets::MeshEmitter) and each drawn actor keeps a persistent emitter
-// per entry on its point, placed every frame from the pose the actor renderer
-// drew. Density and opacity: eqclient.ini [Defaults] ActorParticleDensity /
+// per entry on its point, placed each frame from the pose for that frame.
+// Density and opacity: eqclient.ini [Defaults] ActorParticleDensity /
 // ActorParticleOpacity. Of the animation-started entries (trigger 1; their
 // animation is an index into eqgame's animation table at 0xaae3d8), those of
 // STND (31) and IDLE (32) run while the actor stands: the rune circles'
@@ -72,18 +72,17 @@ public:
     };
     // A bone's world matrix on an actor as drawn (false: not drawn).
     using BoneWorld = std::function<bool(std::uint32_t id, int bone, glm::mat4& world)>;
-    // Whether the actor drawn last was playing the clip `code`, and how far in (render::ActorRenderer::drawn_playing).
+    // Whether the prepared actor pose plays `code`, and how far in (render::ActorRenderer::drawn_playing).
     using Playing = std::function<bool(std::uint32_t id, std::string_view code, float& time)>;
 
-    // Starts the emitters of actors that came or changed their mesh, stops those of actors gone, and advances them
-    // by dt seconds for a viewer at `viewer`; then loads the textures they need (call outside a frame). The scene's
-    // (made with `scene`) does not advance them here: simulate_async does, after the frame is recorded.
+    // Starts the emitters of actors that came or changed their mesh, stops those of actors gone, and queues textures
+    // for existing renderers. Previews also advance the particles and prepare textures here, outside a frame.
     void update(float dt, std::span<const Actor> actors, const BoneWorld& bone_world, const glm::vec3& viewer,
                 const Playing& playing = {});
-    // The scene's step, by this frame's dt, on a worker (core::workers; inline without one): each attached emitter's
-    // place is read now from the poses as drawn this frame, then the particles move while the main thread goes on to
-    // the next frame. Every other call waits for the step first. The next frame draws its result, on the same poses
-    // the inline step used (the pose drawn last frame), the particles' time one frame behind. Nothing without `scene`.
+    // Outside a frame, create the renderers as needed and upload completed particle textures.
+    void prepare();
+    // Advances scene particles using this frame's poses. The step runs on a worker when one is available. Reading
+    // the simulation or drawing waits for the step so both use the current pose.
     void simulate_async(float dt, const BoneWorld& bone_world);
     // `modern`: render::ParticleRenderer::draw's.
     void draw(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::mat4& view, float glow = 1.0f,
@@ -140,7 +139,7 @@ private:
     static constexpr std::int32_t kEffectPointBase = 0x1000;
 
     struct Live {
-        // The mesh drawn last frame, and which one it is: a mesh freed and another dressed at its address (the
+        // The mesh from the last update, and which one it is: a mesh freed and another dressed at its address (the
         // spawn dressed again) has another serial (assets::MeshSerial), so its emitters start afresh.
         const assets::CharacterMesh* mesh = nullptr;
         std::uint64_t mesh_serial = 0;

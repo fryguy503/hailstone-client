@@ -167,22 +167,37 @@ end
 
 local TARGET_BUFFS = {} -- TargetWindow's Buff0..Buff41
 for i = 0, 41 do TARGET_BUFFS[i + 1] = "Buff" .. i end
-local targetBuffs = {} -- the slots holding a buff this frame, in order
+local targetBuffs = {} -- the slots holding a buff, in order
+-- The slots holding a buff are found every 0.25 s (42 slots asked), and at once for a new target; their icons are
+-- read every frame (an emptied slot's icon is gone at once).
+local nTargetBuffs, buffsAt, buffsFor = 0, nil, nil
 local distFeet, distText -- the target's distance and its text, made again only when it changes
 
 ui.window("HUD Target", function()
-  if not W.shown("TargetWindow") then return end
+  if not W.shown("TargetWindow") then
+    buffsAt = nil
+    return
+  end
   local frac, name, raw = API.character.Gauge(6, true)
-  if raw == -1 or not name or name == "" then return end
+  if raw == -1 or not name or name == "" then
+    buffsAt = nil -- (the next target's buffs found at once)
+    return
+  end
   -- a second row only for the target's buffs or its target (hs.Gauge(27))
   local tfrac, tname, traw = API.character.Gauge(27, true)
-  local nBuffs = 0
-  for i = 1, #TARGET_BUFFS do
-    if API.buffs.Slot("TargetWindow", TARGET_BUFFS[i]) then
-      nBuffs = nBuffs + 1
-      targetBuffs[nBuffs] = TARGET_BUFFS[i]
+  local now = ui.GetTime()
+  if not buffsAt or now - buffsAt >= 0.25 or now < buffsAt or name ~= buffsFor then
+    buffsAt, buffsFor = now, name
+    local nBuffs = 0
+    for i = 1, #TARGET_BUFFS do
+      if API.buffs.Slot("TargetWindow", TARGET_BUFFS[i]) then
+        nBuffs = nBuffs + 1
+        targetBuffs[nBuffs] = TARGET_BUFFS[i]
+      end
     end
+    nTargetBuffs = nBuffs
   end
+  local nBuffs = nTargetBuffs
   local extra = (traw ~= -1 and (tname or "") ~= "") or nBuffs > 0
   hud("HUD Target", 660, 74, 600, extra and 150 or 110, false, function(x0, y0, x1, y1)
     T.panel(x0, y0, x1, y1, 0.9)
@@ -266,6 +281,9 @@ ui.window("HUD Group", function()
   local rowH = 62
   hud("HUD Group", 32, 214, 400, 16 + count * (rowH + 6), true, function(x0, y0, x1, y1)
     local y = y0
+    T.font(18)
+    local _, th = ui.CalcTextSize("Ag") -- (once for the rows, in their font)
+    T.unfont()
     for k = 1, count do
       local m = members[k]
       local ry1 = y + T.px(rowH)
@@ -279,7 +297,6 @@ ui.window("HUD Group", function()
       T.panel(x0, y, x1, ry1, hovered and 1 or 0.85, T.px(12))
       local p = T.px(12)
       T.font(18)
-      local _, th = ui.CalcTextSize("Ag")
       local iconSize, iconGap = T.px(18), T.px(4)
       local iconW = roles.Width(m.roles, iconSize, iconGap)
       local name = T.fit(m.name:gsub("\n.*", ""), x1 - x0 - 2 * p - T.px(60) - (iconW > 0 and iconW + T.px(6) or 0))
@@ -312,6 +329,15 @@ for n = 0, 19 do
   XT_IDS[n] = { gauge = "ETW_Gauge" .. n, hpLabel = "ETW_HPLabel" .. n, role = "ETW_Role" .. n, button = "##xtarget" .. n }
 end
 local xtRows = {} -- the slots holding a spawn this frame (records kept from frame to frame)
+-- Each slot's role (its tooltip), asked every 0.25 s rather than a frame: it changes only when a role is set.
+local xtRoles, xtRolesAt = {}, {}
+local function xtRole(window, n)
+  local now, at = ui.GetTime(), xtRolesAt[n]
+  if not at or now - at >= 0.25 or now < at then
+    xtRoles[n], xtRolesAt[n] = API.windows.ChildTooltip(window, XT_IDS[n].role) or "", now
+  end
+  return xtRoles[n]
+end
 ui.window("HUD Extended Target", function()
   if not W.shown("ExtendedTargetWnd") then return end
   local WINDOW = "ExtendedTargetWnd"
@@ -325,7 +351,7 @@ ui.window("HUD Extended Target", function()
     if shown and API.windows.ChildShown(WINDOW, ids.hpLabel) == true then
       local frac, name = API.character.Gauge(42 + n)
       local r, g, b = API.windows.ChildColor(WINDOW, ids.gauge)
-      local role = API.windows.ChildTooltip(WINDOW, ids.role) or ""
+      local role = xtRole(WINDOW, n)
       nRows = nRows + 1
       local row = xtRows[nRows]
       if not row then
@@ -353,6 +379,9 @@ ui.window("HUD Extended Target", function()
     T.textIn(x0 + T.px(10), y0 + T.px(4), x1 - T.px(10), y0 + T.px(4) + th, nRows .. " / " .. slots, C.dim, 1)
     T.unfont()
     local y = y0 + T.px(30)
+    T.font(17)
+    local _, h = ui.CalcTextSize("Ag") -- (once for the rows, in their font)
+    T.unfont()
     for k = 1, nRows do
       local r = rows[k]
       local ry1 = y + T.px(rowH)
@@ -361,7 +390,6 @@ ui.window("HUD Extended Target", function()
       T.panel(x0, y, x1, ry1, ui.IsItemHovered() and 1 or 0.85, T.px(10))
       local p = T.px(10)
       T.font(17)
-      local _, h = ui.CalcTextSize("Ag")
       T.textIn(x0 + p, y + T.px(5), x1 - p - T.px(r.role and 110 or 50), y + T.px(5) + h, T.fit(r.name, x1 - x0 - 2 * p - T.px(r.role and 110 or 50)), r.con or C.text, 0)
       local right = r.pct ~= "" and (r.pct .. "%") or ""
       if r.role then right = r.role .. "  " .. right end

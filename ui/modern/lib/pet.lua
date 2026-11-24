@@ -6,7 +6,7 @@
 --   width = the window's (unscaled; 240)
 --   fold = "<setting key>": the command buttons fold under a "Pet commands" header the player opens and closes
 --     (kept in the UI settings under that key; folded at first)
--- The pet's buffs open the buff's menu on a right click (lib/buffmenu.lua: Spell Info and Add to Blocked Pet Spells).
+-- Right-click a buff for Spell Info, Add to Blocked Pet Spells or Remove when the buff can be clicked off.
 local API = hs.UI
 local hud = dofile("lib/hud.lua")
 local buffmenu = dofile("lib/buffmenu.lua")
@@ -59,11 +59,12 @@ local function gather()
   end
   for i = 1, MAX_BUFFS do
     local id = BUFF_IDS[i]
-    local spell, ms, name, good = API.buffs.Slot(WINDOW, id)
+    local spell, ms, name, good, _, pet, slot = API.buffs.Slot(WINDOW, id, false, true)
     if spell then
       nBuffs = nBuffs + 1
       local b = entry(buffs, nBuffs)
       b.id, b.spell, b.ms, b.name, b.good = id, spell, ms, name, good
+      b.pet, b.slot = pet, slot
     end
   end
   for _, id in ipairs(OTHER_IDS) do
@@ -179,7 +180,7 @@ local function body(x, y, w, h, s)
     T.Icon(ix, yy, ICON * s, s, tex, u0, v0, u1, v1, b.good and C.good or C.bad, ICON_OPTS)
     T.Hit(HIT[b.id], ix, yy, ix + ICON * s, yy + ICON * s, false)
     if ui.IsItemHovered() then
-      ui.SetTooltip(b.name .. "\n" .. T.LongDuration(b.ms) .. "\n" .. buffmenu.Hint(MENU))
+      ui.SetTooltip(b.name .. "\n" .. T.LongDuration(b.ms) .. "\n" .. buffmenu.Hint(MENU, b))
     end
     if ui.IsItemClicked(ui.Mouse.Right) and not ui.GetIO().alt then
       buffmenu.Open(WINDOW, b, MENU)

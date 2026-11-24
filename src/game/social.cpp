@@ -516,13 +516,13 @@ std::string expand_chat_variables(std::string_view text, const EqStrings& string
         const std::size_t at = out.size();
         const auto length = static_cast<std::ptrdiff_t>(at) - static_cast<std::ptrdiff_t>(current);
         if (length < 2 || out[at - 1] == ' ' || out[at - 1] == '\'') {
-            if (expansions > 10) { // after eleven expansions such a '%' becomes '@'
-                out += '@';
-                ++i;
-                continue;
-            }
             if (i + 1 < text.size()) {
                 if (auto value = replacement(ascii_lower(text[i + 1]))) {
+                    if (expansions > 10) { // the limit applies to codes, leaving literal percents alone
+                        out += '@';
+                        ++i;
+                        continue;
+                    }
                     out += *value;
                     current = at + 2;
                     ++expansions;
@@ -543,8 +543,8 @@ std::string expand_chat_variables(std::string_view text, const EqStrings& string
         ++i;
     }
     if (entities.empty()) return out;
-    // The original sends "&PCT;", which its chat window shows as '%'. A plain '%' is sent instead, as before this
-    // expansion existed: this client shows received text as it comes (docs/unknowns.md).
+    // These entities reproduce the sender's scan offsets. Return display text for local echoes and commands.
+    // Outgoing chat encodes the final text separately, including percents inside links and replacement values.
     std::string sent;
     sent.reserve(out.size());
     std::size_t from = 0;

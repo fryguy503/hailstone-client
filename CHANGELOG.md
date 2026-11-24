@@ -5,58 +5,88 @@
 - Custom builds can set a display version shown at login and in the in-game Help window.
 - Enhanced follow tracks the leader's swimming depth over submerged terrain.
 - Inventory add-ons can read quest flags and bag types and preview which empty slots accept the item on the cursor.
+- Trees with authored collision hulls let players move through their branches while their trunks still block movement. This fixes the invisible walls near the Field of Bone entrance to Warsliks Woods and in other classic zones
+- Decorative slime no longer blocks movement over the Veksar ramp and doorway or through passages in several Lost Dungeons of Norrath layouts
+- Spells that require line of sight now report “You cannot see your target” before casting through a solid door or moving obstacle
+- The Autosplit checkbox remembers the last choice you made in Options or with `/autosplit` when you log back in on the same installation
+- Closing a loot window sends one request while waiting for the server, preventing duplicate corpse-not-found messages
+- Autofollow stays with the caster's body while they steer Eye of Zomm
+- Modern Pet window: right-click a removable beneficial buff and choose **Remove** to click it off
+- Literal percent signs show correctly in chat, including tells and their echoes. Chat variables still expand when the message is sent
+
+## 0.7.3-beta (2026-11-23)
+
+- Warrior epic glows and other attached particle effects stay aligned as weapons, characters and objects move
+- Hailstone reads spell IDs above the original client's 45,000 ceiling from the spell file; a server add-on can ask to use them in play (a stock server keeps the 45,000 limit). Item details can show the effects and duration of custom spells from the server's spell file when authored descriptions are missing
+- **Plugin authors:** the SDK hooks `spell_id_limit` and `spell_data_ready` let a server add-on ask for spell IDs above 45,000 and check that the spell file has them (docs/plugins.md "Extended spell IDs")
+- Clicking Train or the background in Modern Alternate Advancement keeps held movement keys active
+- Dear ImGui is 1.93.0 (it was 1.91.9). **Plugin authors:** the SDK is ABI 4. A plugin built for ABI 3 still loads, but its `OnUpdateImGui` is not called and `imgui_context` and `web_view` give it nothing, since the Dear ImGui context it draws into changed. Rebuild it against this SDK and Dear ImGui 1.93.0. Lines, outlines, rectangle outlines and circles that scripts draw (`ui.DrawLine`, `ui.DrawRect`, `ui.DrawCircle`, nameplate canvas commands) keep their old pixel placement, and filled rectangles at fractional positions get smooth edges
+- Stackable items show their live quantity at the bottom of hotkeys in Modern and Gamepad
+- Gamepad merchant parcels: each send asks Yes / No first, "sent to" shows only once the item has left, and a cancelled or refused send says it was not sent
+- Gamepad: a window or popup over a list, tab row or text box no longer passes the mouse wheel or clicks to it, and only the focused item is highlighted while the pad drives. The Friends and Ignore tabs take mouse clicks
+- Gamepad Who strips a name to one word before it goes into `/invite`, `/target` or a tell; the on-screen chat keyboard stops at the input's length
+- Modern: the Menu Size slider shows "125 %" (it showed "125 %%"), the Titles window keeps its tab when the list fills in, the target's health bar no longer drains from the previous target, and the Lua social editor closes on a camp or character switch instead of saving into the next character's slot
+- Modern merchant send notes and coin prompts start fresh for each merchant and character, and Studio and New badges on Marketplace tiles no longer overlap
+- Negative numbers in the achievement browser and point merchants read "-123,456" (they could read "-,123")
+- Fixed a hang in the Options interface status text on malformed UTF-8, an error in the zone finder's route banner for a route of one zone, and slowdowns on server text with many unclosed colour tags
+- Bazaar, guild, mail, merchant, bank, AA, Advanced Inventory, achievements and several gamepad HUD windows do less work each frame
+- With **Auto Target Attackers** enabled, an NPC that attacks you becomes your target if you have none, even when your Extended Target list is empty
+- With a live EverQuest folder, Arena and Nektulos load the zone the server runs: the revamped zone when the server's safe point stands on it (PEQ's Arena, and Nektulos from expansion 10), the old zone otherwise. They always loaded the old zone before
+- Switching targets with Tab or other controls keeps auto attack and auto fire active. Enable **Red-Con Attack Guard** in Options to warn low-level players and stop their melee auto attack when they switch to much higher-level targets
 - Scripts can ask whether you or your target is poisoned, diseased, cursed or corrupted: `Me.Poisoned`, `Target.Diseased`, `.Cursed` and `.Corrupted` give the buff responsible, as in MacroQuest
 - Windows: when the graphics device fails mid-game, the client no longer crashes while closing with a plugin loaded, so the device error itself reaches the log and an error box
 - The target ring no longer tints the target's own body: a wolf's belly and legs stayed in the ring's colour where they stood over it. Ground and steps still take it
-- The out-of-combat regeneration indicator and countdown resume after camping and logging back in.
-- The Potion Belt remembers whether you left it open or closed when you camp and log back in.
-- Fixed automatic AFK while standing still, including automatic tribute shutoff on servers that offer it.
-- Chat displays curly apostrophes and quotes from UTF-8 messages. Fonts without curly quotes draw straight ones.
-- Modern chat has a **Timestamps** submenu with examples for 12-hour time with seconds, 24-hour time with or without seconds, and Off.
-- Modern chat: Turning off **Highlight New Messages** for a tab now suppresses its unread dot and overflow indicator.
-- Server owners can set `[client] deny = on` in `hailstone.cfg` to deny Hailstone access and show a notice at login. Launcher and `--user` test logins now ask for that file too, so on a server without Hailstone's script their first zone-in waits 5 s, as a saved server's already did.
-- Completed LDoN adventures release the request controls even while the instance remains accessible. The Adventure window updates after the server confirms a leave, and Kind and Risk stay editable during the request cooldown.
-- `/target next` and `/target prev` cycle through a spawn search's matches, and `/target` with no argument or `myself` targets you, as in MacroQuest.
-- Mouse look and the gamepad can turn a summoned Eye while your character is sitting.
-- Door clicks while controlling Eye of Zomm use the Eye's reach, and the Eye no longer intercepts first-person clicks.
-- Press F1–F6 again while the corresponding player is targeted to select their pet. Click the green pet bar in the Modern Group window to select that pet directly.
-- `/hidecorpses` remembers your choice per character across restarts and zone changes. Use `always` to hide every corpse, including your own, or `none` to show corpses again.
-- Item, say, and achievement links in chat work during the camp countdown.
-- Fixed starting a trade with only coin on the cursor. Adding held coin to a trade now moves it directly into the offer.
+- The out-of-combat regeneration indicator and countdown resume after camping and logging back in
+- The Potion Belt remembers whether you left it open or closed when you camp and log back in
+- Fixed automatic AFK while standing still, including automatic tribute shutoff on servers that offer it
+- Chat displays curly apostrophes and quotes from UTF-8 messages. Fonts without curly quotes draw straight ones
+- Modern chat has a **Timestamps** submenu with examples for 12-hour time with seconds, 24-hour time with or without seconds, and Off
+- Modern chat: Turning off **Highlight New Messages** for a tab now suppresses its unread dot and overflow indicator
+- Server owners can set `[client] deny = on` in `hailstone.cfg` to deny Hailstone access and show a notice at login. Launcher and `--user` test logins now ask for that file too, so on a server without Hailstone's script their first zone-in waits 5 s, as a saved server's already did
+- Completed LDoN adventures release the request controls even while the instance remains accessible. The Adventure window updates after the server confirms a leave, and Kind and Risk stay editable during the request cooldown
+- `/target next` and `/target prev` cycle through a spawn search's matches, and `/target` with no argument or `myself` targets you, as in MacroQuest
+- MacroQuest scripts: `ImGui.SetNextWindowSizeConstraints` takes two ImVec2 values, as in MacroQuest, as well as four numbers; such a call no longer stops the script
+- Mouse look and the gamepad can turn a summoned Eye while your character is sitting
+- Door clicks while controlling Eye of Zomm use the Eye's reach, and the Eye no longer intercepts first-person clicks
+- Press F1–F6 again while the corresponding player is targeted to select their pet. Click the green pet bar in the Modern Group window to select that pet directly
+- `/hidecorpses` remembers your choice per character across restarts and zone changes. Use `always` to hide every corpse, including your own, or `none` to show corpses again
+- Item, say, and achievement links in chat work during the camp countdown
+- Fixed starting a trade with only coin on the cursor. Adding held coin to a trade now moves it directly into the offer
+- Trades: answering a trade request from out of reach opens the trade, then the reach check cancels it and the server returns the offer, as in the original client (the answer was cancelled at once)
 - **Linux arm64 release package** (`hailstone-<version>-linux-arm64.zip`) for arm64 handhelds, boards and laptops with a Vulkan 1.3 driver, such as Mesa's Turnip on Snapdragon; it updates itself like the x64 one. So far it has only been tested on a Qualcomm Snapdragon 8 Elite (an AYN Odin 3 Max)
-- Modern Player Info: right-click the frame to show mana and endurance percentages, current / maximum values, or both. Each readout defaults to off.
-- `/consider` with no target says "Consider whom?", and considering a ship or boat says "You can't consider that." without asking the server, as in the original client.
-- Considering an NPC or player corpse shows its remaining decay time in chat. Player corpses also show their resurrection time or status.
-- Server add-ons can offer Find for the zone server's advertised NPCs and draw the paths returned by the server.
+- Modern Player Info: right-click the frame to show mana and endurance percentages, current / maximum values, or both. Each readout defaults to off
+- `/consider` with no target says "Consider whom?", and considering a ship or boat says "You can't consider that." without asking the server, as in the original client
+- Considering an NPC or player corpse shows its remaining decay time in chat. Player corpses also show their resurrection time or status
+- Server add-ons can offer Find for the zone server's advertised NPCs and draw the paths returned by the server
 - Server add-ons can enable a visual guide to your selected NPC, player or corpse through Find or `/find`.
 - Bazaar Search can draw a guide to a local seller with **Find Trader** in Modern and Gamepad when enabled by the server add-on.
-- Added `/import` to preview eligible socials and hotbar buttons from game data, fill empty slots, and restore the previous character settings from a backup.
-- The map remembers its zoom and position when reopened in Modern and Gamepad. Zoning or logging out resets the view.
-- Fixed stale Hide indicators on other players' nameplates after the server cancels Hide during combat.
-- When the server ends your Hide or Sneak, the chat says so, as in the original client.
-- Memorize individual spells and saved spell sets, or scribe scrolls, while mounted and stopped.
-- Closing the spell book aborts a scribe in progress with "Aborting scribing of spell.", as in the original, instead of pausing it or dropping it silently.
-- Copy Layout can also bring over another character's keyboard bindings, including movement remaps and alternate keys.
-- Modern Buffs and Songs can each use a horizontal or vertical layout with optional spell names, slot badges, timers, a background, a title bar, and drag resizing. Open **Window options** from an effect's right-click menu. The default stays the compact, transparent icon tray with timers.
-- Your bow appears in your left hand during the archery animation, then your equipped melee weapons or shield return.
-- Archery holds your bow in your left hand, as the original client does: from the first shot until your next melee swing, which brings back your weapons or shield. Other players in the zone see it too.
-- Options can show notices from active add-ons and explain why a setting is unavailable. Notices from several add-ons can appear together in Modern and Gamepad. No add-on can disable the Upscaler, UI pack or Texture pack choice, so the way out of an add-on or a broken pack stays open.
-- Clicking a dead member's name in the Group window targets their corpse when it is in the zone.
-- Tab and the other NPC target keys now pick only nearby NPCs on screen by default, and closed doors and placed objects hide NPCs as walls do. Separate options allow targeting through walls and doors or off-screen.
-- Item descriptions and comparisons show named weapon procs and other item effects even when the spell ID or its local definition is unavailable.
-- NPCs keep their current tint when a live update sends zero or an out-of-range palette index.
-- Bane damage in item descriptions names the creature type with the game's own labels instead of "body type N". A server's body-type change (SetBodyType, read against `Resources/CharacterPropertySets.txt`) updates spell checks and targeting.
-- Raid chat uses the new leader's name when the server supplies it in either name field and skips blank announcements.
-- Which off-hand items are worn as shields now comes from your game folder's `Resources\ActorTagInfo.txt`, as in the original client, so the shields a server's client files add are worn on the forearm. Without that file the original's built-in list is used
+- Added `/import` to preview eligible socials and hotbar buttons from game data, fill empty slots, and restore the previous character settings from a backup
+- The map remembers its zoom and position when reopened in Modern and Gamepad. Zoning or logging out resets the view
+- Fixed stale Hide indicators on other players' nameplates after the server cancels Hide during combat
+- When the server ends your Hide or Sneak, the chat says so, as in the original client
+- Memorize individual spells and saved spell sets, or scribe scrolls, while mounted and stopped
+- Closing the spell book before a scribe has been sent to the server aborts it with "Aborting scribing of spell.", as in the original, instead of pausing it or dropping it silently
+- Copy Layout can also bring over another character's keyboard bindings, including movement remaps and alternate keys
+- Modern Buffs and Songs can each use a horizontal or vertical layout with optional spell names, slot badges, timers, a background, a title bar, and drag resizing. Open **Window options** from an effect's right-click menu. The default stays the compact, transparent icon tray with timers
+- Archery holds your bow in your left hand, as the original client does: from the first shot until your next melee swing, which brings back your weapons or shield. Other players in the zone see it too
+- Options can show notices from active add-ons and explain why a setting is unavailable. Notices from several add-ons can appear together in Modern and Gamepad. No add-on can disable the Upscaler, UI pack or Texture pack choice, so the way out of an add-on or a broken pack stays open
+- Clicking a dead member's name in the Group window targets their corpse when it is in the zone
+- Tab and the other NPC target keys now pick only nearby NPCs on screen by default, and closed doors and placed objects hide NPCs as walls do. Separate options allow targeting through walls and doors or off-screen
+- Item descriptions and comparisons show named weapon procs and other item effects even when the spell ID or its local definition is unavailable
+- NPCs keep their current tint when a live update sends zero or an out-of-range palette index
+- Bane damage in item descriptions names the creature type with the game's own labels instead of "body type N". A server's body-type change (SetBodyType, read against `Resources/CharacterPropertySets.txt`) updates spell checks and targeting
+- Raid chat uses the new leader's name when the server supplies it in either name field and skips blank announcements
+- Which off-hand items are worn as shields now comes from your game folder's `Resources\ActorTagInfo.txt`, as in the original client, so the shields a server's client files add are worn on the forearm. Without that file, or with a current live install's, which has no shield column, the original's built-in list is used
   - `display.extra_shields` and Hailstone's own extra shield list are gone; a few weapons that shared a shield's model are held in the hand again
 - **Individual Sounds** (Options, Audio, modern interface; a Sounds page in the gamepad interface): a volume from 0 to 100 % for each of nine tiresome sounds, on top of Sound Effects, with a Test button and a reset to 100 %
   - Own footsteps (steps, jumps, landings), pet footsteps, other footsteps, opening a bag, opening a bank bag, money, thunder, equipping items and creature ambient sounds (spectres and the like)
 - Add-ons can draw on the zone map and the minimap through `hs.UI.map.RegisterOverlay`, whichever add-on's `map.lua` or `minimap.lua` draws the view (docs/ui-api.md "Map overlays")
-- Fixed Horizon Hills scenery protruding through the ground near cliffs in Trakanon's Teeth and at the Stonebrunt waterfall.
+- UI packs: the hs.UI API is 1.10. 1.9 adds `hs.UI.contributions` and 1.10 the optional argument of `hs.ZoneName(true)`, so a pack can check the version before using them (docs/ui-api.md)
+- Fixed Horizon Hills scenery protruding through the ground near cliffs in Trakanon's Teeth and at the Stonebrunt waterfall
 - A GM's /kill now drops you to -10000 HP, as in the original client, until the server next updates your HP (it only played the sound and printed the line)
-- Door clicks use the distance to the spot you clicked, fixing long-range zoning through the Guild Lobby entrance. The Plane of Fire orb in Plane of Tranquility can also be clicked.
-- Nagafen's dragon-room gate and other doors with passable render meshes and a separate WLD collision hull now block movement using that hull. It moves with the door as it opens and closes.
-- Replacing a door with the same ID refreshes its model and collision, including when the server reloads a zone's doors in one update.
+- Door clicks use the distance to the spot you clicked, fixing long-range zoning through the Guild Lobby entrance. The Plane of Fire orb in Plane of Tranquility can also be clicked
+- Nagafen's dragon-room gate and other doors with passable render meshes and a separate WLD collision hull now block movement using that hull. It moves with the door as it opens and closes
+- Replacing a door with the same ID refreshes its model and collision, including when the server reloads a zone's doors in one update
 - Dropped items and ground spawns whose model has no solid surface can be clicked, as see-through doors such as the Plane of Fire orb already can
 - A key or lockpick on the cursor is no longer offered for dropping when a click in the world misses a door or the door refuses it, as in the original
 - Buying from or selling to a merchant, and buying from a trader, plays the cash register and prints the line in the Merchants chat colour, as in the original
@@ -72,28 +102,26 @@
 - Modern chat: select text in a chat window with the mouse and copy it with Ctrl+C or the right-click menu's **Copy**
   - Drag to select, double-click for a word, triple-click for a line, Shift+click to extend; links still open with a click
 - Modern chat: a word wider than the chat window (a long name or a run with no space) wraps onto the next rows instead of being cut off at the edge
-- Item descriptions show personal and guild tribute values. Both Tribute Master layouts preview the favor for the held item or stack before you donate.
-- The direct Give prompt no longer appears for service NPCs that refuse item handoffs, including tribute masters.
+- Item descriptions show personal and guild tribute values. Both Tribute Master layouts preview the favor for the held item or stack before you donate
+- The direct Give prompt no longer appears for service NPCs that refuse item handoffs, including tribute masters
 - Your own name is in parentheses while you are hidden, as in the original client (it was plain). Sneak alone adds none
 - The sample `hailstone.cfg` now includes the Ability Book's autoskill switch, and the server guide shows how to disable autoskill and Lua socials
 - Loot All takes NO DROP items from your own corpse without confirmation after a same-zone resurrection
   - A spawn that dies in sight is renamed as the original client names it (`Name's corpse<id>` for a player, `name's_corpse<id>` for an NPC), so /corpse and the loot window know your corpse
-- Choose **Map Pack** directly in the map window in Modern and Gamepad. The selection is saved per character.
-- NPCs renamed by a quest after spawning now show their updated names on nameplates and in the target window.
-- Modern Player frame: right-click and select **Always show cast bar** to keep the frame the same height between casts and songs.
+- Choose **Map Pack** directly in the map window in Modern and Gamepad. The selection is saved per character
+- NPCs renamed by a quest after spawning now show their updated names on nameplates and in the target window
+- Modern Player frame: right-click and select **Always show cast bar** to keep the frame the same height between casts and songs
 - Halas citizen women (the South Karana and Halas model) no longer hold their left arm straight out: it now hangs and swings like the right one in every animation
 - `/debug_animinfo` prints your target's (or your own) model, the animations its upper and lower body are playing and which bones are left in their rest pose, to help report characters that animate wrongly
-- Bag windows close when the interface is reloaded with /loadskin
-  - A reload starts a new interface session: no bag is open and the next bag key press opens them again
 - Bag windows close when the interface is reloaded with /loadskin, as in the original
   - The next bag key press opens them again
 - A server's marquee text shows in the large centre-screen text, and its camera effect shakes the drawn camera for as long as it asks
   - They arrive as the zone packets OP_Marquee and OP_CameraEffect; a marquee never adds a chat line
   - The shake moves only the camera, never the player, and a zone change ends it
-- Modern hotbars: **Lock layout** keeps hotbuttons in their slots and blocks edits while leaving activation and page changes available.
+- Modern hotbars: **Lock layout** keeps hotbuttons in their slots and blocks edits while leaving activation and page changes available
   - A bar locked with the old row keeps its frame lock (**Lock this frame**); turn Lock layout on again to protect its buttons
 - `/target <name>` picks as the original client does instead of taking the nearest match: a spawn's whole name wins (a player over the mount named after them), and otherwise a matching player is picked over anything less than 50 units nearer. Typed searches such as `/target npc orc` still take the nearest
-- Native nameplate add-ons can draw the same guild tags, NPC descriptions and pet owner names as stock nameplates.
+- Native nameplate add-ons can draw the same guild tags, NPC descriptions and pet owner names as stock nameplates
 - The server can now change a spawn's last name while you watch
   - It shows wherever name plates and the target window show last names, following your name-plate settings, and your own is updated too
 - The level-up effect shows: when the server sends it, rings and sparkles play on your character (and on others who level up near you), at the actor particle density
@@ -171,8 +199,7 @@
   - A version with leading zeros, names such as `aux.lua` or ending in a dot, and an `--out` folder inside the package's folder
   - It no longer packs a link that leads out of the folder; `tools/make_update.py` does the same and leaves dotfiles out
 - Spell memorization now speeds up with your trained Meditate skill, as it does in RoF2
-- Context submenus now open to the left when they run out of room on the right. Nested menus such as the spell picker keep cascading in that direction while there is room.
-- Chat and socials expand `%T`, `%M`, `%S`, `%O`, `%P` and `%R` in either case, using the target and pet at the time the line runs
+- Context submenus now open to the left when they run out of room on the right. Nested menus such as the spell picker keep cascading in that direction while there is room
 - Chat codes: `%T`, `%M`, `%S`, `%O`, `%P` and `%R`, in either case, become the target's name, your pet's name, the target's pronouns and its race in what you say, tell, emote and send to chat channels, in socials, and in the names given to `/assist` and `/shield`, as on the original client. Each line uses the target and pet it has when it runs
 - Modern login: Add-ons opens on its own when the cards cannot fit side by side, and the login and Add-ons cards scroll in short windows
 - Modern Buffs and Songs: **Show empty slots** keeps gaps in the tray, and **Show slot numbers in tooltips** adds the slot number after the spell name. Both are off by default and available with Alt-right-click on an icon

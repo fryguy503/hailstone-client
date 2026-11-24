@@ -183,7 +183,12 @@ void PlayerCustomization::parse(std::string_view text) {
 void ActorTagTable::parse(std::string_view text) {
     for (std::string_view line : lines(text)) {
         auto f = split(line, '^');
-        if (f.size() < 2) continue;
+        if (f.size() > 1 && f.back().empty()) f.pop_back(); // a trailing caret
+        // Nine values is a current live install's layout, which lacks field 2: its field 2 holds the 10-value layout's
+        // field 3 (IT200's 10, mostly -1) and nothing marks a shield. Such a line is no record, so a file of them leaves
+        // the fixed list in charge (Hailstone, a deliberate difference: the original would read its field 2 as the
+        // kind; docs/formats/characters.md "ActorTagInfo.txt").
+        if (f.size() < 2 || f.size() == 9) continue;
         std::uint32_t model = 0;
         std::int32_t kind = 0;
         auto [end1, ec1] = std::from_chars(f[0].data(), f[0].data() + f[0].size(), model);

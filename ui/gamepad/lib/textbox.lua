@@ -21,7 +21,7 @@ function TB.draw(stml, x0, y0, x1, y1, state)
     local ry = pad.axis("ry") or 0
     if math.abs(ry) > 0.2 then state.scroll = (state.scroll or 0) + ry * T.px(900) / math.max(20, ui.GetIO().fps or 60) end
   end
-  if ui.IsMouseHoveringRect(x0, y0, x1, y1) then
+  if T.mouseOver(x0, y0, x1, y1) then
     local wheel = ui.GetIO().wheel or 0
     if wheel ~= 0 then state.scroll = (state.scroll or 0) - wheel * lh * 3 end
   end

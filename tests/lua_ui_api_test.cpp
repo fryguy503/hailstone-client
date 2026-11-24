@@ -43,9 +43,7 @@ TEST_CASE("Lua UI: all public window flags match ImGui and scrollbar flags reach
     )lua";
     std::unique_ptr<ImGuiContext, void(*)(ImGuiContext*)> context(ImGui::CreateContext(), ImGui::DestroyContext);
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* pixels = nullptr;
-    int width = 0, height = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "settings.txt");
     for (const auto& [name, value] : {
             std::pair{"None", ImGuiWindowFlags_None},
@@ -153,9 +151,7 @@ TEST_CASE("Lua UI: IsItemDisabled and GetStyleAlpha observe widget state without
     )lua";
     ImGuiContext* context = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* pixels = nullptr;
-    int width = 0, height = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "settings.txt");
         for (int frame = 0; frame < 2; ++frame) {
@@ -210,9 +206,7 @@ TEST_CASE("Lua UI: the key names, keyboard capture, typing and DrawText's size")
                                        "end)\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -253,9 +247,7 @@ TEST_CASE("Lua UI: FindWindowRect finds a drawn window by name") {
                                        "end)\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -314,9 +306,7 @@ TEST_CASE("Lua UI: GetIO gives one read-only table, its values the frame's") {
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
     hailstone::ui::configure_keys(); // as the client: no macOS Ctrl/Cmd swap, so the Ctrl event below reads as Ctrl
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -372,9 +362,7 @@ TEST_CASE("Lua UI: PushStyleColors and PushStyleVars push a list in one call") {
            "end)\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -476,9 +464,7 @@ end)
 )lua";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -625,9 +611,7 @@ end)
 )lua";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -834,9 +818,7 @@ end)
 )lua";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -879,7 +861,8 @@ end)
 
 // The modern pack's STML links (ui/modern/lib/stml.lua): an href's target, also when its quote is never closed (the
 // storyline pages some servers ship: <a href="file:///storyline/Epic/BardEpic.txt>Bard</a>), a WndNotify link's
-// message and data, an <a> with neither only coloured, and a "<" that opens no tag kept as text.
+// message and data, an <a> with neither only coloured, and a "<" that opens no tag kept as text. Also the <c> colours
+// stml.Lines carries from line to line, no more than 32 of them.
 TEST_CASE("Lua UI: STML href links, an unclosed quote ending at the tag's end") {
     hailstone::test::ScratchDir scratch("lua_ui_api_stml_href_test");
     const fs::path dir = scratch.path() / "pack";
@@ -911,12 +894,19 @@ local function plain(line)
   return table.concat(t)
 end
 out.lt = plain("a < b") .. "|" .. plain('<c "#ff0000">x &amp; <3') .. "|" .. plain("one <b>two</b> three")
+-- a colour open at a line's end carries on; past 32 unclosed tags only the innermost 32 carry
+local W = { 1, 1, 1, 1 }
+local function hex(c) return string.format("%02x%02x%02x", math.floor(c[1] * 255 + 0.5), math.floor(c[2] * 255 + 0.5), math.floor(c[3] * 255 + 0.5)) end
+local lines = stml.Lines('<c "#ff0000">a\nb</c>c', W)
+local deep = {}
+for i = 1, 40 do deep[i] = string.format('<c "#%02x0000">', i) end
+local capped = stml.Lines(table.concat(deep) .. "x\ny" .. ("</c>"):rep(32) .. "z", W)
+out.carry = hex(lines[2][1][2]) .. "," .. tostring(lines[2][2][2] == W) .. "|" .. hex(capped[2][1][2]) .. "," ..
+  tostring(capped[2][#capped[2]][2] == W)
 )lua";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -941,6 +931,7 @@ out.lt = plain("a < b") .. "|" .. plain('<c "#ff0000">x &amp; <3') .. "|" .. pla
         CHECK(get("notify") == "item=27,x");
         CHECK(get("plain") == "here=plain");
         CHECK(get("lt") == "a < b|x & <3|one two three"); // a "<" that opens no tag is text
+        CHECK(get("carry") == "ff0000,true|280000,true");
     }
     ImGui::DestroyContext(ctx);
 }
@@ -1033,9 +1024,7 @@ end)
 )lua";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -1165,9 +1154,7 @@ end)
 )lua";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -1237,9 +1224,7 @@ TEST_CASE("Lua UI: table calls outside a table, or set up after the first row, a
                                     "end)\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -1285,9 +1270,7 @@ TEST_CASE("Lua UI: images draw only live textures the client handed out") {
     hailstone::ui::texture_id_removed(&freed);
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -1307,7 +1290,7 @@ TEST_CASE("Lua UI: images draw only live textures the client handed out") {
             lua.frame();
             ImGui::Render();
             live_draws = other_draws = 0;
-            const ImTextureID font = ImGui::GetIO().Fonts->TexID;
+            const ImTextureID font = ImGui::GetIO().Fonts->TexRef.GetTexID();
             const ImDrawData* data = ImGui::GetDrawData();
             for (const ImDrawList* list : data->CmdLists)
                 for (const ImDrawCmd& cmd : list->CmdBuffer) {
@@ -1342,9 +1325,7 @@ TEST_CASE("Lua UI: ui.Image takes a tint") {
     hailstone::ui::texture_id_added(&plain);
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -1391,9 +1372,7 @@ bool run_pack_frames(const std::string& name, const std::string& script, int fra
     std::ofstream(dir / "s.lua") << script;
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     bool done = false;
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
@@ -1538,9 +1517,7 @@ TEST_CASE("Lua UI: code editors made from changing ids are forgotten, not kept f
 TEST_CASE("Lua UI: the code editor places text as CalcTextSize from the line's start does") {
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     ImGui::GetIO().DisplaySize = ImVec2(800, 600);
     ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
     ImGui::NewFrame();
@@ -1611,9 +1588,7 @@ function open() return (OPEN.A and "A" or "") .. (OPEN.B and "B" or "") .. (OPEN
 )lua";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -1705,9 +1680,7 @@ end
 )lua";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -1766,9 +1739,7 @@ TEST_CASE("Lua UI: a window rolls up, its collapse button at the right") {
                                        "end)\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -1860,9 +1831,7 @@ ui.Button, ui.SmallButton = pressing(button), pressing(small)
 )lua";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -1920,9 +1889,7 @@ TEST_CASE("Lua UI: a script pops only the style it pushed") {
                                     "end)\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         for (int i = 0; i < 2; ++i) {
@@ -1931,7 +1898,7 @@ TEST_CASE("Lua UI: a script pops only the style it pushed") {
             ImGui::NewFrame();
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 1, 0, 1));
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.5f);
-            ImGui::PushFont(ImGui::GetFont());
+            ImGui::PushFont(ImGui::GetFont(), 0.0f);
             const int colors = GImGui->ColorStack.Size, vars = GImGui->StyleVarStack.Size,
                       fonts = GImGui->FontStack.Size;
             lua.frame();
@@ -1972,9 +1939,7 @@ TEST_CASE("Lua UI: ending a drag and drop never begun leaves the window open") {
                                     "end)\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_register(lua.state(), "current_window_name", &current_window_name);
@@ -2014,9 +1979,7 @@ TEST_CASE("Lua UI: a window with no script reports its error and comes back when
     std::ofstream(dir / "s.lua") << "ui.window('Base', function() end)\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         auto frame = [&] {

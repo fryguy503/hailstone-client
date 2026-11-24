@@ -84,9 +84,7 @@ TEST_CASE("Lua UI: a plugin's folder of windows, its own dofile root, gone with 
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(pack, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -129,9 +127,7 @@ TEST_CASE("Lua UI: a plugin's window covers the pack's of the same name; ui.base
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(pack, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -214,9 +210,7 @@ TEST_CASE("Lua UI: a plugin's code keeps to its own globals, sees hs, ui and the
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(pack, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -305,9 +299,7 @@ TEST_CASE("Lua UI: a plugin's code runs as the plugin: its load, its windows, an
     std::vector<std::string> scopes;
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(pack, scratch.path() / "ui.txt");
         lua.add_ui_api([](lua_State* L) {

@@ -18,6 +18,7 @@ AnimatedObjects AnimatedObjects::build(const assets::Zone& zone) {
         if (mesh == zone.objects.end()) continue;
         auto [number, fresh] = numbers.try_emplace(p.actor, static_cast<std::uint32_t>(out.definitions_.size()));
         if (fresh) {
+            const bool has_hull = zone.placement_collision_hulls.contains(p.actor);
             Definition d;
             d.animation = anim->second;
             // One mesh per moving node with triangles: the object's vertices, only that node's triangles.
@@ -36,6 +37,8 @@ AnimatedObjects AnimatedObjects::build(const assets::Zone& zone) {
                 part.front_ccw = m.front_ccw;
                 for (const auto& mp : m.parts) {
                     assets::MeshPart kept = mp;
+                    // The authored hull stays in the static collision mesh while the rendered branches move.
+                    if (has_hull) kept.solid = false;
                     kept.first_index = static_cast<std::uint32_t>(part.indices.size());
                     for (std::uint32_t i = 0; i + 2 < mp.index_count; i += 3) {
                         if (std::size_t{mp.first_index} + i + 2 >= m.indices.size()) break;

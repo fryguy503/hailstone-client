@@ -38,6 +38,9 @@ namespace hailstone::net {
 
 namespace {
 
+constexpr std::string_view kAutosplitSection = "Hailstone";
+constexpr std::string_view kAutosplitKey = "Autosplit";
+
 bool iequals(std::string_view a, std::string_view b) {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
                return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
@@ -98,6 +101,9 @@ std::string fmt_eq(const game::EqStrings& s, std::uint32_t id, std::vector<std::
 
 // Guild invitations lapse like the original's confirmation dialog (10 s, @0x4b9809).
 constexpr std::int64_t kGuildInviteMs = 10000;
+
+// EQEmu relays at most 512 bytes of the emote body, both for channel 22 and for OP_Emote.
+constexpr std::size_t kEmoteRelayMaxText = 512;
 
 } // namespace
 
@@ -445,7 +451,7 @@ void GameConnection::send_channel(std::uint32_t channel, const std::string& targ
     m.language = lang;
     m.language_skill = static_cast<std::uint32_t>(std::max(0, skill));
     m.channel = channel;
-    m.message = text;
+    m.message = game::encode_chat_percents(text, channel == 22 ? kEmoteRelayMaxText : kChannelMessageMaxText);
     send_zone(encode(m));
 }
 
@@ -527,7 +533,8 @@ void GameConnection::reply_command(const std::string& args) {
         // the chat server
         std::string word = fmt_eq(strings_, 13974, {});
         if (!word.empty() && word[0] == '/') word.erase(0, 1);
-        send_chat_server_message(expand_chat_text(std::format("{}{} {} {}", to[0], word, to.substr(1), args)), false);
+        const auto text = expand_chat_text(std::format("{}{} {} {}", to[0], word, to.substr(1), args));
+        send_chat_server_message(game::encode_chat_percents(text, kChannelMessageMaxText), false);
         return;
     }
     send_tell(to, args);
@@ -587,7 +594,7 @@ void GameConnection::social_emote(const game::SocialEmote& e, const std::string&
     // line.
     text.others = expand_chat_text(text.others);
     text.echo = expand_chat_text(text.echo, false);
-    if (!text.others.empty()) send_zone(encode_social_emote(text.others));
+    if (!text.others.empty()) send_zone(encode_social_emote(game::encode_chat_percents(text.others, kEmoteRelayMaxText)));
     // The animation, when standing still (OP_Animation, speed 10).
     if (e.animation >= 0 && pstatus_.stand_state == 100 && !moving_ && world_.player_id) {
         Animation a;
@@ -734,7 +741,8 @@ void GameConnection::away_reply(const ChannelMessage& m) {
     ChannelMessage r;
     r.sender = character_;
     r.target = m.sender;
-    r.message = afk_message_.empty() ? fmt_eq(strings_, 1419, {}) : (prefix + afk_message_).substr(0, 0x7ff);
+    const auto text = afk_message_.empty() ? fmt_eq(strings_, 1419, {}) : prefix + afk_message_;
+    r.message = game::encode_chat_percents(text, kChannelMessageMaxText);
     r.channel = 7;
     r.language = chat_language_ < 32 ? chat_language_ : 0;
     std::uint32_t skill = profile_ && r.language < profile_->languages.size() ? profile_->languages[r.language] : 0;
@@ -1119,7 +1127,13 @@ void GameConnection::load_chat_filters() {
 void GameConnection::load_client_options() {
     // CEverQuest::loadOptions @0x544be0 (eqclient.ini over defaults.ini): here the character's options.ini over the
     // asset folder's eqclient.ini, the defaults where both lack a key (before a character is chosen, eqclient.ini's).
-    client_options_.load(load_option_settings(game_, own_files().options_ini()));
+    const auto path = own_files().options_ini();
+    client_options_.load(load_option_settings(game_, path));
+    // EQEmu's RoF2 profile sends zero for Autosplit even when the server has it enabled.
+    // Remember the last choice from this character's own file, with no server write on login.
+    IniFile own;
+    own.load(path);
+    autosplit_ = own.get_int(kAutosplitSection, kAutosplitKey, 0) == 1;
     tracking_from_options();
     // Logging that was on goes on in the default log ("eqlog") once the character is known.
     open_chat_log("eqlog");
@@ -1149,10 +1163,11 @@ void GameConnection::copy_character_settings(const std::filesystem::path& from_d
         send_server_filter();
     }
     if (options) {
-        // Anonymous and Roleplaying share [Options] Anonymous: the character's public flags, not a preference.
+        // Keep the destination character's public flags and last Autosplit choice.
         const game::ClientOptionInfo& anon = game::client_option_info(game::ClientOption::Anonymous);
         auto skip = [&](const std::string& section, const std::string& key) {
-            return game::same_no_case(section, anon.section) && game::same_no_case(key, anon.key);
+            return (game::same_no_case(section, anon.section) && game::same_no_case(key, anon.key)) ||
+                   (game::same_no_case(section, kAutosplitSection) && game::same_no_case(key, kAutosplitKey));
         };
         if (merge(from_dir / own.options_ini().filename(), own.options_ini(), skip)) {
             game::ClientOptions before = client_options_;
@@ -1287,6 +1302,16 @@ std::optional<int> GameConnection::character_setting(std::string_view name) cons
     return std::nullopt;
 }
 
+void GameConnection::set_autosplit(bool checked, std::uint32_t message, std::uint32_t color) {
+    autosplit_ = checked;
+    system(message, {}, color);
+    const SpawnAppearance appearance{static_cast<std::uint16_t>(world_.player_id), 28, checked ? 1u : 0u};
+    if (!send_zone(encode(appearance))) return;
+    const auto path = own_files().options_ini();
+    if (!save_chat_setting(path, kAutosplitSection, kAutosplitKey, checked ? "1" : "0"))
+        log::warn("cannot write {}", path.string());
+}
+
 bool GameConnection::set_character_setting(std::string_view name, int value) {
     bool checked = value != 0;
     auto appearance = [&](std::uint16_t type, std::uint32_t parameter) {
@@ -1298,9 +1323,7 @@ bool GameConnection::set_character_setting(std::string_view name, int value) {
     };
     if (name == "loot_autosplit") {
         // +0x238: CharacterBase +0x46c, 0x2f04 / 0x2f05 (0x111), Send_OP_SpawnAppearance_00516c00 {me, 0x1c, flag}.
-        autosplit_ = checked;
-        system(autosplit_ ? 12036 : 12037, {}, 0x111);
-        appearance(28, autosplit_ ? 1 : 0);
+        set_autosplit(checked, checked ? 12036 : 12037, 0x111);
         return true;
     }
     int consent = name == "auto_consent_group" ? 0 : name == "auto_consent_raid" ? 1 : name == "auto_consent_guild" ? 2 : -1;
@@ -1937,6 +1960,16 @@ void GameConnection::send_chat_server_message(const std::string& text, bool via_
         m.sender = character_;
         m.channel = 20;
         m.message = text;
+        const auto separator = text.find(' ');
+        const bool chat_body = text.size() > 1 && (text[0] == ';' ||
+            (text[0] == '[' && (text[1] == '#' || std::isdigit(static_cast<unsigned char>(text[1])))));
+        // Numbered and named channels carry chat after the first space. UCS commands such as join and password
+        // interpret their own argument bytes, including '%'.
+        if (chat_body && separator < kChannelMessageMaxText - 1) {
+            const auto body = separator + 1;
+            m.message.resize(body);
+            m.message += game::encode_chat_percents(std::string_view(text).substr(body), kChannelMessageMaxText - body);
+        }
         send_zone(encode(m));
         return;
     }
@@ -2071,12 +2104,13 @@ void GameConnection::handle_chat_server_event(const ChatServerEvent& e) {
         // our echo 0x134). The original sends it through the zone instead when neither "SPAM:" came, nor the sender
         // is empty or us; EQEmu's chat server always sends "SPAM:0:".
         std::string sender = after_last_dot(e.sender);
+        const std::string text = game::decode_chat_percents(e.text);
         bool me = iequals(sender, character_);
         std::uint32_t color = 0x122;
         std::string line;
         auto chans = chat_server_->channels();
         if (e.channel.empty()) {
-            line = e.text; // -1
+            line = text; // -1
         } else if (e.channel[0] == '$') {
             std::string to = after_last_dot(e.channel.substr(1));
             if (iequals(to, character_)) { // -4
@@ -2084,29 +2118,29 @@ void GameConnection::handle_chat_server_event(const ChatServerEvent& e) {
                 game::add_last_tell(social_, "[" + sender); // LastTell_Add
                 social_.last_tell_from = "[" + sender;
                 color = 0x101;
-                line = fmt_eq(strings_, 6721, {sender, e.text});
+                line = fmt_eq(strings_, 6721, {sender, text});
             } else if (me) { // -3
                 color = 0x134;
-                line = fmt_eq(strings_, 6719, {to, e.text});
+                line = fmt_eq(strings_, 6719, {to, text});
             } else {
-                line = fmt_eq(strings_, 6720, {sender, to, e.text});
+                line = fmt_eq(strings_, 6720, {sender, to, text});
             }
         } else {
             std::string name = after_last_dot(e.channel);
             auto it = std::find_if(chans.begin(), chans.end(), [&](const std::string& c) { return iequals(c, name); });
             if (it == chans.end()) { // -2
-                line = fmt_eq(strings_, 6723, {sender, "#" + name, e.text});
+                line = fmt_eq(strings_, 6723, {sender, "#" + name, text});
             } else {
                 int n = static_cast<int>(it - chans.begin());
                 std::string label = std::format("{}:{}", name, n + 1);
                 color = 0x123 + static_cast<std::uint32_t>(n);
-                if (sender.empty()) line = e.text;
+                if (sender.empty()) line = text;
                 else if (is_ignored(sender)) break;
                 else if (me) {
                     color = 0x13b + static_cast<std::uint32_t>(n);
-                    line = fmt_eq(strings_, 6722, {label, e.text});
+                    line = fmt_eq(strings_, 6722, {label, text});
                 } else {
-                    line = fmt_eq(strings_, 6723, {sender, label, e.text});
+                    line = fmt_eq(strings_, 6723, {sender, label, text});
                 }
             }
         }
@@ -2166,11 +2200,14 @@ void GameConnection::handle_social(Op op, const AppPacket& p) {
     const std::string me = character_;
     switch (op) {
     case Op::ChannelMessage:
-        if (auto m = decode_channel_message(p)) handle_channel_message(*m);
+        if (auto m = decode_channel_message(p)) {
+            m->message = game::decode_chat_percents(m->message);
+            handle_channel_message(*m);
+        }
         break;
     case Op::Emote:
         // Handle_OP_Emote @0x4b89f0.
-        if (auto e = decode_emote(p)) chat(ChatEvent::Kind::Emote, e->text);
+        if (auto e = decode_emote(p)) chat(ChatEvent::Kind::Emote, game::decode_chat_percents(e->text));
         break;
     case Op::WhoAllResponse:
         if (auto r = decode_who_response(p)) {

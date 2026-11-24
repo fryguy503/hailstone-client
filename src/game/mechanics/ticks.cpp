@@ -26,7 +26,6 @@ std::int32_t wrap_add(std::int32_t a, std::int32_t b) {
 }
 std::int32_t wrap_neg(std::int32_t a) { return static_cast<std::int32_t>(0u - static_cast<std::uint32_t>(a)); }
 
-constexpr std::int32_t kMaxSpellId = 0xafc8;
 constexpr std::int32_t kSpaHoldBuffs = 0x1b4;
 
 // PoolTick: the buff's change this tick (removing a draining buff flagged
@@ -55,7 +54,7 @@ std::int32_t process_affects(AffectState& st, AffectQueries& q) {
         if (buff.type < 2) continue;
         const AffectSpell* spell = nullptr;
         if (q.valid_spell(buff.spell_id)) {
-            spell = q.spell(buff.spell_id > kMaxSpellId ? kMaxSpellId : buff.spell_id);
+            spell = q.spell(buff.spell_id);
             if (spell && (!(spell->float_224 == 0.0f) || !(spell->float_21c == 0.0f))) {
                 q.cache_buff_slot_effects(index);
                 dirty = true;

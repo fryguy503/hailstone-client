@@ -31,9 +31,7 @@ TEST_CASE("Lua UI: the generational collector runs on its own and keeps the heap
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -82,9 +80,7 @@ TEST_CASE("Lua UI: the host runs the major collections, at three times the live 
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         lua_State* L = lua.state();
@@ -156,9 +152,7 @@ TEST_CASE("Lua UI: each window's allocations go to its frame section") {
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         hailstone::ui::lua::LuaUi lua(dir, scratch.path() / "ui.txt");
         auto frame = [&] {

@@ -116,6 +116,14 @@ local function refresh()
   end
 end
 
+-- A gem's number as text, made once a number (drawn on every memorized spell's row or tile a frame).
+local gemTexts = {}
+local function gemText(gem)
+  local t = gemTexts[gem]
+  if not t then t = tostring(gem + 1); gemTexts[gem] = t end
+  return t
+end
+
 local function seconds(ms)
   if not ms or ms <= 0 then return "Instant" end
   local s = ms / 1000
@@ -528,7 +536,7 @@ local function gridEntry(i, e)
       sel == e.id and C.accent or ringOf(e.beneficial and C.good or C.bad, 0.35), GRID_ICON)
     if e.gem then
       ui.DrawCircleFilled(px + GRID * s - 10 * s, py + 10 * s, 7 * s, C.accent[1], C.accent[2], C.accent[3], 1)
-      T.Text(px + GRID * s - 10 * s, py + 3 * s, tostring(e.gem + 1), C.onAccent, T.font.tiny, "center")
+      T.Text(px + GRID * s - 10 * s, py + 3 * s, gemText(e.gem), C.onAccent, T.font.tiny, "center")
     end
     if hovered then T.HoverFx(px + pad, py + pad, px + GRID * s - pad, py + GRID * s - pad, s, 6) end
     if st.swapSlot == e.slot then
@@ -567,16 +575,20 @@ local function listEntry(_, e)
     local colCast = px + cw * 0.62
     local colCat = px + cw * 0.72
     T.Text(nx, ty, T.Fit(e.name, colLevel - nx - 8 * s, T.font.small), dim and C.faint or C.text, T.font.small)
-    T.Text(colLevel, ty, tostring(e.level), dim and C.danger or C.muted, T.font.small)
-    T.Text(colMana, ty, e.mana > 0 and tostring(e.mana) or (e.endurance > 0 and (e.endurance .. " end") or "-"),
-      C.muted, T.font.small)
-    T.Text(colCast, ty, seconds(e.castTime), C.muted, T.font.small)
+    if not e._levelText then
+      e._levelText = tostring(e.level)
+      e._costText = e.mana > 0 and tostring(e.mana) or (e.endurance > 0 and (e.endurance .. " end") or "-")
+      e._castText = seconds(e.castTime)
+    end
+    T.Text(colLevel, ty, e._levelText, dim and C.danger or C.muted, T.font.small)
+    T.Text(colMana, ty, e._costText, C.muted, T.font.small)
+    T.Text(colCast, ty, e._castText, C.muted, T.font.small)
     T.Text(colCat, ty, T.Fit(e.subcategoryName ~= "" and e.subcategoryName or e.categoryName, px + cw - colCat - 30 * s,
       T.font.small), C.faint, T.font.small)
     if e.gem then
       local gx = px + cw - 14 * s
       ui.DrawCircleFilled(gx, py + ROW_H * s / 2, 9 * s, C.accent[1], C.accent[2], C.accent[3], 0.9)
-      T.Text(gx, ty, tostring(e.gem + 1), C.onAccent, T.font.small, "center")
+      T.Text(gx, ty, gemText(e.gem), C.onAccent, T.font.small, "center")
     end
     entryInput(e, st, hovered)
   end

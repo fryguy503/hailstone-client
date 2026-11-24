@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -166,6 +167,89 @@ TEST_CASE("An Eye buff controls and reports the Eye while preserving the player'
     CHECK(restored_view.le<std::uint32_t>() == 0);
 }
 
+TEST_CASE("Autofollow sees the Eye owner's body stay put until the owner moves again") {
+    EyeRig rig;
+    rig.enter();
+    auto& caster = rig.conn;
+    const auto caster_id = static_cast<std::uint16_t>(caster.world().player_id);
+    const auto name = caster.world().player()->name;
+    constexpr std::uint16_t eye_id = 987;
+
+    auto observer_config = test::MockConfig::standard();
+    observer_config.own_spawn_id = 8;
+    observer_config.characters.front().name = "Follower";
+    test::Rig observer(std::move(observer_config));
+    REQUIRE(observer.to_zone("Follower"));
+    auto& follower = observer.conn;
+    const auto body = follower.world().player()->position + glm::vec3(14, 0, 0);
+    caster.set_player_motion(body, 0, {}, false);
+    const auto server_body = game::world_to_server(body);
+    net::Spawn caster_spawn;
+    caster_spawn.spawn_id = caster_id;
+    caster_spawn.name = name;
+    caster_spawn.motion.x = server_body.x;
+    caster_spawn.motion.y = server_body.y;
+    caster_spawn.motion.z = server_body.z;
+    observer.server.add_spawn(caster_spawn);
+    REQUIRE(observer.until([&] { return follower.world().spawns.contains(caster_id); }));
+    net::GameConnectionTestAccess::group(follower).add(name, 60, false, {});
+    follower.player_status_mut().stand_state = net::kStandStanding;
+    follower.set_target(caster_id);
+    follower.send_command("/follow");
+    REQUIRE(follower.follow_target() == caster_id);
+
+    const auto eye = eye_packet(name, eye_id);
+    auto new_spawn = net::encode(eye);
+    new_spawn.opcode = net::to_wire(net::Op::NewSpawn);
+    follower.receive_zone_packet_for_test(new_spawn);
+    rig.spawn(eye);
+    rig.buff();
+    rig.tick();
+    REQUIRE(caster.eye_id() == eye_id);
+    const glm::vec3 eye_position{100, 200, 30};
+    caster.set_speed_run(0.7f); // The app publishes the controlled actor's speed for the spell book.
+    caster.set_controlled_motion(eye_position, 128, {0.5f, 0, 0}, 0.7f);
+    auto& updates = rig.server.client_updates;
+    auto report_body = [&] {
+        updates.clear();
+        caster.send_position_now();
+        REQUIRE(rig.until([&] {
+            return std::ranges::find(updates, caster_id, &net::ClientPositionUpdate::spawn_id) != updates.end();
+        }));
+        return *std::ranges::find(updates, caster_id, &net::ClientPositionUpdate::spawn_id);
+    };
+    const auto body_update = report_body();
+    REQUIRE(rig.until([&] {
+        return std::ranges::find(updates, eye_id, &net::ClientPositionUpdate::spawn_id) != updates.end();
+    }));
+    const auto eye_update = *std::ranges::find(updates, eye_id, &net::ClientPositionUpdate::spawn_id);
+    CHECK(body_update.motion.animation == 0);
+    CHECK(eye_update.motion.animation == 28);
+
+    // EQEmu relays the caster's animation and deltas, and broadcasts the Eye's position with zero animation
+    // and deltas. Apply both through the observer's normal receive and prediction paths.
+    net::Motion eye_motion;
+    eye_motion.x = eye_update.motion.x;
+    eye_motion.y = eye_update.motion.y;
+    eye_motion.z = eye_update.motion.z;
+    eye_motion.heading = eye_update.motion.heading;
+    follower.receive_zone_packet_for_test(net::encode(net::SpawnPositionUpdate{caster_id, 0, body_update.motion}));
+    follower.receive_zone_packet_for_test(net::encode(net::SpawnPositionUpdate{eye_id, 0, eye_motion}));
+    for (int step = 0; step < 20; ++step) follower.smooth(0.05f);
+    CHECK(follower.follow_target() == caster_id);
+    const auto& followed = follower.world().spawns.at(follower.follow_target());
+    CHECK(followed.position == body);
+    CHECK(followed.display_position == body);
+    CHECK(follower.world().spawns.at(eye_id).position == eye_position);
+
+    rig.buff(true);
+    REQUIRE(caster.eye_id() == 0);
+    CHECK(report_body().motion.animation == 0); // A report can go out before the next movement frame.
+    caster.set_speed_run(0.7f);
+    caster.set_player_motion(body + glm::vec3(1, 0, 0), 0, {0.5f, 0, 0}, true);
+    CHECK(report_body().motion.animation == 28);
+}
+
 TEST_CASE("Mouse and gamepad turning follow the Eye's posture while its owner sits") {
     EyeRig rig;
     rig.enter();
@@ -204,15 +288,18 @@ TEST_CASE("An Eye's view, control and physics incarnation retire at a zone hand-
     EyeRig rig;
     rig.enter();
     auto& c = rig.conn;
+    c.set_player_motion(c.world().player()->position, 0, {}, false);
     rig.spawn(eye_packet(c.world().player()->name));
     rig.buff();
     rig.tick();
     REQUIRE(c.eye_id() == 987);
+    c.set_speed_run(0.7f);
     c.receive_world_packet_for_test(net::encode(net::ZoneServerInfo{"127.0.0.1", 9000}));
     CHECK(c.eye_id() == 0);
     CHECK(c.controlled_id() == 0);
     CHECK(c.world().view_id == 0);
     CHECK(c.world().spawns.empty());
+    CHECK(c.player_stationary());
 }
 
 TEST_CASE("Door clicks follow the controlled Eye and return to the player's body when it fades") {

@@ -55,6 +55,7 @@ local function tile(window, n, i, x0, y0, size)
   local kind, label, tex = info.kind, info.label, info.tex
   local face = info.social
   local x1, y1 = x0 + size, y0 + size
+  local textBottom = info.stackCount and (y1 - math.min(T.px(16), size * 0.55)) or y1
   local r = T.px(8)
   local wx, wy = ui.GetWindowPos()
   ui.SetCursorPos(x0 - wx, y0 - wy)
@@ -67,11 +68,6 @@ local function tile(window, n, i, x0, y0, size)
   if tex then
     local m = math.floor(size * 0.08)
     T.icon(tex, info.u0, info.v0, info.u1, info.v1, x0 + m, y0 + m, x1 - m, y1 - m, iconA)
-    if kind == "item" and label:match("^%d+$") then
-      T.font(13)
-      T.textIn(x0, y1 - T.px(18), x1 - T.px(4), y1, label, C.text, 1)
-      T.unfont()
-    end
   elseif label ~= "" then
     if face and info.faceCooldown > 0 then ui.DrawRectFilled(x0, y1 - size * info.faceCooldown, x1, y1, 0, 0, 0, 0.5, r) end
     if face and not info.enabled then ui.DrawRectFilled(x0, y0, x1, y1, 0, 0, 0, 0.45, r) end
@@ -81,7 +77,7 @@ local function tile(window, n, i, x0, y0, size)
       tc = rec.tc
       tc[1], tc[2], tc[3] = info.color[1], info.color[2], info.color[3]
     end
-    T.textIn(x0 + 2, y0, x1 - 2, y1, fitted(rec.fit, label, size - 4), tc, 0.5)
+    T.textIn(x0 + 2, y0, x1 - 2, textBottom, fitted(rec.fit, label, size - 4), tc, 0.5)
     if face and info.overlay ~= "" then T.textIn(x0 + 2, y1 - size * 0.4, x1 - 3, y1, info.overlay, C.text, 1) end
     T.unfont()
   end
@@ -93,7 +89,7 @@ local function tile(window, n, i, x0, y0, size)
     if info.left >= 1000 then
       local secs = (info.left + 999) // 1000
       T.font(15)
-      T.textIn(x0, y0, x1, y1, secs >= 60 and string.format("%dm", (secs + 59) // 60) or tostring(secs), C.text, 0.5)
+      T.textIn(x0, y0, x1, textBottom, secs >= 60 and string.format("%dm", (secs + 59) // 60) or tostring(secs), C.text, 0.5)
       T.unfont()
     end
   end
@@ -102,10 +98,11 @@ local function tile(window, n, i, x0, y0, size)
     T.outline(x0, y0, x1, y1, C.accent, 1, r, T.px(3))
   end
   T.outline(x0, y0, x1, y1, hovered and C.accent or C.edge, hovered and 0.9 or 1, r, hovered and T.px(2) or 1)
+  if info.stackCount then T.hotbarCount(x0 + T.px(2), textBottom, x1 - T.px(3), y1 - T.px(1), info.stackCount, 1) end
   -- the key bound to it (Show Key Map: the button's text is its key, "" with the key map off)
   local key = API.windows.Text(window, id) or ""
   if key ~= "" then
-    T.font(12)
+    T.font(info.stackCount and math.min(12, (textBottom - y0 - T.px(3)) / T.S) or 12)
     T.draw(x1 - T.px(4) - ui.CalcTextSize(key), y0 + T.px(2), key, C.faint) -- top right, as the game's (0x5506b0)
     T.unfont()
   end

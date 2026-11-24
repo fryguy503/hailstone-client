@@ -46,8 +46,7 @@ struct ExtensionUi {
     ExtensionUi() {
         ImGui::SetCurrentContext(imgui);
         ImGui::GetIO().IniFilename=nullptr;
-        unsigned char* pixels=nullptr;int width=0,height=0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         for(const auto* dir:{"pack","a","b","c"})fs::create_directories(scratch.path()/dir);
         for(const auto* dir:{"a","b","c"})std::ofstream(scratch.path()/dir/"entry.lua")<<"loaded=true\n";
         host.in_game=host.ui_ready=true;

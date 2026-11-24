@@ -27,3 +27,7 @@ HAILSTONE_API void InitializePlugin(void) {
 }
 
 HAILSTONE_API void ShutdownPlugin(void) { RemoveCommand("/sdk071"); }
+
+/* Built for ABI 3, before Dear ImGui 1.92: the client must not call this (it would draw into a context of another
+ * layout). */
+HAILSTONE_API void OnUpdateImGui(void) { WriteChatf("[Sdk071] OnUpdateImGui called"); }

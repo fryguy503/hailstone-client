@@ -17,15 +17,9 @@ local SIDE_W = 250
 
 local GREEN = C.pet -- (the palette's green)
 
--- The selected ware's slot id and item (the slot the game marks checked).
-local function selectedWare()
-  for i = 0, SLOTS - 1 do
-    local id = "BZR_BazaarSlot" .. i
-    local _, checked = W.State(WINDOW, id)
-    if checked then return id, API.inventory.SlotItem(WINDOW, id) end
-  end
-  return nil, nil
-end
+-- The slots' ids, built once (the wares' pass runs every frame).
+local SLOT_IDS = {}
+for i = 0, SLOTS - 1 do SLOT_IDS[i] = "BZR_BazaarSlot" .. i end
 
 local function chip(text, color, s)
   local x, y = ui.GetCursorScreenPos()
@@ -71,10 +65,19 @@ local function drawWindow(x, y, w, h, s)
   local avail = ui.GetContentRegionAvail()
   local perRow = math.max(1, math.floor((avail + gap) / (size + gap)))
   local n = 0
+  -- One pass over the slots draws the wares and finds the selected one's item, so that each slot is asked for its
+  -- item once a frame. The game marks one slot at most checked, and an empty one shows nothing, so only the slots
+  -- holding an item are asked whether they are.
+  local item
   ui.BeginChild("##bzwaresscroll", 0, 0, false)
   for i = 0, SLOTS - 1 do
-    local id = "BZR_BazaarSlot" .. i
-    if API.inventory.SlotItem(WINDOW, id) then
+    local id = SLOT_IDS[i]
+    local slotItem = API.inventory.SlotItem(WINDOW, id)
+    if slotItem then
+      if not item then
+        local _, checked = W.State(WINDOW, id)
+        if checked then item = slotItem end
+      end
       if n % perRow ~= 0 then ui.SameLine(0, gap) end
       W.Slot(WINDOW, id, size, nil, "Trader's Satchel")
       n = n + 1
@@ -89,7 +92,6 @@ local function drawWindow(x, y, w, h, s)
   -- ---------------------------------------------------------------- the selected ware's price
   ui.SameLine(0, 8 * s)
   M.BeginPanel("##bzprice", sideW, topH, s)
-  local _, item = selectedWare()
   W.Heading("Price")
   if item then
     ui.PushTextWrapPos(0)

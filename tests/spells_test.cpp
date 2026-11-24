@@ -3,6 +3,7 @@
 #include <array>
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
 #include <span>
 #include <string>
 #include <vector>
@@ -12,11 +13,13 @@
 #include "core/game_dir.h"
 #include "game/mechanics/character.h"
 #include "game/spell_gem.h"
+#include "game/spell_record.h"
 #include "game/spells.h"
 #include "game_files.h"
 #include "net/opcodes.h"
 #include "net/packet_io.h"
 #include "net/spell_packets.h"
+#include "scratch_dir.h"
 #include "ui/spell_windows.h"
 
 using namespace hailstone;
@@ -336,12 +339,89 @@ TEST_CASE("spells_us.txt lines: the columns of EQ_Spell_InitFromLine") {
     CHECK(s->min_range == doctest::Approx(2.5f));
     CHECK_FALSE(game::SpellTable::parse_line("# comment"));
     CHECK_FALSE(game::SpellTable::parse_line(""));
+}
 
-    game::SpellTable t;
-    std::string text = line + "\r\n" + spell_line({{0, "45001"}, {1, "Too far"}}) + "\n" + spell_line({{0, "7"}, {1, "Never"}});
-    CHECK(t.parse(text) == 1); // LoadTextSpells stops at an id above 45000
-    CHECK(t.get(200));
-    CHECK_FALSE(t.get(7));
+TEST_CASE("spells_us.txt: spell IDs fit the signed wire fields without treating sentinels as spells") {
+    auto row = [](const char* id, const char* name) { return spell_line({{0, id}, {1, name}}); };
+    const std::string zero = row("0", "Placeholder");
+    const std::string above_legacy_range = row("50820", "Custom Effect");
+    const std::string maximum = row("2147483647", "Custom Effect");
+    std::string text = zero + "\r\n" + above_legacy_range + '\n' + row("100001", "Another Effect") + '\n' +
+                       maximum + '\n';
+    for (const char* id : {"-1", "65534", "65535", "2147483648", "4294967303", "18446744073709551616"}) {
+        const std::string invalid = row(id, "Invalid");
+        CHECK_FALSE(game::SpellTable::parse_line(invalid));
+        text += invalid + '\n';
+    }
+    // EQ_Spell_InitFromLine reads the ID with atoi: its leading digits.
+    const std::string trailing = row("2x", "Trailing");
+    REQUIRE(game::SpellTable::parse_line(trailing));
+    CHECK(game::SpellTable::parse_line(trailing)->id == 2);
+    text += trailing + '\n';
+    text += row("7", "Late Row");
+
+    game::SpellTable table;
+    REQUIRE(table.parse(text) == 6);
+    CHECK(table.get(0));
+    CHECK_FALSE(game::is_spell_id(0));
+    for (const auto id : {7u, 50820u, 65533u, 65536u, 100001u, 2147483647u}) CHECK(game::is_spell_id(id));
+    for (const auto id : {65534u, 65535u, 2147483648u, game::kNoSpell}) CHECK_FALSE(game::is_spell_id(id));
+    REQUIRE(table.get(7));
+    CHECK(table.get(7)->name == "Late Row");
+    CHECK(table.get(100001));
+    CHECK(table.get(2147483647u));
+    REQUIRE(table.get(2));
+    CHECK(table.get(2)->name == "Trailing");
+    CHECK_FALSE(table.get(65534));
+    CHECK_FALSE(table.get(65535));
+    const auto matches = table.find_all_by_name("custom effect");
+    CHECK(std::vector<std::uint32_t>(matches.begin(), matches.end()) == std::vector<std::uint32_t>{50820, 2147483647u});
+    CHECK(table.spell_crc(0) == game::spell_record_crc(game::spell_record_from_line(zero)));
+    CHECK(table.spell_crc(50820) == game::spell_record_crc(game::spell_record_from_line(above_legacy_range)));
+    CHECK(table.spell_crc(2147483647u) == game::spell_record_crc(game::spell_record_from_line(maximum)));
+    CHECK(table.spell_crc(65535) == game::spell_record_crc(game::unknown_spell_record()));
+}
+
+TEST_CASE("spells_us.txt: optional wire compatibility requires native records within the server's range") {
+    test::ScratchDir scratch("spell_table_wire_compatibility");
+    auto write = [&](std::string_view text) {
+        std::ofstream out(scratch.path() / "spells_us.txt", std::ios::binary | std::ios::trunc);
+        out << text;
+        REQUIRE(out.good());
+    };
+    const std::string stock = spell_line({{0, "7"}, {1, "Stock"}});
+    const std::string custom = spell_line({{0, "50820"}, {1, "Custom"}});
+    const std::string valid = stock + '\n' + custom + '\n';
+    write(stock);
+    GameDir game(scratch.path());
+    game::SpellTable table;
+    CHECK_FALSE(table.compatible_with_wire_limit(100000));
+    REQUIRE(table.load(game));
+    CHECK_FALSE(table.compatible_with_wire_limit(100000));
+    CHECK(table.get(7));
+
+    write(valid);
+    REQUIRE(table.load(game));
+    CHECK(table.compatible_with_wire_limit(50820));
+    CHECK_FALSE(table.compatible_with_wire_limit(50819));
+    REQUIRE(table.get(50820));
+    CHECK(table.file_crc() == game::mem_checker1({reinterpret_cast<const std::uint8_t*>(valid.data()), valid.size()}));
+
+    const std::string above_wire_limit = spell_line({{0, "100001"}, {1, "Above the wire limit"}});
+    write(valid + above_wire_limit);
+    REQUIRE(table.load(game));
+    CHECK_FALSE(table.compatible_with_wire_limit(100000));
+    CHECK(table.get(100001));
+
+    const std::string embedded_nul = spell_line({{0, "3"}, {1, std::string("Bad\0Name", 8)}});
+    const std::string trailing_id = spell_line({{0, "4x"}, {1, "Trailing"}});
+    for (const std::string& invalid :
+         {stock, std::string("3^short"), spell_line({{0, "65535"}}), embedded_nul, trailing_id}) {
+        write(valid + invalid);
+        REQUIRE(table.load(game));
+        CHECK_FALSE(table.compatible_with_wire_limit(100000));
+        CHECK(table.get(50820));
+    }
 }
 
 TEST_CASE("Cast time: 100 ms or less is instant") {
@@ -419,6 +499,12 @@ TEST_CASE("SpellTable::by_group_and_rank (SpellManager::GetSpellByGroupAndRank)"
     CHECK(t.by_group_and_rank(5, 9, 3, true)->id == 13);   // the subgroup must match
     CHECK_FALSE(t.by_group_and_rank(0, 2, 1, true));       // group 0 is not hashed
     CHECK_FALSE(t.by_group_and_rank(7, 2, 1, true));
+    REQUIRE(t.parse(line(50820, 5, 2, 2) + line(100010, 5, 4, 2)) == 2);
+    CHECK(t.by_group_and_rank(5, 2, 2, true)->id == 50820);
+    CHECK(t.by_group_and_rank(5, 2, 2, true, 45000)->id == 11);
+    CHECK(t.by_group_and_rank(5, 2, 4, true, 100000)->id == 12);
+    CHECK_FALSE(t.by_group_and_rank(5, 2, 4, false, 100000));
+    CHECK(t.by_group_and_rank(5, 2, -1, false, 100000)->id == 12);
 }
 
 TEST_CASE("SpellTable: the indexed lookups match a scan of the whole table") {
@@ -1066,7 +1152,7 @@ TEST_CASE("spells_us.txt: the live file read in RoF2's layout agrees with RoF2's
     REQUIRE(rof2.load(*game));
     REQUIRE(converted.load(live));
     int both = 0, cast = 0, mana = 0, target = 0, icon = 0, effects = 0, levels = 0, texts = 0, range = 0;
-    for (std::uint32_t id = 1; id <= game::kMaxSpellId; ++id) {
+    for (std::uint32_t id = 1; id <= game::kRof2StockMaxSpellId; ++id) {
         const game::SpellData* a = rof2.get(id);
         const game::SpellData* b = converted.get(id);
         if (!a || !b || a->name != b->name) continue;

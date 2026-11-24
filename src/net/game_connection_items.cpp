@@ -1383,13 +1383,22 @@ void GameConnection::loot_all_now() {
 }
 
 void GameConnection::end_loot() {
-    if (!loot_) return;
+    if (!loot_ || loot_->close_pending) return;
     extension_loot_all_ = false;
     if (quantity_ && quantity_->op == QuantityOp::ExtensionLoot) quantity_.reset();
-    loot_session_generation_ = core::next_process_identity();
-    send_zone(encode_end_loot_request(loot_->corpse_id));
+    const auto generation = core::next_process_identity();
+    loot_session_generation_ = generation;
+    const auto still_current = [this, generation] { return loot_ && loot_session_generation_ == generation; };
+    // CLootWnd::AboutToHide @0x6bcd40 guards a close until OP_LootComplete.
+    // Set the guard before send_zone, which can call back through a packet hook.
+    loot_->close_pending = true;
+    const bool sent = send_zone(encode_end_loot_request(loot_->corpse_id), true, still_current);
+    if (!still_current()) return;
+    if (!sent) {
+        loot_->close_pending = false;
+        return;
+    }
     hide_looted_corpse(); // /hidecorpses looted (net/game_connection_game_commands.cpp)
-    // The server answers OP_LootComplete, which closes the session.
 }
 
 // ---------------------------------------------------------------- links

@@ -397,7 +397,7 @@ std::unique_ptr<UiTextures::Entry> UiTextures::make(std::span<const std::byte> d
     render::UploadBatch batch(vk_);
     e->texture = batch.texture(rgba);
     batch.submit();
-    e->set = ui::add_imgui_texture(static_cast<VkSampler>(sampler_), e->texture.view,
+    e->set = ui::add_imgui_texture(e->texture.view,
                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     if (!e->set) {
         log::warn("ui art: no descriptor left for {}", what);

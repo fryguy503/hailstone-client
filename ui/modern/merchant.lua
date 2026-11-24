@@ -25,9 +25,12 @@ local consideredH = nil             -- the height the strip under the table took
 
 -- The merchant's rows: { row, name, lname (lower case), qty, copper, level, tex, uv }. A row's record is kept while
 -- everything it was made from reads the same (the cells and the icon), so a frame makes no tables and no lower-case
--- names for rows that did not change.
+-- names for rows that did not change. The rows are read again every ROW_REREAD seconds, at once when their count
+-- changes or the window opens (a ListRow a row a frame is a hundred calls into the game for a big merchant).
 local rowCache, rowList = {}, {}
 local rowsChanged = true -- set when a record was made or the row count changed: the filtered, sorted view is redone
+local ROW_REREAD = 0.25
+local rowsReadAt, rowsReadCount = -math.huge, -1
 local function same(e, t, tex, u0, v0, u1, v1)
   return e.src2 == t[2] and e.src3 == t[3] and e.src4 == t[4] and e.src5 == t[5] and e.src6 == t[6]
     and e.src7 == t[7] and e.src8 == t[8] and e.tex == tex and e.uv[1] == u0 and e.uv[2] == v0 and e.uv[3] == u1
@@ -35,8 +38,11 @@ local function same(e, t, tex, u0, v0, u1, v1)
 end
 local function readRows()
   local out = rowList
-  local n = 0
   local rows = API.windows.ListInfo(WINDOW, LIST) or 0
+  local now = ui.GetTime()
+  if rows == rowsReadCount and now - rowsReadAt < ROW_REREAD and now >= rowsReadAt then return out end
+  rowsReadAt, rowsReadCount = now, rows
+  local n = 0
   for r = 0, rows - 1 do
     local t, _, _, _, tex, u0, v0, u1, v1 = API.windows.ListRow(WINDOW, LIST, r)
     if t then
@@ -236,13 +242,21 @@ end
 -- The parcels waiting here (EQEmu's: hs.Parcels): a row picks one for Retrieve, which takes the first when none is
 -- picked; Claim all takes every one, one after another (Hailstone). Above the game's own Send fields.
 local pickedParcel = nil
--- a parcel's "From ..." line by sender and date, made once rather than a frame
-local fromLines = {}
+-- a parcel's "From ..." line by sender and date, made once rather than a frame (dropped past FROM_LINES_MAX, so a
+-- long session's senders and dates do not pile up)
+local fromLines, fromLineCount = {}, 0
+local FROM_LINES_MAX = 256
 local function fromLine(from, sent)
   local bySent = fromLines[from]
   if not bySent then bySent = {}; fromLines[from] = bySent end
   local line = bySent[sent]
   if not line then
+    if fromLineCount >= FROM_LINES_MAX then
+      fromLines, fromLineCount = {}, 0
+      bySent = {}
+      fromLines[from] = bySent
+    end
+    fromLineCount = fromLineCount + 1
     line = (from ~= "" and ("From " .. from) or "From the server") ..
       (sent > 0 and ("  \xC2\xB7  " .. os.date("%b %d", sent)) or "")
     bySent[sent] = line
@@ -427,7 +441,21 @@ local OPTS = {
   size = function() return 440, 520 end,
   resizable = { 340, 320 },
 }
+-- The frame the body was last drawn: a gap means the window was closed (another merchant, or another character
+-- after a camp), and what was being sent there (the parcel's note, the money asked about and typed) is dropped.
+local bodyFrame = -1
+local function opened()
+  local frame = ui.GetFrameCount()
+  local reopened = bodyFrame ~= frame - 1
+  bodyFrame = frame
+  if not reopened then return end
+  sendNote, moneyAsk, sendMoney = nil, nil, false
+  coins = { "", "", "", "" }
+  rowsReadAt = -math.huge
+end
+
 local function body(x, y, w, h, s)
+  opened()
   local _, lh = ui.CalcTextSize("Ag")
   local btnH = lh + 10 * s
   local page = W.Tabs(WINDOW, "MW_MerchantSubwindows", PAGES)

@@ -607,6 +607,15 @@ TEST_CASE("bazaar rules: prices, the INI key and the compact coin text") {
     clicky.effects[kEffectClick].effect = 200;
     clicky.charges = 3;
     CHECK(game::trader_price_key(clicky) == "5023:3");
+    clicky.effects[kEffectClick].effect = 100200;
+    game::TraderPrices prices;
+    prices.set(plain, 900); // the pre-extension key for this item
+    CHECK(game::trader_price_key(clicky) == "5023:3");
+    CHECK(prices.get(clicky) == 900);
+    prices.set(clicky, 1300);
+    CHECK(prices.get(clicky) == 1300);
+    clicky.charges = 2;
+    CHECK(prices.get(clicky) == 900);
 }
 
 TEST_CASE("the trader slots come from Trader's Satchels with their stored prices") {

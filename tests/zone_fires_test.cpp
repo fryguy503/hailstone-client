@@ -239,7 +239,7 @@ TEST_CASE("environment emitter lines") {
     CHECK(big[2].definition == 0);
 }
 
-TEST_CASE("environment emitters: a revamped zone loaded as S3D takes none of the live .eqg's") {
+TEST_CASE("environment emitters: a revamped zone loaded as S3D takes none of the live .eqg's, loaded as EQG all") {
     hailstone::test::ScratchDir dir("envemit");
     auto write = [&](const std::string& name, const std::string& body) {
         std::ofstream(dir.path() / name, std::ios::binary) << body;
@@ -258,6 +258,10 @@ TEST_CASE("environment emitters: a revamped zone loaded as S3D takes none of the
     revamped.name = "nektulos"; // loads its RoF2 .s3d; the emitters file is the revamp's
     CHECK(add_environment_emitters(game, revamped) == 0);
     CHECK(revamped.particle_fixtures.empty());
+    Zone revamp_loaded; // the same zone, loaded from the live .eqg (the server runs the revamp): the file is its own
+    revamp_loaded.name = "nektulos";
+    revamp_loaded.from_eqg = true;
+    CHECK(add_environment_emitters(game, revamp_loaded) == 1);
     Zone ordinary;
     ordinary.name = "somezone";
     CHECK(add_environment_emitters(game, ordinary) == 1);

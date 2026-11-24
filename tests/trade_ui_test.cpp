@@ -61,9 +61,7 @@ TEST_CASE("Give shortcut hides for NPCs that refuse direct hand-ins") {
     io.IniFilename = nullptr;
     io.DisplaySize = ImVec2(1280, 800);
     io.DeltaTime = 1.0f / 60.0f;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
 
     app::CommerceUi commerce;
     auto give_shown = [&] {
@@ -99,9 +97,7 @@ TEST_CASE("Trade window (modern): the partner's accept and ours show in the wind
 
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         Rig rig;
         REQUIRE(rig.to_zone());

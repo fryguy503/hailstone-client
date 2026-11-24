@@ -264,11 +264,12 @@ glm::vec3 ParticleRenderer::texture_color(const std::string& name) const {
 }
 
 void ParticleRenderer::prepare(const game::ParticleSystem& particles) {
-    // Read, decoded and averaged on the loader (they were in the frame: a new effect's first cast hitched); put up
-    // here, in one submission. A zone's own copy is taken from its archives here, in memory: the reader is the zone's
-    // and goes with it.
-    std::vector<std::pair<std::string, LoadedParticleTexture>> done;
-    if (loader_) done = loader_->take();
+    upload_textures();
+    request_textures(particles);
+}
+
+void ParticleRenderer::request_textures(const game::ParticleSystem& particles) {
+    // The loader decodes the textures and averages their colours. A texture can come from the zone's archives.
     std::vector<std::string>& wanted = wanted_;
     wanted.clear();
     auto request = [&](std::string_view texture) {
@@ -279,14 +280,14 @@ void ParticleRenderer::prepare(const game::ParticleSystem& particles) {
             wanted.push_back(name);
     };
     // Once per definition with a live emitter: the same names as asking per emitter, in the same order.
-    if (++prepare_pass_ == 0) {
+    if (++request_pass_ == 0) {
         std::fill(def_pass_.begin(), def_pass_.end(), 0u);
-        prepare_pass_ = 1;
+        request_pass_ = 1;
     }
     if (def_pass_.size() < particles.definitions().size()) def_pass_.resize(particles.definitions().size(), 0u);
     for (const auto& e : particles.emitters()) {
-        if (def_pass_[e.definition] == prepare_pass_) continue;
-        def_pass_[e.definition] = prepare_pass_;
+        if (def_pass_[e.definition] == request_pass_) continue;
+        def_pass_[e.definition] = request_pass_;
         const auto& d = particles.definitions()[e.definition];
         if (d.texture_frames.empty()) request(d.texture);
         else for (const auto& name : d.texture_frames) request(name);
@@ -310,6 +311,11 @@ void ParticleRenderer::prepare(const game::ParticleSystem& particles) {
             }
         });
     }
+}
+
+void ParticleRenderer::upload_textures() {
+    if (!loader_) return;
+    auto done = loader_->take();
     if (done.empty()) return;
     UploadBatch upload(vk_);
     for (auto& [name, t] : done) {

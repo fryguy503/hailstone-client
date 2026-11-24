@@ -32,8 +32,7 @@ struct VisibilityUi {
         auto& io = ImGui::GetIO();
         io.IniFilename = nullptr;
         io.ConfigInputTrickleEventQueue = false;
-        unsigned char* pixels = nullptr; int width = 0, height = 0;
-        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     }
     void begin() {
         auto& io = ImGui::GetIO();
@@ -65,7 +64,7 @@ TEST_CASE("UI visibility: hiding discards every draw list while preserving the w
     REQUIRE(ui.visibility.finish_frame(true));
     REQUIRE(ImGui::GetDrawData());
     CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
-    CHECK(ImGui::GetDrawData()->CmdListsCount >= 3);
+    CHECK(ImGui::GetDrawData()->CmdLists.Size >= 3);
     const auto position = ui.position, size = ui.size;
 
     ui.begin(); ui.editor();
@@ -131,7 +130,7 @@ TEST_CASE("Loading presentation: over every window, or beneath the plugins' ques
             const ImDrawData* data = ImGui::GetDrawData();
             REQUIRE(data);
             auto position = [&](const ImDrawList* list) {
-                for (int i = 0; i < data->CmdListsCount; ++i)
+                for (int i = 0; i < data->CmdLists.Size; ++i)
                     if (data->CmdLists[i] == list) return i;
                 return -1;
             };
@@ -811,9 +810,7 @@ TEST_CASE("Login: the client's own screen draws the corner, What's new's button 
     TempServers servers;
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     auto frame = [](ui::LoginView& v) {
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2(1280, 800);

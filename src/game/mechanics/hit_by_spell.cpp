@@ -7,6 +7,7 @@
 
 #include "core/wrap_math.h"
 #include "game/counter_spas.h"
+#include "game/spells.h"
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -296,7 +297,7 @@ bool is_song_on_self(const Spell* spell, Spawn* caster, Spawn* me) {
 
 } // namespace
 
-bool is_valid_spell_id(std::uint32_t id) { return id - 1 <= 0xafc7; }
+bool is_valid_spell_id(std::uint32_t id) { return game::is_spell_id(id); }
 
 std::uint8_t spell_affects(const Spell* spell, std::int32_t spa) {
     if (!spell) return 0;

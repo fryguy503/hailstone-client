@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "game/chat_text.h"
 #include "game/eq_strings.h"
 #include "game/slash_commands.h"
 #include "game/guild_notes.h"
@@ -390,13 +391,29 @@ TEST_CASE("outgoing chat variables follow DoPercentConvert's positions and limit
     npc.is_npc = true;
     CHECK(expand("%T%S", &npc) == "a gnoll%S");
     CHECK(expand("%T %S", &npc) == "a gnoll he");
-    // A '%' that is no code is "&PCT;" in sent text (sent as '%'), which moves the measure past it; a shown line
+    // For send-side scanning, a literal '%' uses the width of "&PCT;"; a shown line
     // leaves it, so the next '%' can be a code there.
     CHECK(expand("%%t") == "%%t");
     CHECK(expand("%%t", nullptr, false) == "%Target");
     CHECK(expand("100%") == "100%");
-    // After eleven expansions every further code position gets '@'; a '%' elsewhere is left.
-    CHECK(expand("%O %O %O %O %O %O %O %O %O %O %O %O %X x%O") == "it it it it it it it it it it it @O @X x%O");
+    // The limit applies to recognized codes; literal percents are still preserved.
+    CHECK(expand("%O %O %O %O %O %O %O %O %O %O %O %O %X x%O %") == "it it it it it it it it it it it @O %X x%O %");
+}
+
+TEST_CASE("chat percent transport round trips literal text and keeps escapes and links whole") {
+    using game::decode_chat_percents;
+    using game::encode_chat_percents;
+    const std::string text = "100% ready; %T &PCT; &AMP;PCT; &lt; %%";
+    const auto encoded = encode_chat_percents(text, 1023);
+    CHECK(encoded == "100&PCT; ready; &PCT;T &AMP;PCT; &AMP;AMP;PCT; &lt; &PCT;&PCT;");
+    CHECK(decode_chat_percents(encoded) == text);
+    CHECK(decode_chat_percents("100% ready; &PCT;T &AMP; &PCT") == "100% ready; %T &AMP; &PCT");
+    CHECK(encode_chat_percents("100% ready", 7) == "100");
+    CHECK(encode_chat_percents("100% ready", 8) == "100&PCT;");
+    CHECK(encode_chat_percents("a&PCT;", 9) == "a");
+    CHECK(encode_chat_percents("%\xc3\xa9", 6) == "&PCT;");
+    CHECK(encode_chat_percents("a \x12" "0Label%\x12!", 12) == "a ");
+    CHECK(encode_chat_percents("a \x12" "0Label%\x12!", 15) == "a \x12" "0Label&PCT;\x12");
 }
 
 TEST_CASE("chat templates per channel (msg_new_text)") {

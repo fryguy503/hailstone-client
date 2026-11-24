@@ -560,9 +560,7 @@ TEST_CASE("Lua UI: entry scripts load alone, from anywhere in the pack") {
     std::ofstream(pack / "tools" / "tool.lua") << "tool_answer = dofile('lib/shared.lua').answer\n";
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    unsigned char* px = nullptr;
-    int w = 0, h = 0;
-    ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     {
         ui::lua::LuaUi lua(pack, dir.path() / "ui.txt");
         lua.set_entry_scripts({"tools/tool.lua", "tools/missing.lua"});

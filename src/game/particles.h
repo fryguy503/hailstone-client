@@ -65,10 +65,31 @@ inline constexpr std::size_t kSpellFxSourceCount = 3;
 SpellFxSource spell_fx_source(std::uint32_t caster, std::uint32_t struck, std::uint32_t me,
                               std::optional<bool> caster_is_npc, std::optional<bool> struck_is_npc);
 
+// Spell groups keep the whole caster and spell IDs. Local emitters use their own namespace.
+class EmitterKey {
+public:
+    constexpr EmitterKey(std::uint32_t local = 0) : value_(local) {}
+    static constexpr EmitterKey spell(std::uint32_t caster, std::uint32_t id) {
+        EmitterKey key;
+        key.value_ = (static_cast<std::uint64_t>(caster) << 32) | id;
+        key.spell_ = true;
+        return key;
+    }
+    constexpr std::optional<std::uint32_t> local() const {
+        if (spell_) return std::nullopt;
+        return static_cast<std::uint32_t>(value_);
+    }
+    friend constexpr bool operator==(const EmitterKey&, const EmitterKey&) = default;
+
+private:
+    std::uint64_t value_ = 0;
+    bool spell_ = false;
+};
+
 // CreateSpellEmitter's arguments (eqgame's order).
 struct SpellEmitterRequest {
     std::int32_t emitter = 0;     // 1: EDD record index
-    std::uint32_t key = 0;        // 2: spawn id << 16 | spell id
+    EmitterKey key;              // 2: lifetime group
     std::int32_t duration_ms = 0; // 3: requested duration
     float density = 1.0f;         // 4
     float opacity = 1.0f;         // 5
@@ -189,7 +210,7 @@ struct Particle {
 
 struct Emitter {
     std::size_t definition = 0;
-    std::uint32_t key = 0;
+    EmitterKey key;
     std::uint32_t actor = 0;
     std::int32_t point = -1; // the actor's spell point it hangs from, or -1
     bool point_only = false;  // SpellEmitterRequest::point_only
@@ -263,7 +284,7 @@ public:
     // (emission_distance_factor); nullopt (the default) emits at full rate.
     void set_viewer(std::optional<glm::vec3> viewer) { viewer_ = viewer; }
     // Stops every emitter with this key (effect manager vtable +0x38).
-    void stop(std::uint32_t key);
+    void stop(EmitterKey key);
     // Remove a particular owner's attachment without affecting its other spells (e.g. a despawned blood point).
     void stop_attachment(std::uint32_t actor, std::int32_t point);
     void stop_actor(std::uint32_t actor);
@@ -276,8 +297,8 @@ public:
     // it (the effect manager's density setters, +0xa4 environment / +0xac actor).
     void set_persistent_density(float density);
     // Moves the emitters with this key (the effect's position, vtable +0x14).
-    void move(std::uint32_t key, const glm::vec3& origin);
-    bool has(std::uint32_t key) const;
+    void move(EmitterKey key, const glm::vec3& origin);
+    bool has(EmitterKey key) const;
     // A definition of the caller's (a texture to draw still particles with); returns its index.
     std::size_t add_definition(assets::EmitterDefinition d);
     // The particles of the still emitter `key` (of `definition`), drawn as given until set again or stopped.

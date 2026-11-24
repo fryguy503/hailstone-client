@@ -58,8 +58,10 @@ Where:
 The item description and comparison show an effect's name from the item data even when the local spell table lacks
 its definition (as the original does), and when the server masks its spell ID with -1 but still sends the name. The
 second is an extension past RoF2: the original skips any effect whose ID is below 1. Stock EQEmu sends -1 only for
-"no effect", without a name, so nothing changes against it. The detailed spell description still needs a local spell
-definition.
+"no effect", without a name. The item display can resolve a masked effect through a unique, exact extended spell
+name in the local table. It uses the game's authored description when available and formats the spell's effect slots
+when the text is missing. Timed click and combat effects also show their duration when the player context is available.
+The effect lines require the server's matching spell data in `spells_us.txt`.
 
 ## How the numbers are found
 

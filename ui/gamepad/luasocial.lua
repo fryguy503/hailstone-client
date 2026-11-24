@@ -189,6 +189,9 @@ ui.window("Lua Social", function()
   testOpen()
   local req = API.luasocials.EditRequest()
   if req then load(req) end
+  -- a pasted social the editor never took (socialedit.lua's paste, then a camp or a character switch before the
+  -- editor opened): dropped, so it cannot turn up later in another character's editor
+  if not API.session.InGame() then hailstone_social_draft = nil end
   if not open or not ed or not API.session.InGame() then
     st.kb.open, st.pick, state.confirm = false, nil, nil
     return

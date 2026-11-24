@@ -58,7 +58,7 @@ void ItemUi::close_bags_when_bank_hides(net::GameConnection& conn) {
 
 void ItemUi::link_clicked(net::GameConnection& conn, const game::ItemLink& link) { conn.request_item(link); }
 
-void ItemUi::draw(net::GameConnection& conn) {
+void ItemUi::draw(net::GameConnection& conn, const game::mechanics::Character* character) {
     while (auto item = conn.take_item_display()) ui::show_item_info(state_, std::move(*item));
     while (auto item = conn.take_item_refresh()) ui::refresh_item_info(state_, *item);
 
@@ -68,6 +68,13 @@ void ItemUi::draw(net::GameConnection& conn) {
     in.class_mask = conn.player_class_mask();
     in.item_flags = [&conn](const net::Item& item, std::string_view flags) { return conn.server_ext().item_flags(conn, item, flags); };
     in.item_description_append = [&conn](const net::Item& item) { return conn.server_ext().item_description_append(conn, item); };
+    in.item_effect_context.strings = &conn.strings();
+    in.item_effect_context.spells = &conn.spell_table();
+    in.item_effect_context.db_string = [&conn](std::uint32_t id, std::uint32_t type) {
+        return conn.strings().db_string(id, type);
+    };
+    in.item_effect_context.character = character;
+    in.item_effect_context.player_level = conn.player_status().level;
     if (const auto& loot = conn.loot_session(); loot && loot->open) {
         in.corpse_id = loot->corpse_id;
         in.corpse_name = loot->corpse_name;

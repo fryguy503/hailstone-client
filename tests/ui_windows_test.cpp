@@ -611,9 +611,7 @@ TEST_CASE("Group role UI packs: icons beside fitted names and name right clicks 
         auto& io = ImGui::GetIO();
         io.IniFilename = nullptr;
         io.DisplaySize = ImVec2(1600, 900);
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         const auto source = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
         ui::lua::LuaUi lua(source, scratch.path() / "pack.txt");
         lua.set_entry_scripts(pack == "modern" ? std::vector<std::string>{"player.lua", "group.lua"}
@@ -773,9 +771,7 @@ struct RolePackRig {
         auto& io = ImGui::GetIO();
         io.IniFilename = nullptr;
         io.DisplaySize = ImVec2(1600, 900);
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         const auto source = fs::path(__FILE__).parent_path().parent_path() / "ui" / pack;
         lua = std::make_unique<ui::lua::LuaUi>(source, scratch.path() / "pack.txt");
         lua->set_entry_scripts(std::move(scripts));

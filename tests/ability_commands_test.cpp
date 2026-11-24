@@ -61,10 +61,13 @@ net::AppPacket death_of(std::uint32_t id) {
     return net::encode(d);
 }
 
-net::AppPacket hit_on_me(std::uint32_t from, std::int32_t damage = 5) {
+net::AppPacket hit_on_me(std::uint32_t from, std::int32_t damage = 5, std::uint8_t type = 0,
+                        std::uint32_t spell = 0) {
     net::CombatDamage d;
     d.target = 1;
     d.source = static_cast<std::uint16_t>(from);
+    d.type = type;
+    d.spell_id = spell;
     d.damage = damage;
     return net::encode(d);
 }
@@ -402,35 +405,60 @@ TEST_CASE("attack_until_xtarget_clear: auto attack outlives the target while the
     }
 }
 
-TEST_CASE("auto_target_xtarget: with no target, an NPC on the extended target list that attacks becomes the target") {
-    // No target: the attacker on the list is taken (a miss counts).
+TEST_CASE("auto_target_xtarget: with no target, an attacking NPC becomes the target") {
+    // A miss or block counts even when the attacker is outside the list.
     {
         mq_test::World w("hailstone_auto_target_hit_test");
         auto& c = *w.conn;
         REQUIRE(c.auto_target_xtarget());
         A::world(c).target_id = 0;
         c.receive_zone_packet_for_test(xtarget_slot(0, 10, "a_rat01"));
-        c.receive_zone_packet_for_test(xtarget_slot(1, 11, "Fippy_Darkpaw000"));
         c.receive_zone_packet_for_test(hit_on_me(11, 0));
         c.update();
         CHECK(c.world().target_id == 11);
+        c.set_target(0);
+        c.receive_zone_packet_for_test(hit_on_me(11, -1));
+        c.update();
+        CHECK(c.world().target_id == 11);
     }
-    // A target held: unchanged.
+    // Keep a manually selected target, then prefer the next attacker even when another attacker is listed.
     {
         mq_test::World w("hailstone_auto_target_held_test");
         auto& c = *w.conn;
-        c.receive_zone_packet_for_test(xtarget_slot(0, 11, "Fippy_Darkpaw000"));
+        c.receive_zone_packet_for_test(xtarget_slot(0, 10, "a_rat01"));
+        c.receive_zone_packet_for_test(hit_on_me(10));
         c.receive_zone_packet_for_test(hit_on_me(11));
         c.update();
         CHECK(c.world().target_id == 10);
+        c.set_target(0);
+        c.update();
+        CHECK(c.world().target_id == 0);
+        c.receive_zone_packet_for_test(hit_on_me(11, 5, 231, 3004)); // Direct spell damage.
+        c.update();
+        CHECK(c.world().target_id == 11);
     }
-    // An attacker that is not on the list, or a player: nothing.
+    // Only a live, targetable NPC attacking the local player can trigger a pick.
     {
-        mq_test::World w("hailstone_auto_target_off_list_test");
+        mq_test::World w("hailstone_auto_target_ineligible_test");
         auto& c = *w.conn;
-        A::world(c).target_id = 0;
-        c.receive_zone_packet_for_test(hit_on_me(11));
-        c.receive_zone_packet_for_test(hit_on_me(12));
+        c.set_target(0);
+        w.add(14, "PlayerPet", true, 3, {0, 0, 0});
+        A::world(c).spawns.at(14).pet_owner_id = 12;
+        w.add(15, "Untargetable", true, 3, {0, 0, 0});
+        A::world(c).spawns.at(15).targetable = false;
+        for (const auto from : {0u, 1u, 12u, 13u, 14u, 15u, 99u}) {
+            CAPTURE(from);
+            c.receive_zone_packet_for_test(hit_on_me(from));
+            c.update();
+            REQUIRE(c.world().target_id == 0);
+        }
+        c.receive_zone_packet_for_test(net::encode(net::CombatDamage{.target = 12, .source = 11, .damage = 5}));
+        c.update();
+        CHECK(c.world().target_id == 0);
+        c.receive_zone_packet_for_test(hit_on_me(11, -25, 231, 200)); // Spell healing.
+        c.update();
+        CHECK(c.world().target_id == 0);
+        c.receive_zone_packet_for_test(hit_on_me(11, -5, 0xf9)); // Damage shield.
         c.update();
         CHECK(c.world().target_id == 0);
     }
@@ -463,11 +491,90 @@ TEST_CASE("auto_target_xtarget: with no target, an NPC on the extended target li
         auto& c = *w.conn;
         c.set_auto_target_xtarget(false);
         A::world(c).target_id = 0;
-        c.receive_zone_packet_for_test(xtarget_slot(0, 11, "Fippy_Darkpaw000"));
         c.receive_zone_packet_for_test(hit_on_me(11));
         c.update();
         CHECK(c.world().target_id == 0);
     }
+}
+
+TEST_CASE("auto_target_xtarget: only a known detrimental zero-damage spell selects its caster") {
+    mq_test::World w("hailstone_auto_target_zero_damage_spell_test");
+    auto& c = *w.conn;
+    c.set_target(0);
+
+    constexpr std::uint32_t beneficial = 200; // Minor Healing.
+    constexpr std::uint32_t detrimental = 3001; // Test Mesmerize.
+    constexpr std::uint32_t unknown = 60000;
+    for (const auto spell : {beneficial, unknown}) {
+        CAPTURE(spell);
+        c.receive_zone_packet_for_test(hit_on_me(11, 0, 231, spell));
+        c.update();
+        REQUIRE(c.world().target_id == 0);
+    }
+    c.receive_zone_packet_for_test(hit_on_me(11, 0, 231, detrimental));
+    c.update();
+    CHECK(c.world().target_id == 11);
+}
+
+TEST_CASE("auto_target_xtarget: a queued hit cannot select a replacement spawn with the same ID") {
+    for (bool delete_first : {false, true}) {
+        CAPTURE(delete_first);
+        mq_test::World w("hailstone_auto_target_reused_spawn_test");
+        auto& c = *w.conn;
+        c.set_target(0);
+
+        constexpr std::uint32_t attacker = 11;
+        const auto incarnation = c.world().spawns.at(attacker).incarnation;
+        c.receive_zone_packet_for_test(hit_on_me(attacker));
+        if (delete_first) c.receive_zone_packet_for_test(net::encode_delete_spawn(attacker));
+        auto replacement = net::encode(test::make_spawn("Replacement", attacker, 1, 1, 0, 0, 0));
+        replacement.opcode = net::to_wire(net::Op::NewSpawn);
+        c.receive_zone_packet_for_test(replacement);
+        REQUIRE(c.world().spawns.at(attacker).incarnation != incarnation);
+        c.update();
+        CHECK(c.world().target_id == 0);
+
+        c.receive_zone_packet_for_test(hit_on_me(attacker));
+        c.update();
+        CHECK(c.world().target_id == attacker);
+    }
+}
+
+TEST_CASE("auto_target_xtarget: a still-present attacker is selected if the latest one despawns") {
+    mq_test::World w("hailstone_auto_target_latest_despawned_test");
+    auto& c = *w.conn;
+    c.set_target(0);
+    REQUIRE(c.xtargets().slots.empty());
+
+    c.receive_zone_packet_for_test(hit_on_me(10));
+    c.receive_zone_packet_for_test(hit_on_me(11));
+    c.receive_zone_packet_for_test(net::encode_delete_spawn(11));
+    REQUIRE_FALSE(c.world().spawns.contains(11));
+    c.update();
+    CHECK(c.world().target_id == 10);
+}
+
+TEST_CASE("auto_target_xtarget: the first incoming hit selects the attacker without an extended target update") {
+    test::Rig rig;
+    auto& c = rig.conn;
+    auto& server = rig.server;
+    REQUIRE(rig.to_zone());
+    REQUIRE(c.world().target_id == 0);
+    REQUIRE(c.xtargets().slots.empty());
+
+    constexpr std::uint16_t attacker = 101; // The mock zone's rat.
+    REQUIRE(c.world().spawns.contains(attacker));
+    server.zone.send_reliable(net::encode(net::CombatDamage{
+        .target = static_cast<std::uint16_t>(c.world().player_id), .source = attacker, .damage = 5
+    }));
+
+    const auto target_mouse = [](const net::AppPacket& p) { return p.opcode == net::to_wire(net::Op::TargetMouse); };
+    const auto& packets = server.zone_log;
+    REQUIRE(rig.until([&] { return std::any_of(packets.begin(), packets.end(), target_mouse); }));
+    const auto target = std::find_if(packets.begin(), packets.end(), target_mouse);
+    CHECK(net::decode_target(*target) == attacker);
+    CHECK(c.world().target_id == attacker);
+    CHECK_FALSE(c.auto_attack());
 }
 
 TEST_CASE("face_on_attack: the attack key turns the player to the target only when the option is on") {

@@ -63,9 +63,7 @@ struct CanvasUi {
     explicit CanvasUi(std::string owner_tag = kTag) : tag(std::move(owner_tag)) {
         context = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         fs::create_directories(scratch.path() / "pack");
         fs::create_directories(scratch.path() / "plugin");
         host.nameplates = registry.get();

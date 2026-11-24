@@ -717,7 +717,8 @@ void GameConnection::handle_commerce(Op op, const AppPacket& p) {
                     ChannelMessage m;
                     m.sender = character_;
                     m.target = partner;
-                    m.message = strings_.format(1446, std::vector<std::string>{character_});
+                    const auto text = strings_.format(1446, std::vector<std::string>{character_});
+                    m.message = game::encode_chat_percents(text, kChannelMessageMaxText);
                     m.channel = 7;
                     m.language = chat_language_;
                     m.language_skill = 100;

@@ -72,7 +72,7 @@ struct Names {
 
     // GetSpellNameByID.
     std::string spell(std::int64_t id) const {
-        if (ctx.spells && id > 0 && id <= static_cast<std::int64_t>(kMaxSpellId))
+        if (ctx.spells && id > 0 && id <= INT32_MAX)
             if (const SpellData* s = ctx.spells->get(static_cast<std::uint32_t>(id)); s && !s->name.empty())
                 return s->name;
         return "Unknown Spell";

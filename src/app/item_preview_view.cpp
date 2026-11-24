@@ -215,7 +215,7 @@ void ItemPreviewView::make_target(Target& t, int width, int height) {
     t.width = width;
     t.height = height;
     if (!t.set) {
-        t.set = ui::add_imgui_texture(sampler_, t.out_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        t.set = ui::add_imgui_texture(t.out_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     } else {
         VkDescriptorImageInfo info{sampler_, t.out_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -337,7 +337,7 @@ void* ItemPreviewView::image(int width, int height) {
     // pool), nothing is drawn (null) and the set is asked for again on the next call, not the images made again.
     if (!t.set) {
         if (!t.out) make_target(t, want_width_, want_height_);
-        else t.set = ui::add_imgui_texture(sampler_, t.out_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        else t.set = ui::add_imgui_texture(t.out_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
     return t.set;
 }

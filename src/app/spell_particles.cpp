@@ -236,8 +236,8 @@ void SpellParticles::update(net::GameConnection& conn, std::span<const net::Spel
             // SpellEffectTimers_Remove: the emitters stop only when an entry was dropped. A nimbus (EQEmu sends
             // it as an OP_SpellEffect add) outlives its entry, so its removal is OP_RemoveNimbusEffect's.
             if (timers_.remove(e.caster, e.target, e.effect)) {
-                particles_.stop(e.caster << 16 | (e.effect & 0xffffu));
-                if (e.target != 0xffffffffu) particles_.stop(e.target << 16 | (e.effect & 0xffffu));
+                particles_.stop(game::EmitterKey::spell(e.caster, e.effect));
+                if (e.target != 0xffffffffu) particles_.stop(game::EmitterKey::spell(e.target, e.effect));
             }
             break;
         case Kind::AddNimbus:
@@ -246,7 +246,7 @@ void SpellParticles::update(net::GameConnection& conn, std::span<const net::Spel
             break;
         case Kind::RemoveNimbus:
             // Handle_OP_RemoveNimbusEffect @0x4b7a10.
-            particles_.stop(e.caster << 16 | (e.effect & 0xffffu));
+            particles_.stop(game::EmitterKey::spell(e.caster, e.effect));
             break;
         }
     }
@@ -319,7 +319,7 @@ float SpellParticles::particle_scale(const assets::CharacterModel& model) const 
 }
 
 namespace {
-// The keys of the path's emitters (above any spawn id << 16 | spell id a spell's emitters use).
+// Local keys of the path's emitters.
 constexpr std::uint32_t kPathLineKey = 0xfff00000u;
 constexpr std::uint32_t kPathFinishKey = 0xfff00001u;
 constexpr std::uint32_t kGuideLineKey = 0xfff00002u;
@@ -542,7 +542,11 @@ void SpellParticles::play_effect(net::GameConnection& conn, const game::SpellEff
 }
 
 void SpellParticles::prepare() {
-    if (renderer_) renderer_->prepare(particles_);
+    if (renderer_) renderer_->upload_textures();
+}
+
+void SpellParticles::request_textures() {
+    if (renderer_) renderer_->request_textures(particles_);
 }
 
 void SpellParticles::draw(const render::FrameInfo& frame, const glm::mat4& view_proj, const glm::mat4& view,

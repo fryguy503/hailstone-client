@@ -7,11 +7,17 @@
 // replay the original's.
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
 
 namespace hailstone::game {
+
+// Transport encoding for literal percent signs after chat variables have been expanded.
+// Keep an escape or a link whole when it reaches the packet's text limit.
+std::string encode_chat_percents(std::string_view text, std::size_t max_bytes);
+std::string decode_chat_percents(std::string_view text);
 
 // The game's random helpers the two filters call.
 class ChatRandom {

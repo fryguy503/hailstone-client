@@ -40,9 +40,7 @@ struct OverlayUi {
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::GetIO().ConfigErrorRecoveryEnableAssert = false;
         ImGui::GetIO().ConfigErrorRecoveryEnableTooltip = false;
-        unsigned char* pixels = nullptr;
-        int w = 0, h = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         for (const char* folder : {"ui", "qol", "autocombat"}) fs::create_directories(scratch.path() / folder);
         host.in_game = host.ui_ready = host.feet_valid = true; // the player at the origin (mq_test_world.h)
         host.game = world.game.get();

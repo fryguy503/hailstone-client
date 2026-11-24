@@ -238,12 +238,19 @@ TEST_CASE("Animated objects: the moving parts block where the animation has them
     game::AnimatedObjects moving = game::AnimatedObjects::build(zone);
     REQUIRE_FALSE(moving.empty());
     CHECK(moving.definition_count() == 1);
+    const glm::vec3 from{10, 0, 2}, to{0, 0, 2};
+    const auto can_see = [&] {
+        return app::world_geometry_line_of_sight(&mesh, &moving, [](const auto&, const auto&) { return true; }, from, to);
+    };
     // At 0 the slab stands at x 5..6: a walk along -x from x 10 meets it.
     moving.set_time(0);
+    CHECK(mesh.line_of_sight(from, to));
+    CHECK_FALSE(can_see());
     CHECK(blocked(moving, {10, 0, 2}, {0, 0, 2}));
     CHECK_FALSE(blocked(moving, {-10, 0, 2}, {0, 0, 2}));
     // A quarter turn later it stands at y 5..6.
     moving.set_time(100);
+    CHECK(can_see());
     CHECK_FALSE(blocked(moving, {10, 0, 2}, {0, 0, 2}));
     CHECK(blocked(moving, {0, 10, 2}, {0, 0, 2}));
     // Half a turn: at x -6..-5.
@@ -325,6 +332,46 @@ TEST_CASE("Animated objects: the player's movement meets the moving part through
     moving.set_time(200);
     sweep = world.sweep({10, 0, 2}, {0, 0, 2}, 0.5f);
     CHECK_FALSE(sweep.collided);
+}
+
+TEST_CASE("Placed skeleton hulls block movement while their rendered branches remain visible") {
+    for (bool animated : {false, true}) {
+        CAPTURE(animated);
+        auto zone = slab_zone();
+        auto& placement = zone.placements.front();
+        for (int axis = 0; axis < 3; ++axis) placement.transform[axis] *= 2.0f;
+        placement.transform[3] = {12, 27, 1, 1};
+        zone.objects.at(placement.actor).materials.front().blend = assets::BlendMode::Masked;
+        if (!animated) zone.object_animations.clear();
+
+        // The authored trunk face stands at x = 1. The visible branch is the slab at x = 5..6.
+        const glm::vec3 a(1, -1, 0), b(1, -1, 4), c(1, 1, 4), d(1, 1, 0);
+        zone.placement_collision_hulls.emplace(placement.actor, std::vector<glm::vec3>{a, b, c, a, c, d});
+        const auto at = [&](const glm::vec3& p) { return apply(placement.transform, p); };
+        const auto collision = game::CollisionMesh::build(zone);
+        const auto drawn = game::CollisionMesh::build_visual(zone);
+        auto moving = game::AnimatedObjects::build(zone);
+        app::ZoneMoveWorld world(&collision, nullptr, &zone.regions);
+        world.set_animated(&moving);
+        const auto surface = [&](const glm::vec3& p) {
+            return app::world_geometry_surface_floor(drawn, &moving,
+                [](const glm::vec3&) { return std::optional<float>{}; }, at(p));
+        };
+
+        CHECK_FALSE(world.sweep(at({8, 0, 2}), at({3, 0, 2}), 0.5f).collided);
+        CHECK(world.sweep(at({3, 0, 2}), at({0, 0, 2}), 0.5f).collided);
+        CHECK(collision.line_of_sight(at({8, 0, 2}), at({3, 0, 2})));
+        CHECK_FALSE(collision.line_of_sight(at({3, 0, 2}), at({0, 0, 2})));
+        REQUIRE(surface({5.5f, 0, 10}));
+        CHECK(*surface({5.5f, 0, 10}) == doctest::Approx(at({5.5f, 0, 4}).z));
+        if (animated) {
+            moving.set_time(100);
+            REQUIRE(surface({0, 5.5f, 10}));
+            CHECK(*surface({0, 5.5f, 10}) == doctest::Approx(at({0, 5.5f, 4}).z));
+            CHECK_FALSE(world.sweep(at({0, 8, 2}), at({0, 3, 2}), 0.5f).collided);
+            CHECK(world.sweep(at({3, 0, 2}), at({0, 0, 2}), 0.5f).collided);
+        }
+    }
 }
 
 TEST_CASE("Ssraeshza Temple: the turning rings let a swimmer into the water shaft and out at the top") {

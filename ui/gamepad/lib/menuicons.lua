@@ -19,6 +19,19 @@ local function poly(pts, closed)
   for i = 1, #pts - 2, 2 do line(pts[i], pts[i + 1], pts[i + 2], pts[i + 3]) end
   if closed then line(pts[#pts - 1], pts[#pts], pts[1], pts[2]) end
 end
+-- poly over its points given as arguments (x0, y0, x1, y1, ...): no table each time an icon draws
+local function polyv(closed, ...)
+  local n = select("#", ...)
+  for i = 1, n - 2, 2 do
+    local x0, y0, x1, y1 = select(i, ...)
+    line(x0, y0, x1, y1)
+  end
+  if closed then
+    local xl, yl = select(n - 1, ...)
+    local xf, yf = ...
+    line(xl, yl, xf, yf)
+  end
+end
 local function circle(x, y, r) local px, py = P(x, y) ui.DrawCircle(px, py, r * k, cr, cg, cb, ca, lw) end
 local function disc(x, y, r) local px, py = P(x, y) ui.DrawCircleFilled(px, py, r * k, cr, cg, cb, ca) end
 local function rect(x0, y0, x1, y1, round)
@@ -91,7 +104,7 @@ local function star(x, y, r)
 end
 local function upArrow(x, y, sc)
   line(x, y + 0.45 * sc, x, y - 0.45 * sc)
-  poly({ x - 0.3 * sc, y - 0.15 * sc, x, y - 0.45 * sc, x + 0.3 * sc, y - 0.15 * sc })
+  polyv(false, x - 0.3 * sc, y - 0.15 * sc, x, y - 0.45 * sc, x + 0.3 * sc, y - 0.15 * sc)
 end
 local function book(x0)
   rect(-0.75, -0.75, 0.75, 0.8, 0.12)
@@ -102,18 +115,26 @@ local function noEntry(x, y, r)
   line(x - r * 0.7, y + r * 0.7, x + r * 0.7, y - r * 0.7)
 end
 
+local GLOBE = {} -- the globe's meridian
+for i = 0, 23 do
+  local a = i * math.pi / 12
+  GLOBE[#GLOBE + 1] = 0.4 * math.cos(a)
+  GLOBE[#GLOBE + 1] = 0.85 * math.sin(a)
+end
+local BUG_LEGS, SCALE_PANS, AGGRO_TICKS = { -0.1, 0.25, 0.6 }, { -1, 1 }, { 225, 270, 315 }
+
 local ICONS = {
   compass = function()
     circle(0, 0, 0.85)
     tri(0, -0.62, 0.22, 0, -0.22, 0)
-    poly({ 0.22, 0, 0, 0.62, -0.22, 0 })
+    polyv(false, 0.22, 0, 0, 0.62, -0.22, 0)
   end,
   find = function()
     circle(-0.18, -0.18, 0.52)
     line(0.2, 0.2, 0.8, 0.8)
   end,
   map = function()
-    poly({ -0.85, -0.6, -0.3, -0.85, 0.3, -0.6, 0.85, -0.85, 0.85, 0.6, 0.3, 0.85, -0.3, 0.6, -0.85, 0.85 }, true)
+    polyv(true, -0.85, -0.6, -0.3, -0.85, 0.3, -0.6, 0.85, -0.85, 0.85, 0.6, 0.3, 0.85, -0.3, 0.6, -0.85, 0.85)
     line(-0.3, -0.85, -0.3, 0.6)
     line(0.3, -0.6, 0.3, 0.85)
   end,
@@ -128,7 +149,7 @@ local ICONS = {
   end,
   person = function() person(0, 0.05, 1) end,
   guild = function()
-    poly({ -0.7, -0.8, 0.7, -0.8, 0.7, 0.05, 0, 0.88, -0.7, 0.05 }, true)
+    polyv(true, -0.7, -0.8, 0.7, -0.8, 0.7, 0.05, 0, 0.88, -0.7, 0.05)
     line(0, -0.8, 0, 0.88)
   end,
   raid = function()
@@ -175,8 +196,8 @@ local ICONS = {
     line(-0.85, -0.6, -0.55, -0.88) line(0.85, -0.6, 0.55, -0.88)
   end,
   expedition = function()
-    poly({ -0.95, 0.75, -0.3, -0.35, 0.05, 0.2, 0.4, -0.7, 0.95, 0.75 }, true)
-    poly({ 0.2, -0.38, 0.4, -0.2, 0.6, -0.38 })
+    polyv(true, -0.95, 0.75, -0.3, -0.35, 0.05, 0.2, 0.4, -0.7, 0.95, 0.75)
+    polyv(false, 0.2, -0.38, 0.4, -0.2, 0.6, -0.38)
   end,
   journal = function()
     book()
@@ -198,9 +219,9 @@ local ICONS = {
     disc(-0.55, -0.12, 0.18) disc(-0.2, -0.5, 0.18) disc(0.2, -0.5, 0.18) disc(0.55, -0.12, 0.18)
   end,
   gem = function()
-    poly({ -0.45, -0.7, 0.45, -0.7, 0.85, -0.2, 0, 0.85, -0.85, -0.2 }, true)
+    polyv(true, -0.45, -0.7, 0.45, -0.7, 0.85, -0.2, 0, 0.85, -0.85, -0.2)
     line(-0.85, -0.2, 0.85, -0.2)
-    poly({ -0.3, -0.2, 0, 0.85, 0.3, -0.2 })
+    polyv(false, -0.3, -0.2, 0, 0.85, 0.3, -0.2)
   end,
   spellbook = function()
     book()
@@ -212,11 +233,11 @@ local ICONS = {
     upArrow(0, 0, 1)
   end,
   shortbuffs = function()
-    poly({ -0.6, -0.85, 0.6, -0.85, -0.6, 0.85, 0.6, 0.85 }, true)
+    polyv(true, -0.6, -0.85, 0.6, -0.85, -0.6, 0.85, 0.6, 0.85)
     tri(-0.3, 0.6, 0.3, 0.6, 0, 0.2)
   end,
   leadership = function()
-    poly({ -0.85, 0.6, -0.85, -0.5, -0.4, -0.05, 0, -0.75, 0.4, -0.05, 0.85, -0.5, 0.85, 0.6 }, true)
+    polyv(true, -0.85, 0.6, -0.85, -0.5, -0.4, -0.05, 0, -0.75, 0.4, -0.05, 0.85, -0.5, 0.85, 0.6)
   end,
   skills = function()
     fill(-0.8, 0.1, -0.4, 0.85, 0.06)
@@ -263,19 +284,13 @@ local ICONS = {
   globe = function() -- the web browser
     circle(0, 0, 0.85)
     line(-0.85, 0, 0.85, 0)
-    local pts = {}
-    for i = 0, 23 do
-      local a = i * math.pi / 12
-      pts[#pts + 1] = 0.4 * math.cos(a)
-      pts[#pts + 1] = 0.85 * math.sin(a)
-    end
-    poly(pts, true)
+    poly(GLOBE, true)
   end,
   bug = function()
     rect(-0.42, -0.35, 0.42, 0.85, 0.42) -- the body
     circle(0, -0.58, 0.24)              -- the head
     line(0, -0.35, 0, 0.85)
-    for _, y in ipairs({ -0.1, 0.25, 0.6 }) do
+    for _, y in ipairs(BUG_LEGS) do
       line(-0.42, y, -0.85, y - 0.15)
       line(0.42, y, 0.85, y - 0.15)
     end
@@ -288,7 +303,7 @@ local ICONS = {
   aggro = function()
     arc(0, 0.35, 0.8, 180, 360)
     line(-0.8, 0.35, 0.8, 0.35)
-    for _, a in ipairs({ 225, 270, 315 }) do
+    for _, a in ipairs(AGGRO_TICKS) do
       local r = math.rad(a)
       line(math.cos(r) * 0.6, 0.35 + math.sin(r) * 0.6, math.cos(r) * 0.8, 0.35 + math.sin(r) * 0.8)
     end
@@ -303,19 +318,19 @@ local ICONS = {
   end,
   mail = function()
     rect(-0.85, -0.6, 0.85, 0.6, 0.12)
-    poly({ -0.85, -0.55, 0, 0.1, 0.85, -0.55 })
+    polyv(false, -0.85, -0.55, 0, 0.1, 0.85, -0.55)
   end,
   mercenary = function() -- a helmet
     arc(0, 0.05, 0.72, 180, 360)
-    poly({ -0.72, 0.05, -0.72, 0.55, -0.3, 0.88 })
-    poly({ 0.72, 0.05, 0.72, 0.55, 0.3, 0.88 })
+    polyv(false, -0.72, 0.05, -0.72, 0.55, -0.3, 0.88)
+    polyv(false, 0.72, 0.05, 0.72, 0.55, 0.3, 0.88)
     line(-0.55, 0.2, -0.15, 0.2) line(0.15, 0.2, 0.55, 0.2)
     fill(-0.07, -0.05, 0.07, 0.62, 0.04)
   end,
   npcjournal = function()
     book()
     rect(-0.2, -0.5, 0.55, 0.1, 0.18) -- a speech bubble on the page
-    poly({ -0.05, 0.1, -0.1, 0.38, 0.15, 0.1 })
+    polyv(false, -0.05, 0.1, -0.1, 0.38, 0.15, 0.1)
   end,
   pvp = function() -- a trophy
     line(-0.55, -0.8, 0.55, -0.8)
@@ -341,7 +356,7 @@ local ICONS = {
     line(0, -0.75, 0, 0.7)
     line(-0.75, -0.5, 0.75, -0.5)
     line(-0.4, 0.7, 0.4, 0.7)
-    for _, d in ipairs({ -1, 1 }) do
+    for _, d in ipairs(SCALE_PANS) do
       local x = d * 0.58
       line(x, -0.5, x - 0.28, 0.08) line(x, -0.5, x + 0.28, 0.08)
       arc(x, 0.08, 0.3, 0, 180)
@@ -349,21 +364,21 @@ local ICONS = {
   end,
   barter = function() -- two arrows, one each way
     line(-0.8, -0.3, 0.75, -0.3)
-    poly({ 0.45, -0.6, 0.8, -0.3, 0.45, 0 })
+    polyv(false, 0.45, -0.6, 0.8, -0.3, 0.45, 0)
     line(0.8, 0.35, -0.75, 0.35)
-    poly({ -0.45, 0.05, -0.8, 0.35, -0.45, 0.65 })
+    polyv(false, -0.45, 0.05, -0.8, 0.35, -0.45, 0.65)
   end,
   lfgroup = function()
     person(-0.25, 0.05, 0.85)
     line(0.6, -0.4, 0.6, 0.1) line(0.35, -0.15, 0.85, -0.15)
   end,
   lfguild = function()
-    poly({ -0.85, -0.85, 0.15, -0.85, 0.15, -0.15, -0.35, 0.5, -0.85, -0.15 }, true)
+    polyv(true, -0.85, -0.85, 0.15, -0.85, 0.15, -0.15, -0.35, 0.5, -0.85, -0.15)
     circle(0.35, 0.25, 0.3)
     line(0.56, 0.46, 0.85, 0.75)
   end,
   marketplace = function() -- a shop front under a scalloped awning
-    poly({ -0.85, -0.45, -0.7, -0.85, 0.7, -0.85, 0.85, -0.45 })
+    polyv(false, -0.85, -0.45, -0.7, -0.85, 0.7, -0.85, 0.85, -0.45)
     for i = 0, 3 do arc(-0.6375 + i * 0.425, -0.45, 0.2125, 0, 180) end
     line(-0.7, -0.24, -0.7, 0.85) line(0.7, -0.24, 0.7, 0.85)
     line(-0.85, 0.85, 0.85, 0.85)
@@ -371,8 +386,8 @@ local ICONS = {
     rect(0.1, 0.2, 0.45, 0.85, 0.06)
   end,
   house = function() -- real estate
-    poly({ -0.9, -0.02, 0, -0.85, 0.9, -0.02 })
-    poly({ -0.65, -0.25, -0.65, 0.85, 0.65, 0.85, 0.65, -0.25 })
+    polyv(false, -0.9, -0.02, 0, -0.85, 0.9, -0.02)
+    polyv(false, -0.65, -0.25, -0.65, 0.85, 0.65, 0.85, 0.65, -0.25)
     rect(-0.18, 0.3, 0.18, 0.85, 0.05)
   end,
   key = function() -- managing a plot
@@ -399,7 +414,7 @@ local ICONS = {
   end,
   script = function() -- the Lua scripts window: a console with a prompt
     rect(-0.85, -0.7, 0.85, 0.7, 0.15)
-    poly({ -0.5, -0.3, -0.15, 0, -0.5, 0.3 })
+    polyv(false, -0.5, -0.3, -0.15, 0, -0.5, 0.3)
     line(0.05, 0.32, 0.5, 0.32)
   end,
   misc = function()

@@ -16,6 +16,7 @@
 #include "game/inventory.h"
 #include "mock_server/harness.h"
 #include "net/item_packets.h"
+#include "scratch_dir.h"
 
 using namespace hailstone;
 using namespace hailstone::test;
@@ -216,6 +217,71 @@ TEST_CASE("inventory hot button: held on a slot, dropped on a bar") {
 
     lua_close(L);
     ImGui::DestroyContext(ctx);
+}
+
+TEST_CASE("inventory hot button: live stack counts follow item links and fixed slots") {
+    ScratchDir files("hot_button_stack_count");
+    GameDir game_dir(files.path());
+    net::GameConnection conn(game_dir, {});
+    const auto top = net::ItemSlot::possessions(25);
+
+    net::Item arrows = item(8005, "Arrow", top.slot, "0000000000000030");
+    arrows.max_stack = 100;
+    arrows.stack_count = 13;
+    net::Item bag = item(1003, "Backpack", 23, "0000000000000010", true);
+    net::Item spare = arrows;
+    spare.serial = "0000000000000031";
+    spare.stack_count = 8;
+    bag.contents.push_back({2, spare});
+    net::Item held = arrows;
+    held.slot = net::ItemSlot::possessions(net::kSlotCursor);
+    held.stack_count = 30;
+    net::Item banked = arrows;
+    banked.slot = {net::kInvBank, 0, -1, -1, 0, 0};
+    banked.stack_count = 50;
+    net::Item sword = item(5019, "Sword", 26, "0000000000000040");
+    conn.receive_zone_packet_for_test(net::encode_char_inventory({arrows, bag, held, banked, sword}));
+
+    game::HotButtonStore store;
+    store.current(0, 0) = *game::inventory_hot_button(top, &arrows, false);
+    store.current(0, 0).label = "99"; // An assigned label has no effect on the quantity.
+    store.current(0, 1) = *game::inventory_hot_button(top, &arrows, true);
+    store.current(0, 2) = *game::inventory_hot_button(sword.slot, &sword, false);
+    app::UiHost host;
+    host.in_game = host.ui_ready = true;
+    host.conn = &conn;
+    host.hot_buttons = &store;
+    app::UiApi api(host);
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    lua_newtable(L);
+    api.register_functions(L);
+    lua_setglobal(L, "hs");
+    REQUIRE(luaL_dostring(L, R"lua(
+local info = {}
+function count(button)
+  return hs.HotButtonInfo('HotButtonWnd', 'HB_Button' .. button, info).stackCount
+end
+)lua") == LUA_OK);
+    CHECK(run(L, "return type(count(1))") == "number");
+    CHECK(run(L, "return count(1)") == "21");
+    CHECK(run(L, "return count(2)") == "13");
+    CHECK(run(L, "return count(3)") == "nil");
+
+    // Consuming part of the stack changes its count in place.
+    conn.receive_zone_packet_for_test(net::encode_delete_item({top, net::ItemSlot::invalid(), static_cast<std::uint32_t>(-12)}));
+    CHECK(run(L, "return count(1)") == "9");
+    CHECK(run(L, "return count(2)") == "1");
+
+    // The linked serial is gone, so the item link still sees the other carried stack by ID.
+    conn.receive_zone_packet_for_test(net::encode_char_inventory({bag, held, banked, sword}));
+    CHECK(run(L, "return count(2)") == "nil");
+    CHECK(run(L, "return count(1)") == "8");
+
+    // A reused Lua record loses its quantity after the last carried stack goes away.
+    conn.receive_zone_packet_for_test(net::encode_char_inventory({held, banked, sword}));
+    CHECK(run(L, "return count(1)") == "nil");
+    lua_close(L);
 }
 
 TEST_CASE("cursor attachment: a single stackable item has a quantity of 1, an item that does not stack has none") {

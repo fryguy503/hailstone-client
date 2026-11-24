@@ -24,22 +24,33 @@ local function plain(stml)
   return s
 end
 
--- Text word-wrapped to `width` px from x, y; returns the bottom.
+-- Text word-wrapped to `width` px from x, y; returns the bottom. The lines are kept by text, width and the font's
+-- height (a dialog draws the same text every frame, and each word was measured); emptied past 64 texts.
+local wrapCache, wrapCount = {}, 0
 local function wrapped(text, x, y, width, c)
   local _, lh = ui.CalcTextSize("Ag")
-  for para in (text .. "\n"):gmatch("(.-)\n") do
-    local line = ""
-    for word in para:gmatch("%S+") do
-      local try = line == "" and word or (line .. " " .. word)
-      if ui.CalcTextSize(try) > width and line ~= "" then
-        T.draw(x, y, line, c)
-        y = y + lh
-        line = word
-      else
-        line = try
+  local key = text .. "\0" .. width .. "\0" .. lh
+  local lines = wrapCache[key]
+  if not lines then
+    lines = {}
+    for para in (text .. "\n"):gmatch("(.-)\n") do
+      local line = ""
+      for word in para:gmatch("%S+") do
+        local try = line == "" and word or (line .. " " .. word)
+        if ui.CalcTextSize(try) > width and line ~= "" then
+          lines[#lines + 1] = line
+          line = word
+        else
+          line = try
+        end
       end
+      lines[#lines + 1] = line
     end
-    T.draw(x, y, line, c)
+    if wrapCount >= 64 then wrapCache, wrapCount = {}, 0 end
+    wrapCache[key], wrapCount = lines, wrapCount + 1
+  end
+  for i = 1, #lines do
+    T.draw(x, y, lines[i], c)
     y = y + lh
   end
   return y

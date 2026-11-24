@@ -708,6 +708,28 @@ local DIALOG = {
 
 local ROWS = { rowH = 24, drag = true, filter = accepts, sort = sortRows, draw = drawRow }
 
+-- The list's revision for P.Rows, bumped when a row's texts change. hs.WindowList makes new tables each frame, so
+-- the texts are compared with a copy of the last ones: far cheaper than filtering and sorting every row again.
+local listSeen, listRevision = {}, 0
+local function revisionOf(rows)
+  local n = #rows
+  local changed = n ~= #listSeen
+  for i = 1, n do
+    local t, copy = rows[i], listSeen[i]
+    if not copy then copy = {}; listSeen[i] = copy end
+    local m = #t
+    if m ~= #copy then changed = true end
+    for j = 1, m do
+      local v = t[j]
+      if copy[j] ~= v then copy[j], changed = v, true end
+    end
+    for j = #copy, m + 1, -1 do copy[j] = nil end
+  end
+  for i = #listSeen, n + 1, -1 do listSeen[i] = nil end
+  if changed then listRevision = listRevision + 1 end
+  return listRevision
+end
+
 local function body(x, y, w, h, s)
   -- The dialog's minimum is an outer size; at that minimum its padding leaves less room for the contents.
   local availableW, availableH = ui.GetContentRegionAvail()
@@ -737,6 +759,10 @@ local function body(x, y, w, h, s)
   ui.SetCursorScreenPos(lx, ly + hh + 4 * s)
   local _, lh = T.TextSize("Ag", F.tiny)
   ROWS.rows = rows -- (P.Rows reads the list itself where it does not take these)
+  ROWS.revision = revisionOf(rows)
+  -- (sortRows is one function whatever the column: the column and direction tell P.Rows when the order changes)
+  ROWS.filterKey = string.format("%s\0%s\0%s\0%d", needle, tab or "", category or "", view)
+  ROWS.sortKey = sortAsc and sortKey or ("-" .. sortKey)
   ROWS.reserve = reserve
   ROWS.scale = s
   ROWS.empty = #rows == 0 and "No abilities" or "No ability matches"

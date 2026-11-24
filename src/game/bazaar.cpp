@@ -6,6 +6,7 @@
 #include <limits>
 
 #include "core/msvc_atoi.h"
+#include "game/spells.h"
 
 namespace hailstone::game {
 
@@ -13,7 +14,8 @@ std::string trader_price_key(const net::Item& item) {
     // CBazaarWnd_ReadTraderItemFromIni @0x63a6c0: IsValidSpellID(GetSpellID(item, 0)) and charges >= 1.
     const auto& click = item.effects[net::kEffectClick];
     auto charges = static_cast<std::int32_t>(item.charges);
-    if (click.effect > 0 && click.effect < 0xffff && charges >= 1) return std::format("{}:{}", item.id, charges);
+    if (is_spell_id(static_cast<std::uint32_t>(click.effect)) && charges >= 1)
+        return std::format("{}:{}", item.id, charges);
     return std::to_string(item.id);
 }
 
@@ -26,7 +28,11 @@ void TraderPrices::load(const std::filesystem::path& path) {
 bool TraderPrices::save() const { return !path_.empty() && ini_.save(path_); }
 
 std::optional<std::uint32_t> TraderPrices::get(const net::Item& item) const {
-    auto v = ini_.get("ItemToSell", trader_price_key(item));
+    const std::string key = trader_price_key(item);
+    auto v = ini_.get("ItemToSell", key);
+    // Older versions saved one item-wide price for charged spells above the old 16-bit cutoff.
+    if (!v && item.effects[net::kEffectClick].effect > 0xffff && key.find(':') != std::string::npos)
+        v = ini_.get("ItemToSell", std::to_string(item.id));
     if (!v || v->empty() || (*v)[0] == '*') return std::nullopt;
     return static_cast<std::uint32_t>(core::msvc_atoi(*v));
 }

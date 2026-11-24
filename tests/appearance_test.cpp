@@ -123,29 +123,46 @@ TEST_CASE("ActorTagInfo.txt: field 2 of 1 marks a shield, and a loaded table is 
     using hailstone::game::ActorTagTable;
     using hailstone::game::is_shield_model;
     ActorTagTable tags;
-    // The form of the folder at hand, a later live client's (10 fields, CRLF, no trailing caret), and of others (a
-    // trailing caret, 9 fields).
+    // The 10-value layout (CRLF, no trailing caret); a trailing caret after ten values changes nothing.
     tags.parse("1^0^1^0^0^0^0^0^0^0\r\n"
                "6^2^36^0^0^0^0^0^0^0\r\n"
                "200^1^-1^0^0^0^0^0^0^0\r\n"
                "23643^1^-1^-1^0^0^2.6^0^0^0\r\n"
-               "101064^1^-1^0^0^0^0^0^0^\n"
-               "101068^1^-1^0^0^0^0^0^\n"
-               "120^45^-1^0^0^0^0^0^0^\n");
+               "101064^1^-1^0^0^0^0^0^0^0^\n"
+               "101068^1^-1^0^0^0^0^0^0^0\n");
     CHECK(tags.loaded());
-    CHECK(tags.record_count() == 7);
+    CHECK(tags.record_count() == 6);
     CHECK(tags.shield_count() == 4);
     CHECK(is_shield_model(200, &tags));
     CHECK(is_shield_model(23643, &tags));     // on no fixed list
     CHECK(is_shield_model(101064, &tags));    // the Haunting Nightmares ornament, held in the hand by the fixed list
     CHECK(is_shield_model(101068, &tags));
     CHECK_FALSE(is_shield_model(6, &tags));   // kind 2 is not a shield
-    CHECK_FALSE(is_shield_model(120, &tags)); // nor a later file's 37..64
     CHECK_FALSE(is_shield_model(1, &tags));
     // Not in the file: not a shield, even where the fixed list has it.
     CHECK(hailstone::game::is_stock_shield_model(11004));
     CHECK_FALSE(is_shield_model(11004, &tags));
     CHECK_FALSE(is_shield_model(14000, &tags));
+}
+
+TEST_CASE("ActorTagInfo.txt: a current live install's 9-value lines have no kind, so the fixed list decides") {
+    using hailstone::game::ActorTagTable;
+    using hailstone::game::is_shield_model;
+    // That layout lacks field 2: IT200's 10 and IT1's 1 are the 10-value layout's field 3, not kinds.
+    ActorTagTable live;
+    live.parse("1^1^0^0^0^0^0^0^0^\r\n"
+               "200^10^0^0^0^0^0^0^0^\r\n"
+               "228^10^0^0^0^0^0^0^0^\r\n"
+               "23643^-1^1^0^0^2.6^0^0^0^\r\n"
+               "101064^10^0^0^0^0^0^0^0\r\n");  // nine values without the caret too
+    CHECK_FALSE(live.loaded());
+    CHECK(live.record_count() == 0);
+    CHECK(is_shield_model(200, &live));
+    CHECK(is_shield_model(228, &live));
+    CHECK(is_shield_model(11004, &live));       // the fixed list's
+    CHECK_FALSE(is_shield_model(1, &live));
+    CHECK_FALSE(is_shield_model(23643, &live));
+    CHECK_FALSE(is_shield_model(101064, &live));
 }
 
 TEST_CASE("ActorTagInfo.txt: bad lines are skipped, a model listed twice takes its last line") {
@@ -198,8 +215,9 @@ TEST_CASE("the game folder's ActorTagInfo.txt loads with the appearance data" * 
         CHECK_FALSE(data->actor_tags.loaded());
         return;
     }
-    CHECK(data->actor_tags.loaded());
-    // IT200..228, the classic shields, are listed as shields in every file seen.
+    // A 10-value file loads and lists shields; a current live install's 9-value one does not load. IT200..228, the
+    // classic shields, are shields either way: in every 10-value file seen and on the fixed list.
+    if (data->actor_tags.loaded()) CHECK(data->actor_tags.shield_count() > 0);
     CHECK(hailstone::game::is_shield_model(200, &data->actor_tags));
     CHECK(hailstone::game::is_shield_model(228, &data->actor_tags));
     CHECK_FALSE(hailstone::game::is_shield_model(1, &data->actor_tags));

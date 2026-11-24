@@ -20,6 +20,22 @@ local findPolicy, findServerOnly, findPolicyName, findPolicyCustom, findPolicySt
 local findRevision, findContext, findZone = nil, nil, nil
 local pathHints = { { "a", "Show the path" }, { "b", "Close" } }
 local walkHints = { { "a", "Show the path" }, { "x", "Walk there" }, { "b", "Close" } }
+-- The rows shown (hs.FindNpcs, of the kind picked): made again every 0.2 s, as hs.FindNpcs makes its own list
+-- (each call builds a table per NPC), and at once for another kind or a new policy, zone or context (findList).
+local findRows, findRowsAt, findRowsKind, findRowsList = {}, nil, nil, nil
+local function shownRows(kind)
+  local now = ui.GetTime()
+  if not findRowsAt or now - findRowsAt >= 0.2 or now < findRowsAt or findRowsKind ~= findKind
+      or findRowsList ~= findList then
+    local rows = {}
+    for _, r in ipairs(API.find.Npcs()) do
+      if not kind or r.category == kind[1] then rows[#rows + 1] = r end
+    end
+    findRows, findRowsAt, findRowsKind, findRowsList = rows, now, findKind, findList
+  end
+  return findRows
+end
+
 local function npcFindPolicy()
   local query = API.map.Policy
   local policy = type(query) == "function" and query() or nil
@@ -43,7 +59,10 @@ local function npcFindPolicy()
 end
 
 ui.window("Find", function()
-  if not API.session.InGame() or not API.find.Open() then return end -- (before the policy: shut, it costs nothing)
+  if not API.session.InGame() or not API.find.Open() then -- (before the policy: shut, it costs nothing)
+    findRowsAt = nil
+    return
+  end
   local allowed, serverOnly, actorGuides = npcFindPolicy()
   if not allowed then return end
   T.frame()
@@ -59,10 +78,7 @@ ui.window("Find", function()
       findKind = (findKind + 1) % (#CATS + 1)
       findList.offset = 0
     end
-    local rows = {}
-    for _, r in ipairs(API.find.Npcs()) do
-      if not kind or r.category == kind[1] then rows[#rows + 1] = r end
-    end
+    local rows = shownRows(kind)
     local top = y0 + bh + T.px(18)
     if actorGuides and API.find.CurrentTargetPath then
       ui.SetCursorPos(x0 - wx, top - wy)
@@ -81,9 +97,9 @@ ui.window("Find", function()
     else
       local rowH = 70
       local visible = math.max(1, math.floor((y1 - top + T.px(10)) / T.px(rowH + 10)))
+      local _, th = ui.CalcTextSize("Ag") -- (once for the rows: they draw in the window's font)
       local focused = W.list("find", findList, #rows, visible, rowH, x1 - x0, function(i, rx0, ry0, rx1, ry1)
         local r = rows[i]
-        local _, th = ui.CalcTextSize("Ag")
         local mid = (ry0 + ry1) / 2
         T.textIn(rx0 + T.px(20), mid - th, rx1 - T.px(160), mid, r.name, C.text, 0)
         T.textIn(rx0 + T.px(20), mid, rx1 - T.px(160), mid + th, r.subtitle ~= "" and r.subtitle or r.label, C.dim, 0)

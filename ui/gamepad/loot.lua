@@ -12,6 +12,10 @@ local C = T.C
 
 local LOOT = "LootWnd"
 local SLOTS = 34
+-- (the slots' child names and item ids, and the rows of the items present, made once: the grid is read every frame)
+local CHILD, IDS = {}, {}
+for i = 0, SLOTS - 1 do CHILD[i], IDS[i] = "LW_LootSlot" .. i, "##loot" .. i end
+local items, rows = {}, {}
 -- The pad's focus when its item leaves the corpse (looted): it goes to the item now in that place (the last one), or
 -- to Done once the corpse is empty, so A can go on looting without a D-pad press to find the focus again.
 local lastFocus, refocus
@@ -19,6 +23,8 @@ local lastFocus, refocus
 ui.window("Loot", function()
   if not W.shown(LOOT) then
     lastFocus, refocus = nil, nil -- (the next corpse opens with the focus where the window puts it, not on Done)
+    for k = #items, 1, -1 do items[k] = nil end
+    for _, e in ipairs(rows) do e.item = nil end -- (no item kept past the corpse)
     return
   end
   T.frame()
@@ -29,11 +35,17 @@ ui.window("Loot", function()
     local x0, y0, x1, y1 = W.area()
     local cols, size, gap = 8, T.px(84), T.px(10)
     -- the items present (the window's slots in order; empty ones are left out)
-    local items = {}
+    local count = 0
     for i = 0, SLOTS - 1 do
-      local it = API.inventory.SlotItem(LOOT, "LW_LootSlot" .. i)
-      if it then items[#items + 1] = { i = i, item = it } end
+      local it = API.inventory.SlotItem(LOOT, CHILD[i])
+      if it then
+        count = count + 1
+        local e = rows[count] or {}
+        rows[count], e.i, e.item = e, i, it
+        items[count] = e
+      end
     end
+    for k = #items, count + 1, -1 do items[k] = nil end
     local focusedItem, focusedChild
     if #items == 0 then
       T.font(24)
@@ -43,9 +55,9 @@ ui.window("Loot", function()
     local anyFocused, focusedAt = false, nil
     for n, e in ipairs(items) do
       if (n - 1) % cols ~= 0 then ui.SameLine(0, gap) end
-      local child = "LW_LootSlot" .. e.i
+      local child = CHILD[e.i]
       if refocus == n then ui.SetKeyboardFocusHere() refocus = nil end
-      local clicked, focused = T.slot("##loot" .. e.i, e.item, size, {}, pad)
+      local clicked, focused = T.slot(IDS[e.i], e.item, size, {}, pad)
       if focused then
         focusedItem, anyFocused, focusedAt = e.item, true, n
         focusedChild = child

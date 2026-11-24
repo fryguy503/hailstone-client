@@ -169,9 +169,9 @@ void GameConnection::handle_death(const Death& d) {
     if (r.trainer_window_closed) close_trainer();
     if (r.target_cleared) {
         world_.target_id = 0;
-        auto_target_due_ = true; // Hailstone (auto_target_xtarget): another attacker on the list, if any
+        auto_target_xtarget_due_ = true; // Hailstone (auto_target_xtarget): another attacker on the list, if any
     }
-    std::erase(xtarget_attackers_, d.spawn_id);
+    forget_auto_target_attacker(d.spawn_id);
     // ReportSuccessfulHit: the killing blow, shown when reported (OP_Death's 50 units, or combat.report_range).
     if (r.hit)
         if (auto line = game::damage_report(strings_, world_, d.spawn_id, d.killer_id, r.hit_type, r.hit_damage, 0))

@@ -39,8 +39,7 @@ struct DrawingUi {
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::GetIO().ConfigErrorRecoveryEnableAssert = false;
         ImGui::GetIO().ConfigErrorRecoveryEnableTooltip = false;
-        unsigned char* pixels = nullptr; int w = 0, h = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         fs::create_directories(scratch.path()/"ui"); fs::create_directories(scratch.path()/"owner");
         host.plugin_caps = [](std::string_view) { return plugin::kCapRead | plugin::kCapUi; };
         api = std::make_unique<app::UiApi>(host);
@@ -75,7 +74,7 @@ struct DrawingUi {
     void put(const char* folder,const char* text) { std::ofstream(scratch.path()/folder/"entry.lua")<<text; }
     void setup() {
         parent=ImGui::GetCurrentWindow();
-        ImGui::PushFont(GImGui->Font);
+        ImGui::PushFont(GImGui->Font, 0.0f);
         ImGui::TreePush("native member tree");
         REQUIRE(ImGui::BeginTable("native roster",2));ImGui::TableNextRow();ImGui::TableNextColumn();
         REQUIRE(ImGui::BeginTabBar("native member tabs"));REQUIRE(ImGui::BeginTabItem("Native actions"));
@@ -85,7 +84,7 @@ struct DrawingUi {
         trees=parent->DC.TreeDepth;wraps=parent->DC.TextWrapPosStack.Size;clips=parent->DrawList->_ClipRectStack.Size;
         disabled=GImGui->DisabledStackSize;
         last=GImGui->LastItemData;tabItem=tabs->LastTabItemIdx;
-        ImGui::SetWindowFontScale(1.25f);
+        GImGui->CurrentWindow->FontWindowScale = 1.25f; ImGui::UpdateCurrentFontSize(0.0f); // ImGui::SetWindowFontScale, gone in 1.92
         ImGui::SetNextWindowSize(ImVec2(311,277));ImGui::SetNextItemWidth(157);
     }
     void check() {

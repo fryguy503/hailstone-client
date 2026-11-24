@@ -44,7 +44,7 @@ local function tabs(labels, page, x0, y0, set)
     local w = tw + T.px(40)
     T.rect(x, y0, x + w, y0 + h, page == i and C.accent or C.raised, page == i and 0.9 or 1, T.px(10))
     T.textIn(x, y0, x + w, y0 + h, l, page == i and C.onAccent or C.text, 0.5)
-    if ui.IsMouseHoveringRect(x, y0, x + w, y0 + h) and ui.IsMouseClicked(ui.Mouse.Left) then set(i) end
+    if T.mouseOver(x, y0, x + w, y0 + h) and ui.IsMouseClicked(ui.Mouse.Left) then set(i) end
     x = x + w + T.px(10)
   end
   T.unfont()

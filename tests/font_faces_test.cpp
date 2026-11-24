@@ -73,26 +73,28 @@ std::vector<unsigned char> font_file(const std::string& family, const std::strin
 } // namespace
 
 TEST_CASE("UI fonts: built-in chat glyphs draw curly quotes with straight quote shapes") {
-    const ImFontConfig cfg = detail::ui_font_config(1.0f);
-    ImFontGlyphRangesBuilder ranges;
-    ranges.AddRanges(cfg.GlyphRanges);
-    CHECK(ranges.GetBit(0x00e9)); // Latin-1 remains available
-    CHECK(ranges.GetBit(0x2019)); // the selected face is asked for a real curly apostrophe
-
+    const ImFontConfig cfg = detail::ui_font_config();
     ImFontAtlas atlas;
     ImFont* font = atlas.AddFontDefault(&cfg);
     REQUIRE(font);
     REQUIRE(detail::build_ui_font_atlas(atlas));
-    const ImFontGlyph* apostrophe = font->FindGlyphNoFallback('\'');
-    const ImFontGlyph* quote = font->FindGlyphNoFallback('"');
+    // Since ImGui 1.92 a glyph comes from the font at a size (ImFontBaked), made on demand.
+    ImFontBaked* baked = font->GetFontBaked(font->LegacySize);
+    REQUIRE(baked);
+    const ImFontGlyph* apostrophe = baked->FindGlyphNoFallback('\'');
+    const ImFontGlyph* quote = baked->FindGlyphNoFallback('"');
     REQUIRE(apostrophe);
     REQUIRE(quote);
-    CHECK(font->FindGlyphNoFallback(0x2018) == apostrophe);
-    CHECK(font->FindGlyphNoFallback(0x2019) == apostrophe);
-    CHECK(font->FindGlyphNoFallback(0x201c) == quote);
-    CHECK(font->FindGlyphNoFallback(0x201d) == quote);
-    CHECK(font->GetCharAdvance(0x2019) == apostrophe->AdvanceX);
-    CHECK(font->GetCharAdvance(0x1000) == font->FallbackAdvanceX);
+    // A remapped codepoint is its own glyph entry (1.92) carrying the target's shape.
+    auto same_shape = [](const ImFontGlyph* a, const ImFontGlyph* b) {
+        return a && b && a->AdvanceX == b->AdvanceX && a->X0 == b->X0 && a->Y0 == b->Y0 && a->X1 == b->X1 &&
+               a->Y1 == b->Y1 && a->Visible == b->Visible; // (its own atlas rectangle, so its UVs differ)
+    };
+    CHECK(same_shape(baked->FindGlyphNoFallback(0x2018), apostrophe));
+    CHECK(same_shape(baked->FindGlyphNoFallback(0x2019), apostrophe));
+    CHECK(same_shape(baked->FindGlyphNoFallback(0x201c), quote));
+    CHECK(same_shape(baked->FindGlyphNoFallback(0x201d), quote));
+    CHECK(baked->GetCharAdvance(0x2019) == apostrophe->AdvanceX);
 }
 
 TEST_CASE("UI fonts: installed regular and bold faces retain their typographic chat glyphs") {
@@ -104,7 +106,7 @@ TEST_CASE("UI fonts: installed regular and bold faces retain their typographic c
     }
     if (files.regular.empty() || files.bold.empty()) return; // headless hosts can run with only the built-in font
 
-    const ImFontConfig cfg = detail::ui_font_config(1.0f);
+    const ImFontConfig cfg = detail::ui_font_config();
     ImFontAtlas atlas;
     ImFont* regular = atlas.AddFontFromFileTTF(hailstone::path_utf8(files.regular).c_str(), 14.0f, &cfg);
     ImFont* bold = atlas.AddFontFromFileTTF(hailstone::path_utf8(files.bold).c_str(), 20.0f, &cfg);
@@ -113,8 +115,10 @@ TEST_CASE("UI fonts: installed regular and bold faces retain their typographic c
     REQUIRE(detail::build_ui_font_atlas(atlas));
     constexpr ImWchar codepoints[] = {0x00e9, 0x2014, 0x2019, 0x201d, 0x2026};
     for (ImFont* font : {regular, bold}) {
+        ImFontBaked* baked = font->GetFontBaked(font->LegacySize);
+        REQUIRE(baked);
         for (ImWchar codepoint : codepoints) {
-            const ImFontGlyph* glyph = font->FindGlyphNoFallback(codepoint);
+            const ImFontGlyph* glyph = baked->FindGlyphNoFallback(codepoint);
             REQUIRE(glyph);
             CHECK(glyph->Codepoint == codepoint);
             CHECK(glyph->Visible);

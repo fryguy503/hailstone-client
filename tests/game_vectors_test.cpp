@@ -163,7 +163,8 @@ TEST_CASE("SpellTable CRCs of the game's spells_us.txt match the original's") {
     hailstone::game::SpellTable table;
     if (!table.load(*game)) return;
     CHECK(table.file_crc() != 0);
-    CHECK(table.spell_crc(45001) == hailstone::game::spell_record_crc(hailstone::game::unknown_spell_record()));
+    CHECK(table.spell_crc(hailstone::game::kNoSpell) ==
+          hailstone::game::spell_record_crc(hailstone::game::unknown_spell_record()));
     // The vectors' lines come from the recording's copy of spells_us.txt; spells whose line is the same here must
     // get the same CRC from the table.
     auto data = game->read("spells_us.txt");

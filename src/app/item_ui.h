@@ -25,7 +25,7 @@ public:
     ItemUi() = default;
     ~ItemUi();
 
-    void draw(net::GameConnection& conn);
+    void draw(net::GameConnection& conn, const game::mechanics::Character* character);
     void toggle_inventory() { state_.show_inventory = !state_.show_inventory; }
     // The items the item display windows show (CItemDisplayWnd; the Lua windows read them).
     std::vector<net::Item>& item_displays() { return state_.info; }

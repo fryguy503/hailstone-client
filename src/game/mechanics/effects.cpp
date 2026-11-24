@@ -34,8 +34,6 @@ std::int32_t sub(std::int32_t a, std::int32_t b) {
 }
 std::uint32_t u(std::int32_t v) { return static_cast<std::uint32_t>(v); }
 
-bool valid_spell_id(std::int32_t id) { return id >= 1 && id <= 45000; } // IsValidSpellID @0x4ad150
-
 template <std::size_t N>
 bool one_of(const std::array<std::int32_t, N>& sorted, std::int32_t spa) {
     return std::binary_search(sorted.begin(), sorted.end(), spa);
@@ -141,14 +139,14 @@ Character::Character(const CharacterSheet& sheet, const GameTables& tables, Spel
       spawn_hp_current_(sheet.spawn_hp), stored_hp_(sheet.stored_hp), encumbered_state_(sheet.encumbered_state) {}
 
 const SpellData* Character::spell(std::int32_t id) const {
-    if (!valid_spell_id(id) || !spells_) return nullptr;
+    if (!game::is_spell_id(static_cast<std::uint32_t>(id)) || !spells_) return nullptr;
     return spells_(id);
 }
 
 bool Character::valid_spell(std::int32_t id) const {
     if (hooks.is_valid_spell_id)
         if (auto v = hooks.is_valid_spell_id(id)) return *v;
-    return valid_spell_id(id);
+    return game::is_spell_id(static_cast<std::uint32_t>(id));
 }
 
 const net::Item* Character::walk_item(int index) const {
@@ -330,7 +328,7 @@ void Character::cache_negates(EffectCache& c) const {
             // the use check applies to the worn possessions slots only
             if (sheet_.spawn_type == SpawnType::PC && k < kWornSlots && !can_use_item(*item)) continue;
             std::int32_t id = item->effects[net::kEffectWorn].effect;
-            if (id < 2 || !valid_spell_id(id)) continue;
+            if (id < 2) continue;
             const SpellData* s = spell(id);
             if (!s || s->duration_formula == 0 || k == net::kSlotAmmo) continue;
             add_spell(c.items, *s);

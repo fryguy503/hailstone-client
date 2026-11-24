@@ -88,6 +88,39 @@ local WINDOW_OPTS = {
   size = function() return 820, 560 end,
   resizable = { 600, 360 },
 }
+
+-- The results' columns and the table's options are made once (the stat column again only when the stat changes);
+-- the filter reads this frame's needle.
+local BASE_COLS = {
+  { "Item", 0, cell = M.IconName(2), sort = function(r) return r.texts[2] end, default = "asc" },
+  { "Qty", 44, cell = M.Number(3), sort = function(r) return tonumber(r.texts[3]) or 0 end, desc = true },
+  { "Price each", 116, cell = M.PriceCell(price), sort = price },
+  { "Trader", 110, text = 8 },
+}
+local STAT_CELL = M.Number(10)
+local function statSort(r) return tonumber(r.texts[10]) or 0 end
+local statCols, statColsName = nil, nil
+local function columns(stat)
+  if stat == "" or stat == "Stat" then return BASE_COLS end
+  if statColsName ~= stat then
+    statCols = { BASE_COLS[1], BASE_COLS[2], BASE_COLS[3], BASE_COLS[4],
+      { stat, 70, cell = STAT_CELL, sort = statSort, desc = true } }
+    statColsName = stat
+  end
+  return statCols
+end
+local tableNeedle = ""
+local function resultFilter(r)
+  return (r.texts[2] or ""):lower():find(tableNeedle, 1, true) ~= nil
+    or (r.texts[8] or ""):lower():find(tableNeedle, 1, true) ~= nil
+end
+local TABLE_OPTS = {
+  icon = true,
+  tooltip = function(r)
+    return (r.texts[2] or "") .. "\nSold by " .. (r.texts[8] or "?") .. "\nDouble-click to buy, right-click to inspect"
+  end,
+  doubleClick = function() API.windows.ClickChild(WINDOW, "BZR_BuyButton", "left") end,
+}
 local function drawWindow(x, y, w, h, s)
   lastDrawn = ui.GetTime()
   local lh, btnH = M.Heights(s)
@@ -122,30 +155,18 @@ local function drawWindow(x, y, w, h, s)
   local needle = M.Search("bzs", "Filter by item or trader", -1)
   local _, _, _, labels = API.windows.ListInfo(WINDOW, LIST)
   local stat = labels and labels[10] or "Stat"
-  local cols = {
-    { "Item", 0, cell = M.IconName(2), sort = function(r) return r.texts[2] end, default = "asc" },
-    { "Qty", 44, cell = M.Number(3), sort = function(r) return tonumber(r.texts[3]) or 0 end, desc = true },
-    { "Price each", 116, cell = M.PriceCell(price), sort = price },
-    { "Trader", 110, text = 8 },
-  }
-  if stat ~= "" and stat ~= "Stat" then
-    cols[#cols + 1] = { stat, 70, cell = M.Number(10), sort = function(r) return tonumber(r.texts[10]) or 0 end, desc = true }
-  end
+  local cols = columns(stat)
   local barH = btnH + 30 * s
-  local shownRows, _, sel = M.Table(WINDOW, LIST, rw, h - lh - 8 * s - barH, cols, {
-    key = "bzs" .. #cols,
-    icon = true,
-    filter = needle ~= "" and function(r)
-      return (r.texts[2] or ""):lower():find(needle, 1, true) ~= nil or (r.texts[8] or ""):lower():find(needle, 1, true) ~= nil
-    end or nil,
-    filterKey = needle,
-    empty = searching and "Searching..." or (searched and "Nothing matches these filters." or "Set the filters and press Find Items."),
-    emptyFiltered = "No result matches \"" .. needle .. "\".",
-    tooltip = function(r)
-      return (r.texts[2] or "") .. "\nSold by " .. (r.texts[8] or "?") .. "\nDouble-click to buy, right-click to inspect"
-    end,
-    doubleClick = function() API.windows.ClickChild(WINDOW, "BZR_BuyButton", "left") end,
-  })
+  local opts = TABLE_OPTS
+  opts.key = #cols == 5 and "bzs5" or "bzs4"
+  if opts.filterKey ~= needle then
+    opts.emptyFiltered = "No result matches \"" .. needle .. "\"."
+  end
+  tableNeedle = needle
+  opts.filter = needle ~= "" and resultFilter or nil
+  opts.filterKey = needle
+  opts.empty = searching and "Searching..." or (searched and "Nothing matches these filters." or "Set the filters and press Find Items.")
+  local shownRows, _, sel = M.Table(WINDOW, LIST, rw, h - lh - 8 * s - barH, cols, opts)
 
   -- ---------------------------------------------------------------- the selected result
   ui.Dummy(0, 2 * s)

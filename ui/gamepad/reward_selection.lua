@@ -106,19 +106,31 @@ local function prefix(text,length)
   end
   return text:sub(1,length)
 end
+-- A text shortened to width (its search measures many prefixes): kept by text, width, size and the font's height,
+-- so a frame that draws the same cards again only looks it up. (Emptied when it grows past 256 texts.)
+local fitCache,fitCount={},0
 local function fitted(text,width,size)
   text=plain(text)
   local _,fontHeight=ui.CalcTextSize("Ag")
+  local key=text.."\0"..width.."\0"..(size or 0).."\0"..fontHeight
+  local hit=fitCache[key]
+  if hit then return hit end
   local ratio=size and size/math.max(1,fontHeight) or 1
   local function fits(value)return ui.CalcTextSize(value)*ratio<=width end
-  if fits(text)then return text end
-  if not fits("...")then return ""end
-  local low,high=0,#text
-  while low<high do
-    local middle=math.floor((low+high+1)/2)
-    if fits(prefix(text,middle).."...")then low=middle else high=middle-1 end
+  local out
+  if fits(text)then out=text
+  elseif not fits("...")then out=""
+  else
+    local low,high=0,#text
+    while low<high do
+      local middle=math.floor((low+high+1)/2)
+      if fits(prefix(text,middle).."...")then low=middle else high=middle-1 end
+    end
+    out=prefix(text,low).."..."
   end
-  return prefix(text,low).."..."
+  if fitCount>=256 then fitCache,fitCount={},0 end
+  fitCache[key],fitCount=out,fitCount+1
+  return out
 end
 local function itemName(item)
   local name=item.name and item.name~="" and item.name or ("Item "..(item.id or 0))
@@ -140,7 +152,10 @@ local function itemIcon(item,scale,designSize)
     ui.Dummy(size,size)
   end
 end
-local function summary(option)
+-- A choice's one-line summary and its first item, made once per option table (a reward's tables are kept while its
+-- revision is: readState).
+local summaries=setmetatable({},{__mode="k"})
+local function summaryOf(option)
   local parts,firstItem={},nil
   for _,entry in ipairs(option.entries or {})do
     for _,item in ipairs(entry.items or {})do
@@ -157,6 +172,15 @@ local function summary(option)
     return "Quantity: "..tostring(firstItem.quantity or 1),firstItem
   end
   return table.concat(parts,"  |  "),firstItem
+end
+local function summary(option)
+  local s=summaries[option]
+  if not s then
+    local text,firstItem=summaryOf(option)
+    s={text,firstItem}
+    summaries[option]=s
+  end
+  return s[1],s[2]
 end
 local function entryDetails(lane,tab,option,entry,scale,ordinal)
   local items=entry.items or {}

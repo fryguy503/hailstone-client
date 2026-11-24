@@ -176,7 +176,7 @@ local function container(x, y, w, h, s)
     T.Hit("##tsrecipe", ix, yy, ix + iw, yy + 18 * s)
     if ui.IsItemHovered() then ui.SetTooltip(name) end
     yy = yy + 20 * s
-    T.Text(ix, yy, "Trivial at " .. trivial, C.muted, T.font.tiny)
+    T.Text(ix, yy, "Trivial at " .. tostring(trivial or "?"), C.muted, T.font.tiny)
     yy = yy + 18 * s
   else
     T.Text(ix, yy, "No recipe selected", C.faint, T.font.small)

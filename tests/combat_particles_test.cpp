@@ -23,6 +23,7 @@
 #include "core/process_serial.h"
 #include "core/worker_pool.h"
 #include "game/collision.h"
+#include "game/light_list.h"
 #include "game/mechanics/anim_select.h"
 #include "game/missiles.h"
 #include "game/path_trail.h"
@@ -276,7 +277,7 @@ TEST_CASE("Find trail visibility retains both routes and keeps ordinary spell ef
     const auto& emitters = particles.simulation().emitters();
     REQUIRE(emitters.size() == 3);
     CHECK(std::count_if(emitters.begin(), emitters.end(), [](const auto& emitter) { return emitter.still; }) == 2);
-    const auto spell_key = (cast.caster << 16) | cast.spell;
+    const auto spell_key = game::EmitterKey::spell(cast.caster, cast.spell);
     particles.set_paths_visible(false);
     particles.update(rig.conn, {}, {}, nullptr, 0.01f);
     REQUIRE(emitters.size() == 1);
@@ -489,7 +490,7 @@ TEST_CASE("Spell landing packets use the source actor and its level for impact-s
     REQUIRE(emitters.size() == 2);
     CHECK(emitters[0].actor == 333);
     CHECK(emitters[1].actor == 334);
-    CHECK(emitters[0].key == ((333u << 16) | 600u));
+    CHECK(emitters[0].key == game::EmitterKey::spell(333, 600));
     CHECK(near(emitters[0].origin, rig.conn.world().spawns.at(333).position));
     CHECK(near(emitters[1].origin, rig.conn.world().spawns.at(334).position));
     REQUIRE(emitters[0].particles.size() == 1);
@@ -696,10 +697,7 @@ TEST_CASE("An actor can carry independent EQG and WLD held-item effects") {
     CHECK(particles.cloud_simulation().definitions().size() == 2);
 }
 
-TEST_CASE("Actor emitters stepped on a worker match the inline step, drawn a frame later") {
-    // The scene's emitters step in simulate_async, on a worker, after the frame; the others step inside update. Both
-    // read the same poses, so after each step the particles are the same; between update and the step (when the
-    // scene draws) the worker's are the frame before's.
+TEST_CASE("Actor emitters use this frame's pose for attached particles and lights") {
     core::WorkerPool pool(2);
     core::set_workers(&pool);
     struct Unset {
@@ -709,26 +707,37 @@ TEST_CASE("Actor emitters stepped on a worker match the inline step, drawn a fra
     d.duration = -9999.0f;
     d.follow_attachment = 1;
     d.bone_orientation = 1;
+    d.additive = 1;
+    d.offset = {2, 0, 0}; // Along the bone's axis, so a turn changes the particle position as well as its basis.
+    d.reduce_distance = 1000.0f;
     d.per_tick = 1;
     d.ticks_per_second = 30.0f;
-    auto definition = std::make_shared<assets::EmitterDefinition>(d);
+    auto trail = d;
+    trail.follow_attachment = 0;
+    trail.additive = 0;
     assets::CharacterMesh mesh;
     assets::MeshEmitter eqg;
     eqg.bone = 0;
     eqg.emitter.emitter = 1;
     mesh.emitters.push_back(eqg);
+    auto eqg_trail = eqg;
+    eqg_trail.emitter.emitter = 2;
+    mesh.emitters.push_back(eqg_trail);
     auto cloud = eqg;
     cloud.bone = 1;
     cloud.local = glm::translate(glm::mat4(1), glm::vec3(3, 0, 0));
-    cloud.cloud = definition;
+    cloud.cloud = std::make_shared<assets::EmitterDefinition>(d);
     mesh.emitters.push_back(cloud);
-    app::ActorEmitters inline_step({assets::EmitterDefinition{}, d});
-    app::ActorEmitters worker_step({assets::EmitterDefinition{}, d}, {}, true);
+    auto cloud_trail = cloud;
+    cloud_trail.cloud = std::make_shared<assets::EmitterDefinition>(trail);
+    mesh.emitters.push_back(cloud_trail);
+    app::ActorEmitters inline_step({assets::EmitterDefinition{}, d, trail});
+    app::ActorEmitters worker_step({assets::EmitterDefinition{}, d, trail}, {}, true);
     std::array<app::ActorEmitters::Actor, 2> actors{{{7, &mesh}, {8, &mesh, false, 0.5f}}};
     glm::mat4 world(1.0f);
     auto pose = [&](std::uint32_t id, int bone, glm::mat4& out) {
         out = world;
-        out[3].y += static_cast<float>(id) * 10.0f + static_cast<float>(bone);
+        out[3].y += static_cast<float>(id) * 20.0f + static_cast<float>(bone);
         return true;
     };
     auto same = [](const game::ParticleSystem& a, const game::ParticleSystem& b) {
@@ -741,44 +750,60 @@ TEST_CASE("Actor emitters stepped on a worker match the inline step, drawn a fra
             REQUIRE(ea.particles.size() == eb.particles.size());
             for (std::size_t p = 0; p < ea.particles.size(); ++p) {
                 CHECK(near(ea.particles[p].position, eb.particles[p].position));
+                CHECK(near(ea.particles[p].axis, eb.particles[p].axis));
                 CHECK(ea.particles[p].color.a == doctest::Approx(eb.particles[p].color.a));
                 CHECK(ea.particles[p].age == doctest::Approx(eb.particles[p].age));
             }
         }
     };
-    std::vector<game::Emitter> before, before_clouds; // the inline step's particles as of the last frame
-    for (int frame = 0; frame < 40; ++frame) {
-        world = glm::rotate(glm::mat4(1.0f), 0.05f * static_cast<float>(frame), glm::vec3(0, 0, 1));
-        world[3] = glm::vec4(2.0f * static_cast<float>(frame), 0, 0, 1);
-        const float dt = frame % 3 == 0 ? 0.016f : 0.033f;
-        inline_step.update(dt, actors, pose, {});
-        worker_step.update(dt, actors, pose, {});
-        if (frame > 0) {
-            // As the scene draws it: the emitters this frame started, last frame's particles.
-            const auto& drawn = worker_step.simulation().emitters();
-            REQUIRE(drawn.size() == before.size());
-            for (std::size_t e = 0; e < drawn.size(); ++e) {
-                REQUIRE(drawn[e].particles.size() == before[e].particles.size());
-                for (std::size_t p = 0; p < drawn[e].particles.size(); ++p)
-                    CHECK(near(drawn[e].particles[p].position, before[e].particles[p].position));
+    auto check_pose = [&](const game::ParticleSystem& system, const assets::MeshEmitter& e) {
+        const auto lights = game::particle_lights(system, {}, actors.size());
+        REQUIRE(lights.size() == actors.size());
+        REQUIRE(system.emitters().size() == 2 * actors.size());
+        for (std::size_t i = 0; i < actors.size(); ++i) {
+            const auto& follower = system.emitters()[2 * i];
+            const auto& detached = system.emitters()[2 * i + 1];
+            glm::mat4 bone;
+            REQUIRE(pose(actors[i].id, e.bone, bone));
+            const glm::mat4 attachment = bone * e.local;
+            const glm::vec3 expected = glm::vec3(attachment * glm::vec4(0, 0, 2, 1));
+            const glm::vec3 axis(attachment[2]);
+            REQUIRE_FALSE(follower.particles.empty());
+            for (const auto& p : follower.particles) {
+                CHECK(near(p.position, expected));
+                CHECK(near(p.axis, axis));
             }
-            CHECK(worker_step.cloud_simulation().emitters().size() == before_clouds.size());
+            CHECK(std::any_of(lights.begin(), lights.end(), [&](const auto& light) {
+                return near(light.position, expected);
+            }));
+            REQUIRE_FALSE(detached.particles.empty());
+            // The original particle is still alive. Its position and axis stay in the frame where it was emitted.
+            const glm::vec3 birth = glm::vec3(e.local[3]) + glm::vec3(0, bone[3].y, 2);
+            CHECK(near(detached.particles.front().position, birth));
+            CHECK(near(detached.particles.front().axis, {0, 0, 1}));
         }
+    };
+    for (int frame = 0; frame < 40; ++frame) {
+        CAPTURE(frame);
+        const float dt = frame % 3 == 0 ? 0.016f : 0.033f;
+        // The scene prepares the frame's pose before updating the emitters and consuming their particles.
+        world = glm::rotate(glm::mat4(1.0f), 0.05f * static_cast<float>(frame), glm::vec3(0, 1, 0));
+        world[3] = glm::vec4(2.0f * static_cast<float>(frame), 0, 0, 1);
+        worker_step.update(dt, actors, pose, {});
         worker_step.simulate_async(dt, pose);
+        check_pose(worker_step.simulation(), eqg);
+        check_pose(worker_step.cloud_simulation(), cloud);
+        inline_step.update(dt, actors, pose, {});
         same(inline_step.simulation(), worker_step.simulation());
         same(inline_step.cloud_simulation(), worker_step.cloud_simulation());
-        before = inline_step.simulation().emitters();
-        before_clouds = inline_step.cloud_simulation().emitters();
     }
-    CHECK(inline_step.emitters() == 4);
-    CHECK_FALSE(inline_step.simulation().emitters().front().particles.empty());
     // An actor gone: both stop its emitters at the next update.
     inline_step.update(0.016f, std::span(actors.data(), 1), pose, {});
     worker_step.update(0.016f, std::span(actors.data(), 1), pose, {});
     worker_step.simulate_async(0.016f, pose);
     same(inline_step.simulation(), worker_step.simulation());
     same(inline_step.cloud_simulation(), worker_step.cloud_simulation());
-    CHECK(worker_step.emitters() == 2);
+    CHECK(worker_step.emitters() == 4);
 }
 
 TEST_CASE("Instanced item clouds keep independent spawn, object and missile attachment lifetimes") {
@@ -1225,7 +1250,7 @@ TEST_CASE("Actor Particle Density: a change keeps the running emitters' particle
     };
     for (int i = 0; i < 5; ++i) particles.update(0.05f, std::span(&actor, 1), pose, {});
     REQUIRE(particles.simulation().emitters().size() == 2);
-    const std::uint32_t key = particles.simulation().emitters()[0].key;
+    const auto key = particles.simulation().emitters()[0].key;
     const std::size_t before = particles.simulation().emitters()[0].particles.size();
     REQUIRE(before > 0u);
 

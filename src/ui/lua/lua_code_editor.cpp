@@ -281,8 +281,7 @@ int CodeEditor(lua_State* L) {
     }
     ImVec2 caret = place(static_cast<std::size_t>(std::max(0, st.cursor)));
     if (active && std::fmod(ImGui::GetTime(), 1.2) < 0.8)
-        dl->AddLine(ImVec2(origin.x + caret.x, origin.y + caret.y), ImVec2(origin.x + caret.x, origin.y + caret.y + line_h),
-                    IM_COL32(240, 240, 240, 255));
+        dl->AddLineV(origin.x + caret.x, origin.y + caret.y, origin.y + caret.y + line_h, IM_COL32(240, 240, 240, 255));
 
     // Keep the cursor in view when it moved.
     if (active && st.cursor != st.last_cursor) {

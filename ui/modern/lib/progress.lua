@@ -96,6 +96,8 @@ end
 -- a drag picks up the hot button the row makes where the original lets it (opts.drag).
 --   w, h            the area (0: the rest; negative h: leave that much below)
 --   opts.rows       the list's rows when the caller has them already (hs.WindowList's answer this frame; not kept)
+--   opts.revision   with opts.rows: any value that changes when their texts do (the caller compares them); the
+--                    rows shown are then kept like a read copy's, else filtered and sorted again each frame
 --   opts.rowH       a row's height in design pixels (default: a line of small text and padding)
 --   opts.scale      the containing dialog's effective scale (default: the global UI scale)
 --   opts.filter(row, texts) -> bool   leaves rows out (row 0-based)
@@ -103,6 +105,8 @@ end
 --                    are kept while it, the rows and the sort stay the same, instead of filtered again each frame
 --   opts.sort(a, b) -> bool           orders rows (each { row, texts }); the same function from frame to frame
 --                                     sorts again only when the rows shown change
+--   opts.sortKey     any value that changes when opts.sort's order would while it stays the same function (the
+--                    column and direction it sorts by)
 --   opts.draw(row, texts, x0, y0, x1, y1, s, state)   state = { selected, hovered, color = { r, g, b }, colors (the
 --                                     row's cell colours, hs.ListRow's texts.colors, or nil) }; default: the first
 --                                     column's text. (state and its tables are reused: read them in the call.)
@@ -188,8 +192,9 @@ end
 
 -- The rows shown, in pool.order (entries { row, texts }): rebuilt only when they would come out different.
 local function rowOrder(pool, c, opts, given)
-  local filter, fkey, sort = opts.filter, opts.filterKey, opts.sort
-  local kept = not given and pool.version == c.version and pool.sort == sort and pool.hadFilter == (filter ~= nil)
+  local filter, fkey, sort, skey = opts.filter, opts.filterKey, opts.sort, opts.sortKey
+  local kept = (not given or opts.revision ~= nil) and pool.given == given and pool.version == c.version
+    and pool.sort == sort and pool.sortKey == skey and pool.hadFilter == (filter ~= nil)
   if kept and fkey ~= nil and pool.filterKey == fkey then return end
   -- the rows the filter keeps (1-based), compared with last frame's
   local cand = pool.cand
@@ -208,7 +213,8 @@ local function rowOrder(pool, c, opts, given)
   end
   pool.filterKey = fkey
   if kept then return end
-  pool.version, pool.sort, pool.hadFilter = c.version, sort, filter ~= nil
+  pool.version, pool.sort, pool.sortKey, pool.hadFilter = c.version, sort, skey, filter ~= nil
+  pool.given = given
   local entries, order = pool.entries, pool.order
   for i = 1, k do
     local e = entries[i]
@@ -231,7 +237,7 @@ function P.Rows(win, id, w, h, opts)
   local pool = rowPool(win, id)
   local c
   if opts.rows then
-    c = { n = #opts.rows, rows = opts.rows, version = -1 }
+    c = { n = #opts.rows, rows = opts.rows, version = opts.revision or -1 }
   else
     c = rowCopy(win, id, pool, count or 0)
   end

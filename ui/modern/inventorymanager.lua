@@ -1137,6 +1137,31 @@ local function bulkConfirm(s)
   ui.EndPopup()
 end
 
+-- The bar's four dry runs (hs.BulkItems: a plan over every selected place each), kept while the places, the
+-- inventory, the Keep marks and the item job read the same, and for at most BULK_REREAD seconds (the merchant,
+-- bank or tribute master opening changes the answers too). A button so enabled a moment late only opens the
+-- confirmation, which asks the game again.
+local BULK_MODES = { "withdraw", "sell", "tribute", "destroy" }
+local BULK_REREAD = 0.25
+local bulkDry = { at = -math.huge, places = nil, inv = nil, keep = nil, busy = nil, n = {}, err = {} }
+local function bulkDryRuns(places, busy)
+  local c = bulkDry
+  local inv, keep = API.inventory.ItemsRevision()
+  local now = ui.GetTime()
+  local same = c.places ~= nil and #c.places == #places and c.inv == inv and c.keep == keep and c.busy == busy
+    and now - c.at < BULK_REREAD and now >= c.at
+  if same then
+    for i = 1, #places do
+      if places[i] ~= c.places[i] then same = false break end
+    end
+  end
+  if not same then
+    c.at, c.places, c.inv, c.keep, c.busy = now, places, inv, keep, busy
+    for _, mode in ipairs(BULK_MODES) do c.n[mode], c.err[mode] = API.inventory.BulkItems(mode, places, true) end
+  end
+  return c.n, c.err
+end
+
 -- The selection's bar, from x (where the summary is otherwise): how many, their worth, and the actions.
 local function selectionBar(x, y, s, v)
   local places = selPlaces(v)
@@ -1149,9 +1174,10 @@ local function selectionBar(x, y, s, v)
     C.text, T.font.small) + 14 * s
   local busy = API.inventory.ItemJob()
   local bw = 96 * s
-  for _, mode in ipairs({ "withdraw", "sell", "tribute", "destroy" }) do
+  local counts, errs = bulkDryRuns(places, busy ~= nil)
+  for _, mode in ipairs(BULK_MODES) do
     local b = BULK[mode]
-    local n, err = API.inventory.BulkItems(mode, places, true)
+    local n, err = counts[mode], errs[mode]
     local ok = not busy and not err and n > 0
     local tip
     if busy then tip = "Wait for the items being moved"

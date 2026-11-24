@@ -38,13 +38,21 @@ local PAGES = {
 -- New and unread rows are the colour the game gives them (0xffc896).
 local function unread(r, g, b) return r and r > 0.95 and g and g < 0.85 and g > 0.7 and b < 0.65 end
 
+-- The unread count reads every inbox row, so it is counted again every UNREAD_REREAD seconds, or at once when the
+-- row count changes, not every frame.
+local UNREAD_REREAD = 0.25
+local unreadCached, unreadRows, unreadAt = 0, -1, -math.huge
 local function unreadCount()
   local rows = API.windows.ListInfo(WINDOW, "InboxList") or 0
+  local now = ui.GetTime()
+  if rows == unreadRows and now - unreadAt < UNREAD_REREAD and now >= unreadAt then return unreadCached, rows end
+  unreadRows, unreadAt = rows, now
   local n = 0
   for i = 0, rows - 1 do
     local _, r, g, b = API.windows.ListRow(WINDOW, "InboxList", i)
     if unread(r, g, b) then n = n + 1 end
   end
+  unreadCached = n
   return n, rows
 end
 
@@ -56,6 +64,47 @@ local function shortDate(t)
   return mon .. " " .. day .. " " .. year
 end
 
+-- A page's W.List options, made once (the filter again only when the search changes); a date's short form is kept
+-- by the text it was made from.
+local LIST_COLUMNS = { [1] = { "From", 110 }, [2] = { "Subject", 0 }, [3] = { "Date", 92 } }
+local SEARCH_COLUMNS = { 1, 2 }
+local shortDates, shortDateCount = {}, 0
+local function shortDateOf(t)
+  t = t or ""
+  local d = shortDates[t]
+  if not d then
+    if shortDateCount >= 512 then shortDates, shortDateCount = {}, 0 end
+    d = shortDate(t)
+    shortDates[t], shortDateCount = d, shortDateCount + 1
+  end
+  return d
+end
+local listOpts = {}
+local function listOptsFor(P, needle)
+  local o = listOpts[P.list]
+  if not o then
+    o = { columns = LIST_COLUMNS,
+      onRow = function(row, texts)
+        local _, r, g, b = API.windows.ListRow(WINDOW, P.list, row)
+        local new = unread(r, g, b)
+        local c = new and C.gold or C.text
+        ui.TextColored(c[1], c[2], c[3], 1, texts[1] or "")
+        ui.TableNextColumn()
+        ui.TextColored(c[1], c[2], c[3], 1, texts[2] or "")
+        ui.TableNextColumn()
+        ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, shortDateOf(texts[3]))
+        if new and ui.IsItemHovered() then ui.SetTooltip("Unread") end
+        return true
+      end }
+    listOpts[P.list] = o
+  end
+  if o.filterKey ~= needle then
+    o.filterKey = needle
+    o.filter = needle ~= "" and function(_, texts) return S.Matches(texts, needle, SEARCH_COLUMNS) end or nil
+  end
+  return o
+end
+
 local function messageList(P, w, h, needle, s)
   local rows = API.windows.ListInfo(WINDOW, P.list) or 0
   if rows == 0 then
@@ -65,22 +114,7 @@ local function messageList(P, w, h, needle, s)
     ui.EndChild()
     return
   end
-  W.List(WINDOW, P.list, w, h, {
-    columns = { [1] = { "From", 110 }, [2] = { "Subject", 0 }, [3] = { "Date", 92 } },
-    filter = needle ~= "" and function(_, texts) return S.Matches(texts, needle, { 1, 2 }) end or nil,
-    onRow = function(row, texts)
-      local _, r, g, b = API.windows.ListRow(WINDOW, P.list, row)
-      local new = unread(r, g, b)
-      local c = new and C.gold or C.text
-      ui.TextColored(c[1], c[2], c[3], 1, texts[1] or "")
-      ui.TableNextColumn()
-      ui.TextColored(c[1], c[2], c[3], 1, texts[2] or "")
-      ui.TableNextColumn()
-      ui.TextColored(C.muted[1], C.muted[2], C.muted[3], 1, shortDate(texts[3]))
-      if new and ui.IsItemHovered() then ui.SetTooltip("Unread") end
-      return true
-    end,
-  })
+  W.List(WINDOW, P.list, w, h, listOptsFor(P, needle))
 end
 
 local function view(P, w, h, s)

@@ -112,8 +112,8 @@ ui.window(NAME, function()
     -- (the keyboard's Enter and Escape: only while this window has the focus and nothing is being typed)
     local keys = W.focused() and not ui.GetIO().typing
     if P.press("b") or (keys and ui.IsKeyPressed(ui.Key.Escape)) then API.pregame.ServerSelectDo("back") end
-    if P.press("y") and v.selected > 0 and not st.follow then
-      local sel = v.servers[v.selected]
+    local sel = v.servers[v.selected]
+    if P.press("y") and sel and not st.follow then
       -- the list is sorted again with the world's new mark: the focus goes with the world to its new row
       if API.pregame.ServerSelectDo("favorite", v.selected) then
         st.follow = { name = sel.name, fav = sel.favorite, untilF = frame + 30 }
@@ -210,7 +210,6 @@ ui.window(NAME, function()
     P.at(x1 - 2 * bw - px(12), by)
     if P.button(F, "##back", "Back", bw, px(72), { glyph = "b" }) then API.pregame.ServerSelectDo("back") end
     ui.SameLine(0, px(12))
-    local sel = v.servers[v.selected]
     local canPlay = not busy and sel ~= nil and sel.canJoin
     if P.button(F, "##play", "Play", bw, px(72), { primary = canPlay, disabled = not canPlay, glyph = "start" }) then
       play(v, v.selected)

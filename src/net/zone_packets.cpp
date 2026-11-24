@@ -1194,7 +1194,7 @@ AppPacket encode(const ChannelMessage& v) {
     w.le(v.channel);
     w.zeros(5);
     w.le(v.language_skill);
-    write_cstring(w, std::string_view(v.message).substr(0, 0x7ff));
+    write_cstring(w, std::string_view(v.message).substr(0, kChannelMessageMaxText));
     w.zeros(15);
     return make_packet(Op::ChannelMessage, std::move(w));
 }

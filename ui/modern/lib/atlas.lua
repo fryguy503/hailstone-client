@@ -484,9 +484,10 @@ function A.DrawFinder(x, y, w, h, s, onView)
     local rx, ry = ui.GetCursorScreenPos()
     T.Text(rx, ry + 4 * s, q == "" and "No zones on this page." or "No zone by that name.", C.faint, T.font.small)
   end
-  for i, e in ipairs(results) do
+  local rh = 38 * s
+  local function row(i)
+    local e = results[i]
     local rx, ry = ui.GetCursorScreenPos()
-    local rh = 38 * s
     ui.InvisibleButton("##zr" .. i, rw, rh)
     local hov, on = ui.IsItemHovered(), A.sel and A.sel:lower() == e.zone:lower()
     if A.scrollTo and A.scrollTo:lower() == e.zone:lower() then
@@ -512,6 +513,41 @@ function A.DrawFinder(x, y, w, h, s, onView)
       if q ~= "" then A.Show(e.zone) end
     end
     if hov and ui.IsMouseDoubleClicked(ui.Mouse.Left) and onView then onView(e.zone) end
+  end
+  -- Only the rows near the view are laid out (a search can list every zone): rows 1 and 2 measure the step, the
+  -- cursor jumps over the rest, and a Dummy keeps the scrolled height, as the spell book's list does.
+  local count = #results
+  if count <= 3 then
+    for i = 1, count do row(i) end
+  else
+    row(1)
+    local x2, y2 = ui.GetCursorScreenPos()
+    row(2)
+    local _, y3 = ui.GetCursorScreenPos()
+    local step = y3 - y2
+    local _, top = ui.GetWindowPos()
+    local first, last = 3, count
+    if step > 0 then
+      -- a zone to scroll to that is past the drawn rows: centred from where its row would be
+      if A.scrollTo then
+        local want = A.scrollTo:lower()
+        for k = 3, count do
+          if results[k].zone:lower() == want then
+            ui.SetScrollY(math.max(0, y2 - top + ui.GetScrollY() + (k - 2) * step + rh / 2 - listH / 2))
+            A.scrollTo = nil
+            break
+          end
+        end
+      end
+      first = math.max(3, math.floor((top - rh - y2) / step) + 2)
+      last = math.min(count, math.ceil((top + listH - y2) / step) + 2)
+      if first <= last then ui.SetCursorScreenPos(x2, y2 + (first - 2) * step) end
+    end
+    for i = first, last do row(i) end
+    if last < count then
+      ui.SetCursorScreenPos(x2, y2 + (count - 2) * step)
+      ui.Dummy(rw, rh)
+    end
   end
   ui.EndChild()
 
@@ -598,7 +634,8 @@ function A.DrawRouteBanner(x0, y0, x1, s, onWorld)
   local text, color
   if here and here:lower() == target:lower() then
     text, color = "You have arrived in " .. zoneName(target) .. ".", C.gold
-  elseif not route then
+  elseif not nextHop then
+    -- (also a route of one zone, which names no next hop: here's name and the route's may disagree)
     text, color = "No known way to " .. zoneName(target) .. " from here.", C.muted
   else
     local n = #route - 1

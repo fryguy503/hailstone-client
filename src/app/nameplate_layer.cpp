@@ -25,14 +25,17 @@ NameplateLayer::NameplateLayer(render::VkContext& vk, const std::filesystem::pat
 void NameplateLayer::create(const std::filesystem::path& shader_dir) {
     using render::vk_check;
     const render::VkContext& vk = vk_;
-    // Set 0 must be defined as ImGui's is (one combined image sampler, fragment stage) and the push constants as its
-    // own (the vertex stage's scale and translate), or the font texture its draw commands bind would not fit our
-    // pipeline. Set 1 is ours: the scene's depth, and a dynamic uniform buffer with each plate's parameters.
-    VkDescriptorSetLayoutBinding font{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    // Sets 0 and 1 must be defined as ImGui's are (since 1.92.8 a sampled image, and a sampler of its own, each at
+    // binding 0, fragment stage) and the push constants as its own (the vertex stage's scale and translate), or the
+    // font texture and sampler its draw commands bind would not fit our pipeline. Set 2 is ours: the scene's depth,
+    // and a dynamic uniform buffer with each plate's parameters.
+    VkDescriptorSetLayoutBinding font{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = 1;
     li.pBindings = &font;
     vk_check(vkCreateDescriptorSetLayout(device_, &li, nullptr, &font_layout_), "vkCreateDescriptorSetLayout (plate font)");
+    font.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    vk_check(vkCreateDescriptorSetLayout(device_, &li, nullptr, &sampler_layout_), "vkCreateDescriptorSetLayout (plate sampler)");
     VkDescriptorSetLayoutBinding ours[2] = {
         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
@@ -41,9 +44,9 @@ void NameplateLayer::create(const std::filesystem::path& shader_dir) {
     vk_check(vkCreateDescriptorSetLayout(device_, &li, nullptr, &set_layout_), "vkCreateDescriptorSetLayout (plate depth)");
 
     VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) * 4};
-    VkDescriptorSetLayout sets[2] = {font_layout_, set_layout_};
+    VkDescriptorSetLayout sets[3] = {font_layout_, sampler_layout_, set_layout_};
     VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    pl.setLayoutCount = 2;
+    pl.setLayoutCount = 3;
     pl.pSetLayouts = sets;
     pl.pushConstantRangeCount = 1;
     pl.pPushConstantRanges = &push;
@@ -160,6 +163,7 @@ NameplateLayer::~NameplateLayer() {
     if (layout_) vkDestroyPipelineLayout(device_, layout_, nullptr);
     if (pool_) vkDestroyDescriptorPool(device_, pool_, nullptr);
     if (set_layout_) vkDestroyDescriptorSetLayout(device_, set_layout_, nullptr);
+    if (sampler_layout_) vkDestroyDescriptorSetLayout(device_, sampler_layout_, nullptr);
     if (font_layout_) vkDestroyDescriptorSetLayout(device_, font_layout_, nullptr);
     for (std::uint32_t s = 0; s < render::VkContext::kFramesInFlight; ++s)
         if (buffers_[s]) vmaDestroyBuffer(allocator_, buffers_[s], allocations_[s]);
@@ -193,7 +197,7 @@ void NameplateLayer::bind(const ImDrawList*, const ImDrawCmd* cmd) {
     NameplateLayer& l = *data->layer;
     vkCmdBindPipeline(rs->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, l.pipeline_);
     const std::uint32_t offset = static_cast<std::uint32_t>(data->index * l.stride_);
-    vkCmdBindDescriptorSets(rs->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, l.layout_, 1, 1, &l.sets_[l.slot_], 1, &offset);
+    vkCmdBindDescriptorSets(rs->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, l.layout_, 2, 1, &l.sets_[l.slot_], 1, &offset);
 }
 
 bool NameplateLayer::draw(const NameplateText& plate) {
@@ -208,14 +212,14 @@ bool NameplateLayer::draw(const NameplateText& plate) {
     Callback data{this, plates_++};
     dl_->AddCallback(&NameplateLayer::bind, &data, sizeof(data)); // ImGui keeps a copy of the data
     const bool painted = paint(plate);
-    dl_->AddCallback(ImDrawCallback_ResetRenderState, nullptr);   // and ImGui's own pipeline again
+    dl_->AddCallback(ImGui::GetPlatformIO().DrawCallback_ResetRenderState, nullptr);   // and ImGui's own pipeline again
     return painted;
 }
 
 ImFont* NameplateLayer::font() const { return style_.font ? style_.font : ImGui::GetFont(); }
 
 float NameplateLayer::name_size(const NameplateText& p) const {
-    const float base = style_.size > 0.0f ? style_.size : font()->FontSize;
+    const float base = style_.size > 0.0f ? style_.size : font()->LegacySize;
     return base * std::max(p.scale, 0.01f);
 }
 
@@ -280,7 +284,7 @@ bool NameplateLayer::paint(const NameplateText& p) const {
         const float padx = fs * 0.45f, pady = fs * 0.12f;
         ImVec2 a(px - w * 0.5f - padx, py - pady), b(px + w * 0.5f + padx, py + fs + pady);
         dl_->AddRectFilled(a, b, fade(IM_COL32(0, 0, 0, 150)), fs * 0.35f);
-        dl_->AddRect(a, b, color, fs * 0.35f, 0, std::max(1.5f, fs * 0.1f));
+        dl_->AddRect(a, b, color, fs * 0.35f, std::max(1.5f, fs * 0.1f), 0);
         const float bob = std::abs(std::sin(static_cast<float>(ImGui::GetTime()) * 4.0f)) * fs * 0.3f;
         const float tip = a.y - fs * 0.25f - bob, half = fs * 0.4f;
         ImVec2 t0(px - half, tip - half * 1.2f), t1(px + half, tip - half * 1.2f), t2(px, tip);

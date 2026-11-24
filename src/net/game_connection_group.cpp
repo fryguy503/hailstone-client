@@ -222,24 +222,48 @@ void GameConnection::attack_hold_tick() {
     if (!xtarget_holds_spawn()) set_auto_attack(false);
 }
 
-std::uint32_t GameConnection::xtarget_attacker(std::uint32_t prefer) const {
-    auto qualifies = [&](std::uint32_t id) {
-        if (id == 0 || std::find(xtarget_attackers_.begin(), xtarget_attackers_.end(), id) == xtarget_attackers_.end())
+bool GameConnection::can_auto_target_attacker(std::uint32_t id) const {
+    if (id == 0 || id == world_.player_id) return false;
+    auto it = world_.spawns.find(id);
+    if (it == world_.spawns.end()) return false;
+    const game::Spawn& s = it->second;
+    if (!s.is_npc || s.is_corpse || !s.targetable) return false;
+    // Leave player-owned pets alone, including charmed or summoned pets in a duel.
+    if (s.pet_owner_id)
+        if (auto o = world_.spawns.find(s.pet_owner_id); o != world_.spawns.end() && !o->second.is_npc)
             return false;
-        auto it = world_.spawns.find(id);
-        if (it == world_.spawns.end()) return false;
-        const game::Spawn& s = it->second;
-        if (!s.is_npc || s.is_corpse || !s.targetable) return false;
-        // A player's pet (a charmed or summoned one fighting a duel) is left alone.
-        if (s.pet_owner_id)
-            if (auto o = world_.spawns.find(s.pet_owner_id); o != world_.spawns.end() && !o->second.is_npc)
-                return false;
-        return true;
-    };
+    return true;
+}
+
+void GameConnection::record_auto_target_attack(const CombatDamage& damage) {
+    if (damage.target != world_.player_id || game::is_environment_hit(damage.type) ||
+        !can_auto_target_attacker(damage.source)) return;
+    if (damage.type == 231 && damage.damage <= 0) {
+        if (damage.damage < 0) return; // healing
+        // Buffs also send zero damage. Only a known detrimental spell counts in this case.
+        const auto* spell = spell_table_->get(damage.spell_id);
+        if (!spell || spell->beneficial()) return;
+    }
+    if (std::find(xtarget_attackers_.begin(), xtarget_attackers_.end(), damage.source) == xtarget_attackers_.end())
+        xtarget_attackers_.push_back(damage.source);
+    if (world_.target_id == 0) {
+        auto_target_prefer_ = damage.source;
+        pending_auto_target_attackers_.push_back(damage.source);
+    }
+}
+
+void GameConnection::forget_auto_target_attacker(std::uint32_t id) {
+    std::erase(xtarget_attackers_, id);
+    std::erase(pending_auto_target_attackers_, id);
+    if (auto_target_prefer_ == id) auto_target_prefer_ = 0;
+}
+
+std::uint32_t GameConnection::xtarget_attacker(std::uint32_t prefer) const {
     std::uint32_t first = 0;
     for (std::size_t i = 0; i < xtargets_.slots.size(); ++i) {
         std::uint32_t id = xtargets_.slots[i].spawn_id;
-        if (xtarget_slot_hidden(static_cast<int>(i)) || !qualifies(id)) continue;
+        if (xtarget_slot_hidden(static_cast<int>(i)) || !can_auto_target_attacker(id) ||
+            std::find(xtarget_attackers_.begin(), xtarget_attackers_.end(), id) == xtarget_attackers_.end()) continue;
         if (id == prefer) return id;
         if (!first) first = id;
     }
@@ -247,14 +271,23 @@ std::uint32_t GameConnection::xtarget_attacker(std::uint32_t prefer) const {
 }
 
 void GameConnection::auto_target_tick() {
-    if (!auto_target_due_) return;
-    if (world_.target_id != 0 || state_ != ConnectionState::InZone || pstatus_.dead) {
-        auto_target_due_ = false; // a target is held: nothing to do until the next hit or death
-        return;
+    const bool target_lost = std::exchange(auto_target_xtarget_due_, false);
+    auto& attackers = pending_auto_target_attackers_;
+    if (attackers.empty() && !target_lost) return;
+
+    std::uint32_t target = 0;
+    if (auto_target_xtarget_ && world_.target_id == 0 && state_ == ConnectionState::InZone && !pstatus_.dead) {
+        const auto attacker = std::find_if(attackers.rbegin(), attackers.rend(),
+                                          [this](std::uint32_t id) { return can_auto_target_attacker(id); });
+        if (attacker != attackers.rend()) {
+            target = *attacker;
+            auto_target_prefer_ = target;
+        } else if (target_lost) {
+            target = xtarget_attacker(auto_target_prefer_);
+        }
     }
-    auto_target_due_ = false;
-    if (!auto_target_xtarget_) return;
-    if (std::uint32_t id = xtarget_attacker(auto_target_prefer_)) set_target(id);
+    attackers.clear();
+    if (target) set_target(target);
 }
 
 void GameConnection::xtarget_request(int slot, std::uint32_t type, const std::string& name) {
@@ -331,7 +364,8 @@ void GameConnection::reset_group_for_zone() {
     xtargets_ = {};
     xtargets_.zone = zone;
     xtarget_attackers_.clear();
-    auto_target_due_ = false;
+    pending_auto_target_attackers_.clear();
+    auto_target_xtarget_due_ = false;
     auto_target_prefer_ = 0;
     update_pet_presence();
 }
@@ -341,8 +375,9 @@ void GameConnection::set_pet_list(std::vector<game::PetInfo> list) {
     pets_.have_list = true;
     bool focused_listed = std::any_of(pets_.list.begin(), pets_.list.end(),
                                       [&](const game::PetInfo& e) { return e.spawn_id == pets_.focused; });
-    if (!focused_listed) pets_.focused = pets_.list.empty() ? 0 : pets_.list.front().spawn_id;
-    update_pet_presence();
+    auto focused = pets_.focused;
+    if (!focused_listed) focused = pets_.list.empty() ? 0 : pets_.list.front().spawn_id;
+    set_window_pet(focused);
     log::debug("pet list: {} pet(s)", pets_.list.size());
 }
 
@@ -603,7 +638,8 @@ void GameConnection::handle_group(Op op, const AppPacket& p) {
     case Op::PetBuffWindow:
         if (auto bi = decode_buff_icons(p)) {
             if (bi->all_buffs || bi->entity_id != pets_.focused) pet_buffs_.clear();
-            if (bi->entity_id) pets_.focused = bi->entity_id;
+            if (!bi->entity_id) break;
+            pets_.focused = bi->entity_id;
             update_pet_presence();
             for (const auto& e : bi->entries) {
                 if (e.slot >= kMaxSpawnBuffSlots) continue;

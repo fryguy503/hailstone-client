@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -15,11 +16,15 @@
 
 #include "lua_ui_api_mock.h"
 
+#include "app/actions_ui.h"
 #include "app/lua_ui.h"
+#include "core/config.h"
 #include "core/game_dir.h"
 #include "net/game_connection.h"
+#include "platform/window.h"
 #include "scratch_dir.h"
 #include "ui/dev_screens.h"
+#include "ui/imgui_layer.h"
 #include "ui/lua/lua_host.h"
 
 namespace {
@@ -60,6 +65,7 @@ struct AaColumns {
     test::ScratchDir scratch{"aa_columns_ui"};
     ImGuiContext* context = nullptr;
     std::unique_ptr<AaSession> session;
+    bool keyboard_captured = false;
 
     AaColumns() {
         const auto dir = scratch.path();
@@ -77,9 +83,7 @@ end)
 )lua";
         context = ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
         session = std::make_unique<AaSession>(dir);
         lua_pushcfunction(state(), [](lua_State* L) {
             const ImVec4 clip = ImGui::GetWindowDrawList()->_ClipRectStack.back();
@@ -170,7 +174,10 @@ hs.ShowWindow('AAWindow', true)
             io.DisplaySize = ImVec2(3600, 2000);
             io.DeltaTime = 1.0f / 60.0f;
             session->api.begin_frame();
+            const int requested = context->WantCaptureKeyboardNextFrame;
+            ui::keep_tab_from_windows();
             ImGui::NewFrame();
+            keyboard_captured = ui::keyboard_for_ui(requested);
             session->lua.frame();
             ImGui::Render();
             REQUIRE(ImGui::FindWindowByName("UI errors") == nullptr);
@@ -273,6 +280,77 @@ hs.ShowWindow('AAWindow', true)
     }
 };
 } // namespace
+
+TEST_CASE("AA window: clicking Train or the background preserves held forward movement") {
+    AaColumns ui;
+    ui.run(R"lua(
+local WindowText, ChildState, ClickChild = hs.WindowText, hs.ChildState, hs.ClickChild
+train_enabled, train_clicks = false, 0
+function hs.WindowText(win, id, ...)
+  if win == "AAWindow" and id == "ModernSelected" then return "1\tAbility 001\t0\t3\t1" end
+  return WindowText(win, id, ...)
+end
+function hs.ChildState(win, id, ...)
+  if win == "AAWindow" and id == "TrainButton" then return train_enabled, false end
+  return ChildState(win, id, ...)
+end
+function hs.ClickChild(win, id, ...)
+  if win == "AAWindow" and id == "TrainButton" then train_clicks = train_clicks + 1 return true end
+  return ClickChild(win, id, ...)
+end
+)lua");
+    hailstone::test::sync_ui_api_aliases(ui.state());
+    ui.frames(3);
+    const auto train = ui.hit("Train  (1 pt)##TrainButton");
+    const auto hotkey = ui.hit("Hotkey##HotButton");
+
+    Config config;
+    app::ActionsUi actions(config, ui.scratch.path() / "hailstone.ini");
+    platform::InputState input;
+    const auto forward = game::KeyCommand::FORWARD;
+    constexpr std::uint8_t w_key = 0x11;
+    ImGuiIO& io = ImGui::GetIO();
+    auto frame = [&] {
+        ui.frames();
+        return actions.process_keys(input, !ui.keyboard_captured);
+    };
+    io.AddKeyEvent(ImGuiKey_W, true);
+    input.key_down[w_key] = true;
+    input.key_events = {{w_key, true, false}};
+    const auto start = frame();
+    REQUIRE(start.size() == 1);
+    REQUIRE(start.front().command == static_cast<int>(forward));
+    REQUIRE(start.front().down);
+    input.key_events.clear();
+
+    auto click_while_moving = [&](ImVec2 at) {
+        io.AddMousePosEvent(at.x, at.y);
+        CHECK(frame().empty());
+        io.AddMouseButtonEvent(0, true);
+        CHECK(frame().empty());
+        CHECK(frame().empty());
+        io.AddMouseButtonEvent(0, false);
+        CHECK(frame().empty());
+        CHECK(actions.keymap().held(forward));
+        CHECK(frame().empty());
+        CHECK(actions.keymap().held(forward));
+    };
+    click_while_moving(train.center()); // unavailable with zero unspent points
+    CHECK(ImGui::IsKeyDown(ImGuiKey_W));
+    click_while_moving(ImVec2((train.x1 + hotkey.x0) / 2, train.center().y));
+    ui.run("assert(train_clicks == 0) train_enabled = true");
+    click_while_moving(train.center());
+    ui.run("assert(train_clicks == 1)");
+
+    io.AddKeyEvent(ImGuiKey_W, false);
+    input.key_down[w_key] = false;
+    input.key_events = {{w_key, false, false}};
+    const auto stop = frame();
+    REQUIRE(stop.size() == 1);
+    CHECK(stop.front().command == static_cast<int>(forward));
+    CHECK_FALSE(stop.front().down);
+    CHECK_FALSE(actions.keymap().held(forward));
+}
 
 TEST_CASE("AA columns: dialog scale, resizing and a row extension share the header layout") {
     AaColumns ui;

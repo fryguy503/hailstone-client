@@ -1,10 +1,9 @@
 #pragma once
 
 // Collision with the zone objects that play their own animation (assets/object_animation.h): Ssraeshza Temple's
-// turning rings, swaying branches. The original tests a placed hierarchical actor without a static collision mesh (no
-// WLD skeleton has one) by its parts' meshes where the animation has put them (CActorData::FindIntersectionSphere's
-// polygon path, docs/mechanics.md "Animated zone objects"), so a ring's gap lets the player through only while it
-// faces the way in.
+// turning rings, swaying branches. Without an authored collision volume, a placed hierarchical actor tests its parts'
+// meshes in their current pose (docs/mechanics.md "Animated zone objects"), so a ring's gap lets the player through
+// only while it faces the way in. The moving parts of an actor with an authored volume supply visual surfaces only.
 //
 // The triangles that move are left out of the static zone mesh (CollisionMesh::build) and kept here, one shape per
 // moving node of each animated object (game/object_collision.h), in the object's first-key pose. set_time poses every

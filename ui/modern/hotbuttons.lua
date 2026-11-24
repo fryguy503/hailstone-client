@@ -18,6 +18,16 @@ for i = 1, BUTTONS do
   HIT_IDS[i] = "##HB_Button" .. i
 end
 
+local function cornerText(x, y, text, color, s, scale)
+  local fontScale
+  if scale < 1 then
+    fontScale = s / (ui.GetIO().uiScale or 1)
+    ui.SetWindowFontScale(fontScale * scale)
+  end
+  T.Text(x, y, text, color, T.font.tiny, "right")
+  if fontScale then ui.SetWindowFontScale(fontScale) end
+end
+
 -- A text tile's label wrapped to the tile's width, kept in `cache` (the tile's) while the label, the width and the
 -- font's measure of the label stay the same: the lines and their count, and the line height.
 local function wrapLabel(cache, label, maxw)
@@ -160,6 +170,13 @@ local function bar(n)
       local info = API.hotbars.Info(window, id, t.info)
       local kind, label, tex = info.kind, info.label, info.tex
       local face = info.social
+      local stack = info.stackCount and tostring(info.stackCount)
+      local textBottom, countScale = by + sz, 1
+      if stack then
+        local tw, th = T.TextSize(stack, T.font.tiny)
+        countScale = math.min(1, (sz - 6 * s) / tw, sz * 0.55 / th)
+        textBottom = by + sz - th * countScale - 2 * s
+      end
       t.icon.wellAlpha = kind == "empty" and 0.5 or 1
       t.icon.alpha = info.iconAlpha or 1
       T.Icon(bx, by, sz, s, tex, info.u0, info.v0, info.u1, info.v1, nil, t.icon)
@@ -167,8 +184,10 @@ local function bar(n)
         -- a text button (social, combat ability): its label, wrapped to the tile
         ui.PushClipRect(bx, by, bx + sz, by + sz, true)
         ui.DrawRectFilled(bx + 1, by + 1, bx + sz - 1, by + sz - 1, C.accent[1], C.accent[2], C.accent[3], 0.10, 6 * s)
+        if stack then ui.PushClipRect(bx, by, bx + sz, textBottom, true) end
         local lines, count, lh = wrapLabel(t.wrap, label, sz - 4 * s)
-        local ty = by + (sz - math.min(count, 3) * lh) / 2
+        local ty = by + (textBottom - by - math.min(count, 3) * lh) / 2
+        if stack then ty = math.max(by, ty) end
         local tc = C.text
         if face then
           tc = t.tc
@@ -181,6 +200,7 @@ local function bar(n)
         for k = 1, math.min(count, 3) do
           T.Text(bx + sz / 2, ty + (k - 1) * lh, lines[k], tc, T.font.tiny, "center")
         end
+        if stack then ui.PopClipRect() end
         if face and info.overlay ~= "" then
           T.Text(bx + sz - 3 * s, by + sz - 13 * s, info.overlay, C.text, T.font.tiny, "right")
         end
@@ -188,9 +208,6 @@ local function bar(n)
           ui.DrawRect(bx + 1, by + 1, bx + sz - 1, by + sz - 1, C.accent[1], C.accent[2], C.accent[3], 0.9, 6 * s, 2 * s)
         end
         ui.PopClipRect()
-      elseif tex and label ~= "" and kind == "item" then
-        local count = label:match("^%d+$")
-        if count then T.Text(bx + sz - 3 * s, by + sz - 13 * s, count, C.text, T.font.tiny, "right") end
       end
       if info.cooldown then
         -- the time still to go, shaded: it shrinks toward the bottom as the gem bar's does
@@ -201,16 +218,28 @@ local function bar(n)
         if info.left >= 1000 then
           local secs = (info.left + 999) // 1000
           local left = secs >= 60 and string.format("%dm", (secs + 59) // 60) or tostring(secs)
-          T.Text(bx + sz / 2, by + sz / 2 - 7 * s, left, C.text, T.font.small, "center")
+          if stack then ui.PushClipRect(bx, by, bx + sz, textBottom, true) end
+          T.Text(bx + sz / 2, by + (textBottom - by) / 2 - 7 * s, left, C.text, T.font.small, "center")
+          if stack then ui.PopClipRect() end
         end
       end
       if info.checked then
         ui.DrawRectFilled(bx, by, bx + sz, by + sz, C.accent[1], C.accent[2], C.accent[3], 0.16, 6 * s)
         ui.DrawRect(bx + 1, by + 1, bx + sz - 1, by + sz - 1, C.accent[1], C.accent[2], C.accent[3], 0.95, 6 * s, 2 * s)
       end
+      if stack then
+        cornerText(bx + sz - 3 * s, textBottom, stack, C.text, s, countScale)
+      end
       -- the key bound to it (Show Key Map: hs.WindowText of the button is its key, "" with the key map off)
       local keyText = API.windows.Text(window, id) or ""
-      if keyText ~= "" then T.Text(bx + sz - 4 * s, by + 2 * s, keyText, C.faint, T.font.tiny, "right") end
+      if keyText ~= "" then
+        local keyScale = 1
+        if stack then
+          local _, th = T.TextSize(keyText, T.font.tiny)
+          keyScale = math.min(1, (textBottom - by - 3 * s) / th)
+        end
+        cornerText(bx + sz - 4 * s, by + 2 * s, keyText, C.faint, s, keyScale)
+      end
       local clicked = T.Hit(HIT_IDS[i], bx, by, bx + sz, by + sz)
       local key, hovered = ui.GetItemID(), ui.IsItemHovered()
       T.HoverFx(bx, by, bx + sz, by + sz, s, 6)

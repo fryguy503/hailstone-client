@@ -651,10 +651,9 @@ public:
     bool attack_until_xtarget_clear() const { return attack_until_xtarget_clear_; }
     // A living spawn other than `except` in a slot of the extended target list that is not hidden.
     bool xtarget_holds_spawn(std::uint32_t except = 0) const;
-    // Hailstone (option auto_target_xtarget, on by default; docs/mechanics.md): with no target, an NPC on the
-    // extended target list (slots the server extension hides left out) that attacks the player (an OP_Damage on
-    // the player from it, a miss included) becomes the target; so does such an NPC still on the list when the
-    // target dies. Clearing the target by hand holds until the next hit. The original never targets by itself.
+    // Hailstone (option auto_target_xtarget, on by default; docs/mechanics.md): with no target, a qualifying NPC
+    // that attacks the player becomes the target. When the target dies or despawns, the client can pick another
+    // attacker from the visible extended target slots. Clearing by hand holds until the next attack.
     void set_auto_target_xtarget(bool on) { auto_target_xtarget_ = on; }
     bool auto_target_xtarget() const { return auto_target_xtarget_; }
     // Hailstone (option face_on_attack, on by default; docs/mechanics.md): the attack key and buttons
@@ -1464,6 +1463,10 @@ public:
 
     // ---- spells (game/spells.h; net/game_connection_spells.cpp) ----
     const game::SpellTable& spell_table() const { return *spell_table_; }
+    std::uint32_t spell_id_limit() const { return spell_id_limit_; }
+    bool spell_data_ready() const {
+        return spell_id_limit_ > game::kRof2StockMaxSpellId && spell_table_->compatible_with_wire_limit(spell_id_limit_);
+    }
     const game::SpellState& spell_state() const { return spells_; }
     // Whether the target buff list (OP_TargetBuffs) is the player's own, the player targeting itself: the player's
     // buff-timer hold (+0x22d) holds it then, as CTargetWnd::OnProcessFrame @0x76b1b4 hands Spell_IsBuffCountdownHeld
@@ -1735,6 +1738,8 @@ public:
     bool memorizing_set() const { return set_mem_.mode == 2; }
     // Clicks off one of the player's buffs (OP_BuffRemoveRequest).
     void remove_buff(int slot);
+    // Clicks off a removable beneficial buff in the focused pet's server slot.
+    bool remove_pet_buff(std::uint32_t slot);
     // RemovePCAffectex(affect, 0) / NotifyPCAffectChange: the client drops a buff
     // itself (disarm while hidden, Sanctuary before an attack); no packet.
     void clear_buff_locally(int slot);
@@ -1846,6 +1851,7 @@ public:
         net::Coins money;
         bool open = false;     // the server accepted the request
         bool complete = false; // every item sent
+        bool close_pending = false; // awaiting OP_LootComplete
         std::size_t pending_requests = 0; // OP_LootItem requests awaiting an answer, including individual loots
     };
     void loot(std::uint32_t corpse_id);
@@ -2028,6 +2034,7 @@ public:
     // The pet the native pet window shows (the local player's PetID), set by the client alone: the NMS add-on's
     // /petcycle (MultiPet::CyclePet) writes it without telling the server.
     void set_window_pet(std::uint32_t spawn_id) {
+        if (pets_.focused != spawn_id) pet_buffs_.clear();
         pets_.focused = spawn_id;
         update_pet_presence();
     }
@@ -3229,7 +3236,10 @@ private:
     std::uint32_t save_tick_ms_ = 0; // the last tick
     void camp_tick();
     void attack_hold_tick(); // attack_until_xtarget_clear: auto attack off once the list holds no spawn
-    void auto_target_tick(); // auto_target_xtarget: a pending pick, with no target, of an attacker on the list
+    void auto_target_tick();
+    bool can_auto_target_attacker(std::uint32_t id) const;
+    void record_auto_target_attack(const CombatDamage& damage);
+    void forget_auto_target_attacker(std::uint32_t id);
     // auto_target_xtarget: the attacker to target, `prefer` first when it qualifies, else the first in slot order;
     // 0 none.
     std::uint32_t xtarget_attacker(std::uint32_t prefer) const;
@@ -3261,6 +3271,7 @@ private:
     // (CEverQuest_ResetClientStateForZone @0x531b36) and by the server's opcode 0x5369 (HandleWorldMessage @0x4cb984).
     std::int64_t offline_mode_at_ = 0;
     void autosplit_command(const std::string& args);
+    void set_autosplit(bool checked, std::uint32_t message, std::uint32_t color = 0);
     void init_bandolier_from_profile();
     std::int32_t aa_effect_total(std::int32_t spa) const;
     std::optional<ItemSlot> find_item_for_bandolier(std::uint32_t item_id) const;
@@ -3415,9 +3426,10 @@ private:
     bool attack_held_for_xtarget_ = false; // kept on at the target's death (attack_until_xtarget_clear)
     bool auto_target_xtarget_ = true;
     bool face_on_attack_ = true;
-    std::vector<std::uint32_t> xtarget_attackers_; // NPCs that hit (or missed) the player this zone
-    bool auto_target_due_ = false;                 // a hit or the target's death since the last pick
-    std::uint32_t auto_target_prefer_ = 0;         // the latest attacker
+    std::vector<std::uint32_t> xtarget_attackers_; // NPCs that attacked the player this zone
+    std::vector<std::uint32_t> pending_auto_target_attackers_; // attacks while untargeted since the last tick
+    bool auto_target_xtarget_due_ = false;        // the current target died or despawned
+    std::uint32_t auto_target_prefer_ = 0;         // the latest attacker seen while no target was held
     std::int32_t pvp_rules_ = 0;
     std::int32_t spell_scribe_allowed_ = 0; // 0xddfd3c, OP_LogServer +0x18 (/spellscribe)
     bool spell_book_open_ = false;
@@ -3471,6 +3483,8 @@ private:
 
     // Spells.
     std::shared_ptr<const game::SpellTable> spell_table_;
+    std::uint32_t spell_id_limit_ = game::kRof2StockMaxSpellId;
+    void select_zone_spell_limit();
     game::HitModes hit_modes_{};
     game::SpellHitModes spell_hit_modes_{};
     game::SpellState spells_;

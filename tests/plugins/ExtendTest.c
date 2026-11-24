@@ -4,7 +4,7 @@
  *
  * Built three times: ExtendTest (ABI 2); with HAILSTONE_TEST_ABI1, ExtendTestV1, a plugin as an ABI 1 client built
  * it (no hook table, the old host table, only the old export names), which must still load; and with
- * HAILSTONE_TEST_NEW_HOOKS, ExtendTestNew, the same as ExtendTest with its hook table exported under the new name.
+ * HAILSTONE_TEST_NEW_HOOKS, ExtendTestNew, one with a shorter hook table exported under the new name.
  *
  * It keeps the SDK's names up to 0.6 (nmsc_plugin.h, NmscHost, NMSC_*, the `nmsc` global) on purpose, so the build
  * checks that a plugin written against them still compiles. */
@@ -79,6 +79,7 @@ static const char* label(int id, const char* text) {
 }
 
 static int hide_xtarget_slot(int slot) { return slot == 19; }
+static uint32_t spell_id_limit(void) { return 90000u; }
 
 static int skill_gate(int32_t skill, uint32_t mask, int32_t profile_skill, int* has) {
     (void)mask;
@@ -167,6 +168,9 @@ static void ext_read(void* user, const char* args) {
     if (nmsc->get_item(nmsc->host, &bag, &it)) WriteChatf("[read] item %s x%u", it.name, (unsigned)it.stack_count);
     b.size = sizeof b;
     if (nmsc->get_buff(nmsc->host, 0, &b)) WriteChatf("[read] buff %u", (unsigned)b.spell_id);
+    if (NMSC_HOST_HAS(nmsc, spell_id_limit) && NMSC_HOST_HAS(nmsc, spell_data_ready))
+        WriteChatf("[read] spell limit %u ready %d", (unsigned)nmsc->spell_id_limit(nmsc->host),
+                   nmsc->spell_data_ready(nmsc->host));
     WriteChatf("[read] eqstr %d", nmsc->eqstr(nmsc->host, 999999, NULL, 0, buf, sizeof buf));
     /* A struct as an older plugin knew it: only its own fields are written. */
     old.size = sizeof old;
@@ -278,6 +282,10 @@ NMSC_EXPORT const NmscHooks* nmsc_plugin_hooks(void) {
     hooks.item_right_click = item_right_click;
     hooks.list_level = list_level;
     hooks.map_spawn = map_spawn;
+    hooks.spell_id_limit = spell_id_limit;
+#ifdef HAILSTONE_TEST_NEW_HOOKS
+    hooks.size = offsetof(NmscHooks, spell_id_limit);
+#endif
     return &hooks;
 }
 

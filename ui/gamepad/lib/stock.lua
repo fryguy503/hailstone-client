@@ -223,7 +223,7 @@ function G.edit(kb, win, id, x0, x1, opts)
   local function get() return G.text(win, id) end
   local function set(t)
     if opts.digits then t = t:gsub("%D", "") end
-    if #t > max then t = t:sub(1, max) end
+    if #t > max then t = T.cutBytes(t, max) end -- (not mid-character: a cut UTF-8 sequence is not text)
     if t ~= get() then API.windows.SetText(win, id, t) end
   end
   local wx, wy = ui.GetWindowPos()

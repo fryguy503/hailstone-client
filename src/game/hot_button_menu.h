@@ -93,4 +93,8 @@ std::optional<HotButton> inventory_hot_button(const net::ItemSlot& slot, const n
 // with its item id, top-level slots in order, each bag's contents after the bag; never the cursor. Nullopt: none.
 std::optional<net::ItemSlot> hot_button_item_slot(const Inventory& inv, const HotButton& b);
 
+// For the item resolved above, a link shows all carried stacks and a slot button shows its own stack.
+// Zero means there is no quantity to display.
+std::uint64_t hot_button_stack_count(const Inventory& inv, HotButtonType type, const net::Item& item);
+
 } // namespace hailstone::game

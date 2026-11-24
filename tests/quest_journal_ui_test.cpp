@@ -61,9 +61,7 @@ struct JournalSession {
         });
         auto& io = ImGui::GetIO();
         io.IniFilename = nullptr;
-        unsigned char* pixels = nullptr;
-        int width = 0, height = 0;
-        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures; // 1.92: the atlas is built by NewFrame
     }
     ~JournalSession() {
         lua.reset();

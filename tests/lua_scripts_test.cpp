@@ -75,6 +75,15 @@ values={}
 for _,row in ipairs(statusRows(status)) do values[row[1]]=row[2] end
 assert(values['Loaded UI']=='Gamepad' and values['Load state']=='Ready')
 assert(values['Details 1']==nil and values.Scripts==nil and values['Lua windows']==nil)
+-- a character wider than the row, stray continuation bytes and a row of no width still end (whole characters)
+status.diagnostics={'\u{e9}\u{e9}\u{e9}','\u{e9}'..('\128'):rep(50)..' ok'}
+for _,width in ipairs({1,0,-3}) do
+  local n,text=0,{}
+  for _,row in ipairs(statusRows(status,width)) do
+    n=n+1;assert(n<200,'the rows never end');assert(row[2]~='','an empty row');text[#text+1]=row[2]
+  end
+  assert(table.concat(text):find('\u{e9}\u{e9}\u{e9}',1,true),'a character was split')
+end
 )lua");
         CHECK_MESSAGE(rc == LUA_OK, (rc == LUA_OK ? "" : lua_tostring(L, -1)));
         lua_close(L);

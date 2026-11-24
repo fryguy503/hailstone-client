@@ -267,7 +267,7 @@ LabelValue stock_label(const UiHost& host, int type) {
     case 109: case 110: case 111: case 112: case 113: case 114: case 115: { // case 0x2e: the pet's buff slot n
         std::uint32_t slot = static_cast<std::uint32_t>(type - 86);
         for (const auto& [s, b] : c.pet_buffs())
-            if (s == slot && !b.empty() && b.spell >= 1 && b.spell <= 45000) return {spell_name(c, b.spell), std::nullopt};
+            if (s == slot && !b.empty() && game::is_spell_id(b.spell)) return {spell_name(c, b.spell), std::nullopt};
         return {};
     }
     case 135: { // case 0x41: the target of target's name (nothing for a corpse)

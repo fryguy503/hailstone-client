@@ -22,6 +22,7 @@ namespace hailstone::game {
 
 class CharacterPropertySets;
 class EqStrings;
+class SpellTable;
 struct SpellData;
 namespace mechanics { class Character; }
 
@@ -40,8 +41,7 @@ struct ItemDisplayContext {
     std::function<bool(const net::Item&)> can_equip;
     // CEverQuest::GetDeityDesc(id) for deity ids 201..217.
     std::function<std::string(std::uint32_t deity)> deity_name;
-    // The spell table (null when the spell is not known).
-    std::function<const SpellData*(std::int32_t id)> spell;
+    const SpellTable* spells = nullptr;
     // dbstr_us.txt (lore groups: type 7; spell descriptions: type 6).
     std::function<std::string(std::uint32_t id, std::uint32_t type)> db_string;
     // From the server extension (game/server_ext.h; stock: false and empty): CanUseItem and CanEquipItem return
@@ -97,6 +97,10 @@ struct ItemDisplay {
 };
 
 ItemDisplay build_item_display(const net::Item& item, const ItemDisplayContext& ctx);
+
+// Plain spell details for the fallback item window, from the same formatter as the STML description.
+std::vector<std::string> item_effect_detail_lines(const net::ItemEffect& effect, net::ItemEffectKind kind,
+                                                  const ItemDisplayContext& ctx);
 
 // The source/final template ids, current level and unaugmented link hash used by the native Final Result link.
 // No request for a non-evolving, complete or unusable evolution record.
