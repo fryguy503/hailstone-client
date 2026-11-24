@@ -3,6 +3,8 @@
 #include "app/client_app_internal.h"
 #include "app/nameplate_layer.h"
 #include "app/nameplate_canvas_context.h"
+#include "core/ascii_case.h"
+#include "core/ini_file.h"
 #include "ui/lua/lua_host.h"
 #include "ui/texture_ids.h"
 
@@ -414,6 +416,94 @@ void ClientApp::update_ui_host() {
         };
         h.addon_policy = &addon_policy_view_;
         h.retry_required_addons = [this] { retry_required_addons(); };
+        h.server_management_available = [this] {
+            return conn_ && conn_->server_management_available();
+        };
+        h.open_server_management = [this] {
+            return conn_ && conn_->open_server_management();
+        };
+        h.close_server_management = [this] {
+            if (conn_) conn_->close_server_management();
+        };
+        h.save_server_management = [this](std::string_view revision, const std::vector<ServerManagementEdit>& changes) {
+            if (!conn_ || revision.empty() || changes.size() > net::kServerManagementMaxEdits) return false;
+            std::uint32_t token = 0;
+            auto [end, ec] = std::from_chars(revision.data(), revision.data() + revision.size(), token);
+            if (ec != std::errc() || end != revision.data() + revision.size()) return false;
+            std::vector<net::ServerManagementEdit> edits;
+            edits.reserve(changes.size());
+            for (const auto& change : changes) edits.push_back({change.section, change.key, change.value});
+            return conn_->save_server_management(token, edits);
+        };
+        h.server_management = [this](std::uint32_t known_serial,
+                                     std::uint32_t known_catalog_serial) -> std::optional<ServerManagementView> {
+            if (!conn_ || !conn_->server_management_available() || !conn_->server_management_snapshot()) return std::nullopt;
+            const auto& snapshot = *conn_->server_management_snapshot();
+            const auto* hooks = automation_ ? &automation_->hooks() : nullptr;
+            ServerManagementView view;
+            view.serial = conn_->server_management_serial();
+            view.catalog_serial = hooks ? hooks->command_catalog_serial() : 1u;
+            view.revision = std::to_string(snapshot.revision);
+            constexpr std::string_view marker = "; hailstone-policy-revision = ";
+            if (snapshot.text.starts_with(marker)) {
+                auto revision = std::string_view(snapshot.text).substr(marker.size());
+                revision = revision.substr(0, revision.find_first_of("\r\n"));
+                if (revision.size() <= 120 && revision.find_first_not_of(
+                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-") == std::string_view::npos)
+                    view.file_revision = revision;
+            }
+            view.saving = conn_->server_management_saving();
+            view.message = conn_->server_management_message();
+            const bool cfg_changed = view.serial != known_serial;
+            if (!cfg_changed && view.catalog_serial == known_catalog_serial) return view;
+
+            const plugin::Rules parsed = plugin::parse_server_cfg(snapshot.text);
+            view.minimum_status = parsed.management_min_status;
+            if (cfg_changed) {
+                IniFile cfg;
+                cfg.parse(snapshot.text);
+                for (const auto& section : cfg.sections()) {
+                    for (const auto& key : cfg.keys(section)) {
+                        auto lower_section = section;
+                        auto lower_key = key;
+                        for (auto& c : lower_section) c = ascii_lower(c);
+                        for (auto& c : lower_key) c = ascii_lower(c);
+                        auto raw = cfg.get_string(section, key);
+                        raw.resize(std::min(raw.size(), raw.find_first_of(";#")));
+                        const auto start = raw.find_first_not_of(" \t");
+                        raw = start == std::string::npos ? std::string{} : raw.substr(start, raw.find_last_not_of(" \t") - start + 1);
+                        if (lower_section == "commands" && lower_key == "blocked_message") {
+                            raw = parsed.commands.blocked_message;
+                        } else if (lower_section == "commands" && (lower_key == "allow" || lower_key == "block")) {
+                            // The config accepts RoF2 abbreviations. Show the resolved policy in the editor.
+                            const auto& names = lower_key == "allow" ? parsed.commands.allow : parsed.commands.block;
+                            raw.clear();
+                            for (const auto& name : names) {
+                                if (!raw.empty()) raw += ", ";
+                                raw += name;
+                            }
+                        } else if (lower_section == "commands" && lower_key == "gm") {
+                            raw.clear();
+                            for (const auto& [name, minimum] : parsed.commands.gm) {
+                                if (!raw.empty()) raw += ", ";
+                                raw += name + ":";
+                                if (minimum) raw += std::to_string(*minimum);
+                            }
+                        }
+                        view.fields.push_back({std::move(lower_section), std::move(lower_key), std::move(raw)});
+                    }
+                }
+            }
+            auto registered = hooks ? hooks->commands() : std::vector<std::string>{};
+            registered.insert(registered.end(), parsed.commands.allow.begin(), parsed.commands.allow.end());
+            registered.insert(registered.end(), parsed.commands.block.begin(), parsed.commands.block.end());
+            for (const auto& [name, minimum] : parsed.commands.gm) registered.push_back(name);
+            for (auto& command : plugin::command_catalog(registered)) {
+                view.commands.push_back({std::move(command.name), std::move(command.description),
+                    std::string(plugin::command_origin_text(command.origin)), std::move(command.aliases), std::move(command.groups)});
+            }
+            return view;
+        };
     }
     h.web = web_service_.get();
     h.scripts = automation_ ? &automation_->scripts() : nullptr;

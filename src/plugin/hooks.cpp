@@ -56,8 +56,12 @@ struct Hooks::Impl {
     int packet_depth = 0;
     int command_depth = 0;
     bool dirty = false;
+    std::uint32_t command_catalog_serial = 1;
 
     void add(Kind k, EntryPtr e) { lists[k].push_back(std::move(e)); }
+    void command_catalog_changed() {
+        if (++command_catalog_serial == 0) ++command_catalog_serial;
+    }
 
     void sweep() {
         if (depth || !dirty) return;
@@ -107,6 +111,10 @@ Hooks::Owner Hooks::new_guest(std::string name) {
 }
 
 void Hooks::remove(Owner owner) {
+    const auto& commands = impl_->lists[kCommand];
+    if (std::any_of(commands.begin(), commands.end(), [owner](const auto& entry) {
+        return entry->alive && entry->owner == owner;
+    })) impl_->command_catalog_changed();
     for (auto& list : impl_->lists)
         for (auto& e : list)
             if (e->owner == owner) e->alive = false;
@@ -119,8 +127,13 @@ void Hooks::remove(Owner owner) {
 void Hooks::remove_command(Owner owner, std::string_view name) {
     std::string n = lower(name);
     if (!n.empty() && n.front() != '/') n.insert(n.begin(), '/');
-    for (auto& e : impl_->lists[kCommand])
-        if (e->owner == owner && e->name == n) e->alive = false;
+    bool removed = false;
+    for (auto& e : impl_->lists[kCommand]) {
+        if (!e->alive || e->owner != owner || e->name != n) continue;
+        e->alive = false;
+        removed = true;
+    }
+    if (removed) impl_->command_catalog_changed();
     impl_->dirty = true;
     impl_->sweep();
 }
@@ -168,6 +181,7 @@ bool Hooks::add_command(Owner owner, std::string name, std::function<void(std::s
     e->name = std::move(name);
     e->required = required;
     impl_->add(kCommand, std::move(e));
+    impl_->command_catalog_changed();
     return true;
 }
 
@@ -216,7 +230,7 @@ Flow Hooks::chat(ChatLine& line) {
     return dropped ? Flow::Drop : Flow::Continue;
 }
 
-bool Hooks::command(std::string& line) {
+bool Hooks::command(std::string& line, const std::function<bool(std::string_view)>& allow) {
     if (impl_->command_depth >= kMaxCommandDepth) {
         log::warn("plugin commands: commands run from commands nest too deep, '{}' dropped", line.substr(0, 64));
         return true;
@@ -242,6 +256,7 @@ bool Hooks::command(std::string& line) {
     for (const auto& e : impl_->lists[kCommand])
         if (e->alive && e->name == word) found = e;
     if (!found) return false;
+    if (allow && !allow(found->name)) return true;
     std::string held(args); // the line may change under the command
     ++impl_->depth;
     try {
@@ -294,6 +309,8 @@ std::vector<std::string> Hooks::commands() const {
     std::sort(out.begin(), out.end());
     return out;
 }
+
+std::uint32_t Hooks::command_catalog_serial() const { return impl_->command_catalog_serial; }
 
 void Hooks::pulse() {
     impl_->each(kPulse, [](Entry& e) {

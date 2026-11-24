@@ -129,7 +129,9 @@ add_library(hailstone_engine STATIC
   src/plugin/hooks.cpp
   src/plugin/consent.cpp
   src/plugin/policy.cpp
+  src/plugin/command_policy.cpp
   src/net/settings_packets.cpp
+  src/net/server_management_packets.cpp
   src/net/quest_npc_packets.cpp
   src/net/zone_link_packets.cpp
   src/net/server_files_packets.cpp
@@ -178,6 +180,7 @@ add_library(hailstone_engine STATIC
   src/net/des.cpp
   src/net/login.cpp
   src/net/game_connection.cpp
+  src/net/game_connection_server_management.cpp
   src/net/game_connection_spells.cpp
   src/net/game_connection_ticks.cpp
   src/net/game_connection_spell_sets.cpp
@@ -579,6 +582,7 @@ add_library(hailstone_engine STATIC
   src/app/navigator.cpp
   src/app/guide_path.cpp
   src/app/lua_ui_values.cpp
+  src/app/lua_ui_server_management.cpp
   src/app/lua_ui_hud.cpp
   src/app/lua_ui_hotbar.cpp
   src/app/lua_ui_caps.cpp
@@ -1238,6 +1242,7 @@ if(HAILSTONE_BUILD_TESTS)
     tests/ui_rules_vectors_test.cpp
     tests/net_login_test.cpp
     tests/net_packets_test.cpp
+    tests/server_management_packets_test.cpp
     tests/shroud_packets_test.cpp
     tests/pfs_test.cpp
     tests/pfs_mapped_test.cpp

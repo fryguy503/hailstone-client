@@ -551,6 +551,11 @@ public:
         automation_->hooks().add_command(plugin::Hooks::kClient, "/luasocial", [this](std::string_view args) {
             lua_social_command(args);
         });
+        automation_->hooks().add_command(plugin::Hooks::kClient, "/servermanagement", [this](std::string_view args) {
+            if (!conn_ || !plugin::caller_name().empty()) return;
+            if (!args.empty()) return conn_->ui_message("Usage: /servermanagement");
+            if (!conn_->open_server_management()) conn_->ui_message("Server Management is unavailable on this session.");
+        });
         actions_ui_ = std::make_unique<ActionsUi>(config_, config_path_);
         // The gamepad (app/gamepad.h, docs/gamepad.md; a client extension): hailstone.ini gamepad.*.
         gamepad_ = std::make_unique<Gamepad>(config_, config_path_);

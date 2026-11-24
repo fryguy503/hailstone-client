@@ -6,14 +6,17 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
 
 #include "core/sha256.h"
 #include "mock_server/harness.h"
+#include "mq/commands.h"
 #include "net/server_files.h"
 #include "net/server_files_packets.h"
+#include "net/zone_packets.h"
 #include "scratch_dir.h"
 
 namespace fs = std::filesystem;
@@ -143,6 +146,94 @@ void serve_files(test::Rig& rig, FakeServer& files) {
 }
 } // namespace
 
+TEST_CASE("server files: command policy denies actual dispatch after aliases, rewrites and wrappers") {
+    test::ScratchDir profile("server_command_policy");
+    plugin::Hooks hooks;
+    auto options = test::quick_options();
+    options.hooks = &hooks;
+    options.server_files_dir = profile.path();
+    test::Rig rig(test::MockConfig::standard(), options);
+    FakeServer files;
+    files.files["hailstone.cfg"] = R"(
+[commands]
+block = /face, /who, /say, /finditem, /raidnotes
+blocked_message = "Ask a GM in #Support; mention %T."
+)";
+    serve_files(rig, files);
+
+    mq::Registry registry;
+    mq::Context context;
+    context.conn = &rig.conn;
+    context.registry = &registry;
+    mq::CommandEnv command_env;
+    command_env.hooks = &hooks;
+    command_env.registry = &registry;
+    command_env.context = [&]() -> const mq::Context& { return context; };
+    command_env.run = [&](const std::string& line) { rig.conn.send_command(line); };
+    int face = 0, facepick = 0, finditem = 0, addon = 0;
+    command_env.face = [&](double, bool) { ++face; };
+    auto mq_commands = std::make_unique<mq::Commands>(std::move(command_env));
+    auto rewriter = hooks.new_owner("rewrite");
+    hooks.on_command_line(rewriter, [](std::string& line) {
+        if (line == "rewrite this") line = "/FACE heading 120";
+        return plugin::Flow::Continue;
+    });
+    auto guest = hooks.new_guest("add-on");
+    REQUIRE(hooks.add_command(guest, "/raidnotes", [&](std::string_view) { ++addon; }));
+    rig.conn.set_client_commands([&](std::string_view command, const std::string&) {
+        if (command == "Cmd_facepick") { ++facepick; return true; }
+        if (command == "Hailstone_finditem") { ++finditem; return true; }
+        return false;
+    });
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.conn.server_rules());
+    REQUIRE(rig.conn.server_rules()->commands.enabled);
+    rig.chat();
+
+    const std::string notice = "Ask a GM in #Support; mention %T.";
+    for (const char* line : {"/FACE heading 120", "rewrite this", "/docommand /face heading 120",
+                             "/squelch /face heading 120", "/noparse /face heading 120", "/wh",
+                             "'a blocked say shortcut", "/advi search", "/raidnotes"}) {
+        CAPTURE(line);
+        rig.conn.send_command(line);
+        CHECK(test::has_line(rig.chat(), notice));
+    }
+    {
+        // Add-ons pass the command through their own capability checks and then the same server policy.
+        plugin::CallerScope scope(plugin::kCapCommands | plugin::kCapMove, "script");
+        rig.conn.send_command("/docommand /face heading 120");
+        CHECK(test::has_line(rig.chat(), notice));
+        rig.conn.send_command("/raidnotes");
+        CHECK(test::has_line(rig.chat(), notice));
+    }
+    CHECK(face == 0);
+    CHECK(facepick == 0);
+    CHECK(finditem == 0);
+    CHECK(addon == 0);
+
+    // A blocked extension cannot turn into a different command when its hook is absent.
+    mq_commands.reset();
+    rig.conn.send_command("/face");
+    CHECK(test::has_line(rig.chat(), notice));
+    CHECK(facepick == 0);
+    rig.conn.send_command("/facepick");
+    CHECK(facepick == 1);
+
+    // Command permission leaves plain chat and EQEmu's own text commands to their existing paths.
+    rig.conn.send_command("ordinary chat");
+    rig.conn.send_command("#help");
+    REQUIRE(rig.until([&] {
+        bool chat = false, server_command = false;
+        for (const auto& packet : rig.server.zone_log) {
+            if (auto msg = net::decode_channel_message(packet)) {
+                chat |= msg->message == "ordinary chat";
+                server_command |= msg->message == "#help";
+            }
+        }
+        return chat && server_command;
+    }));
+}
+
 TEST_CASE("server files: the current server can refuse Hailstone before zone entry") {
     test::ScratchDir profile("server_client_opt_out");
     auto options = test::quick_options();
@@ -249,6 +340,82 @@ TEST_CASE("server files: access-only sync refuses a hailstone.cfg over its bound
     CHECK(rig.conn.error().empty());
     CHECK(files.pieces == 0);
     CHECK_FALSE(fs::exists(cache.path() / "hailstone.cfg"));
+}
+
+TEST_CASE("server files: command policy also applies to a transient login") {
+    test::ScratchDir cache("transient_command_policy");
+    auto options = test::quick_options();
+    options.server_access_dir = cache.path();
+    FakeServer files;
+    files.files["hailstone.cfg"] = "[commands]\nblock = /who\nblocked_message = Ask the admin.\n[assets]\nplayer = off\n";
+    files.files["graphics.txt"] = "unrelated server asset";
+
+    test::Rig rig(test::MockConfig::standard(), options);
+    serve_files(rig, files);
+    REQUIRE(rig.to_zone());
+    REQUIRE(rig.conn.server_rules());
+    CHECK_FALSE(rig.conn.server_rules()->configured);
+    CHECK(rig.conn.server_rules()->player_assets);
+    CHECK(files.pieces == 1);
+    rig.conn.send_command("/WH");
+    CHECK(test::has_line(rig.chat(), "Ask the admin."));
+}
+
+TEST_CASE("server files: GM command policy needs current EQEmu account status") {
+    test::ScratchDir cache("gm_command_policy");
+    test::ManualClock clock;
+    plugin::Hooks hooks;
+    int runs = 0;
+    REQUIRE(hooks.add_command(hooks.new_guest("test addon"), "/exampleaddon", [&](std::string_view) { ++runs; }));
+    auto options = test::quick_options();
+    options.server_access_dir = cache.path();
+    options.session.clock = clock.source();
+    options.hooks = &hooks;
+    int settings_seen = 0;
+    options.zone_packet_tap = [&](const net::AppPacket& packet) {
+        if (packet.opcode == net::kOpHailstoneSettings) ++settings_seen;
+    };
+    FakeServer files;
+    files.files["hailstone.cfg"] = "[commands]\ngm = /exampleaddon:200\nblocked_message = GM status required.\n";
+
+    test::Rig rig(test::MockConfig::standard(), options);
+    serve_files(rig, files);
+    REQUIRE(rig.to_zone());
+    (void)rig.chat();
+    auto apply_rank = [&](std::optional<std::uint16_t> rank) {
+        const int expected = settings_seen + 1;
+        rig.server.zone.send_reliable(net::encode(net::HailstoneSettings{0, rank}));
+        return rig.until([&] { return settings_seen == expected; });
+    };
+    auto requests = [&] {
+        return std::count_if(rig.server.zone_log.begin(), rig.server.zone_log.end(), [](const net::AppPacket& packet) {
+            return packet.opcode == net::kOpHailstoneSettingsRequest;
+        });
+    };
+    REQUIRE(rig.until([&] { return requests() == 1; }));
+    REQUIRE(apply_rank(std::nullopt)); // Legacy replies carry no rank.
+    rig.conn.send_command("/exampleaddon");
+    CHECK(runs == 0);
+    CHECK(test::has_line(rig.chat(), "GM status required."));
+    REQUIRE(apply_rank(199));
+    rig.conn.send_command("/exampleaddon");
+    CHECK(runs == 0);
+    REQUIRE(apply_rank(200));
+    rig.conn.send_command("/EXAMPLEADDON");
+    CHECK(runs == 1);
+    REQUIRE(apply_rank(150)); // The next status from the zone supersedes the old value.
+    rig.conn.send_command("/exampleaddon");
+    CHECK(runs == 1);
+    REQUIRE(apply_rank(250));
+    clock.hold();
+    clock.advance(std::chrono::seconds(31));
+    REQUIRE(rig.until([&] { return requests() == 2; }));
+    rig.conn.send_command("/exampleaddon");
+    CHECK(runs == 2);
+    clock.advance(std::chrono::seconds(30));
+    REQUIRE(rig.until([&] { return requests() == 3; }));
+    rig.conn.send_command("/exampleaddon");
+    CHECK(runs == 2);
 }
 
 TEST_CASE("server files: packets round trip") {

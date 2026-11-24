@@ -197,8 +197,8 @@ void GameConnection::fail(std::string message) {
 }
 
 void GameConnection::chat(ChatEvent::Kind kind, std::string text, std::uint32_t rgb, std::uint32_t color,
-                          std::string peer, std::optional<std::string> display_text) {
-    if (options_.hooks) { // OnIncomingChat, OnFilterChat (a server's client may drop lines in dsp_chat)
+                          std::string peer, std::optional<std::string> display_text, bool filter) {
+    if (filter && options_.hooks) { // OnIncomingChat, OnFilterChat (a server's client may drop lines in dsp_chat)
         // A deliberate difference from MQ, whose hook hangs off dsp_chat and sees a hit line as displayed: hooks get
         // the full sentence whatever the hit mode (docs/plugins.md), so a parser matches one form.
         plugin::ChatLine line{text, rgb, static_cast<int>(kind)};
@@ -457,6 +457,8 @@ void GameConnection::update() {
         server_rules_.reset();
         ++server_rules_serial_;
     }
+    update_command_account_status();
+    update_server_management();
     // The original reapplies the new-armor filter to a member who joins or leaves the group or raid
     // (PlayerClient_ApplyNewArmorFilterGroupMember / RaidMember); a new spawn has it made in apply_spawn.
     if (new_armor_membership_changed())
@@ -688,6 +690,11 @@ void GameConnection::handle_world(const AppPacket& p) {
         // closes it on OP_WorldComplete). The fresh zone connection replaces any old one.
         zone_session_.reset();
         invalidate_interaction_context();
+        server_management_offered_ = false;
+        command_account_status_.reset();
+        settings_requested_at_ = {};
+        command_account_status_received_at_ = {};
+        close_server_management();
         send_world(make_empty(Op::WorldComplete));
         world_drop_pending_ = true;
         world_drop_deadline_ = Clock::now() + kWorldDropWait;
@@ -1087,7 +1094,7 @@ void GameConnection::finish_server_files() {
     maybe_request_client_spawn();
 }
 
-// A transient login reads only the access setting. A saved profile uses the full policy and keeps its folder for
+// A transient login reads access and command policy. A saved profile uses the full policy and keeps its folder for
 // plugin settings (server_config_dir), including on a server without the Hailstone script.
 bool GameConnection::update_server_rules() {
     plugin::Rules rules;
@@ -1106,10 +1113,12 @@ bool GameConnection::update_server_rules() {
         // A failed sync can leave an earlier login's rules on disk. Only this login's policy decides access.
         if (synced) allow_client = !received.deny_client;
         if (!options_.server_files_dir.empty()) rules = std::move(received);
+        else if (synced) rules.commands = std::move(received.commands);
     }
     log::info("server rules: {}", rules.configured ? std::format("{} ({} scripts and plugins of its own)", plugin::kServerCfgName,
                                                                  rules.server_files.size())
-                                                   : std::string("none (no hailstone.cfg): plugins and scripts run freely"));
+                                                   : std::string(rules.commands.enabled ? "command policy (transient login)"
+                                                                                        : "none: plugins and scripts run freely"));
     server_rules_ = std::move(rules);
     ++server_rules_serial_;
     return allow_client;
@@ -1253,7 +1262,7 @@ void GameConnection::finish_zone_in() {
     guild_world_invites_ = false;
     if (entered) send_zone(encode_hailstone_guild({}));
     // And the server's settings for the client; a server without Hailstone's script does not answer.
-    if (entered) send_zone(encode_hailstone_settings_request());
+    if (entered) request_hailstone_settings();
     // The camera effect's reset @0x4939b0 runs on the zone-in: a new zone starts unshaken.
     camera_shake_.reset();
     // DoMainLoop after ReadyEnterWorld: the task window rebuilt and the task compass mark looked for (0x76ff50).
@@ -1270,6 +1279,20 @@ void GameConnection::request_quest_npcs() {
     send_zone(encode_quest_npcs_request());
 }
 
+void GameConnection::request_hailstone_settings() {
+    settings_requested_at_ = options_.session.clock ? options_.session.clock() : Clock::now();
+    send_zone(encode_hailstone_settings_request());
+}
+
+void GameConnection::update_command_account_status() {
+    if (state_ != ConnectionState::InZone || zone_change_pending_ || !server_rules_ || server_rules_->provisional ||
+        server_rules_->commands.gm.empty()) return;
+    const auto now = options_.session.clock ? options_.session.clock() : Clock::now();
+    // Ask the encounter again while this policy needs an account rank. An absent or expired rank denies GM rules.
+    if (now - command_account_status_received_at_ >= std::chrono::seconds(60)) command_account_status_.reset();
+    if (now - settings_requested_at_ >= std::chrono::seconds(30)) request_hailstone_settings();
+}
+
 std::optional<TimeOfDay> GameConnection::current_time_of_day() const {
     if (!time_) return std::nullopt;
     const auto now = options_.session.clock ? options_.session.clock() : Clock::now();
@@ -1284,6 +1307,10 @@ std::optional<TimeOfDay> GameConnection::current_time_of_day() const {
 
 void GameConnection::handle_zone(const AppPacket& p) {
     if (options_.zone_packet_tap) options_.zone_packet_tap(p);
+    if (p.opcode == kOpServerManagementReply) {
+        handle_server_management(p);
+        return;
+    }
     if (p.opcode == kOpHsFiles) {
         if (auto reply = decode_server_files(p); reply && server_files_ && !server_files_->finished()) {
             server_files_->handle(*reply, ServerFileSync::Clock::now());
@@ -1333,8 +1360,12 @@ void GameConnection::handle_zone(const AppPacket& p) {
     }
     if (p.opcode == kOpHailstoneSettings) {
         if (auto v = decode_hailstone_settings(p)) {
-            log::info("server settings: flags {:#x}", v->flags); // none defined now (net/settings_packets.h)
+            log::info("server settings: flags {:#x}", v->flags);
             hailstone_script_ = true;
+            command_account_status_ = v->account_status;
+            command_account_status_received_at_ = options_.session.clock ? options_.session.clock() : Clock::now();
+            server_management_offered_ = (v->flags & kServerManagementOffered) != 0;
+            if (!server_management_offered_) close_server_management();
         } else {
             log::warn("server settings: a bad OP_HailstoneSettings ({} bytes) ignored", p.data.size());
         }

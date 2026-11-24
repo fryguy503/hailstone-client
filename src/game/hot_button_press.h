@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace hailstone::game {
@@ -150,6 +151,7 @@ public:
     virtual const std::string* line(std::int32_t social, std::int32_t line) = 0; // the social's line 0..4
     virtual void interpret(const std::string& command) = 0;                     // CEverQuest::InterpretCmd
     virtual void alternate_ability(std::int32_t group) = 0;  // "/alternateadv act <group>" (eqstr 0x3773, 0x33d9)
+    virtual bool allow_directive(std::string_view) { return true; } // the server's command policy
     // The social's cooldown (+0x514 start, +0x518 length): started by /timer unless one is running.
     virtual bool cooldown_running(std::int32_t social) = 0;
     virtual void start_cooldown(std::int32_t social, std::int32_t length_ms) = 0;

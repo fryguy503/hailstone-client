@@ -141,16 +141,27 @@ void GameConnection::reset_social_for_zone() {
 
 void GameConnection::say(const std::string& text) { send_command(text); }
 
+bool GameConnection::allow_server_command(std::string_view name) {
+    if (!server_rules_ || server_rules_->provisional || server_rules_->commands.allowed(name, command_account_status_))
+        return true;
+    // Denials are local literal notices. They stay visible when a command wrapper filters its own chat output.
+    chat(ChatEvent::Kind::System, std::string(server_rules_->commands.denial_message()), 0, 15, {}, std::nullopt, false);
+    return false;
+}
+
 void GameConnection::send_command(const std::string& typed) {
     std::string line = typed;
     // Plugin commands and line filters first (plugin/hooks.h): they can take any line, the client's commands too.
-    if (options_.hooks && options_.hooks->command(line)) return;
+    if (options_.hooks && options_.hooks->command(line, [this](std::string_view name) { return allow_server_command(name); }))
+        return;
     if (!zone_session_ || line.empty()) return;
     // InterpretCmd @0x51fce0: with the interface locked (/safelock) only /safelock gets through.
     if (interface_locked() && !game::locked_line_allowed(line, fmt_eq(strings_, 14193))) return system(game::kStrInterfaceLocked);
     // A command's Restriction asks for me->IsGm(): the player spawn's GM flag (PlayerBase +0x25c, vtable +0xdc),
     // which SpawnAppearance 20 changes mid-session (#gm on), not the profile's copy from the zone-in.
     game::CommandLine cl = game::parse_command_line(line, player_is_gm(), &strings_);
+    if (server_rules_ && server_rules_->commands.enabled && plugin::known_extended_command(cl.word) &&
+        !allow_server_command(cl.word)) return;
     switch (cl.kind) {
     case game::CommandLine::Kind::Empty:
         return;
@@ -187,6 +198,7 @@ void GameConnection::send_command(const std::string& typed) {
         break;
     }
     const auto& cmd = game::slash_commands()[cl.index];
+    if (!allow_server_command(cmd.name)) return;
     // InterpretCmd @0x51fce0: most commands cannot be used while dead.
     if (pstatus_.dead && !(cmd.flags & 1)) {
         system(538); // You may not use that command while dead.

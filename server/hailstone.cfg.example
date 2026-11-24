@@ -37,6 +37,23 @@ npc_collision = on        ; live NPCs block players (players, pets, mercenaries 
 passable_ladders = on     ; walking or swimming into a ladder whose polygons are all passable (the Cabilis canal
                           ; ladders) climbs it. On by default, also without this file; off: as in the original
                           ; client, such a ladder is only mounted by a click from the top
+;solid_ladders = on      ; use the whole ladder face for collision so small races can climb rung ladders
+
+[web]
+;allow = example.org     ; hosts and subdomains allowed for scripts and plugins (empty: any)
+
+[management]
+;min_status = 200        ; account status required to view and save Server Management policy (1 through 32767)
+
+[commands]
+;default = allow         ; deny: allow only explicitly allowed commands and groups
+;block_groups = movement_automation, command_helpers
+;allow_groups = non_rof2 ; available groups also include addon_commands
+;allow = /echo           ; command entries override groups
+;block = /follow, /random
+;gm = /nav:200           ; each command requires at least this EQEmu account status (1 through 32767)
+;blocked_message = "This command has been blocked by your server administrator."
+                          ; up to 240 UTF-8 bytes. Leave empty for the default message.
 
 [addons]
 ;suggest = owner/repo     ; add-ons of this server's own on GitHub: the login screen suggests each to players who do not

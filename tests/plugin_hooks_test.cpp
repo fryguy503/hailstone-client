@@ -60,6 +60,29 @@ TEST_CASE("hooks: commands are case-insensitive, the latest wins, removal brings
     CHECK(h.commands() == std::vector<std::string>{"/hello"});
 }
 
+TEST_CASE("hooks: the command catalog changes when add-on commands come and go") {
+    Hooks hooks;
+    auto guest = hooks.new_guest("addon");
+    auto serial = hooks.command_catalog_serial();
+    auto run = [](std::string_view) {};
+    CHECK_FALSE(hooks.add_command(guest, "/say", run));
+    CHECK(hooks.command_catalog_serial() == serial);
+    REQUIRE(hooks.add_command(guest, "/ExampleAddon", run));
+    CHECK(hooks.command_catalog_serial() != serial);
+    CHECK(hooks.commands() == std::vector<std::string>{"/exampleaddon"});
+    serial = hooks.command_catalog_serial();
+    hooks.remove_command(guest, "unknown");
+    CHECK(hooks.command_catalog_serial() == serial);
+    hooks.remove_command(guest, "EXAMPLEADDON");
+    CHECK(hooks.command_catalog_serial() != serial);
+    CHECK(hooks.commands().empty());
+    REQUIRE(hooks.add_command(guest, "exampleaddon", run));
+    serial = hooks.command_catalog_serial();
+    hooks.remove(guest);
+    CHECK(hooks.command_catalog_serial() != serial);
+    CHECK(hooks.commands().empty());
+}
+
 TEST_CASE("hooks: a plugin's or script's owner cannot take the client's own commands") {
     Hooks h;
     auto client = h.new_owner("lua"), g1 = h.new_guest("plugin:a"), g2 = h.new_guest("lua:b");

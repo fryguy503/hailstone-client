@@ -215,6 +215,21 @@ std::string value_without_comment(std::string_view v) {
 // The same, lower-cased.
 std::string value_of(std::string_view v) { return lower(value_without_comment(v)); }
 
+std::optional<std::string_view> blocked_message_value(std::string_view value) {
+    value = trim(value);
+    if (!value.empty() && (value.front() == '"' || value.front() == '\'')) {
+        // A managed edit wraps the text so that a literal '#' or ';' stays in the displayed message.
+        auto close = value.rfind(value.front());
+        while (close > 0) {
+            const auto after = trim(value.substr(close + 1));
+            if (after.empty() || after.front() == '#' || after.front() == ';') return value.substr(1, close - 1);
+            close = value.rfind(value.front(), close - 1);
+        }
+        return std::nullopt;
+    }
+    return trim(value.substr(0, value.find_first_of(";#")));
+}
+
 std::optional<bool> on_off(std::string_view v) {
     if (v == "on" || v == "yes" || v == "true" || v == "1") return true;
     if (v == "off" || v == "no" || v == "false" || v == "0") return false;
@@ -299,7 +314,7 @@ Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings
             continue;
         }
         static constexpr std::string_view kOwn[] = {"client", "scripts", "plugins", "assets", "socials",
-                                                    "abilities", "movement", "web", "addons"};
+                                                    "abilities", "movement", "web", "addons", "commands", "management"};
         if (std::find(std::begin(kOwn), std::end(kOwn), section) == std::end(kOwn)) {
             auto& kept = r.script_sections[section];
             for (const std::string& key_name : ini.keys(section_name))
@@ -310,6 +325,9 @@ Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings
         for (const std::string& key_name : ini.keys(section_name)) {
             std::string key = lower(key_name);
             std::string v = value_of(ini.get_string(section_name, key_name));
+            // These sections were formerly script-defined. Preserve the existing reads through hailstone.server_rule.
+            const bool formerly_custom = section == "commands" || section == "management";
+            if (formerly_custom) r.script_sections[section][key] = v;
             std::string where = std::format("[{}] {}", section, key);
             auto flag = [&](bool& out) {
                 if (auto b = on_off(v)) out = *b;
@@ -322,6 +340,82 @@ Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings
             if (section == "client" && key == "deny") {
                 flag(r.deny_client);
                 continue;
+            }
+            if (section == "management" && key == "min_status") {
+                int n = 0;
+                const auto [p, ec] = std::from_chars(v.data(), v.data() + v.size(), n);
+                if (ec == std::errc() && p == v.data() + v.size() && n >= 1 && n <= 32767) r.management_min_status = n;
+                else warn(where + ": expected a GM status from 1 through 32767");
+                continue;
+            }
+            if (section == "commands") {
+                auto& policy = r.commands;
+                if (key == "default") {
+                    policy.enabled = true;
+                    if (v == "allow" || v == "deny") policy.default_allow = v == "allow";
+                    else warn(where + ": expected allow or deny");
+                    continue;
+                }
+                if (key == "blocked_message") {
+                    policy.enabled = true;
+                    const auto raw = ini.get_string(section_name, key_name);
+                    const auto message = blocked_message_value(raw);
+                    if (message && message->size() <= kCommandBlockedMessageMaxBytes &&
+                        std::none_of(message->begin(), message->end(), [](unsigned char c) { return c < 0x20 || c == 0x7f; }))
+                        policy.blocked_message = *message;
+                    else warn(std::format("{}: expected one line of at most {} bytes", where, kCommandBlockedMessageMaxBytes));
+                    continue;
+                }
+                if (key == "gm") {
+                    policy.enabled = true;
+                    std::string_view rest = v;
+                    while (!rest.empty()) {
+                        const auto end = rest.find_first_of(", \t");
+                        const auto token = rest.substr(0, end);
+                        rest = end == std::string_view::npos ? std::string_view() : rest.substr(end + 1);
+                        if (token.empty()) continue;
+                        // Split at the last colon so the emote alias ':' can be written as '::200'.
+                        const auto colon = token == ":" ? std::string_view::npos : token.rfind(':');
+                        auto name = canonical_command_name(token.substr(0, colon));
+                        std::optional<int> minimum;
+                        if (colon != std::string_view::npos) {
+                            const auto status = token.substr(colon + 1);
+                            int n = 0;
+                            const auto [p, ec] = std::from_chars(status.data(), status.data() + status.size(), n);
+                            if (ec == std::errc() && p == status.data() + status.size() && n >= 1 && n <= 32767)
+                                minimum = n;
+                        }
+                        if (!minimum || name.empty())
+                            warn(std::format("{}: expected command:status from 1 through 32767, got \"{}\"", where, token));
+                        if (name.empty()) continue;
+                        const auto [position, inserted] = policy.gm.try_emplace(std::move(name), minimum);
+                        if (inserted) continue;
+                        auto& previous = position->second;
+                        if (!minimum) previous.reset();
+                        else if (previous) previous = std::max(*previous, *minimum);
+                    }
+                    continue;
+                }
+                const bool groups = key == "allow_groups" || key == "block_groups";
+                if (groups || key == "allow" || key == "block") {
+                    policy.enabled = true;
+                    auto& list = groups ? (key == "allow_groups" ? policy.allow_groups : policy.block_groups)
+                                        : (key == "allow" ? policy.allow : policy.block);
+                    std::string_view rest = v;
+                    while (!rest.empty()) {
+                        const std::size_t end = rest.find_first_of(", \t");
+                        const std::string_view token = rest.substr(0, end);
+                        rest = end == std::string_view::npos ? std::string_view() : rest.substr(end + 1);
+                        if (token.empty()) continue;
+                        auto name = groups ? std::string(token) : canonical_command_name(token);
+                        if (name.empty() || (groups && !known_command_group(name))) {
+                            warn(std::format("{}: unknown {} \"{}\"", where, groups ? "group" : "command", token));
+                        } else if (std::find(list.begin(), list.end(), name) == list.end()) {
+                            list.push_back(std::move(name));
+                        }
+                    }
+                    continue;
+                }
             }
             if (section == "scripts" || section == "plugins") {
                 bool scripts = section == "scripts";
@@ -481,9 +575,26 @@ Rules parse_server_cfg(std::string_view text, std::vector<std::string>* warnings
                 invalid_addons(std::format("{}: not a setting Hailstone knows; ignored", where));
                 continue;
             }
-            warn(std::format("{}: not a setting Hailstone knows; ignored", where));
+            if (formerly_custom) {
+                warn(std::format("{}: not a setting Hailstone knows; kept for scripts", where));
+            } else {
+                warn(std::format("{}: not a setting Hailstone knows; ignored", where));
+            }
         }
     }
+    for (const auto& command : r.commands.block)
+        if (std::find(r.commands.allow.begin(), r.commands.allow.end(), command) != r.commands.allow.end())
+            warn(std::format("[commands] {} is both allowed and blocked; block wins", command));
+    for (const auto& entry : r.commands.gm) {
+        const auto& command = entry.first;
+        if (std::find(r.commands.block.begin(), r.commands.block.end(), command) != r.commands.block.end())
+            warn(std::format("[commands] {} has a GM rule and an explicit block; block wins", command));
+        else if (std::find(r.commands.allow.begin(), r.commands.allow.end(), command) != r.commands.allow.end())
+            warn(std::format("[commands] {} has a GM rule and an explicit allowance; the GM rule wins", command));
+    }
+    for (const auto& group : r.commands.block_groups)
+        if (std::find(r.commands.allow_groups.begin(), r.commands.allow_groups.end(), group) != r.commands.allow_groups.end())
+            warn(std::format("[commands] group {} is both allowed and blocked; block wins", group));
     for (int scripts = 0; scripts < 2; ++scripts) {
         if (player_caps[scripts] && !player_on[scripts])
             warn(std::format("[{}] player_caps: has no effect without player = on", scripts ? "scripts" : "plugins"));

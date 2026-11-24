@@ -4,13 +4,13 @@
 // (docs/plugins.md). A server without one sets no rules: everything runs with every capability. A server with one
 // always runs its own plugins and scripts (those it sent into servers/<profile>/plugins and scripts, named by their
 // SHA-256), with every capability; the player's own run only when the file allows them, with the capabilities it
-// grants. The player's own typed commands are never limited; the capabilities check what plugins and scripts do on
-// the player's behalf.
+// grants. Optional command rules apply to both players and add-ons independently of capabilities.
 
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -142,6 +142,46 @@ bool addon_identity_matches(std::string_view identity, std::string_view source);
 bool addon_required(const AddonRules& rules, std::string_view source);
 bool addon_allowed(const AddonRules& rules, std::string_view source);
 
+enum class CommandOrigin { Stock, Extended, Addon };
+
+struct CommandCatalogEntry {
+    std::string name, description;
+    CommandOrigin origin = CommandOrigin::Stock;
+    std::vector<std::string> aliases, groups;
+    bool gm_only = false;
+};
+
+std::vector<CommandCatalogEntry> command_catalog(std::span<const std::string> registered = {});
+std::string_view command_origin_text(CommandOrigin origin);
+// The same spelling used by policy for aliases and built-in abbreviations. Unknown names are retained for add-ons.
+std::string canonical_command_name(std::string_view name);
+bool known_extended_command(std::string_view name);
+bool known_command_group(std::string_view name);
+
+inline constexpr std::size_t kCommandBlockedMessageMaxBytes = 240;
+inline constexpr std::string_view kDefaultCommandBlockedMessage = "This command has been blocked by your server administrator.";
+
+struct CommandDecision {
+    bool allowed;
+    std::string_view reason;
+    std::optional<int> minimum_status;
+};
+
+struct CommandRules {
+    bool enabled = false, default_allow = true;
+    std::vector<std::string> allow, block, allow_groups, block_groups;
+    // A malformed entry with a known spelling remains a denial until it is corrected.
+    std::map<std::string, std::optional<int>, std::less<>> gm;
+    std::string blocked_message;
+    CommandDecision decision(std::string_view name, std::optional<int> account_status = std::nullopt) const;
+    bool allowed(std::string_view name, std::optional<int> account_status = std::nullopt) const {
+        return decision(name, account_status).allowed;
+    }
+    std::string_view denial_message() const {
+        return blocked_message.empty() ? kDefaultCommandBlockedMessage : std::string_view(blocked_message);
+    }
+};
+
 // The server's rules: its hailstone.cfg, or none.
 struct Rules {
     bool configured = false; // false: no hailstone.cfg, no rules
@@ -151,6 +191,7 @@ struct Rules {
     bool provisional = false;
     std::filesystem::path dir; // servers/<profile>/ (empty: a login without one)
     bool deny_client = false; // [client] deny: stop Hailstone before it completes the first zone-in
+    int management_min_status = 200; // [management] min_status: the encounter authorizes with the account status
     // The player's own scripts and plugins: what they may do (0: they do not run).
     std::uint32_t player_script_caps = 0, player_plugin_caps = 0;
     bool player_assets = true; // false: of servers/<profile>/assets, only the server's files and textures count
@@ -173,9 +214,10 @@ struct Rules {
     // addon_source_text writes them; the login screen offers each one the player does not have.
     std::vector<std::string> suggest_addons;
     AddonRules addons;
+    CommandRules commands;
     std::vector<ServerFile> server_files; // the server's scripts and plugins
-    // Sections that are not the client's own, for scripts (hailstone.server_rule) to read as they like: names and
-    // keys lower-cased, values as written (comments and quotes taken off).
+    // Custom and formerly custom sections for hailstone.server_rule. Case and inline comments follow the
+    // existing script lookup behavior.
     std::map<std::string, std::map<std::string, std::string>> script_sections;
 };
 

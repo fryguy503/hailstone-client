@@ -46,6 +46,143 @@ TEST_CASE("hailstone.cfg: [client] deny is off by default and can deny Hailstone
     CHECK(warnings.front() == "[client] deny: \"maybe\" is not on or off");
 }
 
+TEST_CASE("hailstone.cfg: command permissions are opt-in and resolve aliases, groups and conflicts") {
+    CHECK(plugin::parse_server_cfg("[scripts]\nplayer = on\n").commands.allowed("/nav"));
+    CHECK_FALSE(plugin::parse_server_cfg("[commands]\n").commands.enabled);
+    std::vector<std::string> warnings;
+    const auto rules = plugin::parse_server_cfg(R"(
+[Commands]
+default = deny
+allow_groups = movement_automation, addon_commands
+block_groups = Non_ROF2, not_a_group
+allow = /advi, /time, /TGB
+block = /finditem, /exchange
+blocked_message = "Ask the GM in #Support; they said "please"." ; comment
+custom_key = keep
+[management]
+min_status = 150
+)", &warnings);
+    REQUIRE(rules.commands.enabled);
+    CHECK_FALSE(rules.commands.default_allow);
+    CHECK(rules.commands.denial_message() == "Ask the GM in #Support; they said \"please\".");
+    CHECK(rules.management_min_status == 150);
+    CHECK(rules.script_sections.at("commands").at("custom_key") == "keep");
+    CHECK(rules.script_sections.at("commands").at("default") == "deny");
+    CHECK(rules.script_sections.at("management").at("min_status") == "150");
+    CHECK_FALSE(rules.commands.allowed("/STICK")); // the broader block wins over another group
+    CHECK(rules.commands.decision("/stick").reason == "non_rof2");
+    CHECK(rules.commands.allowed("time"));
+    CHECK(rules.commands.allowed("/targetgroupbuff"));
+    CHECK_FALSE(rules.commands.allowed("/who"));
+    CHECK_FALSE(rules.commands.allowed("advi")); // the alias shares the canonical explicit block
+    CHECK(rules.commands.decision("/advi").reason == "Explicit block");
+    CHECK_FALSE(rules.commands.allowed("/exchange"));
+    CHECK(rules.commands.allowed("/addoncommand"));
+    CHECK(warnings.size() == 3); // unknown group, custom key, explicit alias conflict
+    CHECK_FALSE(plugin::parse_server_cfg("[commands]\nblock = /loc\n").commands.allowed("/LOCATION"));
+    CHECK_FALSE(plugin::parse_server_cfg("[commands]\nblock = /msg\n").commands.allowed("/send"));
+    CHECK(plugin::parse_server_cfg("[commands]\nblock = /face\n").commands.allowed("/facepick"));
+    CHECK_FALSE(plugin::parse_server_cfg("[commands]\nblock = /pause, /timer\n").commands.allowed("/timer"));
+}
+
+TEST_CASE("hailstone.cfg: GM command thresholds apply to aliases and registered add-ons") {
+    std::vector<std::string> warnings;
+    const auto cfg = plugin::parse_server_cfg(R"(
+[commands]
+default = deny
+block_groups = movement_automation
+allow = /Nav, /time
+block = /stick
+gm = /NAV:150 /advi:199, /FINDITEM:230, /stick:1, /exchange:200, ::125, /loc:99, /testcap:32767
+)", &warnings);
+    const auto& rules = cfg.commands;
+    REQUIRE(rules.enabled);
+    CHECK(warnings.size() == 2); // the named GM rules take precedence over Allow, and Block takes precedence over GM
+    CHECK_FALSE(rules.allowed("/nav"));
+    CHECK_FALSE(rules.allowed("/nav", 149));
+    CHECK(rules.allowed("/nav", 150));
+    CHECK(rules.decision("/nav", 151).minimum_status == 150);
+    CHECK_FALSE(rules.allowed("/stick", 32767));
+    CHECK_FALSE(rules.decision("/stick", 32767).minimum_status);
+    CHECK(rules.allowed("/time"));
+    CHECK_FALSE(rules.allowed("/who", 32767));
+
+    CHECK(rules.decision("/advi").minimum_status == 230);
+    CHECK_FALSE(rules.allowed("/finditem", 229));
+    CHECK(rules.allowed("/advi", 230));
+    CHECK_FALSE(rules.allowed("/exchange", 199));
+    CHECK(rules.allowed("/EXCHANGE", 200));
+    CHECK_FALSE(rules.allowed("/emote", 124));
+    CHECK(rules.allowed(":", 125));
+    CHECK(rules.allowed("/location", 99));
+    CHECK_FALSE(rules.allowed("/testcap", 32766));
+    CHECK(rules.allowed("/testcap", 32767));
+}
+
+TEST_CASE("hailstone.cfg: malformed GM command thresholds deny any command they can identify") {
+    std::vector<std::string> warnings;
+    const auto cfg = plugin::parse_server_cfg(R"(
+[commands]
+gm = /nav:0, /stick:32768 /exchange:+200, /who:200extra, /finditem:1, /advi:, /target, :, /:200
+)", &warnings);
+    const auto& rules = cfg.commands;
+    REQUIRE(rules.enabled);
+    CHECK(warnings.size() == 8);
+    for (std::string_view name : {"/nav", "/stick", "/exchange", "/who", "/advi", "/target", "/emote"}) {
+        CAPTURE(name);
+        CHECK_FALSE(rules.allowed(name, 32767));
+        CHECK_FALSE(rules.allowed(name));
+        CHECK(rules.decision(name).reason == "Invalid GM status rule");
+    }
+    CHECK(rules.allowed("/time"));
+    CHECK(rules.allowed("/knownaddon"));
+}
+
+TEST_CASE("hailstone.cfg: blocked command notices keep literal text and bound its size") {
+    CHECK(plugin::parse_server_cfg("[commands]\nblocked_message = \"\"\n").commands.denial_message() ==
+          plugin::kDefaultCommandBlockedMessage);
+    CHECK(plugin::parse_server_cfg("[commands]\nblocked_message = Please Ask a GM. ; old note\n").commands.denial_message() ==
+          "Please Ask a GM.");
+    CHECK(plugin::parse_server_cfg("[commands]\nblocked_message = \"#; \\\"\"\n").commands.denial_message() == "#; \\\"");
+    const std::string longest(plugin::kCommandBlockedMessageMaxBytes, 'm');
+    CHECK(plugin::parse_server_cfg("[commands]\nblocked_message = " + longest).commands.denial_message() == longest);
+    std::vector<std::string> warnings;
+    CHECK(plugin::parse_server_cfg("[commands]\nblocked_message = " + longest + "m\n", &warnings).commands.denial_message() ==
+          plugin::kDefaultCommandBlockedMessage);
+    CHECK(plugin::parse_server_cfg("[commands]\nblocked_message = one\ttwo\n", &warnings).commands.denial_message() ==
+          plugin::kDefaultCommandBlockedMessage);
+    CHECK(plugin::parse_server_cfg("[commands]\nblocked_message = \"unterminated\n", &warnings).commands.denial_message() ==
+          plugin::kDefaultCommandBlockedMessage);
+    CHECK(warnings.size() == 3);
+    CHECK(plugin::parse_server_cfg("[management]\nmin_status = 0\n", &warnings).management_min_status == 200);
+    CHECK(plugin::parse_server_cfg("[management]\nmin_status = 32768\n", &warnings).management_min_status == 200);
+    CHECK(warnings.size() == 5);
+}
+
+TEST_CASE("command catalog: stock aliases, extended commands, and live add-on registrations") {
+    const std::vector<std::string> registered{"/nav", "/target", "/raidnotes"};
+    const auto rows = plugin::command_catalog(registered);
+    auto find = [&](std::string_view name) {
+        return std::find_if(rows.begin(), rows.end(), [&](const auto& row) { return row.name == name; });
+    };
+    auto finditem = find("/finditem");
+    REQUIRE(finditem != rows.end());
+    CHECK(finditem->origin == plugin::CommandOrigin::Extended);
+    CHECK(finditem->aliases == std::vector<std::string>{"/advi"});
+    CHECK(find("/advi") == rows.end());
+    CHECK(find("/exchange") == rows.end());
+    auto target = find("/target");
+    REQUIRE(target != rows.end());
+    CHECK(target->origin == plugin::CommandOrigin::Stock);
+    auto dynamic = find("/raidnotes");
+    REQUIRE(dynamic != rows.end());
+    CHECK(dynamic->origin == plugin::CommandOrigin::Addon);
+    CHECK(dynamic->groups == std::vector<std::string>{"addon_commands"});
+    CHECK(find("/pause") != rows.end());
+    CHECK(find("/timer") != rows.end());
+    CHECK(find("/servermanagement") != rows.end());
+}
+
 TEST_CASE("hailstone.cfg: every setting, defaults for the rest, warnings for what it does not know") {
     std::vector<std::string> warnings;
     auto r = plugin::parse_server_cfg(R"(
@@ -277,13 +414,13 @@ TEST_CASE("settings packets: request layout, answer round trip, later fields ign
     CHECK(req.data[4] == std::byte{1});
 
     net::HailstoneSettings v;
-    v.flags = 0x5; // no flag is defined now; any value goes through
+    v.flags = 0x9; // retired and unrecognized flags are preserved
     auto p = net::encode(v);
     CHECK(p.opcode == 0x1433);
     REQUIRE(p.data.size() == 10);
     auto d = net::decode_hailstone_settings(p);
     REQUIRE(d);
-    CHECK(d->flags == 0x5u);
+    CHECK(d->flags == 0x9u);
 
     auto longer = p;
     longer.data.push_back(std::byte{7}); // a later version's field

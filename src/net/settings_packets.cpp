@@ -20,6 +20,11 @@ std::optional<HailstoneSettings> decode_hailstone_settings(const AppPacket& p) {
         if (r.le<std::uint32_t>() != kHailstoneSettingsMagic || r.le<std::uint16_t>() != kHailstoneSettingsVersion) return std::nullopt;
         HailstoneSettings v;
         v.flags = r.le<std::uint32_t>();
+        if (v.flags & kServerAccountStatus) {
+            const auto status = r.le<std::uint16_t>();
+            if (status > 32767) return std::nullopt;
+            v.account_status = status;
+        }
         return v;
     });
     return got ? *got : std::nullopt;
@@ -29,7 +34,8 @@ AppPacket encode(const HailstoneSettings& v) {
     ByteWriter w;
     w.le(kHailstoneSettingsMagic);
     w.le(kHailstoneSettingsVersion);
-    w.le(v.flags);
+    w.le((v.flags & ~kServerAccountStatus) | (v.account_status ? kServerAccountStatus : 0u));
+    if (v.account_status) w.le(*v.account_status);
     return AppPacket(kOpHailstoneSettings, w.take());
 }
 

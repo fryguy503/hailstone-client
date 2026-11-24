@@ -623,6 +623,7 @@ void ActionsUi::run_socials(net::GameConnection& conn) {
             // "%s %s %d" of eqstr 0x3773 (/alternateadv) and 0x33d9 (act).
             c.send_command(c.strings().format(0x3773, {}) + " " + c.strings().format(0x33d9, {}) + " " + std::to_string(group));
         }
+        bool allow_directive(std::string_view name) override { return c.allow_server_command(name); }
         bool cooldown_running(std::int32_t social) override {
             return social >= 0 && social < 120 && ui.store_.social(social).cooldown_length != 0;
         }

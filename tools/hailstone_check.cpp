@@ -2,7 +2,8 @@
 // hailstone.cfg (what it says, and what Hailstone does not understand in it), and where each file goes in a player's
 // servers/<profile>/ folder (net/server_files.h server_file_destination), naming the files a client refuses.
 //
-//   hailstone_check CLIENT_FILES_DIR
+//   hailstone_check CLIENT_FILES_DIR [--commands]
+//   hailstone_check --list-commands
 //
 // Exits 1 when the cfg has warnings or files are refused.
 #include <cstdio>
@@ -11,7 +12,9 @@
 #include <iterator>
 #include <map>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "net/server_files.h"
@@ -32,11 +35,41 @@ const char* mode_name(plugin::ButtonMode m) {
 
 std::string caps_or_no(std::uint32_t caps) { return caps ? "yes (" + plugin::caps_text(caps) + ")" : "no"; }
 
+void print_commands(const plugin::CommandRules* rules) {
+    std::vector<std::string> configured;
+    if (rules) {
+        configured = rules->allow;
+        configured.insert(configured.end(), rules->block.begin(), rules->block.end());
+        for (const auto& rule : rules->gm) configured.push_back(rule.first);
+    }
+    for (const auto& row : plugin::command_catalog(configured)) {
+        auto origin = plugin::command_origin_text(row.origin);
+        std::printf("  %-24s %-8.*s", row.name.c_str(), static_cast<int>(origin.size()), origin.data());
+        if (rules) {
+            auto decision = rules->decision(row.name);
+            if (decision.minimum_status) {
+                std::printf(" GM %d+", *decision.minimum_status);
+            } else {
+                std::printf(" %-8s %.*s", decision.allowed ? "allowed" : "blocked",
+                            static_cast<int>(decision.reason.size()), decision.reason.data());
+            }
+        }
+        for (const auto& alias : row.aliases) std::printf(" %s", alias.c_str());
+        if (!row.description.empty()) std::printf("  %s", row.description.c_str());
+        std::putchar('\n');
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2 || std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help") {
-        std::puts("usage: hailstone_check CLIENT_FILES_DIR");
+    if (argc == 2 && std::string_view(argv[1]) == "--list-commands") {
+        print_commands(nullptr);
+        return 0;
+    }
+    const bool show_commands = argc == 3 && std::string_view(argv[2]) == "--commands";
+    if ((argc != 2 && !show_commands) || std::string_view(argv[1]) == "-h" || std::string_view(argv[1]) == "--help") {
+        std::puts("usage: hailstone_check CLIENT_FILES_DIR [--commands]\n       hailstone_check --list-commands");
         return argc == 2 ? 0 : 2;
     }
     fs::path dir = argv[1];
@@ -46,6 +79,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     int problems = 0;
+    plugin::CommandRules commands;
 
     fs::path cfg = dir / plugin::kServerCfgName;
     if (!fs::is_regular_file(cfg, ec)) {
@@ -76,7 +110,10 @@ int main(int argc, char** argv) {
         std::printf("  autoskill (the Ability Book): %s\n", r.autoskill ? "allowed" : "off");
         std::printf("  NPC collision: %s\n", r.npc_collision ? "on" : "off");
         std::printf("  passable ladders climbed: %s\n", r.passable_ladders ? "on" : "off");
+        commands = std::move(r.commands);
+        if (commands.enabled) std::printf("  commands by default: %s\n", commands.default_allow ? "allowed" : "blocked");
     }
+    if (show_commands) print_commands(&commands);
 
     // Where the files go, as the server's script lists them (names starting with '.' are not sent).
     std::map<std::string, int> counts;

@@ -105,6 +105,38 @@ See the full policy settings in the [plugin and scripting guide](../docs/plugins
 Run `hailstone_check client_files/` to see the policy, warnings about unknown settings, and any files a client
 will refuse. The checker is built with the client. Players get changes at their next login.
 
+### In-game Server Management
+
+With the current encounter installed and client file delivery enabled, an eligible GM can open **Server Management**
+from the Modern menu or with `/servermanagement`. The encounter checks the account's numeric status on every read and
+save. The default is 200. Set `[management] min_status` in `client_files/hailstone.cfg` to change it. A value outside
+1–32767 disables management access until corrected on disk.
+
+Search the **Stock (RoF2)**, **Extended**, and **Add-on** command lists by name or alias. A rule can inherit the
+server's policy, allow the command, block it, or require a minimum EQEmu GM account status. The **Add-on** list
+updates as plugins and Lua scripts register commands on the GM's client. Commands explicitly named in the policy
+also appear while the add-on is unloaded. Set the message players get for a blocked command in the Commands
+page. The window also edits the server's add-on rules, script and plugin permissions, Lua socials, assets, web
+hosts, Hailstone access, and gameplay settings. Review changes before saving. The server keeps custom sections and
+untouched settings in the file. Creating the first file through this editor retains the server's pre-existing
+script, plugin, and Lua social defaults.
+
+Writes compare the revision opened by the GM before modifying the file. If another GM or a manual edit has changed
+it, or the snapshot has expired after five minutes, reopen the window and review the latest policy before retrying.
+Successful saves carry a revision in the file's first comment and keep the previous bytes and editor metadata in
+`client_files/.hailstone-admin-history/`. The
+dot-prefixed directory is server-only. To restore a revision, copy the relevant previous file to `hailstone.cfg` and
+reload the encounter so zones relist it. For a backup whose metadata says `previous_existed=false`, move the active
+`hailstone.cfg` out of `client_files/` before reloading to restore the server's original defaults. Keep the
+client files directory shared across zone processes if they run on separate hosts. The server account that runs the
+zone process needs permission to write the file, create the lock and history directories, and replace the file.
+If a stopped zone leaves `client_files/.hailstone-admin-lock` behind, remove that empty directory only after confirming
+that no zone is writing policy. The editor supports configurations up to 16 KiB. Larger files can still be managed on disk.
+
+Existing players receive the new policy on their next login. Setting `[client] deny = on` or raising the minimum
+above your own status can require editing the file on disk to regain access. The client-side command policy is
+described in the [plugin and scripting guide](../docs/plugins.md#command-policy).
+
 ## Settings
 
 The settings are at the top of `hailstone.lua`. Any can be overridden live with a data bucket `hailstone:<name>`
@@ -266,8 +298,12 @@ The client sends its requests on custom opcodes that no server's opcode table li
 | guild invitation | 0x1430 | 0x1422 |
 | quest NPCs | 0x1436 | |
 | zone links | 0x1438 | |
+| Server Management | 0x143a | |
 
 So the zone passes them to the `event_unhandled_opcode` quest event, and the script replies with raw packets.
+Server Management replies on 0x143b, with bit 1 of the settings reply advertising availability to an eligible
+account. Bit 2 adds the receiving player's numeric account status for GM command rules.
+The [client packet definitions](../src/net/server_management_packets.h) document bounded snapshots and typed edits.
 
 Hailstone 0.7.0 and older send the same requests 0x0e lower (last column); the script answers those too, so
 updating the script first leaves older clients working. (On Project Triune's server 0x1422 is its own opcode, so

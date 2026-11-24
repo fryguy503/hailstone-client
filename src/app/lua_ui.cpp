@@ -850,14 +850,14 @@ int UiAnimation(lua_State* L) {
 // confirmation, among them a destroy's; a trade, a give, a quantity, a bazaar purchase's, a group invitation, a
 // respawn choice, a large dialog, a task offer) give way only to the pack's own windows: a plugin's code could
 // otherwise put the client's away and draw a question of its own in its place.
-// The consent question and the Server add-ons warning are the client's own interfaces' alone (UiHost::trusted_ui):
+// Consent, add-on policy warnings and Server Management are reserved to the client's own interfaces (UiHost::trusted_ui):
 // under an add-on or hand-placed interface the client draws them, as that interface cannot act on them
 // (hs.AnswerPluginConsent, hs.AddonPolicyAction).
 bool may_replace(std::string_view name, const UiHost& host) {
     static constexpr std::string_view kPackOnly[] = {
-        "PluginConsent", "AddonPolicy", "ConfirmationDialogBox", "TradeWnd",    "GiveWnd",          "QuantityWnd",
+        "PluginConsent", "AddonPolicy", "ServerManagement", "ConfirmationDialogBox", "TradeWnd", "GiveWnd", "QuantityWnd",
         "BazaarConfirmationWnd", "GroupInvite", "RespawnWnd", "LargeDialogWindow", "TaskSelectWnd"};
-    if (!host.trusted_ui && (name == "PluginConsent" || name == "AddonPolicy")) return false;
+    if (!host.trusted_ui && (name == "PluginConsent" || name == "AddonPolicy" || name == "ServerManagement")) return false;
     if (ui::lua::LuaUi::caller_tag().empty()) return true;
     return std::find(std::begin(kPackOnly), std::end(kPackOnly), name) == std::end(kPackOnly);
 }
@@ -3205,6 +3205,7 @@ void register_luasocial_api(lua_State* L, UiHost& host);  // app/lua_ui_luasocia
 void register_hotbar_api(lua_State* L, UiHost& host);     // app/lua_ui_hotbar.cpp
 void register_web_api(lua_State* L, UiHost& host);        // app/lua_ui_web.cpp
 void register_find_api(lua_State* L, UiHost& host);       // app/lua_ui_find.cpp
+void register_server_management_api(lua_State* L, UiHost& host); // app/lua_ui_server_management.cpp
 void register_compare_api(lua_State* L, UiHost& host, std::function<StockWindow*(std::string_view)> find_window); // app/lua_ui_compare.cpp
 void register_task_api(lua_State* L, UiHost& host, std::vector<std::unique_ptr<StockWindow>>& windows); // app/lua_ui_progress.cpp
 int CompassStrips(lua_State* L);                     // app/lua_ui_misc.cpp
@@ -3283,6 +3284,7 @@ void UiApi::register_functions(lua_State* L) {
     register_hotbar_api(L, impl_->host);
     register_web_api(L, impl_->host);
     register_find_api(L, impl_->host);
+    register_server_management_api(L, impl_->host);
     register_compare_api(L, impl_->host, [impl = impl_.get()](std::string_view name) { return impl->window(name); });
     register_task_api(L, impl_->host, impl_->windows);
     // Opening a tracker entry changes TaskWnd's selected objective list in this frame. Its next ListInfo/ListRow

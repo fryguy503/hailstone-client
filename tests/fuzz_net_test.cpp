@@ -46,6 +46,7 @@
 #include "net/notice_packets.h"
 #include "net/quest_npc_packets.h"
 #include "net/settings_packets.h"
+#include "net/server_management_packets.h"
 #include "net/zone_link_packets.h"
 #include "net/opcodes.h"
 #include "net/pet_packets.h"
