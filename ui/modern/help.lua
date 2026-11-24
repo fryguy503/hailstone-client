@@ -32,6 +32,8 @@ local function drawWindow(x, y, w, h, s)
   ui.SameLine()
   W.Button(WINDOW, "CustomerServiceButton", "Customer Service", { tooltip = "Ask a guide for help (/petition)" })
   ui.Dummy(0, 2 * s)
+  local version = W.Text(WINDOW, "HailstoneVersion")
+  if version ~= "" then ui.TextDisabled("Hailstone " .. version) end
   K.TextBox(WINDOW, "Display", 0, 0, { font = T.font.normal, empty = "The help pages are not in the game folder." })
 end
 

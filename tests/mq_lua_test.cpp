@@ -140,6 +140,61 @@ print('spell fields ok')
     CHECK(h.printed_line("spell fields ok"));
 }
 
+TEST_CASE("MQ Lua: spell duration formula and cap are raw read-only integers") {
+    Host h(plugin::kCapRead);
+    {
+        // RoF2 columns 16 and 17 are independent: the cap is not a computed duration for the caster's level.
+        std::ofstream out(h.world.dir / "spells_us.txt", std::ios::binary | std::ios::app);
+        out << mq_test::spell_line({{0, "41000"}, {1, "Raw Duration Zero"}, {16, "0"}, {17, "8"}}) << '\n';
+        out << mq_test::spell_line({{0, "41001"}, {1, "Raw Duration Five"}, {16, "5"}, {17, "30"}}) << '\n';
+        out << mq_test::spell_line({{0, "41002"}, {1, "Raw Duration Level"}, {16, "1"}, {17, "80"}}) << '\n';
+        out << mq_test::spell_line({{0, "41003"}, {1, "Raw Duration Permanent"}, {16, "50"}, {17, "0"}}) << '\n';
+    }
+    h.world.conn->reload_game_files();
+    h.write("spell_duration.lua", R"(
+local mq = require('mq')
+for _, row in ipairs({{41000, 0, 8}, {41001, 5, 30}, {41002, 1, 80}, {41003, 50, 0}}) do
+    local spell = mq.TLO.Spell(row[1])
+    local formula, cap = spell.DurationFormula(), spell.DurationCap()
+    assert(math.type(formula) == 'integer' and formula == row[2])
+    assert(math.type(cap) == 'integer' and cap == row[3])
+    assert(mq.parse(string.format('${Spell[%d].DurationFormula}', row[1])) == tostring(row[2]))
+    assert(mq.parse(string.format('${Spell[%d].DurationCap}', row[1])) == tostring(row[3]))
+    assert(spell.Duration.Raw() == row[3] * 6000)
+    assert(spell.Duration.TotalSeconds() == row[3] * 6)
+    assert(not pcall(function() spell.DurationFormula = 99 end))
+    assert(not pcall(function() spell.DurationCap = 99 end))
+    assert(spell.DurationFormula() == row[2] and spell.DurationCap() == row[3])
+end
+assert(mq.TLO.Spell(44999).DurationFormula() == nil)
+assert(mq.TLO.Spell(44999).DurationCap() == nil)
+assert(mq.parse('${Spell[44999].DurationFormula}/${Spell[44999].DurationCap}') == 'NULL/NULL')
+print('raw spell duration ok')
+)");
+    REQUIRE(h.scripts->run("spell_duration", {}));
+    h.pulses(1);
+    CHECK(h.printed_line("raw spell duration ok"));
+    CHECK(h.sent.empty());
+    CHECK(h.target == 0);
+    const auto* spell = h.world.conn->spell_table().get(41002);
+    REQUIRE(spell);
+    CHECK(spell->duration_formula == 1);
+    CHECK(spell->duration_cap == 80);
+
+    Host denied(plugin::kCapCommands);
+    denied.write("spell_duration_denied.lua", R"(
+local mq = require('mq')
+assert(not pcall(function() return mq.TLO.Spell(200).DurationFormula() end))
+assert(not pcall(function() return mq.TLO.Spell(200).DurationCap() end))
+assert(not pcall(mq.parse, '${Spell[200].DurationFormula}/${Spell[200].DurationCap}'))
+print('spell duration needs read')
+)");
+    REQUIRE(denied.scripts->run("spell_duration_denied", {}));
+    denied.pulses(1);
+    CHECK(denied.printed_line("spell duration needs read"));
+    CHECK(denied.sent.empty());
+}
+
 TEST_CASE("MQ Lua: hailstone.raid is a columnar roster") {
     Host h;
     using A = net::GameConnectionTestAccess;

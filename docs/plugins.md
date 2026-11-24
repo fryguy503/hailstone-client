@@ -672,6 +672,26 @@ Faces run only when `faces` is on, and always with `read` alone.
 
 ## Compiled plugins
 
+Compiled add-ons may read `Spell.DurationFormula` and `Spell.DurationCap` through `parse`: plain integers from the
+player's spell record, with the cap in six-second ticks. The existing `Spell.Duration` timestamp remains the cap
+multiplied by 6000 ms; the raw formula is not a claim about a caster's effective duration.
+
+`get_large_dialog` (`read`) observes the current received game popup, including its host-issued token, button mode,
+server IDs, remaining deadline and the current camp token when it was received during that camp. It never exposes
+the native-plugin consent question. `answer_large_dialog` (`actions`) answers that exact current popup once: OK,
+Yes, No or close. A stale/replaced/expired popup, a button absent from its mode, lost permission or a refused send
+returns zero without consuming the question. Both calls are optional: check `HAILSTONE_HOST_HAS`.
+
+The optional `HAILSTONE_DIALOG_EXPECT_CAMP_DISCONNECT` answer flag also needs an active `extend` owner, Yes and the
+snapshot's current nonzero camp token. It lets a server extension identify an accepted server camp offer. It only
+routes a subsequent validated server disconnect through the ordinary camp destination; timeouts and socket failures
+remain link deaths. It does not assert server acceptance,
+send Logout early, alter the player's Fast Camp setting or advance the normal timer. Cancellation, a new camp,
+zoning and disconnection retire that lifetime. Without a disconnect the normal camp continues. The player's READ
+snapshot reports `HAILSTONE_PLAYER_CAMPING` while the native camp is in progress, including before a popup arrives.
+Popup tokens retire when the connection, zone or player lifetime changes. The opaque map-policy context remains
+stable through ordinary camping and cancellation; the actual state and action eligibility are checked separately.
+
 A plugin is a `.dll`, `.so` or `.dylib` built against `sdk/hailstone_plugin.h`, a plain C interface that works with
 any compiler. It follows MacroQuest's plugin shape: export the callbacks you need and use the MQ-style helpers.
 
@@ -921,11 +941,18 @@ Several plugins may extend the client at once: they are asked in load order and 
 - A plugin built for an older ABI loads in a newer client, not the reverse. This SDK reports ABI 4 (which moved the
   client to Dear ImGui 1.93.0: no `OnUpdateImGui`, `imgui_context` or `web_view` for a plugin of ABI 3 or before). ABI 3
   added the web pages, `web_*`, "Web pages" below.
-- Calls added since keep ABI 3: test `HAILSTONE_HOST_HAS(host, open_bank)` before such a call, since an older client
+- Appended calls such as `open_bank` retain their existing ABI. Test `HAILSTONE_HOST_HAS(host, open_bank)`, since an older client
   has a shorter table. `use_ability`, `ability_state`, `get_ability_data_bulk` and the other calls under "added later
   in ABI 3" in `sdk/hailstone_plugin.h` are such calls.
 - The structs a plugin passes to be filled (`HailstonePlayer`, `HailstoneSpawn`, ..., `HailstoneWebState`) carry
   their size too. `HailstoneWebState`'s `size` is a `size_t` (as ABI 3 shipped it), the others' a `uint32_t`.
+
+The current SDK appends `get_large_dialog` and `answer_large_dialog` after the ABI 4 spell ID services. Windows x64
+builds can provide frozen ABI 3 popup tables to exact binaries by setting their SHA-256 digests. Use
+`HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256` for the layout before nameplate services,
+`HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256` for the layout after UI contributions, and
+`HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256` for the layout after bulk buffer services. Separate multiple digests
+for the same layout with semicolons.
 
 A C++ allocation or provider exception at an SDK entry point returns the ordinary zero/void failure result. Side
 effects completed before it are not retried or undone.

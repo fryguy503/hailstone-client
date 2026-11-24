@@ -11,6 +11,7 @@
 #include <glm/geometric.hpp>
 
 #include "core/log.h"
+#include "core/process_serial.h"
 #include "core/sha1.h"
 #include "game/coords.h"
 #include "game/distance.h"
@@ -912,13 +913,43 @@ void GameConnection::book_button() {
 
 void GameConnection::answer_large_dialog(int button) {
     if (!large_dialog_) return;
-    LargeDialog d = std::move(*large_dialog_);
-    large_dialog_.reset();
+    answer_large_dialog(large_dialog_->token, 0, button, false);
+}
+
+bool GameConnection::answer_large_dialog(std::uint64_t token, std::uint64_t camp_token, int button,
+                                       bool expect_camp_disconnect, const std::function<bool()>& still_allowed) {
+    if (answering_large_dialog_ || !large_dialog_ || token == 0 || large_dialog_->token != token || !in_zone() ||
+        button < 0 || button > 3) return false;
+    const LargeDialog d = *large_dialog_;
+    if (d.close_at_ms != 0 && now_ms() >= d.close_at_ms && button != 3) return false;
+    if ((d.buttons && button == 0) || (!d.buttons && (button == 1 || button == 2))) return false;
+    if (expect_camp_disconnect && (button != 1 || camp_token == 0 || d.camp_token != camp_token ||
+        camp_token_ != camp_token || state_ != ConnectionState::Camping || pstatus_.dead ||
+        (pstatus_.stand_state != kStandSitting && !mount_id()) || zone_exit_ != ZoneExit::None)) return false;
+    if (still_allowed && !still_allowed()) return false;
+    answering_large_dialog_ = true;
+    struct Answering {
+        bool& value;
+        ~Answering() { value = false; }
+    } answering{answering_large_dialog_};
+    const auto current = [&] {
+        return large_dialog_ && large_dialog_->token == token && in_zone() &&
+            (d.close_at_ms == 0 || now_ms() < d.close_at_ms || button == 3) &&
+            (!expect_camp_disconnect || (state_ == ConnectionState::Camping && camp_token_ == camp_token &&
+                                        !pstatus_.dead && (pstatus_.stand_state == kStandSitting || mount_id()) &&
+                                        zone_exit_ == ZoneExit::None)) &&
+            (!still_allowed || still_allowed());
+    };
     // The OnLevelMessage dialog's handlers (vtable 0x9fa260 slots 95..98): Send_OP_PopupResponse, which sends only
     // for a non-zero id.
     std::uint32_t kind = button == 2 ? 1u : button == 3 ? 2u : 0u;
     std::uint32_t id = button == 2 ? d.negative_id : button == 3 ? d.close_id : d.popup_id;
-    if (id != 0 && state_ == ConnectionState::InZone) send_zone(encode_popup_response(kind, id));
+    if (expect_camp_disconnect && id == 0) return false;
+    if (id != 0 && !send_zone(encode_popup_response(kind, id), true, current)) return false;
+    if (!current()) return false;
+    large_dialog_.reset();
+    if (expect_camp_disconnect) camp_disconnect_expected_ = true;
+    return true;
 }
 
 // ---------------------------------------------------------------- the spell book
@@ -1130,6 +1161,8 @@ void GameConnection::handle_player(Op op, const AppPacket& p) {
             d.negative_id = m->negative_id;
             d.close_id = m->close_id;
             d.close_at_ms = m->duration ? now_ms() + static_cast<std::int64_t>(m->duration) : 0;
+            d.token = core::next_process_identity();
+            d.camp_token = current_camp_token();
             large_dialog_ = std::move(d);
         }
         break;

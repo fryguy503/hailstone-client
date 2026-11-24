@@ -9,14 +9,17 @@
 #include <cstring>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <sstream>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <unordered_set>
 #include <tuple>
 #include <utility>
+#include <variant>
 
 #include "platform/shared_library.h"
 
@@ -78,6 +81,53 @@ static_assert(sizeof(HailstoneWorldSurfacePatch) == 64 && sizeof(HailstoneWorldS
 static_assert(sizeof(HailstoneWorldReceipt) == 48);
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneWorldSubmission) == 56 && offsetof(HailstoneWorldSubmission, vertices) == 40));
 static_assert(sizeof(void*) != 8 || (sizeof(HailstoneUiContribution) == 56 && offsetof(HailstoneUiContribution, command) == 48));
+
+#if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256) || \
+    defined(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256)
+// Published preview binaries added popup services after different canonical ABI 3 prefixes.
+// Give only a matched binary its frozen view, with its own table size and no colliding canonical slots.
+template <std::size_t PrefixSize>
+struct LegacyPopupHostApi {
+    alignas(PluginHostApi) std::array<std::byte, PrefixSize> prefix;
+    decltype(PluginHostApi::get_large_dialog) get_large_dialog;
+    decltype(PluginHostApi::answer_large_dialog) answer_large_dialog;
+
+    const PluginHostApi* populate(const PluginHostApi& table) {
+        std::memcpy(prefix.data(), &table, prefix.size());
+        constexpr std::uint32_t abi = 3;
+        const std::uint32_t size = sizeof(*this);
+        std::memcpy(prefix.data() + offsetof(PluginHostApi, abi), &abi, sizeof(abi));
+        std::memcpy(prefix.data() + offsetof(PluginHostApi, size), &size, sizeof(size));
+        get_large_dialog = table.get_large_dialog;
+        answer_large_dialog = table.answer_large_dialog;
+        // Passed across the C ABI, where the plugin reads its own table type.
+        return reinterpret_cast<const PluginHostApi*>(this);
+    }
+};
+using LegacyPopupBeforeNameplates = LegacyPopupHostApi<offsetof(PluginHostApi, nameplate_register)>;
+using LegacyPopupAfterUi = LegacyPopupHostApi<offsetof(PluginHostApi, get_spells_by_name_data_bulk)>;
+using LegacyPopupAfterBulk = LegacyPopupHostApi<offsetof(PluginHostApi, spell_id_limit)>;
+static_assert(offsetof(PluginHostApi, set_class_name) == 848 && offsetof(PluginHostApi, nameplate_register) == 856);
+static_assert(offsetof(LegacyPopupBeforeNameplates, get_large_dialog) == 856 &&
+              offsetof(LegacyPopupBeforeNameplates, answer_large_dialog) == 864 &&
+              sizeof(LegacyPopupBeforeNameplates) == 872);
+static_assert(offsetof(PluginHostApi, remove_ui_contribution) == 912);
+static_assert(offsetof(LegacyPopupAfterUi, get_large_dialog) == 920 &&
+              offsetof(LegacyPopupAfterUi, answer_large_dialog) == 928 && sizeof(LegacyPopupAfterUi) == 936);
+static_assert(offsetof(PluginHostApi, release_bulk_buffer) == 936);
+static_assert(offsetof(LegacyPopupAfterBulk, get_large_dialog) == 944 &&
+              offsetof(LegacyPopupAfterBulk, answer_large_dialog) == 952 && sizeof(LegacyPopupAfterBulk) == 960);
+
+bool contains_legacy_digest(std::string_view digests, const Sha256Digest& hash) {
+    while (!digests.empty()) {
+        const auto separator = digests.find(',');
+        if (parse_sha256(digests.substr(0, separator)) == hash) return true;
+        if (separator == std::string_view::npos) break;
+        digests.remove_prefix(separator + 1);
+    }
+    return false;
+}
+#endif
 
 #if defined(_WIN32)
 constexpr const char* kExt = ".dll";
@@ -254,6 +304,10 @@ struct Loaded {
     std::uint32_t caps = 0;
     void* lib = nullptr; // platform::load_library's
     PluginHostApi table{};
+#if defined(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256) || defined(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256) || \
+    defined(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256)
+    std::variant<std::monostate, LegacyPopupBeforeNameplates, LegacyPopupAfterUi, LegacyPopupAfterBulk> legacy_popup_table;
+#endif
     Hooks::Owner owner = 0;
     std::vector<std::string> tlos;
     game::NameplateCanvasOwner nameplate_owner = 0;
@@ -1332,6 +1386,7 @@ int h_get_player(void* h, HailstonePlayer* out) {
     v.xtarget_slots = static_cast<std::uint32_t>(c->xtargets().slots.size());
     const auto& spells = c->spell_state();
     v.casting_spell_id = spells.casting.casting() ? spells.casting.spell : 0;
+    if (c->state() == net::ConnectionState::Camping) v.observation_flags |= HAILSTONE_PLAYER_CAMPING;
     v.scribing_spell_id = spells.scribing ? spells.scribing->spell : 0;
     v.stand_state = ps.stand_state;
     v.pet_id = c->pets().focused;
@@ -1595,6 +1650,49 @@ std::uint32_t h_get_memorized_spell(void* h, std::uint32_t index) {
     const auto id = c->spell_state().gems[index].spell;
     return id == 0xffffffffu ? 0 : id;
 }
+
+int h_get_large_dialog(void* h, HailstoneLargeDialog* out) {
+    const auto* c = readable(Loaded::of(h), "get_large_dialog");
+    if (!c || !c->in_zone() || !out || out->size < sizeof(HailstoneLargeDialog) || !c->large_dialog()) return 0;
+    const auto& d = *c->large_dialog();
+    const auto now = net::GameConnection::now_ms();
+    if (d.token == 0 || (d.close_at_ms != 0 && now >= d.close_at_ms)) return 0;
+    HailstoneLargeDialog v{};
+    v.size = sizeof(v);
+    v.token = d.token;
+    v.popup_id = d.popup_id;
+    v.negative_id = d.negative_id;
+    v.close_id = d.close_id;
+    if (d.buttons) v.flags |= HAILSTONE_LARGE_DIALOG_YES_NO;
+    if (d.camp_token != 0 && d.camp_token == c->current_camp_token()) {
+        v.flags |= HAILSTONE_LARGE_DIALOG_CAMPING;
+        v.camp_token = d.camp_token;
+    }
+    v.remaining_ms = d.close_at_ms == 0 ? std::numeric_limits<std::uint32_t>::max() :
+        static_cast<std::uint32_t>(std::min<std::int64_t>(d.close_at_ms - now, std::numeric_limits<std::uint32_t>::max()));
+    return give(out, v);
+}
+
+int h_answer_large_dialog(void* h, std::uint64_t token, std::uint64_t camp_token, std::int32_t button,
+                          std::uint32_t flags) {
+    Loaded& l = Loaded::of(h);
+    if (flags & ~HAILSTONE_DIALOG_EXPECT_CAMP_DISCONNECT) return 0;
+    const bool camp = (flags & HAILSTONE_DIALOG_EXPECT_CAMP_DISCONNECT) != 0;
+    const auto generation = l.lifecycle_generation;
+    const auto policy_generation = l.policy_generation;
+    auto* c = connection_of(l);
+    const auto allowed = [&] {
+        if (l.unload_pending || l.lifecycle_generation != generation || l.policy_generation != policy_generation ||
+            connection_of(l) != c || !c || !c->in_zone())
+            return false;
+        if (!l.can(kCapActions) || (camp && (!l.active || !l.can(kCapExtend)))) return false;
+        const auto& d = c->large_dialog();
+        return d && d->token == token && (d->close_at_ms == 0 || net::GameConnection::now_ms() < d->close_at_ms);
+    };
+    if (!allowed()) return 0;
+    return c->answer_large_dialog(token, camp_token, button, camp, allowed) ? 1 : 0;
+}
+
 bool world_allowed(const Loaded& l) {
     const auto* c = connection_of(l);
     return l.active && !l.unload_pending && l.can(kCapUi | kCapExtend) && c && c->in_zone();
@@ -3493,6 +3591,8 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     p.table.release_bulk_buffer = main_only<h_release_bulk_buffer>;
     p.table.spell_id_limit = main_only<h_spell_id_limit>;
     p.table.spell_data_ready = main_only<h_spell_data_ready>;
+    p.table.get_large_dialog = main_only<h_get_large_dialog>;
+    p.table.answer_large_dialog = main_only<h_answer_large_dialog>;
     Hooks& hooks = *m.env.hooks;
     Loaded* lp = &p;
     // Each callback runs with the plugin's capabilities and counts as the plugin being busy (no unloading under it).
@@ -3560,8 +3660,24 @@ bool NativePlugins::load_file(std::string_view name_in, std::string* why, Asker 
     // Its Lua windows (<folder>/ui/<pack>/), with the UI capability.
     if (p.can(kCapUi) && m.env.ui) m.env.ui->set_folder(name, plugin_folder(*file, name));
 
+    const PluginHostApi* host_table = &p.table;
+#ifdef HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256
+    if (got == 3 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256, hash)) {
+        host_table = p.legacy_popup_table.emplace<LegacyPopupBeforeNameplates>().populate(p.table);
+    }
+#endif
+#ifdef HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256
+    if (got == 3 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256, hash)) {
+        host_table = p.legacy_popup_table.emplace<LegacyPopupAfterUi>().populate(p.table);
+    }
+#endif
+#ifdef HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256
+    if (got == 3 && contains_legacy_digest(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256, hash)) {
+        host_table = p.legacy_popup_table.emplace<LegacyPopupAfterBulk>().populate(p.table);
+    }
+#endif
     if (!guarded(p, "hailstone_plugin_set_host", [&] {
-            set_host(&p.table);
+            set_host(host_table);
             return true;
         })) {
         discard(m, std::move(l), false);

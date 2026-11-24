@@ -241,3 +241,8 @@ These end in **Disconnected** with `error()` set:
 - too much received data waiting to be read.
 
 OutOfSession is taken without a check: EQEmu sends it with a zero connect code (`ReliableStreamConnectionManager::SendDisconnect`). What the original checks is not known (docs/unknowns.md). The cost: an off-path sender who spoofs the server's address and guesses the port can end the session with a two-byte `00 1d`.
+
+`Session::peer_disconnected()` is set only for a decoded six-byte SessionDisconnect carrying the current connect
+code. The receipt is protected by the session mutex and resets on the next `connect()`. Timeouts, local closes,
+socket failures, OutOfSession and malformed or stale disconnects leave it unset. Application actions use this receipt
+when they require a server-confirmed disconnect.

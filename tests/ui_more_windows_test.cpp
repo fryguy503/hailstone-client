@@ -16,6 +16,7 @@
 #include "app/actions_ui.h"
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "core/build_info.h"
 #include "core/config.h"
 #include "core/game_dir.h"
 #include "core/ini_file.h"
@@ -177,6 +178,7 @@ TEST_CASE("Help window: Back goes at most 64 pages back") {
     GameDir game(game_dir.path());
     Harness t(game);
     t.api->toggle("HelpWindow");
+    CHECK(t.api->child_text("HelpWindow", "HailstoneVersion") == display_version());
     REQUIRE(t.api->child_text("HelpWindow", "Display") == "contents");
     for (int i = 0; i < 100; ++i)
         CHECK(t.api->stml_link("HelpWindow", "Display", -1, i % 2 ? "file:///help/p1.html" : "file:///help/p0.html"));

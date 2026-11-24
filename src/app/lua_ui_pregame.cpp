@@ -328,7 +328,7 @@ void emit_login(Out& o, const ui::LoginView& v) {
     // This build and the updater's word on it, for the screen's corner (docs/updater.md "What the player sees"):
     // always there, unlike update.
     o.table();
-    o.str("version", v.update.current);
+    o.str("version", v.version_label());
     o.str("build", v.version);
     o.str("status", v.update.check);
     o.str("text", ui::update_status_text(v.update));

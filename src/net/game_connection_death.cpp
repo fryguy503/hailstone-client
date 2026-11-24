@@ -6,6 +6,7 @@
 #include <string>
 
 #include "core/log.h"
+#include "core/process_serial.h"
 #include "game/coords.h"
 #include "game/combat.h"
 #include "game/death_report.h"
@@ -177,6 +178,8 @@ void GameConnection::handle_death(const Death& d) {
             report_hit(*line, d.killer_id, r.hit_report);
     if (d.damage > 0 && d.attack_skill < 231) melee_sound(d.spawn_id, d.killer_id, static_cast<std::int32_t>(d.damage));
     if (r.local_died) {
+        camp_token_ = 0;
+        camp_disconnect_expected_ = false;
         release_eye_control(true);
         clear_hover_rez();
         discard_questions([](const Confirmation& c) { return c.id == kConfirmRezz; });
@@ -463,6 +466,7 @@ void GameConnection::camp_command(const std::string& args) {
 }
 
 void GameConnection::camp() {
+    if (camp_request_sending_) return;
     if (pstatus_.stand_state == 0x66) return;
     if (state_ == ConnectionState::Camping) {
         cancel_camp(12290); // a second /camp
@@ -480,8 +484,22 @@ void GameConnection::camp() {
         set_sitting(true);
         if (!sitting()) return system(12291);
     }
+    camp_request_sending_ = true;
+    struct Sending {
+        bool& value;
+        ~Sending() { value = false; }
+    } sending{camp_request_sending_};
+    const auto token = core::next_process_identity();
+    camp_token_ = token;
+    camp_disconnect_expected_ = false;
+    const auto kind = camp_kind_;
     send_save(0x21); // Save(0, 1, 0x21)
-    send_zone(encode_camp(camp_kind_));
+    if (!send_zone(encode_camp(kind), true, [&] {
+        return state_ == ConnectionState::InZone && !pstatus_.dead && camp_token_ == token && camp_kind_ == kind;
+    })) {
+        if (camp_token_ == token) camp_token_ = 0;
+        return;
+    }
     state_ = ConnectionState::Camping;
     camp_started_ = Clock::now();
     camp_notices_ = 0;
@@ -492,6 +510,8 @@ void GameConnection::cancel_camp(std::uint32_t eqstr) {
     if (state_ != ConnectionState::Camping || zone_exit_ != ZoneExit::None) return; // OP_Logout has gone
     state_ = ConnectionState::InZone;
     camp_started_ = {};
+    camp_token_ = 0;
+    camp_disconnect_expected_ = false;
     camp_kind_ = 0;
     system(eqstr);
 }

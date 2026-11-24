@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "app/lua_ui_windows.h"
+#include "core/build_info.h"
 #include "core/game_dir.h"
 
 namespace hailstone::app {
@@ -65,6 +66,8 @@ public:
         if (id == "Display") {
             if (page_.empty()) set_file(host, "help.html");
             out.text = text_;
+        } else if (id == "HailstoneVersion") {
+            out.text = display_version();
         } else if (id == "BackButton" && back_enabled_) {
             out.enabled = *back_enabled_;
         }

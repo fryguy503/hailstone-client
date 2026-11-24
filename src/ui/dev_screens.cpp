@@ -668,7 +668,7 @@ LoginAction about_corner(const LoginView& view) {
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing;
     if (ImGui::Begin("##hailstone_about", nullptr, flags)) {
-        ImGui::Text("Hailstone %s", view.update.current.c_str());
+        ImGui::Text("Hailstone %s", view.version_label().c_str());
         if (!view.version.empty() && ImGui::IsItemHovered()) ImGui::SetTooltip("This build: %s", view.version.c_str());
         ImGui::PushTextWrapPos(0.0f);
         if (update_notice_text(view.update).empty()) {
@@ -689,7 +689,7 @@ LoginAction about_corner(const LoginView& view) {
         }
         ImGui::SetNextWindowSize(ImVec2(em * 36.0f, 0.0f), ImGuiCond_Always);
         if (ImGui::BeginPopup("##whatsnew")) {
-            ImGui::SeparatorText(("What's new in Hailstone " + view.update.current).c_str());
+            ImGui::SeparatorText(("What's new in Hailstone " + view.version_label()).c_str());
             ImGui::BeginChild("##notes", ImVec2(0.0f, em * 24.0f));
             ImGui::PushTextWrapPos(0.0f);
             for (const auto& line : view.release_notes) {

@@ -13,6 +13,7 @@
 #include "core/sha256.h"
 #include "core/binary_measurement.h"
 #include "net/item_packets.h"
+#include "net/packet_io.h"
 #include "game/nameplate_canvas.h"
 #include "game/server_ext_chain.h"
 #include "mq/commands.h"
@@ -26,6 +27,7 @@
 #include "app/addon_requirements.h"
 #include "app/spell_ui.h"
 #include "app/web_service.h"
+#include "mock_server/harness.h"
 #include "plugin/web_access.h"
 #include "web/browser_host.h"
 
@@ -48,6 +50,7 @@ struct Host {
     plugin::Policy policy;
     mq::Registry reg;
     mq::Context ctx;
+    net::GameConnection* connection_override = nullptr;
     std::vector<std::string> printed, sent;
     std::vector<std::pair<int, std::string>> used, checked; // use_ability, ability_state (kind and name)
     bool ability_ready = true;
@@ -86,7 +89,7 @@ struct Host {
         ne.cache_dir = world.dir / "cache";
         ne.config_dir = world.dir / "config";
         ne.web = web;
-        ne.connection = [this] { return world.conn.get(); };
+        ne.connection = [this] { return connection_override ? connection_override : world.conn.get(); };
         ne.extensions = extensions.get();
         ne.nameplates = &canvas;
         ne.use_ability = [this](mq::AbilityKind kind, std::string_view name) {
@@ -179,6 +182,133 @@ void nameplate_test_metrics(game::NameplateCanvasRegistry& canvas) {
 }
 
 } // namespace
+
+// Keep the upstream nameplate, spell and UI contribution functions ahead of the local popup services.
+static_assert(sizeof(void*) != 8 ||
+              (offsetof(PluginHostApi, nameplate_register) == 856 &&
+               offsetof(PluginHostApi, nameplate_unregister) == 864 &&
+               offsetof(PluginHostApi, nameplate_spell_icon) == 888 &&
+               offsetof(PluginHostApi, get_spells_data_bulk) == 896 &&
+               offsetof(PluginHostApi, set_ui_contribution) == 904 &&
+               offsetof(PluginHostApi, remove_ui_contribution) == 912 &&
+               offsetof(PluginHostApi, get_spells_by_name_data_bulk) == 920 &&
+               offsetof(PluginHostApi, acquire_bulk_buffer) == 928 &&
+               offsetof(PluginHostApi, release_bulk_buffer) == 936 &&
+               offsetof(PluginHostApi, spell_id_limit) == 944 &&
+               offsetof(PluginHostApi, spell_data_ready) == 952 &&
+               offsetof(PluginHostApi, get_large_dialog) == 960 &&
+               offsetof(PluginHostApi, answer_large_dialog) == 968));
+
+namespace {
+net::AppPacket native_game_popup(bool buttons = true) {
+    ByteWriter w;
+    for (std::string_view text : {"SDK fixture", "SDK question", "Accept", "Decline"}) {
+        w.le(static_cast<std::uint32_t>(text.size() + 1));
+        net::detail::write_cstring(w, text);
+    }
+    w.le<std::uint8_t>(buttons ? 1 : 0); w.le<std::uint8_t>(0);
+    w.le<std::uint32_t>(30000); w.le<std::uint32_t>(901); w.le<std::uint32_t>(902); w.le<std::uint32_t>(903);
+    return net::make_packet(net::Op::OnLevelMessage, std::move(w));
+}
+struct RestorePluginContext {
+    Host& host;
+    const net::GameConnection* old;
+    ~RestorePluginContext() { host.ctx.conn = old; host.connection_override = nullptr; }
+};
+} // namespace
+
+TEST_CASE("native plugins: dialog snapshot and answer require live capabilities and current camp") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    auto options = test::quick_options(); options.hooks = &h.hooks;
+    test::Rig rig(test::MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    RestorePluginContext restore{h, h.ctx.conn};
+    h.ctx.conn = &rig.conn;
+    h.connection_override = &rig.conn;
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    rig.conn.camp();
+    rig.conn.receive_zone_packet_for_test(native_game_popup());
+    h.run("/probedialog");
+    CHECK(h.printed_line("[Probe] dialog 1 flags 3 token 1 camp 1 ids 901 902 903 playercamp 1"));
+    h.run("/probedialogthread");
+    CHECK(h.printed_line("[Probe] dialog thread 0 0"));
+    h.approve(plugin::kCapAll & ~plugin::kCapRead); h.plugins->policy_changed({});
+    h.run("/probedialog");
+    CHECK(h.printed_line("[Probe] dialog 0 flags 0 token 0 camp 0 ids 0 0 0 playercamp 0"));
+    h.approve(plugin::kCapAll & ~plugin::kCapActions); h.plugins->policy_changed({});
+    h.printed.clear(); h.run("/probedialoganswer 1 1");
+    CHECK(h.printed_line("[Probe] dialog answer 0"));
+    h.approve(plugin::kCapAll & ~plugin::kCapExtend); h.plugins->policy_changed({});
+    h.printed.clear(); h.run("/probedialoganswer 1 1");
+    CHECK(h.printed_line("[Probe] dialog answer 0"));
+    h.approve(plugin::kCapAll); h.plugins->policy_changed({});
+    h.run("/probedialogactive 0");
+    h.printed.clear(); h.run("/probedialoganswer 1 1");
+    CHECK(h.printed_line("[Probe] dialog answer 0"));
+    h.run("/probedialogactive 1");
+    h.printed.clear(); h.run("/probedialoganswer 1 8");
+    CHECK(h.printed_line("[Probe] dialog answer 0"));
+    h.printed.clear(); h.run("/probedialoganswer 1 1");
+    CHECK(h.printed_line("[Probe] dialog answer 1"));
+    h.printed.clear(); h.run("/probedialoganswer 1 1");
+    CHECK(h.printed_line("[Probe] dialog answer 0"));
+    REQUIRE(rig.until([&] { return test::MockEqServer::count(rig.server.zone_log, net::Op::PopupResponse) == 1; }));
+    CHECK(rig.server.logouts == 0);
+    rig.server.zone.send_disconnect();
+    REQUIRE(rig.until_state(net::ConnectionState::Disconnected));
+    CHECK(rig.conn.camped_out().has_value());
+    CHECK_FALSE(rig.conn.link_death());
+}
+
+TEST_CASE("native plugins: stale or expired game popup tokens never answer replacement dialogs") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    h.world.conn->receive_zone_packet_for_test(native_game_popup()); h.run("/probedialog");
+    h.world.conn->receive_zone_packet_for_test(native_game_popup());
+    h.run("/probedialoganswer 1 0");
+    CHECK(h.printed_line("[Probe] dialog answer 0"));
+    REQUIRE(h.world.conn->large_dialog());
+    h.run("/probedialog");
+    net::GameConnectionTestAccess::expire_large_dialog(*h.world.conn);
+    h.printed.clear(); h.run("/probedialog"); h.run("/probedialoganswer 3 0");
+    CHECK(h.printed_line("[Probe] dialog 0 flags 0 token 0 camp 0 ids 0 0 0 playercamp 0"));
+    CHECK(h.printed_line("[Probe] dialog answer 0"));
+    CHECK(h.world.conn->large_dialog().has_value());
+    PluginHostApi old{};
+    old.size = offsetof(PluginHostApi, get_large_dialog);
+    old.get_large_dialog = [](void*, HailstoneLargeDialog*) { return 1; };
+    CHECK_FALSE(HAILSTONE_HOST_HAS(&old, get_large_dialog));
+    CHECK_FALSE(HAILSTONE_HOST_HAS(&old, answer_large_dialog));
+}
+
+TEST_CASE("native plugins: capability loss inside a popup send cannot authorize camp completion") {
+    Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);
+    auto options = test::quick_options(); options.hooks = &h.hooks;
+    test::Rig rig(test::MockConfig::standard(), options);
+    REQUIRE(rig.to_zone());
+    RestorePluginContext restore{h, h.ctx.conn};
+    h.ctx.conn = &rig.conn;
+    h.connection_override = &rig.conn;
+    h.approve(plugin::kCapAll);
+    REQUIRE(h.plugins->load("HostProbe"));
+    rig.conn.camp();
+    rig.conn.receive_zone_packet_for_test(native_game_popup()); h.run("/probedialog");
+    h.hooks.on_packet(plugin::Hooks::kClient, plugin::Stream::Zone, plugin::Direction::Out,
+        net::to_wire(net::Op::PopupResponse), [&](net::AppPacket&) {
+            h.approve(plugin::kCapAll & ~plugin::kCapActions); h.plugins->policy_changed({});
+            return plugin::Flow::Continue;
+        });
+    h.run("/probedialoganswer 1 1");
+    CHECK(h.printed_line("[Probe] dialog answer 0"));
+    CHECK(rig.conn.large_dialog().has_value());
+    CHECK(test::MockEqServer::count(rig.server.zone_log, net::Op::PopupResponse) == 0);
+    rig.server.zone.send_disconnect();
+    REQUIRE(rig.until_state(net::ConnectionState::Disconnected));
+    CHECK_FALSE(rig.conn.camped_out());
+    CHECK(rig.conn.link_death().has_value());
+}
 
 TEST_CASE("native plugins: nameplate frame lease and canvas ownership") {
     Host h(false, nullptr, HAILSTONE_PROBE_PLUGIN);

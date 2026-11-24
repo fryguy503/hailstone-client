@@ -6,6 +6,7 @@ project(hailstone VERSION 0.7.3 LANGUAGES C CXX)
 # The release's pre-release label (SemVer: "0.1.0-alpha"); empty for a final release. With the version it is what the
 # updater compares against a release's manifest (core/version.h, docs/updater.md), so change both with each release.
 set(HAILSTONE_VERSION_LABEL "beta")
+set(HAILSTONE_DISPLAY_VERSION "" CACHE STRING "Optional display version using this release's numeric prefix")
 if(HAILSTONE_VERSION_LABEL STREQUAL "")
   set(HAILSTONE_RELEASE_VERSION ${PROJECT_VERSION})
 else()
@@ -723,8 +724,9 @@ target_include_directories(hailstone_engine PRIVATE sdk)
 # The build's version line (core/build_info.h), remade at each build from git.
 add_custom_target(hailstone_build_info
   COMMAND ${CMAKE_COMMAND} -DSRC=${PROJECT_SOURCE_DIR} -DVERSION=${HAILSTONE_RELEASE_VERSION}
+          "-DDISPLAY_VERSION=${HAILSTONE_DISPLAY_VERSION}"
           -DOUT=${PROJECT_BINARY_DIR}/generated/build_info.inc -P ${PROJECT_SOURCE_DIR}/cmake/BuildInfo.cmake
-  BYPRODUCTS ${PROJECT_BINARY_DIR}/generated/build_info.inc
+  BYPRODUCTS ${PROJECT_BINARY_DIR}/generated/build_info.inc VERBATIM
   COMMENT "Build version")
 add_dependencies(hailstone_engine hailstone_build_info)
 set_source_files_properties(src/core/build_info.cpp PROPERTIES OBJECT_DEPENDS ${PROJECT_BINARY_DIR}/generated/build_info.inc)
@@ -761,6 +763,28 @@ set(HAILSTONE_PROJECT_PAGE "https://github.com/projecthailstone/hailstone-client
 option(HAILSTONE_ALLOW_IN_EQ_FOLDER "Allow Hailstone's folder to be a subfolder of the EverQuest folder" OFF)
 set_property(SOURCE src/core/asset_folder_choice.cpp APPEND PROPERTY COMPILE_DEFINITIONS
              HAILSTONE_ALLOW_IN_EQ_FOLDER=$<BOOL:${HAILSTONE_ALLOW_IN_EQ_FOLDER}>)
+set(HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 "" CACHE STRING
+    "SHA-256 of the Windows x64 preview plugin with popup slots before nameplate services")
+set(HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256 "" CACHE STRING
+    "SHA-256 of the Windows x64 preview plugin with popup slots after UI contribution services")
+set(HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256 "" CACHE STRING
+    "SHA-256 digests of Windows x64 preview plugins with popup slots after bulk buffer services")
+foreach(legacy_popup_option IN ITEMS HAILSTONE_LEGACY_POPUP_PLUGIN_SHA256 HAILSTONE_LEGACY_POPUP_UI_PLUGIN_SHA256
+                                  HAILSTONE_LEGACY_POPUP_BULK_PLUGIN_SHA256)
+  if("${${legacy_popup_option}}" STREQUAL "")
+    continue()
+  endif()
+  foreach(legacy_popup_hash IN LISTS ${legacy_popup_option})
+    string(LENGTH "${legacy_popup_hash}" legacy_popup_hash_length)
+    if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT legacy_popup_hash_length EQUAL 64 OR
+       NOT "${legacy_popup_hash}" MATCHES "^[0-9a-fA-F]+$")
+      message(FATAL_ERROR "${legacy_popup_option} requires 64-digit digests on 64-bit Windows")
+    endif()
+  endforeach()
+  string(REPLACE ";" "," legacy_popup_digests "${${legacy_popup_option}}")
+  set_property(SOURCE src/plugin/native_plugins.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+               ${legacy_popup_option}="${legacy_popup_digests}")
+endforeach()
 set(HAILSTONE_UPDATE_KEY_DEFAULT "")
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub)
   file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/update-key.pub HAILSTONE_UPDATE_KEY_DEFAULT REGEX "^[0-9a-fA-F]+$" LIMIT_COUNT 1)

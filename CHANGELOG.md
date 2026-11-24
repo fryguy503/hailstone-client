@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Modern Server Management lets authorized GMs review and edit Hailstone policy, command permissions and add-on rules in game. Command rules can require a minimum GM account status, and the add-on command list updates as commands register. The encounter checks GM status and keeps a backup of each previous configuration. Servers can customize the notice shown when a command is blocked.
+- Custom builds can set a display version shown at login and in the in-game Help window.
+- Preserve support for published native preview add-ons with raw spell durations and guarded popup actions.
 
 - Trees with authored collision hulls let players move through their branches while their trunks still block movement. This fixes the invisible walls near the Field of Bone entrance to Warsliks Woods and in other classic zones
 - Decorative slime no longer blocks movement over the Veksar ramp and doorway or through passages in several Lost Dungeons of Norrath layouts

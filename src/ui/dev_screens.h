@@ -209,6 +209,8 @@ struct LoginView {
     // This build ("0.2.0-alpha (39b3e9da)", core/build_info.h build_version()), shown small on every login screen
     // so a player can say which version they run; "" shows nothing.
     std::string version;
+    std::string display_version;
+    const std::string& version_label() const { return display_version.empty() ? update.current : display_version; }
     // This release's part of CHANGELOG.md (core/changelog.h), one entry a line, for What's new; and Hailstone's
     // page, which OpenProject opens.
     std::vector<std::string> release_notes;
