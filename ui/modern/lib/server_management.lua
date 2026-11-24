@@ -36,6 +36,20 @@ function M.new(view, resolveCommand)
   return draft
 end
 
+function M.rebase(draft, view, previousConflicts)
+  local fresh = M.new(view, draft.resolveCommand)
+  local conflicts = {}
+  for id, value in pairs(draft.edits) do
+    local current = fresh.saved[id]
+    if current ~= value then
+      fresh.edits[id] = value
+      if draft.saved[id] ~= current or previousConflicts[id] then conflicts[id] = true end
+    end
+  end
+  fresh.newAddons = draft.newAddons
+  return fresh, conflicts
+end
+
 function M.get(draft, id, fallback)
   return draft.edits[id] or draft.saved[id] or fallback or ""
 end

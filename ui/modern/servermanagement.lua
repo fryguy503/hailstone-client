@@ -72,6 +72,7 @@ local active, draft, serial, catalogSerial, minimumStatus
 local section, origin, page, search = 1, 2, 1, ""
 local results, filteredText, filteredOrigin
 local reviewing, confirmClose, addPackage, localMessage
+local conflicts = {}
 local fieldsById = {}
 for _, collection in ipairs({ GAMEPLAY, SCRIPTS, SOCIALS, ASSETS, ADDONS }) do
   for _, field in ipairs(collection) do fieldsById[field.id] = field end
@@ -342,9 +343,20 @@ local function review(changes)
   heading("Review changes", "Saved policy takes effect on players' next login.")
   for _, change in ipairs(changes) do
     local field = fieldsById[change.id]
+    local previous = change.previous or (field and field.fallback) or "(unset)"
     colored(field and field.label or changeLabels[change.id] or change.id, C.heading)
-    wrap((change.previous or (field and field.fallback) or "(unset)") .. " -> " ..
+    wrap((previous ~= "" and previous or "(empty)") .. " -> " ..
       (change.value ~= "" and change.value or "(empty)"), C.muted)
+    if conflicts[change.id] then
+      wrap("The server value changed after you opened the editor.", C.gold)
+      if not (active.reload_required or active.reloading or active.saving) then
+        if ui.Button("Use server value##" .. change.id) then
+          draft.edits[change.id], conflicts[change.id] = nil, nil
+        end
+        ui.SameLine()
+        if ui.Button("Keep my edit##" .. change.id) then conflicts[change.id] = nil end
+      end
+    end
     if change.id == "client.deny" and change.value == "on" then
       wrap("Blocking Hailstone access also blocks this window after you log in again.", C.danger)
     elseif change.id == "management.min_status" then
@@ -407,6 +419,10 @@ local function body(_, _, _, _, s)
   ui.EndChild()
   ui.Separator()
   local changes = M.changes(draft)
+  for id in pairs(conflicts) do
+    if draft.edits[id] == nil then conflicts[id] = nil end
+  end
+  local hasConflicts = next(conflicts) ~= nil
   local gmEdits = draft.edits["commands.gm"]
   local invalidGm = gmEdits ~= nil and not M.validCommandGmList(gmEdits)
   local footerTable = width >= 585 * s and ui.BeginTable("##smfooter", 2, ui.TableFlags.SizingStretchProp)
@@ -419,29 +435,39 @@ local function body(_, _, _, _, s)
   local version = active.file_revision and active.file_revision ~= "" and "Revision " .. active.file_revision
     or "No saved revision"
   wrap("client_files/hailstone.cfg / " .. version .. " / Applies on next login", C.muted)
-  local status = (invalidGm and "GM rules require command:status with a status from 1 to 32767.") or
-    localMessage or (active.message ~= "" and active.message) or
+  local serverMessage = active.message ~= "" and active.message
+  local status = (active.reloading and "Reloading policy...") or localMessage or
+    (active.reload_required and (serverMessage or "Reload the policy before saving.")) or
+    (hasConflicts and "Resolve the changed server values before saving.") or
+    (invalidGm and "GM rules require command:status with a status from 1 to 32767.") or serverMessage or
     (active.saving and "Saving policy..." or (#changes == 0 and "No unsaved changes" or
       string.format("%d unsaved %s", #changes, #changes == 1 and "change" or "changes")))
-  wrap(status, (invalidGm or localMessage or (reviewing and active.message ~= "" and not active.saving)) and C.danger or C.muted)
+  local attention = not active.reloading and (active.reload_required or hasConflicts or invalidGm or localMessage or
+    (reviewing and active.message ~= "" and not active.saving))
+  wrap(status, attention and C.danger or C.muted)
   if footerTable then ui.TableNextColumn() end
-  ui.BeginDisabled(active.saving)
+  ui.BeginDisabled(active.saving or active.reloading)
   if confirmClose then
     if ui.Button("Keep editing##smclose") then confirmClose = false end
     ui.SameLine()
     if primary("Discard and close##sm") then manager.Close() end
+  elseif active.reload_required or active.reloading then
+    if primary("Reload policy##sm") and not active.reloading then
+      localMessage = not manager.Open() and "Could not request the current policy. Try again." or nil
+    end
   elseif reviewing then
     if ui.Button("Keep editing##smreview") then reviewing, localMessage = false, nil end
     ui.SameLine()
-    ui.BeginDisabled(invalidGm)
-    if primary("Save policy##sm") and not invalidGm then
+    local canSave = not invalidGm and not hasConflicts and #changes > 0
+    ui.BeginDisabled(not canSave)
+    if primary("Save policy##sm") and canSave then
       if manager.Save(active.revision, changes) then localMessage = nil
       else localMessage = "Could not send policy changes. Check the server connection and try again." end
     end
     ui.EndDisabled()
   else
     ui.BeginDisabled(#changes == 0 and not next(draft.newAddons))
-    if ui.Button("Discard##sm") then draft.edits, draft.newAddons, localMessage = {}, {}, nil end
+    if ui.Button("Discard##sm") then draft.edits, draft.newAddons, conflicts, localMessage = {}, {}, {}, nil end
     ui.EndDisabled()
     ui.SameLine()
     ui.BeginDisabled(#changes == 0 or invalidGm)
@@ -469,10 +495,17 @@ ui.window("Server Management", function()
   active = manager and API.session.InGame() and manager.View(serial or 0, catalogSerial or 0) or nil
   if not active then draft, serial, catalogSerial = nil, nil, nil return end
   if active.serial ~= serial then
-    draft, serial = M.new(active, manager.CanonicalCommandName), active.serial
-    minimumStatus = active.minimum_status
-    filteredText, filteredOrigin, addPackage = nil, nil, ""
-    reviewing, confirmClose, localMessage = false, false, nil
+    if active.reloaded and draft then
+      draft, conflicts = M.rebase(draft, active, conflicts)
+      reviewing = next(draft.edits) ~= nil
+      results = nil
+    else
+      draft, conflicts = M.new(active, manager.CanonicalCommandName), {}
+      filteredText, filteredOrigin, addPackage = nil, nil, ""
+      reviewing = false
+    end
+    serial, minimumStatus = active.serial, active.minimum_status
+    confirmClose, localMessage = false, nil
     ui.SetNextWindowFocus()
   elseif active.catalog_serial ~= catalogSerial then
     M.setCommands(draft, active.commands)

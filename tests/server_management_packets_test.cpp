@@ -141,6 +141,8 @@ TEST_CASE("mock server management gates the editor and correlates snapshots and 
     CHECK(r.conn.server_management_snapshot()->revision == 42);
     CHECK(r.conn.server_management_snapshot()->text == cfg);
     CHECK(r.conn.server_management_serial() == 1);
+    CHECK_FALSE(r.conn.server_management_reload_required());
+    CHECK_FALSE(r.conn.server_management_reloaded());
 
     const std::array edits{ServerManagementEdit{"commands", "blocked_message", "Ask a GM."}};
     CHECK_FALSE(r.conn.save_server_management(41, edits));
@@ -151,15 +153,25 @@ TEST_CASE("mock server management gates the editor and correlates snapshots and 
     r.server.zone.send_reliable(management_reply(ServerManagementAction::Save, 2, ServerManagementStatus::Conflict, 0,
                                                  "The policy changed. Reopen the editor."));
     REQUIRE(r.until([&] { return !r.conn.server_management_saving(); }));
+    CHECK(r.conn.server_management_reload_required());
     CHECK(r.conn.server_management_snapshot()->revision == 42);
     CHECK(r.conn.server_management_message() == "The policy changed. Reopen the editor.");
     CHECK(r.conn.server_management_serial() == 1);
 
-    r.conn.close_server_management();
+    CHECK_FALSE(r.conn.save_server_management(42, edits));
     REQUIRE(r.conn.open_server_management());
+    CHECK(r.conn.server_management_reloading());
+    CHECK(r.conn.server_management_snapshot()->revision == 42);
+    CHECK_FALSE(r.conn.save_server_management(42, edits));
+    CHECK(r.conn.open_server_management()); // A second click reuses the outstanding Open.
     REQUIRE(r.until([&] { return management_requests(r) == 3; }));
+    r.server.zone.send_reliable(management_reply(ServerManagementAction::Save, 2, ServerManagementStatus::Ok, 99, "old"));
     r.server.zone.send_reliable(management_reply(ServerManagementAction::Open, 3, ServerManagementStatus::Ok, 43, cfg));
-    REQUIRE(r.until([&] { return r.conn.server_management_snapshot().has_value(); }));
+    REQUIRE(r.until([&] { return !r.conn.server_management_reloading(); }));
+    CHECK_FALSE(r.conn.server_management_reload_required());
+    CHECK(r.conn.server_management_reloaded());
+    CHECK(r.conn.server_management_snapshot()->revision == 43);
+    CHECK_FALSE(r.conn.save_server_management(42, edits));
     REQUIRE(r.conn.save_server_management(43, edits));
     REQUIRE(r.until([&] { return management_requests(r) == 4; }));
     const std::string changed = cfg + "\nblocked_message=\"Ask a GM.\"\n";
@@ -169,6 +181,7 @@ TEST_CASE("mock server management gates the editor and correlates snapshots and 
     CHECK(r.conn.server_management_snapshot()->revision == 44);
     CHECK(r.conn.server_management_snapshot()->text == changed);
     CHECK(r.conn.server_management_serial() == 3);
+    CHECK_FALSE(r.conn.server_management_reloaded());
 
     REQUIRE(r.conn.save_server_management(44, edits));
     REQUIRE(r.until([&] { return management_requests(r) == 5; }));
@@ -177,10 +190,19 @@ TEST_CASE("mock server management gates the editor and correlates snapshots and 
     REQUIRE(r.until([&] { return !r.conn.server_management_saving(); }));
     CHECK(r.conn.server_management_message().find("Save was not confirmed") == 0);
     CHECK(r.conn.server_management_snapshot()->revision == 44);
-    r.conn.close_server_management();
+    CHECK(r.conn.server_management_reload_required());
+    CHECK_FALSE(r.conn.save_server_management(44, edits));
     REQUIRE(r.conn.open_server_management());
     REQUIRE(r.until([&] { return management_requests(r) == 6; }));
-    r.server.zone.send_reliable(management_reply(ServerManagementAction::Open, 6, ServerManagementStatus::Denied, 0,
+    r.server.zone.send_reliable(management_reply(ServerManagementAction::Open, 6, ServerManagementStatus::Unavailable, 0,
+                                                 "Could not read hailstone.cfg."));
+    REQUIRE(r.until([&] { return !r.conn.server_management_reloading(); }));
+    CHECK(r.conn.server_management_reload_required());
+    CHECK(r.conn.server_management_snapshot()->revision == 44);
+    CHECK_FALSE(r.conn.save_server_management(44, edits));
+    REQUIRE(r.conn.open_server_management());
+    REQUIRE(r.until([&] { return management_requests(r) == 7; }));
+    r.server.zone.send_reliable(management_reply(ServerManagementAction::Open, 7, ServerManagementStatus::Denied, 0,
                                                  "Your account no longer has access."));
     REQUIRE(r.until([&] { return !r.conn.server_management_available(); }));
     CHECK_FALSE(r.conn.server_management_snapshot());

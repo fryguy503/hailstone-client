@@ -121,8 +121,9 @@ hosts, Hailstone access, and gameplay settings. Review changes before saving. Th
 untouched settings in the file. Creating the first file through this editor retains the server's pre-existing
 script, plugin, and Lua social defaults.
 
-Writes compare the revision opened by the GM before modifying the file. If another GM or a manual edit has changed
-it, or the snapshot has expired after five minutes, reopen the window and review the latest policy before retrying.
+The editor can stay open while you review. Writes compare the revision opened by the GM before modifying the file.
+If the policy changes or the server loses its snapshot, choose **Reload policy** in the window. It keeps your draft
+and asks you to resolve any settings that changed on the server before you save.
 Successful saves carry a revision in the file's first comment and keep the previous bytes and editor metadata in
 `client_files/.hailstone-admin-history/`. The
 dot-prefixed directory is server-only. To restore a revision, copy the relevant previous file to `hailstone.cfg` and

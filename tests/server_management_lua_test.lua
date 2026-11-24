@@ -77,7 +77,7 @@ local function zone(name, opts)
 		end
 		return io.open(filename, mode)
 	end }, { __index = io })
-	local env = setmetatable({ eq = api, Event = { unhandled_opcode = 1, signal = 2 }, io = layer,
+	local env = setmetatable({ eq = api, Event = { unhandled_opcode = 1, signal = 2, disconnect = 3 }, io = layer,
 		os = setmetatable({ time = function() return now end }, { __index = os }),
 		Packet = function(op, size, raw)
 			assert(raw)
@@ -85,7 +85,7 @@ local function zone(name, opts)
 		end }, { __index = _G })
 	assert(loadfile(script, "t", env))()
 	env.event_encounter_load({ encounter = {} })
-	return handlers[1], logs, bucket
+	return handlers[1], logs, bucket, env.event_encounter_load, handlers[3]
 end
 
 local function transfer(handler, who, op, bytes, optional)
@@ -148,7 +148,7 @@ end
 assert(read(path) == nil, "run in an empty scratch directory")
 mkdir("client_files")
 local opts = {}
-local a = zone("test_a", opts)
+local a, _, _, reload_a, disconnect_a = zone("test_a", opts)
 local ordinary, low_gm, gm, other = client(1, 0), client(2, 199), client(3, 200), client(4, 250)
 local flags, rank = settings_reply(a, ordinary)
 assert(flags == 4 and rank == 0)
@@ -288,8 +288,45 @@ conflict_rev, current = save(a, gm, conflict_rev, 0, edit("scripts", "run", "hud
 assert(read(path) == current and current:find("[::1]", 1, true))
 assert(current:find("another/hud:1.0.0-Alpha.1+build.0", 1, true))
 assert(current:find("gm = /nav:200, /custom!:32767, ::150", 1, true))
-now = now + 301
-save(a, gm, conflict_rev, 3, edit("client", "deny", "off"))
+-- A disconnect from an older entity cannot clear the current editor's snapshot.
+gm.entity = 70
+disconnect_a({ self = gm })
+gm.entity = 3
+now = now + 2 * 60 * 60
+local saved_rev, recovered = save(a, gm, conflict_rev, 0, edit("commands", "gm", "/nav:201, /custom!:32767, ::150"))
+assert(recovered == read(path) and recovered:find("gm = /nav:201", 1, true))
+local recovered_revision = assert(recovered:match("^; hailstone%-policy%-revision = ([%w_-]+)"))
+assert(read(history .. "/" .. recovered_revision .. ".cfg") == current, "the long-lived save must back up the previous policy")
+
+local after_reload_edit = edit("commands", "gm", "/nav:202, /custom!:32767, ::150")
+disconnect_a({ self = gm })
+local _, stale_reason = save(a, gm, saved_rev, 3, after_reload_edit)
+assert(stale_reason == "The server no longer has this editor snapshot. Reload before saving.")
+local before_reload, before_reload_text = open(a, gm)
+assert(before_reload ~= saved_rev and before_reload_text == recovered)
+reload_a({ encounter = {} })
+save(a, gm, before_reload, 3, after_reload_edit)
+assert(read(path) == recovered)
+local reload_rev, reload_text = open(a, gm)
+assert(reload_rev ~= before_reload and reload_text == recovered)
+local _, final = save(a, gm, reload_rev, 0, after_reload_edit)
+assert(final == read(path) and final:find("gm = /nav:202", 1, true))
+local final_revision = assert(final:match("^; hailstone%-policy%-revision = ([%w_-]+)"))
+assert(read(history .. "/" .. final_revision .. ".cfg") == recovered)
+current = final
+
+-- The zone retains at most 64 snapshots, prioritizing one recently used for a valid save attempt.
+local capacity = zone("test_capacity")
+local used, unused = client(100, 250), client(101, 250)
+local used_rev, unused_rev = open(capacity, used), open(capacity, unused)
+for id = 102, 163 do open(capacity, client(id, 250)) end
+mkdir(lock)
+save(capacity, used, used_rev, 5, after_reload_edit)
+rmdir(lock)
+open(capacity, client(164, 250))
+save(capacity, unused, unused_rev, 3, after_reload_edit)
+local _, unchanged = save(capacity, used, used_rev, 0, after_reload_edit)
+assert(unchanged == current and read(path) == current)
 
 assert(os.rename(path, "client_files/Hailstone.cfg"))
 local mixed_rev, mixed = open(b, other)

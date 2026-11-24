@@ -1614,8 +1614,8 @@ local management = (function()
 	local LIMIT, MAX_EDITS, MAX_NAME, MAX_VALUE = 16384, 64, 48, 8192
 	local HISTORY = FILES_DIR .. "/.hailstone-admin-history"
 	local EDIT_LOCK = FILES_DIR .. "/.hailstone-admin-lock"
-	local SNAPSHOT_LIFETIME, MAX_SNAPSHOTS = 300, 64
-	local snapshots, token = {}, 0
+	local MAX_SNAPSHOTS = 64
+	local snapshots, token, last_use = {}, 0, 0
 	local requests = limiter(10)
 	-- Turning management on for a server without a cfg must preserve the permissions it already has.
 	local NO_POLICY = "[scripts]\nplayer = on\n\n[plugins]\nplayer = on\n\n[socials]\nmode = full\ncaps = all\n"
@@ -2073,19 +2073,24 @@ if ([System.IO.File]::Exists($dst)) {
 		client:QueuePacket(packet, true)
 	end
 
+	local function mark_used(entry)
+		last_use = last_use + 1
+		entry.last_used = last_use
+	end
+
 	local function snapshot(client, id, raw, name)
-		local now, count, oldest = os.time(), 0, nil
-		for char_id, entry in pairs(snapshots) do
-			if now - entry.at >= SNAPSHOT_LIFETIME or char_id == id then
-				snapshots[char_id] = nil
-			else
+		if not snapshots[id] then
+			local count, oldest = 0, nil
+			for char_id, entry in pairs(snapshots) do
 				count = count + 1
-				if not oldest or entry.at < snapshots[oldest].at then oldest = char_id end
+				if not oldest or entry.last_used < snapshots[oldest].last_used then oldest = char_id end
 			end
+			if count >= MAX_SNAPSHOTS then snapshots[oldest] = nil end
 		end
-		if count >= MAX_SNAPSHOTS then snapshots[oldest] = nil end
 		token = token % 2147483647 + 1
-		snapshots[id] = { token = token, raw = raw, name = name, at = now, entity = client:GetID(), account = client:AccountID() }
+		local entry = { token = token, raw = raw, name = name, entity = client:GetID(), account = client:AccountID() }
+		mark_used(entry)
+		snapshots[id] = entry
 		return token
 	end
 
@@ -2172,8 +2177,8 @@ if ([System.IO.File]::Exists($dst)) {
 		end
 		local previous = snapshots[id]
 		if not previous or previous.token ~= packet:ReadInt32(12) or previous.entity ~= client:GetID()
-			or previous.account ~= client:AccountID() or os.time() - previous.at >= SNAPSHOT_LIFETIME then
-			reply(client, action, request, STALE, 0, "The editor snapshot expired. Reload before saving.")
+			or previous.account ~= client:AccountID() then
+			reply(client, action, request, STALE, 0, "The server no longer has this editor snapshot. Reload before saving.")
 			return
 		end
 		local edits, why = read_edits(packet, size)
@@ -2181,6 +2186,7 @@ if ([System.IO.File]::Exists($dst)) {
 			reply(client, action, request, INVALID, 0, why or "Malformed Server Management changes.")
 			return
 		end
+		mark_used(previous)
 		if not mkdir(EDIT_LOCK) then
 			reply(client, action, request, BUSY, 0, "The server policy is busy or not writable. Try again.")
 			return
@@ -2196,13 +2202,23 @@ if ([System.IO.File]::Exists($dst)) {
 		reply(client, action, request, status, revision, data)
 	end
 
+	local function on_disconnect(e)
+		local client = e.self
+		local id = client:CharacterID()
+		local entry = snapshots[id]
+		if entry and entry.entity == client:GetID() and entry.account == client:AccountID() then
+			snapshots[id] = nil
+		end
+	end
+
 	return {
 		request = REQUEST,
 		advertised = advertised,
 		account_status = account_status,
 		on_request = on_request,
+		on_disconnect = on_disconnect,
 		reset = function()
-			snapshots, requests = {}, limiter(10)
+			snapshots, last_use, requests = {}, 0, limiter(10)
 		end,
 	}
 end)()
@@ -2295,10 +2311,12 @@ function event_encounter_load(e)
 	end
 	eq.register_player_event("hailstone", Event.unhandled_opcode, on_unhandled_opcode)
 	eq.register_player_event("hailstone", Event.signal, on_signal)
+	if Event.disconnect then eq.register_player_event("hailstone", Event.disconnect, management.on_disconnect) end
 end
 
 function event_encounter_unload(e)
 	waiting, waiting_order, files_timer, served_last = {}, nil, false, nil
 	eq.unregister_player_event("hailstone", Event.unhandled_opcode)
 	eq.unregister_player_event("hailstone", Event.signal)
+	if Event.disconnect then eq.unregister_player_event("hailstone", Event.disconnect) end
 end

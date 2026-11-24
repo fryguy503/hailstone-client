@@ -85,7 +85,7 @@ int ServerManagementViewFn(lua_State* L) {
         scratch.release();
         return 0;
     }
-    lua_createtable(L, 0, 9);
+    lua_createtable(L, 0, 12);
     record::text(L, "revision", view->revision);
     record::text(L, "file_revision", view->file_revision);
     record::text(L, "message", view->message);
@@ -95,6 +95,10 @@ int ServerManagementViewFn(lua_State* L) {
     lua_setfield(L, -2, "catalog_serial");
     lua_pushboolean(L, view->saving);
     lua_setfield(L, -2, "saving");
+    lua_pushboolean(L, view->reload_required);
+    lua_setfield(L, -2, "reload_required");
+    lua_pushboolean(L, view->reloading);
+    lua_setfield(L, -2, "reloading");
     const bool cfg_changed = serial != view->serial;
     if (!cfg_changed && catalog_serial == view->catalog_serial) {
         scratch.release();
@@ -102,6 +106,8 @@ int ServerManagementViewFn(lua_State* L) {
     }
     lua_Integer index = 0;
     if (cfg_changed) {
+        lua_pushboolean(L, view->reloaded);
+        lua_setfield(L, -2, "reloaded");
         lua_pushinteger(L, view->minimum_status);
         lua_setfield(L, -2, "minimum_status");
         lua_createtable(L, static_cast<int>(view->fields.size()), 0);

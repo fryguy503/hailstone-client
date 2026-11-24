@@ -24,15 +24,21 @@ bool GameConnection::server_management_saving() const {
     return server_management_pending_ && server_management_pending_->action == ServerManagementAction::Save;
 }
 
+bool GameConnection::server_management_reloading() const {
+    return server_management_snapshot_ && server_management_pending_ &&
+           server_management_pending_->action == ServerManagementAction::Open;
+}
+
 bool GameConnection::open_server_management() {
     if (!server_management_available()) return false;
-    if (server_management_snapshot_ || server_management_pending_) return true;
+    if (server_management_pending_ || (server_management_snapshot_ && !server_management_reload_required_)) return true;
     const auto id = next_id(server_management_request_id_);
     return send_server_management(encode_server_management_open(id), id, ServerManagementAction::Open);
 }
 
 bool GameConnection::save_server_management(std::uint32_t revision, std::span<const ServerManagementEdit> edits) {
-    if (!server_management_available() || server_management_pending_ || !server_management_snapshot_ ||
+    if (!server_management_available() || server_management_pending_ || server_management_reload_required_ ||
+        !server_management_snapshot_ ||
         server_management_snapshot_->revision != revision) return false;
     const auto id = next_id(server_management_request_id_);
     auto packet = encode_server_management_save(id, revision, edits);
@@ -46,6 +52,8 @@ bool GameConnection::save_server_management(std::uint32_t revision, std::span<co
 void GameConnection::close_server_management() {
     server_management_pending_.reset();
     server_management_snapshot_.reset();
+    server_management_reload_required_ = false;
+    server_management_reloaded_ = false;
     server_management_message_.clear();
 }
 
@@ -73,10 +81,11 @@ void GameConnection::update_server_management() {
     if (!server_management_pending_ || now < server_management_pending_->deadline) return;
     const bool saving = server_management_saving();
     server_management_pending_.reset();
+    if (saving) server_management_reload_required_ = true;
     server_management_message_ = saving
-        ? "Save was not confirmed. Reopen Server Management to check the current policy."
+        ? "Save was not confirmed. Reload policy to check whether your changes were applied."
         : "The server did not answer the management request.";
-    if (!saving) ui_message(server_management_message_);
+    if (!server_management_snapshot_) ui_message(server_management_message_);
 }
 
 void GameConnection::handle_server_management(const AppPacket& packet) {
@@ -89,6 +98,8 @@ void GameConnection::handle_server_management(const AppPacket& packet) {
     if (reply->id != server_management_pending_->id || reply->action != server_management_pending_->action) return;
     server_management_pending_.reset();
     if (reply->status == ServerManagementStatus::Ok) {
+        server_management_reloaded_ = reply->action == ServerManagementAction::Open && server_management_snapshot_.has_value();
+        server_management_reload_required_ = false;
         server_management_message_ = reply->action == ServerManagementAction::Save
             ? "Policy saved. Players receive it at their next login."
             : std::string{};
@@ -97,6 +108,8 @@ void GameConnection::handle_server_management(const AppPacket& packet) {
         return;
     }
     server_management_message_ = reply->text.empty() ? "The server declined the management request." : reply->text;
+    if (reply->action == ServerManagementAction::Save && reply->status == ServerManagementStatus::Conflict)
+        server_management_reload_required_ = true;
     if (reply->status == ServerManagementStatus::Denied) {
         server_management_offered_ = false;
         server_management_snapshot_.reset();

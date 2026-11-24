@@ -23,6 +23,9 @@ struct ServerManagementView {
     std::uint32_t catalog_serial = 0;
     int minimum_status = 200;
     bool saving = false;
+    bool reload_required = false;
+    bool reloading = false;
+    bool reloaded = false;
     std::vector<ServerManagementField> fields;
     std::vector<ServerManagementCommand> commands;
 };

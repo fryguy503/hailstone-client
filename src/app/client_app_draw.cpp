@@ -453,6 +453,9 @@ void ClientApp::update_ui_host() {
                     view.file_revision = revision;
             }
             view.saving = conn_->server_management_saving();
+            view.reload_required = conn_->server_management_reload_required();
+            view.reloading = conn_->server_management_reloading();
+            view.reloaded = conn_->server_management_reloaded();
             view.message = conn_->server_management_message();
             const bool cfg_changed = view.serial != known_serial;
             if (!cfg_changed && view.catalog_serial == known_catalog_serial) return view;

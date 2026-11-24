@@ -563,6 +563,9 @@ public:
     const std::optional<ServerManagementReply>& server_management_snapshot() const { return server_management_snapshot_; }
     std::uint32_t server_management_serial() const { return server_management_serial_; }
     bool server_management_saving() const;
+    bool server_management_reloading() const;
+    bool server_management_reload_required() const { return server_management_reload_required_; }
+    bool server_management_reloaded() const { return server_management_reloaded_; }
     const std::string& server_management_message() const { return server_management_message_; }
     // The current zone's id and instance (from OP_NewZone; 0 before it arrives).
     std::uint16_t zone_id() const { return new_zone_ ? new_zone_->zone_id : 0; }
@@ -3952,6 +3955,8 @@ private:
     };
     std::optional<PendingManagement> server_management_pending_;
     std::optional<ServerManagementReply> server_management_snapshot_;
+    bool server_management_reload_required_ = false;
+    bool server_management_reloaded_ = false;
     std::string server_management_message_;
     std::uint32_t server_management_request_id_ = 0;
     std::uint32_t server_management_serial_ = 0;

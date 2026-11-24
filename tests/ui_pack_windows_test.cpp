@@ -3714,6 +3714,7 @@ TEST_CASE("Modern Server Management uses authorized snapshots and submits only r
         Session session(dir, "modern");
         bool authorized = false;
         int saves = 0;
+        int reloads = 0;
         int full_snapshots = 0;
         int catalog_refreshes = 0;
         app::ServerManagementView snapshot;
@@ -3744,6 +3745,8 @@ TEST_CASE("Modern Server Management uses authorized snapshots and submits only r
             metadata.revision = snapshot.revision;
             metadata.file_revision = snapshot.file_revision;
             metadata.saving = snapshot.saving;
+            metadata.reloading = snapshot.reloading;
+            metadata.reload_required = snapshot.reload_required;
             metadata.message = snapshot.message;
             if (known_catalog != snapshot.catalog_serial) {
                 ++catalog_refreshes;
@@ -3751,16 +3754,25 @@ TEST_CASE("Modern Server Management uses authorized snapshots and submits only r
             }
             return metadata;
         };
+        session.host.open_server_management = [&] {
+            CHECK(snapshot.reload_required);
+            CHECK_FALSE(snapshot.reloading);
+            snapshot.reloading = true;
+            ++reloads;
+            return true;
+        };
         session.host.save_server_management = [&](std::string_view revision, const auto& edits) {
             ++saves;
-            CHECK(revision == "42");
-            REQUIRE(edits.size() == 2);
-            CHECK(edits[0].section == "commands");
-            CHECK(edits[0].key == "blocked_message");
-            CHECK(edits[0].value == "This command was blocked by your server admin.");
-            CHECK(edits[1].section == "commands");
-            CHECK(edits[1].key == "gm");
-            CHECK(edits[1].value == "/nav:253, /target:205");
+            CHECK(revision == (saves == 1 ? "42" : saves == 2 ? "43" : "44"));
+            REQUIRE(edits.size() == (saves <= 2 ? 2 : 1));
+            if (saves <= 2) {
+                CHECK(edits.front().section == "commands");
+                CHECK(edits.front().key == "blocked_message");
+                CHECK(edits.front().value == "This command was blocked by your server admin.");
+            }
+            CHECK(edits.back().section == "commands");
+            CHECK(edits.back().key == "gm");
+            CHECK(edits.back().value == "/nav:253, /target:205");
             snapshot.saving = true;
             return true;
         };
@@ -3883,6 +3895,10 @@ ui.TextColored = function(r, g, b, a, text)
   if text == "GM rules require command:status with a status from 1 to 32767." then managementValidationSeen = true end
   if text == "/notes" then managementNotesSeen = true end
   if text == "/freshaddon" then managementFreshAddonSeen = true end
+  if text == "The editor snapshot expired. Reload before saving." then managementExpiredSeen = true end
+  if text == "Reloading policy..." then managementReloadingSeen = true end
+  if text == "/nav:195 -> /nav:253, /target:205" then managementServerValueSeen = true end
+  if text == "Resolve the changed server values before saving." then managementConflictSeen = true end
   color(r, g, b, a, text)
 end
 )lua") == LUA_OK);
@@ -3939,25 +3955,70 @@ clickManagement = "Review changes##sm"
         session.frames(2);
         CHECK(saves == 1);
         snapshot.saving = false;
-        snapshot.message = "Policy changed; try again.";
+        snapshot.reload_required = true;
+        snapshot.message = "The editor snapshot expired. Reload before saving.";
+        REQUIRE(luaL_dostring(L, "clickManagement = 'Save policy##sm'") == LUA_OK);
+        session.frames(2);
+        CHECK(saves == 1);
+        REQUIRE(luaL_dostring(L, "assert(managementExpiredSeen); clickManagement = 'Reload policy##sm'") == LUA_OK);
+        session.frames(2);
+        CHECK(reloads == 1);
+        REQUIRE(luaL_dostring(L, "assert(managementReloadingSeen)") == LUA_OK);
+        snapshot.serial = 2;
+        snapshot.revision = "43";
+        snapshot.reload_required = false;
+        snapshot.reloading = false;
+        snapshot.reloaded = true;
+        snapshot.message.clear();
+        session.frames(2);
+        CHECK(full_snapshots == 2);
         REQUIRE(luaL_dostring(L, "clickManagement = 'Save policy##sm'") == LUA_OK);
         session.frames(2);
         CHECK(saves == 2);
-        snapshot.serial = 2;
+
+        // A lost confirmation may mean a change already landed. If a different value arrived for another key,
+        // compare it with the proposed edit and require a choice before allowing the new save.
         snapshot.saving = false;
-        snapshot.revision = "43";
+        snapshot.reload_required = true;
+        REQUIRE(luaL_dostring(L, "clickManagement = 'Reload policy##sm'") == LUA_OK);
+        session.frames(2);
+        CHECK(reloads == 2);
+        snapshot.serial = 3;
+        snapshot.revision = "44";
+        snapshot.reload_required = false;
+        snapshot.reloading = false;
         snapshot.fields.push_back({"commands", "blocked_message", "This command was blocked by your server admin."});
+        snapshot.fields[1].value = "/nav:195";
+        session.frames(2);
+        CHECK(full_snapshots == 3);
+        REQUIRE(luaL_dostring(L, R"lua(
+assert(managementConflictSeen and managementServerValueSeen)
+clickManagement = 'Save policy##sm'
+)lua") == LUA_OK);
+        session.frames(2);
+        CHECK(saves == 2);
+        REQUIRE(luaL_dostring(L, "clickManagement = 'Keep my edit##commands.gm'") == LUA_OK);
+        session.frames(2);
+        CHECK(saves == 2);
+        REQUIRE(luaL_dostring(L, "clickManagement = 'Save policy##sm'") == LUA_OK);
+        session.frames(2);
+        CHECK(saves == 3);
+
+        snapshot.serial = 4;
+        snapshot.saving = false;
+        snapshot.reloaded = false;
+        snapshot.revision = "45";
         snapshot.fields[1].value = "/nav:253, /target:205";
         session.frames(2);
-        CHECK(full_snapshots == 2);
+        CHECK(full_snapshots == 4);
         session.host.trusted_ui = false;
         session.frames(2);
         CHECK_FALSE(visible());
         REQUIRE(luaL_dostring(L, R"lua(
 assert(not hs.UI.serverManagement.Available())
-assert(not hs.UI.serverManagement.Save("43", {}))
+assert(not hs.UI.serverManagement.Save("45", {}))
 )lua") == LUA_OK);
-        CHECK(saves == 2);
+        CHECK(saves == 3);
         CHECK(ImGui::FindWindowByName("UI errors") == nullptr);
     }
     ImGui::DestroyContext(ctx);
