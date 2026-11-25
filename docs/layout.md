@@ -81,6 +81,10 @@ hailstone/
                              /outputfile's dumps (the original writes them in the game folder), under any name
                              but those of the settings files above (any case; a chat log's name is allowed, as in
                              the original; is_kept_character_file)
+    characters/<world>/.inventory-index/
+                             Alt Finder's per-character carried and personal-bank snapshots and process locks.
+                             The inventory UI enables the index while it runs. Snapshots stay local to this
+                             data directory, server profile and world and contain no account or item instance IDs.
   notes.txt                  the notes window's text (/note)
   web/                       the in-game browser's data: web/<profile>/ one server's cookies and cache, cef.log
                              CEF's log (docs/browser.md)

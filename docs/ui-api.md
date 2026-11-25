@@ -631,6 +631,22 @@ fields).
 Limits: 128 registrations per VM, 16 per source, 16 per method. After 8 nested hooked calls, calls use the original
 method. Hooks do not cross independent script/plugin Lua states.
 
+## Cross-character inventory search
+
+`API.inventory.UpdateAltFinder()` is the background entry point for an inventory UI that participates in Alt Finder.
+It publishes the active character's carried and known personal-bank slots to a local index and returns no values.
+It checks at most once a second and writes when the rows change or to refresh its presence. A query also updates the
+active character. The native lock releases on leaving the character or process exit, and a stopped publisher's live
+status expires after 15 seconds. Both methods require `read` and `ui`.
+
+`API.inventory.AltFinder([text])` returns a read-only, case-insensitive name search, or `nil` outside a character.
+An empty search returns all indexed slots. The view covers the active server profile and exact world in the same data
+directory, across its signed-in clients and last-seen characters. One row describes one physical stack. Each row
+carries `seen` (Unix seconds), `age` (seconds) and `live` independently of its owner's session. An online character's
+bank can still be last seen. `carriedSeen` and `bankSeen` distinguish an empty observed area from one the client has
+never seen. Prior personal-bank observations from `bank.dat` are included. The scan excludes shared banks, worn
+items and the cursor. See the [API reference](ui-api-reference.md#inventory) for the complete result fields.
+
 ## Adding a new client feature
 
 1. Implement its authoritative model and public Lua binding in the client, with tests. Server-specific

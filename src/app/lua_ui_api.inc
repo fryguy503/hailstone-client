@@ -196,6 +196,7 @@ UI_METHOD("InterfaceStatus", "interfaces", "Status", 0)
 
 // inventory
 UI_METHOD("AllItems", "inventory", "AllItems", 0)
+UI_METHOD("AltFinder", "inventory", "AltFinder", kCapRead | kCapUi)
 UI_METHOD("BagInfo", "inventory", "BagInfo", 0)
 UI_METHOD("BagSlotClick", "inventory", "BagSlotClick", kCapActions)
 UI_METHOD("BagSlotItem", "inventory", "BagSlotItem", 0)
@@ -232,6 +233,7 @@ UI_METHOD("SlotName", "inventory", "SlotName", 0)
 UI_METHOD("SortItems", "inventory", "SortItems", kCapActions)
 UI_METHOD("StopItemJob", "inventory", "StopItemJob", kCapActions)
 UI_METHOD("TakeItemSearch", "inventory", "TakeItemSearch", 0)
+UI_METHOD("UpdateAltFinder", "inventory", "UpdateAltFinder", kCapRead | kCapUi)
 
 // luasocials
 UI_METHOD("LuaComplete", "luasocials", "Complete", 0)

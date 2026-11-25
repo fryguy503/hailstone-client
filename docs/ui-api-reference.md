@@ -10,7 +10,7 @@ does not bypass a function's own caller, screen or server-state checks.
 `API.version`, `API.Supports(module[, member])` and `API.Describe([module[, member]])`
 provide contract version and structural discovery. They confer no permissions.
 
-Coverage: **353/353 method implementation links**, **226/353 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
+Coverage: **355/355 method implementation links**, **228/355 adjacent binding comment excerpts**, and **6/6 constant implementation links**. Excerpts below are verbatim binding comments; they preserve any documented signatures and results, and do not invent omitted arguments or results. **See binding** marks an author documentation gap.
 
 Unresolved method implementations: none.
 Unresolved constant implementations: none.
@@ -260,6 +260,7 @@ Unresolved constant implementations: none.
 | Member | Documented signature / binding comment | Existing binding | Required capabilities | Hook policy |
 | --- | --- | --- | --- | --- |
 | `API.inventory.AllItems` | **See binding** | `hs.AllItems` · [source](../src/app/lua_ui_inventory_manager.cpp) | none (outer gate) | closed |
+| `API.inventory.AltFinder` | `view = hs.AltFinder([text])   -- same-profile, same-world carried bags and personal banks, nil outside a character.`<br>`view: {world, characters={{name,session,carriedSeen,bankSeen}}, items={{name,id,icon,count,character,where,`<br>`slot,sub,bag,live,seen,age}}}; session "local", "boxed" or "offline" and where "carried" or "bank".`<br>`slot and sub follow AllItems (sub and bag omitted for a top-level item), seen is Unix seconds and age is seconds.`<br>`Names match text case-insensitively (empty matches all). Item rows are read-only and each describes one stack.` | `hs.AltFinder` · [source](../src/app/lua_ui_inventory_manager.cpp) | read, ui | closed |
 | `API.inventory.BagInfo` | `name, slots, combine, where = hs.BagInfo(bagWindow)   -- the bag's name, how many slots its window has, whether it`<br>`is a tradeskill container, where it is ("inventory", "bank", "other") and its slot there; bagWindow "Bag1".."Bag36"`<br>`or "WorldContainer" (the open tradeskill object in the zone)` | `hs.BagInfo` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
 | `API.inventory.BagSlotClick` | `ok = hs.BagSlotClick(bagWindow, index [, button [, outside]])   -- the slot logic on that bag slot ("leftheld" as`<br>`hs.ClickSlot takes it: false when no hotbutton went on the cursor)` | `hs.BagSlotClick` · [source](../src/app/lua_ui.cpp) | actions | closed |
 | `API.inventory.BagSlotItem` | `item = hs.BagSlotItem(bagWindow, index)   -- index from 0` | `hs.BagSlotItem` · [source](../src/app/lua_ui.cpp) | none (outer gate) | closed |
@@ -296,6 +297,7 @@ Unresolved constant implementations: none.
 | `API.inventory.SortItems` | `err = hs.SortItems(where, mode [, options])   -- where: "inventory", "bank" or a bag window ("Bag3"); mode: "sort",`<br>`"stack" (fill partial stacks from the later ones) or "tidy" (items into their filtered bags); options: { locked =`<br>`{ place, ... } (left alone), filters = { [bag place] = category } (hs.Item's category names) }. nil when it started`<br>`(or had nothing to do), else why not` | `hs.SortItems` · [source](../src/app/lua_ui.cpp) | actions | closed |
 | `API.inventory.StopItemJob` | `hs.StopItemJob()` | `hs.StopItemJob` · [source](../src/app/lua_ui.cpp) | actions | closed |
 | `API.inventory.TakeItemSearch` | **See binding** | `hs.TakeItemSearch` · [source](../src/app/lua_ui_inventory_manager.cpp) | none (outer gate) | closed |
+| `API.inventory.UpdateAltFinder` | `hs.UpdateAltFinder()   -- a background inventory UI calls each frame to publish this character's index while in game.`<br>`No return values. Writes only on changes or a heartbeat, at most once per second.` | `hs.UpdateAltFinder` · [source](../src/app/lua_ui_inventory_manager.cpp) | read, ui | closed |
 
 ## luasocials
 

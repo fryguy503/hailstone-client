@@ -36,7 +36,7 @@
 struct lua_State;
 
 namespace hailstone::net { class GameConnection; struct Item; struct ItemSlot; struct CharCreate; }
-namespace hailstone::game { class HotButtonStore; struct HotButton; namespace mechanics { class Character; } }
+namespace hailstone::game { class AltInventoryIndex; class HotButtonStore; struct HotButton; namespace mechanics { class Character; } }
 namespace hailstone { class GameDir; }
 namespace hailstone::assets { class CharacterLibrary; struct CharacterModel; }
 namespace hailstone::mq { class ScriptHost; class Registry; struct Context; }
@@ -244,6 +244,7 @@ struct UiHost {
     std::int32_t air = -1, max_air = 0; // the air supply (PlayerMovement; -1 not yet counted) and its maximum
     // A search for the Advanced Inventory (/finditem <text>), until its window takes it (hs.TakeItemSearch).
     std::optional<std::string> item_search;
+    std::shared_ptr<game::AltInventoryIndex> alt_inventory; // enabled by the inventory UI for this session
         bool body_tint_open = false; // BodyTintWnd (the inventory's Tint button opens it; app/lua_ui_tint.cpp)
     // The player customization window (PlayerCustomizationWnd, app/lua_ui_customization.cpp): the character library
     // and the model the player is drawn with (the window tries features on it), and the window's camera: -1 while
@@ -330,6 +331,7 @@ struct UiHost {
     // The connection is gone (a camp, a logout, a link death): the open menus and dialogs go with it, so no handler
     // of theirs runs against the next session.
     void drop_session_dialogs() {
+        alt_inventory.reset();
         menus.clear();
         quantity.reset();
         text_entry.reset();

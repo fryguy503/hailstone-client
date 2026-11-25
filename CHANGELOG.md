@@ -6,6 +6,7 @@
 - Modern Spell Gems has optional spell names, a background toggle, and resize grips that wrap the tiles into rows and columns. Icon size is adjustable, and existing layouts keep their defaults
 - Custom builds can set a display version shown at login and in the in-game Help window.
 - Preserve support for published native preview add-ons with raw spell durations and guarded popup actions.
+- Inventory add-ons can search carried bags and personal banks across characters on the same world, including live boxed clients and last-seen results for offline alts.
 
 - Trees with authored collision hulls let players move through their branches while their trunks still block movement. This fixes the invisible walls near the Field of Bone entrance to Warsliks Woods and in other classic zones
 - Decorative slime no longer blocks movement over the Veksar ramp and doorway or through passages in several Lost Dungeons of Norrath layouts

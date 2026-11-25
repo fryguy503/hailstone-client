@@ -18,10 +18,12 @@
 
 #include "app/lua_ui.h"
 #include "app/lua_ui_menu.h"
+#include "game/alt_inventory.h"
 #include "game/slash_commands.h"
 #include "mock_server/harness.h"
 #include "net/merchant_packets.h"
 #include "net/tribute_packets.h"
+#include "plugin/policy.h"
 #include "ui/lua/lua_host.h"
 #include "scratch_dir.h"
 
@@ -73,6 +75,74 @@ std::string file_text(const fs::path& p) {
 }
 
 } // namespace
+
+TEST_CASE("Alt Finder UI: gated search returns local and boxed rows without exposing item instances") {
+    ScratchDir scratch("alt_finder_lua");
+    auto options = quick_options();
+    options.servers_dir = scratch.path() / "servers";
+    auto config = MockConfig::standard();
+    auto bag = bag_item(2003, "Large Sack", 26);
+    bag.contents.push_back({0, make_item(2004, "Silverleaf", 26, 7)});
+    config.characters[0].inventory.push_back(std::move(bag));
+    Rig rig(std::move(config), options);
+    REQUIRE(rig.to_zone());
+
+    constexpr std::int64_t now = 1'795'657'320;
+    auto& conn = rig.conn;
+    game::AltInventoryIndex box(conn.own_files().dir.parent_path(), conn.ticket().server_name, "Mirelle");
+    game::Inventory boxed_inventory;
+    REQUIRE(boxed_inventory.put(at(24), make_item(2004, "Silverleaf", 24, 3)));
+    box.update(boxed_inventory, {}, false, now);
+
+    const auto pack = scratch.path() / "pack";
+    const auto addon = scratch.path() / "addon";
+    fs::create_directories(pack);
+    fs::create_directories(addon);
+    std::ofstream(addon / "empty.lua") << "ui.window('Alt Finder test',function()end)\n";
+    auto context = std::unique_ptr<ImGuiContext, decltype(&ImGui::DestroyContext)>(ImGui::CreateContext(), ImGui::DestroyContext);
+    ImGui::GetIO().IniFilename = nullptr;
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+
+    app::UiHost host;
+    host.conn = &conn;
+    host.ui_ready = host.in_game = true;
+    host.unix_time = [=] { return now; };
+    app::UiApi api(host);
+    ui::lua::LuaUi lua(pack, scratch.path() / "ui.txt");
+    lua.add_ui_api([&](lua_State* L) { api.register_functions(L); });
+    std::uint32_t caps = plugin::kCapUi;
+    lua.set_caller_scope([&](std::string_view tag) -> std::shared_ptr<void> {
+        return std::make_shared<plugin::CallerScope>(caps, std::string(tag));
+    });
+    lua.set_folders({{"alt-finder-test", addon}});
+    frame(lua);
+    const auto run = [&](const std::string& code) { return lua.run_for_test("alt-finder-test", code); };
+    for (const auto missing : {plugin::kCapRead, plugin::kCapUi}) {
+        caps = (plugin::kCapRead | plugin::kCapUi) & ~missing;
+        CHECK(run("hs.UI.inventory.UpdateAltFinder(); return hs.UI.inventory.AltFinder() == nil") == "true");
+        CHECK_FALSE(host.alt_inventory);
+    }
+    caps = plugin::kCapRead | plugin::kCapUi;
+    CHECK(run(R"lua(
+      hs.UI.inventory.UpdateAltFinder()
+      local search = hs.UI.inventory.AltFinder
+      local v = search('siLvErLeAf')
+      local a, b = v.items[1], v.items[2]
+      return v.world ~= '' and #v.characters == 2 and #v.items == 2
+        and #search('missing').items == 0
+        and v.characters[1].session == 'local' and v.characters[1].carriedSeen
+        and v.characters[2].session == 'boxed' and not v.characters[2].bankSeen
+        and a.name == 'Silverleaf' and a.id == 2004 and a.icon == 500 and a.count == 7
+        and a.where == 'carried' and a.slot == 26 and a.sub == 0 and a.bag == 'Large Sack'
+        and a.live and a.age == 0 and a.seen > 0 and not a.serial
+        and b.character == 'Mirelle' and b.live and b.count == 3 and b.sub == nil
+    )lua") == "true");
+    REQUIRE(host.alt_inventory);
+    host.in_game = false;
+    host.drop_session_dialogs();
+    CHECK(run("return hs.UI.inventory.AltFinder() == nil") == "true");
+    CHECK_FALSE(host.alt_inventory);
+}
 
 TEST_CASE("Advanced Inventory: lists what is worn and carried, draws in both views, and marks items") {
     fs::path src = ui_dir() / "modern";

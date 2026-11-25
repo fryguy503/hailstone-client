@@ -31,6 +31,7 @@
 // (game/bank_snapshot.h), marked stale. Acting on banked items needs the bank open (hs.BankSlotClick); the stale copy
 // is never in the inventory, so no click, job or rule can reach it.
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <ctime>
@@ -46,6 +47,8 @@
 
 #include "app/lua_ui.h"
 #include "app/lua_ui_windows.h"
+#include "core/ascii_case.h"
+#include "game/alt_inventory.h"
 #include "net/game_connection.h"
 #include "plugin/lua_keep.h"
 #include "ui/lua/lua_host.h"
@@ -245,6 +248,99 @@ int BankSeen(lua_State* L) {
     return 2;
 }
 
+game::AltInventoryIndex* update_alt_inventory(UiHost& h, std::int64_t now) {
+    if (!h.in_game || !h.conn || !h.conn->in_zone()) return nullptr;
+    const auto& c = *h.conn;
+    const CharacterFiles files = c.own_files();
+    if (files.empty()) return nullptr;
+    const auto directory = files.dir.parent_path();
+    const auto& world = c.ticket().server_name;
+    const auto& character = c.character_name();
+    if (!h.alt_inventory || !h.alt_inventory->matches(directory, world, character))
+        h.alt_inventory = std::make_shared<game::AltInventoryIndex>(directory, world, character);
+    h.alt_inventory->update(c.inventory(), c.bank_seen(), c.bank_live(), now);
+    return h.alt_inventory.get();
+}
+
+std::int64_t inventory_time(const UiHost& h) {
+    return h.unix_time ? h.unix_time() : static_cast<std::int64_t>(std::time(nullptr));
+}
+
+// hs.UpdateAltFinder()   -- a background inventory UI calls each frame to publish this character's index while in game.
+// No return values. Writes only on changes or a heartbeat, at most once per second.
+int UpdateAltFinder(lua_State* L) {
+    auto& h = host(L);
+    update_alt_inventory(h, inventory_time(h));
+    return 0;
+}
+
+void alt_text(lua_State* L, const char* field, std::string_view value) {
+    lua_pushlstring(L, value.data(), value.size());
+    lua_setfield(L, -2, field);
+}
+
+// view = hs.AltFinder([text])   -- same-profile, same-world carried bags and personal banks, nil outside a character.
+// view: {world, characters={{name,session,carriedSeen,bankSeen}}, items={{name,id,icon,count,character,where,
+// slot,sub,bag,live,seen,age}}}; session "local", "boxed" or "offline" and where "carried" or "bank".
+// slot and sub follow AllItems (sub and bag omitted for a top-level item), seen is Unix seconds and age is seconds.
+// Names match text case-insensitively (empty matches all). Item rows are read-only and each describes one stack.
+int AltFinder(lua_State* L) {
+    size_t length = 0;
+    const char* text = luaL_optlstring(L, 1, "", &length);
+    const std::string_view query(text, length);
+    auto& h = host(L);
+    const auto now = inventory_time(h);
+    const auto* index = update_alt_inventory(h, now);
+    if (!index) { lua_pushnil(L); return 1; }
+    const auto characters = index->characters(now);
+    using Session = game::AltInventoryCharacter::Session;
+
+    lua_createtable(L, 0, 3);
+    alt_text(L, "world", h.conn->ticket().server_name);
+    lua_createtable(L, static_cast<int>(characters.size()), 0);
+    lua_Integer owners = 0;
+    for (const auto& c : characters) {
+        lua_createtable(L, 0, 4);
+        alt_text(L, "name", c.name);
+        alt_text(L, "session", c.session == Session::Local ? "local" : c.session == Session::Boxed ? "boxed" : "offline");
+        set_bool(L, "carriedSeen", c.carried.seen > 0);
+        set_bool(L, "bankSeen", c.bank.seen > 0);
+        lua_rawseti(L, -2, ++owners);
+    }
+    lua_setfield(L, -2, "characters");
+
+    lua_newtable(L);
+    lua_Integer rows = 0;
+    for (const auto& c : characters) {
+        auto append = [&](const game::AltInventoryArea& area, const char* where, bool live) {
+            for (const auto& item : area.items) {
+                if (!query.empty() && std::search(item.name.begin(), item.name.end(), query.begin(), query.end(),
+                    [](char a, char b) { return ascii_lower(a) == ascii_lower(b); }) == item.name.end()) continue;
+                lua_createtable(L, 0, 12);
+                alt_text(L, "character", c.name);
+                alt_text(L, "where", where);
+                alt_text(L, "name", item.name);
+                set_int(L, "id", item.id);
+                set_int(L, "icon", item.icon);
+                set_int(L, "count", item.count);
+                set_int(L, "slot", item.slot);
+                if (item.sub >= 0) {
+                    set_int(L, "sub", item.sub);
+                    alt_text(L, "bag", item.bag);
+                }
+                set_bool(L, "live", live);
+                set_int(L, "seen", area.seen);
+                set_int(L, "age", now > area.seen ? now - area.seen : 0);
+                lua_rawseti(L, -2, ++rows);
+            }
+        };
+        append(c.carried, "carried", c.session != Session::Offline);
+        append(c.bank, "bank", c.bank_live);
+    }
+    lua_setfield(L, -2, "items");
+    return 1;
+}
+
 int ItemStats(lua_State* L) {
     lua_createtable(L, static_cast<int>(std::size(kStats)), 0);
     lua_Integer n = 0;
@@ -404,14 +500,14 @@ void add_inventory_manager_window(std::vector<std::unique_ptr<StockWindow>>& out
 }
 
 void register_inventory_manager_api(lua_State* L, UiHost& h) {
-    static const luaL_Reg fns[] = {{"AllItems", AllItems}, {"BankSeen", BankSeen},
+    static const luaL_Reg fns[] = {{"AllItems", AllItems}, {"AltFinder", AltFinder}, {"BankSeen", BankSeen},
                                    {"ItemsRevision", ItemsRevision},
                                    {"ItemKept", ItemKept},
                                    {"SetItemKept", SetItemKept},
                                    {"SetItemsKept", SetItemsKept},
                                    {"ItemStats", ItemStats},
                                    {"BulkItems", BulkItems},
-                                   {"TakeItemSearch", TakeItemSearch},
+                                   {"TakeItemSearch", TakeItemSearch}, {"UpdateAltFinder", UpdateAltFinder},
                                    {nullptr, nullptr}};
     lua_pushlightuserdata(L, &h);
     luaL_setfuncs(L, fns, 1);
