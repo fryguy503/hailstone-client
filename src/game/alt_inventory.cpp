@@ -160,7 +160,7 @@ void supplement_bank(AltInventoryCharacter& character, const std::filesystem::pa
 } // namespace
 
 AltInventoryIndex::AltInventoryIndex(std::filesystem::path characters, std::string world, std::string character)
-    : characters_(std::move(characters)), directory_(characters_ / ".inventory-index"), world_(std::move(world)) {
+    : characters_(std::move(characters)), directory_(characters_ / ".alt"), world_(std::move(world)) {
     const std::string key = sanitize_file_name(character);
     snapshot_ = directory_ / (key + ".dat");
     lock_file_ = directory_ / (key + ".lock");

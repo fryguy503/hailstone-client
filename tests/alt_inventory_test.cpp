@@ -136,7 +136,7 @@ TEST_CASE("Alt Finder: uses legacy banks, distinguishes empty from never seen, a
     boxed.update(bags_and_bank(12), old_bank, false, kNow);
     const CharacterFiles newer{scope / "Mirelle"};
     REQUIRE(write_file_atomic(newer.bank_snapshot(), game::encode_bank_snapshot({kNow - 50, {}})));
-    REQUIRE(write_file_atomic(scope / ".inventory-index" / "Broken.dat", "HSAI"));
+    REQUIRE(write_file_atomic(scope / ".alt" / "Broken.dat", "HSAI"));
 
     auto visible = local.characters(kNow);
     REQUIRE(visible.size() == 4);

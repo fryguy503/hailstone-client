@@ -77,10 +77,12 @@ std::string file_text(const fs::path& p) {
 } // namespace
 
 TEST_CASE("Alt Finder UI: gated search returns local and boxed rows without exposing item instances") {
-    ScratchDir scratch("alt_finder_lua");
+    ScratchDir scratch("alt");
     auto options = quick_options();
-    options.servers_dir = scratch.path() / "servers";
+    options.servers_dir = scratch.path() / "s";
+    options.profile_id = "p";
     auto config = MockConfig::standard();
+    config.server_name = "World";
     auto bag = bag_item(2003, "Large Sack", 26);
     bag.contents.push_back({0, make_item(2004, "Silverleaf", 26, 7)});
     config.characters[0].inventory.push_back(std::move(bag));
@@ -123,20 +125,26 @@ TEST_CASE("Alt Finder UI: gated search returns local and boxed rows without expo
         CHECK_FALSE(host.alt_inventory);
     }
     caps = plugin::kCapRead | plugin::kCapUi;
-    CHECK(run(R"lua(
+    const auto result = run(R"lua(
       hs.UI.inventory.UpdateAltFinder()
       local search = hs.UI.inventory.AltFinder
       local v = search('siLvErLeAf')
+      assert(v.world ~= '', 'world')
+      assert(#v.characters == 2, 'character count: ' .. #v.characters)
+      assert(#v.items == 2, 'item count: ' .. #v.items)
+      assert(#search('missing').items == 0, 'no matching item')
+      assert(v.characters[1].session == 'local' and v.characters[1].carriedSeen, 'local presence')
+      assert(v.characters[2].session == 'boxed' and not v.characters[2].bankSeen, 'boxed presence')
       local a, b = v.items[1], v.items[2]
-      return v.world ~= '' and #v.characters == 2 and #v.items == 2
-        and #search('missing').items == 0
-        and v.characters[1].session == 'local' and v.characters[1].carriedSeen
-        and v.characters[2].session == 'boxed' and not v.characters[2].bankSeen
-        and a.name == 'Silverleaf' and a.id == 2004 and a.icon == 500 and a.count == 7
-        and a.where == 'carried' and a.slot == 26 and a.sub == 0 and a.bag == 'Large Sack'
-        and a.live and a.age == 0 and a.seen > 0 and not a.serial
-        and b.character == 'Mirelle' and b.live and b.count == 3 and b.sub == nil
-    )lua") == "true");
+      assert(a.name == 'Silverleaf' and a.id == 2004 and a.icon == 500 and a.count == 7,
+        'local item ' .. a.name .. ' id ' .. a.id .. ' icon ' .. a.icon .. ' count ' .. a.count)
+      assert(a.where == 'carried' and a.slot == 26 and a.sub == 0 and a.bag == 'Large Sack', 'local bag location')
+      assert(a.live and a.age == 0 and a.seen > 0 and not a.serial, 'local freshness or serial')
+      assert(b.character == 'Mirelle' and b.live and b.count == 3 and b.sub == nil, 'boxed slot')
+      return true
+    )lua");
+    INFO(result);
+    CHECK(result == "true");
     REQUIRE(host.alt_inventory);
     host.in_game = false;
     host.drop_session_dialogs();
