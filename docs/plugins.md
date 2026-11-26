@@ -704,8 +704,8 @@ Faces run only when `faces` is on, and always with `read` alone.
 ## Compiled plugins
 
 Compiled add-ons may read `Spell.DurationFormula` and `Spell.DurationCap` through `parse`: plain integers from the
-player's spell record, with the cap in six-second ticks. The existing `Spell.Duration` timestamp remains the cap
-multiplied by 6000 ms; the raw formula is not a claim about a caster's effective duration.
+spell record, with the cap in six-second ticks. With a player profile, `Spell.Duration` computes the duration at
+the player's level. Without a profile, it uses the cap.
 
 `get_large_dialog` (`read`) observes the current received game popup, including its host-issued token, button mode,
 server IDs, remaining deadline and the current camp token when it was received during that camp. It never exposes

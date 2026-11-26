@@ -169,12 +169,13 @@ for _, row in ipairs({{41000, 0, 8}, {41001, 5, 30}, {41002, 1, 80}, {41003, 50,
     assert(math.type(cap) == 'integer' and cap == row[3])
     assert(mq.parse(string.format('${Spell[%d].DurationFormula}', row[1])) == tostring(row[2]))
     assert(mq.parse(string.format('${Spell[%d].DurationCap}', row[1])) == tostring(row[3]))
-    assert(spell.Duration.Raw() == row[3] * 6000)
-    assert(spell.Duration.TotalSeconds() == row[3] * 6)
     assert(not pcall(function() spell.DurationFormula = 99 end))
     assert(not pcall(function() spell.DurationCap = 99 end))
     assert(spell.DurationFormula() == row[2] and spell.DurationCap() == row[3])
 end
+-- Formula 5 lasts two ticks even though the raw cap above is 30 ticks.
+local fixed = mq.TLO.Spell(41001)
+assert(fixed.Duration.Raw() == 12000 and fixed.Duration.TotalSeconds() == 12)
 assert(mq.TLO.Spell(44999).DurationFormula() == nil)
 assert(mq.TLO.Spell(44999).DurationCap() == nil)
 assert(mq.parse('${Spell[44999].DurationFormula}/${Spell[44999].DurationCap}') == 'NULL/NULL')
